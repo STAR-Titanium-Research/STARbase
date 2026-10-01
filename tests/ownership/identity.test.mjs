@@ -19,17 +19,15 @@ test('Dennis is standardised on dennis.premoli2 and the other logins are suspend
 	assert.equal(sqlOne(`SELECT count(*) FROM people WHERE full_name = 'dennis.premoli@gmail.com'`), '0');
 });
 
-test('Sam Lister is one person linked to his login', () => {
-	assert.deepEqual(sql(`SELECT u.email FROM people p JOIN directus_users u ON u.id = p.user_id WHERE p.full_name = 'Sam Lister'`),
-		[['sam.lister@sheffield.ac.uk']]);
+// Logins are managed by admins and come and go (invites get deleted and re-sent),
+// so these check the merges held rather than which logins currently exist.
+test('Sam Lister is one person', () => {
 	assert.equal(sqlOne(`SELECT count(*) FROM people WHERE full_name IN ('Sam', 'Sam Lister')`), '1');
 });
 
-test('James Pepper and Jack Krohn are linked to their logins', () => {
-	assert.equal(sqlOne(`SELECT u.email FROM people p JOIN directus_users u ON u.id = p.user_id WHERE p.full_name = 'James Pepper'`),
-		'j.g.pepper@sheffield.ac.uk');
-	assert.equal(sqlOne(`SELECT u.email FROM people p JOIN directus_users u ON u.id = p.user_id WHERE p.full_name = 'Jack Krohn'`),
-		'jjkrohn1@sheffield.ac.uk');
+test('James Pepper and Jack Krohn are each one person', () => {
+	assert.equal(sqlOne(`SELECT count(*) FROM people WHERE full_name = 'James Pepper'`), '1');
+	assert.equal(sqlOne(`SELECT count(*) FROM people WHERE full_name = 'Jack Krohn'`), '1');
 });
 
 test('no legacy login FK still points at an alias login', () => {
