@@ -19,7 +19,7 @@ export const LAB_MEMBER_ROLE = '10000001-0000-0000-0000-000000000002';
 
 export function sql(query) {
 	const out = execFileSync('docker', ['exec', 'd1-database-postgres-1', 'psql', '-U', 'd1', '-d', 'd1_database',
-		'-v', 'ON_ERROR_STOP=1', '-At', '-F', '\t', '-c', query], { encoding: 'utf8' }).trim();
+		'-v', 'ON_ERROR_STOP=1', '-q', '-At', '-F', '\t', '-c', query], { encoding: 'utf8' }).trim();
 	return out === '' ? [] : out.split('\n').map((l) => l.split('\t'));
 }
 
