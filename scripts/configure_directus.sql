@@ -247,6 +247,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('physical_samples','test_sessions','o2m','list-o2m','{"template":"{{session_date}} – {{test_type}}","enableCreate":true}','related-values',NULL,false,false,32,'full',false,'[{"language":"en-US","translation":"Test Sessions"}]'),
 ('physical_samples','data_files','m2m','files','{"template":"{{directus_files_id.filename_download}}"}','related-values','{"template":"{{directus_files_id.filename_download}}"}',false,false,33,'full',false,'[{"language":"en-US","translation":"Linked Data Files"}]'),
 ('physical_samples','data_files_open','alias,no-data','d1-archive-links','{"relationField":"data_files"}',NULL,NULL,false,false,34,'full',false,'[{"language":"en-US","translation":"Open / Copy Linked Files"}]'),
+('physical_samples','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('physical_samples','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,40,'half',false,NULL),
 ('physical_samples','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,41,'half',false,NULL),
 ('physical_samples','version',NULL,'input',NULL,'raw',NULL,true,true,42,'half',false,NULL);
@@ -333,6 +334,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('tool_boxes','project_id',        'm2o','select-dropdown-m2o','{"template":"{{project_code}} – {{project_name}}"}','related-values','{"template":"{{project_code}}"}',false,false,8,'half',false,'[{"language":"en-US","translation":"Primary Project"}]'),
 ('tool_boxes','notes',             NULL,'input-multiline',NULL,'raw',NULL,false,false,9,'full',false,NULL),
 ('tool_boxes','cutting_inserts',   'o2m','list-o2m','{"template":"{{insert_code}}","enableCreate":true}','related-values',NULL,false,false,10,'full',false,'[{"language":"en-US","translation":"Inserts in this Box"}]'),
+('tool_boxes','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('tool_boxes','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('tool_boxes','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('tool_boxes','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -350,6 +352,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('cutting_inserts','is_depleted',      'cast-boolean','toggle',NULL,'boolean',NULL,false,false,9,'half',false,'[{"language":"en-US","translation":"Depleted?"}]'),
 ('cutting_inserts','notes',            NULL,'input-multiline',NULL,'raw',NULL,false,false,10,'full',false,NULL),
 ('cutting_inserts','insert_edges',     'o2m','list-o2m','{"template":"{{edge_code}}","enableCreate":true}','related-values',NULL,false,false,11,'full',false,'[{"language":"en-US","translation":"Insert Edges"}]'),
+('cutting_inserts','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('cutting_inserts','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('cutting_inserts','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('cutting_inserts','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -363,6 +366,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('insert_edges','owner',          'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,false,5,'half',false,'[{"language":"en-US","translation":"Owner"}]'),
 ('insert_edges','is_used',        'cast-boolean','toggle',NULL,'boolean',NULL,false,false,6,'half',false,'[{"language":"en-US","translation":"Used?"}]'),
 ('insert_edges','notes',          NULL,'input-multiline',NULL,'raw',NULL,false,false,7,'full',false,NULL),
+('insert_edges','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('insert_edges','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('insert_edges','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('insert_edges','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -409,6 +413,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- Legacy / unused duplicate columns — registered hidden so they don't clutter the form
 ('manufacturing_operations','force_file_id',       NULL,'input',NULL,'raw',NULL,true,true,33,'half',false,NULL),
 ('manufacturing_operations','nc_program_file_uri', NULL,'input',NULL,'raw',NULL,true,true,34,'half',false,NULL),
+('manufacturing_operations','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('manufacturing_operations','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,30,'half',false,NULL),
 ('manufacturing_operations','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,31,'half',false,NULL),
 ('manufacturing_operations','version',NULL,'input',NULL,'raw',NULL,true,true,32,'half',false,NULL);
@@ -476,6 +481,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('projects','Image',                      'file','file-image','{"crop":false}','image',NULL,false,false,13,'half',false,'[{"language":"en-US","translation":"Image"}]'),
 ('projects','investigator_access_notice', 'alias,no-data','presentation-notice','{"text":"👥 Secondary investigators listed below will be recorded as having viewing access to all samples, operations, and test sessions connected to this project.","color":"blue"}',NULL,NULL,false,false,11,'full',false,NULL),
 ('projects','secondary_investigators',    'm2m','list-m2m','{"template":"{{user_id.first_name}} {{user_id.last_name}}","junction_field":"user_id"}','related-values','{"template":"{{user_id.first_name}} {{user_id.last_name}}"}',false,false,12,'full',false,'[{"language":"en-US","translation":"Secondary Investigators"}]'),
+('projects','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('projects','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('projects','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('projects','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -507,6 +513,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- (Typed test-parameter fields are inline on this table — see configure_inline_params.sql)
 ('test_sessions','data_files','m2m','files','{"template":"{{directus_files_id.filename_download}}"}','related-values','{"template":"{{directus_files_id.filename_download}}"}',false,false,31,'full',false,'[{"language":"en-US","translation":"Linked Data Files"}]'),
 ('test_sessions','data_files_open','alias,no-data','d1-archive-links','{"relationField":"data_files"}',NULL,NULL,false,false,32,'full',false,'[{"language":"en-US","translation":"Open / Copy Linked Files"}]'),
+('test_sessions','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('test_sessions','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,35,'half',false,NULL),
 ('test_sessions','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,36,'half',false,NULL),
 ('test_sessions','version',NULL,'input',NULL,'raw',NULL,true,true,37,'half',false,NULL);

@@ -28,6 +28,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('etchants','suited_metals',NULL,'input',NULL,'raw',NULL,false,false,4,'full',false,'[{"language":"en-US","translation":"Suited Metals"}]'),
 ('etchants','notes',        NULL,'input-multiline',NULL,'raw',NULL,false,false,5,'full',false,NULL),
 ('etchants','owner',        'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,false,6,'half',false,'[{"language":"en-US","translation":"Added By"}]'),
+('etchants','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('etchants','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('etchants','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('etchants','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -40,6 +41,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('prep_recipes','description',     NULL,'input-multiline',NULL,'raw',NULL,false,false,4,'full',false,NULL),
 ('prep_recipes','owner',           'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,false,5,'half',false,'[{"language":"en-US","translation":"Owner"}]'),
 ('prep_recipes','steps',           'o2m','list-o2m','{"template":"{{step_order}}. {{step_type}}","enableCreate":true,"enableSelect":false}','related-values',NULL,false,false,10,'full',false,'[{"language":"en-US","translation":"Steps"}]'),
+('prep_recipes','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('prep_recipes','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('prep_recipes','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('prep_recipes','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);

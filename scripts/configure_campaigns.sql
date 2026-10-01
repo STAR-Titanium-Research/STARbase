@@ -33,6 +33,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('campaigns','notes',        NULL,'input-multiline',NULL,'raw',NULL,false,false,12,'full',false,NULL),
 ('campaigns','operations',   'o2m','list-o2m','{"template":"{{pass_code}} – {{operation_date}}","enableCreate":true}','related-values',NULL,false,true,13,'full',false,'[{"language":"en-US","translation":"Operations (this trial)"}]'),
 ('campaigns','sessions',     'o2m','list-o2m','{"template":"{{session_date}} – {{test_type}}","enableCreate":true}','related-values',NULL,false,true,14,'full',false,'[{"language":"en-US","translation":"Test Sessions (this campaign)"}]'),
+('campaigns','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('campaigns','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('campaigns','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('campaigns','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
