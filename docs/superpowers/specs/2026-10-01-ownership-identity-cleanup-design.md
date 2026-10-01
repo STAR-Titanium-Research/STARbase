@@ -24,7 +24,9 @@ alongside the person-based ones.
 | "Created by" | New `created_by` column (Directus `user-created`), automatic and read-only. |
 | Canonical login for Dennis | `dennis.premoli2@sheffield.ac.uk` (Lab Admin). Deactivate `dpremoli1@sheffield.ac.uk` and `dennis.premoli@gmail.com`. |
 | Access control | Out of scope here. Sub-project 2: per-collection mix (some collections private to owner, others shared). This design must not block row-level rules. |
-| Force app | Must keep working with no code change. |
+| Force app | Must keep working with no code change to `apps/force-app`. |
+| Several operators per run | Operations and test sessions keep one **main operator** (`operator_person_id`, what the force app sets) plus an **"Additional operators"** many-to-many list. Additional operators also see the run in the force dashboard. |
+| Historical operators | Curated by Dennis in `db/mappings/operator-mapping.xlsx` (MAP / NEW / IGNORE + additional people). IGNORE rows keep only the `operator_name` text. |
 
 ## Current state (measured 2026-09-30)
 
@@ -135,8 +137,18 @@ machine token), leave it blank. Never overwrite a supplied value.
   trigger's owner-from-parent branch is removed, so the triggers no longer make
   ownership decisions.
 
-**Operator** (`operator_person_id` on operations / test sessions): unchanged —
-any person, no prefill.
+**Operator** (`operator_person_id` on operations / test sessions): the main
+operator — any person, no prefill. **Additional operators:** junction tables
+`operation_additional_operators (operation_id, person_id)` and
+`session_additional_operators (session_id, person_id)`, unique per pair,
+`ON DELETE CASCADE` both sides, exposed in Directus as an "Additional
+operators" M2M (people) on each form.
+
+**Historical operator backfill:** legacy `operator` (→ `Machine_Operators`)
+values are linked using the curated sheet: MAP → existing person, NEW → one
+person per distinct name (technician unless marked researcher), IGNORE →
+`operator_name` text only. Multi-person names: first person is the main
+operator, the rest go in the additional-operators list.
 
 ### 3. Created by
 
@@ -175,7 +187,9 @@ After backfill assertions pass:
   unchanged, and fixed for users whose person wasn't linked.
 - After backfill, older operations start appearing in their owners'
   dashboards (intended).
-- No force-app code change required. Verified by a test (below).
+- No change to `apps/force-app`. The shared dashboard filter in
+  `packages/force-plotting/src/ForceDashboard.vue` gains one condition so
+  additional operators also see their runs. Verified by a test (below).
 
 ## Compatibility with sub-project 2 (access rules)
 
@@ -191,7 +205,8 @@ in the same migrations and are mirrored into `scripts/configure_directus.sql`
 (never re-run wholesale).
 
 1. Identity cleanup + unique index on `people.user_id`.
-2. Backfill person fields and junction `person_id`s, with assertions.
+2. Backfill person fields and junction `person_id`s, with assertions;
+   additional-operators junctions; curated operator backfill.
 3. `created_by` columns + audit backfill; new owner interface on forms;
    `expand_tool_box_intake` / trigger changes.
 4. Drop legacy columns, `cascade_ownership`, junction `user_id`; metadata
@@ -217,6 +232,9 @@ following the existing box-intake test script pattern; clean up afterwards.
    non-researcher; no legacy columns remain.
 7. As James Pepper: force-app dashboard lists his operations.
 8. New login created → linked/created `people` row with `is_researcher`.
+9. Curated operator backfill: every MAP/NEW row's operations link their main
+   operator; multi-person rows also fill additional operators; an additional
+   operator's force dashboard lists the run.
 
 ## Out of scope
 
