@@ -5,7 +5,7 @@ import { gotoCreateForm, selectM2O, fieldByLabel } from '../helpers';
 /**
  * Campaigns group operations (machining trials) / test sessions (testing campaigns)
  * under a project. A child created with a campaign inherits the campaign's project,
- * owner and default equipment/material (server hook `campaign-inherit`); the project
+ * default equipment/material (server hook `campaign-inherit`); owner comes from the login; the project
  * also fills live in the form via the `d1-project-inherit` interface.
  */
 const BASE = process.env.D1_BASE_URL || 'http://localhost:8055';
@@ -58,7 +58,7 @@ test('live: picking a machining trial fills the project field (with inherited hi
 	await expect(projectField.getByText(/inherited from campaign/i)).toBeVisible();
 });
 
-test('server hook: an operation created with a campaign inherits project + owner + equipment', async () => {
+test('server hook: an operation created with a campaign inherits project + equipment', async () => {
 	const h = { Authorization: `Bearer ${token}` };
 	const method = (await (await api.get('/items/manufacturing_methods?filter[method_code][_eq]=MT&fields=method_id', { headers: h })).json()).data[0];
 	const sample = (await (await api.get('/items/physical_samples?limit=1&fields=sample_id', { headers: h })).json()).data[0];
@@ -71,7 +71,7 @@ test('server hook: an operation created with a campaign inherits project + owner
 	try {
 		expect(op.project_id).toBe(projectId);
 		expect(op.equipment_id).toBe(equipmentId);
-		expect(op.owner_person_id).toBeTruthy(); // campaign owner (project PI) or current user, as a person
+		expect(op.owner_person_id).toBeTruthy(); // owner defaults to the logged-in user's person (d1-owner-default)
 	} finally {
 		await api.delete(`/items/manufacturing_operations/${op.operation_id}`, { headers: h });
 	}

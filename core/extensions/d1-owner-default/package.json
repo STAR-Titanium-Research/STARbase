@@ -1,8 +1,8 @@
 {
-  "name": "directus-extension-d1-default-owner",
+  "name": "directus-extension-d1-owner-default",
   "version": "1.0.0",
   "type": "module",
-  "description": "Defaults the researcher `owner` of a new manufacturing operation / test session to the creating user (editable).",
+  "description": "Owner defaults to the logged-in researcher on create when left blank (login wins).",
   "keywords": ["directus", "directus-extension", "directus-custom-hook"],
   "directus:extension": {
     "type": "hook",
