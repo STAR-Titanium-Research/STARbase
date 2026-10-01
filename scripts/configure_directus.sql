@@ -4,6 +4,22 @@
 -- directus_fields and directus_relations have no unique constraint on their
 -- logical keys, only on id — so we DELETE existing rows then INSERT fresh.
 --
+-- ⚠ STALE BASELINE — DO NOT RE-RUN AGAINST A MIGRATED DATABASE.
+-- This script's DELETE FROM directus_fields WHERE collection IN (...) wipes
+-- ALL field metadata for those collections, including anything added by later
+-- db/migrations/*_directus_meta.sql files (e.g. owner_person_id/
+-- operator_person_id/principal_investigator_person from 20260703000062, the
+-- test_sessions per-test-type fields from 20260703000059, campaign_samples
+-- from 20260710000087, etc.) — this script's own INSERT block below does not
+-- know about any of that, so re-running it silently reverts those forms.
+-- If a live DB ever needs this replayed (e.g. disaster recovery onto a fresh
+-- Directus with no migration history), you must also replay the migrate:up
+-- section of every later db/migrations/*.sql file that touches
+-- directus_fields/directus_relations for these collections, in chronological
+-- order, immediately afterward.
+-- Prefer adding a small targeted migration for any new field/collection
+-- instead of editing this file and re-running it.
+--
 -- Run:
 --   docker exec -i d1-database-postgres-1 psql -U d1 -d d1_database < scripts/configure_directus.sql
 -- =============================================================================
@@ -280,7 +296,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('insert_types','substrate',              NULL,'input',NULL,'raw',NULL,false,false,7,'half',false,NULL),
 ('insert_types','coating',                NULL,'input',NULL,'raw',NULL,false,false,8,'half',false,NULL),
 ('insert_types','mounting_style_code',    NULL,'input',NULL,'raw',NULL,false,false,9,'half',false,'[{"language":"en-US","translation":"Mounting Style Code (IFS)"}]'),
-('insert_types','edge_count',             NULL,'input','{"step":1,"min":1}','raw',NULL,false,false,10,'half',false,'[{"language":"en-US","translation":"Edge #"}]'),
+('insert_types','edge_count',             NULL,'input','{"step":1,"min":1}','raw',NULL,false,false,10,'half',false,'[{"language":"en-US","translation":"Usable Edges Per Insert"}]'),
 ('insert_types','inserts_per_box',        NULL,'input','{"step":1,"min":1}','raw',NULL,false,false,11,'half',false,'[{"language":"en-US","translation":"# Per Box"}]'),
 ('insert_types','nose_radius_mm',         NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,12,'half',false,'[{"language":"en-US","translation":"Nose Radius RE (mm)"}]'),
 ('insert_types','cutting_edge_length_mm', NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,13,'half',false,'[{"language":"en-US","translation":"Cutting Edge Length L (mm)"}]'),
@@ -314,7 +330,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- ── cutting_inserts ───────────────────────────────────────────────────────────
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('cutting_inserts','insert_id',      'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
-('cutting_inserts','insert_code',    NULL,'input',NULL,'raw',NULL,false,false,2,'half',true,'[{"language":"en-US","translation":"Insert ID"}]'),
+('cutting_inserts','insert_code',    NULL,'input','{"placeholder":"Auto-generated on save"}','raw',NULL,false,false,2,'half',false,'[{"language":"en-US","translation":"Insert ID"}]'),
 ('cutting_inserts','tool_box_id',    'm2o','select-dropdown-m2o','{"template":"{{tool_box_code}}"}','related-values','{"template":"{{tool_box_code}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Insert Box"}]'),
 ('cutting_inserts','insert_type_id', 'm2o','select-dropdown-m2o','{"template":"{{type_code}}"}','related-values','{"template":"{{type_code}}"}',false,false,4,'half',false,'[{"language":"en-US","translation":"Insert Type"}]'),
 ('cutting_inserts','insert_number',  NULL,'input','{"step":1}','raw',NULL,false,false,5,'half',false,'[{"language":"en-US","translation":"Position In Box"}]'),
@@ -323,7 +339,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('cutting_inserts','cascade_ownership','cast-boolean','toggle','{"label":"Apply to all edges below"}','boolean',NULL,false,false,8,'half',false,'[{"language":"en-US","translation":"Cascade Ownership to Edges"}]'),
 ('cutting_inserts','is_depleted',      'cast-boolean','toggle',NULL,'boolean',NULL,false,false,9,'half',false,'[{"language":"en-US","translation":"Depleted?"}]'),
 ('cutting_inserts','notes',            NULL,'input-multiline',NULL,'raw',NULL,false,false,10,'full',false,NULL),
-('cutting_inserts','insert_edges',     'o2m','list-o2m','{"template":"{{edge_code}} – {{edge_identifier}}","enableCreate":true}','related-values',NULL,false,false,11,'full',false,'[{"language":"en-US","translation":"Insert Edges"}]'),
+('cutting_inserts','insert_edges',     'o2m','list-o2m','{"template":"{{edge_code}}","enableCreate":true}','related-values',NULL,false,false,11,'full',false,'[{"language":"en-US","translation":"Insert Edges"}]'),
 ('cutting_inserts','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('cutting_inserts','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('cutting_inserts','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -331,7 +347,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- ── insert_edges ──────────────────────────────────────────────────────────────
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('insert_edges','edge_id',         'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
-('insert_edges','edge_code',       NULL,'input',NULL,'raw',NULL,false,false,2,'half',true,'[{"language":"en-US","translation":"Edge ID"}]'),
+('insert_edges','edge_code',       NULL,'input','{"placeholder":"Auto-generated on save"}','raw',NULL,false,false,2,'half',false,'[{"language":"en-US","translation":"Edge ID"}]'),
 ('insert_edges','insert_id',       'm2o','select-dropdown-m2o','{"template":"{{insert_code}}"}','related-values','{"template":"{{insert_code}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Parent Insert"}]'),
 ('insert_edges','edge_identifier', NULL,'input',NULL,'raw',NULL,false,false,4,'half',false,'[{"language":"en-US","translation":"Edge Identifier"}]'),
 ('insert_edges','owner',          'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,false,5,'half',false,'[{"language":"en-US","translation":"Owner"}]'),
@@ -436,7 +452,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- ── projects ──────────────────────────────────────────────────────────────────
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('projects','project_id',                 'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
-('projects','project_code',               NULL,'input',NULL,'raw',NULL,false,false,2,'half',true,'[{"language":"en-US","translation":"Project Code"}]'),
+('projects','project_code',               NULL,'input','{"placeholder":"Auto-generated on save"}','raw',NULL,false,false,2,'half',false,'[{"language":"en-US","translation":"Project Code"}]'),
 ('projects','project_name',               NULL,'input',NULL,'raw',NULL,false,false,3,'half',true,'[{"language":"en-US","translation":"Project Name"}]'),
 ('projects','principal_investigator_name',NULL,'input',NULL,'raw',NULL,false,false,4,'half',false,'[{"language":"en-US","translation":"Principal Investigator"}]'),
 ('projects','start_date',                 NULL,'datetime','{"type":"date"}','datetime',NULL,false,false,5,'half',false,NULL),
