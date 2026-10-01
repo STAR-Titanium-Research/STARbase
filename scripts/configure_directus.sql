@@ -362,6 +362,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('manufacturing_operations','operation_id',           'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
 ('manufacturing_operations','sample_id',              'm2o','select-dropdown-m2o','{"template":"{{sample_code}} – {{nickname}}","enableCreate":true}','related-values','{"template":"{{sample_code}}"}',false,false,2,'half',false,'[{"language":"en-US","translation":"Input Sample / Workpiece"}]'),
 ('manufacturing_operations','output_sample_id',       'm2o','select-dropdown-m2o','{"template":"{{sample_code}} – {{nickname}}","enableCreate":true}','related-values','{"template":"{{sample_code}}"}',false,false,2,'half',false,'[{"language":"en-US","translation":"Output Sample (Produced)"}]'),
+('manufacturing_operations','campaign_id',            'm2o','select-dropdown-m2o','{"template":"{{name}}"}','related-values','{"template":"{{name}}"}',false,false,12,'half',false,'[{"language":"en-US","translation":"Campaign"}]'),
 ('manufacturing_operations','method_id',              'm2o','select-dropdown-m2o','{"template":"{{method_code}} – {{method_name}}"}','related-values','{"template":"{{method_code}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Manufacturing Method"}]'),
 -- process_category: scalar discriminator that drives which typed param panel shows (method_id is a relation, can''t drive conditions)
 -- process_category is auto-inferred from the selected Manufacturing Method by the
@@ -454,13 +455,15 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('projects','project_id',                 'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
 ('projects','project_code',               NULL,'input','{"placeholder":"Auto-generated on save"}','raw',NULL,false,false,2,'half',false,'[{"language":"en-US","translation":"Project Code"}]'),
 ('projects','project_name',               NULL,'input',NULL,'raw',NULL,false,false,3,'half',true,'[{"language":"en-US","translation":"Project Name"}]'),
-('projects','principal_investigator_name',NULL,'input',NULL,'raw',NULL,false,false,4,'half',false,'[{"language":"en-US","translation":"Principal Investigator"}]'),
+('projects','principal_investigator',     'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,true,90,'half',false,'[{"language":"en-US","translation":"Principal Investigator (legacy — use the dropdown above)"}]'),
+('projects','principal_investigator_name',NULL,'input',NULL,'raw',NULL,false,true,4,'half',false,'[{"language":"en-US","translation":"Principal Investigator"}]'),
 ('projects','start_date',                 NULL,'datetime','{"type":"date"}','datetime',NULL,false,false,5,'half',false,NULL),
 ('projects','end_date',                   NULL,'datetime','{"type":"date"}','datetime',NULL,false,false,6,'half',false,NULL),
 ('projects','export_controlled',          'cast-boolean','toggle',NULL,'boolean',NULL,false,false,7,'half',false,'[{"language":"en-US","translation":"Export Controlled?"}]'),
 ('projects','is_active',                  'cast-boolean','toggle',NULL,'boolean',NULL,false,false,8,'half',false,'[{"language":"en-US","translation":"Active?"}]'),
 ('projects','description',                NULL,'input-multiline',NULL,'raw',NULL,false,false,9,'full',false,NULL),
-('projects','document_number',            NULL,'input',NULL,'raw',NULL,false,false,10,'half',false,'[{"language":"en-US","translation":"Document #"}]'),
+('projects','document_number',            NULL,'input',NULL,'raw',NULL,false,true,10,'half',false,'[{"language":"en-US","translation":"Document #"}]'),
+('projects','Image',                      'file','file-image','{"crop":false}','image',NULL,false,false,13,'half',false,'[{"language":"en-US","translation":"Image"}]'),
 ('projects','investigator_access_notice', 'alias,no-data','presentation-notice','{"text":"👥 Secondary investigators listed below will be recorded as having viewing access to all samples, operations, and test sessions connected to this project.","color":"blue"}',NULL,NULL,false,false,11,'full',false,NULL),
 ('projects','secondary_investigators',    'm2m','list-m2m','{"template":"{{user_id.first_name}} {{user_id.last_name}}","junction_field":"user_id"}','related-values','{"template":"{{user_id.first_name}} {{user_id.last_name}}"}',false,false,12,'full',false,'[{"language":"en-US","translation":"Secondary Investigators"}]'),
 ('projects','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
@@ -471,6 +474,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('test_sessions','session_id',           'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
 ('test_sessions','sample_id',            'm2o','select-dropdown-m2o','{"template":"{{sample_code}} – {{nickname}}"}','related-values','{"template":"{{sample_code}}"}',false,false,2,'half',true,'[{"language":"en-US","translation":"Sample / Workpiece"}]'),
+('test_sessions','campaign_id',          'm2o','select-dropdown-m2o','{"template":"{{name}}"}','related-values','{"template":"{{name}}"}',false,false,10,'half',false,'[{"language":"en-US","translation":"Campaign"}]'),
 ('test_sessions','equipment_id',         'm2o','d1-machine-picker','{"categoryField":"test_category"}','related-values','{"template":"{{equipment_name}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Machine"}]'),
 ('test_sessions','insert_edge_id',       'm2o','select-dropdown-m2o','{"template":"{{edge_code}}"}','related-values','{"template":"{{edge_code}}"}',false,false,4,'half',false,'[{"language":"en-US","translation":"Insert Edge Used"}]'),
 ('test_sessions','project_id',           'm2o','select-dropdown-m2o','{"template":"{{project_code}} – {{project_name}}"}','related-values','{"template":"{{project_code}}"}',false,false,5,'half',false,'[{"language":"en-US","translation":"Project"}]'),
@@ -676,6 +680,7 @@ INSERT INTO directus_relations (many_collection, many_field, one_collection, one
 ('manufacturing_operations',  'method_id',        'manufacturing_methods',      'operations',                'nullify'),
 ('manufacturing_operations',  'tool_id',          'tools',                      NULL,                        'nullify'),
 ('manufacturing_operations',  'insert_edge_id',   'insert_edges',               NULL,                        'nullify'),
+('manufacturing_operations',  'campaign_id',      'campaigns',                  'operations',                'nullify'),
 ('manufacturing_operations',  'project_id',       'projects',                   NULL,                        'nullify'),
 -- output sample (produced by the operation) → O2M back-link on physical_samples
 ('manufacturing_operations',  'output_sample_id', 'physical_samples',           'produced_by_operations',    'nullify'),
@@ -701,6 +706,7 @@ INSERT INTO directus_relations (many_collection, many_field, one_collection, one
 -- test sessions: sample_id NOT NULL → delete sessions when sample is deleted
 ('test_sessions',             'sample_id',        'physical_samples',            'test_sessions',            'delete'),
 -- nullable FKs
+('test_sessions',             'campaign_id',      'campaigns',                   'sessions',                 'nullify'),
 ('test_sessions',             'equipment_id',     'equipment',                   'test_sessions',            'nullify'),
 ('test_sessions',             'insert_edge_id',   'insert_edges',                NULL,                       'nullify'),
 ('test_sessions',             'project_id',       'projects',                    NULL,                       'nullify'),
