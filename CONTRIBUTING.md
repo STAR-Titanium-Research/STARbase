@@ -27,6 +27,10 @@ review. These conventions keep each session **resumable cold** and the core
   Scope by area where useful, e.g. `feat(db): add physical_samples table`.
 - **ADRs:** any significant or hard-to-reverse decision gets an ADR
   ([`docs/adr/`](./docs/adr/)) in the same PR.
+- **Feature designs:** a substantial feature gets a design spec in
+  [`docs/superpowers/specs/`](./docs/superpowers/specs/); update its Status line
+  when it ships. Implementation plans are deleted once their feature has
+  shipped — see [`docs/superpowers/README.md`](./docs/superpowers/README.md).
 - **Phases:** keep changes within the current phase's scope (see `plan.md`);
   update the status tracker when a phase completes.
 

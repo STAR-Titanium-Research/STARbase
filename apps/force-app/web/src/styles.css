@@ -2,29 +2,69 @@
    cyan accent, Fx/Fy/Fz red/green/blue) so the shell and the explorer read as one product. */
 :root {
 	color-scheme: dark;
-	--bg: #0b1020;
-	--bg-2: #111a33;
+	/* ===== DESIGN TEST (2026-09-25) — revert with:
+	       git checkout -- apps/force-app/web/src/styles.css
+	   Two changes, both argued from the data rather than taste:
+	   1. The interface palette no longer borrows from the DATA palette. --accent was #38bdf8,
+	      a hair off the Fz axis blue (#60a5fa in the panels, --fz #2563eb here), so "selected"
+	      and "Z axis" were said in the same voice. Amber is used by no channel.
+	   2. Panels were rgba(255,255,255,0.04) over the ground — a 4% wash that made nine panels
+	      read as one dark field. The greys are opaque now and actually step apart.
+	   ===== */
+	--bg: #080c14;
+	--bg-2: #161d29;
 	--bg-3: rgba(255, 255, 255, 0.03);
-	--surface: rgba(255, 255, 255, 0.04);
-	--surface-2: rgba(255, 255, 255, 0.07);
-	--border: rgba(255, 255, 255, 0.12);
-	--border-2: rgba(255, 255, 255, 0.18);
-	--text: #e2e8f0;
-	--text-dim: #94a3b8;
-	--text-faint: #64748b;
-	--accent: #38bdf8;
-	--accent-ink: #0b1020;
+	--surface: #1b2433;
+	--surface-2: #232e40;
+	--border: #26323f;
+	--border-2: #34425a;
+	--text: #e6edf5;
+	--text-dim: #8494a8;
+	--text-faint: #61708a;
+	--accent: #f5a524;
+	--accent-ink: #12161f;
 	--danger: #fca5a5;
 	--fx: #dc2626;
 	--fy: #16a34a;
 	--fz: #2563eb;
+	/* Text/icon colours for statuses and axis readouts. These 400-level hues read well on the dark
+	   ground but wash out on the light theme's near-white, so each theme sets its own. Solid fills
+	   carrying dark ink (badges, meter bars, the Fx/Fy/Fz segment fills) keep their literals, which
+	   read on both. Tints are derived: color-mix(in srgb, var(--ok) 12%, transparent). */
+	--ok: #4ade80;
+	--warn: #fbbf24;
+	--fx-ink: #f87171;
+	--fy-ink: #4ade80;
+	--fz-ink: #60a5fa;
 	--overlay: rgba(0, 0, 0, 0.55);
 	/* Plot canvases (force plots, FRM map, FFT, spectrogram, waterfall) follow the theme rather
 	   than staying permanently dark as a fixed "instrument display" — single toggle point. */
-	--plot-bg: #0b1020;
+	--plot-bg: #090d15;
 	--radius: 14px;
 	--font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 	--mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+	/* Type scale. Every font-size in the app is one of these (there were 27, from 8px to 34px).
+	   11px is the floor: the smaller sizes were badges and labels that had to be read across a lab.
+	     xs 11  badges, tags, units, small caps labels     lg 15  card/dialog titles, key values
+	     sm 12  hints, field labels, meta                  xl 18  settings tab titles
+	     md 13  body, inputs, buttons, menus               2xl 22  page titles
+	   display 30 is the RPM panel's readout. The plotting package uses the same names with px
+	   fallbacks, since it also renders inside Directus where these aren't defined. */
+	--fs-xs: 11px;
+	--fs-sm: 12px;
+	--fs-md: 13px;
+	--fs-lg: 15px;
+	--fs-xl: 18px;
+	--fs-2xl: 22px;
+	--fs-display: 30px;
+	/* Icon (Material Symbols) sizes, kept apart from type: xs inline with text, sm in buttons and
+	   chips, md in headers and menus, lg in banners, xl for dialog and status icons, 2xl loading. */
+	--icon-xs: 14px;
+	--icon-sm: 16px;
+	--icon-md: 18px;
+	--icon-lg: 20px;
+	--icon-xl: 24px;
+	--icon-2xl: 32px;
 
 	/* --- Directus theme-variable compatibility layer ---
 	   The plotting components (ForceDashboard.vue, ForceChart.vue) were authored for the
@@ -35,10 +75,13 @@
 	--theme--foreground: var(--text);
 	--theme--foreground-subdued: var(--text-dim);
 	--theme--primary: var(--accent);
-	--theme--background: #0e162c;
-	--theme--background-subdued: rgba(255, 255, 255, 0.045);
-	--theme--border-color: rgba(255, 255, 255, 0.16);
-	--theme--border-color-subdued: rgba(255, 255, 255, 0.09);
+	/* Mapped onto the Record page's own tokens rather than a parallel set of literals, so the
+	   Plot dashboard's cards, inputs and hairlines are literally the same surfaces as Record's
+	   panels instead of near-misses of them. */
+	--theme--background: var(--bg-2);
+	--theme--background-subdued: var(--surface);
+	--theme--border-color: var(--border);
+	--theme--border-color-subdued: var(--border);
 	--theme--fonts--sans--font-family: var(--font);
 	--theme--fonts--monospace--font-family: var(--mono);
 }
@@ -55,12 +98,22 @@
 	--text: #1e293b;
 	--text-dim: #64748b;
 	--text-faint: #94a3b8;
-	--accent: #0284c7;
+	/* Neutral slate, not a hue. Same rule as the dark design test above (the interface doesn't
+	   borrow from the data palette): the old sky #0284c7 sat next to the Fz blue, teal next to the Fy
+	   green, violet on the Tacho channel, and amber is the warning colour here (--warn) and wasn't
+	   liked. On a light page every hue is taken by data or status, so "selected" is said in ink —
+	   ~10:1 on white as text, and as a fill under white ink. */
+	--accent: #334155;
 	--accent-ink: #fff;
 	--danger: #dc2626;
 	--fx: #dc2626;
 	--fy: #16a34a;
 	--fz: #2563eb;
+	--ok: #15803d;
+	--warn: #b45309;
+	--fx-ink: #b91c1c;
+	--fy-ink: #15803d;
+	--fz-ink: #1d4ed8;
 	--overlay: rgba(15, 23, 42, 0.4);
 	--plot-bg: #eef1f6;
 	--theme--foreground: var(--text);
@@ -117,46 +170,201 @@ a {
 button {
 	font-family: inherit;
 }
+/* One keyboard-focus ring for every control, in the accent — instead of Chromium's default blue
+   ring on some controls and nothing at all on others. Mouse clicks don't match :focus-visible, so
+   this only shows for keyboard use; fields that style their own focus (border-color) keep it. */
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
 
-/* Segmented toggle — carried over from the Directus force-analysis controls (Fx/Fy/Fz, Force/FFT),
-   so the recording plot controls read the same. Global (unscoped) so any panel can use it. */
+/* ---- Controls ----
+   One set for the whole app, instead of a private copy per component (there were ~30 button
+   styles: .scd-btn, .cd-btn, .ecm-btn, .vcb-btn, .lcv-btn, .rb-btn, ... in four paddings and
+   five font sizes). Two heights: 34px, and 26px for toolbars and rows (.sm, segments, chips).
+
+   Buttons: .btn is the everyday (secondary) button; add at most one variant --
+     .primary  the main action of a view or dialog   .danger   destructive, or Stop
+     .success  Start, Recover                         .quiet    no fill until hovered
+   -- and optionally .sm (compact) and/or .icon (square, icon only: give it a title).
+   .danger.quiet is the one combination: a per-row delete. .on is a toggle's pressed state and
+   .inverse sits on a coloured banner. */
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	height: 34px;
+	padding: 0 14px;
+	font: inherit;
+	font-size: var(--fs-md);
+	font-weight: 600;
+	line-height: 1;
+	white-space: nowrap;
+	text-decoration: none;
+	color: var(--text);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-2); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn .material-symbols-rounded { font-size: var(--icon-sm); }
+.btn.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+/* Mixing toward the text colour lightens on the dark theme and darkens on the light one. */
+.btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--text)); border-color: transparent; }
+.btn.danger { color: #fff; background: #dc2626; border-color: #dc2626; }
+.btn.danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+.btn.success { color: #05210f; background: #22c55e; border-color: #22c55e; }
+.btn.success:hover:not(:disabled) { background: #16a34a; border-color: #16a34a; }
+.btn.quiet { color: var(--text-dim); background: transparent; border-color: transparent; }
+.btn.quiet:hover:not(:disabled) { color: var(--text); background: var(--surface-2); border-color: transparent; }
+/* A delete button repeated on every row of a list: red text rather than a red block per row. */
+.btn.danger.quiet { color: var(--danger); background: transparent; border-color: transparent; }
+.btn.danger.quiet:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+/* Pressed state of a toggle button (set aria-pressed too). */
+.btn.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.btn.on:hover:not(:disabled) { color: var(--accent-ink); background: color-mix(in srgb, var(--accent) 85%, var(--text)); border-color: transparent; }
+/* On a coloured banner (recording, disk space, alarm): translucent white. The banner's main action
+   adds .primary: solid white, in the banner's own colour (the banner sets --banner). */
+.btn.inverse { color: #fff; background: rgba(255, 255, 255, 0.18); border-color: transparent; }
+.btn.inverse:hover:not(:disabled) { color: #fff; background: rgba(255, 255, 255, 0.3); border-color: transparent; }
+.btn.inverse.primary { color: var(--banner, #0f172a); background: #fff; }
+.btn.inverse.primary:hover:not(:disabled) { color: var(--banner, #0f172a); background: rgba(255, 255, 255, 0.86); }
+.btn.sm { height: 26px; padding: 0 10px; gap: 5px; font-size: var(--fs-sm); border-radius: 7px; }
+.btn.sm .material-symbols-rounded { font-size: var(--icon-xs); }
+.btn.icon { width: 34px; padding: 0; color: var(--text-dim); }
+.btn.icon.sm { width: 26px; }
+.btn.icon .material-symbols-rounded { font-size: var(--icon-md); }
+.btn.icon.sm .material-symbols-rounded { font-size: var(--icon-sm); }
+.btn.icon:hover:not(:disabled) { color: var(--text); }
+
+/* Segmented control: one choice out of a few, joined. .lg matches .btn's height. Channel choices
+   (.fx/.fy/.fz) light up in the channel's colour instead of the accent. */
 .segmode {
 	display: inline-flex;
+	flex-shrink: 0;
+	border: 1px solid var(--border);
 	border-radius: 8px;
 	overflow: hidden;
-	border: 1px solid var(--border);
 }
 .segbtn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 5px;
+	height: 24px;
+	padding: 0 10px;
 	font: inherit;
-	font-size: 11px;
-	font-weight: 700;
-	cursor: pointer;
-	border: 0;
-	padding: 5px 12px;
-	background: var(--surface);
+	font-size: var(--fs-sm);
+	font-weight: 600;
+	line-height: 1;
+	white-space: nowrap;
 	color: var(--text-dim);
+	background: var(--surface);
+	border: 0;
 	border-right: 1px solid var(--border);
+	cursor: pointer;
 }
-.segbtn:last-child {
-	border-right: 0;
+.segbtn:last-child { border-right: 0; }
+.segbtn:hover:not(:disabled):not(.on) { color: var(--text); background: var(--surface-2); }
+.segbtn.on { color: var(--accent-ink); background: var(--accent); }
+.segbtn:disabled { opacity: 0.4; cursor: default; }
+.segbtn .material-symbols-rounded { font-size: var(--icon-sm); }
+.segmode.lg .segbtn { height: 32px; padding: 0 14px; font-size: var(--fs-md); }
+.segbtn.fx.on { color: #fff; background: var(--fx); }
+.segbtn.fy.on { color: #fff; background: var(--fy); }
+.segbtn.fz.on { color: #fff; background: var(--fz); }
+
+/* Toggle chip: a pill that lights up in its own colour (--c, e.g. a channel's) when on. */
+.chip-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	height: 26px;
+	padding: 0 10px;
+	font: inherit;
+	font-size: var(--fs-sm);
+	font-weight: 600;
+	line-height: 1;
+	color: var(--text-dim);
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	cursor: pointer;
 }
-.segbtn.on {
-	background: var(--accent);
-	color: var(--accent-ink);
+.chip-toggle:hover { color: var(--text); }
+.chip-toggle.on {
+	color: var(--c, var(--accent));
+	border-color: var(--c, var(--accent));
+	background: color-mix(in srgb, var(--c, var(--accent)) 14%, transparent);
 }
-.segbtn:disabled {
-	opacity: 0.4;
-	cursor: default;
+.chip-toggle .material-symbols-rounded { font-size: var(--icon-sm); }
+
+/* Dialogs: every modal opens the same way — the confirm prompt faded in while the others just
+   appeared. The panel itself is what ui/useDialog.ts focuses on open, so it shows no ring. */
+@keyframes dialog-backdrop-in {
+	from { opacity: 0; }
 }
-.segbtn.fx.on {
-	background: var(--fx);
-	color: #fff;
+/* A rise, not a scale: plot canvases inside a dialog size their pixel buffer from
+   getBoundingClientRect(), which includes transforms, so one mounting mid-scale was drawn 2% short
+   and lost its bottom edge. translateY moves the box without resizing it. */
+@keyframes dialog-in {
+	from { opacity: 0; transform: translateY(8px); }
 }
-.segbtn.fy.on {
-	background: var(--fy);
-	color: #fff;
+.dialog-backdrop-in {
+	animation: dialog-backdrop-in 0.14s ease-out;
 }
-.segbtn.fz.on {
-	background: var(--fz);
-	color: #fff;
+.dialog-in {
+	animation: dialog-in 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+[role='dialog']:focus,
+[role='alertdialog']:focus {
+	outline: none;
+}
+
+/* ---- Motion ----
+   One spinner for every loading icon: there were eleven private @keyframes copies turning at five
+   different speeds (0.7-1.1 s). Components just add class="spin" (or use these keyframes). */
+@keyframes spin {
+	to { transform: rotate(360deg); }
+}
+.spin {
+	animation: spin 0.9s linear infinite;
+}
+/* "Live" dot: an expanding ring in --pulse-color (red by default). The pop-out window's recording
+   dot blinked instead of pulsing like the Record page's. */
+@keyframes live-pulse {
+	0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-color, #ef4444) 50%, transparent); }
+	70% { box-shadow: 0 0 0 7px transparent; }
+	100% { box-shadow: 0 0 0 0 transparent; }
+}
+/* Hover/active colour changes ease instead of snapping. Colour properties only, never layout, and
+   any component declaring its own transition keeps it (this is the lowest specificity there is). */
+button,
+a,
+input,
+select,
+textarea {
+	transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+}
+/* Reduced motion (an OS setting): no pulsing, blinking, sliding or fading. Nothing here depends on
+   an animation to be understood — the alarm banner stays solid red and keeps its tone. Spinners
+   are the exception: they are state, and a frozen one reads as a hang, so they keep turning slowly. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+	.spin,
+	.spinner,
+	.v-progress-circular-shim {
+		animation-duration: 2s !important;
+		animation-iteration-count: infinite !important;
+	}
 }

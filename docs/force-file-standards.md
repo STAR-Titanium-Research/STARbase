@@ -251,7 +251,7 @@ be on the signature, not the field list. This is the highest-priority remediatio
 ### Archive census — 2026-07-24
 
 Full crawl of `Z:\star_group1\Shared\Machining\FRM`, 288 `.mat` files, 225 GB.
-Inventory: [`force_structure_inventory.csv`](../force_structure_inventory.csv).
+Inventory: [`force_structure_inventory.csv`](force-archive-census/force_structure_inventory.csv).
 
 | Grade | Files | % | Action |
 |---|---:|---:|---|

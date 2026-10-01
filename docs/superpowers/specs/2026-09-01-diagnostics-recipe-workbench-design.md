@@ -1,5 +1,9 @@
 # Diagnostics Recipe Workbench — design
 
+**Status:** implemented — phases A–F shipped 2026-09-01 → 2026-09-03 (`scripts/diag/recipe.py`,
+`registry.py`, `runner.py`, `plugins/diag-service/`), then extended by the Phase G and Phase H
+specs alongside this one.
+
 Supersedes the UI and pipeline-structure portions of
 `2026-08-30-diagnostics-workbench-design.md`. That document's science (angular resampling, TSA,
 radial detrend, Getis-Ord, HDBSCAN, envelope analysis) is unchanged and still authoritative;

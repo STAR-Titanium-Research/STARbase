@@ -17,6 +17,7 @@
     "@d1/force-plotting": "*",
     "axios": "^1.7.9",
     "grid-layout-plus": "^1.1.1",
+    "material-symbols": "^0.47.5",
     "potree-core": "^2.0.4",
     "three": "^0.160.0",
     "vue": "^3.5.13",

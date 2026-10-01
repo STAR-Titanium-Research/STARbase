@@ -125,3 +125,93 @@ def test_delete_allows_a_finished_session_that_is_still_referenced(client, tmp_p
 
     monkeypatch.setattr(main, "_session", _FakeSession())
     assert client.delete("/captures/done-one").status_code == 200
+
+
+# ---- PATCH /captures/{id}/metadata ----
+#
+# The motivating case: a forgotten Sample locks Upload out at cut end with no way back in (the
+# capture stays on disk, listed, but nothing lets you assign one after the fact). These also cover
+# the real bug found while building this — RecordConfig.sample_name has its own default ("SIM-CUT")
+# completely separate from extra_metadata.sample_name, and the frontend never sent it, so every
+# real recording archived under the generic default regardless of what was actually picked.
+
+
+def test_patch_metadata_corrects_sample_name_and_config_together(client, tmp_path):
+    _make_capture(tmp_path, "20260822-100000-aaa", finalized=True)
+
+    res = client.patch(
+        "/captures/20260822-100000-aaa/metadata", json={"sample_name": "REAL-SAMPLE-42"}
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["sample_name"] == "REAL-SAMPLE-42"
+    assert (
+        body["config"]["sample_name"] == "REAL-SAMPLE-42"
+    )  # kept in step, not just the top-level echo
+
+    with open(os.path.join(str(tmp_path), "20260822-100000-aaa", "summary.json")) as f:
+        on_disk = json.load(f)
+    assert on_disk["sample_name"] == "REAL-SAMPLE-42"
+
+
+def test_patch_metadata_recording_parameters(client, tmp_path):
+    _make_capture(tmp_path, "20260822-100000-aaa", finalized=True)
+
+    res = client.patch(
+        "/captures/20260822-100000-aaa/metadata",
+        json={"rpm": 1500, "feed": 0.08, "diam": 90, "sample_rate": 20000},
+    )
+    cfg = res.json()["config"]
+    assert (
+        cfg["rpm"] == 1500
+        and cfg["feed"] == 0.08
+        and cfg["diam"] == 90
+        and cfg["sample_rate"] == 20000
+    )
+    assert (
+        cfg["source"] == "nidaq"
+    ), "unrelated existing config fields must survive the patch untouched"
+
+
+def test_patch_metadata_replaces_extra_metadata_wholesale(client, tmp_path):
+    """Matches /record/start's own semantics (extra_metadata: metaObj()) — the frontend always
+    sends the full current+edited object, not a sparse diff, so this is a replace, not a per-key
+    merge. A caller sending a smaller object should see keys actually disappear."""
+    _make_capture(tmp_path, "20260822-100000-aaa", finalized=True)
+    client.patch(
+        "/captures/20260822-100000-aaa/metadata",
+        json={"extra_metadata": {"sample_name": "A", "notes": "first pass"}},
+    )
+    res = client.patch(
+        "/captures/20260822-100000-aaa/metadata",
+        json={"extra_metadata": {"sample_name": "A"}},
+    )
+    body = res.json()
+    assert body["metadata"] == {"sample_name": "A"}
+    assert body["config"]["extra_metadata"] == {"sample_name": "A"}
+    assert "notes" not in body["metadata"]
+
+
+def test_patch_metadata_only_touches_provided_fields(client, tmp_path):
+    _make_capture(tmp_path, "20260822-100000-aaa", finalized=True)
+    res = client.patch("/captures/20260822-100000-aaa/metadata", json={"rpm": 1000})
+    body = res.json()
+    assert body["sample_name"] == "SAMPLE-20260822-100000-aaa"  # untouched
+    assert body["config"]["source"] == "nidaq"  # untouched
+
+
+def test_patch_metadata_404_for_unfinalized_or_missing(client, tmp_path):
+    _make_capture(tmp_path, "20260822-090000-partial", finalized=False)
+    assert (
+        client.patch("/captures/20260822-090000-partial/metadata", json={"rpm": 1000}).status_code
+        == 404
+    )
+    assert client.patch("/captures/does-not-exist/metadata", json={"rpm": 1000}).status_code == 404
+
+
+def test_patch_metadata_rejects_path_traversal(client):
+    res = client.patch("/captures/../../etc/metadata", json={"rpm": 1000})
+    assert res.status_code in (
+        400,
+        404,
+    )  # never a 500, and never touches anything outside CAPTURES_ROOT

@@ -1,6 +1,6 @@
 # Diagnostics Phase F — Seeded Segmentation & Recipe Library
 
-**Status:** design, 2026-09-03
+**Status:** implemented 2026-09-03 (merged as "Phase F: seeded segmentation + recipe library")
 **Extends:** `docs/superpowers/specs/2026-09-01-diagnostics-recipe-workbench-design.md` (the Phase F row of its Phasing table: "Seeded segmentation step; recipe library (save / name / apply across cuts) → Campaign-scale reuse")
 **Depends on:** Phases A–E, all merged to `main` (recipe engine, `base.d1an`, diag-service, tune-and-see workbench, paint layers)
 

@@ -7,7 +7,7 @@
 // (the same gate FrmPanel.vue uses for its FrmCloud branch), not while a cut is in progress.
 import { computed } from 'vue';
 import { useWorkspace } from '../workspace';
-import { PolarPlot, type PolarParams } from '@d1/force-plotting';
+import { PolarPlot, COLORMAPS, colormapLabel, type PolarParams } from '@d1/force-plotting';
 import { appUrl } from '../../appUrl';
 
 const w = useWorkspace();
@@ -45,16 +45,19 @@ function openLive() {
 <template>
 	<div class="frm-panel">
 		<div class="frm-controls">
-			<div class="segmode">
+			<div class="segmode radius-seg">
 				<button v-for="r in RADII" :key="r" class="segbtn" :class="{ on: w.plot.polarRadius === r }" @click="w.plot.polarRadius = r">{{ r }}</button>
 			</div>
 			<select class="cmap" v-model="w.plot.polarAngleSource" title="Angle source">
 				<option v-for="s in SOURCES" :key="s.key" :value="s.key">{{ s.label }}</option>
 			</select>
+			<!-- Driven off COLORMAPS rather than a hardcoded list: w.plot.colormap is shared with the
+				 FRM colour-scale editor, so a ramp picked there must be selectable (and spelled the
+				 same way) here too, or this select renders an unmatched/blank value. -->
 			<select class="cmap" v-model="w.plot.colormap" title="Colormap">
-				<option v-for="m in ['viridis', 'inferno', 'grayscale']" :key="m">{{ m }}</option>
+				<option v-for="m in Object.keys(COLORMAPS)" :key="m" :value="m">{{ colormapLabel(m) }}</option>
 			</select>
-			<button class="popout" title="Pop out to a new window" @click="openLive">
+			<button class="btn icon sm" title="Pop out to a new window" @click="openLive">
 				<span class="material-symbols-rounded">open_in_new</span>
 			</button>
 		</div>
@@ -68,13 +71,8 @@ function openLive() {
 <style scoped>
 .frm-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
 .frm-controls { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
-.segmode { display: flex; gap: 4px; margin-right: auto; }
-.segbtn { padding: 5px 10px; font-size: 12px; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; cursor: pointer; }
-.segbtn.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; border-color: var(--accent); }
-.cmap { padding: 5px 7px; font-size: 12px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; }
-.popout { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); cursor: pointer; }
-.popout:hover { color: var(--accent); background: var(--surface-2); }
-.popout .material-symbols-rounded { font-size: 15px; }
+.radius-seg { margin-right: auto; }
+.cmap { padding: 5px 7px; font-size: var(--fs-sm); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; }
 .frm-body { flex: 1; min-height: 0; }
 .frm-body > * { height: 100%; }
 .loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); text-align: center; padding: 12px; }

@@ -2,6 +2,7 @@
 // the MATLAB app's alarms. Latching: once a threshold is breached the alarm fires and stays until
 // acknowledged (safety-first). A looping attention tone plays via the Web Audio API while tripped.
 import { reactive, ref } from 'vue';
+import { getConfig } from '../config';
 
 export interface AlarmConfig {
 	forceEnabled: boolean;
@@ -159,12 +160,7 @@ export class AlarmController {
 		}, 350);
 	}
 	private forceMaxVolume() {
-		try {
-			const base = localStorage.getItem('force-app.config.override');
-			const cfg = base ? JSON.parse(base) : {};
-			const url = cfg.recorderUrl || import.meta.env.VITE_RECORDER_URL || 'http://localhost:8200';
-			fetch(`${url}/audio/maxvolume`, { method: 'POST' }).catch(() => {});
-		} catch { /* best effort */ }
+		fetch(`${getConfig().recorderUrl}/audio/maxvolume`, { method: 'POST' }).catch(() => {});
 	}
 	private stopTone() {
 		if (this.beat != null) { clearInterval(this.beat); this.beat = null; }

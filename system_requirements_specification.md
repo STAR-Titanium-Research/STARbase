@@ -1,8 +1,9 @@
+# System Requirements Specification
 
 ## 1. Context & Executive Summary
 * **Current State:** A research laboratory manages physical samples, material stocks, manufacturing logs, specialized tooling components, and heavy experimental files via a low-code front-end (AppSheet) mapped to a flat, multi-tab spreadsheet backend (Google Sheets).
 * **Core Pain Points:**
-  * **Relational Failure:** Spreadsheets cannot natively handle deeply nested hierarchical dependencies (e.g., Tool Box $\\rightarrow$ Multi-edged Insert $\\rightarrow$ Specific Cutting Edge).
+  * **Relational Failure:** Spreadsheets cannot natively handle deeply nested hierarchical dependencies (e.g., Tool Box $\rightarrow$ Multi-edged Insert $\rightarrow$ Specific Cutting Edge).
   * **Data Ingestion Bottlenecks:** Manual workflows fail to capture programmatic, real-time data dumps from laboratory equipment and analysis engines (e.g., MATLAB).
   * **Scalability Limitations:** Standard HTTP body payloads and web servers crash or exhaust system RAM when handling large experimental datasets ranging from 10 GB to 100 GB.
   * **Accountability & Compliance Gaps:** Lack of multi-user role tracking leads to unrecorded modifications, overwrite collisions, and non-existent scientific data histories.
@@ -48,9 +49,26 @@ Rather than hardcoding process-specific attributes, the system leverages a metad
 
 Because raw data files routinely scale between **10 GB and 100 GB** per experimental run, standard HTTP application layers must be completely bypassed to prevent Out-Of-Memory (OOM) crashes.
 
-Code outputFile successfully written to: system_requirements_specification.md
+```text
+[ MATLAB / Test Rig Client ]
+│
+├── 1. GET /api/samples/{id} ───────────────> [ Core Application API ]
+│                                                   │ (Returns Dimensions, Material)
+├── 2. [ Executes Physical Test Campaign ]          │
+│                                                   ▼
+├── 3. S3 Multipart Upload (Chunked 10GB+) ───> [ Local MinIO Object Storage ]
+│                                                   │ (Returns Permanent Object URI)
+└── 4. POST /api/sessions (Passes Storage URI) ─> [ Core Application API ]
+                                                             │
+                                                             ▼ (Asynchronous Webhook Trigger)
+                                              [ Heavy Data Worker Container ]
+                                      (Memory-Mapped Parsing & Statistical Analysis)
+                                                             │
+                                                             ▼
+                                             [ POST /api/sessions/{id}/plots ]
+                                         (Appends Summary Stats & Visualizations)
+```
 
-[ MATLAB / Test Rig Client ]│├── 1. GET /api/samples/{id} ───────────────> [ Core Application API ]│                                                   │ (Returns Dimensions, Material)├── 2. [ Executes Physical Test Campaign ]          ││                                                   ▼├── 3. S3 Multipart Upload (Chunked 10GB+) ───> [ Local MinIO Object Storage ]│                                                   │ (Returns Permanent Object URI)└── 4. POST /api/sessions (Passes Storage URI) ─> [ Core Application API ]│▼ (Asynchronous Webhook Trigger)[ Heavy Data Worker Container ](Memory-Mapped Parsing & Statistical Analysis)│▼[ POST /api/sessions/{id}/plots ](Appends Summary Stats & Visualizations)
 ### Step 1: Programmatic Metadata Query
 * Before initiating processing or testing, the machine endpoint or software client (e.g., MATLAB) executes an authenticated `GET` request to `/api/samples/{id}` using a hardware barcode scan or input string.
 * The system returns the sample's complete physical profile (material, dimensions, processing status) in JSON format.
@@ -88,4 +106,48 @@ To preserve scientific data integrity across multi-user environments, the system
     "previous_value": "452.18",
     "updated_value": "449.02"
   }
-C. Concurrency ControlThe system handles race conditions between manual front-end web edits and automated machine API updates using Optimistic Concurrency Control (OCC).Tables include an incremental version field or precise millisecond timestamp verification (updated_at). Conflicting updates are safely rejected, forcing the client engine to fetch refreshed states before re-submitting.5. UI Layout & Complete Traceability RequirementsThe front-end user experience must prioritize complete bi-directional click-through traceability, replacing disconnected tabs with an integrated chronological view.Cradle-to-Grave Sample Timeline: Looking up an individual Sample displays its complete digital twin trajectory across time:$$\text{Raw Material Stock Lot} \longrightarrow \text{Sintering Operation (Log + Curve File)} \longrightarrow \text{Machining Operation (Tooling Info)} \longrightarrow \text{Sequential Test Campaigns}$$Forward Traceability: Clicking any historical node immediately expands operator details, asset utilization records, and processing metadata.Reverse Traceability: Inspecting any deep storage file or test session output exposes click-through breadcrumbs tracing the entire lineage back to the originating components:$$\text{10GB+ Raw File} \longrightarrow \text{Test Session ID} \longrightarrow \text{Specific Insert Edge} \longrightarrow \text{Parent Insert} \longrightarrow \text{Tool Box}$$6. AI-Readiness & Local Text-to-SQL OptimizationTo ensure a self-hosted LLM (e.g., Llama-3, Mistral deployed via Ollama) can natively parse and answer queries regarding experimental data, the data layer must implement semantic readability standards.Deterministic Naming Conventions: Cryptic abbreviations are strictly banned. Column names must be fully descriptive and incorporate their explicit scientific units (e.g., temperature_celsius, mass_grams, feed_rate_mm_per_min).Explicit Relational Constraints: Schema mapping must rely on native database FOREIGN KEY declarations and constraints rather than application-level logical links. This populates the PostgreSQL information_schema with a coherent map that the LLM uses to correctly synthesize complex table joins without hallucination.Semantic Schema Dictionary: Every table and column definition must contain a native database COMMENT string, providing explicit business-logic explanations, data formats, and physical contexts.Database Views Abstraction Layer: The database must expose simplified, flattened relational SQL Views (prefixed with v_, such as v_complete_sample_history). These views consolidate multi-table operations and hierarchical lineages into singular flat targets, allowing local LLMs with restrictive context windows to generate accurate, optimized SQL strings.Vector Embeddings Extension: The core PostgreSQL engine must run the pgvector extension to allow future storage and hybrid semantic indexing of unstructured testing text notes or algorithm outputs alongside structured metadata.7. Infrastructure, Deployment, & MaintainabilityThe system infrastructure must be fully vendor-agnostic, built on standardized technology stacks, and simple to backup and deploy.The Core Stack:Database Engine: PostgreSQL (v15+) ensuring relational reliability, JSONB indexing capabilities, and pgvector support.Object Storage Layer: Local MinIO deployment, acting as an abstraction layer for storage hardware while matching Amazon S3 API protocols (ensuring compatibility with standard MATLAB AWS toolboxes).API Framework: Python-based FastAPI or an enterprise open-source data gateway like Directus (leveraging its built-in Many-to-Any relationship models for dynamic form rendering).Network Requirements: Physical hardware infrastructure should connect through a Gigabit Ethernet switch backend (preferably 10GbE local trunks) to facilitate continuous multi-gigabyte dataset transfers without degrading network bandwidth.Orchestration: The total runtime environment—including database instances, caching layers, storage buckets, application APIs, and worker daemons—must be packaged and launched as an infrastructure-as-code configuration via a single, self-contained docker-compose.yml script."""
+  ```
+
+### C. Concurrency Control
+* The system handles race conditions between manual front-end web edits and automated machine API updates using Optimistic Concurrency Control (OCC).
+* Tables include an incremental version field or precise millisecond timestamp verification (`updated_at`). Conflicting updates are safely rejected, forcing the client engine to fetch refreshed states before re-submitting.
+
+---
+
+## 5. UI Layout & Complete Traceability Requirements
+
+The front-end user experience must prioritize complete bi-directional click-through traceability, replacing disconnected tabs with an integrated chronological view.
+
+* **Cradle-to-Grave Sample Timeline:** Looking up an individual Sample displays its complete digital twin trajectory across time:
+
+  $$\text{Raw Material Stock Lot} \longrightarrow \text{Sintering Operation (Log + Curve File)} \longrightarrow \text{Machining Operation (Tooling Info)} \longrightarrow \text{Sequential Test Campaigns}$$
+
+* **Forward Traceability:** Clicking any historical node immediately expands operator details, asset utilization records, and processing metadata.
+* **Reverse Traceability:** Inspecting any deep storage file or test session output exposes click-through breadcrumbs tracing the entire lineage back to the originating components:
+
+  $$\text{10GB+ Raw File} \longrightarrow \text{Test Session ID} \longrightarrow \text{Specific Insert Edge} \longrightarrow \text{Parent Insert} \longrightarrow \text{Tool Box}$$
+
+---
+
+## 6. AI-Readiness & Local Text-to-SQL Optimization
+
+To ensure a self-hosted LLM (e.g., Llama-3, Mistral deployed via Ollama) can natively parse and answer queries regarding experimental data, the data layer must implement semantic readability standards.
+
+* **Deterministic Naming Conventions:** Cryptic abbreviations are strictly banned. Column names must be fully descriptive and incorporate their explicit scientific units (e.g., `temperature_celsius`, `mass_grams`, `feed_rate_mm_per_min`).
+* **Explicit Relational Constraints:** Schema mapping must rely on native database `FOREIGN KEY` declarations and constraints rather than application-level logical links. This populates the PostgreSQL `information_schema` with a coherent map that the LLM uses to correctly synthesize complex table joins without hallucination.
+* **Semantic Schema Dictionary:** Every table and column definition must contain a native database `COMMENT` string, providing explicit business-logic explanations, data formats, and physical contexts.
+* **Database Views Abstraction Layer:** The database must expose simplified, flattened relational SQL Views (prefixed with `v_`, such as `v_complete_sample_history`). These views consolidate multi-table operations and hierarchical lineages into singular flat targets, allowing local LLMs with restrictive context windows to generate accurate, optimized SQL strings.
+* **Vector Embeddings Extension:** The core PostgreSQL engine must run the `pgvector` extension to allow future storage and hybrid semantic indexing of unstructured testing text notes or algorithm outputs alongside structured metadata.
+
+---
+
+## 7. Infrastructure, Deployment, & Maintainability
+
+The system infrastructure must be fully vendor-agnostic, built on standardized technology stacks, and simple to backup and deploy.
+
+* **The Core Stack:**
+  * **Database Engine:** PostgreSQL (v15+) ensuring relational reliability, JSONB indexing capabilities, and pgvector support.
+  * **Object Storage Layer:** Local MinIO deployment, acting as an abstraction layer for storage hardware while matching Amazon S3 API protocols (ensuring compatibility with standard MATLAB AWS toolboxes).
+  * **API Framework:** Python-based FastAPI or an enterprise open-source data gateway like Directus (leveraging its built-in Many-to-Any relationship models for dynamic form rendering).
+* **Network Requirements:** Physical hardware infrastructure should connect through a Gigabit Ethernet switch backend (preferably 10GbE local trunks) to facilitate continuous multi-gigabyte dataset transfers without degrading network bandwidth.
+* **Orchestration:** The total runtime environment—including database instances, caching layers, storage buckets, application APIs, and worker daemons—must be packaged and launched as an infrastructure-as-code configuration via a single, self-contained `docker-compose.yml` script.

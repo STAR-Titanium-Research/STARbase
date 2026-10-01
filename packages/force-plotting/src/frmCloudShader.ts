@@ -44,6 +44,8 @@ uniform float uCropStart;
 uniform float uCropEnd;
 uniform float uCmin;
 uniform float uCmax;
+uniform vec2 uDisp;          // displayed-range filter: [dispMin, dispMax] on the RAW value
+uniform float uGreyOOR;      // 1 = grey out-of-displayed-range points, 0 = hide them
 uniform float uPointSize;
 uniform sampler2D uColormap; // 1D LUT, sampled at (t, 0.5)
 
@@ -70,8 +72,14 @@ void main() {
 	float theta = 2.0 * PI * r;
 	vec3 pos = vec3(rho * cos(theta), rho * sin(theta), 0.0);
 
+	// Displayed-range filter: colour is resolved entirely in THIS stage already (vColor is the
+	// only varying -- see the file header), so the out-of-range decision belongs here too, using
+	// the same off-clip trick as the crop/inner-radius visibility above rather than a new varying.
+	bool outOfDisplay = aVal < uDisp.x || aVal > uDisp.y;
+	if (outOfDisplay && uGreyOOR < 0.5) visible = false;
+
 	float ct = clamp((aVal - uCmin) / max(uCmax - uCmin, 1e-9), 0.0, 1.0);
-	vColor = texture2D(uColormap, vec2(ct, 0.5)).rgb;
+	vColor = (outOfDisplay && uGreyOOR > 0.5) ? vec3(0.5) : texture2D(uColormap, vec2(ct, 0.5)).rgb;
 
 	if (!visible) {
 		// Push off-clip rather than discard (vertex shaders can't discard) — 1e6 is far outside
@@ -166,20 +174,8 @@ export function buildStaticAttributes(
 	return { aT, aRevs, aVal, count: k };
 }
 
-// Build a colour-scale LUT (RGBA8, `steps` samples) from one of liveCloud.ts's COLORMAPS
-// functions, for upload as a THREE.DataTexture — keeps the colormap function itself (including
-// inferno's polynomial fit) as the single source of truth; the shader only ever interpolates a
-// baked table, never reimplements the maths.
-export function buildColormapLUT(fn: (x: number) => [number, number, number], steps = 64): Uint8ClampedArray<ArrayBuffer> {
-	// Uint8ClampedArray (not Uint8Array) to match THREE.DataTexture's expected image-data type —
-	// same byte semantics for our already-0..255 values, just the type three.js actually wants.
-	// Backed by an explicit ArrayBuffer (not the default ArrayBufferLike) so its type matches
-	// THREE.DataTexture's constructor, which only accepts an ArrayBuffer-backed view.
-	const out = new Uint8ClampedArray(new ArrayBuffer(steps * 4));
-	for (let i = 0; i < steps; i++) {
-		const [r, g, b] = fn(i / (steps - 1));
-		out[i * 4] = Math.round(r * 255); out[i * 4 + 1] = Math.round(g * 255);
-		out[i * 4 + 2] = Math.round(b * 255); out[i * 4 + 3] = 255;
-	}
-	return out;
-}
+// The colour-scale LUT builder that used to live here has moved to colorScale.ts's
+// buildScaleLUT -- the last of three near-duplicate implementations (this one, FrmOctree.vue's,
+// DiagScatter.vue's) to be consolidated. It bakes every ColorScale parameter except the
+// displayed-range filter (steps, symmetrical, always-show-zero, log scale) into the LUT bytes,
+// so TURNING_SPIRAL_VERT above only ever needed the one addition: the uDisp/uGreyOOR branch.

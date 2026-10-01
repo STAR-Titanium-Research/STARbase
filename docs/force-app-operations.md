@@ -144,6 +144,17 @@ it only through Caddy keeps it behind the single tailnet-only TLS entry point. D
 `ports:` mapping for 8210. If this host ever becomes publicly reachable, this route needs real auth
 first.
 
+### Offline sign-in (v0.1.32)
+
+Each rig stores, per account that has signed in online on it, a salted PBKDF2-SHA256 hash of the
+password (310,000 rounds) and the Directus profile, in the app's localStorage, valid 30 days from
+the last time the server vouched for the account (online sign-in or background session refresh). It cannot create a Directus token, so an offline session can record and
+queue but not write to Directus. It is deliberately **not** a provisioned list of every user's
+hash: Directus's argon2 hashes are not exposed by its API, and copying them to every rig would let
+anyone with a rig's disk attack all lab passwords offline. To revoke an account everywhere, disable
+it in Directus: the rig's entry stops working at its 30-day expiry, or at once on that rig's next
+online attempt with the old password. See the wiki page [Working offline](wiki/force-app/working-offline.md).
+
 ## Hardware checklist
 
 Automated tests cover most of this (`apps/force-app/desktop/tests/`, and the backend suite), but

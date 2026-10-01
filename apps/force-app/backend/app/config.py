@@ -7,7 +7,7 @@ exact code slice 2b reuses with a real `nidaqmx` source — only the source swap
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,22 @@ AXIS_SUM: dict[str, list[str]] = {
 }
 
 
+class ExtraChannel(BaseModel):
+    """A named channel beyond the fixed [Fx1..Fz4, Tacho] layout — either a real NI-DAQ input
+    ("hardware", genuinely acquired, widening raw.d1raw by one column) or a computed combination
+    of other channels ("virtual", never acquired — evaluated from whatever else is already
+    available and appended only to the derived outputs: capture.mat and the live D1LF stream).
+    Deliberately additive: SIGNAL_CHANNELS/AXIS_SUM/the base 10-column layout are untouched, so
+    every existing consumer of those (process_force.m, capture.mat readers, .d1raw itself) keeps
+    working unchanged whether or not any extra channels are configured.
+    """
+
+    name: str
+    source: Literal["hardware", "virtual"]
+    physical: str | None = None  # required for source="hardware" — the NI-DAQ physical channel
+    formula: str | None = None  # required for source="virtual" — see app/virtual_channels.py
+
+
 class RecordConfig(BaseModel):
     """Parameters for a (simulated, in 2a) recording run."""
 
@@ -67,6 +83,9 @@ class RecordConfig(BaseModel):
     source: str = "sim"
     # NI-DAQ physical channel strings mapped 1:1 onto SIGNAL_CHANNELS (source="nidaq").
     nidaq_channels: list[str] = Field(default_factory=lambda: list(DEFAULT_NIDAQ_CHANNELS))
+    # Channels beyond the fixed 9 — real Aux inputs and/or virtual (computed) channels. Empty by
+    # default: a config with none of these behaves byte-identically to before this field existed.
+    extra_channels: list[ExtraChannel] = Field(default_factory=list)
 
     # Per-channel volts→N gain for the 8 dyno channels (source="nidaq"): N/V = range / analog_fs.
     # Auto-populated from the amp's (auto-ranged) per-channel ranges at record start. Empty => the

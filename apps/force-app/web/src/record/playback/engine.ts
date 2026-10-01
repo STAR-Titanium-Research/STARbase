@@ -11,7 +11,7 @@
 // when it was drawn. That is the whole trick — it makes "seek to t" and "play through to t"
 // produce byte-identical buffers, which is the invariant engine.test.ts pins down.
 import { reactive } from 'vue';
-import { axisAutoLimits, type Axis, type Cache } from '@d1/force-plotting';
+import { axisAutoLimits, idxOfTime as firstIdxAtOrAfter, type Axis, type Cache } from '@d1/force-plotting';
 import { SUB_NAMES, type RecordClient } from '../liveClient';
 import { createSpectrumClient, type SpectrumClient } from './spectrum';
 
@@ -77,22 +77,14 @@ export function createPlaybackEngine(client: RecordClient, opts: PlaybackOpts): 
 		// banner on the transport bar for the rest of the session.
 		state.error = null;
 		if (!r.f.length) return;
-		client.fft = { axis: 'Fz', f: r.f, amp: r.spectra.Fz ?? [], fs: r.fs, spectra: r.spectra };
-		client.fftFreq = r.f;
-		client.fftHistory.push({ t: state.tSec, spectra: r.spectra });
-		if (client.fftHistory.length > client.fftHistCap) client.fftHistory.shift();
-		client.fftSeq.value++;
+		client.pushFft('Fz', r.f, r.fs, r.spectra, state.tSec);
 	};
 	spectra.onError = (e) => { state.error = e.message; };
 
+	// First sample at or after `sec`; at or past the last sample means "everything", i.e. N.
 	function idxOfTime(sec: number): number {
 		if (!cache) return 0;
-		const t = cache.t;
-		let lo = 0, hi = cache.N - 1;
-		if (sec <= t[0]) return 0;
-		if (sec >= t[hi]) return cache.N;
-		while (lo < hi) { const m = (lo + hi) >> 1; if (t[m] < sec) lo = m + 1; else hi = m; }
-		return lo;
+		return sec >= cache.t[cache.N - 1] ? cache.N : firstIdxAtOrAfter(cache.t, sec);
 	}
 
 	function load(c: Cache, o: { ppr: number; innerDiam?: number; stride: number; axis?: Axis; cropStartSec?: number }) {
@@ -270,7 +262,7 @@ export function createPlaybackEngine(client: RecordClient, opts: PlaybackOpts): 
 		client.status.nTotal = target;
 		client.frameSeq.value++;
 
-		if (requestSpectrum) {
+		if (requestSpectrum && spectra.wouldAccept(forceSpectrum)) {
 			const win = Math.min(Math.round(c.Fs * FFT_WINDOW_SEC), FFT_MAX);
 			const s0 = Math.max(0, target - win);
 			if (target - s0 >= 256) {

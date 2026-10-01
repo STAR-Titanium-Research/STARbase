@@ -175,22 +175,9 @@ const geom = computed(() => {
 		return `${up}L ${dn}Z`;
 	}
 
-	let area = '', line = '', cropArea = '';
+	let area = '', line = '';
 	if (props.kind === 'env') {
 		area = areaPath(iA, iB);
-		if (props.cropStart != null && props.cropEnd != null) {
-			// i0 = -1 when the crop starts after all data; revIdx = -1 when it ends
-			// before all data — in both cases there's no in-range window to shade
-			// (guard, else areaPath would index past the array and emit NaN paths).
-			// Clamp to the visible [iA,iB] window so a zoom doesn't paint off-plot.
-			const i0 = Math.max(iA, xs.findIndex((v) => v >= props.cropStart!));
-			// Scan backward in place rather than xs.slice().reverse().findIndex(...) — that clones
-			// the whole array on every recompute, and this runs on every crop-drag pointermove.
-			let i1 = -1;
-			for (let k = xs.length - 1; k >= 0; k--) { if (xs[k] <= props.cropEnd!) { i1 = k; break; } }
-			i1 = i1 < 0 ? -1 : Math.min(iB, i1);
-			if (i0 >= iA && i1 >= i0) cropArea = areaPath(i0, i1);
-		}
 	} else {
 		line = 'M';
 		for (let i = iA; i <= iB; i++) line += `${sx(xs[i]).toFixed(1)},${sy(d.amp[i]).toFixed(1)} `;
@@ -229,8 +216,6 @@ const geom = computed(() => {
 	}
 
 	const zeroY = (lo < 0 && hi > 0) ? sy(0) : null;
-	const cropStartX = props.cropStart != null ? sx(props.cropStart) : null;
-	const cropEndX = props.cropEnd != null ? sx(props.cropEnd) : null;
 
 	// Filtered-spectrum overlay (FFT charts only): map the overlay's own (f,amp) through the
 	// SAME sx/sy so it lands on the current axes/zoom; clipped to the visible x-window.
@@ -263,7 +248,34 @@ const geom = computed(() => {
 			if (path) compareLines.push({ id: c.id, label: c.label, color: c.color, d: path });
 		}
 	}
-	return { W, Hh, xs, x0, x1, iA, iB, lo, hi, sx, sy, area, line, cropArea, xticks, xticks2, yticks, zeroY, cropStartX, cropEndX, overlayLine, compareLines };
+	return { W, Hh, xs, x0, x1, iA, iB, lo, hi, sx, sy, areaPath, area, line, xticks, xticks2, yticks, zeroY, overlayLine, compareLines };
+});
+
+// The crop window is dragged continuously; kept out of `geom` so a drag frame only redraws the
+// shaded window and handles, not the whole envelope, ticks and overlays.
+const crop = computed(() => {
+	const g = geom.value;
+	if (!g) return { cropArea: '', cropStartX: null, cropEndX: null };
+	const { xs, iA, iB, sx, areaPath } = g;
+	let cropArea = '';
+	if (props.kind === 'env' && props.cropStart != null && props.cropEnd != null) {
+		// i0 = -1 when the crop starts after all data; revIdx = -1 when it ends
+		// before all data — in both cases there's no in-range window to shade
+		// (guard, else areaPath would index past the array and emit NaN paths).
+		// Clamp to the visible [iA,iB] window so a zoom doesn't paint off-plot.
+		const i0 = Math.max(iA, xs.findIndex((v) => v >= props.cropStart!));
+		// Scan backward in place rather than xs.slice().reverse().findIndex(...) — that clones
+		// the whole array on every recompute, and this runs on every crop-drag pointermove.
+		let i1 = -1;
+		for (let k = xs.length - 1; k >= 0; k--) { if (xs[k] <= props.cropEnd!) { i1 = k; break; } }
+		i1 = i1 < 0 ? -1 : Math.min(iB, i1);
+		if (i0 >= iA && i1 >= i0) cropArea = areaPath(i0, i1);
+	}
+	return {
+		cropArea,
+		cropStartX: props.cropStart != null ? sx(props.cropStart) : null,
+		cropEndX: props.cropEnd != null ? sx(props.cropEnd) : null,
+	};
 });
 
 const hoverPt = computed(() => {
@@ -419,8 +431,8 @@ function onWheel(ev: WheelEvent) {
 			<line v-for="(t, i) in geom.xticks" :key="'gx' + i" :x1="t.x" :x2="t.x" :y1="MT_EFF" :y2="geom.Hh - MB" class="fc-grid" stroke-width="0.5" />
 			<line v-if="geom.zeroY != null" :x1="ML" :x2="geom.W - MR" :y1="geom.zeroY" :y2="geom.zeroY" class="fc-zero" stroke-width="0.9" />
 			<!-- full-range area at low saturation; the analysed [cropStart,cropEnd] window overpaints at full saturation -->
-			<path v-if="kind === 'env'" :d="geom.area" :fill="stroke" :fill-opacity="geom.cropArea ? 0.09 : 0.2" :stroke="stroke" stroke-opacity="0.35" stroke-width="0.6" />
-			<path v-if="kind === 'env' && geom.cropArea" :d="geom.cropArea" :fill="stroke" fill-opacity="0.28" :stroke="stroke" stroke-width="0.8" />
+			<path v-if="kind === 'env'" :d="geom.area" :fill="stroke" :fill-opacity="crop.cropArea ? 0.09 : 0.2" :stroke="stroke" stroke-opacity="0.35" stroke-width="0.6" />
+			<path v-if="kind === 'env' && crop.cropArea" :d="crop.cropArea" :fill="stroke" fill-opacity="0.28" :stroke="stroke" stroke-width="0.8" />
 			<path v-if="kind === 'line'" :d="geom.line" fill="none" :stroke="stroke" stroke-width="1.1" />
 			<path v-if="geom.overlayLine" :d="geom.overlayLine" fill="none" stroke="#0891b2" stroke-width="1" stroke-dasharray="3 2" opacity="0.9" />
 			<!-- Comparison cuts, drawn over the primary envelope so the current cut stays the
@@ -457,7 +469,7 @@ function onWheel(ev: WheelEvent) {
 			<!-- Live-mode draggable crop handles (start = teal, end = red); wide invisible
 			     hit rects keep them easy to grab. Pointer events are captured on drag. -->
 			<g v-if="cropEditable">
-				<template v-for="(hx, k) in [{ x: geom.cropStartX, c: '#0f766e' }, { x: geom.cropEndX, c: '#b91c1c' }]" :key="'ch' + k">
+				<template v-for="(hx, k) in [{ x: crop.cropStartX, c: '#0f766e' }, { x: crop.cropEndX, c: '#b91c1c' }]" :key="'ch' + k">
 					<template v-if="hx.x != null">
 						<line :x1="hx.x" :x2="hx.x" :y1="MT_EFF" :y2="geom.Hh - MB" :stroke="hx.c" stroke-width="1.4" />
 						<rect :x="hx.x - 3" :y="MT_EFF" width="6" :height="geom.Hh - MB - MT_EFF" :fill="hx.c" fill-opacity="0.001"
@@ -468,7 +480,7 @@ function onWheel(ev: WheelEvent) {
 			</g>
 			<!-- rubber-band x-zoom rectangle -->
 			<rect v-if="zoomRect" :x="zoomRect.x" :y="MT_EFF" :width="zoomRect.w" :height="geom.Hh - MB - MT_EFF"
-				fill="#38bdf8" fill-opacity="0.16" stroke="#0ea5e9" stroke-width="0.8" />
+				class="zoom-rect" />
 		</svg>
 		<div v-else class="chart-empty">no data</div>
 		<div v-if="hoverPt" class="chart-tip"><strong>{{ hoverPt.label }}</strong><span>{{ hoverPt.sub }}</span></div>
@@ -487,25 +499,27 @@ function onWheel(ev: WheelEvent) {
    signal you're looking at on the fingerprint. */
 .chart.active { border-color: var(--accent); box-shadow: inset 3px 0 0 0 var(--accent), 0 0 0 1px var(--accent); }
 .chart-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 2px; gap: 8px; flex: 0 0 auto; }
-.chart-title { font-size: 12.5px; font-weight: 650; color: var(--theme--foreground, #1e293b); }
-.chart-unit { font-size: 10.5px; color: var(--theme--foreground-subdued, #98a2b3); font-weight: 600; }
-.chart-peak { font-size: 10.5px; color: var(--theme--foreground, #1e293b); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart-title { font-size: var(--fs-md, 13px); font-weight: 650; color: var(--theme--foreground, #1e293b); }
+.chart-unit { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #98a2b3); font-weight: 600; }
+.chart-peak { font-size: var(--fs-xs, 11px); color: var(--theme--foreground, #1e293b); font-weight: 700; font-variant-numeric: tabular-nums; }
 .chart-svg { display: block; width: 100%; flex: 1 1 auto; min-height: 0; cursor: crosshair; touch-action: none; }
 .chart-svg.zoomtool { cursor: crosshair; }
-.chart-svg .tick { fill: var(--theme--foreground-subdued, #94a3b8); font-size: 11px; font-variant-numeric: tabular-nums; }
-.chart-svg .axis-label { fill: var(--theme--foreground-subdued, #94a3b8); font-size: 11px; }
+.chart-svg .tick { fill: var(--theme--foreground-subdued, #94a3b8); font-size: var(--fs-xs, 11px); font-variant-numeric: tabular-nums; }
+.chart-svg .axis-label { fill: var(--theme--foreground-subdued, #94a3b8); font-size: var(--fs-xs, 11px); }
 .chart-svg .crop-hit { cursor: ew-resize; }
 /* dimmer than the near-white light-mode defaults so gridlines don't outshine the crop handles
    against a dark background; --border/--border-2 are theme-scoped in apps/force-app's styles.css */
 .chart-svg .fc-grid { stroke: var(--border, #e2e8f0); }
 .chart-svg .fc-axis { stroke: var(--border-2, #94a3b8); }
 .chart-svg .fc-zero { stroke: var(--border-2, #cbd5e1); }
-.chart-empty { flex: 1; display: grid; place-items: center; color: var(--theme--foreground-subdued, #98a2b3); font-size: 12px; }
+.chart-empty { flex: 1; display: grid; place-items: center; color: var(--theme--foreground-subdued, #98a2b3); font-size: var(--fs-sm, 12px); }
+/* The accent, not a sky blue a shade off the Fz trace it is dragged across. */
+.zoom-rect { fill: var(--accent, #38bdf8); fill-opacity: 0.16; stroke: var(--accent, #0ea5e9); stroke-width: 0.8; }
 .chart-tip {
 	/* below the header row so it never covers the "peak … N" readout in the top-right */
 	position: absolute; top: 30px; right: 12px; display: flex; flex-direction: column; align-items: flex-end;
 	background: color-mix(in srgb, var(--theme--background, #fff) 85%, transparent); border-radius: 8px; padding: 2px 7px; pointer-events: none;
 }
-.chart-tip strong { font-size: 12px; font-variant-numeric: tabular-nums; }
-.chart-tip span { font-size: 10px; color: var(--theme--foreground-subdued, #98a2b3); }
+.chart-tip strong { font-size: var(--fs-sm, 12px); font-variant-numeric: tabular-nums; }
+.chart-tip span { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #98a2b3); }
 </style>

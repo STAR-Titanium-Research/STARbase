@@ -6,11 +6,12 @@ deeply nested tooling tracking, high-capacity (10–100 GB) data ingestion, and
 LLM-driven natural-language querying — replacing a brittle AppSheet-over-Google-
 Sheets setup.
 
-> **Status:** 🚧 Active build — Phases 0–7 complete (core schema, infra,
-> Directus RBAC, heavy-data pipeline, plugin framework, traceability, and
-> local text-to-SQL); Phases 8–9 (legacy data migration, hardening) remain.
-> Private & proprietary — see [`NOTICE.md`](./NOTICE.md). Multi-phase build;
-> see [`plan.md`](./plan.md).
+> **Status:** 🚧 Active build — Phases 0–8 complete (core schema, infra,
+> Directus RBAC, heavy-data pipeline, plugin framework, local text-to-SQL,
+> traceability, and legacy data migration); Phase 9 (hardening and the
+> drop-Directus drill) remains. The machining force-capture app runs in
+> production alongside it. Private & proprietary — see [`NOTICE.md`](./NOTICE.md).
+> Multi-phase build; see [`plan.md`](./plan.md).
 
 ## Why
 
@@ -49,12 +50,13 @@ See [`docs/adr/`](./docs/adr/) for the decisions behind this and
 | Path | Contents |
 |---|---|
 | [`db/`](./db/) | SQL migrations, seeds — the schema (the contract) |
-| [`core/`](./core/) | Directus configuration-as-code |
+| [`core/`](./core/) | Directus configuration-as-code: roles, permissions, extensions |
 | [`plugins/`](./plugins/) | Project-specific compute, one container per folder |
+| [`scripts/`](./scripts/) | Host-side orchestrators, Directus config SQL, data import and MATLAB processing |
 | [`apps/`](./apps/) | Operator-facing applications — currently [`force-app/`](./apps/force-app/), the machining force-capture desktop app |
 | [`packages/`](./packages/) | Shared front-end libraries (e.g. `force-plotting` — the force cloud, polar plot, diagnostics workbench) |
-| [`infra/`](./infra/) | Compose stack, env templates, backup/restore |
-| [`docs/`](./docs/) | ADRs, runbooks, data dictionary, legacy-data analysis |
+| [`infra/`](./infra/) | Caddy proxy config, backup/restore scripts (the compose file and `.env.example` sit at the root) |
+| [`docs/`](./docs/) | the wiki, ADRs, runbooks, data dictionary, feature designs, legacy-data analysis |
 | [`tests/`](./tests/) | Integration & end-to-end tests |
 
 ## Quick start
@@ -64,6 +66,7 @@ cp .env.example .env      # then edit secrets
 make setup                # install pre-commit hooks & dev tooling
 make up                   # bring up the core Docker stack
 make migrate seed         # apply schema migrations + reference seed data
+# Then apply the Directus configuration — see core/README.md
 # Optional: local text-to-SQL (heavy — pulls Ollama + models; see the runbook)
 docker compose --profile llm up -d
 ```
@@ -74,10 +77,12 @@ all targets.
 ## Tech stack
 
 PostgreSQL 15+ (with `pgvector`) · Directus · MinIO (S3-compatible) · Redis ·
-Python workers · Ollama (local LLM) · Docker Compose.
+Python workers · Ollama (local LLM) · Docker Compose · Caddy. Machining force
+analysis adds Vue 3 + three.js, Electron, a FastAPI recorder and MATLAB processing.
 
 ## Key documents
 
+- [`docs/wiki/`](./docs/wiki/README.md) — **the wiki**: illustrated user and developer guides for the [Force App](./docs/wiki/force-app/README.md) and the [D1 Database](./docs/wiki/database/README.md)
 - [`plan.md`](./plan.md) — the staggered implementation plan & status tracker
 - [`system_requirements_specification.md`](./system_requirements_specification.md) — requirements
 - [`docs/legacy-data-analysis.md`](./docs/legacy-data-analysis.md) — analysis of the legacy AppSheet/Sheets data
@@ -86,5 +91,6 @@ Python workers · Ollama (local LLM) · Docker Compose.
 - [`docs/force-app-operations.md`](./docs/force-app-operations.md) — running, deploying & troubleshooting the force-capture app
 - [`docs/force-file-standards.md`](./docs/force-file-standards.md) — the four force-capture `.mat` layouts
 - [`docs/FAST25_OVERVIEW.md`](./docs/FAST25_OVERVIEW.md) — FAST 25 / FAST 250 sintering data architecture
+- [`docs/superpowers/`](./docs/superpowers/README.md) — per-feature design specs and their status
 - [`docs/adr/`](./docs/adr/) — architecture decision records · [`docs/runbooks/`](./docs/runbooks/) — operational runbooks
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) · [`SECURITY.md`](./SECURITY.md)

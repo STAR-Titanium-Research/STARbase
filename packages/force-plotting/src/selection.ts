@@ -222,3 +222,13 @@ export function clusterStats(ws: WorkingSet): ClusterRow[] {
 	});
 	return rows;
 }
+
+/** 1st/99th percentile of the finite values -- NaN is dropped, since a masked channel (resid_z
+ *  under a paint mask) is full of it. [0, 1] when nothing is finite. */
+export function percentileRange(a: Float32Array): [number, number] {
+	const s = Float32Array.from(a).filter((v) => Number.isFinite(v)).sort();
+	if (s.length === 0) return [0, 1];
+	const lo = s[Math.floor(0.01 * (s.length - 1))];
+	const hi = s[Math.floor(0.99 * (s.length - 1))];
+	return hi > lo ? [lo, hi] : [lo, lo + 1];
+}

@@ -27,16 +27,24 @@
 BEGIN;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 0. SETTINGS — enable the Lab Dashboard module in the nav bar
+-- 0. SETTINGS — the module bar (the icon rail down the left edge)
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Directus only shows a module entry whose "enabled" is true, so every entry needs
+-- it: without it the rail renders empty. The third condition repairs a bar written
+-- by an earlier version of this script (which omitted the flag) without touching a
+-- bar curated in the UI, since the UI always writes the flag.
 UPDATE directus_settings SET module_bar = '[
-  {"type":"module","id":"content"},
-  {"type":"module","id":"users"},
-  {"type":"module","id":"files"},
-  {"type":"module","id":"insights"},
-  {"type":"module","id":"d1-lab-dashboard"},
-  {"type":"module","id":"settings"}
-]' WHERE module_bar IS NULL OR module_bar::text NOT LIKE '%d1-lab-dashboard%';
+  {"type":"module","id":"content","enabled":true},
+  {"type":"module","id":"users","enabled":true},
+  {"type":"module","id":"files","enabled":true},
+  {"type":"module","id":"insights","enabled":true},
+  {"type":"module","id":"d1-lab-dashboard","enabled":true},
+  {"type":"module","id":"d1-force-dashboard","enabled":true},
+  {"type":"module","id":"d1-fast-dashboard","enabled":true},
+  {"type":"module","id":"settings","enabled":true}
+]' WHERE module_bar IS NULL
+      OR module_bar::text NOT LIKE '%d1-lab-dashboard%'
+      OR module_bar::text NOT LIKE '%"enabled"%';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 1. COLLECTIONS  (icon, display_template, sort_field, sort, color, translations)
@@ -211,7 +219,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('physical_samples','primary_method_id',  'm2o','select-dropdown-m2o','{"template":"{{method_code}} – {{method_name}}"}','related-values','{"template":"{{method_code}}"}',false,false,4,'half',false,'[{"language":"en-US","translation":"Primary Method (for code)"}]'),
 ('physical_samples','project_id',         'm2o','select-dropdown-m2o','{"template":"{{project_code}} – {{project_name}}"}','related-values','{"template":"{{project_code}}"}',false,false,5,'half',false,'[{"language":"en-US","translation":"Project"}]'),
 ('physical_samples','item_type',          NULL,'select-dropdown','{"choices":[{"text":"Sample","value":"sample"},{"text":"Equipment","value":"equipment"},{"text":"Miscellaneous","value":"miscellaneous"}]}','labels','{"choices":[{"text":"Sample","value":"sample","foreground":"#2E7D32","background":"#E8F5E9"},{"text":"Equipment","value":"equipment","foreground":"#1565C0","background":"#E3F2FD"},{"text":"Miscellaneous","value":"miscellaneous","foreground":"#616161","background":"#F5F5F5"}]}',false,false,6,'half',false,'[{"language":"en-US","translation":"Item Type"}]'),
-('physical_samples','form',               NULL,'select-dropdown','{"choices":[{"text":"Disc","value":"disc"},{"text":"Cylindrical","value":"cylindrical"},{"text":"Rectangular","value":"rectangular"},{"text":"Powder / Compact","value":"powder"},{"text":"Other","value":"other"}]}','labels',NULL,false,false,7,'half',false,'[{"language":"en-US","translation":"Geometry"}]'),
+('physical_samples','form',               NULL,'select-dropdown','{"choices":[{"text":"Disc","value":"disc"},{"text":"Cylinder","value":"cylinder"},{"text":"Block","value":"block"},{"text":"Plate","value":"plate"},{"text":"Bar","value":"bar"},{"text":"Round bar","value":"round_bar"},{"text":"Tensile coupon (ISO 6892)","value":"tensile_coupon"},{"text":"Bend / fatigue bar (ISO 7438)","value":"bend_bar"},{"text":"Powder / Compact","value":"powder"},{"text":"Other","value":"other"}]}','labels',NULL,false,false,7,'half',false,'[{"language":"en-US","translation":"Geometry"}]'),
 ('physical_samples','stock_category',     NULL,'select-dropdown','{"choices":[{"text":"Bulk (bar / disc / billet)","value":"bulk"},{"text":"Powder (loose / compact)","value":"powder"},{"text":"Specialty (wire / foil / porous)","value":"specialty"}]}','labels',NULL,false,false,7,'half',false,'[{"language":"en-US","translation":"Stock Category"}]'),
 ('physical_samples','current_status',     NULL,'select-dropdown','{"choices":[{"text":"Active","value":"active"},{"text":"Consumed","value":"consumed"},{"text":"Destroyed","value":"destroyed"},{"text":"Archived","value":"archived"}]}','labels','{"choices":[{"text":"Active","value":"active","foreground":"#2E7D32","background":"#E8F5E9"},{"text":"Consumed","value":"consumed","foreground":"#E65100","background":"#FFF3E0"},{"text":"Destroyed","value":"destroyed","foreground":"#B71C1C","background":"#FFEBEE"},{"text":"Archived","value":"archived","foreground":"#616161","background":"#F5F5F5"}]}',false,false,8,'half',true,'[{"language":"en-US","translation":"Status"}]'),
 ('physical_samples','export_controlled',  'cast-boolean','toggle',NULL,'boolean',NULL,false,false,9,'half',false,'[{"language":"en-US","translation":"Export Controlled?"}]'),
@@ -226,6 +234,8 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('physical_samples','mounting_method',    NULL,'select-dropdown','{"choices":[{"text":"Bakelite","value":"Bakelite"},{"text":"PuriFast","value":"PuriFast"},{"text":"Epoxy","value":"Epoxy"},{"text":"Cold mounted","value":"Cold mounted"}],"allowOther":true}','labels',NULL,false,false,18,'half',false,'[{"language":"en-US","translation":"Mounting Method"}]'),
 ('physical_samples','surface_finish',     NULL,'select-dropdown','{"allowOther":true,"choices":[{"text":"None","value":"none"},{"text":"Rough machined","value":"rough_machined"},{"text":"Finish machined","value":"finish_machined"},{"text":"Ground","value":"ground"},{"text":"Polished","value":"polished"},{"text":"Mirror","value":"mirror"}]}','labels',NULL,false,false,19,'half',false,'[{"language":"en-US","translation":"Surface Finish"}]'),
 ('physical_samples','location',           NULL,'input',NULL,'raw',NULL,false,false,20,'half',false,'[{"language":"en-US","translation":"Location"}]'),
+('physical_samples','gauge_length_mm',  NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,12,'half',false,'[{"language":"en-US","translation":"Gauge length"}]'),
+('physical_samples','gauge_width_mm',   NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,13,'half',false,'[{"language":"en-US","translation":"Gauge width"}]'),
 ('physical_samples','geometry_preview', 'alias,no-data','d1-geometry-preview',NULL,NULL,NULL,false,false,20,'half',false,'[{"language":"en-US","translation":"Shape Preview"}]'),
 ('physical_samples','owner',     'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,false,21,'half',false,'[{"language":"en-US","translation":"Owner"}]'),
 ('physical_samples','co_owners', 'm2m','list-m2m','{"template":"{{user_id.first_name}} {{user_id.last_name}}","junction_field":"user_id"}','related-values','{"template":"{{user_id.first_name}} {{user_id.last_name}}"}',false,false,22,'full',false,'[{"language":"en-US","translation":"Co-owners"}]'),
@@ -543,9 +553,11 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- Two layers of conditions (Directus stacks them — any matching rule applies):
 --   1) hide sample-only fields unless item_type = 'sample'
 --   2) hide dimensions that don't apply to the chosen geometry (form)
--- Geometry → dimensions shown:
---   cylindrical → Ø + length        disc → Ø + thickness
---   rectangular → width+length+thickness   powder → none (mass only)
+-- Geometry (form) → dimensions shown (kept in step with migrations 68 and the round_bar one):
+--   disc → Ø + thickness          cylinder → Ø + length       round_bar → Ø + length
+--   block / plate / bar → width + length + thickness
+--   tensile_coupon → length + width + thickness + gauge length + gauge width
+--   bend_bar → length + width + thickness        powder / other → none (mass only)
 
 -- Fields that only make sense for actual samples (hidden for equipment / misc).
 UPDATE directus_fields
@@ -553,37 +565,45 @@ SET conditions = '[{"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"s
 WHERE collection = 'physical_samples'
   AND field IN ('material_id','primary_method_id','form','stock_category','surface_finish','manufacturing_route','geometry_preview','mounted','mounting_method');
 
--- diameter_mm: samples only, and only for cylindrical/disc geometries.
+-- diameter_mm: disc, cylinder and round bar.
 UPDATE directus_fields
 SET conditions = '[
   {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
-  {"name":"only round geometries","rule":{"_and":[{"form":{"_in":["rectangular","powder"]}}]},"hidden":true,"readonly":false,"required":false}
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["disc", "cylinder", "round_bar"]}}]},"hidden":true,"readonly":false,"required":false}
 ]'
 WHERE collection = 'physical_samples' AND field = 'diameter_mm';
 
--- width_mm: rectangular only.
+-- width_mm: block, plate, bar, tensile coupon and bend bar.
 UPDATE directus_fields
 SET conditions = '[
   {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
-  {"name":"rectangular only","rule":{"_and":[{"form":{"_in":["cylindrical","disc","powder"]}}]},"hidden":true,"readonly":false,"required":false}
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["block", "plate", "bar", "tensile_coupon", "bend_bar"]}}]},"hidden":true,"readonly":false,"required":false}
 ]'
 WHERE collection = 'physical_samples' AND field = 'width_mm';
 
--- length_mm: cylindrical + rectangular.
+-- length_mm: everything except disc and powder/other.
 UPDATE directus_fields
 SET conditions = '[
   {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
-  {"name":"hide for disc/powder","rule":{"_and":[{"form":{"_in":["disc","powder"]}}]},"hidden":true,"readonly":false,"required":false}
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["cylinder", "block", "plate", "bar", "round_bar", "tensile_coupon", "bend_bar"]}}]},"hidden":true,"readonly":false,"required":false}
 ]'
 WHERE collection = 'physical_samples' AND field = 'length_mm';
 
--- thickness_mm: disc + rectangular.
+-- thickness_mm: disc, block, plate, bar, tensile coupon and bend bar.
 UPDATE directus_fields
 SET conditions = '[
   {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
-  {"name":"hide for cyl/powder","rule":{"_and":[{"form":{"_in":["cylindrical","powder"]}}]},"hidden":true,"readonly":false,"required":false}
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["disc", "block", "plate", "bar", "tensile_coupon", "bend_bar"]}}]},"hidden":true,"readonly":false,"required":false}
 ]'
 WHERE collection = 'physical_samples' AND field = 'thickness_mm';
+
+-- gauge_length_mm + gauge_width_mm: tensile coupon only.
+UPDATE directus_fields
+SET conditions = '[
+  {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["tensile_coupon"]}}]},"hidden":true,"readonly":false,"required":false}
+]'
+WHERE collection = 'physical_samples' AND field IN ('gauge_length_mm','gauge_width_mm');
 
 -- mounted / mounting_method: samples only, and not relevant for powder.
 UPDATE directus_fields

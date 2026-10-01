@@ -19,16 +19,17 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { COLORMAPS } from './liveCloud';
+import type { ColorScale } from './colorScale';
+import { createScaleTexture, syncScaleTexture } from './scaleTexture';
 import { CLUSTER_PALETTE } from './clusterPalette';
-import { matches } from './selection';
+import { matches, percentileRange } from './selection';
 import type { ChannelKey, Selection, WorkingSet } from './selection';
 import type { DiagLayer } from './diagLayers';
 
 const props = withDefaults(defineProps<{
 	workingSet: WorkingSet | null;
 	channel: ChannelKey;
-	colormap?: string;
+	colorScale: ColorScale;
 	pointSize?: number;
 	selection?: Selection;
 	clusterMode?: boolean;
@@ -36,7 +37,7 @@ const props = withDefaults(defineProps<{
 	activeLayerName?: string | null;
 	paintMode?: 'off' | 'draw';
 }>(), {
-	colormap: 'viridis', pointSize: 3, selection: null, clusterMode: false,
+	pointSize: 3, selection: null, clusterMode: false,
 	layers: () => [], activeLayerName: null, paintMode: 'off',
 });
 
@@ -68,25 +69,21 @@ let cssW = 1, cssH = 1;
 let needsRender = true;
 function invalidate() { needsRender = true; }
 
-function gradientTexture(name: string): THREE.DataTexture {
-	const cm = COLORMAPS[name] || COLORMAPS.viridis;
-	const N = 256, data = new Uint8Array(N * 4);
-	for (let i = 0; i < N; i++) {
-		const [r, g, b] = cm(i / (N - 1));
-		data[i * 4] = r * 255; data[i * 4 + 1] = g * 255; data[i * 4 + 2] = b * 255; data[i * 4 + 3] = 255;
-	}
-	const t = new THREE.DataTexture(data, N, 1, THREE.RGBAFormat);
-	t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter; t.needsUpdate = true;
-	return t;
-}
 
 function makeMaterial(): THREE.ShaderMaterial {
 	const paletteFlat = new Float32Array(CLUSTER_PALETTE.flat());
+	const s = props.colorScale;
 	return new THREE.ShaderMaterial({
 		transparent: true,
 		uniforms: {
-			uGradient: { value: gradientTexture(props.colormap) },
-			uRange: { value: new THREE.Vector2(0, 1) },
+			uGradient: { value: createScaleTexture(s) },
+			uRange: { value: new THREE.Vector2(s.satMin, s.satMax) },
+			// Displayed-range filter (separate from uRange, the saturation/colour range): points
+			// whose raw value falls outside [uDisp.x, uDisp.y] are either greyed (uGreyOOR>0.5,
+			// vColor overridden) or hidden (fragment discard via vHidden) -- never both, and never
+			// applied to categorical/cluster mode, which has no continuous "out of range" concept.
+			uDisp: { value: new THREE.Vector2(s.dispMin, s.dispMax) },
+			uGreyOOR: { value: s.greyOutOfRange ? 1 : 0 },
 			uSize: { value: props.pointSize },
 			uCluster: { value: categorical.value ? 1 : 0 },
 			uPalette: { value: paletteFlat },
@@ -97,14 +94,19 @@ function makeMaterial(): THREE.ShaderMaterial {
 			attribute float aSelected;
 			uniform sampler2D uGradient;
 			uniform vec2 uRange;
+			uniform vec2 uDisp;
+			uniform float uGreyOOR;
 			uniform float uSize;
 			uniform float uCluster;
 			uniform float uPalette[36];
 			uniform float uSelActive;
 			varying vec3 vColor;
 			varying float vDim;
+			varying float vHidden;
 			void main() {
 				bool isNan = (aValue != aValue);
+				bool outOfDisplay = (!isNan) && (uCluster < 0.5) && (aValue < uDisp.x || aValue > uDisp.y);
+				vHidden = (outOfDisplay && uGreyOOR < 0.5) ? 1.0 : 0.0;
 				if (isNan) {
 					vColor = vec3(0.12);
 				} else if (uCluster > 0.5) {
@@ -117,6 +119,7 @@ function makeMaterial(): THREE.ShaderMaterial {
 				} else {
 					float u = clamp((aValue - uRange.x) / max(1e-6, uRange.y - uRange.x), 0.0, 1.0);
 					vColor = texture2D(uGradient, vec2(u, 0.5)).rgb;
+					if (outOfDisplay && uGreyOOR > 0.5) vColor = vec3(0.5);
 				}
 				vDim = isNan ? 0.25 : ((uSelActive > 0.5 && aSelected < 0.5) ? 0.15 : 1.0);
 				gl_PointSize = uSize;
@@ -127,22 +130,15 @@ function makeMaterial(): THREE.ShaderMaterial {
 			precision mediump float;
 			varying vec3 vColor;
 			varying float vDim;
+			varying float vHidden;
 			void main() {
+				if (vHidden > 0.5) discard;                     // displayed-range filter, hide mode
 				vec2 d = gl_PointCoord - vec2(0.5);
 				if (dot(d, d) > 0.25) discard;                 // round points
 				gl_FragColor = vec4(vColor * vDim, vDim < 1.0 ? 0.5 : 1.0);
 			}
 		`,
 	});
-}
-
-function percentileRange(a: Float32Array): [number, number] {
-	// filter out NaN: a masked channel (resid_z under a paint mask) is full of them.
-	const s = Float32Array.from(a).filter((v) => Number.isFinite(v)).sort();
-	if (s.length === 0) return [0, 1];
-	const lo = s[Math.floor(0.01 * (s.length - 1))];
-	const hi = s[Math.floor(0.99 * (s.length - 1))];
-	return hi > lo ? [lo, hi] : [lo, lo + 1];
 }
 
 function channelArray(ws: WorkingSet, ch: ChannelKey): Float32Array {
@@ -175,8 +171,11 @@ function packValue() {
 	(attr.array as Float32Array).set(col.subarray(0, ws.n));
 	attr.needsUpdate = true;
 	if (!categorical.value) {
+		// Detected purely from the data, for the host to seed a fresh ColorScale (colorScale.ts's
+		// defaultScale/applyParams) on a channel switch. What is actually RENDERED always comes
+		// from props.colorScale via the watcher below, never from this detection directly -- unlike
+		// before this conversion, packValue() no longer writes to uRange itself.
 		const [lo, hi] = percentileRange(col.subarray(0, ws.n));
-		material.uniforms.uRange.value.set(lo, hi);
 		emit('climits', { cmin: lo, cmax: hi });
 	}
 	invalidate();
@@ -347,12 +346,15 @@ watch([() => props.channel, categorical], () => {
 	if (material) material.uniforms.uCluster.value = categorical.value ? 1 : 0;
 	packValue();
 });
-watch(() => props.colormap, () => {
+// LUT bytes resync only when lutKey changes; saturation/displayed-range/grey-vs-hide are uniforms.
+watch(() => props.colorScale, (s) => {
 	if (!material) return;
-	(material.uniforms.uGradient.value as THREE.Texture | undefined)?.dispose();
-	material.uniforms.uGradient.value = gradientTexture(props.colormap);
+	syncScaleTexture(material.uniforms.uGradient.value, s);
+	material.uniforms.uRange.value.set(s.satMin, s.satMax);
+	material.uniforms.uDisp.value.set(s.dispMin, s.dispMax);
+	material.uniforms.uGreyOOR.value = s.greyOutOfRange ? 1 : 0;
 	invalidate();
-});
+}, { deep: true });
 watch(() => props.pointSize, () => { if (material) { material.uniforms.uSize.value = props.pointSize; invalidate(); } });
 watch(() => props.selection, packSelected, { deep: true });
 watch(() => [props.layers, props.activeLayerName], rebuildOverlay, { deep: true });
@@ -388,9 +390,9 @@ watch(() => props.paintMode, () => {
 <style scoped>
 .diag-scatter { position: relative; width: 100%; height: 100%; min-height: 160px; background: var(--plot-bg, #0b1020); border-radius: 6px; overflow: hidden; }
 .diag-scatter canvas { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
-.ds-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-dim, #94a3b8); font-size: 12px; }
+.ds-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-dim, #94a3b8); font-size: var(--fs-sm, 12px); }
 .ds-msg.err { color: var(--danger, #fca5a5); }
-.ds-count { position: absolute; right: 8px; bottom: 6px; font-size: 10px; color: var(--text-dim, #94a3b8); background: rgba(0,0,0,0.35); padding: 1px 5px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.ds-count { position: absolute; right: 8px; bottom: 6px; font-size: var(--fs-xs, 11px); color: var(--text-dim, #94a3b8); background: rgba(0,0,0,0.35); padding: 1px 5px; border-radius: 4px; font-variant-numeric: tabular-nums; }
 .ds-paint { position: absolute; inset: 0; cursor: crosshair; outline: none; }
-.ds-paint-hint { position: absolute; left: 8px; top: 6px; font-size: 10px; color: #fcd34d; background: rgba(0,0,0,0.5); padding: 2px 6px; border-radius: 4px; pointer-events: none; }
+.ds-paint-hint { position: absolute; left: 8px; top: 6px; font-size: var(--fs-xs, 11px); color: #fcd34d; background: rgba(0,0,0,0.5); padding: 2px 6px; border-radius: 4px; pointer-events: none; }
 </style>

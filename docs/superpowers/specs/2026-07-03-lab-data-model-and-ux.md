@@ -1,7 +1,9 @@
 # Lab data-model & UX overhaul — design
 
 **Date:** 2026-07-03
-**Status:** Draft for review
+**Status:** Implemented 2026-07-03 — all five sub-projects shipped as migrations
+`20260703000054`–`20260703000066`, the `d1-equipment-code` hook and the facility → machine
+cascade in `d1-machine-picker`.
 **Author:** Claude (Opus 4.8), reviewed by maintainer
 
 ## Context

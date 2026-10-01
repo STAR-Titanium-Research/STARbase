@@ -279,7 +279,7 @@ async function createWindow(): Promise<void> {
 
   await mainWindow.loadURL('app://force/');
   void offerScheduledTaskCleanup();
-  initAutoUpdater(() => mainWindow, () => port);
+  initAutoUpdater(() => mainWindow, async () => (await activeRecording()) != null);
 }
 
 export function getSupervisor(): SidecarSupervisor | null {

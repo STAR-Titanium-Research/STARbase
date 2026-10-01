@@ -13,11 +13,14 @@ import { useForceHost } from './host';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { type Cache, cacheGet, cachePut, idxOfTime, parseCache } from './liveCache';
-import { type Axis, type Cloud, type CloudChannel, type SpeedMode, axisAutoLimits, buildCloud, COLORMAPS } from './liveCloud';
+import { type Axis, type Cloud, type CloudChannel, type SpeedMode, axisAutoLimits, buildCloud } from './liveCloud';
 import { buildPath, type PathParams } from './path';
 import { exportFrmFigure } from './frmExport';
+import { buildScaleLUT, colorizeValues, lutKey, type ColorScale } from './colorScale';
+import { createScaleTexture, syncScaleTexture } from './scaleTexture';
+import { histogramFrom, type Histogram } from './histogram';
 import {
-	buildColormapLUT, buildStaticAttributes, spiralUniformValues,
+	buildStaticAttributes, spiralUniformValues,
 	TURNING_SPIRAL_FRAG, TURNING_SPIRAL_VERT,
 } from './frmCloudShader';
 
@@ -42,9 +45,7 @@ const props = defineProps<{
 	gridding: boolean;
 	gridN: number;
 	pointSize: number;
-	colormap: string;
-	cmin?: number | null;
-	cmax?: number | null;
+	colorScale: ColorScale;
 	zSeries?: 'none' | 'Fx' | 'Fy' | 'Fz';    // drive Z from a force series -> true 3D (like Full)
 	zScale?: number;                          // height exaggeration as a fraction of the x/y span
 	// Compare mode (filtering suite): a parent-owned view object shared by both panes so
@@ -57,6 +58,7 @@ const props = defineProps<{
 const emit = defineEmits<{
 	(e: 'loaded', meta: { csSec: number; ceSec: number; feed: number; diam: number; rpm: number; Fs: number; N: number }): void;
 	(e: 'climits', v: { cmin: number; cmax: number }): void;
+	(e: 'histogram', v: Histogram): void;   // value distribution over the same auto-limits window, for ColorScaleEditor.vue's strip
 	(e: 'points', n: number): void;   // rendered point count (for the resolution readout)
 	(e: 'zscale', v: number): void;   // 3-finger vertical swipe adjusts the Z exaggeration
 }>();
@@ -154,14 +156,21 @@ function screenToWorld(px: number, py: number) {
 }
 
 // ---- overlays: colorbar + scale bar (reactive, refreshed each draw) ----
-const climits = ref<{ cmin: number; cmax: number } | null>(null);
+// The colorbar always shows exactly what's rendered, so it reads straight from props.colorScale
+// rather than tracking a separately-updated ref -- see emitAutoRange() below for the SEPARATE
+// signal (the 'climits' event) a host uses to seed/reseed a fresh ColorScale on a channel switch.
+const climits = computed(() => (cache.value ? { cmin: props.colorScale.satMin, cmax: props.colorScale.satMax } : null));
 const scaleBar = ref<{ px: number; label: string } | null>(null);
+// Sampled from the SAME LUT the GPU renders with (buildScaleLUT), not a separate 0..1 colormap
+// re-sample -- so this CSS ramp is pixel-consistent with the on-screen render, including step
+// quantisation and log-scale banding, rather than a smooth approximation that could silently
+// diverge from it.
 const rampCss = computed(() => {
-	const cm = COLORMAPS[props.colormap] || COLORMAPS.viridis;
+	const width = 32;
+	const lut = buildScaleLUT(props.colorScale, width);
 	const stops: string[] = [];
-	for (let i = 0; i <= 10; i++) {
-		const [r, g, b] = cm(i / 10);
-		stops.push(`rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)}) ${i * 10}%`);
+	for (let i = 0; i < width; i++) {
+		stops.push(`rgb(${lut[i * 4]},${lut[i * 4 + 1]},${lut[i * 4 + 2]}) ${(i / (width - 1)) * 100}%`);
 	}
 	return `linear-gradient(to top, ${stops.join(', ')})`;
 });
@@ -207,7 +216,6 @@ let gpuGeom: THREE.BufferGeometry | null = null;
 let gpuMat: THREE.ShaderMaterial | null = null;
 let gpuObj: THREE.Points | null = null;
 let colormapTex: THREE.DataTexture | null = null;
-let colormapTexName = '';   // which props.colormap colormapTex currently holds
 let gpuUploaded = false;   // whether gpuGeom currently holds this op's data at all
 // 3D when a Z series is selected: the cloud gets a Z displacement and OrbitControls owns
 // the camera; the custom 2D pan/pinch/wheel/rect handlers stand down. Flat is unchanged.
@@ -265,11 +273,7 @@ function setupRenderer() {
 	pointsObj = new THREE.Points(pointsGeom, pointsMat);
 	scene.add(pointsObj);
 
-	colormapTex = new THREE.DataTexture(buildColormapLUT(COLORMAPS[props.colormap] || COLORMAPS.viridis), 64, 1, THREE.RGBAFormat);
-	colormapTex.minFilter = THREE.LinearFilter; colormapTex.magFilter = THREE.LinearFilter;
-	colormapTex.wrapS = colormapTex.wrapT = THREE.ClampToEdgeWrapping;
-	colormapTex.needsUpdate = true;
-	colormapTexName = props.colormap;
+	colormapTex = createScaleTexture(props.colorScale);
 	gpuGeom = new THREE.BufferGeometry();
 	gpuMat = new THREE.ShaderMaterial({
 		vertexShader: TURNING_SPIRAL_VERT, fragmentShader: TURNING_SPIRAL_FRAG,
@@ -277,7 +281,10 @@ function setupRenderer() {
 			uFeed: { value: 0 }, uRho0: { value: 1 }, uInnerR: { value: 0 }, uSpeedMode: { value: 0 },
 			uRevPerSec: { value: 0 }, uTimeScale: { value: 1 }, uPpr: { value: 1 }, uK: { value: 0 },
 			uTCs: { value: 0 }, uRevsCs: { value: 0 }, uCropStart: { value: 0 }, uCropEnd: { value: 0 },
-			uCmin: { value: 0 }, uCmax: { value: 1 }, uPointSize: { value: 1.4 }, uColormap: { value: colormapTex },
+			uCmin: { value: props.colorScale.satMin }, uCmax: { value: props.colorScale.satMax },
+			uDisp: { value: new THREE.Vector2(props.colorScale.dispMin, props.colorScale.dispMax) },
+			uGreyOOR: { value: props.colorScale.greyOutOfRange ? 1 : 0 },
+			uPointSize: { value: 1.4 }, uColormap: { value: colormapTex },
 		},
 		transparent: false,
 	});
@@ -333,19 +340,23 @@ function sizeCanvas(canvas: HTMLCanvasElement) {
 // O(N) recompute + percentile sort + full buffer re-upload on every frame.
 let cloud: Cloud | null = null;
 
-// Auto colour limits computed once per (cache, axis) over the WHOLE cut window, so Live's
-// scale matches Full's baked scale per axis and doesn't drift while cropping. Manual limits
-// (props.cmin/cmax) still win. Cleared when the cache changes.
-const autoLimitsByAxis = new Map<string, [number, number]>();
-watch(cache, () => { autoLimitsByAxis.clear(); gpuUploaded = false; });
-function effClimits(): { cmin: number; cmax: number } {
-	let auto = autoLimitsByAxis.get(effChannel.value);
-	if (!auto && cache.value) { auto = axisAutoLimits(cache.value, effChannel.value); autoLimitsByAxis.set(effChannel.value, auto); }
-	auto = auto || [0, 1];
-	return {
-		cmin: Number.isFinite(props.cmin as number) ? (props.cmin as number) : auto[0],
-		cmax: Number.isFinite(props.cmax as number) ? (props.cmax as number) : auto[1],
-	};
+// Auto colour limits, computed once per (cache, axis) over the WHOLE cut window, purely for a
+// host to seed/reseed a fresh ColorScale (colorScale.ts's defaultScale/applyParams) on a channel
+// switch -- decoupled from what is actually RENDERED, which always comes from props.colorScale
+// (climits.value above). Same "climits reports the data, colorScale drives the render" split
+// Stage 1/2 established for every other converted renderer.
+watch(cache, () => { gpuUploaded = false; lastEmittedAutoKey = ''; });
+let lastEmittedAutoKey = '';
+function emitAutoRange() {
+	const auto = cache.value ? axisAutoLimits(cache.value, effChannel.value) : [0, 1];   // memoised per (cache, channel)
+	const key = `${effChannel.value}:${auto[0]}:${auto[1]}`;
+	if (key === lastEmittedAutoKey) return;   // avoid re-seeding the host's scale on every rebuild
+	lastEmittedAutoKey = key;
+	emit('climits', { cmin: auto[0], cmax: auto[1] });
+	// Same array/window axisAutoLimits sampled above -- the distribution ColorScaleEditor.vue's
+	// strip shows always matches the range climits just reported, never a different population.
+	const channelArr = cache.value ? (cache.value as any)[effChannel.value] as Float32Array | undefined : undefined;
+	if (channelArr && channelArr.length) emit('histogram', histogramFrom(channelArr, channelArr.length, auto[0], auto[1], 64));
 }
 function rebuild() {
 	if (!ready || !canvasEl.value || !cache.value) return;
@@ -359,39 +370,35 @@ function rebuild() {
 	if (gpuObj) gpuObj.visible = false;
 	if (pointsObj) pointsObj.visible = true;
 	if (!pointsGeom) return;
-	const eff = effClimits();
+	emitAutoRange();
+	const s = props.colorScale;
 	cloud = buildCloud(cache.value, {
 		channel: effChannel.value,
 		path: effPath.value,
 		window: { cropStartSec: props.cropStartSec, cropEndSec: props.cropEndSec, stride: props.stride },
 		gridding: props.gridding, gridN: props.gridN,
-		colormap: COLORMAPS[props.colormap] || COLORMAPS.viridis,
-		cmin: eff.cmin, cmax: eff.cmax,
+		cmin: s.satMin, cmax: s.satMax,   // no colormap: colour comes from colorizeValues below
 		zSeries: props.zSeries || 'none',
 	});
 	pointCount.value = cloud?.count ?? 0;
 	emit('points', pointCount.value);
-	if (!cloud) { climits.value = null; scaleBar.value = null; return; }
+	if (!cloud) { scaleBar.value = null; return; }
 
 	// data-fit params (used when the view is in auto-fit mode + as reset target)
 	fitCx = (cloud.bounds.minX + cloud.bounds.maxX) / 2; fitCy = (cloud.bounds.minY + cloud.bounds.maxY) / 2;
 	fitSpan = Math.max(cloud.bounds.maxX - cloud.bounds.minX, cloud.bounds.maxY - cloud.bounds.minY) || 1;
 
-	// upload ONCE per rebuild. cloud.pos is already stride-3 (buildPath emits x,y,z directly —
-	// this used to expand a stride-2 cloud.pos into a stride-3 GPU buffer by hand). Colours are
-	// already 3-component (0..1) → vertex colours.
+	// upload ONCE per rebuild. cloud.pos is already stride-3 (buildPath emits x,y,z directly).
+	// Colour is RGBA from colorizeValues (the full colour scale: steps, log, displayed range), and
+	// a colour-only change recolours this buffer in place (recolorCpu) rather than rebuilding.
 	const n = cloud.count;
 	pointsGeom.setAttribute('position', new THREE.BufferAttribute(cloud.pos, 3));
-	pointsGeom.setAttribute('color', new THREE.BufferAttribute(cloud.col, 3));
+	const rgba = new Uint8Array(n * 4);
+	colorizeValues(cloud.val, n, s, rgba);
+	pointsGeom.setAttribute('color', new THREE.BufferAttribute(rgba, 4, true));
 	pointsGeom.setDrawRange(0, n);
 	applyZScale();
 	if (is3D.value && !controls) enter3D();   // mounted straight into 3D (Z picked before Lite)
-
-	// colorbar limits (only changes with the cloud)
-	const cl = { cmin: cloud.cmin, cmax: cloud.cmax };
-	if (!climits.value || climits.value.cmin !== cl.cmin || climits.value.cmax !== cl.cmax) {
-		climits.value = cl; emit('climits', cl);
-	}
 }
 
 // ---- GPU (turning-spiral) path: static geometry uploaded once, crop is a free uniform -------
@@ -404,12 +411,6 @@ function uploadGpuGeometry() {
 	const pp = effPath.value;
 	if (pp.kind !== 'turning_spiral') return;   // usesGpuPath already guards this; defensive only
 
-	if (colormapTex && colormapTexName !== props.colormap) {
-		colormapTex.image.data.set(buildColormapLUT(COLORMAPS[props.colormap] || COLORMAPS.viridis));
-		colormapTex.needsUpdate = true;
-		colormapTexName = props.colormap;
-	}
-
 	const { aT, aRevs, aVal, count } = buildStaticAttributes(c, effChannel.value, props.stride);
 	gpuGeom.setAttribute('aT', new THREE.BufferAttribute(aT, 1));
 	gpuGeom.setAttribute('aRevs', new THREE.BufferAttribute(aRevs, 1));
@@ -417,18 +418,15 @@ function uploadGpuGeometry() {
 	gpuGeom.setDrawRange(0, count);
 	gpuUploaded = true;
 
-	// Colour limits reuse the SAME cached-per-axis whole-cut auto limits the CPU path already
-	// uses (effClimits/axisAutoLimits) — NOT a crop-scoped recompute. That matches this file's
-	// existing behaviour exactly (effClimits always hands buildCloud a concrete cmin/cmax, so its
-	// own internal crop-scoped percentile branch never actually runs for this caller) and its own
-	// doc comment's intent: "Live's scale matches Full's baked scale per axis and doesn't drift
-	// while cropping." A per-crop recompute would be a silent behaviour change, not a bug fix.
-	const eff = effClimits();
-	gpuMat.uniforms.uCmin.value = eff.cmin;
-	gpuMat.uniforms.uCmax.value = eff.cmax;
-	if (!climits.value || climits.value.cmin !== eff.cmin || climits.value.cmax !== eff.cmax) {
-		climits.value = eff; emit('climits', eff);
-	}
+	// Apply whatever colour scale is currently in effect -- a real geometry change (e.g. switching
+	// channel) must render with today's colorScale, not stale defaults. Ongoing colour-only
+	// changes (dragging a saturation/displayed handle) are handled by the dedicated colorScale
+	// watcher further down WITHOUT re-running this O(N) attribute rebuild -- that watcher is the
+	// actual point of this GPU path, so this function must never become its trigger.
+	// The LUT too: colour changes made while the CPU path was active never touched colormapTex.
+	if (colormapTex) syncScaleTexture(colormapTex, props.colorScale);
+	pushGpuColorUniforms(props.colorScale);
+	emitAutoRange();
 
 	updateGpuCropUniforms();
 	refineGpuPointCount();   // exact count — cheap enough to also pay here, not just at drag-end
@@ -555,16 +553,34 @@ function draw() {
 	updateScaleBar();
 }
 
+let pendingRecolor = false;
 function scheduleDraw() {
 	if (raf) return;
 	raf = requestAnimationFrame(() => {
 		raf = 0;
-		if (pendingRebuild) { pendingRebuild = false; rebuild(); }
+		if (pendingRebuild) { pendingRebuild = false; pendingRecolor = false; rebuild(); }
+		else if (pendingRecolor) { pendingRecolor = false; recolorCpu(); }
 		draw();
 	});
 }
-// Coalesce a rebuild into the next frame (geometry/colour change).
+// Coalesce a rebuild into the next frame (geometry change).
 function scheduleRebuild() { pendingRebuild = true; scheduleDraw(); }
+// CPU path colour-only change: O(N) repaint of the resident colour buffer, at most once a frame.
+function scheduleRecolor() { pendingRecolor = true; scheduleDraw(); }
+function recolorCpu() {
+	if (!cloud || !pointsGeom) return;
+	const attr = pointsGeom.getAttribute('color') as THREE.BufferAttribute | undefined;
+	if (!attr || attr.itemSize !== 4 || attr.count !== cloud.count) { scheduleRebuild(); return; }
+	colorizeValues(cloud.val, cloud.count, props.colorScale, attr.array as Uint8Array);
+	attr.needsUpdate = true;
+}
+function pushGpuColorUniforms(s: ColorScale) {
+	if (!gpuMat) return;
+	gpuMat.uniforms.uCmin.value = s.satMin;
+	gpuMat.uniforms.uCmax.value = s.satMax > s.satMin ? s.satMax : s.satMin + 1;
+	gpuMat.uniforms.uDisp.value.set(s.dispMin, s.dispMax);
+	gpuMat.uniforms.uGreyOOR.value = s.greyOutOfRange ? 1 : 0;
+}
 
 // Current visible world rectangle (mm) — the same (cx±1/sx, cy±1/sy) extents the
 // camera renders — so the parent can ask the host to re-render exactly this viewport
@@ -582,11 +598,11 @@ function exportViewport(filename: string, subtitle?: string) {
 	const c = canvasEl.value;
 	if (!c || !ready) return false;
 	draw();
-	const cl = climits.value;
+	const s = props.colorScale;
 	return exportFrmFigure({
 		canvas: c, bounds: currentBounds(),
-		cmin: cl?.cmin ?? 0, cmax: cl?.cmax ?? 1,
-		colormap: props.colormap, axis: effChannel.value, subtitle, filename,
+		cmin: s.satMin, cmax: s.satMax, colorScale: s,
+		axis: effChannel.value, subtitle, filename,
 	});
 }
 defineExpose({ currentBounds, exportViewport });
@@ -629,7 +645,7 @@ function teardownRenderer() {
 	}
 	renderer = null; scene = null; camera = null; controls = null;
 	pointsGeom = null; pointsMat = null; pointsObj = null; discTex = null;
-	gpuGeom = null; gpuMat = null; gpuObj = null; colormapTex = null; colormapTexName = '';
+	gpuGeom = null; gpuMat = null; gpuObj = null; colormapTex = null;
 	gpuUploaded = false;
 	ready = false;
 }
@@ -643,8 +659,31 @@ onActivated(() => { if (!ready) nextTick(() => { setupRenderer(); scheduleRebuil
 // drag frame is the O(N) recompute + percentile sort + GPU re-upload lag this file's other
 // comments describe. Including it in this list too would silently bypass that throttle.
 watch(() => [effChannel.value, effPath.value, props.stride,
-	props.gridding, props.gridN, props.colormap, props.cmin, props.cmax, props.zSeries], scheduleRebuild, { deep: true });
+	props.gridding, props.gridN, props.zSeries], scheduleRebuild, { deep: true });
 watch(() => props.pointSize, scheduleDraw);
+
+// A host's colorScale is often a fresh object on every recompute, so the deep watch fires on
+// identity alone; skip when nothing either path reads has changed (lutKey covers log scale).
+function colorScaleUnchanged(a: ColorScale, b: ColorScale | null): boolean {
+	return !!b && lutKey(a) === lutKey(b) &&
+		a.satMin === b.satMin && a.satMax === b.satMax &&
+		a.dispMin === b.dispMin && a.dispMax === b.dispMax &&
+		a.greyOutOfRange === b.greyOutOfRange;
+}
+// Compared against a copy, not the watcher's `prev`: when a host mutates the scale in place, `prev`
+// IS the new object and every change would look like a no-op.
+let lastScale: ColorScale | null = { ...props.colorScale };
+// Neither path re-runs geometry for a colour change: the GPU path pushes uniforms (and rewrites
+// the LUT texture when lutKey changes); the CPU path repaints its resident colour buffer and
+// leaves the texture to uploadGpuGeometry's resync on the way back to the GPU path.
+watch(() => props.colorScale, (s) => {
+	if (colorScaleUnchanged(s, lastScale)) return;
+	lastScale = { ...s };
+	if (!usesGpuPath.value) { scheduleRecolor(); return; }
+	if (colormapTex) syncScaleTexture(colormapTex, s);
+	pushGpuColorUniforms(s);
+	scheduleDraw();
+}, { deep: true });
 
 // Crop is DRAGGED, and — for the CPU path only (gridded mode, a Z-series overlay/3D, or a
 // linear_feed/machine_xyz path; see usesGpuPath) — its rebuild is still the full O(N) recompute +
@@ -818,8 +857,8 @@ function onUp(ev: PointerEvent) {
 		<!-- rubber-band zoom rectangle -->
 		<div v-if="rectSel" class="fc-rect" :style="{ left: rectSel.x + 'px', top: rectSel.y + 'px', width: rectSel.w + 'px', height: rectSel.h + 'px' }"></div>
 
-		<!-- colorbar (force -> colour) -->
-		<div v-if="climits && !loading && !error" class="fc-cbar">
+		<!-- colorbar (force -> colour); the editor's "Show colour bar on render" drives barVisible -->
+		<div v-if="climits && colorScale.barVisible && !loading && !error" class="fc-cbar">
 			<span class="fc-cval">{{ fmtN(climits.cmax) }}</span>
 			<div class="fc-ramp" :style="{ background: rampCss }"></div>
 			<span class="fc-cval">{{ fmtN(climits.cmin) }}</span>
@@ -856,26 +895,26 @@ function onUp(ev: PointerEvent) {
 .frm-cloud canvas:active { cursor: grabbing; }
 .frm-cloud canvas.rect { cursor: crosshair; }
 .fc-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; color: #94a3b8; }
-.fc-msg.err { color: #fca5a5; font-size: 12px; padding: 12px; text-align: center; }
-.fc-count { position: absolute; right: 6px; bottom: 4px; font-size: 10px; color: var(--text-dim, #94a3b8); font-variant-numeric: tabular-nums; }
-.fc-swgl { position: absolute; left: 6px; bottom: 4px; font-size: 10px; font-weight: 700; color: #fbbf24; cursor: help; }
-.fc-pane { position: absolute; left: 6px; top: 4px; font-size: 10px; font-weight: 700; color: var(--text-dim, rgba(255,255,255,0.75)); text-transform: uppercase; letter-spacing: 0.06em; }
+.fc-msg.err { color: #fca5a5; font-size: var(--fs-sm, 12px); padding: 12px; text-align: center; }
+.fc-count { position: absolute; right: 6px; bottom: 4px; font-size: var(--fs-xs, 11px); color: var(--text-dim, #94a3b8); font-variant-numeric: tabular-nums; }
+.fc-swgl { position: absolute; left: 6px; bottom: 4px; font-size: var(--fs-xs, 11px); font-weight: 700; color: #fbbf24; cursor: help; }
+.fc-pane { position: absolute; left: 6px; top: 4px; font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--text-dim, rgba(255,255,255,0.75)); letter-spacing: 0.01em; }
 
-.fc-rect { position: absolute; border: 1px solid #38bdf8; background: rgba(56,189,248,0.14); pointer-events: none; border-radius: 2px; }
+.fc-rect { position: absolute; border: 1px solid var(--accent, #38bdf8); background: color-mix(in srgb, var(--accent, #38bdf8) 14%, transparent); pointer-events: none; border-radius: 2px; }
 
 .fc-cbar { position: absolute; top: 10px; right: 8px; display: flex; flex-direction: column; align-items: center; gap: 3px; pointer-events: none; }
 .fc-ramp { width: 10px; height: 96px; border-radius: 3px; border: 1px solid var(--border-2, rgba(255,255,255,0.25)); }
-.fc-cval { font-size: 9px; color: var(--text, rgba(255,255,255,0.82)); font-variant-numeric: tabular-nums; }
-.fc-cunit { font-size: 9px; color: var(--text-dim, rgba(255,255,255,0.6)); margin-top: 1px; }
+.fc-cval { font-size: var(--fs-xs, 11px); color: var(--text, rgba(255,255,255,0.82)); font-variant-numeric: tabular-nums; }
+.fc-cunit { font-size: var(--fs-xs, 11px); color: var(--text-dim, rgba(255,255,255,0.6)); margin-top: 1px; }
 
 .fc-scale { position: absolute; left: 10px; bottom: 8px; display: flex; flex-direction: column; align-items: center; gap: 2px; pointer-events: none; }
 .fc-scale-line { height: 3px; background: var(--text, rgba(255,255,255,0.85)); border-left: 1px solid var(--text, rgba(255,255,255,0.85)); border-right: 1px solid var(--text, rgba(255,255,255,0.85)); box-sizing: border-box; }
-.fc-scale span { font-size: 9.5px; color: var(--text, rgba(255,255,255,0.85)); font-variant-numeric: tabular-nums; }
+.fc-scale span { font-size: var(--fs-xs, 11px); color: var(--text, rgba(255,255,255,0.85)); font-variant-numeric: tabular-nums; }
 
 .fc-tools { position: absolute; top: 8px; left: 8px; display: flex; gap: 5px; }
 .fc-tbtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; cursor: pointer;
 	color: var(--text, rgba(255,255,255,0.85)); background: var(--overlay, rgba(15,23,42,0.55)); border: 1px solid var(--border-2, rgba(255,255,255,0.18)); }
 .fc-tbtn:hover { background: var(--surface-2, rgba(15,23,42,0.8)); }
-.fc-tbtn.on { background: #38bdf8; border-color: #38bdf8; color: #0b1020; }
+.fc-tbtn.on { background: var(--accent, #38bdf8); border-color: var(--accent, #38bdf8); color: var(--accent-ink, #0b1020); }
 .fc-tbtn:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

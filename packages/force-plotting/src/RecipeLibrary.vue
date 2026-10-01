@@ -66,9 +66,9 @@ async function removeSel() {
 </template>
 
 <style scoped>
-.recipe-library { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 11px; }
-.recipe-library select { flex: 1; min-width: 90px; font-size: 11px; padding: 3px 5px; background: var(--bg-2, #111a33); color: var(--text, #e5e7eb); border: 1px solid var(--border, rgba(255, 255, 255, 0.14)); border-radius: 5px; }
-.recipe-library button { font-size: 11px; padding: 3px 7px; border-radius: 5px; border: 1px solid var(--border, rgba(255, 255, 255, 0.14)); background: var(--bg-2, #111a33); color: var(--text, #e5e7eb); cursor: pointer; }
+.recipe-library { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: var(--fs-xs, 11px); }
+.recipe-library select { flex: 1; min-width: 90px; font-size: var(--fs-xs, 11px); padding: 3px 5px; background: var(--bg-2, #111a33); color: var(--text, #e5e7eb); border: 1px solid var(--border, rgba(255, 255, 255, 0.14)); border-radius: 5px; }
+.recipe-library button { font-size: var(--fs-xs, 11px); padding: 3px 7px; border-radius: 5px; border: 1px solid var(--border, rgba(255, 255, 255, 0.14)); background: var(--bg-2, #111a33); color: var(--text, #e5e7eb); cursor: pointer; }
 .recipe-library button:disabled { opacity: 0.45; cursor: not-allowed; }
 .recipe-library .del { color: var(--danger, #fca5a5); }
 .recipe-library .err { color: var(--danger, #fca5a5); width: 100%; }

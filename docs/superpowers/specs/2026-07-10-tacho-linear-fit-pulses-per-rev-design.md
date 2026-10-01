@@ -1,5 +1,8 @@
 # Tacho linear fit + selectable pulses-per-rev
 
+**Status:** implemented July 2026 — `scripts/matlab/process_force.m` (linear `tachorpm` fit,
+`pulses_per_rev` option) and migration `20260710000086_force_pulses_per_rev.sql`.
+
 ## Problem
 
 `tachorpm` (MATLAB Signal Processing Toolbox) currently runs with its defaults:
@@ -11,7 +14,7 @@
    needs to be able to set it, per operation, with a sensible global default.
 
 Both `rpm` and its integral `revs_cum` feed the FRM geometry (canonical PNGs) and
-the live point-cloud cache ([[live-plotting]]), so this touches the MATLAB
+the live point-cloud cache (`live_cache.bin`), so this touches the MATLAB
 processing script, the orchestrator, two DB tables, and the dashboard's Live
 editable-metadata panel.
 

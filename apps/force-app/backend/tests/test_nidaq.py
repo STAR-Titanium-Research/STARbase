@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from app.config import SIGNAL_CHANNELS, RecordConfig
+from app.config import SIGNAL_CHANNELS, ExtraChannel, RecordConfig
 from app.sources.nidaq import NidaqSource, nidaq_available
 
 
@@ -67,6 +67,51 @@ def test_channel_count_mismatch_rejected():
 
 def test_nidaq_available_is_bool():
     assert isinstance(nidaq_available(), bool)
+
+
+# ---- extra (real Aux) channels widen the acquired channel count ----
+
+
+def test_a_real_aux_channel_widens_the_acquired_channels():
+    cfg = RecordConfig(sample_rate=2000, source="nidaq")
+    extra = [ExtraChannel(name="Temp", source="hardware", physical="cDAQ1Mod3/ai1")]
+    physical = ["Dev1/ai%d" % i for i in range(9)] + ["cDAQ1Mod3/ai1"]
+    src = NidaqSource(
+        cfg,
+        physical_channels=physical,
+        extra_channels=extra,
+        _task=FakeTask(),
+        _reader=FakeReader(),
+    )
+    assert src.channels == list(SIGNAL_CHANNELS) + ["Temp"]
+    src.start()
+    t, data = src.read()
+    assert data.shape == (src.chunk, 10)  # 9 fixed + 1 real Aux
+
+
+def test_a_virtual_channel_does_not_widen_acquisition_at_all():
+    """Virtual channels are computed, never acquired — configuring one must not change how many
+    physical channels NidaqSource expects or reads."""
+    cfg = RecordConfig(sample_rate=2000, source="nidaq")
+    extra = [ExtraChannel(name="Resultant", source="virtual", formula="sqrt(Fx1*Fx1)")]
+    src = NidaqSource(cfg, extra_channels=extra, _task=FakeTask(), _reader=FakeReader())
+    assert src.channels == list(SIGNAL_CHANNELS)  # unchanged — 9, not 10
+    src.start()
+    _t, data = src.read()
+    assert data.shape == (src.chunk, 9)
+
+
+def test_mismatch_message_accounts_for_extra_hardware_channels():
+    cfg = RecordConfig(sample_rate=1000, source="nidaq")
+    extra = [ExtraChannel(name="Temp", source="hardware", physical="cDAQ1Mod3/ai1")]
+    with pytest.raises(ValueError, match="10 .*9 fixed \\+ 1 extra hardware"):
+        NidaqSource(
+            cfg,
+            physical_channels=["Dev1/ai0"],  # only 1, but 10 are now expected
+            extra_channels=extra,
+            _task=FakeTask(),
+            _reader=FakeReader(),
+        )
 
 
 # ---- Read-timeout tolerance (see NidaqSource.READ_STALL_BUDGET_SEC) ----

@@ -1,8 +1,16 @@
 # Data Dictionary — D1-Database Schema
 
-Generated from Phase 1 migrations. Every table and column carries a native
-PostgreSQL `COMMENT` string — this file is the human-readable mirror of those
-comments and the primary context document for LLM text-to-SQL (Phase 6).
+Tables and columns carry native PostgreSQL `COMMENT`s (a rule for every
+migration — see [`CONTRIBUTING.md`](../CONTRIBUTING.md)), and those comments are
+the authoritative dictionary. Query them through the `v_schema_dictionary`
+view (one row per column, with its table and column comments); it is also what
+the text-to-SQL path builds its prompt from (ADR-0009).
+
+This file is the human-readable map. The schema overview lists every table and
+view the migrations create, as of `20260918000113`. The table details describe
+the core entities as designed in Phase 1: those columns all still exist, but the
+core tables have since gained typed parameter columns, people and campaign links
+and more, so use `v_schema_dictionary` for the full column list.
 
 > **LLM guidance:** Always consult `information_schema.columns` and
 > `pg_description` for the authoritative column semantics. This document
@@ -14,40 +22,76 @@ comments and the primary context document for LLM text-to-SQL (Phase 6).
 
 ```
 Reference tables (static / slow-changing)
-  alloying_elements          periodic-table reference
-  material_iso_classifications ISO P/M/K/N/S/H groups
-  materials                  alloy catalogue (alloy_code → common_name)
-  manufacturing_methods       process-type catalogue (method_code → method_name)
-  method_parameters          dynamic-template registry per method
-  equipment                  machines and rigs
-  tools                      tool holders
-  insert_types               cutting-insert catalogue
+  alloying_elements            periodic-table reference
+  material_alloying_elements   M2M: elemental composition of each alloy
+  material_iso_classifications ISO 513 P/M/K/N/S/H groups
+  materials                    alloy catalogue (alloy_code → common_name)
+  manufacturing_methods        process-type catalogue (method_code → method_name)
+  facilities                   labs / centres that house equipment
+  equipment                    machines and rigs
+  manufacturers                manufacturer dropdown for equipment, tools, insert types
+  tools                        tool holders
+  insert_types                 cutting-insert catalogue
+  etchants                     metallographic etchants (sample preparation)
 
-Project grouping
-  projects                   research campaigns (e.g. AI4340)
+People
+  people                       anyone attributed on a record: operator, researcher, owner
 
-Raw-material provenance (new — not in legacy data)
-  raw_stock_lots              inbound material ledger
+Projects & campaigns
+  projects                     research projects (e.g. AI4340)
+  project_investigators        M2M: secondary investigators on a project
+  campaigns                    machining trial or testing campaign under a project
+  campaign_samples             M2M: samples in a campaign
+  project_rollup               read-only cache of v_project_rollup, rebuilt by trigger
+
+Raw-material provenance
+  raw_stock_lots               inbound material ledger
 
 Tooling hierarchy (3 levels)
-  tool_boxes                 grandparent: storage container
-  cutting_inserts            parent: individual multi-edged insert
-  insert_edges               child: discrete cutting point
+  tool_boxes                   grandparent: storage container
+  cutting_inserts              parent: individual multi-edged insert
+  insert_edges                 child: discrete cutting point
 
 Core sample lifecycle
-  physical_samples           central entity (dual identity: UUID + sample_code)
-  sample_genealogy           self-referential parent-child lineage
-  sample_stock_provenance    sample ↔ raw_stock_lots (many-to-many)
+  physical_samples             central entity (dual identity: UUID + sample_code)
+  sample_genealogy             self-referential parent-child lineage
+  sample_stock_provenance      sample ↔ raw_stock_lots (many-to-many)
+  sample_co_owners             M2M: co-owning Directus users
 
-Operations
-  manufacturing_operations   unified op log (JSONB for method params)
-  test_sessions              experimental trial + file pointer
+Operations & tests
+  manufacturing_operations     unified operation log; typed per-process parameter columns
+  test_sessions                experimental trial ledger; typed per-test parameter columns
+  test_sessions_subject        M2A: what a test targets (sample, insert edge, …)
+
+Sample preparation
+  prep_recipes                 reusable preparation recipe
+  prep_recipe_steps            the ordered steps of a recipe
+  prep_steps                   the editable steps of one preparation operation
+
+Files & archive links
+  operation_data_files         M2M: File Library files ↔ operations
+  sample_data_files            M2M: File Library files ↔ samples
+  session_data_files           M2M: File Library files ↔ test sessions
+  operation_files              network-share path links on an operation
+  archive_metadata_edits       audit trail of in-place edits to archive-file metadata
+
+Machining force analysis
+  machining_force_analysis     per-.mat results: metrics, FRM, octrees, diagnostics state
+  force_crawler_state          singleton control/status row for the force-crawler daemon
+  filter_profiles              named FRM filter-chain library
+  tool_setup                   dynamometer mount geometry + H-matrix FRF correction
+  diag_recipes                 named diagnostics recipe library
+  diag_layer                   hand-painted mask / label / seed polygons for diagnostics
+
+FAST sintering
+  fast_run_data                normalised sintering trace per operation
+  fast_recipes                 FAST 25 / 250 recipe definitions
 
 Cross-cutting
-  audit_logs                 append-only immutable change log
+  audit_logs                   append-only immutable change log
 
 AI-readiness (Phase 6 — text-to-SQL & semantic search)
-  semantic_embeddings        pgvector store for note text (HNSW cosine index)
+  semantic_embeddings          pgvector store for note text (HNSW cosine index)
 
 Views (v_ prefix — LLM query targets)
   v_complete_sample_history  flat sample + material + project
@@ -56,6 +100,7 @@ Views (v_ prefix — LLM query targets)
   v_manufacturing_operations_full  ops + method + tooling + project
   v_stock_provenance         sample ← raw stock lots
   v_test_sessions_full       sessions + sample + tooling + project
+  v_project_rollup           everything used in a project, direct or via a campaign
   v_schema_dictionary        table/column COMMENTs as a queryable dictionary
   v_llm_query_targets        allow-list menu of views the LLM may query
   v_embeddings_source_notes  every embeddable note (embedding backfill source)
@@ -120,11 +165,11 @@ separate `FAST Runs` and `Machining Operations` spreadsheet tabs.
 | `equipment_id` | UUID FK | Machine used |
 | `tool_id` | UUID FK | Tool holder used |
 | `insert_edge_id` | UUID FK | Cutting edge consumed |
-| `operator_name` | TEXT | Operator name (Phase 3 links to user FK) |
+| `operator_name` | TEXT | Legacy free-text operator; `operator_person_id` → `people` supersedes it |
 | `operation_sequence` | INTEGER | Ordering within sample lifecycle |
 | `pass_code` | TEXT | Human-readable pass pseudonym, e.g. `9-AA-MR-2023-03-23-F9` |
 | `operation_date` | TIMESTAMPTZ | When the operation ran |
-| `recorded_metadata` | JSONB | Method-specific parameters (see `method_parameters`) |
+| `recorded_metadata` | JSONB | Method-specific parameters as designed in Phase 1 — now superseded by typed columns (below) |
 | `capture_software` | TEXT | e.g. `MATLAB ABFP 0.18` — needed to interpret force files |
 | `capture_frequency_khz` | NUMERIC(10,4) | Sampling frequency in kHz (e.g. 25.6) |
 | `file_storage_pointer` | TEXT | MinIO S3 URI to raw data file |
@@ -141,7 +186,11 @@ CNC Turning (MC): `cutting_speed_m_per_min`, `feed_rate_mm_per_rev`,
 `depth_of_cut_mm`, `max_spindle_rpm`, `coolant_type`, `coolant_pressure_bar`,
 `chips_collected`, `new_edge_used`
 
-See `method_parameters` table for the full registry and data types.
+Since migration `20260623000032_inline_param_fields.sql`, parameters are typed
+inline columns instead, prefixed by process and shown according to
+`process_category`: `machining_*`, `sintering_*`, `ht_*` (heat treatment),
+`deform_*` and `am_*` (additive). The `method_parameters` registry that described
+the JSONB keys was dropped in `20260626000039`.
 
 ---
 
@@ -165,7 +214,12 @@ after parsing.
 | `file_size_gb` | NUMERIC | File size in GB as reported by client |
 | `summary_stats` | JSONB | Written by worker: min/max/mean forces, etc. |
 | `plot_uris` | JSONB | JSON array of MinIO URIs for rendered plots |
-| `status` | TEXT | Pipeline state: registered \| processing \| complete \| failed |
+| `status` | TEXT | Pipeline state: registered \| pending_processing \| processing \| processed \| analysing \| analysed \| failed (migration `…013`) |
+
+Since Phase 1: what a test targets is recorded through the `test_sessions_subject`
+M2A junction (a sample, an insert edge, …; `sample_id` and `insert_edge_id` are kept
+as nullable backups), and typed per-test parameters are inline columns prefixed by
+test type (`tensile_*`, `hardness_*`, `sem_*`, `xrd_*`, …).
 
 ---
 

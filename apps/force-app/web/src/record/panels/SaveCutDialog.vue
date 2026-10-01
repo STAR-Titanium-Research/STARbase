@@ -9,19 +9,34 @@ import { useRouter } from 'vue-router';
 import { useWorkspace } from '../workspace';
 import { RAW_BYTES_PER_SAMPLE, RAW_COLUMNS } from '../liveClient';
 import FinishedForcePlot from '../FinishedForcePlot.vue';
+import { useDialog } from '../../ui/useDialog';
+import { formatMegabytes } from '../../format';
+import { authStore } from '../../authStore';
 
 const w = useWorkspace();
 const router = useRouter();
 
 const online = ref(navigator.onLine);
-window.addEventListener('online', () => (online.value = true));
-window.addEventListener('offline', () => (online.value = false));
+// Removed on unmount: these used to be added at setup and never removed, one more pair for every
+// recording's dialog for as long as the window stayed open.
+const setOnline = () => { online.value = true; };
+const setOffline = () => { online.value = false; };
+window.addEventListener('online', setOnline);
+window.addEventListener('offline', setOffline);
+onBeforeUnmount(() => { window.removeEventListener('online', setOnline); window.removeEventListener('offline', setOffline); });
+
+// No Escape: this dialog is a decision (save or discard), not something to dismiss by accident.
+const panel = ref<HTMLElement | null>(null);
+useDialog(panel);
 
 // manufacturing_operations.sample_id is NOT NULL, and buildRunPayload sends `sampleId || null`, so
 // uploading without a Sample picked fails on a raw Directus constraint error at the end of the save
 // — after the user has already committed to it. Gate the option on having one instead.
 const hasSample = computed(() => !!w.link.sampleId);
-const canUpload = computed(() => online.value && hasSample.value);
+// An offline session (signed in with no connection) has no token to upload with, even if the
+// network has since returned -- the banner at the top is the way back to a real session.
+const offlineSession = computed(() => authStore.state.offline);
+const canUpload = computed(() => online.value && !offlineSession.value && hasSample.value);
 
 const uploadDb = ref(canUpload.value);
 const saveMat = ref(false);
@@ -123,11 +138,6 @@ onBeforeUnmount(() => { if (manualRetryTimer) clearTimeout(manualRetryTimer); })
 
 // float32 rows, matching the raw writer — see RAW_BYTES_PER_SAMPLE.
 const estSizeMb = computed(() => (w.st.nTotal ? (w.st.nTotal * RAW_COLUMNS * RAW_BYTES_PER_SAMPLE) / 1e6 : 0));
-function fmtSize(mb: number): string {
-	if (mb < 1) return (mb * 1000).toFixed(0) + ' KB';
-	if (mb < 1000) return mb.toFixed(1) + ' MB';
-	return (mb / 1000).toFixed(2) + ' GB';
-}
 
 function downloadUrl(href: string, filename: string) {
 	const a = document.createElement('a');
@@ -194,12 +204,12 @@ function startNew() {
 </script>
 
 <template>
-	<div class="scd-backdrop">
-		<div class="scd-modal">
+	<div class="scd-backdrop dialog-backdrop-in">
+		<div ref="panel" class="scd-modal dialog-in" role="dialog" aria-modal="true" aria-labelledby="scd-title" tabindex="-1">
 			<header class="scd-head">
 				<span class="material-symbols-rounded">task_alt</span>
 				<div class="scd-title">
-					<b>Recording finished</b>
+					<b id="scd-title">Recording finished</b>
 					<span class="scd-sub">{{ w.meta.sample_name || 'Untitled cut' }} · {{ (w.st.summary?.duration_sec ?? w.st.tSec).toFixed(1) }}s</span>
 				</div>
 			</header>
@@ -213,8 +223,8 @@ function startNew() {
 						<span class="scd-stage-label">{{ s.label }}</span>
 						<span v-if="stageStatus(s.key) !== 'pending'" class="scd-stage-time">{{ stageElapsed(s.key).toFixed(1) }}s</span>
 					</div>
-					<span v-if="w.st.nTotal" class="scd-loading-sub">{{ w.st.nTotal.toLocaleString() }} samples · ~{{ fmtSize(estSizeMb) }}</span>
-					<button v-if="showManualRetry" class="scd-btn" @click="w.loadFinished()">Still loading — try again</button>
+					<span v-if="w.st.nTotal" class="scd-loading-sub">{{ w.st.nTotal.toLocaleString() }} samples · ~{{ formatMegabytes(estSizeMb) }}</span>
+					<button v-if="showManualRetry" class="btn" @click="w.loadFinished()">Still loading — try again</button>
 				</div>
 			</template>
 
@@ -225,7 +235,7 @@ function startNew() {
 				</div>
 				<div class="scd-actions">
 					<div class="scd-spacer"></div>
-					<button class="scd-btn primary" @click="startNew">Close</button>
+					<button class="btn primary" @click="startNew">Close</button>
 				</div>
 			</template>
 
@@ -255,7 +265,8 @@ function startNew() {
 						<input type="checkbox" v-model="uploadDb" :disabled="!canUpload || stage === 'saving'" />
 						<div>
 							<span>Upload to database</span>
-							<small v-if="!online">offline — will only save locally until you reconnect</small>
+							<small v-if="!online">offline — the capture stays on this PC; upload it later from Settings → Local Captures (recorded under your name)</small>
+							<small v-else-if="offlineSession">signed in offline — use "Sign in to sync" at the top, then upload from Settings → Local Captures</small>
 							<small v-else-if="!hasSample">pick a Sample in Metadata to enable database logging</small>
 							<small v-else>logs this run and links the capture into machining_force_analysis</small>
 						</div>
@@ -279,15 +290,15 @@ function startNew() {
 				</p>
 
 				<div class="scd-actions">
-					<button class="scd-btn discard" :disabled="stage === 'saving'" @click="askDiscard">Don't save</button>
+					<button class="btn danger quiet" :disabled="stage === 'saving'" @click="askDiscard">Don't save</button>
 					<!-- Not gated on the save/upload choice above — the raw capture, .mat and live_cache are
 						 already finalized on disk the moment this stage is reachable (finalize() writes them
 						 unconditionally; the checkboxes above only add a DB record and/or a Downloads copy),
 						 so jumping straight to the plot view here is always safe. -->
-					<button class="scd-btn" :disabled="stage === 'saving'" @click="goToPlot">Open in Plot</button>
-					<button v-if="errMsg" class="scd-btn" :disabled="stage === 'saving'" @click="startNew">Start new run</button>
+					<button class="btn" :disabled="stage === 'saving'" @click="goToPlot">Open in Plot</button>
+					<button v-if="errMsg" class="btn" :disabled="stage === 'saving'" @click="startNew">Start new run</button>
 					<div class="scd-spacer"></div>
-					<button class="scd-btn primary" :disabled="nothingSelected || stage === 'saving'" @click="confirmSave">
+					<button class="btn primary" :disabled="nothingSelected || stage === 'saving'" @click="confirmSave">
 						{{ stage === 'saving' ? 'Saving…' : errMsg ? 'Retry' : 'Save' }}
 					</button>
 				</div>
@@ -299,9 +310,9 @@ function startNew() {
 					<p>Discard this recording without saving? It will <b>not</b> be uploaded or logged — the raw capture stays on disk locally, but nothing will be recorded in the database and no local copy will be exported.</p>
 				</div>
 				<div class="scd-actions">
-					<button class="scd-btn" @click="cancelDiscard">Cancel</button>
+					<button class="btn" @click="cancelDiscard">Cancel</button>
 					<div class="scd-spacer"></div>
-					<button class="scd-btn danger" @click="confirmDiscard">Yes, discard</button>
+					<button class="btn danger" @click="confirmDiscard">Yes, discard</button>
 				</div>
 			</template>
 
@@ -311,9 +322,9 @@ function startNew() {
 					<p>Saved. {{ savedOpId ? 'Logged to the database.' : 'Saved locally — you can still view and plot it, and upload it to the database later.' }}</p>
 				</div>
 				<div class="scd-actions">
-					<button class="scd-btn" @click="startNew">Start new run</button>
+					<button class="btn" @click="startNew">Start new run</button>
 					<div class="scd-spacer"></div>
-					<button class="scd-btn primary" @click="goToPlot">
+					<button class="btn primary" @click="goToPlot">
 						Open in Plot
 					</button>
 				</div>
@@ -327,50 +338,42 @@ function startNew() {
 .scd-backdrop { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); backdrop-filter: blur(2px); padding: 24px; }
 .scd-modal { width: min(880px, 100%); max-height: 92vh; overflow: auto; display: flex; flex-direction: column; gap: 14px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
 .scd-head { display: flex; align-items: center; gap: 12px; }
-.scd-head > .material-symbols-rounded { font-size: 26px; color: #4ade80; }
+.scd-head > .material-symbols-rounded { font-size: var(--icon-xl); color: var(--ok); }
 .scd-title { display: flex; flex-direction: column; }
-.scd-title b { font-size: 15px; }
-.scd-sub { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
-.scd-plot-hint { margin: 0 0 6px; font-size: 11px; color: var(--text-dim); }
+.scd-title b { font-size: var(--fs-lg); }
+.scd-sub { font-size: var(--fs-sm); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.scd-plot-hint { margin: 0 0 6px; font-size: var(--fs-xs); color: var(--text-dim); }
 .scd-plot { height: 280px; }
-.scd-crop-note { display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 7px 10px; font-size: 11.5px; color: var(--text-dim);
-	background: rgba(74,222,128,0.08); border: 1px solid rgba(74,222,128,0.25); border-radius: 8px; }
-.scd-crop-note .material-symbols-rounded { font-size: 15px; color: #4ade80; flex-shrink: 0; }
+.scd-crop-note { display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 7px 10px; font-size: var(--fs-sm); color: var(--text-dim);
+	background: color-mix(in srgb, var(--ok) 8%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 25%, transparent); border-radius: 8px; }
+.scd-crop-note .material-symbols-rounded { font-size: var(--icon-sm); color: var(--ok); flex-shrink: 0; }
 .scd-crop-note span:nth-child(2) { flex: 1; font-variant-numeric: tabular-nums; }
-.scd-crop-reset { flex-shrink: 0; padding: 3px 9px; font-size: 11px; font-weight: 700; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.scd-crop-reset { flex-shrink: 0; padding: 3px 9px; font-size: var(--fs-xs); font-weight: 700; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
 .scd-crop-reset:hover { background: var(--surface); }
 .scd-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 200px; color: var(--text); }
-.scd-loading b { font-size: 14px; font-weight: 600; }
-.scd-loading-sub { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; text-align: center; margin-top: 4px; }
-.scd-loading .spin { font-size: 28px; color: var(--accent); animation: scd-spin 1s linear infinite; }
-@keyframes scd-spin { to { transform: rotate(360deg); } }
+.scd-loading b { font-size: var(--fs-lg); font-weight: 600; }
+.scd-loading-sub { font-size: var(--fs-sm); color: var(--text-dim); font-variant-numeric: tabular-nums; text-align: center; margin-top: 4px; }
+.scd-loading .spin { font-size: var(--icon-2xl); color: var(--accent); }
 .scd-progress { display: flex; flex-direction: column; gap: 4px; justify-content: center; min-height: 200px; padding: 8px 4px; }
-.scd-stage { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-size: 13px; color: var(--text-dim); }
+.scd-stage { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-size: var(--fs-md); color: var(--text-dim); }
 .scd-stage.active { color: var(--text); background: var(--surface); }
 .scd-stage.done { color: var(--text-dim); }
-.scd-stage-icon { font-size: 18px; flex-shrink: 0; }
-.scd-stage.done .scd-stage-icon { color: #4ade80; }
+.scd-stage-icon { font-size: var(--icon-md); flex-shrink: 0; }
+.scd-stage.done .scd-stage-icon { color: var(--ok); }
 .scd-stage.active .scd-stage-icon { color: var(--accent); }
-.scd-stage-icon.spin { animation: scd-spin 1s linear infinite; }
 .scd-stage-label { flex: 1; }
-.scd-stage-time { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+.scd-stage-time { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; color: var(--text-dim); }
 .scd-opts { display: flex; flex-direction: column; gap: 8px; }
 .scd-opt { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; cursor: pointer; }
 .scd-opt input { margin-top: 2px; }
-.scd-opt div, .scd-opt span { display: flex; flex-direction: column; font-size: 13px; color: var(--text); }
-.scd-opt small { font-size: 11px; color: var(--text-dim); font-weight: 400; }
-.scd-err { font-size: 12px; color: var(--danger); background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 8px 10px; }
+.scd-opt div, .scd-opt span { display: flex; flex-direction: column; font-size: var(--fs-md); color: var(--text); }
+.scd-opt small { font-size: var(--fs-xs); color: var(--text-dim); font-weight: 400; }
+.scd-err { font-size: var(--fs-sm); color: var(--danger); background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 8px 10px; }
 .scd-actions { display: flex; align-items: center; gap: 10px; }
 .scd-spacer { flex: 1; }
-.scd-btn { padding: 9px 16px; font-size: 13px; font-weight: 600; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 9px; cursor: pointer; }
-.scd-btn:hover:not(:disabled) { background: var(--surface-2); }
-.scd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.scd-btn.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
-.scd-btn.discard { color: var(--danger); }
-.scd-btn.danger { color: #fff; background: #dc2626; border-color: #dc2626; }
-.scd-confirm { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.3); border-radius: 9px; font-size: 13px; }
-.scd-confirm.ok { background: rgba(74,222,128,0.08); border-color: rgba(74,222,128,0.3); }
-.scd-confirm .material-symbols-rounded.warn { color: #fbbf24; font-size: 22px; }
-.scd-confirm .material-symbols-rounded.ok { color: #4ade80; font-size: 22px; }
+.scd-confirm { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: color-mix(in srgb, var(--warn) 8%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); border-radius: 9px; font-size: var(--fs-md); }
+.scd-confirm.ok { background: color-mix(in srgb, var(--ok) 8%, transparent); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+.scd-confirm .material-symbols-rounded.warn { color: var(--warn); font-size: var(--icon-xl); }
+.scd-confirm .material-symbols-rounded.ok { color: var(--ok); font-size: var(--icon-xl); }
 .scd-confirm p { margin: 0; color: var(--text); }
 </style>

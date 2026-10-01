@@ -2,50 +2,101 @@
 // authenticated `api` client. Each returns [{ id, label, extra? }].
 import { api } from '../directusClient';
 import { labamp } from './labampApi';
+import { SPECS, cachedRows, preferCache, storeRows, type Entity } from './lookupCache';
+import { isUnreachable } from '../netErrors';
 
 export interface LookupItem { id: string; label: string; sublabel?: string; extra?: Record<string, any>; }
 
+// Online first; if the server can't be reached (or this is an offline session with no token) fall
+// back to the snapshot lookupCache.ts keeps. With no snapshot yet, the original error stands, so
+// the picker shows what it always showed.
+async function viaCache<T>(entity: Entity, online: () => Promise<T>, offline: (rows: any[]) => T): Promise<T> {
+	const fromCache = async (cause: unknown): Promise<T> => {
+		const rows = await cachedRows(entity);
+		if (rows) return offline(rows);
+		throw cause instanceof Error ? cause : new Error('offline, and no offline data has been downloaded yet (connect once and sign in)');
+	};
+	if (preferCache()) return fromCache(null);
+	try {
+		return await online();
+	} catch (e: any) {
+		if (!isUnreachable(e)) throw e;   // the server answered: a real error
+		return fromCache(e);
+	}
+}
+const has = (v: unknown, q: string) => String(v ?? '').toLowerCase().includes(q.toLowerCase());
+const byText = (key: string) => (a: any, b: any) => String(a[key] ?? '').localeCompare(String(b[key] ?? ''));
+
+const toSampleItem = (r: any): LookupItem => ({
+	id: r.sample_id,
+	label: r.sample_code || r.sample_id,
+	sublabel: r.nickname || undefined,   // human context, shown under the code in the dropdown
+	extra: { diameter_mm: r.diameter_mm, nickname: r.nickname },
+});
+
 export async function searchSamples(q: string): Promise<LookupItem[]> {
-	// Match either the human-readable code OR the nickname, so a search finds a sample even when its
-	// only "code" is a legacy hex id (some imported/rig items have no generated sample_code).
-	const filter: any = {};
-	if (q?.trim()) filter._or = [{ sample_code: { _icontains: q.trim() } }, { nickname: { _icontains: q.trim() } }];
-	const res = await api.get('/items/physical_samples', {
-		// Descending code_sort surfaces the numbered human codes (…-AA-MF-…) first and pushes the
-		// legacy hex-coded rig/equipment items (code_sort '00000000…') to the bottom of the default list.
-		params: { filter, limit: 20, sort: '-code_sort', fields: ['sample_id', 'sample_code', 'diameter_mm', 'nickname'] },
+	return viaCache('samples', async () => {
+		// Match either the human-readable code OR the nickname, so a search finds a sample even when its
+		// only "code" is a legacy hex id (some imported/rig items have no generated sample_code).
+		const filter: any = {};
+		if (q?.trim()) filter._or = [{ sample_code: { _icontains: q.trim() } }, { nickname: { _icontains: q.trim() } }];
+		const res = await api.get('/items/physical_samples', {
+			// Descending code_sort surfaces the numbered human codes (…-AA-MF-…) first and pushes the
+			// legacy hex-coded rig/equipment items (code_sort '00000000…') to the bottom of the default list.
+			params: { filter, limit: 20, sort: '-code_sort', fields: ['sample_id', 'sample_code', 'diameter_mm', 'nickname'] },
+		});
+		return (res.data?.data ?? []).map(toSampleItem);
+	}, (rows) => {
+		const t = q?.trim();
+		return rows
+			.filter((r) => !t || has(r.sample_code, t) || has(r.nickname, t))
+			.sort((a, b) => String(b.code_sort ?? '').localeCompare(String(a.code_sort ?? '')))
+			.slice(0, 20).map(toSampleItem);
 	});
-	return (res.data?.data ?? []).map((r: any) => ({
-		id: r.sample_id,
-		label: r.sample_code || r.sample_id,
-		sublabel: r.nickname || undefined,   // human context, shown under the code in the dropdown
-		extra: { diameter_mm: r.diameter_mm, nickname: r.nickname },
-	}));
 }
 
+const toOperatorItem = (r: any): LookupItem => ({ id: r.person_id, label: r.full_name || r.person_id });
+
 export async function searchOperators(q: string): Promise<LookupItem[]> {
-	const filter: any = { is_operator: { _eq: true } };
-	if (q?.trim()) filter.full_name = { _icontains: q.trim() };
-	const res = await api.get('/items/people', { params: { filter, limit: 20, sort: 'full_name', fields: ['person_id', 'full_name'] } });
-	return (res.data?.data ?? []).map((r: any) => ({ id: r.person_id, label: r.full_name || r.person_id }));
+	return viaCache('people', async () => {
+		const filter: any = { is_operator: { _eq: true } };
+		if (q?.trim()) filter.full_name = { _icontains: q.trim() };
+		const res = await api.get('/items/people', { params: { filter, limit: 20, sort: 'full_name', fields: ['person_id', 'full_name'] } });
+		return (res.data?.data ?? []).map(toOperatorItem);
+	}, (rows) => {
+		const t = q?.trim();
+		return rows.filter((r) => r.is_operator === true && (!t || has(r.full_name, t)))
+			.sort(byText('full_name')).slice(0, 20).map(toOperatorItem);
+	});
 }
 
 // manufacturing_operations requires a method_id (m2o -> manufacturing_methods). Cache the method
 // list and resolve one for a machining/turning run (matching op-type hint, else "Machining").
 let methodsCache: LookupItem[] | null = null;
+const toMethodItem = (r: any): LookupItem => ({
+	id: r.method_id,
+	label: r.method_name || '',
+	// method_code must be fetched AND carried through to `extra` — resolveMachiningMethodId
+	// matches on it, and without it every lookup below silently misses and falls through to
+	// the turning default, tagging milling runs with a turning method_id (a NOT NULL FK).
+	extra: { method_code: r.method_code || '' },
+});
 export async function getMethods(): Promise<LookupItem[]> {
-	if (!methodsCache) {
-		// method_code must be fetched AND carried through to `extra` — resolveMachiningMethodId
-		// matches on it, and without it every lookup below silently misses and falls through to
-		// the turning default, tagging milling runs with a turning method_id (a NOT NULL FK).
-		const res = await api.get('/items/manufacturing_methods', { params: { limit: 100, fields: ['method_id', 'method_name', 'method_code'] } });
-		methodsCache = (res.data?.data ?? []).map((r: any) => ({
-			id: r.method_id,
-			label: r.method_name || '',
-			extra: { method_code: r.method_code || '' },
-		}));
-	}
-	return methodsCache ?? [];
+	if (methodsCache) return methodsCache;
+	// Also persisted for offline use: after a restart with no network the in-memory copy is gone,
+	// and without a method_id the run record cannot be built at all. Only a list that came from the
+	// server is memoized for the page's life: a snapshot served while offline (possibly old, possibly
+	// empty) must not stop the real fetch once the network is back.
+	let fromServer = false;
+	const items = await viaCache('methods', async () => {
+		const res = await api.get('/items/manufacturing_methods', { params: { limit: 100, fields: SPECS.methods.fields } });
+		const rows: any[] = res.data?.data ?? [];
+		void storeRows('methods', rows).catch(() => {});
+		fromServer = true;
+		return rows.map(toMethodItem);
+	}, (rows) => rows.map(toMethodItem));
+	if (fromServer && items.length) methodsCache = items;
+	return items;
 }
 export async function resolveMachiningMethodId(hint?: string): Promise<string | null> {
 	const ms = await getMethods();
@@ -67,36 +118,52 @@ export async function resolveMachiningMethodId(hint?: string): Promise<string | 
 	return fallback?.id ?? ms[0]?.id ?? null;
 }
 
+const toInsertItem = (r: any): LookupItem => ({
+	id: r.insert_id,
+	label: r.insert_code || r.insert_id,
+	sublabel: r.insert_type_id?.type_code || undefined,
+});
+
 export async function searchInserts(q: string): Promise<LookupItem[]> {
-	const filter: any = { is_depleted: { _eq: false } };
-	if (q?.trim()) filter.insert_code = { _icontains: q.trim() };
-	const res = await api.get('/items/cutting_inserts', {
-		params: { filter, limit: 20, sort: 'insert_code', fields: ['insert_id', 'insert_code', 'insert_number', 'insert_type_id.type_code'] },
+	return viaCache('inserts', async () => {
+		const filter: any = { is_depleted: { _eq: false } };
+		if (q?.trim()) filter.insert_code = { _icontains: q.trim() };
+		const res = await api.get('/items/cutting_inserts', {
+			params: { filter, limit: 20, sort: 'insert_code', fields: ['insert_id', 'insert_code', 'insert_number', 'insert_type_id.type_code'] },
+		});
+		return (res.data?.data ?? []).map(toInsertItem);
+	}, (rows) => {
+		const t = q?.trim();
+		return rows.filter((r) => r.is_depleted === false && (!t || has(r.insert_code, t)))
+			.sort(byText('insert_code')).slice(0, 20).map(toInsertItem);
 	});
-	return (res.data?.data ?? []).map((r: any) => ({
-		id: r.insert_id,
-		label: r.insert_code || r.insert_id,
-		sublabel: r.insert_type_id?.type_code || undefined,
-	}));
 }
 
+const toEdgeItem = (r: any): LookupItem => ({
+	id: r.edge_id,
+	label: r.edge_code || r.edge_id,
+	sublabel: r.edge_identifier || undefined,
+	extra: { insertId: r.insert_id?.insert_id || '', insertLabel: r.insert_id?.insert_code || '' },
+});
+
 export async function searchEdges(q: string, insertId?: string): Promise<LookupItem[]> {
-	const filter: any = { is_used: { _eq: false } };
-	if (insertId) filter.insert_id = { _eq: insertId };
-	if (q?.trim()) filter.edge_code = { _icontains: q.trim() };
-	const res = await api.get('/items/insert_edges', {
-		params: { filter, limit: 20, sort: 'edge_code',
-			// Pull the parent insert alongside each edge so picking an edge directly can auto-fill the
-			// Insert field (an edge belongs to exactly one insert) — lets the user skip picking the
-			// insert first.
-			fields: ['edge_id', 'edge_code', 'edge_identifier', 'insert_id.insert_id', 'insert_id.insert_code'] },
+	return viaCache('edges', async () => {
+		const filter: any = { is_used: { _eq: false } };
+		if (insertId) filter.insert_id = { _eq: insertId };
+		if (q?.trim()) filter.edge_code = { _icontains: q.trim() };
+		const res = await api.get('/items/insert_edges', {
+			params: { filter, limit: 20, sort: 'edge_code',
+				// Pull the parent insert alongside each edge so picking an edge directly can auto-fill the
+				// Insert field (an edge belongs to exactly one insert) — lets the user skip picking the
+				// insert first.
+				fields: ['edge_id', 'edge_code', 'edge_identifier', 'insert_id.insert_id', 'insert_id.insert_code'] },
+		});
+		return (res.data?.data ?? []).map(toEdgeItem);
+	}, (rows) => {
+		const t = q?.trim();
+		return rows.filter((r) => r.is_used === false && (!insertId || r.insert_id?.insert_id === insertId) && (!t || has(r.edge_code, t)))
+			.sort(byText('edge_code')).slice(0, 20).map(toEdgeItem);
 	});
-	return (res.data?.data ?? []).map((r: any) => ({
-		id: r.edge_id,
-		label: r.edge_code || r.edge_id,
-		sublabel: r.edge_identifier || undefined,
-		extra: { insertId: r.insert_id?.insert_id || '', insertLabel: r.insert_id?.insert_code || '' },
-	}));
 }
 
 // Auto Range "previous run" picker: past operations to use as a reference for the per-channel
@@ -170,6 +237,16 @@ export async function searchPastOperations(q: string): Promise<LookupItem[]> {
 const MACHINING_EQUIPMENT_TYPE = 'Machining';
 
 export async function searchEquipment(q: string, category?: string | null): Promise<LookupItem[]> {
+	return viaCache('equipment', () => searchEquipmentOnline(q, category), (rows) => {
+		const t = q?.trim();
+		const active = rows.filter((r) => r.is_active === true && (!t || has(r.equipment_name, t)))
+			.sort(byText('equipment_name'));
+		const machining = category ? active.filter((r) => r.equipment_type === MACHINING_EQUIPMENT_TYPE) : [];
+		if (machining.length) return machining.slice(0, 20).map(toEquipmentItem);
+		return active.slice(0, 20).map((r) => ({ ...toEquipmentItem(r), extra: { ...toEquipmentItem(r).extra, categoryFallback: !!category } }));
+	});
+}
+async function searchEquipmentOnline(q: string, category?: string | null): Promise<LookupItem[]> {
 	const filter: any = { is_active: { _eq: true } };
 	if (q?.trim()) filter.equipment_name = { _icontains: q.trim() };
 	const fields = ['equipment_id', 'equipment_name', 'equipment_code', 'equipment_type'];
@@ -190,6 +267,16 @@ function toEquipmentItem(r: any): LookupItem {
 }
 
 export async function searchTools(q: string, category?: string | null): Promise<LookupItem[]> {
+	return viaCache('tools', () => searchToolsOnline(q, category), (rows) => {
+		const t = q?.trim();
+		const active = rows.filter((r) => r.is_active === true && (!t || has(r.tool_code, t) || has(r.tool_name, t)))
+			.sort(byText('tool_code'));
+		const inCategory = category ? active.filter((r) => has(r.tool_type, category)) : active;
+		if (inCategory.length || !category) return inCategory.slice(0, 20).map(toToolItem);
+		return active.slice(0, 20).map((r) => ({ ...toToolItem(r), extra: { ...toToolItem(r).extra, categoryFallback: true } }));
+	});
+}
+async function searchToolsOnline(q: string, category?: string | null): Promise<LookupItem[]> {
 	const filter: any = { is_active: { _eq: true } };
 	const clauses: any[] = [];
 	if (q?.trim()) clauses.push({ _or: [{ tool_code: { _icontains: q.trim() } }, { tool_name: { _icontains: q.trim() } }] });

@@ -9,6 +9,39 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
 	{
+		version: '0.1.32',
+		date: '2026-09-30',
+		notes: [
+			'Sign in with no connection. An account that has signed in on this PC before can sign in offline with the same password (kept only as a salted hash, for 30 days after its last online sign-in). A banner marks an offline session; "Sign in to sync" upgrades it once you are connected.',
+			'Every recording now carries who recorded it and when. A capture recorded offline and uploaded later, even by someone else, keeps its original owner and recording time; the database also notes who uploaded it.',
+			'Queued run records upload automatically only under the account that recorded them. Another user can upload them deliberately with "Upload as me" in Settings > Local Captures.',
+			'The Sample, Operator, Machine, Tool, Insert and Edge pickers work offline from a copy refreshed while connected (Settings > Connectivity shows its age and has "Refresh now").',
+			'Fixed: a dropped connection while refreshing the session signed you out. Only a refusal from the server does that now.',
+			'Fixed: editing a capture\'s metadata no longer drops who recorded it.',
+		],
+	},
+	{
+		version: '0.1.31',
+		date: '2026-09-27',
+		notes: [
+			'Icons now show on a PC with no internet connection. They used to appear as their names (e.g. "fiber_manual_record Start") because the icon font was downloaded on every start.',
+			'Fixed: the live FFT and Power plots stayed blank until a channel chip was clicked, and the spectrogram and waterfall stuck to the first channel picked.',
+			'Each plot panel\'s title is now its plot-type picker: point at "FFT ›" to switch between Time, FFT, Power, Spectrogram and Waterfall. The same applies in the pop-out window and the Plot page.',
+			'The FRM map has a colour-scale editor with a legend: colormap, steps, display and saturation ranges, with a histogram of the values behind the colour bar.',
+			'Virtual channels: build computed channels from a formula on the NI-DAQ page, and add extra hardware (Aux) channels.',
+			'Clearer text and controls: one set of text sizes with nothing smaller than 11px, one button style across the app, and one accent colour (amber in dark mode, slate in light mode).',
+			'Light mode reworked: plot traces, legends, status colours and the login card are now easy to read on the light background.',
+			'Removed duplicated controls and readouts: the separate "Recording behaviour" block (the toggles next to Start do the same), the RPM tile in Overview, the storage block on the Connectivity page, and the Plot page\'s show/hide eye buttons.',
+			'Number tiles keep their unit next to the value and no longer cut values off in a narrow panel.',
+			'Resetting the panel layout now asks first.',
+			'Keyboard: the navigation sidebar opens with Enter and closes with Escape, lookup lists can be moved through with the arrow keys, and every dialog keeps focus inside it and closes with Escape.',
+			'Animations are consistent, and are turned off when Windows\' "Show animations" setting is off.',
+			'Fixed: Local Captures could never tell which captures were already uploaded, so the Upload buttons never appeared.',
+			'Fixed: editing the metadata of an uploaded capture failed to load its record.',
+			'Connectivity Doctor hints now point to the right place for each fix.',
+		],
+	},
+	{
 		version: '0.1.30',
 		date: '2026-09-24',
 		notes: [

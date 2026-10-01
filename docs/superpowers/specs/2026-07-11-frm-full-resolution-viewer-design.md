@@ -1,7 +1,11 @@
 # FRM full-resolution viewer — design
 
 **Date:** 2026-07-11
-**Status:** design (spike Phase A complete; awaiting review before implementation)
+**Status:** Implemented 2026-07-11/12 with option (b) from the open decision below — the
+three.js renderer (`packages/force-plotting/src/FrmCloud.vue`), the viewport download (migration
+`20260711000092_frm_viewport_render.sql`) and the Phase 2 Potree octree (migration
+`20260712000093_frm_octree.sql`, `FrmOctree.vue`). The throwaway `d1-potree-spike` module was
+never committed.
 
 ## Context & problem
 

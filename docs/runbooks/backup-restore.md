@@ -6,6 +6,28 @@
 
 ---
 
+## Production (`d1-server`)
+
+The production database is **not** backed up with the scripts below. It uses
+[`scripts/backup-postgres.ps1`](../../scripts/backup-postgres.ps1), run nightly
+at 02:00 by the Windows scheduled task **"D1 Postgres Nightly Backup"**:
+
+- `pg_dump -Fc` of the database plus `pg_dumpall --globals-only` for the roles,
+  written to `D:\D1-Backups\postgres` (14-day retention);
+- both copied off-host to the university filestore (5-day retention).
+
+Restore with `pg_restore`; the script's header comment has the tested
+procedure and exit codes, and
+[ADR-0010](../adr/0010-force-app-extraction-and-electron-packaging.md) (step 0)
+records the restore verification. Directus uploads (the `directus-uploads`
+volume) are **not** in these dumps; ADR-0010's open decisions describe their
+one-off off-host snapshot.
+
+The rest of this runbook covers the compose-stack backup to MinIO
+(`make backup`), for development and other deployments of the stack.
+
+---
+
 ## Prerequisites
 
 - Docker and Docker Compose installed and running

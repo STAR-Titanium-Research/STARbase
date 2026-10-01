@@ -17,6 +17,19 @@ jobs:
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.1
 
+  geometry:
+    name: Sample geometry engine (unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Vendored copies in sync
+        run: bash scripts/sync_geometry.sh --check
+      - name: Unit tests
+        run: node --experimental-strip-types --test core/extensions/d1-geometry-preview/test/geometry.test.ts
+
   foundation:
     name: Foundation smoke test
     runs-on: ubuntu-latest

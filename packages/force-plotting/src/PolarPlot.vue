@@ -144,5 +144,5 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); });
 <style scoped>
 .polar-plot { position: relative; width: 100%; height: 100%; }
 .polar-canvas { width: 100%; height: 100%; display: block; }
-.polar-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 13px; pointer-events: none; }
+.polar-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: var(--fs-md, 13px); pointer-events: none; }
 </style>

@@ -3,22 +3,31 @@ derive RPM + cumulative revs + cut window, and write the deliverables — a .mat
 live_cache.bin (D1LC, so the plotting UI renders it directly), and summary.json.
 
 The .mat DATA layout is [Time, Fx1,Fx2,Fy1,Fy2,Fz1,Fz2,Fz3,Fz4, Tacho] (v1.0), identical to what
-the MATLAB app writes, so downstream tooling (process_force.m, the Directus crawler) is unchanged.
+the MATLAB app writes, so downstream tooling (process_force.m, the Directus crawler) is unchanged
+— any configured extra (Aux/virtual) channels are strictly APPENDED after these 10, never inserted
+among them, so a capture with none configured (which includes every capture recorded before extra
+channels existed) still produces the exact original layout.
+
+live_cache.bin (D1LC) does NOT get extra channels: that format is byte-identical across this app,
+plugins/filter-service, and scripts/matlab/process_force.m — extending it needs coordinated changes
+across all three, which is out of scope here. A virtual/Aux channel is archived in capture.mat and
+streamed live (see session.py), but not shown if a finished capture is reopened in the Plot page.
 """
 
 from __future__ import annotations
 
-import json
 import os
 
 import numpy as np
 from scipy.io import savemat
 from scipy.signal import detrend
 
+from . import virtual_channels
 from .config import SIGNAL_CHANNELS, RecordConfig
 from .d1lc import write_d1lc
 from .d1rw import memmap_rows, read_header
 from .dsp import drift_check, order_spectrum_quick, rpm_from_tacho, sum_axes, tacho_column
+from .storage import atomic_write_json
 
 VAR_NAMES = ["Time"] + SIGNAL_CHANNELS  # 10 columns
 LIVE_CACHE_TARGET = 300_000  # decimate the cache to ~this many points for the client
@@ -45,11 +54,17 @@ def finalize(capture_dir: str, cfg: RecordConfig, gain: float = 1.0) -> dict:
     raw_path = os.path.join(capture_dir, "raw.d1raw")
     hdr = read_header(raw_path)
     fs = float(hdr["rate"])
-    rows = memmap_rows(raw_path)  # (n, 10) memmap
+    # (n, 1 + 9 + H) memmap — H is however many source="hardware" extra channels were configured
+    # for this capture (0 for anything recorded before extra channels existed, or with none set).
+    rows = memmap_rows(raw_path)
     n = rows.shape[0]
     t = np.asarray(rows[:, 0], dtype=np.float64)
-    signals = np.asarray(rows[:, 1:], dtype=np.float64)  # (n, 9) in SIGNAL_CHANNELS order
-    signals = signals.copy()
+    # The fixed layout is ALWAYS exactly columns 1:10, regardless of how wide the file is — extra
+    # hardware columns (if any) follow at 10: and are handled separately below, kept apart from the
+    # gain/drift-compensation logic that is specific to the 8 charge-amp dyno channels.
+    # np.array, not asarray: one owned, writable copy -- the gains below scale it in place.
+    signals = np.array(rows[:, 1:10], dtype=np.float64)  # (n, 9) in SIGNAL_CHANNELS order
+    hw_extra_raw = np.array(rows[:, 10:], dtype=np.float64) if rows.shape[1] > 10 else None
     # Apply volts→N gain to the 8 charge channels (Tacho is the last column — leave it). Per-channel
     # gains (from the amp's auto-ranged ranges) calibrate each channel independently; otherwise the
     # scalar gain applies (sim/replay data is already in N, so gain 1).
@@ -80,10 +95,11 @@ def finalize(capture_dir: str, cfg: RecordConfig, gain: float = 1.0) -> dict:
 
     # Optional linear drift compensation on the 8 dyno channels (like the MATLAB app's driftComp).
     # Only affects the derived outputs (.mat DATA + live_cache); the raw .d1raw is never touched.
-    if cfg.drift_comp and n > 1:
+    drift_corrected = cfg.drift_comp and n > 1
+    if drift_corrected:
         signals[:, :8] = detrend(signals[:, :8], axis=0, type="linear")
 
-    axes = sum_axes(signals)
+    axes = sum_axes(signals) if drift_corrected else raw_axes  # both only ever read below
     tacho = tacho_column(signals)
     # No fallback to cfg.rpm: this is the ARCHIVED record. Substituting the configured spindle speed
     # for an unmeasured one wrote a fabricated rate into capture.mat and the revs column, where
@@ -119,14 +135,26 @@ def finalize(capture_dir: str, cfg: RecordConfig, gain: float = 1.0) -> dict:
         "drift": drift_check(t_cut, {k: v[cut_mask] for k, v in raw_axes.items()}),
     }
 
+    # Extra (Aux/virtual) channels, if any were configured for this capture — computed from the
+    # SAME gain/drift-corrected signals+axes the fixed 9 already use, so a virtual channel's
+    # archived value is in the same units as what it references. Never touches raw.d1raw (already
+    # written, verbatim, before finalize ever runs) — only appended to the derived outputs below.
+    extra_cols = virtual_channels.compute_extra_columns(
+        cfg.extra_channels, signals[:, :8], signals[:, 8], axes, hw_extra_raw
+    )
+    var_names = VAR_NAMES + [c.name for c in cfg.extra_channels]
+    n_cols = 10 + extra_cols.shape[1]
+
     # --- .mat (v1.0), full resolution ---
-    mat_bytes = n * 10 * 8
+    mat_bytes = n * n_cols * 8
     mat_written = mat_bytes <= MAT_MAX_BYTES
     mat_skip_reason = None
     if mat_written:
-        data = np.empty((n, 10), dtype=np.float64)
+        data = np.empty((n, n_cols), dtype=np.float64)
         data[:, 0] = t
-        data[:, 1:] = signals
+        data[:, 1:10] = signals
+        if extra_cols.shape[1]:
+            data[:, 10:] = extra_cols
         metadata = {
             "fileVersion": 1.0,
             "SampleName": cfg.sample_name,
@@ -148,7 +176,7 @@ def finalize(capture_dir: str, cfg: RecordConfig, gain: float = 1.0) -> dict:
             {
                 "DATA": data,
                 "metadata": metadata,
-                "VariableNames": np.array(VAR_NAMES, dtype=object),
+                "VariableNames": np.array(var_names, dtype=object),
             },
             do_compression=True,
         )
@@ -190,7 +218,7 @@ def finalize(capture_dir: str, cfg: RecordConfig, gain: float = 1.0) -> dict:
         "fs": fs,
         "n": int(n),
         "duration_sec": float(t[-1] - t[0]) if n > 1 else 0.0,
-        "channels": VAR_NAMES,
+        "channels": var_names,
         "peaks": {ax: float(np.max(np.abs(axes[ax]))) for ax in ("Fx", "Fy", "Fz")},
         "cut_window_sec": [cs_sec, ce_sec],
         "drift_comp": bool(cfg.drift_comp),
@@ -219,6 +247,5 @@ def finalize(capture_dir: str, cfg: RecordConfig, gain: float = 1.0) -> dict:
             "raw": "raw.d1raw",
         },
     }
-    with open(os.path.join(capture_dir, "summary.json"), "w") as f:
-        json.dump(summary, f, indent=2)
+    atomic_write_json(os.path.join(capture_dir, "summary.json"), summary, indent=2)
     return summary

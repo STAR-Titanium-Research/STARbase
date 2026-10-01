@@ -52,14 +52,14 @@ onBeforeUnmount(() => {
 	justify-content: center;
 	gap: 8px;
 	padding: 8px 14px;
-	font-size: 13px;
+	font-size: var(--fs-md);
 	font-weight: 600;
 	color: #7c2d12;
 	background: #fed7aa;
 	border-bottom: 1px solid #fb923c;
 }
 .offline-banner .material-symbols-rounded {
-	font-size: 18px;
+	font-size: var(--icon-md);
 }
 .fade-enter-active,
 .fade-leave-active {

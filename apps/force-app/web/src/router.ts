@@ -39,6 +39,7 @@ export const router = createRouter({
 
 // Auth guard: anything not marked `public` requires a session (access or refresh token).
 router.beforeEach((to) => {
+	authStore.checkOfflineSession();
 	if (to.meta.public) return true;
 	if (authStore.isAuthenticated.value) return true;
 	return { name: 'login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : undefined };

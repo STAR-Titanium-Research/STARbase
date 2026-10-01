@@ -73,9 +73,9 @@ function ringCount(l: DiagLayer) {
 </template>
 
 <style scoped>
-.layer-panel { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.layer-panel { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm, 12px); }
 .lp-tools { display: flex; flex-wrap: wrap; gap: 4px; }
-.lp-tools button { font-size: 11px; padding: 3px 7px; border-radius: 6px; border: 1px solid var(--border, rgba(255, 255, 255, 0.14)); background: var(--bg-2, #111a33); color: var(--text, #e5e7eb); cursor: pointer; }
+.lp-tools button { font-size: var(--fs-xs, 11px); padding: 3px 7px; border-radius: 6px; border: 1px solid var(--border, rgba(255, 255, 255, 0.14)); background: var(--bg-2, #111a33); color: var(--text, #e5e7eb); cursor: pointer; }
 .lp-tools button.on { background: #d97706; border-color: #f59e0b; color: #fff; }
 .lp-add { display: inline-flex; gap: 4px; }
 .lp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -83,8 +83,8 @@ function ringCount(l: DiagLayer) {
 .lp-list li.active { background: color-mix(in srgb, #f59e0b 16%, transparent); }
 .lp-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .lp-name { flex: 1; }
-.lp-meta { color: var(--text-dim, #94a3b8); font-size: 10px; }
+.lp-meta { color: var(--text-dim, #94a3b8); font-size: var(--fs-xs, 11px); }
 .lp-del { border: none; background: none; color: var(--text-dim, #94a3b8); cursor: pointer; }
 .lp-empty { color: var(--text-dim, #94a3b8); font-style: italic; padding: 4px; }
-.lp-list input { flex: 1; font-size: 12px; background: var(--bg-1, #0b1020); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; }
+.lp-list input { flex: 1; font-size: var(--fs-sm, 12px); background: var(--bg-1, #0b1020); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; }
 </style>

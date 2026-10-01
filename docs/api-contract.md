@@ -2,7 +2,7 @@
 
 **Version:** Phase 3  
 **Status:** Active  
-**Last updated:** 2026-06-18
+**Last updated:** 2026-09-26
 
 ---
 
@@ -339,7 +339,7 @@ GET /items/test_sessions?filter[sample_id][_eq]={sample_id}&sort=-session_date
 ### 6.2 Get sessions by type
 
 ```
-GET /items/test_sessions?filter[test_type][_eq]=tribology&filter[status][_eq]=complete
+GET /items/test_sessions?filter[test_type][_eq]=tribology&filter[status][_eq]=processed
 ```
 
 ### 6.3 Create a test session
@@ -363,9 +363,16 @@ Authorization: Bearer <token>
     "s3://d1-data/plots/session-abc123-friction.png"
   ],
   "file_storage_pointer": "s3://d1-data/raw/session-abc123.tdms",
-  "status": "complete"
+  "status": "registered"
 }
 ```
+
+Since migration `20260703000063_test_subject_m2a.sql`, what a test targets is
+recorded in the `test_sessions_subject` many-to-any junction (the `subject`
+field in Directus). `sample_id` and `insert_edge_id` remain as nullable columns
+but are not synced into it, so a session that should show its subject in the
+admin UI also needs
+`"subject": [{ "collection": "physical_samples", "item": "<sample_id>" }]`.
 
 ### 6.4 Update session status
 
@@ -373,8 +380,13 @@ Authorization: Bearer <token>
 PATCH /items/test_sessions/{session_id}?filter[version][_eq]={N}
 Content-Type: application/json
 
-{ "status": "reviewed" }
+{ "status": "pending_processing" }
 ```
+
+`status` must be one of `registered`, `pending_processing`, `processing`,
+`processed`, `analysing`, `analysed` or `failed` (a CHECK constraint since
+migration `20260619000013`); see the lifecycle in
+[`plugin-contract.md`](./plugin-contract.md).
 
 ---
 
@@ -505,7 +517,6 @@ Reference tables are read-only via the API for Operator and Researcher roles.
 | `/items/alloying_elements` | Elements that make up alloys |
 | `/items/material_iso_classifications` | ISO 513 material group codes |
 | `/items/manufacturing_methods` | FAST, milling, turning, etc. |
-| `/items/method_parameters` | Per-method parameter definitions |
 | `/items/equipment` | Machine catalogue (NLX-2500, FAST rig, etc.) |
 | `/items/tools` | Tool holder definitions |
 | `/items/insert_types` | Insert type catalogue (ISO grade, geometry) |

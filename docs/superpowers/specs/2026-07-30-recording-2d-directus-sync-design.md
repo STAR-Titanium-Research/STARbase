@@ -1,7 +1,8 @@
 # Recording — Slice 2d: Directus 2-Way Sync (sample dropdown + run write-back + offline queue)
 
-**Status:** design approved 2026-07-30. Phase 2 slice 2d of the standalone force app. (2b real
-NI-DAQ is paused pending a working NI-DAQmx runtime; 2d is verifiable now against the running Directus.)
+**Status:** implemented 2026-07-30 (`apps/force-app/web/src/record/directusSync.ts`). Phase 2
+slice 2d of the standalone force app. (2b, real NI-DAQ acquisition, was paused at the time pending
+a working NI-DAQmx runtime; it has since shipped as `apps/force-app/backend/app/sources/nidaq.py`.)
 
 ## Context
 

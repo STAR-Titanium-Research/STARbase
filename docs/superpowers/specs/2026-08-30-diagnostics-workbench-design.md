@@ -1,5 +1,10 @@
 # Diagnostics Workbench — design
 
+**Status:** implemented — phases 1–6 shipped 2026-08-30 → 2026-09-01 (`scripts/diag/`,
+`packages/force-plotting/src/DiagnosticsWorkbench.vue`). The UI and pipeline-structure portions
+are superseded by [`2026-09-01-diagnostics-recipe-workbench-design.md`](./2026-09-01-diagnostics-recipe-workbench-design.md);
+the science here remains authoritative.
+
 ## Motivation
 
 The force app records and plots cuts, but every judgement about a cut is currently made by
@@ -145,6 +150,7 @@ on the full cloud. The pipeline grid-reduces to a smaller representative set, cl
 then assigns the remaining points to clusters by an exact grid-cell lookup (an improvement on
 "approximate nearest neighbour": the grid reduction step already knows exactly which cell each
 point fell into, so broadcasting a cluster label back is a direct array index, not a search).
+This is a required step, not a tuning knob.
 
 **Envelope analysis.** Above `f_n/5` the dynamometer amplifies rather than measures. That band
 is still useful for *event detection*: band-pass around the structural resonance, take the
@@ -184,25 +190,32 @@ Two artefacts per op.
 
 ### 5.1 `D1AN` binary — per-point attributes, 1:1 with the diag octree's points
 
-| Attribute    | Type | Meaning                                              |
-|--------------|------|--------------------------------------------------------|
-| `t`          | f32  | sample time — makes time-brushing a shader predicate |
-| `rev`        | f32  | revolution number (from `revs_cum`)                  |
-| `x`          | f32  | spatial x (mm), self-contained WorkingSet data source |
-| `y`          | f32  | spatial y (mm)                                       |
-| `tsa_resid`  | f32  | force minus the per-rev mean signature               |
-| `resid_z`    | f32  | radially-detrended robust z-score                    |
-| `glosh`      | f32  | HDBSCAN outlier-score proxy (`1 - probabilities_`)   |
-| `cluster_id` | f32  | cluster label; -1 = noise                            |
-| `gi_star`    | f32  | Getis-Ord z-score                                    |
-| `gi_sig`     | f32  | FDR-adjusted significance flag (0.0 / 1.0)           |
-| `env_band`   | f32  | envelope amplitude in the resonance band, when computed |
+| Attribute    | Type | Meaning                                                   |
+|--------------|------|-------------------------------------------------------------|
+| `t`          | f32  | sample time — makes time-brushing a shader predicate     |
+| `rev`        | f32  | revolution number (from `revs_cum`)                      |
+| `x`          | f32  | spatial x (mm), self-contained WorkingSet data source    |
+| `y`          | f32  | spatial y (mm)                                           |
+| `tsa_resid`  | f32  | force minus the per-rev mean signature                   |
+| `resid_z`    | f32  | radially-detrended robust z-score                        |
+| `glosh`      | f32  | HDBSCAN outlier-score proxy (`1 - probabilities_`)       |
+| `cluster_id` | f32  | cluster label; -1 = noise                                |
+| `gi_star`    | f32  | Getis-Ord z-score                                        |
+| `gi_sig`     | f32  | FDR-adjusted significance flag (0.0 / 1.0)               |
+| `env_band`   | f32  | envelope amplitude in the resonance band, when computed  |
 
-Stored as **float32 LAS extra dims**, matching both shipped octree handlers. int16-scaled
-extra dims were tried for the grid octree and reverted: PotreeConverter ignores an extra
-dim's scale/offset and stores the raw codes, so the viewer would receive codes rather than
+Stored as **float32 LAS extra dims**, matching both shipped handlers (`process_octree_row`
+and `process_grid_row`).
+
+Note the grid-octree *design doc* proposed int16-scaled extra dims, but the implementation
+reverted to float32 and records why in `process_grid_row`: **PotreeConverter ignores the
+extra-dim scale/offset and stores raw int16 codes**, so the viewer receives codes rather than
 physical values. Do not re-attempt int16 packing without first confirming PotreeConverter
-behaviour has changed.
+behaviour has changed. Storage cost is accepted in exchange for correctness.
+
+`cluster_id` and `gi_sig` are integer-valued but are still carried as float32 for the same
+reason; the shader compares them against exact small integers, which float32 represents
+without error.
 
 `FrmOctree.vue` already reads Fx/Fy/Fz as octree attributes and colours them through a custom
 `ShaderMaterial` with an axis uniform. That uniform generalises from "axis" to "channel" and the
@@ -226,17 +239,23 @@ The octree is LOD-streamed, so **the browser never holds all points at full reso
 flat client-side mask over full-resolution points is not available. Hence a dual
 representation:
 
-- **WorkingSet** — decimated typed arrays, **at least 5 M points**, held in memory. The
-  analysis and selection substrate. Carries `point_id` back to full resolution for export.
-  5 M is not an arbitrary floor: `process_force.m`'s own `live_cache_points` default is
-  already 5,000,000, and `_octree_threshold` falls back to the same constant — the workbench
-  inherits it rather than inventing a second number.
+- **WorkingSet** — decimated typed arrays, **at least 5 M points**, held in memory. The analysis
+  and selection substrate. Carries `point_id` back to full resolution for export.
+
+  5 M is not an arbitrary floor: `process_force.m:43` already defaults `live_cache_points` to
+  5,000,000 ("cache the cut window ~1:1 up to 5M"), and `_octree_threshold` falls back to the
+  same constant. The workbench inherits it rather than inventing a second number.
+
+  At 5 M points with nine f32 attributes plus `x`, `y` and `point_id`, the set is roughly
+  240 MB. That is comfortable in a desktop browser or Electron renderer but is the dominant
+  memory cost of the window, so the attribute set is loaded lazily: `t`, `x`, `y` and
+  `resid_z` on open, the rest on first use by a panel that needs them.
 - **Full octree** — visual detail only.
 
 **Selections are predicates, not index lists.** Three sources, one type:
 
 | Source                  | Predicate                                  | Evaluated      |
-|--------------------------|---------------------------------------------|----------------|
+|-------------------------|---------------------------------------------|----------------|
 | Time brush (Panel A)    | `t0 <= t <= t1`                            | shader uniform |
 | Attribute threshold (D) | `glosh > x`, `gi_sig = 1`, `cluster_id = k`| shader uniform |
 | Spatial lasso (Panel B) | polygon test                               | polygon uniform|
@@ -321,7 +340,7 @@ way a slow analysis never is.
 
 ## Input sample rate — resolved
 
-D1LC is **decimated**, to a target set by `live_cache_points`. `process_force.m` defaults it
+D1LC is **decimated**, to a target set by `live_cache_points`. `process_force.m:43` defaults it
 to 5,000,000; the orchestrator currently overrides it to 250,000 for the dashboard's live
 cache. 250,000 points is far too coarse for order spectra or envelope analysis.
 

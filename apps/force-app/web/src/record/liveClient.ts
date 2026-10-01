@@ -50,11 +50,10 @@ export class RecordClient {
 	// bump each frame so widgets can watch cheaply
 	frameSeq = ref(0);
 	// latest live spectra (published a few times a second by the backend); fftSeq bumps on update.
-	// `spectra` holds an amplitude spectrum per channel (Fx/Fy/Fz + the 8 dyno subs); `amp`/`axis`
-	// stay for the single-axis fallback. `fftHistory` is a rolling stack of recent spectra frames
-	// the spectrogram/waterfall views draw from (accumulated client-side; only current frames cross).
-	fft: { axis: string; f: number[]; amp: number[]; fs: number; spectra: Record<string, number[]> } | null = null;
-	fftFreq: number[] = [];
+	// `spectra` holds an amplitude spectrum per channel (Fx/Fy/Fz + the 8 dyno subs); `axis` stays
+	// for the single-axis fallback. `fftHistory` is a rolling stack of recent spectra frames the
+	// spectrogram/waterfall views draw from (accumulated client-side; only current frames cross).
+	fft: { axis: string; f: number[]; fs: number; spectra: Record<string, number[]> } | null = null;
 	fftHistory: { t: number; spectra: Record<string, number[]> }[] = [];
 	fftHistCap = 220;
 	fftSeq = ref(0);
@@ -191,13 +190,12 @@ export class RecordClient {
 				trace: { t: this.trace.t.slice(), fx: this.trace.fx.slice(), fy: this.trace.fy.slice(), fz: this.trace.fz.slice(),
 					sub: Object.fromEntries(Object.entries(this.trace.sub).map(([k, v]) => [k, v.slice()])) },
 				fft: this.fft ? { ...this.fft } : null,
-				fftFreq: this.fftFreq.slice(),
 				fftHistory: this.fftHistory.slice(),
 			};
 			this.relay?.postMessage(snap);
 		} catch (e) {
 			console.warn('[force-app] snapshot sync to pop-out window failed:', e);
-			this.relay?.postMessage({ type: 'snapshot', status: this.plainStatus(), frm: { xy: new Float32Array(0), cx: new Float32Array(0), cy: new Float32Array(0), cz: new Float32Array(0), count: 0, cAbsMaxByAxis: { Fx: 1, Fy: 1, Fz: 1 } }, trace: null, fft: null, fftFreq: [], fftHistory: [] });
+			this.relay?.postMessage({ type: 'snapshot', status: this.plainStatus(), frm: { xy: new Float32Array(0), cx: new Float32Array(0), cy: new Float32Array(0), cz: new Float32Array(0), count: 0, cAbsMaxByAxis: { Fx: 1, Fy: 1, Fz: 1 } }, trace: null, fft: null, fftHistory: [] });
 		}
 	}
 
@@ -227,9 +225,17 @@ export class RecordClient {
 			this.trace.sub = snap.trace.sub;
 		}
 		if (snap.fft) this.fft = snap.fft;
-		if (snap.fftFreq) this.fftFreq = snap.fftFreq;
 		if (snap.fftHistory?.length) { this.fftHistory = snap.fftHistory; this.fftSeq.value++; }
 		this.frameSeq.value++;
+	}
+
+	// Latest spectra frame + the rolling history the spectrogram/waterfall draw from. Shared by the
+	// live stream and the playback engine.
+	pushFft(axis: string, f: number[], fs: number, spectra: Record<string, number[]>, t: number) {
+		this.fft = { axis, f, fs, spectra };
+		this.fftHistory.push({ t, spectra });
+		if (this.fftHistory.length > this.fftHistCap) this.fftHistory.shift();
+		this.fftSeq.value++;
 	}
 
 	disconnect() { this.ws?.close(); this.ws = null; this.relay?.close(); this.relay = null; this.hasRelayPeer = false; }
@@ -242,11 +248,7 @@ export class RecordClient {
 			this.status.summary = msg.summary ?? null;
 		} else if (msg.type === 'fft') {
 			const spectra: Record<string, number[]> = msg.spectra ?? (msg.axis ? { [msg.axis]: msg.amp ?? [] } : {});
-			this.fft = { axis: msg.axis, f: msg.f, amp: msg.amp ?? spectra[msg.axis] ?? [], fs: msg.fs ?? 0, spectra };
-			this.fftFreq = msg.f ?? this.fftFreq;
-			this.fftHistory.push({ t: this.status.tSec, spectra });
-			if (this.fftHistory.length > this.fftHistCap) this.fftHistory.shift();
-			this.fftSeq.value++;
+			this.pushFft(msg.axis, msg.f, msg.fs ?? 0, spectra, this.status.tSec);
 		} else if (msg.type === 'cutstart') {
 			this.status.cutStartSec = msg.t;
 		} else if (msg.type === 'disk_action') {
@@ -358,10 +360,9 @@ export class RecordClient {
 
 	reset() {
 		this.trace = emptyTrace();
-		this.frm = {
-			xy: new Float32Array(this.cap * 2), cx: new Float32Array(this.cap), cy: new Float32Array(this.cap), cz: new Float32Array(this.cap),
-			count: 0, cAbsMaxByAxis: { Fx: 1, Fy: 1, Fz: 1 }, cLo: undefined, cHi: undefined,
-		};
+		// Keep the preallocated FRM buffers (~40 MB): `count` alone bounds what anything reads.
+		const fm = this.frm;
+		fm.count = 0; fm.cAbsMaxByAxis = { Fx: 1, Fy: 1, Fz: 1 }; fm.cLo = undefined; fm.cHi = undefined;
 		this.fft = null; this.fftHistory = []; this.fftSeq.value++;
 		this.status.state = 'idle'; this.status.error = null; this.status.summary = null;
 		this.status.captureId = null; this.status.nTotal = 0; this.status.tSec = 0;

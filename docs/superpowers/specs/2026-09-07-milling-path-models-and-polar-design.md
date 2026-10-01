@@ -1,7 +1,8 @@
 # Milling groundwork: path models, spindle angle, and the polar plot
 
 **Date:** 2026-09-07
-**Status:** design, approved for implementation planning
+**Status:** implemented 2026-09-07, released in force-app v0.1.19. The milling path models still
+have no live data source (see [`apps/force-app/README.md`](../../../apps/force-app/README.md)).
 **Scope decision:** groundwork + a working polar plot, designed against the schema only — no
 hardware in the loop, no real capture to validate against in this pass.
 

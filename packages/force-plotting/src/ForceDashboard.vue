@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { GridLayout, GridItem } from 'grid-layout-plus';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
 import ForceChart from './ForceChart.vue';
 import SpectrumView from './SpectrumView.vue';
 import FrmCloud from './FrmCloud.vue';
 import FrmOctree from './FrmOctree.vue';
 import WearTrend from './WearTrend.vue';
 import type { SpeedMode } from './liveCloud';
+import { axisAutoLimits } from './liveCloud';
+import { defaultScale, withAutoRange, withOpenDisplay, type ColorScale } from './colorScale';
+import { useAutoColorScale } from './autoColorScale';
+import { histogramFrom, type Histogram } from './histogram';
+import ColorScaleEditor from './ColorScaleEditor.vue';
+import PlotModeFlyout from './PlotModeFlyout.vue';
 import { cacheGet, cachePut, decimateCache, parseCache, type Cache } from './liveCache';
 import { buildPath, alignRhoToBuckets, type TurningSpiralParams } from './path';
 import { computeAutoCode } from './operationCode';
@@ -18,7 +24,6 @@ import { useForceHost } from './host';
 
 const host = useForceHost();
 const api = host.api;
-const router = useRouter();
 const route = useRoute();
 
 // Roles that see every sample/operation regardless of ownership (Administrator,
@@ -57,6 +62,16 @@ const detail = ref<any | null>(null);
 const loadingDetail = ref(false);
 
 const chartMode = ref<'force' | 'fft' | 'psd' | 'spectrogram' | 'waterfall'>('force');
+// Same set/order the Record page's plot panels offer, picked the same way (from the panel's title).
+// Its first entry is the time-domain view under each page's own name for it ("Force" here, "Time"
+// there -- both stay as they were).
+const CHART_MODES = [
+	{ key: 'force', label: 'Force' },
+	{ key: 'fft', label: 'FFT' },
+	{ key: 'psd', label: 'Power', title: 'Power spectrum (dB)' },
+	{ key: 'spectrogram', label: 'Spectro', title: 'Time × frequency heatmap' },
+	{ key: 'waterfall', label: 'Waterfall', title: 'Stacked spectra over time' },
+];
 const SPECTRAL_MODES = ['psd', 'spectrogram', 'waterfall'] as const;
 const isSpectral = computed(() => (SPECTRAL_MODES as readonly string[]).includes(chartMode.value));
 const hoverIndex = ref<number | null>(null);   // shared across the 3 charts
@@ -121,6 +136,23 @@ const editInnerDiam = ref(0);   // donut/diaphragm inner Ø (mm); 0 = solid disc
 // changed vs what was loaded.
 const srcCut = reactive({ feed: 0, diam: 0, inner: 0, ppr: 1, rate: 25600 });
 const near = (a: number, b: number) => Math.abs(Number(a) - Number(b)) < 1e-6;
+/**
+ * Surface speed and depth of cut are stored on BOTH machining_force_analysis (this capture) and
+ * manufacturing_operations (the operation record), and they describe the same physical quantity,
+ * so they should always agree. When they do, printing the capture's copy under "Cut parameters"
+ * just restates a number the operation record already shows a few rows above, editable -- which
+ * reads as the same field twice. Worth showing only when it carries information: the operation
+ * record has no value (so this is the only source), or the two disagree (which is a data problem
+ * worth seeing rather than hiding).
+ */
+function addsInfoOverOp(captureVal: unknown, opVal: number | null | undefined): boolean {
+	// numOrNull, not Number(): Number(null) is 0, which would flag an unrecorded value as a mismatch.
+	const c = numOrNull(captureVal);
+	if (c == null || !Number.isFinite(c)) return false;
+	const o = numOrNull(opVal);
+	if (o == null || !Number.isFinite(o)) return true;
+	return !near(c, o);
+}
 // v-model.number leaves a cleared numeric input as '' (Vue's looseToNumber falls back to the raw
 // string when parseFloat('') is NaN) rather than coercing it to null — normalize that (and any
 // other non-numeric junk) to null so "unset" and "explicitly 0" stay distinguishable, matching
@@ -167,7 +199,6 @@ const plotStride = ref(1);
 const gridding = ref(false);
 const gridN = ref(400);
 const pointSize = ref(1.4);
-const colormap = ref('viridis');
 // Tier-2 host render request.
 const renderPoints = ref(5000000);   // full-res cut-window cache (host caps ~5M; >5M -> octree)
 // Auto-route threshold = the crawler's live_cache_points setting (fetched on mount): a
@@ -433,6 +464,15 @@ const liveOn = computed(() => frmMode.value === 'lite' && liveAvailable.value);
 const compareOn = computed(() => liveOn.value && chainActive(workChain.value) && filtersOpen.value);
 // Both live panes share ONE view object so pan/zoom in either drives both.
 const compareView = reactive({ cx: 0, cy: 0, span: 1, active: false });
+// Geometry/display props every Lite FrmCloud pane shares; each pane adds its own cache override,
+// colour scale and events. Evaluated at render time, so the refs declared further down are set.
+const cloudProps = computed(() => ({
+	cacheFileId: detail.value?.live_cache_file, axis: axis.value,
+	feed: editFeed.value, diam: editDiam.value, innerDiam: editInnerDiam.value, speedMode: speedMode.value,
+	rpm: editRpm.value, vc: editVc.value, timeScale: timeScale.value, ppr: editPpr.value,
+	cropStartSec: cropStartSec.value, cropEndSec: cropEndSec.value,
+	stride: plotStride.value, gridding: gridding.value, gridN: gridN.value, pointSize: pointSize.value,
+}));
 function mergeChain(raw: any): FilterChain {
 	const d = defaultChain();
 	if (!raw) return d;
@@ -483,6 +523,10 @@ async function runPreview() {
 	const ac = new AbortController(); previewAbort = ac;
 	filterBusy.value = true; filterErr.value = null;
 	try {
+		// Independent requests to the filter service, so both start now. The FFT overlay is an
+		// optional extra: its failure costs only the overlay, never the filtered cloud.
+		const fftReq = chartMode.value === 'fft' ? fetchFilteredFft(d.live_cache_file, chain, axis.value, ac.signal) : null;
+		fftReq?.catch(() => {});   // awaited (and reported) below; never an unhandled rejection
 		const { cache, skipped, stride } = await fetchFiltered(d.live_cache_file, chain, 1_500_000, ac.signal);
 		if (ac.signal.aborted) return;
 		filteredCache.value = cache; filterSkipped.value = skipped;
@@ -490,12 +534,22 @@ async function runPreview() {
 		// samples (honest side-by-side: same geometry, filtered only changes the colour).
 		const full = cacheGet(d.live_cache_file);
 		rawDecimatedCache.value = full ? decimateCache(full, stride) : null;
-		if (chartMode.value === 'fft') filterFftOverlay.value = await fetchFilteredFft(d.live_cache_file, chain, axis.value);
+		if (fftReq) {
+			try {
+				const overlay = await fftReq;
+				if (!ac.signal.aborted) filterFftOverlay.value = overlay;
+			} catch (e: any) {
+				if (e?.name === 'AbortError' || ac.signal.aborted) return;
+				filterFftOverlay.value = null;
+				filterErr.value = `filtered FFT unavailable — ${e?.message || 'request failed'}`;
+			}
+		}
 	} catch (e: any) {
 		if (e?.name === 'AbortError' || ac.signal.aborted) return;   // superseded — not an error
 		filterErr.value = (e?.message || 'filter service unreachable').includes('Failed to fetch')
 			? 'filter service unreachable — raw only' : e?.message;
 		filteredCache.value = null;
+		ac.abort();   // drop a still-running FFT request for this failed preview
 	} finally { if (previewAbort === ac) filterBusy.value = false; }
 }
 let previewTimer = 0;
@@ -583,23 +637,89 @@ async function clearBake() {
 		}
 	} finally { baking.value = false; }
 }
-// Manual colour-scale limits for the live cloud (null => auto prctile 1/99 in
-// liveCloud). autoClimits mirrors what the cloud actually applied so the fields
-// can display/seed from the current auto values.
-const cauto = ref(true);
-const cminManual = ref(0);
-const cmaxManual = ref(1);
-const autoClimits = ref<{ cmin: number; cmax: number } | null>(null);
-const cmin = computed(() => (cauto.value ? null : cminManual.value));
-const cmax = computed(() => (cauto.value ? null : cmaxManual.value));
-function onClimits(v: { cmin: number; cmax: number }) {
-	autoClimits.value = v;
-	if (cauto.value) { cminManual.value = Number(v.cmin.toFixed(2)); cmaxManual.value = Number(v.cmax.toFixed(2)); }
-}
+// Full ColorScale editor (Stage 5/6): `colorScale` is now the real source of truth for every
+// FRM pane on this dashboard, driven by ColorScaleEditor.vue's update:colorScale. `locked`
+// replaces the old `cauto` checkbox -- unlocked (false) tracks whatever climits last reported
+// (auto), locked (true) freezes satMin/satMax at their current values regardless of new climits.
+// autoClimits mirrors what the cloud actually reports, purely to give the editor's histogram
+// strip a sensible domain (the full auto-detected range) independent of the user-narrowed
+// saturation window -- it no longer feeds colorScale directly the way the old cauto path did.
+// cacheGet() reads a plain (non-reactive) Map — a computed calling it would never re-run once
+// the cache lands after a later on-demand fetch. Bump this whenever the cache changes and read
+// it (even unused) wherever radialValuesFor() or the colour-scale histogram below might depend on
+// a just-arrived cache. Declared up here (it used to live down by radialValuesFor) so the
+// colour-scale computeds that read it are safe to evaluate eagerly -- an `immediate` watcher on
+// one of them would otherwise hit this in the temporal dead zone.
+const cacheEpoch = ref(0);
+// Unlocking re-applies the renderer's range, or the cache-derived one when none has reported.
+const { colorScale, locked, autoClimits, onClimits, seed: seedAuto } =
+	useAutoColorScale({ fallback: () => cacheAutoLimits.value });
+// Histogram of what a mounted FrmCloud actually renders (e.g. the filtered data of a light-applied
+// chain); preferred over re-binning the raw cache.
+const rendererHistogram = ref<Histogram | null>(null);
+// Stale ranges from the previous operation/channel must not outlive it: the cache-derived fallback
+// below is only consulted while no renderer has reported for the current data. The displayed range
+// is in absolute units of the old data, so it reopens too.
+watch([() => detail.value?.id, axis], () => {
+	autoClimits.value = null; rendererHistogram.value = null;
+	colorScale.value = withOpenDisplay(colorScale.value);
+});
+// Compare mode's filtered pane scales to its own data (a high-pass shifts the whole range) unless
+// the user locked the scale, in which case both panes share it.
+const filteredAuto = ref<{ cmin: number; cmax: number } | null>(null);
+watch(filteredCache, () => { filteredAuto.value = null; });
+const filteredColorScale = computed<ColorScale>(() => {
+	const s = colorScale.value, a = filteredAuto.value;
+	return locked.value || !a ? s : withAutoRange(s, a.cmin, a.cmax);
+});
+// Derived straight from the resident cache rather than from a renderer's @climits/@histogram
+// events. Those only arrive when a FrmCloud is actually mounted -- not in Figure mode, not when
+// the FRM panel is closed, and never from FrmOctree (Full mode streams an octree with no flat
+// scalar array to bin). The Display accordion holding the editor is independent of all of that,
+// so it was showing an empty strip and, with no climits, an x-axis that fell back to the scale's
+// own range and zoomed as you dragged it. Reading the cache directly makes the editor
+// self-sufficient; the always-on radial axis already guarantees the cache gets fetched.
+const cacheAutoLimits = computed<[number, number] | null>(() => {
+	void cacheEpoch.value;
+	const d = detail.value;
+	const c = d?.live_cache_file ? cacheGet(d.live_cache_file) : null;
+	return c ? axisAutoLimits(c, axis.value) : null;
+});
+// The auto range currently in force: a renderer's report wins, else the cache-derived fallback.
+// Short-circuits, so the cache scan only runs when no renderer has reported.
+const currentAuto = computed<[number, number] | null>(() =>
+	autoClimits.value ? [autoClimits.value.cmin, autoClimits.value.cmax] : cacheAutoLimits.value);
+const colorDomainLo = computed(() => currentAuto.value?.[0] ?? colorScale.value.satMin);
+const colorDomainHi = computed(() => currentAuto.value?.[1] ?? colorScale.value.satMax);
+// Binned over the AUTO range, not the edited one, so dragging a handle never triggers an O(N)
+// re-bin (and the curve stays put under the moving handles).
+// Seed the scale from the cache whenever no renderer has reported climits -- Figure mode, a
+// closed FRM panel, or Full/octree mode all leave satMin/satMax sitting at defaultScale's [0, 1]
+// while the strip's axis shows the real data range. On a cut whose forces are fractions of a
+// newton that puts the entire ramp off the end of the axis, so the curve renders with no colour
+// band at all and every handle sits in the wrong place.
+// Source short-circuits on autoClimits so the O(N log N) cache scan only runs when no renderer
+// has reported for the current data.
+watch(() => (autoClimits.value ? null : cacheAutoLimits.value), (range) => {
+	if (!range || locked.value) return;
+	const [lo, hi] = range;
+	if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+	seedAuto(lo, hi);
+}, { immediate: true });
+const colorHistogram = computed<Histogram | null>(() => {
+	if (rendererHistogram.value) return rendererHistogram.value;
+	void cacheEpoch.value;
+	const d = detail.value;
+	const c = d?.live_cache_file ? cacheGet(d.live_cache_file) : null;
+	const arr = c ? (c as any)[axis.value] as Float32Array | undefined : undefined;
+	const range = cacheAutoLimits.value;
+	if (!arr?.length || !range) return null;
+	return histogramFrom(arr, arr.length, range[0], range[1], 64);
+});
 // Filtering shifts the force range (e.g. a high-pass strips the DC offset), so any manually
 // locked colour limits become meaningless — auto-unlock so both panes recompute their own
 // scale over the (raw / filtered) data.
-watch(() => chainActive(workChain.value), (active) => { if (active) cauto.value = true; });
+watch(() => chainActive(workChain.value), (active) => { if (active) locked.value = false; });
 // In-place collapses to free space when live.
 const sampleDetailOpen = ref(true);
 const colStackHidden = ref(false);               // hide the Samples/Operations column
@@ -609,24 +729,12 @@ const frmLoading = ref(false);
 const frmCache = new Map<string, string>();
 
 // ---------------------------------------------------------------- layout state
-// Column widths + the Force/FRM split are user-resizable (drag handles) and each
-// of Force/FRM can be hidden so the other takes the full width. Persisted per
-// browser so the layout survives a reload.
+// Column widths are user-resizable (drag handles); persisted per browser so the layout survives a
+// reload. Keys from the old split layout (rightSplit/showForce/showFRM/visAxes) are ignored.
 const LAYOUT_KEY = 'd1-force-dashboard-layout-v1';
 const colA = ref(240);          // Samples/Operations column width (px)
 const colB = ref(300);          // Sample/Operation detail column width (px)
-const rightSplit = ref(0.46);   // fraction of the right area given to Signals vs FRM
-const showForce = ref(true);
-const showFRM = ref(true);
 const dragging = ref(false);
-// Per-channel selection for the Signals graphs — pick which summed axes to plot (matches the
-// recording view's channel chips). At least one axis stays on.
-const visAxes = ref<Record<Axis, boolean>>({ Fx: true, Fy: true, Fz: true });
-function toggleAxis(a: Axis) {
-	const on = AXES.filter((x) => visAxes.value[x]);
-	if (visAxes.value[a] && on.length <= 1) return;  // keep at least one visible
-	visAxes.value = { ...visAxes.value, [a]: !visAxes.value[a] };  // reassign so the layout watch fires
-}
 
 (function loadLayout() {
 	try {
@@ -635,19 +743,14 @@ function toggleAxis(a: Axis) {
 		const v = JSON.parse(raw);
 		if (typeof v.colA === 'number') colA.value = v.colA;
 		if (typeof v.colB === 'number') colB.value = v.colB;
-		if (typeof v.rightSplit === 'number') rightSplit.value = v.rightSplit;
-		if (typeof v.showForce === 'boolean') showForce.value = v.showForce;
-		if (typeof v.showFRM === 'boolean') showFRM.value = v.showFRM;
 		if (typeof v.colStackHidden === 'boolean') colStackHidden.value = v.colStackHidden;
 		if (typeof v.detailHidden === 'boolean') detailHidden.value = v.detailHidden;
 		if (v.frmMode === 'figure' || v.frmMode === 'lite' || v.frmMode === 'full') frmMode.value = v.frmMode;
-		if (v.visAxes && typeof v.visAxes === 'object') for (const a of AXES) if (typeof v.visAxes[a] === 'boolean') visAxes.value[a] = v.visAxes[a];
 	} catch { /* ignore malformed/absent saved layout */ }
 })();
-watch([colA, colB, rightSplit, showForce, showFRM, colStackHidden, detailHidden, frmMode, visAxes], () => {
+watch([colA, colB, colStackHidden, detailHidden, frmMode], () => {
 	localStorage.setItem(LAYOUT_KEY, JSON.stringify({
-		colA: colA.value, colB: colB.value, rightSplit: rightSplit.value,
-		showForce: showForce.value, showFRM: showFRM.value, visAxes: visAxes.value,
+		colA: colA.value, colB: colB.value,
 		colStackHidden: colStackHidden.value, detailHidden: detailHidden.value,
 		// Persist Live so returning to the dashboard keeps the interactive FRM cloud
 		// instead of silently dropping back to the static PNG. (liveOn still requires a
@@ -676,24 +779,6 @@ const startColAResize = dragAxis(() => colA.value, (v) => { colA.value = v; }, 1
 const startColBResize = dragAxis(() => colB.value, (v) => { colB.value = v; }, 220, 460);
 
 const rightAreaEl = ref<HTMLElement | null>(null);
-function startSplitResize(ev: PointerEvent) {
-	ev.preventDefault();
-	const rect = rightAreaEl.value?.getBoundingClientRect();
-	if (!rect) return;
-	dragging.value = true;
-	// rect! : the `if (!rect) return` above guarantees it, but TS drops the narrowing
-	// inside a hoisted function declaration (onMove is hoisted above the guard).
-	function onMove(e: PointerEvent) {
-		rightSplit.value = Math.min(0.78, Math.max(0.22, (e.clientX - rect!.left) / rect!.width));
-	}
-	function onUp() {
-		dragging.value = false;
-		window.removeEventListener('pointermove', onMove);
-		window.removeEventListener('pointerup', onUp);
-	}
-	window.addEventListener('pointermove', onMove);
-	window.addEventListener('pointerup', onUp);
-}
 
 // Below this content width, fixed pixel columns would overflow — stack instead.
 // Tracks the real element (Directus reserves side chrome, so the viewport is
@@ -812,7 +897,6 @@ const rightRowH = computed(() =>
 	Math.max(16, (availableHeight.value - RIGHT_MARGIN) / rightBottomRow.value - RIGHT_MARGIN),
 );
 const rightAddOpen = ref(false);
-const hasPanel = (t: string) => rightLayout.value.some((p) => p.type === t);
 function addRightPanel(type: RPanelType) {
 	rightAddOpen.value = false;
 	// Place a new panel beside the shortest existing column when there's room on the top row,
@@ -834,10 +918,6 @@ function addRightPanel(type: RPanelType) {
 	});
 }
 function closeRightPanel(i: string) { if (rightLayout.value.length > 1) rightLayout.value = rightLayout.value.filter((p) => p.i !== i); }
-function toggleRightType(type: RPanelType) {
-	if (hasPanel(type)) { if (rightLayout.value.length > 1) rightLayout.value = rightLayout.value.filter((p) => p.type !== type); }
-	else addRightPanel(type);
-}
 function resetRightLayout() { rightLayout.value = RIGHT_DEFAULT.map((p) => ({ ...p })); }
 
 // -------------------------------------------------------------------- data
@@ -1397,22 +1477,6 @@ function fmtCutTime(d: any): string {
 	return `${secs.toFixed(1)}s`;
 }
 
-// Cut parameters: how the operation was set up + what it measured. Shown in BOTH view
-// modes (previously they vanished the moment Lite was on — reference data shouldn't
-// depend on an unrelated display toggle).
-const cutParams = computed(() => {
-	const d = detail.value;
-	if (!d) return [];
-	const mrpm = d.mean_rpm != null ? Number(d.mean_rpm).toFixed(0) : '—';
-	return [
-		{ label: 'Surface speed', value: fmt(d.surface_speed), unit: 'm/min' },
-		{ label: 'Feed', value: fmt(d.feed), unit: 'mm/rev' },
-		{ label: 'Depth of cut', value: fmt(d.depth_of_cut), unit: 'mm' },
-		{ label: 'Diameter', value: fmt(d.cut_diameter), unit: 'mm' },
-		{ label: 'Mean RPM', value: mrpm, unit: '' },
-		{ label: 'Cut time', value: fmtCutTime(d), unit: '' },
-	];
-});
 // Capture/technical info: rarely needed at a glance -> its own collapsed accordion.
 const captureInfo = computed(() => {
 	const d = detail.value;
@@ -1428,10 +1492,6 @@ const captureInfo = computed(() => {
 });
 // Accordion state for the reworked op panel (persist nothing; sensible defaults).
 const captureOpen = ref(false);
-const displayOpen = ref(false);
-const hostOpen = ref(false);
-
-const showRpm = ref(false);
 
 // Entering Live collapses the sample detail + the op's date/coolant rows to free
 // vertical space for the crop plots, cloud, and plotting-settings panel.
@@ -1592,7 +1652,7 @@ const PEAK_FIELD: Record<string, string> = { Fx: 'peak_fx', Fy: 'peak_fy', Fz: '
 function chartsFor(item: RPanel) {
 	const d = detail.value;
 	const sel = (item.channels && item.channels.length ? item.channels : AXES) as readonly Axis[];
-	const secondXLabel = secondXField.value === 'radial' ? 'radial (mm)' : undefined;
+	const secondXLabel = 'radial (mm)';
 	const base = AXES.filter((a) => sel.includes(a)).map((a) => (
 		effectiveMode.value === 'force'
 			? { key: a, title: `${a} · force`, kind: 'env' as const, data: d?.series?.[a], color: AXIS_COLOR[a], xUnit: 's', yUnit: 'N',
@@ -1704,13 +1764,11 @@ function onCloudLoaded(meta: { csSec: number; ceSec: number; feed: number; diam:
 // ---- Second X-axis (radial tool position) on the time-series charts ------------------------
 // 'measured' speed mode needs the cache's baked revs_cum, so it may require an on-demand fetch
 // (see fetchRadialCache); 'rpm'/'vc' modes are closed-form in elapsed time alone and never do.
-// Defaults to 'none' — selecting the cache-backed 'measured' mode fetches a multi-MB asset the
-// moment it's turned on, so that has to be an explicit user action, never the initial state.
-const secondXField = ref<'none' | 'radial'>('none');
-// cacheGet() reads a plain (non-reactive) Map — a computed calling it would never re-run once
-// the cache lands after a later on-demand fetch. Bump this whenever the cache changes and read
-// it (even unused) wherever radialValuesFor() might depend on a just-arrived cache.
-const cacheEpoch = ref(0);
+// The radial second X-axis is always on now (its old 'none'/'radial' picker is gone). It used to
+// default to 'none' because turning it on fetches a multi-MB cache asset, which wanted to be an
+// explicit user action -- that fetch is still lazy (measuredRadialPath below only calls
+// fetchRadialCache when the LRU misses, and Lite mode has usually already put it there), it just
+// no longer waits for a click.
 const radialFetchBusy = ref(false);
 async function fetchRadialCache() {
 	const d = detail.value;
@@ -1730,7 +1788,7 @@ async function fetchRadialCache() {
 // O(N) work 3-4x per animation frame. rho is axis-independent (a function of time only), so one
 // path serves every axis + RPM chart in the panel.
 const measuredRadialPath = computed(() => {
-	if (secondXField.value !== 'radial' || speedMode.value !== 'measured') return null;
+	if (speedMode.value !== 'measured') return null;
 	const d = detail.value;
 	const cropStart = activeCrop.value?.start;
 	if (!d?.live_cache_file || cropStart == null) return null;
@@ -1748,7 +1806,7 @@ const measuredRadialPath = computed(() => {
 // the crop start onward (r=0 there, matching path.ts's buildTurningSpiral); earlier bucket times
 // get NaN, same as any time past wherever the spiral stops (cut-out / inner-diameter reached).
 function radialValuesFor(bucketT: number[] | Float32Array | undefined): Float32Array | null {
-	if (secondXField.value !== 'radial' || !bucketT || !bucketT.length) return null;
+	if (!bucketT || !bucketT.length) return null;
 	const cropStart = activeCrop.value?.start;
 	if (cropStart == null) return null;
 	const rho0 = editDiam.value / 2;
@@ -1788,8 +1846,12 @@ function resetLive() {
 		editPpr.value = Number(d.pulses_per_rev) || 1;
 	}
 	speedMode.value = 'measured';
-	plotStride.value = 1; gridding.value = false; pointSize.value = 1.4; colormap.value = 'viridis';
-	cauto.value = true;
+	plotStride.value = 1; gridding.value = false; pointSize.value = 1.4;
+	// Renderers dedupe their climits, so nothing would re-seed a blank scale: rebuild it from the
+	// current auto range instead of defaultScale(0, 1).
+	const r = currentAuto.value;
+	colorScale.value = r ? defaultScale(r[0], r[1]) : defaultScale(0, 1);
+	locked.value = false;
 }
 // Rate override rescales time for the constant-RPM/Vc models (measured mode uses the
 // baked revs, so it's unaffected). timeScale = 1 when Rate is left at the cache's Fs.
@@ -1898,12 +1960,8 @@ function fmtDateTime(v: string | null | undefined) {
 				<div class="hero-spacer"></div>
 				<div class="panel-toggles" @click.stop>
 					<span class="pt-label">Panels</span>
-					<button class="pt-chip" :class="{ on: hasPanel('signals') }" @click="toggleRightType('signals')">
-						<v-icon :name="hasPanel('signals') ? 'visibility' : 'visibility_off'" x-small /> Signals
-					</button>
-					<button class="pt-chip" :class="{ on: hasPanel('frm') }" @click="toggleRightType('frm')">
-						<v-icon :name="hasPanel('frm') ? 'visibility' : 'visibility_off'" x-small /> FRM map
-					</button>
+					<!-- Add + each panel's own close is the whole panel menu (as on the Record page). Eye
+						 toggles for Signals and FRM map used to sit here too, a third way to do the same. -->
 					<div class="pt-add">
 						<button class="pt-chip" title="Add a panel" @click.stop="rightAddOpen = !rightAddOpen"><v-icon name="add" x-small /> Add</button>
 						<div v-if="rightAddOpen" class="pt-menu" @click.stop>
@@ -2025,19 +2083,36 @@ function fmtDateTime(v: string | null | undefined) {
 							     .mat filenames are matched to an operation by, so hand-editing either from this
 							     panel would silently desync that link (see regeneratedPassCode above). Combined
 							     with any pending crop edit into one "Save changes" summary dialog below. -->
-							<div class="stat-sep">Operation metadata
+							<!-- Surface speed / Feed / Depth of cut / Workpiece Ø appear again under "Cut
+							     parameters" below, which reads as a duplicate until you know these two
+							     groups are different RECORDS: this one is the operation as specified
+							     (manufacturing_operations), that one is what this capture actually used
+							     (machining_force_analysis, and the source of the spiral geometry). The
+							     headings now say which is which. -->
+							<div class="stat-sep">Operation record <span class="u">(as specified)</span>
 								<button v-if="metaDirty" class="linkbtn" @click="seedMetaFromDetail">Reset</button>
 							</div>
 							<div class="edit-grid">
 								<label>Subtype<input v-model="editOpSubtype" type="text" :class="{ modified: editOpSubtype !== srcMeta.subtype }" /></label>
 								<label>Sequence<input :value="fmtOrDash(srcMeta.sequence)" type="text" disabled title="Derived — matches the archive .mat filename this operation was linked from. Not editable here." /></label>
-								<label>Surface speed <span class="u">m/min</span><input v-model.number="editOpCuttingSpeed" type="number" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpCuttingSpeed), srcMeta.cuttingSpeed) }" /></label>
-								<label>Feed <span class="u">mm/rev</span><input v-model.number="editOpFeedMmPerRev" type="number" step="0.001" min="0" :class="{ modified: numDiffers(numOrNull(editOpFeedMmPerRev), srcMeta.feedMmPerRev) }" /></label>
-								<label>Depth of cut <span class="u">mm</span><input v-model.number="editOpAxialDoc" type="number" step="0.01" min="0" :class="{ modified: numDiffers(numOrNull(editOpAxialDoc), srcMeta.axialDoc) }" /></label>
+								<!-- Unit inside the field, right of the number, matching the Record page's
+								     .unit-box: folded into the label it wrapped these two-word labels onto a
+								     second line in this narrow column, which cost a row of height per field. -->
+								<label>Surface speed
+									<span class="unit-box"><input v-model.number="editOpCuttingSpeed" type="number" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpCuttingSpeed), srcMeta.cuttingSpeed) }" /><span class="unit">m/min</span></span>
+								</label>
+								<label>Feed
+									<span class="unit-box"><input v-model.number="editOpFeedMmPerRev" type="number" step="0.001" min="0" :class="{ modified: numDiffers(numOrNull(editOpFeedMmPerRev), srcMeta.feedMmPerRev) }" /><span class="unit">mm/rev</span></span>
+								</label>
+								<label>Depth of cut
+									<span class="unit-box"><input v-model.number="editOpAxialDoc" type="number" step="0.01" min="0" :class="{ modified: numDiffers(numOrNull(editOpAxialDoc), srcMeta.axialDoc) }" /><span class="unit">mm</span></span>
+								</label>
 								<!-- The operation's recorded stock diameter — distinct from the FRM "Diameter"
 								     control above (machining_force_analysis.outer_diameter, a spiral-geometry
 								     override). Editable so the Doctor's diameter backfill has somewhere to write. -->
-								<label>Workpiece Ø <span class="u">mm</span><input v-model.number="editOpWorkpieceDiam" type="number" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpWorkpieceDiam), srcMeta.workpieceDiam) }" /></label>
+								<label>Workpiece Ø
+									<span class="unit-box"><input v-model.number="editOpWorkpieceDiam" type="number" step="0.1" min="0" :class="{ modified: numDiffers(numOrNull(editOpWorkpieceDiam), srcMeta.workpieceDiam) }" /><span class="unit">mm</span></span>
+								</label>
 								<label>Operator<input v-model="editOperatorName" type="text" :class="{ modified: editOperatorName !== srcMeta.operator }" /></label>
 								<label class="chk">New edge<input v-model="editOpNewEdge" type="checkbox" /></label>
 								<label class="chk">Coolant<input v-model="editOpCoolant" type="checkbox" /></label>
@@ -2051,7 +2126,7 @@ function fmtDateTime(v: string | null | undefined) {
 							<!-- Editable cut-parameter boxes (Feed/Diameter/Inner Ø/PPR): drive the Live plot
 							     and are threaded into any host bake. Measured values stay read-only. A box is
 							     highlighted when its value differs from what the op was loaded with. -->
-							<div class="stat-sep">Cut parameters
+							<div class="stat-sep">Cut parameters <span class="u">(this capture — draws the fingerprint)</span>
 								<button v-if="!near(editFeed, srcCut.feed) || !near(editDiam, srcCut.diam) || !near(editInnerDiam, srcCut.inner) || !near(editPpr, srcCut.ppr)"
 									class="linkbtn" @click="seedCutFromDetail">Reset</button>
 							</div>
@@ -2072,8 +2147,8 @@ function fmtDateTime(v: string | null | undefined) {
 									<div class="s-top"><input class="s-inp" v-model.number="editPpr" type="number" step="1" min="1" /></div>
 									<span class="s-lab">Pulses/rev</span>
 								</div>
-								<div class="stat"><div class="s-top"><span class="s-val">{{ fmt(detail.surface_speed) }}</span><span class="s-unit">m/min</span></div><span class="s-lab">Surface speed</span></div>
-								<div class="stat"><div class="s-top"><span class="s-val">{{ fmt(detail.depth_of_cut) }}</span><span class="s-unit">mm</span></div><span class="s-lab">Depth of cut</span></div>
+								<div v-if="addsInfoOverOp(detail.surface_speed, srcMeta.cuttingSpeed)" class="stat mismatch"><div class="s-top"><span class="s-val">{{ fmt(detail.surface_speed) }}</span><span class="s-unit">m/min</span></div><span class="s-lab">Surface speed <span class="u">(capture)</span></span></div>
+								<div v-if="addsInfoOverOp(detail.depth_of_cut, srcMeta.axialDoc)" class="stat mismatch"><div class="s-top"><span class="s-val">{{ fmt(detail.depth_of_cut) }}</span><span class="s-unit">mm</span></div><span class="s-lab">Depth of cut <span class="u">(capture)</span></span></div>
 								<div class="stat edit" :class="{ modified: !near(editRate, srcCut.rate) }">
 									<div class="s-top"><input class="s-inp" v-model.number="editRateKHz" type="number" step="0.1" min="0.1" /><span class="s-unit">kHz</span></div>
 									<span class="s-lab">Capture</span>
@@ -2121,13 +2196,11 @@ function fmtDateTime(v: string | null | undefined) {
 						</div>
 						<template v-if="displayPanelOpen">
 							<div class="edit-grid">
-								<label>Colour<select v-model="colormap"><option value="viridis">viridis</option><option value="inferno">inferno</option><option value="grayscale">grayscale</option></select></label>
 								<label>Point size<input v-model.number="pointSize" type="number" step="0.2" min="0.4" max="6" /></label>
 								<label v-if="liveOn">Show every<select v-model.number="plotStride"><option :value="1">all pts</option><option :value="2">2nd</option><option :value="5">5th</option><option :value="10">10th</option><option :value="25">25th</option></select></label>
-								<label class="chk wide"><input v-model="cauto" type="checkbox" /> Auto colour limits <span class="u">(prctile 1 / 99)</span></label>
-								<label>Colour min <span class="u">N</span><input v-model.number="cminManual" type="number" step="1" :disabled="cauto" /></label>
-								<label>Colour max <span class="u">N</span><input v-model.number="cmaxManual" type="number" step="1" :disabled="cauto" /></label>
 							</div>
+							<ColorScaleEditor v-model:color-scale="colorScale" v-model:locked="locked"
+								:domain-lo="colorDomainLo" :domain-hi="colorDomainHi" :histogram="colorHistogram" :unit="`${axis} (N)`" />
 							<template v-if="liveOn">
 								<div class="stat-sep">Full-resolution render (host)</div>
 								<div class="render-row">
@@ -2254,7 +2327,10 @@ function fmtDateTime(v: string | null | undefined) {
 						<div v-if="item.type === 'signals'" class="card col-charts pg-card">
 							<div class="pg-bar">
 								<span class="pg-grip" title="Drag to move"><v-icon name="drag_indicator" x-small /></span>
-								<span class="pg-title"><v-icon name="insights" x-small /> Signals<span v-if="liveOn" class="live-badge">LIVE · drag to crop</span>
+								<!-- The title is the plot mode and picks it, as in the Record page's panel headers. -->
+								<span class="pg-title"><v-icon name="insights" x-small />
+									<PlotModeFlyout v-model="chartMode" :modes="CHART_MODES" />
+									<span v-if="liveOn" class="live-badge">LIVE</span>
 									<template v-if="liveOn && (cropDirty || cropSavePrompt || cropSavedMsg)">
 										<button v-if="!cropSavePrompt && !cropSavedMsg" class="crop-save" title="Persist this crop as the operation's official crop window" @click.stop="cropSavePrompt = true">Save crop</button>
 										<span v-if="cropSavePrompt" class="crop-confirm" @click.stop>
@@ -2267,7 +2343,7 @@ function fmtDateTime(v: string | null | undefined) {
 								</span>
 								<div class="toggle pg-tools">
 									<button class="tbtn icobtn" :class="{ on: rectZoomTool }" title="Rectangular zoom — drag a box on any graph"
-										:style="rectZoomTool ? { background: '#0ea5e9', borderColor: '#0ea5e9' } : {}"
+										:style="rectZoomTool ? { background: 'var(--fp-accent)', borderColor: 'var(--fp-accent)', color: 'var(--fp-accent-ink)' } : {}"
 										@click="rectZoomTool = !rectZoomTool"><v-icon name="crop_free" x-small /></button>
 									<button class="tbtn icobtn" title="Reset zoom" :disabled="!zoomed" @click="resetZoom"><v-icon name="restart_alt" x-small /></button>
 									<button v-for="a in AXES" :key="a" class="tbtn axchip" :class="{ on: (item.channels || AXES).includes(a) }"
@@ -2276,26 +2352,7 @@ function fmtDateTime(v: string | null | undefined) {
 									<button v-if="effectiveMode === 'force'" class="tbtn rpmbtn" :class="{ on: item.rpm }"
 										:style="item.rpm ? { background: '#a855f7', borderColor: '#a855f7' } : {}"
 										@click="item.rpm = !item.rpm">RPM</button>
-									<select v-if="effectiveMode === 'force'" v-model="secondXField" class="zsel" title="Second X-axis (top margin)">
-										<option value="none">No 2nd axis</option>
-										<option value="radial">Radial position</option>
-									</select>
 									<span v-if="effectiveMode === 'force' && radialFetchBusy" class="cmp-hint">loading radial…</span>
-									<button class="tbtn" :class="{ on: chartMode === 'force' }"
-										:style="chartMode === 'force' ? { background: '#334155', borderColor: '#334155' } : {}"
-										@click="chartMode = 'force'">Force</button>
-									<button class="tbtn" :class="{ on: chartMode === 'fft' }"
-										:style="chartMode === 'fft' ? { background: '#334155', borderColor: '#334155' } : {}"
-										@click="chartMode = 'fft'">FFT</button>
-									<button class="tbtn" :class="{ on: chartMode === 'psd' }"
-										:style="chartMode === 'psd' ? { background: '#334155', borderColor: '#334155' } : {}"
-										title="Power spectrum (dB)" @click="chartMode = 'psd'">Power</button>
-									<button class="tbtn" :class="{ on: chartMode === 'spectrogram' }"
-										:style="chartMode === 'spectrogram' ? { background: '#334155', borderColor: '#334155' } : {}"
-										title="Time × frequency heatmap" @click="chartMode = 'spectrogram'">Spectro</button>
-									<button class="tbtn" :class="{ on: chartMode === 'waterfall' }"
-										:style="chartMode === 'waterfall' ? { background: '#334155', borderColor: '#334155' } : {}"
-										title="Stacked spectra over time" @click="chartMode = 'waterfall'">Waterfall</button>
 								</div>
 								<button class="pg-x" title="Close panel" @click="closeRightPanel(item.i)"><v-icon name="close" x-small /></button>
 							</div>
@@ -2457,7 +2514,7 @@ function fmtDateTime(v: string | null | undefined) {
 									</div>
 									<button v-if="frmMode==='full'" class="tbtn" :class="{ on: gridFull }" :disabled="buildingOctree"
 										:title="gridAvailable ? 'Interpolated-grid octree (filled surface)' : 'Build the interpolated grid on the host'"
-										:style="gridFull ? { background: '#0891b2', borderColor: '#0891b2' } : {}"
+										:style="gridFull ? { background: 'var(--fp-accent)', borderColor: 'var(--fp-accent)', color: 'var(--fp-accent-ink)' } : {}"
 										@click="gridFull = !gridFull"><v-icon name="grid_on" x-small /> Gridded</button>
 									<select v-if="octreeOn || liveOn" v-model="zSeries" class="zsel" title="Drive the Z axis from a force series (3D view — drag to rotate)">
 										<option value="none">2D</option>
@@ -2481,7 +2538,7 @@ function fmtDateTime(v: string | null | undefined) {
 								<div v-if="!detail" class="empty">Select an operation</div>
 								<FrmOctree v-else-if="octreeOn" ref="frmOctreeRef"
 									:octree-path="gridActive ? detail.grid_octree_path : detail.octree_path" :axis="axis"
-									:colormap="colormap" :point-size="pointSize" :cmin="cmin" :cmax="cmax"
+									:color-scale="colorScale" :point-size="pointSize"
 									:z-series="zSeries" :z-scale="zScale"
 									:total-points="gridActive ? Number(detail.grid_octree_points) : (fullResPoints ?? undefined)"
 									:fill="gridActive" :cell-size="Number(detail.grid_cell_mm) || 1"
@@ -2489,40 +2546,20 @@ function fmtDateTime(v: string | null | undefined) {
 									@climits="onClimits" @points="displayedPoints = $event" @zscale="zScale = $event" />
 								<!-- Compare mode: raw | filtered, sharing one view (linked pan/zoom) + colour scale. -->
 								<div v-else-if="compareOn" class="frm-compare" :class="{ stacked }">
-									<FrmCloud ref="frmCloudRef" :cache-file-id="detail.live_cache_file" :cache-override="rawDecimatedCache"
-										:axis="axis" :feed="editFeed" :diam="editDiam" :inner-diam="editInnerDiam" :speed-mode="speedMode"
-										:rpm="editRpm" :vc="editVc" :time-scale="timeScale" :ppr="editPpr"
-										:crop-start-sec="cropStartSec" :crop-end-sec="cropEndSec"
-										:stride="plotStride" :gridding="gridding" :grid-n="gridN"
-										:point-size="pointSize" :colormap="colormap" :cmin="cmin" :cmax="cmax"
+									<FrmCloud ref="frmCloudRef" v-bind="cloudProps" :cache-override="rawDecimatedCache" :color-scale="colorScale"
 										:shared-view="compareView" pane-label="raw"
-										@loaded="onCloudLoaded" @climits="onClimits" @points="displayedPoints = $event" />
-									<FrmCloud :cache-override="filteredCache" :cache-file-id="detail.live_cache_file"
-										:axis="axis" :feed="editFeed" :diam="editDiam" :inner-diam="editInnerDiam" :speed-mode="speedMode"
-										:rpm="editRpm" :vc="editVc" :time-scale="timeScale" :ppr="editPpr"
-										:crop-start-sec="cropStartSec" :crop-end-sec="cropEndSec"
-										:stride="plotStride" :gridding="gridding" :grid-n="gridN"
-										:point-size="pointSize" :colormap="colormap"
-										:cmin="cmin" :cmax="cmax"
-										:shared-view="compareView" pane-label="filtered" />
+										@loaded="onCloudLoaded" @climits="onClimits" @histogram="rendererHistogram = $event" @points="displayedPoints = $event" />
+									<FrmCloud v-bind="cloudProps" :cache-override="filteredCache" :color-scale="filteredColorScale"
+										:shared-view="compareView" pane-label="filtered"
+										@climits="filteredAuto = $event" />
 								</div>
-								<FrmCloud v-else-if="filteredSoloOn" ref="frmCloudRef" :cache-override="filteredCache" :cache-file-id="detail.live_cache_file"
-										:axis="axis" :feed="editFeed" :diam="editDiam" :inner-diam="editInnerDiam" :speed-mode="speedMode"
-										:rpm="editRpm" :vc="editVc" :time-scale="timeScale" :ppr="editPpr"
-										:crop-start-sec="cropStartSec" :crop-end-sec="cropEndSec"
-										:stride="plotStride" :gridding="gridding" :grid-n="gridN"
-										:point-size="pointSize" :colormap="colormap" :cmin="cmin" :cmax="cmax"
+								<FrmCloud v-else-if="filteredSoloOn" ref="frmCloudRef" v-bind="cloudProps" :cache-override="filteredCache" :color-scale="colorScale"
 										:z-series="zSeries" :z-scale="zScale"
-										@loaded="onCloudLoaded" @climits="onClimits" @points="displayedPoints = $event"
+										@loaded="onCloudLoaded" @climits="onClimits" @histogram="rendererHistogram = $event" @points="displayedPoints = $event"
 										@zscale="zScale = $event" />
-									<FrmCloud v-else-if="liveOn" ref="frmCloudRef" :cache-file-id="detail.live_cache_file"
-									:axis="axis" :feed="editFeed" :diam="editDiam" :inner-diam="editInnerDiam" :speed-mode="speedMode"
-									:rpm="editRpm" :vc="editVc" :time-scale="timeScale" :ppr="editPpr"
-									:crop-start-sec="cropStartSec" :crop-end-sec="cropEndSec"
-									:stride="plotStride" :gridding="gridding" :grid-n="gridN"
-									:point-size="pointSize" :colormap="colormap" :cmin="cmin" :cmax="cmax"
+									<FrmCloud v-else-if="liveOn" ref="frmCloudRef" v-bind="cloudProps" :color-scale="colorScale"
 									:z-series="zSeries" :z-scale="zScale"
-									@loaded="onCloudLoaded" @climits="onClimits" @points="displayedPoints = $event"
+									@loaded="onCloudLoaded" @climits="onClimits" @histogram="rendererHistogram = $event" @points="displayedPoints = $event"
 									@zscale="zScale = $event" />
 								<div v-else-if="frmLoading" class="loading"><v-progress-circular indeterminate /></div>
 								<img v-else-if="frmUrl" :src="frmUrl" :alt="`FRM ${axis}`" />
@@ -2563,6 +2600,9 @@ function fmtDateTime(v: string | null | undefined) {
 
 <style scoped>
 .fd {
+	/* App tokens, falling back to the Directus theme when this renders inside the admin. */
+	--fp-accent: var(--accent, var(--theme--primary, #1d4ed8));
+	--fp-accent-ink: var(--accent-ink, var(--theme--foreground-inverted, #fff));
 	padding: 20px 24px 40px;
 	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
 	color: var(--theme--foreground, #1e293b);
@@ -2572,13 +2612,12 @@ function fmtDateTime(v: string | null | undefined) {
 .hero { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 6px 14px; border-radius: 12px;
 	color: #fff; background: linear-gradient(120deg, var(--theme--primary, #1d4ed8), #0d9488);
 	box-shadow: 0 8px 20px -12px rgba(29, 78, 216, 0.5); flex-wrap: wrap; }
-.hero-badge { display: inline-flex; align-items: center; gap: 7px; font-weight: 750; font-size: 14px; }
+.hero-badge { display: inline-flex; align-items: center; gap: 7px; font-weight: 750; font-size: var(--fs-lg, 15px); }
 .hero-badge :deep(.v-icon) { --v-icon-color: #fff; }
-.hero-stat { font-size: 12px; font-weight: 600; opacity: 0.9; }
+.hero-stat { font-size: var(--fs-sm, 12px); font-weight: 600; opacity: 0.9; }
 .hero-spacer { flex: 1 1 auto; }
 .hero .pt-label { color: rgba(255, 255, 255, 0.8); }
 .hero .pt-chip { color: #fff; background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.28); }
-.hero .pt-chip.on { color: var(--theme--primary, #1d4ed8); background: #fff; border-color: #fff; }
 .hero .pt-chip:disabled { opacity: 0.5; }
 
 .loading { display: grid; place-items: center; padding: 40px; }
@@ -2634,18 +2673,18 @@ function fmtDateTime(v: string | null | undefined) {
 .dense .panel-ops .list { max-height: none; }
 .panel-head {
 	display: flex; align-items: center; gap: 8px; padding: 12px 14px;
-	font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+	font-size: var(--fs-sm, 12px); font-weight: 600; letter-spacing: 0.01em;
 	color: var(--theme--foreground-subdued, #6b7684);
 	border-bottom: 1px solid var(--theme--border-color-subdued, #e7ebf0);
 }
 .chip {
-	font-size: 10px; font-weight: 700; color: var(--theme--primary, #1d4ed8);
+	font-size: var(--fs-xs, 11px); font-weight: 700; color: var(--theme--primary, #1d4ed8);
 	background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 12%, transparent);
 	padding: 1px 7px; border-radius: 99px;
 }
-.clearbtn { margin-left: auto; border: 0; background: none; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--theme--primary, #1d4ed8); }
+.clearbtn { margin-left: auto; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--theme--primary, #1d4ed8); }
 .search {
-	margin: 11px 12px 5px; padding: 8px 11px; font: inherit; font-size: 12.5px;
+	margin: 11px 12px 5px; padding: 8px 11px; font: inherit; font-size: var(--fs-md, 13px);
 	border: 1px solid var(--theme--border-color-subdued, #e7ebf0); border-radius: 9px;
 	background: var(--theme--background, #fff); color: inherit; outline: none;
 }
@@ -2663,12 +2702,12 @@ function fmtDateTime(v: string | null | undefined) {
 .latest-chip {
 	display: inline-flex; align-items: center; gap: 1px; margin-left: 5px;
 	font-family: var(--theme--fonts--sans--font-family, system-ui, sans-serif);
-	font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+	font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
 	padding: 1px 6px 1px 4px; border-radius: 99px; color: #b45309;
 	background: color-mix(in srgb, #f59e0b 18%, transparent);
 	vertical-align: middle;
 }
-.latest-chip .v-icon-shim { font-size: 11px !important; }
+.latest-chip .v-icon-shim { font-size: var(--icon-xs, 14px) !important; }
 
 /* ---- Metadata doctor -------------------------------------------------------------------
    .docdot is an inline count badge, NOT a second corner dot: .qdot already owns the corner and
@@ -2677,14 +2716,14 @@ function fmtDateTime(v: string | null | undefined) {
 	display: inline-flex; align-items: center; justify-content: center; margin-left: 5px;
 	min-width: 14px; height: 14px; padding: 0 4px; border-radius: 99px;
 	font-family: var(--theme--fonts--sans--font-family, system-ui, sans-serif);
-	font-size: 9px; font-weight: 700; vertical-align: middle; color: #fff;
+	font-size: var(--fs-xs, 11px); font-weight: 700; vertical-align: middle; color: #fff;
 }
 .docdot.error { background: #dc2626; }
 .docdot.warn { background: #d97706; }
 .docdot.info { background: #64748b; }
 .doc-filter {
 	display: flex; align-items: center; gap: 6px; padding: 4px 10px 6px;
-	font-size: 11px; color: var(--theme--foreground-subdued, #6b7684); cursor: pointer;
+	font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #6b7684); cursor: pointer;
 }
 .doc-filter input { margin: 0; cursor: pointer; }
 .doc-card { display: flex; flex-direction: column; min-height: 0; }
@@ -2692,12 +2731,12 @@ function fmtDateTime(v: string | null | undefined) {
 .doc-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 10px 10px; }
 .doc-opts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .doc-optlabel {
-	font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+	font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
 	color: var(--theme--foreground-subdued, #6b7684);
 }
-.doc-opt { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
+.doc-opt { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs, 11px); cursor: pointer; }
 .doc-opt input { margin: 0; cursor: pointer; }
-.doc-ok { display: flex; align-items: center; gap: 6px; padding: 14px 2px; font-size: 12px; color: #16a34a; }
+.doc-ok { display: flex; align-items: center; gap: 6px; padding: 14px 2px; font-size: var(--fs-sm, 12px); color: #16a34a; }
 .doc-find {
 	border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
 	border-left-width: 3px; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px;
@@ -2710,17 +2749,17 @@ function fmtDateTime(v: string | null | undefined) {
 .doc-sev.error { background: #dc2626; }
 .doc-sev.warn { background: #d97706; }
 .doc-sev.info { background: #64748b; }
-.doc-title { font-size: 12px; font-weight: 600; }
-.doc-detail { margin: 4px 0 0; font-size: 11px; line-height: 1.45; color: var(--theme--foreground-subdued, #6b7684); }
-.doc-cmp { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; }
-.doc-side em { font-style: normal; text-transform: uppercase; font-size: 9px; letter-spacing: 0.04em;
+.doc-title { font-size: var(--fs-sm, 12px); font-weight: 600; }
+.doc-detail { margin: 4px 0 0; font-size: var(--fs-xs, 11px); line-height: 1.45; color: var(--theme--foreground-subdued, #6b7684); }
+.doc-cmp { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: var(--fs-xs, 11px); }
+.doc-side em { font-style: normal; font-size: var(--fs-xs, 11px); letter-spacing: 0.01em;
 	color: var(--theme--foreground-subdued, #6b7684); margin-right: 4px; }
 .doc-side b { font-family: var(--theme--fonts--monospace--font-family, ui-monospace, monospace); }
 .doc-arrow { color: var(--theme--foreground-subdued, #6b7684); }
 .doc-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .doc-btn {
 	border: 1px solid var(--theme--border-color, #d3dae4); background: transparent;
-	border-radius: 5px; padding: 3px 9px; font-size: 11px; cursor: pointer;
+	border-radius: 5px; padding: 3px 9px; font-size: var(--fs-xs, 11px); cursor: pointer;
 	color: var(--theme--foreground, #263238);
 }
 .doc-btn:hover:not(:disabled) { background: var(--theme--background-subdued, #f4f6f8); }
@@ -2728,7 +2767,7 @@ function fmtDateTime(v: string | null | undefined) {
 .doc-btn.primary { border-color: var(--theme--primary, #6644ff); color: var(--theme--primary, #6644ff); font-weight: 600; }
 .doc-dismissed { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
 .doc-dis-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; opacity: 0.65; }
-.doc-err { margin-top: 8px; font-size: 11px; color: #dc2626; }
+.doc-err { margin-top: 8px; font-size: var(--fs-xs, 11px); color: #dc2626; }
 .doc-group { margin-bottom: 10px; }
 .doc-group-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .doc-oprow {
@@ -2740,12 +2779,12 @@ function fmtDateTime(v: string | null | undefined) {
 /* Multi-cut comparison bar (Signals panel, force mode). */
 .cmp-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 10px;
 	border-bottom: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
-.cmp-label { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700;
-	text-transform: uppercase; letter-spacing: 0.04em; color: var(--theme--foreground-subdued, #6b7684); }
-.cmp-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700;
+.cmp-label { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs, 11px); font-weight: 700;
+	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); }
+.cmp-chip { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs, 11px); font-weight: 700;
 	padding: 1px 4px 1px 8px; border: 1px solid; border-radius: 99px; }
-.cmp-x { border: 0; background: none; cursor: pointer; color: inherit; font-size: 13px; line-height: 1; padding: 0 3px; }
-.cmp-hint { font-size: 10.5px; color: var(--theme--foreground-subdued, #98a2b3); }
+.cmp-x { border: 0; background: none; cursor: pointer; color: inherit; font-size: var(--fs-md, 13px); line-height: 1; padding: 0 3px; }
+.cmp-hint { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #98a2b3); }
 .cmp-add { position: relative; }
 .cmp-menu { position: absolute; top: 24px; left: 0; z-index: 40; min-width: 200px; max-height: 280px;
 	overflow: auto; padding: 4px; background: var(--theme--background, #fff);
@@ -2763,40 +2802,42 @@ function fmtDateTime(v: string | null | undefined) {
 }
 .rowcard:hover { transform: translateY(-2px); box-shadow: 0 10px 22px -16px rgba(15, 23, 42, 0.4); }
 .rowcard.active { border-color: var(--theme--primary, #1d4ed8); box-shadow: 0 0 0 1px var(--theme--primary, #1d4ed8) inset; }
-.mono { font-family: var(--theme--fonts--monospace--font-family, 'SF Mono', Menlo, monospace); font-weight: 700; font-size: 13px; overflow-wrap: break-word; word-break: normal; }
-.mono.sm { font-size: 11.5px; }
-.sub { font-size: 11px; color: var(--theme--foreground-subdued, #6b7684); }
-.pill, .badge { align-self: flex-start; margin-top: 2px; font-size: 10px; font-weight: 700; padding: 1px 8px; border-radius: 99px; }
+.mono { font-family: var(--theme--fonts--monospace--font-family, 'SF Mono', Menlo, monospace); font-weight: 700; font-size: var(--fs-md, 13px); overflow-wrap: break-word; word-break: normal; }
+.mono.sm { font-size: var(--fs-sm, 12px); }
+.sub { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #6b7684); }
+.pill, .badge { align-self: flex-start; margin-top: 2px; font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 8px; border-radius: 99px; }
 .pill { color: var(--theme--primary, #1d4ed8); background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 12%, transparent); }
 .badge { color: #fff; }
-.empty { padding: 20px 16px; text-align: center; color: var(--theme--foreground-subdued, #98a2b3); font-size: 12.5px; }
-.empty.sm { padding: 14px; font-size: 12px; }
+.empty { padding: 20px 16px; text-align: center; color: var(--theme--foreground-subdued, #98a2b3); font-size: var(--fs-md, 13px); }
+.empty.sm { padding: 14px; font-size: var(--fs-sm, 12px); }
 
+/* Radius and elevation taken from the Record page's PanelFrame so a card here and a panel there
+   are the same object: 12px, one hairline border, one shallow shadow. */
 .card {
 	background: var(--theme--background, #fff); border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
-	border-radius: 16px; padding: 16px 18px;
+	border-radius: 12px; padding: 16px 18px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
 }
 .dense .card { padding: 12px 14px; }
 .info-head {
 	display: flex; align-items: center; justify-content: space-between; gap: 8px;
-	font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+	font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
 	color: var(--theme--foreground-subdued, #6b7684); margin-bottom: 11px;
 }
 .dense .info-head { margin-bottom: 8px; }
 .openbtn {
 	display: inline-flex; align-items: center; gap: 3px; border: 0; cursor: pointer; font: inherit;
-	font-size: 10.5px; font-weight: 700; text-transform: none; letter-spacing: 0;
+	font-size: var(--fs-xs, 11px); font-weight: 700; text-transform: none; letter-spacing: 0;
 	color: var(--theme--primary, #1d4ed8); background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 10%, transparent);
 	padding: 3px 8px; border-radius: 8px;
 }
 .openbtn:hover { background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 18%, transparent); }
-.info-code { font-size: 13px; margin-bottom: 12px; }
-.kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; font-size: 12.5px; margin-bottom: 4px; }
-.dense .kv { gap: 4px 10px; font-size: 12px; margin-bottom: 2px; }
+.info-code { font-size: var(--fs-md, 13px); margin-bottom: 12px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; font-size: var(--fs-md, 13px); margin-bottom: 4px; }
+.dense .kv { gap: 4px 10px; font-size: var(--fs-sm, 12px); margin-bottom: 2px; }
 .kv span:nth-child(odd) { color: var(--theme--foreground-subdued, #6b7684); white-space: nowrap; }
 .kv span:nth-child(even) { font-weight: 600; text-align: right; }
 .stat-sep {
-	margin: 12px 0 9px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+	margin: 12px 0 9px; font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
 	color: var(--theme--foreground-subdued, #98a2b3); border-top: 1px solid var(--theme--border-color-subdued, #eef1f5); padding-top: 10px;
 }
 .statgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
@@ -2805,15 +2846,15 @@ function fmtDateTime(v: string | null | undefined) {
 	border-radius: 8px; padding: 5px 9px; display: flex; flex-direction: column; gap: 0;
 }
 .s-top { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
-.s-val { font-size: 13px; font-weight: 750; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; line-height: 1.15; }
-.s-unit { font-size: 9.5px; font-weight: 600; color: var(--theme--foreground-subdued, #94a3b8); letter-spacing: 0.02em; }
-.s-lab { font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--theme--foreground-subdued, #6b7684); font-weight: 600; margin-top: 1px; }
+.s-val { font-size: var(--fs-md, 13px); font-weight: 750; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.s-unit { font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--theme--foreground-subdued, #94a3b8); letter-spacing: 0.02em; }
+.s-lab { font-size: var(--fs-xs, 11px); letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); font-weight: 600; margin-top: 1px; }
 /* editable cut-param boxes: an input styled like the value, with a dashed underline so it
    reads as editable WITHOUT clicking; the unit sits inline to its right (like the read-only
    boxes) to save vertical space. Modified = accent ring. */
 .stat.edit { background: var(--theme--background, #fff); transition: border-color 0.12s, box-shadow 0.12s; }
 .stat .s-inp {
-	width: 4.4em; max-width: 100%; font: inherit; font-size: 13px; font-weight: 750; font-variant-numeric: tabular-nums;
+	width: 4.4em; max-width: 100%; font: inherit; font-size: var(--fs-md, 13px); font-weight: 750; font-variant-numeric: tabular-nums;
 	background: transparent; color: inherit; padding: 0 0 1px; line-height: 1.15;
 	border: 0; border-bottom: 1px dashed var(--theme--border-color, #c7d0da); border-radius: 0;
 }
@@ -2829,18 +2870,14 @@ function fmtDateTime(v: string | null | undefined) {
    it shrink inside the fixed-height layout cell and overflow-y makes off-screen panels reachable. */
 .right-area { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .panel-toggles { display: flex; align-items: center; gap: 8px; padding: 0 2px; flex-wrap: wrap; }
-.pt-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--theme--foreground-subdued, #98a2b3); margin-right: 2px; }
+.pt-label { font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #98a2b3); margin-right: 2px; }
 .pt-chip {
-	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11.5px; font-weight: 650;
+	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 650;
 	cursor: pointer; padding: 5px 12px; border-radius: 99px; color: var(--theme--foreground-subdued, #6b7684);
 	background: var(--theme--background-subdued, #f1f5f9); border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
 	transition: all 0.12s ease;
 }
-.pt-chip.on { color: var(--theme--primary, #1d4ed8); background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 10%, transparent); border-color: color-mix(in srgb, var(--theme--primary, #1d4ed8) 30%, transparent); }
 .pt-chip:disabled { opacity: 0.55; cursor: not-allowed; }
-.right-row { display: flex; gap: 0; flex: 1 1 auto; min-height: 0; align-items: stretch; }
-.right-row.stacked { flex-direction: column; }
-.right-row > .card { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 
 /* Flexible plot-panel grid (Signals / FRM as draggable, resizable, closeable panels). Pull the grid
    up by its top margin so row-0 panels align with the top of the samples/detail columns (the empty
@@ -2850,10 +2887,16 @@ function fmtDateTime(v: string | null | undefined) {
 .right-grid :deep(.vgl-item--placeholder) { background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 18%, transparent); border-radius: 12px; }
 .pg-card { height: 100%; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 /* One-line panel bar: drag grip · title · inline tools · close — no separate title row. */
-.pg-bar { display: flex; align-items: center; gap: 6px; padding: 2px 4px 6px; flex: 0 0 auto; flex-wrap: wrap; }
-.pg-title { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; font-size: 11px; font-weight: 700;
-	text-transform: uppercase; letter-spacing: 0.05em; color: var(--theme--foreground-subdued, #6b7684); white-space: nowrap; }
-.pg-tools { flex: 0 1 auto; }
+/* nowrap: the tools group wraps inside itself instead (.toggle already wraps, right-aligned). With
+   the bar itself wrapping, a narrow Signals panel pushed the close button onto a line of its own.
+   Grip, title and close are one tool-row tall and top-aligned, so they stay level with the first
+   row of tools when the rest wrap below. */
+.pg-bar { display: flex; align-items: flex-start; gap: 6px; padding: 2px 4px 6px; flex: 0 0 auto; }
+.pg-bar > .pg-grip, .pg-bar > .pg-title, .pg-bar > .pg-x { min-height: 27px; align-items: center; }
+/* Grows into the bar's free width: the Signals mode picker slides open into it. */
+.pg-title { display: inline-flex; flex: 1 0 auto; align-items: center; gap: 5px; font-size: var(--fs-xs, 11px); font-weight: 700;
+	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); white-space: nowrap; }
+.pg-tools { flex: 0 1 auto; min-width: 0; }
 .pg-grip { cursor: move; display: inline-flex; color: var(--theme--foreground-subdued, #98a2b3); }
 .pg-grip:hover { color: var(--theme--foreground, #1e293b); }
 .pg-x { margin-left: 4px; display: inline-flex; background: transparent; border: none; cursor: pointer; color: var(--theme--foreground-subdued, #98a2b3); border-radius: 5px; padding: 2px; }
@@ -2862,17 +2905,16 @@ function fmtDateTime(v: string | null | undefined) {
 .pg-headbar { padding-bottom: 6px; }
 .pt-add { position: relative; }
 .pt-menu { position: absolute; top: 32px; right: 0; z-index: 40; min-width: 150px; padding: 4px; border-radius: 9px; background: var(--theme--background, #fff); border: 1px solid var(--theme--border-color-subdued, #e7ebf0); box-shadow: 0 14px 34px rgba(0,0,0,0.2); }
-.pt-menu button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 8px; font: inherit; font-size: 12px; color: var(--theme--foreground, #1e293b); background: transparent; border: none; border-radius: 6px; cursor: pointer; text-align: left; }
+.pt-menu button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 8px; font: inherit; font-size: var(--fs-sm, 12px); color: var(--theme--foreground, #1e293b); background: transparent; border: none; border-radius: 6px; cursor: pointer; text-align: left; }
 .pt-menu button:hover { background: var(--theme--background-subdued, #f1f5f9); }
 
-.graphs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; flex-wrap: wrap; gap: 6px; }
 .graphs-title, .frm-kicker {
-	display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700;
-	text-transform: uppercase; letter-spacing: 0.05em; color: var(--theme--foreground-subdued, #6b7684);
+	display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs, 11px); font-weight: 700;
+	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684);
 }
 .toggle { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .tbtn {
-	font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; padding: 5px 13px; border-radius: 9px;
+	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 700; cursor: pointer; padding: 5px 13px; border-radius: 9px;
 	color: var(--theme--foreground-subdued, #6b7684); background: var(--theme--background-subdued, #f1f5f9);
 	border: 1px solid var(--theme--border-color-subdued, #e7ebf0); transition: all 0.12s ease;
 }
@@ -2884,47 +2926,47 @@ function fmtDateTime(v: string | null | undefined) {
 
 .col-frm { display: flex; flex-direction: column; gap: 11px; min-height: 0; }
 .frm-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
-.frm-res { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+.frm-res { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-xs, 11px); font-weight: 600; font-variant-numeric: tabular-nums;
 	color: var(--theme--foreground-subdued, #6b7684); background: var(--theme--background-subdued, #f1f5f9);
 	border: 1px solid var(--theme--border-color-subdued, #e7ebf0); border-radius: 99px; padding: 1px 8px; margin-right: auto; }
-.frm-fid { font-size: 10px; padding: 1px 7px; border-radius: 99px; font-weight: 700;
+.frm-fid { font-size: var(--fs-xs, 11px); padding: 1px 7px; border-radius: 99px; font-weight: 700;
 	color: #b45309; background: color-mix(in srgb, #d97706 14%, transparent); white-space: nowrap; }
 .frm-fid.good { color: #15803d; background: color-mix(in srgb, #16a34a 14%, transparent); }
 .segmode { display: inline-flex; border-radius: 8px; overflow: hidden; border: 1px solid var(--theme--border-color-subdued, #d7dee6); }
-.segbtn { font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; border: 0; padding: 5px 11px; background: var(--theme--background, #fff); color: var(--theme--foreground-subdued, #64748b); border-right: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
+.segbtn { font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700; cursor: pointer; border: 0; padding: 5px 11px; background: var(--theme--background, #fff); color: var(--theme--foreground-subdued, #64748b); border-right: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
 .segbtn:last-child { border-right: 0; }
-.segbtn.on { background: #0891b2; color: #fff; }
+.segbtn.on { background: var(--fp-accent); color: var(--fp-accent-ink); }
 .segbtn:disabled { opacity: 0.4; cursor: default; }
-.zslider { width: 70px; accent-color: #0891b2; vertical-align: middle; cursor: pointer; }
-.stats-table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin: 6px 0 4px; }
-.stats-table th { text-align: right; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--theme--foreground-subdued, #6b7684); padding: 2px 6px; }
+.zslider { width: 70px; accent-color: var(--fp-accent); vertical-align: middle; cursor: pointer; }
+.stats-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm, 12px); margin: 6px 0 4px; }
+.stats-table th { text-align: right; font-size: var(--fs-xs, 11px); letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); padding: 2px 6px; }
 .stats-table td { text-align: right; padding: 3px 6px; font-variant-numeric: tabular-nums; border-top: 1px solid var(--theme--border-color-subdued, #eef1f5); }
 .stats-table td:first-child { text-align: left; color: var(--theme--foreground-subdued, #6b7684); font-weight: 600; white-space: nowrap; }
 .stat-bad { color: #dc2626; font-weight: 700; }
-.stats-win { font-size: 10.5px; color: var(--theme--foreground-subdued, #98a2b3); }
+.stats-win { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #98a2b3); }
 .stats-rpm { margin-top: 2px; }
 .stats-compute { margin-top: 4px; }
 .acc-head {
 	display: flex; align-items: center; gap: 4px; width: 100%; text-align: left;
 	background: none; border: 0; cursor: pointer; font: inherit;
-	font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+	font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em;
 	color: var(--theme--foreground-subdued, #98a2b3); margin: 6px 0 4px; padding: 6px 0 0;
 	border-top: 1px solid var(--theme--border-color-subdued, #eef1f5);
 }
 .acc-head:hover { color: var(--theme--foreground, #1e293b); }
 .filt-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
 .filt-row .chk { flex: 1 1 auto; }
-.filt-row input, .filt-row select { width: 60px; font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 7px; border: 1px solid var(--theme--border-color-subdued, #e7ebf0); background: var(--theme--background, #fff); color: inherit; }
+.filt-row input, .filt-row select { width: 60px; font: inherit; font-size: var(--fs-sm, 12px); padding: 3px 6px; border-radius: 7px; border: 1px solid var(--theme--border-color-subdued, #e7ebf0); background: var(--theme--background, #fff); color: inherit; }
 .filt-row select { width: auto; }
 .filt-harm { display: flex; gap: 8px; margin: 2px 0 6px 20px; }
-.filt-harm .chk { font-size: 11.5px; }
+.filt-harm .chk { font-size: var(--fs-sm, 12px); }
 .filt-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-.prof-sel { flex: 1 1 auto; font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--theme--border-color-subdued, #e7ebf0); background: var(--theme--background, #fff); color: inherit; }
+.prof-sel { flex: 1 1 auto; font: inherit; font-size: var(--fs-sm, 12px); padding: 5px 8px; border-radius: 8px; border: 1px solid var(--theme--border-color-subdued, #e7ebf0); background: var(--theme--background, #fff); color: inherit; }
 /* compare: two square viewports sharing the FRM area (side-by-side; stacked on mobile) */
 .frm-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; height: 100%; min-height: 0; }
 .frm-compare.stacked { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
 .frm-compare > * { min-width: 0; min-height: 0; }
-.zsel { font: inherit; font-size: 11px; font-weight: 650; padding: 3px 7px; border-radius: 8px; cursor: pointer;
+.zsel { font: inherit; font-size: var(--fs-xs, 11px); font-weight: 650; padding: 3px 7px; border-radius: 8px; cursor: pointer;
 	border: 1px solid var(--theme--border-color, #d1d9e6); background: var(--theme--background, #fff); color: var(--theme--foreground, #334155); }
 .frm-img { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 220px; overflow: hidden; }
 .frm-img img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: 8px; border: 1px solid var(--theme--border-color-subdued, #e7ebf0); }
@@ -2934,19 +2976,19 @@ function fmtDateTime(v: string | null | undefined) {
 .tbtn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* Live badge + collapse chevrons */
-.live-badge { margin-left: 8px; font-size: 9px; font-weight: 800; letter-spacing: 0.06em; color: #7c3aed;
+.live-badge { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 800; letter-spacing: 0.06em; color: #7c3aed;
 	background: color-mix(in srgb, #7c3aed 12%, transparent); padding: 2px 7px; border-radius: 99px; }
 /* "Save crop as official" affordance — only appears once the handles have been moved (cropDirty). */
-.crop-save { margin-left: 8px; font-size: 9.5px; font-weight: 700; color: #0ea5e9; cursor: pointer;
-	background: color-mix(in srgb, #0ea5e9 12%, transparent); border: 1px solid color-mix(in srgb, #0ea5e9 45%, transparent);
+.crop-save { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 700; color: var(--fp-accent); cursor: pointer;
+	background: color-mix(in srgb, var(--fp-accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--fp-accent) 45%, transparent);
 	padding: 2px 8px; border-radius: 99px; }
-.crop-save:hover { background: color-mix(in srgb, #0ea5e9 22%, transparent); }
-.crop-confirm { margin-left: 8px; font-size: 9.5px; font-weight: 700; color: var(--theme--foreground, #e2e8f0); display: inline-flex; align-items: center; gap: 6px; }
-.crop-confirm .cc-yes, .crop-confirm .cc-no { font-size: 9.5px; font-weight: 700; cursor: pointer; padding: 2px 8px; border-radius: 99px; border: 1px solid transparent; }
-.crop-confirm .cc-yes { color: #fff; background: #0ea5e9; }
+.crop-save:hover { background: color-mix(in srgb, var(--fp-accent) 22%, transparent); }
+.crop-confirm { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 700; color: var(--theme--foreground, #e2e8f0); display: inline-flex; align-items: center; gap: 6px; }
+.crop-confirm .cc-yes, .crop-confirm .cc-no { font-size: var(--fs-xs, 11px); font-weight: 700; cursor: pointer; padding: 2px 8px; border-radius: 99px; border: 1px solid transparent; }
+.crop-confirm .cc-yes { color: var(--fp-accent-ink); background: var(--fp-accent); }
 .crop-confirm .cc-yes:disabled { opacity: 0.6; cursor: default; }
 .crop-confirm .cc-no { color: var(--theme--foreground-subdued, #94a3b8); background: transparent; border-color: color-mix(in srgb, currentColor 40%, transparent); }
-.crop-msg { margin-left: 8px; font-size: 9.5px; font-weight: 700; color: #22c55e; }
+.crop-msg { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 700; color: #22c55e; }
 .collapsebtn, .chevbtn {
 	display: inline-flex; align-items: center; justify-content: center; border: 0; cursor: pointer; padding: 1px;
 	margin-left: 4px; color: var(--theme--foreground-subdued, #94a3b8); background: transparent; border-radius: 6px;
@@ -2954,7 +2996,7 @@ function fmtDateTime(v: string | null | undefined) {
 .chevbtn { margin-left: 0; margin-right: 2px; }
 .collapsebtn:hover, .chevbtn:hover { background: var(--theme--background-subdued, #eef2f7); color: var(--theme--foreground, #1e293b); }
 .expandbtn {
-	display: inline-flex; align-items: center; gap: 3px; align-self: flex-start; font: inherit; font-size: 11px; font-weight: 700;
+	display: inline-flex; align-items: center; gap: 3px; align-self: flex-start; font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700;
 	cursor: pointer; padding: 5px 10px; border-radius: 9px; margin-bottom: 2px;
 	color: var(--theme--primary, #1d4ed8); background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 10%, transparent);
 	border: 1px solid color-mix(in srgb, var(--theme--primary, #1d4ed8) 22%, transparent);
@@ -2965,38 +3007,55 @@ function fmtDateTime(v: string | null | undefined) {
 .card.info.collapsed .info-head { margin-bottom: 0; }
 
 /* Live-mode editable metadata + plotting settings */
-.linkbtn { border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 10px; font-weight: 700;
+.linkbtn { border: 0; background: transparent; cursor: pointer; font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700;
 	color: var(--theme--primary, #1d4ed8); text-transform: none; letter-spacing: 0; float: right; padding: 0; }
 .edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
-.edit-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; font-weight: 700;
-	text-transform: uppercase; letter-spacing: 0.03em; color: var(--theme--foreground-subdued, #6b7684); }
+.edit-grid label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs, 11px); font-weight: 700;
+	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); }
 .edit-grid label.wide { grid-column: 1 / -1; }
-.edit-grid label.chk { flex-direction: row; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: 12px; }
+.edit-grid label.chk { flex-direction: row; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: var(--fs-sm, 12px); }
 .edit-grid .u { font-weight: 500; color: var(--theme--foreground-subdued, #a4adba); text-transform: none; }
+/* The qualifier on a section heading ("as specified", "this capture") is what distinguishes two
+   groups that carry the same quantities from different records -- quieter than the heading, but
+   it has to stay readable, so it is not dimmed any further than the heading already is. */
+.stat-sep .u { font-weight: 400; opacity: 0.85; }
+/* These tiles now only appear when the capture disagrees with the operation record (or is the
+   only source), so they are a discrepancy to look at, not background reference. */
+.stat.mismatch { border-color: var(--theme--primary, #1d4ed8); }
+.stat.mismatch .s-lab .u { font-weight: 400; opacity: 0.8; }
 .edit-grid input[type="number"], .edit-grid input[type="text"], .edit-grid select, .edit-grid textarea, .render-row input {
-	font: inherit; font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: 0; padding: 5px 8px;
+	font: inherit; font-size: var(--fs-md, 13px); font-weight: 600; text-transform: none; letter-spacing: 0; padding: 5px 8px;
 	border: 1px solid var(--theme--border-color, #d1d9e6); border-radius: 8px; background: var(--theme--background, #fff);
 	color: var(--theme--foreground, #1e293b); width: 100%; box-sizing: border-box;
 }
+/* The BOX carries the border, not the input, so the trailing unit reads as part of one control
+   (same construction as RecordingOptions.vue's .unit-box on the Record page). */
+.edit-grid .unit-box { display: flex; align-items: center; border: 1px solid var(--theme--border-color, #d1d9e6); border-radius: 8px; background: var(--theme--background, #fff); }
+.edit-grid .unit-box:focus-within { border-color: var(--theme--primary, #1d4ed8); }
+.edit-grid .unit-box input { flex: 1 1 auto; min-width: 0; border: none; background: transparent; border-radius: 0; }
+.edit-grid .unit-box input:focus { outline: none; }
+.edit-grid .unit-box input.modified { border: none; box-shadow: none; }
+.edit-grid .unit-box:has(input.modified) { border-color: var(--theme--primary, #1d4ed8); box-shadow: inset 0 0 0 1px var(--theme--primary, #1d4ed8); }
+.edit-grid .unit-box .unit { flex: 0 0 auto; padding-right: 8px; font-size: var(--fs-xs, 11px); font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--theme--foreground-subdued, #a4adba); }
 .edit-grid textarea { resize: vertical; min-height: 44px; }
 .edit-grid input:disabled { opacity: 0.5; cursor: not-allowed; }
 .edit-grid input.modified, .edit-grid textarea.modified { border-color: var(--theme--primary, #1d4ed8); box-shadow: inset 0 0 0 1px var(--theme--primary, #1d4ed8); }
 .speed-row { display: flex; gap: 6px; }
 .speed-row select { flex: 1 1 auto; } .speed-row input { flex: 0 0 82px; }
 .render-row { display: flex; align-items: flex-end; gap: 8px; }
-.render-row label { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; font-weight: 700;
-	text-transform: uppercase; letter-spacing: 0.03em; color: var(--theme--foreground-subdued, #6b7684); flex: 1 1 auto; }
+.render-row label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs, 11px); font-weight: 700;
+	letter-spacing: 0.01em; color: var(--theme--foreground-subdued, #6b7684); flex: 1 1 auto; }
 .processbtn {
-	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer;
-	padding: 7px 14px; border-radius: 9px; color: #fff; background: #7c3aed; border: 0; white-space: nowrap;
+	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 750; cursor: pointer;
+	padding: 7px 14px; border-radius: 9px; color: var(--fp-accent-ink); background: var(--fp-accent); border: 0; white-space: nowrap;
 }
 .processbtn:disabled { opacity: 0.6; cursor: progress; }
 .applybtn {
-	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer;
+	display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 750; cursor: pointer;
 	padding: 7px 14px; border-radius: 9px; color: #6d28d9; background: transparent; border: 1.5px solid #7c3aed; white-space: nowrap;
 }
 .applybtn:disabled { opacity: 0.5; cursor: not-allowed; }
-.render-msg { margin-top: 7px; font-size: 11px; color: var(--theme--foreground-subdued, #6b7684); font-style: italic; }
+.render-msg { margin-top: 7px; font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #6b7684); font-style: italic; }
 .changes-backdrop {
 	position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: grid; place-items: center; z-index: 200;
 }
@@ -3004,13 +3063,13 @@ function fmtDateTime(v: string | null | undefined) {
 	width: min(460px, 92vw); max-height: 80vh; overflow-y: auto; background: var(--theme--background, #fff);
 	border: 1px solid var(--theme--border-color, #d1d9e6); border-radius: 14px; padding: 18px 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.35);
 }
-.changes-dialog h3 { margin: 0 0 10px; font-size: 15px; font-weight: 750; color: var(--theme--foreground, #1e293b); }
-.changes-list { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 0 0 14px; font-size: 12.5px; }
+.changes-dialog h3 { margin: 0 0 10px; font-size: var(--fs-lg, 15px); font-weight: 750; color: var(--theme--foreground, #1e293b); }
+.changes-list { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 0 0 14px; font-size: var(--fs-md, 13px); }
 .changes-list dt { font-weight: 700; color: var(--theme--foreground-subdued, #6b7684); }
 .changes-list dd { margin: 0; color: var(--theme--foreground, #1e293b); font-variant-numeric: tabular-nums; }
 .changes-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-.cd-no, .cd-yes { font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; padding: 6px 14px; border-radius: 8px; border: 1px solid transparent; }
+.cd-no, .cd-yes { font: inherit; font-size: var(--fs-md, 13px); font-weight: 700; cursor: pointer; padding: 6px 14px; border-radius: 8px; border: 1px solid transparent; }
 .cd-no { color: var(--theme--foreground-subdued, #6b7684); background: transparent; border-color: var(--theme--border-color, #d1d9e6); }
-.cd-yes { color: #fff; background: #0ea5e9; }
+.cd-yes { color: var(--fp-accent-ink); background: var(--fp-accent); }
 .cd-yes:disabled, .cd-no:disabled { opacity: 0.6; cursor: default; }
 </style>

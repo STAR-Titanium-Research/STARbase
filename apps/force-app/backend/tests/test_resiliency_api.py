@@ -190,6 +190,42 @@ def test_session_writes_manifest_on_start_and_done(tmp_path, monkeypatch):
         assert m["state"] == "done"
 
 
+def test_recovery_excludes_the_currently_active_recording(tmp_path, monkeypatch):
+    """Regression, reproduced live: RecordPage.vue calls /recovery/check on every mount, not just
+    app launch — a recording that is simply still running (no summary.json yet because it hasn't
+    finished) looks identical on disk to a crashed one and got listed as 'incomplete'. Discarding
+    it hit shutil.rmtree on a directory whose raw.d1raw was still open by the live acquisition
+    thread: PermissionError, swallowed in a background task, while the real recording kept running
+    untouched underneath — a confusing, seemingly-stuck delete with no error surfaced anywhere.
+    """
+    monkeypatch.setattr(main, "CAPTURES_ROOT", str(tmp_path))
+    with TestClient(fastapi_app) as client:
+        r = client.post("/record/start", json={"sample_rate": 2000, "duration_sec": 2.0})
+        assert r.status_code == 200, r.text
+        cid = r.json()["id"]
+
+        # Confirm it is genuinely still recording before asserting anything about it.
+        assert client.get("/record/status").json()["state"] == "recording"
+
+        check = client.get("/recovery/check").json()
+        assert cid not in {
+            s["id"] for s in check["incomplete"]
+        }, "an in-progress recording must never be offered as recoverable/discardable"
+
+        # Defense in depth: even a stale client-side list must not be able to act on it.
+        r_discard = client.post(f"/recovery/discard/{cid}")
+        assert r_discard.status_code == 400
+        r_recover = client.post(f"/recovery/recover/{cid}")
+        assert r_recover.status_code == 400
+
+        # And the recording is provably unaffected — let it finish normally.
+        for _ in range(100):
+            if client.get("/record/status").json()["state"] in ("done", "error"):
+                break
+            time.sleep(0.1)
+        assert client.get("/record/status").json()["state"] == "done"
+
+
 # ---- Backup config API ----
 
 

@@ -1,7 +1,9 @@
 # FAST: recipe linking + machine-sourced metadata
 
 **Date:** 2026-07-22
-**Status:** Design approved, ready for implementation planning
+**Status:** Implemented 2026-07-22 — migrations `20260722000100_fast_recipes.sql` and
+`20260723000102_fast_recipe_field_dedup.sql`, `scripts/fast_recipes.py`, and the FAST dashboard's
+recipe panel (`core/extensions/d1-fast-dashboard`).
 
 ## Context
 

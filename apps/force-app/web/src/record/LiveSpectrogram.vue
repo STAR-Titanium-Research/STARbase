@@ -19,6 +19,7 @@ const off = document.createElement('canvas');
 const offCtx = off.getContext('2d');
 
 const chan = computed(() => {
+	void props.client.fftSeq.value; // client.fft isn't reactive; see LiveFft.vue's chans
 	const avail = props.client.fft ? Object.keys(props.client.fft.spectra) : [];
 	const pick = (props.channels || []).find((c) => avail.includes(c));
 	return pick || props.client.fft?.axis || avail[0] || 'Fz';

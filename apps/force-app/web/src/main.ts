@@ -4,20 +4,25 @@ import { loadRuntimeConfig, getConfig } from './config';
 import { router } from './router';
 import { api, authHeaders, setUnauthorizedHandler } from './directusClient';
 import { authStore } from './authStore';
+import { startLookupSync } from './record/lookupCache';
+import { startSync } from './record/directusSync';
 import { installGlobalErrorReporting, reportClientError } from './clientLog';
 import App from './App.vue';
 import VIcon from './shims/VIcon.vue';
 import VProgressCircular from './shims/VProgressCircular.vue';
 import './theme'; // applies the persisted theme attribute before first paint
+// Bundled, not the Google Fonts CDN: the acquisition PC is often offline, and there every icon
+// rendered as its ligature name ("fiber_manual_record", "drag_indicator") and broke the layouts
+// around it. Same file byte-for-byte as the CDN's, so nothing changes visually online.
+import 'material-symbols/rounded.css';
 import './styles.css';
 
 async function bootstrap() {
 	// Honour an optional runtime /config.json before anything reads the service URLs.
 	await loadRuntimeConfig();
 
-	// Install the shared plotting package's host ONCE, here, at app start -- not only from
-	// StandaloneForceDashboard.vue/StandaloneDiagnosticsWorkbench.vue/DiagPanelWindow.vue (the
-	// three places that used to be the only callers). Every FrmCloud consumer (FrmPanel.vue on
+	// Install the shared plotting package's host ONCE, here, at app start. Every window (including
+	// the pop-outs) boots through this file, so no component installs its own. Every FrmCloud consumer (FrmPanel.vue on
 	// /record, LocalCaptureView.vue on /plot/local/:id) calls useForceHost() unconditionally in
 	// its own setup() -- with no host installed yet, that threw "no host installed" the instant a
 	// recording finished and FrmPanel swapped its v-if from LiveFrm to FrmCloud, UNLESS the user
@@ -26,8 +31,6 @@ async function bootstrap() {
 	// while visually verifying the buildCloud/path-model refactor
 	// (docs/superpowers/specs/2026-09-07-milling-path-models-and-polar-design.md) -- fixed here
 	// rather than left as a note, since it sat directly in the rendering path that work touches.
-	// Same shape as StandaloneForceDashboard.vue's call; installing it twice (there too) is
-	// harmless -- setForceHost just overwrites with equivalent values.
 	setForceHost({
 		api,
 		currentUser: () => authStore.currentUser.value,
@@ -77,6 +80,11 @@ async function bootstrap() {
 	});
 
 	app.mount('#app');
+
+	// Background work that has to run whichever page is open: push queued run records when the
+	// network returns, and keep the offline copy of the picker data fresh while connected.
+	startSync();
+	startLookupSync();
 }
 
 bootstrap();

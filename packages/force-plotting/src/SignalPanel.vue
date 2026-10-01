@@ -188,18 +188,18 @@ function onCropEnd(v: number) {
 .sig-head { display: flex; align-items: center; gap: 6px; padding: 2px 2px 4px; flex-wrap: wrap; }
 .sig-chips { display: flex; gap: 4px; }
 .sig-chip {
-	display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; font: inherit; font-size: 10.5px;
+	display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; font: inherit; font-size: var(--fs-xs, 11px);
 	font-weight: 650; color: var(--text-dim, #94a3b8); background: var(--bg-2, #111a33);
 	border: 1px solid var(--border, rgba(255,255,255,0.14)); border-radius: 999px; cursor: pointer;
 }
 .sig-chip.on { color: var(--accent-ink, #0b1020); background: var(--accent, #38bdf8); border-color: var(--accent, #38bdf8); }
-.sig-spin { font-size: 10px; opacity: 0.8; }
+.sig-spin { font-size: var(--fs-xs, 11px); opacity: 0.8; }
 .sig-allmode {
-	font: inherit; font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.03em;
+	font: inherit; font-size: var(--fs-xs, 11px); font-weight: 650; text-transform: uppercase; letter-spacing: 0.03em;
 	padding: 3px 8px; color: var(--text-dim, #94a3b8); background: none;
 	border: 1px solid var(--border, rgba(255,255,255,0.14)); border-radius: 999px; cursor: pointer;
 }
-.sig-allmode.on { color: #7dd3fc; border-color: #38bdf8; background: color-mix(in srgb, #38bdf8 14%, transparent); }
-.sig-err { margin: 0; font-size: 10.5px; color: var(--danger, #fca5a5); }
-.sig-loading { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-dim, #94a3b8); font-size: 12px; }
+.sig-allmode.on { color: var(--accent, #7dd3fc); border-color: var(--accent, #38bdf8); background: color-mix(in srgb, var(--accent, #38bdf8) 14%, transparent); }
+.sig-err { margin: 0; font-size: var(--fs-xs, 11px); color: var(--danger, #fca5a5); }
+.sig-loading { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-dim, #94a3b8); font-size: var(--fs-sm, 12px); }
 </style>

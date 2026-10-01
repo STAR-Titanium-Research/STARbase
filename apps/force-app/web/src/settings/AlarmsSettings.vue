@@ -85,20 +85,19 @@ async function setEnabled(key: ToggleKey, ev: Event) {
 			<label class="chk"><input type="checkbox" :checked="a.config.audioEnabled" @change="setEnabled('audioEnabled', $event)" /> Audible alert (looping tone)</label>
 		</div>
 
-		<button class="btn ghost" @click="a.test()">Test alarm</button>
+		<button class="btn" @click="a.test()">Test alarm</button>
 	</div>
 </template>
 
 <style scoped>
 .alarms { max-width: 620px; }
-h2 { margin: 0 0 4px; font-size: 16px; }
-.lead { margin: 0 0 18px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
+.lead { margin: 0 0 18px; font-size: var(--fs-md); color: var(--text-dim); line-height: 1.5; }
 .grp { margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
-.chk { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); cursor: pointer; margin-bottom: 8px; }
+.chk { display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); color: var(--text); cursor: pointer; margin-bottom: 8px; }
 .chk input { accent-color: var(--accent); }
-.thr { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); }
-.thr input { width: 90px; padding: 6px 9px; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; text-align: right; }
+.thr { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--text-dim); }
+.thr input { width: 90px; padding: 6px 9px; font-size: var(--fs-md); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; text-align: right; }
 .thr input:disabled { opacity: 0.5; }
-.hint { font-size: 11.5px; color: var(--text-dim); margin: 6px 0 0; line-height: 1.5; }
-.btn.ghost { padding: 9px 16px; font-size: 13px; font-weight: 600; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.hint { font-size: var(--fs-sm); color: var(--text-dim); margin: 6px 0 0; line-height: 1.5; }
 </style>

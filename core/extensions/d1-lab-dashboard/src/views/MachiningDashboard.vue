@@ -41,7 +41,7 @@
 				>
 					<span class="d1-primary">
 						{{ op.sample_id?.sample_code ?? '—' }}
-						<span class="d1-badge">{{ op.method_id?.method_name ?? op.operation_type }}</span>
+						<span class="d1-badge">{{ op.method_id?.method_name ?? '—' }}</span>
 					</span>
 					<span class="d1-secondary">
 						{{ op.insert_edge_id?.edge_code ?? '—' }} · {{ op.tool_id?.tool_code ?? '—' }}
@@ -79,7 +79,7 @@
 				<div class="d1-detail-section">
 					<h4>Parameters</h4>
 					<div class="d1-kv">
-						<span>Op Type</span><span>{{ selectedOp.operation_type ?? '—' }}</span>
+						<span>Op Type</span><span>{{ selectedOp.machining_operation_subtype ?? '—' }}</span>
 						<span>Date</span><span>{{ formatDate(selectedOp.operation_date) }}</span>
 						<span>Outcome</span><span>{{ selectedOp.outcome ?? '—' }}</span>
 					</div>

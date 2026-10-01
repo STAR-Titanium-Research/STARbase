@@ -27,11 +27,6 @@ const dim = props.xSmall ? 14 : props.small ? 18 : props.large ? 40 : 28;
 	border: 2px solid currentColor;
 	border-top-color: transparent;
 	opacity: 0.8;
-	animation: vpc-spin 0.8s linear infinite;
-}
-@keyframes vpc-spin {
-	to {
-		transform: rotate(360deg);
-	}
+	animation: spin 0.9s linear infinite; /* global keyframes (styles.css) */
 }
 </style>

@@ -6,8 +6,9 @@
 // actively picking a cut. Wired directly to the workspace's `replay`/`searchCuts`/`pickReplayCut`
 // rather than taking props: the option shape (ppr/diameters alongside label/cacheId) is specific
 // to this one picker, so there is nothing generic here worth sharing with LookupField.
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { useWorkspace, type ReplayOption } from '../workspace';
+import { useListNav } from '../../ui/listNav';
 
 const w = useWorkspace();
 const open = ref(false);
@@ -19,6 +20,8 @@ const open = ref(false);
 const reselecting = ref(false);
 const inputEl = ref<HTMLInputElement | null>(null);
 const rootEl = ref<HTMLDivElement | null>(null);
+const menuEl = ref<HTMLElement | null>(null);
+const menuId = useId();
 let t: any = null;
 
 function onDocPointerDown(e: PointerEvent) {
@@ -64,6 +67,9 @@ function change() {
 	requestAnimationFrame(() => inputEl.value?.focus());
 }
 function delayedBlurClose() { window.setTimeout(() => { open.value = false; }, 150); }
+const { active, move, pickActive, reset: resetNav } = useListNav(() => w.replay.options, pick, menuEl);
+watch(() => w.replay.options, resetNav);
+function onArrow(delta: 1 | -1) { open.value = true; move(delta); }
 </script>
 
 <template>
@@ -79,11 +85,15 @@ function delayedBlurClose() { window.setTimeout(() => { open.value = false; }, 1
 		<!-- Expanded: search box + dropdown, exactly while actively picking. -->
 		<div v-else class="box">
 			<input ref="inputEl" v-model="w.replay.query" placeholder="e.g. 10-AA-MF" :disabled="w.locked.value"
+				role="combobox" aria-autocomplete="list" :aria-expanded="open && !w.locked.value" :aria-controls="menuId"
+				:aria-activedescendant="open && active >= 0 ? `${menuId}-${active}` : undefined"
 				@input="onInput" @focus="focus" @keydown.esc.prevent="close"
-				@keydown.enter.prevent="w.replay.options[0] && pick(w.replay.options[0])" @blur="delayedBlurClose" />
-			<div v-if="open && !w.locked.value" class="menu">
+				@keydown.enter.prevent="pickActive()" @keydown.down.prevent="onArrow(1)" @keydown.up.prevent="onArrow(-1)"
+				@blur="delayedBlurClose" />
+			<div v-if="open && !w.locked.value" :id="menuId" ref="menuEl" class="menu" role="listbox">
 				<div v-if="w.replay.loading" class="mi hint">searching…</div>
-				<button v-for="o in w.replay.options" :key="o.cacheId" type="button" class="mi" @mousedown.prevent="pick(o)">
+				<button v-for="(o, i) in w.replay.options" :id="`${menuId}-${i}`" :key="o.cacheId" type="button" class="mi" :class="{ active: i === active }"
+					role="option" :aria-selected="i === active" tabindex="-1" @mousedown.prevent="pick(o)" @mouseenter="active = i">
 					{{ o.label }}
 				</button>
 				<div v-if="!w.replay.loading && w.replay.options.length === 0" class="mi hint">no matches</div>
@@ -94,19 +104,20 @@ function delayedBlurClose() { window.setTimeout(() => { open.value = false; }, 1
 
 <style scoped>
 .cutpicker { position: relative; margin-bottom: 8px; }
-.lbl { display: block; font-size: 11.5px; color: var(--text-dim); margin-bottom: 3px; }
+.lbl { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin-bottom: 3px; }
 .sub { font-weight: 400; }
 .box { display: flex; align-items: center; background: var(--bg-3); border: 1px solid var(--border); border-radius: 7px; }
-.box input { flex: 1; padding: 7px 9px; font-size: 13px; color: var(--text); background: transparent; border: none; outline: none; }
+.box input { flex: 1; padding: 7px 9px; font-size: var(--fs-md); color: var(--text); background: transparent; border: none; outline: none; }
+.box:focus-within { border-color: var(--accent); } /* the input sets outline:none; see LookupField */
 .box input:disabled { opacity: 0.55; }
 .menu { position: absolute; z-index: 30; left: 0; right: 0; top: 100%; margin-top: 2px; max-height: 200px; overflow: auto; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.45); }
-.mi { display: block; width: 100%; text-align: left; padding: 7px 10px; font-size: 12.5px; font-family: var(--mono); color: var(--text); background: transparent; border: none; cursor: pointer; }
-.mi:hover { background: var(--surface); }
+.mi { display: block; width: 100%; text-align: left; padding: 7px 10px; font-size: var(--fs-md); font-family: var(--mono); color: var(--text); background: transparent; border: none; cursor: pointer; }
+.mi:hover, .mi.active { background: var(--surface); }
 .mi.hint { color: var(--text-dim); font-family: inherit; cursor: default; }
-.chosen { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.4); border-radius: 7px; }
-.chosen-label { font-size: 12.5px; font-family: var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.change { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 4px 8px; font-size: 11px; color: var(--text-dim); background: transparent; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.chosen { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 7px; }
+.chosen-label { font-size: var(--fs-md); font-family: var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 4px 8px; font-size: var(--fs-xs); color: var(--text-dim); background: transparent; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
 .change:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
 .change:disabled { opacity: 0.5; cursor: not-allowed; }
-.change .material-symbols-rounded { font-size: 13px; }
+.change .material-symbols-rounded { font-size: var(--icon-xs); }
 </style>

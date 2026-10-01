@@ -143,9 +143,9 @@ test('rebuilt app: sim record -> stop -> save dialog shows staged progress and c
     await expect(window.locator('.scd-plot canvas')).toBeVisible();
 
     // Discard without saving — exercises the dialog's other primary exit path.
-    await window.locator('.scd-btn.discard').click();
+    await dialog.getByRole('button', { name: "Don't save" }).click();
     await expect(window.locator('.scd-confirm')).toBeVisible();
-    await window.locator('.scd-btn.danger').click();
+    await dialog.getByRole('button', { name: 'Yes, discard' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5_000 });
 
     expect(pageErrors).toEqual([]);

@@ -77,20 +77,20 @@ function onRow(id: number) {
 </template>
 
 <style scoped>
-.cluster-table { font-size: 11px; overflow: auto; }
+.cluster-table { font-size: var(--fs-xs, 11px); overflow: auto; }
 .ct-empty { padding: 10px 12px; color: var(--text-dim, #94a3b8); font-style: italic; }
-.ct-caption { margin: 0; padding: 4px 8px 3px; font-size: 10px; color: var(--text-dim, #94a3b8); font-style: italic; }
+.ct-caption { margin: 0; padding: 4px 8px 3px; font-size: var(--fs-xs, 11px); color: var(--text-dim, #94a3b8); font-style: italic; }
 .ct-caption strong { color: var(--text, #e5e7eb); font-style: normal; font-variant-numeric: tabular-nums; }
-.ct-hint { margin: 0; padding: 0 8px 5px; font-size: 10px; line-height: 1.4; color: #fcd34d; }
+.ct-hint { margin: 0; padding: 0 8px 5px; font-size: var(--fs-xs, 11px); line-height: 1.4; color: #fcd34d; }
 .ct-hint em { font-style: normal; font-weight: 650; }
 .ct-more {
-	display: block; width: 100%; font: inherit; font-size: 10px; cursor: pointer; padding: 4px 8px;
+	display: block; width: 100%; font: inherit; font-size: var(--fs-xs, 11px); cursor: pointer; padding: 4px 8px;
 	color: var(--text-dim, #94a3b8); background: none; border: none;
 	border-top: 1px solid var(--border, rgba(255,255,255,0.08));
 }
 .ct-more:hover { color: var(--accent, #38bdf8); }
 table { width: 100%; border-collapse: collapse; }
-th { text-align: left; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-dim, #94a3b8); padding: 4px 8px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.12)); }
+th { text-align: left; font-weight: 600; font-size: var(--fs-xs, 11px); text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-dim, #94a3b8); padding: 4px 8px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.12)); }
 td { padding: 4px 8px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.06)); color: var(--text, #e5e7eb); }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 tbody tr { cursor: pointer; }

@@ -13,11 +13,24 @@ export * from './frmExport';
 
 export { default as FrmCloud } from './FrmCloud.vue';
 export { default as FrmOctree } from './FrmOctree.vue';
-export { bucketEnvelope, buildSeriesEnvelope, cacheGet, cachePut, decimateCache, parseCache } from './liveCache';
+export { bucketEnvelope, buildSeriesEnvelope, cacheGet, cachePut, decimateCache, idxOfTime, parseCache } from './liveCache';
 export type { Cache, EnvSeries } from './liveCache';
-export { COLORMAPS, axisAutoLimits } from './liveCloud';
+export { COLORMAPS, COLORMAP_LABELS, colormapLabel, axisAutoLimits } from './liveCloud';
 export type { Axis, CloudChannel } from './liveCloud';
 export type { SpeedMode } from './liveCloud';
+export {
+	defaultScale, applyParams, normalize, denormalize, sampleScale, sampleScaleAt, buildScaleLUT,
+	lutKey, colorizeValues, withAutoRange, withOpenDisplay, OPEN_DISP,
+} from './colorScale';
+export { createScaleTexture, syncScaleTexture } from './scaleTexture';
+export { useAutoColorScale } from './autoColorScale';
+export type { AutoRange } from './autoColorScale';
+export type { ColorScale } from './colorScale';
+export { histogramFrom, createAccumulator } from './histogram';
+export type { Histogram, HistogramAccumulator } from './histogram';
+export { default as ColorBar } from './ColorBar.vue';
+export { default as ColorScaleEditor } from './ColorScaleEditor.vue';
+export { default as PlotModeFlyout } from './PlotModeFlyout.vue';
 export { buildPath, alignRhoToBuckets } from './path';
 export type {
 	PathKind, PathParams, PathWindow, PathBounds, PathResult,

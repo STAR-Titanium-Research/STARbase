@@ -47,7 +47,6 @@ const props = withDefaults(defineProps<{
 	diagPath: string;
 	analysisId: string;
 	diagMetrics: Record<string, unknown> | null;
-	totalPoints: number;
 	initialRecipe?: Recipe | null;
 	bakedRecipe?: Recipe | null;
 	/** true while the host is running a bake for this cut (owned by the page). */
@@ -572,7 +571,6 @@ onBeforeUnmount(() => {
 							:initial-channel="item.channel"
 							@polygon="onPolygon"
 							@update:channel="(c) => setChannel(item.i, c)"
-							@cluster-select="onClusterSelect"
 							@result="(r) => panelResults[item.i] = r"
 							@busy="(b) => panelBusy[item.i] = b"
 							@popout="onPopout"
@@ -641,31 +639,31 @@ onBeforeUnmount(() => {
 .diag-workbench { display: flex; flex-direction: column; min-height: 0; }
 .dw-gridwrap { position: relative; margin: 8px 10px 0; }
 .dw-gridwrap :deep(.vgl-layout) { margin: 0; }
-.dw-gridwrap :deep(.vgl-item--placeholder) { background: rgba(56, 189, 248, 0.18); border-radius: 12px; }
+.dw-gridwrap :deep(.vgl-item--placeholder) { background: color-mix(in srgb, var(--accent, #38bdf8) 18%, transparent); border-radius: 12px; }
 .dw-gridwrap :deep(.vgl-item__resizer) { z-index: 5; }
-.dw-error { padding: 8px 12px; color: var(--danger, #fca5a5); font-size: 12px; }
-.dw-loading { display: flex; align-items: center; justify-content: center; height: 100%; padding: 12px; text-align: center; color: var(--text-dim); font-size: 12px; }
-.dw-loading code { font-size: 11px; background: var(--bg-2, #111a33); padding: 1px 4px; border-radius: 4px; }
+.dw-error { padding: 8px 12px; color: var(--danger, #fca5a5); font-size: var(--fs-sm, 12px); }
+.dw-loading { display: flex; align-items: center; justify-content: center; height: 100%; padding: 12px; text-align: center; color: var(--text-dim); font-size: var(--fs-sm, 12px); }
+.dw-loading code { font-size: var(--fs-xs, 11px); background: var(--bg-2, #111a33); padding: 1px 4px; border-radius: 4px; }
 
 .dw-panel-controls { position: fixed; right: 20px; bottom: 56px; z-index: 25; display: flex; align-items: center; gap: 8px; }
 .dw-addwrap { position: relative; }
 .dw-ctl { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 9px; background: var(--bg-1, #0f172a); border: 1px solid var(--border, rgba(255,255,255,0.16)); color: var(--text-dim, #94a3b8); cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
 .dw-ctl:hover { color: var(--accent, #38bdf8); }
-.dw-ctl .material-symbols-rounded { font-size: 19px; }
+.dw-ctl .material-symbols-rounded { font-size: var(--icon-md, 18px); }
 .dw-addmenu { position: absolute; right: 0; bottom: calc(100% + 8px); min-width: 210px; background: var(--bg-1, #0f172a); border: 1px solid var(--border, rgba(255,255,255,0.16)); border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,0.5); overflow: hidden; }
-.dw-addmenu button { display: flex; align-items: center; gap: 8px; width: 100%; font: inherit; font-size: 12px; padding: 8px 11px; background: none; border: none; color: var(--text, #e5e7eb); cursor: pointer; text-align: left; }
+.dw-addmenu button { display: flex; align-items: center; gap: 8px; width: 100%; font: inherit; font-size: var(--fs-sm, 12px); padding: 8px 11px; background: none; border: none; color: var(--text, #e5e7eb); cursor: pointer; text-align: left; }
 .dw-addmenu button:hover:not(:disabled) { background: rgba(255,255,255,0.05); }
 .dw-addmenu button:disabled { color: var(--text-dim, #94a3b8); cursor: default; }
-.dw-addmenu .material-symbols-rounded { font-size: 16px; color: var(--text-dim, #94a3b8); }
-.dw-added { margin-left: auto; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-dim, #94a3b8); }
+.dw-addmenu .material-symbols-rounded { font-size: var(--icon-sm, 16px); color: var(--text-dim, #94a3b8); }
+.dw-added { margin-left: auto; font-size: var(--fs-xs, 11px); text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-dim, #94a3b8); }
 
-.dw-seg-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding: 0 8px 6px; font-size: 10px; color: var(--text-dim, #94a3b8); }
+.dw-seg-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding: 0 8px 6px; font-size: var(--fs-xs, 11px); color: var(--text-dim, #94a3b8); }
 .dw-seg-row { display: inline-flex; align-items: center; gap: 4px; }
 .dw-seg-swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .dw-layers-row { display: flex; align-items: flex-start; gap: 6px; }
 .dw-layers-row > :first-child { flex: 1; min-width: 0; }
 
-.dw-state { display: flex; align-items: center; gap: 7px; padding: 5px 12px; font-size: 11px; color: var(--text-dim, #94a3b8); border-top: 1px solid var(--border, rgba(255,255,255,0.1)); }
+.dw-state { display: flex; align-items: center; gap: 7px; padding: 5px 12px; font-size: var(--fs-xs, 11px); color: var(--text-dim, #94a3b8); border-top: 1px solid var(--border, rgba(255,255,255,0.1)); }
 .dw-state-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .dw-state.preview { color: #fcd34d; background: color-mix(in srgb, #d97706 12%, transparent); }
 .dw-state.busy { color: #7dd3fc; background: color-mix(in srgb, #38bdf8 12%, transparent); }

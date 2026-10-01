@@ -92,6 +92,57 @@ run_eq "every group-detail field carries the 'group' special" \
        AND (special IS NULL OR special NOT LIKE '%group%')" \
     "0"
 
+echo "== Sample geometry: round bar form migration =="
+# CI has no Directus bootstrap rows (directus_fields is an empty stub), so seed the pre-migration
+# state, apply the migration's up then down SQL, and assert both — all in a rolled-back transaction.
+MIG=db/migrations/20260930000114_round_bar_form.sql
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
+rb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+DELETE FROM directus_fields WHERE collection='physical_samples' AND field IN ('form','diameter_mm','length_mm');
+INSERT INTO directus_fields (collection, field, options, conditions) VALUES
+  ('physical_samples','form','{"choices":[]}',NULL),
+  ('physical_samples','diameter_mm',NULL,'[]'),
+  ('physical_samples','length_mm',NULL,'[]');
+INSERT INTO physical_samples (sample_code, form) VALUES ('TEST-RB-001','round_bar');
+$mig_up
+SELECT 'up_form_choice:' || count(*) FROM directus_fields
+  WHERE field='form' AND options::text LIKE '%"round_bar"%';
+SELECT 'up_dim_fields:' || count(*) FROM directus_fields
+  WHERE field IN ('diameter_mm','length_mm') AND conditions::text LIKE '%"round_bar"%';
+$mig_down
+SELECT 'down_fields:' || count(*) FROM directus_fields
+  WHERE collection='physical_samples' AND (options::text LIKE '%round_bar%' OR conditions::text LIKE '%round_bar%');
+SELECT 'down_form:' || form FROM physical_samples WHERE sample_code='TEST-RB-001';
+ROLLBACK;
+SQL
+)
+rb_check() { grep -qx "$1" <<<"$rb_out" && ok "$2" || bad "$2 (psql output: $rb_out)"; }
+rb_check "up_form_choice:1" "up: Geometry dropdown offers round_bar"
+rb_check "up_dim_fields:2" "up: diameter_mm and length_mm are shown for round_bar"
+rb_check "down_fields:0" "down: round_bar removed from dropdown and conditions"
+rb_check "down_form:cylinder" "down: round_bar samples are mapped to cylinder"
+
+echo "== Sample geometry: legacy forms are back-filled =="
+# Seed old-vocabulary samples, apply the back-fill's up SQL, assert, then ROLLBACK.
+BACKFILL=db/migrations/20260930000115_backfill_legacy_geometry_forms.sql
+bf_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$BACKFILL")
+bf_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO physical_samples (sample_code, form) VALUES
+  ('TEST-LG-001','cylindrical'), ('TEST-LG-002','Rectangular'), ('TEST-LG-003','disc'), ('TEST-LG-004','round_bar');
+$bf_up
+SELECT 'lg:' || sample_code || '=' || form FROM physical_samples WHERE sample_code LIKE 'TEST-LG-%' ORDER BY sample_code;
+ROLLBACK;
+SQL
+)
+bf_check() { grep -qx "$1" <<<"$bf_out" && ok "$2" || bad "$2 (psql output: $bf_out)"; }
+bf_check "lg:TEST-LG-001=cylinder" "cylindrical -> cylinder"
+bf_check "lg:TEST-LG-002=block" "Rectangular -> block (case-insensitive)"
+bf_check "lg:TEST-LG-003=disc" "current values are left alone (disc)"
+bf_check "lg:TEST-LG-004=round_bar" "current values are left alone (round_bar)"
+
 echo "== Campaigns layer (trials + testing campaigns) =="
 run "campaigns table exists" \
     "SELECT to_regclass('public.campaigns')::TEXT"

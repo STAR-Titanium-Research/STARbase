@@ -48,7 +48,7 @@ same auto-naming logic `OperationCode.vue` uses, before anything is written.
 
 | Piece | Where it runs | What it is |
 |---|---|---|
-| **Desktop shell** | acquisition PC | Electron app (`desktop/`) — spawns the sidecar, serves the UI over `app://force/`, auto-updates from GitHub Releases |
+| **Desktop shell** | acquisition PC | Electron app (`desktop/`) — spawns the sidecar, serves the UI over `app://force/`, auto-updates from the tailnet-only feed on `d1-server` |
 | **Recorder backend** | acquisition PC | FastAPI sidecar (`backend/`) — talks to the NI-DAQ hardware, writes `raw.d1raw` + finalises to `.mat` + live-cache, never containerised |
 | **Web UI** | served by the shell | Vue 3 SPA (`web/`) — also served by Caddy at `/app/` for browser use |
 | **Backup server** | `d1-server` | Receives streamed raw captures mid-recording (`backup-server/`) — a crash safety net, not the archive |
@@ -84,8 +84,10 @@ The backend sidecar is spawned from `apps/force-app/backend/.venv`. To run it al
 `.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8200`.
 
 **Installed builds** — every `force-app-v*` tag runs `.github/workflows/force-app-release.yml`,
-which packages the Windows installer and attaches it to a GitHub Release. Deployed rigs
-auto-update from that feed via `electron-updater`.
+which tests and packages the Windows installer and attaches it to a GitHub Release. A scheduled
+task on `d1-server` republishes each release to the Caddy-served feed at `/force-app-updates/`,
+which deployed rigs poll via `electron-updater` (see
+[`docs/force-app-operations.md`](../../docs/force-app-operations.md#deploying-the-auto-publish-task)).
 
 ## Tests
 
@@ -100,10 +102,12 @@ cd apps/force-app/backup-server && ..\backend\.venv\Scripts\pytest
 
 ## More
 
+- [The Force App wiki](../../docs/wiki/force-app/README.md) — the illustrated user guide: recording,
+  replay, the Plot dashboard, hardware setup, settings, recovery and troubleshooting
 - [`docs/force-app-operations.md`](../../docs/force-app-operations.md) — running, deploying and
   troubleshooting (the live-backup server, config locations, log access)
 - [`docs/force-file-standards.md`](../../docs/force-file-standards.md) — the capture `.mat` layouts
-- [`docs/adr/0010-force-app-extraction-and-electron-packaging.md`](../../docs/adr/) — why it is a
-  standalone Electron app
-- [`docs/superpowers/specs/`](../../docs/superpowers/specs/) — per-feature design docs, including
+- [`docs/adr/0010-force-app-extraction-and-electron-packaging.md`](../../docs/adr/0010-force-app-extraction-and-electron-packaging.md)
+  — why it is a standalone Electron app
+- [`docs/superpowers/`](../../docs/superpowers/README.md) — per-feature design docs, including
   `2026-09-07-milling-path-models-and-polar-design.md`

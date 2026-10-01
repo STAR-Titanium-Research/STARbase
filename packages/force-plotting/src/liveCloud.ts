@@ -16,7 +16,8 @@ export interface CloudParams {
 	window: PathWindow;
 	gridding: boolean;     // bin into a grid (mean colour per cell) vs raw scatter
 	gridN: number;         // grid resolution per axis when gridding
-	colormap: (x: number) => [number, number, number];
+	// Optional: when omitted `col` is not built (FrmCloud colours from `val` via colorizeValues).
+	colormap?: (x: number) => [number, number, number];
 	// Manual colour-scale limits (N). When either is null/undefined the limit is auto-computed
 	// from the data (prctile 1 / 99, mirroring process_force.m's canonical FRM colour scale).
 	cmin?: number | null;
@@ -28,11 +29,12 @@ export interface CloudParams {
 
 export interface Cloud {
 	pos: Float32Array;   // stride 3
-	col: Float32Array;   // stride 3, rgb 0..1
+	col?: Float32Array;  // stride 3, rgb 0..1 -- only when CloudParams.colormap is given
 	count: number;
 	bounds: PathBounds;
 	cmin: number; cmax: number;   // colour-scale limits actually applied (for the colorbar)
-	zv?: Float32Array;   // centred -0.5..0.5 force-as-height, only set for flat (z-constant) paths
+	val: Float32Array;   // the channel value behind each point's colour, so a host can recolour without a rebuild
+	zv?: Float32Array;  // centred -0.5..0.5 force-as-height, only set for flat (z-constant) paths
 }
 
 function percentile(sorted: Float32Array, p: number): number {
@@ -43,16 +45,29 @@ function percentile(sorted: Float32Array, p: number): number {
 // Auto colour limits (prctile 1/99) over the WHOLE cached channel array — NOT the current crop
 // and NOT decimation-dependent. Sampled to ~400k for speed. Returns [0, 1] for a missing/empty
 // channel array (e.g. axisAutoLimits(c, 'Mz') on a cache with no torque channel).
+// Memoised per (cache object, channel): the dashboard and each FRM pane ask for the same range.
+const autoLimitsMemo = new WeakMap<Cache, Map<CloudChannel, [number, number]>>();
 export function axisAutoLimits(c: Cache, channel: CloudChannel): [number, number] {
+	let byChannel = autoLimitsMemo.get(c);
+	if (!byChannel) { byChannel = new Map(); autoLimitsMemo.set(c, byChannel); }
+	let r = byChannel.get(channel);
+	if (!r) { r = computeAutoLimits(c, channel); byChannel.set(channel, r); }
+	return r;
+}
+function computeAutoLimits(c: Cache, channel: CloudChannel): [number, number] {
 	const a = (c as any)[channel] as Float32Array | undefined;
 	if (!a || a.length === 0) return [0, 1];
 	const stride = Math.max(1, Math.floor(a.length / 400_000));
 	const s = new Float32Array(Math.ceil(a.length / stride));
 	for (let i = 0, k = 0; i < a.length; i += stride, k++) s[k] = a[i];
 	s.sort();
-	const pc = (q: number) => s[Math.min(s.length - 1, Math.max(0, Math.round((q / 100) * (s.length - 1))))];
-	let lo = pc(1), hi = pc(99);
+	let lo = percentile(s, 1), hi = percentile(s, 99);
 	if (!(hi > lo)) { lo = s[0]; hi = s[s.length - 1]; if (!(hi > lo)) hi = lo + 1; }
+	// A channel carrying NaN sorts those to the END, so the fallback above can pick one up and
+	// then `hi = lo + 1` propagates it. Callers feed this straight into shader uniforms and into
+	// the colour-scale editor's axis, where a single NaN bound silently blanks the whole render
+	// (NaN fails every comparison), so never hand one back.
+	if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return [0, 1];
 	return [lo, hi];
 }
 
@@ -71,10 +86,13 @@ export function buildCloud(c: Cache, p: CloudParams): Cloud | null {
 
 	// colour scale: manual limits when supplied, else percentile-clamped like the app —
 	// prctile(DATA,1) / prctile(DATA,99), matching process_force.m's prctile(cc,[1 99]).
-	const sorted = fv.slice().sort();
-	let lo = Number.isFinite(p.cmin as number) ? (p.cmin as number) : percentile(sorted, 1);
-	let hi = Number.isFinite(p.cmax as number) ? (p.cmax as number) : percentile(sorted, 99);
-	if (!(hi > lo)) { lo = sorted[0]; hi = sorted[sorted.length - 1]; if (!(hi > lo)) hi = lo + 1; }
+	// The sort is O(N log N) on up to millions of points, so only pay for it when a limit is
+	// actually auto-derived (or the supplied pair is degenerate).
+	let sorted: Float32Array | null = null;
+	const getSorted = () => (sorted ??= fv.slice().sort());
+	let lo = Number.isFinite(p.cmin as number) ? (p.cmin as number) : percentile(getSorted(), 1);
+	let hi = Number.isFinite(p.cmax as number) ? (p.cmax as number) : percentile(getSorted(), 99);
+	if (!(hi > lo)) { const s = getSorted(); lo = s[0]; hi = s[s.length - 1]; if (!(hi > lo)) hi = lo + 1; }
 	const span = hi - lo || 1;
 
 	// Optional force-as-height overlay. Gated on the PATH'S OWN Z actually being flat
@@ -97,17 +115,17 @@ export function buildCloud(c: Cache, p: CloudParams): Cloud | null {
 
 	if (p.gridding) return gridCloud(path, fv, lo, span, p, zSrc, zlo, zspan);
 
-	const pos = new Float32Array(m * 3), col = new Float32Array(m * 3);
+	const pos = new Float32Array(m * 3);
+	const cm = p.colormap, col = cm ? new Float32Array(m * 3) : undefined;
 	let zv: Float32Array | undefined;
 	if (zSrc) zv = new Float32Array(m);
 	for (let k = 0; k < m; k++) {
 		pos[k * 3] = path.pos[k * 3]; pos[k * 3 + 1] = path.pos[k * 3 + 1];
 		pos[k * 3 + 2] = zSrc ? 0 : path.pos[k * 3 + 2];   // machine_xyz's real Z passes through when there's no overlay
-		const [rr, gg, bb] = p.colormap((fv[k] - lo) / span);
-		col[k * 3] = rr; col[k * 3 + 1] = gg; col[k * 3 + 2] = bb;
+		if (col) { const [rr, gg, bb] = cm!((fv[k] - lo) / span); col[k * 3] = rr; col[k * 3 + 1] = gg; col[k * 3 + 2] = bb; }
 		if (zv && zSrc) zv[k] = (zSrc[path.idx[k]] - zlo) / zspan - 0.5;
 	}
-	return { pos, col, count: m, bounds: path.bounds, cmin: lo, cmax: hi, zv };
+	return { pos, col, count: m, bounds: path.bounds, cmin: lo, cmax: hi, val: fv, zv };
 }
 
 // Bin the scatter into a gridN x gridN grid on X/Y; emit one point per non-empty cell at its
@@ -148,17 +166,17 @@ function gridCloud(
 		zsg.push(sumZ[idx2] / n); cg.push(sum[idx2] / n);
 	}
 	const n = cg.length;
-	const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+	const pos = new Float32Array(n * 3);
+	const cm = p.colormap, col = cm ? new Float32Array(n * 3) : undefined;
 	let zv: Float32Array | undefined;
 	if (zSrc) zv = new Float32Array(n);
 	for (let k = 0; k < n; k++) {
 		pos[k * 3] = xsg[k]; pos[k * 3 + 1] = ysg[k];
 		pos[k * 3 + 2] = zSrc ? 0 : zsg[k];   // real (unbinned-overlay) Z; zero when the overlay drives height instead
-		const [rr, gg, bb] = p.colormap((cg[k] - lo) / span);
-		col[k * 3] = rr; col[k * 3 + 1] = gg; col[k * 3 + 2] = bb;
+		if (col) { const [rr, gg, bb] = cm!((cg[k] - lo) / span); col[k * 3] = rr; col[k * 3 + 1] = gg; col[k * 3 + 2] = bb; }
 		if (zv) zv[k] = (zsg[k] - zlo) / zspan - 0.5;
 	}
-	return { pos, col, count: n, bounds: path.bounds, cmin: lo, cmax: lo + span, zv };
+	return { pos, col, count: n, bounds: path.bounds, cmin: lo, cmax: lo + span, val: Float32Array.from(cg), zv };
 }
 
 // ---- colormaps (0..1 -> rgb 0..1) ----
@@ -208,6 +226,37 @@ function inferno(x: number): [number, number, number] {
 }
 function grayscale(x: number): [number, number, number] { const v = clamp01(x); return [v, v, v]; }
 
+// CloudCompare's own scalar-field ramps, added for the colour-scale editor port. BGYR is
+// CloudCompare's default scale and the one the port's plan names explicitly; BWR is its diverging
+// scale, which is what the signed-force cases this feature is built around (symmetrical about
+// zero, symmetric log) actually want -- a sequential ramp buries the sign change those modes exist
+// to expose, since +50 N and -50 N land at opposite ends of the ramp with no visual "zero".
+const BGYR_ANCHORS: [number, number, number][] = [
+	[0, 0, 1],   // blue
+	[0, 1, 0],   // green
+	[1, 1, 0],   // yellow
+	[1, 0, 0],   // red
+];
+const BWR_ANCHORS: [number, number, number][] = [
+	[0, 0, 1],   // blue
+	[1, 1, 1],   // white (lands on zero under a symmetrical range)
+	[1, 0, 0],   // red
+];
+function bgyr(x: number): [number, number, number] { return lutLerp(BGYR_ANCHORS, x); }
+function bwr(x: number): [number, number, number] { return lutLerp(BWR_ANCHORS, x); }
+
 export const COLORMAPS: Record<string, (x: number) => [number, number, number]> = {
-	viridis, inferno, grayscale,
+	viridis, inferno, grayscale, bgyr, bwr,
 };
+
+// Display names for the keys above. Keys stay short and stable (they're persisted in
+// workspace.plot.colormap and passed in the live pop-out's querystring); this is purely what a
+// picker shows, so every consumer spells them the same way.
+export const COLORMAP_LABELS: Record<string, string> = {
+	viridis: 'Viridis',
+	inferno: 'Inferno',
+	grayscale: 'Greyscale',
+	bgyr: 'Blue → Green → Yellow → Red',
+	bwr: 'Blue → White → Red',
+};
+export function colormapLabel(key: string): string { return COLORMAP_LABELS[key] ?? key; }

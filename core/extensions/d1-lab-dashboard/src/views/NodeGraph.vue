@@ -163,6 +163,12 @@ onBeforeUnmount(() => {
 	cy?.destroy();
 });
 
+// Operations are labelled by their method ("CNC Turning", "FAST/SPS Sintering"): short enough for
+// a graph node, unlike the full operation code, which only the focal node shows.
+function opLabel(op: any): string {
+	return op.method_id?.method_name ?? 'op';
+}
+
 async function loadNeighbors(collection: string, id: string) {
 	if (!cy) return;
 	loading.value = true;
@@ -196,8 +202,8 @@ async function loadNeighbors(collection: string, id: string) {
 
 		if (collection === 'physical_samples') {
 			const [sample, ops, tests, genealogy] = await Promise.all([
-				getItem('physical_samples', id, { 'fields[]': ['sample_code', 'nickname', 'material_id.common_name', 'project_id.project_code'] }),
-				getItems('manufacturing_operations', { 'filter[sample_id][_eq]': id, 'fields[]': ['operation_id', 'operation_type', 'equipment_id.equipment_name'], limit: 20 }),
+				getItem('physical_samples', id, { 'fields[]': ['sample_code', 'nickname', 'material_id.material_id', 'material_id.common_name', 'project_id.project_id', 'project_id.project_code'] }),
+				getItems('manufacturing_operations', { 'filter[sample_id][_eq]': id, 'fields[]': ['operation_id', 'method_id.method_name', 'equipment_id.equipment_name'], limit: 20 }),
 				getItems('test_sessions', { 'filter[sample_id][_eq]': id, 'fields[]': ['session_id', 'test_type', 'status'], limit: 20 }),
 				getItems('sample_genealogy', { 'filter[child_sample_id][_eq]': id, 'fields[]': ['parent_sample_id.sample_code', 'parent_sample_id.sample_id'], limit: 10 }),
 			]);
@@ -213,7 +219,7 @@ async function loadNeighbors(collection: string, id: string) {
 				addEdge(collection, id, 'projects', sample.project_id.project_id, 'project');
 			}
 			for (const op of ops) {
-				addNode('manufacturing_operations', op.operation_id, op.operation_type ?? 'op');
+				addNode('manufacturing_operations', op.operation_id, opLabel(op));
 				addEdge(collection, id, 'manufacturing_operations', op.operation_id, 'machined');
 			}
 			for (const ts of tests) {
@@ -230,7 +236,7 @@ async function loadNeighbors(collection: string, id: string) {
 			const op = await getItem('manufacturing_operations', id, {
 				'fields[]': ['*', 'sample_id.sample_code', 'sample_id.sample_id', 'equipment_id.equipment_name', 'equipment_id.equipment_id', 'tool_id.tool_code', 'tool_id.tool_id', 'insert_edge_id.edge_code', 'insert_edge_id.edge_id', 'method_id.method_name', 'method_id.method_id'],
 			});
-			const label = `${op.operation_type ?? 'op'}`;
+			const label = op.pass_code || opLabel(op);
 			focalLabel.value = `Operation: ${label}`;
 			addNode(collection, id, label, true);
 			if (op.sample_id?.sample_id) {
@@ -252,7 +258,7 @@ async function loadNeighbors(collection: string, id: string) {
 		} else if (collection === 'equipment') {
 			const [eq, ops] = await Promise.all([
 				getItem('equipment', id, { 'fields[]': ['equipment_name', 'equipment_type', 'project_id.project_id', 'project_id.project_code'] }),
-				getItems('manufacturing_operations', { 'filter[equipment_id][_eq]': id, 'fields[]': ['operation_id', 'operation_type', 'sample_id.sample_code', 'sample_id.sample_id', 'project_id.project_id', 'project_id.project_code'], limit: 20 }),
+				getItems('manufacturing_operations', { 'filter[equipment_id][_eq]': id, 'fields[]': ['operation_id', 'method_id.method_name', 'sample_id.sample_code', 'sample_id.sample_id', 'project_id.project_id', 'project_id.project_code'], limit: 20 }),
 			]);
 			focalLabel.value = eq.equipment_name;
 			addNode(collection, id, `${eq.equipment_name}`, true);
@@ -264,7 +270,7 @@ async function loadNeighbors(collection: string, id: string) {
 			const samplesSeen = new Set<string>();
 			const projectsSeen = new Set<string>(eq.project_id?.project_id ? [eq.project_id.project_id] : []);
 			for (const op of ops) {
-				addNode('manufacturing_operations', op.operation_id, op.operation_type ?? 'op');
+				addNode('manufacturing_operations', op.operation_id, opLabel(op));
 				addEdge(collection, id, 'manufacturing_operations', op.operation_id, 'ran');
 				if (op.sample_id?.sample_id && !samplesSeen.has(op.sample_id.sample_id)) {
 					samplesSeen.add(op.sample_id.sample_id);
@@ -281,7 +287,7 @@ async function loadNeighbors(collection: string, id: string) {
 		} else if (collection === 'insert_edges') {
 			const [edge, ops] = await Promise.all([
 				getItem('insert_edges', id, { 'fields[]': ['edge_code', 'insert_id.insert_code', 'insert_id.insert_id'] }),
-				getItems('manufacturing_operations', { 'filter[insert_edge_id][_eq]': id, 'fields[]': ['operation_id', 'operation_type', 'sample_id.sample_code', 'sample_id.sample_id', 'project_id.project_id', 'project_id.project_code'], limit: 15 }),
+				getItems('manufacturing_operations', { 'filter[insert_edge_id][_eq]': id, 'fields[]': ['operation_id', 'method_id.method_name', 'sample_id.sample_code', 'sample_id.sample_id', 'project_id.project_id', 'project_id.project_code'], limit: 15 }),
 			]);
 			focalLabel.value = edge.edge_code;
 			addNode(collection, id, edge.edge_code, true);
@@ -291,7 +297,7 @@ async function loadNeighbors(collection: string, id: string) {
 			}
 			const projectsSeen = new Set<string>();
 			for (const op of ops) {
-				addNode('manufacturing_operations', op.operation_id, op.operation_type ?? 'op');
+				addNode('manufacturing_operations', op.operation_id, opLabel(op));
 				addEdge(collection, id, 'manufacturing_operations', op.operation_id, 'used in');
 				if (op.sample_id?.sample_id) {
 					addNode('physical_samples', op.sample_id.sample_id, op.sample_id.sample_code);
@@ -304,11 +310,11 @@ async function loadNeighbors(collection: string, id: string) {
 				}
 			}
 		} else if (collection === 'cutting_inserts') {
-			const insert = await getItem('cutting_inserts', id, { 'fields[]': ['insert_code', 'tool_box_id.box_code', 'tool_box_id.tool_box_id', 'insert_type_id.insert_type_code', 'insert_type_id.insert_type_id'] });
+			const insert = await getItem('cutting_inserts', id, { 'fields[]': ['insert_code', 'tool_box_id.tool_box_code', 'tool_box_id.tool_box_id', 'insert_type_id.type_code', 'insert_type_id.insert_type_id'] });
 			focalLabel.value = insert.insert_code;
 			addNode(collection, id, insert.insert_code, true);
 			if (insert.tool_box_id?.tool_box_id) {
-				addNode('tool_boxes', insert.tool_box_id.tool_box_id, insert.tool_box_id.box_code);
+				addNode('tool_boxes', insert.tool_box_id.tool_box_id, insert.tool_box_id.tool_box_code);
 				addEdge('tool_boxes', insert.tool_box_id.tool_box_id, collection, id, 'contains');
 			}
 			const edges = await getItems('insert_edges', { 'filter[insert_id][_eq]': id, 'fields[]': ['edge_id', 'edge_code', 'is_used'], limit: 20 });
@@ -318,11 +324,11 @@ async function loadNeighbors(collection: string, id: string) {
 			}
 		} else if (collection === 'tool_boxes') {
 			const [box, inserts] = await Promise.all([
-				getItem('tool_boxes', id, { 'fields[]': ['box_code', 'insert_type_id.insert_type_code', 'project_id.project_id', 'project_id.project_code'] }),
+				getItem('tool_boxes', id, { 'fields[]': ['tool_box_code', 'insert_type_id.type_code', 'project_id.project_id', 'project_id.project_code'] }),
 				getItems('cutting_inserts', { 'filter[tool_box_id][_eq]': id, 'fields[]': ['insert_id', 'insert_code'], limit: 20 }),
 			]);
-			focalLabel.value = box.box_code;
-			addNode(collection, id, box.box_code, true);
+			focalLabel.value = box.tool_box_code;
+			addNode(collection, id, box.tool_box_code, true);
 			if (box.project_id?.project_id) {
 				addNode('projects', box.project_id.project_id, box.project_id.project_code);
 				addEdge(collection, id, 'projects', box.project_id.project_id, 'assigned to');
@@ -369,21 +375,21 @@ async function handleSearch() {
 
 	const [samples, ops, tests, equipment, inserts, edges, boxes] = await Promise.all([
 		getItems('physical_samples', { 'filter[sample_code][_icontains]': q, 'fields[]': ['sample_id', 'sample_code'], limit: 5 }),
-		getItems('manufacturing_operations', { 'filter[operation_type][_icontains]': q, 'fields[]': ['operation_id', 'operation_type'], limit: 5 }),
+		getItems('manufacturing_operations', { 'filter[pass_code][_icontains]': q, 'fields[]': ['operation_id', 'pass_code'], limit: 5 }),
 		getItems('test_sessions', { 'filter[test_type][_icontains]': q, 'fields[]': ['session_id', 'test_type'], limit: 5 }),
 		getItems('equipment', { 'filter[equipment_name][_icontains]': q, 'fields[]': ['equipment_id', 'equipment_name'], limit: 5 }),
 		getItems('cutting_inserts', { 'filter[insert_code][_icontains]': q, 'fields[]': ['insert_id', 'insert_code'], limit: 5 }),
 		getItems('insert_edges', { 'filter[edge_code][_icontains]': q, 'fields[]': ['edge_id', 'edge_code'], limit: 5 }),
-		getItems('tool_boxes', { 'filter[box_code][_icontains]': q, 'fields[]': ['tool_box_id', 'box_code'], limit: 5 }),
+		getItems('tool_boxes', { 'filter[tool_box_code][_icontains]': q, 'fields[]': ['tool_box_id', 'tool_box_code'], limit: 5 }),
 	]);
 
 	for (const s of samples) results.push({ id: s.sample_id, collection: 'physical_samples', label: s.sample_code });
-	for (const o of ops) results.push({ id: o.operation_id, collection: 'manufacturing_operations', label: o.operation_type });
+	for (const o of ops) results.push({ id: o.operation_id, collection: 'manufacturing_operations', label: o.pass_code });
 	for (const t of tests) results.push({ id: t.session_id, collection: 'test_sessions', label: t.test_type });
 	for (const e of equipment) results.push({ id: e.equipment_id, collection: 'equipment', label: e.equipment_name });
 	for (const i of inserts) results.push({ id: i.insert_id, collection: 'cutting_inserts', label: i.insert_code });
 	for (const e of edges) results.push({ id: e.edge_id, collection: 'insert_edges', label: e.edge_code });
-	for (const b of boxes) results.push({ id: b.tool_box_id, collection: 'tool_boxes', label: b.box_code });
+	for (const b of boxes) results.push({ id: b.tool_box_id, collection: 'tool_boxes', label: b.tool_box_code });
 
 	searchResults.value = results;
 }

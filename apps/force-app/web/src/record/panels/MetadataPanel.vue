@@ -80,25 +80,25 @@ const textFields: { key: string; label: string }[] = [
 <style scoped>
 .meta { display: flex; flex-direction: column; }
 .cutid { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 8px 11px; border-radius: 9px;
-	background: rgba(56,189,248,0.09); border: 1px solid rgba(56,189,248,0.35); }
+	background: color-mix(in srgb, var(--accent) 9%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
 .cutid.empty { background: rgba(0,0,0,0.2); border-color: var(--border); }
-.cutid-lab { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
-.cutid-val { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--accent);
+.cutid-lab { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.01em; color: var(--text-dim); }
+.cutid-val { flex: 1; min-width: 0; font-family: var(--mono); font-size: var(--fs-md); font-weight: 600; color: var(--accent);
 	overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cutid.empty .cutid-val { color: var(--text-dim); font-weight: 400; font-family: inherit; font-size: 12px; }
-.cutid-use { flex: 0 0 auto; padding: 3px 9px; font-size: 11px; font-weight: 700; color: #0b1020; background: var(--accent);
+.cutid.empty .cutid-val { color: var(--text-dim); font-weight: 400; font-family: inherit; font-size: var(--fs-sm); }
+.cutid-use { flex: 0 0 auto; padding: 3px 9px; font-size: var(--fs-xs); font-weight: 700; color: #0b1020; background: var(--accent);
 	border: none; border-radius: 6px; cursor: pointer; }
 .cutid-use:disabled { opacity: 0.5; cursor: default; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
-label { display: block; font-size: 11.5px; color: var(--text-dim); margin-bottom: 8px; }
+label { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin-bottom: 8px; }
 label.wide { display: block; }
-input, textarea { display: block; width: 100%; margin-top: 3px; padding: 7px 9px; font-size: 13px; color: var(--text); background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 7px; outline: none; font-family: inherit; resize: vertical; }
+input, textarea { display: block; width: 100%; margin-top: 3px; padding: 7px 9px; font-size: var(--fs-md); color: var(--text); background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 7px; outline: none; font-family: inherit; resize: vertical; }
 input:focus, textarea:focus { border-color: var(--accent); }
 input:disabled, textarea:disabled { opacity: 0.55; }
-.disclose { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 4px; width: 100%; font-size: 12px; font-weight: 600; color: var(--accent); background: transparent; border: none; border-top: 1px solid var(--border); cursor: pointer; }
-.disclose .material-symbols-rounded { font-size: 18px; }
+.disclose { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 8px 4px; width: 100%; font-size: var(--fs-sm); font-weight: 600; color: var(--accent); background: transparent; border: none; border-top: 1px solid var(--border); cursor: pointer; }
+.disclose .material-symbols-rounded { font-size: var(--icon-md); }
 .advanced { padding-top: 6px; }
 .chks { display: flex; gap: 16px; margin-top: 4px; }
-.chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.chk { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--text); cursor: pointer; }
 .chk input { accent-color: var(--accent); }
 </style>

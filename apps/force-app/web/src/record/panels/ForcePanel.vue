@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// Force panel: rolling force bands (Force) or a live Welch spectrum (FFT). The `inst` prop carries
-// per-panel state — the selected channels (summed Fx/Fy/Fz and/or individual dyno sub-channels
-// Fx1…Fz4) + the mode — so duplicated panels are independent (e.g. one showing only Fz1 to isolate
-// a single sensor). Falls back to defaults (all summed axes, Force mode) for the detached window.
+// Force panel: rolling force bands (Time) or a live spectrum (FFT/Power/Spectrogram/Waterfall). The
+// `inst` prop carries per-panel state — the selected channels (summed Fx/Fy/Fz and/or individual
+// dyno sub-channels Fx1…Fz4) + the mode — so duplicated panels are independent (e.g. one showing
+// only Fz1 to isolate a single sensor). The mode is picked in the panel's header (RecordPage.vue);
+// without an `inst` this falls back to all summed axes in Time mode.
 import { computed, ref, watch } from 'vue';
 import { useWorkspace } from '../workspace';
 import LiveForcePlot from '../LiveForcePlot.vue';
@@ -11,27 +12,17 @@ import LiveFft from '../LiveFft.vue';
 import LiveSpectrogram from '../LiveSpectrogram.vue';
 import LiveWaterfall from '../LiveWaterfall.vue';
 import { SUB_NAMES } from '../liveClient';
-import { CH_COLOR } from '../types';
+import { channelColor } from '../types';
+import { theme } from '../../theme';
 import { appUrl } from '../../appUrl';
+import type { PlotMode } from '../plotModes';
 
-type PlotMode = 'time' | 'fft' | 'psd' | 'spectrogram' | 'waterfall';
-// #23: this tab was labeled "Force," but the channels actually plotted here aren't always force
-// (e.g. Tacho, or the Mz/X/Y/Z channels a milling recording adds) -- "Time" names what the mode
-// actually is (the raw time-domain view, vs. FFT/Power/Spectrogram/Waterfall), not what's on it.
-const MODES: { key: PlotMode; label: string }[] = [
-	{ key: 'time', label: 'Time' }, { key: 'fft', label: 'FFT' }, { key: 'psd', label: 'Power' },
-	{ key: 'spectrogram', label: 'Spectrogram' }, { key: 'waterfall', label: 'Waterfall' },
-];
 const props = defineProps<{ inst?: { mode?: PlotMode; channels?: string[]; axes?: string[] } }>();
 const w = useWorkspace();
 const SUMMED = ['Fx', 'Fy', 'Fz'];
 const ORDER = [...SUMMED, ...SUB_NAMES];
 
-const localMode = ref<PlotMode>('time');
-const mode = computed<PlotMode>({
-	get: () => props.inst?.mode ?? localMode.value,
-	set: (v) => { if (props.inst) props.inst.mode = v; else localMode.value = v; },
-});
+const mode = computed<PlotMode>(() => props.inst?.mode ?? 'time');
 // Spectrogram/waterfall render a single channel; hint the user which one is shown.
 const singleChannelMode = computed(() => mode.value === 'spectrogram' || mode.value === 'waterfall');
 const localCh = ref<string[]>([...SUMMED]);
@@ -71,21 +62,21 @@ function openLive() {
 
 <template>
 	<div class="force-panel">
+		<!-- Control order is deliberate and shared with the Plot dashboard's Signals panel:
+			 channels (Fx/Fy/Fz) -> sub-channel dropdown -> time window. On both, the plot mode is
+			 picked in the panel's header. -->
 		<div class="controls">
-			<div class="segmode">
-				<button v-for="m in MODES" :key="m.key" class="segbtn" :class="{ on: mode === m.key }" @click="mode = m.key">{{ m.label }}</button>
-			</div>
 			<div class="chips">
-				<button v-for="a in SUMMED" :key="a" class="chip" :style="selected.includes(a) ? { '--c': CH_COLOR[a] } : {}"
+				<button v-for="a in SUMMED" :key="a" class="chip-toggle" :style="selected.includes(a) ? { '--c': channelColor(a, theme) } : {}"
 					:class="{ on: selected.includes(a) }" @click="toggle(a)">{{ a }}</button>
 			</div>
 			<div class="subwrap">
-				<button class="chip sub-btn" :class="{ on: subCount > 0 }" @click.stop="subsOpen = !subsOpen">
+				<button class="chip-toggle sub-btn" :class="{ on: subCount > 0 }" @click.stop="subsOpen = !subsOpen">
 					Sub<span v-if="subCount"> · {{ subCount }}</span> <span class="material-symbols-rounded">expand_more</span>
 				</button>
 				<div v-if="subsOpen" class="subpop" @click.stop>
 					<button v-for="s in SUB_NAMES" :key="s" class="subopt" :class="{ on: selected.includes(s) }" @click="toggle(s)">
-						<span class="dot" :style="{ background: CH_COLOR[s] }"></span>{{ s }}
+						<span class="dot" :style="{ background: channelColor(s, theme) }"></span>{{ s }}
 						<span v-if="selected.includes(s)" class="material-symbols-rounded tick">check</span>
 					</button>
 				</div>
@@ -99,7 +90,7 @@ function openLive() {
 				<input type="number" min="1" max="300" v-model.number="w.plot.windowSec" class="tw-num" />
 				<span class="tw-unit">s</span>
 			</div>
-			<button class="popout" title="Pop out to a new window (second monitor) — open before Start"
+			<button class="btn icon sm popout" title="Pop out to a new window (second monitor) — open before Start"
 				@click="openLive()">
 				<span class="material-symbols-rounded">open_in_new</span>
 			</button>
@@ -121,32 +112,21 @@ function openLive() {
 <style scoped>
 .force-panel { display: flex; flex-direction: column; height: 100%; gap: 8px; }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.segmode { display: flex; gap: 4px; }
-.segbtn { padding: 5px 10px; font-size: 12px; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; cursor: pointer; }
-.segbtn.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; border-color: var(--accent); }
-.segbtn.fx.on { background: #f87171; border-color: #f87171; color: #2a0808; }
-.segbtn.fy.on { background: #4ade80; border-color: #4ade80; color: #05210f; }
-.segbtn.fz.on { background: #60a5fa; border-color: #60a5fa; color: #05173a; }
 .chips { display: flex; gap: 5px; }
-.chip { display: inline-flex; align-items: center; gap: 3px; padding: 4px 10px; font-size: 12px; font-weight: 600; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; cursor: pointer; }
-.chip.on { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
-.chip .material-symbols-rounded { font-size: 15px; }
 .subwrap { position: relative; }
-.sub-btn.on { --c: #38bdf8; color: #7dd3fc; border-color: #38bdf8; background: rgba(56,189,248,0.12); }
+.sub-btn.on { --c: var(--accent); }
 .subpop { position: absolute; top: 30px; left: 0; z-index: 40; min-width: 118px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 9px; padding: 4px; box-shadow: 0 12px 34px rgba(0,0,0,0.3); }
-.subopt { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 7px; font-size: 12px; color: var(--text); background: transparent; border: none; border-radius: 6px; cursor: pointer; text-align: left; }
+.subopt { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 7px; font-size: var(--fs-sm); color: var(--text); background: transparent; border: none; border-radius: 6px; cursor: pointer; text-align: left; }
 .subopt:hover { background: var(--surface-2); }
-.subopt.on { color: #fff; }
+.subopt.on { color: var(--text); font-weight: 600; }
 .subopt .dot { width: 9px; height: 9px; border-radius: 50%; }
-.subopt .tick { margin-left: auto; font-size: 14px; color: #4ade80; }
-.mono-hint { font-family: var(--mono); font-size: 11px; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; }
+.subopt .tick { margin-left: auto; font-size: var(--icon-xs); color: var(--ok); }
+.mono-hint { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; }
 .tw-row { display: flex; align-items: center; gap: 4px; }
 .tw-row input[type="range"] { width: 80px; accent-color: var(--accent); }
-.tw-num { width: 42px !important; text-align: center; padding: 3px 2px !important; font-size: 11px !important; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; color: var(--text); }
-.tw-unit { font-size: 11px; color: var(--text-dim); }
-.popout { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); cursor: pointer; }
-.popout:hover { color: var(--accent); background: var(--surface-2); }
-.popout .material-symbols-rounded { font-size: 15px; }
+.tw-num { width: 42px !important; text-align: center; padding: 3px 2px !important; font-size: var(--fs-xs) !important; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; color: var(--text); }
+.tw-unit { font-size: var(--fs-xs); color: var(--text-dim); }
+.popout { margin-left: auto; }
 .plot { flex: 1; min-height: 0; position: relative; }
 .plot > * { position: absolute; inset: 0; }
 </style>

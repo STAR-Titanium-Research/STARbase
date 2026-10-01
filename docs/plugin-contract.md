@@ -285,7 +285,7 @@ X-Actor-Identity: heavy-data-worker
 
 ```json
 {
-  "status": "error",
+  "status": "failed",
   "summary_stats": {
     "error": "D1F_HEADER_INVALID",
     "message": "Magic bytes mismatch: expected 44314f524345 got 504b0304"
@@ -297,8 +297,8 @@ X-Actor-Identity: heavy-data-worker
 ### 6.3 Status lifecycle
 
 ```
-pending_processing  →  processing  →  processed
-                                   ↘  error
+pending_processing  →  processing  →  processed  →  analysing  →  analysed
+                                   ↘  failed                   ↘  failed
 ```
 
 | Status | Set by | Meaning |
@@ -306,7 +306,14 @@ pending_processing  →  processing  →  processed
 | `pending_processing` | Client (on session create) | File uploaded; worker not yet started. |
 | `processing` | Worker (on job start) | Worker has dequeued the job and begun reading the file. |
 | `processed` | Worker (on success) | Statistics and plot URI written; session is complete. |
-| `error` | Worker (on failure) | Processing failed; `summary_stats` contains error detail. |
+| `analysing` | Analysis plugin (on job start) | A processed session is being analysed (e.g. `analysis-worker`'s FFT). |
+| `analysed` | Analysis plugin (on success) | Analysis results written into `summary_stats`. |
+| `failed` | Worker (on failure) | Processing or analysis failed; `summary_stats` contains error detail. |
+
+`registered` is the column default for a session with no file to process. The
+full set is enforced by a CHECK constraint (migration
+`20260619000013_status_vocabulary.sql`) and mirrored by each plugin's
+`app/lib/statuses.py`; a status outside it is rejected by the database.
 
 The worker sets `status = processing` as its first write-back, before streaming
 the file. This provides a visible signal that the job has been picked up.
@@ -395,7 +402,7 @@ On error the `summary_stats` object contains at minimum:
 
 ## 9. Error Handling
 
-- **The worker must PATCH `status = error`** if any stage of processing fails
+- **The worker must PATCH `status = failed`** if any stage of processing fails
   (header parse error, MinIO read error, arithmetic exception, etc.). Leaving
   the session in `processing` with no write-back is not acceptable; it leaves
   the record in an indeterminate state with no recovery path.
@@ -405,11 +412,11 @@ On error the `summary_stats` object contains at minimum:
   according to its configured retry policy.
 - **Partial uploads.** If the client aborts after `presign-upload` but before
   `complete-upload`, the multipart upload remains open in MinIO. The worker
-  should not encounter this (no session is registered), but operators should run
-  `make cleanup-minio-multipart` periodically to abort stale multipart uploads
-  (MinIO lifecycle policy is the preferred long-term solution).
+  should not encounter this (no session is registered), but operators should
+  abort stale multipart uploads periodically. There is no Makefile target for
+  it yet; a MinIO lifecycle policy is the preferred long-term solution.
 - **Missing file.** If the worker cannot find the object in MinIO (404), it must
-  PATCH `status = error` with `error = OBJECT_NOT_FOUND`. It must not retry
+  PATCH `status = failed` with `error = OBJECT_NOT_FOUND`. It must not retry
   indefinitely.
 
 ---

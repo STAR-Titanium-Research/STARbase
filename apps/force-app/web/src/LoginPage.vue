@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onBeforeUnmount, ref } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { authStore } from './authStore';
 import { getConfig } from './config';
@@ -11,6 +11,14 @@ const email = ref('');
 const password = ref('');
 const busy = ref(false);
 const error = ref<string | null>(null);
+
+// Hint only: whether the OS thinks we're online. The real test is whether Directus answers.
+const online = ref(navigator.onLine);
+const setOn = () => { online.value = true; };
+const setOff = () => { online.value = false; };
+window.addEventListener('online', setOn);
+window.addEventListener('offline', setOff);
+onBeforeUnmount(() => { window.removeEventListener('online', setOn); window.removeEventListener('offline', setOff); });
 
 async function submit() {
 	if (busy.value) return;
@@ -53,10 +61,16 @@ async function submit() {
 
 			<p v-if="error" class="error"><span class="material-symbols-rounded">error</span>{{ error }}</p>
 
-			<button class="submit" type="submit" :disabled="busy || !email || !password">
+			<button class="btn primary submit" type="submit" :disabled="busy || !email || !password">
 				<span v-if="busy" class="spinner"></span>
 				<span>{{ busy ? 'Signing in…' : 'Sign in' }}</span>
 			</button>
+
+			<p class="offline-hint" :class="{ active: !online }">
+				<span class="material-symbols-rounded">{{ online ? 'cloud_done' : 'cloud_off' }}</span>
+				<span v-if="online">Accounts that have signed in on this PC can also sign in with no connection.</span>
+				<span v-else>No connection: you can sign in with an account that has signed in on this PC before. Uploads wait until you reconnect.</span>
+			</p>
 
 			<p class="host">{{ getConfig().directusUrl || 'same-origin' }}</p>
 		</form>
@@ -95,6 +109,19 @@ async function submit() {
 	border-radius: var(--radius);
 	box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
 }
+/* The glass above is hard-coded dark navy, which the dark theme wants. On the light theme the text
+   switches to dark ink and landed on that same dark card — title, labels and fields nearly
+   invisible. Light glass there instead; the dark theme is untouched. */
+[data-theme='light'] .login-card {
+	background: rgba(255, 255, 255, 0.72);
+	box-shadow: 0 30px 80px rgba(15, 23, 42, 0.16);
+}
+[data-theme='light'] .brand-mark {
+	background: rgba(0, 0, 0, 0.04);
+}
+[data-theme='light'] .field input {
+	background: rgba(255, 255, 255, 0.85);
+}
 .brand {
 	display: flex;
 	align-items: center;
@@ -102,7 +129,7 @@ async function submit() {
 }
 .brand h1 {
 	margin: 0;
-	font-size: 22px;
+	font-size: var(--fs-2xl);
 	letter-spacing: -0.01em;
 }
 .brand-mark {
@@ -131,7 +158,7 @@ async function submit() {
 .subtitle {
 	margin: 14px 0 22px;
 	color: var(--text-dim);
-	font-size: 13.5px;
+	font-size: var(--fs-md);
 }
 .field {
 	display: block;
@@ -139,14 +166,14 @@ async function submit() {
 }
 .field span {
 	display: block;
-	font-size: 12px;
+	font-size: var(--fs-sm);
 	color: var(--text-dim);
 	margin-bottom: 6px;
 }
 .field input {
 	width: 100%;
 	padding: 11px 13px;
-	font-size: 14px;
+	font-size: var(--fs-lg);
 	color: var(--text);
 	background: rgba(0, 0, 0, 0.25);
 	border: 1px solid var(--border);
@@ -156,7 +183,7 @@ async function submit() {
 }
 .field input:focus {
 	border-color: var(--accent);
-	box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .error {
 	display: flex;
@@ -164,34 +191,19 @@ async function submit() {
 	gap: 6px;
 	margin: 4px 0 12px;
 	color: var(--danger);
-	font-size: 13px;
+	font-size: var(--fs-md);
 }
 .error .material-symbols-rounded {
-	font-size: 18px;
+	font-size: var(--icon-md);
 }
+/* The shared primary button, full width and a size up: the one action on this page. */
 .submit {
 	width: 100%;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
+	height: 42px;
 	gap: 9px;
 	margin-top: 6px;
-	padding: 12px;
-	font-size: 14.5px;
-	font-weight: 600;
-	color: var(--accent-ink);
-	background: var(--accent);
-	border: none;
+	font-size: var(--fs-lg);
 	border-radius: 10px;
-	cursor: pointer;
-	transition: filter 0.15s, opacity 0.15s;
-}
-.submit:hover:not(:disabled) {
-	filter: brightness(1.06);
-}
-.submit:disabled {
-	opacity: 0.55;
-	cursor: not-allowed;
 }
 .spinner {
 	width: 15px;
@@ -199,17 +211,18 @@ async function submit() {
 	border-radius: 50%;
 	border: 2px solid currentColor;
 	border-top-color: transparent;
-	animation: spin 0.7s linear infinite;
+	animation: spin 0.9s linear infinite; /* global keyframes (styles.css) */
 }
-@keyframes spin {
-	to {
-		transform: rotate(360deg);
-	}
+.offline-hint {
+	display: flex; gap: 8px; align-items: flex-start; margin: 14px 0 0;
+	font-size: var(--fs-sm); color: var(--text-dim);
 }
+.offline-hint.active { color: var(--warn); }
+.offline-hint .material-symbols-rounded { font-size: var(--icon-md); flex-shrink: 0; }
 .host {
 	margin: 18px 0 0;
 	text-align: center;
-	font-size: 11px;
+	font-size: var(--fs-xs);
 	color: var(--text-dim);
 	opacity: 0.7;
 	word-break: break-all;

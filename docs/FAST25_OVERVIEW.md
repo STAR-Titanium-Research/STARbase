@@ -57,14 +57,19 @@ Complete specifications for FAST 25 and FAST 250 sintering apparatus data archit
 
 ### Directus Integration
 
-7. **[FAST_DIRECTUS_INTEGRATION.md](./FAST_DIRECTUS_INTEGRATION.md)** — Database schema & UI changes
-   - How current Force Dashboard differs from FAST data
-   - New Directus collections for sintering operations
-   - Schema changes needed (measurements table, metadata, indices)
-   - Backend API changes (`/filter/sinter` endpoint)
-   - Frontend plugin updates (measurement selector, dynamic charting)
-   - Migration path and performance optimization
-   - 10-phase implementation checklist
+7. **[FAST_DIRECTUS_INTEGRATION.md](./FAST_DIRECTUS_INTEGRATION.md)** — a proposed separate
+   sintering schema, endpoint and dashboard. **Not built as written** — see its status note
+   and *How the FAST data path was actually built* below.
+
+How the FAST data path was actually built:
+
+| Piece | Where |
+|---|---|
+| Runs — one `manufacturing_operations` row each, with typed `sintering_*` columns | `scripts/import_fast25.py` (from `ECS_Analysis.MDB`), `scripts/import_fast250.py` (from the export run list) |
+| Traces — a normalised CSV per run in the Directus File Library, catalogued in `fast_run_data` | `scripts/fast_orchestrator.py`, decoding FAST 25 `.HIS` with `scripts/fast_his.py` |
+| Recipes — `fast_recipes`, linked from each run | [FAST recipes design](./superpowers/specs/2026-07-22-fast-recipes-and-metadata-design.md) |
+| Sheet-only QA fields from the Excel logs | `scripts/clear_fast_logs.py`, `scripts/apply_fast_qa_backup.py` |
+| UI | the `d1-fast-dashboard` Directus module |
 
 ---
 
@@ -225,6 +230,9 @@ System/Schemata/*.xsd               # Schema definitions
 ---
 
 ## 🛠️ Implementation Checklist
+
+> The original import plan, kept for reference; its boxes were never tracked. What was
+> built is summarised under *Directus Integration* above.
 
 ### Setup (All Machines)
 - [ ] Install Python libraries: `access-parser`, `pandas`, `openpyxl`, `numpy`, `defusedxml`

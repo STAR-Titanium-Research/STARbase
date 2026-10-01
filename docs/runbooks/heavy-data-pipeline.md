@@ -191,7 +191,7 @@ print("session registered:", session_id)
 
 After step 4, the Directus Flow fires automatically and the worker picks up the
 job. Poll `GET /items/test_sessions/{session_id}?fields=status,summary_stats`
-until `status` is `processed` or `error`.
+until `status` is `processed` or `failed`.
 
 ---
 

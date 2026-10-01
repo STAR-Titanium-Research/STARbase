@@ -15,7 +15,6 @@ const props = defineProps<{
 const AXES = ['Fx', 'Fy', 'Fz'] as const;
 type Axis = typeof AXES[number];
 const AXIS_COLOR: Record<Axis, string> = { Fx: '#dc2626', Fy: '#16a34a', Fz: '#2563eb' };
-const PEAK_FIELD: Record<Axis, string> = { Fx: 'peak_fx', Fy: 'peak_fy', Fz: 'peak_fz' };
 
 const host = useForceHost();
 const api = host.api;
@@ -229,19 +228,19 @@ function toggleAxis(a: Axis) {
 	color: var(--theme--foreground, #1e293b); }
 .wt-tools { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .wt-sep { width: 1px; height: 14px; background: var(--theme--border-color-subdued, #e7ebf0); margin: 0 2px; }
-.tbtn { padding: 2px 8px; font: inherit; font-size: 10.5px; font-weight: 700; cursor: pointer;
+.tbtn { padding: 2px 8px; font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700; cursor: pointer;
 	color: var(--theme--foreground-subdued, #6b7684); background: var(--theme--background, #fff);
 	border: 1px solid var(--theme--border-color-subdued, #e7ebf0); border-radius: 99px; }
 .tbtn.on { color: #fff; background: #334155; border-color: #334155; }
 .tbtn:disabled { opacity: 0.45; cursor: not-allowed; }
 .axchip.on { background: var(--theme--background, #fff); }
 .wt-svg { display: block; width: 100%; flex: 1 1 auto; min-height: 0; }
-.tick { fill: var(--theme--foreground-subdued, #94a3b8); font-size: 8px; font-variant-numeric: tabular-nums; }
-.axis-label { fill: var(--theme--foreground-subdued, #94a3b8); font-size: 8px; }
+.tick { fill: var(--theme--foreground-subdued, #94a3b8); font-size: var(--fs-xs, 11px); font-variant-numeric: tabular-nums; }
+.axis-label { fill: var(--theme--foreground-subdued, #94a3b8); font-size: var(--fs-xs, 11px); }
 .wt-empty { flex: 1; display: grid; place-items: center; text-align: center; padding: 12px;
-	color: var(--theme--foreground-subdued, #98a2b3); font-size: 12px; line-height: 1.5; }
+	color: var(--theme--foreground-subdued, #98a2b3); font-size: var(--fs-sm, 12px); line-height: 1.5; }
 .wt-empty.err { color: #dc2626; }
-.wt-note { margin: 0; font-size: 11px; color: var(--theme--foreground-subdued, #6b7684); }
+.wt-note { margin: 0; font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #6b7684); }
 .wt-note b.up { color: #b45309; }
 .wt-dim { opacity: 0.75; }
 </style>

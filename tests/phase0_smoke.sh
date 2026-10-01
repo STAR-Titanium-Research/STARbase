@@ -30,7 +30,7 @@ echo "== Required directories =="
 for d in db db/migrations db/seeds core plugins infra infra/backup \
          docs docs/adr docs/runbooks tests \
          plugins/heavy-data-worker plugins/llm-text-to-sql \
-         plugins/analysis plugins/equipment
+         plugins/plugin-template plugins/analysis-worker
 do
   [[ -d "$d" ]] && ok "$d/" || bad "missing dir: $d/"
 done

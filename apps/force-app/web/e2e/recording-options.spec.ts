@@ -137,7 +137,7 @@ test('Post-cut card actually expands to its fields (not empty)', async ({ page }
 	await expect(body).toBeHidden();
 });
 
-test('Acquisition toggles live in the footer, left of Start', async ({ page }) => {
+test('Acquisition toggles live in the footer, left of Start (above it when the column is narrow)', async ({ page }) => {
 	const segproc = page.locator('.segproc');
 	await expect(segproc).toBeVisible();
 	await expect(segproc.getByText('Cut start')).toBeVisible();
@@ -145,10 +145,23 @@ test('Acquisition toggles live in the footer, left of Start', async ({ page }) =
 	await expect(segproc.getByText('Converge')).toBeVisible();
 	const startBtn = page.locator('.btn.start');
 	await expect(startBtn).toBeVisible();
-	const segBox = await segproc.boundingBox();
-	const startBox = await startBtn.boundingBox();
-	expect(segBox && startBox).toBeTruthy();
-	if (segBox && startBox) expect(segBox.x).toBeLessThan(startBox.x);
+	const labelsClipped = () => segproc.locator('button').evaluateAll((bs) => bs.some((b) => b.scrollWidth > b.clientWidth + 1));
+
+	// Wide window: one row, the toggles to the left of Start.
+	await page.setViewportSize({ width: 1920, height: 1080 });
+	await expect.poll(async () => {
+		const [seg, start] = [await segproc.boundingBox(), await startBtn.boundingBox()];
+		return !!seg && !!start && seg.x + seg.width <= start.x && seg.y < start.y + start.height && start.y < seg.y + seg.height;
+	}).toBe(true);
+	expect(await labelsClipped()).toBe(false);
+
+	// Narrow column: Start wraps onto its own row below rather than squeezing the labels until they clip.
+	await page.setViewportSize({ width: 1366, height: 768 });
+	await expect.poll(async () => {
+		const [seg, start] = [await segproc.boundingBox(), await startBtn.boundingBox()];
+		return !!seg && !!start && seg.y + seg.height <= start.y;
+	}).toBe(true);
+	expect(await labelsClipped()).toBe(false);
 
 	// Toggle one and confirm it's a real, working control.
 	const cutStartBtn = segproc.getByRole('button', { name: /Cut start/ });

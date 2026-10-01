@@ -15,7 +15,7 @@
 <script setup lang="ts">
 import { inject, computed, ref, watch, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { buildGeometry, FORM_FIELDS } from './geometry';
+import { buildGeometry, FORM_FIELDS, isRoundBar, isUprightCylinder } from './geometry';
 
 // Directus 11 injects the live form values as a Vue Ref — read `.value`.
 const values = inject<Ref<Record<string, any>>>('values', ref({}));
@@ -49,7 +49,7 @@ const volumeMm3 = computed<number | null>(() => {
 	const d = num(v.value.diameter_mm), L = num(v.value.length_mm), t = num(v.value.thickness_mm), w = num(v.value.width_mm);
 	const g = (v.value.form || '').toLowerCase();
 	if (g.includes('disc')) return d && (t ?? L) ? Math.PI * (d / 2) ** 2 * (t ?? L)! : null;
-	if (/cylind|rod/.test(g)) return d && L ? Math.PI * (d / 2) ** 2 * L : null;
+	if (isUprightCylinder(g) || isRoundBar(g)) return d && L ? Math.PI * (d / 2) ** 2 * L : null;
 	if (w && L && t) return w * L * t; // box-like
 	return null;
 });
@@ -72,6 +72,7 @@ const massLabel = computed<string | null>(() => {
 .geo-canvas :deep(.gr) { fill: #93c5fd; stroke: #1d4ed8; stroke-width: 1.3; stroke-linejoin: round; }
 .geo-canvas :deep(.gh) { fill: #fff; stroke: #1d4ed8; stroke-width: 1.2; }
 .geo-canvas :deep(.gdim) { stroke: #475569; stroke-width: 0.8; }
+.geo-canvas :deep(.gext) { stroke: #94a3b8; stroke-width: 0.5; }
 .geo-canvas :deep(.gdimt) { fill: #334155; font-size: 8px; font-weight: 700; text-anchor: middle;
 	paint-order: stroke; stroke: #fff; stroke-width: 2.5px; }
 .geo-canvas :deep(.gsupport) { fill: #94a3b8; stroke: #475569; stroke-width: 0.6; }

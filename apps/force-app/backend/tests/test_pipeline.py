@@ -8,7 +8,7 @@ import numpy as np
 from scipy.io import loadmat
 
 from app import d1lc
-from app.config import SIGNAL_CHANNELS, RecordConfig
+from app.config import SIGNAL_CHANNELS, ExtraChannel, RecordConfig
 from app.session import RecordingSession
 from app.sources.sim import SimSource
 
@@ -119,6 +119,47 @@ def test_session_does_not_publish_a_tacho_fault_during_warm_up(tmp_path):
     assert not any(
         m.get("ok") is False for m in tacho_msgs
     ), f"a healthy, genuinely-pulsing tacho must never be reported as a confirmed fault: {tacho_msgs}"
+
+
+def test_session_streams_a_virtual_channel_live(tmp_path):
+    """A virtual channel's value must actually reach the wire during acquisition, not just get
+    computed at finalize time — it rides the D1LF frame's existing generic per-sub-channel
+    envelope (`nSub`), appended after the fixed 9, so no new frame version was needed for this.
+    """
+    from app.stream.frame import decode_frame
+
+    class FakeBroadcaster:
+        def __init__(self):
+            self.published: list = []
+
+        def publish(self, msg) -> None:
+            self.published.append(msg)
+
+    cfg = RecordConfig(
+        sample_rate=5000,
+        duration_sec=0.5,
+        extra_channels=[ExtraChannel(name="DoubleFx", source="virtual", formula="Fx * 2")],
+    )
+    bc = FakeBroadcaster()
+    sess = RecordingSession(cfg, str(tmp_path), SimSource(cfg, realtime=False), broadcaster=bc)
+    sess.start()
+    sess._thread.join(15)
+    sess.join_finalize(15)
+    assert sess.state == "done", sess.error
+
+    frames = [decode_frame(m) for m in bc.published if isinstance(m, bytes | bytearray)]
+    assert frames, "expected at least one live frame"
+    with_points = [f for f in frames if f["sub"].shape[0] > 0]
+    assert with_points, "expected at least one frame with sub-channel data"
+
+    # 8 dyno sub-channels + Tacho + 1 virtual = 10; the virtual channel is the LAST column, min/max
+    # pair at index 9 (0-indexed) of the (nTrace, nSub*2) block.
+    f = with_points[-1]
+    assert f["sub"].shape[1] == 10 * 2
+    doubled_min, doubled_max = f["sub"][:, 18], f["sub"][:, 19]
+    fx_min, fx_max = f["trace"][:, 1], f["trace"][:, 2]  # Fx's own min/max, columns 1-2 of trace
+    assert np.allclose(doubled_min, fx_min * 2, atol=1e-3)
+    assert np.allclose(doubled_max, fx_max * 2, atol=1e-3)
 
 
 def test_start_writes_raw_header(tmp_path):

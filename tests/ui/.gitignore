@@ -3,3 +3,4 @@ report/
 test-results/
 .auth/
 *.png
+artifacts/

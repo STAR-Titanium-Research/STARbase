@@ -8,8 +8,11 @@ import { buildSeriesEnvelope, parseCache, type Cache } from '@d1/force-plotting'
 import { searchSamples, searchOperators, searchEquipment, searchTools, searchInserts, searchEdges, getMethods, resolveMachiningMethodId, type LookupItem } from './directusLookups';
 import { logRun, syncStatus } from './directusSync';
 import { alarmController } from './alarms';
+import { recordingPrefs } from './recordingPrefs';
 import { labamp, type AutoRangeRec } from './labampApi';
 import { createPlaybackEngine } from './playback/engine';
+import { directusErrorMessage, fetchCaptureBlobs, numOrNull, uploadCaptureFiles } from './uploadCapture';
+import { OFFLINE_SESSION_UPLOAD_MESSAGE, currentRecorder, hasServerSession, ownerPersonId, recorderFields, resolveOwnerPersonId, syncerFields } from '../recorder';
 import { confirmAction } from '../ui/confirm';
 
 export type Axis = 'Fx' | 'Fy' | 'Fz';
@@ -76,8 +79,6 @@ export function createWorkspace() {
 	const cfg = reactive({
 		rpm: 1200, feed: 0.05, diam: 80, inner_diam: 0,
 		sample_rate: 25000, duration_sec: 8, ppr: 1,
-		drift_comp: false,   // optional drift compensation on the saved .mat/live_cache (raw stays raw)
-		frm_from_cut: false, // when true, live FRM waits for cut detection — off by default for immediate feedback
 	});
 	const meta = reactive<Record<string, string>>({
 		sample_name: 'SIM-CUT-001', sample_code: '', operation: '', op_type: '',
@@ -172,8 +173,10 @@ export function createWorkspace() {
 	// the amp is enough — the next nidaq run re-derives its N/V gains from the amp's ranges. Range
 	// changes only ever happen here, between cuts, never mid-cut (which the charge amp can't do
 	// cleanly). Clipped channels over-shoot upward and converge back down over the next pass or two.
-	const converge = reactive<{ enabled: boolean; busy: boolean; status: string | null; recs: AutoRangeRec[] | null }>(
-		{ enabled: false, busy: false, status: null, recs: null },
+	// `enabled` lives on recordingPrefs now (persisted, shared with Settings > Recording) — this
+	// only keeps the session-transient state of an actual converge run.
+	const converge = reactive<{ busy: boolean; status: string | null; recs: AutoRangeRec[] | null }>(
+		{ busy: false, status: null, recs: null },
 	);
 	async function convergeAfterCut() {
 		const cr = st.summary?.channels_ranging;
@@ -192,7 +195,7 @@ export function createWorkspace() {
 		} finally { converge.busy = false; }
 	}
 	// Fire once per completed cut (covers both manual stop and self-terminating duration runs).
-	watch(() => st.state, (s, prev) => { if (s === 'done' && prev !== 'done' && converge.enabled) convergeAfterCut(); });
+	watch(() => st.state, (s, prev) => { if (s === 'done' && prev !== 'done' && recordingPrefs.convergeEnabled) convergeAfterCut(); });
 
 	function onSelectSample(it: LookupItem) {
 		link.sampleLabel = it.label;
@@ -214,9 +217,39 @@ export function createWorkspace() {
 	const isDone = computed(() => st.state === 'done');
 	const locked = computed(() => isRecording.value || isFinalizing.value);
 
-	function metaObj(): Record<string, string> {
-		const o: Record<string, string> = {};
+	// The resolved Sample/Operator/Machine/Tool/Insert/Edge picks (`link.*`) and the folded
+	// machining-details section (`machining.*`) used to reach Directus ONLY via buildRunPayload()'s
+	// top-level columns, written at upload time — never persisted into extra_metadata at all. A
+	// capture that wasn't uploaded immediately (saved locally, or a sample was never picked so
+	// Upload wasn't even available) lost every resolved ID the moment the session ended: only the
+	// free-text labels in `meta` survived to summary.json. `link_`-prefixed to stay unambiguous
+	// against `meta.insert`/`meta.edge_id`, which are older free-text fields with a different
+	// meaning. Found and fixed while building the capture metadata editor, which needs these to
+	// pre-fill a correction with real lookups instead of starting from a blank search every time.
+	// Who recorded this cut and when, fixed at Start (not at upload time -- the upload may happen
+	// days later, offline first, under a different sign-in; see recorder.ts). Replay has no Start,
+	// so it stamps lazily from whoever is signed in when the record is built.
+	const recordedStamp = ref<Record<string, string | boolean> | null>(null);
+
+	function metaObj(): Record<string, string | boolean> {
+		const o: Record<string, string | boolean> = {};
 		for (const [k, v] of Object.entries(meta)) if (v && v.trim()) o[k] = v.trim();
+		const links: [string, string][] = [
+			['link_sample_id', link.sampleId], ['link_sample_label', link.sampleLabel],
+			['link_operator_id', link.operatorId], ['link_operator_label', link.operatorLabel],
+			['link_equipment_id', link.equipmentId], ['link_equipment_label', link.equipmentLabel],
+			['link_insert_id', link.insertId], ['link_insert_label', link.insertLabel],
+			['link_edge_id', link.edgeId], ['link_edge_label', link.edgeLabel],
+			['link_tool_id', link.toolId], ['link_tool_label', link.toolLabel],
+		];
+		for (const [k, v] of links) if (v) o[k] = v;
+		for (const k of ['axial_doc', 'radial_doc', 'cutting_length', 'coolant_pressure', 'operation_sequence', 'chips_ref'] as const) {
+			const v = machining[k];
+			if (v && v.trim()) o[k] = v.trim();
+		}
+		o.new_edge = machining.new_edge;
+		o.chips_collected = machining.chips_collected;
+		Object.assign(o, recordedStamp.value ?? recorderFields(currentRecorder(), new Date().toISOString()));
 		return o;
 	}
 
@@ -288,12 +321,33 @@ export function createWorkspace() {
 		return true;
 	}
 
+	// The toggles that used to live directly on `cfg` — now sourced from recordingPrefs
+	// (Settings > Recording) so a value set there actually reaches the next recording.
+	//
+	// `sample_name` belongs here too, even though it isn't a recordingPrefs field: RecordConfig has
+	// its own top-level `sample_name` (Pydantic default "SIM-CUT"), completely separate from
+	// `extra_metadata.sample_name`, and neither client.start() call ever sent it — every REAL
+	// recording silently archived as "SIM-CUT" in summary.json/capture.mat regardless of which
+	// sample was actually picked, with the true name buried one level down in extra_metadata. Found
+	// while building the capture metadata editor, which needs a single correct source of truth for
+	// this field to correct.
+	function recordingPrefsPayload() {
+		return {
+			frm_from_cut: recordingPrefs.frmFromCut,
+			drift_comp: recordingPrefs.driftComp,
+			cut_detect_force: recordingPrefs.cutDetectForce,
+			sample_name: meta.sample_name || undefined,
+		};
+	}
+
 	async function start() {
 		if (busy.value) return;
 		if (!(await checkAlarmsBeforeStart())) return;
 		if (!(await checkDiskBeforeStart())) return;
 		busy.value = true; errMsg.value = null; finishedCache.value = null;
 		alarms.reset();
+		// Replay is played, not recorded (it throws below): it keeps stamping lazily in metaObj().
+		if (source.value !== 'replay') recordedStamp.value = recorderFields(currentRecorder(), new Date().toISOString());
 		try {
 			if (source.value === 'replay') {
 				// Playback is driven by the transport bar, not by start(). Reaching here means a
@@ -307,9 +361,9 @@ export function createWorkspace() {
 					await labamp.setMode('MEASURE');
 				} catch { /* amp unreachable — proceed anyway, gains were set at last range */ }
 				const chans = nidaqChannels.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
-				await client.start({ ...cfg, source: 'nidaq', nidaq_channels: chans, axis: plot.frmAxis, extra_metadata: metaObj() } as any);
+				await client.start({ ...cfg, ...recordingPrefsPayload(), source: 'nidaq', nidaq_channels: chans, axis: plot.frmAxis, extra_metadata: metaObj() } as any);
 			} else {
-				await client.start({ ...cfg, source: 'sim', axis: plot.frmAxis, extra_metadata: metaObj() } as any);
+				await client.start({ ...cfg, ...recordingPrefsPayload(), source: 'sim', axis: plot.frmAxis, extra_metadata: metaObj() } as any);
 			}
 		} catch (e: any) {
 			const m = e?.message || 'failed to start';
@@ -366,6 +420,7 @@ export function createWorkspace() {
 
 	function newRun() {
 		client.reset(); finishedCache.value = null; errMsg.value = null; logged.value = false; saveOpen.value = false;
+		recordedStamp.value = null;
 		editCutStartSec.value = null; editCutEndSec.value = null;
 	}
 
@@ -374,29 +429,12 @@ export function createWorkspace() {
 	// uploads the capture.mat + live_cache.bin as Directus files and links them into a new
 	// machining_force_analysis row. Throws on failure (offline, validation, etc) so the save dialog
 	// can surface the error and let the user retry or fall back to a local-only save.
-	// Directus surfaces validation/constraint failures as a JSON body with an `errors[]` array; a
-	// bare axios error.message is just "Request failed with status code 500" and tells the user
-	// nothing actionable. Pull the real reason out when it's there.
-	function directusErrorMessage(e: any): string {
-		const status = e?.response?.status;
-		const detail = e?.response?.data?.errors?.[0]?.message;
-		if (status && detail) return `${status}: ${detail}`;
-		if (status) return `${status}: ${e?.message || 'request failed'}`;
-		return e?.message || String(e);
-	}
-	async function uploadFile(blob: Blob, filename: string): Promise<string> {
-		const fd = new FormData();
-		fd.append('file', blob, filename);
-		try {
-			const res = await api.post('/files', fd);
-			return res.data.data.id;
-		} catch (e: any) {
-			throw new Error(`file upload (${filename}) failed - ${directusErrorMessage(e)}`);
-		}
-	}
 	async function logRunSync(): Promise<string> {
+		if (!hasServerSession()) throw new Error(OFFLINE_SESSION_UPLOAD_MESSAGE);
 		const payload = buildRunPayload();
 		payload.method_id = await resolveMachiningMethodId(meta.op_type).catch(() => null);
+		payload.recorded_metadata = { ...payload.recorded_metadata, ...syncerFields() };
+		if (payload.owner_person_id == null) payload.owner_person_id = await resolveOwnerPersonId(payload.recorded_metadata);
 		let res;
 		try {
 			res = await api.post('/items/manufacturing_operations', payload);
@@ -417,22 +455,22 @@ export function createWorkspace() {
 	async function uploadCutToDatabase(): Promise<string> {
 		const id = st.captureId;
 		if (!id) throw new Error('no capture id for this recording');
-		const opId = await logRunSync();
-		// A capture too large for the MAT5 format (see finalize.py's MAT_MAX_BYTES) never had a
-		// capture.mat written at all -- fetching it would 404 and abort the whole save. Everything
-		// else (series, peaks, live_cache) still comes from the decimated cache, so the analysis
-		// record is still fully usable without it; directus_files_id just goes in as null.
-		const matWritten = st.summary?.mat_written !== false;
-		const [matBlob, cacheBlob] = await Promise.all([
-			matWritten
-				? fetch(client.matUrl(id)).then((r) => { if (!r.ok) throw new Error('capture.mat fetch failed'); return r.blob(); })
-				: Promise.resolve(null),
-			fetch(client.cacheUrl(id)).then((r) => { if (!r.ok) throw new Error('live_cache.bin fetch failed'); return r.blob(); }),
-		]);
-		const [matFileId, cacheFileId] = await Promise.all([
-			matBlob ? uploadFile(matBlob, `${id}.mat`) : Promise.resolve(null),
-			uploadFile(cacheBlob, `${id}_live_cache.bin`),
-		]);
+		// The local blob reads don't need the logged run, so they start alongside it; the uploads
+		// still wait for it, so a failed insert never leaves orphaned files -- and cancels the reads.
+		// Without a capture.mat (over MAT_MAX_BYTES) the analysis record is still fully usable from
+		// the decimated cache; directus_files_id just goes in as null.
+		const blobReads = new AbortController();
+		const blobs = fetchCaptureBlobs(client.matUrl(id), client.cacheUrl(id), st.summary?.mat_written !== false, blobReads.signal);
+		blobs.catch(() => {});   // surfaced by the await below, not as an unhandled rejection
+		let opId: string;
+		try {
+			opId = await logRunSync();
+		} catch (e) {
+			blobReads.abort();
+			throw e;
+		}
+		const [matBlob, cacheBlob] = await blobs;
+		const [matFileId, cacheFileId] = await uploadCaptureFiles(id, matBlob, cacheBlob);
 		const peaks = st.summary?.peaks;
 		// ForceDashboard's chart reads its plot data from `series` (a JSONB min/max envelope), not
 		// from live_cache_file — without this, upload "succeeds" (peaks/FRM all show up fine) but
@@ -479,14 +517,16 @@ export function createWorkspace() {
 	// Build + enqueue the manufacturing_operations run record (offline-queued in directusSync).
 	function buildRunPayload(): Record<string, any> {
 		const surface = Math.PI * cfg.diam * cfg.rpm / 1000;
-		const num = (s: string) => (s !== '' && Number.isFinite(Number(s)) ? Number(s) : null);
+		const extra = metaObj();
 		return {
+			// The recorder's person, not whoever's token performs the write (see recorder.ts).
+			owner_person_id: ownerPersonId(extra) ?? null,
 			sample_id: link.sampleId || null,
 			operator_person_id: link.operatorId || null,
 			equipment_id: link.equipmentId || null,
 			insert_edge_id: link.edgeId || null,
 			tool_id: link.toolId || null,
-			operation_date: new Date().toISOString(),
+			operation_date: String(extra.recorded_at || new Date().toISOString()),
 			process_category: 'machining',
 			machining_operation_subtype: meta.op_type || null,
 			machining_spindle_speed_rpm: cfg.rpm,
@@ -500,16 +540,16 @@ export function createWorkspace() {
 			capture_frequency_khz: Number((cfg.sample_rate / 1000).toFixed(3)),
 			outcome_notes: meta.notes || null,
 			// Machining details (folded Directus form section)
-			machining_axial_depth_of_cut_mm: num(machining.axial_doc),
-			machining_radial_depth_of_cut_mm: num(machining.radial_doc),
-			machining_cutting_length_mm: num(machining.cutting_length),
-			machining_coolant_pressure_bar: num(machining.coolant_pressure),
-			operation_sequence: num(machining.operation_sequence),
+			machining_axial_depth_of_cut_mm: numOrNull(machining.axial_doc),
+			machining_radial_depth_of_cut_mm: numOrNull(machining.radial_doc),
+			machining_cutting_length_mm: numOrNull(machining.cutting_length),
+			machining_coolant_pressure_bar: numOrNull(machining.coolant_pressure),
+			operation_sequence: numOrNull(machining.operation_sequence),
 			machining_new_edge: machining.new_edge,
 			machining_chips_collected: machining.chips_collected,
 			machining_chips_ref_code: machining.chips_ref || null,
 			recorded_metadata: {
-				...metaObj(), capture_id: st.captureId, peaks: st.summary?.peaks,
+				...extra, capture_id: st.captureId, peaks: st.summary?.peaks,
 				source: source.value, replay_of: source.value === 'replay' ? replay.label : undefined,
 			},
 		};
@@ -720,6 +760,9 @@ export function createWorkspace() {
 		alarms,
 		// converging between-cuts auto-range
 		converge, convergeAfterCut,
+		// Recording-behaviour toggles (Detect cut start / Drift compensation / Converging auto-range)
+		// and the cut-detect threshold — persisted, shared with Settings > Recording.
+		recordingPrefs,
 	};
 }
 

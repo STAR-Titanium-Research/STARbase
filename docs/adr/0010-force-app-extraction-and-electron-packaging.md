@@ -1,6 +1,8 @@
 # ADR-0010 — Force-App: Shared Plotting Package, Repo Extraction, Electron Packaging
 
-- **Status:** Proposed
+- **Status:** Accepted for steps 0, 1, 3 and 4, which are implemented; step 2
+  (extracting force-app into its own repository) has not been executed — see
+  *Implementation status*
 - **Date:** 2026-08-09 (revised same day — see *Revision note*)
 - **Deciders:** Maintainer + Claude (architecture discussion)
 
@@ -97,10 +99,23 @@ loses the research database outright. (The `backup` code under
 `apps/force-app/` is the live *capture* backup server — unrelated to database
 backups.)
 
+## Implementation status (2026-09-26)
+
+| Step | State |
+|---|---|
+| 0. Back up the production database | Done 2026-08-09 — `scripts/backup-postgres.ps1`, nightly |
+| 1. Shared `packages/force-plotting` workspace | Done 2026-08-10 |
+| 2. Extract `apps/force-app` into its own repository | Not executed — force-app still lives in this monorepo |
+| 3. PyInstaller sidecar | Done 2026-08-11 — `apps/force-app/backend/force-app-backend.spec`, spawned by `apps/force-app/desktop` |
+| 4. Auto-update | Done 2026-08-11 — `force-app-v*` tags build a release (`.github/workflows/force-app-release.yml`), published to the Caddy-served feed by a scheduled task on `d1-server` since 2026-09-11 (see [`docs/force-app-operations.md`](../force-app-operations.md)) |
+
+Steps 3 and 4 were brought forward ahead of step 2 — see alternative (g).
+
 ## Decision
 
-Agreed for planning purposes; not yet executed. The sequence below is ordered
-so that the irreversible step comes last and each step makes the next cheaper.
+Agreed for planning purposes on 2026-08-09; see *Implementation status* for
+what has since been executed. The sequence below is ordered so that the
+irreversible step comes last and each step makes the next cheaper.
 
 ### 0. Back up the production database (prerequisite) — **DONE 2026-08-09**
 
@@ -397,8 +412,10 @@ PyInstaller sidecar does not already achieve at far lower cost.
   revisited together.**
 
   See `docs/superpowers/specs/2026-08-10-force-app-desktop-packaging-design.md`.
-- CI setup for the force-app repo (none exists today), including how the
-  Directus extension bundle is published and consumed.
+- CI setup for the force-app repo, including how the Directus extension bundle
+  is published and consumed. Until the split, the monorepo's
+  `.github/workflows/force-app-release.yml` builds, tests and packages the
+  installer on `force-app-v*` tags.
 - ~~**Off-host copy of the backups.**~~ **Resolved 2026-08-10.** Each nightly
   run now copies both artifacts to
   `\\uosfstore.shef.ac.uk\shared\star_group1\Shared\D1-Server-Backup\postgres`

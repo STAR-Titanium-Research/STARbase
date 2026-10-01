@@ -27,3 +27,10 @@ export function formatBandwidth(bytesPerSec: number): string {
 	if (kb < 1000) return kb.toFixed(1) + ' KB/s';
 	return (bytesPerSec / 1e6).toFixed(2) + ' MB/s';
 }
+
+/** A size given in MB, shown as KB, MB or GB. */
+export function formatMegabytes(mb: number): string {
+	if (mb < 1) return `${(mb * 1000).toFixed(0)} KB`;
+	if (mb < 1000) return `${mb.toFixed(1)} MB`;
+	return `${(mb / 1000).toFixed(2)} GB`;
+}

@@ -1,5 +1,8 @@
 # FRM interpolated-grid octree — design
 
+**Status:** implemented July 2026 — `scripts/matlab/frm_grid_*.m` and migrations
+`20260713000094_frm_grid_octree.sql` and `20260722000098_grid_pregen.sql`.
+
 ## Motivation
 
 The FRM "Full-res" view builds a Potree octree from the **raw measured spiral** of force

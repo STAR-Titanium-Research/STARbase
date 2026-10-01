@@ -184,7 +184,7 @@ const problems = computed(() => counts.value.WARNING + counts.value.ERROR + coun
 		</div>
 
 		<div class="toolbar2">
-			<button class="btn ghost" :disabled="loading" @click="load">
+			<button class="btn" :disabled="loading" @click="load">
 				<span class="material-symbols-rounded">{{ loading ? 'hourglass_top' : 'refresh' }}</span>
 				{{ loading ? 'Loading…' : 'Refresh' }}
 			</button>
@@ -195,11 +195,11 @@ const problems = computed(() => counts.value.WARNING + counts.value.ERROR + coun
 				{{ counts.ERROR + counts.CRITICAL }} error<span v-if="counts.ERROR + counts.CRITICAL !== 1">s</span>,
 				{{ counts.WARNING }} warning<span v-if="counts.WARNING !== 1">s</span>
 			</span>
-			<button class="btn ghost" :disabled="!records.length" @click="copyAll">
+			<button class="btn" :disabled="!records.length" @click="copyAll">
 				<span class="material-symbols-rounded">{{ copied ? 'check' : 'content_copy' }}</span>
 				{{ copied ? 'Copied' : 'Copy' }}
 			</button>
-			<button class="btn ghost" :disabled="!available" @click="downloadLog">
+			<button class="btn" :disabled="!available" @click="downloadLog">
 				<span class="material-symbols-rounded">download</span>Download
 			</button>
 		</div>
@@ -226,16 +226,16 @@ const problems = computed(() => counts.value.WARNING + counts.value.ERROR + coun
 /* Wider than the other panes: log lines are long and wrapping them hurts scanability. The parent
    .body caps at 1000px, so this fills whatever the tab rail leaves. */
 .logs { max-width: 100%; }
-h2 { margin: 0 0 4px; font-size: 16px; }
-.lead { margin: 0 0 18px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
-.hint { font-size: 11.5px; color: var(--text-dim); }
+h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
+.lead { margin: 0 0 18px; font-size: var(--fs-md); color: var(--text-dim); line-height: 1.5; }
+.hint { font-size: var(--fs-sm); color: var(--text-dim); }
 .path { margin-top: 8px; font-family: var(--mono); word-break: break-all; }
-.err { color: var(--danger); font-size: 12px; }
-.warnbox { display: flex; gap: 10px; padding: 11px 13px; margin-bottom: 14px; font-size: 12.5px;
-	background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.3); border-radius: 9px; }
-.warnbox .material-symbols-rounded { font-size: 20px; color: #fbbf24; }
+.err { color: var(--danger); font-size: var(--fs-sm); }
+.warnbox { display: flex; gap: 10px; padding: 11px 13px; margin-bottom: 14px; font-size: var(--fs-md);
+	background: color-mix(in srgb, var(--warn) 8%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); border-radius: 9px; }
+.warnbox .material-symbols-rounded { font-size: var(--icon-lg); color: var(--warn); }
 .warnbox div { display: flex; flex-direction: column; gap: 2px; }
-.warnbox b { font-size: 13px; }
+.warnbox b { font-size: var(--fs-md); }
 .warnbox span { color: var(--text-dim); line-height: 1.45; }
 
 .toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
@@ -243,37 +243,32 @@ h2 { margin: 0 0 4px; font-size: 16px; }
 .toolbar .tb-field.grow { flex: 1 1 160px; }
 .toolbar .tb-field input, .toolbar .tb-field select { max-width: 100%; }
 .toolbar2 { display: flex; gap: 10px; align-items: center; margin: 10px 0 8px; flex-wrap: wrap; }
-.tb-field { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--text-dim); margin: 0; }
+.tb-field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }
 .tb-field.grow { flex: 1; min-width: 160px; }
-.tb-field select, .tb-field input { padding: 7px 9px; font: inherit; font-size: 13px; color: var(--text);
+.tb-field select, .tb-field input { padding: 7px 9px; font: inherit; font-size: var(--fs-md); color: var(--text);
 	background: var(--surface); border: 1px solid var(--border); border-radius: 7px; outline: none; }
 .tb-field select:focus, .tb-field input:focus { border-color: var(--accent); }
 .spacer { flex: 1; }
-.chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.chk { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--text); cursor: pointer; }
 .chk input { accent-color: var(--accent); }
-.tally { font-size: 11.5px; font-weight: 600; color: #fbbf24; }
+.tally { font-size: var(--fs-sm); font-weight: 600; color: var(--warn); }
 .tally.err { color: var(--danger); }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; font-size: 12.5px;
-	font-weight: 600; border: none; border-radius: 8px; cursor: pointer; }
-.btn .material-symbols-rounded { font-size: 16px; }
-.btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .loglist { height: 52vh; min-height: 260px; overflow: auto; background: var(--bg);
 	border: 1px solid var(--border); border-radius: 9px; padding: 6px 0; }
 /* #45: the ts column was 62px, too narrow for "HH:MM:SS,mmm" (12 monospace chars, ~83px) at this
    font-size -- it overflowed into the level column next to it, reading as an overlap. */
 .row { display: grid; grid-template-columns: 86px 62px 78px 1fr; gap: 8px; padding: 2px 11px;
-	font-family: var(--mono); font-size: 11.5px; line-height: 1.5; align-items: baseline; }
+	font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.5; align-items: baseline; }
 .row:hover { background: var(--surface); }
 .ts { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .lvl { font-weight: 700; color: var(--text-dim); }
 .mod { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; }
 /* Preserve newlines so a captured traceback stays readable as a block. */
 .msg { color: var(--text); white-space: pre-wrap; word-break: break-word; }
-.row.warning .lvl { color: #fbbf24; }
+.row.warning .lvl { color: var(--warn); }
 .row.error .lvl, .row.critical .lvl { color: var(--danger); }
 .row.error, .row.critical { background: rgba(239,68,68,0.06); }
 .row.debug { opacity: 0.65; }
-.empty { padding: 26px; text-align: center; color: var(--text-dim); font-size: 12.5px; }
+.empty { padding: 26px; text-align: center; color: var(--text-dim); font-size: var(--fs-md); }
 </style>

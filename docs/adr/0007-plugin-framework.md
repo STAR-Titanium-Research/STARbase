@@ -26,7 +26,7 @@ Without a template, each new plugin author must reconstruct the boilerplate
 from scratch: Dockerfile, gunicorn entrypoint, rq worker invocation, health
 endpoint, error write-back, environment variable wiring. Reconstructed
 boilerplate drifts — silently and in ways that violate the contract (e.g.,
-blocking inside the webhook handler, not writing `status = error` on failure,
+blocking inside the webhook handler, not writing `status = failed` on failure,
 hard-coding the bucket name). Drift is invisible until it causes an operational
 incident.
 
@@ -58,7 +58,7 @@ The template ships with:
   `app/lib/minio_client.py` that new plugins copy verbatim unless they need
   additional collections or storage operations.
 - An `app/jobs/example_job.py` that shows the error-handling envelope
-  (try/finally with `status = error` write-back) and the streaming read
+  (try/finally with `status = failed` write-back) and the streaming read
   pattern. Plugin authors delete this file and replace it with their job.
 - A `tests/` directory with a minimal conftest and a smoke test for the health
   endpoint.
@@ -68,7 +68,7 @@ enforced through code review against the template:
 
 1. The webhook handler returns HTTP 202 before any processing. Synchronous
    processing inside the webhook handler is forbidden.
-2. The worker writes `status = error` with a machine-readable code and a
+2. The worker writes `status = failed` with a machine-readable code and a
    human-readable message if any processing stage fails. Leaving a session in
    `processing` without a terminal write-back is not acceptable.
 
@@ -163,5 +163,6 @@ a much stronger guarantee than a document.
   Flow configuration
 - `plugins/plugin-template/` — canonical scaffold (this decision)
 - `plugins/heavy-data-worker/` — Phase 4 reference implementation
-- `plugins/analysis/` — Phase 5 analysis plugin (template in use)
-- `plugins/equipment/` — Phase 5 equipment integration plugin (template in use)
+- `plugins/analysis-worker/` — Phase 5 analysis plugin (template in use)
+- An equipment-integration plugin was planned for Phase 5 but never built as a
+  container: rig acquisition lives in the force-app recorder instead (ADR-0010)

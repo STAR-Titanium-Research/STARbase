@@ -137,6 +137,29 @@ def test_scan_incomplete_includes_manifest(tmp_path):
     assert incomplete[0]["manifest"]["config"]["sample_name"] == "CRASHED-CUT"
 
 
+def test_scan_incomplete_excludes_the_currently_active_session(tmp_path):
+    """A session with no summary.json is not necessarily crashed — it might just still be
+    recording. Reproduces a fault found live: RecordPage.vue calls /recovery/check on EVERY mount,
+    not just app launch, so navigating to Record while your own recording is still running listed
+    it as 'incomplete'. Discarding it then hit shutil.rmtree on a directory whose raw.d1raw was
+    still open by the live acquisition thread — PermissionError, in a background task the client
+    never learns about, while the real recording kept running untouched. The exact log sequence
+    that exposed this: 'recovery_discard: background delete failed for id=X' immediately followed
+    by 'record_stop: id=X state=recording' for the SAME id.
+    """
+    active_sid = "20240101-120000-active1"
+    _make_raw(str(tmp_path / active_sid), n_rows=200)
+    crashed_sid = "20240101-120000-crash01"
+    _make_raw(str(tmp_path / crashed_sid), n_rows=200)
+
+    incomplete = scan_incomplete(str(tmp_path), exclude_id=active_sid)
+    ids = {s["id"] for s in incomplete}
+    assert crashed_sid in ids, "a genuinely crashed sibling must still be reported"
+    assert (
+        active_sid not in ids
+    ), "the currently-recording session must never be offered as recoverable"
+
+
 def test_scan_incomplete_multiple_sessions(tmp_path):
     for i in range(3):
         sid = f"20240101-12000{i}-ses00{i}"

@@ -14,6 +14,7 @@ const materials = ref<Opt[]>([]);
 const methods = ref<Opt[]>([]);
 const projects = ref<Opt[]>([]);
 const forms = FORMS;
+const formLabel = computed(() => forms.find((x) => x.value === f.value.form)?.text ?? f.value.form);
 
 const f = ref<Record<string, any>>({
 	material_id: null,
@@ -184,7 +185,7 @@ onMounted(async () => {
 					</div>
 					<div class="geo-live" v-if="geoSvg">
 						<div class="geo-canvas" v-html="geoSvg"></div>
-						<div class="geo-cap">{{ f.form }}<span v-if="geoDimsText"> · {{ geoDimsText }}</span></div>
+						<div class="geo-cap">{{ formLabel }}<span v-if="geoDimsText"> · {{ geoDimsText }}</span></div>
 					</div>
 					<div class="geo-live empty" v-else><span>Pick a form to preview the shape</span></div>
 				</section>
@@ -231,6 +232,7 @@ export default { inheritAttrs: false };
 .geo-canvas :deep(.gr) { fill: #93c5fd; stroke: #1d4ed8; stroke-width: 1.3; stroke-linejoin: round; }
 .geo-canvas :deep(.gh) { fill: #fff; stroke: #1d4ed8; stroke-width: 1.2; }
 .geo-canvas :deep(.gdim) { stroke: #475569; stroke-width: 0.8; }
+.geo-canvas :deep(.gext) { stroke: #94a3b8; stroke-width: 0.5; }
 .geo-canvas :deep(.gdimt) { fill: #334155; font-size: 8px; font-weight: 700; text-anchor: middle;
 	font-family: -apple-system, "Segoe UI", Roboto, sans-serif; paint-order: stroke; stroke: #fff; stroke-width: 2.5px; }
 .geo-canvas :deep(.gsupport) { fill: #94a3b8; stroke: #475569; stroke-width: 0.6; }

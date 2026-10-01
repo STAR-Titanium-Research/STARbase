@@ -67,35 +67,35 @@ onMounted(async () => {
 
 		<template v-if="isElectron">
 			<div class="actions">
-				<button class="btn ghost" :disabled="!packaged || checking || updateStatus.state === 'checking' || updateStatus.state === 'downloading'"
+				<button class="btn" :disabled="!packaged || checking || updateStatus.state === 'checking' || updateStatus.state === 'downloading'"
 					@click="checkForUpdates">
 					<span class="material-symbols-rounded">refresh</span>
 					{{ updateStatus.state === 'checking' ? 'Checking…' : 'Check for updates' }}
 				</button>
-				<button v-if="updateStatus.state === 'downloaded'" class="btn save" :disabled="installing" @click="installNow">
+				<button v-if="updateStatus.state === 'downloaded'" class="btn primary" :disabled="installing" @click="installNow">
 					<span class="material-symbols-rounded">restart_alt</span> Restart and install
 				</button>
 			</div>
 			<p v-if="updateStatus.state === 'not-available'" class="hint">
-				<span class="material-symbols-rounded" style="font-size:14px">check_circle</span> You're up to date.
+				<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">check_circle</span> You're up to date.
 			</p>
 			<p v-else-if="updateStatus.state === 'available'" class="hint">
-				<span class="material-symbols-rounded" style="font-size:14px">cloud_download</span> Version {{ updateStatus.version }} found — downloading…
+				<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">cloud_download</span> Version {{ updateStatus.version }} found — downloading…
 			</p>
 			<p v-else-if="updateStatus.state === 'downloading'" class="hint">
-				<span class="material-symbols-rounded" style="font-size:14px">cloud_download</span> Downloading… {{ updateStatus.percent }}%
+				<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">cloud_download</span> Downloading… {{ updateStatus.percent }}%
 			</p>
 			<p v-else-if="updateStatus.state === 'downloaded'" class="hint">
-				<span class="material-symbols-rounded" style="font-size:14px">task_alt</span> Version {{ updateStatus.version }} downloaded — install whenever you're ready.
+				<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">task_alt</span> Version {{ updateStatus.version }} downloaded — install whenever you're ready.
 			</p>
 			<p v-else-if="updateStatus.state === 'installing'" class="hint">
-				<span class="material-symbols-rounded" style="font-size:14px">hourglass_top</span> Installing version {{ updateStatus.version }}…
+				<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">hourglass_top</span> Installing version {{ updateStatus.version }}…
 			</p>
 			<p v-else-if="updateStatus.state === 'error'" class="err">
-				<span class="material-symbols-rounded" style="font-size:14px">error</span> {{ updateStatus.message }}
+				<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">error</span> {{ updateStatus.message }}
 			</p>
 			<p v-if="installNotice" class="err">
-				<span class="material-symbols-rounded" style="font-size:14px">error</span> {{ installNotice }}
+				<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">error</span> {{ installNotice }}
 			</p>
 		</template>
 
@@ -137,40 +137,34 @@ onMounted(async () => {
 
 <style scoped>
 .about { max-width: 640px; }
-h2 { margin: 0 0 4px; font-size: 16px; }
+h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
 .mt { margin-top: 32px; }
-.lead { margin: 0 0 12px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
-.hint { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); margin-top: 4px; }
-.err { display: flex; align-items: center; gap: 5px; color: var(--danger); font-size: 12px; margin: 4px 0 0; }
+.lead { margin: 0 0 12px; font-size: var(--fs-md); color: var(--text-dim); line-height: 1.5; }
+.hint { display: flex; align-items: center; gap: 5px; font-size: var(--fs-sm); color: var(--text-dim); margin-top: 4px; }
+.err { display: flex; align-items: center; gap: 5px; color: var(--danger); font-size: var(--fs-sm); margin: 4px 0 0; }
 .actions { display: flex; gap: 10px; margin-top: 6px; }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; font-size: 13px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; }
-.btn.save { background: var(--accent); color: var(--accent-ink); }
-.btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .install-overlay { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
 	align-items: center; justify-content: center; gap: 6px; background: rgba(0,0,0,0.75); color: #fff; text-align: center; }
-.install-overlay .material-symbols-rounded { font-size: 34px; margin-bottom: 6px; }
-.install-overlay p { margin: 0; font-size: 14px; }
-.install-overlay .sub { font-size: 12px; color: rgba(255,255,255,0.7); }
-.spin { animation: spin 1.1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.install-overlay .material-symbols-rounded { font-size: var(--icon-2xl); margin-bottom: 6px; }
+.install-overlay p { margin: 0; font-size: var(--fs-lg); }
+.install-overlay .sub { font-size: var(--fs-sm); color: rgba(255,255,255,0.7); }
 
 .changelog-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
 .changelog-head h2 { margin: 0; }
-.releases-link { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--accent); text-decoration: none; }
+.releases-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--accent); text-decoration: none; }
 .releases-link:hover { text-decoration: underline; }
-.releases-link .material-symbols-rounded { font-size: 14px; }
+.releases-link .material-symbols-rounded { font-size: var(--icon-xs); }
 /* #44: capped so a long, ever-growing history scrolls in place instead of pushing the whole
    Settings window taller — max-height is a viewport fraction (not a fixed px) so it still leaves
    room to see other page content above it on a shorter window. */
 .changelog { display: flex; flex-direction: column; gap: 14px; max-height: 55vh; overflow-y: auto; padding-right: 4px; }
 .entry { padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
-.entry.current { border-color: var(--accent); background: rgba(56,189,248,0.06); }
+.entry.current { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .entry-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.entry-version { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text); }
-.entry-date { font-size: 11px; color: var(--text-dim); margin-left: auto; }
-.current-badge { font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-ink); background: var(--accent); }
+.entry-version { font-family: var(--mono); font-size: var(--fs-md); font-weight: 700; color: var(--text); }
+.entry-date { font-size: var(--fs-xs); color: var(--text-dim); margin-left: auto; }
+.current-badge { font-size: var(--fs-xs); font-weight: 700; padding: 1px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-ink); background: var(--accent); }
 .entry ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
-.entry li { font-size: 12.5px; color: var(--text-dim); line-height: 1.45; }
+.entry li { font-size: var(--fs-md); color: var(--text-dim); line-height: 1.45; }
 </style>

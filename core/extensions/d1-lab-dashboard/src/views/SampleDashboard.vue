@@ -96,7 +96,7 @@
 								@click="selectOp(op)"
 							>
 								<td>{{ formatDate(op.operation_date) }}</td>
-								<td>{{ op.method_id?.method_name ?? op.operation_type ?? '—' }}</td>
+								<td>{{ op.method_id?.method_name ?? '—' }}</td>
 								<td>{{ op.equipment_id?.equipment_name ?? '—' }}</td>
 								<td>{{ op.insert_edge_id?.edge_code ?? '—' }}</td>
 								<td>{{ op.outcome ?? '—' }}</td>
@@ -129,7 +129,7 @@
 						<span class="d1-badge" :class="`status--${ts.status}`">{{ ts.status }}</span>
 					</span>
 					<span class="d1-secondary">{{ ts.equipment_id?.equipment_name ?? '—' }}</span>
-					<span class="d1-date">{{ formatDate(ts.test_date) }}</span>
+					<span class="d1-date">{{ formatDate(ts.session_date) }}</span>
 				</div>
 				<div v-if="testSessions.length === 0" class="d1-empty">No test sessions</div>
 			</div>
@@ -244,7 +244,7 @@ async function selectSample(s: any) {
 			getItems('test_sessions', {
 				'filter[sample_id][_eq]': s.sample_id,
 				'fields[]': ['*', 'equipment_id.equipment_name'],
-				'sort[]': '-test_date',
+				'sort[]': '-session_date',
 				limit: 100,
 			}),
 		]);

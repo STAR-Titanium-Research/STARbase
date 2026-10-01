@@ -40,6 +40,10 @@ runnable and testable, and later phases depend on earlier ones. **Foundation-fir
 | **Data migration** | **Later**; Sheets export received & analysed ([`docs/legacy-data-analysis.md`](./docs/legacy-data-analysis.md)) | 17 sheets mapped; informs Phase 1; import is Phase 8 |
 | **License / visibility** | **Private for now**; license chosen before any public release | — |
 
+> **Since the interview:** the front-end did not stay admin-UI-only. The Directus UI is
+> extended with custom modules and interfaces ([`core/extensions/`](./core/extensions/)), and
+> machining force capture became its own desktop app (ADR-0010).
+
 ---
 
 ## North-star architecture
@@ -168,7 +172,9 @@ in the 17 real sheets, not assumptions.
   capturing `INSERT/UPDATE/DELETE` JSON deltas; `version`/`updated_at` for OCC.
 - **JSONB-vs-LLM resolution:** core entities/relationships stay typed+FK; JSONB
   only for genuinely variable method params; document the JSONB key space in the
-  dictionary and surface it via views. (ADR.)
+  dictionary and surface it via views. (ADR-0004 — since superseded: method and
+  test parameters became typed columns and `method_parameters` was dropped in
+  June 2026; see the ADR's update.)
 - `pgvector` extension enabled (columns added in Phase 6).
 - Seed/fixture data + schema-diagram docs (`tbls`/`schemaspy`).
 
@@ -340,12 +346,15 @@ alone; the drop-Directus drill succeeds.
 
 ## Open / deferred decisions (revisit at the noted phase)
 
-- **Core↔plugin contract specifics** — finalize in Phase 4 (kept Directus-agnostic).
-- **RBAC durability** — how much to anchor in Postgres roles/RLS vs Directus
-  roles, for swap-safety. Decide in Phase 3.
-- **Queue** — Redis/Celery (lean) vs RabbitMQ. Decide in Phase 4.
-- **License** — before any public release.
-- **Sample identifier** — GUID vs serialized barcode (spec allows both). Phase 1.
+- ~~**Core↔plugin contract specifics**~~ — **Resolved in Phase 4:**
+  [`docs/plugin-contract.md`](./docs/plugin-contract.md), Directus-agnostic (ADR-0006).
+- ~~**RBAC durability**~~ — **Resolved in Phase 3 (ADR-0005):** Directus roles,
+  documented by intent so they can be re-implemented; audit, OCC and constraints
+  stay native Postgres. Project and export-control row filters are deferred to Phase 9.
+- ~~**Queue**~~ — **Resolved in Phase 4:** Redis + rq (ADR-0006).
+- **License** — before any public release. Still open.
+- ~~**Sample identifier**~~ — **Resolved in Phase 1:** a hidden UUID primary key
+  plus the human-readable `sample_code` ([`docs/data-dictionary.md`](./docs/data-dictionary.md)).
 
 ---
 
@@ -368,15 +377,30 @@ alone; the drop-Directus drill succeeds.
 
 The machining force-capture app grew alongside the phases above rather than inside them: a
 Directus dashboard module first, then a standalone recorder + Electron desktop app sharing one
-plotting package, plus a live-backup service. It has its own decision record and operations guide.
+plotting package, plus a live-backup service. On top of the captured cuts sit the FRM plotting
+services (Potree octrees, `filter-service`) and the Diagnostics Workbench, a recipe-driven
+analysis pipeline (`scripts/diag`, `diag-service`) over the full-resolution spiral. Milling
+groundwork (path models, spindle angle, the polar plot) shipped in force-app v0.1.19; the
+self-describing v2.0 capture format is designed but not yet built.
 
 - [`docs/adr/0010-force-app-extraction-and-electron-packaging.md`](./docs/adr/0010-force-app-extraction-and-electron-packaging.md) — why it was extracted and how it ships
+- [`apps/force-app/README.md`](./apps/force-app/README.md) — what the app does, with screenshots
 - [`docs/force-app-operations.md`](./docs/force-app-operations.md) — running, deploying, troubleshooting
 - [`docs/force-file-standards.md`](./docs/force-file-standards.md) — the four `.mat` layouts in the archive
-- `docs/superpowers/specs/` — per-feature design documents (tacho/PPR, FRM viewer and octrees,
-  filtering suite, NI-DAQ channel model, recording slices, desktop packaging)
+- [`docs/superpowers/README.md`](./docs/superpowers/README.md) — the per-feature design specs
+  (FRM viewer, octrees and filtering, recording slices, NI-DAQ channel model, desktop packaging,
+  replay, diagnostics phases, milling) and whether each has shipped
 
-Separately, the FAST 25 / FAST 250 **sintering** data path is specified in
-[`docs/FAST25_OVERVIEW.md`](./docs/FAST25_OVERVIEW.md) and
-[`docs/FAST_DIRECTUS_INTEGRATION.md`](./docs/FAST_DIRECTUS_INTEGRATION.md). It is deliberately a
-separate system from machining force analysis.
+Separately, the FAST 25 / FAST 250 **sintering** data is described in
+[`docs/FAST25_OVERVIEW.md`](./docs/FAST25_OVERVIEW.md): the machines' data formats, and what was
+built on them (importers, `fast_run_data`, `fast_recipes`, the `d1-fast-dashboard` module). It is
+deliberately kept apart from machining force analysis.
+
+## After Phase 8 — the schema keeps moving
+
+Phase 8 landed on 2026-06-19 with 15 migrations. Around a hundred more have followed — people,
+facilities and polymorphic test subjects
+([spec](./docs/superpowers/specs/2026-07-03-lab-data-model-and-ux.md)), campaigns, sample
+preparation, archive file links, FAST run data, and the force-analysis and diagnostics tables. The
+phase notes above describe how the core was built; [`db/migrations/`](./db/migrations/) is the
+authoritative account of what it is now.

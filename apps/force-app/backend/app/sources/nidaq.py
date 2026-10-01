@@ -19,7 +19,7 @@ import time
 
 import numpy as np
 
-from ..config import DEFAULT_NIDAQ_CHANNELS, SIGNAL_CHANNELS, RecordConfig
+from ..config import DEFAULT_NIDAQ_CHANNELS, SIGNAL_CHANNELS, ExtraChannel, RecordConfig
 
 log = logging.getLogger("force_app.nidaq")
 
@@ -70,15 +70,22 @@ class NidaqSource:
         chunk_sec: float = 0.05,
         _task=None,
         _reader=None,
+        extra_channels: list[ExtraChannel] | None = None,
     ):
-        self.channels = list(SIGNAL_CHANNELS)
+        # The fixed 9, plus any real (hardware) Aux channels — genuinely acquired, so they need a
+        # physical channel string same as the fixed 9 do. Virtual channels are deliberately excluded
+        # here: they're computed downstream from these values, never read from the DAQ themselves.
+        hardware_extra = [c for c in (extra_channels or []) if c.source == "hardware"]
+        self.channels = list(SIGNAL_CHANNELS) + [c.name for c in hardware_extra]
         self.rate = float(cfg.sample_rate)
         self.physical = (
             list(physical_channels) if physical_channels else list(DEFAULT_NIDAQ_CHANNELS)
         )
         if len(self.physical) != len(self.channels):
             raise ValueError(
-                f"expected {len(self.channels)} NI-DAQ channels, got {len(self.physical)}"
+                f"expected {len(self.channels)} NI-DAQ channels "
+                f"({len(SIGNAL_CHANNELS)} fixed + {len(hardware_extra)} extra hardware), "
+                f"got {len(self.physical)}"
             )
         self.chunk = max(1, int(round(self.rate * chunk_sec)))
         # Injected for tests; built from nidaqmx in start() otherwise.

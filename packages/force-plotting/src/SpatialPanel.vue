@@ -8,6 +8,7 @@
 // painted layers, the cross-panel selection -- comes in as props; edits go out as events.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import DiagOctreeView from './DiagOctreeView.vue';
+import { defaultScale, type ColorScale } from './colorScale';
 import InfoTip from './InfoTip.vue';
 import { fetchViewportCompute, type ViewportResult, type ViewportStep, type ViewportOp } from './diagViewport';
 import { layersForRequest, type DiagLayer } from './diagLayers';
@@ -35,7 +36,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
 	(e: 'polygon', ring: [number, number][]): void;
 	(e: 'update:channel', c: string): void;
-	(e: 'cluster-select', id: number | null): void;
 	(e: 'result', r: ViewportResult | null): void;
 	(e: 'busy', v: boolean): void;
 	(e: 'popout', channel: string): void;
@@ -43,6 +43,17 @@ const emit = defineEmits<{
 
 const channel = ref<ChannelKey>((props.initialChannel as ChannelKey) || 'residZ');
 watch(channel, (c) => emit('update:channel', c));
+
+// This panel has no colour-scale editor UI yet -- always viridis, always auto-ranged from the
+// octree's own per-channel data (climits), matching the exact behaviour the old hardcoded
+// `:colormap="'viridis'"` + cmin/cmax-absent props had. DiagOctreeView.vue no longer auto-detects
+// internally (Stage 2 moved that decision entirely to the host via climits), so seeding this from
+// the climits event is required, not optional -- without it the octree would render pinned to the
+// placeholder [0,1] range forever.
+const colorScale = ref<ColorScale>(defaultScale(0, 1));
+function onClimits(v: { cmin: number; cmax: number }) {
+	colorScale.value = defaultScale(v.cmin, v.cmax);
+}
 // `initialChannel` is not just a seed: DiagnosticsWorkbench changes it to redirect an
 // already-mounted panel (e.g. "click a step card to revert the hero view to its channel").
 // Without this watch that only updated the persisted layout, never the live view.
@@ -181,7 +192,7 @@ onBeforeUnmount(() => {
 		<DiagOctreeView
 			:octree-path="octreePath"
 			:channel="'residZ'"
-			:colormap="'viridis'"
+			:color-scale="colorScale"
 			:point-size="1.5"
 			:selection="selection"
 			:analysis-result="analysisResult"
@@ -192,6 +203,7 @@ onBeforeUnmount(() => {
 			:paint-mode="drawing ? 'draw' : 'off'"
 			@polygon="(r) => emit('polygon', r)"
 			@bounds="onBounds"
+			@climits="onClimits"
 		/>
 		<div class="sp-bar">
 			<label class="sp-field">
@@ -226,11 +238,11 @@ onBeforeUnmount(() => {
 .spatial-panel > :first-child { flex: 1; min-height: 0; }
 .sp-bar { flex: none; display: flex; align-items: flex-end; gap: 10px; padding: 7px 2px 2px; }
 .sp-field { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.sp-field-label { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim, #94a3b8); }
-.sp-select { width: 100%; font-size: 12px; padding: 4px 6px; background: var(--bg-2, #111a33); color: var(--text, #e5e7eb); border: 1px solid var(--border, rgba(255,255,255,0.14)); border-radius: 6px; }
-.sp-state { flex: none; font-size: 10px; color: var(--text-dim, #94a3b8); font-variant-numeric: tabular-nums; padding-bottom: 5px; }
+.sp-field-label { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs, 11px); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim, #94a3b8); }
+.sp-select { width: 100%; font-size: var(--fs-sm, 12px); padding: 4px 6px; background: var(--bg-2, #111a33); color: var(--text, #e5e7eb); border: 1px solid var(--border, rgba(255,255,255,0.14)); border-radius: 6px; }
+.sp-state { flex: none; font-size: var(--fs-xs, 11px); color: var(--text-dim, #94a3b8); font-variant-numeric: tabular-nums; padding-bottom: 5px; }
 .sp-state .sp-err { color: var(--danger, #fca5a5); }
 .sp-popout { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; background: var(--bg-2, #111a33); border: 1px solid var(--border, rgba(255,255,255,0.18)); color: var(--text-dim, #94a3b8); cursor: pointer; }
 .sp-popout:hover { color: var(--accent, #38bdf8); }
-.sp-popout .material-symbols-rounded { font-size: 15px; }
+.sp-popout .material-symbols-rounded { font-size: var(--icon-sm, 16px); }
 </style>

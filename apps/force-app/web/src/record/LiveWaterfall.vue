@@ -3,7 +3,7 @@
 // front (bottom), older frames receding upward and fading. Drawn from the rolling client.fftHistory.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RecordClient } from './liveClient';
-import { CH_COLOR } from './types';
+import { channelColor } from './types';
 import { theme } from '../theme';
 
 const props = withDefaults(defineProps<{ client: RecordClient; channels?: string[]; windowSec?: number }>(), { windowSec: 12 });
@@ -16,6 +16,7 @@ const FFT_PUBLISH_HZ = 1 / 0.3;
 const maxFrames = computed(() => Math.max(2, Math.round(props.windowSec * FFT_PUBLISH_HZ)));
 
 const chan = computed(() => {
+	void props.client.fftSeq.value; // client.fft isn't reactive; see LiveFft.vue's chans
 	const avail = props.client.fft ? Object.keys(props.client.fft.spectra) : [];
 	const pick = (props.channels || []).find((c) => avail.includes(c));
 	return pick || props.client.fft?.axis || avail[0] || 'Fz';
@@ -54,7 +55,7 @@ function draw() {
 	const top = 18, bottom = H - 16;
 	const bandH = (bottom - top);         // vertical span the stack occupies
 	const traceH = bandH * 0.32;          // height of a single spectrum trace
-	const base = CH_COLOR[ch] || '#38bdf8';
+	const base = channelColor(ch, theme.value) || '#38bdf8';
 	// oldest first so newer traces paint over older ones
 	for (let k = 0; k < frames.length; k++) {
 		const s = frames[k].spectra[ch];

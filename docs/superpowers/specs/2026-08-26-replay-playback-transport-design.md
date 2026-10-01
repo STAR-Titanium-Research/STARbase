@@ -2,7 +2,9 @@
 
 - **Date:** 2026-08-26
 - **Area:** `apps/force-app` — Recording workspace, "Replay file" source
-- **Status:** Agreed, not yet implemented
+- **Status:** Implemented 2026-08-27 — `apps/force-app/web/src/record/playback/`,
+  `TransportBar.vue` and `POST /dsp/spectrum`, with Playwright coverage in
+  `apps/force-app/desktop/tests/replay-playback.spec.ts`
 
 ## Problem
 

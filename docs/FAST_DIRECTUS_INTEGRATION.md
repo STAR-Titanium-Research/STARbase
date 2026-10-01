@@ -1,5 +1,22 @@
 # FAST Sintering Data in Directus: A Separate System
 
+> **Status: not built as written.** The FAST path in production predates this
+> rewrite and kept a different shape — sintering runs are `manufacturing_operations`
+> rows, which section 1 below says not to touch. The `sintering_*` collections and
+> the `/sinter/series` endpoint were never created. Two principles did hold: the
+> timeseries stay in files rather than Postgres rows, and the FAST dashboard shares
+> no plotting code with machining force analysis.
+>
+> How the FAST data path was actually built:
+>
+> | Piece | Where |
+> |---|---|
+> | Runs — one `manufacturing_operations` row each, with typed `sintering_*` columns | `scripts/import_fast25.py` (from `ECS_Analysis.MDB`), `scripts/import_fast250.py` (from the export run list) |
+> | Traces — a normalised CSV per run in the Directus File Library, catalogued in `fast_run_data` | `scripts/fast_orchestrator.py`, decoding FAST 25 `.HIS` with `scripts/fast_his.py` |
+> | Recipes — `fast_recipes`, linked from each run | [FAST recipes design](./superpowers/specs/2026-07-22-fast-recipes-and-metadata-design.md) |
+> | Sheet-only QA fields from the Excel logs | `scripts/clear_fast_logs.py`, `scripts/apply_fast_qa_backup.py` |
+> | UI | the `d1-fast-dashboard` Directus module |
+
 **Principle:** FAST 25 / FAST 250 are **sintering** operations. The existing Force Dashboard is for **machining** force analysis (Fx/Fy/Fz, FRM point clouds, octrees). They are unrelated workflows and must not be merged.
 
 **This document specifies a standalone sintering path** — new Directus collections, a new endpoint, and a new dashboard — that touches **none** of the machining/FRM code.

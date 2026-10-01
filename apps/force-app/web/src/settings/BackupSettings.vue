@@ -164,8 +164,8 @@ onMounted(() => { loadConfig(); });
 		<div v-if="error" class="err-msg">{{ error }}</div>
 
 		<div class="actions">
-			<button class="btn save" @click="saveConfig">{{ saved ? 'Saved ✓' : 'Save' }}</button>
-			<button class="btn ghost" @click="testConnection" :disabled="loading || !cfg.server_url">
+			<button class="btn primary" @click="saveConfig">{{ saved ? 'Saved ✓' : 'Save' }}</button>
+			<button class="btn" @click="testConnection" :disabled="loading || !cfg.server_url">
 				{{ loading ? 'Testing…' : 'Test connection' }}
 			</button>
 		</div>
@@ -173,8 +173,8 @@ onMounted(() => { loadConfig(); });
 		<!-- Remote sessions -->
 		<h3 class="mt">Remote backups</h3>
 		<p class="lead">Recordings stored on the backup server. Restore a backup if the local recording was lost.</p>
-		<button class="btn ghost" :disabled="sessionsLoading || !cfg.server_url" @click="loadSessions">
-			<span class="material-symbols-rounded" style="font-size:15px">{{ sessionsLoading ? 'hourglass_top' : 'cloud_download' }}</span>
+		<button class="btn" :disabled="sessionsLoading || !cfg.server_url" @click="loadSessions">
+			<span class="material-symbols-rounded" style="font-size: var(--icon-sm)">{{ sessionsLoading ? 'hourglass_top' : 'cloud_download' }}</span>
 			{{ sessionsLoading ? 'Loading…' : 'Fetch remote backups' }}
 		</button>
 
@@ -190,7 +190,7 @@ onMounted(() => { loadConfig(); });
 					</span>
 					<span v-if="s.started_iso" class="rs-detail dim">{{ s.started_iso }}</span>
 				</div>
-				<button class="rb-btn recover" :disabled="!!restoreBusy[s.id]" @click="restoreSession(s.id)">
+				<button class="btn sm success" :disabled="!!restoreBusy[s.id]" @click="restoreSession(s.id)">
 					<span class="material-symbols-rounded">cloud_download</span>{{ restoreBusy[s.id] ? 'Restoring…' : 'Restore' }}
 				</button>
 			</div>
@@ -201,48 +201,39 @@ onMounted(() => { loadConfig(); });
 
 <style scoped>
 .backup { max-width: 620px; }
-h2 { margin: 0 0 4px; font-size: 16px; }
-h3 { margin: 0 0 4px; font-size: 14px; }
-.lead { margin: 0 0 14px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
-.toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
+h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
+h3 { margin: 0 0 4px; font-size: var(--fs-lg); }
+.lead { margin: 0 0 14px; font-size: var(--fs-md); color: var(--text-dim); line-height: 1.5; }
+.toggle-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: var(--fs-md); font-weight: 600; color: var(--text); cursor: pointer; }
 .toggle-row input { width: 16px; height: 16px; accent-color: var(--accent); }
 .field { display: block; margin-bottom: 14px; }
-.lbl { display: block; font-size: 12.5px; color: var(--text); margin-bottom: 5px; }
-input { display: block; width: 100%; padding: 9px 11px; font-size: 13px; font-family: var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; box-sizing: border-box; }
+.lbl { display: block; font-size: var(--fs-md); color: var(--text); margin-bottom: 5px; }
+input { display: block; width: 100%; padding: 9px 11px; font-size: var(--fs-md); font-family: var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; box-sizing: border-box; }
 input:focus { border-color: var(--accent); }
 input[type="number"] { max-width: 120px; }
-.hint { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; }
-.err-msg { color: var(--danger); font-size: 12px; margin: 6px 0; }
+.hint { font-size: var(--fs-sm); color: var(--text-dim); margin-top: 4px; }
+.err-msg { color: var(--danger); font-size: var(--fs-sm); margin: 6px 0; }
 .actions { display: flex; gap: 10px; margin-top: 10px; }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; font-size: 13px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; }
-.btn.save { background: var(--accent); color: var(--accent-ink); }
-.btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .mt { margin-top: 28px; }
 
 .server-status { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; margin-bottom: 10px; }
-.server-status.ok { background: rgba(74,222,128,0.08); border: 1px solid rgba(74,222,128,0.2); }
+.server-status.ok { background: color-mix(in srgb, var(--ok) 8%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 20%, transparent); }
 .server-status.fail { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); }
-.server-status .material-symbols-rounded { font-size: 20px; }
-.server-status.ok .material-symbols-rounded { color: #4ade80; }
+.server-status .material-symbols-rounded { font-size: var(--icon-lg); }
+.server-status.ok .material-symbols-rounded { color: var(--ok); }
 .server-status.fail .material-symbols-rounded { color: var(--danger); }
 .ss-info { display: flex; flex-direction: column; }
-.ss-label { font-size: 13px; font-weight: 600; color: var(--text); }
-.ss-detail { font-size: 11.5px; color: var(--text-dim); }
+.ss-label { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+.ss-detail { font-size: var(--fs-sm); color: var(--text-dim); }
 .ss-detail.err { color: var(--danger); }
 
 .session-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .rs-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; }
 .rs-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.rs-id { font-size: 12px; font-weight: 600; font-family: var(--mono); color: var(--text); }
-.rs-detail { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.rs-id { font-size: var(--fs-sm); font-weight: 600; font-family: var(--mono); color: var(--text); }
+.rs-detail { font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .rs-detail.dim { opacity: 0.7; }
-.rs-state { display: inline-block; margin-left: 6px; font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px; text-transform: uppercase; }
+.rs-state { display: inline-block; margin-left: 6px; font-size: var(--fs-xs); font-weight: 700; padding: 1px 5px; border-radius: 4px; text-transform: uppercase; }
 .rs-state.complete { color: #15803d; background: rgba(34,197,94,0.15); }
-.rs-state.streaming { color: #d97706; background: rgba(251,191,36,0.15); }
-.rb-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 12px; font-weight: 600; border: none; border-radius: 7px; cursor: pointer; }
-.rb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.rb-btn .material-symbols-rounded { font-size: 15px; }
-.rb-btn.recover { color: #fff; background: #22c55e; }
-.rb-btn.recover:hover:not(:disabled) { background: #16a34a; }
+.rs-state.streaming { color: #d97706; background: color-mix(in srgb, var(--warn) 15%, transparent); }
 </style>

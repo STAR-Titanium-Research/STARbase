@@ -301,7 +301,7 @@ const SEED_COLUMNS = ['t_raw', 'fx', 'fy', 'fz', 'rpm', 'revs', 'x_raw', 'y_raw'
 /** snake_case column -> the label of the step that produces it, for a human-readable fix. */
 const PRODUCER_OF: Record<string, string> = (() => {
 	const out: Record<string, string> = {};
-	for (const [op, meta] of Object.entries(STEP_META)) {
+	for (const meta of Object.values(STEP_META)) {
 		for (const c of meta.produces) out[c] = meta.label;
 	}
 	return out;

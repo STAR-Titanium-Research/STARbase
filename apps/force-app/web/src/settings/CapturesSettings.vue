@@ -7,8 +7,13 @@ import { computed, onMounted, ref } from 'vue';
 import { getConfig } from '../config';
 import { api } from '../directusClient';
 import { uploadCaptureColdStart } from '../record/uploadCapture';
-import { discardQueued, listQueue, retryQueued, syncStatus, type QueuedRun } from '../record/directusSync';
+import { discardQueued, listQueue, retryQueued, syncStatus, uploadQueuedAsMe, type QueuedRun } from '../record/directusSync';
+import { authStore } from '../authStore';
+import { OFFLINE_SESSION_UPLOAD_MESSAGE, hasServerSession, recorderFromExtra } from '../recorder';
 import { confirmAction } from '../ui/confirm';
+import EditCaptureMetadataDialog from './EditCaptureMetadataDialog.vue';
+import { matchUploaded, uploadedRowsSince } from './captureUploadState';
+import { formatMegabytes } from '../format';
 
 interface Capture {
 	id: string;
@@ -36,7 +41,11 @@ const rowMsg = ref<Record<string, string>>({});
 // Which captures already exist in Directus. Looked up once per load so the list can distinguish
 // "safe to delete, it's in the database" from "this is the only copy".
 const uploaded = ref<Record<string, boolean>>({});
+// capture_id -> operation_id, for the metadata editor: present means "PATCH the Directus row too,
+// not just the local summary.json".
+const uploadedOpId = ref<Record<string, string>>({});
 const uploadedKnown = ref(false);
+const editing = ref<Capture | null>(null);
 
 async function load() {
 	loading.value = true;
@@ -61,23 +70,23 @@ async function load() {
 
 async function checkUploaded() {
 	// recorded_metadata.capture_id is what both upload paths stamp (workspace.ts and
-	// uploadCapture.ts), so it is the link back from a local capture to its database row.
+	// uploadCapture.ts), so it is the link back from a local capture to its database row. Directus
+	// can't filter on that JSON key, so candidate rows are fetched and matched client-side (see
+	// captureUploadState.ts for why the created_at bound is safe).
 	uploadedKnown.value = false;
 	try {
 		const ids = captures.value.map((c) => c.id);
 		if (!ids.length) { uploadedKnown.value = true; return; }
+		const since = uploadedRowsSince(ids);
 		const res = await api.get('/items/manufacturing_operations', {
 			params: {
-				filter: { recorded_metadata: { capture_id: { _in: ids } } },
-				fields: ['recorded_metadata'], limit: -1,
+				filter: { recorded_metadata: { _nnull: true }, ...(since ? { created_at: { _gte: since } } : {}) },
+				fields: ['operation_id', 'recorded_metadata'], limit: -1,
 			},
 		});
-		const found: Record<string, boolean> = {};
-		for (const row of res.data?.data ?? []) {
-			const cid = row?.recorded_metadata?.capture_id;
-			if (cid) found[cid] = true;
-		}
+		const { uploaded: found, opIds } = matchUploaded(res.data?.data ?? [], ids);
 		uploaded.value = found;
+		uploadedOpId.value = opIds;
 		uploadedKnown.value = true;
 	} catch {
 		// Offline or not permitted — leave the state unknown rather than claiming "not uploaded",
@@ -100,7 +109,7 @@ async function remove(c: Capture) {
 		detail: 'This cannot be undone.',
 		stats: [
 			{ label: 'Capture', value: c.sample_name || c.id },
-			{ label: 'Size', value: fmtSize(c.size_mb) },
+			{ label: 'Size', value: formatMegabytes(c.size_mb) },
 			{ label: 'Uploaded to database', value: isUp ? 'yes' : known ? 'no' : 'unknown' },
 		],
 		confirmLabel: 'Delete permanently',
@@ -121,7 +130,27 @@ async function remove(c: Capture) {
 	}
 }
 
+function openEdit(c: Capture) { editing.value = c; }
+async function onMetadataSaved() {
+	const id = editing.value?.id;
+	editing.value = null;
+	if (!id) return;
+	// Refresh just this row's summary-derived fields (sample_name etc.) rather than a full re-scan
+	// of every capture on disk — the same data /captures/browse already extracts, straight from the
+	// file this dialog just wrote.
+	try {
+		const res = await fetch(`${base()}/captures/${id}/summary`);
+		if (!res.ok) return;
+		const s = await res.json();
+		const c = captures.value.find((x) => x.id === id);
+		if (c) c.sample_name = s.sample_name;
+	} catch { /* best effort — Refresh button still works */ }
+}
+
 async function upload(c: Capture) {
+	// Before any prompt: an offline session can't upload, so don't ask the user to confirm something
+	// that cannot run.
+	if (!hasServerSession()) { rowMsg.value[c.id] = OFFLINE_SESSION_UPLOAD_MESSAGE; return; }
 	busy.value[c.id] = 'uploading';
 	rowMsg.value[c.id] = '';
 	try {
@@ -129,6 +158,19 @@ async function upload(c: Capture) {
 			if (!r.ok) throw new Error(`summary: HTTP ${r.status}`);
 			return r.json();
 		});
+		// A capture records who recorded it. If that isn't who is signed in now, make the upload a
+		// deliberate choice rather than a quiet re-attribution (the recorder is kept either way).
+		const rec = recorderFromExtra(sum.config?.extra_metadata || sum.metadata);
+		const me = authStore.state.user?.id;
+		if (rec && me && rec.userId !== me) {
+			const ok = await confirmAction({
+				title: 'Upload someone else\'s capture?',
+				message: `"${sum.sample_name || c.id}" was recorded by ${rec.name || rec.email || 'another user'}.`,
+				detail: 'It is uploaded with them as its recorder and owner, and logged as uploaded by you.',
+				confirmLabel: 'Upload',
+			});
+			if (!ok) return;
+		}
 		await uploadCaptureColdStart({
 			captureId: c.id,
 			matUrl: `${base()}/captures/${c.id}/capture.mat`,
@@ -149,6 +191,7 @@ async function upload(c: Capture) {
 async function uploadAllUnsynced() {
 	const pending = unsynced.value.slice();
 	if (!pending.length) return;
+	if (!hasServerSession()) { error.value = OFFLINE_SESSION_UPLOAD_MESSAGE; return; }
 	const ok = await confirmAction({
 		title: `Upload ${pending.length} capture${pending.length === 1 ? '' : 's'}?`,
 		message: 'Each is sent to the database in turn. Large captures can take a while.',
@@ -156,13 +199,6 @@ async function uploadAllUnsynced() {
 	});
 	if (!ok) return;
 	for (const c of pending) await upload(c);   // sequential: each is a multi-MB file upload
-}
-
-
-function fmtSize(mb: number): string {
-	if (mb < 1) return `${(mb * 1000).toFixed(0)} KB`;
-	if (mb < 1000) return `${mb.toFixed(1)} MB`;
-	return `${(mb / 1000).toFixed(2)} GB`;
 }
 function fmtDate(mtime: number): string {
 	if (!mtime) return '—';
@@ -202,6 +238,23 @@ async function retryOne(id: string) {
 		if (!attempted) rowMsg.value[id] = 'a sync is already running — this run is next in line';
 	} finally { queueBusy.value = null; refreshQueue(); }
 }
+// A queued record recorded by someone else only uploads automatically when THEY sign in. This is
+// the deliberate override: it still carries the recorder's name and owner, and is logged as
+// synced by whoever is signed in now.
+const waitingForOther = (item: QueuedRun) =>
+	!!item.recordedBy && item.recordedBy !== authStore.state.user?.id && !item.syncAsMe;
+async function uploadAsMe(item: QueuedRun) {
+	if (!hasServerSession()) { rowMsg.value[item.id] = OFFLINE_SESSION_UPLOAD_MESSAGE; return; }
+	const ok = await confirmAction({
+		title: 'Upload someone else\'s record?',
+		message: `"${queueLabel(item)}" was recorded by ${item.recordedByLabel || 'another user'}.`,
+		detail: 'It is uploaded with them as its recorder and owner, and logged as uploaded by you.',
+		confirmLabel: 'Upload as me',
+	});
+	if (!ok) return;
+	queueBusy.value = item.id;
+	try { await uploadQueuedAsMe(item.id); } finally { queueBusy.value = null; refreshQueue(); }
+}
 async function discardOne(item: QueuedRun) {
 	const name = item.payload?.recorded_metadata?.sample_name || item.payload?.recorded_metadata?.capture_id || item.id;
 	const ok = await confirmAction({
@@ -234,16 +287,16 @@ onMounted(() => { load(); refreshQueue(); });
 
 		<div class="summary">
 			<div class="stat"><span>Captures</span><b>{{ captures.length }}</b></div>
-			<div class="stat"><span>Using</span><b>{{ fmtSize(totalMb) }}</b></div>
+			<div class="stat"><span>Using</span><b>{{ formatMegabytes(totalMb) }}</b></div>
 			<div class="stat" v-if="disk.free_gb != null">
 				<span>Free on drive</span><b>{{ disk.free_gb.toFixed(1) }} GB</b>
 			</div>
 			<div class="spacer"></div>
-			<button class="btn ghost" :disabled="loading" @click="load">
+			<button class="btn" :disabled="loading" @click="load">
 				<span class="material-symbols-rounded">{{ loading ? 'hourglass_top' : 'refresh' }}</span>
 				{{ loading ? 'Loading…' : 'Refresh' }}
 			</button>
-			<button v-if="unsynced.length" class="btn save" @click="uploadAllUnsynced">
+			<button v-if="unsynced.length" class="btn primary" @click="uploadAllUnsynced">
 				<span class="material-symbols-rounded">cloud_upload</span>
 				Upload {{ unsynced.length }} unsynced
 			</button>
@@ -265,10 +318,12 @@ onMounted(() => { load(); refreshQueue(); });
 					<div class="rtop">
 						<span class="rname">{{ queueLabel(item) }}</span>
 						<span v-if="item.lastError" class="tag warn">error</span>
+						<span v-else-if="waitingForOther(item)" class="tag warn">waiting for {{ item.recordedByLabel || 'recorder' }}</span>
 						<span v-else class="tag">queued</span>
 					</div>
 					<div class="rsub">
 						<span>{{ item.collection }}</span>
+						<span v-if="item.recordedByLabel">recorded by {{ item.recordedByLabel }}</span>
 						<span v-if="item.attempts">{{ item.attempts }} attempt<span v-if="item.attempts !== 1">s</span></span>
 						<span>{{ new Date(item.createdAt).toLocaleString() }}</span>
 					</div>
@@ -276,11 +331,14 @@ onMounted(() => { load(); refreshQueue(); });
 					<p v-if="item.lastError" class="rmsg bad">{{ item.lastError }}</p>
 				</div>
 				<div class="ract">
-					<button class="btn ghost sm" :disabled="queueBusy === item.id" @click="retryOne(item.id)">
+					<button v-if="waitingForOther(item)" class="btn sm" :disabled="queueBusy === item.id" title="Recorded by another user: uploads by itself when they sign in" @click="uploadAsMe(item)">
+						<span class="material-symbols-rounded">cloud_upload</span>Upload as me
+					</button>
+					<button v-else class="btn sm" :disabled="queueBusy === item.id" @click="retryOne(item.id)">
 						<span class="material-symbols-rounded">{{ queueBusy === item.id ? 'hourglass_top' : 'refresh' }}</span>
 						{{ queueBusy === item.id ? 'Retrying…' : 'Retry' }}
 					</button>
-					<button class="btn danger sm" :disabled="queueBusy === item.id" @click="discardOne(item)">
+					<button class="btn sm danger quiet" :disabled="queueBusy === item.id" @click="discardOne(item)">
 						<span class="material-symbols-rounded">delete</span>Discard
 					</button>
 				</div>
@@ -294,7 +352,11 @@ onMounted(() => { load(); refreshQueue(); });
 		<div v-for="c in captures" :key="c.id" class="row">
 			<div class="rmain">
 				<div class="rtop">
-					<span class="rname">{{ c.sample_name || c.id }}</span>
+					<span
+						class="rname" :class="{ clickable: c.finalized }"
+						:title="c.finalized ? 'Click to edit this capture\'s metadata' : ''"
+						@click="c.finalized && openEdit(c)"
+					>{{ c.sample_name || c.id }}</span>
 					<span v-if="!c.finalized" class="tag warn" title="No summary.json — this recording was never finalized">incomplete</span>
 					<span v-else-if="!uploadedKnown" class="tag">upload state unknown</span>
 					<span v-else-if="uploaded[c.id]" class="tag ok">uploaded</span>
@@ -304,7 +366,7 @@ onMounted(() => { load(); refreshQueue(); });
 				</div>
 				<div class="rsub">
 					<span class="mono">{{ c.id }}</span>
-					<span>{{ fmtSize(c.size_mb) }}</span>
+					<span>{{ formatMegabytes(c.size_mb) }}</span>
 					<span v-if="c.duration_sec != null">{{ c.duration_sec.toFixed(1) }}s</span>
 					<span v-if="c.n">{{ c.n.toLocaleString() }} samples</span>
 					<span>{{ fmtDate(c.mtime) }}</span>
@@ -312,62 +374,66 @@ onMounted(() => { load(); refreshQueue(); });
 				<p v-if="rowMsg[c.id]" class="rmsg" :class="{ bad: rowMsg[c.id].includes('failed') }">{{ rowMsg[c.id] }}</p>
 			</div>
 			<div class="ract">
-				<button v-if="canUpload(c)" class="btn ghost sm" :disabled="!!busy[c.id]" @click="upload(c)">
+				<button v-if="c.finalized" class="btn sm" :disabled="!!busy[c.id]" @click="openEdit(c)">
+					<span class="material-symbols-rounded">edit</span>Edit
+				</button>
+				<button v-if="canUpload(c)" class="btn sm" :disabled="!!busy[c.id]" @click="upload(c)">
 					<span class="material-symbols-rounded">{{ busy[c.id] === 'uploading' ? 'hourglass_top' : 'cloud_upload' }}</span>
 					{{ busy[c.id] === 'uploading' ? 'Uploading…' : 'Upload' }}
 				</button>
-				<button class="btn danger sm" :disabled="!!busy[c.id]" @click="remove(c)">
+				<button class="btn sm danger quiet" :disabled="!!busy[c.id]" @click="remove(c)">
 					<span class="material-symbols-rounded">{{ busy[c.id] === 'deleting' ? 'hourglass_top' : 'delete' }}</span>
 					{{ busy[c.id] === 'deleting' ? 'Deleting…' : 'Delete' }}
 				</button>
 			</div>
 		</div>
+
+		<EditCaptureMetadataDialog
+			v-if="editing"
+			:capture-id="editing.id"
+			:operation-id="uploadedOpId[editing.id] || null"
+			@close="editing = null"
+			@saved="onMetadataSaved"
+		/>
 	</div>
 </template>
 
 <style scoped>
 .caps { max-width: 820px; }
-h2 { margin: 0 0 4px; font-size: 16px; }
-.lead { margin: 0 0 18px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
-.hint { font-size: 11.5px; color: var(--text-dim); }
+h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
+.lead { margin: 0 0 18px; font-size: var(--fs-md); color: var(--text-dim); line-height: 1.5; }
+.hint { font-size: var(--fs-sm); color: var(--text-dim); }
 .path { margin: 6px 0 14px; font-family: var(--mono); word-break: break-all; }
-.err { color: var(--danger); font-size: 12px; }
+.err { color: var(--danger); font-size: var(--fs-sm); }
 .summary { display: flex; align-items: flex-end; gap: 22px; padding: 12px 14px;
 	background: var(--surface); border: 1px solid var(--border); border-radius: 10px; flex-wrap: wrap; }
 .stat { display: flex; flex-direction: column; gap: 2px; }
-.stat span { font-size: 11px; color: var(--text-dim); }
-.stat b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: var(--fs-xs); color: var(--text-dim); }
+.stat b { font-size: var(--fs-lg); font-variant-numeric: tabular-nums; }
 .spacer { flex: 1; }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 12.5px;
-	font-weight: 600; border: none; border-radius: 8px; cursor: pointer; }
-.btn.sm { padding: 6px 11px; font-size: 12px; }
-.btn .material-symbols-rounded { font-size: 16px; }
-.btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-.btn.save { background: var(--accent); color: var(--accent-ink); }
-.btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--border); }
-.btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.1); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .row { display: flex; align-items: center; gap: 12px; padding: 11px 13px; margin-top: 8px;
 	background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 .rmain { flex: 1; min-width: 0; }
 .rtop { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-.rname { font-size: 13.5px; font-weight: 600; }
-.rsub { display: flex; gap: 12px; margin-top: 3px; font-size: 11.5px; color: var(--text-dim);
+.rname { font-size: var(--fs-md); font-weight: 600; }
+.rname.clickable { cursor: pointer; }
+.rname.clickable:hover { color: var(--accent); text-decoration: underline; }
+.rsub { display: flex; gap: 12px; margin-top: 3px; font-size: var(--fs-sm); color: var(--text-dim);
 	flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .mono { font-family: var(--mono); }
-.tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+.tag { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
 	padding: 1px 7px; border-radius: 99px; color: var(--text-dim); background: var(--surface-2); }
-.tag.ok { color: #4ade80; background: rgba(74,222,128,0.12); }
-.tag.warn { color: #fbbf24; background: rgba(251,191,36,0.14); }
+.tag.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.tag.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .tag.dim { opacity: 0.7; }
 .ract { display: flex; gap: 7px; flex-shrink: 0; }
-.rmsg { margin: 5px 0 0; font-size: 11.5px; color: #4ade80; }
+.rmsg { margin: 5px 0 0; font-size: var(--fs-sm); color: var(--ok); }
 .rmsg.bad { color: var(--danger); }
-.empty { padding: 26px; text-align: center; color: var(--text-dim); font-size: 12.5px;
+.empty { padding: 26px; text-align: center; color: var(--text-dim); font-size: var(--fs-md);
 	border: 1px dashed var(--border); border-radius: 10px; margin-top: 10px; }
-h3 { margin: 24px 0 4px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-.chip { font-size: 10px; font-weight: 700; color: var(--accent-ink); background: var(--accent);
+h3 { margin: 24px 0 4px; font-size: var(--fs-lg); display: flex; align-items: center; gap: 8px; }
+.chip { font-size: var(--fs-xs); font-weight: 700; color: var(--accent-ink); background: var(--accent);
 	padding: 1px 7px; border-radius: 99px; }
 .sub { margin: 0 0 8px; line-height: 1.45; }
-.qrow { border-color: rgba(251,191,36,0.28); }
+.qrow { border-color: color-mix(in srgb, var(--warn) 28%, transparent); }
 </style>

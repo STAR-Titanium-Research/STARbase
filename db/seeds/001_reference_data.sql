@@ -58,14 +58,17 @@ ON CONFLICT (method_code) DO NOTHING;
 -- ---------------------------------------------------------------------------
 -- Equipment (representative — from Machines sheet, 7 records)
 -- ---------------------------------------------------------------------------
-INSERT INTO equipment (equipment_code, equipment_name, equipment_type) VALUES
-    ('FAST-001',    'FAST/SPS Press Unit 1',    'FAST_Press'),
-    ('NLX-2500',    'DMG Mori NLX-2500/700',   'CNC_Lathe'),
-    ('VF-2',        'Haas VF-2 VMC',            'CNC_Mill'),
-    ('SEM-001',     'Scanning Electron Microscope', 'SEM'),
-    ('HARDNESS-001','Vickers Hardness Tester',  'Hardness_Tester'),
-    ('FURNACE-001', 'Box Furnace (Heat Treatment)', 'Furnace'),
-    ('GRINDER-001', 'Surface Grinder',           'Grinder')
+-- capabilities decides which operations and tests offer the machine in the Machine picker
+-- (see the column COMMENT). Without it none of these would be selectable on a dev stack. Grinding
+-- maps to no process category yet, so the grinder has none.
+INSERT INTO equipment (equipment_code, equipment_name, equipment_type, capabilities) VALUES
+    ('FAST-001',    'FAST/SPS Press Unit 1',    'FAST_Press',      'sintering'),
+    ('NLX-2500',    'DMG Mori NLX-2500/700',   'CNC_Lathe',       'machining'),
+    ('VF-2',        'Haas VF-2 VMC',            'CNC_Mill',        'machining'),
+    ('SEM-001',     'Scanning Electron Microscope', 'SEM',         'nde'),
+    ('HARDNESS-001','Vickers Hardness Tester',  'Hardness_Tester', 'destructive'),
+    ('FURNACE-001', 'Box Furnace (Heat Treatment)', 'Furnace',     'heat_treatment'),
+    ('GRINDER-001', 'Surface Grinder',           'Grinder',        NULL)
 ON CONFLICT (equipment_code) DO NOTHING;
 
 -- ---------------------------------------------------------------------------

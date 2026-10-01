@@ -1,6 +1,7 @@
 # Diagnostics Phase G — Interactive Full-Resolution Workbench
 
-**Status:** design, 2026-09-03
+**Status:** implemented 2026-09-03. One deviation: the analysis overlay described below as a new
+`DiagAnalysisOverlay.vue` was built into `DiagOctreeView.vue` instead.
 **Extends:** the Diagnostics Recipe Workbench (`2026-09-01-diagnostics-recipe-workbench-design.md`) and its Phases A–F, all merged.
 **Supersedes:** the deferred "Phase D-2 full-resolution view" sketch — this replaces it.
 

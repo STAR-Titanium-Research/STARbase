@@ -1,6 +1,6 @@
 # Diagnostics Workbench — Phase H design
 
-Status: approved 2026-09-04. Extends the Phase A–G workbench.
+Status: implemented 2026-09-04 → 2026-09-07 (all four slices). Extends the Phase A–G workbench.
 
 Phase H is a field-report response, decomposed into four slices that ship in order. Each
 slice is independently mergeable and independently useful. Slice 2 must precede slice 3

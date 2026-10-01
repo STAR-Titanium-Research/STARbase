@@ -67,7 +67,7 @@ describe('buildCloud - degenerate input safety (the white-screen bug)', () => {
 		// Either null (no points in window) or, if a single boundary point sneaks in, must be finite.
 		if (cloud) {
 			assertNoNaN(cloud.pos, 'pos');
-			assertNoNaN(cloud.col, 'col');
+			assertNoNaN(cloud.col!, 'col');
 		}
 	});
 
@@ -76,7 +76,7 @@ describe('buildCloud - degenerate input safety (the white-screen bug)', () => {
 		const cloud = buildCloud(c, baseParams({ window: { cropStartSec: 0, cropEndSec: 1, stride: 1 } }));
 		if (cloud) {
 			assertNoNaN(cloud.pos, 'pos');
-			assertNoNaN(cloud.col, 'col');
+			assertNoNaN(cloud.col!, 'col');
 			expect(cloud.cmax).toBeGreaterThan(cloud.cmin - 1e-9);
 		}
 	});
@@ -89,7 +89,7 @@ describe('buildCloud - normal operation', () => {
 		expect(cloud).not.toBeNull();
 		expect(cloud!.count).toBe(200);
 		assertNoNaN(cloud!.pos, 'pos');
-		assertNoNaN(cloud!.col, 'col');
+		assertNoNaN(cloud!.col!, 'col');
 	});
 
 	it('stride thins the point count roughly by the stride factor', () => {
@@ -116,7 +116,7 @@ describe('buildCloud - normal operation', () => {
 		expect(cloud).not.toBeNull();
 		expect(cloud.count).toBeLessThanOrEqual(16 * 16);
 		assertNoNaN(cloud.pos, 'pos');
-		assertNoNaN(cloud.col, 'col');
+		assertNoNaN(cloud.col!, 'col');
 	});
 
 	it('manual cmin/cmax override the auto percentile scale', () => {
@@ -144,6 +144,25 @@ describe('axisAutoLimits', () => {
 	it('never collapses to lo===hi even for a constant signal', () => {
 		const c = makeCache({ N: 100, Fz: Float32Array.from({ length: 100 }, () => 42) });
 		const [lo, hi] = axisAutoLimits(c, 'Fz');
+		expect(hi).toBeGreaterThan(lo);
+	});
+
+	// NaN sorts to the END of a Float32Array, so the degenerate-range fallback could pick one up
+	// and then propagate it through `hi = lo + 1`. These limits go straight into shader uniforms
+	// and the colour-scale editor's axis, where one NaN bound blanks the render.
+	it('never returns NaN for a channel carrying NaN samples', () => {
+		const Fz = Float32Array.from({ length: 100 }, (_, i) => (i % 2 ? NaN : 7));
+		const [lo, hi] = axisAutoLimits(makeCache({ N: 100, Fz }), 'Fz');
+		expect(Number.isFinite(lo)).toBe(true);
+		expect(Number.isFinite(hi)).toBe(true);
+		expect(hi).toBeGreaterThan(lo);
+	});
+
+	it('never returns NaN for an all-NaN channel', () => {
+		const Fz = Float32Array.from({ length: 50 }, () => NaN);
+		const [lo, hi] = axisAutoLimits(makeCache({ N: 50, Fz }), 'Fz');
+		expect(Number.isFinite(lo)).toBe(true);
+		expect(Number.isFinite(hi)).toBe(true);
 		expect(hi).toBeGreaterThan(lo);
 	});
 });

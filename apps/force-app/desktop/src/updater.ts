@@ -13,32 +13,11 @@ export type UpdateStatus =
 
 let status: UpdateStatus = { state: 'idle' };
 let getWindow: (() => BrowserWindow | null) | null = null;
-let getRecorderPort: (() => number | null) | null = null;
+let isRecording: () => Promise<boolean> = async () => false;
 
 function push(next: UpdateStatus): void {
   status = next;
   getWindow?.()?.webContents.send('update:status', status);
-}
-
-// The main process has no visibility into the renderer's recording state — the workspace store
-// that tracks it lives (and dies) with the Record page's component, not as a persistent main-side
-// signal. Asking the backend directly via the same /record/status the UI itself polls sidesteps
-// that entirely: it's authoritative regardless of which page is open or whether Record has ever
-// been mounted this session.
-async function isRecording(): Promise<boolean> {
-  const port = getRecorderPort?.();
-  if (!port) return false;
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`http://127.0.0.1:${port}/record/status`, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) return false;
-    const data = (await res.json()) as { state?: string };
-    return data.state === 'recording';
-  } catch {
-    return false;   // fail-open: a transient check failure must not wedge the prompt forever
-  }
 }
 
 // A silent NSIS install (see below) closes the window with no wizard and no taskbar progress of
@@ -112,9 +91,11 @@ async function offerUpdate(version: string): Promise<void> {
  * calling it in dev throws on the missing dev-update-config.yml, so this is a no-op there. The
  * IPC handlers stay registered either way so the Settings UI can show "dev build" instead of
  * hanging on a renderer call that never resolves. */
-export function initAutoUpdater(getMainWindow: () => BrowserWindow | null, getPort: () => number | null): void {
+// `isRecording` asks the backend, not the renderer: the recording keeps running server-side even
+// when the Record page (and its websocket) is gone, so renderer state would read idle.
+export function initAutoUpdater(getMainWindow: () => BrowserWindow | null, recordingInProgress: () => Promise<boolean>): void {
   getWindow = getMainWindow;
-  getRecorderPort = getPort;
+  isRecording = recordingInProgress;
 
   ipcMain.handle('update:get-info', () => ({ version: app.getVersion(), packaged: app.isPackaged, status }));
   ipcMain.handle('update:check', () => {

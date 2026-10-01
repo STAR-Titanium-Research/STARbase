@@ -64,24 +64,24 @@ function mergeDiam() { w.cfg.inner_diam = 0; diamSplit.value = false; }
 // and how many start open responds to the actual height the grid has given this panel — a small
 // window/monitor gets just Tooling; a tall one gets everything open. Tooling (Insert/Edge/Tool)
 // is the baseline that's always open: per the earlier field-frequency review these change far more
-// often between cuts than Machine/Operator do, so they're worth the space on any screen. Coolant &
-// geometry opens next as height allows (still per-cut, if not always changed); Post-cut last (only
-// relevant once the cut is done, so the least useful to show while setting one up). Acquisition's
-// processing toggles used to be a third card here but live in the footer now, next to Start — see
-// RecordingActions.vue.
+// often between cuts than Machine/Operator do, so they're worth the space on any screen. Post-cut
+// opens next as height allows (only relevant once the cut is done, so the least useful to show
+// while setting one up). Coolant & geometry now live in MetadataPanel.vue's Advanced section, not
+// here. Acquisition's processing toggles used to be a third card here but live in the footer now,
+// next to Start — see RecordingActions.vue.
 //
 // `touched` records a card the OPERATOR has manually toggled, so a later resize (dragging the grid
 // panel, moving the window to a different monitor) never fights a deliberate choice — auto-fold
 // only ever adjusts a card the operator hasn't already decided about themselves.
-const open = reactive({ tooling: true, coolant: false, postCut: false });
-const touched = reactive({ tooling: false, coolant: false, postCut: false });
+const open = reactive({ tooling: true, postCut: false });
+const touched = reactive({ tooling: false, postCut: false });
 function toggleCard(card: keyof typeof open) {
 	touched[card] = true;
 	open[card] = !open[card];
 }
 
 // Least-essential-first: the order auto-fold closes cards in when content overflows.
-const CLOSE_ORDER: (keyof typeof open)[] = ['postCut', 'coolant'];
+const CLOSE_ORDER: (keyof typeof open)[] = ['postCut'];
 
 // Measures instead of guessing: a fixed BASE/STEP pixel model can't know the real rendered height
 // of this form (it's never been seen rendered from here), and the first version of this shipped
@@ -138,10 +138,10 @@ onBeforeUnmount(() => {
 <template>
 	<div class="opts" ref="rootEl">
 		<!-- Source selector -->
-		<div class="seg">
-			<button :class="{ on: w.source.value === 'sim' }" :disabled="w.locked.value" @click="w.setSource('sim')">Simulated</button>
-			<button :class="{ on: w.source.value === 'replay' }" :disabled="w.locked.value" @click="w.setSource('replay')">Replay file</button>
-			<button :class="{ on: w.source.value === 'nidaq' }" :disabled="w.locked.value" @click="w.setSource('nidaq')">NI-DAQ</button>
+		<div class="segmode lg source-seg">
+			<button class="segbtn" :class="{ on: w.source.value === 'sim' }" :disabled="w.locked.value" @click="w.setSource('sim')">Simulated</button>
+			<button class="segbtn" :class="{ on: w.source.value === 'replay' }" :disabled="w.locked.value" @click="w.setSource('replay')">Replay file</button>
+			<button class="segbtn" :class="{ on: w.source.value === 'nidaq' }" :disabled="w.locked.value" @click="w.setSource('nidaq')">NI-DAQ</button>
 		</div>
 
 		<!-- ─── Sample — always first: this is "what am I recording/replaying", the identity of the
@@ -210,10 +210,11 @@ onBeforeUnmount(() => {
 			 Settings"); dropped as pure duplication of the Settings page itself, which is the only
 			 place it's actually editable. -->
 
-		<!-- Acquisition's processing toggles (Cut start / Drift / Converge) used to be their own
-			 card here. Moved to the footer, left of Start, in RecordingActions.vue — they're the one
-			 group of settings worth checking in the moment right before pressing Start, not something
-			 to have folded away in Details. -->
+		<!-- Acquisition's processing toggles (Cut start / Drift / Converge) live only in the footer,
+			 left of Start, in RecordingActions.vue — the one group of settings worth checking in the
+			 moment right before pressing Start. A second "Recording behaviour" block of the same three
+			 switches used to sit here too; their explanations and the cut-detect threshold are in
+			 Settings > Recording. -->
 
 		<div class="card" :class="{ collapsed: !open.tooling }">
 			<button type="button" class="card-head" @click="toggleCard('tooling')">
@@ -242,28 +243,6 @@ onBeforeUnmount(() => {
 					<LookupField v-model="w.link.toolId" :display-label="w.link.toolLabel" label="Tool" placeholder="search tool name…"
 						icon="build" :search="w.searchToolsForOp" :disabled="w.locked.value" @select="(i: any) => (w.link.toolLabel = i.label)" />
 				</div>
-			</div>
-		</div>
-
-		<div class="card" :class="{ collapsed: !open.coolant }">
-			<button type="button" class="card-head" @click="toggleCard('coolant')">
-				<span class="material-symbols-rounded chev">{{ open.coolant ? 'expand_more' : 'chevron_right' }}</span>
-				<span class="material-symbols-rounded">water_drop</span>Coolant &amp; geometry
-			</button>
-			<div v-show="open.coolant" class="grid2">
-				<label>Coolant<input v-model="w.meta.coolant" :disabled="w.locked.value" /></label>
-				<label>Coolant pressure
-					<div class="unit-box"><input type="number" step="0.1" v-model="w.machining.coolant_pressure" :disabled="w.locked.value" /><span class="unit">bar</span></div>
-				</label>
-				<label>Axial DoC
-					<div class="unit-box"><input type="number" step="0.01" v-model="w.machining.axial_doc" :disabled="w.locked.value" /><span class="unit">mm</span></div>
-				</label>
-				<label>Radial DoC
-					<div class="unit-box"><input type="number" step="0.01" v-model="w.machining.radial_doc" :disabled="w.locked.value" /><span class="unit">mm</span></div>
-				</label>
-				<label>Cutting length
-					<div class="unit-box"><input type="number" v-model="w.machining.cutting_length" :disabled="w.locked.value" /><span class="unit">mm</span></div>
-				</label>
 			</div>
 		</div>
 
@@ -297,37 +276,20 @@ onBeforeUnmount(() => {
    positions — the outer at 0 while this one had scrolled itself, which read as the very top row
    (the Simulated/Replay/NI-DAQ source buttons) being clipped even though the panel was at rest. */
 .opts { display: flex; flex-direction: column; gap: 10px; }
-.seg { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
-.seg button { flex: 1; padding: 8px; font-size: 12.5px; background: transparent; color: var(--text-dim); border: none; cursor: pointer; }
-.seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
-.seg button:disabled { opacity: 0.5; cursor: not-allowed; }
-/* min-width: 0 on every grid item: grid tracks default to min-width:auto, sized to the child's
-   min-content width. A <label> wrapping an <input> doesn't shrink below that on its own, so a
-   narrow panel (PanelFrame resized small, or a LookupField's flex .box inside) pushed the second
-   column past the panel's right edge instead of the columns actually sharing 1fr each. */
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
-.grid2 > * { min-width: 0; }
+/* Three equal choices across a narrow column: they share its width and may wrap to two lines. */
+.source-seg { display: flex; }
+.source-seg .segbtn { flex: 1; height: auto; min-height: 32px; padding: 4px 6px; white-space: normal; line-height: 1.2; }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
 .stat-grid.cut-params { margin-top: -2px; }
 .stat-grid .span2 { grid-column: 1 / -1; }
-label { display: block; font-size: 11.5px; color: var(--text-dim); margin-bottom: 8px; }
+label { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin-bottom: 8px; }
 label.wide { display: block; }
-input:not([type="checkbox"]), textarea, select { display: block; width: 100%; margin-top: 3px; padding: 7px 9px; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; outline: none; font-family: inherit; }
+input:not([type="checkbox"]), textarea, select { display: block; width: 100%; margin-top: 3px; padding: 7px 9px; font-size: var(--fs-md); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; outline: none; font-family: inherit; }
 select option { background: var(--bg); color: var(--text); }
-textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+textarea { font-family: var(--mono); font-size: var(--fs-sm); resize: vertical; }
 input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 input:disabled, textarea:disabled, select:disabled { opacity: 0.55; }
-/* Unit shown inside the field itself (a trailing suffix in the same bordered box), not folded into
-   the label text above it — the box, not the input, carries the border so the unit reads as part
-   of one control. */
-.unit-box { display: flex; align-items: center; margin-top: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; }
-.unit-box:focus-within { border-color: var(--accent); }
-.unit-box input { flex: 1; min-width: 0; margin-top: 0; border: none; background: transparent; }
-.unit-box input:disabled { opacity: 1; }
-.unit-box .unit { flex: 0 0 auto; padding-right: 9px; font-size: 11px; color: var(--text-dim); }
-.unit-box.disabled, .unit-box:has(input:disabled) { opacity: 0.55; }
-.sub { color: var(--text-dim); font-weight: 400; font-size: 10.5px; }
-.section-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
+.section-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
 .section-divider::before, .section-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 /* Folding subpanels (Direction B / "Cards"): Tooling, Coolant & geometry, Post-cut. Body content
    is v-show (not v-if) so folding a card never remounts/resets a LookupField's own search state —
@@ -335,37 +297,35 @@ input:disabled, textarea:disabled, select:disabled { opacity: 0.55; }
 .card { border: 1px solid var(--border); background: rgba(255,255,255,0.02); border-radius: 10px; padding: 10px 11px; }
 .card + .card { margin-top: 2px; }
 .card.collapsed { padding-bottom: 10px; }
-.card-head { display: flex; align-items: center; gap: 6px; width: 100%; margin: -4px -4px 5px; padding: 4px; border-radius: 6px; background: transparent; border: none; outline: none; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); cursor: pointer; }
+.card-head { display: flex; align-items: center; gap: 6px; width: 100%; margin: -4px -4px 5px; padding: 4px; border-radius: 6px; background: transparent; border: none; outline: none; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.01em; color: var(--text-dim); cursor: pointer; }
 .card-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .card.collapsed .card-head { margin-bottom: -4px; }
-.card-head .material-symbols-rounded { font-size: 14px; color: var(--accent); }
-.card-head .chev { font-size: 16px; color: var(--text-dim); margin-right: -2px; }
+.card-head .material-symbols-rounded { font-size: var(--icon-xs); color: var(--accent); }
+.card-head .chev { font-size: var(--icon-sm); color: var(--text-dim); margin-right: -2px; }
 .card-head:hover { color: var(--text); }
 /* New-edge toggle, inline in the Edge LookupField's own box via its #badge slot — a property of
    this specific edge, not a fact about the insert, so it lives next to Edge, not off in its own
    checkbox elsewhere. */
 .new-badge { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-right: 4px; padding: 0; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-faint); cursor: pointer; }
-.new-badge .material-symbols-rounded { font-size: 15px; }
-.new-badge.on { border-color: rgba(56,189,248,0.5); background: rgba(56,189,248,0.14); color: #7dd3fc; }
+.new-badge .material-symbols-rounded { font-size: var(--icon-sm); }
+.new-badge.on { border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 .new-badge:disabled { opacity: 0.5; cursor: not-allowed; }
 .links { display: flex; flex-direction: column; }
 .links :deep(.lookup) { min-width: 0; }
 /* Two lookups side by side (Machine|Operator, Insert|Edge) to save vertical space. Each LookupField
    is position:relative with its own absolute dropdown, so the grid columns don't clip the menus. */
 .links.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
-.hint { font-size: 11.5px; color: var(--text-dim); margin: 0; }
 .chks { display: flex; gap: 16px; margin-top: 4px; }
-.chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.chk { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--text); cursor: pointer; }
 .chk input { accent-color: var(--accent); }
 
 /* --- Adaptive compression ------------------------------------------------------------------
    PanelFrame's .panel-body declares `container-type:size` under the name "panel-body" (see
    PanelFrame.vue), so this panel can react to the ACTUAL space the grid has given it, not just
-   scroll once content overflows. Two stages, least-important-first: spacing/padding tightens
-   first, then secondary explanatory text (the "(saved outputs only...)"-style asides, the NI-DAQ
-   live-only note) drops — never the field labels themselves, since most fields here have no
-   leading icon to fall back on for identification, unlike a dedicated compact-list redesign would.
-   If that still isn't enough, panel-body's own overflow-y:auto (unchanged) takes over.
+   scroll once content overflows. Spacing/padding tightens first, then the notes box gives up its
+   minimum height — never the field labels themselves, since most fields here have no leading icon
+   to fall back on for identification. If that still isn't enough, panel-body's own
+   overflow-y:auto (unchanged) takes over.
 
    The thresholds below are a first estimate sized off this form's own field count/spacing, not
    measured against the live grid panel (its actual pixel width depends on RecordPage.vue's grid
@@ -375,17 +335,15 @@ input:disabled, textarea:disabled, select:disabled { opacity: 0.55; }
 	.opts { gap: 6px; }
 	.links :deep(.lookup) { margin-bottom: 4px; }
 	label { margin-bottom: 4px; }
-	.grid2 { gap: 0 8px; }
 	.stat-grid { gap: 5px; margin-bottom: 4px; }
 	.stat-grid :deep(.stat-tile) { padding: 6px 9px; }
-	.stat-grid :deep(.value-text), .stat-grid :deep(.value input) { font-size: 14px; }
+	.stat-grid :deep(.value-text), .stat-grid :deep(.value input) { font-size: var(--fs-md); }
 	.section-divider { margin: 4px 0 1px; }
 	.card { padding: 7px 9px; }
 	.card + .card { margin-top: 0; }
 	.card-head { margin-bottom: 6px; }
 }
 @container panel-body (max-height: 600px) {
-	.sub { display: none; }
 	label.wide textarea { min-height: 0; }
 }
 </style>

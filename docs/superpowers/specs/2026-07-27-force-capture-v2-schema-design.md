@@ -1,8 +1,11 @@
 # Force Capture v2.0 — Self-Describing Multi-Stream Schema
 
-**Status:** design
+**Status:** design — **not yet implemented.** The recorder still writes the v1.0 layout
+(`apps/force-app/backend/app/finalize.py`), `process_force.m` has no v2.0 reader, and
+`scripts/matlab/migrate_force_to_v2.m` is a draft of the archive migration. The rotating-dyno
+channel preset (`apps/force-app/backend/app/channels.py`) is blocked on this format.
 **Date:** 2026-07-27
-**Related:** [`docs/force-file-standards.md`](../../force-file-standards.md), memory `mat-metadata-migration`, `mat-operation-linking`
+**Related:** [`docs/force-file-standards.md`](../../force-file-standards.md)
 
 ## Goal
 
@@ -188,7 +191,7 @@ nothing discarded, source file opened read-only, output written chunked to a new
 | v0.1 (38) | `DATA(:,5:12)` | `DATA(:,13)` | drop pre-summed `DATA(:,2:4)`; time = `DATA(:,1)` |
 | v0.9 (39) | `DATA(:,5:10)` partial | none | `completeness`: Fz3/Fz4/tacho absent; RPM underdetermined |
 
-Counts per [`force_captures_inventory.csv`](../../../force_captures_inventory.csv); the 26 non-force
+Counts per [`force_captures_inventory.csv`](../../force-archive-census/force_captures_inventory.csv); the 26 non-force
 `.mat` (SRAS, ToF/cube, workspace dumps, tap tests) are excluded from migration. `AmpSettings`,
 where present (41 files), is copied verbatim; pre-v1.0 files have none and that gap is permanent.
 

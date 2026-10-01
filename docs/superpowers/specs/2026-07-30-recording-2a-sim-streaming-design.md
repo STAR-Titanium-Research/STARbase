@@ -1,8 +1,7 @@
 # Recording — Slice 2a: Sim Acquisition + Live Streaming + Recording UI
 
-**Status:** design approved 2026-07-30. First slice of Phase 2 (recording/acquisition) of the
-standalone force app. See the parent plan
-`C:\Users\CMBE Admn 3214022001\.claude\plans\we-have-now-built-prancy-mango.md`.
+**Status:** implemented 2026-07-30. First slice of Phase 2 (recording/acquisition) of the
+standalone force app.
 
 ## Context
 

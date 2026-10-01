@@ -5,10 +5,12 @@
 import { onMounted, onBeforeUnmount, provide, reactive, ref, watch, watchEffect, computed } from 'vue';
 import { GridLayout, GridItem } from 'grid-layout-plus';
 import { getWorkspace, WORKSPACE } from './workspace';
-import { startSync, syncStatus } from './directusSync';
+import { startSync } from './directusSync';
 import { hwStatus } from './hwStatus';
 import { labamp } from './labampApi';
 import PanelFrame from './panels/PanelFrame.vue';
+import { PLOT_MODES, type PlotMode } from './plotModes';
+import { PlotModeFlyout } from '@d1/force-plotting';
 import RecordingOptions from './panels/RecordingOptions.vue';
 import RecordingActions from './panels/RecordingActions.vue';
 import ForcePanel from './panels/ForcePanel.vue';
@@ -37,7 +39,7 @@ const PANEL_TYPES: Record<string, { title: string; icon: string; single?: boolea
 	frm: { title: 'FRM Map', icon: 'fingerprint', w: 4, h: 19 },
 	polar: { title: 'Polar Plot', icon: 'radar', w: 4, h: 16 },
 };
-type Inst = { i: string; type: string; x: number; y: number; w: number; h: number; mode?: 'time' | 'fft' | 'psd' | 'spectrogram' | 'waterfall'; channels?: string[] };
+type Inst = { i: string; type: string; x: number; y: number; w: number; h: number; mode?: PlotMode; channels?: string[] };
 const DEFAULT_LAYOUT: Inst[] = [
 	{ i: 'options', type: 'options', x: 0, y: 0, w: 2, h: 28 },
 	{ i: 'overview', type: 'overview', x: 2, y: 0, w: 6, h: 3 },
@@ -58,7 +60,17 @@ function loadLayout(): Inst[] {
 const layout = ref<Inst[]>(loadLayout());
 let saveT: any = null;
 watch(layout, (l) => { clearTimeout(saveT); saveT = setTimeout(() => localStorage.setItem(LS_KEY, JSON.stringify(l)), 400); }, { deep: true });
-function resetLayout() { layout.value = DEFAULT_LAYOUT.map((x) => ({ ...x })); }
+// Asks first: the button sits right beside "Add a panel", and a reset throws away every panel's
+// position, size, mode and channel picks at once, with no undo.
+async function resetLayout() {
+	const ok = await confirmAction({
+		title: 'Reset the panel layout?',
+		message: 'Every panel returns to its default position and size, and panels you added or closed go back to the default set, with their modes and channel choices.',
+		detail: 'Recording settings and data are not affected.',
+		confirmLabel: 'Reset layout',
+	});
+	if (ok) layout.value = DEFAULT_LAYOUT.map((x) => ({ ...x }));
+}
 
 // ---- Responsive grid height ----------------------------------------------------------------
 // The grid's own height is `bottomRow * (rowHeight + marginY) + marginY` (grid-layout-plus), so a
@@ -127,18 +139,6 @@ const displayLayout = computed<Inst[]>({
 
 const addOpen = ref(false);
 const hasType = (t: string) => layout.value.some((p) => p.type === t);
-// #23: 'time' used to read "Force Plot," but this mode isn't always plotting force (Tacho, or a
-// milling recording's Mz/X/Y/Z channels) -- "Time Plot" names the mode (raw time-domain, vs.
-// FFT/Power/Spectrogram/Waterfall), matching ForcePanel.vue's own tab label for it.
-const MODE_LABEL: Record<string, string> = { time: 'Time Plot', fft: 'FFT', psd: 'Power', spectrogram: 'Spectrogram', waterfall: 'Waterfall' };
-function panelTitle(p: Inst) {
-	if (p.type === 'force') {
-		const mode = MODE_LABEL[p.mode || 'time'] || 'Time Plot';
-		const ch = p.channels && p.channels.join() !== 'Fx,Fy,Fz' ? ` · ${p.channels.join(' ')}` : '';
-		return mode + ch;
-	}
-	return PANEL_TYPES[p.type].title;
-}
 function addPanel(type: string) {
 	addOpen.value = false;
 	const meta = PANEL_TYPES[type];
@@ -252,7 +252,7 @@ interface IncompleteSession {
 const recoveryItems = ref<IncompleteSession[]>([]);
 // #27: "dismiss for now" without recovering or discarding -- the crashed capture stays exactly
 // where it is on disk (still visible to the health-doctor's "Crashed recordings" check and
-// Settings > General's purge option), this only stops the Record page banner from nagging about
+// the Connectivity doctor's purge fix), this only stops the Record page banner from nagging about
 // it every visit. Persisted (not just this component's lifetime) since "deal with it later" means
 // "maybe after restarting the app," not just "for the rest of this session."
 const DISMISSED_RECOVERY_LS_KEY = 'force-app.dismissedRecoveryIds';
@@ -483,7 +483,7 @@ onBeforeUnmount(() => {
 				<span v-if="st.diskAction.action === 'backup_started'">Disk space is low ({{ st.diskAction.freeGb.toFixed(1) }} GB free) — remote backup was switched on automatically to protect this recording.</span>
 				<span v-else-if="st.diskAction.action === 'forced_stop'">Recording was stopped automatically — disk space ran critically low ({{ st.diskAction.freeGb.toFixed(1) }} GB free). The data captured so far is safe.</span>
 				<span v-else>Disk space is low ({{ st.diskAction.freeGb.toFixed(1) }} GB free) and no remote backup is configured — free up space or configure a backup server soon.</span>
-				<button class="disk-action-ack" @click="st.diskAction = null">Dismiss</button>
+				<button class="btn sm inverse disk-action-ack" @click="st.diskAction = null">Dismiss</button>
 			</div>
 
 			<!-- Recovery banner for incomplete recordings found on startup -->
@@ -499,16 +499,16 @@ onBeforeUnmount(() => {
 						<span class="rb-detail" :title="`${s.raw.duration_sec.toFixed(1)}s · ${s.raw.n_rows.toLocaleString()} samples · ${s.raw.raw_size_mb} MB`">{{ s.raw.duration_sec.toFixed(1) }}s · {{ s.raw.n_rows.toLocaleString() }} samples · {{ s.raw.raw_size_mb }} MB</span>
 						<span v-if="s.manifest?.config?.sample_name" class="rb-detail" :title="s.manifest.config.sample_name">{{ s.manifest.config.sample_name }}</span>
 					</div>
-					<button class="rb-btn recover" :disabled="!!recoveryBusy[s.id]" @click="recoverSession(s.id)">
+					<button class="btn sm success" :disabled="!!recoveryBusy[s.id]" @click="recoverSession(s.id)">
 						<span class="material-symbols-rounded" :class="{ spin: recoveryBusy[s.id] }">{{ recoveryBusy[s.id] ? 'progress_activity' : 'healing' }}</span>{{ recoveryBusy[s.id] ? `Recovering… ${recoveryElapsed(s.id).toFixed(0)}s` : 'Recover' }}
 					</button>
-					<button class="rb-btn discard" :disabled="!!recoveryBusy[s.id]" @click="discardSession(s.id)">
+					<button class="btn sm danger quiet" :disabled="!!recoveryBusy[s.id]" @click="discardSession(s.id)">
 						<span class="material-symbols-rounded" :class="{ spin: recoveryBusy[s.id] }">{{ recoveryBusy[s.id] ? 'progress_activity' : 'delete' }}</span>{{ recoveryBusy[s.id] ? `Discarding… ${recoveryElapsed(s.id).toFixed(0)}s` : 'Discard' }}
 					</button>
 					<!-- #27: neither recovers nor discards -- just stops nagging about this one. The
 						 capture stays on disk exactly as-is (still visible to the health-doctor's
 						 "Crashed recordings" check if it's forgotten about entirely). -->
-					<button class="rb-btn dismiss" :disabled="!!recoveryBusy[s.id]" title="Deal with this later — stop showing it here, without recovering or discarding it" @click="dismissRecovery(s.id)">
+					<button class="btn sm quiet" :disabled="!!recoveryBusy[s.id]" title="Deal with this later — stop showing it here, without recovering or discarding it" @click="dismissRecovery(s.id)">
 						<span class="material-symbols-rounded">visibility_off</span>Ignore for now
 					</button>
 				</div>
@@ -522,27 +522,34 @@ onBeforeUnmount(() => {
 				<b>SAFETY ALARM</b>
 				<span v-for="al in w.alarms.active" :key="al.key" class="ao-item">{{ al.label }}{{ al.kind === 'tacho' ? '' : ' ' + alarmValueText(al) }}</span>
 			</div>
-			<button class="ao-ack" @click="ackAlarm">Acknowledge</button>
+			<button class="btn inverse primary ao-ack" @click="ackAlarm">Acknowledge</button>
 		</div>
 
 		<div ref="gridEl" class="gridwrap">
 			<div class="panel-controls">
 				<span class="rec-dot" :class="{ live: w.isRecording.value }" :title="w.st.state"></span>
 				<div class="addwrap">
-					<button class="reset" title="Add a panel" @click.stop="addOpen = !addOpen"><span class="material-symbols-rounded">add</span></button>
+					<button class="btn icon reset" title="Add a panel" aria-label="Add a panel" @click.stop="addOpen = !addOpen"><span class="material-symbols-rounded">add</span></button>
 					<div v-if="addOpen" class="addmenu up" @click.stop>
 						<button v-for="a in addable" :key="a.type" :disabled="a.disabled" @click="addPanel(a.type)">
 							<span class="material-symbols-rounded">{{ a.icon }}</span>{{ a.title }}<span v-if="a.disabled" class="added">added</span>
 						</button>
 					</div>
 				</div>
-				<button class="reset" title="Reset panel layout" @click="resetLayout"><span class="material-symbols-rounded">grid_view</span></button>
+				<button class="btn icon reset" title="Reset panel layout" aria-label="Reset panel layout" @click="resetLayout"><span class="material-symbols-rounded">grid_view</span></button>
 			</div>
 		<GridLayout v-model:layout="displayLayout" :col-num="narrow ? 1 : 12" :row-height="rowHeight" :margin="[12, 12]"
 			:is-draggable="!narrow" :is-resizable="!narrow" :use-css-transforms="true" :vertical-compact="true">
 			<GridItem v-for="item in displayLayout" :key="item.i" :x="item.x" :y="item.y" :w="item.w" :h="item.h" :i="item.i"
 				drag-allow-from=".panel-handle" :min-w="narrow ? 1 : 2" :min-h="3">
-				<PanelFrame :title="panelTitle(item)" :icon="PANEL_TYPES[item.type].icon" closable @close="closePanel(item.i)">
+				<PanelFrame :title="PANEL_TYPES[item.type].title" :icon="PANEL_TYPES[item.type].icon" :dense="item.type === 'overview'"
+					closable @close="closePanel(item.i)">
+					<!-- A plot panel's title is its mode, so the header IS the mode picker: a title
+						 reading "FFT" over a toolbar pill reading "FFT" said it twice. -->
+					<template v-if="item.type === 'force'" #title>
+						<PlotModeFlyout :model-value="item.mode ?? 'time'" :modes="PLOT_MODES"
+							@update:model-value="item.mode = $event as PlotMode" />
+					</template>
 					<RecordingOptions v-if="item.type === 'options'" />
 					<OverviewPanel v-else-if="item.type === 'overview'" />
 					<ForcePanel v-else-if="item.type === 'force'" :inst="item" />
@@ -567,63 +574,50 @@ onBeforeUnmount(() => {
    100vh -- guaranteeing exactly 8px of overflow, and a scrollbar, on the default layout at every
    window size. A block formatting context keeps that margin inside. */
 .rec-wrap { min-height: 100vh; display: flow-root; background: radial-gradient(1200px 600px at 50% -10%, var(--bg-2), var(--bg)); padding-bottom: 24px; }
-.alarm-overlay { position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: flex; align-items: center; gap: 14px; padding: 12px 20px;
+.alarm-overlay { --banner: #dc2626; position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: flex; align-items: center; gap: 14px; padding: 12px 20px;
 	color: #fff; background: #dc2626; box-shadow: 0 6px 24px rgba(220,38,38,0.5); animation: alarmpulse 0.9s ease-in-out infinite; }
 @keyframes alarmpulse { 0%,100% { background: #dc2626; } 50% { background: #991b1b; } }
-.alarm-overlay > .material-symbols-rounded { font-size: 28px; }
+.alarm-overlay > .material-symbols-rounded { font-size: var(--icon-2xl); }
 .ao-text { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.ao-text b { font-size: 15px; letter-spacing: 0.04em; }
-.ao-item { font-size: 13px; font-variant-numeric: tabular-nums; background: rgba(0,0,0,0.2); padding: 2px 8px; border-radius: 6px; }
-.ao-ack { margin-left: auto; padding: 8px 18px; font-size: 14px; font-weight: 700; color: #dc2626; background: #fff; border: none; border-radius: 8px; cursor: pointer; }
+.ao-text b { font-size: var(--fs-lg); letter-spacing: 0.04em; }
+.ao-item { font-size: var(--fs-md); font-variant-numeric: tabular-nums; background: rgba(0,0,0,0.2); padding: 2px 8px; border-radius: 6px; }
+.ao-ack { margin-left: auto; }
 .top-overlays { position: fixed; top: 0; left: 0; right: 0; z-index: 90; display: flex; flex-direction: column; max-height: 60vh; overflow-y: auto; }
-.disk-action-banner { display: flex; align-items: center; gap: 12px; padding: 10px 18px; font-size: 13px; color: #fff; flex: none; }
+.disk-action-banner { display: flex; align-items: center; gap: 12px; padding: 10px 18px; font-size: var(--fs-md); color: #fff; flex: none; }
 .disk-action-banner.backup_started { background: #2563eb; }
 .disk-action-banner.backup_unavailable { background: #b45309; }
 .disk-action-banner.forced_stop { background: #dc2626; }
-.disk-action-banner .material-symbols-rounded { font-size: 20px; }
-.disk-action-ack { margin-left: auto; padding: 6px 14px; font-size: 12px; font-weight: 700; color: inherit; background: rgba(255,255,255,0.18); border: none; border-radius: 7px; cursor: pointer; }
-.disk-action-ack:hover { background: rgba(255,255,255,0.28); }
-.reset { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 10px; background: color-mix(in srgb, var(--surface) 55%, transparent); border: 1px solid var(--border); color: var(--text); cursor: pointer; backdrop-filter: blur(4px); transition: background 0.14s, opacity 0.14s; opacity: 0.72; }
-.reset:hover { background: var(--surface-2); opacity: 1; }
-.reset .material-symbols-rounded { font-size: 21px; }
+.disk-action-banner .material-symbols-rounded { font-size: var(--icon-lg); }
+.disk-action-ack { margin-left: auto; }
+/* The shared icon button, see-through while it floats over the panels until pointed at. */
+.reset { background: color-mix(in srgb, var(--surface) 55%, transparent); backdrop-filter: blur(4px); opacity: 0.72; transition: background-color 0.14s, opacity 0.14s; }
+.reset:hover { opacity: 1; }
 .panel-controls { position: fixed; right: 20px; bottom: 20px; z-index: 25; display: flex; align-items: center; gap: 8px; }
 .addwrap { position: relative; }
 .addmenu { position: absolute; top: 32px; right: 0; z-index: 30; min-width: 190px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 5px; box-shadow: 0 14px 40px rgba(0,0,0,0.3); }
 .addmenu.up { top: auto; bottom: 32px; }
-.addmenu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 9px; font-size: 12.5px; color: var(--text); background: transparent; border: none; border-radius: 7px; cursor: pointer; text-align: left; }
+.addmenu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 9px; font-size: var(--fs-md); color: var(--text); background: transparent; border: none; border-radius: 7px; cursor: pointer; text-align: left; }
 .addmenu button:hover:not(:disabled) { background: var(--surface-2); }
 .addmenu button:disabled { opacity: 0.45; cursor: default; }
-.addmenu button .material-symbols-rounded { font-size: 17px; color: var(--text-dim); }
-.addmenu .added { margin-left: auto; font-size: 9.5px; color: var(--text-dim); }
+.addmenu button .material-symbols-rounded { font-size: var(--icon-md); color: var(--text-dim); }
+.addmenu .added { margin-left: auto; font-size: var(--fs-xs); color: var(--text-dim); }
 .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; flex-shrink: 0; }
-.rec-dot.live { background: #ef4444; animation: pulse 1.4s infinite; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); } 70% { box-shadow: 0 0 0 8px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+.rec-dot.live { background: #ef4444; animation: live-pulse 1.4s infinite; }
 /* Recovery banner */
-.recovery-banner { background: color-mix(in srgb, var(--bg-2) 95%, #fbbf24 5%); border-bottom: 1px solid rgba(251,191,36,0.3); padding: 14px 18px; flex: none; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
+.recovery-banner { background: color-mix(in srgb, var(--bg-2) 95%, var(--warn) 5%); border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); padding: 14px 18px; flex: none; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
 .rb-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-.rb-head > .material-symbols-rounded { font-size: 22px; color: #fbbf24; }
-.rb-head b { font-size: 14px; color: var(--text); }
-.rb-hint { font-size: 12px; color: var(--text-dim); }
+.rb-head > .material-symbols-rounded { font-size: var(--icon-xl); color: var(--warn); }
+.rb-head b { font-size: var(--fs-lg); color: var(--text); }
+.rb-hint { font-size: var(--fs-sm); color: var(--text-dim); }
 .rb-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; margin-bottom: 6px; }
 .rb-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .rb-id, .rb-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rb-id { font-size: 12px; font-weight: 600; font-family: var(--mono); color: var(--text); }
-.rb-detail { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
-.rb-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 12px; font-weight: 600; border: none; border-radius: 7px; cursor: pointer; }
-.rb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.rb-btn .material-symbols-rounded { font-size: 15px; }
-.rb-btn.recover { color: #fff; background: #22c55e; }
-.rb-btn.recover:hover:not(:disabled) { background: #16a34a; }
-.rb-btn.discard { color: var(--text-dim); background: var(--surface-2); }
-.rb-btn.discard:hover:not(:disabled) { color: var(--danger); background: rgba(239,68,68,0.1); }
-.rb-btn.dismiss { color: var(--text-dim); background: transparent; border: 1px solid var(--border); }
-.rb-btn.dismiss:hover:not(:disabled) { color: var(--text); background: var(--surface); }
-.rb-btn .spin { animation: rb-spin 1s linear infinite; }
-@keyframes rb-spin { to { transform: rotate(360deg); } }
+.rb-id { font-size: var(--fs-sm); font-weight: 600; font-family: var(--mono); color: var(--text); }
+.rb-detail { font-size: var(--fs-xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
 /* Wrapper exists purely so the responsive row-height maths has a real element to measure from
    (a ref on <GridLayout> would hand back the component instance, not a DOM node). */
 .gridwrap { margin: 8px 10px 0; }
 .vgl-layout { margin: 0; }
-:deep(.vgl-item--placeholder) { background: rgba(56,189,248,0.18); border-radius: 12px; }
+:deep(.vgl-item--placeholder) { background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 12px; }
 :deep(.vgl-item__resizer) { z-index: 5; }
 </style>

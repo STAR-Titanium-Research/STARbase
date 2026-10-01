@@ -80,7 +80,7 @@ describe('buildCloud golden values (pre-refactor characterisation)', () => {
 			expect({
 				count: cloud!.count,
 				pos: pos2,
-				col: Array.from(cloud!.col),
+				col: Array.from(cloud!.col!),
 				bounds: [cloud!.bounds.minX, cloud!.bounds.maxX, cloud!.bounds.minY, cloud!.bounds.maxY],
 				climits: [cloud!.cmin, cloud!.cmax],
 				zv: cloud!.zv ? Array.from(cloud!.zv) : null,

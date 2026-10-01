@@ -1,6 +1,8 @@
 # NI-DAQ page + arbitrary channel model — design
 
 **Date:** 2026-08-02 · **App:** `apps/force-app` · **Slice:** first of the GUI-flexibility roadmap.
+**Status:** implemented 2026-08-02 — `apps/force-app/web/src/nidaq/`,
+`apps/force-app/backend/app/channels.py`, `nidaq_enum.py` and `nidaq_catalog.py`.
 
 ## Goal
 

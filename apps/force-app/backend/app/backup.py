@@ -20,6 +20,7 @@ import urllib.request
 
 from .config import RecordConfig
 from .d1rw import HEADER_SIZE
+from .storage import atomic_write_json
 
 # Explicit name, matching force_app.main / force_app.session / force_app.nidaq. __name__ here
 # resolves to "app.backup", which breaks module filtering in the Settings > Logs view.
@@ -77,8 +78,7 @@ def save_config(captures_root: str, cfg: dict) -> dict:
     merged = load_config(captures_root)
     merged.update(cfg)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(merged, f, indent=2)
+    atomic_write_json(path, merged, indent=2)
     return merged
 
 

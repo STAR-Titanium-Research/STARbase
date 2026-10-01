@@ -1,9 +1,9 @@
 # Recording — Slices 2e (Safety Alarms) & 2c (Kistler LabAmp Control)
 
-**Status:** design approved 2026-07-30. Built in order 2e → 2c. 2e is fully verifiable now (software
-alarms on the live stream). 2c is built from the vendor docs + the MATLAB app's calls; the real amp
-isn't on this network, so it's mock-verified here and validated on the rig later. Vendor docs live in
-`docs/hardware/kistler-labamp/`.
+**Status:** implemented 2026-07-31, in order 2e → 2c (`apps/force-app/web/src/record/alarms.ts`,
+`apps/force-app/backend/app/labamp.py`). 2c was built from the vendor docs + the MATLAB app's calls
+and mock-verified first, as the real amp wasn't on the development network; it now runs against the
+real amplifier on the acquisition PC. Vendor docs live in `docs/hardware/kistler-labamp/`.
 
 ## Context
 

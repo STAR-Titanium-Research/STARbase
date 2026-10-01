@@ -163,44 +163,6 @@ function dateRange(rows, key) {
 
 const PALETTE = ['#2563eb', '#0d9488', '#d97706', '#7c3aed', '#dc2626', '#0891b2', '#65a30d', '#db2777'];
 
-// A simple silhouette of the sample by form (used when no photo exists). The
-// dimensions are shown as a caption beneath it.
-// Isometric (45°) line-drawing of the sample's rough form. Three shaded faces —
-// top (lightest) / left / right — read as a 3-D solid rather than a flat outline.
-function geometrySvg(form) {
-	const f = (form || '').toLowerCase();
-	const wrap = (inner) => `<svg viewBox="0 0 100 92" class="geo-svg" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
-
-	// Vertical isometric cylinder: front/side wall + elliptical top cap.
-	const cyl = (rx, ry, ty, h, hole) => {
-		const side = `<path d="M${50 - rx} ${ty} L${50 - rx} ${ty + h} A${rx} ${ry} 0 0 0 ${50 + rx} ${ty + h} L${50 + rx} ${ty} Z" class="geo geo-left"/>`;
-		const top = `<ellipse cx="50" cy="${ty}" rx="${rx}" ry="${ry}" class="geo geo-top"/>`;
-		const bore = hole ? `<ellipse cx="50" cy="${ty}" rx="${rx * 0.28}" ry="${ry * 0.28}" class="geo-hole"/>` : '';
-		return wrap(side + top + bore);
-	};
-
-	// Isometric box from a top-diamond of half-width a and extruded height h.
-	const box = (a, topY, h) => {
-		const s = a * 0.5; // vertical half-run of the 45° diagonals
-		const T = [50, topY], R = [50 + a, topY + s], B = [50, topY + 2 * s], L = [50 - a, topY + s];
-		const top = `<path d="M${T} L${R} L${B} L${L} Z" class="geo geo-top"/>`;
-		const left = `<path d="M${L} L${B} L${B[0]} ${B[1] + h} L${L[0]} ${L[1] + h} Z" class="geo geo-left"/>`;
-		const right = `<path d="M${B} L${R} L${R[0]} ${R[1] + h} L${B[0]} ${B[1] + h} Z" class="geo geo-right"/>`;
-		return wrap(top + left + right);
-	};
-
-	if (f.includes('disc') || f.includes('puck')) return cyl(33, 15, 30, 16, false); // solid disc — no bore
-	if (/cylind|billet|rod|bar/.test(f)) return cyl(22, 11, 18, 46, false); // cylinder / cylindrical / …
-	if (f.includes('powder'))
-		return wrap(
-			'<ellipse cx="50" cy="70" rx="34" ry="13" class="geo geo-left"/>' +
-				'<path d="M18 70 Q50 30 82 70 Z" class="geo geo-top"/>' +
-				['33,62', '45,64', '57,63', '69,64', '39,56', '51,54', '63,57', '50,48'].map((p) => { const [x, y] = p.split(','); return `<circle cx="${x}" cy="${y}" r="2.1" class="geo-hole"/>`; }).join('')
-		);
-	if (f.includes('plate') || f.includes('sheet')) return box(34, 26, 8);
-	return box(24, 18, 32); // block / coupon / cube / default
-}
-
 export function renderSampleReport(d) {
 	const { sample: s, owner, nickname, location, surfaceFinish, ops, parents, children, tests, qrSvg, recordUrl } = d;
 
@@ -412,13 +374,14 @@ export function renderSampleReport(d) {
 	.qr, .qr svg { width:74px; height:74px; display:block; }
 	.uid { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:8.5px; color:var(--muted); margin-top:4px; }
 	.geo-fig { margin:0; text-align:center; }
-	.geo-fig svg { width:122px; height:auto; display:block; margin:0 auto; }
+	.geo-fig svg { width:190px; height:auto; display:block; margin:0 auto; }
 	/* isometric geometry engine classes (shared with the sample creator) */
 	.gt { fill:#dbeafe; stroke:var(--accent); stroke-width:1.3; stroke-linejoin:round; }
 	.gl { fill:#bfdbfe; stroke:var(--accent); stroke-width:1.3; stroke-linejoin:round; }
 	.gr { fill:#93c5fd; stroke:var(--accent); stroke-width:1.3; stroke-linejoin:round; }
 	.gh { fill:#fff; stroke:var(--accent); stroke-width:1.1; }
 	.gdim { stroke:#64748b; stroke-width:0.8; }
+	.gext { stroke:#94a3b8; stroke-width:0.5; }
 	.gdimt { fill:#334155; font-size:8px; font-weight:700; text-anchor:middle; paint-order:stroke; stroke:#fff; stroke-width:2.5px; }
 	.gsupport { fill:#94a3b8; stroke:#475569; stroke-width:0.6; }
 	.gload { stroke:var(--danger); stroke-width:1.4; }
@@ -507,7 +470,7 @@ export function renderSampleReport(d) {
 			<div class="badges">${statusBadge}${exportBadge}</div>
 		</div>
 		<div class="hd-right">
-			<figure class="geo-fig">${buildGeometry(s)}<figcaption>${dims ? `${esc(dims)} mm` : esc(s.form || 'geometry')}</figcaption></figure>
+			<figure class="geo-fig">${buildGeometry(s, { labelSize: 11 })}<figcaption>${dims ? `${esc(dims)} mm` : esc(s.form || 'geometry')}</figcaption></figure>
 			<div class="qr-wrap">
 				<div class="qr">${qrSvg}</div>
 				<div class="uid">ID ${esc(shortId)}</div>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RecordClient } from './liveClient';
-import { CH_COLOR } from './types';
+import { channelColor } from './types';
 import { theme } from '../theme';
 
 const props = defineProps<{ client: RecordClient; channels?: string[]; scale?: 'amp' | 'psd' }>();
@@ -9,9 +9,15 @@ const canvasEl = ref<HTMLCanvasElement | null>(null);
 let ctx: CanvasRenderingContext2D | null = null;
 let ro: ResizeObserver | null = null;
 
-const ML = 48, MR = 10, MT = 10, MB = 22;
+// MB fits the tick labels (4-14px below the plot) AND the axis title under them; at 22 the
+// title was drawn top-aligned 4px above the canvas edge and always clipped to half its height.
+const ML = 48, MR = 10, MT = 10, MB = 32;
 
 const chans = computed(() => {
+	// client.fft is a plain (non-reactive) field, so without this the pick was cached from the
+	// first render — before any spectrum existed — and the default panel drew an empty grid
+	// until a channel toggle happened to recompute it.
+	void props.client.fftSeq.value;
 	const fft = props.client.fft;
 	const avail = fft ? Object.keys(fft.spectra) : [];
 	const sel = (props.channels && props.channels.length ? props.channels : [fft?.axis || 'Fz']).filter((c) => avail.includes(c));
@@ -115,7 +121,7 @@ function draw() {
 	// Plot data
 	for (const ch of drawn) {
 		const s = fft.spectra[ch]; if (!s) continue;
-		ctx.strokeStyle = CH_COLOR[ch] || '#38bdf8'; ctx.lineWidth = 1.2; ctx.beginPath();
+		ctx.strokeStyle = channelColor(ch, theme.value) || '#38bdf8'; ctx.lineWidth = 1.2; ctx.beginPath();
 		for (let i = 0; i < f.length && i < s.length; i++) {
 			const x = xOf(f[i]);
 			const y = yOf(s[i]);
@@ -126,23 +132,29 @@ function draw() {
 
 	// Axis labels
 	ctx.fillStyle = pal.textFaint; ctx.font = '10px system-ui';
-	ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-	ctx.fillText('Frequency (Hz)', ML + W / 2, CH - 4);
+	ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+	ctx.fillText('Frequency (Hz)', ML + W / 2, CH - 2);
 	ctx.save(); ctx.translate(10, MT + H / 2); ctx.rotate(-Math.PI / 2);
 	ctx.textBaseline = 'middle'; ctx.fillText(psd ? 'Power (dB)' : 'Amplitude (N)', 0, 0); ctx.restore();
 
-	// Legend
+	// Legend, on a backdrop: amplitudes are normalised to the max, so the traces always reach the
+	// top edge the legend sits on.
 	ctx.font = '11px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+	let legendW = 0;
+	for (const ch of drawn) legendW += ctx.measureText(ch).width + 12;
+	ctx.globalAlpha = 0.85; ctx.fillStyle = pal.bg; ctx.fillRect(ML + 1, MT + 1, legendW + 4, 17); ctx.globalAlpha = 1;
 	let lx = ML + 4;
 	for (const ch of drawn) {
-		ctx.fillStyle = CH_COLOR[ch] || '#38bdf8';
+		ctx.fillStyle = channelColor(ch, theme.value) || '#38bdf8';
 		ctx.fillText(ch, lx, MT + 4); lx += ctx.measureText(ch).width + 12;
 	}
 }
 
 watch(() => props.client.fftSeq.value, draw);
 watch(() => props.scale, draw);
-watch(chans, draw, { deep: true });
+// By value: chans now recomputes on every spectrum (it tracks fftSeq), and the fftSeq watcher
+// above already redraws for those — this one only needs to catch a changed selection.
+watch(() => chans.value.join(), draw);
 watch(theme, draw);
 onMounted(() => { resize(); ro = new ResizeObserver(resize); if (canvasEl.value) ro.observe(canvasEl.value); });
 onBeforeUnmount(() => ro?.disconnect());

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { confirmAction, confirmState, resolveActive } from './confirm';
+import { confirmAction, confirmState, promptAction, resolveActive, setPromptValue } from './confirm';
 
 /** Drain the microtask queue so a pending confirmAction() has actually reached `confirmState`. */
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -48,10 +48,65 @@ describe('confirmAction', () => {
 			tone: 'danger',
 		});
 		await settle();
-		expect(confirmState.current?.stats?.[0].value).toBe('412.0 N (limit 400.0 N)');
+		const cur = confirmState.current;
+		expect(cur?.kind === 'confirm' && cur.stats?.[0].value).toBe('412.0 N (limit 400.0 N)');
 		expect(confirmState.current?.confirmLabel).toBe('Silence');
 		expect(confirmState.current?.tone).toBe('danger');
 		resolveActive(false);
 		await p;
+	});
+});
+
+describe('promptAction', () => {
+	it('resolves the entered text on confirm', async () => {
+		// The regression this whole thing exists for: window.prompt() throws
+		// "prompt() is not supported." under Electron, so NidaqPage.vue's "New Aux channel" and
+		// "Virtual" buttons silently did nothing. This is the working replacement.
+		const p = promptAction({ title: 'Name?', defaultValue: 'Aux' });
+		await settle();
+		expect(confirmState.current?.kind).toBe('prompt');
+		expect(confirmState.promptValue).toBe('Aux'); // seeded from defaultValue
+		setPromptValue('Temp1');
+		resolveActive('Temp1');
+		expect(await p).toBe('Temp1');
+	});
+
+	it('resolves null on cancel, mirroring window.prompt()', async () => {
+		const p = promptAction({ title: 'Name?' });
+		await settle();
+		resolveActive(null);
+		expect(await p).toBeNull();
+	});
+
+	it('keeps the dialog open and shows an error when validate rejects the value', async () => {
+		const p = promptAction({
+			title: 'Name?',
+			validate: (v) => (v.trim() ? undefined : 'A name is required.'),
+		});
+		await settle();
+		setPromptValue('');
+		resolveActive(''); // attempt to confirm an empty name
+		expect(confirmState.current).not.toBeNull(); // still open
+		expect(confirmState.promptError).toBe('A name is required.');
+
+		setPromptValue('Aux');
+		resolveActive('Aux');
+		expect(await p).toBe('Aux');
+	});
+
+	it('queues behind an in-progress confirm dialog, same as two confirms would', async () => {
+		const confirmP = confirmAction({ title: 'first', message: 'M' });
+		const promptP = promptAction({ title: 'second' });
+		await settle();
+
+		expect(confirmState.current?.title).toBe('first');
+		resolveActive(true);
+		expect(await confirmP).toBe(true);
+
+		await settle();
+		expect(confirmState.current?.kind).toBe('prompt');
+		expect(confirmState.current?.title).toBe('second');
+		resolveActive('value');
+		expect(await promptP).toBe('value');
 	});
 });

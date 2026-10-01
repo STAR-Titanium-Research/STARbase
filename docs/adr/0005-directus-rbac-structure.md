@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-06-18
 - **Deciders:** Maintainer + Claude (Phase 3 planning)
+- **Update (2026-07-02):** human accounts now use two roles, Lab Admin and Lab
+  Member (`scripts/configure_users_and_policies.sql`). The three roles below
+  remain defined and are what machine users are provisioned on — see
+  [`core/README.md`](../../core/README.md#roles).
 
 ## Context
 

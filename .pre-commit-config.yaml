@@ -37,3 +37,13 @@ repos:
     rev: v2.13.1-beta
     hooks:
       - id: hadolint-docker
+
+  # The sample-geometry drawing engine is vendored into three Directus extensions.
+  - repo: local
+    hooks:
+      - id: geometry-copies-in-sync
+        name: geometry engine copies in sync
+        entry: bash scripts/sync_geometry.sh --check
+        language: system
+        pass_filenames: false
+        files: ^core/extensions/(d1-geometry-preview|d1-home|d1-report)/src/

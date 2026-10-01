@@ -3,10 +3,46 @@ free space, and total capacity. Windows-focused (the acquisition PC runs Windows
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
 import subprocess
+import tempfile
+import time as _time
+
+# Windows refuses os.replace onto a file another handle has open (WinError 5), e.g. a threadpool
+# endpoint reading summary.json at that moment. Those reads are brief, so retry for up to ~0.5 s.
+_REPLACE_RETRIES = 20
+_REPLACE_BACKOFF_S = 0.025
+
+
+def atomic_write_json(path: str, data, *, fsync: bool = False, **dump_kw) -> None:
+    """Write JSON via a temp file + os.replace, so a reader never sees a half-written file.
+
+    The temp file is unique per call, so concurrent writers to the same path never share one."""
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, **dump_kw)
+            if fsync:
+                f.flush()
+                os.fsync(f.fileno())
+        for attempt in range(_REPLACE_RETRIES):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_RETRIES - 1:
+                    raise
+                _time.sleep(_REPLACE_BACKOFF_S)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _drive_letters() -> list[str]:
@@ -63,6 +99,27 @@ def _detect_ssd_map() -> dict[str, bool]:
         return {}
 
 
+# _detect_ssd_map() shells out to PowerShell for a real CIM/WMI query (Get-PhysicalDisk) that takes
+# multiple seconds — measured at ~3.2s against real hardware, essentially all of it PowerShell/WMI,
+# not process-launch overhead. Physical disk media type doesn't change while the app is running, so
+# paying that cost on every /storage/drives call (i.e. every time the General settings tab is
+# opened, since the frontend caches nothing of its own either) made that view stall every time.
+# A short TTL — rather than caching forever — means a drive attached mid-session (e.g. a new
+# external SSD) is picked up within a few minutes without requiring an app restart.
+SSD_CACHE_TTL_SEC = 300
+_ssd_cache: dict[str, bool] | None = None
+_ssd_cache_at: float = 0.0
+
+
+def _detect_ssd_map_cached() -> dict[str, bool]:
+    global _ssd_cache, _ssd_cache_at
+    now = _time.monotonic()
+    if _ssd_cache is None or (now - _ssd_cache_at) > SSD_CACHE_TTL_SEC:
+        _ssd_cache = _detect_ssd_map()
+        _ssd_cache_at = now
+    return _ssd_cache
+
+
 def _usable_root(root: str) -> str:
     """Return the path that should actually be offered for a drive, not necessarily its bare root.
 
@@ -100,7 +157,7 @@ def list_drives() -> list[dict]:
             return []
 
     letters = _drive_letters()
-    ssd_map = _detect_ssd_map()
+    ssd_map = _detect_ssd_map_cached()
     drives: list[dict] = []
     for letter in letters:
         root = f"{letter}:\\"

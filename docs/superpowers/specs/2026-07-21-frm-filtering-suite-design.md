@@ -1,5 +1,9 @@
 # FRM signal-filtering suite — design
 
+**Status:** implemented July 2026 — `plugins/filter-service/`,
+`packages/force-plotting/src/filterChain.ts` and migrations `20260721000097_filter_chain.sql`
+and `20260722000099_filter_baked.sql`.
+
 ## Motivation
 
 The FRM maps colour points by instantaneous force, so every signal artefact becomes a map

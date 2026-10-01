@@ -37,7 +37,7 @@ function applyPartial(j: Partial<AppConfig> | null | undefined) {
 	for (const k of KEYS) if (j[k]) config[k] = stripSlash(j[k] as string);
 }
 
-// Precedence: env defaults < /config.json < localStorage override (Settings > General).
+// Precedence: env defaults < /config.json < localStorage override (Settings > Connectivity).
 export async function loadRuntimeConfig(): Promise<void> {
 	try {
 		// Base-relative so it resolves to <base>config.json (e.g. /app/config.json) and never the
@@ -61,7 +61,7 @@ export function getConfigDefaults(): Readonly<AppConfig> {
 	return defaults;
 }
 
-// Edit service URLs at runtime (Settings > General). Persists a localStorage override and updates
+// Edit service URLs at runtime (Settings > Connectivity). Persists a localStorage override and updates
 // the live config in place, so subsequent requests use the new endpoints without a rebuild.
 export function setConfigOverride(partial: Partial<AppConfig>): void {
 	applyPartial(partial);

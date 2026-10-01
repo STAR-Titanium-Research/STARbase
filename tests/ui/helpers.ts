@@ -53,9 +53,10 @@ export async function isFieldVisible(page: Page, name: string): Promise<boolean>
 /**
  * Pick a value from a Directus `select-dropdown` (enum) field. Clicks the field
  * to open the portalled option list, then clicks the option whose text starts
- * with `optionText` (so "Machining" matches "Machining (turning / …)").
+ * with `optionText` (so "Machining" matches "Machining (turning / …)"); pass
+ * `{ exact: true }` to match the whole option text, e.g. "Bar" without "Round bar".
  */
-export async function selectDropdown(page: Page, fieldLabel: string, optionText: string) {
+export async function selectDropdown(page: Page, fieldLabel: string, optionText: string, opts: { exact?: boolean } = {}) {
 	const field = fieldByLabel(page, fieldLabel);
 	await field.locator('.v-input, input').first().click();
 	await page.waitForTimeout(400);
@@ -65,7 +66,7 @@ export async function selectDropdown(page: Page, fieldLabel: string, optionText:
 	await overlay.waitFor({ state: 'visible' });
 	const option = overlay
 		.locator('.v-list-item')
-		.filter({ hasText: new RegExp(escapeRe(optionText), 'i') })
+		.filter({ hasText: new RegExp(opts.exact ? `^\\s*${escapeRe(optionText)}\\s*$` : escapeRe(optionText), 'i') })
 		.first();
 	await option.click();
 }

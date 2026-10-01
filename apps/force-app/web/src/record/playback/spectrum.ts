@@ -22,6 +22,9 @@ export interface SpectrumRequest {
 }
 export interface SpectrumClient {
 	request(req: SpectrumRequest): void;
+	// Whether request() would take a request right now -- lets a caller skip building a large
+	// samples buffer that the throttle would only discard.
+	wouldAccept(force?: boolean): boolean;
 	onReply: (r: SpectrumReply) => void;
 	onError: (e: Error) => void;
 	flush(): Promise<void>;  // settle all in-flight + pending work (tests, and dispose)
@@ -43,9 +46,12 @@ export function createSpectrumClient(baseUrl: string, opts: { minIntervalMs?: nu
 			// The throttle applies whether or not a call is in flight. Exempting the in-flight case
 			// defeated it entirely: during playback there is essentially always one in flight, so
 			// requests went out back-to-back at round-trip rate with ~300 KB bodies each.
-			if (!req.force && performance.now() - lastSent < minInterval) return;
+			if (!c.wouldAccept(req.force)) return;
 			pending = req;                       // newest wins; an older pending one is discarded
 			if (!inFlight) inFlight = pump();
+		},
+		wouldAccept(force) {
+			return !disposed && (!!force || performance.now() - lastSent >= minInterval);
 		},
 		async flush() {
 			while (inFlight) await inFlight;

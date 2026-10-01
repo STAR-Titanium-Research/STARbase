@@ -2,7 +2,10 @@
 
 - **Date:** 2026-08-10
 - **Implements:** ADR-0010 steps 3–4 (PyInstaller sidecar, auto-update)
-- **Status:** Agreed, not yet implemented
+- **Status:** Implemented 2026-08-11 — `apps/force-app/desktop/` (Electron shell),
+  `apps/force-app/backend/force-app-backend.spec` (PyInstaller sidecar) and
+  `.github/workflows/force-app-release.yml`; releases reach rigs through the Caddy-served feed
+  (see [`docs/force-app-operations.md`](../../force-app-operations.md))
 
 ## Problem
 

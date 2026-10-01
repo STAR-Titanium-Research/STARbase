@@ -1,9 +1,31 @@
 # ADR-0004 — JSONB for Dynamic Method Parameters
 
-**Status:** Accepted
+**Status:** Superseded — parameters are now typed columns (see *Update* below)
 **Date:** 2026-06-18
 **Deciders:** Maintainer + Claude (planning session)
 **Tags:** schema, jsonb, dynamic-template, ai-readiness
+
+---
+
+## Update — superseded by typed parameter columns
+
+By 2026-06-26 the schema had moved to Approach A below, in four steps:
+
+1. `20260621000025_process_param_tables.sql` and `…026_test_param_tables.sql` —
+   typed per-process and per-test parameter tables, 1:1 with operations and
+   sessions, with `recorded_metadata` kept for legacy data.
+2. `20260623000031_process_category.sql` — a scalar `process_category`
+   discriminator, because Directus field conditions evaluate on a scalar in the
+   same collection but not on the `method_id` M2O relation.
+3. `20260623000032_inline_param_fields.sql` — those tables flattened into
+   prefixed inline columns on `manufacturing_operations` and `test_sessions`
+   (`machining_*`, `sintering_*`, `tensile_*`, …), so the typed fields render
+   directly in the form.
+4. `20260626000039_drop_method_parameters.sql` — the `method_parameters`
+   registry dropped as superseded.
+
+`recorded_metadata` remains for legacy rows. The decision below is kept as the
+record of the original reasoning; the change itself has no ADR of its own.
 
 ---
 

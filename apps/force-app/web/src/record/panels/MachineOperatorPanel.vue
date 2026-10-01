@@ -50,8 +50,8 @@ const MACHINING_SUBTYPES = [
 .machine-op { margin-bottom: 12px; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 .row2 :deep(.lookup) { margin-bottom: 8px; min-width: 0; }
-.op-type { display: block; font-size: 11.5px; color: var(--text-dim); margin: 0; }
-.op-type select { display: block; width: 100%; margin-top: 3px; padding: 7px 9px; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; outline: none; font-family: inherit; }
+.op-type { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }
+.op-type select { display: block; width: 100%; margin-top: 3px; padding: 7px 9px; font-size: var(--fs-md); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; outline: none; font-family: inherit; }
 .op-type select:focus { border-color: var(--accent); }
 .op-type select:disabled { opacity: 0.55; }
 .op-type select option { background: var(--bg); color: var(--text); }

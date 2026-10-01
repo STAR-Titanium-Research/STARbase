@@ -33,7 +33,7 @@ const fmtHz = (v: number | undefined) => (typeof v === 'number' && Number.isFini
 </template>
 
 <style scoped>
-.bw-strip { display: flex; align-items: center; gap: 10px; padding: 5px 12px; font-size: 11px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.bw-strip { display: flex; align-items: center; gap: 10px; padding: 5px 12px; font-size: var(--fs-xs, 11px); border-top: 1px solid var(--border); flex-wrap: wrap; }
 .bw-seg { padding: 2px 8px; border-radius: 4px; }
 .bw-quant { background: color-mix(in srgb, #16a34a 22%, transparent); color: #86efac; }
 .bw-event { background: color-mix(in srgb, #d97706 22%, transparent); color: #fcd34d; }

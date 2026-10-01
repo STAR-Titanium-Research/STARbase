@@ -46,7 +46,7 @@ withDefaults(defineProps<{
 	background: var(--bg-1, #0f172a); color: var(--text, #e5e7eb);
 	border: 1px solid var(--border, rgba(255,255,255,0.16));
 	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
-	font-size: 11px; line-height: 1.45; font-weight: 400; font-style: normal;
+	font-size: var(--fs-xs, 11px); line-height: 1.45; font-weight: 400; font-style: normal;
 	text-align: left; white-space: normal; letter-spacing: normal; text-transform: none;
 	opacity: 0; visibility: hidden; transform: translateY(-3px);
 	transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;

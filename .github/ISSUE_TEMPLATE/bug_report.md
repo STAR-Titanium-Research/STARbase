@@ -14,7 +14,7 @@ labels: bug
 ## Expected vs actual
 
 ## Environment
-- Component (core / db / plugin name / infra):
+- Component (core / db / plugin name / infra / force-app):
 - Phase (`plan.md`):
 - Deployment (Docker on Windows / Linux / cloud):
 

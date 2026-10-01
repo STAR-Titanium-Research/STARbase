@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { getConfig, getConfigDefaults, setConfigOverride, resetConfigOverride } from '../config';
+import OfflineModeCard from './OfflineModeCard.vue';
 
 interface Finding {
 	service: string;
@@ -11,10 +12,8 @@ interface Finding {
 	fix_command?: string;
 	fixable?: string;
 }
-interface DiskInfo { path?: string; free_gb: number; total_gb: number; used_pct: number; captures_root?: string; }
 
 const findings = ref<Finding[]>([]);
-const disk = ref<DiskInfo | null>(null);
 const loading = ref(false);
 const lastChecked = ref('');
 const recorderDown = ref(false);
@@ -23,7 +22,6 @@ const fixingId = ref('');
 async function runDoctor() {
 	loading.value = true;
 	findings.value = [];
-	disk.value = null;
 	recorderDown.value = false;
 
 	const cfg = getConfig();
@@ -52,10 +50,10 @@ async function runDoctor() {
 				message: `Cannot reach ${cfg.recorderUrl}`,
 				diagnosis: isLocal
 					? `The recorder backend is not running on this machine (port ${port}). It needs to be started as a background process before recording.`
-					: `Cannot connect to ${host}:${port}. Check that the recorder backend is running on that host and the URL is correct in Settings > General.`,
+					: `Cannot connect to ${host}:${port}. Check that the recorder backend is running on that host and the Recorder URL under Service endpoints below is correct.`,
 				fix: isLocal
 					? 'Start the backend by running this command in a terminal:'
-					: `Verify the Recorder URL in Settings > General, or start the backend on ${host}.`,
+					: `Verify the Recorder URL under Service endpoints below, or start the backend on ${host}.`,
 				fix_command: isLocal
 					? `cd "${backendPath}"; python -m uvicorn app.main:app --host 0.0.0.0 --port ${port}`
 					: undefined,
@@ -66,7 +64,7 @@ async function runDoctor() {
 				status: 'fail',
 				message: 'Invalid recorder URL',
 				diagnosis: `The configured recorder URL "${cfg.recorderUrl}" is not a valid URL.`,
-				fix: 'Fix the Recorder URL in Settings > General (e.g. http://localhost:8200).',
+				fix: 'Fix the Recorder URL under Service endpoints below (e.g. http://localhost:8200).',
 			});
 		}
 
@@ -107,7 +105,6 @@ async function runDoctor() {
 		if (!res.ok) throw new Error(`HTTP ${res.status}`);
 		const data = await res.json();
 		findings.value = data.findings || [];
-		disk.value = data.disk || null;
 	} catch (e: any) {
 		findings.value = [{ service: 'Doctor', status: 'fail', message: `Doctor endpoint failed: ${e?.message}` }];
 	}
@@ -153,6 +150,9 @@ function saveEndpoints() {
 	setConfigOverride({ ...epForm });
 	epSaved.value = true;
 	setTimeout(() => (epSaved.value = false), 2000);
+	// Check the new endpoints straight away (this replaces a separate "Re-check" button that did the
+	// same thing as "Run doctor" at the top of the page).
+	void runDoctor();
 }
 function resetEndpoints() {
 	resetConfigOverride();
@@ -160,7 +160,7 @@ function resetEndpoints() {
 }
 
 const statusIcon: Record<string, string> = { ok: 'check_circle', fail: 'cancel', warn: 'warning', info: 'info' };
-const statusColor: Record<string, string> = { ok: '#4ade80', fail: 'var(--danger)', warn: '#fbbf24', info: 'var(--accent)' };
+const statusColor: Record<string, string> = { ok: 'var(--ok)', fail: 'var(--danger)', warn: 'var(--warn)', info: 'var(--accent)' };
 
 onMounted(() => runDoctor());
 </script>
@@ -170,8 +170,10 @@ onMounted(() => runDoctor());
 		<h2>Connectivity Doctor</h2>
 		<p class="lead">Diagnoses all connections, hardware, and system health. Identifies problems and suggests fixes.</p>
 
+		<OfflineModeCard />
+
 		<div class="actions">
-			<button class="btn ghost" :disabled="loading" @click="runDoctor">
+			<button class="btn" :disabled="loading" @click="runDoctor">
 				<span class="material-symbols-rounded">{{ loading ? 'hourglass_top' : 'stethoscope' }}</span>
 				{{ loading ? 'Diagnosing…' : 'Run doctor' }}
 			</button>
@@ -195,38 +197,23 @@ onMounted(() => runDoctor());
 						<span class="finding-msg">{{ f.message }}</span>
 					</div>
 					<div v-if="f.diagnosis" class="finding-diagnosis">
-						<span class="material-symbols-rounded" style="font-size:13px;flex-shrink:0">search</span>
+						<span class="material-symbols-rounded" style="font-size: var(--icon-xs);flex-shrink:0">search</span>
 						{{ f.diagnosis }}
 					</div>
 					<div v-if="f.fix" class="finding-fix">
-						<span class="material-symbols-rounded" style="font-size:13px;flex-shrink:0">build</span>
-						<span>{{ f.fix }}</span>
-						<button v-if="f.fixable" class="fix-btn" :disabled="fixingId === f.service" @click="applyFix(f)">
+						<span class="material-symbols-rounded" style="font-size: var(--icon-xs);flex-shrink:0">build</span>
+						<span class="fix-text">{{ f.fix }}</span>
+						<button v-if="f.fixable" class="btn sm success" :disabled="fixingId === f.service" @click="applyFix(f)">
 							{{ fixingId === f.service ? 'Fixing…' : 'Fix now' }}
 						</button>
 					</div>
 					<div v-if="f.fix_command" class="cmd-block">
 						<code>{{ f.fix_command }}</code>
-						<button class="copy-btn" @click="copyCommand(f.fix_command!, f.service)">
+						<button class="btn sm" @click="copyCommand(f.fix_command!, f.service)">
 							<span class="material-symbols-rounded">{{ copied === f.service ? 'check' : 'content_copy' }}</span>
 							{{ copied === f.service ? 'Copied' : 'Copy' }}
 						</button>
 					</div>
-				</div>
-			</div>
-		</div>
-
-		<div v-if="disk" class="disk-section">
-			<h3>Recording storage</h3>
-			<div class="disk-info">
-				<div class="disk-stat"><span>Location</span><b class="mono">{{ disk.captures_root || disk.path }}</b></div>
-				<div class="disk-row">
-					<div class="disk-stat"><span>Free</span><b :class="{ warn: disk.free_gb < 10, crit: disk.free_gb < 5 }">{{ disk.free_gb.toFixed(1) }} GB</b></div>
-					<div class="disk-stat"><span>Total</span><b>{{ disk.total_gb.toFixed(0) }} GB</b></div>
-					<div class="disk-stat"><span>Used</span><b>{{ disk.used_pct.toFixed(1) }}%</b></div>
-				</div>
-				<div class="disk-bar-wrap">
-					<div class="disk-bar" :class="{ warn: disk.used_pct > 85, crit: disk.used_pct > 95 }" :style="{ width: disk.used_pct + '%' }"></div>
 				</div>
 			</div>
 		</div>
@@ -244,77 +231,50 @@ onMounted(() => runDoctor());
 			<span class="ep-hint">{{ f.hint }}</span>
 		</label>
 		<div class="actions">
-			<button class="btn save" @click="saveEndpoints">{{ epSaved ? 'Saved ✓' : 'Save' }}</button>
-			<button class="btn ghost" @click="resetEndpoints">Reset to defaults</button>
-			<button class="btn ghost" @click="runDoctor">
-				<span class="material-symbols-rounded" style="font-size:15px">stethoscope</span>
-				Re-check
-			</button>
+			<button class="btn primary" @click="saveEndpoints">{{ epSaved ? 'Saved ✓' : 'Save' }}</button>
+			<button class="btn" @click="resetEndpoints">Reset to defaults</button>
 		</div>
 	</div>
 </template>
 
 <style scoped>
 .connectivity { max-width: 660px; }
-h2 { margin: 0 0 4px; font-size: 16px; }
-h3 { margin: 24px 0 8px; font-size: 14px; }
+h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
 .mt { margin-top: 32px; }
 
 /* Endpoint editor */
 .field { display: block; margin-bottom: 14px; }
-.lbl { display: block; font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 5px; }
-.field input { display: block; width: 100%; padding: 9px 11px; font-size: 13px; font-family: var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; box-sizing: border-box; }
+.lbl { display: block; font-size: var(--fs-md); font-weight: 600; color: var(--text); margin-bottom: 5px; }
+.field input { display: block; width: 100%; padding: 9px 11px; font-size: var(--fs-md); font-family: var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; box-sizing: border-box; }
 .field input:focus { border-color: var(--accent); }
-.ep-hint { display: block; font-size: 11.5px; color: var(--text-dim); margin-top: 3px; }
-.btn.save { background: var(--accent); color: var(--accent-ink); }
-.lead { margin: 0 0 18px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+.ep-hint { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin-top: 3px; }
+.lead { margin: 0 0 18px; font-size: var(--fs-md); color: var(--text-dim); line-height: 1.5; }
 .actions { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; font-size: 13px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; }
-.btn.ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn .material-symbols-rounded { font-size: 17px; }
-.last { font-size: 11.5px; color: var(--text-dim); }
+.last { font-size: var(--fs-sm); color: var(--text-dim); }
 
 .recorder-alert { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; margin-bottom: 14px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: 10px; }
-.recorder-alert .material-symbols-rounded { font-size: 22px; color: var(--danger); margin-top: 1px; }
-.recorder-alert b { font-size: 13px; color: var(--text); }
-.recorder-alert p { margin: 2px 0 0; font-size: 12px; color: var(--text-dim); }
+.recorder-alert .material-symbols-rounded { font-size: var(--icon-xl); color: var(--danger); margin-top: 1px; }
+.recorder-alert b { font-size: var(--fs-md); color: var(--text); }
+.recorder-alert p { margin: 2px 0 0; font-size: var(--fs-sm); color: var(--text-dim); }
 
 .results { display: flex; flex-direction: column; gap: 6px; }
 .finding { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--surface); border-radius: 9px; border: 1px solid var(--border); }
-.finding .icon { font-size: 20px; margin-top: 1px; flex-shrink: 0; }
+.finding .icon { font-size: var(--icon-lg); margin-top: 1px; flex-shrink: 0; }
 .finding-body { flex: 1; min-width: 0; }
 .finding-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.finding-service { font-size: 13px; font-weight: 700; color: var(--text); }
-.finding-msg { font-size: 12px; color: var(--text-dim); }
-.finding-diagnosis { display: flex; align-items: flex-start; gap: 5px; margin-top: 5px; font-size: 11.5px; color: var(--text-dim); line-height: 1.45; }
-.finding-fix { display: flex; align-items: flex-start; gap: 5px; margin-top: 4px; font-size: 11.5px; color: var(--accent); line-height: 1.45; }
-.finding-fix span { flex: 1; }
+.finding-service { font-size: var(--fs-md); font-weight: 700; color: var(--text); }
+.finding-msg { font-size: var(--fs-sm); color: var(--text-dim); }
+.finding-diagnosis { display: flex; align-items: flex-start; gap: 5px; margin-top: 5px; font-size: var(--fs-sm); color: var(--text-dim); line-height: 1.45; }
+.finding-fix { display: flex; align-items: flex-start; gap: 5px; margin-top: 4px; font-size: var(--fs-sm); color: var(--accent); line-height: 1.45; }
+/* Only the text grows — a bare `span` selector also caught the wrench icon, so the two split the
+   row 50/50 and every fix line started half-way across the card, away from its icon. */
+.finding-fix .fix-text { flex: 1; }
 
-.fix-btn { padding: 3px 10px; font-size: 11px; font-weight: 700; color: #fff; background: #22c55e; border: none; border-radius: 5px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
-.fix-btn:hover:not(:disabled) { background: #16a34a; }
-.fix-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .cmd-block { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; }
-.cmd-block code { flex: 1; font-family: var(--mono); font-size: 11.5px; color: var(--text); word-break: break-all; user-select: all; }
-.copy-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 11px; font-weight: 700; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
-.copy-btn .material-symbols-rounded { font-size: 14px; }
-.copy-btn:hover { background: var(--surface-2); }
+.cmd-block code { flex: 1; font-family: var(--mono); font-size: var(--fs-sm); color: var(--text); word-break: break-all; user-select: all; }
 
-.all-good { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 12px 16px; background: rgba(74,222,128,0.08); border: 1px solid rgba(74,222,128,0.2); border-radius: 10px; font-size: 14px; font-weight: 700; color: #4ade80; }
-.all-good .material-symbols-rounded { font-size: 22px; }
+.all-good { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 12px 16px; background: color-mix(in srgb, var(--ok) 8%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 20%, transparent); border-radius: 10px; font-size: var(--fs-lg); font-weight: 700; color: var(--ok); }
+.all-good .material-symbols-rounded { font-size: var(--icon-xl); }
 
-.disk-section { margin-top: 16px; }
-.disk-info { padding: 12px; background: var(--surface); border-radius: 9px; border: 1px solid var(--border); }
-.disk-stat { display: flex; flex-direction: column; }
-.disk-stat span { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
-.disk-stat b { font-size: 13px; font-variant-numeric: tabular-nums; }
-.disk-stat b.mono { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
-.disk-stat b.warn { color: #fbbf24; }
-.disk-stat b.crit { color: #ef4444; }
-.disk-row { display: flex; gap: 20px; margin-top: 8px; flex-wrap: wrap; }
-.disk-bar-wrap { width: 100%; height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; margin-top: 10px; }
-.disk-bar { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
-.disk-bar.warn { background: #fbbf24; }
-.disk-bar.crit { background: #ef4444; }
 </style>

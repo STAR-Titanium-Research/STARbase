@@ -23,7 +23,8 @@ opt-in user action, not something autoassign should guess at.
 
 from __future__ import annotations
 
-from .config import DEFAULT_NIDAQ_CHANNELS, DYNO_CHANNELS, TACHO_CHANNEL
+from . import virtual_channels
+from .config import DEFAULT_NIDAQ_CHANNELS, DYNO_CHANNELS, TACHO_CHANNEL, ExtraChannel
 
 ROLES = ["Fx", "Fy", "Fz", "Mz", "Tacho", "Index", "Aux"]
 ROLE_COLOR = {
@@ -55,6 +56,7 @@ def make_channel(
     sensitivity: float | None = None,
     gain: float | None = None,
     source: str = "hardware",
+    formula: str | None = None,
 ) -> dict:
     return {
         "name": name,
@@ -66,6 +68,7 @@ def make_channel(
         # field rather than overloading gain_n_per_v, which would silently mix units.
         "gain_nm_per_v": None,
         "source": source,
+        "formula": formula,
         "color": ROLE_COLOR.get("Virtual" if source == "virtual" else role, "#94a3b8"),
     }
 
@@ -150,6 +153,56 @@ def to_record_channels(channels: list[dict], kind: str = DYNO_STATIONARY) -> lis
         phys = c.get("physical") if c else None
         out.append(phys or DEFAULT_NIDAQ_CHANNELS[i])
     return out
+
+
+_CORE_NAMES = set(FORCE_ORDER) | {TACHO_CHANNEL}
+
+
+def to_extra_channels(channels: list[dict]) -> list[ExtraChannel]:
+    """Everything beyond the fixed [Fx1..Fz4, Tacho] layout — real Aux inputs (bound to a physical
+    port, genuinely acquired) and virtual channels (a formula, computed from other channels, never
+    acquired). Order is preserved from the stored config, which is also acquisition/evaluation
+    order: a channel is skipped, not failed, if it's missing what it needs (no physical for
+    hardware, no formula for virtual) — main.py's validation is what should have caught that
+    earlier, at save time, when there's a UI to show the operator why."""
+    out: list[ExtraChannel] = []
+    for c in channels:
+        name = c.get("name")
+        if not name or name in _CORE_NAMES:
+            continue
+        source = c.get("source")
+        if source == "hardware" and c.get("physical"):
+            out.append(ExtraChannel(name=name, source="hardware", physical=c["physical"]))
+        elif source == "virtual" and c.get("formula"):
+            out.append(ExtraChannel(name=name, source="virtual", formula=c["formula"]))
+    return out
+
+
+def validate_virtual_formulas(channels: list[dict]) -> None:
+    """Raise virtual_channels.FormulaError — with the offending channel's NAME in the message, so
+    the equation-builder UI can show it directly — if any virtual channel's formula is malformed
+    or references something it may not: a channel that doesn't exist in this list at all, or
+    another virtual channel (formulas are flat by design; see virtual_channels.py for why).
+    Called from PUT /nidaq/channels so a bad formula is caught when it's saved, with a UI right
+    there to explain why, rather than silently at the next acquisition chunk that hits it.
+    """
+    known = set(_CORE_NAMES) | {"Fx", "Fy", "Fz"}
+    for c in channels:
+        if c.get("source") == "hardware" and c.get("name"):
+            known.add(c["name"])
+    for c in channels:
+        if c.get("source") != "virtual":
+            continue
+        name = c.get("name") or "(unnamed)"
+        try:
+            refs = virtual_channels.referenced_channels(c.get("formula") or "")
+        except virtual_channels.FormulaError as e:
+            raise virtual_channels.FormulaError(f"'{name}': {e}") from e
+        unknown = refs - known
+        if unknown:
+            raise virtual_channels.FormulaError(
+                f"'{name}' references unknown channel(s): {', '.join(sorted(unknown))}"
+            )
 
 
 def dyno_gains(channels: list[dict], kind: str = DYNO_STATIONARY) -> list[float]:
