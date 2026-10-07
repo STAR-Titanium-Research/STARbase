@@ -1,0 +1,84 @@
+-- migrate:up
+-- Review finding 4.6: the next sample number was worked out in the browser.
+--
+-- d1-sample-code and the Register-sample page read every sample_code the user could see, took the
+-- highest leading integer + 1, and fell back to 1 when the read failed. A restricted account sees
+-- fewer samples and so computes a lower "max"; two people registering at once compute the same
+-- number; and a failed read silently proposed 1. The UNIQUE constraint on sample_code turned the
+-- collisions into errors, but only after the user had filled in the form.
+--
+-- The database now owns the number. The interface still composes the readable part of the code
+-- ({alloy}-{method}-{Y}-{M}-{D}, unchanged) and writes it behind a {seq}- placeholder:
+--     {seq}-AA-MF-2026-10-4   ->   37-AA-MF-2026-10-4
+-- A BEFORE INSERT / UPDATE trigger replaces the placeholder with 1 + the highest leading integer of
+-- every OTHER sample's code, under a global advisory lock so concurrent registrations queue up and
+-- see each other's committed rows. A code without the placeholder (typed by hand, imported, a
+-- legacy code) is stored exactly as given. On UPDATE the row's own current number is excluded, which
+-- is what the "renumber" button in the interface asks for.
+--
+-- Lock order: the project_rollup refresh (migration 118) holds its advisory lock to commit, and the
+-- operation trigger (migration 126) takes it before its own locks. This trigger takes the same
+-- rollup lock before the sample-number lock, so every transaction acquires rollup -> sample ->
+-- counter in that order and the two cannot deadlock (a transaction that registers a sample and
+-- writes operations in either order is safe). It is taken only when a placeholder is being
+-- replaced; samples written with a plain code take no lock.
+
+CREATE FUNCTION trg_physical_samples_assign_code_number() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+AS $$
+DECLARE
+    v_next BIGINT;
+BEGIN
+    IF NEW.sample_code LIKE '{seq}-%'
+       AND (TG_OP = 'INSERT' OR NEW.sample_code IS DISTINCT FROM OLD.sample_code)
+    THEN
+        -- Same key as refresh_project_rollup() in migration 118; always first (see the header).
+        PERFORM pg_catalog.pg_advisory_xact_lock(
+            pg_catalog.hashtextextended('refresh_project_rollup', 0));
+        PERFORM pg_catalog.pg_advisory_xact_lock(
+            pg_catalog.hashtextextended('physical_samples.sample_code_number', 0));
+        SELECT COALESCE(max((substring(ps.sample_code FROM '^(\d{1,9})-'))::bigint), 0) + 1
+        INTO   v_next
+        FROM   public.physical_samples ps
+        WHERE  ps.sample_id IS DISTINCT FROM NEW.sample_id;
+        NEW.sample_code := v_next::text || substr(NEW.sample_code, length('{seq}') + 1);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION trg_physical_samples_assign_code_number() IS
+    'BEFORE INSERT / UPDATE on physical_samples: replaces a leading {seq}- in sample_code with the '
+    'next sample number (1 + the highest leading integer of the other samples'' codes), under a '
+    'global advisory lock (review 4.6).';
+
+CREATE TRIGGER physical_samples_assign_code_number
+    BEFORE INSERT OR UPDATE ON physical_samples
+    FOR EACH ROW EXECUTE FUNCTION trg_physical_samples_assign_code_number();
+
+COMMENT ON TRIGGER physical_samples_assign_code_number ON physical_samples IS
+    'Assigns the sample number of a {seq}-... sample_code server-side (review 4.6).';
+
+-- Deploy-order guard: if the new interface bundle runs before this migration, a {seq}- code would be
+-- stored literally. The BEFORE trigger above runs before CHECK constraints, so every valid
+-- placeholder insert is rewritten first and passes; a literal {seq} that survives (a placeholder
+-- anywhere but the start) is rejected. NOT VALID: rows already stored are not scanned.
+ALTER TABLE physical_samples
+    ADD CONSTRAINT physical_samples_sample_code_no_placeholder_check
+    CHECK (sample_code !~ '\{seq\}') NOT VALID;
+
+COMMENT ON CONSTRAINT physical_samples_sample_code_no_placeholder_check ON physical_samples IS
+    'Rejects a sample_code that still contains the {seq} placeholder after the assign-number trigger ran (interface deployed before the migration). Not validated against existing rows.';
+
+COMMENT ON COLUMN physical_samples.sample_code IS
+    'Human-readable pseudonym, e.g. 10-AA-MF-2023-06-03. Unique-constrained. NOT the primary key. '
+    'A code that starts with {seq}- gets its number assigned by the database on insert (1 + the '
+    'highest number in use); any other value is stored as given.';
+
+-- migrate:down
+ALTER TABLE physical_samples DROP CONSTRAINT IF EXISTS physical_samples_sample_code_no_placeholder_check;
+DROP TRIGGER IF EXISTS physical_samples_assign_code_number ON physical_samples;
+DROP FUNCTION IF EXISTS trg_physical_samples_assign_code_number();
+COMMENT ON COLUMN physical_samples.sample_code IS
+    'Human-readable pseudonym, e.g. 10-AA-MF-2023-06-03. Generated by generate_sample_code(). Unique-constrained. NOT the primary key.';

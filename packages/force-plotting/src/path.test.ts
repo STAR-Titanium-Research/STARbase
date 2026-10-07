@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPath, alignRhoToBuckets } from './path';
+import { buildPath, alignRhoToBuckets, alignMeasuredRho, measuredRhoSpan, type TurningSpiralParams } from './path';
 import type { Cache } from './liveCache';
 
 function makeCache(overrides: Partial<Cache> = {}): Cache {
@@ -219,5 +219,51 @@ describe('alignRhoToBuckets', () => {
 		expect(out.length).toBe(2);
 		expect(Number.isNaN(out[0])).toBe(true);
 		expect(Number.isNaN(out[1])).toBe(true);
+	});
+});
+
+describe('measuredRhoSpan / alignMeasuredRho (no path build)', () => {
+	const P = (over: Partial<TurningSpiralParams> = {}): TurningSpiralParams => ({
+		kind: 'turning_spiral', feed: 40, diam: 80, innerDiam: 20,
+		speedMode: 'measured', rpm: 0, vc: 0, timeScale: 1, ppr: 1, ...over,
+	});
+	const via = (c: Cache, p: TurningSpiralParams, start: number, ts: number[]) => {
+		const path = buildPath(c, p, { cropStartSec: start, cropEndSec: c.t[c.N - 1], stride: 1 });
+		return path ? alignRhoToBuckets(path, c, ts) : new Float32Array(ts.length).fill(NaN);
+	};
+
+	// The reference is buildPath + alignRhoToBuckets, which is what the dashboard used to run on
+	// every crop drag. Same numbers, none of the pos/idx/rho allocations.
+	it('matches buildPath + alignRhoToBuckets for several crop starts, including the cut-out', () => {
+		const c = makeCache({ N: 100 });
+		const ts = Array.from({ length: 120 }, (_, i) => i * 0.0085 - 0.05);   // before, inside and past the data
+		for (const start of [0, 0.03, 0.1, 0.5, 0.9]) {
+			const got = alignMeasuredRho(measuredRhoSpan(c, P(), start), c, ts);
+			const want = via(c, P(), start, ts);
+			expect(got.length).toBe(want.length);
+			for (let i = 0; i < ts.length; i++) {
+				if (Number.isNaN(want[i])) expect(Number.isNaN(got[i])).toBe(true);
+				else expect(got[i]).toBeCloseTo(want[i], 5);
+			}
+		}
+	});
+	it('stops where the spiral reaches the inner diameter (same bound as the path)', () => {
+		const c = makeCache({ N: 100 });
+		const span = measuredRhoSpan(c, P(), 0.1)!;
+		expect(span.cs).toBe(10);
+		expect(span.end).toBe(48);   // see alignRhoToBuckets' fixture: i = 10..47
+	});
+	it('is null when buildPath would be (already inside the inner radius at the crop start)', () => {
+		const c = makeCache({ N: 100 });
+		expect(measuredRhoSpan(c, P({ innerDiam: 200 }), 0.1)).toBeNull();
+		const out = alignMeasuredRho(null, c, [0.1, 0.2]);
+		expect(Array.from(out).every(Number.isNaN)).toBe(true);
+	});
+	it('a crop drag changes rho (it is measured from the crop start), so the span is rebuilt per start', () => {
+		const c = makeCache({ N: 100 });
+		const a = alignMeasuredRho(measuredRhoSpan(c, P(), 0.1), c, [0.2])[0];
+		const b = alignMeasuredRho(measuredRhoSpan(c, P(), 0.15), c, [0.2])[0];
+		expect(a).toBeCloseTo(32, 4);
+		expect(b).not.toBeCloseTo(a, 3);
 	});
 });

@@ -22,6 +22,53 @@ from scipy.stats import norm
 
 _MAD_TO_SIGMA = 1.4826
 
+# Distances closer than this fraction of the largest returned distance are treated as equal
+# when ordering neighbours (see knn_deterministic).
+_TIE_REL_TOL = 1e-9
+
+
+def knn_deterministic(
+    tree: cKDTree, query: np.ndarray, k: int, *, self_first: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    """k nearest neighbours of every `query` row, with ties broken by point index.
+
+    `cKDTree.query` returns *a* set of k neighbours, but when several points sit at the same
+    distance as the k-th (routine on gridded data: a lattice has 4, 8 or 12 equidistant
+    neighbours per ring) which of them it keeps depends on the tree traversal, so it changes
+    with the scipy/numpy build. That made the Gi* and cluster hand-off goldens fail on
+    any machine other than the one that froze them. Here the neighbours are ordered by
+    (distance, index) and the first k kept, so the result depends only on the data.
+
+    Distances equal to within a relative 1e-9 count as ties, so one-ulp noise in the computed
+    distance of geometrically equidistant points cannot reorder them either. With
+    `self_first` (query == the tree's own points, row i being point i) each point is forced to
+    be its own first neighbour, even among coincident duplicates.
+
+    Returns (dist, idx), both shape (len(query), k), sorted nearest first.
+    """
+    n = tree.n
+    k = int(min(k, n))
+    window = min(n, k + 16)
+    rows = np.arange(len(query))
+    while True:
+        d, idx = tree.query(query, k=window)
+        d = d.reshape(len(query), window)
+        idx = idx.reshape(len(query), window)
+        scale = float(d.max()) if d.size else 0.0
+        tol = scale * _TIE_REL_TOL if scale > 0.0 else 1.0
+        key = np.round(d / tol).astype(np.int64)
+        if self_first:
+            key[idx == rows[:, None]] = -1
+        order = np.lexsort((idx, key), axis=1)
+        key = np.take_along_axis(key, order, axis=1)
+        d = np.take_along_axis(d, order, axis=1)
+        idx = np.take_along_axis(idx, order, axis=1)
+        # Complete when every neighbour tied with the k-th lies inside the window, i.e. the
+        # last one in the window is strictly farther than the k-th kept.
+        if window >= n or bool(np.all(key[:, window - 1] > key[:, k - 1])):
+            return d[:, :k], idx[:, :k]
+        window = min(n, window * 2)
+
 
 def getis_ord_gi_star(
     x: np.ndarray, y: np.ndarray, v: np.ndarray, k: int = 30
@@ -50,8 +97,11 @@ def getis_ord_gi_star(
             f"need at least k+1={k + 1} points for k={k} neighbours, got {n}"
         )
 
-    tree = cKDTree(np.column_stack([x, y]))
-    _, idx = tree.query(np.column_stack([x, y]), k=k)  # idx includes the point itself
+    pts = np.column_stack([x, y])
+    tree = cKDTree(pts)
+    # idx includes the point itself; ties at the k-th neighbour are broken by index so the
+    # statistic does not depend on the scipy/numpy build (see knn_deterministic).
+    _, idx = knn_deterministic(tree, pts, k, self_first=True)
 
     vbar = float(np.median(v))
     s = float(np.median(np.abs(v - vbar))) * _MAD_TO_SIGMA
@@ -135,6 +185,46 @@ def grid_reduce(
     return xr, yr, vr, cell_id.astype(np.int64)
 
 
+_mst_sort_pinned = False
+
+
+def _pin_hdbscan_mst_order() -> None:
+    """Make scikit-learn's HDBSCAN independent of the CPU's argsort tie order.
+
+    HDBSCAN sorts the minimum-spanning-tree edges by distance with a bare `np.argsort`
+    (sklearn.cluster._hdbscan.hdbscan._process_mst), and on gridded data many edges tie
+    exactly (mutual-reachability distances collapse onto a core distance). NumPy >= 2 sorts
+    float64 with x86-simd-sort on CPUs with AVX-512 and with introsort elsewhere; neither is
+    stable, and they order tied edges differently. Which tied edge is merged first can change
+    the condensed tree, so identical input gave different cluster_id / glosh on an AVX-512 host
+    and on a host without it (GitHub's ubuntu-latest runners are a mix of both; 22/9984
+    cluster_id elements differ in the diag goldens). Same inputs, same pins, different hardware.
+
+    The ties are broken here by edge position, last edge first. That is an arbitrary but fixed
+    rule; it is the one that reproduces the frozen goldens (captured on an AVX-512 host), so
+    nothing moves. Only the sort is replaced: `make_single_linkage` is sklearn's own.
+    Idempotent, and a no-op (with the old behaviour) if sklearn's private layout differs.
+    """
+    global _mst_sort_pinned
+    if _mst_sort_pinned:
+        return
+    try:
+        from sklearn.cluster._hdbscan import hdbscan as _h
+        from sklearn.cluster._hdbscan._linkage import make_single_linkage
+    except ImportError:
+        return
+    if not hasattr(_h, "_process_mst"):
+        return
+
+    def _process_mst(min_spanning_tree):
+        dist = min_spanning_tree["distance"]
+        order = np.lexsort((-np.arange(dist.size), dist))
+        return make_single_linkage(min_spanning_tree[order])
+
+    _h._process_mst = _process_mst
+    _mst_sort_pinned = True
+
+
 def cluster_hdbscan(
     xr: np.ndarray, yr: np.ndarray, vr: np.ndarray, min_cluster_size: int = 10
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -145,6 +235,7 @@ def cluster_hdbscan(
     """
     from sklearn.cluster import HDBSCAN
 
+    _pin_hdbscan_mst_order()
     xr = np.asarray(xr, dtype=np.float64)
     yr = np.asarray(yr, dtype=np.float64)
     vr = np.asarray(vr, dtype=np.float64)
@@ -255,11 +346,9 @@ def assign_by_neighbours(
     kq = int(max(1, min(k, xr.size)))
 
     tree = cKDTree(np.column_stack([xr, yr]))
-    dist, idx = tree.query(np.column_stack([x, y]), k=kq)
-    # cKDTree drops the trailing axis when k == 1; restore it so one code path handles both.
-    if kq == 1:
-        dist = dist[:, None]
-        idx = idx[:, None]
+    # Deterministic (distance, index) order: which centroids a tie at the kq-th place keeps
+    # must not depend on the scipy build. Always returns 2-D arrays, also for kq == 1.
+    dist, idx = knn_deterministic(tree, np.column_stack([x, y]), kq)
 
     # Inverse-distance weights. A point coincident with a centroid is at distance 0, which
     # must hand a coincident centroid ALL the weight rather than yielding inf/nan.

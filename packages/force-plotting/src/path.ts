@@ -2,7 +2,7 @@
 // Extracted so the geometry that used to be hardwired into buildCloud() (a turning
 // spiral) is one of three interchangeable models. See
 // docs/superpowers/specs/2026-09-07-milling-path-models-and-polar-design.md §1.
-import { type Cache, idxOfTime } from './liveCache';
+import { type Cache, idxOfTime, normStride } from './liveCache';
 
 export type PathKind = 'turning_spiral' | 'linear_feed' | 'machine_xyz';
 export type SpeedMode = 'measured' | 'rpm' | 'vc';
@@ -70,7 +70,7 @@ export function buildPath(c: Cache, p: PathParams, w: PathWindow): PathResult | 
 	if (!t || t.length === 0 || c.N === 0) return null;
 	const cs = idxOfTime(t, w.cropStartSec);
 	if (cs < 0) return null;
-	const stride = Math.max(1, Math.round(w.stride) || 1);
+	const stride = normStride(w.stride);
 
 	if (p.kind === 'turning_spiral') return buildTurningSpiral(c, p, w, cs, stride);
 	if (p.kind === 'linear_feed') return buildLinearFeed(c, p, w, cs, stride);
@@ -142,6 +142,51 @@ export function alignRhoToBuckets(path: PathResult, c: Cache, bucketTimes: Array
 	for (let i = 0; i < bucketTimes.length; i++) {
 		const j = idxOfTime(c.t, bucketTimes[i]);
 		out[i] = (j < cs || j > lastIdx) ? NaN : path.rho[j - cs];
+	}
+	return out;
+}
+
+/**
+ * The radial position (rho) of a measured-speed turning spiral, WITHOUT building the path.
+ *
+ * ForceDashboard's second x-axis only needs rho at the chart's bucket times. Going through
+ * buildPath() allocated pos/idx/rho for every sample (~100 MB at 5M points) and ran cos/sin per
+ * point, and it did so on every crop-handle drag because the crop start moves rho (review 3.10).
+ * measuredRhoSpan() is one allocation-free scan for where the spiral stops; alignMeasuredRho() is
+ * then O(buckets). Both mirror buildTurningSpiral's measured branch exactly (stride 1, no crop
+ * end): `alignMeasuredRho(measuredRhoSpan(c, p, s), c, ts)` equals
+ * `alignRhoToBuckets(buildPath(c, p, {cropStartSec: s, cropEndSec: Infinity, stride: 1}), c, ts)`.
+ */
+export interface MeasuredRhoSpan {
+	cs: number;       // first sample of the spiral (the crop start)
+	end: number;      // one past the last sample before rho reaches the inner radius
+	rho0: number; feed: number; ppr: number; revsCs: number;
+}
+
+export function measuredRhoSpan(c: Cache, p: TurningSpiralParams, cropStartSec: number): MeasuredRhoSpan | null {
+	const t = c.t;
+	if (!t || t.length === 0 || c.N === 0) return null;
+	const cs = idxOfTime(t, cropStartSec);
+	if (cs < 0) return null;
+	const revs = c.revs;
+	const rho0 = p.diam / 2, feed = p.feed;
+	const innerR = Math.max(0, (p.innerDiam || 0) / 2);
+	const ppr = p.ppr > 0 ? p.ppr : 1;
+	const revsCs = revs[cs];
+	let end = cs;
+	while (end < c.N && !(rho0 - feed * ((revs[end] - revsCs) / ppr) < innerR)) end++;   // `!(<)`, not `>=`: a NaN rho does not stop buildPath
+	if (end === cs) return null;   // buildPath returns null here too
+	return { cs, end, rho0, feed, ppr, revsCs };
+}
+
+/** rho (mm) at each bucket time via the nearest raw sample; NaN before the start / past the stop. */
+export function alignMeasuredRho(span: MeasuredRhoSpan | null, c: Cache, bucketTimes: ArrayLike<number>): Float32Array {
+	const out = new Float32Array(bucketTimes.length);
+	if (!span) { out.fill(NaN); return out; }
+	const revs = c.revs;
+	for (let i = 0; i < bucketTimes.length; i++) {
+		const j = idxOfTime(c.t, bucketTimes[i]);
+		out[i] = (j < span.cs || j >= span.end) ? NaN : span.rho0 - span.feed * ((revs[j] - span.revsCs) / span.ppr);
 	}
 	return out;
 }

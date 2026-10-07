@@ -4,19 +4,24 @@
   "type": "module",
   "scripts": {
     "build": "directus-extension build",
-    "dev": "directus-extension build --watch"
+    "dev": "directus-extension build --watch",
+    "typecheck": "vue-tsc --noEmit"
   },
   "keywords": ["directus", "directus-extension", "directus-custom-module"],
   "devDependencies": {
     "@directus/extensions-sdk": "^17",
     "@vue/compiler-sfc": "^3",
     "typescript": "^5",
-    "vue": "^3"
+    "vue": "^3",
+    "vue-tsc": "^2.2.0"
   },
   "directus:extension": {
     "type": "module",
     "path": "dist/index.js",
     "source": "src/index.ts",
     "host": "^11.0.0"
+  },
+  "dependencies": {
+    "@d1/ui": "*"
   }
 }

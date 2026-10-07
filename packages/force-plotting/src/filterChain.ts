@@ -68,10 +68,11 @@ export async function fetchFilteredFft(cacheFileId: string, chain: FilterChain, 
 }
 
 // STFT of one axis for the spectrogram / waterfall / power-spectrum views. S is [freq][time] in dB.
-export async function fetchSpectrogram(cacheFileId: string, chain: FilterChain, axis: string):
+export async function fetchSpectrogram(cacheFileId: string, chain: FilterChain, axis: string, signal?: AbortSignal):
 	Promise<{ f: number[]; t: number[]; S: number[][]; fmax: number }> {
 	const res = await authorizedFetch(`${useForceHost().filterUrl}/spectrogram`, {
 		method: 'POST',
+		signal,
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ cache_file_id: cacheFileId, chain, axis }),
 	});

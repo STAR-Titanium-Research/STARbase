@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-next-number",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "GET /d1-next-number/sample returns the next free sample number for the interface's preview. The database trigger still assigns the real number on save.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

@@ -6,6 +6,7 @@
 // browser-served /app/ build, where window.forceApp is undefined.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { getConfig } from '../config';
+import { describeFetchError } from '../netErrors';
 
 interface LogRecord { ts: string; level: string; logger: string; message: string; }
 
@@ -82,9 +83,7 @@ async function load() {
 			});
 		}
 	} catch (e: any) {
-		error.value = /failed to fetch|load failed|networkerror/i.test(e?.message || '')
-			? "can't reach the recording backend — is it running?"
-			: e?.message || 'failed to load logs';
+		error.value = describeFetchError(e, 'failed to load logs');
 	} finally {
 		loading.value = false;
 	}

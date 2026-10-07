@@ -11,7 +11,8 @@ from diag.envelope import bandpass_envelope, envelope_spectrum
 
 def _am_signal(fs, duration, carrier, mod_rate, mod_depth=0.8, noise=0.05, seed=0):
     """A carrier amplitude-modulated at mod_rate -- the synthetic stand-in for a structural
-    resonance being excited at some repetition rate the dynamometer can't directly resolve."""
+    resonance being excited at some repetition rate the dynamometer can't directly resolve.
+    """
     t = np.arange(0, duration, 1.0 / fs)
     rng = np.random.default_rng(seed)
     sig = (1.0 + mod_depth * np.sin(2 * np.pi * mod_rate * t)) * np.sin(
@@ -62,3 +63,34 @@ def test_envelope_spectrum_max_freq_caps_the_returned_range():
     freqs, amp = envelope_spectrum(envelope, fs, max_freq=100.0)
     assert freqs.max() <= 100.0
     assert amp.shape == freqs.shape
+
+
+@pytest.mark.parametrize("fc", [200.0, 500.0, 2000.0])
+def test_narrow_low_band_at_high_sample_rate_is_finite_and_matches_the_true_envelope(
+    fc,
+):
+    # Review finding 7.14: the (b, a) Butterworth form went to ~1e92 / NaN for fc=200 and
+    # 500 Hz at fs=100 kHz. The reference is the analytic envelope of the synthetic AM
+    # signal, which is known exactly: 1 + 0.5 sin(2 pi 5 t).
+    fs = 100_000.0
+    t = np.arange(int(2 * fs)) / fs
+    truth = 1.0 + 0.5 * np.sin(2 * np.pi * 5.0 * t)
+    sig = truth * np.sin(2 * np.pi * fc * t)
+    envelope = bandpass_envelope(sig, fs, f_center=fc, bandwidth_frac=0.2)
+    assert np.all(np.isfinite(envelope))
+    mid = slice(int(0.5 * fs), int(1.5 * fs))  # away from the filter's edge transients
+    np.testing.assert_allclose(envelope[mid], truth[mid], rtol=5e-3)
+
+
+def test_envelope_matches_the_sos_reference_implementation():
+    from scipy.signal import butter, hilbert, sosfiltfilt
+
+    fs, fc = 100_000.0, 500.0
+    sig = _am_signal(fs, duration=1.0, carrier=fc, mod_rate=8.0, noise=0.02)
+    sos = butter(
+        4, [0.9 * fc / (fs / 2), 1.1 * fc / (fs / 2)], btype="band", output="sos"
+    )
+    expected = np.abs(hilbert(sosfiltfilt(sos, sig)))
+    np.testing.assert_allclose(
+        bandpass_envelope(sig, fs, fc, 0.2), expected, rtol=1e-12
+    )

@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@d1/force-plotting": "*",
+    "@d1/ui": "*",
     "grid-layout-plus": "^1.1.1",
     "potree-core": "^2.0.4",
     "three": "^0.160.0"

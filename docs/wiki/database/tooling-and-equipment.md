@@ -20,8 +20,8 @@ Insert Types      catalogue: manufacturer, ISO designation, substrate, coating,
 ### Receiving a box
 
 When a delivery arrives, create one **Insert Box** record with its **Insert Type** and the
-**Boxes Received** count. On save, the database expands it (`expand_tool_box_intake()`, called by
-the `box-intake` hook). That one entry becomes:
+**Boxes Received** count. On save, the database expands it (`expand_tool_box_intake()`, run by a
+database trigger when the box still has its placeholder code). That one entry becomes:
 
 - *N* box records (the first is the one you created, the rest are clones),
 - as many **cutting inserts** per box as the insert type holds,
@@ -36,7 +36,7 @@ with every code generated in the pattern `{short code}-{box #}-{insert #}{edge l
 ### Ownership
 
 A box has an owner and a **Cascade Ownership to Children** toggle. Changing the owner with the
-toggle on also reassigns every insert and edge in the box (the `owner-cascade` hook).
+toggle on also reassigns every insert and edge in the box (a database trigger, in the same save).
 
 ### Edges in use
 

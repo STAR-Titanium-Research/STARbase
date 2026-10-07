@@ -1,5 +1,6 @@
 """NI-DAQ catalog + enumeration (sim/real) + channel model + endpoints."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
@@ -347,3 +348,74 @@ def test_validate_formula_endpoint_rejects_referencing_a_saved_virtual_channel(
         res = client.post("/nidaq/channels/validate-formula", json={"formula": "V1 * 2"})
         body = res.json()
         assert body["valid"] is False and "V1" in body["error"]
+
+
+# ---- the package imports but the DAQmx runtime is missing: System.local().devices raises ----
+
+
+def _fake_nidaqmx_without_runtime(monkeypatch):
+    import sys
+    import types
+
+    class _BrokenSystem:
+        @property
+        def devices(self):
+            raise OSError("DAQmx driver not loaded")
+
+    pkg = types.ModuleType("nidaqmx")
+    sub = types.ModuleType("nidaqmx.system")
+    sub.System = types.SimpleNamespace(local=lambda: _BrokenSystem())
+    pkg.system = sub
+    monkeypatch.setitem(sys.modules, "nidaqmx", pkg)
+    monkeypatch.setitem(sys.modules, "nidaqmx.system", sub)
+
+
+def test_enumerate_devices_falls_back_to_simulated_when_the_runtime_is_missing(monkeypatch):
+    _fake_nidaqmx_without_runtime(monkeypatch)
+    d = nidaq_enum.enumerate_devices()  # used to raise OSError out of list(sysobj.devices)
+    assert d["simulated"] is True and d["chassis"]
+    described = nidaq_enum.describe_devices()
+    assert described["runtime_available"] is False and described["hardware_present"] is False
+    # describe_devices is the same tree plus the presence flags
+    for key, value in d.items():
+        assert described[key] == value
+
+
+def test_enumerate_devices_uses_the_sim_layout_when_the_runtime_is_missing(monkeypatch):
+    _fake_nidaqmx_without_runtime(monkeypatch)
+    layout = {
+        "name": "cDAQ7",
+        "product_type": "cDAQ-9174",
+        "slots": 4,
+        "cards": [{"slot": 2, "product_type": "NI 9234"}],
+    }
+    d = nidaq_enum.enumerate_devices(sim_layout=layout)
+    assert d["chassis"][0]["name"] == "cDAQ7"
+    assert d["chassis"][0]["modules"][0]["name"] == "cDAQ7Mod2"
+
+
+def test_first_run_channel_config_survives_a_missing_runtime(monkeypatch):
+    _fake_nidaqmx_without_runtime(monkeypatch)
+    monkeypatch.setattr(main, "_load_json", lambda path, default: default)
+    monkeypatch.setattr(main, "_save_json", lambda path, data: None)
+    with TestClient(fastapi_app) as client:
+        r = client.get("/nidaq/channels")
+        assert r.status_code == 200, r.text
+        assert r.json()["channels"]
+        assert client.get("/nidaq/devices").status_code == 200
+
+
+@pytest.mark.parametrize("formula", ["min(Fx)", "sqrt()", "1/0"])
+def test_put_channels_rejects_formulas_that_would_crash_at_record_time(
+    monkeypatch, tmp_path, formula
+):
+    path = tmp_path / "nidaq_channels.json"
+    monkeypatch.setattr(main, "NIDAQ_CHANNELS_PATH", str(path))
+    with TestClient(fastapi_app) as client:
+        body = {"channels": [chan.make_channel("Bad", "Aux", source="virtual", formula=formula)]}
+        res = client.put("/nidaq/channels", json=body)
+        assert res.status_code == 400
+        assert "Bad" in res.json()["detail"]
+        assert not path.exists()
+        res = client.post("/nidaq/channels/validate-formula", json={"formula": formula})
+        assert res.json()["valid"] is False

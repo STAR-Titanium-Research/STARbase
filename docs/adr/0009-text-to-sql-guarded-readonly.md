@@ -3,6 +3,20 @@
 - **Status:** Accepted
 - **Date:** 2026-06-19
 - **Deciders:** Maintainer + Claude (Phase 6)
+- **Status note (2026-10-03):** the read surface is back to an **explicit allow-list**,
+  restoring the original rule of this ADR. The 2026-07-01 update below (migration
+  `…052`: `SELECT ON ALL TABLES` + default privileges, minus a deny-list) left
+  `audit_logs`, `people`, `Machine_Operators` and, on a live Directus database,
+  `directus_activity` / `directus_revisions` readable, and made every new table readable
+  by default. Migration `20261003000132_llm_readonly_allow_list.sql` revokes everything
+  from `d1_llm_readonly` and grants `SELECT` on 42 named lab tables and 9 views only;
+  new tables stay invisible until a migration grants them. The guard now also denies
+  every `directus_*` table, resolves CTE names per scope, allow-lists functions and
+  rejects `FOR UPDATE/SHARE` (review findings 5.8, 6.4). The "broadened read surface"
+  and "deny-by-default for system tables" bullets in the 2026-07-01 section describe
+  the superseded state; the two-layer design is unchanged. `/d1-ask` is limited to
+  admin and app-access users. The migration also creates `d1_llm_app` (NOLOGIN) as the
+  plugin's login member.
 
 ## Context
 

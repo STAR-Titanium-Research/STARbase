@@ -33,3 +33,11 @@ export async function saveRecipe(p: { name: string; recipe: Recipe; notes?: stri
 export async function deleteRecipe(recipeId: string): Promise<void> {
 	await useForceHost().api.delete(`/items/diag_recipes/${recipeId}`);
 }
+
+export async function updateRecipe(
+	recipeId: string,
+	patch: { name?: string; notes?: string | null; recipe?: Recipe },
+): Promise<SavedRecipe> {
+	const res = await useForceHost().api.patch(`/items/diag_recipes/${recipeId}`, patch, { params: { fields: FIELDS } });
+	return res.data.data as SavedRecipe;
+}

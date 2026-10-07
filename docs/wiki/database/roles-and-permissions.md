@@ -41,22 +41,29 @@ policy parts of that script, not the real accounts (see the [developer guide](de
 `core/apply.sh` creates them. Machine users such as the rig's `Rig_1_Fast_Sampling_Node` use
 the Operator role with a static token. See the [API contract](../../api-contract.md).
 
-### What Lab Member cannot do (as configured in the repository)
+### Lab Member and files
 
-Building the stack from the repository and signing in as a Lab Member shows two gaps. Both matter
-for the Force App:
+A Lab Member can record and save a cut from the Force App. Saving a cut uploads two files
+(`POST /files`: the `.mat` and the live cache), then creates the `machining_force_analysis` row.
+Force Analysis fetches each live cache with `GET /assets/<id>`. Migration
+`20261005000133_lab_member_force_app_save.sql` grants exactly that:
 
-- **No access to files.** No policy gives Lab Member any permission on `directus_files`, so a Lab
-  Member cannot upload files or read stored assets. In the Force App that means **saving a cut
-  fails** at the upload step, leaving the operation row behind. Every view that reads a cut's live
-  cache (Lite FRM, Power, Spectro, Waterfall, filters) is also refused.
-- **Cannot create force-analysis rows.** Lab Member can read and update `machining_force_analysis`
-  (`20260911000111_lab_member_force_analysis_update.sql`) but not create rows, which saving a cut
-  also needs.
+| Collection | Lab Member actions | Why |
+|---|---|---|
+| `directus_files` | create, read | upload a capture. Directus answers an upload with the new file row, so create without read gives the app no file id. Read is not limited to the uploader: Force Analysis opens caches that colleagues uploaded. |
+| `machining_force_analysis` | create (read and update already granted) | link the capture to its operation |
 
-The production server may have been adjusted in the UI since. If Lab Members there can record,
-record those permissions in a migration so a rebuild keeps them. Until then, use a Lab Admin
-account on the acquisition PC. This is listed in [Known issues](known-issues.md).
+Lab Member cannot update or delete files, so a file cannot be replaced or removed from the app
+(use a Lab Admin). Before that migration, saving a cut failed at the upload step and left the
+operation row behind.
+
+**The `directus_files` read grant is unfiltered.** Any Lab Member can read any file, and
+`/assets/<id>` serves the bytes. **Phase 9 follow-up:** when the export-control row filter on
+`physical_samples` lands ([ADR-0005](../../adr/0005-directus-rbac-structure.md)), file reads must be
+filtered the same way, or `/assets/<id>` bypasses it.
+
+The production server may have been adjusted in the UI. If a rebuild loses a permission you rely
+on, record it in a migration.
 
 ## The audit log
 

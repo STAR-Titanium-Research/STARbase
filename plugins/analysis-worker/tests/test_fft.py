@@ -130,3 +130,156 @@ def test_d1f_reader(tmp_path):
 
     fx = read_channel(path, h, channel_index=0, max_samples=10_000)
     assert np.allclose(fx, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Welch / contiguous-block analysis (review finding 6.3)
+# ---------------------------------------------------------------------------
+
+
+def _make_d1f_tones(path, n_samples, fs, tones, n_channels=3, chunk=500_000):
+    """Write a D1F with *tones* [(freq_hz, amp)] on channel index 2, in chunks."""
+    header = bytearray(HEADER_SIZE)
+    header[0:8] = D1F_MAGIC
+    header[8:9] = struct.pack("B", 1)
+    header[9:10] = struct.pack("B", n_channels)
+    header[10:18] = struct.pack("d", fs)
+    header[18:26] = struct.pack("Q", n_samples)
+    with open(path, "wb") as f:
+        f.write(bytes(header))
+        for s in range(0, n_samples, chunk):
+            idx = np.arange(s, min(n_samples, s + chunk))
+            t = idx / fs
+            row = np.zeros((len(idx), n_channels), np.float32)
+            for freq, amp in tones:
+                row[:, 2] += (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+            f.write(row.tobytes())
+
+
+def _run_job(monkeypatch, path):
+    """Run analyse_session on *path* with MinIO/Directus mocked; return fft_analysis."""
+    import shutil
+    from unittest.mock import MagicMock
+
+    from app.jobs import analyse_session as job
+
+    patched = []
+    monkeypatch.setattr(
+        job.minio_client, "download_file", lambda key, dst: shutil.copy(path, dst)
+    )
+    monkeypatch.setattr(job.minio_client, "put_object", MagicMock())
+    row = {"status": "registered", "summary_stats": {}, "plot_uris": [], "version": 1}
+    monkeypatch.setattr(job.directus_client, "get_test_session", lambda i: dict(row))
+    monkeypatch.setattr(
+        job.directus_client,
+        "patch_test_session",
+        lambda i, payload, version=None: patched.append(payload),
+    )
+    job.analyse_session("sess", "a/b.d1f")
+    final = next(p for p in reversed(patched) if "summary_stats" in p)
+    return final["summary_stats"]["fft_analysis"]
+
+
+def test_large_file_tone_not_aliased(tmp_path, monkeypatch):
+    """1 kHz at 20 kHz in a file big enough to have triggered the old stride.
+
+    The old code strided every n//131072-th sample (21 here), giving an effective
+    Nyquist of ~480 Hz and reporting the tone at an alias; the 500-2000 Hz band
+    was structurally empty.
+    """
+    n = 2_800_000  # old stride = 21
+    path = str(tmp_path / "big.d1f")
+    _make_d1f_tones(path, n, 20_000.0, [(1000.0, 500.0)])
+
+    res = _run_job(monkeypatch, path)
+
+    assert res["dominant_frequency_hz"] == pytest.approx(1000.0, abs=1.0)
+    assert res["dominant_magnitude"] == pytest.approx(
+        500.0, rel=0.05
+    )  # Hann scalloping loss
+    bands = res["band_energy"]
+    total = sum(bands.values())
+    assert bands["500_2000_hz"] / total > 0.95
+    assert res["fs_hz"] == 20_000.0
+    assert res["effective_nyquist_hz"] == 10_000.0
+    assert res["effective_sample_rate_hz"] == 20_000.0
+    assert res["stride"] == 1
+    assert res["n_samples_total"] == n
+
+
+def test_sampled_blocks_path_for_huge_files(tmp_path, monkeypatch):
+    """With few blocks allowed, only a bounded part of the file is read."""
+    from app.jobs import analyse_session as job
+
+    monkeypatch.setattr(job, "FFT_MAX_BLOCKS", 2)
+    monkeypatch.setattr(job, "FFT_NPERSEG", 4096)
+    path = str(tmp_path / "big.d1f")
+    _make_d1f_tones(path, 600_000, 20_000.0, [(1000.0, 500.0)])
+    res = _run_job(monkeypatch, path)
+    assert res["n_blocks"] == 2
+    assert res["n_samples_analysed"] == 2 * 8 * 4096
+    assert res["dominant_frequency_hz"] == pytest.approx(1000.0, abs=6.0)
+
+
+def test_two_tones_give_two_distinct_peaks():
+    fs = 20_000.0
+    n = 400_000
+    t = np.arange(n) / fs
+    sig = 300.0 * np.sin(2 * np.pi * 1000.0 * t) + 200.0 * np.sin(
+        2 * np.pi * 3500.0 * t
+    )
+    res = analyse_channel(sig, fs, n_top=5)
+    top = res["top_frequencies"]
+    assert top[0]["frequency_hz"] == pytest.approx(1000.0, abs=1.0)
+    assert top[1]["frequency_hz"] == pytest.approx(3500.0, abs=1.0)
+    assert top[0]["magnitude"] == pytest.approx(300.0, rel=0.05)
+    assert top[1]["magnitude"] == pytest.approx(200.0, rel=0.05)
+    freqs = sorted(p["frequency_hz"] for p in top)
+    min_gap = min(b - a for a, b in zip(freqs, freqs[1:], strict=False))
+    assert min_gap >= 8 * res["frequency_resolution_hz"] * 0.999
+
+
+def test_nyquist_and_dc_not_doubled():
+    from app.lib.fft_analysis import compute_spectrum
+
+    n = 1 << 14
+    # Alternating +-1 is a unit-amplitude tone exactly at Nyquist.
+    alt = np.where(np.arange(n) % 2 == 0, 1.0, -1.0)
+    spec = compute_spectrum([alt], 100.0, nperseg=1024)
+    assert spec.amplitude[-1] == pytest.approx(1.0, rel=1e-6)
+    # A constant is DC only; per-segment mean removal leaves nothing.
+    spec = compute_spectrum([np.full(n, 7.0)], 100.0, nperseg=1024)
+    assert spec.amplitude.max() < 1e-9
+
+
+def test_amplitude_scaling_of_bin_centred_tone():
+    from app.lib.fft_analysis import compute_spectrum
+
+    fs, nperseg = 1024.0, 1024
+    t = np.arange(8 * nperseg) / fs
+    spec = compute_spectrum([2.5 * np.sin(2 * np.pi * 64.0 * t)], fs, nperseg)
+    assert spec.amplitude[64] == pytest.approx(2.5, rel=1e-6)
+    assert spec.nyquist_hz == 512.0
+
+
+def test_plan_blocks_is_bounded_and_ordered():
+    from app.lib.fft_analysis import plan_blocks
+
+    n = 100 * 1024**3 // 24  # a 100 GB, 6-channel file
+    plan = plan_blocks(n, 65536, max_blocks=32)
+    assert len(plan) == 32
+    starts = [s for s, _ in plan]
+    assert starts == sorted(starts) and starts[0] == 0
+    assert all(c == 8 * 65536 for _, c in plan)
+    assert plan[-1][0] + plan[-1][1] <= n
+    # small file: whole file, one block
+    assert plan_blocks(1000, 65536) == [(0, 1000)]
+    # medium file: covered completely, no gaps
+    plan = plan_blocks(3_000_000, 65536, max_blocks=32)
+    assert plan[0][0] == 0 and plan[-1][0] + plan[-1][1] == 3_000_000
+
+
+def test_short_signal_still_analysed():
+    res = analyse_channel(np.sin(np.arange(100) * 0.3), 100.0)
+    assert res["nperseg"] == 100
+    assert analyse_channel(np.array([1.0]), 100.0) == {"error": "insufficient samples"}

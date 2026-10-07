@@ -55,7 +55,8 @@ Overridable via env vars (defaults in parentheses):
 
 - `D1_BASE_URL` (`http://localhost:8055`)
 - `D1_ADMIN_EMAIL` (`admin@example.com`)
-- `D1_ADMIN_PASSWORD` (`change_me_admin`)
+- `D1_ADMIN_PASSWORD` (**required**, no default: use the `DIRECTUS_ADMIN_PASSWORD` from your `.env`;
+  the specs throw a clear error when it is unset)
 
 Each test logs in fresh via the `fixtures.ts` `page` fixture. We deliberately do
 **not** share one stored session: Directus rotates refresh tokens, so a session

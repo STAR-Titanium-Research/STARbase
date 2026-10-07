@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 
 # aliased: `platform` is also a form field name on /support/report-bug (the renderer's UA string)
@@ -20,7 +21,8 @@ import shutil
 import sys
 import threading
 import time
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
+from contextlib import asynccontextmanager, contextmanager
 from logging.handlers import RotatingFileHandler
 from typing import Any
 from urllib.parse import urlparse
@@ -31,6 +33,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
     WebSocket,
@@ -38,11 +41,19 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from . import backup as backup_mod
-from . import bug_report, nidaq_catalog, nidaq_enum, recovery, storage, virtual_channels
+from . import (
+    bug_report,
+    nidaq_catalog,
+    nidaq_enum,
+    origin_guard,
+    recovery,
+    storage,
+    virtual_channels,
+)
 from . import channels as chan
 from .config import DEFAULT_NIDAQ_CHANNELS, RecordConfig
 from .d1lc import read_d1lc_header
@@ -97,6 +108,45 @@ def _load_json(path: str, default):
 def _read_json(path: str) -> dict | None:
     data = _load_json(path, None)
     return data if isinstance(data, dict) else None
+
+
+def _save_json(path: str, data) -> None:
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        storage.atomic_write_json(path, data, indent=2)
+    except OSError:
+        pass
+
+
+# Device settings this backend owns, beside storage_config.json (see _migrate_device_configs).
+LABAMP_CONFIG_PATH = os.path.join(CONFIG_DIR, "labamp.json")
+NIDAQ_SIM_PATH = os.path.join(CONFIG_DIR, "nidaq_sim.json")
+NIDAQ_CHANNELS_PATH = os.path.join(CONFIG_DIR, "nidaq_channels.json")
+
+
+def _migrate_device_configs() -> None:
+    """One-time, at startup: copy the device config files into CONFIG_DIR from where they used to be.
+
+    labamp.json, nidaq_sim.json and nidaq_channels.json used to live in CAPTURES_ROOT, so moving
+    the recording folder (or a restart after the folder picker, #101) made them vanish and the
+    channel assignment silently re-autoassigned. They now live beside backup_config.json. A file
+    is copied only when the new location has none (an unreadable new file counts as present and is
+    never overwritten), from the captures root the app STARTED with, then LEGACY_CONFIG_DIR. Old
+    files are never moved or deleted. Runs once, not on every read, so a stale file in a folder
+    the operator picks later is never adopted.
+    """
+    for new in (LABAMP_CONFIG_PATH, NIDAQ_SIM_PATH, NIDAQ_CHANNELS_PATH):
+        name = os.path.basename(new)
+        if os.path.exists(new):
+            continue
+        for old_dir in (CAPTURES_ROOT, LEGACY_CONFIG_DIR):
+            old = os.path.join(old_dir, name)
+            if os.path.abspath(old) == os.path.abspath(new):
+                continue
+            legacy = _load_json(old, None)
+            if legacy is not None:
+                _save_json(new, legacy)
+                break
 
 
 def _load_captures_root() -> str:
@@ -204,7 +254,7 @@ DEFAULT_BACKUP_URL = "https://d1-server.tail54eeb6.ts.net/backup-ingest"
 # ---- LabAmp (2c) config + instance ----
 # The amp is link-local (reachable only from the acquisition PC) so the backend owns the HTTP
 # conversation. Defaults to a mock (no hardware here); switch mode=real on the rig.
-LABAMP_CONFIG_PATH = os.path.join(CAPTURES_ROOT, "labamp.json")
+_migrate_device_configs()  # before the config below is read; CAPTURES_ROOT is still the initial one
 
 
 def _load_labamp_config() -> dict:
@@ -221,12 +271,40 @@ def _load_labamp_config() -> dict:
         "labamp_dac_bits": int(os.environ.get("LABAMP_DAC_BITS", "12")),
         "analog_fullscale_v": float(os.environ.get("ANALOG_FULLSCALE_V", "10.0")),
     }
-    cfg.update(_read_json(LABAMP_CONFIG_PATH) or {})
+    stored = _load_json(LABAMP_CONFIG_PATH, None)
+    cfg.update(stored if isinstance(stored, dict) else {})
     return cfg
 
 
 _labamp_cfg = _load_labamp_config()
 _labamp = None  # type: ignore[assignment]
+
+_DEFAULT_ANALOG_FULLSCALE_V = 10.0
+
+
+def _valid_fullscale_v(v: object) -> bool:
+    """A usable analog full-scale voltage: a real number (not a bool), finite and above zero."""
+    return isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v) and v > 0
+
+
+def _analog_fullscale_v() -> float:
+    """The Lab Amp's analog full scale in volts. A stored value that is not a positive finite
+    number (a hand-edited labamp.json, or one saved before PUT validated it) falls back to the
+    default with a warning rather than failing every NI-DAQ start and /labamp/* call."""
+    v = _labamp_cfg.get("analog_fullscale_v", _DEFAULT_ANALOG_FULLSCALE_V)
+    if isinstance(v, str):  # an older hand-edited "5.0" still worked through float()
+        try:
+            v = float(v)
+        except ValueError:
+            pass
+    if _valid_fullscale_v(v):
+        return float(v)
+    log.warning(
+        "labamp config analog_fullscale_v=%r is not a positive finite number; using %s V",
+        v,
+        _DEFAULT_ANALOG_FULLSCALE_V,
+    )
+    return _DEFAULT_ANALOG_FULLSCALE_V
 
 
 def _rebuild_labamp() -> None:
@@ -291,6 +369,15 @@ if _cors:
     app.add_middleware(
         CORSMiddleware, allow_origins=_cors, allow_methods=["*"], allow_headers=["*"]
     )
+
+# The API has no auth; loopback binding is its only protection, and a web page the operator visits
+# can still reach it from their browser (no-cors POSTs, the WebSocket handshake, DNS rebinding).
+# Added AFTER CORS so it is the outermost layer and runs first. See origin_guard.py.
+_origin_guard = origin_guard.OriginGuardSettings(
+    origins=_cors,
+    extra_hosts=os.environ.get("RECORDER_ALLOWED_HOSTS", "").split(","),
+)
+app.add_middleware(origin_guard.OriginGuard, settings=_origin_guard)
 
 
 @app.exception_handler(LabAmpError)
@@ -560,7 +647,9 @@ async def report_bug(
     include_logs: bool = Form(True),
     console_tail: str = Form(""),
     kind: str = Form("bug"),
-    area: str = Form("general"),
+    # Repeated form field, one per area (#95). A single value — what older clients send — parses
+    # as a one-item list; bug_report.normalize_areas filters, de-duplicates and caps it.
+    area: list[str] = Form(["general"]),
 ) -> dict:
     log_tail = ""
     diagnostics = ""
@@ -610,6 +699,55 @@ async def storage_get_config() -> dict:
     return {"captures_root": CAPTURES_ROOT, **current}
 
 
+def _refuse_folder_switch_if_busy() -> None:
+    """409 while anything is reading or writing a capture directory under the current root.
+
+    A recording splits across two folders if the root moves under it (#101). A restore, recovery
+    or discard is the same hazard: restore downloads raw.d1raw into the old root, then recovers
+    from the new one, finds no raw file, and its cleanup deletes the download.
+    """
+    if _busy():
+        raise HTTPException(
+            409,
+            "a recording is in progress or still being saved — change the folder once it finishes",
+        )
+    if recovery.any_in_flight():
+        raise HTTPException(
+            409,
+            "a restore, recovery or discard is in progress — change the folder once it finishes",
+        )
+
+
+def _refuse_if_capture_busy(capture_id: str) -> None:
+    """409 while a recover, restore or discard owns this capture directory.
+
+    Removing or rewriting the directory from under any of them is what makes them fail half-way,
+    and two recovers of one id would finalize the same directory twice."""
+    if recovery.in_flight(capture_id):
+        raise HTTPException(
+            409,
+            f"{capture_id} is being recovered, restored or discarded right now — "
+            "wait for it to finish",
+        )
+
+
+@contextmanager
+def _claim_capture(capture_id: str) -> Iterator[None]:
+    """`recovery.recovering` as an HTTP 409 when another job already owns the id.
+
+    Enter it before the first `await` after the busy check: the check and the claim must be one
+    synchronous step, or two requests for the same capture both pass it."""
+    try:
+        with recovery.recovering(capture_id):
+            yield
+    except recovery.CaptureBusyError:
+        raise HTTPException(
+            409,
+            f"{capture_id} is being recovered, restored or discarded right now — "
+            "wait for it to finish",
+        ) from None
+
+
 @app.post("/storage/config")
 async def storage_set_config(body: dict) -> dict:
     global CAPTURES_ROOT
@@ -618,10 +756,22 @@ async def storage_set_config(body: dict) -> dict:
         raise HTTPException(400, "captures_root required")
     if ".." in path:
         raise HTTPException(400, "path traversal not allowed")
-    try:
-        os.makedirs(path, exist_ok=True)
-    except OSError as e:
-        raise HTTPException(400, f"cannot create directory: {e}")
+    # A relative path would resolve against wherever the backend happens to run from (inside the
+    # install directory for a packaged build), which no operator means to choose.
+    if not os.path.isabs(path):
+        raise HTTPException(400, f"choose a full folder path, not {path!r}")
+    # #101: the in-flight session writes raw.d1raw and finalizes into CAPTURES_ROOT/<id>, and the
+    # renderer then reads that capture back by id through the same root — moving the root under
+    # it splits a recording across two folders and 404s the end-of-cut fetch of live_cache.bin.
+    _refuse_folder_switch_if_busy()
+    # makedirs succeeds on a folder that already exists however read-only it is, so the first sign
+    # of a bad choice used to be a recording that failed to start. Find out now instead. Both steps
+    # can block for a long time on a dead network path, so they run off the event loop.
+    problem = await run_in_threadpool(storage.prepare_folder, path)
+    if problem:
+        raise HTTPException(400, problem)
+    # A recording, restore, recovery or discard may have started while the folder was checked.
+    _refuse_folder_switch_if_busy()
     CAPTURES_ROOT = path
     # Persisting is what makes the choice survive a restart, so a failure here must be reported.
     # It used to be swallowed: the drive change applied to the running process, the UI showed
@@ -805,6 +955,22 @@ async def health_doctor(request: Request) -> dict:
         # actually uses (passed in the request body, same pattern as filter_url/octree_url below); only
         # fall back to the backend's own env var for setups that still rely on it.
         directus_url = body.get("directus_url") or os.environ.get("DIRECTUS_URL", "")
+        if body.get("directus_url"):
+            # Client-supplied, and the probe below resolves and connects to it: same SSRF guard as
+            # the filter/octree URLs. (The env var is operator-controlled, so not checked.)
+            try:
+                _validate_outbound_url(str(body["directus_url"]), "Directus URL")
+            except HTTPException as e:
+                findings.append(
+                    {
+                        "service": "Directus",
+                        "status": "fail",
+                        "message": str(e.detail),
+                        "diagnosis": "The configured Directus URL is invalid or not allowed.",
+                        "fix": "Check the Directus URL in Settings > Connectivity.",
+                    }
+                )
+                return
         if directus_url:
             parsed = urlparse(directus_url)
             host = parsed.hostname or ""
@@ -847,7 +1013,7 @@ async def health_doctor(request: Request) -> dict:
                     "message": "DIRECTUS_URL not configured",
                     "diagnosis": "No DIRECTUS_URL environment variable set. Database features (sample lookup, upload) are disabled.",
                     "fix": "Set the environment variable before starting the backend, then restart:",
-                    "fix_command": '$env:DIRECTUS_URL = "https://d1-server.tail54eeb6.ts.net"; python -m uvicorn app.main:app --host 0.0.0.0 --port 8200',
+                    "fix_command": '$env:DIRECTUS_URL = "https://d1-server.tail54eeb6.ts.net"; python -m uvicorn app.main:app --host 127.0.0.1 --port 8200',
                 }
             )
 
@@ -1180,6 +1346,13 @@ async def health_doctor(request: Request) -> dict:
 
     # 9. Incomplete recordings
     incomplete = recovery.scan_incomplete(CAPTURES_ROOT, exclude_id=_active_session_id())
+    # Where recovery actually lives: Settings > Local Captures lists every incomplete capture with
+    # Recover and Delete. The old text sent people to "the Record page" in plain prose, whose
+    # banner can be hidden per-capture ("Ignore for now") while this check still flags it (#83).
+    captures_link = {
+        "to": "/settings?tab=captures&focus=incomplete-captures",
+        "label": "Open Local Captures",
+    }
     if incomplete:
         total_mb = sum(s.get("raw", {}).get("raw_size_mb", 0) for s in incomplete)
         findings.append(
@@ -1187,9 +1360,43 @@ async def health_doctor(request: Request) -> dict:
                 "service": "Crashed recordings",
                 "status": "warn",
                 "message": f"{len(incomplete)} incomplete recording(s) found ({total_mb:.0f} MB)",
-                "diagnosis": "Previous recordings did not finalize — likely from a crash or forced shutdown.",
-                "fix": "Go to the Record page to recover or discard them, or press Fix now to discard them all.",
+                "diagnosis": "Previous recordings did not finalize — likely from a crash or forced "
+                "shutdown. An interrupted recording usually still holds usable data.",
+                "fix": "Recover or delete them one at a time in Settings > Local Captures, or "
+                "discard them all (asks first, listing each one).",
                 "fixable": "purge_incomplete",
+                "fix_label": "Discard all…",
+                "link": captures_link,
+                # Listed so the confirmation can name exactly what is about to be deleted.
+                "items": [
+                    {
+                        "id": s["id"],
+                        "sample_name": ((s.get("manifest") or {}).get("config") or {}).get(
+                            "sample_name"
+                        ),
+                        "raw_size_mb": s["raw"]["raw_size_mb"],
+                        "duration_sec": s["raw"]["duration_sec"],
+                        "started_iso": s.get("started_iso"),
+                    }
+                    for s in incomplete
+                ],
+            }
+        )
+    # A discard deletes in the background and scan_incomplete hides those ids at once, so right
+    # after "Discard all" the check above already reads clean while multi-GB files are still being
+    # removed — and the doctor used to declare "All systems healthy" mid-delete (#83). Report the
+    # in-flight deletes as their own not-yet-healthy finding until they finish.
+    discarding = recovery.discarding_ids()
+    if discarding:
+        findings.append(
+            {
+                "service": "Discarding recordings",
+                "status": "warn",
+                "message": f"Still deleting {len(discarding)} discarded recording(s)…",
+                "diagnosis": "Large raw files take a while to delete. Keep the app open until "
+                "this finishes.",
+                "pending": True,
+                "link": captures_link,
             }
         )
 
@@ -1215,8 +1422,14 @@ async def recovery_recover(session_id: str) -> dict:
         raise HTTPException(
             400, f"session {session_id} is still recording — nothing to recover yet"
         )
+    root = CAPTURES_ROOT  # one root for the whole request, however long it takes
     try:
-        summary = await run_in_threadpool(recovery.recover_session, CAPTURES_ROOT, session_id)
+        # The claim refuses (409) a second recover, a restore or a discard of this id, and there is
+        # no await between that check and the claim.
+        with _claim_capture(session_id):
+            summary = await run_in_threadpool(recovery.recover_session, root, session_id)
+    except HTTPException:
+        raise
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -1234,7 +1447,7 @@ async def recovery_discard(session_id: str) -> dict:
     # (partial delete, then "failed to fetch" retrying against a backend that may still be shutting
     # down). Kick the delete off in the background and return immediately instead; scan_incomplete
     # excludes _discarding ids so the item just vanishes from the recovery list once it finishes.
-    if session_id in recovery._discarding:
+    if recovery.in_flight(session_id) == "discarding":
         return {"discarded": True, "session_id": session_id}  # already in flight — idempotent
     # Same race scan_incomplete's exclude_id guards against, at the point of action rather than
     # listing: this is exactly the check that was missing when a live recording got discarded out
@@ -1242,11 +1455,13 @@ async def recovery_discard(session_id: str) -> dict:
     # while the recording kept running untouched.
     if not recovery.is_safe_id(session_id):
         raise HTTPException(400, "invalid session id")
+    _refuse_if_capture_busy(session_id)
     if session_id == _active_session_id():
         raise HTTPException(
             400, f"session {session_id} is still recording — stop it, don't discard it"
         )
-    capture_dir = os.path.join(CAPTURES_ROOT, session_id)
+    root = CAPTURES_ROOT  # one root for the check and the background delete
+    capture_dir = os.path.join(root, session_id)
     if not os.path.isdir(capture_dir):
         log.info("recovery_discard: id=%s not found", session_id)
         raise HTTPException(404, f"session {session_id} not found")
@@ -1256,15 +1471,18 @@ async def recovery_discard(session_id: str) -> dict:
 
     async def _run() -> None:
         t0 = time.perf_counter()
-        recovery._discarding.add(session_id)
         try:
-            await run_in_threadpool(recovery.discard_session, CAPTURES_ROOT, session_id)
+            await run_in_threadpool(recovery.discard_session, root, session_id)
+            await _mark_remote_deleted(session_id)
         except Exception:
             log.exception("recovery_discard: background delete failed for id=%s", session_id)
         finally:
-            recovery._discarding.discard(session_id)
+            recovery.release_discard(session_id)
             log.info("recovery_discard: id=%s took %.2fs", session_id, time.perf_counter() - t0)
 
+    # Claimed here, not in the task: the task only starts after this handler returns, and a recover
+    # or restore arriving in that gap would otherwise pass its own busy check.
+    recovery.claim_discard(session_id)
     asyncio.create_task(_run())
     return {"discarded": True, "session_id": session_id}
 
@@ -1282,7 +1500,9 @@ async def backup_get_config() -> dict:
 
 @app.post("/backup/config")
 async def backup_set_config(body: dict) -> dict:
-    updates = {k: body[k] for k in ("enabled", "server_url", "retention_hours") if k in body}
+    # retention_hours is no longer a client setting (#93) — an older UI may still send it, and it
+    # is ignored rather than rejected. The server's own value comes back in server_status.
+    updates = {k: body[k] for k in ("enabled", "server_url") if k in body}
     if updates.get("server_url"):
         updates["server_url"] = _validate_outbound_url(
             str(updates["server_url"]), "backup server URL"
@@ -1302,31 +1522,133 @@ async def backup_status() -> dict:
     return result
 
 
+def _local_capture_status(cid: str) -> str:
+    """What this machine holds for a capture id: finalized | incomplete | recording | missing."""
+    if not recovery.is_safe_id(cid):
+        return "missing"
+    d = os.path.join(CAPTURES_ROOT, cid)
+    if not os.path.isdir(d):
+        return "missing"
+    if os.path.isfile(os.path.join(d, "summary.json")):
+        return "finalized"
+    return "recording" if cid == _active_session_id() else "incomplete"
+
+
+def _annotate_remote_session(s: dict, retention_hours: float | None) -> dict:
+    """Cross-reference one remote backup against the local captures (#91, and the cross-link half
+    of #31).
+
+    The server's raw `state` only says how far the STREAM got ("complete" = /ingest/finish was
+    received), which read as "this recording is fine" even for a capture deleted locally long ago.
+    `backup_state` says what the copy is, and `local_status` what this machine still has, so the UI
+    can say "Fully backed up" / "Backup interrupted (partial)" / "Deleted locally — expires in Xh"
+    and refuse a restore that would overwrite a finalized local capture.
+    """
+    meta = s.get("meta") or {}
+    cfg = meta.get("config") or {}
+    sid = str(s.get("id", ""))
+    raw_state = s.get("state") or meta.get("state") or "unknown"
+    local = _local_capture_status(sid)
+    if raw_state == "deleted":
+        backup_state = "deleted"
+    elif raw_state == "complete":
+        backup_state = "complete"
+    elif raw_state == "streaming":
+        # Still "streaming" with no live local recording behind it = the stream was cut off (crash,
+        # network loss, app closed) and never finished: a partial copy.
+        backup_state = "streaming" if local == "recording" else "interrupted"
+    else:
+        backup_state = "unknown"
+    if local == "missing" and backup_state == "deleted":
+        local = "deleted"
+    name = cfg.get("sample_name") if isinstance(cfg, dict) else None
+    if not name and local == "finalized":
+        summary = _read_json(os.path.join(CAPTURES_ROOT, sid, "summary.json")) or {}
+        name = summary.get("sample_name")
+    expires_at = s.get("expires_at")
+    if expires_at is None and retention_hours and meta.get("updated_at"):
+        # Older servers don't report it; same rule their purge sweep applies. One session's
+        # malformed field must not 500 the whole list, so a non-numeric value is just ignored.
+        try:
+            expires_at = float(meta["updated_at"]) + float(retention_hours) * 3600
+        except (TypeError, ValueError):
+            expires_at = None
+    if expires_at is not None and not isinstance(expires_at, int | float):
+        expires_at = None
+    return {
+        **s,
+        "name": name or None,
+        "backup_state": backup_state,
+        "local_status": local,
+        "expires_at": expires_at,
+    }
+
+
 @app.get("/backup/remote-sessions")
 async def backup_remote_sessions() -> dict:
     cfg = backup_mod.load_config(CAPTURES_ROOT)
     url = cfg.get("server_url", "")
     if not url:
-        return {"sessions": [], "error": "no backup server configured"}
-    sessions = await run_in_threadpool(backup_mod.list_remote_sessions, url)
-    return {"sessions": sessions}
+        return {"configured": False, "sessions": [], "error": "no backup server configured"}
+    try:
+        data = await run_in_threadpool(backup_mod.fetch_remote_sessions, url)
+    except backup_mod.RemoteBackupError as e:
+        # An error, not an empty list: "No remote backups found" for a server that simply could
+        # not be asked is a false all-clear (#92).
+        raise HTTPException(502, f"could not reach the backup server: {e}")
+    retention = data.get("retention_hours")
+    sessions = await run_in_threadpool(
+        lambda: [_annotate_remote_session(s, retention) for s in data.get("sessions", [])]
+    )
+    return {"configured": True, "sessions": sessions, "retention_hours": retention}
+
+
+async def _mark_remote_deleted(cid: str) -> bool | None:
+    """Best-effort tombstone of a capture's remote backup after its local copy was deleted (#91).
+    None when no backup server is configured at all; never raises."""
+    url = backup_mod.load_config(CAPTURES_ROOT).get("server_url", "")
+    if not url:
+        return None
+    return await run_in_threadpool(backup_mod.mark_remote_deleted, url, cid)
+
+
+async def _unmark_remote_deleted(cid: str, url: str) -> bool:
+    """Best-effort: after a successful restore, clear the remote backup's deleted tombstone so the
+    list stops mislabelling it and the server stops counting down to purging it. Never raises."""
+    return await run_in_threadpool(backup_mod.unmark_remote_deleted, url, cid)
 
 
 @app.post("/backup/restore/{session_id}")
 async def backup_restore(session_id: str) -> dict:
-    """Download a raw backup from the remote server and finalize it locally."""
+    """Download a raw backup from the remote server and finalize it locally.
+
+    Never destroys local data. The download goes to raw.d1raw.part and only replaces raw.d1raw once
+    it is complete and its config checked. A local raw that already holds rows is kept: the restore
+    is refused (409), except when the remote copy is strictly larger, in which case the local file
+    is set aside as raw.d1raw.local-<timestamp> rather than deleted.
+    """
     if not recovery.is_safe_id(session_id):
         raise HTTPException(400, "invalid session id")
-    cfg = backup_mod.load_config(CAPTURES_ROOT)
+    # Read the root once: a folder switch must never split one restore across two folders.
+    root = CAPTURES_ROOT
+    cfg = backup_mod.load_config(root)
     url = cfg.get("server_url", "")
     if not url:
         raise HTTPException(400, "no backup server configured")
-    capture_dir = os.path.join(CAPTURES_ROOT, session_id)
-    # Refuse BEFORE writing anything. The download opens raw.d1raw for writing, and
-    # recover_session then refuses a session that is already finalized — so restoring over an
-    # intact local capture used to destroy its raw file and *then* fail. Harmless when the remote
-    # copy is complete, but a partial or truncated one would take the good local copy with it, and
-    # this endpoint exists precisely for situations where copies are already being lost.
+    if session_id == _active_session_id():
+        raise HTTPException(409, f"{session_id} is still being recorded — it can't be restored")
+    # Claim the id before the first await: checking busy and claiming must be one synchronous step,
+    # or a double-click (or a recover/discard racing this) gets past the check twice, both write the
+    # same raw.d1raw.part, and the loser's cleanup deletes what the winner just finalized.
+    with _claim_capture(session_id):
+        return await _restore_claimed(session_id, root, url)
+
+
+async def _restore_claimed(session_id: str, root: str, url: str) -> dict:
+    """The body of backup_restore, run while `session_id` is claimed in recovery._recovering."""
+    capture_dir = os.path.join(root, session_id)
+    raw_path = os.path.join(capture_dir, "raw.d1raw")
+    part_path = raw_path + ".part"
     if os.path.isfile(os.path.join(capture_dir, "summary.json")):
         raise HTTPException(
             409,
@@ -1334,45 +1656,107 @@ async def backup_restore(session_id: str) -> dict:
             "local raw file. Delete or move the local capture first if you really want the remote "
             "copy (Settings > Local Captures).",
         )
-    os.makedirs(capture_dir, exist_ok=True)
-    raw_path = os.path.join(capture_dir, "raw.d1raw")
-    try:
-        nbytes = await run_in_threadpool(backup_mod.download_remote_raw, url, session_id, raw_path)
-    except Exception as e:
-        raise HTTPException(502, f"download failed: {e}")
+    local_info = await run_in_threadpool(recovery.raw_info, capture_dir)
+    local_rows = bool(local_info and local_info["n_rows"] > 0)
+    # A failed restore used to leave its half-built directory behind: a raw file with no summary,
+    # which then showed up as an unnamed "incomplete" capture and in the recovery banner (#82). A
+    # directory this request created is removed on failure; one that already existed is not touched
+    # beyond the temporary .part file.
+    created_dir = not os.path.isdir(capture_dir)
+    kept = "" if created_dir else " Your local copy was not changed."
 
-    # Recover the ORIGINAL config too, not just the bytes. recover_session reads the per-channel
-    # dyno_gains out of manifest.json; with no manifest it builds a default RecordConfig whose
-    # dyno_gains are empty, so finalize applies the scalar gain=1.0 and the restored .mat/live_cache
-    # hold raw amplifier volts mislabelled as newtons — wrong by a per-channel factor, and not
-    # obviously wrong when you look at it. Write the manifest before finalizing.
-    remote_cfg = await run_in_threadpool(backup_mod.fetch_remote_session_config, url, session_id)
-    if remote_cfg:
+    def _cleanup() -> None:
         try:
-            # Same None-filtering recover_session uses — a null in the stored config would
-            # otherwise fail validation against a non-optional field.
-            restored_cfg = RecordConfig(**{k: v for k, v in remote_cfg.items() if v is not None})
-            await run_in_threadpool(recovery.write_manifest, capture_dir, "restored", restored_cfg)
-        except Exception as e:
-            raise HTTPException(
-                500,
-                f"restored raw bytes but could not apply the original recording config ({e}); "
-                "finalizing now would silently produce volts instead of newtons",
-            )
-    else:
-        raise HTTPException(
+            os.remove(part_path)
+        except OSError:
+            pass
+        if created_dir:
+            shutil.rmtree(capture_dir, ignore_errors=True)
+
+    def _fail(status: int, detail: str) -> HTTPException:
+        _cleanup()
+        return HTTPException(status, detail)
+
+    os.makedirs(capture_dir, exist_ok=True)
+
+    # Recover the ORIGINAL config too, not just the bytes. recover_session reads the
+    # per-channel dyno_gains out of manifest.json; with no manifest it builds a default
+    # RecordConfig whose dyno_gains are empty, so finalize applies the scalar gain=1.0 and the
+    # restored .mat/live_cache hold raw amplifier volts mislabelled as newtons — wrong by a
+    # per-channel factor, and not obviously wrong when you look at it. Fetched before the
+    # download so a missing config doesn't cost a multi-GB transfer first.
+    remote_cfg = await run_in_threadpool(backup_mod.fetch_remote_session_config, url, session_id)
+    if not remote_cfg:
+        raise _fail(
             502,
             "the backup server has no recording config for this session, so the per-channel "
-            "gains needed to convert volts to newtons are unknown — refusing to finalize with "
-            "incorrect scaling. The raw file has been downloaded and is safe.",
+            "gains needed to convert volts to newtons are unknown — refusing to finalize "
+            f"with incorrect scaling.{kept} The backup is still on the server.",
         )
+    try:
+        # Same None-filtering recover_session uses — a null in the stored config would
+        # otherwise fail validation against a non-optional field.
+        restored_cfg = RecordConfig(**{k: v for k, v in remote_cfg.items() if v is not None})
+    except Exception as e:
+        raise _fail(
+            500,
+            f"could not apply the original recording config from the backup ({e}); "
+            f"finalizing would silently produce volts instead of newtons.{kept} The "
+            "backup is still on the server.",
+        )
+
+    try:
+        nbytes = await run_in_threadpool(backup_mod.download_remote_raw, url, session_id, part_path)
+    except Exception as e:
+        raise _fail(502, f"download failed: {e}.{kept} The backup is still on the server.")
+
+    if local_rows:
+        local_size = os.path.getsize(raw_path)
+        if nbytes <= local_size:
+            raise _fail(
+                409,
+                f"{session_id} already has a local recording with data "
+                f"({local_info['n_rows']:,} samples) that is at least as long as the backup "
+                "— it was not changed. Recover it from Settings > Local Captures instead.",
+            )
+
+    aside: str | None = None
+
+    def _restore_aside() -> None:
+        """Put the set-aside local raw back so nothing about the local capture has changed."""
+        if aside and os.path.exists(aside):
+            try:
+                os.replace(aside, raw_path)
+            except OSError:
+                pass
+
+    # Swap in the download. The local raw (only possible here when the remote is larger) is
+    # renamed, never deleted.
+    try:
+        if local_rows:
+            aside = f"{raw_path}.local-{int(time.time())}"
+            os.replace(raw_path, aside)
+        os.replace(part_path, raw_path)
+        # A local recording's own manifest (written at record start) is kept as it is; the
+        # remote config only fills in when there is none to keep.
+        local_manifest = _read_json(os.path.join(capture_dir, recovery.MANIFEST)) or {}
+        if not (local_rows and local_manifest.get("config")):
+            await run_in_threadpool(recovery.write_manifest, capture_dir, "restored", restored_cfg)
+    except Exception as e:
+        _restore_aside()
+        raise _fail(500, f"could not put the downloaded backup in place ({e}).{kept}")
 
     # Finalize the downloaded raw file
     try:
-        summary = await run_in_threadpool(recovery.recover_session, CAPTURES_ROOT, session_id)
+        summary = await run_in_threadpool(recovery.recover_session, root, session_id)
     except Exception as e:
-        raise HTTPException(500, f"finalize failed after download: {e}")
-    return {"restored": True, "session_id": session_id, "bytes": nbytes, "summary": summary}
+        _restore_aside()
+        raise _fail(500, f"finalize failed after download: {e}.{kept}")
+    result = {"restored": True, "session_id": session_id, "bytes": nbytes, "summary": summary}
+    result["remote_unmarked"] = await _unmark_remote_deleted(session_id, url)
+    if aside:
+        result["local_copy_kept_as"] = os.path.basename(aside)
+    return result
 
 
 def _busy() -> bool:
@@ -1384,6 +1768,29 @@ def _active_session_id() -> str | None:
     yet — indistinguishable on disk from a genuinely crashed one — so recovery must never treat it
     as recoverable/discardable. See scan_incomplete's `exclude_id`."""
     return _session.id if _busy() and _session else None
+
+
+def sample_rate_problem(rate: float, limits: dict) -> dict | None:
+    """A structured 400 detail when `rate` is outside the hardware's {"min", "max"}, else None.
+
+    Structured (not a bare string) so the UI can point at the field itself — `field` names the
+    RecordConfig key, and the numbers let it say what to change it to without parsing prose.
+    """
+    hi, lo = limits.get("max"), limits.get("min")
+    if hi is not None and rate > hi:
+        bound, side, extreme, action = hi, "above", "maximum", "Lower"
+    elif lo is not None and rate < lo:
+        bound, side, extreme, action = lo, "below", "minimum", "Raise"
+    else:
+        return None
+    return {
+        "field": "sample_rate",
+        "value": rate,
+        "max": hi,
+        "min": lo,
+        "message": f"Sample rate {rate:,.0f} Hz is {side} the {bound:,.0f} Hz {extreme} of "
+        f"the NI-DAQ modules these channels are on. {action} it and start again.",
+    }
 
 
 @app.post("/record/start")
@@ -1398,6 +1805,11 @@ async def record_start(cfg: RecordConfig) -> dict:
             raise HTTPException(
                 503, "NI-DAQmx runtime not available on this host — run on the acquisition PC."
             )
+        # The gains below, the live rail detector (session.py) and finalize's clipped flags must all
+        # use the SAME analog full scale: the Lab Amp's (settings or ANALOG_FULLSCALE_V), not
+        # RecordConfig's 10 V default, or a rig on another range never rails.
+        vfs = _analog_fullscale_v()
+        cfg.analog_fullscale_v = vfs
         # The NI-DAQ page's channel model is the source of truth for physical channels + per-channel
         # gains. A request may still override with an explicit non-default channel list.
         cc = _channel_config()
@@ -1425,6 +1837,14 @@ async def record_start(cfg: RecordConfig) -> dict:
             g = chan.dyno_gains(cc, kind=dyno_kind)
             if g:
                 cfg.dyno_gains = g
+        # #84: check the rate against what the assigned modules can actually do BEFORE creating
+        # a session. Otherwise DAQmx rejects it (-200077) inside the acquisition thread, after a
+        # capture directory exists, and the operator gets a raw driver message in a dialog that
+        # talks about finalizing and recovering a recording that never captured a sample.
+        limits = await run_in_threadpool(nidaq_enum.sample_rate_limits, cfg.nidaq_channels)
+        problem = sample_rate_problem(cfg.sample_rate, limits)
+        if problem:
+            raise HTTPException(400, problem)
         try:
             source = NidaqSource(
                 cfg, physical_channels=cfg.nidaq_channels or None, extra_channels=cfg.extra_channels
@@ -1434,7 +1854,6 @@ async def record_start(cfg: RecordConfig) -> dict:
         # Per-channel volts→N gains from the amp's (auto-ranged) ranges: N/V = range / analog_fs.
         if not cfg.dyno_gains:
             try:
-                vfs = float(_labamp_cfg.get("analog_fullscale_v", 10.0))
                 # Blocking LAN round-trip to the amp — off the event loop so it doesn't stall other
                 # concurrent requests while this one waits on it.
                 rows = sorted(
@@ -1447,6 +1866,11 @@ async def record_start(cfg: RecordConfig) -> dict:
                 pass  # amp unreachable — fall back to the scalar gain
     else:
         source = SimSource(cfg, realtime=True)
+    # The NI-DAQ branch above awaits (thread pool, amp round-trip): a second POST can pass the
+    # first _busy() check while this one is parked there. Re-check with NO await between here and
+    # the assignment, so exactly one of two overlapping starts wins and none is orphaned.
+    if _busy():
+        raise HTTPException(409, "a recording is already in progress")
     _session = RecordingSession(cfg, CAPTURES_ROOT, source, broadcaster=_broadcaster)
     _session.start()
     return _session.status()
@@ -1475,17 +1899,32 @@ async def record_start_replay(
     except json.JSONDecodeError:
         meta = {}
     n, fs = h["n"], (h["fs"] or 1000.0)
-    cfg = RecordConfig(
-        sample_name=sample_name,
-        axis=axis if axis in ("Fx", "Fy", "Fz") else "Fz",
-        feed=max(1e-6, h["feed"]),
-        diam=max(1e-6, h["diam"]),
-        sample_rate=fs,
-        duration_sec=max(0.1, n / fs),
-        ppr=max(1, ppr),
-        extra_metadata=meta,
-    )
-    source = ReplaySource(cache_bytes, ppr=cfg.ppr, realtime=True, speed=speed)
+    # RecordConfig.duration_sec is capped at 600 s because it sizes a SIMULATED run. A replay is
+    # sized by the cache itself (ReplaySource streams every sample), so a cut longer than 10 min
+    # must not be refused (it used to raise ValidationError -> a bare 500). Validate with the cap,
+    # then record the true duration.
+    duration = max(0.1, n / fs)
+    try:
+        cfg = RecordConfig(
+            sample_name=sample_name,
+            axis=axis if axis in ("Fx", "Fy", "Fz") else "Fz",
+            feed=max(1e-6, h["feed"]),
+            diam=max(1e-6, h["diam"]),
+            sample_rate=fs,
+            duration_sec=min(duration, 600.0),
+            ppr=max(1, ppr),
+            extra_metadata=meta,
+        )
+    except ValidationError as e:
+        raise HTTPException(422, f"cannot replay this cache: {e.errors()[0]['msg']}") from e
+    cfg.duration_sec = duration
+    try:
+        source = ReplaySource(cache_bytes, ppr=cfg.ppr, realtime=True, speed=speed)
+    except ValueError as e:  # a body cut off after a valid header: frombuffer can't read N samples
+        raise HTTPException(422, f"not a complete D1LC cache: {e}") from e
+    # `await file.read()` above yielded to the loop; re-check with no await before assigning.
+    if _busy():
+        raise HTTPException(409, "a recording is already in progress")
     _session = RecordingSession(cfg, CAPTURES_ROOT, source, broadcaster=_broadcaster)
     _session.start()
     return _session.status()
@@ -1545,6 +1984,7 @@ async def record_stop() -> dict:
         "id": _session.id,
         "state": _session.state,
         "error": _session.error,
+        "error_kind": _session.error_kind,
         "summary": _session.summary,
     }
 
@@ -1556,10 +1996,10 @@ async def record_status() -> dict:
 
 def _capture_ids() -> list[str]:
     """Capture directory names, newest first (ids are timestamp-prefixed)."""
-    return sorted(
-        (d for d in os.listdir(CAPTURES_ROOT) if os.path.isdir(os.path.join(CAPTURES_ROOT, d))),
-        reverse=True,
-    )
+    # scandir: the "is it a folder" answer comes with the listing, where os.path.isdir per name was
+    # one more round trip per capture on a network drive.
+    with os.scandir(CAPTURES_ROOT) as it:
+        return sorted((e.name for e in it if e.is_dir()), reverse=True)
 
 
 @app.get("/captures")
@@ -1618,58 +2058,185 @@ def _capture_file(cid: str, name: str) -> str:
     return path
 
 
+# /captures/browse: finalized captures never change except when summary.json is rewritten (a
+# metadata edit, atomic rename) or the folder goes away, so their entries are cached keyed by the
+# folder's mtime and summary.json's mtime and size. A warm scan then costs two stats per capture
+# instead of ~10, which is what makes browsing thousands of captures on a network drive tolerable.
+# Incomplete captures are never cached: their recording/discarding/recovering flags are live.
+_BROWSE_CACHE: dict[str, tuple[tuple[int, int, int], dict]] = {}
+# /captures/browse runs in the threadpool, so two requests can touch the cache at once. Every
+# mutation and the prune's snapshot of the keys hold this lock: iterating a dict another thread is
+# inserting into raises "dictionary changed size during iteration".
+_BROWSE_CACHE_LOCK = threading.Lock()
+BROWSE_MAX_LIMIT = 500
+_DATE_QUERY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def _capture_entry(cid: str) -> dict:
+    """The /captures/browse row for one capture folder."""
+    d = os.path.join(CAPTURES_ROOT, cid)
+    try:
+        dir_ns = os.stat(d).st_mtime_ns
+    except OSError:
+        dir_ns = 0
+    summary_path = os.path.join(d, "summary.json")
+    try:
+        st = os.stat(summary_path)
+        # Size is in the key because file times can be coarse: two writes inside one clock tick
+        # would otherwise look identical.
+        key: tuple[int, int, int] | None = (dir_ns, st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None  # no summary.json: incomplete, so not cacheable
+    if key is not None:
+        hit = _BROWSE_CACHE.get(d)
+        if hit and hit[0] == key:
+            return hit[1]
+    # #96: where the files are, for the "Show in folder" / copy-path controls.
+    entry: dict = {
+        "id": cid,
+        "dir": os.path.abspath(d),
+        "size_mb": 0.0,
+        "finalized": False,
+        "files": {},
+    }
+    sizes: dict[str, int] = {}
+    for fname in ("raw.d1raw", "capture.mat", "live_cache.bin"):
+        try:
+            sizes[fname] = os.stat(os.path.join(d, fname)).st_size
+        except OSError:
+            pass
+    if key is not None:
+        sizes["summary.json"] = key[2]  # already stat'ed above
+    entry["files"] = {k: round(n / 1e6, 2) for k, n in sizes.items()}
+    entry["size_mb"] = round(sum(sizes.values()) / 1e6, 2)
+    entry["finalized"] = key is not None
+    entry["mtime"] = dir_ns / 1e9
+    if entry["finalized"]:
+        try:
+            with open(summary_path) as f:
+                s = json.load(f)
+            entry["sample_name"] = s.get("sample_name")
+            entry["duration_sec"] = s.get("duration_sec")
+            entry["n"] = s.get("n")
+            entry["peaks"] = s.get("peaks")
+            entry["source"] = (s.get("config") or {}).get("source")
+        except (OSError, ValueError):
+            pass
+        if key is not None:
+            with _BROWSE_CACHE_LOCK:
+                _BROWSE_CACHE[d] = (key, entry)
+    else:
+        # No summary: the recording crashed or its finalize failed. manifest.json is written at
+        # record start with the full config, so the sample name is still known; without this the
+        # row could only show the timestamp id (#82).
+        cfg = (_read_json(os.path.join(d, recovery.MANIFEST)) or {}).get("config") or {}
+        if isinstance(cfg, dict):
+            for k in ("sample_name", "source"):
+                if cfg.get(k):
+                    entry[k] = cfg[k]
+        info = recovery.raw_info(d)
+        if info:
+            entry["duration_sec"] = info["duration_sec"]
+            entry["n"] = info["n_rows"]
+        # What Recover needs: a raw file with at least one row (scan_incomplete's rule).
+        entry["recoverable"] = bool(info and info["n_rows"] > 0)
+        entry["recording"] = cid == _active_session_id()
+        busy = recovery.in_flight(cid)
+        entry["discarding"] = busy == "discarding"
+        entry["recovering"] = busy == "recovering"
+    return entry
+
+
+def _prune_browse_cache(live: set[str]) -> None:
+    """Drop cached entries of this root whose capture folder is gone."""
+    with _BROWSE_CACHE_LOCK:
+        for stale in [k for k in _BROWSE_CACHE if k not in live]:
+            if os.path.dirname(stale) == CAPTURES_ROOT:
+                _BROWSE_CACHE.pop(stale, None)
+
+
+def _browse_matches(entry: dict, needles: list[str], status: str | None) -> bool:
+    if status == "finalized" and not entry["finalized"]:
+        return False
+    if status == "incomplete" and entry["finalized"]:
+        return False
+    if not needles:
+        return True
+    hay = " ".join(str(entry.get(k) or "") for k in ("id", "sample_name", "source")).lower()
+    return any(n in hay for n in needles)
+
+
 @app.get("/captures/browse")
-async def browse_captures(limit: int = 200) -> dict:
-    """Every local capture with the facts needed to decide what to keep.
+async def browse_captures(
+    limit: int = 200,
+    offset: int = 0,
+    q: str = "",
+    status: str | None = Query(None, pattern="^(finalized|incomplete)$"),
+    sort: str = Query("date_desc", pattern="^(date_desc|date_asc|size_desc|size_asc)$"),
+) -> dict:
+    """Local captures with the facts needed to decide what to keep, filtered, sorted and paged.
 
     Distinct from /captures/recent, which exists for the Auto Range picker and therefore skips
     anything without per-channel ranging data. This one lists everything on disk, finalized or not,
     because its job is disk housekeeping: captures accumulate indefinitely (a "Don't save" leaves
     the raw behind by design) and nothing in the app has ever been able to show or remove them.
+
+    Filtering: `q` is a case-insensitive substring of the id, sample name or source (an ISO date
+    such as 2026-10-02 also matches the id's 20261002); `status` is finalized or incomplete. Whether
+    a capture was uploaded is a Directus fact the recorder does not have, so the web UI filters on
+    that itself. `sort` is date_desc (default), date_asc or size_desc/size_asc; date order is the id
+    order (ids are timestamp-prefixed), which costs no per-capture I/O.
+
+    The drive is scanned at most once per request, and only as far as needed: with no q, no status
+    and a date sort, only the requested page is read.
     """
+    limit = max(1, min(limit, BROWSE_MAX_LIMIT))
+    offset = max(0, offset)
+    needle = q.strip().lower()
+    needles = [needle] if needle else []
+    m = _DATE_QUERY.match(needle)
+    if m:
+        needles.append("".join(m.groups()))
 
-    def _scan() -> tuple[list[dict], dict]:
-        rows: list[dict] = []
+    def _scan() -> dict:
+        disk = storage.disk_usage_for(CAPTURES_ROOT)
+        base = {"captures_root": CAPTURES_ROOT, "offset": offset, "limit": limit, "disk": disk}
         if not os.path.isdir(CAPTURES_ROOT):
-            return rows, storage.disk_usage_for(CAPTURES_ROOT)
-        ids = _capture_ids()
-        for cid in ids[: max(1, min(limit, 1000))]:
-            d = os.path.join(CAPTURES_ROOT, cid)
-            entry: dict = {"id": cid, "size_mb": 0.0, "finalized": False, "files": {}}
-            total = 0
-            for fname in ("raw.d1raw", "capture.mat", "live_cache.bin", "summary.json"):
-                fpath = os.path.join(d, fname)
-                if os.path.isfile(fpath):
-                    n = os.path.getsize(fpath)
-                    total += n
-                    entry["files"][fname] = round(n / 1e6, 2)
-            entry["size_mb"] = round(total / 1e6, 2)
-            entry["finalized"] = "summary.json" in entry["files"]
-            try:
-                entry["mtime"] = os.path.getmtime(d)
-            except OSError:
-                entry["mtime"] = 0
-            if entry["finalized"]:
-                try:
-                    with open(os.path.join(d, "summary.json")) as f:
-                        s = json.load(f)
-                    entry["sample_name"] = s.get("sample_name")
-                    entry["duration_sec"] = s.get("duration_sec")
-                    entry["n"] = s.get("n")
-                    entry["peaks"] = s.get("peaks")
-                    entry["source"] = (s.get("config") or {}).get("source")
-                except (OSError, ValueError):
-                    pass
-            rows.append(entry)
-        return rows, storage.disk_usage_for(CAPTURES_ROOT)
+            return {
+                **base,
+                "captures": [],
+                "total": 0,
+                "total_all": 0,
+                "total_size_mb": 0.0,
+                "matching_size_mb": 0.0,
+            }
+        ids = _capture_ids()  # newest first
+        total_all = len(ids)
+        needs_all = bool(needles) or status is not None or sort.startswith("size")
+        if not needs_all:
+            window = ids if sort == "date_desc" else ids[::-1]
+            page = [_capture_entry(cid) for cid in window[offset : offset + limit]]
+            total, matching_mb = total_all, None
+        else:
+            _prune_browse_cache({os.path.join(CAPTURES_ROOT, cid) for cid in ids})
+            rows = [e for e in map(_capture_entry, ids) if _browse_matches(e, needles, status)]
+            if sort.startswith("size"):
+                rows.sort(key=lambda e: (e["size_mb"], e["id"]), reverse=sort == "size_desc")
+            elif sort == "date_asc":
+                rows.reverse()
+            total = len(rows)
+            matching_mb = round(sum(e["size_mb"] for e in rows), 2)
+            page = rows[offset : offset + limit]
+        return {
+            **base,
+            "captures": page,
+            "total": total,
+            "total_all": total_all,
+            "total_size_mb": round(sum(c["size_mb"] for c in page), 2),
+            "matching_size_mb": matching_mb,
+        }
 
-    captures, disk = await run_in_threadpool(_scan)
-    return {
-        "captures_root": CAPTURES_ROOT,
-        "captures": captures,
-        "total_size_mb": round(sum(c["size_mb"] for c in captures), 2),
-        "disk": disk,
-    }
+    return await run_in_threadpool(_scan)
 
 
 @app.delete("/captures/{cid}")
@@ -1689,6 +2256,9 @@ async def delete_capture(cid: str) -> dict:
         raise HTTPException(404, "not found")
     if cid == _active_session_id():
         raise HTTPException(409, "that recording is still in progress")
+    # A restore/recover is reading or writing this directory right now, and a discard is already
+    # deleting it. Removing it from under either one is what makes them fail half-way.
+    _refuse_if_capture_busy(cid)
     t0 = time.perf_counter()
     freed = 0
     try:
@@ -1704,7 +2274,15 @@ async def delete_capture(cid: str) -> dict:
     log.info(
         "delete_capture: id=%s freed=%.1fMB in %.2fs", cid, freed / 1e6, time.perf_counter() - t0
     )
-    return {"deleted": True, "id": cid, "freed_mb": round(freed / 1e6, 2)}
+    # After the local delete has succeeded, never before: the remote copy is the undo for exactly
+    # this action, so it is only relabelled (and left to expire), not removed.
+    remote = await _mark_remote_deleted(cid)
+    return {
+        "deleted": True,
+        "id": cid,
+        "freed_mb": round(freed / 1e6, 2),
+        "remote_marked_deleted": remote,
+    }
 
 
 @app.get("/captures/{cid}/summary")
@@ -1809,6 +2387,20 @@ _LABAMP_BUSY_MSG = (
 )
 
 
+_NIDAQ_BUSY_MSG = (
+    "a recording is in progress -- changing the NI-DAQ configuration or the tacho generator "
+    "would corrupt it"
+)
+
+
+def _refuse_nidaq_change_if_busy() -> None:
+    """Invariant 3: nothing that touches NI-DAQ state may change mid-recording. The tacho generator
+    drives PFI0, the tacho input of the channel being sampled; the channel list and simulated
+    chassis are what the next start (and the live source's layout) are built from."""
+    if _busy():
+        raise HTTPException(409, _NIDAQ_BUSY_MSG)
+
+
 @app.post("/labamp/mode")
 async def labamp_set_mode(body: dict) -> dict:
     # #33: the amp's analog outputs feed straight into the NI-DAQ channels a live recording is
@@ -1860,7 +2452,7 @@ def _daq() -> tuple[int, int, int, float]:
     """(nidaq_bits, dac_bits, effective_bits, analog_fullscale_v). Effective = chain bottleneck."""
     nidaq = int(_labamp_cfg.get("nidaq_bits", 16))
     dac = int(_labamp_cfg.get("labamp_dac_bits", 12))
-    vfs = float(_labamp_cfg.get("analog_fullscale_v", 10.0))
+    vfs = _analog_fullscale_v()
     return nidaq, dac, effective_bits(dac, nidaq), vfs
 
 
@@ -1994,6 +2586,16 @@ async def labamp_post_config(body: dict) -> dict:
         raise HTTPException(409, _LABAMP_BUSY_MSG)
     if "base_url" in body:
         body["base_url"] = _validate_outbound_url(str(body["base_url"]), "amp URL")
+    # Validate before persisting anything: a bad value saved here is re-read at every startup and
+    # then breaks every /labamp/* call (int(...) of garbage, an unknown mode silently meaning real).
+    if "channels" in body:
+        ch = body["channels"]
+        if isinstance(ch, bool) or not isinstance(ch, int) or not 1 <= ch <= 64:
+            raise HTTPException(400, "channels must be an integer from 1 to 64")
+    if "mode" in body and body["mode"] not in ("mock", "real"):
+        raise HTTPException(400, 'mode must be "mock" or "real"')
+    if "analog_fullscale_v" in body and not _valid_fullscale_v(body["analog_fullscale_v"]):
+        raise HTTPException(422, "analog_fullscale_v must be a finite number above 0 (volts)")
     for k in (
         "base_url",
         "channels",
@@ -2014,15 +2616,6 @@ async def labamp_post_config(body: dict) -> dict:
 # On dev machines with no DAQmx runtime the chassis is simulated (editable, persisted); on the rig
 # it enumerates real hardware. The channel model (roles + physical bindings) is persisted and, when
 # source="nidaq", feeds the recorder's channel list + per-channel gains at record start.
-NIDAQ_SIM_PATH = os.path.join(CAPTURES_ROOT, "nidaq_sim.json")
-NIDAQ_CHANNELS_PATH = os.path.join(CAPTURES_ROOT, "nidaq_channels.json")
-
-
-def _save_json(path: str, data) -> None:
-    try:
-        storage.atomic_write_json(path, data, indent=2)
-    except OSError:
-        pass
 
 
 def _sim_layout() -> dict:
@@ -2045,7 +2638,10 @@ def _channel_config() -> list[dict]:
 
 @app.get("/nidaq/devices")
 async def nidaq_devices() -> dict:
-    return _devices()
+    # Also reports runtime_available / hardware_present, which the Record page uses to grey out
+    # the NI-DAQ source when there is nothing to record from (#86). Threadpooled: DAQmx device
+    # enumeration is a driver call that can take a moment.
+    return await run_in_threadpool(nidaq_enum.describe_devices, _sim_layout())
 
 
 @app.get("/nidaq/catalog")
@@ -2056,6 +2652,7 @@ async def nidaq_catalog_list() -> dict:
 @app.post("/nidaq/sim/card")
 async def nidaq_add_card(body: dict) -> dict:
     """Add a card to a simulated slot (the '+' on an empty slot → card catalog)."""
+    _refuse_nidaq_change_if_busy()
     layout = _sim_layout()
     slot = int(body.get("slot", 0))
     product_type = str(body.get("product_type", "")).strip()
@@ -2070,6 +2667,7 @@ async def nidaq_add_card(body: dict) -> dict:
 
 @app.delete("/nidaq/sim/card")
 async def nidaq_remove_card(slot: int) -> dict:
+    _refuse_nidaq_change_if_busy()
     layout = _sim_layout()
     layout["cards"] = [c for c in layout.get("cards", []) if int(c["slot"]) != int(slot)]
     _save_json(NIDAQ_SIM_PATH, layout)
@@ -2083,6 +2681,7 @@ async def nidaq_get_channels() -> dict:
 
 @app.put("/nidaq/channels")
 async def nidaq_put_channels(body: dict) -> dict:
+    _refuse_nidaq_change_if_busy()
     channels = body.get("channels")
     if not isinstance(channels, list):
         raise HTTPException(400, "channels list required")
@@ -2117,6 +2716,7 @@ async def nidaq_validate_formula(body: dict) -> dict:
 
 @app.post("/nidaq/channels/autoassign")
 async def nidaq_autoassign() -> dict:
+    _refuse_nidaq_change_if_busy()
     channels = chan.autoassign(_devices())
     _save_json(NIDAQ_CHANNELS_PATH, {"channels": channels})
     return {"channels": channels}
@@ -2141,6 +2741,7 @@ _tacho_gen_task = None  # nidaqmx.Task or None
 @app.post("/nidaq/tacho/start")
 async def nidaq_tacho_start(body: dict = {}) -> dict:
     global _tacho_gen_task
+    _refuse_nidaq_change_if_busy()
     if _tacho_gen_task is not None:
         raise HTTPException(409, "tacho generator already running")
     freq = float(body.get("freq_hz", 20.0))
@@ -2172,6 +2773,7 @@ async def nidaq_tacho_start(body: dict = {}) -> dict:
 @app.post("/nidaq/tacho/stop")
 async def nidaq_tacho_stop() -> dict:
     global _tacho_gen_task
+    _refuse_nidaq_change_if_busy()
     if _tacho_gen_task is None:
         return {"running": False}
     try:
@@ -2232,9 +2834,21 @@ async def record_stream(ws: WebSocket) -> None:
     await ws.accept()
     assert _broadcaster is not None
     q = _broadcaster.subscribe()
+    # Watch the client side too. Waiting only on q.get() never noticed a client that left while
+    # nothing was being published, and at shutdown uvicorn's close frame went unread, so a SIGTERM
+    # hung on "Waiting for background tasks" for as long as a browser had the stream open.
+    disconnected = asyncio.create_task(_await_ws_disconnect(ws))
+    pending_get: asyncio.Task | None = None
     try:
         while True:
-            msg = await q.get()
+            pending_get = asyncio.ensure_future(q.get())
+            done, _ = await asyncio.wait(
+                {pending_get, disconnected}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if disconnected in done:
+                break
+            msg = pending_get.result()
+            pending_get = None
             if isinstance(msg, bytes):
                 await ws.send_bytes(msg)
             else:
@@ -2242,4 +2856,18 @@ async def record_stream(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        if pending_get is not None:
+            pending_get.cancel()
+        disconnected.cancel()
         _broadcaster.unsubscribe(q)
+
+
+async def _await_ws_disconnect(ws: WebSocket) -> None:
+    """Return once the client side of `ws` is gone. The stream is one-way, so anything the client
+    sends is ignored."""
+    try:
+        while True:
+            if (await ws.receive())["type"] == "websocket.disconnect":
+                return
+    except (WebSocketDisconnect, RuntimeError):
+        return

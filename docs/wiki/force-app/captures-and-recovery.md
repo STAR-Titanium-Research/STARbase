@@ -26,9 +26,8 @@ Other places the app keeps data:
 
 | What | Where (Windows) | Override |
 |---|---|---|
-| storage and backup settings | `%LOCALAPPDATA%\force-app` | `FORCE_APP_CONFIG_DIR` |
+| storage and backup settings, NI-DAQ channel map (`nidaq_channels.json`), simulated chassis, LabAmp settings | `%LOCALAPPDATA%\force-app` | `FORCE_APP_CONFIG_DIR` |
 | `backend.log` (+3 rotated) | Electron's `userData\logs` | `FORCE_APP_LOG_DIR` |
-| NI-DAQ channel map | `nidaq_channels.json` on the capture drive | — |
 | run records waiting to sync | the app's local storage | — |
 
 ## Local captures
@@ -37,13 +36,14 @@ Other places the app keeps data:
 
 | Tag | Meaning |
 |---|---|
-| **uploaded** | a database record exists for this capture |
+| **uploaded** | the database holds this capture's run, its files and its analysis record |
+| **partial upload** | a run record exists but the upload never finished (files or analysis missing). Still the only complete copy: press **Upload** to finish it. |
 | **not uploaded** | only on this PC. Upload it, or keep it until you are sure you don't need it. |
 | **upload queued** | waiting in the offline queue (see below) |
 | **incomplete** | never finalized: an interrupted session (see [Crash recovery](#crash-recovery)) |
 | **upload state unknown** | the app could not ask the database. It is treated as possibly not uploaded, so you are warned before deleting. |
 
-For every capture that is **not uploaded**, an **Upload** button appears, and **Upload N unsynced**
+For every capture that is **not uploaded** or a **partial upload**, an **Upload** button appears, and **Upload N unsynced**
 uploads them all.
 
 The app works out the upload state by matching each capture's id against the `capture_id` that

@@ -22,6 +22,7 @@ import { defaultScale, OPEN_DISP, type ColorScale } from './colorScale';
 import { createScaleTexture, syncScaleTexture } from './scaleTexture';
 import { CLUSTER_PALETTE } from './clusterPalette';
 import { useForceHost } from './host';
+import { createLoadToken } from './loadToken';
 import { percentileRange, type Selection } from './selection';
 import type { DiagLayer } from './diagLayers';
 import type { ViewportResult } from './diagViewport';
@@ -424,7 +425,9 @@ function emitBounds() {
 	emit('bounds', [b.xmin, b.ymin, b.xmax, b.ymax]);
 }
 
-async function loadMeta(base: string) {
+// Returns the ranges it found; the caller applies them only if its load is still current.
+async function loadMeta(base: string): Promise<Record<string, [number, number]>> {
+	const found: Record<string, [number, number]> = {};
 	try {
 		// no-store: this metadata drives the colour limits; never risk a stale cached copy
 		// (a pre-repatch metadata.json would show the wrong, un-clipped colour range).
@@ -438,13 +441,21 @@ async function loadMeta(base: string) {
 		for (const a of meta.attributes || []) {
 			const propKey = byAttrName[a.name];
 			if (propKey && Array.isArray(a.min) && Array.isArray(a.max)) {
-				ranges[propKey] = [Number(a.min[0]), Number(a.max[0])];
+				found[propKey] = [Number(a.min[0]), Number(a.max[0])];
 			}
 		}
 	} catch { /* fall back to defaults */ }
+	return found;
 }
 
+// Each load() takes a token and re-checks it after every await, like FrmOctree.vue: this view stays
+// mounted while the operation changes, and it can also be unmounted mid-load. A load that is
+// superseded or finishes after unmount disposes the point cloud it created and touches nothing
+// else (it used to leak it, and two overlapping loads both reached scene.add; review 3.8).
+const loadToken = createLoadToken();
+
 async function load() {
+	const mine = loadToken.next();
 	loading.value = true; error.value = null;
 	// The octree host is configured, not assumed to be the SPA origin: the standalone app is
 	// served from a different origin than the octree server, while the Directus module is
@@ -455,17 +466,22 @@ async function load() {
 	// FrmOctree.vue serves at /octrees/<octreePath>/. Dropping it silently loads that raw
 	// octree instead (200, not 404) for any operation that has one.
 	const base = `${useForceHost().octreeUrl}/diag/${props.octreePath}/`;
+	let pt: Potree | null = null, loaded: PointCloudOctree | null = null;
 	try {
-		await loadMeta(base);
-		potree = new Potree();
-		potree.maxNumNodesLoading = 12;   // parallelise node fetches so full-res streams in faster
+		const found = await loadMeta(base);
+		if (!loadToken.isCurrent(mine)) return;
+		Object.assign(ranges, found);
+		pt = new Potree();
+		pt.maxNumNodesLoading = 12;   // parallelise node fetches so full-res streams in faster
 		// "Full-res" must mean full res: budget the LOD to cover the whole octree (a small
 		// headroom factor so the top level isn't shaved off), not a fixed 3M cap that left
 		// large maps showing ~49%. Capped for GPU safety on the biggest maps.
-		potree.pointBudget = props.totalPoints && props.totalPoints > 0
+		pt.pointBudget = props.totalPoints && props.totalPoints > 0
 			? Math.min(Math.ceil(props.totalPoints * 1.05), props.budgetCap || 25_000_000)
 			: 15_000_000;
-		pco = await potree.loadPointCloud('metadata.json', base);
+		loaded = await pt.loadPointCloud('metadata.json', base);
+		if (!loadToken.isCurrent(mine)) { try { loaded.dispose(); } catch { /* ignore */ } return; }
+		potree = pt; pco = loaded;
 		// potree culls any octree node projecting smaller than minNodePixelSize (default
 		// 50px) BEFORE the point budget is even considered — so at fit-view every deep
 		// leaf is sub-50px and dropped, leaving only coarse levels (~8-50%). "Full-res"
@@ -485,6 +501,7 @@ async function load() {
 		rebuildOverlay();
 		if (controls) controls.enabled = (props.paintMode ?? 'off') !== 'draw';
 	} catch (e: any) {
+		if (!loadToken.isCurrent(mine)) { try { loaded?.dispose(); } catch { /* ignore */ } return; }
 		error.value = e?.message || 'failed to load octree';
 		loading.value = false;
 	}
@@ -566,6 +583,7 @@ onMounted(() => {
 	nextTick(() => { setupGL(); if (canvasEl.value) ro!.observe(canvasEl.value); load(); });
 });
 onBeforeUnmount(() => {
+	loadToken.cancel();   // a load still in flight disposes its own point cloud when it lands
 	if (raf) cancelAnimationFrame(raf);
 	ro?.disconnect(); controls?.dispose();
 	disposePco(); disposeMaterial(); disposeAnalysis(); disposeOverlay();

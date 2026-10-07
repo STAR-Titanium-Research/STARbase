@@ -6,8 +6,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RecordClient } from './liveClient';
 import { theme } from '../theme';
+import { DEFAULT_WINDOW_SEC } from './plotWindow';
 
-const props = withDefaults(defineProps<{ client: RecordClient; channels?: string[]; windowSec?: number }>(), { windowSec: 12 });
+const props = withDefaults(defineProps<{ client: RecordClient; channels?: string[]; windowSec?: number }>(), { windowSec: DEFAULT_WINDOW_SEC });
 // The backend publishes a spectrum roughly every 0.3s (session.py's fft throttle) — convert the
 // user-facing time window into a frame count so this behaves the same as the force/FFT plots'
 // windowSec control instead of a fixed, non-configurable frame count.

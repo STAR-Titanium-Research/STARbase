@@ -1,5 +1,8 @@
 import { chromium } from '@playwright/test';
-const BASE = 'https://d1-server.tail54eeb6.ts.net';
+const BASE = process.env.D1_BASE_URL || 'https://d1-server.tail54eeb6.ts.net';
+const EMAIL = process.env.D1_ADMIN_EMAIL || 'admin@example.com';
+const PASSWORD = process.env.D1_ADMIN_PASSWORD;
+if (!PASSWORD) throw new Error('D1_ADMIN_PASSWORD must be set (no default)');
 const OP = 'a2e2c03a-2d05-51ed-baf4-8e03f92522b6'; // 25-machine example CSV import
 (async () => {
   const b = await chromium.launch();
@@ -9,8 +12,8 @@ const OP = 'a2e2c03a-2d05-51ed-baf4-8e03f92522b6'; // 25-machine example CSV imp
   p.on('console', m => { if (m.type()==='error' && !m.text().includes('auth/refresh') && !m.text().includes('status of 400')) errs.push(m.text()); });
   p.on('pageerror', e => errs.push('PAGEERROR: ' + e.message));
   await p.goto(`${BASE}/admin/login`);
-  await p.fill('input[type="email"]', 'admin@example.com');
-  await p.fill('input[type="password"]', 'change_me_admin');
+  await p.fill('input[type="email"]', EMAIL);
+  await p.fill('input[type="password"]', PASSWORD);
   await p.click('button[type="submit"]');
   await p.waitForTimeout(2500);
 

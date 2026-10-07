@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue';
+import { onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue';
 import ConfirmDialog from './ui/ConfirmDialog.vue';
 
 // Best-effort offline indicator (Phase 1). Plotting needs the network to reach Directus; when
@@ -12,11 +12,35 @@ function setOnline() {
 function setOffline() {
 	online.value = false;
 }
+
+// The banner is position:fixed at the very top, so it would sit over anything else anchored there
+// (the Record alarm overlay, the disk-action banners, the expanded nav rail, dialog headers).
+// Those read --offline-banner-h (0px while online) as their top offset. The banner's height is
+// measured, not assumed: the message wraps on a narrow window.
+const bannerEl = ref<HTMLElement | null>(null);
+let bannerObserver: ResizeObserver | null = null;
+function publishBannerHeight() {
+	const h = online.value ? 0 : (bannerEl.value?.offsetHeight ?? 0);
+	document.documentElement.style.setProperty('--offline-banner-h', `${h}px`);
+}
+watch(online, async (on) => {
+	bannerObserver?.disconnect();
+	if (on) return publishBannerHeight();
+	await nextTick();
+	publishBannerHeight();
+	if (bannerEl.value && typeof ResizeObserver !== 'undefined') {
+		bannerObserver = new ResizeObserver(publishBannerHeight);
+		bannerObserver.observe(bannerEl.value);
+	}
+});
 onMounted(() => {
+	if (!online.value) void nextTick(() => publishBannerHeight());
 	window.addEventListener('online', setOnline);
 	window.addEventListener('offline', setOffline);
 });
 onBeforeUnmount(() => {
+	bannerObserver?.disconnect();
+	document.documentElement.style.removeProperty('--offline-banner-h');
 	window.removeEventListener('online', setOnline);
 	window.removeEventListener('offline', setOffline);
 });
@@ -25,7 +49,7 @@ onBeforeUnmount(() => {
 <template>
 	<div class="app-root">
 		<transition name="fade">
-			<div v-if="!online" class="offline-banner">
+			<div v-if="!online" ref="bannerEl" class="offline-banner">
 				<span class="material-symbols-rounded">cloud_off</span>
 				Offline — the database is unreachable. Plotting needs a connection; reconnect to continue.
 			</div>

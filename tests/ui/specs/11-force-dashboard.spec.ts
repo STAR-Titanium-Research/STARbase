@@ -27,11 +27,20 @@ test('force dashboard: drill sample → operation → charts + FRM, with toggles
 	expect(sampleCount).toBeGreaterThan(0);
 	expect(opsBefore).toBeGreaterThan(0);
 
-	// Selecting a sample marks it active and filters the operations list to it.
+	// Selecting a sample marks it active and filters the operations list to exactly that
+	// sample's operations. The sample card's pill says how many it has ("3 ops"), so the
+	// filtered list must show exactly that many, the Operations chip must agree, and the
+	// "all" button that clears the filter must appear. (A bare "<= before" check also passes
+	// when nothing was filtered, or when the list was emptied.)
+	const pill = (await samples.first().locator('.pill').innerText()).trim();
+	const sampleOps = Number.parseInt(pill, 10);
+	expect(Number.isNaN(sampleOps), `unexpected op-count pill: "${pill}"`).toBe(false);
 	await samples.first().click();
 	await expect(samples.first()).toHaveClass(/active/);
-	await page.waitForTimeout(400);
-	expect(await ops.count()).toBeLessThanOrEqual(opsBefore);
+	await expect(ops).toHaveCount(sampleOps);
+	await expect(page.locator('.panel-ops .panel-head .chip')).toHaveText(String(sampleOps));
+	await expect(page.locator('.panel-ops .clearbtn')).toBeVisible();
+	expect(sampleOps).toBeLessThanOrEqual(opsBefore);
 
 	// Selecting an operation loads its detail (stat tiles) + charts + FRM.
 	await ops.first().click();

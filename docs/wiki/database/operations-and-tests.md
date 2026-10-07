@@ -6,7 +6,9 @@
 
 A **manufacturing operation** is one process step performed on a sample: a machining pass, a
 FAST sinter, a heat treatment, a preparation for metallography. Operations are listed under
-**Manufacturing Operations**, with shortcuts to the **FAST** and **Machining** subsets.
+**Manufacturing Operations**, with shortcuts to the **FAST** and **Machining** subsets and to
+**My operations**, **FAST runs, last 7 days** and **Missing outcome**
+([Saved views](getting-started.md#saved-views)).
 
 ![The operations list](../images/database/operations-list.png)
 
@@ -61,7 +63,9 @@ parameter is corrected (see the [Force App wiki](../force-app/plot-dashboard.md#
 
 ## Test sessions
 
-A **test session** is one test or measurement: under **Test Sessions**.
+A **test session** is one test or measurement: under **Test Sessions**, where the **Failed** and
+**Needs analysis** saved views ([Saved views](getting-started.md#saved-views)) list the sessions
+that need attention.
 
 ![A test session](../images/database/test-session.png)
 
@@ -84,6 +88,9 @@ A **test session** is one test or measurement: under **Test Sessions**.
 - **Data**: linked files, the data-file URI and size, capture software and frequency. **Summary
   Statistics (auto)** and **Plot URIs (auto)** are filled in by processing plugins.
 
+Operations, tests, campaigns and projects each open as a formatted page from Home and from every
+link; see [Explorer pages](explorer-pages.md).
+
 ## Campaigns
 
 A **campaign** groups the operations or tests of one piece of work under a project. It is either
@@ -93,8 +100,21 @@ campaign** (e.g. a hardness and microstructure survey).
 ![A machining trial](../images/database/campaign.png)
 
 A campaign carries defaults (owner, default machine, default material) that new operations and
-tests created in it **inherit**. Its **Campaign Operations** panel lists its operations and adds
-new ones, with the search pre-filtered to the campaign's type.
+tests created in it **inherit**. Its **Campaign** panel opens with an overview:
+
+- counts of samples, operations and test sessions, and progress bars for force analysis (machining
+  operations whose force files are analysed), diagnostics builds and completed tests;
+- a table of samples with how many operations and tests each has in the campaign (a sample that
+  appears only through an operation is marked "not in list" and can be added);
+- each operation with its **force analysis** and **diagnostics** status (done, pending,
+  processing, error, not analysed; hover an error for the message);
+- each test session with its date and status.
+
+There is no planned count on a campaign, so progress is "done out of what exists", not out of a
+target. Below the overview you can **add samples** and **add test sessions** (search, click to add;
+test sessions already in another campaign are not offered; the x removes), and **add or remove
+operations** with the search pre-filtered to the campaign's type. What you see and change follows
+your role's permissions. A role that cannot read force-analysis rows sees "—" for those columns.
 
 ## Projects
 

@@ -154,6 +154,16 @@ describe('debouncePublish', () => {
 		expect(published).toEqual([7]);
 	});
 
+	it('flush with nothing pending publishes nothing', () => {
+		const published: number[] = [];
+		const d = debouncePublish<number>((v) => published.push(v), 150);
+		d.flush();
+		d.push(1);
+		vi.advanceTimersByTime(150);
+		d.flush();
+		expect(published).toEqual([1]);
+	});
+
 	it('cancel drops a pending publish', () => {
 		const published: number[] = [];
 		const d = debouncePublish<number>((v) => published.push(v), 150);

@@ -6,8 +6,8 @@ import { useWorkspace } from '../workspace';
 import LiveFrm from '../LiveFrm.vue';
 import { FrmCloud, ColorScaleEditor, defaultScale, useAutoColorScale, withOpenDisplay, type ColorScale, type Histogram } from '@d1/force-plotting';
 import { appUrl } from '../../appUrl';
+import { FRM_STRIDES } from '../plotPrefs';
 const w = useWorkspace();
-const STRIDES = [1, 2, 5, 10, 25, 50];
 const editorOpen = ref(false);
 
 // FrmCloud.vue and LiveFrm.vue both take a ColorScale prop now (Stage 2/3/4 of the colour-scale
@@ -33,8 +33,11 @@ function onColorScaleUpdate(v: ColorScale) {
 	colorScale.value = v;
 	w.plot.colormap = v.colormap;
 }
-const colorDomainLo = computed(() => autoClimits.value?.cmin ?? colorScale.value.satMin);
-const colorDomainHi = computed(() => autoClimits.value?.cmax ?? colorScale.value.satMax);
+// The editor strip's axis is the DATA range. Before any is known it is a fixed 0..1, never the
+// scale's own range: that moves as a handle is dragged, so the axis re-zoomed under the handle
+// after each release (#78). The editor still widens it to contain the saturation range.
+const colorDomainLo = computed(() => autoClimits.value?.cmin ?? 0);
+const colorDomainHi = computed(() => autoClimits.value?.cmax ?? 1);
 const colorHistogram = ref<Histogram | null>(null);
 function openLive() {
 	const q = new URLSearchParams({ colormap: w.plot.colormap, pointSize: String(w.plot.pointSize), frmAxis: w.plot.frmAxis, stride: String(w.plot.liveFrmStride) });
@@ -55,7 +58,7 @@ function openLive() {
 			<input class="psize" type="range" min="1" max="5" step="0.1" v-model.number="w.plot.pointSize" :title="`Point size ${w.plot.pointSize.toFixed(1)}`" />
 			<select v-if="!w.isDone.value" class="cmap" v-model.number="w.plot.liveFrmStride"
 				title="Live map decimation — keep every Nth point. Raise this for long/dense cuts to keep the map responsive and under its point cap.">
-				<option v-for="s in STRIDES" :key="s" :value="s">{{ s === 1 ? 'full res' : `1 / ${s}` }}</option>
+				<option v-for="s in FRM_STRIDES" :key="s" :value="s">{{ s === 1 ? 'full res' : `1 / ${s}` }}</option>
 			</select>
 			<button class="btn icon sm" :class="{ on: editorOpen }" :aria-pressed="editorOpen" title="Colour scale editor" @click="editorOpen = !editorOpen">
 				<span class="material-symbols-rounded">palette</span>

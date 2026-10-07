@@ -20,11 +20,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 import force_orchestrator as fo
 import psycopg2
 
-# Prefer the ambient DATABASE_URL (same one dbmate / the daemon use); fall back to the
-# local stack DSN only for a bare `py scripts/diag_smoke_check.py` on d1-server itself.
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgres://d1:change_me@localhost:5432/d1_database?sslmode=disable",
+# The ambient DATABASE_URL (same one dbmate / the daemon use). No built-in default: the
+# compose stack has no well-known password any more.
+DATABASE_URL = os.environ.get("DATABASE_URL") or sys.exit(
+    "ERROR: DATABASE_URL is required, e.g. "
+    "postgres://d1:$POSTGRES_PASSWORD@localhost:5432/d1_database?sslmode=disable"
 )
 
 

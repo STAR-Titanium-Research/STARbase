@@ -163,16 +163,55 @@ catch
     cutstart = 1;                 % no clear engagement -> keep whole signal
 end
 
+% ---- official-crop override (opts.crop_start_sec / crop_end_sec, seconds on the file's
+%      Time axis `t`): the dashboard's saved crop replaces the auto window. The crop is ONE
+%      unit: a start that matches no sample (or leaves < 2 samples) rejects the whole crop
+%      (the end alone would pair an official end with the auto start); never an empty cut.
+%      crop_source = 'override' only if the window actually changed (set after cutend). ----
+crop_source = 'auto';
+crop_end_idx = [];
+auto_cutstart = cutstart;
+has_cs = isfield(opts, 'crop_start_sec') && isscalar(opts.crop_start_sec) && isfinite(opts.crop_start_sec);
+has_ce = isfield(opts, 'crop_end_sec') && isscalar(opts.crop_end_sec) && isfinite(opts.crop_end_sec);
+crop_ok = true;
+if has_cs
+    cs_ov = find(t >= opts.crop_start_sec, 1, 'first');
+    if ~isempty(cs_ov) && cs_ov < N
+        cutstart = cs_ov;
+    else
+        crop_ok = false;
+    end
+end
+if has_ce && crop_ok
+    ce_ov = find(t <= opts.crop_end_sec, 1, 'last');
+    if ~isempty(ce_ov) && ce_ov >= cutstart
+        crop_end_idx = ce_ov;
+    elseif has_cs
+        cutstart = auto_cutstart;        % end unusable: reject the crop as a whole
+    end
+end
+
 % ---- FRM spiral fingerprint, built once from the cut region (geometry is
 %      axis-independent; one clean PNG per force axis, coloured by that axis) ----
 rpm_c = rpm(cutstart:end);
 dt      = 1/Fs;                   % full-resolution integral (finer than app's downsampled dt)
 ang_inc = rpm_c(2:end) * 2*pi/60 * dt;
+% cumulative raw revolutions (PulsesPerRev=1) from sample 1: the live cache's `revs` array. Computed
+% here (not at the cache write) so the build manifest can carry revs_cs = revs_cum(cutstart),
+% the exact anchor the browser needs (r = (revs(i) - revs_cs) / PPR) for any cache decimation.
+revs_cum = cumsum([0; rpm_raw(2:end) / 60 * dt]);
 rho_inc = -Feed * rpm_c(2:end) / 60 * dt;
 theta   = wrapTo2Pi(cumsum([0; ang_inc]));
 rho     = cumsum([Diam/2; rho_inc]);
 inner_r = opts.inner_diam / 2;   % donut/diaphragm discs stop at the inner radius, not 0
 cutend  = find(rho < inner_r, 1, 'first'); if isempty(cutend); cutend = numel(rho); end
+cutend_auto = cutend;
+if ~isempty(crop_end_idx)
+    cutend = max(1, min(cutend, crop_end_idx - cutstart + 1));   % official end shortens the cut
+end
+if cutstart ~= auto_cutstart || cutend ~= cutend_auto
+    crop_source = 'override';            % only when the crop really changed the window
+end
 theta   = theta(1:cutend); rho = rho(1:cutend);
 step    = max(1, round(opts.frm_downsample_step));   % direct stride: data(1:step:end)
 [xx, yy] = pol2cart(theta(1:step:end), rho(1:step:end));
@@ -239,6 +278,8 @@ skip_frm_png = isfield(opts, 'octree_out') && ~isempty(opts.octree_out);
 %      octree (LAS -> PotreeConverter). No stride: every cut-window sample.
 %      Format: uint32 magic 0x44314F43 'D1OC', uint32 N, then float32 x,y,Fx,Fy,Fz [N].
 if isfield(opts, 'octree_out') && ~isempty(opts.octree_out)
+    write_build_json([char(opts.octree_out) '.json'], Feed, Diam, opts.inner_diam, ...
+        opts.pulses_per_rev, t(cutstart), t(abs_cut_end), crop_source, revs_cum(cutstart));
     ox = xx0; oy = yy0;                          % full resolution (shared)
     ofx = axes_cut{1}; ofy = axes_cut{2}; ofz = axes_cut{3};
     Noc = numel(ox);
@@ -266,6 +307,8 @@ if isfield(opts, 'grid_out') && ~isempty(opts.grid_out)
         fn = fieldnames(opts.grid);
         for ii = 1:numel(fn); g.(fn{ii}) = opts.grid.(fn{ii}); end
     end
+    write_build_json([char(opts.grid_out) '.json'], Feed, Diam, opts.inner_diam, ...
+        opts.pulses_per_rev, t(cutstart), t(abs_cut_end), crop_source, revs_cum(cutstart));
     theta_cum = cumsum([0; ang_inc]);            % unwrapped cumulative angle (for arm indexing)
     theta_cum = theta_cum(1:cutend);
     gfx = axes_cut{1}; gfy = axes_cut{2}; gfz = axes_cut{3};
@@ -334,7 +377,6 @@ end
 %   theta/rho for ANY crop-start cs / Feed / Diam / PPR via:
 %   r = (revs_cum(i)-revs_cum(cs))/PPR;  theta = wrapTo2Pi(2*pi*r);
 %   rho = Diam/2 - Feed*r.  (An RPM override instead uses r = RPM/60 * t.)
-revs_cum = cumsum([0; rpm_raw(2:end) / 60 * dt]);         % turns elapsed at each sample (raw, PPR=1)
 write_live_cache(fullfile(outdir, 'live_cache.bin'), opts.live_cache_points, ...
     Fs, Feed, Diam, cutstart, abs_cut_end, t, Fx, Fy, Fz, rpm, revs_cum);
 
@@ -473,6 +515,17 @@ function writejson(fname, s)
 fid = fopen(fname, 'w');
 fwrite(fid, jsonencode(s));
 fclose(fid);
+end
+
+function write_build_json(fname, feed, diam, inner_diam, ppr, cut_start_sec, cut_end_sec, crop_source, revs_cs)
+% Build manifest next to the octree/grid binary: the geometry the spiral was ACTUALLY
+% integrated with (after opts overrides), on the file's Time axis. The host adds
+% schema/kind/n_points/built_at and publishes it as d1_build.json. revs_cs is the cumulative raw
+% revolutions at cutstart, in the units of the live cache's revs array.
+m = struct('feed', feed, 'diam', diam, 'inner_diam', inner_diam, 'ppr', ppr, ...
+    'cut_start_sec', double(cut_start_sec), 'cut_end_sec', double(cut_end_sec), ...
+    'crop_source', crop_source, 'speed_mode', 'measured', 'revs_cs', double(revs_cs));
+writejson(fname, m);
 end
 
 function write_live_cache(fname, target, Fs, Feed, Diam, cutstart, cutend, t, Fx, Fy, Fz, rpm, revs)

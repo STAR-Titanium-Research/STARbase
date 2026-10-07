@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('electron', () => ({ shell: { openExternal: vi.fn() } }));
 
 import { shell } from 'electron';
-import { classifyWindowOpen, popoutKey } from './windowOpen';
+import { classifyWindowOpen, guardNavigation, isAppSender, popoutKey } from './windowOpen';
 import type { WindowStateStore } from './windowState';
 
 function fakeStore(bounds: Record<string, unknown>): WindowStateStore {
@@ -58,5 +58,50 @@ describe('classifyWindowOpen', () => {
     expect(popoutKey('app://force/live/force?mode=psd&channels=Fz')).toBe('/live/force');
     expect(popoutKey('app://force/live/force?mode=time&channels=Fx,Fy,Fz')).toBe('/live/force');
     expect(popoutKey('app://force/live/frm')).toBe('/live/frm');
+  });
+});
+
+describe('guardNavigation (review 2.11)', () => {
+  function attach() {
+    const handlers = new Map<string, (e: { preventDefault(): void }, url?: string) => void>();
+    guardNavigation({ on: (ev, fn) => { handlers.set(ev, fn); } });
+    const run = (ev: string, url?: string) => {
+      const e = { preventDefault: vi.fn() };
+      handlers.get(ev)!(e, url);
+      return e.preventDefault.mock.calls.length > 0;
+    };
+    return run;
+  }
+
+  it('lets the app navigate within app://force', () => {
+    const run = attach();
+    expect(run('will-navigate', 'app://force/plot?operation=1')).toBe(false);
+    expect(run('will-redirect', 'app://force/record')).toBe(false);
+  });
+
+  it.each([
+    'https://evil.example/',
+    'http://localhost:8200/',
+    'file:///C:/Windows/win.ini',
+    'app://other/index.html',
+    'javascript:alert(1)',
+    'not a url',
+  ])('denies %s', (url) => {
+    const run = attach();
+    expect(run('will-navigate', url)).toBe(true);
+    expect(run('will-redirect', url)).toBe(true);
+  });
+
+  it('never lets a webview attach', () => {
+    expect(attach()('will-attach-webview')).toBe(true);
+  });
+});
+
+describe('isAppSender', () => {
+  it('accepts only frames served from app://force', () => {
+    expect(isAppSender({ senderFrame: { url: 'app://force/settings' } })).toBe(true);
+    expect(isAppSender({ senderFrame: { url: 'https://x.example/' } })).toBe(false);
+    expect(isAppSender({ senderFrame: null })).toBe(false);
+    expect(isAppSender({})).toBe(false);
   });
 });

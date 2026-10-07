@@ -37,14 +37,14 @@ production.
 
 | Script | Purpose |
 |---|---|
-| `migrate_legacy.py` | Phase 8 — AppSheet/Sheets export (`Sample_Data.xlsx`) into Postgres (`make migrate-legacy`) |
+| `migrate_legacy.py` | Phase 8 — AppSheet/Sheets export (`Sample_Data.xlsx`) into Postgres (`make migrate-legacy`). Re-runs only fill NULL columns, never overwrite edits; owners and operators go through `people` (`legacy_people.py`) |
 | `transfer_images.py`, `transfer_sample_ownership.py` | Asset images and sample ownership from the same legacy workbook |
-| `index_archive.py` | Index the read-only SMB archive into the Directus File Library (`make index-archive`) |
+| `index_archive.py` | Index the read-only SMB archive into the Directus File Library (`make index-archive`). With `--fingerprint` a file that moved folder (same name, unique fingerprint) has every reference re-pointed; ambiguous or renamed files are flagged missing, never deleted |
 | `import_experiment_sheet.py` | AMRC experiment-sheet machining passes into `manufacturing_operations` |
 | `import_milling_jozef.py` | One-off: milling operations for one trial's `.mat` files |
 | `import_fast25.py`, `import_fast250.py` | Rebuild FAST 25 / FAST 250 runs from the machine backends |
 | `import_fast_logs.py` | Backfill FAST runs from the FCT HP D 250 log workbooks |
-| `clear_fast_logs.py`, `apply_fast_qa_backup.py` | Either side of the FAST rebuild: snapshot, then re-attach, the sheet-only QA fields |
+| `clear_fast_logs.py`, `apply_fast_qa_backup.py` | Either side of the FAST rebuild: snapshot, then re-attach, the sheet-only QA fields. `clear_fast_logs.py` needs `--yes` (or `--dry-run`) and never truncates its append-only backup; `apply_fast_qa_backup.py --revert --dry-run` writes nothing |
 | `backfill_fast_times.py`, `finalize_fast_codes.py` | Operation clock times and canonical pass codes for sintering runs |
 | `fast_his.py`, `fast_mapping.py`, `fast_recipes.py` | Shared FAST helpers: `.HIS` trace decoder, field mapping, recipe parsing |
 

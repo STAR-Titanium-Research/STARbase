@@ -7,7 +7,30 @@
 
 import { buildGeometry } from './geometry';
 
-const esc = (v) =>
+// Collections that have an Explorer page (the `home` module). This is the same mapping as
+// recordRoute() in packages/d1-ui; d1-report is built on its own and cannot import the kit, so
+// the table is repeated here. Keep the two in step: index.test.mjs parses RECORD_PAGES out of the
+// kit source and fails when they differ.
+export const EXPLORER_PAGES = {
+	physical_samples: 'samples',
+	manufacturing_operations: 'operations',
+	test_sessions: 'tests',
+	campaigns: 'campaigns',
+	projects: 'projects',
+};
+
+// The Directus app page for a record: what report QR codes, label QR codes and in-report links
+// open (sign-in required). A record with an Explorer page opens there (/admin/home/samples/<id>);
+// any other goes to its Data Studio form. Labels printed before the Explorer pages existed point
+// at /admin/content/..., which still works. `publicUrl` may carry trailing slashes.
+export function adminRecordUrl(publicUrl, collection, id) {
+	const base = String(publicUrl || '').replace(/\/+$/, '');
+	const key = encodeURIComponent(String(id));
+	const page = EXPLORER_PAGES[collection];
+	return page ? `${base}/admin/home/${page}/${key}` : `${base}/admin/content/${collection}/${key}`;
+}
+
+export const esc = (v) =>
 	v === null || v === undefined
 		? ''
 		: String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -815,7 +838,7 @@ function fastAppendix(fastRun) {
 export function renderOperationReport(d) {
 	const { op: o, qrSvg, recordUrl, publicUrl, fa, fastRun } = d;
 	const shortId = String(o.operation_id).split('-')[0];
-	const sampleUrl = `${publicUrl}/admin/content/physical_samples/${o.sample_id}`;
+	const sampleUrl = adminRecordUrl(publicUrl, 'physical_samples', o.sample_id);
 	const catLabel = CATEGORY_LABEL[o.process_category] || (o.process_category ? esc(o.process_category) : 'Operation');
 
 	const details = [
@@ -860,7 +883,7 @@ export function renderOperationReport(d) {
 export function renderTestReport(d) {
 	const { test: t, qrSvg, recordUrl, publicUrl } = d;
 	const shortId = String(t.session_id).split('-')[0];
-	const sampleUrl = `${publicUrl}/admin/content/physical_samples/${t.sample_id}`;
+	const sampleUrl = adminRecordUrl(publicUrl, 'physical_samples', t.sample_id);
 	const typeLabel = t.test_type ? String(t.test_type).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Test';
 
 	const details = [

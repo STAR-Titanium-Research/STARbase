@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
+import { recordRoute } from '@d1/ui';
 import { buildGeometry, dimsText, FORMS, FORM_FIELDS, PRESETS, fieldLabel } from './geometry';
 
 const api = useApi();
@@ -34,7 +35,11 @@ const f = ref<Record<string, any>>({
 	notes: null,
 });
 
+// The sample number is assigned by the database on save (trigger on physical_samples replaces a
+// leading {seq}-). `seq` is only a preview of it, read with this user's permissions, so it can be
+// lower than the real next number; a failed read shows `seqError` and "?" -- never a made-up 1.
 const seq = ref<number | null>(null);
+const seqError = ref('');
 const saving = ref(false);
 const error = ref('');
 const created = ref<{ id: string; code: string } | null>(null);
@@ -52,27 +57,31 @@ watch(() => f.value.form, (form) => {
 	if (preset) Object.assign(f.value, preset); // standard specimen → standard dimensions
 });
 
-const codePreview = computed(() => {
+function codeWith(num: string): string {
 	const mat = materials.value.find((m) => m.value === f.value.material_id);
 	const met = methods.value.find((m) => m.value === f.value.primary_method_id);
-	if (!mat?.extra || !met?.extra || seq.value == null) return '';
+	if (!mat?.extra || !met?.extra) return '';
 	const d = new Date(f.value.manufactured_date || Date.now());
-	return `${seq.value}-${mat.extra}-${met.extra}-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-});
+	return `${num}-${mat.extra}-${met.extra}-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+// What is sent: the number is left to the database.
+const codeTemplate = computed(() => codeWith('{seq}'));
+// What is shown.
+const codePreview = computed(() => codeWith(seq.value != null ? String(seq.value) : '?'));
 
-const canSubmit = computed(() => !!f.value.material_id && !!f.value.primary_method_id && !!codePreview.value);
+const canSubmit = computed(() => !!f.value.material_id && !!f.value.primary_method_id && !!codeTemplate.value);
 
-async function nextSequence(): Promise<number> {
+// Preview only: /d1-next-number/sample asks the database (the same rule as the save-time trigger).
+async function nextSequence(): Promise<number | null> {
 	try {
-		const res = await api.get('/items/physical_samples', { params: { fields: ['sample_code'], limit: -1 } });
-		let max = 0;
-		for (const r of res?.data?.data ?? []) {
-			const m = /^(\d+)-/.exec(r.sample_code ?? '');
-			if (m) max = Math.max(max, parseInt(m[1], 10));
-		}
-		return max + 1;
+		const res = await api.get('/d1-next-number/sample');
+		const n = Number(res?.data?.next);
+		if (!Number.isFinite(n)) throw new Error('no number returned');
+		seqError.value = '';
+		return n;
 	} catch {
-		return 1;
+		seqError.value = 'Could not read the next sample number, so no preview is available. The database still assigns the number when you save.';
+		return null;
 	}
 }
 
@@ -81,7 +90,7 @@ async function submit() {
 	saving.value = true;
 	error.value = '';
 	try {
-		const payload: Record<string, any> = { sample_code: codePreview.value };
+		const payload: Record<string, any> = { sample_code: codeTemplate.value };
 		for (const k of ['material_id', 'primary_method_id', 'manufactured_date', 'form', 'project_id', 'location', 'nickname', 'notes']) {
 			if (f.value[k] !== null && f.value[k] !== '') payload[k] = f.value[k];
 		}
@@ -147,7 +156,7 @@ onMounted(async () => {
 				<h2>Sample registered</h2>
 				<p class="code">{{ created.code }}</p>
 				<div class="done-actions">
-					<v-button @click="go(`/content/physical_samples/${created.id}`)"><v-icon name="open_in_new" left />Open record</v-button>
+					<v-button @click="go(recordRoute('physical_samples', created.id))"><v-icon name="open_in_new" left />Open record</v-button>
 					<v-button secondary @click="openReport(created.id)"><v-icon name="picture_as_pdf" left />PDF</v-button>
 					<v-button secondary @click="resetForm"><v-icon name="add" left />Register another</v-button>
 				</div>
@@ -170,6 +179,8 @@ onMounted(async () => {
 						<div class="fld code-preview">
 							<label>Sample code</label>
 							<div class="code-val"><span v-if="codePreview">{{ codePreview }}</span><span v-else class="muted">Pick material + route</span></div>
+							<p v-if="seqError" class="err">{{ seqError }}</p>
+							<p v-else-if="codePreview" class="muted">The number is a preview; the database assigns the final one when you register.</p>
 						</div>
 					</div>
 				</section>

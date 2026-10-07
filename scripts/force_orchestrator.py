@@ -17,9 +17,9 @@ Two phases (run together by default, or separately):
 Usage
 -----
     # one-off, scoped to a single sample's files, verbose:
-    DATABASE_URL=postgres://d1:change_me@localhost:5432/d1_database \
+    DATABASE_URL=postgres://d1:$POSTGRES_PASSWORD@localhost:5432/d1_database \
     DIRECTUS_URL=http://localhost:8055 \
-    DIRECTUS_ADMIN_EMAIL=admin@example.com DIRECTUS_ADMIN_PASSWORD=change_me_admin \
+    DIRECTUS_ADMIN_EMAIL=admin@example.com DIRECTUS_ADMIN_PASSWORD="$DIRECTUS_ADMIN_PASSWORD" \
         py scripts/force_orchestrator.py --discover --run --file-like '%10-AA-MF%' -v
 
     # background crawler: 2 MATLAB workers, 5 s between launches, 200 files/pass:
@@ -61,6 +61,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg2
@@ -673,6 +674,7 @@ def claim_octree(conn, limit: int = 2):
             UPDATE machining_force_analysis a SET octree_status='processing', updated_at=now()
               FROM picked WHERE a.id = picked.id
          RETURNING a.id, a.operation_id, a.pulses_per_rev, a.inner_diameter, a.outer_diameter, a.filter_chain::text AS filter_chain,
+                   a.crop_start_idx_override, a.crop_end_idx_override, a.sample_rate,
                    (SELECT metadata->>'archive_path' FROM directus_files WHERE id = a.directus_files_id) AS archive_path
         """,
             [limit],
@@ -789,6 +791,77 @@ def _patch_octree_climits(meta_path: Path, fx, fy, fz) -> None:
         log.warning("[OCTREE] climits patch skipped: %s", e)
 
 
+def _crop_opts(row) -> dict:
+    """MATLAB crop_start_sec/crop_end_sec from the official-crop override columns. The
+    dashboard stores round(sec * Fs) and reads idx / Fs, so idx / sample_rate round-trips.
+    Only set when an override exists and sample_rate is known; octree/grid builds only
+    (process_file keeps the auto window so summary cut_*_idx stays the auto one)."""
+    out = {}
+    fs = row.get("sample_rate")
+    if not fs or float(fs) <= 0:
+        return out
+    for col, key in (
+        ("crop_start_idx_override", "crop_start_sec"),
+        ("crop_end_idx_override", "crop_end_sec"),
+    ):
+        idx = row.get(col)
+        if idx is not None:
+            out[key] = float(idx) / float(fs)
+    return out
+
+
+def _claimed_crop(row) -> list:
+    """The crop override values this build was claimed (and so built) with."""
+    return [row.get("crop_start_idx_override"), row.get("crop_end_idx_override")]
+
+
+_BUILD_KEYS = (
+    "speed_mode",
+    "feed",
+    "diam",
+    "inner_diam",
+    "ppr",
+    "cut_start_sec",
+    "cut_end_sec",
+    "crop_source",
+)
+# Optional: passed through when MATLAB wrote it (the cumulative raw revolutions at cut_start_sec,
+# in the live cache's `revs` units); the client falls back to Math.fround(window) without it.
+_OPTIONAL_BUILD_KEYS = ("revs_cs",)
+
+
+def _load_build_manifest(matlab_json: str, kind: str, n_points: int) -> dict:
+    """The d1_build.json body: the geometry MATLAB actually integrated plus schema/kind/
+    n_points/built_at. MATLAB always writes its JSON, so a missing or unreadable one is a
+    failed build (the fallback geometry from the row may be wrong); raises RuntimeError."""
+    try:
+        m = json.loads(Path(matlab_json).read_text(encoding="utf-8"))
+        manifest = {"schema": 1, "kind": kind}
+        manifest.update({k: m[k] for k in _BUILD_KEYS})
+        manifest.update({k: m[k] for k in _OPTIONAL_BUILD_KEYS if k in m})
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise RuntimeError(
+            f"MATLAB build manifest missing or unreadable ({type(e).__name__}: {e}); "
+            "the octree would have no trustworthy geometry"
+        ) from e
+    manifest["n_points"] = int(n_points)
+    manifest["built_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return manifest
+
+
+def _publish_octree_dir(dst: Path, octmp: Path, manifest: dict) -> None:
+    """Replace dst with the built octree. d1_build.json lands before metadata.json (the file a
+    client loads first), so anything that sees an octree also sees its manifest."""
+    if dst.exists():
+        shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True, exist_ok=True)
+    (dst / "d1_build.json").unlink(missing_ok=True)  # stale one if rmtree was partial
+    for fn in ("hierarchy.bin", "octree.bin"):
+        shutil.copy2(octmp / fn, dst / fn)
+    (dst / "d1_build.json").write_text(json.dumps(manifest), encoding="utf-8")
+    shutil.copy2(octmp / "metadata.json", dst / "metadata.json")
+
+
 def process_octree_row(
     conn, row, exe: str, timeout: int, matlab_opts: dict, potree_exe: str
 ) -> str:
@@ -815,6 +888,7 @@ def process_octree_row(
         fchain = row.get("filter_chain")
         if fchain:
             opts["filter_chain"] = str(fchain)
+        opts.update(_crop_opts(row))
         opts["octree_out"] = binp
         stmt = (
             f"addpath('{mlq(str(MATLAB_SRC))}'); "
@@ -867,19 +941,23 @@ def process_octree_row(
         # same 1/99 percentiles so all three renderers share one colour scale.
         _patch_octree_climits(Path(octmp) / "metadata.json", fx, fy, fz)
 
+        # Checked before the old octree is replaced: a build without its manifest fails here.
+        manifest = _load_build_manifest(binp + ".json", "octree", n)
         op = str(row["operation_id"])
-        dst = OCTREE_DIR / op
-        if dst.exists():
-            shutil.rmtree(dst, ignore_errors=True)
-        dst.mkdir(parents=True, exist_ok=True)
-        for fn in ("metadata.json", "hierarchy.bin", "octree.bin"):
-            shutil.copy2(Path(octmp) / fn, dst / fn)
+        _publish_octree_dir(OCTREE_DIR / op, Path(octmp), manifest)
 
+        # A crop saved while this build ran (status pending/processing, so the dashboard did not
+        # re-queue) is not in what was just built: go back to 'pending' for that rebuild.
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE machining_force_analysis SET octree_status='done', octree_path=%s, "
-                "octree_points=%s, octree_error=NULL, updated_at=now() WHERE id=%s",
-                [op, int(n), row["id"]],
+                "UPDATE machining_force_analysis SET "
+                "octree_status=CASE WHEN crop_start_idx_override IS DISTINCT FROM %s "
+                "OR crop_end_idx_override IS DISTINCT FROM %s THEN 'pending' ELSE 'done' END, "
+                "octree_requested_at=CASE WHEN crop_start_idx_override IS DISTINCT FROM %s "
+                "OR crop_end_idx_override IS DISTINCT FROM %s THEN now() "
+                "ELSE octree_requested_at END, "
+                "octree_path=%s, octree_points=%s, octree_error=NULL, updated_at=now() WHERE id=%s",
+                [*_claimed_crop(row), *_claimed_crop(row), op, int(n), row["id"]],
             )
         conn.commit()
         log.info("[OCTREE] %s -> %s (%d pts)", Path(row["archive_path"]).stem, op, n)
@@ -1364,6 +1442,7 @@ def claim_grid(conn, limit: int = 2):
             UPDATE machining_force_analysis a SET grid_octree_status='processing', updated_at=now()
               FROM picked WHERE a.id = picked.id
          RETURNING a.id, a.operation_id, a.pulses_per_rev, a.inner_diameter, a.outer_diameter, a.filter_chain::text AS filter_chain,
+                   a.crop_start_idx_override, a.crop_end_idx_override, a.sample_rate,
                    (SELECT metadata->>'archive_path' FROM directus_files WHERE id = a.directus_files_id) AS archive_path
         """,
             [limit],
@@ -1407,6 +1486,7 @@ def process_grid_row(
         fchain = row.get("filter_chain")
         if fchain:
             opts["filter_chain"] = str(fchain)
+        opts.update(_crop_opts(row))
         opts["grid_out"] = binp
         opts["grid"] = {
             "n": int(grid_opts["n"]),
@@ -1463,21 +1543,32 @@ def process_grid_row(
             raise RuntimeError("PotreeConverter failed: " + " | ".join(tail))
         _patch_octree_climits(Path(octmp) / "metadata.json", fx, fy, fz)
 
+        manifest = _load_build_manifest(binp + ".json", "grid", n)
         op = str(row["operation_id"])
-        dst = OCTREE_DIR / "grid" / op
-        if dst.exists():
-            shutil.rmtree(dst, ignore_errors=True)
-        dst.mkdir(parents=True, exist_ok=True)
-        for fn in ("metadata.json", "hierarchy.bin", "octree.bin"):
-            shutil.copy2(Path(octmp) / fn, dst / fn)
+        _publish_octree_dir(OCTREE_DIR / "grid" / op, Path(octmp), manifest)
 
+        # Same re-queue rule as the octree: a crop saved during the build gets its rebuild.
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE machining_force_analysis SET grid_octree_status='done', "
+                "UPDATE machining_force_analysis SET "
+                "grid_octree_status=CASE WHEN crop_start_idx_override IS DISTINCT FROM %s "
+                "OR crop_end_idx_override IS DISTINCT FROM %s THEN 'pending' ELSE 'done' END, "
+                "grid_octree_requested_at=CASE WHEN crop_start_idx_override IS DISTINCT FROM %s "
+                "OR crop_end_idx_override IS DISTINCT FROM %s THEN now() "
+                "ELSE grid_octree_requested_at END, "
                 "grid_octree_path=%s, grid_octree_points=%s, grid_fidelity=%s, "
                 "grid_arm_ratio=%s, grid_cell_mm=%s, grid_octree_error=NULL, updated_at=now() "
                 "WHERE id=%s",
-                [f"grid/{op}", int(n), fidelity, arm_ratio, cell_mm, row["id"]],
+                [
+                    *_claimed_crop(row),
+                    *_claimed_crop(row),
+                    f"grid/{op}",
+                    int(n),
+                    fidelity,
+                    arm_ratio,
+                    cell_mm,
+                    row["id"],
+                ],
             )
         conn.commit()
         log.info(

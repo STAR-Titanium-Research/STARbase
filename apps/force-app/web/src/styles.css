@@ -349,6 +349,19 @@ select,
 textarea {
 	transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 }
+/* ---- Spotlight (ui/spotlight.ts) ----------------------------------------------------------------
+   "This is the field to change": a solid accent outline plus an expanding ring, for ~2.5 s (the
+   class is removed by spotlight()). The outline alone carries the meaning, so the reduced-motion
+   variant below keeps it, slightly heavier, and drops only the ring. */
+.spotlight {
+	outline: 2px solid var(--accent) !important;
+	outline-offset: 3px;
+	animation: spotlight-ring 0.9s ease-out 3;
+}
+@keyframes spotlight-ring {
+	0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+	100% { box-shadow: 0 0 0 14px transparent; }
+}
 /* Reduced motion (an OS setting): no pulsing, blinking, sliding or fading. Nothing here depends on
    an animation to be understood — the alarm banner stays solid red and keeps its tone. Spinners
    are the exception: they are state, and a frozen one reads as a hang, so they keep turning slowly. */
@@ -366,5 +379,10 @@ textarea {
 	.v-progress-circular-shim {
 		animation-duration: 2s !important;
 		animation-iteration-count: infinite !important;
+	}
+	/* Static spotlight: no ring, a heavier outline that holds for the whole duration. */
+	.spotlight {
+		animation: none !important;
+		outline-width: 3px !important;
 	}
 }

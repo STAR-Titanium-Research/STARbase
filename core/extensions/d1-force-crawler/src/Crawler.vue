@@ -10,6 +10,12 @@ const queueCounts = ref<Record<string, number>>({});
 const recent = ref<any[]>([]);
 const errors = ref<any[]>([]);
 const saving = ref(false);
+const loadError = ref<string | null>(null);    // last poll failure (cleared by the next good poll)
+const actionError = ref<string | null>(null);  // last failed button action
+
+function errMsg(e: any): string {
+	return e?.response?.data?.errors?.[0]?.message || e?.message || 'request failed';
+}
 
 // editable draft — only pushed to the server on Save, so typing doesn't fight
 // the 5s poll overwriting the field mid-keystroke.
@@ -81,16 +87,46 @@ async function loadRecent() {
 	errors.value = eRes.data.data ?? [];
 }
 
+// One refresh at a time: the 5 s timer skips a tick while the previous refresh is still running
+// (a slow Directus would otherwise pile up overlapping requests), and nothing is written after
+// unmount. allSettled so one failing endpoint neither hides the others nor leaves `loading` stuck.
+let refreshing = false;
+let unmounted = false;
 async function refreshAll() {
-	await Promise.all([loadState(), loadQueue(), loadRecent()]);
+	if (refreshing || unmounted) return;
+	refreshing = true;
+	try {
+		const results = await Promise.allSettled([loadState(), loadQueue(), loadRecent()]);
+		if (unmounted) return;
+		const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+		loadError.value = failed ? `Could not refresh the crawler status: ${errMsg(failed.reason)}` : null;
+	} finally {
+		refreshing = false;
+	}
 }
 
 onMounted(async () => {
-	await refreshAll();
-	loading.value = false;
-	timer = setInterval(refreshAll, 5000);
+	try {
+		await refreshAll();
+	} finally {
+		loading.value = false;
+	}
+	if (!unmounted) timer = setInterval(refreshAll, 5000);
 });
-onBeforeUnmount(() => { if (timer) clearInterval(timer); });
+onBeforeUnmount(() => {
+	unmounted = true;
+	if (timer) clearInterval(timer);
+});
+
+// Run a button action: show its failure instead of an unhandled rejection, always refresh after.
+async function act(fn: () => Promise<void>) {
+	actionError.value = null;
+	try {
+		await fn();
+	} catch (e: any) {
+		actionError.value = errMsg(e);
+	}
+}
 
 const isOnline = computed(() => {
 	if (!state.value?.last_heartbeat_at) return false;
@@ -99,14 +135,16 @@ const isOnline = computed(() => {
 const isRunning = computed(() => state.value?.desired_state === 'running');
 
 async function toggleRunning() {
-	const next = isRunning.value ? 'paused' : 'running';
-	await api.patch('/items/force_crawler_state', { desired_state: next });
-	await loadState();
+	await act(async () => {
+		const next = isRunning.value ? 'paused' : 'running';
+		await api.patch('/items/force_crawler_state', { desired_state: next });
+		await loadState();
+	});
 }
 
 async function saveSettings() {
 	saving.value = true;
-	try {
+	await act(async () => {
 		await api.patch('/items/force_crawler_state', {
 			workers: Number(draft.value.workers) || 1,
 			throttle_seconds: Number(draft.value.throttle_seconds) || 0,
@@ -127,17 +165,22 @@ async function saveSettings() {
 		});
 		dirty.value = false;
 		await loadState();
-	} finally {
-		saving.value = false;
-	}
+	});
+	saving.value = false;
 }
 
 async function retryOne(id: string) {
-	await api.patch(`/items/machining_force_analysis/${id}`, { status: 'pending', error_message: null });
-	await refreshAll();
+	await act(async () => {
+		await resetToPending([id]);
+		await refreshAll();
+	});
 }
+// One batch request and one refresh, not N of each.
 async function retryAllErrors() {
-	await Promise.all(errors.value.map((e) => retryOne(e.id)));
+	await act(async () => {
+		await resetToPending(errors.value.map((e) => e.id));
+		await refreshAll();
+	});
 }
 
 // Recrawl: reprocess specific operations / a whole sample's operations (matched
@@ -153,17 +196,24 @@ async function resetToPending(ids: string[]) {
 	return ids.length;
 }
 
+// Rows the daemon is working on right now ('processing') are never reset: that would queue the same
+// file a second time and run it twice. They are filtered out of both recrawl queries.
+const NOT_PROCESSING = { status: { _neq: 'processing' } };
+
 async function recrawlMatching() {
 	const q = recrawlQuery.value.trim();
 	if (!q) return;
 	recrawling.value = true;
 	recrawlResult.value = null;
-	try {
+	await act(async () => {
 		const res = await api.get('/items/machining_force_analysis', {
 			params: {
-				filter: { _or: [
-					{ 'operation_id.pass_code': { _icontains: q } },
-					{ 'operation_id.sample_id.sample_code': { _icontains: q } },
+				filter: { _and: [
+					NOT_PROCESSING,
+					{ _or: [
+						{ 'operation_id.pass_code': { _icontains: q } },
+						{ 'operation_id.sample_id.sample_code': { _icontains: q } },
+					] },
 				] },
 				limit: -1,
 				fields: ['id'],
@@ -171,26 +221,27 @@ async function recrawlMatching() {
 		});
 		const ids = (res.data.data ?? []).map((r: any) => r.id);
 		const n = await resetToPending(ids);
-		recrawlResult.value = n ? `Queued ${n} file${n === 1 ? '' : 's'} matching "${q}"` : `No files match "${q}"`;
+		recrawlResult.value = n
+			? `Queued ${n} file${n === 1 ? '' : 's'} matching "${q}" (files being processed now are left alone)`
+			: `No idle files match "${q}"`;
 		await refreshAll();
-	} finally {
-		recrawling.value = false;
-	}
+	});
+	recrawling.value = false;
 }
 
 async function recrawlAll() {
-	if (!confirm(`Reprocess ALL ${totalQueued.value} tracked file(s)? This resets every row to pending.`)) return;
+	const busy = queueCounts.value.processing ?? 0;
+	if (!confirm(`Reprocess ALL ${totalQueued.value} tracked file(s)? This resets every row to pending${busy ? `, except the ${busy} being processed right now` : ''}.`)) return;
 	recrawling.value = true;
 	recrawlResult.value = null;
-	try {
-		const res = await api.get('/items/machining_force_analysis', { params: { limit: -1, fields: ['id'] } });
+	await act(async () => {
+		const res = await api.get('/items/machining_force_analysis', { params: { filter: NOT_PROCESSING, limit: -1, fields: ['id'] } });
 		const ids = (res.data.data ?? []).map((r: any) => r.id);
 		const n = await resetToPending(ids);
-		recrawlResult.value = `Queued all ${n} file(s)`;
+		recrawlResult.value = `Queued ${n} file(s)${busy ? `; ${busy} being processed were left alone` : ''}`;
 		await refreshAll();
-	} finally {
-		recrawling.value = false;
-	}
+	});
+	recrawling.value = false;
 }
 
 const STAT_ORDER = ['pending', 'processing', 'done', 'error', 'skipped'];
@@ -221,6 +272,14 @@ function opLabel(r: any) { return r.operation_id?.pass_code || r.operation_id?.s
 			<div v-if="loading" class="loading"><v-progress-circular indeterminate /></div>
 
 			<template v-else>
+				<div v-if="loadError" class="banner err">
+					<v-icon name="error_outline" small />
+					<span>{{ loadError }}</span>
+				</div>
+				<div v-if="actionError" class="banner err">
+					<v-icon name="error_outline" small />
+					<span>{{ actionError }}</span>
+				</div>
 				<div v-if="!isOnline" class="banner">
 					<v-icon name="warning" small />
 					<span>Daemon not detected (no heartbeat in the last 30s). Start it on the host:</span>
@@ -367,6 +426,7 @@ function opLabel(r: any) { return r.operation_id?.pass_code || r.operation_id?.s
 	background: color-mix(in srgb, #d97706 12%, transparent); border: 1px solid color-mix(in srgb, #d97706 30%, transparent);
 	color: #92400e; border-radius: 12px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
 }
+.banner.err { background: color-mix(in srgb, #dc2626 12%, transparent); border-color: color-mix(in srgb, #dc2626 35%, transparent); color: #b91c1c; }
 .banner code { background: #1e293b; color: #e2e8f0; padding: 2px 8px; border-radius: 6px; font-size: 12px; }
 
 .card {

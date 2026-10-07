@@ -32,7 +32,7 @@ if (Test-PortOpen $Port) {
 Write-Host "Starting recorder backend on port $Port (logs: $LogDir)..."
 $procArgs = @{
     FilePath               = "python"
-    ArgumentList           = @("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "$Port")
+    ArgumentList           = @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$Port")
     WorkingDirectory       = $BackendDir
     WindowStyle            = "Hidden"
     RedirectStandardOutput = $OutLog

@@ -42,13 +42,30 @@ run_eq() {
     [[ "$result" == "$expected" ]] && ok "$label" || bad "$label (got '$result', want '$expected')"
 }
 
-# Authenticated curl helper; set AUTH_TOKEN before using
+# Authenticated curl helper; set AUTH_TOKEN before using. -g: Directus filters are written
+# filter[field][_op]=..., and without -g curl treats the brackets as a URL glob and fails
+# (exit 3) before sending anything.
 api() {
     local method="$1" path="$2"; shift 2
-    curl -sf -X "$method" "$DIRECTUS_URL$path" \
+    curl -sfg -X "$method" "$DIRECTUS_URL$path" \
         -H "Authorization: Bearer $AUTH_TOKEN" \
         -H "Content-Type: application/json" \
         "$@"
+}
+
+# Like api(), but keeps the response of a 4xx/5xx and reports the HTTP status separately, so a
+# check can assert the exact status instead of treating "curl failed" as success or failure.
+# Sets HTTP_STATUS (000 when curl itself failed) and HTTP_BODY.
+HTTP_STATUS=""; HTTP_BODY=""
+api_status() {
+    local method="$1" path="$2"; shift 2
+    local out
+    out=$(curl -sg -w '\n%{http_code}' -X "$method" "$DIRECTUS_URL$path" \
+        -H "Authorization: Bearer $AUTH_TOKEN" \
+        -H "Content-Type: application/json" \
+        "$@") || out=$'\n000'
+    HTTP_STATUS="${out##*$'\n'}"
+    HTTP_BODY="${out%$'\n'*}"
 }
 
 # ── Globals for IDs created during the test ───────────────────────────────────
@@ -142,18 +159,22 @@ else
     patched_version=$(echo "$patch_v1" | jq -r '.data.version // empty')
     run_eq "PATCH with correct version → version increments to 2" "$patched_version" "2"
 
-    # 5e. Stale OCC update (version already incremented — use old version 1)
-    patch_stale=$(api PATCH \
-        "/items/physical_samples/$TEST_SAMPLE_ID?filter[version][_eq]=1" \
-        -d '{"notes":"stale update"}' \
-        2>/dev/null || true)
-    stale_data=$(echo "$patch_stale" | jq -r '.data' 2>/dev/null || true)
-    # Directus returns {"data":null} when the filter matches no rows
-    if [[ "$stale_data" == "null" ]] || [[ -z "$stale_data" ]]; then
-        ok "PATCH with stale version → data:null (OCC conflict detected)"
+    # 5e. Stale OCC update (version already incremented — use old version 1).
+    # Contract (docs/api-contract.md §7.2, §12.2): HTTP 200 with "data": null (or an empty
+    # data array). Anything else — a 4xx/5xx, a connection failure, or a body that carries
+    # the record — is NOT the documented conflict signal and must fail.
+    api_status PATCH "/items/physical_samples/$TEST_SAMPLE_ID?filter[version][_eq]=1" \
+        -d '{"notes":"stale update"}'
+    if [[ "$HTTP_STATUS" == "200" ]] && echo "$HTTP_BODY" \
+        | jq -e 'has("data") and (.data == null or (.data | type == "array" and length == 0))' \
+            >/dev/null 2>&1; then
+        ok "PATCH with stale version → 200 with data:null (OCC conflict detected)"
     else
-        bad "PATCH with stale version → expected null data but got: $stale_data"
+        bad "PATCH with stale version → want 200 + null/empty data, got HTTP $HTTP_STATUS: $HTTP_BODY"
     fi
+    stale_notes=$(api GET "/items/physical_samples/$TEST_SAMPLE_ID" 2>/dev/null \
+        | jq -r '.data.notes // empty')
+    run_eq "stale patch left notes untouched" "$stale_notes" "first update"
 
     # Verify version is still 2 (stale patch had no effect)
     check_version=$(api GET "/items/physical_samples/$TEST_SAMPLE_ID" 2>/dev/null \
@@ -192,7 +213,6 @@ else
               operator_name:$operator, operation_date:$op_date, pass_code:$pass_code,
               recorded_metadata:{"test":true}}')
         op_response=$(api POST "/items/manufacturing_operations" \
-            -H "X-Actor-Identity: phase3_test_script" \
             -d "$op_payload" 2>/dev/null || true)
         TEST_OP_ID=$(echo "$op_response" | jq -r '.data.operation_id // empty')
         run "POST /items/manufacturing_operations → operation created" "$TEST_OP_ID"
@@ -215,14 +235,14 @@ else
 
     # Check INSERT was captured
     audit_insert=$(api GET \
-        "/items/audit_logs?filter[table_name][_eq]=physical_samples&filter[action_type][_eq]=INSERT&filter[row_id][_eq]=$TEST_SAMPLE_ID&limit=1" \
+        "/items/audit_logs?filter[table_name][_eq]=physical_samples&filter[action_type][_eq]=INSERT&filter[record_id][_eq]=$TEST_SAMPLE_ID&limit=1" \
         2>/dev/null || true)
     insert_count=$(echo "$audit_insert" | jq '.data | length' 2>/dev/null || echo "0")
     run_eq "audit_logs has INSERT for test sample" "$insert_count" "1"
 
     # Check UPDATE was captured (we did two PATCH operations — version 1→2)
     audit_update=$(api GET \
-        "/items/audit_logs?filter[table_name][_eq]=physical_samples&filter[action_type][_eq]=UPDATE&filter[row_id][_eq]=$TEST_SAMPLE_ID&limit=10" \
+        "/items/audit_logs?filter[table_name][_eq]=physical_samples&filter[action_type][_eq]=UPDATE&filter[record_id][_eq]=$TEST_SAMPLE_ID&limit=10" \
         2>/dev/null || true)
     update_count=$(echo "$audit_update" | jq '.data | length' 2>/dev/null || echo "0")
     # At least 1 UPDATE (successful patch); stale patch matched nothing so no extra entry
@@ -238,6 +258,21 @@ else
         ok "audit UPDATE has row_before populated"
     else
         bad "audit UPDATE row_before is null or missing"
+    fi
+
+    # The PATCH is attributed to the signed-in admin (actor-identity hook, or the
+    # directus_activity fallback of migration 128). v_audit_logs_with_actor is not exposed through
+    # the API, so this needs direct database access; it is skipped without DATABASE_URL.
+    if [[ -n "${DATABASE_URL:-}" ]] && command -v psql >/dev/null; then
+        admin_id=$(api GET "/users/me?fields=id" 2>/dev/null | jq -r '.data.id // empty')
+        update_actor=$(psql "$DATABASE_URL" -tAc \
+            "SELECT actor_identity FROM v_audit_logs_with_actor
+             WHERE table_name = 'physical_samples' AND action_type = 'UPDATE'
+               AND record_id = '$TEST_SAMPLE_ID'
+             ORDER BY log_id DESC LIMIT 1" 2>/dev/null || true)
+        run_eq "audit UPDATE attributed to the signed-in user" "$update_actor" "$admin_id"
+    else
+        printf '  \033[33mSKIP\033[0m audit actor check (needs DATABASE_URL and psql)\n'
     fi
 
     # Check row_after is populated on UPDATE
@@ -278,20 +313,22 @@ if [[ -n "$RESEARCHER_EMAIL" && -n "$RESEARCHER_PASSWORD" ]]; then
     run "Researcher POST /auth/login → token acquired" "$RESEARCHER_TOKEN"
 
     if [[ -n "$RESEARCHER_TOKEN" ]]; then
-        # Researcher must not be able to create a sample
+        # Researcher must not be able to create a sample: assert the exact 403 (curl -f would
+        # have hidden both the status and the body).
+        RESEARCHER_CODE="RESEARCHER-ATTEMPT-$(date +%s)"
         OLD_TOKEN="$AUTH_TOKEN"
         AUTH_TOKEN="$RESEARCHER_TOKEN"
-        researcher_create=$(api POST "/items/physical_samples" \
-            -d '{"sample_code":"RESEARCHER-ATTEMPT-001","current_status":"active"}' \
-            2>/dev/null || true)
+        api_status POST "/items/physical_samples" \
+            -d "{\"sample_code\":\"$RESEARCHER_CODE\",\"current_status\":\"active\"}"
         AUTH_TOKEN="$OLD_TOKEN"
+        run_eq "Researcher POST /items/physical_samples → HTTP 403" "$HTTP_STATUS" "403"
+        err_code=$(echo "$HTTP_BODY" | jq -r '.errors[0].extensions.code // empty' 2>/dev/null || true)
+        run_eq "Researcher POST error code is FORBIDDEN" "$err_code" "FORBIDDEN"
 
-        errors=$(echo "$researcher_create" | jq -r '.errors | length' 2>/dev/null || echo "0")
-        if [[ "$errors" -ge 1 ]]; then
-            ok "Researcher POST /items/physical_samples → 403 Forbidden (expected)"
-        else
-            bad "Researcher POST /items/physical_samples → should have been forbidden but succeeded"
-        fi
+        # ...and nothing was written
+        leaked=$(api GET "/items/physical_samples?filter[sample_code][_eq]=$RESEARCHER_CODE&fields=sample_id" \
+            2>/dev/null | jq -r '.data | length' 2>/dev/null || echo "?")
+        run_eq "Researcher attempt created no sample" "$leaked" "0"
     fi
 else
     printf '  \033[33mSKIP\033[0m Researcher isolation (DIRECTUS_RESEARCHER_EMAIL not set)\n'

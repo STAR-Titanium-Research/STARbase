@@ -16,46 +16,62 @@ The capability has two halves:
 
 ## 1. One-time: create the read-only login role
 
-The migration creates `d1_llm_readonly` as a NOLOGIN **privilege bundle** (SELECT
-on the allow-listed views only; read-only + statement-timeout defaults). The
-plugin must connect as a **login** role that *inherits* it. Create it once, with
-a password kept out of version control:
+Migrations create `d1_llm_readonly`, a NOLOGIN **privilege bundle** (SELECT on an
+explicit allow-list of lab tables and views), and `d1_llm_app`, a NOLOGIN member of
+it that already has `default_transaction_read_only = on` and a 5 s
+`statement_timeout` (migration `…132_llm_readonly_allow_list`). Turn it into the
+plugin's login once, with a password kept out of version control:
 
 ```sql
 -- as the d1 superuser, against the d1_database database
-CREATE ROLE d1_llm_app LOGIN PASSWORD 'choose-a-strong-password' IN ROLE d1_llm_readonly;
-
--- Member roles do NOT inherit a group role's SET values, so pin them here too
--- (defence-in-depth; the plugin also enforces these per connection):
-ALTER ROLE d1_llm_app SET default_transaction_read_only = on;
-ALTER ROLE d1_llm_app SET statement_timeout = '5000ms';
+ALTER ROLE d1_llm_app LOGIN PASSWORD 'choose-a-strong-password';
 ```
 
-Then set the DSNs in `.env`:
+The embedding backfill needs its own writer login, which is **not** the `d1`
+superuser (this container also runs LLM-authored SQL, so it must not hold
+superuser credentials). It only reads the note view and upserts one table:
+
+```sql
+-- as the d1 superuser, against the d1_database database
+CREATE ROLE d1_embedder LOGIN PASSWORD 'choose-another-strong-password';
+GRANT CONNECT ON DATABASE d1_database TO d1_embedder;
+GRANT USAGE ON SCHEMA public TO d1_embedder;
+GRANT SELECT ON v_embeddings_source_notes TO d1_embedder;
+GRANT SELECT, INSERT, UPDATE ON semantic_embeddings TO d1_embedder;
+```
+
+Then set the DSNs in `.env` (use hex passwords so they are URL-safe):
 
 ```
 LLM_DATABASE_URL=postgres://d1_llm_app:choose-a-strong-password@postgres:5432/d1_database?sslmode=disable
-EMBED_DATABASE_URL=postgres://d1:<d1-password>@postgres:5432/d1_database?sslmode=disable
+EMBED_DATABASE_URL=postgres://d1_embedder:choose-another-strong-password@postgres:5432/d1_database?sslmode=disable
 ```
 
 - `LLM_DATABASE_URL` executes LLM-authored SQL — **never** point it at the
   superuser. It is the read-only, allow-listed login role above.
 - `EMBED_DATABASE_URL` is used **only** by the embedding backfill, which must
-  write `semantic_embeddings`; it needs INSERT/UPDATE on that one table.
+  write `semantic_embeddings`; the `d1_embedder` role above has INSERT/UPDATE on
+  that one table and nothing else. Never point it at `d1`. (A later migration or
+  setup script may create the role; until then this runbook step is the source.)
 
 > Verify the isolation any time with `make ai-test` (or
 > `bash tests/phase6_text_to_sql.sh`): it provisions a throwaway member of
 > `d1_llm_readonly` and asserts the role can read but not write.
 
-**Read surface (widened 2026-07-01, migration `…052_llm_readonly_broad_read`):**
-`d1_llm_readonly` can now `SELECT` **all lab/domain tables** and benign Directus
-metadata — so the AI can answer questions about any recorded field (e.g.
-`manufacturing_operations.machining_feed_mm_per_rev`). It is still **denied**
-every credential/auth/system table (`directus_users`, `directus_sessions`,
-`directus_settings`, `directus_flows`/`operations`, the policy/permission tables,
-`schema_migrations`, and `pg_catalog`/`information_schema`). The same deny-list is
-enforced a second time by `app/lib/sql_guard.py` (deny-by-default for any unknown
-`directus_*` table). See ADR-0009 §"Update (2026-07-01)".
+**Read surface (allow-list since migration `…132_llm_readonly_allow_list`):**
+`d1_llm_readonly` can `SELECT` the lab tables and `v_*` views listed in that
+migration and nothing else. `audit_logs`, `people`, `Machine_Operators`,
+`archive_metadata_edits`, `force_crawler_state`, `schema_migrations` and every
+`directus_*` table are not granted, and a table added later stays invisible to the
+LLM until a migration grants it (a view that is dropped and recreated must be
+re-granted). `app/lib/sql_guard.py` enforces the same deny-list a second time and
+also rejects side-effect and SQL-running functions (`query_to_xml`,
+`pg_read_file`, `set_config`, …) and `FOR UPDATE`. See ADR-0009's status note.
+
+Who may ask: `/d1-ask` serves admins and users with app access only (API-only
+tokens get 403). It forwards only the last 20 messages (4000 characters each),
+the plugin caps `row_limit` at 1000, and both refuse to run (503) when
+`WORKER_WEBHOOK_SECRET` is unset.
 
 ---
 
@@ -80,8 +96,9 @@ that produces 768-dimensional vectors, or add a migration to change the column.
 
 ## 3. Ask a question
 
-`POST /api/ask` on the plugin (host port `LLM_HTTP_PORT`, default `8082`). If
-`WORKER_WEBHOOK_SECRET` is set, send it in `X-Worker-Secret`.
+`POST /api/ask` on the plugin (host port `LLM_HTTP_PORT`, default `8082`, bound to
+`D1_BIND_ADDR`, i.e. `127.0.0.1` unless you changed it). `WORKER_WEBHOOK_SECRET` is
+required (compose will not start without it), so always send it in `X-Worker-Secret`.
 
 ```bash
 curl -s localhost:8082/api/ask \
@@ -96,9 +113,15 @@ Response:
 {
   "sql": "SELECT sample_code, mass_grams FROM v_complete_sample_history WHERE mass_grams > 50",
   "columns": ["sample_code", "mass_grams"],
-  "rows": [ ... ]
+  "rows": [ ... ],
+  "row_count": 42,
+  "truncated": false
 }
 ```
+
+Results are capped at `row_limit` rows (default 200, max 1000). The query fetches one
+extra row to find out whether more existed: `truncated` is `true` when it did, and `rows`
+then holds exactly `row_limit` rows. `/api/chat` returns the same two fields.
 
 If the model emits unsafe or off-menu SQL the API returns **422** with the
 rejection reason and the offending SQL — it is never executed. See ADR-0009 and
@@ -197,7 +220,28 @@ with **Plotly charts**. Two extensions in `core/extensions/`:
   `WORKER_WEBHOOK_SECRET` so the browser never sees it. The plugin stays on the
   internal network — no host port needed.
 - `d1-ask-db` — the module (sidebar entry **Ask the Database**). Multi-turn chat;
-  each answer shows the generated SQL, a table, and a chart when one fits.
+  each answer shows the generated SQL, a table, and a chart when one fits. The empty
+  chat offers example-question chips (bundled in `src/examples.ts`, picked from
+  `eval/questions.json`), a "Showing the first N rows" note appears when the result
+  was truncated, and failures (guard rejection, 401/403, 502, 504) show a plain-language
+  message instead of the raw error.
+
+  Each answer has **Download CSV** (RFC 4180, UTF-8 BOM, `ask-<question>-<date>.csv`, built in
+  the browser from the rows shown, so at most the 200-row cap), **Copy SQL** (falls back to
+  `execCommand` on plain-http hosts, where `navigator.clipboard` is unavailable) and **Save
+  question**. The empty chat also lists history, all client-side in `localStorage`: key
+  `d1-ask-db:history:<user id>` holds the last 20 asked questions (deduplicated, newest first) and
+  `d1-ask-db:saved:<user id>` holds saved questions (capped at 100), so users who share a browser
+  keep separate lists (the bare keys are used only if no user id is available; lists written by
+  older versions under the bare keys move to the first user who opens the module, then are
+  deleted). Every change re-reads the stored list first, so two tabs merge instead of overwriting
+  each other. Only the first question of a conversation is added to history (a follow-up is
+  meaningless without the turns before it, so Run again on it would lose its context; Save
+  question still works on any question). Only question text and a timestamp are stored, never result rows. Nothing is synced
+  between browsers.
+
+  Thumbs-up/down feedback on answers is deliberately **out of scope** until there is a place to
+  store it (owner decision); do not add it to the module without one.
 
 Setup:
 
@@ -217,5 +261,6 @@ Unsafe/off-menu SQL is still rejected by the guard (surfaced as a note), never r
 The chart the model proposes is validated against the returned columns by
 `app/lib/charts.py`; anything malformed or off-menu falls back to the table.
 
-Tests: `make llm-test` (backend, incl. `/api/chat` + chart validation) and
+Tests: `make llm-test` (backend, incl. `/api/chat` + chart validation),
+`cd core/extensions/d1-ask-db && npm test` (CSV and history helpers) and
 `cd tests/ui && npx playwright test 08-ask-db-chat` (UI + endpoint auth).

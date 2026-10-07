@@ -6,6 +6,9 @@
     "build": "directus-extension build",
     "dev": "directus-extension build --watch"
   },
+  "dependencies": {
+    "@d1/ui": "*"
+  },
   "devDependencies": {
     "@directus/extensions-sdk": "^17",
     "@vue/compiler-sfc": "^3",

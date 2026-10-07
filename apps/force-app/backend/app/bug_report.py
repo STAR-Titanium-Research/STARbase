@@ -41,14 +41,16 @@ def _fence(text: str, limit: int) -> list[str]:
     return ["```", text.strip()[-limit:].replace("```", "`​`​`"), "```"]
 
 
-# Diagnostics embed filesystem paths (captures_root) that aren't typed by the reporter, so unlike
-# the description text they can leak an identifying Windows account name into a GitHub issue body
-# no one meant to put there.
-_WINDOWS_USER_PATH = re.compile(r"(?i)(C:\\Users\\)([^\\]+)(\\)")
+# Diagnostics and the auto-attached log/console tails embed filesystem paths (captures_root, a
+# traceback's file paths) that aren't typed by the reporter, so unlike the description text they can
+# leak an identifying Windows account name into a GitHub issue body no one meant to put there. Any
+# drive letter, either slash direction, the JSON-escaped double backslash and account names with
+# spaces in them are all covered.
+_WINDOWS_USER_PATH = re.compile(r"(?i)([A-Z]:(?:\\{1,2}|/)Users(?:\\{1,2}|/))([^\\/\r\n\"']+)")
 
 
 def _redact_paths(text: str) -> str:
-    return _WINDOWS_USER_PATH.sub(r"\1<redacted>\3", text)
+    return _WINDOWS_USER_PATH.sub(r"\1<redacted>", text)
 
 
 KIND_LABELS = {"bug": "bug", "feature": "enhancement"}
@@ -59,6 +61,24 @@ KIND_PREFIXES = {"bug": "[Bug]", "feature": "[Feature]"}
 # string a client sends) so the resulting `area:*` label is always one of these, never freeform —
 # the whole point is a stable set of labels to filter/catalogue by later.
 AREAS = {"gui", "recording", "plotting", "diagnostics", "settings", "labamp", "nidaq", "general"}
+# A report can touch several sections (#95), but a long tail of labels stops being a useful filter.
+MAX_AREAS = 4
+
+
+def normalize_areas(area: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """The `area:*` values to label an issue with: known AREAS only, de-duplicated in the order
+    given, at most MAX_AREAS, falling back to ["general"]. "general" (the catch-all) is dropped
+    when a specific area is also chosen — "Plotting + General/other" says no more than "Plotting".
+    Accepts a single string so older clients that send one area keep working."""
+    raw = [area] if isinstance(area, str) else list(area or [])
+    out: list[str] = []
+    for a in raw:
+        a = str(a).strip().lower()
+        if a in AREAS and a not in out:
+            out.append(a)
+    if len(out) > 1 and "general" in out:
+        out.remove("general")
+    return out[:MAX_AREAS] or ["general"]
 
 
 def build_body(
@@ -85,8 +105,9 @@ def build_body(
     ]
     # Machine state first: it is short, and it answers the questions that otherwise cost a
     # round-trip with the operator ("is the amp in real or mock mode?", "which DAQ is attached?",
-    # "was it actually recording?"). Not collapsed, unlike the two long tails below. Paths within
-    # it are redacted (see _redact_paths) since they can carry the operator's Windows account name.
+    # "was it actually recording?"). Not collapsed, unlike the two long tails below. Paths in it and
+    # in both tails are redacted (see _redact_paths) since they can carry the operator's Windows
+    # account name.
     if diagnostics.strip():
         parts += [
             "",
@@ -99,7 +120,7 @@ def build_body(
             "",
             "<details><summary>Renderer console (auto-attached)</summary>",
             "",
-            *_fence(console_tail, 8000),
+            *_fence(_redact_paths(console_tail), 8000),
             "</details>",
         ]
     if log_tail.strip():
@@ -110,7 +131,7 @@ def build_body(
             "",
             "<details><summary>Recent backend log (auto-attached)</summary>",
             "",
-            *_fence(log_tail, 20000),
+            *_fence(_redact_paths(log_tail), 20000),
             "</details>",
         ]
     return "\n".join(parts)
@@ -128,14 +149,15 @@ async def create_issue(
     diagnostics: str = "",
     console_tail: str = "",
     kind: str = "bug",
-    area: str = "general",
+    area: str | list[str] = "general",
 ) -> dict:
-    """Returns {"ok": True, "url": ...} or {"ok": False, "reason": ...}. Never raises."""
+    """Returns {"ok": True, "url": ..., "number": ..., "title": ..., "labels": [...]} or
+    {"ok": False, "reason": ...}. Never raises."""
     title = title.strip()
     if not title:
         return {"ok": False, "reason": "A title is required."}
     kind = kind if kind in KIND_LABELS else "bug"
-    area = area if area in AREAS else "general"
+    areas = normalize_areas(area)
     prefix = KIND_PREFIXES[kind]
     # Tag by prefix, not by trusting any "[Bug]"/"[Feature]" the reporter typed themselves — the
     # picker is the single source of truth so the title prefix and the label can never disagree.
@@ -152,15 +174,12 @@ async def create_issue(
         diagnostics=diagnostics,
         console_tail=console_tail,
     )
+    labels = ["force-app", "in-app-report", KIND_LABELS[kind], *(f"area:{a}" for a in areas)]
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             res = await client.post(
                 f"{_relay_url()}/report",
-                json={
-                    "title": title[:250],
-                    "body": body,
-                    "labels": ["force-app", "in-app-report", KIND_LABELS[kind], f"area:{area}"],
-                },
+                json={"title": title[:250], "body": body, "labels": labels},
             )
     except httpx.HTTPError as e:
         return {"ok": False, "reason": f"could not reach the bug-report relay: {e}"}
@@ -168,7 +187,13 @@ async def create_issue(
     if res.status_code >= 300:
         return {"ok": False, "reason": f"bug-report relay error (HTTP {res.status_code})"}
 
-    return res.json()
+    result = res.json()
+    if isinstance(result, dict) and result.get("ok"):
+        # What was actually filed (prefixed title, labels), so the app can list the new issue
+        # straight away instead of waiting for GitHub's issue list to catch up (#88).
+        result.setdefault("title", title[:250])
+        result.setdefault("labels", labels)
+    return result
 
 
 async def list_issues() -> dict:

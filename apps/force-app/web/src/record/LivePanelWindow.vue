@@ -15,6 +15,7 @@ import LiveWaterfall from './LiveWaterfall.vue';
 import LiveFrm from './LiveFrm.vue';
 import { COLORMAPS, colormapLabel, PlotModeFlyout, useAutoColorScale, type ColorScale } from '@d1/force-plotting';
 import { PLOT_MODES } from './plotModes';
+import { clampWindowSec, WINDOW_MAX_SEC, WINDOW_MIN_SEC, WINDOW_SLIDER_MAX_SEC } from './plotWindow';
 
 const route = useRoute();
 const panel = computed(() => String(route.params.panel || 'force'));
@@ -26,7 +27,7 @@ const mode = ref<string>(q.get('mode') || 'time');
 const SUMMED = ['Fx', 'Fy', 'Fz'];
 const ORDER = [...SUMMED, ...SUB_NAMES];
 const channels = ref<string[]>(q.get('channels')?.split(',').filter(Boolean) || [...SUMMED]);
-const windowSec = ref(Number(q.get('window')) || 12);
+const windowSec = ref(clampWindowSec(Number(q.get('window'))));
 const initColormap = ref<string>(q.get('colormap') || 'viridis');
 const initPointSize = ref(Number(q.get('pointSize')) || 2.2);
 const frmAxis = ref<'Fx' | 'Fy' | 'Fz'>((q.get('frmAxis') as 'Fx' | 'Fy' | 'Fz') || 'Fz');
@@ -61,10 +62,11 @@ const subsOpen = ref(false);
 const subCount = computed(() => channels.value.filter((k) => (SUB_NAMES as readonly string[]).includes(k)).length);
 
 const client = new RecordClient();
-// Clamped, matching the workspace path (workspace.ts). The number input below can be cleared to
-// empty/NaN, and a non-positive window makes the rolling plot drop every point it is handed.
-client.windowSec = Math.max(1, Number(windowSec.value) || 12);
-watch(windowSec, (v) => { client.windowSec = Math.max(1, Number(v) || 12); });
+// This window's OWN view (#105): every plot below slices it out of the trace history, so it is not
+// overwritten by the opener's snapshots, which only replace the data. Clamped: the number input
+// can be cleared to empty/NaN, and a non-positive window would draw nothing.
+const viewWindowSec = computed(() => clampWindowSec(windowSec.value));
+watch(viewWindowSec, (v) => client.setWindowDemand('view', v), { immediate: true });
 const st = client.status;
 const ready = computed(() => client.snapshotReady.value);
 const colormap = ref(initColormap.value);
@@ -137,8 +139,8 @@ onBeforeUnmount(() => client.disconnect());
 				</div>
 				<span v-if="singleChannelMode" class="mono-hint" title="Spectrogram/waterfall show one channel">{{ channels[0] }} only</span>
 				<div v-if="mode !== 'fft' && mode !== 'psd'" class="tw-row">
-					<input type="range" min="2" max="60" step="1" v-model.number="windowSec" />
-					<input type="number" min="1" max="300" v-model.number="windowSec" class="tw-num" />
+					<input type="range" min="2" :max="WINDOW_SLIDER_MAX_SEC" step="1" v-model.number="windowSec" />
+					<input type="number" :min="WINDOW_MIN_SEC" :max="WINDOW_MAX_SEC" v-model.number="windowSec" class="tw-num" />
 					<span class="tw-unit">s</span>
 				</div>
 			</template>
@@ -160,10 +162,10 @@ onBeforeUnmount(() => client.disconnect());
 				<LiveFrm v-if="isFrm" :client="client" :diam="80" :color-scale="frmColorScale" :point-size="pointSize" :point-stride="initStride" :axis="frmAxis"
 					@climits="onFrmClimits" />
 				<div v-else-if="isPolar" class="syncing">Polar pop-out shows a finished/replayed cut — open it from the embedded panel once a cut is done.</div>
-				<LiveForcePlot v-else-if="mode === 'time'" :client="client" :channels="channels" />
+				<LiveForcePlot v-else-if="mode === 'time'" :client="client" :channels="channels" :window-sec="viewWindowSec" />
 				<LiveFft v-else-if="mode === 'fft' || mode === 'psd'" :client="client" :channels="channels" :scale="mode === 'psd' ? 'psd' : 'amp'" />
-				<LiveSpectrogram v-else-if="mode === 'spectrogram'" :client="client" :channels="channels" :window-sec="windowSec" />
-				<LiveWaterfall v-else-if="mode === 'waterfall'" :client="client" :channels="channels" :window-sec="windowSec" />
+				<LiveSpectrogram v-else-if="mode === 'spectrogram'" :client="client" :channels="channels" :window-sec="viewWindowSec" />
+				<LiveWaterfall v-else-if="mode === 'waterfall'" :client="client" :channels="channels" :window-sec="viewWindowSec" />
 			</template>
 		</div>
 	</div>

@@ -6,14 +6,42 @@ BEGIN;
 
 -- ── Collections ───────────────────────────────────────────────────────────────
 INSERT INTO directus_collections (collection, icon, display_template, sort_field, sort, color, translations, "group") VALUES
-  ('etchants',          'science',      '{{name}}',                 'name', 240, '#8E24AA', '[{"language":"en-US","translation":"Etchants","singular":"Etchant","plural":"Etchants"}]', NULL),
-  ('prep_recipes',      'menu_book',    '{{name}}',                 'name', 241, '#5E35B1', '[{"language":"en-US","translation":"Prep Recipes","singular":"Recipe","plural":"Recipes"}]', NULL),
+  ('etchants',          'science',      '{{name}}',                 NULL, 240, '#8E24AA', '[{"language":"en-US","translation":"Etchants","singular":"Etchant","plural":"Etchants"}]', NULL),
+  ('prep_recipes',      'menu_book',    '{{name}}',                 NULL, 241, '#5E35B1', '[{"language":"en-US","translation":"Prep Recipes","singular":"Recipe","plural":"Recipes"}]', NULL),
   ('prep_recipe_steps', 'list',         '{{step_order}}. {{step_type}}', NULL, 242, NULL, NULL, NULL),
   ('prep_steps',        'list',         '{{step_order}}. {{step_type}}', NULL, 243, NULL, NULL, NULL)
 ON CONFLICT (collection) DO UPDATE SET
   icon=EXCLUDED.icon, display_template=EXCLUDED.display_template, sort=EXCLUDED.sort,
   color=COALESCE(EXCLUDED.color, directus_collections.color),
   translations=COALESCE(EXCLUDED.translations, directus_collections.translations);
+
+-- No sort_field on etchants / prep_recipes: it is Directus's drag-to-reorder column and
+-- would overwrite the names (#115). Clear the old 'name' value here too, so this script is
+-- correct when run on its own and not only after the safety net in configure_directus.sql.
+UPDATE directus_collections SET sort_field = NULL
+WHERE collection IN ('etchants', 'prep_recipes') AND sort_field IS NOT NULL;
+
+-- The default order, by name, is the global preset (bookmark/user/role NULL); an existing
+-- one keeps its columns and filter, only its sort is set.
+UPDATE directus_presets AS p
+SET layout = coalesce(p.layout, 'tabular'),
+    layout_query = (
+        CASE WHEN jsonb_typeof(p.layout_query::jsonb) = 'object' THEN p.layout_query::jsonb ELSE '{}'::jsonb END
+        || jsonb_build_object(
+            coalesce(p.layout, 'tabular'),
+            CASE WHEN jsonb_typeof(p.layout_query::jsonb -> coalesce(p.layout, 'tabular')) = 'object'
+                 THEN p.layout_query::jsonb -> coalesce(p.layout, 'tabular') ELSE '{}'::jsonb END
+            || '{"sort":["name"]}'::jsonb)
+    )::json
+WHERE p.collection IN ('etchants', 'prep_recipes')
+  AND p.bookmark IS NULL AND p."user" IS NULL AND p.role IS NULL;
+INSERT INTO directus_presets (bookmark, "user", role, collection, layout, layout_query)
+SELECT NULL, NULL, NULL, v.collection, 'tabular', '{"tabular":{"sort":["name"]}}'
+FROM (VALUES ('etchants'), ('prep_recipes')) AS v (collection)
+WHERE NOT EXISTS (
+    SELECT 1 FROM directus_presets AS p
+    WHERE p.collection = v.collection AND p.bookmark IS NULL AND p."user" IS NULL AND p.role IS NULL
+);
 
 UPDATE directus_collections SET hidden = true WHERE collection IN ('prep_recipe_steps','prep_steps');
 

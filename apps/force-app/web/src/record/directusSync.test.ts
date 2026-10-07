@@ -304,3 +304,47 @@ describe('who a queued record syncs under', () => {
     expect(post).toHaveBeenCalledTimes(1);
   });
 });
+
+// Nit (review): the queued operation POST has no idempotency key, so a retry after a lost reply
+// must look for the row the first attempt created.
+describe('retry after a lost reply', () => {
+  const queued = (attempts: number) => store.set(LS_KEY, JSON.stringify([{
+    id: 'q1', collection: 'manufacturing_operations',
+    payload: { recorded_metadata: { capture_id: '20260930-101500-abc', sample_name: 'S1' } },
+    createdAt: Date.now(), attempts,
+  }]));
+  const found = { data: { data: [{ operation_id: 'op-1', recorded_metadata: { capture_id: '20260930-101500-abc' } }] } };
+
+  it('does not insert again when the earlier attempt actually created the row', async () => {
+    queued(1);
+    get.mockResolvedValue(found);
+    await flush();
+    expect(post).not.toHaveBeenCalled();
+    expect(idsInQueue()).toEqual([]);
+  });
+
+  it('inserts when no such row exists', async () => {
+    queued(1);
+    get.mockResolvedValue({ data: { data: [] } });
+    post.mockResolvedValue({ data: { data: {} } });
+    await flush();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(idsInQueue()).toEqual([]);
+  });
+
+  it('inserts when the lookup itself fails (offline-ish): never blocks the write', async () => {
+    queued(2);
+    get.mockRejectedValue(new Error('Network Error'));
+    post.mockResolvedValue({ data: { data: {} } });
+    await flush();
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not look anything up on the first attempt', async () => {
+    queued(0);
+    post.mockResolvedValue({ data: { data: {} } });
+    await flush();
+    expect(get).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+});

@@ -4,16 +4,28 @@
 import { computed, inject, reactive, ref, shallowRef, watch, type InjectionKey } from 'vue';
 import { RAW_BYTES_PER_SAMPLE, RAW_COLUMNS, RecordClient } from './liveClient';
 import { api } from '../directusClient';
-import { buildSeriesEnvelope, parseCache, type Cache } from '@d1/force-plotting';
+import { buildSeriesEnvelope, debouncePublish, parseCache, type Cache } from '@d1/force-plotting';
 import { searchSamples, searchOperators, searchEquipment, searchTools, searchInserts, searchEdges, getMethods, resolveMachiningMethodId, type LookupItem } from './directusLookups';
 import { logRun, syncStatus } from './directusSync';
 import { alarmController } from './alarms';
 import { recordingPrefs } from './recordingPrefs';
 import { labamp, type AutoRangeRec } from './labampApi';
 import { createPlaybackEngine } from './playback/engine';
+import { loadPlotPrefs, savePlotPrefs, type PlotPrefs } from './plotPrefs';
+import { clearSetupPrefs, defaultSetupPrefs, loadSetupPrefs, pickSetup, saveSetupPrefs, type SetupPrefs } from './setupPrefs';
 import { directusErrorMessage, fetchCaptureBlobs, numOrNull, uploadCaptureFiles } from './uploadCapture';
+import { adoptExistingAnalysis, analysisAlreadyLinked, ensureOperation, needsBlobs, uploadProgress } from './uploadResume';
 import { OFFLINE_SESSION_UPLOAD_MESSAGE, currentRecorder, hasServerSession, ownerPersonId, recorderFields, resolveOwnerPersonId, syncerFields } from '../recorder';
+import { isFetchFailure } from '../netErrors';
 import { confirmAction } from '../ui/confirm';
+import { spotlight } from '../ui/spotlight';
+import { FIELD_FOCUS, StartRequestError, sampleRateIssue } from './recordingErrors';
+import { nidaqHardware } from './nidaqHardware';
+import { railBannerText } from './railing';
+import { computePreflight, isCustomChannelList, needsSampleConfirm, parseChannelList, type AmpReading, type ChannelLike } from './preflight';
+import { hwStatus } from './hwStatus';
+import { nidaqApi } from '../nidaq/nidaqApi';
+import { authStore } from '../authStore';
 
 export type Axis = 'Fx' | 'Fy' | 'Fz';
 
@@ -41,6 +53,17 @@ export function opTypeCategory(opType: string): 'turning' | 'milling' | null {
 	return null;
 }
 
+/** The Cut ID the Metadata panel shows and its "use" button copies into the pass code:
+ *  {sample code}-{first two alphanumerics of the operation type, upper-case}{sequence}. */
+export function composeCutId(
+	link: { sampleLabel: string }, meta: Record<string, string>, machining: { operation_sequence: string },
+): string {
+	const code = (link.sampleLabel || meta.sample_code || meta.sample_name || '').trim();
+	const type = (meta.op_type || '').trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 2);
+	const seq = String(machining.operation_sequence ?? '').trim();
+	return [code, `${type}${seq}`].filter(Boolean).join('-');
+}
+
 export function createWorkspace() {
 	const client = new RecordClient();
 	const SOURCE_LS_KEY = 'force-app.source';
@@ -56,46 +79,113 @@ export function createWorkspace() {
 	// setSource() below writes to localStorage unconditionally and synchronously, and the
 	// auto-detect re-reads localStorage fresh (not a value captured before the click) right before
 	// it would apply, closing the race regardless of which finishes first.
+	// Replay and recording each keep their own copy of the form. A cut picked in Replay fills in
+	// Sample/Machine/type, the per-cut fields and the insert/edge/tool picks for playback; none of
+	// that may reach the next real cut, and the operator's setup must come back exactly as it was.
+	// So entering Replay puts the recording form aside (and stores its setup half), and leaving it
+	// puts the Replay form aside for the next visit (the loaded cut stays loaded) and brings the
+	// recording form back from memory, which also survives a storage write that failed.
+	interface FormCopy { setup: SetupPrefs; meta: Record<string, string>; machining: typeof machining; link: Record<string, string> }
+	const PER_CUT_META = ['operation', 'notes', 'insert', 'edge_id', 'tool'] as const;
+	const PER_CUT_LINK = ['insertId', 'insertLabel', 'edgeId', 'edgeLabel', 'toolId', 'toolLabel'] as const;
+	let recordForm: FormCopy | null = null;
+	let replayForm: FormCopy | null = null;
+	function takeForm(): FormCopy {
+		return {
+			setup: snapshotSetup(),
+			meta: Object.fromEntries(PER_CUT_META.map((k) => [k, meta[k] ?? ''])),
+			machining: { ...machining },
+			link: Object.fromEntries(PER_CUT_LINK.map((k) => [k, link[k]])),
+		};
+	}
+	function putForm(f: FormCopy) {
+		Object.assign(cfg, f.setup.cfg); Object.assign(link, f.setup.link);
+		Object.assign(meta, f.setup.meta, f.meta);
+		Object.assign(machining, f.setup.machining);
+		const { operation_sequence, chips_ref, new_edge, chips_collected } = f.machining;
+		Object.assign(machining, { operation_sequence, chips_ref, new_edge, chips_collected });
+		Object.assign(link, f.link);
+	}
 	function setSource(s: 'sim' | 'replay' | 'nidaq') {
-		// Entering Replay fresh (no cut loaded yet): Sample/Machine left over from an earlier
-		// Sim/NI-DAQ setup in this same session would otherwise silently AND-narrow searchCuts to
-		// that exact sample+machine and return zero rows — "no matches" on every search, with no
-		// visible reason why. CutPicker's own `change()` already clears this for a manual reselect;
-		// this covers the same failure mode on first switch into Replay.
-		if (s === 'replay' && source.value !== 'replay' && !replay.cacheId) {
-			link.sampleId = ''; link.sampleLabel = '';
-			link.equipmentId = ''; link.equipmentLabel = '';
-			meta.op_type = '';
+		const prev = source.value;
+		if (s === 'replay' && prev !== 'replay') {
+			// Store the setup as it is NOW, synchronously, and drop any pending push: the "don't save
+			// in Replay" decision is made when a value is pushed (the setup watcher), not when the
+			// debounce fires, so nothing pending can carry Replay state to storage later.
+			recordForm = takeForm();
+			setupSaver.cancel();
+			saveSetupPrefs(recordForm.setup);
+			if (replayForm && replay.cacheId) {
+				putForm(replayForm);
+			} else {
+				// Entering Replay fresh (no cut loaded yet): Sample/Machine left over from the Sim/NI-DAQ
+				// setup would otherwise silently AND-narrow searchCuts to that exact sample+machine and
+				// return zero rows — "no matches" on every search, with no visible reason why.
+				// CutPicker's own `change()` already clears this for a manual reselect.
+				link.sampleId = ''; link.sampleLabel = '';
+				link.equipmentId = ''; link.equipmentLabel = '';
+				meta.op_type = '';
+			}
 		}
 		source.value = s;
-		localStorage.setItem(SOURCE_LS_KEY, s);
+		try { localStorage.setItem(SOURCE_LS_KEY, s); } catch { /* blocked storage: the choice still holds for this session */ }
+		if (prev === 'replay' && s !== 'replay') {
+			replayForm = takeForm();
+			if (recordForm) {
+				putForm(recordForm);
+			} else {
+				// A launch straight into Replay has no recording form in memory: the stored setup,
+				// with the per-cut fields and insert/edge/tool picks blank.
+				restoreSetup(loadSetupPrefs());
+				for (const k of PER_CUT_META) meta[k] = '';
+				for (const k of PER_CUT_LINK) link[k] = '';
+				Object.assign(machining, { operation_sequence: '', chips_ref: '', new_edge: false, chips_collected: false });
+			}
+			recordForm = null;
+		}
 	}
 	const NIDAQ_LS_KEY = 'force-app.nidaq.channels';
-	const defaultChannels = ['cDAQ1Mod1/ai0', 'cDAQ1Mod1/ai1', 'cDAQ1Mod1/ai2', 'cDAQ1Mod1/ai3',
-		'cDAQ1Mod2/ai0', 'cDAQ1Mod2/ai1', 'cDAQ1Mod2/ai2', 'cDAQ1Mod2/ai3', 'cDAQ1Mod3/ai0'].join('\n');
+	const defaultChannelList = ['cDAQ1Mod1/ai0', 'cDAQ1Mod1/ai1', 'cDAQ1Mod1/ai2', 'cDAQ1Mod1/ai3',
+		'cDAQ1Mod2/ai0', 'cDAQ1Mod2/ai1', 'cDAQ1Mod2/ai2', 'cDAQ1Mod2/ai3', 'cDAQ1Mod3/ai0'];
+	const defaultChannels = defaultChannelList.join('\n');
 	const nidaqChannels = ref(localStorage.getItem(NIDAQ_LS_KEY) || defaultChannels);
 	watch(nidaqChannels, (v) => localStorage.setItem(NIDAQ_LS_KEY, v));
+	// What Start sends. The backend takes the NI-DAQ page's saved channel model unless this list is
+	// empty or the default one, so only then does the model decide what records.
+	// First-boot autoassign writes the saved model's own physical list here, which is never the
+	// default on a real rig, so that list counts as the model too (preflight.ts isCustomChannelList).
+	const customChannelList = computed(() => isCustomChannelList(nidaqChannels.value, defaultChannelList, preflightReads.channels));
 
+	// The setup half of cfg/meta/machining/link is remembered across launches (R1, setupPrefs.ts) and
+	// filled in by restoreSetup() below once `link` exists. `duration_sec` is not part of it: no
+	// input edits it any more, it only feeds the pre-Start disk estimate.
 	const cfg = reactive({
 		rpm: 1200, feed: 0.05, diam: 80, inner_diam: 0,
 		sample_rate: 25000, duration_sec: 8, ppr: 1,
 	});
+	// No default sample name: it used to be the fake 'SIM-CUT-001', which NI-DAQ recordings archived
+	// as a real name. Empty is left out of the capture (metaObj), and the recorder falls back to its
+	// own "SIM-CUT" label.
 	const meta = reactive<Record<string, string>>({
-		sample_name: 'SIM-CUT-001', sample_code: '', operation: '', op_type: '',
+		sample_name: '', sample_code: '', operation: '', op_type: '',
 		insert: '', edge_id: '', coolant: '', notes: '',
 	});
 	// Extra machining fields mirroring the Directus manufacturing_operations form (folded section).
 	const machining = reactive<{ axial_doc: string; radial_doc: string; cutting_length: string; coolant_pressure: string; operation_sequence: string; chips_ref: string; new_edge: boolean; chips_collected: boolean }>(
 		{ axial_doc: '', radial_doc: '', cutting_length: '', coolant_pressure: '', operation_sequence: '', chips_ref: '', new_edge: false, chips_collected: false },
 	);
-	const plot = reactive<{
-		forceMode: 'time' | 'fft'; frmAxis: Axis; colormap: string; pointSize: number; windowSec: number; liveFrmStride: number;
-		polarRadius: 'Mz' | 'Fz' | 'Fxy'; polarAngleSource: 'tacho' | 'force_vector'; polarBins: number;
-	}>({
-		forceMode: 'time', frmAxis: 'Fz', colormap: 'viridis', pointSize: 1.8, windowSec: 12, liveFrmStride: 1,
-		polarRadius: 'Fz', polarAngleSource: 'tacho', polarBins: 36,
-	});
-	watch(() => plot.windowSec, (v) => { client.windowSec = Math.max(1, v); });
+	// Remembered across launches (#108), parsed defensively field by field (plotPrefs.ts).
+	const plot = reactive<PlotPrefs>(loadPlotPrefs());
+	// Written 250 ms after the last change, not on every slider tick; flushed when the page goes away.
+	// The reactive object itself is pushed, so the write serialises whatever it holds by then.
+	const plotSaver = debouncePublish<PlotPrefs>(savePlotPrefs, 250);
+	watch(plot, () => plotSaver.push(plot), { deep: true });
+	if (typeof window !== 'undefined') {
+		window.addEventListener('pagehide', plotSaver.flush);
+		window.addEventListener('beforeunload', plotSaver.flush);
+	}
+	// plot.windowSec is only the DEFAULT view window for force panels that have not set their own
+	// (#34); it no longer limits the client's trace history (#105, see liveClient's retainSec).
 	// `rpm`/`feed`/`diam` here describe the CUT BEING PLAYED. They deliberately do not live on
 	// `cfg`: that is the config for the next real recording and is also serialised into the
 	// Directus write-back by buildRunPayload(), so letting a replay overwrite it would silently
@@ -122,6 +212,9 @@ export function createWorkspace() {
 	// auditable place.
 	const mode = computed<'record' | 'playback'>(() => (source.value === 'replay' ? 'playback' : 'record'));
 	const playback = createPlaybackEngine(client, { baseUrl: client.baseUrl });
+	// Playback drives client.status itself ('recording' while it plays), so the recorder's own
+	// state (RecordClient.reconcile, run on every stream (re)open) must not overwrite it.
+	client.canReconcile = () => mode.value === 'record';
 	// The RPM gauge's reference line: the replayed cut's own spindle speed in playback, the
 	// configured target when recording. Panels read this rather than cfg.rpm directly.
 	const rpmTarget = computed(() => (mode.value === 'playback' ? replay.rpm : cfg.rpm));
@@ -153,9 +246,64 @@ export function createWorkspace() {
 	});
 	const logged = ref(false);
 
+	// Remembered setup (R1). Replay is the exception: setSource() clears Sample/Machine/Operation
+	// type on entering it (they would AND-narrow the cut search to nothing), so a launch that opens
+	// straight into Replay must not bring them back either, and nothing is written while in Replay
+	// (the cleared or replay-hydrated values are not the operator's setup; the stored one stays for
+	// the next Record launch). Leaving Replay restores the stored setup into the form.
+	function restoreSetup(s: SetupPrefs) {
+		Object.assign(cfg, s.cfg);
+		Object.assign(machining, s.machining);
+		Object.assign(meta, s.meta);
+		Object.assign(link, s.link);
+		if (source.value === 'replay') {
+			link.sampleId = ''; link.sampleLabel = '';
+			link.equipmentId = ''; link.equipmentLabel = '';
+			meta.op_type = ''; meta.sample_name = ''; meta.sample_code = '';
+		}
+	}
+	const snapshotSetup = () => pickSetup({ cfg, link, meta, machining });
+	restoreSetup(loadSetupPrefs());
+	// Same debounce/flush shape as plotSaver above. Whether to save is decided when a value is
+	// PUSHED (never while in Replay), not when the debounce fires; setSource() stores the setup on
+	// the way into Replay and restores it on the way out.
+	const setupSaver = debouncePublish<SetupPrefs>(saveSetupPrefs, 250);
+	watch([cfg, meta, machining, link], () => { if (source.value !== 'replay') setupSaver.push(snapshotSetup()); }, { deep: true });
+	if (typeof window !== 'undefined') {
+		window.addEventListener('pagehide', setupSaver.flush);
+		window.addEventListener('beforeunload', setupSaver.flush);
+	}
+	// "Clear setup": every setup AND per-cut field back to its default, and the stored copy removed.
+	function clearSetup() {
+		restoreSetup(defaultSetupPrefs());
+		meta.operation = ''; meta.notes = ''; meta.insert = ''; meta.edge_id = ''; meta.tool = '';
+		machining.operation_sequence = ''; machining.chips_ref = '';
+		machining.new_edge = false; machining.chips_collected = false;
+		link.insertId = ''; link.insertLabel = ''; link.edgeId = ''; link.edgeLabel = ''; link.toolId = ''; link.toolLabel = '';
+		recordForm = null;
+		clearSetupPrefs();
+	}
+
 	// Safety alarms (2e) — the app-wide controller (config lives in Settings > Alarms), evaluated
 	// here on every live frame while recording.
 	const alarms = alarmController;
+	// R6 (opt-in): a tripped force alarm stops the recording through the normal stop path, so the
+	// save dialog and finalize behave exactly as after a manual Stop. The controller calls this once
+	// per trip; the state check keeps a late call from stopping anything that is not recording.
+	// The controller calls this once per trip, so a call that lands while start()/stop() holds `busy`
+	// (stop() would return early) is remembered and retried when busy clears, or the trip's stop
+	// would be lost for good. The retry re-checks the state, so a stop already under way is a no-op.
+	let stopPendingOnTrip = false;
+	alarms.onForceTrip = () => {
+		if (mode.value !== 'record' || st.state !== 'recording') return;
+		if (busy.value) { stopPendingOnTrip = true; return; }
+		void stop();
+	};
+	watch(busy, (b) => {
+		if (b || !stopPendingOnTrip) return;
+		stopPendingOnTrip = false;
+		if (mode.value === 'record' && st.state === 'recording') void stop();
+	});
 	// Record mode only: an archived cut must never trip a safety alarm on a machine that is not
 	// cutting. Playback drove this with RPM that was also wrong by the decimation stride, so every
 	// replay raised the full-screen overlay.
@@ -167,6 +315,58 @@ export function createWorkspace() {
 			if (source.value === 'nidaq') alarms.evaluateTacho(st.tachoOk);
 		}
 	});
+
+	// R4: pre-flight checklist for Start (preflight.ts). Its inputs are read here: the amp and the
+	// saved channel list by refreshPreflight() (RecordPage polls it while waiting to Start), free
+	// space from the Record page's disk poll via hwStatus, the rest straight from the form.
+	const preflightReads = reactive<{ amp: AmpReading | null; channels: ChannelLike[] | null }>({ amp: null, channels: null });
+	async function refreshPreflight() {
+		if (source.value !== 'nidaq' || locked.value) return;
+		const [amp, chans] = await Promise.allSettled([labamp.status(), nidaqApi.getChannels()]);
+		// An unreadable amp or channel list is "not checked", never "failed": the recorder may just be
+		// starting up, and Start has its own error path for a backend that really is down.
+		preflightReads.amp = amp.status === 'fulfilled' ? { reachable: !!amp.value.reachable, mode: amp.value.mode ?? null, mock: !!amp.value.mock } : null;
+		preflightReads.channels = chans.status === 'fulfilled' ? chans.value.channels : null;
+	}
+	const preflight = computed(() => computePreflight({
+		source: source.value,
+		sampleSet: !!link.sampleId,
+		session: hasServerSession() ? 'server' : authStore.state.offline ? 'offline' : 'none',
+		amp: preflightReads.amp,
+		// The recorder measures the tacho only once samples flow, so there is nothing to report
+		// before Start (st.tachoOk is last cut's value until the next one begins).
+		tachoOk: null,
+		diskFreeGb: hwStatus.diskFreeGb >= 0 ? hwStatus.diskFreeGb : null,
+		sampleRate: cfg.sample_rate,
+		channels: preflightReads.channels,
+		channelsCustom: customChannelList.value,
+	}));
+	// A missing Sample is a warning, not a block: the first Start press shows "Start anyway".
+	const sampleConfirmOpen = ref(false);
+	watch(() => link.sampleId, (id) => { if (id) sampleConfirmOpen.value = false; });
+	watch(source, () => { sampleConfirmOpen.value = false; });
+	async function requestStart() {
+		if (busy.value) return;
+		if (needsSampleConfirm(preflight.value)) { sampleConfirmOpen.value = true; return; }
+		await start();
+	}
+	async function startAnyway() {
+		sampleConfirmOpen.value = false;
+		await start();
+	}
+
+	// R5: the backend latches which sensor channels railed this cut (st.railed). The banner names
+	// them once per cut: a dismissal is keyed on the capture it was made for, so adopting another
+	// cut (a reconcile) shows that cut's banner, and it also resets when `railed` empties (New and
+	// the next Start do that, via client.reset()). The badges on the channel tiles are not
+	// dismissible, they stay for as long as the cut is on screen.
+	const railDismissedFor = ref<string | null | undefined>(undefined);   // undefined = not dismissed
+	watch(() => st.railed.length, (n) => { if (n === 0) railDismissedFor.value = undefined; });
+	const railBanner = computed(() => (
+		(railDismissedFor.value !== undefined && railDismissedFor.value === st.captureId) || mode.value !== 'record'
+			? null : railBannerText(st.railed)
+	));
+	function dismissRailBanner() { railDismissedFor.value = st.captureId; }
 
 	// Converging between-cuts auto-range: after each cut, recommend + apply the next-pass per-channel
 	// ranges from THIS cut's recorded per-channel peaks (summary.channels_ranging). Applying them to
@@ -216,6 +416,16 @@ export function createWorkspace() {
 	const isFinalizing = computed(() => st.state === 'finalizing');
 	const isDone = computed(() => st.state === 'done');
 	const locked = computed(() => isRecording.value || isFinalizing.value);
+	// #84: why Start can't be pressed for the chosen NI-DAQ sample rate (the hardware can't do it), or
+	// null. One computed for the footer's Start-disable and the red sample-rate tile, so they can't
+	// disagree.
+	const sampleRateBlocker = computed(() => (source.value === 'nidaq'
+		? sampleRateIssue(cfg.sample_rate, nidaqHardware.maxRateHz)
+		: null));
+	// The footer's Start / Stop buttons are disabled when these are true; the R10 keyboard shortcuts
+	// read the same two so a key can never do what the button can't.
+	const startDisabled = computed(() => busy.value || !st.connected || !!sampleRateBlocker.value);
+	const stopDisabled = computed(() => busy.value || isFinalizing.value);
 
 	// The resolved Sample/Operator/Machine/Tool/Insert/Edge picks (`link.*`) and the folded
 	// machining-details section (`machining.*`) used to reach Directus ONLY via buildRunPayload()'s
@@ -342,13 +552,18 @@ export function createWorkspace() {
 
 	async function start() {
 		if (busy.value) return;
-		if (!(await checkAlarmsBeforeStart())) return;
-		if (!(await checkDiskBeforeStart())) return;
-		busy.value = true; errMsg.value = null; finishedCache.value = null;
-		alarms.reset();
-		// Replay is played, not recorded (it throws below): it keeps stamping lazily in metaObj().
-		if (source.value !== 'replay') recordedStamp.value = recorderFields(currentRecorder(), new Date().toISOString());
+		// Held across the pre-flight prompts and fetches too (not only the request itself): a
+		// double-click used to start a second start() while the first waited on them, which reset
+		// state under the first and then got a 409 (review 2.5). Cleared in the finally below.
+		busy.value = true;
+		cancelAmpReset?.();
 		try {
+			if (!(await checkAlarmsBeforeStart())) return;
+			if (!(await checkDiskBeforeStart())) return;
+			errMsg.value = null; finishedCache.value = null;
+			alarms.reset();
+			// Replay is played, not recorded (it throws below): it keeps stamping lazily in metaObj().
+			if (source.value !== 'replay') recordedStamp.value = recorderFields(currentRecorder(), new Date().toISOString());
 			if (source.value === 'replay') {
 				// Playback is driven by the transport bar, not by start(). Reaching here means a
 				// caller bypassed the mode switch.
@@ -360,7 +575,7 @@ export function createWorkspace() {
 					await new Promise((r) => setTimeout(r, 500));
 					await labamp.setMode('MEASURE');
 				} catch { /* amp unreachable — proceed anyway, gains were set at last range */ }
-				const chans = nidaqChannels.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+				const chans = parseChannelList(nidaqChannels.value);
 				await client.start({ ...cfg, ...recordingPrefsPayload(), source: 'nidaq', nidaq_channels: chans, axis: plot.frmAxis, extra_metadata: metaObj() } as any);
 			} else {
 				await client.start({ ...cfg, ...recordingPrefsPayload(), source: 'sim', axis: plot.frmAxis, extra_metadata: metaObj() } as any);
@@ -369,9 +584,13 @@ export function createWorkspace() {
 			const m = e?.message || 'failed to start';
 			// A bare "Failed to fetch"/"Load failed" is a transport failure reaching the recorder
 			// (backend down, or blocked by CORS / HTTPS mixed-content) — spell that out.
-			errMsg.value = /failed to fetch|load failed|networkerror/i.test(m)
+			errMsg.value = isFetchFailure(m)
 				? `${m} — can't reach the recording backend. Is it running on this machine?`
 				: m;
+			// #84: the backend named the field it refused (e.g. a sample rate above the hardware's
+			// maximum) — point at it rather than leaving the operator to find it.
+			const focusId = e instanceof StartRequestError && e.detail.field ? FIELD_FOCUS[e.detail.field] : undefined;
+			if (focusId) spotlight(focusId);
 		} finally {
 			busy.value = false;
 		}
@@ -385,15 +604,46 @@ export function createWorkspace() {
 		// an interactive-looking-but-actually-stopped UI during the finalize gap.
 		saveOpen.value = true;
 		try {
-			await client.stop();
+			try {
+				await client.stop();
+			} catch (e: any) {
+				// The stop did not go through. Ask the recorder what is really happening: if the cut
+				// already ended on its own (auto-stop, disk-full) carry on into the save flow; if it
+				// is still running, or unreachable, say so and drop the dialog (it would only spin).
+				await client.reconcile().catch(() => {});
+				if (st.state === 'recording' || st.state === 'idle') {
+					saveOpen.value = false;
+					errMsg.value = `could not stop the recording - ${e?.message || e}`;
+					return;
+				}
+			}
 			await loadFinished();
 		} finally {
 			busy.value = false;
-			// The amp should only ever be in MEASURE while a cut is actually running — left in MEASURE
-			// between cuts it keeps integrating charge drift for no reason. Best-effort: an unreachable
-			// amp shouldn't block the UI from settling after stop.
-			if (source.value === 'nidaq') labamp.setMode('RESET').catch(() => {});
+			if (source.value === 'nidaq') resetAmpWhenSettled();
 		}
+	}
+
+	// The amp should only ever be in MEASURE while a cut is actually running — left in MEASURE
+	// between cuts it keeps integrating charge drift for no reason. The recorder refuses amp writes
+	// (409) while it is busy, and that includes `finalizing`, which can last a long time on a big
+	// cut: so RESET goes out once the run has settled (done/error), not right after the stop
+	// request. Best-effort — an unreachable amp must not block the UI. A new recording starting
+	// meanwhile (or a different capture) cancels it: start() does its own RESET -> MEASURE.
+	let cancelAmpReset: (() => void) | null = null;
+	function resetAmpWhenSettled() {
+		cancelAmpReset?.();
+		const sendReset = () => { labamp.setMode('RESET').catch(() => {}); };
+		const state = st.state;
+		if (state === 'recording') return;                 // the stop did not take: still running
+		if (state !== 'finalizing') { sendReset(); return; }
+		const id = st.captureId;
+		const stopWatch = watch(() => [st.state, st.captureId] as const, ([s, cid]) => {
+			if (s === 'finalizing' && cid === id) return;
+			cancelAmpReset?.();
+			if (cid === id && (s === 'done' || s === 'error')) sendReset();
+		}, { flush: 'sync' });
+		cancelAmpReset = () => { stopWatch(); cancelAmpReset = null; };
 	}
 
 	async function loadFinished() {
@@ -418,11 +668,33 @@ export function createWorkspace() {
 		}
 	}
 
-	function newRun() {
+	// `nextCut` is false when the finished cut is being DISCARDED: nothing was kept, so the retake
+	// is the same cut and its sequence number / chips / new-edge flag stay as they were.
+	function newRun(nextCut = true) {
 		client.reset(); finishedCache.value = null; errMsg.value = null; logged.value = false; saveOpen.value = false;
 		recordedStamp.value = null;
 		editCutStartSec.value = null; editCutEndSec.value = null;
+		// The early-warning banner belongs to the cut that just ended. Warnings only: reset() would
+		// also clear an alarm the operator has not acknowledged.
+		alarms.resetWarnings();
+		if (!nextCut) return;
+		// R3: the next cut is a new pass. Step the sequence when it is a whole number (a blank or
+		// free-text one is left alone), so the Cut ID {sample}-{TYPE}{seq} does not repeat, and drop
+		// the previous cut's chips and new-edge marks. Free-text pass codes are not touched.
+		// A pass code that is just the auto-composed Cut ID (the Metadata panel's "use" button) belongs
+		// to the cut that just ended, so it is cleared and the panel composes the next one; free text
+		// the operator typed is left alone.
+		if (meta.operation.trim() && meta.operation.trim() === composeCutId(link, meta, machining)) meta.operation = '';
+		const seq = machining.operation_sequence.trim();
+		if (/^\d+$/.test(seq)) machining.operation_sequence = String(Number(seq) + 1);
+		machining.chips_ref = ''; machining.chips_collected = false; machining.new_edge = false;
 	}
+
+	// The save dialog's failed state: Close and "Show me the setting" land here. A start that captured
+	// nothing is retaken as the same cut, so the sequence and per-cut marks stay, like a discard. An
+	// acquisition or finalize failure that kept the raw (`rawKept`) was a real pass, recoverable from
+	// Local Captures under this sequence number, so the next cut steps on as after a save.
+	function dismissFailure(rawKept: boolean) { saveOpen.value = false; newRun(rawKept); }
 
 	// End-of-cut save/upload: pushes the manufacturing_operations row (bypassing the offline queue,
 	// since we need its operation_id back synchronously to link machining_force_analysis), then
@@ -455,22 +727,56 @@ export function createWorkspace() {
 	async function uploadCutToDatabase(): Promise<string> {
 		const id = st.captureId;
 		if (!id) throw new Error('no capture id for this recording');
+		if (!hasServerSession()) throw new Error(OFFLINE_SESSION_UPLOAD_MESSAGE);
+		// Resume (review 2.2): a retry after a failed file upload or analysis insert continues from
+		// what the earlier attempt finished instead of inserting a second operation row.
+		const progress = uploadProgress(id);
+		if (progress.analysisDone && progress.opId) return progress.opId;
+		// A null summary (the summary fetch failed during a reconcile) is not "a .mat was written":
+		// an over-MAT_MAX_BYTES cut has none. Ask the recorder before deciding. 404 = no
+		// summary.json at all (an old capture): treat as before. Any other failure is a retryable
+		// error, not a guess.
+		if (!st.summary) {
+			let r: Response;
+			try { r = await fetch(`${client.baseUrl}/captures/${id}/summary`); }
+			catch { throw new Error('could not read the capture summary from the recorder - try again'); }
+			if (r.ok) st.summary = await r.json();
+			else if (r.status !== 404) throw new Error(`could not read the capture summary from the recorder (${r.status}) - try again`);
+		}
+		const matWritten = st.summary?.mat_written !== false;
 		// The local blob reads don't need the logged run, so they start alongside it; the uploads
 		// still wait for it, so a failed insert never leaves orphaned files -- and cancels the reads.
 		// Without a capture.mat (over MAT_MAX_BYTES) the analysis record is still fully usable from
 		// the decimated cache; directus_files_id just goes in as null.
 		const blobReads = new AbortController();
-		const blobs = fetchCaptureBlobs(client.matUrl(id), client.cacheUrl(id), st.summary?.mat_written !== false, blobReads.signal);
-		blobs.catch(() => {});   // surfaced by the await below, not as an unhandled rejection
+		let blobs = needsBlobs(progress, matWritten)
+			? fetchCaptureBlobs(client.matUrl(id), client.cacheUrl(id), matWritten, blobReads.signal)
+			: null;
+		blobs?.catch(() => {});   // surfaced by the await below, not as an unhandled rejection
 		let opId: string;
+		let existing: boolean;
 		try {
-			opId = await logRunSync();
+			({ opId, existing } = await ensureOperation(id, progress, logRunSync));
+			logged.value = true;
 		} catch (e) {
 			blobReads.abort();
 			throw e;
 		}
-		const [matBlob, cacheBlob] = await blobs;
-		const [matFileId, cacheFileId] = await uploadCaptureFiles(id, matBlob, cacheBlob);
+		// An existing analysis row may already link some files: don't upload those again.
+		await adoptExistingAnalysis(progress, opId, existing);
+		if (blobs && !needsBlobs(progress, matWritten)) { blobReads.abort(); blobs = null; }
+		if (blobs) {
+			const [matBlob, cacheBlob] = await blobs;
+			await uploadCaptureFiles(id, matBlob, cacheBlob, progress);
+		}
+		try {
+			// Completes an existing but partial analysis row (PATCH of the missing links), else false.
+			if (await analysisAlreadyLinked(progress)) return opId;
+		} catch (e: any) {
+			throw new Error(`linking the capture failed - ${directusErrorMessage(e)} (the run was logged as operation ${opId}, but its existing analysis record could not be completed)`);
+		}
+		const matFileId = progress.matFileId ?? null;
+		const cacheFileId = progress.cacheFileId!;
 		const peaks = st.summary?.peaks;
 		// ForceDashboard's chart reads its plot data from `series` (a JSONB min/max envelope), not
 		// from live_cache_file — without this, upload "succeeds" (peaks/FRM all show up fine) but
@@ -508,6 +814,7 @@ export function createWorkspace() {
 			matlab_version: 'force-app-direct',
 			processed_at: new Date().toISOString(),
 		});
+		progress.analysisDone = true;
 		} catch (e: any) {
 			throw new Error(`linking the capture failed - ${directusErrorMessage(e)} (the run was logged as operation ${opId}, and both files uploaded, but the analysis record could not be created)`);
 		}
@@ -608,7 +915,17 @@ export function createWorkspace() {
 	// whenever any of those three change while in replay mode.
 	// Flipped off the first time Directus rejects crop_start_idx_override (pre-migration); see below.
 	let cropFieldAvailable = true;
+	// Request tokens (review 2.7): searches fire per keystroke and per Sample/Machine/Operation-type
+	// change, and replies can arrive out of order. Only the latest call may write its result; a
+	// source switch also supersedes whatever is in flight (below).
+	let searchSeq = 0;
+	let pickSeq = 0;
+	watch(source, () => {
+		searchSeq++; pickSeq++;
+		replay.loading = false; replay.downloading = false;
+	}, { flush: 'sync' });
 	async function searchCuts(q: string) {
+		const my = ++searchSeq;
 		replay.loading = true;
 		try {
 			const filter: any = { status: { _eq: 'done' }, live_cache_file: { _nnull: true } };
@@ -645,6 +962,7 @@ export function createWorkspace() {
 					res = await api.get('/items/machining_force_analysis', { params: { ...params, fields: baseFields } });
 				} else { throw e; }
 			}
+			if (my !== searchSeq) return;   // superseded while the request was out
 			replay.options = (res.data?.data ?? []).map((r: any) => ({
 				label: r.operation_id?.pass_code || r.operation_id?.sample_id?.sample_code || r.operation_id?.sample_id?.nickname || r.id,
 				cacheId: r.live_cache_file, opId: r.id, operationId: r.operation_id?.operation_id ?? null,
@@ -654,7 +972,11 @@ export function createWorkspace() {
 				sampleRate: r.sample_rate != null ? Number(r.sample_rate) : null,
 				cropStartSec: (r.crop_start_idx_override != null && r.sample_rate) ? Number(r.crop_start_idx_override) / Number(r.sample_rate) : null,
 			})).filter((o: ReplayOption) => o.cacheId);
-		} catch { replay.options = []; } finally { replay.loading = false; }
+		} catch {
+			if (my === searchSeq) replay.options = [];
+		} finally {
+			if (my === searchSeq) replay.loading = false;
+		}
 	}
 
 	// Picking a cut to replay loads that operation's FULL original metadata into the same fields a
@@ -662,6 +984,7 @@ export function createWorkspace() {
 	// recording" left every other field (operator, machine, tool, insert/edge, machining params)
 	// blank even though the original operation had them all recorded.
 	async function pickReplayCut(o: ReplayOption) {
+		const my = ++pickSeq;   // a newer pick, or a switch of source, supersedes this one
 		errMsg.value = null;
 		replay.downloading = true;
 		// Parse the cut locally and hand it to the playhead. No backend session is opened and
@@ -677,10 +1000,14 @@ export function createWorkspace() {
 			const res = await api.get(`/assets/${o.cacheId}`, { responseType: 'arraybuffer' });
 			c = parseCache(res.data as ArrayBuffer);
 		} catch (e: any) {
+			if (my !== pickSeq) return;
 			errMsg.value = `could not load that cut — ${e?.message || e}`;
 			replay.downloading = false;
 			return;
 		}
+		// Late result of a superseded pick: loading it would reset the live client and playhead under
+		// whatever the operator chose since (e.g. after switching to Sim).
+		if (my !== pickSeq) return;
 		// PPR (and diameters) come from the cut's own machining_force_analysis row, fetched
 		// alongside it in searchCuts — NOT from cfg.ppr, which is the recording form's value and
 		// has no relation to how this cut was actually recorded. Getting this wrong doesn't just
@@ -722,7 +1049,7 @@ export function createWorkspace() {
 				] },
 			});
 			const d = res.data?.data;
-			if (!d) return;
+			if (!d || my !== pickSeq) return;
 			const rm = d.recorded_metadata || {};
 			link.sampleId = d.sample_id?.sample_id || ''; link.sampleLabel = d.sample_id?.sample_code || d.sample_id?.nickname || '';
 			link.operatorId = d.operator_person_id?.person_id || ''; link.operatorLabel = d.operator_person_id?.full_name || '';
@@ -750,9 +1077,9 @@ export function createWorkspace() {
 	return {
 		client, source, setSource, nidaqChannels, cfg, meta, machining, plot, replay, st, busy, errMsg, finishedCache,
 		editCutStartSec, editCutEndSec,
-		isIdle, isRecording, isFinalizing, isDone, locked, saveOpen,
+		isIdle, isRecording, isFinalizing, isDone, locked, sampleRateBlocker, startDisabled, stopDisabled, saveOpen,
 		mode, playback, rpmTarget,
-		start, stop, newRun, loadFinished, searchCuts, pickReplayCut, metaObj, uploadCutToDatabase,
+		start, stop, newRun, dismissFailure, clearSetup, loadFinished, searchCuts, pickReplayCut, metaObj, uploadCutToDatabase,
 		// 2d: Directus links + run write-back
 		link, logged, onSelectSample, logRunNow, syncStatus,
 		searchSamples, searchOperators, searchEquipment, searchToolsForOp, searchEquipmentForOp, searchInserts, searchEdges,
@@ -760,6 +1087,10 @@ export function createWorkspace() {
 		alarms,
 		// converging between-cuts auto-range
 		converge, convergeAfterCut,
+		// R4: pre-flight checklist and the Start flow that honours it
+		preflight, refreshPreflight, requestStart, startAnyway, sampleConfirmOpen,
+		// R5: live rail warning banner (once per cut)
+		railBanner, dismissRailBanner,
 		// Recording-behaviour toggles (Detect cut start / Drift compensation / Converging auto-range)
 		// and the cut-detect threshold — persisted, shared with Settings > Recording.
 		recordingPrefs,

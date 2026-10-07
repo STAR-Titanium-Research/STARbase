@@ -18,9 +18,13 @@ It is a specialist tool and is kept out of the everyday Plot dashboard.
 All heavy computation happens on the host. The browser only edits recipes, draws regions and
 displays results. It never computes statistics itself.
 
-1. **Pick an operation** in the drop-down at the top. It lists every successfully analysed cut,
-   each tagged with its diagnostics state: `✓` built, `…` pending or processing, `✗` failed,
-   `·` not built.
+1. **Pick an operation** in the list on the left. It shows every successfully analysed cut,
+   grouped by sample (or by campaign: use *Group by*), each tagged with its diagnostics state:
+   `✓` built, `…` pending or processing, `✗` failed, `·` not built. Type in the search box to
+   filter by pass code, sample or campaign, and use the **Needs build / Built / Error** chips to
+   narrow it. Each row has **Plot** (opens the cut in the Plot page) and **Directus** (opens the
+   analysis record) links. If your role cannot read campaigns, *Group by* offers Sample only and the
+   list loads as usual. Long lists show 100 rows at a time; use *Show more*.
 2. **Build.** The app marks the analysis row `diag_status = pending`. The **force orchestrator**
    daemon on d1-server claims it, re-runs MATLAB on the archived `.mat` to emit a dense point
    cloud and live cache, runs the diagnostics **recipe** (below), and publishes a diagnostics
@@ -50,7 +54,25 @@ A recipe is an ordered list of steps that you can toggle, retune and reorder. Th
 | `hdbscan` | density-based clustering of the significant regions, with GLOSH outlier scores |
 | `envelope` | band envelope analysis |
 
-Named recipes are saved in the **recipe library** and can be applied across a whole campaign.
+Named recipes are saved in the **recipe library** (the footer of the Pipeline panel). *Save as…*
+asks for a name and optional notes, *Rename* edits both, and the delete button asks before
+removing. *Export* downloads the selected (or current) recipe as a `.d1recipe.json` file and
+*Import* reads one back, checking it first and refusing a file with unknown steps, bad values or
+a step order that cannot run. A **modified since loaded** badge appears when the recipe you are
+editing no longer matches the library recipe you applied.
+
+### Apply a recipe to many operations
+
+Tick the operations you want in the list (or *Tick all* for the filtered list), then press
+**Apply recipe to N selected…**, choose a library recipe and **Queue**. For each cut the app makes
+the same request as the Bake button, one at a time, and shows progress; *Cancel* stops before the
+next one. The summary lists what was queued, **skipped** (already built with an equivalent
+recipe, or already queued) and **refused** (with the reason: for example, your role can't request
+builds, which stops the run; Lab Members can, read-only roles can't). Tick *Rebuild cuts already built with this recipe* to force those through.
+"Queued" means waiting for the orchestrator daemon, which analyses them one after another;
+press *Refresh* to watch them turn built. Painted layers are not compared, so a cut whose layers
+changed after its last bake needs the rebuild box.
+
 Hand-painted **layers** (mask, label, seed regions) are stored per cut and read at bake time, so
 a recipe stays reusable.
 
@@ -61,7 +83,7 @@ a recipe stays reusable.
 | **Spatial view** | the full-resolution cloud, coloured by any channel the recipe produces (residual, Gi*, significance, cluster id, GLOSH, envelope band…). You can have several side by side. |
 | **Pipeline** | the recipe editor, with a live preview of any step over a framed region |
 | **Signal** | the anomaly signal along the cut, per force channel in the workpiece frame (Fp / Fc / Ff chips, or *All channels* to compare them) |
-| **Clusters** | a per-cluster summary table |
+| **Clusters** | a per-cluster summary table; **Download CSV** / **Copy** exports every row (`cluster_id`, `points`, `fraction_of_cut`, `mean_abs_resid_z`, `max_gi_star`, `r_min_mm`, `r_max_mm`) |
 | **Selection inspector** | statistics for the points you have selected |
 
 The workbench can also pop out into its own window (`/diag-panel/<analysis id>`) for a second

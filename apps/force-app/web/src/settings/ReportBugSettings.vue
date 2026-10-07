@@ -2,7 +2,7 @@
 // Files a GitHub issue directly from inside the app. The backend holds the GitHub token (see
 // backend/app/bug_report.py) — this form only ever talks to our own recorder backend, never to
 // GitHub directly, so no credential of any kind lives in the renderer.
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { lastNonSettingsRoute } from '../router';
 import { getConfig } from '../config';
 import { authStore } from '../authStore';
@@ -10,7 +10,11 @@ import { getConsoleTail } from '../clientLog';
 // #42: draft form fields live in this sibling module (not local refs) so switching Settings tabs
 // or popping the window — either of which unmounts this component — no longer wipes whatever the
 // operator had already typed. See reportBugDraft.ts for why.
-import { draftArea, draftDescription, draftIncludeLogs, draftKind, draftTitle, resetDraft } from './reportBugDraft';
+import { MAX_AREAS, draftAreas, draftDescription, draftIncludeLogs, draftKind, draftTitle, resetDraft, toggleArea } from './reportBugDraft';
+// #88/#89: the recent-issues list lives in a module-level cache (see reportIssuesCache.ts).
+import {
+	REFETCH_AFTER_FILING_MS, addOptimistic, applyFetched, cachedIssues, isStale, optimisticRow, type IssueRow,
+} from './reportIssuesCache';
 
 const base = () => getConfig().recorderUrl;
 
@@ -41,7 +45,7 @@ function areaForRoute(path: string): string {
 }
 
 const kind = draftKind;
-const area = draftArea;
+const areas = draftAreas;
 const title = draftTitle;
 const description = draftDescription;
 const includeLogs = draftIncludeLogs;
@@ -51,15 +55,7 @@ const submitting = ref(false);
 const result = ref<{ ok: boolean; url?: string; reason?: string } | null>(null);
 const appVersion = ref('');
 
-interface IssueRow {
-	number: number;
-	title: string;
-	url: string;
-	state: string;
-	labels: string[];
-	created_at?: string;
-}
-const issues = ref<IssueRow[]>([]);
+const issues = cachedIssues;
 const issuesLoading = ref(false);
 const issuesErr = ref('');
 async function fetchIssues() {
@@ -68,7 +64,7 @@ async function fetchIssues() {
 	try {
 		const res = await fetch(`${base()}/support/report-bug/issues`);
 		const data = await res.json();
-		if (data.ok) issues.value = data.issues || [];
+		if (data.ok) applyFetched((data.issues || []) as IssueRow[]);
 		else issuesErr.value = data.reason || 'could not load recent reports';
 	} catch (e: any) {
 		issuesErr.value = e?.message || "couldn't reach the recording backend";
@@ -77,17 +73,24 @@ async function fetchIssues() {
 	}
 }
 
+// GitHub's issue listing lags a just-created issue, so after filing the list is read again a few
+// seconds later and merged by number (the optimistic row stays until a list contains it).
+let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+onBeforeUnmount(() => { if (refetchTimer) clearTimeout(refetchTimer); });
+
 onMounted(() => {
 	// Only re-guess the area for a genuinely fresh form — once a draft has content, remounting
 	// (switching tabs and back) must not clobber an area the operator may have deliberately
 	// changed away from the route-based guess.
-	if (!title.value && !description.value) area.value = areaForRoute(lastNonSettingsRoute.value);
+	if (!title.value && !description.value) areas.value = [areaForRoute(lastNonSettingsRoute.value)];
 	// Independent requests — run them concurrently rather than one-after-the-other.
 	const statusP = fetch(`${base()}/support/report-bug`)
 		.then((res) => res.json())
 		.then((data) => {
 			configured.value = !!data.configured;
-			if (configured.value) fetchIssues();
+			// Only when the cached list is old (or was never loaded): leaving and re-entering the tab
+			// used to refetch every time (#89).
+			if (configured.value && isStale()) fetchIssues();
 		})
 		.catch(() => { configured.value = false; });
 	const versionP = window.forceApp
@@ -99,12 +102,13 @@ onMounted(() => {
 });
 
 async function submit() {
-	if (!title.value.trim() || submitting.value) return;
+	const typedTitle = title.value.trim();
+	if (!typedTitle || submitting.value) return;
 	submitting.value = true;
 	result.value = null;
 	try {
 		const body = new URLSearchParams({
-			title: title.value.trim(),
+			title: typedTitle,
 			description: description.value.trim(),
 			app_version: appVersion.value,
 			platform: navigator.platform || '',
@@ -112,11 +116,11 @@ async function submit() {
 			reporter_email: authStore.currentUser.value?.email || '',
 			include_logs: String(includeLogs.value),
 			kind: kind.value,
-			area: area.value,
 			// Gated on the same checkbox as the backend log: both are diagnostic attachments, and
 			// an operator who declines to attach logs has not agreed to send their console either.
 			console_tail: includeLogs.value ? getConsoleTail() : '',
 		});
+		for (const a of areas.value) body.append('area', a);
 		const res = await fetch(`${base()}/support/report-bug`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -126,7 +130,10 @@ async function submit() {
 		result.value = data;
 		if (data.ok) {
 			resetDraft();
-			fetchIssues();
+			const row = optimisticRow(data, typedTitle);
+			if (row) addOptimistic(row);
+			if (refetchTimer) clearTimeout(refetchTimer);
+			refetchTimer = setTimeout(() => { void fetchIssues(); }, REFETCH_AFTER_FILING_MS);
 		}
 	} catch (e: any) {
 		result.value = { ok: false, reason: e?.message || "couldn't reach the recording backend" };
@@ -165,12 +172,15 @@ async function submit() {
 					<span class="material-symbols-rounded">lightbulb</span> Feature request
 				</button>
 			</div>
-			<label class="field area-field">
-				<span>Area</span>
-				<select v-model="area" :disabled="submitting">
-					<option v-for="a in AREAS" :key="a.value" :value="a.value">{{ a.label }}</option>
-				</select>
-			</label>
+			<div class="field area-field" role="group" aria-label="Areas">
+				<span>Areas <span class="area-hint">(pick up to {{ MAX_AREAS }})</span></span>
+				<div class="chips">
+					<button v-for="a in AREAS" :key="a.value" type="button" class="chip" :class="{ on: areas.includes(a.value) }"
+						:aria-pressed="areas.includes(a.value)" :disabled="submitting" @click="areas = toggleArea(areas, a.value)">
+						<span v-if="areas.includes(a.value)" class="material-symbols-rounded">check</span>{{ a.label }}
+					</button>
+				</div>
+			</div>
 			<label class="field">
 				<span>Title</span>
 				<input v-model="title" :placeholder="kind === 'bug' ? 'short summary of what went wrong' : 'short summary of what you\'d like to see'" maxlength="250" :disabled="submitting" />
@@ -238,7 +248,13 @@ h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
 .field input, .field textarea, .field select { padding: 9px 11px; font: inherit; font-size: var(--fs-md); color: var(--text);
 	background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; resize: vertical; }
 .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); }
-.area-field select { max-width: 280px; }
+.area-hint { font-size: var(--fs-sm); opacity: 0.75; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 5px 11px; font: inherit; font-size: var(--fs-sm); color: var(--text-dim);
+	background: var(--surface); border: 1px solid var(--border); border-radius: 99px; cursor: pointer; }
+.chip:hover:not(:disabled) { color: var(--text); }
+.chip.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.chip .material-symbols-rounded { font-size: var(--icon-xs); }
 
 .chk { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-md); color: var(--text); cursor: pointer; margin-bottom: 16px; line-height: 1.4; }
 .chk input { accent-color: var(--accent); margin-top: 2px; }

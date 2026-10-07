@@ -25,6 +25,7 @@ attempt with a 500.
 
 from __future__ import annotations
 
+import calendar
 import os
 import time
 from typing import Annotated
@@ -98,23 +99,60 @@ class _TokenCache:
         res.raise_for_status()
         data = res.json()
         self.token = data["token"]
-        self.expires_at = time.mktime(
-            time.strptime(data["expires_at"], "%Y-%m-%dT%H:%M:%SZ")
+        # GitHub's expires_at is UTC: timegm, not mktime (which would read it as local time and be
+        # off by the host's UTC offset).
+        self.expires_at = float(
+            calendar.timegm(time.strptime(data["expires_at"], "%Y-%m-%dT%H:%M:%SZ"))
         )
         return self.token
 
+    def clear(self) -> None:
+        self.token = ""
+        self.expires_at = 0.0
+
 
 _token_cache = _TokenCache()
+
+
+class _AuthError(Exception):
+    """Minting or exchanging the installation token failed (as opposed to the API call itself)."""
+
+
+async def _github(method: str, url: str, **kwargs) -> httpx.Response:
+    """One authenticated GitHub call. A 401 means the cached installation token was revoked or
+    expired early (clock skew, App reinstalled), so drop it and retry ONCE with a fresh one rather
+    than failing every report until the cache's own expiry. Raises _AuthError if the token can't be had, else httpx.HTTPError like httpx."""
+    res: httpx.Response | None = None
+    for attempt in (1, 2):
+        try:
+            token = await _token_cache.get()
+        except httpx.HTTPError as e:
+            raise _AuthError(str(e)) from e
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.request(
+                method,
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                **kwargs,
+            )
+        if res.status_code != 401 or attempt == 2:
+            break
+        _token_cache.clear()
+    assert res is not None
+    return res
 
 
 _Label = Annotated[str, Field(max_length=100)]
 
 
 class ReportRequest(BaseModel):
-    title: str
-    # title is truncated (not bounded here) at the /report call site below — body and labels have
-    # no such truncation downstream, so an unbounded client payload would otherwise be buffered
-    # fully in memory before the GitHub call ever runs.
+    # Bounded like body/labels so an unbounded payload is not buffered in full before the GitHub
+    # call; the call site still truncates to GitHub's own 250-character limit.
+    title: str = Field(max_length=1000)
     body: str = Field(max_length=100_000)
     labels: list[_Label] = Field(default_factory=list, max_length=20)
 
@@ -139,21 +177,13 @@ async def report(req: ReportRequest) -> dict:
         return {"ok": False, "reason": "A title is required."}
 
     try:
-        token = await _token_cache.get()
-    except httpx.HTTPError as e:
+        res = await _github(
+            "POST",
+            f"{GITHUB_API}/repos/{_repo()}/issues",
+            json={"title": title[:250], "body": req.body, "labels": req.labels},
+        )
+    except _AuthError as e:
         return {"ok": False, "reason": f"could not authenticate with GitHub: {e}"}
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.post(
-                f"{GITHUB_API}/repos/{_repo()}/issues",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-                json={"title": title[:250], "body": req.body, "labels": req.labels},
-            )
     except httpx.HTTPError as e:
         return {"ok": False, "reason": f"could not reach GitHub: {e}"}
 
@@ -186,27 +216,19 @@ async def issues() -> dict:
             "reason": "Bug reporting relay is not configured (missing GitHub App credentials).",
         }
     try:
-        token = await _token_cache.get()
-    except httpx.HTTPError as e:
+        res = await _github(
+            "GET",
+            f"{GITHUB_API}/repos/{_repo()}/issues",
+            params={
+                "labels": "in-app-report",
+                "state": "all",
+                "sort": "created",
+                "direction": "desc",
+                "per_page": 50,
+            },
+        )
+    except _AuthError as e:
         return {"ok": False, "reason": f"could not authenticate with GitHub: {e}"}
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.get(
-                f"{GITHUB_API}/repos/{_repo()}/issues",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-                params={
-                    "labels": "in-app-report",
-                    "state": "all",
-                    "sort": "created",
-                    "direction": "desc",
-                    "per_page": 50,
-                },
-            )
     except httpx.HTTPError as e:
         return {"ok": False, "reason": f"could not reach GitHub: {e}"}
 

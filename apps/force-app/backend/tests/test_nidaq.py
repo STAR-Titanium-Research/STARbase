@@ -75,7 +75,7 @@ def test_nidaq_available_is_bool():
 def test_a_real_aux_channel_widens_the_acquired_channels():
     cfg = RecordConfig(sample_rate=2000, source="nidaq")
     extra = [ExtraChannel(name="Temp", source="hardware", physical="cDAQ1Mod3/ai1")]
-    physical = ["Dev1/ai%d" % i for i in range(9)] + ["cDAQ1Mod3/ai1"]
+    physical = [f"Dev1/ai{i}" for i in range(9)] + ["cDAQ1Mod3/ai1"]
     src = NidaqSource(
         cfg,
         physical_channels=physical,

@@ -12,6 +12,8 @@ import FinishedForcePlot from '../FinishedForcePlot.vue';
 import { useDialog } from '../../ui/useDialog';
 import { formatMegabytes } from '../../format';
 import { authStore } from '../../authStore';
+import { describeRecordingFailure } from '../recordingErrors';
+import { spotlight } from '../../ui/spotlight';
 
 const w = useWorkspace();
 const router = useRouter();
@@ -76,8 +78,20 @@ const nothingSelected = computed(() => !uploadDb.value && !saveMat.value && !sav
 // full-resolution .mat/live_cache/summary in the background. Show a loading state through both so
 // the user gets immediate feedback instead of a UI that looks live but has actually already
 // stopped. Only once state is 'done' AND the finished trace has loaded do we show the save form.
-const loading = computed(() => w.st.state === 'recording' || w.st.state === 'finalizing' || (w.st.state === 'done' && !w.finishedCache.value));
+// 'recording' only counts while the stop request is in flight: after it settles with the run still
+// recording (the recorder refused or could not be reached) there is nothing to wait for.
+const stopping = computed(() => w.st.state === 'recording' && w.busy.value);
+const notStopped = computed(() => w.st.state === 'recording' && !w.busy.value);
+const loading = computed(() => stopping.value || w.st.state === 'finalizing' || (w.st.state === 'done' && !w.finishedCache.value));
 const failed = computed(() => w.st.state === 'error' && !w.finishedCache.value);
+// #84: "failed to start" (nothing captured, nothing kept) is not "finalize failed" (raw still on
+// disk) — the dialog used to claim the latter for both. The raw driver text sits behind Details.
+const failure = computed(() => describeRecordingFailure(w.st.error, w.st.errorKind, w.st.nTotal));
+function fixField() {
+	const field = failure.value.field;
+	w.dismissFailure(failure.value.rawKept);
+	if (field === 'sample_rate') setTimeout(() => spotlight('sample-rate'), 0);
+}
 
 // Three-stage save/finalize progress, each timed independently, so a slow save reads as "which
 // stage is taking long, and for how long" instead of one undifferentiated spinner. Backend timing
@@ -186,7 +200,7 @@ function cancelDiscard() { stage.value = 'ask'; }
 // an idle/empty one. w.newRun() (client.reset() + finishedCache = null, same as startNew()) is
 // what actually clears it.
 function confirmDiscard() {
-	w.newRun();
+	w.newRun(false); // nothing was kept: the retake is the same cut, so no sequence step
 	stage.value = 'ask';
 }
 
@@ -209,7 +223,7 @@ function startNew() {
 			<header class="scd-head">
 				<span class="material-symbols-rounded">task_alt</span>
 				<div class="scd-title">
-					<b id="scd-title">Recording finished</b>
+					<b id="scd-title">{{ failed ? failure.title : 'Recording finished' }}</b>
 					<span class="scd-sub">{{ w.meta.sample_name || 'Untitled cut' }} · {{ (w.st.summary?.duration_sec ?? w.st.tSec).toFixed(1) }}s</span>
 				</div>
 			</header>
@@ -228,14 +242,35 @@ function startNew() {
 				</div>
 			</template>
 
-			<template v-else-if="failed">
+			<template v-else-if="notStopped">
 				<div class="scd-confirm">
 					<span class="material-symbols-rounded warn">error</span>
-					<p>Finalizing this recording failed{{ w.st.error ? `: ${w.st.error}` : '' }}. The raw capture is still on disk and can be recovered later — nothing was uploaded.</p>
+					<div class="scd-fail">
+						<p>The recording is still running: it did not stop. Close this and press Stop again.</p>
+						<p v-if="w.errMsg.value">{{ w.errMsg.value }}</p>
+					</div>
 				</div>
 				<div class="scd-actions">
 					<div class="scd-spacer"></div>
-					<button class="btn primary" @click="startNew">Close</button>
+					<button class="btn primary" @click="w.saveOpen.value = false">Close</button>
+				</div>
+			</template>
+
+			<template v-else-if="failed">
+				<div class="scd-confirm">
+					<span class="material-symbols-rounded warn">error</span>
+					<div class="scd-fail">
+						<p>{{ failure.summary }}</p>
+						<details v-if="failure.details" class="scd-details">
+							<summary>Details</summary>
+							<pre>{{ failure.details }}</pre>
+						</details>
+					</div>
+				</div>
+				<div class="scd-actions">
+					<div class="scd-spacer"></div>
+					<button v-if="failure.field" class="btn" @click="fixField">Show me the setting</button>
+					<button class="btn primary" @click="w.dismissFailure(failure.rawKept)">Close</button>
 				</div>
 			</template>
 
@@ -298,7 +333,7 @@ function startNew() {
 					<button class="btn" :disabled="stage === 'saving'" @click="goToPlot">Open in Plot</button>
 					<button v-if="errMsg" class="btn" :disabled="stage === 'saving'" @click="startNew">Start new run</button>
 					<div class="scd-spacer"></div>
-					<button class="btn primary" :disabled="nothingSelected || stage === 'saving'" @click="confirmSave">
+					<button class="btn primary" data-save-primary :disabled="nothingSelected || stage === 'saving'" @click="confirmSave">
 						{{ stage === 'saving' ? 'Saving…' : errMsg ? 'Retry' : 'Save' }}
 					</button>
 				</div>
@@ -324,7 +359,7 @@ function startNew() {
 				<div class="scd-actions">
 					<button class="btn" @click="startNew">Start new run</button>
 					<div class="scd-spacer"></div>
-					<button class="btn primary" @click="goToPlot">
+					<button class="btn primary" data-save-primary @click="goToPlot">
 						Open in Plot
 					</button>
 				</div>
@@ -335,7 +370,7 @@ function startNew() {
 </template>
 
 <style scoped>
-.scd-backdrop { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); backdrop-filter: blur(2px); padding: 24px; }
+.scd-backdrop { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); backdrop-filter: blur(2px); padding: calc(24px + var(--offline-banner-h, 0px)) 24px 24px; }
 .scd-modal { width: min(880px, 100%); max-height: 92vh; overflow: auto; display: flex; flex-direction: column; gap: 14px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
 .scd-head { display: flex; align-items: center; gap: 12px; }
 .scd-head > .material-symbols-rounded { font-size: var(--icon-xl); color: var(--ok); }
@@ -376,4 +411,8 @@ function startNew() {
 .scd-confirm .material-symbols-rounded.warn { color: var(--warn); font-size: var(--icon-xl); }
 .scd-confirm .material-symbols-rounded.ok { color: var(--ok); font-size: var(--icon-xl); }
 .scd-confirm p { margin: 0; color: var(--text); }
+.scd-fail { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.scd-details { font-size: var(--fs-xs); color: var(--text-dim); }
+.scd-details summary { cursor: pointer; }
+.scd-details pre { margin: 4px 0 0; max-height: 140px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
 </style>

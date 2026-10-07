@@ -2,19 +2,64 @@
 // Video-style transport for replaying an archived cut: play/pause, a scrub bar, an elapsed /
 // total readout and a speed picker. Playback writes nothing — this drives a playhead over a cut
 // already in the database, so there is no Stop and no Save.
-import { computed } from 'vue';
+import { computed, onBeforeUnmount } from 'vue';
 import { useWorkspace } from '../workspace';
 import { formatDuration as fmt } from '../../format';
+import { channelColor } from '../types';
+import { theme } from '../../theme';
+import { markerFraction, type TimelineMarker } from '../playback/markers';
 
 const w = useWorkspace();
 const p = computed(() => w.playback.state);
+// The scrub runs over the cache's own time base, [t0, t0 + duration] (#110): a MATLAB cache holds
+// only the cut window, so its first sample sits seconds into the original signal. The readout
+// shows time ELAPSED into the cut against its length; the tooltip keeps the signal time, which
+// is what the force plot's x-axis is labelled in.
+const tEnd = computed(() => p.value.t0 + p.value.duration);
+const elapsed = computed(() => Math.max(0, p.value.tSec - p.value.t0));
+const timeTitle = computed(() => (p.value.t0 > 0
+	? `Signal time ${p.value.tSec.toFixed(2)} s — this file starts ${p.value.t0.toFixed(2)} s into the recording`
+	: `Signal time ${p.value.tSec.toFixed(2)} s`));
 
 // Scrubbing fires continuously while dragging; only the settled value forces a spectrum request
 // (the FFT / spectrogram views are the expensive part). `input` = dragging, `change` = released.
-function onScrub(e: Event) { w.playback.seek(Number((e.target as HTMLInputElement).value), { commit: false }); }
-function onScrubEnd(e: Event) { w.playback.seek(Number((e.target as HTMLInputElement).value), { commit: true }); }
+// A drag can fire `input` several times per frame, and each seek is a buffer rebuild plus a relay
+// to any pop-out, so they are coalesced to the latest value once per animation frame (#107).
+let pendingSeek: number | null = null;
+let seekFrame = 0;
+function onScrub(e: Event) {
+	pendingSeek = Number((e.target as HTMLInputElement).value);
+	if (seekFrame) return;
+	seekFrame = requestAnimationFrame(() => {
+		seekFrame = 0;
+		if (pendingSeek !== null) w.playback.seek(pendingSeek, { commit: false });
+		pendingSeek = null;
+	});
+}
+function onScrubEnd(e: Event) {
+	if (seekFrame) { cancelAnimationFrame(seekFrame); seekFrame = 0; }
+	pendingSeek = null;
+	w.playback.seek(Number((e.target as HTMLInputElement).value), { commit: true });
+}
+onBeforeUnmount(() => { if (seekFrame) cancelAnimationFrame(seekFrame); });
 
 const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20];
+
+// #104: cut start/end, a saved crop, and each axis's |F| peak, on a lane under the scrub bar (not
+// on it, so they never get in the way of grabbing the thumb). Click one to jump there.
+function markerStyle(m: TimelineMarker) {
+	const f = markerFraction(m.t, p.value.t0, p.value.duration);
+	// The range input's track is inset by half its thumb (~8px) at each end; match it so a marker
+	// sits under the thumb when the playhead is on it.
+	const color = m.kind === 'peak' && m.axis ? channelColor(m.axis, theme.value) : undefined;
+	return { left: `calc(8px + (100% - 16px) * ${f})`, ...(color ? { '--mc': color } : {}) };
+}
+// Computed, not called per marker in the template: the bar re-renders at ~60 Hz while playing, but
+// the styles only change with the cut (markers, t0, duration) or the theme, never with tSec.
+const markerItems = computed(() => p.value.markers.map((m) => ({
+	m, key: `${m.kind}-${m.axis ?? ''}-${m.t}`, style: markerStyle(m),
+})));
+function seekTo(m: TimelineMarker) { w.playback.seek(m.seekT ?? m.t, { commit: true }); }
 </script>
 
 <template>
@@ -30,9 +75,16 @@ const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20];
 					{{ w.replay.downloading ? 'progress_activity' : p.playing ? 'pause' : 'play_arrow' }}
 				</span>
 			</button>
-			<input class="scrub" type="range" min="0" :max="p.duration || 0" step="0.01"
-				:value="p.tSec" :disabled="!p.loaded || w.replay.downloading" @input="onScrub" @change="onScrubEnd" />
-			<span class="time">{{ fmt(p.tSec) }} / {{ fmt(p.duration) }}</span>
+			<div class="scrub-wrap">
+				<input class="scrub" type="range" :min="p.t0" :max="tEnd" step="0.01"
+					:value="p.tSec" :disabled="!p.loaded || w.replay.downloading" @input="onScrub" @change="onScrubEnd" />
+				<div v-if="p.loaded && p.markers.length" class="marks">
+					<button v-for="it in markerItems" :key="it.key" type="button"
+						class="mark" :class="it.m.kind" :style="it.style" :title="it.m.label" :aria-label="`Jump to ${it.m.label}`"
+						@click="seekTo(it.m)"></button>
+				</div>
+			</div>
+			<span class="time" :title="timeTitle">{{ fmt(elapsed) }} / {{ fmt(p.duration) }}</span>
 		</div>
 		<div class="row sub">
 			<label class="speed">Speed
@@ -40,7 +92,7 @@ const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20];
 					<option v-for="s in SPEEDS" :key="s" :value="s">{{ s }}×</option>
 				</select>
 			</label>
-			<span class="note" title="This file stores summed Fx/Fy/Fz only. Per-sensor sub-channels are shown as an even split, and Tacho is not stored at all — RPM comes from the file's own rpm series.">
+			<span class="note" title="This file stores summed Fx/Fy/Fz only. Per-sensor sub-channels are shown as an even split, and the raw tacho pulse train is not stored — the Tacho channel shows the file's own RPM series (empty when the file has none).">
 				<span class="material-symbols-rounded">info</span> summed axes only
 			</span>
 		</div>
@@ -64,7 +116,16 @@ const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20];
 .play .material-symbols-rounded { font-size: var(--icon-lg); }
 /* min-width, NOT the usual `min-width: 0`: this control has to stay grabbable. Under the floor
    the row wraps (above) instead of shrinking it away to a zero-width, unclickable element. */
-.scrub { flex: 1 1 90px; min-width: 90px; accent-color: var(--accent); cursor: pointer; }
+.scrub-wrap { flex: 1 1 90px; min-width: 90px; display: flex; flex-direction: column; }
+.scrub { width: 100%; margin: 0; accent-color: var(--accent); cursor: pointer; }
+/* Marker lane under the track. Peaks take their axis colour (--mc); the cut window and crop are
+   neutral ticks, so they read as boundaries rather than as a fourth channel. */
+.marks { position: relative; height: 10px; }
+.mark { position: absolute; top: 1px; width: 8px; height: 8px; margin-left: -4px; padding: 0; border: none; border-radius: 50%; background: var(--mc, var(--text-dim)); cursor: pointer; opacity: 0.9; }
+.mark:hover, .mark:focus-visible { opacity: 1; transform: scale(1.35); }
+.mark.cut-start, .mark.cut-end, .mark.crop { width: 3px; height: 10px; top: 0; margin-left: -1.5px; border-radius: 1px; }
+.mark.cut-start, .mark.cut-end { background: var(--text-dim); }
+.mark.crop { background: var(--accent); }
 .scrub:disabled { opacity: 0.5; cursor: not-allowed; }
 .time { font-size: var(--fs-sm); font-family: var(--mono); color: var(--text-dim); font-variant-numeric: tabular-nums; flex-shrink: 0; margin-left: auto; }
 .speed { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }

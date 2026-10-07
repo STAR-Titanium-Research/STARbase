@@ -4,38 +4,14 @@
 // a title + operation subtitle. Instant and offline — no host round-trip — so "Download this
 // FRM image" respects the current viewport without losing the report styling.
 import { colorizeValues, type ColorScale } from './colorScale';
+import { downloadBlob } from './csvExport';
+import { fmtTick, niceTicks, tickStep } from './tickLabels';
 
-// "Nice" round tick positions across [lo, hi] (~`target` of them). Exported for ColorBar.vue's
-// tick labels too -- it's the same "nice" rounding either way, no reason for a second copy just
-// because the caller draws to a <canvas> here and a DOM strip there.
-export function niceTicks(lo: number, hi: number, target = 6): number[] {
-	const span = hi - lo;
-	if (!(span > 0) || !isFinite(span)) return [lo];
-	const raw = span / target;
-	const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-	const norm = raw / mag;
-	const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
-	const out: number[] = [];
-	for (let t = Math.ceil(lo / step) * step; t <= hi + step * 1e-6; t += step) out.push(Number(t.toFixed(6)));
-	return out;
-}
-export function fmt(v: number): string {
-	const a = Math.abs(v);
-	if (a === 0) return '0';
-	if (a >= 1000) return (v / 1000).toFixed(1) + 'k';
-	if (a < 0.1) return v.toFixed(3);
-	if (a < 10) return v.toFixed(1);
-	return v.toFixed(0);
-}
+// niceTicks and fmt live in tickLabels.ts (the step-aware label helpers need them); re-exported so
+// the public API and ColorBar.vue's imports are unchanged.
+export { niceTicks, fmt } from './tickLabels';
 function download(cv: HTMLCanvasElement, filename: string) {
-	cv.toBlob((blob) => {
-		if (!blob) return;
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url; a.download = filename;
-		document.body.appendChild(a); a.click(); a.remove();
-		setTimeout(() => URL.revokeObjectURL(url), 1000);
-	}, 'image/png');
+	cv.toBlob((blob) => { if (blob) downloadBlob(blob, filename); }, 'image/png');
 }
 
 export interface FrmFigureOpts {
@@ -67,6 +43,7 @@ export function exportFrmFigure(o: FrmFigureOpts): boolean {
 	g.drawImage(canvas, mL, mT, pw, ph);
 
 	const xt = niceTicks(bounds.xmin, bounds.xmax), yt = niceTicks(bounds.ymin, bounds.ymax);
+	const xStep = tickStep(xt), yStep = tickStep(yt);
 	const xToPx = (t: number) => mL + ((t - bounds.xmin) / (bounds.xmax - bounds.xmin)) * pw;
 	const yToPx = (t: number) => mT + ph - ((t - bounds.ymin) / (bounds.ymax - bounds.ymin)) * ph;
 
@@ -79,9 +56,9 @@ export function exportFrmFigure(o: FrmFigureOpts): boolean {
 	g.strokeStyle = '#000'; g.lineWidth = 1.4 * k; g.strokeRect(mL, mT, pw, ph);
 	g.fillStyle = '#000'; g.font = serif(19);
 	g.textAlign = 'center'; g.textBaseline = 'top';
-	for (const t of xt) { const x = xToPx(t); g.beginPath(); g.moveTo(x, mT + ph); g.lineTo(x, mT + ph + 7 * k); g.stroke(); g.fillText(fmt(t), x, mT + ph + 10 * k); }
+	for (const t of xt) { const x = xToPx(t); g.beginPath(); g.moveTo(x, mT + ph); g.lineTo(x, mT + ph + 7 * k); g.stroke(); g.fillText(fmtTick(t, xStep), x, mT + ph + 10 * k); }
 	g.textAlign = 'right'; g.textBaseline = 'middle';
-	for (const t of yt) { const y = yToPx(t); g.beginPath(); g.moveTo(mL, y); g.lineTo(mL - 7 * k, y); g.stroke(); g.fillText(fmt(t), mL - 10 * k, y); }
+	for (const t of yt) { const y = yToPx(t); g.beginPath(); g.moveTo(mL, y); g.lineTo(mL - 7 * k, y); g.stroke(); g.fillText(fmtTick(t, yStep), mL - 10 * k, y); }
 
 	// axis labels
 	g.fillStyle = '#000'; g.font = serif(21, 'italic'); g.textAlign = 'center'; g.textBaseline = 'alphabetic';
@@ -103,11 +80,12 @@ export function exportFrmFigure(o: FrmFigureOpts): boolean {
 	}
 	g.strokeStyle = '#000'; g.lineWidth = 1; g.strokeRect(cbx, mT, cbw, cbH);
 	g.fillStyle = '#000'; g.font = serif(17); g.textAlign = 'left'; g.textBaseline = 'middle';
-	for (const t of niceTicks(cmin, cmax, 5)) {
-		if (t < cmin - 1e-9 || t > cmax + 1e-9) continue;
+	const cticks = niceTicks(cmin, cmax, 5).filter((t) => t >= cmin - 1e-9 && t <= cmax + 1e-9);
+	const cStep = tickStep(cticks);
+	for (const t of cticks) {
 		const y = mT + cbH - ((t - cmin) / (cmax - cmin)) * cbH;
 		g.beginPath(); g.moveTo(cbx + cbw, y); g.lineTo(cbx + cbw + 6 * k, y); g.stroke();
-		g.fillText(fmt(t), cbx + cbw + 9 * k, y);
+		g.fillText(fmtTick(t, cStep), cbx + cbw + 9 * k, y);
 	}
 	g.save(); g.translate(cbx + cbw + 60 * k, mT + cbH / 2); g.rotate(-Math.PI / 2);
 	g.textAlign = 'center'; g.textBaseline = 'alphabetic'; g.font = serif(20, 'italic'); g.fillText(`${o.axis} (N)`, 0, 0); g.restore();

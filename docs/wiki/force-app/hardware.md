@@ -73,7 +73,8 @@ channels are assigned to a port.
 - The **Channels** list on the right shows every channel, its role (Fx/Fy/Fz/Tacho/Aux) and its
   physical port.
 
-The channel configuration is saved on the capture drive (`nidaq_channels.json`) and decides what
+The channel configuration is saved in the app's settings folder (`nidaq_channels.json`, so it
+stays when you change the capture drive) and decides what
 the recorder captures. On the Record page, the **Sample rate** tile turns red when the rate is
 higher than the assigned modules can do.
 

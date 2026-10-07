@@ -43,6 +43,9 @@ _FUNCS: dict[str, object] = {
     "min": np.minimum,
     "max": np.maximum,
 }
+# Positional argument count each function takes. min/max are the elementwise np.minimum/np.maximum,
+# so exactly two: `min(Fx)` would otherwise pass validation and raise TypeError per chunk.
+_ARITY: dict[str, int] = {"abs": 1, "sqrt": 1, "min": 2, "max": 2}
 
 
 class FormulaError(ValueError):
@@ -73,7 +76,33 @@ def evaluate(expr: str, values: dict[str, np.ndarray]) -> np.ndarray:
     tokens and chunks are already the unit of work throughout this pipeline, so the parse cost is
     negligible next to the numpy work it guards; keeping validation un-cached also means a formula
     can never be evaluated without being freshly checked against the whitelist."""
-    return _eval(parse_formula(expr), values)
+    try:
+        return _eval(parse_formula(expr), values)
+    except FormulaError:
+        raise
+    except Exception as e:
+        # TypeError, ZeroDivisionError, ... must never escape: callers (the live consumer thread,
+        # finalize, recovery) only know how to degrade on a FormulaError.
+        raise FormulaError(f"could not evaluate formula: {type(e).__name__}: {e}") from e
+
+
+def _constant_value(node: ast.expr) -> float | None:
+    """The value of a sub-expression made only of numeric literals, or None if it reads a channel
+    (or can't be folded). Used to catch a constant zero divisor at save time."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
+        return float(node.value)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY:
+        v = _constant_value(node.operand)
+        return None if v is None else float(_UNARY[type(node.op)](v))
+    if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:
+        a, b = _constant_value(node.left), _constant_value(node.right)
+        if a is None or b is None:
+            return None
+        try:
+            return float(_BINOPS[type(node.op)](a, b))
+        except (ZeroDivisionError, OverflowError):
+            return None
+    return None
 
 
 def _validate(node: ast.expr) -> set[str]:
@@ -81,6 +110,8 @@ def _validate(node: ast.expr) -> set[str]:
     if isinstance(node, ast.BinOp):
         if type(node.op) not in _BINOPS:
             raise FormulaError(f"operator '{type(node.op).__name__}' is not allowed")
+        if isinstance(node.op, ast.Div) and _constant_value(node.right) == 0.0:
+            raise FormulaError("division by zero")
         return _validate(node.left) | _validate(node.right)
     if isinstance(node, ast.UnaryOp):
         if type(node.op) not in _UNARY:
@@ -91,6 +122,12 @@ def _validate(node: ast.expr) -> set[str]:
             raise FormulaError("only abs(), sqrt(), min(), max() may be called")
         if node.keywords:
             raise FormulaError("keyword arguments are not allowed")
+        want = _ARITY[node.func.id]
+        if len(node.args) != want:
+            raise FormulaError(
+                f"{node.func.id}() takes {want} argument{'s' if want != 1 else ''}, "
+                f"got {len(node.args)}"
+            )
         names: set[str] = set()
         for arg in node.args:
             names |= _validate(arg)
@@ -169,7 +206,9 @@ def compute_extra_columns(
         else:
             try:
                 out[:, j] = evaluate(ec.formula or "", namespace)
-            except FormulaError as e:
+            except Exception as e:  # evaluate() raises FormulaError; the assignment may not
+                if not isinstance(e, FormulaError):
+                    e = FormulaError(f"could not evaluate formula: {type(e).__name__}: {e}")
                 if on_error:
                     on_error(ec.name, e)
                 else:

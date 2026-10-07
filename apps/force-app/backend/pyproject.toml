@@ -31,7 +31,10 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Slow tests (the 2 GB finalize memory bound) are deselected by default -- the release workflow and
+# a plain `pytest` skip them; `pytest -m slow` runs only them (a later -m overrides this one).
+addopts = "-q -m \"not slow\""
+markers = ["slow: tens of seconds and gigabytes of disk; deselected by default, run with -m slow"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

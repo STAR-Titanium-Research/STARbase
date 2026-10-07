@@ -74,6 +74,10 @@ docker compose --profile llm up -d
 Requires Docker (Desktop/WSL2 on Windows) and `pre-commit`. Run `make help` for
 all targets.
 
+> **Upgrading an existing deployment?** Do not just `git pull` and `docker compose up`: follow
+> [`docs/runbooks/upgrade-2026-10-hardening.md`](./docs/runbooks/upgrade-2026-10-hardening.md)
+> (new required secrets, worker Flow headers, migrations, a Directus restart).
+
 ## Tech stack
 
 PostgreSQL 15+ (with `pgvector`) · Directus · MinIO (S3-compatible) · Redis ·
@@ -93,4 +97,5 @@ analysis adds Vue 3 + three.js, Electron, a FastAPI recorder and MATLAB processi
 - [`docs/FAST25_OVERVIEW.md`](./docs/FAST25_OVERVIEW.md) — FAST 25 / FAST 250 sintering data architecture
 - [`docs/superpowers/`](./docs/superpowers/README.md) — per-feature design specs and their status
 - [`docs/adr/`](./docs/adr/) — architecture decision records · [`docs/runbooks/`](./docs/runbooks/) — operational runbooks
+- [`docs/runbooks/physical-test-backlog.md`](./docs/runbooks/physical-test-backlog.md) — checks waiting for the rig or a live Directus
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) · [`SECURITY.md`](./SECURITY.md)

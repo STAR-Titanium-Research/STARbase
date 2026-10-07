@@ -7,6 +7,7 @@ import { computed, reactive, ref } from 'vue';
 import { api } from '../directusClient';
 import { authStore } from '../authStore';
 import { resolveOwnerPersonId, syncerFields } from '../recorder';
+import { findOperationForCapture } from './uploadResume';
 
 const LS_KEY = 'force-app.sync.queue';
 
@@ -101,7 +102,16 @@ export async function flush(): Promise<void> {
 					// throws into the handler below and leaves the record queued (never owned by the uploader).
 					if (payload.owner_person_id == null) payload.owner_person_id = await resolveOwnerPersonId(payload.recorded_metadata);
 				}
-				await api.post(`/items/${item.collection}`, payload);
+				// A write that timed out may have been committed all the same, and POST has no
+				// idempotency key: retrying it blindly inserts the run twice. On a retry, first look
+				// for a row already stamped with this capture id (see uploadResume.ts); if there is
+				// one, the earlier attempt landed and this item is done.
+				const captureId = item.collection === 'manufacturing_operations' && item.attempts > 0
+					? payload.recorded_metadata?.capture_id : undefined;
+				const already = typeof captureId === 'string' && captureId
+					? await findOperationForCapture(captureId).catch(() => null)
+					: null;
+				if (!already) await api.post(`/items/${item.collection}`, payload);
 				save(load().filter((x) => x.id !== item.id));   // success — drop just this one
 				syncStatus.lastSyncedAt = Date.now();
 				syncStatus.lastError = null;

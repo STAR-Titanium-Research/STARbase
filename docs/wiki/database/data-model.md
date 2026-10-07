@@ -97,6 +97,15 @@ tree in either direction:
 | `f_trace_stock_origins(sample_id)` | the raw stock lots it came from |
 | `f_sample_timeline(sample_id)` | its operations and tests, in date order |
 
+The functions run as the database owner and ignore Directus permissions, so the app does not call
+them directly. The Lab Dashboard's Timeline tab reads them through the `d1-trace` endpoint
+(`GET /d1-trace/sample/<id>`), which re-reads every sample, operation, test, stock lot, genealogy
+link and stock provenance through the signed-in user's permissions, drops (and only counts) what
+they cannot read, and leaves out any field their role cannot read. The functions list every
+*path*, so a genealogy with many branches and merges can take very long to walk: the endpoint
+gives each list at most 500 entries (the nearest relatives, the newest events) and answers "too
+large to trace" (503) if the walk takes more than 8 seconds.
+
 See the [traceability runbook](../../runbooks/traceability.md). The sample report
 ([Reports](dashboards-and-reports.md#printable-reports)) shows the same lineage on paper.
 

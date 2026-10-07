@@ -4,7 +4,7 @@
 // dyno sub-channels Fx1…Fz4) + the mode — so duplicated panels are independent (e.g. one showing
 // only Fz1 to isolate a single sensor). The mode is picked in the panel's header (RecordPage.vue);
 // without an `inst` this falls back to all summed axes in Time mode.
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useWorkspace } from '../workspace';
 import LiveForcePlot from '../LiveForcePlot.vue';
 import FinishedForcePlot from '../FinishedForcePlot.vue';
@@ -16,8 +16,10 @@ import { channelColor } from '../types';
 import { theme } from '../../theme';
 import { appUrl } from '../../appUrl';
 import type { PlotMode } from '../plotModes';
+import { isRailed, shownRailed } from '../railing';
+import { clampWindowSec, WINDOW_MAX_SEC, WINDOW_MIN_SEC, WINDOW_SLIDER_MAX_SEC } from '../plotWindow';
 
-const props = defineProps<{ inst?: { mode?: PlotMode; channels?: string[]; axes?: string[] } }>();
+const props = defineProps<{ inst?: { mode?: PlotMode; channels?: string[]; axes?: string[]; windowSec?: number } }>();
 const w = useWorkspace();
 const SUMMED = ['Fx', 'Fy', 'Fz'];
 const ORDER = [...SUMMED, ...SUB_NAMES];
@@ -53,9 +55,36 @@ function toggle(key: string) {
 	setSel(s);
 }
 const subsOpen = ref(false);
+// R5: sensor channels that reached full scale this cut get a red badge on their chip.
+const railedNow = computed(() => shownRailed(w.mode.value, w.st.railed));
+const railedAny = computed(() => railedNow.value.length > 0);
 const subCount = computed(() => selected.value.filter((k) => (SUB_NAMES as readonly string[]).includes(k)).length);
+// #34: each panel has its own time window, stored on its layout entry (so it persists with the
+// layout). A panel that never set one follows the workspace default, w.plot.windowSec. A cleared
+// or junk number input is ignored rather than written through as 0/NaN.
+const windowSec = computed<number>({
+	get: () => clampWindowSec(props.inst?.windowSec ?? w.plot.windowSec),
+	set: (v) => {
+		if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return;
+		const c = clampWindowSec(v);
+		if (props.inst) props.inst.windowSec = c; else w.plot.windowSec = c;
+	},
+});
+// The number box commits on change (Enter, blur, the spinner), not per keystroke, and then shows
+// the EFFECTIVE value: a typed 500, 0, a negative or an empty box is clamped or ignored by the
+// setter above, which leaves nothing for Vue to re-render, so the box would keep the typed text.
+function commitWindow(e: Event) {
+	const el = e.target as HTMLInputElement;
+	windowSec.value = el.valueAsNumber;
+	el.value = String(windowSec.value);
+}
+// The client keeps at least the slider's maximum of trace history; a wider typed-in window asks
+// for more. Only the Time view reads the trace (the spectrogram/waterfall use fftHistory).
+const demandKey = {};
+watch([windowSec, mode], ([sec, m]) => w.client.setWindowDemand(demandKey, m === 'time' ? sec : null), { immediate: true });
+onBeforeUnmount(() => w.client.setWindowDemand(demandKey, null));
 function openLive() {
-	const q = new URLSearchParams({ mode: mode.value, channels: selected.value.join(','), window: String(w.plot.windowSec) });
+	const q = new URLSearchParams({ mode: mode.value, channels: selected.value.join(','), window: String(windowSec.value) });
 	window.open(appUrl(`/live/force?${q}`), '_blank', 'noopener,width=1400,height=900');
 }
 </script>
@@ -72,11 +101,14 @@ function openLive() {
 			</div>
 			<div class="subwrap">
 				<button class="chip-toggle sub-btn" :class="{ on: subCount > 0 }" @click.stop="subsOpen = !subsOpen">
-					Sub<span v-if="subCount"> · {{ subCount }}</span> <span class="material-symbols-rounded">expand_more</span>
+					Sub<span v-if="subCount"> · {{ subCount }}</span>
+					<span v-if="railedAny" class="rail-dot" title="A channel railed this cut - open for which" aria-label="channel railed"></span>
+					<span class="material-symbols-rounded">expand_more</span>
 				</button>
 				<div v-if="subsOpen" class="subpop" @click.stop>
 					<button v-for="s in SUB_NAMES" :key="s" class="subopt" :class="{ on: selected.includes(s) }" @click="toggle(s)">
 						<span class="dot" :style="{ background: channelColor(s, theme) }"></span>{{ s }}
+						<span v-if="isRailed(railedNow, s)" class="rail-badge" :data-testid="`rail-badge-${s}`" title="Railed: reached full scale this cut">railed</span>
 						<span v-if="selected.includes(s)" class="material-symbols-rounded tick">check</span>
 					</button>
 				</div>
@@ -86,8 +118,8 @@ function openLive() {
 				 spectrum with no time axis, so the control has nothing to affect there — hidden rather
 				 than shown-but-inert. -->
 			<div v-if="mode !== 'fft' && mode !== 'psd'" class="tw-row">
-				<input type="range" min="2" max="60" step="1" v-model.number="w.plot.windowSec" />
-				<input type="number" min="1" max="300" v-model.number="w.plot.windowSec" class="tw-num" />
+				<input type="range" min="2" :max="WINDOW_SLIDER_MAX_SEC" step="1" v-model.number="windowSec" />
+				<input type="number" :min="WINDOW_MIN_SEC" :max="WINDOW_MAX_SEC" :value="windowSec" @change="commitWindow" class="tw-num" />
 				<span class="tw-unit">s</span>
 			</div>
 			<button class="btn icon sm popout" title="Pop out to a new window (second monitor) — open before Start"
@@ -101,10 +133,10 @@ function openLive() {
 				 page (FRM rebuild + this panel + the dialog's own copy all wanting to redraw at once) —
 				 no point paying for a redundant draw of data the user can't currently see. -->
 			<FinishedForcePlot v-if="mode === 'time' && w.isDone.value && w.finishedCache.value && !w.saveOpen.value" :cache="w.finishedCache.value" :channels="selected" />
-			<LiveForcePlot v-else-if="mode === 'time'" :client="w.client" :channels="selected" />
+			<LiveForcePlot v-else-if="mode === 'time'" :client="w.client" :channels="selected" :window-sec="windowSec" />
 			<LiveFft v-if="mode === 'fft' || mode === 'psd'" :client="w.client" :channels="selected" :scale="mode === 'psd' ? 'psd' : 'amp'" />
-			<LiveSpectrogram v-else-if="mode === 'spectrogram'" :client="w.client" :channels="selected" :window-sec="w.plot.windowSec" />
-			<LiveWaterfall v-else-if="mode === 'waterfall'" :client="w.client" :channels="selected" :window-sec="w.plot.windowSec" />
+			<LiveSpectrogram v-else-if="mode === 'spectrogram'" :client="w.client" :channels="selected" :window-sec="windowSec" />
+			<LiveWaterfall v-else-if="mode === 'waterfall'" :client="w.client" :channels="selected" :window-sec="windowSec" />
 		</div>
 	</div>
 </template>
@@ -120,6 +152,8 @@ function openLive() {
 .subopt:hover { background: var(--surface-2); }
 .subopt.on { color: var(--text); font-weight: 600; }
 .subopt .dot { width: 9px; height: 9px; border-radius: 50%; }
+.rail-dot { display: inline-block; width: 8px; height: 8px; margin: 0 2px; border-radius: 50%; background: #dc2626; }
+.rail-badge { padding: 0 6px; font-size: var(--fs-xs); font-weight: 700; color: #fff; background: #dc2626; border-radius: 8px; }
 .subopt .tick { margin-left: auto; font-size: var(--icon-xs); color: var(--ok); }
 .mono-hint { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; }
 .tw-row { display: flex; align-items: center; gap: 4px; }

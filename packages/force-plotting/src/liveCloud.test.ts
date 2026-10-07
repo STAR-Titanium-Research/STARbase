@@ -9,7 +9,7 @@
 //      (used by the FINISHED/FrmCloud path) is covered here for the same reason: it must never
 //      produce fewer/more points than expected, or leave any NaN in the output.
 import { describe, expect, it } from 'vitest';
-import { axisAutoLimits, buildCloud, COLORMAPS, type CloudParams } from './liveCloud';
+import { axisAutoLimits, buildCloud, COLORMAPS, withHeight, type CloudParams } from './liveCloud';
 import type { Cache } from './liveCache';
 
 function makeCache(overrides: Partial<Cache> = {}): Cache {
@@ -181,4 +181,24 @@ describe('COLORMAPS', () => {
 			}
 		});
 	}
+});
+
+describe('withHeight (Lite 3D "Z = Fx/Fy/Fz")', () => {
+	it.each([['ungridded', false], ['gridded', true]])('bakes zv into pos z (%s) so the view is not flat', (_n, gridding) => {
+		const c = makeCache({ N: 400 });
+		const cloud = withHeight(buildCloud(c, baseParams({ zSeries: 'Fz', gridding, gridN: 12 }))!);
+		expect(cloud.zv).toBeDefined();
+		let minZ = Infinity, maxZ = -Infinity;
+		for (let k = 0; k < cloud.count; k++) {
+			const z = cloud.pos[k * 3 + 2];
+			expect(z).toBe(cloud.zv![k]);
+			minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+		}
+		expect(maxZ - minZ).toBeGreaterThan(0);   // not flat
+	});
+	it('leaves pos untouched without a Z series', () => {
+		const cloud = withHeight(buildCloud(makeCache({ N: 100 }), baseParams())!);
+		expect(cloud.zv).toBeUndefined();
+		for (let k = 0; k < cloud.count; k++) expect(cloud.pos[k * 3 + 2]).toBe(0);
+	});
 });

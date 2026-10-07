@@ -20,7 +20,7 @@ discards.
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import butter, filtfilt, hilbert, welch
+from scipy.signal import butter, hilbert, sosfiltfilt, welch
 
 
 def bandpass_envelope(
@@ -44,8 +44,11 @@ def bandpass_envelope(
             f"requested band [{lo:.1f}, {hi:.1f}] Hz does not fit strictly inside "
             f"(0, Nyquist={nyquist:.1f}) Hz at fs={fs:.1f} Hz"
         )
-    b, a = butter(4, [lo / nyquist, hi / nyquist], btype="band")
-    filtered = filtfilt(b, a, sig)
+    # Second-order sections, not (b, a): the transfer-function form of a narrow band-pass at
+    # a low normalised frequency (fc=200 or 500 Hz at fs=100 kHz is ~0.002-0.005 of Nyquist)
+    # is so ill-conditioned that filtfilt returns garbage (~1e92, or NaN).
+    sos = butter(4, [lo / nyquist, hi / nyquist], btype="band", output="sos")
+    filtered = sosfiltfilt(sos, sig)
     return np.abs(hilbert(filtered))
 
 

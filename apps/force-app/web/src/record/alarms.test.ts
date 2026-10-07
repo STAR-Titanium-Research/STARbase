@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { AlarmController } from './alarms';
+import { AlarmController, parseAlarmConfig } from './alarms';
 
 function makeController(): AlarmController {
 	const a = new AlarmController();
@@ -98,5 +98,111 @@ describe('AlarmController.evaluate', () => {
 		expect(a.active).toHaveLength(0);
 		a.evaluateTacho(false);
 		expect(a.active.map((x) => x.kind)).toContain('tacho');
+	});
+});
+
+describe('R6 early warning', () => {
+	it('fires once at the warning level without latching the alarm', () => {
+		const a = makeController(); // limit 400 N, warning at 80 % = 320 N
+		a.evaluate({ Fx: 100, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(a.warnings).toHaveLength(0);
+		a.evaluate({ Fx: 330, Fy: 0, Fz: 0 }, 0, 1200);
+		a.evaluate({ Fx: 350, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(a.warnings.map((w) => w.axis)).toEqual(['Fx']); // once, not per frame
+		expect(a.active).toHaveLength(0);
+		expect(a.tripped).toBe(false); // nothing to acknowledge, no overlay
+	});
+
+	it('stays warned-once after a dismiss, and the real alarm still trips afterwards', () => {
+		const a = makeController();
+		a.evaluate({ Fx: 330, Fy: 0, Fz: 0 }, 0, 1200);
+		a.dismissWarnings();
+		a.evaluate({ Fx: 340, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(a.warnings).toHaveLength(0);
+		a.evaluate({ Fx: 410, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(a.tripped).toBe(true);
+	});
+
+	it('is replaced by the alarm on the same axis, and re-arms on reset', () => {
+		const a = makeController();
+		a.evaluate({ Fx: 330, Fy: 0, Fz: 0 }, 0, 1200);
+		a.evaluate({ Fx: 410, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(a.warnings).toHaveLength(0);
+		a.reset();
+		a.evaluate({ Fx: 330, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(a.warnings).toHaveLength(1);
+	});
+
+	it('resetWarnings clears the banner and re-arms, but leaves an unacknowledged alarm tripped', () => {
+		const a = makeController();
+		a.evaluate({ Fx: 330, Fy: 0, Fz: 0 }, 0, 1200);
+		a.evaluate({ Fx: 0, Fy: 410, Fz: 0 }, 0, 1200); // Fy alarm, unacknowledged
+		expect(a.warnings).toHaveLength(1);
+		a.resetWarnings();
+		expect(a.warnings).toHaveLength(0);
+		expect(a.tripped).toBe(true);
+		expect(a.active.map((x) => x.key)).toEqual(['force:Fy']);
+		a.evaluate({ Fx: 330, Fy: 0, Fz: 0 }, 0, 1200); // re-armed for the next cut
+		expect(a.warnings.map((w) => w.axis)).toEqual(['Fx']);
+	});
+
+	it('follows the configured percentage and can be switched off', () => {
+		const a = makeController();
+		a.config.warnPercent = 50;
+		a.evaluate({ Fx: 0, Fy: 210, Fz: 0 }, 0, 1200);
+		expect(a.warnings.map((w) => w.axis)).toEqual(['Fy']);
+		const b = makeController();
+		b.config.warnEnabled = false;
+		b.evaluate({ Fx: 390, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(b.warnings).toHaveLength(0);
+		const c = makeController();
+		c.config.forceEnabled = false; // no force limit, nothing to warn against
+		c.evaluate({ Fx: 390, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(c.warnings).toHaveLength(0);
+	});
+});
+
+describe('R6 stop on force alarm', () => {
+	it('does nothing by default', () => {
+		const a = makeController();
+		let n = 0; a.onForceTrip = () => { n++; };
+		a.evaluate({ Fx: 500, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(n).toBe(0);
+	});
+
+	it('calls stop exactly once per trip when enabled, even for several axes and later frames', () => {
+		const a = makeController();
+		a.config.stopOnForceAlarm = true;
+		let n = 0; a.onForceTrip = () => { n++; };
+		a.evaluate({ Fx: 500, Fy: 450, Fz: 0 }, 0, 1200);
+		a.evaluate({ Fx: 520, Fy: 460, Fz: 0 }, 0, 1200);
+		expect(n).toBe(1);
+	});
+
+	it('is not triggered by the warning, RPM, tacho, disk or a test alarm', () => {
+		const a = makeController();
+		a.config.stopOnForceAlarm = true;
+		let n = 0; a.onForceTrip = () => { n++; };
+		a.evaluate({ Fx: 330, Fy: 0, Fz: 0 }, 1300, 1200); // warning + rpm trip
+		a.evaluateTacho(false);
+		a.evaluateDisk(0);
+		a.test();
+		expect(n).toBe(0);
+	});
+});
+
+describe('parseAlarmConfig', () => {
+	it('defaults the new settings when absent (old saved configs)', () => {
+		const c = parseAlarmConfig(JSON.stringify({ forceThreshold: 250, rpmEnabled: false }));
+		expect(c).toMatchObject({ forceThreshold: 250, rpmEnabled: false, warnEnabled: true, warnPercent: 80, stopOnForceAlarm: false, toneVolume: null });
+	});
+
+	it('survives corrupt input field by field', () => {
+		expect(parseAlarmConfig('not json').warnPercent).toBe(80);
+		expect(parseAlarmConfig('[1,2]').forceThreshold).toBe(400);
+		const c = parseAlarmConfig(JSON.stringify({ warnPercent: 150, toneVolume: 'loud', stopOnForceAlarm: 'yes', forceThreshold: 'x', warnEnabled: false }));
+		expect(c).toMatchObject({ warnPercent: 80, toneVolume: null, stopOnForceAlarm: false, forceThreshold: 400, warnEnabled: false });
+		expect(parseAlarmConfig(JSON.stringify({ toneVolume: 60 })).toneVolume).toBe(60);
+		expect(parseAlarmConfig(JSON.stringify({ toneVolume: 0 })).toneVolume).toBeNull();
 	});
 });

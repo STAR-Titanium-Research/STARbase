@@ -8,9 +8,11 @@ on:
     # the combination can silently stop the workflow from firing at all. The tag glob is already a
     # narrow enough trigger on its own.
 
-# Needed by the "Create GitHub Release" step; the default GITHUB_TOKEN is read-only for contents.
+# Least privilege: the build job (which runs npm/pip install scripts and third-party actions)
+# only needs to read. `contents: write` is granted only to the `publish` job below, which runs no
+# repository code.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -20,12 +22,19 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't leave the token in .git/config where `npm ci` and every later step can read it.
+          persist-credentials: false
 
       # Fail fast: a tag that outruns the manifest makes electron-builder emit a latest.yml
       # advertising the stale version, so electron-updater on deployed rigs never sees the release.
       - name: Verify tag matches package.json version
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          # Make a failing native command (npm, pip, electron-builder, ...) fail the step, not just
+          # the last one in a multi-line block.
+          $PSNativeCommandUseErrorActionPreference = $true
           $tagVersion = $env:GITHUB_REF_NAME -replace '^force-app-v', ''
           $pkgVersion = (Get-Content apps/force-app/desktop/package.json | ConvertFrom-Json).version
           if ($tagVersion -ne $pkgVersion) {
@@ -75,6 +84,10 @@ jobs:
       - name: Install backend dependencies
         working-directory: apps/force-app/backend
         run: |
+          $ErrorActionPreference = 'Stop'
+          # Make a failing native command (npm, pip, electron-builder, ...) fail the step, not just
+          # the last one in a multi-line block.
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m venv .venv
           # The nidaq extra is the pure-Python nidaqmx wrapper — installing and freezing it needs
           # no NI-DAQmx driver or hardware on the runner, but omitting it ships installers that
@@ -104,6 +117,10 @@ jobs:
       - name: Build the Electron installer
         working-directory: apps/force-app/desktop
         run: |
+          $ErrorActionPreference = 'Stop'
+          # Make a failing native command (npm, pip, electron-builder, ...) fail the step, not just
+          # the last one in a multi-line block.
+          $PSNativeCommandUseErrorActionPreference = $true
           npm run build
           npx electron-builder --win --publish never
 
@@ -126,17 +143,48 @@ jobs:
           path: apps/force-app/desktop/test-results
           retention-days: 7
 
-      # No workflow-run artifact for the installer: the "Create GitHub Release" step below
-      # already attaches the identical *.exe + latest.yml as Release assets (which don't count
-      # against the Actions storage quota), and that is what scripts/publish-release.ps1 and
-      # electron-updater both read. A second copy as a 90-day workflow artifact only burned
-      # ~150 MB of quota per release — it filled the account's Actions storage in ~15 builds.
+      # Hand the release files to the `publish` job, the only one allowed to write. They used to
+      # be attached in this job, but that meant the whole build (npm ci, PyInstaller, Playwright)
+      # ran with a `contents: write` token. One day of retention keeps the ~150 MB of quota
+      # use to a minimum (see the note in `publish`); the Release assets are the durable copy.
+      - name: Stage release files for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: force-app-release-files
+          path: |
+            apps/force-app/desktop/release/*.exe
+            apps/force-app/desktop/release/latest.yml
+          if-no-files-found: error
+          retention-days: 1
 
-      # scripts/publish-release.ps1 pulls with `gh release download <tag>`, which reads Release
-      # assets — a workflow-run artifact is not the same thing and is invisible to it. Creating a
-      # Release here is a plain GitHub API call; it does not push to the tailnet feed. Populating
-      # that feed stays a manual publish-release.ps1 run on d1-server.
+  # The only job with write access. It runs no repository code: it downloads the staged files and
+  # calls the GitHub API.
+  #
+  # scripts/publish-release.ps1 pulls with `gh release download <tag>`, which reads Release
+  # assets - a workflow-run artifact is not the same thing and is invisible to it. Creating a
+  # Release here is a plain GitHub API call; it does not push to the tailnet feed. Populating
+  # that feed stays a manual publish-release.ps1 run on d1-server. The Release attaches the same
+  # *.exe + latest.yml electron-updater reads; the staged artifact above expires after a day so it
+  # does not eat Actions storage quota.
+  publish:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download staged release files
+        uses: actions/download-artifact@v4
+        with:
+          name: force-app-release-files
+          path: release
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$env:GITHUB_REF_NAME" apps/force-app/desktop/release/*.exe apps/force-app/desktop/release/latest.yml --title "$env:GITHUB_REF_NAME" --notes "Automated build from CI."
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ls -l release
+          gh release create "$GITHUB_REF_NAME" release/*.exe release/latest.yml \
+            --title "$GITHUB_REF_NAME" --notes "Automated build from CI."

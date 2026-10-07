@@ -33,14 +33,17 @@ BEGIN;
 -- it: without it the rail renders empty. The third condition repairs a bar written
 -- by an earlier version of this script (which omitted the flag) without touching a
 -- bar curated in the UI, since the UI always writes the flag.
+-- Home is first and the Data Studio (content) follows the dashboards, the order migration
+-- 20261007000138 gives an existing bar (docs/superpowers/specs/2026-10-06-explorer-pages-design.md).
 UPDATE directus_settings SET module_bar = '[
-  {"type":"module","id":"content","enabled":true},
+  {"type":"module","id":"home","enabled":true},
   {"type":"module","id":"users","enabled":true},
   {"type":"module","id":"files","enabled":true},
   {"type":"module","id":"insights","enabled":true},
   {"type":"module","id":"d1-lab-dashboard","enabled":true},
   {"type":"module","id":"d1-force-dashboard","enabled":true},
   {"type":"module","id":"d1-fast-dashboard","enabled":true},
+  {"type":"module","id":"content","enabled":true},
   {"type":"module","id":"settings","enabled":true}
 ]' WHERE module_bar IS NULL
       OR module_bar::text NOT LIKE '%d1-lab-dashboard%'
@@ -49,62 +52,65 @@ UPDATE directus_settings SET module_bar = '[
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 1. COLLECTIONS  (icon, display_template, sort_field, sort, color, translations)
 -- ─────────────────────────────────────────────────────────────────────────────
+-- sort_field is NULL everywhere (#115). In Directus it is the drag-and-drop column: dragging a
+-- row rewrites that column with integers, so pointing it at a code, name or date can overwrite
+-- real data. The default list order comes from the global presets in section 1b instead.
 INSERT INTO directus_collections
     (collection, icon, display_template, sort_field, sort, color, translations)
 VALUES
     ('materials',
-     'science', '{{common_name}} ({{alloy_code}})', 'common_name', 10, '#4CAF50',
+     'science', '{{common_name}} ({{alloy_code}})', NULL, 10, '#4CAF50',
      '[{"language":"en-US","translation":"Alloys / Materials","singular":"Alloy","plural":"Alloys"}]'),
     ('alloying_elements',
-     'colorize', '{{symbol}} – {{element_name}}', 'symbol', 20, '#2196F3',
+     'colorize', '{{symbol}} – {{element_name}}', NULL, 20, '#2196F3',
      '[{"language":"en-US","translation":"Alloying Elements","singular":"Element","plural":"Elements"}]'),
     ('physical_samples',
-     'inventory_2', '{{sample_code}} – {{nickname}}', 'sample_code', 30, '#9C27B0',
+     'inventory_2', '{{sample_code}} – {{nickname}}', NULL, 30, '#9C27B0',
      '[{"language":"en-US","translation":"Items","singular":"Item","plural":"Items"}]'),
     ('manufacturing_operations',
-     'precision_manufacturing', '{{pass_code}}', 'operation_date', 40, '#FF9800',
+     'precision_manufacturing', '{{pass_code}}', NULL, 40, '#FF9800',
      '[{"language":"en-US","translation":"Manufacturing Operations","singular":"Operation","plural":"Operations"}]'),
     ('equipment',
-     'build', '{{equipment_name}}', 'equipment_name', 50, '#607D8B',
+     'build', '{{equipment_name}}', NULL, 50, '#607D8B',
      '[{"language":"en-US","translation":"Machines / Equipment","singular":"Machine","plural":"Machines"}]'),
     ('tools',
-     'handyman', '{{tool_code}} – {{tool_name}}', 'tool_code', 60, '#795548',
+     'handyman', '{{tool_code}} – {{tool_name}}', NULL, 60, '#795548',
      '[{"language":"en-US","translation":"Tool Holders","singular":"Tool","plural":"Tools"}]'),
     ('insert_types',
-     'category', '{{type_code}}', 'type_code', 70, '#009688',
+     'category', '{{type_code}}', NULL, 70, '#009688',
      '[{"language":"en-US","translation":"Insert Types","singular":"Insert Type","plural":"Insert Types"}]'),
     ('tool_boxes',
-     'inventory_2', '{{tool_box_code}}', 'tool_box_code', 80, '#3F51B5',
+     'inventory_2', '{{tool_box_code}}', NULL, 80, '#3F51B5',
      '[{"language":"en-US","translation":"Insert Boxes","singular":"Insert Box","plural":"Insert Boxes"}]'),
     ('cutting_inserts',
-     'cut', '{{insert_code}}', 'insert_code', 90, '#F44336',
+     'cut', '{{insert_code}}', NULL, 90, '#F44336',
      '[{"language":"en-US","translation":"Cutting Inserts","singular":"Insert","plural":"Inserts"}]'),
     ('insert_edges',
-     'toggle_on', '{{edge_code}}', 'edge_code', 100, '#E91E63',
+     'toggle_on', '{{edge_code}}', NULL, 100, '#E91E63',
      '[{"language":"en-US","translation":"Insert Edges","singular":"Edge","plural":"Edges"}]'),
     ('manufacturing_methods',
-     'account_tree', '{{method_code}} – {{method_name}}', 'method_code', 110, '#00BCD4',
+     'account_tree', '{{method_code}} – {{method_name}}', NULL, 110, '#00BCD4',
      '[{"language":"en-US","translation":"Manufacturing Methods","singular":"Method","plural":"Methods"}]'),
     ('material_iso_classifications',
-     'label', '{{iso_code}} – {{description}}', 'iso_code', 120, '#8BC34A',
+     'label', '{{iso_code}} – {{description}}', NULL, 120, '#8BC34A',
      '[{"language":"en-US","translation":"ISO Material Classifications","singular":"ISO Class","plural":"ISO Classes"}]'),
     ('material_alloying_elements',
      'link', '{{material_id}}', NULL, 130, NULL, NULL),
     ('raw_stock_lots',
-     'inventory', '{{lot_code}}', 'lot_code', 140, '#FF5722',
+     'inventory', '{{lot_code}}', NULL, 140, '#FF5722',
      '[{"language":"en-US","translation":"Raw Stock Lots","singular":"Lot","plural":"Lots"}]'),
     ('projects',
-     'folder', '{{project_code}} – {{project_name}}', 'project_code', 150, '#673AB7',
+     'folder', '{{project_code}} – {{project_name}}', NULL, 150, '#673AB7',
      '[{"language":"en-US","translation":"Projects","singular":"Project","plural":"Projects"}]'),
     ('sample_genealogy',
      'device_hub', '{{id}}', NULL, 160, NULL, NULL),
     ('sample_stock_provenance',
      'link', '{{id}}', NULL, 170, NULL, NULL),
     ('test_sessions',
-     'analytics', '{{session_date}} – {{test_type}} ({{status}})', 'session_date', 175, '#00ACC1',
+     'analytics', '{{session_date}} – {{test_type}} ({{status}})', NULL, 175, '#00ACC1',
      '[{"language":"en-US","translation":"Test Sessions","singular":"Test Session","plural":"Test Sessions"}]'),
     ('audit_logs',
-     'history', '{{action_type}} on {{table_name}}', 'event_timestamp', 190, NULL, NULL),
+     'history', '{{action_type}} on {{table_name}}', NULL, 190, NULL, NULL),
     -- NOTE: per-type parameter tables were flattened into inline columns on the
     -- parent tables (migration 032). Their inline fields + conditions live in
     -- scripts/configure_inline_params.sql, which must be run after this file.
@@ -123,6 +129,19 @@ ON CONFLICT (collection) DO UPDATE SET
     sort             = EXCLUDED.sort,
     color            = COALESCE(EXCLUDED.color, directus_collections.color),
     translations     = COALESCE(EXCLUDED.translations, directus_collections.translations);
+
+-- Safety net for collections configured elsewhere (other scripts, the UI): a manual-sort
+-- column must be an integer. Clear any sort_field that points at anything else.
+UPDATE directus_collections AS dc
+SET sort_field = NULL
+WHERE dc.sort_field IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM information_schema.columns AS c
+      WHERE c.table_schema = 'public'
+        AND c.table_name = dc.collection
+        AND c.column_name = dc.sort_field
+        AND c.data_type IN ('smallint', 'integer', 'bigint')
+  );
 
 -- Hide junction / audit / param sub-collections from navigation
 UPDATE directus_collections
@@ -148,15 +167,136 @@ ON CONFLICT (collection) DO UPDATE SET
 UPDATE directus_collections SET "group"='inventory'
 WHERE collection IN ('physical_samples','tools','insert_types','cutting_inserts','tool_boxes','raw_stock_lots');
 
+-- ── 1b. Default list order (global presets) ──────────────────────────────────
+-- A preset with bookmark, user and role all NULL is a collection's global default view.
+-- Directus picks the most specific default: the user's own, then the role's, then this one.
+-- (The user's own appears as soon as they change the sort, columns or widths.)
+-- The code columns use the natural_sort collation (migration 116), so sorting on a code,
+-- here or by clicking its column header, orders 9 < 10 < 151 < 1000 and ...-F9 < ...-F10.
+--   codes          ascending by the code (samples and operations as in migration 085)
+--   names          ascending by the name or short code
+--   dated records  newest first
+-- Upsert: an existing global default keeps its columns, filter and layout; only the sort
+-- of its current layout is set. A missing one is created as a tabular view.
+CREATE TEMP TABLE d1_default_sort (collection TEXT PRIMARY KEY, sort JSONB NOT NULL) ON COMMIT DROP;
+INSERT INTO d1_default_sort (collection, sort) VALUES
+('physical_samples',             '["sample_code"]'),
+('manufacturing_operations',     '["pass_code"]'),
+('tools',                        '["tool_code"]'),
+('tool_boxes',                   '["tool_box_code"]'),
+('cutting_inserts',              '["insert_code"]'),
+('insert_edges',                 '["edge_code"]'),
+('raw_stock_lots',               '["lot_code"]'),
+('projects',                     '["project_code"]'),
+('materials',                    '["common_name"]'),
+('alloying_elements',            '["symbol"]'),
+('equipment',                    '["equipment_name"]'),
+('insert_types',                 '["type_code"]'),
+('manufacturing_methods',        '["method_code"]'),
+('material_iso_classifications', '["iso_code"]'),
+('test_sessions',                '["-session_date"]'),
+('audit_logs',                   '["-event_timestamp"]');
+
+UPDATE directus_presets AS p
+SET layout = coalesce(p.layout, 'tabular'),
+    layout_query = (
+        CASE WHEN jsonb_typeof(p.layout_query::jsonb) = 'object' THEN p.layout_query::jsonb ELSE '{}'::jsonb END
+        || jsonb_build_object(
+            coalesce(p.layout, 'tabular'),
+            CASE WHEN jsonb_typeof(p.layout_query::jsonb -> coalesce(p.layout, 'tabular')) = 'object'
+                 THEN p.layout_query::jsonb -> coalesce(p.layout, 'tabular') ELSE '{}'::jsonb END
+            || jsonb_build_object('sort', d.sort))
+    )::json
+FROM d1_default_sort AS d
+WHERE p.collection = d.collection
+  AND p.bookmark IS NULL AND p."user" IS NULL AND p.role IS NULL;
+
+INSERT INTO directus_presets (bookmark, "user", role, collection, layout, layout_query)
+SELECT NULL, NULL, NULL, d.collection, 'tabular',
+       jsonb_build_object('tabular', jsonb_build_object('sort', d.sort))::json
+FROM d1_default_sort AS d
+WHERE NOT EXISTS (
+    SELECT 1 FROM directus_presets AS p
+    WHERE p.collection = d.collection
+      AND p.bookmark IS NULL AND p."user" IS NULL AND p.role IS NULL
+);
+
 -- ── Global bookmarks ──────────────────────────────────────────────────────────
 -- Inventory is a single full list (no split); Manufacturing Operations is split
 -- into the two most common families: Machining and FAST. (user & role NULL = global)
+-- A bookmark only uses its own sort (never the default preset's), so each one sets it.
+-- "Samples" is the view the d1-home module links to (resolved by name, not by id). It is
+-- updated in place, so a filter or columns curated in the UI survive a re-run.
 DELETE FROM directus_presets
 WHERE collection IN ('physical_samples','manufacturing_operations')
-  AND "user" IS NULL AND role IS NULL AND bookmark IS NOT NULL;
-INSERT INTO directus_presets (bookmark, "user", role, collection, filter, layout, icon, color) VALUES
-('Machining', NULL, NULL, 'manufacturing_operations', '{"process_category":{"_eq":"machining"}}', 'tabular', 'precision_manufacturing', '#FF9800'),
-('FAST',      NULL, NULL, 'manufacturing_operations', '{"method_id":{"method_code":{"_eq":"MF"}}}', 'tabular', 'local_fire_department',   '#F44336');
+  AND "user" IS NULL AND role IS NULL AND bookmark IS NOT NULL
+  AND NOT (collection = 'physical_samples' AND bookmark = 'Samples')
+  -- the saved filters below (migration 135) are kept as they are, not recreated
+  AND (collection, bookmark) NOT IN (
+      ('manufacturing_operations', 'My operations'),
+      ('manufacturing_operations', 'FAST runs, last 7 days'),
+      ('manufacturing_operations', 'Missing outcome'),
+      ('physical_samples', 'My samples'),
+      ('physical_samples', 'No location')
+  );
+INSERT INTO directus_presets (bookmark, "user", role, collection, filter, layout, layout_query, icon, color) VALUES
+('Machining', NULL, NULL, 'manufacturing_operations', '{"process_category":{"_eq":"machining"}}', 'tabular', '{"tabular":{"sort":["pass_code"]}}', 'precision_manufacturing', '#FF9800'),
+('FAST',      NULL, NULL, 'manufacturing_operations', '{"method_id":{"method_code":{"_eq":"MF"}}}', 'tabular', '{"tabular":{"sort":["pass_code"]}}', 'local_fire_department',   '#F44336');
+
+UPDATE directus_presets AS p
+SET layout = coalesce(p.layout, 'tabular'),
+    layout_query = (
+        CASE WHEN jsonb_typeof(p.layout_query::jsonb) = 'object' THEN p.layout_query::jsonb ELSE '{}'::jsonb END
+        || jsonb_build_object(
+            coalesce(p.layout, 'tabular'),
+            CASE WHEN jsonb_typeof(p.layout_query::jsonb -> coalesce(p.layout, 'tabular')) = 'object'
+                 THEN p.layout_query::jsonb -> coalesce(p.layout, 'tabular') ELSE '{}'::jsonb END
+            || '{"sort":["sample_code"]}'::jsonb)
+    )::json
+WHERE p.collection = 'physical_samples' AND p.bookmark = 'Samples'
+  AND p."user" IS NULL AND p.role IS NULL;
+INSERT INTO directus_presets (bookmark, "user", role, collection, layout, layout_query, icon, color)
+SELECT 'Samples', NULL, NULL, 'physical_samples', 'tabular', '{"tabular":{"sort":["sample_code"]}}', 'science', '#9C27B0'
+WHERE NOT EXISTS (
+    SELECT 1 FROM directus_presets AS p
+    WHERE p.collection = 'physical_samples' AND p.bookmark = 'Samples'
+      AND p."user" IS NULL AND p.role IS NULL
+);
+
+-- Saved filters (migration 135): "mine" goes through the person record
+-- (owner_person_id -> people.user_id = $CURRENT_USER). Each is inserted only when missing, so a
+-- filter or columns curated in the UI survive a re-run, like "Samples" above. The clean-up
+-- DELETE above spares these names; the test_sessions ones are never touched by it.
+INSERT INTO directus_presets (bookmark, "user", role, collection, filter, layout, layout_query, icon, color)
+SELECT v.bookmark, NULL, NULL, v.collection, v.filter::json, 'tabular', v.layout_query::json, v.icon, v.color
+FROM (VALUES
+    ('manufacturing_operations', 'My operations',
+     '{"_and":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}]}',
+     '{"tabular":{"sort":["-operation_date"]}}', 'person', '#2196F3'),
+    ('manufacturing_operations', 'FAST runs, last 7 days',
+     '{"_and":[{"method_id":{"method_code":{"_eq":"MF"}}},{"operation_date":{"_gte":"$NOW(-7 days)"}}]}',
+     '{"tabular":{"sort":["-operation_date"]}}', 'date_range', '#F44336'),
+    ('manufacturing_operations', 'Missing outcome',
+     '{"_and":[{"outcome_notes":{"_empty":true}}]}',
+     '{"tabular":{"sort":["pass_code"]}}', 'rule', '#FFC107'),
+    ('test_sessions', 'Failed',
+     '{"_and":[{"status":{"_eq":"failed"}}]}',
+     '{"tabular":{"sort":["-session_date"]}}', 'error', '#F44336'),
+    ('test_sessions', 'Needs analysis',
+     '{"_and":[{"status":{"_eq":"processed"}}]}',
+     '{"tabular":{"sort":["-session_date"]}}', 'query_stats', '#FF9800'),
+    ('physical_samples', 'My samples',
+     '{"_and":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}]}',
+     '{"tabular":{"sort":["sample_code"]}}', 'person', '#2196F3'),
+    ('physical_samples', 'No location',
+     '{"_and":[{"location":{"_empty":true}}]}',
+     '{"tabular":{"sort":["sample_code"]}}', 'location_off', '#9E9E9E')
+) AS v(collection, bookmark, filter, layout_query, icon, color)
+WHERE NOT EXISTS (
+    SELECT 1 FROM directus_presets AS p
+    WHERE p.collection = v.collection AND p.bookmark = v.bookmark
+      AND p."user" IS NULL AND p.role IS NULL
+);
 
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -236,6 +376,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('physical_samples','location',           NULL,'input',NULL,'raw',NULL,false,false,20,'half',false,'[{"language":"en-US","translation":"Location"}]'),
 ('physical_samples','gauge_length_mm',  NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,12,'half',false,'[{"language":"en-US","translation":"Gauge length"}]'),
 ('physical_samples','gauge_width_mm',   NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,13,'half',false,'[{"language":"en-US","translation":"Gauge width"}]'),
+('physical_samples','report_button','alias,no-data','d1-report-button','{"label":"Generate sample PDF"}',NULL,NULL,false,false,0,'full',false,'[{"language":"en-US","translation":"Report"}]'),
 ('physical_samples','geometry_preview', 'alias,no-data','d1-geometry-preview',NULL,NULL,NULL,false,false,20,'half',false,'[{"language":"en-US","translation":"Shape Preview"}]'),
 ('physical_samples','owner',     'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,false,21,'half',false,'[{"language":"en-US","translation":"Owner"}]'),
 ('physical_samples','co_owners', 'm2m','list-m2m','{"template":"{{user_id.first_name}} {{user_id.last_name}}","junction_field":"user_id"}','related-values','{"template":"{{user_id.first_name}} {{user_id.last_name}}"}',false,false,22,'full',false,'[{"language":"en-US","translation":"Co-owners"}]'),
@@ -250,7 +391,9 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('physical_samples','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('physical_samples','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,40,'half',false,NULL),
 ('physical_samples','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,41,'half',false,NULL),
-('physical_samples','version',NULL,'input',NULL,'raw',NULL,true,true,42,'half',false,NULL);
+('physical_samples','version',NULL,'input',NULL,'raw',NULL,true,true,42,'half',false,NULL),
+-- Generated sort key (migration 085) kept for the Force App; hidden so it is not shown as a field.
+('physical_samples','code_sort',NULL,'input',NULL,'raw',NULL,true,true,900,'half',false,NULL);
 
 -- ── equipment ─────────────────────────────────────────────────────────────────
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
@@ -408,6 +551,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('manufacturing_operations','gcode_file',            'file','file',NULL,'file',NULL,false,true,18,'full',false,'[{"language":"en-US","translation":"G-code / NC Program File"}]'),
 -- Linked Data Files: native M2M file picker → browse the SMB archive in the File Library and attach files
 ('manufacturing_operations','data_files',             'm2m','files','{"template":"{{directus_files_id.filename_download}}"}','related-values','{"template":"{{directus_files_id.filename_download}}"}',false,true,19,'full',false,'[{"language":"en-US","translation":"Linked Data Files"}]'),
+('manufacturing_operations','report_button','alias,no-data','d1-report-button','{"label":"Generate operation PDF"}',NULL,NULL,false,false,0,'full',false,'[{"language":"en-US","translation":"Report"}]'),
 ('manufacturing_operations','data_files_open',        'alias,no-data','d1-archive-links','{"relationField":"data_files"}',NULL,NULL,false,false,20,'full',false,'[{"language":"en-US","translation":"Open / Copy Linked Files"}]'),
 -- (Typed process-parameter fields are inline on this table — see configure_inline_params.sql)
 -- Legacy / unused duplicate columns — registered hidden so they don't clutter the form
@@ -416,7 +560,9 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('manufacturing_operations','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('manufacturing_operations','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,30,'half',false,NULL),
 ('manufacturing_operations','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,31,'half',false,NULL),
-('manufacturing_operations','version',NULL,'input',NULL,'raw',NULL,true,true,32,'half',false,NULL);
+('manufacturing_operations','version',NULL,'input',NULL,'raw',NULL,true,true,32,'half',false,NULL),
+-- Generated sort key (migration 085); hidden so it is not shown as a field.
+('manufacturing_operations','code_sort',NULL,'input',NULL,'raw',NULL,true,true,900,'half',false,NULL);
 
 -- Reveal the G-code file picker only for machining & CNC operations (process_category = machining).
 UPDATE directus_fields
@@ -512,6 +658,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('test_sessions','plot_uris',            'cast-json','input-code','{"language":"json"}','raw',NULL,true,false,21,'full',false,'[{"language":"en-US","translation":"Plot URIs (auto)"}]'),
 -- (Typed test-parameter fields are inline on this table — see configure_inline_params.sql)
 ('test_sessions','data_files','m2m','files','{"template":"{{directus_files_id.filename_download}}"}','related-values','{"template":"{{directus_files_id.filename_download}}"}',false,false,31,'full',false,'[{"language":"en-US","translation":"Linked Data Files"}]'),
+('test_sessions','report_button','alias,no-data','d1-report-button','{"label":"Generate test PDF"}',NULL,NULL,false,false,0,'full',false,'[{"language":"en-US","translation":"Report"}]'),
 ('test_sessions','data_files_open','alias,no-data','d1-archive-links','{"relationField":"data_files"}',NULL,NULL,false,false,32,'full',false,'[{"language":"en-US","translation":"Open / Copy Linked Files"}]'),
 ('test_sessions','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('test_sessions','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,35,'half',false,NULL),

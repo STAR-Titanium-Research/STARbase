@@ -5,7 +5,7 @@
 // docs/superpowers/specs/2026-09-07-milling-path-models-and-polar-design.md #6.
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Cache } from './liveCache';
-import { buildPolar, type PolarParams, type PolarResult } from './polar';
+import { buildPolar, radialFrac, radialScale, type PolarParams, type PolarResult } from './polar';
 import { COLORMAPS } from './liveCloud';
 
 const props = withDefaults(defineProps<{
@@ -56,7 +56,9 @@ function draw() {
 	const cx = w / 2, cy = h / 2;
 	const radiusPx = Math.min(w, h) / 2 - 28;
 	const r = result.value;
-	const rMax = props.rMax ?? (r ? r.rMax * 1.05 || 1 : 1);
+	// Radial axis: centre = scale.lo (0, or the data minimum when negative), outer ring = scale.hi.
+	const scale = r && r.count > 0 ? radialScale(r.rMin, r.rMax, props.rMax) : radialScale(0, 1, props.rMax);
+	const unit = r?.unit ?? '';
 
 	// radial grid: 4 rings + spokes every 30deg
 	g.strokeStyle = 'rgba(148,163,184,0.35)'; g.fillStyle = 'rgba(148,163,184,0.7)';
@@ -64,6 +66,13 @@ function draw() {
 	for (let ring = 1; ring <= 4; ring++) {
 		const rr = (radiusPx * ring) / 4;
 		g.beginPath(); g.arc(cx, cy, rr, 0, Math.PI * 2); g.stroke();
+	}
+	// Zero ring, only when negative values pull the centre below 0: without it the viewer cannot
+	// tell a small positive value from a negative one.
+	if (scale.lo < 0 && scale.hi > 0) {
+		g.save(); g.setLineDash([4, 4]); g.strokeStyle = 'rgba(226,232,240,0.55)';
+		g.beginPath(); g.arc(cx, cy, radialFrac(0, scale) * radiusPx, 0, Math.PI * 2); g.stroke();
+		g.restore();
 	}
 	for (let deg = 0; deg < 360; deg += 30) {
 		const a = (deg * Math.PI) / 180;
@@ -99,7 +108,7 @@ function draw() {
 				if (!counts[b]) continue;
 				const mean = sums[b] / counts[b];
 				const phi = ((b + 0.5) / bins) * 2 * Math.PI;
-				const rr = Math.min(radiusPx, (mean / rMax) * radiusPx);
+				const rr = radialFrac(mean, scale) * radiusPx;
 				const x = cx + rr * Math.cos(phi), y = cy + rr * Math.sin(phi);
 				const [cr, cg, cb] = cm((mean - r.rMin) / span);
 				g.fillStyle = `rgb(${Math.round(cr * 255)},${Math.round(cg * 255)},${Math.round(cb * 255)})`;
@@ -107,7 +116,7 @@ function draw() {
 			}
 		} else {
 			for (let k = 0; k < r.count; k++) {
-				const rr = Math.min(radiusPx, (r.r[k] / rMax) * radiusPx);
+				const rr = radialFrac(r.r[k], scale) * radiusPx;
 				const x = cx + rr * Math.cos(r.phi[k]), y = cy + rr * Math.sin(r.phi[k]);
 				const [cr, cg, cb] = cm((r.r[k] - r.rMin) / span);
 				g.fillStyle = `rgb(${Math.round(cr * 255)},${Math.round(cg * 255)},${Math.round(cb * 255)})`;
@@ -122,6 +131,12 @@ function draw() {
 	const srcLabel = props.params.angle.source === 'tacho' ? 'angle: tacho'
 		: props.params.angle.source === 'force_vector' ? 'angle: atan2(Fy,Fx)' : 'angle: index pulse';
 	g.fillText(srcLabel, 8, h - 10);
+	// Radial-axis labels: the outer ring value always, and the centre value when it is not 0, so a
+	// negative-valued plot says what its centre means.
+	g.textAlign = 'left';
+	const fmtR = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(1) : v.toPrecision(2));
+	const u = unit ? ` ${unit}` : '';
+	g.fillText(scale.lo < 0 ? `radius: centre ${fmtR(scale.lo)}${u}, ring ${fmtR(scale.hi)}${u}, dashed = 0` : `radius: 0 – ${fmtR(scale.hi)}${u}`, 8, 14);
 	if (props.paneLabel) { g.textAlign = 'right'; g.fillText(props.paneLabel, w - 8, h - 10); }
 }
 

@@ -3,13 +3,20 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RecordClient } from './liveClient';
 import { channelColor } from './types';
 import { theme } from '../theme';
+import { DEFAULT_WINDOW_SEC, windowView } from './plotWindow';
+import { axisLabel, channelLabel, tachoMissingNote } from './tachoSignal';
 
-const props = defineProps<{ client: RecordClient; channels?: string[] }>();
+// windowSec is this plot's OWN view window (#105/#34): it slices that much out of the client's
+// retained trace history rather than drawing whatever happens to be retained.
+const props = withDefaults(defineProps<{ client: RecordClient; channels?: string[]; windowSec?: number }>(), { windowSec: DEFAULT_WINDOW_SEC });
 type Env = [number, number][];
 function envOf(key: string): Env {
 	const tr = props.client.trace;
 	return key === 'Fx' ? tr.fx : key === 'Fy' ? tr.fy : key === 'Fz' ? tr.fz : (tr.sub[key] ?? []);
 }
+// What the Tacho channel holds right now (live pulse train / replayed RPM / nothing): it changes
+// the axis title and the empty-plot message, so it is part of what draw() redraws on.
+const tachoKind = () => props.client.status.tachoKind;
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 let raf = 0;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -31,11 +38,15 @@ function resize() {
 	lastN = -1;   // force the next draw() past the unchanged-data skip so the resized canvas repaints
 }
 
-// Resolved once per draw (cheap relative to path-building below) rather than cached across theme
-// changes, since getComputedStyle already reflects the DOM's current [data-theme] attribute.
-function palette() {
+// Cached (#107): getComputedStyle forces a style recalculation, and this ran on every redraw of
+// every force plot — during replay, once per animation frame each. The colours only change with
+// the theme, and the theme watcher below drops the cache.
+type Palette = { bg: string; grid: string; axisLine: string; text: string; textFaint: string };
+let palCache: Palette | null = null;
+function palette(): Palette {
+	if (palCache) return palCache;
 	const s = getComputedStyle(document.documentElement);
-	return {
+	return palCache = {
 		bg: s.getPropertyValue('--plot-bg').trim() || '#0b1020',
 		grid: s.getPropertyValue('--border').trim() || 'rgba(255,255,255,0.06)',
 		axisLine: s.getPropertyValue('--border-2').trim() || 'rgba(255,255,255,0.2)',
@@ -57,7 +68,7 @@ function niceStep(range: number, ticks: number): number {
 // and on slower hardware it's enough sustained main-thread work to make the live view visibly
 // stop keeping up ("doesn't update") as a long cut goes on. Skipping frames where nothing changed
 // costs nothing lost (the plot did not change) and removes nearly all of that waste.
-let lastN = -1, lastT = NaN, lastSel = '';
+let lastN = -1, lastT = NaN, lastSel = '', lastW = NaN;
 function draw() {
 	raf = requestAnimationFrame(draw);
 	const c = canvasEl.value;
@@ -68,10 +79,11 @@ function draw() {
 	const tr = props.client.trace;
 	const n = tr.t.length;
 	const sel = props.channels ?? ['Fx', 'Fy', 'Fz'];
-	const selKey = sel.join(',');
+	const selKey = `${sel.join(',')}|${tachoKind()}|${props.client.status.tachoOk}`;
 	const lastPt = n ? tr.t[n - 1] : NaN;
-	if (n === lastN && lastPt === lastT && selKey === lastSel) return;
-	lastN = n; lastT = lastPt; lastSel = selKey;
+	// The window is part of the key: changing it re-slices data that has not changed.
+	if (n === lastN && lastPt === lastT && selKey === lastSel && props.windowSec === lastW) return;
+	lastN = n; lastT = lastPt; lastSel = selKey; lastW = props.windowSec;
 
 	const pal = palette();
 	const W = CW - ML - MR, H = CH - MT - MB;
@@ -79,17 +91,28 @@ function draw() {
 	ctx.fillStyle = pal.bg;
 	ctx.fillRect(0, 0, CW, CH);
 
-	if (n < 2) {
+	const view = windowView(tr.t, props.windowSec);
+	if (n < 2 || !view) {
 		ctx.fillStyle = pal.text; ctx.font = '12px system-ui';
 		ctx.fillText('waiting for data…', ML + 8, MT + H / 2);
 		return;
 	}
 
-	const t0 = tr.t[0], t1 = tr.t[n - 1];
+	// A fixed x-range exactly one window wide (plotWindow.ts), drawn from i0: the y-range scales
+	// to what is visible, not to the whole retained history.
+	const { i0, x0: t0, x1: t1 } = view;
 	const span = Math.max(1e-3, t1 - t0);
 	const series = sel.map((k) => [k, envOf(k)] as const).filter(([, arr]) => arr.length > 0);
+	const note = tachoMissingNote(sel, tachoKind(), props.client.status.tachoOk);
+	if (series.length === 0) {
+		// Nothing to draw for the selection (a replayed cut with no tacho, typically): say so rather
+		// than show empty axes under a legend entry.
+		ctx.fillStyle = pal.text; ctx.font = '12px system-ui'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+		ctx.fillText(note ?? 'no data for the selected channels', ML + 8, MT + H / 2);
+		return;
+	}
 	let lo = Infinity, hi = -Infinity;
-	for (const [, arr] of series) for (const [mn, mx] of arr) { if (mn < lo) lo = mn; if (mx > hi) hi = mx; }
+	for (const [, arr] of series) for (let i = i0; i < arr.length; i++) { const [mn, mx] = arr[i]; if (mn < lo) lo = mn; if (mx > hi) hi = mx; }
 	if (!isFinite(lo) || !isFinite(hi)) { lo = -1; hi = 1; }
 	const pad = 0.1 * (hi - lo || 1);
 	lo -= pad; hi += pad;
@@ -128,30 +151,37 @@ function draw() {
 	ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
 	ctx.fillText('Time (s)', ML + W / 2, CH - 2);
 	ctx.save(); ctx.translate(10, MT + H / 2); ctx.rotate(-Math.PI / 2);
-	ctx.textBaseline = 'middle'; ctx.fillText('Force (N)', 0, 0); ctx.restore();
+	ctx.textBaseline = 'middle'; ctx.fillText(axisLabel(sel, tachoKind()), 0, 0); ctx.restore();
+	if (note) { ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(note, ML + 8, MT + 4); }
 
 	// Zero line
 	if (lo < 0 && hi > 0) { ctx.strokeStyle = pal.axisLine; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(ML, yOf(0)); ctx.lineTo(ML + W, yOf(0)); ctx.stroke(); }
 
-	// Plot data
+	// Plot data, clipped to the plot area: i0 is one bin before the window's left edge.
+	ctx.save();
+	ctx.beginPath(); ctx.rect(ML, MT, W, H); ctx.clip();
 	for (const [key, arr] of series) {
 		const col = channelColor(key, theme.value) ?? '#94a3b8';
+		const m = Math.min(n, arr.length);
+		if (m - i0 < 1) continue;
 		ctx.beginPath();
-		for (let i = 0; i < n; i++) { const x = xOf(tr.t[i]); const y = yOf(arr[i][1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
-		for (let i = n - 1; i >= 0; i--) ctx.lineTo(xOf(tr.t[i]), yOf(arr[i][0]));
+		for (let i = i0; i < m; i++) { const x = xOf(tr.t[i]); const y = yOf(arr[i][1]); i > i0 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+		for (let i = m - 1; i >= i0; i--) ctx.lineTo(xOf(tr.t[i]), yOf(arr[i][0]));
 		ctx.closePath();
 		ctx.globalAlpha = 0.16; ctx.fillStyle = col; ctx.fill();
 		ctx.globalAlpha = 0.9; ctx.strokeStyle = col; ctx.lineWidth = 1.4;
 		ctx.beginPath();
-		for (let i = 0; i < n; i++) { const x = xOf(tr.t[i]); const y = yOf(arr[i][1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+		for (let i = i0; i < m; i++) { const x = xOf(tr.t[i]); const y = yOf(arr[i][1]); i > i0 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
 		ctx.stroke();
 	}
+	ctx.restore();
 	ctx.globalAlpha = 1;
 }
 
 // Theme toggle changes the resolved palette but not n/t/channels, so the unchanged-data skip in
 // draw() would otherwise leave the canvas on the old theme's colours until the next real update.
-watch(theme, () => { lastN = -1; });
+// applyTheme() sets the ref before the [data-theme] attribute, but this watcher runs after both.
+watch(theme, () => { lastN = -1; palCache = null; });
 
 onMounted(() => { resize(); window.addEventListener('resize', resize); ro = new ResizeObserver(resize); if (canvasEl.value) ro.observe(canvasEl.value); draw(); nextTick(resize); });
 onBeforeUnmount(() => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); ro?.disconnect(); });
@@ -162,7 +192,7 @@ onBeforeUnmount(() => { cancelAnimationFrame(raf); window.removeEventListener('r
 		<canvas ref="canvasEl"></canvas>
 		<div class="legend">
 			<span v-for="k in (channels ?? ['Fx', 'Fy', 'Fz'])" :key="k" class="lg" :style="{ color: channelColor(k, theme) }">
-				<i :style="{ background: channelColor(k, theme) }"></i>{{ k }}
+				<i :style="{ background: channelColor(k, theme) }"></i>{{ channelLabel(k, client.status.tachoKind) }}
 			</span>
 		</div>
 	</div>

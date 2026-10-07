@@ -8,7 +8,7 @@
 <script setup lang="ts">
 import { inject, computed, watch, ref, type Ref } from 'vue';
 
-const props = defineProps<{ value: string | null }>();
+const props = defineProps<{ value: string | null; primaryKey?: string | number | null }>();
 const emit = defineEmits<{ (e: 'input', value: string | null): void }>();
 
 // Directus injects the live form values as a Vue Ref. test_type is a scalar on
@@ -35,6 +35,9 @@ watch(
 	testType,
 	(t) => {
 		const cat = t ? TYPE_TO_CAT[t] ?? 'other' : null;
+		// A saved record's category is never cleared just because the form has no test type yet.
+		const existing = props.primaryKey != null && props.primaryKey !== '+';
+		if (cat === null && existing) return;
 		if (cat !== current.value) {
 			current.value = cat;
 			emit('input', cat);

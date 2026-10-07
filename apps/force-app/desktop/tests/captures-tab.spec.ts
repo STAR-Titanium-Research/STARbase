@@ -41,9 +41,9 @@ test('Settings > Local Captures lists what is on disk', async () => {
     await window.goto('app://force/settings?tab=captures');
     await expect(window.locator('.caps')).toBeVisible({ timeout: 15_000 });
 
-    // Cross-check the rendered list against the endpoint it is built from, so a rendering
+    // Cross-check the rendered list (first page, 200 rows) against the endpoint it is built from, so a rendering
     // regression can't pass by showing a plausible-looking but empty list.
-    const api = await fetch(`${cfg.recorderUrl}/captures/browse?limit=500`).then((r) => r.json());
+    const api = await fetch(`${cfg.recorderUrl}/captures/browse?limit=200`).then((r) => r.json());
     console.log(`[captures-tab] backend reports ${api.captures.length} captures, ${api.total_size_mb} MB`);
 
     await expect.poll(async () => window.locator('.caps .row').count(), { timeout: 15_000 })

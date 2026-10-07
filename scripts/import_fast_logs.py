@@ -10,7 +10,7 @@ Idempotent: each run is keyed by a deterministic `source_run_uid`
 (machine|date|time|batch); re-runs INSERT … ON CONFLICT DO NOTHING.
 
 Usage:
-    DATABASE_URL=postgres://d1:change_me@localhost:5432/d1_database \
+    DATABASE_URL=postgres://d1:$POSTGRES_PASSWORD@localhost:5432/d1_database \
         python scripts/import_fast_logs.py "FAST Data" [--dry-run]
 """
 

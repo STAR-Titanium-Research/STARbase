@@ -1,7 +1,7 @@
 <template>
 	<div class="d1-operation-code">
 		<v-input
-			:model-value="value"
+			:model-value="shownValue"
 			placeholder="auto-generated from the fields below…"
 			@update:model-value="onType"
 		>
@@ -17,7 +17,9 @@
 		</v-input>
 		<small class="hint">
 			{{ manual ? 'Manual override — click ↻ to regenerate.' : 'Auto-generated; type to override.' }}
+			<template v-if="hasPlaceholder"> The operation number is a preview; the database assigns the final one on save.</template>
 		</small>
+		<small v-if="previewError" class="hint error">{{ previewError }}</small>
 	</div>
 </template>
 
@@ -38,23 +40,48 @@ const isExistingItem = () => props.primaryKey != null && props.primaryKey !== '+
 const manual = ref<boolean>(!!props.value || isExistingItem());
 
 // --- resolve the input sample's code from sample_id ---
+// The operation number and the sintering MF number are assigned by the database when the record
+// is saved (trigger on manufacturing_operations). The interface composes the readable part of the
+// code and leaves {seq} / {mf} placeholders for the database to fill; the estimates below only
+// feed the on-screen preview. A failed lookup shows an error and a "?" -- never a made-up number.
+const SEQ = '{seq}';
+const MF = '{mf}';
 const sampleCode = ref<string | null>(null);
+const seqEstimate = ref<number | null>(null);
+const previewError = ref<string>('');
 let lastSampleId: string | null = null;
+let sampleReq = 0;
 const sampleId = computed<string | null>(() => values.value?.sample_id ?? null);
 watch(
 	sampleId,
 	async (id) => {
 		if (id === lastSampleId) return;
 		lastSampleId = id;
+		const req = ++sampleReq;
 		if (!id) {
 			sampleCode.value = null;
+			seqEstimate.value = null;
 			return;
 		}
 		try {
-			const res = await api.get(`/items/physical_samples/${id}`, { params: { fields: ['sample_code'] } });
+			const [res, agg] = await Promise.all([
+				api.get(`/items/physical_samples/${id}`, { params: { fields: ['sample_code'] } }),
+				isExistingItem()
+					? Promise.resolve(null)
+					: api.get('/items/manufacturing_operations', {
+							params: { filter: { sample_id: { _eq: id } }, aggregate: { max: 'operation_sequence' } },
+						}),
+			]);
+			if (req !== sampleReq) return; // a newer sample was picked meanwhile
 			sampleCode.value = res?.data?.data?.sample_code ?? null;
+			const m = agg ? Number(agg?.data?.data?.[0]?.max?.operation_sequence ?? 0) : null;
+			seqEstimate.value = m == null ? null : (Number.isFinite(m) ? m : 0) + 1;
+			previewError.value = '';
 		} catch {
+			if (req !== sampleReq) return;
 			sampleCode.value = null;
+			seqEstimate.value = null;
+			previewError.value = 'Could not read the sample or its operations - the preview number is unavailable.';
 		}
 	},
 	{ immediate: true },
@@ -78,21 +105,28 @@ function dateCode(v: unknown): string {
 	return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${String(d.getFullYear()).slice(-2)}`;
 }
 
-// Global running counter for a NEW sintering op — the next MF number after all
-// existing ones (mirrors the DD-MM-YY-MF{n} scheme the backfill applied). Fetched
-// once when the form is a new sintering record; null → fall back to the sequence.
-const sinterSeq = ref<number | null>(null);
+// Preview of the global sintering counter for a NEW sintering op: the next MF number after the
+// highest one in any sintering code. Preview only -- the database assigns the real {mf} number
+// (max+1 under a lock), so a reused or racing number can no longer be stored.
+const mfEstimate = ref<number | null>(null);
 watch(
 	() => values.value?.process_category,
 	async (cat) => {
-		if (cat !== 'sintering' || isExistingItem() || sinterSeq.value != null) return;
+		if (cat !== 'sintering' || isExistingItem() || mfEstimate.value != null) return;
 		try {
 			const res = await api.get('/items/manufacturing_operations', {
-				params: { filter: { process_category: { _eq: 'sintering' } }, aggregate: { count: '*' } },
+				params: { filter: { process_category: { _eq: 'sintering' } }, fields: ['pass_code'], limit: -1 },
 			});
-			const c = Number(res?.data?.data?.[0]?.count ?? 0);
-			sinterSeq.value = (Number.isFinite(c) ? c : 0) + 1;
-		} catch { sinterSeq.value = null; }
+			let max = 0;
+			for (const r of res?.data?.data ?? []) {
+				const m = /(?:^|-)MF(\d{1,9})(?:-|$)/.exec(r.pass_code ?? '');
+				if (m) max = Math.max(max, parseInt(m[1], 10));
+			}
+			mfEstimate.value = max + 1;
+		} catch {
+			mfEstimate.value = null;
+			previewError.value = 'Could not read the existing sintering codes - the MF number preview is unavailable.';
+		}
 	},
 	{ immediate: true },
 );
@@ -120,8 +154,11 @@ const autoCode = computed<string>(() => {
 	// two ops on the same sample never collide even with identical parameters. For
 	// machining this is the facing/roughing pass number; for other methods it's just
 	// the Nth operation on the sample.
+	// A number the user typed (a machining pass number) or a saved record's own number is used as is;
+	// for a new record with a sample the database assigns it, so the code carries a placeholder.
 	const seq = v.operation_sequence;
-	const seqStr = seq === '' || seq === null || seq === undefined ? '' : String(seq);
+	const typedSeq = seq === '' || seq === null || seq === undefined ? '' : String(seq);
+	const seqStr = typedSeq || (!isExistingItem() && sampleCode.value ? SEQ : '');
 
 	let token = '';
 	let parts: string[] = [];
@@ -137,8 +174,9 @@ const autoCode = computed<string>(() => {
 		// FAST/sintering ops usually have no sample link, so uniqueness comes from the
 		// date + a global counter:  DD-MM-YY-MF{NNNN}-{params}  (matches the backfill).
 		const dcode = dateCode(v.operation_date);
-		const nStr = sinterSeq.value != null ? String(sinterSeq.value) : seqStr;
-		const mf = `MF${nStr}`;
+		// A saved record keeps its MF number; a new one gets the database's next one.
+		const keptMf = isExistingItem() ? /(?:^|-)MF(\d{1,9})(?:-|$)/.exec(props.value ?? '')?.[1] : undefined;
+		const mf = `MF${keptMf ?? MF}`;
 		const sparams = [
 			num(v.sintering_max_temp_celsius) && `${num(v.sintering_max_temp_celsius)}C`,
 			num(v.sintering_max_force_kn) && `${num(v.sintering_max_force_kn)}kN`,
@@ -167,7 +205,7 @@ const autoCode = computed<string>(() => {
 			num(v.am_layer_thickness_mm) && `${num(v.am_layer_thickness_mm)}mm`,
 		].filter(Boolean) as string[];
 	} else {
-		return seqStr ? `${sample}-${seqStr}` : sample; // unknown category — sample + seq
+		return sample && seqStr ? `${sample}-${seqStr}` : sample; // unknown category — sample + seq
 	}
 
 	let code = sample;
@@ -175,6 +213,16 @@ const autoCode = computed<string>(() => {
 	if (code && parts.length) code = `${code}-${parts.join('_')}`;
 	return code;
 });
+
+// What the user sees: placeholders replaced by the preview numbers ("?" when unavailable).
+function preview(code: string | null | undefined): string {
+	if (!code) return code ?? '';
+	return code
+		.split(SEQ).join(seqEstimate.value != null ? String(seqEstimate.value) : '?')
+		.split(MF).join(mfEstimate.value != null ? String(mfEstimate.value) : '?');
+}
+const hasPlaceholder = computed(() => !manual.value && /\{(seq|mf)\}/.test(props.value ?? autoCode.value ?? ''));
+const shownValue = computed(() => preview(props.value));
 
 // While in auto mode, keep the field in sync with the composed code.
 watch(
@@ -187,9 +235,15 @@ watch(
 );
 
 function onType(val: string | null) {
+	// Typing the preview back (or clearing the box) returns to auto mode, which keeps the
+	// placeholders so the database still assigns the numbers; anything else is a manual override.
+	if (!val || val === preview(autoCode.value)) {
+		manual.value = false;
+		emit('input', val ? autoCode.value : val);
+		return;
+	}
+	manual.value = true;
 	emit('input', val);
-	// Empty input drops back into auto mode; anything else is a manual override.
-	manual.value = !!val && val !== autoCode.value;
 }
 
 function regenerate() {
@@ -207,5 +261,6 @@ function regenerate() {
 	color: var(--theme--foreground-subdued, #999);
 	font-style: italic;
 }
+.hint.error { color: var(--theme--danger, #c62828); font-style: normal; }
 .v-icon.active { color: var(--theme--primary, #1565c0); }
 </style>

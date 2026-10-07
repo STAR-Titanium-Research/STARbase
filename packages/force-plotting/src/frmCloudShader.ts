@@ -20,7 +20,7 @@
 //      sequential `break` exactly, without needing cross-vertex ordering in the shader.
 // If a future cache with a genuinely noisy/decelerating tacho breaks assumption 1, the symptom
 // is a scattering of points beyond where the CPU path would have stopped; re-run the probe.
-import type { Cache } from './liveCache';
+import { type Cache, idxOfTime, normStride } from './liveCache';
 import type { SpeedMode, CloudChannel } from './liveCloud';
 
 export const SPEED_MODE_CODE: Record<SpeedMode, number> = { measured: 0, rpm: 1, vc: 2 };
@@ -120,14 +120,46 @@ export function spiralUniformValues(p: SpiralUniformParams) {
 	};
 }
 
+// The crop-start anchor every spiral position is measured from (r = 0 at the crop-start sample):
+// t and revs at that sample. One copy for the shader uniforms (FrmCloud's updateGpuCropUniforms)
+// and the CPU mirrors below, so a ring or pick can't drift from what the shader draws.
+export function spiralAnchor(c: Cache, cropStartSec: number): { tCs: number; revsCs: number } {
+	const cs = idxOfTime(c.t, cropStartSec);
+	return { tCs: cs >= 0 ? c.t[cs] : 0, revsCs: cs >= 0 ? c.revs[cs] : 0 };
+}
+
 // Pure JS mirror of the vertex shader's position math — same formula, same branches, same
 // discard conditions — so it can be unit-tested against buildTurningSpiral's CPU output without
 // a GPU. Keep this and TURNING_SPIRAL_VERT's `main()` in lockstep by construction: if one
 // changes, re-derive the other from this file's own doc comment, don't hand-edit both separately.
 export function computeSpiralVertexJS(
 	aT: number, aRevs: number, p: SpiralUniformParams, cropStart: number, cropEnd: number,
-): { x: number; y: number; rho: number; visible: boolean } {
-	const u = spiralUniformValues(p);
+): SpiralPos {
+	const out: SpiralPos = { x: 0, y: 0, rho: 0, visible: false };
+	spiralPositionInto(spiralUniformValues(p), aT, aRevs, cropStart, cropEnd, out);
+	return out;
+}
+
+export interface SpiralPos { x: number; y: number; rho: number; visible: boolean }
+export type SpiralUniforms = ReturnType<typeof spiralUniformValues>;
+
+// The vertex shader's position math itself (computeSpiralVertexJS is a thin wrapper), split out so
+// a pick can run it over millions of samples with nothing allocated per call: `u` is
+// spiralUniformValues() computed ONCE, and the result goes into the caller's `out`. This is the
+// function to keep in lockstep with TURNING_SPIRAL_VERT's `main()`.
+export function spiralPositionInto(
+	u: SpiralUniforms, aT: number, aRevs: number, cropStart: number, cropEnd: number, out: SpiralPos,
+): void {
+	spiralPlaceInto(spiralRadiusInto(u, aT, aRevs, cropStart, cropEnd, out), out);
+}
+
+// The first half of spiralPositionInto: everything up to (not including) the cos/sin. Sets
+// out.rho and out.visible and returns r (revolutions since the crop start), so a pick can reject a
+// sample on its radius alone (cloudPick's cull) before paying for the trig and the projection.
+// spiralPlaceInto finishes the job; the two together ARE the shader's `main()`.
+export function spiralRadiusInto(
+	u: SpiralUniforms, aT: number, aRevs: number, cropStart: number, cropEnd: number, out: SpiralPos,
+): number {
 	let visible = aT >= cropStart && aT <= cropEnd;
 	let rho = u.uRho0, r = 0;
 	if (u.uSpeedMode === 2) {
@@ -142,8 +174,35 @@ export function computeSpiralVertexJS(
 		rho = u.uRho0 - u.uFeed * r;
 		if (rho < u.uInnerR) visible = false;
 	}
+	out.rho = rho; out.visible = visible;
+	return r;
+}
+
+// The second half: x, y from out.rho and r (the shader's theta = 2*PI*r).
+export function spiralPlaceInto(r: number, out: SpiralPos): void {
 	const theta = 2 * Math.PI * r;
-	return { x: rho * Math.cos(theta), y: rho * Math.sin(theta), rho, visible };
+	out.x = out.rho * Math.cos(theta); out.y = out.rho * Math.sin(theta);
+}
+
+// The stride buildStaticAttributes applies (and so the one a pick must replay).
+
+// The samples the GPU draws for a crop window, as a run of phase-0 indices i = (k0 + j) * stride,
+// j < n: every stride-th cache sample from index 0 (buildStaticAttributes) whose t lies in
+// [cropStart, cropEnd] (the shader's crop test). A pick walks these instead of building a
+// cs-anchored path (~20 B per sample), so it looks at exactly the points on screen.
+export function phase0Samples(
+	c: Cache, cropStart: number, cropEnd: number, stride: number,
+): { k0: number; n: number; stride: number } {
+	const st = normStride(stride);
+	const none = { k0: 0, n: 0, stride: st };
+	if (!c.N || !(cropEnd >= cropStart)) return none;
+	const lo = idxOfTime(c.t, cropStart);                  // first t >= cropStart (clamped to the last sample)
+	if (c.t[lo] < cropStart) return none;                  // the whole cache is before the crop
+	let hi = idxOfTime(c.t, cropEnd);                      // first t >= cropEnd ...
+	if (c.t[hi] > cropEnd) hi--;                           // ... so step back to the last t <= cropEnd
+	if (hi < lo) return none;
+	const k0 = Math.ceil(lo / st), k1 = Math.floor(hi / st);
+	return k1 < k0 ? none : { k0, n: k1 - k0 + 1, stride: st };
 }
 
 // Decimate the FULL cache (index 0..N, not just the crop window) into the static per-vertex
@@ -162,7 +221,7 @@ export function computeSpiralVertexJS(
 export function buildStaticAttributes(
 	c: Cache, channel: CloudChannel, stride: number,
 ): { aT: Float32Array; aRevs: Float32Array; aVal: Float32Array; count: number } {
-	const st = Math.max(1, Math.round(stride) || 1);
+	const st = normStride(stride);
 	const channelArr = (c as any)[channel] as Float32Array | undefined;
 	const n = Math.ceil(c.N / st);
 	const aT = new Float32Array(n), aRevs = new Float32Array(n), aVal = new Float32Array(n);
@@ -179,3 +238,13 @@ export function buildStaticAttributes(
 // DiagScatter.vue's) to be consolidated. It bakes every ColorScale parameter except the
 // displayed-range filter (steps, symmetrical, always-show-zero, log scale) into the LUT bytes,
 // so TURNING_SPIRAL_VERT above only ever needed the one addition: the uDisp/uGreyOOR branch.
+
+// Where cache sample i sits on a turning spiral cropped to [cropStart, cropEnd] -- exactly where
+// the shader draws it -- in O(1) after the O(log N) anchor. FrmCloud's ring and reveal use it, so
+// they never build and hold a full path (FrmOctree caches the uniforms and calls spiralPositionInto).
+export function spiralPointAt(
+	c: Cache, p: Omit<SpiralUniformParams, 'tCs' | 'revsCs'>, cropStart: number, cropEnd: number, i: number,
+	anchor = spiralAnchor(c, cropStart),
+) {
+	return computeSpiralVertexJS(c.t[i], c.revs[i], { ...p, ...anchor }, cropStart, cropEnd);
+}

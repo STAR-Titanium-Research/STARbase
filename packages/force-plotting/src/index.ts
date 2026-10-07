@@ -10,6 +10,10 @@ export { default as SpectrumView } from './SpectrumView.vue';
 export { computeSignalStats } from './signalStats';
 export type { SignalStats } from './signalStats';
 export * from './frmExport';
+export { buildChartSvg, saveChartImage, svgToPngBlob } from './chartExport';
+export type { ChartSnapshot, ChartSvgOpts } from './chartExport';
+export { toCsv, downloadText, copyText, safeFilePart } from './csvExport';
+export type { CsvColumn } from './csvExport';
 
 export { default as FrmCloud } from './FrmCloud.vue';
 export { default as FrmOctree } from './FrmOctree.vue';
@@ -31,7 +35,15 @@ export type { Histogram, HistogramAccumulator } from './histogram';
 export { default as ColorBar } from './ColorBar.vue';
 export { default as ColorScaleEditor } from './ColorScaleEditor.vue';
 export { default as PlotModeFlyout } from './PlotModeFlyout.vue';
-export { buildPath, alignRhoToBuckets } from './path';
+export { default as ContextMenu } from './ContextMenu.vue';
+export {
+	pickNearest, pointInfo, formatPointInfo, recentreWindow, findNearestPathIndex,
+	octreePathParams,
+} from './cloudPick';
+export type { PointInfo, PointMenuEvent } from './cloudPick';
+export { parseOctreeBuild, mappableWindow, cacheCoversBuild } from './octreeBuild';
+export type { OctreeBuild } from './octreeBuild';
+export { buildPath, alignRhoToBuckets, alignMeasuredRho, measuredRhoSpan } from './path';
 export type {
 	PathKind, PathParams, PathWindow, PathBounds, PathResult,
 	TurningSpiralParams, LinearFeedParams, MachineXyzParams,
@@ -98,3 +110,13 @@ export type { AlignedDiff } from './compare';
 
 export { diagnose, activeFindings, worstSeverity, CROP_COVERAGE_MIN } from './metadataDoctor';
 export type { Finding, Dismissal, DoctorSeverity, DoctorFix } from './metadataDoctor';
+
+export {
+	BUCKETS, BUCKET_LABEL, attachCampaigns, bucketOf, countByBucket, filterRows, groupRows, windowGroups, toPickerRow,
+} from './diagPicker';
+export type { CampaignInfo, DiagState, PickerBucket, PickerRow, PickerGroup, GroupBy } from './diagPicker';
+export { updateRecipe } from './diagRecipes';
+export { useModalFocus } from './modalFocus';
+export { exportRecipeJson, parseRecipeJson, validateRecipe, isModifiedSinceLoaded } from './recipeIo';
+export { buildPatch, planBatch, runBatch, summaryLine, builtWithRecipe } from './diagBatch';
+export type { BatchRow, BatchItem, BatchSummary, BatchProgress, BatchAction } from './diagBatch';

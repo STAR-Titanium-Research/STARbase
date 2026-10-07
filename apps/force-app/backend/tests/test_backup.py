@@ -18,7 +18,8 @@ def test_load_config_defaults(tmp_path):
     cfg = load_config(str(tmp_path))
     assert cfg["enabled"] is False
     assert cfg["server_url"] == ""
-    assert cfg["retention_hours"] == 12
+    # Retention belongs to the server (#93) — the client no longer has a setting for it.
+    assert "retention_hours" not in cfg
 
 
 def test_save_and_load_config(tmp_path):
@@ -26,16 +27,27 @@ def test_save_and_load_config(tmp_path):
     cfg = load_config(str(tmp_path))
     assert cfg["enabled"] is True
     assert cfg["server_url"] == "http://backuphost:8210"
-    assert cfg["retention_hours"] == 12  # default preserved
 
 
 def test_save_config_merges(tmp_path):
     save_config(str(tmp_path), {"enabled": True, "server_url": "http://host1:8210"})
-    save_config(str(tmp_path), {"retention_hours": 24})
+    save_config(str(tmp_path), {"enabled": False})
     cfg = load_config(str(tmp_path))
-    assert cfg["enabled"] is True  # preserved from first save
-    assert cfg["server_url"] == "http://host1:8210"
-    assert cfg["retention_hours"] == 24
+    assert cfg["enabled"] is False
+    assert cfg["server_url"] == "http://host1:8210"  # preserved from first save
+
+
+def test_old_config_with_retention_hours_still_loads(tmp_path, isolate_backup_config):
+    # A config file written by an older build still carries the dead retention_hours key.
+    isolate_backup_config.write_text(
+        json.dumps({"enabled": True, "server_url": "http://h:8210", "retention_hours": 48})
+    )
+    cfg = load_config(str(tmp_path))
+    assert cfg == {"enabled": True, "server_url": "http://h:8210"}
+    # ...and a save neither keeps the old key nor accepts a new one.
+    saved = save_config(str(tmp_path), {"retention_hours": 5})
+    assert "retention_hours" not in saved
+    assert "retention_hours" not in json.loads(isolate_backup_config.read_text())
 
 
 # ---- BackupStreamer ----

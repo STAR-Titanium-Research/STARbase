@@ -3,22 +3,37 @@
 // sparkline of recent RPM. Reads the live stream's rpm each frame (no per-sample reactivity).
 import { computed, ref, watch } from 'vue';
 import { useWorkspace } from '../workspace';
+import { createStableMax } from '../rpmScale';
 
 const w = useWorkspace();
 const hist = ref<number[]>([]);
 const MAXH = 160;
-watch(() => w.client.frameSeq.value, () => {
-	if (w.st.state !== 'recording') return;
-	hist.value.push(w.st.rpm);
-	if (hist.value.length > MAXH) hist.value.shift();
-});
 
 const rpm = computed(() => w.st.rpm || 0);
 // Resolved by the workspace: the replayed cut's own spindle speed in playback, the configured
 // target when recording — so a replay is measured against itself, not against whatever number
 // happened to be left in the recording form.
 const target = computed(() => w.rpmTarget.value || 0);
-const max = computed(() => Math.max(target.value * 1.25, rpm.value * 1.1, 100));
+// #67: a stable full-scale (rpmScale.ts) — nice steps, grows at once, shrinks only after a
+// sustained drop — instead of max(target*1.25, rpm*1.1, 100) recomputed every frame, which
+// rescaled the gauge and sparkline with every bit of RPM noise. The sparkline uses the same scale.
+const scale = createStableMax({ floor: 100 });
+const max = ref(scale.value);
+function rescale() { max.value = scale.update(Math.max(target.value * 1.25, rpm.value * 1.1), performance.now()); }
+watch(target, rescale, { immediate: true });
+
+// Status is 'recording' while recording AND while a replay is playing (engine.ts), so this fills
+// in both. Fewer samples than before (a reset or a backward scrub) starts the history afresh
+// rather than splicing the old run's tail onto the new one.
+let lastN = 0;
+watch(() => w.client.frameSeq.value, () => {
+	if (w.st.nTotal < lastN) { hist.value = []; scale.reset(); }
+	lastN = w.st.nTotal;
+	rescale();
+	if (w.st.state !== 'recording') return;
+	hist.value.push(w.st.rpm);
+	if (hist.value.length > MAXH) hist.value.shift();
+});
 const overTarget = computed(() => target.value > 0 && rpm.value > target.value * 1.02);
 
 // Gauge geometry: a 240° arc from -120°..+120°.
@@ -42,8 +57,8 @@ const targetTick = computed(() => ({ a: polar(targetDeg.value, R + 2), b: polar(
 const spark = computed(() => {
 	const h = hist.value;
 	if (h.length < 2) return '';
-	const mx = Math.max(...h, target.value, 1);
-	return h.map((v, i) => `${(i / (h.length - 1)) * 200},${38 - (v / mx) * 34}`).join(' ');
+	const mx = max.value;
+	return h.map((v, i) => `${(i / (h.length - 1)) * 200},${38 - (Math.min(v, mx) / mx) * 34}`).join(' ');
 });
 </script>
 

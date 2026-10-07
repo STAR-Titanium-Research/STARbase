@@ -5,6 +5,7 @@
 // spectrum (power, dB). Mirrors the live recording views so plotting stays at feature parity.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { type FilterChain, fetchSpectrogram } from './filterChain';
+import { debounce } from './debounce';
 
 const props = defineProps<{
 	cacheFileId: string | null | undefined;
@@ -75,15 +76,20 @@ function palette() {
 // the host toggles directly instead — cheap, and correct regardless of which app embeds this.
 let themeObserver: MutationObserver | null = null;
 
+// A newer load aborts the one still in flight (so the server stops an STFT nobody will look at) and
+// stale results are dropped by reqId either way.
+let loadAbort: AbortController | null = null;
 async function load() {
-	if (!props.cacheFileId) { grid.value = null; return; }
+	loadAbort?.abort(); loadAbort = null;
+	if (!props.cacheFileId) { ++reqId; grid.value = null; loading.value = false; return; }
 	const mine = ++reqId;
+	const ac = new AbortController(); loadAbort = ac;
 	loading.value = true; err.value = null;
 	try {
-		const g = await fetchSpectrogram(props.cacheFileId, props.chain, props.axis);
+		const g = await fetchSpectrogram(props.cacheFileId, props.chain, props.axis, ac.signal);
 		if (mine === reqId) { grid.value = g; }
 	} catch (e: any) {
-		if (mine === reqId) { err.value = e?.message || 'spectrogram failed'; grid.value = null; }
+		if (mine === reqId && !ac.signal.aborted) { err.value = e?.message || 'spectrogram failed'; grid.value = null; }
 	} finally {
 		if (mine === reqId) { loading.value = false; draw(); }
 	}
@@ -198,7 +204,7 @@ function draw() {
 		ctx.imageSmoothingEnabled = true;
 		ctx.drawImage(off, 0, 0, nT, nF, ML, MT, plotW, plotH);
 		drawAxes(W, H, plotW, plotH, g.t[0], g.t[nT - 1], 0, fMax);
-		label(`${props.axis} spectrogram`, stroke);
+		label(`${props.axis} spectrogram · Hz vs s · colour dB`, stroke);
 		drawHover(W, H);
 		return;
 	}
@@ -215,7 +221,7 @@ function draw() {
 		}
 		ctx.stroke();
 		drawAxes(W, H, plotW, plotH, 0, fMax, -80, 0);
-		label(`${props.axis} power (dB)`, stroke);
+		label(`${props.axis} power (dB) vs Hz`, stroke);
 		drawHover(W, H);
 		return;
 	}
@@ -249,7 +255,7 @@ function draw() {
 		ctx.globalAlpha = 1; ctx.textAlign = 'center'; ctx.fillText(fmtTick(v), x, H - 3);
 	}
 	ctx.textAlign = 'left';
-	label(`${props.axis} waterfall`, stroke);
+	label(`${props.axis} waterfall · Hz, stacked over time`, stroke);
 	drawHover(W, H);
 }
 
@@ -265,14 +271,28 @@ function label(text: string, col: string) {
 	ctx.textAlign = 'left';
 }
 
-const key = () => `${props.cacheFileId}|${props.axis}|${props.mode === 'spectrogram' ? 's' : props.mode}|${JSON.stringify(props.chain)}`;
-watch(key, load);
+// Every keystroke in the filter chain editor changes `chain` ("2000" is four edits, 12 requests across
+// the three axes, and the intermediate values 422). So a chain-only change waits for the typing to
+// settle; a different file, axis or mode is a deliberate switch and loads at once.
+const baseKey = () => `${props.cacheFileId}|${props.axis}|${props.mode === 'spectrogram' ? 's' : props.mode}`;
+const key = () => `${baseKey()}|${JSON.stringify(props.chain)}`;
+const CHAIN_DEBOUNCE_MS = 400;
+const loadSoon = debounce(() => { void load(); }, CHAIN_DEBOUNCE_MS);
+let lastBase = baseKey();
+watch(key, () => {
+	const base = baseKey();
+	if (base !== lastBase) { lastBase = base; loadSoon.cancel(); void load(); }
+	else loadSoon();
+});
 onMounted(() => {
 	load(); resize(); ro = new ResizeObserver(resize); if (canvasEl.value) ro.observe(canvasEl.value);
 	themeObserver = new MutationObserver(draw);
 	themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 });
-onBeforeUnmount(() => { ro?.disconnect(); themeObserver?.disconnect(); });
+onBeforeUnmount(() => {
+	ro?.disconnect(); themeObserver?.disconnect();
+	loadSoon.cancel(); loadAbort?.abort(); loadAbort = null; ++reqId;   // nothing may land after unmount
+});
 </script>
 
 <template>

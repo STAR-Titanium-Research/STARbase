@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy to config.json (gitignored) on a machine that can see the rig's files. Every key is optional.",
+  "captures_root": "D:\\force-captures",
+  "log_dir": "C:\\Users\\<you>\\AppData\\Roaming\\force-app-desktop\\logs",
+  "config_dir": "C:\\Users\\<you>\\AppData\\Local\\force-app",
+  "backend_url": "http://localhost:8200",
+  "backup_server_url": "https://d1-server.<tailnet>.ts.net/backup-ingest",
+  "directus_url": "https://d1-server.<tailnet>.ts.net"
+}

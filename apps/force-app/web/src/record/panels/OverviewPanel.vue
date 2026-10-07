@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { useWorkspace } from '../workspace';
 import { RAW_BYTES_PER_SAMPLE, RAW_COLUMNS } from '../liveClient';
+import { railedNames, shownRailed } from '../railing';
 import { formatBandwidth, formatDuration, formatMegabytes } from '../../format';
 const w = useWorkspace();
 const st = w.st;
@@ -27,6 +28,8 @@ const bandwidth = computed(() => {
 	return formatBandwidth((st.nTotal * ROW_BYTES) / st.tSec);
 });
 
+const railed = computed(() => railedNames(shownRailed(w.mode.value, st.railed)).join(', '));
+
 const eta = computed(() => {
 	if (w.source.value === 'sim' && w.cfg.duration_sec > 0 && st.state === 'recording') {
 		const remaining = w.cfg.duration_sec - st.tSec;
@@ -47,6 +50,7 @@ const eta = computed(() => {
 			<div class="ro" :title="`Samples: ${st.nTotal.toLocaleString()}`"><span>Samples</span><b>{{ st.nTotal.toLocaleString() }}</b></div>
 			<div class="ro" :title="`File size: ${formatMegabytes(estSizeMb)}`"><span>File size</span><b>{{ formatMegabytes(estSizeMb) }}</b></div>
 			<div class="ro" :title="`Bandwidth: ${bandwidth}`"><span>Bandwidth</span><b>{{ bandwidth }}</b></div>
+			<div v-if="railed" class="ro railed" :title="`Railed (full scale): ${railed}`" data-testid="overview-railed"><span>Railed</span><b>{{ railed }}</b></div>
 			<div class="ro" :title="`Fx peak: ${st.peaks.Fx.toFixed(1)} N`"><span>Fx</span><b class="fx">{{ st.peaks.Fx.toFixed(1) }}</b></div>
 			<div class="ro" :title="`Fy peak: ${st.peaks.Fy.toFixed(1)} N`"><span>Fy</span><b class="fy">{{ st.peaks.Fy.toFixed(1) }}</b></div>
 			<div class="ro" :title="`Fz peak: ${st.peaks.Fz.toFixed(1)} N`"><span>Fz</span><b class="fz">{{ st.peaks.Fz.toFixed(1) }}</b></div>
@@ -62,6 +66,8 @@ const eta = computed(() => {
 .grid { display: flex; gap: 6px; justify-content: center; width: 100%; margin: auto 0; }
 .ro { flex: 1 1 0; max-width: 120px; min-width: 0; display: flex; flex-direction: column; align-items: center; padding: 3px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
 .ro span { font-size: var(--fs-xs); color: var(--text-dim); letter-spacing: 0.01em; }
+.ro.railed { background: #dc2626; border-color: #dc2626; }
+.ro.railed span, .ro.railed b { color: #fff; }
 .ro span, .ro b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ro b { font-size: var(--fs-md); font-variant-numeric: tabular-nums; }
 @container (max-width: 760px) {

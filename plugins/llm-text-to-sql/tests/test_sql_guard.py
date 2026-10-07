@@ -22,9 +22,29 @@ ALLOW = [
     "SELECT * FROM physical_samples",
     "SELECT machining_feed_mm_per_rev, machining_spindle_speed_rpm "
     "FROM manufacturing_operations WHERE machining_feed_mm_per_rev IS NOT NULL",
-    "SELECT * FROM audit_logs",
-    # Benign Directus metadata is readable.
-    "SELECT collection FROM directus_activity",
+    # Ordinary scalar / aggregate / window functions.
+    "SELECT lower(sample_code), count(*), date_trunc('month', created_at), "
+    "string_agg(sample_code, ',') FROM physical_samples GROUP BY 1, 3",
+    "SELECT sample_code, row_number() OVER (ORDER BY mass_grams), "
+    "round(avg(mass_grams), 2) OVER () FROM physical_samples",
+    "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY mass_grams) "
+    "FROM physical_samples",
+    "SELECT coalesce(notes, ''), CAST(mass_grams AS int), mass_grams::text, now() "
+    "FROM physical_samples WHERE created_at > now() - interval '30 days'",
+    "SELECT count(*) FILTER (WHERE mass_grams > 1) FROM physical_samples",
+    # generate_series / unnest are the only set-returning functions in FROM.
+    "SELECT s.n, p.sample_code FROM generate_series(1, 3) AS s(n), physical_samples p",
+    "SELECT p.sample_code, u.x FROM physical_samples p "
+    "CROSS JOIN unnest(ARRAY[1, 2]) AS u(x)",
+    # A CTE shadowing nothing real is fine, and a CTE may reference an earlier CTE.
+    "WITH a AS (SELECT sample_id FROM physical_samples), "
+    "b AS (SELECT sample_id FROM a) SELECT * FROM b",
+    "WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3) "
+    "SELECT r.n, p.sample_code FROM r, physical_samples p",
+    # Comments are stripped; a string containing ; or -- or E is just a string.
+    "SELECT sample_code FROM physical_samples /* note */ -- trailing\n",
+    "SELECT 'a;b -- not a comment /* nor this */' FROM physical_samples",
+    "SELECT 'e' FROM physical_samples",
     # CTE + base table.
     "WITH heavy AS (SELECT sample_id FROM physical_samples) "
     "SELECT * FROM v_manufacturing_operations_full "
@@ -77,6 +97,21 @@ DENY = [
         "SELECT v.sample_code FROM v_complete_sample_history v "
         "JOIN directus_users u ON true",
     ),
+    # Audit log, personal data, and every directus_* table (activity/revisions
+    # embed other tables' rows) are denied even though they once were readable.
+    ("audit_logs", "SELECT * FROM audit_logs"),
+    ("audit_logs_schema_qualified", "SELECT * FROM public.audit_logs"),
+    (
+        "audit_logs_in_subquery",
+        "SELECT * FROM v_test_sessions_full WHERE x IN "
+        "(SELECT record_id FROM audit_logs)",
+    ),
+    ("people", "SELECT email FROM people"),
+    ("machine_operators_quoted", 'SELECT * FROM "Machine_Operators"'),
+    ("machine_operators_lower", "SELECT * FROM machine_operators"),
+    ("directus_activity", "SELECT collection FROM directus_activity"),
+    ("directus_revisions", "SELECT data FROM directus_revisions"),
+    ("semantic_embeddings", "SELECT content_text FROM semantic_embeddings"),
     # Postgres system catalogs stay blocked.
     ("information_schema", "SELECT * FROM information_schema.tables"),
     ("pg_catalog", "SELECT * FROM pg_catalog.pg_roles"),
@@ -99,6 +134,11 @@ def test_guard_wraps_with_limit():
     wrapped = guard("SELECT * FROM v_complete_sample_history", row_limit=50)
     assert wrapped.strip().endswith("LIMIT 50")
     assert "v_complete_sample_history" in wrapped
+
+
+def test_guard_probe_fetches_one_extra_row():
+    wrapped = guard("SELECT * FROM v_complete_sample_history", row_limit=50, probe=True)
+    assert wrapped.strip().endswith("LIMIT 51")
 
 
 def test_guard_default_limit():

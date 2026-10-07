@@ -118,6 +118,10 @@ In Phase 9, the implementation will add a `clearance_level` field to the
 Directus user profile and a conditional `permissions.filter` on
 `physical_samples` for the Researcher role.
 
+Follow-up for the same phase: `directus_files` read is currently unfiltered for Lab Member (Force
+App captures and live caches, migration `20261005000133`). The export-control filter must also
+cover file reads, or `/assets/<id>` serves a controlled sample's files around it.
+
 ## Consequences
 
 ### Positive

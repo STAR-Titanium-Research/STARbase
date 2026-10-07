@@ -2,7 +2,7 @@
 # The isometric geometry engine (sample shape drawing) is vendored into three Directus
 # extensions because each is built as an independent package:
 #   d1-geometry-preview  (canonical source — edit this one)
-#   d1-home              (guided sample creator)
+#   d1-home              (guided sample creator; the Sample page reuses it, not a fourth copy)
 #   d1-report            (printed report)
 #
 # Usage:
@@ -18,7 +18,7 @@ SRC=$EXT/d1-geometry-preview/src/geometry.ts
 COPIES=("$EXT/d1-home/src/geometry.ts" "$EXT/d1-report/src/geometry.ts")
 # Files whose CSS styles the generated SVG, and the classes geometry.ts emits. A class counts
 # as styled only if it heads a rule (`.cls {`, `.cls,` or `:deep(.cls) {`), not merely appears.
-STYLES=("$EXT/d1-geometry-preview/src/GeometryPreview.vue" "$EXT/d1-home/src/register-sample.vue" "$EXT/d1-report/src/render.js")
+STYLES=("$EXT/d1-geometry-preview/src/GeometryPreview.vue" "$EXT/d1-home/src/register-sample.vue" "$EXT/d1-home/src/pages/sample/SampleOverview.vue" "$EXT/d1-report/src/render.js")
 CLASSES=(gt gl gr gh gdim gext gdimt gsupport gload)
 
 if [[ "${1:-}" != "--check" ]]; then

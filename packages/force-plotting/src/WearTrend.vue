@@ -6,6 +6,8 @@
 // change and no heavy data (peaks are scalar columns, not the series payload).
 import { computed, ref, watch } from 'vue';
 import { useForceHost } from './host';
+import { downloadText, safeFilePart, toCsv, useCopyFeedback } from './csvExport';
+import { wearCsvColumns } from './wearCsv';
 
 const props = defineProps<{
 	/** The currently-selected analysis row; the trend is drawn for the edge/sample it belongs to. */
@@ -23,6 +25,8 @@ interface Point {
 	id: string;
 	label: string;
 	x: number;
+	/** The operation's own sequence number (null when it has none); x falls back to the row index. */
+	seq: number | null;
 	peaks: Record<Axis, number | null>;
 	isCurrent: boolean;
 }
@@ -97,6 +101,7 @@ const points = computed<Point[]>(() => {
 			label: r.operation_id?.pass_code || `#${i + 1}`,
 			// Cumulative length is what wears an edge; a per-pass value would just be noise.
 			x: xMode.value === 'length' ? cum : (Number.isFinite(seq) ? seq : i + 1),
+			seq: r.operation_id?.operation_sequence != null && Number.isFinite(seq) ? seq : null,
 			peaks: {
 				Fx: r.peak_fx == null ? null : Number(r.peak_fx),
 				Fy: r.peak_fy == null ? null : Number(r.peak_fy),
@@ -107,7 +112,7 @@ const points = computed<Point[]>(() => {
 	});
 });
 
-const W = 520, H = 210, ML = 46, MR = 12, MT = 12, MB = 30;
+const W = 520, H = 210, ML = 56, MR = 12, MT = 12, MB = 30;
 const geom = computed(() => {
 	const pts = points.value;
 	const shown = AXES.filter((a) => visAxes.value[a]);
@@ -160,6 +165,16 @@ const trend = computed(() => {
 	return { axis: a, pct: ((last - first) / Math.abs(first)) * 100, first, last };
 });
 
+// CSV of the plotted points: every pass of the edge/sample, all three axes regardless of which
+// are shown. `x` follows the Pass / Length toggle.
+const CSV_COLS = computed(() => wearCsvColumns(xMode.value));
+const csvTag = computed(() => safeFilePart(
+	groupBy.value === 'edge' ? edgeId.value : sampleId.value) || safeFilePart(props.detail?.operation_id?.pass_code) || 'op');
+const csvReady = computed(() => !loading.value && !error.value && groupAvailable.value && points.value.length > 0);
+function csvText() { return toCsv(CSV_COLS.value, points.value); }
+function downloadCsv() { downloadText(`wear_trend_${groupBy.value}_${csvTag.value}.csv`, csvText()); }
+const { copied, failed, copy: copyCsv } = useCopyFeedback(csvText);
+
 function toggleAxis(a: Axis) {
 	const on = AXES.filter((x) => visAxes.value[x]);
 	if (visAxes.value[a] && on.length <= 1) return;
@@ -183,6 +198,9 @@ function toggleAxis(a: Axis) {
 			<button class="tbtn" :class="{ on: xMode === 'length' }" :disabled="!lengthAvailable"
 				:title="lengthAvailable ? 'Cumulative cutting length' : 'No cutting length recorded on these operations'"
 				@click="xMode = 'length'">Length</button>
+			<span class="wt-sep"></span>
+			<button class="tbtn" :disabled="!csvReady" title="Download the plotted passes as CSV" @click="downloadCsv">Download CSV</button>
+			<button class="tbtn" :disabled="!csvReady" title="Copy the plotted passes to the clipboard as CSV" @click="copyCsv">{{ copied ? 'Copied' : failed ? 'Copy failed' : 'Copy' }}</button>
 		</div>
 
 		<div v-if="!detail" class="wt-empty">Select an operation to see its wear trend</div>
@@ -202,6 +220,7 @@ function toggleAxis(a: Axis) {
 					stroke="currentColor" stroke-opacity="0.12" stroke-width="0.6" />
 				<text v-for="(t, i) in geom.yticks" :key="'yl' + i" :x="ML - 6" :y="t.y + 3" class="tick" text-anchor="end">{{ t.label }}</text>
 				<text v-for="(t, i) in geom.xticks" :key="'xl' + i" :x="t.x" :y="H - MB + 14" class="tick" text-anchor="middle">{{ t.label }}</text>
+				<text :transform="`translate(11 ${(MT + H - MB) / 2}) rotate(-90)`" class="axis-label" text-anchor="middle">Peak force (N)</text>
 				<text :x="(ML + W - MR) / 2" :y="H - 3" class="axis-label" text-anchor="middle">
 					{{ xMode === 'length' ? 'Cumulative cutting length (mm)' : 'Pass' }}
 				</text>

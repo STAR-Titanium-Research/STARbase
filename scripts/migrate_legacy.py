@@ -2,8 +2,14 @@
 """Phase 8 — Legacy data migration from Sample_Data.xlsx into D1 PostgreSQL.
 
 Reads the AppSheet/Sheets export and loads every entity into the target schema
-in FK-dependency order. Safe to re-run: existing rows are skipped via
-ON CONFLICT DO NOTHING (materials use COALESCE to back-fill missing density).
+in FK-dependency order. Safe to re-run: a re-run never overwrites a value that is already
+in the database (so edits made in the app survive). Where a row already exists it is left
+as is (ON CONFLICT DO NOTHING) or only has its NULL columns filled in
+(ON CONFLICT DO UPDATE SET col = COALESCE(table.col, EXCLUDED.col)).
+
+Owners and operators are written to both the people-based columns the UI reads
+(owner_person_id, operator_person_id, sample_co_owners.person_id) and the legacy user
+columns (owner, user_id), resolved through the `people` table (see legacy_people.py).
 
 Provenance: every imported row records 'Imported from legacy AppSheet export'
 in its notes / outcome_notes field so the audit trail is clear.
@@ -11,7 +17,7 @@ in its notes / outcome_notes field so the audit trail is clear.
 Usage
 -----
     pip install -r scripts/requirements.txt
-    DATABASE_URL="postgres://d1:change_me@localhost:5432/d1_database" \\
+    DATABASE_URL="postgres://d1:$POSTGRES_PASSWORD@localhost:5432/d1_database" \\
         python3 scripts/migrate_legacy.py --xlsx /path/to/Sample_Data.xlsx
 
     # Dry-run (prints row counts only, no DB writes):
@@ -35,6 +41,7 @@ from typing import Any
 import openpyxl
 import psycopg2
 import psycopg2.extras
+from legacy_people import PeopleIndex, ensure_people, load_index
 
 log = logging.getLogger("migrate_legacy")
 
@@ -43,6 +50,12 @@ log = logging.getLogger("migrate_legacy")
 _LEGACY_NS = uuid.uuid5(uuid.NAMESPACE_DNS, "d1-database.legacy-migration.v1")
 
 LEGACY_NOTE = "Imported from legacy AppSheet/Sheets export (Phase 8 migration)."
+
+# Provenance tag for the rows this script writes to manufacturing_operations. A row with
+# source_system set is an import: the operation trigger (migration 126) leaves its
+# operation_sequence NULL instead of numbering it, so the machining pass numbers written here
+# are not duplicated by auto-assigned ones.
+LEGACY_SOURCE_SYSTEM = "legacy_migration"
 
 _LAB_ADMIN_ROLE_ID = "10000001-0000-0000-0000-000000000001"
 _LAB_MEMBER_ROLE_ID = "10000001-0000-0000-0000-000000000002"
@@ -58,17 +71,24 @@ def legacy_uuid(raw_id: Any) -> uuid.UUID:
     return uuid.uuid5(_LEGACY_NS, str(raw_id).strip())
 
 
+def is_null_token(s: str) -> bool:
+    """AppSheet "no value" spellings. "na"/"NA" are matched case-sensitively so that the
+    element symbol "Na" (sodium) survives; "none" and "n/a" are unambiguous in any case.
+    """
+    return s.lower() in ("none", "n/a") or s in ("na", "NA")
+
+
 def clean_str(v: Any) -> str | None:
     s = str(v).strip() if v is not None else None
-    return s if s and s.lower() not in ("none", "n/a", "na") else None
+    return s if s and not is_null_token(s) else None
 
 
 def clean_float(v: Any) -> float | None:
+    """float(v), or None when blank/unparseable. A genuine 0.0 is kept."""
     if v is None:
         return None
     try:
-        f = float(v)
-        return None if f == 0.0 else f
+        return float(v)
     except (ValueError, TypeError):
         return None
 
@@ -170,12 +190,12 @@ def load_alloying_elements(cur, rows: list[dict], dry: bool) -> int:
                   boiling_point_k, electronegativity, atomic_radius_pm)
                VALUES %s
                ON CONFLICT (symbol) DO UPDATE SET
-                 atomic_weight     = COALESCE(EXCLUDED.atomic_weight, alloying_elements.atomic_weight),
-                 density_g_per_cm3 = COALESCE(EXCLUDED.density_g_per_cm3, alloying_elements.density_g_per_cm3),
-                 melting_point_k   = COALESCE(EXCLUDED.melting_point_k, alloying_elements.melting_point_k),
-                 boiling_point_k   = COALESCE(EXCLUDED.boiling_point_k, alloying_elements.boiling_point_k),
-                 electronegativity = COALESCE(EXCLUDED.electronegativity, alloying_elements.electronegativity),
-                 atomic_radius_pm  = COALESCE(EXCLUDED.atomic_radius_pm, alloying_elements.atomic_radius_pm)""",
+                 atomic_weight     = COALESCE(alloying_elements.atomic_weight, EXCLUDED.atomic_weight),
+                 density_g_per_cm3 = COALESCE(alloying_elements.density_g_per_cm3, EXCLUDED.density_g_per_cm3),
+                 melting_point_k   = COALESCE(alloying_elements.melting_point_k, EXCLUDED.melting_point_k),
+                 boiling_point_k   = COALESCE(alloying_elements.boiling_point_k, EXCLUDED.boiling_point_k),
+                 electronegativity = COALESCE(alloying_elements.electronegativity, EXCLUDED.electronegativity),
+                 atomic_radius_pm  = COALESCE(alloying_elements.atomic_radius_pm, EXCLUDED.atomic_radius_pm)""",
             data,
         )
     return len(data)
@@ -253,11 +273,16 @@ def load_material_elements(cur, rows: list[dict], dry: bool) -> int:
         Also handles multi-character symbols like "Mo", "Hf", "Ti" etc.
         """
         token = token.strip()
-        if token.lower() in ("n/a", "na", "others", "other", "balance", "bal"):
-            return None
-        # Direct match first
+        # Direct match first (so sodium, "Na", is not mistaken for "na" = not available)
         if token in known:
             return token
+        if is_null_token(token) or token.lower() in (
+            "others",
+            "other",
+            "balance",
+            "bal",
+        ):
+            return None
         # Try each word in the token
         for word in re.split(r"[\s%–\-/:.]+", token):
             word = word.strip()
@@ -286,11 +311,10 @@ def load_material_elements(cur, rows: list[dict], dry: bool) -> int:
                 else token.strip()
             )
             if not sym:
-                if known_symbols and token.strip().lower() not in (
-                    "n/a",
-                    "na",
-                    "others",
-                    "",
+                if (
+                    known_symbols
+                    and not is_null_token(token.strip())
+                    and token.strip().lower() not in ("others", "")
                 ):
                     log.debug(
                         "material_elements: no match for %r, skipping", token.strip()
@@ -336,7 +360,7 @@ def load_equipment(cur, rows: list[dict], dry: bool) -> int:
                  (equipment_id, equipment_code, equipment_name, equipment_type, manufacturer, notes)
                VALUES %s
                ON CONFLICT (equipment_code) DO UPDATE SET
-                 manufacturer = COALESCE(EXCLUDED.manufacturer, equipment.manufacturer)""",
+                 manufacturer = COALESCE(equipment.manufacturer, EXCLUDED.manufacturer)""",
             data,
         )
     return len(data)
@@ -386,16 +410,16 @@ def load_tools(cur, rows: list[dict], dry: bool) -> int:
                   shank_type, cutting_direction, insert_clamping_system, notes)
                VALUES %s
                ON CONFLICT (tool_code) DO UPDATE SET
-                 manufacturer          = COALESCE(EXCLUDED.manufacturer, tools.manufacturer),
-                 datasheet_url         = COALESCE(EXCLUDED.datasheet_url, tools.datasheet_url),
-                 op_type               = COALESCE(EXCLUDED.op_type, tools.op_type),
-                 cutter_diameter_mm    = COALESCE(EXCLUDED.cutter_diameter_mm, tools.cutter_diameter_mm),
-                 shank_width_mm        = COALESCE(EXCLUDED.shank_width_mm, tools.shank_width_mm),
-                 shank_length_mm       = COALESCE(EXCLUDED.shank_length_mm, tools.shank_length_mm),
-                 overall_length_mm     = COALESCE(EXCLUDED.overall_length_mm, tools.overall_length_mm),
-                 shank_type            = COALESCE(EXCLUDED.shank_type, tools.shank_type),
-                 cutting_direction     = COALESCE(EXCLUDED.cutting_direction, tools.cutting_direction),
-                 insert_clamping_system = COALESCE(EXCLUDED.insert_clamping_system, tools.insert_clamping_system)""",
+                 manufacturer          = COALESCE(tools.manufacturer, EXCLUDED.manufacturer),
+                 datasheet_url         = COALESCE(tools.datasheet_url, EXCLUDED.datasheet_url),
+                 op_type               = COALESCE(tools.op_type, EXCLUDED.op_type),
+                 cutter_diameter_mm    = COALESCE(tools.cutter_diameter_mm, EXCLUDED.cutter_diameter_mm),
+                 shank_width_mm        = COALESCE(tools.shank_width_mm, EXCLUDED.shank_width_mm),
+                 shank_length_mm       = COALESCE(tools.shank_length_mm, EXCLUDED.shank_length_mm),
+                 overall_length_mm     = COALESCE(tools.overall_length_mm, EXCLUDED.overall_length_mm),
+                 shank_type            = COALESCE(tools.shank_type, EXCLUDED.shank_type),
+                 cutting_direction     = COALESCE(tools.cutting_direction, EXCLUDED.cutting_direction),
+                 insert_clamping_system = COALESCE(tools.insert_clamping_system, EXCLUDED.insert_clamping_system)""",
             data,
         )
     return len(data)
@@ -461,16 +485,16 @@ def load_insert_types(cur, rows: list[dict], dry: bool) -> int:
                   fixing_hole_diameter_mm, material_class)
                VALUES %s
                ON CONFLICT (type_code) DO UPDATE SET
-                 manufacturer          = COALESCE(EXCLUDED.manufacturer, insert_types.manufacturer),
-                 op_type               = COALESCE(EXCLUDED.op_type, insert_types.op_type),
-                 mounting_style_code   = COALESCE(EXCLUDED.mounting_style_code, insert_types.mounting_style_code),
-                 inserts_per_box       = COALESCE(EXCLUDED.inserts_per_box, insert_types.inserts_per_box),
-                 edge_count            = COALESCE(EXCLUDED.edge_count, insert_types.edge_count),
-                 nose_radius_mm        = COALESCE(EXCLUDED.nose_radius_mm, insert_types.nose_radius_mm),
-                 cutting_edge_length_mm = COALESCE(EXCLUDED.cutting_edge_length_mm, insert_types.cutting_edge_length_mm),
-                 included_angle_deg    = COALESCE(EXCLUDED.included_angle_deg, insert_types.included_angle_deg),
-                 fixing_hole_diameter_mm = COALESCE(EXCLUDED.fixing_hole_diameter_mm, insert_types.fixing_hole_diameter_mm),
-                 material_class        = COALESCE(EXCLUDED.material_class, insert_types.material_class)""",
+                 manufacturer          = COALESCE(insert_types.manufacturer, EXCLUDED.manufacturer),
+                 op_type               = COALESCE(insert_types.op_type, EXCLUDED.op_type),
+                 mounting_style_code   = COALESCE(insert_types.mounting_style_code, EXCLUDED.mounting_style_code),
+                 inserts_per_box       = COALESCE(insert_types.inserts_per_box, EXCLUDED.inserts_per_box),
+                 edge_count            = COALESCE(insert_types.edge_count, EXCLUDED.edge_count),
+                 nose_radius_mm        = COALESCE(insert_types.nose_radius_mm, EXCLUDED.nose_radius_mm),
+                 cutting_edge_length_mm = COALESCE(insert_types.cutting_edge_length_mm, EXCLUDED.cutting_edge_length_mm),
+                 included_angle_deg    = COALESCE(insert_types.included_angle_deg, EXCLUDED.included_angle_deg),
+                 fixing_hole_diameter_mm = COALESCE(insert_types.fixing_hole_diameter_mm, EXCLUDED.fixing_hole_diameter_mm),
+                 material_class        = COALESCE(insert_types.material_class, EXCLUDED.material_class)""",
             data,
         )
     return len(data)
@@ -530,9 +554,19 @@ def load_method_parameters(cur, dry: bool) -> int:
 
 
 def load_tool_boxes(
-    cur, rows: list[dict], insert_rows: list[dict], itype_map: dict, dry: bool
+    cur,
+    rows: list[dict],
+    insert_rows: list[dict],
+    itype_map: dict,
+    dry: bool,
+    people: PeopleIndex | None = None,
 ) -> tuple[int, dict]:
-    """Returns (count, box_id_to_uuid_map)."""
+    """Returns (count, box_id_to_uuid_map).
+
+    Boxes are inserted with their legacy Box ID as an explicit tool_box_code. Migration 125
+    expands a new box into cutting inserts only for codes that still start with 'TMP-', so
+    these rows are never expanded behind this script's back. Keep it that way."""
+    people = people or PeopleIndex()
     # Find insert types by name
     if not dry:
         cur.execute("SELECT insert_type_id, type_code FROM insert_types")
@@ -559,7 +593,7 @@ def load_tool_boxes(
         box_uuid_map[bid] = box_uuid
         pkg_qty_raw = r.get("Package Quantity") or r.get("Qty")
         pkg_qty = int(float(pkg_qty_raw)) if pkg_qty_raw is not None else None
-        owner = clean_str(r.get("Owner"))
+        owner, owner_person = people.resolve_owner(clean_str(r.get("Owner")))
         data.append(
             (
                 box_uuid,
@@ -569,6 +603,7 @@ def load_tool_boxes(
                 itype_id,
                 pkg_qty,
                 owner,
+                owner_person,
                 LEGACY_NOTE,
             )
         )
@@ -586,6 +621,7 @@ def load_tool_boxes(
                 None,
                 None,
                 None,
+                None,
                 f"{LEGACY_NOTE} WARNING: box referenced by inserts but missing from Insert Boxes Inventory.",
             )
         )
@@ -595,20 +631,27 @@ def load_tool_boxes(
             cur,
             """INSERT INTO tool_boxes
                  (tool_box_id, tool_box_code, description, location,
-                  insert_type_id, package_quantity, owner, notes)
+                  insert_type_id, package_quantity, owner, owner_person_id, notes)
                VALUES %s
                ON CONFLICT (tool_box_code) DO UPDATE SET
-                 package_quantity = COALESCE(EXCLUDED.package_quantity, tool_boxes.package_quantity),
-                 owner            = COALESCE(EXCLUDED.owner, tool_boxes.owner)""",
+                 package_quantity = COALESCE(tool_boxes.package_quantity, EXCLUDED.package_quantity),
+                 owner            = COALESCE(tool_boxes.owner, EXCLUDED.owner),
+                 owner_person_id  = COALESCE(tool_boxes.owner_person_id, EXCLUDED.owner_person_id)""",
             data,
         )
     return len(data), box_uuid_map
 
 
 def load_cutting_inserts(
-    cur, rows: list[dict], box_uuid_map: dict, itype_map: dict, dry: bool
+    cur,
+    rows: list[dict],
+    box_uuid_map: dict,
+    itype_map: dict,
+    dry: bool,
+    people: PeopleIndex | None = None,
 ) -> tuple[int, dict]:
     """Returns (count, insert_uid_to_uuid_map)."""
+    people = people or PeopleIndex()
     if not dry:
         cur.execute("SELECT insert_type_id, type_code FROM insert_types")
         itype_uuid = {r[1]: r[0] for r in cur.fetchall()}
@@ -642,9 +685,11 @@ def load_cutting_inserts(
             insert_code = f"{insert_code}-{uid[:4]}"
         seen_codes.add(insert_code)
         status = clean_str(r.get("Status"))
-        is_depleted = status and status.lower() in ("used", "depleted", "consumed")
+        is_depleted = bool(
+            status and status.lower() in ("used", "depleted", "consumed")
+        )
         location = clean_str(r.get("Location"))
-        owner = clean_str(r.get("Owner"))
+        owner, owner_person = people.resolve_owner(clean_str(r.get("Owner")))
         insert_uuid = str(legacy_uuid(f"insert:{uid}"))
         insert_uuid_map[uid] = insert_uuid
         data.append(
@@ -656,6 +701,7 @@ def load_cutting_inserts(
                 insert_number,
                 location,
                 owner,
+                owner_person,
                 is_depleted,
                 LEGACY_NOTE,
             )
@@ -666,11 +712,12 @@ def load_cutting_inserts(
             cur,
             """INSERT INTO cutting_inserts
                  (insert_id, insert_code, tool_box_id, insert_type_id,
-                  insert_number, location, owner, is_depleted, notes)
+                  insert_number, location, owner, owner_person_id, is_depleted, notes)
                VALUES %s
                ON CONFLICT (insert_code) DO UPDATE SET
-                 location = COALESCE(EXCLUDED.location, cutting_inserts.location),
-                 owner    = COALESCE(EXCLUDED.owner, cutting_inserts.owner)""",
+                 location = COALESCE(cutting_inserts.location, EXCLUDED.location),
+                 owner    = COALESCE(cutting_inserts.owner, EXCLUDED.owner),
+                 owner_person_id = COALESCE(cutting_inserts.owner_person_id, EXCLUDED.owner_person_id)""",
             data,
         )
     return len(data), insert_uuid_map
@@ -758,7 +805,11 @@ def load_insert_edges(
 
 
 def load_physical_samples(
-    cur, rows: list[dict], material_map: dict, email_to_uuid_map: dict, dry: bool
+    cur,
+    rows: list[dict],
+    material_map: dict,
+    people: PeopleIndex,
+    dry: bool,
 ) -> tuple[int, dict, dict]:
     """Returns (count, legacy_uid_to_uuid_map, sample_code_to_uuid_map).
 
@@ -803,6 +854,7 @@ def load_physical_samples(
         co_owners_raw = r.get("Co-owners") or r.get("Co-Owners")
         co_owners = clean_str(co_owners_raw)
 
+        owner_user, owner_person = people.resolve_owner(clean_str(r.get("Owner")))
         s_uuid = str(legacy_uuid(f"sample:{uid}"))
         sample_uuid_map[uid] = s_uuid
         if code:
@@ -826,7 +878,8 @@ def load_physical_samples(
                 clean_str(r.get("Nickname")),
                 clean_str(r.get("Location")),
                 clean_str(r.get("Surface Finish")),
-                email_to_uuid_map.get((clean_str(r.get("Owner")) or "").lower()),
+                owner_user,
+                owner_person,
                 co_owners,
                 mfg_route,
                 clean_bool(r.get("Mounted")),
@@ -843,23 +896,24 @@ def load_physical_samples(
                   diameter_mm, width_mm, length_mm, thickness_mm, current_status,
                   manufactured_date, export_controlled, notes,
                   nickname, location, surface_finish,
-                  owner, co_owners, manufacturing_route, mounted, mounting_method,
-                  legacy_notes)
+                  owner, owner_person_id, co_owners, manufacturing_route, mounted,
+                  mounting_method, legacy_notes)
                VALUES %s
                ON CONFLICT (sample_code) DO UPDATE SET
-                 form                = EXCLUDED.form,
-                 item_type           = COALESCE(EXCLUDED.item_type, physical_samples.item_type),
-                 nickname            = COALESCE(EXCLUDED.nickname, physical_samples.nickname),
-                 location            = COALESCE(EXCLUDED.location, physical_samples.location),
-                 surface_finish      = COALESCE(EXCLUDED.surface_finish, physical_samples.surface_finish),
-                 owner               = COALESCE(EXCLUDED.owner, physical_samples.owner),
-                 co_owners           = COALESCE(EXCLUDED.co_owners, physical_samples.co_owners),
-                 manufacturing_route = COALESCE(EXCLUDED.manufacturing_route, physical_samples.manufacturing_route),
-                 mounted             = COALESCE(EXCLUDED.mounted, physical_samples.mounted),
-                 mounting_method     = COALESCE(EXCLUDED.mounting_method, physical_samples.mounting_method),
-                 width_mm            = COALESCE(EXCLUDED.width_mm, physical_samples.width_mm),
-                 legacy_notes        = COALESCE(EXCLUDED.legacy_notes, physical_samples.legacy_notes),
-                 notes               = EXCLUDED.notes""",
+                 form                = COALESCE(physical_samples.form, EXCLUDED.form),
+                 item_type           = COALESCE(physical_samples.item_type, EXCLUDED.item_type),
+                 nickname            = COALESCE(physical_samples.nickname, EXCLUDED.nickname),
+                 location            = COALESCE(physical_samples.location, EXCLUDED.location),
+                 surface_finish      = COALESCE(physical_samples.surface_finish, EXCLUDED.surface_finish),
+                 owner               = COALESCE(physical_samples.owner, EXCLUDED.owner),
+                 owner_person_id     = COALESCE(physical_samples.owner_person_id, EXCLUDED.owner_person_id),
+                 co_owners           = COALESCE(physical_samples.co_owners, EXCLUDED.co_owners),
+                 manufacturing_route = COALESCE(physical_samples.manufacturing_route, EXCLUDED.manufacturing_route),
+                 mounted             = COALESCE(physical_samples.mounted, EXCLUDED.mounted),
+                 mounting_method     = COALESCE(physical_samples.mounting_method, EXCLUDED.mounting_method),
+                 width_mm            = COALESCE(physical_samples.width_mm, EXCLUDED.width_mm),
+                 legacy_notes        = COALESCE(physical_samples.legacy_notes, EXCLUDED.legacy_notes),
+                 notes               = COALESCE(physical_samples.notes, EXCLUDED.notes)""",
             data,
         )
     return len(data), sample_uuid_map, sample_code_map
@@ -868,9 +922,12 @@ def load_physical_samples(
 def load_users(cur, rows: list[dict], dry: bool) -> dict[str, str]:
     """Upsert Directus users from the XLSX Users sheet.
 
-    Returns {email.lower(): uuid_str} for resolving owner/co-owner references.
-    Carolina Guerra is seeded unconditionally — she appears in co_owners data
-    but is absent from the Users sheet.
+    Returns {email.lower(): user id}. When the email already exists the existing row is kept
+    (ON CONFLICT (email) only back-fills NULLs), so the id is read back from the database
+    rather than assumed to be the deterministic uuid5 proposed for a new row. In a dry run
+    there is no database, and the proposed uuid5 ids are returned.
+    Carolina Guerra is seeded unconditionally: she appears in co_owners data but is absent
+    from the Users sheet.
     """
 
     def _user_uuid(email: str) -> str:
@@ -915,7 +972,8 @@ def load_users(cur, rows: list[dict], dry: bool) -> dict[str, str]:
         )
 
     if not dry and rows_to_insert:
-        psycopg2.extras.execute_values(
+        # RETURNING also yields the rows that already existed (DO UPDATE), with their real id.
+        returned = psycopg2.extras.execute_values(
             cur,
             """INSERT INTO directus_users
                  (id, first_name, last_name, email, role, status, password)
@@ -923,22 +981,30 @@ def load_users(cur, rows: list[dict], dry: bool) -> dict[str, str]:
                ON CONFLICT (email) DO UPDATE SET
                  first_name = COALESCE(directus_users.first_name, EXCLUDED.first_name),
                  last_name  = COALESCE(directus_users.last_name,  EXCLUDED.last_name),
-                 role       = COALESCE(directus_users.role,       EXCLUDED.role)""",
+                 role       = COALESCE(directus_users.role,       EXCLUDED.role)
+               RETURNING id::text, lower(email)""",
             [(d[0], d[1], d[2], d[3], d[4], "invited", None) for d in rows_to_insert],
+            fetch=True,
         )
+        for user_id, email_lc in returned:
+            email_to_uuid[email_lc] = user_id
 
     return email_to_uuid
 
 
-def load_co_owners(cur, email_to_uuid_map: dict[str, str], dry: bool) -> int:
+def load_co_owners(
+    cur, email_to_uuid_map: dict[str, str], dry: bool, people: PeopleIndex | None = None
+) -> int:
     """Migrate co_owners TEXT column → sample_co_owners junction rows.
 
     Reads every physical_samples row where co_owners IS NOT NULL, splits on
-    common delimiters, resolves each email to a UUID, and inserts junction rows.
-    Returns the number of rows inserted.
+    common delimiters, resolves each email to a user and a person, and inserts junction
+    rows with both user_id (legacy, NOT NULL) and person_id (what the UI reads). An existing
+    row only gets a missing person_id. Returns the number of rows processed.
     """
     if dry:
         return 0
+    people = people or PeopleIndex()
 
     cur.execute(
         "SELECT sample_id, co_owners FROM physical_samples WHERE co_owners IS NOT NULL"
@@ -951,19 +1017,22 @@ def load_co_owners(cur, email_to_uuid_map: dict[str, str], dry: bool) -> int:
             email = part.strip().lower()
             if not email or "@" not in email:
                 continue
-            user_uuid = email_to_uuid_map.get(email)
+            person = people.person_for(email)
+            user_uuid = people.user_for_person(person) or email_to_uuid_map.get(email)
             if not user_uuid:
                 log.warning(
-                    "co_owners: no UUID for %s (sample %s), skipping", email, sample_id
+                    "co_owners: no user for %s (sample %s), skipping", email, sample_id
                 )
                 continue
-            data.append((str(uuid.uuid4()), str(sample_id), user_uuid))
+            data.append((str(uuid.uuid4()), str(sample_id), user_uuid, person))
 
     if data:
         psycopg2.extras.execute_values(
             cur,
-            """INSERT INTO sample_co_owners (id, sample_id, user_id) VALUES %s
-               ON CONFLICT (sample_id, user_id) DO NOTHING""",
+            """INSERT INTO sample_co_owners (id, sample_id, user_id, person_id) VALUES %s
+               ON CONFLICT (sample_id, user_id) DO UPDATE SET
+                 person_id = COALESCE(sample_co_owners.person_id, EXCLUDED.person_id)
+               WHERE sample_co_owners.person_id IS NULL""",
             data,
         )
     return len(data)
@@ -1022,8 +1091,10 @@ def load_fast_runs(
     equipment_map: dict,
     method_map: dict,
     dry: bool,
+    people: PeopleIndex | None = None,
 ) -> tuple[int, int]:
     """Import FAST Runs and back-fill sintering_params. Returns (imported, skipped_no_sample)."""
+    people = people or PeopleIndex()
     # Build reverse map: fast_run_uid → list of sample uids
     fast_to_samples: dict[str, list[str]] = defaultdict(list)
     for r in inv_rows:
@@ -1034,7 +1105,6 @@ def load_fast_runs(
 
     fast_method_id = method_map.get("MF")
     data = []
-    sintering_data: list[tuple] = []
     skipped_no_sample = 0
 
     for r in fast_rows:
@@ -1050,6 +1120,7 @@ def load_fast_runs(
         machine_name = clean_str(r.get("Machine"))
         equipment_id = equipment_map.get(machine_name)
         operator = clean_str(r.get("User"))
+        operator_person = people.person_for(operator)
         notes_text = clean_str(r.get("Notes"))
 
         metadata: dict = {}
@@ -1101,14 +1172,11 @@ def load_fast_runs(
                     fast_method_id,
                     equipment_id,
                     operator,
+                    operator_person,
                     op_date,
                     json.dumps(metadata),
                     outcome,
-                )
-            )
-            sintering_data.append(
-                (
-                    op_uuid,
+                    "sintering",
                     metadata.get("recipe_number"),
                     metadata.get("batch_number"),
                     metadata.get("mould_diameter_mm"),
@@ -1122,31 +1190,29 @@ def load_fast_runs(
                     metadata.get("ptc_bot_celsius"),
                     metadata.get("coshh_ref"),
                     material_note,
+                    metadata.get("mass_grams"),
                 )
             )
 
     if not dry:
+        # The sintering parameters are inline columns of manufacturing_operations
+        # (migration 20260623000032 dropped sintering_params).
         psycopg2.extras.execute_values(
             cur,
             """INSERT INTO manufacturing_operations
                  (operation_id, sample_id, method_id, equipment_id,
-                  operator_name, operation_date, recorded_metadata, outcome_notes)
+                  operator_name, operator_person_id, operation_date, recorded_metadata,
+                  outcome_notes, process_category,
+                  sintering_recipe_number, sintering_batch_number,
+                  sintering_mould_diameter_mm, sintering_atmosphere,
+                  sintering_tc_pyro_control, sintering_max_temp_celsius,
+                  sintering_max_force_kn, sintering_voltage_at_max_t_v,
+                  sintering_power_at_max_t_kw, sintering_ptc_top_celsius,
+                  sintering_ptc_bot_celsius, sintering_coshh_ref,
+                  sintering_material_type_note, sintering_mass_grams, source_system)
                VALUES %s ON CONFLICT DO NOTHING""",
-            data,
+            [row + (LEGACY_SOURCE_SYSTEM,) for row in data],
         )
-        if sintering_data:
-            psycopg2.extras.execute_values(
-                cur,
-                """INSERT INTO sintering_params
-                     (operation_id, recipe_number, batch_number,
-                      mould_diameter_mm, atmosphere, tc_pyro_control,
-                      max_temp_celsius, max_force_kn,
-                      voltage_at_max_t_v, power_at_max_t_kw,
-                      ptc_top_celsius, ptc_bot_celsius,
-                      coshh_ref, material_type_note)
-                   VALUES %s ON CONFLICT (operation_id) DO NOTHING""",
-                sintering_data,
-            )
     return len(data), skipped_no_sample
 
 
@@ -1171,11 +1237,12 @@ def load_machining_ops(
     tool_uuid_map: dict,
     method_map: dict,
     dry: bool,
+    people: PeopleIndex | None = None,
 ) -> tuple[int, list[str]]:
     """Import Machining Operations and back-fill machining_params. Returns (imported, [warnings])."""
+    people = people or PeopleIndex()
     warnings_out: list[str] = []
     data = []
-    param_data = []
 
     for r in rows:
         uid = clean_str(r.get("Unique ID"))
@@ -1270,6 +1337,15 @@ def load_machining_ops(
         pass_code = clean_str(r.get("Operation Code"))
 
         op_uuid = str(legacy_uuid(f"machining_op:{uid}"))
+        # machining parameters, extracted from the metadata above
+        subtype_raw = operation_type.lower().strip()
+        subtype = _OP_SUBTYPE_MAP.get(subtype_raw, "other")
+        rpm_val = metadata.get("rpm") or metadata.get("max_rpm")
+        axial_val = metadata.get("axial_mm") or metadata.get("ap_mm")
+        coolant_p_raw = metadata.get("coolant_pressure")
+        coolant_p = (
+            clean_float(str(coolant_p_raw)) if coolant_p_raw is not None else None
+        )
         data.append(
             (
                 op_uuid,
@@ -1278,6 +1354,7 @@ def load_machining_ops(
                 equipment_id,
                 tool_uuid,
                 clean_str(r.get("User")),
+                people.person_for(clean_str(r.get("User"))),
                 op_seq,
                 pass_code,
                 op_date,
@@ -1287,27 +1364,13 @@ def load_machining_ops(
                 force_link,
                 nc_prog,
                 outcome,
-            )
-        )
-
-        # Back-fill machining_params from extracted metadata
-        subtype_raw = operation_type.lower().strip()
-        subtype = _OP_SUBTYPE_MAP.get(subtype_raw, "other")
-        rpm_val = metadata.get("rpm") or metadata.get("max_rpm")
-        axial_val = metadata.get("axial_mm") or metadata.get("ap_mm")
-        coolant_p_raw = metadata.get("coolant_pressure")
-        coolant_p = (
-            clean_float(str(coolant_p_raw)) if coolant_p_raw is not None else None
-        )
-        param_data.append(
-            (
-                op_uuid,
+                "machining",
                 subtype,
                 rpm_val,
                 metadata.get("vc_m_per_min"),
                 metadata.get("feed_mm_per_rev"),
                 axial_val,
-                None,  # radial_depth_of_cut_mm — not in legacy data
+                None,  # radial depth of cut — not in the legacy data
                 metadata.get("cut_length_mm"),
                 metadata.get("diameter_mm"),
                 metadata.get("new_edge"),
@@ -1319,36 +1382,34 @@ def load_machining_ops(
                 metadata.get("chips_ref_code"),
                 metadata.get("experiment_sheet"),
                 metadata.get("legacy_insert_edge_id"),
-                uid,  # legacy_machining_uid
+                uid,  # machining_legacy_machining_uid
             )
         )
 
     if not dry:
+        # The machining parameters are inline columns of manufacturing_operations
+        # (migration 20260623000032 dropped machining_params).
         psycopg2.extras.execute_values(
             cur,
             """INSERT INTO manufacturing_operations
                  (operation_id, sample_id, method_id, equipment_id, tool_id,
-                  operator_name, operation_sequence, pass_code, operation_date,
-                  recorded_metadata, capture_software, capture_frequency_khz,
-                  file_storage_pointer, nc_program_text, outcome_notes)
+                  operator_name, operator_person_id, operation_sequence, pass_code,
+                  operation_date, recorded_metadata, capture_software,
+                  capture_frequency_khz, file_storage_pointer, nc_program_text,
+                  outcome_notes, process_category,
+                  machining_operation_subtype, machining_spindle_speed_rpm,
+                  machining_cutting_speed_m_per_min, machining_feed_mm_per_rev,
+                  machining_axial_depth_of_cut_mm, machining_radial_depth_of_cut_mm,
+                  machining_cutting_length_mm, machining_workpiece_diameter_mm,
+                  machining_new_edge, machining_coolant_used,
+                  machining_coolant_pressure_bar, machining_tacho_used,
+                  machining_force_captured, machining_chips_collected,
+                  machining_chips_ref_code, machining_experiment_sheet_url,
+                  machining_legacy_insert_edge_id, machining_legacy_machining_uid,
+                  source_system)
                VALUES %s ON CONFLICT DO NOTHING""",
-            data,
+            [row + (LEGACY_SOURCE_SYSTEM,) for row in data],
         )
-        if param_data:
-            psycopg2.extras.execute_values(
-                cur,
-                """INSERT INTO machining_params
-                     (operation_id, operation_subtype,
-                      spindle_speed_rpm, cutting_speed_m_per_min, feed_mm_per_rev,
-                      axial_depth_of_cut_mm, radial_depth_of_cut_mm, cutting_length_mm,
-                      workpiece_diameter_mm,
-                      new_edge, coolant_used, coolant_pressure_bar,
-                      tacho_used, force_captured, chips_collected,
-                      chips_ref_code, experiment_sheet_url,
-                      legacy_insert_edge_id, legacy_machining_uid)
-                   VALUES %s ON CONFLICT (operation_id) DO NOTHING""",
-                param_data,
-            )
     return len(data), warnings_out
 
 
@@ -1400,6 +1461,145 @@ def print_report(stats: dict, warnings: list[str]) -> None:
     print("\n✓ Migration complete.\n")
 
 
+SHEETS = [
+    ("alloying_elements", "Alloying Elements", True),
+    ("alloy_codes", "Alloy Codes", True),
+    ("machines", "Machines", True),
+    ("tools", "Tools", True),
+    ("insert_types", "Insert Types", True),
+    ("operation", "Operation", True),
+    ("mfg_codes", "Manufacturing Codes", True),
+    ("boxes", "Insert Boxes Inventory", True),
+    ("inserts", "Inserts", True),
+    ("edges", "Inserts Edges", True),
+    ("inventory", "Inventory", True),
+    ("fast_runs", "FAST Runs", True),
+    ("machining_ops", "Machining Operations", True),
+    ("users", "Users", False),
+]
+
+
+def migrate(
+    sheets: dict[str, list[dict]], cur, dry: bool
+) -> tuple[dict[str, int], list[str]]:
+    """Run every loader in FK order on `cur` (None when dry); the caller commits."""
+    stats: dict[str, int] = {}
+    all_warnings: list[str] = []
+
+    log.info("Loading alloying_elements …")
+    stats["alloying_elements"] = load_alloying_elements(
+        cur, sheets["alloying_elements"], dry
+    )
+
+    log.info("Loading materials …")
+    stats["materials"] = load_materials(cur, sheets["alloy_codes"], dry)
+
+    log.info("Loading material_alloying_elements …")
+    stats["material_alloying_elements"] = load_material_elements(
+        cur, sheets["alloy_codes"], dry
+    )
+
+    log.info("Loading equipment …")
+    stats["equipment"] = load_equipment(cur, sheets["machines"], dry)
+
+    log.info("Loading tools …")
+    stats["tools"] = load_tools(cur, sheets["tools"], dry)
+
+    log.info("Loading insert_types …")
+    stats["insert_types"] = load_insert_types(cur, sheets["insert_types"], dry)
+
+    log.info("Loading manufacturing_methods …")
+    stats["manufacturing_methods"] = load_manufacturing_methods(
+        cur, sheets["operation"], sheets["mfg_codes"], dry
+    )
+
+    log.info("Loading method_parameters …")
+    stats["method_parameters"] = load_method_parameters(cur, dry)
+
+    # Users and people first: owners on boxes, inserts and samples resolve through them.
+    log.info("Loading users …")
+    email_to_uuid_map = load_users(cur, sheets["users"], dry)
+    stats["directus_users"] = len(email_to_uuid_map)
+    if dry:
+        people = PeopleIndex()
+    else:
+        ensure_people(cur, list(email_to_uuid_map.values()))
+        people = load_index(cur)
+
+    log.info("Loading tool_boxes …")
+    n_boxes, box_uuid_map = load_tool_boxes(
+        cur, sheets["boxes"], sheets["inserts"], {}, dry, people
+    )
+    stats["tool_boxes"] = n_boxes
+
+    log.info("Loading cutting_inserts …")
+    n_inserts, insert_uuid_map = load_cutting_inserts(
+        cur, sheets["inserts"], box_uuid_map, {}, dry, people
+    )
+    stats["cutting_inserts"] = n_inserts
+
+    log.info("Loading insert_edges …")
+    n_edges, edge_uuid_map = load_insert_edges(
+        cur, sheets["edges"], insert_uuid_map, box_uuid_map, dry
+    )
+    stats["insert_edges"] = n_edges
+
+    # Refresh lookup maps from DB (now populated)
+    material_map, equipment_map, tool_map, method_map = build_lookup_maps(cur, dry)
+
+    log.info("Loading physical_samples …")
+    n_samples, sample_uuid_map, sample_code_map = load_physical_samples(
+        cur, sheets["inventory"], material_map, people, dry
+    )
+    stats["physical_samples"] = n_samples
+
+    log.info("Loading sample_genealogy …")
+    n_gen, gen_skip = load_sample_genealogy(
+        cur, sheets["inventory"], sample_uuid_map, dry
+    )
+    stats["sample_genealogy"] = n_gen
+    all_warnings.extend(gen_skip)
+
+    log.info("Loading FAST Run operations …")
+    n_fast, fast_skipped = load_fast_runs(
+        cur,
+        sheets["fast_runs"],
+        sheets["inventory"],
+        sample_uuid_map,
+        sample_code_map,
+        equipment_map,
+        method_map,
+        dry,
+        people,
+    )
+    stats["manufacturing_operations (FAST)"] = n_fast
+    if fast_skipped:
+        all_warnings.append(
+            f"{fast_skipped} FAST Runs skipped — no linked Inventory sample "
+            f"(Manufacturing Operation ID not set in Inventory sheet)"
+        )
+
+    log.info("Loading Machining Operations …")
+    n_mop, mop_warn = load_machining_ops(
+        cur,
+        sheets["machining_ops"],
+        sample_uuid_map,
+        sample_code_map,
+        equipment_map,
+        tool_map,
+        method_map,
+        dry,
+        people,
+    )
+    stats["manufacturing_operations (Machining)"] = n_mop
+    all_warnings.extend(mop_warn)
+
+    log.info("Migrating co_owners → sample_co_owners junction …")
+    stats["sample_co_owners"] = load_co_owners(cur, email_to_uuid_map, dry, people)
+
+    return stats, all_warnings
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description=__doc__)
@@ -1419,25 +1619,10 @@ def main() -> None:
 
     log.info("Loading %s …", xlsx_path.name)
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-
-    # Load all sheets
-    _, ae_rows = sheet_rows(wb, "Alloying Elements")
-    _, alloy_rows = sheet_rows(wb, "Alloy Codes")
-    _, machine_rows = sheet_rows(wb, "Machines")
-    _, tool_rows = sheet_rows(wb, "Tools")
-    _, itype_rows = sheet_rows(wb, "Insert Types")
-    _, op_rows = sheet_rows(wb, "Operation")
-    _, mfg_code_rows = sheet_rows(wb, "Manufacturing Codes")
-    _, box_rows = sheet_rows(wb, "Insert Boxes Inventory")
-    _, insert_rows = sheet_rows(wb, "Inserts")
-    _, edge_rows = sheet_rows(wb, "Inserts Edges")
-    _, inv_rows = sheet_rows(wb, "Inventory")
-    _, fast_rows = sheet_rows(wb, "FAST Runs")
-    _, mop_rows = sheet_rows(wb, "Machining Operations")
-    _, user_rows = sheet_rows(wb, "Users", required=False)
-
-    stats: dict[str, int] = {}
-    all_warnings: list[str] = []
+    sheets = {
+        key: sheet_rows(wb, name, required=required)[1]
+        for key, name, required in SHEETS
+    }
 
     if args.dry_run:
         log.info("DRY RUN — no database writes")
@@ -1449,109 +1634,7 @@ def main() -> None:
         cur = conn.cursor()
 
     try:
-        log.info("Loading alloying_elements …")
-        stats["alloying_elements"] = load_alloying_elements(cur, ae_rows, args.dry_run)
-
-        log.info("Loading materials …")
-        stats["materials"] = load_materials(cur, alloy_rows, args.dry_run)
-
-        log.info("Loading material_alloying_elements …")
-        stats["material_alloying_elements"] = load_material_elements(
-            cur, alloy_rows, args.dry_run
-        )
-
-        log.info("Loading equipment …")
-        stats["equipment"] = load_equipment(cur, machine_rows, args.dry_run)
-
-        log.info("Loading tools …")
-        stats["tools"] = load_tools(cur, tool_rows, args.dry_run)
-
-        log.info("Loading insert_types …")
-        stats["insert_types"] = load_insert_types(cur, itype_rows, args.dry_run)
-
-        log.info("Loading manufacturing_methods …")
-        stats["manufacturing_methods"] = load_manufacturing_methods(
-            cur, op_rows, mfg_code_rows, args.dry_run
-        )
-
-        log.info("Loading method_parameters …")
-        stats["method_parameters"] = load_method_parameters(cur, args.dry_run)
-
-        log.info("Loading tool_boxes …")
-        n_boxes, box_uuid_map = load_tool_boxes(
-            cur, box_rows, insert_rows, {}, args.dry_run
-        )
-        stats["tool_boxes"] = n_boxes
-
-        log.info("Loading cutting_inserts …")
-        n_inserts, insert_uuid_map = load_cutting_inserts(
-            cur, insert_rows, box_uuid_map, {}, args.dry_run
-        )
-        stats["cutting_inserts"] = n_inserts
-
-        log.info("Loading insert_edges …")
-        n_edges, edge_uuid_map = load_insert_edges(
-            cur, edge_rows, insert_uuid_map, box_uuid_map, args.dry_run
-        )
-        stats["insert_edges"] = n_edges
-
-        # Refresh lookup maps from DB (now populated)
-        material_map, equipment_map, tool_map, method_map = build_lookup_maps(
-            cur, args.dry_run
-        )
-
-        log.info("Loading users …")
-        email_to_uuid_map = load_users(cur, user_rows, args.dry_run)
-        stats["directus_users"] = len(email_to_uuid_map)
-
-        log.info("Loading physical_samples …")
-        n_samples, sample_uuid_map, sample_code_map = load_physical_samples(
-            cur, inv_rows, material_map, email_to_uuid_map, args.dry_run
-        )
-        stats["physical_samples"] = n_samples
-
-        log.info("Loading sample_genealogy …")
-        n_gen, gen_skip = load_sample_genealogy(
-            cur, inv_rows, sample_uuid_map, args.dry_run
-        )
-        stats["sample_genealogy"] = n_gen
-        all_warnings.extend(gen_skip)
-
-        log.info("Loading FAST Run operations …")
-        n_fast, fast_skipped = load_fast_runs(
-            cur,
-            fast_rows,
-            inv_rows,
-            sample_uuid_map,
-            sample_code_map,
-            equipment_map,
-            method_map,
-            args.dry_run,
-        )
-        stats["manufacturing_operations (FAST)"] = n_fast
-        if fast_skipped:
-            all_warnings.append(
-                f"{fast_skipped} FAST Runs skipped — no linked Inventory sample "
-                f"(Manufacturing Operation ID not set in Inventory sheet)"
-            )
-
-        log.info("Loading Machining Operations …")
-        n_mop, mop_warn = load_machining_ops(
-            cur,
-            mop_rows,
-            sample_uuid_map,
-            sample_code_map,
-            equipment_map,
-            tool_map,
-            method_map,
-            args.dry_run,
-        )
-        stats["manufacturing_operations (Machining)"] = n_mop
-        all_warnings.extend(mop_warn)
-
-        log.info("Migrating co_owners → sample_co_owners junction …")
-        stats["sample_co_owners"] = load_co_owners(cur, email_to_uuid_map, args.dry_run)
-
+        stats, all_warnings = migrate(sheets, cur, args.dry_run)
         if not args.dry_run:
             conn.commit()
             log.info("Transaction committed.")

@@ -1,6 +1,8 @@
 -- Directus metadata for operation_files (external data-file links on an operation).
 -- Idempotent. Apply after migration 20260628000049_operation_files.sql, then flush + restart.
 
+BEGIN;
+
 INSERT INTO directus_collections (collection, icon, color, display_template, sort, translations)
 VALUES ('operation_files','attach_file','#607D8B','{{file_name}}',27,
         '[{"language":"en-US","translation":"Operation Files","singular":"Operation File","plural":"Operation Files"}]')
@@ -27,3 +29,5 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 DELETE FROM directus_relations WHERE many_collection='operation_files' AND many_field='operation_id';
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
 ('operation_files','operation_id','manufacturing_operations','data_file_links','delete');
+
+COMMIT;

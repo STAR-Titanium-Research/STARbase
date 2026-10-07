@@ -149,6 +149,15 @@ The central entity. Everything else points to or from here.
 **Code generation:** `generate_sample_code(seq, alloy_code, method_code, date)`
 → `{seq}-{alloy}-{method}-{YYYY-MM-DD}`
 
+**Numbers are assigned by the database** (migrations `…126`, `…127`; `next_sample_code_number()` is the read-only preview function the Register sample page uses, served by the `d1-next-number` endpoint). The Directus
+interfaces send a code whose number part is the literal placeholder `{seq}` (and, for
+sintering pass codes, `{mf}`); a BEFORE trigger replaces it with the next free number
+under a lock (an advisory lock for sample and MF numbers, a row lock on the sample for
+operation numbers), so concurrent registrations never collide. A code without a
+placeholder is stored as given. `manufacturing_operations.operation_sequence` is filled
+the same way when it is NULL, except for imported rows (`source_system` set), which keep
+a NULL sequence because importers number their own rows.
+
 ---
 
 ### `manufacturing_operations`
@@ -192,6 +201,11 @@ inline columns instead, prefixed by process and shown according to
 `deform_*` and `am_*` (additive). The `method_parameters` registry that described
 the JSONB keys was dropped in `20260626000039`.
 
+`process_category` comes from `manufacturing_methods.process_category` (migration
+`…129`): a BEFORE trigger fills it on insert, or when the method changes, if the write
+does not set it. Applying a prep recipe (`prep_recipe_id` on a Sample Preparation
+operation) copies its steps in an AFTER trigger in the same transaction.
+
 ---
 
 ### `test_sessions`
@@ -203,9 +217,9 @@ after parsing.
 | Column | Type | Description |
 |---|---|---|
 | `session_id` | UUID PK | |
-| `sample_id` | UUID FK | Sample under test |
+| `sample_id` | UUID FK | Primary sample under test: derived from `test_sessions_subject` by a trigger (migration `…139`); do not write directly |
 | `equipment_id` | UUID FK | Test rig used |
-| `insert_edge_id` | UUID FK | Cutting edge involved (machining tests) |
+| `insert_edge_id` | UUID FK | Primary cutting edge involved (machining tests): derived from `test_sessions_subject`; do not write directly |
 | `project_id` | UUID FK | Optional project grouping |
 | `test_type` | TEXT | e.g. force_measurement, microstructure, hardness |
 | `capture_software` | TEXT | Data-capture app + version |
@@ -217,9 +231,21 @@ after parsing.
 | `status` | TEXT | Pipeline state: registered \| pending_processing \| processing \| processed \| analysing \| analysed \| failed (migration `…013`) |
 
 Since Phase 1: what a test targets is recorded through the `test_sessions_subject`
-M2A junction (a sample, an insert edge, …; `sample_id` and `insert_edge_id` are kept
-as nullable backups), and typed per-test parameters are inline columns prefixed by
-test type (`tensile_*`, `hardness_*`, `sem_*`, `xrd_*`, …).
+M2A junction (a sample, an insert edge, …). `sample_id` and `insert_edge_id` are a
+denormalised *primary subject*: since migration `…139` a trigger on the junction sets
+them to the first (lowest junction id) `physical_samples` / `insert_edges` subject, so
+form-created tests are found by readers that filter on `sample_id`. A test with several
+samples shows only the first there; read the junction for all of them. The migration's
+back-fill copies a direct `sample_id` / `insert_edge_id` into the junction only for a test with no
+junction row of that kind, and never one that the audit log shows was removed from the test. Deleting a
+sample no longer cascades to its tests (migration `…139`): the sample leaves each test's
+subject list and the next sample becomes primary; a test is deleted with the sample only when
+that was its last subject (no other sample, no insert edge). Deleting an insert edge that a
+test names, in the junction or in `insert_edge_id`, is refused with "… is the subject of test
+<id>; remove it from the test first", and so is deleting a cutting insert or tool box whose
+cascade reaches such an edge: remove the edge from the test first. Typed per-test
+parameters are inline columns prefixed by test type (`tensile_*`, `hardness_*`, `sem_*`,
+`xrd_*`, …).
 
 ---
 
@@ -260,6 +286,12 @@ Append-only; every core-table mutation produces one row. Protected by
 | `row_before` | JSONB | Full row before mutation (NULL for INSERT) |
 | `row_after` | JSONB | Full row after mutation (NULL for DELETE) |
 | `changed_fields` | JSONB | For UPDATE: `{col: {old: ..., new: ...}}` |
+
+Since migration `…121` every business table is audited and `record_id` is the table's
+own primary key (composite keys joined with `:`). `audit_logs` also refuses `TRUNCATE`
+(`…120`). When a Directus API write could not set `d1.actor_identity` in its own
+transaction, the actor is recorded from `directus_activity` into `audit_log_actors`
+(`…128`); query **`v_audit_logs_with_actor`** for "who made this change".
 
 ---
 
@@ -323,8 +355,8 @@ WHERE  sample_id  = '<uuid>'
   session start, picked up by the audit trigger.
 - Passwords must never be stored in this schema (use Directus or separate auth).
 - **Text-to-SQL read surface (Phase 6):** the `d1_llm_readonly` role is granted
-  `SELECT` on the allow-listed `v_*` views **only** — never base tables and never
-  `audit_logs`. It is `default_transaction_read_only` with a statement timeout.
+  `SELECT` on an explicit allow-list of lab tables and `v_*` views (migration `…132`) —
+  never `audit_logs`, `people` or any `directus_*` table. It is `default_transaction_read_only` with a statement timeout.
   LLM-generated SQL is additionally validated by the plugin's SQL guard before it
   runs (ADR-0009, `docs/runbooks/text-to-sql.md`). The login role used by the
   plugin must inherit `d1_llm_readonly` and never be the superuser.

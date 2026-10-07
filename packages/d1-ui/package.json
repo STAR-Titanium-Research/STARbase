@@ -1,0 +1,26 @@
+{
+  "name": "@d1/ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Shared UI kit for the D1 Explorer pages (record routes, status vocabularies, components, composables). Consumed from source by the Directus extensions; no build step.",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./recordRoute": "./src/recordRoute.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@directus/extensions-sdk": "^17",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^2.2.0"
+  }
+}

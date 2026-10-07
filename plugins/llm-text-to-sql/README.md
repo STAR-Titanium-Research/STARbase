@@ -8,20 +8,25 @@ operations in
 [`docs/runbooks/text-to-sql.md`](../../docs/runbooks/text-to-sql.md).
 
 The LLM is **never trusted**. Its SQL passes a two-layer boundary — an
-application SQL guard (sqlglot AST validation, allow-list, enforced LIMIT) and a
-read-only Postgres role — before it touches data.
+application SQL guard (sqlglot AST validation, function allow-list, per-scope CTE
+resolution, denied relations, enforced LIMIT) and a read-only Postgres role with
+`SELECT` on an explicit allow-list of lab tables and views (never `audit_logs`,
+`people` or any `directus_*` table) — before it touches data.
 
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Liveness probe (no auth). |
-| POST | `/api/ask` | `{question}` → `{sql, columns, rows}`. Unsafe SQL → 422, not executed. |
+| POST | `/api/ask` | `{question}` → `{sql, columns, rows, row_count, truncated}`. Unsafe SQL → 422, not executed. |
 | POST | `/api/search` | `{query, limit?}` → note rows ranked by cosine similarity. |
 | POST | `/api/embed/backfill` | (Re)embed all note text into `semantic_embeddings`. |
 
-All but `/health` require the `X-Worker-Secret` header when
-`WORKER_WEBHOOK_SECRET` is set.
+All but `/health` require the `X-Worker-Secret` header. The service **fails
+closed**: with `WORKER_WEBHOOK_SECRET` unset every other route answers 503.
+`row_limit` / `limit` must be positive integers (422 otherwise) and are clamped
+(max 1000 rows; 50 search hits); `/api/chat` takes at most 20 `user`/`assistant`
+messages of 4000 characters each.
 
 ## Layout
 
@@ -29,7 +34,7 @@ All but `/health` require the `X-Worker-Secret` header when
 app/
   api.py                 # Flask app: /health, /api/ask, /api/search, /api/embed/backfill
   lib/
-    sql_guard.py         # THE injection boundary: sqlglot validation + allow-list + LIMIT
+    sql_guard.py         # THE injection boundary: sqlglot validation + function allow-list + denied relations + LIMIT
     schema_context.py    # builds the LLM prompt from v_schema_dictionary (live)
     ollama_client.py     # Ollama /api/chat + /api/embeddings
     db.py                # read-only query execution + pgvector search (LLM_DATABASE_URL)
@@ -51,7 +56,7 @@ tests/                   # guard allow/deny matrix, schema context, API, eval go
 | `OLLAMA_SQL_MODEL` | no | `llama3` | Chat model for SQL generation. |
 | `OLLAMA_EMBED_MODEL` | no | `nomic-embed-text` | Embedding model (must be 768-dim). |
 | `LLM_STATEMENT_TIMEOUT_MS` | no | `5000` | Per-connection statement timeout. |
-| `WORKER_WEBHOOK_SECRET` | no | — | Shared secret for `X-Worker-Secret`. Unset = auth off (dev only). |
+| `WORKER_WEBHOOK_SECRET` | yes | — | Shared secret for `X-Worker-Secret`. Unset = every route except `/health` answers 503. |
 | `WORKER_HTTP_PORT` | no | `8080` | Port gunicorn binds inside the container. |
 
 ## Test

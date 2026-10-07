@@ -101,6 +101,10 @@ test('rebuilt app: sim record -> stop -> save dialog shows staged progress and c
     await expect(startBtn).toBeEnabled({ timeout: 15_000 }); // waits on w.st.connected (WS to the recorder)
     await startBtn.click();
 
+    // No Sample is picked here, so the pre-flight (R4) asks first; "Start anyway" goes on to the
+    // alarm-test gate below.
+    await window.locator('[data-testid="start-anyway"]').click({ timeout: 10_000 });
+
     // The first start of a session asks whether to test the alarms first (workspace.ts,
     // checkAlarmsBeforeStart). This used to be a window.confirm() that opened a native OS dialog
     // Playwright could not see, so the gate had to be skipped outright under FORCE_APP_TEST_HOOKS;

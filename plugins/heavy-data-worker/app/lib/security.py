@@ -22,20 +22,25 @@ MAX_UPLOAD_BYTES: int = int(os.getenv("MAX_UPLOAD_BYTES", str(200 * 1024**3)))
 
 
 def check_secret():
-    """Flask before_request hook enforcing the shared-secret header.
+    """Flask before_request hook enforcing the shared-secret header (fails closed).
 
     Returns None to allow the request, or a Flask (response, status) tuple to
     reject it. GET /health is always exempt so container healthchecks work.
-    If WORKER_WEBHOOK_SECRET is unset the check is disabled (a warning is logged
-    once at import time) — set it in production. See .env.example.
+
+    If WORKER_WEBHOOK_SECRET is unset or empty every other request is rejected
+    with 503: a worker with no secret configured must not accept jobs. A wrong or
+    missing header gets 401. See .env.example.
     """
     if request.method == "GET" and request.path == "/health":
         return None
     expected = os.getenv("WORKER_WEBHOOK_SECRET", "")
     if not expected:
-        return None
+        return (
+            jsonify({"error": "WORKER_WEBHOOK_SECRET is not configured on the worker"}),
+            503,
+        )
     provided = request.headers.get(SECRET_HEADER, "")
-    if not hmac.compare_digest(provided, expected):
+    if not hmac.compare_digest(provided.encode(), expected.encode()):
         return jsonify({"error": "unauthorized"}), 401
     return None
 
@@ -46,6 +51,7 @@ def valid_object_key(key: str) -> bool:
 
 
 if not os.getenv("WORKER_WEBHOOK_SECRET"):
-    log.warning(
-        "WORKER_WEBHOOK_SECRET is not set — webhook authentication is DISABLED."
+    log.error(
+        "WORKER_WEBHOOK_SECRET is not set — every request except GET /health "
+        "will be rejected with 503."
     )

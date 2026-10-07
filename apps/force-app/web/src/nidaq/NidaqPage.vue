@@ -3,8 +3,9 @@
 // geometry (BNC / terminal / D-Sub). Click a port to assign it to a channel; "+" on an empty slot
 // opens the card catalog. The channel model (roles + physical bindings) drives what the recorder
 // captures. Simulated on dev machines, real hardware on the rig.
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, ref, computed, watch } from 'vue';
 import { nidaqApi, ROLE_COLORS, type Devices, type Channel, type CatalogCard, type Port, type Module } from './nidaqApi';
+import { nidaqState } from './nidaqStore';
 import { promptAction } from '../ui/confirm';
 import VirtualChannelBuilder from './VirtualChannelBuilder.vue';
 import { useDialog } from '../ui/useDialog';
@@ -12,8 +13,22 @@ import { useDialog } from '../ui/useDialog';
 const devices = ref<Devices | null>(null);
 const channels = ref<Channel[]>([]);
 const cards = ref<CatalogCard[]>([]);
-const loading = ref(false);
+const loading = nidaqState.loading;
 const err = ref<string | null>(null);
+// Seeded from the module-level snapshot (#109) — the last-known chassis and channels show at once
+// and refresh in the background — and every local edit is written back to it, which also drops a
+// refresh that was already in flight and would otherwise put the pre-edit channels back.
+let seeding = false;
+watch(() => nidaqState.data.value, (snap) => {
+	if (!snap) return;
+	seeding = true;
+	devices.value = snap.devices; channels.value = snap.channels; cards.value = snap.cards;
+	seeding = false;
+}, { immediate: true });
+watch([devices, channels], () => {
+	if (seeding || !devices.value) return;
+	nidaqState.mutate({ devices: devices.value, channels: channels.value, cards: cards.value });
+}, { flush: 'sync' });
 
 const pop = ref<{ physical: string; label: string; x: number; y: number } | null>(null);
 const catalogFor = ref<number | null>(null); // target slot for add-card
@@ -43,12 +58,9 @@ function cardSpec(productType: string): CatalogCard | undefined {
 }
 
 async function load() {
-	loading.value = true; err.value = null;
-	try {
-		const [d, ch, c] = await Promise.all([nidaqApi.devices(), nidaqApi.getChannels(), nidaqApi.catalog()]);
-		devices.value = d; channels.value = ch.channels; cards.value = c.cards;
-	} catch (e: any) { err.value = e?.message || 'failed to load NI-DAQ config'; }
-	finally { loading.value = false; }
+	err.value = null;
+	await nidaqState.revalidate();
+	if (nidaqState.error.value) err.value = nidaqState.error.value;
 }
 onMounted(load);
 
@@ -129,7 +141,7 @@ async function removeCard(slot: number) { try { devices.value = await nidaqApi.r
 			<h1>NI-DAQ</h1>
 			<span v-if="devices" class="badge" :class="devices.simulated ? 'sim' : 'live'">{{ devices.simulated ? 'SIMULATED' : 'LIVE' }}</span>
 			<div class="spacer"></div>
-			<button class="btn" @click="autoassign"><span class="material-symbols-rounded">bolt</span> Auto-assign force</button>
+			<button class="btn" data-focus="nidaq-autoassign" @click="autoassign"><span class="material-symbols-rounded">bolt</span> Auto-assign force</button>
 			<button class="btn icon" title="Refresh" aria-label="Refresh" :disabled="loading" @click="load"><span class="material-symbols-rounded">refresh</span></button>
 		</header>
 		<p v-if="err" class="err">{{ err }}</p>
@@ -157,7 +169,7 @@ async function removeCard(slot: number) { try { devices.value = await nidaqApi.r
 
 		<div class="layout">
 			<!-- Chassis diagram(s) -->
-			<div class="diagram">
+			<div class="diagram" data-focus="nidaq-chassis">
 				<div v-for="ch in devices?.chassis || []" :key="ch.name" class="chassis">
 					<div class="chassis-top"><b>{{ ch.product_type }}</b><span class="sub">{{ ch.name }} · {{ ch.slots }}-slot</span></div>
 					<div class="slots">
@@ -222,7 +234,7 @@ async function removeCard(slot: number) { try { devices.value = await nidaqApi.r
 			</div>
 
 			<!-- Channel model list -->
-			<aside class="channels">
+			<aside class="channels" data-focus="nidaq-channels">
 				<div class="ch-head"><b>Channels</b><button class="btn sm" @click="addVirtual">+ Virtual</button></div>
 				<div v-for="c in channels" :key="c.name" class="chrow" :class="{ clickable: c.source === 'virtual' }" @click="c.source === 'virtual' && editVirtual(c)">
 					<span class="dot" :style="{ background: c.color }"></span>

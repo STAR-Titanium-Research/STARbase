@@ -35,23 +35,29 @@ ON CONFLICT (alloy_code) DO NOTHING;
 -- ---------------------------------------------------------------------------
 -- Manufacturing methods
 -- ---------------------------------------------------------------------------
-INSERT INTO manufacturing_methods (method_code, method_name, description) VALUES
+-- process_category is the same mapping migration 129 back-fills (that back-fill runs before this seed
+-- on a fresh install, so the seed has to carry it). Grinding has none yet (no 'grinding' category).
+-- Re-running keeps a category that is already set; only a NULL one is filled in.
+INSERT INTO manufacturing_methods (method_code, method_name, description, process_category) VALUES
     ('MF', 'FAST/SPS Sintering',
      'Field-Assisted Sintering Technique / Spark Plasma Sintering. '
-     'Consolidates powder feedstock under combined pressure and pulsed DC current.'),
+     'Consolidates powder feedstock under combined pressure and pulsed DC current.', 'sintering'),
     ('MO', 'Forging',
-     'Hot or cold forging to shape billets under compressive force.'),
+     'Hot or cold forging to shape billets under compressive force.', 'deformation'),
     ('MR', 'Rolling',
-     'Rolling to reduce cross-section and improve microstructure.'),
+     'Rolling to reduce cross-section and improve microstructure.', 'deformation'),
     ('MC', 'CNC Turning',
-     'Conventional or CNC single-point turning on a lathe.'),
+     'Conventional or CNC single-point turning on a lathe.', 'machining'),
     ('MM', 'CNC Milling',
-     'CNC milling (end milling, face milling) on a machining centre.'),
+     'CNC milling (end milling, face milling) on a machining centre.', 'machining'),
     ('HT', 'Heat Treatment',
-     'Annealing, solution treatment, ageing, or stress relief cycles.'),
+     'Annealing, solution treatment, ageing, or stress relief cycles.', 'heat_treatment'),
     ('GR', 'Grinding',
-     'Surface or cylindrical grinding for final dimensional accuracy.')
-ON CONFLICT (method_code) DO NOTHING;
+     'Surface or cylindrical grinding for final dimensional accuracy.', NULL)
+ON CONFLICT (method_code) DO UPDATE
+    SET process_category = COALESCE(manufacturing_methods.process_category, EXCLUDED.process_category)
+    WHERE manufacturing_methods.process_category IS NULL
+      AND EXCLUDED.process_category IS NOT NULL;   -- no row churn (version bump, audit row) on a re-run
 
 -- (method_parameters seed removed — table dropped in migration 039)
 

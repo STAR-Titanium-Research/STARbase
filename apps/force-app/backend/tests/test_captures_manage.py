@@ -8,7 +8,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import main, recovery
 from app.main import app
 
 
@@ -125,6 +125,31 @@ def test_delete_allows_a_finished_session_that_is_still_referenced(client, tmp_p
 
     monkeypatch.setattr(main, "_session", _FakeSession())
     assert client.delete("/captures/done-one").status_code == 200
+
+
+@pytest.mark.parametrize("busy_set", ["_recovering", "_discarding"])
+def test_delete_refuses_a_capture_being_recovered_or_discarded(
+    client, tmp_path, monkeypatch, busy_set
+):
+    d = _make_capture(tmp_path, "busy-one", finalized=False)
+    monkeypatch.setattr(recovery, busy_set, {"busy-one"})
+
+    res = client.delete("/captures/busy-one")
+
+    assert res.status_code == 409
+    assert "recovered, restored or discarded" in res.json()["detail"]
+    assert os.path.isfile(os.path.join(d, "raw.d1raw"))
+
+
+def test_browse_marks_an_incomplete_row_that_is_being_recovered(client, tmp_path, monkeypatch):
+    _make_capture(tmp_path, "rec-one", finalized=False)
+    _make_capture(tmp_path, "idle-one", finalized=False)
+    monkeypatch.setattr(recovery, "_recovering", {"rec-one"})
+
+    rows = {c["id"]: c for c in client.get("/captures/browse").json()["captures"]}
+
+    assert rows["rec-one"]["recovering"] is True
+    assert rows["idle-one"]["recovering"] is False
 
 
 # ---- PATCH /captures/{id}/metadata ----

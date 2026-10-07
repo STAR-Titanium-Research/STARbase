@@ -2,7 +2,13 @@ import { type Page, type Locator, expect } from '@playwright/test';
 
 const BASE = process.env.D1_BASE_URL || 'http://localhost:8055';
 const EMAIL = process.env.D1_ADMIN_EMAIL || 'admin@example.com';
-const PASSWORD = process.env.D1_ADMIN_PASSWORD || 'change_me_admin';
+/** A required env var: fail with a clear message instead of logging in with a guessed password. */
+export function requireEnv(name: string): string {
+	const v = process.env[name];
+	if (!v) throw new Error(`${name} must be set (the Directus admin password; no default)`);
+	return v;
+}
+const PASSWORD = requireEnv('D1_ADMIN_PASSWORD');
 
 /**
  * Log into Directus through the UI. Done per-test (not via shared storageState)

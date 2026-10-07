@@ -77,4 +77,13 @@ SELECT s.sample_id, pa.project_id, ca.campaign_id, t.d,'tensile','A. Operator','
 FROM physical_samples s, projects pa, campaigns ca, (VALUES ('2024-06-05'::date,910,985,12.5),('2024-06-18'::date,928,1002,11.8)) AS t(d,ys,uts,el)
 WHERE s.sample_code='DEMO-TI64-001' AND pa.project_code='DEMO-PA' AND ca.campaign_code='DEMO-CA';
 
+-- The subject of a test lives in the junction (migration 063); sample_id is derived from it by a
+-- trigger (migration 139), so write the junction rows too or a later subject edit would blank sample_id.
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+SELECT t.session_id, 'physical_samples', t.sample_id::text
+FROM test_sessions t JOIN physical_samples s ON s.sample_id = t.sample_id
+WHERE s.sample_code LIKE 'DEMO-%'
+  AND NOT EXISTS (SELECT 1 FROM test_sessions_subject j WHERE j.test_sessions_id = t.session_id
+                  AND j.collection = 'physical_samples' AND lower(j.item) = t.sample_id::text);
+
 COMMIT;

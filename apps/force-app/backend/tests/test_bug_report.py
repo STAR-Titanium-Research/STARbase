@@ -66,6 +66,26 @@ def test_backticks_in_attached_text_cannot_break_out_of_the_fence():
     assert body.count("```") == 4
 
 
+def test_windows_account_names_are_redacted_from_every_attached_section():
+    """captures_root defaults under the operator's profile, and log/console lines quote paths too
+    (tracebacks, config loads), so the account name must not reach the issue from any of them."""
+    leaks = [
+        r"captures_root: C:\Users\jsmith\AppData\Local\force-app\captures",
+        r'File "D:\Users\Jane Smith\force-app\main.py", line 3',
+        "C:/Users/jsmith/AppData/Local/force-app",
+        r'{"path": "C:\\Users\\jsmith\\AppData"}',
+    ]
+    for leak in leaks:
+        body = build_body(
+            **{**BASE, "diagnostics": leak, "log_tail": leak, "console_tail": leak},
+        )
+        assert "jsmith" not in body and "Jane" not in body and "Smith" not in body, leak
+        assert body.count("<redacted>") == 3, leak
+    # A path that names no account is left alone, so the triage value of the paths survives.
+    body = build_body(**{**BASE, "diagnostics": r"captures_root: J:\My Drive\force-app-captures"})
+    assert r"J:\My Drive\force-app-captures" in body
+
+
 def test_long_tails_are_truncated_from_the_front():
     """GitHub caps issue bodies, and the END of a log is the part that matters."""
     body = build_body(**{**BASE, "log_tail": "X" * 50_000 + "TAIL_MARKER"})
@@ -163,6 +183,39 @@ async def test_unrecognized_area_falls_back_to_general(fake_relay):
 async def test_missing_area_defaults_to_general(fake_relay):
     await bug_report.create_issue(**CREATE_ARGS, kind="bug")
     assert fake_relay.last_payload["labels"][-1] == "area:general"
+
+
+# ---- #95: several areas per report ------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_several_areas_each_get_a_label(fake_relay):
+    await bug_report.create_issue(**CREATE_ARGS, kind="bug", area=["plotting", "recording"])
+    assert fake_relay.last_payload["labels"][-2:] == ["area:plotting", "area:recording"]
+
+
+def test_normalize_areas_filters_dedupes_and_caps():
+    assert bug_report.normalize_areas(["nidaq", "bogus", "nidaq", "GUI"]) == ["nidaq", "gui"]
+    many = ["recording", "plotting", "diagnostics", "settings", "labamp", "nidaq"]
+    assert bug_report.normalize_areas(many) == many[: bug_report.MAX_AREAS]
+
+
+def test_normalize_areas_falls_back_to_general_and_drops_it_beside_a_specific_area():
+    assert bug_report.normalize_areas([]) == ["general"]
+    assert bug_report.normalize_areas(None) == ["general"]
+    assert bug_report.normalize_areas(["bogus"]) == ["general"]
+    assert bug_report.normalize_areas(["general", "plotting"]) == ["plotting"]
+    # A single string (an older client) still works.
+    assert bug_report.normalize_areas("labamp") == ["labamp"]
+
+
+@pytest.mark.anyio
+async def test_success_result_carries_the_filed_title_and_labels(fake_relay):
+    """#88: the app lists the new issue at once from this, before GitHub's list catches up."""
+    result = await bug_report.create_issue(**CREATE_ARGS, kind="feature", area=["gui"])
+    assert result["number"] == 1 and result["url"].endswith("/issues/1")
+    assert result["title"] == "[Feature] the plot lags"
+    assert "area:gui" in result["labels"]
 
 
 # ---- list_issues: proxies the relay's /issues, never raises ----------------------------------

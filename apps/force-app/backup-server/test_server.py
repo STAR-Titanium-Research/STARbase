@@ -299,3 +299,370 @@ def test_purge_expired(client, tmp_path, monkeypatch):
     srv._purge_expired()
 
     assert not os.path.exists(os.path.join(str(tmp_path), "old-sess"))
+
+
+def test_session_info_reports_expiry(client, tmp_path):
+    import server as srv
+
+    client.post(
+        "/ingest/start", json={"session_id": "exp", "header_hex": _make_header().hex()}
+    )
+    info = client.get("/sessions/exp/info").json()
+    assert info["expires_at"] == pytest.approx(
+        info["updated_at"] + srv.RETENTION_HOURS * 3600
+    )
+
+
+def test_mark_deleted_tombstones_and_restarts_the_retention_clock(client, tmp_path):
+    import server as srv
+
+    client.post(
+        "/ingest/start", json={"session_id": "gone", "header_hex": _make_header().hex()}
+    )
+    client.post("/ingest/finish", json={"session_id": "gone"})
+    # Backdate, so the reset of updated_at is observable.
+    meta_path = os.path.join(str(tmp_path), "gone", "meta.json")
+    with open(meta_path) as f:
+        meta = json.load(f)
+    meta["updated_at"] = time.time() - 3600
+    with open(meta_path, "w") as f:
+        json.dump(meta, f)
+
+    before = time.time()
+    r = client.post("/sessions/gone/mark-deleted")
+    assert r.status_code == 200
+    assert r.json()["expires_at"] >= before + srv.RETENTION_HOURS * 3600 - 1
+
+    info = client.get("/sessions/gone/info").json()
+    assert info["state"] == "deleted"
+    assert info["deleted_at"] >= before
+    assert info["meta"]["state_before_delete"] == "complete"
+    # The bytes are still there: a tombstone is a label, not a delete.
+    assert client.get("/sessions/gone/raw").status_code == 200
+
+    # A late /ingest/finish (the streamer flushing after the local delete) keeps the tombstone.
+    client.post("/ingest/finish", json={"session_id": "gone"})
+    assert client.get("/sessions/gone/info").json()["state"] == "deleted"
+
+    # Marking twice is harmless and keeps the original pre-delete state.
+    client.post("/sessions/gone/mark-deleted")
+    assert (
+        client.get("/sessions/gone/info").json()["meta"]["state_before_delete"]
+        == "complete"
+    )
+
+
+def test_mark_deleted_twice_does_not_restart_the_clock(client, tmp_path):
+    client.post(
+        "/ingest/start",
+        json={"session_id": "twice", "header_hex": _make_header().hex()},
+    )
+    client.post("/sessions/twice/mark-deleted")
+    meta_path = os.path.join(str(tmp_path), "twice", "meta.json")
+    with open(meta_path) as f:
+        meta = json.load(f)
+    meta["updated_at"] -= 3600
+    meta["deleted_at"] -= 3600
+    with open(meta_path, "w") as f:
+        json.dump(meta, f)
+    r = client.post("/sessions/twice/mark-deleted")
+    assert r.status_code == 200
+    with open(meta_path) as f:
+        after = json.load(f)
+    assert after["updated_at"] == meta["updated_at"]
+    assert after["deleted_at"] == meta["deleted_at"]
+    assert r.json()["expires_at"] == pytest.approx(meta["updated_at"] + 12 * 3600)
+
+
+@pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "a\\b"])
+def test_session_dir_rejects_names_that_point_at_storage(client, bad):
+    import server as srv
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as e:
+        srv._session_dir(bad)
+    assert e.value.status_code == 400
+
+
+def test_delete_dot_does_not_remove_the_storage_root(client, tmp_path):
+    client.post(
+        "/ingest/start", json={"session_id": "keep", "header_hex": _make_header().hex()}
+    )
+    # %2E: a literal "." segment would be normalised away by the HTTP client before it got here.
+    client.delete("/sessions/%2E")
+    assert os.path.isdir(os.path.join(str(tmp_path), "keep"))
+
+
+def test_mark_deleted_is_purged_after_retention(client, tmp_path, monkeypatch):
+    import server as srv
+
+    client.post(
+        "/ingest/start", json={"session_id": "tomb", "header_hex": _make_header().hex()}
+    )
+    client.post("/sessions/tomb/mark-deleted")
+    srv._purge_expired()
+    assert os.path.isdir(
+        os.path.join(str(tmp_path), "tomb")
+    )  # not yet: retention is 12 h
+
+    monkeypatch.setattr(srv, "RETENTION_HOURS", 0.0)
+    time.sleep(0.01)
+    srv._purge_expired()
+    assert not os.path.exists(os.path.join(str(tmp_path), "tomb"))
+
+
+def test_mark_deleted_unknown_session_is_404(client):
+    assert client.post("/sessions/ghost/mark-deleted").status_code == 404
+
+
+def _begin(client, sid, config=None):
+    client.post(
+        "/ingest/start",
+        json={
+            "session_id": sid,
+            "header_hex": _make_header().hex(),
+            "config": config or {"dyno_gains": [1, 2, 3, 4, 5, 6, 7, 8]},
+        },
+    )
+    return sid
+
+
+@pytest.mark.parametrize("content", [b"{not json", b"", b"[1, 2]", b"\xff\xfe"])
+def test_mark_deleted_does_not_overwrite_an_unreadable_meta(client, tmp_path, content):
+    _begin(client, "broken")
+    meta_path = os.path.join(str(tmp_path), "broken", "meta.json")
+    with open(meta_path, "wb") as f:
+        f.write(content)
+    r = client.post("/sessions/broken/mark-deleted")
+    assert r.status_code == 409
+    with open(meta_path, "rb") as f:
+        assert f.read() == content  # untouched: nothing was lost
+    assert not os.path.exists(meta_path + ".tmp")
+
+
+def test_mark_deleted_keeps_the_stored_config(client, tmp_path):
+    _begin(client, "cfg", {"dyno_gains": [9] * 8, "sample_name": "KEEP"})
+    assert client.post("/sessions/cfg/mark-deleted").status_code == 200
+    meta = client.get("/sessions/cfg/info").json()["meta"]
+    assert meta["config"] == {"dyno_gains": [9] * 8, "sample_name": "KEEP"}
+
+
+def test_mark_deleted_without_a_meta_file_still_tombstones(client, tmp_path):
+    _begin(client, "nometa")
+    os.remove(os.path.join(str(tmp_path), "nometa", "meta.json"))
+    assert client.post("/sessions/nometa/mark-deleted").status_code == 200
+    with open(os.path.join(str(tmp_path), "nometa", "meta.json")) as f:
+        assert json.load(f)["state"] == "deleted"
+
+
+def test_mark_deleted_writes_meta_atomically(client, tmp_path, monkeypatch):
+    """A write that dies part-way must leave the old meta.json whole, and no temp file behind."""
+    _begin(client, "atomic")
+    meta_path = os.path.join(str(tmp_path), "atomic", "meta.json")
+    with open(meta_path, "rb") as f:
+        before = f.read()
+
+    def dies_halfway(obj, f, *a, **k):
+        f.write('{"session_id": "atom')
+        raise OSError("disk full")
+
+    import server as srv
+
+    monkeypatch.setattr(srv.json, "dump", dies_halfway)
+    with pytest.raises(OSError):
+        client.post("/sessions/atomic/mark-deleted")
+    with open(meta_path, "rb") as f:
+        assert f.read() == before
+    assert not os.path.exists(meta_path + ".tmp")
+
+
+def _meta(tmp_path, sid):
+    with open(os.path.join(str(tmp_path), sid, "meta.json")) as f:
+        return json.load(f)
+
+
+def test_unmark_deleted_restores_the_state_and_drops_the_markers(client, tmp_path):
+    _begin(client, "back")
+    client.post("/ingest/finish", json={"session_id": "back"})
+    client.post("/sessions/back/mark-deleted")
+    tomb = _meta(tmp_path, "back")
+    assert tomb["state"] == "deleted"
+
+    r = client.post("/sessions/back/unmark-deleted")
+    assert r.status_code == 200 and r.json()["unmarked"] is True
+    meta = _meta(tmp_path, "back")
+    assert meta["state"] == "complete"  # what the stream had reached
+    assert "deleted_at" not in meta and "state_before_delete" not in meta
+    # The stored config is intact, and the retention clock was not touched or reset.
+    assert meta["config"] == tomb["config"]
+    assert meta["updated_at"] == tomb["updated_at"]
+    info = client.get("/sessions/back/info").json()
+    assert info["state"] == "complete" and "deleted_at" not in info
+    assert info["expires_at"] == pytest.approx(tomb["updated_at"] + 12 * 3600)
+    assert client.get("/sessions/back/raw").status_code == 200
+
+    # A late /ingest/finish now behaves as for any live session.
+    client.post("/ingest/finish", json={"session_id": "back"})
+    assert client.get("/sessions/back/info").json()["state"] == "complete"
+
+
+def test_unmark_deleted_restores_an_interrupted_copy_as_streaming(client, tmp_path):
+    _begin(client, "cut")  # never finished: state "streaming"
+    client.post("/sessions/cut/mark-deleted")
+    client.post("/sessions/cut/unmark-deleted")
+    assert _meta(tmp_path, "cut")["state"] == "streaming"
+
+
+def test_unmark_deleted_is_idempotent_and_leaves_live_sessions_alone(client, tmp_path):
+    _begin(client, "live")
+    before = _meta(tmp_path, "live")
+    r = client.post("/sessions/live/unmark-deleted")  # never tombstoned
+    assert r.status_code == 200 and r.json()["unmarked"] is False
+    assert _meta(tmp_path, "live") == before
+
+    client.post("/sessions/live/mark-deleted")
+    assert client.post("/sessions/live/unmark-deleted").json()["unmarked"] is True
+    once = _meta(tmp_path, "live")
+    assert client.post("/sessions/live/unmark-deleted").json()["unmarked"] is False
+    assert _meta(tmp_path, "live") == once
+
+
+def test_unmark_then_mark_again_tombstones_afresh(client, tmp_path):
+    _begin(client, "again")
+    client.post("/ingest/finish", json={"session_id": "again"})
+    client.post("/sessions/again/mark-deleted")
+    client.post("/sessions/again/unmark-deleted")
+    client.post("/sessions/again/mark-deleted")
+    meta = _meta(tmp_path, "again")
+    assert meta["state"] == "deleted" and meta["state_before_delete"] == "complete"
+
+
+def test_unmark_deleted_validates_the_id_and_the_session(client, tmp_path):
+    assert client.post("/sessions/ghost/unmark-deleted").status_code == 404
+    assert client.post("/sessions/a%5Cb/unmark-deleted").status_code == 400
+    assert client.post("/sessions/%2E/unmark-deleted").status_code == 400
+
+
+def test_unmark_deleted_does_not_overwrite_an_unreadable_meta(client, tmp_path):
+    _begin(client, "bad")
+    meta_path = os.path.join(str(tmp_path), "bad", "meta.json")
+    with open(meta_path, "wb") as f:
+        f.write(b"{oops")
+    assert client.post("/sessions/bad/unmark-deleted").status_code == 409
+    with open(meta_path, "rb") as f:
+        assert f.read() == b"{oops"
+
+
+@pytest.mark.parametrize(
+    "sid",
+    ["C%3A", "C%3Afoo", "..", "a%2Fb", "a%5Cb", "%2e%2e", "%2E", "x%3Ay", "..%5Cx"],
+)
+def test_session_id_must_be_a_bare_basename(client, tmp_path, sid):
+    """Drive letters, parent refs, separators and encoded variants all name something other than a
+    direct child of STORAGE (on Windows `C:` escapes it) — refused before any filesystem call."""
+    assert client.delete(f"/sessions/{sid}").status_code in (400, 404)
+    assert client.post(f"/sessions/{sid}/mark-deleted").status_code in (400, 404)
+    assert client.get(f"/sessions/{sid}/info").status_code in (400, 404)
+    assert os.path.isdir(str(tmp_path))  # the storage root itself survived
+
+
+@pytest.mark.parametrize(
+    "sid", ["C:", "C:foo", "..", ".", "", "a/b", "a\\b", "x:y", "a\x00b"]
+)
+def test_session_dir_rejects_unsafe_ids(sid, tmp_path, monkeypatch):
+    import server as srv
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(srv, "STORAGE", str(tmp_path))
+    with pytest.raises(HTTPException) as e:
+        srv._session_dir(sid)
+    assert e.value.status_code == 400
+
+
+def test_session_dir_accepts_normal_ids(tmp_path, monkeypatch):
+    import server as srv
+
+    monkeypatch.setattr(srv, "STORAGE", str(tmp_path))
+    for sid in ("20260101-000000-abc123", "test-001", "a.b", "a b"):
+        assert srv._session_dir(sid) == os.path.join(str(tmp_path), sid)
+
+
+def _start_body(sid, config=None):
+    return {
+        "session_id": sid,
+        "header_hex": _make_header().hex(),
+        "config": config or {},
+    }
+
+
+def test_duplicate_ingest_start_keeps_the_streamed_bytes(client, tmp_path):
+    """Review 1.9: a retried /ingest/start used to reopen raw.d1rw with "wb", truncating a
+    recording that was already streaming back to its 32-byte header."""
+    sid = "dup-1"
+    client.post("/ingest/start", json=_start_body(sid, {"gain": 1}))
+    body = os.urandom(400)
+    assert _chunk(client, sid, body, offset=32).json()["appended"] == 400
+    before = _meta(tmp_path, sid)
+
+    r = client.post("/ingest/start", json=_start_body(sid, {"gain": 2}))
+
+    assert r.status_code == 200
+    assert r.json()["existing"] is True
+    assert r.json()["size"] == 32 + 400  # where the client should resume
+    raw = (tmp_path / sid / "raw.d1rw").read_bytes()
+    assert raw == _make_header() + body
+    after = _meta(tmp_path, sid)
+    assert after["started_at"] == before["started_at"]
+    assert after["config"] == {"gain": 1}
+    assert after["chunks_received"] == before["chunks_received"]
+
+
+def test_duplicate_ingest_start_does_not_clear_a_tombstone(client, tmp_path):
+    sid = "dup-2"
+    client.post("/ingest/start", json=_start_body(sid))
+    _chunk(client, sid, os.urandom(400), offset=32)
+    client.post(f"/sessions/{sid}/mark-deleted")
+
+    r = client.post("/ingest/start", json=_start_body(sid))
+
+    assert r.status_code == 200 and r.json()["size"] == 432
+    meta = _meta(tmp_path, sid)
+    assert meta["state"] == "deleted" and "deleted_at" in meta
+    assert (tmp_path / sid / "raw.d1rw").stat().st_size == 432
+
+
+def test_ingest_start_with_bad_hex_is_a_400_not_a_500(client, tmp_path):
+    r = client.post("/ingest/start", json={"session_id": "bad-hex", "header_hex": "zz"})
+    assert r.status_code == 400
+    assert not (tmp_path / "bad-hex").exists()
+
+
+def test_session_info_validates_the_id_like_the_other_routes(client):
+    assert client.get("/sessions/a%5Cb/info").status_code == 400
+    assert client.get("/sessions/C%3A/info").status_code == 400
+    assert client.get("/sessions/ghost/info").status_code == 404
+
+
+def test_meta_updates_leave_no_temp_file_and_stay_valid_json(client, tmp_path):
+    sid = "atomic-1"
+    client.post("/ingest/start", json=_start_body(sid))
+    _chunk(client, sid, os.urandom(400), offset=32)
+    client.post("/ingest/finish", json={"session_id": sid})
+    names = sorted(os.listdir(tmp_path / sid))
+    assert names == ["meta.json", "raw.d1rw"]
+    assert _meta(tmp_path, sid)["state"] == "complete"
+
+
+def test_meta_writes_go_through_write_meta(client, tmp_path, monkeypatch):
+    import server as srv
+
+    calls = []
+    real = srv._write_meta
+    monkeypatch.setattr(
+        srv, "_write_meta", lambda d, m: (calls.append(m["state"]), real(d, m))
+    )
+    sid = "atomic-2"
+    client.post("/ingest/start", json=_start_body(sid))
+    _chunk(client, sid, os.urandom(400), offset=32)
+    client.post("/ingest/finish", json={"session_id": sid})
+    assert calls == ["streaming", "streaming", "complete"]

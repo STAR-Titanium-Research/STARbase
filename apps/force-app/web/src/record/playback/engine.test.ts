@@ -32,6 +32,14 @@ function makeDenseCache(n = 10000, fs = 1000): Cache {
 	return { N: n, Fs: fs, feed: 0.1, diam: 80, csSec: 0, ceSec: (n - 1) / fs, t, Fx, Fy, Fz, rpm, revs };
 }
 
+// A MATLAB-ingested cache: only the cut window is stored, so t[0] is an absolute offset into the
+// original signal (process_force.m caches `cutstart:cutend`). 5 s at 100 Hz starting at t=15 s.
+function makeOffsetCache(t0 = 15, n = 500, fs = 100): Cache {
+	const c = makeCache(n, fs);
+	for (let i = 0; i < n; i++) c.t[i] = t0 + i / fs;
+	return { ...c, csSec: t0, ceSec: t0 + (n - 1) / fs };
+}
+
 // Deterministic clock + manual frame pump, so no rAF and no wall-clock flake.
 function harness() {
 	let clock = 0;
@@ -118,6 +126,73 @@ describe('playback engine', () => {
 		expect(h.engine.state.tSec).toBeCloseTo(h.engine.state.duration, 5);
 	});
 
+	describe('a cache that does not start at t=0 (#110)', () => {
+		it('starts the playhead at the first sample and reports the cut length', () => {
+			const h = harness();
+			h.engine.load(makeOffsetCache(), { ppr: 1, stride: 1 });
+			expect(h.engine.state.t0).toBeCloseTo(15, 5);
+			expect(h.engine.state.tSec).toBeCloseTo(15, 5);
+			expect(h.engine.state.duration).toBeCloseTo(4.99, 2);
+		});
+
+		it('plots from the very first second of playback', () => {
+			// Regression: the playhead started at 0, and idxOfTime() maps every t < t[0] to index 0, so
+			// the first 15 s of "playback" appended nothing at all.
+			const h = harness();
+			h.engine.load(makeOffsetCache(), { ppr: 1, stride: 1 });
+			h.engine.play();
+			h.tick(1000);
+			expect(h.engine.state.tSec).toBeCloseTo(16, 2);
+			expect(h.client.trace.t.length).toBeGreaterThan(50);
+			expect(h.client.frm.count).toBeGreaterThan(50);
+		});
+
+		it('clamps seeks to [t0, end] and replays from t0 after the end', () => {
+			const h = harness();
+			h.engine.load(makeOffsetCache(), { ppr: 1, stride: 1 });
+			h.engine.seek(3);
+			expect(h.engine.state.tSec).toBeCloseTo(15, 5);
+			h.engine.seek(999);
+			expect(h.engine.state.tSec).toBeCloseTo(19.99, 2);
+			// At the end, Play restarts from the first sample, not from 0.
+			h.engine.play();
+			expect(h.engine.state.tSec).toBeCloseTo(15, 5);
+			expect(h.engine.state.playing).toBe(true);
+		});
+
+		it('draws every sample once played to the end', () => {
+			const h = harness();
+			h.engine.load(makeOffsetCache(), { ppr: 1, stride: 1 });
+			h.engine.play();
+			for (let i = 0; i < 10; i++) h.tick(1000);
+			expect(h.engine.state.playing).toBe(false);
+			expect(h.client.status.nTotal).toBe(500);
+		});
+	});
+
+	it('computes timeline markers at load and clears them on a failed load (#104)', () => {
+		const h = harness();
+		h.engine.load(makeDenseCache(), { ppr: 1, stride: 1, cropStartSec: 2 });
+		const kinds = h.engine.state.markers.map((m) => m.kind);
+		expect(kinds).toContain('crop');
+		expect(h.engine.state.markers.find((m) => m.axis === 'Fx')!.t).toBeCloseTo(1.234, 3);
+		h.engine.load({ ...makeCache(1), N: 1 } as Cache, { ppr: 1, stride: 1 });
+		expect(h.engine.state.markers).toEqual([]);
+	});
+
+	it('seeking to a peak marker includes the peak sample, so the shown peak is the real one (#104)', () => {
+		const h = harness();
+		h.engine.load(makeDenseCache(), { ppr: 1, stride: 1 });
+		for (const [axis, want] of [['Fx', 9999], ['Fz', 8888]] as const) {
+			const m = h.engine.state.markers.find((x) => x.axis === axis)!;
+			h.engine.seek(m.seekT ?? m.t);
+			expect(h.client.status.peaks[axis]).toBeCloseTo(want, 0);
+			h.engine.seek(0);
+			h.engine.seek(m.t);                 // the peak sample's own time stops one sample short
+			expect(h.client.status.peaks[axis]).toBeLessThan(want - 1);
+		}
+	});
+
 	it('stops at the end and reports not playing', () => {
 		const h = harness();
 		h.engine.load(makeCache(), { ppr: 1, stride: 1 });
@@ -127,13 +202,76 @@ describe('playback engine', () => {
 		expect(h.engine.state.tSec).toBeCloseTo(h.engine.state.duration, 5);
 	});
 
-	it('trims the trace to windowSec, like the live path', () => {
+	it('trims the trace to the retained history, like the live path', () => {
 		const h = harness();
-		h.client.windowSec = 2;
+		h.client.retainFloorSec = 2;
 		h.engine.load(makeCache(), { ppr: 1, stride: 1 });
 		h.engine.seek(9);
 		const t = h.client.trace.t;
 		expect(t[0]).toBeGreaterThanOrEqual(9 - 2 - 0.5);
+	});
+
+	describe('window changes (#105/#76)', () => {
+		it('rebuilds already-trimmed history when a view asks for a wider window', () => {
+			const h = harness();
+			h.client.retainFloorSec = 2;
+			h.engine.load(makeDenseCache(), { ppr: 1, stride: 1 });
+			h.engine.seek(9);
+			expect(h.client.trace.t[0]).toBeGreaterThan(6.5);
+			// No playback and no seek: the wider window must apply while paused.
+			h.client.setWindowDemand('panel', 6);
+			expect(h.client.trace.t[0]).toBeLessThan(3.1);
+			expect(h.client.trace.t[0]).toBeGreaterThanOrEqual(3 - 0.01);
+		});
+
+		it('a rebuilt trace equals one played through with that window all along', () => {
+			const played = harness();
+			played.client.retainFloorSec = 6;
+			played.engine.load(makeDenseCache(), { ppr: 1, stride: 1 });
+			played.engine.play();
+			for (let i = 0; i < 25; i++) played.tick(333);
+			played.engine.pause();
+
+			const widened = harness();
+			widened.client.retainFloorSec = 2;
+			widened.engine.load(makeDenseCache(), { ppr: 1, stride: 1 });
+			widened.engine.play();
+			for (let i = 0; i < 25; i++) widened.tick(333);
+			widened.engine.pause();
+			widened.client.setWindowDemand('panel', 6);
+
+			expect(widened.client.trace.t).toEqual(played.client.trace.t);
+			expect(widened.client.trace.fz).toEqual(played.client.trace.fz);
+			expect(widened.client.trace.sub.Fx1).toEqual(played.client.trace.sub.Fx1);
+		});
+
+		it('a long forward seek builds the same trace as playing there', () => {
+			const played = harness();
+			played.client.retainFloorSec = 2;
+			played.engine.load(makeDenseCache(), { ppr: 1, stride: 1 });
+			played.engine.play();
+			for (let i = 0; i < 25; i++) played.tick(333);
+			played.engine.pause();
+
+			const sought = harness();
+			sought.client.retainFloorSec = 2;
+			sought.engine.load(makeDenseCache(), { ppr: 1, stride: 1 });
+			sought.engine.seek(1);
+			sought.engine.seek(played.engine.state.tSec);
+			expect(sought.client.trace.t).toEqual(played.client.trace.t);
+			expect(sought.client.trace.fx).toEqual(played.client.trace.fx);
+		});
+
+		it('withdrawing a demand does not throw away history needed by the floor', () => {
+			const h = harness();
+			h.client.retainFloorSec = 2;
+			h.engine.load(makeDenseCache(), { ppr: 1, stride: 1 });
+			h.client.setWindowDemand('panel', 5);
+			h.engine.seek(9);
+			expect(h.client.retainSec).toBe(5);
+			h.client.setWindowDemand('panel', null);
+			expect(h.client.retainSec).toBe(2);
+		});
 	});
 
 	it('reports running peaks and rpm from the cache, not re-derived', () => {
@@ -143,6 +281,53 @@ describe('playback engine', () => {
 		expect(h.client.status.rpm).toBeCloseTo(600, 5);
 		expect(h.client.status.peaks.Fx).toBeGreaterThan(0);
 		expect(h.client.status.tSec).toBeCloseTo(5, 5);
+	});
+
+	describe('Tacho channel in replay (#108)', () => {
+		it('fills Tacho with the cache rpm envelope, not a flat zero line', () => {
+			const h = harness();
+			const c = makeDenseCache();
+			for (let i = 0; i < c.N; i++) c.rpm[i] = 600 + (i % 50);   // varies inside each 5-sample bin
+			h.engine.load(c, { ppr: 1, stride: 1 });
+			h.engine.seek(3);
+			const tacho = h.client.trace.sub.Tacho;
+			expect(h.client.status.tachoKind).toBe('rpm');
+			expect(tacho.length).toBe(h.client.trace.t.length);
+			expect(tacho.length).toBeGreaterThan(0);
+			for (const [lo, hi] of tacho) { expect(lo).toBeGreaterThanOrEqual(600); expect(hi).toBeLessThanOrEqual(649); expect(hi).toBeGreaterThanOrEqual(lo); }
+			expect(tacho.some(([lo, hi]) => hi > lo)).toBe(true);   // the bin spread is kept
+		});
+		it('leaves Tacho EMPTY, and says none, when the cache has no measured rpm', () => {
+			const h = harness();
+			const c = makeCache();
+			c.rpm.fill(0);
+			h.engine.load(c, { ppr: 1, stride: 1 });
+			h.engine.seek(5);
+			expect(h.client.status.tachoKind).toBe('none');
+			expect(h.client.trace.t.length).toBeGreaterThan(0);
+			expect(h.client.trace.sub.Tacho).toEqual([]);
+		});
+		it('SEEK INVARIANT holds for the Tacho bins too', () => {
+			const a = harness(), b = harness();
+			const c = makeDenseCache();
+			for (let i = 0; i < c.N; i++) c.rpm[i] = 600 + (i % 37);
+			a.engine.load(c, { ppr: 1, stride: 1 });
+			b.engine.load(c, { ppr: 1, stride: 1 });
+			a.engine.seek(4.2);
+			b.engine.play();
+			for (let k = 0; k < 42; k++) b.tick(100);
+			b.engine.seek(4.2);
+			expect(b.client.trace.sub.Tacho).toEqual(a.client.trace.sub.Tacho);
+		});
+		it('returns the client to the live default once the replay is reset', () => {
+			const h = harness();
+			const c = makeCache();
+			c.rpm.fill(0);
+			h.engine.load(c, { ppr: 1, stride: 1 });
+			expect(h.client.status.tachoKind).toBe('none');
+			h.client.reset();
+			expect(h.client.status.tachoKind).toBe('signal');
+		});
 	});
 
 	it('rejects a degenerate cache instead of dividing by zero', () => {
@@ -356,6 +541,24 @@ describe('playback engine', () => {
 			expect(h.engine.state.tSec).toBeCloseTo(5, 5);
 			const calls = (globalThis.fetch as any).mock.calls as any[][];
 			expect(calls.some((c) => String(c[0]).includes('/dsp/spectrum'))).toBe(true);
+		});
+
+		it("leaves a live recording's state alone when nothing is playing", () => {
+			// Leaving the Record page mid-cut suspends playback. That must not reset the live cut to
+			// 'idle', or the page can't adopt the server's 'done' when the operator comes back.
+			const h = harness();
+			h.client.status.state = 'recording';
+			h.engine.suspend();
+			expect(h.client.status.state).toBe('recording');
+		});
+
+		it('returns to idle when suspended mid-playback', () => {
+			const h = harness();
+			h.engine.load(makeCache(), { ppr: 1, stride: 1 });
+			h.engine.play();
+			expect(h.client.status.state).toBe('recording');
+			h.engine.suspend();
+			expect(h.client.status.state).toBe('idle');
 		});
 
 		it('can play again after a suspend, advancing the playhead', () => {

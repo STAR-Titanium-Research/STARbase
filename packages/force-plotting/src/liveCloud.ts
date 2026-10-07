@@ -35,6 +35,7 @@ export interface Cloud {
 	cmin: number; cmax: number;   // colour-scale limits actually applied (for the colorbar)
 	val: Float32Array;   // the channel value behind each point's colour, so a host can recolour without a rebuild
 	zv?: Float32Array;  // centred -0.5..0.5 force-as-height, only set for flat (z-constant) paths
+	idx?: Int32Array;   // cache index behind each point (path.idx), ungridded clouds only -- a gridded cell has no single sample
 }
 
 function percentile(sorted: Float32Array, p: number): number {
@@ -125,7 +126,7 @@ export function buildCloud(c: Cache, p: CloudParams): Cloud | null {
 		if (col) { const [rr, gg, bb] = cm!((fv[k] - lo) / span); col[k * 3] = rr; col[k * 3 + 1] = gg; col[k * 3 + 2] = bb; }
 		if (zv && zSrc) zv[k] = (zSrc[path.idx[k]] - zlo) / zspan - 0.5;
 	}
-	return { pos, col, count: m, bounds: path.bounds, cmin: lo, cmax: hi, val: fv, zv };
+	return { pos, col, count: m, bounds: path.bounds, cmin: lo, cmax: hi, val: fv, zv, idx: path.idx };
 }
 
 // Bin the scatter into a gridN x gridN grid on X/Y; emit one point per non-empty cell at its
@@ -260,3 +261,12 @@ export const COLORMAP_LABELS: Record<string, string> = {
 	bwr: 'Blue → White → Red',
 };
 export function colormapLabel(key: string): string { return COLORMAP_LABELS[key] ?? key; }
+
+// Bake the force-as-height overlay (`zv`) into `pos` z, in place. buildCloud leaves pos z = 0 when
+// a Z series drives height; the renderer draws, picks and rings from `pos`, so height has to live
+// there for all three to agree. No-op without an overlay.
+export function withHeight(cloud: Cloud): Cloud {
+	const zv = cloud.zv;
+	if (zv) for (let k = 0; k < cloud.count; k++) cloud.pos[k * 3 + 2] = zv[k];
+	return cloud;
+}

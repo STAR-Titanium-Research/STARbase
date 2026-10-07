@@ -15,6 +15,7 @@ User and developer guides for the two applications in this repository, with scre
   *Force Analysis* in Directus.
 - **Registering samples and logging work?** [D1 Database → Getting started](database/getting-started.md),
   then [Samples](database/samples.md) and [Operations and tests](database/operations-and-tests.md).
+- **Following a project, campaign or sample?** [Explorer pages](database/explorer-pages.md).
 - **Running the server?** [Administration](database/administration.md).
 - **Changing the code?** The developer guides for the [Force App](force-app/developer-guide.md) and
   the [database](database/developer-guide.md).

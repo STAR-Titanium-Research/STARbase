@@ -45,6 +45,28 @@ At the bottom of the form, related records are listed and can be added in place:
   **Open / Copy Linked Files** gives a one-click path to paste into Explorer.
 - **Campaigns** it is part of.
 
+## The Sample page
+
+Click a sample on **Home** (recent activity) or in a dashboard and it opens as a formatted page,
+`/admin/home/samples/<id>`, instead of the Content form:
+
+- **The header** shows the code, nickname and status, the project and campaign as links, and the
+  owner. **Edit** opens the same form as Content in a drawer (changes save without leaving the
+  page, and you are warned if someone else saved the record while it was open). **Print label**
+  and **Report** open in a new tab. **Data Studio** opens the Content form.
+- **Overview** draws the sample at its real dimensions, shows the material with its composition
+  bar, and lists the key facts. A sample without a measured mass shows an estimate from its
+  dimensions and the material density.
+- **Life of the sample** is a left-to-right strip: raw stock, parents, this sample, its operations
+  and tests by date, and its children. Everything in it is a link. Records you are not allowed to
+  read are not shown, only counted as "N not visible to you". On a narrow window the strip
+  becomes a vertical list. **Open lineage graph** opens the Lab Dashboard graph centred on the sample.
+- **Operations** and **Tests** are tables with status badges. Machining operations have **View
+  forces** and FAST runs **View FAST**.
+- **Files** lists the linked data files, with buttons to copy their path on the group share.
+
+A sample you cannot read (or that does not exist) shows *Not found or not visible to you*.
+
 ## Materials
 
 **Alloys / Materials** is the alloy catalogue. Each has an **alloy code** (e.g. `AA` for Ti-6Al-4V
@@ -83,6 +105,8 @@ Metallographic preparation is logged as an operation with the **MP – Sample Pr
 
 - The Items list's search box matches codes and nicknames. **Filter** in the sidebar narrows by
   any field (material, project, status, owner…).
+- The **My samples** and **No location** saved views (under Items in the navigation panel) list
+  your own samples and the ones nobody has shelved ([Saved views](getting-started.md#saved-views)).
 - The [Lab Dashboard](dashboards-and-reports.md#lab-dashboard)'s **Samples** tab shows a sample
   with its operations and tests side by side.
 - [Ask the Database](dashboards-and-reports.md#ask-the-database) answers questions like *"which

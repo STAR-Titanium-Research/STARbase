@@ -83,6 +83,18 @@ def standard_cut():
 #             rather than piecewise-constant per cell). Every other column and the
 #             __metrics__ blob were byte-identical across the recapture, which is the
 #             evidence that the change is confined to the op that was edited.
+#   v11       RECAPTURED, 2026-10-04 (review finding 7.12). spatial.knn_deterministic replaced the
+#             raw cKDTree.query in getis_ord_gi_star and assign_by_neighbours: on this gridded
+#             input the 30th (and 4th) neighbour is tied, and the KD-tree picked among the tied
+#             points in a scipy-build-dependent way, so the old goldens only matched the
+#             machine that froze them. Moved: gi_star (1145/9984, 11.47%, max |delta| 0.77),
+#             gi_sig (3/9984), glosh (103/9984), cluster_id (22/9984, same label set) and the
+#             __metrics__ blob, in both fixtures. Ties now break by (distance, index), so gi_star
+#             is identical on numpy 1.26/scipy 1.11 and numpy 2.4/scipy 1.17 as well as the
+#             plugin pin. Remaining dependency: cluster_id/glosh come from sklearn's HDBSCAN,
+#             which differs between sklearn 1.3 and 1.5 on identical input; the goldens are
+#             valid for the plugin-pinned scikit-learn 1.5.*. The metrics blob is compared to
+#             a relative 1e-9 (FFT low bits differ between numpy/scipy builds).
 #
 # Recapture is only ever legitimate alongside a deliberate algorithm change and its
 # DIAG_VERSION bump, and it goes through the committed, reviewable script rather than an
@@ -148,6 +160,24 @@ def assert_columns_match_golden(cols, metrics, golden_path, nondegenerate=()):
         )
     # The metrics blob is frozen too: analyse() emits columns AND a JSON-serialisable
     # metrics dict, and the runner must reproduce both. Stored as repr(sorted(items())).
-    assert repr(sorted(metrics.items())) == str(
-        golden["__metrics__"]
+    assert metrics_match(
+        metrics, str(golden["__metrics__"])
     ), "metrics payload differs from the golden reference"
+
+
+def _close(a, b, rtol=1e-9):
+    """Structural equality; floats compare to a relative 1e-9 (the Welch spectrum in the
+    metrics moves in its last digits between FFT builds; the columns do not)."""
+    if isinstance(a, float) or isinstance(b, float):
+        return bool(np.isclose(a, b, rtol=rtol, atol=0.0, equal_nan=True))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k]) for k in a)
+    if isinstance(a, list | tuple) and isinstance(b, list | tuple):
+        return len(a) == len(b) and all(_close(x, y) for x, y in zip(a, b, strict=True))
+    return a == b
+
+
+def metrics_match(metrics, golden_repr: str) -> bool:
+    import ast
+
+    return _close(sorted(metrics.items()), ast.literal_eval(golden_repr))

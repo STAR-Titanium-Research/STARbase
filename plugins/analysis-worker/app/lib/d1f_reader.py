@@ -69,3 +69,31 @@ def read_channel(
             pos += stride
 
     return np.array(values, dtype=np.float64)
+
+
+def available_samples(filepath: str | Path, header: dict) -> int:
+    """n_samples from the header, clamped to what the file actually holds."""
+    row_bytes = header["n_channels"] * 4
+    on_disk = max(0, (Path(filepath).stat().st_size - HEADER_SIZE) // row_bytes)
+    return int(min(header["n_samples"], on_disk))
+
+
+def read_channel_block(
+    filepath: str | Path,
+    header: dict,
+    channel_index: int,
+    start: int,
+    count: int,
+) -> np.ndarray:
+    """Read *count* contiguous samples of one channel starting at sample *start*.
+
+    The block is contiguous in time, so it keeps the native sample rate (no
+    decimation, no aliasing). Memory is O(count x n_channels x 4) bytes, so keep
+    *count* modest. Returns float64; may be shorter than *count* at end of file.
+    """
+    n_ch = header["n_channels"]
+    with open(filepath, "rb") as f:
+        f.seek(HEADER_SIZE + start * n_ch * 4)
+        raw = np.fromfile(f, dtype="<f4", count=count * n_ch)
+    rows = raw.size // n_ch
+    return raw[: rows * n_ch].reshape(rows, n_ch)[:, channel_index].astype(np.float64)

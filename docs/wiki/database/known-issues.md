@@ -19,12 +19,12 @@ by hand in the Directus UI.
 | **Two extension lock files were stale** (`d1-material-inherit`, `d1-report`), so `npm ci` failed with `EUSAGE` | refreshed (only the missing optional `@emnapi/*` entries change) |
 | **Seeded machines had no capabilities** (`db/seeds/001_reference_data.sql`), so on a dev stack the machine picker offered none of them | the seed sets them |
 | **Force App Connectivity Doctor sent you to the wrong tab**: its hints said to fix a service URL "in Settings > General", but the URLs are edited on the Connectivity tab itself, and General has no purge for crashed recordings | the hints name *Settings > Connectivity* (or *Service endpoints* on that page), and the crashed-recordings hint points at its own **Fix now** button |
+| **Lab Member could not save a cut from the Force App**: no `directus_files` access and no create on `machining_force_analysis`, so the operation row was created and the upload then failed (live caches in Force Analysis were also refused) | migration `20261005000133_lab_member_force_app_save.sql` grants Lab Member create and read on `directus_files` and create on `machining_force_analysis`. A production database that was adjusted by hand needs the migration applied once. |
 
 ## Open
 
 | Issue | Effect | Workaround |
 |---|---|---|
-| **Lab Member has no `directus_files` access** and cannot create `machining_force_analysis` rows | a Lab Member cannot save a cut from the Force App (the operation row is created, then the upload fails), and cannot open live caches in Force Analysis | record as a Lab Admin. Grant the permissions in a migration. See [Roles](roles-and-permissions.md#what-lab-member-cannot-do-as-configured-in-the-repository). |
 | **Force App cuts are never host-processed**: the orchestrator only handles `.mat` files indexed from the archive | no stored FFT, FRM *Figure*, *Full* octree or diagnostics for cuts saved from the app | copy the capture into the archive and index it. See [Force data](force-data.md#two-ways-in). |
 | **Migrations 057 and 066 fail on a fresh real Directus database** (foreign keys to rows that the configure scripts create later) | a from-scratch rebuild stops part-way | see the [developer guide](developer-guide.md#problems-you-will-hit) |
 | **`configure_directus.sql` removes migration-added metadata** for the core collections | re-applying it loses about a hundred field interfaces and relations; `fast_recipes` then errors | see the [developer guide](developer-guide.md#problems-you-will-hit) |

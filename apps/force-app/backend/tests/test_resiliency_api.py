@@ -254,7 +254,8 @@ def test_backup_config_save_and_load(tmp_path, monkeypatch):
         cfg = r.json()
         assert cfg["enabled"] is True
         assert cfg["server_url"] == "http://backuphost:8210"
-        assert cfg["retention_hours"] == 24
+        # An older UI may still send retention_hours: accepted, ignored (#93).
+        assert "retention_hours" not in cfg
 
         # Verify persisted
         r2 = client.get("/backup/config")
@@ -674,9 +675,15 @@ def test_report_bug_forwards_area_and_defaults_to_general(tmp_path, monkeypatch)
     with TestClient(fastapi_app) as client:
         client.post("/support/report-bug", data={"title": "no area sent"})
         client.post("/support/report-bug", data={"title": "a plotting bug", "area": "plotting"})
+        # #95: several areas arrive as a repeated form field.
+        client.post(
+            "/support/report-bug",
+            data={"title": "two areas", "area": ["plotting", "recording"]},
+        )
 
-    assert calls[0]["area"] == "general"
-    assert calls[1]["area"] == "plotting"
+    assert calls[0]["area"] == ["general"]
+    assert calls[1]["area"] == ["plotting"]
+    assert calls[2]["area"] == ["plotting", "recording"]
 
 
 def test_report_bug_issues_proxies_the_relay(monkeypatch):

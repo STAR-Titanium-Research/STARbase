@@ -19,6 +19,9 @@ on:
   # workflow after changing it, or if the cache was ever evicted for other reasons.
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   warm:
     name: Warm force-app-desktop release caches (Playwright + electron-builder)
@@ -28,6 +31,8 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -65,6 +70,10 @@ jobs:
       - name: Install backend dependencies
         working-directory: apps/force-app/backend
         run: |
+          $ErrorActionPreference = 'Stop'
+          # Make a failing native command (npm, pip, electron-builder, ...) fail the step, not just
+          # the last one in a multi-line block.
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m venv .venv
           .venv\Scripts\pip install -e ".[dev,build,nidaq]"
 
@@ -77,6 +86,10 @@ jobs:
       - name: Build the Electron installer (warms electron-builder's tool downloads)
         working-directory: apps/force-app/desktop
         run: |
+          $ErrorActionPreference = 'Stop'
+          # Make a failing native command (npm, pip, electron-builder, ...) fail the step, not just
+          # the last one in a multi-line block.
+          $PSNativeCommandUseErrorActionPreference = $true
           npm run build
           npx electron-builder --win --publish never
 

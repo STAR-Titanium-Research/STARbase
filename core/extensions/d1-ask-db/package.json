@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "directus-extension build",
-    "dev": "directus-extension build --watch"
+    "dev": "directus-extension build --watch",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "keywords": ["directus", "directus-extension", "directus-custom-module"],
   "devDependencies": {

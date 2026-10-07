@@ -1,5 +1,7 @@
 import { createApp } from 'vue';
 import { setForceHost } from '@d1/force-plotting';
+// Subpath import: the pure link mapping only, not the kit's Vue components.
+import { recordRoute } from '@d1/ui/recordRoute';
 import { loadRuntimeConfig, getConfig } from './config';
 import { router } from './router';
 import { api, authHeaders, setUnauthorizedHandler } from './directusClient';
@@ -41,7 +43,8 @@ async function bootstrap() {
 		refreshAuth: () => authStore.refresh(),
 		fetchCredentials: 'omit',
 		openRecord: (collection, id) => {
-			window.open(`${getConfig().directusUrl}/admin/content/${collection}/${id}`, '_blank', 'noopener');
+			// The Explorer page for the record where there is one, else its Data Studio form.
+			window.open(`${getConfig().directusUrl}/admin${recordRoute(collection, id)}`, '_blank', 'noopener');
 		},
 		downloadAsset: async (fileId) => {
 			try {

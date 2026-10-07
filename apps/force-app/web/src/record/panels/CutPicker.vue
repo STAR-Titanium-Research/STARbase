@@ -6,9 +6,10 @@
 // actively picking a cut. Wired directly to the workspace's `replay`/`searchCuts`/`pickReplayCut`
 // rather than taking props: the option shape (ppr/diameters alongside label/cacheId) is specific
 // to this one picker, so there is nothing generic here worth sharing with LookupField.
-import { onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { useWorkspace, type ReplayOption } from '../workspace';
 import { useListNav } from '../../ui/listNav';
+import { pickRows } from '../../ui/pickList';
 
 const w = useWorkspace();
 const open = ref(false);
@@ -67,7 +68,9 @@ function change() {
 	requestAnimationFrame(() => inputEl.value?.focus());
 }
 function delayedBlurClose() { window.setTimeout(() => { open.value = false; }, 150); }
-const { active, move, pickActive, reset: resetNav } = useListNav(() => w.replay.options, pick, menuEl);
+// Single-value: the cut already loaded is marked (check + aria-selected), not hidden (#99).
+const rows = computed(() => pickRows(w.replay.options, (o) => o.cacheId, { currentId: w.replay.cacheId }));
+const { active, move, pickActive, reset: resetNav } = useListNav(() => rows.value, (r) => pick(r.item), menuEl);
 watch(() => w.replay.options, resetNav);
 function onArrow(delta: 1 | -1) { open.value = true; move(delta); }
 </script>
@@ -92,9 +95,12 @@ function onArrow(delta: 1 | -1) { open.value = true; move(delta); }
 				@blur="delayedBlurClose" />
 			<div v-if="open && !w.locked.value" :id="menuId" ref="menuEl" class="menu" role="listbox">
 				<div v-if="w.replay.loading" class="mi hint">searching…</div>
-				<button v-for="(o, i) in w.replay.options" :id="`${menuId}-${i}`" :key="o.cacheId" type="button" class="mi" :class="{ active: i === active }"
-					role="option" :aria-selected="i === active" tabindex="-1" @mousedown.prevent="pick(o)" @mouseenter="active = i">
-					{{ o.label }}
+				<button v-for="(r, i) in rows" :id="`${menuId}-${i}`" :key="r.item.cacheId" type="button" class="mi"
+					:class="{ active: i === active, current: r.current }" :data-active="i === active"
+					role="option" :aria-selected="r.current" tabindex="-1" :title="r.current ? 'Loaded now' : undefined"
+					@mousedown.prevent="pick(r.item)" @mouseenter="active = i">
+					{{ r.item.label }}
+					<span v-if="r.current" class="material-symbols-rounded mi-check" aria-hidden="true">check</span>
 				</button>
 				<div v-if="!w.replay.loading && w.replay.options.length === 0" class="mi hint">no matches</div>
 			</div>
@@ -113,6 +119,9 @@ function onArrow(delta: 1 | -1) { open.value = true; move(delta); }
 .menu { position: absolute; z-index: 30; left: 0; right: 0; top: 100%; margin-top: 2px; max-height: 200px; overflow: auto; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.45); }
 .mi { display: block; width: 100%; text-align: left; padding: 7px 10px; font-size: var(--fs-md); font-family: var(--mono); color: var(--text); background: transparent; border: none; cursor: pointer; }
 .mi:hover, .mi.active { background: var(--surface); }
+.mi { position: relative; }
+.mi.current { padding-right: 30px; color: var(--accent); }
+.mi-check { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); font-size: var(--icon-sm); color: var(--accent); }
 .mi.hint { color: var(--text-dim); font-family: inherit; cursor: default; }
 .chosen { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 7px; }
 .chosen-label { font-size: var(--fs-md); font-family: var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,35 +1,25 @@
 #!/usr/bin/env python3
-"""Transfer sample ownership from the legacy XLSX into physical_samples.owner.
+"""Transfer sample ownership from the legacy XLSX into physical_samples.
 
-The Inventory sheet's `Owner` column holds the researcher (email or full name).
-Users were imported with deterministic UUIDs (legacy_uuid('d1_user:<email>')),
-so we resolve Owner → that UUID and set physical_samples.owner. Only UUIDs that
-actually exist in directus_users are written (owner has no hard FK, ADR-0002).
+The Inventory sheet's `Owner` column holds the researcher (email or full name). Each owner
+is resolved to a row of `people` (by email or full name, from the database, so users that
+already existed under another id still resolve) and written to BOTH
+physical_samples.owner_person_id (what the UI reads, migrations 061/062) and the legacy
+physical_samples.owner (the person's Directus user, when they have a login).
 
 Usage:
-  DATABASE_URL=postgres://d1:change_me@localhost:5432/d1_database \\
-      python scripts/transfer_sample_ownership.py "<path to Sample_Data.xlsx>"
+  DATABASE_URL=postgres://d1:$POSTGRES_PASSWORD@localhost:5432/d1_database \\
+      python scripts/transfer_sample_ownership.py "<path to Sample_Data.xlsx>" [--dry-run]
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import uuid
 
 import openpyxl
-import psycopg2
-
-_LEGACY_NS = uuid.uuid5(uuid.NAMESPACE_DNS, "d1-database.legacy-migration.v1")
-
-
-def legacy_uuid(raw: str) -> str:
-    return str(uuid.uuid5(_LEGACY_NS, str(raw).strip()))
-
-
-def clean(v) -> str | None:
-    s = str(v).strip() if v is not None else None
-    return s if s and s.lower() not in ("none", "n/a", "na") else None
+from legacy_people import PeopleIndex, load_index
+from migrate_legacy import clean_str as clean
 
 
 def sheet_rows(wb, name):
@@ -44,51 +34,78 @@ def sheet_rows(wb, name):
     return out
 
 
-def main() -> None:
-    xlsx = sys.argv[1]
-    wb = openpyxl.load_workbook(xlsx, read_only=True, data_only=True)
-
-    # email/name → user UUID, from the Users sheet
-    email_to_uuid: dict[str, str] = {}
-    name_to_uuid: dict[str, str] = {}
-    for u in sheet_rows(wb, "Users"):
+def name_to_email(users: list[dict]) -> dict[str, str]:
+    """'first last' -> email, from the Users sheet (an extra way to resolve a name)."""
+    out: dict[str, str] = {}
+    for u in users:
         email = clean(u.get("Email") or u.get("Email Address") or u.get("email"))
         first = clean(u.get("First Name") or u.get("FirstName"))
         last = clean(u.get("Last Name") or u.get("Surname") or u.get("LastName"))
-        if email:
-            uid = legacy_uuid(f"d1_user:{email.lower()}")
-            email_to_uuid[email.lower()] = uid
-            if first and last:
-                name_to_uuid[f"{first} {last}".lower()] = uid
-    cg = "carolina.guerra@nottingham.ac.uk"
-    email_to_uuid.setdefault(cg, legacy_uuid(f"d1_user:{cg}"))
+        if email and first and last:
+            out[f"{first} {last}".lower()] = email.lower()
+    return out
 
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
-    cur = conn.cursor()
-    cur.execute("SELECT id::text FROM directus_users")
-    existing = {r[0] for r in cur.fetchall()}
 
+def transfer(
+    cur,
+    users: list[dict],
+    inventory: list[dict],
+    people: PeopleIndex,
+    dry_run: bool = False,
+) -> tuple[int, set[str]]:
+    """Set the owner of each listed sample. Returns (samples updated, unresolved owners)."""
+    by_name = name_to_email(users)
     updated = 0
     unresolved: set[str] = set()
-    for r in sheet_rows(wb, "Inventory"):
+    for r in inventory:
         code = clean(r.get("Item Code"))
         owner = clean(r.get("Owner"))
         if not (code and owner):
             continue
         key = owner.lower()
-        uid = email_to_uuid.get(key) or name_to_uuid.get(key)
-        if uid and uid in existing:
-            cur.execute(
-                "UPDATE physical_samples SET owner=%s WHERE sample_code=%s",
-                (uid, code),
-            )
-            updated += cur.rowcount
-        else:
+        user_id, person_id = people.resolve_owner(key)
+        if not person_id and key in by_name:
+            user_id, person_id = people.resolve_owner(by_name[key])
+        if not person_id:
             unresolved.add(owner)
-    conn.commit()
+            continue
+        if dry_run:
+            cur.execute(
+                "SELECT count(*) FROM physical_samples WHERE sample_code=%s", (code,)
+            )
+            updated += cur.fetchone()[0]
+            continue
+        cur.execute(
+            "UPDATE physical_samples SET owner_person_id=%s, owner=COALESCE(%s, owner) "
+            "WHERE sample_code=%s",
+            (person_id, user_id, code),
+        )
+        updated += cur.rowcount
+    return updated, unresolved
+
+
+def main() -> None:
+    import psycopg2
+
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    dry = "--dry-run" in sys.argv
+    if not args:
+        sys.exit("usage: transfer_sample_ownership.py <Sample_Data.xlsx> [--dry-run]")
+    dsn = os.environ.get("DATABASE_URL") or sys.exit("ERROR: DATABASE_URL required")
+    wb = openpyxl.load_workbook(args[0], read_only=True, data_only=True)
+    users = sheet_rows(wb, "Users")
+    inventory = sheet_rows(wb, "Inventory")
+
+    conn = psycopg2.connect(dsn)
+    cur = conn.cursor()
+    updated, unresolved = transfer(cur, users, inventory, load_index(cur), dry)
+    if dry:
+        conn.rollback()
+    else:
+        conn.commit()
     cur.close()
     conn.close()
-    print(f"Set owner on {updated} samples.")
+    print(f"{'Would set' if dry else 'Set'} owner on {updated} samples.")
     if unresolved:
         print(f"Unresolved owners ({len(unresolved)}): {sorted(unresolved)}")
 

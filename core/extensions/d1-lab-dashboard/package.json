@@ -13,6 +13,7 @@
     "vue": "^3"
   },
   "dependencies": {
+    "@d1/ui": "*",
     "cytoscape": "^3.30"
   },
   "directus:extension": {

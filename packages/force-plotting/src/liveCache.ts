@@ -27,6 +27,11 @@ export function idxOfTime(t: Float32Array, sec: number): number {
 	return ans;
 }
 
+// A plot stride as every builder applies it (a positive integer, 1 when unset or invalid). One copy,
+// because a pick has to walk exactly the samples a renderer drew: path.ts, polar.ts and the GPU
+// static attributes (frmCloudShader.ts) all use it.
+export function normStride(stride: number): number { return Math.max(1, Math.round(stride) || 1); }
+
 const MAGIC = 0x44314c43; // 'D1LC'
 const KNOWN_TRAILER_NAMES = ['Mz', 'X', 'Y', 'Z'] as const;
 

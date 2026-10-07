@@ -36,7 +36,8 @@
 					</span>
 					<span class="d1-secondary">{{ s.project_id?.project_code ?? '' }}</span>
 				</div>
-				<div v-if="samples.length === 0 && !loadingSamples" class="d1-empty">No samples found</div>
+				<div v-if="samplesError" class="d1-error">{{ samplesError }}</div>
+				<div v-else-if="samples.length === 0 && !loadingSamples" class="d1-empty">No samples found</div>
 				<div v-if="loadingSamples" class="d1-loading"><v-progress-circular indeterminate /></div>
 			</div>
 		</div>
@@ -46,8 +47,20 @@
 			<div class="d1-panel-header">
 				<v-icon name="info" />
 				<h3>Sample Detail</h3>
+				<div class="d1-tabs" role="tablist">
+					<button
+						v-for="t in tabs"
+						:key="t.value"
+						class="d1-tab"
+						:class="{ active: detailTab === t.value }"
+						role="tab"
+						:aria-selected="detailTab === t.value"
+						@click="detailTab = t.value"
+					>{{ t.text }}</button>
+				</div>
 			</div>
 			<div v-if="!selectedSample" class="d1-empty">Select a sample</div>
+			<SampleTimeline v-else-if="detailTab === 'timeline'" :sample-id="selectedSampleId" />
 			<div v-else class="d1-detail">
 				<div class="d1-detail-section">
 					<h4>Identity</h4>
@@ -60,6 +73,9 @@
 						<span>Form</span><span>{{ selectedSample.form ?? '—' }}</span>
 						<span>Location</span><span>{{ selectedSample.location ?? '—' }}</span>
 					</div>
+					<router-link class="d1-open" :to="recordRoute('physical_samples', selectedSample.sample_id)">
+						<v-icon name="open_in_new" small />Open sample
+					</router-link>
 				</div>
 
 				<div class="d1-detail-section">
@@ -76,7 +92,8 @@
 
 				<div class="d1-detail-section">
 					<h4>Manufacturing Operations ({{ operations.length }})</h4>
-					<div v-if="loadingOps" class="d1-loading"><v-progress-circular indeterminate small /></div>
+					<div v-if="detailError" class="d1-error">{{ detailError }}</div>
+					<div v-else-if="loadingOps" class="d1-loading"><v-progress-circular indeterminate small /></div>
 					<div v-else-if="operations.length === 0" class="d1-empty-inline">None recorded</div>
 					<table v-else class="d1-table">
 						<thead>
@@ -86,6 +103,7 @@
 								<th>Machine</th>
 								<th>Edge</th>
 								<th>Outcome</th>
+								<th></th>
 							</tr>
 						</thead>
 						<tbody>
@@ -100,6 +118,11 @@
 								<td>{{ op.equipment_id?.equipment_name ?? '—' }}</td>
 								<td>{{ op.insert_edge_id?.edge_code ?? '—' }}</td>
 								<td>{{ op.outcome ?? '—' }}</td>
+								<td>
+									<router-link class="d1-open" title="Open" :to="recordRoute('manufacturing_operations', op.operation_id)" @click.stop>
+										<v-icon name="open_in_new" small />
+									</router-link>
+								</td>
 							</tr>
 						</tbody>
 					</table>
@@ -115,6 +138,7 @@
 				<span v-if="selectedSampleId" class="d1-count">{{ testSessions.length }}</span>
 			</div>
 			<div v-if="!selectedSampleId" class="d1-empty">Select a sample</div>
+			<div v-else-if="detailError" class="d1-error">{{ detailError }}</div>
 			<div v-else-if="loadingTests" class="d1-loading"><v-progress-circular indeterminate /></div>
 			<div v-else class="d1-list">
 				<div
@@ -130,6 +154,9 @@
 					</span>
 					<span class="d1-secondary">{{ ts.equipment_id?.equipment_name ?? '—' }}</span>
 					<span class="d1-date">{{ formatDate(ts.session_date) }}</span>
+					<router-link class="d1-open" :to="recordRoute('test_sessions', ts.session_id)" @click.stop>
+						<v-icon name="open_in_new" small />Open test
+					</router-link>
 				</div>
 				<div v-if="testSessions.length === 0" class="d1-empty">No test sessions</div>
 			</div>
@@ -147,16 +174,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { useD1Items } from '../composables/useD1Items';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { useItems, useRequestGate, errorText, recordRoute } from '@d1/ui';
 import NodeGraph from './NodeGraph.vue';
+import SampleTimeline from './SampleTimeline.vue';
 
-const { getItems } = useD1Items();
+const { getItems } = useItems();
 
 const samples = ref<any[]>([]);
 const sampleSearch = ref('');
 const statusFilter = ref<string | null>(null);
 const loadingSamples = ref(false);
+const samplesError = ref('');
+const detailError = ref('');
 
 const selectedSampleId = ref<string | null>(null);
 const selectedSample = ref<any | null>(null);
@@ -168,6 +198,12 @@ const testSessions = ref<any[]>([]);
 const loadingTests = ref(false);
 const selectedTestId = ref<string | null>(null);
 
+const detailTab = ref<'detail' | 'timeline'>('detail');
+const tabs = [
+	{ text: 'Detail', value: 'detail' },
+	{ text: 'Timeline', value: 'timeline' },
+] as const;
+
 const graphRef = ref<InstanceType<typeof NodeGraph> | null>(null);
 
 const statusOptions = [
@@ -178,6 +214,8 @@ const statusOptions = [
 ];
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+const listGate = useRequestGate();
+const detailGate = useRequestGate();
 
 function debouncedFetch() {
 	if (debounceTimer) clearTimeout(debounceTimer);
@@ -185,7 +223,9 @@ function debouncedFetch() {
 }
 
 async function fetchSamples() {
+	const token = listGate.begin();
 	loadingSamples.value = true;
+	samplesError.value = '';
 	try {
 		const params: Record<string, unknown> = {
 			'fields[]': [
@@ -214,21 +254,30 @@ async function fetchSamples() {
 		if (statusFilter.value) {
 			params['filter[current_status][_eq]'] = statusFilter.value;
 		}
-		samples.value = await getItems('physical_samples', params);
+		const rows = await getItems('physical_samples', params);
+		if (!listGate.isCurrent(token)) return; // a newer search replaced this one
+		samples.value = rows;
+	} catch (e) {
+		if (!listGate.isCurrent(token)) return;
+		samplesError.value = `Could not load samples: ${errorText(e)}`;
 	} finally {
-		loadingSamples.value = false;
+		if (listGate.isCurrent(token)) loadingSamples.value = false;
 	}
 }
 
 async function selectSample(s: any) {
+	const token = detailGate.begin();
 	selectedSampleId.value = s.sample_id;
 	selectedSample.value = s;
 	selectedTestId.value = null;
+	operations.value = []; // never show the previous sample's rows under this sample's header
+	testSessions.value = [];
+	detailError.value = '';
 	loadingOps.value = true;
 	loadingTests.value = true;
 
 	try {
-		[operations.value, testSessions.value] = await Promise.all([
+		const [ops, tests] = await Promise.all([
 			getItems('manufacturing_operations', {
 				'filter[sample_id][_eq]': s.sample_id,
 				'fields[]': [
@@ -248,9 +297,18 @@ async function selectSample(s: any) {
 				limit: 100,
 			}),
 		]);
+		if (!detailGate.isCurrent(token)) return; // another sample was selected meanwhile
+		operations.value = ops;
+		testSessions.value = tests;
+	} catch (e) {
+		if (!detailGate.isCurrent(token)) return;
+		detailError.value = `Could not load this sample's operations and tests: ${errorText(e)}`;
+		return;
 	} finally {
-		loadingOps.value = false;
-		loadingTests.value = false;
+		if (detailGate.isCurrent(token)) {
+			loadingOps.value = false;
+			loadingTests.value = false;
+		}
 	}
 
 	graphRef.value?.loadNeighbors('physical_samples', s.sample_id);
@@ -271,6 +329,12 @@ function formatDate(d: string | null): string {
 }
 
 onMounted(fetchSamples);
+
+onBeforeUnmount(() => {
+	if (debounceTimer) clearTimeout(debounceTimer);
+	listGate.cancel();
+	detailGate.cancel();
+});
 </script>
 
 <style scoped>
@@ -292,6 +356,12 @@ onMounted(fetchSamples);
 	overflow: hidden;
 }
 
+.d1-error {
+	padding: 10px 12px;
+	font-size: 12px;
+	color: var(--theme--danger, #c62828);
+}
+
 .d1-panel--graph {
 	overflow: hidden;
 }
@@ -311,6 +381,28 @@ onMounted(fetchSamples);
 	font-size: 13px;
 	font-weight: 600;
 	flex: 1;
+}
+
+.d1-tabs {
+	display: flex;
+	gap: 2px;
+}
+
+.d1-tab {
+	border: 0;
+	background: transparent;
+	font: inherit;
+	font-size: 12px;
+	padding: 3px 10px;
+	border-radius: 6px;
+	cursor: pointer;
+	color: var(--theme--foreground-subdued, #64748b);
+}
+
+.d1-tab.active {
+	background: var(--theme--primary-background, #eef2ff);
+	color: var(--theme--primary, #1d4ed8);
+	font-weight: 600;
 }
 
 .d1-filter-bar {
@@ -395,6 +487,20 @@ onMounted(fetchSamples);
 	text-align: center;
 	color: var(--theme--foreground-subdued, #64748b);
 	font-size: 13px;
+}
+
+.d1-open {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	width: fit-content;
+	font-size: 12px;
+	color: var(--theme--primary, #2563eb);
+	text-decoration: none;
+}
+
+.d1-open:hover {
+	text-decoration: underline;
 }
 
 .d1-empty-inline {

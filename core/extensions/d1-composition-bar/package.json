@@ -17,5 +17,8 @@
 		"path": "dist/index.js",
 		"source": "src/index.ts",
 		"host": "^11.0.0"
+	},
+	"dependencies": {
+		"@d1/ui": "*"
 	}
 }

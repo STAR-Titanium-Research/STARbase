@@ -1,14 +1,35 @@
 // Directus endpoint: d1-report (mounted at /d1-report)
 //
+// GET /d1-report/label?ids=<uuid,...>[&codes=<sample code,...>][&layout=a4-21|single-50x25][&start=n]
+//   -> print-ready sample labels (code, QR to the record, material, date, owner initials).
+// GET /d1-report/labels -> the picker page behind "Print labels" (paste codes / tick samples).
+//
 // GET /d1-report/sample/:id  -> a print-ready (A4, ≤2 page) HTML "Sample Overview"
 // document assembling the sample's details, genealogy (parents AND children),
 // manufacturing operations and tests, with a locally-generated QR code linking to
 // the record. Everything renders server-side and offline — no external services.
 //
-// :id may be the sample UUID or the human sample_code. Requires a logged-in user.
+// :id may be the sample UUID or the human sample_code. Requires a logged-in user, and
+// every read goes through Directus's ItemsService with the CALLER's accountability
+// (see access.js): a row the caller cannot read answers exactly like a missing one.
 import { defineEndpoint } from '@directus/extensions-sdk';
 import QRCode from 'qrcode';
-import { renderSampleReport, renderOperationReport, renderTestReport } from './render.js';
+import { adminRecordUrl, renderSampleReport, renderOperationReport, renderTestReport } from './render.js';
+import { createAccess } from './access.js';
+import {
+	LABEL_JS,
+	MAX_LABELS,
+	capError,
+	initials,
+	labelDate,
+	orderRows,
+	parseSelection,
+	parseStart,
+	renderLabelPicker,
+	renderLabelSheet,
+	resolveLayout,
+	sampleRecordUrl,
+} from './label.js';
 
 // Report pages are our own self-contained HTML. Directus's global CSP blocks inline
 // scripts/handlers, so we (a) serve the toggle/print JS as a same-origin file and
@@ -154,12 +175,132 @@ const REPORT_JS = `(function () {
 	window.addEventListener('resize', schedulePaginate);
 })();`;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default defineEndpoint({
 	id: 'd1-report',
-	handler: (router, { database, env, logger }) => {
+	handler: (router, { database, env, logger, services, getSchema }) => {
+		const { ItemsService } = services;
+
+		// Reads for one request, through the CALLER's accountability so their own
+		// permissions apply (see access.js). `database` (root knex) is used below only
+		// for the flat v_* views, and only after the caller has been shown to be
+		// allowed to read the base row — and then only for ids they may read.
+		const accessFor = async (req) =>
+			createAccess({
+				ItemsService,
+				accountability: req.accountability,
+				schema: req.schema ?? (await getSchema()),
+			});
+
+		// Same body whether the row is missing or the caller may not read it, so the
+		// endpoints cannot be used to probe which sample codes / ids exist.
+		// Plain-text error body: never HTML, so nothing a caller put in the query can render.
+		const plain = (res, status, text) => res.status(status).type('text/plain').send(text);
+		const notFound = (res, what) => plain(res, 404, `${what} not found.`);
+
 		// Same-origin toggle/print script (keeps us within Directus's script-src 'self').
 		router.get('/report.js', (_req, res) => {
 			res.set('Content-Type', 'application/javascript; charset=utf-8').send(REPORT_JS);
+		});
+
+		// Sample labels. Same auth model as the reports: a signed-in user, and every row is
+		// read through ItemsService with the CALLER's accountability, so a sample they cannot
+		// read simply gets no label. The QR encodes the record's admin URL: scanning it
+		// opens the Directus app, which asks for sign-in; nothing public is exposed.
+		router.get('/label.js', (_req, res) => {
+			res.set('Content-Type', 'application/javascript; charset=utf-8').send(LABEL_JS);
+		});
+
+		router.get('/label', async (req, res) => {
+			if (!req.accountability?.user) return plain(res, 401, 'Authentication required.');
+
+			const sel = parseSelection(req.query);
+			if (sel.error) return plain(res, 400, sel.error);
+			const lay = resolveLayout(req.query.layout);
+			if (!lay) return plain(res, 400, 'Unknown layout. Use a4-21 or single-50x25.');
+			const start = parseStart(req.query.start, lay.layout);
+			if (start.error) return plain(res, 400, start.error);
+
+			try {
+				const a = await accessFor(req);
+				const clauses = [];
+				if (sel.ids.length) clauses.push({ sample_id: { _in: sel.ids } });
+				if (sel.codes.length) clauses.push({ sample_code: { _in: sel.codes } });
+				const rows = orderRows(
+					await a.list('physical_samples', clauses.length === 1 ? clauses[0] : { _or: clauses }),
+					sel
+				);
+				// Distinct samples, after codes resolved to ids (a code may repeat an id).
+				if (capError(rows)) return plain(res, 400, capError(rows));
+				// Same body whether the samples are missing or not permitted.
+				if (!rows.length) return notFound(res, 'Sample');
+
+				// Material and owner are shown only when the caller can read those collections.
+				const related = (collection, pk, key) => {
+					const ids = [...new Set(rows.map((r) => r[key]).filter(Boolean))];
+					return ids.length ? a.list(collection, { [pk]: { _in: ids } }) : [];
+				};
+				const [materials, people] = await Promise.all([
+					related('materials', 'material_id', 'material_id'),
+					related('people', 'person_id', 'owner_person_id'),
+				]);
+				const matById = new Map(materials.map((m) => [String(m.material_id), m]));
+				const personById = new Map(people.map((p) => [String(p.person_id), p]));
+
+				const haveIds = new Set(rows.map((r) => String(r.sample_id).toLowerCase()));
+				const haveCodes = new Set(rows.map((r) => String(r.sample_code)));
+				const missing = sel.ids.some((i) => !haveIds.has(i)) || sel.codes.some((c) => !haveCodes.has(c));
+
+				const labels = await Promise.all(
+					rows.map(async (r) => {
+						const m = matById.get(String(r.material_id));
+						return {
+							code: r.sample_code,
+							material: m ? m.common_name || m.alloy_code : '',
+							date: labelDate(r.manufactured_date, r.created_at),
+							owner: initials(personById.get(String(r.owner_person_id))?.full_name),
+							qrSvg: await QRCode.toString(sampleRecordUrl(env.PUBLIC_URL, r.sample_id), {
+								type: 'svg',
+								margin: 1,
+								errorCorrectionLevel: lay.layout.style.qrEcc,
+							}),
+						};
+					})
+				);
+
+				res.set('Content-Security-Policy', REPORT_CSP);
+				res.set('Content-Type', 'text/html; charset=utf-8').send(
+					renderLabelSheet({
+						labels,
+						layoutKey: lay.key,
+						skip: start.skip,
+						query: req.query,
+						notice: missing ? 'Some samples were not found or you may not read them; they have no label.' : '',
+					})
+				);
+			} catch (err) {
+				logger.error(`d1-report label failed: ${err.stack || err.message}`);
+				plain(res, 500, 'Label generation failed.');
+			}
+		});
+
+		router.get('/labels', async (req, res) => {
+			if (!req.accountability?.user) return plain(res, 401, 'Authentication required.');
+			const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 64) : '';
+			try {
+				const a = await accessFor(req);
+				const filter = q ? { sample_code: { _icontains: q } } : {};
+				const [rows, total] = await Promise.all([
+					a.list('physical_samples', filter, ['sample_id', 'sample_code'], ['-created_at'], MAX_LABELS),
+					a.count('physical_samples', filter),
+				]);
+				res.set('Content-Security-Policy', REPORT_CSP);
+				res.set('Content-Type', 'text/html; charset=utf-8').send(renderLabelPicker({ rows, q, total }));
+			} catch (err) {
+				logger.error(`d1-report label picker failed: ${err.stack || err.message}`);
+				plain(res, 500, 'Could not list samples.');
+			}
 		});
 
 		router.get('/sample/:id', async (req, res) => {
@@ -168,73 +309,100 @@ export default defineEndpoint({
 			}
 
 			const id = String(req.params.id);
-			const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+			const isUuid = UUID_RE.test(id);
 
 			try {
-				const sample = await database('v_complete_sample_history')
-					.where(isUuid ? { sample_id: id } : { sample_code: id })
-					.first();
-				if (!sample) return res.status(404).send('Sample not found.');
-				const sid = sample.sample_id;
+				const a = await accessFor(req);
 
-				// physical_samples carries a few fields the flat view omits.
-				const ps =
-					(await database('physical_samples')
-						.where('sample_id', sid)
-						.first('owner_person_id', 'nickname', 'location', 'surface_finish',
-							'form', 'diameter_mm', 'length_mm', 'width_mm', 'thickness_mm',
-							'gauge_length_mm', 'gauge_width_mm')) || {};
+				// Gate: the caller must be able to read this physical_samples row.
+				const base = await a.first(
+					'physical_samples',
+					isUuid ? { sample_id: { _eq: id } } : { sample_code: { _eq: id } },
+					['sample_id']
+				);
+				if (!base) return notFound(res, 'Sample');
+				const sid = base.sample_id;
+
+				const sample = await database('v_complete_sample_history').where({ sample_id: sid }).first();
+				if (!sample) return notFound(res, 'Sample');
+
+				// physical_samples carries a few fields the flat view omits (read through
+				// ItemsService, so field-level restrictions apply to these).
+				const ps = (await a.one('physical_samples', sid)) || {};
 
 				// Ensure the geometry drawing has every dimension (the flat view omits some).
 				for (const k of ['form', 'diameter_mm', 'length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm']) {
 					if (ps[k] !== null && ps[k] !== undefined) sample[k] = ps[k];
 				}
 
-				const owner = ps.owner_person_id
-					? await database('people')
-							.where('person_id', ps.owner_person_id)
-							.first('full_name', 'email')
-					: null;
+				// The owner's name/email come from `people`: shown only to callers who can read it.
+				const ownerRow = await a.one('people', ps.owner_person_id);
+				const owner = ownerRow ? { full_name: ownerRow.full_name, email: ownerRow.email } : null;
 
-				const [ops, parents, children, tests, opCamps, testCamps] = await Promise.all([
-					database('v_manufacturing_operations_full')
-						.where('sample_id', sid)
-						.orderBy(['operation_date', 'operation_sequence']),
-					database('v_sample_genealogy_flat').where('child_sample_id', sid),
+				// Operations and tests: ask Directus which ones this caller may read, then
+				// fetch the view rows for exactly those ids.
+				const [opRows, testRows] = await Promise.all([
+					a.list('manufacturing_operations', { sample_id: { _eq: sid } }, ['operation_id', 'campaign_id']),
+					a.list('test_sessions', { sample_id: { _eq: sid } }, ['session_id', 'campaign_id']),
+				]);
+				const opIds = opRows.map((r) => r.operation_id);
+				const testIds = testRows.map((r) => r.session_id);
+
+				// Lineage needs the genealogy collection and each linked sample to be readable.
+				const lineageAllowed = await a.canRead('sample_genealogy');
+
+				const [ops, parentRows, childRows, tests] = await Promise.all([
+					opIds.length
+						? database('v_manufacturing_operations_full')
+								.whereIn('operation_id', opIds)
+								.orderBy(['operation_date', 'operation_sequence'])
+						: [],
+					lineageAllowed ? database('v_sample_genealogy_flat').where('child_sample_id', sid) : [],
 					// Children joined to physical_samples for their creation date (timeline).
-					database('v_sample_genealogy_flat as g')
-						.join('physical_samples as ps', 'g.child_sample_id', 'ps.sample_id')
-						.where('g.parent_sample_id', sid)
-						.orderBy('ps.created_at')
-						.select('g.child_sample_code', 'g.relationship_type', 'g.fraction', 'ps.created_at as child_created', 'ps.form as child_form'),
-					database('v_test_sessions_full').where('sample_id', sid).orderBy('session_date'),
-					// campaign per operation / test (the views expose project, not campaign)
-					database('manufacturing_operations as mo')
-						.leftJoin('campaigns as c', 'mo.campaign_id', 'c.campaign_id')
-						.where('mo.sample_id', sid)
-						.select('mo.operation_id', 'c.campaign_code', 'c.name as campaign_name'),
-					database('test_sessions as t')
-						.leftJoin('campaigns as c', 't.campaign_id', 'c.campaign_id')
-						.where('t.sample_id', sid)
-						.select('t.session_id', 'c.campaign_code', 'c.name as campaign_name'),
+					lineageAllowed
+						? database('v_sample_genealogy_flat as g')
+								.join('physical_samples as ps', 'g.child_sample_id', 'ps.sample_id')
+								.where('g.parent_sample_id', sid)
+								.orderBy('ps.created_at')
+								.select(
+									'g.child_sample_id',
+									'g.child_sample_code',
+									'g.relationship_type',
+									'g.fraction',
+									'ps.created_at as child_created',
+									'ps.form as child_form'
+								)
+						: [],
+					testIds.length ? database('v_test_sessions_full').whereIn('session_id', testIds).orderBy('session_date') : [],
 				]);
 
-				// Attach campaign to each op/test row (project is already on the views).
-				const opCamp = Object.fromEntries(opCamps.map((r) => [r.operation_id, r]));
-				ops.forEach((o) => {
-					const c = opCamp[o.operation_id];
-					o.campaign_code = c?.campaign_code;
-					o.campaign_name = c?.campaign_name;
-				});
-				const testCamp = Object.fromEntries(testCamps.map((r) => [r.session_id, r]));
-				tests.forEach((t) => {
-					const c = testCamp[t.session_id];
-					t.campaign_code = c?.campaign_code;
-					t.campaign_name = c?.campaign_name;
-				});
+				const [readableParents, readableChildren] = await Promise.all([
+					a.readableIds('physical_samples', 'sample_id', parentRows.map((p) => p.parent_sample_id)),
+					a.readableIds('physical_samples', 'sample_id', childRows.map((c) => c.child_sample_id)),
+				]);
+				const parents = parentRows.filter((p) => readableParents.has(String(p.parent_sample_id)));
+				const children = childRows.filter((c) => readableChildren.has(String(c.child_sample_id)));
+
+				// Campaign per operation / test (the views expose project, not campaign).
+				// Campaign names are shown only if the caller can read `campaigns`.
+				const campaignIds = [...opRows, ...testRows].map((r) => r.campaign_id);
+				const campaigns = campaignIds.some((v) => v)
+					? await a.list('campaigns', { campaign_id: { _in: [...new Set(campaignIds.filter(Boolean))] } }, ['campaign_id', 'campaign_code', 'name'])
+					: [];
+				const campById = Object.fromEntries(campaigns.map((c) => [String(c.campaign_id), c]));
+				const withCampaign = (rows, srcRows, key) => {
+					const campOf = Object.fromEntries(srcRows.map((r) => [String(r[key]), campById[String(r.campaign_id)]]));
+					rows.forEach((row) => {
+						const c = campOf[String(row[key])];
+						row.campaign_code = c?.campaign_code;
+						row.campaign_name = c?.name;
+					});
+				};
+				withCampaign(ops, opRows, 'operation_id');
+				withCampaign(tests, testRows, 'session_id');
 
 				const publicUrl = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
-				const recordUrl = `${publicUrl}/admin/content/physical_samples/${sid}`;
+				const recordUrl = adminRecordUrl(publicUrl, 'physical_samples', sid);
 				const qrSvg = await QRCode.toString(recordUrl, {
 					type: 'svg',
 					margin: 0,
@@ -268,48 +436,58 @@ export default defineEndpoint({
 				return res.status(401).send('Authentication required.');
 			}
 			const id = String(req.params.id);
+			// A malformed id cannot match a uuid key; answer like any other miss.
+			if (!UUID_RE.test(id)) return notFound(res, 'Operation');
 			try {
-				// Query the BASE table (LEFT JOINs) so every operation works — the
-				// v_* view only covers machining ops with samples, so FAST/sintering
-				// (and other) ops were "not found". mo.* carries all process params.
-				const op = await database('manufacturing_operations as mo')
-					.leftJoin('physical_samples as ps', 'mo.sample_id', 'ps.sample_id')
-					.leftJoin('manufacturing_methods as mm', 'mo.method_id', 'mm.method_id')
-					.leftJoin('projects as pr', 'mo.project_id', 'pr.project_id')
-					.leftJoin('campaigns as c', 'mo.campaign_id', 'c.campaign_id')
-					.leftJoin('equipment as e', 'mo.equipment_id', 'e.equipment_id')
-					.where('mo.operation_id', id)
-					.first(
-						'mo.*',
-						'ps.sample_code',
-						'mm.method_name',
-						'mm.method_code',
-						'pr.project_code',
-						'pr.project_name',
-						'c.campaign_code',
-						'c.name as campaign_name',
-						'e.equipment_code',
-						'e.equipment_name'
-					);
-				if (!op) return res.status(404).send('Operation not found.');
+				const a = await accessFor(req);
+
+				// Read the BASE table (not the v_* view, which only covers machining ops
+				// with samples) so every operation works — FAST/sintering included. `*`
+				// carries all process params; related names are read per collection and
+				// simply left blank when the caller cannot read that collection.
+				const mo = await a.one('manufacturing_operations', id);
+				if (!mo) return notFound(res, 'Operation');
+
+				const [ps, mm, pr, c, e] = await Promise.all([
+					a.one('physical_samples', mo.sample_id),
+					a.one('manufacturing_methods', mo.method_id),
+					a.one('projects', mo.project_id),
+					a.one('campaigns', mo.campaign_id),
+					a.one('equipment', mo.equipment_id),
+				]);
+				const op = {
+					...mo,
+					sample_code: ps?.sample_code,
+					method_name: mm?.method_name,
+					method_code: mm?.method_code,
+					project_code: pr?.project_code,
+					project_name: pr?.project_name,
+					campaign_code: c?.campaign_code,
+					campaign_name: c?.name,
+					equipment_code: e?.equipment_code,
+					equipment_name: e?.equipment_name,
+				};
 
 				// Force/FFT/FRM appendix, only present for processed machining ops
 				// (scripts/force_orchestrator.py populates this table).
-				const fa = await database('machining_force_analysis')
-					.where('operation_id', op.operation_id)
-					.andWhere('status', 'done')
-					.first('series', 'fft', 'frm_fx', 'frm_fy', 'frm_fz', 'cut_start_idx', 'cut_end_idx', 'sample_rate', 'status', 'trigger_time');
+				const fa = await a.first(
+					'machining_force_analysis',
+					{ _and: [{ operation_id: { _eq: op.operation_id } }, { status: { _eq: 'done' } }] },
+					['series', 'fft', 'frm_fx', 'frm_fy', 'frm_fz', 'cut_start_idx', 'cut_end_idx', 'sample_rate', 'status', 'trigger_time']
+				);
 
 				// FAST sintering ops get a trace-plot appendix instead of the force one.
-				const fastRun = op.process_category === 'sintering'
-					? await database('fast_run_data')
-						.where('operation_id', op.operation_id)
-						.andWhere('status', 'done')
-						.first('series', 'directus_files_id', 'status')
-					: null;
+				const fastRun =
+					op.process_category === 'sintering'
+						? await a.first(
+								'fast_run_data',
+								{ _and: [{ operation_id: { _eq: op.operation_id } }, { status: { _eq: 'done' } }] },
+								['series', 'directus_files_id', 'status']
+							)
+						: null;
 
 				const publicUrl = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
-				const recordUrl = `${publicUrl}/admin/content/manufacturing_operations/${id}`;
+				const recordUrl = adminRecordUrl(publicUrl, 'manufacturing_operations', id);
 				const qrSvg = await QRCode.toString(recordUrl, { type: 'svg', margin: 0, errorCorrectionLevel: 'M' });
 
 				res.set('Content-Security-Policy', REPORT_CSP);
@@ -326,27 +504,32 @@ export default defineEndpoint({
 		router.get('/test/:id', async (req, res) => {
 			if (!req.accountability?.user) return res.status(401).send('Authentication required.');
 			const id = String(req.params.id);
+			if (!UUID_RE.test(id)) return notFound(res, 'Test');
 			try {
-				const t = await database('test_sessions as t')
-					.leftJoin('physical_samples as ps', 't.sample_id', 'ps.sample_id')
-					.leftJoin('projects as pr', 't.project_id', 'pr.project_id')
-					.leftJoin('campaigns as c', 't.campaign_id', 'c.campaign_id')
-					.leftJoin('equipment as e', 't.equipment_id', 'e.equipment_id')
-					.where('t.session_id', id)
-					.first(
-						't.*',
-						'ps.sample_code',
-						'pr.project_code',
-						'pr.project_name',
-						'c.campaign_code',
-						'c.name as campaign_name',
-						'e.equipment_code',
-						'e.equipment_name'
-					);
-				if (!t) return res.status(404).send('Test not found.');
+				const a = await accessFor(req);
+
+				const t0 = await a.one('test_sessions', id);
+				if (!t0) return notFound(res, 'Test');
+
+				const [ps, pr, c, e] = await Promise.all([
+					a.one('physical_samples', t0.sample_id),
+					a.one('projects', t0.project_id),
+					a.one('campaigns', t0.campaign_id),
+					a.one('equipment', t0.equipment_id),
+				]);
+				const t = {
+					...t0,
+					sample_code: ps?.sample_code,
+					project_code: pr?.project_code,
+					project_name: pr?.project_name,
+					campaign_code: c?.campaign_code,
+					campaign_name: c?.name,
+					equipment_code: e?.equipment_code,
+					equipment_name: e?.equipment_name,
+				};
 
 				const publicUrl = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
-				const recordUrl = `${publicUrl}/admin/content/test_sessions/${id}`;
+				const recordUrl = adminRecordUrl(publicUrl, 'test_sessions', id);
 				const qrSvg = await QRCode.toString(recordUrl, { type: 'svg', margin: 0, errorCorrectionLevel: 'M' });
 
 				res.set('Content-Security-Policy', REPORT_CSP);

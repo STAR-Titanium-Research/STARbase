@@ -9,7 +9,12 @@ from app.lib import directus_client, minio_client
 from app.lib.parser import parse_header, strided_read
 from app.lib.plotter import plot_overview
 from app.lib.stats import streaming_stats
-from app.lib.statuses import STATUS_FAILED, STATUS_PROCESSED, STATUS_PROCESSING
+from app.lib.statuses import (
+    STATUS_FAILED,
+    STATUS_PROCESSED,
+    STATUS_PROCESSING,
+    resolve_status,
+)
 
 log = logging.getLogger(__name__)
 
@@ -54,19 +59,11 @@ def process_session(session_id: str, object_key: str) -> None:
         minio_client.put_object(plot_key, svg_bytes, "image/svg+xml")
         plot_uri = f"minio://{minio_client.BUCKET}/{plot_key}"
 
-        # Read-merge-write: namespace our stats under "basic" and append our
-        # plot so we don't clobber the analysis worker's "fft_analysis".
-        merged_stats, merged_plots = _merge_outputs(
-            session_id, "basic", stats, plot_uri
-        )
-        directus_client.patch_test_session(
-            session_id,
-            {
-                "status": STATUS_PROCESSED,
-                "summary_stats": merged_stats,
-                "plot_uris": merged_plots,
-            },
-        )
+        # Read-merge-write under OCC: namespace our stats under "basic" and
+        # append our plot so we don't clobber the analysis worker's
+        # "fft_analysis"; the status moves to 'processed' only if that does not
+        # regress a better outcome (see statuses.resolve_status).
+        _merge_outputs(session_id, "basic", stats, plot_uri, STATUS_PROCESSED)
         log.info("done session=%s", session_id)
 
     except Exception:
@@ -82,36 +79,54 @@ def process_session(session_id: str, object_key: str) -> None:
 
 
 def _merge_outputs(
-    session_id: str, stats_key: str, stats: dict, plot_uri: str
-) -> tuple[dict, list]:
-    """Merge this worker's outputs into the existing JSONB columns.
+    session_id: str,
+    stats_key: str,
+    stats: dict,
+    plot_uri: str,
+    target_status: str | None = None,
+) -> dict | None:
+    """Merge this worker's outputs into the session row, guarded by OCC.
 
-    Returns (summary_stats, plot_uris) with our contribution namespaced under
-    *stats_key* and our plot appended (deduped). Falls back to a fresh object
-    if the current item can't be read.
+    Reads the row (including ``version``), namespaces our contribution under
+    *stats_key*, appends our plot (deduped) and PATCHes with
+    ``filter[version][_eq]``; on a conflict it re-reads and re-merges, a bounded
+    number of times. If the row can't be read the write is aborted (the
+    exception propagates and the job is marked failed) rather than overwriting
+    ``summary_stats`` with a fresh object.
     """
-    try:
-        current = directus_client.get_test_session(session_id)
-    except Exception:
-        log.warning("could not read current session=%s; writing fresh", session_id)
-        current = {}
 
-    summary_stats = current.get("summary_stats") or {}
-    if not isinstance(summary_stats, dict):
-        summary_stats = {}
-    summary_stats[stats_key] = stats
+    def compute(current: dict) -> dict:
+        summary_stats = current.get("summary_stats") or {}
+        if not isinstance(summary_stats, dict):
+            summary_stats = {}
+        summary_stats[stats_key] = stats
 
-    plot_uris = current.get("plot_uris") or []
-    if not isinstance(plot_uris, list):
-        plot_uris = []
-    if plot_uri not in plot_uris:
-        plot_uris.append(plot_uri)
+        plot_uris = current.get("plot_uris") or []
+        if not isinstance(plot_uris, list):
+            plot_uris = []
+        if plot_uri not in plot_uris:
+            plot_uris.append(plot_uri)
 
-    return summary_stats, plot_uris
+        payload: dict = {"summary_stats": summary_stats, "plot_uris": plot_uris}
+        if target_status:
+            status = resolve_status(current.get("status"), target_status)
+            if status:
+                payload["status"] = status
+        return payload
+
+    return directus_client.update_session(session_id, compute)
 
 
 def _mark(session_id: str, status: str) -> None:
+    """Set *status* if the transition rules allow it; never raises."""
     try:
-        directus_client.patch_test_session(session_id, {"status": status})
+        directus_client.update_session(
+            session_id,
+            lambda current: (
+                {"status": new}
+                if (new := resolve_status(current.get("status"), status))
+                else None
+            ),
+        )
     except Exception:
         log.warning("could not set status=%s for session=%s", status, session_id)

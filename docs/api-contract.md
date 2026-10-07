@@ -115,7 +115,13 @@ variable to the authenticated identity:
 SELECT set_config('d1.actor_identity', <authenticated user id>, true)
 ```
 
-The audit trigger reads it back within that transaction. Because the identity is
+The audit trigger reads it back within that transaction. The hook only sets it when
+Directus hands it the write's own transaction; for writes where it does not (Directus
+emits the update/delete filters before it opens the transaction), migration
+`…128_audit_actor_from_directus_activity` attributes the audit rows from the
+`directus_activity` row Directus writes in the same transaction. That actor is kept in
+`audit_log_actors` (`audit_logs` stays append-only); read **`v_audit_logs_with_actor`**
+to ask who made a change. Because the identity is
 taken from the authenticated Directus user / machine-token user (each rig has its
 own machine user, e.g. the `Rig_1` sampling node), it **cannot be spoofed** by a
 client-supplied header. This is a deliberate hardening over the original
@@ -489,7 +495,8 @@ Response fields:
 
 API writes are attributed automatically (see §2.3): the `actor-identity` hook
 sets `d1.actor_identity` from the authenticated user inside the write
-transaction. Machine nodes therefore only need to authenticate with their own
+transaction, with the `directus_activity` fallback described there (query
+`v_audit_logs_with_actor`). Machine nodes therefore only need to authenticate with their own
 static token — each rig's machine user uniquely identifies it in the audit log.
 No client-supplied header is required or trusted.
 

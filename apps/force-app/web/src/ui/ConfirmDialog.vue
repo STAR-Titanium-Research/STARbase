@@ -120,7 +120,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
 </template>
 
 <style scoped>
-/* z-index sits above .alarm-overlay (100) and .rec-banner (150) — the alarm banner is precisely
+/* z-index sits above .alarm-overlay (290) and .rec-banner (150) — the alarm banner is precisely
    what one of these prompts is launched from, so the dialog must not appear behind it. */
 .cd-backdrop { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(0,0,0,0.55); backdrop-filter: blur(2px); }
 .cd-modal { width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 20px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
@@ -131,7 +131,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
 .cd-modal.warning .cd-icon { color: var(--warn); }
 .cd-message { margin: 0; font-size: var(--fs-md); line-height: 1.55; color: var(--text); }
 .cd-detail { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text-dim); }
-.cd-stats { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; }
+.cd-stats { display: flex; flex-direction: column; gap: 4px; margin: 0; max-height: 40vh; overflow-y: auto; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; }
 .cd-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .cd-stat dt { font-size: var(--fs-sm); color: var(--text-dim); }
 .cd-stat dd { margin: 0; font-size: var(--fs-md); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }

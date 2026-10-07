@@ -54,8 +54,20 @@ fi
 
 echo "== docker-compose.yml validates =="
 if command -v docker >/dev/null 2>&1; then
-  if docker compose config -q >/dev/null 2>&1; then ok "docker compose config -q"
-  else bad "docker compose config failed"; fi
+  # Required secrets use ${VAR:?} in compose, so validate against a throwaway env file
+  # (never a real .env) holding a dummy value for each of them.
+  tmp_env="$(mktemp)"
+  trap 'rm -f "$tmp_env"' EXIT
+  for v in POSTGRES_PASSWORD MINIO_ROOT_PASSWORD DIRECTUS_KEY DIRECTUS_SECRET \
+           DIRECTUS_ADMIN_PASSWORD WORKER_WEBHOOK_SECRET REDIS_PASSWORD; do
+    echo "$v=smoke-test-dummy-value" >> "$tmp_env"
+  done
+  if docker compose --env-file "$tmp_env" config -q >/dev/null 2>&1; then ok "docker compose config -q (test env)"
+  else bad "docker compose config failed with a complete test env"; fi
+  # Fail closed: with no secrets set, compose must refuse rather than fall back to defaults.
+  if docker compose --env-file /dev/null config -q >/dev/null 2>&1; then
+    bad "docker compose config succeeded with no secrets (a \${VAR:?} guard is missing)"
+  else ok "docker compose config fails closed without secrets"; fi
 else
   echo "  SKIP docker not available"
 fi

@@ -67,10 +67,15 @@ def write_d1lc(
 
 
 def read_d1lc_header(buf: bytes) -> dict:
-    magic, version, n = struct.unpack_from("<III", buf, 0)
-    if magic != MAGIC:
-        raise ValueError(f"bad D1LC magic {magic:#x}")
-    fs, feed, diam, cs, ce = struct.unpack_from("<fffff", buf, 12)
+    """Raises ValueError for anything that is not a complete D1LC header (including a file cut off
+    before the header ends, which struct reports as struct.error)."""
+    try:
+        magic, version, n = struct.unpack_from("<III", buf, 0)
+        if magic != MAGIC:
+            raise ValueError(f"bad D1LC magic {magic:#x}")
+        fs, feed, diam, cs, ce = struct.unpack_from("<fffff", buf, 12)
+    except struct.error as e:
+        raise ValueError(f"truncated header ({len(buf)} bytes)") from e
     return {
         "version": version,
         "n": n,

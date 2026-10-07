@@ -39,6 +39,24 @@ Depth of cut, coolant, cutting length, operation sequence, chips reference and n
 folded sections further down the panel. You can also fill them in or correct them after the cut
 on the [Plot dashboard](plot-dashboard.md#correcting-an-operations-metadata).
 
+### The setup is remembered
+
+The app remembers the setup between launches, so you do not re-pick the same sample, machine and
+operator every morning: the spindle, feed, diameter, sample rate and pulses/rev values, the
+**Sample**, **Machine**, **Operator** and **Operation type** picks, and the depth, coolant and
+cutting-length fields. Insert, edge and tool are not remembered across launches (they change
+cut to cut), and neither are the per-cut fields: notes, pass code, operation sequence, chips
+reference, chips collected and the new-edge mark. The setup is kept in this computer's app
+storage, per user profile, and is not sent anywhere.
+
+**Clear setup**, at the bottom of the panel, puts every field back to blank or its default and
+forgets the remembered copy. Choosing **Replay file** clears Sample, Machine and Operation type
+for the replay search as before, but does not erase the remembered setup: it is put back in the
+form as soon as you return to Simulated or NI-DAQ (whatever a replayed cut filled in is dropped),
+and it is there at the next launch. The same goes for the per-cut fields and the insert, edge and
+tool picks: they come back as they were before you opened Replay, so the next cut is never linked
+to the archived cut's edge, sequence or notes.
+
 ## 3. Recording behaviour toggles
 
 Three toggles sit at the bottom of the panel, just above **Start**, so they are checked right
@@ -53,6 +71,31 @@ which explains them in full and holds the cut-detection threshold:
 
 ## 4. Start
 
+### Pre-flight checks
+
+A row of small chips above **Start** shows what is and isn't ready. Hover a chip for the detail.
+Anything that needs attention also gets a line of its own with **Show me**, which rings the control
+that fixes it (or opens the page that owns it).
+
+| Chip | Checks | If it isn't right |
+|---|---|---|
+| **Sample** | a Sample is picked | warning. See *Start anyway* below. |
+| **Signed in** / **Offline session** | there is a sign-in to upload with | an offline session is only a note: the cut is saved on this PC and uploaded after you sign in again. Not signed in at all is a warning. |
+| **Lab Amp** (NI-DAQ) | the amp answers | a warning if it doesn't: without the amp's ranges Start uses the channel model's gains if it has them, and otherwise records in volts, not newtons. **Start** resets the amp and sets it to MEASURE itself, so RESET beforehand is normal and shows as fine. |
+| **Tacho** (NI-DAQ) | tacho pulses seen | shown as *not checked*: the recorder only sees the tacho once samples are flowing, so the check is the Tacho alarm during the cut. |
+| **Disk** | free space on the capture drive, as *about N min at this rate* | a warning under 30 minutes, red under 5. The runway is free space minus the 1 GB at which the recorder force-stops, divided by the sample rate × 10 columns × 4 bytes. **Show me** goes to the sample rate. |
+| **Channels** (NI-DAQ) | the saved channel list can record | red for a rotating-dyno layout or one input wired to two channels, a warning if a force channel or the Tacho has no input yet. **Show me** opens the NI-DAQ page at the channel list. Skipped (*not checked*) when the Record page's own channel list isn't the default one, because Start then sends that list and ignores the saved channel model. |
+
+A chip that couldn't be read yet (the recorder is still starting, the amp page didn't answer) shows
+as *not checked*, never as a failure. The list refreshes every 15 seconds while you wait, and
+Replay has no checks.
+
+**Start anyway.** A missing Sample is a warning, not a block: pressing **Start** with no Sample asks
+*Start without a Sample?* and **Start anyway** goes on. The cut can be linked to a Sample later
+(for example when you were offline), but it can't be uploaded until it is. Everything that already
+stopped a start still does: the NI-DAQ sample-rate limit disables **Start**, the low-disk prompt and
+the alarm test below are unchanged.
+
 Press **Start**. The first time in each session the app offers to test the safety alarms:
 
 ![The alarm-test prompt](../images/force-app/alarm-test-prompt.png)
@@ -61,12 +104,69 @@ Press **Start**. The first time in each session the app offers to test the safet
 **Start without testing** is fine if you have already checked them on this machine today. The
 thresholds are set in [Settings → Safety Alarms](settings.md#safety-alarms).
 
+While you cut, a force axis that reaches the **early-warning level** (80 % of the force limit by
+default) raises an amber banner, with no tone and nothing to acknowledge. If the limit itself is
+reached the red alarm takes over. You can also have the alarm stop the recording for you; that is
+off by default (see the settings page). This only works while the Record page is open, because the
+alarms are checked there: stay on the Record page during a cut. After an alarm stops a cut the
+alarm banner stays above the save dialog, and **A** or **Acknowledge** still silences it.
+
 While recording, the parameter fields lock and **Start** becomes **Stop**:
 
 ![A cut in progress](../images/force-app/record-live.png)
 
+### Keyboard shortcuts
+
+The Record page has a **Keyboard shortcuts** line under **Start** that lists these. On a Mac use
+Cmd instead of Ctrl.
+
+| Keys | Does |
+|---|---|
+| Ctrl+Enter | **Start**, exactly as the button: the pre-flight prompt, the alarm test, the low-disk prompt and the sample-rate block all still apply |
+| Ctrl+. | **Stop** |
+| A | acknowledge a safety alarm, while the alarm banner shows (you are still asked to confirm) |
+| Ctrl+N | **New**, once a cut is finished |
+| Enter | the save dialog's main button (**Save**, or **Open in Plot** once saved) |
+
+Space and Esc are never used to start or stop. The shortcuts are ignored while you type in a field
+(except Enter in the save dialog) and in Replay. **A** is the exception to the save dialog rule: it
+silences a showing alarm even while the save dialog is open.
+
+Three limits to know about:
+
+- **Ctrl+N cannot be overridden in a browser tab.** Browsers reserve it to open a new window, so in
+  Chrome or Edge use the **New** button. In the desktop app Ctrl+N works.
+- **The shortcuts do not work in a pop-out panel window.** They listen on the Record page itself;
+  click back on the main window first.
+- The **Help** menu's own shortcuts in the desktop app (View Logs, Report a Bug, Open Captures
+  Folder) are Ctrl+Shift on Windows and Cmd+Shift on macOS.
+
 A recording stops when you press **Stop**. It also stops by itself when a simulated run reaches
 its planned length, or when the capture drive runs out of space.
+
+### Railed channels
+
+If a sensor channel reaches full scale while you are cutting, the app tells you during the cut, not
+after it. A railed channel has saturated the Lab Amp's analog output, so its peaks are flattened
+and only a wider range fixes it, which you can only change between cuts.
+
+- A red **Railed** tile appears in the Overview strip naming the channel (`Fy2`, `Fz1`, …).
+- A red dot appears on the Force Plot's **Sub** button, and a red **railed** badge beside the
+  channel in its list.
+- A red banner says *Ch Fy2 railed - re-range before the next cut*. It shows **once per cut**:
+  **Dismiss** keeps it away until the next cut, even if more channels rail. The tile and badges
+  stay until you press **New** or start the next cut. They show in Record mode only, never when
+  you play back an archived cut.
+
+A channel counts as railed when its peak reaches **99 %** of its full scale (its gain times the
+Lab Amp's analog full-scale voltage, which you set in the Lab Amp settings or `ANALOG_FULLSCALE_V`). That is the same test the saved capture uses for its per-channel clipping flags,
+which the **Converge** toggle reads to widen the range for the next cut. The live warning only
+works on the NI-DAQ source with per-channel gains known, which come from the Lab Amp's ranges
+(Lab Amp reachable at Start) **or** from the `gain_n_per_v` set on each channel in the NI-DAQ
+channel model. With neither, there is no warning, and the cut is recorded in **volts, not
+newtons** (the recorder falls back to a gain of 1), so the Lab Amp pre-flight chip says so when the
+amp is unreachable. Simulated data is already in newtons with no range to compare against, so it
+never rails.
 
 ## 5. Save or discard
 
@@ -127,15 +227,25 @@ indexed from the archive share, so it does not run on a cut saved this way. See
 
 ## Starting the next cut
 
-After saving or discarding, press **New** (or **Start new run** in the dialog) to clear the plots.
-The sample, machine, operator and tooling stay filled in. Only per-cut values need changing.
+After saving, press **New** (or **Start new run** in the dialog) to clear the plots. The sample,
+machine, operator and tooling stay filled in. The per-cut values reset: if the **operation
+sequence** is a whole number it goes up by one (so the Cut ID `{sample}-{TYPE}{seq}` does not
+repeat), and **chips reference**, **chips collected** and the **new edge** mark are cleared. A
+typed pass code and the notes are left as they are, so change them if they no longer apply.
+
+**Discarding** a cut does not step the sequence or clear those fields: the retake is the same cut.
 
 ## Leaving the page mid-cut
 
 Recording runs in the backend, not the page. You can switch to Plot or Settings while a cut runs.
 A banner on every other page shows its progress (see [Getting started](getting-started.md#while-a-recording-is-running)).
 
-Stay on the Record page for the end of the cut if you can. The save dialog opens when the page
-*sees* the recording finish. If the cut ends while you are elsewhere, the capture is still
-finalized on disk and is listed in [Settings → Local Captures](captures-and-recovery.md#local-captures),
-which is where an un-uploaded capture gets uploaded later.
+You do not have to be on the Record page when the cut ends. The page checks with the recorder
+whenever you come back to it, and if the cut finished (or is still being saved) while you were
+away, the save dialog opens then. The capture is finalized on disk either way and is listed in
+[Settings → Local Captures](captures-and-recovery.md#local-captures), which is where an
+un-uploaded capture gets uploaded later.
+
+One case is not offered again: if you **reload or restart the app** and the cut has already finished,
+the page starts with no memory of it and does not open the dialog. A cut that is still being saved
+at that point is offered. Either way, find the finished cut in Local Captures.

@@ -31,6 +31,7 @@ from conftest import (  # noqa: E402
     GOLDEN_ENVELOPE,
     SPR,
     cache_of,
+    metrics_match,
     synthetic_cut,
 )
 from diag.pipeline import analyse  # noqa: E402
@@ -72,7 +73,7 @@ def diff() -> int:
             else:
                 d = np.abs(got.astype(np.float64) - want.astype(np.float64))
                 print(f"      max|delta|={np.nanmax(d):.6g}")
-        if repr(sorted(metrics.items())) != str(golden["__metrics__"]):
+        if not metrics_match(metrics, str(golden["__metrics__"])):
             moved = moved_any = True
             print("  __metrics__  differs")
         if not moved:
@@ -85,7 +86,7 @@ def write() -> int:
         cols, metrics = _run(kwargs)
         payload = dict(cols)
         payload["__metrics__"] = np.array(repr(sorted(metrics.items())))
-        np.savez(path, **payload)
+        np.savez_compressed(path, **payload)
         print(f"wrote {path}")
     return 0
 

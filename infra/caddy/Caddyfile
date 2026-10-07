@@ -50,6 +50,8 @@
     # (http/ws://localhost from an https page is refused by browsers). handle_path strips /recorder,
     # mapping /recorder/record/start → /record/start. reverse_proxy upgrades the WebSocket
     # transparently. Only the host actually running the recorder answers; the tailnet is trusted.
+    # The recorder refuses this route by default (loopback-only Host check, docs/force-app-operations.md);
+    # it needs RECORDER_ALLOWED_HOSTS and RECORDER_CORS_ORIGINS set on the recorder to work.
     handle_path /recorder/* {
         reverse_proxy host.docker.internal:8200
     }

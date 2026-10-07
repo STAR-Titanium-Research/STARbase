@@ -33,7 +33,7 @@ from app.backup import (
     BackupStreamer,
     download_remote_raw,
     fetch_remote_session_config,
-    list_remote_sessions,
+    fetch_remote_sessions,
     probe_server,
 )
 from app.config import SIGNAL_CHANNELS, RecordConfig
@@ -213,7 +213,7 @@ def test_streamed_backup_restores_byte_identically(server, tmp_path):
     sess = _record(tmp_path, server.url)
     assert sess.state == "done", f"local recording failed: {sess.error}"
 
-    sessions = list_remote_sessions(server.url)
+    sessions = fetch_remote_sessions(server.url)["sessions"]
     assert [s["id"] for s in sessions] == [sess.id]
 
     restored = _restore_and_finalize(server.url, sess.id, str(tmp_path / "restored"))
@@ -419,9 +419,11 @@ def test_probe_server_reports_reachability(server):
     assert down["reachable"] is False and "error" in down
 
 
-def test_list_remote_sessions_empty_and_unreachable(server):
-    assert list_remote_sessions(server.url) == []
-    assert list_remote_sessions("http://127.0.0.1:9") == []  # swallows errors by design
+def test_fetch_remote_sessions_empty_and_unreachable(server):
+    assert fetch_remote_sessions(server.url)["sessions"] == []
+    # An unreachable server is an error, not "no backups" (#92).
+    with pytest.raises(bmod.RemoteBackupError):
+        fetch_remote_sessions("http://127.0.0.1:9")
 
 
 def test_fetch_remote_session_config_missing_returns_empty(server):
@@ -514,3 +516,32 @@ def test_restore_refuses_to_overwrite_a_finalized_local_capture(server, tmp_path
     assert res.status_code == 409
     assert "already finalized" in res.json()["detail"]
     assert raw.read_bytes() == b"the local copy, which must survive"
+
+
+def test_local_delete_tombstones_the_real_remote_copy(server, tmp_path, monkeypatch):
+    """#91 end to end: a recording streamed to the real server reads "complete" + finalized; after
+    a local delete it reads deleted on both sides, with an expiry, and its bytes are still there."""
+    from fastapi.testclient import TestClient
+
+    from app import main as mainmod
+
+    sess = _record(tmp_path, server.url)
+    assert sess.state == "done", sess.error
+    monkeypatch.setattr(mainmod, "CAPTURES_ROOT", sess.captures_root)
+    monkeypatch.setattr(mainmod, "_session", None)
+
+    with TestClient(mainmod.app) as c:
+        before = {s["id"]: s for s in c.get("/backup/remote-sessions").json()["sessions"]}
+        row = before[sess.id]
+        assert (row["backup_state"], row["local_status"]) == ("complete", "finalized")
+        assert row["name"] == "E2E-BACKUP"
+
+        body = c.delete(f"/captures/{sess.id}").json()
+        assert body["remote_marked_deleted"] is True
+
+        after = {s["id"]: s for s in c.get("/backup/remote-sessions").json()["sessions"]}
+        row = after[sess.id]
+        assert (row["backup_state"], row["local_status"]) == ("deleted", "deleted")
+        assert row["expires_at"] > time.time()
+
+    assert fetch_remote_session_config(server.url, sess.id)  # still restorable until it expires

@@ -23,17 +23,18 @@ From left to right:
 
    | Icon | Module | What it is |
    |---|---|---|
-   | cube | **Content** | every collection (table) and its records |
+   | house | **Home** | the landing page, the formatted record pages and the guided *Register a sample* ([below](#the-home-page)) |
    | people | **User Directory** | Directus user accounts |
    | folder | **File Library** | uploaded files and indexed archive files |
    | chart | **Insights** | Directus's own dashboards |
    | grid | **Lab Dashboard** | the D1 overview of samples, machining and FAST ([Dashboards](dashboards-and-reports.md#lab-dashboard)) |
    | line chart | **Force Analysis** | the machining force dashboard ([Force data](force-data.md)) |
    | gauge | **FAST Analysis** | sintering traces ([FAST sintering data](fast-data.md)) |
+   | cube | **Content** | the Data Studio: every collection (table) and its records |
    | cog | **Settings** | data model, roles, policies (administrators only) |
 
-   **Home**, **Force Crawler** and **Ask the Database** are also modules. They are reached from
-   the Home page's tiles rather than the rail.
+   **Force Crawler** and **Ask the Database** are also modules. They are reached from the Home
+   page's tiles rather than the rail.
 
 2. **The navigation panel**: in Content, the collections grouped into folders (*Inventory*,
    *Manufacturing Operations*, *Manufacturing Methods*…). Type in *Search Collection…* to find
@@ -46,10 +47,30 @@ From left to right:
 
 ![Home](../images/database/home.png)
 
-**Home** is the landing page. It has quick actions (*Register a sample*, *Log an operation*,
-*Ask the database*, *Manage people*, *Dashboards*, *Force Analysis*, *FAST Analysis*, *Force
-Crawler*), counts of samples, machining operations, FAST runs, tests and campaigns, and the most
-recent activity.
+**Home** is the landing page, and it is about **your** work. From top to bottom:
+
+1. **Quick actions.** Five big buttons for what you do every day: *Register a sample*, *Log an
+   operation*, *Ask the database*, *Print labels* and *Dashboards*. Below them, a **More** row
+   reaches the rest: *Projects*, *People*, *Force Analysis*, *FAST Analysis* and *Force Crawler*.
+2. **Needs attention.** Counts of things that want a look: force analyses in error on your
+   operations, failed test sessions, operations whose force files are still queued, and (for
+   administrators) samples with no owner. Click a tile and the matching records (the first ten)
+   list right under it, each one a link to its page.
+3. **My work.** Cards for the projects where you are PI or an investigator, the campaigns you
+   own, and the samples you own or co-own (latest first). A section says so when it is empty
+   rather than hiding.
+4. **Lab at a glance.** The lab-wide counts of samples, machining operations, FAST runs, tests
+   and campaigns. Each opens its list.
+5. **Recent activity.** The newest samples, operations and tests, each tagged with its kind. A FAST
+   run opens its Operation page and also offers a link to the FAST dashboard.
+
+A section that your role cannot read shows a short notice and the rest of Home still works.
+
+Records you click on Home, and on every page below, open as **formatted pages** rather than
+Content forms: the Projects index, **Project**, **Campaign**, **Sample**, **Operation** and
+**Test** pages. They are described in [Explorer pages](explorer-pages.md). Each page has an
+*Open in Data Studio* button, and Content stays available for everything else: it is after the
+dashboards on the rail.
 
 ## Working with records
 
@@ -65,6 +86,29 @@ recent activity.
   [audit log](roles-and-permissions.md#the-audit-log).
 - **Comments** are for notes to colleagues about a record.
 - **Export** a list from the sidebar's *Import / Export* (CSV, JSON, XLSX).
+- **Saved views** (bookmarks) sit under the collection in the navigation panel. Click one to
+  open the list already filtered. They are shared by everyone, and you can change the filter on
+  screen without altering the saved view. See [Saved views](#saved-views) below.
+
+## Saved views
+
+Ready-made filtered lists, one click away in the navigation panel:
+
+| Collection | View | Shows |
+|---|---|---|
+| Manufacturing Operations | **My operations** | operations whose owner is you, newest first |
+| Manufacturing Operations | **FAST runs, last 7 days** | FAST (`MF`) operations dated in the last 7 days |
+| Manufacturing Operations | **Missing outcome** | operations with no outcome notes yet |
+| Manufacturing Operations | **Machining**, **FAST** | all operations of that family |
+| Test Sessions | **Failed** | tests whose pipeline status is `failed` |
+| Test Sessions | **Needs analysis** | tests whose status is `processed`: the data is processed and analysis has not started |
+| Items (samples) | **My samples** | samples whose owner is you |
+| Items (samples) | **No location** | samples with no storage location recorded |
+
+*My* views match the **Owner** picker on the record against the person linked to your login
+(the person's *user id* field, the linked app login, in the *People* list). If no person is linked
+to your login, they are empty: ask an administrator to link yours. A view you change in the sidebar is not saved
+for anyone else. To keep your own, use the bookmark button next to the collection title.
 
 ## Codes you will see everywhere
 

@@ -32,6 +32,7 @@
 			</div>
 		</div>
 		<div ref="graphEl" class="d1-graph-canvas" />
+		<div v-if="loadError" class="d1-graph-error">{{ loadError }}</div>
 		<div v-if="loading" class="d1-graph-loading">
 			<v-progress-circular indeterminate />
 		</div>
@@ -40,14 +41,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import cytoscape from 'cytoscape';
-import { useD1Items } from '../composables/useD1Items';
+import { useItems, useRequestGate, errorText } from '@d1/ui';
 
 const props = defineProps<{ standalone?: boolean }>();
 const emit = defineEmits<{ (e: 'select', payload: { collection: string; id: string }): void }>();
 
-const { getItems, getItem } = useD1Items();
+const { getItems, getItem } = useItems();
+const route = useRoute();
 
 const graphEl = ref<HTMLElement | null>(null);
 const loading = ref(false);
@@ -55,6 +58,9 @@ const searchQuery = ref('');
 const searchResults = ref<{ id: string; collection: string; label: string }[]>([]);
 const focalLabel = ref('');
 const empty = ref(true);
+const loadError = ref('');
+const loadGate = useRequestGate();
+const searchGate = useRequestGate();
 
 let cy: cytoscape.Core | null = null;
 
@@ -157,10 +163,24 @@ onMounted(() => {
 		loadNeighbors(collection, id);
 		emit('select', { collection, id });
 	});
+
+	openLinkedSample();
 });
 
+// Deep link from the Sample page ("Open lineage graph"): /d1-lab-dashboard/graph?sample=<sample_id>
+// opens the graph on that sample. Only the standalone graph reads it; the copy embedded in the
+// sample dashboard is driven by clicks there.
+function openLinkedSample() {
+	const sample = route.query.sample;
+	if (props.standalone && typeof sample === 'string' && sample) loadNeighbors('physical_samples', sample);
+}
+watch(() => route.query.sample, () => openLinkedSample());
+
 onBeforeUnmount(() => {
+	loadGate.cancel();
+	searchGate.cancel();
 	cy?.destroy();
+	cy = null;
 });
 
 // Operations are labelled by their method ("CNC Turning", "FAST/SPS Sintering"): short enough for
@@ -171,8 +191,11 @@ function opLabel(op: any): string {
 
 async function loadNeighbors(collection: string, id: string) {
 	if (!cy) return;
+	const token = loadGate.begin();
+	let pendingFocal = '';
 	loading.value = true;
 	empty.value = false;
+	loadError.value = '';
 	searchResults.value = [];
 
 	try {
@@ -208,7 +231,7 @@ async function loadNeighbors(collection: string, id: string) {
 				getItems('sample_genealogy', { 'filter[child_sample_id][_eq]': id, 'fields[]': ['parent_sample_id.sample_code', 'parent_sample_id.sample_id'], limit: 10 }),
 			]);
 			const label = sample.nickname ? `${sample.sample_code} (${sample.nickname})` : sample.sample_code;
-			focalLabel.value = label;
+			pendingFocal = label;
 			addNode(collection, id, label, true);
 			if (sample.material_id?.common_name && sample.material_id?.material_id) {
 				addNode('materials', sample.material_id.material_id, sample.material_id.common_name);
@@ -237,7 +260,7 @@ async function loadNeighbors(collection: string, id: string) {
 				'fields[]': ['*', 'sample_id.sample_code', 'sample_id.sample_id', 'equipment_id.equipment_name', 'equipment_id.equipment_id', 'tool_id.tool_code', 'tool_id.tool_id', 'insert_edge_id.edge_code', 'insert_edge_id.edge_id', 'method_id.method_name', 'method_id.method_id'],
 			});
 			const label = op.pass_code || opLabel(op);
-			focalLabel.value = `Operation: ${label}`;
+			pendingFocal = `Operation: ${label}`;
 			addNode(collection, id, label, true);
 			if (op.sample_id?.sample_id) {
 				addNode('physical_samples', op.sample_id.sample_id, op.sample_id.sample_code);
@@ -260,7 +283,7 @@ async function loadNeighbors(collection: string, id: string) {
 				getItem('equipment', id, { 'fields[]': ['equipment_name', 'equipment_type', 'project_id.project_id', 'project_id.project_code'] }),
 				getItems('manufacturing_operations', { 'filter[equipment_id][_eq]': id, 'fields[]': ['operation_id', 'method_id.method_name', 'sample_id.sample_code', 'sample_id.sample_id', 'project_id.project_id', 'project_id.project_code'], limit: 20 }),
 			]);
-			focalLabel.value = eq.equipment_name;
+			pendingFocal = eq.equipment_name;
 			addNode(collection, id, `${eq.equipment_name}`, true);
 			// Primary project assignment
 			if (eq.project_id?.project_id) {
@@ -289,7 +312,7 @@ async function loadNeighbors(collection: string, id: string) {
 				getItem('insert_edges', id, { 'fields[]': ['edge_code', 'insert_id.insert_code', 'insert_id.insert_id'] }),
 				getItems('manufacturing_operations', { 'filter[insert_edge_id][_eq]': id, 'fields[]': ['operation_id', 'method_id.method_name', 'sample_id.sample_code', 'sample_id.sample_id', 'project_id.project_id', 'project_id.project_code'], limit: 15 }),
 			]);
-			focalLabel.value = edge.edge_code;
+			pendingFocal = edge.edge_code;
 			addNode(collection, id, edge.edge_code, true);
 			if (edge.insert_id?.insert_id) {
 				addNode('cutting_inserts', edge.insert_id.insert_id, edge.insert_id.insert_code);
@@ -311,7 +334,7 @@ async function loadNeighbors(collection: string, id: string) {
 			}
 		} else if (collection === 'cutting_inserts') {
 			const insert = await getItem('cutting_inserts', id, { 'fields[]': ['insert_code', 'tool_box_id.tool_box_code', 'tool_box_id.tool_box_id', 'insert_type_id.type_code', 'insert_type_id.insert_type_id'] });
-			focalLabel.value = insert.insert_code;
+			pendingFocal = insert.insert_code;
 			addNode(collection, id, insert.insert_code, true);
 			if (insert.tool_box_id?.tool_box_id) {
 				addNode('tool_boxes', insert.tool_box_id.tool_box_id, insert.tool_box_id.tool_box_code);
@@ -327,7 +350,7 @@ async function loadNeighbors(collection: string, id: string) {
 				getItem('tool_boxes', id, { 'fields[]': ['tool_box_code', 'insert_type_id.type_code', 'project_id.project_id', 'project_id.project_code'] }),
 				getItems('cutting_inserts', { 'filter[tool_box_id][_eq]': id, 'fields[]': ['insert_id', 'insert_code'], limit: 20 }),
 			]);
-			focalLabel.value = box.tool_box_code;
+			pendingFocal = box.tool_box_code;
 			addNode(collection, id, box.tool_box_code, true);
 			if (box.project_id?.project_id) {
 				addNode('projects', box.project_id.project_id, box.project_id.project_code);
@@ -339,7 +362,7 @@ async function loadNeighbors(collection: string, id: string) {
 			}
 		} else if (collection === 'test_sessions') {
 			const ts = await getItem('test_sessions', id, { 'fields[]': ['test_type', 'status', 'sample_id.sample_code', 'sample_id.sample_id', 'equipment_id.equipment_name', 'equipment_id.equipment_id', 'project_id.project_id', 'project_id.project_code'] });
-			focalLabel.value = `Test: ${ts.test_type ?? ts.status}`;
+			pendingFocal = `Test: ${ts.test_type ?? ts.status}`;
 			addNode(collection, id, `${ts.test_type ?? 'test'}\n${ts.status}`, true);
 			if (ts.sample_id?.sample_id) {
 				addNode('physical_samples', ts.sample_id.sample_id, ts.sample_id.sample_code);
@@ -356,32 +379,45 @@ async function loadNeighbors(collection: string, id: string) {
 		} else {
 			// Generic fallback: just show the focal node
 			addNode(collection, id, id, true);
-			focalLabel.value = `${COLLECTION_LABELS[collection] ?? collection}: ${id}`;
+			pendingFocal = `${COLLECTION_LABELS[collection] ?? collection}: ${id}`;
 		}
 
+		// A newer click (or unmount) superseded this load: drop its result.
+		if (!loadGate.isCurrent(token) || !cy) return;
+		focalLabel.value = pendingFocal;
 		cy.add([...nodes, ...edges]);
 		runLayout();
 	} catch (err) {
 		console.error('[NodeGraph] loadNeighbors error', err);
+		if (loadGate.isCurrent(token)) loadError.value = `Could not load connections: ${errorText(err)}`;
 	} finally {
-		loading.value = false;
+		if (loadGate.isCurrent(token)) loading.value = false;
 	}
 }
 
 async function handleSearch() {
 	const q = searchQuery.value.trim();
+	const token = searchGate.begin();
 	if (!q) { searchResults.value = []; return; }
 	const results: typeof searchResults.value = [];
+	loadError.value = '';
 
-	const [samples, ops, tests, equipment, inserts, edges, boxes] = await Promise.all([
-		getItems('physical_samples', { 'filter[sample_code][_icontains]': q, 'fields[]': ['sample_id', 'sample_code'], limit: 5 }),
-		getItems('manufacturing_operations', { 'filter[pass_code][_icontains]': q, 'fields[]': ['operation_id', 'pass_code'], limit: 5 }),
-		getItems('test_sessions', { 'filter[test_type][_icontains]': q, 'fields[]': ['session_id', 'test_type'], limit: 5 }),
-		getItems('equipment', { 'filter[equipment_name][_icontains]': q, 'fields[]': ['equipment_id', 'equipment_name'], limit: 5 }),
-		getItems('cutting_inserts', { 'filter[insert_code][_icontains]': q, 'fields[]': ['insert_id', 'insert_code'], limit: 5 }),
-		getItems('insert_edges', { 'filter[edge_code][_icontains]': q, 'fields[]': ['edge_id', 'edge_code'], limit: 5 }),
-		getItems('tool_boxes', { 'filter[tool_box_code][_icontains]': q, 'fields[]': ['tool_box_id', 'tool_box_code'], limit: 5 }),
-	]);
+	let samples: any[], ops: any[], tests: any[], equipment: any[], inserts: any[], edges: any[], boxes: any[];
+	try {
+		[samples, ops, tests, equipment, inserts, edges, boxes] = await Promise.all([
+			getItems('physical_samples', { 'filter[sample_code][_icontains]': q, 'fields[]': ['sample_id', 'sample_code'], limit: 5 }),
+			getItems('manufacturing_operations', { 'filter[pass_code][_icontains]': q, 'fields[]': ['operation_id', 'pass_code'], limit: 5 }),
+			getItems('test_sessions', { 'filter[test_type][_icontains]': q, 'fields[]': ['session_id', 'test_type'], limit: 5 }),
+			getItems('equipment', { 'filter[equipment_name][_icontains]': q, 'fields[]': ['equipment_id', 'equipment_name'], limit: 5 }),
+			getItems('cutting_inserts', { 'filter[insert_code][_icontains]': q, 'fields[]': ['insert_id', 'insert_code'], limit: 5 }),
+			getItems('insert_edges', { 'filter[edge_code][_icontains]': q, 'fields[]': ['edge_id', 'edge_code'], limit: 5 }),
+			getItems('tool_boxes', { 'filter[tool_box_code][_icontains]': q, 'fields[]': ['tool_box_id', 'tool_box_code'], limit: 5 }),
+		]);
+	} catch (err) {
+		if (searchGate.isCurrent(token)) loadError.value = `Search failed: ${errorText(err)}`;
+		return;
+	}
+	if (!searchGate.isCurrent(token)) return; // a newer search replaced this one
 
 	for (const s of samples) results.push({ id: s.sample_id, collection: 'physical_samples', label: s.sample_code });
 	for (const o of ops) results.push({ id: o.operation_id, collection: 'manufacturing_operations', label: o.pass_code });
@@ -517,6 +553,19 @@ defineExpose({ loadNeighbors });
 	align-items: center;
 	justify-content: center;
 	background: rgba(255,255,255,.75);
+}
+
+.d1-graph-error {
+	position: absolute;
+	left: 8px;
+	right: 8px;
+	bottom: 8px;
+	padding: 6px 10px;
+	font-size: 12px;
+	color: var(--theme--danger, #c62828);
+	background: var(--theme--background, #ffffff);
+	border: 1px solid var(--theme--danger, #c62828);
+	border-radius: 6px;
 }
 
 .d1-graph-empty {

@@ -194,3 +194,61 @@ class TestComputeExtraColumns:
         """Locks in the assumption every caller relies on: column i of the `dyno` argument is
         DYNO_CHANNELS[i], not some other ordering."""
         assert DYNO_CHANNELS == ["Fx1", "Fx2", "Fy1", "Fy2", "Fz1", "Fz2", "Fz3", "Fz4"]
+
+
+class TestFormulasThatUsedToPassValidationThenCrashed:
+    """Review 1.2: wrong arity and constant division by zero were accepted at save time and then
+    raised TypeError / ZeroDivisionError on the consumer thread, finalize and recovery."""
+
+    @pytest.mark.parametrize(
+        "formula",
+        ["min(Fx)", "max(Fx)", "min(Fx, Fy, Fz)", "sqrt()", "sqrt(Fx, Fy)", "abs()", "abs(1, 2)"],
+    )
+    def test_wrong_arity_is_rejected_at_parse_time(self, formula):
+        with pytest.raises(FormulaError, match="argument"):
+            parse_formula(formula)
+        with pytest.raises(FormulaError):
+            referenced_channels(formula)
+
+    @pytest.mark.parametrize("formula", ["1/0", "Fx/0", "Fx/(1-1)", "Fx/(2*0.0)", "1/-0"])
+    def test_constant_division_by_zero_is_rejected(self, formula):
+        with pytest.raises(FormulaError, match="zero"):
+            parse_formula(formula)
+
+    def test_division_by_a_channel_or_nonzero_constant_is_still_fine(self):
+        assert referenced_channels("Fx/Fy") == {"Fx", "Fy"}
+        assert referenced_channels("Fx/2") == {"Fx"}
+        assert referenced_channels("min(Fx, 0)/(1+1)") == {"Fx"}
+
+    def test_evaluate_wraps_any_exception_in_formula_error(self, monkeypatch):
+        import app.virtual_channels as vc
+
+        def _boom(*a):
+            raise TypeError("surprise")
+
+        monkeypatch.setitem(vc._FUNCS, "sqrt", _boom)
+        with pytest.raises(FormulaError, match="surprise"):
+            evaluate("sqrt(Fx)", {"Fx": _chunk()})
+
+    def test_compute_extra_columns_degrades_instead_of_raising(self, monkeypatch):
+        import app.virtual_channels as vc
+
+        n = 3
+        # Bypass the save-time check (a hand-edited nidaq_channels.json / an old manifest can
+        # still carry these): the live path must zero the column, never raise.
+        monkeypatch.setattr(vc, "_validate", lambda node: set())
+        extras = [
+            ExtraChannel(name="A", source="virtual", formula="min(Fx)"),
+            ExtraChannel(name="B", source="virtual", formula="1/0"),
+            ExtraChannel(name="C", source="virtual", formula="sqrt()"),
+        ]
+        errors = []
+        out = compute_extra_columns(
+            extras,
+            np.zeros((n, 8)),
+            np.zeros(n),
+            {"Fx": np.zeros(n)},
+            on_error=lambda name, e: errors.append(name),
+        )
+        assert np.allclose(out, 0.0)
+        assert errors == ["A", "B", "C"]

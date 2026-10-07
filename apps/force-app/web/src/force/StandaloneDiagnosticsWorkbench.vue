@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
 	bakedRecipe: Recipe | null;
 	baking?: boolean;
 	bakeMessage?: string | null;
+	opTag?: string;
 }>(), { baking: false, bakeMessage: null });
 const emit = defineEmits<{ (e: 'bake', recipe: Recipe): void }>();
 
@@ -30,6 +31,7 @@ function onPopout(p: { type: string; channel?: string }) {
 	<DiagnosticsWorkbench
 		:diag-path="props.diagPath"
 		:analysis-id="props.analysisId"
+		:op-tag="props.opTag"
 		:diag-metrics="props.diagMetrics"
 		:initial-recipe="props.initialRecipe"
 		:baked-recipe="props.bakedRecipe"

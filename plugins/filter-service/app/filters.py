@@ -9,8 +9,20 @@ phase-shifts. Must stay in lock-step with the MATLAB twin
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from scipy import signal
+
+# despike.window is user-controlled and the Hampel median costs O(n * window): window=2001 on 200k
+# samples took 36 s and 6.1 GB. The dashboard's number input has no max, so existing saved chains
+# use 11 (the default) or small odd values; 1001 (~40 ms at 25.6 kHz) leaves ample headroom.
+MAX_DESPIKE_WINDOW = int(os.environ.get("FILTER_MAX_DESPIKE_WINDOW", "1001"))
+# Upper bound on n_samples * window per axis, so a wide window on a multi-million-sample cache
+# is refused up front instead of pinning a worker for minutes.
+MAX_DESPIKE_WORK = int(float(os.environ.get("FILTER_MAX_DESPIKE_WORK", "2e9")))
+# Rows of the sliding-window matrix medianed at once (bounds the working set to ~64 MB).
+_HAMPEL_BLOCK_ELEMS = 8_000_000
 
 
 class ChainError(ValueError):
@@ -19,19 +31,25 @@ class ChainError(ValueError):
 
 def _hampel(x: np.ndarray, window: int, sigma: float) -> np.ndarray:
     """Hampel despike: replace samples > sigma * 1.4826*MAD from the rolling median.
-    Implemented with stride tricks over an odd centred window (edges left untouched)."""
+    Implemented with stride tricks over an odd centred window (edges left untouched).
+    The medians are taken in row blocks so memory stays bounded for any n * window."""
     n = x.size
     if n < window:
         return x
     half = window // 2
     sw = np.lib.stride_tricks.sliding_window_view(x, window)
-    med = np.median(sw, axis=1)
-    mad = np.median(np.abs(sw - med[:, None]), axis=1)
-    thr = sigma * 1.4826 * mad
-    centre = x[half : n - half]
+    m = sw.shape[0]
+    block = max(1, _HAMPEL_BLOCK_ELEMS // window)
     out = x.copy()
-    bad = np.abs(centre - med) > thr
-    out[half : n - half] = np.where(bad, med, centre)
+    for lo in range(0, m, block):
+        hi = min(m, lo + block)
+        win = sw[lo:hi]
+        med = np.median(win, axis=1)
+        mad = np.median(np.abs(win - med[:, None]), axis=1)
+        thr = sigma * 1.4826 * mad
+        centre = x[half + lo : half + hi]
+        bad = np.abs(centre - med) > thr
+        out[half + lo : half + hi] = np.where(bad, med, centre)
     return out
 
 
@@ -42,6 +60,8 @@ def _validate(chain: dict, fs: float) -> None:
         w = int(d.get("window", 11))
         if w < 3 or w % 2 == 0:
             raise ChainError("despike.window must be odd and >= 3")
+        if w > MAX_DESPIKE_WINDOW:
+            raise ChainError(f"despike.window must be <= {MAX_DESPIKE_WINDOW}")
         if float(d.get("sigma", 5)) <= 0:
             raise ChainError("despike.sigma must be > 0")
     t = chain.get("detrend") or {}
@@ -78,6 +98,14 @@ def apply_chain(
     the bake applies them at full rate.
     """
     _validate(chain, fs)
+    d0 = chain.get("despike") or {}
+    if d0.get("on"):
+        n_max = max((v.size for v in axes.values()), default=0)
+        if n_max * int(d0.get("window", 11)) > MAX_DESPIKE_WORK:
+            raise ChainError(
+                f"despike.window {int(d0.get('window', 11))} is too large for "
+                f"{n_max} samples; reduce the window"
+            )
     nyq = fs / 2
     skipped: list[str] = []
     out = {k: v.astype(np.float64, copy=True) for k, v in axes.items()}

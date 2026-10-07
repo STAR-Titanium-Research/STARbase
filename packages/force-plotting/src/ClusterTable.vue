@@ -3,6 +3,7 @@
 // the colour chip matches DiagScatter's cluster overlay. Clicking a row selects that cluster
 // across the workbench (emit 'select'); clicking the active row again clears it.
 import { clusterColorCss } from './clusterPalette';
+import { downloadText, safeFilePart, toCsv, useCopyFeedback, type CsvColumn } from './csvExport';
 import type { ClusterRow } from './selection';
 
 import { computed, ref } from 'vue';
@@ -14,6 +15,8 @@ const props = defineProps<{
 	 *  view or the whole-cut bake. Without it the table and the Spatial map can disagree
 	 *  with nothing on screen explaining why. */
 	caption?: string;
+	/** Operation tag / pass code for the CSV filename. */
+	opTag?: string;
 }>();
 const emit = defineEmits<{ (e: 'select', id: number | null): void }>();
 
@@ -30,6 +33,21 @@ const hidden = computed(() => Math.max(0, props.rows.length - shown.value.length
 const fmt = (v: number | null, d = 2) => (v != null && Number.isFinite(v) ? v.toFixed(d) : '—');
 const pct = (f: number) => `${(f * 100).toFixed(f < 0.01 ? 2 : 1)}%`;
 
+// CSV carries every row (not just the shown head), ids as numbers with noise as -1, fraction as a
+// 0..1 number, and units in the header names.
+const CSV_COLS: CsvColumn<ClusterRow>[] = [
+	{ header: 'cluster_id', value: (r) => r.id },
+	{ header: 'points', value: (r) => r.n },
+	{ header: 'fraction_of_cut', value: (r) => r.fraction },
+	{ header: 'mean_abs_resid_z', value: (r) => r.meanAbsResidZ },
+	{ header: 'max_gi_star', value: (r) => r.maxGiStar },
+	{ header: 'r_min_mm', value: (r) => r.rMin },
+	{ header: 'r_max_mm', value: (r) => r.rMax },
+];
+const csv = () => toCsv(CSV_COLS, props.rows);
+function downloadCsv() { downloadText(`clusters_${safeFilePart(props.opTag) || 'cut'}.csv`, csv()); }
+const { copied, failed, copy: copyCsv } = useCopyFeedback(csv);
+
 function onRow(id: number) {
 	emit('select', props.activeId === id ? null : id);
 }
@@ -42,6 +60,8 @@ function onRow(id: number) {
 		<p class="ct-caption">
 			<strong>{{ realCount.toLocaleString() }}</strong> cluster{{ realCount === 1 ? '' : 's' }}
 			<template v-if="caption"> · {{ caption }}</template> · click a row to isolate it
+			<button class="ct-csv" title="Download all cluster rows as CSV" @click="downloadCsv">Download CSV</button>
+			<button class="ct-csv" title="Copy all cluster rows to the clipboard as CSV" @click="copyCsv">{{ copied ? 'Copied' : failed ? 'Copy failed' : 'Copy' }}</button>
 		</p>
 		<p v-if="realCount > HEAD" class="ct-hint">
 			HDBSCAN finds as many clusters as the data supports — it has no target count.
@@ -49,8 +69,8 @@ function onRow(id: number) {
 		</p>
 		<table>
 			<thead>
-				<tr><th></th><th>cluster</th><th class="num">pts</th><th class="num">% cut</th>
-					<th class="num">mean|z|</th><th class="num">max gi*</th><th class="num">r (mm)</th></tr>
+				<tr><th></th><th>cluster</th><th class="num" title="points in the cluster">pts</th><th class="num" title="share of the cut's points">% cut</th>
+					<th class="num" title="mean absolute residual z-score, in standard deviations">mean|z| (σ)</th><th class="num" title="largest Getis-Ord Gi* z-score in the cluster, in standard deviations">max gi* (σ)</th><th class="num" title="radial range of the cluster">r (mm)</th></tr>
 			</thead>
 			<tbody>
 				<tr v-for="r in shown" :key="r.id"
@@ -81,6 +101,8 @@ function onRow(id: number) {
 .ct-empty { padding: 10px 12px; color: var(--text-dim, #94a3b8); font-style: italic; }
 .ct-caption { margin: 0; padding: 4px 8px 3px; font-size: var(--fs-xs, 11px); color: var(--text-dim, #94a3b8); font-style: italic; }
 .ct-caption strong { color: var(--text, #e5e7eb); font-style: normal; font-variant-numeric: tabular-nums; }
+.ct-csv { font: inherit; font-size: var(--fs-xs, 11px); font-style: normal; cursor: pointer; margin-left: 8px; padding: 0; color: var(--accent, #38bdf8); background: none; border: none; }
+.ct-csv:hover { text-decoration: underline; }
 .ct-hint { margin: 0; padding: 0 8px 5px; font-size: var(--fs-xs, 11px); line-height: 1.4; color: #fcd34d; }
 .ct-hint em { font-style: normal; font-weight: 650; }
 .ct-more {

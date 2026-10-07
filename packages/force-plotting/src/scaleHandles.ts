@@ -50,19 +50,24 @@ export function pickHandle(
 	const tied = candidates.filter((c) => c.dist <= best + 1);
 	if (tied.length === 1) return tied[0].key;
 	const wantCircle = Math.abs(py - height / 2) <= CIRCLE_BAND_PX;
-	// Coincident saturation flags (e.g. a collapsed range): split by which side of them the pointer
-	// is, so satMax can still be pulled out rightwards instead of satMin always winning.
-	const flags = tied.filter((c) => c.style === 'flag');
-	if (!wantCircle && flags.length === 2) {
-		const x = (flags[0].pct / 100) * width;
-		if (px > x + 0.5) return 'satMax';
-		if (px < x - 0.5) return 'satMin';
-		return lastDragged === 'satMin' || lastDragged === 'satMax' ? lastDragged : 'satMax';
-	}
+	// A pointer in the circle band belongs to a circle, anywhere else to a flag -- unless the tie
+	// has none of that style, in which case whatever is there.
+	const group = tied.some((c) => (c.style === 'circle') === wantCircle)
+		? tied.filter((c) => (c.style === 'circle') === wantCircle)
+		: tied;
+	if (group.length === 1) return group[0].key;
+	// Two ends of the same range sitting on top of each other (a collapsed range, or an open
+	// displayed range clamped to the same edge): split by which side of them the pointer is, so
+	// either end can be pulled out -- picking the first always left the other one unreachable.
+	const lows = group.filter((c) => c.key === 'satMin' || c.key === 'dispMin');
+	const highs = group.filter((c) => c.key === 'satMax' || c.key === 'dispMax');
+	const x = (group[0].pct / 100) * width;
+	if (px > x + 0.5 && highs.length) return highs[0].key;
+	if (px < x - 0.5 && lows.length) return lows[0].key;
 	return (
-		tied.find((c) => (c.style === 'circle') === wantCircle)?.key ??
-		tied.find((c) => c.key === lastDragged)?.key ??
-		tied[0].key
+		group.find((c) => c.key === lastDragged)?.key ??
+		highs[0]?.key ??
+		group[0].key
 	);
 }
 
@@ -79,13 +84,28 @@ export function handleDragPatch(
 	s: ColorScale, key: HandleKey, value: number, eps: number,
 ): Partial<ColorScale> {
 	if (key === 'satMin' || key === 'satMax') {
+		// The unshaped range a shaping param is applied to (see ColorScale.baseMin). A drag edits the
+		// base, so the shaped satMin/satMax follow and unticking the param restores a sensible range.
+		const bMin = s.baseMin ?? s.satMin, bMax = s.baseMax ?? s.satMax;
 		if (s.symmetrical) {
 			const m = Math.max(Math.abs(value), eps);
-			return { satMin: -m, satMax: m };
+			// The dragged side sets the magnitude; the other base end keeps whatever fits inside it.
+			let lo = key === 'satMin' ? -m : Math.max(bMin, -m);
+			let hi = key === 'satMax' ? m : Math.min(bMax, m);
+			if (!(hi > lo)) { lo = -m; hi = m; }
+			return { satMin: -m, satMax: m, baseMin: lo, baseMax: hi };
 		}
-		return key === 'satMin'
-			? { satMin: Math.min(value, s.satMax - eps) }
-			: { satMax: Math.max(value, s.satMin + eps) };
+		// Clamp against the SHAPED range (satMin/satMax), not the base: with always-show-zero on and a
+		// base of [25, 35] the shaped range is [0, 35], so satMax may be dragged down to ~0 even
+		// though that is below the base's own minimum. When the dragged end passes the opposite BASE
+		// end, the base slides along at its own width rather than the handle sticking at that end.
+		const width = bMax - bMin;
+		if (key === 'satMin') {
+			const v = Math.min(value, s.satMax - eps);
+			return bMax < v + eps ? { satMin: v, baseMin: v, baseMax: v + width } : { satMin: v, baseMin: v };
+		}
+		const v = Math.max(value, s.satMin + eps);
+		return bMin > v - eps ? { satMax: v, baseMax: v, baseMin: v - width } : { satMax: v, baseMax: v };
 	}
 	return key === 'dispMin'
 		? { dispMin: Math.min(value, s.dispMax - eps) }

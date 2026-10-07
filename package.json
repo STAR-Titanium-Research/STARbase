@@ -7,13 +7,20 @@
     "packages/*",
     "apps/force-app/web",
     "apps/force-app/desktop",
-    "core/extensions/d1-force-dashboard"
+    "core/extensions/d1-force-dashboard",
+    "core/extensions/d1-home",
+    "core/extensions/d1-lab-dashboard",
+    "core/extensions/d1-composition-bar",
+    "core/extensions/d1-campaign-ops",
+    "core/extensions/d1-project-items",
+    "core/extensions/d1-fast-dashboard"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build:web": "npm run build -w force-app-web",
     "build:web:desktop": "npm run build:desktop -w force-app-web",
-    "build:extension": "npm run build -w directus-extension-d1-force-dashboard"
+    "build:extension": "npm run build -w directus-extension-d1-force-dashboard",
+    "build:extensions": "npm run build -w directus-extension-d1-home -w directus-extension-d1-lab-dashboard -w directus-extension-d1-composition-bar -w directus-extension-d1-campaign-ops -w directus-extension-d1-project-items -w directus-extension-d1-fast-dashboard"
   }
 }

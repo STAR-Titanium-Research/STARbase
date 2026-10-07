@@ -48,8 +48,34 @@ async function loadDrives() {
 	}
 }
 
-async function selectDrive(drive: DriveInfo) {
-	const path = drive.path + 'force-app-captures';
+// #101: recordings can go in any folder, not only <drive>\force-app-captures. The desktop app
+// gets the native folder picker; the browser build cannot open one, so it takes a typed path.
+// The backend checks either (writable, and not while a recording is running or saving).
+const canPickFolder = typeof window.forceApp?.pickFolder === 'function';
+const typedPath = ref('');
+// Captures stay in the folder they were recorded to, and Local Captures lists only the current
+// one, so after a change say where the earlier ones are rather than let them look deleted.
+const previousRoot = ref('');
+
+const samePath = (a: string, b: string) =>
+	a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase();
+
+function selectDrive(drive: DriveInfo) {
+	return setCapturesRoot(drive.path + 'force-app-captures');
+}
+
+async function pickFolder() {
+	const chosen = await window.forceApp?.pickFolder(currentStorage.value?.captures_root);
+	if (chosen) await setCapturesRoot(chosen);
+}
+
+function useTypedPath() {
+	const p = typedPath.value.trim();
+	if (p) void setCapturesRoot(p);
+}
+
+async function setCapturesRoot(path: string) {
+	const before = currentStorage.value?.captures_root || '';
 	storageError.value = '';
 	try {
 		const base = getConfig().recorderUrl;
@@ -61,6 +87,11 @@ async function selectDrive(drive: DriveInfo) {
 		if (!res.ok) throw new Error(await errorDetail(res, 'failed to set storage'));
 		const data = await res.json();
 		currentStorage.value = data;
+		if (before && !samePath(before, data.captures_root)) {
+			// Switching back to the earlier folder clears the note instead of pointing at the new one.
+			previousRoot.value = previousRoot.value && samePath(previousRoot.value, data.captures_root) ? '' : before;
+		}
+		typedPath.value = '';
 		// The drive can apply to the running backend but fail to persist (an unwritable config
 		// location). Saying "saved" then reverting on restart is the failure this replaces, so the
 		// warning is shown instead of the tick and is not auto-dismissed.
@@ -101,7 +132,7 @@ onMounted(() => { loadDrives(); });
 		</div>
 
 		<h2 class="mt">Recording storage</h2>
-		<p class="lead">Choose where recordings are saved. SSD drives are recommended for high-frequency acquisition. The backend creates a <code>force-app-captures</code> folder on the selected drive.</p>
+		<p class="lead">Choose where recordings are saved. SSD drives are recommended for high-frequency acquisition. Picking a drive uses a <code>force-app-captures</code> folder on it; you can also choose any folder.</p>
 
 		<div v-if="storageLoading" class="hint">Loading drives…</div>
 		<div v-else-if="storageError" class="err">{{ storageError }}</div>
@@ -126,6 +157,16 @@ onMounted(() => { loadDrives(); });
 			</button>
 		</div>
 
+		<div class="custom-folder">
+			<button v-if="canPickFolder" class="btn" @click="pickFolder">
+				<span class="material-symbols-rounded">folder_open</span> Choose folder…
+			</button>
+			<form v-else class="typed-path" @submit.prevent="useTypedPath">
+				<input v-model="typedPath" spellcheck="false" placeholder="Or type a folder, e.g. D:\Recordings" aria-label="Recording folder" />
+				<button class="btn" type="submit" :disabled="!typedPath.trim()">Use folder</button>
+			</form>
+		</div>
+
 		<p v-if="currentStorage" class="hint storage-path">
 			<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">folder</span>
 			{{ currentStorage.captures_root }}
@@ -134,6 +175,10 @@ onMounted(() => { loadDrives(); });
 		<p v-if="currentStorage && currentStorage.free_gb < 5" class="err">
 			<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">warning</span>
 			Low disk space! Only {{ currentStorage.free_gb.toFixed(1) }} GB remaining. Recordings may fail.
+		</p>
+		<p v-if="previousRoot" class="hint moved-note">
+			<span class="material-symbols-rounded" style="font-size: var(--icon-xs)">info</span>
+			<span>Recordings made before this change stay in <code>{{ previousRoot }}</code>. Local Captures lists only the current folder, so switch back to see or upload them.</span>
 		</p>
 	</div>
 </template>
@@ -173,5 +218,11 @@ h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
 .drive-check { font-size: var(--icon-md); color: var(--accent); }
 .storage-path { font-family: var(--mono); font-size: var(--fs-xs); word-break: break-all; }
 .saved-tag { font-size: var(--fs-xs); font-weight: 700; color: var(--ok); margin-left: 6px; }
+.custom-folder { margin: 4px 0 8px; }
+.typed-path { display: flex; gap: 6px; }
+.typed-path input { flex: 1; min-width: 0; padding: 7px 10px; font-size: var(--fs-sm); font-family: var(--mono); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: none; }
+.typed-path input:focus { border-color: var(--accent); }
+.moved-note { align-items: flex-start; line-height: 1.45; }
+.moved-note code { font-family: var(--mono); font-size: var(--fs-xs); word-break: break-all; }
 
 </style>

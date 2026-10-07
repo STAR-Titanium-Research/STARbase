@@ -6,15 +6,34 @@ import tempfile
 from pathlib import Path
 
 from app.lib import directus_client, minio_client
-from app.lib.d1f_reader import CHANNEL_NAMES, parse_header, read_channel
-from app.lib.fft_analysis import analyse_channel, plot_spectrum
-from app.lib.statuses import STATUS_ANALYSED, STATUS_ANALYSING, STATUS_FAILED
+from app.lib.d1f_reader import (
+    CHANNEL_NAMES,
+    available_samples,
+    parse_header,
+    read_channel_block,
+)
+from app.lib.fft_analysis import (
+    analyse_spectrum,
+    compute_spectrum,
+    default_nperseg,
+    plan_blocks,
+    plot_spectrum_from,
+)
+from app.lib.statuses import (
+    STATUS_ANALYSED,
+    STATUS_ANALYSING,
+    STATUS_FAILED,
+    resolve_status,
+)
 
 log = logging.getLogger(__name__)
 
 COLLECTION = "test_sessions"
 FFT_CHANNEL_INDEX = int(os.getenv("FFT_CHANNEL_INDEX", "2"))  # default: Fz
-FFT_MAX_SAMPLES = int(os.getenv("FFT_MAX_SAMPLES", "131072"))  # 2^17
+# Welch segment length (0 = adapt to the sample rate) and the cap on how many
+# evenly spaced contiguous blocks are read from a large file.
+FFT_NPERSEG = int(os.getenv("FFT_NPERSEG", "0"))
+FFT_MAX_BLOCKS = int(os.getenv("FFT_MAX_BLOCKS", "32"))
 
 
 def analyse_session(session_id: str, object_key: str) -> None:
@@ -24,8 +43,9 @@ def analyse_session(session_id: str, object_key: str) -> None:
       1. Mark session status = 'analysing'
       2. Download D1F from MinIO to temp file
       3. Parse header
-      4. Read primary force channel (Fz by default) with stride
-      5. Compute amplitude spectrum + top frequencies + band energy
+      4. Read primary force channel (Fz by default) as contiguous blocks at the
+         native sample rate (no decimation)
+      5. Welch amplitude spectrum + distinct peaks + band energy
       6. Generate spectrum SVG plot
       7. Upload SVG to MinIO
       8. PATCH test_sessions with fft_analysis results + plot URI
@@ -49,14 +69,21 @@ def analyse_session(session_id: str, object_key: str) -> None:
         )
         ch_unit = "N" if ch_idx < 3 else "Nm"
 
-        actual_stride = max(1, header["n_samples"] // FFT_MAX_SAMPLES)
-        signal = read_channel(tmp_path, header, ch_idx, max_samples=FFT_MAX_SAMPLES)
-
-        metrics = analyse_channel(signal, header["sample_rate_hz"], actual_stride)
-
-        svg_bytes = plot_spectrum(
-            signal, header["sample_rate_hz"], actual_stride, ch_name, ch_unit
+        fs = header["sample_rate_hz"]
+        n_avail = available_samples(tmp_path, header)
+        nperseg = min(FFT_NPERSEG or default_nperseg(fs), n_avail)
+        blocks = plan_blocks(n_avail, nperseg, FFT_MAX_BLOCKS)
+        spec = compute_spectrum(
+            (read_channel_block(tmp_path, header, ch_idx, st, n) for st, n in blocks),
+            fs,
+            nperseg,
         )
+        if spec is None:
+            msg = "insufficient samples for FFT"
+            raise ValueError(msg)
+        metrics = analyse_spectrum(spec)
+
+        svg_bytes = plot_spectrum_from(spec, ch_name, ch_unit)
         plot_key = object_key.rsplit(".", 1)[0] + f"_fft_{ch_name}.svg"
         minio_client.put_object(plot_key, svg_bytes, "image/svg+xml")
         plot_uri = f"minio://{minio_client.BUCKET}/{plot_key}"
@@ -64,25 +91,19 @@ def analyse_session(session_id: str, object_key: str) -> None:
         analysis_result = {
             "channel": ch_name,
             "channel_index": ch_idx,
-            "n_samples_analysed": len(signal),
-            "stride": actual_stride,
-            "effective_sample_rate_hz": header["sample_rate_hz"] / actual_stride,
+            "n_samples_analysed": spec.n_samples,
+            "n_samples_total": n_avail,
+            "stride": 1,  # kept for schema compatibility: no decimation any more
+            "effective_sample_rate_hz": fs,
             **metrics,
         }
 
-        # Read-merge-write: namespace under "fft_analysis" and append our plot
-        # so we don't clobber the heavy-data worker's "basic" stats.
-        merged_stats, merged_plots = _merge_outputs(
-            session_id, "fft_analysis", analysis_result, plot_uri
-        )
-        directus_client.patch_item(
-            COLLECTION,
-            session_id,
-            {
-                "status": STATUS_ANALYSED,
-                "summary_stats": merged_stats,
-                "plot_uris": merged_plots,
-            },
+        # Read-merge-write under OCC: namespace our stats under "fft_analysis"
+        # and append our plot so we don't clobber the heavy-data worker's
+        # "basic" stats; the status moves to 'analysed' only if the transition
+        # rules allow it (see statuses.resolve_status).
+        _merge_outputs(
+            session_id, "fft_analysis", analysis_result, plot_uri, STATUS_ANALYSED
         )
         log.info(
             "done analysis session=%s dominant_freq=%.1f Hz",
@@ -103,36 +124,54 @@ def analyse_session(session_id: str, object_key: str) -> None:
 
 
 def _merge_outputs(
-    session_id: str, stats_key: str, stats: dict, plot_uri: str
-) -> tuple[dict, list]:
-    """Merge this worker's outputs into the existing JSONB columns.
+    session_id: str,
+    stats_key: str,
+    stats: dict,
+    plot_uri: str,
+    target_status: str | None = None,
+) -> dict | None:
+    """Merge this worker's outputs into the session row, guarded by OCC.
 
-    Returns (summary_stats, plot_uris) with our contribution namespaced under
-    *stats_key* and our plot appended (deduped). Falls back to a fresh object
-    if the current item can't be read.
+    Reads the row (including ``version``), namespaces our contribution under
+    *stats_key*, appends our plot (deduped) and PATCHes with
+    ``filter[version][_eq]``; on a conflict it re-reads and re-merges, a bounded
+    number of times. If the row can't be read the write is aborted (the
+    exception propagates and the job is marked failed) rather than overwriting
+    ``summary_stats`` with a fresh object.
     """
-    try:
-        current = directus_client.get_item(COLLECTION, session_id)
-    except Exception:
-        log.warning("could not read current session=%s; writing fresh", session_id)
-        current = {}
 
-    summary_stats = current.get("summary_stats") or {}
-    if not isinstance(summary_stats, dict):
-        summary_stats = {}
-    summary_stats[stats_key] = stats
+    def compute(current: dict) -> dict:
+        summary_stats = current.get("summary_stats") or {}
+        if not isinstance(summary_stats, dict):
+            summary_stats = {}
+        summary_stats[stats_key] = stats
 
-    plot_uris = current.get("plot_uris") or []
-    if not isinstance(plot_uris, list):
-        plot_uris = []
-    if plot_uri not in plot_uris:
-        plot_uris.append(plot_uri)
+        plot_uris = current.get("plot_uris") or []
+        if not isinstance(plot_uris, list):
+            plot_uris = []
+        if plot_uri not in plot_uris:
+            plot_uris.append(plot_uri)
 
-    return summary_stats, plot_uris
+        payload: dict = {"summary_stats": summary_stats, "plot_uris": plot_uris}
+        if target_status:
+            status = resolve_status(current.get("status"), target_status)
+            if status:
+                payload["status"] = status
+        return payload
+
+    return directus_client.update_session(session_id, compute)
 
 
 def _mark(session_id: str, status: str) -> None:
+    """Set *status* if the transition rules allow it; never raises."""
     try:
-        directus_client.patch_item(COLLECTION, session_id, {"status": status})
+        directus_client.update_session(
+            session_id,
+            lambda current: (
+                {"status": new}
+                if (new := resolve_status(current.get("status"), status))
+                else None
+            ),
+        )
     except Exception:
         log.warning("could not set status=%s for session=%s", status, session_id)

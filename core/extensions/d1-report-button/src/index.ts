@@ -3,7 +3,8 @@ import Interface from './interface.vue';
 
 // A presentation button that opens the printable PDF report (d1-report endpoint)
 // for the current item. Drop it on any collection's form — samples default to the
-// sample report, manufacturing_operations to the operation report, or set the type.
+// sample report, manufacturing_operations to the operation report, test_sessions to the
+// test report, or set the type.
 export default defineInterface({
 	id: 'd1-report-button',
 	name: 'Generate PDF',
@@ -34,6 +35,7 @@ export default defineInterface({
 						{ text: 'Auto (by collection)', value: 'auto' },
 						{ text: 'Sample overview', value: 'sample' },
 						{ text: 'Operation datasheet', value: 'operation' },
+						{ text: 'Test datasheet', value: 'test' },
 					],
 				},
 			},

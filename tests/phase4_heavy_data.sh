@@ -10,6 +10,10 @@
 #   WORKER_URL      default http://localhost:8080
 #   DIRECTUS_URL    default http://localhost:8055
 #   MACHINE_TOKEN   Operator machine token from core/apply.sh (required)
+#   WORKER_WEBHOOK_SECRET  the same value as in .env (required): the worker rejects every
+#                   request without it in X-Worker-Secret. `set -a; . ./.env; set +a` loads it.
+#   MINIO_RESOLVE_IP  address that the presigned URLs' host `minio` resolves to for the part
+#                   upload (default D1_BIND_ADDR, else 127.0.0.1)
 #   N_SAMPLES       synthetic file size in samples (default 100000 ≈ 2.4 MB)
 
 set -euo pipefail
@@ -17,6 +21,8 @@ set -euo pipefail
 WORKER_URL="${WORKER_URL:-http://localhost:8080}"
 DIRECTUS_URL="${DIRECTUS_URL:-http://localhost:8055}"
 MACHINE_TOKEN="${MACHINE_TOKEN:-}"
+WORKER_WEBHOOK_SECRET="${WORKER_WEBHOOK_SECRET:-}"
+MINIO_RESOLVE_IP="${MINIO_RESOLVE_IP:-${D1_BIND_ADDR:-127.0.0.1}}"
 N_SAMPLES="${N_SAMPLES:-100000}"
 TEST_FILE="/tmp/phase4_test_$(date +%s).d1f"
 OBJECT_KEY="test/phase4_$(date +%s).d1f"
@@ -25,8 +31,8 @@ PASS=0
 FAIL=0
 
 info() { echo "  [INFO] $*"; }
-ok()   { echo "  [PASS] $*"; ((PASS++)); }
-fail() { echo "  [FAIL] $*"; ((FAIL++)); }
+ok()   { echo "  [PASS] $*"; PASS=$((PASS+1)); }
+fail() { echo "  [FAIL] $*"; FAIL=$((FAIL+1)); }
 
 require_env() {
     if [[ -z "${!1:-}" ]]; then
@@ -39,6 +45,7 @@ cleanup() { rm -f "$TEST_FILE"; }
 trap cleanup EXIT
 
 require_env MACHINE_TOKEN
+require_env WORKER_WEBHOOK_SECRET
 
 # ------------------------------------------------------------------ #
 echo
@@ -64,6 +71,7 @@ echo
 echo "=== 3. Presign multipart upload ==="
 PRESIGN=$(curl -sf -X POST "$WORKER_URL/api/presign-upload" \
     -H "Content-Type: application/json" \
+    -H "X-Worker-Secret: $WORKER_WEBHOOK_SECRET" \
     -d "{\"object_key\":\"$OBJECT_KEY\",\"file_size_bytes\":$FILE_SIZE}")
 UPLOAD_ID=$(echo "$PRESIGN" | python3 -c "import sys,json; print(json.load(sys.stdin)['upload_id'])")
 PART_URL=$(echo "$PRESIGN" | python3 -c "import sys,json; print(json.load(sys.stdin)['parts'][0]['url'])")
@@ -72,7 +80,8 @@ PART_URL=$(echo "$PRESIGN" | python3 -c "import sys,json; print(json.load(sys.st
 # ------------------------------------------------------------------ #
 echo
 echo "=== 4. Upload file to MinIO via presigned URL ==="
-ETAG=$(curl -sf -X PUT "$PART_URL" \
+# The presigned URL names the compose host `minio`; resolve it to the published port.
+ETAG=$(curl -sf --resolve "minio:9000:$MINIO_RESOLVE_IP" -X PUT "$PART_URL" \
     --upload-file "$TEST_FILE" \
     -D - \
     | grep -i "^etag:" | tr -d '\r\n' | sed 's/[Ee][Tt][Aa][Gg]:[[:space:]]*//' | tr -d '"')
@@ -83,6 +92,7 @@ echo
 echo "=== 5. Complete multipart upload ==="
 COMPLETE=$(curl -sf -X POST "$WORKER_URL/api/complete-upload" \
     -H "Content-Type: application/json" \
+    -H "X-Worker-Secret: $WORKER_WEBHOOK_SECRET" \
     -d "{\"object_key\":\"$OBJECT_KEY\",\"upload_id\":\"$UPLOAD_ID\",\"parts\":[{\"PartNumber\":1,\"ETag\":\"$ETAG\"}]}")
 POINTER=$(echo "$COMPLETE" | python3 -c "import sys,json; print(json.load(sys.stdin)['file_storage_pointer'])")
 [[ -n "$POINTER" ]] && ok "file_storage_pointer=$POINTER" || fail "no file_storage_pointer"
@@ -118,6 +128,7 @@ echo "=== 7. Trigger webhook ==="
 if [[ -n "${SESSION_ID:-}" ]]; then
     WEBHOOK_RESP=$(curl -sf -X POST "$WORKER_URL/api/webhook/session" \
         -H "Content-Type: application/json" \
+        -H "X-Worker-Secret: $WORKER_WEBHOOK_SECRET" \
         -d "{\"session_id\":\"$SESSION_ID\",\"file_storage_pointer\":\"$POINTER\"}")
     JOB_ID=$(echo "$WEBHOOK_RESP" | python3 -c \
         "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || echo "")
@@ -139,7 +150,7 @@ if [[ -n "${SESSION_ID:-}" ]]; then
         if [[ "$SESSION_STATUS" == "processed" ]]; then
             ok "session processed"
             break
-        elif [[ "$SESSION_STATUS" == "error" ]]; then
+        elif [[ "$SESSION_STATUS" == "failed" ]]; then
             fail "worker reported error on session"
             break
         fi

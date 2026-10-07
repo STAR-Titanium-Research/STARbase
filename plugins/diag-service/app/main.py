@@ -22,13 +22,16 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+import uuid
 from collections import OrderedDict
 
 import httpx
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 # scripts/diag is copied to /app/diag in the image; on a dev host it is reachable one level
 # up from the repo. Import the SAME modules the orchestrator uses — never reimplement them.
@@ -82,8 +85,9 @@ if _cors:
         ],
     )
 
-# base.d1an parsed columns, keyed by diag_path (~18k rows x 5 float64 ~= 730 KB each).
-_base_lru: OrderedDict[str, dict] = OrderedDict()
+# base.d1an parsed columns, keyed by diag_path -> (file signature, columns) (~18k rows x 5
+# float64 ~= 730 KB each).
+_base_lru: OrderedDict[str, tuple[tuple, dict]] = OrderedDict()
 
 
 def _layers_key(layers: dict | None) -> str:
@@ -98,6 +102,45 @@ def _layers_key(layers: dict | None) -> str:
 # Computed D1AN bytes, keyed by (diag_path, recipe_hash, layers_key). The common interaction —
 # viewing several steps of one unchanged recipe — is then served from a single compute.
 _result_lru: OrderedDict[tuple, bytes] = OrderedDict()
+
+# The compute handlers run in the threadpool (so a multi-second recipe no longer freezes the
+# event loop and /health), which means the LRUs are shared between threads: every get/put goes
+# through _lru_get/_lru_put under this lock. Compute itself runs outside it.
+_cache_lock = threading.RLock()
+# Bound how many heavy computes run at once: with the event loop free, N concurrent requests
+# would otherwise each allocate their own multi-hundred-MB working set.
+_compute_slots = threading.BoundedSemaphore(
+    max(1, int(os.environ.get("DIAG_MAX_CONCURRENCY", "2")))
+)
+
+
+def _lru_get(od: OrderedDict, key):
+    with _cache_lock:
+        hit = od.get(key)
+        if hit is not None:
+            od.move_to_end(key)
+        return hit
+
+
+def _lru_put(od: OrderedDict, key, value, cap: int) -> None:
+    with _cache_lock:
+        od[key] = value
+        od.move_to_end(key)
+        while len(od) > cap:
+            od.popitem(last=False)
+
+
+def _file_sig(path: str) -> tuple[int, int, int]:
+    """(mtime_ns, size, inode) of a baked artefact. A rebake rewrites the same path, so every
+    cache keyed on a path alone would keep serving the old bake; keying on this signature makes
+    the next request after a rebake miss and reload."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        raise HTTPException(
+            409, "no baked data for this analysis — a rebake is needed"
+        ) from None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
 
 
 def _auth_headers(req: Request) -> dict:
@@ -116,6 +159,12 @@ async def _resolve_and_authorize(analysis_id: str, req: Request) -> dict:
     for any read, so a caller who may not see the row gets its 401/403 here. Runs on every
     request — there is no cached bypass, matching filter-service's post-32fb4b7 behaviour.
     """
+    try:
+        # Interpolated into a Directus URL path: only a real UUID may reach it ("../users/me"
+        # would collapse to a different route under the caller's own credentials).
+        analysis_id = str(uuid.UUID(str(analysis_id)))
+    except ValueError:
+        raise HTTPException(422, "analysis_id must be a UUID") from None
     async with httpx.AsyncClient(timeout=30) as cl:
         r = await cl.get(
             f"{DIRECTUS_URL}/items/machining_force_analysis/{analysis_id}",
@@ -179,20 +228,22 @@ def _select_base_signal(base: dict, channel: str) -> dict:
     }
 
 
-def _load_base(diag_path: str) -> dict:
+def _base_path(diag_path: str) -> str:
     if not _DIAG_PATH_RE.fullmatch(diag_path):
         raise HTTPException(400, "invalid diag_path")
-    hit = _base_lru.get(diag_path)
-    if hit is not None:
-        _base_lru.move_to_end(diag_path)
-        return hit
-    path = os.path.join(_octree_root(), "diag", diag_path, "base.d1an")
-    if not os.path.isfile(path):
-        raise HTTPException(409, "no base.d1an for this analysis — a rebake is needed")
+    return os.path.join(_octree_root(), "diag", diag_path, "base.d1an")
+
+
+def _load_base(diag_path: str, sig: tuple | None = None) -> dict:
+    """Parsed base.d1an columns, cached per diag_path and invalidated when the file changes."""
+    path = _base_path(diag_path)
+    if sig is None:
+        sig = _file_sig(path)
+    hit = _lru_get(_base_lru, diag_path)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
     cols = {k: np.asarray(v, dtype=np.float64) for k, v in read_d1an(path).items()}
-    _base_lru[diag_path] = cols
-    while len(_base_lru) > BASE_LRU_CAP:
-        _base_lru.popitem(last=False)
+    _lru_put(_base_lru, diag_path, (sig, cols), BASE_LRU_CAP)
     return cols
 
 
@@ -203,7 +254,7 @@ def _load_base(diag_path: str) -> dict:
 # attrs.d1an stays the baked truth; this is a preview at the resolution the analyst is
 # looking at.
 FULL_LRU_CAP = int(os.environ.get("FULL_LRU", "3"))
-_full_lru: OrderedDict[str, dict] = OrderedDict()
+_full_lru: OrderedDict[str, tuple[tuple, dict]] = OrderedDict()
 _viewport_lru: OrderedDict[tuple, tuple[bytes, int, str]] = (
     OrderedDict()
 )  # key -> (d1an bytes, n, cols header)
@@ -217,20 +268,25 @@ _VIEWPORT_OUTPUT = {
 }
 
 
-def _load_full(diag_path: str) -> dict:
+def _full_path(diag_path: str) -> str:
     if not _DIAG_PATH_RE.fullmatch(diag_path):
         raise HTTPException(400, "invalid diag_path")
-    hit = _full_lru.get(diag_path)
-    if hit is not None:
-        _full_lru.move_to_end(diag_path)
-        return hit
-    path = os.path.join(_octree_root(), "diag", diag_path, "full", "full.d1an")
-    if not os.path.isfile(path):
-        raise HTTPException(409, "no full.d1an — a rebake at DIAG_VERSION 7 is needed")
+    return os.path.join(_octree_root(), "diag", diag_path, "full", "full.d1an")
+
+
+def _load_full(diag_path: str, sig: tuple | None = None) -> dict:
+    path = _full_path(diag_path)
+    if sig is None:
+        if not os.path.isfile(path):
+            raise HTTPException(
+                409, "no full.d1an — a rebake at DIAG_VERSION 7 is needed"
+            )
+        sig = _file_sig(path)
+    hit = _lru_get(_full_lru, diag_path)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
     cols = {k: np.asarray(v, dtype=np.float64) for k, v in read_d1an(path).items()}
-    _full_lru[diag_path] = cols
-    while len(_full_lru) > FULL_LRU_CAP:
-        _full_lru.popitem(last=False)
+    _lru_put(_full_lru, diag_path, (sig, cols), FULL_LRU_CAP)
     return cols
 
 
@@ -313,6 +369,15 @@ async def preview(req: Request):
         raise HTTPException(409, "analysis has no completed bake to preview from")
     diag_path = str(row["diag_path"])
 
+    return await run_in_threadpool(
+        _preview_compute, diag_path, recipe, layers, stop_after
+    )
+
+
+def _preview_compute(
+    diag_path: str, recipe: dict, layers: dict | None, stop_after: int | None
+) -> Response:
+    """The CPU-bound half of /preview. Plain `def`, run in the threadpool."""
     # Steps that cannot run from base.d1an are switched off for the preview and named back to
     # the client, rather than raising a bare column-name KeyError. Done before the cache key so
     # a recipe that differs only in an un-previewable step still shares one cache entry.
@@ -320,10 +385,12 @@ async def preview(req: Request):
     recipe, skipped = _disable_unpreviewable(recipe, from_step)
     skipped_hdr = ",".join(s for s in skipped if s)
 
-    key = (diag_path, recipe_hash(recipe), _layers_key(layers), stop_after)
-    cached = _result_lru.get(key)
+    # The base.d1an signature is part of the key: a rebake rewrites the same path.
+    base_path = _base_path(diag_path)
+    base_sig = _file_sig(base_path)
+    key = (diag_path, base_sig, recipe_hash(recipe), _layers_key(layers), stop_after)
+    cached = _lru_get(_result_lru, key)
     if cached is not None:
-        _result_lru.move_to_end(key)
         return Response(
             cached,
             media_type="application/octet-stream",
@@ -335,23 +402,22 @@ async def preview(req: Request):
             },
         )
 
-    base = _load_base(diag_path)
-    seed = _select_base_signal(base, _channel_of(recipe))
-    t0 = time.perf_counter()
-    try:
-        cols, _metrics = run_recipe(
-            recipe, seed, layers=layers, from_step=from_step, stop_after=stop_after
-        )
-    except HTTPException:
-        raise
-    except (KeyError, ValueError) as e:
-        raise HTTPException(422, f"recipe failed: {e}") from e
+    with _compute_slots:
+        base = _load_base(diag_path, base_sig)
+        seed = _select_base_signal(base, _channel_of(recipe))
+        t0 = time.perf_counter()
+        try:
+            cols, _metrics = run_recipe(
+                recipe, seed, layers=layers, from_step=from_step, stop_after=stop_after
+            )
+        except HTTPException:
+            raise
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, f"recipe failed: {e}") from e
 
-    out = d1an_bytes(cols)
+        out = d1an_bytes(cols)
 
-    _result_lru[key] = out
-    while len(_result_lru) > RESULT_LRU_CAP:
-        _result_lru.popitem(last=False)
+    _lru_put(_result_lru, key, out, RESULT_LRU_CAP)
     return Response(
         out,
         media_type="application/octet-stream",
@@ -435,6 +501,30 @@ async def viewport(req: Request):
         raise HTTPException(409, "analysis has no completed bake")
     diag_path = str(row["diag_path"])
 
+    return await run_in_threadpool(
+        _viewport_compute,
+        diag_path,
+        op,
+        step,
+        bbox,
+        layers,
+        output,
+        outputs_raw,
+        max_points,
+    )
+
+
+def _viewport_compute(
+    diag_path: str,
+    op: str,
+    step: dict,
+    bbox: list,
+    layers: dict | None,
+    output: str,
+    outputs_raw: list | None,
+    max_points: int,
+) -> Response:
+    """The CPU-bound half of /viewport. Plain `def`, run in the threadpool."""
     x0, y0, x1, y1 = (float(v) for v in bbox)
     if x1 < x0:
         x0, x1 = x1, x0
@@ -442,8 +532,14 @@ async def viewport(req: Request):
         y0, y1 = y1, y0
 
     outputs_key = tuple(outputs_raw) if outputs_raw is not None else (output,)
+    # full.d1an's signature is part of the key: a rebake rewrites the same path.
+    full_path = _full_path(diag_path)
+    if not os.path.isfile(full_path):
+        raise HTTPException(409, "no full.d1an — a rebake at DIAG_VERSION 7 is needed")
+    full_sig = _file_sig(full_path)
     key = (
         diag_path,
+        full_sig,
         op,
         (round(x0, 3), round(y0, 3), round(x1, 3), round(y1, 3)),
         recipe_hash({"steps": [step]}),
@@ -451,9 +547,8 @@ async def viewport(req: Request):
         outputs_key,
         max_points,
     )
-    cached = _viewport_lru.get(key)
+    cached = _lru_get(_viewport_lru, key)
     if cached is not None:
-        _viewport_lru.move_to_end(key)
         cbytes, cn, ccols = cached
         return Response(
             cbytes,
@@ -466,56 +561,57 @@ async def viewport(req: Request):
             },
         )
 
-    full = _load_full(diag_path)
-    fx, fy, frz = full["x"], full["y"], full["resid_z"]
-    m = (fx >= x0) & (fx <= x1) & (fy >= y0) & (fy <= y1)
-    idx = np.where(m)[0]
-    if idx.size == 0:
-        raise HTTPException(422, "empty viewport")
-    if idx.size > max_points:
-        idx = idx[:: int(np.ceil(idx.size / max_points))]
-    xc = fx[idx].copy()
-    yc = fy[idx].copy()
-    rc = frz[idx].copy()
+    with _compute_slots:
+        full = _load_full(diag_path, full_sig)
+        fx, fy, frz = full["x"], full["y"], full["resid_z"]
+        m = (fx >= x0) & (fx <= x1) & (fy >= y0) & (fy <= y1)
+        idx = np.where(m)[0]
+        if idx.size == 0:
+            raise HTTPException(422, "empty viewport")
+        if idx.size > max_points:
+            idx = idx[:: int(np.ceil(idx.size / max_points))]
+        xc = fx[idx].copy()
+        yc = fy[idx].copy()
+        rc = frz[idx].copy()
 
-    # A mask painted since the last bake is not reflected in full.d1an's NaN pattern (that
-    # only carries masks present at bake time). Apply every mask-role layer to the crop here
-    # so a viewport recompute excludes the same region the 256/rev preview does -- the ops
-    # already skip non-finite resid_z.
-    if layers:
-        for layer in layers.values():
-            lyr = layer or {}
-            if lyr.get("role") == "mask" and lyr.get("geometry"):
-                rc[rasterize_polygons(lyr["geometry"], xc, yc)] = np.nan
+        # A mask painted since the last bake is not reflected in full.d1an's NaN pattern (that
+        # only carries masks present at bake time). Apply every mask-role layer to the crop here
+        # so a viewport recompute excludes the same region the 256/rev preview does -- the ops
+        # already skip non-finite resid_z.
+        if layers:
+            for layer in layers.values():
+                lyr = layer or {}
+                if lyr.get("role") == "mask" and lyr.get("geometry"):
+                    rc[rasterize_polygons(lyr["geometry"], xc, yc)] = np.nan
 
-    t0 = time.perf_counter()
-    try:
-        # resolve_inputs is inside the try: it raises RecipeError (a ValueError subclass) for a
-        # missing/mismatched layer binding, which must surface as the endpoint's 422 contract,
-        # not an unhandled 500.
-        resolved: dict = {}
-        if op == "grow_segmentation":
-            resolved = resolve_inputs(
-                {"op": op, "inputs": step.get("inputs")}, layers, xc, yc
+        t0 = time.perf_counter()
+        try:
+            # resolve_inputs is inside the try: it raises RecipeError (a ValueError subclass) for a
+            # missing/mismatched layer binding, which must surface as the endpoint's 422 contract,
+            # not an unhandled 500.
+            resolved: dict = {}
+            if op == "grow_segmentation":
+                resolved = resolve_inputs(
+                    {"op": op, "inputs": step.get("inputs")}, layers, xc, yc
+                )
+            produced, _metrics = STEPS[op].fn(
+                {"x": xc, "y": yc, "resid_z": rc}, step.get("params") or {}, resolved
             )
-        produced, _metrics = STEPS[op].fn(
-            {"x": xc, "y": yc, "resid_z": rc}, step.get("params") or {}, resolved
-        )
-    except HTTPException:
-        raise
-    except (KeyError, ValueError) as e:
-        raise HTTPException(422, f"step failed: {e}") from e
-    except MemoryError as e:
-        # assign_by_neighbours (hdbscan / gmm_segmentation broadcast-back) allocates an
-        # (n_points, n_labels) float64 matrix with no bound tied to VIEWPORT_MAX_POINTS_CEIL,
-        # so a large crop that clusters into many labels can exhaust host memory. Return a
-        # clean, actionable error rather than a bare 500 or taking the process down for every
-        # concurrent analyst.
-        raise HTTPException(
-            507,
-            "viewport crop is too large for this step — zoom in or lower max_points",
-        ) from e
-    ms = int((time.perf_counter() - t0) * 1000)
+        except HTTPException:
+            raise
+        except (KeyError, ValueError) as e:
+            raise HTTPException(422, f"step failed: {e}") from e
+        except MemoryError as e:
+            # assign_by_neighbours (hdbscan / gmm_segmentation broadcast-back) allocates an
+            # (n_points, n_labels) float64 matrix with no bound tied to VIEWPORT_MAX_POINTS_CEIL,
+            # so a large crop that clusters into many labels can exhaust host memory. Return a
+            # clean, actionable error rather than a bare 500 or taking the process down for every
+            # concurrent analyst.
+            raise HTTPException(
+                507,
+                "viewport crop is too large for this step — zoom in or lower max_points",
+            ) from e
+        ms = int((time.perf_counter() - t0) * 1000)
 
     def _column(name: str) -> np.ndarray:
         categorical = name in ("cluster_id", "segment_id", "gmm_id")
@@ -547,9 +643,7 @@ async def viewport(req: Request):
         }
     )
 
-    _viewport_lru[key] = (out, int(xc.size), cols_header)
-    while len(_viewport_lru) > VIEWPORT_LRU_CAP:
-        _viewport_lru.popitem(last=False)
+    _lru_put(_viewport_lru, key, (out, int(xc.size), cols_header), VIEWPORT_LRU_CAP)
     return Response(
         out,
         media_type="application/octet-stream",

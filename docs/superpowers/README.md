@@ -31,5 +31,11 @@ open.
 | [Diagnostics Phase G — interactive full-res](specs/2026-09-03-diagnostics-phase-g-interactive-fullres-design.md) | Diagnostics | Implemented |
 | [Diagnostics Phase H](specs/2026-09-04-diagnostics-workbench-phase-h-design.md) | Diagnostics | Implemented |
 | [Milling path models + polar plot](specs/2026-09-07-milling-path-models-and-polar-design.md) | force-app / plotting | Implemented |
+| [FRM ↔ Signals linking](specs/2026-10-04-frm-signal-linking-design.md) | force-app / plotting | Implemented |
+| [Cutting metrics card](specs/2026-10-06-cutting-metrics-design.md) | force plotting | Implemented |
+| [Sample timeline + campaign overview](specs/2026-10-06-sample-timeline-and-campaign-overview-design.md) | Directus extensions | Implemented |
+| [Diagnostics across a campaign](specs/2026-10-06-diagnostics-campaign-design.md) | Diagnostics | Implemented |
+| [Captures list: search, filter, bulk actions](specs/2026-10-06-captures-list-design.md) | force-app | Implemented |
+| [Explorer pages](specs/2026-10-06-explorer-pages-design.md) | Directus extensions | Implemented 2026-10-07 (PR pending); access restriction ([ADR-0011](../adr/0011-row-level-visibility.md)) not built |
 
 Add a row when a new spec lands, and update its Status line (and this table) when it ships.

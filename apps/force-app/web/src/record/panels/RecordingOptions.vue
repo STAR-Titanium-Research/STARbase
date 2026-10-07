@@ -5,6 +5,7 @@ import LookupField from './LookupField.vue';
 import CutPicker from './CutPicker.vue';
 import StatTile from './StatTile.vue';
 import MachineOperatorPanel from './MachineOperatorPanel.vue';
+import { checkMaxSampleRate, checkNidaqPresence, nidaqHardware, nidaqUnavailableReason } from '../nidaqHardware';
 
 const w = useWorkspace();
 
@@ -13,20 +14,31 @@ const w = useWorkspace();
 // tile before the operator ever presses Start instead. Re-checked whenever the channel assignment
 // changes (moving to a different module can change the achievable rate); null means "no real
 // limit to check" (simulated hardware, or DAQmx isn't available here), not "unlimited by measurement".
-const maxSampleRateHz = ref<number | null>(null);
-async function checkMaxSampleRate() {
-	if (w.source.value !== 'nidaq') { maxSampleRateHz.value = null; return; }
+// The answer lives in nidaqHardware (shared): the footer's Start button is blocked on it too (#84).
+watch([() => w.source.value, () => w.nidaqChannels.value], () => {
+	if (w.source.value !== 'nidaq') { nidaqHardware.maxRateHz = null; return; }
 	const chans = w.nidaqChannels.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
-	if (!chans.length) { maxSampleRateHz.value = null; return; }
-	try {
-		const res = await fetch(`${w.client.baseUrl}/nidaq/max_rate?channels=${encodeURIComponent(chans.join(','))}`);
-		maxSampleRateHz.value = res.ok ? (await res.json()).max_rate_hz : null;
-	} catch { maxSampleRateHz.value = null; }
-}
-watch([() => w.source.value, () => w.nidaqChannels.value], checkMaxSampleRate, { immediate: true });
-const sampleRateInvalid = computed(() =>
-	maxSampleRateHz.value !== null && w.cfg.sample_rate > maxSampleRateHz.value,
-);
+	void checkMaxSampleRate(w.client.baseUrl, chans);
+}, { immediate: true });
+
+// #86: NI-DAQ is only a choice when DAQmx reports a device — the button used to be enabled on a
+// machine with no driver or nothing plugged in, and Start then failed with a driver error. A
+// source remembered as NI-DAQ from an earlier session falls back to Simulated FOR NOW: assigned to
+// the ref directly, not via setSource(), so the stored choice is kept and NI-DAQ comes back by
+// itself the next time the hardware is there.
+const nidaqDisabledReason = computed(() => (nidaqHardware.checked
+	? nidaqUnavailableReason({ hardware_present: nidaqHardware.hardwarePresent, runtime_available: nidaqHardware.runtimeAvailable })
+	: null));
+const fellBackFromNidaq = ref(false);
+watch([nidaqDisabledReason, () => w.source.value], ([reason, src]) => {
+	if (reason && src === 'nidaq' && !w.locked.value) {
+		w.source.value = 'sim';
+		fellBackFromNidaq.value = true;
+	} else if (src !== 'sim') {
+		fellBackFromNidaq.value = false;
+	}
+}, { immediate: true });
+onMounted(() => { void checkNidaqPresence(w.client.baseUrl); });
 // Surface speed (m/min) = pi * diam(mm) * rpm / 1000 — the same formula buildRunPayload() already
 // logs to Directus as machining_cutting_speed_m_per_min, just surfaced here too.
 const replaySurfaceSpeed = computed(() => (Math.PI * w.replay.diam * w.replay.rpm) / 1000);
@@ -73,15 +85,23 @@ function mergeDiam() { w.cfg.inner_diam = 0; diamSplit.value = false; }
 // `touched` records a card the OPERATOR has manually toggled, so a later resize (dragging the grid
 // panel, moving the window to a different monitor) never fights a deliberate choice — auto-fold
 // only ever adjusts a card the operator hasn't already decided about themselves.
-const open = reactive({ tooling: true, postCut: false });
-const touched = reactive({ tooling: false, postCut: false });
+const open = reactive({ machine: true, tooling: true, postCut: false });
+const touched = reactive({ machine: false, tooling: false, postCut: false });
 function toggleCard(card: keyof typeof open) {
 	touched[card] = true;
 	open[card] = !open[card];
 }
 
-// Least-essential-first: the order auto-fold closes cards in when content overflows.
-const CLOSE_ORDER: (keyof typeof open)[] = ['postCut'];
+// Least-essential-first: the order auto-fold closes cards in when content overflows. Machine
+// (#85) folds after Post-cut but before Tooling: it is set once per session and then mostly left
+// alone, and folded it still shows what is set (machineSummary) in its header.
+const CLOSE_ORDER: (keyof typeof open)[] = ['postCut', 'machine'];
+
+// The folded Machine card's one-line summary, so collapsing it never hides WHICH machine/operator
+// the cut will be logged against.
+const machineSummary = computed(() =>
+	[w.link.equipmentLabel, w.link.operatorLabel, w.meta.op_type].filter(Boolean).join(' · '),
+);
 
 // Measures instead of guessing: a fixed BASE/STEP pixel model can't know the real rendered height
 // of this form (it's never been seen rendered from here), and the first version of this shipped
@@ -141,14 +161,23 @@ onBeforeUnmount(() => {
 		<div class="segmode lg source-seg">
 			<button class="segbtn" :class="{ on: w.source.value === 'sim' }" :disabled="w.locked.value" @click="w.setSource('sim')">Simulated</button>
 			<button class="segbtn" :class="{ on: w.source.value === 'replay' }" :disabled="w.locked.value" @click="w.setSource('replay')">Replay file</button>
-			<button class="segbtn" :class="{ on: w.source.value === 'nidaq' }" :disabled="w.locked.value" @click="w.setSource('nidaq')">NI-DAQ</button>
+			<button class="segbtn" :class="{ on: w.source.value === 'nidaq' }" :disabled="w.locked.value || !!nidaqDisabledReason"
+				:title="nidaqDisabledReason || ''" @click="w.setSource('nidaq')">NI-DAQ</button>
 		</div>
+		<p v-if="fellBackFromNidaq && w.source.value === 'sim'" class="src-note">
+			<span class="material-symbols-rounded">info</span>
+			No NI-DAQ hardware found — using Simulated for now. NI-DAQ comes back once a device is connected.
+		</p>
+		<p v-else-if="w.source.value === 'nidaq' && nidaqHardware.nimaxSimulated" class="src-note">
+			<span class="material-symbols-rounded">info</span>
+			Recording from an NI MAX simulated device — the data is synthetic.
+		</p>
 
 		<!-- ─── Sample — always first: this is "what am I recording/replaying", the identity of the
 			 cut. Machine/Operator/Operation type (also identity-ish, but set-once-per-session facts
 			 rather than per-cut ones) live together in their own subpanel below. ─── -->
 		<div class="links">
-			<LookupField v-model="w.link.sampleId" :display-label="w.link.sampleLabel" label="Sample" placeholder="search sample code…"
+			<LookupField v-model="w.link.sampleId" data-focus="sample" :display-label="w.link.sampleLabel" label="Sample" placeholder="search sample code…"
 				icon="search" :search="w.searchSamples" :disabled="w.locked.value" @select="w.onSelectSample" />
 		</div>
 
@@ -168,8 +197,8 @@ onBeforeUnmount(() => {
 					<StatTile editable label="Inner Ø" unit="mm" v-model="w.cfg.inner_diam" :disabled="w.locked.value" />
 				</template>
 				<StatTile editable label="Sample rate" unit="Hz" v-model="w.cfg.sample_rate" :disabled="w.locked.value"
-					:invalid="sampleRateInvalid"
-					:title="sampleRateInvalid ? `Exceeds the assigned hardware's maximum of ${maxSampleRateHz?.toFixed(0)} Hz for this channel selection — recording would fail to start.` : ''" />
+					data-focus="sample-rate" :invalid="!!w.sampleRateBlocker.value"
+					:title="w.sampleRateBlocker.value ? `${w.sampleRateBlocker.value} Recording would fail to start.` : ''" />
 				<!-- Duration removed from view — but w.cfg.duration_sec is still real state: it drives
 					 checkDiskBeforeStart()/estimatedRecordingGb() in workspace.ts, the pre-Start
 					 disk-space warning. With no field left to change it, that warning now always
@@ -204,7 +233,18 @@ onBeforeUnmount(() => {
 		<!-- ─── Everything else ─── -->
 		<div class="section-divider"><span>Details</span></div>
 
-		<MachineOperatorPanel />
+		<!-- Machine / Operator / Operation type (#85): a folding card like Tooling and Post-cut, open
+			 by default. Folded, its header still names what is set. -->
+		<div class="card" :class="{ collapsed: !open.machine }">
+			<button type="button" class="card-head" @click="toggleCard('machine')">
+				<span class="material-symbols-rounded chev">{{ open.machine ? 'expand_more' : 'chevron_right' }}</span>
+				<span class="material-symbols-rounded">precision_manufacturing</span>Machine
+				<span v-if="!open.machine && machineSummary" class="card-summary" :title="machineSummary">{{ machineSummary }}</span>
+			</button>
+			<div v-show="open.machine" class="card-body">
+				<MachineOperatorPanel />
+			</div>
+		</div>
 
 		<!-- NI-DAQ channel count used to be echoed here too ("N channels configured — edit in
 			 Settings"); dropped as pure duplication of the Settings page itself, which is the only
@@ -267,6 +307,14 @@ onBeforeUnmount(() => {
 		<label class="wide">Notes
 			<textarea v-model="w.meta.notes" rows="2" :disabled="w.locked.value"></textarea>
 		</label>
+
+		<!-- R1: the setup above is remembered across launches; this puts it all back to blank and
+			 forgets the stored copy. Not offered in Replay, where the form shows an archived cut. -->
+		<button v-if="w.source.value !== 'replay'" type="button" class="btn sm clear-setup" :disabled="w.locked.value"
+			title="Reset Sample, Machine, Operator, tooling, cut parameters and notes to blank, and forget the remembered setup"
+			@click="w.clearSetup()">
+			<span class="material-symbols-rounded">restart_alt</span>Clear setup
+		</button>
 	</div>
 </template>
 
@@ -291,7 +339,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 input:disabled, textarea:disabled, select:disabled { opacity: 0.55; }
 .section-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
 .section-divider::before, .section-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-/* Folding subpanels (Direction B / "Cards"): Tooling, Coolant & geometry, Post-cut. Body content
+/* Folding subpanels (Direction B / "Cards"): Machine, Tooling, Post-cut. Body content
    is v-show (not v-if) so folding a card never remounts/resets a LookupField's own search state —
    it just hides. */
 .card { border: 1px solid var(--border); background: rgba(255,255,255,0.02); border-radius: 10px; padding: 10px 11px; }
@@ -303,6 +351,12 @@ input:disabled, textarea:disabled, select:disabled { opacity: 0.55; }
 .card-head .material-symbols-rounded { font-size: var(--icon-xs); color: var(--accent); }
 .card-head .chev { font-size: var(--icon-sm); color: var(--text-dim); margin-right: -2px; }
 .card-head:hover { color: var(--text); }
+/* Folded Machine card: what is set, as a chip after the title (#85). */
+.card-summary { flex: 0 1 auto; min-width: 0; margin-left: auto; padding: 1px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	font-weight: 600; color: var(--text); background: var(--surface-2); border-radius: 99px; }
+/* NI-DAQ fallback / NI MAX simulated note under the source selector (#86). */
+.src-note { display: flex; align-items: flex-start; gap: 5px; margin: -4px 0 0; font-size: var(--fs-xs); color: var(--text-dim); line-height: 1.35; }
+.src-note .material-symbols-rounded { font-size: var(--icon-xs); color: var(--accent); }
 /* New-edge toggle, inline in the Edge LookupField's own box via its #badge slot — a property of
    this specific edge, not a fact about the insert, so it lives next to Edge, not off in its own
    checkbox elsewhere. */
@@ -315,6 +369,7 @@ input:disabled, textarea:disabled, select:disabled { opacity: 0.55; }
 /* Two lookups side by side (Machine|Operator, Insert|Edge) to save vertical space. Each LookupField
    is position:relative with its own absolute dropdown, so the grid columns don't clip the menus. */
 .links.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.clear-setup { align-self: flex-start; }
 .chks { display: flex; gap: 16px; margin-top: 4px; }
 .chk { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--text); cursor: pointer; }
 .chk input { accent-color: var(--accent); }

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -15,13 +16,14 @@ import numpy as np
 from . import virtual_channels
 from .acquisition.consumers import CutDetector, Decimator, FrmIntegrator
 from .acquisition.ring import Ring
-from .backup import BackupStreamer
+from .backup import BackupStreamer, mark_remote_deleted
 from .backup import load_config as load_backup_config
+from .clipping import RailDetector
 from .config import RecordConfig
 from .d1rw import RawWriter
 from .dsp import sum_axes, tacho_column, welch_spectra
 from .finalize import finalize
-from .recovery import write_manifest
+from .recovery import raw_info, write_manifest
 from .storage import disk_usage_for
 from .stream.broadcast import Broadcaster
 from .stream.frame import encode_frame
@@ -40,6 +42,13 @@ SUB_NAMES = ["Fx1", "Fx2", "Fy1", "Fy2", "Fz1", "Fz2", "Fz3", "Fz4", "Tacho"]
 DISK_BACKUP_GB = 3.0
 DISK_STOP_GB = 1.0
 DISK_CHECK_INTERVAL = 10.0
+RAIL_REPUBLISH_SEC = 2.0
+
+
+def _raw_rows(capture_dir: str) -> int:
+    """Rows actually in the capture's raw file (0 when it is missing or has only its header)."""
+    info = raw_info(capture_dir)
+    return info["n_rows"] if info else 0
 
 
 class RecordingSession:
@@ -55,6 +64,12 @@ class RecordingSession:
         self.backup: BackupStreamer | None = None
         self.state = "idle"
         self.error: str | None = None
+        # Which stage failed, when state is "error" (#84): "start" = nothing was captured (the
+        # source never produced a sample — e.g. DAQmx refused the rate), and the empty capture
+        # directory is removed; "acquisition" = it failed mid-run but the data captured so far was
+        # finalized; "finalize" = data was captured but writing the outputs failed, so the raw is
+        # still on disk for recovery. The UI words each case differently.
+        self.error_kind: str | None = None
         self.summary: dict | None = None
         self.n_total = 0
         self.peaks = [0.0, 0.0, 0.0]
@@ -72,6 +87,10 @@ class RecordingSession:
         self.frm = FrmIntegrator(cfg, fs=self.source.rate)
         self.cut = CutDetector(cfg, self.source.rate)
         self.cut_started_t: float | None = None
+        # Live railing test on the raw volts (see clipping.py); needs the per-channel gains, so
+        # it is inert for sim/replay. Its latched set is streamed and reported in status().
+        self.rails = RailDetector(cfg.dyno_gains, cfg.analog_fullscale_v)
+        self._rail_sent = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._finalize_thread: threading.Thread | None = None
@@ -196,17 +215,22 @@ class RecordingSession:
             target=self._consume, name=f"rec-consume-{self.id}", daemon=True
         )
         consumer.start()
+        started = False
         try:
             self.source.start()
+            started = True
             while not self._stop.is_set():
                 chunk = self.source.read()
                 if chunk is None:
                     break
                 if not self.ring.put(chunk[0], chunk[1], timeout=5.0):
-                    self.error = "consumer overrun"
+                    # A closed ring means the consumer already died and recorded why: keep that.
+                    self.error = self.error or "consumer overrun"
                     break
         except Exception as e:
-            self.error = f"acquisition error: {e}"
+            self.error = (
+                f"acquisition error: {e}" if started else f"could not start acquisition: {e}"
+            )
         finally:
             self.ring.close()
             t_consumer = time.perf_counter()
@@ -235,16 +259,35 @@ class RecordingSession:
                 self._finalize_thread.start()
             else:
                 self.state = "error" if self.error else "done"
-                write_manifest(self.dir, self.state, self.cfg, self.error)
+                if self.error and (_raw_rows(self.dir) == 0):
+                    # Failed before a single sample reached the raw file. There is nothing to
+                    # finalize or recover — recovery skips a 0-row raw, so the directory would just
+                    # sit on disk as an unnamed "incomplete" capture forever. Remove it.
+                    self.error_kind = "start"
+                    shutil.rmtree(self.dir, ignore_errors=True)
+                else:
+                    # n_total is bumped AFTER the raw append in _consume, so a failure while
+                    # processing the very first chunk leaves rows on disk with n_total == 0. That
+                    # data is real: keep the directory (recoverable from Local Captures) and call it
+                    # an acquisition failure, not a failed start.
+                    if self.error:
+                        self.error_kind = "acquisition"
+                    write_manifest(self.dir, self.state, self.cfg, self.error)
                 self._publish_control(
                     {
                         "type": "done",
                         "id": self.id,
                         "state": self.state,
                         "error": self.error,
+                        "error_kind": self.error_kind,
                         "summary": self.summary,
                     }
                 )
+                if self.error_kind == "start" and self.backup is not None:
+                    # The streamer may have registered the (header-only) session already; label
+                    # it like any other deleted capture so it expires instead of reading as a
+                    # backup. After the publish: it is a network call and the UI shouldn't wait.
+                    mark_remote_deleted(self.backup.server_url, self.id)
 
     def _finalize_async(self) -> None:
         t0 = time.perf_counter()
@@ -252,8 +295,11 @@ class RecordingSession:
         try:
             self.summary = finalize(self.dir, self.cfg)
             self.state = "error" if self.error else "done"
+            if self.error:
+                self.error_kind = "acquisition"
         except Exception as e:
             self.error = self.error or f"finalize error: {e}"  # keep the original cause
+            self.error_kind = "finalize"
             self.state = "error"
         log.info(
             "session._finalize_async: finished in %.2fs (state=%s)",
@@ -267,6 +313,7 @@ class RecordingSession:
                 "id": self.id,
                 "state": self.state,
                 "error": self.error,
+                "error_kind": self.error_kind,
                 "summary": self.summary,
             }
         )
@@ -290,6 +337,25 @@ class RecordingSession:
         )
 
     def _consume(self) -> None:
+        """Consumer thread. Any failure here (a disk error on the raw append, a bad frame...) must
+        end the run cleanly: record why, stop the source, and let `_run` reach raw.close(), backup
+        stop and finalize, instead of leaving the producer wedged on a full ring while the session
+        reads "recording" forever."""
+        try:
+            self._consume_loop()
+        except Exception as e:
+            log.exception("session consumer thread failed; stopping the recording")
+            self.error = self.error or f"consumer error: {e}"
+            self._stop.set()
+            self.ring.close()  # producer's next put() returns False instead of waiting
+            try:
+                self.source.stop()
+            except Exception:
+                log.exception("source.stop() failed after a consumer error")
+            # Free slots so a producer already blocked in put() wakes up now, not after its timeout.
+            self.ring.drain()
+
+    def _consume_loop(self) -> None:
         seq = 0
         while True:
             item = self.ring.get()
@@ -299,6 +365,15 @@ class RecordingSession:
             if t.size == 0:
                 continue
             self.raw.append(t, data)  # never dropped — source of truth
+            # Published when a channel newly rails, then re-sent every RAIL_REPUBLISH_SEC while
+            # any is railed: a slow client's queue drops control messages under backpressure, and
+            # this is the one the operator must not miss.
+            newly = self.rails.update(data)
+            if newly or (
+                self.rails.any and time.monotonic() - self._rail_sent > RAIL_REPUBLISH_SEC
+            ):
+                self._rail_sent = time.monotonic()
+                self._publish_control({"type": "railed", "channels": self.rails.railed})
             axes = sum_axes(data)
             for i, ax in enumerate(("Fx", "Fy", "Fz")):
                 self.peaks[i] = max(self.peaks[i], float(np.max(np.abs(axes[ax]))))
@@ -389,12 +464,15 @@ class RecordingSession:
             "id": self.id,
             "state": self.state,
             "error": self.error,
+            "error_kind": self.error_kind,
             "elapsed_sec": round(self._t_last, 3),
             "n_total": self.n_total,
             "peaks": {"Fx": self.peaks[0], "Fy": self.peaks[1], "Fz": self.peaks[2]},
             "config": self.cfg.model_dump(),
             # None until the first chunk is processed; False => tacho producing no readable pulses.
             "tacho_ok": self._tacho_ok,
+            # Indices (0-7, Fx1..Fz4) of the sensor channels that have railed this cut.
+            "railed": self.rails.railed,
         }
         if self.backup:
             s["backup"] = self.backup.status()

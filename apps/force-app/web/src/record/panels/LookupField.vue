@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Debounced Directus typeahead. Emits the selected id (v-model) and a `select` event with the full
 // item (for auto-fill, e.g. sample diameter). Shows the chosen label; a clear button resets it.
-import { onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import type { LookupItem } from '../directusLookups';
 import { useListNav } from '../../ui/listNav';
+import { pickRows } from '../../ui/pickList';
 
 const props = defineProps<{
 	modelValue: string;
@@ -14,6 +15,10 @@ const props = defineProps<{
 	displayLabel?: string;
 	/** Material Symbols Rounded ligature name, shown leading the input box. */
 	icon?: string;
+	/** Ids already picked into a multi-pick selection this field feeds (#99, see pickList.ts). */
+	selectedIds?: readonly string[];
+	/** Hide `selectedIds` from the results instead of showing them disabled. */
+	hideSelected?: boolean;
 }>();
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void; (e: 'select', item: LookupItem): void }>();
 
@@ -63,7 +68,10 @@ function pick(it: LookupItem) {
 // Close and drop focus so the menu can't linger/re-open after a pick or Escape.
 function close() { open.value = false; inputEl.value?.blur(); }
 function clear() { emit('update:modelValue', ''); text.value = ''; items.value = []; }
-const { active, move, pickActive, reset: resetNav } = useListNav(() => items.value, pick, menuEl);
+// The current value is marked (check + aria-selected); already-picked ids are hidden or disabled.
+const rows = computed(() => pickRows(items.value, (it) => it.id,
+	{ currentId: props.modelValue, selectedIds: props.selectedIds, hideSelected: props.hideSelected }));
+const { active, move, pickActive, reset: resetNav } = useListNav(() => rows.value, (r) => pick(r.item), menuEl, (r) => r.picked);
 function onArrow(delta: 1 | -1) { open.value = true; move(delta); }
 // A bare `setTimeout` inside an inline template handler resolves against the component instance
 // (_ctx.setTimeout), not window — Vue templates don't fall through to globals for function calls.
@@ -89,12 +97,16 @@ function delayedBlurClose() { window.setTimeout(() => { open.value = false; }, 1
 		</div>
 		<div v-if="open && !disabled" :id="menuId" ref="menuEl" class="menu" role="listbox">
 			<div v-if="loading" class="mi hint">searching…</div>
-			<button v-for="(it, i) in items" :id="`${menuId}-${i}`" :key="it.id" type="button" class="mi" :class="{ active: i === active }"
-				role="option" :aria-selected="i === active" tabindex="-1" @mousedown.prevent="pick(it)" @mouseenter="active = i">
-				<span class="mi-label">{{ it.label }}</span>
-				<span v-if="it.sublabel" class="mi-sub">{{ it.sublabel }}</span>
+			<button v-for="(r, i) in rows" :id="`${menuId}-${i}`" :key="r.item.id" type="button" class="mi"
+				:class="{ active: i === active, current: r.current, picked: r.picked }" :data-active="i === active"
+				role="option" :aria-selected="r.current || r.picked" :aria-disabled="r.picked || undefined" tabindex="-1"
+				:title="r.picked ? 'Already added' : r.current ? 'Current value' : undefined"
+				@mousedown.prevent="!r.picked && pick(r.item)" @mouseenter="!r.picked && (active = i)">
+				<span class="mi-label">{{ r.item.label }}</span>
+				<span v-if="r.item.sublabel" class="mi-sub">{{ r.item.sublabel }}</span>
+				<span v-if="r.current || r.picked" class="material-symbols-rounded mi-check" aria-hidden="true">check</span>
 			</button>
-			<div v-if="!loading && items.length === 0" class="mi hint">no matches</div>
+			<div v-if="!loading && rows.length === 0" class="mi hint">{{ items.length ? 'all matches already added' : 'no matches' }}</div>
 		</div>
 	</label>
 </template>
@@ -116,6 +128,13 @@ function delayedBlurClose() { window.setTimeout(() => { open.value = false; }, 1
 .menu { position: absolute; z-index: 30; left: 0; right: 0; top: 100%; margin-top: 2px; max-height: 200px; overflow: auto; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.45); }
 .mi { display: block; width: 100%; text-align: left; padding: 7px 10px; font-size: var(--fs-md); font-family: var(--mono); color: var(--text); background: transparent; border: none; cursor: pointer; }
 .mi:hover, .mi.active { background: var(--surface); }
+/* #99: the current value carries a check; an already-added item is dimmed and not pickable. */
+.mi { position: relative; }
+.mi.current, .mi.picked { padding-right: 30px; }
+.mi.current .mi-label { color: var(--accent); }
+.mi.picked { opacity: 0.5; cursor: default; }
+.mi.picked:hover { background: transparent; }
+.mi-check { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); font-size: var(--icon-sm); color: var(--accent); }
 .mi.hint { color: var(--text-dim); font-family: inherit; cursor: default; }
 .mi-label { display: block; }
 .mi-sub { display: block; margin-top: 1px; font-family: inherit; font-size: var(--fs-xs); color: var(--text-dim); }

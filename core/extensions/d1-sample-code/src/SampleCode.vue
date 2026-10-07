@@ -1,7 +1,7 @@
 <template>
 	<div class="d1-sample-code">
 		<v-input
-			:model-value="value"
+			:model-value="shownValue"
 			placeholder="Auto-built from alloy, method & date…"
 			@update:model-value="onType"
 		>
@@ -18,11 +18,13 @@
 			<span v-if="parts">{{ parts }}</span>
 			<span v-else class="muted">Pick alloy + method to auto-build the code.</span>
 		</div>
+		<div v-if="previewError" class="hint error">{{ previewError }}</div>
+		<div v-else-if="hasPlaceholder" class="hint"><span class="muted">The number is a preview; the database assigns the final one on save.</span></div>
 	</div>
 </template>
 
 <script setup lang="ts">
-import { inject, ref, watch, type Ref } from 'vue';
+import { computed, inject, ref, watch, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 
 const props = defineProps<{ value: string | null; primaryKey?: string | number | null }>();
@@ -32,6 +34,20 @@ const values = inject<Ref<Record<string, any>>>('values', ref({}));
 const api = useApi();
 
 const parts = ref<string>('');
+
+// The sample number is assigned by the database when the record is saved (a trigger on
+// physical_samples replaces a leading {seq}- with the next free number, under a lock). The
+// interface only composes the rest of the code and shows a PREVIEW of the number. A failed read is
+// reported -- it never falls back to "1".
+const SEQ = '{seq}';
+const seqEstimate = ref<number | null>(null);
+const previewError = ref<string>('');
+const hasPlaceholder = computed(() => (props.value ?? '').startsWith(`${SEQ}-`));
+const shownValue = computed(() => {
+	const v = props.value ?? '';
+	if (!v.startsWith(`${SEQ}-`)) return props.value;
+	return `${seqEstimate.value != null ? seqEstimate.value : '?'}${v.slice(SEQ.length)}`;
+});
 
 // Was this component opened on an already-saved item that had a code? Captured
 // once at setup so an async value load can't flip it later.
@@ -47,6 +63,7 @@ function isExistingItem(): boolean {
 }
 
 function onType(v: string | null) {
+	if (v === shownValue.value) return; // the preview echoed back: keep the placeholder
 	emit('input', v);
 }
 
@@ -59,24 +76,21 @@ async function lookup(collection: string, id: string, field: string): Promise<st
 	}
 }
 
-// Next FREE sequence number = max leading integer across OTHER samples + 1.
-// Excludes this sample's own current code, so re-running is idempotent and can
-// never bump the sample's own number.
-async function nextSequence(): Promise<number> {
+// PREVIEW of the next free sequence number, asked of the database: /d1-next-number/sample runs the
+// same rule as the trigger that assigns it on save, over every sample whatever this user can read.
+// Excludes this sample's own row when renumbering. Returns null and sets previewError on failure.
+async function nextSequence(): Promise<number | null> {
 	try {
-		const own = props.value ?? '';
-		const res = await api.get('/items/physical_samples', {
-			params: { fields: ['sample_code'], limit: -1 },
-		});
-		let max = 0;
-		for (const r of res?.data?.data ?? []) {
-			if ((r.sample_code ?? '') === own) continue; // never count ourselves
-			const m = /^(\d+)-/.exec(r.sample_code ?? '');
-			if (m) max = Math.max(max, parseInt(m[1], 10));
-		}
-		return max + 1;
+		const pk = props.primaryKey;
+		const exclude = pk != null && pk !== '+' ? String(pk) : undefined;
+		const res = await api.get('/d1-next-number/sample', { params: exclude ? { exclude } : {} });
+		const n = Number(res?.data?.next);
+		if (!Number.isFinite(n)) throw new Error('no number returned');
+		previewError.value = '';
+		return n;
 	} catch {
-		return 1;
+		previewError.value = 'Could not read the next sample number, so no preview is available. The database still assigns the number when you save.';
+		return null;
 	}
 }
 
@@ -98,10 +112,14 @@ async function rebuild(force = false) {
 	const existing = /^(\d+)-/.exec(props.value ?? '');
 	// A hand-typed code with no leading number is left untouched (unless forced).
 	if (props.value && !existing && !force) return;
-	const seq = existing && !force ? parseInt(existing[1], 10) : await nextSequence();
+	const keep = existing && !force ? parseInt(existing[1], 10) : null;
+	if (keep == null) seqEstimate.value = await nextSequence();
+	// A kept number is concrete; a new or renumbered one is left to the database.
+	const seq = keep ?? SEQ;
+	const shownSeq = keep ?? (seqEstimate.value != null ? seqEstimate.value : '?');
 
 	const code = `${seq}-${alloy}-${method}-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-	parts.value = `${seq} · ${alloy} · ${method} · ${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+	parts.value = `${shownSeq} · ${alloy} · ${method} · ${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 	if (code !== props.value) emit('input', code); // avoid marking the form dirty on open
 }
 
@@ -118,5 +136,6 @@ watch(
 <style scoped>
 .d1-sample-code { width: 100%; }
 .hint { margin-top: 4px; font-size: 12px; color: var(--theme--primary, #1565c0); }
+.hint.error { color: var(--theme--danger, #c62828); }
 .hint .muted { color: var(--theme--foreground-subdued, #999); font-style: italic; }
 </style>

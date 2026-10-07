@@ -109,3 +109,28 @@ def test_a_broken_virtual_formula_does_not_fail_finalize(tmp_path):
     m = loadmat(os.path.join(d, "capture.mat"))
     assert np.allclose(m["DATA"][:, 10], 0.0)
     assert summary["channels"][-1] == "Bad"
+
+
+def test_formulas_that_raise_non_formula_errors_do_not_fail_finalize_or_recovery(
+    tmp_path, monkeypatch
+):
+    """A manifest/config written before arity checks existed can carry min(Fx), sqrt() or 1/0.
+    Finalize (and so recovery, which calls it) must zero those columns, not raise."""
+    import app.virtual_channels as vc
+
+    monkeypatch.setattr(vc, "_validate", lambda node: set())  # as if saved by an older build
+    fs, n = 2000, 2000
+    d = _write_raw(tmp_path, n, fs)
+    cfg = RecordConfig(
+        sample_rate=fs,
+        extra_channels=[
+            ExtraChannel(name="A", source="virtual", formula="min(Fx)"),
+            ExtraChannel(name="B", source="virtual", formula="1/0"),
+            ExtraChannel(name="C", source="virtual", formula="sqrt()"),
+        ],
+    )
+
+    finalize(d, cfg)  # must not raise
+
+    m = loadmat(os.path.join(d, "capture.mat"))
+    assert np.allclose(m["DATA"][:, 10:13], 0.0)

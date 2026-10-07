@@ -13,7 +13,9 @@ says what to do about each failure. Then look at the log (**Help → View Logs**
 The window cannot reach the recorder backend on `localhost:8200`.
 
 - In the installed app the shell starts the backend and restarts it if it dies. Quit and reopen
-  the app.
+  the app, or open **Settings → Connectivity** and press **Restart recorder** in the *Recorder
+  backend is offline* advice. It refuses while a recording is running or still being saved, and
+  tells you so.
 - Check **Settings → Connectivity → Recorder URL** is `http://localhost:8200`.
 - In development, the backend has to be running (see the [developer guide](developer-guide.md#running-it-from-source)).
 

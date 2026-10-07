@@ -1,8 +1,14 @@
 # D1-Database — full stack definition.
 #
 # Phase 2: healthchecks, restart policies, reverse proxy (Caddy),
-# and MinIO bucket bootstrap added. Config from `.env` (copy from `.env.example`);
-# `${VAR:-default}` fallbacks keep this valid without a .env present.
+# and MinIO bucket bootstrap added. Config from `.env` (copy from `.env.example`).
+#
+# Security defaults:
+#   * Every published host port binds to ${D1_BIND_ADDR:-127.0.0.1}, i.e. loopback only. Keep the
+#     default when Tailscale Serve on the host fronts the proxy; set the host's tailnet IP only if
+#     clients must reach the ports directly (never 0.0.0.0). See infra/README.md.
+#   * Secrets use ${VAR:?} so `docker compose` refuses to start without them: there are no
+#     working default passwords. Non-secret settings keep ${VAR:-default}.
 name: d1-database
 
 services:
@@ -12,14 +18,14 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-d1}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 32)}
       POSTGRES_DB: ${POSTGRES_DB:-d1_database}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${D1_BIND_ADDR:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,17 +33,24 @@ services:
     networks: [d1net]
 
   # Job queue for the heavy-data pipeline (Phase 4).
+  # rq pickles jobs, so anyone who can talk to Redis can run code in the workers: it is NOT
+  # published on the host (reach it with `docker compose exec redis redis-cli`) and it
+  # requires REDIS_PASSWORD. REDISCLI_AUTH lets redis-cli (healthcheck, `exec`) authenticate.
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     # Persist every 60 s if at least 1 key changed; quiet logs.
-    command: redis-server --save 60 1 --loglevel warning
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    command:
+      - sh
+      - -c
+      - exec redis-server --save 60 1 --loglevel warning --requirepass "$$REDIS_PASSWORD"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (openssl rand -hex 32)}
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -50,10 +63,10 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_too}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env (openssl rand -hex 32)}
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${D1_BIND_ADDR:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000"
+      - "${D1_BIND_ADDR:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -73,16 +86,16 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      KEY: ${DIRECTUS_KEY:-replace-with-random-key}
-      SECRET: ${DIRECTUS_SECRET:-replace-with-random-secret}
+      KEY: ${DIRECTUS_KEY:?Set DIRECTUS_KEY in .env (openssl rand -hex 32)}
+      SECRET: ${DIRECTUS_SECRET:?Set DIRECTUS_SECRET in .env (openssl rand -hex 32)}
       DB_CLIENT: pg
       DB_HOST: postgres
       DB_PORT: 5432
       DB_DATABASE: ${POSTGRES_DB:-d1_database}
       DB_USER: ${POSTGRES_USER:-d1}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 32)}
       ADMIN_EMAIL: ${DIRECTUS_ADMIN_EMAIL:-admin@example.com}
-      ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASSWORD:-change_me_admin}
+      ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASSWORD:?Set DIRECTUS_ADMIN_PASSWORD in .env (openssl rand -hex 32)}
       # Public URL used for link generation; override in .env for production.
       PUBLIC_URL: ${DIRECTUS_PUBLIC_URL:-http://localhost:80}
       # CORS for the standalone Force App (apps/force-app/web). It runs on its OWN origin and
@@ -102,22 +115,25 @@ services:
       # Path B (Ask-the-Database): the d1-ask-endpoint extension proxies chat
       # requests to the guarded text-to-SQL plugin over the internal d1net.
       LLM_PLUGIN_URL: ${LLM_PLUGIN_URL:-http://llm-text-to-sql:8080}
-      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:-}
+      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:?Set WORKER_WEBHOOK_SECRET in .env (openssl rand -hex 32)}
+      # Lets the worker-webhook Flows send `X-Worker-Secret: {{$env.WORKER_WEBHOOK_SECRET}}`; the
+      # workers reject every request without it (docs/runbooks/heavy-data-pipeline.md §3).
+      FLOWS_ENV_ALLOW_LIST: WORKER_WEBHOOK_SECRET
+      # The container runs in UTC; d1-report prints label dates in this IANA zone instead.
+      D1_TIMEZONE: ${D1_TIMEZONE:-Europe/London}
     # Path A (built-in AI Chat) and any server-side extension that calls the host
     # can reach the host's Ollama here. Auto-resolved on Windows/Mac Docker
     # Desktop; the host-gateway mapping makes it work on Linux too.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${DIRECTUS_PORT:-8055}:8055"
+      - "${D1_BIND_ADDR:-127.0.0.1}:${DIRECTUS_PORT:-8055}:8055"
     volumes:
       - directus-uploads:/directus/uploads
       # Mount the version-controlled hook extensions (read-only).
       - ./core/extensions:/directus/extensions:ro
-      # Read-only SMB archive (see the `archive_share` volume below).
-      # TEMPORARILY DETACHED: SMB credential expired (required key not available).
-      # Restore this line and refresh SMB_PASS in .env once the share re-auths.
-      # - archive_share:/mnt/archive:ro
+      # The SMB archive (`archive_share`, below) is deliberately NOT mounted here: files there are
+      # linked, not served, and only the `archive-indexer` service reads it.
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
              "http://127.0.0.1:8055/server/health"]
@@ -144,21 +160,20 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # Full URL incl. password; preferred over REDIS_HOST/REDIS_PORT (kept for compatibility).
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (openssl rand -hex 32)}@redis:6379/0
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_too}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env (openssl rand -hex 32)}
       MINIO_BUCKET: ${MINIO_BUCKET:-d1-files}
       DIRECTUS_URL: http://directus:8055
       WORKER_DIRECTUS_TOKEN: ${WORKER_DIRECTUS_TOKEN:-}
       WORKER_MEMORY_LIMIT_MB: ${WORKER_MEMORY_LIMIT_MB:-256}
-      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:-}
+      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:?Set WORKER_WEBHOOK_SECRET in .env (openssl rand -hex 32)}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-214748364800}
       WORKER_HTTP_PORT: "8080"
     ports:
-      - "${WORKER_HTTP_PORT:-8080}:8080"
-    volumes:
-      # Read-only SMB archive — lets the worker fetch linked files by path.
-      - archive_share:/mnt/archive:ro
+      - "${D1_BIND_ADDR:-127.0.0.1}:${WORKER_HTTP_PORT:-8080}:8080"
     healthcheck:
       test:
         - "CMD"
@@ -187,21 +202,20 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # Full URL incl. password; preferred over REDIS_HOST/REDIS_PORT (kept for compatibility).
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (openssl rand -hex 32)}@redis:6379/0
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_too}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env (openssl rand -hex 32)}
       MINIO_BUCKET: ${MINIO_BUCKET:-d1-files}
       DIRECTUS_URL: http://directus:8055
       WORKER_DIRECTUS_TOKEN: ${WORKER_DIRECTUS_TOKEN:-}
-      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:-}
+      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:?Set WORKER_WEBHOOK_SECRET in .env (openssl rand -hex 32)}
       WORKER_HTTP_PORT: "8081"
       QUEUE_NAME: analysis
       FFT_CHANNEL_INDEX: "2"
     ports:
-      - "${ANALYSIS_HTTP_PORT:-8081}:8081"
-    volumes:
-      # Read-only SMB archive — lets the worker fetch linked files by path.
-      - archive_share:/mnt/archive:ro
+      - "${D1_BIND_ADDR:-127.0.0.1}:${ANALYSIS_HTTP_PORT:-8081}:8081"
     healthcheck:
       test:
         - "CMD"
@@ -227,7 +241,7 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+      - "${D1_BIND_ADDR:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 15s
@@ -263,13 +277,13 @@ services:
       OLLAMA_SQL_MODEL: ${OLLAMA_SQL_MODEL:-llama3}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
       LLM_STATEMENT_TIMEOUT_MS: ${LLM_STATEMENT_TIMEOUT_MS:-5000}
-      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:-}
+      WORKER_WEBHOOK_SECRET: ${WORKER_WEBHOOK_SECRET:?Set WORKER_WEBHOOK_SECRET in .env (openssl rand -hex 32)}
       WORKER_HTTP_PORT: "8080"
     # Reach the host Ollama (see OLLAMA_URL above) from inside the container.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${LLM_HTTP_PORT:-8082}:8080"
+      - "${D1_BIND_ADDR:-127.0.0.1}:${LLM_HTTP_PORT:-8082}:8080"
     healthcheck:
       test:
         - "CMD"
@@ -422,7 +436,7 @@ services:
       directus:
         condition: service_healthy
     ports:
-      - "${PROXY_HTTP_PORT:-80}:80"
+      - "${D1_BIND_ADDR:-127.0.0.1}:${PROXY_HTTP_PORT:-80}:80"
     # Reach the host-run recording backend (apps/force-app/backend on :8200) for the /recorder
     # same-origin proxy — it runs on the host because it needs the DAQ hardware, not in a container.
     extra_hosts:
@@ -434,6 +448,23 @@ services:
       - ./apps/force-app/web/dist:/srv/force-app:ro   # standalone Force App SPA, served at /app/
       - caddy-data:/data
       - caddy-config:/config
+    networks: [d1net]
+
+  # One-off indexer for the SMB archive (`make index-archive`). Opt-in profile so a plain
+  # `docker compose up` never tries to mount the share. Nothing else reads /mnt/archive.
+  archive-indexer:
+    image: python:3.12-slim
+    profiles: ["archive"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-d1}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (openssl rand -hex 32)}@postgres:5432/${POSTGRES_DB:-d1_database}?sslmode=disable
+      ARCHIVE_ROOT: /mnt/archive/star_group1
+    volumes:
+      - ./scripts:/scripts:ro
+      - archive_share:/mnt/archive:ro
+    command: ["sh", "-c", "pip install -q psycopg2-binary && python /scripts/index_archive.py"]
     networks: [d1net]
 
 volumes:
@@ -449,10 +480,11 @@ volumes:
   backup-raw:
 
   # Read-only mount of the university SMB archive (Z: → \\uosfstore.shef.ac.uk\shared).
-  # The whole `shared` export is mounted; only the star_group1 subtree is used
-  # (STORAGE_STAR_ROOT and the indexer point at /mnt/archive/star_group1).
-  # Credentials live in .env (SMB_USER / SMB_PASS). The mount is read-only twice
-  # over: `ro` in the options AND `:ro` on every service mount.
+  # Used only by the `archive-indexer` service (profile `archive`, run by `make index-archive`);
+  # the workers and Directus do not mount it. The whole `shared` export is mounted; only the
+  # star_group1 subtree is used (STORAGE_STAR_ROOT and the indexer point at
+  # /mnt/archive/star_group1). Credentials live in .env (SMB_USER / SMB_PASS). The mount is
+  # read-only twice over: `ro` in the options AND `:ro` on the service mount.
   # If SMB negotiation fails, adjust `vers=` (try 3.1.1 or 2.1) or add `domain=`.
   archive_share:
     driver: local

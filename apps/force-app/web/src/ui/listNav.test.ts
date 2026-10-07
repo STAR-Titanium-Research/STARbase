@@ -56,4 +56,38 @@ describe('useListNav', () => {
 		nav.reset();
 		expect(nav.active.value).toBe(-1);
 	});
+
+	it('skips disabled items when moving, in both directions', () => {
+		const items = ['a', 'b', 'c', 'd'];
+		const nav = useListNav(() => items, () => {}, undefined, (it) => it === 'b' || it === 'd');
+		nav.move(1);
+		expect(nav.active.value).toBe(0);
+		nav.move(1);
+		expect(nav.active.value).toBe(2);   // jumped over b
+		nav.move(1);
+		expect(nav.active.value).toBe(2);   // d is disabled: stays on the last enabled item
+		nav.move(-1);
+		expect(nav.active.value).toBe(0);
+	});
+
+	it('starts from the last enabled item when moving up from nothing', () => {
+		const nav = useListNav(() => ['a', 'b', 'c'], () => {}, undefined, (it) => it === 'c');
+		nav.move(-1);
+		expect(nav.active.value).toBe(1);
+	});
+
+	it('Enter with nothing highlighted picks the first enabled item, never a disabled one', () => {
+		const picked: string[] = [];
+		const nav = useListNav(() => ['a', 'b'], (it) => picked.push(it), undefined, (it) => it === 'a');
+		expect(nav.pickActive()).toBe(true);
+		expect(picked).toEqual(['b']);
+	});
+
+	it('does nothing when every item is disabled', () => {
+		const picked: string[] = [];
+		const nav = useListNav(() => ['a'], (it) => picked.push(it), undefined, () => true);
+		nav.move(1);
+		expect(nav.active.value).toBe(-1);
+		expect(nav.pickActive()).toBe(false);
+	});
 });

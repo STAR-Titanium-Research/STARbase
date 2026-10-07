@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPolar, type PolarParams } from './polar';
+import { buildPolar, radialFrac, radialScale, type PolarParams } from './polar';
 import type { AngleParams } from './angle';
 import type { Cache } from './liveCache';
 
@@ -80,5 +80,44 @@ describe('buildPolar', () => {
 			if (means[b] > prev && means[b] > next) maxima++;
 		}
 		expect(maxima).toBe(4);
+	});
+});
+
+describe('radialScale / radialFrac (negative values)', () => {
+	it('non-negative data keeps the old mapping: centre = 0, outer = rMax * 1.05', () => {
+		const s = radialScale(2, 10);
+		expect(s.lo).toBe(0);
+		expect(s.hi).toBeCloseTo(10.5, 10);
+		expect(radialFrac(5.25, s)).toBeCloseTo(0.5, 10);
+	});
+	// Old code: (r / rMax) * radius, so -4 with rMax 8 gave a NEGATIVE radius, i.e. the point was
+	// drawn 180 degrees from its angle.
+	it('a negative value is nearer the centre than a positive one, never mirrored', () => {
+		const s = radialScale(-4, 8);
+		expect(s.lo).toBe(-4);
+		expect(radialFrac(-4, s)).toBe(0);
+		expect(radialFrac(0, s)).toBeGreaterThan(0);
+		expect(radialFrac(8, s)).toBeGreaterThan(radialFrac(0, s));
+		for (const v of [-4, -1, 0, 3, 8]) {
+			const f = radialFrac(v, s);
+			expect(f).toBeGreaterThanOrEqual(0);
+			expect(f).toBeLessThanOrEqual(1);
+		}
+	});
+	it('mapping is strictly increasing in the value', () => {
+		const s = radialScale(-10, -2);
+		const fs = [-10, -8, -6, -4, -2].map((v) => radialFrac(v, s));
+		for (let i = 1; i < fs.length; i++) expect(fs[i]).toBeGreaterThan(fs[i - 1]);
+	});
+	it('all-negative data does not invert the scale', () => {
+		const s = radialScale(-9, -3);
+		expect(s.hi).toBeGreaterThan(s.lo);
+		expect(radialFrac(-3, s)).toBeGreaterThan(radialFrac(-9, s));
+	});
+	it('a caller-supplied outer value wins; degenerate input stays a valid scale', () => {
+		expect(radialScale(0, 5, 20).hi).toBe(20);
+		const s = radialScale(0, 0);
+		expect(s.hi).toBeGreaterThan(s.lo);
+		expect(Number.isFinite(radialFrac(0, s))).toBe(true);
 	});
 });

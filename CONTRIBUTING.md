@@ -52,13 +52,48 @@ left for CI to discover):
 make help          # list targets
 make setup         # install pre-commit hooks (needs python + pre-commit)
 make test          # run the current smoke/integration tests
-make compose-check # validate docker-compose.yml
+make compose-check # validate docker-compose.yml (dummy secrets; no .env needed)
 ```
 
 `make` is optional (Linux/WSL/CI); on Windows you can run the underlying
 commands directly — see the [`Makefile`](./Makefile). `pre-commit` runs
 `ruff`/`black` (Python), `sqlfluff` (SQL), `hadolint` (Dockerfiles), and basic
 hygiene hooks; CI enforces the same set.
+
+## Claude Code skills
+
+[`.claude/skills/`](./.claude/skills/) holds project skills that encode the conventions
+above. Claude Code loads them on its own when a task matches, or you can type
+`/<name>`. Skills marked *manual* only run when you type them.
+
+| Skill | Use it for |
+|---|---|
+| `db-migration` | Writing a dbmate migration and proving up → down → up (works without Docker via a local Postgres 16) |
+| `migration-review` | Reviewing a branch's migrations against the schema rules, in a separate subagent |
+| `new-plugin` | Scaffolding a plugin from `plugins/plugin-template` and wiring compose, `.env.example`, Makefile and CI |
+| `adr` | Writing an ADR or a design spec and updating its index |
+| `ci-local` | Running the CI checks the changed files touch, before committing |
+| `force-app-conventions` | Background knowledge Claude loads when touching force-app files: invariants, architecture, formats |
+| `directus-ui-conventions` | Background knowledge Claude loads when touching the Directus front end (Explorer pages, Home, `@d1/ui`): invariants and checks |
+| `force-scaffold` | Adding a panel, endpoint, channel, format change or diagnostics step across every file it needs |
+| `force-app-verify` | Running the force app hardware-free (sim backend + real UI in headless Chromium) to prove a change works |
+| `force-debug-capture` | Investigating a bad recording from a bug report, capture folder or log, ending in a report |
+| `triage-bug-reports` | Triaging the open in-app bug reports into a P0–P3 batch plan and fixing them |
+| `force-app-release` | *Manual.* Bump, changelog, local preflight of the release job; you push the tag |
+| `careful` | *Manual.* Hook that blocks destructive commands (DB drops, volume/MinIO deletes, force-push, release tags) for the session |
+| `freeze` | *Manual.* Hook that limits edits to the directories you name, for the session |
+
+[`.claude/agents/force-app-reviewer.md`](./.claude/agents/force-app-reviewer.md) is a read-only
+review subagent with `force-app-conventions` preloaded. It keeps shared notes in
+`.claude/agent-memory/force-app-reviewer/`. Two implementation profiles run plan streams in their
+own worktrees: [`force-plotting-implementer`](./.claude/agents/force-plotting-implementer.md)
+(`packages/force-plotting`) and [`directus-ui-implementer`](./.claude/agents/directus-ui-implementer.md)
+(the Directus front end, with `directus-ui-conventions` preloaded), and
+[`directus-ui-reviewer`](./.claude/agents/directus-ui-reviewer.md) is its read-only reviewer. [`.claude/settings.json`](./.claude/settings.json)
+logs each skill use to the gitignored `.claude/skill-usage.log`
+(`cut -f2 .claude/skill-usage.log | sort | uniq -c`), so unused skills can be pruned. The rest of
+`.claude/` (local settings, memory, plans) stays gitignored, and so does any skill's
+per-machine `config.json`.
 
 ## Security
 

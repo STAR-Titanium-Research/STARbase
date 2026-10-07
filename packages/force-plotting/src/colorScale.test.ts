@@ -57,7 +57,12 @@ describe('defaultScale', () => {
 describe('applyParams', () => {
 	it('is a no-op when no shaping params are set and the range is already valid', () => {
 		const s = scale({ satMin: -3, satMax: 7 });
-		expect(applyParams(s, -100, 100)).toEqual(s);
+		// (also records the base range, which equals the saturation range when nothing shapes it)
+		expect(applyParams(s, -100, 100)).toEqual({ ...s, baseMin: -3, baseMax: 7 });
+	});
+	it('is idempotent with shaping params on', () => {
+		const once = applyParams(scale({ symmetrical: true, alwaysShowZero: true, baseMin: 25, baseMax: 35, satMin: 25, satMax: 35 }), 0, 0);
+		expect(applyParams(once, 0, 0)).toEqual(once);
 	});
 	it('symmetrical forces satMin = -satMax using the larger magnitude', () => {
 		const s = applyParams(scale({ symmetrical: true, satMin: -2, satMax: 9 }), 0, 0);
@@ -117,6 +122,47 @@ describe('applyParams', () => {
 			expect(typeof s[k]).toBe('number');
 			expect(Number.isFinite(s[k])).toBe(true);
 		}
+	});
+});
+
+// #78: shaping used to be applied to the already-shaped satMin/satMax, so unticking symmetrical or
+// always-show-zero left the widened range behind.
+describe('applyParams: shaping is reversible', () => {
+	const seeded = (o: Partial<ColorScale> = {}) => applyParams({ ...defaultScale(25, 35), ...o }, 25, 35);
+	const untick = (s: ColorScale, o: Partial<ColorScale>) => applyParams({ ...s, ...o }, 25, 35);
+
+	it('unticking symmetrical restores the original range', () => {
+		const on = untick(seeded(), { symmetrical: true });
+		expect([on.satMin, on.satMax]).toEqual([-35, 35]);
+		const off = untick(on, { symmetrical: false });
+		expect([off.satMin, off.satMax]).toEqual([25, 35]);
+	});
+	it('unticking always-show-zero restores the original range', () => {
+		const on = untick(seeded(), { alwaysShowZero: true });
+		expect([on.satMin, on.satMax]).toEqual([0, 35]);
+		const off = untick(on, { alwaysShowZero: false });
+		expect([off.satMin, off.satMax]).toEqual([25, 35]);
+	});
+	it('unticking one of two params keeps the other applied to the original range', () => {
+		const both = untick(seeded(), { symmetrical: true, alwaysShowZero: true });
+		const noSym = untick(both, { symmetrical: false });
+		expect([noSym.satMin, noSym.satMax]).toEqual([0, 35]);
+		const noZero = untick(both, { alwaysShowZero: false });
+		expect([noZero.satMin, noZero.satMax]).toEqual([-35, 35]);
+	});
+	it('treats a directly written saturation range as the new base', () => {
+		const on = untick(seeded(), { symmetrical: true });
+		// e.g. a caller that spreads the scale and sets satMin/satMax itself
+		const edited = untick(on, { satMin: -10, satMax: 20, symmetrical: false });
+		expect([edited.satMin, edited.satMax]).toEqual([-10, 20]);
+	});
+	it('a re-seed (withAutoRange) re-bases and re-shapes', () => {
+		const on = untick(seeded(), { symmetrical: true });
+		const reseeded = withAutoRange(on, 5, 15);
+		expect([reseeded.satMin, reseeded.satMax]).toEqual([-15, 15]);
+		expect([reseeded.baseMin, reseeded.baseMax]).toEqual([5, 15]);
+		const off = untick(reseeded, { symmetrical: false });
+		expect([off.satMin, off.satMax]).toEqual([5, 15]);
 	});
 });
 

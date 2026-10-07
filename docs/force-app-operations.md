@@ -31,6 +31,20 @@ The app should show a loading screen, spawn the sidecar from
 
 To run the backend alone: `.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8200`.
 
+The recorder has no authentication, so it listens on loopback only and refuses browser requests
+from anywhere else (`app/origin_guard.py`):
+
+- `Host` must be `127.0.0.1`, `localhost` or `[::1]` on the recorder's own port, plus any name in
+  `RECORDER_ALLOWED_HOSTS` (comma-separated, default empty).
+- A request that carries an `Origin` must come from `app://force` or a name in
+  `RECORDER_CORS_ORIGINS` (default `http://localhost:5180,http://localhost:5181`, the Vite dev
+  servers). Requests with no `Origin` (curl, Electron's main process) are allowed.
+
+Running the web UI on another port means adding that origin to `RECORDER_CORS_ORIGINS`. The Caddy
+`/recorder/*` proxy on d1-server is refused by default, because it forwards the tailnet hostname.
+ADR-0010 already notes it points at the wrong machine for recording. To use it anyway, set
+`RECORDER_ALLOWED_HOSTS` to that hostname and add the page's origin to `RECORDER_CORS_ORIGINS`.
+
 ## Where things are kept
 
 | What | Where | Override |
@@ -167,6 +181,12 @@ these need the rig and a human:
 - [ ] Kill the backend mid-recording (`Stop-Process -Name force-app-backend`, or the `python.exe`
       running uvicorn in dev). The supervisor should restart it and route back to Record, where the
       recovery banner picks up the interrupted session.
+- [ ] **Settings > Connectivity > Restart recorder** (R11): with the backend killed, the button
+      brings it back and the doctor goes green; during a recording it refuses with a reason.
+- [ ] Help menu (R13): the menu bar is hidden; press **Alt** to show it (in the main window and in a
+      pop-out). **Check for Updates…** lands on Settings > About and runs the check;
+      **Open Captures Folder** opens the configured capture drive; **Report a Bug…** opens the
+      report screen. When an update finishes downloading, the prompt lists what's new.
 - [ ] A second copy of the app focuses the running window instead of opening a second one.
 - [x] **Live backup end to end — done 2026-08-23.** A real 25 kHz NI-DAQ recording (112,500
       samples, 4,500,032 bytes) streamed to `d1-server` over Tailscale and reached 100 %. The raw

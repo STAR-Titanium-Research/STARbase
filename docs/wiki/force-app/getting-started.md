@@ -16,7 +16,7 @@ for every `force-app-v*` tag and published to the update feed on d1-server.
 
 Once installed, the app updates itself. On launch it checks the feed at
 `https://d1-server…/force-app-updates/` (reachable only over Tailscale) and downloads any newer
-version in the background. When the download is ready it asks **Update now / Not now**:
+version in the background. When the download is ready it shows what is new in that version (trimmed if long; the full history is in **Settings → About**) and asks **Update now / Not now**:
 
 - **Update now** closes the app, installs silently and reopens it within a few seconds.
 - **Not now** keeps the current version. You can install later from **Settings → About**.
@@ -77,11 +77,19 @@ other page then shows a blue banner with the elapsed time, sample count and peak
 
 ## Keyboard and menus
 
+The installed app hides its menu bar. Press **Alt** to show it (the Help menu is in it), and
+press **Alt** again or click away to hide it. The Help items that have a shortcut also work
+without opening the menu.
+
 | | |
 |---|---|
 | **F11** | toggle full screen |
 | **Help → Connectivity Doctor** | jump to the health check ([Troubleshooting](troubleshooting.md)) |
-| **Help → View Logs** | open the backend log viewer |
+| **Help → View Logs** (**Ctrl+Shift+L**) | open the backend log viewer |
+| **Help → Report a Bug…** (**Ctrl+Shift+B**) | open Settings → Report a Bug |
+| **Help → Open Captures Folder** (**Ctrl+Shift+O**) | open the folder recordings are saved to in the file browser |
+| **Help → Check for Updates…** | look for a new version and show the result in Settings → About |
+| **Help → About Force App** | open Settings → About |
 | **Tab** to the navigation tab, then **Enter** | open the navigation, with focus on the current section. **Escape** closes it again. |
 | **↑ / ↓** and **Enter** in a search list | move through the matches in the Sample, Machine, Operator and tooling lookups (and the replay cut picker) and pick one |
 | **Escape** in a dialog | cancel and close it. The save dialog after a cut is the exception: it needs **Save** or **Don't save**. |

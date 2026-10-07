@@ -9,10 +9,15 @@ export interface WindowBounds {
   maximized?: boolean;
 }
 
+const OPEN_POPOUTS_KEY = 'openPopouts';
+
 /** Reads/writes `<userData>/window-state.json` — last-used size/position for the main window and
  * each pop-out kind (keyed by URL pathname, e.g. "/live/force", "/live/frm", "/record"), so
  * reopening a window lands where the operator last put it instead of always resetting to a fixed
- * default. `<userData>` is already per-Windows-user (%LOCALAPPDATA%), so this is per-user for free. */
+ * default. `<userData>` is already per-Windows-user (%LOCALAPPDATA%), so this is per-user for free.
+ *
+ * Also holds the URLs of the pop-outs that were open when the app last quit (#108), under a key
+ * that cannot collide with a pathname key (those all start with "/"). */
 export class WindowStateStore {
   private readonly filePath: string;
 
@@ -20,7 +25,7 @@ export class WindowStateStore {
     this.filePath = path.join(userDataDir, 'window-state.json');
   }
 
-  private readAll(): Record<string, WindowBounds> {
+  private readAll(): Record<string, unknown> {
     try {
       return JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
     } catch {
@@ -29,12 +34,25 @@ export class WindowStateStore {
   }
 
   get(key: string): WindowBounds | undefined {
-    return this.readAll()[key];
+    return this.readAll()[key] as WindowBounds | undefined;
   }
 
   save(key: string, bounds: WindowBounds): void {
+    this.write(key, bounds);
+  }
+
+  /** Raw, unvalidated: whatever was saved. Callers vet it (see popouts.ts). */
+  getOpenPopouts(): unknown {
+    return this.readAll()[OPEN_POPOUTS_KEY];
+  }
+
+  setOpenPopouts(urls: string[]): void {
+    this.write(OPEN_POPOUTS_KEY, urls);
+  }
+
+  private write(key: string, value: unknown): void {
     const all = this.readAll();
-    all[key] = bounds;
+    all[key] = value;
     try {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
       fs.writeFileSync(this.filePath, JSON.stringify(all, null, 2));

@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@d1/force-plotting": "*",
+    "@d1/ui": "*",
     "axios": "^1.7.9",
     "grid-layout-plus": "^1.1.1",
     "material-symbols": "^0.47.5",

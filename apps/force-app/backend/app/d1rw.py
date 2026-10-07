@@ -1,7 +1,8 @@
 """D1RW raw capture file — the append-only source of truth during a run.
 
 Design (see the 2a spec's buffering note): the acquisition consumer appends every chunk here as
-raw float32 rows; finalize() memory-maps it in blocks (constant memory, no read-it-all-into-RAM).
+raw float32 rows; finalize() reads it back in fixed-size blocks (read_rows), so its memory is
+constant however long the capture ran -- never read-it-all-into-RAM.
 
 Layout: a FIXED 32-byte LE header so the body is memmap-able without parsing channel names:
     magic 'D1RW' (4s) | version u32 | n_cols u32 | rate f32 | start_unix f64 | pad(8)
@@ -73,10 +74,30 @@ def read_header(path: str) -> dict:
     return {"version": version, "n_cols": n_cols, "rate": rate, "start_unix": start_unix}
 
 
+def row_count(path: str, n_cols: int | None = None) -> int:
+    """Complete rows in the body. A crash mid-append can leave a partial trailing row; it is not
+    counted (and so never read)."""
+    if n_cols is None:
+        n_cols = read_header(path)["n_cols"]
+    return (os.path.getsize(path) - HEADER_SIZE) // (n_cols * 4)
+
+
+def read_rows(path: str, start: int, stop: int, n_cols: int) -> np.ndarray:
+    """Rows [start, stop) as an owned (m, n_cols) float32 array.
+
+    A plain read rather than a slice of memmap_rows: a mapping's touched pages stay in the
+    process's resident set (Windows' working set) until it is unmapped, so walking a 12 GB capture
+    through one grows the process by the file's size even though no array ever holds it.
+    """
+    with open(path, "rb") as f:
+        f.seek(HEADER_SIZE + start * n_cols * 4)
+        block = np.fromfile(f, dtype="<f4", count=max(0, stop - start) * n_cols)
+    return block.reshape(-1, n_cols)
+
+
 def memmap_rows(path: str) -> np.ndarray:
     """Memory-map the body as a (n_rows, n_cols) float32 view — no full read into RAM."""
     hdr = read_header(path)
     n_cols = hdr["n_cols"]
-    total = os.path.getsize(path) - HEADER_SIZE
-    n_rows = total // (n_cols * 4)
+    n_rows = row_count(path, n_cols)
     return np.memmap(path, dtype="<f4", mode="r", offset=HEADER_SIZE, shape=(n_rows, n_cols))

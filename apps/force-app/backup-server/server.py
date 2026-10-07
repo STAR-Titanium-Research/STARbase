@@ -13,6 +13,8 @@ Endpoints:
   GET  /sessions              — list stored backup sessions
   GET  /sessions/{id}/raw     — download the raw D1RW file
   GET  /sessions/{id}/info    — session metadata (size, duration, state)
+  POST /sessions/{id}/mark-deleted — the recorder deleted its local copy; expire on retention
+  POST /sessions/{id}/unmark-deleted — the recorder restored it; undo the tombstone
   DELETE /sessions/{id}       — delete a backup session
   GET  /health                — server health + storage info
 """
@@ -20,7 +22,9 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import ntpath
 import os
+import posixpath
 import shutil
 import struct
 import threading
@@ -35,6 +39,13 @@ STORAGE = os.environ.get(
     "BACKUP_STORAGE", os.path.join(os.path.dirname(__file__), "backups")
 )
 RETENTION_HOURS = float(os.environ.get("BACKUP_RETENTION_HOURS", "12"))
+
+
+def _expires_at(updated_at: float) -> float:
+    """When the purge sweep removes a session last updated at `updated_at`."""
+    return updated_at + RETENTION_HOURS * 3600
+
+
 PURGE_INTERVAL = 300  # seconds between purge sweeps
 
 D1RW_MAGIC = b"D1RW"
@@ -42,10 +53,71 @@ D1RW_HEADER_SIZE = 32
 D1RW_HEADER_FMT = "<4sIIfd"
 
 
+def _is_safe_id(sid: str) -> bool:
+    """A bare directory name under BOTH path flavours (same rule as the recorder's
+    recovery.is_safe_id): no separators, drive letters (`:`), parent references, and the id must be
+    its own normalised basename. "" and "." name STORAGE itself, which DELETE /sessions/{sid} would
+    rmtree."""
+    if not isinstance(sid, str) or not sid or sid in (".", "..") or ".." in sid:
+        return False
+    if any(c in sid for c in "/\\:\0"):
+        return False
+    return all(
+        flavour.basename(sid) == sid and flavour.normpath(sid) == sid
+        for flavour in (posixpath, ntpath)
+    )
+
+
 def _session_dir(sid: str) -> str:
-    if "/" in sid or "\\" in sid or ".." in sid:
+    if not _is_safe_id(sid):
+        raise HTTPException(400, "invalid session id")
+    root = os.path.abspath(STORAGE)
+    path = os.path.abspath(os.path.join(root, sid))
+    try:
+        inside = (
+            os.path.commonpath([root, path]) == root and os.path.dirname(path) == root
+        )
+    except ValueError:  # different drives
+        inside = False
+    if not inside:
         raise HTTPException(400, "invalid session id")
     return os.path.join(STORAGE, sid)
+
+
+def _write_meta(d: str, meta: dict) -> None:
+    """Write a session's meta.json so a reader (or a crash) never sees half of it: temp file in the
+    same directory, then os.replace."""
+    path = os.path.join(d, "meta.json")
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(meta, f)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_meta_or_409(d: str, sid: str) -> dict | None:
+    """A session's meta.json as a dict, None if there is none, 409 if there is one we can't read.
+
+    The stored config (the per-channel gains a restore needs) lives in this file, so a caller that
+    rewrites it must not do so on the strength of a read that merely failed."""
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            meta = json.load(f)
+        if not isinstance(meta, dict):
+            raise ValueError("meta.json is not an object")
+        return meta
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        raise HTTPException(
+            409, f"session {sid} has an unreadable meta.json ({e}); left untouched"
+        ) from e
 
 
 def _session_info(sid: str) -> dict | None:
@@ -82,9 +154,26 @@ def _session_info(sid: str) -> dict | None:
     except (OSError, struct.error):
         pass
     info["raw_size_mb"] = round(info["raw_size_bytes"] / 1e6, 2)
-    state = info.get("meta", {}).get("state", "unknown")
+    meta = info.get("meta", {})
+    state = meta.get("state", "unknown")
     info["state"] = state
+    # When the purge sweep will remove this session — the same updated_at it measures from (or
+    # the directory mtime when meta has none), so a client can say "expires in Xh" without
+    # re-deriving the server's retention rule.
+    updated = meta.get("updated_at") or _mtime(d)
+    if updated:
+        info["updated_at"] = updated
+        info["expires_at"] = _expires_at(updated)
+    if meta.get("deleted_at"):
+        info["deleted_at"] = meta["deleted_at"]
     return info
+
+
+def _mtime(path: str) -> float:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
 
 
 # ---- Purge daemon ----
@@ -165,23 +254,45 @@ async def ingest_start(request: Request) -> dict:
     if not sid:
         raise HTTPException(400, "session_id required")
     d = _session_dir(sid)
-    os.makedirs(d, exist_ok=True)
-    # Write header bytes if provided
     header_hex = body.get("header_hex", "")
-    if header_hex:
-        raw_path = os.path.join(d, "raw.d1rw")
+    try:
+        header = bytes.fromhex(header_hex) if header_hex else b""
+    except (TypeError, ValueError):
+        raise HTTPException(400, "header_hex is not valid hex")
+    raw_path = os.path.join(d, "raw.d1rw")
+    meta_path = os.path.join(d, "meta.json")
+    # Idempotent: a retry (or a replay of the start) for a session we already hold must not
+    # truncate the raw file back to its header or clear a tombstone -- the streamed bytes are the
+    # only copy a lost local capture can be restored from. Tell the client where we are instead;
+    # it resumes from that offset.
+    if os.path.isfile(raw_path) and os.path.getsize(raw_path) > 0:
+        if not os.path.isfile(meta_path):
+            # Raw but no meta (a crash between the two writes): re-create the meta only.
+            os.makedirs(d, exist_ok=True)
+            _write_meta(d, _new_meta(sid, body))
+        return {
+            "ok": True,
+            "session_id": sid,
+            "existing": True,
+            "size": os.path.getsize(raw_path),
+        }
+    os.makedirs(d, exist_ok=True)
+    if header:
         with open(raw_path, "wb") as f:
-            f.write(bytes.fromhex(header_hex))
-    meta = {
+            f.write(header)
+    _write_meta(d, _new_meta(sid, body))
+    return {"ok": True, "session_id": sid, "size": len(header)}
+
+
+def _new_meta(sid: str, body: dict) -> dict:
+    now = time.time()
+    return {
         "session_id": sid,
         "state": "streaming",
-        "started_at": time.time(),
-        "updated_at": time.time(),
+        "started_at": now,
+        "updated_at": now,
         "config": body.get("config", {}),
     }
-    with open(os.path.join(d, "meta.json"), "w") as f:
-        json.dump(meta, f)
-    return {"ok": True, "session_id": sid}
 
 
 @app.post("/ingest/chunk")
@@ -235,8 +346,7 @@ async def ingest_chunk(request: Request) -> dict:
             meta = json.load(f)
         meta["updated_at"] = time.time()
         meta["chunks_received"] = meta.get("chunks_received", 0) + 1
-        with open(meta_path, "w") as f:
-            json.dump(meta, f)
+        _write_meta(d, meta)
     except (OSError, ValueError):
         pass
     return {"ok": True, "appended": len(chunk)}
@@ -255,11 +365,12 @@ async def ingest_finish(request: Request) -> dict:
     try:
         with open(meta_path) as f:
             meta = json.load(f)
-        meta["state"] = "complete"
+        # A late finish must not resurrect a tombstone into a healthy-looking "complete".
+        if meta.get("state") != "deleted":
+            meta["state"] = "complete"
         meta["finished_at"] = time.time()
         meta["updated_at"] = time.time()
-        with open(meta_path, "w") as f:
-            json.dump(meta, f)
+        _write_meta(d, meta)
     except (OSError, ValueError):
         pass
     return {"ok": True, "session_id": sid}
@@ -282,6 +393,7 @@ async def list_sessions() -> dict:
 
 @app.get("/sessions/{sid}/info")
 async def session_info(sid: str) -> dict:
+    _session_dir(sid)  # same id validation as every other /sessions/{sid} route
     info = _session_info(sid)
     if not info:
         raise HTTPException(404, "session not found")
@@ -297,6 +409,56 @@ async def session_raw(sid: str) -> FileResponse:
     return FileResponse(
         raw, media_type="application/octet-stream", filename=f"{sid}.d1raw"
     )
+
+
+@app.post("/sessions/{sid}/mark-deleted")
+async def session_mark_deleted(sid: str) -> dict:
+    """The recorder deleted (or discarded) its local copy of this session.
+
+    The backup is deliberately NOT removed here: a local delete is exactly the kind of mistake this
+    server exists to undo. It becomes a tombstone instead — state "deleted" plus deleted_at — and
+    updated_at is reset so the ordinary purge sweep removes it one full retention period from now.
+    Clients use the state to stop labelling a deleted capture as a healthy "complete" backup.
+    """
+    d = _session_dir(sid)
+    if not os.path.isdir(d):
+        raise HTTPException(404, "session not found")
+    # No meta at all: a bare tombstone loses nothing.
+    meta = _read_meta_or_409(d, sid) or {"session_id": sid}
+    # Idempotent: a repeat (a retry, or a delete followed by a discard) must not restart the
+    # retention clock, or a tombstone could be kept alive forever by repeated calls.
+    if meta.get("state") == "deleted":
+        base = meta.get("updated_at") or _mtime(d) or time.time()
+        return {"ok": True, "session_id": sid, "expires_at": _expires_at(base)}
+    now = time.time()
+    # Keep what the stream reached, so a restore can still say whether the copy was complete.
+    meta["state_before_delete"] = meta.get("state", "unknown")
+    meta["state"] = "deleted"
+    meta["deleted_at"] = now
+    meta["updated_at"] = now
+    _write_meta(d, meta)
+    return {"ok": True, "session_id": sid, "expires_at": _expires_at(now)}
+
+
+@app.post("/sessions/{sid}/unmark-deleted")
+async def session_unmark_deleted(sid: str) -> dict:
+    """The recorder restored this session from the backup, so it is no longer a deleted capture.
+
+    Undoes mark-deleted: state goes back to what the stream had reached (state_before_delete) and
+    the deleted markers are dropped. updated_at is left exactly as it is, so the retention clock
+    runs as it does for any other session and a restore can't extend a backup's life. Idempotent:
+    a session that is not tombstoned is left as it is.
+    """
+    d = _session_dir(sid)
+    if not os.path.isdir(d):
+        raise HTTPException(404, "session not found")
+    meta = _read_meta_or_409(d, sid)
+    if meta is None or meta.get("state") != "deleted":
+        return {"ok": True, "session_id": sid, "unmarked": False}
+    meta["state"] = meta.pop("state_before_delete", None) or "unknown"
+    meta.pop("deleted_at", None)
+    _write_meta(d, meta)
+    return {"ok": True, "session_id": sid, "unmarked": True, "state": meta["state"]}
 
 
 @app.delete("/sessions/{sid}")

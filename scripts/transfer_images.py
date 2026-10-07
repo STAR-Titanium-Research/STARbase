@@ -8,7 +8,7 @@ stores it in MinIO (so images are available offline). Then sets the entity's
 
 Usage:
   DIRECTUS_URL=http://localhost:8055 ADMIN_EMAIL=admin@example.com \\
-  ADMIN_PASSWORD=change_me_admin \\
+  ADMIN_PASSWORD="$DIRECTUS_ADMIN_PASSWORD" \\
       python scripts/transfer_images.py "<path to Sample_Data.xlsx>"
 """
 
@@ -22,7 +22,9 @@ import requests
 
 BASE = os.environ.get("DIRECTUS_URL", "http://localhost:8055")
 EMAIL = os.environ.get("ADMIN_EMAIL", "admin@example.com")
-PASSWORD = os.environ.get("ADMIN_PASSWORD", "change_me_admin")
+PASSWORD = os.environ.get("ADMIN_PASSWORD") or sys.exit(
+    "ERROR: ADMIN_PASSWORD is required (the Directus admin password; no default)"
+)
 
 
 def clean(v):

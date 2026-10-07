@@ -120,5 +120,10 @@ pick it up from there (see [force-app-operations.md](../../force-app-operations.
   the analysis row. See `uploadCutToDatabase()` in `record/workspace.ts`.
 - **Directus can't filter on keys inside JSON fields** (`recorded_metadata.capture_id`). Store
   anything you need to query in a real column.
+- **Time links the Plot dashboard's charts and maps.** Chart buckets and cache indices are
+  related only through time (`idxOfTime()` in `liveCache.ts`), and octree points carry no time, so
+  an octree pick works by position: the live cache's own path is rebuilt (`octreePathParams()`),
+  projected through the octree camera and matched. See `packages/force-plotting/src/cloudPick.ts`
+  and [the design](../../superpowers/specs/2026-10-04-frm-signal-linking-design.md).
 - Design documents for most features are in [`docs/superpowers/specs/`](../../superpowers/README.md),
   and the packaging decisions are in [ADR-0010](../../adr/0010-force-app-extraction-and-electron-packaging.md).

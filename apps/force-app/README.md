@@ -96,7 +96,7 @@ npm run test        -w @d1/force-plotting     # plotting / geometry unit tests
 npm run test        -w force-app-web           # SPA unit tests
 npm run test        -w force-app-desktop       # Electron main-process unit tests
 npm run test:e2e    -w force-app-desktop       # Playwright: drives the real built app
-cd apps/force-app/backend  && .venv\Scripts\pytest
+cd apps/force-app/backend  && .venv\Scripts\pytest             # add `-m slow` to run only the slow tests
 cd apps/force-app/backup-server && ..\backend\.venv\Scripts\pytest
 ```
 

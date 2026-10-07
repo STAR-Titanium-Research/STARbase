@@ -22,6 +22,10 @@ export interface SignalStats {
 	windowSec: [number, number];     // the crop window analysed
 	axes: Record<'Fx' | 'Fy' | 'Fz', AxisStats>;
 	rpm: { mean: number; std: number; min: number; max: number };
+	/** Per-sample |F| = sqrt(Fx²+Fy²+Fz²) over the window (cuttingMetrics.ts). */
+	resultant: { mean: number; peak: number };
+	/** The cache's own crop start (s): where the turning-spiral model puts the outer diameter. */
+	cacheCropStartSec: number;
 }
 
 // Noise-floor estimate via robust first differences: sigma ≈ 1.4826·median(|x[i+1]−x[i]|)/√2
@@ -77,13 +81,29 @@ function axisStats(a: Float32Array, i0: number, i1: number): AxisStats {
 	return { n, mean, rms, std, min: mn, max: mx, p2p: mx - mn, effBits, railLoPct, railHiPct, clipped };
 }
 
+/**
+ * The window the statistics panel should analyse. The dashboard's crop refs default to 0/0 when no
+ * crop is set, and a crop end of 0 can never be a real window, so `end` is what says "unset" (then
+ * the cache's own crop is used). A START of 0 is a real crop start: it used to be treated as unset
+ * by `cropStartSec || c.csSec` and silently replaced by the cache's start (review 3.11).
+ */
+export function resolveStatsWindow(
+	start: number | null | undefined, end: number | null | undefined, c: Pick<Cache, 'csSec' | 'ceSec'>,
+): [number, number] {
+	if (!end) return [c.csSec, c.ceSec];
+	return [start ?? c.csSec, end];
+}
+
 export function computeSignalStats(c: Cache, cropStartSec: number, cropEndSec: number): SignalStats {
 	const i0 = idxOfTime(c.t, cropStartSec);
 	let i1 = idxOfTime(c.t, cropEndSec);
 	if (c.t[i1] > cropEndSec && i1 > i0) i1--;
 	const win: [number, number] = [c.t[i0], c.t[i1]];
 	let rn = 0, rSum = 0, rSq = 0, rMin = Infinity, rMax = -Infinity;
+	let fSum = 0, fPeak = 0;
 	for (let i = i0; i <= i1; i++) {
+		const f = Math.sqrt(c.Fx[i] * c.Fx[i] + c.Fy[i] * c.Fy[i] + c.Fz[i] * c.Fz[i]);
+		fSum += f; if (f > fPeak) fPeak = f;
 		const v = c.rpm[i]; rn++; rSum += v; rSq += v * v;
 		if (v < rMin) rMin = v; if (v > rMax) rMax = v;
 	}
@@ -96,5 +116,7 @@ export function computeSignalStats(c: Cache, cropStartSec: number, cropEndSec: n
 			Fz: axisStats(c.Fz, i0, i1),
 		},
 		rpm: { mean: rMean, std: rn ? Math.sqrt(Math.max(0, rSq / rn - rMean * rMean)) : 0, min: rMin, max: rMax },
+		resultant: { mean: rn ? fSum / rn : 0, peak: fPeak },
+		cacheCropStartSec: c.csSec,
 	};
 }

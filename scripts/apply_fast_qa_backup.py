@@ -12,6 +12,7 @@ columns the machine data left NULL (coshh_ref, ptc_top/bot, mass, mould, outcome
 The backup table is never modified, so unmatched QA stays available for later reconciliation.
 
 Usage: DATABASE_URL=… python scripts/apply_fast_qa_backup.py [--dry-run]
+       DATABASE_URL=… python scripts/apply_fast_qa_backup.py --revert [--dry-run]
 """
 
 from __future__ import annotations
@@ -74,6 +75,21 @@ WHERE process_category='sintering' AND source_system IN ('fast_25','fast_250')
 """
 
 
+def revert(conn, *, dry_run: bool) -> int:
+    """Null the sheet-written non-QA columns; with dry_run, report the count and roll back."""
+    cur = conn.cursor()
+    cur.execute(REVERT)
+    n = cur.rowcount
+    if dry_run:
+        conn.rollback()
+        print(f"[dry-run] would revert sheet-written non-QA columns on {n} operations")
+    else:
+        conn.commit()
+        print(f"reverted sheet-written non-QA columns on {n} operations")
+    cur.close()
+    return n
+
+
 def main() -> None:
     dry = "--dry-run" in sys.argv
     dsn = os.environ.get("DATABASE_URL") or sys.exit("ERROR: DATABASE_URL required")
@@ -81,10 +97,8 @@ def main() -> None:
     cur = conn.cursor()
 
     if "--revert" in sys.argv:
-        cur.execute(REVERT)
-        print(f"reverted sheet-written non-QA columns on {cur.rowcount} operations")
-        conn.commit()
         cur.close()
+        revert(conn, dry_run=dry)
         conn.close()
         return
 

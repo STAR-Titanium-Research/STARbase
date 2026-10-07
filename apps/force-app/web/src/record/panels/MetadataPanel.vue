@@ -2,7 +2,7 @@
 // Metadata for the cut. Sample/Operator/Machine are Directus-backed typeaheads (linked as m2o on
 // the run write-back); the rest ride in recorded_metadata. Stamped into the .mat + summary too.
 import { computed, ref } from 'vue';
-import { useWorkspace } from '../workspace';
+import { composeCutId, useWorkspace } from '../workspace';
 import LookupField from './LookupField.vue';
 const w = useWorkspace();
 const showAdvanced = ref(false);
@@ -13,11 +13,7 @@ const showAdvanced = ref(false);
 const cutId = computed(() => {
 	const typed = w.meta.operation?.trim();
 	if (typed) return typed;
-	const code = (w.link.sampleLabel || w.meta.sample_code || w.meta.sample_name || '').trim();
-	const type = (w.meta.op_type || '').trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 2);
-	const seq = String(w.machining.operation_sequence ?? '').trim();
-	const suffix = `${type}${seq}`;
-	return [code, suffix].filter(Boolean).join('-');
+	return composeCutId(w.link, w.meta, w.machining);
 });
 const cutIdFromForm = computed(() => cutId.value && !w.meta.operation?.trim());
 function useCutId() { if (cutId.value) w.meta.operation = cutId.value; }

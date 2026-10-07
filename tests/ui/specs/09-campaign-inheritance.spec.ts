@@ -1,6 +1,6 @@
 import { test, expect } from '../fixtures';
 import { request, type APIRequestContext } from '@playwright/test';
-import { gotoCreateForm, selectM2O, fieldByLabel } from '../helpers';
+import { gotoCreateForm, selectM2O, fieldByLabel, requireEnv } from '../helpers';
 
 /**
  * Campaigns group operations (machining trials) / test sessions (testing campaigns)
@@ -10,7 +10,7 @@ import { gotoCreateForm, selectM2O, fieldByLabel } from '../helpers';
  */
 const BASE = process.env.D1_BASE_URL || 'http://localhost:8055';
 const EMAIL = process.env.D1_ADMIN_EMAIL || 'admin@example.com';
-const PASSWORD = process.env.D1_ADMIN_PASSWORD || 'change_me_admin';
+const PASSWORD = requireEnv('D1_ADMIN_PASSWORD');
 
 let api: APIRequestContext;
 let token: string;

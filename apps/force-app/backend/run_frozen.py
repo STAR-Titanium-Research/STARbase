@@ -15,7 +15,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8200)
     args = parser.parse_args()
-    uvicorn.run("app.main:app", host="127.0.0.1", port=args.port, log_level="info")
+    # access_log=False (#106): uvicorn writes one stdout line per request, and nothing ever read
+    # them — they never reached backend.log either (uvicorn.access does not propagate to the root
+    # handlers). On a pipe that a parent fails to drain, those writes eventually block the event
+    # loop and hang every endpoint. The sidecar drains stdout now too; this removes the flood.
+    uvicorn.run(
+        "app.main:app",
+        host="127.0.0.1",
+        port=args.port,
+        log_level="info",
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

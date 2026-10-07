@@ -47,7 +47,7 @@ const MACHINING_SUBTYPES = [
 </template>
 
 <style scoped>
-.machine-op { margin-bottom: 12px; }
+.machine-op { margin: 0; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 .row2 :deep(.lookup) { margin-bottom: 8px; min-width: 0; }
 .op-type { display: block; font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }

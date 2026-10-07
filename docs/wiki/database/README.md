@@ -17,6 +17,7 @@ database with **Directus 11** as the web interface and API.
 | Page | Read it when you want to… |
 |---|---|
 | [Getting started](getting-started.md) | sign in and find your way around Directus |
+| [Explorer pages](explorer-pages.md) | read projects, campaigns, samples, operations and tests as formatted pages, and edit them from the page |
 | [The data model](data-model.md) | understand what the collections are and how they connect |
 | [Samples](samples.md) | register, find, prepare and trace a sample |
 | [Operations, tests, campaigns and projects](operations-and-tests.md) | log a manufacturing step or a test, and group work under campaigns and projects |

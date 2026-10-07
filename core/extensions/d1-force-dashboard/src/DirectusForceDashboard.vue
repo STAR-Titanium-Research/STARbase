@@ -5,6 +5,7 @@
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
 import { ForceDashboard, setForceHost } from '@d1/force-plotting';
+import { recordRoute } from '@d1/ui';
 
 const api = useApi();
 const router = useRouter();
@@ -19,7 +20,7 @@ setForceHost({
 	octreeUrl: `${window.location.origin}/octrees`,
 	authHeaders: () => ({}),
 	fetchCredentials: 'include',
-	openRecord: (collection, id) => { router.push(`/content/${collection}/${id}`); },
+	openRecord: (collection, id) => { router.push(recordRoute(collection, id)); },
 	downloadAsset: async (fileId) => {
 		const a = document.createElement('a');
 		a.href = `/assets/${fileId}?download`;

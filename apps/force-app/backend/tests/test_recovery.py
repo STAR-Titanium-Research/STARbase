@@ -104,6 +104,25 @@ def test_scan_incomplete_excludes_the_live_session(tmp_path):
     assert len(scan_incomplete(str(tmp_path))) == 1
 
 
+def test_scan_incomplete_hides_every_in_flight_capture(tmp_path):
+    # A restore finalizing a multi-GB raw (or a recover) has raw.d1raw and no summary.json for a
+    # long while; listing it as crashed shows a false Record banner / Doctor warning.
+    from app import recovery
+
+    ids = {"20240101-120000-rec": "recovering", "20240101-120000-dis": "discarding"}
+    for sid in ids:
+        _make_raw(str(tmp_path / sid), n_rows=200)
+    _make_raw(str(tmp_path / "20240101-120000-idle"), n_rows=200)
+    recovery._recovering.add("20240101-120000-rec")
+    recovery._discarding.add("20240101-120000-dis")
+    try:
+        assert [s["id"] for s in scan_incomplete(str(tmp_path))] == ["20240101-120000-idle"]
+    finally:
+        recovery._recovering.discard("20240101-120000-rec")
+        recovery._discarding.discard("20240101-120000-dis")
+    assert len(scan_incomplete(str(tmp_path))) == 3  # visible again once the jobs are done
+
+
 def test_scan_incomplete_skips_finalized(tmp_path):
     sid = "20240101-120000-fin001"
     d = str(tmp_path / sid)

@@ -21,7 +21,7 @@ Usage
     make index-archive
 
     # On the host, against the mapped drive and the local DB:
-    DATABASE_URL="postgres://d1:change_me@localhost:5432/d1_database" \
+    DATABASE_URL="postgres://d1:$POSTGRES_PASSWORD@localhost:5432/d1_database" \
         ARCHIVE_ROOT='Z:\\star_group1' python scripts/index_archive.py
 
     # Preview only (no DB writes):
@@ -142,15 +142,101 @@ BATCH = 1000
 # Light fingerprint: size + sha256 of the first and last 64 KB. Survives a
 # move/rename (content unchanged) while reading at most 128 KB per file — a
 # ~1000x cheaper read than a full hash for big .mat/.h5/.tif files. READ-ONLY
-# (opened 'rb', never written). Junctions of moved files are auto-re-pointed.
+# (opened 'rb', never written). References to a moved file are auto-re-pointed,
+# but only when the match is unambiguous (see is_confident_move): a head/tail
+# fingerprint cannot tell apart two zero-padded or otherwise near-identical files.
 _FP_CHUNK = 64 * 1024
 
-# Junction tables whose directus_files_id is re-pointed when a file moves.
+# Junction tables (table, parent column). A re-point that would duplicate an
+# existing (parent, new file) link drops the old link instead of failing.
 _JUNCTIONS = [
     ("operation_data_files", "operation_id"),
     ("sample_data_files", "sample_id"),
     ("session_data_files", "session_id"),
 ]
+
+_PG_UNIQUE_VIOLATION = "23505"
+
+_FILE_FK_SQL = """
+SELECT c.conrelid::regclass::text,
+       quote_ident(a.attname),
+       array_length(c.conkey, 1)
+FROM pg_constraint c
+JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+WHERE c.contype = 'f'
+  AND c.confrelid = 'directus_files'::regclass
+  AND c.conrelid <> 'directus_files'::regclass
+ORDER BY 1, 2
+"""
+
+
+def find_file_fk_columns(cur) -> list[tuple[str, str, int]]:
+    """Every (table, column, n_columns) holding a FK to directus_files, from the catalog.
+
+    Discovered rather than hard-coded: machining_force_analysis (ON DELETE CASCADE),
+    archive_metadata_edits, fast_run_data, tools/equipment images and anything a
+    later migration adds all reference directus_files.
+    """
+    cur.execute(_FILE_FK_SQL)
+    return [(t, c, int(n)) for t, c, n in cur.fetchall()]
+
+
+def is_confident_move(
+    old_name: str | None,
+    new_rel: str,
+    n_new_matches: int,
+    n_old_candidates: int,
+) -> bool:
+    """Decide whether a fingerprint match is safe to auto-re-point.
+
+    The fingerprint is size + head/tail 64 KB, so it is not unique for padded or
+    near-identical files. Cheap guards: exactly one new file carries the fingerprint,
+    exactly one vanished row carries it, and the file name is unchanged (a move to
+    another folder, not a rename). Anything else is flagged missing for a human.
+    """
+    if n_new_matches != 1 or n_old_candidates != 1:
+        return False
+    return bool(old_name) and old_name == PurePosixPath(new_rel).name
+
+
+def repoint_file_references(
+    cur, fks: list[tuple[str, str, int]], old_id: str, new_id: str
+) -> int:
+    """Re-point every FK to directus_files from old_id to new_id; return the references left.
+
+    Each UPDATE runs in a savepoint: a unique violation (the new file already has its
+    own force-analysis row, say) leaves that reference on the old row rather than
+    aborting the sweep. Multi-column FKs are never rewritten, only counted.
+    """
+    junction_parent = dict(_JUNCTIONS)
+    remaining = 0
+    for table, col, ncols in fks:
+        if ncols == 1:
+            parent = junction_parent.get(table)
+            if parent:
+                cur.execute(
+                    f"DELETE FROM {table} d WHERE d.{col}=%s AND EXISTS "
+                    f"(SELECT 1 FROM {table} e WHERE e.{parent}=d.{parent} AND e.{col}=%s)",
+                    (old_id, new_id),
+                )
+            cur.execute("SAVEPOINT repoint_fk")
+            try:
+                cur.execute(
+                    f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_id, old_id)
+                )
+            except Exception as exc:
+                if getattr(exc, "pgcode", None) != _PG_UNIQUE_VIOLATION:
+                    raise
+                cur.execute("ROLLBACK TO SAVEPOINT repoint_fk")
+                log.warning(
+                    "%s.%s: new file already linked; keeping the reference on the old row",
+                    table,
+                    col,
+                )
+            cur.execute("RELEASE SAVEPOINT repoint_fk")
+        cur.execute(f"SELECT count(*) FROM {table} WHERE {col}=%s", (old_id,))
+        remaining += cur.fetchone()[0]
+    return remaining
 
 
 def fingerprint(path: str, size: int) -> str | None:
@@ -212,7 +298,7 @@ def main() -> int:
         "--fingerprint",
         action="store_true",
         help="compute a light head/tail fingerprint per file so links survive "
-        "moves/renames (reads up to 128 KB/file; cached across runs).",
+        "moves to another folder (same file name; reads up to 128 KB/file; cached across runs).",
     )
     ap.add_argument(
         "--fp-workers",
@@ -252,9 +338,9 @@ def main() -> int:
     # Folders we've already ensured this run (memoised) → avoid redundant upserts.
     seen_folders: set[str] = set()
     seen_ids: set[str] = set()  # every file id touched this run (for missing sweep)
-    seen_fp: dict[
-        str, tuple
-    ] = {}  # fingerprint -> (file id, rel path), for move detection
+    # fingerprint -> [(file id, rel path), ...] for move detection; more than one
+    # entry means identical-looking files, which are never auto-matched.
+    seen_fp: dict[str, list[tuple]] = {}
     pending: list[tuple] = []  # files awaiting (parallel) fingerprint + insert
     folder_rows: list[tuple] = []
     file_rows: list[tuple] = []
@@ -367,7 +453,7 @@ def main() -> int:
             ) = e
             fp = fps.get(i)
             if fp:
-                seen_fp.setdefault(fp, (fid_, rel_))
+                seen_fp.setdefault(fp, []).append((fid_, rel_))
             meta = {
                 "archive_path": rel_,
                 "source": "uosfstore/shared/star_group1",
@@ -528,35 +614,52 @@ def main() -> int:
 
             # Candidates = star rows NOT seen this run (moved, renamed, or deleted).
             cur.execute(
-                "SELECT df.id::text, df.metadata::jsonb->>'fingerprint' FROM directus_files df "
+                "SELECT df.id::text, df.metadata::jsonb->>'fingerprint', df.filename_download "
+                "FROM directus_files df "
                 "WHERE df.storage=%s AND NOT EXISTS (SELECT 1 FROM _seen_ids s WHERE s.id = df.id)",
                 (storage,),
             )
             candidates = cur.fetchall()
+            n_old_by_fp: dict[str, int] = {}
+            for _oid, fp, _nm in candidates:
+                if fp:
+                    n_old_by_fp[fp] = n_old_by_fp.get(fp, 0) + 1
+            fks = find_file_fk_columns(cur)
 
             missing_ids = []
-            for old_id, fp in candidates:
-                match = seen_fp.get(fp) if fp else None
-                if match and match[0] != old_id:
-                    # Same content re-appeared elsewhere → it MOVED. Re-point every
-                    # sample/operation/session link to the new file, then drop the
-                    # now-redundant old row (its links are already moved, so the FK
-                    # cascade removes nothing).
-                    new_id, _new_path = match
-                    for tbl, parent in _JUNCTIONS:
-                        cur.execute(
-                            f"DELETE FROM {tbl} d WHERE d.directus_files_id=%s AND EXISTS "
-                            f"(SELECT 1 FROM {tbl} e WHERE e.{parent}=d.{parent} "
-                            f"AND e.directus_files_id=%s)",
-                            (old_id, new_id),
+            n_ambiguous = 0
+            for old_id, fp, old_name in candidates:
+                matches = seen_fp.get(fp, []) if fp else []
+                if matches and is_confident_move(
+                    old_name, matches[0][1], len(matches), n_old_by_fp[fp]
+                ):
+                    # Same content, same name, unique on both sides → it MOVED.
+                    # Re-point every reference (all FKs to directus_files, from the
+                    # catalog), then delete the old row only if nothing references it.
+                    new_id, _new_path = matches[0]
+                    if new_id == old_id:
+                        continue
+                    left = repoint_file_references(cur, fks, old_id, new_id)
+                    if left == 0:
+                        cur.execute("DELETE FROM directus_files WHERE id=%s", (old_id,))
+                        n_moved += 1
+                    else:
+                        log.warning(
+                            "moved file %s still has %d reference(s); keeping the old row, "
+                            "marked missing",
+                            old_id,
+                            left,
                         )
-                        cur.execute(
-                            f"UPDATE {tbl} SET directus_files_id=%s WHERE directus_files_id=%s",
-                            (new_id, old_id),
-                        )
-                    cur.execute("DELETE FROM directus_files WHERE id=%s", (old_id,))
-                    n_moved += 1
+                        missing_ids.append(old_id)
                 else:
+                    if matches:
+                        n_ambiguous += 1
+                        log.warning(
+                            "not auto-re-pointing %s: fingerprint match is ambiguous or "
+                            "the file name changed (%d new candidate(s))",
+                            old_id,
+                            len(matches),
+                        )
                     missing_ids.append(old_id)
 
             newly_missing = 0
@@ -581,9 +684,11 @@ def main() -> int:
             total_missing = cur.fetchone()[0]
         conn.commit()
         log.info(
-            "sweep: %d moved (links re-pointed), %d newly missing, %d total missing (kept, not deleted).",
+            "sweep: %d moved (links re-pointed), %d newly missing "
+            "(%d ambiguous matches left for a human), %d total missing (kept, not deleted).",
             n_moved,
             newly_missing,
+            n_ambiguous,
             total_missing,
         )
 

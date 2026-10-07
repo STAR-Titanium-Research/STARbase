@@ -23,7 +23,12 @@ import { COLORMAPS } from './liveCloud';
 export interface ColorScale {
 	colormap: string;
 	steps: number;                          // ramp quantisation, 2..256
-	satMin: number; satMax: number;         // saturation range -> ramp endpoints
+	satMin: number; satMax: number;         // saturation range -> ramp endpoints (AFTER shaping)
+	// The saturation range BEFORE symmetrical / always-show-zero shaping: what the user or the
+	// auto-range chose. satMin/satMax are always derived from it, so unticking a shaping param gives
+	// the original range back instead of the widened one (#78). Optional: a scale built without
+	// them treats its satMin/satMax as the base.
+	baseMin?: number; baseMax?: number;
 	dispMin: number; dispMax: number;       // displayed range -> filter window
 	greyOutOfRange: boolean;                // true = grey out-of-displayed-range points, false = hide
 	alwaysShowZero: boolean;
@@ -56,7 +61,7 @@ export function defaultScale(lo: number, hi: number): ColorScale {
 	if (!(hi > lo)) hi = lo + 1;   // degenerate guard, mirrors axisAutoLimits' `if (!(hi > lo))`
 	return {
 		colormap: 'viridis', steps: 256,
-		satMin: lo, satMax: hi,
+		satMin: lo, satMax: hi, baseMin: lo, baseMax: hi,
 		// Deliberately NOT [lo, hi]: satMin/satMax are commonly a PERCENTILE range (e.g.
 		// axisAutoLimits' 1st/99th), so ~2% of real points sit outside them by construction. If
 		// the displayed range defaulted to the saturation range, greyOutOfRange's default (true,
@@ -70,10 +75,39 @@ export function defaultScale(lo: number, hi: number): ColorScale {
 	};
 }
 
+// The saturation range after the shaping params: symmetrical mirrors it about 0 on the larger
+// magnitude, always-show-zero widens it to include 0.
+function shapeRange(lo: number, hi: number, symmetrical: boolean, alwaysShowZero: boolean): [number, number] {
+	if (symmetrical) {
+		const M = Math.max(Math.abs(lo), Math.abs(hi), 1e-9);
+		lo = -M; hi = M;
+	}
+	if (alwaysShowZero) {
+		if (lo > 0) lo = 0;
+		if (hi < 0) hi = 0;
+	}
+	return [lo, hi];
+}
+
+// Is [satMin, satMax] what some combination of the shaping params makes of [baseMin, baseMax]?
+// Then it is derived and the base is still authoritative; if not, something wrote satMin/satMax
+// directly (a Sat field, a host re-seed that spread the scale) and that value is the new base.
+function isDerivedFrom(satMin: number, satMax: number, baseMin: number, baseMax: number): boolean {
+	const tol = 1e-9 * Math.max(1, Math.abs(satMin), Math.abs(satMax), Math.abs(baseMin), Math.abs(baseMax));
+	for (const sym of [false, true]) for (const zero of [false, true]) {
+		const [lo, hi] = shapeRange(baseMin, baseMax, sym, zero);
+		if (Math.abs(lo - satMin) <= tol && Math.abs(hi - satMax) <= tol) return true;
+	}
+	return false;
+}
+
 // Re-derives satMin/satMax/dispMin/dispMax from the current scale's params. Pure and idempotent --
 // applying it twice in a row is a no-op. `dataLo`/`dataHi` are used only to repair a degenerate
 // saturation range (e.g. a freshly defaulted scale, or NaN survivors), never to auto-widen a range
 // the user has already set.
+//
+// Shaping is applied to the unshaped base range (baseMin/baseMax), never to an already-shaped
+// satMin/satMax, so it is reversible: untick symmetrical and the range goes back to what it was.
 export function applyParams(s: ColorScale, dataLo: number, dataHi: number): ColorScale {
 	// A cleared <input v-model.number> yields '' (not NaN), which `>` would silently coerce to 0;
 	// normalise anything that isn't a finite number so it takes the repair paths below instead.
@@ -90,17 +124,13 @@ export function applyParams(s: ColorScale, dataLo: number, dataHi: number): Colo
 		satMin = dataLo; satMax = dataHi;
 		if (!(satMax > satMin)) { satMin = 0; satMax = 1; }
 	}
-	if (s.symmetrical) {
-		const M = Math.max(Math.abs(satMin), Math.abs(satMax), 1e-9);
-		satMin = -M; satMax = M;
-	}
-	if (s.alwaysShowZero) {
-		if (satMin > 0) satMin = 0;
-		if (satMax < 0) satMax = 0;
-	}
+	// Which range the shaping starts from.
+	let baseMin = fin(s.baseMin), baseMax = fin(s.baseMax);
+	if (!(baseMax > baseMin) || !isDerivedFrom(satMin, satMax, baseMin, baseMax)) { baseMin = satMin; baseMax = satMax; }
+	[satMin, satMax] = shapeRange(baseMin, baseMax, s.symmetrical, s.alwaysShowZero);
 	if (!(dispMax > dispMin)) { dispMin = satMin; dispMax = satMax; }
 
-	return { ...s, satMin, satMax, dispMin, dispMax };
+	return { ...s, satMin, satMax, baseMin, baseMax, dispMin, dispMax };
 }
 
 // Raw value -> colour-ramp position (0..1). Symlog-aware: under logScale this is the nonlinear
@@ -182,7 +212,7 @@ export function colorizeValues(vals: ArrayLike<number>, count: number, s: ColorS
 
 // Re-seed the saturation range from an auto-detected [lo, hi], keeping every other setting.
 export function withAutoRange(s: ColorScale, lo: number, hi: number): ColorScale {
-	return applyParams({ ...s, satMin: lo, satMax: hi }, lo, hi);
+	return applyParams({ ...s, satMin: lo, satMax: hi, baseMin: lo, baseMax: hi }, lo, hi);
 }
 
 // Displayed-range filter off -- for when the data it was set against changes.

@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "directus-extension build",
-    "dev": "directus-extension build --watch"
+    "dev": "directus-extension build --watch",
+    "test": "node --import ./src/test-register.mjs --test src/index.test.mjs src/label.test.mjs"
   },
   "keywords": [
     "directus",

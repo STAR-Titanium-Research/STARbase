@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-trace",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "GET /d1-trace/sample/:id returns a sample's lineage and event timeline (stock lots, ancestors, operations, tests, descendants), filtered to the records the caller may read.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

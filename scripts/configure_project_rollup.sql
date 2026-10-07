@@ -1,5 +1,7 @@
 -- Surface project_rollup as a read-only Directus collection + an O2M panel on projects.
 -- Idempotent.
+BEGIN;
+
 INSERT INTO directus_collections (collection, icon, color, display_template, hidden, translations)
 VALUES ('project_rollup','account_tree','#795548','{{kind}}: {{code}}',true,
         '[{"language":"en-US","translation":"Project Rollup","singular":"Rollup Item","plural":"Project Rollup"}]')
@@ -22,3 +24,5 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 DELETE FROM directus_relations WHERE many_collection='project_rollup' AND many_field='project_id';
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
 ('project_rollup','project_id','projects','rollup','nullify');
+
+COMMIT;

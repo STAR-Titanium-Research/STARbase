@@ -7,7 +7,10 @@
 import { describe, expect, it } from 'vitest';
 import { buildPath, type TurningSpiralParams } from './path';
 import { idxOfTime, type Cache } from './liveCache';
-import { buildStaticAttributes, computeSpiralVertexJS, type SpiralUniformParams } from './frmCloudShader';
+import {
+	buildStaticAttributes, computeSpiralVertexJS, phase0Samples, spiralPlaceInto, spiralPositionInto, spiralRadiusInto, spiralUniformValues,
+	type SpiralPos, type SpiralUniformParams,
+} from './frmCloudShader';
 
 function makeCache(): Cache {
 	const N = 2000;
@@ -178,5 +181,79 @@ describe('frmCloudShader: buildStaticAttributes under stride > 1 (GPU-buffer pha
 		expect(exact).not.toBeNull();
 		const gpuCount = countVisibleInStaticBuffer(donut, cropStart, 1e9, 10);
 		expect(Math.abs(gpuCount - exact!.count)).toBeLessThanOrEqual(1);
+	});
+});
+
+// The allocation-free position function is what picks run; computeSpiralVertexJS wraps it, so this
+// pins the two together across all three speed modes and the donut cut-out.
+describe('frmCloudShader: spiralPositionInto matches computeSpiralVertexJS', () => {
+	const modes: SpiralUniformParams[] = [
+		{ feed: 0.05, diam: 80, innerDiam: 0, speedMode: 'measured', rpm: 1200, vc: 0, timeScale: 1, ppr: 1, tCs: 5, revsCs: cache.revs[500] },
+		{ feed: 0.05, diam: 80, innerDiam: 30, speedMode: 'rpm', rpm: 1200, vc: 0, timeScale: 1, ppr: 1, tCs: 5, revsCs: 0 },
+		{ feed: 0.05, diam: 80, innerDiam: 30, speedMode: 'vc', rpm: 0, vc: 100, timeScale: 2, ppr: 1, tCs: 5, revsCs: 0 },
+	];
+	for (const p of modes) {
+		it(`${p.speedMode}: same x, y, rho and visibility at every sample, one reused out object`, () => {
+			const u = spiralUniformValues(p);
+			const out: SpiralPos = { x: 0, y: 0, rho: 0, visible: false };
+			for (let i = 0; i < cache.N; i += 7) {
+				const ref = computeSpiralVertexJS(cache.t[i], cache.revs[i], p, 5, 15);
+				spiralPositionInto(u, cache.t[i], cache.revs[i], 5, 15, out);
+				expect(out).toEqual(ref);
+			}
+		});
+		it(`${p.speedMode}: the radius step alone gives rho and visibility, and the place step finishes x, y`, () => {
+			const u = spiralUniformValues(p);
+			const whole: SpiralPos = { x: 0, y: 0, rho: 0, visible: false };
+			const split: SpiralPos = { x: 123, y: 456, rho: 0, visible: false };
+			for (let i = 0; i < cache.N; i += 7) {
+				spiralPositionInto(u, cache.t[i], cache.revs[i], 5, 15, whole);
+				split.x = 123; split.y = 456;
+				const r = spiralRadiusInto(u, cache.t[i], cache.revs[i], 5, 15, split);
+				expect(split.rho).toBe(whole.rho);
+				expect(split.visible).toBe(whole.visible);
+				expect([split.x, split.y]).toEqual([123, 456]);   // no trig yet
+				spiralPlaceInto(r, split);
+				expect(split).toEqual(whole);
+			}
+		});
+	}
+});
+
+// The pick replays the GPU's sampling: phase-0 indices (buildStaticAttributes) inside the crop's
+// time window. Brute force over the static buffer is the reference.
+describe('frmCloudShader: phase0Samples', () => {
+	function brute(cropStart: number, cropEnd: number, stride: number): number[] {
+		const { aT, count } = buildStaticAttributes(cache, 'Fx', stride);
+		const out: number[] = [];
+		for (let k = 0; k < count; k++) if (aT[k] >= cropStart && aT[k] <= cropEnd) out.push(k * stride);
+		return out;
+	}
+	function viaRange(cropStart: number, cropEnd: number, stride: number): number[] {
+		const s = phase0Samples(cache, cropStart, cropEnd, stride);
+		return Array.from({ length: s.n }, (_, j) => (s.k0 + j) * s.stride);
+	}
+	for (const stride of [1, 2, 5, 10, 25]) {
+		it(`stride=${stride}: matches the static buffer's crop test, off-phase crop`, () => {
+			const a = cache.t[503], b = cache.t[1503];
+			expect(viaRange(a, b, stride)).toEqual(brute(a, b, stride));
+		});
+	}
+	it('keeps both crop edges inclusive and handles times between samples', () => {
+		expect(viaRange(cache.t[10], cache.t[20], 1)).toEqual(brute(cache.t[10], cache.t[20], 1));
+		const mid0 = (cache.t[10] + cache.t[11]) / 2, mid1 = (cache.t[20] + cache.t[21]) / 2;
+		expect(viaRange(mid0, mid1, 1)).toEqual(brute(mid0, mid1, 1));
+		expect(viaRange(mid0, mid1, 1)[0]).toBe(11);
+	});
+	it('is empty for a window before, after, or between the samples, and for a reversed crop', () => {
+		expect(phase0Samples(cache, -5, -1, 1).n).toBe(0);
+		expect(phase0Samples(cache, 1e6, 2e6, 1).n).toBe(0);
+		expect(phase0Samples(cache, cache.t[10] + 0.001, cache.t[10] + 0.002, 1).n).toBe(0);
+		expect(phase0Samples(cache, 10, 5, 1).n).toBe(0);
+		expect(phase0Samples(cache, cache.t[11], cache.t[14], 5).n).toBe(0);   // no multiple of 5 in [11, 14]
+	});
+	it('runs to the last sample when the crop end is past the recording', () => {
+		const v = viaRange(cache.t[1990], 1e9, 1);
+		expect(v[v.length - 1]).toBe(cache.N - 1);
 	});
 });

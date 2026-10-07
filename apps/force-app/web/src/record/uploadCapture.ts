@@ -12,6 +12,7 @@ import { api } from '../directusClient';
 import { resolveMachiningMethodId } from './directusLookups';
 import { buildSeriesEnvelope, parseCache, type Cache } from '@d1/force-plotting';
 import { OFFLINE_SESSION_UPLOAD_MESSAGE, hasServerSession, resolveOwnerPersonId, syncerFields } from '../recorder';
+import { adoptExistingAnalysis, analysisAlreadyLinked, ensureOperation, needsBlobs, uploadProgress, type UploadProgress } from './uploadResume';
 
 export interface ColdUploadInfo {
 	captureId: string;
@@ -64,11 +65,24 @@ export function fetchCaptureBlobs(matUrl: string, cacheUrl: string, matWritten: 
 	]);
 }
 
-export function uploadCaptureFiles(captureId: string, matBlob: Blob | null, cacheBlob: Blob): Promise<[string | null, string]> {
-	return Promise.all([
-		matBlob ? uploadFile(matBlob, `${captureId}.mat`) : Promise.resolve(null),
-		uploadFile(cacheBlob, `${captureId}_live_cache.bin`),
-	]);
+// Uploads what `progress` does not already hold, recording each file's id as soon as it lands: if
+// one of the two fails the other is still waited for and remembered, so a retry uploads only the
+// missing one instead of both again.
+export async function uploadCaptureFiles(
+	captureId: string, matBlob: Blob | null, cacheBlob: Blob, progress: UploadProgress = {},
+): Promise<[string | null, string]> {
+	const mat = progress.matFileId !== undefined
+		? Promise.resolve(progress.matFileId)
+		: matBlob
+			? uploadFile(matBlob, `${captureId}.mat`).then((id) => (progress.matFileId = id))
+			: Promise.resolve((progress.matFileId = null));
+	const cache = progress.cacheFileId !== undefined
+		? Promise.resolve(progress.cacheFileId)
+		: uploadFile(cacheBlob, `${captureId}_live_cache.bin`).then((id) => (progress.cacheFileId = id));
+	const [m, c] = await Promise.allSettled([mat, cache]);
+	if (m.status === 'rejected') throw m.reason;
+	if (c.status === 'rejected') throw c.reason;
+	return [m.value, c.value];
 }
 
 export async function uploadCaptureColdStart(info: ColdUploadInfo): Promise<string> {
@@ -120,35 +134,65 @@ export async function uploadCaptureColdStart(info: ColdUploadInfo): Promise<stri
 	};
 	payload.method_id = await resolveMachiningMethodId(extra.op_type).catch(() => null);
 
+	// Resume (review 2.2): what an earlier attempt for this capture already finished is not redone.
+	const progress = uploadProgress(info.captureId);
+	if (progress.analysisDone && progress.opId) return progress.opId;
+	const matWritten = info.matWritten !== false;
+
 	// Local blob reads don't depend on the Directus insert, so run them alongside it; uploads still
 	// wait for it, so a failed insert never leaves orphaned files -- and cancels the reads.
 	const blobReads = new AbortController();
-	const blobs = fetchCaptureBlobs(info.matUrl, info.cacheUrl, info.matWritten !== false, blobReads.signal);
-	blobs.catch(() => {});   // surfaced by the await below, not as an unhandled rejection
+	let blobs = needsBlobs(progress, matWritten)
+		? fetchCaptureBlobs(info.matUrl, info.cacheUrl, matWritten, blobReads.signal)
+		: null;
+	blobs?.catch(() => {});   // surfaced by the await below, not as an unhandled rejection
 	let opId: string;
+	let existing: boolean;
 	try {
-		let res;
-		try {
-			res = await api.post('/items/manufacturing_operations', payload);
-		} catch (e: any) {
-			throw new Error(`logging the run failed - ${directusErrorMessage(e)}`);
-		}
-		opId = res.data?.data?.operation_id;
-		if (!opId) throw new Error('run was logged but the server did not return its operation_id - cannot link the capture');
+		// Always look for an existing row first: this path runs for a capture that is not known to
+		// be uploaded, which includes one whose earlier upload died after the insert.
+		({ opId, existing } = await ensureOperation(info.captureId, progress, async () => {
+			let res;
+			try {
+				res = await api.post('/items/manufacturing_operations', payload);
+			} catch (e: any) {
+				throw new Error(`logging the run failed - ${directusErrorMessage(e)}`);
+			}
+			const id = res.data?.data?.operation_id;
+			if (!id) throw new Error('run was logged but the server did not return its operation_id - cannot link the capture');
+			return id;
+		}, true));
 	} catch (e) {
 		blobReads.abort();
 		throw e;
 	}
+	// An existing analysis row may already link some files: don't upload those again.
+	await adoptExistingAnalysis(progress, opId, existing);
+	if (blobs && !needsBlobs(progress, matWritten)) { blobReads.abort(); blobs = null; }
 
-	const [matBlob, cacheBlob] = await blobs;
-	const [matFileId, cacheFileId] = await uploadCaptureFiles(info.captureId, matBlob, cacheBlob);
+	let cacheBlob: Blob | null = null;
+	if (blobs) {
+		const [matBlob, cb] = await blobs;
+		cacheBlob = cb;
+		await uploadCaptureFiles(info.captureId, matBlob, cb, progress);
+	}
+	try {
+		// Completes an existing but partial analysis row (PATCH of the missing links), else false.
+		if (await analysisAlreadyLinked(progress)) return opId;
+	} catch (e: any) {
+		throw new Error(`linking the capture failed - ${directusErrorMessage(e)} (the run was logged as operation ${opId}, but its existing analysis record could not be completed)`);
+	}
+	const matFileId = progress.matFileId ?? null;
+	const cacheFileId = progress.cacheFileId!;
 
 	// Same fix as the live-session upload path (workspace.ts): the force/RPM charts on the Plot
 	// page read from `series` (a JSONB min/max envelope), not from live_cache_file — without this
 	// the row links up fine (peaks, FRM) but every chart renders "no data" forever.
 	let series: ReturnType<typeof buildSeriesEnvelope> | null = null;
 	try {
-		const cache = info.cache ?? parseCache(await cacheBlob.arrayBuffer());
+		// On a resume that skipped the file uploads there is no blob in hand: read the cache again.
+		const blob = cacheBlob ?? (info.cache ? null : await (await fetch(info.cacheUrl)).blob());
+		const cache = info.cache ?? parseCache(await blob!.arrayBuffer());
 		series = buildSeriesEnvelope(cache);
 	} catch { /* best-effort — a missing series just means blank charts, not a failed upload */ }
 
@@ -169,6 +213,7 @@ export async function uploadCaptureColdStart(info: ColdUploadInfo): Promise<stri
 			matlab_version: 'force-app-direct',
 			processed_at: new Date().toISOString(),
 		});
+		progress.analysisDone = true;
 	} catch (e: any) {
 		throw new Error(`linking the capture failed - ${directusErrorMessage(e)} (the run was logged as operation ${opId}, and both files uploaded, but the analysis record could not be created)`);
 	}

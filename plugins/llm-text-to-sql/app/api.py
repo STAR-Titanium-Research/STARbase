@@ -2,8 +2,10 @@
 
 Endpoints (all but /health require the X-Worker-Secret header):
   GET  /health             — liveness probe
-  POST /api/ask            — {question} -> {sql, columns, rows} (NL -> SQL -> data)
-  POST /api/chat           — {messages[]} -> {sql, columns, rows, chart} (multi-turn)
+  POST /api/ask            — {question} -> {sql, columns, rows, row_count, truncated}
+                             (NL -> SQL -> data)
+  POST /api/chat           — {messages[]} -> {sql, columns, rows, row_count,
+                             truncated, chart} (multi-turn)
   POST /api/search         — {query, limit?} -> semantically similar note rows
   POST /api/embed/backfill — (re)embed all note text into semantic_embeddings
 
@@ -19,7 +21,13 @@ from flask import Flask, jsonify, request
 
 from app.lib import charts, db, embeddings, ollama_client, schema_context
 from app.lib.security import check_secret
-from app.lib.sql_guard import DEFAULT_ROW_LIMIT, SqlGuardError, guard, message_only
+from app.lib.sql_guard import (
+    DEFAULT_ROW_LIMIT,
+    MAX_ROW_LIMIT,
+    SqlGuardError,
+    guard,
+    message_only,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -28,6 +36,60 @@ log = logging.getLogger(__name__)
 # when a generated query is rejected or fails to run, feed the error back to the
 # model and let it fix itself, up to this many total attempts.
 MAX_SQL_ATTEMPTS: int = int(os.getenv("LLM_MAX_SQL_ATTEMPTS", "3"))
+
+# Request-size limits. The Directus proxy already enforces the same caps; they are
+# repeated here so a direct caller of the plugin cannot exceed them either.
+MAX_MESSAGES = 20
+MAX_MESSAGE_CHARS = 4000
+MAX_SEARCH_LIMIT = 50
+CHAT_ROLES = frozenset({"user", "assistant"})
+
+
+class _BadParamError(ValueError):
+    """A request field has the wrong type or range (answered with 422)."""
+
+
+def _clamped_int(payload: dict, key: str, default: int, maximum: int) -> int:
+    """Read an optional positive-integer field, clamped to *maximum*.
+
+    A missing field gives *default*; a non-integer (including bool, float, str) or
+    a value below 1 raises :class:`_BadParamError`; a value above *maximum* is clamped.
+    """
+    if key not in payload or payload[key] is None:
+        return default
+    value = payload[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise _BadParamError(f"{key} must be a positive integer")
+    return min(value, maximum)
+
+
+def _json_object():
+    """The request body as a dict, or None if it is not a JSON object."""
+    payload = request.get_json(force=True, silent=True)
+    return payload if isinstance(payload, dict) else None
+
+
+def _valid_messages(messages) -> bool:
+    """True for a bounded list of {role: user|assistant, content: str} turns
+    that contains at least one non-blank user message."""
+    if not isinstance(messages, list) or not 0 < len(messages) <= MAX_MESSAGES:
+        return False
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") not in CHAT_ROLES:
+            return False
+        content = m.get("content")
+        if not isinstance(content, str) or len(content) > MAX_MESSAGE_CHARS:
+            return False
+    return any(m["role"] == "user" and m["content"].strip() for m in messages)
+
+
+def _cap_rows(rows: list[dict], row_limit: int) -> tuple[list[dict], bool]:
+    """Drop the extra probe row a ``guard(..., probe=True)`` query fetched.
+
+    Returns ``(rows, truncated)``: *truncated* is true when the query produced more
+    than *row_limit* rows, and exactly *row_limit* of them are returned.
+    """
+    return rows[:row_limit], len(rows) > row_limit
 
 
 def _correction_hint(error: str) -> str:
@@ -91,29 +153,43 @@ def _query_error_response(exc: db.QueryExecutionError, candidate_sql: str):
 def ask():
     """Natural-language question -> guarded SQL -> rows.
 
-    Body: {"question": "...", "row_limit": <optional int>}
+    Body: {"question": "...", "row_limit": <optional int, 1..MAX_ROW_LIMIT>}
     """
-    payload = request.get_json(force=True) or {}
-    question = (payload.get("question") or "").strip()
-    if not question:
+    payload = _json_object()
+    question = payload.get("question") if payload else None
+    if not isinstance(question, str) or not question.strip():
         return jsonify({"error": "missing question"}), 400
-    row_limit = int(payload.get("row_limit", DEFAULT_ROW_LIMIT))
+    question = question.strip()
+    if len(question) > MAX_MESSAGE_CHARS:
+        return jsonify({"error": "question is too long"}), 400
+    try:
+        row_limit = _clamped_int(payload, "row_limit", DEFAULT_ROW_LIMIT, MAX_ROW_LIMIT)
+    except _BadParamError as exc:
+        return jsonify({"error": str(exc)}), 422
 
     system_prompt = schema_context.build_system_prompt()
     raw = ollama_client.generate_sql(system_prompt, question)
     candidate_sql = ollama_client.strip_sql_fences(raw)
 
     try:
-        safe_sql = guard(candidate_sql, row_limit=row_limit)
+        safe_sql = guard(candidate_sql, row_limit=row_limit, probe=True)
     except SqlGuardError as exc:
         return _rejection_response(exc, candidate_sql)
 
     try:
-        rows = db.run_select(safe_sql)
+        rows, truncated = _cap_rows(db.run_select(safe_sql), row_limit)
     except db.QueryExecutionError as exc:
         return _query_error_response(exc, candidate_sql)
     columns = list(rows[0].keys()) if rows else []
-    return jsonify({"sql": candidate_sql, "columns": columns, "rows": rows})
+    return jsonify(
+        {
+            "sql": candidate_sql,
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+            "truncated": truncated,
+        }
+    )
 
 
 @app.post("/api/chat")
@@ -121,27 +197,23 @@ def chat():
     """Multi-turn NL chat -> guarded SQL -> rows + an optional chart spec.
 
     Body: {"messages": [{"role": "user"|"assistant", "content": "..."}...],
-           "row_limit": <optional int>}
+           "row_limit": <optional int, 1..MAX_ROW_LIMIT>}
+    At most MAX_MESSAGES turns of MAX_MESSAGE_CHARS characters each.
 
     The prior turns give the model context so follow-ups refine the previous
     query. The generated SQL still passes the guard (unsafe -> 422, not run), and
     any proposed chart passes app.lib.charts before it is returned.
     """
-    payload = request.get_json(force=True) or {}
-    messages = payload.get("messages") or []
-    if not isinstance(messages, list) or not any(
-        (m or {}).get("role") == "user" and (m or {}).get("content", "").strip()
-        for m in messages
-    ):
+    payload = _json_object() or {}
+    messages = payload.get("messages")
+    if not _valid_messages(messages):
         return jsonify({"error": "missing messages"}), 400
-    row_limit = int(payload.get("row_limit", DEFAULT_ROW_LIMIT))
+    try:
+        row_limit = _clamped_int(payload, "row_limit", DEFAULT_ROW_LIMIT, MAX_ROW_LIMIT)
+    except _BadParamError as exc:
+        return jsonify({"error": str(exc)}), 422
     question = next(
-        (
-            m["content"]
-            for m in reversed(messages)
-            if (m or {}).get("role") == "user" and (m or {}).get("content")
-        ),
-        "",
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
     )
 
     system_prompt = schema_context.build_system_prompt()
@@ -149,9 +221,10 @@ def chat():
     # Execution-feedback self-correction loop: generate SQL, and on a guard
     # rejection or a run-time error, append the real error to the conversation
     # and let the model repair it — bounded by MAX_SQL_ATTEMPTS.
-    convo = list(messages)
+    convo = [{"role": m["role"], "content": m["content"]} for m in messages]
     candidate_sql: str = ""
     rows: list[dict] = []
+    truncated = False
     result_ok = False
     failure = None  # (responder, exc, sql) from the last failed attempt
 
@@ -167,7 +240,7 @@ def chat():
             )
 
         try:
-            safe_sql = guard(candidate_sql, row_limit=row_limit)
+            safe_sql = guard(candidate_sql, row_limit=row_limit, probe=True)
         except SqlGuardError as exc:
             failure = (_rejection_response, exc, candidate_sql)
             convo += [
@@ -177,7 +250,7 @@ def chat():
             continue
 
         try:
-            rows = db.run_select(safe_sql)
+            rows, truncated = _cap_rows(db.run_select(safe_sql), row_limit)
         except db.QueryExecutionError as exc:
             failure = (_query_error_response, exc, candidate_sql)
             convo += [
@@ -205,7 +278,14 @@ def chat():
         chart = charts.default_chart_for(columns, rows, question)
 
     return jsonify(
-        {"sql": candidate_sql, "columns": columns, "rows": rows, "chart": chart}
+        {
+            "sql": candidate_sql,
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+            "truncated": truncated,
+            "chart": chart,
+        }
     )
 
 
@@ -213,13 +293,19 @@ def chat():
 def search():
     """Hybrid semantic search over unstructured note text.
 
-    Body: {"query": "...", "limit": <optional int>}
+    Body: {"query": "...", "limit": <optional int, 1..MAX_SEARCH_LIMIT>}
     """
-    payload = request.get_json(force=True) or {}
-    query = (payload.get("query") or "").strip()
-    if not query:
+    payload = _json_object()
+    query = payload.get("query") if payload else None
+    if not isinstance(query, str) or not query.strip():
         return jsonify({"error": "missing query"}), 400
-    limit = int(payload.get("limit", 5))
+    query = query.strip()
+    if len(query) > MAX_MESSAGE_CHARS:
+        return jsonify({"error": "query is too long"}), 400
+    try:
+        limit = _clamped_int(payload, "limit", 5, MAX_SEARCH_LIMIT)
+    except _BadParamError as exc:
+        return jsonify({"error": str(exc)}), 422
 
     query_embedding = ollama_client.embed(query)
     results = db.semantic_search(query_embedding, limit=limit)

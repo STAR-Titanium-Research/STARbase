@@ -43,7 +43,8 @@ The rest of this runbook covers the compose-stack backup to MinIO
 
 | Component | Method | Destination |
 |---|---|---|
-| PostgreSQL | `pg_dump --clean --if-exists` (plain SQL, gzipped) | `./backups/` + MinIO `d1-backups` bucket |
+| PostgreSQL | `pg_dump --clean --if-exists` (plain SQL, gzipped) | `./backups/d1_<ts>.sql.gz` + MinIO `d1-backups` bucket |
+| Roles | `pg_dumpall --globals-only` (gzipped, mode 0600, contains password hashes) | `./backups/d1globals_<ts>.sql.gz` + MinIO |
 | MinIO objects | Stored in named Docker volume `minio-data` | Separate volume backup (see below) |
 
 > The SQL schema is reproducible from migrations alone. A `pg_dump` backup
@@ -59,15 +60,19 @@ bash infra/backup/backup.sh
 make backup
 ```
 
-Output includes the local path and the MinIO key. Example:
+Each dump is written to a `.tmp` file, checked with `gzip -t` (and for being
+non-empty), and only then renamed, so a failed or truncated dump never looks like
+a good backup. Any failure removes the temp files and exits non-zero (safe to use
+from cron). Example output:
 
 ```
 === D1-Database Backup: 20260618T120000Z ===
-[1/3] Dumping PostgreSQL …
+[1/4] Dumping PostgreSQL …
+[2/4] Dumping roles (pg_dumpall --globals-only) …
       → ./backups/d1_20260618T120000Z.sql.gz (4.2M)
-[2/3] Uploading to MinIO (d1-backups bucket) …
-      → minio://d1-backups/d1_20260618T120000Z.sql.gz
-[3/3] Backup complete.
+      → ./backups/d1globals_20260618T120000Z.sql.gz
+[3/4] Uploading to MinIO (d1-backups bucket) …
+[4/4] Backup complete.
 ```
 
 ### Scheduled backups
@@ -91,9 +96,16 @@ BACKUP_FILE=d1_20260618T120000Z.sql.gz make restore
 ```
 
 The script will:
-1. Download the specified file from MinIO `d1-backups/`
-2. Warn with a 10-second countdown (Ctrl-C to abort)
-3. Pipe through `psql` into the running Postgres container
+1. Download the specified file from MinIO `d1-backups/` and verify it with `gzip -t`
+   (a corrupt file is rejected before anything is touched)
+2. Ask you to type the database name to confirm (`--yes` skips this, for automation)
+3. Pipe it through `psql -v ON_ERROR_STOP=1 --single-transaction` into the running
+   Postgres container: the first error aborts and rolls everything back, leaving the
+   database unchanged, and the script exits non-zero.
+
+To replay the roles from the matching globals dump as well, add
+`GLOBALS_FILE=d1globals_20260618T120000Z.sql.gz`. Roles that already exist report
+"already exists"; that step does not stop on errors.
 
 ### From a local file (skip download)
 
@@ -154,7 +166,8 @@ docker run --rm \
 ## Prune old local backups
 
 ```bash
-make prune-backups   # removes local copies older than 30 days
+make prune-backups           # keeps the newest 7 dumps (and 7 globals dumps), however old
+make prune-backups KEEP=14   # keep the newest 14
 ```
 
 MinIO retention is configured separately via the MinIO console

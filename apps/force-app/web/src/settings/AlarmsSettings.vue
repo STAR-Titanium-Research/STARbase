@@ -5,6 +5,16 @@ import { confirmAction } from '../ui/confirm';
 const a = alarmController;
 function save() { a.saveCfg(); }
 
+function onWarnPercent() {
+	const p = Math.round(Number(a.config.warnPercent));
+	a.config.warnPercent = Number.isFinite(p) ? Math.min(99, Math.max(1, p)) : 80;
+	save();
+}
+function setCustomVolume(ev: Event) {
+	a.config.toneVolume = (ev.target as HTMLInputElement).checked ? 50 : null;
+	save();
+}
+
 type ToggleKey = 'forceEnabled' | 'rpmEnabled' | 'diskEnabled' | 'audioEnabled';
 
 // What the operator gives up by switching each one off. Spelled out per alarm rather than a generic
@@ -67,6 +77,11 @@ async function setEnabled(key: ToggleKey, ev: Event) {
 			<label class="chk"><input type="checkbox" :checked="a.config.forceEnabled" @change="setEnabled('forceEnabled', $event)" /> High-force alarm</label>
 			<label class="thr">Trip at ≥ <input type="number" v-model.number="a.config.forceThreshold" :disabled="!a.config.forceEnabled" @change="save" /> N (per-axis peak)</label>
 			<p class="hint">Default ~400 N peak; set to a safe fraction of your dynamometer / setup limit.</p>
+			<label class="chk sub"><input type="checkbox" v-model="a.config.warnEnabled" :disabled="!a.config.forceEnabled" @change="save" /> Early warning</label>
+			<label class="thr">Warn at ≥ <input type="number" min="1" max="99" v-model.number="a.config.warnPercent" :disabled="!a.config.forceEnabled || !a.config.warnEnabled" @change="onWarnPercent" /> % of the limit<span v-if="a.warnLevel != null" class="calc">({{ a.warnLevel.toFixed(0) }} N)</span></label>
+			<p class="hint">An amber banner on the Record page, with no tone, before the alarm itself trips. It does not latch.</p>
+			<label class="chk sub"><input type="checkbox" v-model="a.config.stopOnForceAlarm" :disabled="!a.config.forceEnabled" @change="save" /> Stop the recording when the force alarm trips (Record page open)</label>
+			<p class="hint">Off by default. The recording is stopped the same way as the Stop button, and the save dialog opens. The alarm is only checked while the Record page is open, so leaving that page during a cut turns this off for that cut, and so does closing the window. The alarm banner and tone keep going until you acknowledge them (press A, or click Acknowledge).</p>
 		</div>
 
 		<div class="grp">
@@ -83,6 +98,11 @@ async function setEnabled(key: ToggleKey, ev: Event) {
 
 		<div class="grp">
 			<label class="chk"><input type="checkbox" :checked="a.config.audioEnabled" @change="setEnabled('audioEnabled', $event)" /> Audible alert (looping tone)</label>
+			<label class="chk sub"><input type="checkbox" :checked="a.config.toneVolume != null" :disabled="!a.config.audioEnabled" @change="setCustomVolume" /> Set the tone volume</label>
+			<label v-if="a.config.toneVolume != null" class="thr">Volume
+				<input type="range" min="5" max="100" step="5" v-model.number="a.config.toneVolume" :disabled="!a.config.audioEnabled" @change="save" class="vol" />
+				{{ a.config.toneVolume }} %</label>
+			<p class="hint">Unticked: the app raises the system volume to maximum when an alarm sounds. Ticked: the system volume is left alone, so set it yourself.</p>
 		</div>
 
 		<button class="btn" @click="a.test()">Test alarm</button>
@@ -98,6 +118,9 @@ h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
 .chk input { accent-color: var(--accent); }
 .thr { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--text-dim); }
 .thr input { width: 90px; padding: 6px 9px; font-size: var(--fs-md); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; text-align: right; }
+.chk.sub { margin-top: 12px; }
+.thr .calc { color: var(--text-dim); }
+.thr input.vol { width: 160px; padding: 0; accent-color: var(--accent); }
 .thr input:disabled { opacity: 0.5; }
 .hint { font-size: var(--fs-sm); color: var(--text-dim); margin: 6px 0 0; line-height: 1.5; }
 </style>

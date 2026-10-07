@@ -187,7 +187,33 @@ INSERT INTO directus_permissions (collection, action, fields, policy) VALUES
 ('sample_stock_provenance',           'create', '*', '20000002-0000-0000-0000-000000000002'),
 ('sample_stock_provenance',           'update', '*', '20000002-0000-0000-0000-000000000002'),
 ('sample_stock_provenance',           'delete', '*', '20000002-0000-0000-0000-000000000002'),
-('audit_logs',                        'read',   '*', '20000002-0000-0000-0000-000000000002');
+('audit_logs',                        'read',   '*', '20000002-0000-0000-0000-000000000002'),
+-- ── grants added by later migrations ─────────────────────────────────────────
+-- This script deletes and re-inserts every Lab Member row, so it must repeat each grant that a
+-- migration adds to this policy, or applying it after the migrations (scripts/README.md) undoes
+-- them. Keep in sync with db/migrations/*_lab_member_*.sql and the *_meta / fast_* migrations:
+--   20260703000066 people, test_sessions_subject (CRUD), facilities (read)
+--   20260705000075 machining_force_analysis read; 20260705000078 force_crawler_state read
+--   20260709000084 fast_run_data read;           20260722000100 fast_recipes read
+--   20260911000111 machining_force_analysis update
+--   20261005000133 directus_files create + read, machining_force_analysis create (Force App save)
+('people',                            'create', '*', '20000002-0000-0000-0000-000000000002'),
+('people',                            'read',   '*', '20000002-0000-0000-0000-000000000002'),
+('people',                            'update', '*', '20000002-0000-0000-0000-000000000002'),
+('people',                            'delete', '*', '20000002-0000-0000-0000-000000000002'),
+('test_sessions_subject',             'create', '*', '20000002-0000-0000-0000-000000000002'),
+('test_sessions_subject',             'read',   '*', '20000002-0000-0000-0000-000000000002'),
+('test_sessions_subject',             'update', '*', '20000002-0000-0000-0000-000000000002'),
+('test_sessions_subject',             'delete', '*', '20000002-0000-0000-0000-000000000002'),
+('facilities',                        'read',   '*', '20000002-0000-0000-0000-000000000002'),
+('fast_recipes',                      'read',   '*', '20000002-0000-0000-0000-000000000002'),
+('fast_run_data',                     'read',   '*', '20000002-0000-0000-0000-000000000002'),
+('force_crawler_state',               'read',   '*', '20000002-0000-0000-0000-000000000002'),
+('machining_force_analysis',          'create', '*', '20000002-0000-0000-0000-000000000002'),
+('machining_force_analysis',          'read',   '*', '20000002-0000-0000-0000-000000000002'),
+('machining_force_analysis',          'update', '*', '20000002-0000-0000-0000-000000000002'),
+('directus_files',                    'create', '*', '20000002-0000-0000-0000-000000000002'),
+('directus_files',                    'read',   '*', '20000002-0000-0000-0000-000000000002');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 5. Users

@@ -108,8 +108,17 @@ function roundForEdit(v: number): number {
 	return Number(v.toPrecision(4));
 }
 function clampDisp(v: number): number { return Math.max(axisLo.value, Math.min(axisHi.value, v)); }
-const satMinInput = computed({ get: () => roundForEdit(props.colorScale.satMin), set: (v: number) => commit({ satMin: v }) });
-const satMaxInput = computed({ get: () => roundForEdit(props.colorScale.satMax), set: (v: number) => commit({ satMax: v }) });
+// A typed saturation end edits the unshaped base range too (baseMin/baseMax), so a shaping param
+// ticked afterwards -- and unticked again -- still works from what was typed. Under symmetrical a
+// typed end sets the magnitude, same as a handle drag.
+function typedSat(key: 'satMin' | 'satMax', v: number): Partial<ColorScale> {
+	if (props.colorScale.symmetrical && Number.isFinite(v)) {
+		return handleDragPatch(props.colorScale, key, v, (axisHi.value - axisLo.value || 1) * 1e-6);
+	}
+	return key === 'satMin' ? { satMin: v, baseMin: v } : { satMax: v, baseMax: v };
+}
+const satMinInput = computed({ get: () => roundForEdit(props.colorScale.satMin), set: (v: number) => commit(typedSat('satMin', v)) });
+const satMaxInput = computed({ get: () => roundForEdit(props.colorScale.satMax), set: (v: number) => commit(typedSat('satMax', v)) });
 const dispMinInput = computed({ get: () => roundForEdit(clampDisp(props.colorScale.dispMin)), set: (v: number) => commit({ dispMin: v }) });
 const dispMaxInput = computed({ get: () => roundForEdit(clampDisp(props.colorScale.dispMax)), set: (v: number) => commit({ dispMax: v }) });
 

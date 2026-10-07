@@ -16,7 +16,7 @@ Emits two SQL files and (with --apply) executes them in one transaction:
   scripts/configure_inline_params.sql                     Directus metadata
 
 Usage:
-  DATABASE_URL=postgres://d1:change_me@localhost:5432/d1_database \\
+  DATABASE_URL=postgres://d1:$POSTGRES_PASSWORD@localhost:5432/d1_database \\
       python scripts/flatten_param_fields.py --apply
   # or just generate the SQL files without executing:
   python scripts/flatten_param_fields.py
@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 import psycopg2
@@ -217,8 +218,8 @@ def main() -> None:
     ap.add_argument("--apply", action="store_true", help="execute against the DB")
     args = ap.parse_args()
 
-    db_url = os.environ.get(
-        "DATABASE_URL", "postgres://d1:change_me@localhost:5432/d1_database"
+    db_url = os.environ.get("DATABASE_URL") or sys.exit(
+        "ERROR: DATABASE_URL is required"
     )
     conn = psycopg2.connect(db_url)
     conn.autocommit = False

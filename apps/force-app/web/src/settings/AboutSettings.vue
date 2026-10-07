@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Version + changelog + the update controls. Electron-only for the update controls: the
 // browser-served /app/ build has no window.forceApp and auto-update has no meaning there.
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { CHANGELOG } from '../changelog';
 
 type UpdateStatus =
@@ -47,14 +47,20 @@ async function installNow() {
 	}
 }
 
+// Each visit to this tab subscribes; leaving it must unsubscribe, or the listeners pile up for the
+// life of the window (review 2.10). `gone` covers leaving before getUpdateInfo() has answered.
+let unsubscribeStatus: (() => void) | null = null;
+let gone = false;
 onMounted(async () => {
 	if (!window.forceApp) return;
 	const info = await window.forceApp.getUpdateInfo();
+	if (gone) return;
 	appVersion.value = info.version;
 	packaged.value = info.packaged;
 	updateStatus.value = info.status;
-	window.forceApp.onUpdateStatus((s) => { updateStatus.value = s; });
+	unsubscribeStatus = window.forceApp.onUpdateStatus((s) => { updateStatus.value = s; });
 });
+onBeforeUnmount(() => { gone = true; unsubscribeStatus?.(); unsubscribeStatus = null; });
 </script>
 
 <template>

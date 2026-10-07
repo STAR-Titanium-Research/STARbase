@@ -6,9 +6,9 @@ import CampaignOps from './CampaignOps.vue';
 // sets the operation's campaign_id. Shown on the campaign form as an alias field.
 export default defineInterface({
 	id: 'd1-campaign-ops',
-	name: 'Campaign operations (type-filtered)',
+	name: 'Campaign overview and operations',
 	icon: 'build',
-	description: 'List + add operations, with the add search pre-filtered by the campaign type.',
+	description: 'Campaign overview (samples, operations, tests, force-analysis status) and add/remove pickers; the operations search is pre-filtered by the campaign type.',
 	component: CampaignOps,
 	types: ['alias'],
 	localTypes: ['presentation'],

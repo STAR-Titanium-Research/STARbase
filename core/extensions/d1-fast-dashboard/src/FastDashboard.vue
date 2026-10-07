@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import { useRoute, useRouter } from 'vue-router';
+import { recordRoute } from '@d1/ui';
 import FastChart from './FastChart.vue';
 import { type SeriesMeta, type Trace, loadTrace } from './fastCache';
 import { buildOpMeta, buildRecipe, buildStats, dataQuality } from './fastMeta';
@@ -10,9 +11,9 @@ const api = useApi();
 const route = useRoute();
 const router = useRouter();
 
-// Open the selected operation's record form (mirrors the force dashboard's "Open").
-function openOpForm() { if (selectedId.value) router.push(`/content/manufacturing_operations/${selectedId.value}`); }
-function openRecipe() { const r = recipe.value; if (r?.id) router.push(`/content/fast_recipes/${r.id}`); }
+// Open the selected operation's record (its Explorer page; mirrors the force dashboard's "Open").
+function openOpForm() { if (selectedId.value) router.push(recordRoute('manufacturing_operations', selectedId.value)); }
+function openRecipe() { const r = recipe.value; if (r?.id) router.push(recordRoute('fast_recipes', r.id)); }
 
 // ---------------------------------------------------------------- state
 const loading = ref(true);
@@ -77,12 +78,15 @@ watch([colA, tiles, selectedId, opsHidden, detailHidden], () => {
 	}));
 }, { deep: true });
 
+let endColAResize: (() => void) | null = null;
 function startColAResize(ev: PointerEvent) {
 	ev.preventDefault();
+	endColAResize?.();
 	const startX = ev.clientX, start = colA.value;
 	dragging.value = true;
 	const move = (e: PointerEvent) => { colA.value = Math.min(460, Math.max(200, start + (e.clientX - startX))); };
-	const up = () => { dragging.value = false; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+	const up = () => { dragging.value = false; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); endColAResize = null; };
+	endColAResize = up;
 	window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
 }
 
@@ -111,10 +115,21 @@ function measure() {
 }
 let ro: ResizeObserver | undefined;
 onMounted(() => { ro = new ResizeObserver(measure); if (layoutEl.value) ro.observe(layoutEl.value); measure(); window.addEventListener('resize', measure); });
-onBeforeUnmount(() => { ro?.disconnect(); window.removeEventListener('resize', measure); });
+onBeforeUnmount(() => {
+	ro?.disconnect(); window.removeEventListener('resize', measure);
+	// Stop everything that could still write to this component: the search debounce, a column drag in
+	// progress, the import poll, and any in-flight load (their results are dropped by opGen).
+	clearTimeout(searchTimer);
+	endColAResize?.();
+	opGen++; listGen++;
+	cancelPoll();
+});
 
 // ---------------------------------------------------------------- data load
+const listError = ref<string | null>(null);
+let listGen = 0;
 onMounted(async () => {
+	const gen = ++listGen;
 	try {
 		const res = await api.get('/items/manufacturing_operations', {
 			params: {
@@ -131,12 +146,18 @@ onMounted(async () => {
 		// or selection is what makes the list feel heavy.
 		const mapped = (res.data?.data ?? []).map((o: any) => ({ ...o, id: o.operation_id, quality: dataQuality(o) }));
 		mapped.sort(byDateDesc);
+		if (gen !== listGen) return; // unmounted while loading
 		rows.value = mapped;
+	} catch (e: any) {
+		if (gen !== listGen) return;
+		listError.value = `Could not load the FAST operations: ${e?.response?.data?.errors?.[0]?.message || e?.message || 'request failed'}`;
 	} finally {
-		loading.value = false;
-		await nextTick(); measure();
-		const want = (route.query.operation as string) || pendingSelect;
-		if (want) { const m = rows.value.find((o) => o.operation_id === want); if (m) selectOp(m); }
+		if (gen === listGen) {
+			loading.value = false;
+			await nextTick(); measure();
+			const want = (route.query.operation as string) || pendingSelect;
+			if (want) { const m = rows.value.find((o) => o.operation_id === want); if (m) selectOp(m); }
+		}
 	}
 });
 
@@ -146,9 +167,16 @@ const fastRun = ref<any | null>(null);
 const traceLoading = ref(false);
 const importMsg = ref<string | null>(null);
 
+// Every selection (and unmount) bumps opGen; a load that finishes after that is stale and must not
+// write to detail/fastRun/trace, which now belong to the newer selection.
+let opGen = 0;
+function errMsg(e: any, fallback: string): string { return e?.response?.data?.errors?.[0]?.message || e?.message || fallback; }
+
 async function selectOp(row: any) {
+	const gen = ++opGen;
+	cancelPoll(); // an import poll for the previous operation must not touch this one
 	selectedId.value = row.operation_id;
-	loadingDetail.value = true; detail.value = null; trace.value = null; fastRun.value = null; importMsg.value = null;
+	loadingDetail.value = true; detail.value = null; trace.value = null; fastRun.value = null; importMsg.value = null; traceLoading.value = false;
 	try {
 		const res = await api.get(`/items/manufacturing_operations/${row.operation_id}`, {
 			params: {
@@ -159,12 +187,16 @@ async function selectOp(row: any) {
 						'fast_recipe_id.target_temp_c', 'fast_recipe_id.target_force_kn', 'fast_recipe_id.hold_time_min'],
 			},
 		});
+		if (gen !== opGen) return;
 		detail.value = res.data.data;
-		await loadFastRun(row.operation_id);
-	} finally { loadingDetail.value = false; }
+		await loadFastRun(row.operation_id, gen);
+	} catch (e: any) {
+		if (gen === opGen) importMsg.value = `Could not load this operation: ${errMsg(e, 'request failed')}`;
+	} finally { if (gen === opGen) loadingDetail.value = false; }
 }
 
-async function loadFastRun(operationId: string) {
+// Returns false when the result was dropped because another operation was selected meanwhile.
+async function loadFastRun(operationId: string, gen: number = opGen): Promise<boolean> {
 	const res = await api.get('/items/fast_run_data', {
 		params: {
 			filter: { operation_id: { _eq: operationId } },
@@ -172,25 +204,29 @@ async function loadFastRun(operationId: string) {
 			limit: 1,
 		},
 	});
+	if (gen !== opGen) return false;
 	fastRun.value = res.data?.data?.[0] ?? null;
 	trace.value = null;
-	if (fastRun.value?.status === 'done' && fastRun.value.directus_files_id) await loadTraceData();
+	if (fastRun.value?.status === 'done' && fastRun.value.directus_files_id) await loadTraceData(gen);
+	return gen === opGen;
 }
 
-async function loadTraceData() {
+async function loadTraceData(gen: number = opGen) {
 	const fr = fastRun.value;
 	if (!fr?.directus_files_id) return;
 	traceLoading.value = true;
 	try {
 		const catalog: SeriesMeta[] = fr.series || [];
-		trace.value = await loadTrace(fr.directus_files_id, catalog, async () => {
+		const loaded = await loadTrace(fr.directus_files_id, catalog, async () => {
 			const res = await api.get(`/assets/${fr.directus_files_id}`, { responseType: 'text' });
 			return res.data as string;
 		});
+		if (gen !== opGen) return;
+		trace.value = loaded;
 		// seed default series for empty tiles (first temperature + force)
 		seedDefaultTiles();
-	} catch (e: any) { importMsg.value = e?.message || 'failed to load trace'; }
-	finally { traceLoading.value = false; }
+	} catch (e: any) { if (gen === opGen) importMsg.value = errMsg(e, 'failed to load trace'); }
+	finally { if (gen === opGen) traceLoading.value = false; }
 }
 
 // A row stuck at pending/processing for more than a short grace period almost
@@ -289,8 +325,9 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const archivePath = ref('');
 const importing = ref(false);
 
-async function upsertFastRun(patch: any): Promise<void> {
-	const opId = selectedId.value;
+// opId is the operation the user acted on; fastRun belongs to the CURRENTLY selected operation, so the
+// patch is only valid while that is still opId (callers check this with the generation they started in).
+async function upsertFastRun(opId: string, patch: any): Promise<void> {
 	const existing = fastRun.value?.id;
 	if (existing) await api.patch(`/items/fast_run_data/${existing}`, patch);
 	else await api.post('/items/fast_run_data', { operation_id: opId, ...patch });
@@ -299,6 +336,7 @@ async function upsertFastRun(patch: any): Promise<void> {
 async function onUpload(ev: Event) {
 	const f = (ev.target as HTMLInputElement).files?.[0];
 	if (!f || !selectedId.value) return;
+	const opId = selectedId.value, gen = opGen;
 	importing.value = true; importMsg.value = 'Uploading…';
 	try {
 		const fd = new FormData();
@@ -306,36 +344,51 @@ async function onUpload(ev: Event) {
 		fd.append('file', f);
 		const up = await api.post('/files', fd);
 		const stagedId = up.data.data.id;
-		await upsertFastRun({ status: 'pending', staged_file: stagedId, import_archive_path: null });
+		if (gen !== opGen) return; // another operation was selected during the upload: do not attach it there
+		await upsertFastRun(opId, { status: 'pending', staged_file: stagedId, import_archive_path: null });
 		importMsg.value = 'Queued — waiting for the host importer…';
-		await pollImport();
+		await pollImport(opId, gen);
 	} catch (e: any) {
-		importMsg.value = e?.response?.status === 403 ? 'Not permitted (admin only) to import.' : (e?.message || 'upload failed');
+		if (gen === opGen) importMsg.value = e?.response?.status === 403 ? 'Not permitted (admin only) to import.' : (e?.message || 'upload failed');
 	} finally { importing.value = false; if (fileInput.value) fileInput.value.value = ''; }
 }
 
 async function onArchiveImport() {
 	if (!archivePath.value.trim() || !selectedId.value) return;
+	const opId = selectedId.value, gen = opGen;
 	importing.value = true; importMsg.value = 'Queued archive import…';
 	try {
-		await upsertFastRun({ status: 'pending', import_archive_path: archivePath.value.trim(), staged_file: null });
-		await pollImport();
+		await upsertFastRun(opId, { status: 'pending', import_archive_path: archivePath.value.trim(), staged_file: null });
+		await pollImport(opId, gen);
 	} catch (e: any) {
-		importMsg.value = e?.response?.status === 403 ? 'Not permitted (admin only) to import.' : (e?.message || 'import failed');
+		if (gen === opGen) importMsg.value = e?.response?.status === 403 ? 'Not permitted (admin only) to import.' : (e?.message || 'import failed');
 	} finally { importing.value = false; }
 }
 
-async function pollImport() {
-	const opId = selectedId.value!;
+// The poll sleeps on a timer that selectOp / unmount cancel, so it stops at once when the operation
+// changes or the page goes away instead of running for up to three minutes and overwriting the
+// newer operation's state.
+let pollTimer = 0;
+let pollWake: (() => void) | null = null;
+function sleepCancellable(ms: number): Promise<void> {
+	return new Promise((resolve) => { pollWake = resolve; pollTimer = window.setTimeout(() => { pollWake = null; resolve(); }, ms); });
+}
+function cancelPoll() { clearTimeout(pollTimer); const w = pollWake; pollWake = null; w?.(); }
+
+async function pollImport(opId: string, gen: number) {
 	const deadline = Date.now() + 3 * 60 * 1000;
 	while (Date.now() < deadline) {
-		await new Promise((r) => setTimeout(r, 2500));
-		await loadFastRun(opId);
+		await sleepCancellable(2500);
+		if (gen !== opGen) return;
+		let current: boolean;
+		try { current = await loadFastRun(opId, gen); }
+		catch (e: any) { if (gen === opGen) importMsg.value = `Could not check the import: ${errMsg(e, 'request failed')}`; return; }
+		if (!current) return;
 		const st = fastRun.value?.status;
 		if (st === 'done') { importMsg.value = 'Imported.'; return; }
 		if (st === 'error') { importMsg.value = `Import failed: ${fastRun.value?.error_message || 'unknown'}`; return; }
 	}
-	importMsg.value = 'Still processing on the host — check back shortly (is the FAST importer running?).';
+	if (gen === opGen) importMsg.value = 'Still processing on the host — check back shortly (is the FAST importer running?).';
 }
 
 // ---------------------------------------------------------------- helpers
@@ -367,6 +420,7 @@ const recipe = computed(() => buildRecipe(detail.value));
 			</section>
 
 			<div v-show="loading" class="loading"><v-progress-circular indeterminate /></div>
+			<div v-if="listError" class="import-msg err">{{ listError }}</div>
 
 			<div v-show="!loading" ref="layoutEl" class="layout" :class="{ dragging, stacked }"
 				:style="{ gridTemplateColumns: gridCols, height: stacked ? 'auto' : availableHeight + 'px' }">
@@ -414,6 +468,7 @@ const recipe = computed(() => buildRecipe(detail.value));
 						</template>
 						<div v-else-if="loadingDetail" class="loading sm"><v-progress-circular indeterminate small /></div>
 						<div v-else class="empty sm">Select an operation</div>
+						<div v-if="importMsg" class="import-msg">{{ importMsg }}</div>
 					</div>
 
 						<!-- Recipe: a major, open-by-default dropdown card in the detail column. -->
@@ -576,6 +631,7 @@ const recipe = computed(() => buildRecipe(detail.value));
 .btn { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; padding: 6px 11px; border-radius: 8px; white-space: nowrap;
 	color: var(--theme--foreground, #334155); background: var(--theme--background-subdued, #f1f5f9); border: 1px solid var(--theme--border-color, #d1d9e6); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+.import-msg.err { color: var(--theme--danger, #c62828); font-style: normal; }
 .import-msg { font-size: 11px; color: var(--theme--foreground-subdued, #6b7684); font-style: italic; margin-top: 4px; }
 
 .plots { display: flex; flex-direction: column; padding: 12px; min-height: 0; }

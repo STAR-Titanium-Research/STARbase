@@ -136,3 +136,55 @@ def test_replay_honours_speed_on_long_chunks(tmp_path):
     played = reads * chunk_sec
     # Allow generous slack for scheduler jitter; the bug was a 3x+ overspeed, not a few percent.
     assert wall > played * 0.7, f"played {played:.2f}s of cut in {wall:.2f}s wall — too fast"
+
+
+def test_replay_of_a_cache_longer_than_600_s_is_accepted(tmp_path, monkeypatch):
+    """Review 1.8: /record/start_replay built RecordConfig(duration_sec=n/fs) and RecordConfig caps
+    duration_sec at 600, so a cut longer than 10 minutes raised ValidationError -> a bare 500."""
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+
+    n, fs = 700_000, 1_000.0  # 700 s
+    cache, _ = _make_cache(tmp_path, n=n, fs=fs)
+    root = tmp_path / "captures"
+    root.mkdir()
+    monkeypatch.setattr(main, "CAPTURES_ROOT", str(root))
+    monkeypatch.setattr(main, "_session", None)
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/record/start_replay",
+            files={"file": ("live_cache.bin", cache, "application/octet-stream")},
+            data={"sample_name": "LONG", "speed": "0"},  # speed 0 = as fast as possible
+        )
+        try:
+            assert r.status_code == 200, r.text
+            assert abs(r.json()["config"]["duration_sec"] - 700.0) < 1e-6
+            sess = main._session
+            sess._thread.join(120)
+            sess.join_finalize(120)
+            assert sess.state == "done", sess.error
+        finally:
+            if main._session is not None:
+                main._session.stop(wait=True, timeout=10)
+                main._session.join_finalize(10)
+
+
+def test_truncated_d1lc_uploads_are_a_422_not_a_500(tmp_path, monkeypatch):
+    """A cache cut off inside the header raised struct.error, and one cut off inside the sample
+    arrays raised ValueError from numpy: both surfaced as a bare 500."""
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+
+    cache, _ = _make_cache(tmp_path)
+    monkeypatch.setattr(main, "CAPTURES_ROOT", str(tmp_path / "captures"))
+    monkeypatch.setattr(main, "_session", None)
+    with TestClient(main.app) as client:
+        for cut in (0, 5, 20, 31, 100, len(cache) // 2):
+            r = client.post(
+                "/record/start_replay",
+                files={"file": ("live_cache.bin", cache[:cut], "application/octet-stream")},
+            )
+            assert r.status_code == 422, (cut, r.status_code, r.text)
+        assert main._session is None

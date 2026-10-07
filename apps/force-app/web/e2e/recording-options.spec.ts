@@ -33,15 +33,18 @@ test.beforeEach(async ({ page, request }) => {
 async function toolingCard(page: Page) {
 	return page.locator('.card', { has: page.locator('.card-head', { hasText: 'Tooling' }) });
 }
-async function coolantCard(page: Page) {
-	return page.locator('.card', { has: page.locator('.card-head', { hasText: 'Coolant & geometry' }) });
+async function machineCard(page: Page) {
+	return page.locator('.card', { has: page.locator('.card-head', { hasText: 'Machine' }) });
 }
 async function postCutCard(page: Page) {
 	return page.locator('.card', { has: page.locator('.card-head', { hasText: 'Post-cut' }) });
 }
 
 test('Machine, Operator, and Operation type share one subpanel', async ({ page }) => {
-	const panel = page.locator('.machine-op');
+	const card = await machineCard(page);
+	const body = card.locator('.card-body');
+	if (!(await body.isVisible())) await card.locator('.card-head').click();
+	const panel = card.locator('.machine-op');
 	await expect(panel.getByText('Machine', { exact: true })).toBeVisible();
 	await expect(panel.getByText('Operator', { exact: true })).toBeVisible();
 	// Not getByText(exact) here: the <label> wraps a <select>, whose full text content is the
@@ -90,13 +93,26 @@ test('Diameter starts as one tile and splits/merges on double-click, same footpr
 	await expect(grid.locator('.label', { hasText: 'Inner' })).toHaveCount(0);
 });
 
-test('card order: Tooling before Coolant & geometry before Post-cut, no Acquisition card', async ({ page }) => {
-	const heads = page.locator('.card-head');
+test('card order: Machine before Tooling before Post-cut, no Acquisition card', async ({ page }) => {
+	const heads = page.locator('.opts .card-head');
 	await expect(heads).toHaveCount(3);
-	await expect(heads.nth(0)).toContainText('Tooling');
-	await expect(heads.nth(1)).toContainText('Coolant & geometry');
+	await expect(heads.nth(0)).toContainText('Machine');
+	await expect(heads.nth(1)).toContainText('Tooling');
 	await expect(heads.nth(2)).toContainText('Post-cut');
 	await expect(page.getByText('Acquisition', { exact: true })).toHaveCount(0);
+});
+
+test('Machine card folds, and shows what is set while folded', async ({ page }) => {
+	const card = await machineCard(page);
+	const head = card.locator('.card-head');
+	const body = card.locator('.card-body');
+	if (!(await body.isVisible())) await head.click();
+	await card.locator('.op-type select').selectOption('MT-F');
+	await head.click();
+	await expect(body).toBeHidden();
+	await expect(head.locator('.card-summary')).toContainText('MT-F');
+	await head.click();
+	await expect(body).toBeVisible();
 });
 
 test('Tooling card expands and collapses', async ({ page }) => {
@@ -107,20 +123,6 @@ test('Tooling card expands and collapses', async ({ page }) => {
 	await expect(body).toBeVisible();
 	await expect(card.getByText('Insert', { exact: true })).toBeVisible();
 	await expect(card.getByText('Tool', { exact: true })).toBeVisible();
-	await head.click();
-	await expect(body).toBeHidden();
-});
-
-test('Coolant & geometry card expands with units inside the input box, not the label', async ({ page }) => {
-	const card = await coolantCard(page);
-	const head = card.locator('.card-head');
-	const body = card.locator('.grid2');
-	if (!(await body.isVisible())) await head.click();
-	await expect(body).toBeVisible();
-	const pressureLabel = card.locator('label', { hasText: 'Coolant pressure' });
-	await expect(pressureLabel).toBeVisible();
-	await expect(pressureLabel).not.toContainText('(bar)');
-	await expect(pressureLabel.locator('.unit-box .unit')).toHaveText('bar');
 	await head.click();
 	await expect(body).toBeHidden();
 });

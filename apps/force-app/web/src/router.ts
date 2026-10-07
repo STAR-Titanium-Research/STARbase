@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { ref } from 'vue';
 import { authStore } from './authStore';
+import { installFocusLinks } from './ui/focusLink';
 
 const routes: RouteRecordRaw[] = [
 	{ path: '/login', name: 'login', component: () => import('./LoginPage.vue'), meta: { public: true } },
@@ -20,7 +21,9 @@ const routes: RouteRecordRaw[] = [
 			{ path: 'diagnostics', name: 'diagnostics', component: () => import('./force/DiagnosticsPage.vue') },
 			{ path: 'labamp', name: 'labamp', component: () => import('./labamp/LabAmpPage.vue') },
 			{ path: 'nidaq', name: 'nidaq', component: () => import('./nidaq/NidaqPage.vue') },
-			{ path: 'settings', name: 'settings', component: () => import('./settings/SettingsPage.vue') },
+			// fillViewport: Settings owns its scrolling (a fixed column with its own scrolling pane, see
+			// AppShell's .content.fill) so a banner above it can never push the document into overflow (#30).
+			{ path: 'settings', name: 'settings', component: () => import('./settings/SettingsPage.vue'), meta: { fillViewport: true } },
 		],
 	},
 	// Detached single-panel live view for a second monitor (no shell). Same recorder stream.
@@ -53,6 +56,9 @@ export const lastNonSettingsRoute = ref('/record');
 router.afterEach((to) => {
 	if (!to.path.startsWith('/settings')) lastNonSettingsRoute.value = to.fullPath;
 });
+
+// `?focus=<id>` on any route spotlights the matching [data-focus] element once it renders (#98).
+installFocusLinks(router);
 
 // Electron desktop shell only (see electronBridge.d.ts): the main process's Help menu and the
 // sidecar-recovery flow (apps/force-app/desktop/src/sidecar.ts) both route the renderer here.

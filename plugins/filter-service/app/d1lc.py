@@ -1,12 +1,16 @@
 """D1LC live-cache binary format (must match scripts/matlab/process_force.m's
 write_live_cache and the client parser in liveCache.ts): 32-byte little-endian header
 (magic 'D1LC', version, N, Fs, feed, diam, cs_sec, ce_sec) then six float32[N] arrays
-t, Fx, Fy, Fz, rpm, revs_cum."""
+t, Fx, Fy, Fz, rpm, revs_cum. Version 2 appends a trailer of named float32[N] arrays
+(u32 count, then per array an 8-byte NUL-padded name + float32[N]); see
+apps/force-app/backend/app/d1lc.py, the reference writer. The trailer is parsed into
+`Cache.extras` and written back on serialise (strided like the rest), so filtering a v2
+cache does not silently drop its Mz/X/Y/Z columns."""
 
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -26,6 +30,8 @@ class Cache:
     fz: np.ndarray
     rpm: np.ndarray
     revs: np.ndarray
+    # Version-2 trailer arrays by name (empty for a v1 file). Not filtered, only strided.
+    extras: dict[str, np.ndarray] = field(default_factory=dict)
 
     @property
     def n(self) -> int:
@@ -39,6 +45,19 @@ def parse(buf: bytes) -> Cache:
     fs, feed, diam, cs, ce = struct.unpack_from("<fffff", buf, 12)
     arrs = np.frombuffer(buf, dtype="<f4", count=n * 6, offset=32)
     a = arrs.reshape(6, n)
+    extras: dict[str, np.ndarray] = {}
+    off = 32 + n * 6 * 4
+    if version >= 2 and off + 4 <= len(buf):
+        (count,) = struct.unpack_from("<I", buf, off)
+        off += 4
+        for _ in range(count):
+            if off + 8 + n * 4 > len(buf):
+                break  # truncated trailer: keep what parsed cleanly
+            # latin-1 so every byte of the name slot round-trips unchanged.
+            name = buf[off : off + 8].rstrip(b"\x00").decode("latin-1")
+            off += 8
+            extras[name] = np.frombuffer(buf, dtype="<f4", count=n, offset=off).copy()
+            off += n * 4
     return Cache(
         fs,
         feed,
@@ -51,6 +70,7 @@ def parse(buf: bytes) -> Cache:
         a[3].copy(),
         a[4].copy(),
         a[5].copy(),
+        extras,
     )
 
 
@@ -61,7 +81,7 @@ def serialise(c: Cache, stride: int = 1) -> bytes:
     head = struct.pack(
         "<IIIfffff",
         MAGIC,
-        1,
+        2 if c.extras else 1,
         t.size,
         c.fs,
         c.feed,
@@ -73,4 +93,9 @@ def serialise(c: Cache, stride: int = 1) -> bytes:
         np.ascontiguousarray(x[sl], dtype="<f4").tobytes()
         for x in (c.t, c.fx, c.fy, c.fz, c.rpm, c.revs)
     )
+    if c.extras:
+        body += struct.pack("<I", len(c.extras))
+        for name, arr in c.extras.items():
+            body += name.encode("latin-1")[:8].ljust(8, b"\x00")
+            body += np.ascontiguousarray(arr[sl], dtype="<f4").tobytes()
     return head + body

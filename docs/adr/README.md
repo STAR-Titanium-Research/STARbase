@@ -19,6 +19,7 @@ Format: lightweight [MADR](https://adr.github.io/madr/)-style. Status is one of
 | [0008](./0008-traceability-layer.md) | Cradle-to-grave traceability as Postgres functions | Accepted |
 | [0009](./0009-text-to-sql-guarded-readonly.md) | Local text-to-SQL via a guarded, read-only path | Accepted |
 | [0010](./0010-force-app-extraction-and-electron-packaging.md) | Force-app: shared plotting package, repo extraction, Electron packaging | Accepted (steps 0, 1, 3, 4 done; repo split not executed) |
+| [0011](./0011-row-level-visibility.md) | Row-level visibility: people see the records they are involved in | Proposed (open questions for the owner) |
 
 New ADRs: copy the structure of an existing one, take the next number, and add a
 row above.

@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, onDeactivated, ref } from 'vue';
+import { hoverIndexAt } from './hoverIndex';
+import { createLongPress, isTouchContextMenu, TOUCH_MENU_OFFSET_PX } from './longPress';
+import { markInView, markTagText } from './chartMark';
+import { displayUnit, yAxisTitle, type ChartSnapshot } from './chartExport';
 
 // Dependency-free chart. kind='env' → min/max envelope (force or RPM; always
 // includes 0 on the y-axis); kind='line' → FFT amplitude (optional log y).
@@ -37,19 +41,33 @@ const props = defineProps<{
 	// clamped to the nearest valid value.
 	secondXValues?: Float32Array | number[] | null;
 	secondXLabel?: string;
+	// Pinned marker (x-units, seconds): a solid vertical line + tag, set by the host when a map
+	// point is "shown in time". Optional; no marker by default.
+	markX?: number | null;
+	markLabel?: string;
+	// The host shows a menu for `chartmenu`: only then is the browser's own right-click menu replaced.
+	menu?: boolean;
 }>();
 const emit = defineEmits<{
 	(e: 'hover', i: number | null): void;
+	// Right-click on a chart: x is the time of the nearest bucket under the cursor (env charts; null
+	// on a spectrum, where a position means nothing to the map). The host decides what the menu
+	// holds; this only reports where. `snapshot()` returns what "Save chart as PNG/SVG" needs.
+	(e: 'chartmenu', v: { clientX: number; clientY: number; x: number | null; snapshot: () => ChartSnapshot }): void;
 	(e: 'update:cropStart', v: number): void;
 	(e: 'update:cropEnd', v: number): void;
 	(e: 'zoom', v: { start: number; end: number } | null): void;   // null = reset to full
 }>();
 
-const ML = 46, MR = 12, MT = 8, MB = 24;
+const ML = 56, MR = 12, MT = 8, MB = 24;
 // A second x-axis needs its own tick/label band above the plot — grow the top margin only
 // when one is actually supplied, so charts without it keep today's exact layout.
 const hasSecondX = computed(() => !!(props.secondXValues && props.secondXValues.length));
 const MT_EFF = computed(() => (hasSecondX.value ? MT + 16 : MT));
+// The y-axis unit shown on screen and in exports. A spectrum is the force amplitude in N rms; a
+// chart whose host gave no unit shows none rather than a made-up one.
+const yLabelUnit = computed(() => displayUnit(props.kind, props.yUnit || (props.kind === 'line' ? 'N' : '')) ?? '');
+const yTitle = computed(() => yAxisTitle(props.kind, yLabelUnit.value));
 const stroke = computed(() => props.color || '#0d9488');
 const peakNum = computed(() => {
 	if (props.peak == null) return null;
@@ -58,18 +76,26 @@ const peakNum = computed(() => {
 });
 
 const svgEl = ref<SVGSVGElement | null>(null);
+// The chart body is always rendered (the svg inside it comes and goes with the data), so it is what
+// the size is read from. Observing the svg itself, once, at mount, left the chart at the 360x150
+// default forever when it mounted without data -- or watching a detached node after the svg was
+// re-created -- and the viewBox then stretched onto the real box with preserveAspectRatio="none",
+// scaling everything unevenly (#94).
+const bodyEl = ref<HTMLElement | null>(null);
 const w = ref(360);
 const h = ref(150);
 let ro: ResizeObserver | undefined;
 onMounted(() => {
 	ro = new ResizeObserver((entries) => {
-		const r = entries[0].contentRect;
+		const r = entries[entries.length - 1].contentRect;
 		if (r.width > 0) w.value = Math.round(r.width);
 		if (r.height > 0) h.value = Math.round(r.height);
 	});
-	if (svgEl.value) ro.observe(svgEl.value);
+	if (bodyEl.value) ro.observe(bodyEl.value);
 });
-onBeforeUnmount(() => { ro?.disconnect(); if (rafId) cancelAnimationFrame(rafId); });
+onBeforeUnmount(() => { longPress.cancel(); ro?.disconnect(); if (rafId) cancelAnimationFrame(rafId); });
+// The Plot page is kept alive: a finger down as it hides never sends its pointerup here.
+onDeactivated(() => longPress.cancel());
 
 function niceNum(v: number): string {
 	const a = Math.abs(v);
@@ -286,7 +312,7 @@ const hoverPt = computed(() => {
 	if (props.kind === 'env') {
 		const mid = (d.min[i] + d.max[i]) / 2;
 		return { px: g.sx(g.xs[i]), py: g.sy(mid),
-			label: `${mid.toFixed(2)} ${props.yUnit || ''}`.trim(), sub: `${niceNum(g.xs[i])} ${props.xUnit || ''}`.trim() };
+			label: `${mid.toFixed(2)} ${yLabelUnit.value}`.trim(), sub: `${niceNum(g.xs[i])} ${props.xUnit || ''}`.trim() };
 	}
 	return { px: g.sx(g.xs[i]), py: g.sy(d.amp[i]),
 		label: `${d.amp[i].toPrecision(3)}`, sub: `${niceNum(g.xs[i])} ${props.xUnit || 'Hz'}`.trim() };
@@ -298,14 +324,19 @@ const hoverPt = computed(() => {
 // frame. Coalesce to one emit per animation frame, same rationale/pattern as onCropMove below.
 let hoverRafId = 0;
 let pendingHoverEv: MouseEvent | null = null;
-function emitHover(ev: MouseEvent) {
+// The bucket under a pointer, shared by the hover crosshair and the right-click menu so both
+// always agree. The plot spans the visible window [x0, x1], not the whole record, so map into
+// that and find the nearest sample by value (see hoverIndex.ts).
+function bucketAt(ev: { clientX: number }): number | null {
 	const g = geom.value, svg = svgEl.value;
-	if (!g || !svg) return;
+	if (!g || !svg) return null;
 	const r = svg.getBoundingClientRect();
 	const px = (ev.clientX - r.left) * (g.W / r.width);
-	const frac = (px - ML) / (g.W - ML - MR);
-	const i = Math.round(Math.min(1, Math.max(0, frac)) * (g.xs.length - 1));
-	emit('hover', i);
+	return hoverIndexAt(g.xs, g.x0, g.x1, (px - ML) / (g.W - ML - MR), g.iA, g.iB);
+}
+function emitHover(ev: MouseEvent) {
+	const i = bucketAt(ev);
+	if (i != null) emit('hover', i);
 }
 function onMove(ev: MouseEvent) {
 	if (!geom.value) return;
@@ -313,6 +344,60 @@ function onMove(ev: MouseEvent) {
 	if (!hoverRafId) hoverRafId = requestAnimationFrame(() => { hoverRafId = 0; if (pendingHoverEv) emitHover(pendingHoverEv); });
 }
 function onLeave() { emit('hover', null); }
+
+// Pinned marker. Kept out of `geom` so a marker change doesn't redo the envelope paths. Only
+// 'env' charts take one: the FFT x-axis is frequency, where a time marker means nothing.
+const mark = computed(() => {
+	const g = geom.value;
+	if (!g || props.kind !== 'env' || !markInView(props.markX, g.x0, g.x1)) return null;
+	const px = g.sx(props.markX);
+	// Flip the tag to the left of the line near the right edge so it never clips.
+	const flip = px > (ML + g.W - MR) / 2;
+	return { px, flip, text: markTagText(props.markX, props.markLabel, props.xUnit, niceNum) };
+});
+
+// Right-click on an env chart: report the nearest bucket's time (same mapping as emitHover) so
+// the host can offer "show position on map". Other charts keep the browser's own menu. A right
+// drag is not a gesture here (the pointerdown handlers ignore button 2), so no drag guard.
+// Only intercepted when the host opts in with `menu`: SignalPanel (Diagnostics) renders env charts
+// too but has no menu, and swallowing the browser's menu there would leave the right-click doing
+// nothing at all.
+function onContextMenu(ev: MouseEvent) {
+	const g = geom.value;
+	if (!g || !props.menu) return;
+	ev.preventDefault();
+	// A touch hold opens the menu itself (longPress below). Android Chrome also raises `contextmenu`
+	// for the same hold, so take it here too or the menu would open twice (and once for a drift the
+	// hold has already rejected as a pan). Never a mouse right-click, even with a finger down.
+	if (isTouchContextMenu(ev, longPress.touching)) return;
+	openMenu(ev.clientX, ev.clientY);
+}
+function openMenu(clientX: number, clientY: number, menuOffset = 0) {
+	const g = geom.value;
+	if (!g || !props.menu) return;
+	let x: number | null = null;
+	if (props.kind === 'env') {
+		const i = bucketAt({ clientX });
+		if (i == null) return;
+		x = g.xs[i];
+	}
+	emit('chartmenu', { clientX: clientX + menuOffset, clientY: clientY + menuOffset, x, snapshot });
+}
+// Touch has no right button and iOS Safari no `contextmenu`: a one-finger hold opens the same menu.
+// The svg's pointer handlers below are the zoom box's; these wrap them and only add the hold.
+const longPress = createLongPress((x, y) => openMenu(x, y, TOUCH_MENU_OFFSET_PX));
+function onSvgDown(ev: PointerEvent) { longPress.down(ev); onZoomDown(ev); }
+function onSvgMove(ev: PointerEvent) { longPress.move(ev); onZoomMove(ev); }
+function onSvgUp(ev: PointerEvent) { longPress.up(ev); onZoomUp(ev); }
+// The chart as the image exporter wants it: the props, not the on-screen geometry, so the file
+// is laid out for a report and not for this panel's pixel size.
+function snapshot(): ChartSnapshot {
+	return {
+		title: props.title, kind: props.kind, data: props.data, color: props.color, xUnit: props.xUnit,
+		yUnit: yLabelUnit.value, logY: props.logY, cropStart: props.cropStart, cropEnd: props.cropEnd,
+		viewStart: props.viewStart, viewEnd: props.viewEnd, compare: props.compare,
+	};
+}
 
 // ---- draggable crop handles (Live mode) ----
 let dragging: 'start' | 'end' | null = null;
@@ -332,6 +417,7 @@ function xToSec(ev: PointerEvent): number {
 	return g.x0 + Math.min(1, Math.max(0, frac)) * (g.x1 - g.x0);
 }
 function onCropDown(ev: PointerEvent) {
+	if (ev.button !== 0) return;   // right button opens the chart menu, it must not grab a handle
 	if (!props.cropEditable || !geom.value) return;
 	const sec = xToSec(ev);
 	const ds = props.cropStart != null ? Math.abs(sec - props.cropStart) : Infinity;
@@ -376,6 +462,7 @@ function fracToX(frac: number): number {
 const zoomRect = ref<{ x: number; w: number } | null>(null);
 let zoomDrag = false, zStartPx = 0;
 function onZoomDown(ev: PointerEvent) {
+	if (ev.button !== 0) return;   // right button opens the chart menu, it must not start a zoom box
 	if (!props.zoomTool || !geom.value) return;
 	zoomDrag = true; zStartPx = pxOf(ev); zoomRect.value = { x: zStartPx, w: 0 };
 	(ev.currentTarget as Element).setPointerCapture(ev.pointerId); ev.stopPropagation();
@@ -419,13 +506,14 @@ function onWheel(ev: WheelEvent) {
 	<div class="chart" :class="{ active }" :style="active ? { '--accent': stroke } : {}">
 		<div class="chart-head">
 			<span class="chart-title">{{ title }}</span>
-			<span v-if="peakNum != null" class="chart-peak">peak {{ peakNum.toFixed(2) }} {{ yUnit }}<template v-if="hasSecondX && secondXLabel"> · {{ secondXLabel }}</template></span>
-			<span v-else-if="geom" class="chart-unit">{{ logY ? 'log ' : '' }}{{ yUnit || (kind === 'line' ? 'amp' : '') }}<template v-if="hasSecondX && secondXLabel"> · {{ secondXLabel }}</template></span>
+			<span v-if="peakNum != null" class="chart-peak">peak {{ peakNum.toFixed(2) }} {{ yLabelUnit }}<template v-if="hasSecondX && secondXLabel"> · {{ secondXLabel }}</template></span>
+			<span v-else-if="geom" class="chart-unit">{{ logY ? 'log ' : '' }}{{ yLabelUnit }}<template v-if="hasSecondX && secondXLabel"> · {{ secondXLabel }}</template></span>
 		</div>
+		<div ref="bodyEl" class="chart-body">
 		<svg
 			ref="svgEl" v-if="geom" :viewBox="`0 0 ${geom.W} ${geom.Hh}`" class="chart-svg" :class="{ zoomtool: zoomTool }"
-			preserveAspectRatio="none" @mousemove="onMove" @mouseleave="onLeave" @wheel="onWheel"
-			@pointerdown="onZoomDown" @pointermove="onZoomMove" @pointerup="onZoomUp" @pointercancel="onZoomUp"
+			preserveAspectRatio="none" @mousemove="onMove" @mouseleave="onLeave" @wheel="onWheel" @contextmenu="onContextMenu"
+			@pointerdown="onSvgDown" @pointermove="onSvgMove" @pointerup="onSvgUp" @pointercancel="onSvgUp"
 		>
 			<line v-for="(t, i) in geom.yticks" :key="'gy' + i" :x1="ML" :x2="geom.W - MR" :y1="t.y" :y2="t.y" class="fc-grid" stroke-width="0.5" />
 			<line v-for="(t, i) in geom.xticks" :key="'gx' + i" :x1="t.x" :x2="t.x" :y1="MT_EFF" :y2="geom.Hh - MB" class="fc-grid" stroke-width="0.5" />
@@ -450,6 +538,7 @@ function onWheel(ev: WheelEvent) {
 				<text :x="t.x" :y="geom.Hh - MB + 12" text-anchor="middle" class="tick">{{ t.label }}</text>
 			</g>
 			<text :x="(ML + geom.W - MR) / 2" :y="geom.Hh - 3" text-anchor="middle" class="axis-label">{{ xUnit }}</text>
+			<text v-if="yTitle" :transform="`translate(10 ${(MT_EFF + geom.Hh - MB) / 2}) rotate(-90)`" text-anchor="middle" class="axis-label">{{ yTitle }}</text>
 			<!-- Second x-axis (e.g. radial position) — mirrors the bottom axis (line at the plot's
 			     top edge, ticks extending up into the grown top margin). Its unit label lives in the
 			     chart-head row (chart-peak/chart-unit below), not here — the ~16px top-margin band
@@ -465,6 +554,13 @@ function onWheel(ev: WheelEvent) {
 			<g v-if="hoverPt">
 				<line :x1="hoverPt.px" :x2="hoverPt.px" :y1="MT_EFF" :y2="geom.Hh - MB" stroke="#64748b" stroke-width="0.6" stroke-dasharray="3 3" />
 				<circle :cx="hoverPt.px" :cy="hoverPt.py" r="2.8" :fill="stroke" />
+			</g>
+			<!-- Pinned marker: solid, in its own colour (not the chart's --accent, which the active
+			     chart overrides with its trace colour) so it reads apart from the dashed hover line
+			     and the teal/red crop handles. -->
+			<g v-if="mark" class="fc-mark" pointer-events="none">
+				<line :x1="mark.px" :x2="mark.px" :y1="MT_EFF" :y2="geom.Hh - MB" class="fc-mark-line" stroke-width="1.5" />
+				<text :x="mark.px + (mark.flip ? -4 : 4)" :y="MT_EFF + 10" :text-anchor="mark.flip ? 'end' : 'start'" class="fc-mark-tag">{{ mark.text }}</text>
 			</g>
 			<!-- Live-mode draggable crop handles (start = teal, end = red); wide invisible
 			     hit rects keep them easy to grab. Pointer events are captured on drag. -->
@@ -483,6 +579,7 @@ function onWheel(ev: WheelEvent) {
 				class="zoom-rect" />
 		</svg>
 		<div v-else class="chart-empty">no data</div>
+		</div>
 		<div v-if="hoverPt" class="chart-tip"><strong>{{ hoverPt.label }}</strong><span>{{ hoverPt.sub }}</span></div>
 	</div>
 </template>
@@ -502,6 +599,7 @@ function onWheel(ev: WheelEvent) {
 .chart-title { font-size: var(--fs-md, 13px); font-weight: 650; color: var(--theme--foreground, #1e293b); }
 .chart-unit { font-size: var(--fs-xs, 11px); color: var(--theme--foreground-subdued, #98a2b3); font-weight: 600; }
 .chart-peak { font-size: var(--fs-xs, 11px); color: var(--theme--foreground, #1e293b); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart-body { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .chart-svg { display: block; width: 100%; flex: 1 1 auto; min-height: 0; cursor: crosshair; touch-action: none; }
 .chart-svg.zoomtool { cursor: crosshair; }
 .chart-svg .tick { fill: var(--theme--foreground-subdued, #94a3b8); font-size: var(--fs-xs, 11px); font-variant-numeric: tabular-nums; }
@@ -512,6 +610,8 @@ function onWheel(ev: WheelEvent) {
 .chart-svg .fc-grid { stroke: var(--border, #e2e8f0); }
 .chart-svg .fc-axis { stroke: var(--border-2, #94a3b8); }
 .chart-svg .fc-zero { stroke: var(--border-2, #cbd5e1); }
+.chart-svg .fc-mark-line { stroke: var(--mark-color, #f59e0b); }
+.chart-svg .fc-mark-tag { fill: var(--mark-color, #f59e0b); font-size: var(--fs-xs, 11px); font-weight: 700; font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--theme--background, #fff); stroke-width: 3px; }
 .chart-empty { flex: 1; display: grid; place-items: center; color: var(--theme--foreground-subdued, #98a2b3); font-size: var(--fs-sm, 12px); }
 /* The accent, not a sky blue a shade off the Fz trace it is dragged across. */
 .zoom-rect { fill: var(--accent, #38bdf8); fill-opacity: 0.16; stroke: var(--accent, #0ea5e9); stroke-width: 0.8; }

@@ -10,20 +10,18 @@ Replace example_job with your job in the import below and in _queue.enqueue().
 import os
 
 from flask import Flask, jsonify, request
-from redis import Redis
 from rq import Queue
 
 from app.jobs.example_job import example_job
 from app.lib import minio_client
+from app.lib.job_config import job_timeout_seconds
+from app.lib.redis_conn import get_redis
 from app.lib.security import check_secret, valid_object_key
 
 app = Flask(__name__)
 app.before_request(check_secret)
 
-_redis = Redis(
-    host=os.getenv("REDIS_HOST", "redis"),
-    port=int(os.getenv("REDIS_PORT", "6379")),
-)
+_redis = get_redis()
 _queue = Queue(os.getenv("QUEUE_NAME", "plugin"), connection=_redis)
 
 
@@ -39,17 +37,33 @@ def webhook_session():
 
     session_id = payload.get("key") or payload.get("session_id")
     item_payload = payload.get("payload") or payload
-    raw_pointer: str = item_payload.get("file_storage_pointer", "")
+    raw_pointer: str = item_payload.get("file_storage_pointer") or ""
     prefix = f"minio://{minio_client.BUCKET}/"
-    if raw_pointer.startswith(prefix):
-        object_key = raw_pointer[len(prefix) :]
-    else:
-        object_key = raw_pointer
 
-    if not session_id or not object_key:
-        return jsonify({"error": "missing session_id or file_storage_pointer"}), 400
+    if not session_id:
+        return jsonify({"error": "missing session_id / key"}), 400
+    # The Flow fires on every test_sessions create, including sessions that have no file for
+    # this worker (no pointer, or a pointer into another store). Those are not errors: answer
+    # 200 without enqueueing so the Flow does not log a failed run each time.
+    if not raw_pointer:
+        return jsonify({"status": "skipped", "reason": "no file_storage_pointer"}), 200
+    if "://" in raw_pointer and not raw_pointer.startswith(prefix):
+        return (
+            jsonify(
+                {
+                    "status": "skipped",
+                    "reason": "file_storage_pointer is not a MinIO pointer",
+                }
+            ),
+            200,
+        )
+    object_key = (
+        raw_pointer[len(prefix) :] if raw_pointer.startswith(prefix) else raw_pointer
+    )
     if not valid_object_key(object_key):
         return jsonify({"error": "invalid object_key"}), 400
 
-    job = _queue.enqueue(example_job, session_id, object_key)
+    job = _queue.enqueue(
+        example_job, session_id, object_key, job_timeout=job_timeout_seconds()
+    )
     return jsonify({"job_id": job.id}), 202

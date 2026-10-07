@@ -2,15 +2,20 @@
 // Dedicated Kistler LabAmp page: connection, operation mode, the per-channel sensor table, and a
 // settings reference explaining each parameter with recommended values. Talks to the backend
 // /labamp/* (which proxies the link-local amp; mock by default so this works without hardware).
-import { computed, onMounted, reactive, ref } from 'vue';
-import { labamp, type AutoRangeRec, type LabAmpStatus, type SensorRow } from '../record/labampApi';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { labamp, type AutoRangeRec, type SensorRow } from '../record/labampApi';
+import { labampState, type LabAmpSnapshot } from './labampStore';
 import { searchPastOperations } from '../record/directusLookups';
 import LookupField from '../record/panels/LookupField.vue';
 
-const status = ref<LabAmpStatus | null>(null);
-const sensors = ref<SensorRow[]>([]);
+// Status, config and sensors come from the module-level snapshot (#109): the last-known values
+// show at once on every visit and refresh in the background.
+const status = computed(() => labampState.data.value?.status ?? null);
+const sensors = computed<SensorRow[]>(() => labampState.data.value?.sensors ?? []);
+const refreshing = labampState.loading;
 const busy = ref(false);
-const err = ref<string | null>(null);
+const actionErr = ref<string | null>(null);
+const err = computed({ get: () => actionErr.value ?? labampState.error.value, set: (v: string | null) => { actionErr.value = v; } });
 const cfg = reactive({ base_url: '', channels: 8, mode: 'mock', autorange_headroom: 1.5 });
 const savedCfg = ref(false);
 
@@ -23,6 +28,10 @@ const arStatus = ref<Record<string, string> | null>(null);
 const arBusy = ref(false);
 async function persistDaq() {
 	await labamp.setConfig({ autorange_headroom: headroom.value, nidaq_bits: Number(daq.nidaq_bits), labamp_dac_bits: Number(daq.labamp_dac_bits), analog_fullscale_v: Number(daq.analog_fullscale_v) });
+	// Saved: the server now holds these values, so later refreshes may seed the fields again --
+	// but one already in flight read the server before this write and must not seed them back.
+	labampState.invalidate();
+	daqDirty.value = false;
 }
 const arSource = ref<'live' | 'previous'>('live');
 // Searches both local recordings on this machine (exact per-channel peaks) and past operations
@@ -70,7 +79,7 @@ async function measure() {
 }
 async function applyRanges() {
 	arBusy.value = true; err.value = null;
-	try { await persistDaq(); const r = await labamp.autorangeApply(headroom.value); recs.value = r.applied; arStatus.value = r.status; await refresh(); }
+	try { await persistDaq(); const r = await labamp.autorangeApply(headroom.value); recs.value = r.applied; arStatus.value = r.status; await refresh(true); }
 	catch (e: any) { err.value = e?.message || 'apply failed'; } finally { arBusy.value = false; }
 }
 function fmtRes(x: number) { return x >= 1 ? x.toFixed(2) : x >= 0.001 ? x.toFixed(4) : x.toExponential(1); }
@@ -91,34 +100,50 @@ async function writeCalibration() {
 	writeBusy.value = true; err.value = null;
 	try {
 		const res = await labamp.writeSensors([{ channel: editing.value, sensitivity: editSens.value, range: editRange.value }]);
-		sensors.value = res.sensors;
+		labampState.mutate((cur) => ({ ...cur!, sensors: res.sensors }));
 		editing.value = null;
 	} catch (e: any) { err.value = e?.message || 'write failed'; }
 	finally { writeBusy.value = false; }
 }
 
-async function refresh() {
-	busy.value = true; err.value = null;
+// A background refresh must not overwrite what the user is typing: the connection form and the
+// DAQ/headroom fields are only re-seeded from the snapshot while they hold no unsaved edit. The
+// watchers are sync so the seeding below can tell its own writes from the user's.
+const cfgDirty = ref(false);
+const daqDirty = ref(false);
+let seeding = false;
+watch(cfg, () => { if (!seeding) cfgDirty.value = true; }, { deep: true, flush: 'sync' });
+watch([headroom, daq], () => { if (!seeding) daqDirty.value = true; }, { deep: true, flush: 'sync' });
+function seedForms(snap: LabAmpSnapshot) {
+	seeding = true;
 	try {
-		status.value = await labamp.status();
-		Object.assign(cfg, { base_url: status.value.base_url, channels: status.value.channels, mode: status.value.config_mode });
-		const conf = await labamp.getConfig();
-		if (conf.autorange_headroom) headroom.value = conf.autorange_headroom;
-		if (conf.nidaq_bits) daq.nidaq_bits = conf.nidaq_bits;
-		if (conf.labamp_dac_bits) daq.labamp_dac_bits = conf.labamp_dac_bits;
-		if (conf.analog_fullscale_v) daq.analog_fullscale_v = conf.analog_fullscale_v;
-		effBits.value = Math.min(daq.labamp_dac_bits, daq.nidaq_bits);
-		sensors.value = status.value.reachable ? (await labamp.sensors()).sensors : [];
-	} catch (e: any) { err.value = e?.message || 'status failed'; } finally { busy.value = false; }
+		if (!cfgDirty.value) Object.assign(cfg, { base_url: snap.status.base_url, channels: snap.status.channels, mode: snap.status.config_mode });
+		if (!daqDirty.value) {
+			const conf = snap.config;
+			if (conf.autorange_headroom) headroom.value = conf.autorange_headroom;
+			if (conf.nidaq_bits) daq.nidaq_bits = conf.nidaq_bits;
+			if (conf.labamp_dac_bits) daq.labamp_dac_bits = conf.labamp_dac_bits;
+			if (conf.analog_fullscale_v) daq.analog_fullscale_v = conf.analog_fullscale_v;
+			effBits.value = Math.min(daq.labamp_dac_bits, daq.nidaq_bits);
+		}
+	} finally { seeding = false; }
+}
+watch(() => labampState.data.value, (snap) => { if (snap) seedForms(snap); }, { immediate: true });
+
+// `afterWrite`: the caller has just changed server state, so don't join a request that started
+// before the change (it may carry the old values).
+async function refresh(afterWrite = false) {
+	actionErr.value = null;
+	await labampState.revalidate({ fresh: afterWrite });
 }
 async function saveCfg() {
 	busy.value = true; err.value = null;
-	try { await labamp.setConfig({ base_url: cfg.base_url, channels: Number(cfg.channels), mode: cfg.mode }); savedCfg.value = true; setTimeout(() => (savedCfg.value = false), 1600); await refresh(); }
+	try { await labamp.setConfig({ base_url: cfg.base_url, channels: Number(cfg.channels), mode: cfg.mode }); labampState.invalidate(); cfgDirty.value = false; savedCfg.value = true; setTimeout(() => (savedCfg.value = false), 1600); await refresh(true); }
 	catch (e: any) { err.value = e?.message || 'save failed'; } finally { busy.value = false; }
 }
 async function setMode(mode: 'MEASURE' | 'RESET') {
 	busy.value = true; err.value = null;
-	try { const r = await labamp.setMode(mode); if (status.value) status.value.mode = r.mode; }
+	try { const r = await labamp.setMode(mode); if (labampState.data.value) labampState.mutate((cur) => ({ ...cur!, status: { ...cur!.status, mode: r.mode } })); }
 	catch (e: any) { err.value = e?.message || 'set mode failed'; } finally { busy.value = false; }
 }
 
@@ -127,7 +152,7 @@ const reference = [
 	{ name: 'Sensitivity (pC/N)', what: 'Charge sensitivity per channel from the dynamometer calibration certificate.', rec: 'Click Edit on the channel row above to enter the exact certificate value (Fx/Fy ≈ −7.9, Fz ≈ −3.7 pC/N typical).' },
 	{ name: 'Measuring range', what: 'Full-scale N mapped to ±10 V analog output. The 12-bit DAC bottleneck means range selection directly affects resolution.', rec: 'Use Auto-range below, or pick the smallest range that clears peak force with ~1.5× headroom.' },
 ];
-onMounted(refresh);
+onMounted(() => { void labampState.revalidate(); });
 </script>
 
 <template>
@@ -139,13 +164,13 @@ onMounted(refresh);
 				{{ status?.reachable ? 'Connected' : 'Not connected' }}
 				<span v-if="status?.mock" class="mock">mock</span>
 			</div>
-			<button class="btn icon ic" :disabled="busy" title="Refresh" aria-label="Refresh" @click="refresh"><span class="material-symbols-rounded">refresh</span></button>
+			<button class="btn icon ic" :class="{ spinning: refreshing }" :disabled="busy || refreshing" title="Refresh" aria-label="Refresh" @click="refresh()"><span class="material-symbols-rounded">refresh</span></button>
 		</header>
 
 		<div class="grid">
 			<section class="card">
 				<h2>Connection</h2>
-				<label>Amplifier URL<input v-model="cfg.base_url" placeholder="http://169.254.143.59" spellcheck="false" @input="cfg.mode = 'real'" /></label>
+				<label data-focus="labamp-url">Amplifier URL<input v-model="cfg.base_url" placeholder="http://169.254.143.59" spellcheck="false" @input="cfg.mode = 'real'" /></label>
 				<div class="two">
 					<label>Channels<input type="number" v-model.number="cfg.channels" /></label>
 					<label>Source
@@ -191,6 +216,7 @@ onMounted(refresh);
 						</tr>
 					</tbody>
 				</table>
+				<p v-else-if="refreshing && !labampState.data.value" class="hint">Loading channels…</p>
 				<p v-else class="hint">No channel data — connect the amplifier (or use mock) and refresh.</p>
 			</section>
 
@@ -216,7 +242,7 @@ onMounted(refresh);
 						 rather than replacing the last one. :key remounts the field after each pick so
 						 its "chosen" state resets to a blank search box for the next selection. -->
 					<LookupField :key="pickerKey" v-model="prevOpId" label="Previous recording(s)" placeholder="search sample code or pass code…"
-						:search="searchPastOperations" @select="onPickPastOp" />
+						:search="searchPastOperations" :selected-ids="prevOps.map((o) => o.id)" hide-selected @select="onPickPastOp" />
 					<div v-if="prevOps.length" class="prev-op-chips">
 						<span v-for="o in prevOps" :key="o.id" class="chip" :class="o.exact ? 'exact' : 'approx'"
 							:title="o.exact ? 'Exact per-channel peaks from this recorder\'s own capture history.' : 'The database only stores summed-axis peaks (Fx/Fy/Fz), not per-channel — these are estimated by splitting each axis peak evenly across its sub-channels.'">
@@ -276,6 +302,11 @@ onMounted(refresh);
 .conn .material-symbols-rounded { font-size: var(--icon-md); }
 .mock { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); padding: 1px 6px; border-radius: 10px; }
 .ic { margin-left: auto; }
+/* A background refresh (#109) is visible on the button only; the page keeps showing the last
+   snapshot meanwhile. */
+.ic.spinning .material-symbols-rounded { animation: la-spin 0.9s linear infinite; }
+@keyframes la-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ic.spinning .material-symbols-rounded { animation: none; opacity: 0.5; } }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 22px 26px; max-width: 1100px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
 .card.wide { grid-column: 1 / -1; }
