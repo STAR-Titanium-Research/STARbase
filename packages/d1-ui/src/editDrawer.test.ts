@@ -59,6 +59,35 @@ describe('saveErrors', () => {
 		expect(saveErrors(e)).toEqual(['one', 'two']);
 	});
 
+	it('replaces a refusal with the owner-or-co-owner message', () => {
+		const status403 = { response: { status: 403, data: { errors: [{ message: "You don't have permission to access this." }] } } };
+		expect(saveErrors(status403)).toEqual(['Only the owner or a co-owner can change this record.']);
+		const code = { response: { data: { errors: [{ message: 'x', extensions: { code: 'FORBIDDEN' } }] } } };
+		expect(saveErrors(code)).toEqual(['Only the owner or a co-owner can change this record.']);
+	});
+
+	it("shows the guard's refusal in plain words (the real guard shape)", () => {
+		const reason = "Only the sample's owner can hand it to someone else.";
+		const e = {
+			response: { status: 403, data: { errors: [{ message: reason, extensions: { code: 'FORBIDDEN', reason, source: 'd1-access-guard', kind: 'owner', collection: 'physical_samples', id: 's1' } }] } },
+		};
+		expect(saveErrors(e, 'physical_samples')).toEqual([reason]);
+	});
+
+	it("does not show Directus's stock 403 reason (developer text); it falls back to the collection's wording", () => {
+		const message = 'You don\'t have permission to perform "update" for collection "manufacturing_operations" or it does not exist.';
+		const e = { response: { status: 403, data: { errors: [{ message, extensions: { code: 'FORBIDDEN', reason: message } }] } } };
+		expect(saveErrors(e, 'manufacturing_operations')).toEqual(['Only the owner or a co-owner can change this record.']);
+		expect(saveErrors(e, 'campaigns')).toEqual(["Only the campaign's owner can change it."]);
+	});
+
+	it('words a reasonless refusal for the collection', () => {
+		const e = { response: { status: 403, data: { errors: [{ message: "You don't have permission to access this." }] } } };
+		expect(saveErrors(e, 'campaigns')).toEqual(["Only the campaign's owner can change it."]);
+		expect(saveErrors(e, 'projects')).toEqual(["Only the project's PI can change it."]);
+		expect(saveErrors(e, 'test_sessions')).toEqual(['Only the owner or a co-owner can change this record.']);
+	});
+
 	it('falls back to the error message', () => {
 		expect(saveErrors(new Error('offline'))).toEqual(['offline']);
 		expect(saveErrors({})).toEqual(['The record could not be saved.']);

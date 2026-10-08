@@ -7,7 +7,11 @@ import { RecordLink, Section, StatusBadge, asRecord, humanise, type TestSubjects
 // equal to the junction's first sample by migration 139, or the only link of an older row), so it
 // normally repeats the first junction sample; it is listed once, and still shows when the junction
 // cannot be read.
-const props = defineProps<{ sample: unknown; subjects: TestSubjects }>();
+//
+// A subject the user may not read (row-level visibility, ADR-0011) comes back as null, the same as
+// no subject: `subjects.hidden` counts those junction rows, and `sampleHidden` says the primary
+// sample column links to one (a raw-key read), so the page says "not visible" instead of "none".
+const props = defineProps<{ sample: unknown; subjects: TestSubjects; sampleHidden?: boolean }>();
 
 const samples = computed(() => {
 	const out = [...props.subjects.samples];
@@ -15,13 +19,14 @@ const samples = computed(() => {
 	if (direct && !out.some((s) => s.sample_id === direct.sample_id)) out.unshift(direct);
 	return out;
 });
+const hiddenCount = computed(() => Math.max(props.subjects.hidden, props.sampleHidden ? 1 : 0));
 </script>
 
 <template>
 	<Section
 		title="Subject"
-		:count="samples.length + subjects.others.length"
-		:empty="!samples.length && !subjects.others.length"
+		:count="samples.length + subjects.others.length + hiddenCount"
+		:empty="!samples.length && !subjects.others.length && !hiddenCount"
 		empty-text="No sample or other subject is recorded for this test."
 	>
 		<ul class="rows">
@@ -35,6 +40,10 @@ const samples = computed(() => {
 			<li v-for="o in subjects.others" :key="o.collection + o.item" class="row">
 				<span class="role">{{ humanise(o.collection.replace(/s$/, '')) }}</span>
 				<RecordLink :collection="o.collection" :id="o.item" class="code">{{ o.label || o.item.slice(0, 8) }}</RecordLink>
+			</li>
+			<li v-if="hiddenCount" class="row">
+				<span class="role">Sample</span>
+				<span class="muted">{{ hiddenCount === 1 ? '1 subject' : `${hiddenCount} subjects` }} not visible to you</span>
 			</li>
 		</ul>
 	</Section>

@@ -15,6 +15,7 @@ import LiveWaterfall from './LiveWaterfall.vue';
 import LiveFrm from './LiveFrm.vue';
 import { COLORMAPS, colormapLabel, PlotModeFlyout, useAutoColorScale, type ColorScale } from '@d1/force-plotting';
 import { PLOT_MODES } from './plotModes';
+import { showWindowControl } from './panels/forcePlotView';
 import { clampWindowSec, WINDOW_MAX_SEC, WINDOW_MIN_SEC, WINDOW_SLIDER_MAX_SEC } from './plotWindow';
 
 const route = useRoute();
@@ -138,7 +139,7 @@ onBeforeUnmount(() => client.disconnect());
 					</div>
 				</div>
 				<span v-if="singleChannelMode" class="mono-hint" title="Spectrogram/waterfall show one channel">{{ channels[0] }} only</span>
-				<div v-if="mode !== 'fft' && mode !== 'psd'" class="tw-row">
+				<div v-if="showWindowControl(mode, 'live')" class="tw-row">
 					<input type="range" min="2" :max="WINDOW_SLIDER_MAX_SEC" step="1" v-model.number="windowSec" />
 					<input type="number" :min="WINDOW_MIN_SEC" :max="WINDOW_MAX_SEC" v-model.number="windowSec" class="tw-num" />
 					<span class="tw-unit">s</span>

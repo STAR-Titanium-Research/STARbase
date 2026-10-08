@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backupStateLabel, expiresIn, listState, localStatusLabel, remoteCopyLabel, restoreBlockedReason, type RemoteSession } from './backupLabels';
+import { backupStateLabel, expiresIn, listState, localStatusLabel, prefillServerUrl, remoteCopyLabel, restoreBlockedReason, serverUrlToSave, type RemoteSession } from './backupLabels';
 
 const base: RemoteSession = { id: '20260101_000000', raw_size_mb: 12 };
 const NOW = 1_000_000 * 1000;
@@ -58,5 +58,35 @@ describe('remoteCopyLabel', () => {
 		expect(remoteCopyLabel('unknown')).toBe('partial remote copy');
 		expect(remoteCopyLabel(undefined)).toBe('no remote copy');
 		expect(remoteCopyLabel(null)).toBe('no remote copy');
+	});
+});
+
+describe('prefillServerUrl', () => {
+	const SUG = 'https://d1-server.example/backup-ingest';
+	it('offers the suggestion when no URL is saved', () => {
+		expect(prefillServerUrl('', SUG)).toEqual({ url: SUG, suggested: true });
+		expect(prefillServerUrl('  ', SUG)).toEqual({ url: SUG, suggested: true });
+		expect(prefillServerUrl(undefined, SUG)).toEqual({ url: SUG, suggested: true });
+	});
+	it('keeps a URL that is already saved', () => {
+		expect(prefillServerUrl('http://host:8210', SUG)).toEqual({ url: 'http://host:8210', suggested: false });
+	});
+	it('stays empty when the backend has no suggestion', () => {
+		expect(prefillServerUrl('', undefined)).toEqual({ url: '', suggested: false });
+		expect(prefillServerUrl('', '')).toEqual({ url: '', suggested: false });
+	});
+});
+
+describe('serverUrlToSave', () => {
+	const SUG = 'https://d1-server.example/backup-ingest';
+	it('sends nothing for an untouched suggestion while backups are off', () => {
+		expect(serverUrlToSave({ enabled: false, server_url: SUG }, true)).toBe('');
+	});
+	it('saves the suggestion once backups are enabled', () => {
+		expect(serverUrlToSave({ enabled: true, server_url: SUG }, true)).toBe(SUG);
+	});
+	it('saves an edited or already saved URL, enabled or not', () => {
+		expect(serverUrlToSave({ enabled: false, server_url: 'http://host:8210' }, false)).toBe('http://host:8210');
+		expect(serverUrlToSave({ enabled: true, server_url: 'http://host:8210' }, false)).toBe('http://host:8210');
 	});
 });

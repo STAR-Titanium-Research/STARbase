@@ -43,6 +43,8 @@ DISK_BACKUP_GB = 3.0
 DISK_STOP_GB = 1.0
 DISK_CHECK_INTERVAL = 10.0
 RAIL_REPUBLISH_SEC = 2.0
+# Live FFT window length (samples) when the rolling buffer holds that many; see _update_fft.
+FFT_NPERSEG = 8192
 
 
 def _raw_rows(capture_dir: str) -> int:
@@ -409,7 +411,7 @@ class RecordingSession:
         """Maintain per-channel rolling windows and publish their Welch amplitude spectra a few
         times a second (a JSON control message). The client draws a spectrum per selected channel
         and accumulates the frames into the spectrogram/waterfall views — only the current spectra
-        cross the wire. `axis`/`amp` are kept for back-compat with the old single-axis view."""
+        cross the wire. `axis` is the configured default axis."""
         if self.broadcaster is None:
             return
         for n in ("Fx", "Fy", "Fz"):
@@ -432,7 +434,8 @@ class RecordingSession:
             return
         self._fft_last = now
         fs = float(self.source.rate)
-        nper = int(min(self._fft_bufs[self._fft_axis].size, 4096))
+        # An 8192-sample Welch window once the buffer holds that many samples, else all of it.
+        nper = int(min(self._fft_bufs[self._fft_axis].size, FFT_NPERSEG))
         fout, spectra_out = welch_spectra(self._fft_bufs, fs=fs, nperseg=nper)
         if fout is None:
             return
@@ -442,8 +445,7 @@ class RecordingSession:
                 "fs": fs,
                 "f": fout,
                 "spectra": spectra_out,
-                "axis": self._fft_axis,  # back-compat
-                "amp": spectra_out.get(self._fft_axis, []),  # back-compat
+                "axis": self._fft_axis,
             }
         )
 

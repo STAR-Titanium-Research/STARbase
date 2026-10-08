@@ -79,6 +79,14 @@ named in the step.
 - [ ] **P2 — PNG export in Directus.** "Save chart as PNG" and "as SVG" download a correct image
   (Directus's CSP allows the `blob:` image used for the PNG). Since #125.
 
+### No-.mat force analyses (#190)
+- [ ] **Plot dashboard with a no-.mat cut.** Open a Force App cut uploaded over the recorder's .mat
+  size limit (its analysis row has no `directus_files_id`). Charts render from `series`, the saved
+  crop is applied, Bake is disabled with the "needs the archive .mat" explanation, and Apply and
+  Clear still work. Directus returns `directus_files_id` as null (not `{}`) for it. Since #198 (0.1.35).
+- [ ] **Recrawl leaves no-.mat rows alone.** On the force crawler panel, "Recrawl all" and
+  "Recrawl matching" don't touch rows with no `directus_files_id`. Since #198 (0.1.35).
+
 ### Sample timeline and campaign overview
 - [ ] **D5 — timeline on a real sample with genealogy.** Restart Directus so `d1-trace` and the
   rebuilt Lab Dashboard load. Lab Dashboard > Samples > pick a sample that has a parent, a child, a
@@ -383,6 +391,268 @@ and `d1-fast-dashboard` are now built from the root with the other workspace ext
   sums. Add an operation that someone else just added elsewhere (two tabs): the panel says
   "... is already in another campaign." and nothing changes. Since: Explorer pages E-final (PR pending).
 
+- [ ] **E5-fix-ui: Edit is hidden where you may not change the record.** Use user **A** (owner of a
+  sample, an operation, a test, a campaign and a project, or PI of the project) and user **B** (an
+  investigator of A's project, not an owner or co-owner). As B open A's sample, an operation or test
+  of A's, A's campaign and the project. Expect: the page opens, but there is no **Edit** button
+  (Report, Data Studio and the other buttons remain); as A the **Edit** button is there. As B, the
+  campaign page has no **Add samples** picker or "add" button on samples listed only through an
+  operation or test, and says "Only the campaign's owner can add samples here. Operations and tests
+  are moved by their own owner." (campaigns have no co-owners); the operation and test pickers
+  stay (see the next item). Force an edit anyway (open the Data Studio form and
+  save, or `PATCH` the sample): the error reads as a refusal in plain words, not a generic or
+  developer text. Add B as a co-owner of the sample: B now
+  sees **Edit**. Since: Explorer pages E5-fix-ui (PR pending).
+- [ ] **E5-fix-ui: pickers by a non-owner give the right message.** As user B on a campaign B owns,
+  search the Samples picker for a sample B can read but neither owns nor co-owns (one B sees only as
+  an investigator) and add it. Expect the create guard's refusal to read "You can only add this to a
+  sample you own or co-own.", not a generic Directus error, not a table name or id, and not "already
+  in another campaign". Do the same with an operation or test that B can read but not update (it is
+  an update of that operation or test, not of the campaign): "Only the owner of <code> (or of its
+  sample) can move it.", for add and for remove. As B on a campaign A owns, adding a sample says
+  "Only the campaign's owner can add samples to it."; removing a sample B neither co-owns nor owns the
+  campaign of says "Only the campaign's owner, or the sample's owner or a co-owner, can remove it."
+  As B on A's campaign, an operation B owns can still be added and removed (the picker is there).
+  Two tabs adding the same free operation as its owner still says "... is already in another
+  campaign." Since: Explorer pages E5-fix-ui (PR pending); wording E5-r3.
+- [ ] **E5-r2-ui: a refused save shows the server's reason.** As a co-owner (not owner) of a sample,
+  open the sample page, **Edit**, change the **Owner** and save. Expect "Only the sample's owner can
+  hand it to someone else." (the same for an operation or test: "Only the operation's owner ..."),
+  not the generic "Only the owner or a co-owner can change this record." and not Directus's own
+  "You don't have permission to perform "update" for collection ..." text. As B, an investigator who
+  cannot edit, force a save on a campaign (Data Studio form) and on a project: Directus's own 403
+  is replaced by "Only the campaign's owner can change it." / "Only the project's PI can change
+  it." (in the browser's Network tab the response is the stock 403 with `extensions.reason`; the
+  page must not show it). In the Network tab the guard's 403 carries `extensions.source:
+  "d1-access-guard"`, `kind` and `parent`. Since: Explorer pages E5-r2-ui (PR pending); wording E5-r3.
+- [ ] **E5-r2-ui: Edit follows the record, one permissions request per page.** As a co-owner (not
+  owner) of a sample, open it, **Edit**, set the Owner to someone else and save: the **Edit** button
+  disappears without a reload. Open a record you can change, then follow a link to one you cannot
+  (browser Network tab): Edit does not carry over from the first. On a Campaign page there is a
+  single `GET /permissions/me/campaigns/<id>`, and the pickers vanish after you hand the campaign
+  over. Since: Explorer pages E5-r2-ui (PR pending).
+- [ ] **E5-fix-ui: hidden relatives are named, not shown as empty.** As B (sees one sample of A's
+  campaign through a test, not A's other samples): open an operation whose input sample B cannot
+  see. Expect "Not visible to you" next to **Input**, not "No sample is linked". A test whose sample
+  B cannot see shows "1 subject not visible to you". An operation or test in a project or campaign
+  B cannot read has a dashed "Project (not visible to you)" or "Campaign (not visible to you)" crumb.
+  On the campaign page, when the campaign has samples B cannot see, a line reads "N samples not
+  visible to you" under the tiles and in the Samples list, and N plus the visible samples equals the
+  count on the campaign's card. Since: Explorer pages E5-fix-ui (PR pending).
+- [ ] **E5-fix-ui: project items for a non-investigator.** As a user who owns one sample in a project
+  but is neither PI nor investigator, open the project's Content form and the *Project items* list.
+  Expect "Only the project's PI and investigators can see this list." For the PI, and for an admin,
+  the list shows; for a PI of a project with nothing assigned it still reads "No items assigned to
+  this project yet." Since: Explorer pages E5-fix-ui (PR pending).
+- [ ] **E5-fix-ui: People page and register-sample.** As a Lab Member open People: the **App login**
+  field is read-only with "An admin links logins." and saving a person does not change the login;
+  as an admin the login picker works. Opening an existing person as a member shows no **Delete**
+  button (admin only; Since: E5-r2-ui). As a member whose login has no People row open **Register a
+  Sample**: it says up front that the login is not linked and the button refuses; as an admin
+  without a People row it still registers. If the server answers the create with 204 (a member
+  with a People row that somehow cannot read the sample) the page says "Created, but you can't see
+  it. Ask an admin to link your login to a People row." Since: Explorer pages E5-fix-ui (PR pending).
+- [ ] **E5-fix-ui: counts under relational filters return numbers.** As user B (member) open Home:
+  *At a glance* and *Needs attention* show numbers, not dashes; a project's tiles, the Projects index
+  cards and a campaign's tiles show numbers. These use `aggregate[count]` (and a `groupBy`) under the
+  row-level filters, which reach through other collections; a dash means Directus refused the
+  aggregate under that filter and the page needs another read. Since: Explorer pages E5-fix-ui (PR
+  pending).
+
+#### Row-level visibility (E5, ADR-0011)
+
+Setup for every item: migrations 140 and 141 applied and Directus **restarted right after applying them**
+(`docs/runbooks/upgrade-2026-10-row-level-visibility.md`; flush Redis, `docker restart`) (it reads relations
+at start-up, and 141 adds the hidden `projects.samples`, `operations` and `sessions` aliases, and the
+`d1-access-guard` hook is loaded at start-up too). Two Lab Member users with a People
+row each (`user_id` set): **A** and **B**, unrelated, plus a Lab Admin. Note the NOTICE that
+migration 141 prints about ownerless records.
+
+- [ ] **E5 — migrations 140 and 141 on the real database.** `dbmate up` applies cleanly and prints
+  `ADR-0011 ownerless records ...`; `dbmate down` twice then `up` again; before the `down`, copy the Lab Member rows (`SELECT * FROM
+  directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000002' ORDER BY id`) and after it
+  compare: the same rows come back (ids, filters, fields), and the table
+  `d1_private.lab_member_permissions_backup` and its schema are gone (they exist while 141 is applied; they
+  are not a Data Studio collection and not in `v_schema_dictionary`). In Settings → Access
+  Policies → Lab Member, `physical_samples` read shows the filter (owner, co-owners, project PI and
+  investigators, campaign owner) and `materials` read has none. On a database that already dropped
+  `physical_samples.co_owners` (the 2026-09 snapshot has no such column) nothing is renamed and
+  nothing fails. Since: Explorer pages E5 (PR pending).
+- [ ] **E5 — the NULL-owner rows.** Record the counts the migration printed (samples, operations,
+  tests, campaigns, projects without a PI) and assign owners
+  (`scripts/transfer_sample_ownership.py` or the *Owner* field) before members rely on the filter.
+  Until then those records are visible only through a project, campaign or co-owner. Since:
+  Explorer pages E5 (PR pending).
+- [ ] **E5 — owner A sees it, unrelated B does not (every rule).** As A create a project (A as PI),
+  a campaign in it, a sample in the campaign (project set) and an operation and a test on the sample.
+  Each shows *Owner: A* without A choosing it (the `d1-default-owner` hook). As B (never added to
+  anything): the Home counts, the Projects index, the Data Studio lists (samples, operations, tests,
+  campaigns, projects) and the Explorer pages by direct URL all show none of them (*Not found or not
+  visible to you*); `GET /items/physical_samples/<id>` as B answers 403 or an empty result. As the
+  admin all are visible. Also check the child lists: the sample's co-owners, genealogy, stock
+  provenance, linked files, the operation's force analyses and the test's results are not readable
+  by B. Since: Explorer pages E5 (PR pending).
+- [ ] **E5 — B gains access.** Add B as a **co-owner** of the sample: B now sees the sample, its
+  operations and tests (Explorer pages and Data Studio) and can edit them. Remove B and add B as an
+  **investigator** of the project: B sees the project, its campaigns, samples, operations and tests
+  but **Save** in the Edit drawer fails with a permission error, and so does a PATCH. Remove B and
+  make B the **owner of a campaign** that contains the sample: B sees the sample and its
+  operations and tests (read only) and the project (via the campaign). Make B the owner of a
+  different sample in the project: B sees the project, but only B's own sample in its counts.
+  Since: Explorer pages E5 (PR pending).
+- [ ] **E5 — operator co-owner records a cut from the Force App.** A owns sample S. As A, add the rig
+  operator B as co-owner of S. In the Force App signed in as B, the sample list offers S; record a
+  cut and save with upload. Expect: no 403 on the operation, the two files or the
+  `machining_force_analysis` row; the operation is owned by B; A (owner of S) sees the operation,
+  its force analysis and the live cache; an unrelated user C does not. Before B is a co-owner, S is
+  not offered to B. Since: Explorer pages E5 (PR pending).
+- [ ] **E5 — update and delete are limited to owners.** For each of sample, operation, test,
+  campaign and project: the owner (PI for a project) can edit and delete; a co-owner of the sample
+  can edit the sample and its operations and tests but cannot delete the sample; an investigator
+  (read access through the project) gets a permission error on edit and delete; an admin can do
+  everything. Deleting a sample as its owner removes it and its dependent rows cleanly. Since:
+  Explorer pages E5 (PR pending).
+- [ ] **E5 — `co_owners._some` works after the rename.** The sample form still shows the *Co-owners*
+  field with names (not ids or an old comma list); adding B there is what grants B access above.
+  `physical_samples.co_owners_legacy` is not shown in the form. `GET
+  /items/physical_samples?fields=co_owners.user_id` as the admin returns the junction rows. Since:
+  Explorer pages E5 (PR pending).
+- [ ] **E5 — `projects.samples`, `operations` and `sessions` aliases.** After the Directus restart, `GET
+  /items/projects?fields=samples,operations,sessions` as an admin lists ids of each, and a user who owns only a sample, or
+  only an operation or a test, in a project (no PI or investigator role) can open that project's page. If the project is invisible
+  to that user, Directus has not picked up the alias: restart it or clear its cache
+  (`POST /utils/cache/clear`). Since: Explorer pages E5 (PR pending).
+- [ ] **E5 — project rollup.** As the project's PI the Project rollup list (the `d1-project-items`
+  panel in the Data Studio form) shows the items; as an unrelated co-owner of one sample in it,
+  the panel is empty or reports it cannot read it. Since: Explorer pages E5 (PR pending).
+- [ ] **E5 — Ask-DB still answers over all data (known gap).** As B, ask "how many samples are
+  there?": the answer is the lab total, not B's visible count. This is the accepted gap in ADR-0011;
+  record the result so the owner can decide when to restrict Ask-DB. Since: Explorer pages E5 (PR
+  pending).
+- [ ] **E5 — the configure script keeps the filters.** Run `scripts/configure_users_and_policies.sql`
+  twice against the real database: the Lab Member rows still carry the filters (Access Policies →
+  Lab Member → `physical_samples` read), `directus_files` create/read and the Force App save from
+  the X2 item above still work. Since: Explorer pages E5 (PR pending).
+- [ ] **E5 — speed with real data.** As a member with many involved records, the Data Studio sample
+  list, Home and the Projects index load in a few seconds (the filters add relational subqueries
+  and the migration added the indexes behind them). If a list is slow, `EXPLAIN ANALYZE` the query
+  and note which filter path costs. Since: Explorer pages E5 (PR pending).
+- [ ] **E5 — a member without a People row.** Create a Lab Member whose People row is missing or has
+  no user: their new sample has no owner, and they cannot see it afterwards (the hook cannot fill
+  the owner). The member can create their own People row in the Data Studio (leave *User* empty, or
+  pick themselves) and an admin can link it; linking fixes the records they make from then on.
+  Decide whether sign-up should create the row. Since: Explorer pages E5 (PR pending).
+- [ ] **E5 fix — nobody can grant themselves access (d1-access-guard).** Setup: A owns sample S and
+  project P (A is PI) and campaign C; B is unrelated, then made an **investigator** of P (so B can read S
+  if S is in P, but not edit it). As B, each of these answers **403 FORBIDDEN** and creates nothing:
+  `POST /items/sample_co_owners {"sample_id": S, "user_id": B}`; `POST /items/project_investigators
+  {"project_id": P, "user_id": B}`; `PATCH /items/sample_co_owners/<a row of another sample B can edit>
+  {"sample_id": S}`. Then B owns campaign C2: `POST /items/campaign_samples {"campaign_id": C2,
+  "sample_id": S}` is 403 (B cannot edit S), and works for a sample B owns. As A all of them work;
+  as the admin all of them work. Also: A creates a new sample with a co-owner in the **same form
+  save** (the Data Studio *Co-owners* field on a new sample), and a new project with an investigator,
+  and a new campaign with samples A owns: none is refused (the guard reads the parent inside the
+  request's transaction; if a nested create is wrongly refused, the hook's `database` is not the
+  transaction and that needs fixing; see the next item for the owner-is-someone-else case). Remove B as investigator and re-add via A: works. Since:
+  Explorer pages E5 fix (PR pending).
+- [ ] **E5 r2 — nobody can attach their sample to someone else's test (`test_sessions_subject`).** A
+  owns test T (on A's sample SA); B owns sample SB and is unrelated to T. As B: `POST
+  /items/test_sessions_subject {"test_sessions_id": T, "collection": "physical_samples", "item": SB}`
+  answers **403 FORBIDDEN** ("You can only change the samples of a test you own, or of a test on a sample you own or co-own."), no row is created, and B still cannot read T.
+  The same POST by A, or by the admin, works. A creating a **new test with a sample in the form** (the
+  *Subject* field) still works. Naming a sample A cannot read on A's own test is allowed (A reads
+  the test; SB's owner can then read and edit it): confirm and record that this is what you want
+  (ADR-0011 decision 5). Since: Explorer pages E5 r2 (PR pending).
+- [ ] **E5-r3 — a parent merely updated in the request does not count as "created here".** As B,
+  create a *new* sample with a co-owner in the form (it works), a new project with investigators
+  (works) and a new campaign with samples (works): the guard now requires the parent to be
+  inserted by the request **and still at OCC version 1**. Then `POST /items/sample_co_owners
+  {"sample_id": <a sample of A's that B cannot update>, "user_id": <B's user>}` still answers 403
+  "You can only add this to a sample you own or co-own.". The "updated in the same transaction"
+  case itself is proven at SQL level in phase1 and in the node tests; this checks that the real
+  Directus nested create still passes the new `version = 1` condition. Since: Explorer pages E5-r3
+  (PR pending).
+- [ ] **E5 r2 — the creator owns what they make in someone else's campaign.** A owns campaign C in
+  project P (PI: PI). As B (a co-owner of a sample in C, so B may add an operation to it) create an
+  operation and a test with *Campaign* = C: both show *Owner: B* (not A, not PI), inherit the project,
+  and B can open and edit them afterwards; A sees them through the campaign. A new campaign created
+  by B under P shows *Owner: B*, not the PI. Choosing another owner explicitly in the form is kept.
+  Since: Explorer pages E5 r2 (PR pending).
+- [ ] **E5 r2 — creating a parent with junction rows in one save, owner = someone else.** As A (a
+  Lab Member): (1) Data Studio, new **project**, *Principal Investigator* = B, *Investigators* = C, Save.
+  (2) New **sample**, *Owner* = B, *Co-owners* = C, Save. (3) New **campaign**, *Owner* = B, with
+  *Samples* = a sample A owns, Save. (4) New **test**, *Owner* = B, with a *Subject* sample. Each saves
+  with no 403 (the guard recognises the parent as created in this request: `xmin =
+  pg_current_xact_id()::xid`). A then loses the record (it is B's). Then, as A, the same saves with a
+  **sample A cannot edit** in (3), or `POST /items/sample_co_owners` for an **existing** sample A
+  cannot edit, are still 403. If (1) to (4) are refused, Directus runs the nested junction create
+  outside one transaction (or in a savepoint) and the hook needs another way to know the parent is
+  new. Since: Explorer pages E5 r2 (PR pending).
+- [ ] **E5 r2 — repointing a `campaign_samples` row needs both sides.** B owns campaign C1 and a
+  sample S in it, and owns a second campaign C2; A owns sample T. `PATCH /items/campaign_samples/<row of
+  C1, S> {"sample_id": T}` answers 403 (B cannot edit T). Now a row (C1, S2) where B owns C1 but S2
+  belongs to A and B is not its co-owner: `PATCH {"campaign_id": C2}` answers 403 (the sample half is
+  checked on the moved row; before this fix only the campaign was). As A (owner of S2 and of the target
+  campaign) both PATCHes work. Since: Explorer pages E5 r2 (PR pending).
+- [ ] **E5 fix — a PI sees the project's campaigns' records.** B is PI of project P2 and owns nothing
+  else. A creates a campaign in P2, a sample in that campaign (the sample's own project left empty)
+  and an operation and a test on it with no project of their own. B sees the campaign, the sample, the
+  operation and the test (read only, Save fails), and the Project page counts them. An operation
+  whose own project is empty but whose campaign is in P2 is visible to B too. Since: Explorer pages E5
+  fix (PR pending).
+- [ ] **E5 fix — an operation owner can open the project.** A owns an operation (or test) in project P
+  and nothing else there. A opens the operation: the breadcrumb's project link opens the Project page
+  (not "not visible to you"); A sees the project row but only A's own records in its counts. Since:
+  Explorer pages E5 fix (PR pending).
+- [ ] **E5 fix — a new project's PI is its creator.** As A (with a People row) create a project in the
+  Data Studio or the Explorer: *Principal Investigator* shows A without A choosing it, A can edit it
+  and sees it in the Projects index. Choosing another PI explicitly is kept. Since: Explorer pages E5
+  fix (PR pending).
+- [ ] **E5 fix — the audit log is admins only.** As B, `GET /items/audit_logs` answers 403 and the
+  Audit Logs collection is not in B's Data Studio navigation; as the admin it lists rows. Home,
+  the Explorer pages and `d1-trace` still work for B (nothing reads the log as a member). Since:
+  Explorer pages E5 fix (PR pending).
+- [ ] **E5 fix — nobody can take over another person's People row.** A has a People row linked to A's
+  login; B has one linked to B's. As B: `PATCH /items/people/<A's row> {"user_id": "<B's user id>"}`
+  and `{"user_id": null}` and `PATCH /items/people/<B's row> {"user_id": "<A's user id>"}` all answer
+  403, and neither login changes; `PATCH /items/people/<A's row> {"notes": "x"}` works (other
+  columns stay editable); `DELETE /items/people/<A's row>` is 403; `POST /items/people {"full_name":
+  "Z", "user_id": "<A's user id>"}` is 403 while `POST ... {"full_name": "Z"}` and `{"full_name": "Z",
+  "user_id": "<B's user id>"}` (only if B has no row yet) work. The People page's login picker is
+  hidden for B and shown for the admin, who can link and relink. As the admin none of the above is
+  refused. Since: Explorer pages E5 fix (PR pending).
+- [ ] **E5 fix — Lab Member reads still work after `configure_all.sh`.** Run
+  `scripts/configure_all.sh` against the real database (it restarts Directus), then as A and B
+  repeat a quick pass: A sees A's sample, operation, test, campaign and project in the Data Studio and
+  Explorer; B sees none of them; the sample form still shows *Co-owners* and the campaign form
+  *Samples*, and a sample's *Campaigns* field and the hidden `co_owners_legacy` stay as before.
+  Settings -> Data Model -> `physical_samples` shows `owner_person_id` -> People, `campaigns` ->
+  `owner_person_id`, and `campaign_samples` -> `campaigns` relations. (A re-run used to delete the
+  owner relations and every filter then failed.) Since: Explorer pages E5 fix (PR pending).
+- [ ] **E5 owner — only the owner can change a record's owner.** Setup: A owns sample S; B is
+  a co-owner of S (so B can edit but not delete it); the hook loaded at Directus start-up. As B:
+  `PATCH /items/physical_samples/<S> {"owner_person_id": "<B's person id>"}` answers **403
+  FORBIDDEN** and the owner is unchanged; the same through the Data Studio sample form (change
+  *Owner*, Save) shows the error; `PATCH ... {"notes": "x"}` works, and saving the form without
+  touching *Owner* works. A `PATCH /items/physical_samples {"keys": [S, <a sample B owns>], "data":
+  {"owner_person_id": "<A's person id>"}}` is refused as a whole. Repeat for an operation and a test
+  that B co-edits through the sample (403). As A: handing S to B works, after which A can no longer
+  delete S and B can; as the admin changing the owner always works. Campaigns and projects are
+  unaffected (only their owner or PI can edit them at all). Since: Explorer pages E5 owner (PR pending).
+- [ ] **E5 owner — Owner and Operator pickers survive `configure_all.sh`.** After running
+  `scripts/configure_all.sh` against the real database (and Directus restarting), open a sample, an
+  operation, a test, a campaign, an etchant, a prep recipe, a tool box, a cutting insert and an insert
+  edge in the Data Studio: *Owner* (and *Operator* on operations and tests, *Principal Investigator*
+  on a project) is a People dropdown that lists names and offers "create", not a raw UUID input.
+  Since: Explorer pages E5 owner (PR pending).
+- [ ] **E5 fix — the sample report hides projects the reader cannot open.** A owns sample S in project
+  P and B is a co-owner of S but not an investigator of P. As B open the sample report
+  (`/d1-report/sample/<S>`): the sample is there, but its Project line and the operations' and tests'
+  project column show nothing for P; as A (PI) they show P. Since: Explorer pages E5 fix (PR pending).
+- [ ] **E5 — a secondary sample of a multi-sample test (known gap).** B co-owns only the second
+  sample of a test with two samples: B cannot see the test (it is matched through its first sample).
+  Record whether this matters to the lab. Since: Explorer pages E5 (PR pending).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and
@@ -520,7 +790,59 @@ tool; a test cut on scrap stock is fine.
   needs the chassis).
 - [ ] **#90** Packaged NSIS build and the Tailscale update feed (held back).
 
+### Rig-day batch (2026-10-08, 0.1.35)
+- [ ] **#190 long cut links and keeps its crop.** Record a cut over ~6 min at 51.2 kHz (no .mat).
+  Move both crop handles in the final summary and Save: the analysis row links with no .mat (no
+  400), the status leaves "partial upload". Repeat with the network off: the dialog says the .mat
+  was skipped (not "both files uploaded"); restart the app; Local Captures → the capture's plot
+  shows the moved crop on the force plot and FRM; Retry upload (from the plot and from Settings →
+  Local Captures) sends it. Moving the handles back to auto and saving clears it. Since #198 (0.1.35).
+- [ ] **#185 leaving the Record page mid-cut.** During a real cut go to Plot and Settings for
+  ~30 s and come back: the trace has no hole, the backend log shows one `/record/stream` socket.
+  Let a cut end (duration or Stop from a pop-out) while on another page: on return the Save dialog
+  is open with the finished trace, and the stream closes. A real gap (unplug the network briefly)
+  shows as "no live data", not a straight line. Since #198 (0.1.35).
+- [ ] **Safety alarms after navigating.** With a low software force limit, record once, visit
+  Settings, return and record again: the alarm (and stop-on-trip, if enabled) still fires, and
+  setup fields typed after the round trip are remembered after a restart. Since #198 (0.1.35).
+- [ ] **#189 plots after hiding the window.** After a cut, minimise and alt-tab away for a minute,
+  switch routes, come back: force, FFT, spectrogram and waterfall are drawn without touching the
+  window slider. With the Save dialog open the force panel shows the whole cut and no window
+  slider; it doesn't flip when the dialog closes. Since #198 (0.1.35).
+- [ ] **#186 FFT on real data.** Live FFT at the real rate with 12 channels shows narrow peaks
+  (tooth-pass and harmonics) and looks smooth; CPU and the UI stay responsive; spectrogram and
+  waterfall keep up and hold a 60 s window. The Welch average now has fewer segments, so check the
+  spectrum isn't too noisy to read. Since #198 (0.1.35).
+- [ ] **#187 pop-outs reachable.** Open Live Force / FRM pop-outs, minimise them, Win+D, launch the
+  app a second time: they restore. Save a pop-out on a second monitor, unplug it, relaunch: the
+  pop-out and main window open centred and fully on the remaining screen. Save a window at
+  2560×1440, reopen on 1920×1080: it fits, title bar reachable. A stale `/live/*` entry in
+  `%APPDATA%\…\window-state.json` no longer hides pop-outs. Since #198 (0.1.35).
+- [ ] **#188 RPM sparkline.** On a low-RPM CSS cut with a high target, the RPM panel's curve uses
+  most of its box instead of a flat line at the bottom. Since #198 (0.1.35).
+- [ ] **#135 backup URL.** On a rig with no saved backup URL, Settings → Backup shows the suggested
+  URL with "Suggested — not saved yet"; Save with backups off does not store it (the Doctor stays
+  quiet); enabling and saving stores it. A rig with a saved URL keeps it. Since #198 (0.1.35).
+- [ ] **#136 move the Recording & Metadata panel.** The "move panel to the other side" button
+  docks it right without panels falling below the bottom, also after resizing panels; the layout
+  survives a restart. Since #198 (0.1.35).
+- [ ] **#137 release notes.** After the 0.1.35 update, Settings → About and the update dialog show
+  New / Improved / Fixed groups. Since #198 (0.1.35).
+
+### Release pipeline (CI/CD overhaul)
+- [ ] **NI-DAQmx detection on a PC without the driver.** Install the packaged app on a Windows PC
+  with no NI-DAQmx driver (not the rig). Connectivity Doctor / self-check shows "NI-DAQmx runtime
+  not available", not "driver detected"; starting an NI-DAQ recording and *Start tacho* answer
+  "not available" instead of an internal error. On the rig, the same checks still report the
+  driver and record normally. Since: CI/CD overhaul (PR TBD).
+
 ## C. d1-server and infrastructure
+
+- [ ] **#190 migration 140 on d1-server.** Apply `20261008000140_machining_force_analysis_file_nullable`
+  (`dbmate up`). Directus accepts a `machining_force_analysis` POST with `directus_files_id: null`
+  and the field isn't required in its form. Set such a row to `pending` by hand with the
+  orchestrator daemon running: it comes back `done` with the "needs an archive .mat" message and its
+  `series`, `live_cache_file`, `live_render_points` and `matlab_version` unchanged. Since #198 (0.1.35).
 
 - [ ] **Official crop reaches the octree and grid builds; `d1_build.json` is published.** On
   `d1-server`, in the Plot page save an official crop on an archived cut that has Full and Gridded
@@ -556,6 +878,12 @@ tool; a test cut on scrap stock is fine.
 - [ ] **#10** Figure-mode PNGs re-baked by MATLAB for cuts with a saved crop (held back).
 - [ ] **#97** Tailscale serve, phone access, live-DAQ load (held back; security model is an owner
   decision).
+- [ ] **First automated force-app release reaches the rigs.** After the CI/CD overhaul merges, the
+  `force-app-release` run on `main` publishes Force App 0.1.34 (tag moved from the failed run's
+  commit). Within ~10 minutes `auto-publish.log` on d1-server shows it published, and a rig on 0.1.31
+  is offered the update and installs it. Since: CI/CD overhaul (PR TBD).
+- [ ] **Branch protection requires "CI passed".** In GitHub *Settings > Branches*, `main` requires
+  the **CI passed** check. A PR with a failing job cannot merge. Since: CI/CD overhaul (PR TBD).
 
 ## Done
 

@@ -27,6 +27,17 @@ export function chainActive(c: FilterChain | null | undefined): boolean {
 	return !!c && (c.despike.on || c.detrend.on || c.highpass.on || c.lowpass.on || c.notch.on);
 }
 
+/** Why Bake / bake-clear can't run for this analysis row, or null when they can. A Force App cut
+ *  over the recorder's .mat size limit is stored with directus_files_id NULL (#190); baking
+ *  PATCHes status 'pending' and the orchestrator re-runs MATLAB on that archive .mat, which
+ *  doesn't exist, so it would be a guaranteed failure. */
+export const NO_MAT_BAKE_REASON =
+	'Baking re-runs MATLAB on the archive .mat; this cut was uploaded without one (over the size limit). Apply the filter live instead.';
+export function bakeBlockedReason(detail: { directus_files_id?: unknown } | null | undefined): string | null {
+	if (!detail) return null;
+	return detail.directus_files_id ? null : NO_MAT_BAKE_REASON;
+}
+
 export function chainSummary(c: FilterChain | null | undefined): string {
 	if (!c) return '';
 	const s: string[] = [];

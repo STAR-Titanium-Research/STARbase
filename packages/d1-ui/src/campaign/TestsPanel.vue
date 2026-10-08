@@ -9,11 +9,15 @@ import RecordLink from '../components/RecordLink.vue';
 import Section from '../components/Section.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import PickerBox from './PickerBox.vue';
-import { campaignAssignPatch, inheritCampaignProject, lostRaceMessage } from './assign';
+import { campaignAssignPatch, changeOutcomeMessage, forbiddenWriteMessage, inheritCampaignProject } from './assign';
 import { LIST_CAP, type SectionState } from '../composables/useSections';
 
 // The campaign's test sessions and the picker that adds sessions that are in no campaign yet.
-const props = defineProps<{ campaignId: string; rows: any[]; section: SectionState<any[]> }>();
+const props = defineProps<{
+	campaignId: string;
+	rows: any[];
+	section: SectionState<any[]>;
+}>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
 const api = useApi();
@@ -83,7 +87,7 @@ async function setCampaign(id: string, campaign: string | null, label: string) {
 	actionError.value = '';
 	try {
 		const res = await api.patch('/items/test_sessions', campaignAssignPatch('session_id', id, props.campaignId, campaign));
-		actionError.value = lostRaceMessage(res.data?.data, !!campaign, label) ?? '';
+		actionError.value = (await changeOutcomeMessage(api, 'test_sessions', id, res.data?.data, !!campaign, label)) ?? '';
 		// A session added to a campaign also gets the campaign's project when it has none (never
 		// overwriting one), so project-scoped counts do not depend on the fallback.
 		if (campaign && !actionError.value) {
@@ -91,7 +95,7 @@ async function setCampaign(id: string, campaign: string | null, label: string) {
 		}
 		results.value = results.value.filter((r) => r.session_id !== id);
 	} catch (e) {
-		actionError.value = `Could not ${campaign ? 'add' : 'remove'} ${label}: ${errorText(e)}`;
+		actionError.value = forbiddenWriteMessage(e, !!campaign, 'test_sessions', label) ?? `Could not ${campaign ? 'add' : 'remove'} ${label}: ${errorText(e)}`;
 	} finally {
 		busy.value = null;
 	}

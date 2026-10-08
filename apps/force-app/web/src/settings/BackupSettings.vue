@@ -3,15 +3,19 @@ import { computed, onMounted, ref } from 'vue';
 import { getConfig } from '../config';
 import { describeFetchError } from '../netErrors';
 import { confirmAction } from '../ui/confirm';
-import { backupStateLabel, listState, localStatusLabel, restoreBlockedReason, type RemoteSession } from './backupLabels';
+import { backupStateLabel, listState, localStatusLabel, prefillServerUrl, restoreBlockedReason, serverUrlToSave, type RemoteSession } from './backupLabels';
 
 interface BackupConfig {
 	enabled: boolean;
 	server_url: string;
+	/** The lab's usual URL, offered when none is saved (#135). Never a saved default. */
+	suggested_url?: string;
 	server_status?: { reachable: boolean; sessions?: number; disk_free_gb?: number; retention_hours?: number; error?: string };
 }
 const base = () => getConfig().recorderUrl;
 const cfg = ref<BackupConfig>({ enabled: false, server_url: '' });
+// True while server_url holds the backend's suggestion, which has not been saved yet (#135).
+const urlIsSuggestion = ref(false);
 const loading = ref(false);
 const saved = ref(false);
 const error = ref('');
@@ -34,7 +38,12 @@ async function loadConfig() {
 	error.value = '';
 	try {
 		const res = await fetch(`${base()}/backup/config`);
-		if (res.ok) Object.assign(cfg.value, await res.json());
+		if (res.ok) {
+			Object.assign(cfg.value, await res.json());
+			const pre = prefillServerUrl(cfg.value.server_url, cfg.value.suggested_url);
+			cfg.value.server_url = pre.url;
+			urlIsSuggestion.value = pre.suggested;
+		}
 	} catch (e: any) {
 		error.value = e?.message || 'failed';
 	} finally {
@@ -50,11 +59,15 @@ async function saveConfig() {
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
 				enabled: cfg.value.enabled,
-				server_url: cfg.value.server_url,
+				server_url: serverUrlToSave(cfg.value, urlIsSuggestion.value),
 			}),
 		});
 		if (!res.ok) throw new Error(`HTTP ${res.status}`);
 		Object.assign(cfg.value, await res.json());
+		// Nothing was saved when the suggestion stayed untouched: keep showing it as a suggestion.
+		const pre = prefillServerUrl(cfg.value.server_url, cfg.value.suggested_url);
+		cfg.value.server_url = pre.url;
+		urlIsSuggestion.value = pre.suggested;
 		void loadSessions();
 		saved.value = true;
 		setTimeout(() => (saved.value = false), 2000);
@@ -75,6 +88,7 @@ async function testConnection() {
 		if (res.ok) {
 			const data = await res.json();
 			Object.assign(cfg.value, data);
+			urlIsSuggestion.value = false;
 			await loadConfig();
 			void loadSessions();
 		}
@@ -150,7 +164,8 @@ onMounted(() => { void loadConfig(); void loadSessions(); });
 
 		<label class="field">
 			<span class="lbl">Backup server URL</span>
-			<input v-model="cfg.server_url" placeholder="https://d1-server.tail54eeb6.ts.net/backup-ingest" spellcheck="false" />
+			<input v-model="cfg.server_url" :placeholder="cfg.suggested_url || 'https://backup-host/backup-ingest'" spellcheck="false" @input="urlIsSuggestion = false" />
+			<span v-if="urlIsSuggestion" class="hint">Suggested — not saved yet. Enable backups and press Save to keep it.</span>
 			<span class="hint">
 				The remote backup service endpoint. On the lab server it runs behind the shared proxy at
 				<code>/backup-ingest</code>; a directly-run server on its own port (e.g.

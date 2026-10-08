@@ -4,48 +4,96 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Re-run the whole suite on any branch from the Actions tab.
+  workflow_dispatch:
+
+# A new push to a PR cancels that PR's run still in progress. Runs on main are never cancelled:
+# force-app-release.yml waits for main's CI result on the commit it is about to release.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: no job here writes to the repo, issues or PRs.
 permissions:
   contents: read
 
 jobs:
+  # Which per-component builds this run needs (.github/scripts/ci-plan.mjs). Everything on main;
+  # on a PR, only the extensions and service images it touches.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      images: ${{ steps.plan.outputs.images }}
+      extensions: ${{ steps.plan.outputs.extensions }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          # A PR is checked out as its merge commit, whose first parent is the base branch tip:
+          # HEAD^1..HEAD is exactly what the PR changes.
+          fetch-depth: 2
+      - name: Work out the changed components
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == pull_request ]]; then
+            mapfile -t files < <(git diff --name-only HEAD^1 HEAD)
+            echo "${#files[@]} files changed"
+            node .github/scripts/ci-plan.mjs "${files[@]}"
+          else
+            node .github/scripts/ci-plan.mjs
+          fi
+
   lint:
     name: Lint (pre-commit)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
       - name: Run pre-commit
-        uses: pre-commit/action@v3.0.1
+        run: |
+          pip install pre-commit
+          pre-commit run --all-files --show-diff-on-failure --color=always
 
   geometry:
     name: Sample geometry engine (unit tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
         with:
-          node-version: "22"
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
       - name: Vendored copies in sync
         run: bash scripts/sync_geometry.sh --check
       - name: Unit tests
         run: node --experimental-strip-types --test core/extensions/d1-geometry-preview/test/geometry.test.ts
       - name: Extension endpoint tests
         run: node --test core/extensions/*/index.test.mjs
-      - name: Ask-DB helper tests
-        run: node --experimental-strip-types --test core/extensions/d1-ask-db/test/*.test.ts
-      - name: Report and label endpoint tests
-        working-directory: core/extensions/d1-report
-        run: npm ci --no-audit --no-fund && npm test
+      # d1-ask-db's and d1-report's own suites run in the `extensions` job, after their npm ci.
 
   foundation:
     name: Foundation smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Validate repository foundation
         run: bash tests/phase0_smoke.sh
       # docker compose is preinstalled on ubuntu-latest runners, so the
@@ -54,6 +102,7 @@ jobs:
   migrations:
     name: Schema migrations (up + down + seed + schema tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -71,25 +120,10 @@ jobs:
     env:
       DATABASE_URL: postgres://d1:ci_secret@localhost:5432/d1_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-
-      # Pinned by sha256. dbmate does not publish a checksum file, so this digest was computed
-      # from the official v2.23.0 release asset (fetched twice, identical). When bumping the
-      # version, download the new asset, verify it against the release page, and update both.
-      - name: Install dbmate
-        env:
-          DBMATE_SHA256: 757e0ede33fad35010ce5fdba201a4f2181516471676fe5eab6f93ff70ec7424
-        run: |
-          curl -fsSL -o /tmp/dbmate \
-            https://github.com/amacneil/dbmate/releases/download/v2.23.0/dbmate-linux-amd64
-          echo "${DBMATE_SHA256}  /tmp/dbmate" | sha256sum --check --strict -
-          sudo install -m 0755 /tmp/dbmate /usr/local/bin/dbmate
-
-      - name: Apply all migrations (up)
-        run: dbmate --no-dump-schema up
-
-      - name: Load seed data
-        run: psql "$DATABASE_URL" -f db/seeds/001_reference_data.sql
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-db
 
       - name: Run Phase 1 schema tests
         run: bash tests/phase1_schema.sh
@@ -100,40 +134,15 @@ jobs:
       - name: Run Phase 6 AI-readiness tests
         run: bash tests/phase6_text_to_sql.sh
 
-      - name: Purge test/seed data before rollback
-        run: |
-          psql "$DATABASE_URL" -c "
-            DO \$\$
-            DECLARE r RECORD;
-            BEGIN
-              FOR r IN SELECT tablename FROM pg_tables
-                       WHERE schemaname = 'public'
-                         -- audit_logs is append-only (a BEFORE TRUNCATE trigger raises);
-                         -- the rollback drops it like any other table.
-                         AND tablename NOT IN ('schema_migrations', 'audit_logs')
-              LOOP
-                EXECUTE format('TRUNCATE TABLE %I CASCADE', r.tablename);
-              END LOOP;
-            END \$\$;"
-
-      - name: Roll back all migrations (down — verifies reversibility)
-        run: |
-          for _ in $(seq 1 200); do
-            dbmate --no-dump-schema down || break
-          done
-
-      - name: Verify clean rollback (no tables remain)
-        run: |
-          tables=$(psql "$DATABASE_URL" -t -A -c \
-            "SELECT COUNT(*) FROM information_schema.tables
-             WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-               AND table_name != 'schema_migrations'")
-          echo "Tables after full rollback: $tables"
-          [[ "$tables" -eq 0 ]] || (echo "FAIL: $tables tables remain after rollback" && exit 1)
+      # Rolls back every migration (each down must succeed), fails on any table, view, function,
+      # type or schema left behind, then applies them all again.
+      - name: Roll back everything, check nothing is left, re-apply
+        run: bash scripts/ci/migration_roundtrip.sh
 
   script-tests:
     name: Scripts and diagnostics (pytest, incl. DB-level tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -151,27 +160,17 @@ jobs:
     env:
       DATABASE_URL: postgres://d1:ci_secret@localhost:5432/d1_scripts?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-
-      # Same pinned dbmate as the migrations job.
-      - name: Install dbmate
-        env:
-          DBMATE_SHA256: 757e0ede33fad35010ce5fdba201a4f2181516471676fe5eab6f93ff70ec7424
-        run: |
-          curl -fsSL -o /tmp/dbmate \
-            https://github.com/amacneil/dbmate/releases/download/v2.23.0/dbmate-linux-amd64
-          echo "${DBMATE_SHA256}  /tmp/dbmate" | sha256sum --check --strict -
-          sudo install -m 0755 /tmp/dbmate /usr/local/bin/dbmate
-
-      - name: Apply all migrations
-        run: dbmate --no-dump-schema up
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
 
       # The DB-level tests need the reference rows (e.g. manufacturing methods).
-      - name: Load seed data
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seeds/001_reference_data.sql
+      - uses: ./.github/actions/setup-db
 
       # numpy/scipy/scikit-learn pinned to the plugins' versions: the diag goldens are exact for
       # these (scikit-learn 1.3's HDBSCAN labels differ).
@@ -189,53 +188,82 @@ jobs:
           REQUIRE_DB_TESTS: "1"
         run: python -m pytest -q -rs tests/scripts
 
-  worker-build:
-    name: Heavy-data worker (docker build + unit tests)
+  # Every service image in docker-compose.yml is built here, and its tests run inside it, so a
+  # broken Dockerfile or a dependency that won't install on the image's Python fails the PR rather
+  # than the next `docker compose build` on the server.
+  images:
+    name: ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.images != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.images) }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Build worker image
-        run: docker build -t d1-heavy-data-worker plugins/heavy-data-worker/
-      - name: Run unit tests
-        run: |
-          docker run --rm d1-heavy-data-worker \
-            python -m pytest tests/ -v --tb=short
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          CONTEXT: ${{ matrix.context }}
+        run: docker build -t "$IMAGE" -f "$DOCKERFILE" "$CONTEXT"
+      - name: Run the tests inside the image
+        if: matrix.test != ''
+        env:
+          IMAGE: ${{ matrix.image }}
+          TEST: ${{ matrix.test }}
+        run: docker run --rm "$IMAGE" sh -c "$TEST"
 
-  analysis-build:
-    name: Analysis worker (docker build + unit tests)
+  # The Directus extensions with their own lockfile, outside the npm workspace (ci-plan.mjs lists
+  # them). Each is installed and built exactly as on the server, plus its own tests if it has any.
+  extensions:
+    name: Directus extension ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.extensions != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.extensions) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Build analysis image
-        run: docker build -t d1-analysis-worker plugins/analysis-worker/
-      - name: Run unit tests
-        run: |
-          docker run --rm d1-analysis-worker \
-            python -m pytest tests/ -v --tb=short
-
-  llm-build:
-    name: Text-to-SQL plugin (docker build + guard tests)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build text-to-SQL image
-        run: docker build -t d1-llm-text-to-sql plugins/llm-text-to-sql/
-      - name: Run unit tests (SQL guard, schema context, eval golds)
-        run: |
-          docker run --rm d1-llm-text-to-sql \
-            python -m pytest tests/ -v --tb=short
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Build
+        if: matrix.build
+        run: npm run build
+      - name: Test
+        if: matrix.test
+        run: npm test
 
   # ---- Force app ------------------------------------------------------------------------------
-  # Until these jobs existed nothing force-related ran on a PR: force-app-release.yml runs only the
-  # backend, backup-server and desktop suites, and only when a release is tagged. The Windows-only
-  # parts (PyInstaller freeze, NSIS build, Playwright against the packaged app, taskkill) stay there.
+  # The Windows-only parts (PyInstaller freeze, NSIS build, Playwright against the packaged app,
+  # taskkill) run in force-app-release.yml: on every release, and as a dry run on any PR that
+  # changes the app's version or packaging.
 
   force-app-js:
     name: Force app JS (plotting, web, desktop, Directus dashboard)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: npm
@@ -265,9 +293,12 @@ jobs:
   directus-ui:
     name: Explorer UI (@d1/ui and the six extensions that use it)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: npm
@@ -277,11 +308,10 @@ jobs:
         run: |
           npm test -w @d1/ui
           npm run typecheck -w @d1/ui
-      # d1-lab-dashboard is left out on purpose: it has older cytoscape type errors in NodeGraph.vue
-      # (unrelated to the Explorer pages) that `vue-tsc` reports; add it once those are fixed.
-      - name: Typecheck the Explorer pages and the campaign interface
+      - name: Typecheck the Explorer pages, the lab dashboard and the campaign interface
         run: |
           npm run typecheck -w directus-extension-d1-home
+          npm run typecheck -w directus-extension-d1-lab-dashboard
           npm run typecheck -w directus-extension-d1-campaign-ops
       - name: Build the Directus extensions that use @d1/ui
         run: npm run build:extensions
@@ -289,41 +319,83 @@ jobs:
   force-app-python:
     name: Force app Python (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Same Python and extras as the release build, which freezes the backend on 3.11 with
+          # the nidaq extra. Without the extra, nidaqmx-dependent paths took the "package not
+          # installed" branch here and only failed on the release runner (force-app-v0.1.34).
           - name: recorder backend
             dir: apps/force-app/backend
-            install: -e .[dev]
+            python: "3.11"
+            install: -e .[dev,nidaq]
             deps: apps/force-app/backend/pyproject.toml
+          # The services below run on python:3.12-slim (their Dockerfiles), so test on 3.12.
           - name: backup-server
             dir: apps/force-app/backup-server
+            python: "3.12"
             install: -r requirements.txt
             deps: apps/force-app/backup-server/requirements.txt
           - name: bug-report-relay
             dir: apps/force-app/bug-report-relay
+            python: "3.12"
             install: -r requirements.txt
             deps: apps/force-app/bug-report-relay/requirements.txt
           - name: filter-service
             dir: plugins/filter-service
+            python: "3.12"
             install: -r requirements.txt
             deps: plugins/filter-service/requirements.txt
           - name: diag-service
             dir: plugins/diag-service
+            python: "3.12"
             install: -r requirements.txt
             deps: plugins/diag-service/requirements.txt
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
         with:
-          python-version: "3.11"
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: ${{ matrix.deps }}
       - name: Install dependencies
         run: pip install ${{ matrix.install }}
       - name: Run tests
         run: python -m pytest
+
+  # One check that stands for the whole run, for branch protection: require "CI passed" and
+  # nothing else, and jobs can be added, renamed or skipped by the plan without editing the rule.
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs:
+      - plan
+      - lint
+      - geometry
+      - foundation
+      - migrations
+      - script-tests
+      - images
+      - extensions
+      - force-app-js
+      - directus-ui
+      - force-app-python
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was not needed
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if jq -e 'any(.[]; . == "failure" or . == "cancelled")' <<<"$RESULTS" >/dev/null; then
+            echo "::error::A CI job failed or was cancelled"
+            exit 1
+          fi

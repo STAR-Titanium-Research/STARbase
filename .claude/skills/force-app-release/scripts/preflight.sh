@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Run what force-app-release.yml runs, as far as Linux allows, before a force-app-v* tag is
-# pushed. The Windows-only steps (PyInstaller freeze, NSIS packaging, Playwright against the
-# packaged app) are listed as not run. Exit 0 = nothing here would fail the release job.
+# Run what force-app-release.yml runs, as far as Linux allows, before a release PR is opened.
+# The Windows-only steps (PyInstaller freeze, NSIS packaging, Playwright against the packaged
+# app) are listed as not run; the release PR's dry run covers them.
+# Exit 0 = nothing here would fail the release job.
 #
 # Usage: preflight.sh [--fast]    (--fast: version checks only, no test runs)
 set -uo pipefail
@@ -19,7 +20,8 @@ lock="$(node -p "require('./package-lock.json').packages['apps/force-app/desktop
 top="$(grep -m1 -oE "version: '[^']+'" apps/force-app/web/src/changelog.ts | cut -d"'" -f2)"
 [[ "$top" == "$v" ]] && ok "changelog.ts top entry is $v" || bad "changelog.ts top entry is $top, not $v"
 if git ls-remote --exit-code --tags origin "force-app-v$v" >/dev/null 2>&1 || git rev-parse -q --verify "refs/tags/force-app-v$v" >/dev/null; then
-  bad "tag force-app-v$v already exists: bump the version"
+  # A tag with no GitHub Release is left by a failed release run; the release workflow moves it.
+  printf '  \033[33mWARN\033[0m %s\n' "tag force-app-v$v exists: fine if it has no GitHub Release (a failed run), otherwise bump the version"
 else ok "tag force-app-v$v is free"; fi
 eb="$(grep -oE 'electronVersion:\s*[0-9.]+' apps/force-app/desktop/electron-builder.yml | grep -oE '[0-9.]+$')"
 inst="$(node -p "require('electron/package.json').version" 2>/dev/null || echo '?')"

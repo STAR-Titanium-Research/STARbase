@@ -258,3 +258,57 @@ describe('uploadCaptureColdStart with a partial analysis row already in the data
 		await expect(uploadCaptureColdStart(info)).rejects.toThrow(/linking the capture failed/);
 	});
 });
+
+// #190: the crop the operator set survives into the analysis row of a retried / cold-start upload.
+describe('uploadCaptureColdStart crop override', () => {
+	const base = { ...BASE_INFO, cacheUrl: 'http://x/captures/cap-1/live_cache.bin', matWritten: false, cfg: { source: 'nidaq', extra_metadata: {} } };
+	const analysisBody = () => post.mock.calls.find(([u]) => u === '/items/machining_force_analysis')![1];
+
+	it('sends the override the summary holds', async () => {
+		await uploadCaptureColdStart({ ...base, summary: { fs: 51200, crop_start_idx_override: 1000, crop_end_idx_override: 36_000_000 } });
+		expect(analysisBody()).toMatchObject({ crop_start_idx_override: 1000, crop_end_idx_override: 36_000_000 });
+	});
+
+	it('does not fetch the summary again, and sends no override without one', async () => {
+		const fetchMock = vi.fn(async (_url: string) => ({ ok: true, blob: async () => new Blob(['x']) }));
+		vi.stubGlobal('fetch', fetchMock);
+		await uploadCaptureColdStart({ ...base, summary: { fs: 51200 } });
+		expect(analysisBody()).not.toHaveProperty('crop_start_idx_override');
+		expect(analysisBody()).not.toHaveProperty('crop_end_idx_override');
+		expect(fetchMock.mock.calls.some(([u]) => u.endsWith('/summary'))).toBe(false);
+	});
+
+	it('sends no override for a half-set pair', async () => {
+		await uploadCaptureColdStart({ ...base, summary: { crop_start_idx_override: 5 } });
+		expect(analysisBody()).not.toHaveProperty('crop_start_idx_override');
+		expect(analysisBody()).not.toHaveProperty('crop_end_idx_override');
+	});
+
+	it('sends no override when the caller passes no summary', async () => {
+		await uploadCaptureColdStart(base);
+		expect(analysisBody()).not.toHaveProperty('crop_start_idx_override');
+	});
+});
+
+// #190: the error text must not claim "both files uploaded" when the .mat was skipped.
+describe('uploadCaptureColdStart failure text for the analysis insert', () => {
+	const failAnalysis = () => post.mockImplementation((url: string) => {
+		if (url === '/items/manufacturing_operations') return Promise.resolve({ data: { data: { operation_id: 'op-9' } } });
+		if (url === '/files') return Promise.resolve({ data: { data: { id: 'file-1' } } });
+		return Promise.reject(Object.assign(new Error('x'), { response: { status: 400, data: { errors: [{ message: 'Value can\'t be null' }] } } }));
+	});
+
+	it('says the .mat was skipped (over the size limit) when mat_written is false', async () => {
+		failAnalysis();
+		const err = await uploadCaptureColdStart({ ...BASE_INFO, matWritten: false, cfg: { source: 'nidaq', extra_metadata: {} } }).catch((e) => e);
+		expect(err.message).toMatch(/linking the capture failed - 400/);
+		expect(err.message).toMatch(/size limit/);
+		expect(err.message).not.toMatch(/both files/);
+	});
+
+	it('still says both files uploaded when a .mat was written', async () => {
+		failAnalysis();
+		const err = await uploadCaptureColdStart({ ...BASE_INFO, matWritten: true, cfg: { source: 'nidaq', extra_metadata: {} } }).catch((e) => e);
+		expect(err.message).toMatch(/both files uploaded/);
+	});
+});

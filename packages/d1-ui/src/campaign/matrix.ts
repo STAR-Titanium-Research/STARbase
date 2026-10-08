@@ -16,7 +16,7 @@
 // session status of the tests in it (failed first, processed / analysed last).
 
 import { TEST_RANK } from '../status';
-import { analysisState, diagState, relCode, relId } from './rollup';
+import { analysisState, diagState, hiddenSampleCount, relCode, relId } from './rollup';
 
 export type CellKind = 'operation' | 'test';
 
@@ -61,8 +61,11 @@ export interface MatrixRow {
 export interface Matrix {
 	columns: MatrixColumn[];
 	rows: MatrixRow[];
-	/** Operations and tests whose sample the reader may not see, so they have no row. */
-	unplaced: { operations: number; tests: number };
+	/**
+	 * What has no row because its sample is not visible to the reader: operations and tests with no
+	 * readable sample, and sample-list entries (`campaign_samples`) whose sample is hidden.
+	 */
+	unplaced: { operations: number; tests: number; samples: number };
 }
 
 export interface MatrixInput {
@@ -112,7 +115,7 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 	};
 	for (const j of samples) touch(relId(j?.sample_id, 'sample_id'), relCode(j?.sample_id), true);
 
-	const unplaced = { operations: 0, tests: 0 };
+	const unplaced = { operations: 0, tests: 0, samples: hiddenSampleCount(samples) };
 
 	// ---- operation columns and cells ----
 	const columns = new Map<string, MatrixColumn>();

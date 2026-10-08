@@ -6,8 +6,9 @@ import { collectionRoute } from '@d1/ui';
 import { go } from './goto';
 import { SAMPLES_LIST, samplesBookmarkLink } from './samplesBookmark';
 
-// The lab-wide counts that Home always had, now a quiet strip under "my work". (Once ADR-0011 is
-// live these count what the signed-in user may read, so they become "yours".)
+// The counts that Home always had, a quiet strip under "my work". Every count reads as the signed-in
+// user, so since ADR-0011 it is what that user may see (see "What you see" in the Explorer pages
+// wiki page for every path), not the lab's total. Lab Admins still see everything.
 const api = useApi();
 const router = useRouter();
 
@@ -46,7 +47,8 @@ onMounted(async () => {
 
 <template>
 	<section aria-labelledby="stats-h">
-		<h2 id="stats-h" class="h">Lab at a glance</h2>
+		<h2 id="stats-h" class="h">At a glance</h2>
+		<p class="sub">Counts of the records you can see: yours, ones you co-own, those of projects where you are PI or investigator (including through the project's campaigns), campaigns you own or that hold a sample you own or co-own, projects where you own a campaign, sample, operation or test, and the operations and tests of samples you can see.</p>
 		<div class="stats">
 			<button v-for="st in stats" :key="st.label" class="stat" @click="go(router, st.to)">
 				<v-icon :name="st.icon" class="s-icon" />
@@ -58,7 +60,8 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.h { margin: 0 0 10px; font-size: 18px; font-weight: 750; }
+.h { margin: 0 0 4px; font-size: 18px; font-weight: 750; }
+.sub { margin: 0 0 10px; font-size: 13px; color: var(--theme--foreground-subdued); }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .stat {
 	display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px 16px; cursor: pointer;

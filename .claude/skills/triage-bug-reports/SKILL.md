@@ -76,7 +76,8 @@ Show the plan to the user before writing code. They decide what is held back.
 1. Review the whole diff (`/code-review`, or the `force-app-reviewer` agent) and fix the findings.
 2. Run every suite: `bash .claude/skills/force-app-release/scripts/preflight.sh` covers the force
    app, plus `pytest` in `apps/force-app/bug-report-relay` and the schema tests if you touched SQL.
-3. Changelog entry + version bump through `force-app-release`. The tag stays the user's call.
+3. Changelog entry + version bump through `force-app-release`. Merging that PR releases it, so the
+   merge stays the user's call.
 4. **Only when the user says to**: close the fixed issues with a one-line note naming the version,
    and comment on the held-back ones. End every GitHub post with the Claude Code footer.
 5. Delete the plan file once the batch has shipped (`docs/superpowers/README.md`).

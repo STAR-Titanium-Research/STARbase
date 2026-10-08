@@ -92,15 +92,18 @@ needs a human for.
 
 ## Releasing
 
-1. Bump `apps/force-app/desktop/package.json`'s `version`.
+Ask Claude to *"release the force app"*, or do the same by hand:
+
+1. Bump `apps/force-app/desktop/package.json`'s `version` (then `npm install --package-lock-only`).
 2. Add an entry at the top of `apps/force-app/web/src/changelog.ts`. This is what
    **Settings → About → What's new** shows.
-3. Tag `force-app-v<version>` and push the tag.
+3. Open a PR and merge it. **Merging the version bump is the release.**
 
-`.github/workflows/force-app-release.yml` checks that the tag matches `package.json`, runs the
-backend, backup-server and desktop unit tests, freezes the backend with PyInstaller
-(`force-app-backend.spec`), packages the NSIS installer (`ForceApp-Setup-<version>.exe`), runs
-the Playwright smoke tests against it and attaches it to a GitHub Release. A scheduled
+`.github/workflows/force-app-release.yml` then runs the backend, backup-server and desktop unit
+tests, freezes the backend with PyInstaller (`force-app-backend.spec`), packages the NSIS
+installer (`ForceApp-Setup-<version>.exe`), runs the Playwright smoke tests against it, waits for
+main's CI and creates the tag and GitHub Release. To retry a failed release, press *Actions →
+force-app-release → Run workflow* on `main`. [CI and releases](../../ci-cd.md) has the details. A scheduled
 task on d1-server republishes it to the update feed within about five minutes, and installed apps
 pick it up from there (see [force-app-operations.md](../../force-app-operations.md#deploying-the-auto-publish-task)).
 

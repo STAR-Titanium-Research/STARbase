@@ -350,7 +350,9 @@ alone; the drop-Directus drill succeeds.
   [`docs/plugin-contract.md`](./docs/plugin-contract.md), Directus-agnostic (ADR-0006).
 - ~~**RBAC durability**~~ — **Resolved in Phase 3 (ADR-0005):** Directus roles,
   documented by intent so they can be re-implemented; audit, OCC and constraints
-  stay native Postgres. Project and export-control row filters are deferred to Phase 9.
+  stay native Postgres. Row-level visibility (project, owner and co-owner filters) is
+  decided in [ADR-0011](./docs/adr/0011-row-level-visibility.md) (accepted 2026-10-07). The
+  export-control filter on `directus_files` is still deferred to Phase 9.
 - ~~**Queue**~~ — **Resolved in Phase 4:** Redis + rq (ADR-0006).
 - **License** — before any public release. Still open.
 - ~~**Sample identifier**~~ — **Resolved in Phase 1:** a hidden UUID primary key

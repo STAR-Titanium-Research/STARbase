@@ -8,8 +8,8 @@ import {
 //   - force analysis in `error` on my operations: operations I own with a force file in error;
 //   - failed test sessions: test_sessions.status = 'failed' (the Data Studio "Failed" bookmark);
 //   - operations with force files still pending (queued, not yet analysed);
-//   - samples with no owner (owner_person_id empty): admins only, since a member would see
-//     only their own rows once ADR-0011 is live.
+//   - samples with no owner (owner_person_id empty): admins only, since a member can read only
+//     the records they are involved in (ADR-0011) and so never sees an ownerless sample.
 
 export interface AttentionItem {
 	id: string;
@@ -55,7 +55,7 @@ export const ATTENTION: AttentionDef[] = [
 	{
 		key: 'tests-failed',
 		label: 'Failed test sessions',
-		hint: 'Test sessions with status "failed"',
+		hint: 'Test sessions you can see with status "failed"',
 		icon: 'report',
 		collection: 'test_sessions',
 		filter: failedTests,
@@ -72,7 +72,7 @@ export const ATTENTION: AttentionDef[] = [
 	{
 		key: 'force-pending',
 		label: 'Operations with force files still pending',
-		hint: 'Operations with at least one force file queued for analysis',
+		hint: 'Operations you can see with at least one force file queued for analysis',
 		icon: 'hourglass_top',
 		collection: 'manufacturing_operations',
 		filter: forcePendingOperations,

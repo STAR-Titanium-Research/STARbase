@@ -134,7 +134,18 @@ INSERT INTO directus_relations (many_collection, many_field, one_collection, one
 ('prep_steps','operation_id',      'manufacturing_operations', 'prep_steps', 'delete'),
 ('prep_steps','etchant_id',        'etchants',                 NULL,         'nullify'),
 ('manufacturing_operations','source_recipe_id','prep_recipes', NULL,         'nullify'),
+('etchants','owner_person_id',    'people',                   NULL,         'nullify'),
+('prep_recipes','owner_person_id','people',                   NULL,         'nullify'),
 ('etchants','owner',               'directus_users',           NULL,         'nullify'),
 ('prep_recipes','owner',           'directus_users',           NULL,         'nullify');
+
+-- ── people pickers (migration 062) ─────────────────────────────────────────────
+-- This script deletes the etchants and prep_recipes field rows and relations, so the Owner picker and its
+-- people relation of migration 062 are re-added with the same settings and the legacy `owner` stays hidden.
+-- See configure_directus.sql.
+DELETE FROM directus_fields WHERE (collection, field) IN (('etchants','owner_person_id'), ('prep_recipes','owner_person_id'));
+INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES ('etchants', 'owner_person_id', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}","enableCreate":true}', 'related-values', '{"template":"{{full_name}}"}', FALSE, FALSE, 8, 'half', FALSE, '[{"language": "en-US", "translation": "Owner"}]');
+INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES ('prep_recipes', 'owner_person_id', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}","enableCreate":true}', 'related-values', '{"template":"{{full_name}}"}', FALSE, FALSE, 8, 'half', FALSE, '[{"language": "en-US", "translation": "Owner"}]');
+UPDATE directus_fields SET hidden = TRUE WHERE (collection, field) IN (('etchants','owner'), ('prep_recipes','owner'));
 
 COMMIT;

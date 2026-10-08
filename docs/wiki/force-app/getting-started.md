@@ -5,7 +5,7 @@
 ## Installing
 
 The app is distributed as an unsigned Windows installer (`ForceApp-Setup-x.y.z.exe`, a standard NSIS installer that lets you choose the install folder), built by CI
-for every `force-app-v*` tag and published to the update feed on d1-server.
+for every release and published to the update feed on d1-server.
 
 1. Download the installer from the repository's GitHub Releases page, or ask whoever maintains
    the acquisition PC.

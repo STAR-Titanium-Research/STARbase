@@ -3,9 +3,14 @@
 // Campaigns (machining trials / testing campaigns) group children under a project
 // and carry defaults. When a child is created with a campaign set, it inherits the
 // campaign's project, default equipment and (for operations) default material so
-// the user doesn't re-enter them. Ownership is NOT inherited: the owner defaults to
-// the logged-in user (d1-owner-default); inheriting it is an explicit
-// "same as parent" choice in the form (d1-owner-picker).
+// the user doesn't re-enter them.
+//
+// It deliberately does NOT fill the owner. This hook loads before `d1-owner-default`
+// (alphabetical), and every fill here is blank-only, so an owner copied from the project's
+// PI or the campaign's owner would be in place before d1-owner-default ran and would beat
+// "the creator becomes the owner" (ADR-0011 decision 8). Since ADR-0011 the owner is what
+// lets the creator see and edit the record they just made, so the creator must always win;
+// someone else owns it only when the form or API names them (d1-owner-picker).
 
 const CHILD_COLLECTIONS = new Set(['manufacturing_operations', 'test_sessions']);
 

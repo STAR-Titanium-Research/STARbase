@@ -188,3 +188,44 @@ def test_stop_during_a_timeout_run_ends_the_stream_cleanly():
 
     src._reader.read_many_sample = stop_then_timeout
     assert src.read() is None
+
+
+def _fake_nidaqmx_package(monkeypatch, driver_present):
+    """The nidaqmx package importable (the installer bundles it), with or without the DAQmx driver.
+    The real package loads the driver lazily, so only touching it raises."""
+    import sys
+    import types
+
+    class _System:
+        @property
+        def driver_version(self):
+            if not driver_present:
+                raise OSError("Could not find an installation of NI-DAQmx.")
+            return "24.0.0"
+
+    pkg = types.ModuleType("nidaqmx")
+    mods = {
+        "nidaqmx": pkg,
+        "nidaqmx.constants": types.ModuleType("nidaqmx.constants"),
+        "nidaqmx.stream_readers": types.ModuleType("nidaqmx.stream_readers"),
+        "nidaqmx.system": types.ModuleType("nidaqmx.system"),
+    }
+    mods["nidaqmx.stream_readers"].AnalogMultiChannelReader = object
+    mods["nidaqmx.system"].System = types.SimpleNamespace(local=_System)
+    pkg.constants = mods["nidaqmx.constants"]
+    pkg.stream_readers = mods["nidaqmx.stream_readers"]
+    pkg.system = mods["nidaqmx.system"]
+    for name, mod in mods.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+
+def test_nidaq_unavailable_when_the_package_is_installed_but_the_driver_is_not(monkeypatch):
+    # The force-app-v0.1.34 release job: nidaq_available() said yes on a runner with no driver, and
+    # /nidaq/tacho/start died in nidaqmx.Task() with DaqNotFoundError instead of answering 503.
+    _fake_nidaqmx_package(monkeypatch, driver_present=False)
+    assert nidaq_available() is False
+
+
+def test_nidaq_available_when_the_driver_loads(monkeypatch):
+    _fake_nidaqmx_package(monkeypatch, driver_present=True)
+    assert nidaq_available() is True

@@ -3,7 +3,7 @@
 // sparkline of recent RPM. Reads the live stream's rpm each frame (no per-sample reactivity).
 import { computed, ref, watch } from 'vue';
 import { useWorkspace } from '../workspace';
-import { createStableMax } from '../rpmScale';
+import { createSparkDomain, createStableMax, sparkPoints, type SparkDomain } from '../rpmScale';
 
 const w = useWorkspace();
 const hist = ref<number[]>([]);
@@ -16,9 +16,12 @@ const rpm = computed(() => w.st.rpm || 0);
 const target = computed(() => w.rpmTarget.value || 0);
 // #67: a stable full-scale (rpmScale.ts) — nice steps, grows at once, shrinks only after a
 // sustained drop — instead of max(target*1.25, rpm*1.1, 100) recomputed every frame, which
-// rescaled the gauge and sparkline with every bit of RPM noise. The sparkline uses the same scale.
+// rescaled the gauge and sparkline with every bit of RPM noise. The gauge keeps this scale; the
+// sparkline has its own y-domain from its history (#188).
 const scale = createStableMax({ floor: 100 });
 const max = ref(scale.value);
+const sparkDom = createSparkDomain();
+const dom = ref<SparkDomain>(sparkDom.update([], 0));   // the tracker's empty-history default
 function rescale() { max.value = scale.update(Math.max(target.value * 1.25, rpm.value * 1.1), performance.now()); }
 watch(target, rescale, { immediate: true });
 
@@ -27,12 +30,13 @@ watch(target, rescale, { immediate: true });
 // rather than splicing the old run's tail onto the new one.
 let lastN = 0;
 watch(() => w.client.frameSeq.value, () => {
-	if (w.st.nTotal < lastN) { hist.value = []; scale.reset(); }
+	if (w.st.nTotal < lastN) { hist.value = []; scale.reset(); sparkDom.reset(); }
 	lastN = w.st.nTotal;
 	rescale();
 	if (w.st.state !== 'recording') return;
 	hist.value.push(w.st.rpm);
 	if (hist.value.length > MAXH) hist.value.shift();
+	dom.value = sparkDom.update(hist.value, performance.now());
 });
 const overTarget = computed(() => target.value > 0 && rpm.value > target.value * 1.02);
 
@@ -54,12 +58,7 @@ const targetDeg = computed(() => START + SWEEP * Math.min(1, target.value / max.
 const needle = computed(() => ({ a: polar(valDeg.value, R - 26), b: polar(valDeg.value, R - 9) }));
 const targetTick = computed(() => ({ a: polar(targetDeg.value, R + 2), b: polar(targetDeg.value, R - 14) }));
 
-const spark = computed(() => {
-	const h = hist.value;
-	if (h.length < 2) return '';
-	const mx = max.value;
-	return h.map((v, i) => `${(i / (h.length - 1)) * 200},${38 - (Math.min(v, mx) / mx) * 34}`).join(' ');
-});
+const spark = computed(() => sparkPoints(hist.value, dom.value));
 </script>
 
 <template>

@@ -1,7 +1,7 @@
 {
   "name": "force-app-desktop",
   "private": true,
-  "version": "0.1.34",
+  "version": "0.1.35",
   "description": "Electron shell packaging the force-app SPA and recorder backend as a single Windows installer.",
   "main": "dist/main.js",
   "scripts": {

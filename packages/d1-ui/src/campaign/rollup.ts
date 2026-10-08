@@ -50,6 +50,12 @@ const first = (rows: any[], field: string) => (rows ?? []).map((r) => r?.[field]
 export const relId = (v: any, pk: string): string | null => (v && typeof v === 'object' ? (v[pk] ?? null) : (v ?? null));
 export const relCode = (v: any): string | null => (v && typeof v === 'object' ? (v.sample_code ?? null) : null);
 
+// Junction rows whose sample came back null: the row is visible through the campaign but the
+// sample is not (row-level visibility, ADR-0011). The campaign cards count junction rows, so the
+// page reports these to match, instead of showing fewer samples than the card says.
+export const hiddenSampleCount = (junction: any[] | null | undefined): number =>
+	(junction ?? []).filter((j) => j && relId(j.sample_id, 'sample_id') === null).length;
+
 export interface OverviewInput {
 	samples?: any[];
 	operations?: any[];
@@ -141,6 +147,8 @@ export function buildOverview({ samples = [], operations = [], tests = [], analy
 	return {
 		counts: {
 			samples: sampleRows.length,
+			/** Junction rows whose sample the reader may not see: not in `samples`, but on the card count. */
+			hiddenSamples: hiddenSampleCount(samples),
 			operations: opRows.length,
 			tests: testRows.length,
 			testsByStatus: countBy(testRows, 'status'),

@@ -13,7 +13,7 @@ const main: Action[] = [
 	{ label: 'Dashboards', sub: 'Explore trends & graphs', icon: 'analytics', to: '/d1-lab-dashboard' },
 ];
 const more: Action[] = [
-	{ label: 'Projects', sub: 'All projects', icon: 'folder_open', to: '/home/projects' },
+	{ label: 'Projects', sub: 'All projects you can see', icon: 'folder_open', to: '/home/projects' },
 	{ label: 'People', sub: 'Researchers & operators', icon: 'groups', to: '/home/people' },
 	{ label: 'Force Analysis', sub: 'Machining force & FRM plots', icon: 'insights', to: '/d1-force-dashboard' },
 	{ label: 'FAST Analysis', sub: 'Sintering traces & plots', icon: 'whatshot', to: '/d1-fast-dashboard' },

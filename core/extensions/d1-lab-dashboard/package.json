@@ -4,12 +4,14 @@
   "type": "module",
   "scripts": {
     "build": "directus-extension build",
-    "dev": "directus-extension build --watch"
+    "dev": "directus-extension build --watch",
+    "typecheck": "vue-tsc --noEmit"
   },
   "devDependencies": {
     "@directus/extensions-sdk": "^17",
     "@vue/compiler-sfc": "^3",
     "typescript": "^5",
+    "vue-tsc": "^2.2.0",
     "vue": "^3"
   },
   "dependencies": {

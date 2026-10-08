@@ -5,8 +5,9 @@ import {
 } from '@d1/ui';
 
 // "My work" on Home: the projects where I am PI or investigator, the campaigns I own and my newest samples, read as the
-// signed-in user with explicit "mine" filters (see packages/d1-ui/src/mine.ts), so Home is personal
-// even before ADR-0011 narrows what everybody can read. Each list loads and fails on its own.
+// signed-in user with explicit "mine" filters (see packages/d1-ui/src/mine.ts): a PI can read more
+// than they own (ADR-0011), and "my work" is the narrower, personal list. Each list loads and fails
+// on its own.
 
 export const CARD_LIMIT = 12;
 export const SAMPLE_LIMIT = 10;

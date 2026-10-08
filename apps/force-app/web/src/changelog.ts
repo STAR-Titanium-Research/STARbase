@@ -9,6 +9,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
 	{
+		version: '0.1.35',
+		date: '2026-10-08',
+		notes: [
+			'Record page: a button next to Reset layout moves the Recording & Metadata panel to the other side of the page.',
+			'Settings > About and the update prompt group the release notes into New, Improved and Fixed.',
+			'Improved: the live FFT has about four times as many frequency points, and narrow peaks (tooth-pass, harmonics) are kept at full height instead of falling between points.',
+			'Improved: the RPM panel\'s curve scales to the recent RPM, so a slow cut no longer reads as a flat line under a high target.',
+			'Improved: Settings > Backup fills in the lab\'s backup server address as a suggestion. It is only saved when you save with backups turned on.',
+			'Fixed: saving a cut longer than about 6 minutes to the database failed with "directus_files_id can\'t be null". Long cuts (too big for a .mat file) now link with their trace and crop, and the message no longer claims both files were uploaded.',
+			'Fixed: a crop you set in the final summary was lost if the upload failed. It is now kept with the capture, shown on its local Plot page and sent when you retry the upload.',
+			'Fixed: after visiting another page, the software force alarm, stop-on-trip and remembering the Record setup stopped working until the app was restarted.',
+			'Fixed: the live plot showed a flat line after you left the Record page during a cut. The recording keeps streaming while you are away, a real gap in the live data shows as "no live data", and a cut that ends while you are away offers to save when you come back.',
+			'Fixed: plots could come back blank after the window was minimised or hidden, and the force panel flipped between the whole cut and the last few seconds when the save dialog opened.',
+			'Fixed: live pop-out windows could open off-screen (after a monitor was unplugged or the window was minimised) and could not be reached from the taskbar.',
+			'Fixed: on the Plot page, Bake is disabled for a cut uploaded without a .mat file, which it would have marked as failed.',
+		],
+	},
+	{
 		version: '0.1.34',
 		date: '2026-10-07',
 		notes: [

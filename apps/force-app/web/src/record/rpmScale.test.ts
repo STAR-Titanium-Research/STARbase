@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createStableMax, niceCeil } from './rpmScale';
+import { createSparkDomain, createStableMax, niceCeil, sparkPoints } from './rpmScale';
 
 describe('niceCeil', () => {
 	it('rounds up to a nice step', () => {
@@ -52,5 +52,51 @@ describe('createStableMax (#67)', () => {
 		s.update(5000, 2);
 		s.reset();
 		expect(s.value).toBe(100);
+	});
+});
+
+describe('sparkline domain (#188)', () => {
+	// 40..80 RPM sine, against a 3000 RPM target (the gauge's max would be 5000).
+	const hist = Array.from({ length: 80 }, (_, i) => 60 + 20 * Math.sin(i / 5));
+	const ySpan = (pts: string) => {
+		const ys = pts.split(' ').map((p) => Number(p.split(',')[1]));
+		return Math.max(...ys) - Math.min(...ys);
+	};
+
+	it('gives an empty history the minimum span from zero, without storing it', () => {
+		const tr = createSparkDomain({ minSpan: 20 });
+		expect(tr.update([], 0)).toEqual({ lo: 0, hi: 20 });
+		expect(tr.update([500, 510], 0).lo).toBeGreaterThan(400);
+	});
+
+	it('fills most of the box for a low RPM against a high target', () => {
+		const tr = createSparkDomain();
+		const dom = tr.update(hist, 0);
+		expect(ySpan(sparkPoints(hist, dom)) / 34).toBeGreaterThanOrEqual(0.5);
+		// The old behaviour, for contrast: scaled to the gauge max.
+		const old = hist.map((v) => 38 - (Math.min(v, 5000) / 5000) * 34);
+		expect((Math.max(...old) - Math.min(...old)) / 34).toBeLessThan(0.05);
+	});
+
+	it('keeps a minimum span so steady noise does not fill the box', () => {
+		const tr = createSparkDomain();
+		const noise = Array.from({ length: 60 }, (_, i) => 3000 + (i % 2 ? 2 : -2));
+		const dom = tr.update(noise, 0);
+		expect(dom.hi - dom.lo).toBeGreaterThanOrEqual(300);          // 10 % of the top value
+		expect(ySpan(sparkPoints(noise, dom)) / 34).toBeLessThan(0.1);
+	});
+
+	it('does not move while the data stays inside it, and recentres when it leaves', () => {
+		const tr = createSparkDomain();
+		const d1 = { ...tr.update(hist, 0) };
+		const d2 = { ...tr.update([...hist, 61, 62], 16) };
+		expect(d2).toEqual(d1);
+		const d3 = tr.update([...hist, 400], 32);
+		expect(d3.hi).toBeGreaterThanOrEqual(400);
+	});
+
+	it('never goes below zero RPM', () => {
+		const tr = createSparkDomain();
+		expect(tr.update([0, 3, 1], 0).lo).toBe(0);
 	});
 });

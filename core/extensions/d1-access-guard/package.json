@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-access-guard",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Refuses to add a co-owner, an investigator or a campaign sample unless the caller may update the parent record (ADR-0011: those rows grant visibility, and Directus does not filter create).",
+  "keywords": ["directus", "directus-extension", "directus-custom-hook"],
+  "directus:extension": {
+    "type": "hook",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

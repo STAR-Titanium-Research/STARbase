@@ -1,7 +1,8 @@
 // Directus filters for "mine", as sent to /items (so Directus resolves $CURRENT_USER server-side).
 //
-// "Mine" is explicit rather than a permission rule (ADR-0011 is not live yet), using the
-// involvement columns of that ADR: ownership is `owner_person_id` -> people.user_id, co-ownership
+// "Mine" is an explicit filter on top of what ADR-0011 lets the user read (a PI can read far more
+// than they own, and "my work" is the narrower list), using the involvement columns of that ADR:
+// ownership is `owner_person_id` -> people.user_id, co-ownership
 // is the M2M alias `co_owners` (sample_co_owners.user_id), a project's PI is
 // `principal_investigator_person` -> people.user_id and its investigators are the M2M alias
 // `secondary_investigators` (project_investigators.user_id). The older `owner` and
@@ -26,6 +27,13 @@ export const projectsMine: Filter = {
 		{ secondary_investigators: { _some: { user_id: { _eq: CURRENT_USER } } } },
 	],
 };
+
+// "The signed-in user is this project's PI or one of its investigators": one row (or none) from
+// /items/projects. project_rollup is readable only by them (ADR-0011), so an empty roll-up is
+// either an empty project or this check failing.
+export const projectInvestigatorFilter = (projectId: string | number): Filter => ({
+	_and: [{ project_id: { _eq: projectId } }, projectsMine],
+});
 
 export const campaignsMine: Filter = ownedByMe;
 

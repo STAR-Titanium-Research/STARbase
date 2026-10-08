@@ -5,12 +5,15 @@ import { RecordLink, Section, StatusBadge, asRecord } from '@d1/ui';
 // The samples an operation consumed (sample_id: the workpiece it acted on) and produced
 // (output_sample_id: the new sample of an additive or FAST step). Machining modifies the input in
 // place, so it often has only an input; a powder build has only an output.
-const props = defineProps<{ input: unknown; output: unknown }>();
+//
+// A sample the user may not read comes back as null, the same as no sample at all (row-level
+// visibility, ADR-0011), so the page reads the raw keys once (`*Hidden`) to tell them apart.
+const props = defineProps<{ input: unknown; output: unknown; inputHidden?: boolean; outputHidden?: boolean }>();
 
 const rows = computed(() =>
 	[
-		{ role: 'Input', sample: asRecord(props.input), hidden: props.input && !asRecord(props.input) },
-		{ role: 'Output', sample: asRecord(props.output), hidden: props.output && !asRecord(props.output) },
+		{ role: 'Input', sample: asRecord(props.input), hidden: props.inputHidden || (props.input && !asRecord(props.input)) },
+		{ role: 'Output', sample: asRecord(props.output), hidden: props.outputHidden || (props.output && !asRecord(props.output)) },
 	].filter((r) => r.sample || r.hidden),
 );
 </script>

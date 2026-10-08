@@ -91,10 +91,34 @@ WHERE one_collection='campaigns'
 
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
 ('campaigns','project_id','projects','campaigns','nullify'),
+('campaigns','owner_person_id','people',NULL,'nullify'),
 ('campaigns','owner','directus_users',NULL,'nullify'),
 ('campaigns','default_equipment_id','equipment',NULL,'nullify'),
 ('campaigns','default_material_id','materials',NULL,'nullify'),
 ('manufacturing_operations','campaign_id','campaigns','operations','nullify'),
 ('test_sessions','campaign_id','campaigns','sessions','nullify');
+
+-- The campaign_samples M2M (migration 087). The DELETE above removes its campaign_id side (its one
+-- collection is campaigns), and the row filters of ADR-0011 walk campaigns.samples and
+-- physical_samples.campaigns. The sample_id side survives; both are re-checked here.
+DELETE FROM directus_relations WHERE many_collection = 'campaign_samples';
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, junction_field, one_deselect_action) VALUES
+('campaign_samples','campaign_id','campaigns','samples','sample_id','delete'),
+('campaign_samples','sample_id','physical_samples','campaigns','campaign_id','delete');
+
+-- Their alias fields: campaigns' fields are rebuilt above, and configure_directus.sql removed
+-- physical_samples.campaigns. Without a row Directus does not offer the alias to a filter.
+DELETE FROM directus_fields
+WHERE (collection = 'campaigns' AND field = 'samples') OR (collection = 'physical_samples' AND field = 'campaigns');
+INSERT INTO directus_fields (collection, field, interface, special, width, sort, hidden) VALUES
+('campaigns',        'samples',   'list-m2m', 'm2m', 'full', 30, false),
+('physical_samples', 'campaigns', 'list-m2m', 'm2m', 'full', 60, false);
+
+-- ── people pickers (migration 062) ─────────────────────────────────────────────
+-- This script deletes the campaigns field rows, so the Owner picker of migration 062 (m2o -> people) is
+-- re-added with the same settings and the legacy `owner` column stays hidden. See configure_directus.sql.
+DELETE FROM directus_fields WHERE (collection, field) IN (('campaigns','owner_person_id'));
+INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES ('campaigns', 'owner_person_id', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}","enableCreate":true}', 'related-values', '{"template":"{{full_name}}"}', FALSE, FALSE, 8, 'half', FALSE, '[{"language": "en-US", "translation": "Owner"}]');
+UPDATE directus_fields SET hidden = TRUE WHERE (collection, field) IN (('campaigns','owner'));
 
 COMMIT;

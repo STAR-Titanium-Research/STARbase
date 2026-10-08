@@ -83,8 +83,9 @@ npm run dev -w force-app-desktop
 The backend sidecar is spawned from `apps/force-app/backend/.venv`. To run it alone:
 `.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8200`.
 
-**Installed builds** — every `force-app-v*` tag runs `.github/workflows/force-app-release.yml`,
-which tests and packages the Windows installer and attaches it to a GitHub Release. A scheduled
+**Installed builds** — merging a version bump to `main` (or pressing *Run workflow* on
+`.github/workflows/force-app-release.yml`) tests and packages the Windows installer and publishes
+it as a GitHub Release ([CI and releases](../../docs/ci-cd.md)). A scheduled
 task on `d1-server` republishes each release to the Caddy-served feed at `/force-app-updates/`,
 which deployed rigs poll via `electron-updater` (see
 [`docs/force-app-operations.md`](../../docs/force-app-operations.md#deploying-the-auto-publish-task)).

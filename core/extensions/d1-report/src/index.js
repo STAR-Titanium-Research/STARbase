@@ -342,8 +342,8 @@ export default defineEndpoint({
 				// Operations and tests: ask Directus which ones this caller may read, then
 				// fetch the view rows for exactly those ids.
 				const [opRows, testRows] = await Promise.all([
-					a.list('manufacturing_operations', { sample_id: { _eq: sid } }, ['operation_id', 'campaign_id']),
-					a.list('test_sessions', { sample_id: { _eq: sid } }, ['session_id', 'campaign_id']),
+					a.list('manufacturing_operations', { sample_id: { _eq: sid } }, ['operation_id', 'campaign_id', 'project_id']),
+					a.list('test_sessions', { sample_id: { _eq: sid } }, ['session_id', 'campaign_id', 'project_id']),
 				]);
 				const opIds = opRows.map((r) => r.operation_id);
 				const testIds = testRows.map((r) => r.session_id);
@@ -400,6 +400,26 @@ export default defineEndpoint({
 				};
 				withCampaign(ops, opRows, 'operation_id');
 				withCampaign(tests, testRows, 'session_id');
+
+				// The v_* views are read with the root handle, so they carry the code, name and document
+				// number of a project the caller may not read (ADR-0011: a record can be visible
+				// through its sample or campaign while its project is not). Show a project only when the
+				// caller can read it, the same rule the operation and test reports apply with a.one().
+				const readableProjects = await a.readableIds(
+					'projects',
+					'project_id',
+					[ps.project_id, ...opRows.map((r) => r.project_id), ...testRows.map((r) => r.project_id)]
+				);
+				const blankProject = (row, projectId) => {
+					if (projectId && readableProjects.has(String(projectId))) return;
+					for (const k of ['project_code', 'project_name', 'project_document_number']) if (k in row) row[k] = null;
+				};
+				const projectOf = (srcRows, key) => Object.fromEntries(srcRows.map((r) => [String(r[key]), r.project_id]));
+				blankProject(sample, ps.project_id);
+				const opProject = projectOf(opRows, 'operation_id');
+				ops.forEach((row) => blankProject(row, opProject[String(row.operation_id)]));
+				const testProject = projectOf(testRows, 'session_id');
+				tests.forEach((row) => blankProject(row, testProject[String(row.session_id)]));
 
 				const publicUrl = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
 				const recordUrl = adminRecordUrl(publicUrl, 'physical_samples', sid);

@@ -34,6 +34,12 @@ Migration count: !`ls db/migrations/*.sql | wc -l` (see the CI rollback gotcha b
   `occ_<table>` BEFORE UPDATE → `occ_update_trigger_function()` and
   `audit_<table>` AFTER INSERT OR UPDATE OR DELETE → `audit_trigger_function()`.
 - Index FK columns you will filter on (`idx_<table>_<column>`).
+- A new table that holds **lab data** (samples, operations, tests, campaigns, their child rows)
+  needs a row-visibility rule, or Lab Members get no access (or, if a migration grants it
+  unfiltered, see everyone's records). Add it to `scripts/access_rules.json` (ADR-0011), run
+  `python3 scripts/gen_access_rules.py --write`, and apply the new rows in the migration (copy
+  `20261007000141_lab_member_row_visibility.sql`; `--values` prints them). Reference data goes in
+  the file's `unfiltered` list. phase1 fails when the stored permissions drift from the file.
 
 ## Verify — don't stop at "it looks right"
 

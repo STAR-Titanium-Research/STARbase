@@ -117,7 +117,8 @@ Two host quirks on the current `d1-server`, neither a repo problem:
 
 ## Deploying the auto-publish task
 
-Every `force-app-v*` tag builds an installer and attaches it to a GitHub Release (CI), but
+Every release builds an installer and attaches it to a GitHub Release (CI, see
+[ci-cd.md](ci-cd.md#releasing-the-force-app)), but
 `electron-updater` only sees it once that Release's `*.exe` + `latest.yml` land in the
 Caddy-served feed at `/force-app-updates/`. That publish step is automated: a Windows Scheduled
 Task on d1-server polls GitHub every few minutes and republishes the moment a new release

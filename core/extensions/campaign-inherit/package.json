@@ -2,7 +2,7 @@
   "name": "directus-extension-campaign-inherit",
   "version": "1.0.0",
   "type": "module",
-  "description": "On create, a manufacturing operation / test session inherits project, owner, default equipment and material from its campaign; a campaign inherits its project's principal investigator as owner.",
+  "description": "On create, a manufacturing operation / test session inherits project, default equipment and material from its campaign (the owner is the creator, set by d1-default-owner).",
   "keywords": ["directus", "directus-extension", "directus-custom-hook"],
   "directus:extension": {
     "type": "hook",

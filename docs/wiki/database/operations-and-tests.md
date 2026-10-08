@@ -99,8 +99,8 @@ campaign** (e.g. a hardness and microstructure survey).
 
 ![A machining trial](../images/database/campaign.png)
 
-A campaign carries defaults (owner, default machine, default material) that new operations and
-tests created in it **inherit**. Its **Campaign** panel opens with an overview:
+A campaign carries defaults (default machine, default material, project) that new operations and
+tests created in it **inherit**. Whoever creates an operation or test is its owner, not the campaign's owner. Its **Campaign** panel opens with an overview:
 
 - counts of samples, operations and test sessions, and progress bars for force analysis (machining
   operations whose force files are analysed), diagnostics builds and completed tests;
@@ -121,7 +121,7 @@ your role's permissions. A role that cannot read force-analysis rows sees "—" 
 A **project** is a research project (principal investigator, investigators, dates, document
 number, export control). Its items panel gathers everything used in it: samples, operations and
 tests linked directly, plus those linked through its campaigns (tagged with the campaign). Empty
-sections are hidden. A new campaign inherits the project's principal investigator as its owner.
+sections are hidden. Whoever creates a campaign is its owner (the project's PI is not copied in).
 
 ![A project](../images/database/project.png)
 

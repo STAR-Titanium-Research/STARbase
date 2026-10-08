@@ -12,6 +12,8 @@ export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
 export { rollupOperationsFilter, ROLLUP_OPERATION_FIELDS, rollupTargets } from './rollupLinks';
 export type { RollupTarget } from './rollupLinks';
+export { readHiddenLinks } from './hiddenLinks';
+export { createdRecord, CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE } from './createResult';
 export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
 // Display helpers and error predicates
@@ -39,7 +41,7 @@ export { fetchActivityRows } from './activityRows';
 export { projectRole, projectStatusLabel, filterProjects, campaignProgress, countsByKey } from './projects';
 export type { ProjectRow, ProjectRole, RoleFilter, StatusFilter, CampaignProgress, ForceRows } from './projects';
 export {
-	CURRENT_USER, ownedByMe, samplesMine, projectsMine, campaignsMine, forceErrorOnMyOperations, forcePendingOperations,
+	CURRENT_USER, projectInvestigatorFilter, ownedByMe, samplesMine, projectsMine, campaignsMine, forceErrorOnMyOperations, forcePendingOperations,
 	failedTests, ownerlessSamples,
 } from './mine';
 
@@ -49,6 +51,10 @@ export { useRequestGate } from './composables/useRequestGate';
 export { LIST_CAP, useSections } from './composables/useSections';
 export type { SectionState } from './composables/useSections';
 export { useFieldDefs } from './composables/useFieldDefs';
+export { useCanUpdate } from './composables/useCanUpdate';
+export {
+	NOT_CAMPAIGN_OWNER_MESSAGE, NOT_OWNER_MESSAGE, NOT_PI_MESSAGE, NOT_YOUR_RECORD_MESSAGE, forbiddenReason, notOwnerMessage,
+} from './canUpdate';
 
 // Components
 export { default as RecordHeader } from './components/RecordHeader.vue';
@@ -58,6 +64,7 @@ export { default as RecordLink } from './components/RecordLink.vue';
 export { default as Section } from './components/Section.vue';
 export { default as LoadState } from './components/LoadState.vue';
 export { default as NotVisible } from './components/NotVisible.vue';
+export { default as HiddenLink } from './components/HiddenLink.vue';
 export { default as KeyValueGrid } from './components/KeyValueGrid.vue';
 export type { KeyValue } from './components/KeyValueGrid.vue';
 export { default as ProgressBar } from './components/ProgressBar.vue';

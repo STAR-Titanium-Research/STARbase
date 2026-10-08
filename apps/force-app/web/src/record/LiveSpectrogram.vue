@@ -2,11 +2,14 @@
 // Live spectrogram: a time × frequency heatmap of ONE channel, built from the rolling spectra the
 // backend publishes (client.fftHistory). X = time (older left → newest right), Y = frequency
 // (0 bottom → Nyquist top), colour = amplitude (dB). Painted via an offscreen image the size of the
-// history grid, then stretched to the canvas — cheap even for ~220 frames × ~240 bins.
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+// history grid, then stretched to the canvas. The bins are max-pooled to the canvas's pixel height
+// first, so the dB/colour step runs per visible row, not per ~1024 bins squeezed into a few hundred.
+import { computed, onMounted, ref, watch } from 'vue';
 import type { RecordClient } from './liveClient';
+import { useCanvasLifecycle } from './canvasLifecycle';
 import { theme } from '../theme';
 import { DEFAULT_WINDOW_SEC } from './plotWindow';
+import { maxPoolRows } from './spectrumPool';
 
 const props = withDefaults(defineProps<{ client: RecordClient; channels?: string[]; windowSec?: number }>(), { windowSec: DEFAULT_WINDOW_SEC });
 // The backend publishes a spectrum roughly every 0.3s (session.py's fft throttle) — convert the
@@ -15,7 +18,6 @@ const props = withDefaults(defineProps<{ client: RecordClient; channels?: string
 const FFT_PUBLISH_HZ = 1 / 0.3;
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 let ctx: CanvasRenderingContext2D | null = null;
-let ro: ResizeObserver | null = null;
 const off = document.createElement('canvas');
 const offCtx = off.getContext('2d');
 
@@ -61,27 +63,27 @@ function draw() {
 		ctx.fillText('accumulating spectrogram…', 12, H / 2);
 		return;
 	}
-	const nBins = frames[frames.length - 1].spectra[ch].length;
 	const nCols = frames.length;
+	const rows = Math.min(frames[frames.length - 1].spectra[ch].length, c.height);
+	const cols = frames.map((fr) => maxPoolRows(fr.spectra[ch], rows));
 	// running max across the visible window for the dB reference
 	let amax = 1e-9;
-	for (const fr of frames) { const s = fr.spectra[ch]; for (const a of s) if (a > amax) amax = a; }
+	for (const s of cols) for (let i = 0; i < s.length; i++) if (s[i] > amax) amax = s[i];
 
-	off.width = nCols; off.height = nBins;
-	const img = offCtx.createImageData(nCols, nBins);
+	off.width = nCols; off.height = rows;
+	const img = offCtx.createImageData(nCols, rows);
 	for (let x = 0; x < nCols; x++) {
-		const s = frames[x].spectra[ch];
-		for (let bin = 0; bin < nBins; bin++) {
-			const a = s[bin] || 1e-12;
+		const s = cols[x];
+		for (let row = 0; row < rows; row++) {
+			const a = s[row] || 1e-12;
 			const db = 20 * Math.log10(a / amax);
-			// row 0 = top = high freq; flip so low freq sits at the bottom
-			const y = nBins - 1 - bin;
-			color(db, img.data, (y * nCols + x) * 4);
+			// image row 0 = top = high freq; flip so low freq sits at the bottom
+			color(db, img.data, ((rows - 1 - row) * nCols + x) * 4);
 		}
 	}
 	offCtx.putImageData(img, 0, 0);
 	ctx.imageSmoothingEnabled = true;
-	ctx.drawImage(off, 0, 0, nCols, nBins, 0, 0, W, H);
+	ctx.drawImage(off, 0, 0, nCols, rows, 0, 0, W, H);
 
 	// labels
 	const f = props.client.fft?.f;
@@ -96,8 +98,8 @@ watch(() => props.client.fftSeq.value, draw);
 watch(() => props.windowSec, draw);
 watch(chan, draw);
 watch(theme, draw);
-onMounted(() => { resize(); ro = new ResizeObserver(resize); if (canvasEl.value) ro.observe(canvasEl.value); });
-onBeforeUnmount(() => ro?.disconnect());
+useCanvasLifecycle(canvasEl, { resize, repaint: draw });   // also redraws after a hidden window (#189)
+onMounted(resize);
 </script>
 
 <template>

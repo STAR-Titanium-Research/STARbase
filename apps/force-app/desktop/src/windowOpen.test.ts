@@ -48,6 +48,44 @@ describe('classifyWindowOpen', () => {
     expect(result.overrideBrowserWindowOptions).toMatchObject({ x: 40, y: 60, width: 1400, height: 900 });
   });
 
+  const oneScreen = [{ x: 0, y: 0, width: 1920, height: 1040 }];
+
+  it('drops x/y when the saved pop-out was minimised (-32000 origin) but keeps its size (#187)', () => {
+    const store = fakeStore({ '/live/force': { x: -32000, y: -32000, width: 1400, height: 900 } });
+    const opts = classifyWindowOpen(details('app://force/live/force'), store, oneScreen).overrideBrowserWindowOptions;
+    expect(opts).not.toHaveProperty('x');
+    expect(opts).not.toHaveProperty('y');
+    expect(opts).toMatchObject({ width: 1400, height: 900 });
+  });
+
+  it('drops x/y when the saved rect is on a monitor that is no longer connected (#187)', () => {
+    const store = fakeStore({ '/live/force': { x: -2000, y: 100, width: 1400, height: 900 } });
+    const opts = classifyWindowOpen(details('app://force/live/force'), store, oneScreen).overrideBrowserWindowOptions;
+    expect(opts).not.toHaveProperty('x');
+    expect(opts).not.toHaveProperty('y');
+    expect(opts).toMatchObject({ width: 1400, height: 900 });
+  });
+
+  it('drops a saved zero-size entry entirely (#187)', () => {
+    const store = fakeStore({ '/live/force': { x: 10, y: 10, width: 0, height: 0 } });
+    const opts = classifyWindowOpen(details('app://force/live/force'), store, oneScreen).overrideBrowserWindowOptions;
+    expect(opts).not.toHaveProperty('width');
+    expect(opts).not.toHaveProperty('x');
+  });
+
+  it('keeps a sane saved rect that is on a present display (#187)', () => {
+    const store = fakeStore({ '/live/force': { x: 40, y: 60, width: 1400, height: 900 } });
+    const opts = classifyWindowOpen(details('app://force/live/force'), store, oneScreen).overrideBrowserWindowOptions;
+    expect(opts).toMatchObject({ x: 40, y: 60, width: 1400, height: 900 });
+  });
+
+  it('clamps a pop-out saved on a bigger display so it fits this one (#187)', () => {
+    const store = fakeStore({ '/live/force': { x: 2700, y: 40, width: 2560, height: 1440 } });
+    const opts = classifyWindowOpen(details('app://force/live/force'), store, oneScreen).overrideBrowserWindowOptions;
+    expect(opts).toMatchObject({ width: oneScreen[0].width, height: oneScreen[0].height });
+    expect(opts).not.toHaveProperty('x');
+  });
+
   it('leaves bounds unset (falls back to the window.open() features string) when nothing is saved yet', () => {
     const result = classifyWindowOpen(details('app://force/live/frm'), fakeStore({}));
     expect(result.overrideBrowserWindowOptions).not.toHaveProperty('width');

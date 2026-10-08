@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { LIST_CAP, errorText, isNotVisible, useItems, useRequestGate, useSections, type LinkedFile, type SectionState, linkedFiles, type TraceResponse } from '@d1/ui';
+import { LIST_CAP, errorText, isNotVisible, readHiddenLinks, useItems, useRequestGate, useSections, type LinkedFile, type SectionState, linkedFiles, type TraceResponse } from '@d1/ui';
 
 // Everything the Sample page reads, as the signed-in user (so Directus permissions apply). The
 // sample itself decides between "page" and "Not found or not visible to you"; everything else is a
@@ -21,6 +21,9 @@ const SAMPLE_FIELDS = [
 	'primary_method_id.method_id', 'primary_method_id.method_name',
 ];
 
+// Links that read as "none" when the target is hidden by row-level visibility (ADR-0011).
+const LINK_FIELDS = ['project_id'];
+
 export function useSampleData(id: Ref<string>) {
 	const api = useApi();
 	const { getItem, getItems } = useItems();
@@ -38,6 +41,7 @@ export function useSampleData(id: Ref<string>) {
 	const tests = section<any[]>([]);
 	const files = section<LinkedFile[]>([]);
 	const trace = section<TraceResponse | null>(null);
+	const hidden = section<Record<string, boolean>>({});
 
 	async function load() {
 		const token = gate.begin();
@@ -51,6 +55,7 @@ export function useSampleData(id: Ref<string>) {
 			for (const s of [elements, campaigns, operations, tests, files, trace] as Ref<SectionState<any>>[]) {
 				s.value = { data: s === trace ? null : [], loading: false, error: '' };
 			}
+			hidden.value = { data: {}, loading: false, error: '' };
 		}
 		if (!sampleId) return;
 
@@ -70,6 +75,7 @@ export function useSampleData(id: Ref<string>) {
 
 		const materialId = sample.value?.material_id?.material_id;
 		await Promise.all([
+			fill(hidden, token, 'linked records', () => readHiddenLinks(getItem, 'physical_samples', sampleId, sample.value, LINK_FIELDS)),
 			fill(trace, token, 'the sample history', async () => (await api.get(`/d1-trace/sample/${sampleId}`)).data),
 			fill(operations, token, 'operations', () =>
 				getItems('manufacturing_operations', {
@@ -132,5 +138,5 @@ export function useSampleData(id: Ref<string>) {
 	watch(id, load, { immediate: true });
 	onBeforeUnmount(() => gate.cancel());
 
-	return { sample, loading, notVisible, error, elements, campaigns, operations, tests, files, trace, reload: load };
+	return { sample, loading, notVisible, error, elements, campaigns, operations, tests, files, trace, hidden, reload: load };
 }

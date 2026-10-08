@@ -6,6 +6,11 @@ describe('htmlToPlainText', () => {
     const html = '<h2>What\'s new</h2><ul><li>Fixed <b>flat</b> forces</li><li>Faster &amp; safer</li></ul><p>Thanks</p>';
     expect(htmlToPlainText(html)).toBe("What's new\n\n- Fixed flat forces\n- Faster & safer\nThanks");
   });
+  it('keeps the New / Improved / Fixed headings of a categorised release (#137)', () => {
+    // What GitHub renders from "### New" ... "### Fixed" release notes (release_plan.py).
+    const html = '<h3>New</h3>\n<ul>\n<li>A Move panel button</li>\n</ul>\n<h3>Fixed</h3>\n<ul>\n<li>Blank FFT</li>\n</ul>';
+    expect(htmlToPlainText(html)).toBe('New\n\n- A Move panel button\n\nFixed\n\n- Blank FFT');
+  });
   it('drops script and style blocks entirely', () => {
     expect(htmlToPlainText('a<script>alert(1)</script>b<style>p{}</style>c')).toBe('abc');
   });

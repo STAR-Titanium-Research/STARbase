@@ -1,0 +1,78 @@
+# Version updates, grouped so each ecosystem opens at most a few PRs a month: one for minor and
+# patch updates and one for major updates, each spanning every directory of the entry. Without the
+# "major" groups, every major bump (and every 0.x minor, which Dependabot counts as major) opened its
+# own PR per directory: about 40 PRs, each running the full CI, on 2026-10-08. Security updates
+# are separate and immediate once "Dependabot security updates" is on in the repo settings.
+# Every update PR runs the full CI, including the diag goldens that pin numpy/scipy/scikit-learn.
+version: 2
+updates:
+  # Keeps the workflows' actions on current majors (the Node 20 runtime warning, 2026-10).
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/setup-db
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # The npm workspace (force app, @d1/ui, @d1/force-plotting, the workspace extensions).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      npm-workspace:
+        update-types: [minor, patch]
+      npm-workspace-major:
+        update-types: [major]
+
+  # The Directus extensions with their own lockfile.
+  - package-ecosystem: npm
+    directories:
+      - /core/extensions/d1-archive-links
+      - /core/extensions/d1-ask-db
+      - /core/extensions/d1-edge-new-toggle
+      - /core/extensions/d1-file-link
+      - /core/extensions/d1-force-crawler
+      - /core/extensions/d1-geometry-preview
+      - /core/extensions/d1-machine-picker
+      - /core/extensions/d1-material-inherit
+      - /core/extensions/d1-operation-code
+      - /core/extensions/d1-process-category
+      - /core/extensions/d1-project-inherit
+      - /core/extensions/d1-report-button
+      - /core/extensions/d1-report
+      - /core/extensions/d1-sample-code
+      - /core/extensions/d1-test-category
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      directus-extensions:
+        update-types: [minor, patch]
+      directus-extensions-major:
+        update-types: [major]
+
+  - package-ecosystem: pip
+    directories:
+      - /apps/force-app/backend
+      - /apps/force-app/backup-server
+      - /apps/force-app/bug-report-relay
+      - /plugins/analysis-worker
+      - /plugins/diag-service
+      - /plugins/filter-service
+      - /plugins/heavy-data-worker
+      - /plugins/llm-text-to-sql
+      - /plugins/plugin-template
+      - /scripts
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      python:
+        update-types: [minor, patch]
+      python-major:
+        update-types: [major]

@@ -7,8 +7,10 @@
  * coloured tag naming that campaign; directly-assigned items get none.
  */
 import { computed, onMounted, ref, watch } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { RecordLink, ROLLUP_OPERATION_FIELDS, rollupOperationsFilter, rollupTargets, type RollupTarget } from '@d1/ui';
+import { useApi, useStores } from '@directus/extensions-sdk';
+import {
+	RecordLink, ROLLUP_OPERATION_FIELDS, projectInvestigatorFilter, rollupOperationsFilter, rollupTargets, type RollupTarget,
+} from '@d1/ui';
 
 const props = defineProps<{ primaryKey?: string | number | null }>();
 const api = useApi();
@@ -17,6 +19,15 @@ interface Row { row_id: string; kind: string; code: string; detail: string; camp
 const rows = ref<Row[]>([]);
 const campaigns = ref<Record<string, { code: string; name: string }>>({});
 const loading = ref(false);
+// project_rollup is readable only by the project's PI and investigators (ADR-0011), and a filtered
+// read answers "no rows", not an error. When the list is empty this tells "nothing assigned" from
+// "you may not see this list".
+const restricted = ref(false);
+const userStore = useStores().useUserStore() as any;
+const isAdmin = () => {
+	const u = userStore.currentUser;
+	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
+};
 // row_id -> record, so each row can link to its page. project_rollup rows hold no record id, but
 // their row_id is a hash of it that rollupTargets() recomputes.
 const targets = ref<Map<string, RollupTarget>>(new Map());
@@ -40,6 +51,7 @@ async function load() {
 	const pk = props.primaryKey;
 	if (!pk || pk === '+') { rows.value = []; targets.value = new Map(); return; }
 	loading.value = true;
+	restricted.value = false;
 	targets.value = new Map();
 	try {
 		const res = await api.get('/items/project_rollup', {
@@ -58,7 +70,23 @@ async function load() {
 			campaignColor.value = col;
 		}
 	} catch { rows.value = []; } finally { loading.value = false; }
+	if (!rows.value.length) await checkRestricted(pk);
 	await loadTargets(pk);
+}
+
+// A cheap aggregate over /items/projects: 0 means the user is neither the project's PI nor an
+// investigator, so the empty list is a permission, not an empty project. Admins read everything.
+// If the check itself fails, fall back to the plain "nothing assigned" text.
+async function checkRestricted(pk: string | number) {
+	if (isAdmin()) return;
+	try {
+		const res = await api.get('/items/projects', {
+			params: { filter: projectInvestigatorFilter(pk), aggregate: { count: '*' }, limit: 1 },
+		});
+		const row = res.data?.data?.[0];
+		const n = Number(row?.count);
+		if (props.primaryKey === pk && n === 0) restricted.value = true;
+	} catch { /* keep the plain empty text */ }
 }
 
 // Links are an extra: a failure here leaves the rows as plain text instead of hiding them. The
@@ -99,6 +127,7 @@ function campaignLabel(id: string) { return campaigns.value[id]?.name || campaig
 <template>
 	<div class="pi">
 		<div v-if="loading" class="pi-msg"><v-progress-circular indeterminate small /> Loading…</div>
+		<div v-else-if="!total && restricted" class="pi-msg">Only the project's PI and investigators can see this list.</div>
 		<div v-else-if="!total" class="pi-msg">No items assigned to this project yet.</div>
 		<template v-else>
 			<div class="pi-head">

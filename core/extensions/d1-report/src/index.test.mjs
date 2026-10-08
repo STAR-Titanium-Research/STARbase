@@ -17,24 +17,29 @@ const OP_A = '22222222-2222-4222-8222-222222222222';
 const OP_B = '33333333-3333-4333-8333-333333333333';
 const TEST_ID = '44444444-4444-4444-8444-444444444444';
 const PERSON = '55555555-5555-4555-8555-555555555555';
+const PROJ_A = '66666666-6666-4666-8666-666666666666';
+const PROJ_B = '77777777-7777-4777-8777-777777777777';
 
 const forbidden = () => Object.assign(new Error('You do not have permission'), { code: 'FORBIDDEN', status: 403 });
 
 // Data the fake ItemsService serves, keyed by collection.
 const DATA = {
 	physical_samples: [
-		{ sample_id: SID, sample_code: 'S-001', owner_person_id: PERSON, nickname: 'nick', form: 'round_bar', diameter_mm: 10 },
+		{ sample_id: SID, sample_code: 'S-001', owner_person_id: PERSON, project_id: PROJ_A, nickname: 'nick', form: 'round_bar', diameter_mm: 10 },
 	],
 	people: [{ person_id: PERSON, full_name: 'Ada Lovelace', email: 'ada@example.org' }],
 	manufacturing_operations: [
-		{ operation_id: OP_A, sample_id: SID, campaign_id: null, process_category: 'machining' },
-		{ operation_id: OP_B, sample_id: SID, campaign_id: null, process_category: 'machining' },
+		{ operation_id: OP_A, sample_id: SID, campaign_id: null, project_id: PROJ_A, process_category: 'machining' },
+		{ operation_id: OP_B, sample_id: SID, campaign_id: null, project_id: PROJ_B, process_category: 'machining' },
 	],
-	test_sessions: [{ session_id: TEST_ID, sample_id: SID, campaign_id: null, test_type: 'tensile' }],
+	test_sessions: [{ session_id: TEST_ID, sample_id: SID, campaign_id: null, project_id: PROJ_B, test_type: 'tensile' }],
 	sample_genealogy: [],
 	campaigns: [],
 	manufacturing_methods: [],
-	projects: [],
+	projects: [
+		{ project_id: PROJ_A, project_code: 'PRJ-ALPHA', project_name: 'Alpha Project' },
+		{ project_id: PROJ_B, project_code: 'PRJ-BETA', project_name: 'Beta Project' },
+	],
 	equipment: [],
 	machining_force_analysis: [],
 	fast_run_data: [],
@@ -45,6 +50,7 @@ const PK = {
 	people: 'person_id',
 	manufacturing_operations: 'operation_id',
 	test_sessions: 'session_id',
+	projects: 'project_id',
 };
 
 // `allowed` maps collection -> predicate(row) | true. Unlisted collections are forbidden.
@@ -80,12 +86,16 @@ function harness(allowed) {
 
 	const dbCalls = [];
 	const viewRows = {
-		v_complete_sample_history: [{ sample_id: SID, sample_code: 'S-001', material_name: 'Ti-64' }],
-		v_manufacturing_operations_full: [
-			{ operation_id: OP_A, sample_id: SID, method_name: 'Turning', operation_date: '2026-01-02' },
-			{ operation_id: OP_B, sample_id: SID, method_name: 'Milling', operation_date: '2026-01-03' },
+		v_complete_sample_history: [
+			{ sample_id: SID, sample_code: 'S-001', material_name: 'Ti-64', project_code: 'PRJ-ALPHA', project_name: 'Alpha Project', project_document_number: 'DOC-ALPHA-1' },
 		],
-		v_test_sessions_full: [{ session_id: TEST_ID, sample_id: SID, test_type: 'tensile', session_date: '2026-02-01' }],
+		v_manufacturing_operations_full: [
+			{ operation_id: OP_A, sample_id: SID, method_name: 'Turning', operation_date: '2026-01-02', project_code: 'PRJ-ALPHA', project_name: 'Alpha Project' },
+			{ operation_id: OP_B, sample_id: SID, method_name: 'Milling', operation_date: '2026-01-03', project_code: 'PRJ-BETA', project_name: 'Beta Project' },
+		],
+		v_test_sessions_full: [
+			{ session_id: TEST_ID, sample_id: SID, test_type: 'tensile', session_date: '2026-02-01', project_code: 'PRJ-BETA', project_name: 'Beta Project' },
+		],
 		v_sample_genealogy_flat: [],
 	};
 	const database = (table) => {
@@ -210,6 +220,34 @@ test('sample: a caller who can read people sees the owner', async () => {
 	const { out } = await get(h.routes, '/sample/:id', SID, user);
 	assert.equal(out.status, 200);
 	assert.match(out.body, /ada@example\.org/);
+});
+
+test('sample: the views carry project code and name, shown only for projects the caller can read', async () => {
+	const everything = { physical_samples: true, manufacturing_operations: true, test_sessions: true };
+	// No access to projects at all: nothing of any project leaks from the root-knex views.
+	const none = await get(harness(everything).routes, '/sample/:id', SID, user);
+	assert.equal(none.out.status, 200);
+	for (const secret of ['PRJ-ALPHA', 'Alpha Project', 'DOC-ALPHA-1', 'PRJ-BETA', 'Beta Project']) {
+		assert.doesNotMatch(none.out.body, new RegExp(secret), secret);
+	}
+	// Row filter: only project A is readable. The sample and its A-operation show A; the B-operation
+	// and the B-test do not show B.
+	const onlyA = await get(
+		harness({ ...everything, projects: (r) => r.project_id === PROJ_A }).routes, '/sample/:id', SID, user);
+	assert.match(onlyA.out.body, /PRJ-ALPHA/);
+	assert.doesNotMatch(onlyA.out.body, /PRJ-BETA|Beta Project/);
+	// All readable: both appear.
+	const all = await get(harness({ ...everything, projects: true }).routes, '/sample/:id', SID, user);
+	assert.match(all.out.body, /PRJ-ALPHA/);
+	assert.match(all.out.body, /PRJ-BETA/);
+});
+
+test('sample: project ids are checked in one projects read through the caller accountability', async () => {
+	const h = harness({ physical_samples: true, manufacturing_operations: true, test_sessions: true, projects: true });
+	const { req } = await get(h.routes, '/sample/:id', SID, user);
+	const reads = h.constructed.filter((c) => c.collection === 'projects');
+	assert.equal(reads.length, 1);
+	assert.equal(reads[0].opts.accountability, req.accountability);
 });
 
 test('operation: forbidden, missing and malformed ids are indistinguishable', async () => {

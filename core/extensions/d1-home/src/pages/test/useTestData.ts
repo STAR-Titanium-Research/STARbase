@@ -1,7 +1,7 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import {
 	errorText, isNotVisible, linkedFiles, paramColumns, paramRows, splitSubjects, TEST_SUBJECT_FIELDS, useFieldDefs, useItems,
-	useRequestGate, useSections, type LinkedFile, type ParamRow, type TestSubjects,
+	readHiddenLinks, useRequestGate, useSections, type LinkedFile, type ParamRow, type TestSubjects,
 } from '@d1/ui';
 
 // Everything the Test page reads, as the signed-in user. The test session decides between "page"
@@ -23,6 +23,9 @@ const TEST_FIELDS = [
 	'sample_id.sample_id', 'sample_id.sample_code', 'sample_id.nickname', 'sample_id.form', 'sample_id.current_status',
 ];
 
+// Links that read as "none" when the target is hidden by row-level visibility (ADR-0011).
+const LINK_FIELDS = ['sample_id', 'project_id', 'campaign_id'];
+
 export function useTestData(id: Ref<string>) {
 	const { getItem, getItems } = useItems();
 	const { getFieldDefs } = useFieldDefs();
@@ -35,8 +38,9 @@ export function useTestData(id: Ref<string>) {
 	const error = ref('');
 
 	const params = section<ParamRow[]>([]);
-	const subjects = section<TestSubjects>({ samples: [], others: [] });
+	const subjects = section<TestSubjects>({ samples: [], others: [], hidden: 0 });
 	const files = section<LinkedFile[]>([]);
+	const hidden = section<Record<string, boolean>>({});
 
 	async function readParams(sessionId: string, testType: string | null): Promise<ParamRow[]> {
 		if (!testType) return [];
@@ -59,7 +63,7 @@ export function useTestData(id: Ref<string>) {
 			});
 			return splitSubjects(rows);
 		} catch (e) {
-			if (isNotVisible(e)) return { samples: [], others: [] };
+			if (isNotVisible(e)) return { samples: [], others: [], hidden: 0 };
 			throw e;
 		}
 	}
@@ -72,8 +76,9 @@ export function useTestData(id: Ref<string>) {
 		if (test.value?.session_id !== sessionId) {
 			test.value = null;
 			params.value = { data: [], loading: false, error: '' };
-			subjects.value = { data: { samples: [], others: [] }, loading: false, error: '' };
+			subjects.value = { data: { samples: [], others: [], hidden: 0 }, loading: false, error: '' };
 			files.value = { data: [], loading: false, error: '' };
+			hidden.value = { data: {}, loading: false, error: '' };
 		}
 		if (!sessionId) return;
 
@@ -93,6 +98,7 @@ export function useTestData(id: Ref<string>) {
 
 		const testType: string | null = test.value?.test_type ?? null;
 		await Promise.all([
+			fill(hidden, token, 'linked records', () => readHiddenLinks(getItem, 'test_sessions', sessionId, test.value, LINK_FIELDS)),
 			fill(params, token, 'the parameters', () => readParams(sessionId, testType)),
 			fill(subjects, token, 'the test subject', () => readSubjects(sessionId)),
 			fill(files, token, 'linked files', async () => {
@@ -112,5 +118,5 @@ export function useTestData(id: Ref<string>) {
 	watch(id, load, { immediate: true });
 	onBeforeUnmount(() => gate.cancel());
 
-	return { test, loading, notVisible, error, params, subjects, files, reload: load };
+	return { test, loading, notVisible, error, params, subjects, files, hidden, reload: load };
 }

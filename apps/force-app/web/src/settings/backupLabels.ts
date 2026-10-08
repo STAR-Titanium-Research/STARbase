@@ -104,3 +104,19 @@ export function listState(o: { loaded: boolean; loading: boolean; error: string;
 	if (!o.loaded) return 'idle';
 	return o.count ? 'ready' : 'empty';
 }
+
+/** Fills an empty backup URL with the backend's suggested one (#135). `suggested` is true when the
+ *  returned URL is only a proposal that is not saved yet; a URL the user already saved is kept. */
+export function prefillServerUrl(current: string | null | undefined, suggested: string | null | undefined): { url: string; suggested: boolean } {
+	const cur = (current ?? '').trim();
+	if (cur) return { url: cur, suggested: false };
+	const sug = (suggested ?? '').trim();
+	return sug ? { url: sug, suggested: true } : { url: '', suggested: false };
+}
+
+/** The URL a Save should send. While the field still shows the untouched suggestion and backups are
+ *  off, nothing is saved (''), so a Save that only leaves backups disabled can't make the Doctor probe
+ *  a server the rig may not have (#135). Enabling backups, or editing the field, makes it a real value. */
+export function serverUrlToSave(cfg: { enabled: boolean; server_url: string }, isSuggestion: boolean): string {
+	return isSuggestion && !cfg.enabled ? '' : cfg.server_url;
+}

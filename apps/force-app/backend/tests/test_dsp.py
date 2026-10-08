@@ -79,10 +79,8 @@ def test_welch_spectra_peaks_at_the_input_frequency():
     assert f is not None
     assert "Short" not in spectra
     assert set(spectra) == {"Fz", "Fx"}
-    # step = f.size // max_bins is a floor division (matching the pre-existing
-    # session._update_fft formula this preserves), so the sliced result can land a little
-    # over max_bins rather than exactly at or under it — bound generously, not exactly.
-    assert len(f) == len(spectra["Fz"]) <= 260
+    # nperseg=1024 gives 513 bins, under the max_bins budget, so nothing is reduced.
+    assert len(f) == len(spectra["Fz"]) == 513
     peak_hz = f[int(np.argmax(spectra["Fz"]))]
     assert abs(peak_hz - f0) < 10.0, f"peak at {peak_hz} Hz, expected ~{f0}"
 

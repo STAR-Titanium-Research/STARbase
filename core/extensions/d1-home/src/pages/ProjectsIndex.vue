@@ -24,7 +24,7 @@ const visible = computed(() =>
 const countOrNull = (m: Map<string, number>, failed: string, id: string) => (failed ? null : (m.get(id) ?? 0));
 
 const roleOptions: { value: RoleFilter; label: string }[] = [
-	{ value: 'all', label: 'All projects' },
+	{ value: 'all', label: 'All projects I can see' },
 	{ value: 'any', label: 'I am PI or investigator' },
 	{ value: 'pi', label: 'I am PI' },
 	{ value: 'investigator', label: 'I am investigator' },
@@ -70,7 +70,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 			/>
 			<template v-else>
 				<p class="summary">
-					Showing {{ visible.length }} of {{ projects.length }} projects.
+					Showing {{ visible.length }} of {{ projects.length }} projects you can see.
 					<span v-if="projects.length >= PROJECT_CAP">Only the first {{ PROJECT_CAP }} are loaded.</span>
 				</p>
 				<p v-if="role !== 'all' && !userId" class="note">Your user could not be identified, so role filters match nothing.</p>

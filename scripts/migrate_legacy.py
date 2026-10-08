@@ -896,7 +896,7 @@ def load_physical_samples(
                   diameter_mm, width_mm, length_mm, thickness_mm, current_status,
                   manufactured_date, export_controlled, notes,
                   nickname, location, surface_finish,
-                  owner, owner_person_id, co_owners, manufacturing_route, mounted,
+                  owner, owner_person_id, co_owners_legacy, manufacturing_route, mounted,
                   mounting_method, legacy_notes)
                VALUES %s
                ON CONFLICT (sample_code) DO UPDATE SET
@@ -907,7 +907,7 @@ def load_physical_samples(
                  surface_finish      = COALESCE(physical_samples.surface_finish, EXCLUDED.surface_finish),
                  owner               = COALESCE(physical_samples.owner, EXCLUDED.owner),
                  owner_person_id     = COALESCE(physical_samples.owner_person_id, EXCLUDED.owner_person_id),
-                 co_owners           = COALESCE(physical_samples.co_owners, EXCLUDED.co_owners),
+                 co_owners_legacy    = COALESCE(physical_samples.co_owners_legacy, EXCLUDED.co_owners_legacy),
                  manufacturing_route = COALESCE(physical_samples.manufacturing_route, EXCLUDED.manufacturing_route),
                  mounted             = COALESCE(physical_samples.mounted, EXCLUDED.mounted),
                  mounting_method     = COALESCE(physical_samples.mounting_method, EXCLUDED.mounting_method),
@@ -995,9 +995,9 @@ def load_users(cur, rows: list[dict], dry: bool) -> dict[str, str]:
 def load_co_owners(
     cur, email_to_uuid_map: dict[str, str], dry: bool, people: PeopleIndex | None = None
 ) -> int:
-    """Migrate co_owners TEXT column → sample_co_owners junction rows.
+    """Migrate the legacy co_owners_legacy TEXT column → sample_co_owners junction rows.
 
-    Reads every physical_samples row where co_owners IS NOT NULL, splits on
+    Reads every physical_samples row where co_owners_legacy IS NOT NULL, splits on
     common delimiters, resolves each email to a user and a person, and inserts junction
     rows with both user_id (legacy, NOT NULL) and person_id (what the UI reads). An existing
     row only gets a missing person_id. Returns the number of rows processed.
@@ -1007,7 +1007,8 @@ def load_co_owners(
     people = people or PeopleIndex()
 
     cur.execute(
-        "SELECT sample_id, co_owners FROM physical_samples WHERE co_owners IS NOT NULL"
+        "SELECT sample_id, co_owners_legacy FROM physical_samples "
+        "WHERE co_owners_legacy IS NOT NULL"
     )
     db_rows = cur.fetchall()
     data = []

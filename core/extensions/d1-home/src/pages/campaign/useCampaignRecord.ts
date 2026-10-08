@@ -1,5 +1,5 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
-import { errorText, isNotVisible, useItems, useRequestGate } from '@d1/ui';
+import { errorText, isNotVisible, readHiddenLinks, useItems, useRequestGate } from '@d1/ui';
 
 // The campaign record itself, read as the signed-in user. It decides between "page" and "Not found
 // or not visible to you"; the lists, matrix and progress load on their own inside the kit's
@@ -19,6 +19,8 @@ export function useCampaignRecord(id: Ref<string>) {
 	const gate = useRequestGate();
 
 	const campaign = ref<any | null>(null);
+	// Links that read as "none" because the target is hidden by row-level visibility (ADR-0011).
+	const hidden = ref<Record<string, boolean>>({});
 	const loading = ref(false);
 	const notVisible = ref(false);
 	const error = ref('');
@@ -30,12 +32,18 @@ export function useCampaignRecord(id: Ref<string>) {
 		error.value = '';
 		// Reloading the same campaign (after an edit) keeps what is on screen until the new data
 		// arrives; moving to another campaign starts from a clean page.
-		if (campaign.value?.campaign_id !== campaignId) campaign.value = null;
+		if (campaign.value?.campaign_id !== campaignId) {
+			campaign.value = null;
+			hidden.value = {};
+		}
 		if (!campaignId) return;
 		loading.value = true;
 		try {
 			const row = await getItem('campaigns', campaignId, { fields: CAMPAIGN_FIELDS });
-			if (gate.isCurrent(token)) campaign.value = row;
+			if (!gate.isCurrent(token)) return;
+			campaign.value = row;
+			const links = await readHiddenLinks(getItem, 'campaigns', campaignId, row, ['project_id']);
+			if (gate.isCurrent(token)) hidden.value = links;
 		} catch (e: any) {
 			if (!gate.isCurrent(token)) return;
 			if (isNotVisible(e)) notVisible.value = true;
@@ -48,5 +56,5 @@ export function useCampaignRecord(id: Ref<string>) {
 	watch(id, load, { immediate: true });
 	onBeforeUnmount(() => gate.cancel());
 
-	return { campaign, loading, notVisible, error, reload: load };
+	return { campaign, loading, notVisible, error, hidden, reload: load };
 }

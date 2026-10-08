@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, LoadState, NotVisible, RecordHeader, Section, Sparkline, StatTile, dataStudioRoute, formatDate, projectStatusLabel,
+	EditDrawer, useCanUpdate, LoadState, NotVisible, RecordHeader, Section, Sparkline, StatTile, dataStudioRoute, formatDate, projectStatusLabel,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
 import CampaignCards from './projects/CampaignCards.vue';
@@ -19,6 +19,14 @@ const {
 } = useProjectData(toRef(props, 'id'));
 
 const editing = ref(false);
+// Edit is offered unless the server says this user may not change the record (an investigator
+// or a reader through a sample may read it but not edit it).
+const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('projects', toRef(props, 'id'));
+// A save can change who may edit the record (the Owner field), so ask again.
+function onSaved() {
+	reload();
+	refreshCanUpdate();
+}
 const code = computed(() => project.value?.project_code ?? 'Project');
 const studioTo = computed(() => dataStudioRoute('projects', props.id));
 const active = computed(() => project.value?.is_active !== false);
@@ -59,7 +67,7 @@ const tilesDisabled = computed(() => counts.value.loading);
 						<span v-if="project.export_controlled" class="export">Export controlled</span>
 					</template>
 					<template #actions>
-						<v-button small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+						<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
 						<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
 					</template>
 				</RecordHeader>
@@ -72,6 +80,7 @@ const tilesDisabled = computed(() => counts.value.loading);
 					<StatTile label="Tests" :value="num(counts.data.tests)" icon="biotech" />
 					<StatTile label="Campaigns" :value="num(counts.data.campaigns)" icon="flag" />
 				</div>
+				<p class="vis">Counts of the records you can see in this project.</p>
 				<p v-if="counts.error" class="warn" role="alert">{{ counts.error }}</p>
 
 				<CampaignCards :campaigns="campaigns" />
@@ -112,7 +121,7 @@ const tilesDisabled = computed(() => counts.value.loading);
 					collection="projects"
 					:primary-key="id"
 					:title="`Edit ${code}`"
-					@saved="reload()"
+					@saved="onSaved"
 				/>
 			</template>
 		</div>
@@ -120,6 +129,7 @@ const tilesDisabled = computed(() => counts.value.loading);
 </template>
 
 <style scoped>
+.vis { margin: 6px 0 0; font-size: 12.5px; color: var(--theme--foreground-subdued); }
 .project-page {
 	max-width: 1180px;
 	margin: 0 auto;

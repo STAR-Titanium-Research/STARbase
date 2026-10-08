@@ -3,7 +3,8 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RecordClient } from './liveClient';
 import { channelColor } from './types';
 import { theme } from '../theme';
-import { DEFAULT_WINDOW_SEC, windowView } from './plotWindow';
+import { DEFAULT_WINDOW_SEC, splitAtGaps, windowView } from './plotWindow';
+import { useCanvasLifecycle } from './canvasLifecycle';
 import { axisLabel, channelLabel, tachoMissingNote } from './tachoSignal';
 
 // windowSec is this plot's OWN view window (#105/#34): it slices that much out of the client's
@@ -20,7 +21,6 @@ const tachoKind = () => props.client.status.tachoKind;
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 let raf = 0;
 let ctx: CanvasRenderingContext2D | null = null;
-let ro: ResizeObserver | null = null;
 
 // MB fits the tick labels (4-14px below the plot) AND the axis title under them; at 22 the
 // title was drawn top-aligned 4px above the canvas edge and always clipped to half its height.
@@ -157,22 +157,36 @@ function draw() {
 	// Zero line
 	if (lo < 0 && hi > 0) { ctx.strokeStyle = pal.axisLine; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(ML, yOf(0)); ctx.lineTo(ML + W, yOf(0)); ctx.stroke(); }
 
-	// Plot data, clipped to the plot area: i0 is one bin before the window's left edge.
+	// Plot data, clipped to the plot area: i0 is one bin before the window's left edge. A hole in
+	// the time axis (#185: the stream was away, or frames were dropped) splits the trace into runs;
+	// each run is drawn on its own so nothing joins across the hole, which stays visibly empty.
 	ctx.save();
 	ctx.beginPath(); ctx.rect(ML, MT, W, H); ctx.clip();
+	const m0 = Math.min(n, ...series.map(([, arr]) => arr.length));
+	const runs = splitAtGaps(tr.t, i0, m0);
+	for (let r = 1; r < runs.length; r++) {
+		const xa = xOf(tr.t[runs[r - 1][1] - 1]), xb = xOf(tr.t[runs[r][0]]);
+		ctx.globalAlpha = 1; ctx.fillStyle = pal.grid;
+		ctx.fillRect(xa, MT, xb - xa, H);
+		if (xb - xa > 90) {
+			ctx.fillStyle = pal.textFaint; ctx.font = '10px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+			ctx.fillText('no live data', (xa + xb) / 2, MT + H / 2);
+		}
+	}
 	for (const [key, arr] of series) {
 		const col = channelColor(key, theme.value) ?? '#94a3b8';
-		const m = Math.min(n, arr.length);
-		if (m - i0 < 1) continue;
-		ctx.beginPath();
-		for (let i = i0; i < m; i++) { const x = xOf(tr.t[i]); const y = yOf(arr[i][1]); i > i0 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
-		for (let i = m - 1; i >= i0; i--) ctx.lineTo(xOf(tr.t[i]), yOf(arr[i][0]));
-		ctx.closePath();
-		ctx.globalAlpha = 0.16; ctx.fillStyle = col; ctx.fill();
-		ctx.globalAlpha = 0.9; ctx.strokeStyle = col; ctx.lineWidth = 1.4;
-		ctx.beginPath();
-		for (let i = i0; i < m; i++) { const x = xOf(tr.t[i]); const y = yOf(arr[i][1]); i > i0 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
-		ctx.stroke();
+		for (const [a, b] of runs) {
+			if (b - a < 2) continue;
+			ctx.beginPath();
+			for (let i = a; i < b; i++) { const x = xOf(tr.t[i]); const y = yOf(arr[i][1]); i > a ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+			for (let i = b - 1; i >= a; i--) ctx.lineTo(xOf(tr.t[i]), yOf(arr[i][0]));
+			ctx.closePath();
+			ctx.globalAlpha = 0.16; ctx.fillStyle = col; ctx.fill();
+			ctx.globalAlpha = 0.9; ctx.strokeStyle = col; ctx.lineWidth = 1.4;
+			ctx.beginPath();
+			for (let i = a; i < b; i++) { const x = xOf(tr.t[i]); const y = yOf(arr[i][1]); i > a ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+			ctx.stroke();
+		}
 	}
 	ctx.restore();
 	ctx.globalAlpha = 1;
@@ -183,8 +197,11 @@ function draw() {
 // applyTheme() sets the ref before the [data-theme] attribute, but this watcher runs after both.
 watch(theme, () => { lastN = -1; palCache = null; });
 
-onMounted(() => { resize(); window.addEventListener('resize', resize); ro = new ResizeObserver(resize); if (canvasEl.value) ro.observe(canvasEl.value); draw(); nextTick(resize); });
-onBeforeUnmount(() => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); ro?.disconnect(); });
+// Resize/restore/visibility handling (#189): see canvasLifecycle.ts. The loop redraws every frame,
+// so a repaint only has to defeat the unchanged-data skip.
+useCanvasLifecycle(canvasEl, { resize, repaint: () => { lastN = -1; } });
+onMounted(() => { resize(); draw(); nextTick(resize); });
+onBeforeUnmount(() => cancelAnimationFrame(raf));
 </script>
 
 <template>

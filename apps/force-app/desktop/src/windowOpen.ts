@@ -1,5 +1,5 @@
 import { shell } from 'electron';
-import type { WindowStateStore } from './windowState';
+import { placementFor, type DisplayArea, type WindowStateStore } from './windowState';
 
 /** Stable key for remembering a pop-out's size/position: the pathname only, so every "Live Force"
  * pop-out (any mode/axes) shares one remembered geometry rather than one per query-string variant. */
@@ -43,6 +43,7 @@ export function guardNavigation(contents: {
 export function classifyWindowOpen(
   details: Electron.HandlerDetails,
   windowState?: WindowStateStore,
+  displays: DisplayArea[] = [],
 ): Electron.WindowOpenHandlerResponse {
   let url: URL;
   try {
@@ -55,10 +56,12 @@ export function classifyWindowOpen(
     return {
       action: 'allow',
       overrideBrowserWindowOptions: {
-        // Omitted (not just undefined) when nothing is saved yet — Electron then falls back to
+        // Omitted (not just undefined) when nothing usable is saved — Electron then falls back to
         // whatever width/height the window.open() features string requested, its own existing
         // default. Setting these keys to undefined would still override that fallback with NaN.
-        ...(saved ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : {}),
+        // x/y are dropped when the saved rect is on no current display or is the minimised
+        // (-32000) origin, so a stale save cannot put a pop-out out of reach (#187).
+        ...placementFor(saved, displays),
         webPreferences: { contextIsolation: true, nodeIntegration: false },
       },
     };

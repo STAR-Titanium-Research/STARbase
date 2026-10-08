@@ -5,6 +5,7 @@ import { RecordClient } from './liveClient';
 // stream, and RecordClient.stop() swallowed a refused stop.
 
 class FakeWS {
+	static OPEN = 1;
 	static all: FakeWS[] = [];
 	binaryType = '';
 	onopen: (() => void) | null = null;
@@ -277,5 +278,37 @@ describe('reconcile relays what it adopts to pop-outs', () => {
 		opener.status.state = 'recording';
 		await opener.reconcile();
 		expect(post).not.toHaveBeenCalled();
+	});
+});
+
+describe('RecordClient.connect() is idempotent (#185)', () => {
+	it('keeps the open socket when the page connects again on return', () => {
+		const c = new RecordClient();
+		c.connect();
+		(FakeWS.all[0] as any).readyState = 1;
+		c.connect();
+		expect(FakeWS.all).toHaveLength(1);
+		c.disconnect();
+	});
+
+	it('does not recreate the relay or re-announce source-ready on a repeat connect', () => {
+		const c = new RecordClient();
+		c.connect();
+		(FakeWS.all[0] as any).readyState = 0;
+		const relay = (c as any).relay;
+		const post = vi.spyOn(relay, 'postMessage');
+		c.connect();
+		expect((c as any).relay).toBe(relay);
+		expect(post).not.toHaveBeenCalled();
+		c.disconnect();
+	});
+
+	it('opens a fresh socket when the previous one is already closing', () => {
+		const c = new RecordClient();
+		c.connect();
+		(FakeWS.all[0] as any).readyState = 2;
+		c.connect();
+		expect(FakeWS.all).toHaveLength(2);
+		c.disconnect();
 	});
 });

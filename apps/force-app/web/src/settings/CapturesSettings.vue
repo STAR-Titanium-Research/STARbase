@@ -608,6 +608,7 @@ async function upload(c: Capture): Promise<UploadOutcome> {
 			cfg: sum.config || {},
 			peaks: sum.peaks,
 			matWritten: sum.mat_written,
+			summary: sum,
 		});
 		// "Uploaded" is the database's answer, not the upload call's: look at the operation's analysis
 		// row again and only then show the capture as redundant locally.

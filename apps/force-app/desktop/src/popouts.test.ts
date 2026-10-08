@@ -75,6 +75,17 @@ describe('PopoutTracker', () => {
     expect(store.value).toEqual(['app://force/live/frm']);
   });
 
+  it('windows() lists the pop-outs open right now', () => {
+    const t = new PopoutTracker(memoryStore());
+    const a = fakeWindow('app://force/live/force');
+    const b = fakeWindow('app://force/live/frm');
+    t.track(a, a.current);
+    t.track(b, b.current);
+    expect(t.windows()).toEqual([a, b]);
+    a.close();
+    expect(t.windows()).toEqual([b]);
+  });
+
   it('keeps the pop-outs that were open when the app quit, at their current URL', () => {
     const store = memoryStore();
     const t = new PopoutTracker(store);

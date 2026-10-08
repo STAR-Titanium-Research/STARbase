@@ -105,8 +105,8 @@ export { fetchRecipeLibrary, saveRecipe, deleteRecipe } from './diagRecipes';
 export type { SavedRecipe } from './diagRecipes';
 export { default as RecipeLibrary } from './RecipeLibrary.vue';
 
-export { alignAndDiff } from './compare';
-export type { AlignedDiff } from './compare';
+export { alignAndDiff, cropWindowSec } from './compare';
+export type { AlignedDiff, CropFields } from './compare';
 
 export { diagnose, activeFindings, worstSeverity, CROP_COVERAGE_MIN } from './metadataDoctor';
 export type { Finding, Dismissal, DoctorSeverity, DoctorFix } from './metadataDoctor';

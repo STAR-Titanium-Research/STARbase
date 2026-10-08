@@ -40,7 +40,7 @@ original brief, plus a summary of what is already committed and what is left unc
   12 minutes. Keep Opus for planning, review and the coordinator.
 - **Agent profiles.** Launch workers and reviewers with the committed profiles in
   `.claude/agents/` (`subagent_type`), not a generic agent with the rules pasted into the brief:
-  `directus-ui-implementer`, `directus-ui-reviewer`, `force-plotting-implementer`, `force-app-reviewer`. They are in git,
+  `directus-ui-implementer`, `directus-ui-reviewer`, `force-plotting-implementer`, `force-app-implementer`, `force-app-reviewer`. They are in git,
   so they survive restarts, and they preload their area's conventions skill. If no profile fits
   the area, add one (and its conventions skill) and push it before launching.
 - **Local-only config.** `.claude/skills/`, `.claude/agents/`, `.claude/agent-memory/`,

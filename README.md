@@ -77,6 +77,10 @@ all targets.
 > **Upgrading an existing deployment?** Do not just `git pull` and `docker compose up`: follow
 > [`docs/runbooks/upgrade-2026-10-hardening.md`](./docs/runbooks/upgrade-2026-10-hardening.md)
 > (new required secrets, worker Flow headers, migrations, a Directus restart).
+>
+> The Explorer pages release (row-level visibility, migration 141) has its own steps, including a
+> Directus restart right after migrating:
+> [`docs/runbooks/upgrade-2026-10-row-level-visibility.md`](./docs/runbooks/upgrade-2026-10-row-level-visibility.md).
 
 ## Tech stack
 

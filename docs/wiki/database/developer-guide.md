@@ -33,6 +33,11 @@ make seed                      # dev reference data
 bash scripts/configure_all.sh  # Directus metadata, then flush Redis + restart Directus
 ```
 
+Restart Directus (or clear its schema cache) after `make migrate` whenever a migration touches
+Directus metadata, as migration 141 does (hidden relation aliases, the Lab Member row filters):
+`configure_all.sh` does it for a fresh stack; on an existing one use
+[`upgrade-2026-10-row-level-visibility.md`](../../runbooks/upgrade-2026-10-row-level-visibility.md).
+
 Then apply the **role and policy** statements from `scripts/configure_users_and_policies.sql`.
 That file also creates the lab's real user accounts, so on a dev or demo stack apply only the
 roles and policies and create your own test users. Real accounts and real data stay out of dev stacks and out of git

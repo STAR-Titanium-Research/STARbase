@@ -33,6 +33,8 @@ review. These conventions keep each session **resumable cold** and the core
   shipped — see [`docs/superpowers/README.md`](./docs/superpowers/README.md).
 - **Phases:** keep changes within the current phase's scope (see `plan.md`);
   update the status tracker when a phase completes.
+- **CI and releases:** a PR merges once the **CI passed** check is green. Merging a
+  force-app version bump releases it to the rigs. See [`docs/ci-cd.md`](./docs/ci-cd.md).
 
 ## Tests — write and run them as you go
 
@@ -40,7 +42,13 @@ Every change ships with a test, and tests are **run before committing** (not
 left for CI to discover):
 
 - **Schema/migrations:** migrations must apply up *and* down cleanly; audit
-  triggers and constraints have tests (Phase 1+).
+  triggers and constraints have tests (Phase 1+). CI rolls back every migration and
+  fails on anything left behind (`scripts/ci/migration_roundtrip.sh`).
+- **New lab-data collection:** Lab Members only see records they are involved in
+  ([ADR-0011](./docs/adr/0011-row-level-visibility.md)). Add the collection to
+  `scripts/access_rules.json` (`rules`, not `unfiltered`), run
+  `python3 scripts/gen_access_rules.py --write` and add a migration that applies the new rows
+  (copy `20261007000141_lab_member_row_visibility.sql`). Reference data goes in `unfiltered`.
 - **Plugins/services:** unit tests beside the code; integration tests in
   [`tests/`](./tests/).
 - **Foundation:** `bash tests/phase0_smoke.sh` validates repo structure, env
@@ -79,7 +87,7 @@ above. Claude Code loads them on its own when a task matches, or you can type
 | `force-app-verify` | Running the force app hardware-free (sim backend + real UI in headless Chromium) to prove a change works |
 | `force-debug-capture` | Investigating a bad recording from a bug report, capture folder or log, ending in a report |
 | `triage-bug-reports` | Triaging the open in-app bug reports into a P0–P3 batch plan and fixing them |
-| `force-app-release` | *Manual.* Bump, changelog, local preflight of the release job; you push the tag |
+| `force-app-release` | *Manual.* Bump, changelog, local preflight and the release PR; merging it ships the release ([CI and releases](docs/ci-cd.md)) |
 | `careful` | *Manual.* Hook that blocks destructive commands (DB drops, volume/MinIO deletes, force-push, release tags) for the session |
 | `freeze` | *Manual.* Hook that limits edits to the directories you name, for the session |
 

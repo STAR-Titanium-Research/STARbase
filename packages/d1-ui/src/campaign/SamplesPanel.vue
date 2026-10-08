@@ -8,7 +8,7 @@ import LoadState from '../components/LoadState.vue';
 import RecordLink from '../components/RecordLink.vue';
 import Section from '../components/Section.vue';
 import PickerBox from './PickerBox.vue';
-import { inheritCampaignProject } from './assign';
+import { forbiddenWriteMessage, inheritCampaignProject } from './assign';
 import { LIST_CAP, type SectionState } from '../composables/useSections';
 
 // The campaign's samples (the `campaign_samples` junction, plus samples that only appear through an
@@ -20,6 +20,10 @@ const props = defineProps<{
 	rows: any[];
 	/** The junction rows (their own ids are needed to remove a sample). */
 	junction: SectionState<any[]>;
+	/** The user does not own this campaign: no picker and no add button. Removing stays (the sample's own owner may remove it). */
+	cannotAdd?: boolean;
+	/** Sample-list entries whose sample the user may not see (`overview.counts.hiddenSamples`). */
+	hiddenCount?: number;
 }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
@@ -98,7 +102,7 @@ async function add(id: string, code?: string | null) {
 	} catch (e) {
 		// Already linked (another tab, or a stale list): not an error, the reload shows it.
 		if (isDuplicate(e)) results.value = results.value.filter((r) => r.sample_id !== id);
-		else actionError.value = `Could not add ${code || 'the sample'}: ${errorText(e)}`;
+		else actionError.value = forbiddenWriteMessage(e, true, 'campaign_samples') ?? `Could not add ${code || 'the sample'}: ${errorText(e)}`;
 	} finally {
 		busy.value = null;
 	}
@@ -113,7 +117,7 @@ async function remove(id: string, code?: string | null) {
 	try {
 		await api.delete(`/items/campaign_samples/${jid}`);
 	} catch (e) {
-		actionError.value = `Could not remove ${code || 'the sample'}: ${errorText(e)}`;
+		actionError.value = forbiddenWriteMessage(e, false, 'campaign_samples') ?? `Could not remove ${code || 'the sample'}: ${errorText(e)}`;
 	} finally {
 		busy.value = null;
 	}
@@ -138,15 +142,18 @@ async function remove(id: string, code?: string | null) {
 						<td class="n">{{ s.tests }}</td>
 						<td class="act">
 							<button v-if="s.member" class="x" title="Remove from the campaign's sample list" :disabled="!!busy" @click="remove(s.sample_id, s.sample_code)"><v-icon name="close" x-small /></button>
-							<button v-else class="x add" title="Add to the campaign's sample list" :disabled="!!busy" @click="add(s.sample_id, s.sample_code)"><v-icon name="add" x-small /></button>
+							<button v-else-if="!cannotAdd" class="x add" title="Add to the campaign's sample list" :disabled="!!busy" @click="add(s.sample_id, s.sample_code)"><v-icon name="add" x-small /></button>
 						</td>
 					</tr>
 				</tbody>
 			</table>
-			<p v-else class="d1-cempty">No samples yet.</p>
+			<p v-else-if="!hiddenCount" class="d1-cempty">No samples yet.</p>
+			<p v-if="hiddenCount" class="d1-cempty">
+				{{ hiddenCount }} {{ hiddenCount === 1 ? 'sample' : 'samples' }} not visible to you.
+			</p>
 			<p v-if="rows.length > LIST_CAP" class="d1-ccap">Showing the first {{ LIST_CAP }} of {{ rows.length }} samples. The matrix above has them all.</p>
 		</LoadState>
-		<PickerBox v-model="search" placeholder="Add samples by code or nickname…" :searching="searching" :no-results="searched && !results.length" empty-text="No other samples match.">
+		<PickerBox v-if="!cannotAdd" v-model="search" placeholder="Add samples by code or nickname…" :searching="searching" :no-results="searched && !results.length" empty-text="No other samples match.">
 			<button v-for="r in results" :key="r.sample_id" type="button" class="pick" :disabled="!!busy" @click="add(r.sample_id, r.sample_code)">
 				<span class="code">{{ r.sample_code }}</span>
 				<span class="sub">{{ r.nickname || r.material_id?.common_name || '' }}</span>

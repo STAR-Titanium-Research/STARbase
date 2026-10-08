@@ -33,7 +33,13 @@ def _import_nidaqmx():
         import nidaqmx  # noqa: WPS433
         from nidaqmx import constants  # noqa: WPS433
         from nidaqmx.stream_readers import AnalogMultiChannelReader  # noqa: WPS433
+        from nidaqmx.system import System  # noqa: WPS433
 
+        # nidaqmx loads the DAQmx DLL lazily, on first use, so the imports above succeed on a PC
+        # with the package (the installer always bundles it) but no driver. Reading the driver
+        # version forces the load here, so a missing driver is a clean "not available" rather than
+        # DaqNotFoundError from the first nidaqmx.Task() (a 500 from /nidaq/tacho/start).
+        System.local().driver_version
         return nidaqmx, constants, AnalogMultiChannelReader
     except Exception as e:  # ImportError, or DAQmx DLL load failure
         raise NidaqUnavailableError(f"NI-DAQmx not available: {e}") from e

@@ -77,8 +77,8 @@ function killTree(pid: number): Promise<void> {
 }
 
 /** Ends the child and resolves true once it has exited, or false if no exit was reported in time.
- * taskkill on Windows; elsewhere (dev on
- * Linux/macOS, and the unit tests) there is no taskkill, so SIGTERM, then SIGKILL if the process
+ * taskkill on Windows (the release build runs the unit tests there too); elsewhere (dev on
+ * Linux/macOS, and CI's unit tests) there is no taskkill, so SIGTERM, then SIGKILL if the process
  * is too wedged to act on it — a backend stuck in a blocking write may never get to its handler. */
 function terminate(proc: ChildProcess): Promise<boolean> {
   if (proc.pid == null || proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);

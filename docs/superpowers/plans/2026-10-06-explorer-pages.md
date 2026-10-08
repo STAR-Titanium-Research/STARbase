@@ -23,8 +23,8 @@ Delete this plan once the batch has shipped (see `docs/superpowers/README.md`).
 | E2 — Campaign page and matrix | spec stage 2 | `agent-ae4f2e67ae2684b1c` | merged; matrix columns = sequence N of process category (spec note); EditDrawer gained `hiddenFields` |
 | E3 — Projects, Project, Home "my work" | spec stage 3 (D10) | `agent-ac65ea5bc992c974e` | merged (`1107cb1`); `directus-ui-reviewer`: 0 blocking, 7 should-fix → E3-fix in `agent-ad01616309859b46c`, merged |
 | E4 — Operation and Test pages; links; QR target | spec stage 4 | `agent-a783b7731c3e45aa8` | merged (`277f9fd`); E4-fix (`02f5900`) and E4-mig (`7ba8af3`: migrations renumbered 138/139, sample-delete keeps multi-subject tests, edge delete blocked) merged; origin/main merged (`112abe3`) |
-| E5 — Row-level visibility | ADR-0011 | — | waits for owner decisions |
-| Final review, CI, PR | all | main checkout | reviews done and fixed (E4-mig2 `292a660`, E-final `67d866c`); ci-local 2026-10-07 all green (pre-commit, smoke, geometry, extension/report/ask-db tests, force-app-web, force-plotting, @d1/ui 225, typechecks, builds, verify_migration, phase1 268 / phase7 16 / phase6 59, full rollback to 0 tables and re-apply). Not run: force-app-verify (only `openRecord` link target changed in force-app-web). PR #133 opened; merge when CI is green |
+| E5 — Row-level visibility | ADR-0011 | merged on the branch (E5 `5d2193e`, then E5-fix-db, E5-fix-ui, E5-owner, E5-r2-db, E5-r2-ui, E5-r3) | three review rounds; round 3: 0 blocking, all should-fix fixed. origin/main merged. ci-local 2026-10-08 green: pre-commit, smoke, geometry, extension tests 124, d1-report 38, @d1/ui 261, typechecks (incl. lab-dashboard), builds, rules check, verify_migration, phase1 378 / phase7 16 / phase6 59, access-rules pytest 82, tests/scripts 410, migration_roundtrip 145. PR next |
+| Final review, CI, PR (E1–E4) | all | main checkout | merged in PR #133 (`4c70423`), CI green |
 
 ## E1. Kit and Sample page
 

@@ -123,7 +123,7 @@ async function save(overwrite = false) {
 		emit('saved');
 		close();
 	} catch (e) {
-		saveError.value = saveErrors(e);
+		saveError.value = saveErrors(e, props.collection);
 	} finally {
 		saving.value = false;
 	}

@@ -32,7 +32,7 @@ DBMATE_RUN    := docker run --rm --network $(COMPOSE_NETWORK) -e DATABASE_URL="$
 # prune-backups keeps this many of the newest backups, regardless of age.
 KEEP          ?= 7
 
-.PHONY: help setup test smoke schema-test traceability-test ai-test compose-check lint up down logs \
+.PHONY: help setup test smoke release-force-app release-force-app-dry schema-test traceability-test ai-test compose-check lint up down logs \
         migrate migrate-down migrate-status seed reset-db \
         bootstrap-minio backup restore prune-backups \
         worker-build worker-test worker-logs phase4-test \
@@ -173,3 +173,11 @@ reset-db: ## Drop all tables and re-apply migrations + seed (DESTRUCTIVE — dev
 	$(DBMATE_RUN) --no-dump-schema drop || true
 	$(DBMATE_RUN) --no-dump-schema up
 	$(MAKE) seed
+
+# Same as Actions > force-app-release > Run workflow. Needs the GitHub CLI (`gh auth login` once).
+release-force-app: ## Release the force app's version on main to every rig (fails if already released)
+	gh workflow run force-app-release.yml --ref main
+	@echo "Started. Follow it with: gh run watch \$$(gh run list --workflow force-app-release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+
+release-force-app-dry: ## Build and test the force-app installer for the current branch; publish nothing
+	gh workflow run force-app-release.yml --ref "$$(git branch --show-current)" -f dry_run=true

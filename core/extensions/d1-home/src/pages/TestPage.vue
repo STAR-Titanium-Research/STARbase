@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, KeyValueGrid, LoadState, NotVisible, RecordHeader, RecordLink, Section, StatusBadge, asRecord,
+	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, RecordHeader, RecordLink, Section, StatusBadge, asRecord,
 	dataStudioRoute, formatDate, formatQuantity, humanise, type KeyValue,
 } from '@d1/ui';
 import { useTestData } from './test/useTestData';
@@ -14,9 +14,17 @@ import SampleFiles from './sample/SampleFiles.vue';
 // ("Test session").
 const props = defineProps<{ id: string }>();
 
-const { test, loading, notVisible, error, params, subjects, files, reload } = useTestData(toRef(props, 'id'));
+const { test, loading, notVisible, error, params, subjects, files, hidden, reload } = useTestData(toRef(props, 'id'));
 
 const editing = ref(false);
+// Edit is offered unless the server says this user may not change the record (an investigator
+// or a reader through a sample may read it but not edit it).
+const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('test_sessions', toRef(props, 'id'));
+// A save can change who may edit the record (the Owner field), so ask again.
+function onSaved() {
+	reload();
+	refreshCanUpdate();
+}
 
 const t = computed(() => test.value);
 const typeText = computed(() => (t.value?.test_type ? humanise(t.value.test_type) : 'Test'));
@@ -62,13 +70,22 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 							<span>›</span>
 							<RecordLink collection="projects" :id="project.project_id">{{ project.project_code }}</RecordLink>
 						</template>
+						<template v-else-if="hidden.data.project_id">
+							<span>›</span><HiddenLink label="Project" />
+						</template>
 						<template v-if="campaign">
 							<span>›</span>
 							<RecordLink collection="campaigns" :id="campaign.campaign_id">{{ campaign.campaign_code || campaign.name || 'Campaign' }}</RecordLink>
 						</template>
+						<template v-else-if="hidden.data.campaign_id">
+							<span>›</span><HiddenLink label="Campaign" />
+						</template>
 						<template v-if="sample">
 							<span>›</span>
 							<RecordLink collection="physical_samples" :id="sample.sample_id">{{ sample.sample_code || 'Sample' }}</RecordLink>
+						</template>
+						<template v-else-if="hidden.data.sample_id || subjects.data.hidden">
+							<span>›</span><HiddenLink label="Sample" />
 						</template>
 					</template>
 					<template #status><StatusBadge kind="test" :value="t.status" /></template>
@@ -79,7 +96,7 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 						<span v-if="asRecord(t.equipment_id)">Machine: {{ asRecord(t.equipment_id)!.equipment_name }}</span>
 					</template>
 					<template #actions>
-						<v-button small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+						<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
 						<v-button small secondary @click="openReport"><v-icon name="picture_as_pdf" small left />Report</v-button>
 						<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
 					</template>
@@ -102,7 +119,7 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 				</Section>
 
 				<LoadState v-if="subjects.loading || subjects.error" :loading="subjects.loading" :error="subjects.error" />
-				<TestSubjects v-else :sample="t.sample_id" :subjects="subjects.data" />
+				<TestSubjects v-else :sample="t.sample_id" :subjects="subjects.data" :sample-hidden="!!hidden.data.sample_id" />
 
 				<TestResults :stats="t.summary_stats" :status="t.status" />
 
@@ -118,7 +135,7 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 					collection="test_sessions"
 					:primary-key="id"
 					:title="`Edit ${typeText}`"
-					@saved="reload()"
+					@saved="onSaved"
 				/>
 			</template>
 		</div>

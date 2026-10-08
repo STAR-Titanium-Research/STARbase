@@ -17,6 +17,7 @@ import { theme } from '../../theme';
 import { appUrl } from '../../appUrl';
 import type { PlotMode } from '../plotModes';
 import { isRailed, shownRailed } from '../railing';
+import { forcePlotView, showWindowControl } from './forcePlotView';
 import { clampWindowSec, WINDOW_MAX_SEC, WINDOW_MIN_SEC, WINDOW_SLIDER_MAX_SEC } from '../plotWindow';
 
 const props = defineProps<{ inst?: { mode?: PlotMode; channels?: string[]; axes?: string[]; windowSec?: number } }>();
@@ -78,6 +79,10 @@ function commitWindow(e: Event) {
 	windowSec.value = el.valueAsNumber;
 	el.value = String(windowSec.value);
 }
+// #189: the whole cut once it is done and its cache is loaded -- whether or not the save dialog is
+// open -- and the window slider only while the rolling plot is what is shown.
+const plotView = computed(() => forcePlotView({ mode: mode.value, isDone: w.isDone.value, hasCache: !!w.finishedCache.value }));
+const showWindow = computed(() => showWindowControl(mode.value, plotView.value));
 // The client keeps at least the slider's maximum of trace history; a wider typed-in window asks
 // for more. Only the Time view reads the trace (the spectrogram/waterfall use fftHistory).
 const demandKey = {};
@@ -117,7 +122,7 @@ function openLive() {
 			<!-- Applies to every mode with an actual time dimension. FFT/PSD show a single current
 				 spectrum with no time axis, so the control has nothing to affect there — hidden rather
 				 than shown-but-inert. -->
-			<div v-if="mode !== 'fft' && mode !== 'psd'" class="tw-row">
+			<div v-if="showWindow" class="tw-row">
 				<input type="range" min="2" :max="WINDOW_SLIDER_MAX_SEC" step="1" v-model.number="windowSec" />
 				<input type="number" :min="WINDOW_MIN_SEC" :max="WINDOW_MAX_SEC" :value="windowSec" @change="commitWindow" class="tw-num" />
 				<span class="tw-unit">s</span>
@@ -128,11 +133,9 @@ function openLive() {
 			</button>
 		</div>
 		<div class="plot" @click="subsOpen = false">
-			<!-- Skipped while the save dialog is open: it renders the same full-resolution trace over
-				 this panel anyway, and the moment recording ends is already the heaviest instant on the
-				 page (FRM rebuild + this panel + the dialog's own copy all wanting to redraw at once) —
-				 no point paying for a redundant draw of data the user can't currently see. -->
-			<FinishedForcePlot v-if="mode === 'time' && w.isDone.value && w.finishedCache.value && !w.saveOpen.value" :cache="w.finishedCache.value" :channels="selected" />
+			<!-- Stays up while the save dialog is open (#189): switching to the rolling plot there made the
+				 panel jump between the whole cut and the last N seconds. -->
+			<FinishedForcePlot v-if="plotView === 'finished'" :cache="w.finishedCache.value!" :channels="selected" :paused="w.saveOpen.value" />
 			<LiveForcePlot v-else-if="mode === 'time'" :client="w.client" :channels="selected" :window-sec="windowSec" />
 			<LiveFft v-if="mode === 'fft' || mode === 'psd'" :client="w.client" :channels="selected" :scale="mode === 'psd' ? 'psd' : 'amp'" />
 			<LiveSpectrogram v-else-if="mode === 'spectrogram'" :client="w.client" :channels="selected" :window-sec="windowSec" />

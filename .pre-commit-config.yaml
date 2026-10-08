@@ -47,3 +47,9 @@ repos:
         language: system
         pass_filenames: false
         files: ^core/extensions/(d1-geometry-preview|d1-home|d1-report)/src/
+      - id: access-rules-in-sync
+        name: Lab Member permission block and d1-access-guard rules match access_rules.json
+        entry: python3 scripts/gen_access_rules.py --check
+        language: system
+        pass_filenames: false
+        files: ^(scripts/(access_rules\.json|gen_access_rules\.py|configure_users_and_policies\.sql)|core/extensions/d1-access-guard/rules\.json)$

@@ -1,77 +1,136 @@
 name: force-app-release
+run-name: >-
+  ${{ github.event_name == 'pull_request' && 'Force app release dry run' ||
+      (github.event_name == 'workflow_dispatch' && inputs.dry_run) && 'Force app release dry run' ||
+      'Force app release' }} (${{ github.ref_name }})
 
+# How a force-app release ships (.github/scripts/release_plan.py decides, in the `plan` job):
+#
+#   * Merge a version bump to main. The PR from the force-app-release skill ("release the force
+#     app") bumps apps/force-app/desktop/package.json and writes the changelog entry; once it is
+#     on main, this workflow builds, tests and publishes it. Nothing else to do.
+#   * Or press the button: Actions > force-app-release > Run workflow (on main). It releases
+#     main's version if that has no GitHub Release yet, e.g. to retry a release that failed.
+#     "Dry run" builds and tests any branch, and keeps the installer as a run artifact, without
+#     publishing anything.
+#   * A PR that changes the version or the packaging gets the same Windows build as a dry run,
+#     so a release can't break for the first time after it is merged.
+#   * Pushing a force-app-v* tag by hand still works, as before.
+#
+# Publishing = creating the GitHub Release (*.exe + latest.yml). d1-server's
+# force-app-auto-publish-release task polls Releases and copies new ones into the rigs' update
+# feed within about five minutes (docs/force-app-operations.md).
 on:
   push:
-    tags:
-      - 'force-app-v*'
-    # No `paths:` filter here — GitHub cannot compute a path diff for a newly pushed tag ref, and
-    # the combination can silently stop the workflow from firing at all. The tag glob is already a
-    # narrow enough trigger on its own.
+    branches: [main]
+    tags: ['force-app-v*']
+  pull_request:
+    paths:
+      - apps/force-app/desktop/package.json
+      - apps/force-app/desktop/electron-builder.yml
+      - apps/force-app/backend/force-app-backend.spec
+      - apps/force-app/backend/pyproject.toml
+      - .github/workflows/force-app-release.yml
+      - .github/scripts/release_plan.py
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run (build and test only, publish nothing). Works on any branch.
+        type: boolean
+        default: false
 
-# Least privilege: the build job (which runs npm/pip install scripts and third-party actions)
-# only needs to read. `contents: write` is granted only to the `publish` job below, which runs no
+# One release at a time; a PR's dry run is replaced by its next push.
+concurrency:
+  group: force-app-release-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: the plan and build jobs (which run npm/pip install scripts and third-party
+# actions) only read. `contents: write` is granted only to the `publish` job, which runs no
 # repository code.
 permissions:
   contents: read
 
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+      build: ${{ steps.plan.outputs.build }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Decide what to do and check the release is consistent
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          # A PR's merge commit is not what main will contain; record the PR head for the summary.
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/release_plan.py --notes release-notes.md
+      - name: Keep the release notes for the publish job
+        if: steps.plan.outputs.publish == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: force-app-release-notes
+          path: release-notes.md
+          retention-days: 1
+
   build:
+    name: Build and test (Windows)
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: windows-latest
+    timeout-minutes: 60
     defaults:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Don't leave the token in .git/config where `npm ci` and every later step can read it.
           persist-credentials: false
 
-      # Fail fast: a tag that outruns the manifest makes electron-builder emit a latest.yml
-      # advertising the stale version, so electron-updater on deployed rigs never sees the release.
-      - name: Verify tag matches package.json version
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # Make a failing native command (npm, pip, electron-builder, ...) fail the step, not just
-          # the last one in a multi-line block.
-          $PSNativeCommandUseErrorActionPreference = $true
-          $tagVersion = $env:GITHUB_REF_NAME -replace '^force-app-v', ''
-          $pkgVersion = (Get-Content apps/force-app/desktop/package.json | ConvertFrom-Json).version
-          if ($tagVersion -ne $pkgVersion) {
-            Write-Error "Tag $env:GITHUB_REF_NAME (version $tagVersion) does not match apps/force-app/desktop/package.json version $pkgVersion"
-            exit 1
-          }
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: apps/force-app/backend/pyproject.toml
 
-      # electron-builder's own downloads (the electron binary, nsis, winCodeSign) are not npm
-      # packages, so setup-node's cache above never touches them — same ~100s of re-downloading
-      # every run otherwise. Keyed on package-lock.json since that pins the electron/electron-builder
-      # versions that determine what gets fetched.
+      # electron-builder's own downloads (the electron binary, nsis, winCodeSign) and Playwright's
+      # Chromium are not npm packages, so setup-node's cache never touches them. Keyed on the
+      # lockfile, which pins their versions. Releases now run on main, so their caches are saved
+      # where every later run (PR dry runs included) can restore them, and restore-keys reuses the
+      # previous lockfile's cache after a dependency change (Playwright and electron-builder only
+      # download what is missing). This replaces the old force-app-cache-warm workflow.
       - name: Cache electron-builder downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~\AppData\Local\electron\Cache
             ~\AppData\Local\electron-builder\Cache
           key: electron-builder-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-builder-${{ runner.os }}-
 
-      # By far the single largest step otherwise (~3.5 min to fetch Chromium fresh every run).
-      # Keyed on package-lock.json so a @playwright/test version bump invalidates it automatically.
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~\AppData\Local\ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-
 
       - name: Install JS workspace dependencies
         run: npm ci
@@ -99,9 +158,8 @@ jobs:
         run: .venv\Scripts\pytest
 
       # The backup server is a separate deployable (it runs on d1-server, not the acquisition PC),
-      # so it sits outside the backend's own testpaths and was never collected by the step above —
-      # its suite, including the offset dedup guarantees the whole live-backup design rests on, had
-      # never run in CI. It imports `server` by name, so it must run from its own directory.
+      # so it sits outside the backend's own testpaths. It imports `server` by name, so it must
+      # run from its own directory.
       - name: Run backup-server tests
         working-directory: apps/force-app/backup-server
         run: ..\backend\.venv\Scripts\pytest
@@ -118,8 +176,6 @@ jobs:
         working-directory: apps/force-app/desktop
         run: |
           $ErrorActionPreference = 'Stop'
-          # Make a failing native command (npm, pip, electron-builder, ...) fail the step, not just
-          # the last one in a multi-line block.
           $PSNativeCommandUseErrorActionPreference = $true
           npm run build
           npx electron-builder --win --publish never
@@ -132,59 +188,102 @@ jobs:
         working-directory: apps/force-app/desktop
         run: npm run test:e2e
 
-      # test-results (traces, screenshots, error-context.md) only ever existed on the runner's own
-      # disk — a failed run's evidence was gone the moment the job ended, leaving nothing to debug
-      # beyond the bare console log. Only worth keeping on failure; a green run has nothing useful in it.
+      # test-results (traces, screenshots, error-context.md) only exist on the runner's disk;
+      # keep them when the e2e suite fails.
       - name: Upload Playwright results on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-test-results
           path: apps/force-app/desktop/test-results
           retention-days: 7
 
-      # Hand the release files to the `publish` job, the only one allowed to write. They used to
-      # be attached in this job, but that meant the whole build (npm ci, PyInstaller, Playwright)
-      # ran with a `contents: write` token. One day of retention keeps the ~150 MB of quota
-      # use to a minimum (see the note in `publish`); the Release assets are the durable copy.
-      - name: Stage release files for the publish job
-        uses: actions/upload-artifact@v4
+      # The publish job attaches these to the Release. On a dry run they are the downloadable
+      # installer to try on a rig before releasing; the Release assets are the durable copy.
+      - name: Keep the installer
+        uses: actions/upload-artifact@v6
         with:
           name: force-app-release-files
           path: |
             apps/force-app/desktop/release/*.exe
             apps/force-app/desktop/release/latest.yml
           if-no-files-found: error
-          retention-days: 1
+          retention-days: ${{ needs.plan.outputs.publish == 'true' && 1 || 5 }}
 
-  # The only job with write access. It runs no repository code: it downloads the staged files and
-  # calls the GitHub API.
-  #
-  # scripts/publish-release.ps1 pulls with `gh release download <tag>`, which reads Release
-  # assets - a workflow-run artifact is not the same thing and is invisible to it. Creating a
-  # Release here is a plain GitHub API call; it does not push to the tailnet feed. Populating
-  # that feed stays a manual publish-release.ps1 run on d1-server. The Release attaches the same
-  # *.exe + latest.yml electron-updater reads; the staged artifact above expires after a day so it
-  # does not eat Actions storage quota.
+  # The only job with write access. It runs no repository code: it waits for CI, downloads the
+  # staged files and calls the GitHub API.
   publish:
-    name: Create GitHub Release
-    needs: build
+    name: Publish the GitHub Release
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SHA: ${{ needs.plan.outputs.sha }}
     steps:
-      - name: Download staged release files
-        uses: actions/download-artifact@v4
+      # The Windows build ran the release's own tests; the rest of the repo's suite (web,
+      # plotting, schema, ...) runs in ci.yml. Never publish a commit whose CI on main failed.
+      - name: Wait for CI on this commit to pass
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 80); do
+            run="$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&per_page=1" \
+              --jq '.workflow_runs[0] // empty | [.status, (.conclusion // ""), .html_url] | @tsv')"
+            if [[ -z "$run" ]]; then
+              if (( i > 10 )); then
+                echo "::error::No CI run on main for $SHA. Release only commits that are on main."
+                exit 1
+              fi
+            else
+              IFS=$'\t' read -r status conclusion url <<<"$run"
+              if [[ "$status" == completed ]]; then
+                [[ "$conclusion" == success ]] && { echo "CI passed: $url"; exit 0; }
+                echo "::error::CI on $SHA finished '$conclusion', not releasing: $url"
+                exit 1
+              fi
+              echo "CI is $status ($url)"
+            fi
+            sleep 30
+          done
+          echo "::error::Timed out waiting for CI on $SHA"
+          exit 1
+
+      - name: Download the installer and the release notes
+        uses: actions/download-artifact@v7
         with:
-          name: force-app-release-files
+          pattern: force-app-release-*
+          merge-multiple: true
           path: release
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+      # A tag with no Release is left by a release build that failed (force-app-v0.1.34 was):
+      # nothing shipped from it, so it is moved to the commit being released.
+      - name: Create the GitHub Release
         run: |
           set -euo pipefail
           ls -l release
-          gh release create "$GITHUB_REF_NAME" release/*.exe release/latest.yml \
-            --title "$GITHUB_REF_NAME" --notes "Automated build from CI."
+          tag_sha="$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null || true)"
+          if [[ -n "$tag_sha" && "$tag_sha" != "$SHA" ]]; then
+            echo "::notice::Moving unreleased tag $TAG from ${tag_sha:0:7} to ${SHA:0:7}"
+            gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$TAG"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Only reachable when a previous publish attempt created the Release and then failed.
+            gh release upload "$TAG" release/*.exe release/latest.yml --clobber
+          else
+            gh release create "$TAG" release/*.exe release/latest.yml \
+              --target "$SHA" --title "Force App $VERSION" --notes-file release/release-notes.md
+          fi
+          {
+            echo "### Released Force App $VERSION"
+            echo
+            gh release view "$TAG" --json url --jq .url
+            echo
+            echo "d1-server's auto-publish task copies it into the rigs' update feed within about five minutes."
+          } >> "$GITHUB_STEP_SUMMARY"

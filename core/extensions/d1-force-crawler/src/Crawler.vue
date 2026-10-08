@@ -197,8 +197,10 @@ async function resetToPending(ids: string[]) {
 }
 
 // Rows the daemon is working on right now ('processing') are never reset: that would queue the same
-// file a second time and run it twice. They are filtered out of both recrawl queries.
-const NOT_PROCESSING = { status: { _neq: 'processing' } };
+// file a second time and run it twice. They are filtered out of both recrawl queries. So are rows
+// with no source .mat (a Force App cut over the recorder's size limit): the daemon has nothing to
+// process, and resetting one would turn a good analysis into an error.
+const NOT_PROCESSING = { _and: [{ status: { _neq: 'processing' } }, { directus_files_id: { _nnull: true } }] };
 
 async function recrawlMatching() {
 	const q = recrawlQuery.value.trim();

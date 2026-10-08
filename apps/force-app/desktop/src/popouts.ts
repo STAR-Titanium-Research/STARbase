@@ -35,8 +35,8 @@ export function restorablePopoutUrls(saved: unknown, max = MAX_RESTORED_POPOUTS)
  * Every open and every close the operator makes is saved as it happens. Quitting closes the
  * pop-outs too, but those closes must not count: beginQuit() takes a last snapshot (with each
  * window's current URL, which may have moved on from the one it opened with) and stops saving. */
-export class PopoutTracker {
-  private readonly open = new Map<TrackedWindow, string>();
+export class PopoutTracker<W extends TrackedWindow = TrackedWindow> {
+  private readonly open = new Map<W, string>();
   private quitting = false;
   private readonly saved: string[];
 
@@ -50,7 +50,12 @@ export class PopoutTracker {
     return this.saved;
   }
 
-  track(win: TrackedWindow, url: string): void {
+  /** The pop-outs open right now. */
+  windows(): W[] {
+    return [...this.open.keys()];
+  }
+
+  track(win: W, url: string): void {
     this.open.set(win, url);
     win.once('closed', () => {
       this.open.delete(win);

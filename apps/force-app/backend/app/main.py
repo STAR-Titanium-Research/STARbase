@@ -21,7 +21,7 @@ import shutil
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from logging.handlers import RotatingFileHandler
 from typing import Any
@@ -1491,6 +1491,9 @@ async def recovery_discard(session_id: str) -> dict:
 @app.get("/backup/config")
 async def backup_get_config() -> dict:
     cfg = backup_mod.load_config(CAPTURES_ROOT)
+    # Only a suggestion for the settings page to offer (#135): it is never saved, so the Doctor
+    # doesn't probe a backup server on a rig that has none.
+    cfg["suggested_url"] = DEFAULT_BACKUP_URL
     # Probe server if configured
     if cfg.get("server_url"):
         probe = await run_in_threadpool(backup_mod.probe_server, cfg["server_url"])
@@ -2314,6 +2317,17 @@ class CaptureMetadataPatch(BaseModel):
 _summary_patch_lock = threading.Lock()
 
 
+def _rewrite_summary(path: str, change: Callable[[dict], None]) -> dict:
+    """Read summary.json, let `change` edit it in place, write it back atomically, all under
+    `_summary_patch_lock`. `change` may raise (an HTTPException) to refuse: nothing is written."""
+    with _summary_patch_lock:
+        with open(path) as f:
+            summary = json.load(f)
+        change(summary)
+        storage.atomic_write_json(path, summary, indent=2)
+    return summary
+
+
 @app.patch("/captures/{cid}/metadata")
 def patch_capture_metadata(cid: str, patch: CaptureMetadataPatch) -> dict:
     """Correct a finalized capture's local record after the fact.
@@ -2327,9 +2341,8 @@ def patch_capture_metadata(cid: str, patch: CaptureMetadataPatch) -> dict:
     """
     path = _capture_file(cid, "summary.json")
     changed = patch.model_dump(exclude_unset=True)
-    with _summary_patch_lock:
-        with open(path) as f:
-            summary = json.load(f)
+
+    def apply(summary: dict) -> None:
         cfg = summary.setdefault("config", {})
         if "sample_name" in changed:
             # Kept in step deliberately: finalize.py stamps both from the same
@@ -2343,9 +2356,60 @@ def patch_capture_metadata(cid: str, patch: CaptureMetadataPatch) -> dict:
         if "extra_metadata" in changed:
             cfg["extra_metadata"] = changed["extra_metadata"]
             summary["metadata"] = changed["extra_metadata"]  # finalize.py's top-level echo of it
-        storage.atomic_write_json(path, summary, indent=2)
+
+    summary = _rewrite_summary(path, apply)
     log.info("patch_capture_metadata: id=%s fields=%s", cid, sorted(changed.keys()))
     return summary
+
+
+class CaptureCropPut(BaseModel):
+    """The operator's cut window, as sample indices into the full-rate recording. PUT replaces both:
+    both null (or omitted) clears it, so auto-detection decides again; one side alone is a 422."""
+
+    crop_start_idx_override: int | None = None
+    crop_end_idx_override: int | None = None
+
+
+@app.put("/captures/{cid}/crop")
+def put_capture_crop(cid: str, body: CaptureCropPut) -> dict:
+    """Keep the crop the operator set in the final summary, locally, so it survives a failed upload.
+
+    The edited window used to live only in memory and in the (possibly failing) Directus POST, and
+    it was gone after a restart (#190). Stored as `crop_start_idx_override` / `crop_end_idx_override`
+    in summary.json (same names as the machining_force_analysis columns, so an upload sends them
+    as they are); the raw recording and capture.mat are never touched."""
+    path = _capture_file(cid, "summary.json")  # 400 bad id / 404 unknown capture
+    if cid == _active_session_id():
+        raise HTTPException(409, "that recording is still in progress")
+    _refuse_if_capture_busy(cid)
+    start, end = body.crop_start_idx_override, body.crop_end_idx_override
+    if (start is None) != (end is None):
+        raise HTTPException(
+            422, "crop_start_idx_override and crop_end_idx_override are set together or not at all"
+        )
+
+    def apply(summary: dict) -> None:
+        if start is not None and end is not None:  # both or neither, checked above
+            n = int(summary.get("n") or 0)
+            if not 0 <= start < n:
+                raise HTTPException(
+                    422, f"crop_start_idx_override must be 0 <= start < {n} samples"
+                )
+            if not 0 < end <= n:
+                raise HTTPException(422, f"crop_end_idx_override must be 0 < end <= {n} samples")
+            if start >= end:
+                raise HTTPException(
+                    422, "crop_start_idx_override must be before crop_end_idx_override"
+                )
+        for key, val in (("crop_start_idx_override", start), ("crop_end_idx_override", end)):
+            if val is None:
+                summary.pop(key, None)
+            else:
+                summary[key] = val
+
+    _rewrite_summary(path, apply)
+    log.info("put_capture_crop: id=%s start=%s end=%s", cid, start, end)
+    return {"crop_start_idx_override": start, "crop_end_idx_override": end}
 
 
 @app.get("/captures/{cid}/live_cache.bin")

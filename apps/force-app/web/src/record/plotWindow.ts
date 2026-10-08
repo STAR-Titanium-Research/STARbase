@@ -46,3 +46,45 @@ export function windowView(t: ArrayLike<number>, windowSec: number): { i0: numbe
 	const x0 = newest - w;
 	return { i0: Math.max(0, firstAtOrAfter(t, x0) - 1), x0, x1: newest };
 }
+
+/** A gap is a step in time longer than this many times the typical bin spacing (#185). */
+const GAP_FACTOR = 3;
+
+/**
+ * Typical spacing of the ascending time axis `t` over [from, to): the median step, estimated from
+ * at most ~256 evenly spaced steps so a long window stays cheap. 0 when there are fewer than two
+ * points.
+ */
+export function medianSpacing(t: ArrayLike<number>, from: number, to: number): number {
+	const end = Math.min(to, t.length);
+	const start = Math.max(0, from);
+	const steps = end - start - 1;
+	if (steps < 1) return 0;
+	const stride = Math.max(1, Math.floor(steps / 256));
+	const d: number[] = [];
+	for (let i = start; i + 1 < end; i += stride) d.push(t[i + 1] - t[i]);
+	d.sort((a, b) => a - b);
+	return d[d.length >> 1];
+}
+
+/**
+ * Split [from, to) into runs of consecutive points with no hole between them: a new run starts
+ * wherever the step in time exceeds `factor` times the median spacing. A live plot that joins the
+ * points across a hole draws it as a flat line (#185: the stream was away, or the backend dropped
+ * frames under backpressure). Returned as [start, end) index pairs; a gap-free series is one run.
+ */
+export function splitAtGaps(t: ArrayLike<number>, from: number, to: number, factor = GAP_FACTOR): Array<[number, number]> {
+	const end = Math.min(to, t.length);
+	const start = Math.max(0, from);
+	if (end <= start) return [];
+	const med = medianSpacing(t, start, end);
+	if (!(med > 0)) return [[start, end]];
+	const limit = factor * med;
+	const runs: Array<[number, number]> = [];
+	let a = start;
+	for (let i = start + 1; i < end; i++) {
+		if (t[i] - t[i - 1] > limit) { runs.push([a, i]); a = i; }
+	}
+	runs.push([a, end]);
+	return runs;
+}

@@ -2,13 +2,19 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
-import { recordRoute } from '@d1/ui';
+import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, createdRecord, recordRoute } from '@d1/ui';
 import { buildGeometry, dimsText, FORMS, FORM_FIELDS, PRESETS, fieldLabel } from './geometry';
 
 const api = useApi();
 const router = useRouter();
 const { useUserStore } = useStores();
-const userStore = useUserStore();
+const userStore = useUserStore() as any;
+// An admin reads every row, so a sample with no owner is still visible to them: only members need
+// a People row to see what they register.
+const isAdmin = computed(() => {
+	const u = userStore.currentUser;
+	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
+});
 
 interface Opt { text: string; value: string; extra?: string }
 const materials = ref<Opt[]>([]);
@@ -43,6 +49,24 @@ const seqError = ref('');
 const saving = ref(false);
 const error = ref('');
 const created = ref<{ id: string; code: string } | null>(null);
+// Set when the sample was created but the answer was empty: the user cannot read it (ADR-0011).
+const createdHidden = ref(false);
+// The People row of this login: ownership points at it, and without one a registered sample is
+// owned by nobody and not readable by its creator. null = no row, undefined = not known (yet).
+const personId = ref<string | null | undefined>(undefined);
+
+async function lookupPerson(): Promise<string | null | undefined> {
+	const uid = (userStore.currentUser as any)?.id;
+	if (!uid) return undefined;
+	try {
+		const pr = await api.get('/items/people', {
+			params: { filter: { user_id: { _eq: uid } }, fields: ['person_id'], limit: 1 },
+		});
+		return pr?.data?.data?.[0]?.person_id ?? null;
+	} catch {
+		return undefined; // unknown: let the server decide
+	}
+}
 
 // Live parametric isometric preview + the dimension inputs relevant to the chosen
 // form. Picking a standard test coupon fills its standard dimensions, which then
@@ -97,21 +121,21 @@ async function submit() {
 		for (const k of ['diameter_mm', 'length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm', 'mass_grams']) {
 			if (f.value[k] !== null && f.value[k] !== '') payload[k] = Number(f.value[k]);
 		}
-		// Ownership points at people, not directus_users — resolve the current user
-		// to their person row and set that as the owner.
-		const uid = (userStore.currentUser as any)?.id;
-		if (uid) {
-			try {
-				const pr = await api.get('/items/people', {
-					params: { filter: { user_id: { _eq: uid } }, fields: ['person_id'], limit: 1 },
-				});
-				const pid = pr?.data?.data?.[0]?.person_id;
-				if (pid) payload.owner_person_id = pid;
-			} catch { /* leave unset — owner can be picked later */ }
+		// Ownership points at people, not directus_users: the owner is the current user's person
+		// row. Without one the sample would belong to nobody and its creator could not see it, so
+		// refuse up front instead of registering it into the void.
+		if (personId.value === undefined) personId.value = await lookupPerson();
+		if (personId.value === null && !isAdmin.value) {
+			error.value = NO_PERSON_MESSAGE;
+			return;
 		}
+		if (personId.value) payload.owner_person_id = personId.value;
 
 		const res = await api.post('/items/physical_samples', payload);
-		created.value = { id: res.data.data.sample_id, code: res.data.data.sample_code };
+		// An empty answer (HTTP 204) means created but not readable by this user.
+		const row = createdRecord(res.data, 'sample_id', 'sample_code');
+		createdHidden.value = !row;
+		created.value = row ?? { id: '', code: '' };
 	} catch (e: any) {
 		error.value = e?.response?.data?.errors?.[0]?.message || e?.message || 'Could not register the sample.';
 	} finally {
@@ -121,6 +145,7 @@ async function submit() {
 
 function resetForm() {
 	created.value = null;
+	createdHidden.value = false;
 	f.value.material_id = null;
 	f.value.primary_method_id = null;
 	f.value.form = null;
@@ -134,6 +159,7 @@ const go = (to: string) => router.push(to); // router base is already /admin
 const openReport = (id: string) => window.open(`/d1-report/sample/${id}`, '_blank', 'noopener');
 
 onMounted(async () => {
+	lookupPerson().then((p) => (personId.value = p));
 	const [m, me, p, s] = await Promise.all([
 		api.get('/items/materials', { params: { fields: ['material_id', 'common_name', 'alloy_code'], sort: 'common_name', limit: -1 } }),
 		api.get('/items/manufacturing_methods', { params: { fields: ['method_id', 'method_name', 'method_code'], sort: 'method_name', limit: -1 } }),
@@ -154,12 +180,20 @@ onMounted(async () => {
 			<div v-if="created" class="card done">
 				<v-icon name="check_circle" class="done-ic" />
 				<h2>Sample registered</h2>
-				<p class="code">{{ created.code }}</p>
-				<div class="done-actions">
-					<v-button @click="go(recordRoute('physical_samples', created.id))"><v-icon name="open_in_new" left />Open record</v-button>
-					<v-button secondary @click="openReport(created.id)"><v-icon name="picture_as_pdf" left />PDF</v-button>
-					<v-button secondary @click="resetForm"><v-icon name="add" left />Register another</v-button>
-				</div>
+				<template v-if="createdHidden">
+					<p class="hidden-note">{{ CREATED_BUT_HIDDEN_MESSAGE }}</p>
+					<div class="done-actions">
+						<v-button secondary @click="resetForm"><v-icon name="add" left />Register another</v-button>
+					</div>
+				</template>
+				<template v-else>
+					<p class="code">{{ created.code }}</p>
+					<div class="done-actions">
+						<v-button @click="go(recordRoute('physical_samples', created.id))"><v-icon name="open_in_new" left />Open record</v-button>
+						<v-button secondary @click="openReport(created.id)"><v-icon name="picture_as_pdf" left />PDF</v-button>
+						<v-button secondary @click="resetForm"><v-icon name="add" left />Register another</v-button>
+					</div>
+				</template>
 			</div>
 
 			<template v-else>
@@ -212,6 +246,7 @@ onMounted(async () => {
 					<v-textarea v-model="f.notes" placeholder="Anything worth recording…" />
 				</section>
 
+				<p v-if="personId === null && !isAdmin && !error" class="err" role="alert">{{ NO_PERSON_MESSAGE }}</p>
 				<p v-if="error" class="err">{{ error }}</p>
 				<div class="actions">
 					<v-button secondary @click="go('/home')">Cancel</v-button>
@@ -281,6 +316,7 @@ export default { inheritAttrs: false };
 .done-ic { --v-icon-size: 56px; --v-icon-color: #16a34a; }
 .done h2 { margin: 12px 0 4px; font-size: 20px; }
 .done .code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; font-size: 18px; color: var(--theme--primary, #1d4ed8); margin: 0 0 24px; }
+.done .hidden-note { margin: 0 0 24px; color: var(--theme--warning, #b45309); }
 .done-actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
 
 @media (max-width: 720px) { .row, .row3 { grid-template-columns: 1fr; } }

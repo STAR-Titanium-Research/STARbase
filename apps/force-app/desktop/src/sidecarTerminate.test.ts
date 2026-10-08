@@ -21,13 +21,27 @@ vi.mock('node:child_process', () => ({
   execFile: vi.fn((_cmd: string, _args: string[], cb: () => void) => cb()),
 }));
 
+import { execFile } from 'node:child_process';
 import { SidecarSupervisor, type SidecarState } from './sidecar';
+
+// terminate() kills the process tree with taskkill on Windows (the release build runs these tests
+// there) and sends SIGTERM elsewhere: check whichever this platform uses.
+function expectTerminated(child: FakeChild): void {
+  if (process.platform === 'win32') {
+    expect(execFile).toHaveBeenCalledWith(
+      'taskkill', ['/pid', String(child.pid), '/T', '/F'], expect.any(Function),
+    );
+  } else {
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+  }
+}
 
 describe('SidecarSupervisor when a hung backend will not report its exit', () => {
   let healthy = true;
 
   beforeEach(() => {
     spawned.length = 0;
+    vi.mocked(execFile).mockClear();
     healthy = true;
     vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: healthy })));
@@ -57,7 +71,7 @@ describe('SidecarSupervisor when a hung backend will not report its exit', () =>
     healthy = false; // from here the backend is hung
     // Two failed checks, then terminate()'s grace + give-up window, then the restart backoff.
     await vi.advanceTimersByTimeAsync(2000 + 1000 + 5000 + 1000 + 500);
-    expect(spawned[0].kill).toHaveBeenCalledWith('SIGTERM');
+    expectTerminated(spawned[0]);
     expect(states).toContain('restarting');
     expect(spawned).toHaveLength(2);
 
@@ -105,7 +119,7 @@ describe('SidecarSupervisor when a hung backend will not report its exit', () =>
     // ...and the replacement is still health-checked: when it hangs it is terminated in turn.
     healthy = false;
     await vi.advanceTimersByTimeAsync(2000 + 100);
-    expect(spawned[1].kill).toHaveBeenCalledWith('SIGTERM');
+    expectTerminated(spawned[1]);
 
     const stopping = sup.stop();
     spawned[1].emit('exit', null, 'SIGTERM');

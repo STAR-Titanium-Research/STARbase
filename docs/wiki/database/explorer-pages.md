@@ -22,6 +22,46 @@ ordinary Content form of the record. Samples, operations and tests also have **R
 that loads on its own, so one part you may not read shows a short message and the others still
 work. Lists show their first 200 rows and say when there are more.
 
+## What you see
+
+Since ADR-0011 a member sees only the records they are involved in. You can see a record when:
+
+- you **own** it, or (for a sample) **co-own** it;
+- you are **PI or investigator** of its project, which also covers what belongs to that project
+  through its campaigns (read-only);
+- you **own a campaign**: its samples, operations and tests are visible to you; and you can see a
+  campaign when you own or co-own a sample in it;
+- it is an **operation or test** on a sample you can see.
+
+The pages show exactly that, so **counts are yours, not the lab's**: Home's *At a glance*, a
+project's tiles and the Projects index count the records you can see, and a project you only touch
+through one sample shows only that sample. A campaign's *Samples* count can be lower than its card
+when some of its samples are not yours to see; the page then says *N samples not visible to you*.
+A related record you may not see is shown as *not visible to you* (a breadcrumb, an operation's
+input or output sample, a test's subject) instead of as empty, and a record you may not see at all
+opens *Not found or not visible to you*. The *Project items* list on the project's Content form (the
+roll-up) is for its PI and investigators only; anyone else gets a line saying so.
+
+**Edit** is offered only where you may change the record: a sample's owner or co-owners, an
+operation's or test's owner or an owner or co-owner of the sample it acts on, the owner of a
+campaign, the PI of a project. If you can read a record because you are an investigator, or because
+it sits in your campaign, the **Edit** button is not shown. On a campaign you do not own, the sample
+picker is hidden (adding a sample needs the campaign's owner), with a note that operations and tests
+are moved by their own owner. The operation and test pickers stay, because moving an operation or
+test in or out of a campaign is a change to that operation or test, not to the campaign. If a
+change is refused anyway, the page words it in plain words: the owner-only refusals of the access
+guard (*Only the sample's owner can hand it to someone else.*), or, for Directus's own refusal, *Only
+the owner or a co-owner can change this record.* (*Only the campaign's owner can change it.* for a
+campaign, *Only the project's PI can change it.* for a project, *Only the owner of OP-12 (or of its
+sample) can move it.* for an operation or test in a campaign picker). To let a colleague work
+on a sample, add them as a co-owner. Linking a login to a person (the People page) is for
+administrators only, and so is the audit log. The rules are in
+[Roles and permissions](roles-and-permissions.md#who-can-see-and-change-which-records).
+Administrators see everything.
+
+If your login is not linked to a People row you own nothing: *Register a sample* refuses up front,
+and Home says so. Ask an administrator to link it.
+
 ## Projects index
 
 A card per project: code, name, principal investigator, status (*Active* or *Inactive*), dates,
@@ -111,5 +151,6 @@ analysed, failed...) and the same breadcrumb. Sections:
 same custom widgets (sample code, machine picker, geometry preview...) as Content. **Save** writes
 the changes and the page refreshes behind the drawer; **Cancel** closes it. If someone else saved
 the record while the drawer was open, you are warned and nothing is overwritten until you reload.
-Fields your role may not read are left out. *New* records (a new operation, test or project) still
+If the server refuses the save, the drawer says who may change the record. Fields your role may
+not read are left out. *New* records (a new operation, test or project) still
 open the Content form.

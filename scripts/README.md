@@ -28,6 +28,7 @@ and restart Directus.
 | `configure_operation_files.sql` | External data-file links on an operation |
 | `configure_project_rollup.sql` | Read-only `project_rollup` collection and its panel on projects |
 | `configure_users_and_policies.sql` | Lab Admin / Lab Member roles and policies, and the lab's user accounts. Applied separately, after migrations and before `migrate_legacy.py` |
+| `access_rules.json` + `gen_access_rules.py` | Who may see and change which records (ADR-0011): the rules, and the generator that writes the Lab Member permission rows. `--write` refreshes the marked block in `configure_users_and_policies.sql`; `--check` (pre-commit and CI) fails on drift; `--values` prints the rows for a migration |
 | `seed_demo_sample.sql` | Demo sample for the Sample Overview report |
 
 ## Data import and backfills

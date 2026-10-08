@@ -38,7 +38,7 @@ describe('buildMatrix rows', () => {
 	});
 
 	it('an empty campaign gives an empty matrix', () => {
-		expect(buildMatrix({})).toEqual({ columns: [], rows: [], unplaced: { operations: 0, tests: 0 } });
+		expect(buildMatrix({})).toEqual({ columns: [], rows: [], unplaced: { operations: 0, tests: 0, samples: 0 } });
 	});
 
 	it('counts operations and tests whose sample cannot be read instead of dropping them silently', () => {
@@ -48,7 +48,7 @@ describe('buildMatrix rows', () => {
 			tests: [{ session_id: 't1', test_type: 'tensile', status: 'processed', sample_id: null }],
 		});
 		expect(m.rows).toEqual([]);
-		expect(m.unplaced).toEqual({ operations: 1, tests: 1 });
+		expect(m.unplaced).toEqual({ operations: 1, tests: 1, samples: 1 });
 	});
 });
 

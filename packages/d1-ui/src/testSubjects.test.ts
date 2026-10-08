@@ -23,11 +23,17 @@ describe('splitSubjects', () => {
 		]);
 	});
 	it('skips junk rows and copes with nothing', () => {
-		expect(splitSubjects(null)).toEqual({ samples: [], others: [] });
-		expect(splitSubjects([null, {}, { collection: 'physical_samples', item: null }, { collection: 'tools', item: '' }])).toEqual({
-			samples: [],
-			others: [],
-		});
+		expect(splitSubjects(null)).toEqual({ samples: [], others: [], hidden: 0 });
+		expect(splitSubjects([null, {}, { collection: 'tools', item: '' }])).toEqual({ samples: [], others: [], hidden: 0 });
+	});
+	it('counts targets that came back null as hidden from the user', () => {
+		const out = splitSubjects([
+			{ collection: 'physical_samples', item: null },
+			{ collection: 'physical_samples', item: { sample_id: 's1', sample_code: 'A' } },
+			{ collection: 'insert_edges', item: null },
+		]);
+		expect(out.hidden).toBe(2);
+		expect(out.samples).toEqual([{ sample_id: 's1', sample_code: 'A' }]);
 	});
 	it('asks for each target through the M2A syntax', () => {
 		expect(TEST_SUBJECT_FIELDS).toContain('item:physical_samples.sample_code');

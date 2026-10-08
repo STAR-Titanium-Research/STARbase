@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { RecordClient } from './liveClient';
+import { useCanvasLifecycle } from './canvasLifecycle';
 import { channelColor } from './types';
 import { theme } from '../theme';
 
 const props = defineProps<{ client: RecordClient; channels?: string[]; scale?: 'amp' | 'psd' }>();
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 let ctx: CanvasRenderingContext2D | null = null;
-let ro: ResizeObserver | null = null;
 
 // MB fits the tick labels (4-14px below the plot) AND the axis title under them; at 22 the
 // title was drawn top-aligned 4px above the canvas edge and always clipped to half its height.
@@ -156,8 +156,8 @@ watch(() => props.scale, draw);
 // above already redraws for those — this one only needs to catch a changed selection.
 watch(() => chans.value.join(), draw);
 watch(theme, draw);
-onMounted(() => { resize(); ro = new ResizeObserver(resize); if (canvasEl.value) ro.observe(canvasEl.value); });
-onBeforeUnmount(() => ro?.disconnect());
+useCanvasLifecycle(canvasEl, { resize, repaint: draw });   // also redraws after a hidden window (#189)
+onMounted(resize);
 </script>
 
 <template>

@@ -30,7 +30,7 @@ import { activeFindings, diagnose, worstSeverity, type Finding } from './metadat
 import { computeSignalStats, resolveStatsWindow, type SignalStats } from './signalStats';
 import { statsCsvColumns } from './statsCsv';
 import { AXIS_MAPS, DEFAULT_AXIS_MAP, axisMapKey, computeCuttingMetrics, formatAxisMap, opKindFromSubtype, parseAxisMap, removeLegacyAxisMap, resolveAxisMap, usesSpiralDiameter, writeAxisMapForSubtype, type Metric } from './cuttingMetrics';
-import { type FilterChain, chainActive, chainSummary, defaultChain, fetchFiltered, fetchFilteredFft } from './filterChain';
+import { type FilterChain, bakeBlockedReason, chainActive, chainSummary, defaultChain, fetchFiltered, fetchFilteredFft } from './filterChain';
 import { useForceHost } from './host';
 import { saveChartImage, type ChartSnapshot } from './chartExport';
 import { downloadText, safeFilePart, toCsv, useCopyFeedback, type CsvColumn } from './csvExport';
@@ -600,6 +600,7 @@ const savedChain = computed<FilterChain | null>(() => {
 	return mergeChain(typeof fc === 'string' ? JSON.parse(fc) : fc);
 });
 const filterBaked = computed(() => detail.value?.filter_baked === true);
+const bakeBlocked = computed(() => bakeBlockedReason(detail.value));
 const bakedChain = computed<FilterChain | null>(() => (filterBaked.value ? savedChain.value : null));
 const appliedLight = computed<boolean>(() => !!savedChain.value && !filterBaked.value);
 // The single filtered pane: a light-applied op renders one Lite cloud recomputed from filteredCache
@@ -697,6 +698,9 @@ async function applyFilter() {
 async function bakeFilters() {
 	const d = detail.value;
 	if (!d?.id || baking.value) return;
+	// No archive .mat to reprocess: a 'pending' PATCH would make the orchestrator error the row out.
+	const blocked = bakeBlockedReason(d);
+	if (blocked) { filterErr.value = blocked; return; }
 	const live = opGuard.begin(d.id);
 	baking.value = true; filterErr.value = null;
 	try {
@@ -727,7 +731,8 @@ async function bakeFilters() {
 // the outputs back to raw (status='pending', admin-only), so it keeps the polling path.
 async function clearFilter() {
 	const d = detail.value; if (!d?.id) return;
-	if (!filterBaked.value) {
+	// Without an archive .mat a bake-clear can't reprocess either; just drop the saved chain.
+	if (!filterBaked.value || bakeBlockedReason(d)) {
 		workChain.value = defaultChain();
 		filteredCache.value = null;
 		detail.value = { ...detail.value, filter_chain: null, filter_baked: false };
@@ -738,6 +743,7 @@ async function clearFilter() {
 }
 async function clearBake() {
 	const d = detail.value; if (!d?.id) return;
+	if (bakeBlockedReason(d)) return;   // never PATCH status 'pending' for a row with no .mat
 	const live = opGuard.begin(d.id);
 	workChain.value = defaultChain();
 	await api.patch(`/items/machining_force_analysis/${d.id}`, { filter_chain: null, filter_baked: false, status: 'pending' }).catch(() => {});
@@ -1353,7 +1359,7 @@ async function selectOp(row: any) {
 					'operation_id.sample_id.form', 'operation_id.sample_id.manufactured_date',
 					'operation_id.sample_id.owner_person_id.full_name',
 					'operation_id.sample_id.material_id.common_name',
-					'directus_files_id.filesize', 'live_cache_file', 'live_render_points', 'pulses_per_rev', 'inner_diameter', 'outer_diameter', 'filter_chain', 'filter_baked',
+					'directus_files_id.id', 'directus_files_id.filesize', 'live_cache_file', 'live_render_points', 'pulses_per_rev', 'inner_diameter', 'outer_diameter', 'filter_chain', 'filter_baked',
 					'octree_status', 'octree_path', 'octree_points',
 					'grid_octree_status', 'grid_octree_path', 'grid_octree_points',
 					'grid_fidelity', 'grid_arm_ratio', 'grid_cell_mm'],
@@ -2881,10 +2887,11 @@ function fmtDateTime(v: string | null | undefined) {
 								<div class="filt-actions">
 									<button class="applybtn" :disabled="baking || !chainActive(workChain)" @click="applyFilter"
 										title="Keep this filtered version as the op's default. Lite recomputes it live; Full & FRM PNG stay raw until you Bake."><v-icon name="done" x-small /> Apply (Lite)</button>
-									<button class="processbtn" :disabled="baking || !chainActive(workChain)" @click="bakeFilters"
-										title="Reprocess the op on the host so ALL outputs (Lite, Full, FRM PNG) are filtered. Heavier; needs the orchestrator; admin-only."><v-icon :name="baking ? 'hourglass_top' : 'save'" x-small /> {{ baking ? 'Baking…' : 'Bake all' }}</button>
+									<button class="processbtn" :disabled="baking || !chainActive(workChain) || !!bakeBlocked" @click="bakeFilters"
+										:title="bakeBlocked || 'Reprocess the op on the host so ALL outputs (Lite, Full, FRM PNG) are filtered. Heavier; needs the orchestrator; admin-only.'"><v-icon :name="baking ? 'hourglass_top' : 'save'" x-small /> {{ baking ? 'Baking…' : 'Bake all' }}</button>
 									<button v-if="savedChain" class="recrawlbtn" :disabled="baking" @click="clearFilter">Clear</button>
 								</div>
+								<div v-if="bakeBlocked" class="setting-note">{{ bakeBlocked }}</div>
 							</template>
 						</template>
 					</div>

@@ -1,7 +1,7 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import {
 	LIST_CAP, errorText, isNotVisible, linkedFiles, paramColumns, paramRows, shareFiles, useFieldDefs, useItems, useRequestGate,
-	useSections, type LinkedFile, type ParamRow,
+	readHiddenLinks, useSections, type LinkedFile, type ParamRow,
 } from '@d1/ui';
 
 // Everything the Operation page reads, as the signed-in user. The operation itself decides between
@@ -24,6 +24,9 @@ const OPERATION_FIELDS = [
 	'output_sample_id.current_status',
 ];
 
+// Links that read as "none" when the target is hidden by row-level visibility (ADR-0011).
+const LINK_FIELDS = ['sample_id', 'output_sample_id', 'project_id', 'campaign_id'];
+
 export function useOperationData(id: Ref<string>) {
 	const { getItem, getItems } = useItems();
 	const { getFieldDefs } = useFieldDefs();
@@ -40,6 +43,7 @@ export function useOperationData(id: Ref<string>) {
 	const fast = section<any | null>(null);
 	const files = section<LinkedFile[]>([]);
 	const shared = section<LinkedFile[]>([]);
+	const hidden = section<Record<string, boolean>>({});
 
 	async function readParams(opId: string, category: string | null): Promise<ParamRow[]> {
 		if (!category) return [];
@@ -62,6 +66,7 @@ export function useOperationData(id: Ref<string>) {
 			fast.value = { data: null, loading: false, error: '' };
 			files.value = { data: [], loading: false, error: '' };
 			shared.value = { data: [], loading: false, error: '' };
+			hidden.value = { data: {}, loading: false, error: '' };
 		}
 		if (!opId) return;
 
@@ -81,6 +86,7 @@ export function useOperationData(id: Ref<string>) {
 
 		const category: string | null = operation.value?.process_category ?? null;
 		await Promise.all([
+			fill(hidden, token, 'linked records', () => readHiddenLinks(getItem, 'manufacturing_operations', opId, operation.value, LINK_FIELDS)),
 			fill(params, token, 'the parameters', () => readParams(opId, category)),
 			// Force analysis exists for machining operations, the FAST trace for sintering ones (the same
 			// split analysisLink() in the kit makes); other categories have neither, so no request.
@@ -137,5 +143,5 @@ export function useOperationData(id: Ref<string>) {
 	watch(id, load, { immediate: true });
 	onBeforeUnmount(() => gate.cancel());
 
-	return { operation, loading, notVisible, error, params, force, fast, files, shared, reload: load };
+	return { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, reload: load };
 }

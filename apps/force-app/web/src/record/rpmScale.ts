@@ -44,3 +44,50 @@ export function createStableMax(o: { floor?: number; shrinkAfterMs?: number } = 
 		reset() { cur = niceCeil(floor); lowSince = null; lowMax = 0; },
 	};
 }
+
+// The sparkline's own y-domain (#188). It used to share the gauge's scale (target * 1.25), so for
+// most of a CSS cut, where RPM is a small fraction of the target, 50 RPM at a 3000 target filled
+// under 2 % of the box and read as a flat line. The domain now follows the history shown: its span
+// is the history's range plus padding, never below a minimum (so steady-state noise does not fill
+// the box), snapped and made sticky with createStableMax; and it is only moved when the data
+// leaves it, so the curve does not slide around with every frame.
+
+export interface SparkDomain { lo: number; hi: number }
+
+export interface SparkDomainTracker {
+	/** Feed the visible history at `now` (ms); returns the y-domain to draw it in (empty history: the minimum span from 0). */
+	update(values: readonly number[], now: number): SparkDomain;
+	reset(): void;
+}
+
+export function createSparkDomain(o: { minSpan?: number; pad?: number; relMin?: number } = {}): SparkDomainTracker {
+	const minSpan = o.minSpan ?? 20;
+	const pad = o.pad ?? 1.2;        // span wanted = data range x pad
+	const relMin = o.relMin ?? 0.1;  // ... and at least this fraction of the data's top value
+	const span = createStableMax({ floor: minSpan });
+	let dom: SparkDomain | null = null;
+	return {
+		update(values, now) {
+			let lo = Infinity, hi = -Infinity;
+			for (const v of values) { if (v < lo) lo = v; if (v > hi) hi = v; }
+			if (!Number.isFinite(lo)) return dom ?? { lo: 0, hi: minSpan };
+			const S = span.update(Math.max((hi - lo) * pad, hi * relMin, minSpan), now);
+			if (!dom || lo < dom.lo || hi > dom.hi || Math.abs(dom.hi - dom.lo - S) > 1e-9) {
+				const start = Math.max(0, (lo + hi) / 2 - S / 2);   // RPM is never negative
+				dom = { lo: start, hi: start + S };
+			}
+			return dom;
+		},
+		reset() { span.reset(); dom = null; },
+	};
+}
+
+/** SVG polyline points for `values` in a box `width` wide, `height` tall starting at y = `top`. */
+export function sparkPoints(values: readonly number[], dom: SparkDomain, width = 200, top = 4, height = 34): string {
+	if (values.length < 2) return '';
+	const range = dom.hi - dom.lo || 1;
+	return values.map((v, i) => {
+		const f = Math.min(1, Math.max(0, (v - dom.lo) / range));
+		return `${(i / (values.length - 1)) * width},${top + height - f * height}`;
+	}).join(' ');
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest';
 import { setForceHost, resetForceHost, type ForceHost } from './host';
-import { defaultChain, fetchFiltered, fetchSpectrogram } from './filterChain';
+import { bakeBlockedReason, defaultChain, fetchFiltered, fetchSpectrogram, NO_MAT_BAKE_REASON } from './filterChain';
 
 function hostWith(over: Partial<ForceHost>): ForceHost {
 	return {
@@ -68,5 +68,21 @@ describe('fetchSpectrogram abort', () => {
 		const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
 		expect(url).toBe('/filter/spectrogram');
 		expect(init.signal).toBe(ac.signal);
+	});
+});
+
+describe('bakeBlockedReason (#190: cut uploaded without an archive .mat)', () => {
+	it('blocks when directus_files_id is null / missing', () => {
+		expect(bakeBlockedReason({ directus_files_id: null })).toBe(NO_MAT_BAKE_REASON);
+		expect(bakeBlockedReason({})).toBe(NO_MAT_BAKE_REASON);
+		expect(NO_MAT_BAKE_REASON).toContain('Apply the filter live');
+	});
+	it('allows a linked file (expanded object or bare id)', () => {
+		expect(bakeBlockedReason({ directus_files_id: { id: 'f1', filesize: 12 } })).toBeNull();
+		expect(bakeBlockedReason({ directus_files_id: 'f1' })).toBeNull();
+	});
+	it('does not block before a detail is loaded', () => {
+		expect(bakeBlockedReason(null)).toBeNull();
+		expect(bakeBlockedReason(undefined)).toBeNull();
 	});
 });

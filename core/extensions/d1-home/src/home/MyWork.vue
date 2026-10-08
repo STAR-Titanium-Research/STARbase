@@ -11,7 +11,7 @@ const { projects, campaigns, samples, hasPerson, partialProjects, partialSamples
 	<section class="my-work" aria-labelledby="my-work-h">
 		<div class="section-head">
 			<h2 id="my-work-h">My work</h2>
-			<router-link to="/home/projects" class="link">All projects →</router-link>
+			<router-link to="/home/projects" class="link">All projects you can see →</router-link>
 		</div>
 
 		<p v-if="hasPerson === false" class="notice" role="note">

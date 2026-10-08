@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // Live waterfall: recent spectra of ONE channel stacked with a vertical offset — newest at the
 // front (bottom), older frames receding upward and fading. Drawn from the rolling client.fftHistory.
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { RecordClient } from './liveClient';
+import { useCanvasLifecycle } from './canvasLifecycle';
 import { channelColor } from './types';
 import { theme } from '../theme';
 import { DEFAULT_WINDOW_SEC } from './plotWindow';
@@ -10,7 +11,6 @@ import { DEFAULT_WINDOW_SEC } from './plotWindow';
 const props = withDefaults(defineProps<{ client: RecordClient; channels?: string[]; windowSec?: number }>(), { windowSec: DEFAULT_WINDOW_SEC });
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 let ctx: CanvasRenderingContext2D | null = null;
-let ro: ResizeObserver | null = null;
 // The backend publishes a spectrum roughly every 0.3s (session.py's fft throttle) — convert the
 // user-facing time window into a frame count, same as the spectrogram, instead of a fixed count.
 const FFT_PUBLISH_HZ = 1 / 0.3;
@@ -84,8 +84,8 @@ watch(() => props.client.fftSeq.value, draw);
 watch(chan, draw);
 watch(() => props.windowSec, draw);
 watch(theme, draw);
-onMounted(() => { resize(); ro = new ResizeObserver(resize); if (canvasEl.value) ro.observe(canvasEl.value); });
-onBeforeUnmount(() => ro?.disconnect());
+useCanvasLifecycle(canvasEl, { resize, repaint: draw });   // also redraws after a hidden window (#189)
+onMounted(resize);
 </script>
 
 <template>

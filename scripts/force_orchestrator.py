@@ -473,6 +473,12 @@ def run_matlab(
     return True, ""
 
 
+NO_MAT_MESSAGE = (
+    "no archive .mat linked to this analysis row: baking or reprocessing needs an archive .mat "
+    "(this cut was uploaded without one, over the size limit); existing results left as they were"
+)
+
+
 def process_file(row, exe: str, timeout: int, matlab_opts: dict) -> dict:
     """Run MATLAB for one file. Returns a result dict (no DB / network here).
     A row's live_render_points (a Tier-2 "Process at N points" request from the
@@ -503,6 +509,14 @@ def process_file(row, exe: str, timeout: int, matlab_opts: dict) -> dict:
         fchain = row.get("filter_chain")
         if fchain:
             matlab_opts = {**matlab_opts, "filter_chain": str(fchain)}
+        if not row.get("archive_path"):
+            # A Force App cut over the recorder's .mat size limit is saved as a finished analysis
+            # with no source file (directus_files_id NULL, #190). discover() never queues one, but
+            # a dashboard Bake / reprocess or a hand reset can. This is NOT a processing failure:
+            # ingest() puts the row back to 'done' untouched rather than wiping its outputs.
+            res["status"] = "no_mat"
+            res["message"] = NO_MAT_MESSAGE
+            return res
         unc = unc_for(row["archive_path"])
         ok, err = run_matlab(exe, unc, outdir, timeout, matlab_opts)
         if not ok:
@@ -1783,7 +1797,19 @@ def _num(v):
 
 def ingest(conn, row, res, frm_ids, mrelease):
     s = res["summary"]
-    if res["status"] == "done":
+    if res["status"] == "no_mat":
+        # Claimed (pending -> processing) but there is nothing to reprocess. Restore 'done' and
+        # leave every output, matlab_version and live_render_points as they were (#190).
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE machining_force_analysis
+                   SET status='done', error_message=%s, updated_at=now()
+                 WHERE id=%s
+            """,
+                [res["message"][:2000], row["id"]],
+            )
+    elif res["status"] == "done":
         vals = {c: _num(s.get(SUMMARY_ALIASES.get(c, c))) for c in SUMMARY_COLS}
         series = Path(res["outdir"]) / "series.json"
         fft = Path(res["outdir"]) / "fft.json"
@@ -1877,7 +1903,7 @@ def process_batch(conn, args, exe, mrelease, directus, batch_size, on_progress=N
                         if old and old not in new:
                             directus.delete_file(old)
                 done += 1 if res["status"] == "done" else 0
-                errors += 1 if res["status"] != "done" else 0
+                errors += 1 if res["status"] not in ("done", "no_mat") else 0
                 tag = res["status"].upper()
                 log.info(
                     "[%s] %s%s",
@@ -2103,7 +2129,7 @@ def run_daemon(conn, exe, mrelease, discover_every: int) -> int:
                     nonlocal session_done, session_errors
                     if status == "done":
                         session_done += 1
-                    else:
+                    elif status != "no_mat":  # a restored no-.mat row is neither
                         session_errors += 1
                     try:
                         with conn.cursor() as cur:

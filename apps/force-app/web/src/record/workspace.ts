@@ -1,7 +1,8 @@
 // Shared state for the modular Recording workspace. Created once in RecordPage and provided to
 // every panel via inject(), so panels stay small and independent while sharing one RecordClient,
 // config, metadata, plot options, and the start/stop/replay actions.
-import { computed, inject, reactive, ref, shallowRef, watch, type InjectionKey } from 'vue';
+import { computed, effectScope, inject, reactive, ref, shallowRef, watch, type InjectionKey } from 'vue';
+import { shouldOpenSaveDialog } from './saveDialogGate';
 import { RAW_BYTES_PER_SAMPLE, RAW_COLUMNS, RecordClient } from './liveClient';
 import { api } from '../directusClient';
 import { buildSeriesEnvelope, debouncePublish, parseCache, type Cache } from '@d1/force-plotting';
@@ -13,7 +14,7 @@ import { labamp, type AutoRangeRec } from './labampApi';
 import { createPlaybackEngine } from './playback/engine';
 import { loadPlotPrefs, savePlotPrefs, type PlotPrefs } from './plotPrefs';
 import { clearSetupPrefs, defaultSetupPrefs, loadSetupPrefs, pickSetup, saveSetupPrefs, type SetupPrefs } from './setupPrefs';
-import { directusErrorMessage, fetchCaptureBlobs, numOrNull, uploadCaptureFiles } from './uploadCapture';
+import { analysisCreateFailure, directusErrorMessage, fetchCaptureBlobs, numOrNull, uploadCaptureFiles } from './uploadCapture';
 import { adoptExistingAnalysis, analysisAlreadyLinked, ensureOperation, needsBlobs, uploadProgress } from './uploadResume';
 import { OFFLINE_SESSION_UPLOAD_MESSAGE, currentRecorder, hasServerSession, ownerPersonId, recorderFields, resolveOwnerPersonId, syncerFields } from '../recorder';
 import { isFetchFailure } from '../netErrors';
@@ -26,6 +27,7 @@ import { computePreflight, isCustomChannelList, needsSampleConfirm, parseChannel
 import { hwStatus } from './hwStatus';
 import { nidaqApi } from '../nidaq/nidaqApi';
 import { authStore } from '../authStore';
+import { JSON_HEADERS, readJson } from '../recorderHttp';
 
 export type Axis = 'Fx' | 'Fy' | 'Fz';
 
@@ -416,6 +418,18 @@ export function createWorkspace() {
 	const isFinalizing = computed(() => st.state === 'finalizing');
 	const isDone = computed(() => st.state === 'done');
 	const locked = computed(() => isRecording.value || isFinalizing.value);
+	// #185: leaving the Record page used to close the stream even mid-cut, so nothing arrived while
+	// away and the trace joined old to new frames across the hole. The workspace owns the stream: the
+	// page only acquires it on mount and releases it on unmount. While recording or finalizing a
+	// release is deferred until the cut is no longer running; acquiring again cancels it, and
+	// connect() keeps the socket it already has.
+	let streamReleased = false;
+	function acquireStream() { streamReleased = false; client.connect(); }
+	function releaseStream() {
+		if (locked.value) { streamReleased = true; return; }
+		client.disconnect();
+	}
+	watch(locked, (l) => { if (!l && streamReleased) { streamReleased = false; client.disconnect(); } });
 	// #84: why Start can't be pressed for the chosen NI-DAQ sample rate (the hardware can't do it), or
 	// null. One computed for the footer's Start-disable and the red sample-rate tile, so they can't
 	// disagree.
@@ -724,6 +738,36 @@ export function createWorkspace() {
 		logged.value = true;
 		return opId;
 	}
+	// The crop the operator set in the final summary, as full-rate sample indices. Null unless a
+	// handle was actually moved: untouched, auto-detection keeps deciding. Both sides or neither.
+	function cropOverrideIdx(): { start: number; end: number } | null {
+		const cache = finishedCache.value;
+		const s = editCutStartSec.value, e = editCutEndSec.value;
+		if (!cache || s == null || e == null || (s === cache.csSec && e === cache.ceSec)) return null;
+		const fs = captureFs();
+		return { start: Math.round(s * fs), end: Math.round(e * fs) };
+	}
+	// The cut's own rate from its summary: the form's rate can differ (an adopted cut, an edit after
+	// the cut, NI-DAQ coercion), and the backend checks the indices against summary.n.
+	function captureFs(): number { return Number(st.summary?.fs) || cfg.sample_rate; }
+	// #190: the edited crop used to live only in memory and in the Directus POST, so a failed upload
+	// (or a restart) lost it. Writing it to the capture's summary.json first means the local plot,
+	// a retry from Local Captures and a cold start all still have it. Best effort and never throws:
+	// an unreachable recorder must not block saving the files or the upload. Called once, by the
+	// save dialog, before anything that can fail; the PUT is idempotent.
+	async function saveCropLocally(): Promise<void> {
+		const id = st.captureId;
+		if (!id) return;
+		// Untouched handles PUT nulls, which clears an override an earlier (failed) save stored.
+		const crop = cropOverrideIdx();
+		try {
+			await readJson(await fetch(`${client.baseUrl}/captures/${id}/crop`, {
+				method: 'PUT',
+				headers: JSON_HEADERS,
+				body: JSON.stringify({ crop_start_idx_override: crop?.start ?? null, crop_end_idx_override: crop?.end ?? null }),
+			}));
+		} catch (e) { console.warn('could not save the crop to the capture folder', e); }   // best effort
+	}
 	async function uploadCutToDatabase(): Promise<string> {
 		const id = st.captureId;
 		if (!id) throw new Error('no capture id for this recording');
@@ -783,26 +827,16 @@ export function createWorkspace() {
 		// the force/RPM charts render "no data" forever, since series is otherwise left null.
 		const cache = finishedCache.value;
 		const series = cache ? buildSeriesEnvelope(cache) : null;
-		// Only an explicit override when the operator actually moved a handle in the save dialog —
-		// left untouched, editCutStartSec/editCutEndSec still equal the cache's own csSec/ceSec
-		// (seeded in loadFinished()), so this stays null and auto-detection keeps deciding, same as
-		// before this field existed.
-		const cropOverride: Record<string, number | null> = {};
-		if (cache) {
-			if (editCutStartSec.value != null && editCutStartSec.value !== cache.csSec) {
-				cropOverride.crop_start_idx_override = Math.round(editCutStartSec.value * cfg.sample_rate);
-			}
-			if (editCutEndSec.value != null && editCutEndSec.value !== cache.ceSec) {
-				cropOverride.crop_end_idx_override = Math.round(editCutEndSec.value * cfg.sample_rate);
-			}
-		}
+		// Only an explicit override when the operator actually moved a handle in the save dialog:
+		// untouched, auto-detection keeps deciding.
+		const crop = cropOverrideIdx();
 		try {
 		await api.post('/items/machining_force_analysis', {
 			operation_id: opId,
 			directus_files_id: matFileId,
 			live_cache_file: cacheFileId,
 			status: 'done',
-			sample_rate: cfg.sample_rate,
+			sample_rate: captureFs(),
 			feed: cfg.feed,
 			cut_diameter: cfg.diam,
 			max_rpm: cfg.rpm,
@@ -810,13 +844,13 @@ export function createWorkspace() {
 			peak_fy: peaks?.Fy ?? null,
 			peak_fz: peaks?.Fz ?? null,
 			series,
-			...cropOverride,
+			...(crop ? { crop_start_idx_override: crop.start, crop_end_idx_override: crop.end } : {}),
 			matlab_version: 'force-app-direct',
 			processed_at: new Date().toISOString(),
 		});
 		progress.analysisDone = true;
 		} catch (e: any) {
-			throw new Error(`linking the capture failed - ${directusErrorMessage(e)} (the run was logged as operation ${opId}, and both files uploaded, but the analysis record could not be created)`);
+			throw analysisCreateFailure(e, opId, matWritten);
 		}
 		return opId;
 	}
@@ -844,7 +878,7 @@ export function createWorkspace() {
 			machining_tacho_used: true,
 			machining_coolant_used: !!(meta.coolant && meta.coolant.trim()),
 			capture_software: 'force-app',
-			capture_frequency_khz: Number((cfg.sample_rate / 1000).toFixed(3)),
+			capture_frequency_khz: Number((captureFs() / 1000).toFixed(3)),
 			outcome_notes: meta.notes || null,
 			// Machining details (folded Directus form section)
 			machining_axial_depth_of_cut_mm: numOrNull(machining.axial_doc),
@@ -1074,12 +1108,21 @@ export function createWorkspace() {
 		} catch { /* best-effort — the cut is still replayable even if metadata hydration fails */ }
 	}
 
+	// The cut can end while the operator is on another page (the stream stays open, #185), so the
+	// Save dialog and the finished cache are driven from here, not from RecordPage.
+	watch(() => st.state, async (s, prev) => {
+		if (mode.value === 'playback') return;   // playback never finalizes anything to save
+		// Covers auto-stop (duration, disk full) where stop() was never called; a manual stop opens it in stop().
+		if (shouldOpenSaveDialog(s, prev)) saveOpen.value = true;
+		if (s === 'done' && prev !== 'done' && !finishedCache.value) await loadFinished();
+	});
+
 	return {
 		client, source, setSource, nidaqChannels, cfg, meta, machining, plot, replay, st, busy, errMsg, finishedCache,
 		editCutStartSec, editCutEndSec,
 		isIdle, isRecording, isFinalizing, isDone, locked, sampleRateBlocker, startDisabled, stopDisabled, saveOpen,
-		mode, playback, rpmTarget,
-		start, stop, newRun, dismissFailure, clearSetup, loadFinished, searchCuts, pickReplayCut, metaObj, uploadCutToDatabase,
+		mode, playback, rpmTarget, acquireStream, releaseStream,
+		start, stop, newRun, dismissFailure, clearSetup, loadFinished, searchCuts, pickReplayCut, metaObj, uploadCutToDatabase, saveCropLocally,
 		// 2d: Directus links + run write-back
 		link, logged, onSelectSample, logRunNow, syncStatus,
 		searchSamples, searchOperators, searchEquipment, searchToolsForOp, searchEquipmentForOp, searchInserts, searchEdges,
@@ -1114,7 +1157,9 @@ export type Workspace = ReturnType<typeof createWorkspace>;
 // same timing as before), then reuses it for the app's lifetime.
 let _workspace: Workspace | null = null;
 export function getWorkspace(): Workspace {
-	if (!_workspace) _workspace = createWorkspace();
+	// Detached scope: built inside RecordPage's setup, its watchers would otherwise belong to that
+	// component and stop when it unmounts -- alarms, prefs and the deferred stream close included.
+	if (!_workspace) _workspace = effectScope(true).run(createWorkspace)!;
 	return _workspace;
 }
 export const WORKSPACE: InjectionKey<Workspace> = Symbol('record-workspace');

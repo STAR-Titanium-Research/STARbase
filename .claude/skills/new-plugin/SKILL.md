@@ -45,7 +45,8 @@ below. They also cover what the guide leaves out.
    fails on any undocumented one.
 7. **Makefile**: add `<name>-build` / `<name>-test` targets (copy `analysis-build` /
    `analysis-test`) and add both to `.PHONY`.
-8. **CI**: copy the `analysis-build` job in `.github/workflows/ci.yml` for the new path and image.
+8. **CI**: add a line for the image to `IMAGES` in `.github/scripts/ci-plan.mjs` (copy the
+   `filter-service` one). CI's `images` job then builds it and runs `pytest` inside it.
 9. **plugins/README.md**: add a row to the plugin table.
 10. If it reacts to a new record, document the Directus Flow in `docs/runbooks/` (pattern:
     `docs/runbooks/heavy-data-pipeline.md` §3).

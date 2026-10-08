@@ -52,6 +52,13 @@ make migrate-status   # what is applied / pending
 make migrate-down     # roll back the latest
 ```
 
+**Restart Directus right after a migration that changes Directus metadata** (relations, fields,
+permissions): it reads them at start-up and caches them, so until then the old rules and no new
+aliases are in force. Migration `20261007000141` (row-level visibility, ADR-0011) is one: apply it,
+flush Redis and `docker restart` Directus (or `bash scripts/configure_all.sh`, which does both),
+before members use the system. The steps are in
+[`upgrade-2026-10-row-level-visibility.md`](../../runbooks/upgrade-2026-10-row-level-visibility.md).
+
 Every new table and column needs a `COMMENT`; it is the data dictionary. CI applies every
 migration to a fresh database, runs the schema tests, then rolls everything back. See
 [`db/README.md`](../../../db/README.md) and [`CONTRIBUTING.md`](../../../CONTRIBUTING.md).

@@ -104,6 +104,12 @@ Views (v_ prefix — LLM query targets)
   v_schema_dictionary        table/column COMMENTs as a queryable dictionary
   v_llm_query_targets        allow-list menu of views the LLM may query
   v_embeddings_source_notes  every embeddable note (embedding backfill source)
+
+Private schema (not exposed)
+  d1_private.*               migration bookkeeping that is not data: the Lab Member permission rows
+                             migration 141 saved and the aliases it added (its down restores and
+                             drops them). Not in this dictionary, not exposed by Directus (outside
+                             its schema scan), not granted to the LLM role.
 ```
 
 ---
@@ -143,6 +149,8 @@ The central entity. Everything else points to or from here.
 | `current_status` | TEXT | Lifecycle: active \| consumed \| destroyed \| archived |
 | `manufactured_date` | DATE | Date sample was produced |
 | `export_controlled` | BOOLEAN | ITAR/ECJU flag; drives RBAC visibility |
+| `owner_person_id` | UUID FK | References `people.person_id`; the owner. Owner and co-owners may edit the sample; only the owner may delete it ([ADR-0011](adr/0011-row-level-visibility.md)) |
+| `co_owners_legacy` | TEXT | Legacy comma-separated co-owner e-mails from the AppSheet import (renamed from `co_owners`, migration `…140`). The live co-owners are the `sample_co_owners` rows, shown in Directus as the `co_owners` M2M field. Absent on databases that already dropped the column |
 | `version` | INTEGER | OCC version counter (incremented by trigger on UPDATE) |
 | `updated_at` | TIMESTAMPTZ | Auto-updated by OCC trigger |
 

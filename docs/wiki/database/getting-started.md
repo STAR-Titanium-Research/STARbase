@@ -59,8 +59,12 @@ From left to right:
 3. **My work.** Cards for the projects where you are PI or an investigator, the campaigns you
    own, and the samples you own or co-own (latest first). A section says so when it is empty
    rather than hiding.
-4. **Lab at a glance.** The lab-wide counts of samples, machining operations, FAST runs, tests
-   and campaigns. Each opens its list.
+4. **At a glance.** Counts of the samples, machining operations, FAST runs, tests and campaigns
+   **you can see**: those you own or co-own, those of a project where you are PI or investigator
+   (including what sits in that project's campaigns), campaigns you own or that hold a sample you
+   own or co-own, projects where you own a campaign, sample, operation or test, and the
+   operations and tests of samples you can see. Administrators see everything. Each opens
+   its list.
 5. **Recent activity.** The newest samples, operations and tests, each tagged with its kind. A FAST
    run opens its Operation page and also offers a link to the FAST dashboard.
 

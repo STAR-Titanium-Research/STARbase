@@ -91,6 +91,7 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 <template>
 	<section class="attention" aria-labelledby="attention-h">
 		<div class="section-head"><h2 id="attention-h">Needs attention</h2></div>
+		<p class="sub">Counts of the records you can see.</p>
 		<div class="tiles">
 			<button
 				v-for="d in defs"
@@ -126,8 +127,9 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 </template>
 
 <style scoped>
-.section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
 .section-head h2 { margin: 0; font-size: 18px; font-weight: 750; }
+.sub { margin: 0 0 10px; font-size: 13px; color: var(--theme--foreground-subdued); }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .tile {
 	display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px 16px; text-align: left;

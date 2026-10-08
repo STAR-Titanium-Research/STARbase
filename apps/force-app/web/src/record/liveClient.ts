@@ -76,7 +76,9 @@ export class RecordClient {
 	// spectrogram/waterfall views draw from (accumulated client-side; only current frames cross).
 	fft: { axis: string; f: number[]; fs: number; spectra: Record<string, number[]> } | null = null;
 	fftHistory: { t: number; spectra: Record<string, number[]> }[] = [];
-	fftHistCap = 220;
+	// Enough ~0.3 s frames for the slider's longest window (60 s -> 200), plus a little slack.
+	// 12 channels x ~1024 bins x 210 frames is ~20 MB of doubles.
+	fftHistCap = Math.ceil(WINDOW_SLIDER_MAX_SEC / 0.3) + 10;
 	fftSeq = ref(0);
 
 	// rolling trace envelope (min/max per axis + per dyno sub-channel), capped to retainSec.
@@ -180,10 +182,14 @@ export class RecordClient {
 	}
 
 	connect() {
+		// Fully idempotent while a socket is connecting or open: the Record page acquires the stream on
+		// every mount and no longer disconnects mid-recording (#185). A second socket would double every
+		// frame in the trace, and a repeat would also recreate the relay and re-announce source-ready.
+		if (this.wantConnected && this.ws && this.ws.readyState <= WebSocket.OPEN) return;
 		this.wantConnected = true;
 		this.reconnectAttempts = 0;
 		if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
-		this.openSocket();
+		if (!this.ws || this.ws.readyState > WebSocket.OPEN) this.openSocket();
 		// Close any channel from a previous connect() before replacing it — reconnecting otherwise
 		// leaks the old BroadcastChannel, which stays subscribed and keeps its handler alive.
 		this.relay?.close();
@@ -578,7 +584,7 @@ export class RecordClient {
 			this.status.captureId = msg.id ?? this.status.captureId;
 			this.status.summary = msg.summary ?? null;
 		} else if (msg.type === 'fft') {
-			const spectra: Record<string, number[]> = msg.spectra ?? (msg.axis ? { [msg.axis]: msg.amp ?? [] } : {});
+			const spectra: Record<string, number[]> = msg.spectra ?? {};
 			this.pushFft(msg.axis, msg.f, msg.fs ?? 0, spectra, this.status.tSec);
 		} else if (msg.type === 'cutstart') {
 			this.status.cutStartSec = msg.t;

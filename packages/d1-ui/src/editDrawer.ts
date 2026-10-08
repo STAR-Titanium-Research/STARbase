@@ -1,5 +1,8 @@
 // Pure parts of EditDrawer: which fields the form shows, what is sent, and the OCC check.
 
+import { forbiddenReason, notOwnerMessage } from './canUpdate';
+import { isForbidden } from './format';
+
 // The bits of a Directus field definition we look at (from useFieldsStore()).
 export interface FieldDef {
 	field: string;
@@ -41,8 +44,12 @@ export function versionChanged(loaded: unknown, current: unknown): boolean {
 	return Number(loaded) !== Number(current);
 }
 
-// Messages from a failed PATCH: every Directus error, not just the first.
-export function saveErrors(e: any): string[] {
+// Messages from a failed PATCH: every Directus error, not just the first. A refusal (403) on a
+// record the user can read is the row-level rule of ADR-0011, and Directus's own text for it
+// ("You don't have permission to access this") does not say what to do, so it is replaced: by the
+// d1-access-guard's own reason when it gave one, else by a text for the collection's rule.
+export function saveErrors(e: any, collection?: string): string[] {
+	if (isForbidden(e)) return [forbiddenReason(e) ?? notOwnerMessage(collection)];
 	const list: any[] = e?.response?.data?.errors ?? [];
 	const messages = list.map((x) => x?.message).filter(Boolean);
 	return messages.length ? messages : [e?.message || 'The record could not be saved.'];

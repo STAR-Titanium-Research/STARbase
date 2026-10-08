@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampWindowSec, firstAtOrAfter, windowView, WINDOW_MAX_SEC } from './plotWindow';
+import { clampWindowSec, firstAtOrAfter, medianSpacing, splitAtGaps, windowView, WINDOW_MAX_SEC } from './plotWindow';
 
 const ramp = (n: number, dt = 0.1, t0 = 0) => Array.from({ length: n }, (_, i) => t0 + i * dt);
 
@@ -63,5 +63,27 @@ describe('windowView', () => {
 	it('clamps an unusable window instead of drawing nothing', () => {
 		const v = windowView(ramp(601), 0)!;
 		expect(v.x1 - v.x0).toBeCloseTo(12, 6);
+	});
+});
+
+describe('splitAtGaps (#185)', () => {
+	it('keeps a uniform series as one run', () => {
+		const t = ramp(100);
+		expect(splitAtGaps(t, 0, t.length)).toEqual([[0, 100]]);
+		expect(medianSpacing(t, 0, 100)).toBeCloseTo(0.1);
+	});
+	it('splits a 5 s hole into two runs', () => {
+		const t = [...ramp(50), ...ramp(50, 0.1, 9.9)];
+		expect(splitAtGaps(t, 0, t.length)).toEqual([[0, 50], [50, 100]]);
+	});
+	it('respects the from index and tolerates tiny inputs', () => {
+		const t = [...ramp(50), ...ramp(50, 0.1, 9.9)];
+		expect(splitAtGaps(t, 60, t.length)).toEqual([[60, 100]]);
+		expect(splitAtGaps([1], 0, 1)).toEqual([[0, 1]]);
+		expect(splitAtGaps([], 0, 0)).toEqual([]);
+	});
+	it('does not split on ordinary jitter', () => {
+		const t = ramp(100).map((v, i) => v + (i % 2 ? 0.02 : 0));
+		expect(splitAtGaps(t, 0, 100)).toHaveLength(1);
 	});
 });

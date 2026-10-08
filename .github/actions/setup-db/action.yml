@@ -1,0 +1,29 @@
+name: Set up the D1 database
+description: >-
+  Install the pinned dbmate, apply every migration and load the reference seed into the
+  database at $DATABASE_URL (a postgres service container in the calling job).
+runs:
+  using: composite
+  steps:
+    # Pinned by sha256. dbmate does not publish a checksum file, so this digest was computed
+    # from the official v2.23.0 release asset (fetched twice, identical). When bumping the
+    # version, download the new asset, verify it against the release page, and update both.
+    - name: Install dbmate
+      shell: bash
+      env:
+        DBMATE_VERSION: v2.23.0
+        DBMATE_SHA256: 757e0ede33fad35010ce5fdba201a4f2181516471676fe5eab6f93ff70ec7424
+      run: |
+        curl -fsSL --retry 3 -o /tmp/dbmate \
+          "https://github.com/amacneil/dbmate/releases/download/${DBMATE_VERSION}/dbmate-linux-amd64"
+        echo "${DBMATE_SHA256}  /tmp/dbmate" | sha256sum --check --strict -
+        sudo install -m 0755 /tmp/dbmate /usr/local/bin/dbmate
+
+    - name: Apply all migrations
+      shell: bash
+      run: dbmate --no-dump-schema up
+
+    # ON_ERROR_STOP: without it psql exits 0 after a failing statement, so a broken seed passed.
+    - name: Load seed data
+      shell: bash
+      run: psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f db/seeds/001_reference_data.sql

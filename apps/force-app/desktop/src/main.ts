@@ -13,7 +13,7 @@ import { offerScheduledTaskCleanup } from './scheduledTask';
 import { SidecarSupervisor, type SidecarState } from './sidecar';
 import { initAutoUpdater, markRecorderStartFailed, startUpdateCheck } from './updater';
 import { classifyWindowOpen, guardNavigation, isAppSender, popoutKey } from './windowOpen';
-import { WindowStateStore, isOnSomeDisplay } from './windowState';
+import { DEFAULT_MAIN_SIZE, DEFAULT_POPOUT_SIZE, WindowStateStore, placementFor } from './windowState';
 
 const PREFERRED_PORT = 8200;
 const HEALTH_PATH = '/health';
@@ -27,6 +27,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
+    restorePopouts();
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -38,7 +39,7 @@ registerAppScheme();
 
 let mainWindow: BrowserWindow | null = null;
 // #108: which pop-outs are open, so the ones open at quit come back on the next start.
-let popouts: PopoutTracker | null = null;
+let popouts: PopoutTracker<BrowserWindow> | null = null;
 let supervisor: SidecarSupervisor | null = null;
 let recorderPort: number | null = null;
 // Set once the operator has confirmed quitting mid-recording (or once there was nothing to confirm).
@@ -323,24 +324,36 @@ function currentDisplayAreas() {
   }
 }
 
+/** #187: a pop-out that is minimised (Win+D, or the taskbar) shows in the taskbar as an empty
+ * preview and cannot be switched to, so a second launch restores each open one. Where a window
+ * opens is decided by placementFor (a stale or off-screen saved position is dropped and Electron
+ * centres it), so there is nothing to re-place here. */
+function restorePopouts(): void {
+  for (const win of popouts?.windows() ?? []) {
+    if (win.isDestroyed()) continue;
+    try {
+      if (win.isMinimized()) win.restore();
+    } catch (err) {
+      console.error('restoring a pop-out failed', err);
+    }
+  }
+}
+
 async function createWindow(): Promise<void> {
   const configStore = new ConfigStore(app.getPath('userData'));
   configStore.seedIfMissing();
   const windowState = new WindowStateStore(app.getPath('userData'));
-  popouts = new PopoutTracker(windowState);
+  popouts = new PopoutTracker<BrowserWindow>(windowState);
 
   const mainKey = 'main';
   const savedMain = windowState.get(mainKey);
   // A remembered position is only usable if the machine still has a screen there. Undock the
   // monitor a window was last on and the saved coordinates point into empty space, which reopens
-  // the app somewhere the operator cannot see or drag it back from. Drop just the position in that
-  // case and let Electron place the window; the remembered SIZE is still good.
-  const mainOnScreen = savedMain ? isOnSomeDisplay(savedMain, currentDisplayAreas()) : false;
+  // the app somewhere the operator cannot see or drag it back from. placementFor drops just the
+  // position in that case and lets Electron place the window; the remembered SIZE is still good.
   mainWindow = new BrowserWindow({
-    width: savedMain?.width ?? 1500,
-    height: savedMain?.height ?? 950,
-    x: mainOnScreen ? savedMain?.x : undefined,
-    y: mainOnScreen ? savedMain?.y : undefined,
+    ...DEFAULT_MAIN_SIZE,
+    ...placementFor(savedMain, currentDisplayAreas()),
     show: false,
     // Packaged builds get this for free — electron-builder embeds build/icon.ico into the .exe
     // itself, and Windows shows that everywhere (title bar, taskbar, Start Menu) with no runtime
@@ -399,7 +412,7 @@ async function createWindow(): Promise<void> {
     mainWindow = null;
     app.quit();
   });
-  mainWindow.webContents.setWindowOpenHandler((details) => classifyWindowOpen(details, windowState));
+  mainWindow.webContents.setWindowOpenHandler((details) => classifyWindowOpen(details, windowState, currentDisplayAreas()));
   // setWindowOpenHandler only returns creation OPTIONS, not a handle to the window itself — this
   // is the hook that actually gets one, so a pop-out's size/position can be saved when it closes.
   mainWindow.webContents.on('did-create-window', (win, details) => {
@@ -454,7 +467,7 @@ function reopenPopouts(): void {
   if (process.env.FORCE_APP_TEST_HOOKS === '1' || !mainWindow || !popouts) return;
   for (const url of popouts.toRestore()) {
     mainWindow.webContents
-      .executeJavaScript(`void window.open(${JSON.stringify(url)}, '_blank', 'noopener,width=1400,height=900')`, true)
+      .executeJavaScript(`void window.open(${JSON.stringify(url)}, '_blank', 'noopener,width=${DEFAULT_POPOUT_SIZE.width},height=${DEFAULT_POPOUT_SIZE.height}')`, true)
       .catch((err) => console.error('reopening a pop-out failed', err));
   }
 }

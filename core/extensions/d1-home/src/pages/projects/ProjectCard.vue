@@ -38,9 +38,9 @@ const show = (n: number | null) => (n === null ? '–' : n.toLocaleString('en-GB
 			<span>PI: {{ project.principal_investigator_person?.full_name || 'not set' }}</span>
 			<span>{{ dates }}</span>
 		</div>
-		<div class="counts">
-			<span><b>{{ show(campaigns) }}</b> campaigns</span>
-			<span><b>{{ show(samples) }}</b> samples</span>
+		<div class="counts" title="Counts only what you can see">
+			<span><b>{{ show(campaigns) }}</b> campaigns visible</span>
+			<span><b>{{ show(samples) }}</b> samples visible</span>
 		</div>
 		<Sparkline v-if="activity" :ops="activity.ops" :tests="activity.tests" :weeks="activity.weeks" />
 		<div v-else class="spark-placeholder">Activity unavailable</div>

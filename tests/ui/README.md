@@ -17,7 +17,7 @@ of bug that schema-level checks miss — e.g. a conditional panel that is wired 
 | `06-machine-filter` | Machine picker (`d1-machine-picker`): an operation or test offers only equipment capable of its process/test category, tiered by facility. |
 | `07-inventory-conditional` | Inventory form: sample-only fields and per-geometry dimensions (incl. round bar and tensile-coupon gauge fields) show or hide by item type and geometry; the Shape Preview renders. |
 | `08-operation-code-autogen` | Manufacturing Operation: the operation code composes live from sample, sub-type, pass and cutting parameters, and a manual edit is kept. |
-| `09-campaign-inheritance` | Campaigns: a new operation inherits project, owner and equipment from its campaign (the `campaign-inherit` hook), and the form fills the project live. |
+| `09-campaign-inheritance` | Campaigns: a new operation inherits project and equipment from its campaign (the `campaign-inherit` hook) and is owned by its creator, and the form fills the project live. |
 | `10-ask-db-chat` | **Ask the Database** module: a stubbed proxy response renders the SQL block, result table, and Plotly chart; the `/d1-ask/chat` endpoint rejects unauthenticated requests (401) and passes the auth gate for a logged-in session. A live end-to-end smoke runs only with `D1_LLM_LIVE=1`. |
 | `11-force-dashboard` | Force Analysis module: sample → operation drill-down, signal charts and the per-axis FRM, including the Figure ⇄ Lite switch. Needs at least one processed `machining_force_analysis` row. |
 | `12-force-crawler` | Force Crawler module: status, queue stats, settings and activity read from and written to `force_crawler_state`. |

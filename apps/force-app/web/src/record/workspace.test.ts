@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { effectScope, nextTick } from 'vue';
 
 // createWorkspace() start/stop/upload paths (stream-2 review 2.1, 2.2, 2.5, 2.7). Everything the
 // workspace talks to (Directus, the recorder, dialogs) is faked at the module boundary.
@@ -40,7 +40,7 @@ const confirmMock = vi.hoisted(() => ({ confirmAction: vi.fn().mockResolvedValue
 vi.mock('../ui/confirm', () => confirmMock);
 vi.mock('../ui/spotlight', () => ({ spotlight: vi.fn() }));
 
-import { createWorkspace } from './workspace';
+import { createWorkspace, getWorkspace } from './workspace';
 import { clearUploadProgress, uploadProgress } from './uploadResume';
 import { alarmController } from './alarms';
 import { hwStatus } from './hwStatus';
@@ -127,6 +127,9 @@ async function uploadable() {
 	const w = await make();
 	w.st.state = 'done'; w.st.captureId = 'cap-up'; w.st.summary = { mat_written: true, peaks: { Fx: 1, Fy: 2, Fz: 3 } };
 	w.link.sampleId = 'sample-1';
+	await nextTick();   // idle -> done has the workspace load the finished cache (as a reconcile would)
+	await new Promise((r) => setTimeout(r, 0));
+	w.finishedCache.value = null; w.editCutStartSec.value = null; w.editCutEndSec.value = null;
 	return w;
 }
 let fileN = 0;
@@ -268,6 +271,95 @@ describe('workspace.uploadCutToDatabase() resume (2.2)', () => {
 	});
 });
 
+// #190: the crop set with the sliders is written to the recorder before the upload can fail.
+describe('workspace crop kept locally (#190)', () => {
+	const putCalls = () => (fetch as any).mock.calls.filter((c: any[]) => c[1]?.method === 'PUT');
+	beforeEach(() => {
+		okReplies(); fileN = 0; dx.get.mockResolvedValue({ data: { data: [] } });
+		replies['/captures/cap-up/crop'] = { body: {} };
+	});
+	async function withCrop() {
+		const w = await uploadable();
+		w.cfg.sample_rate = 1000;
+		w.finishedCache.value = { csSec: 1, ceSec: 9 } as any;
+		w.editCutStartSec.value = 2.5; w.editCutEndSec.value = 7;
+		return w;
+	}
+
+	it('saveCropLocally() PUTs the moved crop to the recorder, and uploading does not PUT it again', async () => {
+		dx.post.mockImplementation(async (url: string) => {
+			if (url === '/items/manufacturing_operations') return { data: { data: { operation_id: 'op-c' } } };
+			if (url === '/files') return { data: { data: { id: `file-${++fileN}` } } };
+			throw serverErr();
+		});
+		const w = await withCrop();
+		await w.saveCropLocally();
+		expect(putCalls()).toHaveLength(1);
+		const [url, init] = putCalls()[0];
+		expect(new URL(url, 'http://x').pathname).toBe('/captures/cap-up/crop');
+		expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
+		expect(JSON.parse(init.body)).toEqual({ crop_start_idx_override: 2500, crop_end_idx_override: 7000 });
+		// the upload (even a failing, retried one) leaves the crop on the recorder alone: the save dialog
+		// saves it once, before the upload starts
+		await expect(w.uploadCutToDatabase()).rejects.toThrow(/linking the capture failed/);
+		await expect(w.uploadCutToDatabase()).rejects.toThrow();
+		expect(putCalls()).toHaveLength(1);
+	});
+
+	it('uploadCutToDatabase() on its own does not touch the recorder crop (the save dialog owns that)', async () => {
+		dx.post.mockImplementation(async (url: string) => (url === '/items/manufacturing_operations'
+			? { data: { data: { operation_id: 'op-c' } } }
+			: url === '/files' ? { data: { data: { id: `file-${++fileN}` } } } : { data: { data: {} } }));
+		const w = await withCrop();
+		await w.uploadCutToDatabase();
+		expect(putCalls()).toHaveLength(0);
+	});
+
+	it('sends both overrides in the analysis POST when a handle moved', async () => {
+		dx.post.mockImplementation(async (url: string) => (url === '/items/manufacturing_operations'
+			? { data: { data: { operation_id: 'op-c' } } }
+			: url === '/files' ? { data: { data: { id: `file-${++fileN}` } } } : { data: { data: {} } }));
+		const w = await withCrop();
+		w.editCutStartSec.value = 1;   // only the end moved
+		await w.uploadCutToDatabase();
+		expect(dx.post.mock.calls.find((c) => c[0] === '/items/machining_force_analysis')![1])
+			.toMatchObject({ crop_start_idx_override: 1000, crop_end_idx_override: 7000 });
+	});
+
+	it('untouched handles clear any stored crop and send no override', async () => {
+		dx.post.mockImplementation(async (url: string) => (url === '/items/manufacturing_operations'
+			? { data: { data: { operation_id: 'op-c' } } }
+			: url === '/files' ? { data: { data: { id: `file-${++fileN}` } } } : { data: { data: {} } }));
+		const w = await withCrop();
+		w.editCutStartSec.value = 1; w.editCutEndSec.value = 9;
+		await w.saveCropLocally();
+		await w.uploadCutToDatabase();
+		expect(putCalls()).toHaveLength(1);
+		expect(JSON.parse(putCalls()[0][1].body)).toEqual({ crop_start_idx_override: null, crop_end_idx_override: null });
+		expect(dx.post.mock.calls.find((c) => c[0] === '/items/machining_force_analysis')![1]).not.toHaveProperty('crop_start_idx_override');
+	});
+
+	it("converts the crop with the capture's own rate, not the form's", async () => {
+		const w = await withCrop();
+		w.st.summary = { ...w.st.summary, fs: 500 };   // form says 1000 Hz
+		await w.saveCropLocally();
+		expect(JSON.parse(putCalls()[0][1].body)).toEqual({ crop_start_idx_override: 1250, crop_end_idx_override: 3500 });
+	});
+
+	it('an unreachable recorder does not stop saving the crop or the upload', async () => {
+		(fetch as any).mockImplementation(async (url: string, init?: { method?: string }) => {
+			if (init?.method === 'PUT') throw new TypeError('Failed to fetch');
+			return { ok: true, status: 200, json: async () => ({}), text: async () => '', blob: async () => new Blob(['x']), arrayBuffer: async () => new ArrayBuffer(8) };
+		});
+		dx.post.mockImplementation(async (url: string) => (url === '/items/manufacturing_operations'
+			? { data: { data: { operation_id: 'op-c' } } }
+			: url === '/files' ? { data: { data: { id: `file-${++fileN}` } } } : { data: { data: {} } }));
+		const w = await withCrop();
+		await expect(w.saveCropLocally()).resolves.toBeUndefined();
+		await expect(w.uploadCutToDatabase()).resolves.toBe('op-c');
+	});
+});
+
 describe('workspace.uploadCutToDatabase() with an unknown summary', () => {
 	beforeEach(() => {
 		fileN = 0; dx.get.mockResolvedValue({ data: { data: [] } });
@@ -286,6 +378,19 @@ describe('workspace.uploadCutToDatabase() with an unknown summary', () => {
 		await expect(w.uploadCutToDatabase()).resolves.toBe('op-s');
 		expect(posts('/files')).toBe(1);
 		expect(dx.post.mock.calls.find((c) => c[0] === '/items/machining_force_analysis')![1].directus_files_id).toBeNull();
+	});
+
+	it('a failed insert for an over-size cut says the .mat was skipped, not "both files uploaded" (#190)', async () => {
+		replies['/captures/cap-up/summary'] = { body: { mat_written: false } };
+		dx.post.mockImplementation(async (url: string) => {
+			if (url === '/items/manufacturing_operations') return { data: { data: { operation_id: 'op-s' } } };
+			if (url === '/files') return { data: { data: { id: `file-${++fileN}` } } };
+			throw Object.assign(new Error('x'), { response: { status: 400, data: { errors: [{ message: 'Value can\'t be null' }] } } });
+		});
+		const w = await noSummary();
+		const err = await w.uploadCutToDatabase().catch((e) => e);
+		expect(err.message).toMatch(/size limit/);
+		expect(err.message).not.toMatch(/both files/);
 	});
 
 	it('fails retryably, without logging a run, when the summary cannot be read', async () => {
@@ -967,5 +1072,72 @@ describe('workspace.railBanner (R5)', () => {
 		w.setSource('replay');
 		await railed(w, [2]);
 		expect(w.railBanner.value).toBeNull();
+	});
+});
+
+describe('workspace.releaseStream() (#185)', () => {
+	it('keeps the stream open when the page is left mid-cut, closing it once the cut is over', async () => {
+		const w = await make();
+		const disc = vi.spyOn(w.client, 'disconnect').mockImplementation(() => {});
+		w.st.state = 'recording';
+		w.releaseStream();
+		expect(disc).not.toHaveBeenCalled();
+		w.st.state = 'finalizing';
+		await nextTick();
+		expect(disc).not.toHaveBeenCalled();
+		w.st.state = 'done';
+		await nextTick();
+		expect(disc).toHaveBeenCalledTimes(1);
+	});
+
+	it('acquireStream() connects the client, and releaseStream() is the only way the page closes it', async () => {
+		const w = await make();
+		const conn = vi.spyOn(w.client, 'connect').mockImplementation(() => {});
+		w.acquireStream();
+		expect(conn).toHaveBeenCalledTimes(1);
+	});
+
+	it('closes it at once when nothing is recording', async () => {
+		const w = await make();
+		const disc = vi.spyOn(w.client, 'disconnect').mockImplementation(() => {});
+		w.releaseStream();
+		expect(disc).toHaveBeenCalledTimes(1);
+	});
+
+	it('returning to the page cancels the deferred close', async () => {
+		const w = await make();
+		const disc = vi.spyOn(w.client, 'disconnect').mockImplementation(() => {});
+		w.st.state = 'recording';
+		w.releaseStream();
+		w.acquireStream();
+		w.st.state = 'done';
+		await nextTick();
+		expect(disc).not.toHaveBeenCalled();
+	});
+});
+
+describe('getWorkspace() singleton', () => {
+	it('keeps its watchers after the component that first built it unmounts', async () => {
+		const page = effectScope();   // stands in for RecordPage's setup
+		const w = page.run(() => getWorkspace())!;
+		page.stop();
+		const disc = vi.spyOn(w.client, 'disconnect').mockImplementation(() => {});
+		w.st.state = 'recording';
+		await nextTick();
+		w.releaseStream();
+		w.st.state = 'done';
+		await nextTick();
+		expect(disc).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('save dialog when a cut ends on its own', () => {
+	it('opens from the workspace, so it also opens while the Record page is not mounted', async () => {
+		const w = await make();
+		w.st.state = 'recording';
+		await nextTick();
+		w.st.state = 'finalizing';
+		await nextTick();
+		expect(w.saveOpen.value).toBe(true);
 	});
 });

@@ -1,10 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
+import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
 
 const api = useApi();
 const router = useRouter();
+const userStore = useStores().useUserStore() as any;
+// Only an admin may link a login to a People row (ADR-0011: the link decides whose records a
+// person sees, so a member relinking it would inherit someone else's records). Directus keeps the
+// admin flag in different places across versions; if a non-admin is wrongly treated as one, the
+// server still refuses the write.
+const isAdmin = computed(() => {
+	const u = userStore.currentUser;
+	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
+});
 const go = (to: string) => router.push(to);
 
 interface Person {
@@ -39,9 +48,12 @@ function blank(): Person {
 async function load() {
 	loading.value = true;
 	try {
+		// The login list is only needed by the admin-only login picker.
 		const [pr, ur] = await Promise.all([
 			api.get('/items/people', { params: { limit: -1, sort: ['full_name'] } }),
-			api.get('/users', { params: { limit: -1, fields: ['id', 'first_name', 'last_name', 'email'], sort: ['first_name'] } }),
+			isAdmin.value
+				? api.get('/users', { params: { limit: -1, fields: ['id', 'first_name', 'last_name', 'email'], sort: ['first_name'] } })
+				: Promise.resolve(null),
 		]);
 		people.value = pr?.data?.data ?? [];
 		users.value = (ur?.data?.data ?? []).map((u: any) => ({
@@ -90,15 +102,16 @@ async function save() {
 	saving.value = true;
 	err.value = '';
 	try {
-		const body = {
+		const body: Record<string, unknown> = {
 			full_name: draft.value.full_name.trim(),
 			email: draft.value.email || null,
-			user_id: draft.value.user_id || null,
 			is_researcher: draft.value.is_researcher,
 			is_operator: draft.value.is_operator,
 			active: draft.value.active,
 			notes: draft.value.notes || null,
 		};
+		// Members never send the login: the server refuses a change to it.
+		if (isAdmin.value) body.user_id = draft.value.user_id || null;
 		if (isNew.value) await api.post('/items/people', body);
 		else await api.patch(`/items/people/${draft.value.person_id}`, body);
 		dialog.value = false;
@@ -180,7 +193,11 @@ async function remove() {
 					<div class="row">
 						<div class="fld"><label>Email</label><v-input v-model="draft.email" placeholder="name@sheffield.ac.uk" /></div>
 						<div class="fld"><label>App login (optional)</label>
-							<v-select v-model="draft.user_id" :items="users" placeholder="Not an app user" show-deselect />
+							<v-select v-if="isAdmin" v-model="draft.user_id" :items="users" placeholder="Not an app user" show-deselect />
+							<template v-else>
+								<v-input :model-value="draft.user_id ? 'Linked to an app login' : 'No app login'" disabled />
+								<span class="hint">An admin links logins.</span>
+							</template>
 						</div>
 					</div>
 					<div class="toggles">
@@ -192,7 +209,7 @@ async function remove() {
 					<p v-if="err" class="err">{{ err }}</p>
 				</v-card-text>
 				<v-card-actions>
-					<v-button v-if="!isNew" secondary class="del" :loading="saving" @click="remove"><v-icon name="delete" left small />Delete</v-button>
+					<v-button v-if="!isNew && isAdmin" secondary class="del" :loading="saving" @click="remove"><v-icon name="delete" left small />Delete</v-button>
 					<div class="spacer" />
 					<v-button secondary @click="dialog = false">Cancel</v-button>
 					<v-button :loading="saving" @click="save">{{ isNew ? 'Add person' : 'Save' }}</v-button>
@@ -251,6 +268,7 @@ export default { inheritAttrs: false };
 .toggles { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
 .tg { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .tg .hint { font-weight: 400; color: var(--theme--foreground-subdued, #94a3b8); font-size: 11px; }
+.edit-card .fld > .hint { font-size: 11px; color: var(--theme--foreground-subdued, #94a3b8); }
 .spacer { flex: 1; }
 .del { --v-button-color: #b91c1c; }
 .err { color: #b91c1c; font-size: 12px; margin: 6px 0 0; }

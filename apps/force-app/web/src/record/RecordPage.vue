@@ -9,8 +9,7 @@ import { startSync } from './directusSync';
 import { hwStatus } from './hwStatus';
 import { labamp } from './labampApi';
 import { IntervalGate, shouldPollBackup, shouldPollPreflight, syncDiskGate } from './recordPolling';
-import { shouldOpenSaveDialog } from './saveDialogGate';
-import { parseDismissedIds, parseSavedLayout } from './recordLayout';
+import { DEFAULT_LAYOUT, dockPanel, GRID_COLS, oppositeSide, parseDismissedIds, parseSavedLayout, type RecordPanelInst as Inst } from './recordLayout';
 import PanelFrame from './panels/PanelFrame.vue';
 import { PLOT_MODES, type PlotMode } from './plotModes';
 import { PlotModeFlyout } from '@d1/force-plotting';
@@ -43,20 +42,6 @@ const PANEL_TYPES: Record<string, { title: string; icon: string; single?: boolea
 	frm: { title: 'FRM Map', icon: 'fingerprint', w: 4, h: 19 },
 	polar: { title: 'Polar Plot', icon: 'radar', w: 4, h: 16 },
 };
-// windowSec: a Force panel's own time window (#34), persisted with the layout. Absent = follow the
-// workspace default (w.plot.windowSec).
-type Inst = { i: string; type: string; x: number; y: number; w: number; h: number; mode?: PlotMode; channels?: string[]; windowSec?: number };
-const DEFAULT_LAYOUT: Inst[] = [
-	{ i: 'options', type: 'options', x: 0, y: 0, w: 2, h: 28 },
-	{ i: 'overview', type: 'overview', x: 2, y: 0, w: 6, h: 3 },
-	{ i: 'force', type: 'force', x: 2, y: 3, w: 6, h: 12, mode: 'time', channels: ['Fx', 'Fy', 'Fz'] },
-	// #108: the bottom plot defaults to the Tacho signal over time (was an Fx/Fy/Fz spectrum). Only new
-	// layouts and "Reset layout" pick this up: LS_KEY is deliberately NOT bumped, which would wipe
-	// every user's saved arrangement just to change one default.
-	{ i: 'tacho', type: 'force', x: 2, y: 15, w: 6, h: 13, mode: 'time', channels: ['Tacho'] },
-	{ i: 'frm', type: 'frm', x: 8, y: 0, w: 4, h: 20 },
-	{ i: 'rpm', type: 'rpm', x: 8, y: 20, w: 4, h: 8 },
-];
 const LS_KEY = 'force-app.record.layout.v7';
 
 function loadLayout(): Inst[] {
@@ -78,6 +63,11 @@ async function resetLayout() {
 		confirmLabel: 'Reset layout',
 	});
 	if (ok) layout.value = DEFAULT_LAYOUT.map((x) => ({ ...x }));
+}
+// #136: dragging the full-height Recording & Metadata panel across the grid only pushed the panels it
+// landed on below the bottom row. dockPanel moves its column strip instead; the layout watcher saves it.
+function moveOptionsPanel() {
+	layout.value = dockPanel(layout.value, 'options', oppositeSide(layout.value, 'options', GRID_COLS), GRID_COLS);
 }
 
 // ---- Responsive grid height ----------------------------------------------------------------
@@ -158,21 +148,6 @@ function addPanel(type: string) {
 }
 function closePanel(i: string) { layout.value = layout.value.filter((p) => p.i !== i); }
 const addable = computed(() => Object.entries(PANEL_TYPES).map(([type, m]) => ({ type, ...m, disabled: !!m.single && hasType(type) })));
-
-watch(() => st.state, async (s, prev) => {
-	// Playback never finalizes anything, so there is nothing to save — and its state only ever
-	// moves recording <-> idle, which would not match here anyway. Guarded explicitly so it stays
-	// true if playback's state handling changes.
-	if (w.mode.value === 'playback') return;
-	// Covers auto-stop (self-terminating duration, disk-full, etc) where the frontend never called
-	// w.stop() itself — the manual-stop path already opens this via workspace.ts's stop().
-	// A reconcile that adopts a cut already finalizing resets the client first, so prev is never
-	// 'recording' there (saveDialogGate.ts).
-	if (shouldOpenSaveDialog(s, prev)) w.saveOpen.value = true;
-	if (s === 'done' && prev !== 'done' && !w.finishedCache.value) {
-		await w.loadFinished();
-	}
-});
 
 // Periodic disk space check during recording (every 30s)
 const diskInfo = reactive<{ free_gb: number; total_gb: number; used_pct: number; checking: boolean }>({ free_gb: -1, total_gb: 0, used_pct: 0, checking: false });
@@ -487,7 +462,7 @@ onMounted(() => {
 	// page was away, or a backend that restarted, is never announced over the stream (#2.1). The
 	// stream also reconnects by itself, so a restart that leaves this route unchanged recovers too.
 	w.client.onStreamOpen = () => { checkRecovery(); checkRemoteBackupIds(); checkBackup(); };
-	w.client.connect(); void w.client.reconcile(); startSync(); checkDisk(); checkRecovery(); checkRemoteBackupIds(); checkBackup();
+	w.acquireStream(); void w.client.reconcile(); startSync(); checkDisk(); checkRecovery(); checkRemoteBackupIds(); checkBackup();
 	// ResizeObserver catches content reflow (a banner appearing/dismissing shifts the grid's top);
 	// the window listener is the belt-and-braces fallback, since RO can fire unreliably under rapid
 	// or programmatic viewport changes. Same pairing ForceDashboard uses.
@@ -503,7 +478,7 @@ onBeforeUnmount(() => {
 	window.removeEventListener('keydown', onShortcutKey);
 	document.removeEventListener('visibilitychange', onVisibilityChange);
 	w.client.onStreamOpen = null;
-	w.client.disconnect();
+	w.releaseStream();  // keeps the socket while a cut runs (#185)
 	// Suspend, never tear down: `w` is the app-lifetime workspace singleton (#25), so anything
 	// destroyed here is destroyed for the rest of the session -- see PlaybackEngine.suspend().
 	w.playback.suspend();
@@ -618,9 +593,10 @@ onBeforeUnmount(() => {
 						</button>
 					</div>
 				</div>
+				<button v-if="!narrow && hasType('options')" class="btn icon reset" title="Move the Recording &amp; Metadata panel to the other side" aria-label="Move Recording and Metadata panel to the other side" @click="moveOptionsPanel"><span class="material-symbols-rounded">swap_horiz</span></button>
 				<button class="btn icon reset" title="Reset panel layout" aria-label="Reset panel layout" @click="resetLayout"><span class="material-symbols-rounded">grid_view</span></button>
 			</div>
-		<GridLayout v-model:layout="displayLayout" :col-num="narrow ? 1 : 12" :row-height="rowHeight" :margin="[12, 12]"
+		<GridLayout v-model:layout="displayLayout" :col-num="narrow ? 1 : GRID_COLS" :row-height="rowHeight" :margin="[12, 12]"
 			:is-draggable="!narrow" :is-resizable="!narrow" :use-css-transforms="true" :vertical-compact="true">
 			<GridItem v-for="item in displayLayout" :key="item.i" :x="item.x" :y="item.y" :w="item.w" :h="item.h" :i="item.i"
 				drag-allow-from=".panel-handle" :min-w="narrow ? 1 : 2" :min-h="3">
