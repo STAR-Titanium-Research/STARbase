@@ -1,6 +1,6 @@
 # Explorer record pages: a side rail beside panels
 
-Status: **all questions answered; awaiting the maintainer's approval** (2026-10-09). Stream L1 of
+Status: **approved by the maintainer on 2026-10-09** ("approve rail and panels"). Next: the implementation plan. Stream L1 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md).
 Builds on [the Explorer pages design](2026-10-06-explorer-pages-design.md) and on the restyle
 (`feat/explorer-restyle`).
@@ -182,8 +182,7 @@ No file over about 400 lines.
    would show a different number from the one clicked. "Campaigns" on a Project page scrolls to the
    Campaigns panel on the same page.
 
-No question is open. Awaiting the maintainer's approval of this design before the implementation
-plan is written.
+No question is open. The maintainer approved this design on 2026-10-09.
 
 ## What the standalone direction asks of this stream
 

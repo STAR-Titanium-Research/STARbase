@@ -3,6 +3,54 @@
 Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree each
 (`.claude/worktrees/agent-*`). Reviewer: Opus, read-only, before any merge.
 
+## Resume here (written 2026-10-09 when the session ran out)
+
+Read this section first, then the Status table. Nothing is pushed anywhere.
+
+**In flight when the session ended**
+- **F2, the form fix.** A Sonnet worker was writing migration
+  `20261009000143_restore_inline_param_field_meta.sql` and its regression test in worktree
+  `.claude/worktrees/agent-fieldmeta` (branch `fix/restore-inline-param-meta`). It commits after
+  each piece and was told NOT to apply anything. Check `git -C .claude/worktrees/agent-fieldmeta
+  log --oneline e100e65d..HEAD` and `status --short`. If it did not finish, relaunch a Sonnet
+  worker on that worktree with the same brief (the brief is in this plan's "Root cause of the
+  broken forms" section plus: idempotent, touch only rows it owns, do not revert migration 126's
+  `d1-owner-picker`, add the checks to `tests/phase1_schema.sh`, dry-run inside BEGIN / ROLLBACK
+  only).
+  Then: Opus review (migration-review skill) -> back up `directus_fields` and `directus_relations`
+  (`pg_dump -t`) -> apply the migration to the live database -> `docker restart
+  d1-database-directus-1` -> check `/admin/content/manufacturing_operations/+` shows the parameter
+  fields grouped and conditional, and that an Operation page reads "Cutting speed 1,932.1 m/min".
+  **The maintainer has approved applying it.** Never run `configure_all.sh` or
+  `configure_directus.sql` on the live database.
+- **The last four F1 fixes are built in the main checkout but not loaded.** They load at the next
+  Directus restart (the one F2 needs).
+
+**Next, in the order the maintainer agreed**
+1. **N1: navigation and simple index pages.** Design first (brainstorming -> spec -> the
+   maintainer's review). Decided already: the head reads, finds and navigates; create and edit are
+   Directus's own form, **pulled in as an embedded frame** once the head is standalone (inside
+   Directus today it stays `EditDrawer`). Index pages are deliberately simple: search and a few
+   fixed filters (project, campaign, status) and an "Open in Data Studio" link; no column picker,
+   no saved views.
+2. **L1: build rail and panels.** Spec approved. Write the implementation plan, get it reviewed by
+   the maintainer, then one Sonnet worker for the kit (L1a) and one per page group, then Opus
+   review, then the coordinator's live check.
+3. **A1: access dialog**, after the permissions work on `feat/ownership-identity-cleanup` lands.
+4. **U1: frequently used**, then **G1: lineage graph** (and retiring `d1-lab-dashboard`).
+
+**How the maintainer likes to work (learned this session)**
+- Show mockups as an HTML page in the session folder (it opens in the Browser pane); the inline
+  chat widgets did not reach them. Mockups made so far, in the session folder
+  `C:\Users\CMBE Admn 3214022001\Documents\GitHub\D1-Database`: `layout-options.html`,
+  `layout-counts.html`, and a copy of the rail spec.
+- They answer numbered questions in plain chat. Process they asked for: plan, fix, debug and
+  simplify with Sonnet workers, then review with Opus.
+- Open, lower priority: 16 extensions have source newer than their build (listed below);
+  Directus' own buttons need a dark-theme primary in Settings (`theme_dark_overrides`);
+  `campaign-inherit/index.test.mjs` imports a missing `d1-default-owner/index.js`;
+  "At a glance" wraps its sixth tile at 1440px (fold into L1e).
+
 ## Where things are
 
 - **Base branch:** `feat/explorer-restyle` (worktree `.claude/worktrees/explorer-restyle`), cut from
@@ -26,7 +74,7 @@ Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree
 | F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | **merged** into `feat/explorer-restyle` (`eeb2594b`) after two Opus reviews (no blocking findings left; 296 kit tests). Live in the main checkout except the last four commits, which are built and load at the next Directus restart |
 | D1 | Root cause of the broken "Log an operation" form (read-only) | none | none | done 2026-10-09: see "Root cause of the broken forms" |
 | F2 | Restore the lost field metadata (fix for D1), as migration `20261009000143_restore_inline_param_field_meta.sql` | `agent-fieldmeta` | `fix/restore-inline-param-meta` (from `e100e65d`) | **approved by the maintainer**; a worker is writing the migration and its regression test; then Opus review; then the coordinator backs up `directus_fields` / `directus_relations`, applies it and restarts Directus |
-| L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | spec complete (`docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md`), every question answered; awaiting approval, then the implementation plan. Its clickable counts need N1's index pages |
+| L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | **spec approved 2026-10-09** (`docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md`). Next: write the implementation plan (superpowers:writing-plans), have the maintainer review it, then workers. Its clickable counts need N1's index pages |
 | A1 | "Who has access" dialog on each record page (Google Drive "Manage members" style); the owner really adds and removes people | to do | to do | direction settled (answers below); depends on the permissions work in progress on `feat/ownership-identity-cleanup`; design not started |
 | U1 | Per-user "frequently used" panel on Home: two short lists, pages and actions, and records | to do | to do | settled: ranks both, stored on the server per user (needs a small table and a migration); design not started |
 | G1 | Lineage graph rebuilt on a modern open-source graph library; retire `d1-lab-dashboard` | to do | to do | design not started |
@@ -156,3 +204,13 @@ so the user can reach all pages designed." Stream N1. Consequences to design for
   own, pulled in, not rebuilt** (today: `EditDrawer` with the collection's `v-form`). The same
   test applies to everything new: do not rebuild what Directus already does well (forms, the
   filter builder, bulk edit, export, admin); link to it or embed it.
+
+## Maintainer's answers (2026-10-09, fourth round)
+
+- **"embedded frame for pull in directus"**: when the head is standalone, create and edit open
+  the record's Directus form in an embedded frame.
+- **"approve rail and panels"**: the L1 spec is approved.
+- **"table is ok"**: the division of work is agreed. The head shows a record as a readable page,
+  navigates between related records, finds a record (a simple list with search and a few fixed
+  filters) and draws the plots Directus cannot. Directus keeps create and edit forms, the filter
+  builder, bulk edit, export, admin, users and permissions.
