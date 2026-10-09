@@ -57,6 +57,8 @@ export interface LifeItem {
 	date: string | null;
 	/** App route of the record; null for a hidden marker and for this sample. */
 	to: string | null;
+	/** The label is a code a person could type or scan (sample, lot or pass code), not a description: set in monospace. */
+	isCode: boolean;
 	/** Reached only through a sample the user cannot see. */
 	throughHidden: boolean;
 }
@@ -77,7 +79,7 @@ const join = (parts: (string | null | undefined | false)[]): string => parts.fil
 function hiddenMarker(group: string, n: number): LifeItem[] {
 	if (!n) return [];
 	return [
-		{ key: `hidden-${group}`, kind: 'hidden', label: hiddenText(n), sub: '', date: null, to: null, throughHidden: false },
+		{ key: `hidden-${group}`, kind: 'hidden', label: hiddenText(n), sub: '', date: null, to: null, throughHidden: false, isCode: false },
 	];
 }
 
@@ -89,6 +91,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 			key: `stock-${s.lot_id}|${s.via_sample_id}`,
 			kind: 'stock',
 			label: s.lot_code || 'Stock lot',
+			isCode: !!s.lot_code,
 			sub: join([
 				s.stock_type,
 				s.supplier_name,
@@ -110,6 +113,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 			key: `ancestor-${a.sample_id}`,
 			kind: 'ancestor',
 			label: a.sample_code || 'Sample',
+			isCode: !!a.sample_code,
 			sub: join([a.form, relation(a)]),
 			date: null,
 			to: recordRoute('physical_samples', a.sample_id),
@@ -121,6 +125,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 		key: 'self',
 		kind: 'self',
 		label: trace.sample.sample_code ?? 'This sample',
+		isCode: !!trace.sample.sample_code,
 		sub: trace.sample.form ?? '',
 		date: null,
 		to: null,
@@ -133,6 +138,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 		items.push({
 			key: `${e.type}-${e.id}`,
 			kind: isTest ? 'test' : 'operation',
+			isCode: !isTest && hasPassCode({ pass_code: e.label }),
 			label: isTest ? (e.label ?? '—') : operationLabel({ pass_code: e.label, operation_sequence: e.sequence }, trace.sample.sample_code),
 			// An operation without a pass code is already labelled with its step.
 			sub: isTest ? (e.status ?? '') : hasPassCode({ pass_code: e.label }) && e.sequence !== null && e.sequence !== undefined ? `#${e.sequence}` : '',
@@ -148,6 +154,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 			key: `descendant-${d.sample_id}`,
 			kind: 'descendant',
 			label: d.sample_code || 'Sample',
+			isCode: !!d.sample_code,
 			sub: join([d.form, relation(d)]),
 			date: null,
 			to: recordRoute('physical_samples', d.sample_id),

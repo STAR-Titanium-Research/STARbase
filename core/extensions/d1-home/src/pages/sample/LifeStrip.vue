@@ -47,8 +47,8 @@ const KIND_LABEL: Record<string, string> = {
 			>
 				<span class="dot" />
 				<span class="kind">{{ KIND_LABEL[item.kind] }}</span>
-				<router-link v-if="item.to" :to="item.to" class="label">{{ item.label }}</router-link>
-				<span v-else class="label" :class="{ plain: item.kind === 'hidden' }">{{ item.label }}</span>
+				<router-link v-if="item.to" :to="item.to" class="label" :class="{ code: item.isCode }">{{ item.label }}</router-link>
+				<span v-else class="label" :class="{ code: item.isCode, plain: item.kind === 'hidden' }">{{ item.label }}</span>
 				<span v-if="item.sub" class="sub">{{ item.sub }}</span>
 				<span v-if="item.date" class="date">{{ formatDate(item.date, 'undated') }}</span>
 				<span v-else-if="item.kind === 'operation' || item.kind === 'test'" class="date">undated</span>
@@ -111,7 +111,6 @@ const KIND_LABEL: Record<string, string> = {
 
 .kind { font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em; color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .label {
-	font-family: var(--theme--fonts--monospace--font-family, monospace);
 	font-weight: 650;
 	line-height: 1.35;
 	overflow-wrap: anywhere;
@@ -119,6 +118,8 @@ const KIND_LABEL: Record<string, string> = {
 	text-decoration: none;
 }
 a.label { color: var(--d1-accent, var(--theme--primary)); }
+/* Only a code is set in monospace; an uncoded operation's label and a test's type are descriptions. */
+.label.code { font-family: var(--theme--fonts--monospace--font-family, monospace); }
 a.label:hover { text-decoration: underline; }
 .kind--self .label { font-size: var(--fs-md, 13px); }
 .label.plain { font-family: inherit; font-weight: 500; font-style: italic; color: var(--d1-dim, var(--theme--foreground-subdued)); }

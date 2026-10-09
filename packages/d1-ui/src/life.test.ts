@@ -139,3 +139,45 @@ describe('buildLife: operations without a pass code', () => {
 		expect(buildLife(t)[1].sub).toBe('#3');
 	});
 });
+
+describe('buildLife: isCode', () => {
+	it('is true for records labelled by their code and false for descriptive labels', () => {
+		const t = base();
+		t.stock_origins = [
+			{ lot_id: 'l1', lot_code: 'LOT-1', stock_type: null, supplier_name: null, mass_used_grams: null, via_sample_id: 's0', via_sample_code: null, depth: 0, through_hidden: false },
+			{ lot_id: 'l2', lot_code: null, stock_type: null, supplier_name: null, mass_used_grams: null, via_sample_id: 's0', via_sample_code: null, depth: 0, through_hidden: false },
+		];
+		t.ancestors = [
+			{ depth: 1, sample_id: 'a1', sample_code: 'A1', form: null, relationship_type: null, fraction: null, through_hidden: false },
+			{ depth: 1, sample_id: 'a2', sample_code: null, form: null, relationship_type: null, fraction: null, through_hidden: false },
+		];
+		t.events = [
+			{ type: 'manufacturing_operation', collection: 'manufacturing_operations', id: 'o1', date: null, label: 'P1', sequence: 1, status: null },
+			{ type: 'manufacturing_operation', collection: 'manufacturing_operations', id: 'o2', date: null, label: null, sequence: 2, status: null },
+			{ type: 'manufacturing_operation', collection: 'manufacturing_operations', id: 'o3', date: null, label: '  ', sequence: null, status: null },
+			{ type: 'test_session', collection: 'test_sessions', id: 't1', date: null, label: 'tensile', sequence: null, status: null },
+		];
+		t.hidden.events = 1;
+		t.descendants = [{ depth: 1, sample_id: 'd1', sample_code: 'D1', form: null, relationship_type: null, fraction: null, through_hidden: false }];
+		const flags = Object.fromEntries(buildLife(t).map((i) => [i.key, i.isCode]));
+		expect(flags).toEqual({
+			'stock-l1|s0': true,
+			'stock-l2|s0': false,
+			'ancestor-a1': true,
+			'ancestor-a2': false,
+			self: true,
+			'manufacturing_operation-o1': true,
+			'manufacturing_operation-o2': false,
+			'manufacturing_operation-o3': false,
+			'test_session-t1': false,
+			'hidden-events': false,
+			'descendant-d1': true,
+		});
+	});
+
+	it('is false for this sample without a code', () => {
+		const t = base();
+		t.sample.sample_code = null;
+		expect(buildLife(t)[0]).toMatchObject({ label: 'This sample', isCode: false });
+	});
+});
