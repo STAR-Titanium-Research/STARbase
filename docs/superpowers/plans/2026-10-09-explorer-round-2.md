@@ -26,11 +26,11 @@ Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree
 | F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | **merged** into `feat/explorer-restyle` (`eeb2594b`) after two Opus reviews (no blocking findings left; 296 kit tests). Live in the main checkout except the last four commits, which are built and load at the next Directus restart |
 | D1 | Root cause of the broken "Log an operation" form (read-only) | none | none | done 2026-10-09: see "Root cause of the broken forms" |
 | F2 | Restore the lost field metadata (fix for D1), as migration `20261009000143_restore_inline_param_field_meta.sql` | `agent-fieldmeta` | `fix/restore-inline-param-meta` (from `e100e65d`) | **approved by the maintainer**; a worker is writing the migration and its regression test; then Opus review; then the coordinator backs up `directus_fields` / `directus_relations`, applies it and restarts Directus |
-| L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | spec drafted (`docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md`); three of its four questions answered; waiting on counts (mockup `layout-counts.html` shown) and the approval of the spec |
-| A1 | "Who has access" view on each record page | to do | to do | direction given (see the answers below); design not started |
-| U1 | Per-user "frequently used" panel on Home | to do | to do | stored on the server, per user; what it ranks still to settle; design not started |
+| L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | spec complete (`docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md`), every question answered; awaiting approval, then the implementation plan. Its clickable counts need N1's index pages |
+| A1 | "Who has access" dialog on each record page (Google Drive "Manage members" style); the owner really adds and removes people | to do | to do | direction settled (answers below); depends on the permissions work in progress on `feat/ownership-identity-cleanup`; design not started |
+| U1 | Per-user "frequently used" panel on Home: two short lists, pages and actions, and records | to do | to do | settled: ranks both, stored on the server per user (needs a small table and a migration); design not started |
 | G1 | Lineage graph rebuilt on a modern open-source graph library; retire `d1-lab-dashboard` | to do | to do | design not started |
-| N1 | Explorer navigation of its own, and index pages, so every page is reachable without the Data Studio (the Explorer is to become a standalone web app) | to do | to do | new 2026-10-09; design not started |
+| N1 | Explorer navigation of its own and index pages (samples, operations, tests, campaigns), so every page is reachable without the Data Studio; editing keeps using the Directus form | to do | to do | next to design (proposed order: N1, then L1 build, then A1, U1, G1) |
 
 ## Decisions so far (maintainer, 2026-10-09)
 
@@ -137,3 +137,22 @@ so the user can reach all pages designed." Stream N1. Consequences to design for
   operations, tests, campaigns), and a way to find a record (search);
 - kit code that does not depend on Directus-only components where there is a choice, with the rest
   behind one seam so a shim can replace it, as the force app did (`apps/force-app/web`).
+
+## Maintainer's answers (2026-10-09, third round)
+
+- **Frequently used ranks both**: the pages and actions a user uses most, and the records they
+  open most. Stored per user on the server (answered earlier).
+- **Counts go in the rail and are clickable** (variant 1 of `layout-counts.html`).
+- **Access:** "a non owner shouldn't even see the operation or sample in the first place.
+  permissions is something being worked on." So everyone who can open a record is on its access
+  list by definition, and the dialog needs no separate read-only mode for outsiders. **"Add
+  people" really grants access** (it writes the co-owner / investigator links), for the owner.
+  A1 therefore waits on the permissions work (ADR-0011, `scripts/access_rules.json`, the
+  uncommitted edits on `feat/ownership-identity-cleanup`) and must be built on its rules, not
+  beside them.
+- **Standalone head, and its limit:** "The issue here is ultimately replication. We are slowly
+  building a fully fledged head interface. I am ok, to edit forms, to just pull in the directus
+  form." The head is for reading, finding and navigating; **create and edit forms are Directus's
+  own, pulled in, not rebuilt** (today: `EditDrawer` with the collection's `v-form`). The same
+  test applies to everything new: do not rebuild what Directus already does well (forms, the
+  filter builder, bulk edit, export, admin); link to it or embed it.

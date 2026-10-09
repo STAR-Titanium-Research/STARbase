@@ -1,6 +1,6 @@
 # Explorer record pages: a side rail beside panels
 
-Status: **draft for the maintainer's review** (2026-10-09). Stream L1 of
+Status: **all questions answered; awaiting the maintainer's approval** (2026-10-09). Stream L1 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md).
 Builds on [the Explorer pages design](2026-10-06-explorer-pages-design.md) and on the restyle
 (`feat/explorer-restyle`).
@@ -175,12 +175,15 @@ No file over about 400 lines.
    (stream A1), which is to show the full list to the record's owner in the manner of Google
    Drive's "Manage members" dialog.
 
-## Open question
+4. **Counts on the Project and Campaign pages are in the rail, and each one is a link** (chosen
+   from `layout-counts.html`, variant 1). The tile row goes. A count links to the list of those
+   records for this project or campaign: the Explorer index pages of stream N1, filtered. A count
+   whose index page does not exist yet is plain text; it never links to an unfiltered list, which
+   would show a different number from the one clicked. "Campaigns" on a Project page scrolls to the
+   Campaigns panel on the same page.
 
-- **Counts on the Project and Campaign pages:** four lines in the rail (always visible, the main
-  column starts about 70px higher) or the tile row at the top of the main column as today (the
-  first thing seen, but it scrolls away). Both are shown on the Project page in
-  `layout-counts.html`.
+No question is open. Awaiting the maintainer's approval of this design before the implementation
+plan is written.
 
 ## What the standalone direction asks of this stream
 
