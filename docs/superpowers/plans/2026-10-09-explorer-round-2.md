@@ -23,7 +23,7 @@ Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree
 |---|---|---|---|---|
 | R0 | Restyle (PageShell, tokens, Section, DataTable, RecordCard) | `explorer-restyle` | `feat/explorer-restyle` | committed `ee5b989e`, live in main checkout, not reviewed |
 | F0 | Print labels: rebuild `d1-report` (its build predated the `/labels` route) | main checkout | none (build only) | done 2026-10-09, `/d1-report/labels` renders |
-| F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | six fix commits `a7b5fde1`..`1387f208`, three refactors `fcee2d20`..`e084ac27`; Opus review done (2 blocking, 10 should-fix); a worker is fixing the findings; not merged, not live |
+| F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | **merged** into `feat/explorer-restyle` (`eeb2594b`) after two Opus reviews (no blocking findings left; 296 kit tests). Live in the main checkout except the last four commits, which are built and load at the next Directus restart |
 | D1 | Root cause of the broken "Log an operation" form (read-only) | none | none | done 2026-10-09: see "Root cause of the broken forms" |
 | F2 | Restore the lost field metadata (fix for D1), as a migration | to do | to do | dry-run clean; waiting for the maintainer's approval |
 | L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | direction chosen (option C); spec to write, then the maintainer's review |
@@ -113,3 +113,26 @@ The dry runs advanced `directus_fields_id_seq` from 12690 to 13048 and changed n
 
 - The lineage graph is rebuilt "using a modern existing GitHub repo" (stream G1).
 - The inline mockups did not reach the maintainer; layouts are shown as a page instead.
+
+## Maintainer's answers (2026-10-09, later)
+
+1. **Rail on the left.**
+2. **The sample drawing goes in the rail.**
+3. Counts in the rail or as a tile row on Project and Campaign pages: "not sure, show me". Shown as
+   `layout-counts.html` (both variants of the Project page). Awaiting the choice.
+4. **"People on this record" is left out** of the rail until the access view (A1) is designed.
+5. **Apply the form fix** (stream F2).
+6. **Frequently used: per user, across machines** (stored on the server). Whether it ranks pages
+   and actions, records, or both was not answered; the coordinator's recommendation is both.
+7. **Access view: the full list for the owner, modelled on Google Drive's "Manage members"
+   dialog** (the maintainer sent a screenshot): one row per person with avatar, name, email and a
+   role, and a field to add people.
+
+**New direction:** "this head to the headless Directus will eventually live on its own webpage,
+rather than bolted as extension of Directus as is now. This means we need proper navigation setup
+so the user can reach all pages designed." Stream N1. Consequences to design for:
+- a navigation that belongs to the Explorer and reaches every page, not the Directus module bar;
+- Explorer index pages for the lists that today open a Data Studio collection (samples,
+  operations, tests, campaigns), and a way to find a record (search);
+- kit code that does not depend on Directus-only components where there is a choice, with the rest
+  behind one seam so a shim can replace it, as the force app did (`apps/force-app/web`).

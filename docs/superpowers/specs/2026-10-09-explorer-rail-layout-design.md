@@ -78,7 +78,9 @@ The maintainer chose "rail and panels" from three mockups of the same operation
 3. **Key facts.** A one-column label/value list of the facts that identify the record: the ones in
    today's header "meta" line plus the links up the tree (project, campaign, sample). Links use
    `RecordLink`; a hidden target shows `HiddenLink`, as now.
-4. **People on this record.** First version, from fields the page already reads and nothing else:
+4. **People on this record.** *Not built in this stream: the maintainer chose to leave this place
+   empty until the access view (A1) is designed. Kept here as the fallback that was considered.*
+   First version, from fields the page already reads and nothing else:
    owner, co-owners, operator, the project's PI and investigators where the page has them, each
    with its role, then one line saying what the signed-in user can do ("You can edit this record" /
    "You can view this record", from `useCanUpdate`). It does not claim to be the complete list of
@@ -165,11 +167,27 @@ No file over about 400 lines.
 3. **L1e:** the two Home fixes.
 4. Opus review of the whole stream, fixes, then the coordinator's live check.
 
-## Open questions for the maintainer
+## Decided by the maintainer (2026-10-09)
 
-1. **Rail on the left**, as in the mockup, or on the right (nearer the Directus sidebar)?
-2. **Sample page:** is the drawing right in the rail (always visible, about 280px wide), or would
-   you rather it stay large in the main column?
-3. **Counts in the rail** on the Project and Campaign pages instead of the tile row: agreed?
-4. **"People on this record" now**, as the honest first version, or leave the place empty until
-   the full access view (A1) is designed?
+1. **The rail is on the left.**
+2. **Sample page: the drawing is in the rail**, always visible, about 265px wide.
+3. **"People on this record" is not built here.** The rail keeps the place for the access view
+   (stream A1), which is to show the full list to the record's owner in the manner of Google
+   Drive's "Manage members" dialog.
+
+## Open question
+
+- **Counts on the Project and Campaign pages:** four lines in the rail (always visible, the main
+  column starts about 70px higher) or the tile row at the top of the main column as today (the
+  first thing seen, but it scrolls away). Both are shown on the Project page in
+  `layout-counts.html`.
+
+## What the standalone direction asks of this stream
+
+The Explorer is to become its own web app (plan, stream N1). This stream therefore:
+- puts nothing in the rail that depends on the Directus header bar except the sticky offset, which
+  is one CSS variable;
+- keeps `RecordLayout`, `RecordRail`, `FactList` and `PageContents` free of Directus components
+  (`v-icon`, `v-button`): icons and buttons are passed in through slots by the page, so a
+  standalone shell can supply its own;
+- leaves room to the left of the rail for the app's own navigation.
