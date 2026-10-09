@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { analysisLink, errorText, formatDate, recordRoute, type AnalysisLink } from '@d1/ui';
+import { DataTable, Section, analysisLink, errorText, formatDate, recordRoute, type AnalysisLink } from '@d1/ui';
 import { samplesBookmarkLink, SAMPLES_LIST } from './samplesBookmark';
 
 // Recent activity: samples, operations and tests merged into one feed, each tagged with its kind,
@@ -83,53 +83,39 @@ onMounted(async () => {
 </script>
 
 <template>
-	<section aria-labelledby="recent-h">
-		<div class="section-head">
-			<h2 id="recent-h">Recent activity</h2>
-			<router-link :to="samplesLink" class="link">View samples →</router-link>
-		</div>
-		<p v-if="error" class="error" role="alert">{{ error }}</p>
-		<div v-if="recent.length" class="recent-grid">
-			<div v-for="r in recent" :key="`${r.kind}-${r.id}`" class="rcard">
-				<span class="r-top">
-					<span class="r-kind" :class="`k-${r.kind}`">{{ KIND_LABEL[r.kind] }}</span>
-					<span class="r-date">{{ formatDate(r.date) }}</span>
-				</span>
-				<router-link :to="r.to" class="r-code">{{ r.code }}</router-link>
-				<span class="r-meta">{{ r.meta }}</span>
-				<router-link v-if="r.extra" :to="r.extra.to" class="r-extra">{{ r.extra.label }} →</router-link>
-			</div>
-		</div>
-		<p v-else-if="!error" class="empty">No activity yet.</p>
-	</section>
+	<Section title="Recent activity" :count="recent.length || null" :empty="!recent.length && !error" empty-text="No activity yet.">
+		<template #actions><router-link :to="samplesLink" class="link">View samples →</router-link></template>
+		<p v-if="error" class="d1-note bad error" role="alert">{{ error }}</p>
+		<!-- One row per record, newest first: nine cards made the eye zig-zag to read a list. The
+		     columns are as wide as their content and the last one takes the rest, so a row reads
+		     in one glance instead of across the whole page. -->
+		<DataTable v-if="recent.length">
+			<thead>
+				<tr><th class="fit">Created</th><th class="fit">Type</th><th class="fit">Record</th><th class="fit">Detail</th><th /></tr>
+			</thead>
+			<tbody>
+				<tr v-for="r in recent" :key="`${r.kind}-${r.id}`">
+					<td class="fit dim">{{ formatDate(r.date) }}</td>
+					<td class="fit"><span class="r-kind" :class="`k-${r.kind}`">{{ KIND_LABEL[r.kind] }}</span></td>
+					<td class="fit"><router-link :to="r.to" class="r-code mono">{{ r.code }}</router-link></td>
+					<!-- An operation with no pass code is listed by its sample's code: do not print it twice. -->
+					<td class="fit dim">{{ r.meta !== r.code ? r.meta : '' }}</td>
+					<td class="actions"><router-link v-if="r.extra" :to="r.extra.to" class="link">{{ r.extra.label }} →</router-link></td>
+				</tr>
+			</tbody>
+		</DataTable>
+	</Section>
 </template>
 
 <style scoped>
-.section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
-.section-head h2 { margin: 0; font-size: 18px; font-weight: 750; }
-.link { color: var(--theme--primary); font-weight: 600; font-size: 13px; text-decoration: none; }
+.link { color: var(--theme--primary); font-weight: 600; font-size: var(--fs-sm); text-decoration: none; white-space: nowrap; }
 .link:hover { text-decoration: underline; }
-.recent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
-.rcard {
-	position: relative; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; min-width: 0;
-	border: 1px solid var(--theme--border-color-subdued); border-radius: 14px;
-	background: var(--theme--background); color: var(--theme--foreground);
-	transition: border-color 0.14s ease, box-shadow 0.14s ease;
-}
-.rcard:hover { border-color: var(--theme--primary); box-shadow: 0 10px 22px -16px rgba(15, 23, 42, 0.4); }
-.r-top { display: flex; align-items: center; justify-content: space-between; }
-.r-kind { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; padding: 2px 8px; border-radius: 99px; }
-.k-sample { color: var(--theme--primary); background: var(--theme--primary-background); }
-.k-operation { color: var(--theme--success); background: var(--theme--success-background); }
-.k-fast { color: var(--theme--warning); background: var(--theme--warning-background); }
-.k-test { color: var(--theme--foreground-subdued); background: var(--theme--background-normal); }
-.r-code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; font-size: 14px; overflow-wrap: anywhere; color: inherit; text-decoration: none; }
-/* The whole card opens the record: the code link stretches over it, the extra action sits above. */
-.r-code::after { content: ''; position: absolute; inset: 0; border-radius: 14px; }
-.r-extra { position: relative; z-index: 1; align-self: flex-start; font-size: 12px; font-weight: 600; color: var(--theme--primary); text-decoration: none; }
-.r-extra:hover { text-decoration: underline; }
-.r-meta { font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.r-date { font-size: 11px; color: var(--theme--foreground-subdued); }
-.empty { color: var(--theme--foreground-subdued); }
-.error { margin: 0 0 12px; font-size: 13px; color: var(--theme--danger); }
+.error { margin-bottom: 8px; }
+.r-kind { display: inline-block; font-size: var(--fs-xs); font-weight: 700; padding: 1px 8px; border-radius: 99px; white-space: nowrap; }
+.k-sample { color: var(--theme--primary); background: color-mix(in srgb, var(--theme--primary) 12%, transparent); }
+.k-operation { color: var(--d1-ok); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
+.k-fast { color: var(--d1-warn); background: color-mix(in srgb, var(--theme--warning) 18%, transparent); }
+.k-test { color: var(--d1-dim); background: var(--theme--background-normal); }
+.r-code { color: var(--theme--primary); text-decoration: none; overflow-wrap: anywhere; }
+.r-code:hover { text-decoration: underline; }
 </style>

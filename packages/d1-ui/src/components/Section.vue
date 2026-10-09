@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 
-// A titled block of a page. An empty section collapses to its title and one line of text.
+// A titled block of a page, drawn as the force app's panel: an opaque body under a lid that holds
+// the title, the count and the actions. An empty section keeps its lid and one line of text.
 const props = defineProps<{
 	title: string;
 	count?: number | null;
@@ -30,19 +31,35 @@ const open = ref(!props.collapsed);
 </template>
 
 <style scoped>
-.d1-section { margin-top: 28px; }
-.head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.d1-section {
+	min-width: 0;
+	background: var(--d1-surface, var(--theme--background));
+	border: 1px solid var(--d1-line, var(--theme--border-color-subdued));
+	border-radius: var(--d1-radius, 12px);
+	box-shadow: var(--d1-shadow, none);
+	overflow: hidden;
+}
+.head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 38px;
+	padding: 5px 14px;
+	background: var(--d1-tile, var(--theme--background-subdued));
+	border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued));
+}
 .clickable { cursor: pointer; user-select: none; }
-h2 { margin: 0; font-size: 16px; font-weight: 700; }
+h2 { margin: 0; font-size: var(--fs-md, 13px); font-weight: 650; letter-spacing: 0.01em; line-height: 1.3; }
 .count {
-	font-size: 11.5px;
+	font-size: var(--fs-xs, 11px);
 	font-weight: 700;
-	padding: 0 8px;
+	font-variant-numeric: tabular-nums;
+	padding: 1px 7px;
 	border-radius: 99px;
-	background: var(--theme--background-normal);
-	color: var(--theme--foreground-subdued);
+	color: var(--theme--primary);
+	background: color-mix(in srgb, var(--theme--primary) 12%, transparent);
 }
 .spacer { flex: 1; }
-.empty-text { margin: 0; font-size: 13px; font-style: italic; color: var(--theme--foreground-subdued); }
-.empty .head { margin-bottom: 4px; }
+.body { padding: 12px 14px; }
+.empty-text { margin: 0; padding: 10px 14px; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 </style>

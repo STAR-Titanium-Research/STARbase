@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { LoadState, collectionRoute, errorText, useItems, useRequestGate } from '@d1/ui';
+import { LoadState, Section, collectionRoute, errorText, useItems, useRequestGate } from '@d1/ui';
 import { bookmarkId } from './samplesBookmark';
 import { ATTENTION, ATTENTION_LIST_LIMIT, type AttentionDef, type AttentionItem } from './attention';
 
@@ -89,9 +89,8 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 </script>
 
 <template>
-	<section class="attention" aria-labelledby="attention-h">
-		<div class="section-head"><h2 id="attention-h">Needs attention</h2></div>
-		<p class="sub">Counts of the records you can see.</p>
+	<Section title="Needs attention">
+		<template #actions><span class="sub">Counts of the records you can see</span></template>
 		<div class="tiles">
 			<button
 				v-for="d in defs"
@@ -103,13 +102,12 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 				:title="state[d.key]?.error || d.hint"
 				@click="toggle(d)"
 			>
-				<v-icon :name="d.icon" class="t-icon" />
 				<span class="t-value">{{ show(state[d.key]) }}</span>
-				<span class="t-label">{{ d.label }}</span>
+				<span class="t-label"><v-icon :name="d.icon" x-small class="t-icon" />{{ d.label }}</span>
 			</button>
 		</div>
 
-		<div v-if="openDef" class="panel">
+		<div v-if="openDef" class="list">
 			<LoadState :loading="list.loading" :error="list.error">
 				<ul class="items">
 					<li v-for="i in list.items" :key="i.id">
@@ -117,43 +115,41 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 						<span v-if="i.sub" class="i-sub">{{ i.sub }}</span>
 					</li>
 				</ul>
-				<p v-if="moreLink && openCount > list.items.length" class="more">
+				<p v-if="moreLink && openCount > list.items.length" class="d1-note more">
 					Showing {{ list.items.length }} of {{ openCount }}.
 					<router-link :to="moreLink.to">{{ moreLink.text }}</router-link>
 				</p>
 			</LoadState>
 		</div>
-	</section>
+	</Section>
 </template>
 
 <style scoped>
-.section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
-.section-head h2 { margin: 0; font-size: 18px; font-weight: 750; }
-.sub { margin: 0 0 10px; font-size: 13px; color: var(--theme--foreground-subdued); }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.sub { font-size: var(--fs-xs); color: var(--d1-dim); }
+/* 260px keeps the longest label ("Force analysis errors on my operations") on one line. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+/* A count the size of the Record page's readouts, with what it counts beside it. */
 .tile {
-	display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px 16px; text-align: left;
+	display: flex; align-items: center; gap: 12px; min-width: 0; padding: 8px 12px; text-align: left;
 	font: inherit; color: var(--theme--foreground); cursor: pointer;
-	border: 1px solid var(--theme--border-color-subdued); border-radius: 14px; background: var(--theme--background);
-	transition: border-color 0.14s ease, box-shadow 0.14s ease;
+	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
+	transition: border-color 0.12s ease;
 }
-.tile:disabled { cursor: default; opacity: 0.85; }
+.tile:disabled { cursor: default; }
 .tile:not(:disabled):hover, .tile.open { border-color: var(--theme--primary); }
-.tile.hot { border-color: var(--theme--warning); }
-.tile.hot .t-value { color: var(--theme--warning); }
-.t-icon { --v-icon-color: var(--theme--foreground-subdued); margin-bottom: 4px; }
-.tile.hot .t-icon { --v-icon-color: var(--theme--warning); }
-.t-value { font-size: 26px; font-weight: 760; letter-spacing: -0.02em; }
-.t-label { font-size: 12.5px; color: var(--theme--foreground-subdued); font-weight: 600; }
-.panel {
-	margin-top: 12px; padding: 12px 16px; border-radius: 14px;
-	border: 1px solid var(--theme--border-color-subdued); background: var(--theme--background);
-}
-.items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.items li { display: flex; gap: 12px; align-items: baseline; }
-.i-title { color: var(--theme--primary); font-weight: 650; text-decoration: none; font-family: var(--theme--fonts--monospace--font-family, monospace); }
+.tile.hot { border-color: var(--theme--warning); background: color-mix(in srgb, var(--theme--warning) 10%, var(--d1-surface)); }
+.tile.hot .t-value { color: var(--d1-warn); }
+.tile.hot.open { box-shadow: inset 0 0 0 1px var(--theme--warning); }
+.t-value { flex: none; min-width: 1.2em; font-size: var(--fs-2xl); font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.tile:disabled .t-value { color: var(--d1-dim); }
+.t-label { font-size: var(--fs-sm); font-weight: 600; line-height: 1.3; color: var(--d1-dim); }
+.t-icon { margin-right: 4px; vertical-align: -2px; --v-icon-color: var(--d1-dim); }
+.tile.hot .t-icon { --v-icon-color: var(--d1-warn); }
+.list { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--d1-line); }
+.items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.items li { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
+.i-title { color: var(--theme--primary); font-weight: 650; text-decoration: none; overflow-wrap: anywhere; font-family: var(--theme--fonts--monospace--font-family, monospace); }
 .i-title:hover { text-decoration: underline; }
-.i-sub { font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.more { margin: 10px 0 0; font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.more a { color: var(--theme--primary); }
+.i-sub { font-size: var(--fs-sm); color: var(--d1-dim); }
+.more { margin-top: 10px; }
 </style>

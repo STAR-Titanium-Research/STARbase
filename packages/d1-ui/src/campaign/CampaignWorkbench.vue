@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue';
+// The kit's tokens, for when the workbench renders outside a PageShell (the Data Studio form).
+import '../components/tokens.css';
 import LoadState from '../components/LoadState.vue';
 import Section from '../components/Section.vue';
 import CampaignMatrix from './CampaignMatrix.vue';
@@ -38,7 +40,7 @@ defineExpose({ reload });
 </script>
 
 <template>
-	<div class="d1-campaign">
+	<div class="d1-campaign d1-kit">
 		<CampaignProgress
 			:overview="overview"
 			:force-hidden="analysisUnavailable"
@@ -58,7 +60,13 @@ defineExpose({ reload });
 
 		<p v-if="cannotAdd" class="d1-cnote">Only the campaign's owner can add samples here. Operations and tests are moved by their own owner.</p>
 
-		<SamplesPanel :campaign-id="campaignId" :rows="overview.sampleRows" :junction="junction" :cannot-add="cannotAdd" :hidden-count="overview.counts.hiddenSamples" @changed="reload" />
+		<!-- The two short lists share a row while there is room (on the Campaign page); in the form
+		     they stack. A three-column list across the whole page put its figures a screen away
+		     from the code they belong to. -->
+		<div class="d1-ccols">
+			<SamplesPanel :campaign-id="campaignId" :rows="overview.sampleRows" :junction="junction" :cannot-add="cannotAdd" :hidden-count="overview.counts.hiddenSamples" @changed="reload" />
+			<TestsPanel :campaign-id="campaignId" :rows="overview.testRows" :section="tests" @changed="reload" />
+		</div>
 		<OperationsPanel
 			:campaign-id="campaignId"
 			:campaign-type="campaignType"
@@ -67,45 +75,49 @@ defineExpose({ reload });
 			:force-hidden="analysisUnavailable || !!analyses.error"
 			@changed="reload"
 		/>
-		<TestsPanel :campaign-id="campaignId" :rows="overview.testRows" :section="tests" @changed="reload" />
 	</div>
 </template>
 
 <style scoped>
-.d1-campaign :deep(.d1-cerr) { margin: 8px 0; font-size: 13px; color: var(--theme--danger); }
-.d1-campaign .d1-cnote { margin: 8px 0; font-size: 13px; color: var(--theme--foreground-subdued); }
-.d1-campaign :deep(.d1-cempty) { margin: 0; font-size: 13px; font-style: italic; color: var(--theme--foreground-subdued); }
-.d1-campaign :deep(.d1-ccap) { margin: 8px 0 0; font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.d1-campaign :deep(.d1-ctable) { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.d1-campaign { display: flex; flex-direction: column; gap: 16px; font-size: var(--fs-md, 13px); }
+.d1-ccols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: stretch; }
+.d1-campaign :deep(.d1-cerr) { margin: 0 0 8px; font-size: var(--fs-sm, 12px); color: var(--d1-bad, var(--theme--danger)); }
+.d1-campaign .d1-cnote { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.d1-campaign :deep(.d1-cempty) { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.d1-campaign :deep(.d1-ccap) { margin: 8px 0 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
+/* The look of the kit's DataTable (components/DataTable.vue): keep the two in step. */
+.d1-campaign :deep(.d1-ctable) { width: 100%; border-collapse: collapse; font-size: var(--fs-md, 13px); }
 .d1-campaign :deep(.d1-ctable th) {
 	text-align: left;
-	padding: 6px 12px 6px 0;
-	font-size: 11px;
-	text-transform: uppercase;
-	letter-spacing: 0.05em;
+	padding: 4px 12px 6px 0;
+	font-size: var(--fs-xs, 11px);
 	font-weight: 600;
-	color: var(--theme--foreground-subdued);
+	letter-spacing: 0.01em;
+	white-space: nowrap;
+	color: var(--d1-dim, var(--theme--foreground-subdued));
 	border-bottom: 1px solid var(--theme--border-color);
 }
-.d1-campaign :deep(.d1-ctable td) { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--theme--border-color-subdued); vertical-align: middle; }
-.d1-campaign :deep(.d1-ctable tbody tr:hover) { background: var(--theme--background-subdued); }
+.d1-campaign :deep(.d1-ctable td) { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued)); vertical-align: middle; }
+.d1-campaign :deep(.d1-ctable tbody tr:last-child td) { border-bottom: 0; }
+.d1-campaign :deep(.d1-ctable tbody tr:hover) { background: var(--d1-tile, var(--theme--background-subdued)); }
 .d1-campaign :deep(.d1-ctable .n) { text-align: right; font-variant-numeric: tabular-nums; width: 90px; }
 .d1-campaign :deep(.d1-ctable .act) { width: 28px; text-align: right; padding-right: 0; }
-.d1-campaign :deep(.d1-ctable .mono) { font-family: var(--theme--fonts--monospace--font-family, monospace); }
-.d1-campaign :deep(.d1-ctable .dim) { color: var(--theme--foreground-subdued); font-size: 12.5px; }
+.d1-campaign :deep(.d1-ctable .mono) { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 600; }
+.d1-campaign :deep(.d1-ctable .dim) { color: var(--d1-dim, var(--theme--foreground-subdued)); font-size: var(--fs-sm, 12px); }
 .d1-campaign :deep(.d1-ctable .note) {
 	margin-left: 8px;
-	font-size: 10.5px;
+	font-size: var(--fs-xs, 11px);
+	font-weight: 700;
 	padding: 1px 7px;
 	border-radius: 99px;
-	color: var(--theme--warning);
-	background: var(--theme--warning-background);
+	color: var(--d1-warn, var(--theme--warning));
+	background: color-mix(in srgb, var(--theme--warning) 18%, transparent);
 }
 .d1-campaign :deep(.d1-ctable .x) {
 	border: 0;
 	background: transparent;
 	cursor: pointer;
-	color: var(--theme--foreground-subdued);
+	color: var(--d1-dim, var(--theme--foreground-subdued));
 	border-radius: 5px;
 	display: inline-flex;
 	padding: 2px;

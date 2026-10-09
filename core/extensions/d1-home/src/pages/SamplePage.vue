@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, RecordHeader, RecordLink, Section, StatusBadge,
+	EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, StatusBadge,
 	buildLife, dataStudioRoute, truncatedNotes,
 } from '@d1/ui';
 import { useSampleData } from './sample/useSampleData';
@@ -28,6 +28,8 @@ function onSaved() {
 }
 
 const code = computed(() => sample.value?.sample_code ?? 'Sample');
+// The header bar names the kind of record too: a bare code ("10") says nothing on its own.
+const pageTitle = computed(() => (sample.value?.sample_code ? `Sample ${sample.value.sample_code}` : 'Sample'));
 const studioTo = computed(() => dataStudioRoute('physical_samples', props.id));
 const life = computed(() => (trace.value.data ? buildLife(trace.value.data) : []));
 const notes = computed(() => (trace.value.data ? truncatedNotes(trace.value.data) : []));
@@ -50,8 +52,8 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 </script>
 
 <template>
-	<private-view :title="code">
-		<div class="sample-page">
+	<private-view :title="pageTitle">
+		<PageShell>
 			<LoadState v-if="loading && !sample" loading loading-text="Loading sample…" />
 
 			<NotVisible v-else-if="notVisible" what="sample" />
@@ -65,7 +67,7 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 						<template v-if="sample.project_id">
 							<span>›</span>
 							<RecordLink collection="projects" :id="sample.project_id.project_id">
-								{{ sample.project_id.project_code }}
+								Project {{ sample.project_id.project_code }}
 							</RecordLink>
 						</template>
 						<template v-else-if="hidden.data.project_id">
@@ -73,7 +75,7 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 						</template>
 						<template v-for="c in campaignRows" :key="c.campaign_id">
 							<span>›</span>
-							<RecordLink collection="campaigns" :id="c.campaign_id">{{ c.campaign_code || c.name || 'Campaign' }}</RecordLink>
+							<RecordLink collection="campaigns" :id="c.campaign_id">{{ c.campaign_code ? `Campaign ${c.campaign_code}` : c.name || 'Campaign' }}</RecordLink>
 						</template>
 						<template v-if="hiddenCampaigns > 0">
 							<span>›</span><HiddenLink :label="hiddenCampaigns === 1 ? 'Campaign' : `${hiddenCampaigns} campaigns`" />
@@ -105,13 +107,13 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 
 				<Section title="Life of the sample">
 					<template #actions>
-						<v-button small secondary :to="`/d1-lab-dashboard/graph?sample=${encodeURIComponent(id)}`">
-							<v-icon name="hub" small left />Open lineage graph
+						<v-button x-small secondary :to="`/d1-lab-dashboard/graph?sample=${encodeURIComponent(id)}`">
+							<v-icon name="hub" x-small left />Open lineage graph
 						</v-button>
 					</template>
 					<LoadState :loading="trace.loading" :error="trace.error">
 						<LifeStrip :items="life" />
-						<p v-for="n in notes" :key="n" class="note">{{ n }}</p>
+						<p v-for="n in notes" :key="n" class="d1-note warn note">{{ n }}</p>
 					</LoadState>
 				</Section>
 
@@ -126,20 +128,11 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 					@saved="onSaved"
 				/>
 			</template>
-		</div>
+		</PageShell>
 	</private-view>
 </template>
 
 <style scoped>
-.sample-page {
-	max-width: 1180px;
-	margin: 0 auto;
-	padding: 24px 32px 64px;
-	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
-	color: var(--theme--foreground);
-}
-.sample-page :deep(.crumbs a) { color: var(--theme--primary); text-decoration: none; font-weight: 600; }
-.sample-page :deep(.crumbs a:hover) { text-decoration: underline; }
-.export { color: var(--theme--danger); font-weight: 650; }
-.note { margin: 8px 0 0; font-size: 12.5px; color: var(--theme--warning); }
+.export { color: var(--d1-bad); font-weight: 650; }
+.note { margin-top: 8px; }
 </style>

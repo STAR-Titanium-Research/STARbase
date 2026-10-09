@@ -26,53 +26,57 @@ const router = useRouter();
 	<section aria-label="Quick actions">
 		<div class="grid actions">
 			<button v-for="a in main" :key="a.label" class="card action" @click="go(router, a.to)">
-				<span class="chip"><v-icon :name="a.icon" /></span>
+				<span class="chip"><v-icon :name="a.icon" small /></span>
 				<span class="a-text">
 					<span class="a-label">{{ a.label }}</span>
 					<span class="a-sub">{{ a.sub }}</span>
 				</span>
-				<v-icon name="arrow_forward" class="a-go" />
 			</button>
 		</div>
 		<div class="more" role="group" aria-label="More">
 			<span class="more-label">More</span>
 			<button v-for="a in more" :key="a.label" class="more-btn" :title="a.sub" @click="go(router, a.to)">
-				<v-icon :name="a.icon" small />{{ a.label }}
+				<v-icon :name="a.icon" x-small />{{ a.label }}
 			</button>
 		</div>
 	</section>
 </template>
 
 <style scoped>
-.grid { display: grid; gap: 14px; }
-.actions { grid-template-columns: repeat(auto-fit, minmax(188px, 1fr)); }
+/* 220px is the narrowest a card can be with its label on one line; below that the grid drops a
+   column instead of breaking "Register a sample" over three lines. */
+.grid { display: grid; gap: 10px; }
+.actions { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .card {
-	border: 1px solid var(--theme--border-color-subdued);
-	background: var(--theme--background);
-	border-radius: 16px;
+	border: 1px solid var(--d1-line);
+	background: var(--d1-surface);
+	border-radius: var(--d1-radius);
+	box-shadow: var(--d1-shadow);
 	cursor: pointer;
 	text-align: left;
-	transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+	transition: border-color 0.12s ease;
 	font: inherit;
 	color: var(--theme--foreground);
 }
-.card:hover { transform: translateY(-3px); box-shadow: 0 14px 28px -16px rgba(15, 23, 42, 0.35); border-color: var(--theme--primary); }
-.action { display: flex; align-items: center; gap: 14px; padding: 16px 18px; }
+.card:hover { border-color: var(--theme--primary); }
+.action { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
 .chip {
-	width: 42px; height: 42px; border-radius: 12px; flex: 0 0 auto; display: grid; place-items: center;
-	background: var(--theme--primary-background);
+	width: 34px; height: 34px; border-radius: 9px; flex: 0 0 auto; display: grid; place-items: center;
+	background: var(--d1-tint);
+	--v-icon-color: var(--theme--primary);
 }
-.chip :deep(.v-icon) { --v-icon-color: var(--theme--primary); }
 .a-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.a-label { font-size: 15px; font-weight: 650; }
-.a-sub { font-size: 12.5px; color: var(--theme--foreground-subdued); margin-top: 1px; }
-.a-go { --v-icon-color: var(--theme--foreground-subdued); }
-.more { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
-.more-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; color: var(--theme--foreground-subdued); margin-right: 4px; }
+.a-label { font-size: var(--fs-md); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.a-sub { font-size: var(--fs-sm); color: var(--d1-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.more { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.more-label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.01em; color: var(--d1-dim); margin-right: 4px; }
+/* The force app's chip: 26px, a pill, the accent on hover. */
 .more-btn {
-	display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; font-weight: 600;
-	padding: 5px 12px; border-radius: 99px; cursor: pointer; color: var(--theme--foreground);
-	border: 1px solid var(--theme--border-color-subdued); background: var(--theme--background);
+	display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px;
+	font: inherit; font-size: var(--fs-sm); font-weight: 600; line-height: 1;
+	border-radius: 99px; cursor: pointer; color: var(--theme--foreground);
+	border: 1px solid var(--d1-line); background: var(--d1-surface);
+	transition: border-color 0.12s ease;
 }
-.more-btn:hover { border-color: var(--theme--primary); color: var(--theme--primary); }
+.more-btn:hover { border-color: var(--theme--primary); }
 </style>

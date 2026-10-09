@@ -83,14 +83,11 @@ const facts = computed<KeyValue[]>(() => [
 </template>
 
 <style scoped>
+/* The Section it sits in is the panel: no frame of its own. */
 .overview {
 	display: grid;
 	grid-template-columns: minmax(220px, 300px) 1fr;
-	gap: 28px;
-	padding: 20px 24px;
-	border: 1px solid var(--theme--border-color-subdued);
-	border-radius: 16px;
-	background: var(--theme--background);
+	gap: 16px;
 }
 .drawing {
 	display: flex;
@@ -98,29 +95,24 @@ const facts = computed<KeyValue[]>(() => [
 	align-items: center;
 	justify-content: center;
 	gap: 8px;
-	padding: 14px;
-	border-radius: 12px;
-	background: var(--theme--background-subdued);
+	padding: 12px;
+	border: 1px solid var(--d1-line);
+	border-radius: 10px;
+	background: var(--d1-tile);
 }
 .canvas { width: 100%; }
 .canvas :deep(svg) { width: 100%; max-width: 280px; height: auto; display: block; margin: 0 auto; }
-.no-drawing { margin: 0; font-style: italic; font-size: 13px; color: var(--theme--foreground-subdued); }
-.caption { font-size: 11.5px; color: var(--theme--foreground-subdued); text-align: center; }
+.no-drawing { margin: 0; font-size: var(--fs-sm); color: var(--d1-dim); }
+.caption { font-size: var(--fs-xs); color: var(--d1-dim); text-align: center; }
 .form { text-transform: capitalize; }
-.facts { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.mat-label {
-	font-size: 11px;
-	text-transform: uppercase;
-	letter-spacing: 0.05em;
-	font-weight: 600;
-	color: var(--theme--foreground-subdued);
-}
+.facts { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.mat-label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.01em; color: var(--d1-dim); }
 .mat-name { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
-.mat-name strong { font-size: 17px; }
-.alloy { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: 13px; color: var(--theme--foreground-subdued); }
-.none { font-style: italic; color: var(--theme--foreground-subdued); font-size: 13px; }
-.condition { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
-.notes { font-size: 13.5px; color: var(--theme--foreground-subdued); overflow-wrap: anywhere; }
+.mat-name strong { font-size: var(--fs-lg); }
+.alloy { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-sm); color: var(--d1-dim); }
+.none { color: var(--d1-dim); font-size: var(--fs-md); }
+.condition { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.notes { flex: 1 1 320px; font-size: var(--fs-md); line-height: 1.5; color: var(--d1-dim); overflow-wrap: anywhere; }
 
 /* The drawing's classes. geometry.ts emits them; scripts/sync_geometry.sh --check requires each
    one to be styled here. */

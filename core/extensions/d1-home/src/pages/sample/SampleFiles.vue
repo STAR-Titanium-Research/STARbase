@@ -61,10 +61,11 @@ async function copy(text: string, key: string) {
 </template>
 
 <style scoped>
-.files { list-style: none; margin: 0; padding: 0; border: 1px solid var(--theme--border-color-subdued); border-radius: 10px; }
-.file { display: flex; align-items: center; gap: 10px; padding: 8px 14px; font-size: 13.5px; }
-.file + .file { border-top: 1px solid var(--theme--border-color-subdued); }
-.name { overflow-wrap: anywhere; }
+/* Rows of the panel itself (no box inside the box), each with its actions at the right edge. */
+.files { list-style: none; margin: 0; padding: 0; }
+.file { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: var(--fs-md); }
+.file + .file { border-top: 1px solid var(--d1-line); }
+.name { overflow-wrap: anywhere; font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-sm); }
 .spacer { flex: 1; }
-.hint { margin: 8px 0 0; font-size: 12px; color: var(--theme--foreground-subdued); }
+.hint { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--d1-dim); }
 </style>

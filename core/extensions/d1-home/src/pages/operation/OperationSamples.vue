@@ -42,24 +42,24 @@ const rows = computed(() =>
 </template>
 
 <style scoped>
-.rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--theme--border-color-subdued); border-radius: 10px; }
-.row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 10px 14px; font-size: 13.5px; }
-.row + .row { border-top: 1px solid var(--theme--border-color-subdued); }
+/* Rows of the panel itself: a role chip, the code, then what is known about the sample. */
+.rows { list-style: none; margin: 0; padding: 0; }
+.row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 7px 0; font-size: var(--fs-md); }
+.row:first-child { padding-top: 0; }
+.row + .row { border-top: 1px solid var(--d1-line); }
 .role {
 	min-width: 56px;
 	text-align: center;
-	font-size: 11px;
+	font-size: var(--fs-xs);
 	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	padding: 2px 10px;
+	padding: 1px 8px;
 	border-radius: 99px;
-	color: var(--theme--foreground-subdued);
+	color: var(--d1-dim);
 	background: var(--theme--background-normal);
 }
-.role.input { color: var(--theme--primary); background: var(--theme--primary-background); }
-.role.output { color: var(--theme--success); background: var(--theme--success-background); }
+.role.input { color: var(--theme--primary); background: color-mix(in srgb, var(--theme--primary) 12%, transparent); }
+.role.output { color: var(--d1-ok); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
 .code { font-family: var(--theme--fonts--monospace--font-family, monospace); }
-.muted { color: var(--theme--foreground-subdued); }
-.hint { margin: 8px 0 0; font-size: 12px; color: var(--theme--foreground-subdued); }
+.muted { color: var(--d1-dim); }
+.hint { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--d1-dim); }
 </style>

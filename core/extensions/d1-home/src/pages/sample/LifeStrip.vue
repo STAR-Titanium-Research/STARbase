@@ -73,12 +73,14 @@ const KIND_LABEL: Record<string, string> = {
 .node {
 	position: relative;
 	flex: 0 0 auto;
-	width: 150px;
-	padding: 20px 12px 4px 0;
+	/* Wide enough for a pass code ("10-AA-MF-2023-03-31-F17-30MPM_0.05feed_0.1DoC") in two lines:
+	   at 150px it took four, and the strip's height was set by its longest code. */
+	width: 196px;
+	padding: 22px 16px 4px 0;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	font-size: 13px;
+	font-size: var(--fs-sm, 12px);
 }
 /* the line through the dots */
 .node::before {
@@ -98,33 +100,29 @@ const KIND_LABEL: Record<string, string> = {
 	height: 12px;
 	border-radius: 50%;
 	background: var(--d1-dot, var(--theme--foreground-subdued));
-	box-shadow: 0 0 0 3px var(--theme--background);
+	box-shadow: 0 0 0 3px var(--d1-surface, var(--theme--background));
 }
 .kind--stock { --d1-dot: var(--theme--warning); }
 .kind--operation { --d1-dot: var(--theme--success); }
 .kind--test { --d1-dot: var(--theme--secondary); }
 .kind--self { --d1-dot: var(--theme--primary); }
 .kind--self .dot { width: 16px; height: 16px; top: -1px; }
-.kind--hidden .dot { background: var(--theme--background); border: 2px dashed var(--theme--foreground-subdued); box-sizing: border-box; }
+.kind--hidden .dot { background: var(--d1-surface, var(--theme--background)); border: 2px dashed var(--theme--foreground-subdued); box-sizing: border-box; }
 
-.kind {
-	font-size: 10.5px;
-	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.05em;
-	color: var(--theme--foreground-subdued);
-}
+.kind { font-size: var(--fs-xs, 11px); font-weight: 600; letter-spacing: 0.01em; color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .label {
+	font-family: var(--theme--fonts--monospace--font-family, monospace);
 	font-weight: 650;
+	line-height: 1.35;
 	overflow-wrap: anywhere;
 	color: var(--theme--foreground);
 	text-decoration: none;
 }
 a.label { color: var(--theme--primary); }
 a.label:hover { text-decoration: underline; }
-.kind--self .label { font-size: 15px; }
-.label.plain { font-weight: 500; font-style: italic; color: var(--theme--foreground-subdued); }
-.sub, .date, .via { font-size: 11.5px; color: var(--theme--foreground-subdued); overflow-wrap: anywhere; }
+.kind--self .label { font-size: var(--fs-md, 13px); }
+.label.plain { font-family: inherit; font-weight: 500; font-style: italic; color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.sub, .date, .via { font-size: var(--fs-xs, 11px); color: var(--d1-dim, var(--theme--foreground-subdued)); overflow-wrap: anywhere; }
 .via { font-style: italic; }
 .through .label { opacity: 0.75; }
 

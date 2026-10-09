@@ -57,6 +57,9 @@ export {
 } from './canUpdate';
 
 // Components
+export { default as PageShell } from './components/PageShell.vue';
+export { default as DataTable } from './components/DataTable.vue';
+export { default as RecordCard } from './components/RecordCard.vue';
 export { default as RecordHeader } from './components/RecordHeader.vue';
 export { default as StatTile } from './components/StatTile.vue';
 export { default as StatusBadge } from './components/StatusBadge.vue';

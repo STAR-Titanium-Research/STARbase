@@ -62,14 +62,25 @@ const p = computed(() => props.overview.progress);
 </template>
 
 <style scoped>
-.hidden-note { margin: 8px 0 0; font-size: 12.5px; font-style: italic; color: var(--theme--foreground-subdued); }
-.tiles { display: flex; flex-wrap: wrap; gap: 12px; }
-.tiles > * { min-width: 140px; }
-.bars { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; max-width: 560px; }
-.row { display: flex; align-items: center; gap: 12px; }
-.row > :last-child { flex: 1; }
-.label { width: 130px; flex: none; font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
-.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.hidden-note { margin: 8px 0 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
+/* The tiles fill the row like the Project page's; the bars sit in a panel under them, side by
+   side while there is room (stacked at half the page width they were mostly empty track). */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.bars {
+	margin-top: 12px;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+	gap: 8px 28px;
+	padding: 10px 14px;
+	background: var(--d1-surface, var(--theme--background));
+	border: 1px solid var(--d1-line, var(--theme--border-color-subdued));
+	border-radius: var(--d1-radius, 12px);
+	box-shadow: var(--d1-shadow, none);
+}
+.row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.row > :last-child { flex: 1; min-width: 0; }
+.label { flex: none; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm, 12px); }
 .chip b { font-variant-numeric: tabular-nums; }
 </style>

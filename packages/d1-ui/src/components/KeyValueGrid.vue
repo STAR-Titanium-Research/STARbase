@@ -12,8 +12,8 @@ export interface KeyValue {
 	unit?: string;
 }
 
-// Label/value pairs in a responsive grid. Empty values are left out unless `showEmpty`, so a page
-// does not fill up with dashes.
+// Label/value pairs as the force app's readout tiles: the value with its unit, the label under it.
+// Empty values are left out unless `showEmpty`, so a page does not fill up with dashes.
 const props = defineProps<{ items: KeyValue[]; showEmpty?: boolean }>();
 const shown = computed(() =>
 	props.items.filter((i) => props.showEmpty || (i.value !== null && i.value !== undefined && i.value !== '')),
@@ -35,18 +35,47 @@ const text = (v: KeyValue['value']) => (v === null || v === undefined || v === '
 </template>
 
 <style scoped>
-.d1-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px 24px; margin: 0; }
-.pair { min-width: 0; }
-dt {
-	font-size: 11px;
-	text-transform: uppercase;
-	letter-spacing: 0.05em;
-	font-weight: 600;
-	color: var(--theme--foreground-subdued);
+.d1-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 0; }
+/* The Data Studio styles every `dl > div`, `dt` and `dd` for its own sidebar (a flex row, a value
+   on one line cut with an ellipsis). Those rules reach this list too, so each property they set is
+   set again here: without that the label sits beside the value and long values are cut short.
+   The value is drawn above its label; the markup keeps the label first. */
+.pair {
+	display: flex;
+	flex-direction: column-reverse;
+	justify-content: flex-end;
+	gap: 1px;
+	min-width: 0;
+	margin: 0;
+	padding: 7px 10px;
+	border: 1px solid var(--d1-line, var(--theme--border-color-subdued));
+	border-radius: 8px;
+	background: var(--d1-tile, var(--theme--background-subdued));
 }
-dd { margin: 2px 0 0; font-size: 14px; overflow-wrap: anywhere; }
+dt {
+	flex: none;
+	margin: 0;
+	font-size: var(--fs-xs, 11px);
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	line-height: 1.3;
+	color: var(--d1-dim, var(--theme--foreground-subdued));
+}
+dd {
+	flex: none;
+	margin: 0;
+	overflow: visible;
+	white-space: normal;
+	text-overflow: clip;
+	overflow-wrap: anywhere;
+	font-size: var(--fs-md, 13px);
+	font-weight: 650;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.3;
+	color: var(--theme--foreground);
+}
 .mono { font-family: var(--theme--fonts--monospace--font-family, monospace); }
-.unit { margin-left: 4px; font-size: 12px; color: var(--theme--foreground-subdued); }
-.link { color: var(--theme--primary); font-weight: 600; text-decoration: none; }
+.unit { margin-left: 4px; font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.link { color: var(--theme--primary); text-decoration: none; }
 .link:hover { text-decoration: underline; }
 </style>

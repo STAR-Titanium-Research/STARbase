@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, useCanUpdate, LoadState, NotVisible, RecordHeader, Section, Sparkline, StatTile, dataStudioRoute, formatDate, projectStatusLabel,
+	EditDrawer, useCanUpdate, LoadState, NotVisible, PageShell, RecordHeader, Section, Sparkline, StatTile, dataStudioRoute, formatDate, projectStatusLabel,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
 import CampaignCards from './projects/CampaignCards.vue';
@@ -40,8 +40,8 @@ const tilesDisabled = computed(() => counts.value.loading);
 </script>
 
 <template>
-	<private-view :title="code">
-		<div class="project-page">
+	<private-view :title="project?.project_code ? `Project ${project.project_code}` : 'Project'">
+		<PageShell>
 			<LoadState v-if="loading && !project" loading loading-text="Loading project…" />
 
 			<NotVisible v-else-if="notVisible" what="project" />
@@ -72,49 +72,56 @@ const tilesDisabled = computed(() => counts.value.loading);
 					</template>
 				</RecordHeader>
 
-				<p v-if="project.description" class="description">{{ project.description }}</p>
+				<Section v-if="project.description" title="Description"><p class="description">{{ project.description }}</p></Section>
 
-				<div class="tiles" :aria-busy="tilesDisabled">
-					<StatTile label="Samples" :value="num(counts.data.samples)" icon="science" />
-					<StatTile label="Operations" :value="num(counts.data.operations)" icon="precision_manufacturing" />
-					<StatTile label="Tests" :value="num(counts.data.tests)" icon="biotech" />
-					<StatTile label="Campaigns" :value="num(counts.data.campaigns)" icon="flag" />
+				<div class="totals">
+					<div class="tiles" :aria-busy="tilesDisabled">
+						<StatTile label="Samples" :value="num(counts.data.samples)" icon="science" />
+						<StatTile label="Operations" :value="num(counts.data.operations)" icon="precision_manufacturing" />
+						<StatTile label="Tests" :value="num(counts.data.tests)" icon="biotech" />
+						<StatTile label="Campaigns" :value="num(counts.data.campaigns)" icon="flag" />
+					</div>
+					<p class="d1-note">Counts of the records you can see in this project.</p>
+					<p v-if="counts.error" class="d1-note warn" role="alert">{{ counts.error }}</p>
 				</div>
-				<p class="vis">Counts of the records you can see in this project.</p>
-				<p v-if="counts.error" class="warn" role="alert">{{ counts.error }}</p>
 
 				<CampaignCards :campaigns="campaigns" />
-				<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" />
+				<!-- Three short lists side by side: stacked, three empty ones took a third of the screen. -->
+				<div class="d1-cols">
+					<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" />
+				</div>
 
-				<Section title="Activity">
-					<LoadState :loading="activity.loading" :error="activity.error">
-						<Sparkline
-							v-if="activity.data.data"
-							:ops="activity.data.data.ops"
-							:tests="activity.data.data.tests"
-							:weeks="activity.data.data.weeks"
-							:width="900"
-							:height="70"
-						/>
-						<p v-if="activity.data.truncated" class="warn">Based on the newest records only: the project has more than the page loads.</p>
-					</LoadState>
-				</Section>
+				<div class="d1-cols">
+					<Section title="Activity">
+						<LoadState :loading="activity.loading" :error="activity.error">
+							<Sparkline
+								v-if="activity.data.data"
+								:ops="activity.data.data.ops"
+								:tests="activity.data.data.tests"
+								:weeks="activity.data.data.weeks"
+								:width="640"
+								:height="80"
+							/>
+							<p v-if="activity.data.truncated" class="d1-note warn">Based on the newest records only: the project has more than the page loads.</p>
+						</LoadState>
+					</Section>
 
-				<Section
-					title="Equipment used"
-					:count="equipment.loading ? null : equipment.data.length"
-					:empty="!equipment.loading && !equipment.error && !equipment.data.length"
-					empty-text="No equipment recorded on this project's operations."
-				>
-					<LoadState :loading="equipment.loading" :error="equipment.error">
-						<ul class="equipment">
-							<li v-for="e in equipment.data" :key="e.equipment_id">
-								<span class="e-name">{{ e.name }}</span>
-								<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
-							</li>
-						</ul>
-					</LoadState>
-				</Section>
+					<Section
+						title="Equipment used"
+						:count="equipment.loading ? null : equipment.data.length"
+						:empty="!equipment.loading && !equipment.error && !equipment.data.length"
+						empty-text="No equipment recorded on this project's operations."
+					>
+						<LoadState :loading="equipment.loading" :error="equipment.error">
+							<ul class="equipment">
+								<li v-for="e in equipment.data" :key="e.equipment_id">
+									<span class="e-name">{{ e.name }}</span>
+									<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
+								</li>
+							</ul>
+						</LoadState>
+					</Section>
+				</div>
 
 				<EditDrawer
 					v-model="editing"
@@ -124,35 +131,26 @@ const tilesDisabled = computed(() => counts.value.loading);
 					@saved="onSaved"
 				/>
 			</template>
-		</div>
+		</PageShell>
 	</private-view>
 </template>
 
 <style scoped>
-.vis { margin: 6px 0 0; font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.project-page {
-	max-width: 1180px;
-	margin: 0 auto;
-	padding: 24px 32px 64px;
-	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
-	color: var(--theme--foreground);
-}
-.project-page :deep(.crumbs a) { color: var(--theme--primary); text-decoration: none; font-weight: 600; }
-.project-page :deep(.crumbs a:hover) { text-decoration: underline; }
 .status {
-	font-size: 11.5px; font-weight: 650; padding: 1px 10px; border-radius: 99px;
-	color: var(--theme--foreground-subdued); background: var(--theme--background-normal);
+	font-size: var(--fs-xs); font-weight: 700; padding: 1px 8px; border-radius: 99px;
+	color: var(--d1-dim); background: var(--theme--background-normal);
 }
-.status.active { color: var(--theme--success); background: var(--theme--success-background); }
-.export { color: var(--theme--danger); font-weight: 650; }
-.warn { color: var(--theme--warning); font-size: 12.5px; margin: 8px 0 0; }
-.description { margin: 14px 0 0; font-size: 14px; color: var(--theme--foreground-subdued); white-space: pre-line; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-top: 20px; }
+.status.active { color: var(--d1-ok); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
+.export { color: var(--d1-bad); font-weight: 650; }
+.warn { color: var(--d1-warn); }
+.description { margin: 0; max-width: 90ch; font-size: var(--fs-md); line-height: 1.55; color: var(--d1-dim); white-space: pre-line; }
+.totals { display: flex; flex-direction: column; gap: 6px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .equipment { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .equipment li {
-	display: flex; flex-direction: column; padding: 8px 14px; border-radius: 12px;
-	border: 1px solid var(--theme--border-color-subdued); background: var(--theme--background);
+	display: flex; flex-direction: column; padding: 7px 10px; border-radius: 8px;
+	border: 1px solid var(--d1-line); background: var(--d1-tile);
 }
-.e-name { font-weight: 650; font-size: 13.5px; }
-.e-count { font-size: 12px; color: var(--theme--foreground-subdued); }
+.e-name { font-weight: 650; font-size: var(--fs-md); }
+.e-count { font-size: var(--fs-xs); font-weight: 600; color: var(--d1-dim); }
 </style>

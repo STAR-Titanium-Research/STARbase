@@ -1,0 +1,46 @@
+/* Tokens of the Explorer pages, set on the page frame (PageShell) and on the campaign workbench,
+   which also renders inside a Data Studio form. The look is the force app's (apps/force-app/web
+   styles.css, record/panels/PanelFrame.vue) carried into Directus: the same type scale and the same
+   opaque panel with a lid, but every colour derived from the active Directus theme, so light and
+   dark both work.
+
+   Type scale: every font-size in the kit and the pages is one of these, as var(--fs-sm, 12px) with
+   the px fallback (the convention of packages/force-plotting). 11px is the floor.
+     xs 11  badges, units, tile labels, table heads     lg 15  card codes, key values
+     sm 12  hints, meta, captions                       xl 18  banner title
+     md 13  body, tables, panel titles                  2xl 22 record code, big counts */
+:where(.d1-page, .d1-kit) {
+	--fs-xs: 11px;
+	--fs-sm: 12px;
+	--fs-md: 13px;
+	--fs-lg: 15px;
+	--fs-xl: 18px;
+	--fs-2xl: 22px;
+
+	/* A panel steps off the page ground, and a tile (a lid, a card inside a panel, a row hover)
+	   steps off the panel. Which theme colour is "one step" depends on the scheme, and the Data
+	   Studio sets color-scheme on <body> (body.light / body.dark), so light-dark() can choose:
+	     light  ground = background, panel = the input background (white in the lab's theme, else
+	            the ground itself, told apart by its hairline and shadow), tile = background-subdued
+	     dark   ground = background, panel = background-subdued, tile = background-normal
+	   which is the force app's own ladder (--bg, --bg-2, --surface). */
+	--d1-surface: light-dark(
+		var(--theme--form--field--input--background, var(--theme--background)),
+		var(--theme--background-subdued)
+	);
+	--d1-tile: light-dark(var(--theme--background-subdued), var(--theme--background-normal));
+	--d1-line: var(--theme--border-color-subdued);
+	--d1-radius: 12px;
+	--d1-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+
+	/* Secondary text. --theme--foreground-subdued is about 3.8:1 on the page ground, too faint for
+	   11px labels; mixing the foreground toward the ground keeps the hue and reaches about 6:1. */
+	--d1-dim: color-mix(in srgb, var(--theme--foreground) 68%, var(--theme--background));
+	/* Status inks. The theme's success / warning / danger are fills: as text on their own tinted
+	   background they are under 2:1. Mixing toward the text colour darkens them on a light theme and
+	   lightens them on a dark one. */
+	--d1-ok: color-mix(in srgb, var(--theme--success) 50%, var(--theme--foreground));
+	--d1-warn: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground));
+	--d1-bad: color-mix(in srgb, var(--theme--danger) 60%, var(--theme--foreground));
+	--d1-tint: color-mix(in srgb, var(--theme--primary) 10%, transparent);
+}

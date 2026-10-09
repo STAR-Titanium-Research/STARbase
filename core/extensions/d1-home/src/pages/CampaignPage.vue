@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue';
 import {
-	CampaignWorkbench, EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, RecordHeader, RecordLink, StatusBadge,
+	CampaignWorkbench, EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, StatusBadge,
 	campaignTypeLabel, dataStudioRoute, formatDate,
 } from '@d1/ui';
 import { useCampaignRecord } from './campaign/useCampaignRecord';
@@ -35,8 +35,8 @@ const dates = computed(() => {
 </script>
 
 <template>
-	<private-view :title="code">
-		<div class="campaign-page">
+	<private-view :title="campaign?.campaign_code ? `Campaign ${campaign.campaign_code}` : code">
+		<PageShell>
 			<LoadState v-if="loading && !campaign" loading loading-text="Loading campaign…" />
 
 			<NotVisible v-else-if="notVisible" what="campaign" />
@@ -50,7 +50,7 @@ const dates = computed(() => {
 						<template v-if="campaign.project_id">
 							<span>›</span>
 							<RecordLink collection="projects" :id="campaign.project_id.project_id">
-								{{ campaign.project_id.project_code || campaign.project_id.project_name || 'Project' }}
+								{{ campaign.project_id.project_code ? `Project ${campaign.project_id.project_code}` : campaign.project_id.project_name || 'Project' }}
 							</RecordLink>
 						</template>
 						<template v-else-if="hidden.project_id">
@@ -73,7 +73,7 @@ const dates = computed(() => {
 					</template>
 				</RecordHeader>
 
-				<p v-if="campaign.notes" class="notes">{{ campaign.notes }}</p>
+				<Section v-if="campaign.notes" title="Notes"><p class="notes">{{ campaign.notes }}</p></Section>
 
 				<CampaignWorkbench :campaign-id="id" :campaign-type="campaign.campaign_type" :can-update="canUpdate" />
 
@@ -86,20 +86,10 @@ const dates = computed(() => {
 					@saved="onSaved"
 				/>
 			</template>
-		</div>
+		</PageShell>
 	</private-view>
 </template>
 
 <style scoped>
-.campaign-page {
-	max-width: 1280px;
-	margin: 0 auto;
-	padding: 24px 32px 64px;
-	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
-	color: var(--theme--foreground);
-}
-.campaign-page :deep(.crumbs a) { color: var(--theme--primary); text-decoration: none; font-weight: 600; }
-.campaign-page :deep(.crumbs a:hover) { text-decoration: underline; }
-.notes { margin: 14px 0 0; font-size: 13.5px; color: var(--theme--foreground-subdued); white-space: pre-wrap; }
-.campaign-page :deep(.d1-progress-block) { margin-top: 22px; }
+.notes { margin: 0; max-width: 90ch; font-size: var(--fs-md); line-height: 1.55; color: var(--d1-dim); white-space: pre-wrap; }
 </style>

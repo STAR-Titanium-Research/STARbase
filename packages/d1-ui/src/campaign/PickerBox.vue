@@ -33,21 +33,19 @@ const search = defineModel<string>({ default: '' });
 	border: 0;
 	background: transparent;
 	font: inherit;
-	font-size: 13.5px;
+	font-size: var(--fs-md, 13px);
 	outline: none;
 	color: var(--theme--foreground);
 }
 .filter {
-	font-size: 10px;
+	font-size: var(--fs-xs, 11px);
 	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
 	color: var(--theme--primary);
 	background: var(--theme--primary-background);
 	padding: 2px 8px;
 	border-radius: 99px;
 }
-.msg { display: flex; align-items: center; gap: 6px; padding: 6px 2px; font-size: 12.5px; color: var(--theme--foreground-subdued); }
+.msg { display: flex; align-items: center; gap: 6px; padding: 6px 2px; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .results { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; max-height: 260px; overflow-y: auto; }
 .results :deep(.pick) {
 	display: flex;
@@ -55,7 +53,7 @@ const search = defineModel<string>({ default: '' });
 	gap: 8px;
 	text-align: left;
 	border: 1px solid var(--theme--border-color-subdued);
-	background: var(--theme--background);
+	background: var(--d1-tile, var(--theme--background));
 	color: var(--theme--foreground);
 	border-radius: 8px;
 	padding: 5px 10px;
@@ -64,6 +62,6 @@ const search = defineModel<string>({ default: '' });
 }
 .results :deep(.pick:hover:not(:disabled)) { border-color: var(--theme--primary); background: var(--theme--primary-background); }
 .results :deep(.pick:disabled) { opacity: 0.6; cursor: default; }
-.results :deep(.pick .sub) { margin-left: auto; margin-right: 6px; font-size: 11.5px; color: var(--theme--foreground-subdued); }
+.results :deep(.pick .sub) { margin-left: auto; margin-right: 6px; font-size: var(--fs-xs, 11px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .results :deep(.pick .code) { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 650; }
 </style>

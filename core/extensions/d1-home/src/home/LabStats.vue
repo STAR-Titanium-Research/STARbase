@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
-import { collectionRoute } from '@d1/ui';
+import { Section, collectionRoute } from '@d1/ui';
 import { go } from './goto';
 import { SAMPLES_LIST, samplesBookmarkLink } from './samplesBookmark';
 
@@ -46,30 +46,37 @@ onMounted(async () => {
 </script>
 
 <template>
-	<section aria-labelledby="stats-h">
-		<h2 id="stats-h" class="h">At a glance</h2>
-		<p class="sub">Counts of the records you can see: yours, ones you co-own, those of projects where you are PI or investigator (including through the project's campaigns), campaigns you own or that hold a sample you own or co-own, projects where you own a campaign, sample, operation or test, and the operations and tests of samples you can see.</p>
+	<Section title="At a glance">
+		<template #actions><span class="sub">Counts of the records you can see</span></template>
 		<div class="stats">
 			<button v-for="st in stats" :key="st.label" class="stat" @click="go(router, st.to)">
-				<v-icon :name="st.icon" class="s-icon" />
 				<span class="s-value">{{ st.value }}</span>
-				<span class="s-label">{{ st.label }}</span>
+				<span class="s-label"><v-icon :name="st.icon" x-small class="s-icon" />{{ st.label }}</span>
 			</button>
 		</div>
-	</section>
+		<!-- The full rule, one click away: as a paragraph above the tiles it was the heaviest thing
+		     in the block. -->
+		<details class="rule">
+			<summary>Which records can I see?</summary>
+			<p>Yours, ones you co-own, those of projects where you are PI or investigator (including through the project's campaigns), campaigns you own or that hold a sample you own or co-own, projects where you own a campaign, sample, operation or test, and the operations and tests of samples you can see.</p>
+		</details>
+	</Section>
 </template>
 
 <style scoped>
-.h { margin: 0 0 4px; font-size: 18px; font-weight: 750; }
-.sub { margin: 0 0 10px; font-size: 13px; color: var(--theme--foreground-subdued); }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.sub { font-size: var(--fs-xs); color: var(--d1-dim); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
 .stat {
-	display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px 16px; cursor: pointer;
+	display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; padding: 8px 12px; cursor: pointer;
 	font: inherit; color: var(--theme--foreground); text-align: left;
-	border: 1px solid var(--theme--border-color-subdued); border-radius: 14px; background: var(--theme--background);
+	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
+	transition: border-color 0.12s ease;
 }
 .stat:hover { border-color: var(--theme--primary); }
-.s-icon { --v-icon-color: var(--theme--primary); margin-bottom: 4px; }
-.s-value { font-size: 24px; font-weight: 760; letter-spacing: -0.02em; }
-.s-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--theme--foreground-subdued); font-weight: 600; }
+.s-value { font-size: var(--fs-2xl); font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.s-label { font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); white-space: nowrap; }
+.s-icon { margin-right: 4px; vertical-align: -2px; --v-icon-color: var(--d1-dim); }
+.rule { margin-top: 10px; font-size: var(--fs-sm); color: var(--d1-dim); }
+.rule summary { cursor: pointer; font-weight: 600; width: fit-content; }
+.rule p { margin: 6px 0 0; max-width: 72ch; line-height: 1.5; }
 </style>

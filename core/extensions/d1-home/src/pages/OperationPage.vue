@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, RecordHeader, RecordLink, Section, asRecord, dataStudioRoute,
+	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, asRecord, dataStudioRoute,
 	formatDate, formatQuantity, processLabel, type KeyValue,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
@@ -54,8 +54,8 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 </script>
 
 <template>
-	<private-view :title="code">
-		<div class="op-page">
+	<private-view :title="op?.pass_code ? `Operation ${op.pass_code}` : 'Operation'">
+		<PageShell>
 			<LoadState v-if="loading && !op" loading loading-text="Loading operation…" />
 
 			<NotVisible v-else-if="notVisible" what="operation" />
@@ -68,21 +68,21 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 						<router-link to="/home">Home</router-link>
 						<template v-if="project">
 							<span>›</span>
-							<RecordLink collection="projects" :id="project.project_id">{{ project.project_code }}</RecordLink>
+							<RecordLink collection="projects" :id="project.project_id">Project {{ project.project_code }}</RecordLink>
 						</template>
 						<template v-else-if="hidden.data.project_id">
 							<span>›</span><HiddenLink label="Project" />
 						</template>
 						<template v-if="campaign">
 							<span>›</span>
-							<RecordLink collection="campaigns" :id="campaign.campaign_id">{{ campaign.campaign_code || campaign.name || 'Campaign' }}</RecordLink>
+							<RecordLink collection="campaigns" :id="campaign.campaign_id">{{ campaign.campaign_code ? `Campaign ${campaign.campaign_code}` : campaign.name || 'Campaign' }}</RecordLink>
 						</template>
 						<template v-else-if="hidden.data.campaign_id">
 							<span>›</span><HiddenLink label="Campaign" />
 						</template>
 						<template v-if="sample">
 							<span>›</span>
-							<RecordLink collection="physical_samples" :id="sample.sample_id">{{ sample.sample_code || 'Sample' }}</RecordLink>
+							<RecordLink collection="physical_samples" :id="sample.sample_id">{{ sample.sample_code ? `Sample ${sample.sample_code}` : 'Sample' }}</RecordLink>
 						</template>
 					</template>
 					<template #meta>
@@ -98,30 +98,34 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 					</template>
 				</RecordHeader>
 
-				<Section title="Overview">
-					<KeyValueGrid :items="overview" />
-					<p v-if="op.outcome_notes" class="notes">{{ op.outcome_notes }}</p>
-				</Section>
+				<div class="d1-cols">
+					<Section title="Overview">
+						<KeyValueGrid :items="overview" />
+						<p v-if="op.outcome_notes" class="notes">{{ op.outcome_notes }}</p>
+					</Section>
 
-				<Section
-					title="Parameters"
-					:count="params.loading ? null : params.data.length || null"
-					:empty="!params.loading && !params.error && !params.data.length"
-					:empty-text="op.process_category ? 'No parameters recorded for this operation.' : 'This operation has no process category, so no parameter set applies.'"
-				>
-					<LoadState :loading="params.loading" :error="params.error">
-						<KeyValueGrid :items="params.data.map((p) => ({ label: p.label, value: p.value, unit: p.unit }))" />
-					</LoadState>
-				</Section>
+					<Section
+						title="Parameters"
+						:count="params.loading ? null : params.data.length || null"
+						:empty="!params.loading && !params.error && !params.data.length"
+						:empty-text="op.process_category ? 'No parameters recorded for this operation.' : 'This operation has no process category, so no parameter set applies.'"
+					>
+						<LoadState :loading="params.loading" :error="params.error">
+							<KeyValueGrid :items="params.data.map((p) => ({ label: p.label, value: p.value, unit: p.unit }))" />
+						</LoadState>
+					</Section>
+				</div>
 
-				<OperationSamples
-					:input="op.sample_id"
-					:output="op.output_sample_id"
-					:input-hidden="!!hidden.data.sample_id"
-					:output-hidden="!!hidden.data.output_sample_id"
-				/>
+				<div class="d1-cols">
+					<OperationSamples
+						:input="op.sample_id"
+						:output="op.output_sample_id"
+						:input-hidden="!!hidden.data.sample_id"
+						:output-hidden="!!hidden.data.output_sample_id"
+					/>
 
-				<OperationAnalysis :operation-id="id" :category="op.process_category" :force="force" :fast="fast" />
+					<OperationAnalysis :operation-id="id" :category="op.process_category" :force="force" :fast="fast" />
+				</div>
 
 				<SampleFiles
 					:files="allFiles"
@@ -138,19 +142,10 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 					@saved="onSaved"
 				/>
 			</template>
-		</div>
+		</PageShell>
 	</private-view>
 </template>
 
 <style scoped>
-.op-page {
-	max-width: 1180px;
-	margin: 0 auto;
-	padding: 24px 32px 64px;
-	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
-	color: var(--theme--foreground);
-}
-.op-page :deep(.crumbs a) { color: var(--theme--primary); text-decoration: none; font-weight: 600; }
-.op-page :deep(.crumbs a:hover) { text-decoration: underline; }
-.notes { margin: 14px 0 0; font-size: 13.5px; white-space: pre-wrap; color: var(--theme--foreground-subdued); }
+.notes { margin: 10px 0 0; font-size: var(--fs-md); line-height: 1.55; white-space: pre-wrap; color: var(--d1-dim); }
 </style>

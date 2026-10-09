@@ -14,18 +14,30 @@ const style = computed(() => statusStyle(props.kind, props.value));
 <style scoped>
 .d1-badge {
 	display: inline-block;
-	padding: 1px 9px;
+	padding: 1px 8px;
 	border-radius: 99px;
-	font-size: 11.5px;
-	font-weight: 650;
+	font-size: var(--fs-xs, 11px);
+	font-weight: 700;
 	line-height: 1.6;
 	white-space: nowrap;
 	color: var(--d1-tone-fg);
 	background: var(--d1-tone-bg);
 }
-.tone--neutral { --d1-tone-fg: var(--theme--foreground-subdued); --d1-tone-bg: var(--theme--background-normal); }
-.tone--info { --d1-tone-fg: var(--theme--primary); --d1-tone-bg: var(--theme--primary-background); }
-.tone--progress, .tone--warning { --d1-tone-fg: var(--theme--warning); --d1-tone-bg: var(--theme--warning-background); }
-.tone--success { --d1-tone-fg: var(--theme--success); --d1-tone-bg: var(--theme--success-background); }
-.tone--danger { --d1-tone-fg: var(--theme--danger); --d1-tone-bg: var(--theme--danger-background); }
+/* The theme's status colours are fills. As text on their own tint they are under 2:1 (the mint
+   "Active" on pale mint), so the ink is the colour mixed toward the text colour: darker on a light
+   theme, lighter on a dark one. */
+.tone--neutral { --d1-tone-fg: var(--d1-dim, var(--theme--foreground-subdued)); --d1-tone-bg: var(--theme--background-normal); }
+.tone--info { --d1-tone-fg: var(--theme--primary); --d1-tone-bg: color-mix(in srgb, var(--theme--primary) 12%, transparent); }
+.tone--progress, .tone--warning {
+	--d1-tone-fg: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground));
+	--d1-tone-bg: color-mix(in srgb, var(--theme--warning) 18%, transparent);
+}
+.tone--success {
+	--d1-tone-fg: color-mix(in srgb, var(--theme--success) 50%, var(--theme--foreground));
+	--d1-tone-bg: color-mix(in srgb, var(--theme--success) 18%, transparent);
+}
+.tone--danger {
+	--d1-tone-fg: color-mix(in srgb, var(--theme--danger) 60%, var(--theme--foreground));
+	--d1-tone-bg: color-mix(in srgb, var(--theme--danger) 14%, transparent);
+}
 </style>

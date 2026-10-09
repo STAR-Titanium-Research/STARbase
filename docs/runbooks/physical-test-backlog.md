@@ -652,6 +652,26 @@ migration 141 prints about ownerless records.
 - [ ] **E5 — a secondary sample of a multi-sample test (known gap).** B co-owns only the second
   sample of a test with two samples: B cannot see the test (it is matched through its first sample).
   Record whether this matters to the lab. Since: Explorer pages E5 (PR pending).
+- [ ] **Restyle — dark theme.** Set your account's appearance to Dark and open Home, a Project, a
+  Campaign, a Sample and an Operation page. Expect: panels read as panels (a hairline and a lid a
+  shade off the body), the tile labels and table heads are readable, and the status pills
+  (Active, Analysed, Diagnostics built, Failed) have light ink on a dark tint, not the reverse.
+  Nothing is a fixed light colour except the sample drawing. Also check links and codes: the
+  Dark theme is `Directus Default` with no overrides, so its primary is the project colour
+  (`#18222F`), which is near-black on a near-black ground, in the Data Studio's own pages too; if
+  they are unreadable, the fix is a dark-theme primary in Settings, not the pages. Checked in the Light theme only on
+  2026-10-09 (the test account's appearance is pinned to Light). Since: Explorer restyle (force-app
+  design language), not yet in a PR.
+- [ ] **Restyle — Test page.** Open a test session that has parameters, subjects and results. Expect:
+  Overview and Parameters side by side as readout tiles (value above label, nothing cut with an
+  ellipsis), the Subject rows, and each results table only as wide as its figures with the first
+  column left-aligned and the rest right-aligned. The database had no test session on 2026-10-09,
+  so this page was not seen. Since: Explorer restyle, not yet in a PR.
+- [ ] **Restyle — Home as a member with work.** Sign in as a member who is PI on a project, owns a
+  campaign and owns samples. Expect: "My projects", "Campaigns I own" and "My latest samples" are
+  three panels in one row (stacked on a narrow window), each holding cards with the code, a tag at
+  the right, the name and one line of meta. Only the empty state was seen on 2026-10-09 (admin
+  account). Since: Explorer restyle, not yet in a PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

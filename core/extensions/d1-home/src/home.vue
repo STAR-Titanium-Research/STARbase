@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useStores } from '@directus/extensions-sdk';
+import { PageShell } from '@d1/ui';
 import QuickActions from './home/QuickActions.vue';
 import NeedsAttention from './home/NeedsAttention.vue';
 import MyWork from './home/MyWork.vue';
@@ -33,43 +34,36 @@ const isAdmin = computed(() => {
 
 <template>
 	<private-view title="Home">
-		<div class="home">
+		<PageShell>
+			<!-- The thin banner of the Force dashboard (packages/force-plotting ForceDashboard.vue). -->
 			<section class="hero">
-				<div class="hero-text">
-					<h1>{{ greeting }}, {{ firstName }}</h1>
-					<p>{{ today }} · STARbase Lab</p>
-				</div>
+				<h1>{{ greeting }}, {{ firstName }}</h1>
+				<span class="hero-sub">{{ today }} · STARbase Lab</span>
 			</section>
 
 			<QuickActions />
-			<NeedsAttention :is-admin="isAdmin" />
+			<div class="d1-cols">
+				<NeedsAttention :is-admin="isAdmin" />
+				<LabStats />
+			</div>
 			<MyWork />
-			<LabStats />
 			<RecentActivity />
-		</div>
+		</PageShell>
 	</private-view>
 </template>
 
 <style scoped>
-.home {
-	max-width: 1080px;
-	margin: 0 auto;
-	padding: 24px 32px 56px;
-	display: flex;
-	flex-direction: column;
-	gap: 32px;
-	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
-	color: var(--theme--foreground);
-}
 .hero {
-	border-radius: 20px;
-	padding: 34px 36px;
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 2px 14px;
+	padding: 12px 16px;
+	border-radius: 12px;
 	color: #fff;
-	background:
-		radial-gradient(120% 140% at 100% 0%, rgba(255, 255, 255, 0.18), transparent 55%),
-		linear-gradient(120deg, var(--theme--primary, #1d4ed8), #0d9488);
-	box-shadow: 0 12px 30px -12px rgba(29, 78, 216, 0.5);
+	background: linear-gradient(120deg, var(--theme--primary, #1d4ed8), #0d9488);
+	box-shadow: 0 8px 20px -12px rgba(29, 78, 216, 0.5);
 }
-.hero h1 { margin: 0; font-size: 30px; font-weight: 750; letter-spacing: -0.01em; }
-.hero p { margin: 6px 0 0; font-size: 14px; opacity: 0.9; }
+.hero h1 { margin: 0; font-size: var(--fs-xl, 18px); font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; }
+.hero-sub { font-size: var(--fs-sm, 12px); font-weight: 600; opacity: 0.9; }
 </style>
