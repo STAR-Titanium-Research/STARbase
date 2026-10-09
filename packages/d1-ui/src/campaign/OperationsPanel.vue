@@ -11,7 +11,7 @@ import RecordLink from '../components/RecordLink.vue';
 import Section from '../components/Section.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import PickerBox from './PickerBox.vue';
-import { campaignAssignPatch, changeOutcomeMessage, forbiddenWriteMessage, inheritCampaignProject } from './assign';
+import { campaignAssignPatch, changeOutcomeMessage, forbiddenWriteMessage, inheritCampaignProject, operationPickerFilter } from './assign';
 import { operationCategoryFor } from './campaignType';
 import { LIST_CAP, type SectionState } from '../composables/useSections';
 
@@ -58,9 +58,7 @@ async function runSearch() {
 	const token = gate.begin();
 	searching.value = true;
 	try {
-		const filter: any = { _and: [{ campaign_id: { _null: true } }] };
-		if (category.value) filter._and.push({ process_category: { _eq: category.value } });
-		if (search.value.trim()) filter._and.push({ pass_code: { _icontains: search.value.trim() } });
+		const filter = operationPickerFilter(category.value, search.value);
 		const rows = await getItems('manufacturing_operations', {
 			filter,
 			fields: ['operation_id', 'pass_code', 'operation_sequence', 'process_category', 'sample_id.sample_code'],
