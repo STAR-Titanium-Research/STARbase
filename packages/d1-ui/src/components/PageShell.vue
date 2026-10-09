@@ -27,13 +27,14 @@ defineProps<{ narrow?: boolean }>();
 }
 .d1-page.narrow { max-width: 920px; }
 
-/* Blocks side by side while there is room, stacked when there is not. They share one height, so
-   a row of panels ends on one line. */
+/* Blocks side by side while there is room, stacked when there is not. Each keeps its own height
+   (start, not stretch): stretched to the tallest, a short panel (three values beside ten) was mostly
+   empty. */
 .d1-page :deep(.d1-cols) {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
 	gap: 16px;
-	align-items: stretch;
+	align-items: start;
 }
 /* A line of text between blocks: a note, a description, a cap on a list. */
 .d1-page :deep(.d1-note) { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }

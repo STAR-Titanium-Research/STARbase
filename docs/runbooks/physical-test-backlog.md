@@ -696,6 +696,10 @@ migration 141 prints about ownerless records.
   info-coloured cells and the picker's hover (they keep Directus's `primary-background`) are still
   readable. Then switch to Light: the colours are the project's primary exactly as before. Since:
   Explorer fixes F1, not yet in a PR.
+- [ ] **Explorer fixes F1 — side-by-side panels keep their own height.** Open an Operation with
+  few overview values and many parameters, and a Campaign with a short sample list beside a long
+  test list. Expect: each panel is only as tall as its content, the shorter one ends early with
+  the page background under it, not a half-empty panel. Since: Explorer fixes F1, not yet in a PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

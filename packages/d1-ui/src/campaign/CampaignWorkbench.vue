@@ -80,7 +80,7 @@ defineExpose({ reload });
 
 <style scoped>
 .d1-campaign { display: flex; flex-direction: column; gap: 16px; font-size: var(--fs-md, 13px); }
-.d1-ccols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: stretch; }
+.d1-ccols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
 .d1-campaign :deep(.d1-cerr) { margin: 0 0 8px; font-size: var(--fs-sm, 12px); color: var(--d1-bad, var(--theme--danger)); }
 .d1-campaign .d1-cnote { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .d1-campaign :deep(.d1-cempty) { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
