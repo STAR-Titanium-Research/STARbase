@@ -19,7 +19,7 @@
 --     for manufacturing_operations.source_recipe_id -> prep_recipes).
 --
 -- Why a migration and not "run the scripts again". configure_directus.sql is a stale baseline: run
--- again it wipes the field rows that later migrations (062, 126, 141 and others) own, a second time.
+-- again it wipes the field rows that later migrations (062, 20261001000126_owner_picker_fields, 141 and others) own, a second time.
 -- The scripts cannot restore just the missing rows, and their DELETE-then-INSERT shape is exactly
 -- what caused this. The schema is the contract (ADR-0001), so the repair goes in as a migration
 -- that only adds what is missing.
@@ -35,7 +35,7 @@
 --   * a partly repaired database: only the gaps are filled;
 --   * CI, which has no Directus bootstrap: the rows are inserted, then rolled back by the CI loop.
 -- It never touches the rows of other migrations; in particular the d1-owner-picker interface that
--- migration 126 sets on every owner_person_id is neither read nor written here.
+-- 20261001000126_owner_picker_fields.sql sets on every owner_person_id is neither read nor written here.
 --
 -- Where the row contents come from. The 116 inline parameter rows are the INSERTs of
 -- scripts/configure_inline_params.sql, copied verbatim into a temporary staging table, then given

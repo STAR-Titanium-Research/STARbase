@@ -159,7 +159,7 @@ DELETE FROM directus_relations
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
   ('prep_steps', 'operation_id', 'manufacturing_operations', 'prep_steps', 'delete'),
   ('operation_files', 'operation_id', 'manufacturing_operations', 'data_file_links', 'delete');
--- a row that is present and customised, and an owner picker set by migration 126: both must survive
+-- a row that is present and customised, and an owner picker set by 20261001000126_owner_picker_fields.sql: both must survive
 INSERT INTO directus_fields (collection, field, interface, note, "group") VALUES
   ('manufacturing_operations', 'sintering_batch_number', 'input', 'custom note', NULL),
   ('manufacturing_operations', 'owner_person_id', 'd1-owner-picker', NULL, NULL);
@@ -229,7 +229,7 @@ rim_check "up_missing:0" "up: every inline parameter column has a row again"
 rim_check "up_ops_rows:56" "up: 56 manufacturing_operations parameter rows"
 rim_check "up_sessions_rows:60" "up: 60 test_sessions parameter rows"
 rim_check "up_custom_row:1,custom note" "up: a present, customised row is left as it is (not duplicated, not replaced)"
-rim_check "up_owner_picker:1,d1-owner-picker" "up: the d1-owner-picker interface of migration 126 is untouched"
+rim_check "up_owner_picker:1,d1-owner-picker" "up: the d1-owner-picker interface of 20261001000126_owner_picker_fields.sql is untouched"
 rim_check "up_machine_group:10" "up: ten machine-sourced sintering fields are in the machine group"
 rim_check "up_qa_group:5" "up: five QA fields are in the QA group"
 rim_check "up_hidden_recipe_number:true" "up: the free-text sintering recipe number is hidden (migration 102)"
@@ -2231,6 +2231,8 @@ INSERT INTO physical_samples (sample_code) VALUES ('TEST-NOOWNER-001');
 "
 rv_out=$($PSQL 2>&1 <<SQL
 BEGIN;
+-- migration 143 keeps its ledger in d1_private; drop it (rolled back) so 141's down can drop the empty schema
+DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
