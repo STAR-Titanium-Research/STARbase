@@ -82,7 +82,7 @@ onMounted(() => {
 	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
 	transition: border-color 0.12s ease;
 }
-.stat:hover { border-color: var(--theme--primary); }
+.stat:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .s-value { font-size: var(--fs-2xl); font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
 .s-label { font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); white-space: nowrap; }
 .s-icon { margin-right: 4px; vertical-align: -2px; --v-icon-color: var(--d1-dim); }

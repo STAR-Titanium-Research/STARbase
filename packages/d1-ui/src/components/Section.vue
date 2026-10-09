@@ -56,8 +56,8 @@ h2 { margin: 0; font-size: var(--fs-md, 13px); font-weight: 650; letter-spacing:
 	font-variant-numeric: tabular-nums;
 	padding: 1px 7px;
 	border-radius: 99px;
-	color: var(--theme--primary);
-	background: color-mix(in srgb, var(--theme--primary) 12%, transparent);
+	color: var(--d1-accent, var(--theme--primary));
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent);
 }
 .spacer { flex: 1; }
 .body { padding: 12px 14px; }

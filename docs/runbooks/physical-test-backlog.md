@@ -687,6 +687,15 @@ migration 141 prints about ownerless records.
   heads included, right-aligned over its figures. Other tables (Sample page Operations, Home
   Recent activity) are still full width with left-aligned heads. Since: Explorer fixes F1, not yet
   in a PR.
+- [ ] **Explorer fixes F1 — accent colour on the dark theme.** Set the appearance to Dark and open
+  Home, a Project, a Campaign, a Sample, an Operation, People and Register a Sample. Expect:
+  breadcrumb and record links, the kind pill, section count chips, tags, the quick-action and
+  stat icon chips, progress bars, the activity sparkline and the buttons that look like links are
+  a visible grey-blue (about `#8b949e`), not near-black; the active People tab and the numbered
+  steps of Register a Sample have dark text on the light accent. In the campaign matrix, the
+  info-coloured cells and the picker's hover (they keep Directus's `primary-background`) are still
+  readable. Then switch to Light: the colours are the project's primary exactly as before. Since:
+  Explorer fixes F1, not yet in a PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

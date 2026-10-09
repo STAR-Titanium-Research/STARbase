@@ -109,14 +109,14 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.link { color: var(--theme--primary); font-weight: 600; font-size: var(--fs-sm); text-decoration: none; white-space: nowrap; }
+.link { color: var(--d1-accent, var(--theme--primary)); font-weight: 600; font-size: var(--fs-sm); text-decoration: none; white-space: nowrap; }
 .link:hover { text-decoration: underline; }
 .error { margin-bottom: 8px; }
 .r-kind { display: inline-block; font-size: var(--fs-xs); font-weight: 700; padding: 1px 8px; border-radius: 99px; white-space: nowrap; }
-.k-sample { color: var(--theme--primary); background: color-mix(in srgb, var(--theme--primary) 12%, transparent); }
+.k-sample { color: var(--d1-accent, var(--theme--primary)); background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent); }
 .k-operation { color: var(--d1-ok); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
 .k-fast { color: var(--d1-warn); background: color-mix(in srgb, var(--theme--warning) 18%, transparent); }
 .k-test { color: var(--d1-dim); background: var(--theme--background-normal); }
-.r-code { color: var(--theme--primary); text-decoration: none; overflow-wrap: anywhere; }
+.r-code { color: var(--d1-accent, var(--theme--primary)); text-decoration: none; overflow-wrap: anywhere; }
 .r-code:hover { text-decoration: underline; }
 </style>

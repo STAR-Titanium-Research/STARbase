@@ -105,7 +105,7 @@ const KIND_LABEL: Record<string, string> = {
 .kind--stock { --d1-dot: var(--theme--warning); }
 .kind--operation { --d1-dot: var(--theme--success); }
 .kind--test { --d1-dot: var(--theme--secondary); }
-.kind--self { --d1-dot: var(--theme--primary); }
+.kind--self { --d1-dot: var(--d1-accent, var(--theme--primary)); }
 .kind--self .dot { width: 16px; height: 16px; top: -1px; }
 .kind--hidden .dot { background: var(--d1-surface, var(--theme--background)); border: 2px dashed var(--theme--foreground-subdued); box-sizing: border-box; }
 
@@ -118,7 +118,7 @@ const KIND_LABEL: Record<string, string> = {
 	color: var(--theme--foreground);
 	text-decoration: none;
 }
-a.label { color: var(--theme--primary); }
+a.label { color: var(--d1-accent, var(--theme--primary)); }
 a.label:hover { text-decoration: underline; }
 .kind--self .label { font-size: var(--fs-md, 13px); }
 .label.plain { font-family: inherit; font-weight: 500; font-style: italic; color: var(--d1-dim, var(--theme--foreground-subdued)); }

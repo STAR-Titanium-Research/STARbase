@@ -123,5 +123,5 @@ defineExpose({ reload });
 	padding: 2px;
 }
 .d1-campaign :deep(.d1-ctable .x:hover:not(:disabled)) { color: var(--theme--danger); background: var(--theme--danger-background); }
-.d1-campaign :deep(.d1-ctable .x.add:hover:not(:disabled)) { color: var(--theme--primary); background: var(--theme--primary-background); }
+.d1-campaign :deep(.d1-ctable .x.add:hover:not(:disabled)) { color: var(--d1-accent, var(--theme--primary)); background: var(--theme--primary-background); }
 </style>

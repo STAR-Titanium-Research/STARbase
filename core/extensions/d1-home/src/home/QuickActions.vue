@@ -57,12 +57,12 @@ const router = useRouter();
 	font: inherit;
 	color: var(--theme--foreground);
 }
-.card:hover { border-color: var(--theme--primary); }
+.card:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .action { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
 .chip {
 	width: 34px; height: 34px; border-radius: 9px; flex: 0 0 auto; display: grid; place-items: center;
 	background: var(--d1-tint);
-	--v-icon-color: var(--theme--primary);
+	--v-icon-color: var(--d1-accent, var(--theme--primary));
 }
 .a-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .a-label { font-size: var(--fs-md); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -77,5 +77,5 @@ const router = useRouter();
 	border: 1px solid var(--d1-line); background: var(--d1-surface);
 	transition: border-color 0.12s ease;
 }
-.more-btn:hover { border-color: var(--theme--primary); }
+.more-btn:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 </style>

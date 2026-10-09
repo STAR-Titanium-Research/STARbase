@@ -69,7 +69,7 @@ const testsCapped = computed(() => props.tests.data.length > LIST_CAP);
 </template>
 
 <style scoped>
-.action { font-size: var(--fs-sm); font-weight: 600; text-decoration: none; color: var(--theme--primary); }
+.action { font-size: var(--fs-sm); font-weight: 600; text-decoration: none; color: var(--d1-accent, var(--theme--primary)); }
 .action:hover { text-decoration: underline; }
 .cap { margin-top: 10px; }
 </style>

@@ -40,7 +40,7 @@ defineProps<{ narrow?: boolean }>();
 .d1-page :deep(.d1-note.warn) { color: var(--d1-warn); }
 .d1-page :deep(.d1-note.bad) { color: var(--d1-bad); }
 .d1-page :deep(.d1-note a),
-.d1-page :deep(.d1-crumbs a) { color: var(--theme--primary); font-weight: 600; text-decoration: none; }
+.d1-page :deep(.d1-crumbs a) { color: var(--d1-accent, var(--theme--primary)); font-weight: 600; text-decoration: none; }
 .d1-page :deep(.d1-note a:hover),
 .d1-page :deep(.d1-crumbs a:hover) { text-decoration: underline; }
 .d1-page :deep(.d1-crumbs) {

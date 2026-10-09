@@ -288,7 +288,7 @@ export default { inheritAttrs: false };
 	border-radius: var(--d1-radius); box-shadow: var(--d1-shadow); padding: 14px 16px 16px;
 }
 .card h3 { margin: 0 0 14px; font-size: var(--fs-md); font-weight: 650; letter-spacing: 0.01em; display: flex; align-items: center; gap: 8px; }
-.step { width: 20px; height: 20px; border-radius: 50%; background: var(--theme--primary, #1d4ed8); color: #fff; display: grid; place-items: center; font-size: var(--fs-xs); font-weight: 700; }
+.step { width: 20px; height: 20px; border-radius: 50%; background: var(--d1-accent, var(--theme--primary, #1d4ed8)); color: var(--d1-on-accent, #fff); display: grid; place-items: center; font-size: var(--fs-xs); font-weight: 700; }
 
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 14px; }
 .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
@@ -299,10 +299,10 @@ export default { inheritAttrs: false };
 
 .code-preview .code-val {
 	height: 44px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px;
-	background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 8%, transparent);
-	border: 1px dashed color-mix(in srgb, var(--theme--primary, #1d4ed8) 40%, transparent);
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary, #1d4ed8)) 8%, transparent);
+	border: 1px dashed color-mix(in srgb, var(--d1-accent, var(--theme--primary, #1d4ed8)) 40%, transparent);
 	font-family: var(--theme--fonts--monospace--font-family, 'SF Mono', Menlo, monospace); font-weight: 700;
-	color: var(--theme--primary, #1d4ed8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	color: var(--d1-accent, var(--theme--primary, #1d4ed8)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .muted { color: var(--d1-dim); font-family: inherit; font-weight: 400; }
 
@@ -312,7 +312,7 @@ export default { inheritAttrs: false };
 .done { text-align: center; padding: 48px 24px; }
 .done-ic { --v-icon-size: 56px; --v-icon-color: var(--theme--success); }
 .done h2 { margin: 12px 0 4px; font-size: var(--fs-xl); }
-.done .code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; font-size: var(--fs-xl); color: var(--theme--primary, #1d4ed8); margin: 0 0 24px; }
+.done .code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; font-size: var(--fs-xl); color: var(--d1-accent, var(--theme--primary, #1d4ed8)); margin: 0 0 24px; }
 .done .hidden-note { margin: 0 0 24px; color: var(--d1-warn); }
 .done-actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
 

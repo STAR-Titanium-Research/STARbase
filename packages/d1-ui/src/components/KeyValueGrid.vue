@@ -76,6 +76,6 @@ dd {
 }
 .mono { font-family: var(--theme--fonts--monospace--font-family, monospace); }
 .unit { margin-left: 4px; font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim, var(--theme--foreground-subdued)); }
-.link { color: var(--theme--primary); text-decoration: none; }
+.link { color: var(--d1-accent, var(--theme--primary)); text-decoration: none; }
 .link:hover { text-decoration: underline; }
 </style>

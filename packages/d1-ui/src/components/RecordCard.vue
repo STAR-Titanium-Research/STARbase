@@ -37,7 +37,7 @@ defineProps<{ to?: string | null; code: string; name?: string | null; raised?: b
 	box-shadow: var(--d1-shadow, none);
 }
 .link { transition: border-color 0.12s ease; }
-.link:hover { border-color: var(--theme--primary); }
+.link:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
 .code {
 	margin-right: auto;
@@ -56,8 +56,8 @@ defineProps<{ to?: string | null; code: string; name?: string | null; raised?: b
 	padding: 1px 8px;
 	border-radius: 99px;
 	white-space: nowrap;
-	color: var(--theme--primary);
-	background: color-mix(in srgb, var(--theme--primary) 12%, transparent);
+	color: var(--d1-accent, var(--theme--primary));
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent);
 }
 .d1-card :deep(.d1-counts) { display: flex; flex-wrap: wrap; gap: 0 14px; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .d1-card :deep(.d1-counts b) { font-size: var(--fs-md, 13px); font-variant-numeric: tabular-nums; color: var(--theme--foreground); }
