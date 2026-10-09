@@ -1,9 +1,3 @@
-| G1 | Lineage graph rebuilt on a modern open-source graph library; retire `d1-lab-dashboard` | to do | to do | design not started |
-| N1 | Explorer navigation of its own, and index pages, so every page is reachable without the Data Studio (the Explorer is to become a standalone web app) | to do | to do | new 2026-10-09; design not started |
-| U1 | Per-user "frequently used" panel on Home | to do | to do | stored on the server, per user; what it ranks still to settle; design not started |
-| A1 | "Who has access" view on each record page | to do | to do | direction given (see the answers below); design not started |
-| L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | spec drafted (`docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md`); three of its four questions answered; waiting on counts (mockup `layout-counts.html` shown) and the approval of the spec |
-| F2 | Restore the lost field metadata (fix for D1), as migration `20261009000143_restore_inline_param_field_meta.sql` | `agent-fieldmeta` | `fix/restore-inline-param-meta` (from `e100e65d`) | **approved by the maintainer**; a worker is writing the migration and its regression test; then Opus review; then the coordinator backs up `directus_fields` / `directus_relations`, applies it and restarts Directus |
 # Explorer pages, round 2: fixes, then layout, access, frequently used and lineage graph
 
 Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree each
@@ -31,11 +25,12 @@ Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree
 | F0 | Print labels: rebuild `d1-report` (its build predated the `/labels` route) | main checkout | none (build only) | done 2026-10-09, `/d1-report/labels` renders |
 | F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | **merged** into `feat/explorer-restyle` (`eeb2594b`) after two Opus reviews (no blocking findings left; 296 kit tests). Live in the main checkout except the last four commits, which are built and load at the next Directus restart |
 | D1 | Root cause of the broken "Log an operation" form (read-only) | none | none | done 2026-10-09: see "Root cause of the broken forms" |
-| F2 | Restore the lost field metadata (fix for D1), as a migration | to do | to do | dry-run clean; waiting for the maintainer's approval |
-| L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | direction chosen (option C); spec to write, then the maintainer's review |
-| A1 | "Who has access" view on each record page | to do | to do | design not started |
-| U1 | Per-user "frequently used" panel on Home | to do | to do | design not started |
+| F2 | Restore the lost field metadata (fix for D1), as migration `20261009000143_restore_inline_param_field_meta.sql` | `agent-fieldmeta` | `fix/restore-inline-param-meta` (from `e100e65d`) | **approved by the maintainer**; a worker is writing the migration and its regression test; then Opus review; then the coordinator backs up `directus_fields` / `directus_relations`, applies it and restarts Directus |
+| L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | spec drafted (`docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md`); three of its four questions answered; waiting on counts (mockup `layout-counts.html` shown) and the approval of the spec |
+| A1 | "Who has access" view on each record page | to do | to do | direction given (see the answers below); design not started |
+| U1 | Per-user "frequently used" panel on Home | to do | to do | stored on the server, per user; what it ranks still to settle; design not started |
 | G1 | Lineage graph rebuilt on a modern open-source graph library; retire `d1-lab-dashboard` | to do | to do | design not started |
+| N1 | Explorer navigation of its own, and index pages, so every page is reachable without the Data Studio (the Explorer is to become a standalone web app) | to do | to do | new 2026-10-09; design not started |
 
 ## Decisions so far (maintainer, 2026-10-09)
 
