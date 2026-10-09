@@ -685,11 +685,16 @@ migration 141 prints about ownerless records.
   life strip it is the card's label in the normal font (a pass code, a sample code and a lot code
   stay monospace; a test's type does not) with no `#27` line under it, while an operation with a
   pass code keeps its `#27` line. In the campaign matrix an uncoded operation that has a step is
-  in the column headed `#27` (shared with the same step of other samples), and hovering its cell
-  reads `10-AA-MF-2023-3-31 · step 27: <state>` once, not with the sample twice; an uncoded one
-  without a step has a column of its own, even when several samples have one. In the campaign's
-  operation picker, typing a sample code (or part of one) finds its uncoded operations, and
-  typing a pass code still finds coded ones. Since: Explorer fixes F1, not yet in a PR.
+  in the column headed `#27`, which other samples' operations share only when they have the same
+  step and the same process category (a machining and a heat-treatment step 27 get two columns).
+  Hovering its cell shows `10-AA-MF-2023-3-31 · step 27` on the first line, with the sample named
+  once, and `Force analysis: <state>` on the next (a TEST cell is the one-line
+  `<sample> · <test type>: <state>`); an uncoded one without a step has a column of its own, even
+  when several samples have one. In the campaign's operation picker, typing a sample code (or part
+  of one) finds its uncoded operations, and typing a pass code still finds coded ones. Run the
+  picker check as a Lab Member as well as an admin: the search is a relational filter on
+  `sample_id.sample_code`, which a member's permissions can break. Since: Explorer fixes F1,
+  not yet in a PR.
 - [ ] **Explorer fixes F1 — an uncoded operation whose input sample you cannot see.** As a member
   who can read an operation but not its input sample (the operation is in your project or
   campaign, the input sample belongs to someone else and is outside your projects), open it.
@@ -697,12 +702,18 @@ migration 141 prints about ownerless records.
   give for it, never `<the output sample's code> · step N` (the step is numbered on the input
   sample); the Samples section marks the input sample as not visible to you.
   For an uncoded operation with no input sample at all and a visible output sample, the heading
-  reads `Operation on <output code>` with no step. Since: Explorer fixes F1, not yet in a PR.
+  reads `Operation on <output code>` with no step. No such record exists in the lab database, so
+  create one first: in the Data Studio add a `manufacturing_operations` record with a step number,
+  an Output sample, no Sample (input) and no pass code, then open it. Edit it (change the notes)
+  and save: the heading and tab title stay `Operation on <output code>` throughout, they do not
+  switch to `Uncoded operation · step N` and back. With the Output sample cleared as well, the
+  heading reads `Uncoded operation · step N`, as the lists do. Since: Explorer fixes F1, not yet
+  in a PR.
 - [ ] **Explorer fixes F1 — Projects count in "At a glance".** On Home, the strip has a Projects
   tile between Tests and Campaigns, with a number, not a dash. Expect: as an admin it is every
   project, as a member the number of projects you can read;
-  the tile opens the Projects collection in the Data Studio. Since: Explorer fixes F1, not yet in
-  a PR.
+  the tile opens the Explorer's Projects index (`/admin/home/projects`), not the Projects
+  collection in the Data Studio. Since: Explorer fixes F1, not yet in a PR.
 - [ ] **Explorer fixes F1 — Test page result tables.** Open a test session with processed results
   that have a list of records ("Channels", "Top frequencies"). Expect: each table is only as wide
   as its columns (not the whole page), the first column left-aligned and every other column,
@@ -726,9 +737,12 @@ migration 141 prints about ownerless records.
   maintainer's decision of 2026-10-09 Ask the database is hidden from Home for now, so on this
   install it has no entry in the UI at all (its module is off in the module bar), and the
   Dashboards module is being retired (its lineage graph is to be rebuilt). Expect: Home's quick
-  actions show no tile for either; the lab dashboard is reachable only from a Sample page's "Open
-  lineage graph" until it is replaced. Check that link still opens the graph for the sample.
-  Since: Explorer fixes F1, not yet in a PR.
+  actions show no tile for either; on this install the lab dashboard is reachable only from a
+  Sample page's "Open lineage graph" until it is replaced (its module bar has `d1-lab-dashboard`
+  and `ask-db` disabled). A fresh install differs: `scripts/configure_directus.sql` enables
+  `d1-lab-dashboard` in the module bar, so there it is also in the bar; do not fail this item for
+  that. Check that the link still opens the graph for the sample. Since: Explorer fixes F1, not
+  yet in a PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
