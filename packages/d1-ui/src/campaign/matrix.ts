@@ -6,7 +6,8 @@
 //   - an operation with an `operation_sequence` shares a column with the operations of the same
 //     sequence and process category on the other samples (the sequence is per sample, so "step 3
 //     of machining" lines up across the rows);
-//   - an operation without a sequence gets a column of its own, labelled with its pass_code (else its sample and step, see operationLabel);
+//   - an operation without a sequence gets a column of its own, labelled by operationLabel (its
+//     pass_code, else its sample);
 //   - tests share a column per test_type.
 // A sample with nothing in a column has no cell (the matrix is sparse on purpose).
 //
@@ -24,7 +25,7 @@ export type CellKind = 'operation' | 'test';
 export interface MatrixColumn {
 	key: string;
 	kind: CellKind;
-	/** Short heading: "#3", the pass_code, or the test type. */
+	/** Short heading: "#3", the operation's label (operationLabel), or the test type. */
 	label: string;
 	/** Second line: the process category (operations) or nothing. */
 	sub: string;
@@ -47,7 +48,7 @@ export interface MatrixCell {
 	/** The record a click opens: the worst operation or test in the cell. */
 	collection: 'manufacturing_operations' | 'test_sessions';
 	id: string;
-	/** Name of that record (pass_code or test type), for the tooltip. */
+	/** Name of that record (operationLabel or test type), for the tooltip. */
 	name: string;
 }
 
