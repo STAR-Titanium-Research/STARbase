@@ -6,8 +6,9 @@
 //   - an operation with an `operation_sequence` shares a column with the operations of the same
 //     sequence and process category on the other samples (the sequence is per sample, so "step 3
 //     of machining" lines up across the rows);
-//   - an operation without a sequence gets a column of its own, labelled by operationLabel (its
-//     pass_code, else its sample);
+//   - an operation without a sequence shares a column only with others of the same (non-blank)
+//     pass_code; without one it gets a column of its own, keyed by operation_id and labelled by
+//     operationLabel;
 //   - tests share a column per test_type.
 // A sample with nothing in a column has no cell (the matrix is sparse on purpose).
 //
@@ -17,7 +18,7 @@
 // session status of the tests in it (failed first, processed / analysed last).
 
 import { TEST_RANK } from '../status';
-import { operationLabel } from '../operationLabel';
+import { hasPassCode, operationLabel } from '../operationLabel';
 import { analysisState, diagState, hiddenSampleCount, relCode, relId } from './rollup';
 
 export type CellKind = 'operation' | 'test';
@@ -130,7 +131,7 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 		}
 		const seq = typeof o.operation_sequence === 'number' ? o.operation_sequence : null;
 		const category = o.process_category ?? '';
-		const key = seq !== null ? `op:${seq}:${category}` : `op:code:${o.pass_code ?? o.operation_id}`;
+		const key = seq !== null ? `op:${seq}:${category}` : `op:code:${hasPassCode(o) ? o.pass_code.trim() : o.operation_id}`;
 		if (!columns.has(key)) {
 			columns.set(key, {
 				key,

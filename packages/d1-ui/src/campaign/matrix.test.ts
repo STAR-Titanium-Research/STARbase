@@ -98,6 +98,24 @@ describe('buildMatrix columns', () => {
 		expect(m.rows[0].cells[m.columns[0].key].name).toBe('Operation on 9-A-1');
 	});
 
+	it('gives operations with an empty or blank pass code and no sequence a column each', () => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }, { sample_id: S2 }],
+			operations: [op('o1', S1, { pass_code: '' }), op('o2', S2, { pass_code: '' })],
+		});
+		expect(m.columns.map((c) => c.label)).toEqual(['Operation on 9-A-1', 'Operation on 9-A-2']);
+		expect(Object.keys(m.rows[0].cells)).toHaveLength(1);
+		expect(Object.keys(m.rows[1].cells)).toHaveLength(1);
+	});
+
+	it('still shares one column between samples for the same pass code', () => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }, { sample_id: S2 }],
+			operations: [op('o1', S1, { pass_code: 'SHARED' }), op('o2', S2, { pass_code: ' SHARED ' })],
+		});
+		expect(m.columns.map((c) => c.label)).toEqual(['SHARED']);
+	});
+
 	it('names the cell of an uncoded numbered operation by its sample and step', () => {
 		const m = buildMatrix({
 			samples: [{ sample_id: S1 }],
