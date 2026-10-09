@@ -700,6 +700,13 @@ migration 141 prints about ownerless records.
   few overview values and many parameters, and a Campaign with a short sample list beside a long
   test list. Expect: each panel is only as tall as its content, the shorter one ends early with
   the page background under it, not a half-empty panel. Since: Explorer fixes F1, not yet in a PR.
+- [ ] **Explorer fixes F1 — Ask the database and Dashboards have no entry on Home.** By the
+  maintainer's decision of 2026-10-09 Ask the database is hidden from Home for now, so on this
+  install it has no entry in the UI at all (its module is off in the module bar), and the
+  Dashboards module is being retired (its lineage graph is to be rebuilt). Expect: Home's quick
+  actions show no tile for either; the lab dashboard is reachable only from a Sample page's "Open
+  lineage graph" until it is replaced. Check that link still opens the graph for the sample.
+  Since: Explorer fixes F1, not yet in a PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

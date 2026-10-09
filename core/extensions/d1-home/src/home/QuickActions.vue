@@ -3,8 +3,8 @@ import { useRouter } from 'vue-router';
 import { go } from './goto';
 
 // The things a researcher does every day, as big buttons; the "More" row holds the other Explorer
-// pages and analysis tools. Ask the database and Dashboards are not tiles here: like every other
-// module they are reached from the module bar.
+// pages and analysis tools. There is no tile for Ask the database (hidden for now, by decision on
+// 2026-10-09) or for the Dashboards module (being retired; its lineage graph is to be rebuilt).
 interface Action { label: string; sub: string; icon: string; to: string; }
 const main: Action[] = [
 	{ label: 'Register a sample', sub: 'Add a new physical sample', icon: 'add_circle', to: '/content/physical_samples/+' },
