@@ -111,7 +111,7 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 			<LoadState :loading="list.loading" :error="list.error">
 				<ul class="items">
 					<li v-for="i in list.items" :key="i.id">
-						<router-link :to="i.to" class="i-title">{{ i.title }}</router-link>
+						<router-link :to="i.to" class="i-title" :class="{ plain: i.plain }">{{ i.title }}</router-link>
 						<span v-if="i.sub" class="i-sub">{{ i.sub }}</span>
 					</li>
 				</ul>
@@ -149,6 +149,7 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 .items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .items li { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
 .i-title { color: var(--theme--primary); font-weight: 650; text-decoration: none; overflow-wrap: anywhere; font-family: var(--theme--fonts--monospace--font-family, monospace); }
+.i-title.plain { font-family: inherit; }
 .i-title:hover { text-decoration: underline; }
 .i-sub { font-size: var(--fs-sm); color: var(--d1-dim); }
 .more { margin-top: 10px; }

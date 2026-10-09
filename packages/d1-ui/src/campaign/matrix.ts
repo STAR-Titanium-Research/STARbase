@@ -6,7 +6,7 @@
 //   - an operation with an `operation_sequence` shares a column with the operations of the same
 //     sequence and process category on the other samples (the sequence is per sample, so "step 3
 //     of machining" lines up across the rows);
-//   - an operation without a sequence gets a column of its own, labelled with its pass_code;
+//   - an operation without a sequence gets a column of its own, labelled with its pass_code (else its sample and step, see operationLabel);
 //   - tests share a column per test_type.
 // A sample with nothing in a column has no cell (the matrix is sparse on purpose).
 //
@@ -16,6 +16,7 @@
 // session status of the tests in it (failed first, processed / analysed last).
 
 import { TEST_RANK } from '../status';
+import { operationLabel } from '../operationLabel';
 import { analysisState, diagState, hiddenSampleCount, relCode, relId } from './rollup';
 
 export type CellKind = 'operation' | 'test';
@@ -133,7 +134,7 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 			columns.set(key, {
 				key,
 				kind: 'operation',
-				label: seq !== null ? `#${seq}` : (o.pass_code ?? 'Operation'),
+				label: seq !== null ? `#${seq}` : operationLabel(o),
 				sub: String(category).replace(/_/g, ' '),
 				sequence: seq,
 			});
@@ -161,7 +162,7 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 				count: refs.length,
 				collection: 'manufacturing_operations',
 				id: lead.operation.operation_id,
-				name: lead.operation.pass_code ?? 'Operation',
+				name: operationLabel(lead.operation),
 			};
 		}
 	}

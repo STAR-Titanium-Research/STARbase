@@ -2,7 +2,7 @@
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, asRecord, dataStudioRoute,
-	formatDate, formatQuantity, processLabel, type KeyValue,
+	formatDate, formatQuantity, hasPassCode, operationLabel, processLabel, type KeyValue,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
 import OperationSamples from './operation/OperationSamples.vue';
@@ -26,11 +26,13 @@ function onSaved() {
 }
 
 const op = computed(() => operation.value);
-const code = computed(() => op.value?.pass_code || 'Operation');
 const studioTo = computed(() => dataStudioRoute('manufacturing_operations', props.id));
 const project = computed(() => asRecord(op.value?.project_id));
 const campaign = computed(() => asRecord(op.value?.campaign_id));
 const sample = computed(() => asRecord(op.value?.sample_id) ?? asRecord(op.value?.output_sample_id));
+// The pass code, else the sample and step (the output sample when there is no input one).
+const code = computed(() => operationLabel(op.value, sample.value?.sample_code));
+const isCode = computed(() => hasPassCode(op.value));
 const operatorText = computed(() => asRecord(op.value?.operator_person_id)?.full_name || op.value?.operator_name || '');
 
 const overview = computed<KeyValue[]>(() => {
@@ -54,7 +56,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 </script>
 
 <template>
-	<private-view :title="op?.pass_code ? `Operation ${op.pass_code}` : 'Operation'">
+	<private-view :title="op ? (isCode ? `Operation ${code}` : code) : 'Operation'">
 		<PageShell>
 			<LoadState v-if="loading && !op" loading loading-text="Loading operation…" />
 
@@ -63,7 +65,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 			<LoadState v-else-if="error" :error="error" />
 
 			<template v-else-if="op">
-				<RecordHeader :code="code" :title="processLabel(op.process_category)" kind="Operation" icon="precision_manufacturing">
+				<RecordHeader :code="code" :plain="!isCode" :title="processLabel(op.process_category)" kind="Operation" icon="precision_manufacturing">
 					<template #crumbs>
 						<router-link to="/home">Home</router-link>
 						<template v-if="project">

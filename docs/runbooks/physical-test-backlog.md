@@ -672,6 +672,15 @@ migration 141 prints about ownerless records.
   three panels in one row (stacked on a narrow window), each holding cards with the code, a tag at
   the right, the name and one line of meta. Only the empty state was seen on 2026-10-09 (admin
   account). Since: Explorer restyle, not yet in a PR.
+- [ ] **Explorer fixes F1 — an operation without a pass code.** Find an operation whose pass code
+  is empty (Data Studio: `manufacturing_operations` filtered `pass_code` is empty) and open
+  `/admin/home/operations/<id>`. Expect: the heading reads like `10-AA-MF-2023-3-31 · step 27` (its
+  sample and step) in the normal font, not monospace; the tab title is the same text; nothing
+  says just "Operation" as if it were a code. The same label is the link text in the Sample
+  page's Operations table, the Project page's "Operations not in a campaign", Home's Recent
+  activity and Needs attention, the sample's life strip, and the campaign page's Operations list
+  and picker; in the campaign matrix a column or cell for it is named the same way. Since:
+  Explorer fixes F1, not yet in a PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

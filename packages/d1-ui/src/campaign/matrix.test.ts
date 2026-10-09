@@ -89,6 +89,24 @@ describe('buildMatrix columns', () => {
 		expect(m.columns.map((c) => c.label)).toEqual(['#5', 'A-pass', 'B-pass']);
 	});
 
+	it('names an operation with neither a sequence nor a pass code by its sample, never by a bare "Operation"', () => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }],
+			operations: [op('o1', S1, { pass_code: null })],
+		});
+		expect(m.columns.map((c) => c.label)).toEqual(['Operation on 9-A-1']);
+		expect(m.rows[0].cells[m.columns[0].key].name).toBe('Operation on 9-A-1');
+	});
+
+	it('names the cell of an uncoded numbered operation by its sample and step', () => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }],
+			operations: [op('o1', S1, { pass_code: null, operation_sequence: 27 })],
+		});
+		expect(m.columns.map((c) => c.label)).toEqual(['#27']);
+		expect(m.rows[0].cells[m.columns[0].key].name).toBe('9-A-1 · step 27');
+	});
+
 	it('does not merge the same sequence of different process categories', () => {
 		const m = buildMatrix({
 			samples: [{ sample_id: S1 }, { sample_id: S2 }],

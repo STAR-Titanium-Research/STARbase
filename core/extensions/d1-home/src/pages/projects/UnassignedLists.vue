@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, collectionRoute, formatDate, processLabel, type SectionState,
+	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, collectionRoute, formatDate, hasPassCode, operationLabel, processLabel, type SectionState,
 } from '@d1/ui';
 
 // "Not in a campaign": records that carry this project but no campaign. Three short lists, each
@@ -40,7 +40,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 				<thead><tr><th>Pass</th><th>Process</th><th>Sample</th><th>Date</th></tr></thead>
 				<tbody>
 					<tr v-for="o in opRows" :key="o.operation_id">
-						<td><RecordLink collection="manufacturing_operations" :id="o.operation_id" class="mono">{{ o.pass_code || 'Operation' }}</RecordLink></td>
+						<td><RecordLink collection="manufacturing_operations" :id="o.operation_id" :class="{ mono: hasPassCode(o) }">{{ operationLabel(o) }}</RecordLink></td>
 						<td>{{ processLabel(o.process_category) }}</td>
 						<td>{{ o.sample_id?.sample_code ?? '' }}</td>
 						<td :class="{ dim: !o.operation_date }">{{ formatDate(o.operation_date, 'undated') }}</td>

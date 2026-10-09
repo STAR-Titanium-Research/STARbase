@@ -64,4 +64,6 @@ const search = defineModel<string>({ default: '' });
 .results :deep(.pick:disabled) { opacity: 0.6; cursor: default; }
 .results :deep(.pick .sub) { margin-left: auto; margin-right: 6px; font-size: var(--fs-xs, 11px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .results :deep(.pick .code) { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 650; }
+/* A label that describes the record (an operation without a pass code) is not a code. */
+.results :deep(.pick .code.plain) { font-family: inherit; }
 </style>

@@ -59,7 +59,13 @@ describe('buildLife', () => {
 			'/home/tests/t1',
 		]);
 		expect(items[0].label).toBe('Stock lot');
-		expect(items[3].label).toBe('—');
+		expect(items[3].label).toBe('Operation on 12-AA-FAST');
+	});
+
+	it('labels an operation without a pass code by the sample and step, not by a bare word', () => {
+		const t = base();
+		t.events = [{ type: 'manufacturing_operation', collection: 'manufacturing_operations', id: 'o1', date: null, label: null, sequence: 27, status: null }];
+		expect(buildLife(t).map((i) => i.label)).toEqual(['12-AA-FAST', '12-AA-FAST · step 27']);
 	});
 
 	it('describes stock, relationships and test status on the second line', () => {

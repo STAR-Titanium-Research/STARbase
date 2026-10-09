@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, analysisLink, collectionRoute, formatDate, processLabel, type SectionState,
+	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, analysisLink, collectionRoute, formatDate, hasPassCode, operationLabel, processLabel, type SectionState,
 } from '@d1/ui';
 
 // The sample's operations and tests as tables: each row links to its page, tests carry their
@@ -24,7 +24,7 @@ const testsCapped = computed(() => props.tests.data.length > LIST_CAP);
 				<tbody>
 					<tr v-for="o in ops" :key="o.operation_id">
 						<td class="fit dim num">{{ o.operation_sequence ?? '' }}</td>
-						<td><RecordLink collection="manufacturing_operations" :id="o.operation_id" class="mono">{{ o.pass_code || 'Operation' }}</RecordLink></td>
+						<td><RecordLink collection="manufacturing_operations" :id="o.operation_id" :class="{ mono: hasPassCode(o) }">{{ operationLabel(o) }}</RecordLink></td>
 						<td>{{ processLabel(o.process_category) }}</td>
 						<td>{{ o.method_id?.method_name ?? '' }}</td>
 						<td :class="{ dim: !o.operation_date }">{{ formatDate(o.operation_date, 'undated') }}</td>
