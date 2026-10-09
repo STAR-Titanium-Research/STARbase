@@ -33,6 +33,10 @@ const sample = computed(() => asRecord(op.value?.sample_id) ?? asRecord(op.value
 // The pass code, else the sample and step (the output sample when there is no input one).
 const code = computed(() => operationLabel(op.value, sample.value?.sample_code));
 const isCode = computed(() => hasPassCode(op.value));
+const pageTitle = computed(() => {
+	if (!op.value) return 'Operation';
+	return isCode.value ? `Operation ${code.value}` : code.value;
+});
 const operatorText = computed(() => asRecord(op.value?.operator_person_id)?.full_name || op.value?.operator_name || '');
 
 const overview = computed<KeyValue[]>(() => {
@@ -56,7 +60,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 </script>
 
 <template>
-	<private-view :title="op ? (isCode ? `Operation ${code}` : code) : 'Operation'">
+	<private-view :title="pageTitle">
 		<PageShell>
 			<LoadState v-if="loading && !op" loading loading-text="Loading operation…" />
 
