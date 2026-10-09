@@ -26,10 +26,10 @@ const pending = computed(
 			<KeyValueGrid :items="g.entries.map((e) => ({ label: e.label, value: e.value, unit: e.unit }))" />
 			<div v-for="t in g.tables" :key="t.label" class="table-wrap">
 				<h4>{{ t.label }}</h4>
-				<DataTable dense class="figures">
+				<DataTable dense fit-content figures>
 					<thead><tr><th v-for="c in t.columns" :key="c">{{ c }}</th></tr></thead>
 					<tbody>
-						<tr v-for="(row, i) in t.rows" :key="i"><td v-for="(cell, j) in row" :key="j" class="num">{{ cell }}</td></tr>
+						<tr v-for="(row, i) in t.rows" :key="i"><td v-for="(cell, j) in row" :key="j">{{ cell }}</td></tr>
 					</tbody>
 				</DataTable>
 				<p v-if="t.more" class="d1-note more">{{ t.more }} more rows are not shown.</p>
@@ -42,8 +42,5 @@ const pending = computed(
 .group + .group { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--d1-line); }
 h3 { margin: 0 0 8px; font-size: var(--fs-sm); font-weight: 650; letter-spacing: 0.01em; color: var(--d1-dim); }
 h4 { margin: 12px 0 4px; font-size: var(--fs-md); font-weight: 650; }
-/* Figures: right-aligned under their heads, the first column (the row's name) left. */
-.figures :deep(th) { text-align: right; }
-.figures :deep(th:first-child), .figures :deep(td:first-child) { text-align: left; }
 .more { margin-top: 6px; }
 </style>

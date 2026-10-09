@@ -681,6 +681,12 @@ migration 141 prints about ownerless records.
   activity and Needs attention, the sample's life strip, and the campaign page's Operations list
   and picker; in the campaign matrix a column or cell for it is named the same way. Since:
   Explorer fixes F1, not yet in a PR.
+- [ ] **Explorer fixes F1 — Test page result tables.** Open a test session with processed results
+  that have a list of records ("Channels", "Top frequencies"). Expect: each table is only as wide
+  as its columns (not the whole page), the first column left-aligned and every other column,
+  heads included, right-aligned over its figures. Other tables (Sample page Operations, Home
+  Recent activity) are still full width with left-aligned heads. Since: Explorer fixes F1, not yet
+  in a PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
