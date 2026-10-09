@@ -98,10 +98,10 @@ describe('buildMatrix columns', () => {
 		expect(m.rows[0].cells[m.columns[0].key].name).toBe('Operation on 9-A-1');
 	});
 
-	it('gives operations with an empty or blank pass code and no sequence a column each', () => {
+	it.each([['empty', ''], ['whitespace-only', '  ']])('gives operations with an %s pass code and no sequence a column each', (_name, pass_code) => {
 		const m = buildMatrix({
 			samples: [{ sample_id: S1 }, { sample_id: S2 }],
-			operations: [op('o1', S1, { pass_code: '' }), op('o2', S2, { pass_code: '' })],
+			operations: [op('o1', S1, { pass_code }), op('o2', S2, { pass_code })],
 		});
 		expect(m.columns.map((c) => c.label)).toEqual(['Operation on 9-A-1', 'Operation on 9-A-2']);
 		expect(Object.keys(m.rows[0].cells)).toHaveLength(1);
