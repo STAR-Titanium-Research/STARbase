@@ -3,28 +3,26 @@
 Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree each
 (`.claude/worktrees/agent-*`). Reviewer: Opus, read-only, before any merge.
 
-## Resume here (written 2026-10-09 when the session ran out)
+## Resume here (updated 2026-10-09, second session)
 
 Read this section first, then the Status table. Nothing is pushed anywhere.
 
-**In flight when the session ended**
-- **F2, the form fix.** A Sonnet worker was writing migration
-  `20261009000143_restore_inline_param_field_meta.sql` and its regression test in worktree
-  `.claude/worktrees/agent-fieldmeta` (branch `fix/restore-inline-param-meta`). It commits after
-  each piece and was told NOT to apply anything. Check `git -C .claude/worktrees/agent-fieldmeta
-  log --oneline e100e65d..HEAD` and `status --short`. If it did not finish, relaunch a Sonnet
-  worker on that worktree with the same brief (the brief is in this plan's "Root cause of the
-  broken forms" section plus: idempotent, touch only rows it owns, do not revert migration 126's
-  `d1-owner-picker`, add the checks to `tests/phase1_schema.sh`, dry-run inside BEGIN / ROLLBACK
-  only).
-  Then: Opus review (migration-review skill) -> back up `directus_fields` and `directus_relations`
-  (`pg_dump -t`) -> apply the migration to the live database -> `docker restart
-  d1-database-directus-1` -> check `/admin/content/manufacturing_operations/+` shows the parameter
-  fields grouped and conditional, and that an Operation page reads "Cutting speed 1,932.1 m/min".
-  **The maintainer has approved applying it.** Never run `configure_all.sh` or
-  `configure_directus.sql` on the live database.
-- **The last four F1 fixes are built in the main checkout but not loaded.** They load at the next
-  Directus restart (the one F2 needs).
+**Done in the second session (2026-10-09 evening)**
+- **F2 applied to the live database.** The worker's three commits, plus one review-fix commit
+  (`21790784`: drop 143's ledger table before 141's down test, which would otherwise fail on CI;
+  cite `20261001000126_owner_picker_fields.sql` by name). Opus review: safe to apply; the
+  `directus_relations` row for `source_recipe_id` -> `prep_recipes` went beyond the brief and the
+  maintainer approved keeping it. Backup: `backups/pre_fieldmeta_143_20261009T181458Z.dump`
+  (`pg_dump -Fc -t directus_fields -t directus_relations`). Applied with dbmate (only 143 was
+  pending): `directus_fields` 594 -> 714, `manufacturing_operations` rows 44 -> 103,
+  `test_sessions` 108 -> 168, relations 115 -> 116, owner-picker rows unchanged (9). Redis was
+  empty, so nothing to flush; Directus restarted. Checked live: the create form shows no
+  ungrouped parameters and no "Unexpected Error"; choosing FAST/SPS Sintering shows the Sintering
+  machine and QA groups with units; the Operation page reads "Cutting Speed Vc 1,932.1 m/min".
+  The migration file was copied into the main checkout's `db/migrations` (untracked, next to the
+  other live-only migrations 126, 0001, 141, 142). Branch `fix/restore-inline-param-meta` is not
+  merged or pushed.
+- The restart also loaded the last four F1 fixes.
 
 **Next, in the order the maintainer agreed**
 1. **N1: navigation and simple index pages.** Design first (brainstorming -> spec -> the
@@ -71,9 +69,9 @@ Read this section first, then the Status table. Nothing is pushed anywhere.
 |---|---|---|---|---|
 | R0 | Restyle (PageShell, tokens, Section, DataTable, RecordCard) | `explorer-restyle` | `feat/explorer-restyle` | committed `ee5b989e`, live in main checkout, not reviewed |
 | F0 | Print labels: rebuild `d1-report` (its build predated the `/labels` route) | main checkout | none (build only) | done 2026-10-09, `/d1-report/labels` renders |
-| F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | **merged** into `feat/explorer-restyle` (`eeb2594b`) after two Opus reviews (no blocking findings left; 296 kit tests). Live in the main checkout except the last four commits, which are built and load at the next Directus restart |
+| F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | **merged** into `feat/explorer-restyle` (`eeb2594b`) after two Opus reviews (no blocking findings left; 296 kit tests). Live in the main checkout (the last four loaded at the F2 restart) |
 | D1 | Root cause of the broken "Log an operation" form (read-only) | none | none | done 2026-10-09: see "Root cause of the broken forms" |
-| F2 | Restore the lost field metadata (fix for D1), as migration `20261009000143_restore_inline_param_field_meta.sql` | `agent-fieldmeta` | `fix/restore-inline-param-meta` (from `e100e65d`) | **approved by the maintainer**; a worker is writing the migration and its regression test; then Opus review; then the coordinator backs up `directus_fields` / `directus_relations`, applies it and restarts Directus |
+| F2 | Restore the lost field metadata (fix for D1), as migration `20261009000143_restore_inline_param_field_meta.sql` | `agent-fieldmeta` | `fix/restore-inline-param-meta` (from `e100e65d`) | **applied to the live database 2026-10-09** after Opus review and a backup; form and Operation page checked live (see Resume here) |
 | L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | **spec approved 2026-10-09** (`docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md`). Next: write the implementation plan (superpowers:writing-plans), have the maintainer review it, then workers. Its clickable counts need N1's index pages |
 | A1 | "Who has access" dialog on each record page (Google Drive "Manage members" style); the owner really adds and removes people | to do | to do | direction settled (answers below); depends on the permissions work in progress on `feat/ownership-identity-cleanup`; design not started |
 | U1 | Per-user "frequently used" panel on Home: two short lists, pages and actions, and records | to do | to do | settled: ranks both, stored on the server per user (needs a small table and a migration); design not started |
