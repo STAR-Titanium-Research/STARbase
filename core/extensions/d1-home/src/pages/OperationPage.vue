@@ -2,7 +2,7 @@
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, asRecord, dataStudioRoute,
-	formatDate, formatQuantity, hasPassCode, operationLabel, processLabel, type KeyValue,
+	formatDate, formatQuantity, hasPassCode, operationHeading, processLabel, type KeyValue,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
 import OperationSamples from './operation/OperationSamples.vue';
@@ -30,8 +30,12 @@ const studioTo = computed(() => dataStudioRoute('manufacturing_operations', prop
 const project = computed(() => asRecord(op.value?.project_id));
 const campaign = computed(() => asRecord(op.value?.campaign_id));
 const sample = computed(() => asRecord(op.value?.sample_id) ?? asRecord(op.value?.output_sample_id));
-// The pass code, else the sample and step (the output sample when there is no input one).
-const code = computed(() => operationLabel(op.value, sample.value?.sample_code));
+// The pass code, else what the lists call it (input sample and step). The output sample names it
+// only when no input is linked at all, and then without a step: the step belongs to the input
+// sample. Until the hidden-link read is back, a null input may still be a hidden one.
+const code = computed(() => operationHeading(
+	op.value, asRecord(op.value?.output_sample_id)?.sample_code, hidden.value.loading || !!hidden.value.data.sample_id,
+));
 const isCode = computed(() => hasPassCode(op.value));
 const pageTitle = computed(() => {
 	if (!op.value) return 'Operation';

@@ -40,3 +40,15 @@ export function operationLabel(op: OperationLabelInput | null | undefined, sampl
 	if (step) return `Uncoded operation · ${step}`;
 	return 'Uncoded operation';
 }
+
+/**
+ * The Operation page's heading. `operation_sequence` numbers the steps of the INPUT sample, so a
+ * step is never printed next to the output sample's code. The pass code, else the list label
+ * (`operationLabel`) whenever the operation has an input-sample link, hidden or not; only when it
+ * has none at all does the output sample name it, as `Operation on <code>` (no step).
+ * `inputHidden` is also true while the page does not yet know whether a null input is hidden.
+ */
+export function operationHeading(op: OperationLabelInput | null | undefined, outputSampleCode: string | null | undefined, inputHidden: boolean): string {
+	if (hasPassCode(op) || inputHidden || (op?.sample_id !== null && op?.sample_id !== undefined)) return operationLabel(op);
+	return operationLabel({ sample_id: null }, outputSampleCode);
+}

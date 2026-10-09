@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasPassCode, operationLabel } from './operationLabel';
+import { hasPassCode, operationHeading, operationLabel } from './operationLabel';
 
 describe('operationLabel', () => {
 	it('is the pass code when there is one', () => {
@@ -56,5 +56,34 @@ describe('hasPassCode', () => {
 		expect(hasPassCode({ pass_code: null })).toBe(false);
 		expect(hasPassCode({})).toBe(false);
 		expect(hasPassCode(null)).toBe(false);
+	});
+});
+
+describe('operationHeading', () => {
+	const step = { pass_code: null, operation_sequence: 5 };
+
+	it('is the pass code whatever the samples are', () => {
+		expect(operationHeading({ pass_code: 'X-F1', operation_sequence: 5 }, 'OUT', true)).toBe('X-F1');
+		expect(operationHeading({ pass_code: 'X-F1', operation_sequence: 5 }, 'OUT', false)).toBe('X-F1');
+	});
+
+	it('names the input sample and step when the input is visible', () => {
+		expect(operationHeading({ ...step, sample_id: { sample_code: 'IN' } }, 'OUT', false)).toBe('IN · step 5');
+	});
+
+	it('gives the list label when the input is hidden, never the output sample with the input step', () => {
+		const op = { ...step, sample_id: null };
+		expect(operationHeading(op, 'OUT', true)).toBe('Uncoded operation · step 5');
+		expect(operationHeading(op, 'OUT', true)).toBe(operationLabel(op));
+	});
+
+	it('uses the output sample, without a step, only when there is no input link at all', () => {
+		expect(operationHeading({ ...step, sample_id: null }, 'OUT', false)).toBe('Operation on OUT');
+		expect(operationHeading({ ...step, sample_id: undefined }, 'OUT', false)).toBe('Operation on OUT');
+	});
+
+	it('degrades with neither sample', () => {
+		expect(operationHeading({ ...step, sample_id: null }, undefined, true)).toBe('Uncoded operation · step 5');
+		expect(operationHeading({ pass_code: null, sample_id: null }, '', false)).toBe('Uncoded operation');
 	});
 });
