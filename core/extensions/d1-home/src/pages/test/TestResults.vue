@@ -24,7 +24,7 @@ const pending = computed(
 		<div v-for="g in groups" :key="g.key" class="group">
 			<h3>{{ g.title }}</h3>
 			<KeyValueGrid :items="g.entries.map((e) => ({ label: e.label, value: e.value, unit: e.unit }))" />
-			<div v-for="t in g.tables" :key="t.label" class="table-wrap">
+			<div v-for="t in g.tables" :key="t.label">
 				<h4>{{ t.label }}</h4>
 				<DataTable dense fit-content figures>
 					<thead><tr><th v-for="c in t.columns" :key="c">{{ c }}</th></tr></thead>
