@@ -2,15 +2,14 @@
 import { useRouter } from 'vue-router';
 import { go } from './goto';
 
-// The things a researcher does every day, as big buttons; everything else stays one click away in
-// the "More" row, so no page that used to be on Home becomes unreachable.
+// The things a researcher does every day, as big buttons; the "More" row holds the other Explorer
+// pages and analysis tools. Ask the database and Dashboards are not tiles here: like every other
+// module they are reached from the module bar.
 interface Action { label: string; sub: string; icon: string; to: string; }
 const main: Action[] = [
 	{ label: 'Register a sample', sub: 'Add a new physical sample', icon: 'add_circle', to: '/content/physical_samples/+' },
 	{ label: 'Log an operation', sub: 'Record a manufacturing step', icon: 'precision_manufacturing', to: '/content/manufacturing_operations/+' },
-	{ label: 'Ask the database', sub: 'Chat with your data', icon: 'chat', to: '/ask-db' },
 	{ label: 'Print labels', sub: 'Sample labels with QR codes', icon: 'label', to: '/d1-report/labels' },
-	{ label: 'Dashboards', sub: 'Explore trends & graphs', icon: 'analytics', to: '/d1-lab-dashboard' },
 ];
 const more: Action[] = [
 	{ label: 'Projects', sub: 'All projects you can see', icon: 'folder_open', to: '/home/projects' },
