@@ -1,5 +1,6 @@
 /* Tokens of the Explorer pages, set on the page frame (PageShell) and on the campaign workbench,
-   which also renders inside a Data Studio form. The look is the force app's (apps/force-app/web
+   and the helper classes the frame gives every page (.d1-cols, .d1-note, .d1-crumbs; at the end of
+   this file). The workbench also renders inside a Data Studio form. The look is the force app's (apps/force-app/web
    styles.css, record/panels/PanelFrame.vue) carried into Directus: the same type scale and the same
    opaque panel with a lid, but every colour derived from the active Directus theme, so light and
    dark both work.
@@ -60,4 +61,32 @@
 	   as before, the ground colour on the lifted dark accent (6.2:1; white on it would be 3.1:1). */
 	--d1-on-accent: light-dark(#fff, var(--theme--background));
 	--d1-tint: color-mix(in srgb, var(--d1-accent) 10%, transparent);
+}
+
+/* Helper classes the frame gives every page: two columns of blocks, a line of text between blocks,
+   the breadcrumb line. Unscoped and wrapped in :where() so they weigh (0,1,0) (the pseudo-class
+   and variant add only their own): any single-class scoped rule of a page (`.cap[data-v]`, 0,2,0)
+   overrides them. As `.d1-page[data-v] :deep(...)` they weighed (0,3,0) and silently won over every
+   page's own margin. */
+/* Blocks side by side while there is room, stacked when there is not. Each keeps its own height
+   (start, not stretch): stretched to the tallest, a short panel (three values beside ten) was mostly
+   empty. */
+:where(.d1-page, .d1-kit) .d1-cols {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+	gap: 16px;
+	align-items: start;
+}
+:where(.d1-page, .d1-kit) .d1-note { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
+:where(.d1-page, .d1-kit) .d1-note.warn { color: var(--d1-warn); }
+:where(.d1-page, .d1-kit) .d1-note.bad { color: var(--d1-bad); }
+:where(.d1-page, .d1-kit) :is(.d1-note, .d1-crumbs) a { color: var(--d1-accent, var(--theme--primary)); font-weight: 600; text-decoration: none; }
+:where(.d1-page, .d1-kit) :is(.d1-note, .d1-crumbs) a:hover { text-decoration: underline; }
+:where(.d1-page, .d1-kit) .d1-crumbs {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	font-size: var(--fs-sm, 12px);
+	color: var(--d1-dim);
 }
