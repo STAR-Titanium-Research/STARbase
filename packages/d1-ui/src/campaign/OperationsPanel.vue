@@ -84,11 +84,10 @@ async function runSearch() {
 // campaign (campaignAssignPatch). Directus answers a batch update with the rows it changed, so an
 // empty answer means someone got there first. A failed add/remove is shown and leaves the lists as
 // the server has them (we reload either way), instead of an unhandled rejection.
-async function setCampaign(id: string, name: string, campaign: string | null) {
+async function setCampaign(id: string, label: string, campaign: string | null) {
 	if (busy.value) return;
 	busy.value = id;
 	actionError.value = '';
-	const label = name;
 	try {
 		const res = await api.patch('/items/manufacturing_operations', campaignAssignPatch('operation_id', id, props.campaignId, campaign));
 		actionError.value = (await changeOutcomeMessage(api, 'manufacturing_operations', id, res.data?.data, !!campaign, label)) ?? '';
