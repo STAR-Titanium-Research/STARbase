@@ -5,7 +5,7 @@
 // Everything in the response was already filtered through the caller's permissions by the endpoint:
 // what they may not read is only counted (`hidden`), and shows as a "N not visible to you" marker.
 
-import { operationLabel } from './operationLabel';
+import { hasPassCode, operationLabel } from './operationLabel';
 import { recordRoute } from './recordRoute';
 
 export interface TraceResponse {
@@ -134,7 +134,8 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 			key: `${e.type}-${e.id}`,
 			kind: isTest ? 'test' : 'operation',
 			label: isTest ? (e.label ?? '—') : operationLabel({ pass_code: e.label, operation_sequence: e.sequence }, trace.sample.sample_code),
-			sub: isTest ? (e.status ?? '') : e.sequence !== null && e.sequence !== undefined ? `#${e.sequence}` : '',
+			// An operation without a pass code is already labelled with its step.
+			sub: isTest ? (e.status ?? '') : hasPassCode({ pass_code: e.label }) && e.sequence !== null && e.sequence !== undefined ? `#${e.sequence}` : '',
 			date: e.date,
 			to: recordRoute(e.collection, e.id),
 			throughHidden: false,

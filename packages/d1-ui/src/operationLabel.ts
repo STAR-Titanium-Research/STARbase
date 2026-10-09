@@ -52,3 +52,13 @@ export function operationHeading(op: OperationLabelInput | null | undefined, out
 	if (hasPassCode(op) || inputHidden || (op?.sample_id !== null && op?.sample_id !== undefined)) return operationLabel(op);
 	return operationLabel({ sample_id: null }, outputSampleCode);
 }
+
+/**
+ * The second line of an operation in a list: `Sample <code>`, but only for an operation that has a
+ * pass code. Without one the label already names the sample (`<sample> · step n`), so the line
+ * would say it twice.
+ */
+export function operationSampleLine(op: OperationLabelInput | null | undefined): string {
+	const code = sampleCodeOf(op?.sample_id);
+	return hasPassCode(op) && code ? `Sample ${code}` : '';
+}

@@ -120,3 +120,22 @@ describe('truncatedNotes', () => {
 		expect(truncatedNotes({ truncated: {} })).toEqual([]);
 	});
 });
+
+describe('buildLife: operations without a pass code', () => {
+	const ev = (label: string | null, sequence: number | null) =>
+		({ type: 'manufacturing_operation' as const, collection: 'manufacturing_operations', id: 'o1', date: null, label, sequence, status: null });
+
+	it('does not repeat the step on the second line when the label already names it', () => {
+		const t = base();
+		t.events = [ev(null, 27)];
+		const op = buildLife(t)[1];
+		expect(op.label).toBe('12-AA-FAST · step 27');
+		expect(op.sub).toBe('');
+	});
+
+	it('keeps the step as the second line under a pass code', () => {
+		const t = base();
+		t.events = [ev('P1', 3)];
+		expect(buildLife(t)[1].sub).toBe('#3');
+	});
+});

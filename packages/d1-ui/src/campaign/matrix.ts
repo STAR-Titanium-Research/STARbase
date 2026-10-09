@@ -51,6 +51,8 @@ export interface MatrixCell {
 	id: string;
 	/** Name of that record (operationLabel or test type), for the tooltip. */
 	name: string;
+	/** The name already says which sample it is (an operation without a pass code): the tooltip must not add the sample again. */
+	namesSample: boolean;
 }
 
 export interface MatrixRow {
@@ -165,6 +167,7 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 				collection: 'manufacturing_operations',
 				id: lead.operation.operation_id,
 				name: operationLabel(lead.operation),
+				namesSample: !hasPassCode(lead.operation) && !!relCode(lead.operation.sample_id),
 			};
 		}
 	}
@@ -201,6 +204,7 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 				collection: 'test_sessions',
 				id: lead.session_id,
 				name: lead.test_type ?? 'Test',
+				namesSample: false,
 			};
 		}
 	}
@@ -217,4 +221,12 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 	const rows = [...sampleRows.values()].sort((a, b) => natural(a.sample_code ?? '', b.sample_code ?? ''));
 
 	return { columns: [...opColumns, ...testColumns], rows, unplaced };
+}
+
+/**
+ * What a cell's tooltip starts with: the row's sample and the record's name, unless the name
+ * already names the sample (`S1 · step 27`), which would print `S1 · S1 · step 27`.
+ */
+export function cellHeading(cell: Pick<MatrixCell, 'name' | 'namesSample'>, sampleCode: string | null): string {
+	return cell.namesSample ? cell.name : `${sampleCode ?? 'Sample'} · ${cell.name}`;
 }

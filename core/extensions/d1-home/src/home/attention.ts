@@ -1,5 +1,5 @@
 import {
-	failedTests, forceErrorOnMyOperations, forcePendingOperations, hasPassCode, operationLabel, ownerlessSamples, recordRoute,
+	failedTests, forceErrorOnMyOperations, forcePendingOperations, hasPassCode, operationLabel, operationSampleLine, ownerlessSamples, recordRoute,
 } from '@d1/ui';
 
 // The "Needs attention" tiles: what each one counts, which filter selects the records, and how a
@@ -39,7 +39,8 @@ const opItem = (collection: 'manufacturing_operations') => (r: any): AttentionIt
 	id: r.operation_id,
 	title: operationLabel(r),
 	plain: !hasPassCode(r),
-	sub: r.sample_id?.sample_code ? `Sample ${r.sample_id.sample_code}` : '',
+	// The label of an uncoded operation already names its sample.
+	sub: operationSampleLine(r),
 	to: recordRoute(collection, r.operation_id),
 });
 

@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { recordRoute } from '../recordRoute';
 import { TEST_GLYPH, statusStyle } from '../status';
 import RecordLink from '../components/RecordLink.vue';
-import type { Matrix, MatrixCell } from './matrix';
+import { cellHeading, type Matrix, type MatrixCell } from './matrix';
 
 // The sample x step matrix of a campaign (see matrix.ts). The sample column is pinned and the grid
 // scrolls both ways, so 50+ samples and many steps stay readable. A cell is a link to the operation
@@ -21,12 +21,12 @@ function describe(cell: MatrixCell, sampleCode: string | null, columnLabel: stri
 			tone: st?.tone ?? 'neutral',
 			glyph: TEST_GLYPH[cell.status] ?? '·',
 			diagTone: null,
-			title: `${sampleCode ?? 'Sample'} · ${cell.name}: ${st?.label ?? cell.status}${cell.count > 1 ? ` (worst of ${cell.count})` : ''}`,
+			title: `${cellHeading(cell, sampleCode)}: ${st?.label ?? cell.status}${cell.count > 1 ? ` (worst of ${cell.count})` : ''}`,
 		};
 	}
 	const st = cell.status === 'none' ? null : statusStyle('force', cell.status);
 	const diag = cell.diag === 'none' ? null : statusStyle('diag', cell.diag);
-	const lines = [`${sampleCode ?? 'Sample'} · ${cell.name}${cell.count > 1 ? ` (+${cell.count - 1} more)` : ''}`];
+	const lines = [`${cellHeading(cell, sampleCode)}${cell.count > 1 ? ` (+${cell.count - 1} more)` : ''}`];
 	lines.push(props.forceHidden ? 'Force analysis: not visible to your role' : `Force analysis: ${st?.label ?? 'no force file'}`);
 	if (cell.error) lines.push(`Error: ${cell.error}`);
 	if (diag) lines.push(diag.label);

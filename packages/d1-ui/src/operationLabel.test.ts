@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasPassCode, operationHeading, operationLabel } from './operationLabel';
+import { hasPassCode, operationHeading, operationLabel, operationSampleLine } from './operationLabel';
 
 describe('operationLabel', () => {
 	it('is the pass code when there is one', () => {
@@ -85,5 +85,22 @@ describe('operationHeading', () => {
 	it('degrades with neither sample', () => {
 		expect(operationHeading({ ...step, sample_id: null }, undefined, true)).toBe('Uncoded operation · step 5');
 		expect(operationHeading({ pass_code: null, sample_id: null }, '', false)).toBe('Uncoded operation');
+	});
+});
+
+describe('operationSampleLine', () => {
+	it('names the sample under a pass code', () => {
+		expect(operationSampleLine({ pass_code: 'X-F1', sample_id: { sample_code: 'S1' } })).toBe('Sample S1');
+	});
+
+	it('is empty without a pass code, where the label already names the sample', () => {
+		expect(operationSampleLine({ pass_code: null, operation_sequence: 2, sample_id: { sample_code: 'S1' } })).toBe('');
+		expect(operationSampleLine({ pass_code: ' ', sample_id: { sample_code: 'S1' } })).toBe('');
+	});
+
+	it('is empty when the sample has no readable code', () => {
+		expect(operationSampleLine({ pass_code: 'X-F1', sample_id: null })).toBe('');
+		expect(operationSampleLine({ pass_code: 'X-F1', sample_id: { sample_code: null } })).toBe('');
+		expect(operationSampleLine(null)).toBe('');
 	});
 });
