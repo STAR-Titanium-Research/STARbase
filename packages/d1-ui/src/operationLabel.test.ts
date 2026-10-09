@@ -82,6 +82,13 @@ describe('operationHeading', () => {
 		expect(operationHeading({ ...step, sample_id: undefined }, 'OUT', false)).toBe('Operation on OUT');
 	});
 
+	it('keeps the step when there is no input link and no readable output code, as the lists do', () => {
+		const op = { ...step, sample_id: null };
+		expect(operationHeading(op, undefined, false)).toBe('Uncoded operation · step 5');
+		expect(operationHeading(op, '  ', false)).toBe('Uncoded operation · step 5');
+		expect(operationHeading(op, undefined, false)).toBe(operationLabel(op));
+	});
+
 	it('degrades with neither sample', () => {
 		expect(operationHeading({ ...step, sample_id: null }, undefined, true)).toBe('Uncoded operation · step 5');
 		expect(operationHeading({ pass_code: null, sample_id: null }, '', false)).toBe('Uncoded operation');
