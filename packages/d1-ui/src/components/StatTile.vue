@@ -28,7 +28,7 @@ defineProps<{ label: string; value: string | number; icon?: string; to?: string;
 	text-decoration: none;
 }
 .link { cursor: pointer; transition: border-color 0.12s ease; }
-.link:hover { border-color: var(--theme--primary); }
+.link:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .icon {
 	flex: none;
 	display: grid;
@@ -37,7 +37,7 @@ defineProps<{ label: string; value: string | number; icon?: string; to?: string;
 	height: 32px;
 	border-radius: 8px;
 	background: var(--d1-tint, var(--theme--primary-background));
-	--v-icon-color: var(--theme--primary);
+	--v-icon-color: var(--d1-accent, var(--theme--primary));
 }
 .text { display: flex; flex-direction: column; min-width: 0; }
 .value { font-size: var(--fs-2xl, 22px); font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; font-variant-numeric: tabular-nums; }

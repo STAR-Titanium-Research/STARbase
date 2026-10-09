@@ -1,7 +1,9 @@
 <script setup lang="ts">
 // The top of a record page: what kind of record it is, its code, its status and its actions.
 // Slots: `crumbs` (project / campaign breadcrumb), `status`, `meta` (owner, dates ...), `actions`.
-defineProps<{ code: string; title?: string; kind: string; icon?: string }>();
+// `plain`: the heading describes the record instead of being its code (an operation without a pass
+// code), so it is not set in monospace as though it could be typed or scanned.
+defineProps<{ code: string; title?: string; kind: string; icon?: string; plain?: boolean }>();
 </script>
 
 <template>
@@ -10,7 +12,7 @@ defineProps<{ code: string; title?: string; kind: string; icon?: string }>();
 		<div class="main">
 			<div class="ident">
 				<span class="kind"><v-icon v-if="icon" :name="icon" x-small />{{ kind }}</span>
-				<h1 class="code">{{ code }}</h1>
+				<h1 class="code" :class="{ plain }">{{ code }}</h1>
 				<slot name="status" />
 				<span v-if="title" class="title">{{ title }}</span>
 			</div>
@@ -45,8 +47,8 @@ defineProps<{ code: string; title?: string; kind: string; icon?: string }>();
 	letter-spacing: 0.01em;
 	padding: 2px 9px;
 	border-radius: 99px;
-	color: var(--theme--primary);
-	background: color-mix(in srgb, var(--theme--primary) 12%, transparent);
+	color: var(--d1-accent, var(--theme--primary));
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent);
 }
 .code {
 	margin: 0;
@@ -57,6 +59,7 @@ defineProps<{ code: string; title?: string; kind: string; icon?: string }>();
 	font-family: var(--theme--fonts--monospace--font-family, monospace);
 	overflow-wrap: anywhere;
 }
+.code.plain { font-family: inherit; letter-spacing: normal; }
 .title { font-size: var(--fs-lg, 15px); color: var(--d1-dim, var(--theme--foreground-subdued)); overflow-wrap: anywhere; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .meta { display: flex; flex-wrap: wrap; gap: 2px 20px; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }

@@ -44,6 +44,9 @@ export function useOperationData(id: Ref<string>) {
 	const files = section<LinkedFile[]>([]);
 	const shared = section<LinkedFile[]>([]);
 	const hidden = section<Record<string, boolean>>({});
+	// True once the hidden-link read has answered for the current operation id. A reload after a save
+	// puts `hidden` back to loading but keeps its data, so the page can trust that data meanwhile.
+	const hiddenKnown = ref(false);
 
 	async function readParams(opId: string, category: string | null): Promise<ParamRow[]> {
 		if (!category) return [];
@@ -67,6 +70,7 @@ export function useOperationData(id: Ref<string>) {
 			files.value = { data: [], loading: false, error: '' };
 			shared.value = { data: [], loading: false, error: '' };
 			hidden.value = { data: {}, loading: false, error: '' };
+			hiddenKnown.value = false;
 		}
 		if (!opId) return;
 
@@ -86,7 +90,8 @@ export function useOperationData(id: Ref<string>) {
 
 		const category: string | null = operation.value?.process_category ?? null;
 		await Promise.all([
-			fill(hidden, token, 'linked records', () => readHiddenLinks(getItem, 'manufacturing_operations', opId, operation.value, LINK_FIELDS)),
+			fill(hidden, token, 'linked records', () => readHiddenLinks(getItem, 'manufacturing_operations', opId, operation.value, LINK_FIELDS))
+				.then(() => { if (gate.isCurrent(token)) hiddenKnown.value = true; }),
 			fill(params, token, 'the parameters', () => readParams(opId, category)),
 			// Force analysis exists for machining operations, the FAST trace for sintering ones (the same
 			// split analysisLink() in the kit makes); other categories have neither, so no request.
@@ -143,5 +148,5 @@ export function useOperationData(id: Ref<string>) {
 	watch(id, load, { immediate: true });
 	onBeforeUnmount(() => gate.cancel());
 
-	return { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, reload: load };
+	return { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, hiddenKnown, reload: load };
 }

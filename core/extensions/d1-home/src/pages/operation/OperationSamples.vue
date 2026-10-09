@@ -57,7 +57,7 @@ const rows = computed(() =>
 	color: var(--d1-dim);
 	background: var(--theme--background-normal);
 }
-.role.input { color: var(--theme--primary); background: color-mix(in srgb, var(--theme--primary) 12%, transparent); }
+.role.input { color: var(--d1-accent, var(--theme--primary)); background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent); }
 .role.output { color: var(--d1-ok); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
 .code { font-family: var(--theme--fonts--monospace--font-family, monospace); }
 .muted { color: var(--d1-dim); }

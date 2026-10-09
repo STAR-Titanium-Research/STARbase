@@ -96,7 +96,7 @@ const { projects, campaigns, samples, hasPerson, partialProjects, partialSamples
 
 <style scoped>
 .my-work { display: flex; flex-direction: column; gap: 10px; }
-.link { color: var(--theme--primary); font-weight: 600; font-size: var(--fs-sm); text-decoration: none; white-space: nowrap; }
+.link { color: var(--d1-accent, var(--theme--primary)); font-weight: 600; font-size: var(--fs-sm); text-decoration: none; white-space: nowrap; }
 .link:hover { text-decoration: underline; }
 .notice {
 	margin: 0; padding: 8px 12px; border-radius: 10px; font-size: var(--fs-sm);
@@ -104,7 +104,7 @@ const { projects, campaigns, samples, hasPerson, partialProjects, partialSamples
 	background: color-mix(in srgb, var(--theme--warning) 14%, var(--d1-surface));
 	border: 1px solid var(--theme--warning);
 }
-.notice a { color: var(--theme--primary); font-weight: 600; }
+.notice a { color: var(--d1-accent, var(--theme--primary)); font-weight: 600; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
 .cap { margin-top: 8px; }
 .cap-note { font-size: var(--fs-xs); color: var(--d1-dim); white-space: nowrap; }

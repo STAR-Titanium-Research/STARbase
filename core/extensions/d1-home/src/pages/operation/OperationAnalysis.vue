@@ -40,7 +40,7 @@ const isMachining = computed(() => props.category === 'machining');
 				<thead><tr><th>File</th><th class="fit">Analysis</th><th class="fit">Diagnostics</th><th class="fit">Processed</th></tr></thead>
 				<tbody>
 					<template v-for="r in rows" :key="r.id">
-						<tr>
+						<tr :class="{ failed: r.error_message || r.diag_error }">
 							<td class="file mono">{{ fileName(r) }}</td>
 							<td class="fit"><StatusBadge kind="force" :value="r.status" /></td>
 							<td class="fit"><StatusBadge kind="diag" :value="r.diag_status" /></td>
@@ -84,8 +84,11 @@ const isMachining = computed(() => props.category === 'machining');
 <style scoped>
 .file { overflow-wrap: anywhere; font-size: var(--fs-sm); }
 .capped { margin-bottom: 8px; }
-/* The reason a file failed, under its row: no rule between the two. */
-.errors td { padding-top: 0; }
+/* The reason a file failed sits under its file with no rule between them: the file row drops its
+   bottom border and the reason row its top padding. `tr.` raises both above DataTable's own
+   `.d1-table td` (which would otherwise tie, and stylesheet order would decide). */
+tr.failed td { border-bottom: 0; }
+tr.errors td { padding-top: 0; }
 .err { margin: 0 0 4px; font-size: var(--fs-sm); color: var(--d1-bad); overflow-wrap: anywhere; }
 .fast { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; font-size: var(--fs-md); }
 .fast .err { flex-basis: 100%; }

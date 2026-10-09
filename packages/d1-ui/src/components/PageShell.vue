@@ -27,28 +27,6 @@ defineProps<{ narrow?: boolean }>();
 }
 .d1-page.narrow { max-width: 920px; }
 
-/* Blocks side by side while there is room, stacked when there is not. They share one height, so
-   a row of panels ends on one line. */
-.d1-page :deep(.d1-cols) {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-	gap: 16px;
-	align-items: stretch;
-}
-/* A line of text between blocks: a note, a description, a cap on a list. */
-.d1-page :deep(.d1-note) { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
-.d1-page :deep(.d1-note.warn) { color: var(--d1-warn); }
-.d1-page :deep(.d1-note.bad) { color: var(--d1-bad); }
-.d1-page :deep(.d1-note a),
-.d1-page :deep(.d1-crumbs a) { color: var(--theme--primary); font-weight: 600; text-decoration: none; }
-.d1-page :deep(.d1-note a:hover),
-.d1-page :deep(.d1-crumbs a:hover) { text-decoration: underline; }
-.d1-page :deep(.d1-crumbs) {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 6px;
-	font-size: var(--fs-sm, 12px);
-	color: var(--d1-dim);
-}
+/* The helper classes of the page (.d1-cols, .d1-note, .d1-crumbs) are in tokens.css, unscoped and
+   at the lowest weight, so that a page's own scoped rule for them (a margin) wins. */
 </style>

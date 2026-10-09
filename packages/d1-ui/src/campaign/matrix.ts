@@ -6,7 +6,9 @@
 //   - an operation with an `operation_sequence` shares a column with the operations of the same
 //     sequence and process category on the other samples (the sequence is per sample, so "step 3
 //     of machining" lines up across the rows);
-//   - an operation without a sequence gets a column of its own, labelled with its pass_code;
+//   - an operation without a sequence shares a column only with others of the same (non-blank)
+//     pass_code; without one it gets a column of its own, keyed by operation_id and labelled by
+//     operationLabel;
 //   - tests share a column per test_type.
 // A sample with nothing in a column has no cell (the matrix is sparse on purpose).
 //
@@ -16,6 +18,7 @@
 // session status of the tests in it (failed first, processed / analysed last).
 
 import { TEST_RANK } from '../status';
+import { hasPassCode, operationLabel } from '../operationLabel';
 import { analysisState, diagState, hiddenSampleCount, relCode, relId } from './rollup';
 
 export type CellKind = 'operation' | 'test';
@@ -23,7 +26,7 @@ export type CellKind = 'operation' | 'test';
 export interface MatrixColumn {
 	key: string;
 	kind: CellKind;
-	/** Short heading: "#3", the pass_code, or the test type. */
+	/** Short heading: "#3", the operation's label (operationLabel), or the test type. */
 	label: string;
 	/** Second line: the process category (operations) or nothing. */
 	sub: string;
@@ -46,8 +49,10 @@ export interface MatrixCell {
 	/** The record a click opens: the worst operation or test in the cell. */
 	collection: 'manufacturing_operations' | 'test_sessions';
 	id: string;
-	/** Name of that record (pass_code or test type), for the tooltip. */
+	/** Name of that record (operationLabel or test type), for the tooltip. */
 	name: string;
+	/** The name already says which sample it is (an operation without a pass code): the tooltip must not add the sample again. */
+	namesSample: boolean;
 }
 
 export interface MatrixRow {
@@ -128,12 +133,12 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 		}
 		const seq = typeof o.operation_sequence === 'number' ? o.operation_sequence : null;
 		const category = o.process_category ?? '';
-		const key = seq !== null ? `op:${seq}:${category}` : `op:code:${o.pass_code ?? o.operation_id}`;
+		const key = seq !== null ? `op:${seq}:${category}` : `op:code:${hasPassCode(o) ? o.pass_code.trim() : o.operation_id}`;
 		if (!columns.has(key)) {
 			columns.set(key, {
 				key,
 				kind: 'operation',
-				label: seq !== null ? `#${seq}` : (o.pass_code ?? 'Operation'),
+				label: seq !== null ? `#${seq}` : operationLabel(o),
 				sub: String(category).replace(/_/g, ' '),
 				sequence: seq,
 			});
@@ -161,7 +166,8 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 				count: refs.length,
 				collection: 'manufacturing_operations',
 				id: lead.operation.operation_id,
-				name: lead.operation.pass_code ?? 'Operation',
+				name: operationLabel(lead.operation),
+				namesSample: !hasPassCode(lead.operation) && !!relCode(lead.operation.sample_id),
 			};
 		}
 	}
@@ -198,6 +204,7 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 				collection: 'test_sessions',
 				id: lead.session_id,
 				name: lead.test_type ?? 'Test',
+				namesSample: false,
 			};
 		}
 	}
@@ -214,4 +221,12 @@ export function buildMatrix({ samples = [], operations = [], tests = [], analyse
 	const rows = [...sampleRows.values()].sort((a, b) => natural(a.sample_code ?? '', b.sample_code ?? ''));
 
 	return { columns: [...opColumns, ...testColumns], rows, unplaced };
+}
+
+/**
+ * What a cell's tooltip starts with: the row's sample and the record's name, unless the name
+ * already names the sample (`S1 · step 27`), which would print `S1 · S1 · step 27`.
+ */
+export function cellHeading(cell: Pick<MatrixCell, 'name' | 'namesSample'>, sampleCode: string | null): string {
+	return cell.namesSample ? cell.name : `${sampleCode ?? 'Sample'} · ${cell.name}`;
 }

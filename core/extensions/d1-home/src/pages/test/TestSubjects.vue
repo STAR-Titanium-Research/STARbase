@@ -62,8 +62,8 @@ const hiddenCount = computed(() => Math.max(props.subjects.hidden, props.sampleH
 	font-weight: 700;
 	padding: 1px 8px;
 	border-radius: 99px;
-	color: var(--theme--primary);
-	background: color-mix(in srgb, var(--theme--primary) 12%, transparent);
+	color: var(--d1-accent, var(--theme--primary));
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent);
 }
 .code { font-family: var(--theme--fonts--monospace--font-family, monospace); }
 .muted { color: var(--d1-dim); }

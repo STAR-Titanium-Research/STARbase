@@ -1,5 +1,5 @@
 import {
-	failedTests, forceErrorOnMyOperations, forcePendingOperations, ownerlessSamples, recordRoute,
+	failedTests, forceErrorOnMyOperations, forcePendingOperations, hasPassCode, operationLabel, operationSampleLine, ownerlessSamples, recordRoute,
 } from '@d1/ui';
 
 // The "Needs attention" tiles: what each one counts, which filter selects the records, and how a
@@ -16,6 +16,8 @@ export interface AttentionItem {
 	title: string;
 	sub: string;
 	to: string;
+	/** The title describes the record instead of being its code (an operation without a pass code): not set in monospace. */
+	plain?: boolean;
 }
 
 export interface AttentionDef {
@@ -35,8 +37,10 @@ export interface AttentionDef {
 
 const opItem = (collection: 'manufacturing_operations') => (r: any): AttentionItem => ({
 	id: r.operation_id,
-	title: r.pass_code || 'Operation',
-	sub: r.sample_id?.sample_code ? `Sample ${r.sample_id.sample_code}` : '',
+	title: operationLabel(r),
+	plain: !hasPassCode(r),
+	// The label of an uncoded operation already names its sample.
+	sub: operationSampleLine(r),
 	to: recordRoute(collection, r.operation_id),
 });
 
@@ -48,7 +52,7 @@ export const ATTENTION: AttentionDef[] = [
 		icon: 'error',
 		collection: 'manufacturing_operations',
 		filter: forceErrorOnMyOperations,
-		fields: ['operation_id', 'pass_code', 'sample_id.sample_code'],
+		fields: ['operation_id', 'pass_code', 'operation_sequence', 'sample_id.sample_code'],
 		sort: ['-operation_date'],
 		toItem: opItem('manufacturing_operations'),
 	},
@@ -76,7 +80,7 @@ export const ATTENTION: AttentionDef[] = [
 		icon: 'hourglass_top',
 		collection: 'manufacturing_operations',
 		filter: forcePendingOperations,
-		fields: ['operation_id', 'pass_code', 'sample_id.sample_code'],
+		fields: ['operation_id', 'pass_code', 'operation_sequence', 'sample_id.sample_code'],
 		sort: ['-operation_date'],
 		toItem: opItem('manufacturing_operations'),
 	},

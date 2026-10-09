@@ -24,7 +24,7 @@ const pct = computed(() => (props.max > 0 ? Math.min(100, Math.max(0, (props.val
 	background: var(--theme--background-normal);
 	overflow: hidden;
 }
-.fill { height: 100%; border-radius: 99px; background: var(--theme--primary); transition: width 0.25s ease; }
+.fill { height: 100%; border-radius: 99px; background: var(--d1-accent, var(--theme--primary)); transition: width 0.25s ease; }
 .text {
 	min-width: 52px;
 	text-align: right;

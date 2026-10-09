@@ -112,7 +112,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 	background: var(--theme--form--field--input--background, var(--theme--background));
 	color: var(--theme--foreground);
 }
-.field input:focus, .field select:focus { outline: none; border-color: var(--theme--primary); }
+.field input:focus, .field select:focus { outline: none; border-color: var(--d1-accent, var(--theme--primary)); }
 .spacer { flex: 1; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 </style>

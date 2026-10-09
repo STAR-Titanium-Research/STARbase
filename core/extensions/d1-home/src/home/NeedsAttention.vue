@@ -111,7 +111,7 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 			<LoadState :loading="list.loading" :error="list.error">
 				<ul class="items">
 					<li v-for="i in list.items" :key="i.id">
-						<router-link :to="i.to" class="i-title">{{ i.title }}</router-link>
+						<router-link :to="i.to" class="i-title" :class="{ plain: i.plain }">{{ i.title }}</router-link>
 						<span v-if="i.sub" class="i-sub">{{ i.sub }}</span>
 					</li>
 				</ul>
@@ -136,7 +136,7 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 	transition: border-color 0.12s ease;
 }
 .tile:disabled { cursor: default; }
-.tile:not(:disabled):hover, .tile.open { border-color: var(--theme--primary); }
+.tile:not(:disabled):hover, .tile.open { border-color: var(--d1-accent, var(--theme--primary)); }
 .tile.hot { border-color: var(--theme--warning); background: color-mix(in srgb, var(--theme--warning) 10%, var(--d1-surface)); }
 .tile.hot .t-value { color: var(--d1-warn); }
 .tile.hot.open { box-shadow: inset 0 0 0 1px var(--theme--warning); }
@@ -148,7 +148,8 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 .list { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--d1-line); }
 .items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .items li { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
-.i-title { color: var(--theme--primary); font-weight: 650; text-decoration: none; overflow-wrap: anywhere; font-family: var(--theme--fonts--monospace--font-family, monospace); }
+.i-title { color: var(--d1-accent, var(--theme--primary)); font-weight: 650; text-decoration: none; overflow-wrap: anywhere; font-family: var(--theme--fonts--monospace--font-family, monospace); }
+.i-title.plain { font-family: inherit; }
 .i-title:hover { text-decoration: underline; }
 .i-sub { font-size: var(--fs-sm); color: var(--d1-dim); }
 .more { margin-top: 10px; }

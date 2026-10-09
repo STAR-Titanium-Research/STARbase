@@ -14,7 +14,7 @@ const to = computed(() => (props.id === null || props.id === undefined ? null : 
 
 <style scoped>
 .d1-record-link {
-	color: var(--theme--primary);
+	color: var(--d1-accent, var(--theme--primary));
 	font-weight: 600;
 	text-decoration: none;
 }

@@ -234,7 +234,7 @@ export default { inheritAttrs: false };
 .tab { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border: 1px solid var(--d1-line); background: var(--d1-surface); border-radius: 99px;
 	font: inherit; font-size: var(--fs-sm); font-weight: 600; line-height: 1; color: var(--d1-dim); cursor: pointer; }
 .tab:hover { color: var(--theme--foreground); }
-.tab.on { background: var(--theme--primary, #1d4ed8); border-color: var(--theme--primary, #1d4ed8); color: #fff; }
+.tab.on { background: var(--d1-accent, var(--theme--primary, #1d4ed8)); border-color: var(--d1-accent, var(--theme--primary, #1d4ed8)); color: var(--d1-on-accent, #fff); }
 .tab .tn { opacity: .75; font-weight: 700; margin-left: 5px; font-variant-numeric: tabular-nums; }
 .bar-right { display: flex; gap: 8px; align-items: center; }
 /* A fixed basis, not only a maximum: free to shrink, the field shrank to its icon and "Se…" and
@@ -251,7 +251,7 @@ export default { inheritAttrs: false };
 .prow:hover { background: var(--d1-tile); }
 .prow.former { opacity: .62; }
 .avatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto;
-	background: var(--d1-tint); color: var(--theme--primary); --v-icon-color: var(--theme--primary); }
+	background: var(--d1-tint); color: var(--d1-accent, var(--theme--primary)); --v-icon-color: var(--d1-accent, var(--theme--primary)); }
 .pinfo { flex: 1; min-width: 0; }
 .pname { font-weight: 650; font-size: var(--fs-md); display: flex; align-items: center; gap: 8px; }
 .former-tag { font-size: var(--fs-xs); font-weight: 700; color: var(--d1-bad);
@@ -261,7 +261,7 @@ export default { inheritAttrs: false };
    theme) and at 11px in sentence case (they were 10px capitals). */
 .chip { font-size: var(--fs-xs); font-weight: 700; padding: 1px 8px; border-radius: 99px;
 	background: var(--theme--background-normal); color: var(--d1-dim); }
-.chip.researcher { background: color-mix(in srgb, var(--theme--primary) 12%, transparent); color: var(--theme--primary); }
+.chip.researcher { background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent); color: var(--d1-accent, var(--theme--primary)); }
 .chip.operator { background: color-mix(in srgb, var(--theme--success) 18%, transparent); color: var(--d1-ok); }
 .chip.login { background: transparent; box-shadow: inset 0 0 0 1px var(--theme--border-color); color: var(--theme--foreground); }
 .chip.login.off { color: var(--d1-dim); box-shadow: inset 0 0 0 1px var(--d1-line); }

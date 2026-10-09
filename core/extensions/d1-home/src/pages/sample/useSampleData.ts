@@ -82,7 +82,7 @@ export function useSampleData(id: Ref<string>) {
 					filter: { sample_id: { _eq: sampleId } },
 					fields: [
 						'operation_id', 'pass_code', 'operation_sequence', 'operation_date', 'process_category',
-						'method_id.method_name', 'equipment_id.equipment_name', 'operator_name',
+						'method_id.method_name', 'equipment_id.equipment_name', 'operator_name', 'sample_id.sample_code',
 					],
 					sort: ['operation_sequence', 'operation_date'],
 					limit: LIST_CAP + 1,

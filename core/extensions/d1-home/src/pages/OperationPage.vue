@@ -2,7 +2,7 @@
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, asRecord, dataStudioRoute,
-	formatDate, formatQuantity, processLabel, type KeyValue,
+	formatDate, formatQuantity, hasPassCode, operationHeading, processLabel, type KeyValue,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
 import OperationSamples from './operation/OperationSamples.vue';
@@ -13,7 +13,7 @@ import SampleFiles from './sample/SampleFiles.vue';
 // and files. Design: docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Operation").
 const props = defineProps<{ id: string }>();
 
-const { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, reload } = useOperationData(toRef(props, 'id'));
+const { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, hiddenKnown, reload } = useOperationData(toRef(props, 'id'));
 
 const editing = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
@@ -26,11 +26,22 @@ function onSaved() {
 }
 
 const op = computed(() => operation.value);
-const code = computed(() => op.value?.pass_code || 'Operation');
 const studioTo = computed(() => dataStudioRoute('manufacturing_operations', props.id));
 const project = computed(() => asRecord(op.value?.project_id));
 const campaign = computed(() => asRecord(op.value?.campaign_id));
 const sample = computed(() => asRecord(op.value?.sample_id) ?? asRecord(op.value?.output_sample_id));
+// The pass code, else what the lists call it (input sample and step). The output sample names it
+// only when no input is linked at all, and then without a step: the step belongs to the input
+// sample. Until the hidden-link read has answered for this operation, a null input may still be a
+// hidden one; after that its last answer holds while a reload runs, so a save does not flip the heading.
+const code = computed(() => operationHeading(
+	op.value, asRecord(op.value?.output_sample_id)?.sample_code, !hiddenKnown.value || !!hidden.value.data.sample_id,
+));
+const isCode = computed(() => hasPassCode(op.value));
+const pageTitle = computed(() => {
+	if (!op.value) return 'Operation';
+	return isCode.value ? `Operation ${code.value}` : code.value;
+});
 const operatorText = computed(() => asRecord(op.value?.operator_person_id)?.full_name || op.value?.operator_name || '');
 
 const overview = computed<KeyValue[]>(() => {
@@ -54,7 +65,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 </script>
 
 <template>
-	<private-view :title="op?.pass_code ? `Operation ${op.pass_code}` : 'Operation'">
+	<private-view :title="pageTitle">
 		<PageShell>
 			<LoadState v-if="loading && !op" loading loading-text="Loading operation…" />
 
@@ -63,7 +74,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 			<LoadState v-else-if="error" :error="error" />
 
 			<template v-else-if="op">
-				<RecordHeader :code="code" :title="processLabel(op.process_category)" kind="Operation" icon="precision_manufacturing">
+				<RecordHeader :code="code" :plain="!isCode" :title="processLabel(op.process_category)" kind="Operation" icon="precision_manufacturing">
 					<template #crumbs>
 						<router-link to="/home">Home</router-link>
 						<template v-if="project">

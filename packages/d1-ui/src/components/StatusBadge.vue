@@ -27,7 +27,7 @@ const style = computed(() => statusStyle(props.kind, props.value));
    "Active" on pale mint), so the ink is the colour mixed toward the text colour: darker on a light
    theme, lighter on a dark one. */
 .tone--neutral { --d1-tone-fg: var(--d1-dim, var(--theme--foreground-subdued)); --d1-tone-bg: var(--theme--background-normal); }
-.tone--info { --d1-tone-fg: var(--theme--primary); --d1-tone-bg: color-mix(in srgb, var(--theme--primary) 12%, transparent); }
+.tone--info { --d1-tone-fg: var(--d1-accent, var(--theme--primary)); --d1-tone-bg: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent); }
 .tone--progress, .tone--warning {
 	--d1-tone-fg: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground));
 	--d1-tone-bg: color-mix(in srgb, var(--theme--warning) 18%, transparent);

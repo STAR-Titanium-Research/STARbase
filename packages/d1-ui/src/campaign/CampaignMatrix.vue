@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { recordRoute } from '../recordRoute';
 import { TEST_GLYPH, statusStyle } from '../status';
 import RecordLink from '../components/RecordLink.vue';
-import type { Matrix, MatrixCell } from './matrix';
+import { cellHeading, type Matrix, type MatrixCell } from './matrix';
 
 // The sample x step matrix of a campaign (see matrix.ts). The sample column is pinned and the grid
 // scrolls both ways, so 50+ samples and many steps stay readable. A cell is a link to the operation
@@ -21,12 +21,12 @@ function describe(cell: MatrixCell, sampleCode: string | null, columnLabel: stri
 			tone: st?.tone ?? 'neutral',
 			glyph: TEST_GLYPH[cell.status] ?? '·',
 			diagTone: null,
-			title: `${sampleCode ?? 'Sample'} · ${cell.name}: ${st?.label ?? cell.status}${cell.count > 1 ? ` (worst of ${cell.count})` : ''}`,
+			title: `${cellHeading(cell, sampleCode)}: ${st?.label ?? cell.status}${cell.count > 1 ? ` (worst of ${cell.count})` : ''}`,
 		};
 	}
 	const st = cell.status === 'none' ? null : statusStyle('force', cell.status);
 	const diag = cell.diag === 'none' ? null : statusStyle('diag', cell.diag);
-	const lines = [`${sampleCode ?? 'Sample'} · ${cell.name}${cell.count > 1 ? ` (+${cell.count - 1} more)` : ''}`];
+	const lines = [`${cellHeading(cell, sampleCode)}${cell.count > 1 ? ` (+${cell.count - 1} more)` : ''}`];
 	lines.push(props.forceHidden ? 'Force analysis: not visible to your role' : `Force analysis: ${st?.label ?? 'no force file'}`);
 	if (cell.error) lines.push(`Error: ${cell.error}`);
 	if (diag) lines.push(diag.label);
@@ -145,12 +145,12 @@ tbody tr:hover td, tbody tr:hover th.sample { background: var(--d1-tile, var(--t
 	border: 1px solid transparent;
 }
 a.cell:hover { border-color: var(--theme--foreground-subdued); }
-a.cell:focus-visible { outline: 2px solid var(--theme--primary); outline-offset: 1px; }
+a.cell:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; }
 .count { font-size: var(--fs-xs, 11px); font-weight: 700; }
 .diag { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--d1-fg); box-shadow: 0 0 0 1.5px var(--d1-surface, var(--theme--background)); }
 
 .tone--success { --d1-fg: var(--d1-ok, var(--theme--success)); --d1-bg: color-mix(in srgb, var(--theme--success) 18%, transparent); }
-.tone--info { --d1-fg: var(--theme--primary); --d1-bg: var(--theme--primary-background); }
+.tone--info { --d1-fg: var(--d1-accent, var(--theme--primary)); --d1-bg: var(--theme--primary-background); }
 .tone--progress, .tone--warning { --d1-fg: var(--d1-warn, var(--theme--warning)); --d1-bg: color-mix(in srgb, var(--theme--warning) 18%, transparent); }
 .tone--danger { --d1-fg: var(--d1-bad, var(--theme--danger)); --d1-bg: color-mix(in srgb, var(--theme--danger) 14%, transparent); }
 .tone--neutral { --d1-fg: var(--d1-dim, var(--theme--foreground-subdued)); --d1-bg: var(--theme--background-normal); }

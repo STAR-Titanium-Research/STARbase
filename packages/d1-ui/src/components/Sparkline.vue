@@ -106,17 +106,17 @@ const description = computed(() =>
 svg { width: 100%; height: auto; display: block; overflow: visible; }
 .base { stroke: var(--theme--border-color-subdued); stroke-width: 1; }
 .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.line.ops { stroke: var(--theme--primary); }
+.line.ops { stroke: var(--d1-accent, var(--theme--primary)); }
 .line.tests { stroke: var(--theme--secondary, var(--theme--foreground-subdued)); stroke-dasharray: 5 3; }
 /* A 2px ring in the card colour keeps the two end markers apart when they coincide. */
 .dot { stroke: var(--d1-surface, var(--theme--background)); stroke-width: 2; }
-.dot.ops { fill: var(--theme--primary); }
+.dot.ops { fill: var(--d1-accent, var(--theme--primary)); }
 .dot.tests { fill: var(--theme--secondary, var(--theme--foreground-subdued)); }
 .hit { fill: transparent; }
 .hit:hover { fill: var(--theme--background-accent, rgba(128, 128, 128, 0.12)); opacity: 0.5; }
 .legend { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: var(--fs-xs, 11px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 .key { display: inline-flex; align-items: center; gap: 5px; }
-.swatch { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--theme--primary); }
+.swatch { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--d1-accent, var(--theme--primary)); }
 .swatch.tests { border-top: 2px dashed var(--theme--secondary, var(--theme--foreground-subdued)); }
 .none { font-weight: 600; }
 </style>

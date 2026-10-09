@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMatrix } from './matrix';
+import { buildMatrix, cellHeading } from './matrix';
 
 const S1 = { sample_id: 's1', sample_code: '9-A-1' };
 const S2 = { sample_id: 's2', sample_code: '9-A-2' };
@@ -87,6 +87,42 @@ describe('buildMatrix columns', () => {
 			],
 		});
 		expect(m.columns.map((c) => c.label)).toEqual(['#5', 'A-pass', 'B-pass']);
+	});
+
+	it('names an operation with neither a sequence nor a pass code by its sample, never by a bare "Operation"', () => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }],
+			operations: [op('o1', S1, { pass_code: null })],
+		});
+		expect(m.columns.map((c) => c.label)).toEqual(['Operation on 9-A-1']);
+		expect(m.rows[0].cells[m.columns[0].key].name).toBe('Operation on 9-A-1');
+	});
+
+	it.each([['empty', ''], ['whitespace-only', '  ']])('gives operations with an %s pass code and no sequence a column each', (_name, pass_code) => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }, { sample_id: S2 }],
+			operations: [op('o1', S1, { pass_code }), op('o2', S2, { pass_code })],
+		});
+		expect(m.columns.map((c) => c.label)).toEqual(['Operation on 9-A-1', 'Operation on 9-A-2']);
+		expect(Object.keys(m.rows[0].cells)).toHaveLength(1);
+		expect(Object.keys(m.rows[1].cells)).toHaveLength(1);
+	});
+
+	it('still shares one column between samples for the same pass code', () => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }, { sample_id: S2 }],
+			operations: [op('o1', S1, { pass_code: 'SHARED' }), op('o2', S2, { pass_code: ' SHARED ' })],
+		});
+		expect(m.columns.map((c) => c.label)).toEqual(['SHARED']);
+	});
+
+	it('names the cell of an uncoded numbered operation by its sample and step', () => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }],
+			operations: [op('o1', S1, { pass_code: null, operation_sequence: 27 })],
+		});
+		expect(m.columns.map((c) => c.label)).toEqual(['#27']);
+		expect(m.rows[0].cells[m.columns[0].key].name).toBe('9-A-1 · step 27');
 	});
 
 	it('does not merge the same sequence of different process categories', () => {
@@ -224,5 +260,27 @@ describe('buildMatrix test cells', () => {
 		expect(m.columns).toHaveLength(1);
 		expect(m.rows[0].cells['test:tensile'].status).toBe('processed');
 		expect(m.rows[1].cells['test:tensile']).toBeUndefined();
+	});
+});
+
+describe('cellHeading', () => {
+	it('does not name the sample twice for an operation without a pass code', () => {
+		const m = buildMatrix({
+			samples: [{ sample_id: S1 }],
+			operations: [op('o1', S1, { pass_code: null, operation_sequence: 27 }), op('o2', S1, { operation_sequence: 3 })],
+		});
+		const [c3, c27] = m.columns.map((c) => m.rows[0].cells[c.key]);
+		expect(cellHeading(c3, '9-A-1')).toBe('9-A-1 · 9-A-1-o2');
+		expect(cellHeading(c27, '9-A-1')).toBe('9-A-1 · step 27');
+	});
+
+	it('adds the sample to a test', () => {
+		const m = buildMatrix({ samples: [{ sample_id: S1 }], tests: [{ session_id: 't1', test_type: 'tensile', status: 'processed', sample_id: S1 }] });
+		expect(cellHeading(m.rows[0].cells[m.columns[0].key], '9-A-1')).toBe('9-A-1 · tensile');
+	});
+
+	it('still says "Sample" when the sample has no code to repeat', () => {
+		const cell = { name: 'Uncoded operation · step 2', namesSample: false };
+		expect(cellHeading(cell, null)).toBe('Sample · Uncoded operation · step 2');
 	});
 });

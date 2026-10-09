@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, useId } from 'vue';
 
 // A titled block of a page, drawn as the force app's panel: an opaque body under a lid that holds
 // the title, the count and the actions. An empty section keeps its lid and one line of text.
@@ -14,13 +14,15 @@ const props = defineProps<{
 	emptyText?: string;
 }>();
 const open = ref(!props.collapsed);
+// Names the region for screen readers (it was aria-labelledby on Home's blocks before the restyle).
+const titleId = useId();
 </script>
 
 <template>
-	<section class="d1-section" :class="{ empty }">
+	<section class="d1-section" :class="{ empty }" :aria-labelledby="titleId">
 		<header class="head" :class="{ clickable: collapsible }" @click="collapsible && (open = !open)">
 			<v-icon v-if="collapsible" :name="open ? 'expand_more' : 'chevron_right'" small />
-			<h2>{{ title }}</h2>
+			<h2 :id="titleId">{{ title }}</h2>
 			<span v-if="count !== undefined && count !== null" class="count">{{ count }}</span>
 			<span class="spacer" />
 			<slot name="actions" />
@@ -56,8 +58,8 @@ h2 { margin: 0; font-size: var(--fs-md, 13px); font-weight: 650; letter-spacing:
 	font-variant-numeric: tabular-nums;
 	padding: 1px 7px;
 	border-radius: 99px;
-	color: var(--theme--primary);
-	background: color-mix(in srgb, var(--theme--primary) 12%, transparent);
+	color: var(--d1-accent, var(--theme--primary));
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent);
 }
 .spacer { flex: 1; }
 .body { padding: 12px 14px; }

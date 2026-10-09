@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import { errorText } from '../format';
+import { hasPassCode, operationLabel } from '../operationLabel';
 import { processLabel } from '../process';
 import { useItems } from '../composables/useItems';
 import { useRequestGate } from '../composables/useRequestGate';
@@ -10,7 +11,7 @@ import RecordLink from '../components/RecordLink.vue';
 import Section from '../components/Section.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import PickerBox from './PickerBox.vue';
-import { campaignAssignPatch, changeOutcomeMessage, forbiddenWriteMessage, inheritCampaignProject } from './assign';
+import { campaignAssignPatch, changeOutcomeMessage, forbiddenWriteMessage, inheritCampaignProject, operationPickerFilter } from './assign';
 import { operationCategoryFor } from './campaignType';
 import { LIST_CAP, type SectionState } from '../composables/useSections';
 
@@ -57,12 +58,10 @@ async function runSearch() {
 	const token = gate.begin();
 	searching.value = true;
 	try {
-		const filter: any = { _and: [{ campaign_id: { _null: true } }] };
-		if (category.value) filter._and.push({ process_category: { _eq: category.value } });
-		if (search.value.trim()) filter._and.push({ pass_code: { _icontains: search.value.trim() } });
+		const filter = operationPickerFilter(category.value, search.value);
 		const rows = await getItems('manufacturing_operations', {
 			filter,
-			fields: ['operation_id', 'pass_code', 'process_category', 'sample_id.sample_code'],
+			fields: ['operation_id', 'pass_code', 'operation_sequence', 'process_category', 'sample_id.sample_code'],
 			sort: ['pass_code'],
 			limit: 25,
 		});
@@ -83,11 +82,10 @@ async function runSearch() {
 // campaign (campaignAssignPatch). Directus answers a batch update with the rows it changed, so an
 // empty answer means someone got there first. A failed add/remove is shown and leaves the lists as
 // the server has them (we reload either way), instead of an unhandled rejection.
-async function setCampaign(id: string, passCode: string | null, campaign: string | null) {
+async function setCampaign(id: string, label: string, campaign: string | null) {
 	if (busy.value) return;
 	busy.value = id;
 	actionError.value = '';
-	const label = passCode || 'the operation';
 	try {
 		const res = await api.patch('/items/manufacturing_operations', campaignAssignPatch('operation_id', id, props.campaignId, campaign));
 		actionError.value = (await changeOutcomeMessage(api, 'manufacturing_operations', id, res.data?.data, !!campaign, label)) ?? '';
@@ -115,7 +113,7 @@ async function setCampaign(id: string, passCode: string | null, campaign: string
 				<thead><tr><th>Operation</th><th>Process</th><th>Sample</th><th>Force analysis</th><th>Diagnostics</th><th class="act" /></tr></thead>
 				<tbody>
 					<tr v-for="o in shown" :key="o.operation_id">
-						<td><RecordLink collection="manufacturing_operations" :id="o.operation_id" class="mono">{{ o.pass_code || '—' }}</RecordLink></td>
+						<td><RecordLink collection="manufacturing_operations" :id="o.operation_id" :class="{ mono: hasPassCode(o) }">{{ operationLabel(o, o.sample_code) }}</RecordLink></td>
 						<td>{{ processLabel(o.process_category) }}</td>
 						<td><RecordLink collection="physical_samples" :id="o.sample_id" class="mono">{{ o.sample_code || '—' }}</RecordLink></td>
 						<td>
@@ -127,7 +125,7 @@ async function setCampaign(id: string, passCode: string | null, campaign: string
 							<span v-if="forceHidden || o.diag === 'none'" class="dim">—</span>
 							<span v-else :title="o.diag_error || ''"><StatusBadge kind="diag" :value="o.diag" /></span>
 						</td>
-						<td class="act"><button class="x" title="Remove from the campaign" :disabled="!!busy" @click="setCampaign(o.operation_id, o.pass_code, null)"><v-icon name="close" x-small /></button></td>
+						<td class="act"><button class="x" title="Remove from the campaign" :disabled="!!busy" @click="setCampaign(o.operation_id, operationLabel(o, o.sample_code), null)"><v-icon name="close" x-small /></button></td>
 					</tr>
 				</tbody>
 			</table>
@@ -142,9 +140,10 @@ async function setCampaign(id: string, passCode: string | null, campaign: string
 			:no-results="searched && !results.length"
 			:empty-text="`No unassigned ${category || ''} operations match.`"
 		>
-			<button v-for="op in results" :key="op.operation_id" type="button" class="pick" :disabled="!!busy" @click="setCampaign(op.operation_id, op.pass_code, campaignId)">
-				<span class="code">{{ op.pass_code || '—' }}</span>
-				<span class="sub">{{ op.sample_id?.sample_code || processLabel(op.process_category) }}</span>
+			<button v-for="op in results" :key="op.operation_id" type="button" class="pick" :disabled="!!busy" @click="setCampaign(op.operation_id, operationLabel(op), campaignId)">
+				<span class="code" :class="{ plain: !hasPassCode(op) }">{{ operationLabel(op) }}</span>
+				<!-- The label of an uncoded operation already names its sample. -->
+				<span class="sub">{{ (hasPassCode(op) && op.sample_id?.sample_code) || processLabel(op.process_category) }}</span>
 				<v-icon name="add_circle" x-small />
 			</button>
 		</PickerBox>

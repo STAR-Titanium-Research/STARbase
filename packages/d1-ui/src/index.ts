@@ -10,6 +10,7 @@
 export { recordRoute, collectionRoute, dataStudioRoute } from './recordRoute';
 export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
+export { operationLabel, operationHeading, operationSampleLine, hasPassCode } from './operationLabel';
 export { rollupOperationsFilter, ROLLUP_OPERATION_FIELDS, rollupTargets } from './rollupLinks';
 export type { RollupTarget } from './rollupLinks';
 export { readHiddenLinks } from './hiddenLinks';

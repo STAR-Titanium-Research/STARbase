@@ -2,15 +2,14 @@
 import { useRouter } from 'vue-router';
 import { go } from './goto';
 
-// The things a researcher does every day, as big buttons; everything else stays one click away in
-// the "More" row, so no page that used to be on Home becomes unreachable.
+// The things a researcher does every day, as big buttons; the "More" row holds the other Explorer
+// pages and analysis tools. There is no tile for Ask the database (hidden for now, by decision on
+// 2026-10-09) or for the Dashboards module (being retired; its lineage graph is to be rebuilt).
 interface Action { label: string; sub: string; icon: string; to: string; }
 const main: Action[] = [
 	{ label: 'Register a sample', sub: 'Add a new physical sample', icon: 'add_circle', to: '/content/physical_samples/+' },
 	{ label: 'Log an operation', sub: 'Record a manufacturing step', icon: 'precision_manufacturing', to: '/content/manufacturing_operations/+' },
-	{ label: 'Ask the database', sub: 'Chat with your data', icon: 'chat', to: '/ask-db' },
 	{ label: 'Print labels', sub: 'Sample labels with QR codes', icon: 'label', to: '/d1-report/labels' },
-	{ label: 'Dashboards', sub: 'Explore trends & graphs', icon: 'analytics', to: '/d1-lab-dashboard' },
 ];
 const more: Action[] = [
 	{ label: 'Projects', sub: 'All projects you can see', icon: 'folder_open', to: '/home/projects' },
@@ -58,12 +57,12 @@ const router = useRouter();
 	font: inherit;
 	color: var(--theme--foreground);
 }
-.card:hover { border-color: var(--theme--primary); }
+.card:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .action { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
 .chip {
 	width: 34px; height: 34px; border-radius: 9px; flex: 0 0 auto; display: grid; place-items: center;
 	background: var(--d1-tint);
-	--v-icon-color: var(--theme--primary);
+	--v-icon-color: var(--d1-accent, var(--theme--primary));
 }
 .a-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .a-label { font-size: var(--fs-md); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -78,5 +77,5 @@ const router = useRouter();
 	border: 1px solid var(--d1-line); background: var(--d1-surface);
 	transition: border-color 0.12s ease;
 }
-.more-btn:hover { border-color: var(--theme--primary); }
+.more-btn:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 </style>

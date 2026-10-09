@@ -3,12 +3,19 @@
 // the look comes from here, so every list on every page has the same head, row height and hover.
 // Cell classes: `num` (right-aligned figures), `mono` (codes), `dim`, `actions` (right-aligned,
 // no wrap) and `fit` (a column only as wide as its content).
-defineProps<{ /** Rows 6px high instead of 7px: for long figure tables. */ dense?: boolean }>();
+defineProps<{
+	/** Rows 6px high instead of 7px: for long figure tables. */
+	dense?: boolean;
+	/** The table is only as wide as its content instead of the whole panel: a few narrow columns would otherwise sit far apart. */
+	fitContent?: boolean;
+	/** A table of figures: the first column (the row's name) left-aligned, the others right-aligned, heads included. */
+	figures?: boolean;
+}>();
 </script>
 
 <template>
 	<div class="d1-table-wrap">
-		<table class="d1-table" :class="{ dense }"><slot /></table>
+		<table class="d1-table" :class="{ dense, 'fit-content': fitContent, figures }"><slot /></table>
 	</div>
 </template>
 
@@ -33,6 +40,11 @@ defineProps<{ /** Rows 6px high instead of 7px: for long figure tables. */ dense
 	border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued));
 }
 .d1-table.dense :deep(td) { padding-block: 5px; }
+.d1-table.fit-content { width: auto; }
+/* Written as `.d1-table.figures` so these beat the th/td rules above (same elements, one class
+   more); an override from the caller's own scope lost that tie. */
+.d1-table.figures :deep(th), .d1-table.figures :deep(td) { text-align: right; font-variant-numeric: tabular-nums; }
+.d1-table.figures :deep(th:first-child), .d1-table.figures :deep(td:first-child) { text-align: left; }
 .d1-table :deep(tbody tr:last-child td) { border-bottom: 0; }
 .d1-table :deep(tbody tr:hover td) { background: var(--d1-tile, var(--theme--background-subdued)); }
 .d1-table :deep(.num) { text-align: right; font-variant-numeric: tabular-nums; }
