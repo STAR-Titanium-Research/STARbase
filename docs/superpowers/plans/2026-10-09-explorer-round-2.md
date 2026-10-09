@@ -23,10 +23,10 @@ Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree
 |---|---|---|---|---|
 | R0 | Restyle (PageShell, tokens, Section, DataTable, RecordCard) | `explorer-restyle` | `feat/explorer-restyle` | committed `ee5b989e`, live in main checkout, not reviewed |
 | F0 | Print labels: rebuild `d1-report` (its build predated the `/labels` route) | main checkout | none (build only) | done 2026-10-09, `/d1-report/labels` renders |
-| F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | six commits `a7b5fde1`..`1387f208`; simplify pass running; Opus review next; not merged, not live |
+| F1 | Home tiles, Projects count, uncoded-operation label, Test tables, dark accent token, un-stretch | `agent-fixes1` | `fix/explorer-fixes-1` | six fix commits `a7b5fde1`..`1387f208`, three refactors `fcee2d20`..`e084ac27`; Opus review done (2 blocking, 10 should-fix); a worker is fixing the findings; not merged, not live |
 | D1 | Root cause of the broken "Log an operation" form (read-only) | none | none | done 2026-10-09: see "Root cause of the broken forms" |
 | F2 | Restore the lost field metadata (fix for D1), as a migration | to do | to do | dry-run clean; waiting for the maintainer's approval |
-| L1 | Record-page layout: rail and/or flat sections, density | to do | to do | design: maintainer choosing between three mockups (`layout-options.html`, shown in the browser pane) |
+| L1 | Record-page layout: sticky rail beside panels, dense label/value lists | to do | to do | direction chosen (option C); spec to write, then the maintainer's review |
 | A1 | "Who has access" view on each record page | to do | to do | design not started |
 | U1 | Per-user "frequently used" panel on Home | to do | to do | design not started |
 | G1 | Lineage graph rebuilt on a modern open-source graph library; retire `d1-lab-dashboard` | to do | to do | design not started |
@@ -39,6 +39,10 @@ Started 2026-10-09. Coordinator: the main session. Workers: Sonnet, one worktree
 - The Dashboards module (`d1-lab-dashboard`) is retired. Its lineage graph is rebuilt on a modern
   existing GitHub project instead of being dropped.
 - "Ask the database" is hidden from Home for now (the module stays).
+- Record pages get **option C, "rail and panels"**: a sticky side rail (identity, actions, key
+  facts, access, page contents) beside a main column that keeps its panels, with tiles replaced by
+  a dense label/value list. Chosen from three mockups of the same operation (rail + flat sections,
+  dense panels with no rail, rail + panels).
 
 ## Findings that shape the work
 
