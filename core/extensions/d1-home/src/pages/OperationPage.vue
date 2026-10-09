@@ -13,7 +13,7 @@ import SampleFiles from './sample/SampleFiles.vue';
 // and files. Design: docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Operation").
 const props = defineProps<{ id: string }>();
 
-const { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, reload } = useOperationData(toRef(props, 'id'));
+const { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, hiddenKnown, reload } = useOperationData(toRef(props, 'id'));
 
 const editing = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
@@ -32,9 +32,10 @@ const campaign = computed(() => asRecord(op.value?.campaign_id));
 const sample = computed(() => asRecord(op.value?.sample_id) ?? asRecord(op.value?.output_sample_id));
 // The pass code, else what the lists call it (input sample and step). The output sample names it
 // only when no input is linked at all, and then without a step: the step belongs to the input
-// sample. Until the hidden-link read is back, a null input may still be a hidden one.
+// sample. Until the hidden-link read has answered for this operation, a null input may still be a
+// hidden one; after that its last answer holds while a reload runs, so a save does not flip the heading.
 const code = computed(() => operationHeading(
-	op.value, asRecord(op.value?.output_sample_id)?.sample_code, hidden.value.loading || !!hidden.value.data.sample_id,
+	op.value, asRecord(op.value?.output_sample_id)?.sample_code, !hiddenKnown.value || !!hidden.value.data.sample_id,
 ));
 const isCode = computed(() => hasPassCode(op.value));
 const pageTitle = computed(() => {
