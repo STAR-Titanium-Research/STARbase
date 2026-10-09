@@ -100,7 +100,7 @@ onMounted(async () => {
 					<td class="fit dim">{{ formatDate(r.date) }}</td>
 					<td class="fit"><span class="r-kind" :class="`k-${r.kind}`">{{ KIND_LABEL[r.kind] }}</span></td>
 					<td class="fit"><router-link :to="r.to" class="r-code" :class="{ mono: !r.plain }">{{ r.code }}</router-link></td>
-					<td class="fit dim">{{ r.meta !== r.code ? r.meta : '' }}</td>
+					<td class="fit dim">{{ r.meta }}</td>
 					<td class="actions"><router-link v-if="r.extra" :to="r.extra.to" class="link">{{ r.extra.label }} →</router-link></td>
 				</tr>
 			</tbody>
