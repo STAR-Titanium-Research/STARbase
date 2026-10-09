@@ -24,13 +24,40 @@ Read this section first, then the Status table. Nothing is pushed anywhere.
   merged or pushed.
 - The restart also loaded the last four F1 fixes.
 
-**Next, in the order the maintainer agreed**
-1. **N1: navigation and simple index pages.** Design first (brainstorming -> spec -> the
-   maintainer's review). Decided already: the head reads, finds and navigates; create and edit are
-   Directus's own form, **pulled in as an embedded frame** once the head is standalone (inside
-   Directus today it stays `EditDrawer`). Index pages are deliberately simple: search and a few
-   fixed filters (project, campaign, status) and an "Open in Data Studio" link; no column picker,
-   no saved views.
+**Next (re-ordered 2026-10-09, second session, after a grilling round with the maintainer)**
+0. **T0: record codes, first.** Spec being written: `docs/superpowers/specs/2026-10-09-record-codes-design.md`.
+   Decisions (Q16-Q31 of the grilling): test codes `{primary subject code}-{TYPE}{n}` (edge code for an
+   insert edge), TYPE = TEN HRD CHP CMP TRB OM SEM TEM XRD ALI CLX DCT CT FAT CRP DMA OTH; numbered by
+   the database, unique, overridable; assigned when the first subject is linked ("No code yet" before);
+   on a change of type or primary subject the code becomes the next free number (gaps never filled,
+   other tests untouched); hand-typed codes are kept (a flag records them); a test that loses all its
+   subjects keeps its last code; the form shows a plain text box with a hint. **Operation codes also
+   rename automatically**, with the composition rules moved from `d1-operation-code` into Postgres
+   (the form box becomes a preview): every part follows its field; the number stays when only
+   parameters or the date change, next free number when sample or method changes; imported
+   operations (`source_system` set) are never renamed; nothing is mass-renamed, a code renames only on
+   edit and only if it matches the rule (else it counts as hand-typed); the ~5 duplicate codes are
+   listed for the maintainer to fix by hand, then UNIQUE is switched on. Sonnet workers (high effort),
+   Opus migration review, backup, apply live.
+1. **N1: navigation and index pages.** Decisions (Q1-Q15, Q18-Q19, Q33 of the grilling; the layout
+   mockup is `nav-options.html` in the session folder, option A chosen): a **sidebar** (`ExplorerNav`)
+   inside one `ExplorerView` wrapper (the only Directus-aware seam): STARBase + subtitle; Find (Ctrl K);
+   Home; **Dashboards** (Force = Directus module `d1-force-dashboard`, FAST = `d1-fast-dashboard`);
+   **Records** (Projects, Campaigns, Samples, Operations, Tests, People, with their Directus bookmarks
+   nested; no counts); **Inventory** and **Resources** collapsible (remembered per browser); **Tools**
+   (Print labels, Report a bug, Data Studio; Force Crawler for admins only). Collections the user
+   cannot read are hidden. Narrow screens: Directus's own slide-out for now. **Every visible
+   collection (22) gets an index page** at `/home/<slug>` from one generic page and **one config
+   file** (columns, search fields, fixed filters, default sort, row target); the spec carries the
+   column table for the maintainer to check. Bookmarks read live through the Directus API (filter and
+   search only, not their columns), shown nested in the sidebar and as chips; bookmark + filters +
+   search stack and live in the URL; 50 rows a page, click-to-sort, default newest first (else code
+   A-Z); "+ New" opens the Data Studio create form; "Open in Data Studio" keeps the filter; a core
+   row opens its Explorer page, any other row opens the edit drawer on the list. Projects and People
+   keep their pages and gain the sidebar. **Finder (Ctrl K) now**: page names, bookmark names,
+   samples, operations, campaigns, projects, people, tests (by their new codes) and inventory codes;
+   a non-core pick goes to its index page with the drawer open. Rewire the Home tiles, Needs
+   attention, the Campaigns cap link and `collectionRoute()` to the index pages.
 2. **L1: build rail and panels.** Spec approved. Write the implementation plan, get it reviewed by
    the maintainer, then one Sonnet worker for the kit (L1a) and one per page group, then Opus
    review, then the coordinator's live check.
@@ -42,7 +69,7 @@ Read this section first, then the Status table. Nothing is pushed anywhere.
   chat widgets did not reach them. Mockups made so far, in the session folder
   `C:\Users\CMBE Admn 3214022001\Documents\GitHub\D1-Database`: `layout-options.html`,
   `layout-counts.html`, and a copy of the rail spec.
-- They answer numbered questions in plain chat. Process they asked for: plan, fix, debug and
+- They answer numbered questions in plain chat (grilling rounds work well; give concrete examples, abstract option lists confuse). Agents: Sonnet 5.5 at high effort for workers, Opus 5.5 for reviews. Process they asked for: plan, fix, debug and
   simplify with Sonnet workers, then review with Opus.
 - Open, lower priority: 16 extensions have source newer than their build (listed below);
   Directus' own buttons need a dark-theme primary in Settings (`theme_dark_overrides`);
@@ -76,7 +103,8 @@ Read this section first, then the Status table. Nothing is pushed anywhere.
 | A1 | "Who has access" dialog on each record page (Google Drive "Manage members" style); the owner really adds and removes people | to do | to do | direction settled (answers below); depends on the permissions work in progress on `feat/ownership-identity-cleanup`; design not started |
 | U1 | Per-user "frequently used" panel on Home: two short lists, pages and actions, and records | to do | to do | settled: ranks both, stored on the server per user (needs a small table and a migration); design not started |
 | G1 | Lineage graph rebuilt on a modern open-source graph library; retire `d1-lab-dashboard` | to do | to do | design not started |
-| N1 | Explorer navigation of its own and index pages (samples, operations, tests, campaigns), so every page is reachable without the Data Studio; editing keeps using the Directus form | to do | to do | next to design (proposed order: N1, then L1 build, then A1, U1, G1) |
+| N1 | Explorer navigation of its own and index pages (samples, operations, tests, campaigns), so every page is reachable without the Data Studio; editing keeps using the Directus form | to do | to do | **designed 2026-10-09** (grilling; decisions in Resume here); spec after T0 |
+| T0 | Record codes: test codes, operation codes that rename themselves (rules in Postgres) | to do | to do | **decided 2026-10-09**; spec being written; goes before N1 |
 
 ## Decisions so far (maintainer, 2026-10-09)
 
