@@ -1821,6 +1821,12 @@ sid_check "no_reuse:5d000000000$" "a reserved short ID is never handed out again
 sid_check "not_null:3" "short_id is NOT NULL on the three tables"
 sid_check "directus_rows:3" "the three short_id fields are registered read-only in Directus"
 sid_check "comments:1" "short_ids carries a table comment"
+run_eq "short_id has a column default on the three tables (Directus demands a NOT NULL column without one)" \
+    "SELECT count(*) FROM information_schema.columns WHERE column_name = 'short_id' AND column_default IS NOT NULL AND table_name IN ('physical_samples', 'manufacturing_operations', 'test_sessions')" \
+    "3"
+run_eq "the empty default never reaches a row (the trigger always assigns the short ID)" \
+    "SELECT (SELECT count(*) FROM physical_samples WHERE short_id = '') + (SELECT count(*) FROM manufacturing_operations WHERE short_id = '') + (SELECT count(*) FROM test_sessions WHERE short_id = '')" \
+    "0"
 
 echo "== Short IDs: the back-fill (T0a) =="
 # Runs the real back-fill SQL, extracted from migration 150 between its backfill:start / backfill:end
