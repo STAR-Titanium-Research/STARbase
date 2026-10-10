@@ -143,7 +143,8 @@ echo "== Directus field metadata: restore migration =="
 RIM=db/migrations/20261009000143_restore_inline_param_field_meta.sql
 rim_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RIM")
 rim_down=$(awk '/-- migrate:down/{f=1;next}f' "$RIM")
-rim_inline="((collection = 'manufacturing_operations' AND field ~ '^(machining|sintering|ht|deform|am)_' AND field !~ '_group\$')
+# sintering_run_number (migration 156) is a later column with its own row; 143 neither adds nor removes it, so it stays out of these counts
+rim_inline="((collection = 'manufacturing_operations' AND field ~ '^(machining|sintering|ht|deform|am)_' AND field !~ '_group\$' AND field <> 'sintering_run_number')
          OR (collection = 'test_sessions' AND field ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))"
 rim_out=$($PSQL 2>&1 <<SQL
 BEGIN;
@@ -175,7 +176,7 @@ SELECT 'up_missing:' || count(*) FROM information_schema.columns AS c
       OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
     AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name);
 SELECT 'up_ops_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations'
-  AND field ~ '^(machining|sintering|ht|deform|am)_' AND field !~ '_group\$';
+  AND field ~ '^(machining|sintering|ht|deform|am)_' AND field !~ '_group\$' AND field <> 'sintering_run_number';
 SELECT 'up_sessions_rows:' || count(*) FROM directus_fields WHERE collection = 'test_sessions'
   AND field ~ '^(tensile|hardness|charpy|compression|sem|xrd)_';
 SELECT 'up_custom_row:' || count(*) || ',' || max(note) FROM directus_fields
@@ -183,7 +184,7 @@ SELECT 'up_custom_row:' || count(*) || ',' || max(note) FROM directus_fields
 SELECT 'up_owner_picker:' || count(*) || ',' || max(interface) FROM directus_fields
   WHERE collection = 'manufacturing_operations' AND field = 'owner_person_id';
 SELECT 'up_machine_group:' || count(*) FROM directus_fields
-  WHERE collection = 'manufacturing_operations' AND "group" = 'sintering_machine_group';
+  WHERE collection = 'manufacturing_operations' AND "group" = 'sintering_machine_group' AND field <> 'sintering_run_number';
 SELECT 'up_qa_group:' || count(*) FROM directus_fields
   WHERE collection = 'manufacturing_operations' AND "group" = 'sintering_qa_group';
 SELECT 'up_hidden_recipe_number:' || hidden FROM directus_fields
@@ -2891,6 +2892,113 @@ rv_refuse "an alias name that another relation uses" \
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('equipment', 'project_id', 'projects', 'sessions');" \
     "cannot name the alias projects.sessions"
 
+echo "== Operation code rule: code_num, operation_code_for, the run number (T0b) =="
+# One rolled-back transaction. Rows for operation_code_for are built in memory with jsonb_populate_record.
+# CI has no FCT HP D machines (the live ones come from the Lab Equipment import), so two are created here.
+OC_MIG=db/migrations/20261010000156_operation_code_rule.sql
+oc_backfill=$(awk '/^-- runbackfill:start/{f=1;next}/^-- runbackfill:end/{f=0}f' "$OC_MIG" 2>/dev/null)
+oc_guard=$(printf '%s\n' "$oc_backfill" | awk '/^DO \$\$/{f=1} f{print} f && /^END \$\$;/{exit}')
+[[ -n "$oc_backfill" && -n "$oc_guard" ]] && ok "found the run-number back-fill and its guard in the migration" \
+    || bad "could not extract the run-number back-fill / guard from $OC_MIG"
+OC_E25='9a000000-0000-4000-8000-000000000025'
+OC_E250='9a000000-0000-4000-8000-000000000250'
+oc_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO equipment (equipment_id, equipment_code, equipment_name, equipment_type) VALUES
+    ('$OC_E25',  'T-OC-FCT25',  'FCT HP D 25',  'FAST_Press'),
+    ('$OC_E250', 'T-OC-FCT250', 'FCT HP D 250', 'FAST_Press');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('9a000000-0000-4000-8000-000000000001', 'T-OC-M', 'operation code rule test method');
+
+SELECT 'cn:' || coalesce(code_num(0), '') || '|' || coalesce(code_num(0.05), '') || '|' || coalesce(code_num(1932.080), '')
+    || '|' || coalesce(code_num(30.000), '') || '|' || coalesce(code_num(123456789), '') || '|' || coalesce(code_num(-5.50), '')
+    || '|' || coalesce(code_num(NULL), '');
+
+CREATE FUNCTION pg_temp.oc(j jsonb, s text DEFAULT 'TEST-OC-001') RETURNS text LANGUAGE sql AS
+\$f\$ SELECT coalesce(operation_code_for(jsonb_populate_record(NULL::manufacturing_operations, j), s), '<null>') \$f\$;
+
+SELECT 'm_full:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8,"machining_cutting_speed_m_per_min":30,"machining_feed_mm_per_rev":0.1,"machining_axial_depth_of_cut_mm":1}');
+SELECT 'm_speed:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8,"machining_cutting_speed_m_per_min":30}');
+SELECT 'm_none:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8}');
+SELECT 'ht:' || pg_temp.oc('{"process_category":"heat_treatment","ht_treatment_type":"anneal","operation_sequence":2,"ht_peak_temp_celsius":1050,"ht_hold_time_min":60,"ht_cooling_method":"furnace"}');
+SELECT 'def:' || pg_temp.oc('{"process_category":"deformation","deform_deformation_type":"rolling","operation_sequence":3,"deform_deformation_temp_celsius":900,"deform_total_reduction_pct":50,"deform_pass_count":4}');
+SELECT 'def_unknown:' || pg_temp.oc('{"process_category":"deformation","deform_deformation_type":"weird","operation_sequence":3}');
+SELECT 'am:' || pg_temp.oc('{"process_category":"additive","operation_sequence":4,"am_laser_power_w":200,"am_scan_speed_mm_per_s":800,"am_layer_thickness_mm":0.03}');
+SELECT 'sint_utc:' || pg_temp.oc('{"process_category":"sintering","equipment_id":"$OC_E25","sintering_run_number":9500,"operation_date":"2026-10-09T23:30:00Z","sintering_max_temp_celsius":1150,"sintering_max_force_kn":101,"sintering_mould_diameter_mm":80}', NULL);
+SELECT 'sint_norun:' || pg_temp.oc('{"process_category":"sintering","equipment_id":"$OC_E25","operation_date":"2026-10-09T23:30:00Z","sintering_max_temp_celsius":1150}', NULL);
+SELECT 'sint_src250:' || pg_temp.oc('{"process_category":"sintering","source_system":"fast_250","sintering_run_number":12,"operation_date":"2026-01-02T12:00:00Z"}', NULL);
+SELECT 'sint_equip250:' || pg_temp.oc('{"process_category":"sintering","equipment_id":"$OC_E250","sintering_run_number":12,"operation_date":"2026-01-02T12:00:00Z"}', NULL);
+SELECT 'prep:' || pg_temp.oc('{"process_category":"sample_prep","operation_sequence":5}');
+SELECT 'nothing:' || pg_temp.oc('{}', NULL);
+
+-- the back-fill, on FAST-shaped rows carrying their code and run only in pass_code / source_run_uid
+INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, source_run_uid, operation_date,
+    sintering_max_temp_celsius, sintering_max_force_kn, sintering_mould_diameter_mm, pass_code) VALUES
+    ('9a000000-0000-4000-8000-000000000101', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_25', 'fast25|4624',
+        '2016-10-12T10:00:00Z', 1200, 14, 20, '12-10-16-MF25-4624-1200C_14kN_20dia'),
+    ('9a000000-0000-4000-8000-000000000102', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_25', 'fast25|9686',
+        '2025-02-13T08:00:00Z', NULL, NULL, NULL, '13-02-25-MF25-9686'),
+    ('9a000000-0000-4000-8000-000000000103', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_250', 'fast250|77',
+        '2024-03-05T09:00:00Z', 1100, 30, NULL, '05-03-24-MF250-77-1100C_30kN');
+SELECT 'bf_before:' || count(*) FROM manufacturing_operations WHERE operation_id::text LIKE '9a000000-0000-4000-8000-0000000001%' AND sintering_run_number IS NULL;
+SAVEPOINT guard_test;
+ALTER TABLE manufacturing_operations ENABLE ALWAYS TRIGGER mfg_op_short_id;
+$oc_guard
+ROLLBACK TO guard_test;
+SELECT COALESCE(max(log_id), 0) AS lid FROM audit_logs \gset
+$oc_backfill
+SELECT 'bf_runs:' || string_agg(sintering_run_number::text, ',' ORDER BY operation_id) FROM manufacturing_operations
+  WHERE operation_id::text LIKE '9a000000-0000-4000-8000-0000000001%';
+SELECT 'bf_same:' || count(*) FILTER (WHERE operation_code_for(m, NULL) = m.pass_code) || '/' || count(*)
+  FROM manufacturing_operations m WHERE operation_id::text LIKE '9a000000-0000-4000-8000-0000000001%';
+SELECT 'bf_audit:' || count(*) FROM audit_logs WHERE log_id > :lid AND table_name = 'manufacturing_operations';
+SELECT 'bf_triggers:' || count(*) FILTER (WHERE tgenabled <> 'O') FROM pg_trigger
+  WHERE NOT tgisinternal AND tgrelid = 'manufacturing_operations'::regclass;
+
+-- one operation per machine run
+INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number, operation_date, pass_code)
+VALUES ('9a000000-0000-4000-8000-000000000111', '9a000000-0000-4000-8000-000000000001', 'sintering', 'test', '$OC_E25', 9500, '2026-10-09T23:30:00Z', 'TEST-OC-RUN-A');
+DO \$\$ BEGIN
+  INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number, operation_date, pass_code)
+  VALUES ('9a000000-0000-4000-8000-000000000112', '9a000000-0000-4000-8000-000000000001', 'sintering', 'test', '$OC_E25', 9500, '2026-10-10T08:00:00Z', 'TEST-OC-RUN-B');
+  RAISE NOTICE 'uniq_same:missing';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'uniq_same:ok';
+END \$\$;
+DO \$\$ BEGIN
+  INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number, operation_date, pass_code)
+  VALUES ('9a000000-0000-4000-8000-000000000113', '9a000000-0000-4000-8000-000000000001', 'sintering', 'test', '$OC_E250', 9500, '2026-10-09T23:30:00Z', 'TEST-OC-RUN-C');
+  RAISE NOTICE 'uniq_other:ok';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'uniq_other:refused';
+END \$\$;
+SELECT 'df:' || coalesce("group", '<null>') || '/' || coalesce(required::text, '<null>') || '/' || coalesce(hidden::text, '<null>') || '/' || count(*) OVER ()
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_run_number';
+ROLLBACK;
+SQL
+)
+oc_check() { grep -q -- "$1" <<<"$oc_out" && ok "$2" || bad "$2 (psql output: $oc_out)"; }
+oc_check "^cn:0|0.05|1932.08|30|123457000|-5.5|$" "code_num writes 6 significant digits without trailing zeros (0, 0.05, 1932.08, 30, 123457000, -5.5, NULL)"
+oc_check "^m_full:TEST-OC-001-F8-30MPM_0.1feed_1DoC$" "machining code: sample, subtype + sequence, then the set parameters"
+oc_check "^m_speed:TEST-OC-001-F8-30MPM$" "machining code with only the speed set"
+oc_check "^m_none:TEST-OC-001-F8$" "machining code with no parameters"
+oc_check "^ht:TEST-OC-001-HTA2-1050C_60min_FC$" "heat treatment code"
+oc_check "^def:TEST-OC-001-DR3-900C_50pct_4p$" "deformation code"
+oc_check "^def_unknown:TEST-OC-001-D3$" "deformation code with an unknown type falls back to D"
+oc_check "^am:TEST-OC-001-AM4-200W_800mmps_0.03mm$" "additive code without a process variant"
+oc_check "^sint_utc:09-10-26-MF25-9500-1150C_101kN_80dia$" "sintering code: UTC date, machine from the equipment, run number"
+oc_check "^sint_norun:<null>$" "sintering code is NULL without a run number (never invented)"
+oc_check "^sint_src250:02-01-26-MF250-12$" "sintering code takes the machine from source_system when there is no equipment"
+oc_check "^sint_equip250:02-01-26-MF250-12$" "sintering code: machine 250 from the equipment name"
+oc_check "^prep:TEST-OC-001-5$" "a category without its own rule gives sample code + sequence"
+oc_check "^nothing:<null>$" "no category and no sample gives NULL"
+oc_check "^bf_before:3$" "(setup) the three FAST-shaped rows have no run number before the back-fill"
+oc_check "is not in its normal state" "the run-number back-fill guard refuses a user trigger that is ENABLE ALWAYS"
+oc_check "^bf_runs:4624,9686,77$" "the back-fill reads the run number from source_run_uid"
+oc_check "^bf_same:3/3$" "operation_code_for reproduces the imported FAST code for every back-filled row"
+oc_check "^bf_audit:0$" "the back-fill writes no audit rows"
+oc_check "^bf_triggers:0$" "every user trigger on manufacturing_operations is enabled again after the back-fill"
+oc_check "uniq_same:ok" "a second sintering operation with the same machine and run is refused"
+oc_check "uniq_other:ok" "the same run number on the other machine is allowed"
+oc_check "^df:sintering_machine_group/false/false/1$" "the run number field is in the sintering group, not required, not hidden"
 echo "== Cleanup test rows =="
 $PSQL -c "
     DELETE FROM sample_genealogy
