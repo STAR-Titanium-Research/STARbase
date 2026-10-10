@@ -90,7 +90,7 @@ async function fetchPreview() {
 	} catch (err: any) {
 		if (req !== requestCounter) return;
 		preview.value = null;
-		frozen.value = false;
+		// frozen is kept: it comes from the saved row (source_system), which a failed request does not change.
 		if (err?.response?.status === 403) {
 			previewHidden.value = true;
 			previewFailed.value = false;
