@@ -3078,6 +3078,13 @@ UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 60 WHERE
 SELECT 'frozen:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
 UPDATE manufacturing_operations SET pass_code = 'EXP-SHEET-RENAMED' WHERE operation_id = '${OT_P}000000000131';
 SELECT 'frozen_typed:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+-- frozen: clearing the code (NULL, or blank) keeps the saved one; typing a new one stores it
+UPDATE manufacturing_operations SET pass_code = NULL WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_clear:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+UPDATE manufacturing_operations SET pass_code = '   ' WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_blank:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+UPDATE manufacturing_operations SET pass_code = 'EXP-SHEET-RENAMED-2' WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_retyped:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
 -- fast_follow: a FAST-shaped row follows its temperature
 INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number,
     operation_date, sintering_max_temp_celsius, sintering_max_force_kn, sintering_mould_diameter_mm, pass_code)
@@ -3141,6 +3148,9 @@ ot_check "null_notes:<null>" "an operation with no code stays without one when o
 ot_check "null_speed:TEST-OT-001-F20-31MPM" "an operation with no code gets the rule's code once a field it is built from changes"
 ot_check "frozen:EXP-SHEET-OLD" "an experiment_sheet operation keeps its code when a field changes"
 ot_check "frozen_typed:EXP-SHEET-RENAMED" "a person can still rename an experiment_sheet operation"
+ot_check "frozen_clear:EXP-SHEET-RENAMED" "clearing the code of an experiment_sheet operation keeps its code"
+ot_check "frozen_blank:EXP-SHEET-RENAMED" "blanking the code of an experiment_sheet operation keeps its code"
+ot_check "frozen_retyped:EXP-SHEET-RENAMED-2" "typing a new code on an experiment_sheet operation stores it"
 ot_check "fast_follow:12-10-16-MF25-4624-1250C_14kN_20dia" "a FAST operation's code follows its temperature"
 ot_check "sinter_hand_norun:<null>" "a hand-made sintering operation has no code before it has a run number"
 ot_check "sinter_hand_run:05-03-26-MF250-400" "a run number gives it the code"
