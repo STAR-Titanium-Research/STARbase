@@ -166,13 +166,11 @@ The central entity. Everything else points to or from here.
 → `{seq}-{alloy}-{method}-{YYYY-MM-DD}`
 
 **Numbers are assigned by the database** (migrations `…126`, `…127`; `next_sample_code_number()` is the read-only preview function the Register sample page uses, served by the `d1-next-number` endpoint). The Directus
-interfaces send a code whose number part is the literal placeholder `{seq}` (and, for
-sintering pass codes, `{mf}`); a BEFORE trigger replaces it with the next free number
-under a lock (an advisory lock for sample and MF numbers, a row lock on the sample for
-operation numbers), so concurrent registrations never collide. A code without a
-placeholder is stored as given. `manufacturing_operations.operation_sequence` is filled
-the same way when it is NULL, except for imported rows (`source_system` set), which keep
-a NULL sequence because importers number their own rows.
+interfaces send a sample code whose number part is the literal placeholder `{seq}`; a BEFORE
+trigger replaces it with the next free number under an advisory lock, so concurrent
+registrations never collide. A sample code without a placeholder is stored as given. This
+paragraph is about samples only: operation codes and `operation_sequence` are built by a
+different trigger with different rules (see "Operation codes" under `manufacturing_operations`).
 
 ---
 
@@ -191,9 +189,9 @@ separate `FAST Runs` and `Machining Operations` spreadsheet tabs.
 | `tool_id` | UUID FK | Tool holder used |
 | `insert_edge_id` | UUID FK | Cutting edge consumed |
 | `operator_name` | TEXT | Legacy free-text operator; `operator_person_id` → `people` supersedes it |
-| `operation_sequence` | INTEGER | Ordering of this operation within the sample lifecycle (1 = first); the number in its code. Left NULL on insert it is assigned by the database as max+1 for the sample (not for imported rows, `source_system` set); a supplied value (e.g. a machining pass number) is kept. An automatic operation that moves to another sample or method gets the next number there. Existing machining operations were numbered from their stored codes (migration `…157`, ledger `d1_private.operation_sequence_backfill`) |
-| `pass_code` | TEXT | Human-readable operation code, e.g. `TEST-S-F2-30MPM_0.1feed_1DoC` or `22-04-21-MF25-4624-950C_11kN_20dia`. Kept up to date by the database from the operation's fields (`operation_code_for`) unless a person typed a different one; clear it to make it automatic again. Not the PK. See "Operation codes" below |
-| `sintering_run_number` | INTEGER (> 0) | FAST/SPS run number as the machine shows it (typed on a hand-logged operation, read from the machine file by the importer). Part of the sintering code; never invented. Unique per machine (`equipment_id`; unique index `manufacturing_operations_sintering_run_unique`). Added by migration `…156` |
+| `operation_sequence` | INTEGER | Ordering of this operation within the sample lifecycle (1 = first); the number in its code. Left NULL on insert it is assigned by the database as max+1 for the sample (not for imported rows, `source_system` set); a supplied value (e.g. a machining pass number) is kept. An automatic operation that moves to another sample or method gets the next number there. Existing machining operations were numbered where the number could be read from the stored code (migration `…157`, ledger `d1_private.operation_sequence_backfill`); codes like N/R, or a number already taken by the same letter on that sample, stay without a sequence |
+| `pass_code` | TEXT | Human-readable operation code, e.g. `TEST-S-F2-30MPM_0.1feed_1DoC` or `22-04-21-MF25-4624-950C_11kN_20dia`. Kept up to date by the database from the operation's fields (`operation_code_for`) unless a person typed a different one; clear it to make it automatic again (not for experiment-sheet rows, whose code is fixed). Not the PK. See "Operation codes" below |
+| `sintering_run_number` | INTEGER (> 0), nullable, no default | FAST/SPS run number as the machine shows it (typed on a hand-logged operation, read from the machine file by the importer). Part of the sintering code; never invented. Unique per machine: the unique index `manufacturing_operations_sintering_run_unique` on (`equipment_id`, `sintering_run_number`) covers sintering rows that have a run number and an equipment set. Added by migration `…156` |
 | `short_id` | TEXT UNIQUE | Permanent short ID (8+ hex characters of `operation_id`), unique across samples, operations and tests. Never changes. Assigned by trigger (migration `…150`) |
 | `operation_date` | TIMESTAMPTZ | When the operation ran |
 | `recorded_metadata` | JSONB | Method-specific parameters as designed in Phase 1 — now superseded by typed columns (below) |
@@ -245,8 +243,10 @@ the sample row), statement-level triggers on `physical_samples` (UPDATE, DELETE)
 `manufacturing_operations` take the rollup advisory lock first. `preview_operation_code(values
 JSONB, operation_id UUID, sample_code TEXT)` is the read-only preview the form box uses (served
 by `POST /d1-next-number/operation-code`, which authorises the operation and the sample as the
-user and answers `{code, frozen}`): it returns what the rule would give, writes nothing, and
-does not check access itself, so its caller must.
+user and answers `{code, frozen}`): it returns what the rule would give (even for a typed or frozen
+operation, which the trigger stores as written), writes nothing, and does not check access
+itself, so its caller must (a) authorise the operation as the user (read it through Directus
+`ItemsService`) and (b) pass the code of the merged row's sample as `sample_code`.
 
 ---
 

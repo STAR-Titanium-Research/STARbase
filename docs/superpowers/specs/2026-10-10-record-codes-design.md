@@ -4,7 +4,7 @@ Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 
 **T0a applied to live (migrations 150-152). T0b built on `feat/record-codes` (migrations 155-158,
 the `d1-next-number` operation-code route, the new `d1-operation-code` box), not yet live.**
 Migration numbers below T0b are "next free" (see the table).
-Next: the implementation plan. Stream T0 of
+Next: T0b final review and apply, then T0c-T0f. Stream T0 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md);
 it goes before N1 (navigation), whose finder and Tests index use what this adds. Every decision
 below was made by the maintainer in a grilling round on 2026-10-09/10 (questions Q16-Q47; the
@@ -220,7 +220,7 @@ that needs frozen codes is added to this list explicitly, in its own migration.
 **Trigger** `mfg_op_set_code` replaces `mfg_op_assign_numbers`, BEFORE INSERT OR UPDATE.
 Its name sorts after `mfg_op_derive_category`, so `process_category` is already set when it runs.
 
-1. *Frozen:* leave `pass_code` alone.
+1. *Frozen:* never renamed automatically. A person can still re-type the code, but clearing it (empty, or writing a `{seq}`/`{mf}` placeholder) keeps the saved code.
 2. *Automatic or typed?* On UPDATE the code is automatic when `OLD.pass_code =
    operation_code_for(OLD, old sample code)` (Q29). On INSERT it is automatic when `pass_code` is
    NULL/'' or contains a placeholder.
@@ -386,10 +386,10 @@ merged in first**, so migration 143 and its test fix (`21790784`) are in the tre
 `tests/phase1_schema.sh` edits do not conflict.
 
 1. **T0a** short IDs + test codes (migrations 150-152), with tests.
-2. **T0b** operation codes in Postgres + preview endpoint + the form box (153).
+2. **T0b** operation codes in Postgres + preview endpoint + the form box (155-158).
 3. **T0c** Force dashboard / force-plotting changes and the Force App release.
-4. **T0d** FAST rebuild (154) — backup of `manufacturing_operations` first; dry run; apply.
-5. **T0e** file fingerprints (155) + the worker's back-fill + the force-file-standard update.
+4. **T0d** FAST rebuild (next free) — backup of `manufacturing_operations` first; dry run; apply.
+5. **T0e** file fingerprints (next free) + the worker's back-fill + the force-file-standard update.
 6. **T0f** UNIQUE on `pass_code`, after the maintainer's hand-fix.
 
 Each stage: Opus migration review → backup of the touched tables → apply → Directus restart →

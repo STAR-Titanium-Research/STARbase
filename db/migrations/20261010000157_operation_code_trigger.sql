@@ -18,7 +18,7 @@
 -- An operation with no code yet counts as automatic, but only gets one once something its code is
 -- built from changes (an edit of the notes leaves it NULL). Operations with source_system
 -- 'experiment_sheet' are frozen: they keep their code whatever changes (a person may still type
--- a new one, but clearing the code keeps the saved one); imported rows (source_system set) keep a NULL
+-- a new one, but clearing the code, or writing a {seq}/{mf} placeholder, keeps the saved one); imported rows (source_system set) keep a NULL
 -- sequence as under 126.
 --
 -- operation_sequence: a new operation with a sample and no number gets max+1 for the sample (as
