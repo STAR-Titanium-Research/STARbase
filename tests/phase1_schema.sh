@@ -1667,6 +1667,15 @@ VALUES ('00000000-0000-4000-8000-000000000004', 'c0000000-0000-4000-8000-0000000
 SELECT 'lowest_id:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
   FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c2';
 
+-- the earliest LINKED subject is the primary, even when a later one has a lower junction id
+INSERT INTO test_sessions (session_id) VALUES ('c0000000-0000-4000-8000-0000000001c9');
+INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item)
+VALUES ('00000000-0000-4000-8000-0000000000ff', 'c0000000-0000-4000-8000-0000000001c9', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a2');
+INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item)
+VALUES ('00000000-0000-4000-8000-0000000000f1', 'c0000000-0000-4000-8000-0000000001c9', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a1');
+SELECT 'earliest:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
+  FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c9';
+
 -- delete the primary: the next subject is promoted
 DELETE FROM test_sessions_subject WHERE id = '00000000-0000-4000-8000-000000000002';
 SELECT 'delete_primary:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
@@ -1725,7 +1734,8 @@ SQL
 ps_check() { grep -qx "$1" <<<"$ps_out" && ok "$2" || bad "$2 (psql output: $ps_out)"; }
 ps_check "insert:true/true/v2" "insert: the first sample subject becomes sample_id"
 ps_check "second:true/v2" "a second sample subject with a higher id leaves sample_id and the test row untouched"
-ps_check "lowest_id:true" "the subject with the lowest junction id is the primary"
+ps_check "lowest_id:true" "of two subjects linked in turn, the first linked is the primary"
+ps_check "earliest:true" "the earliest linked subject stays primary when a later one has a lower junction id"
 ps_check "delete_primary:true" "deleting the primary subject promotes the next one"
 ps_check "delete_last:true" "deleting the last sample subject clears sample_id"
 ps_check "edge:true/true" "an insert_edges subject fills insert_edge_id and leaves sample_id alone"
