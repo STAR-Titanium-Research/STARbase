@@ -41,8 +41,10 @@ SET LOCAL lock_timeout = '10s';
 -- The imported/legacy machining operations have no operation_sequence, but their codes carry the
 -- pass number (S-F7-30MPM, S-F2_1-60MPM, S-F3_30MPM_0.05feed: sample code, then letter + number).
 -- Read it into the column so the rule can rebuild those codes. Done with the table's user triggers
--- on (the audited, versioned change is wanted; ~50 rows) and before the new trigger exists, so
--- nothing rewrites the codes. Frozen rows are included (the number is read, the code is untouched).
+-- on (the audited, versioned change is wanted; 18 rows on live, measured on a restored copy) and
+-- before the new trigger exists, so nothing rewrites the codes. Frozen rows are included (the
+-- number is read, the code is untouched). On live this fills 18 rows; the rest (N/R codes, codes
+-- whose number cannot be read, numbers already taken) stay NULL.
 -- A number is not taken when another machining operation of the sample already has it for the same
 -- letter, or when two candidates would share it (the rule would then give two operations one code);
 -- those stay NULL. What was filled is kept in d1_private.operation_sequence_backfill so the down

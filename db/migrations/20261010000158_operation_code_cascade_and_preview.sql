@@ -34,6 +34,10 @@
 -- columns, which Postgres refuses while a trigger names the column. The cascade checks for a
 -- changed sample_code in its own body.
 
+-- This migration takes strong locks on busy tables: with live writers it fails fast instead of
+-- queueing every reader behind it. Apply in a quiet window.
+SET LOCAL lock_timeout = '10s';
+
 CREATE FUNCTION trg_physical_samples_rollup_lock()
     RETURNS TRIGGER
     LANGUAGE plpgsql

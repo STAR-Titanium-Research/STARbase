@@ -763,24 +763,53 @@ $$;
 ### Task 9 (coordinator): review, dry run, apply, check live
 
 - [ ] Opus whole-branch review of T0b (base: the commit before Task 1).
-- [ ] **Existing operations, automatic vs typed:** on a restored copy with 155-158 applied, list
-  every non-frozen operation whose stored code differs from `operation_code_for(m, sample code)`
-  (these will stay as typed until someone edits them) and every one that matches (they will
-  follow their fields). Record counts and the differing rows in the plan's Outcome section for
-  the maintainer.
-- [ ] **Pre-checks on live** (read-only): duplicate (equipment, run) among FAST rows after the
-  run back-fill (`SELECT equipment_id, split_part(source_run_uid,'|',2), count(*) … HAVING count(*) > 1` = none);
-  user triggers on the touched tables all `'O'`; the no-placeholder CHECK still holds.
-- [ ] **Dry run + Directus smoke on a copy:** `bash scripts/dev/directus_smoke.sh` (it restores a
-  fresh copy and applies 155-158) → all PASS; time the migrations.
+- [ ] **Deploy together with T0c.** T0b is not applied to live alone. T0c is the Force dashboard /
+  force-plotting stop writing `pass_code` and the Force App release. Until it ships, the
+  dashboard's save writes its own `MT-F…` code and could overwrite the codes of frozen
+  experiment-sheet operations. The migrations, the three extensions (d1-next-number,
+  d1-operation-code, T0c's) and the Force App release go live in one window.
+- [ ] **Pre-checks on live** (read-only):
+  - duplicates of (equipment, run) among FAST rows = 0
+    (`SELECT equipment_id, split_part(source_run_uid,'|',2), count(*) … HAVING count(*) > 1` = none);
+  - user triggers on the touched tables are all `'O'`;
+  - the no-placeholder CHECK holds;
+  - no long transactions: `SELECT pid, state, xact_start, query FROM pg_stat_activity WHERE datname = current_database() AND xact_start < now() - interval '1 minute'` returns nothing;
+  - no backup (`pg_dump`) and no FAST importer is running.
+- [ ] **Dry run + Directus smoke on a copy:**
+  - `bash scripts/dev/directus_smoke.sh` → exit 0 (it restores a fresh copy and applies 155-158; the
+    Lab Member cases SKIP on the known separate permissions bug). Time the migrations.
+  - The sequence back-fill ledger (`d1_private.operation_sequence_backfill`) holds 18 rows.
+  - **Existing operations, automatic vs typed:** list every non-frozen operation whose stored code
+    differs from `operation_code_for(m, sample code)` (these stay as typed until someone edits
+    them) and every one that matches (they follow their fields). Record counts and the differing
+    rows in the plan's Outcome section for the maintainer.
+  - **Idempotence check** in the copy: in one transaction that is rolled back, change every
+    operation's `operation_date` by 1 µs and back, and expect 0 changes to `pass_code` and to
+    `operation_sequence`. Time it.
 - [ ] **Backup:** `pg_dump -Fc -t manufacturing_operations -t physical_samples -t test_sessions -t directus_fields -t schema_migrations`
   → `backups/pre_t0b_<UTC>.dump`.
-- [ ] **Apply in a quiet window:** stop Directus; copy 155-158 into the main checkout's
-  `db/migrations`; `dbmate status` shows exactly 155-158 pending; `dbmate up`; copy the worktree's
-  `core/extensions/d1-next-number/` and `core/extensions/d1-operation-code/src/` + `package.json`
-  into the main checkout; `npm run build -w directus-extension-d1-operation-code` there; start
-  Directus.
-- [ ] **Live check (browser + API):** on the demo sample `DEMO-T0A-001` create a demo machining
-  operation through the form (notes "DEMO … safe to delete"): the box previews the code as you
-  type, the saved code matches; change the speed → the code follows; type a code → kept; ↻ →
-  back to automatic. Open an existing FAST operation: the box says Automatic and shows its code.
+- [ ] **Apply in a quiet window:**
+  1. Stop Directus.
+  2. Copy 155-158 into the main checkout's `db/migrations`; `dbmate status` shows exactly 155-158
+     pending; `dbmate up`.
+  3. **All four (155-158) must show applied in `dbmate status` before any extension is deployed.**
+     If one fails, stop: do not deploy the endpoint or the box.
+  4. Copy the worktree's `core/extensions/d1-next-number/` and
+     `core/extensions/d1-operation-code/src/` + `package.json` into the main checkout (and T0c's
+     extension and Force App changes); `npm run build -w directus-extension-d1-operation-code` there.
+  5. Start Directus.
+- [ ] **Rollback order:** revert the extensions first, then run the downs 158 → 155. The old box
+  composes codes itself; the new box sends none in automatic mode, and the restored migration-126
+  trigger would then save NULL codes, so the extensions must be back before the trigger is.
+  Losses: run numbers typed by hand during the window (156's down drops the column), and codes
+  rebuilt by the trigger or the cascade during the window (there is no ledger for them). The
+  pre-apply backup covers manual recovery of both.
+- [ ] **Note for the maintainer:** sample edits now wait for an in-progress FAST import (the
+  importers hold the rollup lock until their single commit). Run imports outside working hours
+  until T0d commits per page.
+- [ ] **Live check (browser + API, mandatory: the smoke run does not exercise the new box):** on
+  the demo sample `DEMO-T0A-001` create a demo machining operation through the form (notes "DEMO …
+  safe to delete"): the box previews the code as you type, the saved code matches; change the
+  speed → the code follows; type a code → kept; ↻ → back to automatic. Open an existing FAST
+  operation: the box says Automatic and shows its code. Open a frozen experiment-sheet operation:
+  it shows its saved code with the "fixed" hint and no ↻.

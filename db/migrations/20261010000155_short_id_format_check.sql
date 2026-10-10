@@ -4,6 +4,10 @@
 -- session_replication_role = replica) would silently store '' instead of failing on NOT NULL.
 -- CHECK runs after the BEFORE triggers, so the normal path is unaffected; Directus does not read
 -- CHECK constraints, so it does not start demanding the field.
+-- This migration takes strong locks on busy tables: with live writers it fails fast instead of
+-- queueing every reader behind it. Apply in a quiet window.
+SET LOCAL lock_timeout = '10s';
+
 ALTER TABLE physical_samples
     ADD CONSTRAINT physical_samples_short_id_format_check CHECK (short_id ~ '^[0-9a-f]{8,32}$');
 ALTER TABLE manufacturing_operations

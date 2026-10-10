@@ -25,7 +25,7 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The code-input columns of manufacturing_operations: the ones in the fast exit of
-// trg_manufacturing_operations_set_code (migration 157) plus pass_code itself.
+// trg_mfg_op_set_code (migration 157) plus pass_code itself.
 const CODE_KEYS = [
     'pass_code', 'sample_id', 'method_id', 'process_category', 'operation_sequence',
     'machining_operation_subtype', 'machining_cutting_speed_m_per_min',

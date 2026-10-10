@@ -13,6 +13,10 @@
 -- subtype is stored as method code + letter (MT-F, MT-R, MT-O, MM-R) but every live code carries the
 -- bare letter (...-F1-60MPM...), so a two-letter method prefix is stripped from the subtype token.
 
+-- This migration takes strong locks on busy tables: with live writers it fails fast instead of
+-- queueing every reader behind it. Apply in a quiet window.
+SET LOCAL lock_timeout = '10s';
+
 CREATE FUNCTION code_num(p NUMERIC)
     RETURNS TEXT
     LANGUAGE sql
