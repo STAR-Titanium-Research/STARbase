@@ -1,48 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initialMode, nextMode, recordLoaded, canDecide, afterFieldChange, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
+import { decideMode, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
 
-test('initialMode: a new record starts automatic whatever the value', () => {
-	assert.equal(initialMode({ isNew: true, value: null, preview: 'A-1' }), 'auto');
-	assert.equal(initialMode({ isNew: true, value: 'typed', preview: 'A-1' }), 'auto');
-	assert.equal(initialMode({ isNew: true, value: '', preview: null }), 'auto');
+test('decideMode: a new item is automatic', () => {
+	assert.equal(decideMode({ isNew: true, decided: false, automatic: true, current: 'auto' }), 'auto');
+	assert.equal(decideMode({ isNew: true, decided: false, automatic: undefined, current: 'typed' }), 'auto');
 });
 
-test('initialMode: existing record whose code equals the preview is automatic', () => {
-	assert.equal(initialMode({ isNew: false, value: 'S1-FA1', preview: 'S1-FA1' }), 'auto');
+test("decideMode: an existing item takes the endpoint's automatic flag (the saved row's test)", () => {
+	const e = { isNew: false, decided: false, current: 'auto' };
+	assert.equal(decideMode({ ...e, automatic: true }), 'auto');
+	assert.equal(decideMode({ ...e, automatic: false }), 'typed');
+	assert.equal(decideMode({ ...e, automatic: true, current: 'typed' }), 'auto');
 });
 
-test('initialMode: existing record with a different code is typed', () => {
-	assert.equal(initialMode({ isNew: false, value: 'MINE', preview: 'S1-FA1' }), 'typed');
-	assert.equal(initialMode({ isNew: false, value: 'MINE', preview: null }), 'typed');
-	assert.equal(initialMode({ isNew: false, value: 'MINE', preview: '' }), 'typed');
+test('decideMode: the live case: a typed saved code is typed whatever the form-built preview says', () => {
+	// op 49eb731a: saved DEMO-TI64-001-F1, rule DEMO-TI64-001-F5-...; the first preview was {code: null}.
+	// The preview is not an input at all: only the server's flag counts.
+	assert.equal(decideMode({ isNew: false, decided: false, automatic: false, current: 'auto' }), 'typed');
 });
 
-test('initialMode: both empty (null / undefined / empty string) is automatic', () => {
-	assert.equal(initialMode({ isNew: false, value: null, preview: null }), 'auto');
-	assert.equal(initialMode({ isNew: false, value: '', preview: null }), 'auto');
-	assert.equal(initialMode({ isNew: false, value: undefined, preview: '' }), 'auto');
-	assert.equal(initialMode({ isNew: false, value: null, preview: undefined }), 'auto');
+test('decideMode: once decided (an earlier answer, typing, or the refresh icon) later answers never change it', () => {
+	assert.equal(decideMode({ isNew: false, decided: true, automatic: true, current: 'typed' }), 'typed');
+	assert.equal(decideMode({ isNew: false, decided: true, automatic: false, current: 'auto' }), 'auto');
+	assert.equal(decideMode({ isNew: true, decided: true, automatic: true, current: 'typed' }), 'typed');
 });
 
-test('initialMode: whitespace-only counts as empty', () => {
-	assert.equal(initialMode({ isNew: false, value: '  ', preview: null }), 'auto');
-	assert.equal(initialMode({ isNew: false, value: null, preview: ' ' }), 'auto');
+test('decideMode: an answer without a boolean automatic (an older endpoint) decides nothing', () => {
+	for (const automatic of [undefined, null, 'true', 1]) {
+		assert.equal(decideMode({ isNew: false, decided: false, automatic, current: 'auto' }), null, String(automatic));
+	}
 });
 
-test('initialMode: an existing record with no code is automatic whatever the preview (the trigger builds it)', () => {
-	assert.equal(initialMode({ isNew: false, value: '', preview: 'S1-FA1' }), 'auto');
-	assert.equal(initialMode({ isNew: false, value: null, preview: 'S1-FA1' }), 'auto');
-	assert.equal(initialMode({ isNew: false, value: '  ', preview: 'S1-FA1' }), 'auto');
-});
-
-test('initialMode: surrounding whitespace is ignored when comparing', () => {
-	assert.equal(initialMode({ isNew: false, value: ' S1-FA1 ', preview: 'S1-FA1' }), 'auto');
-	assert.equal(initialMode({ isNew: false, value: 'S1-FA1', preview: ' S1-FA1' }), 'auto');
-});
-
-test('initialMode: comparison is exact otherwise (case matters)', () => {
-	assert.equal(initialMode({ isNew: false, value: 's1-fa1', preview: 'S1-FA1' }), 'typed');
+test('decideMode: a frozen operation (automatic: false) is typed: shows its saved code, no refresh icon, frozen hint', () => {
+	const mode = decideMode({ isNew: false, decided: false, automatic: false, current: 'auto' });
+	assert.equal(mode, 'typed');
+	assert.equal(shown({ mode, value: 'IMPORTED', preview: 'IMPORTED' }), 'IMPORTED');
+	assert.equal(canRegenerate({ mode, frozen: true }), false);
+	assert.match(hint({ mode, frozen: true, hidden: false, failed: false, noPreview: false, sintering: false }), /^Imported from the experiment sheets/);
 });
 
 test('onTyped: empty input goes back to automatic and emits null', () => {
@@ -114,61 +109,4 @@ test('hint: frozen wins over everything, typed or not', () => {
 
 test('hint: typed beats the preview-state hints', () => {
 	assert.equal(hint({ ...base, mode: 'typed', hidden: true }), TYPED);
-});
-
-test('nextMode: before any interaction it follows initialMode on every preview', () => {
-	const e = { touched: false, isNew: false, current: 'auto' };
-	// first preview null (form not loaded yet), then the real code
-	assert.equal(nextMode({ ...e, value: 'S1-FA1', preview: null, current: 'auto' }), 'typed');
-	assert.equal(nextMode({ ...e, value: 'S1-FA1', preview: 'S1-FA1', current: 'typed' }), 'auto');
-	// a real written code that differs from the rule stays typed
-	assert.equal(nextMode({ ...e, value: 'MINE', preview: 'S1-FA1', current: 'typed' }), 'typed');
-	assert.equal(nextMode({ ...e, value: 'MINE', preview: 'S1-FA1', current: 'auto' }), 'typed');
-	// no code yet: automatic
-	assert.equal(nextMode({ ...e, value: null, preview: 'S1-FA1', current: 'typed' }), 'auto');
-});
-
-test('nextMode: a new record is automatic', () => {
-	assert.equal(nextMode({ touched: false, isNew: true, value: 'x', preview: 'y', current: 'typed' }), 'auto');
-});
-
-test('nextMode: after the user touched the box the mode never flips back', () => {
-	assert.equal(nextMode({ touched: true, isNew: false, value: 'S1-FA1', preview: 'S1-FA1', current: 'typed' }), 'typed');
-	assert.equal(nextMode({ touched: true, isNew: false, value: 'MINE', preview: 'S1-FA1', current: 'auto' }), 'auto');
-	assert.equal(nextMode({ touched: true, isNew: true, value: null, preview: null, current: 'typed' }), 'typed');
-});
-
-test('afterFieldChange: a field edit takes over only once a mode has been decided', () => {
-	assert.equal(afterFieldChange({ touched: false, decided: true }), true);
-	assert.equal(afterFieldChange({ touched: false, decided: false }), false);
-	assert.equal(afterFieldChange({ touched: true, decided: false }), true);
-});
-
-test('never decided + field edit: the next good preview still decides the mode', () => {
-	// the first preview failed (nothing decided), the user edits a field, then a good preview arrives
-	const touched = afterFieldChange({ touched: false, decided: false });
-	assert.equal(nextMode({ touched, isNew: false, value: 'MINE', preview: 'S1-FA1', current: 'auto' }), 'typed');
-	assert.equal(nextMode({ touched, isNew: false, value: 'S1-FA1', preview: 'S1-FA1', current: 'auto' }), 'auto');
-});
-
-test('recordLoaded: a new item is ready at once; an existing one only when its record is in the form', () => {
-	assert.equal(recordLoaded({ isNew: true, values: {}, primaryKey: '+' }), true);
-	assert.equal(recordLoaded({ isNew: false, values: undefined, primaryKey: 'op-1' }), false);
-	assert.equal(recordLoaded({ isNew: false, values: {}, primaryKey: 'op-1' }), false);
-	// the primary key alone arrives before the rest of the record
-	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-1' }, primaryKey: 'op-1' }), false);
-	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-1', version: null }, primaryKey: 'op-1' }), false);
-	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-1', version: 3 }, primaryKey: 'op-1' }), true);
-	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-1', version: 0 }, primaryKey: 'op-1' }), true);
-	// another record's values
-	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-2', version: 3 }, primaryKey: 'op-1' }), false);
-	// a numeric key against a string one
-	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 7, version: 1 }, primaryKey: '7' }), true);
-});
-
-test('canDecide: an existing item is not decided while its value is still undefined (not loaded)', () => {
-	assert.equal(canDecide({ isNew: false, value: undefined }), false);
-	assert.equal(canDecide({ isNew: false, value: null }), true);
-	assert.equal(canDecide({ isNew: false, value: 'X' }), true);
-	assert.equal(canDecide({ isNew: true, value: undefined }), true);
 });

@@ -3,45 +3,20 @@
 
 const text = (v) => (v === null || v === undefined ? '' : String(v));
 const clean = (v) => text(v).trim(); // the trigger btrims written codes, so compare and emit trimmed
-const isEmpty = (v) => clean(v) === '';
 
-// New record -> automatic. Existing record -> automatic when it has no code yet (the trigger treats
-// a NULL code as automatic) or its saved code is what the rule gives now; otherwise the user wrote
-// it: typed.
-export function initialMode({ isNew, value, preview }) {
+// The mode from a preview answer, or null while it cannot be decided. Once decided (by an earlier
+// answer, or by the user typing / pressing the refresh icon) it stays `current`: later answers only
+// change the displayed preview. A new item is automatic. An existing one takes the endpoint's
+// `automatic`, which the server computes from the SAVED row with the trigger's own test (saved code
+// NULL, or equal to the rule's value for the saved row), so it does not depend on how much of the
+// record the form holds yet. An answer without a boolean `automatic` (an older endpoint) decides
+// nothing: the box keeps showing the saved code.
+export function decideMode({ isNew, decided, automatic, current }) {
+	if (decided) return current;
 	if (isNew) return 'auto';
-	if (isEmpty(value)) return 'auto';
-	return clean(value) === clean(preview) ? 'auto' : 'typed';
-}
-
-// The mode after a preview arrives. Until the user takes over (types in the box, presses the refresh
-// icon, or edits a field of the form) every successful preview re-decides it, so an early answer
-// built from a half-loaded form cannot stick; once touched the mode is the user's. `current` is the
-// mode in force.
-export function nextMode({ touched, isNew, value, preview, current }) {
-	if (touched) return current;
-	return initialMode({ isNew, value, preview });
-}
-
-// Is the form ready to preview? A new item always is. An existing one only when the form holds the
-// record: Directus puts the primary key into the values before the rest of the record, so the key
-// alone is not enough; `version` (NOT NULL on every operation) proves the load. Relies on
-// `operation_id` and `version` being in the values; if they are not, no preview is sent (fails safe).
-export function recordLoaded({ isNew, values, primaryKey }) {
-	if (isNew) return true;
-	return String(values?.operation_id ?? '') === String(primaryKey ?? '') && values?.version != null;
-}
-
-// A mode is not decided from a preview while an existing item's value is still undefined (Directus
-// passes undefined before the load, null for a record that really has no code).
-export function canDecide({ isNew, value }) {
-	return isNew || value !== undefined;
-}
-
-// A change to a field of the form: the user has taken over, but only once a mode was decided (a
-// preview that failed or is still in flight has decided nothing, so the next good one still must).
-export function afterFieldChange({ touched, decided }) {
-	return touched || decided;
+	if (automatic === true) return 'auto';
+	if (automatic === false) return 'typed';
+	return null;
 }
 
 // The user edited the box. Empty, or equal to the preview -> automatic and emit null (the database
@@ -58,8 +33,8 @@ export function onRegenerate() {
 	return { mode: 'auto', emit: null };
 }
 
-// What the box displays. `error` and `frozen` need no branch: a frozen operation's preview is its
-// saved code, and with no preview the box is empty.
+// What the box displays. `error` and `frozen` need no branch: a frozen operation is typed (shows its
+// saved code), and with no preview the box is empty.
 export function shown({ mode, value, preview }) {
 	return mode === 'typed' ? text(value) : text(preview);
 }
