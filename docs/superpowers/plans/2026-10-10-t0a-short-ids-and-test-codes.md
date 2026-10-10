@@ -5,7 +5,7 @@
 **Goal:** Give samples, operations and tests a permanent short ID, and give every test a readable
 code built from its subject and type, assigned and kept up to date by the database.
 
-**Architecture:** Three dbmate migrations (144-146). Short IDs: a registry table `short_ids` that
+**Architecture:** Three dbmate migrations (150-152). Short IDs: a registry table `short_ids` that
 makes them unique across the three tables, a claim function and one generic trigger. Test codes:
 columns on `test_sessions`, a counter table so numbers are never reused, a BEFORE trigger that
 builds the code from the earliest-linked subject, and AFTER triggers on samples and edges so a
@@ -196,7 +196,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Migration 144 — short IDs
+### Task 2: Migration 150 — short IDs
 
 **Files:**
 - Create: `db/migrations/20261010000150_short_ids.sql`
@@ -494,7 +494,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: Migration 145 — the primary subject is the earliest linked
+### Task 3: Migration 151 — the primary subject is the earliest linked
 
 **Files:**
 - Create: `db/migrations/20261010000151_test_subject_linked_at.sql`
@@ -696,7 +696,7 @@ diff <(grep FAIL /tmp/t0a-baseline.txt) <(grep FAIL /tmp/t0a-3.txt)
 ```
 
 Expected: `earliest` PASS, every existing "Test subject junction" and "Deleting samples and edges"
-check still PASS, empty FAIL diff, clean roundtrip of 145.
+check still PASS, empty FAIL diff, clean roundtrip of 151.
 
 - [ ] **Step 5: Commit**
 
@@ -709,7 +709,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 4: Migration 146 — test codes
+### Task 4: Migration 152 — test codes
 
 **Files:**
 - Create: `db/migrations/20261010000152_test_codes.sql`
@@ -1150,7 +1150,7 @@ diff <(grep FAIL /tmp/t0a-baseline.txt) <(grep FAIL /tmp/t0a-4.txt)
 ```
 
 Expected: all 26 test-code checks PASS, the short-ID and subject sections still PASS, empty FAIL
-diff, and the roundtrip rolls back 146, 145, 144 and applies them again without an error.
+diff, and the roundtrip rolls back 152, 151, 150 and applies them again without an error.
 
 - [ ] **Step 5: Commit**
 
@@ -1200,7 +1200,7 @@ Expected: `Results:` with exactly the baseline's 4 failures (empty diff), clean 
 - [ ] **Step 3: Update the stream status**
 
 In `docs/superpowers/plans/2026-10-09-explorer-round-2.md`, change the T0 status cell to:
-`**T0a built** on feat/record-codes (migrations 144-146, short IDs and test codes); awaiting Opus
+`**T0a built** on feat/record-codes (migrations 150-152, short IDs and test codes); awaiting Opus
 review; T0b next`.
 
 - [ ] **Step 4: Commit**
@@ -1226,7 +1226,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
   manufacturing_operations -t test_sessions -t test_sessions_subject -t directus_fields` into
   `backups/pre_t0a_<UTC timestamp>.dump`.
 - [ ] Copy the three migration files into the main checkout's `db/migrations` (untracked, as for
-  143), `dbmate status` shows exactly 144-146 pending, `dbmate up`, `docker restart
+  143), `dbmate status` shows exactly 150-152 pending, `dbmate up`, `docker restart
   d1-database-directus-1`.
 - [ ] Live check: the sample, operation and test forms show a read-only **Short ID**; a new test
   with a linked sample gets `{sample code}-SEM1`; typing a code keeps it.

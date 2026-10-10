@@ -379,11 +379,11 @@ The T0 worktree branches from `feat/explorer-restyle` **with `fix/restore-inline
 merged in first**, so migration 143 and its test fix (`21790784`) are in the tree and the
 `tests/phase1_schema.sh` edits do not conflict.
 
-1. **T0a** short IDs + test codes (migrations 144-146), with tests.
-2. **T0b** operation codes in Postgres + preview endpoint + the form box (147).
+1. **T0a** short IDs + test codes (migrations 150-152), with tests.
+2. **T0b** operation codes in Postgres + preview endpoint + the form box (153).
 3. **T0c** Force dashboard / force-plotting changes and the Force App release.
-4. **T0d** FAST rebuild (148) — backup of `manufacturing_operations` first; dry run; apply.
-5. **T0e** file fingerprints (149) + the worker's back-fill + the force-file-standard update.
+4. **T0d** FAST rebuild (154) — backup of `manufacturing_operations` first; dry run; apply.
+5. **T0e** file fingerprints (155) + the worker's back-fill + the force-file-standard update.
 6. **T0f** UNIQUE on `pass_code`, after the maintainer's hand-fix.
 
 Each stage: Opus migration review → backup of the touched tables → apply → Directus restart →
