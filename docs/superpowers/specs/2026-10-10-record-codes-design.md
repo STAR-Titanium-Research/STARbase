@@ -75,7 +75,7 @@ numbers are kept so the record can be traced).
 | Q38 | The 151 machining operations imported from experiment sheets stay **frozen**: their codes match the archive file names. Their 6 `N/R` codes go on the hand-fix list. |
 | Q39 | When a sample's code changes, the automatic codes of its operations and tests follow (same numbers). Typed and frozen codes are left alone. |
 | Q41 | Samples, operations and tests get a short ID. |
-| Q42 | Short ID = the first 8 hex characters of the record's UUID, unique, never changes (9+ characters on the rare clash). |
+| Q42 | Short ID = the first 8 hex characters of the record's UUID, unique, never changes (9+ characters on the rare clash). *Added in review:* unique across samples, operations and tests together, and new ids stay random (v4). |
 | Q43 | File names carry the code at capture time and **no ID**. The full record ID goes inside the file; the database stores a content hash of every linked file; the Force App generates the record ID when a capture starts. |
 | Q44 | The short ID shows on Explorer record pages (copyable), in the finder, on printed sample labels (text + QR) and as a read-only field on the Directus form. |
 | Q45 | Hash the operation-linked files first, then the rest of the share in the background. |
@@ -113,8 +113,14 @@ numbers are kept so the record can be traced).
 - Column `short_id TEXT` on `physical_samples`, `manufacturing_operations`, `test_sessions`;
   `UNIQUE`, `NOT NULL` after back-fill, never updated (a BEFORE UPDATE guard rejects a change).
 - Value: `left(replace(<uuid>::text,'-',''), 8)`. On a clash, 9, then 10 … characters until unique.
-  Assigned by a BEFORE INSERT trigger (and the back-fill), under a per-table advisory lock so two
-  inserts cannot pick the same value.
+  Assigned by a BEFORE INSERT trigger (and the back-fill), under one advisory lock shared by the
+  three tables so two inserts cannot pick the same value.
+- **Unique across all three tables**, not per table: a label's QR code or a short ID typed in the
+  finder must reach exactly one record. A registry table `short_ids(short_id TEXT PRIMARY KEY,
+  collection TEXT, record_id UUID)` holds every assigned value; the triggers insert into it and
+  a delete of the record removes its row. All record ids here are random UUIDs (v4), so the first
+  8 hex characters are random; **new ids must stay v4** (see §7: a time-ordered v7 id would put
+  timestamp bits in those characters and clash for every capture made within the same minute).
 - Directus: read-only `input` field near the top of each form, note "Permanent ID — never changes".
 - Lookup helper for tools: `record_by_short_id(text) RETURNS TABLE(collection text, id uuid)`.
 
@@ -175,7 +181,9 @@ deliberate changes:
   trailing zeros). Unchanged abbreviation maps (HT types and cooling, deformation tokens).
 - **Change 1 — sintering:** machine = 25 or 250 from the operation's equipment (`FCT HP D 25` /
   `FCT HP D 250`, pinned by id in the migration), run = `sintering_run_number`.
-- **Change 2 — the date is taken in `Europe/London`** (the browser used local time).
+- **Change 2 — the date is taken in UTC.** Every one of the 10,048 FAST codes already uses the UTC
+  date (measured: 0 differ in UTC, 1 would differ in `Europe/London`), so UTC keeps them as they
+  are. The browser used local time; only sintering codes carry a date, and none was made by hand.
 - **Change 3 — no placeholders.** The database knows the numbers when it builds the code, so
   `{seq}`/`{mf}` disappear. The trigger still accepts them from an old client (treated as "build
   it for me") until the Force App release is out.
@@ -185,6 +193,15 @@ deliberate changes:
 the date change; the next free number when the input sample or the method changes (Q27):
 `max(operation_sequence)+1` for the new sample, or `max(sintering_run_number)+1` for the machine.
 A machining sub-type change (F → R) counts as a parameter: the number stays.
+
+**Missing sequence numbers.** 52 machining operations have no `operation_sequence` (43 made by
+hand, 9 experiment-sheet). On those samples a new operation would get `max+1` and repeat an
+F-number already in a code. The migration fills `operation_sequence` from the number after the
+sub-type in the stored code (`…-F8-…` → 8) wherever it parses, for frozen rows too (the number is
+read, the code is not touched), and lists the rows it could not parse.
+
+**Sintering runs are unique per machine:** a unique index on `(equipment_id,
+sintering_run_number)` for sintering rows, not only a one-off check during the rebuild.
 
 **Frozen operations:** `source_system = 'experiment_sheet'` — never renamed automatically (Q38).
 FAST imports (`fast_25`, `fast_250`) are not frozen after the rebuild (Q37). A future importer
@@ -212,9 +229,17 @@ An AFTER UPDATE OF `sample_code` trigger on `physical_samples` rebuilds the auto
 sample's operations (`sample_id`) and of tests whose primary subject is that sample, with the same
 numbers. It sets the new code explicitly, only on rows whose stored code equals the rule's value
 with the *old* sample code (that is what "automatic" means here), so it does not rely on the
-operation trigger's fast exit. It runs one UPDATE per table (so the operation trigger's rollup lock is taken once per
-statement, after the sample row, matching the lock order). Typed and frozen codes are untouched.
-The same applies to `insert_edges.edge_code` for tests.
+operation trigger's fast exit. Typed and frozen codes are untouched. The same applies to
+`insert_edges.edge_code` for tests.
+
+**Lock order.** Updating the operations fires the statement-level `refresh_rollup_ops`, which
+takes the `refresh_project_rollup` advisory lock (`20261003000118`). By then the UPDATE on
+`physical_samples` already holds the sample row, which is the reverse of the order a new operation
+uses (rollup lock, then sample row, `20261003000126`): the two could deadlock. So a BEFORE UPDATE
+OF `sample_code` trigger on `physical_samples` takes the rollup lock first, before the row is
+changed, restoring the one order (rollup → sample row → counters). The plan verifies with a
+two-session test that this holds (a sample-code edit and a new operation on the same sample,
+concurrently) before relying on it.
 
 ### 5. Live preview (Q36)
 
@@ -224,8 +249,11 @@ The same applies to `insert_edges.edge_code` for tests.
   no writes. `values` is the form's partial state merged over the saved row.
 - Endpoint: two routes added to `d1-next-number` (it already asks Postgres for the next sample
   number): `POST /d1-next-number/operation-code` and `POST /d1-next-number/test-code`. Same
-  guards (signed-in user with app access). The sample and edge codes they read are ones the user
-  picked in the form.
+  guards (signed-in user with app access). **Permissions:** the endpoint's `database` connection
+  ignores Directus permissions, so it must not read a sample or edge code itself (a user could
+  send any `sample_id` and learn a code they cannot see, against the row visibility of ADR-0011).
+  It reads them through Directus's `ItemsService` with the request's accountability, and passes
+  the codes into the SQL function; a sample the user cannot read gives a 403, not a code.
 - **`d1-operation-code` box:** shows the preview, updating 300 ms after the last change. In
   automatic mode it sends **no** `pass_code`, so the database builds it on save; typing sends the
   text (typed); ↻ clears it (back to automatic). Hints: "Automatic: follows the fields below" /
@@ -243,8 +271,18 @@ One migration, after §3 is in place:
 1. Back-fill `sintering_run_number` from `source_run_uid` (`fast25|4624` → 4624); stop with an
    error listing any FAST row it cannot parse.
 2. Check that (machine, run) is unique across sintering rows; stop with the clashes listed if not.
-3. Rebuild every FAST `pass_code` with `operation_code_for`. One UPDATE statement; the audit
-   trigger records each old code; the statement-level rollup refresh runs once.
+3. Rebuild every FAST `pass_code` with `operation_code_for`. One UPDATE statement; the statement-
+   level rollup refresh runs once. The old codes go into a ledger table
+   (`d1_private.fast_code_rebuild_changes`: operation id, old code, new code) so `migrate:down`
+   restores them exactly; it is also added to the `DROP TABLE` list of the migration-141 test, the
+   same CI trap the form fix hit.
+
+**Expected size (measured 2026-10-09):** with UTC dates, every FAST code already matches the rule:
+0 date prefixes differ, 0 run numbers differ from `source_run_uid`, 0 duplicate runs, 0 short
+codes whose row has parameters, and the 293 "other" shapes are codes with only some parameters
+set, which the rule also writes. So the rebuild should change almost nothing; its real effect is
+that FAST codes stop being special. The migration prints the count it changed and the plan's dry
+run lists every changed row for the reviewer.
 
 `scripts/finalize_fast_codes.py` is retired: the FAST importers leave `pass_code` NULL as now and
 set `sintering_run_number`, and the trigger builds the code on insert.
@@ -252,8 +290,12 @@ set `sintering_run_number`, and the trigger builds the code on insert.
 ### 7. File identity (Q43, Q45, Q46)
 
 - **Table `file_fingerprints`:** `directus_files_id UUID PRIMARY KEY` (FK, ON DELETE CASCADE),
-  `content_sha256 TEXT` (the whole file), `data_sha256 TEXT` (`.mat` only: the main force-data
-  matrix's raw bytes as stored, float64 little-endian column-major), `size_bytes BIGINT`,
+  `content_sha256 TEXT` (the whole file), `data_sha256 TEXT` (`.mat` only: the *decoded* main
+  force-data array, never the bytes on disk, because v7.3 files are HDF5 and their chunked or
+  compressed bytes change without the data changing. Defined as SHA-256 over: the array's shape
+  as two little-endian uint64, then its values as float64 little-endian in column-major order.
+  The variable read is the one `docs/force-file-standards.md` §2 names for the file's layout
+  version), `size_bytes BIGINT`,
   `hashed_at TIMESTAMPTZ`. Index on each hash. `data_sha256` survives metadata-only edits (the
   future metadata migration), so an old file stays recognisable after it; a layout upgrade
   (v0.5 → v1.0) changes it, and the tool doing the upgrade records the new value.
@@ -261,8 +303,9 @@ set `sintering_run_number`, and the trigger builds the code on insert.
   rest of `star` and `local` in the background, oldest first, resumable, throttled so the share
   stays usable. Re-hashed when `directus_files.modified_on` changes.
 - **New files:** the code at capture time is the file name, with no ID (Q43). Phase 2 recording
-  generates the operation's UUID (time-ordered, v7) when a capture starts, writes it into the
-  file's metadata as `RecordID` (and `RecordShortID`), and creates the operation with that id.
+  generates the operation's UUID (**random, v4**, so its short ID is random too, §1) when a
+  capture starts, writes it into the file's metadata as `RecordID` (and `RecordShortID`), and
+  creates the operation with that id.
 - **`docs/force-file-standards.md`:** new §3.4 "Record identity" (`RecordID`, `RecordShortID`,
   added only by writers of new files; readers use `isfield`) and §6 rules for hashes: the two
   hashes, how `data_sha256` is computed, and that a migration which rewrites the matrix must
@@ -298,7 +341,9 @@ for the new columns and tables.
 | Risk | Check |
 |---|---|
 | The SQL rule differs from the browser rule for existing machining codes, so automatic codes look "typed" | Before switching: run `operation_code_for` over the 84 non-imported machining rows and list every row whose stored code differs; the maintainer sees the list in review. |
-| Deadlock with the rollup lock | Same lock order as `20261003000126`; a test runs two concurrent sessions renaming operations of one sample. |
+| Deadlock with the rollup lock | Same lock order as `20261003000126` everywhere (rollup → sample row → counters), including the sample-code cascade (§4). Two-session tests: two renames on one sample; a sample-code edit against a new operation on the same sample. |
+| The preview leaks a code the user cannot see | Codes are read through `ItemsService` as the user (§5); a test asks for a sample outside the user's visibility and expects 403. |
+| A short ID clashes across tables | One registry (§1); a test forces the same 8 characters on a sample and an operation. |
 | The FAST rebuild clashes or mis-parses a run number | Steps 1-2 of §6 stop the migration with the offending rows listed; dry-run in BEGIN/ROLLBACK on a copy first. |
 | An old Force App build writes a code during the switch | Placeholders still accepted; a code it builds that equals the rule stays automatic. The release goes out with T0. |
 | Renames cost work on busy rows | Fast exit when no input changed; renames happen only on edits. |
@@ -323,6 +368,10 @@ for the new columns and tables.
 
 ## Stages (Sonnet workers at high effort; Opus review; the coordinator applies)
 
+The T0 worktree branches from `feat/explorer-restyle` **with `fix/restore-inline-param-meta`
+merged in first**, so migration 143 and its test fix (`21790784`) are in the tree and the
+`tests/phase1_schema.sh` edits do not conflict.
+
 1. **T0a** short IDs + test codes (migrations 144-146), with tests.
 2. **T0b** operation codes in Postgres + preview endpoint + the form box (147).
 3. **T0c** Force dashboard / force-plotting changes and the Force App release.
@@ -332,6 +381,17 @@ for the new columns and tables.
 
 Each stage: Opus migration review → backup of the touched tables → apply → Directus restart →
 live check, as for the form fix (F2). Never `configure_all.sh` or `configure_directus.sql`.
+
+## Open question for the maintainer
+
+**Q48 — a hand-logged sintering run and the machine's import.** Q35 gives a hand-made sintering
+operation "the machine's next run number". But the FAST import keeps running: when the machine's
+own file for that run arrives, it is usually the *same physical run*, and it would become a second
+operation with the same machine and run (now refused by the unique index). Options: (a) the run
+number on a hand-made sintering operation is the one shown on the FAST machine, typed by the
+person, and the importer, finding an operation with the same machine and run, fills it in instead
+of creating a new one; (b) a hand-made operation leaves the run empty, with no code until the
+import matches it by machine and date. Recommended: (a).
 
 ## What N1 takes from this
 
