@@ -1272,3 +1272,22 @@ number on a clash; (3) tighten test (d) (assert `test_code_number` and the typed
 (5) writing the rule's own value marks a code typed (revisit with the §5 preview); (6) spec drift:
 `test_code_for()` does not exist yet, `record_by_short_id` returns `record_id`, `test_code` sits at
 sort 1; (7) the deferred harness and doc minors listed in the review history.
+
+## Live demo and two follow-up fixes (2026-10-10)
+
+- **153 (hotfix, live):** creating a sample through Directus failed ("short_id: Value is required")
+  because Directus treats a NOT NULL column without a default as required. `short_id` got a `''`
+  column default; the trigger still assigns the real value on every insert. Opus-reviewed after
+  the fact: acceptable as is.
+- **154 (live, backup `backups/pre_t0a_154_20261010T130937Z.dump`):** a test inserted with
+  `sample_id` already set (Directus "Save as copy", importers) never got a code; the trigger now
+  falls back to the directly written `sample_id` / `insert_edge_id` when the junction gives none.
+  Opus-reviewed: safe.
+- **Demo records on live (safe to delete):** sample `DEMO-T0A-001` (short ID `581a6d5e`) with tests
+  `DEMO-T0A-001-SEM1` (`a6a9ea90`), `-SEM2` (`0c7a914a`, re-coded once by hand after 154) and
+  `-SEM3` (`001bac96`). A copy that kept the code was refused as a duplicate.
+- **More carry-overs for T0b:** add `CHECK (short_id ~ '^[0-9a-f]{8,32}$')` on the three tables (an
+  insert with triggers off would now silently store `''`); document that a multi-row junction insert
+  naming an edge before a directly written sample keeps the sample-based code; the second 153 check is
+  near-vacuous; add a check where a junction names a different primary than a directly written
+  sample_id; schema filter on the information_schema check.
