@@ -25,7 +25,7 @@ Read this section first, then the Status table. Nothing is pushed anywhere.
 - The restart also loaded the last four F1 fixes.
 
 **Next (re-ordered 2026-10-09, second session, after a grilling round with the maintainer)**
-0. **T0: record codes, first.** Spec being written: `docs/superpowers/specs/2026-10-09-record-codes-design.md`.
+0. **T0: record codes, first.** Spec written, awaiting review: `docs/superpowers/specs/2026-10-10-record-codes-design.md`.
    Decisions (Q16-Q31 of the grilling): test codes `{primary subject code}-{TYPE}{n}` (edge code for an
    insert edge), TYPE = TEN HRD CHP CMP TRB OM SEM TEM XRD ALI CLX DCT CT FAT CRP DMA OTH; numbered by
    the database, unique, overridable; assigned when the first subject is linked ("No code yet" before);
