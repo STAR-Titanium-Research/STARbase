@@ -1,6 +1,7 @@
 # Record codes: test codes, operation codes that follow their fields, short IDs and file hashes
 
-Status: **draft for the maintainer's review** (2026-10-10). Stream T0 of
+Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 answered (a)).
+Next: the implementation plan. Stream T0 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md);
 it goes before N1 (navigation), whose finder and Tests index use what this adds. Every decision
 below was made by the maintainer in a grilling round on 2026-10-09/10 (questions Q16-Q47; the
@@ -69,7 +70,8 @@ numbers are kept so the record can be traced).
 | Q30 | Operation codes stay non-unique for now. The duplicates are listed for the maintainer to fix by hand; then UNIQUE is switched on. |
 | Q31 | A test that loses all its subjects keeps its last code. |
 | Q34 | The primary subject becomes the **earliest linked** one (today it is the lowest random junction id). |
-| Q35 | Sintering code = `DD-MM-YY-MF{machine}-{run}[-{T}C_{F}kN_{D}dia]`, machine 25 or 250, run = the machine's next run number. The running-MF-counter rule is dropped. |
+| Q35 | Sintering code = `DD-MM-YY-MF{machine}-{run}[-{T}C_{F}kN_{D}dia]`, machine 25 or 250. The running-MF-counter rule is dropped. |
+| Q48 | The run is the number the FAST machine shows: typed by the person on a hand-logged operation, read from the file by the importer. The importer fills in an existing operation with the same machine and run instead of creating a duplicate. |
 | Q36 | The rules live only in the database. The form box and the Force dashboard show a live preview by asking it; the dashboard stops writing codes. A Force App release is part of T0. |
 | Q37 | All 10,048 FAST codes are rebuilt to the Q35 rule once; afterwards they follow the rules like any other. New FAST imports get their code from the database (retires the `finalize_fast_codes.py` step). |
 | Q38 | The 151 machining operations imported from experiment sheets stay **frozen**: their codes match the archive file names. Their 6 `N/R` codes go on the hand-fix list. |
@@ -191,7 +193,12 @@ deliberate changes:
 **Numbers:** `operation_sequence` (existing, per sample) and a new `sintering_run_number INTEGER`
 (per machine; back-filled from `source_run_uid` for FAST imports). Kept when only parameters or
 the date change; the next free number when the input sample or the method changes (Q27):
-`max(operation_sequence)+1` for the new sample, or `max(sintering_run_number)+1` for the machine.
+`max(operation_sequence)+1` for the new sample. **The sintering run number is never invented**
+(Q48): it is the run number the FAST machine shows, typed by the person on a hand-logged
+operation (a new `sintering_run_number` field on the form, required for sintering) or read from
+the machine's file by the importer. Until it is set, a sintering operation has no code. When the
+importer meets an operation with the same machine and run, it fills that operation in instead of
+creating a second one.
 A machining sub-type change (F → R) counts as a parameter: the number stays.
 
 **Missing sequence numbers.** 52 machining operations have no `operation_sequence` (43 made by
@@ -218,8 +225,8 @@ Its name sorts after `mfg_op_derive_category`, so `process_category` is already 
    cleared code goes back to automatic.
 4. *Automatic:* assign the numbers as above, then `NEW.pass_code := operation_code_for(NEW, …)`.
 5. **Lock order, unchanged:** `refresh_project_rollup` advisory lock → sample row
-   (`FOR NO KEY UPDATE`) → the per-machine run counter lock. Taken only when a number is
-   assigned, as today.
+   (`FOR NO KEY UPDATE`). Taken only when a sequence number is assigned, as today. (No run
+   counter: the run number is typed or imported, Q48, and the unique index guards it.)
 6. Fast exit: on UPDATE, when none of the fields the code is built from changed and `pass_code`
    did not change, return at once (the dashboards write these rows often).
 
@@ -382,16 +389,6 @@ merged in first**, so migration 143 and its test fix (`21790784`) are in the tre
 Each stage: Opus migration review → backup of the touched tables → apply → Directus restart →
 live check, as for the form fix (F2). Never `configure_all.sh` or `configure_directus.sql`.
 
-## Open question for the maintainer
-
-**Q48 — a hand-logged sintering run and the machine's import.** Q35 gives a hand-made sintering
-operation "the machine's next run number". But the FAST import keeps running: when the machine's
-own file for that run arrives, it is usually the *same physical run*, and it would become a second
-operation with the same machine and run (now refused by the unique index). Options: (a) the run
-number on a hand-made sintering operation is the one shown on the FAST machine, typed by the
-person, and the importer, finding an operation with the same machine and run, fills it in instead
-of creating a new one; (b) a hand-made operation leaves the run empty, with no code until the
-import matches it by machine and date. Recommended: (a).
 
 ## What N1 takes from this
 
