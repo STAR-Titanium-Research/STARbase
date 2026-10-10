@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initialMode, onTyped, onRegenerate, shown } from './state.js';
+import { initialMode, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
 
 test('initialMode: a new record starts automatic whatever the value', () => {
 	assert.equal(initialMode({ isNew: true, value: null, preview: 'A-1' }), 'auto');
@@ -30,12 +30,18 @@ test('initialMode: whitespace-only counts as empty', () => {
 	assert.equal(initialMode({ isNew: false, value: null, preview: ' ' }), 'auto');
 });
 
-test('initialMode: empty value against a real preview is typed (nothing to compare)', () => {
-	assert.equal(initialMode({ isNew: false, value: '', preview: 'S1-FA1' }), 'typed');
-	assert.equal(initialMode({ isNew: false, value: null, preview: 'S1-FA1' }), 'typed');
+test('initialMode: an existing record with no code is automatic whatever the preview (the trigger builds it)', () => {
+	assert.equal(initialMode({ isNew: false, value: '', preview: 'S1-FA1' }), 'auto');
+	assert.equal(initialMode({ isNew: false, value: null, preview: 'S1-FA1' }), 'auto');
+	assert.equal(initialMode({ isNew: false, value: '  ', preview: 'S1-FA1' }), 'auto');
 });
 
-test('initialMode: comparison is exact (case and inner spaces matter)', () => {
+test('initialMode: surrounding whitespace is ignored when comparing', () => {
+	assert.equal(initialMode({ isNew: false, value: ' S1-FA1 ', preview: 'S1-FA1' }), 'auto');
+	assert.equal(initialMode({ isNew: false, value: 'S1-FA1', preview: ' S1-FA1' }), 'auto');
+});
+
+test('initialMode: comparison is exact otherwise (case matters)', () => {
 	assert.equal(initialMode({ isNew: false, value: 's1-fa1', preview: 'S1-FA1' }), 'typed');
 });
 
@@ -46,15 +52,17 @@ test('onTyped: empty input goes back to automatic and emits null', () => {
 	assert.deepEqual(onTyped('   ', 'S1-FA1'), { mode: 'auto', emit: null });
 });
 
-test('onTyped: text equal to the preview stays automatic but is emitted', () => {
-	assert.deepEqual(onTyped('S1-FA1', 'S1-FA1'), { mode: 'auto', emit: 'S1-FA1' });
+test('onTyped: text equal to the preview is automatic and emits null (no stale written code)', () => {
+	assert.deepEqual(onTyped('S1-FA1', 'S1-FA1'), { mode: 'auto', emit: null });
+	assert.deepEqual(onTyped(' S1-FA1 ', 'S1-FA1'), { mode: 'auto', emit: null });
 });
 
-test('onTyped: any other text is typed and emitted as written', () => {
+test('onTyped: any other text is typed and emitted trimmed', () => {
 	assert.deepEqual(onTyped('MINE', 'S1-FA1'), { mode: 'typed', emit: 'MINE' });
 	assert.deepEqual(onTyped('MINE', null), { mode: 'typed', emit: 'MINE' });
 	assert.deepEqual(onTyped('MINE', ''), { mode: 'typed', emit: 'MINE' });
-	assert.deepEqual(onTyped('S1-FA1 ', 'S1-FA1'), { mode: 'typed', emit: 'S1-FA1 ' });
+	assert.deepEqual(onTyped('  MINE  ', 'S1-FA1'), { mode: 'typed', emit: 'MINE' }); // the trigger btrims
+	assert.deepEqual(onTyped('s1-fa1', 'S1-FA1'), { mode: 'typed', emit: 's1-fa1' });
 });
 
 test('onRegenerate: automatic, emits null', () => {
@@ -72,4 +80,38 @@ test('shown: typed shows the value', () => {
 	assert.equal(shown({ mode: 'typed', value: 'MINE', preview: 'S1-FA1', error: false }), 'MINE');
 	assert.equal(shown({ mode: 'typed', value: null, preview: 'S1-FA1', error: false }), '');
 	assert.equal(shown({ mode: 'typed', value: undefined, preview: null, error: true }), '');
+});
+
+test('shown: a frozen op (its preview is its saved code) shows that code in auto and what was typed in typed', () => {
+	assert.equal(shown({ mode: 'auto', value: 'OLD', preview: 'OLD', error: false, frozen: true }), 'OLD');
+	assert.equal(shown({ mode: 'typed', value: 'NEW', preview: 'OLD', error: false, frozen: true }), 'NEW');
+});
+
+test('canRegenerate: the refresh icon only in typed mode, never for a frozen op', () => {
+	assert.equal(canRegenerate({ mode: 'typed', frozen: false }), true);
+	assert.equal(canRegenerate({ mode: 'auto', frozen: false }), false);
+	assert.equal(canRegenerate({ mode: 'typed', frozen: true }), false);
+	assert.equal(canRegenerate({ mode: 'auto', frozen: true }), false);
+});
+
+const TYPED = 'Typed: kept as you wrote it — ↻ to go back to automatic.';
+const base = { mode: 'auto', frozen: false, hidden: false, failed: false, noPreview: false, sintering: false };
+test('hint: the brief strings', () => {
+	assert.equal(hint(base), 'Automatic: follows the fields below.');
+	assert.equal(hint({ ...base, mode: 'typed' }), TYPED);
+	assert.equal(hint({ ...base, hidden: true }), 'Automatic: the database builds the code on save.');
+	assert.equal(hint({ ...base, failed: true }), 'Preview unavailable — the database still builds the code on save.');
+	assert.equal(hint({ ...base, noPreview: true, sintering: true }), 'Set the run number to get a code.');
+	assert.equal(hint({ ...base, noPreview: true }), 'Automatic: follows the fields below.');
+});
+
+test('hint: frozen wins over everything, typed or not', () => {
+	const f = 'Imported from the experiment sheets: this code is fixed (type to rename).';
+	assert.equal(hint({ ...base, frozen: true }), f);
+	assert.equal(hint({ ...base, frozen: true, mode: 'typed' }), f);
+	assert.equal(hint({ ...base, frozen: true, failed: true }), f);
+});
+
+test('hint: typed beats the preview-state hints', () => {
+	assert.equal(hint({ ...base, mode: 'typed', hidden: true }), TYPED);
 });

@@ -7,7 +7,7 @@
 		>
 			<template #append>
 				<v-icon
-					v-if="mode === 'typed'"
+					v-if="showRefresh"
 					v-tooltip="'Back to automatic'"
 					name="refresh"
 					clickable
@@ -27,7 +27,7 @@
 // payload and the database builds the code; typing emits, and the refresh icon emits null.
 import { inject, ref, computed, watch, onMounted, onBeforeUnmount, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { initialMode, onTyped, onRegenerate, shown } from './state.js';
+import { initialMode, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
 
 const props = defineProps<{ value: string | null; primaryKey?: string | number | null }>();
 const emit = defineEmits<{ (e: 'input', value: string | null): void }>();
@@ -42,6 +42,7 @@ const decided = ref(false); // true once the first preview (or the user) has set
 const preview = ref<string | null>(null);
 const previewHidden = ref(false); // 403: the user may not read the operation or sample
 const previewFailed = ref(false); // 500 / network / anything else
+const frozen = ref(false); // imported from the experiment sheets: the saved code is fixed
 
 // The form sends changed fields only, so pass_code itself must not retrigger previews
 // (typing in the box would otherwise cause a request per keystroke).
@@ -66,6 +67,7 @@ async function fetchPreview() {
 		});
 		if (req !== requestCounter) return; // a newer request is in flight; drop this one
 		preview.value = res?.data?.code ?? null;
+		frozen.value = res?.data?.frozen === true;
 		previewHidden.value = false;
 		previewFailed.value = false;
 		if (!decided.value) {
@@ -75,6 +77,7 @@ async function fetchPreview() {
 	} catch (err: any) {
 		if (req !== requestCounter) return;
 		preview.value = null;
+		frozen.value = false;
 		if (err?.response?.status === 403) {
 			previewHidden.value = true;
 			previewFailed.value = false;
@@ -115,16 +118,18 @@ const shownValue = computed(() => {
 	});
 });
 
-const hintIsError = computed(() => mode.value === 'auto' && previewFailed.value);
-const hint = computed(() => {
-	if (mode.value === 'typed') return 'Typed: kept as you wrote it — ↻ to go back to automatic.';
-	if (previewHidden.value) return 'Automatic: the database builds the code on save.';
-	if (previewFailed.value) return 'Preview unavailable — the database still builds the code on save.';
-	if (decided.value && preview.value == null && values.value?.process_category === 'sintering') {
-		return 'Set the run number to get a code.';
-	}
-	return 'Automatic: follows the fields below.';
-});
+const showRefresh = computed(() => canRegenerate({ mode: mode.value, frozen: frozen.value }));
+const hintIsError = computed(() => !frozen.value && mode.value === 'auto' && previewFailed.value);
+const hint = computed(() =>
+	hintFor({
+		mode: mode.value,
+		frozen: frozen.value,
+		hidden: previewHidden.value,
+		failed: previewFailed.value,
+		noPreview: decided.value && preview.value == null && !previewHidden.value && !previewFailed.value,
+		sintering: values.value?.process_category === 'sintering',
+	}),
+);
 
 function onType(val: string | null) {
 	const r = onTyped(val, preview.value);
