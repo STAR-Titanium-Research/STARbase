@@ -1250,4 +1250,9 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
   Directus (`docker start d1-database-directus-1`, or `docker restart` if it was left running).
 - [ ] **Live check:** the sample, operation and test forms show a read-only **Short ID**; a new test
   with a linked sample gets `{sample code}-SEM1`; typing a code keeps it; "Save as copy" on a coded
-  test gets a new code (no UNIQUE error).
+  test that keeps the copied code is refused as a duplicate (codes are unique), and the same copy
+  with the code box cleared gets the next number (`{sample code}-SEM2`), not the source's code.
+- Dry run done 2026-10-10 on a copy of live (directus_revisions / directus_activity data left out):
+  migration 150 took 0.45 s, all three 1.3 s; 10,445 short IDs, all 8 characters; `sum(version)`
+  119,408 and 140,897 audit rows unchanged; all triggers back to 'O'; 10 Directus field rows.
+  Pre-checks on live the same day: all 0.
