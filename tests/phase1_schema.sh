@@ -433,13 +433,15 @@ run_eq "campaign_type CHECK restricts to the two kinds" \
        AND check_clause LIKE '%machining_trial%'
        AND check_clause LIKE '%testing_campaign%'" \
     "1"
-# owner_person_id (062) and campaign_samples.campaign_id (087), plus the project_id link and the two
-# campaign_id links of operations and tests that migration 141 registers for the row filters (ADR-0011).
-run_eq "Directus relations for campaigns are registered (5)" \
-    "SELECT count(*) FROM directus_relations
+# owner_person_id (062), campaign_samples.campaign_id (087) and created_by (20261001000124), plus the
+# project_id link and the two campaign_id links of operations and tests that migration 141 registers
+# for the row filters (ADR-0011).
+run_eq "Directus relations for campaigns are registered (6)" \
+    "SELECT string_agg(many_collection || '.' || many_field || '->' || one_collection, ',' ORDER BY many_collection COLLATE \"C\", many_field COLLATE \"C\")
+     FROM directus_relations
      WHERE one_collection='campaigns' OR many_collection='campaigns'
         OR (many_collection IN ('manufacturing_operations','test_sessions') AND many_field='campaign_id')" \
-    "5"
+    "campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
 
 echo "== Audit trigger fires on INSERT =="
 # Insert a test sample and verify audit_logs captured it.
@@ -2240,6 +2242,60 @@ rv_refuse "an alias name that another relation uses" \
     "UPDATE directus_relations SET one_field = NULL WHERE many_collection = 'test_sessions' AND many_field = 'project_id';
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('equipment', 'project_id', 'projects', 'sessions');" \
     "cannot name the alias projects.sessions"
+
+echo "== Operator backfill is safe on an empty database =="
+# The generated backfill maps legacy Machine_Operators ids to people by name. Only ids a run still
+# points at are mapped, so a fresh database (as CI builds) neither fails the name check nor gains
+# the NEW people. Each case runs the up SQL in its own rolled-back transaction (its temp table is
+# ON COMMIT DROP, but a second CREATE in one transaction would clash).
+OPB=db/migrations/20261001000123_operator_backfill.sql
+opb_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$OPB")
+opb_fixture="INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('c0000123-0000-4000-8000-0000000000a1', 'T-C-OB', 'operator backfill test method');
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000123-0000-4000-8000-0000000000d1', 'TEST-OB-001');"
+opb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+UPDATE manufacturing_operations SET operator = NULL WHERE operator IS NOT NULL;
+UPDATE test_sessions SET operator = NULL WHERE operator IS NOT NULL;
+CREATE TEMP TABLE _opb_before AS SELECT count(*) AS n FROM people;
+$opb_up
+SELECT 'empty_people_unchanged:' || ((SELECT count(*) FROM people) = (SELECT n FROM _opb_before));
+ROLLBACK;
+SQL
+)
+opb_check() { grep -qx "$1" <<<"$opb_out" && ok "$2" || bad "$2 (psql output: $opb_out)"; }
+opb_check "empty_people_unchanged:true" "no run points at an operator: up succeeds and adds no people"
+opb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$opb_fixture
+INSERT INTO "Machine_Operators" (id) VALUES (121), (228) ON CONFLICT (id) DO NOTHING;
+INSERT INTO people (person_id, full_name) VALUES ('c0000123-0000-4000-8000-0000000000f1', 'Nick Weston');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code, operator)
+VALUES ('c0000123-0000-4000-8000-0000000000c1', 'c0000123-0000-4000-8000-0000000000a1', 'c0000123-0000-4000-8000-0000000000d1', 'TEST-OB-OP', 121);
+INSERT INTO test_sessions (session_id, sample_id, operator)
+VALUES ('c0000123-0000-4000-8000-0000000000e1', 'c0000123-0000-4000-8000-0000000000d1', 228);
+$opb_up
+SELECT 'map:' || operator_person_id FROM manufacturing_operations WHERE operation_id = 'c0000123-0000-4000-8000-0000000000c1';
+SELECT 'new:' || p.full_name || '/' || p.is_operator FROM test_sessions s JOIN people p ON p.person_id = s.operator_person_id
+ WHERE s.session_id = 'c0000123-0000-4000-8000-0000000000e1';
+ROLLBACK;
+SQL
+)
+opb_check "map:c0000123-0000-4000-8000-0000000000f1" "a referenced MAP operator is linked to its person"
+opb_check "new:Kyle Marshall/true" "a referenced NEW operator gets a new operator person"
+opb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$opb_fixture
+INSERT INTO "Machine_Operators" (id) VALUES (113) ON CONFLICT (id) DO NOTHING;
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code, operator)
+VALUES ('c0000123-0000-4000-8000-0000000000c1', 'c0000123-0000-4000-8000-0000000000a1', 'c0000123-0000-4000-8000-0000000000d1', 'TEST-OB-OP', 113);
+$opb_up
+ROLLBACK;
+SQL
+)
+grep -qF "names missing or ambiguous in people: Xinzef" <<<"$opb_out" \
+    && ok "a referenced operator whose person is missing still fails, naming only that person" \
+    || bad "a referenced operator whose person is missing still fails, naming only that person (psql output: $opb_out)"
 
 echo "== Cleanup test rows =="
 $PSQL -c "
