@@ -130,7 +130,9 @@ the underlying data if the column is ever corrupted.
 **Short IDs.** Samples, operations and tests also carry `short_id`: the first 8 hex characters of
 the UUID (more only after a clash), unique across the three tables through the `short_ids`
 registry, never changed and never reused. It is the handle for labels, the finder and notes; the
-readable codes (`sample_code`, `pass_code`, `test_code`) may change when their fields do.
+readable codes (`sample_code`, `pass_code`, `test_code`) may change when their fields do. A CHECK
+on each of the three tables (`*_short_id_format_check`, migration `…155`) keeps `short_id` at
+8-32 lower-case hex characters, so the empty column default can never be stored.
 
 ---
 
@@ -189,8 +191,9 @@ separate `FAST Runs` and `Machining Operations` spreadsheet tabs.
 | `tool_id` | UUID FK | Tool holder used |
 | `insert_edge_id` | UUID FK | Cutting edge consumed |
 | `operator_name` | TEXT | Legacy free-text operator; `operator_person_id` → `people` supersedes it |
-| `operation_sequence` | INTEGER | Ordering within sample lifecycle |
-| `pass_code` | TEXT | Human-readable pass pseudonym, e.g. `9-AA-MR-2023-03-23-F9` |
+| `operation_sequence` | INTEGER | Ordering of this operation within the sample lifecycle (1 = first); the number in its code. Left NULL on insert it is assigned by the database as max+1 for the sample (not for imported rows, `source_system` set); a supplied value (e.g. a machining pass number) is kept. An automatic operation that moves to another sample or method gets the next number there. Existing machining operations were numbered from their stored codes (migration `…157`, ledger `d1_private.operation_sequence_backfill`) |
+| `pass_code` | TEXT | Human-readable operation code, e.g. `TEST-S-F2-30MPM_0.1feed_1DoC` or `22-04-21-MF25-4624-950C_11kN_20dia`. Kept up to date by the database from the operation's fields (`operation_code_for`) unless a person typed a different one; clear it to make it automatic again. Not the PK. See "Operation codes" below |
+| `sintering_run_number` | INTEGER (> 0) | FAST/SPS run number as the machine shows it (typed on a hand-logged operation, read from the machine file by the importer). Part of the sintering code; never invented. Unique per machine (`equipment_id`; unique index `manufacturing_operations_sintering_run_unique`). Added by migration `…156` |
 | `short_id` | TEXT UNIQUE | Permanent short ID (8+ hex characters of `operation_id`), unique across samples, operations and tests. Never changes. Assigned by trigger (migration `…150`) |
 | `operation_date` | TIMESTAMPTZ | When the operation ran |
 | `recorded_metadata` | JSONB | Method-specific parameters as designed in Phase 1 — now superseded by typed columns (below) |
@@ -220,6 +223,30 @@ the JSONB keys was dropped in `20260626000039`.
 `…129`): a BEFORE trigger fills it on insert, or when the method changes, if the write
 does not set it. Applying a prep recipe (`prep_recipe_id` on a Sample Preparation
 operation) copies its steps in an AFTER trigger in the same transaction.
+
+**Operation codes (T0b, migrations `…155`-`…158`).** The code rule lives in Postgres:
+`operation_code_for(manufacturing_operations, sample_code TEXT)` returns the code the rule gives
+for a row and its input sample's code (`NULL` when none can be built, e.g. sintering without a
+run number). The machining token drops a two-letter method prefix (`MT-F` gives `F`), as in every
+stored code. `code_num(NUMERIC)` writes a number as the codes do: 6 significant digits, no
+trailing zeros (`80` gives `80`, `0.05` gives `0.05`). The BEFORE trigger `mfg_op_set_code`
+(`trg_mfg_op_set_code()`, replacing migration 126's number trigger) keeps `pass_code` equal to the
+rule for operations whose code is automatic: empty, an old client's `{seq}`/`{mf}` placeholder,
+or equal to the rule's value for the row before the change. A code a person typed is kept as
+written; clearing it makes the operation automatic again. A new operation takes the next
+`operation_sequence` for its sample (under the rollup lock and the sample row), and an automatic
+one that changes sample or method is renumbered. Experiment-sheet rows (`source_system =
+'experiment_sheet'`) are frozen: never renamed automatically, and their code cannot be cleared
+(clearing it, or writing a placeholder, keeps the saved code); a person can still type a new one.
+When a sample's `sample_code` changes, the AFTER trigger `trg_cascade_operation_codes()` rewrites
+the codes of its automatic operations with the new sample code, keeping their numbers; typed and
+experiment-sheet codes are left alone. To keep lock order the same everywhere (rollup lock, then
+the sample row), statement-level triggers on `physical_samples` (UPDATE, DELETE) and
+`manufacturing_operations` take the rollup advisory lock first. `preview_operation_code(values
+JSONB, operation_id UUID, sample_code TEXT)` is the read-only preview the form box uses (served
+by `POST /d1-next-number/operation-code`, which authorises the operation and the sample as the
+user and answers `{code, frozen}`): it returns what the rule would give, writes nothing, and
+does not check access itself, so its caller must.
 
 ---
 

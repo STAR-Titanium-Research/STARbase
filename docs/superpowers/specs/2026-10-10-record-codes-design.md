@@ -1,6 +1,9 @@
 # Record codes: test codes, operation codes that follow their fields, short IDs and file hashes
 
 Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 answered (a)).
+**T0a applied to live (migrations 150-152). T0b built on `feat/record-codes` (migrations 155-158,
+the `d1-next-number` operation-code route, the new `d1-operation-code` box), not yet live.**
+Migration numbers below T0b are "next free" (see the table).
 Next: the implementation plan. Stream T0 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md);
 it goes before N1 (navigation), whose finder and Tests index use what this adds. Every decision
@@ -334,10 +337,13 @@ codes are allowed by UNIQUE and become automatic codes at their next edit (they 
 | `…150_short_ids` | `short_id` on the three tables, back-fill, trigger, guard, `record_by_short_id()` |
 | `…151_test_subject_linked_at` | `linked_at`, primary subject = earliest linked |
 | `…152_test_codes` | test code columns, counters, `test_code_for()`, trigger, Directus field rows |
-| `…153_operation_codes_in_db` | `sintering_run_number`, `operation_code_for()`, `mfg_op_set_code` replacing `mfg_op_assign_numbers`, preview functions, sample/edge code cascade |
-| `…154_fast_code_rebuild` | back-fill run numbers, uniqueness check, rebuild the FAST codes |
-| `…155_file_fingerprints` | the table and its indexes |
-| later | `UNIQUE (pass_code)`, after the hand-fix |
+| `…155_short_id_format_check` | **T0b, built.** CHECK on the three `short_id` columns (8-32 lower-case hex) |
+| `…156_operation_code_rule` | **T0b, built.** `code_num()`, `sintering_run_number` and its unique index (per machine), `operation_code_for()` (machining token drops a two-letter method prefix), run-number back-fill |
+| `…157_operation_code_trigger` | **T0b, built.** `mfg_op_set_code` replacing 126's `mfg_op_assign_numbers` (automatic vs typed, renumbering, frozen experiment_sheet rows keep their code even when cleared), `operation_sequence` back-fill with ledger `d1_private.operation_sequence_backfill` |
+| `…158_operation_code_cascade_and_preview` | **T0b, built.** Sample-code cascade to automatic operations, statement-level rollup-lock triggers on `physical_samples` and `manufacturing_operations`, `preview_operation_code()` |
+| next free | T0d: back-fill run numbers for the FAST rows, uniqueness check, rebuild the FAST codes (was planned as 154) |
+| next free | T0e: `file_fingerprints`, the table and its indexes (was planned as 155) |
+| later | T0f: `UNIQUE (pass_code)`, after the hand-fix |
 
 Each has a working `migrate:down`, comments on every new table and column, and its checks in
 `tests/phase1_schema.sh`. The latest live migration is `20261009000143`. Data-dictionary entries
