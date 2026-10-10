@@ -162,6 +162,26 @@ def test_update_and_delete_are_narrower_than_read():
     assert BY_KEY[("projects", "delete")]["permissions"] == pi
 
 
+def test_orphan_amnesty_opens_read_only_for_fully_unowned_operations():
+    """~7254 pre-ADR-0011 FAST runs have no owner, operator, project or campaign and never will
+    (migration 20261009000141): admin-only visibility helps nobody, so read is opened to every
+    Lab Member for exactly that shape of record. Update/delete still require a real owner."""
+    read = BY_KEY[("manufacturing_operations", "read")]["permissions"]
+    amnesty = {
+        "_and": [
+            {"owner_person_id": {"_null": True}},
+            {"project_id": {"_null": True}},
+            {"campaign_id": {"_null": True}},
+        ]
+    }
+    assert amnesty in read["_or"]
+    for action in ("update", "delete"):
+        text = json.dumps(BY_KEY[("manufacturing_operations", action)]["permissions"])
+        assert "_null" not in text, action
+    # Not leaked onto test_sessions via the shared 'record.read' set: this is a per-collection grant.
+    assert "_null" not in json.dumps(BY_KEY[("test_sessions", "read")]["permissions"])
+
+
 def test_project_rollup_is_for_pi_and_investigators_only():
     paths = _paths("project_rollup", "read")
     assert paths == [
@@ -185,6 +205,72 @@ def test_path_filter_shape():
     assert gen.path_filter("co_owners._some.user_id") == {
         "co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}
     }
+
+
+def test_path_filter_drops_only_illegal_some():
+    """Directus's filter engine (apply-query/filter) only gives `_some`/`_none` their
+    EXISTS-subquery handling when the field right above is reached in exactly one hop from
+    where that subquery started: `_some` at path index 1, or immediately after another legal
+    `_some` (starting a fresh one-hop subquery). Reached through a preceding to-one hop --
+    `project_id.secondary_investigators._some.user_id` -- it throws "_some can only be used
+    with top level relational alias field", confirmed live against a running Directus. A chain
+    of legal `_some`s (`samples._some.co_owners._some.user_id`) is fine and must be preserved:
+    each starts its own subquery. A bare relational filter still means "any row" in a
+    permission filter, so an illegal `_some` is dropped, not replaced."""
+    # legal: single hop, kept as-is.
+    assert gen.path_filter("co_owners._some.user_id") == {
+        "co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}
+    }
+    # illegal: reached through a preceding to-one hop (project_id) -- dropped.
+    assert gen.path_filter("project_id.secondary_investigators._some.user_id") == {
+        "project_id": {"secondary_investigators": {"user_id": {"_eq": "$CURRENT_USER"}}}
+    }
+    # legal chain: both `_some`s start a fresh one-hop subquery -- both kept.
+    assert gen.path_filter("samples._some.co_owners._some.user_id") == {
+        "samples": {"_some": {"co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}}}
+    }
+    # both illegal: each is reached through a preceding to-one hop -- both dropped.
+    assert gen.path_filter(
+        "sample_id.campaigns._some.campaign_id.project_id.secondary_investigators._some.user_id"
+    ) == {
+        "sample_id": {
+            "campaigns": {"campaign_id": {"project_id": {"secondary_investigators": {
+                "user_id": {"_eq": "$CURRENT_USER"}
+            }}}}
+        }
+    }
+
+
+def test_no_generated_filter_has_an_illegal_some():
+    """Static guard for the live bug above: `resolve()` only checks that relations exist, not
+    that Directus accepts the resulting filter shape, so this is the only thing that would have
+    caught it before it shipped."""
+    for (collection, action), row in BY_KEY.items():
+        bad = _illegal_some_paths(row["permissions"])
+        assert not bad, (collection, action, bad)
+
+
+def _illegal_some_paths(node, trail=()):
+    """Every dict-key trail where `_some` sits somewhere other than index 1, or immediately
+    after another `_some` two keys back in that same trail. `_or`/`_and` are logical
+    combinators, not relational hops -- each of their branches starts a fresh trail."""
+    bad = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("_or", "_and"):
+                bad.extend(_illegal_some_paths(value, ()))
+                continue
+            new_trail = trail + (key,)
+            if key == "_some":
+                i = len(new_trail) - 1
+                legal = i == 1 or (i >= 2 and new_trail[i - 2] == "_some")
+                if not legal:
+                    bad.append(new_trail)
+            bad.extend(_illegal_some_paths(value, new_trail))
+    elif isinstance(node, list):
+        for item in node:
+            bad.extend(_illegal_some_paths(item, trail))
+    return bad
 
 
 @pytest.mark.parametrize("collection,action,paths", list(_rule_paths()))

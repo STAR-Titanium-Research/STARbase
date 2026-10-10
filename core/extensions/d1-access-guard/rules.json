@@ -107,10 +107,8 @@
             {
               "sample_id": {
                 "co_owners": {
-                  "_some": {
-                    "user_id": {
-                      "_eq": "$CURRENT_USER"
-                    }
+                  "user_id": {
+                    "_eq": "$CURRENT_USER"
                   }
                 }
               }
