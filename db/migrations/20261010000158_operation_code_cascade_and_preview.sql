@@ -14,7 +14,8 @@
 -- locked the sample row first and the rollup lock afterwards would deadlock with it. Two
 -- statement-level BEFORE triggers take the rollup lock at the start of the statement, before
 -- Postgres locks any row of it (row-level BEFORE triggers run after the row is locked):
---   * physical_samples_rollup_lock, BEFORE UPDATE on physical_samples;
+--   * physical_samples_rollup_lock, BEFORE UPDATE OR DELETE on physical_samples (a sample delete
+--     cascades to its operations, which would otherwise lock rows before the rollup lock);
 --   * mfg_op_rollup_lock, BEFORE INSERT OR UPDATE OR DELETE on manufacturing_operations. Every
 --     operation write already takes this lock at its end (refresh_rollup_ops, an AFTER STATEMENT
 --     trigger), but an operation write that does not renumber (an explicit operation_sequence such
@@ -25,7 +26,7 @@
 -- Not covered: a transaction that first locks a sample row some other way (a test_session insert,
 -- through its foreign key) and then writes an operation, racing a rename of that sample. One of the
 -- two is aborted with a deadlock error (40P01); nothing is corrupted and a retry succeeds.
--- Throughput: every UPDATE of physical_samples and every write to manufacturing_operations now
+-- Throughput: every UPDATE or DELETE of physical_samples and every write to manufacturing_operations now
 -- takes the global rollup lock at statement start (they already queued on it at statement end), and
 -- renaming N samples in one statement runs N rollup refreshes (one per cascaded operation update).
 --
@@ -46,10 +47,10 @@ END;
 $$;
 
 COMMENT ON FUNCTION trg_physical_samples_rollup_lock() IS
-    'BEFORE UPDATE (statement level) on physical_samples: takes the project_rollup advisory lock before Postgres locks any sample row, so a sample update and an operation write lock rollup first, then the sample row. Statement level because row-level BEFORE triggers run after the row is locked. Not covered: a transaction that locks a sample row through another table first (e.g. a test_session insert) and then writes an operation, racing a rename: one side gets a deadlock abort (40P01), nothing is corrupted. Every sample UPDATE now takes the global lock at statement start. Spec 2026-10-10-record-codes §3.';
+    'BEFORE UPDATE OR DELETE (statement level) on physical_samples: takes the project_rollup advisory lock before Postgres locks any sample row, so a sample update or delete (a delete cascades to its operations) and an operation write lock rollup first, then the sample row. Statement level because row-level BEFORE triggers run after the row is locked. Not covered: a transaction that locks a sample row through another table first (e.g. a test_session insert) and then writes an operation, racing a rename: one side gets a deadlock abort (40P01), nothing is corrupted. Every sample UPDATE or DELETE now takes the global lock at statement start. Spec 2026-10-10-record-codes §3.';
 
 CREATE TRIGGER physical_samples_rollup_lock
-    BEFORE UPDATE ON physical_samples
+    BEFORE UPDATE OR DELETE ON physical_samples
     FOR EACH STATEMENT EXECUTE FUNCTION trg_physical_samples_rollup_lock();
 
 COMMENT ON TRIGGER physical_samples_rollup_lock ON physical_samples IS

@@ -3231,7 +3231,7 @@ SELECT 'preview_cat_c:' || (:'pc' = pass_code) || ':' || coalesce(process_catego
 SELECT 'preview_empty:' || coalesce(preview_operation_code('{}'::jsonb, NULL, NULL), '<null>');
 SELECT 'preview_nullvalues:' || coalesce(preview_operation_code(NULL, NULL, 'TEST-OC-CAS2'), '<null>');
 -- the triggers' shape and the comments on every new object
-SELECT 'shape:' || string_agg(tgname || '/' || (tgtype & 1) || '/' || (tgtype & 2) || '/' || (tgtype & 4) || '/' || (tgtype & 16)
+SELECT 'shape:' || string_agg(tgname || '/' || (tgtype & 1) || '/' || (tgtype & 2) || '/' || (tgtype & 4) || '/' || (tgtype & 8) || '/' || (tgtype & 16)
     || '/' || (tgattr::text = '')::text || '/' || (tgqual IS NULL)::text || '/' || (obj_description(oid, 'pg_trigger') IS NOT NULL)::text, ',' ORDER BY tgname)
 FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'physical_samples'::regclass
   AND tgname IN ('physical_samples_rollup_lock', 'physical_samples_cascade_operation_codes');
@@ -3258,7 +3258,7 @@ cs_check "preview_method:true:TEST-OC-CAS2-F5" "a preview with only a method tak
 cs_check "preview_method_edit:true:TEST-OC-CAS2-HT6" "a preview of a method change takes the new category and the next number, as the UPDATE does"
 cs_check "preview_empty:<null>" "a preview of nothing is NULL"
 cs_check "preview_nullvalues:TEST-OC-CAS2" "a NULL values object is read as empty"
-cs_check "shape:physical_samples_cascade_operation_codes/1/0/0/16/true/true/true,physical_samples_rollup_lock/0/2/0/16/true/true/true" "the two triggers: row AFTER UPDATE and statement BEFORE UPDATE, no column list, no WHEN, commented"
+cs_check "shape:physical_samples_cascade_operation_codes/1/0/0/0/16/true/true/true,physical_samples_rollup_lock/0/2/0/8/16/true/true/true" "the two triggers: row AFTER UPDATE and statement BEFORE UPDATE OR DELETE, no column list, no WHEN, commented"
 cs_check "shape_ops:mfg_op_rollup_lock/0/2/4/8/16/true/true/true" "mfg_op_rollup_lock: statement BEFORE INSERT OR UPDATE OR DELETE, no column list, no WHEN, commented"
 cs_check "fn_comments:4/4" "every new function has a comment"
 cs_check "preview_cat_a:true:heat_treatment:TEST-OC-CAS2-HT7" "preview: a method change derives the category even when the same category is passed (as the UPDATE does)"
