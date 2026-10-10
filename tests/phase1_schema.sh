@@ -2255,7 +2255,7 @@ echo "== Lab Member filters put _some only where Directus accepts it =="
 # top of a query, or at the top of the subquery another legal `_some` opens. Anywhere else, e.g.
 # `sample_id.co_owners._some` (after a to-one hop), it throws `"_some" can only be used with top level
 # relational alias field`. A `_some` subquery also applies the related collection's own permission
-# rows, so one bad row 400s every collection whose rule reaches it: 24 Lab Member collections on
+# rows, so one bad row 400s every collection whose rule reaches it: 20 Lab Member collections on
 # live after hotfix 20261009000142, which kept the outermost `_some` even where it was illegal
 # (migration 20261010000160). CI has no Directus, so this checks the stored JSON against that rule,
 # using directus_relations for which fields are O2M.

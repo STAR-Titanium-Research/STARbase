@@ -654,14 +654,18 @@ migration 141 prints about ownerless records.
   Record whether this matters to the lab. Since: Explorer pages E5 (PR pending).
 - [ ] **Migration 20261010000160 on live: Lab Member queries stop returning 400.** Before applying,
   record `SELECT md5(string_agg(id||coalesce(permissions::text,'~'), ',' ORDER BY id)) FROM
-  directus_permissions`. Apply, then restart Directus (it caches permissions). Expect `UPDATE 36`
+  directus_permissions`. Apply, then flush Redis and `docker restart` Directus (it caches permissions,
+  see `docs/runbooks/upgrade-2026-10-row-level-visibility.md`). Expect `UPDATE 36`
   and 36 rows in `d1_private.lab_member_some_fix_backup`. As jsmcgowan1 (or any Lab Member), open
   Home, Samples, Projects, Campaigns and Tests, and in the Data Studio open `physical_samples`,
   `manufacturing_operations`, `equipment` and `materials`. Nothing returns `"_some" can only be used
   with top level relational alias field`, and `docker logs d1-database-directus-1` shows no new 400 on
   `/items/*`. A sample the user co-owns (not owns) and its operations and tests are visible. Editing
   them saves. Deleting the sample is refused. They can create a sample and an operation on it. A
-  sample of a project where they are only a secondary investigator is visible. Then run `dbmate down`
+  sample of a project where they are only a secondary investigator is visible. Junction creates go
+  through d1-access-guard: adding a co-owner to a sample they own saves, adding one to someone else's
+  sample is refused by d1-access-guard, and linking their own sample to their own campaign saves.
+  Then run `dbmate down`
   once: the md5 matches the value recorded before applying, and the backup table is gone. Run
   `up` again and restart Directus. Since: fix/lab-member-legal-some (PR pending).
 

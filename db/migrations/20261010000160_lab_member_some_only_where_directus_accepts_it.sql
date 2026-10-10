@@ -1,7 +1,7 @@
 -- migrate:up
 -- Every Lab Member query still fails with HTTP 400 `"_some" can only be used with top level relational
 -- alias field` after hotfix 20261009000142 (found 2026-10-10 building feat/record-codes; reproduced on a
--- restored copy of live: 24 of the 36 collections a Lab Member can read return 400, including
+-- restored copy of live: 20 of the 36 collections a Lab Member can read return 400, including
 -- equipment, materials and fast_recipes, whose own rules have no `_some`).
 --
 -- Directus 11.17 (api: database/run-ast/lib/apply-query/filter) handles `_some` only directly under an
@@ -27,7 +27,7 @@
 -- other collections and other policies, and missing rows are not touched. What it overwrites is
 -- kept in d1_private.lab_member_some_fix_backup for `down`.
 --
--- Directus caches permissions: restart it (or clear its cache) after applying.
+-- Directus caches permissions: flush Redis and restart Directus after applying.
 
 CREATE SCHEMA IF NOT EXISTS d1_private;
 
