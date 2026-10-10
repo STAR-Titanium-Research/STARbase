@@ -22,7 +22,7 @@ NET=d1-schema-test; PG=d1-schema-test-pg; RUNNER=d1-schema-runner:1
 URL="postgres://d1:ci_secret@$PG:5432/d1_test?sslmode=disable"
 STATUS=0
 
-cleanup() { docker rm -f "$PG" >/dev/null 2>&1; docker network rm "$NET" >/dev/null 2>&1; }
+cleanup() { docker rm -fv "$PG" >/dev/null 2>&1; docker network rm "$NET" >/dev/null 2>&1; }
 # stage_fail <stage> <exit> <output>: greppable FAIL line, then the stage's full output.
 stage_fail() { echo "FAIL harness: $1 (exit $2)"; [[ -n "${3:-}" ]] && echo "$3"; STATUS=1; }
 abort() { stage_fail "$@"; cleanup; exit 1; }

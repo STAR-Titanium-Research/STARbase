@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 cleanup() {
-  docker rm -f "$DX" "$PG" >/dev/null 2>&1
+  docker rm -fv "$DX" "$PG" >/dev/null 2>&1
   docker network rm "$NET" >/dev/null 2>&1
   [[ -n "$TMPDB" ]] && rm -rf "$TMPDB"
 }
