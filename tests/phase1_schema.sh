@@ -3150,6 +3150,144 @@ ot_check "bf_seq:2,<null>,3,<null>,5,<null>,<null>,<null>" "the back-fill reads 
 ot_check "bf_codes:TEST-OT-004-F2_1-60MPM,N/R,TEST-OT-004-F3_30MPM_0.05feed,TEST-OT-004-F5-30MPM,TEST-OT-004-F5-X,TEST-OT-004-R6-a,TEST-OT-004-R6-b,TEST-OT-004-7-x" "the back-fill leaves every code as it was"
 ot_check "bf_ledger:2:2,3" "the back-fill ledger holds exactly the two filled rows"
 ot_check "trg:1/0" "mfg_op_set_code is on the table and mfg_op_assign_numbers is gone"
+echo "== Sample code corrections reach operation codes; the code preview (T0b) =="
+# One rolled-back transaction for the cascade and the preview (prefix 9c000000-0000-4000-8000-), then a
+# two-session lock-order check on committed rows that are deleted afterwards.
+CS_MIG=db/migrations/20261010000158_operation_code_cascade_and_preview.sql
+[[ -f "$CS_MIG" ]] && ok "found migration 158" || bad "migration 158 is missing ($CS_MIG)"
+CS_P='9c000000-0000-4000-8000-'
+cs_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${CS_P}000000000001', 'TEST-OC-CAS');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name, process_category) VALUES
+    ('${CS_P}000000000011', 'T-OC-M1', 'operation code cascade test machining', 'machining'),
+    ('${CS_P}000000000012', 'T-OC-M2', 'operation code cascade test heat treatment', 'heat_treatment');
+-- an automatic, a typed and a frozen operation on the sample, and a test coded on it (T0a)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype,
+    machining_cutting_speed_m_per_min, machining_feed_mm_per_rev)
+VALUES ('${CS_P}000000000101', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F', 30, 0.1);
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype, pass_code)
+VALUES ('${CS_P}000000000102', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F', 'MY-TYPED-OC');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, source_system,
+    machining_operation_subtype, pass_code)
+VALUES ('${CS_P}000000000103', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 3, 'experiment_sheet', 'F', 'EXP-OLD-OC');
+INSERT INTO test_sessions (session_id, test_type, sample_id) VALUES ('${CS_P}000000000201', 'sem', '${CS_P}000000000001');
+SELECT 'cas_before:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+SELECT 'cas_test_before:' || test_code FROM test_sessions WHERE session_id = '${CS_P}000000000201';
+UPDATE physical_samples SET sample_code = 'TEST-OC-CAS2' WHERE sample_id = '${CS_P}000000000001';
+SELECT 'cascade_auto:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+SELECT 'cascade_typed:' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000102';
+SELECT 'cascade_frozen:' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000103';
+SELECT 'cascade_tests_still:' || test_code FROM test_sessions WHERE session_id = '${CS_P}000000000201';
+-- the renamed operation is still automatic: it follows a later field change
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 45 WHERE operation_id = '${CS_P}000000000101';
+SELECT 'cascade_still_auto:' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+-- a change that is not the code leaves the operations alone
+UPDATE physical_samples SET nickname = 'nick' WHERE sample_id = '${CS_P}000000000001';
+SELECT 'cascade_nick:' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+
+-- preview_new: the preview of a new operation is what a real insert with those values then gets
+SELECT preview_operation_code('{"process_category":"machining","sample_id":"${CS_P}000000000001","machining_operation_subtype":"F","machining_cutting_speed_m_per_min":30}'::jsonb, NULL, 'TEST-OC-CAS2') AS pn \gset
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype, machining_cutting_speed_m_per_min)
+VALUES ('${CS_P}000000000104', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F', 30);
+SELECT 'preview_new:' || (:'pn' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000104';
+-- preview_edit: the preview of an edit is what the UPDATE then gives
+SELECT preview_operation_code('{"machining_feed_mm_per_rev":0.2}'::jsonb, '${CS_P}000000000101', 'TEST-OC-CAS2') AS pe \gset
+UPDATE manufacturing_operations SET machining_feed_mm_per_rev = 0.2 WHERE operation_id = '${CS_P}000000000101';
+SELECT 'preview_edit:' || (:'pe' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+-- preview_method: only a method, no category: the category comes from the method
+SELECT preview_operation_code('{"method_id":"${CS_P}000000000011","sample_id":"${CS_P}000000000001","machining_operation_subtype":"F"}'::jsonb, NULL, 'TEST-OC-CAS2') AS pm \gset
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, machining_operation_subtype)
+VALUES ('${CS_P}000000000105', '${CS_P}000000000011', '${CS_P}000000000001', 'F');
+SELECT 'preview_method:' || (:'pm' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000105';
+-- preview_method_edit: a saved operation moved to a heat-treatment method (category and number follow)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${CS_P}000000000106', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F');
+SELECT preview_operation_code('{"method_id":"${CS_P}000000000012"}'::jsonb, '${CS_P}000000000106', 'TEST-OC-CAS2') AS pme \gset
+UPDATE manufacturing_operations SET method_id = '${CS_P}000000000012' WHERE operation_id = '${CS_P}000000000106';
+SELECT 'preview_method_edit:' || (:'pme' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000106';
+-- no values and no saved row gives NULL, not an error; a NULL values object is read as empty
+SELECT 'preview_empty:' || coalesce(preview_operation_code('{}'::jsonb, NULL, NULL), '<null>');
+SELECT 'preview_nullvalues:' || coalesce(preview_operation_code(NULL, NULL, 'TEST-OC-CAS2'), '<null>');
+-- the triggers' shape and the comments on every new object
+SELECT 'shape:' || string_agg(tgname || '/' || (tgtype & 1) || '/' || (tgtype & 2) || '/' || (tgtype & 4) || '/' || (tgtype & 16)
+    || '/' || (tgattr::text = '')::text || '/' || (tgqual IS NULL)::text || '/' || (obj_description(oid, 'pg_trigger') IS NOT NULL)::text, ',' ORDER BY tgname)
+FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'physical_samples'::regclass
+  AND tgname IN ('physical_samples_rollup_lock', 'physical_samples_cascade_operation_codes');
+SELECT 'fn_comments:' || count(*) FILTER (WHERE obj_description(p.oid, 'pg_proc') IS NOT NULL) || '/' || count(*)
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+  AND p.proname IN ('trg_physical_samples_rollup_lock', 'trg_cascade_operation_codes', 'preview_operation_code');
+ROLLBACK;
+SQL
+)
+cs_check() { grep -qx -- "$1" <<<"$cs_out" && ok "$2" || bad "$2 (psql output: $cs_out)"; }
+cs_check "cas_before:1:TEST-OC-CAS-F1-30MPM_0.1feed" "(setup) the automatic operation carries the sample's first code"
+cs_check "cas_test_before:TEST-OC-CAS-SEM1" "(setup) the test on the sample carries the sample's first code"
+cs_check "cascade_auto:1:TEST-OC-CAS2-F1-30MPM_0.1feed" "renaming the sample renames its automatic operation, sequence unchanged"
+cs_check "cascade_typed:MY-TYPED-OC" "a typed operation code is kept when the sample is renamed"
+cs_check "cascade_frozen:EXP-OLD-OC" "an experiment_sheet operation code is kept when the sample is renamed"
+cs_check "cascade_tests_still:TEST-OC-CAS2-SEM1" "the test code cascade (T0a) still runs next to the operation cascade"
+cs_check "cascade_still_auto:TEST-OC-CAS2-F1-45MPM_0.1feed" "a renamed operation is still automatic: it follows a later field change"
+cs_check "cascade_nick:TEST-OC-CAS2-F1-45MPM_0.1feed" "a sample change that is not its code leaves operation codes alone"
+cs_check "preview_new:true:TEST-OC-CAS2-F4-30MPM" "preview_operation_code of a new operation equals the code a real insert gets"
+cs_check "preview_edit:true:TEST-OC-CAS2-F1-45MPM_0.2feed" "preview_operation_code of an edit equals the code the UPDATE gives"
+cs_check "preview_method:true:TEST-OC-CAS2-F5" "a preview with only a method takes the category from the method, as the insert does"
+cs_check "preview_method_edit:true:TEST-OC-CAS2-HT6" "a preview of a method change takes the new category and the next number, as the UPDATE does"
+cs_check "preview_empty:<null>" "a preview of nothing is NULL"
+cs_check "preview_nullvalues:TEST-OC-CAS2" "a NULL values object is read as empty"
+cs_check "shape:physical_samples_cascade_operation_codes/1/0/0/16/true/true/true,physical_samples_rollup_lock/0/2/0/16/true/true/true" "the two triggers: row AFTER UPDATE and statement BEFORE UPDATE, no column list, no WHEN, commented"
+cs_check "fn_comments:3/3" "every new function has a comment"
+
+# lock_order: session A locks a sample row and, later in its transaction, refreshes the rollup (any
+# operation write does); session B writes an operation of that sample (rollup lock, then the sample
+# row). Without the statement-level trigger A takes the sample row first and B the rollup lock first:
+# deadlock. With it A takes the rollup lock before locking the sample row, so B simply waits.
+CS_L='9c000000-0000-4000-8000-0000000000'
+$PSQL -c "
+    DELETE FROM manufacturing_operations WHERE operation_id IN ('${CS_L}f1','${CS_L}f2');
+    DELETE FROM physical_samples WHERE sample_id = '${CS_L}f0';
+    DELETE FROM manufacturing_methods WHERE method_id = '${CS_L}fa';
+" > /dev/null 2>&1 || true
+cs_fx=$($PSQL -v ON_ERROR_STOP=1 -c "
+    INSERT INTO manufacturing_methods (method_id, method_code, method_name, process_category)
+    VALUES ('${CS_L}fa', 'T-OC-LK', 'operation code lock order test method', 'machining');
+    INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${CS_L}f0', 'TEST-OC-LOCK');
+    INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+    VALUES ('${CS_L}f1', '${CS_L}fa', '${CS_L}f0', 'machining', 'F');
+" 2>&1) && ok "(setup) lock-order fixtures committed" || bad "lock-order fixtures could not be committed: $cs_fx"
+cs_a_log=$(mktemp); cs_b_log=$(mktemp)
+psql "$DATABASE_URL" --no-psqlrc -q -v ON_ERROR_STOP=1 > "$cs_a_log" 2>&1 <<SQL &
+BEGIN;
+SET LOCAL lock_timeout = '10s';
+UPDATE physical_samples SET nickname = nickname WHERE sample_id = '${CS_L}f0';
+SELECT pg_sleep(1.5);
+UPDATE manufacturing_operations SET outcome_notes = 'lo-a' WHERE operation_id = '${CS_L}f1';
+COMMIT;
+SQL
+cs_a_pid=$!
+sleep 0.5
+psql "$DATABASE_URL" --no-psqlrc -q -v ON_ERROR_STOP=1 > "$cs_b_log" 2>&1 <<SQL
+BEGIN;
+SET LOCAL lock_timeout = '10s';
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${CS_L}f2', '${CS_L}fa', '${CS_L}f0', 'machining', 'F');
+COMMIT;
+SQL
+cs_b_rc=$?
+wait "$cs_a_pid"; cs_a_rc=$?
+[[ $cs_a_rc -eq 0 ]] && ok "lock_order: session A (sample row, then an operation write) committed" || bad "lock_order: session A failed: $(cat "$cs_a_log")"
+[[ $cs_b_rc -eq 0 ]] && ok "lock_order: session B (operation insert on the same sample) committed" || bad "lock_order: session B failed: $(cat "$cs_b_log")"
+if grep -qi "deadlock detected" "$cs_a_log" "$cs_b_log"; then bad "lock_order: deadlock detected: $(cat "$cs_a_log" "$cs_b_log")"; else ok "lock_order: no deadlock between a sample update and an operation insert"; fi
+run_eq "lock_order: both writes landed, B's operation numbered after A's" \
+    "SELECT string_agg(right(operation_id::text, 2) || ':' || coalesce(operation_sequence::text, ''), ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id IN ('${CS_L}f1','${CS_L}f2')" \
+    "f1:1,f2:2"
+rm -f "$cs_a_log" "$cs_b_log"
+$PSQL -c "
+    DELETE FROM manufacturing_operations WHERE operation_id IN ('${CS_L}f1','${CS_L}f2');
+    DELETE FROM physical_samples WHERE sample_id = '${CS_L}f0';
+    DELETE FROM manufacturing_methods WHERE method_id = '${CS_L}fa';
+" > /dev/null 2>&1 || true
+run_eq "lock_order: fixtures removed" "SELECT count(*) FROM physical_samples WHERE sample_code = 'TEST-OC-LOCK'" "0"
 echo "== Cleanup test rows =="
 $PSQL -c "
     DELETE FROM sample_genealogy
