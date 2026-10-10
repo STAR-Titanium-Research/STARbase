@@ -162,6 +162,27 @@ await check('op_preview_matches', async () => {
   expect(n.status === 200 && n.body?.code === `${sampleCode}-F2-30MPM`, `new-op preview ${n.status} ${JSON.stringify(n.body)}`);
 });
 
+// `automatic` comes from the SAVED row (the trigger's test), not from the values sent: an automatic op is
+// automatic even with values that change the code; after a typed code is saved it is not. Restores `op`
+// to automatic at the end (sample_rename_cascades relies on it following the rule).
+await check('op_preview_automatic_flag', async () => {
+  expect(op, 'no operation (op_create_auto failed)');
+  const a = await api('POST', '/d1-next-number/operation-code', { values: {}, operation_id: op.operation_id });
+  expect(a.status === 200 && a.body?.automatic === true && a.body?.code === f1(50, 0.2),
+    `automatic op: ${a.status} ${JSON.stringify(a.body)}, expected {code: ${f1(50, 0.2)}, automatic: true}`);
+  const e = await api('POST', '/d1-next-number/operation-code',
+    { values: { machining_cutting_speed_m_per_min: 70 }, operation_id: op.operation_id });
+  expect(e.status === 200 && e.body?.automatic === true && e.body?.code === f1(70, 0.2),
+    `automatic op, edited values: ${e.status} ${JSON.stringify(e.body)}`);
+  const t = await patchOp(op.operation_id, { pass_code: 'SMOKE-TYPED-R4' });
+  expect(t.pass_code === 'SMOKE-TYPED-R4', `typed pass_code ${t.pass_code}`);
+  const b = await api('POST', '/d1-next-number/operation-code', { values: {}, operation_id: op.operation_id });
+  expect(b.status === 200 && b.body?.automatic === false && b.body?.code === f1(50, 0.2),
+    `typed op: ${b.status} ${JSON.stringify(b.body)}, expected {code: ${f1(50, 0.2)}, automatic: false}`);
+  const r = await patchOp(op.operation_id, { pass_code: null });
+  expect(r.pass_code === f1(50, 0.2), `restore: pass_code ${r.pass_code}, expected ${f1(50, 0.2)}`);
+});
+
 await check('op_preview_requires_login', async () => {
   const res = await fetch(`${BASE}/d1-next-number/operation-code`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: {} }),

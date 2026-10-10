@@ -8,7 +8,7 @@
 // trigger that assigns the number on save), so it counts every sample. It reveals only that one
 // number, and only to signed-in users with app access. The database still decides at save time.
 //
-// POST /d1-next-number/operation-code  { values: {...}, operation_id?: uuid|null }  ->  { code, frozen }
+// POST /d1-next-number/operation-code  { values: {...}, operation_id?: uuid|null }  ->  { code, frozen, automatic }
 //
 // The live preview of an operation's code while the form is being filled in: the code the rule
 // (operation_code_for) would give the saved operation, if any, with `values` written over it.
@@ -20,7 +20,15 @@
 //
 // A saved operation imported from the experiment sheets (source_system 'experiment_sheet') is
 // frozen: the trigger never renames it, so the answer is its saved pass_code with frozen: true and
-// the preview SQL is not called. Every other answer carries frozen: false.
+// the preview SQL is not called (automatic: false). Every other answer carries frozen: false.
+//
+// `automatic` says whether the SAVED operation's code is automatic, by the trigger's own test
+// (trg_mfg_op_set_code, migration 157: OLD.pass_code IS NULL OR OLD.pass_code = operation_code_for(OLD,
+// old sample)): the saved pass_code is NULL or equals preview_operation_code('{}', operation_id, the
+// saved sample's code), the rule's value for the saved row with no form values merged. It never
+// depends on `values`, so a half-loaded form cannot change it; the box decides its mode from it. A new
+// operation is automatic: true. The saved sample is read as the user even when values.sample_id
+// names another (403 if it cannot be read).
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -116,32 +124,46 @@ export default {
                 const itemsFor = (collection) =>
                     new services.ItemsService(collection, { accountability: acc, schema: req.schema });
                 // Authorise as the user: the SQL below reads with the database role's rights.
-                let savedSample = null;
-                if (operationId !== null) {
-                    const saved = await itemsFor('manufacturing_operations')
-                        .readOne(operationId, { fields: ['operation_id', 'sample_id', 'source_system', 'pass_code'] });
+                const sampleCodeOf = async (id) => {
+                    if (!id) return null;
+                    const sample = await itemsFor('physical_samples').readOne(id, { fields: ['sample_code'] });
                     // Fail closed: a read that returns nothing instead of throwing is not an authorisation.
-                    if (!saved) return res.status(403).json({ error: 'forbidden' });
-                    if (saved.source_system === 'experiment_sheet') {
-                        return res.json({ code: saved.pass_code ?? null, frozen: true });
-                    }
-                    savedSample = saved.sample_id ?? null;
+                    if (!sample) throw Object.assign(new Error('forbidden'), { status: 403 });
+                    return sample.sample_code ?? null;
+                };
+                if (operationId === null) {
+                    // A new operation: the code is built from values alone, and it is automatic.
+                    const sampleCode = await sampleCodeOf(values.sample_id ?? null);
+                    const out = await database.raw(
+                        'SELECT preview_operation_code(?::jsonb, ?::uuid, ?) AS code',
+                        [JSON.stringify(values), null, sampleCode],
+                    );
+                    return res.json({ code: out?.rows?.[0]?.code ?? null, frozen: false, automatic: true });
                 }
-                // The code is built with the merged row's sample: the one in values, else the saved one.
-                const sampleId = Object.prototype.hasOwnProperty.call(values, 'sample_id')
+                const saved = await itemsFor('manufacturing_operations')
+                    .readOne(operationId, { fields: ['operation_id', 'sample_id', 'source_system', 'pass_code'] });
+                if (!saved) return res.status(403).json({ error: 'forbidden' });
+                if (saved.source_system === 'experiment_sheet') {
+                    return res.json({ code: saved.pass_code ?? null, frozen: true, automatic: false });
+                }
+                // The saved row's sample (for `automatic`; read even when values names another), and the
+                // merged row's sample (for the code): the one in values, else the saved one.
+                const savedSample = saved.sample_id ?? null;
+                const savedSampleCode = await sampleCodeOf(savedSample);
+                const mergedSample = Object.prototype.hasOwnProperty.call(values, 'sample_id')
                     ? values.sample_id
                     : savedSample;
-                let sampleCode = null;
-                if (sampleId) {
-                    const sample = await itemsFor('physical_samples').readOne(sampleId, { fields: ['sample_code'] });
-                    if (!sample) return res.status(403).json({ error: 'forbidden' });
-                    sampleCode = sample.sample_code ?? null;
-                }
+                const sampleCode = mergedSample === savedSample ? savedSampleCode : await sampleCodeOf(mergedSample);
                 const out = await database.raw(
-                    'SELECT preview_operation_code(?::jsonb, ?::uuid, ?) AS code',
-                    [JSON.stringify(values), operationId, sampleCode],
+                    'SELECT preview_operation_code(?::jsonb, ?::uuid, ?) AS code,'
+                        + " preview_operation_code('{}'::jsonb, ?::uuid, ?) AS saved_rule",
+                    [JSON.stringify(values), operationId, sampleCode, operationId, savedSampleCode],
                 );
-                return res.json({ code: out?.rows?.[0]?.code ?? null, frozen: false });
+                const row = out?.rows?.[0] ?? {};
+                // The trigger's test, exact (no trim) like its `=`; a NULL rule value equals no code.
+                const savedCode = saved.pass_code ?? null;
+                const automatic = savedCode === null || (row.saved_rule != null && savedCode === row.saved_rule);
+                return res.json({ code: row.code ?? null, frozen: false, automatic });
             } catch (e) {
                 if (isForbidden(e)) {
                     return res.status(403).json({ error: 'forbidden' });

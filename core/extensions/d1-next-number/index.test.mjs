@@ -113,11 +113,12 @@ function itemsStub(rows) {
     return { services: { ItemsService }, log };
 }
 
-function previewDb(code = 'S-1-F1-30MPM') {
+// code: the merged-row preview; saved_rule: the rule's value for the saved row (existing operations only).
+function previewDb(code = 'S-1-F1-30MPM', savedRule = 'S-1-F1-30MPM') {
     const seen = { calls: [] };
     return {
         seen,
-        raw: async (sql, args) => (seen.calls.push({ sql, args }), { rows: [{ code }] }),
+        raw: async (sql, args) => (seen.calls.push({ sql, args }), { rows: [{ code, saved_rule: savedRule }] }),
     };
 }
 
@@ -172,9 +173,11 @@ test('preview: a new operation passes (values json, null, sample code) to the SQ
     const { h, db, log } = mountPreview(sampleRows);
     const r = await call(h, user, {}, { values: { sample_id: SAMPLE, machining_feed_mm_per_rev: 0.1 } });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false });
+    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false, automatic: true });
     assert.equal(db.seen.calls.length, 1);
     assert.match(db.seen.calls[0].sql, /preview_operation_code\(\?::jsonb, \?::uuid, \?\)/);
+    assert.doesNotMatch(db.seen.calls[0].sql, /saved_rule/);
+    assert.equal(db.seen.calls[0].args.length, 3);
     const [json, opId, sampleCode] = db.seen.calls[0].args;
     assert.deepEqual(JSON.parse(json), { sample_id: SAMPLE, machining_feed_mm_per_rev: 0.1 });
     assert.equal(opId, null);
@@ -189,24 +192,97 @@ test('preview: an edit reads the operation, and the sample of the saved operatio
     const { h, db, log } = mountPreview(rows);
     const r = await call(h, user, {}, { values: { machining_feed_mm_per_rev: 0.2 }, operation_id: OP });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false });
+    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false, automatic: true });
     assert.equal(log.reads[0].collection, 'manufacturing_operations');
     assert.equal(log.reads[0].id, OP);
     assert.equal(log.reads[1].collection, 'physical_samples');
     assert.equal(log.reads[1].id, SAMPLE);
-    assert.deepEqual(db.seen.calls[0].args.slice(1), [OP, 'S-1']);
+    assert.equal(log.reads.length, 2); // the saved sample is the merged one: read once
+    assert.match(
+        db.seen.calls[0].sql,
+        /preview_operation_code\(\?::jsonb, \?::uuid, \?\) AS code, preview_operation_code\('\{\}'::jsonb, \?::uuid, \?\) AS saved_rule/,
+    );
+    assert.deepEqual(db.seen.calls[0].args.slice(1), [OP, 'S-1', OP, 'S-1']);
 });
 
-test("preview: values.sample_id wins over the saved operation's sample", async () => {
+test("preview: values.sample_id wins for the code; the saved sample still gives the saved-row rule", async () => {
+    const rows = {
+        ...sampleRows,
+        ['physical_samples:' + OTHER_SAMPLE]: { sample_code: 'S-9' },
+        ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: SAMPLE, pass_code: 'S-1-F1-30MPM' },
+    };
+    const { h, db, log } = mountPreview(rows);
+    const r = await call(h, user, {}, { values: { sample_id: OTHER_SAMPLE }, operation_id: OP });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.automatic, true);
+    assert.deepEqual(db.seen.calls[0].args.slice(1), [OP, 'S-9', OP, 'S-1']);
+    // both samples read as the user, with the request's schema
+    assert.deepEqual(log.reads.map((x) => [x.collection, x.id]), [
+        ['manufacturing_operations', OP], ['physical_samples', SAMPLE], ['physical_samples', OTHER_SAMPLE],
+    ]);
+    for (const m of log.made) assert.deepEqual(m.opts, { accountability: user, schema: 'SCHEMA' });
+});
+
+test("preview: the saved operation's sample unreadable is a 403 even when values names another sample", async () => {
     const rows = {
         ['physical_samples:' + OTHER_SAMPLE]: { sample_code: 'S-9' },
         ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: SAMPLE },
     };
-    // the saved operation's own sample is not readable: it is not read, the new one is
     const { h, db } = mountPreview(rows);
     const r = await call(h, user, {}, { values: { sample_id: OTHER_SAMPLE }, operation_id: OP });
+    assert.equal(r.status, 403);
+    assert.equal(db.seen.calls.length, 0);
+});
+
+// automatic: the trigger's test on the SAVED row (pass_code NULL, or equal to the rule's value for it).
+const opRow = (pass_code) => ({
+    ...sampleRows,
+    ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: SAMPLE, source_system: null, pass_code },
+});
+
+test('preview: automatic is true when the saved code equals the rule for the saved row', async () => {
+    // the merged-row preview differs (a field edit in the form): it does not matter
+    const { h } = mountPreview(opRow('S-1-F1-30MPM'), previewDb('S-1-F1-45MPM', 'S-1-F1-30MPM'));
+    const r = await call(h, user, {}, { values: { machining_cutting_speed_m_per_min: 45 }, operation_id: OP });
+    assert.deepEqual(r.body, { code: 'S-1-F1-45MPM', frozen: false, automatic: true });
+});
+
+test('preview: automatic is false when the saved code differs from the rule for the saved row (typed)', async () => {
+    // the live example: a typed code; even a merged preview equal to it does not make it automatic
+    const { h } = mountPreview(opRow('DEMO-TI64-001-F1'), previewDb('DEMO-TI64-001-F1', 'DEMO-TI64-001-F5-60MPM'));
+    const r = await call(h, user, {}, { values: {}, operation_id: OP });
+    assert.deepEqual(r.body, { code: 'DEMO-TI64-001-F1', frozen: false, automatic: false });
+});
+
+test('preview: automatic compares exactly (no trim, case matters), as the trigger does', async () => {
+    for (const saved of [' S-1-F1-30MPM', 's-1-f1-30mpm']) {
+        const { h } = mountPreview(opRow(saved), previewDb('S-1-F1-30MPM', 'S-1-F1-30MPM'));
+        const r = await call(h, user, {}, { values: {}, operation_id: OP });
+        assert.equal(r.body.automatic, false, JSON.stringify(saved));
+    }
+});
+
+test('preview: automatic is true when the saved code is NULL, whatever the rule gives', async () => {
+    for (const rule of ['S-1-F1-30MPM', null]) {
+        const { h } = mountPreview(opRow(null), previewDb(null, rule));
+        const r = await call(h, user, {}, { values: {}, operation_id: OP });
+        assert.deepEqual(r.body, { code: null, frozen: false, automatic: true });
+    }
+});
+
+test('preview: automatic is false when the saved code is set and the rule gives NULL', async () => {
+    const { h } = mountPreview(opRow('SOMETHING'), previewDb(null, null));
+    const r = await call(h, user, {}, { values: {}, operation_id: OP });
+    assert.equal(r.body.automatic, false);
+});
+
+test('preview: a saved operation with no sample reads no sample and passes null sample codes', async () => {
+    const rows = { ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: null, pass_code: null } };
+    const { h, db, log } = mountPreview(rows);
+    const r = await call(h, user, {}, { values: {}, operation_id: OP });
     assert.equal(r.status, 200);
-    assert.equal(db.seen.calls[0].args[2], 'S-9');
+    assert.deepEqual(log.reads.map((x) => x.collection), ['manufacturing_operations']);
+    assert.deepEqual(db.seen.calls[0].args.slice(1), [OP, null, OP, null]);
 });
 
 test('preview: no sample at all previews with a null sample code', async () => {
@@ -220,7 +296,7 @@ test('preview: no sample at all previews with a null sample code', async () => {
 test('preview: a null code from the database is {code: null}', async () => {
     const { h } = mountPreview(sampleRows, previewDb(null));
     const r = await call(h, user, {}, { values: { sample_id: SAMPLE } });
-    assert.deepEqual(r.body, { code: null, frozen: false });
+    assert.deepEqual(r.body, { code: null, frozen: false, automatic: true });
 });
 
 test('preview: only whitelisted keys reach the SQL', async () => {
@@ -280,13 +356,13 @@ test("preview: the saved operation's sample being unreadable is a 403 with no SQ
     assert.equal(db.seen.calls.length, 0);
 });
 
-test('preview: values.sample_id null reads the operation, no sample, and sends a null sample code', async () => {
+test('preview: values.sample_id null sends a null sample code for the code, the saved one for the saved-row rule', async () => {
     const rows = { ...sampleRows, ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: SAMPLE } };
     const { h, db, log } = mountPreview(rows);
     const r = await call(h, user, {}, { values: { sample_id: null }, operation_id: OP });
     assert.equal(r.status, 200);
-    assert.deepEqual(log.reads.map((x) => x.collection), ['manufacturing_operations']);
-    assert.equal(db.seen.calls[0].args[2], null);
+    assert.deepEqual(log.reads.map((x) => x.collection), ['manufacturing_operations', 'physical_samples']);
+    assert.deepEqual(db.seen.calls[0].args.slice(1), [OP, null, OP, 'S-1']);
 });
 
 test('preview: a read that returns nothing instead of throwing fails closed (403, no SQL)', async () => {
@@ -318,7 +394,7 @@ test('preview: a frozen (experiment_sheet) operation answers its saved code with
     const { h, db, log } = mountPreview(rows);
     const r = await call(h, user, {}, { values: { machining_feed_mm_per_rev: 0.2 }, operation_id: OP });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { code: 'IMPORTED-CODE', frozen: true });
+    assert.deepEqual(r.body, { code: 'IMPORTED-CODE', frozen: true, automatic: false });
     assert.equal(db.seen.calls.length, 0);
     assert.deepEqual(log.reads[0].query, {
         fields: ['operation_id', 'sample_id', 'source_system', 'pass_code'],
@@ -331,7 +407,7 @@ test('preview: a frozen operation with no saved code answers {code: null, frozen
     };
     const { h, db } = mountPreview(rows);
     const r = await call(h, user, {}, { values: {}, operation_id: OP });
-    assert.deepEqual(r.body, { code: null, frozen: true });
+    assert.deepEqual(r.body, { code: null, frozen: true, automatic: false });
     assert.equal(db.seen.calls.length, 0);
 });
 
@@ -342,6 +418,7 @@ test('preview: a saved operation from any other source is previewed with frozen:
     };
     const { h, db } = mountPreview(rows);
     const r = await call(h, user, {}, { values: {}, operation_id: OP });
-    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false });
+    // saved 'X' is not the rule's value for the saved row: typed
+    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false, automatic: false });
     assert.equal(db.seen.calls.length, 1);
 });
