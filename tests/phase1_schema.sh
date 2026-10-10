@@ -745,9 +745,10 @@ echo "== Audit coverage: every business table, keyed by its primary key (review 
 # Tables deliberately NOT audited: the log itself, dbmate bookkeeping, Directus system tables,
 # derived caches (project_rollup, semantic_embeddings), the crawler's heartbeat row,
 # audit_log_actors (the actor side-table of the log itself), short_ids (the short-ID registry:
-# write-once bookkeeping written only by claim_short_id()). Migration 141's backup of Directus
+# write-once bookkeeping written only by claim_short_id()), test_code_counters (test-code number
+# bookkeeping written only by next_test_code_number()). Migration 141's backup of Directus
 # permission rows lives in the private schema d1_private, so this public-schema check never sees it.
-AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids'"
+AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters'"
 run_eq "every business table has an audit trigger (missing: none)" \
     "SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -1819,6 +1820,121 @@ sid_check "no_reuse:5d000000000$" "a reserved short ID is never handed out again
 sid_check "not_null:3" "short_id is NOT NULL on the three tables"
 sid_check "directus_rows:3" "the three short_id fields are registered read-only in Directus"
 sid_check "comments:1" "short_ids carries a table comment"
+echo "== Test codes: built from the earliest subject and the type, kept up to date (T0a) =="
+tc_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('7e000000-0000-4000-8000-000000000211', 'TEST-TC-001'),
+    ('7e000000-0000-4000-8000-000000000212', 'TEST-TC-002');
+INSERT INTO people (person_id, full_name) VALUES ('7e000000-0000-4000-8000-000000000213', 'Test Code Owner');
+INSERT INTO tool_boxes (tool_box_id, tool_box_code, owner_person_id)
+VALUES ('7e000000-0000-4000-8000-000000000214', 'TEST-TC-BOX', '7e000000-0000-4000-8000-000000000213');
+INSERT INTO cutting_inserts (insert_id, insert_code, tool_box_id)
+VALUES ('7e000000-0000-4000-8000-000000000215', 'TEST-TC-BOX-1', '7e000000-0000-4000-8000-000000000214');
+INSERT INTO insert_edges (edge_id, edge_code, insert_id, edge_identifier)
+VALUES ('7e000000-0000-4000-8000-000000000216', 'TEST-TC-BOX-1A', '7e000000-0000-4000-8000-000000000215', 'A');
+INSERT INTO test_sessions (session_id, test_type) VALUES
+    ('7e000000-0000-4000-8000-000000000221', 'sem'),
+    ('7e000000-0000-4000-8000-000000000222', 'sem'),
+    ('7e000000-0000-4000-8000-000000000223', 'sem'),
+    ('7e000000-0000-4000-8000-000000000224', 'hardness'),
+    ('7e000000-0000-4000-8000-000000000226', 'sem'),
+    ('7e000000-0000-4000-8000-000000000228', NULL);
+INSERT INTO test_sessions (session_id, test_type, test_code)
+VALUES ('7e000000-0000-4000-8000-000000000225', 'sem', '  TEST-TC-001-SEM4 ');
+CREATE TEMP VIEW tc AS SELECT session_id, coalesce(test_code, 'null') AS code, test_code_is_manual AS manual FROM test_sessions;
+
+SELECT 'nocode:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000221', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'first:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000221', 'physical_samples', '7e000000-0000-4000-8000-000000000212');
+SELECT 'second:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000222', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'next:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+UPDATE test_sessions SET test_code = test_code WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'resave:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+UPDATE test_sessions SET test_type = 'xrd' WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+SELECT 'type:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000223', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'noreuse:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000223';
+UPDATE test_sessions SET test_code = 'MY-CODE' WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'typed:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+UPDATE test_sessions SET test_type = 'tem' WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'typed_kept:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+UPDATE test_sessions SET test_code = NULL WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'cleared:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'typed_insert:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000225';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000226', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'skip_taken:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000226';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000224', 'insert_edges', '7e000000-0000-4000-8000-000000000216');
+SELECT 'edge:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000224';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000224', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'edge_kept:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000224';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000228', 'physical_samples', 'not-a-uuid');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000228', 'physical_samples', '7E000000-0000-4000-8000-000000000211');
+SELECT 'notype:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000228';
+UPDATE test_sessions SET test_type = 'dma' WHERE session_id = '7e000000-0000-4000-8000-000000000228';
+SELECT 'type_arrives:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000228';
+SELECT 'junk_subject:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000228';
+UPDATE physical_samples SET sample_code = 'TEST-TC-001B' WHERE sample_id = '7e000000-0000-4000-8000-000000000211';
+SELECT 'cascade:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000223';
+SELECT 'cascade_typed:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000225';
+SELECT 'cascade_edge_test:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000224';
+UPDATE insert_edges SET edge_code = 'TEST-TC-BOX-1Z' WHERE edge_id = '7e000000-0000-4000-8000-000000000216';
+SELECT 'cascade_edge:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000224';
+DELETE FROM test_sessions_subject
+  WHERE test_sessions_id = '7e000000-0000-4000-8000-000000000221' AND item = '7e000000-0000-4000-8000-000000000211';
+SELECT 'promoted:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+DELETE FROM test_sessions_subject WHERE test_sessions_id = '7e000000-0000-4000-8000-000000000221';
+SELECT 'orphan:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+DO $$ BEGIN
+  INSERT INTO test_sessions (session_id, test_code) VALUES ('7e000000-0000-4000-8000-000000000229', 'TEST-TC-001B-SEM3');
+  RAISE NOTICE 'unique:missing';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'unique:ok';
+END $$;
+SELECT 'directus:' || count(*) FROM directus_fields WHERE collection = 'test_sessions'
+  AND field IN ('test_code', 'test_code_number', 'test_code_type', 'test_code_is_manual',
+                'test_code_subject_collection', 'test_code_subject_id');
+SELECT 'directus_visible:' || count(*) FROM directus_fields WHERE collection = 'test_sessions' AND field = 'test_code' AND NOT hidden;
+ROLLBACK;
+SQL
+)
+tc_check() { grep -q -- "$1" <<<"$tc_out" && ok "$2" || bad "$2 (psql output: $tc_out)"; }
+tc_check "nocode:null$" "a test with no subject has no code"
+tc_check "first:TEST-TC-001-SEM1/false$" "linking the first subject gives {sample code}-{TYPE}1, automatic"
+tc_check "second:TEST-TC-001-SEM1$" "linking a second subject changes nothing"
+tc_check "next:TEST-TC-001-SEM2$" "the next SEM test on the sample gets 2"
+tc_check "resave:TEST-TC-001-SEM2/false$" "re-saving the same code keeps it automatic"
+tc_check "type:TEST-TC-001-XRD1$" "a type change takes the next number of the new type"
+tc_check "noreuse:TEST-TC-001-SEM3$" "a number that moved away is not handed out again"
+tc_check "typed:MY-CODE/true$" "a typed code is kept and flagged as typed"
+tc_check "typed_kept:MY-CODE$" "a typed code survives a type change"
+tc_check "cleared:TEST-TC-001-TEM1/false$" "clearing a typed code goes back to automatic with the current type"
+tc_check "typed_insert:TEST-TC-001-SEM4/true$" "a code given on insert is typed (and trimmed)"
+tc_check "skip_taken:TEST-TC-001-SEM5$" "an automatic code skips a number someone typed by hand"
+tc_check "edge:TEST-TC-BOX-1A-HRD1$" "an insert-edge subject uses the edge code"
+tc_check "edge_kept:TEST-TC-BOX-1A-HRD1$" "adding a sample to an edge test keeps the edge-based code"
+tc_check "notype:null$" "a test with a subject but no type has no code"
+tc_check "type_arrives:TEST-TC-001-DMA1$" "setting the type gives the code (upper-case junction item accepted)"
+tc_check "junk_subject:TEST-TC-001-DMA1$" "a junk junction item linked earlier is skipped when building the code"
+tc_check "cascade:TEST-TC-001B-SEM3$" "a corrected sample code flows into its tests' automatic codes"
+tc_check "cascade_typed:TEST-TC-001-SEM4$" "a typed code ignores a sample code change"
+tc_check "cascade_edge_test:TEST-TC-BOX-1A-HRD1$" "a sample code change leaves an edge-based code alone"
+tc_check "cascade_edge:TEST-TC-BOX-1Z-HRD1$" "a corrected edge code flows into its tests"
+tc_check "promoted:TEST-TC-002-XRD1$" "removing the code's subject re-codes the test from the next subject"
+tc_check "orphan:TEST-TC-002-XRD1$" "a test that loses all its subjects keeps its last code"
+tc_check "unique:ok" "test codes are unique"
+tc_check "directus:6$" "the six test-code fields are registered in Directus"
+tc_check "directus_visible:1$" "only test_code is visible on the form"
 
 echo "== Deleting samples and edges that are test subjects =="
 # Same fixture style as above; every row is rolled back. The back-fill statements are extracted
