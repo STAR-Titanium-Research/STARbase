@@ -27,7 +27,7 @@
 // payload and the database builds the code; typing emits, and the refresh icon emits null.
 import { inject, ref, computed, watch, onMounted, onBeforeUnmount, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { nextMode, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
+import { nextMode, afterFieldChange, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
 
 const props = defineProps<{ value: string | null; primaryKey?: string | number | null }>();
 const emit = defineEmits<{ (e: 'input', value: string | null): void }>();
@@ -39,10 +39,9 @@ const isNew = () => props.primaryKey == null || props.primaryKey === '+';
 
 const mode = ref<'auto' | 'typed'>('auto');
 const decided = ref(false); // true once a preview (or the user) has settled the mode
-// The user took over: typed in the box, pressed the refresh icon, or edited a field after the first
-// preview was sent. From then on previews no longer re-decide the mode.
+// The user took over: typed in the box, pressed the refresh icon, or edited a field after a mode was
+// decided. From then on previews no longer re-decide the mode.
 let touched = false;
-let sent = false;
 const preview = ref<string | null>(null);
 const previewHidden = ref(false); // 403: the user may not read the operation or sample
 const previewFailed = ref(false); // 500 / network / anything else
@@ -63,13 +62,13 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let requestCounter = 0;
 
 // An existing record is previewed only once the form holds it (its primary key is in the values);
-// before that the fields are still null and the answer would be wrong.
+// before that the fields are still null and the answer would be wrong. Relies on `operation_id` being
+// in `values`; if it is not, this fails safe: no preview, and the box shows the saved code.
 const formHoldsRecord = () =>
 	isNew() || String(values.value?.operation_id ?? '') === String(props.primaryKey);
 
 async function fetchPreview() {
 	if (!formHoldsRecord()) return;
-	sent = true;
 	const req = ++requestCounter;
 	try {
 		const res = await api.post('/d1-next-number/operation-code', {
@@ -114,7 +113,7 @@ function schedule(delay: number) {
 
 onMounted(() => schedule(0)); // next tick, so a late-arriving form state is included
 watch(watchKey, () => {
-	if (sent) touched = true; // a field changed after the first preview went out: the user is editing
+	touched = afterFieldChange({ touched, decided: decided.value });
 	schedule(300);
 });
 onBeforeUnmount(() => {

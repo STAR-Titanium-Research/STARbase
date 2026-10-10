@@ -23,6 +23,12 @@ export function nextMode({ touched, isNew, value, preview, current }) {
 	return initialMode({ isNew, value, preview });
 }
 
+// A change to a field of the form: the user has taken over, but only once a mode was decided (a
+// preview that failed or is still in flight has decided nothing, so the next good one still must).
+export function afterFieldChange({ touched, decided }) {
+	return touched || decided;
+}
+
 // The user edited the box. Empty, or equal to the preview -> automatic and emit null (the database
 // builds the code, so no written code can go stale after a later field edit). Anything else ->
 // typed, emitted trimmed.

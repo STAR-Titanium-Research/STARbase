@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initialMode, nextMode, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
+import { initialMode, nextMode, afterFieldChange, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
 
 test('initialMode: a new record starts automatic whatever the value', () => {
 	assert.equal(initialMode({ isNew: true, value: null, preview: 'A-1' }), 'auto');
@@ -136,4 +136,17 @@ test('nextMode: after the user touched the box the mode never flips back', () =>
 	assert.equal(nextMode({ touched: true, isNew: false, value: 'S1-FA1', preview: 'S1-FA1', current: 'typed' }), 'typed');
 	assert.equal(nextMode({ touched: true, isNew: false, value: 'MINE', preview: 'S1-FA1', current: 'auto' }), 'auto');
 	assert.equal(nextMode({ touched: true, isNew: true, value: null, preview: null, current: 'typed' }), 'typed');
+});
+
+test('afterFieldChange: a field edit takes over only once a mode has been decided', () => {
+	assert.equal(afterFieldChange({ touched: false, decided: true }), true);
+	assert.equal(afterFieldChange({ touched: false, decided: false }), false);
+	assert.equal(afterFieldChange({ touched: true, decided: false }), true);
+});
+
+test('never decided + field edit: the next good preview still decides the mode', () => {
+	// the first preview failed (nothing decided), the user edits a field, then a good preview arrives
+	const touched = afterFieldChange({ touched: false, decided: false });
+	assert.equal(nextMode({ touched, isNew: false, value: 'MINE', preview: 'S1-FA1', current: 'auto' }), 'typed');
+	assert.equal(nextMode({ touched, isNew: false, value: 'S1-FA1', preview: 'S1-FA1', current: 'auto' }), 'auto');
 });
