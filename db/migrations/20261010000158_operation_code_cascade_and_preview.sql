@@ -8,12 +8,26 @@
 -- carries a corrected sample code into the test codes (physical_samples_cascade_test_codes); this
 -- does the same for the operation codes, next to it.
 --
--- Lock order: the rollup advisory lock (key 'refresh_project_rollup', migration 118) comes first,
+-- Lock order: the rollup advisory lock (key 'refresh_project_rollup', migration 118) first,
 -- then the sample row. Renaming a sample updates operations, which refreshes the rollup, and an
 -- operation insert takes the rollup lock and then its sample row (migration 157): a statement that
--- locked the sample row first and the rollup lock afterwards would deadlock with it. A
--- statement-level BEFORE UPDATE trigger on physical_samples takes the rollup lock before Postgres
--- locks any sample row of the statement (row-level BEFORE triggers run after the row is locked).
+-- locked the sample row first and the rollup lock afterwards would deadlock with it. Two
+-- statement-level BEFORE triggers take the rollup lock at the start of the statement, before
+-- Postgres locks any row of it (row-level BEFORE triggers run after the row is locked):
+--   * physical_samples_rollup_lock, BEFORE UPDATE on physical_samples;
+--   * mfg_op_rollup_lock, BEFORE INSERT OR UPDATE OR DELETE on manufacturing_operations. Every
+--     operation write already takes this lock at its end (refresh_rollup_ops, an AFTER STATEMENT
+--     trigger), but an operation write that does not renumber (an explicit operation_sequence such
+--     as the Force App sends, an imported row, an update that exits 157 early) would first hold a
+--     KEY SHARE lock on its sample row (foreign key check) and only then ask for the rollup lock,
+--     while a rename holds the rollup lock and waits for that sample row (sample_code is UNIQUE,
+--     so the rename takes a FOR UPDATE row lock).
+-- Not covered: a transaction that first locks a sample row some other way (a test_session insert,
+-- through its foreign key) and then writes an operation, racing a rename of that sample. One of the
+-- two is aborted with a deadlock error (40P01); nothing is corrupted and a retry succeeds.
+-- Throughput: every UPDATE of physical_samples and every write to manufacturing_operations now
+-- takes the global rollup lock at statement start (they already queued on it at statement end), and
+-- renaming N samples in one statement runs N rollup refreshes (one per cascaded operation update).
 --
 -- Trigger shape: no column list (UPDATE OF) and no WHEN clause: migration 116's down retypes code
 -- columns, which Postgres refuses while a trigger names the column. The cascade checks for a
@@ -32,14 +46,36 @@ END;
 $$;
 
 COMMENT ON FUNCTION trg_physical_samples_rollup_lock() IS
-    'BEFORE UPDATE (statement level) on physical_samples: takes the project_rollup advisory lock before Postgres locks any sample row, so a sample update and an operation write always lock rollup first, then the sample row (no deadlock). Statement level because row-level BEFORE triggers run after the row is locked. Spec 2026-10-10-record-codes §3.';
+    'BEFORE UPDATE (statement level) on physical_samples: takes the project_rollup advisory lock before Postgres locks any sample row, so a sample update and an operation write lock rollup first, then the sample row. Statement level because row-level BEFORE triggers run after the row is locked. Not covered: a transaction that locks a sample row through another table first (e.g. a test_session insert) and then writes an operation, racing a rename: one side gets a deadlock abort (40P01), nothing is corrupted. Every sample UPDATE now takes the global lock at statement start. Spec 2026-10-10-record-codes §3.';
 
 CREATE TRIGGER physical_samples_rollup_lock
     BEFORE UPDATE ON physical_samples
     FOR EACH STATEMENT EXECUTE FUNCTION trg_physical_samples_rollup_lock();
 
 COMMENT ON TRIGGER physical_samples_rollup_lock ON physical_samples IS
-    'Rollup advisory lock first, sample rows after (lock order, T0b). Statement level on purpose; no column list or WHEN (migration 116).';
+    'Rollup advisory lock first, sample rows after (lock order, T0b; narrows deadlocks, does not remove every path: see trg_physical_samples_rollup_lock). Statement level on purpose; no column list or WHEN (migration 116).';
+
+CREATE FUNCTION trg_manufacturing_operations_rollup_lock()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    -- Same key as refresh_project_rollup() (migration 118).
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('refresh_project_rollup', 0));
+    RETURN NULL;
+END;
+$$;
+
+COMMENT ON FUNCTION trg_manufacturing_operations_rollup_lock() IS
+    'BEFORE INSERT / UPDATE / DELETE (statement level) on manufacturing_operations: takes the project_rollup advisory lock at the start of the statement. Every operation write already takes it at the end (refresh_rollup_ops); taking it first means no operation write can hold a sample row lock (foreign key check) and then wait for the rollup lock while a sample rename holds the rollup lock and waits for that row. Throughput: every operation write takes the global lock at statement start. Spec 2026-10-10-record-codes §3.';
+
+CREATE TRIGGER mfg_op_rollup_lock
+    BEFORE INSERT OR UPDATE OR DELETE ON manufacturing_operations
+    FOR EACH STATEMENT EXECUTE FUNCTION trg_manufacturing_operations_rollup_lock();
+
+COMMENT ON TRIGGER mfg_op_rollup_lock ON manufacturing_operations IS
+    'Rollup advisory lock at statement start (lock order, T0b). Statement level on purpose; no column list or WHEN.';
 
 CREATE FUNCTION trg_cascade_operation_codes()
     RETURNS TRIGGER
@@ -99,12 +135,13 @@ BEGIN
         v_op := jsonb_populate_record(NULL::public.manufacturing_operations, v_vals);
     END IF;
 
-    -- Category from the method, as the trigger mfg_op_derive_category does: a new operation without
-    -- one, or an operation whose method changed in these values without a category being given.
+    -- Category from the method, exactly as mfg_op_derive_category (129) does: on INSERT when the
+    -- category is NULL; on UPDATE only when the method changed and the category did not (it never
+    -- derives just because a saved category is NULL). Never assigns NULL over a value.
     IF v_op.method_id IS NOT NULL
-       AND (v_op.process_category IS NULL
-            OR (v_vals ? 'method_id' AND NOT v_vals ? 'process_category'
-                AND v_op.method_id IS DISTINCT FROM CASE WHEN v_have THEN v_saved.method_id END)) THEN
+       AND ((NOT v_have AND v_op.process_category IS NULL)
+            OR (v_have AND v_op.method_id IS DISTINCT FROM v_saved.method_id
+                AND v_op.process_category IS NOT DISTINCT FROM v_saved.process_category)) THEN
         SELECT mm.process_category INTO v_category
         FROM public.manufacturing_methods mm WHERE mm.method_id = v_op.method_id;
         IF v_category IS NOT NULL THEN
@@ -131,11 +168,13 @@ END;
 $$;
 
 COMMENT ON FUNCTION preview_operation_code(JSONB, UUID, TEXT) IS
-    'The operation code the form would show: the saved operation (p_operation_id, if any) with p_values written over it, its category taken from the method when none is given and its number estimated as the trigger would, run through operation_code_for with p_sample_code. A preview only, no writes; the trigger decides on save (concurrent writers can take the number first). Spec 2026-10-10-record-codes §3.';
+    'The operation code the rule would give: the saved operation (p_operation_id, if any) with p_values written over it, its category derived from the method and its number estimated as the triggers (mfg_op_derive_category, mfg_op_set_code) would, run through operation_code_for with p_sample_code. A preview only, no writes; the trigger decides on save (concurrent writers can take the number first). It returns the rule''s value even for a typed or experiment_sheet (frozen) operation, which the trigger stores as written: "what the rule would give", not "what will be stored" there; it also estimates a number for a typed operation that moved sample, which the trigger would not assign. Caller duties: this function reads the saved row with the database role''s rights and does not check access, so the caller must first authorise p_operation_id (read the item through Directus ItemsService as the user), and must pass the code of the merged row''s sample_id as p_sample_code. Spec 2026-10-10-record-codes §3.';
 
 -- migrate:down
+DROP TRIGGER IF EXISTS mfg_op_rollup_lock ON manufacturing_operations;
 DROP TRIGGER IF EXISTS physical_samples_cascade_operation_codes ON physical_samples;
 DROP TRIGGER IF EXISTS physical_samples_rollup_lock ON physical_samples;
 DROP FUNCTION IF EXISTS preview_operation_code(JSONB, UUID, TEXT);
 DROP FUNCTION IF EXISTS trg_cascade_operation_codes();
+DROP FUNCTION IF EXISTS trg_manufacturing_operations_rollup_lock();
 DROP FUNCTION IF EXISTS trg_physical_samples_rollup_lock();

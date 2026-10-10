@@ -3206,6 +3206,27 @@ VALUES ('${CS_P}000000000106', '${CS_P}000000000011', '${CS_P}000000000001', 'ma
 SELECT preview_operation_code('{"method_id":"${CS_P}000000000012"}'::jsonb, '${CS_P}000000000106', 'TEST-OC-CAS2') AS pme \gset
 UPDATE manufacturing_operations SET method_id = '${CS_P}000000000012' WHERE operation_id = '${CS_P}000000000106';
 SELECT 'preview_method_edit:' || (:'pme' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000106';
+-- derive_category_exact: the preview derives the category exactly as mfg_op_derive_category does
+-- (A) method changed and a category passed along that equals the saved one: the trigger still derives
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${CS_P}000000000107', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F');
+SELECT preview_operation_code('{"method_id":"${CS_P}000000000012","process_category":"machining"}'::jsonb, '${CS_P}000000000107', 'TEST-OC-CAS2') AS pa \gset
+UPDATE manufacturing_operations SET method_id = '${CS_P}000000000012', process_category = 'machining' WHERE operation_id = '${CS_P}000000000107';
+SELECT 'preview_cat_a:' || (:'pa' = pass_code) || ':' || process_category || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000107';
+-- (B) a saved operation whose category is NULL keeps it when only another value is edited
+ALTER TABLE manufacturing_operations DISABLE TRIGGER mfg_op_derive_category;
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, machining_operation_subtype)
+VALUES ('${CS_P}000000000108', '${CS_P}000000000011', '${CS_P}000000000001', 'F');
+ALTER TABLE manufacturing_operations ENABLE TRIGGER mfg_op_derive_category;
+SELECT preview_operation_code('{"machining_cutting_speed_m_per_min":30}'::jsonb, '${CS_P}000000000108', 'TEST-OC-CAS2') AS pb \gset
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 30 WHERE operation_id = '${CS_P}000000000108';
+SELECT 'preview_cat_b:' || (:'pb' = pass_code) || ':' || coalesce(process_category, '<null>') || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000108';
+-- (C) a category set to NULL on a saved operation stays NULL (the method did not change)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${CS_P}000000000109', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F');
+SELECT preview_operation_code('{"process_category":null}'::jsonb, '${CS_P}000000000109', 'TEST-OC-CAS2') AS pc \gset
+UPDATE manufacturing_operations SET process_category = NULL WHERE operation_id = '${CS_P}000000000109';
+SELECT 'preview_cat_c:' || (:'pc' = pass_code) || ':' || coalesce(process_category, '<null>') || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000109';
 -- no values and no saved row gives NULL, not an error; a NULL values object is read as empty
 SELECT 'preview_empty:' || coalesce(preview_operation_code('{}'::jsonb, NULL, NULL), '<null>');
 SELECT 'preview_nullvalues:' || coalesce(preview_operation_code(NULL, NULL, 'TEST-OC-CAS2'), '<null>');
@@ -3214,9 +3235,11 @@ SELECT 'shape:' || string_agg(tgname || '/' || (tgtype & 1) || '/' || (tgtype & 
     || '/' || (tgattr::text = '')::text || '/' || (tgqual IS NULL)::text || '/' || (obj_description(oid, 'pg_trigger') IS NOT NULL)::text, ',' ORDER BY tgname)
 FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'physical_samples'::regclass
   AND tgname IN ('physical_samples_rollup_lock', 'physical_samples_cascade_operation_codes');
+SELECT 'shape_ops:' || string_agg(tgname || '/' || (tgtype & 1) || '/' || (tgtype & 2) || '/' || (tgtype & 4) || '/' || (tgtype & 8) || '/' || (tgtype & 16) || '/' || (tgattr::text = '')::text || '/' || (tgqual IS NULL)::text || '/' || (obj_description(oid, 'pg_trigger') IS NOT NULL)::text, ',' ORDER BY tgname)
+FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'manufacturing_operations'::regclass AND tgname = 'mfg_op_rollup_lock';
 SELECT 'fn_comments:' || count(*) FILTER (WHERE obj_description(p.oid, 'pg_proc') IS NOT NULL) || '/' || count(*)
 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
-  AND p.proname IN ('trg_physical_samples_rollup_lock', 'trg_cascade_operation_codes', 'preview_operation_code');
+  AND p.proname IN ('trg_physical_samples_rollup_lock', 'trg_cascade_operation_codes', 'preview_operation_code', 'trg_manufacturing_operations_rollup_lock');
 ROLLBACK;
 SQL
 )
@@ -3236,7 +3259,11 @@ cs_check "preview_method_edit:true:TEST-OC-CAS2-HT6" "a preview of a method chan
 cs_check "preview_empty:<null>" "a preview of nothing is NULL"
 cs_check "preview_nullvalues:TEST-OC-CAS2" "a NULL values object is read as empty"
 cs_check "shape:physical_samples_cascade_operation_codes/1/0/0/16/true/true/true,physical_samples_rollup_lock/0/2/0/16/true/true/true" "the two triggers: row AFTER UPDATE and statement BEFORE UPDATE, no column list, no WHEN, commented"
-cs_check "fn_comments:3/3" "every new function has a comment"
+cs_check "shape_ops:mfg_op_rollup_lock/0/2/4/8/16/true/true/true" "mfg_op_rollup_lock: statement BEFORE INSERT OR UPDATE OR DELETE, no column list, no WHEN, commented"
+cs_check "fn_comments:4/4" "every new function has a comment"
+cs_check "preview_cat_a:true:heat_treatment:TEST-OC-CAS2-HT7" "preview: a method change derives the category even when the same category is passed (as the UPDATE does)"
+cs_check "preview_cat_b:true:<null>:TEST-OC-CAS2-8" "preview: a saved NULL category is not derived by an edit of another value (as the UPDATE)"
+cs_check "preview_cat_c:true:<null>:TEST-OC-CAS2-9" "preview: a category set to NULL stays NULL (as the UPDATE)"
 
 # lock_order: session A locks a sample row and, later in its transaction, refreshes the rollup (any
 # operation write does); session B writes an operation of that sample (rollup lock, then the sample
