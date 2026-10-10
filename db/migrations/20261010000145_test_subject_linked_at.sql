@@ -4,13 +4,18 @@
 -- Why: test codes (next migration) are built from the primary subject, and 20261007000139 picks
 -- the subject with the lowest junction id, a random UUID: linking a second sample could make it
 -- the primary and rename the test. The junction gets the time each row was linked, and the sync
--- orders by it (the id only breaks ties, e.g. rows that existed before this migration).
+-- orders by it. Rows that exist before this migration are all stamped '-infinity' (a constant,
+-- so they tie), and the id breaks the tie: their order is the old lowest-id rule, so no existing
+-- test changes its primary subject. New rows get clock_timestamp() (not now(): two rows linked in
+-- one transaction must still differ).
 
 ALTER TABLE test_sessions_subject
-    ADD COLUMN linked_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp();
+    ADD COLUMN linked_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity';
+ALTER TABLE test_sessions_subject
+    ALTER COLUMN linked_at SET DEFAULT clock_timestamp();
 
 COMMENT ON COLUMN test_sessions_subject.linked_at IS
-    'When this subject was linked to the test. The earliest valid subject is the test''s primary subject (sync_test_session_primary_subject).';
+    'When this subject was linked to the test. The earliest valid subject is the test''s primary subject (sync_test_session_primary_subject). Rows linked before this column existed carry -infinity, so among them the lowest junction id wins (the previous rule).';
 
 CREATE OR REPLACE FUNCTION sync_test_session_primary_subject(p_session_id UUID)
     RETURNS VOID

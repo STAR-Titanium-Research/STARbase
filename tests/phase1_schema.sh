@@ -1676,6 +1676,22 @@ VALUES ('00000000-0000-4000-8000-0000000000f1', 'c0000000-0000-4000-8000-0000000
 SELECT 'earliest:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
   FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c9';
 
+-- rows with EQUAL linked_at (e.g. linked before the column existed) fall back to junction id order
+INSERT INTO test_sessions (session_id) VALUES ('c0000000-0000-4000-8000-0000000001c8');
+INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item, linked_at)
+VALUES ('00000000-0000-4000-8000-0000000000e9', 'c0000000-0000-4000-8000-0000000001c8', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a1', '-infinity');
+INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item, linked_at)
+VALUES ('00000000-0000-4000-8000-0000000000e8', 'c0000000-0000-4000-8000-0000000001c8', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a2', '-infinity');
+SELECT 'tie_id_order:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
+  FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c8';
+
+-- new junction rows are stamped with the wall-clock time they are linked
+SELECT 'linked_at_default:' || pg_get_expr(d.adbin, d.adrelid)
+  FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+  WHERE d.adrelid = 'test_sessions_subject'::regclass AND a.attname = 'linked_at';
+SELECT 'linked_at_field:' || hidden || '/' || readonly
+  FROM directus_fields WHERE collection = 'test_sessions_subject' AND field = 'linked_at';
+
 -- delete the primary: the next subject is promoted
 DELETE FROM test_sessions_subject WHERE id = '00000000-0000-4000-8000-000000000002';
 SELECT 'delete_primary:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
@@ -1736,6 +1752,9 @@ ps_check "insert:true/true/v2" "insert: the first sample subject becomes sample_
 ps_check "second:true/v2" "a second sample subject with a higher id leaves sample_id and the test row untouched"
 ps_check "lowest_id:true" "of two subjects linked in turn, the first linked is the primary"
 ps_check "earliest:true" "the earliest linked subject stays primary when a later one has a lower junction id"
+ps_check "tie_id_order:true" "subjects with an equal linked_at fall back to junction id order (the pre-migration rule)"
+ps_check "linked_at_default:clock_timestamp()" "new junction rows are stamped with clock_timestamp() by default"
+ps_check "linked_at_field:true/true" "linked_at is registered hidden and read-only in Directus"
 ps_check "delete_primary:true" "deleting the primary subject promotes the next one"
 ps_check "delete_last:true" "deleting the last sample subject clears sample_id"
 ps_check "edge:true/true" "an insert_edges subject fills insert_edge_id and leaves sample_id alone"
