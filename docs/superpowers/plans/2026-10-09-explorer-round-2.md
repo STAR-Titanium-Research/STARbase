@@ -104,7 +104,7 @@ Read this section first, then the Status table. Nothing is pushed anywhere.
 | U1 | Per-user "frequently used" panel on Home: two short lists, pages and actions, and records | to do | to do | settled: ranks both, stored on the server per user (needs a small table and a migration); design not started |
 | G1 | Lineage graph rebuilt on a modern open-source graph library; retire `d1-lab-dashboard` | to do | to do | design not started |
 | N1 | Explorer navigation of its own and index pages (samples, operations, tests, campaigns), so every page is reachable without the Data Studio; editing keeps using the Directus form | to do | to do | **designed 2026-10-09** (grilling; decisions in Resume here); spec after T0 |
-| T0 | Record codes: test codes, operation codes that rename themselves (rules in Postgres) | to do | to do | **T0a built** on feat/record-codes (migrations 150-152, short IDs and test codes); awaiting Opus review; T0b next |
+| T0 | Record codes: test codes, operation codes that rename themselves (rules in Postgres) | to do | to do | **T0a APPLIED to live 2026-10-10** (migrations 150-152 on `feat/record-codes`: short IDs, earliest-linked subject, test codes); Opus task + branch reviews clean; backup `backups/pre_t0a_20261010T121545Z.dump`; the three files copied untracked into the main checkout like 143. Next: T0b plan (operation codes in Postgres) — carry the parked items from the T0a plan ledger summary below |
 
 ## Decisions so far (maintainer, 2026-10-09)
 

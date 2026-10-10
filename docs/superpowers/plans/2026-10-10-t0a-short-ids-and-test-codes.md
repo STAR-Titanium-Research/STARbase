@@ -1256,3 +1256,19 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
   migration 150 took 0.45 s, all three 1.3 s; 10,445 short IDs, all 8 characters; `sum(version)`
   119,408 and 140,897 audit rows unchanged; all triggers back to 'O'; 10 Directus field rows.
   Pre-checks on live the same day: all 0.
+
+## Outcome (2026-10-10)
+
+Applied to live after the maintainer's go-ahead: backup `backups/pre_t0a_20261010T121545Z.dump`;
+Directus stopped ~25 s; 150 in 0.43 s, 151 and 152 in 30 ms; 10,445 short IDs, all 8 characters;
+`sum(version)` and audit rows unchanged; triggers back to 'O'. Forms show **Short ID** (operation,
+sample, test) and **Test Code** with its hint; a rolled-back run on live gave
+`2-AA-MF-2023-3-23-SEM1`, then `SEM2`, a typed code kept, and `record_by_short_id` resolving.
+
+Carry into T0b: (1) assert the four test-code bookkeeping columns are NULL after a clone insert;
+(2) the cascade comment/COMMENT still say "same numbers" — the branch-5 fallback can change the
+number on a clash; (3) tighten test (d) (assert `test_code_number` and the typed test untouched);
+(4) triggers on code columns retyped by migration 116 must not use `UPDATE OF <col>` or `WHEN`;
+(5) writing the rule's own value marks a code typed (revisit with the §5 preview); (6) spec drift:
+`test_code_for()` does not exist yet, `record_by_short_id` returns `record_id`, `test_code` sits at
+sort 1; (7) the deferred harness and doc minors listed in the review history.
