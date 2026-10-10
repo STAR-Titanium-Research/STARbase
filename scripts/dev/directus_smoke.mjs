@@ -69,6 +69,8 @@ await check('copy_test_keeping_code', async () => {
   const r = await api('POST', '/items/test_sessions', await copyOfTest());
   expect(r.status === 400, `status ${r.status}, expected 400: ${errText(r)}`);
   expect(/has to be unique/i.test(errText(r)), `no "has to be unique" message: ${errText(r)}`);
+  const e = r.body?.errors?.[0];
+  expect(e?.extensions?.field === 'test_code', `uniqueness error is not on test_code: ${errText(r)}`);
 });
 
 // With the code cleared (and the subject re-attached) the copy gets the next number.

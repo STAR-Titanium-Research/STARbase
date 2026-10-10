@@ -60,13 +60,37 @@ done
 [[ -n "$ready" ]] || abort "postgres not ready after 60s" 1
 
 # --- restore a copy of live (live is only read). Revisions/activity data are skipped: large, not needed.
+# Two steps so a failed or truncated dump cannot pass: the dump is streamed into a file in the scratch
+# container with both exit codes checked, then restored from that file with every pg_restore error accounted for.
 t0=$SECONDS
-rout=$(docker exec "$LIVE_PG" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --exclude-table-data=directus_revisions --exclude-table-data=directus_activity' \
-  | docker exec -i "$PG" pg_restore -U d1 -d d1_database --no-owner --role=d1 2>&1)
-# Expected noise: GRANTs to roles that exist only on live (d1_llm_readonly ...). pg_restore prints each
-# failing command as "Command was: ..."; any failing command that is not a GRANT/REVOKE is a real failure.
-badcmd=$(grep -E '^[[:space:]]*Command was:' <<<"$rout" | grep -vE 'Command was: (GRANT|REVOKE) ')
-[[ -z "$badcmd" ]] || abort "restore" 1 "$(grep -vE '^[[:space:]]*Command was: (GRANT|REVOKE) |role "[^"]+" does not exist|^pg_restore: while' <<<"$rout" | head -40)"
+docker exec "$LIVE_PG" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --exclude-table-data=directus_revisions --exclude-table-data=directus_activity' \
+  | docker exec -i "$PG" sh -c 'cat > /tmp/live.dump'
+ps=("${PIPESTATUS[@]}")
+[[ ${ps[0]} -eq 0 && ${ps[1]} -eq 0 ]] || abort "restore: pg_dump of live (pg_dump/cat exit ${ps[0]}/${ps[1]})" 1
+# Harness self-test hook: D1_SMOKE_TEST_TRUNCATE_DUMP=<bytes> cuts the dump to prove a broken restore is caught.
+[[ -n "${D1_SMOKE_TEST_TRUNCATE_DUMP:-}" ]] \
+  && docker exec "$PG" sh -c "head -c $D1_SMOKE_TEST_TRUNCATE_DUMP /tmp/live.dump > /tmp/t && mv /tmp/t /tmp/live.dump"
+docker exec "$PG" pg_restore -l /tmp/live.dump >/dev/null 2>&1 || abort "restore: dump file unreadable (truncated?)" $?
+rout=$(docker exec "$PG" pg_restore -U d1 -d d1_database --no-owner --role=d1 /tmp/live.dump 2>&1)
+# Every "pg_restore: error:" must be explained: a `role "..." does not exist` error on a GRANT/REVOKE (roles
+# that exist only on live, e.g. d1_llm_readonly). Anything else (COPY failed, could not read from input
+# file, a failed CREATE ...) is a real failure. The count must also equal pg_restore's own
+# "errors ignored on restore: N" summary.
+acct=$(awk '
+  /^pg_restore: error:/ { if (pend) { print "  " err; bad++ } err = $0; pend = 1; total++; next }
+  /^Command was:/ { if (pend) { if (err ~ /role "[^"]+" does not exist/ && $0 ~ /^Command was: (GRANT|REVOKE) /) ok++;
+                                else { print "  " err; print "  " $0; bad++ } pend = 0 } next }
+  END { if (pend) { print "  " err; bad++ } print "COUNTS " total + 0 " " ok + 0 " " bad + 0 }' <<<"$rout")
+read -r _ e_total e_ok e_bad <<<"$(grep '^COUNTS ' <<<"$acct")"
+e_sum=$(sed -n 's/^pg_restore: warning: errors ignored on restore: \([0-9]*\).*/\1/p' <<<"$rout")
+[[ "$e_bad" -eq 0 && "$e_total" -eq "$e_ok" && "${e_sum:-0}" -eq "$e_total" ]] \
+  || abort "restore" 1 "unexplained pg_restore errors (errors=$e_total explained=$e_ok summary=${e_sum:-none}):
+$(grep -v '^COUNTS ' <<<"$acct" | head -40)
+$(tail -5 <<<"$rout")"
+# Sanity: the post-data section (indexes, constraints, triggers) made it, i.e. the dump was complete.
+trg=$(psql_copy -Atc "SELECT count(*) FROM pg_trigger WHERE tgname IN ('physical_samples_short_id','mfg_op_short_id','test_sessions_short_id','test_sessions_set_code')") \
+  || abort "restore check (triggers)" $?
+[[ "$trg" == "4" ]] || abort "restore: expected 4 short_id/test_code triggers in the copy, found ${trg:-none}" 1 "$(tail -5 <<<"$rout")"
 n=$(psql_copy -Atc "SELECT count(*) FROM schema_migrations") || abort "restore check (schema_migrations missing)" $? "$rout"
 [[ "${n:-0}" -gt 0 ]] || abort "restore produced no schema_migrations rows" 1 "$rout"
 echo "restored copy of live ($n migrations applied) in $((SECONDS - t0))s"
@@ -130,6 +154,14 @@ done
 [[ -n "$ready" ]] || abort "directus not healthy after 120s" 1 "$(docker logs --tail 60 "$DX" 2>&1)"
 
 # --- cases
-docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" \
-  -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_smoke.mjs 2>&1
-exit $?
+cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" \
+  -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_smoke.mjs 2>&1)
+crc=$?
+echo "$cout"
+# A failure outside check() (image pull, the .mjs throwing) prints no SMOKE lines: flag it as a harness failure.
+if ! grep -q '^SMOKE ' <<<"$cout"; then
+  echo "FAIL harness: cases (exit $crc): no SMOKE lines in the output"; exit 1
+elif [[ $crc -ne 0 ]] && ! grep -q '^SMOKE FAIL ' <<<"$cout"; then
+  echo "FAIL harness: cases (exit $crc): non-zero exit without a SMOKE FAIL line"; exit 1
+fi
+exit "$crc"
