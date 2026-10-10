@@ -38,11 +38,14 @@ SET LOCAL lock_timeout = '10s';
 
 -- seqbackfill:start
 -- The imported/legacy machining operations have no operation_sequence, but their codes carry the
--- pass number (TEST-S-F7-30MPM: sample code, then subtype + number). Read it into the column so the
--- rule can rebuild those codes. Done with the table's user triggers on (the audited, versioned
--- change is wanted; ~50 rows) and before the new trigger exists, so nothing rewrites the codes.
--- Frozen rows are included (the number is read, the code is untouched). What was filled is kept in
--- d1_private.operation_sequence_backfill so the down can undo exactly that.
+-- pass number (S-F7-30MPM, S-F2_1-60MPM, S-F3_30MPM_0.05feed: sample code, then letter + number).
+-- Read it into the column so the rule can rebuild those codes. Done with the table's user triggers
+-- on (the audited, versioned change is wanted; ~50 rows) and before the new trigger exists, so
+-- nothing rewrites the codes. Frozen rows are included (the number is read, the code is untouched).
+-- A number is not taken when another machining operation of the sample already has it for the same
+-- letter, or when two candidates would share it (the rule would then give two operations one code);
+-- those stay NULL. What was filled is kept in d1_private.operation_sequence_backfill so the down
+-- can undo exactly that.
 CREATE SCHEMA IF NOT EXISTS d1_private;
 CREATE TABLE IF NOT EXISTS d1_private.operation_sequence_backfill (
     operation_id UUID    PRIMARY KEY,
@@ -56,17 +59,33 @@ DECLARE
     v_left   INTEGER;
 BEGIN
     WITH cand AS (
-        SELECT mo.operation_id,
-               substring(split_part(substr(mo.pass_code, length(ps.sample_code) + 2), '-', 1) FROM '(\d+)$') AS digits
+        -- token = what follows "<sample code>-" up to the next "-" (F3, F2_1, F3_30MPM_0.05feed);
+        -- the number is the digits right after its leading letters (F2_1 gives 2, a bare "7" none).
+        -- st = the subtype as the rule writes it in the code (MT-F gives F).
+        SELECT mo.operation_id, mo.sample_id,
+               regexp_replace(coalesce(mo.machining_operation_subtype, ''), '^[A-Z]{2}-', '') AS st,
+               substring(split_part(substr(mo.pass_code, length(ps.sample_code) + 2), '-', 1) FROM '^[A-Za-z]+(\d+)') AS digits
         FROM public.manufacturing_operations mo
         JOIN public.physical_samples ps ON ps.sample_id = mo.sample_id
         WHERE mo.process_category = 'machining'
           AND mo.operation_sequence IS NULL
           AND left(mo.pass_code, length(ps.sample_code) + 1) = ps.sample_code || '-'
-    ), ins AS (
-        INSERT INTO d1_private.operation_sequence_backfill (operation_id, filled)
-        SELECT operation_id, digits::int FROM cand
+    ), num AS (
+        SELECT operation_id, sample_id, st, digits::int AS n,
+               count(*) OVER (PARTITION BY sample_id, st, digits::int) AS same_candidates
+        FROM cand
         WHERE digits IS NOT NULL AND length(digits) <= 9
+    ), ins AS (
+        -- never create a duplicate code: skip a number another operation of the sample already has
+        -- for the same letter, and numbers two candidates would share
+        INSERT INTO d1_private.operation_sequence_backfill (operation_id, filled)
+        SELECT n.operation_id, n.n FROM num n
+        WHERE n.same_candidates = 1
+          AND NOT EXISTS (
+              SELECT 1 FROM public.manufacturing_operations o
+              WHERE o.sample_id = n.sample_id AND o.operation_id <> n.operation_id
+                AND o.process_category = 'machining' AND o.operation_sequence = n.n
+                AND regexp_replace(coalesce(o.machining_operation_subtype, ''), '^[A-Z]{2}-', '') = n.st)
         ON CONFLICT (operation_id) DO NOTHING
         RETURNING operation_id, filled
     )
@@ -144,7 +163,7 @@ BEGIN
             v_auto := TRUE;                 -- cleared, or an old client's placeholder: rebuild
         ELSE
             v_auto := FALSE;
-            v_written := TRUE;              -- decided below against the rule's value
+            v_written := TRUE;              -- kept as written; the next edit compares the old row with the rule
         END IF;
     ELSE
         SELECT ps.sample_code INTO v_old_sample FROM public.physical_samples ps WHERE ps.sample_id = OLD.sample_id;
@@ -152,12 +171,14 @@ BEGIN
         -- at their next edit); otherwise automatic means "is the rule's value for the old row".
         v_auto := OLD.pass_code IS NULL
                   OR OLD.pass_code = public.operation_code_for(OLD, v_old_sample);
-        -- a new number when the sample or the method changed (and the sequence was not set by hand)
-        IF v_auto AND NEW.sample_id IS NOT NULL AND NEW.source_system IS NULL
-           AND NEW.operation_sequence IS NOT DISTINCT FROM OLD.operation_sequence
-           AND (NEW.sample_id IS DISTINCT FROM OLD.sample_id OR NEW.method_id IS DISTINCT FROM OLD.method_id) THEN
-            v_renumber := TRUE;
-        END IF;
+    END IF;
+
+    -- A new number when the sample or the method of an automatic operation changed (also when the
+    -- same statement cleared the code or sent a placeholder), unless the sequence was set by hand.
+    IF TG_OP = 'UPDATE' AND v_auto AND NEW.sample_id IS NOT NULL AND NEW.source_system IS NULL
+       AND NEW.operation_sequence IS NOT DISTINCT FROM OLD.operation_sequence
+       AND (NEW.sample_id IS DISTINCT FROM OLD.sample_id OR NEW.method_id IS DISTINCT FROM OLD.method_id) THEN
+        v_renumber := TRUE;
     END IF;
 
     IF v_renumber THEN

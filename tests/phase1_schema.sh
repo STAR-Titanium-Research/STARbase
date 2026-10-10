@@ -2894,6 +2894,9 @@ CREATE FUNCTION pg_temp.oc(j jsonb, s text DEFAULT 'TEST-OC-001') RETURNS text L
 SELECT 'm_full:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8,"machining_cutting_speed_m_per_min":30,"machining_feed_mm_per_rev":0.1,"machining_axial_depth_of_cut_mm":1}');
 SELECT 'm_speed:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8,"machining_cutting_speed_m_per_min":30}');
 SELECT 'm_none:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8}');
+SELECT 'm_mt:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"MT-F","operation_sequence":8,"machining_cutting_speed_m_per_min":30}');
+SELECT 'm_mm:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"MM-R","operation_sequence":8}');
+SELECT 'm_word:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"facing","operation_sequence":8}');
 SELECT 'ht:' || pg_temp.oc('{"process_category":"heat_treatment","ht_treatment_type":"anneal","operation_sequence":2,"ht_peak_temp_celsius":1050,"ht_hold_time_min":60,"ht_cooling_method":"furnace"}');
 SELECT 'def:' || pg_temp.oc('{"process_category":"deformation","deform_deformation_type":"rolling","operation_sequence":3,"deform_deformation_temp_celsius":900,"deform_total_reduction_pct":50,"deform_pass_count":4}');
 SELECT 'def_unknown:' || pg_temp.oc('{"process_category":"deformation","deform_deformation_type":"weird","operation_sequence":3}');
@@ -2954,6 +2957,9 @@ oc_check "^cn:0|0.05|1932.08|30|123457000|-5.5|$" "code_num writes 6 significant
 oc_check "^m_full:TEST-OC-001-F8-30MPM_0.1feed_1DoC$" "machining code: sample, subtype + sequence, then the set parameters"
 oc_check "^m_speed:TEST-OC-001-F8-30MPM$" "machining code with only the speed set"
 oc_check "^m_none:TEST-OC-001-F8$" "machining code with no parameters"
+oc_check "^m_mt:TEST-OC-001-F8-30MPM$" "machining code: a subtype stored as method code + letter (MT-F) gives the bare letter, as every stored code has it"
+oc_check "^m_mm:TEST-OC-001-R8$" "machining code: MM-R gives R"
+oc_check "^m_word:TEST-OC-001-facing8$" "machining code: a subtype without a method prefix is used as it is"
 oc_check "^ht:TEST-OC-001-HTA2-1050C_60min_FC$" "heat treatment code"
 oc_check "^def:TEST-OC-001-DR3-900C_50pct_4p$" "deformation code"
 oc_check "^def_unknown:TEST-OC-001-D3$" "deformation code with an unknown type falls back to D"
@@ -2984,7 +2990,8 @@ OT_P='9b000000-0000-4000-8000-'
 ot_out=$($PSQL 2>&1 <<SQL
 BEGIN;
 INSERT INTO physical_samples (sample_id, sample_code) VALUES
-    ('${OT_P}000000000001', 'TEST-OT-001'), ('${OT_P}000000000002', 'TEST-OT-002'), ('${OT_P}000000000003', 'TEST-OT-003');
+    ('${OT_P}000000000001', 'TEST-OT-001'), ('${OT_P}000000000002', 'TEST-OT-002'), ('${OT_P}000000000003', 'TEST-OT-003'),
+    ('${OT_P}000000000004', 'TEST-OT-004');
 INSERT INTO manufacturing_methods (method_id, method_code, method_name) VALUES
     ('${OT_P}000000000011', 'T-OT-M1', 'operation code trigger test method 1'),
     ('${OT_P}000000000012', 'T-OT-M2', 'operation code trigger test method 2');
@@ -3044,6 +3051,9 @@ INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, proces
 VALUES ('${OT_P}000000000112', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'F', 30, 'TEST-OT-001-F{seq}-30MPM');
 SELECT 'placeholder_a:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000111';
 SELECT 'placeholder_b:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000112';
+-- clear_move: clearing the code in the same statement as a sample change still takes the next number there
+UPDATE manufacturing_operations SET sample_id = '${OT_P}000000000001', pass_code = NULL WHERE operation_id = '${OT_P}000000000101';
+SELECT 'clear_move:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
 -- legacy_kept: a stored code that is not the rule's value counts as typed
 ALTER TABLE manufacturing_operations DISABLE TRIGGER mfg_op_set_code;
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, machining_operation_subtype,
@@ -3085,17 +3095,24 @@ SELECT 'sinter_hand_run:' || pass_code FROM manufacturing_operations WHERE opera
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, equipment_id, operation_date, pass_code)
 VALUES ('${OT_P}000000000143', '${OT_P}000000000011', '${OT_P}000000000003', 'sintering', '${OT_P}000000000022', '2026-03-06T09:00:00Z', '06-03-26-MF{mf}');
 SELECT 'mf_placeholder:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000143';
--- seq_backfill: the extracted back-fill, on rows with a NULL sequence (imported rows keep NULL)
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, source_system, pass_code) VALUES
-    ('${OT_P}000000000151', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'test', 'TEST-OT-001-F7-30MPM'),
-    ('${OT_P}000000000152', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'test', 'N/R');
-SELECT 'bf_before:' || count(*) FROM manufacturing_operations WHERE operation_id IN ('${OT_P}000000000151', '${OT_P}000000000152') AND operation_sequence IS NULL;
+-- seq_backfill: the extracted back-fill, run as the migration runs it (before mfg_op_set_code exists,
+-- so with that trigger disabled; the other user triggers stay on). Imported rows keep a NULL sequence.
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, source_system, machining_operation_subtype, operation_sequence, pass_code) VALUES
+    ('${OT_P}000000000151', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'TEST-OT-004-F2_1-60MPM'),
+    ('${OT_P}000000000152', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'N/R'),
+    ('${OT_P}000000000153', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'TEST-OT-004-F3_30MPM_0.05feed'),
+    ('${OT_P}000000000154', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'TEST-OT-004-F5-30MPM'),
+    ('${OT_P}000000000155', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'F', 5, 'TEST-OT-004-F5-X'),
+    ('${OT_P}000000000156', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-R', NULL, 'TEST-OT-004-R6-a'),
+    ('${OT_P}000000000157', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-R', NULL, 'TEST-OT-004-R6-b'),
+    ('${OT_P}000000000158', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'TEST-OT-004-7-x');
+SELECT 'bf_before:' || count(*) FROM manufacturing_operations WHERE operation_id::text LIKE '${OT_P}00000000015%' AND operation_sequence IS NULL;
+ALTER TABLE manufacturing_operations DISABLE TRIGGER mfg_op_set_code;
 $ot_seqfill
-SELECT 'bf_seq:' || coalesce((SELECT operation_sequence::text FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000151'), '<null>')
-    || ',' || coalesce((SELECT operation_sequence::text FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000152'), '<null>');
-SELECT 'bf_codes:' || (SELECT pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000151')
-    || ',' || (SELECT pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000152');
-SELECT 'bf_ledger:' || count(*) || ':' || min(filled) FROM d1_private.operation_sequence_backfill WHERE operation_id::text LIKE '${OT_P}%';
+ALTER TABLE manufacturing_operations ENABLE TRIGGER mfg_op_set_code;
+SELECT 'bf_seq:' || string_agg(coalesce(operation_sequence::text, '<null>'), ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id::text LIKE '${OT_P}00000000015%';
+SELECT 'bf_codes:' || string_agg(pass_code, ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id::text LIKE '${OT_P}00000000015%';
+SELECT 'bf_ledger:' || count(*) || ':' || string_agg(filled::text, ',' ORDER BY filled) FROM d1_private.operation_sequence_backfill WHERE operation_id::text LIKE '${OT_P}%';
 SELECT 'trg:' || count(*) FILTER (WHERE tgname = 'mfg_op_set_code' AND tgenabled = 'O')
     || '/' || count(*) FILTER (WHERE tgname = 'mfg_op_assign_numbers') FROM pg_trigger
     WHERE NOT tgisinternal AND tgrelid = 'manufacturing_operations'::regclass;
@@ -3118,6 +3135,7 @@ ot_check "typed_equals_rule:TEST-OT-002-R4-55MPM_0.2feed_1DoC" "writing exactly 
 ot_check "cleared:TEST-OT-002-R4-55MPM_0.2feed_1DoC" "clearing the code rebuilds it from the rule"
 ot_check "placeholder_a:1:TEST-OT-001-F1" "an old client's {seq}-whatever code is replaced by the rule's code"
 ot_check "placeholder_b:2:TEST-OT-001-F2-30MPM" "an old client's code with a {seq} placeholder is replaced by the rule's code"
+ot_check "clear_move:3:TEST-OT-001-R3-55MPM_0.2feed_1DoC" "clearing the code in the same statement as a sample change takes the next number on the new sample"
 ot_check "legacy_kept:TEST-OT-001-F9-30MPM_0.05feed_0.1DoC_" "a stored code that is not the rule's value counts as typed and is kept"
 ot_check "null_notes:<null>" "an operation with no code stays without one when only the notes change"
 ot_check "null_speed:TEST-OT-001-F20-31MPM" "an operation with no code gets the rule's code once a field it is built from changes"
@@ -3127,10 +3145,10 @@ ot_check "fast_follow:12-10-16-MF25-4624-1250C_14kN_20dia" "a FAST operation's c
 ot_check "sinter_hand_norun:<null>" "a hand-made sintering operation has no code before it has a run number"
 ot_check "sinter_hand_run:05-03-26-MF250-400" "a run number gives it the code"
 ot_check "mf_placeholder:<null>" "an old client's {mf} code is automatic: no run number, no code, no invented MF number"
-ot_check "bf_before:2" "(setup) the two back-fill rows have no sequence"
-ot_check "bf_seq:7,<null>" "the back-fill reads the number from the code and leaves the other row"
-ot_check "bf_codes:TEST-OT-001-F7-30MPM,N/R" "the back-fill leaves every code as it was"
-ot_check "bf_ledger:1:7" "the back-fill ledger holds exactly the filled row"
+ot_check "bf_before:7" "(setup) the seven back-fill candidates have no sequence"
+ot_check "bf_seq:2,<null>,3,<null>,5,<null>,<null>,<null>" "the back-fill reads F2_1 as 2 and F3_30MPM_0.05feed as 3, and leaves N/R, a taken number, two candidates sharing one and a bare-digit token NULL"
+ot_check "bf_codes:TEST-OT-004-F2_1-60MPM,N/R,TEST-OT-004-F3_30MPM_0.05feed,TEST-OT-004-F5-30MPM,TEST-OT-004-F5-X,TEST-OT-004-R6-a,TEST-OT-004-R6-b,TEST-OT-004-7-x" "the back-fill leaves every code as it was"
+ot_check "bf_ledger:2:2,3" "the back-fill ledger holds exactly the two filled rows"
 ot_check "trg:1/0" "mfg_op_set_code is on the table and mfg_op_assign_numbers is gone"
 echo "== Cleanup test rows =="
 $PSQL -c "

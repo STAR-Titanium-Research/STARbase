@@ -5,11 +5,13 @@
 -- packages/force-plotting, only for new operations, and saved codes went stale when their fields
 -- changed. One rule, here, used by the trigger (next migration), the sample-code cascade, the
 -- form's live preview and later the Force App. A faithful port of OperationCode.vue's autoCode
--- with three deliberate changes: (1) sintering = DD-MM-YY-MF{machine}-{run}[-params], machine
+-- with four deliberate changes: (1) sintering = DD-MM-YY-MF{machine}-{run}[-params], machine
 -- from the equipment (FCT HP D <n>) or source_system fast_<n>, run = sintering_run_number (typed
 -- from the FAST machine or imported, never invented: Q48) — the old rule treated the number after
 -- MF as a running counter, but in every imported FAST code it is the machine; (2) the date is
--- UTC, which is what all 10,048 imported FAST codes use; (3) no {seq}/{mf} placeholders.
+-- UTC, which is what all 10,048 imported FAST codes use; (3) no {seq}/{mf} placeholders; (4) a machining
+-- subtype is stored as method code + letter (MT-F, MT-R, MT-O, MM-R) but every live code carries the
+-- bare letter (...-F1-60MPM...), so a two-letter method prefix is stripped from the subtype token.
 
 CREATE FUNCTION code_num(p NUMERIC)
     RETURNS TEXT
@@ -88,7 +90,7 @@ BEGIN
         END IF;
         RETURN v_code;
     ELSIF op.process_category = 'machining' THEN
-        v_token := coalesce(op.machining_operation_subtype, '') || v_seq;
+        v_token := regexp_replace(coalesce(op.machining_operation_subtype, ''), '^[A-Z]{2}-', '') || v_seq;
         v_parts := array_remove(ARRAY[
             code_num(op.machining_cutting_speed_m_per_min) || 'MPM',
             code_num(op.machining_feed_mm_per_rev) || 'feed',
@@ -134,7 +136,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION operation_code_for(manufacturing_operations, TEXT) IS
-    'The operation code the rule gives for this row and its input sample''s code (spec 2026-10-10-record-codes §3); NULL when none can be built (e.g. sintering without a run number).';
+    'The operation code the rule gives for this row and its input sample''s code (spec 2026-10-10-record-codes §3); NULL when none can be built (e.g. sintering without a run number). A machining subtype loses its two-letter method prefix (MT-F gives F), as in every stored code.';
 
 INSERT INTO directus_fields (collection, field, interface, options, readonly, hidden, sort, width, note, "group", searchable)
 SELECT 'manufacturing_operations', 'sintering_run_number', 'input', '{"min":1,"step":1}'::json, FALSE, FALSE,
