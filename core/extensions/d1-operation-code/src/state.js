@@ -4,6 +4,32 @@
 const text = (v) => (v === null || v === undefined ? '' : String(v));
 const clean = (v) => text(v).trim(); // the trigger btrims written codes, so compare and emit trimmed
 
+// What the form's primary key says about the item. Directus gives '+' for a new item and the key for
+// a saved one; while the form is still setting up the key can be undefined / null, which is neither
+// (treating it as new sent the first preview without operation_id, and the endpoint answers
+// automatic: true for a new item). 'pending': send nothing and decide nothing until the key arrives.
+export function keyState(primaryKey) {
+	if (primaryKey === '+') return 'new';
+	if (primaryKey === null || primaryKey === undefined || primaryKey === '') return 'pending';
+	return 'existing';
+}
+
+// Does an answer belong to the item the box shows now? Only when the request was sent with a ready
+// key and that key is still the form's key. Anything else (sent while pending, or the key changed
+// while it was in flight) is dropped whole: it neither decides the mode nor sets the preview.
+export function answerMatches({ sentKey, currentKey }) {
+	if (keyState(sentKey) === 'pending') return false;
+	return String(sentKey) === String(currentKey);
+}
+
+// The form switched from one ready key to another (another item, or '+' -> the saved key without a
+// remount): start over, so the next answer for the new key decides the mode. pending -> ready is not a
+// switch (nothing was sent before, and a mode the user set by typing meanwhile is kept).
+export function keyChangeResets(oldKey, newKey) {
+	if (keyState(oldKey) === 'pending' || keyState(newKey) === 'pending') return false;
+	return String(oldKey) !== String(newKey);
+}
+
 // The mode from a preview answer, or null while it cannot be decided. Once decided (by an earlier
 // answer, or by the user typing / pressing the refresh icon) it stays `current`: later answers only
 // change the displayed preview. A new item is automatic. An existing one takes the endpoint's

@@ -30,15 +30,13 @@
 // values: those are half-built while the form and other automatic interfaces mount.
 import { inject, ref, computed, watch, onMounted, onBeforeUnmount, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { decideMode, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
+import { keyState, answerMatches, keyChangeResets, decideMode, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
 
 const props = defineProps<{ value: string | null; primaryKey?: string | number | null }>();
 const emit = defineEmits<{ (e: 'input', value: string | null): void }>();
 
 const values = inject<Ref<Record<string, any>>>('values', ref({}));
 const api = useApi();
-
-const isNew = () => props.primaryKey == null || props.primaryKey === '+';
 
 const mode = ref<'auto' | 'typed'>('auto');
 // true once the first successful answer (or the user typing / pressing the refresh icon) has settled the
@@ -65,20 +63,26 @@ let requestCounter = 0;
 
 // No wait for the form to hold the record: the mode does not depend on the values, and an answer built
 // from a half-loaded form is replaced by the next one (each change of the values previews again).
+// But the primary key must be there (keyState 'pending' sends nothing), and an answer counts only for
+// the key it was sent with (answerMatches).
 async function fetchPreview() {
+	const sentKey = props.primaryKey;
+	const ks = keyState(sentKey);
+	if (ks === 'pending') return;
 	const req = ++requestCounter;
 	try {
 		const res = await api.post('/d1-next-number/operation-code', {
 			values: values.value ?? {},
-			operation_id: isNew() ? undefined : props.primaryKey,
+			operation_id: ks === 'new' ? undefined : sentKey,
 		});
 		if (req !== requestCounter) return; // a newer request is in flight; drop this one
+		if (!answerMatches({ sentKey, currentKey: props.primaryKey })) return;
 		preview.value = res?.data?.code ?? null;
 		frozen.value = res?.data?.frozen === true;
 		previewHidden.value = false;
 		previewFailed.value = false;
 		const m = decideMode({
-			isNew: isNew(),
+			isNew: ks === 'new',
 			decided: decided.value,
 			automatic: res?.data?.automatic,
 			current: mode.value,
@@ -89,6 +93,7 @@ async function fetchPreview() {
 		}
 	} catch (err: any) {
 		if (req !== requestCounter) return;
+		if (!answerMatches({ sentKey, currentKey: props.primaryKey })) return;
 		preview.value = null;
 		// frozen is kept: it comes from the saved row (source_system), which a failed request does not change.
 		if (err?.response?.status === 403) {
@@ -112,6 +117,23 @@ function schedule(delay: number) {
 
 onMounted(() => schedule(0)); // next tick, so a late-arriving form state is included
 watch(watchKey, () => schedule(300));
+// The key can arrive after mount (pending -> ready): preview then. A switch to another ready key starts
+// over, so the new item's own answer decides its mode.
+watch(
+	() => props.primaryKey,
+	(newKey, oldKey) => {
+		if (keyChangeResets(oldKey, newKey)) {
+			requestCounter++; // drop anything in flight for the old key
+			decided.value = false;
+			mode.value = 'auto';
+			preview.value = null;
+			frozen.value = false;
+			previewHidden.value = false;
+			previewFailed.value = false;
+		}
+		if (keyState(newKey) !== 'pending') schedule(0);
+	},
+);
 onBeforeUnmount(() => {
 	if (timer) clearTimeout(timer);
 	requestCounter++; // ignore anything still in flight

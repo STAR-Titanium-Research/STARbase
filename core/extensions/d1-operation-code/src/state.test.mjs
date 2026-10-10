@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideMode, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
+import { keyState, answerMatches, keyChangeResets, decideMode, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
 
 test('decideMode: a new item is automatic', () => {
 	assert.equal(decideMode({ isNew: true, decided: false, automatic: true, current: 'auto' }), 'auto');
@@ -109,4 +109,49 @@ test('hint: frozen wins over everything, typed or not', () => {
 
 test('hint: typed beats the preview-state hints', () => {
 	assert.equal(hint({ ...base, mode: 'typed', hidden: true }), TYPED);
+});
+
+const OP = '49eb731a-6a50-4580-9d2c-58d0a01ad4a5';
+
+test("keyState: only '+' is new; undefined / null / '' are pending (not ready), anything else existing", () => {
+	assert.equal(keyState('+'), 'new');
+	assert.equal(keyState(undefined), 'pending');
+	assert.equal(keyState(null), 'pending');
+	assert.equal(keyState(''), 'pending');
+	assert.equal(keyState(OP), 'existing');
+	assert.equal(keyState(7), 'existing');
+	assert.equal(keyState(0), 'existing');
+});
+
+test('answerMatches: an answer counts only for the ready key it was sent with, while that is still the key', () => {
+	assert.equal(answerMatches({ sentKey: OP, currentKey: OP }), true);
+	assert.equal(answerMatches({ sentKey: '+', currentKey: '+' }), true);
+	assert.equal(answerMatches({ sentKey: 7, currentKey: '7' }), true);
+	// sent while pending: never counts (it went without operation_id)
+	assert.equal(answerMatches({ sentKey: undefined, currentKey: OP }), false);
+	assert.equal(answerMatches({ sentKey: null, currentKey: null }), false);
+	// the key changed while the request was in flight
+	assert.equal(answerMatches({ sentKey: '+', currentKey: OP }), false);
+	assert.equal(answerMatches({ sentKey: OP, currentKey: 'other' }), false);
+	assert.equal(answerMatches({ sentKey: OP, currentKey: undefined }), false);
+});
+
+test('the live case (round 5): a pending-key answer cannot decide; the matching existing-key answer does', () => {
+	// mount: key undefined -> no request at all
+	assert.equal(keyState(undefined), 'pending');
+	// had an answer for a keyless request landed ({automatic: true}), it is dropped
+	assert.equal(answerMatches({ sentKey: undefined, currentKey: OP }), false);
+	// the key arrives; the request carries it; its answer decides: typed
+	assert.equal(answerMatches({ sentKey: OP, currentKey: OP }), true);
+	assert.equal(decideMode({ isNew: keyState(OP) === 'new', decided: false, automatic: false, current: 'auto' }), 'typed');
+});
+
+test('keyChangeResets: a switch between two ready keys starts over; pending -> ready and no change do not', () => {
+	assert.equal(keyChangeResets(undefined, OP), false);
+	assert.equal(keyChangeResets(null, '+'), false);
+	assert.equal(keyChangeResets(OP, undefined), false);
+	assert.equal(keyChangeResets(OP, OP), false);
+	assert.equal(keyChangeResets(7, '7'), false);
+	assert.equal(keyChangeResets('+', OP), true); // saved without a remount (or a transient '+')
+	assert.equal(keyChangeResets(OP, 'other'), true);
 });
