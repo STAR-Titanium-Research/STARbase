@@ -169,6 +169,22 @@ await check('op_preview_requires_login', async () => {
   expect(res.status === 401, `status ${res.status}, expected 401`);
 });
 
+// Frozen rows (source_system experiment_sheet): clearing the code keeps it, and the preview says so
+// without building anything. Runs on the copy of live, on one of its imported operations.
+await check('op_frozen_clear_keeps_code', async () => {
+  const f = await api('GET', `${OPS}?filter[source_system][_eq]=experiment_sheet&filter[pass_code][_nnull]=true&limit=1&fields=operation_id,pass_code`);
+  expect(f.status === 200, `list frozen operations: status ${f.status}: ${errText(f)}`);
+  const row = f.body?.data?.[0];
+  expect(row?.operation_id && row.pass_code, 'no experiment_sheet operation with a code in the copy');
+  const p = await api('POST', '/d1-next-number/operation-code', { values: {}, operation_id: row.operation_id });
+  expect(p.status === 200 && p.body?.frozen === true && p.body?.code === row.pass_code,
+    `frozen preview ${p.status} ${JSON.stringify(p.body)}, expected {code: ${row.pass_code}, frozen: true}`);
+  const r = await patchOp(row.operation_id, { pass_code: null });
+  expect(r.pass_code === row.pass_code, `clearing changed the code: ${row.pass_code} -> ${r.pass_code}`);
+  const again = await readOp(row.operation_id);
+  expect(again.pass_code === row.pass_code, `saved code after clearing: ${again.pass_code}`);
+});
+
 // Row visibility (ADR-0011) end to end: a Lab Member who is not on the admin's smoke sample or operation
 // must get 403 from the preview (the SQL reads with the database role's rights, so the route must refuse),
 // and must still be able to preview their own operation.
