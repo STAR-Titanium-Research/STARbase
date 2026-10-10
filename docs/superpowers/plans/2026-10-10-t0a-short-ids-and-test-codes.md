@@ -1214,19 +1214,40 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 6 (coordinator, not a worker): review, apply, check live
+### Task 6 (coordinator, not a worker): review, check, dry run, apply, check live
 
 - [ ] Opus review of `feat/record-codes` against `feat/explorer-restyle` with the repo's
   `migration-review` checklist (base ref: the merge commit's first parent), plus the six
   "Decisions this plan makes" above for explicit sign-off.
-- [ ] Dry run on a copy of the live database: `pg_dump -Fc` of the live DB restored into a
-  scratch container, `dbmate up`, then: every sample/operation/test has a `short_id`; no clash
-  report; `version` and `audit_logs` row counts unchanged by the back-fill.
-- [ ] Backup of the touched tables on live: `pg_dump -Fc -t physical_samples -t
+- [ ] **Pre-checks on live (read-only).** Each must return 0, or migration 150 is blocked until the
+  cause is fixed (run by the controller on 2026-10-10: all 0):
+  - `SELECT count(*) FROM manufacturing_operations WHERE pass_code ~ '\{(seq|mf)\}';`
+  - `SELECT count(*) FROM physical_samples WHERE sample_code ~ '\{seq\}';`
+  - duplicate UUIDs across the three tables (one registry, so a UUID must not appear twice):
+    `SELECT id FROM (SELECT sample_id id FROM physical_samples UNION ALL SELECT operation_id FROM
+    manufacturing_operations UNION ALL SELECT session_id FROM test_sessions) x GROUP BY id HAVING
+    count(*) > 1;` (no rows)
+  - user triggers not in their normal state on the three tables (the back-fill refuses them):
+    `SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled <> 'O' AND tgrelid IN
+    ('physical_samples'::regclass, 'manufacturing_operations'::regclass, 'test_sessions'::regclass);`
+- [ ] **Dry run on a restored copy.** `pg_dump -Fc` of the live DB restored into a scratch container,
+  `dbmate up` (time migration 150: that is the live lock window; it holds `lock_timeout = 10s`
+  and ACCESS EXCLUSIVE on the three tables while it back-fills). Post-checks, all against the copy:
+  - `SELECT length(short_id), count(*) FROM short_ids GROUP BY 1;` (8 for nearly all rows; longer
+    only on a clash)
+  - `SELECT count(*) FROM short_ids` = samples + operations + tests;
+  - every user trigger on the three tables back to `'O'` (the pre-check query above returns 0);
+  - `sum(version)` of the three tables and `count(*)` of `audit_logs` taken before `dbmate up` equal
+    the values after migration 150 (the back-fill must not bump versions or write audit rows).
+- [ ] **Backup** of the touched tables on live: `pg_dump -Fc -t physical_samples -t
   manufacturing_operations -t test_sessions -t test_sessions_subject -t directus_fields` into
   `backups/pre_t0a_<UTC timestamp>.dump`.
-- [ ] Copy the three migration files into the main checkout's `db/migrations` (untracked, as for
-  143), `dbmate status` shows exactly 150-152 pending, `dbmate up`, `docker restart
-  d1-database-directus-1`.
-- [ ] Live check: the sample, operation and test forms show a read-only **Short ID**; a new test
-  with a linked sample gets `{sample code}-SEM1`; typing a code keeps it.
+- [ ] **Apply in a quiet window.** Stop Directus (`docker stop d1-database-directus-1`) and any
+  crawler or importer that writes to the three tables. Copy the three migration files into the
+  main checkout's `db/migrations` (untracked, as for 143), `dbmate status` shows exactly 150-152
+  pending, then `dbmate up`. Apply only through dbmate: it runs each migration in one transaction,
+  while `psql -f` failing mid-back-fill would leave the user triggers disabled. Then start
+  Directus (`docker start d1-database-directus-1`, or `docker restart` if it was left running).
+- [ ] **Live check:** the sample, operation and test forms show a read-only **Short ID**; a new test
+  with a linked sample gets `{sample code}-SEM1`; typing a code keeps it; "Save as copy" on a coded
+  test gets a new code (no UNIQUE error).

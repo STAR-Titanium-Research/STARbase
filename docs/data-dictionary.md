@@ -234,7 +234,7 @@ after parsing.
 | `session_id` | UUID PK | |
 | `short_id` | TEXT UNIQUE | Permanent short ID (8+ hex characters of `session_id`), unique across samples, operations and tests. Never changes. Assigned by trigger (migration `…150`) |
 | `test_code` | TEXT UNIQUE | Readable test code, `{subject code}-{TYPE}{n}` (e.g. `116-RK-MH-2024-12-18-SEM1`). Assigned by the database when the first subject is linked; follows the subject and type unless typed by hand (`test_code_is_manual`) (migration `…152`) |
-| `test_code_number` | INTEGER | The n of an automatic `test_code`, drawn from `test_code_counters` |
+| `test_code_number` | INTEGER | The n of an automatic `test_code`, drawn from `test_code_counters`. The `test_code_*` bookkeeping columns belong to the trigger: reset on INSERT, ignored on UPDATE (a copied test does not inherit them) |
 | `test_code_type` | TEXT | The `test_type` the current number was drawn for; a different `test_type` draws a new number |
 | `test_code_is_manual` | BOOLEAN | True when `test_code` was written by a person: it is then kept as written. Clearing `test_code` sets it back to false |
 | `test_code_subject_collection` | TEXT | Kind of subject the automatic code is built on: `physical_samples` or `insert_edges` |
@@ -255,7 +255,7 @@ after parsing.
 Since Phase 1: what a test targets is recorded through the `test_sessions_subject`
 M2A junction (a sample, an insert edge, …). `sample_id` and `insert_edge_id` are a
 denormalised *primary subject*: since migration `…139` a trigger on the junction sets
-them to the first (lowest junction id) `physical_samples` / `insert_edges` subject, so
+them to the earliest linked (by `linked_at`, ties by junction id) `physical_samples` / `insert_edges` subject, so
 form-created tests are found by readers that filter on `sample_id`. A test with several
 samples shows only the first there; read the junction for all of them. The migration's
 back-fill copies a direct `sample_id` / `insert_edge_id` into the junction only for a test with no

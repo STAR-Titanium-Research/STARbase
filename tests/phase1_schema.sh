@@ -1660,7 +1660,7 @@ VALUES ('00000000-0000-4000-8000-000000000003', 'c0000000-0000-4000-8000-0000000
 SELECT 'second:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a1') || '/v' || version
   FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c1';
 
--- a second sample with a LOWER id takes over
+-- of two samples linked in turn, the first linked (it also has the lower junction id) stays primary
 INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item)
 VALUES ('00000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-0000000001c2', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a2');
 INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item)
@@ -1813,6 +1813,7 @@ sid_check "operation:5d0000000$" "an operation whose 8 characters are taken by a
 sid_check "test:5d00000000$" "a test whose 8 and 9 characters are taken gets 10"
 sid_check "lookup:manufacturing_operations/5d000000-0000-4000-8000-000000000202" "record_by_short_id finds the record (case-insensitive)"
 sid_check "guard:ok" "changing a short_id is refused"
+sid_check "samecode:5d000000$" "a refused change leaves the short_id as it was"
 sid_check "other_update:5d000000$" "other updates keep the short_id"
 sid_check "deleted_lookup:0" "a deleted record's short ID resolves to nothing"
 sid_check "registry_kept:1" "a deleted record's short ID stays reserved"
@@ -1820,6 +1821,91 @@ sid_check "no_reuse:5d000000000$" "a reserved short ID is never handed out again
 sid_check "not_null:3" "short_id is NOT NULL on the three tables"
 sid_check "directus_rows:3" "the three short_id fields are registered read-only in Directus"
 sid_check "comments:1" "short_ids carries a table comment"
+
+echo "== Short IDs: the back-fill (T0a) =="
+# Runs the real back-fill SQL, extracted from migration 150 between its backfill:start / backfill:end
+# markers, on rows made to look like pre-migration data (short_id NULL, no registry row), inside
+# a rolled-back transaction. The three user-trigger sets are bypassed for the setup and must be
+# back to enabled ('O') afterwards. The guard is run on its own, on a trigger set to ENABLE ALWAYS.
+SID_MIG=db/migrations/20261010000150_short_ids.sql
+sid_backfill=$(awk '/^-- backfill:start/{f=1;next}/^-- backfill:end/{f=0}f' "$SID_MIG")
+sid_guard=$(printf '%s\n' "$sid_backfill" | awk '/^DO \$\$/{f=1} f{print} f && /^END \$\$;/{exit}')
+[[ -n "$sid_backfill" && -n "$sid_guard" ]] && ok "found the short-ID back-fill and its guard in the migration" \
+    || bad "could not extract the short-ID back-fill / guard from $SID_MIG"
+bf_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code)
+VALUES ('6b000000-0000-4000-8000-000000000301', 'TEST-SBF-001');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('6b000000-0000-4000-8000-000000000305', 'T-SBF-M', 'short id back-fill test method');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code)
+VALUES ('6b000000-0000-4000-8000-000000000302', '6b000000-0000-4000-8000-000000000305', '6b000000-0000-4000-8000-000000000301', 'TEST-SBF-OP');
+INSERT INTO test_sessions (session_id) VALUES ('6b000000-0000-4000-8000-000000000303');
+-- make them look like pre-migration rows: no short_id, no registry row, a recorded version
+ALTER TABLE physical_samples ALTER COLUMN short_id DROP NOT NULL;
+ALTER TABLE manufacturing_operations ALTER COLUMN short_id DROP NOT NULL;
+ALTER TABLE test_sessions ALTER COLUMN short_id DROP NOT NULL;
+ALTER TABLE physical_samples DISABLE TRIGGER USER;
+ALTER TABLE manufacturing_operations DISABLE TRIGGER USER;
+ALTER TABLE test_sessions DISABLE TRIGGER USER;
+UPDATE physical_samples SET short_id = NULL, version = 7 WHERE sample_id = '6b000000-0000-4000-8000-000000000301';
+UPDATE manufacturing_operations SET short_id = NULL, version = 5 WHERE operation_id = '6b000000-0000-4000-8000-000000000302';
+UPDATE test_sessions SET short_id = NULL, version = 3 WHERE session_id = '6b000000-0000-4000-8000-000000000303';
+DELETE FROM short_ids WHERE record_id IN ('6b000000-0000-4000-8000-000000000301',
+    '6b000000-0000-4000-8000-000000000302', '6b000000-0000-4000-8000-000000000303');
+ALTER TABLE physical_samples ENABLE TRIGGER USER;
+ALTER TABLE manufacturing_operations ENABLE TRIGGER USER;
+ALTER TABLE test_sessions ENABLE TRIGGER USER;
+SELECT (SELECT sum(version) FROM physical_samples) + (SELECT sum(version) FROM manufacturing_operations)
+     + (SELECT sum(version) FROM test_sessions) AS vsum \gset
+SELECT COALESCE(max(log_id), 0) AS lid FROM audit_logs \gset
+SELECT 'bf_setup:' || count(*) FROM (
+    SELECT short_id FROM physical_samples WHERE sample_id = '6b000000-0000-4000-8000-000000000301'
+    UNION ALL SELECT short_id FROM manufacturing_operations WHERE operation_id = '6b000000-0000-4000-8000-000000000302'
+    UNION ALL SELECT short_id FROM test_sessions WHERE session_id = '6b000000-0000-4000-8000-000000000303') x
+  WHERE short_id IS NULL;
+
+-- the guard refuses a trigger that is not in its normal state (here ENABLE ALWAYS), and the
+-- failed statement leaves it untouched
+SAVEPOINT guard_test;
+ALTER TABLE test_sessions ENABLE ALWAYS TRIGGER test_sessions_set_code;
+$sid_guard
+ROLLBACK TO guard_test;
+
+-- the real back-fill
+$sid_backfill
+
+SELECT 'bf_short:' || (SELECT short_id FROM physical_samples WHERE sample_id = '6b000000-0000-4000-8000-000000000301')
+    || '/' || (SELECT short_id FROM manufacturing_operations WHERE operation_id = '6b000000-0000-4000-8000-000000000302')
+    || '/' || (SELECT short_id FROM test_sessions WHERE session_id = '6b000000-0000-4000-8000-000000000303');
+SELECT 'bf_versions:' || (SELECT version FROM physical_samples WHERE sample_id = '6b000000-0000-4000-8000-000000000301')
+    || '/' || (SELECT version FROM manufacturing_operations WHERE operation_id = '6b000000-0000-4000-8000-000000000302')
+    || '/' || (SELECT version FROM test_sessions WHERE session_id = '6b000000-0000-4000-8000-000000000303');
+SELECT 'bf_vsum:' || ((SELECT sum(version) FROM physical_samples) + (SELECT sum(version) FROM manufacturing_operations)
+     + (SELECT sum(version) FROM test_sessions) = :vsum);
+SELECT 'bf_audit:' || count(*) FROM audit_logs
+  WHERE log_id > :lid AND table_name IN ('physical_samples', 'manufacturing_operations', 'test_sessions');
+SELECT 'bf_nulls:' || (SELECT count(*) FROM physical_samples WHERE short_id IS NULL)
+    || '/' || (SELECT count(*) FROM manufacturing_operations WHERE short_id IS NULL)
+    || '/' || (SELECT count(*) FROM test_sessions WHERE short_id IS NULL);
+SELECT 'bf_registry:' || count(*) FROM short_ids
+  WHERE record_id IN ('6b000000-0000-4000-8000-000000000301', '6b000000-0000-4000-8000-000000000302', '6b000000-0000-4000-8000-000000000303');
+SELECT 'bf_triggers:' || count(*) FILTER (WHERE tgenabled <> 'O') || '/' || count(*) FROM pg_trigger
+  WHERE NOT tgisinternal
+    AND tgrelid IN ('physical_samples'::regclass, 'manufacturing_operations'::regclass, 'test_sessions'::regclass);
+ROLLBACK;
+SQL
+)
+bf_check() { grep -q -- "$1" <<<"$bf_out" && ok "$2" || bad "$2 (psql output: $bf_out)"; }
+bf_check "bf_setup:3$" "(setup) the three rows have no short_id before the back-fill"
+bf_check "is not enabled in its normal state" "the back-fill guard refuses a user trigger that is ENABLE ALWAYS"
+bf_check "bf_short:6b000000/6b0000000/6b00000000$" "the back-fill assigns short IDs, lengthening on a clash across the three tables"
+bf_check "bf_versions:7/5/3$" "the back-fill leaves each version as it was"
+bf_check "bf_vsum:true$" "the back-fill changes no version in the three tables"
+bf_check "bf_audit:0$" "the back-fill writes no audit rows"
+bf_check "bf_nulls:0/0/0$" "no row is left without a short_id"
+bf_check "bf_registry:3$" "the back-fill registers the three short IDs"
+bf_check "bf_triggers:0/" "every user trigger on the three tables is enabled again after the back-fill"
 echo "== Test codes: built from the earliest subject and the type, kept up to date (T0a) =="
 tc_out=$($PSQL 2>&1 <<'SQL'
 BEGIN;
@@ -1952,6 +2038,81 @@ tc_check "directus:6$" "the six test-code fields are registered in Directus"
 tc_check "directus_visible:1$" "only test_code is visible on the form"
 tc_check "orphan_rename:TEST-TC-ORP-SEM1$" "renaming the old subject of an orphaned test keeps its code"
 tc_check "notype_rename:TEST-TC-NUL-SEM1$" "renaming the subject of a test whose type was cleared keeps its code"
+
+echo "== Test codes: client-supplied bookkeeping is ignored; a taken rebuilt code draws a new number (T0a) =="
+# A clone (Directus "Save as copy") carries the source test's test_code_* columns; they must not
+# decide the copy's code. Each risky step is in a DO block that reports instead of aborting, so a
+# regression shows up as a failed check, not a dead transaction. Rolled back.
+cg_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('7e000000-0000-4000-8000-000000000251', 'TEST-CG-001'),
+    ('7e000000-0000-4000-8000-000000000253', 'TEST-CG-003');
+INSERT INTO test_sessions (session_id, test_type) VALUES ('7e000000-0000-4000-8000-000000000261', 'sem');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000261', 'physical_samples', '7e000000-0000-4000-8000-000000000251');
+SELECT 'cg_source:' || test_code || '/' || test_code_number FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000261';
+
+-- (a) a copy that carries the source's bookkeeping but no code gets the next free number
+DO $$
+DECLARE v TEXT;
+BEGIN
+  INSERT INTO test_sessions (session_id, test_type, test_code_number, test_code_type,
+                             test_code_subject_collection, test_code_subject_id)
+  VALUES ('7e000000-0000-4000-8000-000000000262', 'sem', 1, 'sem', 'physical_samples',
+          '7e000000-0000-4000-8000-000000000251');
+  INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+  VALUES ('7e000000-0000-4000-8000-000000000262', 'physical_samples', '7e000000-0000-4000-8000-000000000251');
+  SELECT test_code INTO v FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000262';
+  RAISE NOTICE 'copy_nocode:%', v;
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'copy_nocode:unique_violation';
+END $$;
+
+-- (b) a copy that also carries the source's code is still refused as a duplicate
+DO $$
+BEGIN
+  INSERT INTO test_sessions (session_id, test_type, test_code, test_code_number, test_code_type,
+                             test_code_subject_collection, test_code_subject_id)
+  VALUES ('7e000000-0000-4000-8000-000000000263', 'sem', 'TEST-CG-001-SEM1', 1, 'sem', 'physical_samples',
+          '7e000000-0000-4000-8000-000000000251');
+  RAISE NOTICE 'copy_unique:missing';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'copy_unique:ok';
+END $$;
+
+-- (c) an UPDATE cannot change the bookkeeping columns
+UPDATE test_sessions SET test_code_number = 9, test_code_type = 'tem', test_code_subject_collection = 'insert_edges',
+       test_code_subject_id = '7e000000-0000-4000-8000-000000000253'
+ WHERE session_id = '7e000000-0000-4000-8000-000000000261';
+SELECT 'bookkeeping_ignored:' || test_code || '/' || test_code_number || '/' || test_code_type || '/'
+    || test_code_subject_collection || '/' || (test_code_subject_id = '7e000000-0000-4000-8000-000000000251')
+  FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000261';
+
+-- (d) renaming a subject to a name whose next code is taken (typed by hand on another test)
+-- draws the next number instead of failing on UNIQUE
+INSERT INTO test_sessions (session_id, test_type) VALUES ('7e000000-0000-4000-8000-000000000264', 'sem');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000264', 'physical_samples', '7e000000-0000-4000-8000-000000000253');
+INSERT INTO test_sessions (session_id, test_type, test_code)
+VALUES ('7e000000-0000-4000-8000-000000000265', 'sem', 'TEST-CG-004-SEM1');
+SELECT 'rename_before:' || test_code FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000264';
+DO $$
+DECLARE v TEXT;
+BEGIN
+  UPDATE physical_samples SET sample_code = 'TEST-CG-004' WHERE sample_id = '7e000000-0000-4000-8000-000000000253';
+  SELECT test_code INTO v FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000264';
+  RAISE NOTICE 'rename_taken:%', v;
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'rename_taken:unique_violation';
+END $$;
+ROLLBACK;
+SQL
+)
+cg_check() { grep -q -- "$1" <<<"$cg_out" && ok "$2" || bad "$2 (psql output: $cg_out)"; }
+cg_check "cg_source:TEST-CG-001-SEM1/1$" "(setup) the source test is TEST-CG-001-SEM1, number 1"
+cg_check "copy_nocode:TEST-CG-001-SEM2$" "a copy carrying the source's bookkeeping but no code gets the next free number"
+cg_check "copy_unique:ok" "a copy carrying the source's code is refused as a duplicate"
+cg_check "bookkeeping_ignored:TEST-CG-001-SEM1/1/sem/physical_samples/true$" "an UPDATE of the test_code_* bookkeeping columns is ignored"
+cg_check "rename_before:TEST-CG-003-SEM1$" "(setup) the renamed sample's test starts as TEST-CG-003-SEM1"
+cg_check "rename_taken:TEST-CG-004-SEM2$" "renaming a subject to a name whose rebuilt code is taken draws the next number"
 
 echo "== Deleting samples and edges that are test subjects =="
 # Same fixture style as above; every row is rolled back. The back-fill statements are extracted

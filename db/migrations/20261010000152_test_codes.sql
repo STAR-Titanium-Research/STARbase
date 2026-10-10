@@ -111,7 +111,23 @@ DECLARE
     v_abbr TEXT;
     v_n    INTEGER;
     v_code TEXT;
+    v_draw BOOLEAN;
 BEGIN
+    -- The bookkeeping columns belong to this trigger, not to the client: a client that clones a
+    -- test (Directus "Save as copy", GET-then-POST) would otherwise carry the source's number and
+    -- subject along, and clearing the copied code would rebuild the source's exact code.
+    IF TG_OP = 'INSERT' THEN
+        NEW.test_code_number := NULL;
+        NEW.test_code_type := NULL;
+        NEW.test_code_subject_collection := NULL;
+        NEW.test_code_subject_id := NULL;
+    ELSE
+        NEW.test_code_number := OLD.test_code_number;
+        NEW.test_code_type := OLD.test_code_type;
+        NEW.test_code_subject_collection := OLD.test_code_subject_collection;
+        NEW.test_code_subject_id := OLD.test_code_subject_id;
+    END IF;
+
     -- Fast exit: nothing the code depends on changed.
     IF TG_OP = 'UPDATE'
        AND NEW.test_code IS NOT DISTINCT FROM OLD.test_code
@@ -155,10 +171,19 @@ BEGIN
     END IF;
 
     -- 4. New subject, new type or no number yet: draw the next free number.
-    IF NEW.test_code_number IS NULL
-       OR NEW.test_code_subject_collection IS DISTINCT FROM v_sub.collection
-       OR NEW.test_code_subject_id IS DISTINCT FROM v_sub.subject_id
-       OR NEW.test_code_type IS DISTINCT FROM NEW.test_type THEN
+    v_draw := NEW.test_code_number IS NULL
+           OR NEW.test_code_subject_collection IS DISTINCT FROM v_sub.collection
+           OR NEW.test_code_subject_id IS DISTINCT FROM v_sub.subject_id
+           OR NEW.test_code_type IS DISTINCT FROM NEW.test_type;
+    IF NOT v_draw THEN
+        -- 5. Same subject, type and number: follow the subject's (possibly corrected) code. If that
+        -- code is already used by another test (typed by hand, or the subject was renamed to a name
+        -- another test's code is built on), draw a new number instead of failing on UNIQUE.
+        v_code := v_sub.subject_code || '-' || v_abbr || NEW.test_code_number;
+        v_draw := EXISTS (SELECT 1 FROM public.test_sessions t
+                          WHERE t.test_code = v_code AND t.session_id <> NEW.session_id);
+    END IF;
+    IF v_draw THEN
         LOOP
             v_n := public.next_test_code_number(v_sub.collection, v_sub.subject_id, NEW.test_type);
             v_code := v_sub.subject_code || '-' || v_abbr || v_n;
@@ -170,17 +195,14 @@ BEGIN
         NEW.test_code_type := NEW.test_type;
         NEW.test_code_subject_collection := v_sub.collection;
         NEW.test_code_subject_id := v_sub.subject_id;
-        NEW.test_code := v_code;
-    ELSE
-        -- 5. Same subject, type and number: follow the subject's (possibly corrected) code.
-        NEW.test_code := v_sub.subject_code || '-' || v_abbr || NEW.test_code_number;
     END IF;
+    NEW.test_code := v_code;
     RETURN NEW;
 END;
 $$;
 
 COMMENT ON FUNCTION trg_test_sessions_set_code() IS
-    'BEFORE INSERT / UPDATE on test_sessions: keeps test_code = {subject code}-{TYPE}{n} up to date (spec 2026-10-10-record-codes §2). Typed codes are kept; clearing the code returns to automatic.';
+    'BEFORE INSERT / UPDATE on test_sessions: keeps test_code = {subject code}-{TYPE}{n} up to date (spec 2026-10-10-record-codes §2). Typed codes are kept; clearing the code returns to automatic. The test_code_* bookkeeping columns are the trigger''s own: reset on INSERT, ignored on UPDATE.';
 
 CREATE TRIGGER test_sessions_set_code
     BEFORE INSERT OR UPDATE ON test_sessions

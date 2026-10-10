@@ -13,6 +13,12 @@
 -- Registry rows are kept when a record is deleted, so a deleted sample's label never resolves to
 -- a different record.
 
+-- The back-fill below takes ACCESS EXCLUSIVE on physical_samples, manufacturing_operations and
+-- test_sessions. If live writers hold locks on them the migration fails fast instead of queueing
+-- every Directus read behind it. Apply only through dbmate (one transaction: `psql -f` failing
+-- mid-back-fill would leave the user triggers disabled), ideally with Directus stopped.
+SET LOCAL lock_timeout = '10s';
+
 CREATE TABLE short_ids (
     short_id   TEXT PRIMARY KEY CHECK (short_id ~ '^[0-9a-f]{8,32}$'),
     collection TEXT NOT NULL CHECK (collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions')),
@@ -90,15 +96,16 @@ ALTER TABLE test_sessions ADD COLUMN short_id TEXT;
 
 -- backfill:start
 -- With the tables' user triggers off, so 10k rows do not each bump version, write an audit row
--- and refresh the rollup. Refuse to run if one is already disabled: ENABLE TRIGGER USER below
--- would otherwise switch it on.
+-- and refresh the rollup. Refuse to run if one is not in its normal state ('O'): ENABLE TRIGGER
+-- USER below would switch a disabled trigger on and reset an ENABLE REPLICA / ENABLE ALWAYS one
+-- to 'O'.
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_trigger
-               WHERE NOT tgisinternal AND tgenabled = 'D'
+               WHERE NOT tgisinternal AND tgenabled <> 'O'
                  AND tgrelid IN ('physical_samples'::regclass, 'manufacturing_operations'::regclass,
                                  'test_sessions'::regclass)) THEN
-        RAISE EXCEPTION 'a user trigger on physical_samples / manufacturing_operations / test_sessions is disabled; enable it or back-fill by hand';
+        RAISE EXCEPTION 'a user trigger on physical_samples / manufacturing_operations / test_sessions is not enabled in its normal state (disabled, ENABLE REPLICA or ENABLE ALWAYS); restore it first (ENABLE TRIGGER USER below would change it)';
     END IF;
 END $$;
 ALTER TABLE physical_samples DISABLE TRIGGER USER;
