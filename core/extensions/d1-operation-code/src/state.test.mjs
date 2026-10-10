@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initialMode, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
+import { initialMode, nextMode, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
 
 test('initialMode: a new record starts automatic whatever the value', () => {
 	assert.equal(initialMode({ isNew: true, value: null, preview: 'A-1' }), 'auto');
@@ -114,4 +114,26 @@ test('hint: frozen wins over everything, typed or not', () => {
 
 test('hint: typed beats the preview-state hints', () => {
 	assert.equal(hint({ ...base, mode: 'typed', hidden: true }), TYPED);
+});
+
+test('nextMode: before any interaction it follows initialMode on every preview', () => {
+	const e = { touched: false, isNew: false, current: 'auto' };
+	// first preview null (form not loaded yet), then the real code
+	assert.equal(nextMode({ ...e, value: 'S1-FA1', preview: null, current: 'auto' }), 'typed');
+	assert.equal(nextMode({ ...e, value: 'S1-FA1', preview: 'S1-FA1', current: 'typed' }), 'auto');
+	// a real written code that differs from the rule stays typed
+	assert.equal(nextMode({ ...e, value: 'MINE', preview: 'S1-FA1', current: 'typed' }), 'typed');
+	assert.equal(nextMode({ ...e, value: 'MINE', preview: 'S1-FA1', current: 'auto' }), 'typed');
+	// no code yet: automatic
+	assert.equal(nextMode({ ...e, value: null, preview: 'S1-FA1', current: 'typed' }), 'auto');
+});
+
+test('nextMode: a new record is automatic', () => {
+	assert.equal(nextMode({ touched: false, isNew: true, value: 'x', preview: 'y', current: 'typed' }), 'auto');
+});
+
+test('nextMode: after the user touched the box the mode never flips back', () => {
+	assert.equal(nextMode({ touched: true, isNew: false, value: 'S1-FA1', preview: 'S1-FA1', current: 'typed' }), 'typed');
+	assert.equal(nextMode({ touched: true, isNew: false, value: 'MINE', preview: 'S1-FA1', current: 'auto' }), 'auto');
+	assert.equal(nextMode({ touched: true, isNew: true, value: null, preview: null, current: 'typed' }), 'typed');
 });

@@ -14,6 +14,15 @@ export function initialMode({ isNew, value, preview }) {
 	return clean(value) === clean(preview) ? 'auto' : 'typed';
 }
 
+// The mode after a preview arrives. Until the user takes over (types in the box, presses the refresh
+// icon, or edits a field of the form) every successful preview re-decides it, so an early answer
+// built from a half-loaded form cannot stick; once touched the mode is the user's. `current` is the
+// mode in force.
+export function nextMode({ touched, isNew, value, preview, current }) {
+	if (touched) return current;
+	return initialMode({ isNew, value, preview });
+}
+
 // The user edited the box. Empty, or equal to the preview -> automatic and emit null (the database
 // builds the code, so no written code can go stale after a later field edit). Anything else ->
 // typed, emitted trimmed.

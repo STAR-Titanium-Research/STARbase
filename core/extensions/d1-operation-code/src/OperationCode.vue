@@ -27,7 +27,7 @@
 // payload and the database builds the code; typing emits, and the refresh icon emits null.
 import { inject, ref, computed, watch, onMounted, onBeforeUnmount, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { initialMode, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
+import { nextMode, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
 
 const props = defineProps<{ value: string | null; primaryKey?: string | number | null }>();
 const emit = defineEmits<{ (e: 'input', value: string | null): void }>();
@@ -38,7 +38,11 @@ const api = useApi();
 const isNew = () => props.primaryKey == null || props.primaryKey === '+';
 
 const mode = ref<'auto' | 'typed'>('auto');
-const decided = ref(false); // true once the first preview (or the user) has settled the mode
+const decided = ref(false); // true once a preview (or the user) has settled the mode
+// The user took over: typed in the box, pressed the refresh icon, or edited a field after the first
+// preview was sent. From then on previews no longer re-decide the mode.
+let touched = false;
+let sent = false;
 const preview = ref<string | null>(null);
 const previewHidden = ref(false); // 403: the user may not read the operation or sample
 const previewFailed = ref(false); // 500 / network / anything else
@@ -58,7 +62,14 @@ const watchKey = computed(() => {
 let timer: ReturnType<typeof setTimeout> | null = null;
 let requestCounter = 0;
 
+// An existing record is previewed only once the form holds it (its primary key is in the values);
+// before that the fields are still null and the answer would be wrong.
+const formHoldsRecord = () =>
+	isNew() || String(values.value?.operation_id ?? '') === String(props.primaryKey);
+
 async function fetchPreview() {
+	if (!formHoldsRecord()) return;
+	sent = true;
 	const req = ++requestCounter;
 	try {
 		const res = await api.post('/d1-next-number/operation-code', {
@@ -70,10 +81,14 @@ async function fetchPreview() {
 		frozen.value = res?.data?.frozen === true;
 		previewHidden.value = false;
 		previewFailed.value = false;
-		if (!decided.value) {
-			mode.value = initialMode({ isNew: isNew(), value: props.value, preview: preview.value });
-			decided.value = true;
-		}
+		mode.value = nextMode({
+			touched,
+			isNew: isNew(),
+			value: props.value,
+			preview: preview.value,
+			current: mode.value,
+		});
+		decided.value = true;
 	} catch (err: any) {
 		if (req !== requestCounter) return;
 		preview.value = null;
@@ -98,7 +113,10 @@ function schedule(delay: number) {
 }
 
 onMounted(() => schedule(0)); // next tick, so a late-arriving form state is included
-watch(watchKey, () => schedule(300));
+watch(watchKey, () => {
+	if (sent) touched = true; // a field changed after the first preview went out: the user is editing
+	schedule(300);
+});
 onBeforeUnmount(() => {
 	if (timer) clearTimeout(timer);
 	requestCounter++; // ignore anything still in flight
@@ -132,6 +150,7 @@ const hint = computed(() =>
 );
 
 function onType(val: string | null) {
+	touched = true;
 	const r = onTyped(val, preview.value);
 	mode.value = r.mode;
 	decided.value = true;
@@ -139,6 +158,7 @@ function onType(val: string | null) {
 }
 
 function regenerate() {
+	touched = true;
 	const r = onRegenerate();
 	mode.value = r.mode;
 	decided.value = true;
