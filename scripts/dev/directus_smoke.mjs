@@ -1,13 +1,15 @@
 // Directus smoke cases, run by scripts/dev/directus_smoke.sh against a throwaway Directus on a
 // restored copy of live. Node 20, no dependencies. One `SMOKE PASS|FAIL <case>` line per case;
-// exit 1 on any FAIL. Env: DIRECTUS_URL, TOKEN (admin static token of the copy).
+// exit 1 on any FAIL. Env: DIRECTUS_URL, TOKEN (admin static token of the copy),
+// LM_TOKEN (static token of a Lab Member user created in the copy, with its own people row).
 const BASE = process.env.DIRECTUS_URL;
 const TOKEN = process.env.TOKEN;
+const LM_TOKEN = process.env.LM_TOKEN;
 
-async function api(method, path, body) {
+async function api(method, path, body, token = TOKEN) {
   const res = await fetch(BASE + path, {
     method,
-    headers: { Authorization: `Bearer ${TOKEN}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -23,6 +25,10 @@ async function check(name, fn) {
     await fn();
     console.log(`SMOKE PASS ${name}`);
   } catch (e) {
+    if (e?.skip && !process.env.D1_SMOKE_REQUIRE_LM) {
+      console.log(`SMOKE SKIP ${name}: ${e.message}`);
+      return;
+    }
     failed++;
     console.log(`SMOKE FAIL ${name}: ${String(e.message ?? e).replace(/\s+/g, ' ')}`);
   }
@@ -157,6 +163,64 @@ await check('op_preview_requires_login', async () => {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: {} }),
   });
   expect(res.status === 401, `status ${res.status}, expected 401`);
+});
+
+// Row visibility (ADR-0011) end to end: a Lab Member who is not on the admin's smoke sample or operation
+// must get 403 from the preview (the SQL reads with the database role's rights, so the route must refuse),
+// and must still be able to preview their own operation.
+const PREVIEW = '/d1-next-number/operation-code';
+// Precondition: the Lab Member can read at all. If not (see the SKIP reason), the three cases are reported as
+// SKIP, loudly, instead of FAIL: the cause is the Lab Member permission rows, not the preview route. Set
+// D1_SMOKE_REQUIRE_LM=1 to make a skip a failure.
+let lmBlocked = null;
+if (LM_TOKEN) {
+  const probe = await api('GET', '/items/physical_samples?limit=1&fields=sample_id', undefined, LM_TOKEN);
+  if (probe.status !== 200) lmBlocked = `a Lab Member cannot read physical_samples in this copy (status ${probe.status}: ${errText(probe)})`;
+}
+function needLm() {
+  expect(LM_TOKEN, 'no LM_TOKEN (the harness did not create the Lab Member user)');
+  if (lmBlocked) throw Object.assign(new Error(lmBlocked), { skip: true });
+}
+
+await check('lm_preview_foreign_op_403', async () => {
+  needLm();
+  expect(op, 'no operation (op_create_auto failed)');
+  const r = await api('POST', PREVIEW, { values: {}, operation_id: op.operation_id }, LM_TOKEN);
+  expect(r.status === 403, `status ${r.status}, expected 403: ${JSON.stringify(r.body)}`);
+  expect(!JSON.stringify(r.body).includes(sampleCode), `the 403 body leaks the operation's code: ${JSON.stringify(r.body)}`);
+});
+
+await check('lm_preview_foreign_sample_403', async () => {
+  needLm();
+  expect(sample, 'no sample (create_sample failed)');
+  const r = await api('POST', PREVIEW, {
+    values: { sample_id: sample.sample_id, process_category: 'machining', machining_operation_subtype: 'F' },
+  }, LM_TOKEN);
+  expect(r.status === 403, `status ${r.status}, expected 403: ${JSON.stringify(r.body)}`);
+  expect(!JSON.stringify(r.body).includes(sampleCode), `the 403 body leaks the sample's code: ${JSON.stringify(r.body)}`);
+});
+
+await check('lm_preview_own_op_200', async () => {
+  needLm();
+  expect(methodId, 'no method (earlier case failed)');
+  const lmCode = `SMOKELM-${rand6}`;
+  const s = await api('POST', '/items/physical_samples?fields=sample_id,sample_code',
+    { sample_code: lmCode, nickname: 'smoke lm', item_type: 'sample', current_status: 'active' }, LM_TOKEN);
+  expect(s.status === 200, `lab member sample create: status ${s.status}: ${errText(s)}`);
+  const o = await api('POST', `${OPS}?fields=operation_id,pass_code`, {
+    sample_id: s.body.data.sample_id, method_id: methodId, machining_operation_subtype: 'F',
+    machining_cutting_speed_m_per_min: 30,
+  }, LM_TOKEN);
+  expect(o.status === 200, `lab member operation create: status ${o.status}: ${errText(o)}`);
+  expect(o.body.data.pass_code === `${lmCode}-F1-30MPM`, `pass_code ${o.body.data.pass_code}`);
+  const p = await api('POST', PREVIEW,
+    { values: { machining_cutting_speed_m_per_min: 70 }, operation_id: o.body.data.operation_id }, LM_TOKEN);
+  expect(p.status === 200, `preview status ${p.status}: ${JSON.stringify(p.body)}`);
+  const u = await api('PATCH', `${OPS}/${o.body.data.operation_id}?fields=pass_code`,
+    { machining_cutting_speed_m_per_min: 70 }, LM_TOKEN);
+  expect(u.status === 200, `lab member patch: status ${u.status}: ${errText(u)}`);
+  expect(u.body.data.pass_code === `${lmCode}-F1-70MPM`, `saved code ${u.body.data.pass_code}`);
+  expect(p.body?.code === u.body.data.pass_code, `preview ${JSON.stringify(p.body)} differs from the saved code ${u.body.data.pass_code}`);
 });
 
 // A non-sintering create must not be blocked by the sintering run number (a typed code here).

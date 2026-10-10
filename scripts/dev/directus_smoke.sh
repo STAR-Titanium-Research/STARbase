@@ -136,6 +136,21 @@ admin=$(psql_copy -Atc "
 [[ -n "$admin" ]] || abort "no active admin user in the copy" 1
 psql_copy -c "UPDATE directus_users SET token = '$TOKEN' WHERE id = '$admin'" >/dev/null || abort "set token" $?
 
+# --- a Lab Member token, on the copy only: a fresh user in the Lab Member role (access through the role's
+# policy) with its own people row (people.user_id, ADR-0011), so the row-visibility rules apply to it. Always
+# created, never borrowed from a real person in the copy, so it owns and co-owns nothing to begin with.
+LM_TOKEN="smoke-lm-$(rhex 16)"
+lm_user=$(psql_copy -Atc "
+  WITH r AS (SELECT r.id FROM directus_roles r JOIN directus_access a ON a.role = r.id
+             JOIN directus_policies p ON p.id = a.policy
+             WHERE r.name = 'Lab Member' AND NOT p.admin_access LIMIT 1),
+  u AS (INSERT INTO directus_users (id, email, status, role, token, first_name, last_name)
+        SELECT gen_random_uuid(), 'smoke-lab-member-$(rhex 4)@example.invalid', 'active', r.id, '$LM_TOKEN', 'Smoke', 'Member'
+        FROM r RETURNING id),
+  p AS (INSERT INTO people (full_name, user_id) SELECT 'Smoke Member', id FROM u RETURNING person_id)
+  SELECT id FROM u") || abort "create Lab Member smoke user" $?
+[[ -n "$lm_user" ]] || abort "no Lab Member role in the copy to create the smoke user in" 1
+
 # --- Directus: the live container's exact image; live's extensions + this worktree's d1-next-number
 IMAGE=$(docker inspect "$LIVE_DX" --format '{{.Image}}') || abort "docker inspect $LIVE_DX" $?
 docker run -d --name "$DX" --network "$NET" \
@@ -154,10 +169,12 @@ done
 [[ -n "$ready" ]] || abort "directus not healthy after 120s" 1 "$(docker logs --tail 60 "$DX" 2>&1)"
 
 # --- cases
-cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" \
+cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e LM_TOKEN="$LM_TOKEN" -e D1_SMOKE_REQUIRE_LM \
   -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_smoke.mjs 2>&1)
 crc=$?
 echo "$cout"
+# On a failed case show the end of Directus's own log: the route logs the cause of a 500 there.
+grep -q '^SMOKE FAIL ' <<<"$cout" && { echo "--- directus log (tail) ---"; docker logs --tail 40 "$DX" 2>&1 | cut -c1-600; }
 # A failure outside check() (image pull, the .mjs throwing) prints no SMOKE lines: flag it as a harness failure.
 if ! grep -q '^SMOKE ' <<<"$cout"; then
   echo "FAIL harness: cases (exit $crc): no SMOKE lines in the output"; exit 1

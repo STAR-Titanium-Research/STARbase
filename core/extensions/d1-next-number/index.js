@@ -116,7 +116,9 @@ export default {
                 if (operationId !== null) {
                     const saved = await itemsFor('manufacturing_operations')
                         .readOne(operationId, { fields: ['operation_id', 'sample_id'] });
-                    savedSample = saved?.sample_id ?? null;
+                    // Fail closed: a read that returns nothing instead of throwing is not an authorisation.
+                    if (!saved) return res.status(403).json({ error: 'forbidden' });
+                    savedSample = saved.sample_id ?? null;
                 }
                 // The code is built with the merged row's sample: the one in values, else the saved one.
                 const sampleId = Object.prototype.hasOwnProperty.call(values, 'sample_id')
@@ -125,7 +127,8 @@ export default {
                 let sampleCode = null;
                 if (sampleId) {
                     const sample = await itemsFor('physical_samples').readOne(sampleId, { fields: ['sample_code'] });
-                    sampleCode = sample?.sample_code ?? null;
+                    if (!sample) return res.status(403).json({ error: 'forbidden' });
+                    sampleCode = sample.sample_code ?? null;
                 }
                 const out = await database.raw(
                     'SELECT preview_operation_code(?::jsonb, ?::uuid, ?) AS code',

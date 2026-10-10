@@ -270,3 +270,40 @@ test('preview: an unexpected error from the access check is a 500, not a 403', a
     const r = await call(h, user, {}, { values: { sample_id: SAMPLE } });
     assert.equal(r.status, 500);
 });
+
+test("preview: the saved operation's sample being unreadable is a 403 with no SQL", async () => {
+    // the operation is readable, values has no sample_id, the saved sample is not in the table
+    const rows = { ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: SAMPLE } };
+    const { h, db } = mountPreview(rows);
+    const r = await call(h, user, {}, { values: { machining_feed_mm_per_rev: 0.2 }, operation_id: OP });
+    assert.equal(r.status, 403);
+    assert.equal(db.seen.calls.length, 0);
+});
+
+test('preview: values.sample_id null reads the operation, no sample, and sends a null sample code', async () => {
+    const rows = { ...sampleRows, ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: SAMPLE } };
+    const { h, db, log } = mountPreview(rows);
+    const r = await call(h, user, {}, { values: { sample_id: null }, operation_id: OP });
+    assert.equal(r.status, 200);
+    assert.deepEqual(log.reads.map((x) => x.collection), ['manufacturing_operations']);
+    assert.equal(db.seen.calls[0].args[2], null);
+});
+
+test('preview: a read that returns nothing instead of throwing fails closed (403, no SQL)', async () => {
+    for (const rows of [{}, { ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: SAMPLE } }]) {
+        const db = previewDb();
+        class ItemsService {
+            async readOne(id) {
+                return rows['manufacturing_operations:' + id] ?? null;
+            }
+        }
+        const h = mountAll(db, { ItemsService })['POST /operation-code'];
+        // case 1: the operation read returns null; case 2: the operation is fine and the sample read returns null
+        const body = Object.keys(rows).length
+            ? { values: { sample_id: SAMPLE }, operation_id: OP }
+            : { values: {}, operation_id: OP };
+        const r = await call(h, user, {}, body);
+        assert.equal(r.status, 403);
+        assert.equal(db.seen.calls.length, 0);
+    }
+});
