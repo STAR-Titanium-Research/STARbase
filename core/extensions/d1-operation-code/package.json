@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "directus-extension build",
-    "dev": "directus-extension build --watch"
+    "dev": "directus-extension build --watch",
+    "test": "node --test src/state.test.mjs"
   },
   "devDependencies": {
     "@directus/extensions-sdk": "^17",
