@@ -1822,11 +1822,41 @@ sid_check "not_null:3" "short_id is NOT NULL on the three tables"
 sid_check "directus_rows:3" "the three short_id fields are registered read-only in Directus"
 sid_check "comments:1" "short_ids carries a table comment"
 run_eq "short_id has a column default on the three tables (Directus demands a NOT NULL column without one)" \
-    "SELECT count(*) FROM information_schema.columns WHERE column_name = 'short_id' AND column_default IS NOT NULL AND table_name IN ('physical_samples', 'manufacturing_operations', 'test_sessions')" \
+    "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'short_id' AND column_default IS NOT NULL AND table_name IN ('physical_samples', 'manufacturing_operations', 'test_sessions')" \
     "3"
-run_eq "the empty default never reaches a row (the trigger always assigns the short ID)" \
-    "SELECT (SELECT count(*) FROM physical_samples WHERE short_id = '') + (SELECT count(*) FROM manufacturing_operations WHERE short_id = '') + (SELECT count(*) FROM test_sessions WHERE short_id = '')" \
-    "0"
+run_eq "the short_id format CHECKs exist and are validated on the three tables (so the empty default can never be stored)" \
+    "SELECT count(*) FROM pg_constraint WHERE conname IN ('physical_samples_short_id_format_check', 'manufacturing_operations_short_id_format_check', 'test_sessions_short_id_format_check') AND convalidated" \
+    "3"
+# With the short-ID triggers bypassed (session_replication_role = replica) an insert that omits short_id
+# would store the '' column default; the format CHECK must refuse it. Rolled back.
+fmt_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+SET LOCAL session_replication_role = replica;
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('5d000000-0000-4000-8000-000000000215', 'T-FMT-M', 'short id format test method');
+DO $$ BEGIN
+  INSERT INTO physical_samples (sample_id, sample_code) VALUES ('5d000000-0000-4000-8000-000000000211', 'TEST-FMT-001');
+  RAISE NOTICE 'fmt_sample:missing';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'fmt_sample:ok';
+END $$;
+DO $$ BEGIN
+  INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
+  VALUES ('5d000000-0000-4000-8000-000000000212', '5d000000-0000-4000-8000-000000000215', 'sintering', 'test', 'TEST-FMT-OP');
+  RAISE NOTICE 'fmt_operation:missing';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'fmt_operation:ok';
+END $$;
+DO $$ BEGIN
+  INSERT INTO test_sessions (session_id) VALUES ('5d000000-0000-4000-8000-000000000213');
+  RAISE NOTICE 'fmt_test:missing';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'fmt_test:ok';
+END $$;
+ROLLBACK;
+SQL
+)
+fmt_check() { grep -q -- "$1" <<<"$fmt_out" && ok "$2" || bad "$2 (psql output: $fmt_out)"; }
+fmt_check "fmt_sample:ok" "a sample inserted without a short_id (trigger bypassed) is refused by the format CHECK"
+fmt_check "fmt_operation:ok" "an operation inserted without a short_id (trigger bypassed) is refused by the format CHECK"
+fmt_check "fmt_test:ok" "a test inserted without a short_id (trigger bypassed) is refused by the format CHECK"
 
 echo "== Short IDs: the back-fill (T0a) =="
 # Runs the real back-fill SQL, extracted from migration 150 between its backfill:start / backfill:end
