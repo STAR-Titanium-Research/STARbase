@@ -142,7 +142,9 @@ NOT NULL DEFAULT clock_timestamp()`; `sync_test_session_primary_subject()` order
 2. *Manual codes are left alone* (Q24).
 3. *No subject:* keep whatever code there is (Q31; on INSERT that means NULL).
 4. *Primary subject or `test_type` changed, or no code yet:* take the next number from
-   `test_code_counters` for (subject, type), store it in `test_code_number`, build the code.
+   `test_code_counters` for (subject, type), store it in `test_code_number`, build the code. If
+   that code is already taken (someone typed it by hand on another test), take the next number
+   again, so an automatic code never hits the UNIQUE constraint.
 5. *Only the subject's code changed* (Q39, see §4): rebuild with the same number.
 
 The junction sync already issues a real UPDATE on `test_sessions` when the primary changes, so
@@ -156,8 +158,9 @@ back to automatic." `test_code_number` and `test_code_is_manual` hidden.
 ### 3. Operation codes in Postgres
 
 **The rule** `operation_code_for(op manufacturing_operations, sample_code text) RETURNS text`,
-IMMUTABLE given its inputs: a faithful port of `OperationCode.vue`'s `autoCode` (the dossier in
-the plan's working notes lists every branch), with three deliberate changes:
+STABLE (it reads the equipment row for the sintering machine): a faithful port of
+`OperationCode.vue`'s `autoCode` (lines 148-215 and the abbreviation maps at 135-144), with three
+deliberate changes:
 
 | Category | Code |
 |---|---|
@@ -183,8 +186,9 @@ the date change; the next free number when the input sample or the method change
 `max(operation_sequence)+1` for the new sample, or `max(sintering_run_number)+1` for the machine.
 A machining sub-type change (F → R) counts as a parameter: the number stays.
 
-**Frozen operations:** `source_system = 'experiment_sheet'` (and any future non-FAST import
-system) — never renamed automatically (Q38). FAST imports are not frozen after the rebuild (Q37).
+**Frozen operations:** `source_system = 'experiment_sheet'` — never renamed automatically (Q38).
+FAST imports (`fast_25`, `fast_250`) are not frozen after the rebuild (Q37). A future importer
+that needs frozen codes is added to this list explicitly, in its own migration.
 
 **Trigger** `mfg_op_set_code` replaces `mfg_op_assign_numbers`, BEFORE INSERT OR UPDATE.
 Its name sorts after `mfg_op_derive_category`, so `process_category` is already set when it runs.
@@ -206,7 +210,9 @@ Its name sorts after `mfg_op_derive_category`, so `process_category` is already 
 
 An AFTER UPDATE OF `sample_code` trigger on `physical_samples` rebuilds the automatic codes of the
 sample's operations (`sample_id`) and of tests whose primary subject is that sample, with the same
-numbers. It runs one UPDATE per table (so the operation trigger's rollup lock is taken once per
+numbers. It sets the new code explicitly, only on rows whose stored code equals the rule's value
+with the *old* sample code (that is what "automatic" means here), so it does not rely on the
+operation trigger's fast exit. It runs one UPDATE per table (so the operation trigger's rollup lock is taken once per
 statement, after the sample row, matching the lock order). Typed and frozen codes are untouched.
 The same applies to `insert_edges.edge_code` for tests.
 
@@ -264,8 +270,11 @@ set `sintering_run_number`, and the trigger builds the code on insert.
 
 ### 8. Hand-fix list (for the maintainer)
 
-The 6 `N/R` operation codes (ids in the plan's working notes; all experiment-sheet machining,
-frozen). After they are fixed, a small migration adds `UNIQUE (pass_code)` (Q30). The 9 NULL
+The 6 `N/R` operation codes, all experiment-sheet machining dated 2023-03-23, frozen, no linked
+files: `41182593-1c07-53d4-aa9a-b454c3e1a266`, `53f517cc-0885-544a-bbda-fe3e05943bf2`,
+`ba64ab12-5b02-563c-8967-b0f628ecfe4d`, `df74191d-403f-5a99-9008-d6d6dc4b5bd1`,
+`fc328912-f090-5de0-aa5f-0d8a4b181408`, `fe32afdd-e907-5c6c-97cb-07b619606d3d` (the last three
+are on one sample, sequences 1, 3 and 8). After they are fixed, a small migration adds `UNIQUE (pass_code)` (Q30). The 9 NULL
 codes are allowed by UNIQUE and become automatic codes at their next edit (they are not frozen).
 
 ## Migrations (in order)
