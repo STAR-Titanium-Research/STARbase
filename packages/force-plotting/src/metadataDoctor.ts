@@ -3,10 +3,10 @@
 // Two records describe the same cut and can silently disagree:
 //   * `machining_force_analysis` — the .mat file's own `metadata` struct, extracted read-only by
 //     scripts/matlab/process_force.m (feed, depth_of_cut, surface_speed, cut_diameter, …);
-//   * `manufacturing_operations.machining_*` — the D1 record, which is also what the operation
-//     name (`pass_code`) is generated from via computeAutoCode().
+//   * `manufacturing_operations.machining_*` — the D1 record (the database builds the operation
+//     name, `pass_code`, from these itself; the dashboard no longer checks or writes it).
 //
-// This module is pure and framework-agnostic (same contract as operationCode.ts): it takes one
+// This module is pure and framework-agnostic: it takes one
 // already-fetched row and returns findings. It performs no I/O and knows nothing about Vue, the
 // API, or how a fix is applied — every surface (the list's severity dot, the Doctor panel) is a
 // view over the same `diagnose()` output, so a check is defined exactly once.
@@ -15,8 +15,6 @@
 // holds only at one radius, and these are facing cuts under constant-surface-speed where rpm ramps
 // as the tool moves inward — it flags 129 of 189 archive rows and means nothing. `crop.coverage`
 // below captures the same "Feed or Diameter is wrong" signal without the CSS assumption.
-
-import { computeAutoCode } from './operationCode';
 
 /** Crop windows covering less than this fraction of the recording are flagged. */
 export const CROP_COVERAGE_MIN = 0.6;
@@ -27,7 +25,7 @@ const ONE_DAY_MS = 86_400_000;
 export type DoctorSeverity = 'error' | 'warn' | 'info';
 
 /** What a surface can offer to do about a finding. `crop` has no auto-fix — it opens the editor. */
-export type DoctorFix = 'adopt' | 'crop' | 'regen' | 'link';
+export type DoctorFix = 'adopt' | 'crop' | 'link';
 
 export interface Finding {
 	/** Stable check id, e.g. `conflict.feed`. Also the key a dismissal is recorded under. */
@@ -119,7 +117,7 @@ function dismissalFor(row: any, id: string): Dismissal | null {
  * Every consistency problem on one `machining_force_analysis` row (with `operation_id` expanded).
  * An empty array means the operation is internally consistent.
  *
- * `optional` opts into the default-off checks by id (`name.stale`, `date.trigger`); the default-on
+ * `optional` opts into the default-off checks by id (`date.trigger`); the default-on
  * checks always run. Findings are returned including dismissed ones, each carrying `dismissed`, so
  * a surface can show and undo them — use `activeFindings()` for the ones that still need action.
  */
@@ -134,14 +132,12 @@ export function diagnose(row: any, optional?: Iterable<string>): Finding[] {
 		out.push({ ...f, dismissed: d != null && d.sig === f.sig });
 	};
 
-	// ---- Sample link. Reported on its own because it BLOCKS name regeneration (the sample code is
-	// the name's prefix) — surfacing that as a name mismatch would blame the wrong thing.
+	// ---- Sample link.
 	const sample = op?.sample_id ?? null;
-	const sampleCode: string | null = (typeof sample === 'object' ? sample?.sample_code : null) ?? null;
 	if (op && !sample) {
 		push({
 			id: 'link.sample', severity: 'warn', title: 'Not linked to a sample',
-			detail: 'This operation has no physical sample linked, so its name cannot be regenerated and it will not group with the rest of the sample’s passes.',
+			detail: 'This operation has no physical sample linked, so it will not group with the rest of the sample’s passes.',
 			fix: 'link', sig: 'link:none', defaultOn: true,
 		});
 	}
@@ -191,35 +187,6 @@ export function diagnose(row: any, optional?: Iterable<string>): Finding[] {
 				detail: `The cut window spans ${pct(coverage)} of the recording (samples ${cs}–${ce} of ${nRaw}). The window end is derived from Feed and Diameter, so a short one usually means one of those is wrong rather than that the cut was short.`,
 				fix: 'crop', sig: `crop:${cs}|${ce}|${nRaw}`, defaultOn: true,
 			});
-		}
-	}
-
-	// ---- Optional: stale name. Legacy pass_codes came from filenames rather than computeAutoCode,
-	// so a difference is "the name predates the fields", not an error. Skipped outright when the
-	// regeneration inputs are missing, otherwise it reports a truncated code as a mismatch.
-	if (on.has('name.stale') && op) {
-		const stored: string = op.pass_code || '';
-		const subtype = op.machining_operation_subtype;
-		const seq = op.operation_sequence;
-		const canRegen = sampleCode && stored && subtype != null && subtype !== '' && seq != null && seq !== '';
-		if (canRegen) {
-			const regenerated = computeAutoCode({
-				processCategory: op.process_category,
-				sampleCode,
-				operationSequence: seq,
-				machiningOperationSubtype: subtype,
-				machiningCuttingSpeedMPerMin: op.machining_cutting_speed_m_per_min,
-				machiningFeedMmPerRev: op.machining_feed_mm_per_rev,
-				machiningAxialDepthOfCutMm: op.machining_axial_depth_of_cut_mm,
-			});
-			if (regenerated && regenerated !== stored) {
-				push({
-					id: 'name.stale', severity: 'info', title: 'Name does not match its fields',
-					detail: `Stored as “${stored}”; the current field values would generate “${regenerated}”.`,
-					matValue: stored, dbValue: regenerated, fix: 'regen',
-					sig: `name:${stored}|${regenerated}`, defaultOn: false,
-				});
-			}
 		}
 	}
 
