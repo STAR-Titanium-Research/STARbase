@@ -8,7 +8,7 @@
 // trigger that assigns the number on save), so it counts every sample. It reveals only that one
 // number, and only to signed-in users with app access. The database still decides at save time.
 //
-// POST /d1-next-number/operation-code  { values: {...}, operation_id?: uuid|null }  ->  { code }
+// POST /d1-next-number/operation-code  { values: {...}, operation_id?: uuid|null }  ->  { code, frozen }
 //
 // The live preview of an operation's code while the form is being filled in: the code the rule
 // (operation_code_for) would give the saved operation, if any, with `values` written over it.
@@ -17,6 +17,10 @@
 // user first (a user who cannot read either gets 403, and the SQL is not called). Only the columns
 // the code is built from are passed on; unknown keys, and free text like notes, are dropped. The
 // database still decides the real code at save time.
+//
+// A saved operation imported from the experiment sheets (source_system 'experiment_sheet') is
+// frozen: the trigger never renames it, so the answer is its saved pass_code with frozen: true and
+// the preview SQL is not called. Every other answer carries frozen: false.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -115,9 +119,12 @@ export default {
                 let savedSample = null;
                 if (operationId !== null) {
                     const saved = await itemsFor('manufacturing_operations')
-                        .readOne(operationId, { fields: ['operation_id', 'sample_id'] });
+                        .readOne(operationId, { fields: ['operation_id', 'sample_id', 'source_system', 'pass_code'] });
                     // Fail closed: a read that returns nothing instead of throwing is not an authorisation.
                     if (!saved) return res.status(403).json({ error: 'forbidden' });
+                    if (saved.source_system === 'experiment_sheet') {
+                        return res.json({ code: saved.pass_code ?? null, frozen: true });
+                    }
                     savedSample = saved.sample_id ?? null;
                 }
                 // The code is built with the merged row's sample: the one in values, else the saved one.
@@ -134,7 +141,7 @@ export default {
                     'SELECT preview_operation_code(?::jsonb, ?::uuid, ?) AS code',
                     [JSON.stringify(values), operationId, sampleCode],
                 );
-                return res.json({ code: out?.rows?.[0]?.code ?? null });
+                return res.json({ code: out?.rows?.[0]?.code ?? null, frozen: false });
             } catch (e) {
                 if (isForbidden(e)) {
                     return res.status(403).json({ error: 'forbidden' });

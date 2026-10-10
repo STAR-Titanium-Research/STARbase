@@ -172,7 +172,7 @@ test('preview: a new operation passes (values json, null, sample code) to the SQ
     const { h, db, log } = mountPreview(sampleRows);
     const r = await call(h, user, {}, { values: { sample_id: SAMPLE, machining_feed_mm_per_rev: 0.1 } });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM' });
+    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false });
     assert.equal(db.seen.calls.length, 1);
     assert.match(db.seen.calls[0].sql, /preview_operation_code\(\?::jsonb, \?::uuid, \?\)/);
     const [json, opId, sampleCode] = db.seen.calls[0].args;
@@ -189,7 +189,7 @@ test('preview: an edit reads the operation, and the sample of the saved operatio
     const { h, db, log } = mountPreview(rows);
     const r = await call(h, user, {}, { values: { machining_feed_mm_per_rev: 0.2 }, operation_id: OP });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM' });
+    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false });
     assert.equal(log.reads[0].collection, 'manufacturing_operations');
     assert.equal(log.reads[0].id, OP);
     assert.equal(log.reads[1].collection, 'physical_samples');
@@ -220,7 +220,7 @@ test('preview: no sample at all previews with a null sample code', async () => {
 test('preview: a null code from the database is {code: null}', async () => {
     const { h } = mountPreview(sampleRows, previewDb(null));
     const r = await call(h, user, {}, { values: { sample_id: SAMPLE } });
-    assert.deepEqual(r.body, { code: null });
+    assert.deepEqual(r.body, { code: null, frozen: false });
 });
 
 test('preview: only whitelisted keys reach the SQL', async () => {
@@ -306,4 +306,42 @@ test('preview: a read that returns nothing instead of throwing fails closed (403
         assert.equal(r.status, 403);
         assert.equal(db.seen.calls.length, 0);
     }
+});
+
+test('preview: a frozen (experiment_sheet) operation answers its saved code with frozen: true and no SQL', async () => {
+    const rows = {
+        ...sampleRows,
+        ['manufacturing_operations:' + OP]: {
+            operation_id: OP, sample_id: SAMPLE, source_system: 'experiment_sheet', pass_code: 'IMPORTED-CODE',
+        },
+    };
+    const { h, db, log } = mountPreview(rows);
+    const r = await call(h, user, {}, { values: { machining_feed_mm_per_rev: 0.2 }, operation_id: OP });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { code: 'IMPORTED-CODE', frozen: true });
+    assert.equal(db.seen.calls.length, 0);
+    assert.deepEqual(log.reads[0].query, {
+        fields: ['operation_id', 'sample_id', 'source_system', 'pass_code'],
+    });
+});
+
+test('preview: a frozen operation with no saved code answers {code: null, frozen: true}', async () => {
+    const rows = {
+        ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: null, source_system: 'experiment_sheet', pass_code: null },
+    };
+    const { h, db } = mountPreview(rows);
+    const r = await call(h, user, {}, { values: {}, operation_id: OP });
+    assert.deepEqual(r.body, { code: null, frozen: true });
+    assert.equal(db.seen.calls.length, 0);
+});
+
+test('preview: a saved operation from any other source is previewed with frozen: false', async () => {
+    const rows = {
+        ...sampleRows,
+        ['manufacturing_operations:' + OP]: { operation_id: OP, sample_id: SAMPLE, source_system: 'legacy_import', pass_code: 'X' },
+    };
+    const { h, db } = mountPreview(rows);
+    const r = await call(h, user, {}, { values: {}, operation_id: OP });
+    assert.deepEqual(r.body, { code: 'S-1-F1-30MPM', frozen: false });
+    assert.equal(db.seen.calls.length, 1);
 });
