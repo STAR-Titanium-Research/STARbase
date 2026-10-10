@@ -2932,13 +2932,13 @@ SELECT 'prep:' || pg_temp.oc('{"process_category":"sample_prep","operation_seque
 SELECT 'nothing:' || pg_temp.oc('{}', NULL);
 
 -- the back-fill, on FAST-shaped rows carrying their code and run only in pass_code / source_run_uid
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, source_run_uid, operation_date,
+INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, source_run_uid, equipment_id, operation_date,
     sintering_max_temp_celsius, sintering_max_force_kn, sintering_mould_diameter_mm, pass_code) VALUES
-    ('9a000000-0000-4000-8000-000000000101', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_25', 'fast25|4624',
+    ('9a000000-0000-4000-8000-000000000101', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_25', 'fast25|4624', '$OC_E25',
         '2016-10-12T10:00:00Z', 1200, 14, 20, '12-10-16-MF25-4624-1200C_14kN_20dia'),
-    ('9a000000-0000-4000-8000-000000000102', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_25', 'fast25|9686',
+    ('9a000000-0000-4000-8000-000000000102', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_25', 'fast25|9686', '$OC_E25',
         '2025-02-13T08:00:00Z', NULL, NULL, NULL, '13-02-25-MF25-9686'),
-    ('9a000000-0000-4000-8000-000000000103', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_250', 'fast250|77',
+    ('9a000000-0000-4000-8000-000000000103', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_250', 'fast250|77', '$OC_E250',
         '2024-03-05T09:00:00Z', 1100, 30, NULL, '05-03-24-MF250-77-1100C_30kN');
 SELECT 'bf_before:' || count(*) FROM manufacturing_operations WHERE operation_id::text LIKE '9a000000-0000-4000-8000-0000000001%' AND sintering_run_number IS NULL;
 SAVEPOINT guard_test;

@@ -71,7 +71,7 @@ DECLARE
     v_machine TEXT;
 BEGIN
     IF op.process_category = 'sintering' THEN
-        SELECT substring(e.equipment_name FROM 'FCT HP D (\d+)$') INTO v_machine
+        SELECT substring(e.equipment_name FROM '^FCT HP D (\d+)$') INTO v_machine
         FROM public.equipment e WHERE e.equipment_id = op.equipment_id;
         v_machine := coalesce(v_machine, substring(op.source_system FROM '^fast_(\d+)$'));
         IF v_machine IS NULL OR op.sintering_run_number IS NULL OR op.operation_date IS NULL THEN
