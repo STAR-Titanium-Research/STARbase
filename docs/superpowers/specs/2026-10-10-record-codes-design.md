@@ -269,10 +269,13 @@ concurrently) before relying on it.
   text (typed); ↻ clears it (back to automatic). Hints: "Automatic: follows the fields below" /
   "Typed: kept as you wrote it — ↻ to go back to automatic". The browser copy of the rules is
   deleted.
-- **Force dashboard (and the standalone Force App, same package):** `computeAutoCode` is removed.
-  Its metadata panel shows the preview from the endpoint and no longer PATCHes `pass_code`;
-  "name.stale" in `metadataDoctor` compares the stored code with the endpoint's answer. One Force
-  App release, through the `force-app-release` / ship-release workflow.
+- **Force dashboard (and the standalone Force App, same package):** `computeAutoCode` is removed
+  and the metadata panel no longer PATCHes `pass_code`; after a save it shows the code the database
+  stored (read back from the PATCH). *Changed in T0c (2026-10-11):* no live preview inside the
+  dashboard (the Directus form has it), and the opt-in "name.stale" check is retired rather than
+  rewired (an automatic code cannot be stale any more and typed codes are intended). The Directus
+  module ships with T0b; the standalone Force App gets it at its next release (a PR to `main`,
+  the maintainer's decision).
 
 ### 6. FAST rebuild (Q37) and the importer
 
