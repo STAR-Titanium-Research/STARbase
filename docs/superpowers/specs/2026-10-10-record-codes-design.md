@@ -331,12 +331,12 @@ codes are allowed by UNIQUE and become automatic codes at their next edit (they 
 
 | Version | What |
 |---|---|
-| `…144_short_ids` | `short_id` on the three tables, back-fill, trigger, guard, `record_by_short_id()` |
-| `…145_test_subject_linked_at` | `linked_at`, primary subject = earliest linked |
-| `…146_test_codes` | test code columns, counters, `test_code_for()`, trigger, Directus field rows |
-| `…147_operation_codes_in_db` | `sintering_run_number`, `operation_code_for()`, `mfg_op_set_code` replacing `mfg_op_assign_numbers`, preview functions, sample/edge code cascade |
-| `…148_fast_code_rebuild` | back-fill run numbers, uniqueness check, rebuild the FAST codes |
-| `…149_file_fingerprints` | the table and its indexes |
+| `…150_short_ids` | `short_id` on the three tables, back-fill, trigger, guard, `record_by_short_id()` |
+| `…151_test_subject_linked_at` | `linked_at`, primary subject = earliest linked |
+| `…152_test_codes` | test code columns, counters, `test_code_for()`, trigger, Directus field rows |
+| `…153_operation_codes_in_db` | `sintering_run_number`, `operation_code_for()`, `mfg_op_set_code` replacing `mfg_op_assign_numbers`, preview functions, sample/edge code cascade |
+| `…154_fast_code_rebuild` | back-fill run numbers, uniqueness check, rebuild the FAST codes |
+| `…155_file_fingerprints` | the table and its indexes |
 | later | `UNIQUE (pass_code)`, after the hand-fix |
 
 Each has a working `migrate:down`, comments on every new table and column, and its checks in

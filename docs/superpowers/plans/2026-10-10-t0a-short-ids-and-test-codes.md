@@ -23,7 +23,7 @@ get their own plans after this one lands.
 - Work in the worktree `.claude/worktrees/t0-record-codes` on branch `feat/record-codes` (Task 1
   creates it). Never touch the main checkout, never apply anything to the live database, never run
   `scripts/configure_all.sh` or `scripts/configure_directus.sql`.
-- Migration versions: `20261010000144`, `20261010000145`, `20261010000146` (the latest anywhere is
+- Migration versions: `20261010000150`, `20261010000151`, `20261010000152` (the latest anywhere is
   `20261009000143`).
 - Every new table, column, function and trigger carries a `COMMENT` (text-to-SQL depends on them).
 - Every `migrate:down` undoes its `migrate:up` exactly, in reverse order.
@@ -199,7 +199,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 2: Migration 144 — short IDs
 
 **Files:**
-- Create: `db/migrations/20261010000144_short_ids.sql`
+- Create: `db/migrations/20261010000150_short_ids.sql`
 - Modify: `tests/phase1_schema.sh` (new section after the "Test subject junction" section, i.e.
   after the `ps_check "comments:5" …` line)
 
@@ -286,7 +286,7 @@ Expected: the new section's checks FAIL (`column "short_id" does not exist` in t
 
 - [ ] **Step 3: Write the migration**
 
-`db/migrations/20261010000144_short_ids.sql`:
+`db/migrations/20261010000150_short_ids.sql`:
 
 ```sql
 -- migrate:up
@@ -480,13 +480,13 @@ diff <(grep FAIL /tmp/t0a-baseline.txt) <(grep FAIL /tmp/t0a-2.txt)
 ```
 
 Expected: all 12 short-ID checks PASS; the FAIL diff is empty; the roundtrip prints
-`Rolling back: 20261010000144_short_ids.sql` and then `Applied: 20261010000144_short_ids.sql`
+`Rolling back: 20261010000150_short_ids.sql` and then `Applied: 20261010000150_short_ids.sql`
 with no error.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add db/migrations/20261010000144_short_ids.sql tests/phase1_schema.sh
+git add db/migrations/20261010000150_short_ids.sql tests/phase1_schema.sh
 git commit -m "feat(db): permanent short IDs for samples, operations and tests
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -497,7 +497,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 3: Migration 145 — the primary subject is the earliest linked
 
 **Files:**
-- Create: `db/migrations/20261010000145_test_subject_linked_at.sql`
+- Create: `db/migrations/20261010000151_test_subject_linked_at.sql`
 - Modify: `tests/phase1_schema.sh` (the "Test subject junction" section: one new check, one label)
 
 **Interfaces:**
@@ -545,7 +545,7 @@ Expected: `FAIL the earliest linked subject stays primary …`.
 
 - [ ] **Step 3: Write the migration**
 
-`db/migrations/20261010000145_test_subject_linked_at.sql`:
+`db/migrations/20261010000151_test_subject_linked_at.sql`:
 
 ```sql
 -- migrate:up
@@ -701,7 +701,7 @@ check still PASS, empty FAIL diff, clean roundtrip of 145.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add db/migrations/20261010000145_test_subject_linked_at.sql tests/phase1_schema.sh
+git add db/migrations/20261010000151_test_subject_linked_at.sql tests/phase1_schema.sh
 git commit -m "feat(db): a test's primary subject is the earliest linked one
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -712,7 +712,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 4: Migration 146 — test codes
 
 **Files:**
-- Create: `db/migrations/20261010000146_test_codes.sql`
+- Create: `db/migrations/20261010000152_test_codes.sql`
 - Modify: `tests/phase1_schema.sh` (new section after the short-ID section from Task 2)
 
 **Interfaces:**
@@ -859,7 +859,7 @@ Expected: FAIL lines (`column "test_code" … does not exist`).
 
 - [ ] **Step 3: Write the migration**
 
-`db/migrations/20261010000146_test_codes.sql`:
+`db/migrations/20261010000152_test_codes.sql`:
 
 ```sql
 -- migrate:up
@@ -1155,7 +1155,7 @@ diff, and the roundtrip rolls back 146, 145, 144 and applies them again without 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add db/migrations/20261010000146_test_codes.sql tests/phase1_schema.sh
+git add db/migrations/20261010000152_test_codes.sql tests/phase1_schema.sh
 git commit -m "feat(db): test codes built from the subject and type, kept up to date by the database
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
