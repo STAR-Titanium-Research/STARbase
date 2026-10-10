@@ -25,7 +25,7 @@ Read this section first, then the Status table. Nothing is pushed anywhere.
 - The restart also loaded the last four F1 fixes.
 
 **Next (re-ordered 2026-10-09, second session, after a grilling round with the maintainer)**
-0. **T0: record codes, first.** Spec written, awaiting review: `docs/superpowers/specs/2026-10-10-record-codes-design.md`.
+0. **T0: record codes, first.** Spec APPROVED 2026-10-10: `docs/superpowers/specs/2026-10-10-record-codes-design.md`.
    Decisions (Q16-Q31 of the grilling): test codes `{primary subject code}-{TYPE}{n}` (edge code for an
    insert edge), TYPE = TEN HRD CHP CMP TRB OM SEM TEM XRD ALI CLX DCT CT FAT CRP DMA OTH; numbered by
    the database, unique, overridable; assigned when the first subject is linked ("No code yet" before);
@@ -104,7 +104,7 @@ Read this section first, then the Status table. Nothing is pushed anywhere.
 | U1 | Per-user "frequently used" panel on Home: two short lists, pages and actions, and records | to do | to do | settled: ranks both, stored on the server per user (needs a small table and a migration); design not started |
 | G1 | Lineage graph rebuilt on a modern open-source graph library; retire `d1-lab-dashboard` | to do | to do | design not started |
 | N1 | Explorer navigation of its own and index pages (samples, operations, tests, campaigns), so every page is reachable without the Data Studio; editing keeps using the Directus form | to do | to do | **designed 2026-10-09** (grilling; decisions in Resume here); spec after T0 |
-| T0 | Record codes: test codes, operation codes that rename themselves (rules in Postgres) | to do | to do | **decided 2026-10-09**; spec being written; goes before N1 |
+| T0 | Record codes: test codes, operation codes that rename themselves (rules in Postgres) | to do | to do | **spec approved 2026-10-10** (`docs/superpowers/specs/2026-10-10-record-codes-design.md`); next: implementation plan; goes before N1 |
 
 ## Decisions so far (maintainer, 2026-10-09)
 
