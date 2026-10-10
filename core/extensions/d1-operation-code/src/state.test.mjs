@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initialMode, nextMode, afterFieldChange, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
+import { initialMode, nextMode, recordLoaded, canDecide, afterFieldChange, onTyped, onRegenerate, shown, hint, canRegenerate } from './state.js';
 
 test('initialMode: a new record starts automatic whatever the value', () => {
 	assert.equal(initialMode({ isNew: true, value: null, preview: 'A-1' }), 'auto');
@@ -149,4 +149,26 @@ test('never decided + field edit: the next good preview still decides the mode',
 	const touched = afterFieldChange({ touched: false, decided: false });
 	assert.equal(nextMode({ touched, isNew: false, value: 'MINE', preview: 'S1-FA1', current: 'auto' }), 'typed');
 	assert.equal(nextMode({ touched, isNew: false, value: 'S1-FA1', preview: 'S1-FA1', current: 'auto' }), 'auto');
+});
+
+test('recordLoaded: a new item is ready at once; an existing one only when its record is in the form', () => {
+	assert.equal(recordLoaded({ isNew: true, values: {}, primaryKey: '+' }), true);
+	assert.equal(recordLoaded({ isNew: false, values: undefined, primaryKey: 'op-1' }), false);
+	assert.equal(recordLoaded({ isNew: false, values: {}, primaryKey: 'op-1' }), false);
+	// the primary key alone arrives before the rest of the record
+	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-1' }, primaryKey: 'op-1' }), false);
+	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-1', version: null }, primaryKey: 'op-1' }), false);
+	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-1', version: 3 }, primaryKey: 'op-1' }), true);
+	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-1', version: 0 }, primaryKey: 'op-1' }), true);
+	// another record's values
+	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 'op-2', version: 3 }, primaryKey: 'op-1' }), false);
+	// a numeric key against a string one
+	assert.equal(recordLoaded({ isNew: false, values: { operation_id: 7, version: 1 }, primaryKey: '7' }), true);
+});
+
+test('canDecide: an existing item is not decided while its value is still undefined (not loaded)', () => {
+	assert.equal(canDecide({ isNew: false, value: undefined }), false);
+	assert.equal(canDecide({ isNew: false, value: null }), true);
+	assert.equal(canDecide({ isNew: false, value: 'X' }), true);
+	assert.equal(canDecide({ isNew: true, value: undefined }), true);
 });

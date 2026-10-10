@@ -27,7 +27,7 @@
 // payload and the database builds the code; typing emits, and the refresh icon emits null.
 import { inject, ref, computed, watch, onMounted, onBeforeUnmount, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { nextMode, afterFieldChange, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
+import { nextMode, afterFieldChange, recordLoaded, canDecide, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
 
 const props = defineProps<{ value: string | null; primaryKey?: string | number | null }>();
 const emit = defineEmits<{ (e: 'input', value: string | null): void }>();
@@ -61,11 +61,9 @@ const watchKey = computed(() => {
 let timer: ReturnType<typeof setTimeout> | null = null;
 let requestCounter = 0;
 
-// An existing record is previewed only once the form holds it (its primary key is in the values);
-// before that the fields are still null and the answer would be wrong. Relies on `operation_id` being
-// in `values`; if it is not, this fails safe: no preview, and the box shows the saved code.
-const formHoldsRecord = () =>
-	isNew() || String(values.value?.operation_id ?? '') === String(props.primaryKey);
+// An existing record is previewed only once the form holds the whole record (see recordLoaded); before
+// that the fields are still null and the answer would be wrong.
+const formHoldsRecord = () => recordLoaded({ isNew: isNew(), values: values.value, primaryKey: props.primaryKey });
 
 async function fetchPreview() {
 	if (!formHoldsRecord()) return;
@@ -80,14 +78,16 @@ async function fetchPreview() {
 		frozen.value = res?.data?.frozen === true;
 		previewHidden.value = false;
 		previewFailed.value = false;
-		mode.value = nextMode({
-			touched,
-			isNew: isNew(),
-			value: props.value,
-			preview: preview.value,
-			current: mode.value,
-		});
-		decided.value = true;
+		if (canDecide({ isNew: isNew(), value: props.value })) {
+			mode.value = nextMode({
+				touched,
+				isNew: isNew(),
+				value: props.value,
+				preview: preview.value,
+				current: mode.value,
+			});
+			decided.value = true;
+		}
 	} catch (err: any) {
 		if (req !== requestCounter) return;
 		preview.value = null;
@@ -111,6 +111,13 @@ function schedule(delay: number) {
 	}, delay);
 }
 
+// pass_code is not part of watchKey: when the saved value arrives after the preview, ask again.
+watch(
+	() => props.value !== undefined,
+	(has) => {
+		if (has && !decided.value) schedule(0);
+	},
+);
 onMounted(() => schedule(0)); // next tick, so a late-arriving form state is included
 watch(watchKey, () => {
 	touched = afterFieldChange({ touched, decided: decided.value });

@@ -23,6 +23,21 @@ export function nextMode({ touched, isNew, value, preview, current }) {
 	return initialMode({ isNew, value, preview });
 }
 
+// Is the form ready to preview? A new item always is. An existing one only when the form holds the
+// record: Directus puts the primary key into the values before the rest of the record, so the key
+// alone is not enough; `version` (NOT NULL on every operation) proves the load. Relies on
+// `operation_id` and `version` being in the values; if they are not, no preview is sent (fails safe).
+export function recordLoaded({ isNew, values, primaryKey }) {
+	if (isNew) return true;
+	return String(values?.operation_id ?? '') === String(primaryKey ?? '') && values?.version != null;
+}
+
+// A mode is not decided from a preview while an existing item's value is still undefined (Directus
+// passes undefined before the load, null for a record that really has no code).
+export function canDecide({ isNew, value }) {
+	return isNew || value !== undefined;
+}
+
 // A change to a field of the form: the user has taken over, but only once a mode was decided (a
 // preview that failed or is still in flight has decided nothing, so the next good one still must).
 export function afterFieldChange({ touched, decided }) {
