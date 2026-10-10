@@ -3083,6 +3083,8 @@ UPDATE manufacturing_operations SET pass_code = NULL WHERE operation_id = '${OT_
 SELECT 'frozen_clear:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
 UPDATE manufacturing_operations SET pass_code = '   ' WHERE operation_id = '${OT_P}000000000131';
 SELECT 'frozen_blank:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+UPDATE manufacturing_operations SET pass_code = 'X-{seq}-{mf}' WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_placeholder:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
 UPDATE manufacturing_operations SET pass_code = 'EXP-SHEET-RENAMED-2' WHERE operation_id = '${OT_P}000000000131';
 SELECT 'frozen_retyped:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
 -- fast_follow: a FAST-shaped row follows its temperature
@@ -3150,6 +3152,7 @@ ot_check "frozen:EXP-SHEET-OLD" "an experiment_sheet operation keeps its code wh
 ot_check "frozen_typed:EXP-SHEET-RENAMED" "a person can still rename an experiment_sheet operation"
 ot_check "frozen_clear:EXP-SHEET-RENAMED" "clearing the code of an experiment_sheet operation keeps its code"
 ot_check "frozen_blank:EXP-SHEET-RENAMED" "blanking the code of an experiment_sheet operation keeps its code"
+ot_check "frozen_placeholder:EXP-SHEET-RENAMED" "writing a {seq}/{mf} placeholder to an experiment_sheet operation keeps its code"
 ot_check "frozen_retyped:EXP-SHEET-RENAMED-2" "typing a new code on an experiment_sheet operation stores it"
 ot_check "fast_follow:12-10-16-MF25-4624-1250C_14kN_20dia" "a FAST operation's code follows its temperature"
 ot_check "sinter_hand_norun:<null>" "a hand-made sintering operation has no code before it has a run number"

@@ -149,9 +149,11 @@ BEGIN
     END IF;
 
     -- Frozen rows: never renamed automatically (a person may still type a code). Clearing the code
-    -- does not make a frozen row automatic: the saved code is kept.
+    -- (empty, or an old client's {seq}/{mf} placeholder) does not make a frozen row automatic:
+    -- the saved code is kept.
     IF NEW.source_system = 'experiment_sheet' THEN
-        IF TG_OP = 'UPDATE' AND nullif(btrim(NEW.pass_code), '') IS NULL
+        IF TG_OP = 'UPDATE'
+           AND (nullif(btrim(NEW.pass_code), '') IS NULL OR NEW.pass_code ~ '\{(seq|mf)\}')
            AND nullif(btrim(OLD.pass_code), '') IS NOT NULL THEN
             NEW.pass_code := OLD.pass_code;
         END IF;
@@ -206,7 +208,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION trg_mfg_op_set_code() IS
-    'BEFORE INSERT / UPDATE on manufacturing_operations: keeps pass_code equal to the rule (operation_code_for) for operations whose code is automatic (empty, an old client''s {seq}/{mf} placeholder, or the rule''s own value for the row before the change); a typed code is kept; experiment_sheet rows are frozen (never renamed automatically, and clearing the code keeps the saved one; a new typed code is stored). Also numbers a new operation (max+1 per sample under the rollup lock and the sample row) and renumbers an automatic one that changes sample or method. Replaces trg_manufacturing_operations_assign_numbers (126). Spec 2026-10-10-record-codes §3.';
+    'BEFORE INSERT / UPDATE on manufacturing_operations: keeps pass_code equal to the rule (operation_code_for) for operations whose code is automatic (empty, an old client''s {seq}/{mf} placeholder, or the rule''s own value for the row before the change); a typed code is kept; experiment_sheet rows are frozen (never renamed automatically, and clearing the code, or sending a placeholder, keeps the saved one; a new typed code is stored). Also numbers a new operation (max+1 per sample under the rollup lock and the sample row) and renumbers an automatic one that changes sample or method. Replaces trg_manufacturing_operations_assign_numbers (126). Spec 2026-10-10-record-codes §3.';
 
 CREATE TRIGGER mfg_op_set_code
     BEFORE INSERT OR UPDATE ON manufacturing_operations
