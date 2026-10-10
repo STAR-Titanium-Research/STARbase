@@ -2120,6 +2120,88 @@ cg_check "bookkeeping_ignored:TEST-CG-001-SEM1/1/sem/physical_samples/true$" "an
 cg_check "rename_before:TEST-CG-003-SEM1$" "(setup) the renamed sample's test starts as TEST-CG-003-SEM1"
 cg_check "rename_taken:TEST-CG-004-SEM2$" "renaming a subject to a name whose rebuilt code is taken draws the next number"
 
+echo "== Test codes: a subject written directly on the test is coded too (T0a follow-up) =="
+# Directus "Save as copy" copies the hidden derived sample_id, an importer may set sample_id or
+# insert_edge_id: the junction insert that follows then derives the same primary, the sync's UPDATE
+# is a no-op and the BEFORE trigger never runs again. The trigger therefore falls back to the
+# directly written columns when the junction has no subject yet. Rolled back.
+fb_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('8c000000-0000-4000-8000-000000000011', 'TEST-FB-001'),
+    ('8c000000-0000-4000-8000-000000000012', 'TEST-FB-002');
+INSERT INTO people (person_id, full_name) VALUES ('8c000000-0000-4000-8000-000000000013', 'Fallback Code Owner');
+INSERT INTO tool_boxes (tool_box_id, tool_box_code, owner_person_id)
+VALUES ('8c000000-0000-4000-8000-000000000014', 'TEST-FB-BOX', '8c000000-0000-4000-8000-000000000013');
+INSERT INTO cutting_inserts (insert_id, insert_code, tool_box_id)
+VALUES ('8c000000-0000-4000-8000-000000000015', 'TEST-FB-BOX-1', '8c000000-0000-4000-8000-000000000014');
+INSERT INTO insert_edges (edge_id, edge_code, insert_id, edge_identifier)
+VALUES ('8c000000-0000-4000-8000-000000000016', 'TEST-FB-BOX-1A', '8c000000-0000-4000-8000-000000000015', 'A');
+CREATE TEMP VIEW fb AS SELECT session_id, coalesce(test_code, 'null') AS code FROM test_sessions;
+
+-- (a) a test written with sample_id and no junction row is coded at INSERT
+INSERT INTO test_sessions (session_id, test_type, sample_id)
+VALUES ('8c000000-0000-4000-8000-000000000021', 'sem', '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_direct:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000021';
+-- (b) the junction row that follows (same primary, the sync is a no-op) leaves the code alone
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('8c000000-0000-4000-8000-000000000021', 'physical_samples', '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_junction_after:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000021';
+-- (c) a "Save as copy": sample_id and the source's bookkeeping carried, no code; then the junction
+INSERT INTO test_sessions (session_id, test_type, sample_id, test_code_number, test_code_type,
+                           test_code_subject_collection, test_code_subject_id)
+VALUES ('8c000000-0000-4000-8000-000000000022', 'sem', '8c000000-0000-4000-8000-000000000011',
+        1, 'sem', 'physical_samples', '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_clone:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000022';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('8c000000-0000-4000-8000-000000000022', 'physical_samples', '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_clone_junction:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000022';
+-- (d) an insert-edge subject written directly
+INSERT INTO test_sessions (session_id, test_type, insert_edge_id)
+VALUES ('8c000000-0000-4000-8000-000000000023', 'hardness', '8c000000-0000-4000-8000-000000000016');
+SELECT 'fb_edge:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000023';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('8c000000-0000-4000-8000-000000000023', 'insert_edges', '8c000000-0000-4000-8000-000000000016');
+SELECT 'fb_edge_junction:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000023';
+-- (e) no type yet: no code; the type arriving gives the code from the direct subject
+INSERT INTO test_sessions (session_id, test_type, sample_id)
+VALUES ('8c000000-0000-4000-8000-000000000024', NULL, '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_notype:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000024';
+UPDATE test_sessions SET test_type = 'dma' WHERE session_id = '8c000000-0000-4000-8000-000000000024';
+SELECT 'fb_type_arrives:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000024';
+-- (f) a junction-linked test that loses its only subject keeps its code (the sync clears
+-- sample_id, so the fallback finds nothing)
+INSERT INTO test_sessions (session_id, test_type) VALUES ('8c000000-0000-4000-8000-000000000025', 'sem');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('8c000000-0000-4000-8000-000000000025', 'physical_samples', '8c000000-0000-4000-8000-000000000012');
+SELECT 'fb_linked:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000025';
+DELETE FROM test_sessions_subject WHERE test_sessions_id = '8c000000-0000-4000-8000-000000000025';
+SELECT 'fb_orphan:' || coalesce(test_code, 'null') || '/' || (sample_id IS NULL)
+  FROM test_sessions WHERE session_id = '8c000000-0000-4000-8000-000000000025';
+-- the cascade on a corrected sample / edge code reaches fallback-coded tests, keeping their numbers
+UPDATE physical_samples SET sample_code = 'TEST-FB-001B' WHERE sample_id = '8c000000-0000-4000-8000-000000000011';
+SELECT 'fb_cascade:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000021';
+SELECT 'fb_cascade_clone:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000022';
+UPDATE insert_edges SET edge_code = 'TEST-FB-BOX-1Z' WHERE edge_id = '8c000000-0000-4000-8000-000000000016';
+SELECT 'fb_cascade_edge:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000023';
+ROLLBACK;
+SQL
+)
+fb_check() { grep -qx -- "$1" <<<"$fb_out" && ok "$2" || bad "$2 (psql output: $fb_out)"; }
+fb_check "fb_direct:TEST-FB-001-SEM1" "a test written with sample_id and no junction row is coded at INSERT"
+fb_check "fb_junction_after:TEST-FB-001-SEM1" "the junction row that follows leaves that code unchanged"
+fb_check "fb_clone:TEST-FB-001-SEM2" "a copy carrying sample_id and the source's bookkeeping is coded at INSERT with the next number"
+fb_check "fb_clone_junction:TEST-FB-001-SEM2" "the copy's junction row leaves its code unchanged"
+fb_check "fb_edge:TEST-FB-BOX-1A-HRD1" "a test written with insert_edge_id and no junction row is coded from the edge"
+fb_check "fb_edge_junction:TEST-FB-BOX-1A-HRD1" "the edge test's junction row leaves its code unchanged"
+fb_check "fb_notype:null" "a direct subject without a test type gives no code"
+fb_check "fb_type_arrives:TEST-FB-001-DMA1" "setting the type then gives the code from the direct subject"
+fb_check "fb_linked:TEST-FB-002-SEM1" "a junction-linked test is coded as before"
+fb_check "fb_orphan:TEST-FB-002-SEM1/true" "a test that loses its only junction subject keeps its code (the fallback finds nothing)"
+fb_check "fb_cascade:TEST-FB-001B-SEM1" "a corrected sample code flows into a fallback-coded test"
+fb_check "fb_cascade_clone:TEST-FB-001B-SEM2" "a corrected sample code flows into a copy's fallback code, keeping its number"
+fb_check "fb_cascade_edge:TEST-FB-BOX-1Z-HRD1" "a corrected edge code flows into a fallback-coded edge test"
+
 echo "== Deleting samples and edges that are test subjects =="
 # Same fixture style as above; every row is rolled back. The back-fill statements are extracted
 # from the migration so the direct-value case runs the real SQL.
