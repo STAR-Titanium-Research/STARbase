@@ -744,9 +744,10 @@ grep -qx 'shadow:0' <<<"$sp_out" && grep -qx 'real:1' <<<"$sp_out" \
 echo "== Audit coverage: every business table, keyed by its primary key (review 5.3) =="
 # Tables deliberately NOT audited: the log itself, dbmate bookkeeping, Directus system tables,
 # derived caches (project_rollup, semantic_embeddings), the crawler's heartbeat row,
-# audit_log_actors (the actor side-table of the log itself). Migration 141's backup of Directus
+# audit_log_actors (the actor side-table of the log itself), short_ids (the short-ID registry:
+# write-once bookkeeping written only by claim_short_id()). Migration 141's backup of Directus
 # permission rows lives in the private schema d1_private, so this public-schema check never sees it.
-AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state'"
+AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids'"
 run_eq "every business table has an audit trigger (missing: none)" \
     "SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -1326,10 +1327,11 @@ grep -q 'physical_samples_sample_code_no_placeholder_check' <<<"$ph_s" \
     && ok "a literal {seq} that the trigger does not replace is rejected" \
     || bad "literal {seq} sample code was not rejected (psql output: $ph_s)"
 # With the trigger bypassed (as when the interface runs before the migration did) a literal
-# placeholder hits the CHECK; one implicit transaction per -c, so nothing is left behind.
+# placeholder hits the CHECK; one implicit transaction per -c, so nothing is left behind. The
+# short_id is supplied by hand because the short-ID trigger is bypassed too (it is NOT NULL).
 ph_o=$($PSQL -q 2>&1 -c "SET LOCAL session_replication_role = replica;
-INSERT INTO manufacturing_operations (method_id, process_category, source_system, pass_code)
-VALUES ((SELECT method_id FROM manufacturing_methods LIMIT 1), 'sintering', 'test', '05-01-26-MF{mf}')")
+INSERT INTO manufacturing_operations (short_id, method_id, process_category, source_system, pass_code)
+VALUES ('5ba0d0ff', (SELECT method_id FROM manufacturing_methods LIMIT 1), 'sintering', 'test', '05-01-26-MF{mf}')")
 grep -q 'manufacturing_operations_pass_code_no_placeholder_check' <<<"$ph_o" \
     && ok "a literal {mf} / {seq} in pass_code is rejected when the trigger did not run" \
     || bad "literal {mf} pass_code was not rejected (psql output: $ph_o)"
@@ -1734,6 +1736,60 @@ ps_check "stale:true" "(setup) with the trigger off the junction alone leaves sa
 ps_check "backfill:true" "back-fill repairs a test from its junction rows"
 ps_check "cascade:0" "deleting a test cascades through the junction without error"
 ps_check "comments:5" "function, trigger function, trigger and columns carry the derived-column comment"
+
+echo "== Short IDs: permanent, unique across samples, operations and tests (T0a) =="
+# The three fixture ids share their first 8 hex characters, so the second and third must be
+# lengthened. Everything is rolled back. (Prefix 5d000000: earlier sections commit c0000000- fixtures, whose registry rows stay.)
+sid_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code)
+VALUES ('5d000000-0000-4000-8000-000000000201', 'TEST-SID-001');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('5d000000-0000-4000-8000-000000000205', 'T-SID-M', 'short id test method');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code)
+VALUES ('5d000000-0000-4000-8000-000000000202', '5d000000-0000-4000-8000-000000000205', '5d000000-0000-4000-8000-000000000201', 'TEST-SID-OP');
+INSERT INTO test_sessions (session_id) VALUES ('5d000000-0000-4000-8000-000000000203');
+SELECT 'sample:' || short_id FROM physical_samples WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+SELECT 'operation:' || short_id FROM manufacturing_operations WHERE operation_id = '5d000000-0000-4000-8000-000000000202';
+SELECT 'test:' || short_id FROM test_sessions WHERE session_id = '5d000000-0000-4000-8000-000000000203';
+SELECT 'lookup:' || collection || '/' || record_id FROM record_by_short_id('5D0000000');
+DO $$ BEGIN
+  UPDATE physical_samples SET short_id = 'deadbeef' WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+  RAISE NOTICE 'guard:missing';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'guard:ok';
+END $$;
+SELECT 'samecode:' || short_id FROM physical_samples WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+UPDATE physical_samples SET nickname = 'renamed' WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+SELECT 'other_update:' || short_id FROM physical_samples WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+DELETE FROM test_sessions WHERE session_id = '5d000000-0000-4000-8000-000000000203';
+SELECT 'deleted_lookup:' || count(*) FROM record_by_short_id('5d00000000');
+SELECT 'registry_kept:' || count(*) FROM short_ids WHERE short_id = '5d00000000';
+INSERT INTO test_sessions (session_id) VALUES ('5d000000-0000-4000-8000-000000000204');
+SELECT 'no_reuse:' || short_id FROM test_sessions WHERE session_id = '5d000000-0000-4000-8000-000000000204';
+SELECT 'not_null:' || count(*) FROM information_schema.columns
+  WHERE column_name = 'short_id' AND is_nullable = 'NO'
+    AND table_name IN ('physical_samples', 'manufacturing_operations', 'test_sessions');
+SELECT 'directus_rows:' || count(*) FROM directus_fields
+  WHERE field = 'short_id' AND readonly
+    AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions');
+SELECT 'comments:' || count(*) FROM pg_description d JOIN pg_class c ON c.oid = d.objoid
+  WHERE c.relname = 'short_ids' AND d.objsubid = 0;
+ROLLBACK;
+SQL
+)
+sid_check() { grep -q -- "$1" <<<"$sid_out" && ok "$2" || bad "$2 (psql output: $sid_out)"; }
+sid_check "sample:5d000000$" "a new sample gets the first 8 hex characters of its id"
+sid_check "operation:5d0000000$" "an operation whose 8 characters are taken by a sample gets 9"
+sid_check "test:5d00000000$" "a test whose 8 and 9 characters are taken gets 10"
+sid_check "lookup:manufacturing_operations/5d000000-0000-4000-8000-000000000202" "record_by_short_id finds the record (case-insensitive)"
+sid_check "guard:ok" "changing a short_id is refused"
+sid_check "other_update:5d000000$" "other updates keep the short_id"
+sid_check "deleted_lookup:0" "a deleted record's short ID resolves to nothing"
+sid_check "registry_kept:1" "a deleted record's short ID stays reserved"
+sid_check "no_reuse:5d000000000$" "a reserved short ID is never handed out again"
+sid_check "not_null:3" "short_id is NOT NULL on the three tables"
+sid_check "directus_rows:3" "the three short_id fields are registered read-only in Directus"
+sid_check "comments:1" "short_ids carries a table comment"
 
 echo "== Deleting samples and edges that are test subjects =="
 # Same fixture style as above; every row is rolled back. The back-fill statements are extracted
