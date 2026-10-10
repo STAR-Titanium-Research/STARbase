@@ -149,6 +149,7 @@ rim_inline="((collection = 'manufacturing_operations' AND field ~ '^(machining|s
 rim_out=$($PSQL 2>&1 <<SQL
 BEGIN;
 DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
+DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 DELETE FROM directus_fields WHERE $rim_inline
   OR (collection = 'manufacturing_operations' AND field IN ('prep_steps', 'source_recipe_id', 'data_file_links'))
   OR (collection = 'projects' AND field = 'rollup')
@@ -1092,38 +1093,39 @@ SQL
 grep -q 'cannot derive short_code' <<<"$bt_err" && ok "an expansion error aborts the INSERT and reaches the caller" || bad "expansion error was swallowed (output: $bt_err)"
 
 echo "== Operation numbers and codes are assigned server-side (review 4.5) =="
-# The trigger fills operation_sequence (max+1 per sample) and the {seq} / {mf} placeholders of a
-# client-composed pass_code. Rolled-back transaction first: the numbers a new heat-treatment,
-# deformation and additive operation get, a supplied number being kept, and the sintering counter.
+# The trigger fills operation_sequence (max+1 per sample) and builds the code from the rule (T0b, migration 157).
+# An old client's {seq} / {mf} placeholder code counts as automatic, so the operations below carry the
+# fields their code is built from. Rolled-back transaction first: the numbers a new heat-treatment,
+# deformation and additive operation get, a supplied number being kept, and a typed code kept.
 seq_out=$($PSQL -q 2>&1 <<SQL
 BEGIN;
 INSERT INTO manufacturing_methods (method_id, method_code, method_name)
 VALUES ('c0000000-0000-4000-8000-000000000401', 'T-I-HT', 'stream I test method');
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-4000-8000-000000000411', 'TI-S1');
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-4000-8000-000000000412', 'TI-S2');
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000421', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'heat_treatment', 'TI-S1-HTA{seq}-800C_60min_AC');
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000422', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'deformation', 'TI-S1-DR{seq}-20C_50pct');
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000423', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'additive', 'TI-S1-AM{seq}-200W');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, ht_treatment_type, ht_peak_temp_celsius, ht_hold_time_min, ht_cooling_method, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000421', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'heat_treatment', 'anneal', 800, 60, 'air', 'TI-S1-HTA{seq}-800C_60min_AC');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, deform_deformation_type, deform_deformation_temp_celsius, deform_total_reduction_pct, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000422', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'deformation', 'rolling', 20, 50, 'TI-S1-DR{seq}-20C_50pct');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, am_laser_power_w, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000423', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'additive', 200, 'TI-S1-AM{seq}-200W');
 -- a machining pass number the user typed is kept, and the next blank one continues after it
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, pass_code)
 VALUES ('c0000000-0000-4000-8000-000000000424', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'machining', 9, 'TI-S1-F9-20MPM');
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000425', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'heat_treatment', 'TI-S1-HTS{seq}');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, ht_treatment_type, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000425', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'heat_treatment', 'solution_treat', 'TI-S1-HTS{seq}');
 -- numbering is per sample, and a typed override without a placeholder is stored as given
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000426', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'heat_treatment', 'TI-S2-HTA{seq}');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, ht_treatment_type, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000426', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'heat_treatment', 'anneal', 'TI-S2-HTA{seq}');
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
 VALUES ('c0000000-0000-4000-8000-000000000427', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'heat_treatment', 'MY-OWN-CODE');
--- no sample: the placeholder collapses to nothing and the sequence stays NULL (as before)
+-- no sample: the sequence stays NULL; a typed code is stored as given
 INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000428', 'c0000000-0000-4000-8000-000000000401', 'heat_treatment', 'test', 'TI-NOSAMPLE{seq}-X');
+VALUES ('c0000000-0000-4000-8000-000000000428', 'c0000000-0000-4000-8000-000000000401', 'heat_treatment', 'test', 'TI-NOSAMPLE-X');
 -- an imported row (source_system set) keeps a NULL sequence even with a sample; a later explicit
 -- number is kept, so the importer's own numbering cannot collide with an auto-assigned one
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000429', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'sintering', 'test', 'TI-IMP{seq}-FAST');
+VALUES ('c0000000-0000-4000-8000-000000000429', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'sintering', 'test', 'TI-IMP-FAST');
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, source_system, operation_sequence, pass_code)
 VALUES ('c0000000-0000-4000-8000-00000000042a', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'machining', 'test', 1, 'TI-IMP-F1');
 SELECT 'op:' || substr(operation_id::text, 33) || ':' || COALESCE(operation_sequence::text, 'null') || ':' || pass_code
@@ -1134,17 +1136,10 @@ SELECT COALESCE(max((substring(pass_code FROM '(?:^|-)MF(\d{1,9})(?:-|$)'))::big
 FROM manufacturing_operations WHERE process_category = 'sintering' \gset
 INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
 VALUES ('c0000000-0000-4000-8000-000000000431', 'c0000000-0000-4000-8000-000000000401', 'sintering', 'test', '01-01-26-MF' || (:mfbase + 5) || '-950C');
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000432', 'c0000000-0000-4000-8000-000000000401', 'sintering', 'test', '02-01-26-MF{mf}-950C_11kN');
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000433', 'c0000000-0000-4000-8000-000000000401', 'sintering', 'test', '03-01-26-MF{mf}');
-DELETE FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-000000000432';
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000434', 'c0000000-0000-4000-8000-000000000401', 'sintering', 'test', '04-01-26-MF{mf}');
 SELECT 'mf_explicit:' || (:mfbase + 5);
 SELECT 'mf:' || substr(operation_id::text, 33) || ':' || pass_code FROM manufacturing_operations
 WHERE operation_id::text LIKE 'c0000000-0000-4000-8000-00000000043_' ORDER BY operation_id;
--- regenerating the code of an existing operation must not store a raw placeholder
+-- an old client's regenerate (a {seq} placeholder code) gets the rule's code, never a raw placeholder
 UPDATE manufacturing_operations SET pass_code = 'TI-S1-HTA{seq}-regen' WHERE operation_id = 'c0000000-0000-4000-8000-000000000421';
 SELECT 'regen:' || pass_code || ':' || operation_sequence FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-000000000421';
 ROLLBACK;
@@ -1158,14 +1153,12 @@ seq_check "op:0424:9:TI-S1-F9-20MPM" "a supplied (machining pass) number is kept
 seq_check "op:0425:10:TI-S1-HTS10" "the next blank number continues after the highest one"
 seq_check "op:0426:1:TI-S2-HTA1" "numbering restarts per sample"
 seq_check "op:0427:2:MY-OWN-CODE" "a typed code without a placeholder is stored unchanged"
-seq_check "op:0428:null:TI-NOSAMPLE-X" "an operation without a sample keeps a NULL sequence and an empty placeholder"
+seq_check "op:0428:null:TI-NOSAMPLE-X" "an operation without a sample keeps a NULL sequence and a typed code"
 mf_exp=$(grep -m1 '^mf_explicit:' <<<"$seq_out" | cut -d: -f2)
 seq_check "op:0429:null:TI-IMP-FAST" "an imported row (source_system set) is not auto-numbered, even with a sample"
 seq_check "op:042a:1:TI-IMP-F1" "an imported row's explicit number is kept"
 seq_check "mf:0431:01-01-26-MF${mf_exp}-950C" "an explicit MF number is stored as given"
-seq_check "mf:0433:03-01-26-MF$((mf_exp + 2))" "the sintering MF counter is max+1 over existing codes"
-seq_check "mf:0434:04-01-26-MF$((mf_exp + 3))" "an MF number is not handed out again after a delete"
-seq_check "regen:TI-S1-HTA1-regen:1" "regenerating an existing code fills the placeholder from the stored sequence"
+seq_check "regen:TI-S1-HTA1-800C_60min_AC:1" "regenerating with an old client's {seq} placeholder code gives the rule's code, never a raw placeholder"
 
 # Two writers at once: session A inserts and holds its transaction open, session B inserts for the
 # same sample meanwhile. Without the advisory lock both read max = 0 and get 1.
@@ -1177,9 +1170,9 @@ INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-400
 cc_insert() {  # cc_insert <op-id-suffix> <code> <hold-seconds>
     $PSQL -q 2>&1 <<SQL
 BEGIN;
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, ht_treatment_type, pass_code)
 VALUES ('c0000000-0000-4000-8000-0000000004$1', 'c0000000-0000-4000-8000-000000000402',
-        'c0000000-0000-4000-8000-000000000413', 'heat_treatment', '$2')
+        'c0000000-0000-4000-8000-000000000413', 'heat_treatment', 'anneal', '$2')
 RETURNING operation_sequence || '|' || pass_code;
 SELECT pg_sleep($3);
 COMMIT;
@@ -1194,26 +1187,6 @@ cc_a=$(cat "$cc_dir/a"); cc_b=$(cat "$cc_dir/b")
     && ok "concurrent inserts for one sample get distinct sequences and codes ($cc_a, $cc_b)" \
     || bad "concurrent inserts collided (A='$cc_a', B='$cc_b')"
 
-# Same for the global sintering counter.
-cc_mf() {  # cc_mf <op-id-suffix> <hold-seconds>
-    $PSQL -q 2>&1 <<SQL
-BEGIN;
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-0000000004$1', 'c0000000-0000-4000-8000-000000000402', 'sintering', 'test', '05-01-26-MF{mf}')
-RETURNING pass_code;
-SELECT pg_sleep($2);
-COMMIT;
-SQL
-}
-cc_mf 53 2 | grep MF > "$cc_dir/a" &
-sleep 0.7
-cc_mf 54 0 | grep MF > "$cc_dir/b"
-wait
-cc_a=$(cat "$cc_dir/a"); cc_b=$(cat "$cc_dir/b")
-[[ -n "$cc_a" && -n "$cc_b" && "$cc_a" != "$cc_b" ]] \
-    && ok "concurrent sintering inserts get distinct MF numbers ($cc_a, $cc_b)" \
-    || bad "concurrent sintering inserts collided (A='$cc_a', B='$cc_b')"
-
 # Bulk load: the per-sample lock must not use the shared lock table (advisory locks do, and
 # ~13,000 samples in one transaction ran out of it). 400 samples, one operation each, one
 # transaction: no per-sample advisory lock is held at the end, and each sample's number is 1.
@@ -1221,11 +1194,11 @@ bulk_out=$($PSQL -q 2>&1 <<SQL
 BEGIN;
 INSERT INTO physical_samples (sample_id, sample_code)
 SELECT ('c0000000-0000-4000-8001-' || lpad(g::text, 12, '0'))::uuid, 'TI-BULK-' || g FROM generate_series(1, 400) g;
-INSERT INTO manufacturing_operations (method_id, sample_id, process_category, pass_code)
-SELECT 'c0000000-0000-4000-8000-000000000402', sample_id, 'heat_treatment', 'TI-BULK-HTA{seq}'
+INSERT INTO manufacturing_operations (method_id, sample_id, process_category, ht_treatment_type, pass_code)
+SELECT 'c0000000-0000-4000-8000-000000000402', sample_id, 'heat_treatment', 'anneal', 'TI-BULK-HTA{seq}'
 FROM physical_samples WHERE sample_code LIKE 'TI-BULK-%';
 SELECT 'bulk_ops:' || count(*) || ':' || min(operation_sequence) || ':' || max(operation_sequence)
-FROM manufacturing_operations WHERE pass_code = 'TI-BULK-HTA1';
+FROM manufacturing_operations WHERE pass_code ~ '^TI-BULK-[0-9]+-HTA1$';
 SELECT 'bulk_advisory_locks:' || (count(*) <= 3) FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory';
 ROLLBACK;
 SQL
@@ -2731,6 +2704,7 @@ rv_out=$($PSQL 2>&1 <<SQL
 BEGIN;
 -- migration 143 keeps its ledger in d1_private; drop it (rolled back) so 141's down can drop the empty schema
 DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
+DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
@@ -2999,6 +2973,165 @@ oc_check "^bf_triggers:0$" "every user trigger on manufacturing_operations is en
 oc_check "uniq_same:ok" "a second sintering operation with the same machine and run is refused"
 oc_check "uniq_other:ok" "the same run number on the other machine is allowed"
 oc_check "^df:sintering_machine_group/false/false/1$" "the run number field is in the sintering group, not required, not hidden"
+echo "== Operation codes follow their fields (T0b) =="
+# One rolled-back transaction. A person's typed code is kept; an automatic one is rebuilt from the
+# rule (operation_code_for) whenever a field it is built from changes. Prefix 9b000000-0000-4000-8000-.
+OT_MIG=db/migrations/20261010000157_operation_code_trigger.sql
+ot_seqfill=$(awk '/^-- seqbackfill:start/{f=1;next}/^-- seqbackfill:end/{f=0}f' "$OT_MIG" 2>/dev/null)
+[[ -n "$ot_seqfill" ]] && ok "found the sequence back-fill in the migration" \
+    || bad "could not extract the sequence back-fill from $OT_MIG"
+OT_P='9b000000-0000-4000-8000-'
+ot_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('${OT_P}000000000001', 'TEST-OT-001'), ('${OT_P}000000000002', 'TEST-OT-002'), ('${OT_P}000000000003', 'TEST-OT-003');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name) VALUES
+    ('${OT_P}000000000011', 'T-OT-M1', 'operation code trigger test method 1'),
+    ('${OT_P}000000000012', 'T-OT-M2', 'operation code trigger test method 2');
+INSERT INTO equipment (equipment_id, equipment_code, equipment_name, equipment_type) VALUES
+    ('${OT_P}000000000021', 'T-OT-FCT25',  'FCT HP D 25',  'FAST_Press'),
+    ('${OT_P}000000000022', 'T-OT-FCT250', 'FCT HP D 250', 'FAST_Press');
+
+-- new_auto: a machining operation without a code gets its number and the rule's code
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype,
+    machining_cutting_speed_m_per_min, machining_feed_mm_per_rev, machining_axial_depth_of_cut_mm)
+VALUES ('${OT_P}000000000101', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'F', 30, 0.1, 1);
+SELECT 'new_auto:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- param_follow
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 45 WHERE operation_id = '${OT_P}000000000101';
+SELECT 'param_follow:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- resend: the same code written again changes nothing and the op stays automatic
+UPDATE manufacturing_operations SET pass_code = pass_code WHERE operation_id = '${OT_P}000000000101';
+SELECT 'resend:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+UPDATE manufacturing_operations SET machining_feed_mm_per_rev = 0.2 WHERE operation_id = '${OT_P}000000000101';
+SELECT 'resend_follow:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- notes: nothing the code is built from changed
+UPDATE manufacturing_operations SET outcome_notes = 'just a note' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'notes:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- subtype_keeps_number
+UPDATE manufacturing_operations SET machining_operation_subtype = 'R' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'subtype:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- sample_change: TEST-OT-002 already has one operation (number 1)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${OT_P}000000000102', '${OT_P}000000000011', '${OT_P}000000000002', 'machining', 'F');
+SELECT 'other_first:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000102';
+UPDATE manufacturing_operations SET sample_id = '${OT_P}000000000002' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'sample_change:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- method_change: a third operation on TEST-OT-002 raises the highest number to 3, so the moved one gets 4
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${OT_P}000000000103', '${OT_P}000000000011', '${OT_P}000000000002', 'machining', 'F');
+UPDATE manufacturing_operations SET method_id = '${OT_P}000000000012' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'method_change:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- typed: a code a person wrote is kept, and later field changes leave it alone
+UPDATE manufacturing_operations SET pass_code = 'MY-OP-CODE' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'typed:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 50 WHERE operation_id = '${OT_P}000000000101';
+SELECT 'typed_kept:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- typed_equals_rule: writing exactly the rule's value makes it automatic again
+SELECT operation_code_for(m, 'TEST-OT-002') AS rule_value FROM manufacturing_operations m WHERE operation_id = '${OT_P}000000000101' \gset
+UPDATE manufacturing_operations SET pass_code = :'rule_value' WHERE operation_id = '${OT_P}000000000101';
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 55 WHERE operation_id = '${OT_P}000000000101';
+SELECT 'typed_equals_rule:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- cleared: NULL rebuilds from the rule
+UPDATE manufacturing_operations SET pass_code = 'MY-OP-CODE' WHERE operation_id = '${OT_P}000000000101';
+UPDATE manufacturing_operations SET pass_code = NULL WHERE operation_id = '${OT_P}000000000101';
+SELECT 'cleared:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- placeholder: an old client's {seq} code counts as automatic (TEST-OT-001 has no operation left)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype, pass_code)
+VALUES ('${OT_P}000000000111', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'F', '{seq}-whatever');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype,
+    machining_cutting_speed_m_per_min, pass_code)
+VALUES ('${OT_P}000000000112', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'F', 30, 'TEST-OT-001-F{seq}-30MPM');
+SELECT 'placeholder_a:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000111';
+SELECT 'placeholder_b:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000112';
+-- legacy_kept: a stored code that is not the rule's value counts as typed
+ALTER TABLE manufacturing_operations DISABLE TRIGGER mfg_op_set_code;
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, machining_operation_subtype,
+    machining_cutting_speed_m_per_min, machining_feed_mm_per_rev, machining_axial_depth_of_cut_mm, pass_code)
+VALUES ('${OT_P}000000000121', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 9, 'F', 30, 0.05, 0.1, 'TEST-OT-001-F9-30MPM_0.05feed_0.1DoC_');
+-- null_code_becomes_auto: no code yet counts as automatic, but only once something it is built from changes
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, machining_operation_subtype,
+    machining_cutting_speed_m_per_min)
+VALUES ('${OT_P}000000000122', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 20, 'F', 30);
+ALTER TABLE manufacturing_operations ENABLE TRIGGER mfg_op_set_code;
+UPDATE manufacturing_operations SET machining_feed_mm_per_rev = 0.07 WHERE operation_id = '${OT_P}000000000121';
+SELECT 'legacy_kept:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000121';
+UPDATE manufacturing_operations SET outcome_notes = 'a note' WHERE operation_id = '${OT_P}000000000122';
+SELECT 'null_notes:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000122';
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 31 WHERE operation_id = '${OT_P}000000000122';
+SELECT 'null_speed:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000122';
+-- frozen: an experiment_sheet row keeps its code; a person may still rename it
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, source_system,
+    machining_operation_subtype, machining_cutting_speed_m_per_min, pass_code)
+VALUES ('${OT_P}000000000131', '${OT_P}000000000011', '${OT_P}000000000003', 'machining', 1, 'experiment_sheet', 'F', 30, 'EXP-SHEET-OLD');
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 60 WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+UPDATE manufacturing_operations SET pass_code = 'EXP-SHEET-RENAMED' WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_typed:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+-- fast_follow: a FAST-shaped row follows its temperature
+INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number,
+    operation_date, sintering_max_temp_celsius, sintering_max_force_kn, sintering_mould_diameter_mm, pass_code)
+VALUES ('${OT_P}000000000141', '${OT_P}000000000011', 'sintering', 'fast_25', '${OT_P}000000000021', 4624,
+    '2016-10-12T10:00:00Z', 1200, 14, 20, '12-10-16-MF25-4624-1200C_14kN_20dia');
+UPDATE manufacturing_operations SET sintering_max_temp_celsius = 1250 WHERE operation_id = '${OT_P}000000000141';
+SELECT 'fast_follow:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000141';
+-- sinter_hand: a hand-made sintering operation has no code until it has a run number
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, equipment_id, operation_date)
+VALUES ('${OT_P}000000000142', '${OT_P}000000000011', '${OT_P}000000000003', 'sintering', '${OT_P}000000000022', '2026-03-05T09:00:00Z');
+SELECT 'sinter_hand_norun:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000142';
+UPDATE manufacturing_operations SET sintering_run_number = 400 WHERE operation_id = '${OT_P}000000000142';
+SELECT 'sinter_hand_run:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000142';
+-- an old client's {mf} placeholder is automatic too, and the run number is never invented
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, equipment_id, operation_date, pass_code)
+VALUES ('${OT_P}000000000143', '${OT_P}000000000011', '${OT_P}000000000003', 'sintering', '${OT_P}000000000022', '2026-03-06T09:00:00Z', '06-03-26-MF{mf}');
+SELECT 'mf_placeholder:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000143';
+-- seq_backfill: the extracted back-fill, on rows with a NULL sequence (imported rows keep NULL)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, source_system, pass_code) VALUES
+    ('${OT_P}000000000151', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'test', 'TEST-OT-001-F7-30MPM'),
+    ('${OT_P}000000000152', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'test', 'N/R');
+SELECT 'bf_before:' || count(*) FROM manufacturing_operations WHERE operation_id IN ('${OT_P}000000000151', '${OT_P}000000000152') AND operation_sequence IS NULL;
+$ot_seqfill
+SELECT 'bf_seq:' || coalesce((SELECT operation_sequence::text FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000151'), '<null>')
+    || ',' || coalesce((SELECT operation_sequence::text FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000152'), '<null>');
+SELECT 'bf_codes:' || (SELECT pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000151')
+    || ',' || (SELECT pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000152');
+SELECT 'bf_ledger:' || count(*) || ':' || min(filled) FROM d1_private.operation_sequence_backfill WHERE operation_id::text LIKE '${OT_P}%';
+SELECT 'trg:' || count(*) FILTER (WHERE tgname = 'mfg_op_set_code' AND tgenabled = 'O')
+    || '/' || count(*) FILTER (WHERE tgname = 'mfg_op_assign_numbers') FROM pg_trigger
+    WHERE NOT tgisinternal AND tgrelid = 'manufacturing_operations'::regclass;
+ROLLBACK;
+SQL
+)
+ot_check() { grep -qx -- "$1" <<<"$ot_out" && ok "$2" || bad "$2 (psql output: $ot_out)"; }
+ot_check "new_auto:1:TEST-OT-001-F1-30MPM_0.1feed_1DoC" "a new machining operation gets number 1 and the rule's code"
+ot_check "param_follow:1:TEST-OT-001-F1-45MPM_0.1feed_1DoC" "changing the speed rewrites the code and keeps the number"
+ot_check "resend:TEST-OT-001-F1-45MPM_0.1feed_1DoC" "writing the same code again changes nothing"
+ot_check "resend_follow:TEST-OT-001-F1-45MPM_0.2feed_1DoC" "an operation whose code was written again still follows its fields"
+ot_check "notes:1:TEST-OT-001-F1-45MPM_0.2feed_1DoC" "changing only the notes leaves code and number alone"
+ot_check "subtype:1:TEST-OT-001-R1-45MPM_0.2feed_1DoC" "changing the subtype keeps the number"
+ot_check "other_first:1:TEST-OT-002-F1" "(setup) the first operation on TEST-OT-002 is number 1"
+ot_check "sample_change:2:TEST-OT-002-R2-45MPM_0.2feed_1DoC" "moving to another sample takes that sample's next number"
+ot_check "method_change:4:TEST-OT-002-R4-45MPM_0.2feed_1DoC" "changing the method takes the next number on the sample"
+ot_check "typed:MY-OP-CODE" "a typed code is stored as written"
+ot_check "typed_kept:MY-OP-CODE" "a typed code survives a later field change"
+ot_check "typed_equals_rule:TEST-OT-002-R4-55MPM_0.2feed_1DoC" "writing exactly the rule's value keeps the operation automatic"
+ot_check "cleared:TEST-OT-002-R4-55MPM_0.2feed_1DoC" "clearing the code rebuilds it from the rule"
+ot_check "placeholder_a:1:TEST-OT-001-F1" "an old client's {seq}-whatever code is replaced by the rule's code"
+ot_check "placeholder_b:2:TEST-OT-001-F2-30MPM" "an old client's code with a {seq} placeholder is replaced by the rule's code"
+ot_check "legacy_kept:TEST-OT-001-F9-30MPM_0.05feed_0.1DoC_" "a stored code that is not the rule's value counts as typed and is kept"
+ot_check "null_notes:<null>" "an operation with no code stays without one when only the notes change"
+ot_check "null_speed:TEST-OT-001-F20-31MPM" "an operation with no code gets the rule's code once a field it is built from changes"
+ot_check "frozen:EXP-SHEET-OLD" "an experiment_sheet operation keeps its code when a field changes"
+ot_check "frozen_typed:EXP-SHEET-RENAMED" "a person can still rename an experiment_sheet operation"
+ot_check "fast_follow:12-10-16-MF25-4624-1250C_14kN_20dia" "a FAST operation's code follows its temperature"
+ot_check "sinter_hand_norun:<null>" "a hand-made sintering operation has no code before it has a run number"
+ot_check "sinter_hand_run:05-03-26-MF250-400" "a run number gives it the code"
+ot_check "mf_placeholder:<null>" "an old client's {mf} code is automatic: no run number, no code, no invented MF number"
+ot_check "bf_before:2" "(setup) the two back-fill rows have no sequence"
+ot_check "bf_seq:7,<null>" "the back-fill reads the number from the code and leaves the other row"
+ot_check "bf_codes:TEST-OT-001-F7-30MPM,N/R" "the back-fill leaves every code as it was"
+ot_check "bf_ledger:1:7" "the back-fill ledger holds exactly the filled row"
+ot_check "trg:1/0" "mfg_op_set_code is on the table and mfg_op_assign_numbers is gone"
 echo "== Cleanup test rows =="
 $PSQL -c "
     DELETE FROM sample_genealogy
