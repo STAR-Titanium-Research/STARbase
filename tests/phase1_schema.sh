@@ -1901,6 +1901,21 @@ DO $$ BEGIN
   RAISE NOTICE 'unique:missing';
 EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'unique:ok';
 END $$;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('7e000000-0000-4000-8000-000000000231', 'TEST-TC-ORP'),
+    ('7e000000-0000-4000-8000-000000000232', 'TEST-TC-NUL');
+INSERT INTO test_sessions (session_id, test_type) VALUES
+    ('7e000000-0000-4000-8000-000000000241', 'sem'),
+    ('7e000000-0000-4000-8000-000000000242', 'sem');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item) VALUES
+    ('7e000000-0000-4000-8000-000000000241', 'physical_samples', '7e000000-0000-4000-8000-000000000231'),
+    ('7e000000-0000-4000-8000-000000000242', 'physical_samples', '7e000000-0000-4000-8000-000000000232');
+DELETE FROM test_sessions_subject WHERE test_sessions_id = '7e000000-0000-4000-8000-000000000241';
+UPDATE test_sessions SET test_type = NULL WHERE session_id = '7e000000-0000-4000-8000-000000000242';
+UPDATE physical_samples SET sample_code = 'TEST-TC-ORP2' WHERE sample_id = '7e000000-0000-4000-8000-000000000231';
+UPDATE physical_samples SET sample_code = 'TEST-TC-NUL2' WHERE sample_id = '7e000000-0000-4000-8000-000000000232';
+SELECT 'orphan_rename:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000241';
+SELECT 'notype_rename:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000242';
 SELECT 'directus:' || count(*) FROM directus_fields WHERE collection = 'test_sessions'
   AND field IN ('test_code', 'test_code_number', 'test_code_type', 'test_code_is_manual',
                 'test_code_subject_collection', 'test_code_subject_id');
@@ -1935,6 +1950,8 @@ tc_check "orphan:TEST-TC-002-XRD1$" "a test that loses all its subjects keeps it
 tc_check "unique:ok" "test codes are unique"
 tc_check "directus:6$" "the six test-code fields are registered in Directus"
 tc_check "directus_visible:1$" "only test_code is visible on the form"
+tc_check "orphan_rename:TEST-TC-ORP-SEM1$" "renaming the old subject of an orphaned test keeps its code"
+tc_check "notype_rename:TEST-TC-NUL-SEM1$" "renaming the subject of a test whose type was cleared keeps its code"
 
 echo "== Deleting samples and edges that are test subjects =="
 # Same fixture style as above; every row is rolled back. The back-fill statements are extracted

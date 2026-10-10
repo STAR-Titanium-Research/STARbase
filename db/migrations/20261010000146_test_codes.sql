@@ -190,6 +190,10 @@ COMMENT ON TRIGGER test_sessions_set_code ON test_sessions IS 'Assigns and updat
 
 -- A corrected subject code flows into the automatic codes built on it (same numbers): clearing
 -- the code makes the trigger above rebuild it with the number it already has.
+-- Only tests whose code subject is still their primary subject (sample_id / insert_edge_id) and
+-- whose type still matches the code are touched: a test that lost its subjects, or whose type was
+-- cleared, keeps its code (clearing it here would leave NULL), and renaming a subject does not
+-- lock rows of tests that have moved on.
 CREATE FUNCTION trg_cascade_test_codes()
     RETURNS TRIGGER
     LANGUAGE plpgsql
@@ -205,21 +209,25 @@ BEGIN
         SET test_code = NULL
         WHERE NOT test_code_is_manual
           AND test_code_subject_collection = 'physical_samples'
-          AND test_code_subject_id = NEW.sample_id;
+          AND test_code_subject_id = NEW.sample_id
+          AND sample_id = NEW.sample_id
+          AND test_type IS NOT DISTINCT FROM test_code_type;
     ELSE
         IF OLD.edge_code IS NOT DISTINCT FROM NEW.edge_code THEN RETURN NULL; END IF;
         UPDATE public.test_sessions
         SET test_code = NULL
         WHERE NOT test_code_is_manual
           AND test_code_subject_collection = 'insert_edges'
-          AND test_code_subject_id = NEW.edge_id;
+          AND test_code_subject_id = NEW.edge_id
+          AND insert_edge_id = NEW.edge_id
+          AND test_type IS NOT DISTINCT FROM test_code_type;
     END IF;
     RETURN NULL;
 END;
 $$;
 
 COMMENT ON FUNCTION trg_cascade_test_codes() IS
-    'AFTER UPDATE on physical_samples / insert_edges, acts only when sample_code / edge_code changed: rebuilds the automatic test codes built on that subject, keeping their numbers.';
+    'AFTER UPDATE on physical_samples / insert_edges, acts only when sample_code / edge_code changed: rebuilds the automatic test codes built on that subject, keeping their numbers. Only touches tests whose code subject is still their primary subject and whose type still matches the code (an orphaned test, or one whose type was cleared, keeps its code)';
 
 CREATE TRIGGER physical_samples_cascade_test_codes
     AFTER UPDATE ON physical_samples
