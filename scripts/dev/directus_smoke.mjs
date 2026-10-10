@@ -1,7 +1,11 @@
 // Directus smoke cases, run by scripts/dev/directus_smoke.sh against a throwaway Directus on a
 // restored copy of live. Node 20, no dependencies. One `SMOKE PASS|FAIL <case>` line per case;
 // exit 1 on any FAIL. Env: DIRECTUS_URL, TOKEN (admin static token of the copy),
-// LM_TOKEN (static token of a Lab Member user created in the copy, with its own people row).
+// LM_TOKEN (static token of a Lab Member user created in the copy, with its own people row; is_researcher).
+// The lm_* cases need that user to be able to read at all. When Directus answers the probe read with the known
+// `_some ... can only be used with top level relational alias field` 400 (the Lab Member permission rows, see
+// task-6 report) they print `SMOKE SKIP <case>: <reason>` and do not fail the run; any other probe failure (401,
+// 403, 500, another 400) leaves them to run and FAIL. D1_SMOKE_REQUIRE_LM=1 (or true) makes the skip a FAIL.
 const BASE = process.env.DIRECTUS_URL;
 const TOKEN = process.env.TOKEN;
 const LM_TOKEN = process.env.LM_TOKEN;
@@ -25,7 +29,7 @@ async function check(name, fn) {
     await fn();
     console.log(`SMOKE PASS ${name}`);
   } catch (e) {
-    if (e?.skip && !process.env.D1_SMOKE_REQUIRE_LM) {
+    if (e?.skip && !/^(1|true)$/i.test(process.env.D1_SMOKE_REQUIRE_LM ?? '')) {
       console.log(`SMOKE SKIP ${name}: ${e.message}`);
       return;
     }
@@ -170,12 +174,14 @@ await check('op_preview_requires_login', async () => {
 // and must still be able to preview their own operation.
 const PREVIEW = '/d1-next-number/operation-code';
 // Precondition: the Lab Member can read at all. If not (see the SKIP reason), the three cases are reported as
-// SKIP, loudly, instead of FAIL: the cause is the Lab Member permission rows, not the preview route. Set
-// D1_SMOKE_REQUIRE_LM=1 to make a skip a failure.
+// SKIP, loudly, instead of FAIL: the cause is the Lab Member permission rows, not the preview route. Only that
+// one known 400 skips; a 401 (token not accepted), 403, 500 or another 400 lets the cases run and fail.
+// D1_SMOKE_REQUIRE_LM=1 makes a skip a failure.
 let lmBlocked = null;
 if (LM_TOKEN) {
   const probe = await api('GET', '/items/physical_samples?limit=1&fields=sample_id', undefined, LM_TOKEN);
-  if (probe.status !== 200) lmBlocked = `a Lab Member cannot read physical_samples in this copy (status ${probe.status}: ${errText(probe)})`;
+  const knownBlocker = probe.status === 400 && /_some.*can only be used/.test(errText(probe));
+  if (knownBlocker) lmBlocked = `a Lab Member cannot read physical_samples in this copy (status ${probe.status}: ${errText(probe)})`;
 }
 function needLm() {
   expect(LM_TOKEN, 'no LM_TOKEN (the harness did not create the Lab Member user)');

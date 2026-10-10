@@ -16,7 +16,13 @@
 # mounted), otherwise `dbmate up` would simply re-apply it. Use it to prove the smoke test catches
 # an old incident, e.g.:  bash scripts/dev/directus_smoke.sh --skip 20261010000153
 #
-# Usage: bash scripts/dev/directus_smoke.sh [--skip <migration-version>...]   (from the repo root)
+# The lm_* cases run as a Lab Member created in the copy (people row with is_researcher, so d1-owner-default
+# owns what they create). If Directus answers that user's probe read with the known 400 `"_some" can only be used
+# with top level relational alias field` (the Lab Member permission rows), those cases print `SMOKE SKIP <case>:
+# <reason>` and the run still exits 0; any other probe failure makes them FAIL. D1_SMOKE_REQUIRE_LM=1 (or true)
+# turns the skip into a FAIL; unset, 0 or anything else leaves it off.
+#
+# Usage: [D1_SMOKE_REQUIRE_LM=1] bash scripts/dev/directus_smoke.sh [--skip <migration-version>...]   (from the repo root)
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
 REPO="$(pwd -W 2>/dev/null || pwd)"
@@ -147,7 +153,7 @@ lm_user=$(psql_copy -Atc "
   u AS (INSERT INTO directus_users (id, email, status, role, token, first_name, last_name)
         SELECT gen_random_uuid(), 'smoke-lab-member-$(rhex 4)@example.invalid', 'active', r.id, '$LM_TOKEN', 'Smoke', 'Member'
         FROM r RETURNING id),
-  p AS (INSERT INTO people (full_name, user_id) SELECT 'Smoke Member', id FROM u RETURNING person_id)
+  p AS (INSERT INTO people (full_name, user_id, is_researcher, active) SELECT 'Smoke Member', id, true, true FROM u RETURNING person_id)
   SELECT id FROM u") || abort "create Lab Member smoke user" $?
 [[ -n "$lm_user" ]] || abort "no Lab Member role in the copy to create the smoke user in" 1
 
@@ -169,7 +175,7 @@ done
 [[ -n "$ready" ]] || abort "directus not healthy after 120s" 1 "$(docker logs --tail 60 "$DX" 2>&1)"
 
 # --- cases
-cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e LM_TOKEN="$LM_TOKEN" -e D1_SMOKE_REQUIRE_LM \
+cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e LM_TOKEN="$LM_TOKEN" -e D1_SMOKE_REQUIRE_LM="${D1_SMOKE_REQUIRE_LM:-}" \
   -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_smoke.mjs 2>&1)
 crc=$?
 echo "$cout"
