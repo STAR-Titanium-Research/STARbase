@@ -34,7 +34,7 @@ describe('stateFromQuery / queryFromState', () => {
 	});
 
 	it('falls back to page 1 for a non-numeric, fractional or non-positive page', () => {
-		for (const page of ['abc', '', '0', '-2', '1.5']) expect(stateFromQuery({ page }).page).toBe(1);
+		for (const page of ['abc', '', '0', '-2', '1.5', '1e2', '0x10', ' 5', '1000000000000']) expect(stateFromQuery({ page }).page).toBe(1);
 		expect(stateFromQuery({ page: '4' }).page).toBe(4);
 	});
 
@@ -116,6 +116,8 @@ describe('buildItemsParams', () => {
 		const field = def.filters.find((f) => f.options.kind === 'bool')!.field;
 		expect(parsedFilter(buildItemsParams(def, state({ filters: { [field]: 'true' } }), null))._and).toEqual([{ [field]: { _eq: true } }]);
 		expect(parsedFilter(buildItemsParams(def, state({ filters: { [field]: 'false' } }), null))._and).toEqual([{ [field]: { _eq: false } }]);
+		// a junk value is dropped, not read as false
+		expect('filter' in buildItemsParams(def, state({ filters: { [field]: 'banana' } }), null)).toBe(false);
 	});
 
 	it('drops a chip for a field the page does not offer', () => {

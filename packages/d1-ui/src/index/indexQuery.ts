@@ -26,9 +26,17 @@ type RawQuery = Record<string, string | string[] | undefined>;
 
 const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
 
+// Plain digits only ('1e2', '0x10', ' 5' are junk), capped so a hand-edited URL can't send 1e+21.
+const MAX_INT = 1_000_000_000;
+function positiveInt(v: string | undefined): number | null {
+	if (!v || !/^\d+$/.test(v)) return null;
+	const n = Number(v);
+	return n >= 1 && n <= MAX_INT ? n : null;
+}
+
 export function stateFromQuery(query: RawQuery): IndexState {
-	const bookmark = Number(first(query.bookmark));
-	const page = Number(first(query.page));
+	const bookmark = positiveInt(first(query.bookmark));
+	const page = positiveInt(first(query.page));
 	const filters: Record<string, string> = {};
 	for (const [key, raw] of Object.entries(query)) {
 		if (!key.startsWith('f.') || key.length === 2) continue;
@@ -36,11 +44,11 @@ export function stateFromQuery(query: RawQuery): IndexState {
 		if (value) filters[key.slice(2)] = value;
 	}
 	return {
-		bookmark: Number.isInteger(bookmark) && bookmark > 0 ? bookmark : null,
+		bookmark,
 		q: first(query.q) ?? '',
 		filters,
 		sort: first(query.sort) || null,
-		page: Number.isInteger(page) && page >= 1 ? page : 1,
+		page: page ?? 1,
 		open: first(query.open) || null,
 	};
 }
@@ -99,7 +107,12 @@ export function buildItemsParams(def: IndexDef, s: IndexState, bookmark: Bookmar
 	for (const [field, value] of Object.entries(s.filters)) {
 		const chip = def.filters.find((f) => f.field === field);
 		if (!chip || !value) continue;
-		and.push({ [field]: { _eq: chip.options.kind === 'bool' ? value === 'true' : value } });
+		if (chip.options.kind === 'bool') {
+			if (value !== 'true' && value !== 'false') continue; // junk is dropped, not read as false
+			and.push({ [field]: { _eq: value === 'true' } });
+		} else {
+			and.push({ [field]: { _eq: value } });
+		}
 	}
 	const search = searchClause(def, s.q);
 	if (search) and.push(search);
