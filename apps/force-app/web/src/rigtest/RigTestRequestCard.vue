@@ -5,7 +5,7 @@
 import { computed, ref } from 'vue';
 import { rigTest } from './rigTestStore';
 import {
-	DECLINE_REASONS, DECLINE_TEXT_MAX, SNOOZE_PRESETS, declineBody, estimateText, formatWhen,
+	DECLINE_REASONS, DECLINE_TEXT_MAX, SNOOZE_PRESETS, declineBody, estimateText, formatWhen, httpUrl,
 	type DeclineCode, type RigRequest,
 } from './rigTestLogic';
 
@@ -21,6 +21,7 @@ const error = computed(() => rigTest.state.errors[props.request.number] || '');
 const sendable = computed(() => !!declineBody(reason.value, reasonText.value));
 const estimate = computed(() => estimateText(props.request.estimate_s.full, props.request.needs_operator_steps));
 const asked = computed(() => formatWhen(props.request.created_at));
+const href = computed(() => httpUrl(props.request.url));
 
 function toggle(p: 'snooze' | 'decline') { panel.value = panel.value === p ? null : p; }
 function run() { void rigTest.accept(props.request.number); }
@@ -29,7 +30,7 @@ function run() { void rigTest.accept(props.request.number); }
 <template>
 	<div class="rq" :data-testid="`rig-request-${request.number}`">
 		<div class="rq-title">
-			<a v-if="request.url" :href="request.url" target="_blank" rel="noopener">#{{ request.number }} {{ request.title }}</a>
+			<a v-if="href" :href="href" target="_blank" rel="noopener">#{{ request.number }} {{ request.title }}</a>
 			<span v-else>#{{ request.number }} {{ request.title }}</span>
 		</div>
 		<div class="rq-by">

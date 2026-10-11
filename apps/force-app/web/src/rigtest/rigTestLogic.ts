@@ -322,6 +322,18 @@ export function acceptBody(ctx: AcceptContext): { mode: 'full'; upload_busy: boo
 
 // ---- Settings > Rig tests ----------------------------------------------------------------------
 
+/** `u` as a link target only if it is an http(s) URL, else '' (a `javascript:` or `data:` URL from
+ *  a request or a result file must never reach an `href`). */
+export function httpUrl(u: unknown): string {
+	if (typeof u !== 'string') return '';
+	try {
+		const p = new URL(u);
+		return p.protocol === 'https:' || p.protocol === 'http:' ? p.href : '';
+	} catch {
+		return '';
+	}
+}
+
 export interface RelayInfo { text: string; tone: 'ok' | 'bad' | 'dim'; icon: string }
 
 /** How Settings shows the relay. "unknown" is a backend that hasn't asked the relay yet (just

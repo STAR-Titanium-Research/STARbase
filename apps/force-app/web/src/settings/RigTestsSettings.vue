@@ -6,7 +6,7 @@ import { computed, onMounted } from 'vue';
 import RigTestRequestCard from '../rigtest/RigTestRequestCard.vue';
 import { rigTest } from '../rigtest/rigTestStore';
 import { isPopoutWindow } from '../popoutWindow';
-import { formatWhen, relayInfo, snoozedUntilText, summaryCounts } from '../rigtest/rigTestLogic';
+import { formatWhen, httpUrl, relayInfo, snoozedUntilText, summaryCounts } from '../rigtest/rigTestLogic';
 
 const s = rigTest.state;
 const elig = computed(() => s.eligibility);
@@ -91,7 +91,7 @@ const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
 				<tbody>
 					<tr v-for="h in s.history" :key="`${h.number}-${h.started_at}`">
 						<td class="req">
-							<a v-if="h.url" :href="h.url" target="_blank" rel="noopener">#{{ h.number }} {{ h.title }}</a>
+							<a v-if="httpUrl(h.url)" :href="httpUrl(h.url)" target="_blank" rel="noopener">#{{ h.number }} {{ h.title }}</a>
 							<span v-else>#{{ h.number }} {{ h.title }}</span>
 						</td>
 						<td><span class="pill" :class="h.state">{{ stateLabel(h.state) }}</span></td>

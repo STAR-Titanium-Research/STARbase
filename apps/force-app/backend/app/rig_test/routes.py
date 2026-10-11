@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import bug_report, recovery
 from . import eligibility, relay, runner
+from .catalog import issue_url
 from .poller import RigTestPoller, StateFile
 from .runner import AnswerRejectedError, RigTestRunner, RunnerBusyError
 
@@ -228,7 +229,7 @@ def _summary(data: dict) -> dict:
     return {
         "number": data.get("number"),
         "title": data.get("title", ""),
-        "url": data.get("url", ""),
+        "url": issue_url(data.get("url")),
         "state": data.get("state"),
         "started_at": data.get("started_at"),
         "finished_at": data.get("finished_at"),

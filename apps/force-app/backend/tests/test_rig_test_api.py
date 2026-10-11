@@ -1,6 +1,7 @@
 """The /rig-tests REST surface end to end, and the rig lock on every endpoint it covers."""
 
 import json
+import os
 from datetime import UTC, datetime
 
 import pytest
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app import recovery
-from app.rig_test import LOCKED, eligibility, relay, routes
+from app.rig_test import LOCKED, catalog, eligibility, relay, routes
 from app.rig_test import runner as runner_mod
 from app.rig_test.poller import StateFile
 
@@ -399,7 +400,6 @@ def test_cancel_over_http(client, rig, fake):
 
 def test_history_lists_every_run_of_an_issue_and_old_single_file_results(client, rig):
     folder = rig.runner._captures_root() + "/rig-tests/231"
-    import os
 
     os.makedirs(folder)
     for name, stamp, state in (
@@ -411,6 +411,34 @@ def test_history_lists_every_run_of_an_issue_and_old_single_file_results(client,
             json.dump({"number": 231, "state": state, "started_at": stamp, "counts": {}}, f)
     runs = client.get("/rig-tests/history").json()["runs"]
     assert [r["state"] for r in runs] == ["cancelled", "done", "partial"]
+
+
+@pytest.mark.parametrize(
+    ("url", "kept"),
+    [
+        ("https://github.com/dpremoli/D1-Database/issues/231", True),
+        ("javascript:alert(1)", False),
+        ("data:text/html,<script>1</script>", False),
+        ("http://github.com/o/r/issues/1", False),
+        ("https://github.com.evil.example/o/r/issues/1", False),
+        ("https://github.com/o/r/pull/1", False),
+        ("https://github.com/o/r/issues/1\n", False),
+        ("https://github.com/o/r/issues/1/../../x", False),
+        (None, False),
+        (42, False),
+    ],
+)
+def test_only_a_github_issue_link_survives_as_a_url(client, rig, url, kept):
+    """L4: the web binds this as an href, so it is checked where it comes in (request) and where
+    it comes back (result files on disk)."""
+    request = issue(231, ASK, url=url)
+    resolved = catalog.parse_request(request["body"]).as_request(231, request)
+    assert resolved["url"] == (url if kept else "")
+    folder = rig.runner._captures_root() + "/rig-tests/231"
+    os.makedirs(folder, exist_ok=True)
+    with open(f"{folder}/result-20261011T100000.json", "w") as f:
+        json.dump({"number": 231, "state": "done", "started_at": "x", "url": url, "counts": {}}, f)
+    assert client.get("/rig-tests/history").json()["runs"][0]["url"] == (url if kept else "")
 
 
 def test_run_is_idle_with_nothing_started(client):

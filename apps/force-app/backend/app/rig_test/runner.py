@@ -29,7 +29,7 @@ from datetime import datetime
 
 from ..storage import atomic_write_json
 from . import relay, report
-from .catalog import NOTE_OPTIONS
+from .catalog import NOTE_OPTIONS, issue_url
 
 log = logging.getLogger("force_app.rig_test")
 
@@ -95,7 +95,7 @@ class _Run:
         self.record: dict = {
             "number": request["number"],
             "title": request["title"],
-            "url": request.get("url", ""),
+            "url": issue_url(request.get("url")),
             "rig": rig,
             "app_version": meta.get("app_version") or "unknown",
             "operator": meta.get("operator") or "",

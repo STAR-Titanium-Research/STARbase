@@ -58,6 +58,15 @@ def repo_backlog_path() -> Path:
     return root / "docs" / "runbooks" / "physical-test-backlog.md"
 
 
+_ISSUE_URL_RE = re.compile(r"https://github\.com/[^/]+/[^/]+/issues/\d+")
+
+
+def issue_url(value: object) -> str:
+    """`value` if it is a link to a GitHub issue, else "". The web UI makes this a link, so a
+    `javascript:` or `data:` URL (from the relay, or a result file on disk) must never get through."""
+    return value if isinstance(value, str) and _ISSUE_URL_RE.fullmatch(value) else ""
+
+
 class RigRequestError(ValueError):
     """The request (or a catalogue block it points at) cannot be run. The message is safe to post."""
 
@@ -187,7 +196,7 @@ class ResolvedRequest(BaseModel):
         return {
             "number": number,
             "title": str(issue.get("title") or "")[:200],
-            "url": str(issue.get("url") or ""),
+            "url": issue_url(issue.get("url")),
             "requested_by": str(issue.get("requested_by") or "")[:80],
             "created_at": str(issue.get("created_at") or ""),
             "items": [i.model_dump(by_alias=True, exclude_none=True) for i in self.items],
