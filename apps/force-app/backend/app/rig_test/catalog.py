@@ -94,6 +94,10 @@ def _load_yaml(text: str, what: str) -> Any:
         raise RigRequestError(f"{what} is not valid YAML{where}") from None
     except RecursionError:  # "[" * 3000 fits the size limit and overflows the parser's stack
         raise RigRequestError(f"{what} is nested too deeply") from None
+    except (ValueError, TypeError, OverflowError):
+        # SafeLoader builds values itself and lets these escape: `2026-13-01` (a date that does not
+        # exist) and a number of more than 4300 digits are plain ValueErrors, not YAMLErrors.
+        raise RigRequestError(f"{what} has a value that cannot be read") from None
 
 
 # ---- models ----------------------------------------------------------------------------------

@@ -304,7 +304,11 @@ class RigTestPoller:
         for issue in sorted(
             res["requests"], key=lambda i: (str(i.get("created_at")), i.get("number", 0))
         ):
-            request = self._consider(issue)
+            try:
+                request = self._consider(issue)
+            except Exception:  # noqa: BLE001 - one bad issue must not hide the others
+                log.exception("rig test #%s could not be read; skipping it", issue.get("number"))
+                continue
             if request:
                 pending.append(request)
         self._set_pending(pending)
