@@ -9,8 +9,8 @@
 // bottom is the app's one real instance.
 import { computed, reactive, watch } from 'vue';
 import { currentAcceptContext } from './acceptContext';
-import { saveDialogOpen } from './saveDialogOpen';
 import { rigTestApi, type ApiResult, type RigTestApi } from './rigTestApi';
+import { saveDialogOpen } from './saveDialogOpen';
 import {
 	justFinished, newRequests, promptMode, rigBlocked, questionKey, questionNotification, requestNotification,
 	shouldReopen, snoozeUntil, declineBody,
@@ -103,8 +103,10 @@ export function createRigTestStore(deps: RigTestDeps) {
 		if (next?.state === 'running' && (!prev || prev.number !== next.number)) state.finished = null;
 		if (shouldReopen(prev, next)) state.minimised = false;
 		const k = questionKey(next);
-		if (k && k !== questionKey(prev)) state.forced = false; // a new question waits for the cut to be saved
-		if (k && k !== questionKey(prev) && next) safeNotify(questionNotification(next));
+		if (k && k !== questionKey(prev) && next) {
+			state.forced = false; // a new question waits for the cut to be saved
+			safeNotify(questionNotification(next));
+		}
 		state.run = next;
 	}
 
@@ -221,7 +223,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 	}
 
 	return {
-		state, runActive, mode, head, blocked, runBlocked,
+		state, runActive, mode, head, runBlocked,
 		start, stop, refreshPending, refreshRun, refreshAll, refreshEligibility, refreshHistory,
 		accept, snooze, decline, answer, cancel,
 		setRecordingPhase(p: PhaseState) {
