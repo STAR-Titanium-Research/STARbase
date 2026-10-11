@@ -53,6 +53,10 @@ def _hhmm(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).strftime("%H:%M")
 
 
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+
+
 class StateFile:
     """The small JSON file behind `rig_tests_state.json`: pending requests, snoozes, declines,
     the invalid requests already reported, and the run in progress (to spot a crash)."""
@@ -115,7 +119,8 @@ class RigTestPoller:
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self.relay_state = "ok"  # of the last relay answer; "ok" until one has failed
+        # Of the last relay answer: "unknown" until a call has been made, then ok|unreachable|...
+        self.relay_state = "unknown"
 
     # ---- thread ------------------------------------------------------------------------------
 
@@ -226,8 +231,10 @@ class RigTestPoller:
 
     # ---- what the routes use -----------------------------------------------------------------
 
-    def pending(self) -> list[dict]:
-        """Pending requests oldest first, minus the snoozed ones that are not yet due."""
+    def _live_snoozes(self) -> dict:
+        """The snoozes that are still in force. Due ones are dropped here, so the request comes
+        back on the next read; a snooze "until after this recording" is due once a recording has
+        been seen and has ended, or at its 4 h fallback."""
         busy = self._is_busy()
         with self._lock:
             snoozes = self._store.get("snoozes", {})
@@ -239,7 +246,28 @@ class RigTestPoller:
                 if due:
                     del snoozes[key]
             self._store.update(snoozes=snoozes)
+            return snoozes
+
+    def pending(self) -> list[dict]:
+        """Pending requests oldest first, minus the snoozed ones that are not yet due."""
+        with self._lock:
+            snoozes = self._live_snoozes()
             return [r for r in self._store.get("pending", []) if str(r["number"]) not in snoozes]
+
+    def snoozed(self) -> list[dict]:
+        """The snoozed requests, each with `snoozed_until`: an ISO 8601 time, or "after_recording"."""
+        with self._lock:
+            snoozes = self._live_snoozes()
+            return [
+                {
+                    **r,
+                    "snoozed_until": "after_recording"
+                    if snoozes[str(r["number"])]["after_recording"]
+                    else _iso(snoozes[str(r["number"])]["until"]),
+                }
+                for r in self._store.get("pending", [])
+                if str(r["number"]) in snoozes
+            ]
 
     def get(self, n: int) -> dict | None:
         return next((r for r in self._store.get("pending", []) if r["number"] == n), None)

@@ -1,6 +1,7 @@
 """The /rig-tests REST surface end to end, and the rig lock on every endpoint it covers."""
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -78,7 +79,12 @@ def test_this_pc_is_not_the_rig_unless_hardware_or_the_override(client, monkeypa
     monkeypatch.delenv("FORCE_APP_RIG_TEST_ALLOW_SIM")
     body = client.get("/rig-tests/eligibility").json()
     assert body["eligible"] is False and "simulated" in body["reason"]
-    assert body["rig_id"] == "rig-1" and body["relay"] in ("ok", "unreachable", "not_configured")
+    assert body["rig_id"] == "rig-1" and body["relay"] in (
+        "ok",
+        "unreachable",
+        "not_configured",
+        "unknown",
+    )
     monkeypatch.setenv("FORCE_APP_RIG_TEST_ALLOW_SIM", "1")
     body = client.get("/rig-tests/eligibility").json()
     assert body["eligible"] is True and "reason" not in body
@@ -107,7 +113,7 @@ def test_a_non_rig_machine_never_polls_the_relay_or_accepts(client, rig, fake, m
     fake.requests = [issue(231, ASK)]
     fake.list_requests = lambda: pytest.fail("the relay must not be asked")
     rig.poller.poll_once()
-    assert client.get("/rig-tests/pending").json() == {"requests": []}
+    assert client.get("/rig-tests/pending").json()["requests"] == []
     assert _accept(client).status_code == 409
 
 
@@ -126,11 +132,58 @@ def test_pending_lists_the_contract_request(client, rig, fake):
     }  # fmt: skip
 
 
+def test_pending_reports_busy_and_lists_the_snoozed_requests(client, rig, fake, monkeypatch):
+    fake.requests = [issue(231, ASK), issue(232, ASK), issue(233, ASK)]
+    rig.poller.poll_once()
+    body = client.get("/rig-tests/pending").json()
+    assert set(body) == {"requests", "snoozed", "busy"}
+    assert body["busy"] is False and body["snoozed"] == []
+    client.post("/rig-tests/232/snooze", json={"until": "2999-01-01T10:00:00"})
+    client.post("/rig-tests/233/snooze", json={"until": "after_recording"})
+    body = client.get("/rig-tests/pending").json()
+    assert [r["number"] for r in body["requests"]] == [231]
+    by_number = {r["number"]: r for r in body["snoozed"]}
+    assert set(by_number) == {232, 233}
+    assert by_number[233]["snoozed_until"] == "after_recording"
+    until = datetime.fromisoformat(by_number[232]["snoozed_until"])  # an ISO 8601 time
+    assert until.tzinfo is not None and until > datetime.now(UTC)
+    assert by_number[232]["title"] == "Rig test 232" and "items" in by_number[232]
+    for state in ("recording", "finalizing"):
+        monkeypatch.setattr(main, "_session", _Session(state))
+        assert client.get("/rig-tests/pending").json()["busy"] is True
+    monkeypatch.setattr(main, "_session", None)
+    monkeypatch.setattr(recovery, "_discarding", {"20260101-000000-x"})
+    assert client.get("/rig-tests/pending").json()["busy"] is True  # what accept refuses on
+    monkeypatch.setattr(recovery, "_discarding", set())
+    assert client.get("/rig-tests/pending").json()["busy"] is False
+
+
+def test_the_run_carries_the_title_and_url_of_its_issue(client, rig, fake):
+    _running(client, rig, fake)
+    run = client.get("/rig-tests/run").json()
+    assert run["title"] == "Rig test 231"
+    assert run["url"] == "https://github.com/o/r/issues/231"
+
+
+def test_relay_state_is_unknown_until_the_first_answer(client, rig, fake):
+    assert client.get("/rig-tests/eligibility").json()["relay"] == "unknown"
+    rig.poller.poll_once()
+    assert client.get("/rig-tests/eligibility").json()["relay"] == "ok"
+
+
+def test_decline_text_may_be_300_characters_and_no_more(client, rig, fake):
+    _offer(rig, fake)
+    long = client.post("/rig-tests/231/decline", json={"reason_code": "other", "text": "x" * 301})
+    assert long.status_code == 422
+    ok = client.post("/rig-tests/231/decline", json={"reason_code": "other", "text": "x" * 300})
+    assert ok.status_code == 200
+
+
 def test_snooze_hides_the_request_and_posts_the_comment_and_label(client, rig, fake):
     _offer(rig, fake)
     r = client.post("/rig-tests/231/snooze", json={"until": "2999-01-01T10:00:00"})
     assert r.json() == {"ok": True}
-    assert client.get("/rig-tests/pending").json() == {"requests": []}
+    assert client.get("/rig-tests/pending").json()["requests"] == []
     assert fake.last_state(231) == "deferred"
     ((number, body),) = fake.comments
     assert number == 231 and body.startswith("**Rig test #231 snoozed** on rig-1 until ")
@@ -184,9 +237,9 @@ def test_decline_posts_the_reason_and_label_and_removes_the_request(client, rig,
         "**Rig test #231 declined** on rig-1: Someone else is using the machine."
     )
     assert body.count("```") == 2 and "sam\\x" not in body and "<redacted>" in body
-    assert client.get("/rig-tests/pending").json() == {"requests": []}
+    assert client.get("/rig-tests/pending").json()["requests"] == []
     rig.poller.poll_once()  # the relay's cache still lists it unlabelled: we keep our decision
-    assert client.get("/rig-tests/pending").json() == {"requests": []}
+    assert client.get("/rig-tests/pending").json()["requests"] == []
 
 
 def test_decline_rejects_unknown_reasons_and_requests(client, rig, fake):
@@ -247,7 +300,7 @@ def test_accept_answer_and_result_over_http(client, rig, fake, tmp_path):
     run = client.get("/rig-tests/run").json()
     assert run["state"] == "running" and run["number"] == 231
     assert run["question"]["text"] == "Is the light on?"
-    assert client.get("/rig-tests/pending").json() == {"requests": []}
+    assert client.get("/rig-tests/pending").json()["requests"] == []
     assert (
         client.post("/rig-tests/run/answer", json={"step": 5, "option": "Pass"}).status_code == 409
     )
@@ -268,7 +321,7 @@ def test_accept_answer_and_result_over_http(client, rig, fake, tmp_path):
     # once the label is set the relay lists the issue as done: it is never offered again
     fake.requests = [issue(231, ASK, state_label="done")]
     rig.poller.poll_once()
-    assert client.get("/rig-tests/pending").json() == {"requests": []}
+    assert client.get("/rig-tests/pending").json()["requests"] == []
 
 
 def test_cancel_over_http(client, rig, fake):

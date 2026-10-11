@@ -110,7 +110,7 @@ class DeclineBody(BaseModel):
     reason_code: Literal[
         "about_to_record", "machine_in_use", "rig_not_set_up", "not_today", "other"
     ]
-    text: str | None = Field(None, max_length=200)
+    text: str | None = Field(None, max_length=300)
 
 
 class AnswerBody(BaseModel):
@@ -138,7 +138,14 @@ async def get_eligibility() -> dict:
 
 @router.get("/pending")
 async def get_pending() -> dict:
-    return {"requests": _wiring().poller.pending()}
+    w = _wiring()
+    return {
+        "requests": w.poller.pending(),
+        "snoozed": w.poller.snoozed(),
+        # The condition accept refuses on, so a web UI whose own status poll is stale stays in
+        # badge mode instead of opening a dialog over a recording.
+        "busy": w.is_busy() or recovery.any_in_flight(),
+    }
 
 
 @router.post("/{n}/accept")
