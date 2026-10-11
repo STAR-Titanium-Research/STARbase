@@ -243,7 +243,8 @@ def write_operations(
 ) -> tuple[int, int, int]:
     """Upsert the built runs into manufacturing_operations and queue their trace files.
 
-    Returns (operations upserted, hand-logged operations adopted, traces queued). The database
+    Returns (operations upserted, hand-logged operations adopted as
+    [(operation_id, run)], traces queued). The database
     builds pass_code from the run number, so the code is never written here.
     """
     cols = [
@@ -448,7 +449,9 @@ def main() -> None:
         code_to_mat=code_to_mat,
         resolve_owner=resolve_owner,
     )
-    print(f"upserted {n_ops} FAST 250 operations ({adopted} hand-logged filled in)")
+    print(f"upserted {n_ops} FAST 250 operations ({len(adopted)} hand-logged filled in)")
+    for op_id, run in adopted:
+        print(f"  filled in hand-logged operation {op_id} as run {run}")
     print(f"enqueued {queued} trace imports (status=pending)")
 
     conn.commit()

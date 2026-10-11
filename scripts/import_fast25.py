@@ -212,7 +212,8 @@ def write_operations(
 ) -> tuple[int, int, int]:
     """Upsert the parsed runs into manufacturing_operations and queue their EMD traces.
 
-    Returns (operations upserted, hand-logged operations adopted, traces queued). The database
+    Returns (operations upserted, hand-logged operations adopted as
+    [(operation_id, run)], traces queued). The database
     builds pass_code from the run number, so the code is never written here.
     """
     cols = [
@@ -420,9 +421,11 @@ def main() -> None:
         by_prog=by_prog,
         resolve_owner=resolve_owner,
     )
+    for op_id, run in adopted:
+        print(f"  filled in hand-logged operation {op_id} as run {run}")
     conn.commit()
     print(
-        f"upserted {n_ops} FAST 25 operations ({adopted} hand-logged filled in); "
+        f"upserted {n_ops} FAST 25 operations ({len(adopted)} hand-logged filled in); "
         f"enqueued {queued} EMD traces (pending)"
     )
     cur.close()

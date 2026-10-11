@@ -107,14 +107,14 @@ def _ids(mapping):
 
 
 def test_adopts_a_hand_logged_operation_once(cur):
-    mf, e25 = _method_id(cur), None
-    e25 = _machine(cur, "FCT HP D 25")
+    mf, e25 = _method_id(cur), _machine(cur, "FCT HP D 25")
     op = _hand_logged(cur, mf, e25, RUN)
     uid = import_fast25.uid_for(RUN)
 
-    assert fast_ops.adopt_hand_logged(cur, e25, "fast_25", [(RUN, uid)]) == 1
+    adopted = fast_ops.adopt_hand_logged(cur, e25, "fast_25", [(RUN, uid)])
+    assert [(str(i), r) for i, r in adopted] == [(op, RUN)]
     assert _row(cur, op)[:3] == (uid, "fast_25", RUN)
-    assert fast_ops.adopt_hand_logged(cur, e25, "fast_25", [(RUN, uid)]) == 0
+    assert fast_ops.adopt_hand_logged(cur, e25, "fast_25", [(RUN, uid)]) == []
     assert _ids(fast_ops.operation_ids_for(cur, [uid])) == {uid: op}
 
 
@@ -129,7 +129,7 @@ def test_leaves_other_machines_and_identified_operations_alone(cur):
     machining = _hand_logged(cur, mf, e25, RUN + 3, process_category="machining")
 
     runs = [(RUN, "fast25|a"), (RUN + 1, "fast25|b"), (RUN + 3, "fast25|d")]
-    assert fast_ops.adopt_hand_logged(cur, e25, "fast_25", runs) == 0
+    assert fast_ops.adopt_hand_logged(cur, e25, "fast_25", runs) == []
     assert _row(cur, other_machine)[:2] == (None, None)
     assert _row(cur, imported)[:2] == ("fast25|elsewhere", "fast_25")
     assert _row(cur, other_run)[:2] == (None, None)
@@ -138,7 +138,7 @@ def test_leaves_other_machines_and_identified_operations_alone(cur):
 
 
 def test_empty_run_list_adopts_nothing(cur):
-    assert fast_ops.adopt_hand_logged(cur, _machine(cur, "FCT HP D 25"), "fast_25", []) == 0
+    assert fast_ops.adopt_hand_logged(cur, _machine(cur, "FCT HP D 25"), "fast_25", []) == []
     assert fast_ops.operation_ids_for(cur, []) == {}
 
 
@@ -183,7 +183,8 @@ def test_fast25_upsert_fills_in_the_hand_logged_run_and_codes_a_new_one(cur):
         _fast25_op(RUN + 1, datetime(2026, 3, 6, 12, 0)),
     ]
 
-    assert _write25(cur, ops, e25, mf) == (2, 1, 2)  # upserted, adopted, queued
+    n, adopted, queued = _write25(cur, ops, e25, mf)  # upserted, adopted [(id, run)], queued
+    assert (n, [(str(i), r) for i, r in adopted], queued) == (2, [(hand, RUN)], 2)
 
     uid = import_fast25.uid_for(RUN)
     assert _row(cur, hand) == (uid, "fast_25", RUN, "05-03-26-MF25-9999-1600C_63kN_20dia")
@@ -209,7 +210,7 @@ def test_fast25_upsert_fills_in_the_hand_logged_run_and_codes_a_new_one(cur):
     assert {r[0] for r in cur.fetchall()} == {hand, str(new_id)}
 
     # a second run of the importer adopts nothing and keeps the codes
-    assert _write25(cur, ops, e25, mf) == (2, 0, 2)
+    assert _write25(cur, ops, e25, mf) == (2, [], 2)
     assert _row(cur, hand)[3] == "05-03-26-MF25-9999-1600C_63kN_20dia"
 
 
@@ -237,7 +238,8 @@ def test_fast250_upsert_fills_in_the_hand_logged_run_and_codes_a_new_one(cur):
     ops = [op(331, datetime(2026, 7, 20, 12, 0)), op(332, datetime(2026, 7, 21, 12, 0))]
     kw = dict(op_to_id={}, code_to_mat={}, resolve_owner=lambda o: None,
               equipment_id=e250, method_id=mf)
-    assert import_fast250.write_operations(cur, ops, **kw) == (2, 1, 2)
+    n, adopted, queued = import_fast250.write_operations(cur, ops, **kw)
+    assert (n, [(str(i), r) for i, r in adopted], queued) == (2, [(hand, 331)], 2)
 
     assert _row(cur, hand) == (
         import_fast250.uid_for(331), "fast_250", 331, "20-07-26-MF250-331")
@@ -291,13 +293,16 @@ def test_fast25_import_keeps_what_a_person_typed_on_a_hand_logged_run(cur):
     kw = dict(code_to_mat={}, by_prog={}, resolve_owner=lambda o: theirs, equipment_id=e25, method_id=mf)
 
     # adoption pass: the person's owner and notes stay; a NULL import never wipes operator or material text
-    assert import_fast25.write_operations(cur, [imported], op_to_id={}, **kw)[:2] == (1, 1)
+    n, adopted, _ = import_fast25.write_operations(cur, [imported], op_to_id={}, **kw)
+    assert (n, len(adopted)) == (1, 1)
     assert _person_fields(cur, hand) == (mine, "my notes", typed_op, "Typed Name", "my material")
 
     # a second import that now knows the operator updates it, still keeps owner and notes
     imported = {**imported, "operator_disp": import_op_name, "operator_name": "Import Name",
                 "material_text": "import material"}
-    assert import_fast25.write_operations(cur, [imported], op_to_id={import_op_name: import_op}, **kw)[:2] == (1, 0)
+    n, adopted, _ = import_fast25.write_operations(
+        cur, [imported], op_to_id={import_op_name: import_op}, **kw)
+    assert (n, len(adopted)) == (1, 0)
     assert _person_fields(cur, hand) == (mine, "my notes", import_op, "Import Name", "import material")
 
     # a blank owner / notes is filled in by the import
@@ -339,6 +344,37 @@ def test_a_frozen_experiment_sheet_row_is_never_adopted(cur):
     mf, e25 = _method_id(cur), _machine(cur, "FCT HP D 25")
     sheet = _hand_logged(cur, mf, e25, RUN, source_system="experiment_sheet")
     uid = import_fast25.uid_for(RUN)
-    assert fast_ops.adopt_hand_logged(cur, e25, "fast_25", [(RUN, uid)]) == 0
+    assert fast_ops.adopt_hand_logged(cur, e25, "fast_25", [(RUN, uid)]) == []
     assert _row(cur, sheet)[:2] == (None, "experiment_sheet")
     assert fast_ops.operation_ids_for(cur, [uid]) == {}
+
+
+def test_a_missing_import_value_never_wipes_what_a_person_typed(cur):
+    mf, e25 = _method_id(cur), _machine(cur, "FCT HP D 25")
+    hand = _hand_logged(
+        cur, mf, e25, RUN, sintering_mould_diameter_mm=20, sintering_max_temp_celsius=1600,
+        sintering_max_force_kn=63,
+    )
+    kw = dict(op_to_id={}, code_to_mat={}, by_prog={}, resolve_owner=lambda o: None,
+              equipment_id=e25, method_id=mf)
+    blank = _fast25_op(RUN, datetime(2026, 3, 5, 12, 0), temp_c=None, force_kn=None, mould_mm=None)
+
+    for _ in range(2):  # the adoption pass, then a plain re-import
+        import_fast25.write_operations(cur, [blank], **kw)
+        cur.execute(
+            "SELECT sintering_mould_diameter_mm, sintering_max_temp_celsius, sintering_max_force_kn, pass_code "
+            "FROM manufacturing_operations WHERE operation_id = %s",
+            [hand],
+        )
+        d, t, f, code = cur.fetchone()
+        assert (float(d), float(t), float(f)) == (20, 1600, 63)
+        assert code == "05-03-26-MF25-9999-1600C_63kN_20dia"
+
+    # a value the import does have wins over the typed one
+    import_fast25.write_operations(cur, [{**blank, "mould_mm": 30.0}], **kw)
+    cur.execute(
+        "SELECT sintering_mould_diameter_mm, pass_code FROM manufacturing_operations WHERE operation_id = %s",
+        [hand],
+    )
+    d, code = cur.fetchone()
+    assert (float(d), code) == (30, "05-03-26-MF25-9999-1600C_63kN_30dia")

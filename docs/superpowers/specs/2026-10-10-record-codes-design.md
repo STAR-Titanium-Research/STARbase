@@ -1,9 +1,8 @@
 # Record codes: test codes, operation codes that follow their fields, short IDs and file hashes
 
 Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 answered (a)).
-**T0a applied to live (migrations 150-152). T0b built on `feat/record-codes` (migrations 155-158,
-the `d1-next-number` operation-code route, the new `d1-operation-code` box), not yet live.**
-Migration numbers below T0b are "next free" (see the table).
+**T0a, T0b and T0c (Directus side) are live (migrations 150-158, the `d1-next-number` operation-code
+route, the `d1-operation-code` box); T0d is built on `feat/record-codes` (scripts only, nothing deployed).**
 Next: T0e (file fingerprints); T0f after the maintainer's N/R hand-fix.
 **T0d built (no migration): the FAST importers write `sintering_run_number`, `scripts/finalize_fast_codes.py` is retired.**
 Stream T0 of
