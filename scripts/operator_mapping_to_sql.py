@@ -3,6 +3,7 @@
 Usage: py -3 scripts/operator_mapping_to_sql.py db/mappings/operator-mapping.xlsx \
            db/migrations/20261001000123_operator_backfill.sql
 """
+
 import sys
 
 from openpyxl import load_workbook
@@ -23,15 +24,25 @@ def read_rows(path):
         op_id = ws.cell(r, 1).value
         if op_id is None or not str(op_id).strip().isdigit():
             break
-        rows.append({
-            "id": int(op_id),
-            "name": ws.cell(r, 2).value,
-            "action": (str(ws.cell(r, 5).value or "").strip().upper() or "IGNORE"),
-            "person": (str(ws.cell(r, 6).value).strip() if ws.cell(r, 6).value else None),
-            "new": (str(ws.cell(r, 7).value).strip() if ws.cell(r, 7).value else None),
-            "researcher": str(ws.cell(r, 8).value or "").strip().upper() == "Y",
-            "additional": [p.strip() for p in str(ws.cell(r, 13).value or "").split(",") if p.strip()],
-        })
+        rows.append(
+            {
+                "id": int(op_id),
+                "name": ws.cell(r, 2).value,
+                "action": (str(ws.cell(r, 5).value or "").strip().upper() or "IGNORE"),
+                "person": (
+                    str(ws.cell(r, 6).value).strip() if ws.cell(r, 6).value else None
+                ),
+                "new": (
+                    str(ws.cell(r, 7).value).strip() if ws.cell(r, 7).value else None
+                ),
+                "researcher": str(ws.cell(r, 8).value or "").strip().upper() == "Y",
+                "additional": [
+                    p.strip()
+                    for p in str(ws.cell(r, 13).value or "").split(",")
+                    if p.strip()
+                ],
+            }
+        )
     return rows
 
 
@@ -56,8 +67,14 @@ def convert(path):
         person = row["person"] if a == "MAP" else None
         new = row["new"] if a == "NEW" else None
         researcher = "true" if (a == "NEW" and row["researcher"]) else "false"
-        values.append(f"({row['id']}, {lit(a)}, {lit(person)}, {lit(new)}, {researcher}, {arr(row['additional'])})")
-    body = ",\n    ".join(values) if values else "(NULL::int, NULL, NULL, NULL, false, '{}'::text[])"
+        values.append(
+            f"({row['id']}, {lit(a)}, {lit(person)}, {lit(new)}, {researcher}, {arr(row['additional'])})"
+        )
+    body = (
+        ",\n    ".join(values)
+        if values
+        else "(NULL::int, NULL, NULL, NULL, false, '{}'::text[])"
+    )
     return f"""-- migrate:up
 -- Generated from db/mappings/operator-mapping.xlsx by scripts/operator_mapping_to_sql.py.
 -- Links legacy Machine_Operators entries to people: MAP -> existing person,
