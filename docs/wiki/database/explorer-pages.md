@@ -9,7 +9,7 @@ may read; a record that does not exist and one you may not read look the same
 
 | Page | Address | Reached from |
 |---|---|---|
-| [Projects index](#projects-index) | `/admin/home/projects` | Home → More → *Projects* |
+| [Projects index](#projects-index) | `/admin/home/projects` | the sidebar: Records → *Projects*, or **Ctrl K** (finder) |
 | [Project](#project) | `/admin/home/projects/<id>` | a project card |
 | [Campaign](#campaign) | `/admin/home/campaigns/<id>` | a campaign card, or a breadcrumb |
 | [Sample](samples.md#the-sample-page) | `/admin/home/samples/<id>` | any sample code |
