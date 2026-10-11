@@ -23,18 +23,20 @@ Rig test requests (ADR-0012, docs/superpowers/specs/2026-10-11-rig-test-requests
 app on the rig PC polls these; none of them runs anything here:
 
     GET   /rig-tests                       open issues labelled "rig-test-request" whose label was
-                                           last applied by an allowlisted login (30 s cache)
+                                           last applied by an allowlisted login and that an
+                                           allowlisted login opened (30 s cache)
     POST  /rig-tests/{n}/comment           {body} -> {ok, id}; comment on a rig-test issue
     PATCH /rig-tests/{n}/comment/{id}      {body}; edits only a comment this App created there
     POST  /rig-tests/{n}/state             {state}; sets one "rig-test:<state>" label, drops the
                                            others (deferred|declined|running|partial|done|
                                            interrupted)
 
-Trust: a command is trusted by its GitHub authorship (who applied the label), never by who called
-the relay. The relay has no auth of its own, so anyone on the tailnet can call these endpoints;
+Trust: a command is trusted by its GitHub authorship (who opened the issue and who applied the
+label: both must be allowlisted, since the author can edit the block after the label is on), never
+by who called the relay. The relay has no auth of its own, so anyone on the tailnet can call these endpoints;
 the worst they can do is post or label on an issue that is already an allowlisted rig-test
-request. Every write re-checks that the issue is open, is not a PR, carries the label and was
-labelled by an allowlisted login. With RIG_TEST_ALLOWED_LOGINS empty, or the App unconfigured, all
+request. Every write re-checks that the issue is open, is not a PR, carries the label, was
+opened by an allowlisted login and was labelled by one. With RIG_TEST_ALLOWED_LOGINS empty, or the App unconfigured, all
 of them answer {"ok": false, "reason": "rig tests not configured"}.
 
 If any of the App ID / private key / installation ID is missing, /report fails closed with a
@@ -320,6 +322,14 @@ def _is_allowed(login: str | None) -> bool:
     return (login or "").lower() in _allowed_logins()
 
 
+def _author(issue: dict) -> str | None:
+    """Login of whoever opened the issue. Anyone who can open an issue can later edit its body,
+    so a request is only trusted if its author is allowlisted as well as its labeller."""
+    user = issue.get("user")
+    login = user.get("login") if isinstance(user, dict) else None
+    return login if isinstance(login, str) else None
+
+
 def _rig_gate() -> dict | None:
     """Fail closed: no allowlist, or no GitHub App, means no rig-test endpoint does anything."""
     if not _allowed_logins() or not configured():
@@ -376,8 +386,8 @@ async def _labeller(n: int) -> tuple[str | None, dict | None]:
 
 
 async def _rig_issue(n: int) -> tuple[dict | None, dict | None]:
-    """Issue n if it is an open, non-PR issue carrying RIG_LABEL applied by an allowlisted login;
-    otherwise a refusal. Every write endpoint goes through this, so the relay cannot be used to
+    """Issue n if it is an open, non-PR issue carrying RIG_LABEL, opened by an allowlisted login
+    and labelled by one; otherwise a refusal. Every write endpoint goes through this, so the relay cannot be used to
     comment on or relabel anything that is not a legitimate rig-test request."""
     issue, err = await _gh("GET", _repo_path(f"/issues/{n}"), allow=(404,))
     if err:
@@ -389,6 +399,8 @@ async def _rig_issue(n: int) -> tuple[dict | None, dict | None]:
         or "pull_request" in issue
         or RIG_LABEL not in (name.lower() for name in _label_names(issue))
     ):
+        return None, refusal
+    if not _is_allowed(_author(issue)):
         return None, refusal
     login, err = await _labeller(n)
     if err:
@@ -404,8 +416,9 @@ _list_cache: dict = {"key": None, "expires": 0.0, "requests": []}
 @app.get("/rig-tests")
 @_never_raise
 async def rig_tests() -> dict:
-    """Pending rig-test requests, or {"ok": False, "reason": ...}. An issue is listed only if the
-    most recent application of the label was by an allowlisted login. Cached for 30 s."""
+    """Pending rig-test requests, or {"ok": False, "reason": ...}. An issue is listed only if its
+    author and the login that most recently applied the label are both allowlisted. Cached for
+    30 s."""
     if (gate := _rig_gate()) is not None:
         return gate
     allowed = _allowed_logins()
@@ -425,6 +438,13 @@ async def rig_tests() -> dict:
             continue
         n = item.get("number")
         if not isinstance(n, int):
+            continue
+        if not _is_allowed(_author(item)):
+            log.info(
+                "rig-test #%s ignored: opened by %r, not on the allowlist",
+                n,
+                _author(item),
+            )
             continue
         login, err = await _labeller(n)
         if err:
