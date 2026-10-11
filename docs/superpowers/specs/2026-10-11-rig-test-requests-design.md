@@ -154,25 +154,31 @@ Never in the vocabulary (ADR-0012 §3): `/labamp/sensors/write`, `PUT /nidaq/cha
 
 ### Relay (`apps/force-app/bug-report-relay/server.py`)
 
-New env: `RIG_TEST_ALLOWED_LOGINS` (comma-separated). If it's empty, all rig-test endpoints answer
-`{"ok": false, "reason": "rig tests not configured"}`, the same fail-closed contract as `/report`.
+New env: `RIG_TEST_ALLOWED_LOGINS` (comma-separated) and `RIG_TEST_RELAY_TOKEN` (the rig token).
+If either is empty, all rig-test endpoints answer `{"ok": false, "reason": "rig tests not
+configured"}`, the same fail-closed contract as `/report`. Every `/rig-tests*` call, `GET`
+included, must carry the token in an `X-Rig-Token` header (compared in constant time); a missing
+or wrong one gets HTTP 403 `{"ok": false, "reason": "rig token rejected"}`. The rig PC holds the
+same token, from `FORCE_APP_RIG_TEST_TOKEN` or the first line of `<config dir>/rig_test_token`. It
+is never built into the app, and never logged or put in a comment, report or diagnostics.
 
 | Endpoint | Does |
 |---|---|
-| `GET /rig-tests` | Open issues labelled `rig-test-request`. For each one, check the issue's `labeled` events: the most recent application of the label must be by an allowlisted login, and the issue's author must be an allowlisted login too (an author can edit the block after the label is on), or the issue is left out. Returns number, title, body, labeller, state label, created_at. Cached for 30 s, with an ETag to GitHub. |
+| `GET /rig-tests` | Open issues labelled `rig-test-request`. For each one, check the issue's `labeled` events: the most recent application of the label must be by an allowlisted login, and the issue's author must be an allowlisted login too (an author can edit the block after the label is on), or the issue is left out. The labeller is found by reading the last page of events first (the `Link: rel="last"` header) and walking back, within a 10-page bound. An issue that can't be verified (too many events, a bad GitHub reply) is skipped and logged; it doesn't fail the list. Returns number, title, body, labeller, state label, created_at. Cached for 30 s, with an ETag to GitHub. |
 | `GET /rig-tests/{n}/actions?since=<comment id>` | (phase 3) Comments after `since` that are by allowlisted logins, not by the App's own bot, and contain a `rig-action` block. Returns the raw blocks; the backend parses them. |
 | `POST /rig-tests/{n}/comment` | Creates a comment, then returns its id. Refuses an issue that isn't an open `rig-test-request` issue, so it can't be used to post anywhere else. |
-| `PATCH /rig-tests/{n}/comment/{id}` | Edits a comment the App created on that issue (the progress comment). |
+| `PATCH /rig-tests/{n}/comment/{id}` | Edits a comment the App created on that issue (the progress comment). Refuses a comment whose body holds a `<!-- rig-test-result` marker, so a result can't be rewritten. |
 | `POST /rig-tests/{n}/state` | Sets one `rig-test:*` state label and removes the others. |
 
 State labels: `rig-test:deferred`, `rig-test:declined`, `rig-test:running`, `rig-test:partial`,
 `rig-test:done`, `rig-test:interrupted`. `rig-test-request` itself stays on the issue until the
 run is `done`. A declined or partial request then shows up again at the next poll once its state
-label is cleared, so the maintainer can ask again by removing it. The relay has no auth of its
-own (tailnet only), so anyone on the tailnet could post a comment through it. The worst they
-could do is post a false result comment on a rig-test issue. They can't make the rig run
-anything, because commands are checked against GitHub authorship, not against who called the
-relay.
+label is cleared, so the maintainer can ask again by removing it. The relay is reachable from the
+whole tailnet, so network position is not trusted: without the rig token a tailnet host can
+neither read requests nor post a comment (a forged result, say) or set a label through the
+relay. With the token, the relay still only writes to an issue that passes the checks above, and
+the rig never runs anything because of who called it, only because of GitHub authorship. The token
+is a shared secret: anyone who can read the rig PC's config folder, or the relay's env, has it.
 
 ### Backend (`apps/force-app/backend/app/rig_test/`)
 
@@ -184,10 +190,13 @@ relay.
   that was active when the app last stopped, are kept in the state file and re-sent every poll
   until they get through.
 - `eligibility.py`: answers requests only when `nidaq: simulated=False` with at least one chassis,
-  and the Lab Amp client is not the mock. The rig id comes from `FORCE_APP_RIG_ID`, or the
-  hostname if that isn't set, and is shown in Settings → About. `FORCE_APP_RIG_TEST_ALLOW_SIM=1`
-  (tests, hardware-free runs) makes any PC eligible only if `FORCE_APP_BUG_REPORT_RELAY_URL` is
-  also set, so a dev machine never answers requests from the production relay.
+  and the Lab Amp client is not the mock. The rig id comes from `FORCE_APP_RIG_ID`, or is `rig` if
+  that isn't set (never the Windows hostname: the id is posted on a public issue), and is shown in
+  Settings → About. `FORCE_APP_RIG_TEST_ALLOW_SIM=1` (tests, hardware-free runs) makes any PC
+  eligible only if `FORCE_APP_BUG_REPORT_RELAY_URL` is set to something other than the production
+  relay, so a dev machine never answers requests from it. Without a rig token the PC is not
+  eligible ("rig test token not set (see Settings → Rig tests)") and doesn't poll.
+- `relay.py`: the client for the endpoints above; sends the rig token on every call.
 - `catalog.py`: parses the bundled `catalog.md`, resolves a request's items, validates every step
   against `actions.py`, and computes the full and automated-only estimates.
 - `runner.py`: the state machine. `pending → accepted → running → (done | partial | cancelled |
@@ -263,13 +272,13 @@ renderer sends its upload-queue state with the accept call.
 
 The progress comment is edited in place:
 
-> **Rig test #231, running on force-rig-1**: accepted by `op@lab` at 14:02, full run, about 12 min.
+> **Rig test #231, running on force-rig-1**: accepted by D.P. at 14:02, full run, about 12 min.
 > Step 4 of 9: R4 › `ask`: waiting for the operator.
 
 The result comment is new, so that GitHub notifies the maintainer:
 
 ```markdown
-### Rig test result: partial (force-rig-1, app 0.1.40, 14:02–14:13, accepted by op@lab)
+### Rig test result: partial (force-rig-1, app 0.1.40, 14:02–14:13, accepted by D.P.)
 
 | Item | Result | Evidence |
 |---|---|---|
@@ -285,6 +294,13 @@ Result values: `pass`, `fail`, `no_response`, `skipped_automated_only`, `skipped
 ticking session writes `— <date>, rig test #N (op): OK` after the item, or for a fail
 `FAIL, see #N` and a new or reopened issue, following the backlog's own rules.
 
+The repository is public, so the comments carry no personal data: the operator is initials only
+(the web sends initials and the recorder reduces anything else to initials, 12 characters at
+most), and the rig id is `rig` unless an admin sets `FORCE_APP_RIG_ID`. Operator and request text
+is fenced or escaped, with Windows account names redacted and `<!--` / `-->` broken up, so a note
+can't add a second `rig-test-result` marker. Issue links are shown only if they look like
+`https://github.com/<owner>/<repo>/issues/<n>`.
+
 A result comment can't exceed GitHub's 60 000 characters. If it would, operator notes are shortened
 first, then the table's evidence column. The hidden JSON is kept whole, and each item in it carries
 its `title` so a ticking session can match the backlog line.
@@ -299,10 +315,14 @@ like any capture, and the report says "upload queued".
 
 ## Error handling
 
-- **Relay unreachable, or not configured**: nothing is shown. Settings → Rig tests says why.
+- **Relay unreachable, or not configured**: nothing is shown. Settings → Rig tests says why. No
+  rig token on this PC, or one the relay rejects (403), is shown the same way, with its own text.
 - **The request body doesn't parse, or names an unknown item or action**: the request is never
   shown to the operator. The app posts one comment explaining the error and sets
-  `rig-test:declined` with reason `invalid request`.
+  `rig-test:declined` with reason `invalid request`. This includes a body over 64 KB and a YAML
+  value the parser can't build (`2026-13-01`, a 5000-digit number). One bad request never stops
+  the poll: each issue is judged on its own, and an unexpected error on one is logged and skipped.
+  An unchanged body that was already judged invalid is skipped before it is parsed again.
 - **An action fails, for example a DAQmx error**: the step is marked `error` with the message,
   steps that depend on it are skipped, and the run continues.
 - **The relay is down when a run ends**: the result comment and label are kept in the outbox and

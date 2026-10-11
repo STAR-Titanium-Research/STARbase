@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DECLINE_REASONS, NOTIFY_MAX, clip, currentPosition, declineBody, estimateText, finishedText, formatApproxDuration, formatClock,
-	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, acceptBody, appVersionOf, isUploadBusy, operatorName, progress, promptMode, questionKey, rigBlocked, barAskText,
+	httpUrl, justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, acceptBody, appVersionOf, isUploadBusy, operatorInitials, progress, promptMode, questionKey, rigBlocked, barAskText,
 	questionNotification, requestNotification, runView, secondsLeft, shouldReopen, snoozeUntil, stepMark, summaryCounts, timeLeft,
 	type RigRequest, type RigRun, type RunStep, type StepStatus,
 } from './rigTestLogic';
@@ -280,6 +280,8 @@ describe('relayInfo and snoozedUntilText', () => {
 		expect(relayInfo('ok').text).toBe('Request relay reachable');
 		expect(relayInfo('unreachable').tone).toBe('bad');
 		expect(relayInfo(undefined).text).toMatch(/not configured/);
+		expect(relayInfo('token_rejected').tone).toBe('bad');
+		expect(relayInfo('token_rejected').text).toMatch(/rig token/);
 	});
 	it('says when a snoozed request comes back', () => {
 		expect(snoozedUntilText('after_recording')).toMatch(/next recording/);
@@ -289,13 +291,15 @@ describe('relayInfo and snoozedUntilText', () => {
 });
 
 describe('what accept tells the recorder', () => {
-	it('the operator is the first and last name, never the email', () => {
-		expect(operatorName({ first_name: 'Ada', last_name: 'Lovelace' })).toBe('Ada Lovelace');
-		expect(operatorName({ first_name: ' Ada ', last_name: null })).toBe('Ada');
-		expect(operatorName({ last_name: 'Lovelace' })).toBe('Lovelace');
-		expect(operatorName({ first_name: '', last_name: ' ' })).toBeUndefined();
-		expect(operatorName(null)).toBeUndefined();
-		expect(operatorName({ first_name: 'Ada', last_name: 'L', email: 'ada@x.org' } as any)).not.toContain('@');
+	it('the operator is initials only: never the name or the email (the repository is public)', () => {
+		expect(operatorInitials({ first_name: 'Ada', last_name: 'Lovelace' })).toBe('A.L.');
+		expect(operatorInitials({ first_name: ' ada ', last_name: null })).toBe('A.');
+		expect(operatorInitials({ last_name: 'Lovelace' })).toBe('L.');
+		expect(operatorInitials({ first_name: 'Ünal', last_name: '"Çelik"' })).toBe('Ü.Ç.');
+		expect(operatorInitials({ first_name: '1', last_name: '_' })).toBeUndefined();
+		expect(operatorInitials({ first_name: '', last_name: ' ' })).toBeUndefined();
+		expect(operatorInitials(null)).toBeUndefined();
+		expect(operatorInitials({ first_name: 'Ada', last_name: 'L', email: 'ada@x.org' } as any)).toBe('A.L.');
 	});
 	it('the version is the shell\'s, else the bundled one, else absent', () => {
 		expect(appVersionOf('0.1.37', '0.1.36')).toBe('0.1.37');
@@ -311,5 +315,16 @@ describe('what accept tells the recorder', () => {
 		expect(acceptBody({ uploadBusy: false })).toEqual({ mode: 'full', upload_busy: false });
 		expect(acceptBody({ uploadBusy: true, operator: 'Ada', appVersion: '1.0.0' }))
 			.toEqual({ mode: 'full', upload_busy: true, operator: 'Ada', app_version: '1.0.0' });
+	});
+});
+
+describe('httpUrl (what may be bound as an href)', () => {
+	it('keeps http and https links', () => {
+		expect(httpUrl('https://github.com/o/r/issues/231')).toBe('https://github.com/o/r/issues/231');
+		expect(httpUrl('http://example.com/x')).toBe('http://example.com/x');
+	});
+	it('drops every other scheme, a relative path, an empty value and a non-string', () => {
+		const bad = ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'data:text/html,<script>1</script>', 'file:///C:/x', 'vbscript:x', '//evil.example', '/issues/1', '', '   ', null, undefined, 7, {}];
+		for (const b of bad) expect(httpUrl(b)).toBe('');
 	});
 });

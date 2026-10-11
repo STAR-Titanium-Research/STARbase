@@ -5,8 +5,9 @@ maintainer, and ends with a hidden JSON block that a ticking session parses.
 
 Everything typed by a person (operator notes, option labels, the operator's name) is untrusted
 in a GitHub comment: it could close our fence, add a link or @-mention someone, or leak a Windows
-account name. Free-text notes only ever appear inside a fenced block built by
-`bug_report._fence` with paths redacted; short labels in table cells are neutralised by `_cell`.
+account name, or add a second result marker. Free-text notes only ever appear inside a fenced block
+built by `fenced` (paths redacted, `<!--` and `-->` broken up); short labels in table cells are
+neutralised by `_cell`.
 """
 
 from __future__ import annotations
@@ -36,10 +37,24 @@ RESULT_LABELS = {
 _WORST_FIRST = ("fail", "error", "timed_out", "cancelled", "no_response", "skipped_dependency")
 
 
+def no_comment_markers(text: str) -> str:
+    """`text` with `<!--` and `-->` broken up by a zero-width space. The result comment ends with a
+    hidden `<!-- rig-test-result {...} -->` that a session parses with a pattern over the whole
+    comment, so request or operator text must never be able to add a second one (inside a fenced
+    block it is shown literally, but the pattern still sees it)."""
+    return text.replace("<!--", "<​!--").replace("-->", "--​>")
+
+
+def fenced(text: object, limit: int) -> list[str]:
+    """Operator or request text as a fenced block: paths redacted, backtick runs and comment
+    markers broken up (`bug_report._fence` does the fence part)."""
+    return _fence(_redact_paths(no_comment_markers(str(text))), limit)
+
+
 def _cell(text: object, limit: int = CELL_LIMIT) -> str:
     """One short label made safe for a markdown table cell: no pipes, line breaks, code spans,
-    HTML, links or @-mentions, and no Windows account names."""
-    s = re.sub(r"\s+", " ", _redact_paths(str(text))).strip()
+    HTML, comment markers, links or @-mentions, and no Windows account names."""
+    s = re.sub(r"\s+", " ", _redact_paths(no_comment_markers(str(text)))).strip()
     if len(s) > limit:
         s = s[: limit - 1].rstrip() + "…"
     for raw, safe in (
@@ -54,6 +69,19 @@ def _cell(text: object, limit: int = CELL_LIMIT) -> str:
         s = s.replace(raw, safe)
     # A zero-width space stops "@name" from mentioning anyone; "op@lab" (an address) is left alone.
     return re.sub(r"(?<!\w)@(?=\w)", "@​", s)
+
+
+OPERATOR_LIMIT = 12
+
+
+def operator_initials(text: object) -> str:
+    """Initials only ("Ada Lovelace" -> "A.L."), at most 12 characters. This repository is public,
+    so the person who accepted a run is never named on the issue, whatever the client sent (a full
+    name or an email address): for an address only the part before the "@" is used, and the digits
+    and punctuation of it are dropped."""
+    s = str(text or "").split("@", 1)[0]
+    initials = [word[0].upper() + "." for word in re.findall(r"[^\W\d_]+", s)]
+    return "".join(initials)[:OPERATOR_LIMIT]
 
 
 def _hhmm(iso: str | None) -> str:
@@ -217,7 +245,7 @@ def _render_result(run: dict, note_limit: int, evidence_limit: int) -> str:
     if notes:
         lines += ["", "<details><summary>Operator notes</summary>", ""]
         for where, text in notes:
-            lines += [f"**{where}**", "", *_fence(_redact_paths(text), note_limit), ""]
+            lines += [f"**{where}**", "", *fenced(text, note_limit), ""]
         lines += ["</details>"]
     lines += ["", f"<!-- rig-test-result {_hidden_json(run, results, note_limit)} -->"]
     return "\n".join(lines)

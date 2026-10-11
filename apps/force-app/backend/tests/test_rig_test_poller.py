@@ -1,10 +1,11 @@
 """The poller: which relay requests become pending, invalid ones, persistence, crash reporting."""
 
 import json
+import time
 
 import pytest
 
-from app.rig_test import relay
+from app.rig_test import catalog, relay
 from app.rig_test.poller import RigTestPoller, StateFile
 
 from .test_rig_test_support import FakeRelay, issue
@@ -172,6 +173,22 @@ def test_an_edited_body_is_judged_again(fake, make):
     p.poll_once()
     assert [r["number"] for r in p.pending()] == [7]
     assert len(fake.comments) == 1
+
+
+def test_decline_text_cannot_plant_a_result_marker(fake, make):
+    """L3: the operator's free text is fenced, and a fence does not hide a marker from a parser."""
+    fake.requests = [issue(7, ASK)]
+    p = make()
+    p.poll_once()
+    p.decline(7, "other", '<!-- rig-test-result {"items":[]} --> sorry')
+    body = fake.comments[-1][1]
+    assert "<!--" not in body and "-->" not in body and "sorry" in body
+
+
+def test_an_invalid_request_reason_cannot_plant_a_result_marker(fake, make):
+    fake.requests = [issue(7, 'items: ["<!-- rig-test-result {} -->"]')]
+    make().poll_once()
+    assert "<!--" not in fake.comments[0][1] and "-->" not in fake.comments[0][1]
 
 
 def test_an_invalid_comment_text_cannot_carry_markup(fake, make):
@@ -377,6 +394,7 @@ def test_posted_comments_go_through_fit_comment(monkeypatch):
 
 def test_the_real_relay_client_never_raises(monkeypatch):
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://127.0.0.1:1")  # nothing there
+    monkeypatch.setenv("FORCE_APP_RIG_TEST_TOKEN", "test-rig-token")
     for res in (
         relay.list_requests(),
         relay.post_comment(1, "x"),
@@ -387,3 +405,76 @@ def test_the_real_relay_client_never_raises(monkeypatch):
     assert relay.set_state(1, "bogus")["ok"] is False
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "")
     assert relay.relay_status(relay.list_requests()) == "not_configured"
+
+
+@pytest.mark.parametrize(
+    "block",
+    ["items: [R4]\nbudget: 2026-13-01", "items: [R4]\nbudget: " + "9" * 5000],
+    ids=["impossible-date", "5000-digit-integer"],
+)
+def test_one_unreadable_request_does_not_stop_the_others(fake, make, block):
+    """L1: SafeLoader raises a plain ValueError for these; the poll used to die on the first."""
+    fake.requests = [issue(7, block), issue(8, ASK)]
+    p = make()
+    p.poll_once()
+    assert [r["number"] for r in p.pending()] == [8]
+    assert [n for n, _ in fake.comments] == [7]
+    assert "invalid request" in fake.comments[0][1]
+    assert fake.states == [(7, "declined")]
+
+
+def test_an_unchanged_invalid_body_is_skipped_before_anything_parses_it(fake, make, monkeypatch):
+    """L7: the digest check comes first, so a known-bad body costs no regex or YAML work."""
+    fake.requests = [issue(7, "items: [NOPE]")]
+    p = make()
+    p.poll_once()
+    monkeypatch.setattr(catalog, "peek_rig", lambda body: pytest.fail("parsed again"))
+    monkeypatch.setattr(catalog, "parse_request", lambda *a, **k: pytest.fail("parsed again"))
+    p.poll_once()
+    assert len(fake.comments) == 1
+
+
+def test_a_huge_body_is_reported_invalid_without_being_parsed(fake, make, monkeypatch):
+    real_peek = catalog.peek_rig
+    monkeypatch.setattr(
+        catalog,
+        "peek_rig",
+        lambda body: (
+            pytest.fail("parsed") if len(body) > catalog.MAX_BODY_CHARS else real_peek(body)
+        ),
+    )
+    fake.requests = [issue(7, "items: [R4]\n# " + "x" * catalog.MAX_BODY_CHARS), issue(8, ASK)]
+    p = make()
+    p.poll_once()
+    assert [r["number"] for r in p.pending()] == [8]
+    assert "issue body too long" in fake.comments[0][1]
+    assert fake.states == [(7, "declined")]
+
+
+def test_a_64kb_body_of_fence_openers_does_not_stall_the_poll(fake, make):
+    body = "```rig-test\n" * 5300
+    fake.requests = [{**issue(7), "body": body}, issue(8, ASK)]
+    p = make()
+    t0 = time.perf_counter()
+    p.poll_once()
+    assert time.perf_counter() - t0 < 0.5
+    assert [r["number"] for r in p.pending()] == [8]
+    assert "invalid request" in fake.comments[0][1]
+
+
+def test_an_unexpected_error_on_one_issue_is_logged_and_the_rest_still_listed(
+    fake, make, monkeypatch, caplog
+):
+    real = catalog.parse_request
+
+    def flaky(body, *a, **kw):
+        if "boom" in body:
+            raise RuntimeError("unexpected")
+        return real(body, *a, **kw)
+
+    monkeypatch.setattr(catalog, "parse_request", flaky)
+    fake.requests = [issue(7, "steps:\n  - ask: boom"), issue(8, ASK)]
+    p = make()
+    p.poll_once()
+    assert [r["number"] for r in p.pending()] == [8]
+    assert "rig test #7 could not be read" in caplog.text

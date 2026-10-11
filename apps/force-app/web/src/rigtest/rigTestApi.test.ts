@@ -36,6 +36,11 @@ describe('GET routes', () => {
 		const r = await getEligibility();
 		expect(r.kind === 'ok' && r.data.relay).toBe('unknown');
 	});
+	it('GET /eligibility keeps relay "token_rejected" (the relay refused this PC\'s token)', async () => {
+		stub(200, { eligible: true, rig_id: 'rig-1', relay: 'token_rejected' });
+		const r = await getEligibility();
+		expect(r.kind === 'ok' && r.data.relay).toBe('token_rejected');
+	});
 	it('GET /pending returns requests, snoozed and busy', async () => {
 		stub(200, { requests: [{ number: 1 }], snoozed: [{ number: 2, snoozed_until: 'after_recording' }], busy: true });
 		const r = await getPending();

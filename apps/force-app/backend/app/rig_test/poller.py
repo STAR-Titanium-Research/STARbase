@@ -22,10 +22,9 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 
-from ..bug_report import _fence, _redact_paths
 from ..storage import atomic_write_json
 from . import catalog, relay
-from .report import _cell
+from .report import _cell, fenced
 from .runner import iso_local
 
 log = logging.getLogger("force_app.rig_test")
@@ -304,7 +303,11 @@ class RigTestPoller:
         for issue in sorted(
             res["requests"], key=lambda i: (str(i.get("created_at")), i.get("number", 0))
         ):
-            request = self._consider(issue)
+            try:
+                request = self._consider(issue)
+            except Exception:  # noqa: BLE001 - one bad issue must not hide the others
+                log.exception("rig test #%s could not be read; skipping it", issue.get("number"))
+                continue
             if request:
                 pending.append(request)
         self._set_pending(pending)
@@ -321,11 +324,16 @@ class RigTestPoller:
         handled = self._store.get("handled", {}).get(str(n))
         if handled and self._wall() - handled["at"] < HANDLED_GRACE_S:
             return None
-        rig = catalog.peek_rig(body)
-        if rig and rig.lower() != self._rig_id().lower():
-            return None
+        # Cheapest checks first: an unchanged body that was already judged invalid is skipped
+        # before anything parses it, and a huge one is never parsed at all.
         digest = hashlib.sha1(body.encode("utf-8", "replace")).hexdigest()[:12]
         if self._store.get("invalid", {}).get(str(n)) == digest:
+            return None
+        if len(body) > catalog.MAX_BODY_CHARS:
+            self._reject(n, catalog.BODY_TOO_LONG, digest)
+            return None
+        rig = catalog.peek_rig(body)
+        if rig and rig.lower() != self._rig_id().lower():
             return None
         try:
             resolved = catalog.parse_request(body)
@@ -430,7 +438,7 @@ class RigTestPoller:
         label = DECLINE_REASONS[reason_code]
         lines = [f"**Rig test #{n} declined** on {_cell(self._rig_id(), 80)}: {label}."]
         if text and text.strip():
-            lines += ["", *_fence(_redact_paths(text), 500)]
+            lines += ["", *fenced(text, 500)]
         self._settle(n, "declined")
         relay.post_comment(n, "\n".join(lines))
         relay.set_state(n, "declined")

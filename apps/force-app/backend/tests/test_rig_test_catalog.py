@@ -1,5 +1,7 @@
 """Parsing the backlog into a catalogue and an issue body into runnable steps (phase 1)."""
 
+import time
+
 import pytest
 
 from app.rig_test import catalog
@@ -275,6 +277,46 @@ def test_the_real_backlog_resolves_r4_and_190():
     req = parse_request(BODY.format(block='items: [R4, "#185"]'), index)
     assert req.steps[0].text.startswith("R4")
     assert all(len(s.text) <= catalog.MAX_PROSE_TEXT for s in req.steps)
+
+
+def test_a_64kb_body_of_unclosed_openers_is_parsed_in_linear_time():
+    """L7: the lazy-quantifier fence regex was quadratic on this."""
+    body = "```rig-test\n" * (64_000 // len("```rig-test\n"))
+    assert len(body) <= catalog.MAX_BODY_CHARS
+    t0 = time.perf_counter()
+    with pytest.raises(RigRequestError, match="no ```rig-test block"):
+        parse_request(body, {})
+    assert catalog.peek_rig(body) is None
+    nested = "```rig-test\n  \n" * 4000 + "```\n"  # openers, then one closer
+    with pytest.raises(RigRequestError):
+        parse_request(nested, {})
+    assert time.perf_counter() - t0 < 0.5
+
+
+def test_a_body_over_the_cap_is_an_invalid_request():
+    body = BODY.format(block="items: [R4]") + "x" * catalog.MAX_BODY_CHARS
+    with pytest.raises(RigRequestError, match="issue body too long"):
+        parse_request(body, {})
+    assert catalog.peek_rig(body) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "blocks", "rest"),
+    [
+        ("a\n```rig-test\nx: 1\n```\nb", ["x: 1\n"], "a\nb"),
+        ("a\r\n  ```rig-test \r\nx: 1\r\n\t```  \r\nb", ["x: 1\n"], "a\nb"),
+        ("```rig-test\n```", [""], ""),
+        ("```rig-test\n1\n```\n```rig-test\n2\n```", ["1\n", "2\n"], ""),
+        ("```rig-test\nnever closed", [], "```rig-test\nnever closed"),
+        (
+            "```python\nx\n```\n```rig-test-not\ny\n```",
+            [],
+            "```python\nx\n```\n```rig-test-not\ny\n```",
+        ),
+    ],
+)
+def test_split_fences(text, blocks, rest):
+    assert catalog.split_fences(text) == (blocks, rest)
 
 
 def test_catalog_falls_back_to_the_repo_backlog_when_no_bundled_copy(monkeypatch, tmp_path):

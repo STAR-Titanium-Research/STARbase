@@ -24,8 +24,9 @@ Constraints:
   shipped to the PC would be public. Today the
   [bug-report relay](../../apps/force-app/bug-report-relay/server.py) on d1-server holds the GitHub
   App key and files issues for the app (`POST /report`, `GET /issues`).
-- **The relay is reachable only over Tailscale** and has no authentication of its own
-  (`infra/caddy/Caddyfile`, `handle_path /bug-report-relay/*`). Claude cloud sessions are not on
+- **The relay is reachable only over Tailscale**, and its older endpoints have no authentication
+  of its own (`infra/caddy/Caddyfile`, `handle_path /bug-report-relay/*`); the rig-test endpoints
+  add a shared token (decision 2). Claude cloud sessions are not on
   the tailnet, so they can't reach the relay or the rig. They can reach GitHub.
 - **The backend only listens on loopback** (`app/origin_guard.py`). Nothing off the PC can talk to
   it directly, and that should stay true.
@@ -50,7 +51,12 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
    (an author can edit the request after the label is on), and an action comment only if an
    allowlisted login wrote it. Comments by the relay's own bot (`d1-database-bug-reporter[bot]`)
    are never read as commands. Anything else is dropped and logged. The rig app polls the relay; nothing
-   connects inbound to the rig, and the backend still listens on loopback only.
+   connects inbound to the rig, and the backend still listens on loopback only. The relay also
+   authenticates its caller: every `/rig-tests*` call must carry a shared **rig token**
+   (`X-Rig-Token`, set on d1-server as `RIG_TEST_RELAY_TOKEN` and on the rig PC through
+   `FORCE_APP_RIG_TEST_TOKEN` or a `rig_test_token` file in its config folder). Without it a
+   tailnet host could post a forged result as the App bot. The token is not built into the app,
+   and the relay refuses to edit a comment that already holds a result.
 
 3. **The rig runs only a fixed action vocabulary compiled into the app.** An action is a name and
    validated parameters (pydantic, with bounded ranges such as a recording of at most 120 s). No
@@ -105,7 +111,14 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
   covers issue events, comments and labels. It still gets no Contents permission.
 - Every round trip of the live loop goes rig → relay → GitHub → Claude and back. Expect 5 to 15 s
   per step, so live runs suit checks that take minutes, not tight interactive tuning.
-- The relay's allowlist and the app's action vocabulary are the two security boundaries. A new
+- Tailnet hosts can no longer write through the relay (or read requests) without the rig token.
+  The token is a shared secret held on d1-server and the rig PC; rotate it by changing both.
+  It protects the relay's endpoints, not GitHub: a person who can label and write issues as an
+  allowlisted login is still trusted by design.
+- The repository is public, so everything the rig posts is public. Results name the operator by
+  initials only and the rig by a neutral id (`rig`, or `FORCE_APP_RIG_ID`), never a full name,
+  email or the Windows hostname.
+- The relay's allowlist, the rig token and the app's action vocabulary are the security boundaries. A new
   action that writes to hardware or disk needs a review against decision 3 and an update to this
   ADR.
 - Test captures upload to a dedicated Directus project, "Rig tests". Dashboards and campaign views
@@ -115,7 +128,8 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
 
 ## Verification
 
-- Relay tests: label applied by a login not on the allowlist → the request is not listed; an
+- Relay tests: a call with a missing or wrong `X-Rig-Token` → 403 on every endpoint, nothing sent
+  to GitHub; a result comment can't be edited; label applied by a login not on the allowlist → the request is not listed; an
   action comment by a login not on the allowlist, or by the relay's own bot → it is not returned.
 - Backend tests: `/record/start` → 409 while an automated step runs (and free during an `ask`); accept → 409 while recording or
   finalizing; Cancel and the hard time limit restore the captured amp state; a journal left by a

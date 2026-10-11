@@ -10,7 +10,7 @@ import { useDialog } from '../ui/useDialog';
 import { confirmAndCancelRun } from './confirmCancel';
 import { rigTest } from './rigTestStore';
 import {
-	currentPosition, finishedText, formatClock, minimisedText, progress, questionKey, secondsLeft, stepMark, timeLeft,
+	currentPosition, finishedText, formatClock, httpUrl, minimisedText, progress, questionKey, secondsLeft, stepMark, timeLeft,
 	type RigRun,
 } from './rigTestLogic';
 
@@ -25,7 +25,7 @@ const title = computed(() => {
 	const t = r ? r.title || s.known[r.number]?.title : '';
 	return t ? `Rig test #${r!.number}: ${t}` : `Rig test #${r?.number ?? ''}`;
 });
-const link = computed(() => (run.value ? run.value.url || s.known[run.value.number]?.url : '') || '');
+const link = computed(() => httpUrl(run.value ? run.value.url || s.known[run.value.number]?.url : ''));
 const prog = computed(() => (run.value ? progress(run.value) : null));
 const question = computed(() => (finished.value ? undefined : run.value?.question));
 const questionStep = computed(() => run.value?.steps.find((x) => x.index === question.value?.step));

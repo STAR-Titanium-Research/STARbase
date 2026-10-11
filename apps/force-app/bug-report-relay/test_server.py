@@ -16,9 +16,13 @@ def _reset_cache():
     yield
 
 
+RIG_TOKEN = "rig-secret-token"
+
+
 @pytest.fixture
 def client():
-    return TestClient(srv.app)
+    # The rig PC's token on every call; tests of the token itself build their own client.
+    return TestClient(srv.app, headers={"X-Rig-Token": RIG_TOKEN})
 
 
 def test_health_reports_unconfigured_by_default(client, monkeypatch):
@@ -447,8 +451,19 @@ class FakeGitHub:
                 return httpx.Response(200, json=issue)
             if tail == ["events"]:
                 page = int(request.url.params.get("page", 1))
+                events = self.events[n]
+                if events is None:
+                    return httpx.Response(200, json=None)
+                # Like GitHub: a Link header with rel="last" whenever there is more than a page.
+                last = max(1, -(-len(events) // 100))
+                headers = {}
+                if last > 1:
+                    base = f"https://api.github.com{path}?per_page=100"
+                    headers["Link"] = (
+                        f'<{base}&page={page + 1}>; rel="next", <{base}&page={last}>; rel="last"'
+                    )
                 return httpx.Response(
-                    200, json=self.events[n][(page - 1) * 100 : page * 100]
+                    200, json=events[(page - 1) * 100 : page * 100], headers=headers
                 )
             if tail == ["comments"] and method == "POST":
                 cid = 1000 + len(self.comments)
@@ -496,6 +511,7 @@ def bot_comment(cid, n, body, **overrides):
 def gh(monkeypatch):
     _configure(monkeypatch)
     monkeypatch.setenv("RIG_TEST_ALLOWED_LOGINS", "maintainer, Other-Admin")
+    monkeypatch.setenv("RIG_TEST_RELAY_TOKEN", RIG_TOKEN)
     srv._list_cache.update(key=None, expires=0.0, requests=[])
     srv._bot_login.clear()
     fake = FakeGitHub()
@@ -519,6 +535,63 @@ def test_rig_tests_fail_closed_without_an_allowlist(client, gh, monkeypatch):
         assert r.status_code == 200
         assert r.json() == {"ok": False, "reason": "rig tests not configured"}
     assert gh.calls == []
+
+
+def test_rig_tests_fail_closed_without_a_relay_token(client, gh, monkeypatch):
+    gh.issue(5)
+    for value in (None, "", "  "):
+        if value is None:
+            monkeypatch.delenv("RIG_TEST_RELAY_TOKEN")
+        else:
+            monkeypatch.setenv("RIG_TEST_RELAY_TOKEN", value)
+        for r in _all_rig_endpoints(client):
+            assert r.status_code == 200
+            assert r.json() == {"ok": False, "reason": "rig tests not configured"}
+    assert gh.calls == []
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"X-Rig-Token": ""},
+        {"X-Rig-Token": "wrong"},
+        {"X-Rig-Token": RIG_TOKEN + "x"},
+    ],
+)
+def test_every_rig_endpoint_rejects_a_missing_or_wrong_token(gh, headers):
+    """A tailnet host without the token can neither read nor write (M1): forging a result
+    comment is the case that mattered."""
+    gh.issue(5)
+    gh.comments[9] = bot_comment(9, 5, "progress")
+    c = TestClient(srv.app)
+    forged = '<!-- rig-test-result {"items":[]} -->'
+    for r in (
+        c.get("/rig-tests", headers=headers),
+        c.post("/rig-tests/5/comment", json={"body": forged}, headers=headers),
+        c.patch("/rig-tests/5/comment/9", json={"body": "forged"}, headers=headers),
+        c.post("/rig-tests/5/state", json={"state": "done"}, headers=headers),
+    ):
+        assert r.status_code == 403
+        assert r.json() == {"ok": False, "reason": "rig token rejected"}
+    assert gh.calls == []
+    assert gh.comments[9]["body"] == "progress"
+
+
+def test_the_right_token_is_accepted_on_a_get(gh):
+    gh.issue(5)
+    r = TestClient(srv.app).get("/rig-tests", headers={"X-Rig-Token": RIG_TOKEN})
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+
+def test_token_is_compared_in_constant_time(gh, monkeypatch):
+    seen = []
+    real = srv.hmac.compare_digest
+    monkeypatch.setattr(
+        srv.hmac, "compare_digest", lambda a, b: seen.append(1) or real(a, b)
+    )
+    TestClient(srv.app).get("/rig-tests", headers={"X-Rig-Token": "x"})
+    assert seen
 
 
 def test_rig_tests_fail_closed_without_the_github_app(client, gh, monkeypatch):
@@ -628,7 +701,50 @@ def test_list_unexpected_payload_never_500s(client, gh):
     gh.issue(5)
     gh.events[5] = None  # json null instead of a list
     r = client.get("/rig-tests")
+    assert r.status_code == 200 and r.json() == {"ok": True, "requests": []}
+    # a write to that issue is refused with a reason, not a 500
+    r = client.post("/rig-tests/5/comment", json={"body": "x"})
     assert r.status_code == 200 and r.json()["ok"] is False
+
+
+def test_one_unverifiable_issue_does_not_hide_the_others(client, gh):
+    """L2: an issue with too many events (or any error verifying it) is skipped and logged."""
+    gh.issue(5)
+    gh.events[5] = [{"event": "commented"}] * (100 * srv._EVENT_PAGES_MAX + 1)
+    gh.issue(6)
+    gh.issue(7)
+    gh.events[7] = None
+    gh.issue(8)
+    assert [r["number"] for r in client.get("/rig-tests").json()["requests"]] == [6, 8]
+    # the same issue still fails closed on a write
+    r = client.post("/rig-tests/5/comment", json={"body": "x"})
+    assert r.json()["ok"] is False and "too many events" in r.json()["reason"]
+
+
+def test_the_latest_label_event_is_found_from_the_last_page(client, gh):
+    """L2: a long thread costs two calls (page 1 for the Link header, then the last page), not
+    every page."""
+    gh.issue(5)
+    noise = [{"event": "commented"}] * 450
+    gh.events[5] = [labeled("stranger")] + noise + [labeled("maintainer")]
+    assert [r["number"] for r in client.get("/rig-tests").json()["requests"]] == [5]
+    assert sum(p.endswith("/events") for _, p in gh.calls) == 2
+
+
+def test_the_walk_goes_backwards_to_an_older_page_and_is_bounded(client, gh):
+    gh.issue(5)
+    # label on page 1 only, 3 pages in all: pages 3, 2 are read (and page 1 reused)
+    gh.events[5] = [labeled("maintainer")] + [{"event": "commented"}] * 250
+    assert len(client.get("/rig-tests").json()["requests"]) == 1
+    assert sum(p.endswith("/events") for _, p in gh.calls) == 3
+    # more pages than the cap, label only at the very start: fail closed, bounded reads
+    gh.calls.clear()
+    srv._list_cache["expires"] = 0.0
+    gh.events[5] = [labeled("maintainer")] + [{"event": "commented"}] * (
+        100 * srv._EVENT_PAGES_MAX + 50
+    )
+    assert client.get("/rig-tests").json() == {"ok": True, "requests": []}
+    assert sum(p.endswith("/events") for _, p in gh.calls) == srv._EVENT_PAGES_MAX + 1
 
 
 def test_comment_posts_to_a_rig_test_issue(client, gh):
@@ -701,6 +817,17 @@ def test_patch_edits_the_apps_own_comment(client, gh):
     r = client.patch("/rig-tests/5/comment/9", json={"body": "step 2"})
     assert r.json() == {"ok": True, "id": 9}
     assert gh.comments[9]["body"] == "step 2"
+
+
+def test_patch_refuses_a_comment_that_holds_a_result(client, gh):
+    """The rig only edits its progress comment; the result marker is write-once (M1)."""
+    gh.issue(5)
+    body = 'Result\n<!-- rig-test-result {"items":[{"id":"R4","status":"pass"}]} -->'
+    gh.comments[9] = bot_comment(9, 5, body)
+    r = client.patch("/rig-tests/5/comment/9", json={"body": "forged"})
+    assert r.json()["ok"] is False
+    assert gh.comments[9]["body"] == body
+    assert [(m, p) for m, p in gh.calls if m == "PATCH"] == []
 
 
 def test_patch_refuses_a_humans_comment(client, gh):

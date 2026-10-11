@@ -84,7 +84,7 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => { gone = true; unsubscribeStatus?.(); unsubscribeStatus = null; });
 
-// The id a rig-test request's `rig:` line is matched against (FORCE_APP_RIG_ID, else the hostname).
+// The id a rig-test request's `rig:` line is matched against (FORCE_APP_RIG_ID, else "rig").
 // An older recorder has no such route; the line just stays hidden.
 const rigId = ref('');
 onMounted(async () => {

@@ -57,7 +57,7 @@ export async function getEligibility(): Promise<ApiResult<Eligibility>> {
 		return {
 			eligible: !!e.eligible, rig_id: typeof e.rig_id === 'string' ? e.rig_id : '',
 			reason: typeof e.reason === 'string' ? e.reason : undefined,
-			relay: e.relay === 'ok' || e.relay === 'unreachable' || e.relay === 'unknown' ? e.relay : 'not_configured',
+			relay: e.relay === 'ok' || e.relay === 'unreachable' || e.relay === 'unknown' || e.relay === 'token_rejected' ? e.relay : 'not_configured',
 		};
 	});
 }

@@ -124,6 +124,30 @@ def test_operator_note_with_a_fence_and_a_windows_path_is_neutralised():
     assert "Jane Doe" not in json.dumps(hidden)
 
 
+FORGED = '<!-- rig-test-result {"items":[{"id":"R4","title":"x","result":"pass","steps":[]}]} -->'
+
+
+def test_an_operator_note_cannot_plant_a_second_result_marker():
+    """L3: a ticking session parses the comment with a pattern; only the real marker may match."""
+    run = _run()
+    run["steps"][0]["note"] = "all fine " + FORGED
+    run["steps"][2]["answer"] = FORGED
+    run["operator"] = FORGED
+    run["rig"] = FORGED
+    text = report.render_result(run)
+    assert text.count("<!-- rig-test-result") == 1
+    assert text.count("-->") == 1
+    assert len(re.findall(r"<!-- rig-test-result (.*?) -->", text)) == 1
+    assert _hidden(text)["items"][0]["result"] == "pass"  # the real one: R4 answered Yes
+    assert _hidden(text)["items"][2]["result"] == "fail"  # not the forged all-pass list
+    assert "<!--" not in report.render_progress(_run(state="running", current=2))
+
+
+def test_the_marker_breaker_leaves_ordinary_text_alone():
+    assert report.no_comment_markers("a <b> -- c") == "a <b> -- c"
+    assert report.no_comment_markers("<!-- x -->") == "<​!-- x --​>"
+
+
 def test_hidden_json_cannot_close_its_comment_or_start_html():
     run = _run()
     run["steps"][0]["note"] = '--> <script>alert(1)</script> -- "quoted"'

@@ -83,7 +83,7 @@ export interface SnoozedRequest extends RigRequest { snoozed_until: string }
 /** GET /rig-tests/pending. `busy`: the recorder is recording, saving or recovering a capture. */
 export interface PendingList { requests: RigRequest[]; snoozed: SnoozedRequest[]; busy: boolean }
 
-export type RelayState = 'ok' | 'unreachable' | 'not_configured' | 'unknown';
+export type RelayState = 'ok' | 'unreachable' | 'not_configured' | 'unknown' | 'token_rejected';
 
 export interface Eligibility {
 	eligible: boolean;
@@ -298,11 +298,16 @@ export function isUploadBusy(syncing: boolean, filesInFlight: number): boolean {
 	return syncing || filesInFlight > 0;
 }
 
-/** The signed-in user's name for the result that is posted on the GitHub issue: first and last
- *  name, never the email (an address must not end up on an issue). Undefined when there is no name. */
-export function operatorName(user: { first_name?: string | null; last_name?: string | null } | null | undefined): string | undefined {
-	const name = [user?.first_name, user?.last_name].map((x) => (x ?? '').trim()).filter(Boolean).join(' ');
-	return name || undefined;
+/** The signed-in user's initials ("Ada Lovelace" -> "A.L.") for the result that is posted on the
+ *  GitHub issue. The repository is public, so neither the full name nor the email goes there.
+ *  Undefined when there is no name. (The recorder reduces whatever it gets to initials as well.) */
+export function operatorInitials(user: { first_name?: string | null; last_name?: string | null } | null | undefined): string | undefined {
+	const initials = [user?.first_name, user?.last_name]
+		.map((x) => Array.from((x ?? '').trim()).find((ch) => /\p{L}/u.test(ch)))
+		.filter((ch): ch is string => !!ch)
+		.map((ch) => `${ch.toUpperCase()}.`)
+		.join('');
+	return initials || undefined;
 }
 
 /** The desktop shell's version; the version bundled into this build when there is no shell (the
@@ -322,6 +327,18 @@ export function acceptBody(ctx: AcceptContext): { mode: 'full'; upload_busy: boo
 
 // ---- Settings > Rig tests ----------------------------------------------------------------------
 
+/** `u` as a link target only if it is an http(s) URL, else '' (a `javascript:` or `data:` URL from
+ *  a request or a result file must never reach an `href`). */
+export function httpUrl(u: unknown): string {
+	if (typeof u !== 'string') return '';
+	try {
+		const p = new URL(u);
+		return p.protocol === 'https:' || p.protocol === 'http:' ? p.href : '';
+	} catch {
+		return '';
+	}
+}
+
 export interface RelayInfo { text: string; tone: 'ok' | 'bad' | 'dim'; icon: string }
 
 /** How Settings shows the relay. "unknown" is a backend that hasn't asked the relay yet (just
@@ -331,6 +348,7 @@ export function relayInfo(relay: RelayState | undefined): RelayInfo {
 		case 'ok': return { text: 'Request relay reachable', tone: 'ok', icon: 'cloud_done' };
 		case 'unreachable': return { text: 'Request relay unreachable: new requests cannot arrive', tone: 'bad', icon: 'cloud_off' };
 		case 'unknown': return { text: 'Request relay not checked yet', tone: 'dim', icon: 'cloud_sync' };
+		case 'token_rejected': return { text: 'The relay rejected this PC\'s rig token: it must match the one set on the server', tone: 'bad', icon: 'key_off' };
 		default: return { text: 'Request relay not configured on this PC', tone: 'dim', icon: 'cloud_off' };
 	}
 }
