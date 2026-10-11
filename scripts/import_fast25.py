@@ -269,19 +269,7 @@ def write_operations(
         for o in ops
     ]
 
-    update_cols = [
-        c
-        for c in cols
-        if c
-        not in (
-            "operation_id",
-            "source_run_uid",
-            "method_id",
-            "process_category",
-            "source_system",
-        )
-    ]
-    set_clause = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+    set_clause = fast_ops.upsert_set_clause(cols)
     # A hand-logged operation of this machine and run (typed by a person) becomes the imported run.
     adopted = fast_ops.adopt_hand_logged(
         cur,

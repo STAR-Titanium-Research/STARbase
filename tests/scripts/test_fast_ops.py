@@ -253,3 +253,92 @@ def test_fast250_upsert_fills_in_the_hand_logged_run_and_codes_a_new_one(cur):
         [hand],
     )
     assert cur.fetchone()[0] == 1
+
+
+def _operator(cur, name):
+    # the stub table has no id default on a migrated database (Directus adds one on live)
+    cur.execute(
+        'INSERT INTO "Machine_Operators" (id, "Name") '
+        'SELECT coalesce(max(id), 0) + 1, %s FROM "Machine_Operators" RETURNING id',
+        [name],
+    )
+    return cur.fetchone()[0]
+
+
+def _person_fields(cur, op_id):
+    cur.execute(
+        "SELECT owner::text, outcome_notes, operator, operator_name, sintering_material_type_note "
+        "FROM manufacturing_operations WHERE operation_id = %s",
+        [op_id],
+    )
+    return cur.fetchone()
+
+
+def test_fast25_import_keeps_what_a_person_typed_on_a_hand_logged_run(cur):
+    mf, e25 = _method_id(cur), _machine(cur, "FCT HP D 25")
+    mine, theirs = str(uuid.uuid4()), str(uuid.uuid4())
+    typed_op = _operator(cur, f"T0D typed {uuid.uuid4().hex[:6]}")
+    import_op_name = f"T0D import {uuid.uuid4().hex[:6]}"
+    import_op = _operator(cur, import_op_name)
+    hand = _hand_logged(
+        cur, mf, e25, RUN, owner=mine, outcome_notes="my notes", operator=typed_op,
+        operator_name="Typed Name", sintering_material_type_note="my material",
+    )
+    imported = _fast25_op(
+        RUN, datetime(2026, 3, 5, 12, 0), notes="import notes", material_text=None,
+        operator_disp=None, operator_name=None,
+    )
+    kw = dict(code_to_mat={}, by_prog={}, resolve_owner=lambda o: theirs, equipment_id=e25, method_id=mf)
+
+    # adoption pass: the person's owner and notes stay; a NULL import never wipes operator or material text
+    assert import_fast25.write_operations(cur, [imported], op_to_id={}, **kw)[:2] == (1, 1)
+    assert _person_fields(cur, hand) == (mine, "my notes", typed_op, "Typed Name", "my material")
+
+    # a second import that now knows the operator updates it, still keeps owner and notes
+    imported = {**imported, "operator_disp": import_op_name, "operator_name": "Import Name",
+                "material_text": "import material"}
+    assert import_fast25.write_operations(cur, [imported], op_to_id={import_op_name: import_op}, **kw)[:2] == (1, 0)
+    assert _person_fields(cur, hand) == (mine, "my notes", import_op, "Import Name", "import material")
+
+    # a blank owner / notes is filled in by the import
+    cur.execute("UPDATE manufacturing_operations SET owner = NULL, outcome_notes = NULL WHERE operation_id = %s", [hand])
+    import_fast25.write_operations(cur, [imported], op_to_id={import_op_name: import_op}, **kw)
+    assert _person_fields(cur, hand)[:2] == (theirs, "import notes")
+
+
+def test_fast250_import_keeps_what_a_person_typed_on_a_hand_logged_run(cur):
+    mf, e250 = _method_id(cur), _machine(cur, "FCT HP D 250")
+    mine, theirs = str(uuid.uuid4()), str(uuid.uuid4())
+    typed_op = _operator(cur, f"T0D typed {uuid.uuid4().hex[:6]}")
+    hand = _hand_logged(
+        cur, mf, e250, 331, owner=mine, outcome_notes="my notes", operator=typed_op,
+        operator_name="Typed Name", sintering_material_type_note="my material",
+    )
+    op = {
+        "run_no": 331, "source_run_uid": import_fast250.uid_for(331),
+        "operation_id": import_fast250.op_id_for(331),
+        "operation_date": datetime(2026, 7, 20, 12, 0), "operator_disp": None, "operator_name": None,
+        "owner_email": None, "material_code": None, "material_text": None, "recipe": None,
+        "mass_grams": None, "outcome_notes": "import notes", "trace_rel": None,
+    }
+    kw = dict(code_to_mat={}, resolve_owner=lambda o: theirs, equipment_id=e250, method_id=mf)
+    for _ in range(2):  # the adoption pass, then a plain re-import
+        import_fast250.write_operations(cur, [op], op_to_id={}, **kw)
+        assert _person_fields(cur, hand) == (mine, "my notes", typed_op, "Typed Name", "my material")
+
+    imp_name = f"T0D import {uuid.uuid4().hex[:6]}"
+    imp = _operator(cur, imp_name)
+    import_fast250.write_operations(
+        cur, [{**op, "operator_disp": imp_name, "operator_name": "Import Name"}],
+        op_to_id={imp_name: imp}, **kw,
+    )
+    assert _person_fields(cur, hand)[2:4] == (imp, "Import Name")
+
+
+def test_a_frozen_experiment_sheet_row_is_never_adopted(cur):
+    mf, e25 = _method_id(cur), _machine(cur, "FCT HP D 25")
+    sheet = _hand_logged(cur, mf, e25, RUN, source_system="experiment_sheet")
+    uid = import_fast25.uid_for(RUN)
+    assert fast_ops.adopt_hand_logged(cur, e25, "fast_25", [(RUN, uid)]) == 0
+    assert _row(cur, sheet)[:2] == (None, "experiment_sheet")
+    assert fast_ops.operation_ids_for(cur, [uid]) == {}

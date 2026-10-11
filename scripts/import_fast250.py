@@ -296,19 +296,7 @@ def write_operations(
         SOURCE_SYSTEM,
         [(fast_ops.run_number(o["run_no"]), o["source_run_uid"]) for o in ops],
     )
-    update_cols = [
-        c
-        for c in cols
-        if c
-        not in (
-            "operation_id",
-            "source_run_uid",
-            "method_id",
-            "process_category",
-            "source_system",
-        )
-    ]
-    set_clause = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+    set_clause = fast_ops.upsert_set_clause(cols)
     psycopg2.extras.execute_values(
         cur,
         f"INSERT INTO manufacturing_operations ({', '.join(cols)}) VALUES %s "
