@@ -68,3 +68,18 @@ describe('update-notify bridge (#197)', () => {
     expect(invoke).toHaveBeenCalledWith('updateNotify:set', false);
   });
 });
+
+describe('rig-test notify bridge', () => {
+  it('invokes notify:show with the two strings and hands back the shell\'s answer', async () => {
+    const { ipcRenderer } = await import('electron');
+    const invoke = ipcRenderer.invoke as ReturnType<typeof vi.fn>;
+    invoke.mockResolvedValueOnce({ ok: true });
+    await expect(h.exposed.notify('Rig test #5 needs you', 'Did the chip warn?')).resolves.toEqual({ ok: true });
+    expect(invoke).toHaveBeenCalledWith('notify:show', 'Rig test #5 needs you', 'Did the chip warn?');
+  });
+
+  it('exposes nothing beyond the call itself (no way to read or hold a notification)', () => {
+    expect(typeof h.exposed.notify).toBe('function');
+    expect(h.exposed.notify.length).toBe(2);
+  });
+});

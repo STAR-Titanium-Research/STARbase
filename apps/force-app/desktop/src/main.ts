@@ -4,6 +4,7 @@ import { ConfigStore } from './config';
 import { applyMenuBarMode, buildMenu } from './menu';
 import { findAvailablePort } from './port';
 import { registerAppScheme, handleAppProtocol } from './protocol';
+import { handleNotify } from './notify';
 import { checkRevealTarget } from './reveal';
 import { isCrashRecovery, restartRecorder, unknownStatusDialog } from './restart';
 import { watchRenderer } from './rendererWatch';
@@ -30,6 +31,7 @@ const HEALTH_PATH = '/health';
 // #197: the scheduled task launches `Force App.exe --update-check` while the app is closed. That
 // run is only a notifier: no window, no recorder backend, no config or capture access.
 const updateCheckMode = isUpdateCheckArgv(process.argv);
+const rigToasts = new Set<Notification>(); // rig-test toasts, held until closed
 let updateToast: Notification | null = null; // kept referenced, or the toast's click handler is collected
 
 // Single-instance lock. A second launch would spawn a second sidecar (the port probe would push
@@ -298,6 +300,31 @@ function registerShellIpc(): void {
     if (!fromApp(event)) return { ok: false, reason: 'not allowed from this page' };
     const root = await currentCapturesRoot();
     return root ? revealInFileBrowser(requested, root) : NO_BACKEND;
+  });
+
+  // Rig tests: the prompt and each question that needs the operator. Two short strings, shown only
+  // while the window that asked isn't focused (see notify.ts).
+  ipcMain.handle('notify:show', (event, title: unknown, body: unknown) => {
+    if (!fromApp(event)) return { ok: false, reason: 'not allowed from this page' };
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    return handleNotify(
+      {
+        isFocused: () => !!win && !win.isDestroyed() && win.isFocused() && !win.isMinimized(),
+        show: (n) => {
+          if (!Notification.isSupported()) throw new Error('notifications are not supported');
+          const toast = new Notification(n);
+          rigToasts.add(toast); // kept referenced, or the click handler is collected
+          toast.on('click', () => {
+            if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.focus(); }
+          });
+          toast.on('close', () => rigToasts.delete(toast));
+          toast.show();
+        },
+        flash: () => { if (win && !win.isDestroyed()) win.flashFrame(true); },
+      },
+      title,
+      body,
+    );
   });
 
   // R11: Settings > Connectivity's "Restart recorder". Goes through the same supervisor as launch
