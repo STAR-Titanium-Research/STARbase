@@ -32,14 +32,17 @@ import './tokens.css';
 	position: sticky;
 	top: var(--d1-sticky-top, 0px);
 	max-height: calc(100vh - var(--d1-sticky-top, 0px) - 16px);
+	max-height: calc(100dvh - var(--d1-sticky-top, 0px) - 16px);
 	overflow: auto;
 	min-width: 0;
+	/* overflow: auto clips what is drawn outside the box: room for the rail's shadow and focus outlines. */
+	padding: 2px 4px 8px;
 }
 /* The panels stack with the page frame's 16px gap. */
 .main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 @container (max-width: 1000px) {
 	.grid { grid-template-columns: minmax(0, 1fr); }
-	.rail { position: static; max-height: none; overflow: visible; --d1-fact-grid: repeat(auto-fill, minmax(280px, 1fr)); }
+	.rail { position: static; max-height: none; overflow: visible; padding: 0; --d1-fact-grid: repeat(auto-fill, minmax(280px, 1fr)); }
 	.rail :deep(.d1-page-contents) { display: none; }
 }
 </style>

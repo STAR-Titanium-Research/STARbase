@@ -56,7 +56,7 @@ const listed = (f: Fact) => capList(f.list ?? [], expanded.value.has(f.label) ? 
    --d1-fact-grid (RecordLayout does when it stacks the rail at the top of a narrow page). */
 .d1-facts {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+	grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
 	column-gap: 28px;
 	margin: 0;
 	padding: 0;

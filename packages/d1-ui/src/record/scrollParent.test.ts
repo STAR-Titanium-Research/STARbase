@@ -22,3 +22,18 @@ describe('findScrollParent', () => {
 		expect(findScrollParent(root, style)).toBeNull();
 	});
 });
+
+describe('findScrollParent with a target', () => {
+	it('skips a scroller that does not contain the target (the rail beside the sections)', () => {
+		const page = el('page', 'auto');
+		const rail = el('rail', 'auto', page);
+		const nav = el('nav', 'visible', rail);
+		const section = el('section', 'visible', page);
+		const contains = (target: Fake) => (s: Fake) => {
+			for (let e: Fake | null = target; e; e = e.parentElement) if (e === s) return true;
+			return false;
+		};
+		expect(findScrollParent(nav, style)?.name).toBe('rail');
+		expect(findScrollParent(nav, style, contains(section))?.name).toBe('page');
+	});
+});
