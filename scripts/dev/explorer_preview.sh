@@ -45,7 +45,8 @@ echo "$out" | grep -E '^Applying' || echo "no pending migrations"
 
 # --- local test users on the copy: an admin (through an admin policy) and a Lab Member (role + people row)
 ADMIN_EMAIL="preview-admin-$(rhex 3)@example.invalid"; LM_EMAIL="preview-member-$(rhex 3)@example.invalid"
-ADMIN_PASS="$(rhex 12)"; LM_PASS="$(rhex 12)"; TOKEN="preview-$(rhex 16)"
+# The copy keeps live's password policy (upper, lower, digit, symbol).
+ADMIN_PASS="Pv$(rhex 10)A!"; LM_PASS="Pv$(rhex 10)M!"; TOKEN="preview-$(rhex 16)"
 admin_id=$(psql_copy -Atc "
   WITH p AS (SELECT id FROM directus_policies WHERE admin_access ORDER BY name LIMIT 1),
   u AS (INSERT INTO directus_users (id, email, status, token, first_name, last_name)
@@ -77,8 +78,10 @@ curl -fs "http://127.0.0.1:$PORT/server/health" >/dev/null || abort "directus no
 
 # Passwords through the API so Directus hashes them.
 for pair in "$admin_id:$ADMIN_PASS" "$lm_id:$LM_PASS"; do
-  curl -fs -X PATCH "http://127.0.0.1:$PORT/users/${pair%%:*}" -H "Authorization: Bearer $TOKEN" \
-    -H 'Content-Type: application/json' -d "{\"password\":\"${pair#*:}\"}" >/dev/null || abort "set password"
+  mkdir -p .superpowers
+  code=$(curl -s -o .superpowers/preview-resp.json -w '%{http_code}' -X PATCH "http://127.0.0.1:$PORT/users/${pair%%:*}" \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "{\"password\":\"${pair#*:}\"}")
+  [[ "$code" == 2* ]] || abort "set password (HTTP $code)" "$(cat .superpowers/preview-resp.json 2>/dev/null)"
 done
 mkdir -p .superpowers
 printf 'url=http://127.0.0.1:%s/admin\nadmin=%s %s\nmember=%s %s\n' "$PORT" "$ADMIN_EMAIL" "$ADMIN_PASS" "$LM_EMAIL" "$LM_PASS" > "$CREDS"
