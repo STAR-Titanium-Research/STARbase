@@ -4,7 +4,7 @@ import { ConfigStore } from './config';
 import { applyMenuBarMode, buildMenu } from './menu';
 import { findAvailablePort } from './port';
 import { registerAppScheme, handleAppProtocol } from './protocol';
-import { handleNotify } from './notify';
+import { handleNotify, ToastKeeper } from './notify';
 import { checkRevealTarget } from './reveal';
 import { isCrashRecovery, restartRecorder, unknownStatusDialog } from './restart';
 import { watchRenderer } from './rendererWatch';
@@ -31,7 +31,8 @@ const HEALTH_PATH = '/health';
 // #197: the scheduled task launches `Force App.exe --update-check` while the app is closed. That
 // run is only a notifier: no window, no recorder backend, no config or capture access.
 const updateCheckMode = isUpdateCheckArgv(process.argv);
-const rigToasts = new Set<Notification>(); // rig-test toasts, held until closed
+const rigToasts = new ToastKeeper<Notification>(); // rig-test toasts: bounded, emptied when the operator is back at the window
+const focusHooked = new WeakSet<BrowserWindow>();
 let updateToast: Notification | null = null; // kept referenced, or the toast's click handler is collected
 
 // Single-instance lock. A second launch would spawn a second sidecar (the port probe would push
@@ -313,11 +314,17 @@ function registerShellIpc(): void {
         show: (n) => {
           if (!Notification.isSupported()) throw new Error('notifications are not supported');
           const toast = new Notification(n);
-          rigToasts.add(toast); // kept referenced, or the click handler is collected
+          rigToasts.add(toast); // kept referenced (or the click handler is collected), at most MAX_RIG_TOASTS
           toast.on('click', () => {
             if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.focus(); }
           });
-          toast.on('close', () => rigToasts.delete(toast));
+          toast.on('close', () => rigToasts.forget(toast));
+          // Back at the window: the toasts are stale. (A Windows toast in the Action Center may
+          // never emit 'close', so this is what stops them piling up.)
+          if (win && !win.isDestroyed() && !focusHooked.has(win)) {
+            focusHooked.add(win);
+            win.on('focus', () => rigToasts.closeAll());
+          }
           toast.show();
         },
         flash: () => { if (win && !win.isDestroyed()) win.flashFrame(true); },
