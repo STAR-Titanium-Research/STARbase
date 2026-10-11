@@ -278,7 +278,9 @@ Where the build differs from the sections above, the build wins:
 - **§2 host:** `explorerHost.ts` (beside `ExplorerView.vue`) is the second Directus-aware file: Home,
   People and Register sample sit above `ExplorerView` and read `isAdmin` from it. `/users/me` also
   fetches `role` (for the bookmark rule). `isAdmin` is seeded from the Directus user store and then
-  corrected from `GET /policies/me/globals`. A failed admin check means "not admin", with no message.
+  corrected from `GET /policies/me/globals` (a failed call keeps the store's guess); `adminKnown`
+  says when the server has answered, and Register sample waits for it before showing its
+  "no person record" warning.
 - **§3 sidebar:** the brand is hidden inside Directus (its own project header sits above the nav);
   collections with `meta.hidden` are left out; the bookmark request uses a visibility filter (own,
   or shared with no role or with the user's role), because an admin can read every user's private
@@ -288,7 +290,11 @@ Where the build differs from the sections above, the build wins:
   "Show the whole list"; "Clear filters" in the filter bar keeps the saved view; a `sort` from the
   URL is accepted only if the page offers it; relation columns the user cannot read are requested
   as the bare key; record rows carry a real link in the first cell (middle-click opens a new tab).
-  Record pages' "See the full list" links carry their context (`?q=<sample code>`, `?f.project_id=`).
+  Record pages' "See the full list" links carry their context (`?q=<sample code>`, `?f.project_id=`;
+  the project filter matches a record's own project only, so it can show fewer rows than the
+  project page, which also counts records through their campaign). The first request waits for
+  `/collections` (shared with the sidebar, once per session); chip options are cached for the
+  session; a saved view opened by id is applied only if the sidebar's visibility rule allows it.
 - **§6 finder:** `MIN_QUERY = 2`; Inventory shows 5 hits in total across its five sources, each
   labelled with its kind; a short-ID hit tops its own group (groups keep their order); Ctrl K does
   nothing while a Directus drawer or dialog is open (Directus mounts them in `#dialog-outlet`);
