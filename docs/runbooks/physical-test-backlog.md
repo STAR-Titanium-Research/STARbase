@@ -25,7 +25,7 @@ from the copy of this file built into its release, so a request can only name it
 version. Give every new rig item (§B) a bold id at the start (`**R12 — …**` or `**#240 …**`). From
 phase 2 on, also add a `rig-test` step block after the item's prose. Until then, the app shows
 an item's prose to the operator as one Pass/Fail/Skip question. A request's block is a fence
-tagged `rig-test` containing, for example, `items: [R4, "#190"]`. No example fence is written
+tagged `rig-test` containing, for example, `items: [R4, "#185"]`. No example fence is written
 here, because the app parses this file.
 
 Item ids are the UX review's (`docs/reviews/2026-10-05-ux-utility-review.md`) or the GitHub issue
@@ -1094,7 +1094,7 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
   appears on the Settings item, and the Record page is never covered. After the cut is saved, the
   dialog appears. Accepting while a capture is uploading is refused, and the prompt says why.
 - [ ] **The operator can do the checks during a run.** Phase 1 does not lock the rig, so with
-  a run open, ask for an item that needs a recording, such as #190. Minimise the modal: the bottom
+  a run open, ask for an item that needs a recording, such as #185. Minimise the modal: the bottom
   bar shows the step and the time left, and a recording starts and saves as normal. A question
   that arrives during the cut shows only on the bar ("Waiting for you — after this cut"). The
   modal opens once the Save dialog is closed. Throughout, keyboard focus stays in the Save

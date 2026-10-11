@@ -17,7 +17,7 @@ is phase 3. Both get their own plan.
 | B. Backend `rig_test` package + rig lock | `.claude/worktrees/agent-a27071929ebf5cd44` | `worktree-agent-a27071929ebf5cd44` | `force-app-implementer` (sonnet, high) | done (4 commits; backend 818 tests pass, verified over HTTP with a stub relay), merged |
 | C. Web prompt, run modal, Settings tab, desktop notify | `.claude/worktrees/agent-a6c4a305de047f410` | `worktree-agent-a6c4a305de047f410` | `force-app-implementer` (sonnet, high) | done (5 commits; web 819 and desktop 264 tests pass, e2e stubbed), merged |
 | D. Docs, conventions, deploy config | coordinator | `ccr-52e8d6c9-5rl4pg` | coordinator | done (backlog, CLAUDE.md, triage skill) |
-| Review | coordinator branch | `ccr-52e8d6c9-5rl4pg` | `force-app-reviewer` (opus, high), then a security review (opus, high) | Opus review done (2 blockers, 14 should-fix); fixes in progress in two Sonnet worktrees (backend+relay, web+desktop); security review next |
+| Review | coordinator branch | `ccr-52e8d6c9-5rl4pg` | `force-app-reviewer` (opus, high), then a security review (opus, high) | Opus review fixes merged (backend 866, relay 46, web 853, desktop 269 tests pass); security review in progress |
 
 Workflow per stream (owner's instruction, 2026-10-11): plan → code → `/simplify` → debug (full suites, typecheck, `force-app-verify` where it applies) → Opus review → security review → coordinator merge.
 

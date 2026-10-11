@@ -69,7 +69,7 @@ A request is an issue in the repo the relay files to (`GITHUB_REPO`), with the l
 ```rig-test
 rig: force-rig-1          # optional; omit = any eligible rig
 budget: 20m               # optional; required for live runs (phase 3)
-items: [R4, "#190", R5]   # backlog item ids to run, each resolved from the step catalogue
+items: [R4, "#185", R5]   # backlog item ids to run, each resolved from the step catalogue
 ```
 ````
 
