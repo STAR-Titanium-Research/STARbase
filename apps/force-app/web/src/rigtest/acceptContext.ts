@@ -5,7 +5,7 @@ import { authStore } from '../authStore';
 import { CHANGELOG } from '../changelog';
 import { syncStatus } from '../record/directusSync';
 import { uploadsInFlight } from '../record/uploadCapture';
-import { appVersionOf, isUploadBusy, operatorName, type AcceptContext } from './rigTestLogic';
+import { appVersionOf, isUploadBusy, operatorInitials, type AcceptContext } from './rigTestLogic';
 
 async function shellVersion(): Promise<string | undefined> {
 	try { return (await window.forceApp?.getUpdateInfo())?.version; } catch { return undefined; } // browser build or bridge down
@@ -14,7 +14,7 @@ async function shellVersion(): Promise<string | undefined> {
 export async function currentAcceptContext(): Promise<AcceptContext> {
 	return {
 		uploadBusy: isUploadBusy(syncStatus.syncing, uploadsInFlight.value),
-		operator: operatorName(authStore.currentUser.value),
+		operator: operatorInitials(authStore.currentUser.value),
 		appVersion: appVersionOf(await shellVersion(), CHANGELOG[0]?.version),
 	};
 }

@@ -71,6 +71,19 @@ def _cell(text: object, limit: int = CELL_LIMIT) -> str:
     return re.sub(r"(?<!\w)@(?=\w)", "@​", s)
 
 
+OPERATOR_LIMIT = 12
+
+
+def operator_initials(text: object) -> str:
+    """Initials only ("Ada Lovelace" -> "A.L."), at most 12 characters. This repository is public,
+    so the person who accepted a run is never named on the issue, whatever the client sent (a full
+    name or an email address): for an address only the part before the "@" is used, and the digits
+    and punctuation of it are dropped."""
+    s = str(text or "").split("@", 1)[0]
+    initials = [word[0].upper() + "." for word in re.findall(r"[^\W\d_]+", s)]
+    return "".join(initials)[:OPERATOR_LIMIT]
+
+
 def _hhmm(iso: str | None) -> str:
     return iso[11:16] if iso and len(iso) >= 16 else "?"
 

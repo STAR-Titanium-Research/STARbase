@@ -98,7 +98,7 @@ class _Run:
             "url": issue_url(request.get("url")),
             "rig": rig,
             "app_version": meta.get("app_version") or "unknown",
-            "operator": meta.get("operator") or "",
+            "operator": report.operator_initials(meta.get("operator")),
             "mode": "full",
             "state": "running",
             "started_at": iso_local(wall),

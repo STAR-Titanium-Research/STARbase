@@ -298,11 +298,16 @@ export function isUploadBusy(syncing: boolean, filesInFlight: number): boolean {
 	return syncing || filesInFlight > 0;
 }
 
-/** The signed-in user's name for the result that is posted on the GitHub issue: first and last
- *  name, never the email (an address must not end up on an issue). Undefined when there is no name. */
-export function operatorName(user: { first_name?: string | null; last_name?: string | null } | null | undefined): string | undefined {
-	const name = [user?.first_name, user?.last_name].map((x) => (x ?? '').trim()).filter(Boolean).join(' ');
-	return name || undefined;
+/** The signed-in user's initials ("Ada Lovelace" -> "A.L.") for the result that is posted on the
+ *  GitHub issue. The repository is public, so neither the full name nor the email goes there.
+ *  Undefined when there is no name. (The recorder reduces whatever it gets to initials as well.) */
+export function operatorInitials(user: { first_name?: string | null; last_name?: string | null } | null | undefined): string | undefined {
+	const initials = [user?.first_name, user?.last_name]
+		.map((x) => Array.from((x ?? '').trim()).find((ch) => /\p{L}/u.test(ch)))
+		.filter((ch): ch is string => !!ch)
+		.map((ch) => `${ch.toUpperCase()}.`)
+		.join('');
+	return initials || undefined;
 }
 
 /** The desktop shell's version; the version bundled into this build when there is no shell (the

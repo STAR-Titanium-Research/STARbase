@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import os
-import socket
 
 from ..labamp import MockLabAmp
 
 ALLOW_SIM_ENV = "FORCE_APP_RIG_TEST_ALLOW_SIM"
 RIG_ID_ENV = "FORCE_APP_RIG_ID"
+DEFAULT_RIG_ID = "rig"  # never the Windows hostname: the id is posted on a public issue
 RELAY_URL_ENV = "FORCE_APP_BUG_REPORT_RELAY_URL"
 
 
 def rig_id() -> str:
-    return (os.environ.get(RIG_ID_ENV) or "").strip() or socket.gethostname()
+    return (os.environ.get(RIG_ID_ENV) or "").strip() or DEFAULT_RIG_ID
 
 
 def check(devices: dict, labamp: object) -> tuple[bool, str | None]:

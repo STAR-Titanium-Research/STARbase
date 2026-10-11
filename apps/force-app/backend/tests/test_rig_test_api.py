@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app import recovery
-from app.rig_test import LOCKED, catalog, eligibility, relay, routes
+from app.rig_test import LOCKED, catalog, eligibility, relay, report, routes
 from app.rig_test import runner as runner_mod
 from app.rig_test.poller import StateFile
 
@@ -123,12 +123,48 @@ def test_the_sim_override_needs_an_explicit_relay_so_a_dev_machine_is_never_a_ri
     assert eligibility.check(real, main.LabAmpClient("http://127.0.0.1:1")) == (True, None)
 
 
-def test_rig_id_prefers_the_env_var_then_the_hostname(monkeypatch):
+def test_rig_id_is_the_env_var_else_a_neutral_default_never_the_hostname(monkeypatch):
+    """L5: the id is posted on a public issue, so the Windows hostname must not be the default."""
     monkeypatch.setenv("FORCE_APP_RIG_ID", " force-rig-1 ")
     assert eligibility.rig_id() == "force-rig-1"
     monkeypatch.delenv("FORCE_APP_RIG_ID")
     monkeypatch.setattr("socket.gethostname", lambda: "LABPC")
-    assert eligibility.rig_id() == "LABPC"
+    assert eligibility.rig_id() == "rig"
+    monkeypatch.setenv("FORCE_APP_RIG_ID", "  ")
+    assert eligibility.rig_id() == "rig"
+
+
+@pytest.mark.parametrize(
+    ("sent", "posted"),
+    [
+        ("Ada Lovelace", "A.L."),
+        ("A.L.", "A.L."),
+        ("dpremoli1@sheffield.ac.uk", "D."),
+        ("jane.doe@lab.example", "J.D."),
+        ("Anne-Marie O'Neil Smith-Jones", "A.M.O.N.S.J."),
+        ("Ünal Çelik", "Ü.Ç."),
+        ("", ""),
+        ("1234 @@", ""),
+    ],
+)
+def test_the_operator_is_reduced_to_initials_before_anything_is_posted(
+    client, rig, fake, sent, posted
+):
+    """L5: the client already sends initials; the backend does not rely on it."""
+    _offer(rig, fake)
+    assert _accept(client, operator=sent).status_code == 200
+    wait_for(lambda: client.get("/rig-tests/run").json().get("question"))
+    client.post("/rig-tests/run/cancel")
+    rig.runner.join()
+    posted_text = " ".join([c[1] for c in fake.comments] + [e[2] for e in fake.edits])
+    assert (f"accepted by {posted} at" in posted_text) if posted else "accepted at" in posted_text
+    assert client.get("/rig-tests/run").json().get("operator") in (None, posted)
+    for leak in ("Lovelace", "Doe", "sheffield", "dpremoli", "op@", "Ünal", "Marie"):
+        assert leak not in posted_text
+
+
+def test_initials_are_capped_at_12_characters():
+    assert len(report.operator_initials("a b c d e f g h i j")) == 12
 
 
 def test_no_device_enumeration_during_a_recording(client, rig, fake, monkeypatch):
@@ -377,7 +413,8 @@ def test_accept_answer_and_result_over_http(client, rig, fake, tmp_path):
     wait_for(lambda: client.get("/rig-tests/run").json()["state"] == "done")
     rig.runner.join()
     assert fake.last_state(231) == "done"
-    assert "accepted by op@lab" in fake.comments[0][1] + fake.edits[-1][2]
+    posted = fake.comments[0][1] + fake.edits[-1][2]
+    assert "accepted by O." in posted and "op@lab" not in posted
     hist = client.get("/rig-tests/history").json()["runs"]
     assert len(hist) == 1
     assert hist[0]["number"] == 231 and hist[0]["state"] == "done"
