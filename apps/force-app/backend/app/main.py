@@ -2065,7 +2065,10 @@ def _capture_ids() -> list[str]:
     # scandir: the "is it a folder" answer comes with the listing, where os.path.isdir per name was
     # one more round trip per capture on a network drive.
     with os.scandir(CAPTURES_ROOT) as it:
-        return sorted((e.name for e in it if e.is_dir()), reverse=True)
+        # rig-tests/ holds rig test results, not a capture
+        return sorted(
+            (e.name for e in it if e.is_dir() and e.name != rig_test.RESULTS_DIR), reverse=True
+        )
 
 
 @app.get("/captures")

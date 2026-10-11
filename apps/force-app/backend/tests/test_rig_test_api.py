@@ -359,6 +359,16 @@ def test_a_run_accepted_while_record_start_is_parked_still_wins(client, rig, fak
     assert main._session is None
 
 
+def test_the_results_folder_is_not_listed_as_a_capture(client, rig, monkeypatch, tmp_path):
+    root = tmp_path / "captures"
+    (root / "rig-tests" / "231").mkdir(parents=True)
+    (root / "20260101-000000-abc123").mkdir()
+    monkeypatch.setattr(main, "CAPTURES_ROOT", str(root))
+    assert client.get("/captures").json() == {"captures": ["20260101-000000-abc123"]}
+    ids = [c["id"] for c in client.get("/captures/browse").json()["captures"]]
+    assert ids == ["20260101-000000-abc123"]
+
+
 def test_state_file_survives_a_restart(rig, fake, client, tmp_path):
     _offer(rig, fake)
     client.post("/rig-tests/231/snooze", json={"until": "2999-01-01T10:00:00"})
