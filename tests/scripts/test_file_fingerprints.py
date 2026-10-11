@@ -944,8 +944,8 @@ def test_once_the_share_is_found_gone_a_late_finishing_worker_writes_nothing(db)
 
 # ---- fix round 1: share-level OSErrors, Ctrl+C, honest byte counts -----------------------
 
-import errno  # noqa: E402
 import _thread  # noqa: E402
+import errno  # noqa: E402
 
 
 def share_dropped_stat(db, monkeypatch, bad=None):
