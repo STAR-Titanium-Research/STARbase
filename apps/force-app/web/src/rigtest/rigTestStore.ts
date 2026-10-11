@@ -8,11 +8,12 @@
 // It is a factory so the tests can drive it with a fake api and fake timers; `rigTest` at the
 // bottom is the app's one real instance.
 import { computed, reactive } from 'vue';
+import { saveDialogOpen } from './saveDialogOpen';
 import { rigTestApi, type ApiResult, type RigTestApi } from './rigTestApi';
 import {
-	justFinished, newRequests, promptMode, questionKey, questionNotification, requestNotification,
+	justFinished, newRequests, promptMode, rigBlocked, questionKey, questionNotification, requestNotification,
 	shouldReopen, snoozeUntil, declineBody,
-	type DeclineCode, type Eligibility, type PendingList, type RecordingPhase, type RigRequest, type RigRun, type RunSummary,
+	type DeclineCode, type Eligibility, type PendingList, type PhaseState, type RigRequest, type RigRun, type RunSummary,
 	type SnoozeChoice, type SnoozedRequest,
 } from './rigTestLogic';
 
@@ -40,7 +41,10 @@ export function createRigTestStore(deps: RigTestDeps) {
 		/** The run that just ended, shown as a summary until the operator closes it. */
 		finished: null as RigRun | null,
 		minimised: false,
-		recordingPhase: null as RecordingPhase,
+		/** From the shell's /record/status poll; 'unknown' until its first answer. */
+		recordingPhase: 'unknown' as PhaseState,
+		/** The operator pressed Show/Run now: the modal may open even while a cut is in progress. */
+		forced: false,
 		eligibility: null as Eligibility | null,
 		history: [] as RunSummary[],
 		/** Per request: what the last Run now / Snooze / Decline was refused with. */
@@ -54,7 +58,13 @@ export function createRigTestStore(deps: RigTestDeps) {
 	});
 
 	const runActive = computed(() => state.run?.state === 'running');
-	const mode = computed(() => promptMode(state.pending.length, runActive.value, state.recordingPhase));
+	const blockInputs = () => ({ phase: state.recordingPhase, saveDialogOpen: saveDialogOpen.value });
+	/** A cut is being recorded or saved (or we can't tell yet): nothing may pop over the page. */
+	const blocked = computed(() => rigBlocked({ ...blockInputs(), backendBusy: state.backendBusy }));
+	const mode = computed(() => promptMode(state.pending.length, runActive.value, blocked.value));
+	/** The run modal's version: the backend's flag is left out (it may mean "a run is going"), and
+	 *  Show / Run now override it, because the operator asked for the modal. */
+	const runBlocked = computed(() => rigBlocked(blockInputs()) && !state.forced);
 	/** The request the dialog offers: oldest first, one at a time. */
 	const head = computed(() => state.pending[0] ?? null);
 
@@ -87,6 +97,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 		if (next?.state === 'running' && (!prev || prev.number !== next.number)) state.finished = null;
 		if (shouldReopen(prev, next)) state.minimised = false;
 		const k = questionKey(next);
+		if (k && k !== questionKey(prev)) state.forced = false; // a new question waits for the cut to be saved
 		if (k && k !== questionKey(prev) && next) safeNotify(questionNotification(next));
 		state.run = next;
 	}
@@ -153,6 +164,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 	async function accept(n: number, uploadBusy: boolean): Promise<void> {
 		if (!(await act(n, 'accept', () => api.accept(n, uploadBusy)))) return;
 		state.minimised = false;
+		state.forced = true;
 		expectRunUntil = deps.now() + RUN_APPEAR_GRACE_MS;
 		await refreshAll();
 	}
@@ -199,12 +211,12 @@ export function createRigTestStore(deps: RigTestDeps) {
 	}
 
 	return {
-		state, runActive, mode, head,
+		state, runActive, mode, head, blocked, runBlocked,
 		start, stop, refreshPending, refreshRun, refreshAll, refreshEligibility, refreshHistory,
 		accept, snooze, decline, answer, cancel,
-		setRecordingPhase(p: RecordingPhase) { state.recordingPhase = p; },
-		minimise() { state.minimised = true; },
-		restore() { state.minimised = false; },
+		setRecordingPhase(p: PhaseState) { state.recordingPhase = p; },
+		minimise() { state.minimised = true; state.forced = false; },
+		restore() { state.minimised = false; state.forced = true; },
 		closeFinished() { state.finished = null; },
 	};
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DECLINE_REASONS, NOTIFY_MAX, clip, currentPosition, declineBody, estimateText, finishedText, formatApproxDuration, formatClock,
-	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, progress, promptMode, questionKey,
+	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, progress, promptMode, questionKey, rigBlocked, barAskText,
 	questionNotification, requestNotification, runView, secondsLeft, shouldReopen, snoozeUntil, stepMark, summaryCounts, timeLeft,
 	type RigRequest, type RigRun, type RunStep, type StepStatus,
 } from './rigTestLogic';
@@ -19,17 +19,35 @@ function run(extra: Partial<RigRun> = {}): RigRun {
 }
 const q = { step: 2, text: 'Pull the cable', options: ['Yes', 'No'], expires_at: '2026-10-11T14:07:00Z' };
 
+describe('rigBlocked', () => {
+	const idle = { phase: null, saveDialogOpen: false } as const;
+	it('is clear only when the shell says idle, no Save dialog is open and the backend is not busy', () => {
+		expect(rigBlocked(idle)).toBe(false);
+		expect(rigBlocked({ ...idle, backendBusy: false })).toBe(false);
+	});
+	it('is blocked while recording or finalizing', () => {
+		expect(rigBlocked({ ...idle, phase: 'recording' })).toBe(true);
+		expect(rigBlocked({ ...idle, phase: 'finalizing' })).toBe(true);
+	});
+	it('is blocked while the Save dialog is open, even though the phase is already null', () => {
+		expect(rigBlocked({ phase: null, saveDialogOpen: true })).toBe(true);
+	});
+	it('is blocked until the shell has answered once, and when the backend says it is busy', () => {
+		expect(rigBlocked({ ...idle, phase: 'unknown' })).toBe(true);
+		expect(rigBlocked({ ...idle, backendBusy: true })).toBe(true);
+	});
+});
+
 describe('promptMode: dialog or badge', () => {
-	it('is a dialog when idle', () => expect(promptMode(1, false, null)).toBe('dialog'));
-	it('is only a badge while recording or finalizing: never a dialog over the Record page mid-cut', () => {
-		expect(promptMode(1, false, 'recording')).toBe('badge');
-		expect(promptMode(1, false, 'finalizing')).toBe('badge');
+	it('is a dialog when not blocked', () => expect(promptMode(1, false, false)).toBe('dialog'));
+	it('is only a badge while blocked: never a dialog over the Record page mid-cut or over the Save dialog', () => {
+		expect(promptMode(1, false, true)).toBe('badge');
 	});
 	it('is nothing without requests, or while a run is active', () => {
-		expect(promptMode(0, false, null)).toBe('none');
-		expect(promptMode(0, false, 'recording')).toBe('none');
-		expect(promptMode(2, true, null)).toBe('none');
-		expect(promptMode(2, true, 'recording')).toBe('none');
+		expect(promptMode(0, false, false)).toBe('none');
+		expect(promptMode(0, false, true)).toBe('none');
+		expect(promptMode(2, true, false)).toBe('none');
+		expect(promptMode(2, true, true)).toBe('none');
 	});
 });
 
@@ -98,6 +116,15 @@ describe('which view the run gets', () => {
 	});
 	it('a finished run shows its summary modal, minimised or not', () => {
 		expect(runView(run({ state: 'partial' }), true, true)).toBe('modal');
+	});
+	it('while blocked (a cut is recording or being saved) a question shows on the bar, never the modal', () => {
+		expect(runView(run({ question: q }), false, false, true)).toBe('bar');
+		expect(runView(run({ question: q }), false, false, false)).toBe('modal');
+		expect(barAskText(true)).toMatch(/after this cut/);
+		expect(barAskText(false)).toBe('Waiting for you');
+	});
+	it('while blocked a finished summary waits instead of opening over the Save dialog', () => {
+		expect(runView(run({ state: 'done' }), false, true, true)).toBe('none');
 	});
 	it('reopens for a new question but not for the same one the operator minimised', () => {
 		const asking = run({ question: q });

@@ -15,6 +15,7 @@ import OfflineSessionBanner from './OfflineSessionBanner.vue';
 import UpdatePrompt from './UpdatePrompt.vue';
 import RigTestHost from './rigtest/RigTestHost.vue';
 import { rigTest } from './rigtest/rigTestStore';
+import type { PhaseState } from './rigtest/rigTestLogic';
 
 const router = useRouter();
 const route = useRoute();
@@ -29,6 +30,9 @@ onMounted(() => alarmController.reset());
 // disconnects the websocket) — recording itself is server-side and keeps running regardless, so
 // this polls the backend directly, independent of whether RecordPage is even mounted.
 const recording = ref<BannerRun | null>(null);
+// What the rig-test UI sees: 'unknown' until the first status answer, and the last answer is kept
+// when a later poll fails (the banner above resets on failure; a prompt must not take that as "idle").
+const rigPhase = ref<PhaseState>('unknown');
 // #22: elapsedSec above only refreshes once per 5s poll, so displaying it directly made the
 // banner's clock visibly jump in 5-second steps instead of ticking live. elapsedBase/-At snapshot
 // each poll's value and the moment it arrived; displayedElapsedSec (below) extrapolates from that
@@ -53,6 +57,7 @@ async function pollRecordingStatus() {
 		if (!res.ok) { recording.value = null; return; }
 		const data = await res.json();
 		const run = bannerRunFromStatus(data);
+		rigPhase.value = run?.phase ?? null;
 		if (run) {
 			elapsedBaseSec = run.elapsedSec;
 			elapsedBaseAt = performance.now();
@@ -219,7 +224,7 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 				</keep-alive>
 			</router-view>
 		</main>
-		<RigTestHost :recording-phase="recording?.phase ?? null" />
+		<RigTestHost :recording-phase="rigPhase" />
 	</div>
 </template>
 

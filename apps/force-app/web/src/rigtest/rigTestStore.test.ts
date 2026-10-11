@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiResult, RigTestApi } from './rigTestApi';
 import { PENDING_POLL_MS, RUN_POLL_MS, createRigTestStore } from './rigTestStore';
+import { saveDialogOpen } from './saveDialogOpen';
 import type { PendingList, RigRequest, RigRun } from './rigTestLogic';
 
 const ok = <T,>(data: T): ApiResult<T> => ({ kind: 'ok', data });
@@ -33,10 +34,11 @@ function fakeApi(over: Partial<Record<keyof RigTestApi, any>> = {}) {
 function make(api = fakeApi()) {
 	const notify = vi.fn();
 	const store = createRigTestStore({ api, notify, now: () => Date.now() });
+	store.setRecordingPhase(null); // the shell has answered: idle (the store starts at 'unknown')
 	return { api, notify, store };
 }
 
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-11T12:00:00Z')); });
+beforeEach(() => { saveDialogOpen.value = false; vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-11T12:00:00Z')); });
 afterEach(() => vi.useRealTimers());
 
 describe('polling', () => {
@@ -105,6 +107,77 @@ describe('the pending answer', () => {
 		expect(store.state.snoozed.map((r) => r.number)).toEqual([7]);
 		expect(store.state.backendBusy).toBe(true);
 		expect(store.state.known[7].title).toBe('Request 7');
+		store.stop();
+	});
+});
+
+describe('what blocks the prompt and the run modal', () => {
+	const asking = () => fakeApi({
+		getPending: vi.fn(async () => pend([req(1)])),
+		getRun: vi.fn(async () => ok<RigRun | null>(runOf({ question: q }))),
+	});
+
+	it('the phase is unknown until the shell answers: a badge, not a dialog (a reload mid-cut)', async () => {
+		const api = fakeApi({ getPending: vi.fn(async () => pend([req(1)])) });
+		const store = createRigTestStore({ api, notify: vi.fn(), now: () => Date.now() });
+		store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(store.state.recordingPhase).toBe('unknown');
+		expect(store.mode.value).toBe('badge');
+		store.setRecordingPhase(null);
+		expect(store.mode.value).toBe('dialog');
+		store.stop();
+	});
+
+	it('the backend saying busy keeps the prompt a badge although the shell says idle', async () => {
+		const { store } = make(fakeApi({ getPending: vi.fn(async () => pend([req(1)], { busy: true })) }));
+		store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(store.mode.value).toBe('badge');
+		store.stop();
+	});
+
+	it('an open Save dialog keeps the prompt a badge although the phase is already null', async () => {
+		const { store } = make(fakeApi({ getPending: vi.fn(async () => pend([req(1)])) }));
+		store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(store.mode.value).toBe('dialog');
+		saveDialogOpen.value = true;
+		expect(store.mode.value).toBe('badge');
+		saveDialogOpen.value = false;
+		expect(store.mode.value).toBe('dialog');
+		store.stop();
+	});
+
+	it('a question arriving mid-cut is blocked (bar) and unblocks once the cut is saved', async () => {
+		const { store } = make(asking());
+		store.setRecordingPhase('recording');
+		store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(store.state.run?.question).toBeDefined();
+		expect(store.state.minimised).toBe(false);
+		expect(store.runBlocked.value).toBe(true);
+		store.setRecordingPhase('finalizing');
+		expect(store.runBlocked.value).toBe(true);
+		store.setRecordingPhase(null);
+		saveDialogOpen.value = true; // the Save dialog is up, the phase is already null
+		expect(store.runBlocked.value).toBe(true);
+		saveDialogOpen.value = false;
+		expect(store.runBlocked.value).toBe(false);
+		store.stop();
+	});
+
+	it('Show overrides the block (the operator asked), Minimise takes it back, a new question blocks again', async () => {
+		const { store } = make(asking());
+		store.setRecordingPhase('recording');
+		store.restore();
+		expect(store.runBlocked.value).toBe(false);
+		store.minimise();
+		expect(store.runBlocked.value).toBe(true);
+		store.restore();
+		store.start();
+		await vi.advanceTimersByTimeAsync(0); // the first question of the run arrives
+		expect(store.runBlocked.value).toBe(true);
 		store.stop();
 	});
 });

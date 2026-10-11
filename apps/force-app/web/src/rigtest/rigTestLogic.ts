@@ -162,15 +162,34 @@ export function parseHistory(raw: unknown): RunSummary[] {
 
 /** Recording phases from the shell's /record/status poll (recordingBanner.ts); null = not recording. */
 export type RecordingPhase = 'recording' | 'finalizing' | null;
+/** The same, plus 'unknown' until the shell's first status answer arrives. */
+export type PhaseState = RecordingPhase | 'unknown';
 export type PromptMode = 'none' | 'dialog' | 'badge';
+
+export interface BlockInputs {
+	phase: PhaseState;
+	/** The recording Save dialog is open (the cut is over but the operator hasn't decided yet). */
+	saveDialogOpen: boolean;
+	/** GET /pending `busy`: the recorder itself says it is recording, saving or recovering. */
+	backendBusy?: boolean;
+}
+
+/** Whether anything that would pop over the page must hold back: a cut is being recorded or saved,
+ *  the Save dialog is open, the backend says it is busy, or we don't know yet (the shell has not
+ *  answered, e.g. right after a reload). Unknown counts as busy: a missed prompt shows as a badge
+ *  a moment later, a prompt over a live cut costs the operator the cut. */
+export function rigBlocked(b: BlockInputs): boolean {
+	return b.phase !== null || b.saveDialogOpen || !!b.backendBusy;
+}
 
 /** What the "your admin has requested tests" prompt looks like right now.
  *  - Nothing pending, or a run already going: nothing (the run modal is the whole story).
- *  - Recording or saving a cut: only a badge. A dialog must never cover the Record page mid-cut.
+ *  - Blocked (see rigBlocked): only a badge. A dialog must never cover the Record page mid-cut, nor
+ *    take focus from the Save dialog.
  *  - Otherwise: the dialog, one request at a time. */
-export function promptMode(pendingCount: number, runActive: boolean, phase: RecordingPhase): PromptMode {
+export function promptMode(pendingCount: number, runActive: boolean, blocked: boolean): PromptMode {
 	if (pendingCount <= 0 || runActive) return 'none';
-	return phase === 'recording' || phase === 'finalizing' ? 'badge' : 'dialog';
+	return blocked ? 'badge' : 'dialog';
 }
 
 // ---- text --------------------------------------------------------------------------------------
@@ -295,11 +314,17 @@ export function snoozedUntilText(until: string): string {
 export type RunView = 'none' | 'modal' | 'bar';
 
 /** A finished run is shown once (as a summary in the modal) until closed. While running, the modal
- *  or, when the operator minimised it, the bar. */
-export function runView(run: RigRun | null, minimised: boolean, hasFinished: boolean): RunView {
-	if (hasFinished) return 'modal';
+ *  or, when the operator minimised it, the bar. When blocked (see rigBlocked) the modal holds back
+ *  the same way the prompt does: a running test shows as the bar only, a finished summary waits. */
+export function runView(run: RigRun | null, minimised: boolean, hasFinished: boolean, blocked = false): RunView {
+	if (hasFinished) return blocked ? 'none' : 'modal';
 	if (!run || run.state !== 'running') return 'none';
-	return minimised ? 'bar' : 'modal';
+	return minimised || blocked ? 'bar' : 'modal';
+}
+
+/** The tag on the bar when a question is open. */
+export function barAskText(blocked: boolean): string {
+	return blocked ? 'Waiting for you \u2014 after this cut' : 'Waiting for you';
 }
 
 /** Identity of the open question, so the modal reopens once per question rather than on every poll. */
