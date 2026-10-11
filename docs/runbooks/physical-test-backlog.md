@@ -1101,7 +1101,7 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
   dialog, and Tab never reaches the rig-test window.
 - [ ] **Accept is refused while busy.** Accept while a large .mat is uploading to Directus: it is
   refused, and the prompt says why. After the upload, the result comment shows the operator's
-  name (not their email) and the app version.
+  initials only (never a full name or email) and the app version.
 - [ ] **Pop-outs and reloads.** With a Live Force pop-out on a second monitor, a new request gives
   one prompt and one Windows notification, both from the main window. This holds after a restart
   that reopens the pop-out. Reloading the app mid-cut does not bring up a prompt over the Record
@@ -1137,12 +1137,20 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 
 ## C. d1-server and infrastructure
 
-- [ ] **Rig test relay settings.** In the relay's environment on d1-server, set
-  `RIG_TEST_ALLOWED_LOGINS=dpremoli` (plus the login Claude sessions comment as, if it is
-  different) and redeploy `bug-report-relay`. Check:
-  - `GET /bug-report-relay/rig-tests` over Tailscale returns `{"ok": true, ...}`.
-  - An issue labelled by an allowlisted login is listed, and one labelled by anyone else is not.
+- [ ] **Rig test relay settings.** In the relay's environment on d1-server, set:
+  - `RIG_TEST_ALLOWED_LOGINS=dpremoli`, plus the login Claude sessions comment as if it is
+    different;
+  - `RIG_TEST_RELAY_TOKEN` to a long random string.
+
+  Redeploy `bug-report-relay`. On the rig PC, put the same token in
+  `FORCE_APP_RIG_TEST_TOKEN`, or in the `rig_test_token` file in the app's config folder. Also set
+  `FORCE_APP_RIG_ID`, for example `force-rig-1`; without it the rig id is just `rig`. Check:
+  - `GET /bug-report-relay/rig-tests` over Tailscale, without the `X-Rig-Token` header, is refused
+    with 403. With the header it returns `{"ok": true, ...}`.
+  - An issue that an allowlisted login both wrote and labelled is listed. One written by anyone
+    else is not, even if you label it.
   - A comment through `POST /rig-tests/<n>/comment` on an issue without the label is refused.
+  - An attempt to PATCH the rig's result comment is refused.
 
   Since the rig test requests PR.
 - [ ] **#190 migration 140 on d1-server.** Apply `20261008000140_machining_force_analysis_file_nullable`
