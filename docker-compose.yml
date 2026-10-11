@@ -413,6 +413,7 @@ services:
       GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app-private-key.pem
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
       GITHUB_REPO: ${GITHUB_BUG_REPORT_REPO:-dpremoli/D1-Database}
+      RIG_TEST_ALLOWED_LOGINS: ${RIG_TEST_ALLOWED_LOGINS:-}
     volumes:
       - ${GITHUB_APP_PRIVATE_KEY_FILE_HOST:-./secrets/github-app-private-key.pem}:/run/secrets/github-app-private-key.pem:ro
     healthcheck:
