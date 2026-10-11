@@ -1101,7 +1101,8 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
   dialog, and Tab never reaches the rig-test window.
 - [ ] **Accept is refused while busy.** Accept while a large .mat is uploading to Directus: it is
   refused, and the prompt says why. After the upload, the result comment shows the operator's
-  initials only (never a full name or email) and the app version.
+  initials only (never a full name, email or Windows PC name) and the app
+  version. The rig id is `FORCE_APP_RIG_ID`, or `rig` if that isn't set.
 - [ ] **Pop-outs and reloads.** With a Live Force pop-out on a second monitor, a new request gives
   one prompt and one Windows notification, both from the main window. This holds after a restart
   that reopens the pop-out. Reloading the app mid-cut does not bring up a prompt over the Record
@@ -1151,6 +1152,10 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
     else is not, even if you label it.
   - A comment through `POST /rig-tests/<n>/comment` on an issue without the label is refused.
   - An attempt to PATCH the rig's result comment is refused.
+  - With a wrong token on the rig PC, Settings → Rig tests says "The relay rejected this PC's
+    rig token". With no token, it shows how to set one, and the PC never polls.
+  - An issue with more than 100 events, for example one with many label changes, is still
+    listed, because the latest labeller is found from the last page.
 
   Since the rig test requests PR.
 - [ ] **#190 migration 140 on d1-server.** Apply `20261008000140_machining_force_analysis_file_nullable`

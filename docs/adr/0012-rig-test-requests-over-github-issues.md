@@ -123,6 +123,15 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
   ADR.
 - Test captures upload to a dedicated Directus project, "Rig tests". Dashboards and campaign views
   must filter it out.
+- **Accepted risk: edits made after the label.** The relay checks who wrote the issue and who
+  last applied the label, but not who last edited the body. Anyone with write access to the repo
+  can change an allowlisted author's `rig-test` block after it is labelled. The block can only
+  name items from the app's bundled backlog, plus inline `ask`/`note` text shown to the operator.
+  Any triager can also remove a `rig-test:*` state label so a request is offered again. Both
+  need repo write or triage rights, so the risk is accepted. GraphQL `lastEditedAt`/`editor`
+  could close it later if the collaborator list grows.
+- **Phase 2:** the `LOCKED` table is a deny-list. Before automated actions ship, turn it into an
+  allow-list of what a run may call (security review, 2026-10-11).
 - **Forbidden from now on:** an action that executes request-supplied code or paths, a code path
   that starts a run without operator consent, and an inbound listener on the rig for this feature.
 
