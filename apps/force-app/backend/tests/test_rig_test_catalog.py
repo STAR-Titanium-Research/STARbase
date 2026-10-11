@@ -115,11 +115,14 @@ def test_item_without_a_block_becomes_one_ask_with_pass_fail_skip(index):
     assert first.est_s == catalog.PROSE_EST_S == 600  # "record a cut, check X": 10 min, not 2
 
 
-def test_long_prose_is_cut_to_the_text_bound():
-    long_item = "- [ ] **R9 — long.** " + "word " * 600
-    req = parse_request(BODY.format(block="items: [R9]"), catalog._index(long_item))
-    text = req.steps[0].text
-    assert len(text) <= catalog.MAX_TEXT and text.endswith("…")
+def test_prose_steps_may_be_longer_than_request_text_but_not_unbounded():
+    medium = "- [ ] **R9 — long.** " + "word " * 600  # ~3000 chars: fine for bundled prose
+    req = parse_request(BODY.format(block="items: [R9]"), catalog._index(medium))
+    assert 1000 < len(req.steps[0].text) <= catalog.MAX_PROSE_TEXT
+    assert not req.steps[0].text.endswith("…")
+    huge = "- [ ] **R9 — long.** " + "word " * 3000
+    text = parse_request(BODY.format(block="items: [R9]"), catalog._index(huge)).steps[0].text
+    assert len(text) <= catalog.MAX_PROSE_TEXT and text.endswith("…")
 
 
 def test_item_block_steps_options_pass_est_and_after(index):
@@ -235,6 +238,15 @@ def test_yaml_aliases_and_huge_blocks_are_refused():
         parse_request(BODY.format(block="items: [R4]\n# " + "x" * 17000), {})
 
 
+def test_deeply_nested_yaml_is_an_invalid_request_not_a_crash():
+    with pytest.raises(RigRequestError, match="nested too deeply"):
+        parse_request(BODY.format(block="items: " + "[" * 3000), {})
+    assert catalog.peek_rig(BODY.format(block="[" * 3000)) is None
+    md = "- [ ] **R1 — deep.** x\n  ```rig-test\n  steps: " + "[" * 3000 + "\n  ```\n"
+    with pytest.raises(RigRequestError, match="R1.*nested too deeply"):
+        parse_request(BODY.format(block="items: [R1]"), catalog._index(md))
+
+
 def test_a_broken_catalogue_block_makes_only_requests_for_it_invalid():
     md = "- [ ] **R1 — bad.** x\n  ```rig-test\n  steps:\n    - do: record\n  ```\n- [ ] **R2 — fine.** y\n"
     index = catalog._index(md)
@@ -262,7 +274,7 @@ def test_the_real_backlog_resolves_r4_and_190():
     assert catalog._index(text) is index  # cached by content
     req = parse_request(BODY.format(block='items: [R4, "#185"]'), index)
     assert req.steps[0].text.startswith("R4")
-    assert all(len(s.text) <= catalog.MAX_TEXT for s in req.steps)
+    assert all(len(s.text) <= catalog.MAX_PROSE_TEXT for s in req.steps)
 
 
 def test_catalog_falls_back_to_the_repo_backlog_when_no_bundled_copy(monkeypatch, tmp_path):

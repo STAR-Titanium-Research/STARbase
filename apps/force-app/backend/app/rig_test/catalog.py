@@ -31,7 +31,9 @@ ASK_EST_S = 120
 NOTE_EST_S = 30
 # A backlog item with no step block is usually "record a cut, check X": give it room.
 PROSE_EST_S = 600
-MAX_TEXT = 1000
+MAX_TEXT = 1000  # request-supplied text (inline steps)
+# Prose from the bundled backlog is trusted content that ships with the build, so it gets more room.
+MAX_PROSE_TEXT = 4000
 MAX_OPTIONS = 6
 MAX_STEPS_PER_BLOCK = 50
 MAX_STEPS_PER_REQUEST = 200
@@ -90,6 +92,8 @@ def _load_yaml(text: str, what: str) -> Any:
         mark = getattr(e, "problem_mark", None)
         where = f" (line {mark.line + 1})" if mark else ""
         raise RigRequestError(f"{what} is not valid YAML{where}") from None
+    except RecursionError:  # "[" * 3000 fits the size limit and overflows the parser's stack
+        raise RigRequestError(f"{what} is nested too deeply") from None
 
 
 # ---- models ----------------------------------------------------------------------------------
@@ -269,7 +273,8 @@ def _build_steps(raw_steps: list, item_id: str, base: int) -> list[Step]:
 
 
 def _prose_step(item: CatalogItem, index: int) -> Step:
-    text = item.prose if len(item.prose) <= MAX_TEXT else item.prose[: MAX_TEXT - 1].rstrip() + "…"
+    prose = item.prose
+    text = prose if len(prose) <= MAX_PROSE_TEXT else prose[: MAX_PROSE_TEXT - 1].rstrip() + "…"
     return Step(
         index=index,
         item_id=item.id or "",
