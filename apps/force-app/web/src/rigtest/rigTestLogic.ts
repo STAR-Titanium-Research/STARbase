@@ -169,6 +169,12 @@ export function estimateText(estimateSeconds: number, operatorSteps: number): st
 	return `${when}, ${operatorSteps} ${operatorSteps === 1 ? 'step needs' : 'steps need'} you`;
 }
 
+/** A request or run time for display; '' when it doesn't parse. */
+export function formatWhen(iso: string | undefined): string {
+	const t = iso ? Date.parse(iso) : NaN;
+	return Number.isFinite(t) ? new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+}
+
 /** m:ss, for the answer countdown. */
 export function formatClock(totalSeconds: number): string {
 	const s = Math.max(0, Math.floor(totalSeconds));
@@ -213,16 +219,15 @@ export function currentPosition(run: RigRun): number {
 	return open >= 0 ? open + 1 : run.steps.length;
 }
 
-/** "about 6 min left", "under a minute left" once the estimate is (nearly) spent. */
-export function timeLeftText(run: RigRun): string {
+/** "about 6 min", "under a minute" once the estimate is (nearly) spent. */
+export function timeLeft(run: RigRun): string {
 	const left = run.estimate_s - run.elapsed_s;
-	if (left <= 30) return 'under a minute left';
-	return `about ${Math.max(1, Math.round(left / 60))} min left`;
+	return left <= 30 ? 'under a minute' : `about ${Math.max(1, Math.round(left / 60))} min`;
 }
 
 /** The minimised bar: "Rig test #231, step 4/9, about 6 min left". */
 export function minimisedText(run: RigRun): string {
-	return `Rig test #${run.number}, step ${currentPosition(run)}/${run.steps.length}, ${timeLeftText(run)}`;
+	return `Rig test #${run.number}, step ${currentPosition(run)}/${run.steps.length}, ${timeLeft(run)} left`;
 }
 
 export interface StepMark { icon: string; label: string; tone: 'ok' | 'bad' | 'dim' | 'active' | 'warn' }

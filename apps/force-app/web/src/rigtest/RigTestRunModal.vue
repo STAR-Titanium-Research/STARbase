@@ -10,7 +10,7 @@ import { useDialog } from '../ui/useDialog';
 import { confirmAndCancelRun } from './confirmCancel';
 import { rigTest } from './rigTestStore';
 import {
-	currentPosition, finishedText, formatClock, minimisedText, progress, questionKey, secondsLeft, stepMark, timeLeftText,
+	currentPosition, finishedText, formatClock, minimisedText, progress, questionKey, secondsLeft, stepMark, timeLeft,
 	type RigRun,
 } from './rigTestLogic';
 
@@ -81,7 +81,7 @@ useDialog(panel, dismiss);
 					<div class="rm-track" role="progressbar" aria-label="Time used of the estimate" :aria-valuenow="Math.round(prog.timeFraction * 100)" aria-valuemin="0" aria-valuemax="100">
 						<div class="rm-fill time" :style="{ width: `${prog.timeFraction * 100}%` }"></div>
 					</div>
-					<b>{{ finished ? 'done' : timeLeftText(run).replace(' left', '') }}</b>
+					<b>{{ finished ? 'done' : timeLeft(run) }}</b>
 				</div>
 			</div>
 

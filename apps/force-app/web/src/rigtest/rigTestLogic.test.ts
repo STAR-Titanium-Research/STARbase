@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	DECLINE_REASONS, NOTIFY_MAX, clip, currentPosition, declineBody, estimateText, finishedText, formatApproxDuration, formatClock,
 	justFinished, minimisedText, newRequests, parseHistory, parseRequests, parseRun, progress, promptMode, questionKey,
-	questionNotification, requestNotification, runView, secondsLeft, shouldReopen, snoozeUntil, stepMark, summaryCounts, timeLeftText,
+	questionNotification, requestNotification, runView, secondsLeft, shouldReopen, snoozeUntil, stepMark, summaryCounts, timeLeft,
 	type RigRequest, type RigRun, type RunStep, type StepStatus,
 } from './rigTestLogic';
 
@@ -84,8 +84,8 @@ describe('minimised bar text', () => {
 		expect(currentPosition(run({ current: 99 }))).toBe(3);
 	});
 	it('does not promise minutes once the estimate is spent', () => {
-		expect(timeLeftText(run({ elapsed_s: 700 }))).toBe('under a minute left');
-		expect(timeLeftText(run({ elapsed_s: 900 }))).toBe('under a minute left');
+		expect(timeLeft(run({ elapsed_s: 700 }))).toBe('under a minute');
+		expect(timeLeft(run({ elapsed_s: 900 }))).toBe('under a minute');
 	});
 });
 

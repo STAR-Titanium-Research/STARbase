@@ -242,7 +242,7 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 	/* margin: 0, not 0 auto — this pill's left edge is deliberately square (border-radius only on
 	   the right) so it can sit flush against the screen's left border; centering it in the wider
 	   .sidebar hitbox left an ~8px gap instead (#13). */
-	display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+	position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
 	width: 14px; height: 64px; margin: 0; padding: 8px 2px; overflow: hidden;
 	background: var(--bg-2); border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
 	border-radius: 0 14px 14px 0;
@@ -269,7 +269,6 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 .badge { position: absolute; top: 6px; right: 18px; min-width: 15px; height: 15px; padding: 0 3px; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-xs); font-weight: 700; border-radius: 8px; }
 .badge.warn { color: #0b1020; background: #fbbf24; }
 .badge.rig { right: auto; left: 18px; color: #fff; background: #2563eb; }
-.trigger { position: relative; }
 .rig-dot { position: absolute; top: 4px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 1.5px var(--bg-2); }
 .badge.alarm { color: #fff; background: #ef4444; animation: alarmpulse 0.9s ease-in-out infinite; }
 .spacer { flex: 1; }

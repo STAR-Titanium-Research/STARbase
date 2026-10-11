@@ -5,7 +5,7 @@
 import { computed, onMounted } from 'vue';
 import RigTestRequestCard from '../rigtest/RigTestRequestCard.vue';
 import { rigTest } from '../rigtest/rigTestStore';
-import { summaryCounts } from '../rigtest/rigTestLogic';
+import { formatWhen, summaryCounts } from '../rigtest/rigTestLogic';
 
 const s = rigTest.state;
 const elig = computed(() => s.eligibility);
@@ -23,10 +23,6 @@ const STATE_LABEL: Record<string, string> = {
 	done: 'Passed', partial: 'Partial', cancelled: 'Cancelled', timed_out: 'Timed out', interrupted: 'Interrupted', running: 'Running',
 };
 const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
-function when(iso?: string): string {
-	const d = iso ? Date.parse(iso) : NaN;
-	return Number.isFinite(d) ? new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
-}
 </script>
 
 <template>
@@ -88,7 +84,7 @@ function when(iso?: string): string {
 						<td><span class="pill" :class="h.state">{{ stateLabel(h.state) }}</span></td>
 						<td class="n">{{ summaryCounts(h).pass }}</td>
 						<td class="n">{{ summaryCounts(h).fail }}</td>
-						<td class="when">{{ when(h.finished_at || h.started_at) }}</td>
+						<td class="when">{{ formatWhen(h.finished_at || h.started_at) }}</td>
 					</tr>
 				</tbody>
 			</table>

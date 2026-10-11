@@ -6,7 +6,7 @@ import { computed, ref } from 'vue';
 import { syncStatus } from '../record/directusSync';
 import { rigTest } from './rigTestStore';
 import {
-	DECLINE_REASONS, DECLINE_TEXT_MAX, SNOOZE_PRESETS, declineBody, estimateText,
+	DECLINE_REASONS, DECLINE_TEXT_MAX, SNOOZE_PRESETS, declineBody, estimateText, formatWhen,
 	type DeclineCode, type RigRequest,
 } from './rigTestLogic';
 
@@ -21,10 +21,7 @@ const busy = computed(() => rigTest.state.busy[props.request.number]);
 const error = computed(() => rigTest.state.errors[props.request.number] || '');
 const sendable = computed(() => !!declineBody(reason.value, reasonText.value));
 const estimate = computed(() => estimateText(props.request.estimate_s.full, props.request.needs_operator_steps));
-const asked = computed(() => {
-	const d = Date.parse(props.request.created_at);
-	return Number.isFinite(d) ? new Date(d).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
-});
+const asked = computed(() => formatWhen(props.request.created_at));
 
 function toggle(p: 'snooze' | 'decline') { panel.value = panel.value === p ? null : p; }
 function run() { void rigTest.accept(props.request.number, syncStatus.syncing); }
