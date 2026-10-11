@@ -4,6 +4,7 @@ Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 
 **T0a applied to live (migrations 150-152). T0b built on `feat/record-codes` (migrations 155-158,
 the `d1-next-number` operation-code route, the new `d1-operation-code` box), not yet live.**
 Migration numbers below T0b are "next free" (see the table).
+**T0d built (no migration): the FAST importers write `sintering_run_number`, `scripts/finalize_fast_codes.py` is retired.**
 Next: T0b final review and apply, then T0c-T0f. Stream T0 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md);
 it goes before N1 (navigation), whose finder and Tests index use what this adds. Every decision
@@ -300,6 +301,8 @@ run lists every changed row for the reviewer.
 `scripts/finalize_fast_codes.py` is retired: the FAST importers leave `pass_code` NULL as now and
 set `sintering_run_number`, and the trigger builds the code on insert.
 
+T0d outcome (2026-10-11): the rebuild was measured on live and is a no-op, so no rebuild migration was written; the importers write `sintering_run_number`, adopt a hand-logged run of the same machine and run, and `finalize_fast_codes.py` is deleted.
+
 ### 7. File identity (Q43, Q45, Q46)
 
 - **Table `file_fingerprints`:** `directus_files_id UUID PRIMARY KEY` (FK, ON DELETE CASCADE),
@@ -344,7 +347,7 @@ codes are allowed by UNIQUE and become automatic codes at their next edit (they 
 | `…156_operation_code_rule` | **T0b, built.** `code_num()`, `sintering_run_number` and its unique index (per machine), `operation_code_for()` (machining token drops a two-letter method prefix), run-number back-fill |
 | `…157_operation_code_trigger` | **T0b, built.** `mfg_op_set_code` replacing 126's `mfg_op_assign_numbers` (automatic vs typed, renumbering, frozen experiment_sheet rows keep their code even when cleared), `operation_sequence` back-fill with ledger `d1_private.operation_sequence_backfill` |
 | `…158_operation_code_cascade_and_preview` | **T0b, built.** Sample-code cascade to automatic operations, statement-level rollup-lock triggers on `physical_samples` and `manufacturing_operations`, `preview_operation_code()` |
-| next free | T0d: back-fill run numbers for the FAST rows, uniqueness check, rebuild the FAST codes (was planned as 154) |
+| (none) | **T0d, built: no migration.** The importers write `sintering_run_number`; `finalize_fast_codes.py` retired. Migration 156 already back-filled the run numbers, and the rebuild measured as a no-op (see §6) |
 | next free | T0e: `file_fingerprints`, the table and its indexes (was planned as 155) |
 | later | T0f: `UNIQUE (pass_code)`, after the hand-fix |
 
@@ -391,7 +394,7 @@ merged in first**, so migration 143 and its test fix (`21790784`) are in the tre
 1. **T0a** short IDs + test codes (migrations 150-152), with tests.
 2. **T0b** operation codes in Postgres + preview endpoint + the form box (155-158).
 3. **T0c** Force dashboard / force-plotting changes and the Force App release.
-4. **T0d** FAST rebuild (next free) — backup of `manufacturing_operations` first; dry run; apply.
+4. **T0d** FAST importers feed the rule (built, no migration; the rebuild was a no-op).
 5. **T0e** file fingerprints (next free) + the worker's back-fill + the force-file-standard update.
 6. **T0f** UNIQUE on `pass_code`, after the maintainer's hand-fix.
 

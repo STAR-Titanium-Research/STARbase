@@ -43,11 +43,11 @@ production.
 | `index_archive.py` | Index the read-only SMB archive into the Directus File Library (`make index-archive`). With `--fingerprint` a file that moved folder (same name, unique fingerprint) has every reference re-pointed; ambiguous or renamed files are flagged missing, never deleted |
 | `import_experiment_sheet.py` | AMRC experiment-sheet machining passes into `manufacturing_operations` |
 | `import_milling_jozef.py` | One-off: milling operations for one trial's `.mat` files |
-| `import_fast25.py`, `import_fast250.py` | Rebuild FAST 25 / FAST 250 runs from the machine backends |
+| `import_fast25.py`, `import_fast250.py` | Rebuild FAST 25 / FAST 250 runs from the machine backends. They write the machine's own run number to `sintering_run_number` and the database builds the operation code from it (trigger `mfg_op_set_code`; the importers never write `pass_code`). A hand-logged sintering run with the same machine and run number is filled in instead of duplicated (`fast_ops.py`; what the import keeps of it is in that file's header). Order: importers, then the `fast_orchestrator.py` drain |
 | `import_fast_logs.py` | Backfill FAST runs from the FCT HP D 250 log workbooks |
 | `clear_fast_logs.py`, `apply_fast_qa_backup.py` | Either side of the FAST rebuild: snapshot, then re-attach, the sheet-only QA fields. `clear_fast_logs.py` needs `--yes` (or `--dry-run`) and never truncates its append-only backup; `apply_fast_qa_backup.py --revert --dry-run` writes nothing |
-| `backfill_fast_times.py`, `finalize_fast_codes.py` | Operation clock times and canonical pass codes for sintering runs |
-| `fast_his.py`, `fast_mapping.py`, `fast_recipes.py` | Shared FAST helpers: `.HIS` trace decoder, field mapping, recipe parsing |
+| `backfill_fast_times.py` | Operation clock times for sintering runs |
+| `fast_his.py`, `fast_mapping.py`, `fast_recipes.py`, `fast_ops.py` | Shared FAST helpers: `.HIS` trace decoder, field mapping, recipe parsing, hand-logged run adoption and the importers' upsert rules |
 
 ## Migration generators
 
