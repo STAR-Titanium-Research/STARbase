@@ -9,7 +9,11 @@ export interface ExplorerHost {
 	navigate(to: string): void;
 	// A Data Studio path, e.g. '/content/samples'.
 	openDataStudio(path: string): void;
+	// Starts as the host's best synchronous guess and is corrected when the server answers, so a page
+	// that uses it must react to changes (watch it), not read it once.
 	isAdmin: Ref<boolean>;
+	// False until the server has answered (or failed to): while false, isAdmin may still be a guess.
+	adminKnown: Ref<boolean>;
 	user: Ref<{ id: string; first_name?: string; role?: string | null } | null>;
 }
 

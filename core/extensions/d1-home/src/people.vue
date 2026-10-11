@@ -48,21 +48,32 @@ function blank(): Person {
 	return { full_name: '', email: null, user_id: null, is_researcher: true, is_operator: false, active: true, notes: null };
 }
 
-async function load() {
-	loading.value = true;
+// The login list is only needed by the admin-only login picker. isAdmin starts as a guess and can
+// turn true after the page has loaded, so this runs again when it does.
+async function loadUsers() {
+	if (!isAdmin.value) return;
 	try {
-		// The login list is only needed by the admin-only login picker.
-		const [pr, ur] = await Promise.all([
-			api.get('/items/people', { params: { limit: -1, sort: ['full_name'] } }),
-			isAdmin.value
-				? api.get('/users', { params: { limit: -1, fields: ['id', 'first_name', 'last_name', 'email'], sort: ['first_name'] } })
-				: Promise.resolve(null),
-		]);
-		people.value = pr?.data?.data ?? [];
+		const ur = await api.get('/users', { params: { limit: -1, fields: ['id', 'first_name', 'last_name', 'email'], sort: ['first_name'] } });
 		users.value = (ur?.data?.data ?? []).map((u: any) => ({
 			text: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || u.id,
 			value: u.id,
 		}));
+	} catch {
+		users.value = [];
+	}
+}
+watch(isAdmin, (admin) => {
+	if (admin && !users.value.length) void loadUsers();
+});
+
+async function load() {
+	loading.value = true;
+	try {
+		const [pr] = await Promise.all([
+			api.get('/items/people', { params: { limit: -1, sort: ['full_name'] } }),
+			loadUsers(),
+		]);
+		people.value = pr?.data?.data ?? [];
 	} finally {
 		loading.value = false;
 	}

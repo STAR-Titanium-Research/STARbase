@@ -13,7 +13,8 @@ const { useUserStore } = useStores();
 const userStore = useUserStore() as any;
 // An admin reads every row, so a sample with no owner is still visible to them: only members need
 // a People row to see what they register. The server's own answer, shared with the sidebar.
-const { isAdmin } = useExplorerHost();
+// isAdmin starts as a guess: the no-person warning waits for adminKnown so it never flashes at an admin.
+const { isAdmin, adminKnown } = useExplorerHost();
 
 interface Opt { text: string; value: string; extra?: string }
 const materials = ref<Opt[]>([]);
@@ -124,7 +125,7 @@ async function submit() {
 		// row. Without one the sample would belong to nobody and its creator could not see it, so
 		// refuse up front instead of registering it into the void.
 		if (personId.value === undefined) personId.value = await lookupPerson();
-		if (personId.value === null && !isAdmin.value) {
+		if (personId.value === null && adminKnown.value && !isAdmin.value) {
 			error.value = NO_PERSON_MESSAGE;
 			return;
 		}
@@ -243,7 +244,7 @@ onMounted(async () => {
 					<v-textarea v-model="f.notes" placeholder="Anything worth recording…" />
 				</section>
 
-				<p v-if="personId === null && !isAdmin && !error" class="err" role="alert">{{ NO_PERSON_MESSAGE }}</p>
+				<p v-if="personId === null && adminKnown && !isAdmin && !error" class="err" role="alert">{{ NO_PERSON_MESSAGE }}</p>
 				<p v-if="error" class="err">{{ error }}</p>
 				<div class="actions">
 					<v-button secondary @click="go('/home')">Cancel</v-button>

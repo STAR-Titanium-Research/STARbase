@@ -79,8 +79,9 @@ export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
 
 // Explorer navigation: host contract, sidebar tree, index-page configs
 export { EXPLORER_HOST } from './host';
+export { guessAdmin } from './hostAdmin';
 export type { ExplorerHost } from './host';
-export { NAV_GROUPS, buildNav, linkForBookmark } from './nav/navConfig';
+export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser, pickBookmarkId, linkForBookmark } from './nav/navConfig';
 export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';
