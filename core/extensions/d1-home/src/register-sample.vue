@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExplorerView from './ExplorerView.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
@@ -174,7 +175,7 @@ onMounted(async () => {
 </script>
 
 <template>
-	<private-view title="Register a Sample">
+	<ExplorerView title="Register a Sample">
 		<PageShell narrow>
 			<!-- success -->
 			<div v-if="created" class="card done">
@@ -252,7 +253,7 @@ onMounted(async () => {
 				</div>
 			</template>
 		</PageShell>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <script lang="ts">

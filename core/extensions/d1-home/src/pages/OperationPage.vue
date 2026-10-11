@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, asRecord, dataStudioRoute,
@@ -65,7 +66,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 </script>
 
 <template>
-	<private-view :title="pageTitle">
+	<ExplorerView :title="pageTitle">
 		<PageShell>
 			<LoadState v-if="loading && !op" loading loading-text="Loading operation…" />
 
@@ -154,7 +155,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 				/>
 			</template>
 		</PageShell>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <style scoped>

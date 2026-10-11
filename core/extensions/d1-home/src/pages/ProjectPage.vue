@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, useCanUpdate, LoadState, NotVisible, PageShell, RecordHeader, Section, Sparkline, StatTile, dataStudioRoute, formatDate, projectStatusLabel,
@@ -40,7 +41,7 @@ const tilesDisabled = computed(() => counts.value.loading);
 </script>
 
 <template>
-	<private-view :title="project?.project_code ? `Project ${project.project_code}` : 'Project'">
+	<ExplorerView :title="project?.project_code ? `Project ${project.project_code}` : 'Project'">
 		<PageShell>
 			<LoadState v-if="loading && !project" loading loading-text="Loading project…" />
 
@@ -132,7 +133,7 @@ const tilesDisabled = computed(() => counts.value.loading);
 				/>
 			</template>
 		</PageShell>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <style scoped>

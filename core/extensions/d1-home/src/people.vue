@@ -1,20 +1,17 @@
 <script setup lang="ts">
+import ExplorerView from './ExplorerView.vue';
+import { useExplorerHost } from './explorerHost';
 import { computed, onMounted, ref } from 'vue';
-import { useApi, useStores } from '@directus/extensions-sdk';
+import { useApi } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
 import { PageShell } from '@d1/ui';
 
 const api = useApi();
 const router = useRouter();
-const userStore = useStores().useUserStore() as any;
 // Only an admin may link a login to a People row (ADR-0011: the link decides whose records a
-// person sees, so a member relinking it would inherit someone else's records). Directus keeps the
-// admin flag in different places across versions; if a non-admin is wrongly treated as one, the
-// server still refuses the write.
-const isAdmin = computed(() => {
-	const u = userStore.currentUser;
-	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
-});
+// person sees, so a member relinking it would inherit someone else's records). The host reads the
+// flag from the server; if a non-admin were wrongly shown the picker, the server still refuses the write.
+const { isAdmin } = useExplorerHost();
 const go = (to: string) => router.push(to);
 
 interface Person {
@@ -141,7 +138,7 @@ async function remove() {
 </script>
 
 <template>
-	<private-view title="People">
+	<ExplorerView title="People">
 		<template #headline><span class="crumb" @click="go('/home')">Home</span></template>
 		<template #title-outer:prepend>
 			<v-button class="header-icon" rounded icon secondary disabled><v-icon name="groups" /></v-button>
@@ -217,7 +214,7 @@ async function remove() {
 				</v-card-actions>
 			</v-card>
 		</v-dialog>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <script lang="ts">

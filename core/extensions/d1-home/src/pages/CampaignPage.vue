@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
 	CampaignWorkbench, EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, StatusBadge,
@@ -35,7 +36,7 @@ const dates = computed(() => {
 </script>
 
 <template>
-	<private-view :title="campaign?.campaign_code ? `Campaign ${campaign.campaign_code}` : code">
+	<ExplorerView :title="campaign?.campaign_code ? `Campaign ${campaign.campaign_code}` : code">
 		<PageShell>
 			<LoadState v-if="loading && !campaign" loading loading-text="Loading campaign…" />
 
@@ -87,7 +88,7 @@ const dates = computed(() => {
 				/>
 			</template>
 		</PageShell>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <style scoped>
