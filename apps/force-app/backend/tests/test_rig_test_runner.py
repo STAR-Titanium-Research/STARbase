@@ -1,6 +1,7 @@
 """The run state machine: answers, no_response, dependency skips, the hard cap and Cancel."""
 
 import json
+from datetime import datetime
 
 import pytest
 
@@ -117,7 +118,7 @@ def test_a_dependent_step_runs_when_its_dependency_passed(fake, make_runner):
 def test_no_answer_marks_no_response_after_the_timeout_and_the_run_carries_on(fake, make_runner):
     clock = Clock()
     r = make_runner(clock=clock)
-    r.start(inline_request("- ask: a\n  est: 25m\n- ask: b"), {})  # est big: the cap is far away
+    r.start(inline_request("- ask: a\n- ask: b"), {})  # window 300 s each, cap 600 s
     wait_for(lambda: (r.snapshot().get("question") or {}).get("step") == 0)
     clock.advance(299)
     assert r.snapshot()["steps"][0]["status"] == "active"
@@ -129,40 +130,94 @@ def test_no_answer_marks_no_response_after_the_timeout_and_the_run_carries_on(fa
     assert run["state"] == "partial"
 
 
-def test_the_question_carries_its_expiry_and_options(fake, make_runner):
-    r = make_runner()
-    r.start(inline_request("- ask: pick\n  options: [A, B]\n  pass: [A]\n- note: n"), {})
+def test_a_single_default_ask_gets_its_whole_answer_window_before_the_cap(fake, make_runner):
+    """B2: est 120 s used to make the cap 180 s, which killed the ask 120 s before its window."""
+    clock = Clock()
+    r = make_runner(clock=clock)
+    r.start(inline_request("- ask: only one"), {})
     wait_for(lambda: r.snapshot().get("question"))
-    snap = r.snapshot()
-    q = snap["question"]
-    assert q["step"] == 0 and q["text"] == "pick" and q["options"] == ["A", "B"]
-    assert q["expires_at"] and snap["current"] == 0
-    assert snap["steps"][0]["status"] == "active" and snap["steps"][1]["status"] == "pending"
-    assert snap["estimate_s"] == 150 and snap["deadline_at"] and snap["elapsed_s"] == 0
-    r.answer(0, "A", None)
-    wait_for(lambda: (r.snapshot().get("question") or {}).get("step") == 1)
-    assert r.snapshot()["question"]["options"] == ["Continue"]
+    clock.advance(250)
+    assert r.snapshot()["steps"][0]["status"] == "active"
+    clock.advance(60)
+    run = _finish(r)
+    assert run["steps"][0]["status"] == "no_response"  # not "cancelled"
+    assert run["state"] == "partial"
 
 
-def test_hard_cap_is_one_and_a_half_times_the_estimate_up_to_30_minutes():
-    assert runner_mod.hard_cap_s(120) == 180
-    assert runner_mod.hard_cap_s(1000) == 1500
-    assert runner_mod.hard_cap_s(5000) == 1800
+def test_the_answer_window_grows_with_a_long_estimate_and_is_300_s_for_a_note(fake, make_runner):
+    spec = {"kind": "ask", "est_s": 1200}
+    assert runner_mod.step_window_s(spec) == 1800  # 1.5 x est
+    assert runner_mod.step_window_s({"kind": "ask", "est_s": 30}) == 300
+    assert runner_mod.step_window_s({"kind": "note", "est_s": 1200}) == 300
+    clock = Clock()
+    r = make_runner(clock=clock)
+    r.start(inline_request("- ask: a\n  est: 20m\n- ask: b"), {})
+    wait_for(lambda: r.snapshot().get("question"))
+    clock.advance(1700)
+    assert r.snapshot()["steps"][0]["status"] == "active"
+    clock.advance(101)
+    wait_for(lambda: r.snapshot()["steps"][0]["status"] == "no_response")
+
+
+def test_run_cap_is_the_larger_of_1_5x_the_estimates_and_the_windows_up_to_2_hours():
+    def ask(est):
+        return {"kind": "ask", "est_s": est}
+
+    assert runner_mod.run_cap_s([ask(120)]) == 300  # window 300 > 1.5 x 120
+    assert runner_mod.run_cap_s([ask(120), ask(120)]) == 600
+    assert runner_mod.run_cap_s([ask(600)] * 3) == 3 * 900  # prose items: window 900 each
+    assert runner_mod.run_cap_s([ask(1800)] * 5) == runner_mod.RUN_CAP_MAX_S == 7200
+    assert runner_mod.run_cap_s([{"kind": "note", "est_s": 30}] * 2) == 600
 
 
 def test_the_hard_cap_ends_the_run_as_timed_out(fake, make_runner):
     clock = Clock()
     r = make_runner(clock=clock)
-    r.start(inline_request("- ask: a\n- ask: b"), {})  # estimate 240 s, cap 360 s
-    _answer_when_asked(r, 0, "Pass")
-    wait_for(lambda: (r.snapshot().get("question") or {}).get("step") == 1)
-    clock.advance(361)
+    steps = "\n".join(f"- ask: s{i}\n  est: 25m" for i in range(5))  # windows 2250 s, cap 2 h
+    r.start(inline_request(steps), {})
+    for i in range(3):  # a slow operator: 2000 s per answer, 6000 s of the 7200 s used
+        _answer_when_asked(r, i, "Pass")
+        clock.advance(2000)
+    wait_for(lambda: (r.snapshot().get("question") or {}).get("step") == 3)
+    clock.advance(1300)  # past the cap, but inside step 3's 2250 s window
     run = _finish(r)
     assert run["state"] == "timed_out" and not r.owns_rig()
-    assert [s["status"] for s in run["steps"]] == ["pass", "cancelled"]
+    assert [s["status"] for s in run["steps"]] == ["pass"] * 3 + ["cancelled"] * 2
     assert fake.last_state(231) == "partial"
     assert "result: timed_out" in fake.comments[-1][1]
     assert "⏱ Timed out" in fake.comments[-1][1]
+
+
+def test_question_expires_at_is_the_step_deadline_or_the_run_deadline_whichever_is_first(
+    fake, make_runner
+):
+    clock = Clock()
+    epoch = 1_760_000_000.0
+    r = make_runner(clock=clock, wall=lambda: epoch + (clock.t - 1000.0))
+    r.start(inline_request("- ask: a\n- ask: b"), {})
+    wait_for(lambda: r.snapshot().get("question"))
+    snap = r.snapshot()
+    first = datetime.fromisoformat(snap["question"]["expires_at"]).timestamp()
+    assert first == epoch + 300  # the step window, well inside the 600 s cap
+    assert datetime.fromisoformat(snap["deadline_at"]).timestamp() == epoch + 600
+    clock.advance(200)
+    r.answer(0, "Pass", None)
+    wait_for(lambda: (r.snapshot().get("question") or {}).get("step") == 1)
+    second = datetime.fromisoformat(r.snapshot()["question"]["expires_at"]).timestamp()
+    assert second == epoch + 500  # 200 s in, +300 s window: still before the cap at 600 s
+    r.answer(1, "Pass", None)
+    _finish(r)
+
+    r2 = make_runner(clock=Clock(2000.0), wall=lambda: epoch)
+    steps = "\n".join(f"- ask: s{i}\n  est: 25m" for i in range(5))  # windows 2250 s, cap 7200 s
+    r2.start(inline_request(steps, number=232), {})
+    for i in range(3):
+        _answer_when_asked(r2, i, "Pass")
+        r2._clock.advance(2000)
+    wait_for(lambda: (r2.snapshot().get("question") or {}).get("step") == 3)
+    # 6000 s used, 1200 s left of the cap: the countdown shows 1200 s, not the 2250 s window
+    expires = datetime.fromisoformat(r2.snapshot()["question"]["expires_at"]).timestamp()
+    assert expires == epoch + 1200
 
 
 def test_cancel_during_an_ask_ends_the_run_and_reports(fake, make_runner, tmp_path):

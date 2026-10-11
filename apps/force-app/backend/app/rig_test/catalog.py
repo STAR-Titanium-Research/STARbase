@@ -29,6 +29,8 @@ from pydantic import (
 
 ASK_EST_S = 120
 NOTE_EST_S = 30
+# A backlog item with no step block is usually "record a cut, check X": give it room.
+PROSE_EST_S = 600
 MAX_TEXT = 1000
 MAX_OPTIONS = 6
 MAX_STEPS_PER_BLOCK = 50
@@ -270,7 +272,7 @@ def _prose_step(item: CatalogItem, index: int) -> Step:
         text=text or item.title,
         options=list(DEFAULT_OPTIONS),
         pass_=list(DEFAULT_PASS),
-        est_s=ASK_EST_S,
+        est_s=PROSE_EST_S,
     )
 
 

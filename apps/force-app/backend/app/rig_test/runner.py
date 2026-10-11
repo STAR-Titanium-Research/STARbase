@@ -1,9 +1,12 @@
 """Runs one accepted rig-test request, and owns the rig while it does (ADR-0012 §4).
 
 One run at a time, in a daemon thread that walks the steps in order. Phase 1 has two kinds:
-an `ask` waits for the operator's answer (up to ASK_TIMEOUT_S, then `no_response`); a `note`
-waits for "Continue". A step whose `after` dependency did not pass is skipped. The whole run has
-a hard limit of min(1.5 x its estimate, 30 min), and the operator can cancel at any time.
+an `ask` waits for the operator's answer, a `note` waits for "Continue". Each step has an answer
+window (`step_window_s`: an ask gets max(ASK_TIMEOUT_S, 1.5 x its estimate), a note gets
+ASK_TIMEOUT_S); with no answer the step is `no_response` and the run carries on. A step whose
+`after` dependency did not pass is skipped. The whole run has a hard cap (`run_cap_s`):
+min(RUN_CAP_MAX_S, max(1.5 x the estimates, the sum of the windows)), so a run of default asks is
+never cut off before its last answer window. The operator can cancel at any time.
 
 While a run is active `owns_rig()` is true: it stops a second run from being accepted and the poller
 from asking the relay. The rig *lock* (see `__init__`) is narrower: it refuses `/record/start` and
@@ -30,9 +33,12 @@ from .catalog import NOTE_OPTIONS
 
 log = logging.getLogger("force_app.rig_test")
 
-ASK_TIMEOUT_S = 300.0
-HARD_CAP_S = 30 * 60.0
-HARD_CAP_FACTOR = 1.5
+ASK_TIMEOUT_S = 300.0  # the shortest time the operator gets to answer any one step
+ASK_WINDOW_FACTOR = 1.5  # an ask with a long estimate gets this many times it
+RUN_CAP_FACTOR = 1.5
+# Nothing is locked in phase 1, so the run may wait on a person for a long while. The spec's 30 min
+# ceiling was for automated steps holding the rig (phase 2).
+RUN_CAP_MAX_S = 2 * 3600.0
 FINISHED_TTL_S = 300.0  # how long a finished run stays visible on GET /rig-tests/run
 MAX_NOTE = 1000
 RESULTS_DIR = "rig-tests"  # under the captures root: rig-tests/<n>/result.json
@@ -51,8 +57,18 @@ class AnswerRejectedError(Exception):
         self.conflict = conflict
 
 
-def hard_cap_s(estimate_s: float) -> float:
-    return min(HARD_CAP_FACTOR * estimate_s, HARD_CAP_S)
+def step_window_s(spec: dict, base_s: float = ASK_TIMEOUT_S) -> float:
+    """How long the operator has to answer this step before it counts as `no_response`."""
+    if spec["kind"] == "ask":
+        return max(base_s, ASK_WINDOW_FACTOR * spec["est_s"])
+    return base_s
+
+
+def run_cap_s(specs: list[dict], base_s: float = ASK_TIMEOUT_S) -> float:
+    """The hard time limit of a whole run."""
+    estimate = sum(s["est_s"] for s in specs)
+    windows = sum(step_window_s(s, base_s) for s in specs)
+    return min(RUN_CAP_MAX_S, max(RUN_CAP_FACTOR * estimate, windows))
 
 
 def _iso(epoch: float) -> str:
@@ -62,11 +78,13 @@ def _iso(epoch: float) -> str:
 class _Run:
     """Everything about one run: the public record, the step specs and the waiting state."""
 
-    def __init__(self, request: dict, meta: dict, clock: float, wall: float, rig: str):
+    def __init__(
+        self, request: dict, meta: dict, clock: float, wall: float, rig: str, window_s: float
+    ):
         specs = [s for item in request["items"] for s in item["steps"]]
         estimate = float(request["estimate_s"]["full"])
         self.specs = specs
-        cap_s = hard_cap_s(estimate)
+        cap_s = run_cap_s(specs, window_s)
         self.started_clock = clock
         self.hard_deadline = clock + cap_s
         self.finished_wall: float | None = None
@@ -194,7 +212,9 @@ class RigTestRunner:
         with self._cond:
             if self.owns_rig():
                 raise RunnerBusyError()
-            run = _Run(request, meta, self._clock(), self._wall(), self._rig_id())
+            run = _Run(
+                request, meta, self._clock(), self._wall(), self._rig_id(), self._ask_timeout_s
+            )
             self._run = run
         self._notify_active(run.record["number"])
         self._thread = threading.Thread(
@@ -266,20 +286,23 @@ class RigTestRunner:
         options = spec["options"] if spec["kind"] == "ask" else list(NOTE_OPTIONS)
         with self._cond:
             run.answer = None
-            ask_deadline = self._clock() + self._ask_timeout_s
+            now = self._clock()
+            # The countdown the UI shows ends when the step times out or the run's cap hits,
+            # whichever is first.
+            step_deadline = now + step_window_s(spec, self._ask_timeout_s)
+            limit = min(step_deadline, run.hard_deadline)
             step["status"] = "active"
             rec["current"] = spec["index"]
             rec["question"] = {
                 "step": spec["index"],
                 "text": spec["text"],
                 "options": options,
-                "expires_at": _iso(self._wall() + self._ask_timeout_s),
+                "expires_at": _iso(self._wall() + (limit - now)),
             }
         self._sync_progress(run)
         with self._cond:
             while run.answer is None and not run.cancel:
                 now = self._clock()
-                limit = min(ask_deadline, run.hard_deadline)
                 if now >= limit:
                     break
                 self._cond.wait(min(self._slice_s, limit - now))
@@ -295,8 +318,8 @@ class RigTestRunner:
                     step["status"] = "no_response"
                 else:
                     step["status"] = "fail"
-            elif run.cancel or self._clock() >= run.hard_deadline:
-                step["status"] = "cancelled"
+            elif run.cancel or self._clock() < step_deadline:
+                step["status"] = "cancelled"  # Cancel, or the run's cap cut the window short
             else:
                 step["status"] = "no_response"
             rec["current"] = None

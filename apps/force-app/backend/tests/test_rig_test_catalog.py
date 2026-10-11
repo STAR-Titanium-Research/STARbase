@@ -81,7 +81,7 @@ def test_item_without_a_block_becomes_one_ask_with_pass_fail_skip(index):
     assert first.kind == "ask" and first.item_id == "R4"
     assert first.options == ["Pass", "Fail", "Skip"] and first.pass_ == ["Pass"]
     assert first.text.startswith("R4 — pre-flight chips.")
-    assert first.est_s == 120
+    assert first.est_s == catalog.PROSE_EST_S == 600  # "record a cut, check X": 10 min, not 2
 
 
 def test_long_prose_is_cut_to_the_text_bound():
@@ -111,7 +111,7 @@ def test_after_uses_request_wide_indexes_for_later_items(index):
 
 def test_estimates_and_operator_step_count(index):
     req = parse_request(BODY.format(block="items: [R4, R7]"), index)
-    assert req.estimate_s == {"full": 120 + 90 + 30 + 30 + 120, "automated": 0}
+    assert req.estimate_s == {"full": 600 + 90 + 30 + 30 + 120, "automated": 0}
     assert req.needs_operator_steps == 5
 
 
