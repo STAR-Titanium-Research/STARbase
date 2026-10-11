@@ -35,7 +35,6 @@ class _Wiring:
     captures_root: Callable[[], str]
     poller: RigTestPoller
     runner: RigTestRunner
-    eligible: Callable[[], tuple[bool, str | None]]
 
 
 _w: _Wiring | None = None
@@ -56,6 +55,7 @@ def configure(
         captures_root=captures_root,
         rig_id=eligibility.rig_id,
         on_active=lambda n: store.update(active_run=n),
+        on_unsent=store.outbox_add,
     )
     runner.install(rig_runner)
     interval = poll_interval_s or float(os.environ.get("FORCE_APP_RIG_TEST_POLL_S", "60"))
@@ -71,7 +71,7 @@ def configure(
         rig_id=eligibility.rig_id,
         interval_s=interval,
     )
-    _w = _Wiring(is_busy, captures_root, poller, rig_runner, eligible)
+    _w = _Wiring(is_busy, captures_root, poller, rig_runner)
 
 
 def start_poller() -> None:
@@ -110,7 +110,7 @@ class DeclineBody(BaseModel):
     reason_code: Literal[
         "about_to_record", "machine_in_use", "rig_not_set_up", "not_today", "other"
     ]
-    text: str | None = Field(None, max_length=200)
+    text: str | None = Field(None, max_length=300)
 
 
 class AnswerBody(BaseModel):
@@ -125,7 +125,7 @@ class AnswerBody(BaseModel):
 @router.get("/eligibility")
 async def get_eligibility() -> dict:
     w = _wiring()
-    ok, reason = await run_in_threadpool(w.eligible)
+    ok, reason = await run_in_threadpool(w.poller.check_eligibility)
     out: dict = {
         "eligible": ok,
         "rig_id": eligibility.rig_id(),
@@ -138,13 +138,20 @@ async def get_eligibility() -> dict:
 
 @router.get("/pending")
 async def get_pending() -> dict:
-    return {"requests": _wiring().poller.pending()}
+    w = _wiring()
+    return {
+        "requests": w.poller.pending(),
+        "snoozed": w.poller.snoozed(),
+        # The condition accept refuses on, so a web UI whose own status poll is stale stays in
+        # badge mode instead of opening a dialog over a recording.
+        "busy": w.is_busy() or recovery.any_in_flight(),
+    }
 
 
 @router.post("/{n}/accept")
 async def accept(n: int, body: AcceptBody) -> dict:
     w = _wiring()
-    ok, reason = await run_in_threadpool(w.eligible)
+    ok, reason = await run_in_threadpool(w.poller.check_eligibility)
     # No await from here to runner.start(): the checks and the claim are one step, so a recording
     # cannot start in between (the same rule as /record/start's busy check).
     if not ok:
@@ -232,7 +239,8 @@ def _summary(data: dict) -> dict:
 
 def _read_history(root: str) -> list[dict]:
     runs = []
-    for path in glob.glob(os.path.join(root, runner.RESULTS_DIR, "*", "result.json")):
+    # result-<started>.json per run; a bare result.json is how an earlier build wrote them
+    for path in glob.glob(os.path.join(root, runner.RESULTS_DIR, "*", "result*.json")):
         try:
             with open(path, encoding="utf-8") as f:
                 runs.append(_summary(json.load(f)))

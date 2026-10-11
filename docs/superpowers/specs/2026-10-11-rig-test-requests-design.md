@@ -79,7 +79,10 @@ the backend at build time (`backend/app/rig_test/catalog.md`, copied there by th
 from the shipped copy, not from the issue body, is what keeps request text from turning into new
 behaviour. It also matches how the backlog is used: a fix and its backlog entry land in the same
 PR, so the release under test carries its own items. An id the build doesn't know is reported as
-`unknown item (not in app <version>)`.
+`unknown item (not in app <version>)`. An id that matches more than one backlog item is an
+invalid request ("E5 matches 37 items in this app's backlog; ask for one by its full id"): the
+backend never picks one. An id is `#190` or a letter-and-number token such as `R4`, plus any
+hyphenated suffix (`E5-fix-ui`); it ends at the first space, colon, comma or slash.
 
 An issue may also give inline steps under `steps:`, for one-off checks that aren't in the backlog.
 They may only use vocabulary actions. An inline `ask` only shows text to the operator. It is
@@ -89,7 +92,9 @@ checked like everything else, and only allowlisted logins can write it.
 
 From now on, every new rig item in `physical-test-backlog.md` gets a block straight after its
 prose. Existing items are converted when someone works on them. An item with no block still runs:
-the app shows its prose as one `ask` step with Pass, Fail and Skip.
+the app shows its prose (up to 4000 characters; request-supplied inline text is limited to 1000)
+as one `ask` step with Pass, Fail and Skip. Such a step defaults to a 10 min estimate, because it
+is usually "record a cut, check X".
 
 ````markdown
 - [ ] **R4 — pre-flight chips.** …prose as today…
@@ -114,8 +119,8 @@ the app shows its prose as one `ask` step with Pass, Fail and Skip.
   ```
 ````
 
-Rules: every step has an estimate. Each action has a default estimate, and `ask` steps default
-to 2 min. `expect` compares fields in the action's result with literal values or ranges such as
+Rules: every step has an estimate. Each action has a default estimate, and `ask` steps in a
+block default to 2 min. `expect` compares fields in the action's result with literal values or ranges such as
 `{ peak_n: [50, 500] }`. `after: <n>` makes a step depend on step n. If step n failed, was
 skipped or got no response, this step is skipped too.
 
@@ -154,7 +159,7 @@ New env: `RIG_TEST_ALLOWED_LOGINS` (comma-separated). If it's empty, all rig-tes
 
 | Endpoint | Does |
 |---|---|
-| `GET /rig-tests` | Open issues labelled `rig-test-request`. For each one, check the issue's `labeled` events: the most recent application of the label must be by an allowlisted login, or the issue is left out. Returns number, title, body, labeller, state label, created_at. Cached for 30 s, with an ETag to GitHub. |
+| `GET /rig-tests` | Open issues labelled `rig-test-request`. For each one, check the issue's `labeled` events: the most recent application of the label must be by an allowlisted login, and the issue's author must be an allowlisted login too (an author can edit the block after the label is on), or the issue is left out. Returns number, title, body, labeller, state label, created_at. Cached for 30 s, with an ETag to GitHub. |
 | `GET /rig-tests/{n}/actions?since=<comment id>` | (phase 3) Comments after `since` that are by allowlisted logins, not by the App's own bot, and contain a `rig-action` block. Returns the raw blocks; the backend parses them. |
 | `POST /rig-tests/{n}/comment` | Creates a comment, then returns its id. Refuses an issue that isn't an open `rig-test-request` issue, so it can't be used to post anywhere else. |
 | `PATCH /rig-tests/{n}/comment/{id}` | Edits a comment the App created on that issue (the progress comment). |
@@ -173,27 +178,48 @@ relay.
 
 - `poller.py`: a background thread, like `BackupStreamer` in `backup.py`, that polls the relay
   every 60 s while the app is idle and every 3 s during a live run. It skips polling while
-  `_busy()`, so it never adds load during a recording.
+  `_busy()` or a run is active, and checks that before it checks eligibility, so it never adds
+  load or enumerates DAQmx during a recording. It also retries the **outbox**: a result comment or
+  label that the relay did not take at the end of a run, and the "interrupted" notice for a run
+  that was active when the app last stopped, are kept in the state file and re-sent every poll
+  until they get through.
 - `eligibility.py`: answers requests only when `nidaq: simulated=False` with at least one chassis,
   and the Lab Amp client is not the mock. The rig id comes from `FORCE_APP_RIG_ID`, or the
-  hostname if that isn't set, and is shown in Settings → About.
+  hostname if that isn't set, and is shown in Settings → About. `FORCE_APP_RIG_TEST_ALLOW_SIM=1`
+  (tests, hardware-free runs) makes any PC eligible only if `FORCE_APP_BUG_REPORT_RELAY_URL` is
+  also set, so a dev machine never answers requests from the production relay.
 - `catalog.py`: parses the bundled `catalog.md`, resolves a request's items, validates every step
   against `actions.py`, and computes the full and automated-only estimates.
 - `runner.py`: the state machine. `pending → accepted → running → (done | partial | cancelled |
-  timed_out | interrupted)`. It owns the **rig lock**: `_busy()` gains a third condition,
-  `rig_test.owns_rig()`, and the runner's own recordings go through `/record/start` with an
-  in-process token. `/record/start`, `/record/start_replay`, `POST /labamp/mode`,
-  `/labamp/autorange/apply`, `/labamp/sensors/write`, `PUT /nidaq/channels`,
-  `/nidaq/tacho/start` and the storage writes return
+  timed_out | interrupted)`. While a run is active, `rig_test.owns_rig()` is true: accept
+  refuses a second run and the poller stays quiet. The **rig lock** is narrower: it engages only
+  while an *automated* step is executing (`runner.automated_step_active()`; never in phase 1, where
+  every step is an `ask` or `note` and the operator has to use the rig to carry them out). While it
+  is engaged, the runner's own recordings go through `/record/start` with an in-process token,
+  and `/record/start`, `/record/start_replay`, `POST /labamp/mode`, `/labamp/autorange/apply`,
+  `/labamp/autorange/converge`, `/labamp/sensors/write`, `PUT /nidaq/channels`,
+  `/nidaq/channels/autoassign`, `/nidaq/tacho/start` and the storage writes return
   `409 "a rig test is running (issue #N); cancel it from the rig-test window"` for anyone else.
+  The check is in a table (`lock_guard`) and also in `_refuse_nidaq_change_if_busy()` and next to
+  each `_busy()` re-check after an await.
 - **Snapshot and restore** (phase 2): before the first state-changing step, it saves the amp mode,
   per-channel ranges and params to `rig-tests/<n>/journal.json` (with fsync), and restores them on
   any end state. At startup, a journal with no end state means a crash: restore, mark it
   `interrupted` and post that.
-- **Hard time limit**: 1.5× the total estimate, at most 30 min. For live runs it is 1.5× `budget`.
-  When it runs out, it cancels the current step and ends as `timed_out`.
+- **Answer windows and the hard time limit.** An `ask` has max(5 min, 1.5× its estimate) to be
+  answered, a `note` has 5 min; after that the step is `no_response` and the run carries on. The
+  run's hard cap is min(2 h, max(1.5× the sum of the estimates, the sum of the windows)), so a run
+  of default asks is never cut off before its last window. (An earlier draft capped a run at
+  30 min; that was for automated steps holding the rig, and nothing is locked in phase 1.) For
+  live runs the cap is 1.5× `budget`. When it runs out, the runner cancels the current step and
+  ends as `timed_out`. `question.expires_at` is the earlier of the step's deadline and the run's,
+  so the countdown the operator sees is the real one.
+- Each run writes `rig-tests/<n>/result-<started>.json`, so asking for the same issue again
+  doesn't overwrite the first result.
 - `report.py`: builds the comments (format below).
-- REST, loopback only like everything else: `GET /rig-tests/pending`, `GET /rig-tests/run`
+- REST, loopback only like everything else: `GET /rig-tests/pending` (`{requests, snoozed,
+  busy}`: `busy` is what accept refuses on, so the UI can stay in badge mode; `snoozed` lists
+  snoozed requests with `snoozed_until`), `GET /rig-tests/run`
   (state, the current step and its index, elapsed and remaining time, pending question),
   `POST /rig-tests/{n}/accept {mode: full|automated}`, `/snooze {until}`, `/decline {reason}`,
   `POST /rig-tests/run/answer {step, option, note}`, `POST /rig-tests/run/cancel`, and
@@ -224,7 +250,7 @@ renderer sends its upload-queue state with the accept call.
   **Cancel** button that asks for confirmation. **Minimise** turns it into a bar along the bottom
   edge of the screen ("Rig test #N, step 4/9, about 6 min left, Cancel") so the operator can browse
   Plot, Captures or Settings. An `ask` step brings the modal back up, with the question, option
-  buttons, a note field and a 5 min countdown. With no answer, the step is marked `no response`
+  buttons, a note field and a countdown to `question.expires_at`. With no answer, the step is marked `no response`
   and the run carries on. In automated-only mode, `ask` steps are skipped, never shown.
 - **Settings → Rig tests** tab (`settings/RigTestsSettings.vue`): pending, snoozed and past
   requests with their state, issue link and result summary, plus the rig id and whether this PC
@@ -259,6 +285,10 @@ Result values: `pass`, `fail`, `no_response`, `skipped_automated_only`, `skipped
 ticking session writes `— <date>, rig test #N (op): OK` after the item, or for a fail
 `FAIL, see #N` and a new or reopened issue, following the backlog's own rules.
 
+A result comment can't exceed GitHub's 60 000 characters. If it would, operator notes are shortened
+first, then the table's evidence column. The hidden JSON is kept whole, and each item in it carries
+its `title` so a ticking session can match the backlog line.
+
 ## Directus
 
 The migration `…_rig_tests_project.sql` seeds one project, "Rig tests", and one operation under
@@ -275,8 +305,10 @@ like any capture, and the report says "upload queued".
   `rig-test:declined` with reason `invalid request`.
 - **An action fails, for example a DAQmx error**: the step is marked `error` with the message,
   steps that depend on it are skipped, and the run continues.
+- **The relay is down when a run ends**: the result comment and label are kept in the outbox and
+  sent when the relay is back.
 - **The app or the PC crashes mid-run**: at the next start the journal is restored and the run
-  is reported as `interrupted`.
+  is reported as `interrupted` (through the outbox, so a relay outage can't lose the notice).
 - **Two requests at once**: they are offered one at a time, oldest first.
 - **A request is relabelled or closed mid-run**: the run finishes the current step, restores the
   state and reports `cancelled (request withdrawn)`.
@@ -300,7 +332,8 @@ like any capture, and the report says "upload queued".
 ## Phases
 
 1. **Request, consent, operator steps, report.** Relay endpoints (except `/actions`), poller,
-   eligibility, catalogue with `ask` and `note` only, runner and rig lock, prompt (Run now, Snooze,
+   eligibility, catalogue with `ask` and `note` only, runner and the rig lock (built, but it only
+   engages for automated steps, so not yet), prompt (Run now, Snooze,
    Decline), modal with minimise and Cancel, the Settings tab, the report. Items without blocks
    run as prose checklists.
 2. **Automation.** The vocabulary above, snapshot and restore with the journal, Run automated
@@ -314,7 +347,8 @@ like any capture, and the report says "upload queued".
 - Which login do Claude session comments show up as on this repo? Comments posted through the
   GitHub MCP have so far appeared as the maintainer's own login. If that holds, the allowlist is
   just `dpremoli`. Check this on the first live run.
-- Item ids aren't unique across the backlog today. Some are review ids (R4), some are issue
-  numbers (#190), and a few items have neither. Phase 1 gives the parser a rule: the bold lead
-  `**<id> — …**` or `**#<n> …**`, and the first one wins. A CI check reports duplicates and
-  items with no id once blocks start appearing.
+- Item ids aren't unique across the backlog today (E5 appears 37 times, R9 6 times, #190 twice),
+  and some items have no id. The parser takes the id from the bold lead (see "Request format");
+  an id that names several items is refused, so those items can't be requested until they get a
+  distinct id in a block (`id: E5-owner-a`). A CI check should report duplicates and items with no
+  id once blocks start appearing.

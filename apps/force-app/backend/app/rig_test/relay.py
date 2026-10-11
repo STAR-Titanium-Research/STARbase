@@ -14,9 +14,11 @@ import httpx
 
 from .. import bug_report
 
-TIMEOUT_S = 10.0
+TIMEOUT_S = 30.0  # GitHub can take a while under load; a poll never blocks a recording
 STATES = ("deferred", "declined", "running", "partial", "done", "interrupted")
-_MAX_COMMENT = 60_000  # the relay's own limit
+MAX_COMMENT = 60_000  # the relay's own limit
+RESULT_MARKER = "<!-- rig-test-result "
+_SHORTENED = "\n\n(comment shortened to fit GitHub's size limit)\n\n"
 
 
 def _call(method: str, path: str, body: dict | None = None) -> dict:
@@ -58,14 +60,28 @@ def list_requests() -> dict:
     return res
 
 
+def fit_comment(body: str) -> str:
+    """`body` within the relay's size limit. report.render_result already shortens notes and the
+    table to fit, so this is only the last resort; it cuts the head of the comment and keeps the
+    hidden result JSON at the end whole, never the other way round."""
+    if len(body) <= MAX_COMMENT:
+        return body
+    at = body.rfind(RESULT_MARKER)
+    tail = body[at:] if at >= 0 else ""
+    room = MAX_COMMENT - len(tail) - len(_SHORTENED)
+    if room <= 0:  # the JSON alone is too big: nothing sensible is left to cut
+        return body[:MAX_COMMENT]
+    return body[:room].rstrip() + _SHORTENED + tail
+
+
 def post_comment(number: int, body: str) -> dict:
     """{ok, id} for a new comment on rig-test issue `number`."""
-    return _call("POST", f"/rig-tests/{int(number)}/comment", {"body": body[:_MAX_COMMENT]})
+    return _call("POST", f"/rig-tests/{int(number)}/comment", {"body": fit_comment(body)})
 
 
 def edit_comment(number: int, comment_id: int | str, body: str) -> dict:
     path = f"/rig-tests/{int(number)}/comment/{quote(str(comment_id), safe='')}"
-    return _call("PATCH", path, {"body": body[:_MAX_COMMENT]})
+    return _call("PATCH", path, {"body": fit_comment(body)})
 
 
 def set_state(number: int, state: str) -> dict:

@@ -18,7 +18,7 @@ BACKLOG = """\
 - [x] **#190 long cut links and keeps its crop.** Record a cut over ~6 min at 51.2 kHz (no .mat).
   Move both crop handles in the final summary and Save. Since #198 (0.1.35).
 - [ ] **Leaving the page mid-cut.** Go to Plot and back; the trace has no hole.
-- [ ] **R4 — a second item with the same id.** The first R4 must win.
+- [ ] **R40 — a lookalike.** Its id is its own, not R4.
 - [ ] **#96, #101** Explorer reveal and network-drive behaviour.
 - [ ] **R7 — chips with a block.** Pull the cable.
   ```rig-test
@@ -50,18 +50,49 @@ def index():
 
 def test_item_ids_come_from_the_bold_lead():
     items = parse_items(BACKLOG)
-    assert [i.id for i in items] == ["R4", "#190", None, "R4", "#96", "R7", "C1"]
+    assert [i.id for i in items] == ["R4", "#190", None, "R40", "#96", "R7", "C1"]
     assert items[0].title == "R4 — pre-flight chips"
     assert items[4].title == "#96, #101"
 
 
-def test_first_occurrence_of_an_id_wins(index):
-    assert index["R4"].title == "R4 — pre-flight chips"
+def test_ids_stop_at_the_real_boundary_and_keep_hyphenated_suffixes():
+    md = "\n".join(
+        f"- [ ] **{lead}** text"
+        for lead in (
+            "E5-fix-ui: Edit is hidden where you may not",
+            "E5-r2-ui: a refused save shows the server's words",
+            "E4-fix — the subject trigger",
+            "E5 — migrations 140 and 141",
+            "E5 fix — nobody can grant themselves a role",
+            "E5-r3 — a parent merely updated",
+            "D1/D2 — chips and messages",
+            "#96, #101 Explorer reveal",
+            "R10: chip",
+            "E-final: campaign pickers",
+            "Lab Member file reads.",
+        )
+    )
+    assert [i.id for i in parse_items(md)] == [
+        "E5-fix-ui", "E5-r2-ui", "E4-fix", "E5", "E5", "E5-r3", "D1", "#96", "R10", None, None,
+    ]  # fmt: skip
+
+
+def test_an_id_naming_several_items_is_an_invalid_request():
+    md = "- [ ] **E5 — one.** a\n- [ ] **E5 — two.** b\n- [ ] **E5-fix-ui: three.** c\n"
+    index = catalog._index(md)
+    assert len(index["E5"]) == 2 and len(index["E5-fix-ui"]) == 1
+    with pytest.raises(RigRequestError) as e:
+        parse_request(BODY.format(block="items: [E5]"), index)
+    assert str(e.value) == "E5 matches 2 items in this app's backlog; ask for one by its full id"
+    assert parse_request(BODY.format(block="items: [E5-fix-ui]"), index).items[0].id == "E5-fix-ui"
+
+
+def test_items_without_an_id_are_not_in_the_index(index):
     assert None not in index  # an item with no id cannot be requested
 
 
 def test_prose_is_one_line_without_markup_and_item_ends_at_the_next_checkbox(index):
-    prose = index["R4"].prose
+    prose = index["R4"][0].prose
     assert prose.startswith("R4 — pre-flight chips. With the Lab Amp in MEASURE")
     assert "**" not in prose and "\n" not in prose
     assert "Leaving the page" not in prose
@@ -81,14 +112,17 @@ def test_item_without_a_block_becomes_one_ask_with_pass_fail_skip(index):
     assert first.kind == "ask" and first.item_id == "R4"
     assert first.options == ["Pass", "Fail", "Skip"] and first.pass_ == ["Pass"]
     assert first.text.startswith("R4 — pre-flight chips.")
-    assert first.est_s == 120
+    assert first.est_s == catalog.PROSE_EST_S == 600  # "record a cut, check X": 10 min, not 2
 
 
-def test_long_prose_is_cut_to_the_text_bound():
-    long_item = "- [ ] **R9 — long.** " + "word " * 600
-    req = parse_request(BODY.format(block="items: [R9]"), catalog._index(long_item))
-    text = req.steps[0].text
-    assert len(text) <= catalog.MAX_TEXT and text.endswith("…")
+def test_prose_steps_may_be_longer_than_request_text_but_not_unbounded():
+    medium = "- [ ] **R9 — long.** " + "word " * 600  # ~3000 chars: fine for bundled prose
+    req = parse_request(BODY.format(block="items: [R9]"), catalog._index(medium))
+    assert 1000 < len(req.steps[0].text) <= catalog.MAX_PROSE_TEXT
+    assert not req.steps[0].text.endswith("…")
+    huge = "- [ ] **R9 — long.** " + "word " * 3000
+    text = parse_request(BODY.format(block="items: [R9]"), catalog._index(huge)).steps[0].text
+    assert len(text) <= catalog.MAX_PROSE_TEXT and text.endswith("…")
 
 
 def test_item_block_steps_options_pass_est_and_after(index):
@@ -111,7 +145,7 @@ def test_after_uses_request_wide_indexes_for_later_items(index):
 
 def test_estimates_and_operator_step_count(index):
     req = parse_request(BODY.format(block="items: [R4, R7]"), index)
-    assert req.estimate_s == {"full": 120 + 90 + 30 + 30 + 120, "automated": 0}
+    assert req.estimate_s == {"full": 600 + 90 + 30 + 30 + 120, "automated": 0}
     assert req.needs_operator_steps == 5
 
 
@@ -204,6 +238,15 @@ def test_yaml_aliases_and_huge_blocks_are_refused():
         parse_request(BODY.format(block="items: [R4]\n# " + "x" * 17000), {})
 
 
+def test_deeply_nested_yaml_is_an_invalid_request_not_a_crash():
+    with pytest.raises(RigRequestError, match="nested too deeply"):
+        parse_request(BODY.format(block="items: " + "[" * 3000), {})
+    assert catalog.peek_rig(BODY.format(block="[" * 3000)) is None
+    md = "- [ ] **R1 — deep.** x\n  ```rig-test\n  steps: " + "[" * 3000 + "\n  ```\n"
+    with pytest.raises(RigRequestError, match="R1.*nested too deeply"):
+        parse_request(BODY.format(block="items: [R1]"), catalog._index(md))
+
+
 def test_a_broken_catalogue_block_makes_only_requests_for_it_invalid():
     md = "- [ ] **R1 — bad.** x\n  ```rig-test\n  steps:\n    - do: record\n  ```\n- [ ] **R2 — fine.** y\n"
     index = catalog._index(md)
@@ -225,17 +268,17 @@ def test_peek_rig_never_raises():
 
 
 def test_the_real_backlog_resolves_r4_and_190():
-    text = catalog.REPO_BACKLOG.read_text(encoding="utf-8")
+    text = catalog.repo_backlog_path().read_text(encoding="utf-8")
     index = catalog._index(text)
-    assert {"R4", "#190"} <= set(index)
+    assert {"R4", "#185"} <= set(index)
     assert catalog._index(text) is index  # cached by content
-    req = parse_request(BODY.format(block='items: [R4, "#190"]'), index)
+    req = parse_request(BODY.format(block='items: [R4, "#185"]'), index)
     assert req.steps[0].text.startswith("R4")
-    assert all(len(s.text) <= catalog.MAX_TEXT for s in req.steps)
+    assert all(len(s.text) <= catalog.MAX_PROSE_TEXT for s in req.steps)
 
 
 def test_catalog_falls_back_to_the_repo_backlog_when_no_bundled_copy(monkeypatch, tmp_path):
     monkeypatch.setattr(catalog, "BUNDLED_CATALOG", tmp_path / "missing.md")
     assert "R4" in catalog.catalog_index()
-    monkeypatch.setattr(catalog, "REPO_BACKLOG", tmp_path / "also-missing.md")
+    monkeypatch.setattr(catalog, "repo_backlog_path", lambda: tmp_path / "also-missing.md")
     assert catalog.load_catalog_text() == ""

@@ -386,10 +386,17 @@ class FakeGitHub:
         self.hook = None  # request -> Response | None, tried before the routes
 
     def issue(
-        self, n, labels=("rig-test-request",), state="open", labeller="Maintainer", **kw
+        self,
+        n,
+        labels=("rig-test-request",),
+        state="open",
+        labeller="Maintainer",
+        author="Maintainer",
+        **kw,
     ):
         self.issues[n] = {
             "number": n,
+            "user": {"login": author},
             "title": f"Rig test {n}",
             "body": "```rig-test\nitems: [R4]\n```",
             "html_url": f"https://github.com/x/y/issues/{n}",
@@ -552,6 +559,19 @@ def test_list_excludes_a_stranger_pull_requests_and_closed_issues(client, gh):
     assert [r["number"] for r in client.get("/rig-tests").json()["requests"]] == [10]
 
 
+def test_list_requires_the_issue_author_to_be_allowlisted_too(client, gh):
+    """An allowlisted login labels an issue a stranger wrote: the stranger can edit the block
+    afterwards, so it is not a request (12)."""
+    gh.issue(5, author="stranger")  # labelled by the maintainer, written by a stranger
+    gh.issue(6, author="Other-Admin")  # both allowlisted, any case
+    gh.issue(7, author=None, user=None)  # a deleted account: GitHub gives user=null
+    gh.issue(8, labeller="stranger", author="maintainer")  # the other direction
+    gh.issue(9, author="maintainer")
+    assert [r["number"] for r in client.get("/rig-tests").json()["requests"]] == [6, 9]
+    # the stranger-authored issues did not cost an events call
+    assert not any(p.endswith("/issues/5/events") for _, p in gh.calls)
+
+
 def test_list_the_most_recent_labeller_wins(client, gh):
     # allowlisted applies, label removed, a stranger re-applies: excluded.
     gh.issue(5)
@@ -624,9 +644,18 @@ def test_comment_posts_to_a_rig_test_issue(client, gh):
         {"state": "closed"},
         {"labels": ("bug",)},
         {"labeller": "stranger"},
+        {"author": "stranger"},
+        {"user": None},
         {"pull_request": {"url": "x"}},
     ],
-    ids=["closed", "unlabelled", "stranger-labelled", "pull-request"],
+    ids=[
+        "closed",
+        "unlabelled",
+        "stranger-labelled",
+        "stranger-authored",
+        "no-author",
+        "pull-request",
+    ],
 )
 def test_writes_are_refused_unless_the_issue_is_an_open_rig_test_request(
     client, gh, setup

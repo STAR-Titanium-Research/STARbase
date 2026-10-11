@@ -29,7 +29,11 @@ from pydantic import (
 
 ASK_EST_S = 120
 NOTE_EST_S = 30
-MAX_TEXT = 1000
+# A backlog item with no step block is usually "record a cut, check X": give it room.
+PROSE_EST_S = 600
+MAX_TEXT = 1000  # request-supplied text (inline steps)
+# Prose from the bundled backlog is trusted content that ships with the build, so it gets more room.
+MAX_PROSE_TEXT = 4000
 MAX_OPTIONS = 6
 MAX_STEPS_PER_BLOCK = 50
 MAX_STEPS_PER_REQUEST = 200
@@ -40,11 +44,16 @@ DEFAULT_PASS = ["Pass"]
 NOTE_OPTIONS = ["Continue"]
 INLINE_ITEM_ID = "inline"
 
-# The backlog is read from here when the bundled copy is missing (a dev checkout, the tests).
+# The backlog is read from the repo when the bundled copy is missing (a dev checkout, the tests).
 BUNDLED_CATALOG = Path(__file__).with_name("catalog.md")
-REPO_BACKLOG = (
-    Path(__file__).resolve().parents[5] / "docs" / "runbooks" / "physical-test-backlog.md"
-)
+
+
+def repo_backlog_path() -> Path:
+    """docs/runbooks/physical-test-backlog.md in a source checkout. Worked out on use, not at
+    import: in a packaged build this file sits fewer folders deep than that."""
+    here = Path(__file__).resolve()
+    root = here.parents[5] if len(here.parents) > 5 else here.parent
+    return root / "docs" / "runbooks" / "physical-test-backlog.md"
 
 
 class RigRequestError(ValueError):
@@ -83,6 +92,8 @@ def _load_yaml(text: str, what: str) -> Any:
         mark = getattr(e, "problem_mark", None)
         where = f" (line {mark.line + 1})" if mark else ""
         raise RigRequestError(f"{what} is not valid YAML{where}") from None
+    except RecursionError:  # "[" * 3000 fits the size limit and overflows the parser's stack
+        raise RigRequestError(f"{what} is nested too deeply") from None
 
 
 # ---- models ----------------------------------------------------------------------------------
@@ -262,7 +273,8 @@ def _build_steps(raw_steps: list, item_id: str, base: int) -> list[Step]:
 
 
 def _prose_step(item: CatalogItem, index: int) -> Step:
-    text = item.prose if len(item.prose) <= MAX_TEXT else item.prose[: MAX_TEXT - 1].rstrip() + "…"
+    prose = item.prose
+    text = prose if len(prose) <= MAX_PROSE_TEXT else prose[: MAX_PROSE_TEXT - 1].rstrip() + "…"
     return Step(
         index=index,
         item_id=item.id or "",
@@ -270,7 +282,7 @@ def _prose_step(item: CatalogItem, index: int) -> Step:
         text=text or item.title,
         options=list(DEFAULT_OPTIONS),
         pass_=list(DEFAULT_PASS),
-        est_s=ASK_EST_S,
+        est_s=PROSE_EST_S,
     )
 
 
@@ -288,7 +300,11 @@ class CatalogItem:
 
 _ITEM_RE = re.compile(r"^(\s*)- \[[ xX]\] (.*)$")
 _LEAD_RE = re.compile(r"^\*\*(.+?)\*\*")
-_ID_RE = re.compile(r"(#\d+|[A-Z]{1,2}\d+)(?![A-Za-z0-9])")
+# An id is `#190` or a letter-and-number token such as `R4`, optionally followed by hyphen-joined
+# words that the backlog uses as part of the id (`E5-fix-ui`, `E4-fix`, `E5-r2-ui`). It ends at the
+# first space, colon, comma, dash with spaces or slash, so `E5 — x`, `E5 fix — x` and `E5: x` are
+# all `E5`.
+_ID_RE = re.compile(r"(#\d+|[A-Z]{1,2}\d+)(?:-[A-Za-z0-9]+)*(?![A-Za-z0-9])")
 _FENCE_RE = re.compile(r"^[ \t]*```rig-test[ \t]*\n(.*?)^[ \t]*```[ \t]*$", re.M | re.S)
 
 
@@ -311,7 +327,7 @@ def _item_from_lines(lines: list[str]) -> CatalogItem:
     lead = _LEAD_RE.match(first)
     title = (lead.group(1) if lead else "").strip().rstrip(".:")
     m = _ID_RE.match(title)
-    item_id = m.group(1) if m else None
+    item_id = m.group(0) if m else None
     if isinstance(block, dict) and block.get("id") is not None:
         item_id = str(block["id"]).strip() or item_id
     prose = re.sub(r"\s+", " ", text.replace("**", "")).strip()
@@ -343,16 +359,18 @@ def parse_items(markdown: str) -> list[CatalogItem]:
 
 
 @lru_cache(maxsize=2)
-def _index(markdown: str) -> dict[str, CatalogItem]:
-    index: dict[str, CatalogItem] = {}
+def _index(markdown: str) -> dict[str, list[CatalogItem]]:
+    """id -> every item with that id, in file order. An id that names more than one item cannot be
+    requested (`parse_request` refuses it) until someone gives those items distinct ids."""
+    index: dict[str, list[CatalogItem]] = {}
     for item in parse_items(markdown):
-        if item.id and item.id not in index:  # the first occurrence wins
-            index[item.id] = item
+        if item.id:
+            index.setdefault(item.id, []).append(item)
     return index
 
 
 def load_catalog_text() -> str:
-    for path in (BUNDLED_CATALOG, REPO_BACKLOG):
+    for path in (BUNDLED_CATALOG, repo_backlog_path()):
         try:
             return path.read_text(encoding="utf-8")
         except OSError:
@@ -360,7 +378,7 @@ def load_catalog_text() -> str:
     return ""
 
 
-def catalog_index() -> dict[str, CatalogItem]:
+def catalog_index() -> dict[str, list[CatalogItem]]:
     return _index(load_catalog_text())
 
 
@@ -399,7 +417,9 @@ def _resolve_item(item: CatalogItem, base: int) -> Item:
     )
 
 
-def parse_request(body: str, catalog: dict[str, CatalogItem] | None = None) -> ResolvedRequest:
+def parse_request(
+    body: str, catalog: dict[str, list[CatalogItem]] | None = None
+) -> ResolvedRequest:
     """Resolve an issue body into runnable items, or raise RigRequestError with a postable reason."""
     catalog = catalog_index() if catalog is None else catalog
     data = _load_yaml(extract_block(body), "rig-test block")
@@ -414,10 +434,15 @@ def parse_request(body: str, catalog: dict[str, CatalogItem] | None = None) -> R
     items: list[Item] = []
     base = 0
     for item_id in dict.fromkeys(block.items):  # de-duplicated, order kept
-        found = catalog.get(item_id)
-        if found is None:
+        found = catalog.get(item_id) or []
+        if not found:
             raise RigRequestError(f"unknown item {item_id!r} (not in this app version)")
-        resolved = _resolve_item(found, base)
+        if len(found) > 1:
+            raise RigRequestError(
+                f"{item_id} matches {len(found)} items in this app's backlog; "
+                "ask for one by its full id"
+            )
+        resolved = _resolve_item(found[0], base)
         items.append(resolved)
         base += len(resolved.steps)
     if block.steps:

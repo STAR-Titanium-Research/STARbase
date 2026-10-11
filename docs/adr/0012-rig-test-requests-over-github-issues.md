@@ -46,7 +46,8 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
 2. **The relay is the only broker, and it checks authority.** New relay endpoints (see the
    spec) list pending requests and their unread action comments, and post comments and labels for
    the app. The relay accepts a request only if a login on `RIG_TEST_ALLOWED_LOGINS` applied the
-   label (checked against the issue's `labeled` events), and an action comment only if an
+   label (checked against the issue's `labeled` events) and the issue's author is on the list too
+   (an author can edit the request after the label is on), and an action comment only if an
    allowlisted login wrote it. Comments by the relay's own bot (`d1-database-bug-reporter[bot]`)
    are never read as commands. Anything else is dropped and logged. The rig app polls the relay; nothing
    connects inbound to the rig, and the backend still listens on loopback only.
@@ -61,10 +62,12 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
 
 4. **The operator decides, and the backend enforces it.** Nothing runs until the operator
    accepts in the app (run now, run automated steps only, snooze, or decline). A run is refused
-   while a recording, finalize, recovery, restore or upload is in progress. While a run owns the
-   rig, the backend refuses `/record/start` and hardware config writes from anyone but the run.
-   Cancel always works. The hardware state is captured before the run and restored after Cancel,
-   after the hard time limit (1.5× the estimate, at most 30 min), or after a crash, from a journal on
+   while a recording, finalize, recovery, restore or upload is in progress. While an *automated*
+   step is executing, the backend refuses `/record/start` and hardware config writes from anyone
+   but the run. Operator steps (`ask`, `note`) don't lock anything: the person has to use the rig
+   to carry them out. Cancel always works. The hardware state is captured before the first
+   automated step and restored after Cancel, after the hard time limit (the larger of 1.5× the
+   estimate and the sum of the answer windows, at most 2 h), or after a crash, from a journal on
    disk.
 
 5. **Only the rig answers.** A backend answers requests only when it sees real NI-DAQ hardware and
@@ -114,7 +117,7 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
 
 - Relay tests: label applied by a login not on the allowlist → the request is not listed; an
   action comment by a login not on the allowlist, or by the relay's own bot → it is not returned.
-- Backend tests: `/record/start` → 409 while a run owns the rig; accept → 409 while recording or
+- Backend tests: `/record/start` → 409 while an automated step runs (and free during an `ask`); accept → 409 while recording or
   finalizing; Cancel and the hard time limit restore the captured amp state; a journal left by a
   crash is restored at startup and reported as `interrupted`; unknown action names and
   out-of-range parameters are rejected before anything runs.
