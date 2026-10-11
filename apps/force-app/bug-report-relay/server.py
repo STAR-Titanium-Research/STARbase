@@ -291,10 +291,7 @@ async def issues() -> dict:
                 "title": item.get("title", ""),
                 "url": item.get("html_url", ""),
                 "state": item.get("state", ""),
-                "labels": [
-                    (label if isinstance(label, str) else label.get("name", ""))
-                    for label in item.get("labels", [])
-                ],
+                "labels": _label_names(item),
                 "created_at": item.get("created_at"),
             }
         )
@@ -312,7 +309,6 @@ _LIST_TTL_S = 30.0
 _EVENT_PAGES_MAX = (
     10  # 1000 events on one issue; beyond that fail closed rather than guess
 )
-_NOT_CONFIGURED = "rig tests not configured"
 
 
 def _allowed_logins() -> frozenset[str]:
@@ -320,10 +316,14 @@ def _allowed_logins() -> frozenset[str]:
     return frozenset(p.strip().lower() for p in raw.split(",") if p.strip())
 
 
+def _is_allowed(login: str | None) -> bool:
+    return (login or "").lower() in _allowed_logins()
+
+
 def _rig_gate() -> dict | None:
     """Fail closed: no allowlist, or no GitHub App, means no rig-test endpoint does anything."""
     if not _allowed_logins() or not configured():
-        return _failure(_NOT_CONFIGURED)
+        return _failure("rig tests not configured")
     return None
 
 
@@ -393,7 +393,7 @@ async def _rig_issue(n: int) -> tuple[dict | None, dict | None]:
     login, err = await _labeller(n)
     if err:
         return None, err
-    if (login or "").lower() not in _allowed_logins():
+    if not _is_allowed(login):
         return None, refusal
     return issue, None
 
@@ -429,7 +429,7 @@ async def rig_tests() -> dict:
         login, err = await _labeller(n)
         if err:
             return err
-        if (login or "").lower() not in allowed:
+        if not _is_allowed(login):
             log.info(
                 "rig-test #%s ignored: label applied by %r, not on the allowlist",
                 n,
