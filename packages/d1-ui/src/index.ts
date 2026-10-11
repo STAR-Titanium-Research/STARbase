@@ -76,3 +76,11 @@ export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
+
+// Explorer navigation: host contract, sidebar tree, index-page configs
+export { EXPLORER_HOST } from './host';
+export type { ExplorerHost } from './host';
+export { NAV_GROUPS, buildNav, linkForBookmark } from './nav/navConfig';
+export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
+export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
+export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
