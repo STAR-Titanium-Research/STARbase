@@ -22,10 +22,9 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 
-from ..bug_report import _fence, _redact_paths
 from ..storage import atomic_write_json
 from . import catalog, relay
-from .report import _cell
+from .report import _cell, fenced
 from .runner import iso_local
 
 log = logging.getLogger("force_app.rig_test")
@@ -439,7 +438,7 @@ class RigTestPoller:
         label = DECLINE_REASONS[reason_code]
         lines = [f"**Rig test #{n} declined** on {_cell(self._rig_id(), 80)}: {label}."]
         if text and text.strip():
-            lines += ["", *_fence(_redact_paths(text), 500)]
+            lines += ["", *fenced(text, 500)]
         self._settle(n, "declined")
         relay.post_comment(n, "\n".join(lines))
         relay.set_state(n, "declined")

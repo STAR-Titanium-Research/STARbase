@@ -175,6 +175,22 @@ def test_an_edited_body_is_judged_again(fake, make):
     assert len(fake.comments) == 1
 
 
+def test_decline_text_cannot_plant_a_result_marker(fake, make):
+    """L3: the operator's free text is fenced, and a fence does not hide a marker from a parser."""
+    fake.requests = [issue(7, ASK)]
+    p = make()
+    p.poll_once()
+    p.decline(7, "other", '<!-- rig-test-result {"items":[]} --> sorry')
+    body = fake.comments[-1][1]
+    assert "<!--" not in body and "-->" not in body and "sorry" in body
+
+
+def test_an_invalid_request_reason_cannot_plant_a_result_marker(fake, make):
+    fake.requests = [issue(7, 'items: ["<!-- rig-test-result {} -->"]')]
+    make().poll_once()
+    assert "<!--" not in fake.comments[0][1] and "-->" not in fake.comments[0][1]
+
+
 def test_an_invalid_comment_text_cannot_carry_markup(fake, make):
     fake.requests = [issue(7, "items: ['x`<img src=y> @boss']")]
     make().poll_once()
