@@ -61,7 +61,7 @@ import logging
 import os
 import time
 from typing import Annotated, Literal
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import jwt
@@ -198,17 +198,21 @@ async def _gh(
     *,
     what: str = "request",
     allow: tuple[int, ...] = (),
+    links: dict | None = None,
     **kwargs,
 ) -> tuple[object, dict | None]:
     """_github plus the never-raise contract: returns (parsed JSON or None, None) on success, or
     (None, {"ok": False, "reason": ...}) when authentication, the network or GitHub failed.
-    Statuses in `allow` count as success (their body is still returned)."""
+    Statuses in `allow` count as success (their body is still returned). A dict passed as `links`
+    is filled with the response's parsed Link header (rel -> {"url": ...})."""
     try:
         res = await _github(method, f"{GITHUB_API}{path}", **kwargs)
     except _AuthError as e:
         return None, _failure(f"could not authenticate with GitHub: {e}")
     except httpx.HTTPError as e:
         return None, _failure(f"could not reach GitHub: {e}")
+    if links is not None:
+        links.update(res.links)
     try:
         data = res.json()
     except ValueError:
@@ -380,30 +384,55 @@ def _label_names(issue: dict) -> list[str]:
     ]
 
 
+def _last_page(links: dict) -> int:
+    """Number of the last page of a paginated reply, from its Link header (1 when there is none)."""
+    url = (links.get("last") or {}).get("url") or ""
+    found = parse_qs(urlparse(url).query).get("page") or []
+    return int(found[0]) if found and found[0].isdigit() else 1
+
+
+def _latest_label_event(events: list) -> str | None:
+    """Login on the newest RIG_LABEL `labeled` event in a page of events (oldest first), "" if
+    GitHub shows no actor, None if the page has no such event."""
+    for e in reversed(events):
+        if (
+            isinstance(e, dict)
+            and e.get("event") == "labeled"
+            and ((e.get("label") or {}).get("name") or "").lower() == RIG_LABEL
+        ):
+            return (e.get("actor") or {}).get("login") or ""
+    return None
+
+
 async def _labeller(n: int) -> tuple[str | None, dict | None]:
     """Login that most recently applied RIG_LABEL to issue n ("" if GitHub shows no actor, None
-    if never). Events come oldest first, so every page is read and the last match wins."""
-    last: str | None = None
-    for page in range(1, _EVENT_PAGES_MAX + 1):
-        events, err = await _gh(
-            "GET",
-            _repo_path(f"/issues/{n}/events"),
-            params={"per_page": 100, "page": page},
-        )
-        if err:
-            return None, err
-        if not isinstance(events, list):
-            return None, _failure("unexpected reply from GitHub")
-        for e in events:
-            if (
-                isinstance(e, dict)
-                and e.get("event") == "labeled"
-                and ((e.get("label") or {}).get("name") or "").lower() == RIG_LABEL
-            ):
-                last = (e.get("actor") or {}).get("login") or ""
-        if len(events) < 100:
-            return last, None
-    return None, _failure(f"issue #{n} has too many events to verify")
+    if never). Events come oldest first, so the newest page is read first (page 1 tells where it
+    is, through the Link header) and the walk goes backwards until a match turns up. At most
+    _EVENT_PAGES_MAX pages are read; if the label is not in them, fail closed."""
+    links: dict = {}
+    path = _repo_path(f"/issues/{n}/events")
+    first, err = await _gh(
+        "GET", path, params={"per_page": 100, "page": 1}, links=links
+    )
+    if err:
+        return None, err
+    if not isinstance(first, list):
+        return None, _failure("unexpected reply from GitHub")
+    for read, page in enumerate(range(_last_page(links), 0, -1), start=1):
+        if read > _EVENT_PAGES_MAX:
+            return None, _failure(f"issue #{n} has too many events to verify")
+        if page == 1:
+            events = first
+        else:
+            events, err = await _gh("GET", path, params={"per_page": 100, "page": page})
+            if err:
+                return None, err
+            if not isinstance(events, list):
+                return None, _failure("unexpected reply from GitHub")
+        found = _latest_label_event(events)
+        if found is not None:
+            return found, None
+    return None, None
 
 
 async def _rig_issue(n: int) -> tuple[dict | None, dict | None]:
@@ -469,7 +498,10 @@ async def rig_tests(x_rig_token: Annotated[str, Header()] = "") -> dict:
             continue
         login, err = await _labeller(n)
         if err:
-            return err
+            # One issue that cannot be verified (too many events, a GitHub hiccup) is left out
+            # and logged; it must not hide the other requests.
+            log.warning("rig-test #%s skipped: %s", n, err["reason"])
+            continue
         if not _is_allowed(login):
             log.info(
                 "rig-test #%s ignored: label applied by %r, not on the allowlist",

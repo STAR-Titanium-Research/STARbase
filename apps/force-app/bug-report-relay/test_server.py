@@ -451,8 +451,19 @@ class FakeGitHub:
                 return httpx.Response(200, json=issue)
             if tail == ["events"]:
                 page = int(request.url.params.get("page", 1))
+                events = self.events[n]
+                if events is None:
+                    return httpx.Response(200, json=None)
+                # Like GitHub: a Link header with rel="last" whenever there is more than a page.
+                last = max(1, -(-len(events) // 100))
+                headers = {}
+                if last > 1:
+                    base = f"https://api.github.com{path}?per_page=100"
+                    headers["Link"] = (
+                        f'<{base}&page={page + 1}>; rel="next", <{base}&page={last}>; rel="last"'
+                    )
                 return httpx.Response(
-                    200, json=self.events[n][(page - 1) * 100 : page * 100]
+                    200, json=events[(page - 1) * 100 : page * 100], headers=headers
                 )
             if tail == ["comments"] and method == "POST":
                 cid = 1000 + len(self.comments)
@@ -690,7 +701,50 @@ def test_list_unexpected_payload_never_500s(client, gh):
     gh.issue(5)
     gh.events[5] = None  # json null instead of a list
     r = client.get("/rig-tests")
+    assert r.status_code == 200 and r.json() == {"ok": True, "requests": []}
+    # a write to that issue is refused with a reason, not a 500
+    r = client.post("/rig-tests/5/comment", json={"body": "x"})
     assert r.status_code == 200 and r.json()["ok"] is False
+
+
+def test_one_unverifiable_issue_does_not_hide_the_others(client, gh):
+    """L2: an issue with too many events (or any error verifying it) is skipped and logged."""
+    gh.issue(5)
+    gh.events[5] = [{"event": "commented"}] * (100 * srv._EVENT_PAGES_MAX + 1)
+    gh.issue(6)
+    gh.issue(7)
+    gh.events[7] = None
+    gh.issue(8)
+    assert [r["number"] for r in client.get("/rig-tests").json()["requests"]] == [6, 8]
+    # the same issue still fails closed on a write
+    r = client.post("/rig-tests/5/comment", json={"body": "x"})
+    assert r.json()["ok"] is False and "too many events" in r.json()["reason"]
+
+
+def test_the_latest_label_event_is_found_from_the_last_page(client, gh):
+    """L2: a long thread costs two calls (page 1 for the Link header, then the last page), not
+    every page."""
+    gh.issue(5)
+    noise = [{"event": "commented"}] * 450
+    gh.events[5] = [labeled("stranger")] + noise + [labeled("maintainer")]
+    assert [r["number"] for r in client.get("/rig-tests").json()["requests"]] == [5]
+    assert sum(p.endswith("/events") for _, p in gh.calls) == 2
+
+
+def test_the_walk_goes_backwards_to_an_older_page_and_is_bounded(client, gh):
+    gh.issue(5)
+    # label on page 1 only, 3 pages in all: pages 3, 2 are read (and page 1 reused)
+    gh.events[5] = [labeled("maintainer")] + [{"event": "commented"}] * 250
+    assert len(client.get("/rig-tests").json()["requests"]) == 1
+    assert sum(p.endswith("/events") for _, p in gh.calls) == 3
+    # more pages than the cap, label only at the very start: fail closed, bounded reads
+    gh.calls.clear()
+    srv._list_cache["expires"] = 0.0
+    gh.events[5] = [labeled("maintainer")] + [{"event": "commented"}] * (
+        100 * srv._EVENT_PAGES_MAX + 50
+    )
+    assert client.get("/rig-tests").json() == {"ok": True, "requests": []}
+    assert sum(p.endswith("/events") for _, p in gh.calls) == srv._EVENT_PAGES_MAX + 1
 
 
 def test_comment_posts_to_a_rig_test_issue(client, gh):
