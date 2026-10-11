@@ -179,6 +179,26 @@ cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOK
   -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_smoke.mjs 2>&1)
 crc=$?
 echo "$cout"
+
+# --- file case (T0e): a file that has a file_fingerprints row can still be deleted through Directus, and the
+# row goes with it (ON DELETE CASCADE). Upload and delete run in node; the fingerprint insert needs psql here.
+node_files() { docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" \
+  -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_smoke_files.mjs "$@" 2>&1; }
+if [[ "$(psql_copy -Atc "SELECT to_regclass('public.file_fingerprints') IS NOT NULL")" == t ]]; then
+  fcase=file_delete_cascades_fingerprint
+  if ! fid=$(node_files upload) || ! [[ "$fid" =~ ^[0-9a-f-]{36}$ ]]; then
+    fline="SMOKE FAIL $fcase: upload: $fid"
+  elif ! psql_copy -c "INSERT INTO file_fingerprints (directus_files_id, content_sha256, size_bytes) VALUES ('$fid', repeat('a', 64), 1)" >/dev/null; then
+    fline="SMOKE FAIL $fcase: fingerprint insert"
+  else
+    st=$(node_files delete "$fid")
+    left=$(psql_copy -Atc "SELECT count(*) FROM file_fingerprints WHERE directus_files_id = '$fid'")
+    if [[ "$st" == 204 && "$left" == 0 ]]; then fline="SMOKE PASS $fcase"
+    else fline="SMOKE FAIL $fcase: DELETE /files -> $st, fingerprint rows left: $left"; fi
+  fi
+  echo "$fline"; cout+=$'\n'"$fline"
+  [[ "$fline" == "SMOKE FAIL"* && $crc -eq 0 ]] && crc=1
+fi
 # On a failed case show the end of Directus's own log: the route logs the cause of a 500 there.
 grep -q '^SMOKE FAIL ' <<<"$cout" && { echo "--- directus log (tail) ---"; docker logs --tail 40 "$DX" 2>&1 | cut -c1-600; }
 # A failure outside check() (image pull, the .mjs throwing) prints no SMOKE lines: flag it as a harness failure.
