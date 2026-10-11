@@ -1,0 +1,186 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick, reactive, ref } from 'vue';
+import type { ExplorerHost } from '../host';
+import { indexDefBySlug } from './indexConfig';
+import { SEARCH_DEBOUNCE_MS, useIndexPage } from './useIndexPage';
+import type { RouteLike, RouterLike } from './useIndexPage';
+
+// The composable with a fake host (a recording API) and a fake route/router that applies what is
+// pushed, the way vue-router would.
+const samples = indexDefBySlug('samples')!;
+
+const flush = async () => {
+	for (let i = 0; i < 6; i++) await Promise.resolve();
+	await nextTick();
+};
+
+interface Call { path: string; params: Record<string, any> }
+
+function setup(query: Record<string, string>, opts: { bookmarks?: any[]; presets?: Record<string, any> } = {}) {
+	const calls: Call[] = [];
+	const api = {
+		get: vi.fn(async (path: string, config?: { params?: Record<string, any> }) => {
+			calls.push({ path, params: config?.params ?? {} });
+			if (path === '/collections') {
+				return { data: { data: ['physical_samples', 'projects', 'materials'].map((c) => ({ collection: c, meta: { hidden: false } })) } };
+			}
+			if (path === '/presets') return { data: { data: opts.bookmarks ?? [] } };
+			if (path.startsWith('/presets/')) {
+				const id = path.slice('/presets/'.length);
+				const hit = opts.presets?.[id] ?? opts.bookmarks?.find((b) => String(b.id) === id);
+				if (!hit) throw { response: { status: 403 } };
+				return { data: { data: hit } };
+			}
+			if (path === '/items/physical_samples') {
+				if (config?.params?.groupBy) return { data: { data: [{ current_status: 'active' }, { current_status: 'archived' }] } };
+				return { data: { data: [{ sample_id: 's1', sample_code: 'A-1' }], meta: { filter_count: 120 } } };
+			}
+			if (path === '/items/projects') return { data: { data: [{ project_id: 'p1', project_code: 'STAR-01' }] } };
+			if (path === '/items/materials') return { data: { data: [{ material_id: 'm1', alloy_code: 'Ti64' }] } };
+			throw new Error(`unexpected ${path}`);
+		}),
+	};
+	const host = { api, navigate: vi.fn(), openDataStudio: vi.fn(), isAdmin: ref(false), user: ref(null) } as unknown as ExplorerHost;
+	const route = reactive<RouteLike>({ path: '/home/samples', query, params: { slug: 'samples' } });
+	const pushed: Array<{ how: string; query: Record<string, string> }> = [];
+	const apply = (how: string) => (to: { path: string; query: Record<string, string> }) => {
+		pushed.push({ how, query: to.query });
+		route.query = to.query;
+	};
+	const router: RouterLike = { push: apply('push'), replace: apply('replace') };
+	return { host, route, router, calls, pushed, items: () => calls.filter((c) => c.path === '/items/physical_samples' && !c.params.groupBy) };
+}
+
+const bm = (over: Record<string, any> = {}) => ({
+	id: 7, bookmark: 'Mine', collection: 'physical_samples', user: null, role: null, filter: { owner: { _eq: '$CURRENT_USER' } }, search: null, layout_query: null, ...over,
+});
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+
+describe('useIndexPage', () => {
+	it('loads the page from the URL and reads the total from filter_count', async () => {
+		const t = setup({ page: '2' });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(t.items()).toHaveLength(1);
+		expect(t.items()[0].params.page).toBe(2);
+		expect(page.total.value).toBe(120);
+		expect(page.rows.value).toHaveLength(1);
+		expect(page.loading.value).toBe(false);
+	});
+
+	it('fills the search from a saved view when the URL has no q, and sends it', async () => {
+		const t = setup({ bookmark: '7' }, { bookmarks: [bm({ search: 'ti64' })] });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.state.value.q).toBe('ti64');
+		expect(page.searchText.value).toBe('ti64');
+		const filter = JSON.parse(t.items().at(-1)!.params.filter);
+		expect(JSON.stringify(filter)).toContain('ti64');
+	});
+
+	it('keeps an emptied search empty over such a saved view', async () => {
+		const t = setup({ bookmark: '7' }, { bookmarks: [bm({ search: 'ti64' })] });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		page.setSearch('');
+		vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+		await flush();
+		expect(t.route.query).toEqual({ bookmark: '7', q: '' });
+		expect(page.state.value.q).toBe('');
+		expect(JSON.stringify(JSON.parse(t.items().at(-1)!.params.filter))).not.toContain('ti64');
+	});
+
+	it('writes typing with replace after 250 ms, once, and clicks with push', async () => {
+		const t = setup({});
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		page.setSearch('t');
+		page.setSearch('ti');
+		page.setSearch('ti6');
+		vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS - 1);
+		expect(t.pushed).toHaveLength(0);
+		vi.advanceTimersByTime(1);
+		expect(t.pushed).toEqual([{ how: 'replace', query: { q: 'ti6' } }]);
+		page.setFilter('current_status', 'active');
+		expect(t.pushed.at(-1)).toEqual({ how: 'push', query: { q: 'ti6', 'f.current_status': 'active' } });
+		page.setSort('sample_code');
+		expect(t.pushed.at(-1)!.query.sort).toBe('sample_code');
+		page.setPage(3);
+		expect(t.pushed.at(-1)!.query.page).toBe('3');
+	});
+
+	it('starts again from page 1 when the search, a chip or the sort changes', async () => {
+		const t = setup({ page: '4' });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		page.setFilter('current_status', 'active');
+		expect(t.pushed.at(-1)!.query.page).toBeUndefined();
+	});
+
+	it('toggles the header sort from the default, ascending first', async () => {
+		const t = setup({});
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.sort.value).toBe('-created_at');
+		page.setSort('sample_code');
+		await flush();
+		page.setSort('sample_code');
+		expect(t.pushed.at(-1)!.query.sort).toBe('-sample_code');
+	});
+
+	it('says so when the saved view in the URL cannot be read, and loads the list without it', async () => {
+		const t = setup({ bookmark: '9' });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.bookmarkUnavailable.value).toBe(true);
+		expect(page.rows.value).toHaveLength(1);
+		expect(t.items().at(-1)!.params.filter).toBeUndefined();
+	});
+
+	it('rejects a saved view of another collection', async () => {
+		const t = setup({ bookmark: '9' }, { presets: { 9: bm({ id: 9, collection: 'campaigns' }) } });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.bookmarkUnavailable.value).toBe(true);
+	});
+
+	it('offers a relation chip only for a visible collection, and loads enum values', async () => {
+		const t = setup({});
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		await flush();
+		const fields = page.chips.value.map((c) => c.field);
+		// project and material are visible; status is an enum
+		expect(fields).toEqual(['project_id', 'current_status', 'material_id']);
+		expect(page.chips.value.find((c) => c.field === 'current_status')!.options.map((o) => o.value)).toEqual(['active', 'archived']);
+		expect(page.chips.value.find((c) => c.field === 'project_id')!.options).toEqual([{ value: 'p1', label: 'STAR-01' }]);
+	});
+
+	it('shows the not-visible state on a 403', async () => {
+		const t = setup({});
+		t.host.api.get = vi.fn(async (path: string) => {
+			if (path.startsWith('/items/')) throw { response: { status: 403 } };
+			return { data: { data: [] } };
+		});
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.forbidden.value).toBe(true);
+		expect(page.error.value).toBe('');
+	});
+
+	it('does not reload when only the drawer key changes, and ignores a route to another page', async () => {
+		const t = setup({});
+		useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		const before = t.items().length;
+		t.route.query = { open: 'abc' };
+		await flush();
+		expect(t.items()).toHaveLength(before);
+		t.route.params = { slug: 'tools' };
+		t.route.query = { q: 'x' };
+		await flush();
+		expect(t.items()).toHaveLength(before);
+	});
+});

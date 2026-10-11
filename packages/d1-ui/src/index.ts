@@ -85,3 +85,4 @@ export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
 export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
+export { default as IndexPage } from './index/IndexPage.vue';
