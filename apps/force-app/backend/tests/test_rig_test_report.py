@@ -90,6 +90,9 @@ def test_result_golden():
     assert [(i["id"], i["result"]) for i in hidden["items"]] == [
         ("R4", "pass"), ("#190", "no_response"), ("R5", "fail"),
     ]  # fmt: skip
+    assert [i["title"] for i in hidden["items"]] == [
+        "R4 — pre-flight chips", "#190 long cut", "R5 live clipping",
+    ]  # fmt: skip
     assert text.endswith(" -->")
 
 

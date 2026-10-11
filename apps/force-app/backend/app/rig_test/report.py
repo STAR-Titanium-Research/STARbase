@@ -20,6 +20,7 @@ SCHEMA_VERSION = 1
 NOTE_LIMIT = 1000
 CELL_LIMIT = 160
 EVIDENCE_LIMIT = 300
+TITLE_LIMIT = 120
 
 RESULT_LABELS = {
     "pass": "✅ Pass",
@@ -149,6 +150,7 @@ def _hidden_json(run: dict, results: list[dict]) -> str:
         "items": [
             {
                 "id": r["id"],
+                "title": _redact_paths(r["title"])[:TITLE_LIMIT],
                 "result": r["result"],
                 "steps": [
                     {
