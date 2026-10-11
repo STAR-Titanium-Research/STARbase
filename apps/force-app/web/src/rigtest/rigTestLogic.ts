@@ -293,6 +293,11 @@ export function stepMark(status: StepStatus): StepMark {
  *  contends with a test for the machine and the network), who accepted, and which app build. */
 export interface AcceptContext { uploadBusy: boolean; operator?: string; appVersion?: string }
 
+/** An upload is busy if the run-record queue is flushing or any capture file is going up. */
+export function isUploadBusy(syncing: boolean, filesInFlight: number): boolean {
+	return syncing || filesInFlight > 0;
+}
+
 /** The signed-in user's name for the result that is posted on the GitHub issue: first and last
  *  name, never the email (an address must not end up on an issue). Undefined when there is no name. */
 export function operatorName(user: { first_name?: string | null; last_name?: string | null } | null | undefined): string | undefined {

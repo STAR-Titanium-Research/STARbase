@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DECLINE_REASONS, NOTIFY_MAX, clip, currentPosition, declineBody, estimateText, finishedText, formatApproxDuration, formatClock,
-	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, acceptBody, appVersionOf, operatorName, progress, promptMode, questionKey, rigBlocked, barAskText,
+	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, acceptBody, appVersionOf, isUploadBusy, operatorName, progress, promptMode, questionKey, rigBlocked, barAskText,
 	questionNotification, requestNotification, runView, secondsLeft, shouldReopen, snoozeUntil, stepMark, summaryCounts, timeLeft,
 	type RigRequest, type RigRun, type RunStep, type StepStatus,
 } from './rigTestLogic';
@@ -301,6 +301,11 @@ describe('what accept tells the recorder', () => {
 		expect(appVersionOf('0.1.37', '0.1.36')).toBe('0.1.37');
 		expect(appVersionOf(undefined, '0.1.36')).toBe('0.1.36');
 		expect(appVersionOf('', undefined)).toBeUndefined();
+	});
+	it('an upload is busy when the queue flushes or any capture file is going up', () => {
+		expect(isUploadBusy(false, 0)).toBe(false);
+		expect(isUploadBusy(true, 0)).toBe(true);
+		expect(isUploadBusy(false, 1)).toBe(true);
 	});
 	it('the body omits what is unknown', () => {
 		expect(acceptBody({ uploadBusy: false })).toEqual({ mode: 'full', upload_busy: false });

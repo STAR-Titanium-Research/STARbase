@@ -8,6 +8,7 @@
 // recover them. (That persistence is relatively new — a capture recorded before it existed will
 // only have the free-text labels, not the resolved IDs, and won't link a sample here until its
 // metadata is corrected through the editor, which re-resolves them via the same lookups.)
+import { ref } from 'vue';
 import { api } from '../directusClient';
 import { resolveMachiningMethodId } from './directusLookups';
 import { buildSeriesEnvelope, parseCache, type Cache } from '@d1/force-plotting';
@@ -57,14 +58,23 @@ export function numOrNull(s: unknown): number | null {
 	return str !== '' && Number.isFinite(Number(str)) ? Number(str) : null;
 }
 
+// File uploads running right now. uploadFile() is the one leaf every capture upload goes through
+// (the save dialog's, a retry from Local Captures, the cold start), so counting here sees them all.
+// The rig-test request tells the recorder whether an upload is busy before it starts a run, and the
+// queue's `syncStatus.syncing` only covers the small run-record writes, not these multi-GB files.
+export const uploadsInFlight = ref(0);
+
 export async function uploadFile(blob: Blob, filename: string): Promise<string> {
 	const fd = new FormData();
 	fd.append('file', blob, filename);
+	uploadsInFlight.value++;
 	try {
 		const res = await api.post('/files', fd);
 		return res.data.data.id;
 	} catch (e: any) {
 		throw new Error(`file upload (${filename}) failed - ${directusErrorMessage(e)}`);
+	} finally {
+		uploadsInFlight.value--;
 	}
 }
 
