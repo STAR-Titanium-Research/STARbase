@@ -11,8 +11,10 @@ For every run that has a local trace file we also upsert a `fast_run_data` row (
 'pending', import_archive_path relative to the data-root) — scripts/fast_orchestrator.py
 (run with ARCHIVE_UNC pointed at the data-root) then normalises + uploads + catalogs it.
 
-pass_code is left NULL here; run scripts/finalize_fast_codes.py afterwards to assign the
-canonical DD-MM-YY-MF{n} codes across all sintering ops.
+The machine's own run number (`No`) is written to sintering_run_number and the database builds the
+operation code from it (trigger mfg_op_set_code): this script never writes pass_code. A
+hand-logged FAST 250 operation with the same run number and no source_run_uid is filled in
+instead of duplicated (fast_ops.adopt_hand_logged).
 
 Usage:
     DATABASE_URL=… python scripts/import_fast250.py "…/FAST Machines Data" [--dry-run]
@@ -35,6 +37,7 @@ import psycopg2.extras
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fast_mapping as fm
+import fast_ops
 import fast_recipes as frx
 
 METHOD_MF = "4b13b4f4-7f7e-5356-b93a-937ab527386d"
@@ -228,6 +231,108 @@ def build_ops(data_root: str) -> tuple[list[dict], dict[int, str]]:
     return ops, traces
 
 
+def write_operations(
+    cur,
+    ops: list[dict],
+    *,
+    op_to_id: dict,
+    code_to_mat: dict,
+    resolve_owner,
+    equipment_id: str = EQUIP_250,
+    method_id: str = METHOD_MF,
+) -> tuple[int, int, int]:
+    """Upsert the built runs into manufacturing_operations and queue their trace files.
+
+    Returns (operations upserted, hand-logged operations adopted, traces queued). The database
+    builds pass_code from the run number, so the code is never written here.
+    """
+    cols = [
+        "operation_id",
+        "method_id",
+        "equipment_id",
+        "process_category",
+        "source_run_uid",
+        "source_system",
+        "operation_date",
+        "operator",
+        "operator_name",
+        "owner",
+        "material_id",
+        "sintering_recipe_number",
+        "sintering_run_number",
+        "fast_recipe_id",
+        "sintering_mass_grams",
+        "sintering_material_type_note",
+        "outcome_notes",
+    ]
+    values = [
+        (
+            o["operation_id"],
+            method_id,
+            equipment_id,
+            "sintering",
+            o["source_run_uid"],
+            SOURCE_SYSTEM,
+            o["operation_date"],
+            op_to_id.get(o["operator_disp"]),
+            o["operator_name"],
+            resolve_owner(o),
+            code_to_mat.get(o["material_code"]) if o["material_code"] else None,
+            o["recipe"],
+            fast_ops.run_number(o["run_no"]),
+            o.get("fast_recipe_id"),
+            o["mass_grams"],
+            o["material_text"],
+            o["outcome_notes"],
+        )
+        for o in ops
+    ]
+
+    # Upsert: refresh mutable metadata; pass_code is never written (the database builds it from the run number).
+    # A hand-logged operation of this machine and run (typed by a person) becomes the imported run.
+    adopted = fast_ops.adopt_hand_logged(
+        cur,
+        equipment_id,
+        SOURCE_SYSTEM,
+        [(fast_ops.run_number(o["run_no"]), o["source_run_uid"]) for o in ops],
+    )
+    update_cols = [
+        c
+        for c in cols
+        if c
+        not in (
+            "operation_id",
+            "source_run_uid",
+            "method_id",
+            "process_category",
+            "source_system",
+        )
+    ]
+    set_clause = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+    psycopg2.extras.execute_values(
+        cur,
+        f"INSERT INTO manufacturing_operations ({', '.join(cols)}) VALUES %s "
+        f"ON CONFLICT (source_run_uid) WHERE source_run_uid IS NOT NULL "
+        f"DO UPDATE SET {set_clause}, updated_at=now()",
+        values,
+    )
+
+    # Enqueue trace imports for runs that have a local trace file.
+    # An adopted operation keeps its own id, so read the ids back instead of using the derived ones.
+    ids = fast_ops.operation_ids_for(cur, [o["source_run_uid"] for o in ops if o["trace_rel"]])
+    enq = [(ids[o["source_run_uid"]], o["trace_rel"]) for o in ops if o["trace_rel"]]
+    psycopg2.extras.execute_values(
+        cur,
+        "INSERT INTO fast_run_data (operation_id, status, machine_format, import_archive_path) "
+        "VALUES %s ON CONFLICT (operation_id) DO UPDATE "
+        "SET status='pending', machine_format=EXCLUDED.machine_format, "
+        "    import_archive_path=EXCLUDED.import_archive_path, error_message=NULL, updated_at=now() "
+        "WHERE fast_run_data.status IS DISTINCT FROM 'done'",  # don't re-drain finished traces
+        [(oid, "pending", "250", rel) for oid, rel in enq],
+    )
+    return len(values), adopted, len(enq)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("data_root", help="path to the 'FAST Machines Data' folder")
@@ -348,81 +453,15 @@ def main() -> None:
     )
     print(f"upserted {len(recipes)} FAST 250 recipes")
 
-    cols = [
-        "operation_id",
-        "method_id",
-        "equipment_id",
-        "process_category",
-        "source_run_uid",
-        "source_system",
-        "operation_date",
-        "operator",
-        "operator_name",
-        "owner",
-        "material_id",
-        "sintering_recipe_number",
-        "fast_recipe_id",
-        "sintering_mass_grams",
-        "sintering_material_type_note",
-        "outcome_notes",
-    ]
-    values = [
-        (
-            o["operation_id"],
-            METHOD_MF,
-            EQUIP_250,
-            "sintering",
-            o["source_run_uid"],
-            SOURCE_SYSTEM,
-            o["operation_date"],
-            op_to_id.get(o["operator_disp"]),
-            o["operator_name"],
-            resolve_owner(o),
-            code_to_mat.get(o["material_code"]) if o["material_code"] else None,
-            o["recipe"],
-            o.get("fast_recipe_id"),
-            o["mass_grams"],
-            o["material_text"],
-            o["outcome_notes"],
-        )
-        for o in ops
-    ]
-
-    # Upsert: refresh mutable metadata but never touch pass_code (finalized separately).
-    update_cols = [
-        c
-        for c in cols
-        if c
-        not in (
-            "operation_id",
-            "source_run_uid",
-            "method_id",
-            "process_category",
-            "source_system",
-        )
-    ]
-    set_clause = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
-    psycopg2.extras.execute_values(
+    n_ops, adopted, queued = write_operations(
         cur,
-        f"INSERT INTO manufacturing_operations ({', '.join(cols)}) VALUES %s "
-        f"ON CONFLICT (source_run_uid) WHERE source_run_uid IS NOT NULL "
-        f"DO UPDATE SET {set_clause}, updated_at=now()",
-        values,
+        ops,
+        op_to_id=op_to_id,
+        code_to_mat=code_to_mat,
+        resolve_owner=resolve_owner,
     )
-    print(f"upserted {len(values)} FAST 250 operations")
-
-    # Enqueue trace imports for runs that have a local trace file.
-    enq = [(o["operation_id"], o["trace_rel"]) for o in ops if o["trace_rel"]]
-    psycopg2.extras.execute_values(
-        cur,
-        "INSERT INTO fast_run_data (operation_id, status, machine_format, import_archive_path) "
-        "VALUES %s ON CONFLICT (operation_id) DO UPDATE "
-        "SET status='pending', machine_format=EXCLUDED.machine_format, "
-        "    import_archive_path=EXCLUDED.import_archive_path, error_message=NULL, updated_at=now() "
-        "WHERE fast_run_data.status IS DISTINCT FROM 'done'",  # don't re-drain finished traces
-        [(oid, "pending", "250", rel) for oid, rel in enq],
-    )
-    print(f"enqueued {len(enq)} trace imports (status=pending)")
+    print(f"upserted {n_ops} FAST 250 operations ({adopted} hand-logged filled in)")
+    print(f"enqueued {queued} trace imports (status=pending)")
 
     conn.commit()
     cur.close()
