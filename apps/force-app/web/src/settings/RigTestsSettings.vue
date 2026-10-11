@@ -78,8 +78,8 @@ const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
 				<tbody>
 					<tr v-for="h in s.history" :key="`${h.number}-${h.started_at}`">
 						<td class="req">
-							<a v-if="h.url" :href="h.url" target="_blank" rel="noopener">#{{ h.number }}<template v-if="h.title"> {{ h.title }}</template></a>
-							<span v-else>#{{ h.number }}<template v-if="h.title"> {{ h.title }}</template></span>
+							<a v-if="h.url" :href="h.url" target="_blank" rel="noopener">#{{ h.number }} {{ h.title }}</a>
+							<span v-else>#{{ h.number }} {{ h.title }}</span>
 						</td>
 						<td><span class="pill" :class="h.state">{{ stateLabel(h.state) }}</span></td>
 						<td class="n">{{ summaryCounts(h).pass }}</td>

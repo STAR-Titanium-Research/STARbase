@@ -141,8 +141,8 @@ useDialog(panel, dismiss);
 .rm-done.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 .rm-done.partial, .rm-done.timed_out { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
 .rm-bars { display: flex; flex-direction: column; gap: 6px; }
-.rm-bar-row { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 10px; font-size: var(--fs-sm); color: var(--text-dim); }
-.rm-bar-row b { min-width: 74px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.rm-bar-row { display: grid; grid-template-columns: 44px 1fr 92px; align-items: center; gap: 10px; font-size: var(--fs-sm); color: var(--text-dim); }
+.rm-bar-row b { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
 .rm-track { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
 .rm-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width 0.4s ease; }
 .rm-fill.time { background: var(--text-faint); }
