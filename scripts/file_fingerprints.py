@@ -475,7 +475,7 @@ def fingerprint_job(job: FileJob, archive_root: str, throttle=None, block_bytes:
             if _should_retry(attempt):
                 attempt += 1
                 continue
-            return result("error", f"{type(e).__name__}: {e}")
+            return result("error", f"{type(e).__name__}: {e}", io_failure=True)
         if before is None:
             return result("missing", f"not found: {path}")
         if not started:
@@ -490,7 +490,7 @@ def fingerprint_job(job: FileJob, archive_root: str, throttle=None, block_bytes:
             if _should_retry(attempt):
                 attempt += 1
                 continue
-            return result("error", f"{type(e).__name__}: {e}", content_sha256=got.get("content"))
+            return result("error", f"{type(e).__name__}: {e}", content_sha256=got.get("content"), io_failure=True)
         except Exception as e:  # noqa: BLE001 - one odd file must not stop a 10K-file run
             return result("error", f"unexpected {type(e).__name__}: {e}", content_sha256=got.get("content"))
         if after != before:
@@ -539,11 +539,19 @@ class _Run:
         self.counts = {"done": 0, "error": 0, "missing": 0}
         self.vanished = 0  # deleted from Directus while we ran
         self.processed = 0
-        self.bytes_read = 0
-        self.bytes_done = 0
-        self.pending: list[tuple[FileJob, dict]] = []  # missing, not written until the share is vouched for
-        self.exit_code: int | None = None
+        self.bytes_done = 0  # directus_files.filesize of the files finished (the ETA basis)
+        # Rows not written yet: files that were missing or whose reads kept failing with an OSError.
+        # They are written once the share is vouched for (see finish).
+        self.pending: list[tuple[FileJob, dict]] = []
+        self.exit_code: int | None = None  # 2: the share went away (set under the lock)
+        self.stop = threading.Event()  # Ctrl+C: workers finish the file they are on, take no more
         self.t0 = time.monotonic()
+
+    @property
+    def bytes_read(self) -> int:
+        """Bytes that went through the throttle: the whole file on the content pass, plus the decoded
+        array on the data pass of a .mat (so a .mat counts about twice)."""
+        return getattr(self.throttle, "total", 0)
 
     # callers hold self.lock for everything below
 
@@ -568,13 +576,17 @@ class _Run:
 
     def share_gone(self, n):
         self.exit_code = 2
-        print(f"stopping: {n} missing file(s) in a row and the archive root {self.root!r} is no longer "
-              f"reachable; those files were not marked, rows already written are kept (exit 2)", file=sys.stderr)
+        print(f"stopping: {n} file(s) in a row were missing or unreadable and the archive root {self.root!r} "
+              f"is no longer reachable; those files were not marked, rows already written are kept (exit 2)",
+              file=sys.stderr)
 
     def finish(self, conn, job, row):
         if self.exit_code is not None:  # another worker found the share gone: write nothing more
             return
-        if row["status"] == "missing":
+        # A streak candidate is a file that was not found, or whose reads kept failing with an OSError
+        # (on a dropped Windows share these are errors like WinError 64/59/121, not "not found"). Neither
+        # is written until 5 in a row have been checked against the share itself, or a good file turns up.
+        if row["status"] == "missing" or row.get("io_failure"):
             self.pending.append((job, row))
             if len(self.pending) >= MISSING_STREAK:
                 if not os.path.isdir(self.root):
@@ -582,9 +594,8 @@ class _Run:
                     return
                 self.flush_pending(conn)
         else:
-            self.flush_pending(conn)  # a file was found: the earlier misses are genuinely missing
+            self.flush_pending(conn)  # a file was read: the earlier failures were genuinely the files
             self._write(conn, job, row)
-            self.bytes_read += job.size_bytes or 0
         self.processed += 1
         self.bytes_done += job.size_bytes or 0
         if self.processed % PROGRESS_EVERY == 0:
@@ -593,8 +604,9 @@ class _Run:
     def progress_line(self) -> str:
         elapsed = max(time.monotonic() - self.t0, 1e-9)
         rate = self.bytes_read / elapsed
+        file_rate = self.bytes_done / elapsed
         left = max(self.total_bytes - self.bytes_done, 0)
-        eta = f"{left / rate / 60:.0f} min" if rate > 0 else "?"
+        eta = f"{left / file_rate / 60:.0f} min" if file_rate > 0 else "?"
         c = self.counts
         return (f"[{self.processed}/{self.total}] {c['done']} done, {c['error']} error, {c['missing']} missing | "
                 f"{self.bytes_read / 1e9:.2f} GB read | {rate / 1e6:.1f} MB/s | ETA {eta}")
@@ -611,7 +623,7 @@ def _worker(run: _Run, conn) -> None:
                                              "error_message": "hashing started"})
         conn.commit()
 
-    while run.exit_code is None:
+    while run.exit_code is None and not run.stop.is_set():
         try:
             job = run.queue.popleft()
         except IndexError:
@@ -679,20 +691,23 @@ def main(argv=None) -> int:
 
     conns = []
     try:
-        main_conn = psycopg2.connect(dsn)
-        conns.append(main_conn)
-        with main_conn.cursor() as cur:
-            jobs = select_files(cur, args.phase, args.include_local, not args.skip_failed, args.limit)
-        main_conn.commit()
+        with contextlib.closing(psycopg2.connect(dsn)) as sel_conn:  # not kept: it would idle for the whole run
+            with sel_conn.cursor() as cur:
+                jobs = select_files(cur, args.phase, args.include_local, not args.skip_failed, args.limit)
+            sel_conn.commit()
         if args.dry_run:
             return _dry_run(jobs, root)
         print(f"{len(jobs)} file(s) to hash, {sum(j.size_bytes or 0 for j in jobs) / 1e9:.2f} GB", flush=True)
-        throttle = Throttle(args.max_mb_s * 1e6 if args.max_mb_s > 0 else None)
+        throttle = _CountingThrottle(Throttle(args.max_mb_s * 1e6 if args.max_mb_s > 0 else None))
         run = _Run(jobs, root, throttle, 64 << 20)
         if args.workers == 1 or len(jobs) <= 1:
             conn = psycopg2.connect(dsn)
             conns.append(conn)
-            _worker(run, conn)
+            try:
+                _worker(run, conn)
+            except KeyboardInterrupt:
+                run.stop.set()
+                print("interrupted: the file in progress is left as 'hashing started'", file=sys.stderr)
         else:
             errors: list[BaseException] = []
 
@@ -707,28 +722,67 @@ def main(argv=None) -> int:
             for _ in range(args.workers):
                 conn = psycopg2.connect(dsn)
                 conns.append(conn)
-                threads.append(threading.Thread(target=target, args=(conn,)))
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+                threads.append(threading.Thread(target=target, args=(conn,), daemon=True))
+            _join_workers(threads, run)
             if errors:
                 raise errors[0]
         if run.exit_code is None and run.pending:
             if os.path.isdir(root):
-                run.flush_pending(main_conn)
+                # a fresh connection: none of the others is safe to assume alive after a long run
+                with contextlib.closing(psycopg2.connect(dsn)) as end_conn:
+                    run.flush_pending(end_conn)
             else:
                 run.share_gone(len(run.pending))
         c = run.counts
-        print(f"{'finished' if run.exit_code is None else 'stopped'}: {c['done']} done, {c['error']} error, "
-              f"{c['missing']} missing" + (f", {run.vanished} vanished" if run.vanished else "")
+        interrupted = run.stop.is_set() and run.exit_code is None
+        print(f"{'interrupted' if interrupted else 'finished' if run.exit_code is None else 'stopped'}: "
+              f"{c['done']} done, {c['error']} error, {c['missing']} missing"
+              + (f", {run.vanished} vanished" if run.vanished else "")
               + f" | {run.bytes_read / 1e9:.2f} GB read in {time.monotonic() - run.t0:.0f} s", flush=True)
-        return run.exit_code or 0
+        return 130 if interrupted else run.exit_code or 0
     finally:
         for conn in conns:
             with contextlib.suppress(Exception):
                 conn.rollback()
                 conn.close()
+
+
+def _join_workers(threads, run: _Run) -> None:
+    """Start the worker threads and wait for them. join(timeout) in a loop keeps Ctrl+C deliverable
+    on Windows. The first interrupt asks the workers to stop after the file they are on (so its row is written); a
+    second one gives up waiting (the daemon threads die with the process, their files stay provisional)."""
+    try:
+        for t in threads:
+            t.start()
+        while any(t.is_alive() for t in threads):
+            for t in threads:
+                if t.is_alive():  # (a thread whose start was interrupted never ran)
+                    t.join(0.5)
+        return
+    except KeyboardInterrupt:
+        run.stop.set()
+        print("interrupted: finishing the files in progress (Ctrl+C again to stop at once)",
+              file=sys.stderr, flush=True)
+    try:
+        while any(t.is_alive() for t in threads):
+            for t in threads:
+                if t.is_alive():  # (a thread whose start was interrupted never ran)
+                    t.join(0.5)
+    except KeyboardInterrupt:
+        print("stopping at once; files in progress stay 'hashing started'", file=sys.stderr, flush=True)
+        run.exit_code = run.exit_code or 130
+
+
+class _CountingThrottle:
+    """Wraps a Throttle and totals every byte that goes through it (what the progress line reports)."""
+
+    def __init__(self, inner: Throttle):
+        self.inner, self.total, self._lock = inner, 0, threading.Lock()
+
+    def consume(self, n: int) -> None:
+        with self._lock:
+            self.total += max(n, 0)
+        self.inner.consume(n)
 
 
 if __name__ == "__main__":

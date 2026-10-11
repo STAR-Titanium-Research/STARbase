@@ -334,7 +334,7 @@ DSN = os.environ.get("DATABASE_URL")
 MIGRATION = Path(__file__).resolve().parents[2] / "db/migrations/20261010000159_file_fingerprints.sql"
 ROW_COLUMNS = ("status", "content_sha256", "data_sha256", "data_variable", "data_rows", "data_cols",
                "size_bytes", "source_mtime", "error_message")
-T0 = dt.datetime(2025, 3, 1, 12, 0, tzinfo=dt.UTC)
+T0 = dt.datetime(2025, 3, 1, 12, 0, 0, 123456, tzinfo=dt.UTC)  # microseconds: the staleness key must round-trip them
 
 
 def migration_up_sql() -> str:
@@ -940,3 +940,94 @@ def test_once_the_share_is_found_gone_a_late_finishing_worker_writes_nothing(db)
     done = {"status": "done", "content_sha256": "0" * 64, "size_bytes": 1, "source_mtime": None}
     run_state.finish(db.conn, late, done)  # a worker that was mid-file when the stop fired
     assert db.count() == 0
+
+
+# ---- fix round 1: share-level OSErrors, Ctrl+C, honest byte counts -----------------------
+
+import errno  # noqa: E402
+import _thread  # noqa: E402
+
+
+def share_dropped_stat(db, monkeypatch, bad=None):
+    """_stat as a dropped Windows share behaves: an OSError that is not FileNotFoundError."""
+    real = ff._stat
+
+    def stat(job, path):
+        if not os.path.isdir(db.root) or (bad and bad in path):
+            raise OSError(errno.EINVAL, "The specified network name is no longer available")
+        return real(job, path)
+
+    monkeypatch.setattr(ff, "_stat", stat)
+
+
+def test_share_level_oserrors_count_toward_the_share_check_and_mark_nothing(db, monkeypatch):
+    ids = [db.add_file(f"p/f{i}.txt", b"x") for i in range(8)]
+    share_dropped_stat(db, monkeypatch)
+    real, calls = ff.fingerprint_job, []
+
+    def drop_the_share_after_the_first(*a, **kw):
+        out = real(*a, **kw)
+        if not calls:
+            shutil.rmtree(db.root)
+        calls.append(1)
+        return out
+
+    monkeypatch.setattr(ff, "fingerprint_job", drop_the_share_after_the_first)
+    assert run(db, "--phase", "linked") == 2
+    assert [r["status"] for r in map(db.row, ids) if r] == ["done"]  # only the file read before the drop
+    assert len(calls) == 6  # stopped at the fifth failure, not after the whole queue
+
+
+def test_unreadable_files_on_a_live_share_are_written_as_errors_with_the_message(db, monkeypatch):
+    bad = [db.add_file(f"p/bad{i}.txt", b"x") for i in range(6)]
+    good = db.add_file("p/good.txt", b"x")
+    share_dropped_stat(db, monkeypatch, bad="bad")
+    assert run(db, "--phase", "linked") == 0  # the root is there: the files are the problem, carry on
+    for i in bad:
+        r = db.row(i)
+        assert r["status"] == "error" and "network name" in r["error_message"]
+    assert db.row(good)["status"] == "done"
+
+
+def test_a_file_that_reads_fine_resets_the_streak(db):
+    mk = lambda name, **kw: make_job(id=db.add_file(f"p/{name}.txt", b"x", write=False), archive_path=f"p/{name}.txt", **kw)  # noqa: E731
+    state = ff._Run([], db.root, ff.Throttle(None), 1)
+    io = {"status": "error", "error_message": "OSError: gone", "io_failure": True}
+    for i in range(4):
+        state.finish(db.conn, mk(f"a{i}"), dict(io))
+    state.finish(db.conn, mk("ok"), {"status": "done", "content_sha256": "0" * 64})
+    assert db.count() == 5  # the four failures were written once a file read fine
+    shutil.rmtree(db.root)
+    for i in range(4):
+        state.finish(db.conn, mk(f"b{i}"), dict(io))
+    assert state.exit_code is None  # a streak of 4, not 5
+    state.finish(db.conn, mk("b4"), dict(io))
+    assert state.exit_code == 2 and db.count() == 5
+
+
+def test_ctrl_c_with_several_workers_finishes_in_flight_files_and_exits_130(db, monkeypatch):
+    ids = [db.add_file(f"p/{i}.txt", b"x") for i in range(60)]
+    real, calls = ff.fingerprint_job, []
+
+    def slow_and_interrupted(*a, **kw):
+        if not calls:
+            _thread.interrupt_main()  # what SIGINT does: KeyboardInterrupt in the main thread
+        calls.append(1)
+        time.sleep(0.05)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ff, "fingerprint_job", slow_and_interrupted)
+    assert run(db, "--phase", "linked", "--workers", "2") == 130
+    rows = [r for r in map(db.row, ids) if r]
+    assert 0 < len(rows) < 60  # stopped early
+    assert all(r["status"] == "done" for r in rows)  # every file in flight was finished and written
+    assert not [t for t in threading.enumerate() if t.daemon and t.is_alive() and t.name.startswith("Thread")]
+
+
+def test_the_progress_byte_count_is_what_went_through_the_throttle():
+    t = ff._CountingThrottle(ff.Throttle(None))
+    t.consume(100)
+    t.consume(50)
+    assert t.total == 150
+    state = ff._Run([], "/x", t, 1)
+    assert state.bytes_read == 150
