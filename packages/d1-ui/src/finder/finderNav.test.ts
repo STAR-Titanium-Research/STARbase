@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinderHit } from './finder';
-import { isFinderShortcut, isModalOpen, MODAL_SELECTOR, moveIndex, optionId, toSections } from './finderNav';
+import { isFinderShortcut, isModalOpen, moveIndex, optionId, toSections } from './finderNav';
 
 const hit = (group: FinderHit['group'], label: string): FinderHit => ({ group, label, to: `/x/${label}`, rank: 3 });
 
@@ -64,15 +64,11 @@ describe('isFinderShortcut', () => {
 });
 
 describe('isModalOpen', () => {
-	it('asks for an open drawer or dialog, not for any active overlay', () => {
+	it('asks the document for the selector it is given, and says whether anything matched', () => {
 		const asked: string[] = [];
-		const doc = (found: boolean) => ({ querySelector: (s: string) => (asked.push(s), found ? {} : null) });
-		expect(isModalOpen(doc(true))).toBe(true);
-		expect(isModalOpen(doc(false))).toBe(false);
-		// Directus's own navigation drawer is an absolute, "active" v-overlay at narrow widths.
-		expect(asked[0]).toBe(MODAL_SELECTOR);
-		expect(MODAL_SELECTOR).not.toMatch(/\.v-overlay|\.v-dialog/);
-		expect(MODAL_SELECTOR).toContain('#dialog-outlet > *');
-		expect(MODAL_SELECTOR).toContain(':not(.d1-finder)');
+		const doc = (found: boolean) => ({ querySelector: (sel: string) => (asked.push(sel), found ? {} : null) });
+		expect(isModalOpen(doc(true), '#some-outlet > *')).toBe(true);
+		expect(isModalOpen(doc(false), '#some-outlet > *')).toBe(false);
+		expect(asked).toEqual(['#some-outlet > *', '#some-outlet > *']);
 	});
 });

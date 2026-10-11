@@ -62,6 +62,17 @@ export function useFinder(host: ExplorerHost, nav: Ref<VisibleNav>, visible: Ref
 		{ flush: 'sync' },
 	);
 
+	// The sidebar's lists may still be loading when the finder opens (Ctrl K right after the page
+	// loads): a query typed meanwhile was answered with no sources, and that empty answer must not
+	// stay. When the readable collections arrive (or change), ask again for the current query.
+	watch(visible, (v) => {
+		const q = query.value;
+		if (!v || !isSearchable(q)) return;
+		stop();
+		loading.value = true;
+		void run(q);
+	});
+
 	const hits = computed<FinderHit[]>(() => {
 		const q = query.value;
 		const answered = remote.value && remote.value.q === q ? remote.value.groups : [];

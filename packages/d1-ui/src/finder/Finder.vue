@@ -86,7 +86,7 @@ function onKeydown(e: KeyboardEvent) {
 					role="combobox"
 					aria-label="Find a record"
 					aria-autocomplete="list"
-					aria-expanded="true"
+					:aria-expanded="hits.length > 0"
 					:aria-controls="`${uid}-list`"
 					:aria-activedescendant="activeId"
 					placeholder="Find a record, page or saved view…"

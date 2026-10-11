@@ -86,7 +86,7 @@ watch(
 			<small>A sisyphean pursuit</small>
 		</div>
 
-		<button type="button" class="find" @click="$emit('open-finder')">
+		<button type="button" class="find" aria-haspopup="dialog" @click="$emit('open-finder')">
 			<span>Find a record…</span>
 			<kbd>Ctrl K</kbd>
 		</button>

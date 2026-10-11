@@ -26,6 +26,35 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('useFinder', () => {
+	it('asks again for the typed query when the readable collections arrive late', async () => {
+		const calls: string[] = [];
+		const host = { api: { get: async (path: string) => { calls.push(path); return rowsFor(path); } } } as unknown as ExplorerHost;
+		const sources = ref<Set<string> | null>(null);
+		const finder = useFinder(host, ref(buildNav(null, [], false)), sources);
+		finder.query.value = '12';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		// nothing to ask yet: an empty answer, not a pending one
+		expect(calls).toEqual([]);
+		expect(finder.hits.value).toEqual([]);
+		sources.value = visible;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(calls.sort()).toEqual(['/items/campaigns', '/items/manufacturing_operations', '/items/physical_samples']);
+		expect(finder.loading.value).toBe(false);
+		expect(finder.hits.value.map((h) => h.group)).toEqual(['Samples', 'Campaigns']);
+	});
+
+	it('does not search when the collections arrive and nothing searchable is typed', async () => {
+		const calls: string[] = [];
+		const host = { api: { get: async (path: string) => { calls.push(path); return rowsFor(path); } } } as unknown as ExplorerHost;
+		const sources = ref<Set<string> | null>(null);
+		const finder = useFinder(host, ref(buildNav(null, [], false)), sources);
+		finder.query.value = 's';
+		sources.value = visible;
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(calls).toEqual([]);
+		expect(finder.loading.value).toBe(false);
+	});
+
 	it('asks the server nothing below the minimum length, but still matches pages', async () => {
 		const { finder, calls } = setup(async (p) => rowsFor(p));
 		finder.query.value = 's';

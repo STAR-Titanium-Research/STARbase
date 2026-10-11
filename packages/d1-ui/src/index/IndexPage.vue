@@ -69,8 +69,16 @@ function onDrawer(open: boolean): void {
 	if (!open) closeOpen();
 }
 
-// What a screen reader says for a row: its first column (the code or name).
-const rowLabel = (row: Record<string, unknown>): string => cellText(row, props.def.columns[0], props.def);
+// The record link in a row's first cell is a real <a>, so the browser's own link actions work
+// (open in a new tab, copy the address). A plain click goes through the host like every other
+// navigation; a modified click is left to the browser, and neither reaches the row's own handler.
+const rowHref = (row: Record<string, unknown>): string => router.resolve(recordRoute(props.def.collection, rowKey(row))).href;
+function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
+	e.stopPropagation();
+	if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+	e.preventDefault();
+	openRow(row);
+}
 
 const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 </script>
@@ -164,18 +172,28 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 							</tr>
 						</template>
 						<template v-else>
-							<tr
-								v-for="row in rows"
-								:key="rowKey(row)"
-								class="row"
-								tabindex="0"
-								role="link"
-								:aria-label="rowLabel(row) || undefined"
-								@click="openRow(row)"
-								@keydown.enter.self.prevent="openRow(row)"
-								@keydown.space.self.prevent="openRow(row)"
-							>
-								<td v-for="c in def.columns" :key="c.field" :class="cellClass(c)">{{ cellText(row, c, def) }}</td>
+							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
+								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
+							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
+								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
+									<template v-if="i === 0">
+										<a
+											v-if="def.rowTarget === 'record'"
+											class="cell-link"
+											:href="rowHref(row)"
+											:aria-label="cellText(row, c, def) ? undefined : 'Open'"
+											@click="onRowLink($event, row)"
+										>{{ cellText(row, c, def) || '—' }}</a>
+										<button
+											v-else
+											type="button"
+											class="cell-link"
+											:aria-label="cellText(row, c, def) ? undefined : 'Open'"
+											@click.stop="openRow(row)"
+										>{{ cellText(row, c, def) || '—' }}</button>
+									</template>
+									<template v-else>{{ cellText(row, c, def) }}</template>
+								</td>
 							</tr>
 						</template>
 					</tbody>
@@ -264,7 +282,12 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 th.num .sort { justify-content: flex-end; }
 
 .row { cursor: pointer; }
-.row:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: -2px; }
+.cell-link {
+	display: inline; padding: 0; border: 0; background: none; font: inherit; text-align: inherit;
+	color: inherit; text-decoration: none; cursor: pointer;
+}
+.cell-link:hover { color: var(--d1-accent, var(--theme--primary)); text-decoration: underline; }
+.cell-link:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 3px; }
 /* Long free text (outcomes, notes) is cut instead of stretching the row. */
 .row td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

@@ -43,14 +43,11 @@ export function moveIndex(current: number, delta: 1 | -1, count: number): number
 	return (current + delta + count) % count;
 }
 
-// A real modal on screen: Directus mounts every open drawer and dialog into #dialog-outlet (empty
-// otherwise; checked in Directus 11.17), plus any other aria-modal dialog that is not the finder.
-// Not `.v-overlay.active` (at narrow widths Directus's own navigation drawer is an "active" absolute
-// overlay whenever the nav is shown) and not `.v-dialog .content` (that wrapper is always in the DOM).
-export const MODAL_SELECTOR = '#dialog-outlet > *, [role="dialog"][aria-modal="true"]:not(.d1-finder)';
-
-export function isModalOpen(doc: { querySelector(selector: string): unknown }): boolean {
-	return !!doc.querySelector(MODAL_SELECTOR);
+// Whether a modal is on screen, given the host's own selector for one (how a host mounts its
+// drawers and dialogs is the host's business: ExplorerView passes Directus's). The finder dialog
+// itself must be excluded by the selector, or it would count as the modal that blocks it.
+export function isModalOpen(doc: { querySelector(selector: string): unknown }, selector: string): boolean {
+	return !!doc.querySelector(selector);
 }
 
 // Ctrl K on Windows/Linux, Cmd K on Mac; with Shift or Alt it is someone else's shortcut.

@@ -24,6 +24,13 @@ describe('localHits', () => {
 		expect(hits.some((h) => h.label === 'Slow tests')).toBe(false);
 	});
 
+	it('does not offer a link that opens in a new tab (Print labels is a server page)', () => {
+		expect(localHits('print', nav)).toEqual([]);
+		expect(localHits('label', nav).some((h) => h.to.startsWith('/d1-report/'))).toBe(false);
+		// the other Tools entries are still found
+		expect(localHits('data studio', nav).map((h) => h.label)).toEqual(['Data Studio']);
+	});
+
 	it('offers nothing below the minimum length', () => {
 		expect(localHits('s', nav)).toEqual([]);
 		expect(MIN_QUERY).toBe(2);

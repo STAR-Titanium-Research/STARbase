@@ -18,8 +18,13 @@ const openFinder = () => {
 };
 
 // A Directus drawer or dialog being open means the user is in the middle of a form: Ctrl K does
-// not pull the finder over it. (See isModalOpen for why this is not `.v-overlay.active`.)
-const overlayOpen = () => isModalOpen(document);
+// not pull the finder over it. Directus mounts every open drawer and dialog into #dialog-outlet
+// (empty otherwise; checked in Directus 11.17), plus any other aria-modal dialog that is not the
+// finder. Not `.v-overlay.active` (at narrow widths Directus's own navigation drawer is an "active"
+// absolute overlay whenever the nav is shown) and not `.v-dialog .content` (that wrapper is always
+// in the DOM).
+const MODAL_SELECTOR = '#dialog-outlet > *, [role="dialog"][aria-modal="true"]:not(.d1-finder)';
+const overlayOpen = () => isModalOpen(document, MODAL_SELECTOR);
 
 function onKeydown(e: KeyboardEvent) {
 	if (!isFinderShortcut(e)) return;
