@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import ExplorerView from './ExplorerView.vue';
+import { useExplorerHost } from './explorerHost';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
@@ -11,11 +12,8 @@ const router = useRouter();
 const { useUserStore } = useStores();
 const userStore = useUserStore() as any;
 // An admin reads every row, so a sample with no owner is still visible to them: only members need
-// a People row to see what they register.
-const isAdmin = computed(() => {
-	const u = userStore.currentUser;
-	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
-});
+// a People row to see what they register. The server's own answer, shared with the sidebar.
+const { isAdmin } = useExplorerHost();
 
 interface Opt { text: string; value: string; extra?: string }
 const materials = ref<Opt[]>([]);

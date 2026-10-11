@@ -3,6 +3,9 @@
 // saved views nested under it. It sits in the host's navigation column; the host supplies the
 // ExplorerHost (ExplorerView in d1-home) and this component only reads it.
 //
+// Active state is ours (`.on`, from linkActive, which reads the query too); vue-router ignores the
+// query, so its own active classes are switched off on the links.
+//
 // Plain HTML, the kit's tokens and the host's navigation theme variables, so it can move to the
 // standalone app unchanged. The "Find a record" box only emits; the finder dialog is wired by
 // the host page.
@@ -59,10 +62,13 @@ const holdsPage = (links: VisibleLink[]) => links.some((l) => active(l.to) || l.
 
 // Open the group holding the page you are on, when you arrive on it (a link, the finder) and when
 // the list first loads; not on every render, so a group you close stays closed.
+// Only the ids matter: the computed re-evaluates (to a new array) whenever the nav reloads, and a
+// group the user just closed must not be re-opened by that.
 const holdingGroups = computed(() => nav.value.groups.filter((g) => g.collapsible && holdsPage(g.links)).map((g) => g.id));
 watch(
-	holdingGroups,
-	(ids) => {
+	() => holdingGroups.value.join(),
+	() => {
+		const ids = holdingGroups.value;
 		if (ids.length) forced.value = new Set([...forced.value, ...ids]);
 	},
 	{ immediate: true },
@@ -108,6 +114,8 @@ watch(
 						v-else
 						class="item"
 						:class="{ on: active(link.to) }"
+						active-class=""
+						exact-active-class=""
 						:to="link.to"
 						:aria-current="active(link.to) ? 'page' : undefined"
 					>
@@ -119,6 +127,8 @@ watch(
 							<router-link
 								class="item sub"
 								:class="{ on: active(bookmarkTo(b)) }"
+								active-class=""
+								exact-active-class=""
 								:to="bookmarkTo(b)"
 								:aria-current="active(bookmarkTo(b)) ? 'page' : undefined"
 							>

@@ -10,6 +10,9 @@ import type { Bookmark, VisibleNav } from './navConfig';
 
 export interface ExplorerNavState {
 	nav: ComputedRef<VisibleNav>;
+	// The collections the user may read (null until known, or when that request failed): what the
+	// finder queries by.
+	visible: Ref<Set<string> | null>;
 	loading: Ref<boolean>;
 	// True when either request failed; the sidebar then says so quietly and offers Retry.
 	error: Ref<boolean>;
@@ -49,7 +52,15 @@ export function useExplorerNav(host: ExplorerHost): ExplorerNavState {
 	const loading = ref(true);
 	const error = ref(false);
 
-	async function refresh(): Promise<void> {
+	// Retry clicked twice, or while the first load is still running, joins that load.
+	let inFlight: Promise<void> | null = null;
+
+	function refresh(): Promise<void> {
+		if (!inFlight) inFlight = load().finally(() => { inFlight = null; });
+		return inFlight;
+	}
+
+	async function load(): Promise<void> {
 		loading.value = true;
 		// Independent: the pages list still works when only the saved views fail, and the reverse.
 		const [collections, presets] = await Promise.allSettled([fetchVisibleCollections(host), fetchBookmarks(host)]);
@@ -63,7 +74,7 @@ export function useExplorerNav(host: ExplorerHost): ExplorerNavState {
 	// collection (the same as the failure case), and the component shows a loading line.
 	const nav = computed(() => buildNav(visible.value, bookmarks.value, host.isAdmin.value));
 
-	const state: ExplorerNavState = { nav, loading, error, refresh };
+	const state: ExplorerNavState = { nav, visible, loading, error, refresh };
 	states.set(host, state);
 	void refresh();
 	return state;
