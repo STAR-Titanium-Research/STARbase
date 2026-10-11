@@ -923,3 +923,20 @@ def test_local_files_are_skipped_without_include_local(db):
     db.add_file("x/n.bin", write=False, storage="local", filename_disk="n.bin")
     assert run(db, "--phase", "linked") == 0
     assert db.count() == 0
+
+
+def test_once_the_share_is_found_gone_a_late_finishing_worker_writes_nothing(db):
+    """Another worker may still be finishing a file when the share-gone stop fires; its result must not
+    flush the pending missing files (driven on _Run directly, so it is deterministic)."""
+    jobs = [make_job(id=db.add_file(f"p/m{i}.txt", b"x", write=False), archive_path=f"p/m{i}.txt") for i in range(6)]
+    late = make_job(id=db.add_file("p/late.txt", b"x"), archive_path="p/late.txt")
+    run_state = ff._Run(jobs + [late], db.root, ff.Throttle(None), 1)
+    missing = {"status": "missing", "error_message": "not found"}
+    for j in jobs[:4]:
+        run_state.finish(db.conn, j, dict(missing))
+    shutil.rmtree(db.root)
+    run_state.finish(db.conn, jobs[4], dict(missing))  # the fifth: the share is gone
+    assert run_state.exit_code == 2
+    done = {"status": "done", "content_sha256": "0" * 64, "size_bytes": 1, "source_mtime": None}
+    run_state.finish(db.conn, late, done)  # a worker that was mid-file when the stop fired
+    assert db.count() == 0

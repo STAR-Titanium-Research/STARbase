@@ -572,6 +572,8 @@ class _Run:
               f"reachable; those files were not marked, rows already written are kept (exit 2)", file=sys.stderr)
 
     def finish(self, conn, job, row):
+        if self.exit_code is not None:  # another worker found the share gone: write nothing more
+            return
         if row["status"] == "missing":
             self.pending.append((job, row))
             if len(self.pending) >= MISSING_STREAK:
