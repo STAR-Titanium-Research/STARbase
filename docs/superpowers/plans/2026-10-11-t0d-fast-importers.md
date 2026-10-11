@@ -93,3 +93,18 @@ The importers run by hand, not as a service, so nothing is deployed to the stack
 of live: run `adopt_hand_logged` + the upsert path with two synthetic runs (one matching a hand-logged
 op created in the copy) and check codes and ids; note the result in the plan's Outcome. The maintainer
 runs the next real import; until then nothing changes on live.
+
+## Outcome (2026-10-11)
+
+Built and reviewed; nothing is deployed (the importers run by hand). Verified on a restored copy of
+live with the real `write_operations`: a hand-logged run (FCT HP D 25, run 99901, typed note and
+operator) was adopted — same operation id, note and operator kept, code rebuilt to
+`11-10-26-MF25-99901-1200C_50kN_20dia` — and a fresh run was inserted with its code built by the
+database; one row per run. Final review: ready for the next real import (live has one equipment row
+per machine, 0 adoptable rows, 0 code drift). Merge rule after review: owner and notes keep what a
+person typed; every other column takes the import's value when it has one and a blank never wipes.
+`finalize_fast_codes.py` retired; `import_fast_logs.py` no longer writes codes.
+
+Before the next real import (operational): snapshot `SELECT operation_id, pass_code FROM
+manufacturing_operations WHERE process_category = 'sintering'` and diff afterwards; run it when
+nobody is editing (it holds the rollup lock until its single commit).
