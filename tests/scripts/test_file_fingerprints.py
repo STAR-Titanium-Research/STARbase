@@ -24,10 +24,17 @@ sys.path.insert(0, str(SCRIPTS))
 import file_fingerprints as ff  # noqa: E402
 
 
-def write_v73(path, name, a, **extra):
-    """A MATLAB-v7.3-shaped file: 512-byte header, then HDF5 holding each array transposed."""
+def write_v73(path, name, a, *, chunks=None, matlab_class=None, **extra):
+    """A MATLAB-v7.3-shaped file: 512-byte header, then HDF5 holding each array transposed.
+
+    `chunks` (a (cols-side, rows-side) HDF5 chunk shape) makes the first array chunked and gzipped;
+    `matlab_class` sets the MATLAB_class attribute on it (real MATLAB files carry one).
+    """
     with h5py.File(path, "w", userblock_size=512) as f:
-        f.create_dataset(name, data=np.asarray(a).T)
+        kw = {"chunks": chunks, "compression": "gzip"} if chunks else {}
+        ds = f.create_dataset(name, data=np.asarray(a).T, **kw)
+        if matlab_class:
+            ds.attrs["MATLAB_class"] = np.bytes_(matlab_class)
         for k, v in extra.items():
             f.create_dataset(k, data=np.asarray(v).T)
     with open(path, "r+b") as f:  # h5py leaves the userblock zeroed
@@ -36,10 +43,12 @@ def write_v73(path, name, a, **extra):
 
 
 def reference(a):
+    """The definition, written out with plain hashlib: shape header, then one digest per column."""
     a = np.asarray(a)
-    return hashlib.sha256(
-        struct.pack("<QQ", a.shape[0], a.shape[1]) + a.astype("<f8").tobytes(order="F")
-    ).hexdigest()
+    h = hashlib.sha256(struct.pack("<QQ", a.shape[0], a.shape[1]))
+    for j in range(a.shape[1]):
+        h.update(hashlib.sha256(a[:, j].astype("<f8").tobytes()).digest())
+    return h.hexdigest()
 
 
 @pytest.fixture
@@ -65,19 +74,51 @@ def test_v73_signature_at_offset_zero_is_accepted(tmp_path, matrix):
     assert ff.mat_data_sha256(p)[0] == reference(matrix)
 
 
-def test_hdf5_streaming_in_many_blocks_gives_the_same_hash(tmp_path, matrix):
+class Rec(ff.Throttle):
+    """A throttle that records the byte counts it is asked to consume."""
+
+    def __init__(self):
+        super().__init__(None)
+        self.seen = []
+
+    def consume(self, n):
+        self.seen.append(n)
+
+
+def test_golden_vector(tmp_path):
+    # 2x3 (MATLAB rows=2, cols=3): [[1,2,3],[4,5,6]]. The literal was computed once with plain
+    # hashlib/struct from the definition; it is the vector for the force-file standard.
+    a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    want = "31b27bca76dc86c7f8dbefde8e1541e793a4f2bafa2cf515c536467986c318f4"
+    assert reference(a) == want
+    p5, p73 = tmp_path / "g5.mat", tmp_path / "g73.mat"
+    scipy_io.savemat(p5, {"data": a})
+    write_v73(p73, "data", a)
+    assert ff.mat_data_sha256(p5)[0] == want
+    assert ff.mat_data_sha256(p73)[0] == want
+
+
+def test_hdf5_streams_all_columns_per_block_in_one_pass(tmp_path, matrix):
     p = tmp_path / "a73.mat"
     write_v73(p, "data", matrix)
-    seen = []
-
-    class Rec(ff.Throttle):
-        def consume(self, n):
-            seen.append(n)
-
-    h, _, _, _ = ff.mat_data_sha256(p, block_bytes=24, throttle=Rec(None))
+    rec = Rec()
+    # 96 bytes = 3 samples of all 4 columns per block (one float64 each)
+    h, _, _, _ = ff.mat_data_sha256(p, block_bytes=96, throttle=rec)
     assert h == reference(matrix)
-    assert max(seen) == 24 and len(seen) == 4 * (1000 // 3 + 1)
-    assert sum(seen) == matrix.size * 8
+    assert max(rec.seen) == 96 and len(rec.seen) == 1000 // 3 + 1
+    assert sum(rec.seen) == matrix.size * 8
+
+
+def test_hdf5_block_is_rounded_to_whole_chunk_widths(tmp_path, matrix):
+    p = tmp_path / "chunked.mat"
+    write_v73(p, "data", matrix, chunks=(4, 100))  # every chunk holds all 4 columns x 100 samples
+    rec = Rec()
+    h, _, _, _ = ff.mat_data_sha256(p, block_bytes=8, throttle=rec)  # asks for less than a chunk
+    assert h == reference(matrix)
+    assert rec.seen == [4 * 100 * 8] * 10  # one chunk width per block: each chunk is decoded once
+    rec = Rec()
+    ff.mat_data_sha256(p, block_bytes=4 * 250 * 8, throttle=rec)  # 250 samples -> rounds down to 200
+    assert rec.seen == [4 * 200 * 8] * 5
 
 
 def test_int16_hashes_as_float64(tmp_path):
@@ -212,3 +253,60 @@ def test_throttle_caps_the_rate_across_threads():
         th.join()
     took = time.monotonic() - t0
     assert 1.8 <= took < 5  # 3000 bytes at 1000 B/s: each caller waits out its own bytes: 1.5 s, then 3 s
+
+
+@pytest.mark.parametrize("compress", [False, True])
+def test_truncated_v5_is_unreadable(tmp_path, matrix, compress):
+    p = tmp_path / "cut.mat"
+    scipy_io.savemat(p, {"data": matrix}, do_compression=compress)
+    raw = p.read_bytes()
+    p.write_bytes(raw[: len(raw) * 6 // 10])
+    with pytest.raises(ff.UnreadableMat):
+        ff.mat_data_sha256(p)
+
+
+def test_hdf5_read_error_after_open_is_retryable_oserror(tmp_path, matrix, monkeypatch):
+    p = tmp_path / "a73.mat"
+    write_v73(p, "data", matrix)
+    real = h5py.Dataset.__getitem__
+
+    def flaky(self, args):
+        if isinstance(args, tuple) and len(args) == 2 and args != ():
+            raise OSError("Can't read data (filter returned failure)")  # errno None, as h5py raises it
+        return real(self, args)
+
+    monkeypatch.setattr(h5py.Dataset, "__getitem__", flaky)
+    with pytest.raises(OSError) as ei:
+        ff.mat_data_sha256(p)
+    assert not isinstance(ei.value, ff.FingerprintError)
+
+
+@pytest.mark.parametrize("cls", ["double", "single", "int8", "uint16", "int64", "uint64", "logical"])
+def test_v73_matlab_numeric_classes_are_accepted(tmp_path, cls):
+    a = np.arange(12).reshape(3, 4) % 2
+    p = tmp_path / "c.mat"
+    write_v73(p, "data", a.astype("uint8" if cls == "logical" else cls), matlab_class=cls)
+    assert ff.mat_data_sha256(p)[0] == reference(a)
+
+
+def test_v73_char_array_is_rejected(tmp_path):
+    p = tmp_path / "char.mat"
+    write_v73(p, "data", np.array([[72, 105]], dtype="uint16"), matlab_class="char")  # char is uint16
+    with pytest.raises(ff.BadForceArray):
+        ff.mat_data_sha256(p)
+
+
+def test_empty_array_hashes_alike_in_v5_and_v73(tmp_path):
+    p5, p73 = tmp_path / "e5.mat", tmp_path / "e73.mat"
+    scipy_io.savemat(p5, {"data": np.zeros((0, 3))})
+    with h5py.File(p73, "w", userblock_size=512) as f:  # the way MATLAB writes an empty: its dimensions
+        ds = f.create_dataset("data", data=np.array([0, 3], dtype="uint64"))
+        ds.attrs["MATLAB_class"] = np.bytes_("double")
+        ds.attrs["MATLAB_empty"] = np.uint32(1)
+    with open(p73, "r+b") as f:
+        f.write(b"MATLAB 7.3 MAT-file".ljust(512, b"\0"))
+    h5_, _, r5, c5 = ff.mat_data_sha256(p5)
+    h73, var, r73, c73 = ff.mat_data_sha256(p73)
+    assert (r5, c5) == (r73, c73) == (0, 3)
+    assert h5_ == h73 == "1dd0b17c4d187f22eb8028162fca71c9d2e0e2d6942070f9061ebaf842b8b503"
+    assert var == "data"

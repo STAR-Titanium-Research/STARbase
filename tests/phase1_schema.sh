@@ -3389,8 +3389,8 @@ run_eq "every file_fingerprints column has a comment (without: none)" \
     "SELECT coalesce(string_agg(a.attname, ', '), '') FROM pg_attribute a WHERE a.attrelid = 'public.file_fingerprints'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND coalesce(col_description(a.attrelid, a.attnum), '') = ''" ""
 run_eq "both file_fingerprints indexes have a comment" \
     "SELECT count(*) FROM pg_class c WHERE c.relname IN ('file_fingerprints_content_idx', 'file_fingerprints_data_idx') AND coalesce(obj_description(c.oid, 'pg_class'), '') <> ''" "2"
-run_eq "data_sha256's comment says how the hash is taken (uint64 shape, float64, column-major, DATA)" \
-    "SELECT count(*) FROM pg_description WHERE objoid = 'public.file_fingerprints'::regclass AND objsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.file_fingerprints'::regclass AND attname = 'data_sha256') AND description ~* 'uint64' AND description ~* 'float64' AND description ~* 'column-major' AND description ~ 'otherwise DATA'" "1"
+run_eq "data_sha256's comment says how the hash is taken (uint64 shape, float64, per-column digests, DATA)" \
+    "SELECT count(*) FROM pg_description WHERE objoid = 'public.file_fingerprints'::regclass AND objsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.file_fingerprints'::regclass AND attname = 'data_sha256') AND description ~* 'uint64' AND description ~* 'float64' AND description ~* 'each column' AND description ~ 'otherwise DATA'" "1"
 
 echo "== Cleanup test rows =="
 $PSQL -c "
