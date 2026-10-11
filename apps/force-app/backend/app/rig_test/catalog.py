@@ -165,6 +165,19 @@ class ResolvedRequest(BaseModel):
     def needs_operator_steps(self) -> int:
         return len(self.steps)
 
+    def as_request(self, number: int, issue: dict) -> dict:
+        """The REST contract's `Request` for issue `number`, with the issue's own fields bounded."""
+        return {
+            "number": number,
+            "title": str(issue.get("title") or "")[:200],
+            "url": str(issue.get("url") or ""),
+            "requested_by": str(issue.get("requested_by") or "")[:80],
+            "created_at": str(issue.get("created_at") or ""),
+            "items": [i.model_dump(by_alias=True, exclude_none=True) for i in self.items],
+            "estimate_s": self.estimate_s,
+            "needs_operator_steps": self.needs_operator_steps,
+        }
+
 
 class RequestBlock(BaseModel):
     """The issue body's ```rig-test block."""

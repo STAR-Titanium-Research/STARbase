@@ -48,10 +48,10 @@ def _cell(text: object, limit: int = CELL_LIMIT) -> str:
         ("`", "'"),
         ("[", "\\["),
         ("]", "\\]"),
-        ("@", "@​"),
     ):
         s = s.replace(raw, safe)
-    return s
+    # A zero-width space stops "@name" from mentioning anyone; "op@lab" (an address) is left alone.
+    return re.sub(r"(?<!\w)@(?=\w)", "@​", s)
 
 
 def _hhmm(iso: str | None) -> str:
@@ -125,7 +125,7 @@ def _evidence(steps: list[dict]) -> tuple[str, list[tuple[str, str]]]:
         elif status == "no_response" and s.get("answer") is not None:
             what = f'operator: "{_cell(s["answer"], 60)}" (no result)'
         elif status == "no_response":
-            what = "no response in 5 min"
+            what = "no response from the operator"
         else:
             what = status.replace("_", " ")
         if s.get("note"):

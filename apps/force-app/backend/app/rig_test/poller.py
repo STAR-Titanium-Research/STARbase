@@ -201,16 +201,7 @@ class RigTestPoller:
         except catalog.RigRequestError as e:
             self._reject(n, str(e), digest)
             return None
-        return {
-            "number": n,
-            "title": str(issue.get("title") or "")[:200],
-            "url": str(issue.get("url") or ""),
-            "requested_by": str(issue.get("requested_by") or "")[:80],
-            "created_at": str(issue.get("created_at") or ""),
-            "items": [i.model_dump(by_alias=True, exclude_none=True) for i in resolved.items],
-            "estimate_s": resolved.estimate_s,
-            "needs_operator_steps": resolved.needs_operator_steps,
-        }
+        return resolved.as_request(n, issue)
 
     def _reject(self, n: int, reason: str, digest: str) -> None:
         """Say once, on the issue, that the request cannot run; the operator never sees it."""
