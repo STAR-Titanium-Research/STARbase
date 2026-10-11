@@ -314,6 +314,7 @@ _BODIES = {
     ("POST", "/labamp/sensors/write"): {"json": {}},
     ("POST", "/labamp/config"): {"json": {"channels": 99}},
     ("PUT", "/nidaq/channels"): {"json": {"channels": "not a list"}},
+    ("POST", "/nidaq/channels/autoassign"): {"json": {}},
     ("POST", "/nidaq/tacho/start"): {"json": {"freq_hz": 0}},
     ("POST", "/storage/config"): {"json": {}},
 }
@@ -324,39 +325,92 @@ def test_every_locked_endpoint_has_a_probe():
 
 
 @pytest.mark.parametrize("method,path", sorted(LOCKED))
-def test_locked_endpoint_is_409_during_a_run_and_not_after(client, rig, fake, method, path):
+def test_locked_endpoint_is_409_during_an_automated_step_and_not_after(
+    client, rig, fake, method, path
+):
     _running(client, rig, fake)
+    rig.runner.set_automated_step_active(True)  # phase 2's executor does this around an action
     r = client.request(method, path, **_BODIES[(method, path)])
     assert r.status_code == 409 and r.json()["detail"] == LOCK_MESSAGE
-    client.post("/rig-tests/run/cancel")
-    rig.runner.join()
+    rig.runner.set_automated_step_active(False)
     r = client.request(method, path, **_BODIES[(method, path)])
     assert r.status_code != 409 or r.json()["detail"] != LOCK_MESSAGE
 
 
+@pytest.mark.parametrize("method,path", sorted(LOCKED))
+def test_manual_steps_leave_the_rig_free_for_the_operator(client, rig, fake, method, path):
+    """Phase 1 steps are all ask/note: the operator must be able to record, change the amp mode and
+    edit channels while the question is open (B1)."""
+    _running(client, rig, fake)
+    assert rig.runner.owns_rig() and not rig.runner.automated_step_active()
+    r = client.request(method, path, **_BODIES[(method, path)])
+    assert r.status_code != 409 or r.json()["detail"] != LOCK_MESSAGE
+
+
+def test_the_flag_ends_with_the_run_and_means_nothing_without_one(client, rig, fake):
+    rig.runner.set_automated_step_active(True)  # no run: not locked
+    assert not rig.runner.automated_step_active()
+    assert client.post("/nidaq/tacho/stop").status_code == 200
+    rig.runner.set_automated_step_active(False)
+    _running(client, rig, fake)
+    rig.runner.set_automated_step_active(True)
+    assert rig.runner.automated_step_active()
+    client.post("/rig-tests/run/cancel")
+    rig.runner.join()
+    assert not rig.runner.automated_step_active()
+
+
 def test_reads_stay_open_during_a_run(client, rig, fake):
     _running(client, rig, fake)
+    rig.runner.set_automated_step_active(True)
     for path in ("/health", "/record/status", "/labamp/status", "/captures", "/nidaq/devices"):
         assert client.get(path).status_code == 200, path
 
 
-def test_a_run_accepted_while_record_start_is_parked_still_wins(client, rig, fake, monkeypatch):
-    """/record/start re-checks `_busy()` after its awaits, so an accept can land between its first
-    check and the assignment. The re-check must refuse then too, or the recording would start."""
-    _offer(rig, fake)
+def test_nidaq_changes_outside_the_table_are_refused_by_the_busy_helper(client, rig, fake):
+    """`_refuse_nidaq_change_if_busy()` carries the check itself, so endpoints that are not in the
+    LOCKED table (tacho stop, simulated cards) are covered too."""
+    _running(client, rig, fake)
+    rig.runner.set_automated_step_active(True)
+    for method, path, kw in (
+        ("POST", "/nidaq/tacho/stop", {}),
+        ("POST", "/nidaq/sim/card", {"json": {"slot": 1, "product_type": "x"}}),
+        ("DELETE", "/nidaq/sim/card?slot=1", {}),
+    ):
+        r = client.request(method, path, **kw)
+        assert r.status_code == 409 and r.json()["detail"] == LOCK_MESSAGE, path
+
+
+def _flip_on_nth_busy_call(monkeypatch, rig, nth):
     real_busy, calls = main._busy, []
 
     def busy():
         calls.append(1)
-        if len(calls) == 2:  # the re-check: the accept lands just before it
-            assert _accept(client).status_code == 200
+        if len(calls) == nth:  # the re-check after the awaits: an automated step starts just before
+            rig.runner.set_automated_step_active(True)
         return real_busy()
 
     monkeypatch.setattr(main, "_busy", busy)
     monkeypatch.setattr(main, "_session", None)
+
+
+def test_record_start_rechecks_the_lock_after_its_awaits(client, rig, fake, monkeypatch):
+    """/record/start re-checks `_busy()` after its awaits, so an automated step can begin between
+    its first check and the assignment. The re-check must refuse then too."""
+    _running(client, rig, fake)
+    _flip_on_nth_busy_call(monkeypatch, rig, 2)
     r = client.post("/record/start", json={})
     assert r.status_code == 409 and r.json()["detail"] == LOCK_MESSAGE
     assert main._session is None
+
+
+def test_autorange_converge_rechecks_the_lock_before_writing_the_amp(
+    client, rig, fake, monkeypatch
+):
+    _running(client, rig, fake)
+    _flip_on_nth_busy_call(monkeypatch, rig, 1)  # the apply branch's own check is the first
+    r = client.post("/labamp/autorange/converge", json={"peaks": [40] * 8, "apply": True})
+    assert r.status_code == 409 and r.json()["detail"] == LOCK_MESSAGE
 
 
 def test_the_results_folder_is_not_listed_as_a_capture(client, rig, monkeypatch, tmp_path):

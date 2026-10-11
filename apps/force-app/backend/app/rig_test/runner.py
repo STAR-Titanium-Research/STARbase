@@ -5,8 +5,11 @@ an `ask` waits for the operator's answer (up to ASK_TIMEOUT_S, then `no_response
 waits for "Continue". A step whose `after` dependency did not pass is skipped. The whole run has
 a hard limit of min(1.5 x its estimate, 30 min), and the operator can cancel at any time.
 
-While a run is active `owns_rig()` is true and the lock (see `__init__`) refuses `/record/start`
-and every hardware or storage write. The run itself makes no recordings in phase 1.
+While a run is active `owns_rig()` is true: it stops a second run from being accepted and the poller
+from asking the relay. The rig *lock* (see `__init__`) is narrower: it refuses `/record/start` and
+every hardware or storage write only while an automated step is executing
+(`automated_step_active()`). Phase 1 has no automated steps, so it never engages, and the operator
+stays free to record, change the amp mode or edit channels while an `ask` step is open.
 
 Clocks and timeouts are injected so the tests run in milliseconds. Every relay call is best
 effort: a failure is logged and never changes how the run ends.
@@ -122,12 +125,25 @@ class RigTestRunner:
         self._cond = threading.Condition()
         self._run: _Run | None = None
         self._thread: threading.Thread | None = None
+        self._automated_active = False
 
     # ---- queries -----------------------------------------------------------------------------
 
     def owns_rig(self) -> bool:
         with self._cond:
             return self._run is not None and self._run.record["state"] == "running"
+
+    def automated_step_active(self) -> bool:
+        """True while an automated step is executing against the hardware. Always False in phase 1
+        (no automated kinds exist)."""
+        with self._cond:
+            return self._automated_active and self.owns_rig()
+
+    def set_automated_step_active(self, active: bool) -> None:
+        """The executor of an automated step (phase 2) wraps its action in this; tests use it to
+        exercise the lock."""
+        with self._cond:
+            self._automated_active = active
 
     def current_issue(self) -> int | None:
         with self._cond:
@@ -312,6 +328,7 @@ class RigTestRunner:
             rec["elapsed_s"] = round(self._clock() - run.started_clock, 1)
             run.finished_wall = self._wall()
             rec["finished_at"] = _iso(run.finished_wall)
+            self._automated_active = False
             rec["state"] = state  # the rig is free from here on
         self._notify_active(None)
         self._write_result(run)
@@ -353,6 +370,10 @@ def install(runner: RigTestRunner | None) -> None:
 
 def owns_rig() -> bool:
     return _runner is not None and _runner.owns_rig()
+
+
+def automated_step_active() -> bool:
+    return _runner is not None and _runner.automated_step_active()
 
 
 def current_issue() -> int | None:

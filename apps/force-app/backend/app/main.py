@@ -2525,6 +2525,7 @@ def _refuse_nidaq_change_if_busy() -> None:
     chassis are what the next start (and the live source's layout) are built from."""
     if _busy():
         raise HTTPException(409, _NIDAQ_BUSY_MSG)
+    rig_test.refuse_if_rig_test()
 
 
 @app.post("/labamp/mode")
@@ -2662,6 +2663,7 @@ async def labamp_autorange_converge(body: dict) -> dict:
         # them to the amp needs the between-cuts guard (#33).
         if _busy():
             raise HTTPException(409, _LABAMP_BUSY_MSG)
+        rig_test.refuse_if_rig_test()
         await run_in_threadpool(_labamp.set_operation_mode, "RESET")
         for r in recs:
             await run_in_threadpool(_labamp.set_range, r["channel"], r["recommended"])
