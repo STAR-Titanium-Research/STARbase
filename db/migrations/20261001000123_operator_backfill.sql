@@ -67,6 +67,11 @@ INSERT INTO _opmap (machine_operator_id, action, person_name, new_name, research
     (138, 'MAP', 'Sam Lister', NULL, false, '{}'::text[]),
     (113, 'MAP', 'Xinzef', NULL, false, '{}'::text[]);
 DELETE FROM _opmap WHERE machine_operator_id IS NULL;
+-- Only map operators a run still points at. A fresh database has none, so the
+-- whole backfill (NEW people and the name check included) is then a no-op.
+DELETE FROM _opmap m
+ WHERE NOT EXISTS (SELECT 1 FROM manufacturing_operations o WHERE o.operator = m.machine_operator_id)
+   AND NOT EXISTS (SELECT 1 FROM test_sessions s WHERE s.operator = m.machine_operator_id);
 
 INSERT INTO people (full_name, is_operator, is_researcher)
 SELECT DISTINCT ON (lower(new_name)) new_name, true, researcher

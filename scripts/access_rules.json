@@ -151,11 +151,12 @@
     "cutting_inserts": ["create", "read", "update", "delete"],
     "insert_edges": ["create", "read", "update", "delete"],
     "insert_types": ["create", "read", "update", "delete"],
+    "manufacturers": ["create", "read", "update", "delete"],
     "raw_stock_lots": ["create", "read", "update", "delete"],
     "manufacturing_methods": ["create", "read", "update", "delete"],
     "facilities": ["read"],
     "fast_recipes": ["read"],
     "force_crawler_state": ["read"],
-    "directus_files": ["create", "read"]
+    "directus_files": ["create", "read", "update", "delete"]
   }
 }
