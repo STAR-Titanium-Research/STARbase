@@ -17,7 +17,7 @@
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
 REPO="$(pwd -W 2>/dev/null || pwd)"
-NET=d1-script-test; PG=d1-script-test-pg; RUNNER=d1-script-runner:1
+NET=d1-script-test; PG=d1-script-test-pg; RUNNER=d1-script-runner:2
 URL="postgres://d1:ci_secret@$PG:5432/d1_scripts?sslmode=disable"
 STATUS=0
 
