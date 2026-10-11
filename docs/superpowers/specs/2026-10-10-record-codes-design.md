@@ -310,10 +310,14 @@ T0d outcome (2026-10-11): the rebuild was measured on live and is a no-op, so no
 - **Table `file_fingerprints`:** `directus_files_id UUID PRIMARY KEY` (FK, ON DELETE CASCADE),
   `content_sha256 TEXT` (the whole file), `data_sha256 TEXT` (`.mat` only: the *decoded* main
   force-data array, never the bytes on disk, because v7.3 files are HDF5 and their chunked or
-  compressed bytes change without the data changing. Defined as SHA-256 over: the array's shape
-  as two little-endian uint64, then its values as float64 little-endian in column-major order.
-  The variable read is the one `docs/force-file-standards.md` §2 names for the file's layout
-  version), `size_bytes BIGINT`,
+  compressed bytes change without the data changing. Defined as SHA-256 over: the array's
+  MATLAB shape as two little-endian uint64 (rows, cols), then, for each column in order, the
+  32-byte SHA-256 digest of that column's values as float64 little-endian (top to bottom).
+  *Amended 2026-10-11 during T0e:* the first wording hashed all values in one column-major
+  stream; real v7.3 force files are chunked 10 columns × 819 samples, so a column-major stream
+  re-reads an 11.8 GB file ~10× over the share, while per-column digests are computed in one
+  pass. The variable read is `data` when present, else `DATA` — taken from the variables, not
+  from `fileVersion` (22 files declare v1 but carry the v0.9 layout)), `size_bytes BIGINT`,
   `hashed_at TIMESTAMPTZ`. Index on each hash. `data_sha256` survives metadata-only edits (the
   future metadata migration), so an old file stays recognisable after it; a layout upgrade
   (v0.5 → v1.0) changes it, and the tool doing the upgrade records the new value.

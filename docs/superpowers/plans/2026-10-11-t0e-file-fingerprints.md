@@ -27,9 +27,12 @@ share files, 137 GB) and `all` (the rest of the share, 2.26 TB, days). Local upl
   live; trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 - Migration version `20261010000159` (live tops at `20261010000158`). COMMENTs on everything; down
   exact. The table is not exposed in Directus.
-- `data_sha256` definition (spec §7): SHA-256 over the array's MATLAB shape as two little-endian
-  uint64 (rows, cols), then its values as float64 little-endian in **column-major** order (all of
-  column 1, then column 2, …). The variable read is `data` when present, else `DATA` (layout from the
+- `data_sha256` definition (spec §7, amended during Task 2): SHA-256 over the array's MATLAB shape
+  as two little-endian uint64 (rows, cols), then, **for each column in order**, the 32-byte SHA-256
+  digest of that column's values as float64 little-endian (top to bottom). (cols = 0 → the shape
+  alone; rows = 0 → each column digest is SHA-256 of nothing.) Computed in one pass over the file:
+  read blocks of whole chunk-rows `ds[:, k:k+n]` (all columns) and feed one hasher per column.
+  The variable read is `data` when present, else `DATA` (layout from the
   variables, not from `fileVersion`: 22 files declare v1 but carry the v0.9 layout). Not the bytes on
   disk.
 - Old `.mat` files are never written to (Q46). The script only reads (`open(..., 'rb')`, h5py `'r'`).
