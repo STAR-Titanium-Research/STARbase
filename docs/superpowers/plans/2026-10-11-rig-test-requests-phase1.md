@@ -13,7 +13,7 @@ is phase 3. Both get their own plan.
 
 | Stream | Worktree | Branch | Agent profile | State |
 |---|---|---|---|---|
-| A. Relay endpoints | agent worktree | worktree branch | `force-app-implementer` (sonnet, high) | in progress |
+| A. Relay endpoints | `.claude/worktrees/agent-a173c86a1bfb243bc` | `worktree-agent-a173c86a1bfb243bc` | `force-app-implementer` (sonnet, high) | done (4 commits, relay 43 tests pass), awaiting review |
 | B. Backend `rig_test` package + rig lock | agent worktree | worktree branch | `force-app-implementer` (sonnet, high) | in progress |
 | C. Web prompt, run modal, Settings tab, desktop notify | agent worktree | worktree branch | `force-app-implementer` (sonnet, high) | in progress (codes against the contract below, not B's code) |
 | D. Docs, conventions, deploy config | coordinator | `ccr-52e8d6c9-5rl4pg` | coordinator | in progress |
