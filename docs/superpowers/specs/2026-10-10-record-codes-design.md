@@ -3,7 +3,8 @@
 Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 answered (a)).
 **T0a, T0b and T0c (Directus side) are live (migrations 150-158, the `d1-next-number` operation-code
 route, the `d1-operation-code` box); T0d is built on `feat/record-codes` (scripts only, nothing deployed).**
-Next: T0e (file fingerprints); T0f after the maintainer's N/R hand-fix.
+**T0e (file fingerprints) built on the same branch: migration 159 + `scripts/file_fingerprints.py`.**
+Next: T0f after the maintainer's N/R hand-fix.
 **T0d built (no migration): the FAST importers write `sintering_run_number`, `scripts/finalize_fast_codes.py` is retired.**
 Stream T0 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md);
@@ -324,6 +325,13 @@ T0d outcome (2026-10-11): the rebuild was measured on live and is a no-op, so no
 - **Back-fill:** the heavy-data worker hashes the 186 operation-linked files first, then walks the
   rest of `star` and `local` in the background, oldest first, resumable, throttled so the share
   stays usable. Re-hashed when `directus_files.modified_on` changes.
+  *As built (T0e, 2026-10-11):* a host script, `scripts/file_fingerprints.py`, not the heavy-data
+  worker (the worker has neither the share nor a database driver). It runs by hand:
+  `--phase linked` (files linked to operations, samples, tests and force analyses), then
+  `--phase all`. The staleness key is `filesize` plus the share mtime the indexer writes to
+  `metadata.modified` (falling back to `modified_on`). Each row has a status (`done` / `error` /
+  `missing`); failed rows are retried on the next run. When the indexer detects a moved file,
+  the fingerprint moves with the file's references.
 - **New files:** the code at capture time is the file name, with no ID (Q43). Phase 2 recording
   generates the operation's UUID (**random, v4**, so its short ID is random too, §1) when a
   capture starts, writes it into the file's metadata as `RecordID` (and `RecordShortID`), and
