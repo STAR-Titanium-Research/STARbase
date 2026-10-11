@@ -345,6 +345,33 @@ Primary key `(subject_collection, subject_id, test_type)`.
 
 ---
 
+### `file_fingerprints`
+
+Content hashes of Directus files, one row per file (migration `…159`, stream T0e). Derived data,
+recomputable from the file: written only by `scripts/file_fingerprints.py` on the host that can read
+the share; no audit trigger. It gives a file an identity that survives renames, copies and a
+metadata-only edit of a `.mat` file. Rows are deleted with their file (`ON DELETE CASCADE`).
+
+| Column | Type | Description |
+|---|---|---|
+| `directus_files_id` | UUID PK | The file (`directus_files.id`). One fingerprint per file |
+| `status` | TEXT NOT NULL | `done` (default): read, `content_sha256` set. `error`: found but could not be (fully) read or decoded, see `error_message`. `missing`: not on the share |
+| `content_sha256` | TEXT | SHA-256 (64 lower-case hex) of the whole file, byte for byte. Required when `status` is `done` |
+| `data_sha256` | TEXT | `.mat` force files only: SHA-256 of the decoded force array, **not** of the bytes on disk. Taken over the array's MATLAB shape as two little-endian uint64 (rows, cols), then its values as little-endian float64 in column-major order (all of column 1, then column 2, …). The variable read is `data` when present, else `DATA`. A metadata-only edit of the file keeps it |
+| `data_variable` | TEXT | `data` or `DATA`: the variable `data_sha256` was taken from |
+| `data_rows` | BIGINT | Rows of that array (the first shape value hashed) |
+| `data_cols` | BIGINT | Columns of that array (the second shape value hashed) |
+| `size_bytes` | BIGINT | The `directus_files.filesize` the hash was taken against (staleness key) |
+| `source_mtime` | TIMESTAMPTZ | The modification time the hash was taken against: the share mtime from `directus_files.metadata.modified`, else `modified_on` (staleness key) |
+| `error_message` | TEXT | Why the file could not be (fully) hashed |
+| `hashed_at` | TIMESTAMPTZ | When the row was last computed |
+
+Indexes: `file_fingerprints_content_idx` on `content_sha256` (duplicate and copy detection);
+`file_fingerprints_data_idx` on `data_sha256`, partial (`WHERE data_sha256 IS NOT NULL`).
+`CHECK`s: both hashes are 64 lower-case hex characters; `status = 'done'` needs a `content_sha256`.
+
+---
+
 ### `raw_stock_lots`
 
 Inbound material ledger — new entity with no equivalent in legacy AppSheet data.

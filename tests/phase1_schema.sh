@@ -748,9 +748,11 @@ echo "== Audit coverage: every business table, keyed by its primary key (review 
 # derived caches (project_rollup, semantic_embeddings), the crawler's heartbeat row,
 # audit_log_actors (the actor side-table of the log itself), short_ids (the short-ID registry:
 # write-once bookkeeping written only by claim_short_id()), test_code_counters (test-code number
-# bookkeeping written only by next_test_code_number()). Migration 141's backup of Directus
+# bookkeeping written only by next_test_code_number()), file_fingerprints (derived data: content
+# hashes of directus_files rows, written only by scripts/file_fingerprints.py and recomputable at
+# any time, so an audit row would record nothing a re-run cannot). Migration 141's backup of Directus
 # permission rows lives in the private schema d1_private, so this public-schema check never sees it.
-AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters'"
+AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints'"
 run_eq "every business table has an audit trigger (missing: none)" \
     "SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -3328,6 +3330,68 @@ $PSQL -c "
     DELETE FROM manufacturing_methods WHERE method_id = '${CS_L}fa';
 " > /dev/null 2>&1 || true
 run_eq "lock_order: fixtures removed" "SELECT count(*) FROM physical_samples WHERE sample_code = 'TEST-OC-LOCK'" "0"
+echo "== File fingerprints table (T0e) =="
+# Each check is its own rolled-back transaction (prefix 9d000000-0000-4000-8000-). A rejected statement
+# aborts psql (ON_ERROR_STOP), so the error text is what is asserted on. The CI database has the stub
+# directus_files (id only, migration 030), so the fixture row sets just the id.
+FF_MIG=db/migrations/20261010000159_file_fingerprints.sql
+[[ -f "$FF_MIG" ]] && ok "found migration 159" || bad "migration 159 is missing ($FF_MIG)"
+FF_F='9d000000-0000-4000-8000-000000000001'
+FF_H64=$(printf 'a%.0s' $(seq 1 64))
+FF_H63=$(printf 'a%.0s' $(seq 1 63))
+FF_HUP=$(printf 'A%.0s' $(seq 1 64))
+ff_sql() { # ff_sql <statements>: run them after a fixture directus_files row, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_files (id) VALUES ('$FF_F');
+$1
+ROLLBACK;
+SQL
+}
+run_eq "file_fingerprints exists" "SELECT to_regclass('public.file_fingerprints')::TEXT" "file_fingerprints"
+run_eq "file_fingerprints has both indexes" \
+    "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'file_fingerprints' AND indexname IN ('file_fingerprints_content_idx', 'file_fingerprints_data_idx')" \
+    "file_fingerprints_content_idx,file_fingerprints_data_idx"
+run_eq "file_fingerprints_data_idx is partial (data_sha256 IS NOT NULL)" \
+    "SELECT count(*) FROM pg_indexes WHERE indexname = 'file_fingerprints_data_idx' AND indexdef LIKE '%WHERE (data_sha256 IS NOT NULL)%'" "1"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256, data_sha256, data_variable, data_rows, data_cols, size_bytes, source_mtime)
+    VALUES ('$FF_F', '$FF_H64', '$FF_H64', 'DATA', 10, 3, 1234, now());
+SELECT 'ff_row:' || status || ':' || data_variable || ':' || data_rows || 'x' || data_cols FROM file_fingerprints WHERE directus_files_id = '$FF_F';")
+grep -q 'ff_row:done:DATA:10x3' <<<"$ff_out" && ok "a done fingerprint for a file inserts (status defaults to done)" || bad "done fingerprint insert failed (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256) VALUES ('$FF_F', '$FF_H63');")
+grep -q 'check constraint' <<<"$ff_out" && ok "a 63-character content_sha256 is rejected (check_violation)" || bad "63-character content_sha256 was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256) VALUES ('$FF_F', '$FF_HUP');")
+grep -q 'check constraint' <<<"$ff_out" && ok "an upper-case content_sha256 is rejected (check_violation)" || bad "upper-case content_sha256 was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256, data_sha256) VALUES ('$FF_F', '$FF_H64', '$FF_H63');")
+grep -q 'check constraint' <<<"$ff_out" && ok "a 63-character data_sha256 is rejected (check_violation)" || bad "63-character data_sha256 was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256, data_variable) VALUES ('$FF_F', '$FF_H64', 'Data');")
+grep -q 'check constraint' <<<"$ff_out" && ok "a data_variable other than data / DATA is rejected" || bad "bad data_variable was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256, data_rows) VALUES ('$FF_F', '$FF_H64', -1);")
+grep -q 'check constraint' <<<"$ff_out" && ok "a negative data_rows is rejected" || bad "negative data_rows was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status, content_sha256) VALUES ('$FF_F', 'weird', '$FF_H64');")
+grep -q 'check constraint' <<<"$ff_out" && ok "an unknown status is rejected" || bad "unknown status was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status) VALUES ('$FF_F', 'done');")
+grep -q 'file_fingerprints_done_has_hash' <<<"$ff_out" && ok "status done with a NULL content_sha256 is rejected" || bad "done without content_sha256 was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status) VALUES ('9d000000-0000-4000-8000-000000000002', 'missing');")
+grep -q 'foreign key' <<<"$ff_out" && ok "a fingerprint for a file that does not exist is rejected (foreign key)" || bad "fingerprint without a file was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status, error_message) VALUES ('$FF_F', 'missing', 'not on the share');
+SELECT 'ff_missing:' || status || ':' || coalesce(content_sha256, '<null>') || ':' || coalesce(data_sha256, '<null>') FROM file_fingerprints WHERE directus_files_id = '$FF_F';")
+grep -q 'ff_missing:missing:<null>:<null>' <<<"$ff_out" && ok "status missing with NULL hashes is accepted" || bad "missing fingerprint with NULL hashes failed (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status, error_message) VALUES ('$FF_F', 'error', 'unreadable');
+SELECT 'ff_error:' || status FROM file_fingerprints WHERE directus_files_id = '$FF_F';")
+grep -q 'ff_error:error' <<<"$ff_out" && ok "status error with NULL hashes is accepted" || bad "error fingerprint with NULL hashes failed (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256) VALUES ('$FF_F', '$FF_H64');
+DELETE FROM directus_files WHERE id = '$FF_F';
+SELECT 'ff_cascade:' || count(*) FROM file_fingerprints WHERE directus_files_id = '$FF_F';")
+grep -q 'ff_cascade:0' <<<"$ff_out" && ok "deleting the directus_files row removes its fingerprint" || bad "fingerprint survived its file's deletion (output: $ff_out)"
+run_eq "file_fingerprints has a table comment" "SELECT count(*) FROM pg_description WHERE objoid = 'public.file_fingerprints'::regclass AND objsubid = 0 AND description <> ''" "1"
+run_eq "every file_fingerprints column has a comment (without: none)" \
+    "SELECT coalesce(string_agg(a.attname, ', '), '') FROM pg_attribute a WHERE a.attrelid = 'public.file_fingerprints'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND coalesce(col_description(a.attrelid, a.attnum), '') = ''" ""
+run_eq "both file_fingerprints indexes have a comment" \
+    "SELECT count(*) FROM pg_class c WHERE c.relname IN ('file_fingerprints_content_idx', 'file_fingerprints_data_idx') AND coalesce(obj_description(c.oid, 'pg_class'), '') <> ''" "2"
+run_eq "data_sha256's comment says how the hash is taken (uint64 shape, float64, column-major, DATA)" \
+    "SELECT count(*) FROM pg_description WHERE objoid = 'public.file_fingerprints'::regclass AND objsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.file_fingerprints'::regclass AND attname = 'data_sha256') AND description ~* 'uint64' AND description ~* 'float64' AND description ~* 'column-major' AND description ~* 'DATA'" "1"
+
 echo "== Cleanup test rows =="
 $PSQL -c "
     DELETE FROM sample_genealogy
