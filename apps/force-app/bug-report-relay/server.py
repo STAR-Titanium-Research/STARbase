@@ -128,7 +128,9 @@ async def _github(method: str, url: str, **kwargs) -> httpx.Response:
             token = await _token_cache.get()
         except httpx.HTTPError as e:
             raise _AuthError(str(e)) from e
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # A renamed or transferred repo answers with a redirect to /repositories/<id> (307 for a
+        # POST, which keeps the method and body). Same host, so httpx keeps the Authorization.
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             res = await client.request(
                 method,
                 url,

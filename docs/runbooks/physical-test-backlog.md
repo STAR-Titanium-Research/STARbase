@@ -1125,6 +1125,11 @@ when picked up):
   a capture deleted on a rig still reads as a complete backup (#91). Rebuild and restart it, then
   delete a capture on a rig: the recorder's answer has `remote_marked_deleted: true` and the remote
   list shows it as deleted. Found 2026-10-08 on the rig.
+- [ ] **#223 Redeploy the bug-report relay (renamed repo).** Since the GitHub repo was renamed,
+  every report failed with "GitHub rejected the report (HTTP 307) Moved Permanently" (the relay's
+  own message; the Directus form in #223 isn't in this repo but reaches the same relay). Rebuild and restart `bug-report-relay` on d1-server, then
+  file a test report from the app's Report a Bug screen: it answers with an issue link and the
+  issue appears on the repo, and the "already reported" list loads. Since the 2026-10-11 triage PR.
 - [ ] **Branch protection requires "CI passed".** In GitHub *Settings > Branches*, `main` requires
   the **CI passed** check. A PR with a failing job cannot merge. Since: CI/CD overhaul (PR TBD).
 

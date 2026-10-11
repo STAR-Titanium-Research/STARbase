@@ -102,6 +102,53 @@ def test_report_surfaces_github_rejection(client, monkeypatch):
     assert "Validation failed" in data["reason"]
 
 
+def test_report_follows_a_renamed_repo_redirect(client, monkeypatch):
+    """#223: after the repo was renamed, GitHub answers POST /repos/<old>/issues with a 307 to
+    /repositories/<id>/issues. The report has to land there, still as the App, not fail."""
+    monkeypatch.setattr(srv, "configured", lambda: True)
+
+    async def fake_get_token(self):
+        return "installation-token"
+
+    monkeypatch.setattr(srv._TokenCache, "get", fake_get_token)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.content))
+        if request.url.path.startswith("/repos/"):
+            return httpx.Response(
+                307,
+                headers={"Location": "https://api.github.com/repositories/42/issues"},
+                json={"message": "Moved Permanently"},
+            )
+        assert request.headers["Authorization"] == "Bearer installation-token"
+        return httpx.Response(
+            201, json={"html_url": "https://github.com/x/new/issues/7", "number": 7}
+        )
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: real_async_client(
+            transport=httpx.MockTransport(handler),
+            **{k: v for k, v in kw.items() if k != "transport"},
+        ),
+    )
+
+    r = client.post("/report", json={"title": "Bug", "body": "Body text"})
+    assert r.json() == {
+        "ok": True,
+        "url": "https://github.com/x/new/issues/7",
+        "number": 7,
+    }
+    assert [(m, p) for m, p, _ in seen] == [
+        ("POST", f"/repos/{srv._repo()}/issues"),
+        ("POST", "/repositories/42/issues"),
+    ]
+    assert seen[0][2] == seen[1][2]
+
+
 def test_issues_fails_closed_when_not_configured(client, monkeypatch):
     monkeypatch.delenv("GITHUB_APP_ID", raising=False)
     r = client.get("/issues")
