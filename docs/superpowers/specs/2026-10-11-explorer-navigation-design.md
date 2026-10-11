@@ -1,6 +1,8 @@
 # N1: Explorer navigation and index pages
 
-Status: **draft for the maintainer's review** (2026-10-11). Built from the decisions of the
+Status: **approved to proceed 2026-10-11** (the maintainer said "proceed" without answering §10,
+so the recommended answers to N-Q1…N-Q6 stand; deploying into the main checkout, N-Q1, still waits
+for an explicit go-ahead). Built from the decisions of the
 2026-10-09 grilling (Q1-Q15, Q18-Q19, Q33; recorded in
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md),
 "Resume here", item 1) and the layout mockup `nav-options.html` (option A, chosen). Questions the
