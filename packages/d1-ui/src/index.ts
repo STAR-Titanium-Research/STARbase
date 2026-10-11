@@ -7,7 +7,7 @@
 // link mapping and not the Vue components (the force app) imports "@d1/ui/recordRoute".
 
 // Links
-export { recordRoute, collectionRoute, dataStudioRoute } from './recordRoute';
+export { recordRoute, collectionRoute, dataStudioRoute, indexRoute } from './recordRoute';
 export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
 export { operationLabel, operationHeading, operationSampleLine, hasPassCode } from './operationLabel';

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import ExplorerView from './ExplorerView.vue';
 import { useExplorerHost } from './explorerHost';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { PageShell } from '@d1/ui';
 
 const api = useApi();
 const router = useRouter();
+const route = useRoute();
 // Only an admin may link a login to a People row (ADR-0011: the link decides whose records a
 // person sees, so a member relinking it would inherit someone else's records). The host reads the
 // flag from the server; if a non-admin were wrongly shown the picker, the server still refuses the write.
@@ -30,7 +31,11 @@ const people = ref<Person[]>([]);
 const users = ref<Opt[]>([]);
 const loading = ref(true);
 const filter = ref<'all' | 'researchers' | 'operators' | 'former' | 'nologin'>('all');
-const q = ref('');
+// The finder sends a People hit to /home/people?q=<name>: the search box starts with that text, and
+// follows it if the query changes while the page stays open (a second finder search).
+const routeQ = () => (typeof route.query.q === 'string' ? route.query.q : '');
+const q = ref(routeQ());
+watch(() => route.query.q, () => (q.value = routeQ()));
 
 // Edit / add dialog state.
 const dialog = ref(false);

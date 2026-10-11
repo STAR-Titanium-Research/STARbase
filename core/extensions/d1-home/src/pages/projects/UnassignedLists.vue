@@ -30,7 +30,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.samples)" class="d1-note cap">Showing the first {{ LIST_CAP }}. <router-link :to="collectionRoute('physical_samples')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.</p>
+			<p v-if="capped(props.samples)" class="d1-note cap">Showing the first {{ LIST_CAP }}. <router-link :to="collectionRoute('physical_samples')">See the full list</router-link>.</p>
 		</LoadState>
 	</Section>
 
@@ -47,7 +47,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.operations)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="collectionRoute('manufacturing_operations')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.</p>
+			<p v-if="capped(props.operations)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="collectionRoute('manufacturing_operations')">See the full list</router-link>.</p>
 		</LoadState>
 	</Section>
 
@@ -64,7 +64,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.tests)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="collectionRoute('test_sessions')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.</p>
+			<p v-if="capped(props.tests)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="collectionRoute('test_sessions')">See the full list</router-link>.</p>
 		</LoadState>
 	</Section>
 </template>

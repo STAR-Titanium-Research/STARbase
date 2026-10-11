@@ -39,7 +39,7 @@ const testsCapped = computed(() => props.tests.data.length > LIST_CAP);
 			</DataTable>
 			<p v-if="opsCapped" class="d1-note cap">
 				Showing the first {{ LIST_CAP }} operations.
-				<router-link :to="collectionRoute('manufacturing_operations')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.
+				<router-link :to="collectionRoute('manufacturing_operations')">See the full list</router-link>.
 			</p>
 		</LoadState>
 	</Section>
@@ -62,7 +62,7 @@ const testsCapped = computed(() => props.tests.data.length > LIST_CAP);
 			</DataTable>
 			<p v-if="testsCapped" class="d1-note cap">
 				Showing the first {{ LIST_CAP }} tests.
-				<router-link :to="collectionRoute('test_sessions')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.
+				<router-link :to="collectionRoute('test_sessions')">See the full list</router-link>.
 			</p>
 		</LoadState>
 	</Section>

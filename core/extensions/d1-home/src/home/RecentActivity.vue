@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { DataTable, Section, analysisLink, errorText, formatDate, hasPassCode, operationLabel, recordRoute, type AnalysisLink } from '@d1/ui';
-import { samplesBookmarkLink, SAMPLES_LIST } from './samplesBookmark';
+import { DataTable, Section, analysisLink, collectionRoute, errorText, formatDate, hasPassCode, operationLabel, recordRoute, type AnalysisLink } from '@d1/ui';
 
 // Recent activity: samples, operations and tests merged into one feed, each tagged with its kind,
 // newest first. Links go through recordRoute; a FAST run opens its Operation page like any other
@@ -14,7 +13,7 @@ const KIND_LABEL: Record<Kind, string> = { sample: 'Sample', operation: 'Operati
 
 const api = useApi();
 const recent = ref<Activity[]>([]);
-const samplesLink = ref(SAMPLES_LIST);
+const samplesLink = collectionRoute('physical_samples');
 const error = ref('');
 
 // Each source loads on its own: one the role cannot read leaves the others in the feed, and the
@@ -68,7 +67,6 @@ const SOURCES: { label: string; read: () => Promise<Activity[]> }[] = [
 ];
 
 onMounted(async () => {
-	samplesBookmarkLink(api).then((to) => (samplesLink.value = to));
 	const results = await Promise.allSettled(SOURCES.map((s) => s.read()));
 	const failed: string[] = [];
 	const merged: Activity[] = [];

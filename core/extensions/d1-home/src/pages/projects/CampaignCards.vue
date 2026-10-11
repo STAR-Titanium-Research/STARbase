@@ -59,7 +59,7 @@ const dates = (c: any) => {
 					<span v-else class="no-progress">Counts unavailable</span>
 				</RecordCard>
 			</div>
-			<p v-if="capped" class="d1-note cap">Showing the first {{ LIST_CAP }} campaigns. <router-link :to="collectionRoute('campaigns')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.</p>
+			<p v-if="capped" class="d1-note cap">Showing the first {{ LIST_CAP }} campaigns. <router-link :to="collectionRoute('campaigns')">See the full list</router-link>.</p>
 		</LoadState>
 	</Section>
 </template>

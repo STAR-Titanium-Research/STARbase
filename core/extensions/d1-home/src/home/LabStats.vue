@@ -4,7 +4,6 @@ import { useApi } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
 import { Section, collectionRoute } from '@d1/ui';
 import { go } from './goto';
-import { SAMPLES_LIST, samplesBookmarkLink } from './samplesBookmark';
 
 // The counts that Home always had, a quiet strip under "my work". Every count reads as the signed-in
 // user, so since ADR-0011 it is what that user may see (see "What you see" in the Explorer pages
@@ -16,7 +15,7 @@ const router = useRouter();
 // cannot make a count land on the wrong one.
 interface Stat { key: string; label: string; value: string; icon: string; to: string; }
 const stats = ref<Stat[]>([
-	{ key: 'samples', label: 'Samples', value: '—', icon: 'science', to: SAMPLES_LIST },
+	{ key: 'samples', label: 'Samples', value: '—', icon: 'science', to: collectionRoute('physical_samples') },
 	{ key: 'machining', label: 'Machining', value: '—', icon: 'build', to: collectionRoute('manufacturing_operations') },
 	{ key: 'fast', label: 'FAST', value: '—', icon: 'whatshot', to: '/d1-fast-dashboard' },
 	{ key: 'tests', label: 'Tests', value: '—', icon: 'biotech', to: collectionRoute('test_sessions') },
@@ -41,7 +40,6 @@ async function count(collection: string, filter?: any): Promise<string> {
 }
 
 onMounted(() => {
-	samplesBookmarkLink(api).then((to) => fill('samples', { to }));
 	// Each tile fills as its own count arrives. Machining and FAST (sintering) are one collection split.
 	const reads: [string, string, any?][] = [
 		['samples', 'physical_samples'],
