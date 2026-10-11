@@ -1,6 +1,7 @@
 """The run state machine: answers, no_response, dependency skips, the hard cap and Cancel."""
 
 import json
+import re
 from datetime import datetime
 
 import pytest
@@ -42,6 +43,11 @@ def make_runner(tmp_path):
         r.join()
 
 
+def _only_result(root):
+    (path,) = (root / "rig-tests" / "231").glob("result-*.json")
+    return path
+
+
 def _answer_when_asked(r, index, option, note=None):
     wait_for(lambda: (r.snapshot().get("question") or {}).get("step") == index)
     r.answer(index, option, note)
@@ -70,9 +76,24 @@ def test_all_steps_pass_gives_done_and_result_files(fake, make_runner, tmp_path)
     assert len(fake.edits) >= 6 and all(e[1] == 1001 for e in fake.edits)
     assert fake.comments[1][1].startswith("### Rig test result: done (rig-1, app 0.1.40")
     assert [s for _, s in fake.states] == ["running", "done"]
-    saved = json.loads((tmp_path / "rig-tests" / "231" / "result.json").read_text())
+    saved = json.loads(_only_result(tmp_path).read_text())
     assert saved["state"] == "done" and saved["counts"] == {"pass": 3}
     assert saved["items"][0]["result"] == "pass"
+
+
+def test_a_second_run_of_the_same_issue_keeps_the_first_result(fake, make_runner, tmp_path):
+    wall = [1_760_000_000.0]
+    r = make_runner(wall=lambda: wall[0])
+    r.start(inline_request("- ask: a"), {})
+    _answer_when_asked(r, 0, "Pass")
+    r.join()
+    wall[0] += 3600
+    r.start(inline_request("- ask: a"), {})
+    _answer_when_asked(r, 0, "Fail")
+    r.join()
+    files = sorted((tmp_path / "rig-tests" / "231").glob("result-*.json"))
+    assert len(files) == 2
+    assert [json.loads(f.read_text())["state"] for f in files] == ["done", "partial"]
 
 
 def test_a_failed_step_gives_partial(fake, make_runner):
@@ -230,7 +251,7 @@ def test_cancel_during_an_ask_ends_the_run_and_reports(fake, make_runner, tmp_pa
     assert [s["status"] for s in run["steps"]] == ["cancelled"] * 3
     assert "Rig test result: cancelled" in fake.comments[-1][1]
     assert fake.last_state(231) == "partial"
-    saved = json.loads((tmp_path / "rig-tests" / "231" / "result.json").read_text())
+    saved = json.loads(_only_result(tmp_path).read_text())
     assert saved["state"] == "cancelled"
 
 
@@ -364,4 +385,4 @@ def test_request_text_is_only_displayed_never_used_as_a_path(fake, make_runner, 
     _answer_when_asked(r, 0, "Pass")
     _finish(r)
     written = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file())
-    assert written == ["rig-tests/231/result.json"]
+    assert len(written) == 1 and re.fullmatch(r"rig-tests/231/result-\d{8}T\d{6}\.json", written[0])

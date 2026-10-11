@@ -41,7 +41,7 @@ RUN_CAP_FACTOR = 1.5
 RUN_CAP_MAX_S = 2 * 3600.0
 FINISHED_TTL_S = 300.0  # how long a finished run stays visible on GET /rig-tests/run
 MAX_NOTE = 1000
-RESULTS_DIR = "rig-tests"  # under the captures root: rig-tests/<n>/result.json
+RESULTS_DIR = "rig-tests"  # under the captures root: rig-tests/<n>/result-<started>.json
 
 
 class RunnerBusyError(Exception):
@@ -87,6 +87,7 @@ class _Run:
         cap_s = run_cap_s(specs, window_s)
         self.started_clock = clock
         self.hard_deadline = clock + cap_s
+        self.started_wall = wall
         self.finished_wall: float | None = None
         self.comment_id: int | str | None = None
         self.cancel = False
@@ -393,7 +394,9 @@ class RigTestRunner:
         try:
             os.makedirs(folder, exist_ok=True)
             data = {**rec, "items": report.item_results(rec), "counts": report.counts(rec)}
-            atomic_write_json(os.path.join(folder, "result.json"), data, indent=2)
+            # One file per run: asking for the same issue again must not overwrite the first.
+            stamp = datetime.fromtimestamp(run.started_wall).strftime("%Y%m%dT%H%M%S")
+            atomic_write_json(os.path.join(folder, f"result-{stamp}.json"), data, indent=2)
         except OSError:
             log.exception("could not write rig test result for #%s", rec["number"])
 

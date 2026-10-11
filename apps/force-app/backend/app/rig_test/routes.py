@@ -239,7 +239,8 @@ def _summary(data: dict) -> dict:
 
 def _read_history(root: str) -> list[dict]:
     runs = []
-    for path in glob.glob(os.path.join(root, runner.RESULTS_DIR, "*", "result.json")):
+    # result-<started>.json per run; a bare result.json is how an earlier build wrote them
+    for path in glob.glob(os.path.join(root, runner.RESULTS_DIR, "*", "result*.json")):
         try:
             with open(path, encoding="utf-8") as f:
                 runs.append(_summary(json.load(f)))

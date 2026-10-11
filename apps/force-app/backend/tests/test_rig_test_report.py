@@ -135,6 +135,51 @@ def test_hidden_json_cannot_close_its_comment_or_start_html():
     assert _hidden(text)["items"][0]["steps"][0]["note"].startswith("--> <script>")
 
 
+def _big_run(steps=60, note="word " * 200):
+    """60 steps over 15 items, each with a 1000-character operator note."""
+    run = _run()
+    run["items"] = [{"id": f"R{i}", "title": f"R{i} — item {i}"} for i in range(1, 16)]
+    run["steps"] = [
+        {"index": n, "item_id": f"R{n % 15 + 1}", "kind": "ask", "text": "q", "status": "fail",
+         "answer": "No", "note": note}
+        for n in range(steps)
+    ]  # fmt: skip
+    return run
+
+
+def test_a_comment_over_the_limit_loses_notes_before_anything_else():
+    run = _big_run(steps=60)
+    full = report.render_result(run, limit=10**9)
+    assert len(full) > report.MAX_COMMENT  # the raw comment would not fit on GitHub
+    text = report.render_result(run)
+    assert len(text) <= report.MAX_COMMENT
+    hidden = _hidden(text)  # the JSON is whole and parses
+    assert [i["id"] for i in hidden["items"]] == [f"R{i}" for i in range(1, 16)]
+    assert sum(len(i["steps"]) for i in hidden["items"]) == 60
+    assert all(i["result"] == "fail" for i in hidden["items"])
+    notes = [s["note"] for i in hidden["items"] for s in i["steps"] if "note" in s]
+    assert notes and all(len(n) <= 200 for n in notes)  # shortened, not cut off mid-JSON
+    assert len(re.findall(r"^\| R\d+ ", text, re.M)) == 15  # the table is untouched
+
+
+def test_the_table_shrinks_only_after_the_notes_are_gone():
+    run = _big_run(steps=150)
+    for item in run["items"]:
+        item["title"] = "t" * 200
+    tiny = report.render_result(run, limit=9000)
+    assert len(tiny) <= 9000 or "Operator notes" not in tiny
+    assert "Operator notes" not in tiny and "note" not in json.dumps(_hidden(tiny)["items"][0])
+    assert len(_hidden(tiny)["items"]) == 15
+
+
+def test_a_small_result_is_rendered_in_full():
+    run = _run()
+    run["steps"][0]["note"] = "all fine"
+    text = report.render_result(run)
+    assert "all fine" in text and "Operator notes" in text
+    assert _hidden(text)["items"][0]["steps"][0]["note"] == "all fine"
+
+
 def test_labels_in_table_cells_cannot_break_the_table_or_mention_people():
     run = _run(operator="@boss `x` [l](http://e)|<b>")
     run["items"][0]["title"] = "evil | cell\nnewline `code` @maintainer"

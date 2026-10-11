@@ -15,6 +15,7 @@ import json
 import re
 
 from ..bug_report import _fence, _redact_paths
+from .relay import MAX_COMMENT
 
 SCHEMA_VERSION = 1
 NOTE_LIMIT = 1000
@@ -114,7 +115,9 @@ def render_progress(run: dict) -> str:
     return f"{head}\n\nStep {cur + 1} of {n}: {_cell(step['item_id'], 40)} › `{step['kind']}`: {doing}."
 
 
-def _evidence(steps: list[dict]) -> tuple[str, list[tuple[str, str]]]:
+def _evidence(
+    steps: list[dict], limit: int = EVIDENCE_LIMIT, notes_kept: bool = True
+) -> tuple[str, list[tuple[str, str]]]:
     """(table text, [(step label, note)]) for one item's steps."""
     multi = len(steps) > 1
     parts, notes = [], []
@@ -129,15 +132,17 @@ def _evidence(steps: list[dict]) -> tuple[str, list[tuple[str, str]]]:
             what = "no response from the operator"
         else:
             what = status.replace("_", " ")
-        if s.get("note"):
+        if s.get("note") and notes_kept:
             notes.append((f"step {s['index'] + 1}", s["note"]))
             what += " (note below)"
         parts.append(label + what)
     text = "; ".join(parts)
-    return (text if len(text) <= EVIDENCE_LIMIT else text[: EVIDENCE_LIMIT - 1] + "…"), notes
+    if len(text) > limit:
+        text = text[: limit - 1] + "…" if limit > 0 else ""
+    return text, notes
 
 
-def _hidden_json(run: dict, results: list[dict]) -> str:
+def _hidden_json(run: dict, results: list[dict], note_limit: int = NOTE_LIMIT) -> str:
     payload = {
         "version": SCHEMA_VERSION,
         "issue": run["number"],
@@ -154,8 +159,12 @@ def _hidden_json(run: dict, results: list[dict]) -> str:
                 "result": r["result"],
                 "steps": [
                     {
-                        **s,
-                        **({"note": _redact_paths(s["note"])[:NOTE_LIMIT]} if "note" in s else {}),
+                        **{k: v for k, v in s.items() if k != "note"},
+                        **(
+                            {"note": _redact_paths(s["note"])[:note_limit]}
+                            if "note" in s and note_limit
+                            else {}
+                        ),
                     }
                     for s in r["steps"]
                 ],
@@ -168,13 +177,33 @@ def _hidden_json(run: dict, results: list[dict]) -> str:
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("--", "-\\u002d")
 
 
-def render_result(run: dict) -> str:
+# (operator note characters, table evidence characters): tried in this order until the comment
+# fits. Notes shrink first, then the table; the hidden JSON at the end is never cut.
+_SHRINK = (
+    (NOTE_LIMIT, EVIDENCE_LIMIT),
+    (200, EVIDENCE_LIMIT),
+    (0, EVIDENCE_LIMIT),
+    (0, 100),
+    (0, 0),
+)
+
+
+def render_result(run: dict, limit: int = MAX_COMMENT) -> str:
+    text = ""
+    for note_limit, evidence_limit in _SHRINK:
+        text = _render_result(run, note_limit, evidence_limit)
+        if len(text) <= limit:
+            break
+    return text
+
+
+def _render_result(run: dict, note_limit: int, evidence_limit: int) -> str:
     results = item_results(run)
     notes: list[tuple[str, str]] = []
     rows = []
     for r in results:
         steps = [s for s in run["steps"] if s["item_id"] == r["id"]]
-        evidence, item_notes = _evidence(steps)
+        evidence, item_notes = _evidence(steps, evidence_limit, notes_kept=note_limit > 0)
         notes += [(f"{_cell(r['id'], 40)} {where}", text) for where, text in item_notes]
         rows.append(f"| {_cell(r['title'], 80)} | {RESULT_LABELS[r['result']]} | {evidence} |")
     lines = [
@@ -188,7 +217,7 @@ def render_result(run: dict) -> str:
     if notes:
         lines += ["", "<details><summary>Operator notes</summary>", ""]
         for where, text in notes:
-            lines += [f"**{where}**", "", *_fence(_redact_paths(text), NOTE_LIMIT), ""]
+            lines += [f"**{where}**", "", *_fence(_redact_paths(text), note_limit), ""]
         lines += ["</details>"]
-    lines += ["", f"<!-- rig-test-result {_hidden_json(run, results)} -->"]
+    lines += ["", f"<!-- rig-test-result {_hidden_json(run, results, note_limit)} -->"]
     return "\n".join(lines)

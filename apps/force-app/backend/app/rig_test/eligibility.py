@@ -9,6 +9,7 @@ from ..labamp import MockLabAmp
 
 ALLOW_SIM_ENV = "FORCE_APP_RIG_TEST_ALLOW_SIM"
 RIG_ID_ENV = "FORCE_APP_RIG_ID"
+RELAY_URL_ENV = "FORCE_APP_BUG_REPORT_RELAY_URL"
 
 
 def rig_id() -> str:
@@ -20,6 +21,10 @@ def check(devices: dict, labamp: object) -> tuple[bool, str | None]:
     Lab Amp client. `FORCE_APP_RIG_TEST_ALLOW_SIM=1` overrides it for tests and hardware-free
     verification runs only."""
     if os.environ.get(ALLOW_SIM_ENV) == "1":
+        # The override makes any machine a rig, and the relay URL defaults to the production one:
+        # a developer with the flag set would answer real requests. Make them name a relay.
+        if not os.environ.get(RELAY_URL_ENV, "").strip():
+            return False, f"{ALLOW_SIM_ENV} is set but {RELAY_URL_ENV} is not: set a test relay"
         return True, None
     if devices.get("simulated", True):
         return False, "NI-DAQ is simulated: no DAQmx hardware found on this PC"

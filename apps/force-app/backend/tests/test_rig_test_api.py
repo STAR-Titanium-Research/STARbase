@@ -34,6 +34,7 @@ def fake(monkeypatch):
 def rig(monkeypatch, tmp_path, fake):
     """A fresh poller, runner and state file wired to the real app, eligible via ALLOW_SIM."""
     monkeypatch.setenv("FORCE_APP_RIG_TEST_ALLOW_SIM", "1")
+    monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://test-relay.invalid")
     monkeypatch.setenv("FORCE_APP_RIG_ID", "rig-1")
     monkeypatch.setattr(routes, "_w", routes._w)  # undone after the test
     monkeypatch.setattr(runner_mod, "_runner", runner_mod._runner)
@@ -98,6 +99,25 @@ def test_eligibility_rules():
     assert eligibility.check({"simulated": False, "chassis": []}, amp)[0] is False
     ok, reason = eligibility.check(real, main.MockLabAmp("http://x"))
     assert not ok and "mock" in reason
+
+
+def test_the_sim_override_needs_an_explicit_relay_so_a_dev_machine_is_never_a_rig(
+    client, monkeypatch
+):
+    """With ALLOW_SIM=1 and no FORCE_APP_BUG_REPORT_RELAY_URL the relay would default to the
+    production one: refuse rather than poll it."""
+    monkeypatch.delenv("FORCE_APP_BUG_REPORT_RELAY_URL")
+    body = client.get("/rig-tests/eligibility").json()
+    assert body["eligible"] is False and "FORCE_APP_BUG_REPORT_RELAY_URL" in body["reason"]
+    monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "  ")
+    assert client.get("/rig-tests/eligibility").json()["eligible"] is False
+    monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://127.0.0.1:9")
+    assert client.get("/rig-tests/eligibility").json()["eligible"] is True
+    # real hardware needs no override and no explicit relay
+    monkeypatch.delenv("FORCE_APP_RIG_TEST_ALLOW_SIM")
+    monkeypatch.delenv("FORCE_APP_BUG_REPORT_RELAY_URL")
+    real = {"simulated": False, "chassis": [{"name": "cDAQ1"}]}
+    assert eligibility.check(real, main.LabAmpClient("http://127.0.0.1:1")) == (True, None)
 
 
 def test_rig_id_prefers_the_env_var_then_the_hostname(monkeypatch):
@@ -373,6 +393,22 @@ def test_cancel_over_http(client, rig, fake):
     rig.runner.join()
     assert not rig.runner.owns_rig()
     assert client.post("/rig-tests/run/cancel").json() == {"ok": True}  # idempotent
+
+
+def test_history_lists_every_run_of_an_issue_and_old_single_file_results(client, rig):
+    folder = rig.runner._captures_root() + "/rig-tests/231"
+    import os
+
+    os.makedirs(folder)
+    for name, stamp, state in (
+        ("result.json", "2026-10-11T09:00:00", "partial"),  # written by an earlier build
+        ("result-20261011T100000.json", "2026-10-11T10:00:00", "done"),
+        ("result-20261011T110000.json", "2026-10-11T11:00:00", "cancelled"),
+    ):
+        with open(f"{folder}/{name}", "w") as f:
+            json.dump({"number": 231, "state": state, "started_at": stamp, "counts": {}}, f)
+    runs = client.get("/rig-tests/history").json()["runs"]
+    assert [r["state"] for r in runs] == ["cancelled", "done", "partial"]
 
 
 def test_run_is_idle_with_nothing_started(client):

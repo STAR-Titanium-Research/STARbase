@@ -350,6 +350,31 @@ def test_the_poller_thread_starts_and_stops_cleanly(fake, make):
     assert not p._thread.is_alive()
 
 
+def test_the_relay_client_waits_up_to_30_seconds():
+    assert relay.TIMEOUT_S == 30.0
+
+
+def test_a_comment_over_the_size_limit_keeps_its_result_json_whole():
+    tail = '<!-- rig-test-result {"version":1,"items":[]} -->'
+    body = "x" * 70_000 + "\n\n" + tail
+    fitted = relay.fit_comment(body)
+    assert len(fitted) <= relay.MAX_COMMENT and fitted.endswith(tail)
+    assert "shortened" in fitted
+    assert relay.fit_comment("short") == "short"
+    plain = relay.fit_comment("y" * 70_000)  # no JSON to protect: plain cut
+    assert len(plain) == relay.MAX_COMMENT
+
+
+def test_posted_comments_go_through_fit_comment(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(
+        relay, "_call", lambda m, path, body=None: sent.update(body=body) or {"ok": 1}
+    )
+    relay.post_comment(5, "z" * 70_000 + "<!-- rig-test-result {} -->")
+    assert len(sent["body"]["body"]) <= relay.MAX_COMMENT
+    assert sent["body"]["body"].endswith("<!-- rig-test-result {} -->")
+
+
 def test_the_real_relay_client_never_raises(monkeypatch):
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://127.0.0.1:1")  # nothing there
     for res in (
