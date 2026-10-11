@@ -71,7 +71,7 @@ def run_cap_s(specs: list[dict], base_s: float = ASK_TIMEOUT_S) -> float:
     return min(RUN_CAP_MAX_S, max(RUN_CAP_FACTOR * estimate, windows))
 
 
-def _iso(epoch: float) -> str:
+def iso_local(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
 
 
@@ -101,8 +101,8 @@ class _Run:
             "operator": meta.get("operator") or "",
             "mode": "full",
             "state": "running",
-            "started_at": _iso(wall),
-            "deadline_at": _iso(wall + cap_s),
+            "started_at": iso_local(wall),
+            "deadline_at": iso_local(wall + cap_s),
             "finished_at": None,
             "elapsed_s": 0.0,
             "estimate_s": estimate,
@@ -300,7 +300,7 @@ class RigTestRunner:
                 "step": spec["index"],
                 "text": spec["text"],
                 "options": options,
-                "expires_at": _iso(self._wall() + (limit - now)),
+                "expires_at": iso_local(self._wall() + (limit - now)),
             }
         self._sync_progress(run)
         with self._cond:
@@ -353,7 +353,7 @@ class RigTestRunner:
             rec["current"] = None
             rec["elapsed_s"] = round(self._clock() - run.started_clock, 1)
             run.finished_wall = self._wall()
-            rec["finished_at"] = _iso(run.finished_wall)
+            rec["finished_at"] = iso_local(run.finished_wall)
             self._automated_active = False
             rec["state"] = state  # the rig is free from here on
         self._notify_active(None)

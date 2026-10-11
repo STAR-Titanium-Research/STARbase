@@ -26,6 +26,7 @@ from ..bug_report import _fence, _redact_paths
 from ..storage import atomic_write_json
 from . import catalog, relay
 from .report import _cell
+from .runner import iso_local
 
 log = logging.getLogger("force_app.rig_test")
 
@@ -54,10 +55,6 @@ def _label(issue: dict) -> str:
 
 def _hhmm(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).strftime("%H:%M")
-
-
-def _iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
 
 
 def _num(value, default: float = 0.0) -> float:
@@ -161,15 +158,16 @@ class StateFile:
             self._save()
 
     def outbox_update(self, entry_id: str, **fields) -> None:
-        """Change fields of an entry; with `remove=True`, drop it."""
+        with self._lock:
+            for e in self._data.setdefault("outbox", []):
+                if e["id"] == entry_id:
+                    e.update(fields)
+            self._save()
+
+    def outbox_remove(self, entry_id: str) -> None:
         with self._lock:
             box = self._data.setdefault("outbox", [])
-            if fields.pop("remove", False):
-                self._data["outbox"] = [e for e in box if e["id"] != entry_id]
-            else:
-                for e in box:
-                    if e["id"] == entry_id:
-                        e.update(fields)
+            self._data["outbox"] = [e for e in box if e["id"] != entry_id]
             self._save()
 
     def update_in(self, key: str, sub: str, value) -> None:
@@ -260,29 +258,24 @@ class RigTestPoller:
         interrupted notice). Stops at the first transport failure (the relay is down); an entry
         the relay refuses outright is dropped after a few tries."""
         for e in self._store.get("outbox", []):
-            for part, send in (
-                ("body", lambda e=e: relay.post_comment(e["number"], e["body"])),
-                ("state", lambda e=e: relay.set_state(e["number"], e["state"])),
-            ):
-                if e.get(part) is None:
+            for part, send in (("body", relay.post_comment), ("state", relay.set_state)):
+                if e[part] is None:
                     continue
-                res = send()
+                res = send(e["number"], e[part])
                 if res.get("ok"):
                     e[part] = None
                     self._store.outbox_update(e["id"], **{part: None})
-                    continue
-                if res.get("kind"):  # unreachable / not configured: nothing else will get through
+                elif res.get("kind"):  # unreachable / not configured: nothing else gets through
                     return
-                e["tries"] = e.get("tries", 0) + 1
-                self._store.outbox_update(e["id"], tries=e["tries"])
-                break
-            if e.get("body") is None and e.get("state") is None:
-                self._store.outbox_update(e["id"], remove=True)
+                else:
+                    e["tries"] += 1
+                    self._store.outbox_update(e["id"], tries=e["tries"])
+                    break
+            if e["body"] is None and e["state"] is None:
+                self._store.outbox_remove(e["id"])
             elif e["tries"] >= OUTBOX_REFUSED_MAX:
-                log.warning(
-                    "rig test #%s: the relay refuses this comment; dropping it", e["number"]
-                )
-                self._store.outbox_update(e["id"], remove=True)
+                log.warning("rig test #%s: the relay refuses this entry; dropping it", e["number"])
+                self._store.outbox_remove(e["id"])
 
     def check_eligibility(self) -> tuple[bool, str | None]:
         """Whether this PC is the rig. While a recording runs this returns the last answer instead
@@ -396,7 +389,7 @@ class RigTestPoller:
                     **r,
                     "snoozed_until": "after_recording"
                     if snoozes[str(r["number"])]["after_recording"]
-                    else _iso(snoozes[str(r["number"])]["until"]),
+                    else iso_local(snoozes[str(r["number"])]["until"]),
                 }
                 for r in self._store.get("pending", [])
                 if str(r["number"]) in snoozes
