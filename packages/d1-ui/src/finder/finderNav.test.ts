@@ -71,8 +71,8 @@ describe('isModalOpen', () => {
 		expect(isModalOpen(doc(false))).toBe(false);
 		// Directus's own navigation drawer is an absolute, "active" v-overlay at narrow widths.
 		expect(asked[0]).toBe(MODAL_SELECTOR);
-		expect(MODAL_SELECTOR).not.toMatch(/\.v-overlay/);
-		expect(MODAL_SELECTOR).toContain('.v-drawer');
+		expect(MODAL_SELECTOR).not.toMatch(/\.v-overlay|\.v-dialog/);
+		expect(MODAL_SELECTOR).toContain('#dialog-outlet > *');
 		expect(MODAL_SELECTOR).toContain(':not(.d1-finder)');
 	});
 });
