@@ -121,6 +121,7 @@ class RigTestPoller:
         self._thread: threading.Thread | None = None
         # Of the last relay answer: "unknown" until a call has been made, then ok|unreachable|...
         self.relay_state = "unknown"
+        self._last_eligibility: tuple[bool, str | None] | None = None
 
     # ---- thread ------------------------------------------------------------------------------
 
@@ -163,12 +164,23 @@ class RigTestPoller:
         relay.set_state(n, "interrupted")
         self._store.update(active_run=None)
 
+    def check_eligibility(self) -> tuple[bool, str | None]:
+        """Whether this PC is the rig. While a recording runs this returns the last answer instead
+        of asking again: finding out means enumerating DAQmx, which must not happen mid-recording."""
+        if self._is_busy():
+            return self._last_eligibility or (
+                False,
+                "a recording is in progress; this is checked again when it ends",
+            )
+        self._last_eligibility = self._eligible()
+        return self._last_eligibility
+
     def poll_once(self) -> None:
-        eligible, _ = self._eligible()
+        if self._is_busy() or self._owns_rig():
+            return  # before the eligibility check: that one may enumerate DAQmx
+        eligible, _ = self.check_eligibility()
         if not eligible:
             self._set_pending([])
-            return
-        if self._is_busy() or self._owns_rig():
             return
         res = relay.list_requests()
         self.relay_state = relay.relay_status(res)

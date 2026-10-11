@@ -92,6 +92,33 @@ def test_not_polled_when_this_pc_is_not_the_rig(fake, make, env):
 
 
 @pytest.mark.parametrize("what", ["busy", "owns"])
+def test_eligibility_is_not_checked_while_recording_or_running(fake, make, env, what):
+    """Finding out whether this PC is the rig enumerates DAQmx: never during a recording (7)."""
+    calls = []
+    p = make()
+    p._eligible = lambda: calls.append(1) or (True, None)
+    setattr(env, what, True)
+    p.poll_once()
+    assert calls == []
+    setattr(env, what, False)
+    p.poll_once()
+    assert calls == [1]
+
+
+def test_check_eligibility_serves_the_last_answer_while_busy(make, env):
+    p = make()
+    n = []
+    p._eligible = lambda: n.append(1) or (False, "no chassis")
+    assert p.check_eligibility() == (False, "no chassis")
+    env.busy = True
+    assert p.check_eligibility() == (False, "no chassis") and n == [1]
+    fresh = make()  # never checked, and a recording is running: refuse to guess, never enumerate
+    fresh._eligible = lambda: pytest.fail("must not enumerate devices")
+    ok, reason = fresh.check_eligibility()
+    assert not ok and "recording" in reason
+
+
+@pytest.mark.parametrize("what", ["busy", "owns"])
 def test_not_polled_while_recording_or_running(fake, make, env, what):
     p = make()
     fake.requests = [issue(1, ASK)]

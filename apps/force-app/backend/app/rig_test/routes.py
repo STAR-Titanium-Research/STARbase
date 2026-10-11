@@ -35,7 +35,6 @@ class _Wiring:
     captures_root: Callable[[], str]
     poller: RigTestPoller
     runner: RigTestRunner
-    eligible: Callable[[], tuple[bool, str | None]]
 
 
 _w: _Wiring | None = None
@@ -71,7 +70,7 @@ def configure(
         rig_id=eligibility.rig_id,
         interval_s=interval,
     )
-    _w = _Wiring(is_busy, captures_root, poller, rig_runner, eligible)
+    _w = _Wiring(is_busy, captures_root, poller, rig_runner)
 
 
 def start_poller() -> None:
@@ -125,7 +124,7 @@ class AnswerBody(BaseModel):
 @router.get("/eligibility")
 async def get_eligibility() -> dict:
     w = _wiring()
-    ok, reason = await run_in_threadpool(w.eligible)
+    ok, reason = await run_in_threadpool(w.poller.check_eligibility)
     out: dict = {
         "eligible": ok,
         "rig_id": eligibility.rig_id(),
@@ -151,7 +150,7 @@ async def get_pending() -> dict:
 @router.post("/{n}/accept")
 async def accept(n: int, body: AcceptBody) -> dict:
     w = _wiring()
-    ok, reason = await run_in_threadpool(w.eligible)
+    ok, reason = await run_in_threadpool(w.poller.check_eligibility)
     # No await from here to runner.start(): the checks and the claim are one step, so a recording
     # cannot start in between (the same rule as /record/start's busy check).
     if not ok:

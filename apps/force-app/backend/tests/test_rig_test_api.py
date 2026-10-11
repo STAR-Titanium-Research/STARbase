@@ -108,6 +108,17 @@ def test_rig_id_prefers_the_env_var_then_the_hostname(monkeypatch):
     assert eligibility.rig_id() == "LABPC"
 
 
+def test_no_device_enumeration_during_a_recording(client, rig, fake, monkeypatch):
+    """/eligibility and accept answer from the last known result while a cut is recording."""
+    _offer(rig, fake)
+    assert client.get("/rig-tests/eligibility").json()["eligible"] is True
+    monkeypatch.setattr(main, "_devices", lambda: pytest.fail("DAQmx must not be enumerated"))
+    monkeypatch.setattr(main, "_session", _Session("recording"))
+    assert client.get("/rig-tests/eligibility").json()["eligible"] is True
+    assert _accept(client).status_code == 409
+    rig.poller.poll_once()
+
+
 def test_a_non_rig_machine_never_polls_the_relay_or_accepts(client, rig, fake, monkeypatch):
     monkeypatch.delenv("FORCE_APP_RIG_TEST_ALLOW_SIM")
     fake.requests = [issue(231, ASK)]
