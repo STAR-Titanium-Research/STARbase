@@ -1,0 +1,178 @@
+"""Content fingerprints for stored files (spec 2026-10-10-record-codes, section 7; stage T0e).
+
+Two SHA-256 hashes identify a file's content independently of its name, path or date:
+
+* `content_sha256`: the whole file, byte for byte. Any change at all (a renamed internal field, a
+  re-saved header) gives a different hash.
+* `mat_data_sha256` (MATLAB .mat files only): the decoded force array, not the bytes on disk.
+  It is the SHA-256 of the array's MATLAB shape as two little-endian uint64 (rows, cols), then its
+  values as little-endian float64 in column-major order (all of column 1, then column 2, ...).
+  The variable is `data` when the file has one, else `DATA` (never decided from `fileVersion`).
+  Because only the numbers are hashed, the same force data saved as v5 or v7.3, with or without
+  extra metadata variables, in any integer or float type, gives the same hash; that is what lets
+  a metadata-only upgrade of an old file be recognised as the same measurement.
+
+v5/v6/v7 files are read with scipy (the whole array is loaded; they are small). v7.3 files are
+HDF5 and are read with h5py one block at a time (`block_bytes`, default 64 MiB of float64), so a
+14.6 GB array never sits in memory. HDF5 stores a MATLAB array transposed, so a dataset of shape
+(cols, rows) is MATLAB (rows, cols) and one HDF5 row is one MATLAB column.
+
+Files are only ever opened for reading. An `OSError` from the file system (missing file, I/O
+error) propagates unchanged so a caller can retry it; a file that is not a parseable .mat raises
+`UnreadableMat`. This module is a library: importing it does no work.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import struct
+import threading
+import time
+
+import numpy as np
+
+HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+VARIABLES = ("data", "DATA")  # `data` wins when both are present
+NUMERIC_KINDS = "biuf"  # bool, signed/unsigned integer, float (not complex, string, object, compound)
+
+
+class FingerprintError(Exception):
+    """Base class for fingerprinting failures."""
+
+
+class NoForceArray(FingerprintError):
+    """The file has neither a `data` nor a `DATA` variable."""
+
+
+class BadForceArray(FingerprintError):
+    """The force variable is not a 2-D numeric array."""
+
+
+class UnreadableMat(FingerprintError):
+    """The file cannot be parsed as a MATLAB .mat file."""
+
+
+class Throttle:
+    """A thread-safe global byte-rate cap: the total rate across all callers stays <= the cap.
+
+    Each `consume(n)` reserves the next n / rate seconds of a shared timeline and sleeps until
+    that slot has passed. `Throttle(None)` never sleeps.
+    """
+
+    def __init__(self, max_bytes_per_s: float | None):
+        if max_bytes_per_s is not None and max_bytes_per_s <= 0:
+            raise ValueError("max_bytes_per_s must be positive or None")
+        self.rate = max_bytes_per_s
+        self._lock = threading.Lock()
+        self._free_at = 0.0  # monotonic time at which the timeline is next free
+
+    def consume(self, n: int) -> None:
+        if self.rate is None or n <= 0:
+            return
+        with self._lock:
+            start = max(time.monotonic(), self._free_at)
+            self._free_at = start + n / self.rate
+            wait = self._free_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+
+
+def content_sha256(stream_or_path, chunk: int = 8 << 20, throttle: Throttle | None = None) -> tuple[str, int]:
+    """SHA-256 of a whole file, given a path or a binary file object. Returns (hex, bytes read)."""
+    h = hashlib.sha256()
+    total = 0
+
+    def run(f):
+        nonlocal total
+        while True:
+            buf = f.read(chunk)
+            if not buf:
+                return
+            h.update(buf)
+            total += len(buf)
+            if throttle is not None:
+                throttle.consume(len(buf))
+
+    if hasattr(stream_or_path, "read"):
+        run(stream_or_path)
+    else:
+        with open(stream_or_path, "rb") as f:
+            run(f)
+    return h.hexdigest(), total
+
+
+def _is_hdf5(path) -> bool:
+    with open(path, "rb") as f:
+        if f.read(8) == HDF5_SIGNATURE:
+            return True
+        f.seek(512)
+        return f.read(8) == HDF5_SIGNATURE
+
+
+def _pick(container) -> str:
+    for v in VARIABLES:
+        if v in container:
+            return v
+    raise NoForceArray("neither 'data' nor 'DATA' in the file")
+
+
+def mat_data_sha256(path, block_bytes: int = 64 << 20, throttle: Throttle | None = None) -> tuple[str, str, int, int]:
+    """SHA-256 of the decoded force array (see the module docstring). Returns (hex, variable, rows, cols)."""
+    if _is_hdf5(path):  # also raises FileNotFoundError / PermissionError (OSError) as-is
+        return _hdf5_data_sha256(path, block_bytes, throttle)
+    return _v5_data_sha256(path, throttle)
+
+
+def _v5_data_sha256(path, throttle):
+    import scipy.io
+
+    try:
+        mat = scipy.io.loadmat(os.fspath(path), variable_names=list(VARIABLES))
+    except (OSError, MemoryError):
+        raise
+    except Exception as e:  # scipy raises ValueError, NotImplementedError, struct.error, ...
+        raise UnreadableMat(f"scipy cannot read {path}: {type(e).__name__}: {e}") from e
+    var = _pick(mat)
+    a = mat[var]
+    if not isinstance(a, np.ndarray) or a.ndim != 2 or a.dtype.kind not in NUMERIC_KINDS:
+        raise BadForceArray(f"{var!r} is not a 2-D numeric array")
+    rows, cols = a.shape
+    h = hashlib.sha256(struct.pack("<QQ", rows, cols))
+    for j in range(cols):
+        buf = np.ascontiguousarray(a[:, j], dtype="<f8").tobytes()
+        h.update(buf)
+        if throttle is not None:
+            throttle.consume(len(buf))
+    return h.hexdigest(), var, rows, cols
+
+
+def _hdf5_data_sha256(path, block_bytes, throttle):
+    import h5py
+
+    try:
+        with h5py.File(path, "r") as f:
+            var = _pick(f)
+            ds = f[var]
+            if not isinstance(ds, h5py.Dataset) or ds.shape is None or ds.ndim != 2 \
+                    or ds.dtype.kind not in NUMERIC_KINDS:
+                raise BadForceArray(f"{var!r} is not a 2-D numeric array")
+            cols, rows = ds.shape  # HDF5 holds the MATLAB array transposed
+            n = max(1, block_bytes // 8)
+            h = hashlib.sha256(struct.pack("<QQ", rows, cols))
+            for j in range(cols):
+                for k in range(0, rows, n):
+                    block = ds[j, k:k + n]
+                    h.update(np.ascontiguousarray(block, dtype="<f8").tobytes())
+                    if throttle is not None:
+                        throttle.consume(block.nbytes)
+            return h.hexdigest(), var, rows, cols
+    except FingerprintError:
+        raise
+    except OSError as e:
+        # h5py reports an unparseable file as an OSError with no errno; a real file-system error has one.
+        if e.errno is not None:
+            raise
+        raise UnreadableMat(f"h5py cannot read {path}: {e}") from e
+    except (KeyError, ValueError, RuntimeError, TypeError) as e:
+        raise UnreadableMat(f"h5py cannot read {path}: {type(e).__name__}: {e}") from e
