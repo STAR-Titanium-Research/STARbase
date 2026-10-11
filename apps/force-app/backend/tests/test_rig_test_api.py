@@ -169,6 +169,37 @@ def test_pending_reports_busy_and_lists_the_snoozed_requests(client, rig, fake, 
     assert client.get("/rig-tests/pending").json()["busy"] is False
 
 
+def test_a_result_the_relay_refused_is_sent_by_the_poller_later(client, rig, fake, monkeypatch):
+    _running(client, rig, fake)
+    down = {"ok": False, "reason": "unreachable", "kind": "unreachable"}
+    real_post, real_state = fake.post_comment, fake.set_state
+    monkeypatch.setattr("app.rig_test.relay.post_comment", lambda n, b: down)
+    monkeypatch.setattr("app.rig_test.relay.set_state", lambda n, s: down)
+    client.post("/rig-tests/run/answer", json={"step": 0, "option": "Pass"})
+    rig.runner.join()
+    assert [e["number"] for e in rig.poller._store.get("outbox")] == [231]
+    monkeypatch.setattr("app.rig_test.relay.post_comment", real_post)
+    monkeypatch.setattr("app.rig_test.relay.set_state", real_state)
+    rig.poller.poll_once()
+    assert fake.comments[-1][1].startswith("### Rig test result: done")
+    assert fake.last_state(231) == "done" and rig.poller._store.get("outbox") == []
+
+
+def test_a_damaged_state_file_does_not_break_pending(client, rig, tmp_path):
+    path = tmp_path / "cfg" / "rig_tests_state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"pending": "x", "snoozes": [], "handled": 3}')
+    routes.configure(
+        devices=lambda: main._devices(),
+        labamp=lambda: main._labamp,
+        is_busy=lambda: main._busy(),
+        captures_root=lambda: str(tmp_path / "captures"),
+        config_dir=str(tmp_path / "cfg"),
+    )
+    r = client.get("/rig-tests/pending")
+    assert r.status_code == 200 and r.json() == {"requests": [], "snoozed": [], "busy": False}
+
+
 def test_the_run_carries_the_title_and_url_of_its_issue(client, rig, fake):
     _running(client, rig, fake)
     run = client.get("/rig-tests/run").json()

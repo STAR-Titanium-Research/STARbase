@@ -305,6 +305,39 @@ def test_relay_failures_never_change_how_the_run_ends(monkeypatch, make_runner):
     assert _finish(r)["state"] == "done"
 
 
+def test_a_result_the_relay_did_not_take_goes_to_the_outbox(monkeypatch, make_runner):
+    down = {"ok": False, "reason": "unreachable", "kind": "unreachable"}
+    monkeypatch.setattr("app.rig_test.relay.post_comment", lambda n, b: down)
+    monkeypatch.setattr("app.rig_test.relay.edit_comment", lambda n, c, b: down)
+    monkeypatch.setattr("app.rig_test.relay.set_state", lambda n, s: down)
+    queued = []
+    r = make_runner(on_unsent=lambda n, body, state: queued.append((n, body, state)))
+    r.start(inline_request("- ask: a"), {})
+    _answer_when_asked(r, 0, "Pass")
+    assert _finish(r)["state"] == "done"
+    ((n, body, state),) = queued
+    assert n == 231 and state == "done" and body.startswith("### Rig test result: done")
+
+
+def test_only_the_part_the_relay_refused_is_queued(monkeypatch, fake, make_runner):
+    monkeypatch.setattr("app.rig_test.relay.set_state", lambda n, s: {"ok": False})
+    queued = []
+    r = make_runner(on_unsent=lambda n, body, state: queued.append((n, body, state)))
+    r.start(inline_request("- ask: a"), {})
+    _answer_when_asked(r, 0, "Fail")
+    _finish(r)
+    assert queued == [(231, None, "partial")]  # the comment was posted, the label was not
+
+
+def test_nothing_is_queued_when_everything_was_sent(fake, make_runner):
+    queued = []
+    r = make_runner(on_unsent=lambda *a: queued.append(a))
+    r.start(inline_request("- ask: a"), {})
+    _answer_when_asked(r, 0, "Pass")
+    _finish(r)
+    assert queued == []
+
+
 def test_active_run_is_recorded_and_cleared(fake, make_runner):
     seen = []
     r = make_runner(on_active=seen.append)

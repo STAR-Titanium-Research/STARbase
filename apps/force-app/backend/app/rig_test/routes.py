@@ -55,6 +55,7 @@ def configure(
         captures_root=captures_root,
         rig_id=eligibility.rig_id,
         on_active=lambda n: store.update(active_run=n),
+        on_unsent=store.outbox_add,
     )
     runner.install(rig_runner)
     interval = poll_interval_s or float(os.environ.get("FORCE_APP_RIG_TEST_POLL_S", "60"))

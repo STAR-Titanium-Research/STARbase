@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from datetime import datetime
 
@@ -32,6 +33,8 @@ DEFAULT_INTERVAL_S = 60.0
 INITIAL_DELAY_S = 5.0
 HANDLED_GRACE_S = 120.0  # the relay caches for 30 s: trust our own decision until it has caught up
 AFTER_RECORDING_MAX_S = 4 * 3600.0
+OUTBOX_MAX = 20
+OUTBOX_REFUSED_MAX = 5  # an entry the relay keeps refusing (the issue was closed) is dropped
 MAX_SNOOZE_S = 7 * 24 * 3600.0
 # States that hide a request until its maintainer clears the label (spec, "Relay").
 _SETTLED_LABELS = {"declined", "running", "partial", "done", "interrupted"}
@@ -57,9 +60,72 @@ def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
 
 
+def _num(value, default: float = 0.0) -> float:
+    ok = isinstance(value, int | float) and not isinstance(value, bool)
+    return float(value) if ok else default
+
+
+def _clean(data: object) -> dict:
+    """The state file as the rest of the code expects it. A file from another version, a hand edit
+    or a half-written one can have the wrong shape; whatever is unusable is dropped (the poller
+    refills `pending` within a minute) instead of turning /rig-tests/pending into a 500."""
+    d = data if isinstance(data, dict) else {}
+
+    def section(key: str) -> dict:
+        return d[key] if isinstance(d.get(key), dict) else {}
+
+    def rows(key: str) -> list:
+        return [r for r in d[key] if isinstance(r, dict)] if isinstance(d.get(key), list) else []
+
+    pending = [
+        r
+        for r in rows("pending")
+        if isinstance(r.get("number"), int)
+        and isinstance(r.get("items"), list)
+        and isinstance(r.get("estimate_s"), dict)
+    ]
+    snoozes = {
+        str(k): {
+            "until": _num(v.get("until")),
+            "after_recording": bool(v.get("after_recording")),
+            "saw_busy": bool(v.get("saw_busy")),
+        }
+        for k, v in section("snoozes").items()
+        if isinstance(v, dict)
+    }
+    handled = {
+        str(k): {"state": str(v.get("state") or ""), "at": _num(v.get("at"))}
+        for k, v in section("handled").items()
+        if isinstance(v, dict)
+    }
+    invalid = {str(k): v for k, v in section("invalid").items() if isinstance(v, str)}
+    outbox = [
+        {
+            "id": str(e.get("id") or uuid.uuid4().hex),
+            "number": e["number"],
+            "body": e["body"] if isinstance(e.get("body"), str) else None,
+            "state": e["state"] if isinstance(e.get("state"), str) else None,
+            "tries": int(_num(e.get("tries"))),
+        }
+        for e in rows("outbox")
+        if isinstance(e.get("number"), int)
+        and (isinstance(e.get("body"), str) or isinstance(e.get("state"), str))
+    ]
+    active = d.get("active_run")
+    return {
+        "pending": pending,
+        "snoozes": snoozes,
+        "handled": handled,
+        "invalid": invalid,
+        "outbox": outbox[-OUTBOX_MAX:],
+        "active_run": active if isinstance(active, int) and not isinstance(active, bool) else None,
+    }
+
+
 class StateFile:
     """The small JSON file behind `rig_tests_state.json`: pending requests, snoozes, declines,
-    the invalid requests already reported, and the run in progress (to spot a crash)."""
+    the invalid requests already reported, the run in progress (to spot a crash) and the outbox of
+    comments and labels that could not be sent yet."""
 
     def __init__(self, path: str):
         self._path = path
@@ -69,7 +135,7 @@ class StateFile:
                 data = json.load(f)
         except (OSError, ValueError):
             data = {}
-        self._data: dict = data if isinstance(data, dict) else {}
+        self._data: dict = _clean(data)
 
     def get(self, key: str, default=None):
         with self._lock:
@@ -80,6 +146,30 @@ class StateFile:
             if all(self._data.get(k) == v for k, v in values.items()):
                 return
             self._data.update(values)
+            self._save()
+
+    def outbox_add(self, number: int, body: str | None, state: str | None, **also) -> None:
+        """Queue a comment and/or state label for issue `number`, to be sent when the relay is
+        back. Extra `also` values are stored in the same write (the interrupted-run marker)."""
+        with self._lock:
+            box = self._data.setdefault("outbox", [])
+            box.append(
+                {"id": uuid.uuid4().hex, "number": number, "body": body, "state": state, "tries": 0}
+            )
+            del box[:-OUTBOX_MAX]
+            self._data.update(also)
+            self._save()
+
+    def outbox_update(self, entry_id: str, **fields) -> None:
+        """Change fields of an entry; with `remove=True`, drop it."""
+        with self._lock:
+            box = self._data.setdefault("outbox", [])
+            if fields.pop("remove", False):
+                self._data["outbox"] = [e for e in box if e["id"] != entry_id]
+            else:
+                for e in box:
+                    if e["id"] == entry_id:
+                        e.update(fields)
             self._save()
 
     def update_in(self, key: str, sub: str, value) -> None:
@@ -122,6 +212,7 @@ class RigTestPoller:
         # Of the last relay answer: "unknown" until a call has been made, then ok|unreachable|...
         self.relay_state = "unknown"
         self._last_eligibility: tuple[bool, str | None] | None = None
+        self._queue_interrupted_run()
 
     # ---- thread ------------------------------------------------------------------------------
 
@@ -140,7 +231,6 @@ class RigTestPoller:
     def _loop(self) -> None:
         if self._stop.wait(self._initial_delay_s):
             return
-        self._report_interrupted_run()
         while True:
             try:
                 self.poll_once()
@@ -151,18 +241,48 @@ class RigTestPoller:
 
     # ---- polling -----------------------------------------------------------------------------
 
-    def _report_interrupted_run(self) -> None:
-        """A run that was active when the app last stopped never reported: say so, once."""
+    def _queue_interrupted_run(self) -> None:
+        """A run that was active when the app last stopped never reported. Called from the
+        constructor, before any accept can overwrite the marker: the notice goes into the outbox
+        and the marker is cleared in the same write, so neither a relay that is down nor a new run
+        can lose it. The outbox keeps retrying until the relay has taken it."""
         n = self._store.get("active_run")
         if n is None:
             return
-        relay.post_comment(
-            n,
+        body = (
             f"**Rig test #{n} was interrupted**: the app on {_cell(self._rig_id(), 80)} "
-            "restarted while the run was in progress. Results so far were not reported.",
+            "restarted while the run was in progress. Results so far were not reported."
         )
-        relay.set_state(n, "interrupted")
-        self._store.update(active_run=None)
+        self._store.outbox_add(n, body, "interrupted", active_run=None)
+
+    def flush_outbox(self) -> None:
+        """Send the comments and labels that could not be sent earlier (a run's result, an
+        interrupted notice). Stops at the first transport failure (the relay is down); an entry
+        the relay refuses outright is dropped after a few tries."""
+        for e in self._store.get("outbox", []):
+            for part, send in (
+                ("body", lambda e=e: relay.post_comment(e["number"], e["body"])),
+                ("state", lambda e=e: relay.set_state(e["number"], e["state"])),
+            ):
+                if e.get(part) is None:
+                    continue
+                res = send()
+                if res.get("ok"):
+                    e[part] = None
+                    self._store.outbox_update(e["id"], **{part: None})
+                    continue
+                if res.get("kind"):  # unreachable / not configured: nothing else will get through
+                    return
+                e["tries"] = e.get("tries", 0) + 1
+                self._store.outbox_update(e["id"], tries=e["tries"])
+                break
+            if e.get("body") is None and e.get("state") is None:
+                self._store.outbox_update(e["id"], remove=True)
+            elif e["tries"] >= OUTBOX_REFUSED_MAX:
+                log.warning(
+                    "rig test #%s: the relay refuses this comment; dropping it", e["number"]
+                )
+                self._store.outbox_update(e["id"], remove=True)
 
     def check_eligibility(self) -> tuple[bool, str | None]:
         """Whether this PC is the rig. While a recording runs this returns the last answer instead
@@ -178,6 +298,7 @@ class RigTestPoller:
     def poll_once(self) -> None:
         if self._is_busy() or self._owns_rig():
             return  # before the eligibility check: that one may enumerate DAQmx
+        self.flush_outbox()
         eligible, _ = self.check_eligibility()
         if not eligible:
             self._set_pending([])

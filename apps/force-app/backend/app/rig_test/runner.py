@@ -132,6 +132,7 @@ class RigTestRunner:
         ask_timeout_s: float = ASK_TIMEOUT_S,
         slice_s: float = 0.25,
         on_active: Callable[[int | None], None] = lambda n: None,
+        on_unsent: Callable[[int, str | None, str | None], None] = lambda n, body, state: None,
     ):
         self._captures_root = captures_root
         self._rig_id = rig_id
@@ -140,6 +141,7 @@ class RigTestRunner:
         self._ask_timeout_s = ask_timeout_s
         self._slice_s = slice_s
         self._on_active = on_active
+        self._on_unsent = on_unsent
         self._cond = threading.Condition()
         self._run: _Run | None = None
         self._thread: threading.Thread | None = None
@@ -356,8 +358,23 @@ class RigTestRunner:
         self._notify_active(None)
         self._write_result(run)
         self._sync_progress(run)
-        relay.post_comment(rec["number"], report.render_result(rec))
-        relay.set_state(rec["number"], "done" if state == "done" else "partial")
+        self._send_result(rec, state)
+
+    def _send_result(self, rec: dict, state: str) -> None:
+        """Post the result comment and set the final label. Whatever the relay does not take goes
+        to the outbox (the state file), which the poller retries until it is sent."""
+        body = report.render_result(rec)
+        label = "done" if state == "done" else "partial"
+        comment_ok = bool(relay.post_comment(rec["number"], body).get("ok"))
+        label_ok = bool(relay.set_state(rec["number"], label).get("ok"))
+        if comment_ok and label_ok:
+            return
+        try:
+            self._on_unsent(
+                rec["number"], None if comment_ok else body, None if label_ok else label
+            )
+        except Exception:  # noqa: BLE001 - the run is over either way
+            log.exception("could not queue the result of rig test #%s", rec["number"])
 
     def _sync_progress(self, run: _Run) -> None:
         """Create the progress comment on first use, edit it afterwards."""

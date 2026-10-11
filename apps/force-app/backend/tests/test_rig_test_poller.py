@@ -1,5 +1,7 @@
 """The poller: which relay requests become pending, invalid ones, persistence, crash reporting."""
 
+import json
+
 import pytest
 
 from app.rig_test import relay
@@ -221,16 +223,118 @@ def test_snooze_is_capped_at_a_week(fake, make, env):
     assert len(p.pending()) == 1
 
 
-def test_a_run_that_was_active_when_the_app_stopped_is_reported_interrupted(fake, make):
-    store = StateFile(str(make()._store._path))
-    store.update(active_run=44)
-    p = make()
-    p._report_interrupted_run()
+def _crashed_run(make, n=44):
+    """A state file left by an app that stopped with run `n` active, and a poller started on it."""
+    StateFile(str(make()._store._path)).update(active_run=n)
+    return make()
+
+
+def test_a_run_that_was_active_when_the_app_stopped_is_reported_interrupted(fake, make, tmp_path):
+    p = _crashed_run(make)
+    assert fake.comments == []  # nothing is sent from the constructor: the relay may be down
+    again = StateFile(str(tmp_path / "state.json"))
+    assert again.get("active_run") is None and len(again.get("outbox")) == 1
+    p.poll_once()
     assert fake.comments[0][0] == 44 and "interrupted" in fake.comments[0][1]
     assert fake.states == [(44, "interrupted")]
-    assert StateFile(store._path).get("active_run") is None
-    p._report_interrupted_run()  # only once
+    assert StateFile(str(tmp_path / "state.json")).get("outbox") == []
+    p.poll_once()  # only once
     assert len(fake.comments) == 1
+
+
+def test_a_new_run_cannot_hide_the_interrupted_one(fake, make):
+    """The marker is read when the poller is built, before an accept overwrites it (7)."""
+    p = _crashed_run(make, 44)
+    p._store.update(active_run=45)  # the operator accepts #45 within seconds of the restart
+    p.poll_once()
+    assert [n for n, _ in fake.comments] == [44]
+    assert fake.states == [(44, "interrupted")]
+    assert p._store.get("active_run") == 45  # the new run's marker is untouched
+
+
+def test_the_interrupted_notice_is_retried_until_the_relay_takes_it(fake, make, monkeypatch):
+    p = _crashed_run(make)
+    down = {"ok": False, "reason": "could not reach the relay", "kind": "unreachable"}
+    monkeypatch.setattr(relay, "post_comment", lambda n, b: down)
+    p.poll_once()
+    p.poll_once()
+    assert fake.states == [] and len(p._store.get("outbox")) == 1
+    restarted = make()  # and it survives a restart
+    monkeypatch.setattr(relay, "post_comment", fake.post_comment)
+    restarted.poll_once()
+    assert fake.comments[0][0] == 44 and fake.states == [(44, "interrupted")]
+    assert restarted._store.get("outbox") == []
+
+
+def test_an_outbox_entry_resumes_where_it_stopped(fake, make, monkeypatch):
+    """Comment sent, label failed: the retry sends only the label."""
+    p = make()
+    p._store.outbox_add(7, "result", "done")
+    monkeypatch.setattr(relay, "set_state", lambda n, s: {"ok": False, "kind": "unreachable"})
+    p.poll_once()
+    assert fake.comments == [(7, "result")]
+    monkeypatch.setattr(relay, "set_state", fake.set_state)
+    p.poll_once()
+    assert fake.comments == [(7, "result")] and fake.states == [(7, "done")]
+    assert p._store.get("outbox") == []
+
+
+def test_an_entry_the_relay_keeps_refusing_is_dropped_and_does_not_block_others(
+    fake, make, monkeypatch
+):
+    p = make()
+    p._store.outbox_add(7, "closed issue", None)
+    p._store.outbox_add(8, "fine", None)
+    real = fake.post_comment
+    monkeypatch.setattr(
+        relay,
+        "post_comment",
+        lambda n, b: (
+            {"ok": False, "reason": "not an open rig-test request"} if n == 7 else real(n, b)
+        ),
+    )
+    for _ in range(5):
+        p.poll_once()
+    assert fake.comments == [(8, "fine")] and p._store.get("outbox") == []
+
+
+def test_the_outbox_is_bounded(make):
+    p = make()
+    for n in range(30):
+        p._store.outbox_add(n, "x", None)
+    assert [e["number"] for e in p._store.get("outbox")] == list(range(10, 30))
+
+
+def test_a_wrong_shaped_state_file_is_tolerated(fake, make, tmp_path):
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "pending": "oops",
+                "snoozes": [1, 2],
+                "handled": {"3": 5, "4": {"state": "declined"}},
+                "invalid": ["x"],
+                "outbox": [1, {"number": "x"}, {"number": 9}],
+                "active_run": "soon",
+            }
+        )
+    )
+    p = make()
+    assert p.pending() == [] and p.snoozed() == []
+    fake.requests = [issue(4, ASK)]
+    p.poll_once()  # "4" was handled at time 0: long ago, so it is offered again
+    assert [r["number"] for r in p.pending()] == [4]
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "pending": [{"number": 1}, {"number": 2, "items": [], "estimate_s": {}}],
+                "snoozes": {"2": {"after_recording": True}, "3": 7},
+            }
+        )
+    )
+    q = make()
+    assert [r["number"] for r in q.pending()] == [2]  # #1 is half-formed; the snooze is long due
+    (tmp_path / "state.json").write_text("[1, 2, 3]")
+    assert make().pending() == []
 
 
 def test_the_poller_thread_starts_and_stops_cleanly(fake, make):
