@@ -5,16 +5,12 @@
 import { computed, onMounted } from 'vue';
 import RigTestRequestCard from '../rigtest/RigTestRequestCard.vue';
 import { rigTest } from '../rigtest/rigTestStore';
-import { formatWhen, summaryCounts } from '../rigtest/rigTestLogic';
+import { isPopoutWindow } from '../popoutWindow';
+import { formatWhen, relayInfo, snoozedUntilText, summaryCounts } from '../rigtest/rigTestLogic';
 
 const s = rigTest.state;
 const elig = computed(() => s.eligibility);
-const RELAY: Record<string, { text: string; tone: string }> = {
-	ok: { text: 'Request relay reachable', tone: 'ok' },
-	unreachable: { text: 'Request relay unreachable: new requests cannot arrive', tone: 'bad' },
-	not_configured: { text: 'Request relay not configured on this PC', tone: 'dim' },
-};
-const relay = computed(() => RELAY[elig.value?.relay ?? 'not_configured']);
+const relay = computed(() => relayInfo(elig.value?.relay));
 
 function refresh() { void rigTest.refreshEligibility(); void rigTest.refreshPending(); void rigTest.refreshHistory(); }
 onMounted(refresh);
@@ -35,10 +31,14 @@ const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
 		</div>
 		<p class="lead">
 			Your admin can ask this PC to run checks from the lab's physical-test list. You are asked first, can
-			snooze or decline, and can cancel a run at any time. Nothing runs while you are recording.
+			snooze or decline, and can cancel a run at any time. A request is held back (shown only as a badge) while you are recording or saving a cut.
 		</p>
 
-		<p v-if="!s.available" class="note dim">
+		<p v-if="isPopoutWindow" class="note dim">
+			<span class="material-symbols-rounded">info</span>Rig-test requests are answered in the main window.
+		</p>
+
+		<p v-else-if="!s.available" class="note dim">
 			<span class="material-symbols-rounded">info</span>This recorder is too old for rig tests. Update the app.
 		</p>
 
@@ -51,7 +51,7 @@ const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
 				</div>
 			</div>
 			<div class="row">
-				<span class="material-symbols-rounded" :class="relay.tone">{{ elig?.relay === 'ok' ? 'cloud_done' : 'cloud_off' }}</span>
+				<span class="material-symbols-rounded" :class="relay.tone">{{ relay.icon }}</span>
 				<div><span>{{ relay.text }}</span></div>
 			</div>
 			<div v-if="elig?.rig_id" class="row">
@@ -60,12 +60,21 @@ const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
 			</div>
 		</section>
 
-		<template v-if="s.available">
+		<template v-if="s.available && !isPopoutWindow">
 			<h3>Waiting for you</h3>
 			<p v-if="!s.pending.length" class="empty">No requests are waiting.</p>
 			<div v-else class="list">
 				<article v-for="r in s.pending" :key="r.number" class="card"><RigTestRequestCard :request="r" /></article>
 			</div>
+			<template v-if="s.snoozed.length">
+				<h3>Snoozed</h3>
+				<div class="list">
+					<article v-for="r in s.snoozed" :key="r.number" class="card" :data-testid="`rig-snoozed-${r.number}`">
+						<p class="snoozed-until"><span class="material-symbols-rounded">snooze</span>{{ snoozedUntilText(r.snoozed_until) }}</p>
+						<RigTestRequestCard :request="r" />
+					</article>
+				</div>
+			</template>
 			<p v-if="rigTest.runActive.value" class="note">
 				<span class="material-symbols-rounded">science</span>A rig test is running.
 				<button type="button" class="btn sm" @click="rigTest.restore()">Show it</button>
@@ -106,6 +115,8 @@ h3 { margin: 24px 0 8px; font-size: var(--fs-md); font-weight: 700; color: var(-
 .sub { color: var(--text-dim); line-height: 1.4; overflow-wrap: anywhere; }
 .ok { color: var(--ok); } .bad { color: var(--danger); } .dim { color: var(--text-dim); }
 code { font-size: var(--fs-sm); }
+.snoozed-until { display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--fs-md); color: var(--text-dim); }
+.snoozed-until .material-symbols-rounded { font-size: var(--icon-md); }
 .empty { margin: 0; font-size: var(--fs-md); color: var(--text-dim); }
 .note { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; font-size: var(--fs-md); }
 .note.dim { color: var(--text-dim); }

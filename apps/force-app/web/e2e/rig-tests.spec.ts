@@ -8,11 +8,11 @@ import { test, expect, type Page } from '@playwright/test';
 const DIRECTUS = 'http://directus.invalid';
 const RECORDER = 'http://recorder.invalid';
 
-interface Stub { run: any; answered: boolean; pending: any[]; cancelled: boolean }
+interface Stub { run: any; answered: boolean; pending: any[]; snoozed: any[]; cancelled: boolean; phase: 'idle' | 'recording'; accepted: any; pendingCalls: number }
 
 async function setup(page: Page): Promise<Stub> {
 	const s: Stub = {
-		cancelled: false, answered: false, run: null,
+		cancelled: false, answered: false, run: null, snoozed: [], phase: 'idle', accepted: null, pendingCalls: 0,
 		pending: [{
 			number: 231, title: 'R4 pre-flight chips', url: 'https://github.com/x/y/issues/231', requested_by: 'dpremoli',
 			created_at: new Date().toISOString(), items: [{ id: 'R4', title: 'Pre-flight chips', steps: [] }],
@@ -31,9 +31,9 @@ async function setup(page: Page): Promise<Stub> {
 		const path = new URL(req.url()).pathname;
 		const json = (body: unknown, status = 200) => route.fulfill({ status, json: body, headers: cors });
 		if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
-		if (path === '/record/status') return json({ state: 'idle' });
+		if (path === '/record/status') return json({ state: s.phase });
 		if (path === '/rig-tests/eligibility') return json({ eligible: true, rig_id: 'rig-e2e', relay: 'ok' });
-		if (path === '/rig-tests/pending') return json({ requests: s.pending });
+		if (path === '/rig-tests/pending') { s.pendingCalls++; return json({ requests: s.pending, snoozed: s.snoozed, busy: s.phase !== 'idle' }); }
 		if (path === '/rig-tests/history') return json({ runs: [] });
 		if (path === '/rig-tests/run') {
 			if (!s.run) return json({ state: 'idle' });
@@ -43,11 +43,11 @@ async function setup(page: Page): Promise<Stub> {
 			];
 			const state = s.cancelled ? 'cancelled' : s.answered ? 'done' : 'running';
 			return json({
-				number: 231, state, started_at: '', deadline_at: '', elapsed_s: 30, estimate_s: 240, steps, current: 0,
+				number: 231, title: 'R4 pre-flight chips', url: 'https://github.com/x/y/issues/231', state, started_at: '', deadline_at: '', elapsed_s: 30, estimate_s: 240, steps, current: 0,
 				question: state === 'running' ? { step: 0, text: steps[0].text, options: ['Yes', 'No'], expires_at: new Date(Date.now() + 240_000).toISOString() } : undefined,
 			});
 		}
-		if (/^\/rig-tests\/\d+\/accept$/.test(path)) { s.pending = []; s.run = true; return json({ ok: true }); }
+		if (/^\/rig-tests\/\d+\/accept$/.test(path)) { s.accepted = req.postDataJSON(); s.pending = []; s.run = true; return json({ ok: true }); }
 		if (path === '/rig-tests/run/answer') { s.answered = true; return json({ ok: true }); }
 		if (path === '/rig-tests/run/cancel') { s.cancelled = true; return json({ ok: true }); }
 		return json({ detail: 'Not Found' }, 404);
@@ -56,12 +56,15 @@ async function setup(page: Page): Promise<Stub> {
 }
 
 test('prompt -> Run now -> question -> answer -> finished summary', async ({ page }) => {
-	await setup(page);
+	const s = await setup(page);
 	await page.goto('/settings?tab=general');
 	const prompt = page.getByTestId('rig-test-prompt');
 	await expect(prompt).toContainText('#231 R4 pre-flight chips');
 	await expect(prompt).toContainText('about 4 min, 2 steps need you');
 	await prompt.getByRole('button', { name: /Run now/ }).click();
+	// The operator is the signed-in user's name (it is posted on a GitHub issue), never the email.
+	await expect.poll(() => s.accepted).toMatchObject({ mode: 'full', upload_busy: false, operator: 'E2E Check' });
+	expect(JSON.stringify(s.accepted)).not.toContain('@');
 
 	const question = page.getByTestId('rig-test-question');
 	await expect(question).toContainText('Does the chip warn?');
@@ -89,4 +92,34 @@ test('Escape minimises to the bar (the run keeps going); Cancel asks first', asy
 	await page.getByTestId('confirm-accept').click();
 	await expect(page.getByTestId('rig-test-modal')).toContainText('Rig test cancelled');
 	expect(s.cancelled).toBe(true);
+});
+
+test('a request that arrives mid-cut stays a badge; the dialog opens once the cut is over', async ({ page }) => {
+	const s = await setup(page);
+	s.phase = 'recording';
+	await page.goto('/settings?tab=general');
+	await expect.poll(() => s.pendingCalls).toBeGreaterThan(0);
+	await page.waitForTimeout(1000);
+	await expect(page.getByTestId('rig-test-prompt')).toHaveCount(0);
+	s.phase = 'idle'; // the next /record/status poll (5 s) sees it and re-reads the pending list
+	await expect(page.getByTestId('rig-test-prompt')).toBeVisible({ timeout: 15_000 });
+});
+
+test('a pop-out window hosts no rig tests: no polling, no prompt', async ({ page }) => {
+	const s = await setup(page);
+	await page.goto('/settings?tab=general&popout=1');
+	await page.waitForTimeout(1500);
+	expect(s.pendingCalls).toBe(0);
+	await expect(page.getByTestId('rig-test-prompt')).toHaveCount(0);
+});
+
+test('Settings > Rig tests lists snoozed requests with when they come back', async ({ page }) => {
+	const s = await setup(page);
+	s.snoozed = [{ ...s.pending[0], number: 232, title: 'Later chips', snoozed_until: 'after_recording' }];
+	s.phase = 'recording'; // keep the dialog from covering the page
+	await page.goto('/settings?tab=rig-tests');
+	const card = page.getByTestId('rig-snoozed-232');
+	await expect(card).toContainText('Snoozed until the next recording is saved');
+	await expect(card.getByRole('button', { name: /Run now/ })).toBeVisible();
+	await expect(card.getByRole('button', { name: /Decline/ })).toBeVisible();
 });

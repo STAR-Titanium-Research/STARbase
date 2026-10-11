@@ -41,3 +41,44 @@ export function handleNotify(deps: NotifyDeps, title: unknown, body: unknown): {
   }
   return { ok: true };
 }
+
+/** More than this many rig-test toasts held at once and the oldest is closed. */
+export const MAX_RIG_TOASTS = 10;
+
+/** The toasts the main process holds a reference to (a toast that is collected loses its click
+ * handler). Electron emits `close` when a toast is dismissed, but on Windows a toast that slides
+ * into the Action Center may never emit it, so a plain "delete on close" set grows for the life of
+ * the app. This one is bounded, and is emptied when the operator comes back to the window. */
+export class ToastKeeper<T extends { close(): void }> {
+  private readonly held = new Set<T>();
+
+  constructor(private readonly max = MAX_RIG_TOASTS) {}
+
+  get size(): number {
+    return this.held.size;
+  }
+
+  /** Hold `toast`; past the cap the oldest ones are closed and released. */
+  add(toast: T): void {
+    this.held.add(toast);
+    for (const oldest of [...this.held]) {
+      if (this.held.size <= this.max) break;
+      this.closeAndRelease(oldest);
+    }
+  }
+
+  /** The toast closed by itself: forget it. */
+  forget(toast: T): void {
+    this.held.delete(toast);
+  }
+
+  /** The operator is back at the window: the toasts are stale, so close and release them all. */
+  closeAll(): void {
+    for (const toast of [...this.held]) this.closeAndRelease(toast);
+  }
+
+  private closeAndRelease(toast: T): void {
+    this.held.delete(toast);
+    try { toast.close(); } catch { /* already gone */ }
+  }
+}

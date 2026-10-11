@@ -2,6 +2,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { ref } from 'vue';
 import { authStore } from './authStore';
 import { installFocusLinks } from './ui/focusLink';
+import { isPopoutWindow, queryWithPopoutMarker } from './popoutWindow';
 
 const routes: RouteRecordRaw[] = [
 	{ path: '/login', name: 'login', component: () => import('./LoginPage.vue'), meta: { public: true } },
@@ -46,6 +47,13 @@ router.beforeEach((to) => {
 	if (to.meta.public) return true;
 	if (authStore.isAuthenticated.value) return true;
 	return { name: 'login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : undefined };
+});
+
+// A pop-out stays marked (?popout=1) as the operator navigates inside it: the desktop shell saves its
+// current URL at quit and reopens it, and only the marked windows skip the once-per-app rig-test host.
+router.beforeEach((to) => {
+	const query = queryWithPopoutMarker(isPopoutWindow, to.query);
+	return query ? { path: to.path, query: query as typeof to.query, hash: to.hash, replace: true } : true;
 });
 
 // The most recent route that wasn't /settings itself. Settings > Report a Bug is only ever

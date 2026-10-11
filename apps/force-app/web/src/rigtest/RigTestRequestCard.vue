@@ -3,7 +3,6 @@
 // dialog (the oldest request) and by Settings > Rig tests (all of them), so both behave the same.
 // A refusal (e.g. 409 "a recording is in progress") is shown inline, where the operator is looking.
 import { computed, ref } from 'vue';
-import { syncStatus } from '../record/directusSync';
 import { rigTest } from './rigTestStore';
 import {
 	DECLINE_REASONS, DECLINE_TEXT_MAX, SNOOZE_PRESETS, declineBody, estimateText, formatWhen,
@@ -24,7 +23,7 @@ const estimate = computed(() => estimateText(props.request.estimate_s.full, prop
 const asked = computed(() => formatWhen(props.request.created_at));
 
 function toggle(p: 'snooze' | 'decline') { panel.value = panel.value === p ? null : p; }
-function run() { void rigTest.accept(props.request.number, syncStatus.syncing); }
+function run() { void rigTest.accept(props.request.number); }
 </script>
 
 <template>

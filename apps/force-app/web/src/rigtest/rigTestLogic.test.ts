@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DECLINE_REASONS, NOTIFY_MAX, clip, currentPosition, declineBody, estimateText, finishedText, formatApproxDuration, formatClock,
-	justFinished, minimisedText, newRequests, parseHistory, parseRequests, parseRun, progress, promptMode, questionKey,
+	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, acceptBody, appVersionOf, isUploadBusy, operatorName, progress, promptMode, questionKey, rigBlocked, barAskText,
 	questionNotification, requestNotification, runView, secondsLeft, shouldReopen, snoozeUntil, stepMark, summaryCounts, timeLeft,
 	type RigRequest, type RigRun, type RunStep, type StepStatus,
 } from './rigTestLogic';
@@ -11,7 +11,7 @@ function step(index: number, status: StepStatus, extra: Partial<RunStep> = {}): 
 }
 function run(extra: Partial<RigRun> = {}): RigRun {
 	return {
-		number: 231, state: 'running', started_at: '2026-10-11T14:02:00Z', deadline_at: '2026-10-11T14:30:00Z',
+		number: 231, title: '', url: '', state: 'running', started_at: '2026-10-11T14:02:00Z', deadline_at: '2026-10-11T14:30:00Z',
 		elapsed_s: 120, estimate_s: 720,
 		steps: [step(0, 'pass'), step(1, 'fail'), step(2, 'active'), step(3, 'pending')],
 		current: 2, ...extra,
@@ -19,17 +19,35 @@ function run(extra: Partial<RigRun> = {}): RigRun {
 }
 const q = { step: 2, text: 'Pull the cable', options: ['Yes', 'No'], expires_at: '2026-10-11T14:07:00Z' };
 
+describe('rigBlocked', () => {
+	const idle = { phase: null, saveDialogOpen: false } as const;
+	it('is clear only when the shell says idle, no Save dialog is open and the backend is not busy', () => {
+		expect(rigBlocked(idle)).toBe(false);
+		expect(rigBlocked({ ...idle, backendBusy: false })).toBe(false);
+	});
+	it('is blocked while recording or finalizing', () => {
+		expect(rigBlocked({ ...idle, phase: 'recording' })).toBe(true);
+		expect(rigBlocked({ ...idle, phase: 'finalizing' })).toBe(true);
+	});
+	it('is blocked while the Save dialog is open, even though the phase is already null', () => {
+		expect(rigBlocked({ phase: null, saveDialogOpen: true })).toBe(true);
+	});
+	it('is blocked until the shell has answered once, and when the backend says it is busy', () => {
+		expect(rigBlocked({ ...idle, phase: 'unknown' })).toBe(true);
+		expect(rigBlocked({ ...idle, backendBusy: true })).toBe(true);
+	});
+});
+
 describe('promptMode: dialog or badge', () => {
-	it('is a dialog when idle', () => expect(promptMode(1, false, null)).toBe('dialog'));
-	it('is only a badge while recording or finalizing: never a dialog over the Record page mid-cut', () => {
-		expect(promptMode(1, false, 'recording')).toBe('badge');
-		expect(promptMode(1, false, 'finalizing')).toBe('badge');
+	it('is a dialog when not blocked', () => expect(promptMode(1, false, false)).toBe('dialog'));
+	it('is only a badge while blocked: never a dialog over the Record page mid-cut or over the Save dialog', () => {
+		expect(promptMode(1, false, true)).toBe('badge');
 	});
 	it('is nothing without requests, or while a run is active', () => {
-		expect(promptMode(0, false, null)).toBe('none');
-		expect(promptMode(0, false, 'recording')).toBe('none');
-		expect(promptMode(2, true, null)).toBe('none');
-		expect(promptMode(2, true, 'recording')).toBe('none');
+		expect(promptMode(0, false, false)).toBe('none');
+		expect(promptMode(0, false, true)).toBe('none');
+		expect(promptMode(2, true, false)).toBe('none');
+		expect(promptMode(2, true, true)).toBe('none');
 	});
 });
 
@@ -98,6 +116,15 @@ describe('which view the run gets', () => {
 	});
 	it('a finished run shows its summary modal, minimised or not', () => {
 		expect(runView(run({ state: 'partial' }), true, true)).toBe('modal');
+	});
+	it('while blocked (a cut is recording or being saved) a question shows on the bar, never the modal', () => {
+		expect(runView(run({ question: q }), false, false, true)).toBe('bar');
+		expect(runView(run({ question: q }), false, false, false)).toBe('modal');
+		expect(barAskText(true)).toMatch(/after this cut/);
+		expect(barAskText(false)).toBe('Waiting for you');
+	});
+	it('while blocked a finished summary waits instead of opening over the Save dialog', () => {
+		expect(runView(run({ state: 'done' }), false, true, true)).toBe('none');
 	});
 	it('reopens for a new question but not for the same one the operator minimised', () => {
 		const asking = run({ question: q });
@@ -221,5 +248,68 @@ describe('desktop notifications', () => {
 		const n = requestNotification(req(231));
 		expect(n.title).toContain('dpremoli');
 		expect(n.body).toBe('#231 R4 pre-flight (about 12 min, 3 steps need you)');
+	});
+});
+
+describe('parsePending: the requests, the snoozed ones and the busy flag', () => {
+	it('reads snoozed requests with their return time, and busy', () => {
+		const p = parsePending({
+			requests: [{ number: 5 }],
+			snoozed: [{ title: 'no number' }, { number: 7, title: 'later', snoozed_until: '2026-10-11T17:00:00Z' }, { number: 8, snoozed_until: 'after_recording' }],
+			busy: true,
+		});
+		expect(p.requests.map((r) => r.number)).toEqual([5]);
+		expect(p.snoozed.map((r) => [r.number, r.snoozed_until])).toEqual([[7, '2026-10-11T17:00:00Z'], [8, 'after_recording']]);
+		expect(p.busy).toBe(true);
+	});
+	it('an older backend (only `requests`) means nothing snoozed and not busy', () => {
+		expect(parsePending({ requests: [{ number: 5 }] })).toMatchObject({ snoozed: [], busy: false });
+		expect(parsePending(null)).toEqual({ requests: [], snoozed: [], busy: false });
+		expect(parsePending({ busy: 'yes', snoozed: 4 })).toEqual({ requests: [], snoozed: [], busy: false });
+	});
+	it('a run carries its title and link, empty from an older backend', () => {
+		expect(parseRun({ number: 7, state: 'running', title: 'R4 chips', url: 'https://x/7' })).toMatchObject({ title: 'R4 chips', url: 'https://x/7' });
+		expect(parseRun({ number: 7, state: 'running' })).toMatchObject({ title: '', url: '' });
+	});
+});
+
+describe('relayInfo and snoozedUntilText', () => {
+	it('"unknown" reads as not checked yet, never as reachable', () => {
+		expect(relayInfo('unknown').text).toBe('Request relay not checked yet');
+		expect(relayInfo('unknown').tone).not.toBe('ok');
+		expect(relayInfo('ok').text).toBe('Request relay reachable');
+		expect(relayInfo('unreachable').tone).toBe('bad');
+		expect(relayInfo(undefined).text).toMatch(/not configured/);
+	});
+	it('says when a snoozed request comes back', () => {
+		expect(snoozedUntilText('after_recording')).toMatch(/next recording/);
+		expect(snoozedUntilText('2026-10-11T17:00:00Z')).toMatch(/^Snoozed until .+/);
+		expect(snoozedUntilText('garbage')).toBe('Snoozed');
+	});
+});
+
+describe('what accept tells the recorder', () => {
+	it('the operator is the first and last name, never the email', () => {
+		expect(operatorName({ first_name: 'Ada', last_name: 'Lovelace' })).toBe('Ada Lovelace');
+		expect(operatorName({ first_name: ' Ada ', last_name: null })).toBe('Ada');
+		expect(operatorName({ last_name: 'Lovelace' })).toBe('Lovelace');
+		expect(operatorName({ first_name: '', last_name: ' ' })).toBeUndefined();
+		expect(operatorName(null)).toBeUndefined();
+		expect(operatorName({ first_name: 'Ada', last_name: 'L', email: 'ada@x.org' } as any)).not.toContain('@');
+	});
+	it('the version is the shell\'s, else the bundled one, else absent', () => {
+		expect(appVersionOf('0.1.37', '0.1.36')).toBe('0.1.37');
+		expect(appVersionOf(undefined, '0.1.36')).toBe('0.1.36');
+		expect(appVersionOf('', undefined)).toBeUndefined();
+	});
+	it('an upload is busy when the queue flushes or any capture file is going up', () => {
+		expect(isUploadBusy(false, 0)).toBe(false);
+		expect(isUploadBusy(true, 0)).toBe(true);
+		expect(isUploadBusy(false, 1)).toBe(true);
+	});
+	it('the body omits what is unknown', () => {
+		expect(acceptBody({ uploadBusy: false })).toEqual({ mode: 'full', upload_busy: false });
+		expect(acceptBody({ uploadBusy: true, operator: 'Ada', appVersion: '1.0.0' }))
+			.toEqual({ mode: 'full', upload_busy: true, operator: 'Ada', app_version: '1.0.0' });
 	});
 });

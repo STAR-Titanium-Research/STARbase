@@ -8,8 +8,9 @@
 // a request can't be accepted right now).
 import { JSON_HEADERS, recorderBase } from '../recorderHttp';
 import {
-	parseHistory, parseRequests, parseRun,
-	type DeclineCode, type Eligibility, type RigRequest, type RigRun, type RunSummary,
+	parseHistory, parsePending, parseRun,
+	acceptBody,
+	type AcceptContext, type DeclineCode, type Eligibility, type PendingList, type RigRun, type RunSummary,
 } from './rigTestLogic';
 
 export type ApiResult<T> =
@@ -56,13 +57,13 @@ export async function getEligibility(): Promise<ApiResult<Eligibility>> {
 		return {
 			eligible: !!e.eligible, rig_id: typeof e.rig_id === 'string' ? e.rig_id : '',
 			reason: typeof e.reason === 'string' ? e.reason : undefined,
-			relay: e.relay === 'ok' || e.relay === 'unreachable' ? e.relay : 'not_configured',
+			relay: e.relay === 'ok' || e.relay === 'unreachable' || e.relay === 'unknown' ? e.relay : 'not_configured',
 		};
 	});
 }
 
-export async function getPending(): Promise<ApiResult<RigRequest[]>> {
-	return map(await call('GET', '/pending'), parseRequests);
+export async function getPending(): Promise<ApiResult<PendingList>> {
+	return map(await call('GET', '/pending'), parsePending);
 }
 
 /** `null` data = no run (the backend's `{state: "idle"}`). */
@@ -74,8 +75,7 @@ export async function getHistory(): Promise<ApiResult<RunSummary[]>> {
 	return map(await call('GET', '/history'), parseHistory);
 }
 
-export const accept = (n: number, uploadBusy: boolean) =>
-	call('POST', `/${n}/accept`, { mode: 'full', upload_busy: uploadBusy });
+export const accept = (n: number, ctx: AcceptContext) => call('POST', `/${n}/accept`, acceptBody(ctx));
 
 export const snooze = (n: number, until: string) => call('POST', `/${n}/snooze`, { until });
 

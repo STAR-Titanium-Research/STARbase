@@ -6,7 +6,7 @@
 import { computed } from 'vue';
 import { confirmAndCancelRun } from './confirmCancel';
 import { rigTest } from './rigTestStore';
-import { minimisedText } from './rigTestLogic';
+import { barAskText, minimisedText } from './rigTestLogic';
 
 const run = computed(() => rigTest.state.run);
 </script>
@@ -15,7 +15,7 @@ const run = computed(() => rigTest.state.run);
 	<div v-if="run" class="rb-bar" :class="{ asking: !!run.question }" role="region" aria-label="Rig test in progress" data-testid="rig-test-bar">
 		<span class="rb-dot" aria-hidden="true"></span>
 		<span class="rb-text">{{ minimisedText(run) }}</span>
-		<span v-if="run.question" class="rb-ask">Waiting for you</span>
+		<span v-if="run.question" class="rb-ask">{{ barAskText(rigTest.runBlocked.value) }}</span>
 		<span class="rb-spacer"></span>
 		<button type="button" class="btn sm" @click="rigTest.restore()">
 			<span class="material-symbols-rounded">open_in_full</span>Show
