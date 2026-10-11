@@ -7,6 +7,7 @@ Postgres when DATABASE_URL is set (it builds a throwaway schema, touching nothin
 import os
 import sys
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -105,6 +106,14 @@ def test_other_errors_propagate():
 DSN = os.environ.get("DATABASE_URL")
 
 
+def _fingerprints_ddl() -> str:
+    """The up section of the file_fingerprints migration (T0e)."""
+    sql = (
+        Path(__file__).resolve().parents[2] / "db/migrations/20261010000159_file_fingerprints.sql"
+    ).read_text(encoding="utf-8")
+    return sql.split("-- migrate:up", 1)[1].split("-- migrate:down", 1)[0]
+
+
 @pytest.fixture
 def pgcur():
     psycopg2 = pytest.importorskip("psycopg2")
@@ -132,6 +141,7 @@ def pgcur():
         "CREATE TABLE tools (id serial PRIMARY KEY, "
         "image uuid REFERENCES directus_files(id) ON DELETE SET NULL)"
     )
+    cur.execute(_fingerprints_ddl())  # the real migration, so the table is exactly what ships
     yield cur
     conn.rollback()
     conn.close()
@@ -150,6 +160,7 @@ def test_catalog_discovery_finds_every_referencing_column(pgcur):
     assert found == {
         ("sample_data_files", "directus_files_id"),
         ("machining_force_analysis", "directus_files_id"),
+        ("file_fingerprints", "directus_files_id"),
         ("tools", "image"),
     }
 
@@ -207,3 +218,49 @@ def test_conflicting_force_analysis_blocks_deletion_and_is_reported(pgcur):
     assert cur.fetchone()[0] == 1  # the rest were still re-pointed
     cur.execute("SELECT count(*) FROM machining_force_analysis")
     assert cur.fetchone()[0] == 2
+
+
+# ---- fingerprints follow a moved file (T0e) -----------------------------------------
+
+HASH_OLD, HASH_NEW = "a" * 64, "b" * 64
+
+
+def _fingerprint(cur, file_id, content_hash):
+    cur.execute(
+        "INSERT INTO file_fingerprints (directus_files_id, content_sha256, size_bytes) "
+        "VALUES (%s, %s, 10)",
+        (file_id, content_hash),
+    )
+
+
+def test_move_repoints_the_fingerprint_when_the_new_file_has_none(pgcur):
+    cur = pgcur
+    _files(cur, OLD, NEW)
+    _fingerprint(cur, OLD, HASH_OLD)
+
+    left = ia.repoint_file_references(cur, ia.find_file_fk_columns(cur), OLD, NEW)
+
+    assert left == 0
+    cur.execute("SELECT directus_files_id::text, content_sha256 FROM file_fingerprints")
+    assert cur.fetchall() == [(NEW, HASH_OLD)]
+
+
+def test_move_keeps_the_new_files_fingerprint_and_drops_the_old_ones(pgcur):
+    cur = pgcur
+    _files(cur, OLD, NEW)
+    _fingerprint(cur, OLD, HASH_OLD)
+    _fingerprint(cur, NEW, HASH_NEW)
+
+    left = ia.repoint_file_references(cur, ia.find_file_fk_columns(cur), OLD, NEW)
+
+    assert left == 0  # no leftover reference to block deleting the old row
+    cur.execute("SELECT directus_files_id::text, content_sha256 FROM file_fingerprints")
+    assert cur.fetchall() == [(NEW, HASH_NEW)]
+
+
+def test_fingerprint_dedupe_runs_before_the_update_on_a_fake_cursor():
+    cur = FakeCursor()
+    ia.repoint_file_references(cur, [("file_fingerprints", "directus_files_id", 1)], "old", "new")
+    dedupe = [i for i, s in enumerate(cur.sql) if s.startswith("DELETE FROM file_fingerprints")]
+    update = [i for i, s in enumerate(cur.sql) if s.startswith("UPDATE file_fingerprints")]
+    assert dedupe and update and dedupe[0] < update[0]

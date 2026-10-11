@@ -310,3 +310,616 @@ def test_empty_array_hashes_alike_in_v5_and_v73(tmp_path):
     assert (r5, c5) == (r73, c73) == (0, 3)
     assert h5_ == h73 == "1dd0b17c4d187f22eb8028162fca71c9d2e0e2d6942070f9061ebaf842b8b503"
     assert var == "data"
+
+
+# ======================================================================================
+# The runner: selection, paths, per-file hashing, resumability (database + temp "share")
+#
+# The runner opens its own connection per worker, so its tests need committed rows. They get
+# them in a throwaway schema (unique name, created and dropped per test, PGOPTIONS pointing every
+# connection at it), which leaks nothing into the migrated database and leaves it untouched. The
+# `directus_files` of a migrated database is a one-column stub (Directus owns the real table), so
+# the schema carries a stand-in with the columns the runner reads; `file_fingerprints` is built
+# from the real migration. The "share" is a directory under tmp_path.
+# ======================================================================================
+
+import contextlib  # noqa: E402
+import datetime as dt  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import shutil  # noqa: E402
+import uuid  # noqa: E402
+
+DSN = os.environ.get("DATABASE_URL")
+MIGRATION = Path(__file__).resolve().parents[2] / "db/migrations/20261010000159_file_fingerprints.sql"
+ROW_COLUMNS = ("status", "content_sha256", "data_sha256", "data_variable", "data_rows", "data_cols",
+               "size_bytes", "source_mtime", "error_message")
+T0 = dt.datetime(2025, 3, 1, 12, 0, tzinfo=dt.UTC)
+
+
+def migration_up_sql() -> str:
+    return MIGRATION.read_text(encoding="utf-8").split("-- migrate:up", 1)[1].split("-- migrate:down", 1)[0]
+
+
+class Db:
+    """Test-side handle: a connection in the throwaway schema plus helpers to add files."""
+
+    def __init__(self, conn, root):
+        self.conn, self.root = conn, root
+        self.cur = conn.cursor()
+
+    def path(self, rel):
+        return os.path.join(self.root, *rel.split("/"))
+
+    def add_file(self, rel, content=b"hello", *, linked="operation", storage="star", write=True, **kw):
+        """Register a pointer row (and write the bytes under the share root unless write=False)."""
+        if write:
+            os.makedirs(os.path.dirname(self.path(rel)), exist_ok=True)
+            with open(self.path(rel), "wb") as f:
+                f.write(content)
+        fid = kw.pop("id", str(uuid.uuid4()))
+        size = kw.pop("filesize", len(content))
+        modified = kw.pop("modified", T0.isoformat())
+        disk = kw.pop("filename_disk", fid)
+        modified_on = kw.pop("modified_on", dt.datetime(2025, 1, 1, tzinfo=dt.UTC))
+        assert not kw, kw
+        meta = {"archive_path": rel, "modified": modified} if storage == "star" else {}
+        self.cur.execute(
+            "INSERT INTO directus_files (id, storage, filename_disk, filename_download, filesize, "
+            "modified_on, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (fid, storage, disk, rel.rsplit("/", 1)[-1], size, modified_on, json.dumps(meta)),
+        )
+        if linked == "operation":
+            self.cur.execute("INSERT INTO operation_data_files (operation_id, directus_files_id) VALUES (%s, %s)",
+                             (str(uuid.uuid4()), fid))
+        elif linked == "force_analysis":
+            self.cur.execute("INSERT INTO machining_force_analysis (directus_files_id) VALUES (%s)", (fid,))
+        self.conn.commit()
+        return fid
+
+    def update(self, fid, **cols):
+        sets = ", ".join(f"{k} = %s" for k in cols)
+        self.cur.execute(f"UPDATE directus_files SET {sets} WHERE id = %s", (*cols.values(), fid))
+        self.conn.commit()
+
+    def set_modified(self, fid, iso):
+        self.cur.execute(
+            "UPDATE directus_files SET metadata = (metadata::jsonb || jsonb_build_object('modified', %s::text))::json "
+            "WHERE id = %s", (iso, fid))
+        self.conn.commit()
+
+    def row(self, fid):
+        self.cur.execute(f"SELECT {', '.join(ROW_COLUMNS)} FROM file_fingerprints WHERE directus_files_id = %s", (fid,))
+        r = self.cur.fetchone()
+        self.conn.commit()
+        return None if r is None else dict(zip(ROW_COLUMNS, r))
+
+    def count(self):
+        self.cur.execute("SELECT count(*) FROM file_fingerprints")
+        n = self.cur.fetchone()[0]
+        self.conn.commit()
+        return n
+
+    def selected(self, phase="linked", include_local=False, retry_failed=True, limit=None):
+        jobs = ff.select_files(self.cur, phase, include_local, retry_failed, limit)
+        self.conn.commit()
+        return jobs
+
+
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    psycopg2 = pytest.importorskip("psycopg2")
+    if not DSN:
+        pytest.skip("DATABASE_URL not set")
+    try:
+        admin = psycopg2.connect(DSN)
+    except psycopg2.OperationalError:
+        pytest.skip("database not reachable")
+    monkeypatch.setattr(ff, "_sleep", lambda s: None)  # no real backoff waits in tests
+    schema = "ff_test_" + uuid.uuid4().hex[:8]
+    admin.autocommit = True
+    acur = admin.cursor()
+    acur.execute(f"CREATE SCHEMA {schema}")
+    monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")  # every connection, ours and the runner's
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    root = tmp_path / "share"
+    root.mkdir()
+    conn = psycopg2.connect(DSN)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "CREATE TABLE directus_files (id uuid PRIMARY KEY, storage text NOT NULL, filename_disk text, "
+            "filename_download text, filesize bigint, modified_on timestamptz, metadata json)")
+        for t, parent in (("operation_data_files", "operation_id"), ("sample_data_files", "sample_id"),
+                          ("session_data_files", "session_id")):
+            cur.execute(f"CREATE TABLE {t} ({parent} uuid NOT NULL, directus_files_id uuid NOT NULL "
+                        "REFERENCES directus_files(id) ON DELETE CASCADE)")
+        cur.execute(
+            "CREATE TABLE machining_force_analysis (id serial PRIMARY KEY, directus_files_id uuid NOT NULL "
+            "UNIQUE REFERENCES directus_files(id) ON DELETE CASCADE, "
+            "live_cache_file uuid REFERENCES directus_files(id), render_file uuid REFERENCES directus_files(id))")
+        cur.execute(migration_up_sql())
+        conn.commit()
+        yield Db(conn, str(root))
+    finally:
+        conn.rollback()
+        conn.close()
+        acur.execute(f"DROP SCHEMA {schema} CASCADE")
+        admin.close()
+
+
+def run(db, *args):
+    return ff.main(["--archive-root", db.root, *args])
+
+
+def write_v5(path, a):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    scipy_io.savemat(str(path), {"data": a})
+
+
+def sha(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+# ---- pure helpers -------------------------------------------------------------------
+
+
+def make_job(**kw):
+    base = dict(id="i", storage="star", archive_path="a/b/c.txt", filename_disk="uuid-name",
+                filename_download="c.txt", size_bytes=1, source_mtime=None)
+    base.update(kw)
+    return ff.FileJob(**base)
+
+
+def test_resolve_path_joins_the_archive_path_under_the_root_never_filename_disk():
+    p = ff.resolve_path(make_job(), "/root")
+    assert p == os.path.join("/root", "a", "b", "c.txt")
+    assert "uuid-name" not in p
+
+
+def test_resolve_path_refuses_dotdot_and_a_missing_archive_path():
+    with pytest.raises(ValueError):
+        ff.resolve_path(make_job(archive_path="a/../../etc/passwd"), "/root")
+    with pytest.raises(ValueError):
+        ff.resolve_path(make_job(archive_path=None), "/root")
+
+
+def test_resolve_path_for_local_files_is_the_path_inside_the_directus_container():
+    assert ff.resolve_path(make_job(storage="local", filename_disk="abc.mat"), "/root") == "/directus/uploads/abc.mat"
+
+
+def test_default_archive_root_is_the_unc_path_of_the_orchestrator(monkeypatch):
+    monkeypatch.delenv("ARCHIVE_UNC", raising=False)
+    assert ff.default_archive_root() == r"\\uosfstore.shef.ac.uk\shared\star_group1"
+    monkeypatch.setenv("ARCHIVE_UNC", "/elsewhere")
+    assert ff.default_archive_root() == "/elsewhere"
+
+
+# ---- 1. a linked .mat and a .txt are fingerprinted -----------------------------------
+
+
+def test_linked_mat_and_txt_get_done_rows(db, matrix):
+    write_v5(db.path("Proj/run1.mat"), matrix)
+    mat = db.add_file("Proj/run1.mat", write=False, filesize=os.path.getsize(db.path("Proj/run1.mat")))
+    txt = db.add_file("Proj/notes.txt", b"some notes\n")
+
+    assert run(db, "--phase", "linked") == 0
+
+    m = db.row(mat)
+    assert m["status"] == "done" and m["error_message"] is None
+    with open(db.path("Proj/run1.mat"), "rb") as f:
+        assert m["content_sha256"] == sha(f.read())
+    assert (m["data_sha256"], m["data_variable"], m["data_rows"], m["data_cols"]) == (
+        reference(matrix), "data", 1000, 4)
+    t = db.row(txt)
+    assert t["status"] == "done" and t["content_sha256"] == sha(b"some notes\n")
+    assert (t["data_sha256"], t["data_variable"], t["data_rows"], t["data_cols"]) == (None, None, None, None)
+
+
+def test_mat_is_recognised_by_extension_case_insensitively(db, matrix):
+    write_v5(db.path("p/UP.MAT"), matrix)
+    fid = db.add_file("p/UP.MAT", write=False, filesize=os.path.getsize(db.path("p/UP.MAT")))
+    assert run(db, "--phase", "linked") == 0
+    assert db.row(fid)["data_sha256"] == reference(matrix)
+
+
+def test_the_stored_staleness_key_is_what_the_database_said_not_the_disk(db):
+    when = dt.datetime(2020, 5, 5, 5, 5, tzinfo=dt.UTC)
+    fid = db.add_file("p/a.txt", b"abc", filesize=999, modified=when.isoformat())  # DB disagrees with the disk
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert r["size_bytes"] == 999 and r["source_mtime"] == when
+    assert db.selected() == []  # so it is not stale on the next look
+
+
+def test_source_mtime_falls_back_to_modified_on_without_metadata_modified(db):
+    fid = db.add_file("p/a.txt", b"abc")
+    db.cur.execute("UPDATE directus_files SET metadata = %s WHERE id = %s",
+                   (json.dumps({"archive_path": "p/a.txt"}), fid))
+    db.update(fid, modified_on=dt.datetime(2024, 2, 2, tzinfo=dt.UTC))
+    assert run(db, "--phase", "linked") == 0
+    assert db.row(fid)["source_mtime"] == dt.datetime(2024, 2, 2, tzinfo=dt.UTC)
+
+
+# ---- 2/3. resumable and staleness -----------------------------------------------------
+
+
+def test_a_second_run_selects_nothing_and_rewrites_nothing(db):
+    db.add_file("p/a.txt", b"abc")
+    assert run(db, "--phase", "linked") == 0
+    assert db.selected() == []
+    db.cur.execute("SELECT max(hashed_at) FROM file_fingerprints")
+    before = db.cur.fetchone()[0]
+    db.conn.commit()
+    assert run(db, "--phase", "linked") == 0
+    db.cur.execute("SELECT max(hashed_at), count(*) FROM file_fingerprints")
+    assert db.cur.fetchone() == (before, 1)
+
+
+def test_a_changed_filesize_or_metadata_modified_makes_it_stale_but_modified_on_does_not(db):
+    fid = db.add_file("p/a.txt", b"abc")
+    assert run(db, "--phase", "linked") == 0
+    first = db.row(fid)["content_sha256"]
+
+    db.update(fid, modified_on=dt.datetime(2030, 1, 1, tzinfo=dt.UTC))  # only modified_on: not stale
+    assert db.selected() == []
+
+    db.set_modified(fid, dt.datetime(2026, 1, 1, tzinfo=dt.UTC).isoformat())  # metadata.modified: stale
+    assert [j.id for j in db.selected()] == [fid]
+    db.set_modified(fid, T0.isoformat())
+    assert db.selected() == []
+
+    with open(db.path("p/a.txt"), "wb") as f:
+        f.write(b"abcdef")
+    db.update(fid, filesize=6)  # filesize: stale, and re-hashed to the new content
+    assert [j.id for j in db.selected()] == [fid]
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert r["content_sha256"] == sha(b"abcdef") != first and r["size_bytes"] == 6
+
+
+# ---- 4. missing, retried until present -----------------------------------------------
+
+
+def test_missing_path_is_marked_missing_retried_and_then_done(db):
+    fid = db.add_file("p/later.txt", b"arrives", write=False)
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert r["status"] == "missing" and r["content_sha256"] is None and r["error_message"]
+
+    assert [j.id for j in db.selected(retry_failed=True)] == [fid]  # the next run retries it
+    assert db.selected(retry_failed=False) == []  # --skip-failed leaves it alone
+    assert run(db, "--phase", "linked", "--skip-failed") == 0
+    assert db.row(fid)["status"] == "missing"
+
+    os.makedirs(os.path.dirname(db.path("p/later.txt")))
+    with open(db.path("p/later.txt"), "wb") as f:
+        f.write(b"arrives")
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert r["status"] == "done" and r["content_sha256"] == sha(b"arrives") and r["error_message"] is None
+
+
+# ---- 5. broken .mat -> error, hash kept, sorted to the back --------------------------
+
+
+def test_broken_mat_is_an_error_row_that_keeps_the_content_hash_and_goes_to_the_back(db):
+    bad = db.add_file("p/broken.mat", b"this is not a mat file")
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(bad)
+    assert r["status"] == "error" and r["error_message"]
+    assert r["content_sha256"] == sha(b"this is not a mat file") and r["data_sha256"] is None
+
+    fresh = db.add_file("p/fresh.txt", b"new")
+    assert [j.id for j in db.selected(retry_failed=True)] == [fresh, bad]  # never-tried first
+
+
+def test_a_mat_without_a_force_array_is_an_error_not_a_crash(db):
+    os.makedirs(os.path.dirname(db.path("p/nodata.mat")))
+    scipy_io.savemat(db.path("p/nodata.mat"), {"other": np.ones((2, 2))})
+    fid = db.add_file("p/nodata.mat", write=False, filesize=os.path.getsize(db.path("p/nodata.mat")))
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert r["status"] == "error" and "data" in r["error_message"] and r["content_sha256"]
+
+
+# ---- 6. phases -----------------------------------------------------------------------
+
+
+def test_phase_linked_ignores_unlinked_files_and_all_takes_them(db):
+    linked = db.add_file("p/l.txt", b"l", linked="operation")
+    via_analysis = db.add_file("p/f.txt", b"f", linked="force_analysis")
+    unlinked = db.add_file("p/u.txt", b"u", linked=None)
+
+    assert {j.id for j in db.selected("linked")} == {linked, via_analysis}
+    assert run(db, "--phase", "linked") == 0
+    assert db.row(unlinked) is None
+    assert run(db, "--phase", "all") == 0
+    assert db.row(unlinked)["status"] == "done"
+
+
+def test_the_cache_files_of_a_force_analysis_are_not_linked_source_files(db):
+    src = db.add_file("p/src.mat", b"x", linked="force_analysis", write=False)
+    cache = db.add_file("p/cache.bin", b"c", linked=None)
+    db.cur.execute("UPDATE machining_force_analysis SET live_cache_file = %s, render_file = %s", (cache, cache))
+    db.conn.commit()
+    assert [j.id for j in db.selected("linked")] == [src]
+
+
+def test_linked_covers_every_junction_and_local_files_need_include_local(db):
+    a = db.add_file("p/a.txt", b"a", linked=None)
+    b = db.add_file("p/b.txt", b"b", linked=None)
+    loc = db.add_file("p/c.bin", b"c", linked=None, storage="local", write=False)
+    db.cur.execute("INSERT INTO sample_data_files VALUES (%s, %s)", (str(uuid.uuid4()), a))
+    db.cur.execute("INSERT INTO session_data_files VALUES (%s, %s)", (str(uuid.uuid4()), b))
+    db.cur.execute("INSERT INTO operation_data_files VALUES (%s, %s)", (str(uuid.uuid4()), loc))
+    db.conn.commit()
+    assert {j.id for j in db.selected("linked")} == {a, b}
+    assert {j.id for j in db.selected("linked", include_local=True)} == {a, b, loc}
+
+
+def test_selected_jobs_carry_the_database_values(db):
+    fid = db.add_file("p/a.txt", b"abc", filesize=5)
+    (j,) = db.selected()
+    assert (j.id, j.storage, j.archive_path, j.filename_download, j.size_bytes) == (fid, "star", "p/a.txt", "a.txt", 5)
+    assert j.source_mtime == T0
+
+
+def test_limit_caps_the_queue(db):
+    for i in range(4):
+        db.add_file(f"p/{i}.txt", b"x")
+    assert len(db.selected(limit=3)) == 3
+    assert run(db, "--phase", "linked", "--limit", "2") == 0
+    assert db.count() == 2
+
+
+# ---- 7/8. share health ---------------------------------------------------------------
+
+
+def test_missing_archive_root_exits_2_and_writes_nothing(db, capsys):
+    db.add_file("p/a.txt", b"abc")
+    shutil.rmtree(db.root)
+    assert run(db, "--phase", "linked") == 2
+    assert db.count() == 0
+    assert "archive root" in capsys.readouterr().err
+
+
+def test_five_consecutive_missing_with_the_share_gone_exits_2_and_marks_nothing(db, monkeypatch):
+    ids = [db.add_file(f"p/f{i}.txt", b"x") for i in range(7)]
+    real = ff.fingerprint_job
+    calls = []
+
+    def drop_the_share_after_the_first(*a, **kw):
+        out = real(*a, **kw)
+        if not calls:
+            shutil.rmtree(db.root)  # the share disappears after the first file
+        calls.append(1)
+        return out
+
+    monkeypatch.setattr(ff, "fingerprint_job", drop_the_share_after_the_first)
+    assert run(db, "--phase", "linked") == 2
+    rows = [db.row(i) for i in ids]
+    assert [r["status"] for r in rows if r] == ["done"]  # only the first file was written
+    assert len(calls) == 6  # the sixth call is the fifth missing one; the run stops there
+
+
+def test_five_missing_files_with_the_share_present_are_marked_missing_and_the_run_goes_on(db):
+    gone = [db.add_file(f"p/gone{i}.txt", b"x", write=False) for i in range(6)]
+    there = db.add_file("p/there.txt", b"x")
+    assert run(db, "--phase", "linked") == 0
+    assert [db.row(i)["status"] for i in gone] == ["missing"] * 6
+    assert db.row(there)["status"] == "done"
+
+
+def test_fewer_than_five_missing_at_the_end_are_marked_when_the_share_is_still_there(db):
+    gone = db.add_file("p/gone.txt", b"x", write=False)
+    assert run(db, "--phase", "linked") == 0
+    assert db.row(gone)["status"] == "missing"
+
+
+def test_pending_missing_files_are_not_marked_when_the_share_is_gone_at_the_end(db, monkeypatch):
+    gone = db.add_file("p/gone.txt", b"x", write=False)
+    real = ff.fingerprint_job
+
+    def then_drop_the_share(*a, **kw):
+        out = real(*a, **kw)
+        shutil.rmtree(db.root)
+        return out
+
+    monkeypatch.setattr(ff, "fingerprint_job", then_drop_the_share)
+    assert run(db, "--phase", "linked") == 2
+    assert db.row(gone) is None
+
+
+# ---- 9. the provisional row ----------------------------------------------------------
+
+
+class Boom(BaseException):
+    pass
+
+
+def test_provisional_row_survives_a_hard_crash(db, monkeypatch):
+    fid = db.add_file("p/a.mat", b"whatever")
+
+    def crash(*a, **kw):
+        raise Boom()
+
+    monkeypatch.setattr(ff, "mat_data_sha256", crash)
+    with pytest.raises(Boom):
+        run(db, "--phase", "linked")
+    r = db.row(fid)
+    assert r["status"] == "error" and r["error_message"] == "hashing started"
+    assert r["size_bytes"] == len(b"whatever") and r["source_mtime"] == T0
+    assert r["content_sha256"] is None
+    assert [j.id for j in db.selected()] == [fid]  # and it is picked up again next run
+
+
+# ---- 10. dry run ---------------------------------------------------------------------
+
+
+def test_dry_run_reads_nothing_writes_nothing_and_reports_existence(db, monkeypatch, capsys):
+    db.add_file("p/here.txt", b"abc")
+    db.add_file("p/gone.txt", b"x", write=False)
+
+    def no_reads(*a, **kw):
+        raise AssertionError("a dry run must not read file content")
+
+    monkeypatch.setattr(ff, "content_sha256", no_reads)
+    monkeypatch.setattr(ff, "mat_data_sha256", no_reads)
+    assert run(db, "--phase", "linked", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert db.count() == 0
+    assert db.path("p/here.txt") in out and db.path("p/gone.txt") in out
+    assert "exists" in out and "missing" in out
+    assert "2 files" in out and "1 of 2 paths exist" in out
+
+
+# ---- per-file behaviour: retries, changes while hashing ------------------------------
+
+
+def test_oserror_is_retried_with_backoff_then_succeeds(db, monkeypatch):
+    fid = db.add_file("p/a.txt", b"abc")
+    real, fails, waits = ff.content_sha256, [2], []
+
+    def flaky(*a, **kw):
+        if fails[0]:
+            fails[0] -= 1
+            raise OSError("share hiccup")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ff, "content_sha256", flaky)
+    monkeypatch.setattr(ff, "_sleep", waits.append)
+    assert run(db, "--phase", "linked") == 0
+    assert db.row(fid)["status"] == "done" and waits == [2, 4]
+
+
+def test_oserror_every_time_gives_up_after_three_retries_as_an_error_row(db, monkeypatch):
+    fid = db.add_file("p/a.mat", b"abc")
+    waits, attempts = [], []
+
+    def corrupt_chunk(*a, **kw):
+        attempts.append(1)
+        raise OSError("wrong B-tree signature")
+
+    monkeypatch.setattr(ff, "mat_data_sha256", corrupt_chunk)
+    monkeypatch.setattr(ff, "_sleep", waits.append)
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert r["status"] == "error" and "B-tree" in r["error_message"]
+    assert r["content_sha256"] == sha(b"abc")
+    assert waits == [2, 4, 8] and len(attempts) == 4
+
+
+def test_a_file_that_changes_while_it_is_hashed_is_left_as_a_provisional_error(db, monkeypatch):
+    fid = db.add_file("p/a.txt", b"abc")
+    real = ff.content_sha256
+
+    def touch_then_hash(path, *a, **kw):
+        out = real(path, *a, **kw)
+        with open(path, "ab") as f:
+            f.write(b"more")  # a writer got there while we were reading
+        return out
+
+    monkeypatch.setattr(ff, "content_sha256", touch_then_hash)
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert r["status"] == "error" and r["error_message"] == "file changed while hashing"
+    assert r["content_sha256"] is None  # no hash is trusted from a file that moved
+
+
+def test_missing_archive_path_is_an_error_row(db):
+    fid = db.add_file("p/a.txt", b"abc")
+    db.cur.execute("UPDATE directus_files SET metadata = '{}' WHERE id = %s", (fid,))
+    db.conn.commit()
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert r["status"] == "error" and "archive_path" in r["error_message"]
+
+
+def test_an_unexpected_exception_is_recorded_and_the_run_goes_on(db, monkeypatch):
+    bad = db.add_file("p/a.txt", b"abc")
+    good = db.add_file("p/b.txt", b"def")
+    real = ff.content_sha256
+
+    def sometimes(path, *a, **kw):
+        if str(path).endswith("a.txt"):
+            raise RuntimeError("surprise")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(ff, "content_sha256", sometimes)
+    assert run(db, "--phase", "linked") == 0
+    assert db.row(bad)["status"] == "error" and "surprise" in db.row(bad)["error_message"]
+    assert db.row(good)["status"] == "done"
+
+
+def test_a_file_deleted_from_directus_mid_run_is_skipped(db, monkeypatch):
+    gone = db.add_file("p/a.txt", b"abc")
+    other = db.add_file("p/b.txt", b"def")
+    real = ff.fingerprint_job
+
+    def delete_the_row_first(j, *a, **kw):
+        if j.id == gone:
+            db.cur.execute("DELETE FROM directus_files WHERE id = %s", (gone,))
+            db.conn.commit()
+        return real(j, *a, **kw)
+
+    monkeypatch.setattr(ff, "fingerprint_job", delete_the_row_first)
+    assert run(db, "--phase", "linked") == 0
+    assert db.row(gone) is None and db.row(other)["status"] == "done"
+
+
+def test_two_workers_share_the_queue(db):
+    ids = [db.add_file(f"p/{i}.txt", f"content {i}".encode()) for i in range(12)]
+    assert run(db, "--phase", "linked", "--workers", "2") == 0
+    assert all(db.row(i)["status"] == "done" for i in ids)
+
+
+def test_progress_lines_and_final_summary_are_printed(db, capsys):
+    for i in range(11):
+        db.add_file(f"p/{i}.txt", b"x" * 100)
+    assert run(db, "--phase", "linked", "--max-mb-s", "100") == 0
+    out = capsys.readouterr().out
+    assert "[10/11]" in out
+    assert "11 done, 0 error, 0 missing" in out.splitlines()[-1]
+
+
+def test_throttle_is_shared_and_applied(db, monkeypatch):
+    db.add_file("p/a.txt", b"x" * 1000)
+    seen = []
+    real = ff.Throttle.consume
+    monkeypatch.setattr(ff.Throttle, "consume", lambda self, n: (seen.append((self.rate, n)), real(self, n))[1])
+    assert run(db, "--phase", "linked", "--max-mb-s", "50") == 0
+    assert seen and all(r == 50e6 for r, _ in seen) and sum(n for _, n in seen) == 1000
+
+
+# ---- local storage (the Directus container), without Docker --------------------------
+
+
+def test_local_files_are_streamed_from_the_container_and_mats_hashed_via_a_temp_file(db, monkeypatch, matrix, tmp_path):
+    import io as _io
+
+    write_v5(tmp_path / "local.mat", matrix)
+    mat_bytes = (tmp_path / "local.mat").read_bytes()
+    store = {"m.mat": mat_bytes, "n.bin": b"opaque bytes"}
+    mat = db.add_file("x/m.mat", write=False, storage="local", filename_disk="m.mat", filesize=len(mat_bytes))
+    other = db.add_file("x/n.bin", write=False, storage="local", filename_disk="n.bin", filesize=12)
+    seen = []
+
+    @contextlib.contextmanager
+    def fake_open(filename_disk):
+        seen.append(filename_disk)
+        yield _io.BytesIO(store[filename_disk])
+
+    monkeypatch.setattr(ff, "_local_open", fake_open)
+    monkeypatch.setattr(ff, "_local_stat", lambda fd: (len(store[fd]), 1))
+    assert run(db, "--phase", "linked", "--include-local") == 0
+    m, o = db.row(mat), db.row(other)
+    assert m["status"] == "done" and m["content_sha256"] == sha(mat_bytes) and m["data_sha256"] == reference(matrix)
+    assert o["status"] == "done" and o["content_sha256"] == sha(b"opaque bytes") and o["data_sha256"] is None
+    assert sorted(seen) == ["m.mat", "n.bin"]
+
+
+def test_local_files_are_skipped_without_include_local(db):
+    db.add_file("x/n.bin", write=False, storage="local", filename_disk="n.bin")
+    assert run(db, "--phase", "linked") == 0
+    assert db.count() == 0

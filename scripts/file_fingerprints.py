@@ -23,7 +23,8 @@ HDF5 and are read with h5py one block at a time (`block_bytes`, default 64 MiB o
 
 Files are only ever opened for reading. An `OSError` from the file system (missing file, I/O
 error) propagates unchanged so a caller can retry it; a file that is not a parseable .mat raises
-`UnreadableMat`. This module is a library: importing it does no work.
+`UnreadableMat`. Importing this module does no work; the runner and CLI (selection, throttled hashing
+of the files on the share, resumable writes to file_fingerprints) are at the end of the file.
 """
 
 from __future__ import annotations
@@ -239,3 +240,494 @@ def _hdf5_data_sha256(path, block_bytes, throttle):
         except Exception as e:
             raise OSError(f"reading {var!r} from {path} failed: {type(e).__name__}: {e}") from e
         return _finish(rows, cols, hashers), var, rows, cols
+
+
+# ======================================================================================
+# The runner: select files from the database, hash them on the share, write file_fingerprints.
+#
+#   DATABASE_URL=... python scripts/file_fingerprints.py --phase linked [--workers 1] [--max-mb-s 60]
+#       [--limit N] [--skip-failed] [--include-local] [--archive-root PATH] [--dry-run]
+#
+# Resumable: a file is selected when it has no fingerprint, when the stored staleness key
+# (size_bytes, source_mtime) no longer matches directus_files, or when its status is
+# missing/error (unless --skip-failed); ordering by hashed_at NULLS FIRST puts never-tried files
+# first and sends a file that fails to the back. Only reads from the share; only writes
+# file_fingerprints. Exit codes: 0 queue drained, 2 the share (or the setup) is not usable.
+# ======================================================================================
+
+import argparse  # noqa: E402
+import contextlib  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import tempfile  # noqa: E402
+from collections import deque  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+DIRECTUS_CONTAINER = "d1-database-directus-1"
+LOCAL_UPLOADS = "/directus/uploads"
+RETRY_BACKOFF_S = (2, 4, 8)  # an OSError is retried after each of these waits, then recorded as an error
+MISSING_STREAK = 5  # consecutive missing files before the share itself is re-checked
+PROGRESS_EVERY = 10
+_sleep = time.sleep  # indirection so tests do not wait out the backoff
+
+
+@dataclass
+class FileJob:
+    id: str
+    storage: str
+    archive_path: str | None
+    filename_disk: str | None
+    filename_download: str | None
+    size_bytes: int | None  # directus_files.filesize, as read at selection time
+    source_mtime: datetime | None  # metadata.modified, else modified_on, as read at selection time
+
+
+def default_archive_root() -> str:
+    """The same root the force orchestrator uses (ARCHIVE_UNC), without importing that daemon module."""
+    return os.environ.get("ARCHIVE_UNC", r"\\uosfstore.shef.ac.uk\shared\star_group1")
+
+
+# ---- selection ----------------------------------------------------------------------
+
+_SOURCE_MTIME_SQL = "COALESCE((f.metadata::jsonb->>'modified')::timestamptz, f.modified_on)"
+# Linked = attached somewhere. machining_force_analysis.directus_files_id is the source .mat; its
+# live_cache_file / render_file are derived caches, not linked source files.
+_LINKED_SQL = """f.id IN (
+        SELECT directus_files_id FROM operation_data_files
+        UNION SELECT directus_files_id FROM sample_data_files
+        UNION SELECT directus_files_id FROM session_data_files
+        UNION SELECT directus_files_id FROM machining_force_analysis)"""
+
+
+def select_files(cur, phase: str, include_local: bool, retry_failed: bool, limit: int | None) -> list[FileJob]:
+    """The files that need (re)hashing, never-tried first. See the section comment for the rules."""
+    if phase not in ("linked", "all"):
+        raise ValueError(f"phase must be 'linked' or 'all', not {phase!r}")
+    storages = ["star", "local"] if include_local else ["star"]
+    linked = _LINKED_SQL if phase == "linked" else "true"
+    sql = f"""
+        SELECT f.id::text, f.storage, f.metadata::jsonb->>'archive_path', f.filename_disk,
+               f.filename_download, f.filesize, {_SOURCE_MTIME_SQL}
+        FROM directus_files f
+        LEFT JOIN file_fingerprints fp ON fp.directus_files_id = f.id
+        WHERE f.storage = ANY(%s)
+          AND ({linked})
+          AND (fp.directus_files_id IS NULL
+               OR fp.size_bytes IS DISTINCT FROM f.filesize
+               OR fp.source_mtime IS DISTINCT FROM {_SOURCE_MTIME_SQL}
+               OR (fp.status <> 'done' AND %s))
+        ORDER BY fp.hashed_at NULLS FIRST, f.id
+    """
+    params: list = [storages, bool(retry_failed)]
+    if limit is not None:
+        sql += " LIMIT %s"
+        params.append(limit)
+    cur.execute(sql, params)
+    return [FileJob(*r) for r in cur.fetchall()]
+
+
+# ---- paths and file access ----------------------------------------------------------
+
+
+def resolve_path(job: FileJob, archive_root: str) -> str:
+    """Where the bytes are: star files at archive_root + metadata.archive_path (never filename_disk);
+    local files at their path inside the Directus container (read through `docker exec`)."""
+    if job.storage == "local":
+        if not job.filename_disk:
+            raise ValueError("no filename_disk for a local file")
+        return f"{LOCAL_UPLOADS}/{job.filename_disk}"
+    if not job.archive_path:
+        raise ValueError("no archive_path in the file metadata")
+    parts = job.archive_path.split("/")
+    if ".." in parts:
+        raise ValueError(f"archive_path escapes the archive root: {job.archive_path!r}")
+    return os.path.join(archive_root, *parts)
+
+
+def _display_name(job: FileJob) -> str:
+    if job.storage == "local":
+        return job.filename_download or job.filename_disk or ""
+    return (job.archive_path or "").rsplit("/", 1)[-1]
+
+
+def _stat(job: FileJob, path: str):
+    """(size, mtime) of the file as it is now, or None when it is not there. Other OSErrors propagate."""
+    if job.storage == "local":
+        return _local_stat(job.filename_disk)
+    try:
+        st = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return st.st_size, st.st_mtime_ns
+
+
+def _local_stat(filename_disk: str):
+    r = subprocess.run(
+        ["docker", "exec", DIRECTUS_CONTAINER, "stat", "-c", "%s %Y", f"{LOCAL_UPLOADS}/{filename_disk}"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        if "No such file" in r.stderr:
+            return None
+        raise OSError(f"docker exec stat failed ({r.returncode}): {r.stderr.strip()}")
+    size, mtime = r.stdout.split()
+    return int(size), int(mtime)
+
+
+@contextlib.contextmanager
+def _local_open(filename_disk: str):
+    """A binary stream of a file in the Directus container uploads (docker exec ... cat)."""
+    p = subprocess.Popen(
+        ["docker", "exec", DIRECTUS_CONTAINER, "cat", f"{LOCAL_UPLOADS}/{filename_disk}"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    try:
+        yield p.stdout
+    except BaseException:
+        p.kill()
+        raise
+    finally:
+        p.stdout.close()
+        rc = p.wait()
+    if rc != 0:  # reached only when the body completed: the stream was cut short or the file vanished
+        raise OSError(f"docker exec cat exited {rc} for {filename_disk}")
+
+
+class _Tee:
+    """A read-only stream that copies what it hands out into a file (one pass for hash and temp copy)."""
+
+    def __init__(self, src, out):
+        self.src, self.out = src, out
+
+    def read(self, n=-1):
+        b = self.src.read(n)
+        self.out.write(b)
+        return b
+
+
+def _hash_file(job, path, is_mat, throttle, block_bytes, got) -> FingerprintError | None:
+    """Fill `got` with the content / mat results; return a FingerprintError for a permanent .mat failure.
+    OSError propagates (the caller retries). got['content'] is set only for a fully read file."""
+    if job.storage != "local":
+        got["content"], _ = content_sha256(path, throttle=throttle)
+        if is_mat:
+            try:
+                got["mat"] = mat_data_sha256(path, block_bytes=block_bytes, throttle=throttle)
+            except FingerprintError as e:
+                return e
+        return None
+    tmp = None
+    try:
+        with _local_open(job.filename_disk) as stream:
+            if is_mat:
+                fd, tmp = tempfile.mkstemp(suffix=".mat")
+                with os.fdopen(fd, "wb") as out:
+                    digest, _ = content_sha256(_Tee(stream, out), throttle=throttle)
+            else:
+                digest, _ = content_sha256(stream, throttle=throttle)
+        got["content"] = digest  # only once the stream ended cleanly (the exit above checks docker status)
+        if is_mat:
+            try:
+                got["mat"] = mat_data_sha256(tmp, block_bytes=block_bytes, throttle=throttle)
+            except FingerprintError as e:
+                return e
+        return None
+    finally:
+        if tmp:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+
+
+def _should_retry(attempt: int) -> bool:
+    if attempt < len(RETRY_BACKOFF_S):
+        _sleep(RETRY_BACKOFF_S[attempt])
+        return True
+    return False
+
+
+def fingerprint_job(job: FileJob, archive_root: str, throttle=None, block_bytes: int = 64 << 20,
+                    on_start=None) -> dict:
+    """Hash one file and return the file_fingerprints row values (nothing is written here).
+
+    `on_start` (optional) runs once the file is known to exist and just before it is read; the
+    runner uses it to write and commit the provisional row, so a hard crash leaves the file recorded.
+    """
+    row = {"status": None, "content_sha256": None, "data_sha256": None, "data_variable": None,
+           "data_rows": None, "data_cols": None, "size_bytes": job.size_bytes,
+           "source_mtime": job.source_mtime, "error_message": None}
+
+    def result(status, message=None, **more):
+        return {**row, "status": status, "error_message": message, **more}
+
+    try:
+        path = resolve_path(job, archive_root)
+    except ValueError as e:
+        return result("error", str(e))
+    is_mat = _display_name(job).lower().endswith(".mat")
+    started = False
+    got: dict = {}
+    attempt = 0
+    while True:
+        try:
+            before = _stat(job, path)
+        except OSError as e:
+            if _should_retry(attempt):
+                attempt += 1
+                continue
+            return result("error", f"{type(e).__name__}: {e}")
+        if before is None:
+            return result("missing", f"not found: {path}")
+        if not started:
+            started = True
+            if on_start is not None:
+                on_start()
+        got.clear()
+        try:
+            ferr = _hash_file(job, path, is_mat, throttle, block_bytes, got)
+            after = _stat(job, path)
+        except OSError as e:
+            if _should_retry(attempt):
+                attempt += 1
+                continue
+            return result("error", f"{type(e).__name__}: {e}", content_sha256=got.get("content"))
+        except Exception as e:  # noqa: BLE001 - one odd file must not stop a 10K-file run
+            return result("error", f"unexpected {type(e).__name__}: {e}", content_sha256=got.get("content"))
+        if after != before:
+            return result("error", "file changed while hashing")
+        if ferr is not None:
+            return result("error", str(ferr), content_sha256=got["content"])
+        out = result("done", None, content_sha256=got["content"])
+        if "mat" in got:
+            digest, variable, rows, cols = got["mat"]
+            out.update(data_sha256=digest, data_variable=variable, data_rows=rows, data_cols=cols)
+        return out
+
+
+_UPSERT_SQL = """
+    INSERT INTO file_fingerprints (directus_files_id, status, content_sha256, data_sha256, data_variable,
+                                   data_rows, data_cols, size_bytes, source_mtime, error_message, hashed_at)
+    VALUES (%(id)s, %(status)s, %(content_sha256)s, %(data_sha256)s, %(data_variable)s,
+            %(data_rows)s, %(data_cols)s, %(size_bytes)s, %(source_mtime)s, %(error_message)s, now())
+    ON CONFLICT (directus_files_id) DO UPDATE SET
+        status = EXCLUDED.status, content_sha256 = EXCLUDED.content_sha256,
+        data_sha256 = EXCLUDED.data_sha256, data_variable = EXCLUDED.data_variable,
+        data_rows = EXCLUDED.data_rows, data_cols = EXCLUDED.data_cols, size_bytes = EXCLUDED.size_bytes,
+        source_mtime = EXCLUDED.source_mtime, error_message = EXCLUDED.error_message, hashed_at = now()
+"""
+_ROW_KEYS = ("status", "content_sha256", "data_sha256", "data_variable", "data_rows", "data_cols",
+             "size_bytes", "source_mtime", "error_message")
+
+
+def upsert_fingerprint(cur, file_id: str, row: dict) -> None:
+    """Insert or replace the file fingerprint row (the caller commits)."""
+    cur.execute(_UPSERT_SQL, {"id": file_id, **{k: row.get(k) for k in _ROW_KEYS}})
+
+
+# ---- the run -------------------------------------------------------------------------
+
+
+class _Run:
+    """Shared state of one run: the queue, the counters, the not-yet-written missing files."""
+
+    def __init__(self, jobs, root, throttle, block_bytes):
+        self.queue = deque(jobs)
+        self.root, self.throttle, self.block_bytes = root, throttle, block_bytes
+        self.lock = threading.Lock()
+        self.total = len(jobs)
+        self.total_bytes = sum(j.size_bytes or 0 for j in jobs)
+        self.counts = {"done": 0, "error": 0, "missing": 0}
+        self.vanished = 0  # deleted from Directus while we ran
+        self.processed = 0
+        self.bytes_read = 0
+        self.bytes_done = 0
+        self.pending: list[tuple[FileJob, dict]] = []  # missing, not written until the share is vouched for
+        self.exit_code: int | None = None
+        self.t0 = time.monotonic()
+
+    # callers hold self.lock for everything below
+
+    def _write(self, conn, job, row) -> bool:
+        import psycopg2.errors
+
+        try:
+            with conn.cursor() as cur:
+                upsert_fingerprint(cur, job.id, row)
+            conn.commit()
+        except psycopg2.errors.ForeignKeyViolation:
+            conn.rollback()
+            self.vanished += 1
+            return False
+        self.counts[row["status"]] += 1
+        return True
+
+    def flush_pending(self, conn):
+        for job, row in self.pending:
+            self._write(conn, job, row)
+        self.pending = []
+
+    def share_gone(self, n):
+        self.exit_code = 2
+        print(f"stopping: {n} missing file(s) in a row and the archive root {self.root!r} is no longer "
+              f"reachable; those files were not marked, rows already written are kept (exit 2)", file=sys.stderr)
+
+    def finish(self, conn, job, row):
+        if row["status"] == "missing":
+            self.pending.append((job, row))
+            if len(self.pending) >= MISSING_STREAK:
+                if not os.path.isdir(self.root):
+                    self.share_gone(len(self.pending))
+                    return
+                self.flush_pending(conn)
+        else:
+            self.flush_pending(conn)  # a file was found: the earlier misses are genuinely missing
+            self._write(conn, job, row)
+            self.bytes_read += job.size_bytes or 0
+        self.processed += 1
+        self.bytes_done += job.size_bytes or 0
+        if self.processed % PROGRESS_EVERY == 0:
+            print(self.progress_line(), flush=True)
+
+    def progress_line(self) -> str:
+        elapsed = max(time.monotonic() - self.t0, 1e-9)
+        rate = self.bytes_read / elapsed
+        left = max(self.total_bytes - self.bytes_done, 0)
+        eta = f"{left / rate / 60:.0f} min" if rate > 0 else "?"
+        c = self.counts
+        return (f"[{self.processed}/{self.total}] {c['done']} done, {c['error']} error, {c['missing']} missing | "
+                f"{self.bytes_read / 1e9:.2f} GB read | {rate / 1e6:.1f} MB/s | ETA {eta}")
+
+
+def _worker(run: _Run, conn) -> None:
+    import psycopg2.errors
+
+    def provisional(job):
+        """Record the file as 'hashing started' and commit, before reading a byte of it."""
+        with conn.cursor() as cur:
+            upsert_fingerprint(cur, job.id, {"status": "error", "size_bytes": job.size_bytes,
+                                             "source_mtime": job.source_mtime,
+                                             "error_message": "hashing started"})
+        conn.commit()
+
+    while run.exit_code is None:
+        try:
+            job = run.queue.popleft()
+        except IndexError:
+            return
+        try:
+            row = fingerprint_job(job, run.root, run.throttle, run.block_bytes,
+                                  on_start=lambda job=job: provisional(job))
+        except psycopg2.errors.ForeignKeyViolation:  # the file left Directus since we selected it
+            conn.rollback()
+            with run.lock:
+                run.vanished += 1
+                run.processed += 1
+            continue
+        with run.lock:
+            run.finish(conn, job, row)
+
+
+def _dry_run(jobs, root) -> int:
+    exist, total = 0, 0
+    for j in jobs:
+        try:
+            path = resolve_path(j, root)
+            ok = _stat(j, path) is not None
+        except (ValueError, OSError):
+            path, ok = f"<unresolvable: {j.archive_path or j.filename_disk}>", False
+        exist += ok
+        total += j.size_bytes or 0
+        print(f"{j.id}  {j.size_bytes or 0:>14}  {path}  {'exists' if ok else 'missing'}")
+    print(f"{len(jobs)} files, {total / 1e9:.2f} GB, {exist} of {len(jobs)} paths exist "
+          f"(dry run: nothing read or written)")
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Hash Directus files on the lab share into file_fingerprints.")
+    p.add_argument("--phase", choices=("linked", "all"), required=True,
+                   help="linked: files attached to operations/samples/sessions/force analyses; all: every file")
+    p.add_argument("--workers", type=int, default=1, help="parallel hashing threads (default 1)")
+    p.add_argument("--max-mb-s", type=float, default=60.0,
+                   help="global read cap in MB/s across all workers (default 60; 0 = unlimited)")
+    p.add_argument("--limit", type=int, default=None, help="stop after selecting N files")
+    p.add_argument("--skip-failed", action="store_true", help="do not retry files recorded as missing or error")
+    p.add_argument("--include-local", action="store_true",
+                   help="also hash storage='local' files, read from the Directus container via docker exec")
+    p.add_argument("--archive-root", default=None, help="the share root (default: env ARCHIVE_UNC)")
+    p.add_argument("--dry-run", action="store_true", help="list what would be hashed; read and write nothing")
+    return p
+
+
+def main(argv=None) -> int:
+    args = _parser().parse_args(argv)
+    if args.workers < 1:
+        print("--workers must be at least 1", file=sys.stderr)
+        return 2
+    root = args.archive_root or default_archive_root()
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        print("DATABASE_URL is required", file=sys.stderr)
+        return 2
+    if not os.path.isdir(root):
+        print(f"archive root {root!r} is not reachable (is the share mounted / VPN up?); nothing written",
+              file=sys.stderr)
+        return 2
+    import psycopg2
+
+    conns = []
+    try:
+        main_conn = psycopg2.connect(dsn)
+        conns.append(main_conn)
+        with main_conn.cursor() as cur:
+            jobs = select_files(cur, args.phase, args.include_local, not args.skip_failed, args.limit)
+        main_conn.commit()
+        if args.dry_run:
+            return _dry_run(jobs, root)
+        print(f"{len(jobs)} file(s) to hash, {sum(j.size_bytes or 0 for j in jobs) / 1e9:.2f} GB", flush=True)
+        throttle = Throttle(args.max_mb_s * 1e6 if args.max_mb_s > 0 else None)
+        run = _Run(jobs, root, throttle, 64 << 20)
+        if args.workers == 1 or len(jobs) <= 1:
+            conn = psycopg2.connect(dsn)
+            conns.append(conn)
+            _worker(run, conn)
+        else:
+            errors: list[BaseException] = []
+
+            def target(conn):
+                try:
+                    _worker(run, conn)
+                except BaseException as e:  # noqa: BLE001 - re-raised in the main thread below
+                    errors.append(e)
+                    run.exit_code = run.exit_code or 2
+
+            threads = []
+            for _ in range(args.workers):
+                conn = psycopg2.connect(dsn)
+                conns.append(conn)
+                threads.append(threading.Thread(target=target, args=(conn,)))
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            if errors:
+                raise errors[0]
+        if run.exit_code is None and run.pending:
+            if os.path.isdir(root):
+                run.flush_pending(main_conn)
+            else:
+                run.share_gone(len(run.pending))
+        c = run.counts
+        print(f"{'finished' if run.exit_code is None else 'stopped'}: {c['done']} done, {c['error']} error, "
+              f"{c['missing']} missing" + (f", {run.vanished} vanished" if run.vanished else "")
+              + f" | {run.bytes_read / 1e9:.2f} GB read in {time.monotonic() - run.t0:.0f} s", flush=True)
+        return run.exit_code or 0
+    finally:
+        for conn in conns:
+            with contextlib.suppress(Exception):
+                conn.rollback()
+                conn.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
