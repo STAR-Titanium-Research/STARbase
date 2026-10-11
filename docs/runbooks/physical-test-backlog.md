@@ -1093,20 +1093,34 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 - [ ] **Not during a recording.** Start a recording, then add the label to a request: only a badge
   appears on the Settings item, and the Record page is never covered. After the cut is saved, the
   dialog appears. Accepting while a capture is uploading is refused, and the prompt says why.
-- [ ] **The rig is locked during a run.** While a run is waiting on a question, minimise the
-  modal. The bottom bar shows the step and the time left. Ctrl+Enter or Start on the Record page
-  is refused with "a rig test is running (issue #N)". The Lab Amp mode buttons and NI-DAQ channel
-  save are refused too.
-- [ ] **Cancel and no answer.** Cancel during a question: the run ends as `cancelled`, the issue
-  says so, and recording works again straight away. In a second run, leave a question unanswered
-  for 5 min: that step is `no response`, the steps after it still run, and the report lists it
-  as not run.
+- [ ] **The operator can do the checks during a run.** Phase 1 does not lock the rig, so with
+  a run open, ask for an item that needs a recording, such as #190. Minimise the modal: the bottom
+  bar shows the step and the time left, and a recording starts and saves as normal. A question
+  that arrives during the cut shows only on the bar ("Waiting for you — after this cut"). The
+  modal opens once the Save dialog is closed. Throughout, keyboard focus stays in the Save
+  dialog, and Tab never reaches the rig-test window.
+- [ ] **Accept is refused while busy.** Accept while a large .mat is uploading to Directus: it is
+  refused, and the prompt says why. After the upload, the result comment shows the operator's
+  name (not their email) and the app version.
+- [ ] **Pop-outs and reloads.** With a Live Force pop-out on a second monitor, a new request gives
+  one prompt and one Windows notification, both from the main window. This holds after a restart
+  that reopens the pop-out. Reloading the app mid-cut does not bring up a prompt over the Record
+  page. Many requests in a row don't pile up notifications, and notifications clear when the app
+  window gets focus.
+- [ ] **Cancel and no answer.** Cancel during a question: the run ends as `cancelled`, and the
+  issue says so. In a second run, leave a question unanswered past its countdown (5 min for a
+  short question, 15 min for an item written only as prose): that step is `no response`, the
+  steps after it still run, and the report lists it as not run. The countdown on screen matches
+  when the step really ends.
+- [ ] **Result kept until the relay is back.** Pull the network just before the last answer. The
+  run ends, and the result comment appears on the issue within a minute or two of the network
+  coming back.
 - [ ] **Snooze and decline.** "In 30 min" brings the prompt back in 30 min, and the issue gets
   `rig-test:deferred`. Decline with "Someone else is using the machine": the issue gets the
   reason and `rig-test:declined`.
 - [ ] **Only the rig answers.** The same release on an office PC, with no NI-DAQ hardware, never
-  shows the prompt. Settings → Rig tests on that PC says why. Settings → About on the rig shows
-  the rig id.
+  shows the prompt. Settings → Rig tests on that PC says why, and the relay reads "not checked
+  yet". Settings → About on the rig shows the rig id.
 - [ ] **Windows notification.** With the app minimised or behind another window, a new request
   flashes the taskbar button and shows a Windows notification.
 
