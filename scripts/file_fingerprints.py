@@ -252,7 +252,8 @@ def _hdf5_data_sha256(path, block_bytes, throttle):
 # (size_bytes, source_mtime) no longer matches directus_files, or when its status is
 # missing/error (unless --skip-failed); ordering by hashed_at NULLS FIRST puts never-tried files
 # first and sends a file that fails to the back. Only reads from the share; only writes
-# file_fingerprints. Exit codes: 0 queue drained, 2 the share (or the setup) is not usable.
+# file_fingerprints. Exit codes: 0 queue drained, 2 the share (or the setup) is not usable,
+# 130 stopped with Ctrl+C (files in hand finished), 1 an unexpected error (traceback).
 # ======================================================================================
 
 import argparse  # noqa: E402

@@ -46,4 +46,5 @@ COMMENT ON INDEX file_fingerprints_content_idx IS 'Finds the file(s) with a give
 COMMENT ON INDEX file_fingerprints_data_idx IS 'Finds the force file(s) with a given decoded-array hash, so a file whose metadata was rewritten is still recognised as the same data. Partial: only rows that have a data_sha256.';
 
 -- migrate:down
+SET LOCAL lock_timeout = '10s';
 DROP TABLE IF EXISTS file_fingerprints;

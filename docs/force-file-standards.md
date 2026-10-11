@@ -358,9 +358,9 @@ D1 stores two hashes per file in `file_fingerprints` (filled by
 
 Rules for any tool that edits a `.mat` file:
 
-1. A metadata-only edit (the partial writes above) keeps `data_sha256`. The file is re-hashed
-   on the next run (its size or modification time changed) and is still recognised by its
-   `data_sha256`.
+1. A metadata-only edit (the partial writes above) keeps `data_sha256`. Once the archive
+   indexer has re-indexed the file (its size or modification time changed), the next
+   fingerprint run re-hashes it, and it is still recognised by its `data_sha256`.
 2. A migration that rewrites the force matrix (a layout upgrade such as v0.5 → v1.0) changes
    `data_sha256`. The tool doing it must record the new value against the **same**
    `directus_files` row and keep the old value in its own log, so the file's history stays
