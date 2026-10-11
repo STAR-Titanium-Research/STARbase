@@ -50,6 +50,9 @@ export interface RunQuestion { step: number; text: string; options: string[]; ex
 
 export interface RigRun {
 	number: number;
+	/** The request's title and issue link; '' from a backend that doesn't send them yet. */
+	title: string;
+	url: string;
 	state: RunState;
 	started_at: string;
 	deadline_at: string;
@@ -74,11 +77,19 @@ export interface RunSummary {
 	steps?: { status?: string }[];
 }
 
+/** A snoozed request: `snoozed_until` is an ISO 8601 instant, or "after_recording". */
+export interface SnoozedRequest extends RigRequest { snoozed_until: string }
+
+/** GET /rig-tests/pending. `busy`: the recorder is recording, saving or recovering a capture. */
+export interface PendingList { requests: RigRequest[]; snoozed: SnoozedRequest[]; busy: boolean }
+
+export type RelayState = 'ok' | 'unreachable' | 'not_configured' | 'unknown';
+
 export interface Eligibility {
 	eligible: boolean;
 	rig_id: string;
 	reason?: string;
-	relay: 'ok' | 'unreachable' | 'not_configured';
+	relay: RelayState;
 }
 
 // ---- parsing (the backend may be an older or newer build than this UI expects) -----------------
@@ -108,14 +119,13 @@ export function parseRun(raw: unknown): RigRun | null {
 		}
 		: undefined;
 	return {
-		number: num(r.number), state: r.state, started_at: str(r.started_at), deadline_at: str(r.deadline_at),
+		number: num(r.number), title: str(r.title), url: str(r.url), state: r.state, started_at: str(r.started_at), deadline_at: str(r.deadline_at),
 		elapsed_s: num(r.elapsed_s), estimate_s: num(r.estimate_s), steps,
 		current: typeof r.current === 'number' ? r.current : undefined, question,
 	};
 }
 
-export function parseRequests(raw: unknown): RigRequest[] {
-	const list = (raw as { requests?: unknown })?.requests;
+function parseRequestList(list: unknown): RigRequest[] {
 	if (!Array.isArray(list)) return [];
 	return list.filter((x) => x && typeof x.number === 'number').map((x: any) => ({
 		number: x.number, title: str(x.title, `Request #${x.number}`), url: str(x.url),
@@ -127,6 +137,18 @@ export function parseRequests(raw: unknown): RigRequest[] {
 		needs_operator_steps: num(x.needs_operator_steps),
 		error: typeof x.error === 'string' && x.error ? x.error : undefined,
 	}));
+}
+
+export function parseRequests(raw: unknown): RigRequest[] {
+	return parseRequestList((raw as { requests?: unknown })?.requests);
+}
+
+/** GET /rig-tests/pending. An older backend sends only `requests`: no snoozed list, not busy. */
+export function parsePending(raw: unknown): PendingList {
+	const r = (raw ?? {}) as { requests?: unknown; snoozed?: unknown; busy?: unknown };
+	const rawSnoozed = (Array.isArray(r.snoozed) ? r.snoozed : []).filter((x) => x && typeof x.number === 'number');
+	const snoozed = parseRequestList(rawSnoozed).map((x, i) => ({ ...x, snoozed_until: str(rawSnoozed[i].snoozed_until) }));
+	return { requests: parseRequests(raw), snoozed, busy: r.busy === true };
 }
 
 export function parseHistory(raw: unknown): RunSummary[] {
@@ -244,6 +266,28 @@ export function stepMark(status: StepStatus): StepMark {
 		case 'active': return { icon: 'play_circle', label: 'in progress', tone: 'active' };
 		default: return { icon: 'radio_button_unchecked', label: 'waiting', tone: 'dim' };
 	}
+}
+
+// ---- Settings > Rig tests ----------------------------------------------------------------------
+
+export interface RelayInfo { text: string; tone: 'ok' | 'bad' | 'dim'; icon: string }
+
+/** How Settings shows the relay. "unknown" is a backend that hasn't asked the relay yet (just
+ *  started), which must not read as "reachable". */
+export function relayInfo(relay: RelayState | undefined): RelayInfo {
+	switch (relay) {
+		case 'ok': return { text: 'Request relay reachable', tone: 'ok', icon: 'cloud_done' };
+		case 'unreachable': return { text: 'Request relay unreachable: new requests cannot arrive', tone: 'bad', icon: 'cloud_off' };
+		case 'unknown': return { text: 'Request relay not checked yet', tone: 'dim', icon: 'cloud_sync' };
+		default: return { text: 'Request relay not configured on this PC', tone: 'dim', icon: 'cloud_off' };
+	}
+}
+
+/** "until Oct 11, 5:00 PM", or "until the next recording is saved" for an after-recording snooze. */
+export function snoozedUntilText(until: string): string {
+	if (until === 'after_recording') return 'Snoozed until the next recording is saved';
+	const when = formatWhen(until);
+	return when ? `Snoozed until ${when}` : 'Snoozed';
 }
 
 // ---- run modal vs. bar -------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DECLINE_REASONS, NOTIFY_MAX, clip, currentPosition, declineBody, estimateText, finishedText, formatApproxDuration, formatClock,
-	justFinished, minimisedText, newRequests, parseHistory, parseRequests, parseRun, progress, promptMode, questionKey,
+	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, progress, promptMode, questionKey,
 	questionNotification, requestNotification, runView, secondsLeft, shouldReopen, snoozeUntil, stepMark, summaryCounts, timeLeft,
 	type RigRequest, type RigRun, type RunStep, type StepStatus,
 } from './rigTestLogic';
@@ -11,7 +11,7 @@ function step(index: number, status: StepStatus, extra: Partial<RunStep> = {}): 
 }
 function run(extra: Partial<RigRun> = {}): RigRun {
 	return {
-		number: 231, state: 'running', started_at: '2026-10-11T14:02:00Z', deadline_at: '2026-10-11T14:30:00Z',
+		number: 231, title: '', url: '', state: 'running', started_at: '2026-10-11T14:02:00Z', deadline_at: '2026-10-11T14:30:00Z',
 		elapsed_s: 120, estimate_s: 720,
 		steps: [step(0, 'pass'), step(1, 'fail'), step(2, 'active'), step(3, 'pending')],
 		current: 2, ...extra,
@@ -221,5 +221,42 @@ describe('desktop notifications', () => {
 		const n = requestNotification(req(231));
 		expect(n.title).toContain('dpremoli');
 		expect(n.body).toBe('#231 R4 pre-flight (about 12 min, 3 steps need you)');
+	});
+});
+
+describe('parsePending: the requests, the snoozed ones and the busy flag', () => {
+	it('reads snoozed requests with their return time, and busy', () => {
+		const p = parsePending({
+			requests: [{ number: 5 }],
+			snoozed: [{ title: 'no number' }, { number: 7, title: 'later', snoozed_until: '2026-10-11T17:00:00Z' }, { number: 8, snoozed_until: 'after_recording' }],
+			busy: true,
+		});
+		expect(p.requests.map((r) => r.number)).toEqual([5]);
+		expect(p.snoozed.map((r) => [r.number, r.snoozed_until])).toEqual([[7, '2026-10-11T17:00:00Z'], [8, 'after_recording']]);
+		expect(p.busy).toBe(true);
+	});
+	it('an older backend (only `requests`) means nothing snoozed and not busy', () => {
+		expect(parsePending({ requests: [{ number: 5 }] })).toMatchObject({ snoozed: [], busy: false });
+		expect(parsePending(null)).toEqual({ requests: [], snoozed: [], busy: false });
+		expect(parsePending({ busy: 'yes', snoozed: 4 })).toEqual({ requests: [], snoozed: [], busy: false });
+	});
+	it('a run carries its title and link, empty from an older backend', () => {
+		expect(parseRun({ number: 7, state: 'running', title: 'R4 chips', url: 'https://x/7' })).toMatchObject({ title: 'R4 chips', url: 'https://x/7' });
+		expect(parseRun({ number: 7, state: 'running' })).toMatchObject({ title: '', url: '' });
+	});
+});
+
+describe('relayInfo and snoozedUntilText', () => {
+	it('"unknown" reads as not checked yet, never as reachable', () => {
+		expect(relayInfo('unknown').text).toBe('Request relay not checked yet');
+		expect(relayInfo('unknown').tone).not.toBe('ok');
+		expect(relayInfo('ok').text).toBe('Request relay reachable');
+		expect(relayInfo('unreachable').tone).toBe('bad');
+		expect(relayInfo(undefined).text).toMatch(/not configured/);
+	});
+	it('says when a snoozed request comes back', () => {
+		expect(snoozedUntilText('after_recording')).toMatch(/next recording/);
+		expect(snoozedUntilText('2026-10-11T17:00:00Z')).toMatch(/^Snoozed until .+/);
+		expect(snoozedUntilText('garbage')).toBe('Snoozed');
 	});
 });

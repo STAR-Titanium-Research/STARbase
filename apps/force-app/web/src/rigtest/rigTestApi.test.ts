@@ -31,6 +31,16 @@ describe('GET routes', () => {
 		stub(200, { eligible: true, rig_id: 'rig-1' });
 		expect(await getEligibility()).toEqual({ kind: 'ok', data: { eligible: true, rig_id: 'rig-1', reason: undefined, relay: 'not_configured' } });
 	});
+	it('GET /eligibility keeps relay "unknown" (the relay has not been asked yet)', async () => {
+		stub(200, { eligible: true, rig_id: 'rig-1', relay: 'unknown' });
+		const r = await getEligibility();
+		expect(r.kind === 'ok' && r.data.relay).toBe('unknown');
+	});
+	it('GET /pending returns requests, snoozed and busy', async () => {
+		stub(200, { requests: [{ number: 1 }], snoozed: [{ number: 2, snoozed_until: 'after_recording' }], busy: true });
+		const r = await getPending();
+		expect(r.kind === 'ok' && [r.data.requests.length, r.data.snoozed[0].snoozed_until, r.data.busy]).toEqual([1, 'after_recording', true]);
+	});
 	it('GET /pending calls the contract path on the configured recorder', async () => {
 		const f = stub(200, { requests: [] });
 		await getPending();

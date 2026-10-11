@@ -12,8 +12,8 @@ import { rigTestApi, type ApiResult, type RigTestApi } from './rigTestApi';
 import {
 	justFinished, newRequests, promptMode, questionKey, questionNotification, requestNotification,
 	shouldReopen, snoozeUntil, declineBody,
-	type DeclineCode, type Eligibility, type RecordingPhase, type RigRequest, type RigRun, type RunSummary,
-	type SnoozeChoice,
+	type DeclineCode, type Eligibility, type PendingList, type RecordingPhase, type RigRequest, type RigRun, type RunSummary,
+	type SnoozeChoice, type SnoozedRequest,
 } from './rigTestLogic';
 
 export const PENDING_POLL_MS = 30_000;
@@ -32,6 +32,10 @@ export function createRigTestStore(deps: RigTestDeps) {
 		/** false once the backend answers 404: an older recorder with no rig-test routes. */
 		available: true,
 		pending: [] as RigRequest[],
+		/** Requests the operator snoozed, with when they come back (Settings > Rig tests). */
+		snoozed: [] as SnoozedRequest[],
+		/** The backend says it is recording, saving or recovering (GET /pending `busy`). */
+		backendBusy: false,
 		run: null as RigRun | null,
 		/** The run that just ended, shown as a summary until the operator closes it. */
 		finished: null as RigRun | null,
@@ -67,11 +71,14 @@ export function createRigTestStore(deps: RigTestDeps) {
 		try { notify(n.title, n.body); } catch { /* no bridge, or the shell refused: the prompt is on screen anyway */ }
 	}
 
-	function applyPending(list: RigRequest[]): void {
-		for (const r of newRequests(seen, list)) safeNotify(requestNotification(r));
+	function applyPending(p: PendingList): void {
+		for (const r of newRequests(seen, p.requests)) safeNotify(requestNotification(r));
 		seen.clear();
-		for (const r of list) { seen.add(r.number); state.known[r.number] = { title: r.title, url: r.url }; }
-		state.pending = list;
+		for (const r of p.requests) seen.add(r.number);
+		for (const r of [...p.requests, ...p.snoozed]) state.known[r.number] = { title: r.title, url: r.url };
+		state.pending = p.requests;
+		state.snoozed = p.snoozed;
+		state.backendBusy = p.busy;
 	}
 
 	function applyRun(next: RigRun | null): void {
@@ -91,7 +98,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 			const r = await api.getPending();
 			if (stopped) return;
 			if (r.kind === 'ok') { state.available = true; applyPending(r.data); }
-			else if (r.kind === 'missing') { state.available = false; applyPending([]); }
+			else if (r.kind === 'missing') { state.available = false; applyPending({ requests: [], snoozed: [], busy: false }); }
 		} finally { pendingBusy = false; }
 	}
 
