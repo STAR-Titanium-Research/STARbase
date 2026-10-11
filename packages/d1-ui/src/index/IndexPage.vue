@@ -27,7 +27,7 @@ const route = useRoute();
 const router = useRouter();
 
 const {
-	rows, total, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered,
+	rows, total, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setPage, clearFilters, closeOpen,
 } = useIndexPage(host, props.def, route, router);
 
@@ -68,6 +68,9 @@ function onDrawer(open: boolean): void {
 	drawerOpen.value = open;
 	if (!open) closeOpen();
 }
+
+// What a screen reader says for a row: its first column (the code or name).
+const rowLabel = (row: Record<string, unknown>): string => cellText(row, props.def.columns[0], props.def);
 
 const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 </script>
@@ -132,12 +135,14 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 						<option v-for="o in chip.options" :key="o.value" :value="o.value">{{ o.label }}</option>
 					</select>
 				</label>
-				<button v-if="filtered" type="button" class="link clear" @click="clearFilters">Clear filters</button>
+				<button v-if="hasFilters" type="button" class="link clear" @click="clearFilters">Clear filters</button>
 			</div>
 
 			<div v-if="error" class="state-row">
 				<LoadState :error="error" />
 				<button type="button" class="btn" @click="reload">Retry</button>
+				<!-- The saved view's own filter may be what the server rejects: offer the list without it. -->
+				<button v-if="state.bookmark !== null" type="button" class="btn" @click="setBookmark(null)">Show the whole list</button>
 			</div>
 
 			<div v-else class="panel" :class="{ busy: loading && rows.length }" :aria-busy="loading">
@@ -164,8 +169,11 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 								:key="rowKey(row)"
 								class="row"
 								tabindex="0"
+								role="link"
+								:aria-label="rowLabel(row) || undefined"
 								@click="openRow(row)"
 								@keydown.enter.self.prevent="openRow(row)"
+								@keydown.space.self.prevent="openRow(row)"
 							>
 								<td v-for="c in def.columns" :key="c.field" :class="cellClass(c)">{{ cellText(row, c, def) }}</td>
 							</tr>

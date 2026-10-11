@@ -133,7 +133,18 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	}
 
 	// ---- writing the URL ----------------------------------------------------------------------
-	function go(patch: Partial<IndexState>, opts: { replace?: boolean; qExplicit?: boolean } = {}): void {
+	// A click (a saved view, a chip, a sort, a page, clear) supersedes typing that has not reached the
+	// URL yet: its pending write is dropped, so it cannot land after the click and overwrite the
+	// click's URL. The box then shows what the URL says.
+	function dropPendingSearch(): void {
+		if (!timer) return;
+		clearTimeout(timer);
+		timer = null;
+		searchText.value = state.value.q;
+	}
+
+	function go(patch: Partial<IndexState>, opts: { replace?: boolean; qExplicit?: boolean; keepTyping?: boolean } = {}): void {
+		if (!opts.keepTyping) dropPendingSearch();
 		const next = withChange(raw.value, patch);
 		const query = queryForState(next, bookmarkById(next.bookmark), opts.qExplicit ?? qExplicit.value);
 		const to = { path: route.path, query };
@@ -167,17 +178,17 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	}
 	const setSort = (key: string) => go({ sort: nextSort(sort.value, key) });
 	const setPage = (page: number) => go({ page: Math.max(1, page) });
+	// "Clear filters": the search and the chips go, the saved view stays (it is a choice of its own,
+	// with its own x). With no search or chip left to clear, it drops the saved view too, so the
+	// button always gets you somewhere (the empty state's).
 	function clearFilters(): void {
-		if (timer) {
-			clearTimeout(timer);
-			timer = null;
-		}
-		go({ bookmark: null, q: '', filters: {}, page: 1 }, { qExplicit: false });
+		if (hasActiveFilters(state.value)) go({ q: '', filters: {}, page: 1 }, { qExplicit: true });
+		else go({ bookmark: null, q: '', filters: {}, page: 1 }, { qExplicit: false });
 	}
 	// The drawer's ?open goes when it closes; the rest of the view stays.
 	function closeOpen(): void {
 		if (raw.value.open === null) return;
-		go({ open: null, page: raw.value.page }, { replace: true });
+		go({ open: null, page: raw.value.page }, { replace: true, keepTyping: true });
 	}
 
 	// ---- chips --------------------------------------------------------------------------------
@@ -245,10 +256,12 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	// A relation column sorts by the related row's field, which needs that collection readable.
 	const relationSortable = (collection: string) => collectionOffered(collection);
 	const filtered = computed(() => hasActiveFilters(state.value) || raw.value.bookmark !== null);
+	// Search or chips set (the filter bar's "Clear filters" is for these; a saved view alone has its x).
+	const hasFilters = computed(() => hasActiveFilters(state.value));
 
 	return {
 		rows, total, loading, error, forbidden, bookmarkUnavailable,
-		state, sort, bookmarks, searchText, chips, dsLink, filtered,
+		state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 		reload: load, rowKey, relationSortable,
 		setSearch, setBookmark, setFilter, setSort, setPage, clearFilters, closeOpen,
 	};

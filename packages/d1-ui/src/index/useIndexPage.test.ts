@@ -194,4 +194,103 @@ describe('useIndexPage', () => {
 		await flush();
 		expect(t.items()).toHaveLength(before);
 	});
+
+	it('drops a slow response that a newer request has replaced', async () => {
+		const t = setup({});
+		const original = (t.host.api.get as any).getMockImplementation() as (p: string, c?: any) => Promise<any>;
+		const held: Array<{ page: number; release: () => void }> = [];
+		(t.host.api.get as any).mockImplementation((path: string, config?: any) => {
+			if (path !== '/items/physical_samples' || config?.params?.groupBy) return original(path, config);
+			const page = config.params.page as number;
+			return new Promise((resolve) => {
+				held.push({
+					page,
+					release: () => resolve({ data: { data: [{ sample_id: `s${page}`, sample_code: `PAGE-${page}` }], meta: { filter_count: 120 } } }),
+				});
+			});
+		});
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		page.setPage(2);
+		await flush();
+		expect(held.map((h) => h.page)).toEqual([1, 2]);
+		held[1].release();
+		await flush();
+		held[0].release(); // the first, slower answer arrives last
+		await flush();
+		expect(page.rows.value).toEqual([{ sample_id: 's2', sample_code: 'PAGE-2' }]);
+		expect(page.loading.value).toBe(false);
+	});
+
+	it('closeOpen removes ?open with replace and keeps the rest of the view', async () => {
+		const t = setup({ q: 'ti', page: '2', open: 's1' });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		page.closeOpen();
+		expect(t.pushed.at(-1)).toEqual({ how: 'replace', query: { q: 'ti', page: '2' } });
+		const n = t.pushed.length;
+		page.closeOpen(); // nothing open any more
+		expect(t.pushed).toHaveLength(n);
+	});
+
+	it('"Clear filters" clears search and chips but keeps the saved view', async () => {
+		const t = setup({ bookmark: '7', q: 'ti', 'f.current_status': 'active', page: '3' }, { bookmarks: [bm()] });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.hasFilters.value).toBe(true);
+		page.clearFilters();
+		expect(t.pushed.at(-1)).toEqual({ how: 'push', query: { bookmark: '7' } });
+		await flush();
+		expect(page.state.value.bookmark).toBe(7);
+		expect(page.hasFilters.value).toBe(false);
+	});
+
+	it('keeps a saved view\'s own search cleared by "Clear filters"', async () => {
+		const t = setup({ bookmark: '7' }, { bookmarks: [bm({ search: 'ti64' })] });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		page.clearFilters();
+		expect(t.pushed.at(-1)!.query).toEqual({ bookmark: '7', q: '' });
+	});
+
+	it('with no search or chip left, "Clear filters" drops the saved view too', async () => {
+		const t = setup({ bookmark: '7', page: '2' }, { bookmarks: [bm()] });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.hasFilters.value).toBe(false);
+		page.clearFilters();
+		expect(t.pushed.at(-1)!.query).toEqual({});
+	});
+
+	it('a click drops typing that has not reached the URL, so it cannot overwrite the click', async () => {
+		const t = setup({});
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		page.setSearch('ti6');
+		page.setSort('sample_code');
+		const after = t.pushed.length;
+		vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS * 2);
+		expect(t.pushed).toHaveLength(after); // no late replace
+		expect(t.route.query).toEqual({ sort: 'sample_code' });
+		expect(page.searchText.value).toBe('');
+	});
+
+	it('the other clicks drop pending typing too', async () => {
+		for (const click of [
+			(p: ReturnType<typeof useIndexPage>) => p.setBookmark(7),
+			(p: ReturnType<typeof useIndexPage>) => p.setFilter('current_status', 'active'),
+			(p: ReturnType<typeof useIndexPage>) => p.setPage(2),
+			(p: ReturnType<typeof useIndexPage>) => p.clearFilters(),
+		]) {
+			const t = setup({}, { bookmarks: [bm()] });
+			const page = useIndexPage(t.host, samples, t.route, t.router);
+			await flush();
+			page.setSearch('zzz');
+			click(page);
+			const after = t.pushed.length;
+			vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS * 2);
+			expect(t.pushed).toHaveLength(after);
+			expect(t.route.query.q).toBeUndefined();
+		}
+	});
 });
