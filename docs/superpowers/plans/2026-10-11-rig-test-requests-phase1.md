@@ -13,11 +13,11 @@ is phase 3. Both get their own plan.
 
 | Stream | Worktree | Branch | Agent profile | State |
 |---|---|---|---|---|
-| A. Relay endpoints | `.claude/worktrees/agent-a173c86a1bfb243bc` | `worktree-agent-a173c86a1bfb243bc` | `force-app-implementer` (sonnet, high) | done (4 commits, relay 43 tests pass), awaiting review |
-| B. Backend `rig_test` package + rig lock | agent worktree | worktree branch | `force-app-implementer` (sonnet, high) | in progress |
-| C. Web prompt, run modal, Settings tab, desktop notify | `.claude/worktrees/agent-a6c4a305de047f410` | `worktree-agent-a6c4a305de047f410` | `force-app-implementer` (sonnet, high) | done (5 commits; web 819 and desktop 264 tests pass, e2e stubbed), awaiting review |
-| D. Docs, conventions, deploy config | coordinator | `ccr-52e8d6c9-5rl4pg` | coordinator | in progress |
-| Review | — | — | `force-app-reviewer` (opus, high), then a security review (opus, high) | — |
+| A. Relay endpoints | `.claude/worktrees/agent-a173c86a1bfb243bc` | `worktree-agent-a173c86a1bfb243bc` | `force-app-implementer` (sonnet, high) | done (4 commits, relay 43 tests pass), merged |
+| B. Backend `rig_test` package + rig lock | `.claude/worktrees/agent-a27071929ebf5cd44` | `worktree-agent-a27071929ebf5cd44` | `force-app-implementer` (sonnet, high) | done (4 commits; backend 818 tests pass, verified over HTTP with a stub relay), merged |
+| C. Web prompt, run modal, Settings tab, desktop notify | `.claude/worktrees/agent-a6c4a305de047f410` | `worktree-agent-a6c4a305de047f410` | `force-app-implementer` (sonnet, high) | done (5 commits; web 819 and desktop 264 tests pass, e2e stubbed), merged |
+| D. Docs, conventions, deploy config | coordinator | `ccr-52e8d6c9-5rl4pg` | coordinator | done (backlog, CLAUDE.md, triage skill) |
+| Review | coordinator branch | `ccr-52e8d6c9-5rl4pg` | `force-app-reviewer` (opus, high), then a security review (opus, high) | Opus review in progress |
 
 Workflow per stream (owner's instruction, 2026-10-11): plan → code → `/simplify` → debug (full suites, typecheck, `force-app-verify` where it applies) → Opus review → security review → coordinator merge.
 
