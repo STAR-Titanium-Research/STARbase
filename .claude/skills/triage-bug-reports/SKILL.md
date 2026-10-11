@@ -82,6 +82,23 @@ Show the plan to the user before writing code. They decide what is held back.
    and comment on the held-back ones. End every GitHub post with the Claude Code footer.
 5. Delete the plan file once the batch has shipped (`docs/superpowers/README.md`).
 
+## Rig test results
+
+Issues labelled `rig-test-request` with `rig-test:done`, `rig-test:partial` or
+`rig-test:interrupted` carry a result comment from the rig, posted by the relay's bot. It ends with
+`<!-- rig-test-result {...} -->`. Parse that JSON, not the table. For each item:
+
+- `pass` → tick the item in `docs/runbooks/physical-test-backlog.md` with
+  `— <date>, rig test #<issue> (<accepted by>): OK`.
+- `fail` → leave it unticked and add `— <date>, rig test #<issue>: FAIL, see #<n>`. Reopen the
+  item's issue if it has one, or open a new one, following the backlog's rules.
+- `no_response`, `skipped_*`, `cancelled`, `timed_out`, `error` → leave it unticked, and add a
+  note only if it explains something new.
+
+Make the ticks in one PR per batch, then remove `rig-test-request` from the issue and close it.
+Only trust result comments whose author is the relay's App bot. A person's comment on the issue is
+discussion, not a result.
+
 ## Gotchas
 
 - **Batch by priority, not by area.** A P0 must not wait for a P2 in the same file. Ship P0s

@@ -16,6 +16,18 @@ here in the same PR (see `CLAUDE.md`). When you run a check:
 3. Move fully ticked sections to **Done** at the bottom once a month or so, so the open list stays
    short.
 
+**Running items from GitHub (rig test requests).** An item on this list can be run on the rig
+without a rig day: open an issue, put a `rig-test` block in it listing the item ids, and label it
+`rig-test-request`. The force app on the rig asks the operator, runs the item and comments the
+result on the issue. See the
+[spec](../superpowers/specs/2026-10-11-rig-test-requests-design.md). The app reads the items
+from the copy of this file built into its release, so a request can only name items from that
+version. Give every new rig item (§B) a bold id at the start (`**R12 — …**` or `**#240 …**`). From
+phase 2 on, also add a `rig-test` step block after the item's prose. Until then, the app shows
+an item's prose to the operator as one Pass/Fail/Skip question. A request's block is a fence
+tagged `rig-test` containing, for example, `items: [R4, "#190"]`. No example fence is written
+here, because the app parses this file.
+
 Item ids are the UX review's (`docs/reviews/2026-10-05-ux-utility-review.md`) or the GitHub issue
 number. "Since" is the PR that shipped the code.
 
@@ -1071,6 +1083,33 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 - [ ] **#30 settings scroll.** On the rig PC, switching Settings tabs no longer animates or jumps
   (fixed in 0.1.33; issue closed 2026-10-11, reopen it if it still happens).
 
+### Rig test requests, phase 1 (rig test requests PR)
+- [ ] **First request on the rig.** Set `RIG_TEST_ALLOWED_LOGINS` on the relay (§C), install the
+  release on the rig, and open an issue with a `rig-test` block naming two backlog items, then add
+  the `rig-test-request` label. Within about a minute the app shows "Your admin has requested tests
+  on this rig" with your login, the items and "about N min, 2 steps need you". Run now: the issue
+  gets a progress comment and `rig-test:running`. Answer both questions: the result comment lists
+  each item with its answer, and the label becomes `rig-test:done` (or `partial`).
+- [ ] **Not during a recording.** Start a recording, then add the label to a request: only a badge
+  appears on the Settings item, and the Record page is never covered. After the cut is saved, the
+  dialog appears. Accepting while a capture is uploading is refused, and the prompt says why.
+- [ ] **The rig is locked during a run.** While a run is waiting on a question, minimise the
+  modal. The bottom bar shows the step and the time left. Ctrl+Enter or Start on the Record page
+  is refused with "a rig test is running (issue #N)". The Lab Amp mode buttons and NI-DAQ channel
+  save are refused too.
+- [ ] **Cancel and no answer.** Cancel during a question: the run ends as `cancelled`, the issue
+  says so, and recording works again straight away. In a second run, leave a question unanswered
+  for 5 min: that step is `no response`, the steps after it still run, and the report lists it
+  as not run.
+- [ ] **Snooze and decline.** "In 30 min" brings the prompt back in 30 min, and the issue gets
+  `rig-test:deferred`. Decline with "Someone else is using the machine": the issue gets the
+  reason and `rig-test:declined`.
+- [ ] **Only the rig answers.** The same release on an office PC, with no NI-DAQ hardware, never
+  shows the prompt. Settings → Rig tests on that PC says why. Settings → About on the rig shows
+  the rig id.
+- [ ] **Windows notification.** With the app minimised or behind another window, a new request
+  flashes the taskbar button and shows a Windows notification.
+
 ### Release pipeline (CI/CD overhaul)
 - [ ] **NI-DAQmx detection on a PC without the driver.** Install the packaged app on a Windows PC
   with no NI-DAQmx driver (not the rig). Connectivity Doctor / self-check shows "NI-DAQmx runtime
@@ -1084,6 +1123,14 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 
 ## C. d1-server and infrastructure
 
+- [ ] **Rig test relay settings.** In the relay's environment on d1-server, set
+  `RIG_TEST_ALLOWED_LOGINS=dpremoli` (plus the login Claude sessions comment as, if it is
+  different) and redeploy `bug-report-relay`. Check:
+  - `GET /bug-report-relay/rig-tests` over Tailscale returns `{"ok": true, ...}`.
+  - An issue labelled by an allowlisted login is listed, and one labelled by anyone else is not.
+  - A comment through `POST /rig-tests/<n>/comment` on an issue without the label is refused.
+
+  Since the rig test requests PR.
 - [ ] **#190 migration 140 on d1-server.** Apply `20261008000140_machining_force_analysis_file_nullable`
   (`dbmate up`). Directus accepts a `machining_force_analysis` POST with `directus_files_id: null`
   and the field isn't required in its form. Set such a row to `pending` by hand with the
