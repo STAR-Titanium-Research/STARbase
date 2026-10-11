@@ -20,6 +20,7 @@ Format: lightweight [MADR](https://adr.github.io/madr/)-style. Status is one of
 | [0009](./0009-text-to-sql-guarded-readonly.md) | Local text-to-SQL via a guarded, read-only path | Accepted |
 | [0010](./0010-force-app-extraction-and-electron-packaging.md) | Force-app: shared plotting package, repo extraction, Electron packaging | Accepted (steps 0, 1, 3, 4 done; repo split not executed) |
 | [0011](./0011-row-level-visibility.md) | Row-level visibility: people see the records they are involved in | Accepted (2026-10-07) |
+| [0012](./0012-rig-test-requests-over-github-issues.md) | Rig test requests: GitHub issues as the command channel, a fixed action vocabulary on the rig | Proposed |
 
 New ADRs: copy the structure of an existing one, take the next number, and add a
 row above.

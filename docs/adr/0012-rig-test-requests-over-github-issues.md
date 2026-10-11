@@ -1,0 +1,130 @@
+# ADR-0012 — Rig test requests: GitHub issues as the command channel, a fixed action vocabulary on the rig
+
+- **Status:** Proposed
+- **Date:** 2026-10-11
+- **Deciders:** Maintainer + Claude (force app, post-0.1.36)
+
+## Context
+
+Most force-app fixes are written in cloud sessions that have no NI-DAQ chassis, no Lab Amp and no
+packaged Windows app. What only the real rig can confirm goes into
+[`docs/runbooks/physical-test-backlog.md`](../runbooks/physical-test-backlog.md) as prose (167
+unticked items on 2026-10-11), and waits for a rig day. The rig PC is in use by lab members most
+of the time, so the maintainer can't just walk up and run checks, and asking by message is slow
+and leaves no record of what was run.
+
+The maintainer wants to request tests from GitHub, have the app on the rig ask whoever is using it
+for permission, run what it can on its own, guide the operator through what needs a person, and
+report back to the issue. A Claude session should be able to drive a run step by step, not only
+hand over a fixed script.
+
+Constraints:
+
+- **No GitHub credential on the rig PC.** A packaged build's asar can be unpacked, so a token
+  shipped to the PC would be public. Today the
+  [bug-report relay](../../apps/force-app/bug-report-relay/server.py) on d1-server holds the GitHub
+  App key and files issues for the app (`POST /report`, `GET /issues`).
+- **The relay is reachable only over Tailscale** and has no authentication of its own
+  (`infra/caddy/Caddyfile`, `handle_path /bug-report-relay/*`). Claude cloud sessions are not on
+  the tailnet, so they can't reach the relay or the rig. They can reach GitHub.
+- **The backend only listens on loopback** (`app/origin_guard.py`). Nothing off the PC can talk to
+  it directly, and that should stay true.
+- **A recording must never be disturbed.** `_busy()` in `app/main.py` already refuses a second
+  `/record/start` while a session is recording or finalizing.
+- **Physical safety and the next user.** A test may leave the amp in the wrong mode or range for
+  the next person's cut, which spoils a real sample.
+
+Issue #97 (remote viewing of a live session) asks a related question, but it is not settled here.
+
+## Decision
+
+1. **The GitHub issue is the only command channel.** A request is an issue labelled
+   `rig-test-request`. During a run, Claude or the maintainer sends further actions as comments
+   that carry a fenced `rig-action` block. The rig app reports progress and results as comments on
+   the same issue. The issue thread is the full record of what ran on the rig.
+
+2. **The relay is the only broker, and it checks authority.** New relay endpoints (see the
+   spec) list pending requests and their unread action comments, and post comments and labels for
+   the app. The relay accepts a request only if a login on `RIG_TEST_ALLOWED_LOGINS` applied the
+   label (checked against the issue's `labeled` events), and an action comment only if an
+   allowlisted login wrote it. Comments by the relay's own bot (`d1-database-bug-reporter[bot]`)
+   are never read as commands. Anything else is dropped and logged. The rig app polls the relay; nothing
+   connects inbound to the rig, and the backend still listens on loopback only.
+
+3. **The rig runs only a fixed action vocabulary compiled into the app.** An action is a name and
+   validated parameters (pydantic, with bounded ranges such as a recording of at most 120 s). No
+   request can carry code, shell commands, file paths or URLs that the app executes or fetches.
+   New actions arrive only with app releases. Allowed: reads, short real recordings, Lab Amp mode
+   and temporary range changes, autorange *proposals*, app screenshots, and `ask` steps that put a
+   question to the operator. Never allowed: writing sensor data to the Lab Amp, saving the channel
+   config, deleting captures, changing storage or backup settings.
+
+4. **The operator decides, and the backend enforces it.** Nothing runs until the operator
+   accepts in the app (run now, run automated steps only, snooze, or decline). A run is refused
+   while a recording, finalize, recovery, restore or upload is in progress. While a run owns the
+   rig, the backend refuses `/record/start` and hardware config writes from anyone but the run.
+   Cancel always works. The hardware state is captured before the run and restored after Cancel,
+   after the hard time limit (1.5× the estimate, at most 30 min), or after a crash, from a journal on
+   disk.
+
+5. **Only the rig answers.** A backend answers requests only when it sees real NI-DAQ hardware and
+   a real Lab Amp. A request can also name one machine (`rig: <id>`). Office PCs and laptops never
+   see the prompt.
+
+6. **Results flow back as data, not repo writes.** The result comment carries a table for people
+   and a hidden JSON block for machines. A cloud session ticks the backlog items in a normal PR.
+   The relay gets no contents-write permission.
+
+## Alternatives considered
+
+- **Claude drives the rig desktop with computer use.** This covers every UI check, but it needs
+  the Claude desktop app signed in on a shared lab PC. The force app can't enforce the recording
+  lock or restore state around clicks it doesn't see. It is still possible by hand, as on
+  2026-10-08, and it stays outside this design.
+- **The relay holds a live socket to the rig, and Claude talks to the relay.** Cloud sessions
+  can't reach the tailnet, and this would mean adding auth to a service that has none.
+- **Arbitrary scripts or recipes in the issue.** This is the most flexible option, but it lets anyone who
+  can comment as an allowlisted login run code on the lab PC. A vocabulary covers the backlog's
+  needs, and it can grow with each release.
+- **Trust GitHub's own repo permissions instead of an allowlist.** Any collaborator who can label
+  issues could then command the rig. The allowlist is one environment variable.
+- **A GitHub Actions `workflow_dispatch` to send requests.** Every request would cost paid
+  Actions minutes, and the results would still need an issue to land in.
+- **The relay commits backlog ticks directly.** This would need contents-write permission on the
+  App and safe edits to markdown on a server with no review step. A session ticking in a PR is
+  reviewable.
+
+## Consequences
+
+- Backlog items gain an optional `rig-test` step block next to the prose (format in the spec).
+  Items without a block still run as an operator checklist built from their prose.
+- The relay's GitHub App needs no new permission. Its existing Issues read and write permission
+  covers issue events, comments and labels. It still gets no Contents permission.
+- Every round trip of the live loop goes rig → relay → GitHub → Claude and back. Expect 5 to 15 s
+  per step, so live runs suit checks that take minutes, not tight interactive tuning.
+- The relay's allowlist and the app's action vocabulary are the two security boundaries. A new
+  action that writes to hardware or disk needs a review against decision 3 and an update to this
+  ADR.
+- Test captures upload to a dedicated Directus project, "Rig tests". Dashboards and campaign views
+  must filter it out.
+- **Forbidden from now on:** an action that executes request-supplied code or paths, a code path
+  that starts a run without operator consent, and an inbound listener on the rig for this feature.
+
+## Verification
+
+- Relay tests: label applied by a login not on the allowlist → the request is not listed; an
+  action comment by a login not on the allowlist, or by the relay's own bot → it is not returned.
+- Backend tests: `/record/start` → 409 while a run owns the rig; accept → 409 while recording or
+  finalizing; Cancel and the hard time limit restore the captured amp state; a journal left by a
+  crash is restored at startup and reported as `interrupted`; unknown action names and
+  out-of-range parameters are rejected before anything runs.
+- Physical test backlog §B entries for the first real run (added by the phase-1 PR).
+
+## References
+
+- Spec: [`docs/superpowers/specs/2026-10-11-rig-test-requests-design.md`](../superpowers/specs/2026-10-11-rig-test-requests-design.md)
+- Relay: `apps/force-app/bug-report-relay/server.py`; backend client `apps/force-app/backend/app/bug_report.py`
+- Recording guard: `_busy()` in `apps/force-app/backend/app/main.py`; loopback guard
+  `apps/force-app/backend/app/origin_guard.py`
+- ADR-0010 (force-app packaging, why the rig PC holds no secrets)
+- Related open issues: #97 (remote control), #20 (screenshot attachments)
