@@ -217,7 +217,8 @@ CLI: `python scripts/file_fingerprints.py --phase linked|all [--workers 1] [--ma
   `sample_data_files`, `session_data_files` or `machining_force_analysis` (read the actual column
   names from `db/migrations`); a row is selected when it has no fingerprint, or its stored
   `size_bytes`/`source_mtime` differ from the current staleness key (Global Constraints), or its status
-  is `missing`/`error` (unless `--skip-failed`). Order: linked-ness irrelevant within a phase; order
+  is `missing`/`error` (unless `--skip-failed`; amended: permanent errors only with
+  `--retry-permanent`, see the Outcome follow-up). Order: linked-ness irrelevant within a phase; order
   by `hashed_at NULLS FIRST, id` so never-tried files go first and a failing file moves to the back.
 - **Paths** (`resolve_path`): `star` → `os.path.join(archive_root, *archive_path.split('/'))`
   (default root: `force_orchestrator.ARCHIVE_UNC` — import the constant or re-read the same
