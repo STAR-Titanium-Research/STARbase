@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app import recovery
+from app import bug_report, recovery
 from app.rig_test import LOCKED, catalog, eligibility, relay, report, routes
 from app.rig_test import runner as runner_mod
 from app.rig_test.poller import StateFile
@@ -114,6 +114,11 @@ def test_the_sim_override_needs_an_explicit_relay_so_a_dev_machine_is_never_a_ri
     assert body["eligible"] is False and "FORCE_APP_BUG_REPORT_RELAY_URL" in body["reason"]
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "  ")
     assert client.get("/rig-tests/eligibility").json()["eligible"] is False
+    # naming the production relay is the same as not naming one (with or without a trailing slash)
+    for prod in (bug_report.DEFAULT_RELAY_URL, bug_report.DEFAULT_RELAY_URL + "/"):
+        monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", prod)
+        body = client.get("/rig-tests/eligibility").json()
+        assert body["eligible"] is False and "production" in body["reason"]
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://127.0.0.1:9")
     assert client.get("/rig-tests/eligibility").json()["eligible"] is True
     # real hardware needs no override and no explicit relay
