@@ -300,3 +300,28 @@ script, not the heavy-data worker; `missing`/`error` statuses); the round-2 plan
    the sample counts the dashboard or `machining_force_analysis` already know (orientation check).
 5. `--phase linked --workers 2 --max-mb-s 60` at a quiet time; record counts (done / error /
    missing) and duration in the Outcome. Leave `--phase all` (≈2.26 TB, days) to the maintainer.
+
+## Outcome (2026-10-11)
+
+Built, reviewed and live. Migration 159 applied 04:51 UTC in 31 ms (backup
+`backups/pre_t0e_20261011T045026Z.dump`: `schema_migrations` + `directus_files`; no Directus
+restart). Before apply: schema suite 592 passed / 4 pre-existing FAIL (roundtrip clean), script
+suite 512 passed, Directus smoke on a restored copy of live all PASS, including a new case that
+deletes a file with a fingerprint through Directus (the row cascades).
+
+`data_sha256` was redefined during Task 2 (spec §7 amended): per-column digests, because the large
+v7.3 captures are HDF5-chunked as 10 columns × 819 samples (gzip) and a column-major stream would
+re-read an 11.8 GB file ~10×. Check value `[1 2 3; 4 5 6]` →
+`31b27bca76dc86c7f8dbefde8e1541e793a4f2bafa2cf515c536467986c318f4` (in the force-file standard §6).
+
+Linked phase on the host (`--workers 2 --max-mb-s 60`, Sunday 05:55-07:21 local): dry run found
+187 of 187 paths; 86 min, 296 GB hashed (each `.mat` is read twice), 57.9 MB/s. Result: **183
+done** (182 with a force-data hash, one `.tiff` with a content hash only), **4 error**, 0 missing:
+three `.mat` files with no `data`/`DATA` variable (two `workspace_…` saves and one `_CROPPED`
+file: not captures), and `122-AA-MM-2025-6-5-F1-…mat`, the known corrupt file (h5py cannot open
+it). No shape has fewer rows than columns; all 187 content hashes are distinct.
+
+Left for the maintainer: `--phase all` (≈2.26 TB, days; use `--skip-failed` on repeat runs so
+the four permanent errors are not re-read each time), and deciding whether the indexer change in
+`scripts/index_archive.py` is deployed with the branch (the deployed indexer already copes: on a
+duplicate it keeps the old row marked missing).

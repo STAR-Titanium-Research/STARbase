@@ -3,7 +3,7 @@
 Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 answered (a)).
 **T0a, T0b and T0c (Directus side) are live (migrations 150-158, the `d1-next-number` operation-code
 route, the `d1-operation-code` box); T0d is built on `feat/record-codes` (scripts only, nothing deployed).**
-**T0e (file fingerprints) built on the same branch: migration 159 + `scripts/file_fingerprints.py`.**
+**T0e (file fingerprints) LIVE 2026-10-11: migration 159 + `scripts/file_fingerprints.py`; the 187 linked files are hashed (183 done, 4 permanent errors).**
 Next: T0f after the maintainer's N/R hand-fix.
 **T0d built (no migration): the FAST importers write `sintering_run_number`, `scripts/finalize_fast_codes.py` is retired.**
 Stream T0 of
