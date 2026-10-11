@@ -11,6 +11,8 @@ here in the same PR (see `CLAUDE.md`). When you run a check:
 1. Tick it (`[x]`), and add the date, who ran it and the result after the item, e.g.
    `— 2026-10-12, DP: OK` or `— 2026-10-12, DP: FAIL, see #131`.
 2. If it fails, open an issue and link it; leave the box unticked until the fix is checked too.
+   An issue is closed once its fix ships in a release, so its item here is what is left: if the
+   check fails, reopen that issue rather than opening a new one.
 3. Move fully ticked sections to **Done** at the bottom once a month or so, so the open list stays
    short.
 
@@ -38,7 +40,7 @@ named in the step.
 - [ ] **P10 — Diagnostics picker as a Lab Member.** Sign in to the Force App as a Lab Member and open
   Diagnostics: the list loads; campaign grouping is shown if the role can read `campaigns`, and
   otherwise *Group by* offers Sample only (no empty list). Note which it was; if Lab Member cannot
-  read campaigns and the lab wants them, add the read grant by migration. Since: this batch (PR TBD).
+  read campaigns and the lab wants them, add the read grant by migration. Since #127.
 
 ### Sample numbers, dashboards, saved filters
 - [ ] **D9 — next sample number.** `GET /d1-next-number/sample` returns a number when signed in,
@@ -94,7 +96,7 @@ named in the step.
   first), the sample, operations and tests in date order, then descendants, matching
   `SELECT * FROM f_sample_timeline('<id>')` and the `f_trace_*` functions run by hand. Every entry
   opens its record. `GET /d1-trace/sample/<id>` is 401 signed out, 403 for a user without app
-  access, 400 for a bad id. Since: this batch (PR TBD).
+  access, 400 for a bad id. Since #127.
 - [ ] **D5 — hidden items for a restricted role.** Sign in as a role whose item filter hides some
   of that sample's relatives, operations or tests. Expect: the Timeline shows only what the role can
   open, with "N items are not visible to you" lines where something was dropped; no code, id or
@@ -104,8 +106,7 @@ named in the step.
   (lots), `fraction` or `mass_used_grams` (genealogy, stock provenance): the JSON has `null` for
   that field and the Timeline shows the record without it. A role with no access to
   `sample_genealogy` still sees the relatives, just without relationship type or fraction. A raw
-  stock lot reached through a hidden ancestor reads "via a sample you cannot see". Since: this batch
-  (PR TBD).
+  stock lot reached through a hidden ancestor reads "via a sample you cannot see". Since #127.
 - [ ] **D5 — diamond genealogy and a huge genealogy.** On a sample whose ancestors merge (two
   parents that share a grandparent) each sample appears once in the Timeline and the counts match
   `SELECT count(DISTINCT sample_id) FROM f_trace_ancestors('<id>')` minus the sample itself. On a
@@ -115,7 +116,7 @@ named in the step.
   migration 136 the functions walk samples, not paths, so the 503 should no longer happen (the 8 s
   deadline stays as a safety net; see the next item). With more than 500 ancestors, descendants
   or events the tab says only the nearest 500 relatives / newest 500 operations and tests are
-  shown. Since: this batch (PR TBD).
+  shown. Since #128.
 - [ ] **Genealogy functions on the deepest real genealogy (migrations 136 and 137, f_trace_*
   visit each sample once, parent index).** Before deploying, as a restricted role, note the
   `hidden` counts and `through_hidden` flags from `GET /d1-trace/sample/<id>` for a sample with a
@@ -128,7 +129,7 @@ named in the step.
   copy, never on the live database: there, create the old bodies from the `-- migrate:down`
   section of `20261006000136` under other names (`old_trace_ancestors` / `old_trace_descendants`),
   and, if the genealogy is small enough for path enumeration, check that the distinct
-  `sample_id`s and `min(depth)` per sample match. Since: this batch (PR TBD).
+  `sample_id`s and `min(depth)` per sample match. Since #128.
 - [ ] **D11 — campaign overview counts.** Open a machining trial and a testing campaign that have
   real data. Expect: sample, operation and test-session counts equal a hand count in the
   collection lists; "Force analysed n / m" equals the machining operations whose
@@ -139,7 +140,7 @@ named in the step.
   "Tests complete n / m" counts test sessions whose status is `processed` or `analysed` (compare
   with a status filter on the Test Sessions list), and the status chips use the real vocabulary
   (`registered`, `pending processing`, `processing`, `processed`, `analysing`, `analysed`,
-  `failed`). Since: this batch (PR TBD).
+  `failed`). Since #127.
 - [ ] **D11 — pickers.** In a campaign, add a sample by code, then a test session that is in no
   campaign: each appears in the overview, the counts rise, and the test session shows the campaign
   in its own form. Remove both again. A sample that only appears through an operation is marked
@@ -148,8 +149,7 @@ named in the step.
   both, the second gives "already in another campaign" (not an error from Directus) and the
   session stays in the first campaign; add the same sample in both, the second just reloads with no
   error. The batch `PATCH /items/test_sessions` answer lists the changed row for a role that may
-  read test sessions, so a normal add never shows the "already in another campaign" note. Since:
-  this batch (PR TBD).
+  read test sessions, so a normal add never shows the "already in another campaign" note. Since #127.
 
 ### Explorer pages (Home module)
 Restart Directus after `npm ci` and `npm run build:extensions` at the repo root so
@@ -671,6 +671,7 @@ tool; a test cut on scrap stock is fine.
   hand). The unplugged amp is still to do.
   — 2026-10-08, DP at the rig: FAIL on the unplugged amp, see #215. With the amp's network cable pulled the
   chip gave no warning; it only showed after opening the Connectivity Doctor and running it.
+  Fixed in 0.1.35 (#213, #215): re-check under "Re-checks for the 2026-10-08 fixes" below.
 - [ ] **R5 — live clipping.** Drive one channel to its rail (lower the amp range, or a known
   overload) at a Lab Amp full scale of 10 V, then 5 V. Expect the red banner naming that channel,
   the tile and badge, and after the cut `channels_ranging.clipped` true for the same channel only.
@@ -683,6 +684,7 @@ tool; a test cut on scrap stock is fine.
   sits flat at ±5.117 V (the NI 9234 limit) for 2.4 % of the cut and `channels_ranging.clipped` is
   false for every channel. In `20261008-170349-b4c4d3` Fz2, Fz3 and Fz4 (200 N ranges) also stop
   at 5.12 V, 102 N each, with no warning. The 5 V run is still to do.
+  Fixed in 0.1.35 (#200): re-check under "Re-checks for the 2026-10-08 fixes" below.
 - [ ] **R6 — alarms on hardware.** Early warning at 80 % of the force limit (amber, no tone). With
   "Stop the recording when the force alarm trips" on, a trip stops the cut, the alarm stays on top
   of the save dialog and A acknowledges it. With a tone volume set, Windows volume is not changed.
@@ -693,6 +695,7 @@ tool; a test cut on scrap stock is fine.
   the live plot, live peaks and the cut-detect threshold read 10 to 20 times low, which is the
   factor of ten DP saw between the live plot and the summary plot; only the saved files are in
   newtons. Stop-on-alarm, A and the tone could not be checked.
+  Fixed in 0.1.35 (#212): re-check under "Re-checks for the 2026-10-08 fixes" below.
 - [ ] **R10 — shortcuts in the packaged app.** Ctrl+Enter starts (through the pre-flight and alarm
   test), Ctrl+. stops, A acknowledges, Ctrl+N starts a new cut, Enter saves. Press Alt once, then
   A during an alarm: A must still acknowledge (Alt opens menu mode on Windows). Since #125. —
@@ -713,6 +716,7 @@ tool; a test cut on scrap stock is fine.
   relaunch. Sample, Machine, Operator, op type, Replay and the sequence need a real sign-in.
   — 2026-10-08, DP at the rig (signed in): FAIL, see #216. The metadata set before
   quitting was not there after relaunch. Replay and the sequence were not run.
+  Fixed in 0.1.35 (#216): re-check under "Re-checks for the 2026-10-08 fixes" below.
 - [x] **Leaving the page mid-cut.** Start a cut, go to Plot, come back after it ends: the save dialog
   offers to save it. Since #123 (doc fix). — 2026-10-08, Claude (isolated copy of the installed
   0.1.34, real NI-DAQ cut of 71.5 s): OK. The cut was ended through the recorder while Plot was
@@ -724,16 +728,14 @@ tool; a test cut on scrap stock is fine.
   or more captures (a network drive if that is what the lab uses; copy old captures in if needed),
   open Settings > Local Captures. Expect the first 200 rows within a few seconds, "Showing 200 of
   N" with the true N, and Load more adding the next page. Press Refresh again: a warm scan should
-  be clearly faster than the first. Note both times and the drive type here. Since: this batch (PR
-  TBD). — 2026-10-08, Claude (isolated copy of the installed 0.1.34; 1,208 captures in a scratch
+  be clearly faster than the first. Note both times and the drive type here. Since #127. — 2026-10-08, Claude (isolated copy of the installed 0.1.34; 1,208 captures in a scratch
   folder on the rig's local C: drive, 1,200 of them small synthetic copies): OK. First page 2.5 s
   cold and 0.05 s warm from the recorder, "Showing 200 of 1208", Load more to 400 in 1.1 s, Refresh
   0.8 s. Not run on a network drive or with full-size captures.
 - [ ] **R9 — search, sort and filters at scale.** Search a sample name, a date (`2026-10-02`) and an
   id fragment: results match a hand check in File Explorer. Sort by Largest first: the top rows are
   the biggest folders. The Not uploaded and Uploaded chips keep loading pages and the footer's
-  "checked" count makes sense. Needs a real Directus so the uploaded state is real. Since: this
-  batch (PR TBD). — 2026-10-08, Claude (same 1,208-capture set, checked against the folder):
+  "checked" count makes sense. Needs a real Directus so the uploaded state is real. Since #127. — 2026-10-08, Claude (same 1,208-capture set, checked against the folder):
   partly run. A sample name gave 182 of 182, the date `2026-08-02` 13 of 13, an id fragment 1 of
   1, and Largest first put the five biggest folders on top in the right order. The Not uploaded
   and Uploaded chips need a real sign-in and were not run.
@@ -741,7 +743,7 @@ tool; a test cut on scrap stock is fine.
   selected: the confirm's space total matches the drive's free space gained (Explorer or the
   "Free on drive" figure after Refresh), the folders are gone, and the remote backup copy is marked
   deleted rather than removed. Include one not-uploaded capture: the only-copy warning appears.
-  Cancel mid-run: the rest are untouched. Since: this batch (PR TBD). — 2026-10-08, Claude
+  Cancel mid-run: the rest are untouched. Since #127. — 2026-10-08, Claude
   (isolated copy of the installed 0.1.34, five not-uploaded test captures): partly run. The
   confirm said "Frees about 366.7 MB", equal to the five folders on disk, with the only-copy
   warning for all five; the five folders went and the other 1,203 stayed. It took 39 s for five
@@ -756,7 +758,7 @@ tool; a test cut on scrap stock is fine.
   is created); it must show "partial upload", keep its Upload button, be absent from the preview,
   and get the only-copy warning in a bulk delete. Not-uploaded, incomplete and
   queued ones are absent at any N. Run it and confirm those are still on disk. Repeat with Directus
-  stopped: the preview must refuse. Since: this batch (PR TBD).
+  stopped: the preview must refuse. Since #127.
 - [ ] **R9 — upload-all progress and cancel against the real Directus.** With three or more
   not-uploaded captures, Upload N unsynced: the bar shows "Uploading n of m" and the capture name,
   Cancel stops after the current one and says how many were not attempted, and each uploaded
@@ -764,14 +766,14 @@ tool; a test cut on scrap stock is fine.
   it runs, Delete selected, Free up space and the row Upload buttons are disabled; click a row's
   Upload just before Upload N unsynced: that capture is still uploaded once. Open a row's Delete
   confirm, leave it open until Upload all reaches that row, then confirm: nothing is deleted and
-  the row says it was busy. Since: this batch (PR TBD).
+  the row says it was busy. Since #127.
 - [ ] **R9 — a partial upload is completed, not skipped.** In Directus, clear `directus_files_id`
   on the `machining_force_analysis` row of a capture that has a `capture.mat` (it then shows
   "partial upload"). Press its Upload: expect no second operation row, no second analysis row, the
   `.mat` uploaded once and its link filled in on the same row (the live cache file link and file
   are untouched), and only then the row shows "Uploaded". Repeat clearing `live_cache_file`
   instead. Then Upload on a complete one is not offered. Also stop Directus right after an upload
-  returns: the row must not show as uploaded without the check. Since: this batch (PR TBD).
+  returns: the row must not show as uploaded without the check. Since #127.
 
 ### Desktop shell
 - [ ] **R11 — Restart recorder.** Kill the backend (Task Manager): the Doctor's "Restart recorder"
@@ -802,11 +804,11 @@ tool; a test cut on scrap stock is fine.
   Rename and Delete use the in-app dialog (Escape closes, focus returns to the button). Export a
   recipe, Import it back: it opens in the Save dialog; importing a hand-broken file is refused with
   a reason. The "modified since loaded" badge appears after editing an applied recipe.
-  Since: this batch (PR TBD).
+  Since #127.
 - [ ] **P10 — searchable picker on real data.** With the full campaign list, search, the Needs
   build / Built / Error chips and Group by (sample, campaign) work; campaign names appear for
   cuts that belong to one; Open in Plot lands on that cut and Directus opens the analysis record.
-  Since: this batch (PR TBD).
+  Since #127.
 
 ### Plot on real cuts
 - [ ] **Octree pick and ring alignment on a real archived cut.** On a cut that has a live cache and
@@ -819,12 +821,12 @@ tool; a test cut on scrap stock is fine.
   `live_cache_points` samples) and with an official crop that starts between two cache samples, and
   one that starts before the cache's window: rings and picks must still sit on the same spot as the
   octree's points (the anchor is `revs_cs`, not a cache sample). An octree built before the manifest
-  still works as before (and may drift after the edit). Since this PR.
+  still works as before (and may drift after the edit). Since #129.
 - [ ] **Touch long-press on a touchscreen.** On a touchscreen laptop or tablet: hold one finger on
   the map (Lite 2D, Lite 3D, Full) and on a Force chart for ~0.5 s. Expect the menu to open once, a
   little down-right of the finger (not under it), with the pick under the finger. A drag or
   two-finger pinch must still pan/zoom and never open the menu. Android Chrome: the menu opens once
-  (no second browser menu); iOS Safari: no text callout or magnifier. Since this PR.
+  (no second browser menu); iOS Safari: no text callout or magnifier. Since #129.
 - [ ] **X1 — Lite 3D height.** On a real cut, Lite 3D with Z = Fz shows height; picking a point and
   the linked marker land on the raised point. Since #123.
 - [ ] **P2 — PNG/SVG export in the app.** Both downloads open, axes and units are right, a zoomed
@@ -843,10 +845,11 @@ tool; a test cut on scrap stock is fine.
   (`MT-O`) uses the Diameter box unchanged for vc and that a facing cut (`MT-F`, also one with a
   saved crop) uses D at the window midpoint, matching the radial axis of the plots. Check "—"
   with a reason on an operation with no feed or depth, and on a milling op. Since #127 (new default and per-subtype
-  memory: this batch, PR TBD).
+  memory: also #128).
 
 ### Re-checks for the 2026-10-08 fixes (#199, #200, #212 to #216)
-Run these on a packaged build that contains PR #217 (branch `fix/rig-findings-2026-10-08`).
+Shipped in 0.1.35 (#217), so any build from 0.1.35 on will do. The issues were closed on
+2026-10-11; reopen the one whose check fails.
 The recorder side of #199, #200 and #214 was already checked on the rig on 2026-10-08 through the
 branch's own backend; the items below are what still needs the app window and hands.
 
@@ -930,7 +933,7 @@ when picked up):
   field (#199). With the default of 25,000 Hz every first Start on NI 9234 modules is refused once.
 - Auto-range should take the DAQ's input limit as its own parameter rather than through a scaled
   headroom (#200).
-- A release note for the next version: live values are newtons, so alarm limits and cut-detect
+- Done in 0.1.35's release notes: live values are newtons, so alarm limits and cut-detect
   thresholds set against the old live plot must be looked at (first item of the re-checks above).
 
 ### Earlier issues that need the rig (from the 2026-10-02 batch)
@@ -942,14 +945,16 @@ when picked up):
   (NI 9234 1,651.6 to 51,200 Hz, NI 9201 500 kHz, chassis 26.7 MHz); rates outside that are refused
   with the structured 400 and no capture folder; raw codes are -200332 from 51,200 to 51,367 Hz,
   -200077 above, and -200220 for a channel not on the chassis, which ends as `error_kind: "start"`
-  with the folder removed. The dialog and field focus in the app were not looked at.
+  with the folder removed. The dialog and field focus in the app were not looked at. Coerced
+  rates fixed in 0.1.35: re-check with the #199 item above.
 - [ ] **#86** NI-DAQ hot-plug, and whether NI MAX simulated devices count as "present". —
   2026-10-08, Claude: only the plugged-in case was run. `/nidaq/devices` gives `simulated: false`,
   `hardware_present: true`, `nimax_simulated: false` for the real cDAQ-9178. Unplugging and an NI MAX
   simulated device are still to do.
   — 2026-10-08, DP at the rig: FAIL on hot-plug, see #215. With the chassis unplugged the NI-DAQ source did
   not grey out; it only changed after running the Connectivity Doctor. An NI MAX simulated device
-  is still to do.
+  is still to do. Hot-plug fixed in 0.1.35 (#215): re-check it with the #215 item above. #86
+  closed 2026-10-11.
 - [x] **#109** Real Lab Amp latency. — 2026-10-08, Claude (through the recorder, 15 calls each):
   `/labamp/status` 0.57 s median (0.52 to 0.69; it asks the amp twice), `/labamp/sensors` 0.33 s
   (0.31 to 0.44), a MEASURE or RESET switch about 1.0 s; a plain GET to the amp takes 22 ms. The
@@ -961,6 +966,7 @@ when picked up):
   drive and a new folder under `C:\Program Files` (400 with the Windows error, 0.1 s), and any
   change while a recording runs (409). #96: opening a folder outside the recording folder is
   refused with a reason. Not run: a real reveal in Explorer, the folder picker, a network drive.
+  The non-writable folder is fixed in 0.1.35: re-check with the #214 item above.
 - [ ] **#81** DAQ buffer overruns while a 12 GB finalize runs beside a live acquisition (held back:
   needs the chassis).
 - [ ] **#90** Packaged NSIS build and the Tailscale update feed (held back). — 2026-10-08, Claude:
@@ -968,6 +974,7 @@ when picked up):
   the downgrade itself is still to do.
 
 ### Rig-day batch (2026-10-08, 0.1.35)
+The issues were closed on 2026-10-11; reopen the one whose check fails.
 - [ ] **#190 long cut links and keeps its crop.** Record a cut over ~6 min at 51.2 kHz (no .mat).
   Move both crop handles in the final summary and Save: the analysis row links with no .mat (no
   400), the status leaves "partial upload". Repeat with the network off: the dialog says the .mat
@@ -995,6 +1002,11 @@ when picked up):
   pop-out and main window open centred and fully on the remaining screen. Save a window at
   2560×1440, reopen on 1920×1080: it fits, title bar reachable. A stale `/live/*` entry in
   `%APPDATA%\…\window-state.json` no longer hides pop-outs. Since #198 (0.1.35).
+- [ ] **#67 RPM meter doesn't glitch.** During a real cut with the spindle speeding up and down,
+  the RPM gauge's scale steps up at once and steps down only after a lower speed has held for
+  about 3 s, with no flicker between scales; the sparkline doesn't jump with it. Compare with the
+  screenshot in #67. Since #117 (gauge scale) and #198 (sparkline, 0.1.35). Issue closed
+  2026-10-11; reopen it if the glitch is still there.
 - [ ] **#188 RPM sparkline.** On a low-RPM CSS cut with a high target, the RPM panel's curve uses
   most of its box instead of a flat line at the bottom. Since #198 (0.1.35).
 - [ ] **#135 backup URL.** On a rig with no saved backup URL, Settings → Backup shows the suggested
@@ -1010,7 +1022,7 @@ when picked up):
 - [ ] **#192 Start next cut.** Record a cut, save it, choose Open in Plot and come back: Start reads
   "Start next cut"; the next cut has sequence +1, an empty chips ref, new-edge off and a new Cut ID.
   Press "Clear for next cut" first instead: Start reads "Start" and the sequence moves on only once.
-  Since the 0.1.36 batch PR.
+  Since #230 (0.1.36).
 - [ ] **#194 long cuts get a v7.3 .mat.** Record past the v5 limit (about 6 min at 51.2 kHz with 10
   columns) on the rig PC: finalize writes `capture.mat` as MATLAB v7.3 in acceptable time and disk;
   the save dialog says so. In MATLAB, `load('capture.mat')` and `matfile` give the same DATA,
@@ -1020,14 +1032,14 @@ when picked up):
   mid-upload), the cut still reaches the database without it and the message names the .mat; Retry
   upload sends only the .mat and links it. The frozen backend loads h5py, and still starts (long cuts
   then get no .mat and a reason) with a conflicting `hdf5.dll` on PATH. With antivirus scanning the
-  captures folder, a long cut's .mat still lands (the rename is retried). Since the 0.1.36 batch PR.
+  captures folder, a long cut's .mat still lands (the rename is retried). Since #230 (0.1.36).
 - [ ] **#184 Start FRM now.** On a real cut where the detector stays silent ("Detect cut start" on),
   press Start FRM now: the FRM spiral starts from that moment, the Cut cell shows a time and
   summary.json says `cut_start_source: "manual"`. The button disappears when the detector fires
-  first; a double press shows the refusal text. Since the 0.1.36 batch PR.
+  first; a double press shows the refusal text. Since #230 (0.1.36).
 - [ ] **#195 Re-assign channels.** Unplug or swap a 9234 module: the Channels pre-flight item fails
   naming the missing ports, Re-assign maps to the real `cDAQ1ModN` ports, and is refused during a
-  recording. A fresh config with no force channels bound warns the same way. Since the 0.1.36 batch PR.
+  recording. A fresh config with no force channels bound warns the same way. Since #230 (0.1.36).
 - [ ] **#197 update notifications.** Packaged app: a toast when an update has downloaded and the
   window is minimised or behind another window, and clicking it brings the app forward. After
   install, `schtasks /query /tn ForceAppUpdateCheck` shows a logon and a daily trigger with no UAC
@@ -1035,7 +1047,7 @@ when picked up):
   no window or backend; clicking it opens the app. With the app running, the scheduled run exits
   without touching the window. Turning the toggle off in Settings > About removes the task;
   uninstalling removes it too. On a PC where policy blocks creating the task, the toggle says
-  "Couldn't set up the scheduled check" and doesn't stay ticked. Since the 0.1.36 batch PR.
+  "Couldn't set up the scheduled check" and doesn't stay ticked. Since #230 (0.1.36).
 - [ ] **#197 update prompt (packaged app).** With an update downloaded while the sign-in page is
   showing, typing the password shows no dialog and keeps focus. After sign-in the in-app card
   appears in the corner; Enter in a text field does not install; "Not now" hides it until the next
@@ -1044,28 +1056,27 @@ when picked up):
   finishes, the taskbar button flashes until the window is focused. Help → Check for updates while
   offline after a download keeps the card and "Restart and update" working. A page pop-out window
   shows the same card and its "Installing…" state. On /record the card sits bottom-centre and
-  covers neither Start nor Stop with the panel docked on either side. Since the 0.1.36 batch PR.
+  covers neither Start nor Stop with the panel docked on either side. Since #230 (0.1.36).
 - [ ] **#108 pop-out settings survive a relaunch (packaged app).** Change the mode, channels or
   colour map inside a Live Force / FRM / Polar pop-out, quit, relaunch: it reopens as changed.
-  Since the 0.1.36 batch PR.
+  Since #230 (0.1.36).
 - [ ] **#193 log colours.** Settings → Logs with a real backend log: the type colours and the Type
-  filter read well in light and dark. Since the 0.1.36 batch PR.
+  filter read well in light and dark. Since #230 (0.1.36).
 - [ ] **#191 loading screens.** On the Plot page against d1-server, Figure, Lite, Full and a
   filtered single pane show the same centred loading veil (Full keeps a corner pill while it
-  streams). Since the 0.1.36 batch PR.
+  streams). Since #230 (0.1.36).
 - [ ] **Electron 44 in the packaged app.** 0.1.36 is the first installer built on Electron 44
   (`electron-builder.yml` was still pinned to 43 after the dependency bump). Install it on the rig
-  PC: the app starts, signs in, records a cut, opens pop-outs and updates itself. Since the 0.1.36
-  batch PR.
+  PC: the app starts, signs in, records a cut, opens pop-outs and updates itself. Since #230 (0.1.36).
 - [ ] **#30 settings scroll.** On the rig PC, switching Settings tabs no longer animates or jumps
-  (fixed in 0.1.33; reopened for confirmation).
+  (fixed in 0.1.33; issue closed 2026-10-11, reopen it if it still happens).
 
 ### Release pipeline (CI/CD overhaul)
 - [ ] **NI-DAQmx detection on a PC without the driver.** Install the packaged app on a Windows PC
   with no NI-DAQmx driver (not the rig). Connectivity Doctor / self-check shows "NI-DAQmx runtime
   not available", not "driver detected"; starting an NI-DAQ recording and *Start tacho* answer
   "not available" instead of an internal error. On the rig, the same checks still report the
-  driver and record normally. Since: CI/CD overhaul (PR TBD). — 2026-10-08, Claude: rig half OK on
+  driver and record normally. Since #138 (CI/CD overhaul). — 2026-10-08, Claude: rig half OK on
   the installed 0.1.34 (doctor: "NI-DAQmx driver detected", "1 device(s) detected: cDAQ1", healthy;
   two NI-DAQ recordings ran to `done`; the tacho generator started on `cDAQ1/_ctr0`). With no
   counter given it answers 500, because the default is the name `STAR_DAQ`. The PC without the
@@ -1091,7 +1102,7 @@ when picked up):
   (no stale octree left as `done`). Stop MATLAB's JSON from being written (or break the file): the
   build ends `error` with a "build manifest missing" message and the previous octree stays served. Also run `scripts/matlab/test_octree_out.m` by hand in MATLAB (it asserts
   the crop window and the JSON; the MATLAB changes have never been executed). The Full view then
-  shows the saved window, matching the charts. Since this PR.
+  shows the saved window, matching the charts. Since #129.
 
 - [ ] **Diag clustering is CPU-independent.** Rebuild a diagnostics analysis on `d1-server` for a cut
   built before 2026-10-06: cluster ids match the old result. (`scripts/diag/spatial.py` pins
@@ -1102,13 +1113,13 @@ when picked up):
 - [ ] **P10 — batch diagnostics build on d1-server.** In Diagnostics, tick 3 or more analysed cuts
   (at least one already built with the default recipe), Apply recipe to selected with a library
   recipe. Expect: the summary says queued / skipped; the orchestrator daemon processes every
-  queued cut in turn until each shows built; no cut is queued twice. Since: this batch (PR TBD).
+  queued cut in turn until each shows built; no cut is queued twice. Since #127.
 - [ ] **P10 — skipped cuts really match.** Apply the same recipe again to the same selection:
   everything is skipped as "already built with this recipe" and `diag_recipe_hash` /
-  `updated_at` on those rows do not change. Then tick *Rebuild*: they requeue. Since: this batch (PR TBD).
+  `updated_at` on those rows do not change. Then tick *Rebuild*: they requeue. Since #127.
 - [ ] **P10 — build permissions by role.** As a Lab Member, Apply recipe to selected queues builds
   (Lab Member can update `machining_force_analysis`, migration 111). As a role with read-only access
-  to analyses, it stops on the first item with "your role can't request builds" and nothing is queued. Since: this batch (PR TBD).
+  to analyses, it stops on the first item with "your role can't request builds" and nothing is queued. Since #127.
 - [ ] **#80** MATLAB run on the d1-server orchestrator and Directus asset download (held back).
 - [ ] **#10** Figure-mode PNGs re-baked by MATLAB for cuts with a saved crop (held back).
 - [ ] **#97** Tailscale serve, phone access, live-DAQ load (held back; security model is an owner
@@ -1116,7 +1127,7 @@ when picked up):
 - [x] **First automated force-app release reaches the rigs.** After the CI/CD overhaul merges, the
   `force-app-release` run on `main` publishes Force App 0.1.34 (tag moved from the failed run's
   commit). Within ~10 minutes `auto-publish.log` on d1-server shows it published, and a rig on 0.1.31
-  is offered the update and installs it. Since: CI/CD overhaul (PR TBD). — 2026-10-08, Claude: OK,
+  is offered the update and installs it. Since #138 (CI/CD overhaul). — 2026-10-08, Claude: OK,
   seen from the rig. GitHub release published 00:46:27 UTC, on the feed at 00:49:44 UTC; this rig
   downloaded the installer at 12:57 local (SHA-512 equals `latest.yml`) and runs 0.1.34.
   `auto-publish.log` and the version the rig had before were not looked at.
@@ -1129,9 +1140,9 @@ when picked up):
   every report failed with "GitHub rejected the report (HTTP 307) Moved Permanently" (the relay's
   own message; the Directus form in #223 isn't in this repo but reaches the same relay). Rebuild and restart `bug-report-relay` on d1-server, then
   file a test report from the app's Report a Bug screen: it answers with an issue link and the
-  issue appears on the repo, and the "already reported" list loads. Since the 2026-10-11 triage PR.
+  issue appears on the repo, and the "already reported" list loads. Since #232.
 - [ ] **Branch protection requires "CI passed".** In GitHub *Settings > Branches*, `main` requires
-  the **CI passed** check. A PR with a failing job cannot merge. Since: CI/CD overhaul (PR TBD).
+  the **CI passed** check. A PR with a failing job cannot merge. Since #138 (CI/CD overhaul).
 
 ## Done
 

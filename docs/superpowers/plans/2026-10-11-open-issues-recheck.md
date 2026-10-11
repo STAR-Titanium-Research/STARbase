@@ -5,10 +5,11 @@ Scope widened past `in-app-report` at the owner's request ("existing issues in t
 also covers the reports filed by hand (#199 #200 #212–#216 #222 #223 #67). Delete this plan once
 #223 is deployed and the owner has decided on §0.
 
-## 0. Fixed and released, waiting to be closed
+## 0. Fixed and released: closed on 2026-10-11
 
-The owner decides whether to close these now (naming the version) or after the rig re-check in
-`docs/runbooks/physical-test-backlog.md`. None of those re-checks is ticked yet.
+Closed at the owner's word, each with a note naming the version and pointing at its re-check in
+`docs/runbooks/physical-test-backlog.md` (reopen the issue if the check fails). #30 (fixed in
+0.1.33) and #86 (greyed out in #117, hot-plug in 0.1.35 via #215) were closed the same way.
 
 | # | Fixed in | Commit / PR | Backlog re-check |
 |---|---|---|---|
@@ -20,19 +21,21 @@ The owner decides whether to close these now (naming the version) or after the r
 | 214 | 0.1.35 | `f6556a1` | same |
 | 215 | 0.1.35 | `c6bda01` | same |
 | 216 | 0.1.35 | `c75c8df`, `4d507b4` | same |
-| 67 (rest) | 0.1.35 | #198 (#188: the RPM sparkline gets its own range) | the issue's screenshot was never matched; ask the reporter |
+| 67 | #117, 0.1.35 | gauge scale steps (#117), sparkline range (#188 in #198) | "#67 RPM meter doesn't glitch" in the rig-day section |
 
 ## 1. Needs real equipment or the server
 
 | # | What only the real setup can confirm |
 |---|---|
 | 223 | Relay redeployed on d1-server; a report from the app lands (backlog §C) |
-| 86 | Chassis hot-plug re-read every 5 s (#215) on the rig |
-| 30 | Settings tab scroll on the rig PC |
 | 81 | Held back: saving while acquiring needs a multi-session model and DAQ-overrun tests |
 
 ## 2. Held back for an owner decision (unchanged unless noted)
 
+- **#190 (C)** automatic crop detection (first/last |Fz| > 0.2·peak, no dwell or hysteresis):
+  min dwell, RMS envelope, tacho gating or resultant force. Data fidelity, so the owner's call;
+  the manual crop shipped in 0.1.35 is the workaround. #190 itself is closed; file this as its
+  own issue if it's wanted.
 - **#196** light-mode login: screenshots look consistent; asked the reporter for theirs on 10-09,
   no answer yet.
 - **#100** performance umbrella: two slices shipped (#117, then 0.1.36); asked which screen still
