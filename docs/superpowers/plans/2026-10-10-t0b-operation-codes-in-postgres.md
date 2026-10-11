@@ -813,3 +813,22 @@ $$;
   speed → the code follows; type a code → kept; ↻ → back to automatic. Open an existing FAST
   operation: the box says Automatic and shows its code. Open a frozen experiment-sheet operation:
   it shows its saved code with the "fixed" hint and no ↻.
+
+## Outcome (2026-10-11)
+
+Applied to live 2026-10-10 23:57 together with T0c (Directus side): backup
+`backups/pre_t0b_20261010T225712Z.dump`; Directus down ~1¾ min; 155-158 in 0.4 s; back-fill
+ledger 18 rows; all 10,048 FAST codes and 12 hand-made machining codes equal the rule (they follow
+their fields); the rest stay as typed. Dry-run idempotence check: bumping every operation's date
+changed no sequence and no existing code (only the 9 codeless operations got a code).
+Live checks through Directus: a demo machining op on `DEMO-T0A-001` was created as
+`DEMO-T0A-001-F1-30MPM_0.1feed_1DoC` (subtype `MT-F` → `F`), followed a speed change exactly as
+previewed, kept a typed code through a later edit, rebuilt when cleared; clearing a frozen
+experiment-sheet code kept it. The form box needed five post-deploy rounds; the last two moved the
+Automatic/Typed decision to the server (from the saved row, the trigger's own test) and stopped a
+box without its record key from asking as a new item. Lesson: after rebuilding an app extension,
+restart Directus (it caches the bundle) — three rounds were tested against a stale bundle.
+
+Open: the standalone Force App picks up T0c at its next release (a PR to `main`, the maintainer's
+call). Lab Member smoke cases SKIP until the separate `_some` permissions bug is fixed (task card).
+Deferred minors are in the plan ledger summary of the review history.
