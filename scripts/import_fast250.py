@@ -308,7 +308,9 @@ def write_operations(
 
     # Enqueue trace imports for runs that have a local trace file.
     # An adopted operation keeps its own id, so read the ids back instead of using the derived ones.
-    ids = fast_ops.operation_ids_for(cur, [o["source_run_uid"] for o in ops if o["trace_rel"]])
+    ids = fast_ops.operation_ids_for(
+        cur, [o["source_run_uid"] for o in ops if o["trace_rel"]]
+    )
     enq = [(ids[o["source_run_uid"]], o["trace_rel"]) for o in ops if o["trace_rel"]]
     psycopg2.extras.execute_values(
         cur,
@@ -449,7 +451,9 @@ def main() -> None:
         code_to_mat=code_to_mat,
         resolve_owner=resolve_owner,
     )
-    print(f"upserted {n_ops} FAST 250 operations ({len(adopted)} hand-logged filled in)")
+    print(
+        f"upserted {n_ops} FAST 250 operations ({len(adopted)} hand-logged filled in)"
+    )
     for op_id, run in adopted:
         print(f"  filled in hand-logged operation {op_id} as run {run}")
     print(f"enqueued {queued} trace imports (status=pending)")

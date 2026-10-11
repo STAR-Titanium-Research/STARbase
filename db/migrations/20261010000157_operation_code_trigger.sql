@@ -311,4 +311,3 @@ COMMENT ON COLUMN manufacturing_operations.pass_code IS
     'Human-readable operation code, e.g. 9-AA-MR-2023-03-23-F9 or 22-04-21-MF1-950C_11kN_20dia. '
     'The placeholders {seq} (operation_sequence) and {mf} (next sintering MF number) are replaced '
     'by the database on insert; any other value is stored as given. Not the PK.';
-
