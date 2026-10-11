@@ -4,8 +4,9 @@ Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 
 **T0a applied to live (migrations 150-152). T0b built on `feat/record-codes` (migrations 155-158,
 the `d1-next-number` operation-code route, the new `d1-operation-code` box), not yet live.**
 Migration numbers below T0b are "next free" (see the table).
+Next: T0e (file fingerprints); T0f after the maintainer's N/R hand-fix.
 **T0d built (no migration): the FAST importers write `sintering_run_number`, `scripts/finalize_fast_codes.py` is retired.**
-Next: T0b final review and apply, then T0c-T0f. Stream T0 of
+Stream T0 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md);
 it goes before N1 (navigation), whose finder and Tests index use what this adds. Every decision
 below was made by the maintainer in a grilling round on 2026-10-09/10 (questions Q16-Q47; the
@@ -77,7 +78,7 @@ numbers are kept so the record can be traced).
 | Q35 | Sintering code = `DD-MM-YY-MF{machine}-{run}[-{T}C_{F}kN_{D}dia]`, machine 25 or 250. The running-MF-counter rule is dropped. |
 | Q48 | The run is the number the FAST machine shows: typed by the person on a hand-logged operation, read from the file by the importer. The importer fills in an existing operation with the same machine and run instead of creating a duplicate. |
 | Q36 | The rules live only in the database. The form box and the Force dashboard show a live preview by asking it; the dashboard stops writing codes. A Force App release is part of T0. |
-| Q37 | All 10,048 FAST codes are rebuilt to the Q35 rule once; afterwards they follow the rules like any other. New FAST imports get their code from the database (retires the `finalize_fast_codes.py` step). |
+| Q37 | All 10,048 FAST codes are rebuilt to the Q35 rule once; afterwards they follow the rules like any other. *(Rebuild superseded 2026-10-11: measured no-op, see the T0d outcome note.)* New FAST imports get their code from the database (retires the `finalize_fast_codes.py` step). |
 | Q38 | The 151 machining operations imported from experiment sheets stay **frozen**: their codes match the archive file names. Their 6 `N/R` codes go on the hand-fix list. |
 | Q39 | When a sample's code changes, the automatic codes of its operations and tests follow (same numbers). Typed and frozen codes are left alone. |
 | Q41 | Samples, operations and tests get a short ID. |
@@ -280,9 +281,11 @@ concurrently) before relying on it.
 
 ### 6. FAST rebuild (Q37) and the importer
 
+*(Steps 1-3 and the expected size below are superseded 2026-10-11: measured no-op, see the T0d outcome note at the end of this section.)*
+
 One migration, after §3 is in place:
 
-1. Back-fill `sintering_run_number` from `source_run_uid` (`fast25|4624` → 4624); stop with an
+1. *(superseded 2026-10-11: measured no-op, see the T0d outcome note)* Back-fill `sintering_run_number` from `source_run_uid` (`fast25|4624` → 4624); stop with an
    error listing any FAST row it cannot parse.
 2. Check that (machine, run) is unique across sintering rows; stop with the clashes listed if not.
 3. Rebuild every FAST `pass_code` with `operation_code_for`. One UPDATE statement; the statement-
@@ -291,7 +294,7 @@ One migration, after §3 is in place:
    restores them exactly; it is also added to the `DROP TABLE` list of the migration-141 test, the
    same CI trap the form fix hit.
 
-**Expected size (measured 2026-10-09):** with UTC dates, every FAST code already matches the rule:
+**Expected size (measured 2026-10-09):** *(superseded 2026-10-11: measured no-op, see the T0d outcome note)* with UTC dates, every FAST code already matches the rule:
 0 date prefixes differ, 0 run numbers differ from `source_run_uid`, 0 duplicate runs, 0 short
 codes whose row has parameters, and the 293 "other" shapes are codes with only some parameters
 set, which the rule also writes. So the rebuild should change almost nothing; its real effect is
