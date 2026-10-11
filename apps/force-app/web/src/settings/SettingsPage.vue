@@ -10,6 +10,7 @@ import BackupSettings from './BackupSettings.vue';
 import LogsSettings from './LogsSettings.vue';
 import CapturesSettings from './CapturesSettings.vue';
 import ReportBugSettings from './ReportBugSettings.vue';
+import RigTestsSettings from './RigTestsSettings.vue';
 import AboutSettings from './AboutSettings.vue';
 
 const tabs = [
@@ -21,9 +22,10 @@ const tabs = [
 	{ id: 'captures', label: 'Local Captures', icon: 'folder' },
 	{ id: 'logs', label: 'Logs', icon: 'receipt_long' },
 	{ id: 'report-bug', label: 'Report a Bug', icon: 'bug_report' },
+	{ id: 'rig-tests', label: 'Rig tests', icon: 'science' },
 	{ id: 'about', label: 'About', icon: 'info' },
 ];
-const VALID_TABS = ['general', 'recording', 'alarms', 'connectivity', 'backup', 'captures', 'logs', 'report-bug', 'about'] as const;
+const VALID_TABS = ['general', 'recording', 'alarms', 'connectivity', 'backup', 'captures', 'logs', 'report-bug', 'rig-tests', 'about'] as const;
 type SettingsTab = (typeof VALID_TABS)[number];
 
 const route = useRoute();
@@ -76,6 +78,7 @@ watch(active, () => { if (scrollEl.value) scrollEl.value.scrollTop = 0; });
 					<CapturesSettings v-if="active === 'captures'" />
 					<LogsSettings v-if="active === 'logs'" />
 					<ReportBugSettings v-if="active === 'report-bug'" />
+					<RigTestsSettings v-if="active === 'rig-tests'" />
 					<AboutSettings v-if="active === 'about'" />
 				</section>
 			</div>

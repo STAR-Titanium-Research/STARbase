@@ -30,4 +30,26 @@ describe('overlay stacking', () => {
 		expect(read('./record/RecordPage.vue')).toMatch(/\.alarm-overlay\s*\{[^}]*top:\s*var\(--offline-banner-h/);
 		expect(read('./App.vue')).toContain("setProperty('--offline-banner-h'");
 	});
+	// Rig tests: the consent prompt and the run modal must never sit on top of an open recording Save
+	// dialog (or any other dialog), and Cancel's confirm prompt must be above the modal it comes from.
+	it('the rig-test prompt, modal and bar sit below every dialog and the alarm banner', () => {
+		const layers = [
+			z('./rigtest/RigTestPrompt.vue', '.rt-backdrop'),
+			z('./rigtest/RigTestRunModal.vue', '.rm-backdrop'),
+			z('./rigtest/RigTestBar.vue', '.rb-bar'),
+		];
+		for (const l of layers) {
+			expect(l).toBeLessThan(z('./record/panels/SaveCutDialog.vue', '.scd-backdrop'));
+			expect(l).toBeLessThan(z('./settings/EditCaptureMetadataDialog.vue', '.ecm-backdrop'));
+			expect(l).toBeLessThan(z('./nidaq/VirtualChannelBuilder.vue', '.vcb-backdrop'));
+			expect(l).toBeLessThan(alarm);
+			expect(l).toBeLessThan(z('./ui/ConfirmDialog.vue', '.cd-backdrop'));
+		}
+	});
+	it('the rig-test layers are above the recording banner and the update prompt they float over', () => {
+		const prompt = z('./UpdatePrompt.vue', '.upd');
+		expect(z('./rigtest/RigTestPrompt.vue', '.rt-backdrop')).toBeGreaterThan(z('./AppShell.vue', '.rec-banner'));
+		expect(z('./rigtest/RigTestRunModal.vue', '.rm-backdrop')).toBeGreaterThan(prompt);
+		expect(z('./rigtest/RigTestBar.vue', '.rb-bar')).toBeGreaterThan(prompt);
+	});
 });

@@ -13,6 +13,8 @@ import { formatDuration } from './format';
 import { bannerRunFromStatus, type BannerRun } from './record/recordingBanner';
 import OfflineSessionBanner from './OfflineSessionBanner.vue';
 import UpdatePrompt from './UpdatePrompt.vue';
+import RigTestHost from './rigtest/RigTestHost.vue';
+import { rigTest } from './rigtest/rigTestStore';
 
 const router = useRouter();
 const route = useRoute();
@@ -76,6 +78,8 @@ onBeforeUnmount(() => {
 	if (recordingPollTimer) clearInterval(recordingPollTimer);
 	if (tickTimer) clearInterval(tickTimer);
 });
+// A rig-test request that arrives mid-cut is only a badge (never a dialog over the Record page).
+const rigBadge = computed(() => rigTest.mode.value === 'badge');
 const userName = computed(() => {
 	const u = authStore.currentUser.value;
 	if (!u) return '';
@@ -144,6 +148,7 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 			<button ref="triggerEl" v-show="!expanded" type="button" class="trigger" aria-label="Open navigation" title="Navigation"
 				:aria-expanded="expanded" @click="openFromTrigger">
 				<span class="vdot fx"></span><span class="vdot fy"></span><span class="vdot fz"></span>
+				<span v-if="rigBadge" class="rig-dot" aria-hidden="true"></span>
 			</button>
 			<div class="navwrap" v-show="expanded">
 				<div class="brand">
@@ -156,6 +161,7 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 						<span class="lbl">{{ n.label }}</span>
 						<span v-if="n.to === '/settings' && syncStatus.pending > 0" class="badge warn">{{ syncStatus.pending }}</span>
 						<span v-if="n.to === '/record' && alarmController.tripped" class="badge alarm">!</span>
+						<span v-if="n.to === '/settings' && rigBadge" class="badge rig" title="A rig test has been requested (Settings > Rig tests)" aria-label="Rig test requested">{{ rigTest.state.pending.length }}</span>
 					</router-link>
 					<button class="popout" title="Open in a new window (for a second monitor)" @click="openWindow(n.to)">
 						<span class="material-symbols-rounded">open_in_new</span>
@@ -213,6 +219,7 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 				</keep-alive>
 			</router-view>
 		</main>
+		<RigTestHost :recording-phase="recording?.phase ?? null" />
 	</div>
 </template>
 
@@ -235,7 +242,7 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 	/* margin: 0, not 0 auto — this pill's left edge is deliberately square (border-radius only on
 	   the right) so it can sit flush against the screen's left border; centering it in the wider
 	   .sidebar hitbox left an ~8px gap instead (#13). */
-	display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+	position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
 	width: 14px; height: 64px; margin: 0; padding: 8px 2px; overflow: hidden;
 	background: var(--bg-2); border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
 	border-radius: 0 14px 14px 0;
@@ -261,6 +268,8 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 .navitem.active { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 .badge { position: absolute; top: 6px; right: 18px; min-width: 15px; height: 15px; padding: 0 3px; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-xs); font-weight: 700; border-radius: 8px; }
 .badge.warn { color: #0b1020; background: #fbbf24; }
+.badge.rig { right: auto; left: 18px; color: #fff; background: #2563eb; }
+.rig-dot { position: absolute; top: 4px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 1.5px var(--bg-2); }
 .badge.alarm { color: #fff; background: #ef4444; animation: alarmpulse 0.9s ease-in-out infinite; }
 .spacer { flex: 1; }
 .statuswrap { display: flex; flex-direction: column; align-items: center; gap: 4px; flex-shrink: 0; }
@@ -279,7 +288,7 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
    viewport, banners included, as a flex column: nothing can overflow the document and the page's
    own pane scrolls. Every other page is laid out exactly as before (plain block content that
    scrolls the document); only `.fill` changes anything. */
-.content { flex: 1; min-width: 0; }
+.content { flex: 1; min-width: 0; padding-bottom: var(--rig-bar-h, 0px); } /* room for the minimised rig-test bar */
 .content.fill { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .content.fill > .rec-banner, .content.fill > :deep(.off-banner) { flex-shrink: 0; }
 .content:focus { outline: none; } /* a programmatic focus target after navigation, not a control */
