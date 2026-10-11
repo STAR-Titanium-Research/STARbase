@@ -167,6 +167,36 @@ describe('what blocks the prompt and the run modal', () => {
 		store.stop();
 	});
 
+	it('re-reads the pending list the moment a cut ends, so a stale busy flag does not hold the dialog back', async () => {
+		let busy = true;
+		const api = fakeApi({ getPending: vi.fn(async () => pend([req(1)], { busy })) });
+		const { store } = make(api);
+		store.setRecordingPhase('recording');
+		store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(store.mode.value).toBe('badge');
+		busy = false;
+		store.setRecordingPhase(null);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(2);
+		expect(store.mode.value).toBe('dialog');
+		store.stop();
+	});
+
+	it('re-reads the pending list when the Save dialog closes', async () => {
+		const api = fakeApi({ getPending: vi.fn(async () => pend([req(1)])) });
+		const { store } = make(api);
+		store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		saveDialogOpen.value = true;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(1);
+		saveDialogOpen.value = false;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(2);
+		store.stop();
+	});
+
 	it('Show overrides the block (the operator asked), Minimise takes it back, a new question blocks again', async () => {
 		const { store } = make(asking());
 		store.setRecordingPhase('recording');

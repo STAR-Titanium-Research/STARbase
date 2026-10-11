@@ -7,7 +7,7 @@
 //
 // It is a factory so the tests can drive it with a fake api and fake timers; `rigTest` at the
 // bottom is the app's one real instance.
-import { computed, reactive } from 'vue';
+import { computed, reactive, watch } from 'vue';
 import { currentAcceptContext } from './acceptContext';
 import { saveDialogOpen } from './saveDialogOpen';
 import { rigTestApi, type ApiResult, type RigTestApi } from './rigTestApi';
@@ -75,6 +75,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 
 	let stopped = true;
 	let pendingTimer: ReturnType<typeof setInterval> | null = null;
+	let unwatchSave: (() => void) | null = null;
 	let runTimer: ReturnType<typeof setTimeout> | null = null;
 	let runBusy = false;
 	let expectRunUntil = 0;
@@ -141,10 +142,14 @@ export function createRigTestStore(deps: RigTestDeps) {
 		stopped = false;
 		void refreshAll();
 		pendingTimer = setInterval(() => { void refreshAll(); }, PENDING_POLL_MS);
+		// The Save dialog closing ends a cut: re-read now, so `busy` (up to 30 s old) doesn't keep a
+		// waiting request a badge after the operator has finished.
+		unwatchSave = watch(saveDialogOpen, (open) => { if (!open) void refreshPending(); });
 		return stop;
 	}
 	function stop(): void {
 		stopped = true;
+		unwatchSave?.(); unwatchSave = null;
 		if (pendingTimer) { clearInterval(pendingTimer); pendingTimer = null; }
 		if (runTimer) { clearTimeout(runTimer); runTimer = null; }
 	}
@@ -219,7 +224,12 @@ export function createRigTestStore(deps: RigTestDeps) {
 		state, runActive, mode, head, blocked, runBlocked,
 		start, stop, refreshPending, refreshRun, refreshAll, refreshEligibility, refreshHistory,
 		accept, snooze, decline, answer, cancel,
-		setRecordingPhase(p: PhaseState) { state.recordingPhase = p; },
+		setRecordingPhase(p: PhaseState) {
+			const was = state.recordingPhase;
+			state.recordingPhase = p;
+			// A cut just ended: ask now whether the recorder is still busy (see the Save dialog watch).
+			if (p === null && (was === 'recording' || was === 'finalizing')) void refreshPending();
+		},
 		minimise() { state.minimised = true; state.forced = false; },
 		restore() { state.minimised = false; state.forced = true; },
 		closeFinished() { state.finished = null; },
