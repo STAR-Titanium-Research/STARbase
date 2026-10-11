@@ -12,7 +12,7 @@ Phase 1 knows two step kinds, `ask` and `note`. Any `do:` action is refused unti
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -284,7 +284,6 @@ class CatalogItem:
     prose: str
     block: dict | None = None
     block_error: str | None = None
-    lines: list[str] = field(default_factory=list, repr=False)
 
 
 _ITEM_RE = re.compile(r"^(\s*)- \[[ xX]\] (.*)$")

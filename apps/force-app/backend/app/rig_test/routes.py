@@ -31,12 +31,11 @@ HISTORY_LIMIT = 50
 
 @dataclass
 class _Wiring:
-    devices: Callable[[], dict]
-    labamp: Callable[[], object]
     is_busy: Callable[[], bool]
     captures_root: Callable[[], str]
     poller: RigTestPoller
     runner: RigTestRunner
+    eligible: Callable[[], tuple[bool, str | None]]
 
 
 _w: _Wiring | None = None
@@ -60,15 +59,19 @@ def configure(
     )
     runner.install(rig_runner)
     interval = poll_interval_s or float(os.environ.get("FORCE_APP_RIG_TEST_POLL_S", "60"))
+
+    def eligible() -> tuple[bool, str | None]:
+        return eligibility.check(devices(), labamp())
+
     poller = RigTestPoller(
         store=store,
-        eligible=lambda: eligibility.check(devices(), labamp()),
+        eligible=eligible,
         is_busy=is_busy,
         owns_rig=runner.owns_rig,
         rig_id=eligibility.rig_id,
         interval_s=interval,
     )
-    _w = _Wiring(devices, labamp, is_busy, captures_root, poller, rig_runner)
+    _w = _Wiring(is_busy, captures_root, poller, rig_runner, eligible)
 
 
 def start_poller() -> None:
@@ -122,7 +125,7 @@ class AnswerBody(BaseModel):
 @router.get("/eligibility")
 async def get_eligibility() -> dict:
     w = _wiring()
-    ok, reason = await run_in_threadpool(lambda: eligibility.check(w.devices(), w.labamp()))
+    ok, reason = await run_in_threadpool(w.eligible)
     out: dict = {
         "eligible": ok,
         "rig_id": eligibility.rig_id(),
@@ -141,7 +144,7 @@ async def get_pending() -> dict:
 @router.post("/{n}/accept")
 async def accept(n: int, body: AcceptBody) -> dict:
     w = _wiring()
-    ok, reason = await run_in_threadpool(lambda: eligibility.check(w.devices(), w.labamp()))
+    ok, reason = await run_in_threadpool(w.eligible)
     # No await from here to runner.start(): the checks and the claim are one step, so a recording
     # cannot start in between (the same rule as /record/start's busy check).
     if not ok:

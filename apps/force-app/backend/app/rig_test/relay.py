@@ -8,14 +8,11 @@ outage can only ever mean "nothing to show", never a crashed poller or a failed 
 
 from __future__ import annotations
 
-import logging
 from urllib.parse import quote
 
 import httpx
 
 from .. import bug_report
-
-log = logging.getLogger("force_app.rig_test")
 
 TIMEOUT_S = 10.0
 STATES = ("deferred", "declined", "running", "partial", "done", "interrupted")

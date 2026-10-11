@@ -63,9 +63,9 @@ class _Run:
         specs = [s for item in request["items"] for s in item["steps"]]
         estimate = float(request["estimate_s"]["full"])
         self.specs = specs
-        self.cap_s = hard_cap_s(estimate)
+        cap_s = hard_cap_s(estimate)
         self.started_clock = clock
-        self.hard_deadline = clock + self.cap_s
+        self.hard_deadline = clock + cap_s
         self.finished_wall: float | None = None
         self.comment_id: int | str | None = None
         self.cancel = False
@@ -80,7 +80,7 @@ class _Run:
             "mode": "full",
             "state": "running",
             "started_at": _iso(wall),
-            "deadline_at": _iso(wall + self.cap_s),
+            "deadline_at": _iso(wall + cap_s),
             "finished_at": None,
             "elapsed_s": 0.0,
             "estimate_s": estimate,
@@ -243,7 +243,8 @@ class RigTestRunner:
         step = rec["steps"][spec["index"]]
         dep = spec.get("after")
         if dep is not None and rec["steps"][dep]["status"] != "pass":
-            step["status"] = "skipped_dependency"
+            with self._cond:
+                step["status"] = "skipped_dependency"
             self._sync_progress(run)
             return
         options = spec["options"] if spec["kind"] == "ask" else list(NOTE_OPTIONS)
