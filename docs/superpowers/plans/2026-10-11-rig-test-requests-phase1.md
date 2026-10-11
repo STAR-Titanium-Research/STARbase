@@ -13,11 +13,13 @@ is phase 3. Both get their own plan.
 
 | Stream | Worktree | Branch | Agent profile | State |
 |---|---|---|---|---|
-| A. Relay endpoints | — | — | `force-app-implementer` (sonnet) | not started |
-| B. Backend `rig_test` package + rig lock | — | — | `force-app-implementer` (sonnet) | not started |
-| C. Web prompt, run modal, Settings tab, desktop notify | — | — | `force-app-implementer` (sonnet) | not started (needs B's contract, below; not B's code) |
-| D. Docs, conventions, deploy config | coordinator | `ccr-52e8d6c9-5rl4pg` | coordinator | not started |
-| Review | — | — | `force-app-reviewer` | — |
+| A. Relay endpoints | agent worktree | worktree branch | `force-app-implementer` (sonnet, high) | in progress |
+| B. Backend `rig_test` package + rig lock | agent worktree | worktree branch | `force-app-implementer` (sonnet, high) | in progress |
+| C. Web prompt, run modal, Settings tab, desktop notify | agent worktree | worktree branch | `force-app-implementer` (sonnet, high) | in progress (codes against the contract below, not B's code) |
+| D. Docs, conventions, deploy config | coordinator | `ccr-52e8d6c9-5rl4pg` | coordinator | in progress |
+| Review | — | — | `force-app-reviewer` (opus, high), then a security review (opus, high) | — |
+
+Workflow per stream (owner's instruction, 2026-10-11): plan → code → `/simplify` → debug (full suites, typecheck, `force-app-verify` where it applies) → Opus review → security review → coordinator merge.
 
 Update this table when a stream starts, finishes, is reviewed or is merged, and fold that commit
 into the next code push (CLAUDE.md, "CI minutes").
