@@ -1,6 +1,7 @@
 """The poller: which relay requests become pending, invalid ones, persistence, crash reporting."""
 
 import json
+import time
 
 import pytest
 
@@ -404,6 +405,45 @@ def test_one_unreadable_request_does_not_stop_the_others(fake, make, block):
     assert [n for n, _ in fake.comments] == [7]
     assert "invalid request" in fake.comments[0][1]
     assert fake.states == [(7, "declined")]
+
+
+def test_an_unchanged_invalid_body_is_skipped_before_anything_parses_it(fake, make, monkeypatch):
+    """L7: the digest check comes first, so a known-bad body costs no regex or YAML work."""
+    fake.requests = [issue(7, "items: [NOPE]")]
+    p = make()
+    p.poll_once()
+    monkeypatch.setattr(catalog, "peek_rig", lambda body: pytest.fail("parsed again"))
+    monkeypatch.setattr(catalog, "parse_request", lambda *a, **k: pytest.fail("parsed again"))
+    p.poll_once()
+    assert len(fake.comments) == 1
+
+
+def test_a_huge_body_is_reported_invalid_without_being_parsed(fake, make, monkeypatch):
+    real_peek = catalog.peek_rig
+    monkeypatch.setattr(
+        catalog,
+        "peek_rig",
+        lambda body: (
+            pytest.fail("parsed") if len(body) > catalog.MAX_BODY_CHARS else real_peek(body)
+        ),
+    )
+    fake.requests = [issue(7, "items: [R4]\n# " + "x" * catalog.MAX_BODY_CHARS), issue(8, ASK)]
+    p = make()
+    p.poll_once()
+    assert [r["number"] for r in p.pending()] == [8]
+    assert "issue body too long" in fake.comments[0][1]
+    assert fake.states == [(7, "declined")]
+
+
+def test_a_64kb_body_of_fence_openers_does_not_stall_the_poll(fake, make):
+    body = "```rig-test\n" * 5300
+    fake.requests = [{**issue(7), "body": body}, issue(8, ASK)]
+    p = make()
+    t0 = time.perf_counter()
+    p.poll_once()
+    assert time.perf_counter() - t0 < 0.5
+    assert [r["number"] for r in p.pending()] == [8]
+    assert "invalid request" in fake.comments[0][1]
 
 
 def test_an_unexpected_error_on_one_issue_is_logged_and_the_rest_still_listed(

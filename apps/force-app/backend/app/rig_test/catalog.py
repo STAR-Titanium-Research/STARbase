@@ -39,6 +39,8 @@ MAX_STEPS_PER_BLOCK = 50
 MAX_STEPS_PER_REQUEST = 200
 MAX_ITEMS = 20
 MAX_BLOCK_CHARS = 16_000
+MAX_BODY_CHARS = 64_000  # the whole issue body; a request block is far smaller (16 000 above)
+BODY_TOO_LONG = "issue body too long"
 DEFAULT_OPTIONS = ["Pass", "Fail", "Skip"]
 DEFAULT_PASS = ["Pass"]
 NOTE_OPTIONS = ["Continue"]
@@ -309,14 +311,39 @@ _LEAD_RE = re.compile(r"^\*\*(.+?)\*\*")
 # first space, colon, comma, dash with spaces or slash, so `E5 — x`, `E5 fix — x` and `E5: x` are
 # all `E5`.
 _ID_RE = re.compile(r"(#\d+|[A-Z]{1,2}\d+)(?:-[A-Za-z0-9]+)*(?![A-Za-z0-9])")
-_FENCE_RE = re.compile(r"^[ \t]*```rig-test[ \t]*\n(.*?)^[ \t]*```[ \t]*$", re.M | re.S)
+
+
+def split_fences(text: str) -> tuple[list[str], str]:
+    """The contents of the ```rig-test fences in `text`, and the text without them.
+
+    A fence opens on a line that is only ```rig-test and closes on the next line that is only
+    ```. One pass over the lines: a regex with a lazy `.*?` between the two markers is quadratic
+    on a body of many openers and no closer, which a 64 KB issue can use to stall the poller. An
+    opener with no closer ends the search (a later opener cannot find one either).
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    blocks: list[str] = []
+    rest: list[str] = []
+    searching = True
+    i = 0
+    while i < len(lines):
+        if searching and lines[i].strip(" \t") == "```rig-test":
+            close = next(
+                (j for j in range(i + 1, len(lines)) if lines[j].strip(" \t") == "```"), None
+            )
+            if close is not None:
+                blocks.append("".join(line + "\n" for line in lines[i + 1 : close]))
+                i = close + 1
+                continue
+            searching = False
+        rest.append(lines[i])
+        i += 1
+    return blocks, "\n".join(rest)
 
 
 def _item_from_lines(lines: list[str]) -> CatalogItem:
     first = _ITEM_RE.match(lines[0]).group(2)  # type: ignore[union-attr]
-    text = "\n".join([first, *lines[1:]])
-    blocks = _FENCE_RE.findall(text + "\n")
-    text = _FENCE_RE.sub("", text + "\n")
+    blocks, text = split_fences("\n".join([first, *lines[1:]]) + "\n")
     block, block_error = None, None
     if len(blocks) > 1:
         block_error = "more than one rig-test block"
@@ -390,7 +417,9 @@ def catalog_index() -> dict[str, list[CatalogItem]]:
 
 
 def extract_block(body: str) -> str:
-    blocks = _FENCE_RE.findall(body.replace("\r\n", "\n").replace("\r", "\n") + "\n")
+    if len(body) > MAX_BODY_CHARS:
+        raise RigRequestError(BODY_TOO_LONG)
+    blocks, _ = split_fences(body)
     if not blocks:
         raise RigRequestError("no ```rig-test block in the issue body")
     if len(blocks) > 1:

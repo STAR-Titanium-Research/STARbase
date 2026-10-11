@@ -325,11 +325,16 @@ class RigTestPoller:
         handled = self._store.get("handled", {}).get(str(n))
         if handled and self._wall() - handled["at"] < HANDLED_GRACE_S:
             return None
-        rig = catalog.peek_rig(body)
-        if rig and rig.lower() != self._rig_id().lower():
-            return None
+        # Cheapest checks first: an unchanged body that was already judged invalid is skipped
+        # before anything parses it, and a huge one is never parsed at all.
         digest = hashlib.sha1(body.encode("utf-8", "replace")).hexdigest()[:12]
         if self._store.get("invalid", {}).get(str(n)) == digest:
+            return None
+        if len(body) > catalog.MAX_BODY_CHARS:
+            self._reject(n, catalog.BODY_TOO_LONG, digest)
+            return None
+        rig = catalog.peek_rig(body)
+        if rig and rig.lower() != self._rig_id().lower():
             return None
         try:
             resolved = catalog.parse_request(body)
