@@ -8,6 +8,7 @@ import { syncStatus } from './record/directusSync';
 import { hwStatus } from './record/hwStatus';
 import { alarmController } from './record/alarms';
 import { appUrl } from './appUrl';
+import { isPopoutWindow, withPopoutMarker } from './popoutWindow';
 import { getConfig } from './config';
 import { formatDuration } from './format';
 import { bannerRunFromStatus, type BannerRun } from './record/recordingBanner';
@@ -143,7 +144,7 @@ watch(() => route.path, () => {
 });
 // Multi-monitor: pop a section into its own window (e.g. Plot while recording). Same origin, so the
 // new window shares the login; the recording backend is a single session but plotting is read-only.
-function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,width=1500,height=950'); }
+function openWindow(to: string) { window.open(appUrl(withPopoutMarker(to)), '_blank', 'noopener,width=1500,height=950'); }
 </script>
 
 <template>
@@ -224,7 +225,8 @@ function openWindow(to: string) { window.open(appUrl(to), '_blank', 'noopener,wi
 				</keep-alive>
 			</router-view>
 		</main>
-		<RigTestHost :recording-phase="rigPhase" />
+		<!-- Once per app: a pop-out would poll, prompt and toast a second time. -->
+		<RigTestHost v-if="!isPopoutWindow" :recording-phase="rigPhase" />
 	</div>
 </template>
 

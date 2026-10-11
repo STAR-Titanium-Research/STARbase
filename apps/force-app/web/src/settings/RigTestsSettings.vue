@@ -5,6 +5,7 @@
 import { computed, onMounted } from 'vue';
 import RigTestRequestCard from '../rigtest/RigTestRequestCard.vue';
 import { rigTest } from '../rigtest/rigTestStore';
+import { isPopoutWindow } from '../popoutWindow';
 import { formatWhen, relayInfo, snoozedUntilText, summaryCounts } from '../rigtest/rigTestLogic';
 
 const s = rigTest.state;
@@ -33,7 +34,11 @@ const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
 			snooze or decline, and can cancel a run at any time. A request is held back (shown only as a badge) while you are recording or saving a cut.
 		</p>
 
-		<p v-if="!s.available" class="note dim">
+		<p v-if="isPopoutWindow" class="note dim">
+			<span class="material-symbols-rounded">info</span>Rig-test requests are answered in the main window.
+		</p>
+
+		<p v-else-if="!s.available" class="note dim">
 			<span class="material-symbols-rounded">info</span>This recorder is too old for rig tests. Update the app.
 		</p>
 
@@ -55,7 +60,7 @@ const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
 			</div>
 		</section>
 
-		<template v-if="s.available">
+		<template v-if="s.available && !isPopoutWindow">
 			<h3>Waiting for you</h3>
 			<p v-if="!s.pending.length" class="empty">No requests are waiting.</p>
 			<div v-else class="list">
