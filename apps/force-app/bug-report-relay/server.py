@@ -148,6 +148,43 @@ async def _github(method: str, url: str, **kwargs) -> httpx.Response:
     return res
 
 
+def _repo_path(suffix: str) -> str:
+    return f"/repos/{_repo()}{suffix}"
+
+
+def _failure(reason: str) -> dict:
+    return {"ok": False, "reason": reason}
+
+
+async def _gh(
+    method: str,
+    path: str,
+    *,
+    what: str = "request",
+    allow: tuple[int, ...] = (),
+    **kwargs,
+) -> tuple[object, dict | None]:
+    """_github plus the never-raise contract: returns (parsed JSON or None, None) on success, or
+    (None, {"ok": False, "reason": ...}) when authentication, the network or GitHub failed.
+    Statuses in `allow` count as success (their body is still returned)."""
+    try:
+        res = await _github(method, f"{GITHUB_API}{path}", **kwargs)
+    except _AuthError as e:
+        return None, _failure(f"could not authenticate with GitHub: {e}")
+    except httpx.HTTPError as e:
+        return None, _failure(f"could not reach GitHub: {e}")
+    try:
+        data = res.json()
+    except ValueError:
+        data = None
+    if res.status_code >= 300 and res.status_code not in allow:
+        detail = data.get("message", "") if isinstance(data, dict) else ""
+        return None, _failure(
+            f"GitHub rejected the {what} (HTTP {res.status_code}) {detail}".strip()
+        )
+    return data, None
+
+
 _Label = Annotated[str, Field(max_length=100)]
 
 
@@ -178,29 +215,15 @@ async def report(req: ReportRequest) -> dict:
     if not title:
         return {"ok": False, "reason": "A title is required."}
 
-    try:
-        res = await _github(
-            "POST",
-            f"{GITHUB_API}/repos/{_repo()}/issues",
-            json={"title": title[:250], "body": req.body, "labels": req.labels},
-        )
-    except _AuthError as e:
-        return {"ok": False, "reason": f"could not authenticate with GitHub: {e}"}
-    except httpx.HTTPError as e:
-        return {"ok": False, "reason": f"could not reach GitHub: {e}"}
-
-    if res.status_code >= 300:
-        detail = ""
-        try:
-            detail = res.json().get("message", "")
-        except ValueError:
-            pass
-        return {
-            "ok": False,
-            "reason": f"GitHub rejected the report (HTTP {res.status_code}) {detail}".strip(),
-        }
-
-    data = res.json()
+    data, err = await _gh(
+        "POST",
+        _repo_path("/issues"),
+        what="report",
+        json={"title": title[:250], "body": req.body, "labels": req.labels},
+    )
+    if err:
+        return err
+    data = data if isinstance(data, dict) else {}
     return {"ok": True, "url": data.get("html_url", ""), "number": data.get("number")}
 
 
@@ -217,36 +240,22 @@ async def issues() -> dict:
             "ok": False,
             "reason": "Bug reporting relay is not configured (missing GitHub App credentials).",
         }
-    try:
-        res = await _github(
-            "GET",
-            f"{GITHUB_API}/repos/{_repo()}/issues",
-            params={
-                "labels": "in-app-report",
-                "state": "all",
-                "sort": "created",
-                "direction": "desc",
-                "per_page": 50,
-            },
-        )
-    except _AuthError as e:
-        return {"ok": False, "reason": f"could not authenticate with GitHub: {e}"}
-    except httpx.HTTPError as e:
-        return {"ok": False, "reason": f"could not reach GitHub: {e}"}
-
-    if res.status_code >= 300:
-        detail = ""
-        try:
-            detail = res.json().get("message", "")
-        except ValueError:
-            pass
-        return {
-            "ok": False,
-            "reason": f"GitHub rejected the request (HTTP {res.status_code}) {detail}".strip(),
-        }
+    data, err = await _gh(
+        "GET",
+        _repo_path("/issues"),
+        params={
+            "labels": "in-app-report",
+            "state": "all",
+            "sort": "created",
+            "direction": "desc",
+            "per_page": 50,
+        },
+    )
+    if err:
+        return err
 
     out = []
-    for item in res.json():
+    for item in data if isinstance(data, list) else []:
         if (
             "pull_request" in item
         ):  # the issues endpoint also returns PRs; this repo files none
