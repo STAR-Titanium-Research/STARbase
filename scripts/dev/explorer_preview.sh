@@ -44,7 +44,7 @@ out=$(docker run --rm --network "$NET" -e DATABASE_URL="$URL" -v "$REPO/db:/db" 
 echo "$out" | grep -E '^Applying' || echo "no pending migrations"
 
 # --- local test users on the copy: an admin (through an admin policy) and a Lab Member (role + people row)
-ADMIN_EMAIL="preview-admin-$(rhex 3)@example.invalid"; LM_EMAIL="preview-member-$(rhex 3)@example.invalid"
+ADMIN_EMAIL="preview-admin-$(rhex 3)@example.com"; LM_EMAIL="preview-member-$(rhex 3)@example.com"
 # The copy keeps live's password policy (upper, lower, digit, symbol).
 ADMIN_PASS="Pv$(rhex 10)A!"; LM_PASS="Pv$(rhex 10)M!"; TOKEN="preview-$(rhex 16)"
 admin_id=$(psql_copy -Atc "
