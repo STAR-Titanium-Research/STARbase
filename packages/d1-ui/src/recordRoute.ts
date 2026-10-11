@@ -40,15 +40,23 @@ export function dataStudioRoute(collection: string, id: string | number): string
 	return `/content/${collection}/${encodeURIComponent(String(id))}`;
 }
 
-// A list page, optionally with a saved view (?bookmark=<id>) or a row's drawer open (?open=<key>).
-// Projects and People are bespoke pages that ignore both, so they get the plain path; a collection
-// with no Explorer page opens the Data Studio list, which understands ?bookmark too.
-export function indexRoute(collection: string, opts: { bookmark?: number; open?: string } = {}): string {
+// A list page, optionally with a saved view (?bookmark=<id>), a row's drawer open (?open=<key>) or
+// extra query keys of the index page's own URL: `query` is written as given, e.g. { q: 'A-12' } for
+// a search or { 'f.project_id': id } for a chip filter. Projects and People are bespoke pages that
+// ignore all of these, so they get the plain path; a collection with no Explorer page opens the
+// Data Studio list, which understands only ?bookmark.
+export function indexRoute(
+	collection: string,
+	opts: { bookmark?: number; open?: string; query?: Record<string, string> } = {},
+): string {
 	const base = INDEX_PAGES[collection];
 	if (!base) return opts.bookmark !== undefined ? `/content/${collection}?bookmark=${opts.bookmark}` : `/content/${collection}`;
 	if (collection === 'projects' || collection === 'people') return base;
 	const params: string[] = [];
 	if (opts.bookmark !== undefined) params.push(`bookmark=${opts.bookmark}`);
 	if (opts.open !== undefined) params.push(`open=${encodeURIComponent(opts.open)}`);
+	for (const [key, value] of Object.entries(opts.query ?? {})) {
+		if (value !== '') params.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+	}
 	return params.length ? `${base}?${params.join('&')}` : base;
 }

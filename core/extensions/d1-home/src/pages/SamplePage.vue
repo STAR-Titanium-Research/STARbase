@@ -118,7 +118,7 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 					</LoadState>
 				</Section>
 
-				<SampleRecords :operations="operations" :tests="tests" />
+				<SampleRecords :operations="operations" :tests="tests" :sample-code="sample.sample_code" />
 				<SampleFiles :files="files.data" :loading="files.loading" :error="files.error" />
 
 				<EditDrawer

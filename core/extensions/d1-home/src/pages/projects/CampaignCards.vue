@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {
-	LIST_CAP, LoadState, ProgressBar, RecordCard, Section, campaignTypeLabel, collectionRoute, formatDate, humanise, recordRoute,
+	LIST_CAP, LoadState, ProgressBar, RecordCard, Section, campaignTypeLabel, formatDate, humanise, indexRoute, recordRoute,
 	type SectionState,
 } from '@d1/ui';
 import { computed } from 'vue';
@@ -8,7 +8,9 @@ import { computed } from 'vue';
 // The project's campaigns as cards: type, owner, status, dates, plain counts and one progress bar
 // ("force analysed n / m" for a machining trial, "tests complete n / m" for a testing campaign).
 // The numbers are computed here from the real collections; the Campaign page has its own roll-up.
-const props = defineProps<{ campaigns: SectionState<any[]> }>();
+const props = defineProps<{ campaigns: SectionState<any[]>; projectId?: string | null }>();
+// The full list opens narrowed to this project (the Campaigns page has a Project filter).
+const allCampaigns = computed(() => indexRoute('campaigns', props.projectId ? { query: { 'f.project_id': props.projectId } } : {}));
 
 const rows = computed(() => props.campaigns.data.slice(0, LIST_CAP));
 const capped = computed(() => props.campaigns.data.length > LIST_CAP);
@@ -59,7 +61,7 @@ const dates = (c: any) => {
 					<span v-else class="no-progress">Counts unavailable</span>
 				</RecordCard>
 			</div>
-			<p v-if="capped" class="d1-note cap">Showing the first {{ LIST_CAP }} campaigns. <router-link :to="collectionRoute('campaigns')">See the full list</router-link>.</p>
+			<p v-if="capped" class="d1-note cap">Showing the first {{ LIST_CAP }} campaigns. <router-link :to="allCampaigns">{{ projectId ? "See all of this project's campaigns" : 'See the full list' }}</router-link>.</p>
 		</LoadState>
 	</Section>
 </template>

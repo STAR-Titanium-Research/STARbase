@@ -86,10 +86,10 @@ const tilesDisabled = computed(() => counts.value.loading);
 					<p v-if="counts.error" class="d1-note warn" role="alert">{{ counts.error }}</p>
 				</div>
 
-				<CampaignCards :campaigns="campaigns" />
+				<CampaignCards :campaigns="campaigns" :project-id="id" />
 				<!-- Three short lists side by side: stacked, three empty ones took a third of the screen. -->
 				<div class="d1-cols">
-					<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" />
+					<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
 				</div>
 
 				<div class="d1-cols">
