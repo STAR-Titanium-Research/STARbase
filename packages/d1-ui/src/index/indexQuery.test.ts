@@ -149,3 +149,27 @@ describe('dataStudioLink', () => {
 		expect(dataStudioLink(samples, state({ filters: { project_id: 'p' } }))).toEqual({ to: '/content/physical_samples', note });
 	});
 });
+
+describe('buildItemsParams: unreadable relation columns', () => {
+	const fieldsOf = (readable: ReadonlySet<string> | null) => buildItemsParams(samples, state(), null, readable).fields as string[];
+
+	it('asks for the related display only where the related collection is readable', () => {
+		const fields = fieldsOf(new Set(['materials']));
+		expect(fields).toContain('material_id.alloy_code');
+		// projects is not readable: the bare key, never project_id.project_code
+		expect(fields).toContain('project_id');
+		expect(fields).not.toContain('project_id.project_code');
+	});
+
+	it('asks for every relation when the readable set is not known', () => {
+		const fields = fieldsOf(null);
+		expect(fields).toContain('material_id.alloy_code');
+		expect(fields).toContain('project_id.project_code');
+	});
+
+	it('asks for none when nothing is readable, keeping the primary key first', () => {
+		const fields = fieldsOf(new Set());
+		expect(fields[0]).toBe('sample_id');
+		expect(fields.some((f) => f.includes('.'))).toBe(false);
+	});
+});

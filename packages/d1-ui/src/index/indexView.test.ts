@@ -5,7 +5,7 @@ import type { Bookmark } from '../nav/navConfig';
 import {
 	BOOL_OPTIONS, cellText, effectiveState, enumOptionParams, enumOptions, extraFields, hasActiveFilters, hasExplicitQ, hasNextPage,
 	nextSort, queryForState, sortKey, rangeText, relationKey, relationOptionParams, relationOptions, relationText, sortDirection, withChange,
-	withSelected,
+	validSort, withSelected,
 } from './indexView';
 
 const samples = indexDefBySlug('samples')!;
@@ -92,6 +92,33 @@ describe('sorting', () => {
 		expect(sortDirection('name', 'name')).toBe('asc');
 		expect(sortDirection('-name', 'name')).toBe('desc');
 		expect(sortDirection('-name', 'code')).toBeNull();
+	});
+});
+
+describe('validSort (the URL sort)', () => {
+	it('accepts a column sort key either way round, and the default', () => {
+		expect(validSort(samples, 'nickname', null)).toBe('nickname');
+		expect(validSort(samples, '-nickname', null)).toBe('-nickname');
+		expect(validSort(samples, 'material_id.alloy_code', null)).toBe('material_id.alloy_code');
+		expect(validSort(samples, samples.defaultSort, null)).toBe(samples.defaultSort);
+	});
+	it('accepts the active saved view sort', () => {
+		const b = bm({ layout_query: { tabular: { sort: ['-weight'] } } });
+		expect(validSort(samples, '-weight', b)).toBe('-weight');
+		expect(validSort(samples, '-weight', null)).toBeNull();
+	});
+	it('drops anything else: unknown fields, junk, the wrong relation spelling, nothing', () => {
+		expect(validSort(samples, 'password', null)).toBeNull();
+		expect(validSort(samples, '--nickname', null)).toBeNull();
+		expect(validSort(samples, 'nickname,-form', null)).toBeNull();
+		expect(validSort(samples, 'material_id', null)).toBeNull();
+		expect(validSort(samples, '', null)).toBeNull();
+		expect(validSort(samples, null, null)).toBeNull();
+	});
+	it('drops a relation column the user cannot sort by', () => {
+		const sortable = (c: { relation?: unknown }) => !c.relation;
+		expect(validSort(samples, 'material_id.alloy_code', null, sortable)).toBeNull();
+		expect(validSort(samples, 'nickname', null, sortable)).toBe('nickname');
 	});
 });
 

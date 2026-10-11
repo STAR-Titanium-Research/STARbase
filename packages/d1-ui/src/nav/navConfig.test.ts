@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOOKMARK_VISIBILITY_FILTER, NAV_GROUPS, buildNav, linkForBookmark } from './navConfig';
+import { BOOKMARK_VISIBILITY_FILTER, NAV_GROUPS, bookmarkVisibleToUser, buildNav, linkForBookmark, pickBookmarkId } from './navConfig';
 import type { Bookmark } from './navConfig';
 
 const allCollections = new Set(NAV_GROUPS.flatMap((g) => g.links).flatMap((l) => (l.collection ? [l.collection] : [])));
@@ -164,5 +164,50 @@ describe('bookmark visibility', () => {
 				},
 			],
 		});
+	});
+});
+
+describe('saved views under bespoke pages', () => {
+	it('does not nest saved views under Projects or People, whose pages ignore them', () => {
+		const nav = buildNav(allCollections, [bm(1, 'P', 'projects'), bm(2, 'Q', 'people'), bm(3, 'S', 'physical_samples')], true);
+		const links = nav.groups.flatMap((g) => g.links);
+		expect(links.find((l) => l.label === 'Projects')!.bookmarks).toEqual([]);
+		expect(links.find((l) => l.label === 'People')!.bookmarks).toEqual([]);
+		expect(links.find((l) => l.label === 'Samples')!.bookmarks.map((b) => b.id)).toEqual([3]);
+	});
+});
+
+describe('bookmarkVisibleToUser (the strict rule for a view fetched by id)', () => {
+	const me = { id: 'u1', role: 'r1' };
+	it('admits own views and global or same-role shared ones', () => {
+		expect(bookmarkVisibleToUser({ user: 'u1', role: null }, me)).toBe(true);
+		expect(bookmarkVisibleToUser({ user: null, role: null }, me)).toBe(true);
+		expect(bookmarkVisibleToUser({ user: null, role: 'r1' }, me)).toBe(true);
+	});
+	it('rejects another user view (even one in my role) and another role view', () => {
+		expect(bookmarkVisibleToUser({ user: 'u2', role: null }, me)).toBe(false);
+		expect(bookmarkVisibleToUser({ user: 'u2', role: 'r1' }, me)).toBe(false);
+		expect(bookmarkVisibleToUser({ user: null, role: 'r2' }, me)).toBe(false);
+	});
+	it('rejects role views for a user with no role, and everything but global views while the user is unknown', () => {
+		expect(bookmarkVisibleToUser({ user: null, role: 'r1' }, { id: 'u1', role: null })).toBe(false);
+		expect(bookmarkVisibleToUser({ user: 'u1', role: null }, null)).toBe(false);
+		expect(bookmarkVisibleToUser({ user: null, role: 'r1' }, null)).toBe(false);
+		expect(bookmarkVisibleToUser({ user: null, role: null }, null)).toBe(true);
+	});
+});
+
+describe('pickBookmarkId', () => {
+	const row = (id: number, user: string | null, role: string | null) => ({ id, user, role });
+	const me = { id: 'u1', role: 'r1' };
+	it('prefers the global view, then a role view, then the user own', () => {
+		expect(pickBookmarkId([row(3, 'u1', null), row(2, null, 'r1'), row(5, null, null)], me)).toBe(5);
+		expect(pickBookmarkId([row(3, 'u1', null), row(2, null, 'r1')], me)).toBe(2);
+		expect(pickBookmarkId([row(3, 'u1', null)], me)).toBe(3);
+	});
+	it('never picks another user private view, which an admin can read', () => {
+		expect(pickBookmarkId([row(1, 'u2', null)], me)).toBeNull();
+		expect(pickBookmarkId([row(1, 'u2', null), row(4, 'u1', null)], me)).toBe(4);
+		expect(pickBookmarkId([], me)).toBeNull();
 	});
 });

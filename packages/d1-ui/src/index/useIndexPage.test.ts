@@ -16,13 +16,16 @@ const flush = async () => {
 
 interface Call { path: string; params: Record<string, any> }
 
-function setup(query: Record<string, string>, opts: { bookmarks?: any[]; presets?: Record<string, any> } = {}) {
+function setup(
+	query: Record<string, string>,
+	opts: { bookmarks?: any[]; presets?: Record<string, any>; user?: { id: string; role?: string | null } | null; collections?: string[]; host?: ExplorerHost } = {},
+) {
 	const calls: Call[] = [];
 	const api = {
 		get: vi.fn(async (path: string, config?: { params?: Record<string, any> }) => {
 			calls.push({ path, params: config?.params ?? {} });
 			if (path === '/collections') {
-				return { data: { data: ['physical_samples', 'projects', 'materials'].map((c) => ({ collection: c, meta: { hidden: false } })) } };
+				return { data: { data: (opts.collections ?? ['physical_samples', 'projects', 'materials']).map((c) => ({ collection: c, meta: { hidden: false } })) } };
 			}
 			if (path === '/presets') return { data: { data: opts.bookmarks ?? [] } };
 			if (path.startsWith('/presets/')) {
@@ -40,7 +43,7 @@ function setup(query: Record<string, string>, opts: { bookmarks?: any[]; presets
 			throw new Error(`unexpected ${path}`);
 		}),
 	};
-	const host = { api, navigate: vi.fn(), openDataStudio: vi.fn(), isAdmin: ref(false), user: ref(null) } as unknown as ExplorerHost;
+	const host = opts.host ?? ({ api, navigate: vi.fn(), openDataStudio: vi.fn(), isAdmin: ref(false), adminKnown: ref(true), user: ref(opts.user ?? null) } as unknown as ExplorerHost);
 	const route = reactive<RouteLike>({ path: '/home/samples', query, params: { slug: 'samples' } });
 	const pushed: Array<{ how: string; query: Record<string, string> }> = [];
 	const apply = (how: string) => (to: { path: string; query: Record<string, string> }) => {
@@ -155,6 +158,77 @@ describe('useIndexPage', () => {
 		const page = useIndexPage(t.host, samples, t.route, t.router);
 		await flush();
 		expect(page.bookmarkUnavailable.value).toBe(true);
+	});
+
+	it('does not apply another user private saved view fetched by id', async () => {
+		const t = setup({ bookmark: '9' }, { user: { id: 'u1', role: 'r1' }, presets: { 9: bm({ id: 9, user: 'u2', filter: { owner: { _eq: 'x' } } }) } });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.bookmarkUnavailable.value).toBe(true);
+		expect(t.items().at(-1)!.params.filter).toBeUndefined();
+	});
+
+	it('applies the signed-in user own view and a global one fetched by id', async () => {
+		const own = setup({ bookmark: '9' }, { user: { id: 'u1', role: 'r1' }, presets: { 9: bm({ id: 9, user: 'u1', filter: { owner: { _eq: 'x' } } }) } });
+		const p1 = useIndexPage(own.host, samples, own.route, own.router);
+		await flush();
+		expect(p1.bookmarkUnavailable.value).toBe(false);
+		expect(own.items().at(-1)!.params.filter).toContain('owner');
+		const global = setup({ bookmark: '9' }, { user: { id: 'u1', role: 'r1' }, presets: { 9: bm({ id: 9, filter: { owner: { _eq: 'y' } } }) } });
+		const p2 = useIndexPage(global.host, samples, global.route, global.router);
+		await flush();
+		expect(p2.bookmarkUnavailable.value).toBe(false);
+	});
+
+	it('judges a private view again once the signed-in user is known', async () => {
+		const t = setup({ bookmark: '9' }, { presets: { 9: bm({ id: 9, user: 'u1', filter: { owner: { _eq: 'x' } } }) } });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		// the user is not known yet: nothing but a global view can be judged
+		expect(page.bookmarkUnavailable.value).toBe(true);
+		(t.host.user as any).value = { id: 'u1', role: 'r1' };
+		await flush();
+		await flush();
+		expect(page.bookmarkUnavailable.value).toBe(false);
+		expect(t.items().at(-1)!.params.filter).toContain('owner');
+	});
+
+	it('ignores a ?sort= the page does not offer', async () => {
+		const t = setup({ sort: 'password' });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.sort.value).toBe('-created_at');
+		expect(t.items().at(-1)!.params.sort).toEqual(['-created_at']);
+		const ok = setup({ sort: '-nickname' });
+		useIndexPage(ok.host, samples, ok.route, ok.router);
+		await flush();
+		expect(ok.items().at(-1)!.params.sort).toEqual(['-nickname']);
+	});
+
+	it('does not ask for a relation display of a collection the user cannot read', async () => {
+		const t = setup({}, { collections: ['physical_samples', 'materials'] });
+		useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		const fields = t.items().at(-1)!.params.fields as string[];
+		expect(fields).toContain('material_id.alloy_code');
+		expect(fields).toContain('project_id');
+		expect(fields).not.toContain('project_id.project_code');
+	});
+
+	it('loads the chip options once per session, not once per page', async () => {
+		const a = setup({});
+		useIndexPage(a.host, samples, a.route, a.router);
+		await flush();
+		await flush();
+		const asked = (t: ReturnType<typeof setup>) => t.calls.filter((c) => c.path === '/items/projects' || (c.path === '/items/physical_samples' && c.params.groupBy)).length;
+		expect(asked(a)).toBe(2);
+		// a second page on the same host: the options come from the cache
+		const b = setup({}, { host: a.host });
+		const page = useIndexPage(b.host, samples, b.route, b.router);
+		await flush();
+		await flush();
+		expect(asked(a)).toBe(2); // b shares a's host and recording API: no new option requests
+		expect(page.chips.value.find((c) => c.field === 'project_id')!.options).toEqual([{ value: 'p1', label: 'STAR-01' }]);
 	});
 
 	it('offers a relation chip only for a visible collection, and loads enum values', async () => {

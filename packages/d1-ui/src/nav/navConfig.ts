@@ -159,6 +159,29 @@ function visibleTo(b: Bookmark, me: NavViewer): boolean {
 	return true;
 }
 
+// The strict form of the rule, for a view fetched by id (GET /presets/<id>, which an admin can do
+// for anyone's): whose it is must be known to say yes. user = null (the signed-in user is not
+// loaded yet) admits only global views, because nothing else can be judged. A user with no role
+// (role null) sees no role-shared view.
+export function bookmarkVisibleToUser(b: Pick<Bookmark, 'user' | 'role'>, user: { id: string; role?: string | null } | null): boolean {
+	if (b.user) return !!user && b.user === user.id;
+	if (b.role) return !!user && !!user.role && b.role === user.role;
+	return true;
+}
+
+// The saved view a named link should open (the Home tile for failed tests): global first, then the
+// role's, then the user's own, lowest id first inside each. Views this user may not see are never
+// picked, whatever the request returned.
+export function pickBookmarkId(rows: Array<Pick<Bookmark, 'id' | 'user' | 'role'>>, user: { id: string; role?: string | null } | null): number | null {
+	const mine = rows.filter((r) => bookmarkVisibleToUser(r, user)).sort((a, b) => a.id - b.id);
+	const pick = mine.find((r) => !r.user && !r.role) ?? mine.find((r) => !r.user) ?? mine[0];
+	return pick ? pick.id : null;
+}
+
+// Projects and People are bespoke pages that ignore a saved view (see indexRoute), so a view
+// listed under them would open the plain list: they get none.
+const BESPOKE_PAGES = new Set(['projects', 'people']);
+
 // visibleCollections is what GET /collections returned; null means that call failed, in which
 // case only the entries that need no collection stay (spec section 8).
 export function buildNav(visibleCollections: Set<string> | null, bookmarks: Bookmark[], isAdmin: boolean, me: NavViewer = {}): VisibleNav {
@@ -180,7 +203,7 @@ export function buildNav(visibleCollections: Set<string> | null, bookmarks: Book
 			})
 			.map((link) => ({
 				...link,
-				bookmarks: link.collection ? sortBookmarks(byCollection.get(link.collection) ?? []) : [],
+				bookmarks: link.collection && !BESPOKE_PAGES.has(link.collection) ? sortBookmarks(byCollection.get(link.collection) ?? []) : [],
 			}));
 		if (links.length) groups.push({ ...group, links });
 	}

@@ -94,10 +94,18 @@ function searchClause(def: IndexDef, q: string): Record<string, unknown> | null 
 // fields[]=a&fields[]=b, which Directus accepts, and the d1-home pages already do the same);
 // `filter` is a JSON string, which Directus parses from the query string. A chip whose field
 // the page does not offer is dropped, so a hand-edited URL cannot send Directus an unknown field.
-export function buildItemsParams(def: IndexDef, s: IndexState, bookmark: Bookmark | null): Record<string, unknown> {
+// `readable` is the set of collections the user may read (null = not known: every relation is
+// tried). A relation column whose collection is not in it is asked for as the bare key, because a
+// nested field of a collection the user cannot read is refused; the page then shows that cell blank.
+export function buildItemsParams(
+	def: IndexDef,
+	s: IndexState,
+	bookmark: Bookmark | null,
+	readable: ReadonlySet<string> | null = null,
+): Record<string, unknown> {
 	const fields = [def.primaryKey];
 	for (const c of def.columns) {
-		const f = c.relation ? `${c.field}.${c.relation.display}` : c.field;
+		const f = c.relation && (!readable || readable.has(c.relation.collection)) ? `${c.field}.${c.relation.display}` : c.field;
 		if (!fields.includes(f)) fields.push(f);
 	}
 

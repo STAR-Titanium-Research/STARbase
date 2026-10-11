@@ -7,7 +7,7 @@ import { operationLabel } from '../operationLabel';
 import type { Bookmark } from '../nav/navConfig';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { indexDefByCollection } from './indexConfig';
-import { PAGE_SIZE, queryFromState } from './indexQuery';
+import { PAGE_SIZE, bookmarkSort, queryFromState } from './indexQuery';
 import type { IndexState } from './indexQuery';
 
 type Row = Record<string, unknown>;
@@ -74,6 +74,26 @@ export function nextSort(current: string, field: string): string {
 // relation (sorting a foreign key would order by UUID).
 export function sortKey(col: ColumnDef): string {
 	return col.relation ? `${col.field}.${col.relation.display}` : col.field;
+}
+
+// The sort the URL asks for, if the page offers it: a column's sort key either way round, the def's
+// own default or the saved view's sort. Anything else (a hand-edited ?sort=) is dropped, so Directus
+// is never sent a field the page does not show. `sortable` leaves out a relation column whose
+// related collection the user cannot read.
+export function validSort(
+	def: IndexDef,
+	requested: string | null,
+	bookmark: Bookmark | null,
+	sortable: (c: ColumnDef) => boolean = () => true,
+): string | null {
+	if (!requested) return null;
+	if (requested === def.defaultSort || requested === bookmarkSort(bookmark)) return requested;
+	for (const c of def.columns) {
+		if (!sortable(c)) continue;
+		const key = sortKey(c);
+		if (requested === key || requested === `-${key}`) return requested;
+	}
+	return null;
 }
 
 export function sortDirection(current: string, field: string): 'asc' | 'desc' | null {

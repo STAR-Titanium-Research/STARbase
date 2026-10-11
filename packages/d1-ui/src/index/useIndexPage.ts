@@ -7,13 +7,14 @@ import type { ExplorerHost } from '../host';
 import { errorText, isForbidden } from '../format';
 import { useRequestGate } from '../composables/useRequestGate';
 import { useExplorerNav } from '../nav/useExplorerNav';
+import { bookmarkVisibleToUser } from '../nav/navConfig';
 import type { Bookmark } from '../nav/navConfig';
 import type { IndexDef } from './indexConfig';
 import { bookmarkSort, buildItemsParams, dataStudioLink, stateFromQuery } from './indexQuery';
 import type { IndexState } from './indexQuery';
 import {
 	BOOL_OPTIONS, effectiveState, enumOptionParams, enumOptions, extraFields, hasActiveFilters, hasExplicitQ, nextSort,
-	queryForState, relationKey, relationOptionParams, relationOptions, withChange, withSelected,
+	queryForState, relationKey, relationOptionParams, relationOptions, validSort, withChange, withSelected,
 } from './indexView';
 import type { ChipOption } from './indexView';
 
@@ -38,8 +39,20 @@ export interface ChipView {
 	value: string;
 }
 
+// Chip options per signed-in session, keyed by the collection and field the list came from. One
+// cache per host (a host is built per user), and it is emptied if the host's user turns out to be a
+// different one from the user it was filled for. A failed request is not cached.
+const chipCaches = new WeakMap<ExplorerHost, { userId: string | null; map: Map<string, ChipOption[]> }>();
+export function chipCacheFor(host: ExplorerHost): Map<string, ChipOption[]> {
+	const id = host.user.value?.id ?? null;
+	let entry = chipCaches.get(host);
+	if (!entry || (entry.userId && id && entry.userId !== id)) chipCaches.set(host, (entry = { userId: id, map: new Map() }));
+	else if (!entry.userId) entry.userId = id;
+	return entry.map;
+}
+
 export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike, router: RouterLike) {
-	const { nav, error: navError } = useExplorerNav(host);
+	const { nav, visible, loading: navLoading, error: navError } = useExplorerNav(host);
 	const gate = useRequestGate();
 	let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -52,6 +65,11 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	const settledBookmark = ref<number | null>(null);
 
 	// ---- state from the URL -------------------------------------------------------------------
+	// Which related collections the user may read (see useExplorerNav). With the list of readable
+	// collections unavailable, a relation chip or sort is tried (a 403 on its options drops the
+	// chip); otherwise only a visible collection's is offered.
+	const collectionOffered = (collection: string) => navError.value || (visible.value?.has(collection) ?? false);
+
 	const raw = computed(() => stateFromQuery(route.query));
 	const qExplicit = computed(() => hasExplicitQ(route.query));
 
@@ -65,8 +83,13 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		id === null ? null : (bookmarks.value.find((b) => b.id === id) ?? fetched.value[id] ?? null);
 	const bookmark = computed(() => bookmarkById(raw.value.bookmark));
 
-	// A saved view's own search fills the box when the URL carries no q.
-	const state = computed<IndexState>(() => effectiveState(raw.value, qExplicit.value, bookmark.value));
+	// A saved view's own search fills the box when the URL carries no q. A ?sort= the page does not
+	// offer is dropped (see validSort), so a hand-edited URL falls back to the default order.
+	const state = computed<IndexState>(() => {
+		const s = effectiveState(raw.value, qExplicit.value, bookmark.value);
+		const sort = validSort(def, s.sort, bookmark.value, (c) => !c.relation || collectionOffered(c.relation.collection));
+		return sort === s.sort ? s : { ...s, sort };
+	});
 	const bookmarkUnavailable = computed(() => settledBookmark.value !== null && settledBookmark.value === raw.value.bookmark && !bookmark.value);
 	const sort = computed(() => state.value.sort ?? bookmarkSort(bookmark.value) ?? def.defaultSort);
 
@@ -81,22 +104,46 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		} catch {
 			found = null;
 		}
+		// An admin can read anyone's preset by id, so the sidebar's rule applies here too: someone
+		// else's private view (or another role's) is "not available", not applied. While who is
+		// signed in is unknown only a global view can be told apart, and that verdict is not cached:
+		// it is asked again once the user is known (see the watch below).
+		const me = host.user.value;
+		if (found && !bookmarkVisibleToUser(found, me)) {
+			if (!me) return false;
+			found = null;
+		}
 		fetched.value = { ...fetched.value, [id]: found };
 		return found !== null;
 	}
 
 	// ---- the rows -----------------------------------------------------------------------------
+	function navSettled(): Promise<void> {
+		if (!navLoading.value) return Promise.resolve();
+		return new Promise((resolve) => {
+			const stop = watch(navLoading, (now) => {
+				if (!now) {
+					stop();
+					resolve();
+				}
+			});
+		});
+	}
+
 	async function load(): Promise<void> {
 		const token = gate.begin();
 		loading.value = true;
 		error.value = '';
 		forbidden.value = false;
+		// The relation columns depend on which collections the user can read: wait for that answer
+		// (once per session, shared with the sidebar) instead of asking for a field it refuses.
+		await navSettled();
 		const id = raw.value.bookmark;
 		const ok = await ensureBookmark(id);
 		if (!gate.isCurrent(token)) return;
 		settledBookmark.value = ok ? null : id;
 
-		const params = buildItemsParams(def, state.value, bookmark.value);
+		const params = buildItemsParams(def, state.value, bookmark.value, visible.value);
 		params.fields = [...(params.fields as string[]), ...extraFields(def).filter((f) => !(params.fields as string[]).includes(f))];
 		try {
 			const res = await host.api.get(`/items/${def.collection}`, { params });
@@ -114,6 +161,15 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 			if (gate.isCurrent(token)) loading.value = false;
 		}
 	}
+
+	// The signed-in user arrives after the first load: a saved view that could not be judged without
+	// it is looked at again.
+	watch(
+		() => host.user.value?.id,
+		(id) => {
+			if (id && settledBookmark.value !== null) void load();
+		},
+	);
 
 	// A change of the opened drawer's key alone (?open) does not reload the list.
 	const queryKey = computed(() => JSON.stringify({ ...route.query, open: undefined }));
@@ -192,14 +248,16 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	}
 
 	// ---- chips --------------------------------------------------------------------------------
-	const visibleCollections = computed(() => new Set(nav.value.groups.flatMap((g) => g.links).map((l) => l.collection).filter(Boolean) as string[]));
-	// With the list of readable collections unavailable, a relation chip is tried (a 403 on its
-	// options drops it); otherwise only a visible collection's chip is offered.
-	const collectionOffered = (collection: string) => navError.value || visibleCollections.value.has(collection);
-
 	const optionLists = ref<Record<string, ChipOption[]>>({});
 	const failedChips = ref<string[]>([]);
 	const requested = new Set<string>();
+
+	// Options come from the session cache when an earlier page already asked: moving between lists
+	// does not refetch the same projects and statuses every time.
+	function setOptions(field: string, cacheKey: string | null, options: ChipOption[]): void {
+		if (cacheKey) chipCacheFor(host).set(cacheKey, options);
+		optionLists.value = { ...optionLists.value, [field]: options };
+	}
 
 	async function loadOptions(field: string): Promise<void> {
 		const filter = def.filters.find((f) => f.field === field);
@@ -208,15 +266,21 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 			if (filter.options.kind === 'relation') {
 				const key = relationKey(filter.options.collection);
 				if (!key) throw new Error('unknown relation');
+				const cacheKey = `${filter.options.collection}.${filter.options.display}`;
+				const hit = chipCacheFor(host).get(cacheKey);
+				if (hit) return setOptions(field, null, hit);
 				const res = await host.api.get(`/items/${filter.options.collection}`, { params: relationOptionParams(key, filter.options.display) });
-				optionLists.value = { ...optionLists.value, [field]: relationOptions(res.data?.data, key, filter.options.display) };
+				setOptions(field, cacheKey, relationOptions(res.data?.data, key, filter.options.display));
 			} else if (filter.options.kind === 'enum') {
 				if (filter.options.values) {
-					optionLists.value = { ...optionLists.value, [field]: filter.options.values.map((v) => ({ value: v, label: v })) };
+					setOptions(field, null, filter.options.values.map((v) => ({ value: v, label: v })));
 					return;
 				}
+				const cacheKey = `${def.collection}.${field}`;
+				const hit = chipCacheFor(host).get(cacheKey);
+				if (hit) return setOptions(field, null, hit);
 				const res = await host.api.get(`/items/${def.collection}`, { params: enumOptionParams(field) });
-				optionLists.value = { ...optionLists.value, [field]: enumOptions(res.data?.data, field) };
+				setOptions(field, cacheKey, enumOptions(res.data?.data, field));
 			}
 		} catch {
 			failedChips.value = [...failedChips.value, field];
