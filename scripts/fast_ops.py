@@ -18,7 +18,13 @@ from __future__ import annotations
 # Columns a person may have filled on a hand-logged row: the import only fills them when blank.
 KEEP_STORED = ("owner", "outcome_notes")
 # Never updated on conflict: the row's identity.
-IDENTITY_COLS = ("operation_id", "source_run_uid", "method_id", "process_category", "source_system")
+IDENTITY_COLS = (
+    "operation_id",
+    "source_run_uid",
+    "method_id",
+    "process_category",
+    "source_system",
+)
 
 
 def upsert_set_clause(cols, table="manufacturing_operations") -> str:
@@ -69,7 +75,12 @@ def adopt_hand_logged(cur, equipment_id, source_system, runs) -> list:
         "  AND m.source_system IS NULL "
         "  AND NOT EXISTS (SELECT 1 FROM manufacturing_operations x WHERE x.source_run_uid = r.uid) "
         "RETURNING m.operation_id, m.sintering_run_number",
-        [source_system, [n for n, _ in runs], [uid for _, uid in runs], str(equipment_id)],
+        [
+            source_system,
+            [n for n, _ in runs],
+            [uid for _, uid in runs],
+            str(equipment_id),
+        ],
     )
     return cur.fetchall()
 

@@ -109,7 +109,8 @@ DSN = os.environ.get("DATABASE_URL")
 def _fingerprints_ddl() -> str:
     """The up section of the file_fingerprints migration (T0e)."""
     sql = (
-        Path(__file__).resolve().parents[2] / "db/migrations/20261010000159_file_fingerprints.sql"
+        Path(__file__).resolve().parents[2]
+        / "db/migrations/20261010000159_file_fingerprints.sql"
     ).read_text(encoding="utf-8")
     return sql.split("-- migrate:up", 1)[1].split("-- migrate:down", 1)[0]
 
@@ -141,7 +142,9 @@ def pgcur():
         "CREATE TABLE tools (id serial PRIMARY KEY, "
         "image uuid REFERENCES directus_files(id) ON DELETE SET NULL)"
     )
-    cur.execute(_fingerprints_ddl())  # the real migration, so the table is exactly what ships
+    cur.execute(
+        _fingerprints_ddl()
+    )  # the real migration, so the table is exactly what ships
     yield cur
     conn.rollback()
     conn.close()
@@ -260,7 +263,15 @@ def test_move_keeps_the_new_files_fingerprint_and_drops_the_old_ones(pgcur):
 
 def test_fingerprint_dedupe_runs_before_the_update_on_a_fake_cursor():
     cur = FakeCursor()
-    ia.repoint_file_references(cur, [("file_fingerprints", "directus_files_id", 1)], "old", "new")
-    dedupe = [i for i, s in enumerate(cur.sql) if s.startswith("DELETE FROM file_fingerprints")]
-    update = [i for i, s in enumerate(cur.sql) if s.startswith("UPDATE file_fingerprints")]
+    ia.repoint_file_references(
+        cur, [("file_fingerprints", "directus_files_id", 1)], "old", "new"
+    )
+    dedupe = [
+        i
+        for i, s in enumerate(cur.sql)
+        if s.startswith("DELETE FROM file_fingerprints")
+    ]
+    update = [
+        i for i, s in enumerate(cur.sql) if s.startswith("UPDATE file_fingerprints")
+    ]
     assert dedupe and update and dedupe[0] < update[0]

@@ -41,7 +41,8 @@ HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 VARIABLES = ("data", "DATA")  # `data` wins when both are present
 NUMERIC_KINDS = "biuf"  # bool, signed/unsigned integer, float (not complex, string, object, compound)
 MATLAB_NUMERIC_CLASSES = frozenset(
-    ["double", "single", "logical"] + [f"{p}int{b}" for p in ("", "u") for b in (8, 16, 32, 64)]
+    ["double", "single", "logical"]
+    + [f"{p}int{b}" for p in ("", "u") for b in (8, 16, 32, 64)]
 )
 
 
@@ -49,15 +50,15 @@ class FingerprintError(Exception):
     """Base class for fingerprinting failures."""
 
 
-class NoForceArray(FingerprintError):
+class NoForceArray(FingerprintError):  # noqa: N818 (named for what it means; the base is the Error)
     """The file has neither a `data` nor a `DATA` variable."""
 
 
-class BadForceArray(FingerprintError):
+class BadForceArray(FingerprintError):  # noqa: N818
     """The force variable is not a 2-D numeric array."""
 
 
-class UnreadableMat(FingerprintError):
+class UnreadableMat(FingerprintError):  # noqa: N818
     """The file cannot be parsed as a MATLAB .mat file."""
 
 
@@ -86,7 +87,9 @@ class Throttle:
             time.sleep(wait)
 
 
-def content_sha256(stream_or_path, chunk: int = 8 << 20, throttle: Throttle | None = None) -> tuple[str, int]:
+def content_sha256(
+    stream_or_path, chunk: int = 8 << 20, throttle: Throttle | None = None
+) -> tuple[str, int]:
     """SHA-256 of a whole file, given a path or a binary file object. Returns (hex, bytes read)."""
     h = hashlib.sha256()
     total = 0
@@ -125,9 +128,13 @@ def _pick(container) -> str:
     raise NoForceArray("neither 'data' nor 'DATA' in the file")
 
 
-def mat_data_sha256(path, block_bytes: int = 64 << 20, throttle: Throttle | None = None) -> tuple[str, str, int, int]:
+def mat_data_sha256(
+    path, block_bytes: int = 64 << 20, throttle: Throttle | None = None
+) -> tuple[str, str, int, int]:
     """SHA-256 of the decoded force array (see the module docstring). Returns (hex, variable, rows, cols)."""
-    if _is_hdf5(path):  # also raises FileNotFoundError / PermissionError (OSError) as-is
+    if _is_hdf5(
+        path
+    ):  # also raises FileNotFoundError / PermissionError (OSError) as-is
         return _hdf5_data_sha256(path, block_bytes, throttle)
     return _v5_data_sha256(path, throttle)
 
@@ -157,11 +164,17 @@ def _v5_data_sha256(path, throttle):
         if e.errno is not None:
             raise
         raise _unreadable(path, e) from e
-    except Exception as e:  # scipy raises ValueError, NotImplementedError, struct.error, ...
+    except (
+        Exception
+    ) as e:  # scipy raises ValueError, NotImplementedError, struct.error, ...
         raise _unreadable(path, e) from e
     var = _pick(mat)
     a = mat[var]
-    if not isinstance(a, np.ndarray) or a.ndim != 2 or a.dtype.kind not in NUMERIC_KINDS:
+    if (
+        not isinstance(a, np.ndarray)
+        or a.ndim != 2
+        or a.dtype.kind not in NUMERIC_KINDS
+    ):
         raise BadForceArray(f"{var!r} is not a 2-D numeric array")
     rows, cols = a.shape
     hashers = []
@@ -204,9 +217,16 @@ def _hdf5_data_sha256(path, block_bytes, throttle):
                 # MATLAB stores an empty array as its dimensions (rows, cols, ...), not as data.
                 dims = [int(d) for d in np.ravel(ds[()])]
                 if len(dims) != 2:
-                    raise BadForceArray(f"{var!r} is an empty array with {len(dims)} dimensions")
+                    raise BadForceArray(
+                        f"{var!r} is an empty array with {len(dims)} dimensions"
+                    )
                 rows, cols = dims
-                return _finish(rows, cols, [hashlib.sha256() for _ in range(cols)]), var, rows, cols
+                return (
+                    _finish(rows, cols, [hashlib.sha256() for _ in range(cols)]),
+                    var,
+                    rows,
+                    cols,
+                )
             if ds.ndim != 2 or ds.dtype.kind not in NUMERIC_KINDS:
                 raise BadForceArray(f"{var!r} is not a 2-D numeric array")
             cols, rows = ds.shape  # HDF5 holds the MATLAB array transposed
@@ -230,7 +250,7 @@ def _hdf5_data_sha256(path, block_bytes, throttle):
         hashers = [hashlib.sha256() for _ in range(cols)]
         try:
             for k in range(0, rows, n):
-                block = ds[:, k:k + n]
+                block = ds[:, k : k + n]
                 for j in range(cols):
                     hashers[j].update(np.ascontiguousarray(block[j], dtype="<f8"))
                 if throttle is not None:
@@ -238,7 +258,9 @@ def _hdf5_data_sha256(path, block_bytes, throttle):
         except (OSError, MemoryError):
             raise
         except Exception as e:
-            raise OSError(f"reading {var!r} from {path} failed: {type(e).__name__}: {e}") from e
+            raise OSError(
+                f"reading {var!r} from {path} failed: {type(e).__name__}: {e}"
+            ) from e
         return _finish(rows, cols, hashers), var, rows, cols
 
 
@@ -267,7 +289,11 @@ from datetime import datetime  # noqa: E402
 
 DIRECTUS_CONTAINER = "d1-database-directus-1"
 LOCAL_UPLOADS = "/directus/uploads"
-RETRY_BACKOFF_S = (2, 4, 8)  # an OSError is retried after each of these waits, then recorded as an error
+RETRY_BACKOFF_S = (
+    2,
+    4,
+    8,
+)  # an OSError is retried after each of these waits, then recorded as an error
 MISSING_STREAK = 5  # consecutive missing files before the share itself is re-checked
 PROGRESS_EVERY = 10
 _sleep = time.sleep  # indirection so tests do not wait out the backoff
@@ -281,7 +307,9 @@ class FileJob:
     filename_disk: str | None
     filename_download: str | None
     size_bytes: int | None  # directus_files.filesize, as read at selection time
-    source_mtime: datetime | None  # metadata.modified, else modified_on, as read at selection time
+    source_mtime: (
+        datetime | None
+    )  # metadata.modified, else modified_on, as read at selection time
 
 
 def default_archive_root() -> str:
@@ -291,7 +319,9 @@ def default_archive_root() -> str:
 
 # ---- selection ----------------------------------------------------------------------
 
-_SOURCE_MTIME_SQL = "COALESCE((f.metadata::jsonb->>'modified')::timestamptz, f.modified_on)"
+_SOURCE_MTIME_SQL = (
+    "COALESCE((f.metadata::jsonb->>'modified')::timestamptz, f.modified_on)"
+)
 # Linked = attached somewhere. machining_force_analysis.directus_files_id is the source .mat; its
 # live_cache_file / render_file are derived caches, not linked source files.
 _LINKED_SQL = """f.id IN (
@@ -301,7 +331,9 @@ _LINKED_SQL = """f.id IN (
         UNION SELECT directus_files_id FROM machining_force_analysis)"""
 
 
-def select_files(cur, phase: str, include_local: bool, retry_failed: bool, limit: int | None) -> list[FileJob]:
+def select_files(
+    cur, phase: str, include_local: bool, retry_failed: bool, limit: int | None
+) -> list[FileJob]:
     """The files that need (re)hashing, never-tried first. See the section comment for the rules."""
     if phase not in ("linked", "all"):
         raise ValueError(f"phase must be 'linked' or 'all', not {phase!r}")
@@ -365,8 +397,17 @@ def _stat(job: FileJob, path: str):
 
 def _local_stat(filename_disk: str):
     r = subprocess.run(
-        ["docker", "exec", DIRECTUS_CONTAINER, "stat", "-c", "%s %Y", f"{LOCAL_UPLOADS}/{filename_disk}"],
-        capture_output=True, text=True,
+        [
+            "docker",
+            "exec",
+            DIRECTUS_CONTAINER,
+            "stat",
+            "-c",
+            "%s %Y",
+            f"{LOCAL_UPLOADS}/{filename_disk}",
+        ],
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
         if "No such file" in r.stderr:
@@ -380,8 +421,15 @@ def _local_stat(filename_disk: str):
 def _local_open(filename_disk: str):
     """A binary stream of a file in the Directus container uploads (docker exec ... cat)."""
     p = subprocess.Popen(
-        ["docker", "exec", DIRECTUS_CONTAINER, "cat", f"{LOCAL_UPLOADS}/{filename_disk}"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        [
+            "docker",
+            "exec",
+            DIRECTUS_CONTAINER,
+            "cat",
+            f"{LOCAL_UPLOADS}/{filename_disk}",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
     try:
         yield p.stdout
@@ -391,7 +439,9 @@ def _local_open(filename_disk: str):
     finally:
         p.stdout.close()
         rc = p.wait()
-    if rc != 0:  # reached only when the body completed: the stream was cut short or the file vanished
+    if (
+        rc != 0
+    ):  # reached only when the body completed: the stream was cut short or the file vanished
         raise OSError(f"docker exec cat exited {rc} for {filename_disk}")
 
 
@@ -407,14 +457,18 @@ class _Tee:
         return b
 
 
-def _hash_file(job, path, is_mat, throttle, block_bytes, got) -> FingerprintError | None:
+def _hash_file(
+    job, path, is_mat, throttle, block_bytes, got
+) -> FingerprintError | None:
     """Fill `got` with the content / mat results; return a FingerprintError for a permanent .mat failure.
     OSError propagates (the caller retries). got['content'] is set only for a fully read file."""
     if job.storage != "local":
         got["content"], _ = content_sha256(path, throttle=throttle)
         if is_mat:
             try:
-                got["mat"] = mat_data_sha256(path, block_bytes=block_bytes, throttle=throttle)
+                got["mat"] = mat_data_sha256(
+                    path, block_bytes=block_bytes, throttle=throttle
+                )
             except FingerprintError as e:
                 return e
         return None
@@ -427,10 +481,14 @@ def _hash_file(job, path, is_mat, throttle, block_bytes, got) -> FingerprintErro
                     digest, _ = content_sha256(_Tee(stream, out), throttle=throttle)
             else:
                 digest, _ = content_sha256(stream, throttle=throttle)
-        got["content"] = digest  # only once the stream ended cleanly (the exit above checks docker status)
+        got["content"] = (
+            digest  # only once the stream ended cleanly (the exit above checks docker status)
+        )
         if is_mat:
             try:
-                got["mat"] = mat_data_sha256(tmp, block_bytes=block_bytes, throttle=throttle)
+                got["mat"] = mat_data_sha256(
+                    tmp, block_bytes=block_bytes, throttle=throttle
+                )
             except FingerprintError as e:
                 return e
         return None
@@ -447,16 +505,29 @@ def _should_retry(attempt: int) -> bool:
     return False
 
 
-def fingerprint_job(job: FileJob, archive_root: str, throttle=None, block_bytes: int = 64 << 20,
-                    on_start=None) -> dict:
+def fingerprint_job(
+    job: FileJob,
+    archive_root: str,
+    throttle=None,
+    block_bytes: int = 64 << 20,
+    on_start=None,
+) -> dict:
     """Hash one file and return the file_fingerprints row values (nothing is written here).
 
     `on_start` (optional) runs once the file is known to exist and just before it is read; the
     runner uses it to write and commit the provisional row, so a hard crash leaves the file recorded.
     """
-    row = {"status": None, "content_sha256": None, "data_sha256": None, "data_variable": None,
-           "data_rows": None, "data_cols": None, "size_bytes": job.size_bytes,
-           "source_mtime": job.source_mtime, "error_message": None}
+    row = {
+        "status": None,
+        "content_sha256": None,
+        "data_sha256": None,
+        "data_variable": None,
+        "data_rows": None,
+        "data_cols": None,
+        "size_bytes": job.size_bytes,
+        "source_mtime": job.source_mtime,
+        "error_message": None,
+    }
 
     def result(status, message=None, **more):
         return {**row, "status": status, "error_message": message, **more}
@@ -491,9 +562,18 @@ def fingerprint_job(job: FileJob, archive_root: str, throttle=None, block_bytes:
             if _should_retry(attempt):
                 attempt += 1
                 continue
-            return result("error", f"{type(e).__name__}: {e}", content_sha256=got.get("content"), io_failure=True)
+            return result(
+                "error",
+                f"{type(e).__name__}: {e}",
+                content_sha256=got.get("content"),
+                io_failure=True,
+            )
         except Exception as e:  # noqa: BLE001 - one odd file must not stop a 10K-file run
-            return result("error", f"unexpected {type(e).__name__}: {e}", content_sha256=got.get("content"))
+            return result(
+                "error",
+                f"unexpected {type(e).__name__}: {e}",
+                content_sha256=got.get("content"),
+            )
         if after != before:
             return result("error", "file changed while hashing")
         if ferr is not None:
@@ -501,7 +581,12 @@ def fingerprint_job(job: FileJob, archive_root: str, throttle=None, block_bytes:
         out = result("done", None, content_sha256=got["content"])
         if "mat" in got:
             digest, variable, rows, cols = got["mat"]
-            out.update(data_sha256=digest, data_variable=variable, data_rows=rows, data_cols=cols)
+            out.update(
+                data_sha256=digest,
+                data_variable=variable,
+                data_rows=rows,
+                data_cols=cols,
+            )
         return out
 
 
@@ -516,8 +601,17 @@ _UPSERT_SQL = """
         data_rows = EXCLUDED.data_rows, data_cols = EXCLUDED.data_cols, size_bytes = EXCLUDED.size_bytes,
         source_mtime = EXCLUDED.source_mtime, error_message = EXCLUDED.error_message, hashed_at = now()
 """
-_ROW_KEYS = ("status", "content_sha256", "data_sha256", "data_variable", "data_rows", "data_cols",
-             "size_bytes", "source_mtime", "error_message")
+_ROW_KEYS = (
+    "status",
+    "content_sha256",
+    "data_sha256",
+    "data_variable",
+    "data_rows",
+    "data_cols",
+    "size_bytes",
+    "source_mtime",
+    "error_message",
+)
 
 
 def upsert_fingerprint(cur, file_id: str, row: dict) -> None:
@@ -540,12 +634,16 @@ class _Run:
         self.counts = {"done": 0, "error": 0, "missing": 0}
         self.vanished = 0  # deleted from Directus while we ran
         self.processed = 0
-        self.bytes_done = 0  # directus_files.filesize of the files finished (the ETA basis)
+        self.bytes_done = (
+            0  # directus_files.filesize of the files finished (the ETA basis)
+        )
         # Rows not written yet: files that were missing or whose reads kept failing with an OSError.
         # They are written once the share is vouched for (see finish).
         self.pending: list[tuple[FileJob, dict]] = []
         self.exit_code: int | None = None  # 2: the share went away (set under the lock)
-        self.stop = threading.Event()  # Ctrl+C: workers finish the file they are on, take no more
+        self.stop = (
+            threading.Event()
+        )  # Ctrl+C: workers finish the file they are on, take no more
         self.t0 = time.monotonic()
 
     @property
@@ -577,12 +675,16 @@ class _Run:
 
     def share_gone(self, n):
         self.exit_code = 2
-        print(f"stopping: {n} file(s) in a row were missing or unreadable and the archive root {self.root!r} "
-              f"is no longer reachable; those files were not marked, rows already written are kept (exit 2)",
-              file=sys.stderr)
+        print(
+            f"stopping: {n} file(s) in a row were missing or unreadable and the archive root {self.root!r} "
+            f"is no longer reachable; those files were not marked, rows already written are kept (exit 2)",
+            file=sys.stderr,
+        )
 
     def finish(self, conn, job, row):
-        if self.exit_code is not None:  # another worker found the share gone: write nothing more
+        if (
+            self.exit_code is not None
+        ):  # another worker found the share gone: write nothing more
             return
         # A streak candidate is a file that was not found, or whose reads kept failing with an OSError
         # (on a dropped Windows share these are errors like WinError 64/59/121, not "not found"). Neither
@@ -595,7 +697,9 @@ class _Run:
                     return
                 self.flush_pending(conn)
         else:
-            self.flush_pending(conn)  # a file was read: the earlier failures were genuinely the files
+            self.flush_pending(
+                conn
+            )  # a file was read: the earlier failures were genuinely the files
             self._write(conn, job, row)
         self.processed += 1
         self.bytes_done += job.size_bytes or 0
@@ -609,8 +713,10 @@ class _Run:
         left = max(self.total_bytes - self.bytes_done, 0)
         eta = f"{left / file_rate / 60:.0f} min" if file_rate > 0 else "?"
         c = self.counts
-        return (f"[{self.processed}/{self.total}] {c['done']} done, {c['error']} error, {c['missing']} missing | "
-                f"{self.bytes_read / 1e9:.2f} GB read | {rate / 1e6:.1f} MB/s | ETA {eta}")
+        return (
+            f"[{self.processed}/{self.total}] {c['done']} done, {c['error']} error, {c['missing']} missing | "
+            f"{self.bytes_read / 1e9:.2f} GB read | {rate / 1e6:.1f} MB/s | ETA {eta}"
+        )
 
 
 def _worker(run: _Run, conn) -> None:
@@ -619,9 +725,16 @@ def _worker(run: _Run, conn) -> None:
     def provisional(job):
         """Record the file as 'hashing started' and commit, before reading a byte of it."""
         with conn.cursor() as cur:
-            upsert_fingerprint(cur, job.id, {"status": "error", "size_bytes": job.size_bytes,
-                                             "source_mtime": job.source_mtime,
-                                             "error_message": "hashing started"})
+            upsert_fingerprint(
+                cur,
+                job.id,
+                {
+                    "status": "error",
+                    "size_bytes": job.size_bytes,
+                    "source_mtime": job.source_mtime,
+                    "error_message": "hashing started",
+                },
+            )
         conn.commit()
 
     while run.exit_code is None and not run.stop.is_set():
@@ -630,9 +743,16 @@ def _worker(run: _Run, conn) -> None:
         except IndexError:
             return
         try:
-            row = fingerprint_job(job, run.root, run.throttle, run.block_bytes,
-                                  on_start=lambda job=job: provisional(job))
-        except psycopg2.errors.ForeignKeyViolation:  # the file left Directus since we selected it
+            row = fingerprint_job(
+                job,
+                run.root,
+                run.throttle,
+                run.block_bytes,
+                on_start=lambda job=job: provisional(job),
+            )
+        except (
+            psycopg2.errors.ForeignKeyViolation
+        ):  # the file left Directus since we selected it
             conn.rollback()
             with run.lock:
                 run.vanished += 1
@@ -652,25 +772,56 @@ def _dry_run(jobs, root) -> int:
             path, ok = f"<unresolvable: {j.archive_path or j.filename_disk}>", False
         exist += ok
         total += j.size_bytes or 0
-        print(f"{j.id}  {j.size_bytes or 0:>14}  {path}  {'exists' if ok else 'missing'}")
-    print(f"{len(jobs)} files, {total / 1e9:.2f} GB, {exist} of {len(jobs)} paths exist "
-          f"(dry run: nothing read or written)")
+        print(
+            f"{j.id}  {j.size_bytes or 0:>14}  {path}  {'exists' if ok else 'missing'}"
+        )
+    print(
+        f"{len(jobs)} files, {total / 1e9:.2f} GB, {exist} of {len(jobs)} paths exist "
+        f"(dry run: nothing read or written)"
+    )
     return 0
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Hash Directus files on the lab share into file_fingerprints.")
-    p.add_argument("--phase", choices=("linked", "all"), required=True,
-                   help="linked: files attached to operations/samples/sessions/force analyses; all: every file")
-    p.add_argument("--workers", type=int, default=1, help="parallel hashing threads (default 1)")
-    p.add_argument("--max-mb-s", type=float, default=60.0,
-                   help="global read cap in MB/s across all workers (default 60; 0 = unlimited)")
-    p.add_argument("--limit", type=int, default=None, help="stop after selecting N files")
-    p.add_argument("--skip-failed", action="store_true", help="do not retry files recorded as missing or error")
-    p.add_argument("--include-local", action="store_true",
-                   help="also hash storage='local' files, read from the Directus container via docker exec")
-    p.add_argument("--archive-root", default=None, help="the share root (default: env ARCHIVE_UNC)")
-    p.add_argument("--dry-run", action="store_true", help="list what would be hashed; read and write nothing")
+    p = argparse.ArgumentParser(
+        description="Hash Directus files on the lab share into file_fingerprints."
+    )
+    p.add_argument(
+        "--phase",
+        choices=("linked", "all"),
+        required=True,
+        help="linked: files attached to operations/samples/sessions/force analyses; all: every file",
+    )
+    p.add_argument(
+        "--workers", type=int, default=1, help="parallel hashing threads (default 1)"
+    )
+    p.add_argument(
+        "--max-mb-s",
+        type=float,
+        default=60.0,
+        help="global read cap in MB/s across all workers (default 60; 0 = unlimited)",
+    )
+    p.add_argument(
+        "--limit", type=int, default=None, help="stop after selecting N files"
+    )
+    p.add_argument(
+        "--skip-failed",
+        action="store_true",
+        help="do not retry files recorded as missing or error",
+    )
+    p.add_argument(
+        "--include-local",
+        action="store_true",
+        help="also hash storage='local' files, read from the Directus container via docker exec",
+    )
+    p.add_argument(
+        "--archive-root", default=None, help="the share root (default: env ARCHIVE_UNC)"
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list what would be hashed; read and write nothing",
+    )
     return p
 
 
@@ -685,21 +836,36 @@ def main(argv=None) -> int:
         print("DATABASE_URL is required", file=sys.stderr)
         return 2
     if not os.path.isdir(root):
-        print(f"archive root {root!r} is not reachable (is the share mounted / VPN up?); nothing written",
-              file=sys.stderr)
+        print(
+            f"archive root {root!r} is not reachable (is the share mounted / VPN up?); nothing written",
+            file=sys.stderr,
+        )
         return 2
     import psycopg2
 
     conns = []
     try:
-        with contextlib.closing(psycopg2.connect(dsn)) as sel_conn:  # not kept: it would idle for the whole run
+        with contextlib.closing(
+            psycopg2.connect(dsn)
+        ) as sel_conn:  # not kept: it would idle for the whole run
             with sel_conn.cursor() as cur:
-                jobs = select_files(cur, args.phase, args.include_local, not args.skip_failed, args.limit)
+                jobs = select_files(
+                    cur,
+                    args.phase,
+                    args.include_local,
+                    not args.skip_failed,
+                    args.limit,
+                )
             sel_conn.commit()
         if args.dry_run:
             return _dry_run(jobs, root)
-        print(f"{len(jobs)} file(s) to hash, {sum(j.size_bytes or 0 for j in jobs) / 1e9:.2f} GB", flush=True)
-        throttle = _CountingThrottle(Throttle(args.max_mb_s * 1e6 if args.max_mb_s > 0 else None))
+        print(
+            f"{len(jobs)} file(s) to hash, {sum(j.size_bytes or 0 for j in jobs) / 1e9:.2f} GB",
+            flush=True,
+        )
+        throttle = _CountingThrottle(
+            Throttle(args.max_mb_s * 1e6 if args.max_mb_s > 0 else None)
+        )
         run = _Run(jobs, root, throttle, 64 << 20)
         if args.workers == 1 or len(jobs) <= 1:
             conn = psycopg2.connect(dsn)
@@ -708,7 +874,10 @@ def main(argv=None) -> int:
                 _worker(run, conn)
             except KeyboardInterrupt:
                 run.stop.set()
-                print("interrupted: the file in progress is left as 'hashing started'", file=sys.stderr)
+                print(
+                    "interrupted: the file in progress is left as 'hashing started'",
+                    file=sys.stderr,
+                )
         else:
             errors: list[BaseException] = []
 
@@ -723,7 +892,9 @@ def main(argv=None) -> int:
             for _ in range(args.workers):
                 conn = psycopg2.connect(dsn)
                 conns.append(conn)
-                threads.append(threading.Thread(target=target, args=(conn,), daemon=True))
+                threads.append(
+                    threading.Thread(target=target, args=(conn,), daemon=True)
+                )
             _join_workers(threads, run)
             if errors:
                 raise errors[0]
@@ -736,10 +907,13 @@ def main(argv=None) -> int:
                 run.share_gone(len(run.pending))
         c = run.counts
         interrupted = run.stop.is_set() and run.exit_code is None
-        print(f"{'interrupted' if interrupted else 'finished' if run.exit_code is None else 'stopped'}: "
-              f"{c['done']} done, {c['error']} error, {c['missing']} missing"
-              + (f", {run.vanished} vanished" if run.vanished else "")
-              + f" | {run.bytes_read / 1e9:.2f} GB read in {time.monotonic() - run.t0:.0f} s", flush=True)
+        print(
+            f"{'interrupted' if interrupted else 'finished' if run.exit_code is None else 'stopped'}: "
+            f"{c['done']} done, {c['error']} error, {c['missing']} missing"
+            + (f", {run.vanished} vanished" if run.vanished else "")
+            + f" | {run.bytes_read / 1e9:.2f} GB read in {time.monotonic() - run.t0:.0f} s",
+            flush=True,
+        )
         return 130 if interrupted else run.exit_code or 0
     finally:
         for conn in conns:
@@ -762,15 +936,22 @@ def _join_workers(threads, run: _Run) -> None:
         return
     except KeyboardInterrupt:
         run.stop.set()
-        print("interrupted: finishing the files in progress (Ctrl+C again to stop at once)",
-              file=sys.stderr, flush=True)
+        print(
+            "interrupted: finishing the files in progress (Ctrl+C again to stop at once)",
+            file=sys.stderr,
+            flush=True,
+        )
     try:
         while any(t.is_alive() for t in threads):
             for t in threads:
                 if t.is_alive():  # (a thread whose start was interrupted never ran)
                     t.join(0.5)
     except KeyboardInterrupt:
-        print("stopping at once; files in progress stay 'hashing started'", file=sys.stderr, flush=True)
+        print(
+            "stopping at once; files in progress stay 'hashing started'",
+            file=sys.stderr,
+            flush=True,
+        )
         run.exit_code = run.exit_code or 130
 
 

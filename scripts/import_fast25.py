@@ -289,7 +289,9 @@ def write_operations(
     # Enqueue the per-run EMD trace for decoding by fast_orchestrator (fast_his.decode_emd).
     # Guard IS DISTINCT FROM 'done' so re-runs don't re-drain finished traces.
     # An adopted operation keeps its own id, so read the ids back instead of using the derived ones.
-    ids = fast_ops.operation_ids_for(cur, [o["source_run_uid"] for o in ops if o["emd_rel"]])
+    ids = fast_ops.operation_ids_for(
+        cur, [o["source_run_uid"] for o in ops if o["emd_rel"]]
+    )
     enq = [(ids[o["source_run_uid"]], o["emd_rel"]) for o in ops if o["emd_rel"]]
     psycopg2.extras.execute_values(
         cur,
