@@ -239,7 +239,8 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	);
 
 	// ---- header and rows ----------------------------------------------------------------------
-	const dsLink = computed(() => dataStudioLink(def, state.value));
+	// A search that only came from the saved view is the view's own: the Data Studio applies it with the bookmark.
+	const dsLink = computed(() => dataStudioLink(def, qExplicit.value ? state.value : raw.value));
 	const rowKey = (row: Record<string, unknown>): string => String(row[def.primaryKey]);
 	// A relation column sorts by the related row's field, which needs that collection readable.
 	const relationSortable = (collection: string) => collectionOffered(collection);

@@ -80,6 +80,17 @@ describe('useIndexPage', () => {
 		expect(JSON.stringify(filter)).toContain('ti64');
 	});
 
+	it('opens a saved view in the Data Studio with its own search, but not an extra one', async () => {
+		const t = setup({ bookmark: '7' }, { bookmarks: [bm({ search: 'ti64' })] });
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		expect(page.dsLink.value).toEqual({ to: '/content/physical_samples?bookmark=7', note: null });
+		t.route.query = { bookmark: '7', q: 'other' };
+		await flush();
+		expect(page.dsLink.value.to).toBe('/content/physical_samples');
+		expect(page.dsLink.value.note).not.toBeNull();
+	});
+
 	it('keeps an emptied search empty over such a saved view', async () => {
 		const t = setup({ bookmark: '7' }, { bookmarks: [bm({ search: 'ti64' })] });
 		const page = useIndexPage(t.host, samples, t.route, t.router);
