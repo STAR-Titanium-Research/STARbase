@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, provide, ref } from 'vue';
-import { EXPLORER_HOST, ExplorerNav, Finder, isFinderShortcut } from '@d1/ui';
+import { EXPLORER_HOST, ExplorerNav, Finder, isFinderShortcut, isModalOpen } from '@d1/ui';
 import { useExplorerHost } from './explorerHost';
 
 // The frame of every Explorer page in the Directus app: Directus's <private-view> with the
@@ -18,8 +18,8 @@ const openFinder = () => {
 };
 
 // A Directus drawer or dialog being open means the user is in the middle of a form: Ctrl K does
-// not pull the finder over it. (Directus's v-overlay carries the `active` class while shown.)
-const overlayOpen = () => !!document.querySelector('.v-overlay.active, [role="dialog"][aria-modal="true"]');
+// not pull the finder over it. (See isModalOpen for why this is not `.v-overlay.active`.)
+const overlayOpen = () => isModalOpen(document);
 
 function onKeydown(e: KeyboardEvent) {
 	if (!isFinderShortcut(e)) return;
@@ -35,7 +35,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 <template>
 	<private-view :title="title">
 		<template #navigation>
-			<ExplorerNav @open-finder="openFinder" />
+			<ExplorerNav :show-brand="false" @open-finder="openFinder" />
 			<Finder v-if="finderOpen" @close="finderOpen = false" />
 		</template>
 		<template v-for="(_, name) in $slots" :key="name" #[name]="slotProps">

@@ -124,11 +124,47 @@ function sortBookmarks(list: Bookmark[]): Bookmark[] {
 	);
 }
 
+// The filter for GET /presets: only saved views meant for this user. An admin can read every
+// user's presets, so without it the sidebar would list other people's private bookmarks. Own
+// views, or shared ones (no user) that are global (no role) or for this user's role. Directus
+// resolves the $CURRENT_* variables on the server.
+export const BOOKMARK_VISIBILITY_FILTER = {
+	_and: [
+		{ bookmark: { _nnull: true } },
+		{
+			_or: [
+				{ user: { _eq: '$CURRENT_USER' } },
+				{
+					_and: [
+						{ user: { _null: true } },
+						{ _or: [{ role: { _null: true } }, { role: { _eq: '$CURRENT_ROLE' } }] },
+					],
+				},
+			],
+		},
+	],
+};
+
+// Who is looking: an unknown id or role (not loaded yet, or the request failed) filters nothing
+// here, the server filter above already did.
+export interface NavViewer {
+	id?: string | null;
+	role?: string | null;
+}
+
+// The same rule as the server filter, as a second line of defence.
+function visibleTo(b: Bookmark, me: NavViewer): boolean {
+	if (b.user) return !me.id || b.user === me.id;
+	if (b.role) return !me.role || b.role === me.role;
+	return true;
+}
+
 // visibleCollections is what GET /collections returned; null means that call failed, in which
 // case only the entries that need no collection stay (spec section 8).
-export function buildNav(visibleCollections: Set<string> | null, bookmarks: Bookmark[], isAdmin: boolean): VisibleNav {
+export function buildNav(visibleCollections: Set<string> | null, bookmarks: Bookmark[], isAdmin: boolean, me: NavViewer = {}): VisibleNav {
 	const byCollection = new Map<string, Bookmark[]>();
 	for (const b of bookmarks) {
+		if (!visibleTo(b, me)) continue;
 		const list = byCollection.get(b.collection);
 		if (list) list.push(b);
 		else byCollection.set(b.collection, [b]);

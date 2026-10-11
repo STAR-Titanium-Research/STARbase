@@ -20,6 +20,10 @@ import { useExplorerNav } from './useExplorerNav';
 
 defineEmits<{ (e: 'open-finder'): void }>();
 
+// The brand block (name and tagline). Inside Directus the project header above the navigation
+// slot already shows it, so ExplorerView turns it off; the standalone app leaves it on.
+withDefaults(defineProps<{ showBrand?: boolean }>(), { showBrand: true });
+
 const host = inject(EXPLORER_HOST);
 if (!host) throw new Error('ExplorerNav needs an ExplorerHost: render it inside ExplorerView');
 const { nav, loading, error, refresh } = useExplorerNav(host);
@@ -77,7 +81,7 @@ watch(
 
 <template>
 	<nav class="d1-kit d1-nav" aria-label="Explorer">
-		<div class="brand">
+		<div v-if="showBrand" class="brand">
 			STARBase
 			<small>A sisyphean pursuit</small>
 		</div>

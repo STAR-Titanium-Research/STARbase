@@ -21,7 +21,7 @@ export function useExplorerHost(): ExplorerHost {
 	if (current && current.userId === userId) return current.host;
 
 	const isAdmin = ref(false);
-	const user = ref<{ id: string; first_name?: string } | null>(null);
+	const user = ref<{ id: string; first_name?: string; role?: string | null } | null>(null);
 
 	// REST, not the store heuristic the pages used to guess with: GET /policies/me/globals is the
 	// server's own answer. A failure leaves false, which only hides admin-only entries.
@@ -34,7 +34,7 @@ export function useExplorerHost(): ExplorerHost {
 			isAdmin.value = false;
 		});
 	api
-		.get('/users/me', { params: { fields: 'id,first_name' } })
+		.get('/users/me', { params: { fields: 'id,first_name,role' } })
 		.then((res) => {
 			user.value = res.data?.data ?? null;
 		})

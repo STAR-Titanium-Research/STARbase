@@ -81,6 +81,17 @@ describe('toHits', () => {
 		expect(project[0]).toMatchObject({ label: 'PRJ-1', detail: 'Alpha', to: '/home/projects/pj1' });
 	});
 
+	it('names the kind of an inventory hit as its detail', () => {
+		const kinds: Array<[string, string, string]> = [
+			['tools', 'tool_code', 'Tool'], ['tool_boxes', 'tool_box_code', 'Tool box'], ['cutting_inserts', 'insert_code', 'Cutting insert'],
+			['insert_edges', 'edge_code', 'Insert edge'], ['raw_stock_lots', 'lot_code', 'Raw stock lot'],
+		];
+		for (const [collection, codeField, kind] of kinds) {
+			const [hit] = toHits(source(collection), 'x', [{ [`${collection}_id`]: 1, id: 1, [codeField]: 'X-1' }]);
+			expect(hit).toMatchObject({ group: 'Inventory', label: 'X-1', detail: kind });
+		}
+	});
+
 	it('opens inventory rows in their index page drawer by primary key', () => {
 		const lot = toHits(source('raw_stock_lots'), 'lot', [{ lot_id: 'L1', lot_code: 'LOT-1' }]);
 		expect(lot[0]).toMatchObject({ group: 'Inventory', label: 'LOT-1', to: '/home/stock-lots?open=L1' });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NAV_GROUPS, buildNav, linkForBookmark } from './navConfig';
+import { BOOKMARK_VISIBILITY_FILTER, NAV_GROUPS, buildNav, linkForBookmark } from './navConfig';
 import type { Bookmark } from './navConfig';
 
 const allCollections = new Set(NAV_GROUPS.flatMap((g) => g.links).flatMap((l) => (l.collection ? [l.collection] : [])));
@@ -127,5 +127,42 @@ describe('linkForBookmark', () => {
 
 	it('falls back to the Data Studio list for a collection with no page', () => {
 		expect(linkForBookmark(bm(5, 'x', 'audit_logs'))).toBe('/content/audit_logs?bookmark=5');
+	});
+});
+
+describe('bookmark visibility', () => {
+	const names = (nav: ReturnType<typeof buildNav>) =>
+		nav.groups.flatMap((g) => g.links).flatMap((l) => l.bookmarks).map((b) => b.bookmark).sort();
+	const mixed = [
+		bm(1, 'global', 'physical_samples'),
+		bm(2, 'my role', 'physical_samples', { role: 'r1' }),
+		bm(3, 'other role', 'physical_samples', { role: 'r2' }),
+		bm(4, 'mine', 'physical_samples', { user: 'u1' }),
+		bm(5, 'theirs', 'physical_samples', { user: 'u2' }),
+		bm(6, 'theirs in my role', 'physical_samples', { user: 'u2', role: 'r1' }),
+	];
+
+	it('drops other users\' bookmarks and other roles\' shared ones, given who is looking', () => {
+		const nav = buildNav(allCollections, mixed, true, { id: 'u1', role: 'r1' });
+		expect(names(nav)).toEqual(['global', 'mine', 'my role']);
+	});
+
+	it('filters nothing it cannot judge when the user or role is unknown', () => {
+		expect(names(buildNav(allCollections, mixed, true))).toHaveLength(6);
+		expect(names(buildNav(allCollections, mixed, true, { id: 'u1' }))).toEqual(['global', 'mine', 'my role', 'other role']);
+	});
+
+	it('asks the server only for own views and shared ones for this user\'s role', () => {
+		expect(BOOKMARK_VISIBILITY_FILTER).toEqual({
+			_and: [
+				{ bookmark: { _nnull: true } },
+				{
+					_or: [
+						{ user: { _eq: '$CURRENT_USER' } },
+						{ _and: [{ user: { _null: true } }, { _or: [{ role: { _null: true } }, { role: { _eq: '$CURRENT_ROLE' } }] }] },
+					],
+				},
+			],
+		});
 	});
 });

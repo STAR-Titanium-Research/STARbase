@@ -43,6 +43,16 @@ export function moveIndex(current: number, delta: 1 | -1, count: number): number
 	return (current + delta + count) % count;
 }
 
+// A real modal on screen: an open Directus drawer or dialog (or any other aria-modal dialog that
+// is not the finder itself). Not `.v-overlay.active`: at narrow widths Directus's own navigation
+// drawer is an absolute v-overlay that is "active" whenever the nav is shown, and that would block
+// Ctrl K for good. The v-overlay machinery is only mounted while open, so presence is enough.
+export const MODAL_SELECTOR = '.v-drawer, .v-dialog .content, [role="dialog"][aria-modal="true"]:not(.d1-finder)';
+
+export function isModalOpen(doc: { querySelector(selector: string): unknown }): boolean {
+	return !!doc.querySelector(MODAL_SELECTOR);
+}
+
 // Ctrl K on Windows/Linux, Cmd K on Mac; with Shift or Alt it is someone else's shortcut.
 export function isFinderShortcut(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): boolean {
 	return (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k';

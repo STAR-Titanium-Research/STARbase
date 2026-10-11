@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinderHit } from './finder';
-import { isFinderShortcut, moveIndex, optionId, toSections } from './finderNav';
+import { isFinderShortcut, isModalOpen, MODAL_SELECTOR, moveIndex, optionId, toSections } from './finderNav';
 
 const hit = (group: FinderHit['group'], label: string): FinderHit => ({ group, label, to: `/x/${label}`, rank: 3 });
 
@@ -60,5 +60,19 @@ describe('isFinderShortcut', () => {
 		expect(isFinderShortcut(key({ ctrlKey: true, key: 'j' }))).toBe(false);
 		expect(isFinderShortcut(key({ ctrlKey: true, shiftKey: true }))).toBe(false);
 		expect(isFinderShortcut(key({ ctrlKey: true, altKey: true }))).toBe(false);
+	});
+});
+
+describe('isModalOpen', () => {
+	it('asks for an open drawer or dialog, not for any active overlay', () => {
+		const asked: string[] = [];
+		const doc = (found: boolean) => ({ querySelector: (s: string) => (asked.push(s), found ? {} : null) });
+		expect(isModalOpen(doc(true))).toBe(true);
+		expect(isModalOpen(doc(false))).toBe(false);
+		// Directus's own navigation drawer is an absolute, "active" v-overlay at narrow widths.
+		expect(asked[0]).toBe(MODAL_SELECTOR);
+		expect(MODAL_SELECTOR).not.toMatch(/\.v-overlay/);
+		expect(MODAL_SELECTOR).toContain('.v-drawer');
+		expect(MODAL_SELECTOR).toContain(':not(.d1-finder)');
 	});
 });

@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue';
 import type { ComputedRef, Ref } from 'vue';
 import type { ExplorerHost } from '../host';
-import { buildNav } from './navConfig';
+import { BOOKMARK_VISIBILITY_FILTER, buildNav } from './navConfig';
 import type { Bookmark, VisibleNav } from './navConfig';
 
 // What the sidebar loads: the collections this user can read and their saved views (spec section
@@ -32,7 +32,8 @@ async function fetchVisibleCollections(host: ExplorerHost): Promise<Set<string>>
 async function fetchBookmarks(host: ExplorerHost): Promise<Bookmark[]> {
 	const res = await host.api.get('/presets', {
 		params: {
-			filter: { bookmark: { _nnull: true } },
+			// A JSON string: the nested _and/_or arrays survive any params serializer (indexQuery does the same).
+			filter: JSON.stringify(BOOKMARK_VISIBILITY_FILTER),
 			fields: BOOKMARK_FIELDS,
 			sort: 'bookmark',
 			limit: -1,
@@ -72,7 +73,10 @@ export function useExplorerNav(host: ExplorerHost): ExplorerNavState {
 
 	// Until the first answer there is nothing to trim by: show only the entries that need no
 	// collection (the same as the failure case), and the component shows a loading line.
-	const nav = computed(() => buildNav(visible.value, bookmarks.value, host.isAdmin.value));
+	const nav = computed(() => buildNav(visible.value, bookmarks.value, host.isAdmin.value, {
+		id: host.user.value?.id,
+		role: host.user.value?.role,
+	}));
 
 	const state: ExplorerNavState = { nav, visible, loading, error, refresh };
 	states.set(host, state);

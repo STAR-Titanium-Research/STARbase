@@ -45,7 +45,7 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 // An inventory code finds its row and opens the index page with that row's drawer. The key comes
 // from indexConfig so a renamed primary key cannot leave the finder behind.
-function inventory(collection: string, codeField: string, extra: string[] = []): FinderSource {
+function inventory(collection: string, codeField: string, kind: string, extra: string[] = []): FinderSource {
 	const pk = indexDefByCollection(collection)?.primaryKey ?? `${collection}_id`;
 	return {
 		group: 'Inventory',
@@ -53,6 +53,8 @@ function inventory(collection: string, codeField: string, extra: string[] = []):
 		fields: [pk, codeField, ...extra],
 		match: [codeField],
 		label: (r) => str(r[codeField]) || String(r[pk]),
+		// The code alone does not say what it is: a tool box and an insert edge look alike.
+		detail: () => kind,
 		to: (r) => indexRoute(collection, { open: String(r[pk]) }),
 	};
 }
@@ -116,11 +118,11 @@ export const FINDER_SOURCES: FinderSource[] = [
 		// The People page has no per-person route: it opens searched for the name.
 		to: (r) => `/home/people?q=${encodeURIComponent(str(r.full_name))}`,
 	},
-	inventory('tools', 'tool_code'),
-	inventory('tool_boxes', 'tool_box_code'),
-	inventory('cutting_inserts', 'insert_code'),
-	inventory('insert_edges', 'edge_code'),
-	inventory('raw_stock_lots', 'lot_code'),
+	inventory('tools', 'tool_code', 'Tool'),
+	inventory('tool_boxes', 'tool_box_code', 'Tool box'),
+	inventory('cutting_inserts', 'insert_code', 'Cutting insert'),
+	inventory('insert_edges', 'edge_code', 'Insert edge'),
+	inventory('raw_stock_lots', 'lot_code', 'Raw stock lot'),
 ];
 
 // Only the sources whose collection the user can read; null (the /collections call failed) leaves

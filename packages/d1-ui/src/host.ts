@@ -10,7 +10,7 @@ export interface ExplorerHost {
 	// A Data Studio path, e.g. '/content/samples'.
 	openDataStudio(path: string): void;
 	isAdmin: Ref<boolean>;
-	user: Ref<{ id: string; first_name?: string } | null>;
+	user: Ref<{ id: string; first_name?: string; role?: string | null } | null>;
 }
 
 export const EXPLORER_HOST: InjectionKey<ExplorerHost> = Symbol('ExplorerHost');
