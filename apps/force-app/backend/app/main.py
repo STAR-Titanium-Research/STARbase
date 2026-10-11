@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 from fastapi import (
+    Depends,
     FastAPI,
     File,
     Form,
@@ -51,6 +52,7 @@ from . import (
     nidaq_enum,
     origin_guard,
     recovery,
+    rig_test,
     storage,
     virtual_channels,
 )
@@ -343,7 +345,9 @@ async def lifespan(app: FastAPI):
             pass
 
     asyncio.get_running_loop().run_in_executor(None, _warm_nidaq)
+    rig_test.start_poller()
     yield
+    rig_test.stop_poller()
     # Graceful shutdown: stop any active recording so the raw file is properly closed and finalized.
     # finalize() now runs in its own background thread (see session.py) so normal /record/stop calls
     # return quickly — but here, where the process may be killed right after, we must wait for it to
@@ -356,7 +360,17 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="force-app-recorder", lifespan=lifespan)
+app = FastAPI(
+    title="force-app-recorder", lifespan=lifespan, dependencies=[Depends(rig_test.lock_guard)]
+)
+rig_test.configure(
+    devices=lambda: _devices(),
+    labamp=lambda: _labamp,
+    is_busy=lambda: _busy(),
+    captures_root=lambda: CAPTURES_ROOT,
+    config_dir=CONFIG_DIR,
+)
+app.include_router(rig_test.router)
 
 _cors = [
     o.strip()
@@ -1902,6 +1916,7 @@ async def record_start(cfg: RecordConfig) -> dict:
     # the assignment, so exactly one of two overlapping starts wins and none is orphaned.
     if _busy():
         raise HTTPException(409, "a recording is already in progress")
+    rig_test.refuse_if_rig_test()  # an accept may have landed while this start was parked above
     _session = RecordingSession(cfg, CAPTURES_ROOT, source, broadcaster=_broadcaster)
     _session.start()
     return _session.status()
@@ -1956,6 +1971,7 @@ async def record_start_replay(
     # `await file.read()` above yielded to the loop; re-check with no await before assigning.
     if _busy():
         raise HTTPException(409, "a recording is already in progress")
+    rig_test.refuse_if_rig_test()
     _session = RecordingSession(cfg, CAPTURES_ROOT, source, broadcaster=_broadcaster)
     _session.start()
     return _session.status()
@@ -2049,7 +2065,10 @@ def _capture_ids() -> list[str]:
     # scandir: the "is it a folder" answer comes with the listing, where os.path.isdir per name was
     # one more round trip per capture on a network drive.
     with os.scandir(CAPTURES_ROOT) as it:
-        return sorted((e.name for e in it if e.is_dir()), reverse=True)
+        # rig-tests/ holds rig test results, not a capture
+        return sorted(
+            (e.name for e in it if e.is_dir() and e.name != rig_test.RESULTS_DIR), reverse=True
+        )
 
 
 @app.get("/captures")
