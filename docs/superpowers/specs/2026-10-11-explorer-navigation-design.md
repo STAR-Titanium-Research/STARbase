@@ -270,3 +270,31 @@ arrow keys + Enter, Esc closes.
 - **N-Q5. Home "more" chips.** Drop the chips that the sidebar now duplicates? Recommended: yes.
 - **N-Q6. The column table (§5.1).** Please check the columns, searches and chip filters per
   collection; anything not listed there is out.
+
+## 11. As built (2026-10-11)
+
+Where the build differs from the sections above, the build wins:
+
+- **§2 host:** `explorerHost.ts` (beside `ExplorerView.vue`) is the second Directus-aware file: Home,
+  People and Register sample sit above `ExplorerView` and read `isAdmin` from it. `/users/me` also
+  fetches `role` (for the bookmark rule). `isAdmin` is seeded from the Directus user store and then
+  corrected from `GET /policies/me/globals`. A failed admin check means "not admin", with no message.
+- **§3 sidebar:** the brand is hidden inside Directus (its own project header sits above the nav);
+  collections with `meta.hidden` are left out; the bookmark request uses a visibility filter (own,
+  or shared with no role or with the user's role), because an admin can read every user's private
+  views; saved views are not nested under Projects and People (their pages ignore them); the lists
+  are cached for the session, so a saved view created in the Data Studio appears after a reload.
+- **§5 index pages:** search writes the URL after 250 ms; a failed load under a saved view offers
+  "Show the whole list"; "Clear filters" in the filter bar keeps the saved view; a `sort` from the
+  URL is accepted only if the page offers it; relation columns the user cannot read are requested
+  as the bare key; record rows carry a real link in the first cell (middle-click opens a new tab).
+  Record pages' "See the full list" links carry their context (`?q=<sample code>`, `?f.project_id=`).
+- **§6 finder:** `MIN_QUERY = 2`; Inventory shows 5 hits in total across its five sources, each
+  labelled with its kind; a short-ID hit tops its own group (groups keep their order); Ctrl K does
+  nothing while a Directus drawer or dialog is open (Directus mounts them in `#dialog-outlet`);
+  links that open a new tab (Print labels) are not finder hits.
+- **Deploy dependency:** "Report a bug" links to the `d1-bug-report` module, which exists only in
+  the main checkout (untracked). The preview works because it mounts the main checkout's
+  extensions; the module must be committed before N1 can run anywhere else.
+- **Preview:** `scripts/dev/explorer_preview.sh` runs the branch on a restored copy of live at
+  127.0.0.1:18055 with two local test logins (never on live).
