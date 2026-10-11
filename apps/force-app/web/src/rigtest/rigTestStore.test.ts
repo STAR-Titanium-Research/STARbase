@@ -33,7 +33,7 @@ function fakeApi(over: Partial<Record<keyof RigTestApi, any>> = {}) {
 }
 function make(api = fakeApi()) {
 	const notify = vi.fn();
-	const store = createRigTestStore({ api, notify, now: () => Date.now() });
+	const store = createRigTestStore({ api, notify, now: () => Date.now(), acceptContext: async () => ({ uploadBusy: false }) });
 	store.setRecordingPhase(null); // the shell has answered: idle (the store starts at 'unknown')
 	return { api, notify, store };
 }
@@ -119,7 +119,7 @@ describe('what blocks the prompt and the run modal', () => {
 
 	it('the phase is unknown until the shell answers: a badge, not a dialog (a reload mid-cut)', async () => {
 		const api = fakeApi({ getPending: vi.fn(async () => pend([req(1)])) });
-		const store = createRigTestStore({ api, notify: vi.fn(), now: () => Date.now() });
+		const store = createRigTestStore({ api, notify: vi.fn(), now: () => Date.now(), acceptContext: async () => ({ uploadBusy: false }) });
 		store.start();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(store.state.recordingPhase).toBe('unknown');
@@ -223,7 +223,7 @@ describe('notifications', () => {
 	});
 	it('a notify that throws does not break polling', async () => {
 		const api = fakeApi({ getPending: vi.fn(async () => pend([req(1)])) });
-		const store = createRigTestStore({ api, notify: () => { throw new Error('no bridge'); }, now: () => Date.now() });
+		const store = createRigTestStore({ api, notify: () => { throw new Error('no bridge'); }, now: () => Date.now(), acceptContext: async () => ({ uploadBusy: false }) });
 		store.start();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(store.state.pending).toHaveLength(1);
@@ -240,11 +240,15 @@ describe('Run now', () => {
 			getRun: vi.fn(async () => ok(runs)),
 			accept: vi.fn(async () => { pending.length = 0; return ok({ ok: true }); }),
 		});
-		const { store } = make(api);
+		const store = createRigTestStore({
+			api, notify: vi.fn(), now: () => Date.now(),
+			acceptContext: async () => ({ uploadBusy: true, operator: 'Ada Lovelace', appVersion: '0.1.37' }),
+		});
+		store.setRecordingPhase(null);
 		store.start();
 		await vi.advanceTimersByTimeAsync(0);
-		await store.accept(1, true);
-		expect(api.accept).toHaveBeenCalledWith(1, true);
+		await store.accept(1);
+		expect(api.accept).toHaveBeenCalledWith(1, { uploadBusy: true, operator: 'Ada Lovelace', appVersion: '0.1.37' });
 		expect(store.state.pending).toEqual([]);
 		// The recorder takes a moment to publish the run: the store keeps asking instead of waiting 30 s.
 		runs = runOf();
@@ -262,13 +266,13 @@ describe('Run now', () => {
 		const { store } = make(api);
 		store.start();
 		await vi.advanceTimersByTimeAsync(0);
-		await store.accept(1, false);
+		await store.accept(1);
 		expect(store.state.errors[1]).toBe('a recording is in progress');
 		expect(store.state.pending).toHaveLength(1);
 		expect(store.state.busy[1]).toBeUndefined();
 		// A later attempt clears the old message.
 		api.accept.mockResolvedValueOnce(ok({ ok: true }));
-		await store.accept(1, false);
+		await store.accept(1);
 		expect(store.state.errors[1]).toBeUndefined();
 		store.stop();
 	});
@@ -278,8 +282,8 @@ describe('Run now', () => {
 		const api = fakeApi({ accept: vi.fn(() => new Promise((r) => { release = r; })) });
 		const { store } = make(api);
 		store.start();
-		const first = store.accept(1, false);
-		await store.accept(1, false);
+		const first = store.accept(1);
+		await store.accept(1);
 		expect(api.accept).toHaveBeenCalledTimes(1);
 		release(ok({ ok: true }));
 		await first;

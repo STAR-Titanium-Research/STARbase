@@ -9,7 +9,8 @@
 import { JSON_HEADERS, recorderBase } from '../recorderHttp';
 import {
 	parseHistory, parsePending, parseRun,
-	type DeclineCode, type Eligibility, type PendingList, type RigRun, type RunSummary,
+	acceptBody,
+	type AcceptContext, type DeclineCode, type Eligibility, type PendingList, type RigRun, type RunSummary,
 } from './rigTestLogic';
 
 export type ApiResult<T> =
@@ -74,8 +75,7 @@ export async function getHistory(): Promise<ApiResult<RunSummary[]>> {
 	return map(await call('GET', '/history'), parseHistory);
 }
 
-export const accept = (n: number, uploadBusy: boolean) =>
-	call('POST', `/${n}/accept`, { mode: 'full', upload_busy: uploadBusy });
+export const accept = (n: number, ctx: AcceptContext) => call('POST', `/${n}/accept`, acceptBody(ctx));
 
 export const snooze = (n: number, until: string) => call('POST', `/${n}/snooze`, { until });
 

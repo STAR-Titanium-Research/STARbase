@@ -8,12 +8,13 @@
 // It is a factory so the tests can drive it with a fake api and fake timers; `rigTest` at the
 // bottom is the app's one real instance.
 import { computed, reactive } from 'vue';
+import { currentAcceptContext } from './acceptContext';
 import { saveDialogOpen } from './saveDialogOpen';
 import { rigTestApi, type ApiResult, type RigTestApi } from './rigTestApi';
 import {
 	justFinished, newRequests, promptMode, rigBlocked, questionKey, questionNotification, requestNotification,
 	shouldReopen, snoozeUntil, declineBody,
-	type DeclineCode, type Eligibility, type PendingList, type PhaseState, type RigRequest, type RigRun, type RunSummary,
+	type AcceptContext, type DeclineCode, type Eligibility, type PendingList, type PhaseState, type RigRequest, type RigRun, type RunSummary,
 	type SnoozeChoice, type SnoozedRequest,
 } from './rigTestLogic';
 
@@ -23,7 +24,11 @@ export const RUN_POLL_MS = 1_000;
 export const RUN_APPEAR_GRACE_MS = 10_000;
 
 export type Notify = (title: string, body: string) => void;
-export interface RigTestDeps { api: RigTestApi; notify: Notify; now: () => number }
+export interface RigTestDeps {
+	api: RigTestApi; notify: Notify; now: () => number;
+	/** Read at the moment of accepting: the upload state, the signed-in operator, the app version. */
+	acceptContext: () => Promise<AcceptContext>;
+}
 
 const NO_ROUTES = 'This recorder is too old for rig tests';
 
@@ -161,8 +166,8 @@ export function createRigTestStore(deps: RigTestDeps) {
 		} finally { delete state.busy[n]; }
 	}
 
-	async function accept(n: number, uploadBusy: boolean): Promise<void> {
-		if (!(await act(n, 'accept', () => api.accept(n, uploadBusy)))) return;
+	async function accept(n: number): Promise<void> {
+		if (!(await act(n, 'accept', async () => api.accept(n, await deps.acceptContext())))) return;
 		state.minimised = false;
 		state.forced = true;
 		expectRunUntil = deps.now() + RUN_APPEAR_GRACE_MS;
@@ -227,4 +232,4 @@ function desktopNotify(title: string, body: string): void {
 }
 
 /** The app's one store. */
-export const rigTest = createRigTestStore({ api: rigTestApi, notify: desktopNotify, now: () => Date.now() });
+export const rigTest = createRigTestStore({ api: rigTestApi, notify: desktopNotify, now: () => Date.now(), acceptContext: currentAcceptContext });

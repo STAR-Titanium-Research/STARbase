@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DECLINE_REASONS, NOTIFY_MAX, clip, currentPosition, declineBody, estimateText, finishedText, formatApproxDuration, formatClock,
-	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, progress, promptMode, questionKey, rigBlocked, barAskText,
+	justFinished, minimisedText, newRequests, parseHistory, parsePending, parseRequests, parseRun, relayInfo, snoozedUntilText, acceptBody, appVersionOf, operatorName, progress, promptMode, questionKey, rigBlocked, barAskText,
 	questionNotification, requestNotification, runView, secondsLeft, shouldReopen, snoozeUntil, stepMark, summaryCounts, timeLeft,
 	type RigRequest, type RigRun, type RunStep, type StepStatus,
 } from './rigTestLogic';
@@ -285,5 +285,26 @@ describe('relayInfo and snoozedUntilText', () => {
 		expect(snoozedUntilText('after_recording')).toMatch(/next recording/);
 		expect(snoozedUntilText('2026-10-11T17:00:00Z')).toMatch(/^Snoozed until .+/);
 		expect(snoozedUntilText('garbage')).toBe('Snoozed');
+	});
+});
+
+describe('what accept tells the recorder', () => {
+	it('the operator is the first and last name, never the email', () => {
+		expect(operatorName({ first_name: 'Ada', last_name: 'Lovelace' })).toBe('Ada Lovelace');
+		expect(operatorName({ first_name: ' Ada ', last_name: null })).toBe('Ada');
+		expect(operatorName({ last_name: 'Lovelace' })).toBe('Lovelace');
+		expect(operatorName({ first_name: '', last_name: ' ' })).toBeUndefined();
+		expect(operatorName(null)).toBeUndefined();
+		expect(operatorName({ first_name: 'Ada', last_name: 'L', email: 'ada@x.org' } as any)).not.toContain('@');
+	});
+	it('the version is the shell\'s, else the bundled one, else absent', () => {
+		expect(appVersionOf('0.1.37', '0.1.36')).toBe('0.1.37');
+		expect(appVersionOf(undefined, '0.1.36')).toBe('0.1.36');
+		expect(appVersionOf('', undefined)).toBeUndefined();
+	});
+	it('the body omits what is unknown', () => {
+		expect(acceptBody({ uploadBusy: false })).toEqual({ mode: 'full', upload_busy: false });
+		expect(acceptBody({ uploadBusy: true, operator: 'Ada', appVersion: '1.0.0' }))
+			.toEqual({ mode: 'full', upload_busy: true, operator: 'Ada', app_version: '1.0.0' });
 	});
 });

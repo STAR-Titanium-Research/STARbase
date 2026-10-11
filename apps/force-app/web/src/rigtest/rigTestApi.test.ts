@@ -55,13 +55,20 @@ describe('POST routes', () => {
 	};
 	it('accept sends the full mode and the upload state', async () => {
 		const f = stub(200, { ok: true });
-		await accept(231, true);
+		await accept(231, { uploadBusy: true });
 		expect(sent(f)).toMatchObject({ method: 'POST', body: { mode: 'full', upload_busy: true } });
 		expect(sent(f).url).toMatch(/\/rig-tests\/231\/accept$/);
+		expect(sent(f).body).not.toHaveProperty('operator');
+		expect(sent(f).body).not.toHaveProperty('app_version');
+	});
+	it('accept sends the operator name and the app version when known', async () => {
+		const f = stub(200, { ok: true });
+		await accept(231, { uploadBusy: false, operator: 'Ada Lovelace', appVersion: '0.1.37' });
+		expect(sent(f).body).toEqual({ mode: 'full', upload_busy: false, operator: 'Ada Lovelace', app_version: '0.1.37' });
 	});
 	it('a 409 carries the backend detail for the prompt to show inline', async () => {
 		stub(409, { detail: 'a recording is in progress' });
-		expect(await accept(231, false)).toEqual({ kind: 'error', status: 409, detail: 'a recording is in progress' });
+		expect(await accept(231, { uploadBusy: false })).toEqual({ kind: 'error', status: 409, detail: 'a recording is in progress' });
 	});
 	it('a 404 on a POST is an error (the request vanished), not "missing"', async () => {
 		stub(404, { detail: 'no such request' });

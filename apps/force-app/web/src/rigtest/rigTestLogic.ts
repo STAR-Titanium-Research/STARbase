@@ -287,6 +287,34 @@ export function stepMark(status: StepStatus): StepMark {
 	}
 }
 
+// ---- POST /accept --------------------------------------------------------------------------------
+
+/** What the recorder is told when the operator accepts: whether an upload is running (it
+ *  contends with a test for the machine and the network), who accepted, and which app build. */
+export interface AcceptContext { uploadBusy: boolean; operator?: string; appVersion?: string }
+
+/** The signed-in user's name for the result that is posted on the GitHub issue: first and last
+ *  name, never the email (an address must not end up on an issue). Undefined when there is no name. */
+export function operatorName(user: { first_name?: string | null; last_name?: string | null } | null | undefined): string | undefined {
+	const name = [user?.first_name, user?.last_name].map((x) => (x ?? '').trim()).filter(Boolean).join(' ');
+	return name || undefined;
+}
+
+/** The desktop shell's version; the version bundled into this build when there is no shell (the
+ *  browser-served app); undefined when neither is known. */
+export function appVersionOf(shellVersion: string | undefined, bundledVersion: string | undefined): string | undefined {
+	return shellVersion?.trim() || bundledVersion?.trim() || undefined;
+}
+
+/** The body of POST /accept: the optional fields are left out, not sent empty. */
+export function acceptBody(ctx: AcceptContext): { mode: 'full'; upload_busy: boolean; operator?: string; app_version?: string } {
+	return {
+		mode: 'full', upload_busy: ctx.uploadBusy,
+		...(ctx.operator ? { operator: ctx.operator } : {}),
+		...(ctx.appVersion ? { app_version: ctx.appVersion } : {}),
+	};
+}
+
 // ---- Settings > Rig tests ----------------------------------------------------------------------
 
 export interface RelayInfo { text: string; tone: 'ok' | 'bad' | 'dim'; icon: string }
