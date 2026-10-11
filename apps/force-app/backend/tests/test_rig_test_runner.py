@@ -227,7 +227,9 @@ def test_a_long_note_is_cut(fake, make_runner):
 
 
 def test_a_finished_run_stays_visible_for_a_while_then_goes_idle(fake, make_runner):
-    wall = [10_000.0]
+    # A real epoch, not a small number: on Windows, datetime.fromtimestamp() refuses timestamps
+    # near 1970 (OSError 22), which is what `_iso` hits when the run records started_at.
+    wall = [1_760_000_000.0]
     r = make_runner(wall=lambda: wall[0])
     r.start(inline_request("- note: x"), {})
     _answer_when_asked(r, 0, "Continue")
