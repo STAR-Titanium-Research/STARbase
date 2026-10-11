@@ -377,6 +377,7 @@ def test_posted_comments_go_through_fit_comment(monkeypatch):
 
 def test_the_real_relay_client_never_raises(monkeypatch):
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://127.0.0.1:1")  # nothing there
+    monkeypatch.setenv("FORCE_APP_RIG_TEST_TOKEN", "test-rig-token")
     for res in (
         relay.list_requests(),
         relay.post_comment(1, "x"),

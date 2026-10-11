@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app import recovery
-from app.rig_test import LOCKED, eligibility, routes
+from app.rig_test import LOCKED, eligibility, relay, routes
 from app.rig_test import runner as runner_mod
 from app.rig_test.poller import StateFile
 
@@ -36,6 +36,8 @@ def rig(monkeypatch, tmp_path, fake):
     monkeypatch.setenv("FORCE_APP_RIG_TEST_ALLOW_SIM", "1")
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://test-relay.invalid")
     monkeypatch.setenv("FORCE_APP_RIG_ID", "rig-1")
+    monkeypatch.setenv("FORCE_APP_RIG_TEST_TOKEN", "test-rig-token")
+    monkeypatch.setattr(relay, "_config_dir", relay._config_dir)  # configure() below sets it
     monkeypatch.setattr(routes, "_w", routes._w)  # undone after the test
     monkeypatch.setattr(runner_mod, "_runner", runner_mod._runner)
     routes.configure(

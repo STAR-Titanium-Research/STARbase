@@ -83,7 +83,7 @@ export interface SnoozedRequest extends RigRequest { snoozed_until: string }
 /** GET /rig-tests/pending. `busy`: the recorder is recording, saving or recovering a capture. */
 export interface PendingList { requests: RigRequest[]; snoozed: SnoozedRequest[]; busy: boolean }
 
-export type RelayState = 'ok' | 'unreachable' | 'not_configured' | 'unknown';
+export type RelayState = 'ok' | 'unreachable' | 'not_configured' | 'unknown' | 'token_rejected';
 
 export interface Eligibility {
 	eligible: boolean;
@@ -331,6 +331,7 @@ export function relayInfo(relay: RelayState | undefined): RelayInfo {
 		case 'ok': return { text: 'Request relay reachable', tone: 'ok', icon: 'cloud_done' };
 		case 'unreachable': return { text: 'Request relay unreachable: new requests cannot arrive', tone: 'bad', icon: 'cloud_off' };
 		case 'unknown': return { text: 'Request relay not checked yet', tone: 'dim', icon: 'cloud_sync' };
+		case 'token_rejected': return { text: 'The relay rejected this PC\'s rig token: it must match the one set on the server', tone: 'bad', icon: 'key_off' };
 		default: return { text: 'Request relay not configured on this PC', tone: 'dim', icon: 'cloud_off' };
 	}
 }

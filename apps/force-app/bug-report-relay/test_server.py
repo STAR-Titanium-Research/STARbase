@@ -16,9 +16,13 @@ def _reset_cache():
     yield
 
 
+RIG_TOKEN = "rig-secret-token"
+
+
 @pytest.fixture
 def client():
-    return TestClient(srv.app)
+    # The rig PC's token on every call; tests of the token itself build their own client.
+    return TestClient(srv.app, headers={"X-Rig-Token": RIG_TOKEN})
 
 
 def test_health_reports_unconfigured_by_default(client, monkeypatch):
@@ -496,6 +500,7 @@ def bot_comment(cid, n, body, **overrides):
 def gh(monkeypatch):
     _configure(monkeypatch)
     monkeypatch.setenv("RIG_TEST_ALLOWED_LOGINS", "maintainer, Other-Admin")
+    monkeypatch.setenv("RIG_TEST_RELAY_TOKEN", RIG_TOKEN)
     srv._list_cache.update(key=None, expires=0.0, requests=[])
     srv._bot_login.clear()
     fake = FakeGitHub()
@@ -519,6 +524,63 @@ def test_rig_tests_fail_closed_without_an_allowlist(client, gh, monkeypatch):
         assert r.status_code == 200
         assert r.json() == {"ok": False, "reason": "rig tests not configured"}
     assert gh.calls == []
+
+
+def test_rig_tests_fail_closed_without_a_relay_token(client, gh, monkeypatch):
+    gh.issue(5)
+    for value in (None, "", "  "):
+        if value is None:
+            monkeypatch.delenv("RIG_TEST_RELAY_TOKEN")
+        else:
+            monkeypatch.setenv("RIG_TEST_RELAY_TOKEN", value)
+        for r in _all_rig_endpoints(client):
+            assert r.status_code == 200
+            assert r.json() == {"ok": False, "reason": "rig tests not configured"}
+    assert gh.calls == []
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"X-Rig-Token": ""},
+        {"X-Rig-Token": "wrong"},
+        {"X-Rig-Token": RIG_TOKEN + "x"},
+    ],
+)
+def test_every_rig_endpoint_rejects_a_missing_or_wrong_token(gh, headers):
+    """A tailnet host without the token can neither read nor write (M1): forging a result
+    comment is the case that mattered."""
+    gh.issue(5)
+    gh.comments[9] = bot_comment(9, 5, "progress")
+    c = TestClient(srv.app)
+    forged = '<!-- rig-test-result {"items":[]} -->'
+    for r in (
+        c.get("/rig-tests", headers=headers),
+        c.post("/rig-tests/5/comment", json={"body": forged}, headers=headers),
+        c.patch("/rig-tests/5/comment/9", json={"body": "forged"}, headers=headers),
+        c.post("/rig-tests/5/state", json={"state": "done"}, headers=headers),
+    ):
+        assert r.status_code == 403
+        assert r.json() == {"ok": False, "reason": "rig token rejected"}
+    assert gh.calls == []
+    assert gh.comments[9]["body"] == "progress"
+
+
+def test_the_right_token_is_accepted_on_a_get(gh):
+    gh.issue(5)
+    r = TestClient(srv.app).get("/rig-tests", headers={"X-Rig-Token": RIG_TOKEN})
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+
+def test_token_is_compared_in_constant_time(gh, monkeypatch):
+    seen = []
+    real = srv.hmac.compare_digest
+    monkeypatch.setattr(
+        srv.hmac, "compare_digest", lambda a, b: seen.append(1) or real(a, b)
+    )
+    TestClient(srv.app).get("/rig-tests", headers={"X-Rig-Token": "x"})
+    assert seen
 
 
 def test_rig_tests_fail_closed_without_the_github_app(client, gh, monkeypatch):
@@ -701,6 +763,17 @@ def test_patch_edits_the_apps_own_comment(client, gh):
     r = client.patch("/rig-tests/5/comment/9", json={"body": "step 2"})
     assert r.json() == {"ok": True, "id": 9}
     assert gh.comments[9]["body"] == "step 2"
+
+
+def test_patch_refuses_a_comment_that_holds_a_result(client, gh):
+    """The rig only edits its progress comment; the result marker is write-once (M1)."""
+    gh.issue(5)
+    body = 'Result\n<!-- rig-test-result {"items":[{"id":"R4","status":"pass"}]} -->'
+    gh.comments[9] = bot_comment(9, 5, body)
+    r = client.patch("/rig-tests/5/comment/9", json={"body": "forged"})
+    assert r.json()["ok"] is False
+    assert gh.comments[9]["body"] == body
+    assert [(m, p) for m, p in gh.calls if m == "PATCH"] == []
 
 
 def test_patch_refuses_a_humans_comment(client, gh):

@@ -18,6 +18,8 @@ Configure via env vars:
     GITHUB_REPO                    "owner/repo", defaults to this monorepo
     RIG_TEST_ALLOWED_LOGINS        comma-separated GitHub logins (case-insensitive) allowed to
                                     request rig tests; empty = rig tests off
+    RIG_TEST_RELAY_TOKEN           shared secret the rig PC sends in the X-Rig-Token header on
+                                    every /rig-tests call; empty = rig tests off
 
 Rig test requests (ADR-0012, docs/superpowers/specs/2026-10-11-rig-test-requests-design.md). The
 app on the rig PC polls these; none of them runs anything here:
@@ -33,11 +35,16 @@ app on the rig PC polls these; none of them runs anything here:
 
 Trust: a command is trusted by its GitHub authorship (who opened the issue and who applied the
 label: both must be allowlisted, since the author can edit the block after the label is on), never
-by who called the relay. The relay has no auth of its own, so anyone on the tailnet can call these endpoints;
-the worst they can do is post or label on an issue that is already an allowlisted rig-test
-request. Every write re-checks that the issue is open, is not a PR, carries the label, was
-opened by an allowlisted login and was labelled by one. With RIG_TEST_ALLOWED_LOGINS empty, or the App unconfigured, all
-of them answer {"ok": false, "reason": "rig tests not configured"}.
+by who called the relay. Callers are not trusted by network position either: every /rig-tests*
+call, reads included, must carry the shared rig token in X-Rig-Token (constant-time compare), so a
+tailnet host that lacks it can neither read requests nor post a forged result as the App bot. The
+token lives in the relay's env and on the rig PC's config folder, never in the app build. Even
+with the token, every write re-checks that the issue is open, is not a PR, carries the label, was
+opened by an allowlisted login and was labelled by one, and the relay will not edit a comment that
+holds a result marker (the rig only ever edits its progress comment). With
+RIG_TEST_ALLOWED_LOGINS or the token empty, or the App unconfigured, every rig-test endpoint
+answers {"ok": false, "reason": "rig tests not configured"}; a wrong or missing token gets
+HTTP 403 {"ok": false, "reason": "rig token rejected"}.
 
 If any of the App ID / private key / installation ID is missing, /report fails closed with a
 clear "not configured" reason rather than raising — callers should surface that as a runtime
@@ -49,6 +56,7 @@ from __future__ import annotations
 
 import calendar
 import functools
+import hmac
 import logging
 import os
 import time
@@ -57,7 +65,8 @@ from urllib.parse import quote
 
 import httpx
 import jwt
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 GITHUB_API = "https://api.github.com"
@@ -330,10 +339,22 @@ def _author(issue: dict) -> str | None:
     return login if isinstance(login, str) else None
 
 
-def _rig_gate() -> dict | None:
-    """Fail closed: no allowlist, or no GitHub App, means no rig-test endpoint does anything."""
-    if not _allowed_logins() or not configured():
+# A comment holding this is a result the machine reads; it is never editable through the relay.
+RESULT_MARKER = "<!-- rig-test-result"
+
+
+def _rig_token() -> str:
+    return os.environ.get("RIG_TEST_RELAY_TOKEN", "").strip()
+
+
+def _rig_gate(token: str) -> dict | JSONResponse | None:
+    """Fail closed: no allowlist, no GitHub App or no relay token means no rig-test endpoint does
+    anything. Otherwise the caller must present the shared token (every method, reads too)."""
+    wanted = _rig_token()
+    if not _allowed_logins() or not configured() or not wanted:
         return _failure("rig tests not configured")
+    if not hmac.compare_digest(token.encode(), wanted.encode()):
+        return JSONResponse(_failure("rig token rejected"), status_code=403)
     return None
 
 
@@ -415,11 +436,11 @@ _list_cache: dict = {"key": None, "expires": 0.0, "requests": []}
 
 @app.get("/rig-tests")
 @_never_raise
-async def rig_tests() -> dict:
+async def rig_tests(x_rig_token: Annotated[str, Header()] = "") -> dict:
     """Pending rig-test requests, or {"ok": False, "reason": ...}. An issue is listed only if its
     author and the login that most recently applied the label are both allowlisted. Cached for
     30 s."""
-    if (gate := _rig_gate()) is not None:
+    if (gate := _rig_gate(x_rig_token)) is not None:
         return gate
     allowed = _allowed_logins()
     if _list_cache["key"] == allowed and time.monotonic() < _list_cache["expires"]:
@@ -488,8 +509,10 @@ class StateRequest(BaseModel):
 
 @app.post("/rig-tests/{n}/comment")
 @_never_raise
-async def rig_test_comment(n: int, req: CommentRequest) -> dict:
-    if (gate := _rig_gate()) is not None:
+async def rig_test_comment(
+    n: int, req: CommentRequest, x_rig_token: Annotated[str, Header()] = ""
+) -> dict:
+    if (gate := _rig_gate(x_rig_token)) is not None:
         return gate
     _, err = await _rig_issue(n)
     if err:
@@ -547,8 +570,13 @@ async def _is_own_comment(comment: dict, n: int) -> bool:
 
 @app.patch("/rig-tests/{n}/comment/{comment_id}")
 @_never_raise
-async def rig_test_edit_comment(n: int, comment_id: int, req: CommentRequest) -> dict:
-    if (gate := _rig_gate()) is not None:
+async def rig_test_edit_comment(
+    n: int,
+    comment_id: int,
+    req: CommentRequest,
+    x_rig_token: Annotated[str, Header()] = "",
+) -> dict:
+    if (gate := _rig_gate(x_rig_token)) is not None:
         return gate
     _, err = await _rig_issue(n)
     if err:
@@ -559,6 +587,8 @@ async def rig_test_edit_comment(n: int, comment_id: int, req: CommentRequest) ->
         return err
     if not await _is_own_comment(comment, n):
         return _failure(f"comment {comment_id} is not a relay comment on issue #{n}")
+    if RESULT_MARKER in str(comment.get("body") or ""):
+        return _failure(f"comment {comment_id} holds a result and cannot be edited")
     _, err = await _gh("PATCH", path, what="comment", json={"body": req.body})
     if err:
         return err
@@ -567,9 +597,11 @@ async def rig_test_edit_comment(n: int, comment_id: int, req: CommentRequest) ->
 
 @app.post("/rig-tests/{n}/state")
 @_never_raise
-async def rig_test_state(n: int, req: StateRequest) -> dict:
+async def rig_test_state(
+    n: int, req: StateRequest, x_rig_token: Annotated[str, Header()] = ""
+) -> dict:
     """Set the one rig-test:<state> label on issue n and remove the others."""
-    if (gate := _rig_gate()) is not None:
+    if (gate := _rig_gate(x_rig_token)) is not None:
         return gate
     issue, err = await _rig_issue(n)
     if err:

@@ -280,6 +280,8 @@ describe('relayInfo and snoozedUntilText', () => {
 		expect(relayInfo('ok').text).toBe('Request relay reachable');
 		expect(relayInfo('unreachable').tone).toBe('bad');
 		expect(relayInfo(undefined).text).toMatch(/not configured/);
+		expect(relayInfo('token_rejected').tone).toBe('bad');
+		expect(relayInfo('token_rejected').text).toMatch(/rig token/);
 	});
 	it('says when a snoozed request comes back', () => {
 		expect(snoozedUntilText('after_recording')).toMatch(/next recording/);

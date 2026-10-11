@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .. import bug_report, recovery
-from . import eligibility, runner
+from . import eligibility, relay, runner
 from .poller import RigTestPoller, StateFile
 from .runner import AnswerRejectedError, RigTestRunner, RunnerBusyError
 
@@ -51,6 +51,7 @@ def configure(
 ) -> None:
     global _w
     store = StateFile(os.path.join(config_dir, STATE_FILE))
+    relay.set_config_dir(config_dir)
     rig_runner = RigTestRunner(
         captures_root=captures_root,
         rig_id=eligibility.rig_id,
@@ -61,7 +62,11 @@ def configure(
     interval = poll_interval_s or float(os.environ.get("FORCE_APP_RIG_TEST_POLL_S", "60"))
 
     def eligible() -> tuple[bool, str | None]:
-        return eligibility.check(devices(), labamp())
+        ok, reason = eligibility.check(devices(), labamp())
+        if ok and not relay.token():
+            # No token, no polling: the relay would refuse every call anyway.
+            return False, relay.TOKEN_MISSING
+        return ok, reason
 
     poller = RigTestPoller(
         store=store,
