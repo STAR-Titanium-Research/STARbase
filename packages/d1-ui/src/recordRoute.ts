@@ -5,6 +5,8 @@
 // router-link / router.push as they are. Anything without an Explorer page falls back to the
 // Data Studio form at /content/<collection>/<id>.
 
+import { INDEX_DEFS } from './index/indexConfig';
+
 const RECORD_PAGES: Record<string, string> = {
 	physical_samples: '/home/samples',
 	manufacturing_operations: '/home/operations',
@@ -13,9 +15,13 @@ const RECORD_PAGES: Record<string, string> = {
 	projects: '/home/projects',
 };
 
-// Collections that have an Explorer index page (a list rather than one record).
+// Collections that have an Explorer index page (a list rather than one record): the generic index
+// pages from indexConfig, plus the two bespoke ones. indexConfig.ts is plain data with no imports,
+// so this file stays safe to import on its own (the force app does, as @d1/ui/recordRoute).
 const INDEX_PAGES: Record<string, string> = {
+	...Object.fromEntries(INDEX_DEFS.map((d) => [d.collection, `/home/${d.slug}`])),
 	projects: '/home/projects',
+	people: '/home/people',
 };
 
 export function recordRoute(collection: string, id: string | number): string {
@@ -32,4 +38,17 @@ export function collectionRoute(collection: string): string {
 // Where "Open in Data Studio" goes: always the form, whatever the Explorer shows.
 export function dataStudioRoute(collection: string, id: string | number): string {
 	return `/content/${collection}/${encodeURIComponent(String(id))}`;
+}
+
+// A list page, optionally with a saved view (?bookmark=<id>) or a row's drawer open (?open=<key>).
+// Projects and People are bespoke pages that ignore both, so they get the plain path; a collection
+// with no Explorer page opens the Data Studio list, which understands ?bookmark too.
+export function indexRoute(collection: string, opts: { bookmark?: number; open?: string } = {}): string {
+	const base = INDEX_PAGES[collection];
+	if (!base) return opts.bookmark !== undefined ? `/content/${collection}?bookmark=${opts.bookmark}` : `/content/${collection}`;
+	if (collection === 'projects' || collection === 'people') return base;
+	const params: string[] = [];
+	if (opts.bookmark !== undefined) params.push(`bookmark=${opts.bookmark}`);
+	if (opts.open !== undefined) params.push(`open=${encodeURIComponent(opts.open)}`);
+	return params.length ? `${base}?${params.join('&')}` : base;
 }

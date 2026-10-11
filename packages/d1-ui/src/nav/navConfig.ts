@@ -1,3 +1,5 @@
+import { indexRoute } from '../recordRoute';
+
 // The sidebar tree, as data. Grouping is the lab's, not the Directus collection tree's (there,
 // samples sit under "inventory" and tests under "projects"). buildNav() then trims the tree to
 // what this user can see and hangs their saved views (bookmarks) under the right entries.
@@ -149,9 +151,8 @@ export function buildNav(visibleCollections: Set<string> | null, bookmarks: Book
 	return { groups };
 }
 
-// Where a saved view opens: its collection's page with ?bookmark=<id>. A collection with no page
-// of ours falls back to the Data Studio list, which understands the same parameter.
+// Where a saved view opens: its collection's page with ?bookmark=<id> (see indexRoute for the
+// bespoke pages and the Data Studio fallback).
 export function linkForBookmark(b: Bookmark): string {
-	const link = NAV_GROUPS.flatMap((g) => g.links).find((l) => l.collection === b.collection);
-	return `${link ? link.to : `/content/${b.collection}`}?bookmark=${b.id}`;
+	return indexRoute(b.collection, { bookmark: b.id });
 }

@@ -120,6 +120,11 @@ describe('linkForBookmark', () => {
 		expect(linkForBookmark(bm(4, 'x', 'test_sessions'))).toBe('/home/tests?bookmark=4');
 	});
 
+	it('links the bespoke pages plainly, since they ignore the bookmark', () => {
+		expect(linkForBookmark(bm(6, 'x', 'projects'))).toBe('/home/projects');
+		expect(linkForBookmark(bm(8, 'x', 'people'))).toBe('/home/people');
+	});
+
 	it('falls back to the Data Studio list for a collection with no page', () => {
 		expect(linkForBookmark(bm(5, 'x', 'audit_logs'))).toBe('/content/audit_logs?bookmark=5');
 	});
