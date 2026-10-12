@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { INDEX_DEFS } from './index/indexConfig';
 import {
-	PAGES, PAGE_KEYS, RECORD_COLLECTIONS, SUGGESTED_PAGES, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget,
-	recordEntries, recordRequest, recordTarget, routeTarget, splitRecordTarget, suggestedPageEntries,
+	DISMISSED_KEY, PAGES, PAGE_KEYS, RECORD_COLLECTIONS, SUGGESTED_PAGES, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget,
+	pinEntry, readDismissed, recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, revertPin, routeTarget, splitRecordTarget,
+	suggestedPageEntries, withoutDismissed, writeDismissed, type UsageEntry,
 } from './usage';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -148,6 +149,23 @@ describe('createRepeatFilter', () => {
 	});
 });
 
+describe('createRepeatFilter peek, mark and unmark', () => {
+	it('peek does not mark, mark does, and unmark lets the next try through', () => {
+		let t = 0;
+		const send = createRepeatFilter(100, () => t);
+		expect(send.peek('a')).toBe(true);
+		expect(send.peek('a')).toBe(true);
+		send.mark('a');
+		expect(send.peek('a')).toBe(false);
+		expect(send('a')).toBe(false);
+		send.unmark('a');
+		expect(send.peek('a')).toBe(true);
+		send.mark('a');
+		t = 100;
+		expect(send.peek('a')).toBe(true);
+	});
+});
+
 describe('mergeWithSuggestions', () => {
 	const real = (target: string) => ({ target, label: target });
 	const sug = (target: string) => ({ target, label: target });
@@ -232,5 +250,73 @@ describe('records', () => {
 		expect(splitRecordTarget(`people:${S1}`)).toEqual({ collection: 'people', id: S1 });
 		expect(splitRecordTarget('samples')).toBeNull();
 		expect(splitRecordTarget(`tools:${S1}`)).toBeNull();
+	});
+});
+
+describe('list changes revert one entry, never the whole list', () => {
+	const e = (target: string, pinned = false): UsageEntry => ({ target, label: target, to: '/x', pinned });
+	const names = (l: UsageEntry[]) => l.map((x) => `${x.target}${x.pinned ? '*' : ''}`);
+
+	it('pinEntry pins in place, adds a suggestion as a real entry, and sorts pinned first', () => {
+		expect(names(pinEntry([e('a'), e('b')], e('b'), true))).toEqual(['b*', 'a']);
+		const added = pinEntry([e('a')], { ...e('s'), suggested: true }, true);
+		expect(names(added)).toEqual(['s*', 'a']);
+		expect(added[0].suggested).toBeUndefined();
+	});
+
+	it('a failed pin of A does not bring back a hidden B', () => {
+		const before = [e('a'), e('b')];
+		const afterPin = pinEntry(before, e('a'), true);
+		const { list: afterHide } = removeEntry(afterPin, 'b');
+		expect(names(revertPin(afterHide, 'a', e('a')))).toEqual(['a']);
+	});
+
+	it('reverting a pin that added a suggestion removes it; one already hidden stays hidden', () => {
+		expect(names(revertPin([e('s', true), e('a')], 's', null))).toEqual(['a']);
+		expect(names(revertPin([e('a')], 'gone', e('gone')))).toEqual(['a']);
+	});
+
+	it('a failed hide of A restores only A, and leaves a later pin of C alone', () => {
+		const { list, index } = removeEntry([e('a'), e('b'), e('c')], 'a');
+		expect(index).toBe(0);
+		const later = pinEntry(list, e('c'), true);
+		expect(names(restoreEntry(later, e('a'), index))).toEqual(['c*', 'a', 'b']);
+	});
+
+	it('restoreEntry clamps the place and does not duplicate', () => {
+		expect(names(restoreEntry([e('b')], e('a'), 9))).toEqual(['b', 'a']);
+		expect(names(restoreEntry([e('a'), e('b')], e('a'), 0))).toEqual(['a', 'b']);
+		expect(removeEntry([e('a')], 'zzz')).toEqual({ list: [e('a')], index: -1 });
+	});
+});
+
+describe('dismissed suggestions', () => {
+	const fake = (initial?: string) => {
+		const data = new Map<string, string>(initial === undefined ? [] : [[DISMISSED_KEY, initial]]);
+		return { data, getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v) };
+	};
+
+	it('round-trips through storage under d1.usage.dismissed', () => {
+		const store = fake();
+		writeDismissed(new Set(['samples', 'operations']), store);
+		expect(DISMISSED_KEY).toBe('d1.usage.dismissed');
+		expect(store.data.get('d1.usage.dismissed')).toBe('["samples","operations"]');
+		expect([...readDismissed(store)]).toEqual(['samples', 'operations']);
+	});
+
+	it('works without storage: junk, missing, throwing', () => {
+		expect(readDismissed(fake('not json')).size).toBe(0);
+		expect(readDismissed(fake('{"a":1}')).size).toBe(0);
+		expect([...readDismissed(fake('["a",3,null]'))]).toEqual(['a']);
+		expect(readDismissed(null).size).toBe(0);
+		const boom = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
+		expect(readDismissed(boom).size).toBe(0);
+		expect(() => writeDismissed(new Set(['a']), boom)).not.toThrow();
+		expect(() => writeDismissed(new Set(['a']), null)).not.toThrow();
+	});
+
+	it('filters suggestions by the dismissed set', () => {
+		const sug = [{ target: 'samples' }, { target: 'operations' }];
+		expect(withoutDismissed(sug, new Set(['samples']))).toEqual([{ target: 'operations' }]);
 	});
 });

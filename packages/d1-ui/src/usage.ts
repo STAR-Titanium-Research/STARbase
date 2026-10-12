@@ -142,18 +142,31 @@ export function routeTarget(path: string): { kind: UsageKind; target: string } |
 	return target ? { kind: 'record', target } : null;
 }
 
-// True the first time a target is seen and again once the window has passed since the last time it
-// was let through: a user reloading or going back and forth is one visit, not many. The clock is
-// injectable for tests.
-export function createRepeatFilter(windowMs = 10 * 60 * 1000, now: () => number = Date.now): (target: string) => boolean {
+// The repeat filter: a target is let through the first time it is seen and again once the window has
+// passed since it last was. Calling the filter checks and marks in one step. A sender that must only
+// count a ping once it is really on its way uses peek (would it pass?), mark (it is on its way) and
+// unmark (it failed: let the next try through). The clock is injectable for tests.
+export interface RepeatFilter {
+	(target: string): boolean;
+	peek(target: string): boolean;
+	mark(target: string): void;
+	unmark(target: string): void;
+}
+
+export function createRepeatFilter(windowMs = 10 * 60 * 1000, now: () => number = Date.now): RepeatFilter {
 	const lastSent = new Map<string, number>();
-	return (target) => {
-		const t = now();
+	const peek = (target: string) => {
 		const before = lastSent.get(target);
-		if (before !== undefined && t - before < windowMs) return false;
-		lastSent.set(target, t);
+		return before === undefined || now() - before >= windowMs;
+	};
+	const mark = (target: string) => void lastSent.set(target, now());
+	const unmark = (target: string) => void lastSent.delete(target);
+	const send = (target: string) => {
+		if (!peek(target)) return false;
+		mark(target);
 		return true;
 	};
+	return Object.assign(send, { peek, mark, unmark });
 }
 
 // One list entry as the panel shows it.
@@ -258,4 +271,81 @@ export function splitRecordTarget(target: string): { collection: string; id: str
 	if (i < 1) return null;
 	const collection = target.slice(0, i);
 	return RECORD_COLLECTIONS.includes(collection) ? { collection, id: target.slice(i + 1) } : null;
+}
+
+// -- List changes (pure, so the panel's optimistic updates and their reverts are tested) -------------
+
+// Pinned first; the order inside each band is kept (the endpoint ranked it).
+export function sortPinned<T extends { pinned: boolean }>(list: T[]): T[] {
+	return [...list].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+}
+
+// The list with this entry pinned or unpinned; an entry not in the list yet (a suggestion) is added,
+// no longer marked suggested.
+export function pinEntry(list: UsageEntry[], entry: UsageEntry, pinned: boolean): UsageEntry[] {
+	const has = list.some((e) => e.target === entry.target);
+	const next = has
+		? list.map((e) => (e.target === entry.target ? { ...e, pinned } : e))
+		: [...list, { ...entry, pinned, suggested: undefined }];
+	return sortPinned(next);
+}
+
+// Undo pinEntry for one entry on the CURRENT list, leaving every other entry as it is: `previous` is
+// the entry as it was before (null = it was not in the list, so remove it). An entry that has since
+// left the list (hidden) is not brought back.
+export function revertPin(list: UsageEntry[], target: string, previous: UsageEntry | null): UsageEntry[] {
+	if (!previous) return list.filter((e) => e.target !== target);
+	return sortPinned(list.map((e) => (e.target === target ? { ...e, pinned: previous.pinned } : e)));
+}
+
+// The list without this entry, and where it was (for restoreEntry).
+export function removeEntry(list: UsageEntry[], target: string): { list: UsageEntry[]; index: number } {
+	return { list: list.filter((e) => e.target !== target), index: list.findIndex((e) => e.target === target) };
+}
+
+// Put a removed entry back at about its old place (clamped to the list as it is now), unless it is
+// already there. Touches no other entry (pinned ones still come first).
+export function restoreEntry(list: UsageEntry[], entry: UsageEntry, index: number): UsageEntry[] {
+	if (list.some((e) => e.target === entry.target)) return list;
+	const at = Math.max(0, Math.min(index, list.length));
+	return sortPinned([...list.slice(0, at), entry, ...list.slice(at)]);
+}
+
+// -- Dismissed suggestions (a per-browser convenience, never sent to the server) --------------------
+
+export const DISMISSED_KEY = 'd1.usage.dismissed';
+
+type KeyValueStore = Pick<Storage, 'getItem' | 'setItem'>;
+
+// The browser's storage, or null when it is missing or refuses (private window, blocked site data).
+function browserStore(): KeyValueStore | null {
+	try {
+		return typeof localStorage === 'undefined' ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+
+// The suggestion keys this browser dismissed. Every read is guarded: no storage, or junk in it, is
+// the empty set.
+export function readDismissed(store: KeyValueStore | null = browserStore()): Set<string> {
+	try {
+		const parsed: unknown = JSON.parse(store?.getItem(DISMISSED_KEY) ?? '[]');
+		return new Set(Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === 'string') : []);
+	} catch {
+		return new Set();
+	}
+}
+
+// Remembers the set; a storage that refuses is ignored (the dismissal then lasts until the page reloads).
+export function writeDismissed(keys: Set<string>, store: KeyValueStore | null = browserStore()): void {
+	try {
+		store?.setItem(DISMISSED_KEY, JSON.stringify([...keys]));
+	} catch {
+		// Storage is a convenience only.
+	}
+}
+
+export function withoutDismissed<T extends { target: string }>(suggestions: T[], dismissed: Set<string>): T[] {
+	return suggestions.filter((s) => !dismissed.has(s.target));
 }

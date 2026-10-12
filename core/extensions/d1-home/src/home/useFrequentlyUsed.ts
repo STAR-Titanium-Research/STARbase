@@ -1,8 +1,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import {
-	RECORD_COLLECTIONS, mergeWithSuggestions, pageEntry, recordEntries, recordRequest, splitRecordTarget, suggestedPageEntries,
-	useRequestGate, type UsageEntry,
+	RECORD_COLLECTIONS, mergeWithSuggestions, pageEntry, pinEntry, readDismissed, recordEntries, recordRequest, removeEntry, restoreEntry,
+	revertPin, splitRecordTarget, suggestedPageEntries, useRequestGate, withoutDismissed, writeDismissed, type UsageEntry,
 } from '@d1/ui';
 
 // The Home "Frequently used" lists. GET /d1-usage (core/extensions/d1-usage) says which pages and
@@ -10,13 +10,12 @@ import {
 // through the normal items API as the user, one request per collection, so a record the user may no
 // longer read (or that is gone) simply does not come back and is dropped without a word.
 //
-// Pin, hide and clear are applied to the lists at once and sent after; a failed one puts the lists
-// back and says so on one quiet line. A failure to read the usage at all is one quiet line too.
+// Pin, hide and clear are applied to the lists at once and sent after; a failed one undoes only its
+// own entry (clear reloads) and says so on one quiet line. A failure to read the usage at all is one quiet line too.
 export const SHOWN = 6;
 export const MAX_SHOWN = 15;
 
 type Which = 'pages' | 'records';
-const sortPinned = (list: UsageEntry[]) => [...list].sort((a, b) => Number(b.pinned) - Number(a.pinned));
 
 export function useFrequentlyUsed() {
 	const api = useApi();
@@ -76,59 +75,72 @@ export function useFrequentlyUsed() {
 	const listOf = (which: Which) => (which === 'pages' ? pages : records);
 	const kindOf = (which: Which) => (which === 'pages' ? 'page' : 'record');
 
-	// Runs `change` on the list at once, then `send`; if the send fails the list goes back as it was.
-	async function apply(which: Which, change: (list: UsageEntry[]) => UsageEntry[], send: () => Promise<unknown>) {
-		const list = listOf(which);
-		const before = list.value;
-		list.value = change(before);
+	// A failed change undoes only the entry it changed, on the list as it is NOW: another change made
+	// (and saved) in the meantime stays. `undo` is that one-entry inverse.
+	async function save(send: () => Promise<unknown>, undo: () => void) {
 		try {
 			await send();
 			error.value = '';
 		} catch {
-			list.value = before;
+			undo();
 			error.value = 'That change could not be saved. Try again.';
 		}
 	}
 
 	function pin(which: Which, entry: UsageEntry) {
 		const pinned = !entry.pinned;
-		return apply(
-			which,
-			(list) => {
-				const has = list.some((e) => e.target === entry.target);
-				const next = has ? list.map((e) => (e.target === entry.target ? { ...e, pinned } : e)) : [...list, { ...entry, pinned, suggested: undefined }];
-				return sortPinned(next);
-			},
+		const list = listOf(which);
+		const previous = list.value.find((e) => e.target === entry.target) ?? null;
+		list.value = pinEntry(list.value, entry, pinned);
+		return save(
 			() => api.post('/d1-usage/pin', { kind: kindOf(which), target: entry.target, pinned }),
+			() => { list.value = revertPin(list.value, entry.target, previous); },
 		);
 	}
 
 	function hide(which: Which, entry: UsageEntry) {
-		return apply(which, (list) => list.filter((e) => e.target !== entry.target), () => api.post('/d1-usage/hide', { kind: kindOf(which), target: entry.target }));
+		const list = listOf(which);
+		const { list: rest, index } = removeEntry(list.value, entry.target);
+		list.value = rest;
+		return save(
+			() => api.post('/d1-usage/hide', { kind: kindOf(which), target: entry.target }),
+			() => { list.value = restoreEntry(list.value, entry, index); },
+		);
 	}
 
-	// Clear keeps the pins (the endpoint drops the rest and zeroes the pinned scores).
+	// A suggestion was never used, so there is nothing on the server to hide: dismissing it is this
+	// browser's own convenience (localStorage, guarded: without storage it lasts until a reload).
+	const dismissed = ref<Set<string>>(readDismissed());
+	function dismissSuggestion(entry: UsageEntry) {
+		const next = new Set(dismissed.value).add(entry.target);
+		dismissed.value = next;
+		writeDismissed(next);
+	}
+
+	// Clear keeps the pins (the endpoint drops the rest and zeroes the pinned scores). The lists are
+	// emptied at once, and the answer is read back from the server either way: a failure puts back
+	// what the server still has (not a snapshot), and a read that was already in flight is dropped
+	// (load() starts a newer one) so it cannot bring the old history back.
 	async function clear() {
-		const beforePages = pages.value;
-		const beforeRecords = records.value;
+		gate.begin();
 		pages.value = pages.value.filter((e) => e.pinned);
 		records.value = records.value.filter((e) => e.pinned);
+		let failed = false;
 		try {
 			await api.post('/d1-usage/clear');
-			error.value = '';
 		} catch {
-			pages.value = beforePages;
-			records.value = beforeRecords;
-			error.value = 'Your history could not be cleared. Try again.';
+			failed = true;
 		}
+		await load();
+		if (failed && !loadFailed.value) error.value = 'Your history could not be cleared. Try again.';
 	}
 
-	// Pages: the user's own, then suggestions while there are fewer than SHOWN (flagged `suggested`).
-	const pageList = computed(() => mergeWithSuggestions(pages.value, suggestedPageEntries(), SHOWN).slice(0, MAX_SHOWN));
+	// Pages: the user's own, then suggestions (not dismissed here) while there are fewer than SHOWN.
+	const pageList = computed(() => mergeWithSuggestions(pages.value, withoutDismissed(suggestedPageEntries(), dismissed.value), SHOWN).slice(0, MAX_SHOWN));
 	const recordList = computed(() => records.value.slice(0, MAX_SHOWN));
 
 	onMounted(load);
 	onBeforeUnmount(() => gate.cancel());
 
-	return { pageList, recordList, loading, loadFailed, error, pin, hide, clear };
+	return { pageList, recordList, loading, loadFailed, error, pin, hide, dismissSuggestion, clear };
 }

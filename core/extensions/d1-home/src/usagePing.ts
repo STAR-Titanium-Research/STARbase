@@ -1,5 +1,5 @@
 import type { Router } from 'vue-router';
-import { createRepeatFilter, routeTarget, type UsageKind } from '@d1/ui';
+import { createRepeatFilter, routeTarget, type RepeatFilter, type UsageKind } from '@d1/ui';
 
 // The visit pings of the "Frequently used" panel: POST /d1-usage/visit (core/extensions/d1-usage)
 // each time the signed-in user opens an Explorer page, a record page, a dashboard or a quick
@@ -14,15 +14,20 @@ interface PingApi {
 	post(path: string, body?: unknown): Promise<unknown>;
 }
 
-let active: { send: (target: string) => boolean; api: PingApi; off: () => void } | null = null;
+let active: { filter: RepeatFilter; api: PingApi; off: () => void } | null = null;
 
+// A target counts as sent once its request is on its way (so a click and the route change it causes
+// send one ping), and is let through again at once if the request fails: a failed ping does not
+// block the next try for ten minutes.
 export function pingVisit(kind: UsageKind, target: string): void {
-	if (!active || !active.send(target)) return;
+	const now = active;
+	if (!now || !now.filter.peek(target)) return;
 	try {
-		// A rejected promise is caught here; a throw before the request is caught by the try.
-		void Promise.resolve(active.api.post('/d1-usage/visit', { kind, target })).catch(() => {});
+		const sent = now.api.post('/d1-usage/visit', { kind, target });
+		now.filter.mark(target);
+		void Promise.resolve(sent).catch(() => now.filter.unmark(target));
 	} catch {
-		// Never surfaces.
+		// Never surfaces; nothing was sent, so nothing is marked.
 	}
 }
 
@@ -38,6 +43,6 @@ export function installUsagePings(router: Router, api: PingApi): void {
 	const off = router.afterEach((to, _from, failure) => {
 		if (!failure) pingRoute(to.fullPath);
 	});
-	active = { send: createRepeatFilter(), api, off };
+	active = { filter: createRepeatFilter(), api, off };
 	pingRoute(router.currentRoute.value.fullPath);
 }
