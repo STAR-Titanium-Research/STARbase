@@ -40,7 +40,7 @@ const showingExample = computed(() => !!draft.value && samples.selected.value.le
 const previewSamples = computed(() => (showingExample.value ? [EXAMPLE] : samples.selected.value));
 
 const entries = computed(() => sampleEntries(previewSamples.value, showingExample.value ? {} : samples.copyOverrides.value, showingExample.value ? 1 : copies.value));
-const { doc, problems, rendering, forPrint } = useLabelDocument({ entries, start, template: active });
+const { doc, problems, rendering, error: renderError, forPrint } = useLabelDocument({ entries, start, template: active });
 
 const slots = computed(() => (active.value ? slotsPerPage(active.value) : 1));
 const showStart = computed(() => active.value?.media === 'sheet' && slots.value > 1);
@@ -203,6 +203,7 @@ onMounted(() => {
 							<ul v-if="problems.length && !draft" class="problems" role="alert">
 								<li v-for="p in problems" :key="p">{{ p }}</li>
 							</ul>
+							<p v-if="renderError" class="d1-note bad" role="alert">{{ renderError }}</p>
 							<p class="d1-note summary" role="status" aria-live="polite">
 								<template v-if="showingExample">Example label (tick samples to preview them).</template>
 								<template v-else-if="!samples.selected.value.length">Tick samples to preview their labels.</template>

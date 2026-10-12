@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import {
-	clampStart, countLabels, isPrintableSample, paginateCounts, renderLabelDocument, slotsPerPage, validateTemplate,
+	errorText, clampStart, countLabels, isPrintableSample, paginateCounts, renderLabelDocument, slotsPerPage, validateTemplate,
 	type LabelEntry, type LabelTemplate,
 } from '@d1/ui';
 import { canvasMeasure } from './measure';
@@ -34,7 +34,20 @@ export function useLabelDocument(inputs: {
 	const rendering = ref(false);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
+	// Set when rendering throws (a QR payload too long for a code, a bad value from the editor): the last good
+	// document stays on screen and the page says what failed.
+	const error = ref('');
+
 	function render(outline: boolean): LabelDoc | null {
+		try {
+			return renderNow(outline);
+		} catch (e) {
+			error.value = `The labels could not be drawn: ${errorText(e)}`;
+			return null;
+		}
+	}
+
+	function renderNow(outline: boolean): LabelDoc | null {
 		const t = inputs.template.value;
 		if (!t || validateTemplate(t).length) return null;
 		const pages = paginateCounts(inputs.entries.value, clampStart(inputs.start.value, slotsPerPage(t)), t);
@@ -46,10 +59,14 @@ export function useLabelDocument(inputs: {
 		clearTimeout(timer);
 		rendering.value = true;
 		timer = setTimeout(() => {
-			const next = render(true);
-			if (next) doc.value = next;
-			else if (!inputs.template.value) doc.value = null;
-			rendering.value = false;
+			try {
+				error.value = '';
+				const next = render(true);
+				if (next) doc.value = next;
+				else if (!inputs.template.value) doc.value = null;
+			} finally {
+				rendering.value = false;
+			}
 		}, DEBOUNCE_MS);
 	}
 
@@ -57,7 +74,10 @@ export function useLabelDocument(inputs: {
 	onBeforeUnmount(() => clearTimeout(timer));
 
 	// The print variant: no outlines, rendered now from the current inputs.
-	const forPrint = (): LabelDoc | null => render(false);
+	const forPrint = (): LabelDoc | null => {
+		error.value = '';
+		return render(false);
+	};
 
-	return { doc, problems, rendering, forPrint };
+	return { doc, problems, rendering, error, forPrint };
 }
