@@ -88,8 +88,12 @@ COMMENT ON COLUMN label_templates.version IS 'Optimistic-concurrency counter, in
 -- Making a template the default clears the old default in the same statement, so the swap is one write
 -- (the partial unique index above is checked row by row, and the UI would otherwise need two requests that
 -- can leave no default, or fail halfway). Rows it clears fire the OCC and audit triggers like any update.
+-- Limit: ONE row at a time. A single statement that makes two rows the default fails on the unique index (each
+-- row's trigger clears the other's flag only after it has run). The labels page writes one row per request, and
+-- is_default is read-only in the Data Studio form so a batch edit cannot send a multi-row UPDATE of it.
 CREATE FUNCTION label_templates_single_default() RETURNS trigger
     LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
 AS $$
 BEGIN
     IF NEW.is_default THEN
@@ -150,7 +154,7 @@ SELECT v.collection, v.field, v.special, v.interface, v.options::json, v.display
 FROM (VALUES
     ('label_templates', 'id', 'uuid', 'input', NULL, NULL, NULL, true, true, 1, 'full', NULL),
     ('label_templates', 'name', NULL, 'input', NULL, NULL, NULL, false, false, 2, 'half', NULL),
-    ('label_templates', 'is_default', 'cast-boolean', 'boolean', NULL, NULL, NULL, false, false, 3, 'half',
+    ('label_templates', 'is_default', 'cast-boolean', 'boolean', NULL, NULL, NULL, true, false, 3, 'half',
         '[{"language":"en-US","translation":"Default template"}]'),
     ('label_templates', 'description', NULL, 'input-multiline', NULL, NULL, NULL, false, false, 4, 'full', NULL),
     ('label_templates', 'media', NULL, 'select-dropdown',
