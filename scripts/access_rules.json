@@ -20,7 +20,12 @@
     "owner may delete it). Changing the owner column there would hand delete rights to the editor, so the same hook refuses an",
     "update that changes 'field' unless the caller passes the record's delete rule (they are its current owner). 'key' is the",
     "record's primary key, 'value_key' the primary key of the table 'field' points to. gen_access_rules.py fails when a ruled",
-    "collection has different update and delete filters and no entry here."
+    "collection has different update and delete filters and no entry here.",
+    "'orphan_amnesty' ORs an extra clause into a collection's read rule: every record where ALL of the listed columns are NULL",
+    "is readable by every Lab Member, not just through a project/campaign/co-owner. For pre-ADR-0011 legacy rows that will",
+    "never get a real owner (migration 20261009000141: ~7254 FAST sintering runs with no owner, operator, project or",
+    "campaign), the alternative is admin-only visibility, which is worse than leaving them open. Scoped to read only --",
+    "update/delete still require real ownership, so nobody can edit or delete these on nobody's behalf."
   ],
   "policy": "20000002-0000-0000-0000-000000000002",
   "sets": {
@@ -104,6 +109,8 @@
     "machining_force_analysis": {"create": "any", "read": "operation.read", "update": "operation.update"},
     "fast_run_data": {"read": "operation.read"},
     "session_data_files": {"create": "any", "read": "session.read", "update": "session.update", "delete": "session.update"},
+    "operation_additional_operators": {"create": "any", "read": "operation.read", "update": "operation.update", "delete": "operation.update"},
+    "session_additional_operators": {"create": "any", "read": "session.read", "update": "session.update", "delete": "session.update"},
     "test_sessions_subject": {"create": "any", "read": "subject.read", "update": "subject.update", "delete": "subject.update"},
     "project_investigators": {"create": "any", "read": "investigators.read", "update": "investigators.write", "delete": "investigators.write"},
     "project_rollup": {"read": "rollup.read"}
@@ -128,6 +135,9 @@
     "physical_samples": {"field": "owner_person_id", "key": "sample_id", "value_key": "person_id"},
     "manufacturing_operations": {"field": "owner_person_id", "key": "operation_id", "value_key": "person_id"},
     "test_sessions": {"field": "owner_person_id", "key": "session_id", "value_key": "person_id"}
+  },
+  "orphan_amnesty": {
+    "manufacturing_operations": ["owner_person_id", "project_id", "campaign_id"]
   },
   "unfiltered": {
     "machining_params": ["create", "read", "update", "delete"],
