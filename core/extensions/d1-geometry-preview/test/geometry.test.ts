@@ -56,7 +56,8 @@ test('marker references resolve within their own SVG and ids never repeat across
 	for (const { form, svg } of svgs) {
 		const defined = [...svg.matchAll(/<marker id="([^"]+)"/g)].map((m) => m[1]);
 		if (!defined.length) continue; // powder has no markers
-		for (const ref of svg.matchAll(/url\(#([^)]+)\)/g)) assert.ok(defined.includes(ref[1]), `${form}: dangling ${ref[1]}`);
+		const ids = [...svg.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]); // markers, and the ring bore's clip and mask
+		for (const ref of svg.matchAll(/url\(#([^)]+)\)/g)) assert.ok(ids.includes(ref[1]), `${form}: dangling ${ref[1]}`);
 		for (const id of defined) { assert.ok(!seen.has(id), `${form}: duplicate marker id ${id}`); seen.add(id); }
 	}
 });
@@ -73,10 +74,10 @@ test('ring: outer Ø, bore Ø (drawn on the top face) and thickness; dimsText li
 	assert.match(svg, />Ø151</);
 	assert.match(svg, />Ø19.5</);
 	assert.match(svg, />16.5</);
-	assert.equal((svg.match(/<ellipse/g) || []).length, 2);
+	assert.match(svg, /<mask id="gbm-/); // a through-hole, not a filled disc on top
 	assert.equal(dimsText({ form: 'ring', diameter_mm: 151, inner_diameter_mm: 19.5, thickness_mm: 16.5, width_mm: 36 }), 'Ø151 · ID19.5 · t16.5 · W36 mm');
 	// A bore as wide as the ring is ignored rather than drawn inside out.
-	assert.equal((buildGeometry({ form: 'ring', diameter_mm: 20, inner_diameter_mm: 25, thickness_mm: 5 }).match(/<ellipse/g) || []).length, 1);
+	assert.doesNotMatch(buildGeometry({ form: 'ring', diameter_mm: 20, inner_diameter_mm: 25, thickness_mm: 5 }), /<mask/);
 });
 
 test('round bar is matched exactly, not by substring', () => {

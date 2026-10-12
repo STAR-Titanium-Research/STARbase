@@ -103,6 +103,7 @@ const fmt = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
 // to the first match in the document (which fails if that SVG sits in a hidden container).
 const uid = Math.random().toString(36).slice(2, 7);
 let svgSeq = 0;
+let boreSeq = 0; // the ring bore's clip and mask ids, unique per SVG for the same reason
 
 // `extra` = screen-space points (label boxes, arrow tips) the fitter did not reserve room for;
 // the viewBox grows to include them so nothing is clipped and nothing spills outside the svg.
@@ -234,16 +235,26 @@ function cylSvg(D: number, H: number, Di = 0): string {
 		+ dimLine([hx, topC[1]], [hx, botC[1]])
 		+ dimText(hx - 8 * lk(), (topC[1] + botC[1]) / 2, fmt(H), ' dominant-baseline="middle"');
 	labelBox(hx - 8 * lk(), (topC[1] + botC[1]) / 2, fmt(H), sink);
-	let bore = '';
-	if (Di > 0 && Di < D) {
-		const irx = rx * (Di / D), iry = ry * (Di / D);
-		const by = topC[1] + ry + 9 * lk(); // the bore's label sits just below the top face
-		bore = `<ellipse cx="${f1(topC[0])}" cy="${f1(topC[1])}" rx="${f1(irx)}" ry="${f1(iry)}" class="gr"/>`
-			+ dimLine([topC[0] - irx, topC[1]], [topC[0] + irx, topC[1]])
-			+ dimText(topC[0], by, `Ø${fmt(Di)}`, ' dominant-baseline="middle"');
-		labelBox(topC[0], by, `Ø${fmt(Di)}`, sink);
-	}
-	return svgWrap(body + top + bore + dimD + dimH, sink);
+	if (!(Di > 0 && Di < D)) return svgWrap(body + top + dimD + dimH, sink);
+	// Through-bore. Looking into the top opening you see the far inside wall, except where the
+	// bottom opening (the same ellipse, dropped by the height) lines up with it: there you see
+	// straight through, so that part is masked out of the whole solid and the background shows.
+	const irx = rx * (Di / D), iry = ry * (Di / D);
+	const cx = f1(topC[0]), ty = f1(topC[1]), byC = f1(botC[1]), irxs = f1(irx), irys = f1(iry);
+	const id = `${uid}b${++boreSeq}`;
+	const defs = `<defs><clipPath id="gbc-${id}"><ellipse cx="${cx}" cy="${ty}" rx="${irxs}" ry="${irys}"/></clipPath>`
+		+ `<mask id="gbm-${id}" maskUnits="userSpaceOnUse" x="-9999" y="-9999" width="19998" height="19998">`
+		+ `<rect x="-9999" y="-9999" width="19998" height="19998" fill="#fff"/>`
+		+ `<ellipse cx="${cx}" cy="${byC}" rx="${irxs}" ry="${irys}" fill="#000" clip-path="url(#gbc-${id})"/></mask></defs>`;
+	const wall = `<ellipse cx="${cx}" cy="${ty}" rx="${irxs}" ry="${irys}" class="gl"/>`;
+	// Edges: the rim of the top opening, and the bottom opening's rim where it shows inside the bore.
+	const rims = `<ellipse cx="${cx}" cy="${ty}" rx="${irxs}" ry="${irys}" class="gt" style="fill:none"/>`
+		+ `<ellipse cx="${cx}" cy="${byC}" rx="${irxs}" ry="${irys}" class="gl" style="fill:none" clip-path="url(#gbc-${id})"/>`;
+	const by = topC[1] + ry + 9 * lk(); // the bore's label sits just below the top face
+	const dimDi = dimLine([topC[0] - irx, topC[1]], [topC[0] + irx, topC[1]])
+		+ dimText(topC[0], by, `Ø${fmt(Di)}`, ' dominant-baseline="middle"');
+	labelBox(topC[0], by, `Ø${fmt(Di)}`, sink);
+	return svgWrap(defs + `<g mask="url(#gbm-${id})">${body + top + wall + rims}</g>` + dimDi + dimD + dimH, sink);
 }
 
 // Round bar: a cylinder lying along the length (y) axis. The near end cap (y = L) is an
