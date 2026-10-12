@@ -96,7 +96,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 		try { notify(n.title, n.body); } catch { /* no bridge, or the shell refused: the prompt is on screen anyway */ }
 	}
 
-	function applyPending(p: PendingList): void {
+	function applyPending(p: PendingList, askedAt?: number): void {
 		for (const r of newRequests(seen, p.requests)) safeNotify(requestNotification(r));
 		seen.clear();
 		for (const r of p.requests) seen.add(r.number);
@@ -104,7 +104,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 		state.pending = p.requests;
 		state.snoozed = p.snoozed;
 		state.backendBusy = p.busy;
-		void deps.session?.sync({ session: p.session, hardwareOk: p.hardwareOk, relay: p.relay });
+		void deps.session?.sync({ session: p.session, hardwareOk: p.hardwareOk, relay: p.relay, askedAt });
 	}
 
 	function applyRun(next: RigRun | null): void {
@@ -124,10 +124,11 @@ export function createRigTestStore(deps: RigTestDeps) {
 		if (stopped || pendingBusy) return;
 		pendingBusy = true;
 		try {
+			const askedAt = deps.session?.stamp(); // taken before the request leaves (see SessionView.askedAt)
 			const r = await api.getPending();
 			if (stopped) return;
-			if (r.kind === 'ok') { state.available = true; applyPending(r.data); }
-			else if (r.kind === 'missing') { state.available = false; applyPending({ requests: [], snoozed: [], busy: false, session: false, hardwareOk: null, relay: 'not_configured' }); }
+			if (r.kind === 'ok') { state.available = true; applyPending(r.data, askedAt); }
+			else if (r.kind === 'missing') { state.available = false; applyPending({ requests: [], snoozed: [], busy: false, session: false, hardwareOk: null, relay: 'not_configured' }, askedAt); }
 		} finally { pendingBusy = false; }
 	}
 

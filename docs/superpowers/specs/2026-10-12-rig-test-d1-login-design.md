@@ -45,8 +45,11 @@ can authenticate rig-test calls instead.
   backend. On sign-out, or when the session goes offline, it sends `DELETE /rig-tests/session`.
 - Only the main window does this (same rule as the rest of the feature; pop-outs never host it).
 - Today the auth store refreshes only after a 401. While the PC has rig hardware (see
-  `hardware_ok` below), the store also refreshes about 60 s before `expiresAt`, so the backend's
-  copy never lapses while the app is open and idle.
+  `hardware_ok` below), the store also refreshes about 90 s (`REFRESH_AHEAD_MS`) before `expiresAt`, so the
+  recorder's copy never lapses between two 30 s polls, and so never while the app is open and idle.
+- A `signin_rejected` answer is believed only if its GET /pending left after the last successful PUT
+  finished (a monotonic stamp the store takes before each GET). An older answer describes the token
+  that PUT replaced, and acting on it would refuse and then delete the fresh token.
 - The access token is the short-lived Directus one (15 min by default). The refresh token never
   leaves the web app.
 
@@ -150,7 +153,7 @@ client and no compatibility period is needed.
   expired `expires_at` → treated as signed out; outbox entries wait while signed out and send once
   a session arrives; the `rig_test_token` file is ignored.
 - **Web (vitest):** the store sends the token on sign-in and refresh, deletes it on sign-out and
-  offline, re-sends when eligibility reports `session: false`; the early refresh fires about 60 s
+  offline, re-sends when eligibility reports `session: false`; the early refresh fires about 90 s
   before expiry only while `hardware_ok`; Settings shows the signed-out and rejected messages.
 - **E2E:** update `web/e2e/rig-tests.spec.ts` for the session call and the signed-out state.
 - **Live (runbook §C):** on d1-server, the real relay with a real D1 access token → `ok: true`;

@@ -68,11 +68,11 @@ describe('createSessionSync', () => {
 	it('retries a rejected sign-in once, then stops', async () => {
 		const { api, refresh, sync } = setup();
 		await sync.sync(view());                                   // sends tok-1
-		await sync.sync(view({ relay: 'signin_rejected' }));       // refused: refresh, send tok-1-r
+		await sync.sync(view({ relay: 'signin_rejected', askedAt: sync.stamp() })); // refused: refresh, send tok-1-r
 		expect(refresh).toHaveBeenCalledTimes(1);
 		expect(api.putSession).toHaveBeenLastCalledWith('tok-1-r', expect.any(Number));
-		await sync.sync(view({ relay: 'signin_rejected' }));       // refused again: give up
-		await sync.sync(view({ relay: 'signin_rejected' }));
+		await sync.sync(view({ relay: 'signin_rejected', askedAt: sync.stamp() })); // refused again: give up
+		await sync.sync(view({ relay: 'signin_rejected', askedAt: sync.stamp() }));
 		expect(refresh).toHaveBeenCalledTimes(1);
 		expect(api.putSession).toHaveBeenCalledTimes(2);
 	});
@@ -104,5 +104,76 @@ describe('createSessionSync', () => {
 		release(ok());
 		await Promise.all([first, second]);
 		expect(api.deleteSession).toHaveBeenCalledTimes(1);
+	});
+
+	it('a rejection asked before the new token was sent is stale: ignored, nothing deleted', async () => {
+		const { auth, api, refresh, sync } = setup();
+		let releasePut: () => void = () => {};
+		let onRefresh = () => {};
+		refresh.mockImplementation(async () => { auth.token = 'tok-1-r'; onRefresh(); return true; });
+		await sync.sync(view()); // tok-1 lent
+		api.putSession.mockImplementationOnce(() => new Promise<ApiResult<unknown>>((res) => { releasePut = () => res(ok()); }));
+		let stale: Promise<void> = Promise.resolve();
+		// The refresh makes the store re-read /pending; that GET leaves before the new PUT finishes
+		// and still carries the old "rejected" answer.
+		onRefresh = () => { stale = sync.sync(view({ relay: 'signin_rejected', askedAt: sync.stamp() })); };
+		const first = sync.sync(view({ relay: 'signin_rejected', askedAt: sync.stamp() }));
+		await vi.waitFor(() => expect(api.putSession).toHaveBeenCalledTimes(2));
+		releasePut();
+		await Promise.all([first, stale]);
+		await sync.sync(view({ session: true, relay: 'ok', askedAt: sync.stamp() })); // the recorder holds tok-1-r, relay accepts it
+		expect((api.putSession.mock.calls as unknown as [string][]).map((c) => c[0])).toEqual(['tok-1', 'tok-1-r']);
+		expect(api.deleteSession).not.toHaveBeenCalled();
+		expect(refresh).toHaveBeenCalledTimes(1);
+	});
+
+	it('a rejection asked after the new token was sent is believed', async () => {
+		const { api, sync } = setup();
+		await sync.sync(view());
+		await sync.sync(view({ relay: 'signin_rejected', askedAt: sync.stamp() }));
+		expect(api.putSession).toHaveBeenLastCalledWith('tok-1-r', expect.any(Number));
+		await sync.sync(view({ session: false, relay: 'signin_rejected', askedAt: sync.stamp() })); // refused again
+		await sync.sync(view({ session: false, relay: 'ok', askedAt: sync.stamp() }));
+		expect(api.putSession).toHaveBeenCalledTimes(2); // gave up: the refused token is not sent again
+	});
+
+	it('a rejection with no askedAt is never believed once a PUT has finished', async () => {
+		const { refresh, sync, api } = setup();
+		await sync.sync(view());
+		await sync.sync(view({ relay: 'signin_rejected' }));
+		expect(refresh).not.toHaveBeenCalled();
+		expect(api.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it('release() while a PUT is in flight: the finished PUT is undone and not recorded as lent', async () => {
+		const { auth, api, sync } = setup();
+		let finish: () => void = () => {};
+		api.putSession.mockImplementationOnce(() => new Promise<ApiResult<unknown>>((res) => { finish = () => res(ok()); }));
+		const first = sync.sync(view());
+		await vi.waitFor(() => expect(api.putSession).toHaveBeenCalledTimes(1));
+		auth.on = false;
+		await sync.release();
+		expect(api.deleteSession).toHaveBeenCalledTimes(1);
+		finish();
+		await first;
+		expect(api.deleteSession).toHaveBeenCalledTimes(2); // the late PUT is undone
+		// The old token is not remembered as lent: signing back in with it sends it again.
+		auth.on = true;
+		await sync.sync(view({ session: true }));
+		expect(api.putSession).toHaveBeenCalledTimes(2);
+		expect(api.putSession).toHaveBeenLastCalledWith('tok-1', expect.any(Number));
+	});
+
+	it('release() forgets a refused token, so the next sign-in starts clean', async () => {
+		const { auth, api, refresh, sync } = setup();
+		await sync.sync(view());
+		await sync.sync(view({ relay: 'signin_rejected', askedAt: sync.stamp() })); // refresh -> tok-1-r
+		await sync.sync(view({ relay: 'signin_rejected', askedAt: sync.stamp() })); // tok-1-r refused too: retry used up
+		auth.on = false;
+		await sync.release();
+		auth.on = true; // the same token signed in again
+		await sync.sync(view({ relay: 'ok' }));
+		expect(api.putSession).toHaveBeenLastCalledWith('tok-1-r', expect.any(Number));
+		expect(refresh).toHaveBeenCalledTimes(1);
 	});
 });

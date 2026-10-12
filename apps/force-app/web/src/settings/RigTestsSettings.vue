@@ -11,6 +11,8 @@ import { formatWhen, httpUrl, relayInfo, snoozedUntilText, summaryCounts } from 
 const s = rigTest.state;
 const elig = computed(() => s.eligibility);
 const relay = computed(() => relayInfo(elig.value?.relay));
+/** Signed out on the rig, the eligibility reason is already this sentence: show it once. */
+const relayRowShown = computed(() => !(elig.value?.relay === 'signed_out' && elig.value.reason === relay.value.text));
 
 function refresh() { void rigTest.refreshEligibility(); void rigTest.refreshPending(); void rigTest.refreshHistory(); }
 onMounted(refresh);
@@ -50,7 +52,7 @@ const stateLabel = (x: string) => STATE_LABEL[x] ?? x;
 					<span v-if="elig && !elig.eligible && elig.reason" class="sub">{{ elig.reason }}</span>
 				</div>
 			</div>
-			<div class="row">
+			<div v-if="relayRowShown" class="row">
 				<span class="material-symbols-rounded" :class="relay.tone">{{ relay.icon }}</span>
 				<div><span>{{ relay.text }}</span></div>
 			</div>
