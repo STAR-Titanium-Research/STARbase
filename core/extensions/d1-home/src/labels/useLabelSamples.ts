@@ -176,7 +176,7 @@ export function useLabelSamples() {
 	}
 
 	return {
-		selected, add, remove, removeMany, clear, copyOverrides, setCopies,
+		selected, add, remove, removeMany, clear, copyOverrides, setCopies, resetCopies: dropOverride,
 		search, projectId, campaignId, results, total, loading, error, runSearch,
 		projects, campaigns, optionsError, loadOptions, loadCampaigns, lookup, resolve,
 	};

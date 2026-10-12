@@ -17,6 +17,15 @@ const pasteBusy = ref(false);
 
 // What a sample prints: its own number if one was typed, else the global copies.
 const copiesOf = (s: LabelSample): number => d.copyOverrides.value[s.id] ?? clampCopies(copies.value);
+const isOwn = (s: LabelSample): boolean => d.copyOverrides.value[s.id] !== undefined;
+// A typed number is this sample's own; emptying the field puts it back on the default (and the field shows it).
+function onCopies(s: LabelSample, e: Event): void {
+	const input = e.target as HTMLInputElement;
+	if (input.value.trim() === '') {
+		d.resetCopies(s.id);
+		input.value = String(clampCopies(copies.value));
+	} else d.setCopies(s.id, input.value);
+}
 const selectedIds = computed(() => new Set(d.selected.value.map((s) => s.id)));
 const allShown = computed(() => d.results.value.length > 0 && d.results.value.every((s) => selectedIds.value.has(s.id)));
 const campaignOptions = computed(() => d.campaigns.value.filter((c) => !d.projectId.value || c.projectId === d.projectId.value));
@@ -126,11 +135,11 @@ const rangeText = computed(() => {
 		</div>
 
 		<div v-if="d.selected.value.length" class="picked" aria-label="Selected samples">
-			<span v-for="s in d.selected.value" :key="s.id" class="pill">
+			<span v-for="s in d.selected.value" :key="s.id" class="pill" :class="{ own: isOwn(s) }" :title="isOwn(s) ? 'Its own number of labels. Clear the number to use the default again.' : undefined">
 				<span class="mono">{{ s.code || s.shortId }}</span>
 				<label class="pill-n" :title="`Labels of ${s.code}`">
-					<span class="sr">Labels of {{ s.code }}</span>
-					<input type="number" min="1" :max="MAX_COPIES" step="1" :value="copiesOf(s)" @change="d.setCopies(s.id, ($event.target as HTMLInputElement).value)" />
+					<span class="sr">Labels of {{ s.code }}{{ isOwn(s) ? ' (its own number; clear it to use the default)' : '' }}</span>
+					<input type="number" min="1" :max="MAX_COPIES" step="1" :value="copiesOf(s)" @change="onCopies(s, $event)" />
 				</label>
 				<button type="button" :aria-label="`Remove ${s.code} from the selection`" @click="d.remove(s.id)">×</button>
 			</span>
@@ -167,6 +176,8 @@ const rangeText = computed(() => {
 	display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border-radius: 99px;
 	border: 1px solid var(--d1-line); background: var(--d1-tile); font-size: var(--fs-sm, 12px);
 }
+.pill.own { border-color: var(--d1-accent, var(--theme--primary)); }
+.pill.own::before { content: ''; width: 6px; height: 6px; margin-left: -4px; border-radius: 50%; background: var(--d1-accent, var(--theme--primary)); }
 .pill-n input { width: 44px; height: 22px; padding: 0 4px; text-align: center; border: 1px solid var(--theme--border-color); border-radius: 6px; background: var(--theme--form--field--input--background, var(--theme--background)); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .pill button { border: 0; background: none; color: var(--d1-dim); font: inherit; font-size: var(--fs-lg, 15px); line-height: 1; padding: 0 6px; cursor: pointer; }
