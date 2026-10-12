@@ -350,21 +350,21 @@ test('GET /label redirects to /admin/home/labels with ids query parameter', asyn
 	const { routes } = harness({});
 	const out = await getRedirect(routes, '/label', { ids: SID });
 	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, `/admin/home/labels?ids=${SID}`);
+	assert.equal(out.redirectTo, `https://lims.example.org/admin/home/labels?ids=${SID}`);
 });
 
 test('GET /label redirects to /admin/home/labels with codes query parameter', async () => {
 	const { routes } = harness({});
 	const out = await getRedirect(routes, '/label', { codes: 'S-001' });
 	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, `/admin/home/labels?codes=S-001`);
+	assert.equal(out.redirectTo, `https://lims.example.org/admin/home/labels?codes=S-001`);
 });
 
 test('GET /label redirects to /admin/home/labels with both ids and codes', async () => {
 	const { routes } = harness({});
 	const out = await getRedirect(routes, '/label', { ids: SID, codes: 'S-001' });
 	assert.equal(out.status, 302);
-	assert.ok(out.redirectTo.startsWith('/admin/home/labels?'));
+	assert.ok(out.redirectTo.startsWith('https://lims.example.org/admin/home/labels?'));
 	assert.ok(out.redirectTo.includes(`ids=${SID}`));
 	assert.ok(out.redirectTo.includes('codes=S-001'));
 });
@@ -373,14 +373,14 @@ test('GET /label redirects to /admin/home/labels without query parameters', asyn
 	const { routes } = harness({});
 	const out = await getRedirect(routes, '/label', {});
 	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, '/admin/home/labels');
+	assert.equal(out.redirectTo, 'https://lims.example.org/admin/home/labels');
 });
 
 test('GET /labels redirects to /admin/home/labels', async () => {
 	const { routes } = harness({});
 	const out = await getRedirect(routes, '/labels', {});
 	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, '/admin/home/labels');
+	assert.equal(out.redirectTo, 'https://lims.example.org/admin/home/labels');
 });
 
 test('GET /label encodes query parameters', async () => {
