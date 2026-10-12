@@ -5,7 +5,7 @@ import type { Bookmark } from '../nav/navConfig';
 import {
 	BOOL_OPTIONS, cellText, effectiveState, enumOptionParams, enumOptions, extraFields, hasActiveFilters, hasExplicitQ, hasNextPage,
 	nextSort, queryForState, sortKey, rangeText, relationKey, relationOptionParams, relationOptions, relationText, sortDirection, withChange,
-	validSort, withSelected,
+	validSort, withSelected, selectionRoute, SELECT_MAX,
 } from './indexView';
 
 const samples = indexDefBySlug('samples')!;
@@ -212,5 +212,15 @@ describe('chip options', () => {
 		expect(withSelected(list, 'a')).toBe(list);
 		expect(withSelected(list, undefined)).toBe(list);
 		expect(withSelected(list, 'zzz')[0]).toEqual({ value: 'zzz', label: 'zzz' });
+	});
+});
+
+describe('select action', () => {
+	it('is set for samples only, and routes the ticked keys to the labels page', () => {
+		expect(samples.selectAction).toEqual({ label: 'Print labels for selected', path: '/home/labels', param: 'ids' });
+		expect(operations.selectAction).toBeUndefined();
+		expect(selectionRoute(samples.selectAction!, ['a1', 'b2'])).toBe('/home/labels?ids=a1,b2');
+		expect(selectionRoute(samples.selectAction!, ['a b'])).toBe('/home/labels?ids=a%20b');
+		expect(SELECT_MAX).toBe(100);
 	});
 });

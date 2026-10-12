@@ -107,7 +107,7 @@ export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';
 export { isFinderShortcut, isModalOpen } from './finder/finderNav';
 export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
-export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
+export type { IndexDef, ColumnDef, FilterDef, SelectAction } from './index/indexConfig';
 export { default as IndexPage } from './index/IndexPage.vue';
 
 // Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)

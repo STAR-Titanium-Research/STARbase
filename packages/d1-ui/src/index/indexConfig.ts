@@ -39,6 +39,16 @@ export interface IndexDef {
 	rowTarget: 'record' | 'drawer';
 	// The collection has a short_id column the finder can match exactly.
 	hasShortId?: boolean;
+	// Rows can be ticked, and one button sends the ticked keys to an app page as ?<param>=a,b,c.
+	selectAction?: SelectAction;
+}
+
+export interface SelectAction {
+	label: string;
+	// An app route without the host's base path, e.g. '/home/labels'.
+	path: string;
+	// The query parameter that carries the keys.
+	param: string;
 }
 
 const col = (field: string, label: string, format?: ColumnDef['format']): ColumnDef => (format ? { field, label, format } : { field, label });
@@ -80,6 +90,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		searchFields: ['sample_code', 'nickname'],
 		filters: [project, enumFilter('current_status', 'Status'), material],
 		defaultSort: '-created_at', rowTarget: 'record', hasShortId: true,
+		selectAction: { label: 'Print labels for selected', path: '/home/labels', param: 'ids' },
 	},
 	{
 		slug: 'operations', collection: 'manufacturing_operations', title: 'Operations', group: 'records', primaryKey: 'operation_id',

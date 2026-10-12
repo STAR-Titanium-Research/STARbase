@@ -3,7 +3,7 @@
 // search, chip filters, a plain sortable table, paging, "+ New" and "Open in Data Studio". Rows go
 // to the record's Explorer page or open the edit drawer, per the def. All state lives in the URL
 // (see useIndexPage); the host (ExplorerView in d1-home) supplies the API and navigation.
-import { inject, ref, watch } from 'vue';
+import { computed, inject, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { EXPLORER_HOST } from '../host';
 import type { ExplorerHost } from '../host';
@@ -15,7 +15,7 @@ import NotVisible from '../components/NotVisible.vue';
 import PageShell from '../components/PageShell.vue';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { PAGE_SIZE } from './indexQuery';
-import { cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
+import { SELECT_MAX, cellText, hasNextPage, rangeText, selectionRoute, sortDirection, sortKey } from './indexView';
 import { useIndexPage } from './useIndexPage';
 
 const props = defineProps<{ def: IndexDef }>();
@@ -80,6 +80,26 @@ function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
 	openRow(row);
 }
 
+// ---- ticked rows (defs with a selectAction): kept across pages, in the order ticked ----------------
+const picked = ref<string[]>([]);
+const isPicked = (row: Record<string, unknown>): boolean => picked.value.includes(rowKey(row));
+const pageFull = computed(() => picked.value.length >= SELECT_MAX);
+function togglePick(row: Record<string, unknown>): void {
+	const k = rowKey(row);
+	if (picked.value.includes(k)) picked.value = picked.value.filter((x) => x !== k);
+	else if (!pageFull.value) picked.value = [...picked.value, k];
+}
+const allPicked = computed(() => rows.value.length > 0 && rows.value.every(isPicked));
+function togglePage(): void {
+	const keys = rows.value.map(rowKey);
+	picked.value = allPicked.value
+		? picked.value.filter((k) => !keys.includes(k))
+		: [...picked.value, ...keys.filter((k) => !picked.value.includes(k))].slice(0, SELECT_MAX);
+}
+function runSelectAction(): void {
+	if (props.def.selectAction && picked.value.length) host.navigate(selectionRoute(props.def.selectAction, picked.value));
+}
+
 const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 </script>
 
@@ -93,6 +113,9 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 			<div class="head">
 				<span class="range" role="status">{{ rangeText(state.page, rows.length, total) }}</span>
 				<span class="spacer" />
+				<button v-if="def.selectAction" type="button" class="btn" :disabled="!picked.length" @click="runSelectAction">
+					{{ def.selectAction.label }}{{ picked.length ? ` (${picked.length})` : '' }}
+				</button>
 				<button
 					type="button"
 					class="btn"
@@ -157,6 +180,9 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 				<DataTable v-if="loading || rows.length">
 					<thead>
 						<tr>
+							<th v-if="def.selectAction" class="fit">
+								<input type="checkbox" :checked="allPicked" aria-label="Tick every row on this page" @change="togglePage" />
+							</th>
 							<th v-for="c in def.columns" :key="c.field" :class="{ num: c.format === 'number' }" :aria-sort="ariaSort(c)">
 								<button v-if="sortable(c)" type="button" class="sort" @click="setSort(sortKey(c))">
 									{{ c.label }}<span class="arrow" aria-hidden="true">{{ arrow(c) }}</span>
@@ -168,6 +194,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 					<tbody>
 						<template v-if="loading && !rows.length">
 							<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
+								<td v-if="def.selectAction" />
 								<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
 							</tr>
 						</template>
@@ -175,6 +202,16 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
 								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
 							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
+								<td v-if="def.selectAction" class="fit">
+									<input
+										type="checkbox"
+										:checked="isPicked(row)"
+										:disabled="!isPicked(row) && pageFull"
+										aria-label="Tick this row"
+										@click.stop
+										@change="togglePick(row)"
+									/>
+								</td>
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
 										<a
@@ -203,6 +240,8 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 					<button v-if="filtered || state.page > 1" type="button" class="link" @click="clearFilters">Clear filters</button>
 				</div>
 			</div>
+
+			<p v-if="def.selectAction && pageFull" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
 
 			<div v-if="!error && total !== null && total > 0" class="foot">
 				<span class="d1-note">Page {{ state.page }} of {{ Math.max(1, Math.ceil(total / PAGE_SIZE)) }}</span>
