@@ -4,9 +4,12 @@
 #   2. apply the worktree's pending dbmate migrations,
 #   3. create two local test users ON THE COPY (an admin and a Lab Member, random passwords written to the
 #      git-ignored .superpowers/preview-credentials.txt),
-#   4. start Directus (live's exact image, live's extensions mounted read-only, this worktree's built d1-home
-#      overlaid) published on 127.0.0.1:18055 only, and leave it running.
-# Stop and remove everything with --stop. Build d1-home first: npm run build -w directus-extension-d1-home
+#   4. start Directus (live's exact image and asset settings) on a merged extensions folder (live's built
+#      extensions, with this worktree's D1_PREVIEW_OVERLAY extensions in their place, default d1-home and
+#      d1-admin-overview), published on 127.0.0.1:18055 only, and leave it running.
+# The copy has no uploaded files (an empty preview-only volume), so picture thumbnails show their placeholders;
+# sample drawings need no files. Stop and remove everything with --stop. Build d1-home first:
+#   npm run build -w directus-extension-d1-home
 #
 # Usage: bash scripts/dev/explorer_preview.sh [--stop]   (from the repo root)
 set -uo pipefail
@@ -15,16 +18,32 @@ REPO="$(pwd -W 2>/dev/null || pwd)"
 MAIN_CHECKOUT="${D1_MAIN_CHECKOUT:-D:\\Users\\CMBE Admn 3214022001\\Documents\\GitHub\\D1-Database}"
 NET=d1-preview; PG=d1-preview-pg; DX=d1-preview-directus; PORT="${D1_PREVIEW_PORT:-18055}"
 LIVE_PG=d1-database-postgres-1; LIVE_DX=d1-database-directus-1
+FILES_VOL=d1-preview-uploads
+OVERLAY="${D1_PREVIEW_OVERLAY:-d1-home d1-admin-overview}"
 CREDS=.superpowers/preview-credentials.txt
+EXT_DIR=.superpowers/preview-extensions
 rhex() { openssl rand -hex "$1" 2>/dev/null || od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
 stop() { docker rm -fv "$DX" "$PG" >/dev/null 2>&1; docker network rm "$NET" >/dev/null 2>&1; }
 abort() { echo "FAIL preview: $1"; [[ -n "${2:-}" ]] && echo "$2"; stop; exit 1; }
 psql_copy() { docker exec -i "$PG" psql -U d1 -d d1_database -X -q -v ON_ERROR_STOP=1 "$@"; }
+# Built extensions only: node_modules and sources stay behind (every extension ships a bundled entry).
+copy_ext() { tar -C "$1" --exclude=node_modules --exclude=src -cf - . | tar -C "$2" -xf -; }
 
-if [[ "${1:-}" == "--stop" ]]; then stop; rm -f "$CREDS"; echo "preview stopped"; exit 0; fi
+if [[ "${1:-}" == "--stop" ]]; then
+  stop; docker volume rm "$FILES_VOL" >/dev/null 2>&1; rm -rf "$CREDS" "$EXT_DIR"; echo "preview stopped"; exit 0
+fi
 [[ -f core/extensions/d1-home/dist/index.js ]] || abort "build d1-home first (npm run build -w directus-extension-d1-home)"
 
 stop
+# --- merged extensions: live's, then this worktree's overlay extensions replacing theirs
+rm -rf "$EXT_DIR"; mkdir -p "$EXT_DIR"
+copy_ext "$(cygpath -u "$MAIN_CHECKOUT" 2>/dev/null || echo "$MAIN_CHECKOUT")/core/extensions" "$EXT_DIR" \
+  || abort "copy live's extensions"
+for ext in $OVERLAY; do
+  [[ -d "core/extensions/$ext" ]] || abort "overlay extension core/extensions/$ext not found"
+  rm -rf "${EXT_DIR:?}/$ext"; mkdir -p "$EXT_DIR/$ext"; copy_ext "core/extensions/$ext" "$EXT_DIR/$ext" || abort "copy $ext"
+done
+EXT_MOUNT="$(cd "$EXT_DIR" && (pwd -W 2>/dev/null || pwd))"
 DB_PASS="preview-$(rhex 8)"
 URL="postgres://d1:$DB_PASS@$PG:5432/d1_database?sslmode=disable"
 docker network create --internal "$NET" >/dev/null || abort "docker network create"
@@ -67,8 +86,9 @@ docker run -d --name "$DX" -p "127.0.0.1:$PORT:8055" \
   -e KEY="$(rhex 16)" -e SECRET="$(rhex 32)" -e TELEMETRY=false \
   -e DB_CLIENT=pg -e DB_HOST="$PG" -e DB_PORT=5432 -e DB_DATABASE=d1_database -e DB_USER=d1 -e DB_PASSWORD="$DB_PASS" \
   -e PUBLIC_URL="http://127.0.0.1:$PORT" -e EXTENSIONS_AUTO_RELOAD=false -e D1_TIMEZONE=Europe/London \
-  -v "$MAIN_CHECKOUT\\core\\extensions:/directus/extensions:ro" \
-  -v "$REPO/core/extensions/d1-home:/directus/extensions/d1-home:ro" \
+  -e ASSETS_TRANSFORM_IMAGE_MAX_DIMENSION=8000 -e ASSETS_TRANSFORM_TIMEOUT=30000 -e ASSETS_TRANSFORM_MAX_CONCURRENT=4 \
+  -v "$EXT_MOUNT:/directus/extensions:ro" \
+  -v "$FILES_VOL:/directus/uploads" \
   "$IMAGE" >/dev/null || abort "directus start"
 docker network connect "$NET" "$DX" || abort "connect directus to the copy's network"
 for _ in $(seq 1 120); do

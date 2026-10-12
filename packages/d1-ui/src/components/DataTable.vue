@@ -2,7 +2,7 @@
 // The one table of the Explorer pages. The caller writes the rows (<thead>, <tbody>) in the slot;
 // the look comes from here, so every list on every page has the same head, row height and hover.
 // Cell classes: `num` (right-aligned figures), `mono` (codes), `dim`, `actions` (right-aligned,
-// no wrap) and `fit` (a column only as wide as its content).
+// no wrap), `fit` (a column only as wide as its content) and `thumb` (a small picture column).
 defineProps<{
 	/** Rows 6px high instead of 7px: for long figure tables. */
 	dense?: boolean;
@@ -10,12 +10,14 @@ defineProps<{
 	fitContent?: boolean;
 	/** A table of figures: the first column (the row's name) left-aligned, the others right-aligned, heads included. */
 	figures?: boolean;
+	/** Row height and text size, the per-list preference: compact (3px rows, 12px text), normal (today), roomy (11px rows). */
+	density?: 'compact' | 'normal' | 'roomy';
 }>();
 </script>
 
 <template>
 	<div class="d1-table-wrap">
-		<table class="d1-table" :class="{ dense, 'fit-content': fitContent, figures }"><slot /></table>
+		<table class="d1-table" :class="[{ dense, 'fit-content': fitContent, figures }, density && density !== 'normal' ? density : '']"><slot /></table>
 	</div>
 </template>
 
@@ -40,6 +42,11 @@ defineProps<{
 	border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued));
 }
 .d1-table.dense :deep(td) { padding-block: 5px; }
+/* After .dense, so a chosen density wins over it. */
+.d1-table.compact { font-size: 12px; }
+.d1-table.compact :deep(td) { padding-block: 3px; }
+.d1-table.roomy :deep(td) { padding-block: 11px; }
+.d1-table :deep(.thumb) { width: 1%; padding-right: 2px; line-height: 0; }
 .d1-table.fit-content { width: auto; }
 /* Written as `.d1-table.figures` so these beat the th/td rules above (same elements, one class
    more); an override from the caller's own scope lost that tie. */

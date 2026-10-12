@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-admin-overview",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "GET /d1-admin-overview (admin only) serves the counts behind the admin Home panels: missing files, file fingerprints, the force crawler and its analysis queue, and records with no owner.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

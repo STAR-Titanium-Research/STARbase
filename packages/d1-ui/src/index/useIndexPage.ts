@@ -10,6 +10,8 @@ import { useExplorerNav } from '../nav/useExplorerNav';
 import { bookmarkVisibleToUser } from '../nav/navConfig';
 import type { Bookmark } from '../nav/navConfig';
 import type { IndexDef } from './indexConfig';
+import { mergePlots, plotRequests } from './plotData';
+import type { PlotKey, RowPlots } from './plotData';
 import { bookmarkSort, buildItemsParams, dataStudioLink, stateFromQuery } from './indexQuery';
 import type { IndexState } from './indexQuery';
 import {
@@ -35,6 +37,8 @@ const BOOKMARK_FIELDS = 'id,bookmark,collection,user,role,filter,search,layout_q
 export interface ChipView {
 	field: string;
 	label: string;
+	/** A yes / off toggle rather than a select. */
+	flag: boolean;
 	options: ChipOption[];
 	value: string;
 }
@@ -58,6 +62,8 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 
 	const rows = ref<Record<string, unknown>[]>([]);
 	const total = ref<number | null>(null);
+	// Force / FAST data per row key (operations, samples), from a second round of requests after the page loads.
+	const plots = ref<Record<string, RowPlots>>({});
 	const loading = ref(true);
 	const error = ref('');
 	const forbidden = ref(false);
@@ -144,22 +150,48 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		settledBookmark.value = ok ? null : id;
 
 		const params = buildItemsParams(def, state.value, bookmark.value, visible.value);
-		params.fields = [...(params.fields as string[]), ...extraFields(def).filter((f) => !(params.fields as string[]).includes(f))];
+		params.fields = [...(params.fields as string[]), ...extraFields(def, visible.value).filter((f) => !(params.fields as string[]).includes(f))];
 		try {
 			const res = await host.api.get(`/items/${def.collection}`, { params });
 			if (!gate.isCurrent(token)) return;
 			rows.value = res.data?.data ?? [];
+			plots.value = {};
 			const count = Number(res.data?.meta?.filter_count);
 			total.value = Number.isFinite(count) ? count : rows.value.length;
 		} catch (e) {
 			if (!gate.isCurrent(token)) return;
 			rows.value = [];
+			plots.value = {};
 			total.value = null;
 			if (isForbidden(e)) forbidden.value = true;
 			else error.value = errorText(e, 'Could not load the list');
 		} finally {
 			if (gate.isCurrent(token)) loading.value = false;
 		}
+		void loadPlots(token);
+	}
+
+	// The Force / FAST buttons: one request per kind for the rows on screen, after the list is shown.
+	// These collections are hidden ones the page's readable list does not hold, so each request stands
+	// alone and fails soft (null: no buttons of that kind). A newer load drops a slow answer.
+	async function loadPlots(token: number): Promise<void> {
+		if (!gate.isCurrent(token) || !rows.value.length) return;
+		const ids = rows.value.map(rowKey);
+		const requests = plotRequests(def.collection, ids);
+		if (!requests.length) return;
+		const answers = await Promise.all(
+			requests.map(async (r) => {
+				try {
+					const res = await host.api.get(r.path, { params: r.params });
+					const data = res.data?.data;
+					return [r.key, Array.isArray(data) ? data : null] as const;
+				} catch {
+					return [r.key, null] as const;
+				}
+			}),
+		);
+		if (!gate.isCurrent(token)) return;
+		plots.value = mergePlots(def.collection, ids, Object.fromEntries(answers) as Partial<Record<PlotKey, unknown[] | null>>);
 	}
 
 	// The signed-in user arrives after the first load: a saved view that could not be judged without
@@ -233,6 +265,8 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		go({ filters });
 	}
 	const setSort = (key: string) => go({ sort: nextSort(sort.value, key) });
+	// The cards toolbar's select names the sort outright (a header click toggles).
+	const setSortTo = (value: string) => go({ sort: value });
 	const setPage = (page: number) => go({ page: Math.max(1, page) });
 	// "Clear filters": the search and the chips go, the saved view stays (it is a choice of its own,
 	// with its own x). With no search or chip left to clear, it drops the saved view too, so the
@@ -300,7 +334,7 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 			for (const f of def.filters) {
 				if (!offered(f.field) || requested.has(f.field)) continue;
 				requested.add(f.field);
-				if (f.options.kind !== 'bool') void loadOptions(f.field);
+				if (f.options.kind === 'relation' || f.options.kind === 'enum') void loadOptions(f.field);
 			}
 		},
 		{ immediate: true },
@@ -309,8 +343,9 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	const chips = computed<ChipView[]>(() =>
 		def.filters.filter((f) => offered(f.field)).map((f) => {
 			const value = state.value.filters[f.field] ?? '';
-			const base = f.options.kind === 'bool' ? BOOL_OPTIONS : (optionLists.value[f.field] ?? []);
-			return { field: f.field, label: f.label, options: withSelected(base, value), value };
+			const flag = f.options.kind === 'flag';
+			const base = f.options.kind === 'bool' ? BOOL_OPTIONS : flag ? [] : (optionLists.value[f.field] ?? []);
+			return { field: f.field, label: f.label, flag, options: flag ? [] : withSelected(base, value), value };
 		}),
 	);
 
@@ -325,9 +360,9 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 	const hasFilters = computed(() => hasActiveFilters(state.value));
 
 	return {
-		rows, total, loading, error, forbidden, bookmarkUnavailable,
+		rows, total, plots, loading, error, forbidden, bookmarkUnavailable,
 		state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 		reload: load, rowKey, relationSortable,
-		setSearch, setBookmark, setFilter, setSort, setPage, clearFilters, closeOpen,
+		setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
 	};
 }

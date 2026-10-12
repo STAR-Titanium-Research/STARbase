@@ -1,17 +1,14 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import {
-	DEFAULT_WEEKS, LIST_CAP, TEST_DONE_STATUSES, campaignProgress, countsByKey, errorText, fetchActivityRows, isNotVisible,
-	operationCategoryFor, projectScopeFilter, sampleProjectScopeFilter, useItems, useRequestGate, useSections, weeklyActivity,
-	type CampaignProgress, type ForceRows, type SectionState, type WeeklyActivity,
+	DEFAULT_WEEKS, LIST_CAP, countsByKey, errorText, fetchActivityRows, isNotVisible, loadCampaignStats,
+	projectScopeFilter, sampleProjectScopeFilter, useItems, useRequestGate, useSections, weeklyActivity,
+	type CampaignProgress, type SectionState, type WeeklyActivity,
 } from '@d1/ui';
 
 // Everything the Project page reads, as the signed-in user (so Directus permissions apply). Reads
 // the real collections, not `project_rollup`, which ADR-0011 restricts. The project decides between
 // "page" and "Not found or not visible to you"; every other block is a section that loads in
 // parallel and fails on its own, so one forbidden collection does not blank the page.
-
-// Cap of the row reads behind the machining progress bar; past it the bar is withheld, not wrong.
-const PROGRESS_ROW_CAP = 5000;
 
 const PROJECT_FIELDS = [
 	'project_id', 'project_code', 'project_name', 'description', 'document_number', 'is_active',
@@ -81,55 +78,9 @@ export function useProjectData(id: Ref<string>) {
 			limit: LIST_CAP + 1,
 		});
 		if (!gate.isCurrent(token)) return [];
-		// The numbers behind the progress bars. Each read fails on its own: the cards then show no
-		// stats rather than no campaigns.
-		const soft = async <T>(read: () => Promise<T>, fallback: T): Promise<{ data: T; ok: boolean }> => {
-			try {
-				return { data: await read(), ok: true };
-			} catch {
-				return { data: fallback, ok: false };
-			}
-		};
-		// Counts are exact: `aggregate[count]` grouped by campaign, not a capped row read. Only the
-		// force-analysis states need rows (one operation can have several force files), so only
-		// machining trials read rows, and a read that hits the cap says so instead of drawing a bar.
-		const grouped = (collection: string, filter: Record<string, unknown>) =>
-			getItems(collection, { aggregate: { count: '*' }, groupBy: ['campaign_id'], filter, limit: -1 });
-		const hasMachining = rows.some((c: any) => operationCategoryFor(c.campaign_type) === 'machining');
-		const machining = (path: Record<string, unknown>) => ({ _and: [path, { campaign_id: { campaign_type: { _eq: 'machining_trial' } } }] });
-		const [samples, ops, tests, testsDone, force] = await Promise.all([
-			soft(() => grouped('campaign_samples', inProject), [] as any[]),
-			soft(() => grouped('manufacturing_operations', inProject), [] as any[]),
-			soft(() => grouped('test_sessions', inProject), [] as any[]),
-			soft(() => grouped('test_sessions', { _and: [inProject, { status: { _in: TEST_DONE_STATUSES } }] }), [] as any[]),
-			soft(async (): Promise<ForceRows> => {
-				if (!hasMachining) return { operations: [], analyses: [], truncated: false };
-				const [operations, analyses] = await Promise.all([
-					getItems('manufacturing_operations', {
-						filter: machining(inProject),
-						fields: ['operation_id', 'campaign_id', 'process_category'],
-						limit: PROGRESS_ROW_CAP,
-					}),
-					getItems('machining_force_analysis', {
-						filter: { operation_id: machining(inProject) },
-						fields: ['operation_id', 'status'],
-						limit: PROGRESS_ROW_CAP,
-					}),
-				]);
-				return { operations, analyses, truncated: operations.length >= PROGRESS_ROW_CAP || analyses.length >= PROGRESS_ROW_CAP };
-			}, null as ForceRows | null),
-		]);
-		// Without the three counts there is nothing to show on a card; the bars degrade on their own.
-		const stats = samples.ok && ops.ok && tests.ok
-			? campaignProgress({
-					campaigns: rows,
-					samplesByCampaign: countsByKey(samples.data, 'campaign_id'),
-					operationsByCampaign: countsByKey(ops.data, 'campaign_id'),
-					testsByCampaign: countsByKey(tests.data, 'campaign_id'),
-					testsDoneByCampaign: testsDone.ok ? countsByKey(testsDone.data, 'campaign_id') : null,
-					forceRows: force.ok ? force.data : null,
-				})
-			: null;
+		// The numbers behind the progress bars (the kit's loader, shared with the campaigns list). Each
+		// read fails on its own: the cards then show no stats rather than no campaigns.
+		const stats = await loadCampaignStats(getItems, rows, inProject);
 		return rows.map((c: any) => ({ ...c, stats: stats?.get(c.campaign_id) ?? null }));
 	}
 

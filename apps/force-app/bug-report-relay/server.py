@@ -16,6 +16,35 @@ Configure via env vars:
                                     mechanisms can't carry real newlines)
     GITHUB_APP_INSTALLATION_ID     installation ID from installing the App on the target repo
     GITHUB_REPO                    "owner/repo", defaults to this monorepo
+    RIG_TEST_ALLOWED_LOGINS        comma-separated GitHub logins (case-insensitive) allowed to
+                                    request rig tests; empty = rig tests off
+    RIG_TEST_RELAY_TOKEN           shared secret the rig PC sends in the X-Rig-Token header on
+                                    every /rig-tests call; empty = rig tests off
+
+Rig test requests (ADR-0012, docs/superpowers/specs/2026-10-11-rig-test-requests-design.md). The
+app on the rig PC polls these; none of them runs anything here:
+
+    GET   /rig-tests                       open issues labelled "rig-test-request" whose label was
+                                           last applied by an allowlisted login and that an
+                                           allowlisted login opened (30 s cache)
+    POST  /rig-tests/{n}/comment           {body} -> {ok, id}; comment on a rig-test issue
+    PATCH /rig-tests/{n}/comment/{id}      {body}; edits only a comment this App created there
+    POST  /rig-tests/{n}/state             {state}; sets one "rig-test:<state>" label, drops the
+                                           others (deferred|declined|running|partial|done|
+                                           interrupted)
+
+Trust: a command is trusted by its GitHub authorship (who opened the issue and who applied the
+label: both must be allowlisted, since the author can edit the block after the label is on), never
+by who called the relay. Callers are not trusted by network position either: every /rig-tests*
+call, reads included, must carry the shared rig token in X-Rig-Token (constant-time compare), so a
+tailnet host that lacks it can neither read requests nor post a forged result as the App bot. The
+token lives in the relay's env and on the rig PC's config folder, never in the app build. Even
+with the token, every write re-checks that the issue is open, is not a PR, carries the label, was
+opened by an allowlisted login and was labelled by one, and the relay will not edit a comment that
+holds a result marker (the rig only ever edits its progress comment). With
+RIG_TEST_ALLOWED_LOGINS or the token empty, or the App unconfigured, every rig-test endpoint
+answers {"ok": false, "reason": "rig tests not configured"}; a wrong or missing token gets
+HTTP 403 {"ok": false, "reason": "rig token rejected"}.
 
 If any of the App ID / private key / installation ID is missing, /report fails closed with a
 clear "not configured" reason rather than raising — callers should surface that as a runtime
@@ -26,17 +55,24 @@ attempt with a 500.
 from __future__ import annotations
 
 import calendar
+import functools
+import hmac
+import logging
 import os
 import time
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import jwt
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 GITHUB_API = "https://api.github.com"
 DEFAULT_REPO = "dpremoli/D1-Database"
+
+log = logging.getLogger("bug-report-relay")
 
 app = FastAPI()
 
@@ -148,6 +184,47 @@ async def _github(method: str, url: str, **kwargs) -> httpx.Response:
     return res
 
 
+def _repo_path(suffix: str) -> str:
+    return f"/repos/{_repo()}{suffix}"
+
+
+def _failure(reason: str) -> dict:
+    return {"ok": False, "reason": reason}
+
+
+async def _gh(
+    method: str,
+    path: str,
+    *,
+    what: str = "request",
+    allow: tuple[int, ...] = (),
+    links: dict | None = None,
+    **kwargs,
+) -> tuple[object, dict | None]:
+    """_github plus the never-raise contract: returns (parsed JSON or None, None) on success, or
+    (None, {"ok": False, "reason": ...}) when authentication, the network or GitHub failed.
+    Statuses in `allow` count as success (their body is still returned). A dict passed as `links`
+    is filled with the response's parsed Link header (rel -> {"url": ...})."""
+    try:
+        res = await _github(method, f"{GITHUB_API}{path}", **kwargs)
+    except _AuthError as e:
+        return None, _failure(f"could not authenticate with GitHub: {e}")
+    except httpx.HTTPError as e:
+        return None, _failure(f"could not reach GitHub: {e}")
+    if links is not None:
+        links.update(res.links)
+    try:
+        data = res.json()
+    except ValueError:
+        data = None
+    if res.status_code >= 300 and res.status_code not in allow:
+        detail = data.get("message", "") if isinstance(data, dict) else ""
+        return None, _failure(
+            f"GitHub rejected the {what} (HTTP {res.status_code}) {detail}".strip()
+        )
+    return data, None
+
+
 _Label = Annotated[str, Field(max_length=100)]
 
 
@@ -178,29 +255,15 @@ async def report(req: ReportRequest) -> dict:
     if not title:
         return {"ok": False, "reason": "A title is required."}
 
-    try:
-        res = await _github(
-            "POST",
-            f"{GITHUB_API}/repos/{_repo()}/issues",
-            json={"title": title[:250], "body": req.body, "labels": req.labels},
-        )
-    except _AuthError as e:
-        return {"ok": False, "reason": f"could not authenticate with GitHub: {e}"}
-    except httpx.HTTPError as e:
-        return {"ok": False, "reason": f"could not reach GitHub: {e}"}
-
-    if res.status_code >= 300:
-        detail = ""
-        try:
-            detail = res.json().get("message", "")
-        except ValueError:
-            pass
-        return {
-            "ok": False,
-            "reason": f"GitHub rejected the report (HTTP {res.status_code}) {detail}".strip(),
-        }
-
-    data = res.json()
+    data, err = await _gh(
+        "POST",
+        _repo_path("/issues"),
+        what="report",
+        json={"title": title[:250], "body": req.body, "labels": req.labels},
+    )
+    if err:
+        return err
+    data = data if isinstance(data, dict) else {}
     return {"ok": True, "url": data.get("html_url", ""), "number": data.get("number")}
 
 
@@ -217,36 +280,22 @@ async def issues() -> dict:
             "ok": False,
             "reason": "Bug reporting relay is not configured (missing GitHub App credentials).",
         }
-    try:
-        res = await _github(
-            "GET",
-            f"{GITHUB_API}/repos/{_repo()}/issues",
-            params={
-                "labels": "in-app-report",
-                "state": "all",
-                "sort": "created",
-                "direction": "desc",
-                "per_page": 50,
-            },
-        )
-    except _AuthError as e:
-        return {"ok": False, "reason": f"could not authenticate with GitHub: {e}"}
-    except httpx.HTTPError as e:
-        return {"ok": False, "reason": f"could not reach GitHub: {e}"}
-
-    if res.status_code >= 300:
-        detail = ""
-        try:
-            detail = res.json().get("message", "")
-        except ValueError:
-            pass
-        return {
-            "ok": False,
-            "reason": f"GitHub rejected the request (HTTP {res.status_code}) {detail}".strip(),
-        }
+    data, err = await _gh(
+        "GET",
+        _repo_path("/issues"),
+        params={
+            "labels": "in-app-report",
+            "state": "all",
+            "sort": "created",
+            "direction": "desc",
+            "per_page": 50,
+        },
+    )
+    if err:
+        return err
 
     out = []
-    for item in res.json():
+    for item in data if isinstance(data, list) else []:
         if (
             "pull_request" in item
         ):  # the issues endpoint also returns PRs; this repo files none
@@ -257,11 +306,373 @@ async def issues() -> dict:
                 "title": item.get("title", ""),
                 "url": item.get("html_url", ""),
                 "state": item.get("state", ""),
-                "labels": [
-                    (label if isinstance(label, str) else label.get("name", ""))
-                    for label in item.get("labels", [])
-                ],
+                "labels": _label_names(item),
                 "created_at": item.get("created_at"),
             }
         )
     return {"ok": True, "issues": out}
+
+
+# ---------------------------------------------------------------------------------------------
+# Rig test requests (ADR-0012). A request is an open issue labelled RIG_LABEL whose label was
+# applied by a login on RIG_TEST_ALLOWED_LOGINS. The relay is the only place that check happens.
+
+RIG_LABEL = "rig-test-request"
+STATE_PREFIX = "rig-test:"
+RigState = Literal["deferred", "declined", "running", "partial", "done", "interrupted"]
+_LIST_TTL_S = 30.0
+_EVENT_PAGES_MAX = (
+    10  # 1000 events on one issue; beyond that fail closed rather than guess
+)
+
+
+def _allowed_logins() -> frozenset[str]:
+    raw = os.environ.get("RIG_TEST_ALLOWED_LOGINS", "")
+    return frozenset(p.strip().lower() for p in raw.split(",") if p.strip())
+
+
+def _is_allowed(login: str | None) -> bool:
+    return (login or "").lower() in _allowed_logins()
+
+
+def _author(issue: dict) -> str | None:
+    """Login of whoever opened the issue. Anyone who can open an issue can later edit its body,
+    so a request is only trusted if its author is allowlisted as well as its labeller."""
+    user = issue.get("user")
+    login = user.get("login") if isinstance(user, dict) else None
+    return login if isinstance(login, str) else None
+
+
+# A comment holding this is a result the machine reads; it is never editable through the relay.
+RESULT_MARKER = "<!-- rig-test-result"
+
+
+def _rig_token() -> str:
+    return os.environ.get("RIG_TEST_RELAY_TOKEN", "").strip()
+
+
+def _rig_gate(token: str) -> dict | JSONResponse | None:
+    """Fail closed: no allowlist, no GitHub App or no relay token means no rig-test endpoint does
+    anything. Otherwise the caller must present the shared token (every method, reads too)."""
+    wanted = _rig_token()
+    if not _allowed_logins() or not configured() or not wanted:
+        return _failure("rig tests not configured")
+    if not hmac.compare_digest(token.encode(), wanted.encode()):
+        return JSONResponse(_failure("rig token rejected"), status_code=403)
+    return None
+
+
+def _never_raise(fn):
+    """The rig-test endpoints are polled by the backend, which renders "reason" as is; an
+    unexpected GitHub payload shape must not turn into a 500."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except Exception:
+            log.exception("rig-test endpoint failed")
+            return _failure("unexpected error in the relay")
+
+    return wrapper
+
+
+def _label_names(issue: dict) -> list[str]:
+    return [
+        (lb if isinstance(lb, str) else (lb or {}).get("name", ""))
+        for lb in issue.get("labels") or []
+    ]
+
+
+def _last_page(links: dict) -> int:
+    """Number of the last page of a paginated reply, from its Link header (1 when there is none)."""
+    url = (links.get("last") or {}).get("url") or ""
+    found = parse_qs(urlparse(url).query).get("page") or []
+    return int(found[0]) if found and found[0].isdigit() else 1
+
+
+def _latest_label_event(events: list) -> str | None:
+    """Login on the newest RIG_LABEL `labeled` event in a page of events (oldest first), "" if
+    GitHub shows no actor, None if the page has no such event."""
+    for e in reversed(events):
+        if (
+            isinstance(e, dict)
+            and e.get("event") == "labeled"
+            and ((e.get("label") or {}).get("name") or "").lower() == RIG_LABEL
+        ):
+            return (e.get("actor") or {}).get("login") or ""
+    return None
+
+
+async def _labeller(n: int) -> tuple[str | None, dict | None]:
+    """Login that most recently applied RIG_LABEL to issue n ("" if GitHub shows no actor, None
+    if never). Events come oldest first, so the newest page is read first (page 1 tells where it
+    is, through the Link header) and the walk goes backwards until a match turns up. At most
+    _EVENT_PAGES_MAX pages are read; if the label is not in them, fail closed."""
+    links: dict = {}
+    path = _repo_path(f"/issues/{n}/events")
+    first, err = await _gh(
+        "GET", path, params={"per_page": 100, "page": 1}, links=links
+    )
+    if err:
+        return None, err
+    if not isinstance(first, list):
+        return None, _failure("unexpected reply from GitHub")
+    for read, page in enumerate(range(_last_page(links), 0, -1), start=1):
+        if read > _EVENT_PAGES_MAX:
+            return None, _failure(f"issue #{n} has too many events to verify")
+        if page == 1:
+            events = first
+        else:
+            events, err = await _gh("GET", path, params={"per_page": 100, "page": page})
+            if err:
+                return None, err
+            if not isinstance(events, list):
+                return None, _failure("unexpected reply from GitHub")
+        found = _latest_label_event(events)
+        if found is not None:
+            return found, None
+    return None, None
+
+
+async def _rig_issue(n: int) -> tuple[dict | None, dict | None]:
+    """Issue n if it is an open, non-PR issue carrying RIG_LABEL, opened by an allowlisted login
+    and labelled by one; otherwise a refusal. Every write endpoint goes through this, so the relay cannot be used to
+    comment on or relabel anything that is not a legitimate rig-test request."""
+    issue, err = await _gh("GET", _repo_path(f"/issues/{n}"), allow=(404,))
+    if err:
+        return None, err
+    refusal = _failure(f"issue #{n} is not an open rig-test request")
+    if (
+        not isinstance(issue, dict)
+        or issue.get("state") != "open"
+        or "pull_request" in issue
+        or RIG_LABEL not in (name.lower() for name in _label_names(issue))
+    ):
+        return None, refusal
+    if not _is_allowed(_author(issue)):
+        return None, refusal
+    login, err = await _labeller(n)
+    if err:
+        return None, err
+    if not _is_allowed(login):
+        return None, refusal
+    return issue, None
+
+
+_list_cache: dict = {"key": None, "expires": 0.0, "requests": []}
+
+
+@app.get("/rig-tests")
+@_never_raise
+async def rig_tests(x_rig_token: Annotated[str, Header()] = "") -> dict:
+    """Pending rig-test requests, or {"ok": False, "reason": ...}. An issue is listed only if its
+    author and the login that most recently applied the label are both allowlisted. Cached for
+    30 s."""
+    if (gate := _rig_gate(x_rig_token)) is not None:
+        return gate
+    allowed = _allowed_logins()
+    if _list_cache["key"] == allowed and time.monotonic() < _list_cache["expires"]:
+        return {"ok": True, "requests": _list_cache["requests"]}
+
+    items, err = await _gh(
+        "GET",
+        _repo_path("/issues"),
+        params={"labels": RIG_LABEL, "state": "open", "per_page": 50},
+    )
+    if err:
+        return err
+    out = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or "pull_request" in item:
+            continue
+        n = item.get("number")
+        if not isinstance(n, int):
+            continue
+        if not _is_allowed(_author(item)):
+            log.info(
+                "rig-test #%s ignored: opened by %r, not on the allowlist",
+                n,
+                _author(item),
+            )
+            continue
+        login, err = await _labeller(n)
+        if err:
+            # One issue that cannot be verified (too many events, a GitHub hiccup) is left out
+            # and logged; it must not hide the other requests.
+            log.warning("rig-test #%s skipped: %s", n, err["reason"])
+            continue
+        if not _is_allowed(login):
+            log.info(
+                "rig-test #%s ignored: label applied by %r, not on the allowlist",
+                n,
+                login,
+            )
+            continue
+        states = [
+            x[len(STATE_PREFIX) :]
+            for x in _label_names(item)
+            if x.startswith(STATE_PREFIX)
+        ]
+        out.append(
+            {
+                "number": n,
+                "title": item.get("title", ""),
+                "body": item.get("body") or "",
+                "url": item.get("html_url", ""),
+                "requested_by": login,
+                "created_at": item.get("created_at"),
+                "state_label": states[0] if states else None,
+            }
+        )
+    _list_cache.update(
+        key=allowed, expires=time.monotonic() + _LIST_TTL_S, requests=out
+    )
+    return {"ok": True, "requests": out}
+
+
+class CommentRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=60_000)
+
+
+class StateRequest(BaseModel):
+    state: RigState
+
+
+@app.post("/rig-tests/{n}/comment")
+@_never_raise
+async def rig_test_comment(
+    n: int, req: CommentRequest, x_rig_token: Annotated[str, Header()] = ""
+) -> dict:
+    if (gate := _rig_gate(x_rig_token)) is not None:
+        return gate
+    _, err = await _rig_issue(n)
+    if err:
+        return err
+    data, err = await _gh(
+        "POST",
+        _repo_path(f"/issues/{n}/comments"),
+        what="comment",
+        json={"body": req.body},
+    )
+    if err:
+        return err
+    return {"ok": True, "id": (data or {}).get("id")}
+
+
+_bot_login: dict[str, str] = {}
+
+
+async def _app_bot_login() -> str:
+    """ "<slug>[bot]", the login GitHub gives this App's comments. GET /app needs the App JWT, not
+    an installation token, so it does not go through _gh. Cached for the process lifetime."""
+    if "login" not in _bot_login:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(
+                f"{GITHUB_API}/app",
+                headers={
+                    "Authorization": f"Bearer {_mint_jwt()}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+        res.raise_for_status()
+        _bot_login["login"] = f"{res.json()['slug']}[bot]".lower()
+    return _bot_login["login"]
+
+
+async def _is_own_comment(comment: dict, n: int) -> bool:
+    """True only for a comment on issue n that this App created. The author must be a Bot, and
+    then GitHub's performed_via_github_app (when present) must be this App; if GitHub omits it,
+    the bot login must be this App's "<slug>[bot]". A human's comment, or another App's, is never
+    editable here."""
+    if (
+        not isinstance(comment, dict)
+        or (comment.get("user") or {}).get("type") != "Bot"
+    ):
+        return False
+    if not str(comment.get("issue_url") or "").endswith(f"/issues/{n}"):
+        return False
+    via = comment.get("performed_via_github_app")
+    if isinstance(via, dict) and via.get("id") is not None:
+        return str(via["id"]) == _app_id()
+    login = str((comment.get("user") or {}).get("login") or "").lower()
+    return login == await _app_bot_login()
+
+
+@app.patch("/rig-tests/{n}/comment/{comment_id}")
+@_never_raise
+async def rig_test_edit_comment(
+    n: int,
+    comment_id: int,
+    req: CommentRequest,
+    x_rig_token: Annotated[str, Header()] = "",
+) -> dict:
+    if (gate := _rig_gate(x_rig_token)) is not None:
+        return gate
+    _, err = await _rig_issue(n)
+    if err:
+        return err
+    path = _repo_path(f"/issues/comments/{comment_id}")
+    comment, err = await _gh("GET", path, what="comment")
+    if err:
+        return err
+    if not await _is_own_comment(comment, n):
+        return _failure(f"comment {comment_id} is not a relay comment on issue #{n}")
+    if RESULT_MARKER in str(comment.get("body") or ""):
+        return _failure(f"comment {comment_id} holds a result and cannot be edited")
+    _, err = await _gh("PATCH", path, what="comment", json={"body": req.body})
+    if err:
+        return err
+    return {"ok": True, "id": comment_id}
+
+
+@app.post("/rig-tests/{n}/state")
+@_never_raise
+async def rig_test_state(
+    n: int, req: StateRequest, x_rig_token: Annotated[str, Header()] = ""
+) -> dict:
+    """Set the one rig-test:<state> label on issue n and remove the others."""
+    if (gate := _rig_gate(x_rig_token)) is not None:
+        return gate
+    issue, err = await _rig_issue(n)
+    if err:
+        return err
+    want = f"{STATE_PREFIX}{req.state}"
+    have = [x for x in _label_names(issue) if x.startswith(STATE_PREFIX)]
+    if want not in have:
+        # 422 = the label already exists in the repo, which is fine.
+        _, err = await _gh(
+            "POST",
+            _repo_path("/labels"),
+            what="label",
+            allow=(422,),
+            json={
+                "name": want,
+                "color": "ededed",
+                "description": "Rig test request state",
+            },
+        )
+        if err:
+            return err
+        _, err = await _gh(
+            "POST",
+            _repo_path(f"/issues/{n}/labels"),
+            what="label",
+            json={"labels": [want]},
+        )
+        if err:
+            return err
+    for stale in have:
+        if stale != want:
+            # 404 = someone removed it between our read and now.
+            _, err = await _gh(
+                "DELETE",
+                _repo_path(f"/issues/{n}/labels/{quote(stale, safe='')}"),
+                what="label",
+                allow=(404,),
+            )
+            if err:
+                return err
+    _list_cache["expires"] = 0.0
+    return {"ok": True, "state": req.state}

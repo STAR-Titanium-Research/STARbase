@@ -5,6 +5,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { CHANGELOG } from '../changelog';
 import { groupNotes } from '../changelogGroups';
 import type { UpdateStatus } from '../electronBridge';
+import { getEligibility } from '../rigtest/rigTestApi';
 import { closedNotifyBridge, closedNotifyWarning, loadClosedNotify, toggleClosedNotifyBox } from './closedNotify';
 
 // The changelog is static, so group each entry's notes once, not on every render.
@@ -82,6 +83,14 @@ onMounted(async () => {
 	}
 });
 onBeforeUnmount(() => { gone = true; unsubscribeStatus?.(); unsubscribeStatus = null; });
+
+// The id a rig-test request's `rig:` line is matched against (FORCE_APP_RIG_ID, else "rig").
+// An older recorder has no such route; the line just stays hidden.
+const rigId = ref('');
+onMounted(async () => {
+	const r = await getEligibility();
+	if (!gone && r.kind === 'ok') rigId.value = r.data.rig_id;
+});
 </script>
 
 <template>
@@ -91,6 +100,8 @@ onBeforeUnmount(() => { gone = true; unsubscribeStatus?.(); unsubscribeStatus = 
 			<template v-if="isElectron">Force App {{ appVersion || '…' }}<span v-if="!packaged"> (dev build — auto-update is disabled)</span></template>
 			<template v-else>Browser build — version and updates are managed by the desktop app.</template>
 		</p>
+
+		<p v-if="rigId" class="rig-id">Rig ID: <code>{{ rigId }}</code> <span class="rig-id-sub">(a rig-test request's <code>rig:</code> line must match this)</span></p>
 
 		<template v-if="isElectron">
 			<div class="actions">
@@ -184,6 +195,8 @@ onBeforeUnmount(() => { gone = true; unsubscribeStatus?.(); unsubscribeStatus = 
 h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
 .mt { margin-top: 32px; }
 .lead { margin: 0 0 12px; font-size: var(--fs-md); color: var(--text-dim); line-height: 1.5; }
+.rig-id { margin: 0 0 12px; font-size: var(--fs-md); color: var(--text); }
+.rig-id-sub { color: var(--text-dim); font-size: var(--fs-sm); }
 .hint { display: flex; align-items: center; gap: 5px; font-size: var(--fs-sm); color: var(--text-dim); margin-top: 4px; }
 .err { display: flex; align-items: center; gap: 5px; color: var(--danger); font-size: var(--fs-sm); margin: 4px 0 0; }
 .actions { display: flex; gap: 10px; margin-top: 6px; }

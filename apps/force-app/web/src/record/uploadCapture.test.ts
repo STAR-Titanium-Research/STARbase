@@ -17,7 +17,7 @@ vi.mock('@d1/force-plotting', () => ({
 	buildSeriesEnvelope: vi.fn(() => null),
 }));
 
-import { uploadCaptureColdStart } from './uploadCapture';
+import { uploadCaptureColdStart, uploadFile, uploadsInFlight } from './uploadCapture';
 import { clearUploadProgress } from './uploadResume';
 
 function mockFetchOk() {
@@ -48,6 +48,35 @@ const BASE_INFO = {
 	cacheUrl: 'http://x/cap-1_live_cache.bin',
 	peaks: { Fx: 1, Fy: 2, Fz: 3 },
 };
+
+describe('uploadsInFlight (the rig-test upload_busy source)', () => {
+	it('counts a file while it uploads and drops back when it lands', async () => {
+		let release!: (v: unknown) => void;
+		post.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+		const up = uploadFile(new Blob(['x']), 'a.bin');
+		expect(uploadsInFlight.value).toBe(1);
+		release({ data: { data: { id: 'f1' } } });
+		await expect(up).resolves.toBe('f1');
+		expect(uploadsInFlight.value).toBe(0);
+	});
+	it('drops back when an upload fails, too', async () => {
+		post.mockRejectedValueOnce(new Error('boom'));
+		await expect(uploadFile(new Blob(['x']), 'a.bin')).rejects.toThrow(/file upload \(a\.bin\) failed/);
+		expect(uploadsInFlight.value).toBe(0);
+	});
+	it('sees both files of a cold-start upload, and is idle after it', async () => {
+		const seen: number[] = [];
+		post.mockImplementation((url: string) => {
+			if (url === '/files') { seen.push(uploadsInFlight.value); return Promise.resolve({ data: { data: { id: 'file-1' } } }); }
+			if (url === '/items/manufacturing_operations') return Promise.resolve({ data: { data: { operation_id: 'op-1' } } });
+			return Promise.resolve({ data: { data: {} } });
+		});
+		await uploadCaptureColdStart({ ...BASE_INFO, cfg: {}, matWritten: true });
+		expect(seen.length).toBe(2);
+		expect(seen.every((n) => n >= 1)).toBe(true);
+		expect(uploadsInFlight.value).toBe(0);
+	});
+});
 
 describe('uploadCaptureColdStart', () => {
 	it('links the resolved sample/operator/etc. when the capture persisted them', async () => {

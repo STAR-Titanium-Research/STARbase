@@ -1,12 +1,21 @@
 <script setup lang="ts">
+import { hasTextSelection } from './textSelection';
 // A record as a card: its code, a tag beside it, its name, a line of meta, then anything else
 // (counts, a progress bar, a chart). The whole card is the link. Inside a panel it is a tile one
 // step off the surface; `raised` is for a card that sits on the page ground on its own.
 defineProps<{ to?: string | null; code: string; name?: string | null; raised?: boolean }>();
+
+// A click that ends a drag-select of the card's text does not open the card. Captured, so it runs
+// before the router link's own handler.
+function onClickCapture(e: MouseEvent): void {
+	if (!hasTextSelection()) return;
+	e.preventDefault();
+	e.stopPropagation();
+}
 </script>
 
 <template>
-	<component :is="to ? 'router-link' : 'div'" :to="to || undefined" class="d1-card" :class="{ link: !!to, raised }">
+	<component :is="to ? 'router-link' : 'div'" :to="to || undefined" class="d1-card" :class="{ link: !!to, raised }" @click.capture="onClickCapture">
 		<span class="top">
 			<span class="code">{{ code }}</span>
 			<slot name="tag" />
@@ -38,6 +47,7 @@ defineProps<{ to?: string | null; code: string; name?: string | null; raised?: b
 }
 .link { transition: border-color 0.12s ease; }
 .link:hover { border-color: var(--d1-accent, var(--theme--primary)); }
+.link:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
 .top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
 .code {
 	margin-right: auto;

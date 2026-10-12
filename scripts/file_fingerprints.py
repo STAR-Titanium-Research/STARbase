@@ -23,14 +23,26 @@ HDF5 and are read with h5py one block at a time (`block_bytes`, default 64 MiB o
 
 Files are only ever opened for reading. An `OSError` from the file system (missing file, I/O
 error) propagates unchanged so a caller can retry it; a file that is not a parseable .mat raises
-`UnreadableMat`. Importing this module does no work; the runner and CLI (selection, throttled hashing
-of the files on the share, resumable writes to file_fingerprints) are at the end of the file.
+`UnreadableMat`. A v7.3 chunk that fails to decode (gzip/filter/checksum) raises `CorruptChunk`, an
+OSError: a flaky share can garble a read, so it is retried like any read error, and the runner
+records it as `UnreadableMat` only once the retries are spent and the whole file was read cleanly.
+Importing this module does no work; the runner and CLI (selection, throttled hashing of the files
+on the share, resumable writes to file_fingerprints) are at the end of the file.
+
+Permanent and retryable errors. The runner writes a `FingerprintError` (NoForceArray,
+BadForceArray, UnreadableMat; the file was read but is not a usable force file) as status `error`
+with an error_message that starts with `PERMANENT_PREFIX`, exactly "permanent: ", then the class
+name: `permanent: NoForceArray: neither 'data' nor 'DATA' in the file`. That prefix is the stable
+marker the selection keys on: such a row is re-read only when its staleness key changes or with
+--retry-permanent. Every other `error` row (read failures after the retries, the provisional
+"hashing started", "file changed while hashing", unexpected exceptions) is retried on every run.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 import struct
 import threading
 import time
@@ -60,6 +72,24 @@ class BadForceArray(FingerprintError):  # noqa: N818
 
 class UnreadableMat(FingerprintError):  # noqa: N818
     """The file cannot be parsed as a MATLAB .mat file."""
+
+
+class CorruptChunk(OSError):  # noqa: N818
+    """A v7.3 data chunk failed to decode. Retryable (an OSError); see the module docstring."""
+
+
+PERMANENT_PREFIX = (
+    "permanent: "  # error_message of a FingerprintError row (see the module docstring)
+)
+# The HDF5 causes (the parenthesised part of h5py's "Can't read data (...)") that mean the stored
+# bytes do not decode. "file read failed" (what a dropped share looks like) is deliberately absent.
+_DECODE_FAILURE = re.compile(
+    r"filter returned failure|inflate|fletcher32|checksum|B-tree signature", re.I
+)
+
+
+def permanent_message(e: FingerprintError) -> str:
+    return f"{PERMANENT_PREFIX}{type(e).__name__}: {e}"
 
 
 class Throttle:
@@ -245,8 +275,9 @@ def _hdf5_data_sha256(path, block_bytes, throttle):
         except (KeyError, ValueError, RuntimeError, TypeError) as e:
             raise _unreadable(path, e) from e
 
-        # The single pass over the data. From here on a failure is a read problem (for example the
-        # share dropped mid-file), so it surfaces as a retryable OSError, never as UnreadableMat.
+        # The single pass over the data. From here on a failure may be a read problem (for example
+        # the share dropped mid-file), so it surfaces as a retryable OSError, never as UnreadableMat;
+        # a chunk that does not decode is a CorruptChunk, which the runner judges after its retries.
         hashers = [hashlib.sha256() for _ in range(cols)]
         try:
             for k in range(0, rows, n):
@@ -255,7 +286,11 @@ def _hdf5_data_sha256(path, block_bytes, throttle):
                     hashers[j].update(np.ascontiguousarray(block[j], dtype="<f8"))
                 if throttle is not None:
                     throttle.consume(block.nbytes)
-        except (OSError, MemoryError):
+        except MemoryError:
+            raise
+        except OSError as e:
+            if e.errno is None and _DECODE_FAILURE.search(str(e)):
+                raise CorruptChunk(f"reading {var!r} from {path} failed: {e}") from e
             raise
         except Exception as e:
             raise OSError(
@@ -268,12 +303,14 @@ def _hdf5_data_sha256(path, block_bytes, throttle):
 # The runner: select files from the database, hash them on the share, write file_fingerprints.
 #
 #   DATABASE_URL=... python scripts/file_fingerprints.py --phase linked [--workers 1] [--max-mb-s 60]
-#       [--limit N] [--skip-failed] [--include-local] [--archive-root PATH] [--dry-run]
+#       [--limit N] [--skip-failed] [--retry-permanent] [--include-local] [--archive-root PATH] [--dry-run]
 #
 # Resumable: a file is selected when it has no fingerprint, when the stored staleness key
-# (size_bytes, source_mtime) no longer matches directus_files, or when its status is
-# missing/error (unless --skip-failed); ordering by hashed_at NULLS FIRST puts never-tried files
-# first and sends a file that fails to the back. Only reads from the share; only writes
+# (size_bytes, source_mtime) no longer matches directus_files, when its status is missing or a
+# retryable error (unless --skip-failed), or when it is a permanent error (error_message starts
+# with PERMANENT_PREFIX) and --retry-permanent is given. The two flags combine: both together
+# retry only the permanent errors (for example after a parser fix). Ordering by hashed_at NULLS
+# FIRST puts never-tried files first and sends a file that fails to the back. Only reads from the share; only writes
 # file_fingerprints. Exit codes: 0 queue drained, 2 the share (or the setup) is not usable,
 # 130 stopped with Ctrl+C (files in hand finished), 1 an unexpected error (traceback).
 # ======================================================================================
@@ -332,13 +369,19 @@ _LINKED_SQL = """f.id IN (
 
 
 def select_files(
-    cur, phase: str, include_local: bool, retry_failed: bool, limit: int | None
+    cur,
+    phase: str,
+    include_local: bool,
+    retry_failed: bool,
+    limit: int | None,
+    retry_permanent: bool = False,
 ) -> list[FileJob]:
     """The files that need (re)hashing, never-tried first. See the section comment for the rules."""
     if phase not in ("linked", "all"):
         raise ValueError(f"phase must be 'linked' or 'all', not {phase!r}")
     storages = ["star", "local"] if include_local else ["star"]
     linked = _LINKED_SQL if phase == "linked" else "true"
+    permanent = "starts_with(COALESCE(fp.error_message, ''), %s)"
     sql = f"""
         SELECT f.id::text, f.storage, f.metadata::jsonb->>'archive_path', f.filename_disk,
                f.filename_download, f.filesize, {_SOURCE_MTIME_SQL}
@@ -349,10 +392,19 @@ def select_files(
           AND (fp.directus_files_id IS NULL
                OR fp.size_bytes IS DISTINCT FROM f.filesize
                OR fp.source_mtime IS DISTINCT FROM {_SOURCE_MTIME_SQL}
-               OR (fp.status <> 'done' AND %s))
+               OR (fp.status = 'missing' AND %s)
+               OR (fp.status = 'error' AND NOT {permanent} AND %s)
+               OR (fp.status = 'error' AND {permanent} AND %s))
         ORDER BY fp.hashed_at NULLS FIRST, f.id
     """
-    params: list = [storages, bool(retry_failed)]
+    params: list = [
+        storages,
+        bool(retry_failed),
+        PERMANENT_PREFIX,
+        bool(retry_failed),
+        PERMANENT_PREFIX,
+        bool(retry_permanent),
+    ]
     if limit is not None:
         sql += " LIMIT %s"
         params.append(limit)
@@ -562,6 +614,14 @@ def fingerprint_job(
             if _should_retry(attempt):
                 attempt += 1
                 continue
+            if isinstance(e, CorruptChunk) and got.get("content"):
+                # Every byte of the file was read cleanly (the content pass) and the force array
+                # still failed to decode on each attempt: the file itself is corrupt, not the share.
+                return result(
+                    "error",
+                    permanent_message(UnreadableMat(str(e))),
+                    content_sha256=got["content"],
+                )
             return result(
                 "error",
                 f"{type(e).__name__}: {e}",
@@ -577,7 +637,9 @@ def fingerprint_job(
         if after != before:
             return result("error", "file changed while hashing")
         if ferr is not None:
-            return result("error", str(ferr), content_sha256=got["content"])
+            return result(
+                "error", permanent_message(ferr), content_sha256=got["content"]
+            )
         out = result("done", None, content_sha256=got["content"])
         if "mat" in got:
             digest, variable, rows, cols = got["mat"]
@@ -807,7 +869,13 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--skip-failed",
         action="store_true",
-        help="do not retry files recorded as missing or error",
+        help="do not retry files recorded as missing or as a retryable error (read failures)",
+    )
+    p.add_argument(
+        "--retry-permanent",
+        action="store_true",
+        help="also re-read files recorded as a permanent error (not a usable .mat force file); "
+        "without it they are re-read only when their size or mtime changes",
     )
     p.add_argument(
         "--include-local",
@@ -855,6 +923,7 @@ def main(argv=None) -> int:
                     args.include_local,
                     not args.skip_failed,
                     args.limit,
+                    retry_permanent=args.retry_permanent,
                 )
             sel_conn.commit()
         if args.dry_run:
