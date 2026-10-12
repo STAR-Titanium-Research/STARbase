@@ -54,7 +54,8 @@ const PK = {
 };
 
 // `allowed` maps collection -> predicate(row) | true. Unlisted collections are forbidden.
-function harness(allowed) {
+// `env_override` is passed to endpoint.handler's env param.
+function harness(allowed, env_override) {
 	const constructed = [];
 	class ItemsService {
 		constructor(collection, opts) {
@@ -125,9 +126,10 @@ function harness(allowed) {
 	const routes = {};
 	const router = { get: (path, fn) => (routes[path] = fn) };
 	const logger = { error: () => {} };
+	const env = env_override !== undefined ? env_override : { PUBLIC_URL: 'https://lims.example.org' };
 	endpoint.handler(router, {
 		database,
-		env: { PUBLIC_URL: 'https://lims.example.org' },
+		env,
 		logger,
 		services: { ItemsService },
 		getSchema: async () => ({ collections: {} }),
@@ -323,4 +325,89 @@ test('reports link back to the Explorer page of the record, not the Data Studio 
 	assert.ok(op.out.body.includes(`/admin/home/operations/${OP_A}`), 'operation report QR target');
 	const t = await get(h.routes, '/test/:id', TEST_ID, user);
 	assert.ok(t.out.body.includes(`/admin/home/tests/${TEST_ID}`), 'test report QR target');
+});
+
+// ---- Label redirects to Explorer page ---------------------------------------------------
+
+async function getRedirect(routes, route, query) {
+	const out = { status: 200, headers: {}, body: '' };
+	const res = {
+		status(code) {
+			out.status = code;
+			return res;
+		},
+		redirect(location) {
+			out.redirectTo = location;
+			return res;
+		},
+	};
+	const req = { query, accountability: { user: 'test' }, schema: { collections: {} } };
+	await routes[route](req, res);
+	return out;
+}
+
+test('GET /label redirects to /admin/home/labels with ids query parameter', async () => {
+	const { routes } = harness({});
+	const out = await getRedirect(routes, '/label', { ids: SID });
+	assert.equal(out.status, 302);
+	assert.equal(out.redirectTo, `https://lims.example.org/admin/home/labels?ids=${SID}`);
+});
+
+test('GET /label redirects to /admin/home/labels with codes query parameter', async () => {
+	const { routes } = harness({});
+	const out = await getRedirect(routes, '/label', { codes: 'S-001' });
+	assert.equal(out.status, 302);
+	assert.equal(out.redirectTo, `https://lims.example.org/admin/home/labels?codes=S-001`);
+});
+
+test('GET /label redirects to /admin/home/labels with both ids and codes', async () => {
+	const { routes } = harness({});
+	const out = await getRedirect(routes, '/label', { ids: SID, codes: 'S-001' });
+	assert.equal(out.status, 302);
+	assert.ok(out.redirectTo.startsWith('https://lims.example.org/admin/home/labels?'));
+	assert.ok(out.redirectTo.includes(`ids=${SID}`));
+	assert.ok(out.redirectTo.includes('codes=S-001'));
+});
+
+test('GET /label redirects to /admin/home/labels without query parameters', async () => {
+	const { routes } = harness({});
+	const out = await getRedirect(routes, '/label', {});
+	assert.equal(out.status, 302);
+	assert.equal(out.redirectTo, 'https://lims.example.org/admin/home/labels');
+});
+
+test('GET /labels redirects to /admin/home/labels', async () => {
+	const { routes } = harness({});
+	const out = await getRedirect(routes, '/labels', {});
+	assert.equal(out.status, 302);
+	assert.equal(out.redirectTo, 'https://lims.example.org/admin/home/labels');
+});
+
+test('GET /label encodes query parameters', async () => {
+	const { routes } = harness({});
+	const out = await getRedirect(routes, '/label', { codes: 'S 001&x=1' });
+	assert.equal(out.status, 302);
+	// URL.searchParams encodes spaces as +, & as %26, = as %3D
+	assert.ok(out.redirectTo.includes('codes=S+001%26x%3D1') || out.redirectTo.includes('codes=S%20001%26x%3D1'));
+});
+
+test('GET /label includes PUBLIC_URL as base when set', async () => {
+	const { routes } = harness({}, { PUBLIC_URL: 'https://d1.example.org/lab' });
+	const out = await getRedirect(routes, '/label', { ids: SID });
+	assert.equal(out.status, 302);
+	assert.equal(out.redirectTo, `https://d1.example.org/lab/admin/home/labels?ids=${SID}`);
+});
+
+test('GET /label uses root-relative path when PUBLIC_URL is empty', async () => {
+	const { routes } = harness({}, { PUBLIC_URL: '' });
+	const out = await getRedirect(routes, '/label', { codes: 'S-001' });
+	assert.equal(out.status, 302);
+	assert.equal(out.redirectTo, '/admin/home/labels?codes=S-001');
+});
+
+test('GET /labels includes PUBLIC_URL as base when set', async () => {
+	const { routes } = harness({}, { PUBLIC_URL: 'https://d1.example.org/lab/' });
+	const out = await getRedirect(routes, '/labels', {});
+	assert.equal(out.status, 302);
+	assert.equal(out.redirectTo, 'https://d1.example.org/lab/admin/home/labels');
 });
