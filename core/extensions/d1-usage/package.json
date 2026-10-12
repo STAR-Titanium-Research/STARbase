@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-usage",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "/d1-usage: per-user 'Frequently used' scores for the Explorer Home panel (visit, list, pin, hide, clear). Every route touches only the signed-in user's own rows.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}
