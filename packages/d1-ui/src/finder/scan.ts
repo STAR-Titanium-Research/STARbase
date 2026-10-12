@@ -73,7 +73,7 @@ const MAX_SHOWN = 1000;
 // as plain text (never as HTML or a link), so a code that says "http://evil" is not clickable.
 export function displayText(raw: string): string {
 	// eslint-disable-next-line no-control-regex
-	const escaped = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f‎‏‪-‮⁦-⁩]/g, (c) => {
+	const escaped = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) => {
 		const n = c.charCodeAt(0);
 		return n < 0x100 ? '\\x' + n.toString(16).padStart(2, '0') : '\\u' + n.toString(16).padStart(4, '0');
 	});
