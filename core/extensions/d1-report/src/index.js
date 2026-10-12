@@ -191,15 +191,18 @@ export default defineEndpoint({
 		});
 
 		// Label routes redirect to the Explorer labels page (no authentication required).
+		// Build the redirect location using PUBLIC_URL like adminRecordUrl does.
 		router.get('/label', (req, res) => {
+			const base = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
 			const target = new URL('/admin/home/labels', 'http://localhost');
 			if (req.query.ids) target.searchParams.set('ids', req.query.ids);
 			if (req.query.codes) target.searchParams.set('codes', req.query.codes);
-			res.status(302).redirect(target.pathname + target.search);
+			res.status(302).redirect(base + target.pathname + target.search);
 		});
 
 		router.get('/labels', (req, res) => {
-			res.status(302).redirect('/admin/home/labels');
+			const base = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
+			res.status(302).redirect(base + '/admin/home/labels');
 		});
 
 		router.get('/sample/:id', async (req, res) => {
