@@ -2,9 +2,10 @@
 import { useRouter } from 'vue-router';
 import { go } from './goto';
 
-// The things a researcher does every day, as big buttons. The other Explorer pages and the analysis
-// tools are in the sidebar, so they are not repeated here. There is no tile for Ask the database
-// (hidden for now, by decision on 2026-10-09) or for the Dashboards module (being retired; its lineage graph is to be rebuilt).
+// The things a researcher does every day, as three buttons in the Home greeting. The other Explorer
+// pages and the analysis tools are in the sidebar, so they are not repeated here. There is no tile
+// for Ask the database (hidden for now, by decision on 2026-10-09) or for the Dashboards module
+// (being retired; its lineage graph is to be rebuilt).
 interface Action { label: string; sub: string; icon: string; to: string; }
 const main: Action[] = [
 	{ label: 'Register a sample', sub: 'Add a new physical sample', icon: 'add_circle', to: '/content/physical_samples/+' },
@@ -15,43 +16,24 @@ const router = useRouter();
 </script>
 
 <template>
-	<section aria-label="Quick actions">
-		<div class="grid actions">
-			<button v-for="a in main" :key="a.label" class="card action" @click="go(router, a.to)">
-				<span class="chip"><v-icon :name="a.icon" small /></span>
-				<span class="a-text">
-					<span class="a-label">{{ a.label }}</span>
-					<span class="a-sub">{{ a.sub }}</span>
-				</span>
-			</button>
-		</div>
-	</section>
+	<nav class="actions" aria-label="Quick actions">
+		<button v-for="a in main" :key="a.label" class="action" :title="a.sub" @click="go(router, a.to)">
+			<v-icon :name="a.icon" small />
+			<span>{{ a.label }}</span>
+		</button>
+	</nav>
 </template>
 
 <style scoped>
-/* 220px is the narrowest a card can be with its label on one line; below that the grid drops a
-   column instead of breaking "Register a sample" over three lines. */
-.grid { display: grid; gap: 10px; }
-.actions { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-.card {
-	border: 1px solid var(--d1-line);
-	background: var(--d1-surface);
-	border-radius: var(--d1-radius);
-	box-shadow: var(--d1-shadow);
-	cursor: pointer;
-	text-align: left;
-	transition: border-color 0.12s ease;
-	font: inherit;
-	color: var(--theme--foreground);
+/* Sits on the greeting's gradient: translucent white buttons, wrapping under the greeting on a narrow screen. */
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.action {
+	display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; cursor: pointer;
+	font: inherit; font-size: var(--fs-md); font-weight: 650; white-space: nowrap; color: #fff;
+	border: 1px solid rgba(255, 255, 255, 0.45); border-radius: 99px; background: rgba(255, 255, 255, 0.16);
+	--v-icon-color: #fff;
+	transition: background 0.12s ease, border-color 0.12s ease;
 }
-.card:hover { border-color: var(--d1-accent, var(--theme--primary)); }
-.action { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
-.chip {
-	width: 34px; height: 34px; border-radius: 9px; flex: 0 0 auto; display: grid; place-items: center;
-	background: var(--d1-tint);
-	--v-icon-color: var(--d1-accent, var(--theme--primary));
-}
-.a-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.a-label { font-size: var(--fs-md); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.a-sub { font-size: var(--fs-sm); color: var(--d1-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.action:hover { background: rgba(255, 255, 255, 0.3); border-color: rgba(255, 255, 255, 0.75); }
+.action:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 </style>

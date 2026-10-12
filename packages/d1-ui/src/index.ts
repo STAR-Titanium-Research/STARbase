@@ -116,3 +116,7 @@ export type { ThumbKind } from './index/thumbs';
 export { plotKind, plotRequests, mergePlots } from './index/plotData';
 export type { RowPlots } from './index/plotData';
 export { default as IndexPage } from './index/IndexPage.vue';
+
+// Admin Home rules (the crawler online test, the overview shape, the Needs attention rows)
+export { CRAWLER_ONLINE_MS, ago, attentionView, crawlerOnline, normaliseOverview, ownerlessRows, ownerlessTotal } from './adminHome';
+export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints, MissingFiles, Ownerless, OwnerlessRow } from './adminHome';
