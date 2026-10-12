@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { INDEX_DEFS, indexDefBySlug } from './indexConfig';
+import type { IndexDef } from './indexConfig';
 import {
 	PAGE_SIZE, SHORT_ID_RE, bookmarkSort, buildItemsParams, dataStudioLink, nested, queryFromState, stateFromQuery,
 } from './indexQuery';
@@ -171,5 +172,22 @@ describe('buildItemsParams: unreadable relation columns', () => {
 		const fields = fieldsOf(new Set());
 		expect(fields[0]).toBe('sample_id');
 		expect(fields.some((f) => f.includes('.'))).toBe(false);
+	});
+});
+
+describe('a flag chip', () => {
+	const def = {
+		slug: 'x', collection: 'x', title: 'X', group: 'records', primaryKey: 'id', columns: [{ field: 'id', label: 'Id' }],
+		searchFields: [], defaultSort: 'id', rowTarget: 'record',
+		filters: [{ field: 'has_force', label: 'With force data', options: { kind: 'flag', filter: { force_analyses: { _some: { status: { _eq: 'done' } } } } } }],
+	} as unknown as IndexDef;
+	const state = (v: string) => ({ bookmark: null, q: '', filters: { has_force: v }, sort: null, page: 1, open: null });
+
+	it("emits its own filter only for 'true'", () => {
+		expect(JSON.parse(buildItemsParams(def, state('true'), null).filter as string)).toEqual({
+			_and: [{ force_analyses: { _some: { status: { _eq: 'done' } } } }],
+		});
+		expect(buildItemsParams(def, state('false'), null).filter).toBeUndefined();
+		expect(buildItemsParams(def, state('junk'), null).filter).toBeUndefined();
 	});
 });

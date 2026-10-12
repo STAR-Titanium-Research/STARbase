@@ -54,7 +54,7 @@ describe('cellText', () => {
 	});
 
 	it('asks for the step number only on the operations page', () => {
-		expect(extraFields(operations)).toEqual(['operation_sequence']);
+		expect(extraFields(operations)).toEqual(['operation_sequence', 'process_category']);
 	});
 	it("adds the thumbnail fields: a sample's form and dimensions, an image list's file field", () => {
 		expect(extraFields(samples)).toEqual(['form', 'diameter_mm', 'length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm']);

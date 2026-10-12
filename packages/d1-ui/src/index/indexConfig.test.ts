@@ -111,7 +111,11 @@ describe('INDEX_DEFS', () => {
 				field: 'campaign_id', label: 'Campaign', options: { kind: 'relation', collection: 'campaigns', display: 'campaign_code', fallback: 'name' },
 			});
 		}
-		expect(indexDefBySlug('operations')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Method', 'Process category']);
+		expect(indexDefBySlug('operations')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Method', 'Process category', 'With force data']);
+		expect(indexDefBySlug('operations')!.filters.at(-1)).toEqual({
+			field: 'has_force', label: 'With force data',
+			options: { kind: 'flag', filter: { force_analyses: { _some: { status: { _eq: 'done' } } } } },
+		});
 		expect(indexDefBySlug('tests')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Type', 'Status']);
 	});
 

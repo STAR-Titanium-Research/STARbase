@@ -9,7 +9,9 @@
 // A list with a designed card (campaigns) fills the `card` slot and may pass `cardData`, a loader
 // for what that card shows beyond the row (the campaigns' counts); it runs for the rows on screen,
 // in Cards view only, and the slot gets each row's entry as `data` (null while loading or missing).
-// The `footer` slot (a row's buttons) is drawn at the foot of a text card.
+// The `footer` slot (a row's buttons) is drawn at the foot of a text card. Operations and samples
+// get their Force / FAST buttons from here (RowPlotButtons, filled by useIndexPage's `plots`); the
+// `thumb` slot also receives the row's `plots` (an operation's Fz figure comes from there).
 import { computed, inject, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { EXPLORER_HOST } from '../host';
@@ -23,9 +25,11 @@ import PageShell from '../components/PageShell.vue';
 import SegmentedControl from '../components/SegmentedControl.vue';
 import { useRequestGate } from '../composables/useRequestGate';
 import CardGrid from './CardGrid.vue';
+import RowPlotButtons from './RowPlotButtons.vue';
 import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { PAGE_SIZE } from './indexQuery';
+import { plotKind } from './plotData';
 import { cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
 import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { Density, ListView } from './listPrefs';
@@ -43,7 +47,7 @@ const route = useRoute();
 const router = useRouter();
 
 const {
-	rows, total, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
+	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
 } = useIndexPage(host, props.def, route, router);
 
@@ -53,6 +57,10 @@ const initial = readListPrefs(props.def.slug);
 const view = ref<ListView>(initial.view);
 const density = ref<Density>(initial.density);
 const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
+// Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
+const hasPlots = computed(() => plotKind(props.def.collection) !== null);
+// A sample's code is what its "Force (n)" button searches the operations list for.
+const plotCode = (row: Record<string, unknown>): string => (typeof row.sample_code === 'string' ? row.sample_code : '');
 const VIEW_OPTIONS = [
 	{ value: 'table', label: 'Table', icon: '☰' },
 	{ value: 'cards', label: 'Cards', icon: '▦' },
@@ -219,13 +227,23 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 						@input="setSearch(($event.target as HTMLInputElement).value)"
 					/>
 				</label>
-				<label v-for="chip in chips" :key="chip.field" class="field">
+				<template v-for="chip in chips" :key="chip.field">
+				<button
+					v-if="chip.flag"
+					type="button"
+					class="flag"
+					:class="{ on: chip.value === 'true' }"
+					:aria-pressed="chip.value === 'true'"
+					@click="setFilter(chip.field, chip.value === 'true' ? '' : 'true')"
+				>{{ chip.label }}</button>
+				<label v-else class="field">
 					<span>{{ chip.label }}</span>
 					<select :value="chip.value" :aria-label="`Filter by ${chip.label.toLowerCase()}`" @change="setFilter(chip.field, ($event.target as HTMLSelectElement).value)">
 						<option value="">Any {{ chip.label.toLowerCase() }}</option>
 						<option v-for="o in chip.options" :key="o.value" :value="o.value">{{ o.label }}</option>
 					</select>
 				</label>
+				</template>
 				<button v-if="hasFilters" type="button" class="link clear" @click="clearFilters">Clear filters</button>
 			</div>
 
@@ -251,8 +269,11 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 					@open="openRow"
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
-					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" /></template>
-					<template v-if="$slots.footer" #footer="{ row }"><slot name="footer" :row="row" /></template>
+					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
+					<template v-if="$slots.footer || hasPlots" #footer="{ row }">
+						<RowPlotButtons v-if="hasPlots" :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :plots="plots[rowKey(row)]" />
+						<slot name="footer" :row="row" />
+					</template>
 				</CardGrid>
 				<DataTable v-else-if="loading || rows.length" :density="density">
 					<thead>
@@ -264,6 +285,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 								</button>
 								<template v-else>{{ c.label }}</template>
 							</th>
+							<th v-if="hasPlots" class="plots">Plots</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -271,13 +293,14 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 							<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
 								<td v-if="showThumb" class="thumb"><span class="bar" /></td>
 								<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
+								<td v-if="hasPlots" class="plots" />
 							</tr>
 						</template>
 						<template v-else>
 							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
 								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
 							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
-								<td v-if="showThumb" class="thumb"><div class="thumb-box"><slot name="thumb" :row="row" /></div></td>
+								<td v-if="showThumb" class="thumb"><div class="thumb-box"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></div></td>
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
 										<a
@@ -296,6 +319,9 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 										>{{ cellText(row, c, def) || '—' }}</button>
 									</template>
 									<template v-else>{{ cellText(row, c, def) }}</template>
+								</td>
+								<td v-if="hasPlots" class="plots">
+									<RowPlotButtons :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :plots="plots[rowKey(row)]" />
 								</td>
 							</tr>
 						</template>
@@ -385,6 +411,14 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 th.num .sort { justify-content: flex-end; }
 
 .row { cursor: pointer; }
+.plots { text-align: right; }
+.row td.plots { overflow: visible; }
+.flag {
+	height: 30px; padding: 0 12px; border: 1px solid var(--theme--border-color); border-radius: 99px; background: var(--d1-surface);
+	color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer; align-self: flex-end;
+}
+.flag:hover { border-color: var(--d1-accent, var(--theme--primary)); }
+.flag.on { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
 .cell-link {
 	display: inline; padding: 0; border: 0; background: none; font: inherit; text-align: inherit;
 	color: inherit; text-decoration: none; cursor: pointer;

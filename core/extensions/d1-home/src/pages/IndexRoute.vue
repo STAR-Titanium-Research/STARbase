@@ -24,8 +24,8 @@ const hasThumb = computed(() => !!def.value && thumbKind(def.value.collection) !
 			<template v-if="isCampaigns" #card="{ row, data, loading }">
 				<CampaignCard :campaign="row" :stats="(data as CampaignStats | null)" :loading="loading" />
 			</template>
-			<template v-if="hasThumb" #thumb="{ row }">
-				<IndexThumb :def="def" :row="row" />
+			<template v-if="hasThumb" #thumb="{ row, plots }">
+				<IndexThumb :def="def" :row="row" :plots="plots" />
 			</template>
 		</IndexPage>
 		<div v-else class="missing">

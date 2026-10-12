@@ -69,5 +69,6 @@ function onLink(e: MouseEvent): void {
 .fact { display: flex; gap: 4px; min-width: 0; max-width: 100%; }
 .fact dt { flex: none; color: var(--d1-dim); }
 .fact dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.foot:empty { display: none; }
 .foot { margin-top: auto; display: flex; flex-wrap: wrap; gap: 4px; padding: 0 11px 10px; cursor: default; }
 </style>

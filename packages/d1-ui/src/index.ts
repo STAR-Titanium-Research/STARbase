@@ -113,4 +113,6 @@ export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexC
 export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
 export { thumbKind, thumbFields, imageField, hasDrawableDims, fileId, assetThumbUrl } from './index/thumbs';
 export type { ThumbKind } from './index/thumbs';
+export { plotKind, plotRequests, mergePlots } from './index/plotData';
+export type { RowPlots } from './index/plotData';
 export { default as IndexPage } from './index/IndexPage.vue';

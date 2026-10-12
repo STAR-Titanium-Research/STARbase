@@ -24,6 +24,8 @@ const isRecord = (v: unknown): v is Row => typeof v === 'object' && v !== null &
 export function extraFields(def: IndexDef, readable: ReadonlySet<string> | null = null): string[] {
 	const out: string[] = [];
 	if (def.collection === 'manufacturing_operations' && def.columns.some((c) => c.field === 'pass_code')) out.push('operation_sequence');
+	// Which dashboard an operation belongs to (a sintering run has no force figure).
+	if (def.collection === 'manufacturing_operations') out.push('process_category');
 	if (def.collection === 'campaigns' && (!readable || readable.has('people'))) out.push('owner_person_id.full_name');
 	// The thumbnail's own fields (a sample's form and dimensions, an image list's file field).
 	out.push(...thumbFields(def.collection));

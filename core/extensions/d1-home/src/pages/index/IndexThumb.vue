@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { assetThumbUrl, fileId, hasDrawableDims, humanise, imageField, sampleDims, thumbKind } from '@d1/ui';
-import type { IndexDef } from '@d1/ui';
+import type { IndexDef, RowPlots } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
 
 // The picture of one list row, in a card's picture area or a roomy row's box (both fixed-size, so
@@ -11,10 +11,11 @@ import SampleGeometry from '../sample/SampleGeometry.vue';
 //            does not draw ('other', none) or a sample with no dimensions shows the form's name instead.
 //   equipment, tools, insert types, manufacturers: the photo or logo, a small cropped WebP from
 //            Directus; no file (or one that fails to load) shows "No picture".
-//   operations: the Fz force figure. The list page's second request will put it on the row as
-//            `row.__force.frmFz` (a file id); until then, and when the image cannot be made (most
-//            force figures cannot be transformed yet), it shows "No force figure yet".
-const props = defineProps<{ def: IndexDef; row: Record<string, unknown> }>();
+//   operations: the Fz force figure of a machining operation. The list page's plots request finds it
+//            (the `plots` prop, from useIndexPage); until then, and when the image cannot be made (most
+//            force figures cannot be transformed yet), it shows "No force figure yet". A sintering run
+//            has no force figure, so it gets the ordinary "No picture".
+const props = defineProps<{ def: IndexDef; row: Record<string, unknown>; plots?: RowPlots | null }>();
 
 const kind = computed(() => thumbKind(props.def.collection));
 const dims = computed(() => sampleDims(props.row));
@@ -27,8 +28,7 @@ const src = computed<string | null>(() => {
 		return id ? assetThumbUrl(id) : null;
 	}
 	if (kind.value === 'force') {
-		const force = props.row.__force as { frmFz?: unknown } | null | undefined;
-		const id = fileId(force?.frmFz);
+		const id = fileId(props.plots?.frmFz);
 		return id ? assetThumbUrl(id) : null;
 	}
 	return null;
@@ -43,7 +43,7 @@ const placeholder = computed(() => {
 		const form = typeof props.row.form === 'string' ? props.row.form.trim() : '';
 		return form ? humanise(form) : 'No drawing';
 	}
-	if (kind.value === 'force') return 'No force figure yet';
+	if (kind.value === 'force' && props.row.process_category !== 'sintering') return 'No force figure yet';
 	return props.def.collection === 'manufacturers' ? 'No logo' : 'No picture';
 });
 </script>

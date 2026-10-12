@@ -368,3 +368,59 @@ describe('useIndexPage', () => {
 		}
 	});
 });
+
+describe('useIndexPage plots (the Force / FAST buttons)', () => {
+	const operations = indexDefBySlug('operations')!;
+	function opsSetup(handlers: Record<string, () => unknown>) {
+		const calls: Call[] = [];
+		const api = {
+			get: vi.fn(async (path: string, config?: { params?: Record<string, any> }) => {
+				calls.push({ path, params: config?.params ?? {} });
+				if (path === '/collections') return { data: { data: ['manufacturing_operations', 'projects'].map((c) => ({ collection: c, meta: { hidden: false } })) } };
+				if (path === '/presets') return { data: { data: [] } };
+				if (path === '/items/manufacturing_operations') {
+					return { data: { data: [{ operation_id: 'o1' }, { operation_id: 'o2' }], meta: { filter_count: 2 } } };
+				}
+				const h = handlers[path];
+				if (h) return { data: { data: h() } };
+				throw { response: { status: 403 } };
+			}),
+		};
+		const host = { api, navigate: vi.fn(), openDataStudio: vi.fn(), isAdmin: ref(false), adminKnown: ref(true), user: ref(null) } as unknown as ExplorerHost;
+		const route = reactive<RouteLike>({ path: '/home/operations', query: {}, params: { slug: 'operations' } });
+		const router: RouterLike = { push: () => undefined, replace: () => undefined };
+		return { host, route, router, calls };
+	}
+
+	it('asks once per kind for the rows on screen and exposes what came back by row key', async () => {
+		const t = opsSetup({
+			'/items/machining_force_analysis': () => [{ operation_id: 'o1', frm_fz: 'f1' }],
+			'/items/fast_run_data': () => [{ operation_id: 'o2' }],
+		});
+		const page = useIndexPage(t.host, operations, t.route, t.router);
+		await flush();
+		await flush();
+		const force = t.calls.filter((c) => c.path === '/items/machining_force_analysis');
+		const fast = t.calls.filter((c) => c.path === '/items/fast_run_data');
+		expect(force).toHaveLength(1);
+		expect(fast).toHaveLength(1);
+		expect(JSON.parse(force[0].params.filter)._and[0]).toEqual({ operation_id: { _in: ['o1', 'o2'] } });
+		expect(page.plots.value).toEqual({
+			o1: { force: true, fast: false, frmFz: 'f1' },
+			o2: { force: false, fast: true, frmFz: null },
+		});
+	});
+
+	it('a failed plot request shows no buttons of that kind and never errors the list', async () => {
+		const t = opsSetup({ '/items/fast_run_data': () => [{ operation_id: 'o2' }] }); // force answers 403
+		const page = useIndexPage(t.host, operations, t.route, t.router);
+		await flush();
+		await flush();
+		expect(page.error.value).toBe('');
+		expect(page.forbidden.value).toBe(false);
+		expect(page.rows.value).toHaveLength(2);
+		expect(page.plots.value.o1).toEqual({ force: false, fast: false, frmFz: null });
+		expect(page.plots.value.o2.fast).toBe(true);
+	});
+
+});

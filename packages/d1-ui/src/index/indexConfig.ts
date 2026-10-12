@@ -17,7 +17,9 @@ export interface FilterDef {
 	label: string;
 	// relation / enum options are loaded at runtime, so an enum need not list its values.
 	// `fallback`: a second field that labels a row whose `display` is empty (a campaign without a code is named).
-	options: { kind: 'relation'; collection: string; display: string; fallback?: string } | { kind: 'enum'; values?: string[] } | { kind: 'bool' };
+	options: { kind: 'relation'; collection: string; display: string; fallback?: string } | { kind: 'enum'; values?: string[] } | { kind: 'bool' }
+		// A yes / off toggle (not a column): when on (`f.<field>=true`) the given Directus filter is ANDed in.
+		| { kind: 'flag'; filter: Record<string, unknown> };
 }
 
 export interface IndexDef {
@@ -54,6 +56,11 @@ const campaign = relFilter('campaign_id', 'Campaign', 'campaigns', 'campaign_cod
 const material = relFilter('material_id', 'Material', 'materials', 'alloy_code');
 const insertType = relFilter('insert_type_id', 'Insert type', 'insert_types', 'type_code');
 const processCategory = enumFilter('process_category', 'Process category');
+// Operations with a finished force analysis (the top-level o2m alias on the operation, so `_some` is legal here).
+const hasForce: FilterDef = {
+	field: 'has_force', label: 'With force data',
+	options: { kind: 'flag', filter: { force_analyses: { _some: { status: { _eq: 'done' } } } } },
+};
 
 export const INDEX_DEFS: IndexDef[] = [
 	{
@@ -91,7 +98,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('operation_date', 'Date', 'date'), col('operator_name', 'Operator'), col('outcome_notes', 'Outcome'),
 		],
 		searchFields: ['pass_code', 'sample_id.sample_code', 'operator_name'],
-		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory],
+		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory, hasForce],
 		defaultSort: '-operation_date', rowTarget: 'record', hasShortId: true,
 	},
 	{
