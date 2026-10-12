@@ -3,6 +3,7 @@
 import json
 import time
 
+import httpx
 import pytest
 
 from app.rig_test import catalog, relay
@@ -394,7 +395,7 @@ def test_posted_comments_go_through_fit_comment(monkeypatch):
 
 def test_the_real_relay_client_never_raises(monkeypatch):
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://127.0.0.1:1")  # nothing there
-    monkeypatch.setenv("FORCE_APP_RIG_TEST_TOKEN", "test-rig-token")
+    relay.set_session("test-d1-token", (time.time() + 3600) * 1000)
     for res in (
         relay.list_requests(),
         relay.post_comment(1, "x"),
@@ -405,6 +406,7 @@ def test_the_real_relay_client_never_raises(monkeypatch):
     assert relay.set_state(1, "bogus")["ok"] is False
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "")
     assert relay.relay_status(relay.list_requests()) == "not_configured"
+    relay.clear_session()
 
 
 @pytest.mark.parametrize(
@@ -478,3 +480,31 @@ def test_an_unexpected_error_on_one_issue_is_logged_and_the_rest_still_listed(
     p.poll_once()
     assert [r["number"] for r in p.pending()] == [8]
     assert "rig test #7 could not be read" in caplog.text
+
+
+def test_outbox_waits_while_signed_out_then_sends(monkeypatch, tmp_path):
+    monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://relay.invalid")
+    relay.clear_session()
+    store = StateFile(str(tmp_path / "state.json"))
+    store.outbox_add(7, "result body", "done")
+    p = RigTestPoller(
+        store=store,
+        eligible=lambda: (False, relay.SIGNED_OUT),
+        is_busy=lambda: False,
+        owns_rig=lambda: False,
+        rig_id=lambda: "rig",
+        interval_s=60,
+    )
+    sent = []
+    monkeypatch.setattr(
+        httpx,
+        "request",
+        lambda m, u, **kw: sent.append(u) or httpx.Response(200, json={"ok": True, "id": 1}),
+    )
+    for _ in range(6):  # more than OUTBOX_REFUSED_MAX: signed out must never count as a refusal
+        p.flush_outbox()
+    assert sent == [] and len(store.get("outbox")) == 1
+    relay.set_session("test-d1-token", (time.time() + 3600) * 1000)
+    p.flush_outbox()
+    assert store.get("outbox") == []
+    relay.clear_session()

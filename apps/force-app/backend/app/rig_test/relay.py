@@ -1,10 +1,10 @@
 """Client for the bug-report relay's /rig-tests endpoints (apps/force-app/bug-report-relay).
 
 The rig PC holds no GitHub credential: the relay does, and checks who labelled a request (ADR-0012).
-It does hold a shared rig token, sent as `X-Rig-Token` on every call, which the relay requires so
-that other tailnet hosts cannot write through it. The token comes from `FORCE_APP_RIG_TEST_TOKEN`
-or the first line of `<config dir>/rig_test_token`; it is never part of the build and never
-logged, reported or put in an error message.
+Every call carries the signed-in operator's D1 access token as `Authorization: Bearer`, which the
+relay checks with Directus. The web app lends that token to this process (`PUT /rig-tests/session`)
+while its session is online; it lives in memory only, is never written to disk, logged, reported or
+put in an error message, and is gone after a restart until the web app sends it again.
 Every function here returns the relay's own `{"ok": ..., ...}` dict and never raises, so a relay
 outage can only ever mean "nothing to show", never a crashed poller or a failed run. Callers use
 `relay.<fn>(...)` through the module (not `from .relay import ...`) so tests can monkeypatch it.
@@ -12,8 +12,9 @@ outage can only ever mean "nothing to show", never a crashed poller or a failed 
 
 from __future__ import annotations
 
-import os
 import re
+import threading
+import time
 from urllib.parse import quote
 
 import httpx
@@ -24,41 +25,57 @@ TIMEOUT_S = 30.0  # GitHub can take a while under load; a poll never blocks a re
 STATES = ("deferred", "declined", "running", "partial", "done", "interrupted")
 MAX_COMMENT = 60_000  # the relay's own limit
 RESULT_MARKER = "<!-- rig-test-result "
-TOKEN_ENV = "FORCE_APP_RIG_TEST_TOKEN"
-TOKEN_FILE = "rig_test_token"
-TOKEN_MISSING = "rig test token not set (see Settings \u2192 Rig tests)"
-TOKEN_REJECTED = "rig token rejected"
-# Printable ASCII only, so it is a legal header value whatever the file holds.
-_TOKEN_RE = re.compile(r"[\x21-\x7e]{1,256}")
-_config_dir = ""
+SIGNED_OUT = "Sign in to D1 online to receive rig-test requests"
+SIGNIN_REJECTED = "D1 sign-in rejected"  # the relay's reason, verbatim
+# Printable ASCII only, so it is a legal header value whatever the web sent.
+_TOKEN_RE = re.compile(r"[\x21-\x7e]{1,4096}")
+_session_lock = threading.Lock()
+_session = {
+    "token": "",
+    "expires_at": 0.0,
+}  # expires_at: epoch ms, as the web's auth store keeps it
 _SHORTENED = "\n\n(comment shortened to fit GitHub's size limit)\n\n"
 
 
-def set_config_dir(path: str) -> None:
-    """Where `rig_test_token` is looked for (the app's config folder)."""
-    global _config_dir
-    _config_dir = path
+def set_session(token: str, expires_at: float) -> bool:
+    """Hold the operator's D1 access token. True if it differs from the one held. Raises
+    ValueError (without the token in it) for anything that is not a usable header value."""
+    if not isinstance(token, str) or not _TOKEN_RE.fullmatch(token):
+        raise ValueError("not a usable access token")
+    with _session_lock:
+        changed = token != _session["token"]
+        _session["token"] = token
+        _session["expires_at"] = float(expires_at)
+    return changed
 
 
-def token() -> str:
-    """The rig token, or "" when none is set (or what is set is not a usable header value)."""
-    value = (os.environ.get(TOKEN_ENV) or "").strip()
-    if not value and _config_dir:
-        try:
-            with open(os.path.join(_config_dir, TOKEN_FILE), encoding="utf-8") as f:
-                value = f.readline().strip()
-        except (OSError, ValueError):
-            value = ""
-    return value if _TOKEN_RE.fullmatch(value) else ""
+def clear_session(only: str | None = None) -> None:
+    """Forget the token; with `only`, just if that is still the one held (a refresh may have
+    replaced it while a refused call was in flight)."""
+    with _session_lock:
+        if only is None or _session["token"] == only:
+            _session["token"] = ""
+            _session["expires_at"] = 0.0
+
+
+def _current_token() -> str:
+    with _session_lock:
+        if _session["token"] and _session["expires_at"] > time.time() * 1000:
+            return _session["token"]
+    return ""
+
+
+def session_present() -> bool:
+    return bool(_current_token())
 
 
 def _call(method: str, path: str, body: dict | None = None) -> dict:
     base = bug_report._relay_url().rstrip("/")
     if not base:
         return {"ok": False, "reason": "relay not configured", "kind": "not_configured"}
-    secret = token()
+    secret = _current_token()
     if not secret:
-        return {"ok": False, "reason": TOKEN_MISSING, "kind": "not_configured"}
+        return {"ok": False, "reason": SIGNED_OUT, "kind": "signed_out"}
 
     def scrub(e: Exception) -> str:  # an exception text must never carry the token
         return str(e).replace(secret, "<token>")
@@ -68,7 +85,7 @@ def _call(method: str, path: str, body: dict | None = None) -> dict:
             method,
             f"{base}{path}",
             json=body,
-            headers={"X-Rig-Token": secret},
+            headers={"Authorization": f"Bearer {secret}"},
             timeout=TIMEOUT_S,
         )
         data = res.json()
@@ -86,8 +103,15 @@ def _call(method: str, path: str, body: dict | None = None) -> dict:
         }
     if not isinstance(data, dict):
         return {"ok": False, "reason": "unexpected relay answer", "kind": "unreachable"}
-    if res.status_code == 403 and data.get("reason") == TOKEN_REJECTED:
-        return {"ok": False, "reason": TOKEN_REJECTED, "kind": "token_rejected"}
+    if res.status_code == 403 and data.get("reason") == SIGNIN_REJECTED:
+        clear_session(only=secret)
+        return {"ok": False, "reason": SIGNIN_REJECTED, "kind": "signin_rejected"}
+    if res.status_code == 503:  # Directus or the relay is down: wait, it is not a refusal
+        return {
+            "ok": False,
+            "reason": str(data.get("reason") or "relay unavailable"),
+            "kind": "unreachable",
+        }
     if res.status_code >= 300 and data.get("ok") is not False:
         return {
             "ok": False,
@@ -98,13 +122,14 @@ def _call(method: str, path: str, body: dict | None = None) -> dict:
 
 
 def relay_status(result: dict) -> str:
-    """'ok' | 'unreachable' | 'not_configured' | 'token_rejected' for the Settings tab, from one
-    relay answer."""
+    """'ok' | 'unreachable' | 'not_configured' | 'signed_out' | 'signin_rejected' for the
+    Settings tab, from one relay answer."""
     if result.get("ok"):
         return "ok"
-    if result.get("kind") == "token_rejected":
-        return "token_rejected"
-    if result.get("kind") == "not_configured" or "not configured" in str(result.get("reason", "")):
+    kind = result.get("kind")
+    if kind in ("signed_out", "signin_rejected"):
+        return kind
+    if kind == "not_configured" or "not configured" in str(result.get("reason", "")):
         return "not_configured"
     return "unreachable"
 
