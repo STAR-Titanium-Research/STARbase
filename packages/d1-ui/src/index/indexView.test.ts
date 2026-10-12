@@ -182,6 +182,21 @@ describe('chip options', () => {
 		expect(relationOptions(undefined, 'a', 'b')).toEqual([]);
 	});
 
+	it('labels a row without a display value by its fallback field (a campaign without a code is named)', () => {
+		expect(relationOptionParams('campaign_id', 'campaign_code', 'name')).toEqual({ fields: ['campaign_id', 'campaign_code', 'name'], sort: ['campaign_code'], limit: 200 });
+		const rows = [
+			{ campaign_id: 'c1', campaign_code: 'C-6', name: 'Turning trial' },
+			{ campaign_id: 'c2', campaign_code: null, name: 'Free text' },
+			{ campaign_id: 'c3', campaign_code: '', name: null },
+		];
+		expect(relationOptions(rows, 'campaign_id', 'campaign_code', 'name')).toEqual([
+			{ value: 'c1', label: 'C-6' },
+			{ value: 'c2', label: 'Free text' },
+			{ value: 'c3', label: 'c3' },
+		]);
+		expect(relationOptions(rows, 'campaign_id', 'campaign_code')[1]).toEqual({ value: 'c2', label: 'c2' });
+	});
+
 	it('requests enum values with groupBy and reads them distinct, A-Z, without nulls', () => {
 		expect(enumOptionParams('status')).toEqual({ groupBy: ['status'], aggregate: { count: '*' }, limit: 200 });
 		const rows = [{ status: 'planned' }, { status: 'active' }, { status: null }, { status: '' }, { status: 'active' }, { status: 'Complete' }];

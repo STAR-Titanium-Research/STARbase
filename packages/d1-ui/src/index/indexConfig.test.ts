@@ -108,7 +108,7 @@ describe('INDEX_DEFS', () => {
 		for (const slug of ['operations', 'tests']) {
 			const d = indexDefBySlug(slug)!;
 			expect(d.filters.find((f) => f.field === 'campaign_id'), slug).toEqual({
-				field: 'campaign_id', label: 'Campaign', options: { kind: 'relation', collection: 'campaigns', display: 'campaign_code' },
+				field: 'campaign_id', label: 'Campaign', options: { kind: 'relation', collection: 'campaigns', display: 'campaign_code', fallback: 'name' },
 			});
 		}
 		expect(indexDefBySlug('operations')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Method', 'Process category']);
