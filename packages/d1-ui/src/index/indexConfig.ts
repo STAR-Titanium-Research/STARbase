@@ -49,6 +49,7 @@ const enumFilter = (field: string, label: string): FilterDef => ({ field, label,
 const boolFilter = (field: string, label: string): FilterDef => ({ field, label, options: { kind: 'bool' } });
 
 const project = relFilter('project_id', 'Project', 'projects', 'project_code');
+const campaign = relFilter('campaign_id', 'Campaign', 'campaigns', 'campaign_code');
 const material = relFilter('material_id', 'Material', 'materials', 'alloy_code');
 const insertType = relFilter('insert_type_id', 'Insert type', 'insert_types', 'type_code');
 const processCategory = enumFilter('process_category', 'Process category');
@@ -89,7 +90,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('operation_date', 'Date', 'date'), col('operator_name', 'Operator'), col('outcome_notes', 'Outcome'),
 		],
 		searchFields: ['pass_code', 'sample_id.sample_code', 'operator_name'],
-		filters: [project, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory],
+		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory],
 		defaultSort: '-operation_date', rowTarget: 'record', hasShortId: true,
 	},
 	{
@@ -101,7 +102,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			rel('equipment_id', 'Equipment', 'equipment', 'equipment_name'),
 		],
 		searchFields: ['test_code', 'test_type', 'sample_id.sample_code'],
-		filters: [project, enumFilter('test_type', 'Type'), enumFilter('status', 'Status')],
+		filters: [project, campaign, enumFilter('test_type', 'Type'), enumFilter('status', 'Status')],
 		defaultSort: '-session_date', rowTarget: 'record', hasShortId: true,
 	},
 	{

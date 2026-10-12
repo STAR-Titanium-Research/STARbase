@@ -2,14 +2,17 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, useCanUpdate, LoadState, NotVisible, PageShell, RecordHeader, Section, Sparkline, StatTile, dataStudioRoute, formatDate, projectStatusLabel,
+	EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
+	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
 import CampaignCards from './projects/CampaignCards.vue';
 import UnassignedLists from './projects/UnassignedLists.vue';
 
-// Project page: header, totals, campaigns as cards, what is not in a campaign, activity and the
-// equipment used. Design: docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Project").
+// Project page: a rail (identity, actions, dates, people, totals, contents) beside the description,
+// campaigns as cards, what is not in a campaign, activity and the equipment used. Design:
+// docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Project"), laid out as a rail and
+// panels by docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md.
 // There is no "Report" action yet: d1-report has sample, operation and test reports only. Add one
 // here when it grows a project report.
 const props = defineProps<{ id: string }>();
@@ -31,13 +34,21 @@ function onSaved() {
 const code = computed(() => project.value?.project_code ?? 'Project');
 const studioTo = computed(() => dataStudioRoute('projects', props.id));
 const active = computed(() => project.value?.is_active !== false);
-const dates = computed(() => {
-	const a = formatDate(project.value?.start_date);
-	const b = formatDate(project.value?.end_date);
-	return a && b ? `${a} to ${b}` : a ? `From ${a}` : b ? `Until ${b}` : '';
-});
-const num = (n: number | null | undefined) => (n === null || n === undefined ? '–' : n.toLocaleString('en-GB'));
-const tilesDisabled = computed(() => counts.value.loading);
+
+// The rail's key facts: the old header line and the totals the stat tiles showed. The counts follow
+// the project rule (projectScope.ts), so they are text here, not links (see record/projectFacts.ts).
+const railFacts = computed(() => projectRailFacts(project.value, investigators.value.data, counts.value.data, counts.value.loading));
+
+// "On this page": the panels in page order. A count is null while its read loads.
+const rows = (s: { loading: boolean; data: unknown[] }) => (s.loading ? null : Math.min(s.data.length, LIST_CAP));
+const contents = computed<ContentsEntry[]>(() => projectContents({
+	hasDescription: !!project.value?.description,
+	campaigns: rows(campaigns.value),
+	samples: rows(looseSamples.value),
+	operations: rows(looseOperations.value),
+	tests: rows(looseTests.value),
+	equipment: equipment.value.loading ? null : equipment.value.data.length,
+}));
 </script>
 
 <template>
@@ -50,79 +61,74 @@ const tilesDisabled = computed(() => counts.value.loading);
 			<LoadState v-else-if="error" :error="error" />
 
 			<template v-else-if="project">
-				<RecordHeader :code="code" :title="project.project_name" kind="Project" icon="folder_open">
+				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
+				<RecordLayout style="--d1-sticky-top: 70px">
 					<template #crumbs>
 						<router-link to="/home">Home</router-link>
 						<span>›</span>
 						<router-link to="/home/projects">Projects</router-link>
 					</template>
-					<template #status>
-						<span class="status" :class="{ active }">{{ projectStatusLabel(project.is_active) }}</span>
-					</template>
-					<template #meta>
-						<span v-if="dates">{{ dates }}</span>
-						<span>PI: {{ project.principal_investigator_person?.full_name || 'not set' }}</span>
-						<span v-if="investigators.data.length">Investigators: {{ investigators.data.join(', ') }}</span>
-						<span v-else-if="investigators.error" class="warn">{{ investigators.error }}</span>
-						<span v-if="project.document_number">Document: {{ project.document_number }}</span>
-						<span v-if="project.export_controlled" class="export">Export controlled</span>
-					</template>
-					<template #actions>
-						<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
-						<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
-					</template>
-				</RecordHeader>
 
-				<Section v-if="project.description" title="Description"><p class="description">{{ project.description }}</p></Section>
+					<template #rail>
+						<RecordRail kind="Project" :code="code" :title="project.project_name" :facts="railFacts" :contents="contents">
+							<template #kind-icon><v-icon name="folder_open" x-small /></template>
+							<template #status>
+								<span class="status" :class="{ active }">{{ projectStatusLabel(project.is_active) }}</span>
+							</template>
+							<template #actions>
+								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
+							</template>
+							<template #after-facts>
+								<span v-if="project.export_controlled" class="export">Export controlled</span>
+								<p class="d1-note">Counts of the records you can see in this project.</p>
+								<p v-if="investigators.error" class="d1-note warn" role="alert">{{ investigators.error }}</p>
+								<p v-if="counts.error" class="d1-note warn" role="alert">{{ counts.error }}</p>
+							</template>
+						</RecordRail>
+					</template>
 
-				<div class="totals">
-					<div class="tiles" :aria-busy="tilesDisabled">
-						<StatTile label="Samples" :value="num(counts.data.samples)" icon="science" />
-						<StatTile label="Operations" :value="num(counts.data.operations)" icon="precision_manufacturing" />
-						<StatTile label="Tests" :value="num(counts.data.tests)" icon="biotech" />
-						<StatTile label="Campaigns" :value="num(counts.data.campaigns)" icon="flag" />
+					<Section v-if="project.description" id="description" title="Description"><p class="description">{{ project.description }}</p></Section>
+
+					<CampaignCards :campaigns="campaigns" :project-id="id" />
+					<!-- Three short lists side by side: stacked, three empty ones took a third of the screen. -->
+					<div class="d1-cols">
+						<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
 					</div>
-					<p class="d1-note">Counts of the records you can see in this project.</p>
-					<p v-if="counts.error" class="d1-note warn" role="alert">{{ counts.error }}</p>
-				</div>
 
-				<CampaignCards :campaigns="campaigns" :project-id="id" />
-				<!-- Three short lists side by side: stacked, three empty ones took a third of the screen. -->
-				<div class="d1-cols">
-					<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
-				</div>
+					<div class="d1-cols">
+						<Section id="activity" title="Activity">
+							<LoadState :loading="activity.loading" :error="activity.error">
+								<Sparkline
+									v-if="activity.data.data"
+									:ops="activity.data.data.ops"
+									:tests="activity.data.data.tests"
+									:weeks="activity.data.data.weeks"
+									:width="640"
+									:height="80"
+								/>
+								<p v-if="activity.data.truncated" class="d1-note warn">Based on the newest records only: the project has more than the page loads.</p>
+							</LoadState>
+						</Section>
 
-				<div class="d1-cols">
-					<Section title="Activity">
-						<LoadState :loading="activity.loading" :error="activity.error">
-							<Sparkline
-								v-if="activity.data.data"
-								:ops="activity.data.data.ops"
-								:tests="activity.data.data.tests"
-								:weeks="activity.data.data.weeks"
-								:width="640"
-								:height="80"
-							/>
-							<p v-if="activity.data.truncated" class="d1-note warn">Based on the newest records only: the project has more than the page loads.</p>
-						</LoadState>
-					</Section>
-
-					<Section
-						title="Equipment used"
-						:count="equipment.loading ? null : equipment.data.length"
-						:empty="!equipment.loading && !equipment.error && !equipment.data.length"
-						empty-text="No equipment recorded on this project's operations."
-					>
-						<LoadState :loading="equipment.loading" :error="equipment.error">
-							<ul class="equipment">
-								<li v-for="e in equipment.data" :key="e.equipment_id">
-									<span class="e-name">{{ e.name }}</span>
-									<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
-								</li>
-							</ul>
-						</LoadState>
-					</Section>
-				</div>
+						<Section
+							id="equipment"
+							title="Equipment used"
+							:count="equipment.loading ? null : equipment.data.length"
+							:empty="!equipment.loading && !equipment.error && !equipment.data.length"
+							empty-text="No equipment recorded on this project's operations."
+						>
+							<LoadState :loading="equipment.loading" :error="equipment.error">
+								<ul class="equipment">
+									<li v-for="e in equipment.data" :key="e.equipment_id">
+										<span class="e-name">{{ e.name }}</span>
+										<span class="e-count">{{ e.operations }} operation{{ e.operations === 1 ? '' : 's' }}</span>
+									</li>
+								</ul>
+							</LoadState>
+						</Section>
+					</div>
+				</RecordLayout>
 
 				<EditDrawer
 					v-model="editing"
@@ -142,11 +148,10 @@ const tilesDisabled = computed(() => counts.value.loading);
 	color: var(--d1-dim); background: var(--theme--background-normal);
 }
 .status.active { color: var(--d1-ok); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
-.export { color: var(--d1-bad); font-weight: 650; }
+.export { color: var(--d1-bad); font-weight: 650; font-size: var(--fs-md); }
 .warn { color: var(--d1-warn); }
+.d1-note { margin: 0; }
 .description { margin: 0; max-width: 90ch; font-size: var(--fs-md); line-height: 1.55; color: var(--d1-dim); white-space: pre-line; }
-.totals { display: flex; flex-direction: column; gap: 6px; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .equipment { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .equipment li {
 	display: flex; flex-direction: column; padding: 7px 10px; border-radius: 8px;

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { contentsModel, type ContentsEntry } from '../record/contents';
 import { findScrollParent } from '../record/scrollParent';
+import { scrollToSection } from '../record/scrollTo';
 
 // "On this page": the page's sections with their counts. The section in view is marked, a click
 // scrolls to a section, and an empty section is listed dimmed. The model is record/contents.ts; this
@@ -86,15 +87,8 @@ onBeforeUnmount(() => {
 });
 
 function go(id: string, event: MouseEvent) {
-	if (typeof document === 'undefined') return;
-	// A new-tab or new-window click keeps the link's own behaviour.
-	if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-	const el = document.getElementById(id);
-	if (!el) return;
-	event.preventDefault();
-	el.scrollIntoView({ block: 'start' });
-	// The hash is for sharing the place; replaceState keeps the router state and starts no navigation.
-	if (typeof history !== 'undefined') history.replaceState(history.state, '', `#${id}`);
+	// A new-tab or new-window click keeps the link's own behaviour (the helper declines it).
+	scrollToSection(id, event);
 }
 </script>
 

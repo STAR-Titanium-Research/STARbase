@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import HiddenLink from './HiddenLink.vue';
 import { capList, visibleFacts, type Fact } from '../record/facts';
+import { scrollToSection } from '../record/scrollTo';
 
 // Label/value rows: the label on the left in the secondary colour, the value on the right at weight
 // 600 with its unit after it, a hairline under each row. Used in the rail (one column) and in the
@@ -44,6 +45,7 @@ const listed = (f: Fact) => capList(f.list ?? [], expanded.value.has(f.label) ? 
 					<span v-else class="not-visible">not visible to you</span>
 				</template>
 				<router-link v-else-if="f.to" :to="f.to" class="link">{{ text(f.value) }}</router-link>
+				<a v-else-if="f.anchor" :href="`#${f.anchor}`" class="link" @click="scrollToSection(f.anchor, $event)">{{ text(f.value) }}</a>
 				<template v-else>{{ text(f.value) }}</template>
 				<span v-if="f.unit && !f.hidden" class="unit">{{ f.unit }}</span>
 			</span>

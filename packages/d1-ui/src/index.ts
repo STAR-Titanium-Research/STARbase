@@ -85,6 +85,10 @@ export {
 	sampleDims, sampleKind, sampleMassText, sampleCampaigns, coOwnerText, sampleRailFacts, sampleDetailBase,
 } from './record/sampleFacts';
 export type { SampleDims } from './record/sampleFacts';
+export { dateRangeText, projectRailFacts, projectContents } from './record/projectFacts';
+export type { ProjectCounts as ProjectRailCounts, ProjectContentsInput } from './record/projectFacts';
+export { campaignCode, campaignRailFacts, campaignContents } from './record/campaignFacts';
+export type { CampaignCounts, CampaignContentsInput } from './record/campaignFacts';
 export { default as KeyValueGrid } from './components/KeyValueGrid.vue';
 export type { KeyValue } from './components/KeyValueGrid.vue';
 export { default as ProgressBar } from './components/ProgressBar.vue';
@@ -92,6 +96,9 @@ export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
+export { default as CampaignProgressBars } from './campaign/CampaignProgress.vue';
+export { useCampaignData } from './campaign/useCampaignData';
+export type { CampaignData } from './campaign/useCampaignData';
 
 // Explorer navigation: host contract, sidebar tree, index-page configs
 export { EXPLORER_HOST } from './host';

@@ -8,6 +8,8 @@ export interface Fact {
 	unit?: string;
 	/** Monospace, for codes and ids. */
 	mono?: boolean;
+	/** Makes the value a link to the section with this id on the same page (scrolled to by hand, as "On this page" does). */
+	anchor?: string;
 	/** Makes the value a link to this app route. */
 	to?: string;
 	/** The target exists but row-level visibility hides it from the user: drawn as "not visible to you". */

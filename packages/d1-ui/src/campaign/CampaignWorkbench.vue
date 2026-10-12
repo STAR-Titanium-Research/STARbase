@@ -9,7 +9,7 @@ import CampaignProgress from './CampaignProgress.vue';
 import OperationsPanel from './OperationsPanel.vue';
 import SamplesPanel from './SamplesPanel.vue';
 import TestsPanel from './TestsPanel.vue';
-import { useCampaignData } from './useCampaignData';
+import { useCampaignData, type CampaignData } from './useCampaignData';
 import { useCanUpdate } from '../composables/useCanUpdate';
 
 // Everything below a campaign's header: counts and progress, the sample x step matrix, the sample,
@@ -18,12 +18,23 @@ import { useCanUpdate } from '../composables/useCanUpdate';
 // user's, and each list loads and fails on its own.
 // `canUpdate` is passed by a host that already asked about this campaign (the Campaign page, so one
 // request serves the Edit button and the panels); without it (undefined) the workbench asks itself.
+// The Campaign page hosts the counts and progress bars in its rail: it reads the data once itself (`data`),
+// hides the bars here (`showProgress`) and gives the panels their ids for "On this page" (`sectionIds`).
+// The Data Studio form passes none of these and keeps the bars on top.
 const props = withDefaults(
-	defineProps<{ campaignId: string; campaignType?: string | null; showMatrix?: boolean; canUpdate?: boolean | null }>(),
-	{ showMatrix: true, canUpdate: undefined },
+	defineProps<{
+		campaignId: string;
+		campaignType?: string | null;
+		showMatrix?: boolean;
+		canUpdate?: boolean | null;
+		data?: CampaignData;
+		showProgress?: boolean;
+		sectionIds?: boolean;
+	}>(),
+	{ showMatrix: true, canUpdate: undefined, data: undefined, showProgress: true, sectionIds: false },
 );
 
-const data = useCampaignData(toRef(props, 'campaignId'));
+const data = props.data ?? useCampaignData(toRef(props, 'campaignId'));
 const { junction, operations, tests, analyses, analysisUnavailable, overview, matrix, reload } = data;
 
 // Rights are per row, not per campaign (ADR-0011): putting an operation or test in or out of a
@@ -42,13 +53,14 @@ defineExpose({ reload });
 <template>
 	<div class="d1-campaign d1-kit">
 		<CampaignProgress
+			v-if="showProgress"
 			:overview="overview"
 			:force-hidden="analysisUnavailable"
 			:force-failed="!!analyses.error"
 		/>
 		<p v-if="analyses.error" class="d1-cerr" role="alert">{{ analyses.error }}</p>
 
-		<Section v-if="showMatrix" title="Samples and steps" :count="matrix.rows.length">
+		<Section v-if="showMatrix" :id="sectionIds ? 'matrix' : undefined" title="Samples and steps" :count="matrix.rows.length">
 			<LoadState
 				:loading="(junction.loading || operations.loading || tests.loading) && !matrix.rows.length"
 				:empty="!matrix.rows.length"
@@ -64,10 +76,11 @@ defineExpose({ reload });
 		     they stack. A three-column list across the whole page put its figures a screen away
 		     from the code they belong to. -->
 		<div class="d1-ccols">
-			<SamplesPanel :campaign-id="campaignId" :rows="overview.sampleRows" :junction="junction" :cannot-add="cannotAdd" :hidden-count="overview.counts.hiddenSamples" @changed="reload" />
-			<TestsPanel :campaign-id="campaignId" :rows="overview.testRows" :section="tests" @changed="reload" />
+			<SamplesPanel :id="sectionIds ? 'samples' : undefined" :campaign-id="campaignId" :rows="overview.sampleRows" :junction="junction" :cannot-add="cannotAdd" :hidden-count="overview.counts.hiddenSamples" @changed="reload" />
+			<TestsPanel :id="sectionIds ? 'test-sessions' : undefined" :campaign-id="campaignId" :rows="overview.testRows" :section="tests" @changed="reload" />
 		</div>
 		<OperationsPanel
+			:id="sectionIds ? 'operations' : undefined"
 			:campaign-id="campaignId"
 			:campaign-type="campaignType"
 			:rows="overview.opRows"
