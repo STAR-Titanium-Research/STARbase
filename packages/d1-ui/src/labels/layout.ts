@@ -1,6 +1,6 @@
 // Where the QR code and each text line go inside one label (mm, relative to the label's top-left
 // corner), and which lines had to be cut. Pure arithmetic; render.ts turns it into HTML.
-import { fitText, MM_PER_PT } from './fit';
+import { fitText, MIN_PT, MM_PER_PT, textWidthMm } from './fit';
 import { round2 } from './geometry';
 import { fieldValue, type LabelSample, type LabelTemplate } from './types';
 
@@ -29,9 +29,7 @@ export interface LabelLayout {
 export const LINE_HEIGHT = 1.2;
 // Space between the QR code and the text.
 const GAP_MM = 1;
-// With an automatic QR size the text keeps at least this share of the label's width (qr_left)...
-const TEXT_SHARE_LEFT = 0.45;
-// ...and the QR code is never smaller than this share of the label's shorter inner side (qr_top).
+// An automatic QR code is never smaller than this share of the label's shorter inner side.
 const MIN_QR_SHARE = 0.35;
 
 interface Fitted {
@@ -42,6 +40,16 @@ interface Fitted {
 }
 
 const lineHeightMm = (pt: number) => pt * MM_PER_PT * LINE_HEIGHT;
+
+// Width of the widest field value when every field is set at its minimum size, 0 when there is no text.
+function widestAtMin(s: LabelSample, t: LabelTemplate): number {
+	let widest = 0;
+	for (const f of t.fields) {
+		const value = fieldValue(s, f.key).trim();
+		if (value) widest = Math.max(widest, textWidthMm(value, MIN_PT[f.size], f.bold));
+	}
+	return widest;
+}
 
 function fitLines(s: LabelSample, t: LabelTemplate, widthMm: number): { lines: Fitted[]; clipped: boolean } {
 	const lines: Fitted[] = [];
@@ -112,11 +120,12 @@ export function layoutLabel(s: LabelSample, t: LabelTemplate): LabelLayout {
 
 	// qr_left
 	const side = Math.min(innerW, innerH);
-	const probe = fitLines(s, t, 0); // only to know whether there is any text at all
+	const widest = widestAtMin(s, t);
 	let q: number;
 	if (explicit !== null) q = Math.min(explicit, side);
-	else if (!probe.lines.length) q = side;
-	else q = Math.min(innerH, innerW * (1 - TEXT_SHARE_LEFT));
+	else if (widest === 0) q = side;
+	// The text column is as wide as the widest field needs at its smallest size; the QR code gets the rest.
+	else q = Math.min(innerH, Math.max(innerW - GAP_MM - widest - 0.01, side * MIN_QR_SHARE));
 	const textW = Math.max(0, innerW - q - GAP_MM);
 	const fit = fitLines(s, t, textW);
 	const { kept, dropped } = fitHeight(fit.lines, innerH);
