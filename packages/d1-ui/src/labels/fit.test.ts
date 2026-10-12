@@ -43,3 +43,41 @@ describe('fitText', () => {
 		expect(r.text).toMatch(/^(?:😀)+…$/u);
 	});
 });
+
+describe('width estimate by character class', () => {
+	const w = (s: string) => textWidthMm(s, 10, false);
+	it('orders the classes: wide capitals > capitals > digits > lower case > narrow', () => {
+		expect(w('WWWW')).toBeGreaterThan(w('AAAA'));
+		expect(w('MMMM')).toBeGreaterThan(w('AAAA'));
+		expect(w('AAAA')).toBeGreaterThan(w('0000'));
+		expect(w('0000')).toBeGreaterThan(w('aaaa'));
+		expect(w('aaaa')).toBeGreaterThan(w('iiii'));
+		expect(w('aaaa')).toBeGreaterThan(w('----'));
+	});
+	it('treats every digit alike (tabular figures), and bold as 8% wider', () => {
+		expect(w('1111')).toBe(w('0000'));
+		expect(textWidthMm('Abc', 10, true) / w('Abc')).toBeCloseTo(1.08, 5);
+	});
+	it('reports a 36-character run of wide capitals as clipped on an A4 4x5 label', () => {
+		const r = fitText('W'.repeat(36), 48.5, 'lg', true);
+		expect(r.clipped).toBe(true);
+		expect(r.pt).toBe(MIN_PT.lg);
+		expect(r.text.endsWith('…')).toBe(true);
+	});
+});
+
+describe('fitText with a custom measure', () => {
+	// 1 mm per character per 10 pt
+	const measure = (text: string, pt: number) => Array.from(text).length * (pt / 10);
+	it('uses it for shrinking', () => {
+		const r = fitText('x'.repeat(20), 15, 'md', false, measure);
+		expect(r).toEqual({ pt: 7.5, clipped: false, text: 'x'.repeat(20) });
+	});
+	it('uses it for cutting, ellipsis included', () => {
+		const r = fitText('x'.repeat(40), 20, 'md', false, measure);
+		expect(r.clipped).toBe(true);
+		expect(r.pt).toBe(MIN_PT.md);
+		// 6.5 pt -> 0.65 mm per char: 30 chars (29 + "…") fit in 20 mm
+		expect(Array.from(r.text)).toHaveLength(30);
+	});
+});

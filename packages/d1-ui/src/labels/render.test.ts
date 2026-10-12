@@ -105,6 +105,15 @@ describe('renderLabelDocument', () => {
 		expect(html).toMatch(/font-size:7pt;text-align:center">nick</);
 		expect(html).not.toContain('font-size:10pt');
 	});
+	it('reports a 36-character run of wide capitals as a clipped label on A4', () => {
+		expect(render([sample(1, { code: 'W'.repeat(36) })], A4_4X5).clipped).toBe(1);
+	});
+	it('takes a measure function through the options', () => {
+		const code = '1234-AA-MM-2026-10-12';
+		expect(render([sample(1, { code })], BROTHER).clipped).toBe(0);
+		const huge = renderLabelDocument(paginate([sample(1, { code })], { copies: 1, start: 1 }, BROTHER), BROTHER, FAKE_QR, { measure: () => 500 });
+		expect(huge.clipped).toBe(1);
+	});
 	it('counts clipped labels (not fields) and cuts with an ellipsis', () => {
 		const long = 'A nickname that is far too long to fit across a 62 mm label even at the smallest size';
 		const r = render([sample(1, { nickname: long }), sample(2), sample(3, { nickname: long })], BROTHER);

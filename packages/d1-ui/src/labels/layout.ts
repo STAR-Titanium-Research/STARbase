@@ -1,6 +1,6 @@
 // Where the QR code and each text line go inside one label (mm, relative to the label's top-left
 // corner), and which lines had to be cut. Pure arithmetic; render.ts turns it into HTML.
-import { fitText, MIN_PT, MM_PER_PT, textWidthMm } from './fit';
+import { fitText, MIN_PT, MM_PER_PT, textWidthMm, type Measure } from './fit';
 import { round2 } from './geometry';
 import { fieldValue, type LabelSample, type LabelTemplate } from './types';
 
@@ -42,22 +42,22 @@ interface Fitted {
 const lineHeightMm = (pt: number) => pt * MM_PER_PT * LINE_HEIGHT;
 
 // Width of the widest field value when every field is set at its minimum size, 0 when there is no text.
-function widestAtMin(s: LabelSample, t: LabelTemplate): number {
+function widestAtMin(s: LabelSample, t: LabelTemplate, measure: Measure): number {
 	let widest = 0;
 	for (const f of t.fields) {
 		const value = fieldValue(s, f.key).trim();
-		if (value) widest = Math.max(widest, textWidthMm(value, MIN_PT[f.size], f.bold));
+		if (value) widest = Math.max(widest, measure(value, MIN_PT[f.size], f.bold));
 	}
 	return widest;
 }
 
-function fitLines(s: LabelSample, t: LabelTemplate, widthMm: number): { lines: Fitted[]; clipped: boolean } {
+function fitLines(s: LabelSample, t: LabelTemplate, widthMm: number, measure: Measure): { lines: Fitted[]; clipped: boolean } {
 	const lines: Fitted[] = [];
 	let clipped = false;
 	for (const f of t.fields) {
 		const value = fieldValue(s, f.key).trim();
 		if (!value) continue;
-		const r = fitText(value, widthMm, f.size, f.bold);
+		const r = fitText(value, widthMm, f.size, f.bold, measure);
 		if (r.clipped) clipped = true;
 		lines.push({ text: r.text, pt: r.pt, bold: f.bold, h: lineHeightMm(r.pt) });
 	}
@@ -87,21 +87,21 @@ function stack(lines: Fitted[], x: number, y: number, w: number, align: TextLine
 	});
 }
 
-export function layoutLabel(s: LabelSample, t: LabelTemplate): LabelLayout {
+export function layoutLabel(s: LabelSample, t: LabelTemplate, measure: Measure = textWidthMm): LabelLayout {
 	const p = t.paddingMm;
 	const innerW = t.labelWidthMm - 2 * p;
 	const innerH = t.labelHeightMm - 2 * p;
 	const explicit = t.qrSizeMm !== null && t.qrSizeMm > 0 ? t.qrSizeMm : null;
 
 	if (t.arrangement === 'text_only') {
-		const fit = fitLines(s, t, innerW);
+		const fit = fitLines(s, t, innerW, measure);
 		const { kept, dropped } = fitHeight(fit.lines, innerH);
 		const top = p + (innerH - sum(kept)) / 2;
 		return { qr: null, lines: stack(kept, p, top, innerW, 'center'), clipped: fit.clipped || dropped };
 	}
 
 	if (t.arrangement === 'qr_top') {
-		const fit = fitLines(s, t, innerW);
+		const fit = fitLines(s, t, innerW, measure);
 		const side = Math.min(innerW, innerH);
 		let q: number;
 		if (explicit !== null) q = Math.min(explicit, side);
@@ -120,14 +120,14 @@ export function layoutLabel(s: LabelSample, t: LabelTemplate): LabelLayout {
 
 	// qr_left
 	const side = Math.min(innerW, innerH);
-	const widest = widestAtMin(s, t);
+	const widest = widestAtMin(s, t, measure);
 	let q: number;
 	if (explicit !== null) q = Math.min(explicit, side);
 	else if (widest === 0) q = side;
 	// The text column is as wide as the widest field needs at its smallest size; the QR code gets the rest.
 	else q = Math.min(innerH, Math.max(innerW - GAP_MM - widest - 0.01, side * MIN_QR_SHARE));
 	const textW = Math.max(0, innerW - q - GAP_MM);
-	const fit = fitLines(s, t, textW);
+	const fit = fitLines(s, t, textW, measure);
 	const { kept, dropped } = fitHeight(fit.lines, innerH);
 	return {
 		qr: { x: round2(p), y: round2(p + (innerH - q) / 2), w: round2(q), h: round2(q) },

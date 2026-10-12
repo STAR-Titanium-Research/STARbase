@@ -4,12 +4,15 @@
 import { slotPositions, round2 } from './geometry';
 import { layoutLabel, type Box } from './layout';
 import { buildQrPayload } from './qrPayload';
+import type { Measure } from './fit';
 import type { LabelSample, LabelTemplate } from './types';
 
 export interface RenderOptions {
 	// Screen-only dashed outline round every label (and an amber one round a clipped label, with empty
 	// slots shown ghosted). Never reaches the printer. Off by default: that is the print variant.
 	outline?: boolean;
+	// Exact text width in mm (for example from canvas measureText); the default is a per-character estimate.
+	measure?: Measure;
 }
 
 export interface RenderedLabels {
@@ -68,7 +71,7 @@ export function renderLabelDocument(
 			const frame = `left:${mm(slot.x)};top:${mm(slot.y)};width:${mm(t.labelWidthMm)};height:${mm(t.labelHeightMm)}`;
 			if (!sample) return outline ? `<div class="slot-skipped" style="${frame}"></div>` : '';
 			count++;
-			const lay = layoutLabel(sample, t);
+			const lay = layoutLabel(sample, t, options.measure);
 			if (lay.clipped) clipped++;
 			const qr = lay.qr ? `<div class="qr" style="${boxStyle(lay.qr)}">${qrSvg(buildQrPayload(sample, t.qrFields))}</div>` : '';
 			const text = lay.lines
