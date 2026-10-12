@@ -150,8 +150,11 @@ async function applyQuery(): Promise<void> {
 		const { found, missing } = await samples.lookup(ids, codes);
 		if (!queryGate.isCurrent(token)) return; // a newer address replaced this one
 		samples.removeMany(fromUrl);
-		samples.add(found);
-		fromUrl = found.map((s) => s.id);
+		// Only samples that were not already selected count as URL-driven: one ticked by hand stays when the address changes.
+		const had = new Set(samples.selected.value.map((s) => s.id));
+		const fresh = found.filter((s) => !had.has(s.id));
+		samples.add(fresh);
+		fromUrl = fresh.map((s) => s.id);
 		if (missing.length) selectionNote.value = `Not found, or not visible to you: ${missing.join(', ')}.`;
 	} catch (e) {
 		if (!queryGate.isCurrent(token)) return;
@@ -159,7 +162,8 @@ async function applyQuery(): Promise<void> {
 	}
 }
 onBeforeUnmount(() => queryGate.cancel());
-watch(() => [route.query.ids, route.query.codes], () => void applyQuery());
+// Keyed on what the address asks for, so an unrelated route change (another query parameter) does not re-run it.
+watch(() => JSON.stringify(parseSelectionQuery(route.query)), () => void applyQuery());
 
 onMounted(() => {
 	void templates.load();
