@@ -8,11 +8,11 @@ import { test, expect, type Page } from '@playwright/test';
 const DIRECTUS = 'http://directus.invalid';
 const RECORDER = 'http://recorder.invalid';
 
-interface Stub { run: any; answered: boolean; pending: any[]; snoozed: any[]; cancelled: boolean; phase: 'idle' | 'recording'; accepted: any; pendingCalls: number }
+interface Stub { run: any; answered: boolean; pending: any[]; snoozed: any[]; cancelled: boolean; phase: 'idle' | 'recording'; accepted: any; pendingCalls: number; sessions: any[] }
 
 async function setup(page: Page): Promise<Stub> {
 	const s: Stub = {
-		cancelled: false, answered: false, run: null, snoozed: [], phase: 'idle', accepted: null, pendingCalls: 0,
+		cancelled: false, answered: false, run: null, snoozed: [], phase: 'idle', accepted: null, pendingCalls: 0, sessions: [],
 		pending: [{
 			number: 231, title: 'R4 pre-flight chips', url: 'https://github.com/x/y/issues/231', requested_by: 'dpremoli',
 			created_at: new Date().toISOString(), items: [{ id: 'R4', title: 'Pre-flight chips', steps: [] }],
@@ -32,8 +32,8 @@ async function setup(page: Page): Promise<Stub> {
 		const json = (body: unknown, status = 200) => route.fulfill({ status, json: body, headers: cors });
 		if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
 		if (path === '/record/status') return json({ state: s.phase });
-		if (path === '/rig-tests/eligibility') return json({ eligible: true, rig_id: 'rig-e2e', relay: 'ok' });
-		if (path === '/rig-tests/pending') { s.pendingCalls++; return json({ requests: s.pending, snoozed: s.snoozed, busy: s.phase !== 'idle' }); }
+		if (path === '/rig-tests/eligibility') return json({ eligible: true, rig_id: 'rig-e2e', relay: 'ok', session: true, hardware_ok: true });
+		if (path === '/rig-tests/pending') { s.pendingCalls++; return json({ requests: s.pending, snoozed: s.snoozed, busy: s.phase !== 'idle', session: s.sessions.length > 0, hardware_ok: true, relay: 'ok' }); }
 		if (path === '/rig-tests/history') return json({ runs: [] });
 		if (path === '/rig-tests/run') {
 			if (!s.run) return json({ state: 'idle' });
@@ -50,6 +50,7 @@ async function setup(page: Page): Promise<Stub> {
 		if (/^\/rig-tests\/\d+\/accept$/.test(path)) { s.accepted = req.postDataJSON(); s.pending = []; s.run = true; return json({ ok: true }); }
 		if (path === '/rig-tests/run/answer') { s.answered = true; return json({ ok: true }); }
 		if (path === '/rig-tests/run/cancel') { s.cancelled = true; return json({ ok: true }); }
+		if (path === '/rig-tests/session') { s.sessions.push(req.method() === 'PUT' ? req.postDataJSON() : 'DELETE'); return json({ ok: true }); }
 		return json({ detail: 'Not Found' }, 404);
 	});
 	return s;
@@ -62,8 +63,8 @@ test('prompt -> Run now -> question -> answer -> finished summary', async ({ pag
 	await expect(prompt).toContainText('#231 R4 pre-flight chips');
 	await expect(prompt).toContainText('about 4 min, 2 steps need you');
 	await prompt.getByRole('button', { name: /Run now/ }).click();
-	// The operator is the signed-in user's name (it is posted on a GitHub issue), never the email.
-	await expect.poll(() => s.accepted).toMatchObject({ mode: 'full', upload_busy: false, operator: 'E2E Check' });
+	// The operator is the signed-in user's initials (it is posted on a public GitHub issue), never the email.
+	await expect.poll(() => s.accepted).toMatchObject({ mode: 'full', upload_busy: false, operator: 'E.C.' });
 	expect(JSON.stringify(s.accepted)).not.toContain('@');
 
 	const question = page.getByTestId('rig-test-question');
@@ -122,4 +123,11 @@ test('Settings > Rig tests lists snoozed requests with when they come back', asy
 	await expect(card).toContainText('Snoozed until the next recording is saved');
 	await expect(card.getByRole('button', { name: /Run now/ })).toBeVisible();
 	await expect(card.getByRole('button', { name: /Decline/ })).toBeVisible();
+});
+
+test('the signed-in D1 token is lent to the recorder', async ({ page }) => {
+	const s = await setup(page);
+	await page.goto('/settings?tab=general');
+	await expect.poll(() => s.sessions.length).toBeGreaterThan(0);
+	expect(s.sessions[0]).toMatchObject({ access_token: 'fake', expires_at: expect.any(Number) });
 });
