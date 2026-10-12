@@ -11,4 +11,6 @@ export type { FittedText } from './fit';
 export { buildQrPayload, parseQrPayload, QR_HEADER } from './qrPayload';
 export type { ParsedQrPayload } from './qrPayload';
 export { renderLabelDocument } from './render';
+export type { QrModules } from './qrSvg';
+export type { Measure } from './fit';
 export type { RenderOptions, RenderedLabels } from './render';

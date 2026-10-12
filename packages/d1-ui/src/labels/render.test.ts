@@ -24,7 +24,7 @@ const BROTHER = templateFromRow({
 const sample = (n: number, over: Partial<LabelSample> = {}): LabelSample => ({
 	id: `id-${n}`, code: `S-${n}`, shortId: String(n).padStart(8, '0'), nickname: null, material: null, date: null, ownerInitials: null, ...over,
 });
-const FAKE_QR = (payload: string) => `<svg viewBox="0 0 1 1" data-payload="${payload.length}"><path d="M0 0h1v1z"/></svg>`;
+const FAKE_QR = (_payload: string) => ({ size: 2, data: [1, 0, 0, 1] });
 const render = (samples: LabelSample[], t: LabelTemplate, opts?: { outline?: boolean }, start = 1) =>
 	renderLabelDocument(paginate(samples, { copies: 1, start }, t), t, FAKE_QR, opts);
 
@@ -58,6 +58,24 @@ describe('renderLabelDocument', () => {
 		expect(html).not.toContain('@font-face');
 		expect(html).not.toMatch(/prefers-color-scheme/);
 	});
+	it('has a restrictive CSP right after the charset meta', () => {
+		const { html } = render([sample(1)], A4_4X5);
+		expect(html).toContain(
+			'<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">'
+		);
+	});
+	it('never inserts markup from the caller: a nickname that tries to close the svg shows only escaped', () => {
+		const t = { ...A4_4X5, qrFields: ['nickname' as const] };
+		const nasty = '</svg><script>x</script>';
+		const { html } = renderLabelDocument(paginate([sample(1, { nickname: nasty })], { copies: 1, start: 1 }, t), t, FAKE_QR);
+		expect(html).not.toContain('<script');
+		expect(html).not.toContain('</svg><script');
+		expect(html).toContain('&lt;/svg&gt;&lt;script&gt;x&lt;/script&gt;');
+	});
+	it('draws the QR itself from the modules the callback returns', () => {
+		const { html } = renderLabelDocument(paginate([sample(1)], { copies: 1, start: 1 }, A4_4X5), A4_4X5, () => ({ size: 2, data: [1, 1, 0, 1] }));
+		expect(html).toContain('M2 2h2v1h-2zM3 3h1v1h-1z');
+	});
 	it('has no external resources and no scripts', () => {
 		const { html } = render([sample(1, { nickname: 'x', material: 'y' })], A4_4X5);
 		expect(html).not.toMatch(/<script|<link|@import|url\(|<img|<iframe|\bsrc=|\bhref=|https?:/i);
@@ -67,16 +85,16 @@ describe('renderLabelDocument', () => {
 		const t = { ...A4_4X5, qrFields: ['nickname' as const] };
 		const { html } = renderLabelDocument(paginate([sample(1, { nickname: 'bracket' })], { copies: 1, start: 1 }, t), t, (p) => {
 			seen.push(p);
-			return '<svg id="qr"></svg>';
+			return { size: 1, data: [1] };
 		});
 		expect(seen).toEqual(['D1 SAMPLE\nS-1 · 00000001\n"bracket"']);
 		expect(html).toContain('<div class="qr" style="');
-		expect(html).toContain('<svg id="qr"></svg>');
+		expect(html).toContain('<svg viewBox="0 0 5 5"');
 	});
 	it('draws no QR for a text-only template', () => {
 		const t = { ...A4_4X5, arrangement: 'text_only' as const };
 		let calls = 0;
-		const { html } = renderLabelDocument(paginate([sample(1)], { copies: 1, start: 1 }, t), t, () => (calls++, '<svg></svg>'));
+		const { html } = renderLabelDocument(paginate([sample(1)], { copies: 1, start: 1 }, t), t, () => (calls++, { size: 1, data: [1] }));
 		expect(calls).toBe(0);
 		expect(html).not.toContain('class="qr"');
 		expect(html).toContain('S-1');

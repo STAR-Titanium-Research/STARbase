@@ -117,5 +117,5 @@ export {
 } from './labels';
 export type {
 	FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
-	RenderOptions, RenderedLabels,
+	RenderOptions, RenderedLabels, QrModules, Measure,
 } from './labels';
