@@ -22,7 +22,7 @@ async function save(): Promise<void> {
 
 <template>
 	<div class="contact">
-		<p class="d1-note" role="status">{{ settings.loaded.value ? contactLine(settings.contactEmail.value) : 'Loading the lab contact…' }}</p>
+		<p class="d1-note" role="status">{{ !settings.loaded.value ? 'Loading the lab contact…' : settings.loadError.value ? "Couldn't load the lab contact" : contactLine(settings.contactEmail.value) }}</p>
 		<p v-if="settings.loadError.value" class="d1-note warn" role="alert">{{ settings.loadError.value }}</p>
 		<form v-if="isAdmin && settings.loaded.value" class="lf-row edit" aria-label="Lab contact" @submit.prevent="save">
 			<label class="lf-field grow">Contact email (admins)

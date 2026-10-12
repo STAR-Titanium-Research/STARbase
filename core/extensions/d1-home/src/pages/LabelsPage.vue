@@ -63,7 +63,8 @@ const tidyStart = () => { if (problems.value.length === 0) start.value = clampSt
 const tidyCopies = () => { copies.value = clampCopies(copies.value); };
 
 const summary = computed(() => (doc.value ? summaryText(doc.value) : ''));
-const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value && !renderError.value);
+// Not before the lab contact has loaded (or failed to): a label printed meanwhile would have no Contact line.
+const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value && !renderError.value && settings.loaded.value);
 
 // ---- the template picker -------------------------------------------------------------------------
 // A draft opened with openDraft() has a snapshot; the editor is "dirty" when the draft no longer matches it.
@@ -263,6 +264,7 @@ onMounted(() => {
 								<template v-else-if="!samples.selected.value.length">Tick samples to preview their labels.</template>
 								<template v-else-if="summary">{{ summary }}</template>
 								<span v-if="rendering" class="d1-note"> Updating…</span>
+								<span v-if="settings.loadError.value" class="bad" role="alert"> {{ settings.loadError.value }} The labels print without a Contact line.</span>
 							</p>
 							<LabelPreview :html="doc?.html ?? null" :page-width-mm="active.pageWidthMm || 210" />
 							<p v-if="active.media === 'roll'" class="d1-note hint">
