@@ -101,7 +101,7 @@ test('the shipped rules guard exactly the four visibility junctions', () => {
   }
 });
 
-test('sample_co_owners create: allowed when the caller may update the sample', async () => {
+test('sample_co_owners create: allowed when the caller may manage the sample (its owner)', async () => {
   const { filters, log } = mount();
   const payload = { sample_id: 's1', user_id: 'u9' };
   assert.equal(await filters['items.create'](payload, { collection: 'sample_co_owners' }, ctx()), payload);
@@ -114,7 +114,8 @@ test('sample_co_owners create: allowed when the caller may update the sample', a
   const sent = JSON.stringify(query.filter._and[1]);
   assert.ok(sent.includes('user-1'), 'the caller replaces $CURRENT_USER');
   assert.ok(!sent.includes('$CURRENT_USER'));
-  assert.ok(sent.includes('co_owners'), "it is the sample's update rule: owner or co-owner");
+  assert.ok(!sent.includes('co_owners'), "it is the sample's delete rule since A1: the owner, not a co-owner");
+  assert.ok(sent.includes('owner_person_id'));
 });
 
 test('the read runs as the caller, inside the request transaction', async () => {
@@ -486,13 +487,16 @@ function ownerDb(existing) {
 
 test('the shipped rules guard the owner column where update is wider than delete', () => {
   const guards = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8')).ownerGuards;
-  assert.deepEqual(Object.keys(guards).sort(), ['manufacturing_operations', 'physical_samples', 'test_sessions']);
+  assert.deepEqual(Object.keys(guards).sort(), ['campaigns', 'manufacturing_operations', 'physical_samples', 'test_sessions']);
   for (const [collection, g] of Object.entries(guards)) {
     assert.equal(g.field, 'owner_person_id', collection);
     assert.equal(g.valueKey, 'person_id', collection);
-    // the delete rule: the owner only, not the co-owners the update rule also lets in
+    // the delete rule: the owner (with the restriction gates of operations, tests and campaigns, which
+    // mention co-owners of the sample), never a plain "any editor"; scripts/gen_access_rules.py's pytest
+    // proves who passes it. The generated list also names restricted as an owner-only field.
     assert.ok(JSON.stringify(g.filter).includes('$CURRENT_USER'), collection);
-    assert.ok(!JSON.stringify(g.filter).includes('co_owners'), collection);
+    assert.ok(JSON.stringify(g.filter).includes('owner_person_id'), collection);
+    assert.deepEqual(g.fields.map((f) => f.field), ['owner_person_id', 'restricted'], collection);
   }
 });
 
@@ -658,7 +662,7 @@ test('owner change: a 403 from the read means "not the owner"; other errors are 
 test('owner change: collections without an owner guard, and creates, are left alone', async () => {
   const { filters, log } = mount({ canUpdate: () => false });
   const database = ownerDb([{ id: 1, owner_person_id: 'p1' }]);
-  for (const collection of ['campaigns', 'projects', 'etchants', 'sample_co_owners']) {
+  for (const collection of ['projects', 'etchants', 'sample_co_owners']) {
     await filters['items.update']({ owner_person_id: 'p2' }, { collection, keys: [1] }, ctx({ database }));
   }
   await filters['items.create']({ owner_person_id: 'p2' }, { collection: 'physical_samples' }, ctx({ database }));
