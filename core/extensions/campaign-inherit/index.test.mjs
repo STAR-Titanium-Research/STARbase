@@ -2,12 +2,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import defaultOwner from '../d1-default-owner/index.js';
+import defaultOwner from '../d1-owner-default/index.js';
 import inherit from './index.js';
 
 // A knex stand-in for the three tables the hooks read.
 //   db('campaigns' | 'projects').where(col, id).select(...).first()  -> the row
-//   db('people').where('user_id', id).first('person_id')              -> the person
+//   db('people').where({ user_id: id, is_researcher: true }).first(...) -> the person
 function fakeDb({ campaigns = {}, projects = {}, people = {} } = {}) {
   const tables = {
     campaigns: (id) => campaigns[id],
@@ -15,8 +15,10 @@ function fakeDb({ campaigns = {}, projects = {}, people = {} } = {}) {
     people: (id) => people[id],
   };
   return (table) => ({
-    where: (_column, value) => {
-      const chain = { select: () => chain, first: async () => tables[table](value) };
+    // where(column, id), or an object as d1-owner-default passes: { user_id: id, is_researcher: true }
+    where: (column, value) => {
+      const id = column && typeof column === 'object' ? column.user_id : value;
+      const chain = { select: () => chain, first: async () => tables[table](id) };
       return chain;
     },
   });
@@ -34,7 +36,7 @@ function loadInOrder(hooks) {
   };
 }
 
-const run = loadInOrder({ 'campaign-inherit': inherit, 'd1-default-owner': defaultOwner });
+const run = loadInOrder({ 'campaign-inherit': inherit, 'd1-owner-default': defaultOwner });
 
 const db = fakeDb({
   campaigns: { c1: { project_id: 'p1', owner_person_id: 'person-owner', default_equipment_id: 'eq1', default_material_id: 'm1' } },
