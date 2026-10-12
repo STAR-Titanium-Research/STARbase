@@ -182,6 +182,10 @@ export const authStore = {
 					if (!sent) return false;
 					try {
 						const res = await authClient().post('/auth/refresh', { refresh_token: sent, mode: 'json' });
+						// Another window signed out, or in as someone else, while this was on the wire (a
+						// competing refresh can't succeed with the same token): its session wins. Writing
+						// these tokens back would revive a signed-out session or pin them to another user.
+						if (state.refreshToken !== sent) return !!state.accessToken;
 						const data = res.data?.data ?? {};
 						state.accessToken = data.access_token ?? null;
 						state.refreshToken = data.refresh_token ?? state.refreshToken;

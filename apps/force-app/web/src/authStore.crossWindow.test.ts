@@ -148,6 +148,31 @@ describe('storage events from another window', () => {
 	});
 });
 
+describe('a refresh that succeeds after another window changed the session', () => {
+	it('a sign-out elsewhere mid-flight is not undone by writing the new tokens back', async () => {
+		await authStore.login('ada@lab.org', 'pw-1');
+		const pending = authStore.refresh();      // rt-1 still valid: this one will succeed
+		store.delete(KEY);
+		fireStorage();
+
+		await pending;
+		expect(store.has(KEY)).toBe(false);
+		expect(authStore.isAuthenticated.value).toBe(false);
+	});
+
+	it('a sign-in as someone else mid-flight keeps that session, not a mix of the two', async () => {
+		await authStore.login('ada@lab.org', 'pw-1');
+		const pending = authStore.refresh();
+		const bob = { id: 'u-2', role: 'r', email: 'bob@lab.org' };
+		store.set(KEY, JSON.stringify({ accessToken: 'at-bob', refreshToken: 'rt-bob', expiresAt: Date.now() + 900000, user: bob, offline: false, offlineVerifiedAt: 0 }));
+		fireStorage();
+
+		await pending;
+		expect(JSON.parse(store.get(KEY)!)).toMatchObject({ refreshToken: 'rt-bob', user: { id: 'u-2' } });
+		expect(authStore.state.refreshToken).toBe('rt-bob');
+	});
+});
+
 describe('a refused refresh re-reads the stored session first', () => {
 	it('another window already rotated the token: retry with the stored one, keep the session', async () => {
 		await authStore.login('ada@lab.org', 'pw-1');
