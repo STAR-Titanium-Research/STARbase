@@ -50,9 +50,9 @@ const placeholder = computed(() => {
 
 <template>
 	<div v-if="kind" class="d1-thumb" :class="{ geometry: drawable }">
-		<SampleGeometry v-if="drawable" :dims="dims" class="drawing" />
+		<SampleGeometry v-if="drawable" :dims="dims" class="drawing" aria-hidden="true" />
 		<img v-else-if="src && !failed" :src="src" alt="" loading="lazy" decoding="async" @error="failed = true" />
-		<span v-else class="ph">{{ placeholder }}</span>
+		<span v-else class="ph" aria-hidden="true">{{ placeholder }}</span>
 	</div>
 </template>
 

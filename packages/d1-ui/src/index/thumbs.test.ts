@@ -45,6 +45,15 @@ describe('hasDrawableDims', () => {
 		expect(hasDrawableDims({ form: null, diameter_mm: 10 })).toBe(false);
 		expect(hasDrawableDims({ diameter_mm: 10 })).toBe(false);
 	});
+	it('is true for a powder with no dimensions at all (the engine draws a heap)', () => {
+		expect(hasDrawableDims({ form: 'powder' })).toBe(true);
+		expect(hasDrawableDims({ form: 'Metal_Powder' })).toBe(true);
+	});
+	it('is false for a negative or non-numeric dimension, true for a numeric string', () => {
+		expect(hasDrawableDims({ form: 'bar', length_mm: -5 })).toBe(false);
+		expect(hasDrawableDims({ form: 'bar', length_mm: 'abc' })).toBe(false);
+		expect(hasDrawableDims({ form: 'bar', length_mm: '12.5' })).toBe(true);
+	});
 	it('is false when no dimension is present', () => {
 		expect(hasDrawableDims({ form: 'bar' })).toBe(false);
 		expect(hasDrawableDims({ form: 'bar', length_mm: null, width_mm: '', thickness_mm: 0 })).toBe(false);
@@ -66,5 +75,13 @@ describe('fileId', () => {
 		expect(fileId(null)).toBeNull();
 		expect(fileId('')).toBeNull();
 		expect(fileId({})).toBeNull();
+		expect(fileId({ id: 5 })).toBeNull();
+	});
+});
+
+describe('collection lookup', () => {
+	it('ignores names inherited from Object', () => {
+		expect(thumbKind('constructor')).toBeNull();
+		expect(imageField('toString')).toBeNull();
 	});
 });

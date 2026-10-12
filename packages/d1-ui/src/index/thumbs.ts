@@ -21,14 +21,14 @@ const IMAGE_FIELDS: Record<string, string> = {
 
 export function thumbKind(collection: string): ThumbKind {
 	if (collection === 'physical_samples') return 'geometry';
-	if (collection in IMAGE_FIELDS) return 'image';
+	if (Object.hasOwn(IMAGE_FIELDS, collection)) return 'image';
 	if (collection === 'manufacturing_operations') return 'force';
 	return null;
 }
 
 /** The file field of an image collection; null for the others. */
 export function imageField(collection: string): string | null {
-	return IMAGE_FIELDS[collection] ?? null;
+	return Object.hasOwn(IMAGE_FIELDS, collection) ? IMAGE_FIELDS[collection] : null;
 }
 
 /** The fields the thumbnail needs on top of the list's columns. */
@@ -40,10 +40,12 @@ export function thumbFields(collection: string): string[] {
 
 const isPresent = (v: unknown): boolean => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) && Number(v) > 0;
 
-/** True when the sample has a form the engine draws (not empty, not 'other') and at least one dimension. */
+/** True when the sample has a form the engine draws (not empty, not 'other'): a powder always, any other form with at least one dimension. */
 export function hasDrawableDims(row: Row | null | undefined): boolean {
 	const form = typeof row?.form === 'string' ? row.form.trim().toLowerCase() : '';
 	if (!form || form === 'other') return false;
+	// The engine draws a powder as a heap whatever the dimensions (or none), exactly as the Sample page does.
+	if (form.includes('powder')) return true;
 	return SAMPLE_DIM_FIELDS.some((f) => isPresent(row?.[f]));
 }
 
