@@ -824,8 +824,10 @@ migration 141 prints about ownerless records.
   default, tick **Default template** and Save: it becomes the only default (check the Template list: only one
   says "(default)"; reload to confirm). Then "Save as new" on a template with Default ticked and a name that already
   exists: the save is refused with "A template with that name already exists" and the old default is still the
-  default. Save as new with a fresh name and Default ticked: the new template is the only default. Check
-  Directus's audit log shows the old default row updated (is_default off) in the same moment.
+  default. Save as new with a fresh name and Default ticked: the new template is the only default. "Save as new" on the
+  current default template (new name, Default left ticked as it was): the default does not move. Check
+  `v_audit_logs_with_actor` (`table_name = 'label_templates'`): the swap shows an UPDATE of the old default row turning
+  is_default off, with you as the actor, next to the INSERT or UPDATE of the new default.
 - [ ] **#TBD-L11 — Start at and Copies can be typed.** On a sheet template, click into **Start at label**, clear it
   and type 4: it reads 4 (not 14), and the preview starts at the 4th cell. Type 99: it settles on the number of
   cells on the page. Do the same with **Copies of each sample**: clear and type 4 gives 4; 5000 settles on 100; an
@@ -834,8 +836,9 @@ migration 141 prints about ownerless records.
 - [ ] **#TBD-L12 — Copies per sample.** Tick three samples. Each chip has its own number. Change the global
   "Copies of each sample" to 2: every chip shows 2. Type 5 on one chip, then change the global value to 3: that
   chip stays 5 and the others become 3. The summary line totals every copy (5 + 3 + 3 = 11 labels), the preview
-  shows the right number of labels for each sample, and the printed sheet matches. Removing a chip and ticking it
-  again starts from the global value.
+  shows the right number of labels for each sample, and the printed sheet matches. A chip with its own number is marked (a dot and an accent border); clearing its
+  number puts it back on the global value and the mark goes. Removing a chip and ticking it again starts from the
+  global value.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
