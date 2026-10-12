@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import jsQR from 'jsqr';
 import { cameraErrorMessage, cameraSupport, DECODE_INTERVAL_MS, decodeSize } from '@d1/ui';
 
@@ -86,6 +86,11 @@ export function useQrCamera(onText: (text: string) => void) {
 			return;
 		}
 		stream = s;
+		// The camera can be taken away under us (another app, the device sleeping, unplugged). stop() on our
+		// own tracks fires no 'ended' event, and a stale session is ignored.
+		s.getTracks().forEach((t) => t.addEventListener('ended', () => {
+			if (mine === session) fail('The camera stopped. Close any other app using it, then try again.');
+		}));
 		const v = video.value;
 		if (!v) return fail('The camera could not be started.');
 		v.srcObject = s;
@@ -102,7 +107,26 @@ export function useQrCamera(onText: (text: string) => void) {
 		frame = requestAnimationFrame((t) => tick(t, mine));
 	}
 
-	onBeforeUnmount(stop);
+	// A phone that is locked or switched to another tab/app pauses the camera or kills the stream: let
+	// go of it while the page is hidden (the camera light stays on otherwise) and start again on return.
+	let resume = false;
+	function onVisibility(): void {
+		if (document.visibilityState === 'hidden') {
+			if (state.value === 'starting' || state.value === 'scanning') {
+				resume = true;
+				stop();
+			}
+		} else if (resume) {
+			resume = false;
+			void start();
+		}
+	}
+	onMounted(() => document.addEventListener('visibilitychange', onVisibility));
+	onBeforeUnmount(() => {
+		document.removeEventListener('visibilitychange', onVisibility);
+		resume = false;
+		stop();
+	});
 
 	return { video, state, error, start, stop };
 }
