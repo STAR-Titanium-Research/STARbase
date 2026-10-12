@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import {
-	clampCopies, clampStart, countLabels, isPrintableSample, paginate, renderLabelDocument, slotsPerPage, validateTemplate,
-	type LabelSample, type LabelTemplate,
+	clampStart, countLabels, isPrintableSample, paginateCounts, renderLabelDocument, slotsPerPage, validateTemplate,
+	type LabelEntry, type LabelTemplate,
 } from '@d1/ui';
 import { canvasMeasure } from './measure';
 import { qrModules } from './qr';
@@ -24,8 +24,8 @@ export interface LabelDoc {
 const DEBOUNCE_MS = 150;
 
 export function useLabelDocument(inputs: {
-	samples: Ref<LabelSample[]>;
-	copies: Ref<number>;
+	// The samples with their copy counts (sampleEntries).
+	entries: Ref<LabelEntry[]>;
 	start: Ref<number>;
 	template: Ref<LabelTemplate | null>;
 }) {
@@ -37,11 +37,7 @@ export function useLabelDocument(inputs: {
 	function render(outline: boolean): LabelDoc | null {
 		const t = inputs.template.value;
 		if (!t || validateTemplate(t).length) return null;
-		const pages = paginate(
-			inputs.samples.value,
-			{ copies: clampCopies(inputs.copies.value), start: clampStart(inputs.start.value, slotsPerPage(t)) },
-			t,
-		);
+		const pages = paginateCounts(inputs.entries.value, clampStart(inputs.start.value, slotsPerPage(t)), t);
 		const out = renderLabelDocument(pages, t, qrModules, { outline, measure: canvasMeasure() });
 		return { html: out.html, labels: countLabels(pages, isPrintableSample), pages: pages.length, clipped: out.clipped, invalid: out.invalid };
 	}
@@ -57,7 +53,7 @@ export function useLabelDocument(inputs: {
 		}, DEBOUNCE_MS);
 	}
 
-	watch([inputs.samples, inputs.copies, inputs.start, inputs.template], refresh, { deep: true, immediate: true });
+	watch([inputs.entries, inputs.start, inputs.template], refresh, { deep: true, immediate: true });
 	onBeforeUnmount(() => clearTimeout(timer));
 
 	// The print variant: no outlines, rendered now from the current inputs.

@@ -4,8 +4,8 @@ export { FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA } from './types';
 export type { FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample } from './types';
 export { toLabelSample, isPrintableSample } from './sample';
 export { templateFromRow, validateTemplate } from './template';
-export { slotPositions, paginate } from './geometry';
-export type { Slot, PaginateOptions } from './geometry';
+export { slotPositions, paginate, paginateCounts } from './geometry';
+export type { Slot, PaginateOptions, CountedSample } from './geometry';
 export { fitText, SIZE_PT, MIN_PT } from './fit';
 export type { FittedText } from './fit';
 export { buildQrPayload, parseQrPayload, QR_HEADER } from './qrPayload';
@@ -17,6 +17,6 @@ export type { RenderOptions, RenderedLabels } from './render';
 export {
 	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
 	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
-	saveErrorText, moveField,
+	saveErrorText, moveField, sampleEntries,
 } from './page';
-export type { BrokenTemplate } from './page';
+export type { BrokenTemplate, LabelEntry } from './page';

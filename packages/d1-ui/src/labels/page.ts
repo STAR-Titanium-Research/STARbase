@@ -67,6 +67,16 @@ export function clampCopies(v: unknown): number {
 export const slotsPerPage = (t: Pick<LabelTemplate, 'columns' | 'rows' | 'media'>): number =>
 	t.media === 'roll' ? 1 : Math.max(1, t.columns * t.rows);
 
+// Per-sample copies: an override typed on a sample wins; every other sample follows the global value, so
+// changing the global value changes exactly the samples that were not overridden.
+export interface LabelEntry {
+	sample: LabelSample;
+	copies: number;
+}
+export function sampleEntries(samples: LabelSample[], overrides: Record<string, number>, globalCopies: number): LabelEntry[] {
+	return samples.map((sample) => ({ sample, copies: clampCopies(Object.prototype.hasOwnProperty.call(overrides, sample.id) ? overrides[sample.id] : globalCopies) }));
+}
+
 // "Start at": a whole slot from 1 to the number of slots on a page.
 export function clampStart(v: unknown, slots: number): number {
 	const n = Math.floor(Number(v));

@@ -112,13 +112,13 @@ export { default as IndexPage } from './index/IndexPage.vue';
 
 // Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)
 export {
-	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, fitText,
+	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, paginateCounts, fitText,
 	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, QR_HEADER, renderLabelDocument,
 	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
 	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
-	saveErrorText, moveField,
+	saveErrorText, moveField, sampleEntries,
 } from './labels';
 export type {
 	FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
-	RenderOptions, RenderedLabels, QrModules, Measure, BrokenTemplate,
+	RenderOptions, RenderedLabels, QrModules, Measure, BrokenTemplate, CountedSample, LabelEntry,
 } from './labels';

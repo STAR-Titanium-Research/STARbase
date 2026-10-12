@@ -1,7 +1,7 @@
 import { onBeforeUnmount, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import {
-	LABEL_SAMPLE_FIELDS, errorText, pickerFilter, sampleProjectScopeFilter, toLabelSample, useRequestGate, type LabelSample,
+	LABEL_SAMPLE_FIELDS, clampCopies, errorText, pickerFilter, sampleProjectScopeFilter, toLabelSample, useRequestGate, type LabelSample,
 } from '@d1/ui';
 
 // The samples of the labels page: what is ticked (kept apart from the search results, so a new search never
@@ -32,11 +32,22 @@ export function useLabelSamples() {
 			have.add(s.id);
 		}
 	}
+	// Copies typed on one sample; every other sample follows the global copies (see sampleEntries).
+	const copyOverrides = ref<Record<string, number>>({});
+	function setCopies(id: string, value: unknown): void {
+		copyOverrides.value = { ...copyOverrides.value, [id]: clampCopies(value) };
+	}
+	const dropOverride = (id: string): void => {
+		const { [id]: _gone, ...rest } = copyOverrides.value;
+		copyOverrides.value = rest;
+	};
 	const remove = (id: string): void => {
 		selected.value = selected.value.filter((s) => s.id !== id);
+		dropOverride(id);
 	};
 	const clear = (): void => {
 		selected.value = [];
+		copyOverrides.value = {};
 	};
 
 	// ---- the picker ----------------------------------------------------------------------------
@@ -129,7 +140,7 @@ export function useLabelSamples() {
 	}
 
 	return {
-		selected, add, remove, clear,
+		selected, add, remove, clear, copyOverrides, setCopies,
 		search, projectId, campaignId, results, total, loading, error, runSearch,
 		projects, campaigns, optionsError, loadOptions, resolve,
 	};

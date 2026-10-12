@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, blankTemplate, canEditTemplate, classifyTemplates, clampCopies, clampStart, copyAsNew,
-	countLabels, moveField, parseCodes, parseSelectionQuery, pickTemplate, pickerFilter, saveErrorText, slotsPerPage, summaryText, templatePayload,
+	countLabels, moveField, sampleEntries, parseCodes, parseSelectionQuery, pickTemplate, pickerFilter, saveErrorText, slotsPerPage, summaryText, templatePayload,
 } from './page';
 import { templateFromRow } from './template';
 import { toLabelSample, isPrintableSample } from './sample';
@@ -166,5 +166,19 @@ describe('sample fields', () => {
 	it('are the ones toLabelSample reads', () => {
 		expect(LABEL_SAMPLE_FIELDS).toContain('owner_person_id.full_name');
 		expect(LABEL_SAMPLE_FIELDS).toContain('material_id.alloy_code');
+	});
+});
+
+describe('sampleEntries', () => {
+	const mk = (id: string) => toLabelSample({ sample_id: id, sample_code: id, short_id: '1a2b3c4d' });
+	it('follows the global value except where a sample is overridden', () => {
+		const s = [mk('a'), mk('b'), mk('c')];
+		expect(sampleEntries(s, { b: 5 }, 2).map((e) => e.copies)).toEqual([2, 5, 2]);
+		expect(sampleEntries(s, { b: 5 }, 7).map((e) => e.copies)).toEqual([7, 5, 7]);
+	});
+	it('clamps a bad value and finds no override by prototype name', () => {
+		const s = [mk('toString'), mk('d')];
+		expect(sampleEntries(s, { d: 0 }, 3).map((e) => e.copies)).toEqual([3, 1]);
+		expect(sampleEntries(s, { d: 10 ** 6 }, 3)[1].copies).toBe(MAX_COPIES);
 	});
 });

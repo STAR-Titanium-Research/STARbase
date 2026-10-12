@@ -32,16 +32,26 @@ export interface PaginateOptions {
 
 const wholeAtLeast = (n: number, min: number): number => (Number.isFinite(n) ? Math.max(min, Math.floor(n)) : min);
 
+export interface CountedSample {
+	sample: LabelSample;
+	// Copies of this sample, a whole number, 1 or more.
+	copies: number;
+}
+
 // Spread the samples (each repeated `copies` times) over pages of rows x columns slots. A skipped slot
 // is null; only the first page has any, and a page is not padded after its last label. A roll
 // (media 'roll', or any 1x1 template) has one label per page.
 export function paginate(samples: LabelSample[], opts: PaginateOptions, t: LabelTemplate): (LabelSample | null)[][] {
+	return paginateCounts(samples.map((sample) => ({ sample, copies: opts.copies })), opts.start, t);
+}
+
+// The same, with a copy count per sample (the labels page lets each sample have its own).
+export function paginateCounts(items: CountedSample[], start: number, t: LabelTemplate): (LabelSample | null)[][] {
 	const perPage = Math.max(1, t.columns * t.rows);
-	const copies = wholeAtLeast(opts.copies, 1);
-	const skip = t.media === 'roll' || perPage === 1 ? 0 : Math.min(wholeAtLeast(opts.start, 1), perPage) - 1;
+	const skip = t.media === 'roll' || perPage === 1 ? 0 : Math.min(wholeAtLeast(start, 1), perPage) - 1;
 
 	const flat: (LabelSample | null)[] = Array(skip).fill(null);
-	for (const s of samples) for (let i = 0; i < copies; i++) flat.push(s);
+	for (const { sample, copies } of items) for (let i = 0, n = wholeAtLeast(copies, 1); i < n; i++) flat.push(sample);
 	if (flat.length === skip) return [];
 
 	const pages: (LabelSample | null)[][] = [];

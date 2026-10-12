@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { DataTable, LoadState, MAX_COPIES, Section, parseCodes, type LabelSample } from '@d1/ui';
+import { DataTable, LoadState, MAX_COPIES, clampCopies, Section, parseCodes, type LabelSample } from '@d1/ui';
 import { PICKER_LIMIT, type useLabelSamples } from './useLabelSamples';
 import './form.css';
 
@@ -15,6 +15,8 @@ const pasted = ref('');
 const pasteNote = ref('');
 const pasteBusy = ref(false);
 
+// What a sample prints: its own number if one was typed, else the global copies.
+const copiesOf = (s: LabelSample): number => d.copyOverrides.value[s.id] ?? clampCopies(copies.value);
 const selectedIds = computed(() => new Set(d.selected.value.map((s) => s.id)));
 const allShown = computed(() => d.results.value.length > 0 && d.results.value.every((s) => selectedIds.value.has(s.id)));
 const campaignOptions = computed(() => d.campaigns.value.filter((c) => !d.projectId.value || c.projectId === d.projectId.value));
@@ -125,6 +127,10 @@ const rangeText = computed(() => {
 		<div v-if="d.selected.value.length" class="picked" aria-label="Selected samples">
 			<span v-for="s in d.selected.value" :key="s.id" class="pill">
 				<span class="mono">{{ s.code || s.shortId }}</span>
+				<label class="pill-n" :title="`Labels of ${s.code}`">
+					<span class="sr">Labels of {{ s.code }}</span>
+					<input type="number" min="1" :max="MAX_COPIES" step="1" :value="copiesOf(s)" @change="d.setCopies(s.id, ($event.target as HTMLInputElement).value)" />
+				</label>
 				<button type="button" :aria-label="`Remove ${s.code} from the selection`" @click="d.remove(s.id)">×</button>
 			</span>
 		</div>
@@ -139,7 +145,7 @@ const rangeText = computed(() => {
 			</div>
 		</div>
 
-		<label class="lf-field copies">Copies of each sample
+		<label class="lf-field copies">Copies of each sample (the default)
 			<input v-model.number="copies" type="number" min="1" :max="MAX_COPIES" step="1" @change="emit('tidyCopies')" />
 		</label>
 	</Section>
@@ -160,6 +166,8 @@ const rangeText = computed(() => {
 	display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border-radius: 99px;
 	border: 1px solid var(--d1-line); background: var(--d1-tile); font-size: var(--fs-sm, 12px);
 }
+.pill-n input { width: 44px; height: 22px; padding: 0 4px; text-align: center; border: 1px solid var(--theme--border-color); border-radius: 6px; background: var(--theme--form--field--input--background, var(--theme--background)); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .pill button { border: 0; background: none; color: var(--d1-dim); font: inherit; font-size: var(--fs-lg, 15px); line-height: 1; padding: 0 6px; cursor: pointer; }
 .pill button:hover { color: var(--d1-bad); }
 .paste { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }

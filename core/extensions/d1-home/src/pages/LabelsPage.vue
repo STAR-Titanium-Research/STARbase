@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
 	LoadState, PageShell, Section, blankTemplate, canEditTemplate, MAX_COPIES, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
-	slotsPerPage, summaryText, type LabelSample, type LabelTemplate,
+	sampleEntries, slotsPerPage, summaryText, type LabelSample, type LabelTemplate,
 } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 import { useExplorerHost } from '../explorerHost';
@@ -39,7 +39,8 @@ const EXAMPLE: LabelSample = {
 const showingExample = computed(() => !!draft.value && samples.selected.value.length === 0);
 const previewSamples = computed(() => (showingExample.value ? [EXAMPLE] : samples.selected.value));
 
-const { doc, problems, rendering, forPrint } = useLabelDocument({ samples: previewSamples, copies, start, template: active });
+const entries = computed(() => sampleEntries(previewSamples.value, showingExample.value ? {} : samples.copyOverrides.value, showingExample.value ? 1 : copies.value));
+const { doc, problems, rendering, forPrint } = useLabelDocument({ entries, start, template: active });
 
 const slots = computed(() => (active.value ? slotsPerPage(active.value) : 1));
 const showStart = computed(() => active.value?.media === 'sheet' && slots.value > 1);
