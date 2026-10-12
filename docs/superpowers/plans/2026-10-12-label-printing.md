@@ -85,7 +85,7 @@ validateTemplate(t): string[]            // human-readable problems (labels off 
 slotPositions(t): {x:number,y:number}[]  // mm, row-major
 paginate(samples, {copies, start}, t): (LabelSample|null)[][]   // null = skipped slot
 fitText(text, boxWidthMm, size, bold): { pt: number; clipped: boolean; text: string }
-buildQrPayload(s, extraKeys): string     // 'D1 SAMPLE\n<code> · <shortId>\n…'
+buildQrPayload(s, extraKeys): string     // 'D1 SAMPLE\n<code> | <shortId> (old labels with · still parse)\n…'
 parseQrPayload(text): { code: string; shortId: string; lines: string[] } | null
 renderLabelDocument(pages, t, qrSvg: (payload:string)=>string): { html: string; clipped: number }
   // a full HTML document: @page size, mm absolute positions, white labels, no external

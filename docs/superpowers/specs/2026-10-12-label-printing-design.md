@@ -44,10 +44,12 @@ without the database.
    parsed and versioned:
    ```
    D1 SAMPLE
-   S-0123 · 1a2b3c4d
-   Ti-6Al-4V · "bracket A"
-   2026-10-01 · DP
+   S-0123 | 1a2b3c4d
+   Ti-6Al-4V | "bracket A"
+   2026-10-01 | DP
    ```
+   The separator is ASCII ` | ` so a USB scanner, which types keystrokes and cannot type a middle dot, can
+   read every line. Labels printed earlier used ` · `; they still parse (decision 12).
    The code and short ID are always included; the template picks the rest. Every sample already
    has a short ID (`db/migrations/20261010000150_short_ids.sql` back-fill and trigger).
 8. **Page flow.**

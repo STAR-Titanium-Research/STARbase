@@ -860,11 +860,15 @@ migration 141 prints about ownerless records.
   other label lines with "No sample matches this label...", and **Scan again** restarts the camera. Scan a
   non-D1 QR code (a web address, say): its text is shown as plain text, not as a link. In Safari's Settings
   deny the camera for the site and open the dialog: it says permission was denied. Open the plain-HTTP
-  address instead (`http://d1-server...`): it says the camera needs the HTTPS address. Since PR B (#TBD).
+  address instead (`http://d1-server...`): it says the camera needs the HTTPS address. Open the dialog and
+  lock the phone, then unlock it: the camera comes back and scanning resumes without reopening the dialog. Open the
+  dialog, then switch to the phone camera app and back: the dialog shows "The camera stopped..." (or, if it
+  had only been hidden, resumes), and **Try again** restarts it. Since PR B (#TBD).
 - [ ] **#TBD-L14 — Scan a label with a phone (Android Chrome).** The same checks as #TBD-L13 on an Android phone
   in Chrome: the rear camera (not the front one) opens, a label scans from about 15 cm, a label printed on the
-  QL-700 62 mm roll scans too, and the camera stops when the dialog is closed or the tab is switched away
-  and back. Since PR B (#TBD).
+  QL-700 62 mm roll scans too, and the camera light goes off when the dialog is closed. Lock/unlock mid-scan
+  resumes scanning, and opening the camera app and returning shows the "stopped" message or resumes, as on the
+  iPhone. Since PR B (#TBD).
 - [ ] **#TBD-L15 — Scan a label with a USB scanner.** Plug a USB (keyboard-mode) barcode scanner into a PC, open
   any Explorer page, press Ctrl K (or click the sidebar search box) and scan a label's QR code, once with a label
   printed after this change (its lines are separated by ` | `) and once with an older one (separated by `·`, which a
