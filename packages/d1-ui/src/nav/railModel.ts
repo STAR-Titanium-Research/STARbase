@@ -23,7 +23,7 @@ export const RAIL_SECTIONS: Array<{ id: RailSectionId; label: string; icon: stri
 	{ id: 'home', label: 'Home', icon: '⌂', groupIds: ['main'] },
 	{ id: 'records', label: 'Records', icon: '▦', groupIds: ['records'] },
 	{ id: 'analysis', label: 'Analysis', icon: '∿', groupIds: ['dashboards'] },
-	{ id: 'kit', label: 'Kit', icon: '⚙', groupIds: ['inventory', 'resources'] },
+	{ id: 'kit', label: 'Kit', icon: '⚙︎', groupIds: ['inventory', 'resources'] },
 	{ id: 'tools', label: 'Tools', icon: '☰', groupIds: ['tools'] },
 ];
 
@@ -43,8 +43,8 @@ export function railSections(nav: VisibleNav): RailSection[] {
 // The section holding the page at path/query: the one with the lit link (or lit saved view), as the
 // panel would show it. A saved view that is not listed (someone else's, or the views have not
 // loaded) still belongs to its list's section: second pass, the query ignored. A page in no
-// section is Home.
-export function activeSection(sections: RailSection[], path: string, query: Record<string, unknown>): RailSectionId {
+// section is null (nothing on the rail is "current"); the panel then shows Home.
+export function activeSection(sections: RailSection[], path: string, query: Record<string, unknown>): RailSectionId | null {
 	const links = (s: RailSection) => s.groups.flatMap((g) => g.links);
 	for (const s of sections) {
 		if (links(s).some((l) => linkActive(l.to, path, query) || l.bookmarks.some((b) => linkActive(linkForBookmark(b), path, query)))) {
@@ -54,15 +54,17 @@ export function activeSection(sections: RailSection[], path: string, query: Reco
 	for (const s of sections) {
 		if (links(s).some((l) => linkActive(l.to, path, {}))) return s.id;
 	}
-	return 'home';
+	return null;
 }
 
-// The section the panel shows when the page changes. Everywhere but on Home it follows the page.
-// On Home itself the user may have been browsing another section (the rail switches the panel
-// without navigating), and that choice, `stored`, is shown again if that section still exists.
-export function resolveSection(sections: RailSection[], path: string, query: Record<string, unknown>, stored: string | null): RailSectionId {
-	const current = activeSection(sections, path, query);
-	if (path !== '/home') return current;
-	const kept = sections.find((s) => s.id === stored);
-	return kept ? kept.id : current;
+// The section whose panel is shown for the current page: the page's own section, else Home.
+export function followPage(sections: RailSection[], path: string, query: Record<string, unknown>): RailSectionId {
+	return activeSection(sections, path, query) ?? 'home';
+}
+
+// The section remembered from the last visit to Home, if it still exists for this user. Used once,
+// when the sidebar first mounts on Home; after that the panel follows the user's clicks on the rail
+// and the page they navigate to.
+export function restoreSection(sections: RailSection[], stored: string | null): RailSectionId | null {
+	return sections.find((s) => s.id === stored)?.id ?? null;
 }

@@ -6,7 +6,7 @@
 // Glyphs are plain text, so nothing here needs a host icon component.
 import type { RailSection, RailSectionId } from './railModel';
 
-defineProps<{ sections: RailSection[]; selected: RailSectionId; current: RailSectionId }>();
+defineProps<{ sections: RailSection[]; selected: RailSectionId; current: RailSectionId | null }>();
 defineEmits<{ (e: 'select', id: RailSectionId): void; (e: 'open-finder'): void }>();
 </script>
 
@@ -35,20 +35,25 @@ defineEmits<{ (e: 'select', id: RailSectionId): void; (e: 'open-finder'): void }
 <style scoped>
 .d1-rail {
 	display: flex; flex: none; flex-direction: column; align-items: center; gap: 6px;
-	width: 56px; padding: 10px 0;
+	width: 60px; padding: 10px 0;
 	background: #11181f; color: #b9c2cc;
+	/* Fills the navigation column and stays put while a long panel scrolls past it. 100vh is a little
+	   more than the column (the header sits above it); set --d1-nav-offset to the header's height to trim. */
+	position: sticky; top: 0; align-self: flex-start;
+	height: calc(100vh - var(--d1-nav-offset, 0px));
+	overflow-y: auto;
 }
 .btn {
 	position: relative;
 	display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-	width: 46px; height: 44px; padding: 0;
+	width: 54px; height: 46px; padding: 0;
 	border: 0; border-radius: 10px; background: none; color: inherit;
 	font: inherit; cursor: pointer;
 }
 .btn:hover { background: #1c2630; }
 .btn.on { background: #2a3644; color: #fff; }
-.glyph { font-size: 16px; line-height: 1; color: #fff; }
-.text { font-size: var(--fs-xs, 11px); line-height: 1.1; }
+.glyph { font-size: 16px; line-height: 1; color: #fff; font-variant-emoji: text; }
+.text { font-size: var(--fs-xs, 11px); line-height: 1.1; letter-spacing: -0.01em; white-space: nowrap; }
 /* The page you are on: a thin bar on the rail's edge, so it still shows while another section's panel is open. */
 .btn[aria-current='true']::before {
 	content: ''; position: absolute; left: -5px; top: 10px; bottom: 10px; width: 3px; border-radius: 2px;

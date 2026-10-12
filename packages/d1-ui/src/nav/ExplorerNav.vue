@@ -17,7 +17,7 @@ import { EXPLORER_HOST } from '../host';
 import NavPanel from './NavPanel.vue';
 import NavRail from './NavRail.vue';
 import { readSection, writeSection } from './navState';
-import { activeSection, railSections, resolveSection } from './railModel';
+import { activeSection, followPage, railSections, restoreSection } from './railModel';
 import type { RailSectionId } from './railModel';
 import { useExplorerNav } from './useExplorerNav';
 
@@ -35,23 +35,50 @@ const route = useRoute();
 
 const sections = computed(() => railSections(nav.value));
 
-// The section holding the page you are on (marked on the rail), and the one whose panel is open.
-const current = computed<RailSectionId>(() => activeSection(sections.value, route.path, route.query));
-const selected = ref<RailSectionId>(resolveSection(sections.value, route.path, route.query, readSection()));
+// The section holding the page you are on (marked on the rail; none for a page outside every
+// section), and the one whose panel is open.
+const current = computed<RailSectionId | null>(() => activeSection(sections.value, route.path, route.query));
+const selected = ref<RailSectionId>(followPage(sections.value, route.path, route.query));
 
-// Re-pick when the page changes and when the set of sections does (the lists load after the first
-// paint), not when only a saved view is added; so a section you picked on a page stays until you
-// move on.
+// The section remembered from the last visit to Home is restored once, when the sidebar mounts on
+// Home. The lists load after the first paint, so it waits (`pending`) until its section exists;
+// a rail click or a page change cancels it. After that the panel just follows the user.
+let pending: string | null = route.path === '/home' ? readSection() : null;
+// True once the user has picked a section on this page: loading more sections then leaves it alone.
+let picked = false;
+
+const follow = () => {
+	selected.value = followPage(sections.value, route.path, route.query);
+};
+
 watch(
-	() => `${route.fullPath}|${sections.value.map((s) => s.id).join()}`,
+	() => route.fullPath,
 	() => {
-		selected.value = resolveSection(sections.value, route.path, route.query, readSection());
+		pending = null;
+		picked = false;
+		follow();
+	},
+);
+
+watch(
+	() => sections.value.map((s) => s.id).join(),
+	() => {
+		const restored = pending ? restoreSection(sections.value, pending) : null;
+		if (restored) {
+			selected.value = restored;
+			pending = null;
+		} else if (!sections.value.some((s) => s.id === selected.value) || (!picked && !pending)) {
+			follow();
+		}
 	},
 );
 
 function select(id: RailSectionId) {
 	selected.value = id;
-	// Only Home lets the rail wander; anywhere else the panel goes back to following the page.
+	picked = true;
+	pending = null;
+	// Remembered only from Home (where the panel is free to wander); elsewhere the panel goes back to
+	// following the page on the next navigation.
 	if (route.path === '/home') writeSection(id);
 }
 
@@ -86,8 +113,7 @@ const section = computed(() => sections.value.find((s) => s.id === selected.valu
 	--nav-hover: var(--theme--navigation--list--background-hover, var(--d1-tint));
 	--nav-on: var(--theme--navigation--list--background-active, var(--d1-tint));
 	display: flex;
-	align-items: stretch;
-	min-height: 100%;
+	align-items: flex-start;
 	font-family: var(--theme--navigation--list--font-family, var(--theme--fonts--sans--font-family, inherit));
 	font-size: var(--fs-md, 13px);
 	line-height: 1.4;

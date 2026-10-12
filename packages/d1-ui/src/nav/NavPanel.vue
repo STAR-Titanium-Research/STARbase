@@ -84,7 +84,7 @@ watch(
 			<ul v-show="!group.collapsible || isOpen(group.id)" :id="`d1-nav-${group.id}`" class="list">
 				<li v-for="link in group.links" :key="link.to">
 					<a v-if="link.newTab" class="item" :href="newTabHref(link.to)" target="_blank" rel="noopener">
-						<span class="label">{{ link.label }}</span>
+						<span class="label" :title="link.label">{{ link.label }}</span>
 						<span class="ext" aria-hidden="true">↗</span>
 						<span class="sr">(opens in a new tab)</span>
 					</a>
@@ -97,7 +97,7 @@ watch(
 						:to="link.to"
 						:aria-current="active(link.to) ? 'page' : undefined"
 					>
-						<span class="label">{{ link.label }}</span>
+						<span class="label" :title="link.label">{{ link.label }}</span>
 					</router-link>
 
 					<ul v-if="link.bookmarks.length" class="subs" :aria-label="`${link.label} saved views`">
@@ -110,7 +110,7 @@ watch(
 								:to="bookmarkTo(b)"
 								:aria-current="active(bookmarkTo(b)) ? 'page' : undefined"
 							>
-								<span class="label">{{ b.bookmark }}</span>
+								<span class="label" :title="b.bookmark">{{ b.bookmark }}</span>
 							</router-link>
 						</li>
 					</ul>

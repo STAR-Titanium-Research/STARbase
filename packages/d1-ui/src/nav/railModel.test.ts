@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NAV_GROUPS, buildNav } from './navConfig';
 import type { Bookmark } from './navConfig';
-import { RAIL_SECTIONS, activeSection, railSections, resolveSection } from './railModel';
+import { RAIL_SECTIONS, activeSection, followPage, railSections, restoreSection } from './railModel';
 
 const allCollections = new Set(NAV_GROUPS.flatMap((g) => g.links).flatMap((l) => (l.collection ? [l.collection] : [])));
 const bm = (id: number, name: string, collection: string): Bookmark => ({
@@ -88,29 +88,34 @@ describe('activeSection', () => {
 		expect(activeSection(withView, '/home/operations', { bookmark: ['9'] })).toBe('records');
 	});
 
-	it('falls back to home for a page that is in no section', () => {
-		expect(activeSection(sections, '/somewhere-else', {})).toBe('home');
-		expect(activeSection([], '/home/samples', {})).toBe('home');
+	it('is null for a page that is in no section', () => {
+		expect(activeSection(sections, '/somewhere-else', {})).toBeNull();
+		expect(activeSection([], '/home/samples', {})).toBeNull();
 	});
 });
 
-describe('resolveSection', () => {
+describe('followPage', () => {
 	const sections = railSections(adminNav());
 
-	it('follows the page everywhere but Home', () => {
-		expect(resolveSection(sections, '/home/samples', {}, 'kit')).toBe('records');
-		expect(resolveSection(sections, '/d1-force-dashboard', {}, 'tools')).toBe('analysis');
+	it("shows the page's section, and Home for a page in none", () => {
+		expect(followPage(sections, '/home/samples', {})).toBe('records');
+		expect(followPage(sections, '/d1-force-dashboard', {})).toBe('analysis');
+		expect(followPage(sections, '/somewhere-else', {})).toBe('home');
+	});
+});
+
+describe('restoreSection', () => {
+	const sections = railSections(adminNav());
+
+	it('gives back a remembered section that exists, Home included', () => {
+		expect(restoreSection(sections, 'records')).toBe('records');
+		expect(restoreSection(sections, 'kit')).toBe('kit');
+		expect(restoreSection(sections, 'home')).toBe('home');
 	});
 
-	it('shows the remembered section on Home', () => {
-		expect(resolveSection(sections, '/home', {}, 'records')).toBe('records');
-		expect(resolveSection(sections, '/home', {}, 'kit')).toBe('kit');
-	});
-
-	it('shows Home when nothing, something unknown or a missing section is remembered', () => {
-		expect(resolveSection(sections, '/home', {}, null)).toBe('home');
-		expect(resolveSection(sections, '/home', {}, 'nope')).toBe('home');
-		const noKit = railSections(buildNav(null, [], false)); // no Kit section
-		expect(resolveSection(noKit, '/home', {}, 'kit')).toBe('home');
+	it('gives null for nothing, something unknown or a section this user does not have', () => {
+		expect(restoreSection(sections, null)).toBeNull();
+		expect(restoreSection(sections, 'nope')).toBeNull();
+		expect(restoreSection(railSections(buildNav(null, [], false)), 'kit')).toBeNull();
 	});
 });
