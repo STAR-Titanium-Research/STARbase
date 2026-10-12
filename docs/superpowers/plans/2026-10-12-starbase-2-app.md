@@ -84,7 +84,7 @@ Directus Home module.
     - `docs/runbooks/starbase.md`, with the maintainer's steps from spec §3.7, including tailnet
       sharing.
 11. **End-to-end on the preview.**
-    - Plan 1's route harness pointed at STARbase (`D1_ROUTES_ADMIN_BASE`).
+    - Plan 1's route harness pointed at STARbase (`D1_ROUTES_ADMIN_BASE`). Its `signIn` is hard-coded to Directus's login page, so it needs a STARbase sign-in variant.
     - Specs for sign-in and sign-out (shared with Data Studio), edit through the frame or a new
       tab, Force and FAST plot pages, and the phone viewport.
     - The two-hostname setup from the step-0 spike becomes a committed test helper.

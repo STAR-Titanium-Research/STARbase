@@ -505,7 +505,9 @@ const RECORDS: [string, string][] = [
 	['projects', '/home/projects/'],
 ];
 
-const IGNORED_CONSOLE = [/favicon/i, /ResizeObserver loop/];
+// Chrome logs every 4xx resource as a console error; a Lab Member's refused reads are handled by the
+// pages, so those are ignored here and real breakage is caught as a 5xx response (see visit()).
+const IGNORED_CONSOLE = [/favicon/i, /ResizeObserver loop/, /Failed to load resource/];
 
 async function signIn(page: Page, who: 'admin' | 'member') {
 	const [email, password] = creds[who].split(' ');
@@ -517,7 +519,7 @@ async function signIn(page: Page, who: 'admin' | 'member') {
 }
 
 async function firstId(page: Page, collection: string): Promise<string | null> {
-	const r = await page.request.get(`${SERVER}/items/${collection}?limit=1&fields=id&sort=-date_created`);
+	const r = await page.request.get(`${SERVER}/items/${collection}?limit=1&fields=id`);
 	if (!r.ok()) return null;
 	const rows = (await r.json()).data as { id: string }[];
 	return rows[0]?.id ?? null;
@@ -539,6 +541,9 @@ for (const who of ['admin', 'member'] as const) {
 		test('every page draws with no console error', async ({ page }) => {
 			const errors: string[] = [];
 			page.on('pageerror', (e) => errors.push(String(e)));
+			page.on('response', (r) => {
+				if (r.status() >= 500) errors.push(`${r.status()} ${r.url()}`);
+			});
 			page.on('console', (m) => {
 				if (m.type() === 'error' && !IGNORED_CONSOLE.some((r) => r.test(m.text()))) errors.push(m.text());
 			});
@@ -546,6 +551,8 @@ for (const who of ['admin', 'member'] as const) {
 			for (const path of ROUTES) await visit(page, path, errors);
 			for (const [collection, prefix] of RECORDS) {
 				const id = await firstId(page, collection);
+				// The admin sees every record, so a missing id means the lookup broke, not a permission.
+				if (who === 'admin') expect(id, `${collection}: an id to visit`).not.toBeNull();
 				if (id) await visit(page, prefix + encodeURIComponent(id), errors);
 			}
 		});
@@ -825,6 +832,12 @@ cd tests/ui && npx playwright test specs/13-explorer-routes.spec.ts --retries=0
 
 Expected: 4 passed. Then push.
 
+From here on, add the usage endpoint to every preview overlay, so the Frequently used panel and
+the pings are tested against this branch's endpoint and not live's. Confirm the folder name with
+`ls core/extensions | grep usage` (expected `d1-usage`). Every later
+`D1_PREVIEW_OVERLAY="d1-home d1-admin-overview d1-fast-dashboard d1-campaign-ops d1-lab-dashboard d1-project-items"`
+in this plan means that list **plus `d1-usage`**.
+
 ---
 
 ### Task 6: The host contract, widened, with a shared Directus host
@@ -1037,7 +1050,6 @@ Edit `packages/directus-host/src/directusHost.ts`:
 
 ```ts
 		fieldsFor: async (collection) => {
-			const stores = useStores();
 			if (typeof stores.useFieldsStore === 'function') {
 				const defs = stores.useFieldsStore().getFieldsForCollectionSorted(collection);
 				if (Array.isArray(defs) && defs.length) return defs as HostField[];
@@ -1047,9 +1059,10 @@ Edit `packages/directus-host/src/directusHost.ts`:
 		},
 ```
 
-  `useStores()` is called lazily inside `fieldsFor`, so it only runs from a page's setup or event
-  handler, as today. If `useStores` must be called during setup, hoist `const stores = useStores();`
-  next to the existing `useStores().useUserStore()` call and close over it.
+  `stores` is captured **during setup**: add `const stores = useStores();` next to the existing
+  `useStores().useUserStore()` call, where the host is created, and let `fieldsFor` close over it.
+  Directus's `useStores()` works by injection, so calling it later (inside `fieldsFor`) would
+  find nothing. The host is created once, in the first page's setup, and cached.
 - keep `api` as `useApi()` itself, not a wrapper, so errors and interceptors are unchanged.
   Type it with `const api = useApi() as unknown as HostApi;`.
 
