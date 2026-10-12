@@ -327,20 +327,30 @@ work is in two plans:
 
 ## 9. Step-0 results (2026-10-12)
 
-Run on a local preview copy of the database (Directus 11 image from live, spike module `d1-spike-bare`),
-headless Chromium with both tailnet names mapped to the local machine. Plain HTTP throughout.
+Two runs on a local preview copy of the database (the Directus 11 image from live, with a spike module
+`d1-spike-bare`), in headless Chromium with `starbase.tail54eeb6.ts.net` and `d1-server.tail54eeb6.ts.net`
+both mapped to the local machine (the same-site layout STARbase will have):
 
-| Check | Result | Consequence |
+- **Run 1, plain HTTP**: Directus on :18057, cookie not Secure. This did not follow the §6 HTTPS
+  requirement, so it is kept only as a baseline.
+- **Run 2, local HTTPS (the §6 form)**: a throwaway self-signed certificate (SANs for both names, made with
+  `openssl`), the stand-in page on `https://starbase...:5191`, an HTTPS reverse proxy
+  (`node:https` to `node:http`, all headers and Set-Cookie passed through) on `https://d1-server...:18443`
+  in front of Directus, `SESSION_COOKIE_SECURE=true`, CORS and `frame-ancestors` set to the https origin,
+  `PUBLIC_URL=https://d1-server...:18443`, Chromium with `--ignore-certificate-errors`.
+
+| Check | Result (run 2, HTTPS; run 1 agreed on every row) | Consequence |
 |---|---|---|
-| (a) frame-ancestors setting | worked with the string form `CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS='self' http://starbase.tail54eeb6.ts.net:5191`; Directus sent `frame-ancestors 'self' http://starbase.tail54eeb6.ts.net:5191` (array form not needed, not tried) | frame the edit form in STARbase |
-| (b) bare module | renders: yes; module bar elements: 0 (the same selector finds 1 on a normal Data Studio page; the bare page contains only `#directus > #spike-bare`, no `.private-view`, navigation, sidebar or header) | form-only page as designed |
-| (b) framed + signed in | yes (cross-origin frame at `d1-server...:18057/admin/d1-spike-bare`, content visible; a signed-out browser framing it is redirected to `/admin/login?redirect=...`) | frame works as designed |
-| (c) cross-host session (STARbase → API, Data Studio, frame) | API from STARbase: yes (`/users/me` returned the member); Data Studio signed in: yes; frame signed in: yes. Cookie `directus_session_token`: host `d1-server...`, `SameSite=Lax`, HttpOnly, not Secure | shared session, no Bearer fallback needed |
+| (a) frame-ancestors setting | worked with the string form `CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS='self' https://starbase.tail54eeb6.ts.net:5191`; seen through the proxy as `frame-ancestors 'self' https://starbase.tail54eeb6.ts.net:5191` (array form not needed, not tried) | frame the edit form in STARbase |
+| (b) bare module | renders: yes; module bar elements: 0 (the same selector finds 1 on a normal Data Studio page; the bare page holds only `#directus > #spike-bare`, no `.private-view`, navigation, sidebar or header) | form-only page as designed |
+| (b) framed + signed in | yes (cross-origin frame at `https://d1-server...:18443/admin/d1-spike-bare`, content visible; a signed-out browser framing it is redirected to `/admin/login?redirect=...`, run 1) | frame works as designed |
+| (c) cross-host session (STARbase to API, Data Studio, frame) | API from STARbase: yes (`/users/me` returned the member); Data Studio signed in: yes; frame signed in: yes. Cookie as the browser stored it: `directus_session_token`, domain `d1-server.tail54eeb6.ts.net` (host-only), path `/`, `secure: true`, `sameSite: Lax`, `httpOnly: true` | the shared session works with a Secure cookie over HTTPS in headless Chromium, so no Bearer fallback is needed on this evidence. Real Safari/iOS is not tested; rollout step 5 on the live tailnet is the final proof |
 | (c) shared sign-out | yes (`/auth/logout` from STARbase left Data Studio at the login page) | sign-out from STARbase also signs out of Data Studio |
-| (c) axios query strings | `http://d1-server.tail54eeb6.ts.net:18057/items/physical_samples?fields%5B%5D=sample_id&fields%5B%5D=sample_code&filter%5Bsample_code%5D%5B_nnull%5D=true&limit=2` (HTTP 200, Directus parsed it; 0 rows for the Lab Member) | axios bracket-form `fields[]` and nested `filter[...]` work against Directus unchanged |
-| HSTS | http worked (no upgrade, no HTTPS needed) | plain HTTP is fine in this Chromium; real browsers on the live tailnet were not tested |
+| (c) axios query strings | `https://d1-server.tail54eeb6.ts.net:18443/items/physical_samples?fields%5B%5D=sample_id&fields%5B%5D=sample_code&filter%5Bsample_code%5D%5B_nnull%5D=true&limit=2`. Directus accepted the query (parsed, HTTP 200). As the Lab Member it returned 0 rows, so filter selection was not shown for that role; the same probe as the admin returned 2 rows | axios bracket-form `fields[]` and nested `filter[...]` work against Directus unchanged |
+| HSTS | not tested (a fresh browser context has no HSTS state); production is HTTPS per §3.2 | none |
 
-Notes: the spike probe first used `fields: ['id', ...]`, which gave HTTP 403 because `physical_samples`
-has no `id` column (its key is `sample_id`); that was a bad probe field, not a query-string problem.
-Directus returns 403, not 400, for an unknown field. The check ran with both hostnames under one
-tailnet name (`tail54eeb6.ts.net`), the same-site layout STARbase will have.
+Notes: the spike probe first used `fields: ['id', ...]`, which gave HTTP 403 for both the Lab Member and the
+admin. The 403 body reads `You don't have permission to access field "id" in collection "physical_samples"
+or it does not exist`, and `GET /fields/physical_samples` as admin shows the only primary key is
+`sample_id` and there is no `id` field. So the confirmed cause is a field that does not exist (Directus
+answers 403, not 400, for an unknown field); the probe was changed to `sample_id`.
