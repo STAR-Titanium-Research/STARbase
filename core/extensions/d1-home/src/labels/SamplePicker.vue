@@ -42,7 +42,8 @@ watch(d.search, () => {
 	clearTimeout(timer);
 	timer = setTimeout(() => void d.runSearch(), 250);
 });
-watch(d.projectId, () => {
+watch(d.projectId, (project) => {
+	void d.loadCampaigns(project);
 	if (d.campaignId.value && !campaignOptions.value.some((c) => c.value === d.campaignId.value)) d.campaignId.value = '';
 	void d.runSearch();
 });

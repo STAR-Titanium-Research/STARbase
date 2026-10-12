@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import {
 	LABEL_SAMPLE_FIELDS, clampCopies, errorText, pickerFilter, sampleProjectScopeFilter, toLabelSample, useRequestGate, type LabelSample,
@@ -85,36 +85,49 @@ export function useLabelSamples() {
 	}
 
 	// The filters' choices. Each read stands alone (one forbidden list must not blank the other) and is capped:
-	// past OPTIONS_LIMIT the dropdown is cut and says so.
+	// past OPTIONS_LIMIT the dropdown is cut and says so. With a project chosen the campaigns are read again,
+	// filtered by that project on the server, so a long campaign list still reaches the project's own.
 	const projects = ref<Option[]>([]);
 	const campaigns = ref<Option[]>([]);
-	const optionsError = ref('');
-	async function loadOptions(): Promise<void> {
-		const read = (collection: string, fields: string[], sort: string) =>
-			api.get(`/items/${collection}`, { params: { fields, sort: [sort], limit: OPTIONS_LIMIT, meta: 'filter_count' } });
-		const [p, c] = await Promise.allSettled([
-			read('projects', ['project_id', 'project_code', 'project_name'], 'project_code'),
-			read('campaigns', ['campaign_id', 'campaign_code', 'name', 'project_id'], 'campaign_code'),
-		]);
-		const notes: string[] = [];
-		const cut = (name: string, res: PromiseFulfilledResult<any>) => {
-			const total = res.value.data?.meta?.filter_count;
-			if (typeof total === 'number' && total > OPTIONS_LIMIT) notes.push(`The ${name} filter lists the first ${OPTIONS_LIMIT} of ${total}; search by code to reach the others.`);
-		};
-		if (p.status === 'fulfilled') {
-			projects.value = (p.value.data?.data ?? []).map((r: any) => ({ value: r.project_id, label: r.project_code || r.project_name || 'Project' }));
-			cut('project', p);
-		} else notes.push(`Could not load the project filter: ${errorText(p.reason)}`);
-		if (c.status === 'fulfilled') {
-			campaigns.value = (c.value.data?.data ?? []).map((r: any) => ({
+	const projectNote = ref('');
+	const campaignNote = ref('');
+	const optionsError = computed(() => [projectNote.value, campaignNote.value].filter(Boolean).join(' '));
+	const cutNote = (name: string, total: unknown): string =>
+		typeof total === 'number' && total > OPTIONS_LIMIT ? `The ${name} filter lists the first ${OPTIONS_LIMIT} of ${total}; paste the sample codes instead.` : '';
+	const campaignGate = useRequestGate();
+
+	async function loadProjects(): Promise<void> {
+		try {
+			const res = await api.get('/items/projects', {
+				params: { fields: ['project_id', 'project_code', 'project_name'], sort: ['project_code'], limit: OPTIONS_LIMIT, meta: 'filter_count' },
+			});
+			projects.value = (res.data?.data ?? []).map((r: any) => ({ value: r.project_id, label: r.project_code || r.project_name || 'Project' }));
+			projectNote.value = cutNote('project', res.data?.meta?.filter_count);
+		} catch (e) {
+			projectNote.value = `Could not load the project filter: ${errorText(e)}`;
+		}
+	}
+	async function loadCampaigns(forProject = ''): Promise<void> {
+		const token = campaignGate.begin();
+		try {
+			const res = await api.get('/items/campaigns', {
+				params: {
+					fields: ['campaign_id', 'campaign_code', 'name', 'project_id'], sort: ['campaign_code'], limit: OPTIONS_LIMIT, meta: 'filter_count',
+					...(forProject ? { filter: { project_id: { _eq: forProject } } } : {}),
+				},
+			});
+			if (!campaignGate.isCurrent(token)) return;
+			campaigns.value = (res.data?.data ?? []).map((r: any) => ({
 				value: r.campaign_id,
 				label: r.campaign_code || r.name || 'Campaign',
 				projectId: r.project_id && typeof r.project_id === 'object' ? r.project_id.project_id : r.project_id,
 			}));
-			cut('campaign', c);
-		} else notes.push(`Could not load the campaign filter: ${errorText(c.reason)}`);
-		optionsError.value = notes.join(' ');
+			campaignNote.value = cutNote('campaign', res.data?.meta?.filter_count);
+		} catch (e) {
+			if (campaignGate.isCurrent(token)) campaignNote.value = `Could not load the campaign filter: ${errorText(e)}`;
+		}
 	}
+	const loadOptions = (): Promise<unknown> => Promise.allSettled([loadProjects(), loadCampaigns()]);
 
 	// ---- resolving ids and codes ------------------------------------------------------------------
 	// Adds the samples with these ids or codes to the selection, in the order asked, and returns what could not
@@ -165,6 +178,6 @@ export function useLabelSamples() {
 	return {
 		selected, add, remove, removeMany, clear, copyOverrides, setCopies,
 		search, projectId, campaignId, results, total, loading, error, runSearch,
-		projects, campaigns, optionsError, loadOptions, lookup, resolve,
+		projects, campaigns, optionsError, loadOptions, loadCampaigns, lookup, resolve,
 	};
 }
