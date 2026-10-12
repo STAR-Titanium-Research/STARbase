@@ -1,0 +1,24 @@
+{
+  "name": "@d1/fast-plotting",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Shared FAST (sintering) plotting. Consumed from source by the Directus module and STARbase; no build step.",
+  "main": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@d1/ui": "*",
+    "axios": "^1.20.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^2.2.0"
+  }
+}

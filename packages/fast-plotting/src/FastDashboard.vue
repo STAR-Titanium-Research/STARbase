@@ -1,19 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { useRoute, useRouter } from 'vue-router';
-import { recordRoute } from '@d1/ui';
+import { useRoute } from 'vue-router';
 import FastChart from './FastChart.vue';
+import { useFastHost } from './host';
 import { type SeriesMeta, type Trace, loadTrace } from './fastCache';
 import { buildOpMeta, buildRecipe, buildStats, dataQuality } from './fastMeta';
 
-const api = useApi();
+const host = useFastHost();
+const api = host.api;
 const route = useRoute();
-const router = useRouter();
 
 // Open the selected operation's record (its Explorer page; mirrors the force dashboard's "Open").
-function openOpForm() { if (selectedId.value) router.push(recordRoute('manufacturing_operations', selectedId.value)); }
-function openRecipe() { const r = recipe.value; if (r?.id) router.push(recordRoute('fast_recipes', r.id)); }
+function openOpForm() { if (selectedId.value) host.openRecord('manufacturing_operations', String(selectedId.value)); }
+function openRecipe() { const r = recipe.value; if (r?.id) host.openRecord('fast_recipes', String(r.id)); }
 
 // ---------------------------------------------------------------- state
 const loading = ref(true);
@@ -225,7 +224,7 @@ async function loadTraceData(gen: number = opGen) {
 		trace.value = loaded;
 		// seed default series for empty tiles (first temperature + force)
 		seedDefaultTiles();
-	} catch (e: any) { if (gen === opGen) importMsg.value = errMsg(e, 'failed to load trace'); }
+	} catch (e: any) { console.error('FAST trace load failed', e); if (gen === opGen) importMsg.value = 'Could not load the trace for this run.'; }
 	finally { if (gen === opGen) traceLoading.value = false; }
 }
 
