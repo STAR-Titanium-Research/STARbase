@@ -5,6 +5,7 @@ import type { VisibleNav } from '../nav/navConfig';
 import { useRequestGate } from '../composables/useRequestGate';
 import { isSearchable, localHits, mergeHits, sourceParams, toHits, visibleSources } from './finder';
 import type { FinderHit } from './finder';
+import { QR_HEADER } from '../labels/qrPayload';
 import { isScanComplete, isScanStarted, resolveLabel } from './scan';
 import type { ScanOutcome } from './scan';
 
@@ -86,6 +87,13 @@ export function useFinder(host: ExplorerHost, nav: Ref<VisibleNav>, visible: Ref
 		query,
 		(q) => {
 			stop();
+			// A label scanned into a box that already holds something (an earlier search, or the tail of an
+			// earlier label with no line break before the new header): the label starts at its last header.
+			const at = q.lastIndexOf(QR_HEADER);
+			if (at > 0) {
+				query.value = q.slice(at);
+				return;
+			}
 			if (isScanStarted(q)) {
 				remote.value = null;
 				loading.value = false;

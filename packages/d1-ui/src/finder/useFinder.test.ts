@@ -217,3 +217,34 @@ describe('useFinder waits for a finished label', () => {
 		expect(opened).toEqual(['/home/samples/u1']);
 	});
 });
+
+describe('useFinder with a label scanned into a non-empty box', () => {
+	function open() {
+		const host = { api: { get: async () => ({ data: { data: [{ sample_id: 'u1', sample_code: 'S-1', short_id: '1a2b3c4d' }] } }) } } as unknown as ExplorerHost;
+		const opened: string[] = [];
+		const finder = useFinder(host, ref(buildNav(visible, [], false)), ref<Set<string> | null>(visible), { onOpen: (to) => opened.push(to) });
+		return { finder, opened };
+	}
+	it('drops an earlier non-D1 search and reads the label', async () => {
+		const { finder, opened } = open();
+		finder.query.value = 'tita';
+		await vi.advanceTimersByTimeAsync(FINDER_DEBOUNCE_MS);
+		finder.query.value += 'D1 SAMPLE\rS-1 | 1a2b3c4d\r';
+		expect(finder.query.value).toBe('D1 SAMPLE\rS-1 | 1a2b3c4d\r');
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(opened).toEqual(['/home/samples/u1']);
+	});
+	it('reads a label glued onto the trimmed end of an earlier label', async () => {
+		const { finder, opened } = open();
+		finder.query.value = 'D1 SAMPLE\rOLD-1 | 11111111\rTi-6Al-4V';
+		finder.query.value += 'D1 SAMPLE\rS-1 | 1a2b3c4d\r';
+		expect(finder.query.value).toBe('D1 SAMPLE\rS-1 | 1a2b3c4d\r');
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(opened).toEqual(['/home/samples/u1']);
+	});
+	it('leaves a query that merely contains no header alone', async () => {
+		const { finder } = open();
+		finder.query.value = 'S-0123';
+		expect(finder.query.value).toBe('S-0123');
+	});
+});
