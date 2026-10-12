@@ -89,12 +89,12 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
 ### Sample labels and QR
 - [ ] **D4 — label sheets.** From a sample form, "Print label" and "Print several labels"; from Home,
   the "Print labels" tile. Print the A4 sheet on L7160 (63.5 × 38.1 mm, 21-up) and one 50 × 25 mm
-  label: text and QR sit inside each label, the `start` offset skips used labels. Since #124.
+  label: text and QR sit inside each label, the `start` offset skips used labels. Since #124. **Superseded by the Explorer labels page (PR #TBD).**
 - [ ] **D4 — scan to open.** Scan a printed QR with a phone on the lab network: it asks to sign in,
-  then opens that sample's record. Nothing is visible without signing in. Since #124.
+  then opens that sample's record. Nothing is visible without signing in. Since #124. **Superseded by the Explorer labels page (PR #TBD).**
 - [ ] **D4 — permissions and dates.** A role that cannot read a sample gets "not found" for it in a
   label request. With `D1_TIMEZONE=Europe/London` set, a sample created just after midnight BST
-  prints the right date. The picker shows "(200 of N)" when there are more than 200. Since #124.
+  prints the right date. The picker shows "(200 of N)" when there are more than 200. Since #124. **Superseded by the Explorer labels page (PR #TBD).**
 
 ### Plot dashboard inside Directus
 - [ ] **P3 — links in the Directus module.** "Copy link" in the Directus-hosted Plot opens the same
