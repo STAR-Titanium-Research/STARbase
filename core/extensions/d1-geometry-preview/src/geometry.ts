@@ -250,10 +250,16 @@ function cylSvg(D: number, H: number, Di = 0): string {
 	// Edges: the rim of the top opening, and the bottom opening's rim where it shows inside the bore.
 	const rims = `<ellipse cx="${cx}" cy="${ty}" rx="${irxs}" ry="${irys}" class="gt" style="fill:none"/>`
 		+ `<ellipse cx="${cx}" cy="${byC}" rx="${irxs}" ry="${irys}" class="gl" style="fill:none" clip-path="url(#gbc-${id})"/>`;
-	const by = topC[1] + ry + 9 * lk(); // the bore's label sits just below the top face
+	// The bore's Ø sits on the top face with its dimension line: inside the opening, just above the
+	// line, when the label fits there; otherwise on the ring face beside the bore, to the right.
+	const diText = `Ø${fmt(Di)}`;
+	const lw = diText.length * 0.625 * labelPx + 2;
+	const inside = 2 * irx >= lw + 6 && 2 * iry >= 1.6 * labelPx;
+	const lx = inside ? topC[0] : topC[0] + irx + 4 + lw / 2;
+	const ly = inside ? topC[1] - 0.6 * labelPx : topC[1];
 	const dimDi = dimLine([topC[0] - irx, topC[1]], [topC[0] + irx, topC[1]])
-		+ dimText(topC[0], by, `Ø${fmt(Di)}`, ' dominant-baseline="middle"');
-	labelBox(topC[0], by, `Ø${fmt(Di)}`, sink);
+		+ dimText(lx, ly, diText, ' dominant-baseline="middle"');
+	labelBox(lx, ly, diText, sink);
 	return svgWrap(defs + `<g mask="url(#gbm-${id})">${body + top + wall + rims}</g>` + dimDi + dimD + dimH, sink);
 }
 
