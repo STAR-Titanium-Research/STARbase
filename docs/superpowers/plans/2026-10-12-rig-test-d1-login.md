@@ -35,6 +35,8 @@
 4. **The relay rejects a sign-in and keeps rejecting it:** the web refreshes and re-sends once, then stops (no loop every poll). Pinned in Task 5 (`retries a rejected sign-in once, then stops`).
 5. **Sign-out while the shell unmounts:** the backend must not keep the last operator's token. Pinned in Task 5 (`stop() releases the session when signed out`).
 
+**Known, out of scope:** `authStore` doesn't listen for `storage` events, so a pop-out window keeps the refresh token it loaded. Directus rotates the refresh token on every refresh, so after the main window refreshes, a pop-out's own refresh is refused and its `clear()` removes the shared `localStorage` session (the main window's in-memory session survives until a reload). This exists today on any 401-driven refresh; Task 5's early refresh makes it periodic on an idle rig. Fix separately (sync `authStore` across windows); don't widen this PR.
+
 ---
 
 ### Task 1: Relay checks the D1 sign-in instead of the shared token
@@ -241,6 +243,17 @@ Expected: FAIL — `AttributeError: module 'server' has no attribute '_d1_cache'
 - [ ] **Step 3: Implement the D1 gate in `server.py`**
 
 Imports: drop `import hmac`, add `import hashlib`.
+
+Logging: the relay never configures logging, and uvicorn only configures its own loggers, so an
+`log.info` line is dropped in production (Python's last-resort handler prints WARNING and up). The
+D1-user line must reach `docker logs`. Right after `log = logging.getLogger("bug-report-relay")` add:
+
+```python
+if not logging.getLogger().handlers:  # uvicorn configures only its own loggers; pytest adds its own
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+```
+
+(Checked live after deploy by the runbook step "the relay log names that D1 user".)
 
 Replace `_rig_token` and `_rig_gate` (the block starting `def _rig_token() -> str:` through the end of `_rig_gate`) with:
 
