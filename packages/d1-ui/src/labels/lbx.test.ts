@@ -2,7 +2,7 @@ import { DOMParser } from '@xmldom/xmldom';
 import { strFromU8, unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { buildLbxDownload, isLbxTemplate, lbxFileStem } from './lbxBundle';
-import { buildLbxLabelXml, buildPropXml, chooseLbxQr, qrModuleCount, qrVersion, xmlText } from './lbx';
+import { buildLbxLabelXml, buildPropXml, CELL_STEPS_PT, chooseLbxQr, qrModuleCount, qrVersion, xmlText } from './lbx';
 import { buildQrPayload } from './qrPayload';
 import { templateFromRow } from './template';
 import type { LabelSample } from './types';
@@ -54,7 +54,7 @@ describe('buildLbxLabelXml', () => {
 	});
 	it('puts the payload in the QR with CRLF line breaks, model 2, level 15%', () => {
 		expect(attr(xml, 'barcode:barcodeStyle', 'protocol')).toBe('QRCODE');
-		expect(xml).toMatch(/<barcode:qrcodeStyle model="2" eccLevel="15%" cellSize="[\d.]+pt" mbcs="932" joint="1" version="auto"\/>/);
+		expect(xml).toMatch(/<barcode:qrcodeStyle model="2" eccLevel="15%" cellSize="[\d.]+pt" mbcs="65001" joint="1" version="auto"\/>/);
 		expect(qrData(xml)).toContain('\r\n');
 		expect(qrData(xml).replace(/\r\n/g, '\n')).toBe(buildQrPayload(sample(1), CONTACT, BROTHER.qrFields));
 	});
@@ -126,19 +126,29 @@ describe('QR size', () => {
 		expect(qrVersion(17, 'L')).toBe(1);
 		expect(qrVersion(5000, 'M')).toBeGreaterThan(20);
 	});
-	it('picks whole printer dots, as big as the box allows', () => {
+	it('picks the biggest cell step that fits, from the sizes P-touch honours', () => {
 		const payload = buildQrPayload(sample(1), CONTACT);
-		const big = chooseLbxQr(payload, 100);
-		expect(big.level).toBe('M');
-		const dots = big.cellPt / (72 / 300);
-		expect(Math.abs(dots - Math.round(dots))).toBeLessThan(0.05);
-		expect(big.sizePt).toBeLessThanOrEqual(100 + 1e-6);
-		expect(chooseLbxQr(payload, 40).cellPt).toBeLessThan(big.cellPt);
+		const cells = qrModuleCount(new TextEncoder().encode(payload).length, 'M') + 4;
+		for (const box of [200, 100, 80, 65]) {
+			const q = chooseLbxQr(payload, box);
+			expect(CELL_STEPS_PT).toContain(q.cellPt);
+			expect(q.sizePt).toBeLessThanOrEqual(box + 1e-6);
+			expect(q.level).toBe('M');
+		}
+		expect(chooseLbxQr(payload, 200).cellPt).toBe(2.4);
+		expect(chooseLbxQr(payload, cells * 1.2).cellPt).toBe(1.2);
+		expect(chooseLbxQr(payload, 100).cellPt).toBeGreaterThan(chooseLbxQr(payload, 65).cellPt);
 	});
-	it('drops to the 7% level when 15% would make the modules too small', () => {
+	it('drops to the 7% level when 15% would need modules under 0.33 mm', () => {
 		const payload = buildQrPayload(sample(1), CONTACT);
-		expect(chooseLbxQr(payload, 40).level).toBe('L');
-		expect(chooseLbxQr(payload, 5).cellPt).toBeCloseTo(0.72, 2);
+		const q = chooseLbxQr(payload, 45);
+		expect(q.level).toBe('L');
+		expect(CELL_STEPS_PT).toContain(q.cellPt);
+		expect(q.sizePt).toBeLessThanOrEqual(45);
+	});
+	it('falls back to the smallest step when nothing fits', () => {
+		const q = chooseLbxQr(buildQrPayload(sample(1), CONTACT), 5);
+		expect(q).toMatchObject({ level: 'L', cellPt: 0.8 });
 	});
 });
 

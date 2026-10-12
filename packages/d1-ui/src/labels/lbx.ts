@@ -31,11 +31,11 @@ const MARGIN_ALONG = 8.4;
 const ORG_SIZE_PT = 28.8;
 const FONT = 'Arial';
 
-// A QR cell is a whole number of printer dots (the QL-700 prints 300 dpi), and never under 3 (0.25 mm).
-const DOT_PT = 72 / 300;
-const MIN_DOTS = 3;
-// Under this many dots per module the 15% level is dropped for 7%, as the preview does at 0.33 mm.
-const MIN_DOTS_M = 4;
+// P-touch Editor only honours these QR cell sizes (pt per module); any other value is silently replaced by 1.6
+// (checked in Editor 5.4: 0.72, 0.96 and 1.6 all came out as 1.6). The QL-700 prints 300 dpi, so 0.8 is about 3 dots.
+export const CELL_STEPS_PT = [2.4, 2.0, 1.6, 1.2, 0.8];
+// The 15% level is kept while a module is at least the preview's 0.33 mm (0.935 pt), else 7% (as chooseQr does).
+const MIN_CELL_M_PT = 0.33 / MM_PER_PT;
 // Light modules round the code, in modules (P-touch draws the same margin as qrSvg's quiet zone).
 const QUIET = 2;
 
@@ -85,19 +85,20 @@ export interface LbxQr {
 	sizePt: number;
 }
 
-// The level and the cell size that make the QR fit a square of `boxPt`: 15% while a module is at least
-// MIN_DOTS_M printer dots, else 7%; the cell is whole dots, and never under MIN_DOTS.
+// The level and the cell size that make the QR fit a square of `boxPt`: the 15% level with the biggest cell step
+// that fits, if that cell is at least MIN_CELL_M_PT; else 7% with the biggest step that fits; else 7% at the
+// smallest step (the code then overflows its box a little, and the page warns for dense labels).
 export function chooseLbxQr(payload: string, boxPt: number): LbxQr {
 	const bytes = new TextEncoder().encode(payload).length;
-	const pick = (level: 'M' | 'L'): LbxQr & { dots: number } => {
-		const cells = qrModuleCount(bytes, level) + 2 * QUIET;
-		const dots = Math.max(MIN_DOTS, Math.floor(boxPt / cells / DOT_PT + 1e-9));
-		const cellPt = Math.round(dots * DOT_PT * 100) / 100;
-		return { level, cellPt, sizePt: cells * cellPt, dots };
-	};
-	const m = pick('M');
-	if (m.dots >= MIN_DOTS_M) return m;
-	return pick('L');
+	const at = (level: 'M' | 'L', cellPt: number): LbxQr => ({ level, cellPt, sizePt: (qrModuleCount(bytes, level) + 2 * QUIET) * cellPt });
+	for (const level of ['M', 'L'] as const) {
+		for (const cellPt of CELL_STEPS_PT) {
+			if (level === 'M' && cellPt < MIN_CELL_M_PT) continue;
+			const q = at(level, cellPt);
+			if (q.sizePt <= boxPt + 1e-6) return q;
+		}
+	}
+	return at('L', CELL_STEPS_PT[CELL_STEPS_PT.length - 1]);
 }
 
 interface ObjectBox {
@@ -118,7 +119,7 @@ function qrObject(payload: string, box: ObjectBox, qr: LbxQr): string {
 		'<barcode:barcode>' +
 		objectStyle(box, 'INSIDEFRAME', 'CENTER') +
 		'<barcode:barcodeStyle protocol="QRCODE" lengths="48" barWidth="1.2pt" barRatio="1:3" humanReadable="false" humanReadableAlignment="LEFT" checkDigit="true" autoLengths="true" margin="true" sameLengthBar="false" bearerBar="false"/>' +
-		`<barcode:qrcodeStyle model="2" eccLevel="${qr.level === 'M' ? '15%' : '7%'}" cellSize="${qr.cellPt}pt" mbcs="932" joint="1" version="auto"/>` +
+		`<barcode:qrcodeStyle model="2" eccLevel="${qr.level === 'M' ? '15%' : '7%'}" cellSize="${qr.cellPt.toFixed(1)}pt" mbcs="65001" joint="1" version="auto"/>` +
 		// Line breaks as P-touch itself writes them in text data: CRLF.
 		`<pt:data>${xmlText(payload).replace(/\n/g, '\r\n')}</pt:data>` +
 		'</barcode:barcode>'
