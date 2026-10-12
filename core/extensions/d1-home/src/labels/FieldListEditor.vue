@@ -63,8 +63,11 @@ const toggleQr = (key: FieldKey, on: boolean) =>
 .fields { display: flex; flex-direction: column; gap: 8px; }
 .cap { margin: 4px 0 0; font-size: var(--fs-xs, 11px); font-weight: 650; color: var(--d1-dim); }
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.line { display: flex; align-items: center; gap: 8px; }
-.line select { flex: 1 1 90px; }
+.line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.line select:first-child { flex: 1 1 130px; }
+.line select:nth-child(2) { flex: 0 0 96px; }
+/* In a narrow column the buttons drop to their own row, at the right. */
+.line .lf-btn:nth-of-type(1) { margin-left: auto; }
 .add { align-items: center; }
 .qr { gap: 16px; align-items: center; }
 </style>

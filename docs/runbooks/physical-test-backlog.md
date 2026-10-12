@@ -224,7 +224,7 @@ the rebuilt `d1-home`, `d1-lab-dashboard` and `d1-composition-bar` load, and app
   machining operations and **View FAST** on sintering ones opening the right run, and the file
   rows' copy-path buttons giving the same paths as the sample form. Narrow the browser below
   ~640 px wide (or open the page in a split view): the strip becomes a vertical list. **Print
-  label** and **Report** open in a new tab. Operations and tests that you click open their
+  label** opens the labels page in the same tab with this sample ticked (see the labels items below) and **Report** opens in a new tab. Operations and tests that you click open their
   Explorer pages (see the E4 items below). Dark theme: the page is readable. Since: Explorer pages E1 (PR pending).
 - [ ] **E1 — Sample page with hidden relatives.** As a role whose item filter hides some of that
   sample's relatives, operations or tests, open the page. Expect: the life strip shows only what
@@ -792,6 +792,34 @@ migration 141 prints about ownerless records.
   Then run `dbmate down`
   once: the md5 matches the value recorded before applying, and the backup table is gone. Run
   `up` again and restart Directus. Since: fix/lab-member-legal-some (PR pending).
+- [ ] **Labels page — A4 4×5 sheet on the office laser (label-printing PR #TBD).** Open
+  **Print labels** (sidebar), tick 6 samples, keep the **A4 4×5** template, press **Print**. In the
+  browser's print dialog choose A4, **100% scale** (not "fit to page") and no margins or headers. On
+  a plain sheet laid over the die-cut A4 4 × 5 sheet, each label (52.5 × 59.4 mm) has its QR code
+  and text inside its cell. Set **Start at label** to 3: the first two cells stay empty. Scan one QR
+  code with any phone camera: it reads as plain text (`D1 SAMPLE`, the code and short ID, ...). The
+  page itself follows light and dark mode, the labels stay white.
+- [ ] **Labels page — QL-700 with DK-22205 through the Windows driver (label-printing PR #TBD).** On
+  the PC the QL-700 is plugged into, open the labels page, tick 3 samples, choose **Brother DK-22205
+  62 mm** and press **Print**. In the print dialog pick the QL-700, paper **62 mm continuous** (the
+  driver's DK-22205 entry), **100% scale**. Expect: three labels, each its own page, 62 mm wide and
+  30 mm long, the QR code on the left and the code, short ID and nickname on the right, none cut off.
+  Scan one QR code. If the driver shrinks or crops the label, record the driver settings that work in
+  the wiki page on labels.
+- [ ] **Labels page — template editor as a non-admin (label-printing PR #TBD).** Sign in as a Lab
+  Member (not an admin), open the labels page, press **Edit template** on a seeded template: there is
+  **no Default switch**, **Save** is disabled, **Delete** is absent, and a line says the template is
+  not yours; **Save as new** with a new name works and selects the new template. On that template
+  **Save** and **Delete** are offered: change the padding and Save, then Delete it. Saving a template
+  under a name that already exists shows "A template with that name already exists" inside the editor.
+  Another member's template shows the same read-only state. Sign in as an admin: the Default switch
+  is there, and ticking it on another template moves the default.
+- [ ] **Labels page — preselection from the record pages (label-printing PR #TBD).** From a Sample
+  page (real data) press **Print label**: the labels page opens in the same tab with that sample
+  ticked. From **Samples**, tick two rows and press **Print labels for selected**: both are ticked
+  on the labels page. Open `/admin/home/labels?codes=<a real code>,NOPE`: the real one is ticked and
+  "Not found, or not visible to you: NOPE" is shown. The Print label button on a sample form (the
+  `d1-report-button` interface) goes to the same page.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
