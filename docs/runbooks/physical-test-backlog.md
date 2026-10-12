@@ -66,6 +66,16 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
   to check this on a migrated database, it wipes field metadata (see the note at the top of section A).
   Since #125.
 
+### Ring form (migration 162, `feat/ring-form`)
+- [ ] **Ring in the record form.** Open a sample in Directus and pick Geometry → Ring. Ø, Ø Inner,
+  width and thickness show; length and gauge fields hide. Round bar is in the dropdown again. The
+  geometry preview draws a disc with a bore marked `Ø<inner>`. An inner Ø ≥ the outer Ø is refused
+  on save (`physical_samples_inner_diameter_mm_check`).
+- [ ] **Ring on the Register-sample page.** Pick Ring. The four dimension inputs appear, the
+  drawing shows the bore, and the saved sample keeps `inner_diameter_mm`.
+- [ ] **Ring on the Sample page and label.** The ring's Sample page shows `Ø… · ID… · t… · W… mm`,
+  the drawing has the bore, and the mass estimate is π/4·(OD² − ID²)·t × density. The printed
+  sample report lists `ID…` after the outer Ø.
 ### Ask-DB
 - [ ] **D1/D2 — chips and messages.** The five example chips run and answer. A query returning more
   than the row limit shows "Showing the first N rows". Stop the `llm-text-to-sql` container: the

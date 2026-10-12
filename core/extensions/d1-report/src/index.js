@@ -331,7 +331,7 @@ export default defineEndpoint({
 				const ps = (await a.one('physical_samples', sid)) || {};
 
 				// Ensure the geometry drawing has every dimension (the flat view omits some).
-				for (const k of ['form', 'diameter_mm', 'length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm']) {
+				for (const k of ['form', 'diameter_mm', 'inner_diameter_mm', 'length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm']) {
 					if (ps[k] !== null && ps[k] !== undefined) sample[k] = ps[k];
 				}
 

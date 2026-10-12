@@ -283,6 +283,50 @@ rb_check "up_dim_fields:2" "up: diameter_mm and length_mm are shown for round_ba
 rb_check "down_fields:0" "down: round_bar removed from dropdown and conditions"
 rb_check "down_form:cylinder" "down: round_bar samples are mapped to cylinder"
 
+echo "== Sample geometry: ring form migration =="
+# Same shape as the round bar section: the column is real, the Directus rows are seeded stubs.
+MIG=db/migrations/20261012000162_ring_form.sql
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
+ring_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+ALTER TABLE physical_samples DROP CONSTRAINT physical_samples_inner_diameter_mm_check;
+ALTER TABLE physical_samples DROP COLUMN inner_diameter_mm;
+DELETE FROM directus_fields WHERE collection='physical_samples' AND field IN ('form','diameter_mm','width_mm','length_mm','thickness_mm','inner_diameter_mm');
+INSERT INTO directus_fields (collection, field, options, conditions) VALUES
+  ('physical_samples','form','{"choices":[]}',NULL),
+  ('physical_samples','diameter_mm',NULL,'[]'),
+  ('physical_samples','width_mm',NULL,'[]'),
+  ('physical_samples','length_mm',NULL,'[]'),
+  ('physical_samples','thickness_mm',NULL,'[]');
+$mig_up
+SELECT 'up_form_choices:' || count(*) FROM directus_fields
+  WHERE field='form' AND options::text LIKE '%"ring"%' AND options::text LIKE '%"round_bar"%';
+SELECT 'up_dim_fields:' || count(*) FROM directus_fields
+  WHERE field IN ('diameter_mm','width_mm','thickness_mm','inner_diameter_mm') AND conditions::text LIKE '%"ring"%';
+INSERT INTO physical_samples (sample_code, form, diameter_mm, inner_diameter_mm, thickness_mm)
+  VALUES ('TEST-RING-001','ring',151,19.5,16.5);
+SAVEPOINT bad_bore;
+INSERT INTO physical_samples (sample_code, form, diameter_mm, inner_diameter_mm) VALUES ('TEST-RING-002','ring',20,20);
+SELECT 'bore_check:missing';
+ROLLBACK TO SAVEPOINT bad_bore;
+$mig_down
+SELECT 'down_fields:' || count(*) FROM directus_fields
+  WHERE collection='physical_samples' AND (options::text LIKE '%"ring"%' OR conditions::text LIKE '%"ring"%' OR field='inner_diameter_mm');
+SELECT 'down_form:' || form FROM physical_samples WHERE sample_code='TEST-RING-001';
+SELECT 'down_column:' || count(*) FROM information_schema.columns WHERE table_name='physical_samples' AND column_name='inner_diameter_mm';
+ROLLBACK;
+SQL
+)
+ring_check() { grep -qx "$1" <<<"$ring_out" && ok "$2" || bad "$2 (psql output: $ring_out)"; }
+ring_check "up_form_choices:1" "up: Geometry dropdown offers ring (and round_bar)"
+ring_check "up_dim_fields:4" "up: Ø, inner Ø, width and thickness are shown for ring"
+grep -q "physical_samples_inner_diameter_mm_check" <<<"$ring_out" && ! grep -qx "bore_check:missing" <<<"$ring_out" \
+  && ok "a bore as wide as the ring is refused" || bad "a bore as wide as the ring is refused (psql output: $ring_out)"
+ring_check "down_fields:0" "down: ring removed from dropdown, conditions and fields"
+ring_check "down_form:disc" "down: ring samples are mapped to disc"
+ring_check "down_column:0" "down: inner_diameter_mm is dropped"
+
 echo "== Sample geometry: legacy forms are back-filled =="
 # Seed old-vocabulary samples, apply the back-fill's up SQL, assert, then ROLLBACK.
 BACKFILL=db/migrations/20260930000115_backfill_legacy_geometry_forms.sql

@@ -149,9 +149,10 @@ The central entity. Everything else points to or from here.
 | `short_id` | TEXT UNIQUE | Permanent short ID (8+ hex characters of `sample_id`), unique across samples, operations and tests. Never changes; printed on labels. Assigned by trigger (migration `…150`) |
 | `material_id` | UUID FK | References `materials.material_id` |
 | `project_id` | UUID FK | References `projects.project_id` |
-| `form` | TEXT | Physical form: disc, billet, powder-compact, coupon |
+| `form` | TEXT | Physical form (the Geometry dropdown): disc, ring, cylinder, block, plate, bar, round_bar, tensile_coupon, bend_bar, powder, other |
 | `mass_grams` | NUMERIC(12,4) | Current mass in grams |
 | `diameter_mm` | NUMERIC(10,4) | Outer diameter in mm |
+| `inner_diameter_mm` | NUMERIC(10,4) | Bore diameter in mm of a `ring`-form sample; must be below `diameter_mm` (migration `…162`) |
 | `length_mm` | NUMERIC(10,4) | Length in mm |
 | `thickness_mm` | NUMERIC(10,4) | Thickness in mm |
 | `current_status` | TEXT | Lifecycle: active \| consumed \| destroyed \| archived |

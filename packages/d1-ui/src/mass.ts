@@ -6,6 +6,7 @@
 export interface MassDims {
 	form: string | null;
 	diameter_mm?: number | null;
+	inner_diameter_mm?: number | null;
 	length_mm?: number | null;
 	width_mm?: number | null;
 	thickness_mm?: number | null;
@@ -17,6 +18,10 @@ export function volumeMm3(d: MassDims): number | null {
 	const g = (d.form || '').toLowerCase();
 	if (g.includes('powder')) return null; // no defined shape
 	const { diameter_mm: dia, length_mm: len, width_mm: w, thickness_mm: t } = d;
+	if (g === 'ring') {
+		const h = pos(t) ? t : len, di = pos(d.inner_diameter_mm) ? d.inner_diameter_mm : 0;
+		return pos(dia) && pos(h) && di < dia ? (Math.PI / 4) * (dia ** 2 - di ** 2) * h : null;
+	}
 	if (g.includes('disc')) {
 		const h = pos(t) ? t : len;
 		return pos(dia) && pos(h) ? Math.PI * (dia / 2) ** 2 * h : null;

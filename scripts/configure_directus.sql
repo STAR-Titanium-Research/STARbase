@@ -366,12 +366,13 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('physical_samples','primary_method_id',  'm2o','select-dropdown-m2o','{"template":"{{method_code}} – {{method_name}}"}','related-values','{"template":"{{method_code}}"}',false,false,4,'half',false,'[{"language":"en-US","translation":"Primary Method (for code)"}]'),
 ('physical_samples','project_id',         'm2o','select-dropdown-m2o','{"template":"{{project_code}} – {{project_name}}"}','related-values','{"template":"{{project_code}}"}',false,false,5,'half',false,'[{"language":"en-US","translation":"Project"}]'),
 ('physical_samples','item_type',          NULL,'select-dropdown','{"choices":[{"text":"Sample","value":"sample"},{"text":"Equipment","value":"equipment"},{"text":"Miscellaneous","value":"miscellaneous"}]}','labels','{"choices":[{"text":"Sample","value":"sample","foreground":"#2E7D32","background":"#E8F5E9"},{"text":"Equipment","value":"equipment","foreground":"#1565C0","background":"#E3F2FD"},{"text":"Miscellaneous","value":"miscellaneous","foreground":"#616161","background":"#F5F5F5"}]}',false,false,6,'half',false,'[{"language":"en-US","translation":"Item Type"}]'),
-('physical_samples','form',               NULL,'select-dropdown','{"choices":[{"text":"Disc","value":"disc"},{"text":"Cylinder","value":"cylinder"},{"text":"Block","value":"block"},{"text":"Plate","value":"plate"},{"text":"Bar","value":"bar"},{"text":"Round bar","value":"round_bar"},{"text":"Tensile coupon (ISO 6892)","value":"tensile_coupon"},{"text":"Bend / fatigue bar (ISO 7438)","value":"bend_bar"},{"text":"Powder / Compact","value":"powder"},{"text":"Other","value":"other"}]}','labels',NULL,false,false,7,'half',false,'[{"language":"en-US","translation":"Geometry"}]'),
+('physical_samples','form',               NULL,'select-dropdown','{"choices":[{"text":"Disc","value":"disc"},{"text":"Ring","value":"ring"},{"text":"Cylinder","value":"cylinder"},{"text":"Block","value":"block"},{"text":"Plate","value":"plate"},{"text":"Bar","value":"bar"},{"text":"Round bar","value":"round_bar"},{"text":"Tensile coupon (ISO 6892)","value":"tensile_coupon"},{"text":"Bend / fatigue bar (ISO 7438)","value":"bend_bar"},{"text":"Powder / Compact","value":"powder"},{"text":"Other","value":"other"}]}','labels',NULL,false,false,7,'half',false,'[{"language":"en-US","translation":"Geometry"}]'),
 ('physical_samples','stock_category',     NULL,'select-dropdown','{"choices":[{"text":"Bulk (bar / disc / billet)","value":"bulk"},{"text":"Powder (loose / compact)","value":"powder"},{"text":"Specialty (wire / foil / porous)","value":"specialty"}]}','labels',NULL,false,false,7,'half',false,'[{"language":"en-US","translation":"Stock Category"}]'),
 ('physical_samples','current_status',     NULL,'select-dropdown','{"choices":[{"text":"Active","value":"active"},{"text":"Consumed","value":"consumed"},{"text":"Destroyed","value":"destroyed"},{"text":"Archived","value":"archived"}]}','labels','{"choices":[{"text":"Active","value":"active","foreground":"#2E7D32","background":"#E8F5E9"},{"text":"Consumed","value":"consumed","foreground":"#E65100","background":"#FFF3E0"},{"text":"Destroyed","value":"destroyed","foreground":"#B71C1C","background":"#FFEBEE"},{"text":"Archived","value":"archived","foreground":"#616161","background":"#F5F5F5"}]}',false,false,8,'half',true,'[{"language":"en-US","translation":"Status"}]'),
 ('physical_samples','export_controlled',  'cast-boolean','toggle',NULL,'boolean',NULL,false,false,9,'half',false,'[{"language":"en-US","translation":"Export Controlled?"}]'),
 ('physical_samples','mass_grams',         NULL,'input','{"step":0.001,"suffix":"g"}','raw',NULL,false,false,10,'half',false,'[{"language":"en-US","translation":"Weight (g)"}]'),
 ('physical_samples','diameter_mm',        NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,11,'half',false,'[{"language":"en-US","translation":"Ø (mm)"}]'),
+('physical_samples','inner_diameter_mm',  NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,11,'half',false,'[{"language":"en-US","translation":"Ø Inner (mm)"}]'),
 ('physical_samples','width_mm',           NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,12,'half',false,'[{"language":"en-US","translation":"x / Width (mm)"}]'),
 ('physical_samples','length_mm',          NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,13,'half',false,'[{"language":"en-US","translation":"z / Length (mm)"}]'),
 ('physical_samples','thickness_mm',       NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,14,'half',false,'[{"language":"en-US","translation":"y / Thickness (mm)"}]'),
@@ -731,6 +732,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 --   2) hide dimensions that don't apply to the chosen geometry (form)
 -- Geometry (form) → dimensions shown (kept in step with migrations 68 and the round_bar one):
 --   disc → Ø + thickness          cylinder → Ø + length       round_bar → Ø + length
+--   ring → Ø + inner Ø + thickness + width
 --   block / plate / bar → width + length + thickness
 --   tensile_coupon → length + width + thickness + gauge length + gauge width
 --   bend_bar → length + width + thickness        powder / other → none (mass only)
@@ -741,19 +743,27 @@ SET conditions = '[{"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"s
 WHERE collection = 'physical_samples'
   AND field IN ('material_id','primary_method_id','form','stock_category','surface_finish','manufacturing_route','geometry_preview','mounted','mounting_method');
 
--- diameter_mm: disc, cylinder and round bar.
+-- diameter_mm: disc, ring, cylinder and round bar.
 UPDATE directus_fields
 SET conditions = '[
   {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
-  {"name":"form","rule":{"_and":[{"form":{"_nin":["disc", "cylinder", "round_bar"]}}]},"hidden":true,"readonly":false,"required":false}
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["disc", "ring", "cylinder", "round_bar"]}}]},"hidden":true,"readonly":false,"required":false}
 ]'
 WHERE collection = 'physical_samples' AND field = 'diameter_mm';
 
--- width_mm: block, plate, bar, tensile coupon and bend bar.
+-- inner_diameter_mm: ring only.
 UPDATE directus_fields
 SET conditions = '[
   {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
-  {"name":"form","rule":{"_and":[{"form":{"_nin":["block", "plate", "bar", "tensile_coupon", "bend_bar"]}}]},"hidden":true,"readonly":false,"required":false}
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["ring"]}}]},"hidden":true,"readonly":false,"required":false}
+]'
+WHERE collection = 'physical_samples' AND field = 'inner_diameter_mm';
+
+-- width_mm: ring, block, plate, bar, tensile coupon and bend bar.
+UPDATE directus_fields
+SET conditions = '[
+  {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["ring", "block", "plate", "bar", "tensile_coupon", "bend_bar"]}}]},"hidden":true,"readonly":false,"required":false}
 ]'
 WHERE collection = 'physical_samples' AND field = 'width_mm';
 
@@ -765,11 +775,11 @@ SET conditions = '[
 ]'
 WHERE collection = 'physical_samples' AND field = 'length_mm';
 
--- thickness_mm: disc, block, plate, bar, tensile coupon and bend bar.
+-- thickness_mm: disc, ring, block, plate, bar, tensile coupon and bend bar.
 UPDATE directus_fields
 SET conditions = '[
   {"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false},
-  {"name":"form","rule":{"_and":[{"form":{"_nin":["disc", "block", "plate", "bar", "tensile_coupon", "bend_bar"]}}]},"hidden":true,"readonly":false,"required":false}
+  {"name":"form","rule":{"_and":[{"form":{"_nin":["disc", "ring", "block", "plate", "bar", "tensile_coupon", "bend_bar"]}}]},"hidden":true,"readonly":false,"required":false}
 ]'
 WHERE collection = 'physical_samples' AND field = 'thickness_mm';
 
@@ -833,7 +843,7 @@ WHERE collection = 'test_sessions';
 UPDATE directus_fields SET sort = CASE field
   WHEN 'sample_code' THEN 2 WHEN 'nickname' THEN 3 WHEN 'item_type' THEN 4
   WHEN 'material_id' THEN 5 WHEN 'primary_method_id' THEN 5 WHEN 'form' THEN 6 WHEN 'stock_category' THEN 7
-  WHEN 'diameter_mm' THEN 8 WHEN 'width_mm' THEN 9 WHEN 'length_mm' THEN 10
+  WHEN 'diameter_mm' THEN 8 WHEN 'inner_diameter_mm' THEN 8 WHEN 'width_mm' THEN 9 WHEN 'length_mm' THEN 10
   WHEN 'thickness_mm' THEN 11 WHEN 'mass_grams' THEN 12 WHEN 'geometry_preview' THEN 13
   WHEN 'current_status' THEN 14 WHEN 'export_controlled' THEN 15
   WHEN 'mounted' THEN 16 WHEN 'mounting_method' THEN 17
