@@ -127,46 +127,31 @@ in the next section.
 
 ## Sample labels and QR codes
 
-The same `d1-report` endpoint prints sample labels: the sample code in large type, a QR code,
-the material, the date (the manufactured date, else the entry date, taken in the `D1_TIMEZONE` time
-zone, `Europe/London` unless set) and the owner's initials.
-Two layouts:
+**Labels** (from **Home** or the **Print label** button on a sample) is an in-app Explorer page
+where you choose samples, pick a template and layout, and print labels. It lives in the same
+module as the other Explorer pages. Samples and labels stay on screen (no separate tab): search,
+tick samples in a list, or paste sample codes. Choose a label template (several pre-built templates
+for common sheets and rolls), and on a part-used sheet set the position to skip used labels. The
+preview shows the layout live; Print sends the same markup to your printer.
 
-| Layout | `layout=` | Use |
-|---|---|---|
-| A4 sheet of 21 labels, 63.5 x 38.1 mm (3 x 7, the common "L7160" size) | `a4-21` (default) | label sheets in a laser/inkjet printer |
-| Single label, 50 x 25 mm | `single-50x25` | a label-printer or roll, one label per page |
+Templates are data: each row holds the page geometry, label size and margins, label arrangement
+(QR on top or left, or text only), field selection and sizes, and which fields go into the QR
+payload. Everyone can create a template and edit or delete their own; admins can edit or delete
+any. The pre-built templates cover A4 sheets (21-up L7160 labels, 63.5 × 38.1 mm) and rolls
+(50 × 25 mm, Brother DK-22205 62 mm continuous).
 
-**Print labels for one sample.** Open the sample and press **Print label** at the top of the form.
+Each label encodes the sample code in large type, a QR code, the material and date (manufactured
+if available, else created), and the owner's initials. The QR payload is self-describing text
+(`D1 SAMPLE` followed by the code, nickname, material, date and initials) readable by any phone
+with no login. Samples you may not read get no label (the page says so); material and owner
+appear only if your role can read those collections. Field overflow is cut off with "…", and the
+preview flags clipped labels.
 
-**Print labels for several samples.** Directus 11 does not let an extension add a "do this to the
-selected rows" action to a list, so there is no button in the samples list itself. Instead:
-
-1. Press **Print several labels** at the top of any sample form, or the **Print labels** tile on
-   **Home**, or open `/d1-report/labels` directly. A new tab opens (it uses your Directus sign-in).
-2. Paste sample codes (separated by commas, spaces or new lines) and/or tick samples in the list
-   (newest first; **Search** narrows it by code; the box in the header ticks all shown).
-3. Choose the layout. On a part-used A4 sheet, set **Start at position** (1 to 21, row by row from
-   the top left) so the used labels are skipped.
-4. **Open label sheet**, then **Print labels**. Print at 100 % scale ("Actual size", not "Fit to
-   page"), with margins set to None, or the labels drift off the die-cuts.
-
-You can change layout and start position on the label page and press **Update**. Up to 200 samples
-per sheet. Samples you may not read, or that do not exist, simply get no label (the page says so);
-material and owner initials appear only if your role can read those collections.
-
-Direct URL: `/d1-report/label?ids=<uuid,uuid,...>` (and/or `&codes=<sample code,...>`),
-`&layout=a4-21|single-50x25`, `&start=<1-based position>`. It needs a signed-in session, like the
-reports; without one it answers 401. Bad ids, layouts or counts answer 400.
-
-**Scan to open.** The QR code encodes `<PUBLIC_URL>/admin/home/samples/<sample id>`, the sample's
-Explorer page (operation and test reports use `/admin/home/operations/<id>` and
-`/admin/home/tests/<id>`). Labels printed before the Explorer pages existed encode
-`/admin/content/physical_samples/<id>`, the Data Studio form, which still works.
-Scanning it with a phone opens that record in the Directus app, which is usable on a small
-screen. A phone that is not signed in is sent to the sign-in page and then to the record. The QR
-carries only the link: no sample data is public, and what the person sees is limited by their
-role's permissions. `PUBLIC_URL` must be the address phones can reach (the same value the
+**Scan to open.** The QR code encodes `<PUBLIC_URL>/admin/home/samples/<sample id>`, the
+sample's Explorer page. Labels from before these pages existed encode `/admin/content/physical_samples/<id>`,
+the Data Studio form, which still works. Scanning with a phone opens that record in the Directus
+app, sign-in first if needed. The QR carries only the link; no sample data is public, and access
+is limited by your role. `PUBLIC_URL` must be the address phones can reach (the same value the
 reports' QR codes use).
 
 ## Insights
