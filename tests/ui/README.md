@@ -21,6 +21,7 @@ of bug that schema-level checks miss — e.g. a conditional panel that is wired 
 | `10-ask-db-chat` | **Ask the Database** module: a stubbed proxy response renders the SQL block, result table, and Plotly chart; the `/d1-ask/chat` endpoint rejects unauthenticated requests (401) and passes the auth gate for a logged-in session. A live end-to-end smoke runs only with `D1_LLM_LIVE=1`. |
 | `11-force-dashboard` | Force Analysis module: sample → operation drill-down, signal charts and the per-axis FRM, including the Figure ⇄ Lite switch. Needs at least one processed `machining_force_analysis` row. |
 | `12-force-crawler` | Force Crawler module: status, queue stats, settings and activity read from and written to `force_crawler_state`. |
+| `13-explorer-routes` | Home (Explorer) module: every page in the nav config plus a first record of each kind draws its body and nav with no console error, as an admin and as a Lab Member; the other kit users still render. Runs against the preview, not live: `bash scripts/dev/explorer_preview.sh`, then `cd tests/ui && npx playwright test specs/13-explorer-routes.spec.ts` (env `D1_ROUTES_CREDENTIALS`, `D1_ROUTES_ADMIN_BASE`). |
 
 ## Ad-hoc verification scripts
 
