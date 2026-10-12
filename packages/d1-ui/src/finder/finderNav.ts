@@ -54,3 +54,9 @@ export function isModalOpen(doc: { querySelector(selector: string): unknown }, s
 export function isFinderShortcut(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): boolean {
 	return (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k';
 }
+
+// A key that types one character into a text box: a single printable character with no Ctrl, Meta or
+// Alt. Space is not one here: on a focused button it is "press", and a scanner never needs it first.
+export function isTypingKey(e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean }): boolean {
+	return e.key.length === 1 && e.key !== ' ' && !e.ctrlKey && !e.metaKey && !e.altKey;
+}

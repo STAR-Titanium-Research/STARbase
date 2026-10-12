@@ -18,7 +18,7 @@ import { EXPLORER_HOST } from '../host';
 import { MIN_QUERY } from './finder';
 import ScanResultCard from './ScanResultCard.vue';
 import type { FinderHit } from './finder';
-import { moveIndex, toSections } from './finderNav';
+import { isTypingKey, moveIndex, toSections } from './finderNav';
 import { flattenLines, isScanStarted, normalizeScan } from './scan';
 import { useFinder } from './useFinder';
 import { useExplorerNav } from '../nav/useExplorerNav';
@@ -91,12 +91,18 @@ function onPaste(e: ClipboardEvent) {
 	readScanNow();
 }
 
+// Put text into the box at the caret, replacing the selection, and focus it. The DOM value is changed
+// synchronously (not through v-model's next render), so keys that arrive right behind it, as from a
+// scanner, land after this text and do not replace the selection a second time.
 function insertAtCaret(text: string) {
 	const el = input.value;
-	const from = el?.selectionStart ?? query.value.length;
-	const to = el?.selectionEnd ?? from;
-	query.value = query.value.slice(0, from) + text + query.value.slice(to);
-	void nextTick(() => el?.setSelectionRange(from + text.length, from + text.length));
+	if (!el) {
+		query.value += text;
+		return;
+	}
+	el.focus();
+	el.setRangeText(text, el.selectionStart, el.selectionEnd, 'end');
+	query.value = el.value;
 }
 
 // A touch keyboard's Enter / Search key may arrive only as a line-break edit, with no Enter keydown.
@@ -113,6 +119,13 @@ function openActive() {
 }
 
 function onKeydown(e: KeyboardEvent) {
+	// Typing with a button focused (a scanner after a click on Scan, or on a result card's button): the
+	// character goes into the box instead of the button being pressed by a later Enter in the label.
+	if (e.target !== input.value && isTypingKey(e) && (e.target as HTMLElement | null)?.tagName === 'BUTTON') {
+		e.preventDefault();
+		insertAtCaret(e.key);
+		return;
+	}
 	if (e.key === 'Escape') {
 		e.preventDefault();
 		e.stopPropagation();
