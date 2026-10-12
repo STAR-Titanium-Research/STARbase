@@ -364,7 +364,7 @@ metadata-only edit of a `.mat` file. Rows are deleted with their file (`ON DELET
 | `data_cols` | BIGINT | Columns of that array (the second shape value hashed) |
 | `size_bytes` | BIGINT | The `directus_files.filesize` the hash was taken against (staleness key) |
 | `source_mtime` | TIMESTAMPTZ | The modification time the hash was taken against: the share mtime from `directus_files.metadata.modified`, else `modified_on` (staleness key) |
-| `error_message` | TEXT | Why the file could not be (fully) hashed |
+| `error_message` | TEXT | Why the file could not be (fully) hashed. A message starting `permanent: ` (then the error class, e.g. `permanent: NoForceArray: …`) marks a file that was read but is not a usable `.mat` force file; the script re-reads it only when its staleness key changes or with `--retry-permanent`. Every other `error` (and every `missing`) is retried on each run unless `--skip-failed` |
 | `hashed_at` | TIMESTAMPTZ | When the row was last computed |
 
 Indexes: `file_fingerprints_content_idx` on `content_sha256` (duplicate and copy detection);

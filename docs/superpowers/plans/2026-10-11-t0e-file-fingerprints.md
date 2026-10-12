@@ -54,7 +54,9 @@ share files, 137 GB) and `all` (the rest of the share, 2.26 TB, days). Local upl
    daemon; the two share one rule — do not run the `all` phase while a force crawl is busy.
 3. **Status per file** (`done` / `error` / `missing`) with an error message, so unreadable, moved or
    corrupt files are recorded; `missing` and `error` rows are retried on every run (a file may come
-   back; a share hiccup is not permanent) — `--skip-failed` turns that off.
+   back; a share hiccup is not permanent) — `--skip-failed` turns that off. *(Amended after the
+   Outcome: a file that is not a usable force file is a permanent error, not retried; see the
+   follow-up note there.)*
 4. **Moves:** `scripts/index_archive.py` discovers every FK to `directus_files` from the catalog and
    re-points it when a file moves, so it will also re-point `file_fingerprints`. Fingerprints are
    derived data: when the new row already has its own fingerprint, the old one is dropped instead of
@@ -215,7 +217,8 @@ CLI: `python scripts/file_fingerprints.py --phase linked|all [--workers 1] [--ma
   `sample_data_files`, `session_data_files` or `machining_force_analysis` (read the actual column
   names from `db/migrations`); a row is selected when it has no fingerprint, or its stored
   `size_bytes`/`source_mtime` differ from the current staleness key (Global Constraints), or its status
-  is `missing`/`error` (unless `--skip-failed`). Order: linked-ness irrelevant within a phase; order
+  is `missing`/`error` (unless `--skip-failed`; amended: permanent errors only with
+  `--retry-permanent`, see the Outcome follow-up). Order: linked-ness irrelevant within a phase; order
   by `hashed_at NULLS FIRST, id` so never-tried files go first and a failing file moves to the back.
 - **Paths** (`resolve_path`): `star` → `os.path.join(archive_root, *archive_path.split('/'))`
   (default root: `force_orchestrator.ARCHIVE_UNC` — import the constant or re-read the same
@@ -321,7 +324,19 @@ three `.mat` files with no `data`/`DATA` variable (two `workspace_…` saves and
 file: not captures), and `122-AA-MM-2025-6-5-F1-…mat`, the known corrupt file (h5py cannot open
 it). No shape has fewer rows than columns; all 187 content hashes are distinct.
 
-Left for the maintainer: `--phase all` (≈2.26 TB, days; use `--skip-failed` on repeat runs so
-the four permanent errors are not re-read each time), and deciding whether the indexer change in
+Left for the maintainer: `--phase all` (≈2.26 TB, days), and deciding whether the indexer change in
 `scripts/index_archive.py` is deployed with the branch (the deployed indexer already copes: on a
 duplicate it keeps the old row marked missing).
+
+**Follow-up (2026-10-11): permanent errors are no longer retried by default**, so `--skip-failed`
+is not needed for repeat runs of `--phase all`. A `FingerprintError` (`NoForceArray`,
+`BadForceArray`, `UnreadableMat`) is now written with `error_message` starting `permanent: <Class>: `
+(no migration: the prefix is the marker, documented in the script's header). The selection
+re-reads such a row only when its staleness key changes or with the new `--retry-permanent`;
+`missing` rows and the other `error` rows (read failures after the retries, `hashing started`,
+`file changed while hashing`, unexpected exceptions) are still retried on every run unless
+`--skip-failed` (both flags together re-read only the permanent errors). A v7.3 chunk that fails
+to decode (h5py filter / inflate / checksum / B-tree signature) is retried like a read error, then
+recorded as a permanent `UnreadableMat` if the whole-file pass read every byte cleanly; `file read
+failed` (a dropped share) stays retryable. The four live error rows predate the prefix, so the
+first run with this version reads those four files once more and marks them permanent.
