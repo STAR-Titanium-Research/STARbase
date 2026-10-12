@@ -292,3 +292,35 @@ draft PR is open from the first commit, and pushes follow each step.
 - The lineage graph (G1).
 - Moving STARbase off d1-server.
 - The Force App's own `/app/` (unchanged).
+
+## 8. Errata (2026-10-12, found while planning)
+
+The code inventory done for the plan corrected four points above. They change how things are
+built, not what was decided.
+
+1. **No SDK alias.** §3.1 says STARbase aliases `@directus/extensions-sdk` to a shim "the way the
+   Force App did". The Force App never did that. `@d1/force-plotting` is host-neutral by
+   construction and reaches its host through `setForceHost`. STARbase follows the same pattern:
+   - every page and kit file reaches Directus only through `ExplorerHost`, whose `api` is widened
+     to `get`/`post`/`patch`/`delete` and which gains `fieldsFor()`;
+   - links go through one link resolver in `@d1/ui` (`configureLinks`): pages keep writing today's
+     Directus paths (`/home/…`, `/content/…`, `/d1-force-dashboard?…`), and each host maps them to
+     a route or an external URL;
+   - pages render inside a frame component the host installs (`setPageFrame`);
+   - `noSdkImports.test.ts` is extended into a guard over all of `@d1/ui` and
+     `@d1/starbase-pages`.
+2. **FAST deep link.** The FAST plotter already reads `?operation=<id>`, so its STARbase page is
+   `/plot/fast?operation=<id>`, not `?run=`.
+3. **Report links.** The function in `d1-report` is `adminRecordUrl` (not `recordUrl`), and its
+   `/label` and `/labels` redirects hard-code `/admin/home/labels`. Both learn `STARBASE_URL`.
+4. **The FAST extraction on `feat/lab-web-stage1` is out of date.** It predates `f58605ce`
+   (stale-load guards and cleanup) and `5d794c11` (`recordRoute` links). `@d1/fast-plotting` is
+   re-extracted from today's `d1-fast-dashboard`, taking only the branch's `FastHost` contract and
+   its error-message fix (`4595f7eb`).
+
+**Plan split.** Step 0 can change the sign-in (to Bearer) and the editing (to a new tab), so the
+work is in two plans:
+- `2026-10-12-starbase-1-foundations.md` covers step 0, the FAST package and the page move. It
+  holds whatever step 0 finds.
+- `2026-10-12-starbase-2-app.md` covers the app, the edit frame, the plot pages, the phone layout
+  and deployment. It is an outline until the step-0 results are recorded here.
