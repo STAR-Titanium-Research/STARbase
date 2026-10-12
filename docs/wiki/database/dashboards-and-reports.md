@@ -137,7 +137,7 @@ layout live; **Print** sends the same markup to your printer.
 **Templates** are data, held in a collection. Each template defines page geometry (A4, roll,
 custom), label size and margins, gap between labels, label arrangement (QR on top, QR on left,
 or text only), the fields to show (sample code, short ID, nickname, material, date, owner
-initials), their sizes and bold on or off, and which fields go into the QR payload. Everyone can
+initials), their sizes and bold on or off, and which extras go into the QR payload (all of them unless you untick "All (default)"). Everyone can
 create a template and edit or delete their own; admins can edit or delete any (the plain Directus
 form is the admin fallback). Pre-built templates:
 
@@ -159,8 +159,14 @@ material and owner appear only if your role can read those collections. Each fie
 minimum size, then is cut off with "…"; the preview flags labels that were clipped.
 
 **QR and scanning.** The QR payload is self-describing plain text, readable by any phone with no
-login, so the QR is **not private**. It starts with `D1 SAMPLE`, then the sample code and short
-ID, then the fields the template chose (nickname, material, date, owner initials). The Finder
+login, network or database access, so anyone who finds a sample can identify it and contact the
+lab, and the QR is **not private**. It starts with `D1 SAMPLE`, then the sample code and short
+ID, the material and nickname, the date and owner initials, the owner's email and
+`Contact: <lab email>`; a value that is empty is left out, and a template can leave extras out
+(untick "All (default)"). The lab contact email is one setting for the whole lab, shown under
+**Template** on the labels page ("Contact on labels: ..."); admins change it there. A label too
+small for this much text drops to a lower error correction, and the preview warns "QR may be
+hard to scan on this label size" when it may not scan. The Finder
 can scan a printed label or a pasted payload to open the sample. **Old labels** (printed before
 these pages existed) encode `/admin/content/physical_samples/<id>`, the Data Studio form, which
 still works. Scanning with a phone opens that record in the Directus app, sign-in first if

@@ -19,6 +19,8 @@ export interface LabelDoc {
 	pages: number;
 	clipped: number;
 	invalid: number;
+	// Labels whose QR modules are too small to scan reliably (see renderLabelDocument).
+	qrDense: number;
 }
 
 const DEBOUNCE_MS = 150;
@@ -28,6 +30,8 @@ export function useLabelDocument(inputs: {
 	entries: Ref<LabelEntry[]>;
 	start: Ref<number>;
 	template: Ref<LabelTemplate | null>;
+	// The lab contact for the QR's Contact line (label_settings).
+	contactEmail: Ref<string | null>;
 }) {
 	const doc = ref<LabelDoc | null>(null);
 	const problems = computed(() => (inputs.template.value ? validateTemplate(inputs.template.value) : []));
@@ -51,8 +55,8 @@ export function useLabelDocument(inputs: {
 		const t = inputs.template.value;
 		if (!t || validateTemplate(t).length) return null;
 		const pages = paginateCounts(inputs.entries.value, clampStart(inputs.start.value, slotsPerPage(t)), t);
-		const out = renderLabelDocument(pages, t, qrModules, { outline, measure: canvasMeasure() });
-		return { html: out.html, labels: countLabels(pages, isPrintableSample), pages: pages.length, clipped: out.clipped, invalid: out.invalid };
+		const out = renderLabelDocument(pages, t, qrModules, { outline, measure: canvasMeasure(), contactEmail: inputs.contactEmail.value });
+		return { html: out.html, labels: countLabels(pages, isPrintableSample), pages: pages.length, clipped: out.clipped, invalid: out.invalid, qrDense: out.qrDense };
 	}
 
 	function refresh(): void {
@@ -70,7 +74,7 @@ export function useLabelDocument(inputs: {
 		}, DEBOUNCE_MS);
 	}
 
-	watch([inputs.entries, inputs.start, inputs.template], refresh, { deep: true, immediate: true });
+	watch([inputs.entries, inputs.start, inputs.template, inputs.contactEmail], refresh, { deep: true, immediate: true });
 	onBeforeUnmount(() => clearTimeout(timer));
 
 	// The print variant: no outlines, rendered now from the current inputs.

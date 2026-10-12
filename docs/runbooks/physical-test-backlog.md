@@ -851,7 +851,7 @@ migration 141 prints about ownerless records.
   shows the right number of labels for each sample, and the printed sheet matches. A chip with its own number is marked (a dot and an accent border); clearing its
   number puts it back on the global value and the mark goes. Removing a chip and ticking it again starts from the
   global value.
-- [ ] **#TBD-L13 — Scan a label with a phone (iPhone Safari).** On an iPhone on the lab network or Tailscale,
+- [ ] **#252-L1 — Scan a label with a phone (iPhone Safari).** On an iPhone on the lab network or Tailscale,
   sign in at `https://d1-server.tail54eeb6.ts.net/admin`. Open **Home** and press **Scan a label**; allow the
   camera when Safari asks. The rear camera shows. Hold it over a printed label's QR code: the dialog closes and
   that sample's page opens. Open the Finder (the search box in the sidebar) and press **Scan**: the same dialog
@@ -863,13 +863,13 @@ migration 141 prints about ownerless records.
   address instead (`http://d1-server...`): it says the camera needs the HTTPS address. Open the dialog and
   lock the phone, then unlock it: the camera comes back and scanning resumes without reopening the dialog. Open the
   dialog, then switch to the phone camera app and back: the dialog shows "The camera stopped..." (or, if it
-  had only been hidden, resumes), and **Try again** restarts it. Since PR B (#TBD).
-- [ ] **#TBD-L14 — Scan a label with a phone (Android Chrome).** The same checks as #TBD-L13 on an Android phone
+  had only been hidden, resumes), and **Try again** restarts it. Since #252.
+- [ ] **#252-L2 — Scan a label with a phone (Android Chrome).** The same checks as #TBD-L13 on an Android phone
   in Chrome: the rear camera (not the front one) opens, a label scans from about 15 cm, a label printed on the
   QL-700 62 mm roll scans too, and the camera light goes off when the dialog is closed. Lock/unlock mid-scan
   resumes scanning, and opening the camera app and returning shows the "stopped" message or resumes, as on the
-  iPhone. Since PR B (#TBD).
-- [ ] **#TBD-L15 — Scan a label with a USB scanner.** Plug a USB (keyboard-mode) barcode scanner into a PC, open
+  iPhone. Since #252.
+- [ ] **#252-L3 — Scan a label with a USB scanner.** Plug a USB (keyboard-mode) barcode scanner into a PC, open
   any Explorer page, press Ctrl K (or click the sidebar search box) and scan a label's QR code, once with a label
   printed after this change (its lines are separated by ` | `) and once with an older one (separated by `·`, which a
   scanner cannot type: it types some other character or none). Expect: the Finder opens that sample within about a
@@ -881,7 +881,31 @@ migration 141 prints about ownerless records.
   whose short ID is wrong but whose code is right: a card offers the sample with "Open sample", and nothing opens
   until you press it. Paste the label's text (copy it from a phone's QR reader) into the box: it opens the sample at
   once. Then type an ordinary search such as `S-01` and check the results list still works; paste a few lines of
-  ordinary text: they become one line. Since PR B (#TBD).
+  ordinary text: they become one line. Since #252.
+
+- [ ] **#247-L13 — Rich QR scans on a phone.** Set a lab contact on the labels page (admin, under Template:
+  "Contact on labels"), then print one label of a sample that has a nickname, a material and an owner with an email
+  on the A4 4×5 sheet, the 50×25 single and the Brother DK-22205 roll. Scan each with the stock camera of an iPhone
+  and of an Android phone. Each shows the whole text: `D1 SAMPLE`, the code and short ID, material and nickname,
+  date and owner initials, the owner's email and `Contact: <the lab email>`, with no login and no network. The
+  preview shows no "QR may be hard to scan" warning on A4 4×5 and the DK-22205. For the 50×25 use a sample with a
+  long code (about 22 characters) and an owner with a Sheffield-length email: the QR grows to the full label
+  height and the text beside it may shrink or be cut (the label is flagged as clipped), and it still scans; if
+  the preview does warn, the QR is too small for that payload on that label and the template needs a bigger label
+  or fewer QR extras. Also scan a label of a template with
+  "All (default)" unticked and only Date chosen: it shows just the code, short ID and date. A label of a sample
+  whose owner has no email scans without an email line. Since #247.
+
+- [ ] **#247-L14 — P-touch .lbx export.** Pick the Brother DK-22205 template on the labels page, tick 3 samples and
+  click "Download for P-touch (.lbx)": a `labels-<date>.zip` with three `<code>-1.lbx` files (one sample ticked,
+  one copy: a bare `<code>.lbx`). Unzip it and open one `.lbx` in P-touch Editor on the PC with the QL-700 (62 mm
+  roll loaded). It opens without an error, with the QR on the left and the code (bold), short ID and nickname to its
+  right, the label 62 mm wide and about 30 mm long, and P-touch keeps the QL-700 and the 62 mm continuous roll.
+  Print it. Scan the QR with a phone: the whole payload as in L13, with a non-ASCII letter (for example "é" in a
+  nickname) intact. The text on the label matches the preview, and nothing is cut at the edges. Not checked here:
+  there is no Brother driver on the dev PC, so P-touch Editor re-targeted the file to another printer and the paper
+  size and orientation (portrait, `format="259"`, QL-550 `printerID`) are unconfirmed. If P-touch asks to change the
+  paper, or the label comes out rotated, report it. Since the .lbx PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

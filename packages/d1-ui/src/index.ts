@@ -127,13 +127,21 @@ export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints,
 
 // Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)
 export {
-	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, paginateCounts, fitText,
-	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, QR_HEADER, renderLabelDocument,
+	FIELD_KEYS, QR_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, paginateCounts, fitText,
+	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, effectiveQrKeys, QR_HEADER, renderLabelDocument, chooseQr, moduleMm, MIN_MODULE_MM, WARN_MODULE_MM, contactEmailOf, parseContactInput, contactLine, EMAIL_PATTERN,
 	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
 	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
-	saveErrorText, moveField, sampleEntries,
+	saveErrorText, moveField, sampleEntries, buildLbxDownload, isLbxTemplate, LBX_TAPE_MM,
 } from './labels';
 export type {
-	FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
-	RenderOptions, RenderedLabels, QrModules, Measure, BrokenTemplate, CountedSample, LabelEntry,
+	QrKey, FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
+	RenderOptions, RenderedLabels, QrModules, QrLevel, ChosenQr, Measure, BrokenTemplate, CountedSample, LabelEntry, LbxDownload,
 } from './labels';
+
+// Frequently used (Home panel and the visit pings; the server half is core/extensions/d1-usage)
+export {
+	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, pinEntry, readDismissed,
+	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, revertPin, routeTarget, splitRecordTarget, suggestedPageEntries,
+	withoutDismissed, writeDismissed,
+} from './usage';
+export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';

@@ -65,7 +65,7 @@ describe('resolveLabel', () => {
 		expect(await resolveLabel(api([[row]]), typed)).toMatchObject({ kind: 'open' });
 	});
 	it('round-trips what buildQrPayload makes', async () => {
-		const text = buildQrPayload({ code: 'A-1', shortId: 'deadbeef', nickname: 'n', material: 'm', date: '2026-01-01', ownerInitials: 'DP' } as any, ['material', 'nickname']);
+		const text = buildQrPayload({ code: 'A-1', shortId: 'deadbeef', nickname: 'n', material: 'm', date: '2026-01-01', ownerInitials: 'DP' } as any, null, ['material', 'nickname']);
 		const a = api([[{ sample_id: 'u', sample_code: 'A-1' }]]);
 		await resolveLabel(a, text);
 		expect(a.calls[0].filter).toEqual({ short_id: { _eq: 'deadbeef' } });

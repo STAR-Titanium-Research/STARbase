@@ -3,7 +3,11 @@
 -- decisions 5 and 6): label layouts become rows in a `label_templates` collection instead of
 -- being hard-coded in the page. One row holds the page geometry (a sheet, or a continuous roll
 -- whose page is one label), the label grid, an arrangement, the ordered text fields and the extra
--- fields that go into the QR payload.
+-- fields that go into the QR payload (an empty list means all of them: material, nickname, date,
+-- owner_initials, owner_email, contact_email; the sample code and short id are always there).
+--
+-- It also adds the singleton `label_settings`, the lab's contact email that every label's QR carries
+-- (everyone reads it, only admins write it) so that whoever finds a sample can reach someone.
 --
 -- Permissions (decision 6): every Lab Member reads and creates; update and delete only where
 -- user_created is the signed-in user (create and update cannot touch is_default or the system columns); admins (admin_access policy) can do everything. The Lab Member
@@ -76,7 +80,7 @@ COMMENT ON COLUMN label_templates.padding_mm IS 'Inner padding of each label in 
 COMMENT ON COLUMN label_templates.arrangement IS 'Label layout: qr_top (QR above centred text), qr_left (QR left, text right) or text_only.';
 COMMENT ON COLUMN label_templates.qr_size_mm IS 'QR code edge in mm; NULL means the largest square that fits.';
 COMMENT ON COLUMN label_templates.fields IS 'Ordered JSON array of printed text lines: [{"key": FieldKey, "size": "lg"|"md"|"sm", "bold": bool}]; FieldKey is sample_code, short_id, nickname, material, date or owner_initials.';
-COMMENT ON COLUMN label_templates.qr_fields IS 'JSON array of extra FieldKeys written into the QR payload besides the sample identity.';
+COMMENT ON COLUMN label_templates.qr_fields IS 'JSON array of the extras written into the QR payload besides the sample code and short id: material, nickname, date, owner_initials, owner_email, contact_email. Empty means all of them.';
 COMMENT ON COLUMN label_templates.is_default IS 'True for the template the labels page selects first; at most one row is true.';
 COMMENT ON COLUMN label_templates.user_created IS 'Directus user who created the template; only they (and admins) can update or delete it.';
 COMMENT ON COLUMN label_templates.date_created IS 'When the template was created (set by Directus).';
@@ -117,31 +121,79 @@ CREATE TRIGGER audit_label_templates
 -- Seeds (owned by nobody: only admins can edit them).
 INSERT INTO label_templates (
     name, description, media, page_width_mm, page_height_mm, columns, rows, label_width_mm, label_height_mm,
-    margin_top_mm, margin_left_mm, gap_x_mm, gap_y_mm, arrangement, fields, is_default
+    margin_top_mm, margin_left_mm, gap_x_mm, gap_y_mm, arrangement, fields, qr_fields, is_default
 ) VALUES
 (
     'A4 4×5', 'A4 sheet, 4 columns by 5 rows, edge to edge', 'sheet', 210, 297, 4, 5, 52.5, 59.4,
     0, 0, 0, 0, 'qr_top',
-    '[{"key": "sample_code", "size": "lg", "bold": true}, {"key": "nickname", "size": "sm", "bold": false}]', true
+    '[{"key": "sample_code", "size": "lg", "bold": true}, {"key": "nickname", "size": "sm", "bold": false}]', '["material", "nickname", "date", "owner_initials", "owner_email", "contact_email"]', true
 ),
 (
     'L7160 21-up', 'Avery L7160 address labels, A4, 3 by 7', 'sheet', 210, 297, 3, 7, 63.5, 38.1,
     15.15, 7.25, 2.54, 0, 'qr_left',
-    '[{"key": "sample_code", "size": "md", "bold": true}, {"key": "nickname", "size": "sm", "bold": false}]', false
+    '[{"key": "sample_code", "size": "md", "bold": true}, {"key": "nickname", "size": "sm", "bold": false}]', '["material", "nickname", "date", "owner_initials", "owner_email", "contact_email"]', false
 ),
 (
     '50×25 single', 'Single 50 x 25 mm label on a roll', 'roll', 50, 25, 1, 1, 50, 25,
     0, 0, 0, 0, 'qr_left',
-    '[{"key": "sample_code", "size": "md", "bold": true}, {"key": "nickname", "size": "sm", "bold": false}]', false
+    '[{"key": "sample_code", "size": "md", "bold": true}, {"key": "nickname", "size": "sm", "bold": false}]', '["material", "nickname", "date", "owner_initials", "owner_email", "contact_email"]', false
 ),
 (
     'Brother DK-22205 62 mm', 'Brother QL continuous roll, 62 mm wide, 30 mm label', 'roll', 62, 30, 1, 1, 62, 30,
     0, 0, 0, 0, 'qr_left',
     '[{"key": "sample_code", "size": "lg", "bold": true}, {"key": "short_id", "size": "md", "bold": false}, {"key": "nickname", "size": "sm", "bold": false}]',
-    false
+    '["material", "nickname", "date", "owner_initials", "owner_email", "contact_email"]', false
 );
 
--- Directus metadata.
+-- The lab contact printed into every label's QR code (a "Contact: <email>" line): a singleton, so there is one
+-- row, id 1, and the CHECK stops a second. It starts empty (the QR then has no contact line) until an admin sets it
+-- on the labels page. Everyone reads it, only admins write it (the Lab Member policy gets read only).
+CREATE TABLE label_settings (
+    id            INTEGER PRIMARY KEY DEFAULT 1,
+    contact_email TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    version       INTEGER NOT NULL DEFAULT 1,
+    CONSTRAINT label_settings_singleton_check CHECK (id = 1),
+    CONSTRAINT label_settings_contact_email_check CHECK (
+        contact_email IS NULL OR contact_email ~ '^[^@[:space:]]+@[^@[:space:]]+[.][^@[:space:]]+$'
+    )
+);
+
+COMMENT ON TABLE label_settings IS 'Singleton (one row, id 1): settings shared by every printed label. Today the lab contact email that the QR code carries.';
+COMMENT ON COLUMN label_settings.id IS 'Always 1: the table holds one row.';
+COMMENT ON COLUMN label_settings.contact_email IS 'Lab contact email written into every label QR code as "Contact: <email>"; NULL leaves the line out. Must look like an email address.';
+COMMENT ON COLUMN label_settings.created_at IS 'When the row was created.';
+COMMENT ON COLUMN label_settings.updated_at IS 'Last update time, maintained by the occ_label_settings trigger.';
+COMMENT ON COLUMN label_settings.version IS 'Optimistic-concurrency counter, incremented by the occ_label_settings trigger.';
+
+CREATE TRIGGER occ_label_settings
+    BEFORE UPDATE ON label_settings
+    FOR EACH ROW EXECUTE FUNCTION occ_update_trigger_function();
+CREATE TRIGGER audit_label_settings
+    AFTER INSERT OR UPDATE OR DELETE ON label_settings
+    FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+
+INSERT INTO label_settings (id, contact_email) VALUES (1, NULL);
+
+-- Directus metadata for label_settings.
+INSERT INTO directus_collections (collection, icon, note, hidden, singleton, sort)
+VALUES ('label_settings', 'contact_mail', 'Lab contact email printed into every label QR code (admins edit it on the Print labels page)', true, true, 93)
+ON CONFLICT (collection) DO NOTHING;
+
+INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, translations)
+SELECT v.collection, v.field, v.special, v.interface, v.options::json, v.display, v.readonly, v.hidden, v.sort, v.width, v.translations::json
+FROM (VALUES
+    ('label_settings', 'id', NULL, 'input', NULL, NULL, true, true, 1, 'full', NULL),
+    ('label_settings', 'contact_email', NULL, 'input', '{"placeholder":"lab@example.org"}', NULL, false, false, 2, 'full',
+        '[{"language":"en-US","translation":"Contact email on labels"}]'),
+    ('label_settings', 'created_at', NULL, 'datetime', NULL, 'datetime', true, true, 3, 'half', NULL),
+    ('label_settings', 'updated_at', NULL, 'datetime', NULL, 'datetime', true, true, 4, 'half', NULL),
+    ('label_settings', 'version', NULL, 'input', NULL, NULL, true, true, 5, 'half', NULL)
+) v(collection, field, special, interface, options, display, readonly, hidden, sort, width, translations)
+WHERE NOT EXISTS (SELECT 1 FROM directus_fields f WHERE f.collection = v.collection AND f.field = v.field);
+
+-- Directus metadata for label_templates.
 INSERT INTO directus_collections (collection, icon, note, hidden, sort)
 VALUES ('label_templates', 'label', 'Printable label layouts for the Explorer labels page', false, 92)
 ON CONFLICT (collection) DO NOTHING;
@@ -188,7 +240,7 @@ FROM (VALUES
     ('label_templates', 'fields', 'cast-json', 'input-code', '{"language":"json"}', NULL, NULL, false, false, 19, 'full',
         '[{"language":"en-US","translation":"Printed fields"}]'),
     ('label_templates', 'qr_fields', 'cast-json', 'input-code', '{"language":"json"}', NULL, NULL, false, false, 20, 'full',
-        '[{"language":"en-US","translation":"Extra QR payload fields"}]'),
+        '[{"language":"en-US","translation":"QR payload extras (empty = all)"}]'),
     ('label_templates', 'user_created', 'user-created', 'select-dropdown-m2o', '{"template":"{{first_name}} {{last_name}}"}',
         'user', NULL, true, true, 21, 'half', NULL),
     ('label_templates', 'date_created', 'date-created', 'datetime', NULL, 'datetime', '{"relative":true}', true, true, 22, 'half', NULL),
@@ -226,11 +278,23 @@ WHERE NOT EXISTS (
       AND p.collection = 'label_templates' AND p.action = v.action
 );
 
+-- label_settings: Lab Members read only (the generated 'unfiltered' row of scripts/access_rules.json); admins
+-- write through the admin_access policy.
+INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
+SELECT 'label_settings', 'read', '{}'::json, '{}'::json, NULL, '*', '20000002-0000-0000-0000-000000000002'
+WHERE NOT EXISTS (
+    SELECT 1 FROM directus_permissions p
+    WHERE p.policy = '20000002-0000-0000-0000-000000000002' AND p.collection = 'label_settings' AND p.action = 'read'
+);
+
 -- migrate:down
-DELETE FROM directus_permissions WHERE collection = 'label_templates';
+DELETE FROM directus_permissions WHERE collection IN ('label_templates', 'label_settings');
 DELETE FROM directus_relations WHERE many_collection = 'label_templates';
-DELETE FROM directus_fields WHERE collection = 'label_templates';
-DELETE FROM directus_collections WHERE collection = 'label_templates';
+DELETE FROM directus_fields WHERE collection IN ('label_templates', 'label_settings');
+DELETE FROM directus_collections WHERE collection IN ('label_templates', 'label_settings');
+DROP TRIGGER IF EXISTS audit_label_settings ON label_settings;
+DROP TRIGGER IF EXISTS occ_label_settings ON label_settings;
+DROP TABLE IF EXISTS label_settings;
 DROP TRIGGER IF EXISTS audit_label_templates ON label_templates;
 DROP TRIGGER IF EXISTS occ_label_templates ON label_templates;
 DROP TRIGGER IF EXISTS label_templates_single_default ON label_templates;

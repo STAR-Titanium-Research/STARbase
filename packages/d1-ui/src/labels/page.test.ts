@@ -5,6 +5,7 @@ import {
 } from './page';
 import { templateFromRow } from './template';
 import { toLabelSample, isPrintableSample } from './sample';
+import { QR_KEYS } from './types';
 
 const ID1 = '11111111-1111-4111-8111-111111111111';
 const ID2 = '22222222-2222-4222-8222-222222222222';
@@ -85,6 +86,10 @@ describe('summary', () => {
 	it('reads as the page shows it', () => {
 		expect(summaryText({ labels: 12, pages: 1, clipped: 1, invalid: 2 })).toBe('12 labels on 1 page · 1 clipped · 2 skipped (invalid)');
 		expect(summaryText({ labels: 1, pages: 2, clipped: 0, invalid: 0 })).toBe('1 label on 2 pages · 0 clipped · 0 skipped (invalid)');
+		expect(summaryText({ labels: 1, pages: 1, clipped: 0, invalid: 0, qrDense: 0 })).not.toContain('QR');
+		expect(summaryText({ labels: 1, pages: 1, clipped: 0, invalid: 0, qrDense: 1 })).toBe(
+			'1 label on 1 page · 0 clipped · 0 skipped (invalid) · QR may be hard to scan on this label size'
+		);
 	});
 });
 
@@ -141,6 +146,10 @@ describe('templatePayload', () => {
 		expect(body.qr_fields).toEqual(['material', 'date']);
 		expect(body.fields).toEqual([{ key: 'sample_code', size: 'lg', bold: false }]);
 	});
+	it('stores an empty QR selection as all, and a new template starts with all', () => {
+		expect(blankTemplate().qrFields).toEqual([...QR_KEYS]);
+		expect(templatePayload({ ...t, qrFields: [] }, false).qr_fields).toEqual([...QR_KEYS]);
+	});
 });
 
 describe('draft helpers', () => {
@@ -172,6 +181,7 @@ describe('draft helpers', () => {
 describe('sample fields', () => {
 	it('are the ones toLabelSample reads', () => {
 		expect(LABEL_SAMPLE_FIELDS).toContain('owner_person_id.full_name');
+		expect(LABEL_SAMPLE_FIELDS).toContain('owner_person_id.email');
 		expect(LABEL_SAMPLE_FIELDS).toContain('material_id.alloy_code');
 	});
 });

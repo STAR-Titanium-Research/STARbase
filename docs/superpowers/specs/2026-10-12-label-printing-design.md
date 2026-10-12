@@ -31,7 +31,7 @@ without the database.
      only
    - an ordered list of fields (sample code, short ID, nickname, material, date, owner initials),
      each with a size (large/normal/small) and bold on or off
-   - the fields that go into the QR payload (see 7)
+   - the extras that go into the QR payload (see 7; all of them by default)
 6. **Template permissions:** everyone reads and creates; owners edit and delete their own;
    admins edit and delete all. Seeds:
    - the maintainer's A4 4 × 5 sheet (52.5 × 59.4 mm, edge to edge, QR on top, then the code in
@@ -39,19 +39,39 @@ without the database.
    - L7160 21-up (63.5 × 38.1 mm)
    - 50 × 25 single
    - Brother DK-22205, a 62 mm continuous roll, QR on the left
-7. **QR payload: self-describing text**, readable by any phone with no network or login, for
-   future-proofing (the maintainer's AppSheet practice). The first line is fixed so it can be
-   parsed and versioned:
+7. **QR payload: self-describing text**, readable by any phone with no network, login or database
+   access, so that anyone who finds a sample can identify it and contact someone (decided
+   2026-10-12; it replaces the first, shorter format). The first line is fixed so it can be parsed
+   and versioned:
    ```
    D1 SAMPLE
    S-0123 | 1a2b3c4d
    Ti-6Al-4V | "bracket A"
    2026-10-01 | DP
+   dp@example.org
+   Contact: lab@example.org
    ```
-   The separator is ASCII ` | ` so a USB scanner, which types keystrokes and cannot type a middle dot, can
-   read every line. Labels printed earlier used ` · `; they still parse (decision 12).
-   The code and short ID are always included; the template picks the rest. Every sample already
-   has a short ID (`db/migrations/20261010000150_short_ids.sql` back-fill and trigger).
+   Separators are ASCII ` | ` (a USB scanner types keystrokes and cannot type `·`; labels printed
+   with ` · ` before are still read). An empty value is left out and a line with both values empty
+   is dropped. Line breaks and tabs inside a value become spaces.
+   - The code and short ID are always included. Every sample already has a short ID
+     (`db/migrations/20261010000150_short_ids.sql` back-fill and trigger).
+   - The rest (material, nickname, date, owner initials, owner email, the lab contact email) is in
+     every template's QR by default: `qr_fields` lists them and an empty or NULL list means all, so a
+     template can still leave some out (the editor shows "All (default)").
+   - The owner email is `people.email` of the sample's owner. Lab Members already read `people` in
+     full (`scripts/access_rules.json`, `people`: read `*`), so the labels page asks for
+     `owner_person_id.email` in the same query as `owner_person_id.full_name` and no permission
+     widens. A sample whose owner has no email just has no email line.
+     **The owner email is printed on labels that anyone can read, and a label outlives the owner's time at
+     the university.** A template that should not carry it opts out by unticking "Owner email" in its QR
+     extras (untick "All (default)" first).
+   - The lab contact is the singleton `label_settings.contact_email`: everyone reads it, only admins
+     write it (inline on the labels page, one PATCH). Empty means no Contact line.
+   - **Density.** The payload is about 150 to 200 characters, so the QR has more modules. The
+     renderer draws error correction M while a module stays at least 0.33 mm on the label, else L,
+     and the preview says "QR may be hard to scan on this label size" when modules are under 0.3 mm
+     even at L.
 8. **Page flow.**
    - The left column is the picker: search, filter by project or campaign, tick boxes, paste
      codes, and copies per sample.

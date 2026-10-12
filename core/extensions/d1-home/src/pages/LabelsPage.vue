@@ -3,17 +3,20 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
 	LoadState, PageShell, Section, blankTemplate, canEditTemplate, MAX_COPIES, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
-	sampleEntries, slotsPerPage, summaryText, useRequestGate, type LabelSample, type LabelTemplate,
+	sampleEntries, slotsPerPage, summaryText, useRequestGate, buildLbxDownload, isLbxTemplate, type LabelSample, type LabelTemplate,
 } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 import { useExplorerHost } from '../explorerHost';
 import SamplePicker from '../labels/SamplePicker.vue';
+import ContactSetting from '../labels/ContactSetting.vue';
 import LabelPreview from '../labels/LabelPreview.vue';
 import TemplateEditor from '../labels/TemplateEditor.vue';
 import { useLabelDocument } from '../labels/useLabelDocument';
 import { useLabelSamples } from '../labels/useLabelSamples';
+import { useLabelSettings } from '../labels/useLabelSettings';
 import { useLabelTemplates } from '../labels/useLabelTemplates';
 import { printLabels } from '../labels/printFrame';
+import { saveFile } from '../labels/saveFile';
 import '../labels/form.css';
 
 // Print labels: pick samples on the left, pick or edit a template on the right, check the live preview, print.
@@ -24,6 +27,7 @@ const route = useRoute();
 
 const templates = useLabelTemplates();
 const samples = useLabelSamples();
+const settings = useLabelSettings();
 const copies = ref(1);
 const start = ref(1);
 
@@ -31,16 +35,18 @@ const start = ref(1);
 const draft = ref<LabelTemplate | null>(null);
 const active = computed<LabelTemplate | null>(() => draft.value ?? templates.selected.value);
 
-// With nothing ticked, the editor previews an example label so the layout can still be judged.
+// With nothing ticked, the editor previews an example label so the layout can still be judged. It is as long as a
+// real one (a code of about 22 characters, an email of real length), so a layout that only fits a short example
+// shows up as clipped or as a dense QR code here, not on the printed sheet.
 const EXAMPLE: LabelSample = {
-	id: '00000000-0000-4000-8000-000000000000', code: 'S-0123', shortId: '1a2b3c4d', nickname: 'bracket A', material: 'Ti-6Al-4V',
-	date: '2026-10-01', ownerInitials: 'DP',
+	id: '00000000-0000-4000-8000-000000000000', code: '1234-AG-MF-2026-10-12', shortId: '1a2b3c4d', nickname: 'FAST control bar', material: 'Ti-6Al-4V',
+	date: '2026-10-12', ownerInitials: 'DP', ownerEmail: 'dennis.premoli2@sheffield.ac.uk',
 };
 const showingExample = computed(() => !!draft.value && samples.selected.value.length === 0);
 const previewSamples = computed(() => (showingExample.value ? [EXAMPLE] : samples.selected.value));
 
 const entries = computed(() => sampleEntries(previewSamples.value, showingExample.value ? {} : samples.copyOverrides.value, showingExample.value ? 1 : copies.value));
-const { doc, problems, rendering, error: renderError, forPrint } = useLabelDocument({ entries, start, template: active });
+const { doc, problems, rendering, error: renderError, forPrint } = useLabelDocument({ entries, start, template: active, contactEmail: settings.contactEmail });
 
 const slots = computed(() => (active.value ? slotsPerPage(active.value) : 1));
 const showStart = computed(() => active.value?.media === 'sheet' && slots.value > 1);
@@ -58,7 +64,8 @@ const tidyStart = () => { if (problems.value.length === 0) start.value = clampSt
 const tidyCopies = () => { copies.value = clampCopies(copies.value); };
 
 const summary = computed(() => (doc.value ? summaryText(doc.value) : ''));
-const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value && !renderError.value);
+// Not before the lab contact has loaded (or failed to): a label printed meanwhile would have no Contact line.
+const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value && !renderError.value && settings.loaded.value);
 
 // ---- the template picker -------------------------------------------------------------------------
 // A draft opened with openDraft() has a snapshot; the editor is "dirty" when the draft no longer matches it.
@@ -152,6 +159,25 @@ async function print(): Promise<void> {
 	}
 }
 
+// ---- download for P-touch (.lbx) ----------------------------------------------------------------
+// For the Brother QL-700 with the 62 mm roll: one .lbx per label for P-touch Editor on the PC that has the printer.
+// Same selection and copies as Print; a single label is a bare .lbx, several are one .zip.
+const showLbx = computed(() => isLbxTemplate(active.value));
+const canLbx = computed(() => showLbx.value && canPrint.value);
+const lbxError = ref('');
+function downloadLbx(): void {
+	const t = active.value;
+	if (!t || !canLbx.value) return;
+	lbxError.value = '';
+	try {
+		const out = buildLbxDownload(entries.value, t, settings.contactEmail.value);
+		if (!out) return;
+		saveFile(out.filename, out.mime, out.bytes);
+	} catch (e) {
+		lbxError.value = `The P-touch files could not be made: ${errorText(e)}`;
+	}
+}
+
 // ---- ?ids= and ?codes= --------------------------------------------------------------------------
 const selectionNote = ref('');
 const selectionError = ref('');
@@ -185,6 +211,7 @@ watch(() => JSON.stringify(parseSelectionQuery(route.query)), () => void applyQu
 
 onMounted(() => {
 	void templates.load();
+	void settings.load();
 	void samples.loadOptions();
 	void samples.runSearch();
 	void applyQuery();
@@ -237,12 +264,14 @@ onMounted(() => {
 								<button type="button" class="lf-btn" @click="newTemplate">New template</button>
 								<button type="button" class="lf-btn" :disabled="!templates.selected.value" @click="copyTemplate">Copy template</button>
 							</div>
+							<ContactSetting :settings="settings" :is-admin="host.isAdmin.value" />
 							<p v-if="templates.broken.value.length" class="d1-note warn">{{ templates.broken.value.length }} template{{ templates.broken.value.length === 1 ? ' is' : 's are' }} unreadable and shown greyed out above.</p>
 						</LoadState>
 					</Section>
 
 					<Section title="Preview">
 						<template #actions>
+							<button v-if="showLbx" type="button" class="lf-btn" :disabled="!canLbx" @click="downloadLbx">Download for P-touch (.lbx)</button>
 							<button type="button" class="lf-btn pri" :disabled="!canPrint || printing" @click="print">Print</button>
 						</template>
 						<LoadState v-if="!active" empty :empty-text="templates.loading.value ? 'Loading templates…' : 'No template to preview. Create one, or ask an admin.'" />
@@ -256,11 +285,16 @@ onMounted(() => {
 								<template v-else-if="!samples.selected.value.length">Tick samples to preview their labels.</template>
 								<template v-else-if="summary">{{ summary }}</template>
 								<span v-if="rendering" class="d1-note"> Updating…</span>
+								<span v-if="settings.loadError.value" class="bad" role="alert"> {{ settings.loadError.value }} The labels print without a Contact line.</span>
 							</p>
 							<LabelPreview :html="doc?.html ?? null" :page-width-mm="active.pageWidthMm || 210" />
 							<p v-if="active.media === 'roll'" class="d1-note hint">
 								Roll printers: in the print dialog choose the roll's paper size ({{ active.pageWidthMm }} mm wide) and 100% scale (no "fit to page").
 							</p>
+							<p v-if="showLbx" class="d1-note hint">
+								Download for P-touch (.lbx): open it in P-touch Editor on the PC with the QL-700, then print. Several labels download as one .zip of .lbx files.
+							</p>
+							<p v-if="lbxError" class="d1-note bad" role="alert">{{ lbxError }}</p>
 							<p v-if="printError" class="d1-note bad" role="alert">{{ printError }}</p>
 						</template>
 					</Section>

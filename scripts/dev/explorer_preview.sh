@@ -12,13 +12,15 @@
 #   npm run build -w directus-extension-d1-home
 #
 # Usage: bash scripts/dev/explorer_preview.sh [--stop]   (from the repo root)
+# Example with custom name prefix:
+#   D1_PREVIEW_NAME=d1-labels D1_PREVIEW_PORT=18056 bash scripts/dev/explorer_preview.sh
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
 REPO="$(pwd -W 2>/dev/null || pwd)"
 MAIN_CHECKOUT="${D1_MAIN_CHECKOUT:-D:\\Users\\CMBE Admn 3214022001\\Documents\\GitHub\\D1-Database}"
-NET=d1-preview; PG=d1-preview-pg; DX=d1-preview-directus; PORT="${D1_PREVIEW_PORT:-18055}"
+NAME="${D1_PREVIEW_NAME:-d1-preview}"; NET="$NAME"; PG="${NAME}-pg"; DX="${NAME}-directus"; PORT="${D1_PREVIEW_PORT:-18055}"
 LIVE_PG=d1-database-postgres-1; LIVE_DX=d1-database-directus-1
-FILES_VOL=d1-preview-uploads
+FILES_VOL="${NAME}-uploads"
 OVERLAY="${D1_PREVIEW_OVERLAY:-d1-home d1-admin-overview}"
 CREDS=.superpowers/preview-credentials.txt
 EXT_DIR=.superpowers/preview-extensions
