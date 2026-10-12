@@ -72,18 +72,35 @@ function openDraft(t: LabelTemplate | null): void {
 	snapshot = t ? JSON.stringify(t) : '';
 	draftKey.value++;
 }
-const confirmDiscard = (): boolean => !dirty.value || window.confirm('Discard your unsaved changes to this template?');
+// The kit's discard dialog (as EditDrawer's): the action waits in `pendingAction` until the user chooses.
+const discardOpen = ref(false);
+let pendingAction: (() => void) | null = null;
+function askDiscard(action: () => void): void {
+	if (!dirty.value) return action();
+	pendingAction = action;
+	discardOpen.value = true;
+}
+function keepEditing(): void {
+	pendingAction = null;
+	discardOpen.value = false;
+}
+function discard(): void {
+	const action = pendingAction;
+	pendingAction = null;
+	discardOpen.value = false;
+	action?.();
+}
 
 function onPick(e: Event): void {
 	const select = e.target as HTMLSelectElement;
-	if (!confirmDiscard()) {
-		select.value = templates.selectedId.value ?? '';
-		return;
-	}
 	const id = select.value || null;
-	templates.select(id);
-	const t = templates.templates.value.find((x) => x.id === id);
-	if (draft.value && t) openDraft(draftOf(t));
+	if (dirty.value) select.value = templates.selectedId.value ?? ''; // back to the current one until discarding is confirmed
+	askDiscard(() => {
+		select.value = id ?? '';
+		templates.select(id);
+		const t = templates.templates.value.find((x) => x.id === id);
+		if (draft.value && t) openDraft(draftOf(t));
+	});
 }
 const userId = computed(() => host.user.value?.id ?? null);
 // Save and Delete are offered on your own templates, or to an admin: the same rule as the database's row rule
@@ -93,17 +110,18 @@ const canEditDraft = computed(() => !!draft.value && canEditTemplate(draft.value
 const editLabel = computed(() => (draft.value ? 'Close editor' : 'Edit template'));
 
 function closeEditor(): void {
-	if (confirmDiscard()) openDraft(null);
+	askDiscard(() => openDraft(null));
 }
 function toggleEditor(): void {
 	if (draft.value) closeEditor();
 	else if (templates.selected.value) openDraft(draftOf(templates.selected.value));
 }
 function newTemplate(): void {
-	if (confirmDiscard()) openDraft(blankTemplate());
+	askDiscard(() => openDraft(blankTemplate()));
 }
 function copyTemplate(): void {
-	if (templates.selected.value && confirmDiscard()) openDraft(copyAsNew(templates.selected.value));
+	const t = templates.selected.value;
+	if (t) askDiscard(() => openDraft(copyAsNew(t)));
 }
 async function onSaved(id: string): Promise<void> {
 	await templates.load(id);
@@ -248,6 +266,17 @@ onMounted(() => {
 					</Section>
 				</div>
 			</div>
+
+			<v-dialog v-model="discardOpen" @esc="keepEditing">
+				<v-card>
+					<v-card-title>Discard your changes?</v-card-title>
+					<v-card-text>The edits you made to this template have not been saved.</v-card-text>
+					<v-card-actions>
+						<v-button secondary @click="keepEditing">Keep editing</v-button>
+						<v-button kind="danger" @click="discard">Discard</v-button>
+					</v-card-actions>
+				</v-card>
+			</v-dialog>
 		</PageShell>
 	</ExplorerView>
 </template>
