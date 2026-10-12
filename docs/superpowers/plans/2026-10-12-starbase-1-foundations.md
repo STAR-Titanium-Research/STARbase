@@ -68,7 +68,7 @@ first. ADR-0013.
 `feat/explorer-standalone` was rebuilt on `origin/feat/label-printing` (`21c527a9`), with the
 docs commits re-applied (`255baf92` … `0f06e6a3`).
 
-- [ ] **Step 1: Push the branch and retarget the draft PR at the Labels branch**
+- [x] **Step 1: Push the branch and retarget the draft PR at the Labels branch** (done 2026-10-12)
 
 ```bash
 cd "/d/Users/CMBE Admn 3214022001/Documents/GitHub/D1-Database/.claude/worktrees/explorer-standalone"
