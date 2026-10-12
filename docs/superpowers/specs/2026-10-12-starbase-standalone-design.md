@@ -161,6 +161,16 @@ The contract gains `openEditor(collection, id): Promise<'saved' | 'cancelled'>` 
 
 - `/plot/force?operation=<id>` mounts `ForceDashboard` from `@d1/force-plotting` with STARbase's
   config: Directus, `/filter`, `/diag` and `/octrees` all at the d1-server origin.
+  Authentication goes through the plotting package's own host contract
+  (`packages/force-plotting/src/host.ts`). The STARbase `ForceHost` is the cookie variant:
+  - `authHeaders()` returns `{}`;
+  - `fetchCredentials` is `'include'`;
+  - the axios instance uses `withCredentials`;
+  - `refreshAuth()` re-checks `/users/me` instead of exchanging a refresh token, and `openRecord()` routes to the STARbase record page.
+
+  `filter-service` and `diag-service` already forward the caller's `Cookie` to Directus
+  (`plugins/*/app/main.py`). Their CORS middleware only needs `allow_credentials=True` alongside
+  the exact STARbase origin.
 - `/plot/fast?run=<id>` mounts the FAST plotter from `@d1/fast-plotting`.
 - The index-page "Force (n)" / "FAST" row buttons and the record-page plot links route there
   instead of into Directus.
@@ -195,6 +205,9 @@ The contract gains `openEditor(collection, id): Promise<'saved' | 'cancelled'>` 
 - **Runbook** `docs/runbooks/starbase.md`, listing the maintainer's steps in order:
   1. Add `tag:starbase` to the tailnet policy, owned by the maintainer, and grant the d1-server
      audience access to `tag:starbase:443`.
+  1a. If d1-server is shared with anyone outside the tailnet (device sharing), share `starbase`
+     with the same people. Access rules do not reach share recipients. Confirm in the admin
+     console that a tagged device can be shared this way.
   2. Generate a tagged, reusable or ephemeral auth key and put it in `.env` as
      `STARBASE_TS_AUTHKEY`.
   3. Set `STARBASE_ORIGIN` and `STARBASE_URL`, and the Directus settings in §3.2.
@@ -246,7 +259,13 @@ The contract gains `openEditor(collection, id): Promise<'saved' | 'cancelled'>` 
 0. **Step 0: check the risky bits on the preview first, before anything else.**
    (a) does `CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS` actually change the header?
    (b) does a Directus module without `private-view` render with no module bar?
-   (c) does the session-mode cookie from a cross-origin credentialed login reach both apps?
+   (c) does the session-mode cookie from a credentialed login reach both apps when they are on
+   **two different hostnames** under one registrable domain? Same-host ports do not prove this,
+   because cookies ignore the port. The check maps `starbase.tail54eeb6.ts.net` and
+   `d1-server.tail54eeb6.ts.net` to loopback in a test Chromium (`--host-resolver-rules`) and
+   serves each over local HTTPS with a throwaway certificate. If that cannot be made to work
+   locally, the first real proof is rollout step 5, and a failure there means STARbase falls
+   back to a Bearer sign-in like the Force App, with editing in a new tab.
    Results go into this spec. A "no" on (a) switches editing to the new-tab fallback; a "no" on
    (c) comes back to the maintainer before anything is built.
 1. Salvage `@d1/fast-plotting` and make `d1-fast-dashboard` a thin wrapper (no visible change).

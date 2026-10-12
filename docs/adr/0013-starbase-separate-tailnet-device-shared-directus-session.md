@@ -36,12 +36,13 @@ sign-in, one sign-out, and the framed form is already signed in.
   `CORS_CREDENTIALS=true`). It must let STARbase frame the form page (the CSP `frame-ancestors`
   directive), and it must mark its cookies `Secure`. The plotting sidecars (`/filter`, `/diag`)
   need the same credentialed CORS.
-- **SameSite no longer protects Directus from other `*.tail54eeb6.ts.net` devices.** A page on any
-  device in the tailnet is same-site, so a cookie-carrying request from it is not blocked by
-  SameSite. CORS still stops such a page from *reading* responses, but a blind form POST could
-  carry the cookie. This is acceptable only because every tailnet device is trusted (the same
-  posture as `/recorder` and `/backup-ingest`). Revisit if the tailnet ever admits untrusted
-  devices.
+- **SameSite has never protected Directus from other `*.tail54eeb6.ts.net` devices, and this
+  decision relies on that.** Every device in the tailnet is already same-site with d1-server, so a
+  page on any of them (for example the `d1-dashboard` device) could send a blind, cookie-carrying
+  form POST today. STARbase does not create that risk. What it *adds* is two narrow grants for
+  one exact origin: credentialed CORS reads, and permission to frame the form page. The whole
+  arrangement is acceptable only because every tailnet device is trusted (the same posture as
+  `/recorder` and `/backup-ingest`). Revisit if the tailnet ever admits untrusted devices.
 - If Directus ignores the `frame-ancestors` setting, editing falls back to opening the form page
   in a new tab. Nothing else in this decision changes.
 - Google sign-in later uses Directus's own provider in session mode, so it lands in the same
