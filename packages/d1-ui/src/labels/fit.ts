@@ -9,7 +9,7 @@ export const SIZE_PT: Record<FieldSize, number> = { lg: 14, md: 10, sm: 7 };
 // The smallest it may shrink to before the text is cut with an ellipsis.
 export const MIN_PT: Record<FieldSize, number> = { lg: 9, md: 6.5, sm: 5 };
 
-const MM_PER_PT = 25.4 / 72;
+export const MM_PER_PT = 25.4 / 72;
 const EM_REGULAR = 0.56;
 const EM_BOLD = 0.62;
 export const ELLIPSIS = '…';
