@@ -364,8 +364,21 @@ ROLLBACK TO SAVEPOINT s1;
 SAVEPOINT s2;
 INSERT INTO label_templates (name, media, page_width_mm, page_height_mm, label_width_mm, label_height_mm, arrangement, is_default)
   VALUES ('t-second-default', 'sheet', 210, 297, 50, 50, 'text_only', true);
-SELECT 'second_default:accepted';
+SELECT 'swap_insert:' || string_agg(name, '|') FROM label_templates WHERE is_default;
+UPDATE label_templates SET is_default = true WHERE name = 'L7160 21-up';
+SELECT 'swap_update:' || string_agg(name, '|') FROM label_templates WHERE is_default;
+UPDATE label_templates SET description = 'x' WHERE name = 'L7160 21-up';
+SELECT 'swap_unrelated_update:' || string_agg(name, '|') FROM label_templates WHERE is_default;
 ROLLBACK TO SAVEPOINT s2;
+SAVEPOINT s2b;
+-- a failed insert (duplicate name) with is_default must leave the old default in place
+DO \$\$ BEGIN
+  INSERT INTO label_templates (name, media, page_width_mm, page_height_mm, label_width_mm, label_height_mm, arrangement, is_default)
+    VALUES ('A4 4×5', 'sheet', 210, 297, 50, 50, 'text_only', true);
+EXCEPTION WHEN unique_violation THEN NULL;
+END \$\$;
+SELECT 'swap_failed_insert:' || string_agg(name, '|') FROM label_templates WHERE is_default;
+ROLLBACK TO SAVEPOINT s2b;
 SAVEPOINT s3;
 INSERT INTO label_templates (name, media, page_width_mm, page_height_mm, label_width_mm, label_height_mm, arrangement)
   VALUES ('A4 4×5', 'sheet', 210, 297, 50, 50, 'text_only');
@@ -396,9 +409,12 @@ lt_check 'up_perm_rows:create={};delete={"user_created":{"_eq":"$CURRENT_USER"}}
 lt_check "up_perm_fields:create=18/false;delete=1/false;read=1/false;update=18/false"     "up: Lab Member create and update cannot set is_default, id or the system columns"
 lt_check "up_comments:0" "up: every column carries a COMMENT"
 lt_check "up_tbl_comment:true" "up: the table carries a COMMENT"
-lt_check "up_triggers:audit_label_templates,occ_label_templates" "up: OCC and audit triggers are attached"
+lt_check "up_triggers:audit_label_templates,label_templates_single_default,occ_label_templates" "up: audit, single-default and OCC triggers are attached"
 ! grep -qx "roll_grid:accepted" <<<"$lt_out" && ok "a roll with 2 columns is refused" || bad "a roll with 2 columns is refused"
-! grep -qx "second_default:accepted" <<<"$lt_out" && ok "a second default template is refused" || bad "a second default template is refused"
+lt_check "swap_insert:t-second-default" "inserting a default template clears the old default"
+lt_check "swap_update:L7160 21-up" "making a template the default clears the old default"
+lt_check "swap_unrelated_update:L7160 21-up" "an unrelated update keeps the default"
+lt_check "swap_failed_insert:A4 4×5" "a failed insert with is_default keeps the old default"
 ! grep -qx "dup_name:accepted" <<<"$lt_out" && ok "a duplicate template name is refused" || bad "a duplicate template name is refused"
 ! grep -qx "bad_arrangement:accepted" <<<"$lt_out" && ok "an unknown arrangement is refused" || bad "an unknown arrangement is refused"
 lt_check "occ_version:2" "an update bumps version"
