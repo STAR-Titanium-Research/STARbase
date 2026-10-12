@@ -12,6 +12,10 @@
 #   npm run build -w directus-extension-d1-home
 #
 # Usage: bash scripts/dev/explorer_preview.sh [--stop]   (from the repo root)
+# Options (environment):
+#   D1_PREVIEW_ENV_FILE=<file>     extra Directus settings, docker --env-file format (CORS, CSP, ...)
+#   D1_PREVIEW_PUBLIC_URL=<url>    PUBLIC_URL for the preview (default http://127.0.0.1:$PORT)
+#   D1_PREVIEW_EXTRA_EXT="<dir>…"  built extension folders (package.json + dist/) to add, e.g. a spike
 # Example with custom name prefix:
 #   D1_PREVIEW_NAME=d1-labels D1_PREVIEW_PORT=18056 bash scripts/dev/explorer_preview.sh
 set -uo pipefail
@@ -22,6 +26,9 @@ NAME="${D1_PREVIEW_NAME:-d1-preview}"; NET="$NAME"; PG="${NAME}-pg"; DX="${NAME}
 LIVE_PG=d1-database-postgres-1; LIVE_DX=d1-database-directus-1
 FILES_VOL="${NAME}-uploads"
 OVERLAY="${D1_PREVIEW_OVERLAY:-d1-home d1-admin-overview}"
+ENV_FILE="${D1_PREVIEW_ENV_FILE:-}"
+EXTRA_EXT="${D1_PREVIEW_EXTRA_EXT:-}"
+PUBLIC="${D1_PREVIEW_PUBLIC_URL:-http://127.0.0.1:$PORT}"
 CREDS=.superpowers/preview-credentials.txt
 EXT_DIR=.superpowers/preview-extensions
 rhex() { openssl rand -hex "$1" 2>/dev/null || od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
@@ -45,6 +52,16 @@ for ext in $OVERLAY; do
   [[ -d "core/extensions/$ext" ]] || abort "overlay extension core/extensions/$ext not found"
   rm -rf "${EXT_DIR:?}/$ext"; mkdir -p "$EXT_DIR/$ext"; copy_ext "core/extensions/$ext" "$EXT_DIR/$ext" || abort "copy $ext"
 done
+for dir in $EXTRA_EXT; do
+  [[ -f "$dir/package.json" && -d "$dir/dist" ]] || abort "extra extension $dir needs package.json and dist/"
+  name="$(basename "$dir")"
+  rm -rf "${EXT_DIR:?}/$name"; mkdir -p "$EXT_DIR/$name"; copy_ext "$dir" "$EXT_DIR/$name" || abort "copy $dir"
+done
+ENV_ARGS=()
+if [[ -n "$ENV_FILE" ]]; then
+  [[ -f "$ENV_FILE" ]] || abort "env file $ENV_FILE not found"
+  ENV_ARGS=(--env-file "$ENV_FILE")
+fi
 EXT_MOUNT="$(cd "$EXT_DIR" && (pwd -W 2>/dev/null || pwd))"
 DB_PASS="preview-$(rhex 8)"
 URL="postgres://d1:$DB_PASS@$PG:5432/d1_database?sslmode=disable"
@@ -84,10 +101,10 @@ lm_id=$(psql_copy -Atc "
 
 # --- Directus on the copy, published on localhost only
 IMAGE=$(docker inspect "$LIVE_DX" --format '{{.Image}}') || abort "docker inspect $LIVE_DX"
-docker run -d --name "$DX" -p "127.0.0.1:$PORT:8055" \
+docker run -d --name "$DX" -p "127.0.0.1:$PORT:8055" "${ENV_ARGS[@]}" \
   -e KEY="$(rhex 16)" -e SECRET="$(rhex 32)" -e TELEMETRY=false \
   -e DB_CLIENT=pg -e DB_HOST="$PG" -e DB_PORT=5432 -e DB_DATABASE=d1_database -e DB_USER=d1 -e DB_PASSWORD="$DB_PASS" \
-  -e PUBLIC_URL="http://127.0.0.1:$PORT" -e EXTENSIONS_AUTO_RELOAD=false -e D1_TIMEZONE=Europe/London \
+  -e PUBLIC_URL="$PUBLIC" -e EXTENSIONS_AUTO_RELOAD=false -e D1_TIMEZONE=Europe/London \
   -e ASSETS_TRANSFORM_IMAGE_MAX_DIMENSION=8000 -e ASSETS_TRANSFORM_TIMEOUT=30000 -e ASSETS_TRANSFORM_MAX_CONCURRENT=4 \
   -v "$EXT_MOUNT:/directus/extensions:ro" \
   -v "$FILES_VOL:/directus/uploads" \
