@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ExplorerView from './ExplorerView.vue';
+import { useExplorerHost } from './explorerHost';
 import { computed } from 'vue';
 import { useStores } from '@directus/extensions-sdk';
 import { PageShell } from '@d1/ui';
@@ -23,17 +25,12 @@ const greeting = computed(() => {
 const today = computed(() =>
 	new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
 );
-// Directus keeps the admin flag in different places across versions; any of them being true is
-// enough, and a non-admin who is wrongly treated as one only sees a tile that counts what they
-// may read anyway.
-const isAdmin = computed(() => {
-	const u = userStore.currentUser;
-	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
-});
+// The server's own answer (GET /policies/me/globals), read once for the whole Explorer by the host.
+const { isAdmin } = useExplorerHost();
 </script>
 
 <template>
-	<private-view title="Home">
+	<ExplorerView title="Home">
 		<PageShell>
 			<!-- The thin banner of the Force dashboard (packages/force-plotting ForceDashboard.vue). -->
 			<section class="hero">
@@ -49,7 +46,7 @@ const isAdmin = computed(() => {
 			<MyWork />
 			<RecentActivity />
 		</PageShell>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <style scoped>

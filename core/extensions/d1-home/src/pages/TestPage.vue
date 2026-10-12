@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, StatusBadge, asRecord,
@@ -54,7 +55,7 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 </script>
 
 <template>
-	<private-view :title="pageTitle">
+	<ExplorerView :title="pageTitle">
 		<PageShell>
 			<LoadState v-if="loading && !t" loading loading-text="Loading test…" />
 
@@ -141,7 +142,7 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 				/>
 			</template>
 		</PageShell>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <style scoped>

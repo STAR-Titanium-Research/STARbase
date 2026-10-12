@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, useCanUpdate, LoadState, NotVisible, PageShell, RecordHeader, Section, Sparkline, StatTile, dataStudioRoute, formatDate, projectStatusLabel,
@@ -40,7 +41,7 @@ const tilesDisabled = computed(() => counts.value.loading);
 </script>
 
 <template>
-	<private-view :title="project?.project_code ? `Project ${project.project_code}` : 'Project'">
+	<ExplorerView :title="project?.project_code ? `Project ${project.project_code}` : 'Project'">
 		<PageShell>
 			<LoadState v-if="loading && !project" loading loading-text="Loading project…" />
 
@@ -85,10 +86,10 @@ const tilesDisabled = computed(() => counts.value.loading);
 					<p v-if="counts.error" class="d1-note warn" role="alert">{{ counts.error }}</p>
 				</div>
 
-				<CampaignCards :campaigns="campaigns" />
+				<CampaignCards :campaigns="campaigns" :project-id="id" />
 				<!-- Three short lists side by side: stacked, three empty ones took a third of the screen. -->
 				<div class="d1-cols">
-					<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" />
+					<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
 				</div>
 
 				<div class="d1-cols">
@@ -132,7 +133,7 @@ const tilesDisabled = computed(() => counts.value.loading);
 				/>
 			</template>
 		</PageShell>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <style scoped>

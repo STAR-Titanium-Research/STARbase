@@ -2,21 +2,14 @@
 import { useRouter } from 'vue-router';
 import { go } from './goto';
 
-// The things a researcher does every day, as big buttons; the "More" row holds the other Explorer
-// pages and analysis tools. There is no tile for Ask the database (hidden for now, by decision on
-// 2026-10-09) or for the Dashboards module (being retired; its lineage graph is to be rebuilt).
+// The things a researcher does every day, as big buttons. The other Explorer pages and the analysis
+// tools are in the sidebar, so they are not repeated here. There is no tile for Ask the database
+// (hidden for now, by decision on 2026-10-09) or for the Dashboards module (being retired; its lineage graph is to be rebuilt).
 interface Action { label: string; sub: string; icon: string; to: string; }
 const main: Action[] = [
 	{ label: 'Register a sample', sub: 'Add a new physical sample', icon: 'add_circle', to: '/content/physical_samples/+' },
 	{ label: 'Log an operation', sub: 'Record a manufacturing step', icon: 'precision_manufacturing', to: '/content/manufacturing_operations/+' },
 	{ label: 'Print labels', sub: 'Sample labels with QR codes', icon: 'label', to: '/d1-report/labels' },
-];
-const more: Action[] = [
-	{ label: 'Projects', sub: 'All projects you can see', icon: 'folder_open', to: '/home/projects' },
-	{ label: 'People', sub: 'Researchers & operators', icon: 'groups', to: '/home/people' },
-	{ label: 'Force Analysis', sub: 'Machining force & FRM plots', icon: 'insights', to: '/d1-force-dashboard' },
-	{ label: 'FAST Analysis', sub: 'Sintering traces & plots', icon: 'whatshot', to: '/d1-fast-dashboard' },
-	{ label: 'Force Crawler', sub: '.mat processing queue', icon: 'dns', to: '/d1-force-crawler' },
 ];
 const router = useRouter();
 </script>
@@ -30,12 +23,6 @@ const router = useRouter();
 					<span class="a-label">{{ a.label }}</span>
 					<span class="a-sub">{{ a.sub }}</span>
 				</span>
-			</button>
-		</div>
-		<div class="more" role="group" aria-label="More">
-			<span class="more-label">More</span>
-			<button v-for="a in more" :key="a.label" class="more-btn" :title="a.sub" @click="go(router, a.to)">
-				<v-icon :name="a.icon" x-small />{{ a.label }}
 			</button>
 		</div>
 	</section>
@@ -67,15 +54,4 @@ const router = useRouter();
 .a-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .a-label { font-size: var(--fs-md); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .a-sub { font-size: var(--fs-sm); color: var(--d1-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.more { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
-.more-label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.01em; color: var(--d1-dim); margin-right: 4px; }
-/* The force app's chip: 26px, a pill, the accent on hover. */
-.more-btn {
-	display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px;
-	font: inherit; font-size: var(--fs-sm); font-weight: 600; line-height: 1;
-	border-radius: 99px; cursor: pointer; color: var(--theme--foreground);
-	border: 1px solid var(--d1-line); background: var(--d1-surface);
-	transition: border-color 0.12s ease;
-}
-.more-btn:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 </style>

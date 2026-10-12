@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, analysisLink, collectionRoute, formatDate, hasPassCode, operationLabel, processLabel, type SectionState,
+	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, analysisLink, formatDate, indexRoute, hasPassCode, operationLabel, processLabel, type SectionState,
 } from '@d1/ui';
 
 // The sample's operations and tests as tables: each row links to its page, tests carry their
 // status, and machining / FAST operations offer the matching analysis dashboard.
-const props = defineProps<{ operations: SectionState<any[]>; tests: SectionState<any[]> }>();
+// `sampleCode` scopes the "see all" links: the list pages search sample codes, so the full list
+// opens already narrowed to this sample (without a code it opens plain).
+const props = defineProps<{ operations: SectionState<any[]>; tests: SectionState<any[]>; sampleCode?: string | null }>();
 
 const ops = computed(() => props.operations.data.slice(0, LIST_CAP));
 const testRows = computed(() => props.tests.data.slice(0, LIST_CAP));
 const opsCapped = computed(() => props.operations.data.length > LIST_CAP);
 const testsCapped = computed(() => props.tests.data.length > LIST_CAP);
+const forThisSample = (collection: string) => indexRoute(collection, props.sampleCode ? { query: { q: props.sampleCode } } : {});
 </script>
 
 <template>
@@ -39,7 +42,7 @@ const testsCapped = computed(() => props.tests.data.length > LIST_CAP);
 			</DataTable>
 			<p v-if="opsCapped" class="d1-note cap">
 				Showing the first {{ LIST_CAP }} operations.
-				<router-link :to="collectionRoute('manufacturing_operations')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.
+				<router-link :to="forThisSample('manufacturing_operations')">{{ sampleCode ? "See all of this sample's operations" : 'See the full list' }}</router-link>.
 			</p>
 		</LoadState>
 	</Section>
@@ -62,7 +65,7 @@ const testsCapped = computed(() => props.tests.data.length > LIST_CAP);
 			</DataTable>
 			<p v-if="testsCapped" class="d1-note cap">
 				Showing the first {{ LIST_CAP }} tests.
-				<router-link :to="collectionRoute('test_sessions')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.
+				<router-link :to="forThisSample('test_sessions')">{{ sampleCode ? "See all of this sample's tests" : 'See the full list' }}</router-link>.
 			</p>
 		</LoadState>
 	</Section>

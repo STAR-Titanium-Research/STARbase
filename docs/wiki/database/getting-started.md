@@ -49,9 +49,12 @@ From left to right:
 
 **Home** is the landing page, and it is about **your** work. From top to bottom:
 
-1. **Quick actions.** Five big buttons for what you do every day: *Register a sample*, *Log an
-   operation*, *Ask the database*, *Print labels* and *Dashboards*. Below them, a **More** row
-   reaches the rest: *Projects*, *People*, *Force Analysis*, *FAST Analysis* and *Force Crawler*.
+1. **Quick actions.** Three big buttons for what you do every day: *Register a sample*, *Log an
+   operation* and *Print labels*. Everything else is in the **sidebar** on the left: *Records*
+   (Projects, Campaigns, Samples, Operations, Tests, People), *Inventory* and *Resources*, with
+   the Force and FAST dashboards above them and your **saved views** listed under the pages they
+   belong to. To jump straight to a record, a page or a saved view, press **Ctrl K** (Cmd K on a
+   Mac) or use *Find a record…* at the top of the sidebar.
 2. **Needs attention.** Counts of things that want a look: force analyses in error on your
    operations, failed test sessions, operations whose force files are still queued, and (for
    administrators) samples with no owner. Click a tile and the matching records (the first ten)

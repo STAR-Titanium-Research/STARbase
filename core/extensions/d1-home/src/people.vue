@@ -1,20 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { useApi, useStores } from '@directus/extensions-sdk';
-import { useRouter } from 'vue-router';
+import ExplorerView from './ExplorerView.vue';
+import { useExplorerHost } from './explorerHost';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useApi } from '@directus/extensions-sdk';
+import { useRoute, useRouter } from 'vue-router';
 import { PageShell } from '@d1/ui';
 
 const api = useApi();
 const router = useRouter();
-const userStore = useStores().useUserStore() as any;
+const route = useRoute();
 // Only an admin may link a login to a People row (ADR-0011: the link decides whose records a
-// person sees, so a member relinking it would inherit someone else's records). Directus keeps the
-// admin flag in different places across versions; if a non-admin is wrongly treated as one, the
-// server still refuses the write.
-const isAdmin = computed(() => {
-	const u = userStore.currentUser;
-	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
-});
+// person sees, so a member relinking it would inherit someone else's records). The host reads the
+// flag from the server; if a non-admin were wrongly shown the picker, the server still refuses the write.
+const { isAdmin } = useExplorerHost();
 const go = (to: string) => router.push(to);
 
 interface Person {
@@ -33,7 +31,11 @@ const people = ref<Person[]>([]);
 const users = ref<Opt[]>([]);
 const loading = ref(true);
 const filter = ref<'all' | 'researchers' | 'operators' | 'former' | 'nologin'>('all');
-const q = ref('');
+// The finder sends a People hit to /home/people?q=<name>: the search box starts with that text, and
+// follows it if the query changes while the page stays open (a second finder search).
+const routeQ = () => (typeof route.query.q === 'string' ? route.query.q : '');
+const q = ref(routeQ());
+watch(() => route.query.q, () => (q.value = routeQ()));
 
 // Edit / add dialog state.
 const dialog = ref(false);
@@ -46,21 +48,32 @@ function blank(): Person {
 	return { full_name: '', email: null, user_id: null, is_researcher: true, is_operator: false, active: true, notes: null };
 }
 
-async function load() {
-	loading.value = true;
+// The login list is only needed by the admin-only login picker. isAdmin starts as a guess and can
+// turn true after the page has loaded, so this runs again when it does.
+async function loadUsers() {
+	if (!isAdmin.value) return;
 	try {
-		// The login list is only needed by the admin-only login picker.
-		const [pr, ur] = await Promise.all([
-			api.get('/items/people', { params: { limit: -1, sort: ['full_name'] } }),
-			isAdmin.value
-				? api.get('/users', { params: { limit: -1, fields: ['id', 'first_name', 'last_name', 'email'], sort: ['first_name'] } })
-				: Promise.resolve(null),
-		]);
-		people.value = pr?.data?.data ?? [];
+		const ur = await api.get('/users', { params: { limit: -1, fields: ['id', 'first_name', 'last_name', 'email'], sort: ['first_name'] } });
 		users.value = (ur?.data?.data ?? []).map((u: any) => ({
 			text: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || u.id,
 			value: u.id,
 		}));
+	} catch {
+		users.value = [];
+	}
+}
+watch(isAdmin, (admin) => {
+	if (admin && !users.value.length) void loadUsers();
+});
+
+async function load() {
+	loading.value = true;
+	try {
+		const [pr] = await Promise.all([
+			api.get('/items/people', { params: { limit: -1, sort: ['full_name'] } }),
+			loadUsers(),
+		]);
+		people.value = pr?.data?.data ?? [];
 	} finally {
 		loading.value = false;
 	}
@@ -141,7 +154,7 @@ async function remove() {
 </script>
 
 <template>
-	<private-view title="People">
+	<ExplorerView title="People">
 		<template #headline><span class="crumb" @click="go('/home')">Home</span></template>
 		<template #title-outer:prepend>
 			<v-button class="header-icon" rounded icon secondary disabled><v-icon name="groups" /></v-button>
@@ -217,7 +230,7 @@ async function remove() {
 				</v-card-actions>
 			</v-card>
 		</v-dialog>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <script lang="ts">

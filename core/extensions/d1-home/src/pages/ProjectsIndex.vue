@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ExplorerView from '../ExplorerView.vue';
 import { computed, ref } from 'vue';
 import { useStores } from '@directus/extensions-sdk';
 import { LoadState, PageShell, filterProjects, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
@@ -37,7 +38,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 </script>
 
 <template>
-	<private-view title="Projects">
+	<ExplorerView title="Projects">
 		<PageShell>
 			<nav class="d1-crumbs"><router-link to="/home">Home</router-link><span>›</span><span>Projects</span></nav>
 
@@ -94,7 +95,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 				</div>
 			</template>
 		</PageShell>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <style scoped>

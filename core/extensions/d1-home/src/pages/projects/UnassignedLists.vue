@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, collectionRoute, formatDate, hasPassCode, operationLabel, processLabel, type SectionState,
+	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, formatDate, hasPassCode, indexRoute, operationLabel, processLabel, type SectionState,
 } from '@d1/ui';
 
 // "Not in a campaign": records that carry this project but no campaign. Three short lists, each
 // loading on its own and capped at LIST_CAP with a pointer to the Data Studio for the rest.
-const props = defineProps<{ samples: SectionState<any[]>; operations: SectionState<any[]>; tests: SectionState<any[]> }>();
+// `projectId` scopes the "see all" links: each list page has a Project filter, so the full list
+// opens already narrowed to this project (without it, plain).
+const props = defineProps<{ samples: SectionState<any[]>; operations: SectionState<any[]>; tests: SectionState<any[]>; projectId?: string | null }>();
+const forThisProject = (collection: string) => indexRoute(collection, props.projectId ? { query: { 'f.project_id': props.projectId } } : {});
+const seeAll = (what: string) => (props.projectId ? `See all of this project's ${what}` : 'See the full list');
 
 const cap = <T,>(b: SectionState<T[]>) => b.data.slice(0, LIST_CAP);
 const capped = (b: SectionState<any[]>) => b.data.length > LIST_CAP;
@@ -30,7 +34,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.samples)" class="d1-note cap">Showing the first {{ LIST_CAP }}. <router-link :to="collectionRoute('physical_samples')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.</p>
+			<p v-if="capped(props.samples)" class="d1-note cap">Showing the first {{ LIST_CAP }}. <router-link :to="forThisProject('physical_samples')">{{ seeAll('samples') }}</router-link>.</p>
 		</LoadState>
 	</Section>
 
@@ -47,7 +51,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.operations)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="collectionRoute('manufacturing_operations')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.</p>
+			<p v-if="capped(props.operations)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="forThisProject('manufacturing_operations')">{{ seeAll('operations') }}</router-link>.</p>
 		</LoadState>
 	</Section>
 
@@ -64,7 +68,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.tests)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="collectionRoute('test_sessions')">Open the collection in the Data Studio (unfiltered)</router-link> for the rest.</p>
+			<p v-if="capped(props.tests)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="forThisProject('test_sessions')">{{ seeAll('tests') }}</router-link>.</p>
 		</LoadState>
 	</Section>
 </template>

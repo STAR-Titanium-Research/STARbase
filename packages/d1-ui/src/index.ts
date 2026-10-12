@@ -7,7 +7,7 @@
 // link mapping and not the Vue components (the force app) imports "@d1/ui/recordRoute".
 
 // Links
-export { recordRoute, collectionRoute, dataStudioRoute } from './recordRoute';
+export { recordRoute, collectionRoute, dataStudioRoute, indexRoute } from './recordRoute';
 export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
 export { operationLabel, operationHeading, operationSampleLine, hasPassCode } from './operationLabel';
@@ -76,3 +76,16 @@ export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
+
+// Explorer navigation: host contract, sidebar tree, index-page configs
+export { EXPLORER_HOST } from './host';
+export { guessAdmin } from './hostAdmin';
+export type { ExplorerHost } from './host';
+export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser, pickBookmarkId, linkForBookmark } from './nav/navConfig';
+export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
+export { default as ExplorerNav } from './nav/ExplorerNav.vue';
+export { default as Finder } from './finder/Finder.vue';
+export { isFinderShortcut, isModalOpen } from './finder/finderNav';
+export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
+export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
+export { default as IndexPage } from './index/IndexPage.vue';

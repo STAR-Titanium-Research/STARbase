@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { LoadState, Section, collectionRoute, errorText, useItems, useRequestGate } from '@d1/ui';
-import { bookmarkId } from './samplesBookmark';
+import {
+	BOOKMARK_VISIBILITY_FILTER, EXPLORER_HOST, LoadState, Section, collectionRoute, errorText, indexRoute, pickBookmarkId, useItems, useRequestGate,
+} from '@d1/ui';
 import { ATTENTION, ATTENTION_LIST_LIMIT, type AttentionDef, type AttentionItem } from './attention';
 
 // Counts of things that need a look. Each tile loads its own count (a role that cannot read one
@@ -13,6 +14,7 @@ const props = defineProps<{ isAdmin: boolean }>();
 
 const { getItems } = useItems();
 const api = useApi();
+const host = inject(EXPLORER_HOST, null);
 const gate = useRequestGate();
 
 const defs = computed(() => ATTENTION.filter((d) => !d.adminOnly || props.isAdmin));
@@ -54,32 +56,72 @@ async function toggle(def: AttentionDef) {
 	}
 }
 
+// The id of a named bookmark on a collection, or null when there is none (or the role cannot read
+// presets). Prefers the global bookmark, then a role's, then the user's own. An admin can read
+// every user's presets, so the request carries the sidebar's visibility filter and the result is
+// checked again against who is signed in: another user's private view is never linked.
+async function bookmarkId(collection: string, name: string): Promise<number | null> {
+	try {
+		const res = await api.get('/presets', {
+			params: {
+				filter: JSON.stringify({ _and: [BOOKMARK_VISIBILITY_FILTER, { bookmark: { _eq: name } }, { collection: { _eq: collection } }] }),
+				fields: ['id', 'user', 'role'],
+				sort: ['id'],
+				limit: -1,
+			},
+		});
+		return pickBookmarkId(res.data.data ?? [], host?.user.value ?? null);
+	} catch {
+		return null;
+	}
+}
+
 const openDef = computed(() => defs.value.find((d) => d.key === open.value) ?? null);
-// A tile whose filter exists as a Data Studio bookmark ("Failed") links to that filtered view,
-// found by name since its id differs between installs. Without it the link is the plain, unfiltered
-// collection and says so.
+// A tile whose filter exists as a saved view ("Failed") links to the Explorer list with that view
+// applied, found by name since its id differs between installs. Without it the link is the plain list.
 const bookmarkIds = ref<Record<string, number>>({});
 const moreLink = computed(() => {
 	const d = openDef.value;
 	if (!d) return null;
 	const id = bookmarkIds.value[d.key];
 	return id === undefined
-		? { to: collectionRoute(d.collection), text: 'Open the collection in the Data Studio (unfiltered)' }
-		: { to: `/content/${d.collection}?bookmark=${id}`, text: `Open the "${d.bookmark}" bookmark in the Data Studio` };
+		? { to: collectionRoute(d.collection), text: 'See the list' }
+		: { to: indexRoute(d.collection, { bookmark: id }), text: 'See all' };
 });
 const openCount = computed(() => (open.value ? (state.value[open.value]?.count ?? 0) : 0));
 
-onMounted(() => {
-	const token = gate.begin();
-	for (const d of defs.value) {
-		loadCount(d, token);
-		if (d.bookmark) {
-			bookmarkId(api, d.collection, d.bookmark).then((id) => {
-				if (id !== null) bookmarkIds.value = { ...bookmarkIds.value, [d.key]: id };
-			});
+// Counts load for the tiles shown, and again for a tile that appears later: the admin-only one
+// shows only once the host has learnt the user is an admin (it starts as a guess).
+const token = gate.begin();
+const started = new Set<string>();
+function loadBookmark(d: AttentionDef) {
+	if (!d.bookmark) return;
+	bookmarkId(d.collection, d.bookmark).then((id) => {
+		const next = { ...bookmarkIds.value };
+		if (id !== null) next[d.key] = id;
+		else delete next[d.key];
+		bookmarkIds.value = next;
+	});
+}
+watch(
+	defs,
+	(list) => {
+		for (const d of list) {
+			if (started.has(d.key)) continue;
+			started.add(d.key);
+			loadCount(d, token);
+			loadBookmark(d);
 		}
-	}
-});
+	},
+	{ immediate: true },
+);
+// Who is signed in arrives after the page does: pick the views again with it.
+watch(
+	() => host?.user.value?.id,
+	() => {
+		for (const d of defs.value) loadBookmark(d);
+	},
+);
 onBeforeUnmount(() => {
 	gate.cancel();
 	listGate.cancel();
