@@ -51,6 +51,7 @@
       "campaign_id.project_id.secondary_investigators._some.user_id"
     ],
     "campaign.owner": ["owner_person_id.user_id"],
+    "label.owner": ["user_created"],
     "campaign.read": [
       "owner_person_id.user_id",
       "project_id.principal_investigator_person.user_id",
@@ -99,6 +100,7 @@
     "manufacturing_operations": {"create": "any", "read": "record.read", "update": "record.update", "delete": "record.owner"},
     "test_sessions": {"create": "any", "read": "record.read", "update": "record.update", "delete": "record.owner"},
     "campaigns": {"create": "any", "read": "campaign.read", "update": "campaign.owner", "delete": "campaign.owner"},
+    "label_templates": {"create": "any", "read": "any", "update": "label.owner", "delete": "label.owner"},
     "projects": {"create": "any", "read": "project.read", "update": "project.pi", "delete": "project.pi"},
     "sample_co_owners": {"create": "any", "read": "link.sample.read", "update": "link.sample.editors", "delete": "link.sample.editors"},
     "sample_stock_provenance": {"create": "any", "read": "link.sample.read", "update": "link.sample.editors", "delete": "link.sample.editors"},
