@@ -3,8 +3,9 @@
 // page mounts it while it is open (v-if) and listens for `close`; state therefore starts fresh on
 // every open. It reads the ExplorerHost like the sidebar does and goes to a hit with host.navigate.
 //
-// Keyboard: the input keeps focus the whole time and the arrow keys move an "active" option
-// (aria-activedescendant), so there is nothing else to tab to and Tab is simply held in the input.
+// Keyboard: the input keeps focus while typing and the arrow keys move an "active" option
+// (aria-activedescendant). The only other stops are the Scan button and a result card's button, and Tab
+// cycles through them without leaving the dialog.
 // Focus goes back to whatever had it before the dialog opened.
 //
 // A scanned label: a USB (keyboard) scanner types the label's lines with Enter (CR) between them,
@@ -45,6 +46,7 @@ const activeId = computed(() => (active.value >= 0 ? `${uid}-opt-${active.value}
 
 const input = ref<HTMLTextAreaElement | null>(null);
 const list = ref<HTMLElement | null>(null);
+const dialog = ref<HTMLElement | null>(null);
 
 // The best match is the one Enter opens; a new result list starts from it.
 watch(hits, (h) => { active.value = h.length ? 0 : -1; });
@@ -119,8 +121,8 @@ function onKeydown(e: KeyboardEvent) {
 		e.preventDefault();
 		active.value = moveIndex(active.value, e.key === 'ArrowDown' ? 1 : -1, hits.value.length);
 	} else if (e.key === 'Enter') {
-		// Enter that confirms an IME composition is not "open this".
-		if (e.isComposing) return;
+		// Enter that confirms an IME composition is not "open this"; Enter on a button (Scan, Open sample) is that button's.
+		if (e.isComposing || e.target !== input.value) return;
 		// Part of a scanned label: the textarea adds the line break. Once the scan is settled the text is
 		// selected, and Enter must not wipe it.
 		if (scanning.value) {
@@ -130,9 +132,13 @@ function onKeydown(e: KeyboardEvent) {
 		e.preventDefault();
 		openActive();
 	} else if (e.key === 'Tab') {
-		// The input is the only stop: focus stays in the dialog.
+		// Focus stays in the dialog: it cycles through the box and the buttons (Scan, a result card's Open).
 		e.preventDefault();
-		input.value?.focus();
+		const stops = Array.from(dialog.value?.querySelectorAll<HTMLElement>('textarea, button:not([disabled])') ?? []);
+		if (!stops.length) return;
+		const at = stops.indexOf(document.activeElement as HTMLElement);
+		const next = e.shiftKey ? (at <= 0 ? stops.length - 1 : at - 1) : (at + 1) % stops.length;
+		stops[next].focus();
 	}
 }
 </script>
@@ -140,7 +146,7 @@ function onKeydown(e: KeyboardEvent) {
 <template>
 	<Teleport to="body">
 		<div class="d1-kit d1-finder-backdrop" @mousedown.self="emit('close')">
-			<div class="d1-finder" role="dialog" aria-modal="true" aria-label="Find a record" @keydown="onKeydown">
+			<div ref="dialog" class="d1-finder" role="dialog" aria-modal="true" aria-label="Find a record" @keydown="onKeydown">
 				<div class="bar">
 				<!-- ARIA 1.1 combobox: a textarea may not carry role=combobox, so the wrapper does and the textarea
 				     (a single-line textbox to a screen reader) is its text box. -->
@@ -166,7 +172,7 @@ function onKeydown(e: KeyboardEvent) {
 					/>
 				</div>
 				<!-- mousedown.prevent: a click must not take focus off the box. -->
-				<button v-if="props.canScan" type="button" class="scan" aria-label="Scan a label with the camera" title="Scan a label with the camera" tabindex="-1" @mousedown.prevent @click="emit('scan')">
+				<button v-if="props.canScan" type="button" class="scan" aria-label="Scan a label with the camera" title="Scan a label with the camera" @mousedown.prevent @click="emit('scan')">
 					<v-icon name="qr_code_scanner" small />
 					<span>Scan</span>
 				</button>

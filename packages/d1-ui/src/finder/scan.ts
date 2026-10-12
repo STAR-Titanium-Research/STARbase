@@ -68,11 +68,15 @@ export function fromLastHeader(text: string): string {
 const MAX_SHOWN = 1000;
 
 // Text from a QR code or scanner for display: control characters (other than line breaks and tabs)
-// are shown as \xNN so nothing invisible is hidden in it, and a very long payload is cut. It is shown
+// and the bidirectional controls (which can make text read in another order than it is typed) are shown
+// as \xNN or \uNNNN so nothing invisible is hidden in it, and a very long payload is cut. It is shown
 // as plain text (never as HTML or a link), so a code that says "http://evil" is not clickable.
 export function displayText(raw: string): string {
 	// eslint-disable-next-line no-control-regex
-	const escaped = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, (c) => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0'));
+	const escaped = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f‎‏‪-‮⁦-⁩]/g, (c) => {
+		const n = c.charCodeAt(0);
+		return n < 0x100 ? '\\x' + n.toString(16).padStart(2, '0') : '\\u' + n.toString(16).padStart(4, '0');
+	});
 	return escaped.length > MAX_SHOWN ? `${escaped.slice(0, MAX_SHOWN)}…` : escaped;
 }
 

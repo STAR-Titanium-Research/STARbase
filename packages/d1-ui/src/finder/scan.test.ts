@@ -135,3 +135,10 @@ describe('flattenLines', () => {
 		expect(flattenLines('one line')).toBe('one line');
 	});
 });
+
+describe('displayText and bidi controls', () => {
+	it('shows direction overrides and isolates visibly', () => {
+		expect(displayText('abc\u202edef\u2066x\u2069')).toBe('abc\\u202edef\\u2066x\\u2069');
+		expect(displayText('a\u200fb')).toBe('a\\u200fb');
+	});
+});
