@@ -81,6 +81,10 @@ export {
 } from './record/operationFacts';
 export type { HiddenLinks } from './record/operationFacts';
 export { testTypeText, testSample, testRailFacts, testDetailBase, testSubjectCount } from './record/testFacts';
+export {
+	sampleDims, sampleKind, sampleMassText, sampleCampaigns, coOwnerText, sampleRailFacts, sampleDetailBase,
+} from './record/sampleFacts';
+export type { SampleDims } from './record/sampleFacts';
 export { default as KeyValueGrid } from './components/KeyValueGrid.vue';
 export type { KeyValue } from './components/KeyValueGrid.vue';
 export { default as ProgressBar } from './components/ProgressBar.vue';
