@@ -19,17 +19,9 @@ number. "Since" is the PR that shipped the code.
 
 ## A. Live Directus (local stack with real data)
 
-Start with `make up` and apply migrations (`make migrate`); on a stack that already has its Directus
-configuration the migrations carry every metadata change, so there is nothing else to apply. Flush Redis and restart Directus so new
-extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
-`docker restart d1-database-directus-1`), then sign in as each role named in the step.
-
-> **Do not run `scripts/configure_all.sh` or `scripts/configure_directus.sql` on a database that
-> already has migrations applied.** They delete and re-insert the field metadata of whole collections
-> and silently undo what later migrations added. That happened on the live database between
-> 2026-07 and 2026-09 and cost the inline parameter fields, repaired by migration
-> `20261009000143_restore_inline_param_field_meta`. They are for a brand-new Directus only, or a
-> scratch database you can throw away.
+Start with `make up`, apply migrations (`make migrate`) and the configure scripts
+(`scripts/configure_all.sh`), restart Directus so new extensions load, then sign in as each role
+named in the step.
 
 ### Permissions and migrations
 - [ ] **Migrations 133–135 on a real Directus database** (not the CI stub tables). `dbmate up`
@@ -58,11 +50,8 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
 - [ ] **D12 — saved filters.** In Operations, Tests and Samples, the seven bookmarks appear for
   every role. "My operations"/"My samples" show only records whose owner person is linked to the
   signed-in user. "FAST runs, last 7 days", "Missing outcome", "Failed", "Needs analysis" and "No
-  location" match a hand count. Each bookmark exists once (`SELECT bookmark, count(*) FROM
-  directus_presets WHERE "user" IS NULL AND role IS NULL GROUP BY 1`). Migration
-  `20261006000135_saved_filter_bookmarks` creates them; do not re-run `scripts/configure_directus.sql`
-  to check this on a migrated database, it wipes field metadata (see the note at the top of section A).
-  Since #125.
+  location" match a hand count. Re-run `scripts/configure_directus.sql`: they are still there,
+  once each. Since #125.
 
 ### Ask-DB
 - [ ] **D1/D2 — chips and messages.** The five example chips run and answer. A query returning more
