@@ -127,7 +127,8 @@ export function validTarget(kind, target) {
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const usageWeight = (kind, target) => (kind === 'page' && target.startsWith('action:') ? WEIGHT_ACTION : WEIGHT_VISIT);
 
-const SQL = {
+// Exported so the schema tests (tests/phase1_schema.sh) can run these exact statements against Postgres.
+export const SQL = {
     lock: 'SELECT pg_advisory_xact_lock(hashtextextended(?::text, 0))',
     getRow:
         'SELECT score, last_at, pinned, hidden_at FROM d1_private.user_usage'
@@ -261,6 +262,9 @@ export function mount(router, { database, logger }, clock = () => new Date()) {
                 const cutoff = new Date(toMs(now) - FIRST_FOLD_LOOKBACK_DAYS * DAY_MS);
                 cursor = Number(rowsOf(await trx.raw(SQL.startId, [cutoff]))[0]?.id ?? 0);
             }
+            // Read the newest activity id BEFORE the scan: everything up to it is visible to the scan, so
+            // a short scan may safely move the cursor there (a quiet user then never rescans old rows).
+            const newest = Number(rowsOf(await trx.raw(SQL.maxId))[0]?.id ?? 0);
             const acts = rowsOf(await trx.raw(SQL.activity, [user, cursor, ...RECORD_COLLECTIONS]));
             // Group by target, oldest first, so each row is read and written once.
             const byTarget = new Map();
@@ -283,6 +287,9 @@ export function mount(router, { database, logger }, clock = () => new Date()) {
                     hidden_at: row?.hidden_at ?? null,
                 });
             }
+            // A full page (FOLD_LIMIT rows) means there may be more: stay at the last row read. A short
+            // page has read everything up to `newest`, so skip the user's non-matching rows too.
+            if (acts.length < FOLD_LIMIT) last = Math.max(last, newest);
             if (!cur || last !== cursor) await trx.raw(SQL.setCursor, [user, last]);
         });
     }

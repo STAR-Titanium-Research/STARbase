@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import ext, { PAGE_KEYS, RECORD_COLLECTIONS, bump, decay, mount, validTarget } from './index.js';
+import ext, { PAGE_KEYS, RECORD_COLLECTIONS, SQL, bump, decay, mount, validTarget } from './index.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = new Date('2026-10-12T09:00:00Z');
@@ -247,17 +247,23 @@ test('a database failure is a 500 with a logged error, not a crash', async () =>
     assert.equal(logs.error.length, 1);
 });
 
-test('SQL is parameterised: the user id and the target never appear in statement text, and a lock comes first', async () => {
+test('every statement sent is one of the constant SQL strings, and a lock comes first in each transaction', async () => {
     const { db, call } = setup();
     await call('POST /visit', ALICE, { kind: 'record', target: `physical_samples:${S1}` });
     await call('POST /pin', ALICE, { kind: 'page', target: 'samples', pinned: true });
+    await call('POST /hide', ALICE, { kind: 'page', target: 'samples' });
     await call('GET /', ALICE);
     await call('POST /clear', ALICE);
-    for (const { sql } of db.log) {
-        assert.ok(!sql.includes(ALICE) && !sql.includes(S1) && !sql.includes('samples\''), sql);
-    }
-    assert.ok(db.txLog.length >= 4);
-    for (const tx of db.txLog) assert.ok(tx[0].includes('pg_advisory_xact_lock'), 'each transaction locks the user first');
+    const allowed = new Set(Object.values(SQL));
+    for (const { sql } of db.log) assert.ok(allowed.has(sql), `not a constant statement: ${sql}`);
+    assert.ok(db.txLog.length >= 5);
+    for (const tx of db.txLog) assert.equal(tx[0], SQL.lock, 'each transaction locks the user first');
+});
+
+test('the schema test (tests/phase1_schema.sh) runs the same SQL strings as index.js', () => {
+    // The shell file keeps each statement on one line, with \" for a double quote; compare as the shell sees it.
+    const sh = readFileSync(new URL('../../../tests/phase1_schema.sh', import.meta.url), 'utf8').replaceAll('\\"', '"');
+    for (const [name, sql] of Object.entries(SQL)) assert.ok(sh.includes(sql), `phase1_schema.sh is missing SQL.${name}: ${sql}`);
 });
 
 // -- visit, list, decay -------------------------------------------------------------------------
@@ -419,6 +425,25 @@ test('the fold query binds the user and exactly the seven collections', async ()
     const q = db.log.find((l) => l.sql.startsWith('SELECT id, collection, item, "timestamp"'));
     assert.deepEqual(q.bindings, [ALICE, 0, ...RECORD_COLLECTIONS]);
     assert.equal((q.sql.match(/\?/g) ?? []).length, 2 + 7);
+});
+
+test('a user with no matching activity still gets the cursor moved to the newest id (no rescans), once the page is short', async () => {
+    const activity = [
+        act(1, BOB, 'update', 'physical_samples', S1, at(-2)),
+        act(2, ALICE, 'delete', 'physical_samples', S1, at(-2)),
+        act(3, BOB, 'update', 'physical_samples', S2, at(-1)),
+    ];
+    const { db, call } = setup({ activity });
+    await call('GET /', ALICE);
+    assert.equal(db.state.cursors.get(ALICE), 3);
+    const newestRead = db.log.findIndex((l) => l.sql === SQL.maxId);
+    const scan = db.log.findIndex((l) => l.sql === SQL.activity);
+    assert.ok(newestRead >= 0 && newestRead < scan, 'the newest id is read before the scan');
+    // Later activity by her is found from the moved cursor.
+    activity.push(act(4, ALICE, 'update', 'physical_samples', S2, at(-0.5)));
+    const out = (await call('GET /', ALICE)).body;
+    assert.deepEqual(out.records.map((r) => r.target), [`physical_samples:${S2}`]);
+    assert.equal(db.state.cursors.get(ALICE), 4);
 });
 
 test('later activity is folded on the next GET, advancing the cursor', async () => {
