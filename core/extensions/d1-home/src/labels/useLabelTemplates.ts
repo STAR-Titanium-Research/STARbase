@@ -1,6 +1,6 @@
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { classifyTemplates, errorText, pickTemplate, type BrokenTemplate, type LabelTemplate } from '@d1/ui';
+import { classifyTemplates, errorText, pickTemplate, useRequestGate, type BrokenTemplate, type LabelTemplate } from '@d1/ui';
 
 // The label_templates the signed-in user may read, as the page's picker shows them. A row that cannot be
 // read as a template is listed as broken (disabled, with the reason) and never blanks the picker.
@@ -25,6 +25,8 @@ function remember(id: string | null): void {
 
 export function useLabelTemplates() {
 	const api = useApi();
+	const gate = useRequestGate();
+	onBeforeUnmount(() => gate.cancel());
 	const templates = ref<LabelTemplate[]>([]);
 	const broken = ref<BrokenTemplate[]>([]);
 	const loading = ref(false);
@@ -35,10 +37,12 @@ export function useLabelTemplates() {
 	// `choose`: the id to show afterwards (a template just saved); else the one on screen, the remembered one,
 	// the default, the first that prints.
 	async function load(choose?: string | null): Promise<void> {
+		const token = gate.begin();
 		loading.value = true;
 		error.value = '';
 		try {
 			const res = await api.get('/items/label_templates', { params: { fields: ['*'], sort: ['name'], limit: -1 } });
+			if (!gate.isCurrent(token)) return; // a newer load (after a save) replaced this one
 			const out = classifyTemplates((res.data?.data ?? []) as Record<string, unknown>[]);
 			templates.value = out.templates;
 			broken.value = out.broken;
@@ -46,9 +50,10 @@ export function useLabelTemplates() {
 			const pick = out.templates.find((t) => t.id === choose) ?? pickTemplate(out.templates, keep);
 			selectedId.value = pick?.id ?? null;
 		} catch (e) {
+			if (!gate.isCurrent(token)) return;
 			error.value = `Could not load the label templates: ${errorText(e)}`;
 		} finally {
-			loading.value = false;
+			if (gate.isCurrent(token)) loading.value = false;
 		}
 	}
 
