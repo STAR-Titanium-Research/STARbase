@@ -124,9 +124,12 @@ function onKeydown(e: KeyboardEvent) {
 		// Enter that confirms an IME composition is not "open this"; Enter on a button (Scan, Open sample) is that button's.
 		if (e.isComposing || e.target !== input.value) return;
 		// Part of a scanned label: the textarea adds the line break. Once the scan is settled the text is
-		// selected, and Enter must not wipe it.
+		// selected, and Enter must not wipe it: it tries again (the connection may be back).
 		if (scanning.value) {
-			if (scan.value?.status === 'done') e.preventDefault();
+			if (scan.value?.status === 'done') {
+				e.preventDefault();
+				readScanNow();
+			}
 			return;
 		}
 		e.preventDefault();

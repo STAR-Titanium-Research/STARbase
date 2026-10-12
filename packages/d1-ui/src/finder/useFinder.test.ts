@@ -248,3 +248,19 @@ describe('useFinder with a label scanned into a non-empty box', () => {
 		expect(finder.query.value).toBe('S-0123');
 	});
 });
+
+describe('useFinder retry', () => {
+	it('reads a settled scan again on request, and opens it once the lookup works', async () => {
+		let up = false;
+		const host = { api: { get: async () => { if (!up) throw new Error('Network Error'); return { data: { data: [{ sample_id: 'u1', sample_code: 'S-1', short_id: '1a2b3c4d' }] } }; } } } as unknown as ExplorerHost;
+		const opened: string[] = [];
+		const finder = useFinder(host, ref(buildNav(visible, [], false)), ref<Set<string> | null>(visible), { onOpen: (to) => opened.push(to) });
+		finder.query.value = 'D1 SAMPLE\rS-1 | 1a2b3c4d\r';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(finder.scan.value).toMatchObject({ status: 'done', outcome: { kind: 'failed', reason: 'network' } });
+		up = true;
+		finder.readScanNow();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(opened).toEqual(['/home/samples/u1']);
+	});
+});
