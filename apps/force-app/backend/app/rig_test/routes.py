@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import glob
 import json
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -162,7 +163,13 @@ async def put_session(request: Request) -> dict:
     ):
         raise HTTPException(422, "expected {access_token, expires_at}") from None
     try:
-        changed = relay.set_session(body["access_token"], body["expires_at"])
+        expires_at = float(body["expires_at"])  # a huge int overflows; JSON NaN/Infinity parse
+    except (ValueError, OverflowError):
+        raise HTTPException(422, "expected {access_token, expires_at}") from None
+    if not math.isfinite(expires_at):
+        raise HTTPException(422, "expected {access_token, expires_at}") from None
+    try:
+        changed = relay.set_session(body["access_token"], expires_at)
     except ValueError:
         raise HTTPException(422, "not a usable access token") from None
     if changed:

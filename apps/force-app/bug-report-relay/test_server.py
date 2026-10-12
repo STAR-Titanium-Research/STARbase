@@ -724,6 +724,16 @@ def test_directus_me_failures_raise_unavailable(monkeypatch, handler):
         asyncio.run(srv._directus_me(D1_TOKEN))
 
 
+def test_directus_me_with_a_malformed_url_is_unavailable_not_a_crash(monkeypatch):
+    monkeypatch.setenv("DIRECTUS_INTERNAL_URL", "http://[::1")
+    with pytest.raises(srv._D1Unavailable):
+        asyncio.run(srv._directus_me(D1_TOKEN))
+
+
+def test_httpx_is_not_logged_at_info():
+    assert logging.getLogger("httpx").level == logging.WARNING
+
+
 def test_rig_tests_fail_closed_without_the_github_app(client, gh, monkeypatch):
     monkeypatch.delenv("GITHUB_APP_ID")
     for r in _all_rig_endpoints(client):

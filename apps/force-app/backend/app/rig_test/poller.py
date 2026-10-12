@@ -265,6 +265,10 @@ class RigTestPoller:
                     e[part] = None
                     self._store.outbox_update(e["id"], **{part: None})
                 elif res.get("kind"):  # unreachable / not configured: nothing else gets through
+                    if res["kind"] == "signin_rejected":
+                        # poll_once never reaches list_requests while the session is gone, so this
+                        # is the only place the poller learns the relay refused the sign-in.
+                        self.relay_state = "signin_rejected"
                     return
                 else:
                     e["tries"] += 1

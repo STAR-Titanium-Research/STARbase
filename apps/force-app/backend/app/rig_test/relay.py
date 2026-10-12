@@ -12,6 +12,7 @@ outage can only ever mean "nothing to show", never a crashed poller or a failed 
 
 from __future__ import annotations
 
+import math
 import re
 import threading
 import time
@@ -42,10 +43,13 @@ def set_session(token: str, expires_at: float) -> bool:
     ValueError (without the token in it) for anything that is not a usable header value."""
     if not isinstance(token, str) or not _TOKEN_RE.fullmatch(token):
         raise ValueError("not a usable access token")
+    expiry = float(expires_at)  # before the swap: a bad expiry must not leave a mismatched pair
+    if not math.isfinite(expiry):
+        raise ValueError("not a usable expiry")
     with _session_lock:
         changed = token != _session["token"]
         _session["token"] = token
-        _session["expires_at"] = float(expires_at)
+        _session["expires_at"] = expiry
     return changed
 
 

@@ -80,6 +80,8 @@ if (
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+# httpx logs every request at INFO, which would be a line per Directus and GitHub call.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = FastAPI()
 
@@ -386,6 +388,8 @@ async def _directus_me(token: str) -> dict | None:
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError:
+        raise _D1Unavailable from None
+    except Exception:  # noqa: BLE001 - e.g. httpx.InvalidURL from a malformed DIRECTUS_INTERNAL_URL
         raise _D1Unavailable from None
     if res.status_code in (401, 403):
         return None

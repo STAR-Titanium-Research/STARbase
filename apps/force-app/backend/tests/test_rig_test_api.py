@@ -5,6 +5,7 @@ import os
 import time
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -740,3 +741,50 @@ def test_a_rejection_is_reported_even_though_the_session_was_cleared(client, rig
     relay.clear_session()
     assert client.get("/rig-tests/pending").json()["relay"] == "signin_rejected"
     assert client.get("/rig-tests/eligibility").json()["relay"] == "signin_rejected"
+
+
+def test_a_rejection_seen_while_flushing_the_outbox_reaches_pending(client, rig, fake, monkeypatch):
+    """The refusal arrives on the outbox's comment, not on a list call, and the poller never lists
+    once the session is gone: it must still tell the web, or the web re-sends the dead token."""
+    rig.poller._store.outbox_add(231, "### Rig test result: done", "done")
+    monkeypatch.setattr(
+        relay,
+        "post_comment",
+        lambda n, b: relay._call("POST", f"/rig-tests/{n}/comment", {"body": b}),
+    )
+    monkeypatch.setattr(
+        relay.httpx,
+        "request",
+        lambda *a, **k: httpx.Response(403, json={"ok": False, "reason": relay.SIGNIN_REJECTED}),
+    )
+    rig.poller.poll_once()
+    body = client.get("/rig-tests/pending").json()
+    assert body["relay"] == "signin_rejected" and body["session"] is False
+    assert rig.poller._store.get("outbox")  # still queued: the entry was not the problem
+
+
+def test_a_huge_or_non_finite_expiry_is_422_and_changes_nothing(client, rig):
+    before = dict(relay._session)
+    huge = client.put(
+        "/rig-tests/session", json={"access_token": "distinct-secret-abc123", "expires_at": 10**400}
+    )
+    assert huge.status_code == 422 and "distinct-secret-abc123" not in huge.text
+    for literal in ("NaN", "Infinity", "-Infinity"):
+        r = client.put(
+            "/rig-tests/session",
+            content=f'{{"access_token": "distinct-secret-abc123", "expires_at": {literal}}}'.encode(),
+            headers={"content-type": "application/json"},
+        )
+        assert r.status_code == 422 and "distinct-secret-abc123" not in r.text
+    assert relay._session == before and relay._current_token() == SESSION_TOKEN
+
+
+def test_set_session_validates_the_expiry_before_swapping_the_token():
+    relay.clear_session()
+    relay.set_session("first-token", 123.0)
+    with pytest.raises(ValueError):
+        relay.set_session("second-token", float("nan"))
+    with pytest.raises(OverflowError):
+        relay.set_session("second-token", 10**400)
+    assert relay._session == {"token": "first-token", "expires_at": 123.0}
+    relay.clear_session()
