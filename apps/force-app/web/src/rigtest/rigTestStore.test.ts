@@ -416,3 +416,33 @@ describe('a run in progress', () => {
 		store.stop();
 	});
 });
+
+describe('session sync', () => {
+	it('passes each pending answer to the session sync, and stop() releases it', async () => {
+		const session = { sync: vi.fn(async () => {}), release: vi.fn(async () => {}) };
+		const api = fakeApi({ getPending: vi.fn(async () => pend([], { session: false, hardwareOk: true, relay: 'signed_out' })) });
+		const store = createRigTestStore({ api, notify: vi.fn(), now: () => Date.now(), acceptContext: async () => ({ uploadBusy: false }), session });
+		const stop = store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(session.sync).toHaveBeenCalledWith({ session: false, hardwareOk: true, relay: 'signed_out' });
+		stop();
+		expect(session.release).toHaveBeenCalledTimes(1);
+	});
+
+	it('a sign-in change re-reads pending right away', async () => {
+		let fire = () => {};
+		const onAuthChange = vi.fn((cb: () => void) => { fire = cb; return () => { fire = () => {}; }; });
+		const api = fakeApi();
+		const store = createRigTestStore({ api, notify: vi.fn(), now: () => Date.now(), acceptContext: async () => ({ uploadBusy: false }), onAuthChange });
+		const stop = store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(1);
+		fire();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(2);
+		stop();
+		fire(); // unwatched on stop
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(2);
+	});
+});

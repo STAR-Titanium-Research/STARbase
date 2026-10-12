@@ -5,11 +5,15 @@
 // 1 s for as long as one is active. Both stop when the host unmounts. A backend without the
 // routes (404) just shows nothing; a failed poll keeps what the UI already had.
 //
+// It also lends the operator's D1 sign-in to the recorder (rigTestSession.ts) on every pending poll.
+//
 // It is a factory so the tests can drive it with a fake api and fake timers; `rigTest` at the
 // bottom is the app's one real instance.
 import { computed, reactive, watch } from 'vue';
+import { authStore } from '../authStore';
 import { currentAcceptContext } from './acceptContext';
 import { rigTestApi, type ApiResult, type RigTestApi } from './rigTestApi';
+import { createSessionSync, type SessionSync } from './rigTestSession';
 import { saveDialogOpen } from './saveDialogOpen';
 import {
 	justFinished, newRequests, promptMode, rigBlocked, questionKey, questionNotification, requestNotification,
@@ -28,6 +32,10 @@ export interface RigTestDeps {
 	api: RigTestApi; notify: Notify; now: () => number;
 	/** Read at the moment of accepting: the upload state, the signed-in operator, the app version. */
 	acceptContext: () => Promise<AcceptContext>;
+	/** Lends the D1 token to the recorder (rigTestSession.ts). Absent in most tests. */
+	session?: SessionSync;
+	/** Calls back when the sign-in changes (token, offline); returns the unwatch. */
+	onAuthChange?: (cb: () => void) => () => void;
 }
 
 const NO_ROUTES = 'This recorder is too old for rig tests';
@@ -76,6 +84,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 	let stopped = true;
 	let pendingTimer: ReturnType<typeof setInterval> | null = null;
 	let unwatchSave: (() => void) | null = null;
+	let unwatchAuth: (() => void) | null = null;
 	let runTimer: ReturnType<typeof setTimeout> | null = null;
 	let runBusy = false;
 	let expectRunUntil = 0;
@@ -95,6 +104,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 		state.pending = p.requests;
 		state.snoozed = p.snoozed;
 		state.backendBusy = p.busy;
+		void deps.session?.sync({ session: p.session, hardwareOk: p.hardwareOk, relay: p.relay });
 	}
 
 	function applyRun(next: RigRun | null): void {
@@ -147,11 +157,14 @@ export function createRigTestStore(deps: RigTestDeps) {
 		// The Save dialog closing ends a cut: re-read now, so `busy` (up to 30 s old) doesn't keep a
 		// waiting request a badge after the operator has finished.
 		unwatchSave = watch(saveDialogOpen, (open) => { if (!open) void refreshPending(); });
+		unwatchAuth = deps.onAuthChange?.(() => { void refreshPending(); }) ?? null;
 		return stop;
 	}
 	function stop(): void {
 		stopped = true;
 		unwatchSave?.(); unwatchSave = null;
+		unwatchAuth?.(); unwatchAuth = null;
+		void deps.session?.release();
 		if (pendingTimer) { clearInterval(pendingTimer); pendingTimer = null; }
 		if (runTimer) { clearTimeout(runTimer); runTimer = null; }
 	}
@@ -243,5 +256,22 @@ function desktopNotify(title: string, body: string): void {
 	void window.forceApp?.notify?.(title, body)?.catch?.(() => {});
 }
 
+/** Lends this window's D1 sign-in to the recorder. Only the main window mounts RigTestHost, so
+ *  only it ever sends the token. */
+const sessionSync = createSessionSync({
+	api: rigTestApi,
+	auth: {
+		online: () => !authStore.state.offline && !!authStore.state.accessToken,
+		accessToken: () => authStore.state.accessToken,
+		expiresAt: () => authStore.state.expiresAt,
+		refresh: () => authStore.refresh(),
+	},
+	now: () => Date.now(),
+});
+
 /** The app's one store. */
-export const rigTest = createRigTestStore({ api: rigTestApi, notify: desktopNotify, now: () => Date.now(), acceptContext: currentAcceptContext });
+export const rigTest = createRigTestStore({
+	api: rigTestApi, notify: desktopNotify, now: () => Date.now(), acceptContext: currentAcceptContext,
+	session: sessionSync,
+	onAuthChange: (cb) => watch(() => [authStore.state.accessToken, authStore.state.offline], cb),
+});
