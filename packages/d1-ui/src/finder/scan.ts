@@ -16,6 +16,9 @@ export type ScanOutcome =
 	| { kind: 'open'; to: string; code: string }
 	// A D1 label whose sample could not be opened. The decoded label text is kept so it can be shown.
 	| { kind: 'failed'; reason: FailReason; message: string; code: string; shortId: string; lines: string[] }
+	// The short ID matched nothing the user can see, but the code matches a sample. The code can have been
+	// reused or typed by hand, so this is shown for the user to confirm, never opened by itself.
+	| { kind: 'confirm'; to: string; code: string; shortId: string; lines: string[]; found: { shortId: string; nickname: string } }
 	// Not a D1 sample label (or an unreadable one): the text as scanned.
 	| { kind: 'text'; text: string; looksLikeD1: boolean };
 
@@ -54,7 +57,7 @@ export function displayText(raw: string): string {
 	return escaped.length > MAX_SHOWN ? `${escaped.slice(0, MAX_SHOWN)}…` : escaped;
 }
 
-const SAMPLE_FIELDS = ['sample_id', 'sample_code', 'short_id'];
+const SAMPLE_FIELDS = ['sample_id', 'sample_code', 'short_id', 'nickname'];
 
 function failure(err: any): { reason: FailReason; message: string } {
 	const status = err?.response?.status;
@@ -67,9 +70,9 @@ function failure(err: any): { reason: FailReason; message: string } {
 	return { reason: 'error', message: `The server could not look the sample up (error ${status ?? 'unknown'}).` };
 }
 
-// A D1 label's sample: by short id first (it never changes), then by sample code (a label printed
-// before the code was renamed still opens through its short id; one printed by hand may have only
-// the code). Reads as the signed-in user, so a deleted sample and one the user may not see look the same.
+// A D1 label's sample: by short id (it never changes, so a label printed before the code was renamed still
+// opens). If the short id matches nothing visible, the code is tried, but a match there only asks the
+// user to confirm ('confirm'): it may be another sample that reuses the code. Reads as the signed-in user, so a deleted sample and one the user may not see look the same.
 export async function resolveLabel(api: ScanApi, text: string): Promise<ScanOutcome> {
 	const raw = fromLastHeader(text);
 	const parsed = parseQrPayload(raw);
@@ -87,7 +90,10 @@ export async function resolveLabel(api: ScanApi, text: string): Promise<ScanOutc
 		const byShortId = await find({ short_id: { _eq: parsed.shortId } });
 		if (byShortId?.sample_id) return open(byShortId);
 		const byCode = await find({ sample_code: { _eq: parsed.code } });
-		if (byCode?.sample_id) return open(byCode);
+		if (byCode?.sample_id) {
+			const found = { shortId: String(byCode.short_id ?? ''), nickname: String(byCode.nickname ?? '') };
+			return { kind: 'confirm', to: recordRoute('physical_samples', byCode.sample_id), ...label, found };
+		}
 	} catch (err) {
 		return { kind: 'failed', ...failure(err), ...label };
 	}

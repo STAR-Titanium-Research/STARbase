@@ -52,9 +52,12 @@ describe('resolveLabel', () => {
 		expect(out).toEqual({ kind: 'open', to: '/home/samples/uuid-1', code: 'S-0123' });
 		expect(a.calls).toEqual([{ path: '/items/physical_samples', filter: { short_id: { _eq: '1a2b3c4d' } } }]);
 	});
-	it('falls back to the code when the short id matches nothing', async () => {
-		const a = api([[], [row]]);
-		expect(await resolveLabel(a, PAYLOAD)).toMatchObject({ kind: 'open', to: '/home/samples/uuid-1' });
+	it('asks for confirmation, and does not open, when only the code matches', async () => {
+		const a = api([[], [{ ...row, short_id: 'ffffffff', nickname: 'other' }]]);
+		expect(await resolveLabel(a, PAYLOAD)).toEqual({
+			kind: 'confirm', to: '/home/samples/uuid-1', code: 'S-0123', shortId: '1a2b3c4d',
+			lines: ['Ti-6Al-4V · "bracket A"', '2026-10-01 · DP'], found: { shortId: 'ffffffff', nickname: 'other' },
+		});
 		expect(a.calls[1].filter).toEqual({ sample_code: { _eq: 'S-0123' } });
 	});
 	it('reads a payload a scanner typed with CR line ends and "-" for the dot', async () => {

@@ -32,6 +32,11 @@ async function onText(text: string): Promise<void> {
 
 const { video, state, error, start } = useQrCamera((t) => void onText(t));
 
+function openTo(to: string): void {
+	host!.navigate(to);
+	close();
+}
+
 function close(): void {
 	emit('close');
 }
@@ -99,7 +104,7 @@ const showError = computed(() => state.value === 'error' && !outcome.value);
 
 				<p v-if="status" class="note" role="status" aria-live="polite">{{ status }}</p>
 				<p v-if="showError" class="note err" role="alert">{{ error }}</p>
-				<ScanResultCard v-if="outcome" :outcome="outcome" />
+				<ScanResultCard v-if="outcome" :outcome="outcome" @open="openTo" />
 
 				<footer v-if="outcome || showError">
 					<button type="button" class="btn primary" :disabled="resolving" @click="again">{{ showError ? 'Try again' : 'Scan again' }}</button>

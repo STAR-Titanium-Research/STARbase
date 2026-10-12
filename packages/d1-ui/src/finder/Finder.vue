@@ -62,6 +62,11 @@ onBeforeUnmount(() => {
 	if (opener?.isConnected) opener.focus();
 });
 
+function openTo(to: string) {
+	host!.navigate(to);
+	emit('close');
+}
+
 function pick(hit: FinderHit) {
 	host!.navigate(hit.to);
 	emit('close');
@@ -136,7 +141,7 @@ function onKeydown(e: KeyboardEvent) {
 
 				<div v-if="scanning" class="scanned">
 					<p v-if="!scan || scan.status !== 'done'" class="hint" role="status" aria-live="polite">{{ scan?.status === 'resolving' ? 'Opening the sample…' : 'Reading the label…' }}</p>
-					<ScanResultCard v-else-if="scan.outcome.kind !== 'open'" :outcome="scan.outcome" />
+					<ScanResultCard v-else-if="scan.outcome.kind !== 'open'" :outcome="scan.outcome" @open="openTo" />
 				</div>
 
 				<div v-show="!scanning" :id="`${uid}-list`" ref="list" class="results" role="listbox" aria-label="Results">
