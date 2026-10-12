@@ -148,14 +148,14 @@ export function blankTemplate(): LabelTemplate {
 // A copy of `t` to edit and save as a new row: no id or audit columns, never the default.
 export function copyAsNew(t: LabelTemplate, name = `${t.name} copy`): LabelTemplate {
 	return {
-		...structuredClone(t), id: null, name, isDefault: false,
+		...clone(t), id: null, name, isDefault: false,
 		userCreated: null, dateCreated: null, userUpdated: null, dateUpdated: null,
 	};
 }
 
 // A draft (a deep copy, so the editor never changes the picker's template while typing).
 export function draftOf(t: LabelTemplate): LabelTemplate {
-	return structuredClone(t);
+	return clone(t);
 }
 
 const num = (v: unknown): number | null => (v === '' || v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -207,4 +207,9 @@ export function moveField(fields: LabelField[], from: number, to: number): Label
 	const [item] = out.splice(from, 1);
 	out.splice(to, 0, item);
 	return out;
+}
+
+// A deep copy that also works on a Vue reactive proxy (structuredClone throws on one). A template is plain JSON.
+function clone<T>(v: T): T {
+	return JSON.parse(JSON.stringify(v)) as T;
 }
