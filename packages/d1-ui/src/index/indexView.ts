@@ -151,19 +151,23 @@ export function relationKey(collection: string): string | null {
 	return indexDefByCollection(collection)?.primaryKey ?? null;
 }
 
-export function relationOptionParams(key: string, display: string): Record<string, unknown> {
-	return { fields: key === display ? [key] : [key, display], sort: [display], limit: 200 };
+export function relationOptionParams(key: string, display: string, fallback?: string): Record<string, unknown> {
+	const fields = [...new Set([key, display, ...(fallback ? [fallback] : [])])];
+	return { fields, sort: [display], limit: 200 };
 }
 
-export function relationOptions(rows: unknown, key: string, display: string): ChipOption[] {
+// The label is the display field, else the fallback field (a campaign without a code shows its name),
+// else the key.
+export function relationOptions(rows: unknown, key: string, display: string, fallback?: string): ChipOption[] {
 	const list = Array.isArray(rows) ? rows : [];
 	const out: ChipOption[] = [];
 	for (const r of list) {
 		if (!isRecord(r)) continue;
 		const value = r[key];
 		if (value === null || value === undefined || value === '') continue;
-		const label = r[display];
-		out.push({ value: String(value), label: label === null || label === undefined || label === '' ? String(value) : String(label) });
+		const blank = (x: unknown) => x === null || x === undefined || x === '';
+		const label = !blank(r[display]) ? r[display] : fallback && !blank(r[fallback]) ? r[fallback] : value;
+		out.push({ value: String(value), label: String(label) });
 	}
 	return out;
 }

@@ -2,17 +2,20 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, StatusBadge, asRecord,
-	dataStudioRoute, formatDate, formatQuantity, humanise, type KeyValue,
+	EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, StatusBadge, asRecord,
+	dataStudioRoute, detailFacts, detailsCount, formatDate, summaryCount, summaryGroups, testDetailBase, testRailFacts, testSample, testSubjectCount, testTypeText,
+	type ContentsEntry,
 } from '@d1/ui';
 import { useTestData } from './test/useTestData';
 import TestSubjects from './test/TestSubjects.vue';
 import TestResults from './test/TestResults.vue';
+import RecordDetails from './record/RecordDetails.vue';
 import SampleFiles from './sample/SampleFiles.vue';
 
 // Test page: one test session with its parameters, what it was run on, the results the analysis
 // workers wrote, and its files. Design: docs/superpowers/specs/2026-10-06-explorer-pages-design.md
-// ("Test session").
+// ("Test session"), laid out as a rail and panels by
+// docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md.
 const props = defineProps<{ id: string }>();
 
 const { test, loading, notVisible, error, params, subjects, files, hidden, reload } = useTestData(toRef(props, 'id'));
@@ -28,26 +31,33 @@ function onSaved() {
 }
 
 const t = computed(() => test.value);
-const typeText = computed(() => (t.value?.test_type ? humanise(t.value.test_type) : 'Test'));
-const dateText = computed(() => formatDate(t.value?.session_date, 'Undated'));
-const pageTitle = computed(() => `${typeText.value} · ${dateText.value}`);
+const typeText = computed(() => testTypeText(t.value));
+const pageTitle = computed(() => `${typeText.value} · ${formatDate(t.value?.session_date, 'Undated')}`);
 const studioTo = computed(() => dataStudioRoute('test_sessions', props.id));
 const project = computed(() => asRecord(t.value?.project_id));
 const campaign = computed(() => asRecord(t.value?.campaign_id));
 // The sample for the breadcrumb: the single-sample column, else the first sample subject.
-const sample = computed(() => asRecord(t.value?.sample_id) ?? subjects.value.data.samples[0] ?? null);
-const operatorText = computed(() => asRecord(t.value?.operator_person_id)?.full_name || t.value?.operator_name || '');
+const sample = computed(() => testSample(t.value, subjects.value.data));
 
-const overview = computed<KeyValue[]>(() => {
+// The rail's key facts, and the Details panel: the test's own values and its parameters, minus what
+// the rail already shows.
+const railFacts = computed(() => testRailFacts(t.value, subjects.value.data, hidden.value.data));
+const details = computed(() => detailFacts(testDetailBase(t.value), params.value.data, railFacts.value));
+
+// "On this page": the panels this test has, in page order. A count is null while it loads.
+const contents = computed<ContentsEntry[]>(() => {
 	const x = t.value;
 	if (!x) return [];
+	const groups = summaryGroups(x.summary_stats);
 	return [
-		{ label: 'Test type', value: typeText.value },
-		{ label: 'Category', value: x.test_category ? humanise(x.test_category) : '' },
-		{ label: 'Capture software', value: x.capture_software },
-		{ label: 'Capture frequency', value: formatQuantity(x.capture_frequency_khz), unit: 'kHz' },
-		{ label: 'Raw file size', value: formatQuantity(x.file_size_gb), unit: 'GB' },
-		{ label: 'Raw file', value: x.file_storage_pointer, mono: true },
+		{ id: 'details', title: 'Details', count: detailsCount(details.value.length, !!x.notes, params.value.loading, params.value.error) },
+		{
+			id: 'subject',
+			title: 'Subject',
+			count: subjects.value.loading || subjects.value.error ? null : testSubjectCount(x.sample_id, subjects.value.data, !!hidden.value.data.sample_id),
+		},
+		{ id: 'results', title: 'Results', count: groups.length ? summaryCount(groups) || null : 0 },
+		{ id: 'files', title: 'Files', count: files.value.loading ? null : files.value.data.length },
 	];
 });
 
@@ -64,7 +74,8 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 			<LoadState v-else-if="error" :error="error" />
 
 			<template v-else-if="t">
-				<RecordHeader :code="typeText" :title="dateText" kind="Test" icon="biotech">
+				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
+				<RecordLayout style="--d1-sticky-top: 70px">
 					<template #crumbs>
 						<router-link to="/home">Home</router-link>
 						<template v-if="project">
@@ -89,49 +100,43 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 							<span>›</span><HiddenLink label="Sample" />
 						</template>
 					</template>
-					<template #status><StatusBadge kind="test" :value="t.status" /></template>
-					<template #meta>
-						<span v-if="t.test_category">{{ humanise(t.test_category) }} test</span>
-						<span v-if="asRecord(t.owner_person_id)">Owner: {{ asRecord(t.owner_person_id)!.full_name }}</span>
-						<span v-if="operatorText">Operator: {{ operatorText }}</span>
-						<span v-if="asRecord(t.equipment_id)">Machine: {{ asRecord(t.equipment_id)!.equipment_name }}</span>
+
+					<template #rail>
+						<RecordRail kind="Test" :code="typeText" :facts="railFacts" :contents="contents">
+							<template #kind-icon><v-icon name="biotech" x-small /></template>
+							<template #status><StatusBadge kind="test" :value="t.status" /></template>
+							<template #actions>
+								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+								<v-button small secondary @click="openReport"><v-icon name="picture_as_pdf" small left />Report</v-button>
+								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
+							</template>
+						</RecordRail>
 					</template>
-					<template #actions>
-						<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
-						<v-button small secondary @click="openReport"><v-icon name="picture_as_pdf" small left />Report</v-button>
-						<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
-					</template>
-				</RecordHeader>
 
-				<div class="d1-cols">
-					<Section title="Overview">
-						<KeyValueGrid :items="overview" />
-						<p v-if="t.notes" class="notes">{{ t.notes }}</p>
-					</Section>
+					<RecordDetails
+						:facts="details"
+						:notes="t.notes"
+						:params-loading="params.loading"
+						:params-error="params.error"
+						:empty-text="t.test_type ? 'No details or parameters recorded for this test.' : 'No details recorded, and no test type, so no parameter set applies.'"
+					/>
 
-					<Section
-						title="Parameters"
-						:count="params.loading ? null : params.data.length || null"
-						:empty="!params.loading && !params.error && !params.data.length"
-						:empty-text="t.test_type ? 'No parameters recorded for this test.' : 'This test has no type, so no parameter set applies.'"
-					>
-						<LoadState :loading="params.loading" :error="params.error">
-							<KeyValueGrid :items="params.data.map((p) => ({ label: p.label, value: p.value, unit: p.unit }))" />
-						</LoadState>
-					</Section>
-				</div>
+					<!-- The wrapper carries the id, so "On this page" has a target while the subjects load or fail. -->
+					<div id="subject" class="subject-slot">
+						<LoadState v-if="subjects.loading || subjects.error" :loading="subjects.loading" :error="subjects.error" />
+						<TestSubjects v-else :sample="t.sample_id" :subjects="subjects.data" :sample-hidden="!!hidden.data.sample_id" />
+					</div>
 
-				<LoadState v-if="subjects.loading || subjects.error" :loading="subjects.loading" :error="subjects.error" />
-				<TestSubjects v-else :sample="t.sample_id" :subjects="subjects.data" :sample-hidden="!!hidden.data.sample_id" />
+					<TestResults id="results" :stats="t.summary_stats" :status="t.status" />
 
-				<TestResults :stats="t.summary_stats" :status="t.status" />
-
-				<SampleFiles
-					:files="files.data"
-					:loading="files.loading"
-					:error="files.error"
-					empty-text="No files linked to this test."
-				/>
+					<SampleFiles
+						id="files"
+						:files="files.data"
+						:loading="files.loading"
+						:error="files.error"
+						empty-text="No files linked to this test."
+					/>
+				</RecordLayout>
 
 				<EditDrawer
 					v-model="editing"
@@ -146,5 +151,6 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 </template>
 
 <style scoped>
-.notes { margin: 10px 0 0; font-size: var(--fs-md); line-height: 1.55; white-space: pre-wrap; color: var(--d1-dim); }
+/* Scroll under the page's sticky offset, like a Section (the wrapper is the target while loading). */
+.subject-slot { min-width: 0; scroll-margin-top: calc(var(--d1-sticky-top, 0px) + 8px); }
 </style>

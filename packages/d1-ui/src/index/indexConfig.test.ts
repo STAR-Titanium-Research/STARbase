@@ -104,6 +104,17 @@ describe('INDEX_DEFS', () => {
 		expect(INDEX_DEFS.filter((d) => d.hasShortId).map((d) => d.slug)).toEqual(['samples', 'operations', 'tests']);
 	});
 
+	it('lets operations and tests be narrowed to one campaign (the Campaign page counts link here)', () => {
+		for (const slug of ['operations', 'tests']) {
+			const d = indexDefBySlug(slug)!;
+			expect(d.filters.find((f) => f.field === 'campaign_id'), slug).toEqual({
+				field: 'campaign_id', label: 'Campaign', options: { kind: 'relation', collection: 'campaigns', display: 'campaign_code', fallback: 'name' },
+			});
+		}
+		expect(indexDefBySlug('operations')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Method', 'Process category']);
+		expect(indexDefBySlug('tests')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Type', 'Status']);
+	});
+
 	it('follows the spec table for samples', () => {
 		const d = indexDefBySlug('samples')!;
 		expect(d.columns.map((c) => c.field)).toEqual([

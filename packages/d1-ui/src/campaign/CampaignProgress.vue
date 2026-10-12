@@ -6,11 +6,15 @@ import StatusBadge from '../components/StatusBadge.vue';
 import { TEST_STATUS_ORDER } from '../status';
 import type { Overview } from './rollup';
 
-// Counts and progress bars of a campaign, from the roll-up (`buildOverview`).
+// Counts and progress bars of a campaign, from the roll-up (`buildOverview`). `rail`: only the bars, bare
+// and stacked, for the Campaign page's rail (its counts are rail facts there, and the hidden-samples
+// note is the Samples fact's unit); the Data Studio form keeps the tiles and the boxed bars.
 const props = defineProps<{
 	overview: Overview;
 	/** The role may not read the force-analysis table. */
 	forceHidden?: boolean;
+	/** Bars only, for the rail of a record page. */
+	rail?: boolean;
 	/** The force-analysis read failed for another reason (its error is shown by the lists). */
 	forceFailed?: boolean;
 }>();
@@ -26,13 +30,13 @@ const p = computed(() => props.overview.progress);
 </script>
 
 <template>
-	<div class="d1-progress-block">
-		<div class="tiles">
+	<div class="d1-progress-block" :class="{ rail }">
+		<div v-if="!rail" class="tiles">
 			<StatTile label="Samples" :value="overview.counts.samples" icon="science" hint="Samples you can see in this campaign" />
 			<StatTile label="Operations" :value="overview.counts.operations" icon="precision_manufacturing" hint="Operations you can see in this campaign" />
 			<StatTile label="Test sessions" :value="overview.counts.tests" icon="biotech" hint="Test sessions you can see in this campaign" />
 		</div>
-		<p v-if="overview.counts.hiddenSamples" class="hidden-note">
+		<p v-if="overview.counts.hiddenSamples && !rail" class="hidden-note">
 			{{ overview.counts.hiddenSamples }} {{ overview.counts.hiddenSamples === 1 ? 'sample' : 'samples' }} in this campaign not visible to you
 			(counted on the campaign card, not in the tiles).
 		</p>
@@ -83,4 +87,8 @@ const p = computed(() => props.overview.progress);
 .chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm, 12px); }
 .chip b { font-variant-numeric: tabular-nums; }
+/* In the rail (about 268px wide): no box inside the rail's own panel, one column, the label over its bar. */
+.d1-progress-block.rail .bars { margin-top: 0; padding: 0; grid-template-columns: minmax(0, 1fr); background: none; border: 0; border-radius: 0; box-shadow: none; }
+.d1-progress-block.rail .row { flex-direction: column; align-items: stretch; gap: 2px; }
+.d1-progress-block.rail .row > :last-child { flex: none; }
 </style>

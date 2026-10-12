@@ -18,7 +18,7 @@ const forThisSample = (collection: string) => indexRoute(collection, props.sampl
 </script>
 
 <template>
-	<Section title="Operations" :count="operations.loading ? null : ops.length" :empty="!operations.loading && !operations.error && !ops.length" empty-text="No operations recorded for this sample.">
+	<Section id="operations" title="Operations" :count="operations.loading ? null : ops.length" :empty="!operations.loading && !operations.error && !ops.length" empty-text="No operations recorded for this sample.">
 		<LoadState :loading="operations.loading" :error="operations.error">
 			<DataTable>
 				<thead>
@@ -47,7 +47,7 @@ const forThisSample = (collection: string) => indexRoute(collection, props.sampl
 		</LoadState>
 	</Section>
 
-	<Section title="Tests" :count="tests.loading ? null : testRows.length" :empty="!tests.loading && !tests.error && !testRows.length" empty-text="No tests recorded for this sample.">
+	<Section id="tests" title="Tests" :count="tests.loading ? null : testRows.length" :empty="!tests.loading && !tests.error && !testRows.length" empty-text="No tests recorded for this sample.">
 		<LoadState :loading="tests.loading" :error="tests.error">
 			<DataTable>
 				<thead>

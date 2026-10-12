@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { RecordLink, Section, StatusBadge, asRecord, humanise, type TestSubjects } from '@d1/ui';
+import { RecordLink, Section, StatusBadge, asRecord, humanise, testSubjectCount, type TestSubjects } from '@d1/ui';
 
 // What the test was run on: the subjects of the test_sessions_subject junction (samples, or for
 // tool tests an insert edge). `sample` is the derived primary sample (test_sessions.sample_id, kept
@@ -20,13 +20,15 @@ const samples = computed(() => {
 	return out;
 });
 const hiddenCount = computed(() => Math.max(props.subjects.hidden, props.sampleHidden ? 1 : 0));
+// The row count is the kit's (the page's "On this page" entry uses the same function).
+const total = computed(() => testSubjectCount(props.sample, props.subjects, !!props.sampleHidden));
 </script>
 
 <template>
 	<Section
 		title="Subject"
-		:count="samples.length + subjects.others.length + hiddenCount"
-		:empty="!samples.length && !subjects.others.length && !hiddenCount"
+		:count="total"
+		:empty="total === 0"
 		empty-text="No sample or other subject is recorded for this test."
 	>
 		<ul class="rows">

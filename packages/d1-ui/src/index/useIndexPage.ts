@@ -266,11 +266,12 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 			if (filter.options.kind === 'relation') {
 				const key = relationKey(filter.options.collection);
 				if (!key) throw new Error('unknown relation');
-				const cacheKey = `${filter.options.collection}.${filter.options.display}`;
+				const { collection, display, fallback } = filter.options;
+				const cacheKey = `${collection}.${display}${fallback ? `.${fallback}` : ''}`;
 				const hit = chipCacheFor(host).get(cacheKey);
 				if (hit) return setOptions(field, null, hit);
-				const res = await host.api.get(`/items/${filter.options.collection}`, { params: relationOptionParams(key, filter.options.display) });
-				setOptions(field, cacheKey, relationOptions(res.data?.data, key, filter.options.display));
+				const res = await host.api.get(`/items/${filter.options.collection}`, { params: relationOptionParams(key, display, fallback) });
+				setOptions(field, cacheKey, relationOptions(res.data?.data, key, display, fallback));
 			} else if (filter.options.kind === 'enum') {
 				if (filter.options.values) {
 					setOptions(field, null, filter.options.values.map((v) => ({ value: v, label: v })));

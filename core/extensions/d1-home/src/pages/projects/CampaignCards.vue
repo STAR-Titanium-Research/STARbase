@@ -23,6 +23,7 @@ const dates = (c: any) => {
 
 <template>
 	<Section
+		id="campaigns"
 		title="Campaigns"
 		:count="campaigns.loading ? null : rows.length"
 		:empty="!campaigns.loading && !campaigns.error && !rows.length"

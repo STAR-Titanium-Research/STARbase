@@ -21,7 +21,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 </script>
 
 <template>
-	<Section title="Samples not in a campaign" :count="props.samples.loading ? null : sampleRows.length" :empty="isEmpty(props.samples)" empty-text="Every sample of this project that you can see is in a campaign.">
+	<Section id="unassigned-samples" title="Samples not in a campaign" :count="props.samples.loading ? null : sampleRows.length" :empty="isEmpty(props.samples)" empty-text="Every sample of this project that you can see is in a campaign.">
 		<LoadState :loading="props.samples.loading" :error="props.samples.error">
 			<DataTable>
 				<thead><tr><th>Sample</th><th>Form</th><th>Material</th><th>Status</th></tr></thead>
@@ -38,7 +38,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 		</LoadState>
 	</Section>
 
-	<Section title="Operations not in a campaign" :count="props.operations.loading ? null : opRows.length" :empty="isEmpty(props.operations)" empty-text="Every operation of this project that you can see is in a campaign.">
+	<Section id="unassigned-operations" title="Operations not in a campaign" :count="props.operations.loading ? null : opRows.length" :empty="isEmpty(props.operations)" empty-text="Every operation of this project that you can see is in a campaign.">
 		<LoadState :loading="props.operations.loading" :error="props.operations.error">
 			<DataTable>
 				<thead><tr><th>Pass</th><th>Process</th><th>Sample</th><th>Date</th></tr></thead>
@@ -55,7 +55,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 		</LoadState>
 	</Section>
 
-	<Section title="Tests not in a campaign" :count="props.tests.loading ? null : testRows.length" :empty="isEmpty(props.tests)" empty-text="Every test of this project that you can see is in a campaign.">
+	<Section id="unassigned-tests" title="Tests not in a campaign" :count="props.tests.loading ? null : testRows.length" :empty="isEmpty(props.tests)" empty-text="Every test of this project that you can see is in a campaign.">
 		<LoadState :loading="props.tests.loading" :error="props.tests.error">
 			<DataTable>
 				<thead><tr><th>Test</th><th>Sample</th><th>Date</th><th>Status</th></tr></thead>

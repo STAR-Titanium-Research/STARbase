@@ -101,3 +101,6 @@ export function useCampaignData(campaignId: Ref<string>) {
 
 	return { junction, operations, tests, analyses, analysisUnavailable, overview, matrix, loading, reload: load };
 }
+
+/** What the workbench reads from: the Campaign page makes one and shares it with its rail. */
+export type CampaignData = ReturnType<typeof useCampaignData>;

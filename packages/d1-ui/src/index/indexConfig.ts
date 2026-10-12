@@ -16,7 +16,8 @@ export interface FilterDef {
 	field: string;
 	label: string;
 	// relation / enum options are loaded at runtime, so an enum need not list its values.
-	options: { kind: 'relation'; collection: string; display: string } | { kind: 'enum'; values?: string[] } | { kind: 'bool' };
+	// `fallback`: a second field that labels a row whose `display` is empty (a campaign without a code is named).
+	options: { kind: 'relation'; collection: string; display: string; fallback?: string } | { kind: 'enum'; values?: string[] } | { kind: 'bool' };
 }
 
 export interface IndexDef {
@@ -42,13 +43,14 @@ export interface IndexDef {
 
 const col = (field: string, label: string, format?: ColumnDef['format']): ColumnDef => (format ? { field, label, format } : { field, label });
 const rel = (field: string, label: string, collection: string, display: string): ColumnDef => ({ field, label, relation: { collection, display } });
-const relFilter = (field: string, label: string, collection: string, display: string): FilterDef => ({
-	field, label, options: { kind: 'relation', collection, display },
+const relFilter = (field: string, label: string, collection: string, display: string, fallback?: string): FilterDef => ({
+	field, label, options: fallback ? { kind: 'relation', collection, display, fallback } : { kind: 'relation', collection, display },
 });
 const enumFilter = (field: string, label: string): FilterDef => ({ field, label, options: { kind: 'enum' } });
 const boolFilter = (field: string, label: string): FilterDef => ({ field, label, options: { kind: 'bool' } });
 
 const project = relFilter('project_id', 'Project', 'projects', 'project_code');
+const campaign = relFilter('campaign_id', 'Campaign', 'campaigns', 'campaign_code', 'name');
 const material = relFilter('material_id', 'Material', 'materials', 'alloy_code');
 const insertType = relFilter('insert_type_id', 'Insert type', 'insert_types', 'type_code');
 const processCategory = enumFilter('process_category', 'Process category');
@@ -89,7 +91,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('operation_date', 'Date', 'date'), col('operator_name', 'Operator'), col('outcome_notes', 'Outcome'),
 		],
 		searchFields: ['pass_code', 'sample_id.sample_code', 'operator_name'],
-		filters: [project, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory],
+		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory],
 		defaultSort: '-operation_date', rowTarget: 'record', hasShortId: true,
 	},
 	{
@@ -101,7 +103,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			rel('equipment_id', 'Equipment', 'equipment', 'equipment_name'),
 		],
 		searchFields: ['test_code', 'test_type', 'sample_id.sample_code'],
-		filters: [project, enumFilter('test_type', 'Type'), enumFilter('status', 'Status')],
+		filters: [project, campaign, enumFilter('test_type', 'Type'), enumFilter('status', 'Status')],
 		defaultSort: '-session_date', rowTarget: 'record', hasShortId: true,
 	},
 	{
