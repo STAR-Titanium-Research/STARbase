@@ -33,21 +33,20 @@ INSERT INTO _lm_junction_rules (collection, action, filter) VALUES
     ('session_additional_operators', 'update', '{"_or":[{"session_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"session_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'),
     ('session_additional_operators', 'delete', '{"_or":[{"session_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"session_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}');
 
-WITH targets AS (
-    SELECT p.id, p.permissions AS old_p, p.validation AS old_v, g.filter
-      FROM directus_permissions p
-      JOIN _lm_junction_rules g ON g.collection = p.collection AND g.action = p.action
-     WHERE p.policy = '20000002-0000-0000-0000-000000000002'
-       AND (p.permissions::jsonb IS DISTINCT FROM g.filter::jsonb
-            OR p.validation::jsonb IS DISTINCT FROM '{}'::jsonb)
-), saved AS (
-    INSERT INTO d1_private.lab_member_junction_rules_backup (id, permissions, validation)
-    SELECT id, old_p, old_v FROM targets
-)
+-- First keep the rows that are about to change, then change exactly those.
+INSERT INTO d1_private.lab_member_junction_rules_backup (id, permissions, validation)
+SELECT p.id, p.permissions, p.validation
+  FROM directus_permissions p
+  JOIN _lm_junction_rules g ON g.collection = p.collection AND g.action = p.action
+ WHERE p.policy = '20000002-0000-0000-0000-000000000002'
+   AND (p.permissions::jsonb IS DISTINCT FROM g.filter::jsonb
+        OR p.validation::jsonb IS DISTINCT FROM '{}'::jsonb);
+
 UPDATE directus_permissions p
-   SET permissions = t.filter, validation = '{}'
-  FROM targets t
- WHERE p.id = t.id;
+   SET permissions = g.filter, validation = '{}'
+  FROM _lm_junction_rules g, d1_private.lab_member_junction_rules_backup b
+ WHERE b.id = p.id
+   AND g.collection = p.collection AND g.action = p.action;
 
 WITH added AS (
     INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
