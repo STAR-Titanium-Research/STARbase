@@ -46,6 +46,10 @@ const titleId = useId();
 	/* A click in the contents list scrolls here: stop under the page's sticky offset, not behind it. */
 	scroll-margin-top: calc(var(--d1-sticky-top, 0px) + 8px);
 }
+/* Focused programmatically after a contents click (tabindex -1): a quiet accent border, not the
+   browser's heavy ring round the whole panel. */
+.d1-section:focus { outline: none; }
+.d1-section:focus-visible { outline: none; border-color: var(--d1-accent, var(--theme--primary)); }
 .head {
 	display: flex;
 	align-items: center;

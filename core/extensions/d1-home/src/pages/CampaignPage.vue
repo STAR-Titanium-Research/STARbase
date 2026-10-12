@@ -48,15 +48,18 @@ const railFacts = computed(() => {
 	return campaignRailFacts(campaign.value, hidden.value, counts, failed);
 });
 
-// "On this page": the panels in page order. A count is null while its read loads.
+// "On this page": the panels in page order. A count is null while its read loads or after it
+// failed (never a wrong 0, and never the previous load's rows after a failed reload).
+const unknown = (s: { loading: boolean; error?: unknown }) => s.loading || !!s.error;
 const contents = computed<ContentsEntry[]>(() => {
 	const o = data.overview.value;
+	const [j, ops, tests] = [data.junction.value, data.operations.value, data.tests.value];
 	return campaignContents({
 		hasNotes: !!campaign.value?.notes,
-		matrix: data.junction.value.loading || data.operations.value.loading || data.tests.value.loading ? null : data.matrix.value.rows.length,
-		samples: data.junction.value.loading ? null : o.sampleRows.length,
-		tests: data.tests.value.loading ? null : o.testRows.length,
-		operations: data.operations.value.loading ? null : o.opRows.length,
+		matrix: unknown(j) || unknown(ops) || unknown(tests) ? null : data.matrix.value.rows.length,
+		samples: unknown(j) ? null : o.sampleRows.length,
+		tests: unknown(tests) ? null : o.testRows.length,
+		operations: unknown(ops) ? null : o.opRows.length,
 	});
 });
 </script>
