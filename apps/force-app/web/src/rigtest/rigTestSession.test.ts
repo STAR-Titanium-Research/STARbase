@@ -93,4 +93,16 @@ describe('createSessionSync', () => {
 		await signedOut.sync.release();
 		expect(signedOut.api.deleteSession).toHaveBeenCalledTimes(1);
 	});
+
+	it('a sign-out that lands while a PUT is in flight is applied once it finishes', async () => {
+		const { auth, api, sync } = setup();
+		let release: (r: ApiResult<unknown>) => void = () => {};
+		api.putSession.mockImplementationOnce(() => new Promise<ApiResult<unknown>>((res) => { release = res; }));
+		const first = sync.sync(view());
+		auth.on = false;
+		const second = sync.sync(view({ session: true })); // dropped by the busy guard, but remembered
+		release(ok());
+		await Promise.all([first, second]);
+		expect(api.deleteSession).toHaveBeenCalledTimes(1);
+	});
 });

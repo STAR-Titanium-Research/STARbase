@@ -29,13 +29,17 @@ export function detailText(body: unknown, fallback: string): string {
 	return fallback;
 }
 
-async function call(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<ApiResult<unknown>> {
+/** The session routes feed a sync that must not wedge on a hung recorder. */
+const SESSION_TIMEOUT_MS = 10_000;
+
+async function call(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown, signal?: AbortSignal): Promise<ApiResult<unknown>> {
 	let res: Response;
 	try {
 		res = await fetch(`${recorderBase()}/rig-tests${path}`, {
 			method,
 			headers: body === undefined ? undefined : JSON_HEADERS,
 			body: body === undefined ? undefined : JSON.stringify(body),
+			signal,
 		});
 	} catch {
 		return { kind: 'error', status: 0, detail: "couldn't reach the recording backend" };
@@ -90,9 +94,10 @@ export const answer = (step: number, option: string, note?: string) =>
 export const cancelRun = () => call('POST', '/run/cancel');
 
 /** Lend the signed-in operator's D1 access token to the recorder (it sends it to the relay). */
-export const putSession = (token: string, expiresAt: number) => call('PUT', '/session', { access_token: token, expires_at: expiresAt });
+export const putSession = (token: string, expiresAt: number) =>
+	call('PUT', '/session', { access_token: token, expires_at: expiresAt }, AbortSignal.timeout(SESSION_TIMEOUT_MS));
 
-export const deleteSession = () => call('DELETE', '/session');
+export const deleteSession = () => call('DELETE', '/session', undefined, AbortSignal.timeout(SESSION_TIMEOUT_MS));
 
 /** The whole client, as the store takes it (tests pass a fake). */
 export const rigTestApi = { getEligibility, getPending, getRun, getHistory, accept, snooze, decline, answer, cancelRun, putSession, deleteSession };

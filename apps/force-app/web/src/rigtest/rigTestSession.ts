@@ -35,11 +35,14 @@ export function createSessionSync(deps: { api: SessionApi; auth: SessionAuth; no
 	/** A refused sign-in gets one refresh-and-resend; reset once the relay accepts again. */
 	let retried = false;
 	let busy = false;
+	/** The latest view that arrived while a pass was running: the sign-in may have changed under
+	 *  it, so one more pass runs on it when the first finishes. */
+	let pendingView: SessionView | null = null;
 
 	const wanted = (): string | null => (auth.online() ? auth.accessToken() : null);
 
 	async function sync(view: SessionView): Promise<void> {
-		if (busy) return;
+		if (busy) { pendingView = view; return; }
 		busy = true;
 		try {
 			if (view.relay === 'signin_rejected' && sent) {
@@ -63,6 +66,9 @@ export function createSessionSync(deps: { api: SessionApi; auth: SessionAuth; no
 		} finally {
 			busy = false;
 		}
+		const next = pendingView;
+		pendingView = null;
+		if (next) await sync(next);
 	}
 
 	/** The shell is going away: if nobody is signed in online, the recorder must not keep the

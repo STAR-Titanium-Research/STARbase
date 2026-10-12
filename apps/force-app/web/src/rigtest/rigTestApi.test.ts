@@ -131,4 +131,17 @@ describe('session routes', () => {
 		stub(422, { detail: 'not a usable access token' });
 		expect(await putSession('bad token', 1)).toMatchObject({ kind: 'error', status: 422, detail: 'not a usable access token' });
 	});
+	it('PUT and DELETE /session carry a timeout signal, so a hung recorder cannot wedge the sync', async () => {
+		const f = stub(200, { ok: true });
+		await putSession('tok', 1);
+		await deleteSession();
+		for (const i of [0, 1]) {
+			const [, init] = f.mock.calls[i] as unknown as [string, RequestInit];
+			expect(init.signal).toBeInstanceOf(AbortSignal);
+		}
+	});
+	it('a timed-out PUT is an error, not a throw', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => { throw new DOMException('timed out', 'TimeoutError'); }));
+		expect(await putSession('tok', 1)).toMatchObject({ kind: 'error', status: 0 });
+	});
 });
