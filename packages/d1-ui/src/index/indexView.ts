@@ -5,7 +5,7 @@
 import { formatDate, formatNumber } from '../format';
 import { operationLabel } from '../operationLabel';
 import type { Bookmark } from '../nav/navConfig';
-import type { ColumnDef, IndexDef } from './indexConfig';
+import type { ColumnDef, IndexDef, SelectAction } from './indexConfig';
 import { indexDefByCollection } from './indexConfig';
 import { PAGE_SIZE, bookmarkSort, queryFromState } from './indexQuery';
 import type { IndexState } from './indexQuery';
@@ -209,4 +209,15 @@ export const BOOL_OPTIONS: ChipOption[] = [
 export function withSelected(options: ChipOption[], selected: string | undefined): ChipOption[] {
 	if (!selected || options.some((o) => o.value === selected)) return options;
 	return [{ value: selected, label: selected }, ...options];
+}
+
+// ---- ticked rows -------------------------------------------------------------------------------
+
+// The most rows one select action takes: the keys travel in the address (about 37 characters each), and a
+// reload of a longer one can be refused by the proxy.
+export const SELECT_MAX = 100;
+
+// The route the select button goes to: the action's page with the ticked keys as one comma list.
+export function selectionRoute(action: SelectAction, keys: string[]): string {
+	return `${action.path}?${action.param}=${keys.map(encodeURIComponent).join(',')}`;
 }

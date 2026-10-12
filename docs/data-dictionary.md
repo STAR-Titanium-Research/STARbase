@@ -44,6 +44,10 @@ Projects & campaigns
   campaign_samples             M2M: samples in a campaign
   project_rollup               read-only cache of v_project_rollup, rebuilt by trigger
 
+Labels
+  label_templates              printable label layouts (sheet or roll) for the Explorer labels page
+  label_settings               singleton: the lab contact email printed into every label's QR code
+
 Raw-material provenance
   raw_stock_lots               inbound material ledger
 

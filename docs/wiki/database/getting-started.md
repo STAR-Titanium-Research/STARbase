@@ -50,7 +50,7 @@ From left to right:
 **Home** is the landing page, and it is about **your** work. From top to bottom:
 
 1. **Quick actions.** Three big buttons for what you do every day: *Register a sample*, *Log an
-   operation* and *Print labels*. Everything else is in the **sidebar** on the left: *Records*
+   operation* and *Print labels* (opens the in-app Labels page). Everything else is in the **sidebar** on the left: *Records*
    (Projects, Campaigns, Samples, Operations, Tests, People), *Inventory* and *Resources*, with
    the Force and FAST dashboards above them and your **saved views** listed under the pages they
    belong to. To jump straight to a record, a page or a saved view, press **Ctrl K** (Cmd K on a

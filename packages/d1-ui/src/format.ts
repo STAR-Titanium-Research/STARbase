@@ -23,7 +23,7 @@ export function errorText(e: any, fallback = 'Request failed'): string {
 	return e?.response?.data?.errors?.[0]?.message || e?.message || fallback;
 }
 
-const errCode = (e: any) => e?.response?.data?.errors?.[0]?.extensions?.code;
+export const errCode = (e: any) => e?.response?.data?.errors?.[0]?.extensions?.code;
 
 // The failure predicates of the Directus API. Which one to use:
 //   isForbidden  a read of a related list the role may not see (HTTP 403 or the FORBIDDEN code):
@@ -43,6 +43,11 @@ export function isNotVisible(e: any): boolean {
 
 export function isDuplicate(e: any): boolean {
 	return errCode(e) === 'RECORD_NOT_UNIQUE';
+}
+
+/** The column a RECORD_NOT_UNIQUE (or similar) failure names, when Directus says. */
+export function errField(e: any): string | undefined {
+	return e?.response?.data?.errors?.[0]?.extensions?.field;
 }
 
 // A measured quantity for display. formatNumber() rounds to a fixed number of decimals, which

@@ -14,7 +14,7 @@ interface Action { key: string; label: string; sub: string; icon: string; to: st
 const main: Action[] = [
 	{ key: 'action:register-sample', label: 'Register a sample', sub: 'Add a new physical sample', icon: 'add_circle', to: '/content/physical_samples/+' },
 	{ key: 'action:log-operation', label: 'Log an operation', sub: 'Record a manufacturing step', icon: 'precision_manufacturing', to: '/content/manufacturing_operations/+' },
-	{ key: 'action:print-labels', label: 'Print labels', sub: 'Sample labels with QR codes', icon: 'label', to: '/d1-report/labels' },
+	{ key: 'action:print-labels', label: 'Print labels', sub: 'Sample labels with QR codes', icon: 'label', to: '/home/labels' },
 ];
 const router = useRouter();
 function open(a: Action) {

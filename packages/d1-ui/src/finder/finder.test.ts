@@ -24,10 +24,8 @@ describe('localHits', () => {
 		expect(hits.some((h) => h.label === 'Slow tests')).toBe(false);
 	});
 
-	it('does not offer a link that opens in a new tab (Print labels is a server page)', () => {
-		expect(localHits('print', nav)).toEqual([]);
-		expect(localHits('label', nav).some((h) => h.to.startsWith('/d1-report/'))).toBe(false);
-		// the other Tools entries are still found
+	it('offers Print labels as an app page, and the other Tools entries', () => {
+		expect(localHits('print', nav).map((h) => [h.label, h.to])).toEqual([['Print labels', '/home/labels']]);
 		expect(localHits('data studio', nav).map((h) => h.label)).toEqual(['Data Studio']);
 	});
 

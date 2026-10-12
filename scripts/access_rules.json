@@ -120,6 +120,12 @@
       "create": {"validation": {"_or": [{"user_id": {"_null": true}}, {"user_id": {"_eq": "$CURRENT_USER"}}]}},
       "read": {},
       "update": {"fields": ["full_name", "email", "is_operator", "is_researcher", "active", "notes"]}
+    },
+    "label_templates": {
+      "create": {"fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
+      "read": {},
+      "update": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}, "fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
+      "delete": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}}
     }
   },
   "guards": {
@@ -167,6 +173,7 @@
     "facilities": ["read"],
     "fast_recipes": ["read"],
     "force_crawler_state": ["read"],
+    "label_settings": ["read"],
     "directus_files": ["create", "read", "update", "delete"]
   }
 }

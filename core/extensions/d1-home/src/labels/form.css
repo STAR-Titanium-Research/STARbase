@@ -1,0 +1,32 @@
+/* Controls of the labels page (picker, template panel, editor), from the theme's tokens like the index page's
+   filters: a label over a 30px control, plain buttons, small links. Unscoped under :where(.d1-page), so
+   every component of the page shares them and a scoped rule still wins. */
+:where(.d1-page) .lf-field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim); min-width: 0; }
+:where(.d1-page) .lf-field > input,
+:where(.d1-page) .lf-field > select,
+:where(.d1-page) .lf-field > textarea,
+:where(.d1-page) .lf-input {
+	height: 30px; min-width: 0; padding: 0 10px; box-sizing: border-box;
+	border: 1px solid var(--theme--border-color); border-radius: 8px;
+	background: var(--theme--form--field--input--background, var(--theme--background));
+	color: var(--theme--foreground); font: inherit; font-size: var(--fs-md, 13px); font-weight: 400;
+}
+:where(.d1-page) .lf-field > textarea { height: auto; padding: 6px 10px; resize: vertical; }
+:where(.d1-page) .lf-field > input:disabled,
+:where(.d1-page) .lf-field > select:disabled { opacity: 0.55; }
+:where(.d1-page) .lf-btn {
+	display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 12px;
+	border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-tile); color: var(--theme--foreground);
+	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; white-space: nowrap; cursor: pointer;
+}
+:where(.d1-page) .lf-btn:hover:not(:disabled) { border-color: var(--d1-accent, var(--theme--primary)); }
+:where(.d1-page) .lf-btn:disabled { opacity: 0.45; cursor: default; }
+:where(.d1-page) .lf-btn.pri { background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); color: var(--d1-on-accent, #fff); }
+:where(.d1-page) .lf-btn.bad { color: var(--d1-bad); }
+:where(.d1-page) .lf-btn.icon { width: 30px; padding: 0; }
+:where(.d1-page) .lf-link {
+	border: 0; background: none; padding: 0; font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600;
+	color: var(--d1-accent, var(--theme--primary)); cursor: pointer; text-decoration: underline;
+}
+:where(.d1-page) .lf-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+:where(.d1-page) .lf-check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-md, 13px); cursor: pointer; }
