@@ -35,10 +35,12 @@ const start = ref(1);
 const draft = ref<LabelTemplate | null>(null);
 const active = computed<LabelTemplate | null>(() => draft.value ?? templates.selected.value);
 
-// With nothing ticked, the editor previews an example label so the layout can still be judged.
+// With nothing ticked, the editor previews an example label so the layout can still be judged. It is as long as a
+// real one (a code of about 22 characters, an email of real length), so a layout that only fits a short example
+// shows up as clipped or as a dense QR code here, not on the printed sheet.
 const EXAMPLE: LabelSample = {
-	id: '00000000-0000-4000-8000-000000000000', code: 'S-0123', shortId: '1a2b3c4d', nickname: 'bracket A', material: 'Ti-6Al-4V',
-	date: '2026-10-01', ownerInitials: 'DP', ownerEmail: 'owner@example.org',
+	id: '00000000-0000-4000-8000-000000000000', code: '1234-AG-MF-2026-10-12', shortId: '1a2b3c4d', nickname: 'FAST control bar', material: 'Ti-6Al-4V',
+	date: '2026-10-12', ownerInitials: 'DP', ownerEmail: 'dennis.premoli2@sheffield.ac.uk',
 };
 const showingExample = computed(() => !!draft.value && samples.selected.value.length === 0);
 const previewSamples = computed(() => (showingExample.value ? [EXAMPLE] : samples.selected.value));
@@ -62,7 +64,8 @@ const tidyStart = () => { if (problems.value.length === 0) start.value = clampSt
 const tidyCopies = () => { copies.value = clampCopies(copies.value); };
 
 const summary = computed(() => (doc.value ? summaryText(doc.value) : ''));
-const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value && !renderError.value);
+// Not before the lab contact has loaded (or failed to): a label printed meanwhile would have no Contact line.
+const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value && !renderError.value && settings.loaded.value);
 
 // ---- the template picker -------------------------------------------------------------------------
 // A draft opened with openDraft() has a snapshot; the editor is "dirty" when the draft no longer matches it.
@@ -282,6 +285,7 @@ onMounted(() => {
 								<template v-else-if="!samples.selected.value.length">Tick samples to preview their labels.</template>
 								<template v-else-if="summary">{{ summary }}</template>
 								<span v-if="rendering" class="d1-note"> Updating…</span>
+								<span v-if="settings.loadError.value" class="bad" role="alert"> {{ settings.loadError.value }} The labels print without a Contact line.</span>
 							</p>
 							<LabelPreview :html="doc?.html ?? null" :page-width-mm="active.pageWidthMm || 210" />
 							<p v-if="active.media === 'roll'" class="d1-note hint">

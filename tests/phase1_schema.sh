@@ -412,6 +412,10 @@ SAVEPOINT s6;
 UPDATE label_settings SET contact_email = 'not an email';
 SELECT 'ls_bad_email:accepted';
 ROLLBACK TO SAVEPOINT s6;
+SAVEPOINT s6b;
+UPDATE label_settings SET contact_email = 'a@bcd';
+SELECT 'ls_no_dot_email:accepted';
+ROLLBACK TO SAVEPOINT s6b;
 SAVEPOINT s7;
 UPDATE label_settings SET contact_email = 'lab@example.org';
 SELECT 'ls_good_email:' || contact_email || ',v' || version FROM label_settings;
@@ -440,6 +444,7 @@ lt_check "ls_comments:0" "up: every label_settings column carries a COMMENT"
 lt_check "ls_triggers:audit_label_settings,occ_label_settings" "up: label_settings has the audit and OCC triggers"
 ! grep -qx "ls_second_row:accepted" <<<"$lt_out" && ok "a second label_settings row is refused" || bad "a second label_settings row is refused"
 ! grep -qx "ls_bad_email:accepted" <<<"$lt_out" && ok "a contact email without an @ is refused" || bad "a contact email without an @ is refused"
+! grep -qx "ls_no_dot_email:accepted" <<<"$lt_out" && ok "a contact email with no dot after the @ (a@bcd) is refused" || bad "a contact email with no dot after the @ (a@bcd) is refused"
 lt_check "ls_good_email:lab@example.org,v2" "a valid contact email is accepted and bumps version"
 lt_check "up_comments:0" "up: every column carries a COMMENT"
 lt_check "up_tbl_comment:true" "up: the table carries a COMMENT"

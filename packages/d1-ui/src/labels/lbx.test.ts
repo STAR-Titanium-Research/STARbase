@@ -3,6 +3,8 @@ import { strFromU8, unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { buildLbxDownload, isLbxTemplate, lbxFileStem } from './lbxBundle';
 import { buildLbxLabelXml, buildPropXml, CELL_STEPS_PT, chooseLbxQr, qrModuleCount, qrVersion, xmlText } from './lbx';
+import { MM_PER_PT } from './fit';
+import { layoutLabel } from './layout';
 import { buildQrPayload } from './qrPayload';
 import { templateFromRow } from './template';
 import type { LabelSample } from './types';
@@ -114,6 +116,21 @@ describe('buildLbxLabelXml', () => {
 	it('takes the length from the template label height', () => {
 		const out = buildLbxLabelXml(sample(1), { ...BROTHER, labelHeightMm: 40 }, CONTACT);
 		expect(attr(out, 'style:paper', 'height')).toBe('113.4pt');
+	});
+});
+
+describe('QR before text', () => {
+	it('asks the layout for the QR edge that keeps modules readable, so the code grows before the text', () => {
+		const t = templateFromRow({
+			name: 'Brother tall', media: 'roll', page_width_mm: 62, page_height_mm: 40, columns: 1, rows: 1, label_width_mm: 62, label_height_mm: 40,
+			arrangement: 'qr_top', fields: [{ key: 'sample_code', size: 'lg', bold: true }, { key: 'short_id', size: 'md' }, { key: 'nickname', size: 'md' }],
+		});
+		const area = { ...t, labelWidthMm: 167 * MM_PER_PT, labelHeightMm: (40 / MM_PER_PT - 16.8) * MM_PER_PT };
+		const plain = layoutLabel(sample(1), area);
+		const xml = buildLbxLabelXml(sample(1), t, CONTACT);
+		const firstText = /<text:text><pt:objectStyle x="[\d.]+pt" y="([\d.]+)pt"/.exec(xml)![1];
+		// the text starts lower than in the plain layout, because the code was given more room
+		expect(+firstText).toBeGreaterThan(8.4 + plain.lines[0].y / MM_PER_PT + 1);
 	});
 });
 

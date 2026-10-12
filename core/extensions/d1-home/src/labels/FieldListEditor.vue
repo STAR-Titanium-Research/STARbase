@@ -25,13 +25,14 @@ const move = (i: number, to: number) => emit('update:fields', moveField(props.fi
 const removeAt = (i: number) => emit('update:fields', props.fields.filter((_, j) => j !== i));
 const add = (key: FieldKey) => emit('update:fields', [...props.fields, { key, size: 'md', bold: false }]);
 // "All (default)" is ticked while the template carries every extra (an empty list also means all). Unticking it
-// lets you leave some out; the last one stays, because an empty list reads as all.
+// lets you leave some out; the last one stays ticked and disabled, because an empty list reads as all.
 const custom = ref(props.qrFields.length > 0 && !QR_KEYS.every((k) => props.qrFields.includes(k)));
 const effective = computed<QrKey[]>(() => (custom.value ? props.qrFields : [...QR_KEYS]));
 const setAll = (on: boolean) => {
 	custom.value = !on;
 	if (on) emit('update:qrFields', [...QR_KEYS]);
 };
+const isLastExtra = (key: QrKey) => custom.value && effective.value.length === 1 && effective.value[0] === key;
 const toggleQr = (key: QrKey, on: boolean) => {
 	const next = on ? QR_KEYS.filter((k) => k === key || effective.value.includes(k)) : effective.value.filter((k) => k !== key);
 	if (next.length) emit('update:qrFields', [...next]);
@@ -65,7 +66,7 @@ const toggleQr = (key: QrKey, on: boolean) => {
 		<div class="lf-row qr">
 			<label class="lf-check all"><input type="checkbox" :checked="!custom" :disabled="disabled" @change="setAll(($event.target as HTMLInputElement).checked)" />All (default)</label>
 			<label v-for="k in QR_KEYS" :key="k" class="lf-check">
-				<input type="checkbox" :checked="effective.includes(k)" :disabled="disabled || !custom" @change="toggleQr(k, ($event.target as HTMLInputElement).checked)" />{{ QR_LABEL[k] }}
+				<input type="checkbox" :checked="effective.includes(k)" :disabled="disabled || !custom || isLastExtra(k)" :title="isLastExtra(k) ? 'At least one extra is required. Tick All (default) to put them all back.' : undefined" @change="toggleQr(k, ($event.target as HTMLInputElement).checked)" />{{ QR_LABEL[k] }}
 			</label>
 		</div>
 		<p class="d1-note">The sample code and short ID are always in the QR code. The lab contact is set under Template.</p>

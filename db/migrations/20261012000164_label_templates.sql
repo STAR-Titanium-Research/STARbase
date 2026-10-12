@@ -156,7 +156,7 @@ CREATE TABLE label_settings (
     version       INTEGER NOT NULL DEFAULT 1,
     CONSTRAINT label_settings_singleton_check CHECK (id = 1),
     CONSTRAINT label_settings_contact_email_check CHECK (
-        contact_email IS NULL OR contact_email ~ '^[^@[:space:]]+@[^@[:space:]]+.[^@[:space:]]+$'
+        contact_email IS NULL OR contact_email ~ '^[^@[:space:]]+@[^@[:space:]]+[.][^@[:space:]]+$'
     )
 );
 

@@ -15,6 +15,12 @@ export function moduleMm(boxMm: number, modules: number): number {
 	return boxMm / (modules + 2 * QUIET_MODULES);
 }
 
+// The QR box edge, in mm, at which error correction M keeps its modules at MIN_MODULE_MM: what an automatic code
+// should grow to (layoutLabel caps it at the label's inner side).
+export function wantedQrMm(payload: string, qr: (payload: string, level: QrLevel) => QrModules): number {
+	return (qr(payload, 'M').size + 2 * QUIET_MODULES) * MIN_MODULE_MM;
+}
+
 export interface ChosenQr {
 	modules: QrModules;
 	level: QrLevel;

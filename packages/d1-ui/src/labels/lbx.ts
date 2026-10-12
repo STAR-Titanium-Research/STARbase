@@ -161,7 +161,11 @@ export function buildLbxLabelXml(s: LabelSample, t: LabelTemplate, contactEmail:
 	const usableH = Math.max(1, length - 2 * MARGIN_ALONG);
 	// The layout engine places everything inside the printable area, so no object reaches P-touch's unprintable margin.
 	const area: LabelTemplate = { ...t, labelWidthMm: usableW * MM_PER_PT, labelHeightMm: usableH * MM_PER_PT };
-	const layout = layoutLabel(s, area);
+	// The QR grows before the text where it can, as in the preview and the print: ask for the edge at which the 15%
+	// level keeps the preview's minimum module size, using the module count P-touch will draw (layoutLabel caps it).
+	const payload = t.arrangement === 'text_only' ? '' : buildQrPayload(s, contactEmail, t.qrFields);
+	const wantedQrMm = payload ? (qrModuleCount(new TextEncoder().encode(payload).length, 'M') + 2 * QUIET) * MIN_CELL_M_PT * MM_PER_PT : 0;
+	const layout = layoutLabel(s, area, undefined, wantedQrMm);
 	const at = (b: { x: number; y: number; w: number; h: number }): ObjectBox => ({
 		x: MARGIN_ACROSS_L + mmToPt(b.x),
 		y: MARGIN_ALONG + mmToPt(b.y),
@@ -171,7 +175,6 @@ export function buildLbxLabelXml(s: LabelSample, t: LabelTemplate, contactEmail:
 
 	const objects: string[] = [];
 	if (layout.qr) {
-		const payload = buildQrPayload(s, contactEmail, t.qrFields);
 		const box = at(layout.qr);
 		const qr = chooseLbxQr(payload, Math.min(box.w, box.h));
 		// The object is the code and its quiet zone, centred in the box the layout gave it.
