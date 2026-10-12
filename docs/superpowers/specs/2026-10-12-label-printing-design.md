@@ -63,6 +63,9 @@ without the database.
      full (`scripts/access_rules.json`, `people`: read `*`), so the labels page asks for
      `owner_person_id.email` in the same query as `owner_person_id.full_name` and no permission
      widens. A sample whose owner has no email just has no email line.
+     **The owner email is printed on labels that anyone can read, and a label outlives the owner's time at
+     the university.** A template that should not carry it opts out by unticking "Owner email" in its QR
+     extras (untick "All (default)" first).
    - The lab contact is the singleton `label_settings.contact_email`: everyone reads it, only admins
      write it (inline on the labels page, one PATCH). Empty means no Contact line.
    - **Density.** The payload is about 150 to 200 characters, so the QR has more modules. The
