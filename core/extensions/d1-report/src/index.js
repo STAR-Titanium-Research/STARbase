@@ -1,8 +1,8 @@
 // Directus endpoint: d1-report (mounted at /d1-report)
 //
-// GET /d1-report/label?ids=<uuid,...>[&codes=<sample code,...>][&layout=a4-21|single-50x25][&start=n]
-//   -> print-ready sample labels (code, QR to the record, material, date, owner initials).
-// GET /d1-report/labels -> the picker page behind "Print labels" (paste codes / tick samples).
+// GET /d1-report/label[?ids=<uuid,...>][&codes=<sample code,...>] -> 302 redirect to /admin/home/labels
+// GET /d1-report/labels -> 302 redirect to /admin/home/labels
+// (Both carry query parameters over. The in-app Explorer labels page replaced these routes.)
 //
 // GET /d1-report/sample/:id  -> a print-ready (A4, ≤2 page) HTML "Sample Overview"
 // document assembling the sample's details, genealogy (parents AND children),
