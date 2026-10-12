@@ -42,6 +42,11 @@ export function isScanComplete(text: string): boolean {
 	return lines.length - last >= 3;
 }
 
+// Ordinary pasted text in the search box: line breaks become single spaces, as a one-line input would do.
+export function flattenLines(text: string): string {
+	return text.replace(/\s*[\r\n]+\s*/g, ' ');
+}
+
 // Line breaks as LF, edges trimmed. A paste or scan is one value, not several submissions.
 export function normalizeScan(text: string): string {
 	return text.replace(/\r\n|\r/g, '\n').trim();

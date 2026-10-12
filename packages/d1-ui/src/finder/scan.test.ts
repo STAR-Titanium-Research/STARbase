@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildQrPayload } from '../labels/qrPayload';
-import { displayText, fromLastHeader, isScanComplete, isScanStarted, normalizeScan, resolveLabel } from './scan';
+import { displayText, flattenLines, fromLastHeader, isScanComplete, isScanStarted, normalizeScan, resolveLabel } from './scan';
 import type { ScanApi } from './scan';
 
 const PAYLOAD = 'D1 SAMPLE\nS-0123 · 1a2b3c4d\nTi-6Al-4V · "bracket A"\n2026-10-01 · DP';
@@ -126,5 +126,12 @@ describe('isScanComplete', () => {
 	it('counts from the last header and ignores other text', () => {
 		expect(isScanComplete('D1 SAMPLE\nA-1 | 11111111\nD1 SAMPLE\nS-1 | 1a2b3c4d')).toBe(false);
 		expect(isScanComplete('S-0123')).toBe(false);
+	});
+});
+
+describe('flattenLines', () => {
+	it('turns line breaks into single spaces', () => {
+		expect(flattenLines('S-0123\r\n  nickname\n\nend')).toBe('S-0123 nickname end');
+		expect(flattenLines('one line')).toBe('one line');
 	});
 });

@@ -18,7 +18,7 @@ import { MIN_QUERY } from './finder';
 import ScanResultCard from './ScanResultCard.vue';
 import type { FinderHit } from './finder';
 import { moveIndex, toSections } from './finderNav';
-import { isScanStarted, normalizeScan } from './scan';
+import { flattenLines, isScanStarted, normalizeScan } from './scan';
 import { useFinder } from './useFinder';
 import { useExplorerNav } from '../nav/useExplorerNav';
 
@@ -76,10 +76,38 @@ function pick(hit: FinderHit) {
 // would turn its line breaks into spaces.
 function onPaste(e: ClipboardEvent) {
 	const text = e.clipboardData?.getData('text') ?? '';
-	if (!isScanStarted(text)) return;
+	if (!isScanStarted(text)) {
+		// Ordinary text keeps behaving as in a one-line input: line breaks become spaces.
+		const flat = flattenLines(text);
+		if (flat === text) return;
+		e.preventDefault();
+		insertAtCaret(flat);
+		return;
+	}
 	e.preventDefault();
 	query.value = normalizeScan(text);
 	readScanNow();
+}
+
+function insertAtCaret(text: string) {
+	const el = input.value;
+	const from = el?.selectionStart ?? query.value.length;
+	const to = el?.selectionEnd ?? from;
+	query.value = query.value.slice(0, from) + text + query.value.slice(to);
+	void nextTick(() => el?.setSelectionRange(from + text.length, from + text.length));
+}
+
+// A touch keyboard's Enter / Search key may arrive only as a line-break edit, with no Enter keydown.
+// Outside a scanned label that is "open the best match", as in a one-line input.
+function onBeforeinput(e: InputEvent) {
+	if (e.inputType !== 'insertLineBreak' || scanning.value) return;
+	e.preventDefault();
+	openActive();
+}
+
+function openActive() {
+	const hit = hits.value[active.value];
+	if (hit) pick(hit);
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -100,8 +128,7 @@ function onKeydown(e: KeyboardEvent) {
 			return;
 		}
 		e.preventDefault();
-		const hit = hits.value[active.value];
-		if (hit) pick(hit);
+		openActive();
 	} else if (e.key === 'Tab') {
 		// The input is the only stop: focus stays in the dialog.
 		e.preventDefault();
@@ -115,23 +142,29 @@ function onKeydown(e: KeyboardEvent) {
 		<div class="d1-kit d1-finder-backdrop" @mousedown.self="emit('close')">
 			<div class="d1-finder" role="dialog" aria-modal="true" aria-label="Find a record" @keydown="onKeydown">
 				<div class="bar">
-				<textarea
-					ref="input"
-					v-model="query"
-					class="q"
-					rows="1"
-					wrap="off"
-					role="combobox"
-					aria-label="Find a record"
-					aria-autocomplete="list"
-					:aria-expanded="hits.length > 0"
-					:aria-controls="`${uid}-list`"
-					:aria-activedescendant="activeId"
-					placeholder="Find a record, page or saved view…"
-					autocomplete="off"
-					spellcheck="false"
-					@paste="onPaste"
-				/>
+				<!-- ARIA 1.1 combobox: a textarea may not carry role=combobox, so the wrapper does and the textarea
+				     (a single-line textbox to a screen reader) is its text box. -->
+				<div class="box" role="combobox" aria-haspopup="listbox" :aria-expanded="hits.length > 0" :aria-owns="`${uid}-list`">
+					<textarea
+						ref="input"
+						v-model="query"
+						class="q"
+						rows="1"
+						wrap="off"
+						enterkeyhint="search"
+						aria-label="Find a record"
+						aria-multiline="false"
+						aria-autocomplete="list"
+						:aria-controls="`${uid}-list`"
+						:aria-activedescendant="activeId"
+						placeholder="Find a record, page or saved view…"
+						autocomplete="off"
+						autocapitalize="off"
+						spellcheck="false"
+						@paste="onPaste"
+						@beforeinput="onBeforeinput"
+					/>
+				</div>
 				<!-- mousedown.prevent: a click must not take focus off the box. -->
 				<button v-if="props.canScan" type="button" class="scan" aria-label="Scan a label with the camera" title="Scan a label with the camera" tabindex="-1" @mousedown.prevent @click="emit('scan')">
 					<v-icon name="qr_code_scanner" small />
@@ -195,6 +228,7 @@ function onKeydown(e: KeyboardEvent) {
 .bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--d1-line); }
 .bar:focus-within { box-shadow: inset 0 -2px 0 var(--d1-accent, var(--theme--primary)); }
 /* One row that looks like an input; the textarea only exists so a pasted or scanned label keeps its line breaks. */
+.box { flex: 1; min-width: 0; display: flex; }
 .q {
 	flex: 1; min-width: 0; box-sizing: border-box; height: 44px; padding: 12px 16px; resize: none; overflow: hidden;
 	border: 0; outline: none; white-space: nowrap;
