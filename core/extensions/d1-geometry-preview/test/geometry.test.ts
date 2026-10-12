@@ -1,7 +1,7 @@
 // Run: node --experimental-strip-types --test core/extensions/d1-geometry-preview/test/geometry.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildGeometry, FORM_FIELDS, isRoundBar, isUprightCylinder } from '../src/geometry.ts';
+import { buildGeometry, dimsText, FORM_FIELDS, isRoundBar, isUprightCylinder } from '../src/geometry.ts';
 
 const DIMS = [
 	{ diameter_mm: 30, length_mm: 100, width_mm: 15, thickness_mm: 10, gauge_length_mm: 50, gauge_width_mm: 12.5 },
@@ -66,6 +66,17 @@ test('round bar: Ø and length dimensions, both with extension lines', () => {
 	assert.match(svg, />Ø20</);
 	assert.match(svg, />100</);
 	assert.equal((svg.match(/class="gext"/g) || []).length, 4);
+});
+
+test('ring: outer Ø, bore Ø (drawn on the top face) and thickness; dimsText lists all four', () => {
+	const svg = buildGeometry({ form: 'ring', diameter_mm: 151, inner_diameter_mm: 19.5, thickness_mm: 16.5, width_mm: 36 });
+	assert.match(svg, />Ø151</);
+	assert.match(svg, />Ø19.5</);
+	assert.match(svg, />16.5</);
+	assert.equal((svg.match(/<ellipse/g) || []).length, 2);
+	assert.equal(dimsText({ form: 'ring', diameter_mm: 151, inner_diameter_mm: 19.5, thickness_mm: 16.5, width_mm: 36 }), 'Ø151 · ID19.5 · t16.5 · W36 mm');
+	// A bore as wide as the ring is ignored rather than drawn inside out.
+	assert.equal((buildGeometry({ form: 'ring', diameter_mm: 20, inner_diameter_mm: 25, thickness_mm: 5 }).match(/<ellipse/g) || []).length, 1);
 });
 
 test('round bar is matched exactly, not by substring', () => {

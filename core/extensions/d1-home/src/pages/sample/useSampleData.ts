@@ -10,7 +10,7 @@ import { LIST_CAP, errorText, isNotVisible, readHiddenLinks, useItems, useReques
 const SAMPLE_FIELDS = [
 	'sample_id', 'sample_code', 'nickname', 'form', 'current_status', 'item_type', 'stock_category',
 	'location', 'notes', 'surface_finish', 'manufacturing_route', 'manufactured_date', 'mounted',
-	'mounting_method', 'export_controlled', 'mass_grams', 'diameter_mm', 'length_mm',
+	'mounting_method', 'export_controlled', 'mass_grams', 'diameter_mm', 'inner_diameter_mm', 'length_mm',
 	'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm', 'created_at', 'updated_at', 'version',
 	'material_id.material_id', 'material_id.common_name', 'material_id.alloy_code', 'material_id.density_g_per_cm3',
 	'project_id.project_id', 'project_id.project_code', 'project_id.project_name',

@@ -7,6 +7,12 @@ describe('volumeMm3', () => {
 		expect(volumeMm3({ form: 'disc', diameter_mm: 20, length_mm: 4 })).toBeCloseTo(Math.PI * 100 * 4);
 	});
 
+	it('ring: pi/4 (D^2 - Di^2) t; no bore counts as a disc, a bore wider than the ring as unknown', () => {
+		expect(volumeMm3({ form: 'ring', diameter_mm: 20, inner_diameter_mm: 10, thickness_mm: 5 })).toBeCloseTo((Math.PI / 4) * (400 - 100) * 5);
+		expect(volumeMm3({ form: 'ring', diameter_mm: 20, thickness_mm: 5 })).toBeCloseTo(Math.PI * 100 * 5);
+		expect(volumeMm3({ form: 'ring', diameter_mm: 20, inner_diameter_mm: 20, thickness_mm: 5 })).toBeNull();
+	});
+
 	it('round bar and cylinders (including legacy free-text forms): pi r^2 L', () => {
 		const expected = Math.PI * 100 * 50;
 		expect(volumeMm3({ form: 'round_bar', diameter_mm: 20, length_mm: 50 })).toBeCloseTo(expected);

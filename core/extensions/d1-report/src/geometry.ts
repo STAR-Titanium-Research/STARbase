@@ -8,6 +8,7 @@
 export interface Dims {
 	form: string | null;
 	diameter_mm?: number | null;
+	inner_diameter_mm?: number | null;
 	length_mm?: number | null;
 	width_mm?: number | null;
 	thickness_mm?: number | null;
@@ -25,6 +26,8 @@ export const PRESETS: Record<string, Partial<Dims>> = {
 // Which dimension inputs are relevant per form.
 export const FORM_FIELDS: Record<string, string[]> = {
 	disc: ['diameter_mm', 'thickness_mm'],
+	// A disc with a bore: outer Ø, bore Ø and axial thickness (drawn), plus an optional width.
+	ring: ['diameter_mm', 'inner_diameter_mm', 'thickness_mm', 'width_mm'],
 	cylinder: ['diameter_mm', 'length_mm'],
 	bar: ['width_mm', 'thickness_mm', 'length_mm'],
 	round_bar: ['diameter_mm', 'length_mm'],
@@ -37,13 +40,14 @@ export const FORM_FIELDS: Record<string, string[]> = {
 };
 
 const LABELS: Record<string, string> = {
-	diameter_mm: 'Ø Diameter (mm)', length_mm: 'Length (mm)', width_mm: 'Width (mm)',
+	diameter_mm: 'Ø Diameter (mm)', inner_diameter_mm: 'Ø Inner diameter (mm)', length_mm: 'Length (mm)', width_mm: 'Width (mm)',
 	thickness_mm: 'Thickness (mm)', gauge_length_mm: 'Gauge length (mm)', gauge_width_mm: 'Gauge width (mm)',
 };
 export const fieldLabel = (k: string) => LABELS[k] || k;
 
 export const FORMS = [
 	{ text: 'Disc', value: 'disc' },
+	{ text: 'Ring', value: 'ring' },
 	{ text: 'Cylinder', value: 'cylinder' },
 	{ text: 'Block', value: 'block' },
 	{ text: 'Plate', value: 'plate' },
@@ -203,8 +207,9 @@ function boxSvg(W: number, L: number, H: number): string {
 	return svgWrap(faces.map((f) => faceSvg(f, to)).join('') + drawDims(dims, to, sink), sink);
 }
 
-// Round solid (cylinder / disc): diameter D, height H along z.
-function cylSvg(D: number, H: number): string {
+// Round solid (cylinder / disc): diameter D, height H along z. A bore diameter Di (ring) cuts a
+// through-hole, drawn as the bore's ellipse on the top face with its own Ø marker.
+function cylSvg(D: number, H: number, Di = 0): string {
 	const Rr = D / 2;
 	const circles: Circle[] = [{ cx: Rr, cy: Rr, cz: 0, r: Rr }, { cx: Rr, cy: Rr, cz: H, r: Rr }];
 	// Both markers are drawn in screen space against the silhouette, so reserve room for them.
@@ -229,7 +234,16 @@ function cylSvg(D: number, H: number): string {
 		+ dimLine([hx, topC[1]], [hx, botC[1]])
 		+ dimText(hx - 8 * lk(), (topC[1] + botC[1]) / 2, fmt(H), ' dominant-baseline="middle"');
 	labelBox(hx - 8 * lk(), (topC[1] + botC[1]) / 2, fmt(H), sink);
-	return svgWrap(body + top + dimD + dimH, sink);
+	let bore = '';
+	if (Di > 0 && Di < D) {
+		const irx = rx * (Di / D), iry = ry * (Di / D);
+		const by = topC[1] + ry + 9 * lk(); // the bore's label sits just below the top face
+		bore = `<ellipse cx="${f1(topC[0])}" cy="${f1(topC[1])}" rx="${f1(irx)}" ry="${f1(iry)}" class="gr"/>`
+			+ dimLine([topC[0] - irx, topC[1]], [topC[0] + irx, topC[1]])
+			+ dimText(topC[0], by, `Ø${fmt(Di)}`, ' dominant-baseline="middle"');
+		labelBox(topC[0], by, `Ø${fmt(Di)}`, sink);
+	}
+	return svgWrap(body + top + bore + dimD + dimH, sink);
 }
 
 // Round bar: a cylinder lying along the length (y) axis. The near end cap (y = L) is an
@@ -354,6 +368,7 @@ function drawGeometry(d: Dims): string {
 	const g = (d.form || '').toLowerCase();
 	if (!g || g === 'other') return '';
 	if (g.includes('powder')) return powderSvg();
+	if (g === 'ring') return cylSvg(num(d.diameter_mm, 60), num(d.thickness_mm ?? d.length_mm, 10), num(d.inner_diameter_mm, 20));
 	if (g.includes('disc')) return cylSvg(num(d.diameter_mm, 30), num(d.thickness_mm ?? d.length_mm, 8));
 	if (isRoundBar(g)) return roundBarSvg(num(d.diameter_mm, 20), num(d.length_mm, 100));
 	if (isUprightCylinder(g)) return cylSvg(num(d.diameter_mm, 25), num(d.length_mm, 50));
@@ -371,7 +386,7 @@ function drawGeometry(d: Dims): string {
 export function dimsText(d: Dims): string {
 	const g = (d.form || '').toLowerCase();
 	const keys = FORM_FIELDS[g] || [];
-	const short: Record<string, string> = { diameter_mm: 'Ø', length_mm: 'L', width_mm: 'W', thickness_mm: 't', gauge_length_mm: 'G', gauge_width_mm: 'Wg' };
+	const short: Record<string, string> = { diameter_mm: 'Ø', inner_diameter_mm: 'ID', length_mm: 'L', width_mm: 'W', thickness_mm: 't', gauge_length_mm: 'G', gauge_width_mm: 'Wg' };
 	const parts = keys.filter((k) => (d as any)[k]).map((k) => `${short[k]}${(d as any)[k]}`);
 	return parts.length ? parts.join(' · ') + ' mm' : '';
 }

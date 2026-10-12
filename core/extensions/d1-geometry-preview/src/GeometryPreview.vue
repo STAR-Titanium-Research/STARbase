@@ -30,7 +30,7 @@ const num = (x: any): number | null => {
 const geoSvg = computed(() => buildGeometry(v.value as any));
 
 // Dimension chips from the fields relevant to the chosen form.
-const SHORT: Record<string, string> = { diameter_mm: 'Ø', length_mm: 'L', width_mm: 'W', thickness_mm: 't', gauge_length_mm: 'G', gauge_width_mm: 'Wg' };
+const SHORT: Record<string, string> = { diameter_mm: 'Ø', inner_diameter_mm: 'ID', length_mm: 'L', width_mm: 'W', thickness_mm: 't', gauge_length_mm: 'G', gauge_width_mm: 'Wg' };
 const dimChips = computed(() => (FORM_FIELDS[(v.value.form || '').toLowerCase()] || [])
 	.filter((k) => num(v.value[k]) != null)
 	.map((k) => `${SHORT[k]} ${num(v.value[k])} mm`));
@@ -48,6 +48,7 @@ watch(() => v.value.material_id, async (id) => {
 const volumeMm3 = computed<number | null>(() => {
 	const d = num(v.value.diameter_mm), L = num(v.value.length_mm), t = num(v.value.thickness_mm), w = num(v.value.width_mm);
 	const g = (v.value.form || '').toLowerCase();
+	if (g === 'ring') { const di = num(v.value.inner_diameter_mm) ?? 0, h = t ?? L; return d && h && di < d ? Math.PI / 4 * (d ** 2 - di ** 2) * h : null; }
 	if (g.includes('disc')) return d && (t ?? L) ? Math.PI * (d / 2) ** 2 * (t ?? L)! : null;
 	if (isUprightCylinder(g) || isRoundBar(g)) return d && L ? Math.PI * (d / 2) ** 2 * L : null;
 	if (w && L && t) return w * L * t; // box-like

@@ -17,6 +17,7 @@ type Rec = Record<string, any>;
 export interface SampleDims {
 	form: string | null;
 	diameter_mm: number | null;
+	inner_diameter_mm: number | null;
 	length_mm: number | null;
 	width_mm: number | null;
 	thickness_mm: number | null;
@@ -31,6 +32,7 @@ export function sampleDims(sample: Rec | null | undefined): SampleDims {
 	return {
 		form: sample?.form ?? null,
 		diameter_mm: num(sample?.diameter_mm),
+		inner_diameter_mm: num(sample?.inner_diameter_mm),
 		length_mm: num(sample?.length_mm),
 		width_mm: num(sample?.width_mm),
 		thickness_mm: num(sample?.thickness_mm),

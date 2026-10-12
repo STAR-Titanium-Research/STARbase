@@ -29,6 +29,7 @@ const f = ref<Record<string, any>>({
 	manufactured_date: new Date().toISOString().slice(0, 10),
 	form: null,
 	diameter_mm: null,
+	inner_diameter_mm: null,
 	length_mm: null,
 	width_mm: null,
 	thickness_mm: null,
@@ -118,7 +119,7 @@ async function submit() {
 		for (const k of ['material_id', 'primary_method_id', 'manufactured_date', 'form', 'project_id', 'location', 'nickname', 'notes']) {
 			if (f.value[k] !== null && f.value[k] !== '') payload[k] = f.value[k];
 		}
-		for (const k of ['diameter_mm', 'length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm', 'mass_grams']) {
+		for (const k of ['diameter_mm', 'inner_diameter_mm', 'length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm', 'mass_grams']) {
 			if (f.value[k] !== null && f.value[k] !== '') payload[k] = Number(f.value[k]);
 		}
 		// Ownership points at people, not directus_users: the owner is the current user's person
@@ -149,7 +150,7 @@ function resetForm() {
 	f.value.material_id = null;
 	f.value.primary_method_id = null;
 	f.value.form = null;
-	f.value.diameter_mm = f.value.length_mm = f.value.width_mm = f.value.thickness_mm = null;
+	f.value.diameter_mm = f.value.inner_diameter_mm = f.value.length_mm = f.value.width_mm = f.value.thickness_mm = null;
 	f.value.gauge_length_mm = f.value.gauge_width_mm = f.value.mass_grams = null;
 	f.value.nickname = f.value.notes = f.value.location = null;
 	nextSequence().then((n) => (seq.value = n));
