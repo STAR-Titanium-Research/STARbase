@@ -7,7 +7,16 @@ thumbnails) when it knows the original's width and height. Files the force crawl
 Reads only the first bytes of each file (PNG IHDR, JPEG SOF, WebP VP8/VP8L/VP8X header) from the
 Directus uploads volume through ``docker exec <container> head -c``, and writes width/height. Dry
 run by default; ``--apply`` writes. Only ``storage = 'local'`` rows with NULL width or height and an
-image/png, image/jpeg or image/webp type are touched.
+image/png, image/jpeg or image/webp type are touched. A size of 0 (a corrupt header) or one over
+65535 is rejected, so the row stays NULL and is looked at again, not written as a wrong size.
+
+Deploy order (the compose settings raise Directus's transform limits, so the first thumbnail of each
+large figure costs a ~6,100 x 5,900 px decode):
+  1. restart Directus with the new environment (docker-compose.yml: ASSETS_TRANSFORM_IMAGE_MAX_DIMENSION,
+     ASSETS_TRANSFORM_TIMEOUT and ASSETS_TRANSFORM_MAX_CONCURRENT);
+  2. run this script with ``--apply``;
+  3. warm the thumbnails one at a time (a serial loop requesting /assets/<id>?width=320&height=200
+     &fit=cover&format=webp for each frm_fz figure), so users only ever hit the cache.
 
     DATABASE_URL=postgres://... python scripts/backfill_image_dims.py [--apply] [--limit N]
         [--container d1-database-directus-1] [--uploads /directus/uploads]
@@ -22,6 +31,7 @@ import subprocess
 import sys
 
 HEAD_BYTES = 256 * 1024  # a JPEG's SOF can follow large EXIF blocks
+MAX_SIDE = 65535  # the largest side a JPEG or WebP can hold; anything bigger is a corrupt header
 
 
 def png_size(b: bytes) -> tuple[int, int] | None:
@@ -38,6 +48,10 @@ def jpeg_size(b: bytes) -> tuple[int, int] | None:
         if b[i] != 0xFF:
             i += 1
             continue
+        while i + 1 < len(b) and b[i + 1] == 0xFF:  # fill bytes may precede a marker
+            i += 1
+        if i + 9 >= len(b):
+            return None
         marker = b[i + 1]
         if (
             marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7
@@ -71,7 +85,11 @@ def webp_size(b: bytes) -> tuple[int, int] | None:
 
 
 def image_size(b: bytes) -> tuple[int, int] | None:
-    return png_size(b) or jpeg_size(b) or webp_size(b)
+    """The (width, height) in the header, or None when unreadable or not a plausible size (0, or over 65535)."""
+    size = png_size(b) or jpeg_size(b) or webp_size(b)
+    if size is None or not all(0 < side <= MAX_SIDE for side in size):
+        return None
+    return size
 
 
 def read_head(container: str, path: str) -> bytes:

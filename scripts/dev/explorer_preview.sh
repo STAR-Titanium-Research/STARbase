@@ -86,7 +86,7 @@ docker run -d --name "$DX" -p "127.0.0.1:$PORT:8055" \
   -e KEY="$(rhex 16)" -e SECRET="$(rhex 32)" -e TELEMETRY=false \
   -e DB_CLIENT=pg -e DB_HOST="$PG" -e DB_PORT=5432 -e DB_DATABASE=d1_database -e DB_USER=d1 -e DB_PASSWORD="$DB_PASS" \
   -e PUBLIC_URL="http://127.0.0.1:$PORT" -e EXTENSIONS_AUTO_RELOAD=false -e D1_TIMEZONE=Europe/London \
-  -e ASSETS_TRANSFORM_IMAGE_MAX_DIMENSION=8000 -e ASSETS_TRANSFORM_TIMEOUT=30000 \
+  -e ASSETS_TRANSFORM_IMAGE_MAX_DIMENSION=8000 -e ASSETS_TRANSFORM_TIMEOUT=30000 -e ASSETS_TRANSFORM_MAX_CONCURRENT=4 \
   -v "$EXT_MOUNT:/directus/extensions:ro" \
   -v "$FILES_VOL:/directus/uploads" \
   "$IMAGE" >/dev/null || abort "directus start"
