@@ -2,6 +2,7 @@ import { ref } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
 import { guessAdmin, type ExplorerHost } from '@d1/ui';
+import { installUsagePings } from './usagePing';
 
 // The Directus side of the Explorer's host contract (packages/d1-ui/src/host.ts). This and
 // ExplorerView.vue are the only places the Explorer knows it runs inside Directus; a standalone
@@ -47,6 +48,9 @@ export function useExplorerHost(): ExplorerHost {
 		.catch(() => {
 			user.value = null;
 		});
+
+	// The visit pings of the Frequently used panel: one router hook per signed-in user (see usagePing.ts).
+	installUsagePings(router, api);
 
 	const host: ExplorerHost = {
 		api,

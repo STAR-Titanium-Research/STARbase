@@ -120,3 +120,11 @@ export { default as IndexPage } from './index/IndexPage.vue';
 // Admin Home rules (the crawler online test, the overview shape, the Needs attention rows)
 export { CRAWLER_ONLINE_MS, ago, attentionView, crawlerOnline, isAuthRefusal, normaliseOverview, overviewTime, ownerlessRows, ownerlessTotal } from './adminHome';
 export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints, MissingFiles, Ownerless, OwnerlessRow } from './adminHome';
+
+// Frequently used (Home panel and the visit pings; the server half is core/extensions/d1-usage)
+export {
+	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, pinEntry, readDismissed,
+	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, revertPin, routeTarget, splitRecordTarget, suggestedPageEntries,
+	withoutDismissed, writeDismissed,
+} from './usage';
+export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
