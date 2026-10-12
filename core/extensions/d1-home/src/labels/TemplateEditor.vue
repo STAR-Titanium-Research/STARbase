@@ -60,6 +60,8 @@ function setMedia(media: Media): void {
 
 const { busy, error, create, update, remove } = useTemplateSave();
 const isNew = computed(() => !local.id);
+// Whether the template was the default when the editor opened (the editor is re-created for each draft).
+const initialDefault = props.modelValue.isDefault;
 const canSave = computed(() => !props.problems.length && !busy.value);
 
 async function save(): Promise<void> {
@@ -67,9 +69,10 @@ async function save(): Promise<void> {
 	if (id) emit('saved', id);
 }
 async function saveAsNew(): Promise<void> {
-	// An existing template saved as new needs its own name: the table's names are unique. An admin's Default
-	// tick is kept (the database then moves the default to the new row).
-	const draft = isNew.value ? draftOf(local) : { ...copyAsNew(local, local.name), isDefault: props.isAdmin && local.isDefault };
+	// An existing template saved as new needs its own name: the table's names are unique. Copying the default
+	// template must not move the default; ticking Default on a template that was not the default does (the database
+	// then moves it to the new row).
+	const draft = isNew.value ? draftOf(local) : { ...copyAsNew(local, local.name), isDefault: props.isAdmin && local.isDefault && !initialDefault };
 	const id = await create(draft, props.isAdmin);
 	if (id) emit('saved', id);
 }
