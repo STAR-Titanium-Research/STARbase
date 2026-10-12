@@ -127,32 +127,48 @@ in the next section.
 
 ## Sample labels and QR codes
 
-**Labels** (from **Home** or the **Print label** button on a sample) is an in-app Explorer page
-where you choose samples, pick a template and layout, and print labels. It lives in the same
-module as the other Explorer pages. Samples and labels stay on screen (no separate tab): search,
-tick samples in a list, or paste sample codes. Choose a label template (several pre-built templates
-for common sheets and rolls), and on a part-used sheet set the position to skip used labels. The
-preview shows the layout live; Print sends the same markup to your printer.
+**Labels** (from **Home**, the **Print label** button on a sample, the sidebar **Labels** entry,
+or "Print labels for selected" on the samples index) is an in-app Explorer page where you choose
+samples, pick a template, and print. Samples and labels stay on screen (no separate tab): search
+or filter by project / campaign, tick samples in a list, or paste sample codes. Set copies per
+sample and, on a part-used sheet, the start position to skip used labels. The preview shows the
+layout live; **Print** sends the same markup to your printer.
 
-Templates are data: each row holds the page geometry, label size and margins, label arrangement
-(QR on top or left, or text only), field selection and sizes, and which fields go into the QR
-payload. Everyone can create a template and edit or delete their own; admins can edit or delete
-any. The pre-built templates cover A4 sheets (21-up L7160 labels, 63.5 × 38.1 mm) and rolls
-(50 × 25 mm, Brother DK-22205 62 mm continuous).
+**Templates** are data, held in a collection. Each template defines page geometry (A4, roll,
+custom), label size and margins, gap between labels, label arrangement (QR on top, QR on left,
+or text only), the fields to show (sample code, short ID, nickname, material, date, owner
+initials), their sizes and bold on or off, and which fields go into the QR payload. Everyone can
+create a template and edit or delete their own; admins can edit or delete any (the plain Directus
+form is the admin fallback). Pre-built templates:
 
-Each label encodes the sample code in large type, a QR code, the material and date (manufactured
-if available, else created), and the owner's initials. The QR payload is self-describing text
-(`D1 SAMPLE` followed by the code, nickname, material, date and initials) readable by any phone
-with no login. Samples you may not read get no label (the page says so); material and owner
-appear only if your role can read those collections. Field overflow is cut off with "…", and the
-preview flags clipped labels.
+| Template | Geometry | Size | Arrangement |
+|---|---|---|---|
+| **A4 4×5** (default) | A4 page, no margins or gaps | 52.5 × 59.4 mm | QR on top, bold code, nickname |
+| **L7160 21-up** | A4 sheet, margin-top 15.15, margin-left 7.25, gap-x 2.54 | 63.5 × 38.1 mm | QR on left |
+| **50×25 single** | Roll | 50 × 25 mm | QR on left |
+| **Brother DK-22205 62 mm** | Roll, 62 × 30 mm | 62 × 30 mm | QR on left, code and short ID |
 
-**Scan to open.** The QR code encodes `<PUBLIC_URL>/admin/home/samples/<sample id>`, the
-sample's Explorer page. Labels from before these pages existed encode `/admin/content/physical_samples/<id>`,
-the Data Studio form, which still works. Scanning with a phone opens that record in the Directus
-app, sign-in first if needed. The QR carries only the link; no sample data is public, and access
-is limited by your role. `PUBLIC_URL` must be the address phones can reach (the same value the
-reports' QR codes use).
+**Printing.** On a part-used A4 sheet, set **Start at position** to skip used labels. Print at
+**100 %** scale ("Actual size", not "Fit to page"), with **margins set to None**, or the labels
+drift off the die-cuts. This applies to office lasers (A4 sheets) and the Brother QL-700 label
+printer (62 mm roll on USB through its Windows driver).
+
+Each label shows the sample code, a QR code, the material and date (manufactured if available,
+else created), and the owner's initials. Samples you may not read get no label (the page says so);
+material and owner appear only if your role can read those collections. Each field shrinks to a
+minimum size, then is cut off with "…"; the preview flags labels that were clipped.
+
+**QR and scanning.** The QR payload is self-describing plain text, readable by any phone with no
+login, so the QR is **not private**. It starts with `D1 SAMPLE`, then the sample code and short
+ID, then the fields the template chose (nickname, material, date, owner initials). The Finder
+can scan a printed label or a pasted payload to open the sample. **Old labels** (printed before
+these pages existed) encode `/admin/content/physical_samples/<id>`, the Data Studio form, which
+still works. Scanning with a phone opens that record in the Directus app, sign-in first if
+needed. Every record you can see is limited by your role's permissions. `PUBLIC_URL` must be
+the address phones can reach.
+
+**Old URLs.** The label routes `/d1-report/label` and `/d1-report/labels` are redirected to the
+Labels page, carrying sample ids and codes over as query parameters.
 
 ## Insights
 
