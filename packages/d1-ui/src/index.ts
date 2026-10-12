@@ -18,7 +18,7 @@ export { createdRecord, CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE } from './
 export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
 // Display helpers and error predicates
-export { formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden } from './format';
+export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden } from './format';
 export { humanise, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
 export { estimateMassGrams } from './mass';
 export { buildLife, truncatedNotes } from './life';
@@ -74,7 +74,7 @@ export { default as FactList } from './components/FactList.vue';
 export { default as PageContents } from './components/PageContents.vue';
 export type { Fact } from './record/facts';
 export type { ContentsEntry } from './record/contents';
-export { detailFacts } from './record/details';
+export { detailFacts, detailsCount } from './record/details';
 export {
 	operationKind, operationRailFacts, operationDetailBase, operationSampleCount, projectFact, campaignFact, sampleFact, personText,
 } from './record/operationFacts';

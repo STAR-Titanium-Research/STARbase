@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detailFacts, paramFact } from './details';
+import { detailFacts, detailsCount, paramFact } from './details';
 import type { ParamRow } from '../params';
 
 const p = (label: string, value: string, unit = ''): ParamRow => ({ field: label, label, value, unit });
@@ -42,5 +42,23 @@ describe('detailFacts', () => {
 	it('keeps the same label with a different value, renamed so the list keys stay unique', () => {
 		const out = detailFacts([{ label: 'Feed', value: '0.2' }], [p('Feed', '0.3'), p('Feed', '0.4')], []);
 		expect(out.map((f) => [f.label, f.value])).toEqual([['Feed', '0.2'], ['Feed (2)', '0.3'], ['Feed (3)', '0.4']]);
+	});
+});
+
+describe('detailsCount', () => {
+	it('is the number of facts once the parameters have loaded', () => {
+		expect(detailsCount(5, false, false, '')).toBe(5);
+		expect(detailsCount(5, true, false, undefined)).toBe(5);
+	});
+
+	it('is unknown (null) while the parameters load or when their read failed', () => {
+		expect(detailsCount(0, false, true, '')).toBeNull();
+		expect(detailsCount(3, false, true, '')).toBeNull();
+		expect(detailsCount(0, false, false, 'Could not load parameters')).toBeNull();
+	});
+
+	it('is 0 (listed dimmed) with no facts and no notes, and no count with notes only', () => {
+		expect(detailsCount(0, false, false, '')).toBe(0);
+		expect(detailsCount(0, true, false, '')).toBeNull();
 	});
 });

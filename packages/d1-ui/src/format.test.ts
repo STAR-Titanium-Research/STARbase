@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { errorText, formatDate, formatNumber, asRecord, formatQuantity, isDuplicate, isForbidden, isNotVisible } from './format';
+import { breakableParts, errorText, formatDate, formatNumber, asRecord, formatQuantity, isDuplicate, isForbidden, isNotVisible } from './format';
 
 describe('formatQuantity', () => {
 	it('trims trailing zeros of a database numeric string', () => {
@@ -94,5 +94,20 @@ describe('isForbidden and isDuplicate', () => {
 	it('isForbidden is not isNotVisible: a 404 is a missing record, not a permission failure', () => {
 		expect(isForbidden({ response: { status: 404 } })).toBe(false);
 		expect(isNotVisible({ response: { status: 404 } })).toBe(true);
+	});
+});
+
+describe('breakableParts', () => {
+	it('splits after underscores, dashes, dots and spaces, and loses nothing', () => {
+		const name = 'Run_12-A_force trace.v2.mat';
+		const parts = breakableParts(name);
+		expect(parts).toEqual(['Run_', '12-', 'A_', 'force ', 'trace.', 'v2.', 'mat']);
+		expect(parts.join('')).toBe(name);
+	});
+
+	it('keeps a name without separators whole, and an empty one empty', () => {
+		expect(breakableParts('abcdef')).toEqual(['abcdef']);
+		expect(breakableParts('')).toEqual([]);
+		expect(breakableParts('__a').join('')).toBe('__a');
 	});
 });

@@ -88,7 +88,7 @@ const p = computed(() => props.overview.progress);
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm, 12px); }
 .chip b { font-variant-numeric: tabular-nums; }
 /* In the rail (about 268px wide): no box inside the rail's own panel, one column, the label over its bar. */
-.rail .bars { margin-top: 0; padding: 0; grid-template-columns: minmax(0, 1fr); background: none; border: 0; border-radius: 0; box-shadow: none; }
-.rail .row { flex-direction: column; align-items: stretch; gap: 2px; }
-.rail .row > :last-child { flex: none; }
+.d1-progress-block.rail .bars { margin-top: 0; padding: 0; grid-template-columns: minmax(0, 1fr); background: none; border: 0; border-radius: 0; box-shadow: none; }
+.d1-progress-block.rail .row { flex-direction: column; align-items: stretch; gap: 2px; }
+.d1-progress-block.rail .row > :last-child { flex: none; }
 </style>

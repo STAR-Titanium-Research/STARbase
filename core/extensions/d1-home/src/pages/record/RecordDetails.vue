@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { FactList, LoadState, Section, type Fact } from '@d1/ui';
+import { FactList, LoadState, Section, detailsCount, type Fact } from '@d1/ui';
 
 // The "Details" panel of the Operation and Test pages: the record's own values and its process
 // parameters as one many-column list (the old Overview and Parameters panels, minus the facts now in
@@ -16,10 +16,11 @@ const props = defineProps<{
 
 const settled = computed(() => !props.paramsLoading && !props.paramsError);
 const empty = computed(() => settled.value && !props.facts.length && !props.notes);
+const count = computed(() => detailsCount(props.facts.length, !!props.notes, !!props.paramsLoading, props.paramsError));
 </script>
 
 <template>
-	<Section id="details" title="Details" :count="paramsLoading ? null : facts.length || null" :empty="empty" :empty-text="emptyText">
+	<Section id="details" title="Details" :count="count" :empty="empty" :empty-text="emptyText">
 		<FactList :facts="facts" />
 		<p v-if="notes" class="notes">{{ notes }}</p>
 		<LoadState v-if="paramsLoading || paramsError" class="params-state" :loading="paramsLoading" :error="paramsError" loading-text="Loading parameters…" />

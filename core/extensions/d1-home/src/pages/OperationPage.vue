@@ -3,7 +3,7 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
-	detailFacts, hasPassCode, operationDetailBase, operationHeading, operationKind, operationRailFacts, operationSampleCount, type ContentsEntry,
+	detailFacts, detailsCount, hasPassCode, operationDetailBase, operationHeading, operationKind, operationRailFacts, operationSampleCount, type ContentsEntry,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
 import OperationSamples from './operation/OperationSamples.vue';
@@ -59,7 +59,7 @@ const contents = computed<ContentsEntry[]>(() => {
 	const o = op.value;
 	if (!o) return [];
 	const entries: ContentsEntry[] = [
-		{ id: 'details', title: 'Details', count: params.value.loading ? null : details.value.length || null },
+		{ id: 'details', title: 'Details', count: detailsCount(details.value.length, !!o.outcome_notes, params.value.loading, params.value.error) },
 		{ id: 'samples', title: 'Samples in and out', count: operationSampleCount(o, hidden.value.data) },
 	];
 	if (o.process_category === 'machining') {
@@ -128,17 +128,16 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 						:empty-text="op.process_category ? 'No details or parameters recorded for this operation.' : 'No details recorded, and no process category, so no parameter set applies.'"
 					/>
 
-					<div class="d1-cols">
-						<OperationSamples
-							id="samples"
-							:input="op.sample_id"
-							:output="op.output_sample_id"
-							:input-hidden="!!hidden.data.sample_id"
-							:output-hidden="!!hidden.data.output_sample_id"
-						/>
+					<OperationSamples
+						id="samples"
+						:input="op.sample_id"
+						:output="op.output_sample_id"
+						:input-hidden="!!hidden.data.sample_id"
+						:output-hidden="!!hidden.data.output_sample_id"
+					/>
 
-						<OperationAnalysis :operation-id="id" :category="op.process_category" :force="force" :fast="fast" />
-					</div>
+					<!-- Full width, not beside the samples: the force table's file column needs the room. -->
+					<OperationAnalysis :operation-id="id" :category="op.process_category" :force="force" :fast="fast" />
 
 					<SampleFiles
 						id="files"

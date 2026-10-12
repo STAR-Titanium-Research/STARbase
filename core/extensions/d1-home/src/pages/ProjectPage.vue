@@ -74,13 +74,13 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 							<template #kind-icon><v-icon name="folder_open" x-small /></template>
 							<template #status>
 								<span class="status" :class="{ active }">{{ projectStatusLabel(project.is_active) }}</span>
+								<span v-if="project.export_controlled" class="export">Export controlled</span>
 							</template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
 								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
 							</template>
 							<template #after-facts>
-								<span v-if="project.export_controlled" class="export">Export controlled</span>
 								<p class="d1-note">Counts of the records you can see in this project.</p>
 								<p v-if="investigators.error" class="d1-note warn" role="alert">{{ investigators.error }}</p>
 								<p v-if="counts.error" class="d1-note warn" role="alert">{{ counts.error }}</p>
@@ -92,11 +92,11 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 
 					<CampaignCards :campaigns="campaigns" :project-id="id" />
 					<!-- Three short lists side by side: stacked, three empty ones took a third of the screen. -->
-					<div class="d1-cols">
+					<div class="d1-cols project-cols">
 						<UnassignedLists :samples="looseSamples" :operations="looseOperations" :tests="looseTests" :project-id="id" />
 					</div>
 
-					<div class="d1-cols">
+					<div class="d1-cols project-cols">
 						<Section id="activity" title="Activity">
 							<LoadState :loading="activity.loading" :error="activity.error">
 								<Sparkline
@@ -143,6 +143,11 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 </template>
 
 <style scoped>
+/* Side by side while there is room, but a section with nothing in it is only its lid, so it takes the
+   whole row (its one line of text does not wrap in half a column). Dense: the sections after it fill
+   the gap it leaves in the row above. */
+.project-cols { grid-auto-flow: row dense; }
+.project-cols :deep(.d1-section.empty) { grid-column: 1 / -1; }
 .status {
 	font-size: var(--fs-xs); font-weight: 700; padding: 1px 8px; border-radius: 99px;
 	color: var(--d1-dim); background: var(--theme--background-normal);

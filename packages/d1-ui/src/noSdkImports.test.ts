@@ -39,7 +39,10 @@ describe('Explorer sources stay host-neutral', () => {
 describe('record-page kit stays host-neutral', () => {
 	const names = ['RecordLayout', 'RecordRail', 'FactList', 'PageContents'];
 	const files = names.map((n) => join(here, 'components', `${n}.vue`));
-	const modules = ['facts.ts', 'contents.ts', 'scrollParent.ts'].map((n) => join(here, 'record', n));
+	// Every module of record/ (the pure ones the kit and the pages share), tests left out.
+	const modules = readdirSync(join(here, 'record'))
+		.filter((n) => n.endsWith('.ts') && !n.endsWith('.test.ts'))
+		.map((n) => join(here, 'record', n));
 
 	it('has the four components', () => {
 		for (const f of files) expect(statSync(f).isFile(), f).toBe(true);

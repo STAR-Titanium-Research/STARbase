@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { DataTable, LIST_CAP, LoadState, Section, StatusBadge, analysisLink, formatDate, formatQuantity, type SectionState } from '@d1/ui';
+import { DataTable, LIST_CAP, LoadState, Section, StatusBadge, analysisLink, breakableParts, formatDate, formatQuantity, type SectionState } from '@d1/ui';
 
 // Analysis of the operation's data: the force analysis of each .mat file (machining) or the
 // imported FAST trace (sintering), with the dashboard that plots it. Cutting metrics stay in the
@@ -42,7 +42,7 @@ const isMachining = computed(() => props.category === 'machining');
 				<tbody>
 					<template v-for="r in rows" :key="r.id">
 						<tr :class="{ failed: r.error_message || r.diag_error }">
-							<td class="file mono">{{ fileName(r) }}</td>
+							<td class="file mono"><template v-for="(part, i) in breakableParts(fileName(r))" :key="i">{{ part }}<wbr /></template></td>
 							<td class="fit"><StatusBadge kind="force" :value="r.status" /></td>
 							<td class="fit"><StatusBadge kind="diag" :value="r.diag_status" /></td>
 							<td class="fit dim">{{ formatDate(r.processed_at, '') }}</td>
@@ -85,7 +85,9 @@ const isMachining = computed(() => props.category === 'machining');
 </template>
 
 <style scoped>
-.file { overflow-wrap: anywhere; font-size: var(--fs-sm); }
+/* A long name wraps after an underscore, dash or dot (the <wbr> in the template), never one
+   character per line: `anywhere` would shrink the column's minimum to one character. */
+.file { overflow-wrap: break-word; word-break: normal; font-size: var(--fs-sm); }
 .capped { margin-bottom: 8px; }
 /* The reason a file failed sits under its file with no rule between them: the file row drops its
    bottom border and the reason row its top padding. `tr.` raises both above DataTable's own

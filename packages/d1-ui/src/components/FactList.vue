@@ -36,8 +36,8 @@ const listed = (f: Fact) => capList(f.list ?? [], expanded.value.has(f.label) ? 
 					<router-link v-else-if="item.to" :to="item.to" class="link">{{ item.label }}</router-link>
 					<span v-else>{{ item.label }}</span>
 				</template>
-				<button v-if="listed(f).more > 0" type="button" class="more" @click="toggle(f.label)">{{ listed(f).more }} more</button>
-				<button v-else-if="expanded.has(f.label)" type="button" class="more" @click="toggle(f.label)">fewer</button>
+				<button v-if="listed(f).more > 0" type="button" class="more" aria-expanded="false" @click="toggle(f.label)">{{ listed(f).more }} more</button>
+				<button v-else-if="expanded.has(f.label)" type="button" class="more" aria-expanded="true" @click="toggle(f.label)">fewer</button>
 			</span>
 			<span v-else class="value" :class="{ mono: f.mono }">
 				<template v-if="f.hidden">

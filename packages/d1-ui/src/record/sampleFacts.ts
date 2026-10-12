@@ -50,7 +50,7 @@ export function sampleMassText(sample: Rec | null | undefined): string {
 	const measured = num(sample.mass_grams);
 	if (measured !== null) return formatNumber(measured, 'g');
 	const est = estimateMassGrams(sampleDims(sample), num(asRecord(sample.material_id)?.density_g_per_cm3));
-	return est === null ? '' : `≈ ${formatNumber(est, 'g', est >= 100 ? 0 : 2)} (estimated from dimensions)`;
+	return est === null ? '' : `≈ ${formatNumber(est, 'g', est >= 100 ? 0 : 2)} (estimated)`;
 }
 
 /** The campaigns a sample belongs to, from its `campaign_samples` rows: the campaigns the user may

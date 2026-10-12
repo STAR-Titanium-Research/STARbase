@@ -48,6 +48,12 @@ export function isDuplicate(e: any): boolean {
 // A measured quantity for display. formatNumber() rounds to a fixed number of decimals, which
 // turns a strain rate of 0.000001 into "0"; this keeps the leading digits whatever the size:
 // tiny values switch to exponent form, large ones drop the noise decimals, trailing zeros go.
+/** A file name split after each underscore, dash, dot and space, so a long name can wrap at those
+ *  places (put a <wbr> between the parts) instead of one character per line in a narrow column. */
+export function breakableParts(name: string): string[] {
+	return name.match(/[^_. -]*[_. -]|[^_. -]+$/g) ?? (name ? [name] : []);
+}
+
 export function formatQuantity(value: number | string | null | undefined): string {
 	if (value === null || value === undefined || value === '') return '';
 	const n = typeof value === 'number' ? value : Number(value);

@@ -28,6 +28,14 @@ export interface CampaignCounts {
 
 const num = (n: number): string => n.toLocaleString('en-GB');
 
+/** Which of the page's reads failed: a count behind a failed read is unknown, never a wrong 0. The
+ *  samples count is built from all three lists (the sample list, operations and tests). */
+export interface CampaignCountErrors {
+	samples?: boolean;
+	operations?: boolean;
+	tests?: boolean;
+}
+
 /** The campaign's own code, else its free-text name: what it is called everywhere else. */
 export const campaignCode = (c: Rec | null | undefined): string => c?.campaign_code || c?.name || 'Campaign';
 
@@ -44,17 +52,24 @@ function campaignProjectFact(project: Rec | null, hidden?: boolean): Fact {
 /**
  * The rail's key facts: the old header's meta line (project name, owner, dates, default machine and
  * material) and the three totals the stat tiles showed. `counts` is null while the page's reads load:
- * the counts are left out until then.
+ * the counts are left out until then. A count whose read failed (`failed`) shows a dash and no link
+ * (the same rule as the Project page's counts).
  */
-export function campaignRailFacts(campaign: Rec | null | undefined, hidden: HiddenLinks, counts: CampaignCounts | null): Fact[] {
+export function campaignRailFacts(campaign: Rec | null | undefined, hidden: HiddenLinks, counts: CampaignCounts | null, failed: CampaignCountErrors = {}): Fact[] {
 	if (!campaign) return [];
 	const id = String(campaign.campaign_id);
 	const countFacts: Fact[] = counts
 		? [
 				// Samples you may not see sit in the list but not in the number: said once, after it.
-				{ label: 'Samples', value: num(counts.samples), unit: counts.hiddenSamples ? `+ ${counts.hiddenSamples} not visible to you` : undefined },
-				{ label: 'Operations', value: num(counts.operations), to: indexRoute('manufacturing_operations', { query: { 'f.campaign_id': id } }) },
-				{ label: 'Test sessions', value: num(counts.tests), to: indexRoute('test_sessions', { query: { 'f.campaign_id': id } }) },
+				failed.samples
+					? { label: 'Samples', value: '–' }
+					: { label: 'Samples', value: num(counts.samples), unit: counts.hiddenSamples ? `+ ${counts.hiddenSamples} not visible to you` : undefined },
+				failed.operations
+					? { label: 'Operations', value: '–' }
+					: { label: 'Operations', value: num(counts.operations), to: indexRoute('manufacturing_operations', { query: { 'f.campaign_id': id } }) },
+				failed.tests
+					? { label: 'Test sessions', value: '–' }
+					: { label: 'Test sessions', value: num(counts.tests), to: indexRoute('test_sessions', { query: { 'f.campaign_id': id } }) },
 			]
 		: [];
 	return [

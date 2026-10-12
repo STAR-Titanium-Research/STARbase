@@ -97,7 +97,10 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 					<template #rail>
 						<RecordRail :kind="sampleKind(sample)" :code="code" :title="sample.nickname" :facts="railFacts" :contents="contents">
 							<template #kind-icon><v-icon name="science" x-small /></template>
-							<template #status><StatusBadge kind="sample" :value="sample.current_status" /></template>
+							<template #status>
+								<StatusBadge kind="sample" :value="sample.current_status" />
+								<span v-if="sample.export_controlled" class="export">Export controlled</span>
+							</template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
 								<v-button small secondary @click="printLabel"><v-icon name="label" small left />Print label</v-button>
@@ -105,7 +108,6 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
 							</template>
 							<template #extra><SampleGeometry :dims="dims" /></template>
-							<template v-if="sample.export_controlled" #after-facts><span class="export">Export controlled</span></template>
 						</RecordRail>
 					</template>
 

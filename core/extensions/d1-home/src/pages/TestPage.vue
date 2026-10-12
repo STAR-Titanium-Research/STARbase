@@ -3,7 +3,7 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
 	EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, StatusBadge, asRecord,
-	dataStudioRoute, detailFacts, formatDate, summaryCount, summaryGroups, testDetailBase, testRailFacts, testSample, testSubjectCount, testTypeText,
+	dataStudioRoute, detailFacts, detailsCount, formatDate, summaryCount, summaryGroups, testDetailBase, testRailFacts, testSample, testSubjectCount, testTypeText,
 	type ContentsEntry,
 } from '@d1/ui';
 import { useTestData } from './test/useTestData';
@@ -50,11 +50,11 @@ const contents = computed<ContentsEntry[]>(() => {
 	if (!x) return [];
 	const groups = summaryGroups(x.summary_stats);
 	return [
-		{ id: 'details', title: 'Details', count: params.value.loading ? null : details.value.length || null },
+		{ id: 'details', title: 'Details', count: detailsCount(details.value.length, !!x.notes, params.value.loading, params.value.error) },
 		{
 			id: 'subject',
 			title: 'Subject',
-			count: subjects.value.loading ? null : testSubjectCount(x.sample_id, subjects.value.data, !!hidden.value.data.sample_id),
+			count: subjects.value.loading || subjects.value.error ? null : testSubjectCount(x.sample_id, subjects.value.data, !!hidden.value.data.sample_id),
 		},
 		{ id: 'results', title: 'Results', count: groups.length ? summaryCount(groups) || null : 0 },
 		{ id: 'files', title: 'Files', count: files.value.loading ? null : files.value.data.length },
@@ -121,8 +121,11 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 						:empty-text="t.test_type ? 'No details or parameters recorded for this test.' : 'No details recorded, and no test type, so no parameter set applies.'"
 					/>
 
-					<LoadState v-if="subjects.loading || subjects.error" :loading="subjects.loading" :error="subjects.error" />
-					<TestSubjects v-else id="subject" :sample="t.sample_id" :subjects="subjects.data" :sample-hidden="!!hidden.data.sample_id" />
+					<!-- The wrapper carries the id, so "On this page" has a target while the subjects load or fail. -->
+					<div id="subject" class="subject-slot">
+						<LoadState v-if="subjects.loading || subjects.error" :loading="subjects.loading" :error="subjects.error" />
+						<TestSubjects v-else :sample="t.sample_id" :subjects="subjects.data" :sample-hidden="!!hidden.data.sample_id" />
+					</div>
 
 					<TestResults id="results" :stats="t.summary_stats" :status="t.status" />
 
@@ -146,3 +149,8 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 		</PageShell>
 	</ExplorerView>
 </template>
+
+<style scoped>
+/* Scroll under the page's sticky offset, like a Section (the wrapper is the target while loading). */
+.subject-slot { min-width: 0; scroll-margin-top: calc(var(--d1-sticky-top, 0px) + 8px); }
+</style>

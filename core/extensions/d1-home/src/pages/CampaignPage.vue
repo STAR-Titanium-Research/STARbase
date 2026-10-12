@@ -17,7 +17,8 @@ const props = defineProps<{ id: string }>();
 const { campaign, loading, notVisible, error, hidden, reload } = useCampaignRecord(toRef(props, 'id'));
 // The lists, matrix and progress are read once here: the rail shows their counts and bars, the
 // workbench (given `data`) draws the panels from the same reads.
-const data = useCampaignData(toRef(props, 'id'));
+// An invisible or failed campaign reads nothing: an empty id makes the composable's load() return early.
+const data = useCampaignData(computed(() => (notVisible.value || error.value ? '' : props.id)));
 const editing = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
 // or a reader through a sample may read it but not edit it).
@@ -40,7 +41,11 @@ const railFacts = computed(() => {
 	const counts = settled.value
 		? { samples: c.samples, hiddenSamples: c.hiddenSamples, operations: c.operations, tests: c.tests }
 		: null;
-	return campaignRailFacts(campaign.value, hidden.value, counts);
+	// A count behind a failed read is a dash, not a wrong 0 (samples are built from all three lists).
+	const o = data.operations.value.error;
+	const t = data.tests.value.error;
+	const failed = { samples: !!(data.junction.value.error || o || t), operations: !!o, tests: !!t };
+	return campaignRailFacts(campaign.value, hidden.value, counts, failed);
 });
 
 // "On this page": the panels in page order. A count is null while its read loads.

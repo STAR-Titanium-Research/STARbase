@@ -14,6 +14,18 @@ export function paramFact(p: ParamRow): Fact {
 }
 
 /**
+ * The Details panel's count, for its section and its "On this page" entry: null while the parameters
+ * load or when their read failed (the count is not known), 0 when everything has answered and there
+ * is no fact and no notes (the panel is its empty lid, so the entry is listed dimmed), no count when
+ * there are no facts but there are notes (the panel shows only the notes), else the number of facts.
+ */
+export function detailsCount(factCount: number, hasNotes: boolean, paramsLoading: boolean, paramsError: string | undefined): number | null {
+	if (paramsLoading || paramsError) return null;
+	if (factCount) return factCount;
+	return hasNotes ? null : 0;
+}
+
+/**
  * The record's own facts followed by its parameters, as one list of non-empty facts:
  *  - a fact the rail already shows (same label and the same value) is dropped;
  *  - the same label twice with the same value is shown once;

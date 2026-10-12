@@ -41,7 +41,7 @@ describe('sampleMassText', () => {
 	});
 	it('estimates from the dimensions and the density, and says so', () => {
 		// pi * 5^2 * 50 mm3 = 3926.99 mm3 = 3.927 cm3, times 8.19 g/cm3 = 32.16 g
-		expect(sampleMassText(sample)).toBe('≈ 32.16 g (estimated from dimensions)');
+		expect(sampleMassText(sample)).toBe('≈ 32.16 g (estimated)');
 	});
 	it('is empty when neither is known', () => {
 		expect(sampleMassText({ form: 'other' })).toBe('');

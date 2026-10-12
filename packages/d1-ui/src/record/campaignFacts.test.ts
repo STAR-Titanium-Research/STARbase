@@ -62,6 +62,18 @@ describe('campaignRailFacts', () => {
 		expect(hidden).toMatchObject({ value: '12', unit: '+ 2 not visible to you' });
 	});
 
+	it('shows a dash with no link for a count whose read failed, never a wrong 0', () => {
+		const facts = campaignRailFacts(campaign, {}, { ...counts, operations: 0 }, { operations: true });
+		expect(byLabel(facts, 'Operations')).toEqual({ label: 'Operations', value: '–' });
+		expect(byLabel(facts, 'Test sessions')).toMatchObject({ value: '4', to: '/home/tests?f.campaign_id=c1' });
+		const all = campaignRailFacts(campaign, {}, counts, { samples: true, operations: true, tests: true });
+		expect(['Samples', 'Operations', 'Test sessions'].map((l) => byLabel(all, l))).toEqual([
+			{ label: 'Samples', value: '–' },
+			{ label: 'Operations', value: '–' },
+			{ label: 'Test sessions', value: '–' },
+		]);
+	});
+
 	it('leaves the counts out while the page still loads them', () => {
 		expect(visibleFacts(campaignRailFacts(campaign, {}, null)).map((f) => f.label)).toEqual(['Type', 'Owner', 'Dates', 'Machine', 'Material', 'Project']);
 	});

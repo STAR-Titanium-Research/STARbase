@@ -6,8 +6,9 @@ import './tokens.css';
 //
 // Sticky offset: the rail sticks at `top: var(--d1-sticky-top, 0px)` and its height is capped to the
 // window under it. The default is 0px (no bar above). The page inside the Data Studio sets the height
-// of the Directus header bar on its own root (`style="--d1-sticky-top: 60px"`, with a unit), because
-// only the host knows it. Sections scroll to the same offset (Section's scroll-margin-top).
+// of the Directus header bar plus a gap on its own root (`style="--d1-sticky-top: 70px"`, with a
+// unit), because only the host knows it. Sections scroll to the same offset (Section's
+// scroll-margin-top).
 // Sticky also needs every ancestor up to the scroll container to leave `overflow` at visible.
 //
 // Narrow: the layout root is a size container, and under 1000px of its own width (not the width of
@@ -17,9 +18,9 @@ import './tokens.css';
 
 <template>
 	<div class="d1-record-layout d1-kit">
-		<nav v-if="$slots.crumbs" class="d1-crumbs"><slot name="crumbs" /></nav>
+		<nav v-if="$slots.crumbs" class="d1-crumbs" aria-label="Breadcrumb"><slot name="crumbs" /></nav>
 		<div class="grid">
-			<aside class="rail"><slot name="rail" /></aside>
+			<aside class="rail" aria-label="Record"><slot name="rail" /></aside>
 			<div class="main"><slot /></div>
 		</div>
 	</div>

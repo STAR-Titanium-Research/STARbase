@@ -94,7 +94,7 @@ function go(id: string, event: MouseEvent) {
 
 <template>
 	<nav v-if="entries.length" ref="root" class="d1-page-contents" aria-label="On this page">
-		<h3>On this page</h3>
+		<h2>On this page</h2>
 		<a
 			v-for="e in model"
 			:key="e.id"
@@ -112,7 +112,7 @@ function go(id: string, event: MouseEvent) {
 
 <style scoped>
 .d1-page-contents { display: flex; flex-direction: column; }
-h3 {
+h2 {
 	margin: 0 0 4px;
 	padding-bottom: 4px;
 	font-size: var(--fs-sm, 12px);
