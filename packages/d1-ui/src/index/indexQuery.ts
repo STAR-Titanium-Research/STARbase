@@ -118,6 +118,8 @@ export function buildItemsParams(
 		if (chip.options.kind === 'bool') {
 			if (value !== 'true' && value !== 'false') continue; // junk is dropped, not read as false
 			and.push({ [field]: { _eq: value === 'true' } });
+		} else if (chip.options.kind === 'flag') {
+			if (value === 'true') and.push(chip.options.filter); // a flag is on or off: anything else is dropped
 		} else {
 			and.push({ [field]: { _eq: value } });
 		}

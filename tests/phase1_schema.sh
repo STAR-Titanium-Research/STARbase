@@ -330,7 +330,7 @@ ring_check "down_column:0" "down: inner_diameter_mm is dropped"
 echo "== Label templates migration =="
 # Run the file's down and up inside a rolled-back transaction (the Directus tables are stubs here, so
 # the metadata rows are asserted by counting what the migration wrote).
-LT=db/migrations/20261012000163_label_templates.sql
+LT=db/migrations/20261012000164_label_templates.sql
 lt_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LT")
 lt_down=$(awk '/-- migrate:down/{f=1;next}f' "$LT")
 lt_out=$($PSQL 2>&1 <<SQL
@@ -2884,7 +2884,7 @@ SELECT 'up_people_update_fields:' || fields FROM directus_permissions WHERE poli
 SELECT 'up_people_create_validation:' || (validation::jsonb ? '_or') FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='create';
 $sf_up
 $jr_up
--- 20261012000163 (label_templates, a custom-rows collection) runs after these and adds its four rows, which are the generated ones
+-- 20261012000164 (label_templates, a custom-rows collection) runs after these and adds its four rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
   SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection = 'label_templates';
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p

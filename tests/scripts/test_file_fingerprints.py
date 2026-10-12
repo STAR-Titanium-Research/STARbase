@@ -291,6 +291,48 @@ def test_hdf5_read_error_after_open_is_retryable_oserror(tmp_path, matrix, monke
     with pytest.raises(OSError) as ei:
         ff.mat_data_sha256(p)
     assert not isinstance(ei.value, ff.FingerprintError)
+    assert isinstance(
+        ei.value, ff.CorruptChunk
+    )  # a decode failure: the runner judges it after the retries
+
+
+def test_an_hdf5_read_failure_that_is_not_a_decode_failure_is_a_plain_oserror(
+    tmp_path, matrix, monkeypatch
+):
+    p = tmp_path / "a73.mat"
+    write_v73(p, "data", matrix)
+    real = h5py.Dataset.__getitem__
+
+    def dropped(self, args):
+        if isinstance(args, tuple) and len(args) == 2:
+            raise OSError(
+                "Can't read data (file read failed: time = Sun Oct 11, errno = 5)"
+            )  # a dropped share
+        return real(self, args)
+
+    monkeypatch.setattr(h5py.Dataset, "__getitem__", dropped)
+    with pytest.raises(OSError) as ei:
+        ff.mat_data_sha256(p)
+    assert not isinstance(ei.value, ff.CorruptChunk | ff.FingerprintError)
+
+
+def write_corrupt_chunk_v73(path, a):
+    """A gzip-chunked v7.3 file whose first data chunk has its compressed bytes overwritten."""
+    write_v73(path, "data", a, chunks=(a.shape[1], 100), matlab_class="double")
+    with h5py.File(path, "r") as f:
+        info = f["data"].id.get_chunk_info(0)
+    with open(path, "r+b") as fh:
+        fh.seek(info.byte_offset + info.size // 4)
+        fh.write(b"\xff" * (info.size // 2))
+
+
+def test_a_really_corrupt_gzip_chunk_raises_corrupt_chunk(tmp_path, matrix):
+    p = tmp_path / "bad.mat"
+    write_corrupt_chunk_v73(p, matrix)
+    with pytest.raises(
+        ff.CorruptChunk
+    ):  # h5py's own message for a chunk that does not inflate
+        ff.mat_data_sha256(p)
 
 
 @pytest.mark.parametrize(
@@ -470,9 +512,21 @@ class Db:
         return n
 
     def selected(
-        self, phase="linked", include_local=False, retry_failed=True, limit=None
+        self,
+        phase="linked",
+        include_local=False,
+        retry_failed=True,
+        limit=None,
+        retry_permanent=False,
     ):
-        jobs = ff.select_files(self.cur, phase, include_local, retry_failed, limit)
+        jobs = ff.select_files(
+            self.cur,
+            phase,
+            include_local,
+            retry_failed,
+            limit,
+            retry_permanent=retry_permanent,
+        )
         self.conn.commit()
         return jobs
 
@@ -730,14 +784,19 @@ def test_broken_mat_is_an_error_row_that_keeps_the_content_hash_and_goes_to_the_
     bad = db.add_file("p/broken.mat", b"this is not a mat file")
     assert run(db, "--phase", "linked") == 0
     r = db.row(bad)
-    assert r["status"] == "error" and r["error_message"]
+    assert r["status"] == "error" and r["error_message"].startswith(
+        "permanent: UnreadableMat: "
+    )
     assert (
         r["content_sha256"] == sha(b"this is not a mat file")
         and r["data_sha256"] is None
     )
 
     fresh = db.add_file("p/fresh.txt", b"new")
-    assert [j.id for j in db.selected(retry_failed=True)] == [
+    assert [j.id for j in db.selected()] == [
+        fresh
+    ]  # a permanent error is not retried by default
+    assert [j.id for j in db.selected(retry_permanent=True)] == [
         fresh,
         bad,
     ]  # never-tried first
@@ -754,6 +813,225 @@ def test_a_mat_without_a_force_array_is_an_error_not_a_crash(db):
     assert (
         r["status"] == "error" and "data" in r["error_message"] and r["content_sha256"]
     )
+
+
+# ---- 5b. permanent errors are not re-read on every run -------------------------------
+
+
+def no_reads(*a, **kw):
+    raise AssertionError("this file must not be read")
+
+
+def hashed_at(db, fid):
+    db.cur.execute(
+        "SELECT hashed_at FROM file_fingerprints WHERE directus_files_id = %s", (fid,)
+    )
+    t = db.cur.fetchone()[0]
+    db.conn.commit()
+    return t
+
+
+def add_permanent_errors(db):
+    """One file per FingerprintError: no force array, a 3-D force array, not a .mat at all."""
+    os.makedirs(db.path("p"), exist_ok=True)
+    scipy_io.savemat(db.path("p/workspace_1.mat"), {"other": np.ones((2, 2))})
+    scipy_io.savemat(db.path("p/cube.mat"), {"data": np.ones((2, 2, 2))})
+    ids = {
+        cls: db.add_file(rel, write=False, filesize=os.path.getsize(db.path(rel)))
+        for cls, rel in (
+            ("NoForceArray", "p/workspace_1.mat"),
+            ("BadForceArray", "p/cube.mat"),
+        )
+    }
+    ids["UnreadableMat"] = db.add_file("p/122-AA-F1.mat", b"not a mat file")
+    return ids
+
+
+def test_permanent_errors_are_marked_and_not_read_again(db, monkeypatch):
+    ids = add_permanent_errors(db)
+    assert run(db, "--phase", "linked") == 0
+    for cls, fid in ids.items():
+        r = db.row(fid)
+        assert r["status"] == "error" and r["error_message"].startswith(
+            f"permanent: {cls}: "
+        ), r
+        assert r["content_sha256"] and r["data_sha256"] is None
+    assert db.selected() == []
+    before = {fid: hashed_at(db, fid) for fid in ids.values()}
+
+    monkeypatch.setattr(ff, "content_sha256", no_reads)
+    monkeypatch.setattr(ff, "mat_data_sha256", no_reads)
+    assert run(db, "--phase", "linked") == 0
+    assert {fid: hashed_at(db, fid) for fid in ids.values()} == before
+
+
+def test_retry_permanent_reads_them_again(db):
+    ids = add_permanent_errors(db)
+    assert run(db, "--phase", "linked") == 0
+    before = {fid: hashed_at(db, fid) for fid in ids.values()}
+    assert sorted(j.id for j in db.selected(retry_permanent=True)) == sorted(
+        ids.values()
+    )
+    assert run(db, "--phase", "linked", "--retry-permanent") == 0
+    for cls, fid in ids.items():
+        assert hashed_at(db, fid) > before[fid]
+        assert db.row(fid)["error_message"].startswith(f"permanent: {cls}: ")
+
+
+def test_a_permanent_error_is_read_again_when_its_size_or_mtime_changes(db):
+    fid = add_permanent_errors(db)["UnreadableMat"]
+    assert run(db, "--phase", "linked") == 0
+    assert db.selected() == []
+
+    db.set_modified(fid, dt.datetime(2026, 1, 1, tzinfo=dt.UTC).isoformat())
+    assert [j.id for j in db.selected()] == [fid]
+    db.set_modified(fid, T0.isoformat())
+    assert db.selected() == []
+
+    write_v5(
+        db.path("p/122-AA-F1.mat"), np.ones((3, 2))
+    )  # the file was replaced by a good one
+    db.update(fid, filesize=os.path.getsize(db.path("p/122-AA-F1.mat")))
+    assert [j.id for j in db.selected()] == [fid]
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert (
+        r["status"] == "done"
+        and r["data_sha256"] == reference(np.ones((3, 2)))
+        and r["error_message"] is None
+    )
+
+
+RETRYABLE, PERMANENT = "retryable", "permanent"
+SEEDED_ROWS = [
+    ("missing", "not found: //share/p/x.txt", RETRYABLE),
+    (
+        "error",
+        "OSError: [WinError 64] The specified network name is no longer available",
+        RETRYABLE,
+    ),
+    (
+        "error",
+        "hashing started",
+        RETRYABLE,
+    ),  # provisional row of a crashed or interrupted run
+    ("error", "file changed while hashing", RETRYABLE),
+    ("error", "unexpected RuntimeError: surprise", RETRYABLE),
+    ("error", None, RETRYABLE),
+    # Written before the prefix existed (the four live rows of 2026-10-11): retried once, then marked.
+    ("error", "neither 'data' nor 'DATA' in the file", RETRYABLE),
+    (
+        "error",
+        "permanent: NoForceArray: neither 'data' nor 'DATA' in the file",
+        PERMANENT,
+    ),
+    ("error", "permanent: BadForceArray: 'data' is not a 2-D numeric array", PERMANENT),
+    (
+        "error",
+        "permanent: UnreadableMat: cannot read x.mat as a .mat file: OSError: bad",
+        PERMANENT,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "retry_failed, retry_permanent, wanted",
+    [
+        (True, False, {RETRYABLE}),  # the default
+        (False, False, set()),  # --skip-failed
+        (True, True, {RETRYABLE, PERMANENT}),  # --retry-permanent
+        (False, True, {PERMANENT}),  # both: only the permanent errors
+    ],
+)
+def test_which_recorded_failures_are_selected(
+    db, retry_failed, retry_permanent, wanted
+):
+    kinds = {}
+    for i, (status, message, kind) in enumerate(SEEDED_ROWS):
+        fid = db.add_file(f"p/f{i}.txt", b"abc")
+        ff.upsert_fingerprint(
+            db.cur,
+            fid,
+            {
+                "status": status,
+                "error_message": message,
+                "size_bytes": 3,
+                "source_mtime": T0,
+            },
+        )
+        kinds[fid] = kind
+    done = db.add_file("p/done.txt", b"abc")
+    ff.upsert_fingerprint(
+        db.cur,
+        done,
+        {
+            "status": "done",
+            "content_sha256": sha(b"abc"),
+            "size_bytes": 3,
+            "source_mtime": T0,
+        },
+    )
+    db.conn.commit()
+    got = {
+        j.id
+        for j in db.selected(retry_failed=retry_failed, retry_permanent=retry_permanent)
+    }
+    assert got == {fid for fid, kind in kinds.items() if kind in wanted}
+
+
+def test_skip_failed_with_retry_permanent_reads_only_the_permanent_errors(db):
+    perm = add_permanent_errors(db)["NoForceArray"]
+    gone = db.add_file("p/gone.txt", b"x", write=False)
+    assert run(db, "--phase", "linked") == 0
+    assert db.row(gone)["status"] == "missing"
+    before = hashed_at(db, gone)
+    assert run(db, "--phase", "linked", "--skip-failed", "--retry-permanent") == 0
+    assert hashed_at(db, gone) == before
+    assert db.row(perm)["error_message"].startswith("permanent: NoForceArray: ")
+
+
+def test_a_corrupt_chunk_is_retried_then_recorded_as_a_permanent_unreadable_mat(
+    db, monkeypatch, matrix
+):
+    os.makedirs(db.path("p"), exist_ok=True)
+    write_corrupt_chunk_v73(db.path("p/bad.mat"), matrix)
+    fid = db.add_file(
+        "p/bad.mat", write=False, filesize=os.path.getsize(db.path("p/bad.mat"))
+    )
+    waits = []
+    monkeypatch.setattr(ff, "_sleep", waits.append)
+    assert run(db, "--phase", "linked") == 0
+    r = db.row(fid)
+    assert waits == [
+        2,
+        4,
+        8,
+    ]  # a garbled read off the share looks the same, so it is retried first
+    assert r["status"] == "error" and r["error_message"].startswith(
+        "permanent: UnreadableMat: "
+    )
+    with open(db.path("p/bad.mat"), "rb") as f:
+        assert r["content_sha256"] == sha(f.read())
+    assert db.selected() == []
+
+
+def test_a_corrupt_chunk_without_a_clean_whole_file_read_stays_retryable(
+    db, monkeypatch
+):
+    fid = db.add_file("p/a.mat", b"abc")
+
+    def garbled(*a, **kw):
+        raise ff.CorruptChunk("Can't read data (filter returned failure)")
+
+    monkeypatch.setattr(
+        ff, "content_sha256", garbled
+    )  # the whole-file pass never completed
+    job = db.selected()[0]
+    row = ff.fingerprint_job(job, db.root)
+    assert row["status"] == "error" and row.get("io_failure")
+    assert not row["error_message"].startswith(ff.PERMANENT_PREFIX)
+    assert run(db, "--phase", "linked") == 0
+    assert [j.id for j in db.selected()] == [fid]
 
 
 # ---- 6. phases -----------------------------------------------------------------------

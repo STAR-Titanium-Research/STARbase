@@ -9,9 +9,20 @@
 
 let current: HTMLIFrameElement | null = null;
 
+const removed = new WeakSet<HTMLIFrameElement>();
+function removeOnce(frame: HTMLIFrameElement): void {
+	if (removed.has(frame)) return;
+	removed.add(frame);
+	frame.remove();
+}
+
 export function printLabels(html: string): Promise<void> {
 	return new Promise((resolve, reject) => {
-		current?.remove();
+		// Removing the old frame fires its pagehide, whose handler removes it again: in Chrome that nested remove()
+		// throws ("no longer a child"), which would reject this print. removeOnce() makes removal happen once.
+		const old = current;
+		current = null;
+		if (old) removeOnce(old);
 		const frame = document.createElement('iframe');
 		current = frame;
 		frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
@@ -22,7 +33,7 @@ export function printLabels(html: string): Promise<void> {
 		frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
 		const drop = () => {
 			if (current === frame) current = null;
-			frame.remove();
+			removeOnce(frame);
 		};
 		frame.onload = () => {
 			const win = frame.contentWindow;

@@ -16,6 +16,18 @@ here in the same PR (see `CLAUDE.md`). When you run a check:
 3. Move fully ticked sections to **Done** at the bottom once a month or so, so the open list stays
    short.
 
+**Running items from GitHub (rig test requests).** An item on this list can be run on the rig
+without a rig day: open an issue, put a `rig-test` block in it listing the item ids, and label it
+`rig-test-request`. The force app on the rig asks the operator, runs the item and comments the
+result on the issue. See the
+[spec](../superpowers/specs/2026-10-11-rig-test-requests-design.md). The app reads the items
+from the copy of this file built into its release, so a request can only name items from that
+version. Give every new rig item (§B) a bold id at the start (`**R12 — …**` or `**#240 …**`). From
+phase 2 on, also add a `rig-test` step block after the item's prose. Until then, the app shows
+an item's prose to the operator as one Pass/Fail/Skip question. A request's block is a fence
+tagged `rig-test` containing, for example, `items: [R4, "#185"]`. No example fence is written
+here, because the app parses this file.
+
 Item ids are the UX review's (`docs/reviews/2026-10-05-ux-utility-review.md`) or the GitHub issue
 number. "Since" is the PR that shipped the code.
 
@@ -89,22 +101,22 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
 ### Sample labels and QR
 - [ ] **D4 — label sheets.** From a sample form, "Print label" and "Print several labels"; from Home,
   the "Print labels" tile. Print the A4 sheet on L7160 (63.5 × 38.1 mm, 21-up) and one 50 × 25 mm
-  label: text and QR sit inside each label, the `start` offset skips used labels. Since #124. **Superseded by the Explorer labels page (PR #TBD).**
+  label: text and QR sit inside each label, the `start` offset skips used labels. Since #124. **Superseded by the Explorer labels page (PR #247).**
 - [ ] **D4 — scan to open.** Scan a printed QR with a phone on the lab network: it asks to sign in,
-  then opens that sample's record. Nothing is visible without signing in. Since #124. **Superseded by the Explorer labels page (PR #TBD).**
+  then opens that sample's record. Nothing is visible without signing in. Since #124. **Superseded by the Explorer labels page (PR #247).**
 - [ ] **D4 — permissions and dates.** A role that cannot read a sample gets "not found" for it in a
   label request. With `D1_TIMEZONE=Europe/London` set, a sample created just after midnight BST
-  prints the right date. The picker shows "(200 of N)" when there are more than 200. Since #124. **Superseded by the Explorer labels page (PR #TBD).**
-- [ ] **#TBD-L1 — Label templates — own rows.** As a Lab Member, create a template in
+  prints the right date. The picker shows "(200 of N)" when there are more than 200. Since #124. **Superseded by the Explorer labels page (PR #247).**
+- [ ] **#247-L1 — Label templates — own rows.** As a Lab Member, create a template in
   `label_templates`: it saves. Update and delete it: allowed. Another member's template (and the four
   seeds) can be read but not updated or deleted.
-- [ ] **#TBD-L2 — Label templates — seeds and Default.** A Lab Member cannot edit a seed
+- [ ] **#247-L2 — Label templates — seeds and Default.** A Lab Member cannot edit a seed
   template, and the Default toggle (`is_default`) is not offered or not saved for them.
-- [ ] **#TBD-L3 — Label templates — owner is forced.** After a member creates a template,
+- [ ] **#247-L3 — Label templates — owner is forced.** After a member creates a template,
   `user_created` is that member, whatever the request body said.
-- [ ] **#TBD-L4 — Label templates — Lab Admin.** A Lab Admin can create, edit, delete and
+- [ ] **#247-L4 — Label templates — Lab Admin.** A Lab Admin can create, edit, delete and
   set Default on any template, including the seeds.
-- [ ] **#TBD-L5 — Label templates — permissions apply.** After the migration, flush Redis
+- [ ] **#247-L5 — Label templates — permissions apply.** After the migration, flush Redis
   and restart Directus: the rules above then hold, with no 403 on reading `label_templates`.
 
 ### Plot dashboard inside Directus
@@ -369,7 +381,7 @@ and `d1-fast-dashboard` are now built from the root with the other workspace ext
   the sign-in page, then `/admin/home/samples/<id>` (the Explorer page, usable on a phone). An old
   printed label (encodes `/admin/content/physical_samples/<id>`) still opens the Content form. The
   QR and the sample link on an operation report and a test report open the Explorer pages. Needs
-  `PUBLIC_URL` set to an address the phone can reach. Since: Explorer pages E4 (PR pending). **Superseded by the Explorer labels page (PR #TBD).**
+  `PUBLIC_URL` set to an address the phone can reach. Since: Explorer pages E4 (PR pending). **Superseded by the Explorer labels page (PR #247).**
 - [ ] **E4 — Force and FAST dashboards land on the Explorer.** In the Force dashboard use the "open
   record" action on an operation and on a sample: both open `/admin/home/operations/<id>` and
   `/admin/home/samples/<id>`, and Back returns to the dashboard. In the FAST dashboard **Open** on
@@ -792,21 +804,21 @@ migration 141 prints about ownerless records.
   Then run `dbmate down`
   once: the md5 matches the value recorded before applying, and the backup table is gone. Run
   `up` again and restart Directus. Since: fix/lab-member-legal-some (PR pending).
-- [ ] **#TBD-L6 — Labels page — A4 4×5 sheet on the office laser.** Open
+- [ ] **#247-L6 — Labels page — A4 4×5 sheet on the office laser.** Open
   **Print labels** (sidebar), tick 6 samples, keep the **A4 4×5** template, press **Print**. In the
   browser's print dialog choose A4, **100% scale** (not "fit to page") and no margins or headers. On
   a plain sheet laid over the die-cut A4 4 × 5 sheet, each label (52.5 × 59.4 mm) has its QR code
   and text inside its cell. Set **Start at label** to 3: the first two cells stay empty. Scan one QR
   code with any phone camera: it reads as plain text (`D1 SAMPLE`, the code and short ID, ...). The
   page itself follows light and dark mode, the labels stay white.
-- [ ] **#TBD-L7 — Labels page — QL-700 with DK-22205 through the Windows driver.** On
+- [ ] **#247-L7 — Labels page — QL-700 with DK-22205 through the Windows driver.** On
   the PC the QL-700 is plugged into, open the labels page, tick 3 samples, choose **Brother DK-22205
   62 mm** and press **Print**. In the print dialog pick the QL-700, paper **62 mm continuous** (the
   driver's DK-22205 entry), **100% scale**. Expect: three labels, each its own page, 62 mm wide and
   30 mm long, the QR code on the left and the code, short ID and nickname on the right, none cut off.
   Scan one QR code. If the driver shrinks or crops the label, record the driver settings that work in
   the wiki page on labels.
-- [ ] **#TBD-L8 — Labels page — template editor as a non-admin.** Sign in as a Lab
+- [ ] **#247-L8 — Labels page — template editor as a non-admin.** Sign in as a Lab
   Member (not an admin), open the labels page, press **Edit template** on a seeded template: there is
   **no Default switch**, **Save** is disabled, **Delete** is absent, and a line says the template is
   not yours; **Save as new** with a new name works and selects the new template. On that template
@@ -814,13 +826,13 @@ migration 141 prints about ownerless records.
   under a name that already exists shows "A template with that name already exists" inside the editor.
   Another member's template shows the same read-only state. Sign in as an admin: the Default switch
   is there, and ticking it on another template moves the default.
-- [ ] **#TBD-L9 — Labels page — preselection from the record pages.** From a Sample
+- [ ] **#247-L9 — Labels page — preselection from the record pages.** From a Sample
   page (real data) press **Print label**: the labels page opens in the same tab with that sample
   ticked. From **Samples**, tick two rows and press **Print labels for selected**: both are ticked
   on the labels page. Open `/admin/home/labels?codes=<a real code>,NOPE`: the real one is ticked and
   "Not found, or not visible to you: NOPE" is shown. The Print label button on a sample form (the
   `d1-report-button` interface) goes to the same page.
-- [ ] **#TBD-L10 — Default swap is one write.** As an admin, on the labels page open a template that is not the
+- [ ] **#247-L10 — Default swap is one write.** As an admin, on the labels page open a template that is not the
   default, tick **Default template** and Save: it becomes the only default (check the Template list: only one
   says "(default)"; reload to confirm). Then "Save as new" on a template with Default ticked and a name that already
   exists: the save is refused with "A template with that name already exists" and the old default is still the
@@ -828,12 +840,12 @@ migration 141 prints about ownerless records.
   current default template (new name, Default left ticked as it was): the default does not move. Check
   `v_audit_logs_with_actor` (`table_name = 'label_templates'`): the swap shows an UPDATE of the old default row turning
   is_default off, with you as the actor, next to the INSERT or UPDATE of the new default.
-- [ ] **#TBD-L11 — Start at and Copies can be typed.** On a sheet template, click into **Start at label**, clear it
+- [ ] **#247-L11 — Start at and Copies can be typed.** On a sheet template, click into **Start at label**, clear it
   and type 4: it reads 4 (not 14), and the preview starts at the 4th cell. Type 99: it settles on the number of
   cells on the page. Do the same with **Copies of each sample**: clear and type 4 gives 4; 5000 settles on 100; an
   empty field becomes 1 when you leave it. While editing a template, a half-typed grid (empty Columns) does not
   change Start at or show NaN anywhere.
-- [ ] **#TBD-L12 — Copies per sample.** Tick three samples. Each chip has its own number. Change the global
+- [ ] **#247-L12 — Copies per sample.** Tick three samples. Each chip has its own number. Change the global
   "Copies of each sample" to 2: every chip shows 2. Type 5 on one chip, then change the global value to 3: that
   chip stays 5 and the others become 3. The summary line totals every copy (5 + 3 + 3 = 11 labels), the preview
   shows the right number of labels for each sample, and the printed sheet matches. A chip with its own number is marked (a dot and an accent border); clearing its
@@ -1285,6 +1297,48 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 - [ ] **#30 settings scroll.** On the rig PC, switching Settings tabs no longer animates or jumps
   (fixed in 0.1.33; issue closed 2026-10-11, reopen it if it still happens).
 
+### Rig test requests, phase 1 (rig test requests PR)
+- [ ] **First request on the rig.** Set `RIG_TEST_ALLOWED_LOGINS` on the relay (§C), install the
+  release on the rig, and open an issue with a `rig-test` block naming two backlog items, then add
+  the `rig-test-request` label. Within about a minute the app shows "Your admin has requested tests
+  on this rig" with your login, the items and "about N min, 2 steps need you". Run now: the issue
+  gets a progress comment and `rig-test:running`. Answer both questions: the result comment lists
+  each item with its answer, and the label becomes `rig-test:done` (or `partial`).
+- [ ] **Not during a recording.** Start a recording, then add the label to a request: only a badge
+  appears on the Settings item, and the Record page is never covered. After the cut is saved, the
+  dialog appears. Accepting while a capture is uploading is refused, and the prompt says why.
+- [ ] **The operator can do the checks during a run.** Phase 1 does not lock the rig, so with
+  a run open, ask for an item that needs a recording, such as #185. Minimise the modal: the bottom
+  bar shows the step and the time left, and a recording starts and saves as normal. A question
+  that arrives during the cut shows only on the bar ("Waiting for you — after this cut"). The
+  modal opens once the Save dialog is closed. Throughout, keyboard focus stays in the Save
+  dialog, and Tab never reaches the rig-test window.
+- [ ] **Accept is refused while busy.** Accept while a large .mat is uploading to Directus: it is
+  refused, and the prompt says why. After the upload, the result comment shows the operator's
+  initials only (never a full name, email or Windows PC name) and the app
+  version. The rig id is `FORCE_APP_RIG_ID`, or `rig` if that isn't set.
+- [ ] **Pop-outs and reloads.** With a Live Force pop-out on a second monitor, a new request gives
+  one prompt and one Windows notification, both from the main window. This holds after a restart
+  that reopens the pop-out. Reloading the app mid-cut does not bring up a prompt over the Record
+  page. Many requests in a row don't pile up notifications, and notifications clear when the app
+  window gets focus.
+- [ ] **Cancel and no answer.** Cancel during a question: the run ends as `cancelled`, and the
+  issue says so. In a second run, leave a question unanswered past its countdown (5 min for a
+  short question, 15 min for an item written only as prose): that step is `no response`, the
+  steps after it still run, and the report lists it as not run. The countdown on screen matches
+  when the step really ends.
+- [ ] **Result kept until the relay is back.** Pull the network just before the last answer. The
+  run ends, and the result comment appears on the issue within a minute or two of the network
+  coming back.
+- [ ] **Snooze and decline.** "In 30 min" brings the prompt back in 30 min, and the issue gets
+  `rig-test:deferred`. Decline with "Someone else is using the machine": the issue gets the
+  reason and `rig-test:declined`.
+- [ ] **Only the rig answers.** The same release on an office PC, with no NI-DAQ hardware, never
+  shows the prompt. Settings → Rig tests on that PC says why, and the relay reads "not checked
+  yet". Settings → About on the rig shows the rig id.
+- [ ] **Windows notification.** With the app minimised or behind another window, a new request
+  flashes the taskbar button and shows a Windows notification.
+
 ### Release pipeline (CI/CD overhaul)
 - [ ] **NI-DAQmx detection on a PC without the driver.** Install the packaged app on a Windows PC
   with no NI-DAQmx driver (not the rig). Connectivity Doctor / self-check shows "NI-DAQmx runtime
@@ -1298,6 +1352,26 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 
 ## C. d1-server and infrastructure
 
+- [ ] **Rig test relay settings.** In the relay's environment on d1-server, set:
+  - `RIG_TEST_ALLOWED_LOGINS=dpremoli`, plus the login Claude sessions comment as if it is
+    different;
+  - `RIG_TEST_RELAY_TOKEN` to a long random string.
+
+  Redeploy `bug-report-relay`. On the rig PC, put the same token in
+  `FORCE_APP_RIG_TEST_TOKEN`, or in the `rig_test_token` file in the app's config folder. Also set
+  `FORCE_APP_RIG_ID`, for example `force-rig-1`; without it the rig id is just `rig`. Check:
+  - `GET /bug-report-relay/rig-tests` over Tailscale, without the `X-Rig-Token` header, is refused
+    with 403. With the header it returns `{"ok": true, ...}`.
+  - An issue that an allowlisted login both wrote and labelled is listed. One written by anyone
+    else is not, even if you label it.
+  - A comment through `POST /rig-tests/<n>/comment` on an issue without the label is refused.
+  - An attempt to PATCH the rig's result comment is refused.
+  - With a wrong token on the rig PC, Settings → Rig tests says "The relay rejected this PC's
+    rig token". With no token, it shows how to set one, and the PC never polls.
+  - An issue with more than 100 events, for example one with many label changes, is still
+    listed, because the latest labeller is found from the last page.
+
+  Since the rig test requests PR.
 - [ ] **#190 migration 140 on d1-server.** Apply `20261008000140_machining_force_analysis_file_nullable`
   (`dbmate up`). Directus accepts a `machining_force_analysis` POST with `directus_files_id: null`
   and the field isn't required in its form. Set such a row to `pending` by hand with the

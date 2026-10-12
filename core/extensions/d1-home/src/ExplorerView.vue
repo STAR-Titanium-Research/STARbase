@@ -13,6 +13,10 @@ defineProps<{ title: string }>();
 
 provide(EXPLORER_HOST, useExplorerHost());
 
+// The sidebar's rail is as tall as the navigation column, which sits under Directus's 54px header
+// bar (the same bar the pages' sticky rail clears with --d1-sticky-top: 70px, bar plus a gap): the
+// rail is told so with --d1-nav-offset, set on the sidebar below.
+
 // The finder dialog: opened by the sidebar's box and by Ctrl K / Cmd K anywhere in the app.
 const finderOpen = ref(false);
 const openFinder = () => {
@@ -52,7 +56,7 @@ onBeforeUnmount(() => {
 <template>
 	<private-view :title="title">
 		<template #navigation>
-			<ExplorerNav :show-brand="false" @open-finder="openFinder" />
+			<ExplorerNav :show-brand="false" style="--d1-nav-offset: 54px" @open-finder="openFinder" />
 			<Finder v-if="finderOpen" can-scan @close="finderOpen = false" @scan="scanFromFinder" />
 			<ScanDialog v-if="scanOpen" @close="scanOpen = false" />
 		</template>

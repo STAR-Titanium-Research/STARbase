@@ -59,6 +59,9 @@ on real systems"), add the check to [`docs/runbooks/physical-test-backlog.md`](d
 in the same PR, under the right section, with what to do, what to expect and the PR it came from.
 Never remove an unticked item because it is inconvenient; tick it with a date and result once it
 has actually been run.
+An item can also be run on the rig from a GitHub issue: add a `rig-test` block listing item ids
+and the `rig-test-request` label (spec: `docs/superpowers/specs/2026-10-11-rig-test-requests-design.md`).
+So give every new rig item a bold id at the start (`**R12 — …**` or `**#240 …**`).
 
 ## Agent skills
 

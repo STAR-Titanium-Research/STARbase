@@ -36,6 +36,9 @@ declare global {
       /** Opens a local capture's folder in the file browser (#96). Only paths inside the backend's
        * captures folder are allowed; `reason` says why when not. */
       revealPath: (target: string) => Promise<{ ok: boolean; reason?: string }>;
+      /** Rig-test prompts and questions: a desktop notification and a flashing taskbar button, only
+       * while the window is not focused. Both strings are at most 200 characters. */
+      notify: (title: string, body: string) => Promise<{ ok: boolean; reason?: string }>;
     };
   }
 }

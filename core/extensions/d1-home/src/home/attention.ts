@@ -1,5 +1,5 @@
 import {
-	failedTests, forceErrorOnMyOperations, forcePendingOperations, hasPassCode, operationLabel, operationSampleLine, ownerlessSamples, recordRoute,
+	failedTests, forceErrorOnMyOperations, forcePendingOperations, hasPassCode, operationLabel, operationSampleLine, recordRoute,
 } from '@d1/ui';
 
 // The "Needs attention" tiles: what each one counts, which filter selects the records, and how a
@@ -8,8 +8,9 @@ import {
 //   - force analysis in `error` on my operations: operations I own with a force file in error;
 //   - failed test sessions: test_sessions.status = 'failed' (the Data Studio "Failed" bookmark);
 //   - operations with force files still pending (queued, not yet analysed);
-//   - samples with no owner (owner_person_id empty): admins only, since a member can read only
-//     the records they are involved in (ADR-0011) and so never sees an ownerless sample.
+//
+// Ownerless samples are not here: an admin sees them, with campaigns and operations, in the Ownerless
+// records panel (home/AdminPanels.vue), so the same fact is not shown twice.
 
 export interface AttentionItem {
 	id: string;
@@ -83,23 +84,6 @@ export const ATTENTION: AttentionDef[] = [
 		fields: ['operation_id', 'pass_code', 'operation_sequence', 'sample_id.sample_code'],
 		sort: ['-operation_date'],
 		toItem: opItem('manufacturing_operations'),
-	},
-	{
-		key: 'ownerless',
-		label: 'Samples with no owner',
-		hint: 'Samples whose owner is empty (admins only)',
-		icon: 'person_off',
-		collection: 'physical_samples',
-		filter: ownerlessSamples,
-		fields: ['sample_id', 'sample_code', 'form'],
-		sort: ['sample_code'],
-		adminOnly: true,
-		toItem: (r) => ({
-			id: r.sample_id,
-			title: r.sample_code || 'Sample',
-			sub: r.form ?? '',
-			to: recordRoute('physical_samples', r.sample_id),
-		}),
 	},
 ];
 

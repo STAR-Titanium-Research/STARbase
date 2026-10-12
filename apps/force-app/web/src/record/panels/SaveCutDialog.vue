@@ -15,6 +15,11 @@ import { authStore } from '../../authStore';
 import { describeRecordingFailure } from '../recordingErrors';
 import { matFormatNote, matSkipNote } from '../matLimit';
 import { spotlight } from '../../ui/spotlight';
+import { saveDialogOpen } from '../../rigtest/saveDialogOpen';
+
+// Tells the rig-test prompt to stay a badge while this dialog is up (it would steal focus).
+saveDialogOpen.value = true;
+onBeforeUnmount(() => { saveDialogOpen.value = false; });
 
 const w = useWorkspace();
 const router = useRouter();
