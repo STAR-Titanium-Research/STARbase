@@ -16,10 +16,15 @@ type Row = Record<string, unknown>;
 
 const isRecord = (v: unknown): v is Row => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-// Fields a column needs that buildItemsParams does not ask for: the operation label falls back to
-// the step number when the operation has no pass code.
-export function extraFields(def: IndexDef): string[] {
-	return def.collection === 'manufacturing_operations' && def.columns.some((c) => c.field === 'pass_code') ? ['operation_sequence'] : [];
+// Fields the page asks for that buildItemsParams does not: the operation label falls back to the
+// step number when the operation has no pass code, and a campaign card names the owner. A nested
+// field of a collection the user cannot read is refused (taking the whole list with it), so the
+// owner is only asked for when `people` is readable (null = not known: tried).
+export function extraFields(def: IndexDef, readable: ReadonlySet<string> | null = null): string[] {
+	const out: string[] = [];
+	if (def.collection === 'manufacturing_operations' && def.columns.some((c) => c.field === 'pass_code')) out.push('operation_sequence');
+	if (def.collection === 'campaigns' && (!readable || readable.has('people'))) out.push('owner_person_id.full_name');
+	return out;
 }
 
 // The related row's display value. A bare key (the role may not read that collection) or null shows

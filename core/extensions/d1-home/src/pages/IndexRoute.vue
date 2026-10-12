@@ -1,18 +1,26 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { IndexPage, indexDefBySlug } from '@d1/ui';
+import { CampaignCard, IndexPage, campaignCardStats, indexDefBySlug } from '@d1/ui';
+import type { CampaignStats } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 
 // The :slug route: one generic list page for every collection of INDEX_DEFS. The slug picks the
 // definition; an unknown one (a mistyped link, a page that was never made) says so and goes Home.
+// The campaigns list has a designed card (the same one the Project page uses): it is filled into the
+// page's `card` slot, with the counts loaded for the campaigns on screen.
 const props = defineProps<{ slug: string }>();
 const def = computed(() => indexDefBySlug(props.slug));
+const isCampaigns = computed(() => def.value?.collection === 'campaigns');
 </script>
 
 <template>
 	<ExplorerView :title="def?.title ?? 'No such page'">
 		<!-- Keyed on the slug: moving from one collection to another starts a fresh page. -->
-		<IndexPage v-if="def" :key="def.slug" :def="def" />
+		<IndexPage v-if="def" :key="def.slug" :def="def" :card-data="isCampaigns ? campaignCardStats : undefined">
+			<template v-if="isCampaigns" #card="{ row, data, loading }">
+				<CampaignCard :campaign="row" :stats="(data as CampaignStats | null)" :loading="loading" />
+			</template>
+		</IndexPage>
 		<div v-else class="missing">
 			<h2>No such page</h2>
 			<p>There is no page called "{{ slug }}".</p>

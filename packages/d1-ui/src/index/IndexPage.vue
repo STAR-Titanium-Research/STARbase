@@ -5,8 +5,11 @@
 // (see useIndexPage); the host (ExplorerView in d1-home) supplies the API and navigation.
 // How the list is shown (table or cards, and the row density) is a per-browser preference kept
 // per list (listPrefs), not part of the URL. The parent can fill the `thumb` slot (a small picture
-// per row, shown as the first column at Roomy density).
-import { computed, inject, ref, useSlots, watch } from 'vue';
+// per row, shown as the first column at Roomy density, and the picture area of a text card).
+// A list with a designed card (campaigns) fills the `card` slot and may pass `cardData`, a loader
+// for what that card shows beyond the row (the campaigns' counts); it runs for the rows on screen,
+// in Cards view only, and the slot gets each row's entry as `data` (null while loading or missing).
+import { computed, inject, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { EXPLORER_HOST } from '../host';
 import type { ExplorerHost } from '../host';
@@ -17,6 +20,9 @@ import LoadState from '../components/LoadState.vue';
 import NotVisible from '../components/NotVisible.vue';
 import PageShell from '../components/PageShell.vue';
 import SegmentedControl from '../components/SegmentedControl.vue';
+import { useRequestGate } from '../composables/useRequestGate';
+import CardGrid from './CardGrid.vue';
+import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { PAGE_SIZE } from './indexQuery';
 import { cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
@@ -24,7 +30,10 @@ import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { Density, ListView } from './listPrefs';
 import { useIndexPage } from './useIndexPage';
 
-const props = defineProps<{ def: IndexDef }>();
+const props = defineProps<{
+	def: IndexDef;
+	cardData?: (host: ExplorerHost, rows: any[]) => Promise<ReadonlyMap<string, unknown>>;
+}>();
 
 const injected = inject(EXPLORER_HOST);
 if (!injected) throw new Error('IndexPage needs an ExplorerHost: render it inside ExplorerView');
@@ -34,7 +43,7 @@ const router = useRouter();
 
 const {
 	rows, total, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
-	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setPage, clearFilters, closeOpen,
+	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
 } = useIndexPage(host, props.def, route, router);
 
 // ---- how the list is shown ----------------------------------------------------------------
@@ -111,6 +120,40 @@ function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
 	openRow(row);
 }
 
+// ---- cards ----------------------------------------------------------------------------------
+// With no column headers to click, the cards toolbar sorts through a select (the same URL sort).
+const sortChoices = computed(() => sortOptions(props.def, sort.value, (c) => sortable(c)));
+const cardHref = (row: Record<string, unknown>): string | null => (props.def.rowTarget === 'record' ? rowHref(row) : null);
+
+// What a designed card shows beyond the row (the campaigns' counts), for the rows on screen. A
+// failure leaves the map empty: the cards then say the numbers are unavailable.
+const cardMap = ref<ReadonlyMap<string, unknown> | null>(null);
+const cardLoading = ref(false);
+const cardGate = useRequestGate();
+watch(
+	[() => view.value, rows],
+	async ([v, list]) => {
+		const token = cardGate.begin();
+		cardMap.value = null;
+		if (v !== 'cards' || !props.cardData || !list.length) {
+			cardLoading.value = false;
+			return;
+		}
+		cardLoading.value = true;
+		let data: ReadonlyMap<string, unknown> = new Map();
+		try {
+			data = await props.cardData(host, list);
+		} catch {
+			// no numbers, not an error page
+		}
+		if (!cardGate.isCurrent(token)) return;
+		cardMap.value = data;
+		cardLoading.value = false;
+	},
+	{ immediate: true },
+);
+onBeforeUnmount(() => cardGate.cancel());
+
 const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 </script>
 
@@ -125,7 +168,13 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 				<span class="range" role="status">{{ rangeText(state.page, rows.length, total) }}</span>
 				<span class="spacer" />
 				<SegmentedControl :model-value="view" :options="VIEW_OPTIONS" label="View" @update:model-value="setView" />
-				<SegmentedControl :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="setDensity" />
+				<label v-if="view === 'cards'" class="sortsel">
+					<span>Sort by</span>
+					<select :value="sort" aria-label="Sort by" @change="setSortTo(($event.target as HTMLSelectElement).value)">
+						<option v-for="o in sortChoices" :key="o.value" :value="o.value">{{ o.label }}</option>
+					</select>
+				</label>
+				<SegmentedControl v-else :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="setDensity" />
 				<button
 					type="button"
 					class="btn"
@@ -187,15 +236,22 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 			</div>
 
 			<div v-else class="panel" :class="{ busy: loading && rows.length }" :aria-busy="loading">
-				<!-- Placeholder until the card view lands: the same rows as plain tiles (code and title). -->
-				<ul v-if="view === 'cards' && rows.length" class="card-grid">
-					<li v-for="row in rows" :key="rowKey(row)">
-						<button type="button" class="card" @click="openRow(row)">
-							<span class="card-code">{{ cellText(row, def.columns[0], def) || '—' }}</span>
-							<span v-if="def.columns[1]" class="card-title">{{ cellText(row, def.columns[1], def) }}</span>
-						</button>
-					</li>
-				</ul>
+				<!-- Cards: the page's own `card` slot (campaigns), else a text card per row. Skeleton cards while the
+					first page loads, so the grid does not flip to a table and back. -->
+				<CardGrid
+					v-if="view === 'cards' && (loading || rows.length)"
+					:def="def"
+					:rows="rows"
+					:loading="loading"
+					:row-key="rowKey"
+					:href-for="cardHref"
+					:data="cardMap"
+					:data-loading="cardLoading"
+					@open="openRow"
+				>
+					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
+					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" /></template>
+				</CardGrid>
 				<DataTable v-else-if="loading || rows.length" :density="density">
 					<thead>
 						<tr>
@@ -336,16 +392,12 @@ th.num .sort { justify-content: flex-end; }
 /* Long free text (outcomes, notes) is cut instead of stretching the row. */
 .row td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.card-grid { list-style: none; margin: 6px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-.card {
-	display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 12px; text-align: left;
-	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
-	color: var(--theme--foreground); font: inherit; cursor: pointer;
+.sortsel { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); }
+.sortsel select {
+	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
+	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
 }
-.card:hover { border-color: var(--d1-accent, var(--theme--primary)); }
-.card:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
-.card-code { font-weight: 600; overflow-wrap: anywhere; }
-.card-title { font-size: var(--fs-sm, 12px); color: var(--d1-dim); overflow-wrap: anywhere; }
+.skeleton .thumb .bar { width: 40px; height: 28px; border-radius: 4px; }
 
 .skeleton .bar {
 	display: block; height: 10px; width: 70%; border-radius: 5px;

@@ -144,7 +144,7 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		settledBookmark.value = ok ? null : id;
 
 		const params = buildItemsParams(def, state.value, bookmark.value, visible.value);
-		params.fields = [...(params.fields as string[]), ...extraFields(def).filter((f) => !(params.fields as string[]).includes(f))];
+		params.fields = [...(params.fields as string[]), ...extraFields(def, visible.value).filter((f) => !(params.fields as string[]).includes(f))];
 		try {
 			const res = await host.api.get(`/items/${def.collection}`, { params });
 			if (!gate.isCurrent(token)) return;
@@ -233,6 +233,8 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		go({ filters });
 	}
 	const setSort = (key: string) => go({ sort: nextSort(sort.value, key) });
+	// The cards toolbar's select names the sort outright (a header click toggles).
+	const setSortTo = (value: string) => go({ sort: value });
 	const setPage = (page: number) => go({ page: Math.max(1, page) });
 	// "Clear filters": the search and the chips go, the saved view stays (it is a choice of its own,
 	// with its own x). With no search or chip left to clear, it drops the saved view too, so the
@@ -328,6 +330,6 @@ export function useIndexPage(host: ExplorerHost, def: IndexDef, route: RouteLike
 		rows, total, loading, error, forbidden, bookmarkUnavailable,
 		state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 		reload: load, rowKey, relationSortable,
-		setSearch, setBookmark, setFilter, setSort, setPage, clearFilters, closeOpen,
+		setSearch, setBookmark, setFilter, setSort, setSortTo, setPage, clearFilters, closeOpen,
 	};
 }

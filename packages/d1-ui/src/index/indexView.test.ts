@@ -57,6 +57,12 @@ describe('cellText', () => {
 		expect(extraFields(operations)).toEqual(['operation_sequence']);
 		expect(extraFields(samples)).toEqual([]);
 	});
+	it('asks for the owner of a campaign when people are readable', () => {
+		const campaigns = indexDefBySlug('campaigns')!;
+		expect(extraFields(campaigns)).toEqual(['owner_person_id.full_name']);
+		expect(extraFields(campaigns, new Set(['people']))).toEqual(['owner_person_id.full_name']);
+		expect(extraFields(campaigns, new Set(['projects']))).toEqual([]);
+	});
 });
 
 describe('paging', () => {

@@ -16,6 +16,8 @@ const emit = defineEmits<{ 'update:modelValue': [value: T] }>();
 const buttons = ref<HTMLButtonElement[]>([]);
 
 function onKey(e: KeyboardEvent, i: number): void {
+	// Alt+arrow is the browser's Back/Forward, Ctrl/Cmd+arrow its own too: not ours to take.
+	if (e.altKey || e.ctrlKey || e.metaKey) return;
 	const to = nextRadioIndex(props.options.length, i, e.key);
 	if (to === null) return;
 	e.preventDefault();
