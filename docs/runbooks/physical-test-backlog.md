@@ -839,6 +839,28 @@ migration 141 prints about ownerless records.
   shows the right number of labels for each sample, and the printed sheet matches. A chip with its own number is marked (a dot and an accent border); clearing its
   number puts it back on the global value and the mark goes. Removing a chip and ticking it again starts from the
   global value.
+- [ ] **#TBD-L13 — Scan a label with a phone (iPhone Safari).** On an iPhone on the lab network or Tailscale,
+  sign in at `https://d1-server.tail54eeb6.ts.net/admin`. Open **Home** and press **Scan a label**; allow the
+  camera when Safari asks. The rear camera shows. Hold it over a printed label's QR code: the dialog closes and
+  that sample's page opens. Open the Finder (the search box in the sidebar) and press **Scan**: the same dialog
+  opens. Close the dialog (Close, or tap outside it): the camera light goes off. Now scan a label for a sample
+  that was deleted, or one you may not see: the dialog stays open and shows the code, the short ID and the
+  other label lines with "No sample matches this label...", and **Scan again** restarts the camera. Scan a
+  non-D1 QR code (a web address, say): its text is shown as plain text, not as a link. In Safari's Settings
+  deny the camera for the site and open the dialog: it says permission was denied. Open the plain-HTTP
+  address instead (`http://d1-server...`): it says the camera needs the HTTPS address. Since PR B (#TBD).
+- [ ] **#TBD-L14 — Scan a label with a phone (Android Chrome).** The same checks as #TBD-L13 on an Android phone
+  in Chrome: the rear camera (not the front one) opens, a label scans from about 15 cm, a label printed on the
+  QL-700 62 mm roll scans too, and the camera stops when the dialog is closed or the tab is switched away
+  and back. Since PR B (#TBD).
+- [ ] **#TBD-L15 — Scan a label with a USB scanner.** Plug a USB (keyboard-mode) barcode scanner into a PC, open
+  any Explorer page, press Ctrl K (or click the sidebar search box) and scan a printed label's QR code. Expect:
+  the Finder opens that sample without pressing anything, within about a quarter of a second after the scan, and
+  the box does not turn the label into one run-on line or lose its line breaks (if the scanner's Enter ends the
+  scan, nothing extra happens). If the scanner cannot type `·` the label still opens (the code is read after
+  `-` or `|` too). Scan a label for a deleted sample: the Finder stays open and shows the decoded label with
+  the reason. Paste the label's text (copy it from a phone's QR reader) into the box: it opens the sample at
+  once. Then type an ordinary search such as `S-01` and check the results list still works. Since PR B (#TBD).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
