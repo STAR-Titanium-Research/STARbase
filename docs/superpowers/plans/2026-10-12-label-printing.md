@@ -17,8 +17,8 @@ from `feat/label-printing` once S2 is merged.
 | S1 migration | `.claude/worktrees/lp-s1` | `lp/s1-templates` | sonnet | merged |
 | S2 pure logic | `.claude/worktrees/lp-s2` | `lp/s2-logic` | sonnet | merged |
 | S4 cleanup | `.claude/worktrees/lp-s4` | `lp/s4-cleanup` | haiku | merged |
-| S3 page | `.claude/worktrees/lp-s3` | `lp/s3-page` | sonnet | in progress |
-| S5 scanning | `.claude/worktrees/lp-s5` | `feat/label-scan` | sonnet | blocked on S2 merge |
+| S3 page | `.claude/worktrees/lp-s3` | `lp/s3-page` | sonnet | merged |
+| S5 scanning | `.claude/worktrees/lp-s5` | `feat/label-scan` | sonnet | in progress |
 
 Order: S1, S2, S4 run in parallel → review (Opus, `directus-ui-reviewer` / `migration-review`) →
 merge into `feat/label-printing` → S3 → review → PR A → S5 → PR B.
