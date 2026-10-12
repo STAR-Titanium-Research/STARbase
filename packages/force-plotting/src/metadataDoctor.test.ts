@@ -145,30 +145,17 @@ describe('diagnose / sample link', () => {
 describe('diagnose / optional checks', () => {
 	const stale = () => row({}, { pass_code: 'WRONG-F1' });
 
-	it('leaves name.stale and date.trigger off by default', () => {
+	it('leaves date.trigger off by default', () => {
 		expect(ids(stale())).toEqual([]);
 		expect(ids(row({ trigger_time: '2024-01-01T00:00:00Z' }, { operation_date: '2020-05-05' })))
 			.toEqual([]);
 	});
 
-	it('runs name.stale when enabled', () => {
-		const f = activeFindings(diagnose(stale(), ['name.stale']));
-		expect(f.map((x) => x.id)).toEqual(['name.stale']);
-		expect(f[0].severity).toBe('info');
-		expect(f[0].fix).toBe('regen');
-	});
-
-	it('does not flag name.stale when the stored name already matches the regenerated one', () => {
-		// computeAutoCode('S' + 'F' + 1) with no parameters set -> "S-F1", the fixture's pass_code.
+	// The database builds and owns the operation code now, so the dashboard no longer second-guesses
+	// it: asking for the retired check is ignored.
+	it('ignores a request for the retired name.stale check', () => {
+		expect(ids(stale(), ['name.stale'])).toEqual([]);
 		expect(ids(row(), ['name.stale'])).toEqual([]);
-	});
-
-	// Without a sample code the regenerated name loses its prefix, and without subtype/sequence it
-	// loses its token -- reporting either as a "mismatch" would blame the name for a different gap.
-	it('skips name.stale when the inputs it needs are missing', () => {
-		expect(ids(row({}, { sample_id: null, pass_code: 'X' }), ['name.stale'])).toEqual(['link.sample']);
-		expect(ids(row({}, { machining_operation_subtype: null, pass_code: 'X' }), ['name.stale'])).toEqual([]);
-		expect(ids(row({}, { operation_sequence: null, pass_code: 'X' }), ['name.stale'])).toEqual([]);
 	});
 
 	it('runs date.trigger when enabled, tolerating a same-day difference', () => {
@@ -236,7 +223,7 @@ describe('diagnose / real archive rows', () => {
 				sample_id: { sample_id: 's', sample_code: '11-RK-MO-2023-10-16' } },
 		);
 		// coverage = (519680-173500)/519680 = 0.666 -> above threshold, no crop finding.
-		expect(ids(r, ['name.stale'])).toEqual(['missing.diam', 'missing.doc', 'missing.feed', 'missing.vc']);
+		expect(ids(r)).toEqual(['missing.diam', 'missing.doc', 'missing.feed', 'missing.vc']);
 	});
 
 	it('10-AA-MF-2023-3-31-F25: bad crop, and the diameter conflict is already overridden', () => {
@@ -271,8 +258,8 @@ describe('diagnose / real archive rows', () => {
 	});
 
 	// Same operation, second .mat: the sample code is 122-AA-MM-2025-6-2 while the name says -6-5,
-	// the documented stale-SampleName case. With name.stale enabled it surfaces.
-	it('122-AA-MM-2025-6-5-F11 second file: conflict, backfills, bad crop, stale name', () => {
+	// the documented stale-SampleName case. The retired name check no longer reports it.
+	it('122-AA-MM-2025-6-5-F11 second file: conflict, backfills, bad crop', () => {
 		const r = row(
 			{ n_raw: 182922240, cut_start_idx: 155214000, cut_end_idx: 158113316,
 				feed: 0.1, depth_of_cut: null, surface_speed: null, cut_diameter: 80 },
@@ -282,7 +269,7 @@ describe('diagnose / real archive rows', () => {
 				machining_cutting_speed_m_per_min: 30, machining_workpiece_diameter_mm: 565,
 				sample_id: { sample_id: 's', sample_code: '122-AA-MM-2025-6-2' } },
 		);
-		expect(ids(r, ['name.stale'])).toEqual(['conflict.diam', 'crop.coverage', 'name.stale']);
+		expect(ids(r)).toEqual(['conflict.diam', 'crop.coverage']);
 		expect(worstSeverity(diagnose(r))).toBe('error');
 	});
 });

@@ -98,6 +98,159 @@ run_eq "every group-detail field carries the 'group' special" \
        AND (special IS NULL OR special NOT LIKE '%group%')" \
     "0"
 
+echo "== Directus field metadata is complete =="
+# Regression guard for the 2026-07/09 incident: scripts/configure_directus.sql was run on a migrated
+# database, its blanket DELETE FROM directus_fields removed the inline parameter field rows (and more),
+# and nothing noticed for weeks. The migration 20261009000143 restores them. On CI the migrations are
+# the only thing that writes Directus metadata, so these are real checks there too.
+run_eq "every inline parameter column has a directus_fields row" \
+    "SELECT count(*) FROM information_schema.columns AS c
+     WHERE c.table_schema = 'public'
+       AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am)_')
+         OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
+       AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name)" \
+    "0"
+# Every relation that names an alias (one_field) needs the alias field row, or the parent form loses
+# the panel. Known gaps that predate the incident, kept out so this stays a regression guard:
+#   * manufacturing_methods.operations and raw_stock_lots.provenance: relations from configure_directus.sql
+#     whose alias field rows have never existed anywhere;
+#   * campaigns.operations and campaigns.sessions: on CI the relation rows come from migration
+#     20261007000141, but the alias field rows come from scripts/configure_campaigns.sql, which CI
+#     does not run.
+run_eq "every relation alias has its directus_fields row (known gaps excepted)" \
+    "SELECT count(*) FROM directus_relations AS r
+     WHERE r.one_field IS NOT NULL
+       AND (r.one_collection, r.one_field) NOT IN (
+           ('manufacturing_methods', 'operations'), ('raw_stock_lots', 'provenance'),
+           ('campaigns', 'operations'), ('campaigns', 'sessions'))
+       AND NOT EXISTS (SELECT 1 FROM directus_fields AS f
+                       WHERE f.collection = r.one_collection AND f.field = r.one_field)" \
+    "0"
+run_eq "every field group points at a field row of the same collection" \
+    "SELECT count(*) FROM directus_fields AS f
+     WHERE f.\"group\" IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM directus_fields AS g WHERE g.collection = f.collection AND g.field = f.\"group\")" \
+    "0"
+run_eq "no (collection, field) has two directus_fields rows" \
+    "SELECT count(*) FROM (SELECT 1 FROM directus_fields GROUP BY collection, field HAVING count(*) > 1) AS d" \
+    "0"
+
+echo "== Directus field metadata: restore migration =="
+# directus_fields / directus_relations are empty stubs on CI, so reproduce the state the incident left
+# (inline rows, the four alias fields and the source_recipe_id relation gone; a customised inline row and
+# an owner picker present; the o2m relation of projects.rollup missing) in a rolled-back transaction, then
+# apply the migration's up twice and its down, asserting each step.
+RIM=db/migrations/20261009000143_restore_inline_param_field_meta.sql
+rim_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RIM")
+rim_down=$(awk '/-- migrate:down/{f=1;next}f' "$RIM")
+# sintering_run_number (migration 156) is a later column with its own row; 143 neither adds nor removes it, so it stays out of these counts
+rim_inline="((collection = 'manufacturing_operations' AND field ~ '^(machining|sintering|ht|deform|am)_' AND field !~ '_group\$' AND field <> 'sintering_run_number')
+         OR (collection = 'test_sessions' AND field ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))"
+rim_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
+DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
+DELETE FROM directus_fields WHERE $rim_inline
+  OR (collection = 'manufacturing_operations' AND field IN ('prep_steps', 'source_recipe_id', 'data_file_links'))
+  OR (collection = 'projects' AND field = 'rollup')
+  OR (collection = 'manufacturing_operations' AND field = 'owner_person_id');
+DELETE FROM directus_relations
+  WHERE (many_collection = 'manufacturing_operations' AND many_field = 'source_recipe_id')
+     OR (many_collection, many_field) IN (('prep_steps', 'operation_id'), ('operation_files', 'operation_id'), ('project_rollup', 'project_id'));
+-- the o2m relations that name two of the aliases exist; the one for projects.rollup does not (yet)
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+  ('prep_steps', 'operation_id', 'manufacturing_operations', 'prep_steps', 'delete'),
+  ('operation_files', 'operation_id', 'manufacturing_operations', 'data_file_links', 'delete');
+-- a row that is present and customised, and an owner picker set by 20261001000126_owner_picker_fields.sql: both must survive
+INSERT INTO directus_fields (collection, field, interface, note, "group") VALUES
+  ('manufacturing_operations', 'sintering_batch_number', 'input', 'custom note', NULL),
+  ('manufacturing_operations', 'owner_person_id', 'd1-owner-picker', NULL, NULL);
+SELECT 'seeded_missing:' || count(*) FROM information_schema.columns AS c
+  WHERE c.table_schema = 'public'
+    AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am)_')
+      OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
+    AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name);
+$rim_up
+SELECT 'up_missing:' || count(*) FROM information_schema.columns AS c
+  WHERE c.table_schema = 'public'
+    AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am)_')
+      OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
+    AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name);
+SELECT 'up_ops_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations'
+  AND field ~ '^(machining|sintering|ht|deform|am)_' AND field !~ '_group\$' AND field <> 'sintering_run_number';
+SELECT 'up_sessions_rows:' || count(*) FROM directus_fields WHERE collection = 'test_sessions'
+  AND field ~ '^(tensile|hardness|charpy|compression|sem|xrd)_';
+SELECT 'up_custom_row:' || count(*) || ',' || max(note) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'up_owner_picker:' || count(*) || ',' || max(interface) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'owner_person_id';
+SELECT 'up_machine_group:' || count(*) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND "group" = 'sintering_machine_group' AND field <> 'sintering_run_number';
+SELECT 'up_qa_group:' || count(*) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND "group" = 'sintering_qa_group';
+SELECT 'up_hidden_recipe_number:' || hidden FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'sintering_recipe_number';
+SELECT 'up_presets:' || count(*) FROM directus_fields
+  WHERE interface = 'select-dropdown' AND options::text LIKE '%allowOther%'
+    AND collection = 'test_sessions'
+    AND field IN ('sem_magnification_range', 'sem_coating_material', 'sem_etchant', 'xrd_radiation_source', 'xrd_detector_type');
+SELECT 'up_relation:' || count(*) || ',' || max(one_collection) FROM directus_relations
+  WHERE many_collection = 'manufacturing_operations' AND many_field = 'source_recipe_id';
+SELECT 'up_alias_with_relation:' || count(*) FROM directus_fields
+  WHERE (collection = 'manufacturing_operations' AND field IN ('prep_steps', 'source_recipe_id', 'data_file_links'));
+SELECT 'up_alias_without_relation:' || count(*) FROM directus_fields WHERE collection = 'projects' AND field = 'rollup';
+-- the missing relation arrives; the second run fills only that gap
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+  ('project_rollup', 'project_id', 'projects', 'rollup', 'nullify');
+$rim_up
+SELECT 'up2_rollup:' || count(*) FROM directus_fields WHERE collection = 'projects' AND field = 'rollup';
+SELECT 'up2_inline_rows:' || count(*) FROM directus_fields WHERE $rim_inline;
+SELECT 'up2_duplicates:' || count(*) FROM (SELECT 1 FROM directus_fields GROUP BY collection, field HAVING count(*) > 1) AS d;
+SELECT 'up2_relations:' || count(*) FROM directus_relations
+  WHERE many_collection = 'manufacturing_operations' AND many_field = 'source_recipe_id';
+$rim_down
+SELECT 'down_inline_rows:' || count(*) FROM directus_fields WHERE $rim_inline;
+SELECT 'down_custom_row:' || count(*) || ',' || max(note) || ',' || coalesce(max("group"), 'no group') FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'down_aliases:' || count(*) FROM directus_fields
+  WHERE (collection = 'manufacturing_operations' AND field IN ('prep_steps', 'source_recipe_id', 'data_file_links'))
+     OR (collection = 'projects' AND field = 'rollup');
+SELECT 'down_relation:' || count(*) FROM directus_relations
+  WHERE many_collection = 'manufacturing_operations' AND many_field = 'source_recipe_id';
+SELECT 'down_other_relations:' || count(*) FROM directus_relations
+  WHERE (many_collection, many_field) IN (('prep_steps', 'operation_id'), ('operation_files', 'operation_id'), ('project_rollup', 'project_id'));
+SELECT 'down_owner_picker:' || count(*) || ',' || max(interface) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'owner_person_id';
+SELECT 'down_ledger:' || coalesce(to_regclass('d1_private.restore_inline_param_meta_changes')::text, 'dropped');
+ROLLBACK;
+SQL
+)
+rim_check() { grep -qx "$1" <<<"$rim_out" && ok "$2" || bad "$2 (psql output: $rim_out)"; }
+rim_check "seeded_missing:115" "setup: the incident state is reproduced (115 inline columns without a row; the 116th is the customised one)"
+rim_check "up_missing:0" "up: every inline parameter column has a row again"
+rim_check "up_ops_rows:56" "up: 56 manufacturing_operations parameter rows"
+rim_check "up_sessions_rows:60" "up: 60 test_sessions parameter rows"
+rim_check "up_custom_row:1,custom note" "up: a present, customised row is left as it is (not duplicated, not replaced)"
+rim_check "up_owner_picker:1,d1-owner-picker" "up: the d1-owner-picker interface of 20261001000126_owner_picker_fields.sql is untouched"
+rim_check "up_machine_group:10" "up: ten machine-sourced sintering fields are in the machine group"
+rim_check "up_qa_group:5" "up: five QA fields are in the QA group"
+rim_check "up_hidden_recipe_number:true" "up: the free-text sintering recipe number is hidden (migration 102)"
+rim_check "up_presets:5" "up: the five SEM/XRD dropdown presets are restored"
+rim_check "up_relation:1,prep_recipes" "up: manufacturing_operations.source_recipe_id is related to prep_recipes"
+rim_check "up_alias_with_relation:3" "up: prep_steps, source_recipe_id and data_file_links aliases are restored"
+rim_check "up_alias_without_relation:0" "up: an o2m alias whose relation is missing is not inserted"
+rim_check "up2_rollup:1" "up (second run): fills the gap once the relation exists"
+rim_check "up2_inline_rows:116" "up (second run): no inline row is added twice"
+rim_check "up2_duplicates:0" "up (second run): no (collection, field) is duplicated"
+rim_check "up2_relations:1" "up (second run): the relation is not duplicated"
+rim_check "down_inline_rows:1" "down: removes the inline rows it added and keeps the one that was there"
+rim_check "down_custom_row:1,custom note,no group" "down: the pre-existing row keeps its content and its group is cleared"
+rim_check "down_aliases:0" "down: removes the four alias fields"
+rim_check "down_relation:0" "down: removes the source_recipe_id relation"
+rim_check "down_other_relations:3" "down: leaves relations it did not add"
+rim_check "down_owner_picker:1,d1-owner-picker" "down: the owner picker is still untouched"
+rim_check "down_ledger:dropped" "down: drops its bookkeeping table"
+
 echo "== Sample geometry: round bar form migration =="
 # CI has no Directus bootstrap rows (directus_fields is an empty stub), so seed the pre-migration
 # state, apply the migration's up then down SQL, and assert both — all in a rolled-back transaction.
@@ -595,9 +748,13 @@ grep -qx 'shadow:0' <<<"$sp_out" && grep -qx 'real:1' <<<"$sp_out" \
 echo "== Audit coverage: every business table, keyed by its primary key (review 5.3) =="
 # Tables deliberately NOT audited: the log itself, dbmate bookkeeping, Directus system tables,
 # derived caches (project_rollup, semantic_embeddings), the crawler's heartbeat row,
-# audit_log_actors (the actor side-table of the log itself). Migration 141's backup of Directus
+# audit_log_actors (the actor side-table of the log itself), short_ids (the short-ID registry:
+# write-once bookkeeping written only by claim_short_id()), test_code_counters (test-code number
+# bookkeeping written only by next_test_code_number()), file_fingerprints (derived data: content
+# hashes of directus_files rows, written only by scripts/file_fingerprints.py and recomputable at
+# any time, so an audit row would record nothing a re-run cannot). Migration 141's backup of Directus
 # permission rows lives in the private schema d1_private, so this public-schema check never sees it.
-AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state'"
+AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints'"
 run_eq "every business table has an audit trigger (missing: none)" \
     "SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -940,38 +1097,39 @@ SQL
 grep -q 'cannot derive short_code' <<<"$bt_err" && ok "an expansion error aborts the INSERT and reaches the caller" || bad "expansion error was swallowed (output: $bt_err)"
 
 echo "== Operation numbers and codes are assigned server-side (review 4.5) =="
-# The trigger fills operation_sequence (max+1 per sample) and the {seq} / {mf} placeholders of a
-# client-composed pass_code. Rolled-back transaction first: the numbers a new heat-treatment,
-# deformation and additive operation get, a supplied number being kept, and the sintering counter.
+# The trigger fills operation_sequence (max+1 per sample) and builds the code from the rule (T0b, migration 157).
+# An old client's {seq} / {mf} placeholder code counts as automatic, so the operations below carry the
+# fields their code is built from. Rolled-back transaction first: the numbers a new heat-treatment,
+# deformation and additive operation get, a supplied number being kept, and a typed code kept.
 seq_out=$($PSQL -q 2>&1 <<SQL
 BEGIN;
 INSERT INTO manufacturing_methods (method_id, method_code, method_name)
 VALUES ('c0000000-0000-4000-8000-000000000401', 'T-I-HT', 'stream I test method');
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-4000-8000-000000000411', 'TI-S1');
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-4000-8000-000000000412', 'TI-S2');
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000421', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'heat_treatment', 'TI-S1-HTA{seq}-800C_60min_AC');
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000422', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'deformation', 'TI-S1-DR{seq}-20C_50pct');
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000423', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'additive', 'TI-S1-AM{seq}-200W');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, ht_treatment_type, ht_peak_temp_celsius, ht_hold_time_min, ht_cooling_method, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000421', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'heat_treatment', 'anneal', 800, 60, 'air', 'TI-S1-HTA{seq}-800C_60min_AC');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, deform_deformation_type, deform_deformation_temp_celsius, deform_total_reduction_pct, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000422', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'deformation', 'rolling', 20, 50, 'TI-S1-DR{seq}-20C_50pct');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, am_laser_power_w, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000423', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'additive', 200, 'TI-S1-AM{seq}-200W');
 -- a machining pass number the user typed is kept, and the next blank one continues after it
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, pass_code)
 VALUES ('c0000000-0000-4000-8000-000000000424', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'machining', 9, 'TI-S1-F9-20MPM');
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000425', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'heat_treatment', 'TI-S1-HTS{seq}');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, ht_treatment_type, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000425', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000411', 'heat_treatment', 'solution_treat', 'TI-S1-HTS{seq}');
 -- numbering is per sample, and a typed override without a placeholder is stored as given
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000426', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'heat_treatment', 'TI-S2-HTA{seq}');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, ht_treatment_type, pass_code)
+VALUES ('c0000000-0000-4000-8000-000000000426', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'heat_treatment', 'anneal', 'TI-S2-HTA{seq}');
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
 VALUES ('c0000000-0000-4000-8000-000000000427', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'heat_treatment', 'MY-OWN-CODE');
--- no sample: the placeholder collapses to nothing and the sequence stays NULL (as before)
+-- no sample: the sequence stays NULL; a typed code is stored as given
 INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000428', 'c0000000-0000-4000-8000-000000000401', 'heat_treatment', 'test', 'TI-NOSAMPLE{seq}-X');
+VALUES ('c0000000-0000-4000-8000-000000000428', 'c0000000-0000-4000-8000-000000000401', 'heat_treatment', 'test', 'TI-NOSAMPLE-X');
 -- an imported row (source_system set) keeps a NULL sequence even with a sample; a later explicit
 -- number is kept, so the importer's own numbering cannot collide with an auto-assigned one
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000429', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'sintering', 'test', 'TI-IMP{seq}-FAST');
+VALUES ('c0000000-0000-4000-8000-000000000429', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'sintering', 'test', 'TI-IMP-FAST');
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, source_system, operation_sequence, pass_code)
 VALUES ('c0000000-0000-4000-8000-00000000042a', 'c0000000-0000-4000-8000-000000000401', 'c0000000-0000-4000-8000-000000000412', 'machining', 'test', 1, 'TI-IMP-F1');
 SELECT 'op:' || substr(operation_id::text, 33) || ':' || COALESCE(operation_sequence::text, 'null') || ':' || pass_code
@@ -982,17 +1140,10 @@ SELECT COALESCE(max((substring(pass_code FROM '(?:^|-)MF(\d{1,9})(?:-|$)'))::big
 FROM manufacturing_operations WHERE process_category = 'sintering' \gset
 INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
 VALUES ('c0000000-0000-4000-8000-000000000431', 'c0000000-0000-4000-8000-000000000401', 'sintering', 'test', '01-01-26-MF' || (:mfbase + 5) || '-950C');
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000432', 'c0000000-0000-4000-8000-000000000401', 'sintering', 'test', '02-01-26-MF{mf}-950C_11kN');
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000433', 'c0000000-0000-4000-8000-000000000401', 'sintering', 'test', '03-01-26-MF{mf}');
-DELETE FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-000000000432';
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-000000000434', 'c0000000-0000-4000-8000-000000000401', 'sintering', 'test', '04-01-26-MF{mf}');
 SELECT 'mf_explicit:' || (:mfbase + 5);
 SELECT 'mf:' || substr(operation_id::text, 33) || ':' || pass_code FROM manufacturing_operations
 WHERE operation_id::text LIKE 'c0000000-0000-4000-8000-00000000043_' ORDER BY operation_id;
--- regenerating the code of an existing operation must not store a raw placeholder
+-- an old client's regenerate (a {seq} placeholder code) gets the rule's code, never a raw placeholder
 UPDATE manufacturing_operations SET pass_code = 'TI-S1-HTA{seq}-regen' WHERE operation_id = 'c0000000-0000-4000-8000-000000000421';
 SELECT 'regen:' || pass_code || ':' || operation_sequence FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-000000000421';
 ROLLBACK;
@@ -1006,14 +1157,12 @@ seq_check "op:0424:9:TI-S1-F9-20MPM" "a supplied (machining pass) number is kept
 seq_check "op:0425:10:TI-S1-HTS10" "the next blank number continues after the highest one"
 seq_check "op:0426:1:TI-S2-HTA1" "numbering restarts per sample"
 seq_check "op:0427:2:MY-OWN-CODE" "a typed code without a placeholder is stored unchanged"
-seq_check "op:0428:null:TI-NOSAMPLE-X" "an operation without a sample keeps a NULL sequence and an empty placeholder"
+seq_check "op:0428:null:TI-NOSAMPLE-X" "an operation without a sample keeps a NULL sequence and a typed code"
 mf_exp=$(grep -m1 '^mf_explicit:' <<<"$seq_out" | cut -d: -f2)
 seq_check "op:0429:null:TI-IMP-FAST" "an imported row (source_system set) is not auto-numbered, even with a sample"
 seq_check "op:042a:1:TI-IMP-F1" "an imported row's explicit number is kept"
 seq_check "mf:0431:01-01-26-MF${mf_exp}-950C" "an explicit MF number is stored as given"
-seq_check "mf:0433:03-01-26-MF$((mf_exp + 2))" "the sintering MF counter is max+1 over existing codes"
-seq_check "mf:0434:04-01-26-MF$((mf_exp + 3))" "an MF number is not handed out again after a delete"
-seq_check "regen:TI-S1-HTA1-regen:1" "regenerating an existing code fills the placeholder from the stored sequence"
+seq_check "regen:TI-S1-HTA1-800C_60min_AC:1" "regenerating with an old client's {seq} placeholder code gives the rule's code, never a raw placeholder"
 
 # Two writers at once: session A inserts and holds its transaction open, session B inserts for the
 # same sample meanwhile. Without the advisory lock both read max = 0 and get 1.
@@ -1025,9 +1174,9 @@ INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-400
 cc_insert() {  # cc_insert <op-id-suffix> <code> <hold-seconds>
     $PSQL -q 2>&1 <<SQL
 BEGIN;
-INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, pass_code)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, ht_treatment_type, pass_code)
 VALUES ('c0000000-0000-4000-8000-0000000004$1', 'c0000000-0000-4000-8000-000000000402',
-        'c0000000-0000-4000-8000-000000000413', 'heat_treatment', '$2')
+        'c0000000-0000-4000-8000-000000000413', 'heat_treatment', 'anneal', '$2')
 RETURNING operation_sequence || '|' || pass_code;
 SELECT pg_sleep($3);
 COMMIT;
@@ -1042,26 +1191,6 @@ cc_a=$(cat "$cc_dir/a"); cc_b=$(cat "$cc_dir/b")
     && ok "concurrent inserts for one sample get distinct sequences and codes ($cc_a, $cc_b)" \
     || bad "concurrent inserts collided (A='$cc_a', B='$cc_b')"
 
-# Same for the global sintering counter.
-cc_mf() {  # cc_mf <op-id-suffix> <hold-seconds>
-    $PSQL -q 2>&1 <<SQL
-BEGIN;
-INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
-VALUES ('c0000000-0000-4000-8000-0000000004$1', 'c0000000-0000-4000-8000-000000000402', 'sintering', 'test', '05-01-26-MF{mf}')
-RETURNING pass_code;
-SELECT pg_sleep($2);
-COMMIT;
-SQL
-}
-cc_mf 53 2 | grep MF > "$cc_dir/a" &
-sleep 0.7
-cc_mf 54 0 | grep MF > "$cc_dir/b"
-wait
-cc_a=$(cat "$cc_dir/a"); cc_b=$(cat "$cc_dir/b")
-[[ -n "$cc_a" && -n "$cc_b" && "$cc_a" != "$cc_b" ]] \
-    && ok "concurrent sintering inserts get distinct MF numbers ($cc_a, $cc_b)" \
-    || bad "concurrent sintering inserts collided (A='$cc_a', B='$cc_b')"
-
 # Bulk load: the per-sample lock must not use the shared lock table (advisory locks do, and
 # ~13,000 samples in one transaction ran out of it). 400 samples, one operation each, one
 # transaction: no per-sample advisory lock is held at the end, and each sample's number is 1.
@@ -1069,11 +1198,11 @@ bulk_out=$($PSQL -q 2>&1 <<SQL
 BEGIN;
 INSERT INTO physical_samples (sample_id, sample_code)
 SELECT ('c0000000-0000-4000-8001-' || lpad(g::text, 12, '0'))::uuid, 'TI-BULK-' || g FROM generate_series(1, 400) g;
-INSERT INTO manufacturing_operations (method_id, sample_id, process_category, pass_code)
-SELECT 'c0000000-0000-4000-8000-000000000402', sample_id, 'heat_treatment', 'TI-BULK-HTA{seq}'
+INSERT INTO manufacturing_operations (method_id, sample_id, process_category, ht_treatment_type, pass_code)
+SELECT 'c0000000-0000-4000-8000-000000000402', sample_id, 'heat_treatment', 'anneal', 'TI-BULK-HTA{seq}'
 FROM physical_samples WHERE sample_code LIKE 'TI-BULK-%';
 SELECT 'bulk_ops:' || count(*) || ':' || min(operation_sequence) || ':' || max(operation_sequence)
-FROM manufacturing_operations WHERE pass_code = 'TI-BULK-HTA1';
+FROM manufacturing_operations WHERE pass_code ~ '^TI-BULK-[0-9]+-HTA1$';
 SELECT 'bulk_advisory_locks:' || (count(*) <= 3) FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory';
 ROLLBACK;
 SQL
@@ -1177,10 +1306,11 @@ grep -q 'physical_samples_sample_code_no_placeholder_check' <<<"$ph_s" \
     && ok "a literal {seq} that the trigger does not replace is rejected" \
     || bad "literal {seq} sample code was not rejected (psql output: $ph_s)"
 # With the trigger bypassed (as when the interface runs before the migration did) a literal
-# placeholder hits the CHECK; one implicit transaction per -c, so nothing is left behind.
+# placeholder hits the CHECK; one implicit transaction per -c, so nothing is left behind. The
+# short_id is supplied by hand because the short-ID trigger is bypassed too (it is NOT NULL).
 ph_o=$($PSQL -q 2>&1 -c "SET LOCAL session_replication_role = replica;
-INSERT INTO manufacturing_operations (method_id, process_category, source_system, pass_code)
-VALUES ((SELECT method_id FROM manufacturing_methods LIMIT 1), 'sintering', 'test', '05-01-26-MF{mf}')")
+INSERT INTO manufacturing_operations (short_id, method_id, process_category, source_system, pass_code)
+VALUES ('5ba0d0ff', (SELECT method_id FROM manufacturing_methods LIMIT 1), 'sintering', 'test', '05-01-26-MF{mf}')")
 grep -q 'manufacturing_operations_pass_code_no_placeholder_check' <<<"$ph_o" \
     && ok "a literal {mf} / {seq} in pass_code is rejected when the trigger did not run" \
     || bad "literal {mf} pass_code was not rejected (psql output: $ph_o)"
@@ -1508,13 +1638,38 @@ VALUES ('00000000-0000-4000-8000-000000000003', 'c0000000-0000-4000-8000-0000000
 SELECT 'second:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a1') || '/v' || version
   FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c1';
 
--- a second sample with a LOWER id takes over
+-- of two samples linked in turn, the first linked (it also has the lower junction id) stays primary
 INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item)
 VALUES ('00000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-0000000001c2', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a2');
 INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item)
 VALUES ('00000000-0000-4000-8000-000000000004', 'c0000000-0000-4000-8000-0000000001c2', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a1');
 SELECT 'lowest_id:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
   FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c2';
+
+-- the earliest LINKED subject is the primary, even when a later one has a lower junction id
+INSERT INTO test_sessions (session_id) VALUES ('c0000000-0000-4000-8000-0000000001c9');
+INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item)
+VALUES ('00000000-0000-4000-8000-0000000000ff', 'c0000000-0000-4000-8000-0000000001c9', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a2');
+INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item)
+VALUES ('00000000-0000-4000-8000-0000000000f1', 'c0000000-0000-4000-8000-0000000001c9', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a1');
+SELECT 'earliest:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
+  FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c9';
+
+-- rows with EQUAL linked_at (e.g. linked before the column existed) fall back to junction id order
+INSERT INTO test_sessions (session_id) VALUES ('c0000000-0000-4000-8000-0000000001c8');
+INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item, linked_at)
+VALUES ('00000000-0000-4000-8000-0000000000e9', 'c0000000-0000-4000-8000-0000000001c8', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a1', '-infinity');
+INSERT INTO test_sessions_subject (id, test_sessions_id, collection, item, linked_at)
+VALUES ('00000000-0000-4000-8000-0000000000e8', 'c0000000-0000-4000-8000-0000000001c8', 'physical_samples', 'c0000000-0000-4000-8000-0000000001a2', '-infinity');
+SELECT 'tie_id_order:' || (sample_id = 'c0000000-0000-4000-8000-0000000001a2')
+  FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001c8';
+
+-- new junction rows are stamped with the wall-clock time they are linked
+SELECT 'linked_at_default:' || pg_get_expr(d.adbin, d.adrelid)
+  FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+  WHERE d.adrelid = 'test_sessions_subject'::regclass AND a.attname = 'linked_at';
+SELECT 'linked_at_field:' || hidden || '/' || readonly
+  FROM directus_fields WHERE collection = 'test_sessions_subject' AND field = 'linked_at';
 
 -- delete the primary: the next subject is promoted
 DELETE FROM test_sessions_subject WHERE id = '00000000-0000-4000-8000-000000000002';
@@ -1574,7 +1729,11 @@ SQL
 ps_check() { grep -qx "$1" <<<"$ps_out" && ok "$2" || bad "$2 (psql output: $ps_out)"; }
 ps_check "insert:true/true/v2" "insert: the first sample subject becomes sample_id"
 ps_check "second:true/v2" "a second sample subject with a higher id leaves sample_id and the test row untouched"
-ps_check "lowest_id:true" "the subject with the lowest junction id is the primary"
+ps_check "lowest_id:true" "of two subjects linked in turn, the first linked is the primary"
+ps_check "earliest:true" "the earliest linked subject stays primary when a later one has a lower junction id"
+ps_check "tie_id_order:true" "subjects with an equal linked_at fall back to junction id order (the pre-migration rule)"
+ps_check "linked_at_default:clock_timestamp()" "new junction rows are stamped with clock_timestamp() by default"
+ps_check "linked_at_field:true/true" "linked_at is registered hidden and read-only in Directus"
 ps_check "delete_primary:true" "deleting the primary subject promotes the next one"
 ps_check "delete_last:true" "deleting the last sample subject clears sample_id"
 ps_check "edge:true/true" "an insert_edges subject fills insert_edge_id and leaves sample_id alone"
@@ -1585,6 +1744,471 @@ ps_check "stale:true" "(setup) with the trigger off the junction alone leaves sa
 ps_check "backfill:true" "back-fill repairs a test from its junction rows"
 ps_check "cascade:0" "deleting a test cascades through the junction without error"
 ps_check "comments:5" "function, trigger function, trigger and columns carry the derived-column comment"
+
+echo "== Short IDs: permanent, unique across samples, operations and tests (T0a) =="
+# The three fixture ids share their first 8 hex characters, so the second and third must be
+# lengthened. Everything is rolled back. (Prefix 5d000000: earlier sections commit c0000000- fixtures, whose registry rows stay.)
+sid_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code)
+VALUES ('5d000000-0000-4000-8000-000000000201', 'TEST-SID-001');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('5d000000-0000-4000-8000-000000000205', 'T-SID-M', 'short id test method');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code)
+VALUES ('5d000000-0000-4000-8000-000000000202', '5d000000-0000-4000-8000-000000000205', '5d000000-0000-4000-8000-000000000201', 'TEST-SID-OP');
+INSERT INTO test_sessions (session_id) VALUES ('5d000000-0000-4000-8000-000000000203');
+SELECT 'sample:' || short_id FROM physical_samples WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+SELECT 'operation:' || short_id FROM manufacturing_operations WHERE operation_id = '5d000000-0000-4000-8000-000000000202';
+SELECT 'test:' || short_id FROM test_sessions WHERE session_id = '5d000000-0000-4000-8000-000000000203';
+SELECT 'lookup:' || collection || '/' || record_id FROM record_by_short_id('5D0000000');
+DO $$ BEGIN
+  UPDATE physical_samples SET short_id = 'deadbeef' WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+  RAISE NOTICE 'guard:missing';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'guard:ok';
+END $$;
+SELECT 'samecode:' || short_id FROM physical_samples WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+UPDATE physical_samples SET nickname = 'renamed' WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+SELECT 'other_update:' || short_id FROM physical_samples WHERE sample_id = '5d000000-0000-4000-8000-000000000201';
+DELETE FROM test_sessions WHERE session_id = '5d000000-0000-4000-8000-000000000203';
+SELECT 'deleted_lookup:' || count(*) FROM record_by_short_id('5d00000000');
+SELECT 'registry_kept:' || count(*) FROM short_ids WHERE short_id = '5d00000000';
+INSERT INTO test_sessions (session_id) VALUES ('5d000000-0000-4000-8000-000000000204');
+SELECT 'no_reuse:' || short_id FROM test_sessions WHERE session_id = '5d000000-0000-4000-8000-000000000204';
+SELECT 'not_null:' || count(*) FROM information_schema.columns
+  WHERE column_name = 'short_id' AND is_nullable = 'NO'
+    AND table_name IN ('physical_samples', 'manufacturing_operations', 'test_sessions');
+SELECT 'directus_rows:' || count(*) FROM directus_fields
+  WHERE field = 'short_id' AND readonly
+    AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions');
+SELECT 'comments:' || count(*) FROM pg_description d JOIN pg_class c ON c.oid = d.objoid
+  WHERE c.relname = 'short_ids' AND d.objsubid = 0;
+ROLLBACK;
+SQL
+)
+sid_check() { grep -q -- "$1" <<<"$sid_out" && ok "$2" || bad "$2 (psql output: $sid_out)"; }
+sid_check "sample:5d000000$" "a new sample gets the first 8 hex characters of its id"
+sid_check "operation:5d0000000$" "an operation whose 8 characters are taken by a sample gets 9"
+sid_check "test:5d00000000$" "a test whose 8 and 9 characters are taken gets 10"
+sid_check "lookup:manufacturing_operations/5d000000-0000-4000-8000-000000000202" "record_by_short_id finds the record (case-insensitive)"
+sid_check "guard:ok" "changing a short_id is refused"
+sid_check "samecode:5d000000$" "a refused change leaves the short_id as it was"
+sid_check "other_update:5d000000$" "other updates keep the short_id"
+sid_check "deleted_lookup:0" "a deleted record's short ID resolves to nothing"
+sid_check "registry_kept:1" "a deleted record's short ID stays reserved"
+sid_check "no_reuse:5d000000000$" "a reserved short ID is never handed out again"
+sid_check "not_null:3" "short_id is NOT NULL on the three tables"
+sid_check "directus_rows:3" "the three short_id fields are registered read-only in Directus"
+sid_check "comments:1" "short_ids carries a table comment"
+run_eq "short_id has a column default on the three tables (Directus demands a NOT NULL column without one)" \
+    "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'short_id' AND column_default IS NOT NULL AND table_name IN ('physical_samples', 'manufacturing_operations', 'test_sessions')" \
+    "3"
+run_eq "the short_id format CHECKs exist and are validated on the three tables (so the empty default can never be stored)" \
+    "SELECT count(*) FROM pg_constraint WHERE conname IN ('physical_samples_short_id_format_check', 'manufacturing_operations_short_id_format_check', 'test_sessions_short_id_format_check') AND convalidated" \
+    "3"
+# With the short-ID triggers bypassed (session_replication_role = replica) an insert that omits short_id
+# would store the '' column default; the format CHECK must refuse it. Rolled back.
+fmt_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+SET LOCAL session_replication_role = replica;
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('5d000000-0000-4000-8000-000000000215', 'T-FMT-M', 'short id format test method');
+DO $$ BEGIN
+  INSERT INTO physical_samples (sample_id, sample_code) VALUES ('5d000000-0000-4000-8000-000000000211', 'TEST-FMT-001');
+  RAISE NOTICE 'fmt_sample:missing';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'fmt_sample:ok';
+END $$;
+DO $$ BEGIN
+  INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, pass_code)
+  VALUES ('5d000000-0000-4000-8000-000000000212', '5d000000-0000-4000-8000-000000000215', 'sintering', 'test', 'TEST-FMT-OP');
+  RAISE NOTICE 'fmt_operation:missing';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'fmt_operation:ok';
+END $$;
+DO $$ BEGIN
+  INSERT INTO test_sessions (session_id) VALUES ('5d000000-0000-4000-8000-000000000213');
+  RAISE NOTICE 'fmt_test:missing';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'fmt_test:ok';
+END $$;
+ROLLBACK;
+SQL
+)
+fmt_check() { grep -q -- "$1" <<<"$fmt_out" && ok "$2" || bad "$2 (psql output: $fmt_out)"; }
+fmt_check "fmt_sample:ok" "a sample inserted without a short_id (trigger bypassed) is refused by the format CHECK"
+fmt_check "fmt_operation:ok" "an operation inserted without a short_id (trigger bypassed) is refused by the format CHECK"
+fmt_check "fmt_test:ok" "a test inserted without a short_id (trigger bypassed) is refused by the format CHECK"
+
+echo "== Short IDs: the back-fill (T0a) =="
+# Runs the real back-fill SQL, extracted from migration 150 between its backfill:start / backfill:end
+# markers, on rows made to look like pre-migration data (short_id NULL, no registry row), inside
+# a rolled-back transaction. The three user-trigger sets are bypassed for the setup and must be
+# back to enabled ('O') afterwards. The guard is run on its own, on a trigger set to ENABLE ALWAYS.
+SID_MIG=db/migrations/20261010000150_short_ids.sql
+sid_backfill=$(awk '/^-- backfill:start/{f=1;next}/^-- backfill:end/{f=0}f' "$SID_MIG")
+sid_guard=$(printf '%s\n' "$sid_backfill" | awk '/^DO \$\$/{f=1} f{print} f && /^END \$\$;/{exit}')
+[[ -n "$sid_backfill" && -n "$sid_guard" ]] && ok "found the short-ID back-fill and its guard in the migration" \
+    || bad "could not extract the short-ID back-fill / guard from $SID_MIG"
+bf_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code)
+VALUES ('6b000000-0000-4000-8000-000000000301', 'TEST-SBF-001');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('6b000000-0000-4000-8000-000000000305', 'T-SBF-M', 'short id back-fill test method');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code)
+VALUES ('6b000000-0000-4000-8000-000000000302', '6b000000-0000-4000-8000-000000000305', '6b000000-0000-4000-8000-000000000301', 'TEST-SBF-OP');
+INSERT INTO test_sessions (session_id) VALUES ('6b000000-0000-4000-8000-000000000303');
+-- make them look like pre-migration rows: no short_id, no registry row, a recorded version
+ALTER TABLE physical_samples ALTER COLUMN short_id DROP NOT NULL;
+ALTER TABLE manufacturing_operations ALTER COLUMN short_id DROP NOT NULL;
+ALTER TABLE test_sessions ALTER COLUMN short_id DROP NOT NULL;
+ALTER TABLE physical_samples DISABLE TRIGGER USER;
+ALTER TABLE manufacturing_operations DISABLE TRIGGER USER;
+ALTER TABLE test_sessions DISABLE TRIGGER USER;
+UPDATE physical_samples SET short_id = NULL, version = 7 WHERE sample_id = '6b000000-0000-4000-8000-000000000301';
+UPDATE manufacturing_operations SET short_id = NULL, version = 5 WHERE operation_id = '6b000000-0000-4000-8000-000000000302';
+UPDATE test_sessions SET short_id = NULL, version = 3 WHERE session_id = '6b000000-0000-4000-8000-000000000303';
+DELETE FROM short_ids WHERE record_id IN ('6b000000-0000-4000-8000-000000000301',
+    '6b000000-0000-4000-8000-000000000302', '6b000000-0000-4000-8000-000000000303');
+ALTER TABLE physical_samples ENABLE TRIGGER USER;
+ALTER TABLE manufacturing_operations ENABLE TRIGGER USER;
+ALTER TABLE test_sessions ENABLE TRIGGER USER;
+SELECT (SELECT sum(version) FROM physical_samples) + (SELECT sum(version) FROM manufacturing_operations)
+     + (SELECT sum(version) FROM test_sessions) AS vsum \gset
+SELECT COALESCE(max(log_id), 0) AS lid FROM audit_logs \gset
+SELECT 'bf_setup:' || count(*) FROM (
+    SELECT short_id FROM physical_samples WHERE sample_id = '6b000000-0000-4000-8000-000000000301'
+    UNION ALL SELECT short_id FROM manufacturing_operations WHERE operation_id = '6b000000-0000-4000-8000-000000000302'
+    UNION ALL SELECT short_id FROM test_sessions WHERE session_id = '6b000000-0000-4000-8000-000000000303') x
+  WHERE short_id IS NULL;
+
+-- the guard refuses a trigger that is not in its normal state (here ENABLE ALWAYS), and the
+-- failed statement leaves it untouched
+SAVEPOINT guard_test;
+ALTER TABLE test_sessions ENABLE ALWAYS TRIGGER test_sessions_set_code;
+$sid_guard
+ROLLBACK TO guard_test;
+
+-- the real back-fill
+$sid_backfill
+
+SELECT 'bf_short:' || (SELECT short_id FROM physical_samples WHERE sample_id = '6b000000-0000-4000-8000-000000000301')
+    || '/' || (SELECT short_id FROM manufacturing_operations WHERE operation_id = '6b000000-0000-4000-8000-000000000302')
+    || '/' || (SELECT short_id FROM test_sessions WHERE session_id = '6b000000-0000-4000-8000-000000000303');
+SELECT 'bf_versions:' || (SELECT version FROM physical_samples WHERE sample_id = '6b000000-0000-4000-8000-000000000301')
+    || '/' || (SELECT version FROM manufacturing_operations WHERE operation_id = '6b000000-0000-4000-8000-000000000302')
+    || '/' || (SELECT version FROM test_sessions WHERE session_id = '6b000000-0000-4000-8000-000000000303');
+SELECT 'bf_vsum:' || ((SELECT sum(version) FROM physical_samples) + (SELECT sum(version) FROM manufacturing_operations)
+     + (SELECT sum(version) FROM test_sessions) = :vsum);
+SELECT 'bf_audit:' || count(*) FROM audit_logs
+  WHERE log_id > :lid AND table_name IN ('physical_samples', 'manufacturing_operations', 'test_sessions');
+SELECT 'bf_nulls:' || (SELECT count(*) FROM physical_samples WHERE short_id IS NULL)
+    || '/' || (SELECT count(*) FROM manufacturing_operations WHERE short_id IS NULL)
+    || '/' || (SELECT count(*) FROM test_sessions WHERE short_id IS NULL);
+SELECT 'bf_registry:' || count(*) FROM short_ids
+  WHERE record_id IN ('6b000000-0000-4000-8000-000000000301', '6b000000-0000-4000-8000-000000000302', '6b000000-0000-4000-8000-000000000303');
+SELECT 'bf_triggers:' || count(*) FILTER (WHERE tgenabled <> 'O') || '/' || count(*) FROM pg_trigger
+  WHERE NOT tgisinternal
+    AND tgrelid IN ('physical_samples'::regclass, 'manufacturing_operations'::regclass, 'test_sessions'::regclass);
+ROLLBACK;
+SQL
+)
+bf_check() { grep -q -- "$1" <<<"$bf_out" && ok "$2" || bad "$2 (psql output: $bf_out)"; }
+bf_check "bf_setup:3$" "(setup) the three rows have no short_id before the back-fill"
+bf_check "is not enabled in its normal state" "the back-fill guard refuses a user trigger that is ENABLE ALWAYS"
+bf_check "bf_short:6b000000/6b0000000/6b00000000$" "the back-fill assigns short IDs, lengthening on a clash across the three tables"
+bf_check "bf_versions:7/5/3$" "the back-fill leaves each version as it was"
+bf_check "bf_vsum:true$" "the back-fill changes no version in the three tables"
+bf_check "bf_audit:0$" "the back-fill writes no audit rows"
+bf_check "bf_nulls:0/0/0$" "no row is left without a short_id"
+bf_check "bf_registry:3$" "the back-fill registers the three short IDs"
+bf_check "bf_triggers:0/" "every user trigger on the three tables is enabled again after the back-fill"
+echo "== Test codes: built from the earliest subject and the type, kept up to date (T0a) =="
+tc_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('7e000000-0000-4000-8000-000000000211', 'TEST-TC-001'),
+    ('7e000000-0000-4000-8000-000000000212', 'TEST-TC-002');
+INSERT INTO people (person_id, full_name) VALUES ('7e000000-0000-4000-8000-000000000213', 'Test Code Owner');
+INSERT INTO tool_boxes (tool_box_id, tool_box_code, owner_person_id)
+VALUES ('7e000000-0000-4000-8000-000000000214', 'TEST-TC-BOX', '7e000000-0000-4000-8000-000000000213');
+INSERT INTO cutting_inserts (insert_id, insert_code, tool_box_id)
+VALUES ('7e000000-0000-4000-8000-000000000215', 'TEST-TC-BOX-1', '7e000000-0000-4000-8000-000000000214');
+INSERT INTO insert_edges (edge_id, edge_code, insert_id, edge_identifier)
+VALUES ('7e000000-0000-4000-8000-000000000216', 'TEST-TC-BOX-1A', '7e000000-0000-4000-8000-000000000215', 'A');
+INSERT INTO test_sessions (session_id, test_type) VALUES
+    ('7e000000-0000-4000-8000-000000000221', 'sem'),
+    ('7e000000-0000-4000-8000-000000000222', 'sem'),
+    ('7e000000-0000-4000-8000-000000000223', 'sem'),
+    ('7e000000-0000-4000-8000-000000000224', 'hardness'),
+    ('7e000000-0000-4000-8000-000000000226', 'sem'),
+    ('7e000000-0000-4000-8000-000000000228', NULL);
+INSERT INTO test_sessions (session_id, test_type, test_code)
+VALUES ('7e000000-0000-4000-8000-000000000225', 'sem', '  TEST-TC-001-SEM4 ');
+CREATE TEMP VIEW tc AS SELECT session_id, coalesce(test_code, 'null') AS code, test_code_is_manual AS manual FROM test_sessions;
+
+SELECT 'nocode:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000221', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'first:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000221', 'physical_samples', '7e000000-0000-4000-8000-000000000212');
+SELECT 'second:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000222', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'next:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+UPDATE test_sessions SET test_code = test_code WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'resave:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+UPDATE test_sessions SET test_type = 'xrd' WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+SELECT 'type:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000223', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'noreuse:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000223';
+UPDATE test_sessions SET test_code = 'MY-CODE' WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'typed:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+UPDATE test_sessions SET test_type = 'tem' WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'typed_kept:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+UPDATE test_sessions SET test_code = NULL WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'cleared:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000222';
+SELECT 'typed_insert:' || code || '/' || manual FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000225';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000226', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'skip_taken:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000226';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000224', 'insert_edges', '7e000000-0000-4000-8000-000000000216');
+SELECT 'edge:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000224';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000224', 'physical_samples', '7e000000-0000-4000-8000-000000000211');
+SELECT 'edge_kept:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000224';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000228', 'physical_samples', 'not-a-uuid');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000228', 'physical_samples', '7E000000-0000-4000-8000-000000000211');
+SELECT 'notype:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000228';
+UPDATE test_sessions SET test_type = 'dma' WHERE session_id = '7e000000-0000-4000-8000-000000000228';
+SELECT 'type_arrives:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000228';
+SELECT 'junk_subject:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000228';
+UPDATE physical_samples SET sample_code = 'TEST-TC-001B' WHERE sample_id = '7e000000-0000-4000-8000-000000000211';
+SELECT 'cascade:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000223';
+SELECT 'cascade_typed:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000225';
+SELECT 'cascade_edge_test:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000224';
+UPDATE insert_edges SET edge_code = 'TEST-TC-BOX-1Z' WHERE edge_id = '7e000000-0000-4000-8000-000000000216';
+SELECT 'cascade_edge:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000224';
+DELETE FROM test_sessions_subject
+  WHERE test_sessions_id = '7e000000-0000-4000-8000-000000000221' AND item = '7e000000-0000-4000-8000-000000000211';
+SELECT 'promoted:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+DELETE FROM test_sessions_subject WHERE test_sessions_id = '7e000000-0000-4000-8000-000000000221';
+SELECT 'orphan:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000221';
+DO $$ BEGIN
+  INSERT INTO test_sessions (session_id, test_code) VALUES ('7e000000-0000-4000-8000-000000000229', 'TEST-TC-001B-SEM3');
+  RAISE NOTICE 'unique:missing';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'unique:ok';
+END $$;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('7e000000-0000-4000-8000-000000000231', 'TEST-TC-ORP'),
+    ('7e000000-0000-4000-8000-000000000232', 'TEST-TC-NUL');
+INSERT INTO test_sessions (session_id, test_type) VALUES
+    ('7e000000-0000-4000-8000-000000000241', 'sem'),
+    ('7e000000-0000-4000-8000-000000000242', 'sem');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item) VALUES
+    ('7e000000-0000-4000-8000-000000000241', 'physical_samples', '7e000000-0000-4000-8000-000000000231'),
+    ('7e000000-0000-4000-8000-000000000242', 'physical_samples', '7e000000-0000-4000-8000-000000000232');
+DELETE FROM test_sessions_subject WHERE test_sessions_id = '7e000000-0000-4000-8000-000000000241';
+UPDATE test_sessions SET test_type = NULL WHERE session_id = '7e000000-0000-4000-8000-000000000242';
+UPDATE physical_samples SET sample_code = 'TEST-TC-ORP2' WHERE sample_id = '7e000000-0000-4000-8000-000000000231';
+UPDATE physical_samples SET sample_code = 'TEST-TC-NUL2' WHERE sample_id = '7e000000-0000-4000-8000-000000000232';
+SELECT 'orphan_rename:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000241';
+SELECT 'notype_rename:' || code FROM tc WHERE session_id = '7e000000-0000-4000-8000-000000000242';
+SELECT 'directus:' || count(*) FROM directus_fields WHERE collection = 'test_sessions'
+  AND field IN ('test_code', 'test_code_number', 'test_code_type', 'test_code_is_manual',
+                'test_code_subject_collection', 'test_code_subject_id');
+SELECT 'directus_visible:' || count(*) FROM directus_fields WHERE collection = 'test_sessions' AND field = 'test_code' AND NOT hidden;
+ROLLBACK;
+SQL
+)
+tc_check() { grep -q -- "$1" <<<"$tc_out" && ok "$2" || bad "$2 (psql output: $tc_out)"; }
+tc_check "nocode:null$" "a test with no subject has no code"
+tc_check "first:TEST-TC-001-SEM1/false$" "linking the first subject gives {sample code}-{TYPE}1, automatic"
+tc_check "second:TEST-TC-001-SEM1$" "linking a second subject changes nothing"
+tc_check "next:TEST-TC-001-SEM2$" "the next SEM test on the sample gets 2"
+tc_check "resave:TEST-TC-001-SEM2/false$" "re-saving the same code keeps it automatic"
+tc_check "type:TEST-TC-001-XRD1$" "a type change takes the next number of the new type"
+tc_check "noreuse:TEST-TC-001-SEM3$" "a number that moved away is not handed out again"
+tc_check "typed:MY-CODE/true$" "a typed code is kept and flagged as typed"
+tc_check "typed_kept:MY-CODE$" "a typed code survives a type change"
+tc_check "cleared:TEST-TC-001-TEM1/false$" "clearing a typed code goes back to automatic with the current type"
+tc_check "typed_insert:TEST-TC-001-SEM4/true$" "a code given on insert is typed (and trimmed)"
+tc_check "skip_taken:TEST-TC-001-SEM5$" "an automatic code skips a number someone typed by hand"
+tc_check "edge:TEST-TC-BOX-1A-HRD1$" "an insert-edge subject uses the edge code"
+tc_check "edge_kept:TEST-TC-BOX-1A-HRD1$" "adding a sample to an edge test keeps the edge-based code"
+tc_check "notype:null$" "a test with a subject but no type has no code"
+tc_check "type_arrives:TEST-TC-001-DMA1$" "setting the type gives the code (upper-case junction item accepted)"
+tc_check "junk_subject:TEST-TC-001-DMA1$" "a junk junction item linked earlier is skipped when building the code"
+tc_check "cascade:TEST-TC-001B-SEM3$" "a corrected sample code flows into its tests' automatic codes"
+tc_check "cascade_typed:TEST-TC-001-SEM4$" "a typed code ignores a sample code change"
+tc_check "cascade_edge_test:TEST-TC-BOX-1A-HRD1$" "a sample code change leaves an edge-based code alone"
+tc_check "cascade_edge:TEST-TC-BOX-1Z-HRD1$" "a corrected edge code flows into its tests"
+tc_check "promoted:TEST-TC-002-XRD1$" "removing the code's subject re-codes the test from the next subject"
+tc_check "orphan:TEST-TC-002-XRD1$" "a test that loses all its subjects keeps its last code"
+tc_check "unique:ok" "test codes are unique"
+tc_check "directus:6$" "the six test-code fields are registered in Directus"
+tc_check "directus_visible:1$" "only test_code is visible on the form"
+tc_check "orphan_rename:TEST-TC-ORP-SEM1$" "renaming the old subject of an orphaned test keeps its code"
+tc_check "notype_rename:TEST-TC-NUL-SEM1$" "renaming the subject of a test whose type was cleared keeps its code"
+
+echo "== Test codes: client-supplied bookkeeping is ignored; a taken rebuilt code draws a new number (T0a) =="
+# A clone (Directus "Save as copy") carries the source test's test_code_* columns; they must not
+# decide the copy's code. Each risky step is in a DO block that reports instead of aborting, so a
+# regression shows up as a failed check, not a dead transaction. Rolled back.
+cg_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('7e000000-0000-4000-8000-000000000251', 'TEST-CG-001'),
+    ('7e000000-0000-4000-8000-000000000253', 'TEST-CG-003');
+INSERT INTO test_sessions (session_id, test_type) VALUES ('7e000000-0000-4000-8000-000000000261', 'sem');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000261', 'physical_samples', '7e000000-0000-4000-8000-000000000251');
+SELECT 'cg_source:' || test_code || '/' || test_code_number FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000261';
+
+-- (a) a copy that carries the source's bookkeeping but no code gets the next free number
+DO $$
+DECLARE v TEXT;
+BEGIN
+  INSERT INTO test_sessions (session_id, test_type, test_code_number, test_code_type,
+                             test_code_subject_collection, test_code_subject_id)
+  VALUES ('7e000000-0000-4000-8000-000000000262', 'sem', 1, 'sem', 'physical_samples',
+          '7e000000-0000-4000-8000-000000000251');
+  INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+  VALUES ('7e000000-0000-4000-8000-000000000262', 'physical_samples', '7e000000-0000-4000-8000-000000000251');
+  SELECT test_code INTO v FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000262';
+  RAISE NOTICE 'copy_nocode:%', v;
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'copy_nocode:unique_violation';
+END $$;
+
+-- (b) a copy that also carries the source's code is still refused as a duplicate
+DO $$
+BEGIN
+  INSERT INTO test_sessions (session_id, test_type, test_code, test_code_number, test_code_type,
+                             test_code_subject_collection, test_code_subject_id)
+  VALUES ('7e000000-0000-4000-8000-000000000263', 'sem', 'TEST-CG-001-SEM1', 1, 'sem', 'physical_samples',
+          '7e000000-0000-4000-8000-000000000251');
+  RAISE NOTICE 'copy_unique:missing';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'copy_unique:ok';
+END $$;
+
+-- (c) an UPDATE cannot change the bookkeeping columns
+UPDATE test_sessions SET test_code_number = 9, test_code_type = 'tem', test_code_subject_collection = 'insert_edges',
+       test_code_subject_id = '7e000000-0000-4000-8000-000000000253'
+ WHERE session_id = '7e000000-0000-4000-8000-000000000261';
+SELECT 'bookkeeping_ignored:' || test_code || '/' || test_code_number || '/' || test_code_type || '/'
+    || test_code_subject_collection || '/' || (test_code_subject_id = '7e000000-0000-4000-8000-000000000251')
+  FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000261';
+
+-- (d) renaming a subject to a name whose next code is taken (typed by hand on another test)
+-- draws the next number instead of failing on UNIQUE
+INSERT INTO test_sessions (session_id, test_type) VALUES ('7e000000-0000-4000-8000-000000000264', 'sem');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('7e000000-0000-4000-8000-000000000264', 'physical_samples', '7e000000-0000-4000-8000-000000000253');
+INSERT INTO test_sessions (session_id, test_type, test_code)
+VALUES ('7e000000-0000-4000-8000-000000000265', 'sem', 'TEST-CG-004-SEM1');
+SELECT 'rename_before:' || test_code FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000264';
+DO $$
+DECLARE v TEXT;
+BEGIN
+  UPDATE physical_samples SET sample_code = 'TEST-CG-004' WHERE sample_id = '7e000000-0000-4000-8000-000000000253';
+  SELECT test_code INTO v FROM test_sessions WHERE session_id = '7e000000-0000-4000-8000-000000000264';
+  RAISE NOTICE 'rename_taken:%', v;
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'rename_taken:unique_violation';
+END $$;
+ROLLBACK;
+SQL
+)
+cg_check() { grep -q -- "$1" <<<"$cg_out" && ok "$2" || bad "$2 (psql output: $cg_out)"; }
+cg_check "cg_source:TEST-CG-001-SEM1/1$" "(setup) the source test is TEST-CG-001-SEM1, number 1"
+cg_check "copy_nocode:TEST-CG-001-SEM2$" "a copy carrying the source's bookkeeping but no code gets the next free number"
+cg_check "copy_unique:ok" "a copy carrying the source's code is refused as a duplicate"
+cg_check "bookkeeping_ignored:TEST-CG-001-SEM1/1/sem/physical_samples/true$" "an UPDATE of the test_code_* bookkeeping columns is ignored"
+cg_check "rename_before:TEST-CG-003-SEM1$" "(setup) the renamed sample's test starts as TEST-CG-003-SEM1"
+cg_check "rename_taken:TEST-CG-004-SEM2$" "renaming a subject to a name whose rebuilt code is taken draws the next number"
+
+echo "== Test codes: a subject written directly on the test is coded too (T0a follow-up) =="
+# Directus "Save as copy" copies the hidden derived sample_id, an importer may set sample_id or
+# insert_edge_id: the junction insert that follows then derives the same primary, the sync's UPDATE
+# is a no-op and the BEFORE trigger never runs again. The trigger therefore falls back to the
+# directly written columns when the junction has no subject yet. Rolled back.
+fb_out=$($PSQL 2>&1 <<'SQL'
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('8c000000-0000-4000-8000-000000000011', 'TEST-FB-001'),
+    ('8c000000-0000-4000-8000-000000000012', 'TEST-FB-002');
+INSERT INTO people (person_id, full_name) VALUES ('8c000000-0000-4000-8000-000000000013', 'Fallback Code Owner');
+INSERT INTO tool_boxes (tool_box_id, tool_box_code, owner_person_id)
+VALUES ('8c000000-0000-4000-8000-000000000014', 'TEST-FB-BOX', '8c000000-0000-4000-8000-000000000013');
+INSERT INTO cutting_inserts (insert_id, insert_code, tool_box_id)
+VALUES ('8c000000-0000-4000-8000-000000000015', 'TEST-FB-BOX-1', '8c000000-0000-4000-8000-000000000014');
+INSERT INTO insert_edges (edge_id, edge_code, insert_id, edge_identifier)
+VALUES ('8c000000-0000-4000-8000-000000000016', 'TEST-FB-BOX-1A', '8c000000-0000-4000-8000-000000000015', 'A');
+CREATE TEMP VIEW fb AS SELECT session_id, coalesce(test_code, 'null') AS code FROM test_sessions;
+
+-- (a) a test written with sample_id and no junction row is coded at INSERT
+INSERT INTO test_sessions (session_id, test_type, sample_id)
+VALUES ('8c000000-0000-4000-8000-000000000021', 'sem', '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_direct:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000021';
+-- (b) the junction row that follows (same primary, the sync is a no-op) leaves the code alone
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('8c000000-0000-4000-8000-000000000021', 'physical_samples', '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_junction_after:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000021';
+-- (c) a "Save as copy": sample_id and the source's bookkeeping carried, no code; then the junction
+INSERT INTO test_sessions (session_id, test_type, sample_id, test_code_number, test_code_type,
+                           test_code_subject_collection, test_code_subject_id)
+VALUES ('8c000000-0000-4000-8000-000000000022', 'sem', '8c000000-0000-4000-8000-000000000011',
+        1, 'sem', 'physical_samples', '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_clone:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000022';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('8c000000-0000-4000-8000-000000000022', 'physical_samples', '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_clone_junction:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000022';
+-- (d) an insert-edge subject written directly
+INSERT INTO test_sessions (session_id, test_type, insert_edge_id)
+VALUES ('8c000000-0000-4000-8000-000000000023', 'hardness', '8c000000-0000-4000-8000-000000000016');
+SELECT 'fb_edge:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000023';
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('8c000000-0000-4000-8000-000000000023', 'insert_edges', '8c000000-0000-4000-8000-000000000016');
+SELECT 'fb_edge_junction:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000023';
+-- (e) no type yet: no code; the type arriving gives the code from the direct subject
+INSERT INTO test_sessions (session_id, test_type, sample_id)
+VALUES ('8c000000-0000-4000-8000-000000000024', NULL, '8c000000-0000-4000-8000-000000000011');
+SELECT 'fb_notype:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000024';
+UPDATE test_sessions SET test_type = 'dma' WHERE session_id = '8c000000-0000-4000-8000-000000000024';
+SELECT 'fb_type_arrives:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000024';
+-- (f) a junction-linked test that loses its only subject keeps its code (the sync clears
+-- sample_id, so the fallback finds nothing)
+INSERT INTO test_sessions (session_id, test_type) VALUES ('8c000000-0000-4000-8000-000000000025', 'sem');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
+VALUES ('8c000000-0000-4000-8000-000000000025', 'physical_samples', '8c000000-0000-4000-8000-000000000012');
+SELECT 'fb_linked:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000025';
+DELETE FROM test_sessions_subject WHERE test_sessions_id = '8c000000-0000-4000-8000-000000000025';
+SELECT 'fb_orphan:' || coalesce(test_code, 'null') || '/' || (sample_id IS NULL)
+  FROM test_sessions WHERE session_id = '8c000000-0000-4000-8000-000000000025';
+-- the cascade on a corrected sample / edge code reaches fallback-coded tests, keeping their numbers
+UPDATE physical_samples SET sample_code = 'TEST-FB-001B' WHERE sample_id = '8c000000-0000-4000-8000-000000000011';
+SELECT 'fb_cascade:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000021';
+SELECT 'fb_cascade_clone:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000022';
+UPDATE insert_edges SET edge_code = 'TEST-FB-BOX-1Z' WHERE edge_id = '8c000000-0000-4000-8000-000000000016';
+SELECT 'fb_cascade_edge:' || code FROM fb WHERE session_id = '8c000000-0000-4000-8000-000000000023';
+ROLLBACK;
+SQL
+)
+fb_check() { grep -qx -- "$1" <<<"$fb_out" && ok "$2" || bad "$2 (psql output: $fb_out)"; }
+fb_check "fb_direct:TEST-FB-001-SEM1" "a test written with sample_id and no junction row is coded at INSERT"
+fb_check "fb_junction_after:TEST-FB-001-SEM1" "the junction row that follows leaves that code unchanged"
+fb_check "fb_clone:TEST-FB-001-SEM2" "a copy carrying sample_id and the source's bookkeeping is coded at INSERT with the next number"
+fb_check "fb_clone_junction:TEST-FB-001-SEM2" "the copy's junction row leaves its code unchanged"
+fb_check "fb_edge:TEST-FB-BOX-1A-HRD1" "a test written with insert_edge_id and no junction row is coded from the edge"
+fb_check "fb_edge_junction:TEST-FB-BOX-1A-HRD1" "the edge test's junction row leaves its code unchanged"
+fb_check "fb_notype:null" "a direct subject without a test type gives no code"
+fb_check "fb_type_arrives:TEST-FB-001-DMA1" "setting the type then gives the code from the direct subject"
+fb_check "fb_linked:TEST-FB-002-SEM1" "a junction-linked test is coded as before"
+fb_check "fb_orphan:TEST-FB-002-SEM1/true" "a test that loses its only junction subject keeps its code (the fallback finds nothing)"
+fb_check "fb_cascade:TEST-FB-001B-SEM1" "a corrected sample code flows into a fallback-coded test"
+fb_check "fb_cascade_clone:TEST-FB-001B-SEM2" "a corrected sample code flows into a copy's fallback code, keeping its number"
+fb_check "fb_cascade_edge:TEST-FB-BOX-1Z-HRD1" "a corrected edge code flows into a fallback-coded edge test"
 
 echo "== Deleting samples and edges that are test subjects =="
 # Same fixture style as above; every row is rolled back. The back-fill statements are extracted
@@ -2093,6 +2717,9 @@ INSERT INTO physical_samples (sample_code) VALUES ('TEST-NOOWNER-001');
 "
 rv_out=$($PSQL 2>&1 <<SQL
 BEGIN;
+-- migration 143 keeps its ledger in d1_private; drop it (rolled back) so 141's down can drop the empty schema
+DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
+DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
@@ -2259,6 +2886,530 @@ rv_refuse "an alias name that another relation uses" \
     "UPDATE directus_relations SET one_field = NULL WHERE many_collection = 'test_sessions' AND many_field = 'project_id';
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('equipment', 'project_id', 'projects', 'sessions');" \
     "cannot name the alias projects.sessions"
+
+echo "== Operation code rule: code_num, operation_code_for, the run number (T0b) =="
+# One rolled-back transaction. Rows for operation_code_for are built in memory with jsonb_populate_record.
+# CI has no FCT HP D machines (the live ones come from the Lab Equipment import), so two are created here.
+OC_MIG=db/migrations/20261010000156_operation_code_rule.sql
+oc_backfill=$(awk '/^-- runbackfill:start/{f=1;next}/^-- runbackfill:end/{f=0}f' "$OC_MIG" 2>/dev/null)
+oc_guard=$(printf '%s\n' "$oc_backfill" | awk '/^DO \$\$/{f=1} f{print} f && /^END \$\$;/{exit}')
+[[ -n "$oc_backfill" && -n "$oc_guard" ]] && ok "found the run-number back-fill and its guard in the migration" \
+    || bad "could not extract the run-number back-fill / guard from $OC_MIG"
+OC_E25='9a000000-0000-4000-8000-000000000025'
+OC_E250='9a000000-0000-4000-8000-000000000250'
+oc_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO equipment (equipment_id, equipment_code, equipment_name, equipment_type) VALUES
+    ('$OC_E25',  'T-OC-FCT25',  'FCT HP D 25',  'FAST_Press'),
+    ('$OC_E250', 'T-OC-FCT250', 'FCT HP D 250', 'FAST_Press');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('9a000000-0000-4000-8000-000000000001', 'T-OC-M', 'operation code rule test method');
+
+SELECT 'cn:' || coalesce(code_num(0), '') || '|' || coalesce(code_num(0.05), '') || '|' || coalesce(code_num(1932.080), '')
+    || '|' || coalesce(code_num(30.000), '') || '|' || coalesce(code_num(123456789), '') || '|' || coalesce(code_num(-5.50), '')
+    || '|' || coalesce(code_num(NULL), '');
+
+CREATE FUNCTION pg_temp.oc(j jsonb, s text DEFAULT 'TEST-OC-001') RETURNS text LANGUAGE sql AS
+\$f\$ SELECT coalesce(operation_code_for(jsonb_populate_record(NULL::manufacturing_operations, j), s), '<null>') \$f\$;
+
+SELECT 'm_full:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8,"machining_cutting_speed_m_per_min":30,"machining_feed_mm_per_rev":0.1,"machining_axial_depth_of_cut_mm":1}');
+SELECT 'm_speed:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8,"machining_cutting_speed_m_per_min":30}');
+SELECT 'm_none:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"F","operation_sequence":8}');
+SELECT 'm_mt:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"MT-F","operation_sequence":8,"machining_cutting_speed_m_per_min":30}');
+SELECT 'm_mm:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"MM-R","operation_sequence":8}');
+SELECT 'm_word:' || pg_temp.oc('{"process_category":"machining","machining_operation_subtype":"facing","operation_sequence":8}');
+SELECT 'ht:' || pg_temp.oc('{"process_category":"heat_treatment","ht_treatment_type":"anneal","operation_sequence":2,"ht_peak_temp_celsius":1050,"ht_hold_time_min":60,"ht_cooling_method":"furnace"}');
+SELECT 'def:' || pg_temp.oc('{"process_category":"deformation","deform_deformation_type":"rolling","operation_sequence":3,"deform_deformation_temp_celsius":900,"deform_total_reduction_pct":50,"deform_pass_count":4}');
+SELECT 'def_unknown:' || pg_temp.oc('{"process_category":"deformation","deform_deformation_type":"weird","operation_sequence":3}');
+SELECT 'am:' || pg_temp.oc('{"process_category":"additive","operation_sequence":4,"am_laser_power_w":200,"am_scan_speed_mm_per_s":800,"am_layer_thickness_mm":0.03}');
+SELECT 'sint_utc:' || pg_temp.oc('{"process_category":"sintering","equipment_id":"$OC_E25","sintering_run_number":9500,"operation_date":"2026-10-09T23:30:00Z","sintering_max_temp_celsius":1150,"sintering_max_force_kn":101,"sintering_mould_diameter_mm":80}', NULL);
+SELECT 'sint_norun:' || pg_temp.oc('{"process_category":"sintering","equipment_id":"$OC_E25","operation_date":"2026-10-09T23:30:00Z","sintering_max_temp_celsius":1150}', NULL);
+SELECT 'sint_src250:' || pg_temp.oc('{"process_category":"sintering","source_system":"fast_250","sintering_run_number":12,"operation_date":"2026-01-02T12:00:00Z"}', NULL);
+SELECT 'sint_equip250:' || pg_temp.oc('{"process_category":"sintering","equipment_id":"$OC_E250","sintering_run_number":12,"operation_date":"2026-01-02T12:00:00Z"}', NULL);
+SELECT 'prep:' || pg_temp.oc('{"process_category":"sample_prep","operation_sequence":5}');
+SELECT 'nothing:' || pg_temp.oc('{}', NULL);
+
+-- the back-fill, on FAST-shaped rows carrying their code and run only in pass_code / source_run_uid
+INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, source_run_uid, equipment_id, operation_date,
+    sintering_max_temp_celsius, sintering_max_force_kn, sintering_mould_diameter_mm, pass_code) VALUES
+    ('9a000000-0000-4000-8000-000000000101', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_25', 'fast25|4624', '$OC_E25',
+        '2016-10-12T10:00:00Z', 1200, 14, 20, '12-10-16-MF25-4624-1200C_14kN_20dia'),
+    ('9a000000-0000-4000-8000-000000000102', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_25', 'fast25|9686', '$OC_E25',
+        '2025-02-13T08:00:00Z', NULL, NULL, NULL, '13-02-25-MF25-9686'),
+    ('9a000000-0000-4000-8000-000000000103', '9a000000-0000-4000-8000-000000000001', 'sintering', 'fast_250', 'fast250|77', '$OC_E250',
+        '2024-03-05T09:00:00Z', 1100, 30, NULL, '05-03-24-MF250-77-1100C_30kN');
+SELECT 'bf_before:' || count(*) FROM manufacturing_operations WHERE operation_id::text LIKE '9a000000-0000-4000-8000-0000000001%' AND sintering_run_number IS NULL;
+SAVEPOINT guard_test;
+ALTER TABLE manufacturing_operations ENABLE ALWAYS TRIGGER mfg_op_short_id;
+$oc_guard
+ROLLBACK TO guard_test;
+SELECT COALESCE(max(log_id), 0) AS lid FROM audit_logs \gset
+$oc_backfill
+SELECT 'bf_runs:' || string_agg(sintering_run_number::text, ',' ORDER BY operation_id) FROM manufacturing_operations
+  WHERE operation_id::text LIKE '9a000000-0000-4000-8000-0000000001%';
+SELECT 'bf_same:' || count(*) FILTER (WHERE operation_code_for(m, NULL) = m.pass_code) || '/' || count(*)
+  FROM manufacturing_operations m WHERE operation_id::text LIKE '9a000000-0000-4000-8000-0000000001%';
+SELECT 'bf_audit:' || count(*) FROM audit_logs WHERE log_id > :lid AND table_name = 'manufacturing_operations';
+SELECT 'bf_triggers:' || count(*) FILTER (WHERE tgenabled <> 'O') FROM pg_trigger
+  WHERE NOT tgisinternal AND tgrelid = 'manufacturing_operations'::regclass;
+
+-- one operation per machine run
+INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number, operation_date, pass_code)
+VALUES ('9a000000-0000-4000-8000-000000000111', '9a000000-0000-4000-8000-000000000001', 'sintering', 'test', '$OC_E25', 9500, '2026-10-09T23:30:00Z', 'TEST-OC-RUN-A');
+DO \$\$ BEGIN
+  INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number, operation_date, pass_code)
+  VALUES ('9a000000-0000-4000-8000-000000000112', '9a000000-0000-4000-8000-000000000001', 'sintering', 'test', '$OC_E25', 9500, '2026-10-10T08:00:00Z', 'TEST-OC-RUN-B');
+  RAISE NOTICE 'uniq_same:missing';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'uniq_same:ok';
+END \$\$;
+DO \$\$ BEGIN
+  INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number, operation_date, pass_code)
+  VALUES ('9a000000-0000-4000-8000-000000000113', '9a000000-0000-4000-8000-000000000001', 'sintering', 'test', '$OC_E250', 9500, '2026-10-09T23:30:00Z', 'TEST-OC-RUN-C');
+  RAISE NOTICE 'uniq_other:ok';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'uniq_other:refused';
+END \$\$;
+SELECT 'df:' || coalesce("group", '<null>') || '/' || coalesce(required::text, '<null>') || '/' || coalesce(hidden::text, '<null>') || '/' || count(*) OVER ()
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_run_number';
+ROLLBACK;
+SQL
+)
+oc_check() { grep -q -- "$1" <<<"$oc_out" && ok "$2" || bad "$2 (psql output: $oc_out)"; }
+oc_check "^cn:0|0.05|1932.08|30|123457000|-5.5|$" "code_num writes 6 significant digits without trailing zeros (0, 0.05, 1932.08, 30, 123457000, -5.5, NULL)"
+oc_check "^m_full:TEST-OC-001-F8-30MPM_0.1feed_1DoC$" "machining code: sample, subtype + sequence, then the set parameters"
+oc_check "^m_speed:TEST-OC-001-F8-30MPM$" "machining code with only the speed set"
+oc_check "^m_none:TEST-OC-001-F8$" "machining code with no parameters"
+oc_check "^m_mt:TEST-OC-001-F8-30MPM$" "machining code: a subtype stored as method code + letter (MT-F) gives the bare letter, as every stored code has it"
+oc_check "^m_mm:TEST-OC-001-R8$" "machining code: MM-R gives R"
+oc_check "^m_word:TEST-OC-001-facing8$" "machining code: a subtype without a method prefix is used as it is"
+oc_check "^ht:TEST-OC-001-HTA2-1050C_60min_FC$" "heat treatment code"
+oc_check "^def:TEST-OC-001-DR3-900C_50pct_4p$" "deformation code"
+oc_check "^def_unknown:TEST-OC-001-D3$" "deformation code with an unknown type falls back to D"
+oc_check "^am:TEST-OC-001-AM4-200W_800mmps_0.03mm$" "additive code without a process variant"
+oc_check "^sint_utc:09-10-26-MF25-9500-1150C_101kN_80dia$" "sintering code: UTC date, machine from the equipment, run number"
+oc_check "^sint_norun:<null>$" "sintering code is NULL without a run number (never invented)"
+oc_check "^sint_src250:02-01-26-MF250-12$" "sintering code takes the machine from source_system when there is no equipment"
+oc_check "^sint_equip250:02-01-26-MF250-12$" "sintering code: machine 250 from the equipment name"
+oc_check "^prep:TEST-OC-001-5$" "a category without its own rule gives sample code + sequence"
+oc_check "^nothing:<null>$" "no category and no sample gives NULL"
+oc_check "^bf_before:3$" "(setup) the three FAST-shaped rows have no run number before the back-fill"
+oc_check "is not in its normal state" "the run-number back-fill guard refuses a user trigger that is ENABLE ALWAYS"
+oc_check "^bf_runs:4624,9686,77$" "the back-fill reads the run number from source_run_uid"
+oc_check "^bf_same:3/3$" "operation_code_for reproduces the imported FAST code for every back-filled row"
+oc_check "^bf_audit:0$" "the back-fill writes no audit rows"
+oc_check "^bf_triggers:0$" "every user trigger on manufacturing_operations is enabled again after the back-fill"
+oc_check "uniq_same:ok" "a second sintering operation with the same machine and run is refused"
+oc_check "uniq_other:ok" "the same run number on the other machine is allowed"
+oc_check "^df:sintering_machine_group/false/false/1$" "the run number field is in the sintering group, not required, not hidden"
+echo "== Operation codes follow their fields (T0b) =="
+# One rolled-back transaction. A person's typed code is kept; an automatic one is rebuilt from the
+# rule (operation_code_for) whenever a field it is built from changes. Prefix 9b000000-0000-4000-8000-.
+OT_MIG=db/migrations/20261010000157_operation_code_trigger.sql
+ot_seqfill=$(awk '/^-- seqbackfill:start/{f=1;next}/^-- seqbackfill:end/{f=0}f' "$OT_MIG" 2>/dev/null)
+[[ -n "$ot_seqfill" ]] && ok "found the sequence back-fill in the migration" \
+    || bad "could not extract the sequence back-fill from $OT_MIG"
+OT_P='9b000000-0000-4000-8000-'
+ot_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES
+    ('${OT_P}000000000001', 'TEST-OT-001'), ('${OT_P}000000000002', 'TEST-OT-002'), ('${OT_P}000000000003', 'TEST-OT-003'),
+    ('${OT_P}000000000004', 'TEST-OT-004');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name) VALUES
+    ('${OT_P}000000000011', 'T-OT-M1', 'operation code trigger test method 1'),
+    ('${OT_P}000000000012', 'T-OT-M2', 'operation code trigger test method 2');
+INSERT INTO equipment (equipment_id, equipment_code, equipment_name, equipment_type) VALUES
+    ('${OT_P}000000000021', 'T-OT-FCT25',  'FCT HP D 25',  'FAST_Press'),
+    ('${OT_P}000000000022', 'T-OT-FCT250', 'FCT HP D 250', 'FAST_Press');
+
+-- new_auto: a machining operation without a code gets its number and the rule's code
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype,
+    machining_cutting_speed_m_per_min, machining_feed_mm_per_rev, machining_axial_depth_of_cut_mm)
+VALUES ('${OT_P}000000000101', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'F', 30, 0.1, 1);
+SELECT 'new_auto:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- param_follow
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 45 WHERE operation_id = '${OT_P}000000000101';
+SELECT 'param_follow:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- resend: the same code written again changes nothing and the op stays automatic
+UPDATE manufacturing_operations SET pass_code = pass_code WHERE operation_id = '${OT_P}000000000101';
+SELECT 'resend:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+UPDATE manufacturing_operations SET machining_feed_mm_per_rev = 0.2 WHERE operation_id = '${OT_P}000000000101';
+SELECT 'resend_follow:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- notes: nothing the code is built from changed
+UPDATE manufacturing_operations SET outcome_notes = 'just a note' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'notes:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- subtype_keeps_number
+UPDATE manufacturing_operations SET machining_operation_subtype = 'R' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'subtype:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- sample_change: TEST-OT-002 already has one operation (number 1)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${OT_P}000000000102', '${OT_P}000000000011', '${OT_P}000000000002', 'machining', 'F');
+SELECT 'other_first:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000102';
+UPDATE manufacturing_operations SET sample_id = '${OT_P}000000000002' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'sample_change:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- method_change: a third operation on TEST-OT-002 raises the highest number to 3, so the moved one gets 4
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${OT_P}000000000103', '${OT_P}000000000011', '${OT_P}000000000002', 'machining', 'F');
+UPDATE manufacturing_operations SET method_id = '${OT_P}000000000012' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'method_change:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- typed: a code a person wrote is kept, and later field changes leave it alone
+UPDATE manufacturing_operations SET pass_code = 'MY-OP-CODE' WHERE operation_id = '${OT_P}000000000101';
+SELECT 'typed:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 50 WHERE operation_id = '${OT_P}000000000101';
+SELECT 'typed_kept:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- typed_equals_rule: writing exactly the rule's value makes it automatic again
+SELECT operation_code_for(m, 'TEST-OT-002') AS rule_value FROM manufacturing_operations m WHERE operation_id = '${OT_P}000000000101' \gset
+UPDATE manufacturing_operations SET pass_code = :'rule_value' WHERE operation_id = '${OT_P}000000000101';
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 55 WHERE operation_id = '${OT_P}000000000101';
+SELECT 'typed_equals_rule:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- cleared: NULL rebuilds from the rule
+UPDATE manufacturing_operations SET pass_code = 'MY-OP-CODE' WHERE operation_id = '${OT_P}000000000101';
+UPDATE manufacturing_operations SET pass_code = NULL WHERE operation_id = '${OT_P}000000000101';
+SELECT 'cleared:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- placeholder: an old client's {seq} code counts as automatic (TEST-OT-001 has no operation left)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype, pass_code)
+VALUES ('${OT_P}000000000111', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'F', '{seq}-whatever');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype,
+    machining_cutting_speed_m_per_min, pass_code)
+VALUES ('${OT_P}000000000112', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 'F', 30, 'TEST-OT-001-F{seq}-30MPM');
+SELECT 'placeholder_a:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000111';
+SELECT 'placeholder_b:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000112';
+-- clear_move: clearing the code in the same statement as a sample change still takes the next number there
+UPDATE manufacturing_operations SET sample_id = '${OT_P}000000000001', pass_code = NULL WHERE operation_id = '${OT_P}000000000101';
+SELECT 'clear_move:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000101';
+-- legacy_kept: a stored code that is not the rule's value counts as typed
+ALTER TABLE manufacturing_operations DISABLE TRIGGER mfg_op_set_code;
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, machining_operation_subtype,
+    machining_cutting_speed_m_per_min, machining_feed_mm_per_rev, machining_axial_depth_of_cut_mm, pass_code)
+VALUES ('${OT_P}000000000121', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 9, 'F', 30, 0.05, 0.1, 'TEST-OT-001-F9-30MPM_0.05feed_0.1DoC_');
+-- null_code_becomes_auto: no code yet counts as automatic, but only once something it is built from changes
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, machining_operation_subtype,
+    machining_cutting_speed_m_per_min)
+VALUES ('${OT_P}000000000122', '${OT_P}000000000011', '${OT_P}000000000001', 'machining', 20, 'F', 30);
+ALTER TABLE manufacturing_operations ENABLE TRIGGER mfg_op_set_code;
+UPDATE manufacturing_operations SET machining_feed_mm_per_rev = 0.07 WHERE operation_id = '${OT_P}000000000121';
+SELECT 'legacy_kept:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000121';
+UPDATE manufacturing_operations SET outcome_notes = 'a note' WHERE operation_id = '${OT_P}000000000122';
+SELECT 'null_notes:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000122';
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 31 WHERE operation_id = '${OT_P}000000000122';
+SELECT 'null_speed:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000122';
+-- frozen: an experiment_sheet row keeps its code; a person may still rename it
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, source_system,
+    machining_operation_subtype, machining_cutting_speed_m_per_min, pass_code)
+VALUES ('${OT_P}000000000131', '${OT_P}000000000011', '${OT_P}000000000003', 'machining', 1, 'experiment_sheet', 'F', 30, 'EXP-SHEET-OLD');
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 60 WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+UPDATE manufacturing_operations SET pass_code = 'EXP-SHEET-RENAMED' WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_typed:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+-- frozen: clearing the code (NULL, or blank) keeps the saved one; typing a new one stores it
+UPDATE manufacturing_operations SET pass_code = NULL WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_clear:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+UPDATE manufacturing_operations SET pass_code = '   ' WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_blank:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+UPDATE manufacturing_operations SET pass_code = 'X-{seq}-{mf}' WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_placeholder:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+UPDATE manufacturing_operations SET pass_code = 'EXP-SHEET-RENAMED-2' WHERE operation_id = '${OT_P}000000000131';
+SELECT 'frozen_retyped:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000131';
+-- fast_follow: a FAST-shaped row follows its temperature
+INSERT INTO manufacturing_operations (operation_id, method_id, process_category, source_system, equipment_id, sintering_run_number,
+    operation_date, sintering_max_temp_celsius, sintering_max_force_kn, sintering_mould_diameter_mm, pass_code)
+VALUES ('${OT_P}000000000141', '${OT_P}000000000011', 'sintering', 'fast_25', '${OT_P}000000000021', 4624,
+    '2016-10-12T10:00:00Z', 1200, 14, 20, '12-10-16-MF25-4624-1200C_14kN_20dia');
+UPDATE manufacturing_operations SET sintering_max_temp_celsius = 1250 WHERE operation_id = '${OT_P}000000000141';
+SELECT 'fast_follow:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000141';
+-- sinter_hand: a hand-made sintering operation has no code until it has a run number
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, equipment_id, operation_date)
+VALUES ('${OT_P}000000000142', '${OT_P}000000000011', '${OT_P}000000000003', 'sintering', '${OT_P}000000000022', '2026-03-05T09:00:00Z');
+SELECT 'sinter_hand_norun:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000142';
+UPDATE manufacturing_operations SET sintering_run_number = 400 WHERE operation_id = '${OT_P}000000000142';
+SELECT 'sinter_hand_run:' || pass_code FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000142';
+-- an old client's {mf} placeholder is automatic too, and the run number is never invented
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, equipment_id, operation_date, pass_code)
+VALUES ('${OT_P}000000000143', '${OT_P}000000000011', '${OT_P}000000000003', 'sintering', '${OT_P}000000000022', '2026-03-06T09:00:00Z', '06-03-26-MF{mf}');
+SELECT 'mf_placeholder:' || coalesce(pass_code, '<null>') FROM manufacturing_operations WHERE operation_id = '${OT_P}000000000143';
+-- seq_backfill: the extracted back-fill, run as the migration runs it (before mfg_op_set_code exists,
+-- so with that trigger disabled; the other user triggers stay on). Imported rows keep a NULL sequence.
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, source_system, machining_operation_subtype, operation_sequence, pass_code) VALUES
+    ('${OT_P}000000000151', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'TEST-OT-004-F2_1-60MPM'),
+    ('${OT_P}000000000152', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'N/R'),
+    ('${OT_P}000000000153', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'TEST-OT-004-F3_30MPM_0.05feed'),
+    ('${OT_P}000000000154', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'TEST-OT-004-F5-30MPM'),
+    ('${OT_P}000000000155', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'F', 5, 'TEST-OT-004-F5-X'),
+    ('${OT_P}000000000156', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-R', NULL, 'TEST-OT-004-R6-a'),
+    ('${OT_P}000000000157', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-R', NULL, 'TEST-OT-004-R6-b'),
+    ('${OT_P}000000000158', '${OT_P}000000000011', '${OT_P}000000000004', 'machining', 'test', 'MT-F', NULL, 'TEST-OT-004-7-x');
+SELECT 'bf_before:' || count(*) FROM manufacturing_operations WHERE operation_id::text LIKE '${OT_P}00000000015%' AND operation_sequence IS NULL;
+ALTER TABLE manufacturing_operations DISABLE TRIGGER mfg_op_set_code;
+$ot_seqfill
+ALTER TABLE manufacturing_operations ENABLE TRIGGER mfg_op_set_code;
+SELECT 'bf_seq:' || string_agg(coalesce(operation_sequence::text, '<null>'), ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id::text LIKE '${OT_P}00000000015%';
+SELECT 'bf_codes:' || string_agg(pass_code, ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id::text LIKE '${OT_P}00000000015%';
+SELECT 'bf_ledger:' || count(*) || ':' || string_agg(filled::text, ',' ORDER BY filled) FROM d1_private.operation_sequence_backfill WHERE operation_id::text LIKE '${OT_P}%';
+SELECT 'trg:' || count(*) FILTER (WHERE tgname = 'mfg_op_set_code' AND tgenabled = 'O')
+    || '/' || count(*) FILTER (WHERE tgname = 'mfg_op_assign_numbers') FROM pg_trigger
+    WHERE NOT tgisinternal AND tgrelid = 'manufacturing_operations'::regclass;
+ROLLBACK;
+SQL
+)
+ot_check() { grep -qx -- "$1" <<<"$ot_out" && ok "$2" || bad "$2 (psql output: $ot_out)"; }
+ot_check "new_auto:1:TEST-OT-001-F1-30MPM_0.1feed_1DoC" "a new machining operation gets number 1 and the rule's code"
+ot_check "param_follow:1:TEST-OT-001-F1-45MPM_0.1feed_1DoC" "changing the speed rewrites the code and keeps the number"
+ot_check "resend:TEST-OT-001-F1-45MPM_0.1feed_1DoC" "writing the same code again changes nothing"
+ot_check "resend_follow:TEST-OT-001-F1-45MPM_0.2feed_1DoC" "an operation whose code was written again still follows its fields"
+ot_check "notes:1:TEST-OT-001-F1-45MPM_0.2feed_1DoC" "changing only the notes leaves code and number alone"
+ot_check "subtype:1:TEST-OT-001-R1-45MPM_0.2feed_1DoC" "changing the subtype keeps the number"
+ot_check "other_first:1:TEST-OT-002-F1" "(setup) the first operation on TEST-OT-002 is number 1"
+ot_check "sample_change:2:TEST-OT-002-R2-45MPM_0.2feed_1DoC" "moving to another sample takes that sample's next number"
+ot_check "method_change:4:TEST-OT-002-R4-45MPM_0.2feed_1DoC" "changing the method takes the next number on the sample"
+ot_check "typed:MY-OP-CODE" "a typed code is stored as written"
+ot_check "typed_kept:MY-OP-CODE" "a typed code survives a later field change"
+ot_check "typed_equals_rule:TEST-OT-002-R4-55MPM_0.2feed_1DoC" "writing exactly the rule's value keeps the operation automatic"
+ot_check "cleared:TEST-OT-002-R4-55MPM_0.2feed_1DoC" "clearing the code rebuilds it from the rule"
+ot_check "placeholder_a:1:TEST-OT-001-F1" "an old client's {seq}-whatever code is replaced by the rule's code"
+ot_check "placeholder_b:2:TEST-OT-001-F2-30MPM" "an old client's code with a {seq} placeholder is replaced by the rule's code"
+ot_check "clear_move:3:TEST-OT-001-R3-55MPM_0.2feed_1DoC" "clearing the code in the same statement as a sample change takes the next number on the new sample"
+ot_check "legacy_kept:TEST-OT-001-F9-30MPM_0.05feed_0.1DoC_" "a stored code that is not the rule's value counts as typed and is kept"
+ot_check "null_notes:<null>" "an operation with no code stays without one when only the notes change"
+ot_check "null_speed:TEST-OT-001-F20-31MPM" "an operation with no code gets the rule's code once a field it is built from changes"
+ot_check "frozen:EXP-SHEET-OLD" "an experiment_sheet operation keeps its code when a field changes"
+ot_check "frozen_typed:EXP-SHEET-RENAMED" "a person can still rename an experiment_sheet operation"
+ot_check "frozen_clear:EXP-SHEET-RENAMED" "clearing the code of an experiment_sheet operation keeps its code"
+ot_check "frozen_blank:EXP-SHEET-RENAMED" "blanking the code of an experiment_sheet operation keeps its code"
+ot_check "frozen_placeholder:EXP-SHEET-RENAMED" "writing a {seq}/{mf} placeholder to an experiment_sheet operation keeps its code"
+ot_check "frozen_retyped:EXP-SHEET-RENAMED-2" "typing a new code on an experiment_sheet operation stores it"
+ot_check "fast_follow:12-10-16-MF25-4624-1250C_14kN_20dia" "a FAST operation's code follows its temperature"
+ot_check "sinter_hand_norun:<null>" "a hand-made sintering operation has no code before it has a run number"
+ot_check "sinter_hand_run:05-03-26-MF250-400" "a run number gives it the code"
+ot_check "mf_placeholder:<null>" "an old client's {mf} code is automatic: no run number, no code, no invented MF number"
+ot_check "bf_before:7" "(setup) the seven back-fill candidates have no sequence"
+ot_check "bf_seq:2,<null>,3,<null>,5,<null>,<null>,<null>" "the back-fill reads F2_1 as 2 and F3_30MPM_0.05feed as 3, and leaves N/R, a taken number, two candidates sharing one and a bare-digit token NULL"
+ot_check "bf_codes:TEST-OT-004-F2_1-60MPM,N/R,TEST-OT-004-F3_30MPM_0.05feed,TEST-OT-004-F5-30MPM,TEST-OT-004-F5-X,TEST-OT-004-R6-a,TEST-OT-004-R6-b,TEST-OT-004-7-x" "the back-fill leaves every code as it was"
+ot_check "bf_ledger:2:2,3" "the back-fill ledger holds exactly the two filled rows"
+ot_check "trg:1/0" "mfg_op_set_code is on the table and mfg_op_assign_numbers is gone"
+echo "== Sample code corrections reach operation codes; the code preview (T0b) =="
+# One rolled-back transaction for the cascade and the preview (prefix 9c000000-0000-4000-8000-), then a
+# two-session lock-order check on committed rows that are deleted afterwards.
+CS_MIG=db/migrations/20261010000158_operation_code_cascade_and_preview.sql
+[[ -f "$CS_MIG" ]] && ok "found migration 158" || bad "migration 158 is missing ($CS_MIG)"
+CS_P='9c000000-0000-4000-8000-'
+cs_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${CS_P}000000000001', 'TEST-OC-CAS');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name, process_category) VALUES
+    ('${CS_P}000000000011', 'T-OC-M1', 'operation code cascade test machining', 'machining'),
+    ('${CS_P}000000000012', 'T-OC-M2', 'operation code cascade test heat treatment', 'heat_treatment');
+-- an automatic, a typed and a frozen operation on the sample, and a test coded on it (T0a)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype,
+    machining_cutting_speed_m_per_min, machining_feed_mm_per_rev)
+VALUES ('${CS_P}000000000101', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F', 30, 0.1);
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype, pass_code)
+VALUES ('${CS_P}000000000102', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F', 'MY-TYPED-OC');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, operation_sequence, source_system,
+    machining_operation_subtype, pass_code)
+VALUES ('${CS_P}000000000103', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 3, 'experiment_sheet', 'F', 'EXP-OLD-OC');
+INSERT INTO test_sessions (session_id, test_type, sample_id) VALUES ('${CS_P}000000000201', 'sem', '${CS_P}000000000001');
+SELECT 'cas_before:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+SELECT 'cas_test_before:' || test_code FROM test_sessions WHERE session_id = '${CS_P}000000000201';
+UPDATE physical_samples SET sample_code = 'TEST-OC-CAS2' WHERE sample_id = '${CS_P}000000000001';
+SELECT 'cascade_auto:' || operation_sequence || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+SELECT 'cascade_typed:' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000102';
+SELECT 'cascade_frozen:' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000103';
+SELECT 'cascade_tests_still:' || test_code FROM test_sessions WHERE session_id = '${CS_P}000000000201';
+-- the renamed operation is still automatic: it follows a later field change
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 45 WHERE operation_id = '${CS_P}000000000101';
+SELECT 'cascade_still_auto:' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+-- a change that is not the code leaves the operations alone
+UPDATE physical_samples SET nickname = 'nick' WHERE sample_id = '${CS_P}000000000001';
+SELECT 'cascade_nick:' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+
+-- preview_new: the preview of a new operation is what a real insert with those values then gets
+SELECT preview_operation_code('{"process_category":"machining","sample_id":"${CS_P}000000000001","machining_operation_subtype":"F","machining_cutting_speed_m_per_min":30}'::jsonb, NULL, 'TEST-OC-CAS2') AS pn \gset
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype, machining_cutting_speed_m_per_min)
+VALUES ('${CS_P}000000000104', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F', 30);
+SELECT 'preview_new:' || (:'pn' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000104';
+-- preview_edit: the preview of an edit is what the UPDATE then gives
+SELECT preview_operation_code('{"machining_feed_mm_per_rev":0.2}'::jsonb, '${CS_P}000000000101', 'TEST-OC-CAS2') AS pe \gset
+UPDATE manufacturing_operations SET machining_feed_mm_per_rev = 0.2 WHERE operation_id = '${CS_P}000000000101';
+SELECT 'preview_edit:' || (:'pe' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000101';
+-- preview_method: only a method, no category: the category comes from the method
+SELECT preview_operation_code('{"method_id":"${CS_P}000000000011","sample_id":"${CS_P}000000000001","machining_operation_subtype":"F"}'::jsonb, NULL, 'TEST-OC-CAS2') AS pm \gset
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, machining_operation_subtype)
+VALUES ('${CS_P}000000000105', '${CS_P}000000000011', '${CS_P}000000000001', 'F');
+SELECT 'preview_method:' || (:'pm' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000105';
+-- preview_method_edit: a saved operation moved to a heat-treatment method (category and number follow)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${CS_P}000000000106', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F');
+SELECT preview_operation_code('{"method_id":"${CS_P}000000000012"}'::jsonb, '${CS_P}000000000106', 'TEST-OC-CAS2') AS pme \gset
+UPDATE manufacturing_operations SET method_id = '${CS_P}000000000012' WHERE operation_id = '${CS_P}000000000106';
+SELECT 'preview_method_edit:' || (:'pme' = pass_code) || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000106';
+-- derive_category_exact: the preview derives the category exactly as mfg_op_derive_category does
+-- (A) method changed and a category passed along that equals the saved one: the trigger still derives
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${CS_P}000000000107', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F');
+SELECT preview_operation_code('{"method_id":"${CS_P}000000000012","process_category":"machining"}'::jsonb, '${CS_P}000000000107', 'TEST-OC-CAS2') AS pa \gset
+UPDATE manufacturing_operations SET method_id = '${CS_P}000000000012', process_category = 'machining' WHERE operation_id = '${CS_P}000000000107';
+SELECT 'preview_cat_a:' || (:'pa' = pass_code) || ':' || process_category || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000107';
+-- (B) a saved operation whose category is NULL keeps it when only another value is edited
+ALTER TABLE manufacturing_operations DISABLE TRIGGER mfg_op_derive_category;
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, machining_operation_subtype)
+VALUES ('${CS_P}000000000108', '${CS_P}000000000011', '${CS_P}000000000001', 'F');
+ALTER TABLE manufacturing_operations ENABLE TRIGGER mfg_op_derive_category;
+SELECT preview_operation_code('{"machining_cutting_speed_m_per_min":30}'::jsonb, '${CS_P}000000000108', 'TEST-OC-CAS2') AS pb \gset
+UPDATE manufacturing_operations SET machining_cutting_speed_m_per_min = 30 WHERE operation_id = '${CS_P}000000000108';
+SELECT 'preview_cat_b:' || (:'pb' = pass_code) || ':' || coalesce(process_category, '<null>') || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000108';
+-- (C) a category set to NULL on a saved operation stays NULL (the method did not change)
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${CS_P}000000000109', '${CS_P}000000000011', '${CS_P}000000000001', 'machining', 'F');
+SELECT preview_operation_code('{"process_category":null}'::jsonb, '${CS_P}000000000109', 'TEST-OC-CAS2') AS pc \gset
+UPDATE manufacturing_operations SET process_category = NULL WHERE operation_id = '${CS_P}000000000109';
+SELECT 'preview_cat_c:' || (:'pc' = pass_code) || ':' || coalesce(process_category, '<null>') || ':' || pass_code FROM manufacturing_operations WHERE operation_id = '${CS_P}000000000109';
+-- no values and no saved row gives NULL, not an error; a NULL values object is read as empty
+SELECT 'preview_empty:' || coalesce(preview_operation_code('{}'::jsonb, NULL, NULL), '<null>');
+SELECT 'preview_nullvalues:' || coalesce(preview_operation_code(NULL, NULL, 'TEST-OC-CAS2'), '<null>');
+-- the triggers' shape and the comments on every new object
+SELECT 'shape:' || string_agg(tgname || '/' || (tgtype & 1) || '/' || (tgtype & 2) || '/' || (tgtype & 4) || '/' || (tgtype & 8) || '/' || (tgtype & 16)
+    || '/' || (tgattr::text = '')::text || '/' || (tgqual IS NULL)::text || '/' || (obj_description(oid, 'pg_trigger') IS NOT NULL)::text, ',' ORDER BY tgname)
+FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'physical_samples'::regclass
+  AND tgname IN ('physical_samples_rollup_lock', 'physical_samples_cascade_operation_codes');
+SELECT 'shape_ops:' || string_agg(tgname || '/' || (tgtype & 1) || '/' || (tgtype & 2) || '/' || (tgtype & 4) || '/' || (tgtype & 8) || '/' || (tgtype & 16) || '/' || (tgattr::text = '')::text || '/' || (tgqual IS NULL)::text || '/' || (obj_description(oid, 'pg_trigger') IS NOT NULL)::text, ',' ORDER BY tgname)
+FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'manufacturing_operations'::regclass AND tgname = 'mfg_op_rollup_lock';
+SELECT 'fn_comments:' || count(*) FILTER (WHERE obj_description(p.oid, 'pg_proc') IS NOT NULL) || '/' || count(*)
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+  AND p.proname IN ('trg_physical_samples_rollup_lock', 'trg_cascade_operation_codes', 'preview_operation_code', 'trg_manufacturing_operations_rollup_lock');
+ROLLBACK;
+SQL
+)
+cs_check() { grep -qx -- "$1" <<<"$cs_out" && ok "$2" || bad "$2 (psql output: $cs_out)"; }
+cs_check "cas_before:1:TEST-OC-CAS-F1-30MPM_0.1feed" "(setup) the automatic operation carries the sample's first code"
+cs_check "cas_test_before:TEST-OC-CAS-SEM1" "(setup) the test on the sample carries the sample's first code"
+cs_check "cascade_auto:1:TEST-OC-CAS2-F1-30MPM_0.1feed" "renaming the sample renames its automatic operation, sequence unchanged"
+cs_check "cascade_typed:MY-TYPED-OC" "a typed operation code is kept when the sample is renamed"
+cs_check "cascade_frozen:EXP-OLD-OC" "an experiment_sheet operation code is kept when the sample is renamed"
+cs_check "cascade_tests_still:TEST-OC-CAS2-SEM1" "the test code cascade (T0a) still runs next to the operation cascade"
+cs_check "cascade_still_auto:TEST-OC-CAS2-F1-45MPM_0.1feed" "a renamed operation is still automatic: it follows a later field change"
+cs_check "cascade_nick:TEST-OC-CAS2-F1-45MPM_0.1feed" "a sample change that is not its code leaves operation codes alone"
+cs_check "preview_new:true:TEST-OC-CAS2-F4-30MPM" "preview_operation_code of a new operation equals the code a real insert gets"
+cs_check "preview_edit:true:TEST-OC-CAS2-F1-45MPM_0.2feed" "preview_operation_code of an edit equals the code the UPDATE gives"
+cs_check "preview_method:true:TEST-OC-CAS2-F5" "a preview with only a method takes the category from the method, as the insert does"
+cs_check "preview_method_edit:true:TEST-OC-CAS2-HT6" "a preview of a method change takes the new category and the next number, as the UPDATE does"
+cs_check "preview_empty:<null>" "a preview of nothing is NULL"
+cs_check "preview_nullvalues:TEST-OC-CAS2" "a NULL values object is read as empty"
+cs_check "shape:physical_samples_cascade_operation_codes/1/0/0/0/16/true/true/true,physical_samples_rollup_lock/0/2/0/8/16/true/true/true" "the two triggers: row AFTER UPDATE and statement BEFORE UPDATE OR DELETE, no column list, no WHEN, commented"
+cs_check "shape_ops:mfg_op_rollup_lock/0/2/4/8/16/true/true/true" "mfg_op_rollup_lock: statement BEFORE INSERT OR UPDATE OR DELETE, no column list, no WHEN, commented"
+cs_check "fn_comments:4/4" "every new function has a comment"
+cs_check "preview_cat_a:true:heat_treatment:TEST-OC-CAS2-HT7" "preview: a method change derives the category even when the same category is passed (as the UPDATE does)"
+cs_check "preview_cat_b:true:<null>:TEST-OC-CAS2-8" "preview: a saved NULL category is not derived by an edit of another value (as the UPDATE)"
+cs_check "preview_cat_c:true:<null>:TEST-OC-CAS2-9" "preview: a category set to NULL stays NULL (as the UPDATE)"
+
+# lock_order: session A locks a sample row and, later in its transaction, refreshes the rollup (any
+# operation write does); session B writes an operation of that sample (rollup lock, then the sample
+# row). Without the statement-level trigger A takes the sample row first and B the rollup lock first:
+# deadlock. With it A takes the rollup lock before locking the sample row, so B simply waits.
+CS_L='9c000000-0000-4000-8000-0000000000'
+$PSQL -c "
+    DELETE FROM manufacturing_operations WHERE operation_id IN ('${CS_L}f1','${CS_L}f2');
+    DELETE FROM physical_samples WHERE sample_id = '${CS_L}f0';
+    DELETE FROM manufacturing_methods WHERE method_id = '${CS_L}fa';
+" > /dev/null 2>&1 || true
+cs_fx=$($PSQL -v ON_ERROR_STOP=1 -c "
+    INSERT INTO manufacturing_methods (method_id, method_code, method_name, process_category)
+    VALUES ('${CS_L}fa', 'T-OC-LK', 'operation code lock order test method', 'machining');
+    INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${CS_L}f0', 'TEST-OC-LOCK');
+    INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+    VALUES ('${CS_L}f1', '${CS_L}fa', '${CS_L}f0', 'machining', 'F');
+" 2>&1) && ok "(setup) lock-order fixtures committed" || bad "lock-order fixtures could not be committed: $cs_fx"
+cs_a_log=$(mktemp); cs_b_log=$(mktemp)
+psql "$DATABASE_URL" --no-psqlrc -q -v ON_ERROR_STOP=1 > "$cs_a_log" 2>&1 <<SQL &
+BEGIN;
+SET LOCAL lock_timeout = '10s';
+UPDATE physical_samples SET nickname = nickname WHERE sample_id = '${CS_L}f0';
+SELECT pg_sleep(1.5);
+UPDATE manufacturing_operations SET outcome_notes = 'lo-a' WHERE operation_id = '${CS_L}f1';
+COMMIT;
+SQL
+cs_a_pid=$!
+sleep 0.5
+psql "$DATABASE_URL" --no-psqlrc -q -v ON_ERROR_STOP=1 > "$cs_b_log" 2>&1 <<SQL
+BEGIN;
+SET LOCAL lock_timeout = '10s';
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, process_category, machining_operation_subtype)
+VALUES ('${CS_L}f2', '${CS_L}fa', '${CS_L}f0', 'machining', 'F');
+COMMIT;
+SQL
+cs_b_rc=$?
+wait "$cs_a_pid"; cs_a_rc=$?
+[[ $cs_a_rc -eq 0 ]] && ok "lock_order: session A (sample row, then an operation write) committed" || bad "lock_order: session A failed: $(cat "$cs_a_log")"
+[[ $cs_b_rc -eq 0 ]] && ok "lock_order: session B (operation insert on the same sample) committed" || bad "lock_order: session B failed: $(cat "$cs_b_log")"
+if grep -qi "deadlock detected" "$cs_a_log" "$cs_b_log"; then bad "lock_order: deadlock detected: $(cat "$cs_a_log" "$cs_b_log")"; else ok "lock_order: no deadlock between a sample update and an operation insert"; fi
+run_eq "lock_order: both writes landed, B's operation numbered after A's" \
+    "SELECT string_agg(right(operation_id::text, 2) || ':' || coalesce(operation_sequence::text, ''), ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id IN ('${CS_L}f1','${CS_L}f2')" \
+    "f1:1,f2:2"
+rm -f "$cs_a_log" "$cs_b_log"
+$PSQL -c "
+    DELETE FROM manufacturing_operations WHERE operation_id IN ('${CS_L}f1','${CS_L}f2');
+    DELETE FROM physical_samples WHERE sample_id = '${CS_L}f0';
+    DELETE FROM manufacturing_methods WHERE method_id = '${CS_L}fa';
+" > /dev/null 2>&1 || true
+run_eq "lock_order: fixtures removed" "SELECT count(*) FROM physical_samples WHERE sample_code = 'TEST-OC-LOCK'" "0"
+echo "== File fingerprints table (T0e) =="
+# Each check is its own rolled-back transaction (prefix 9d000000-0000-4000-8000-). A rejected statement
+# aborts psql (ON_ERROR_STOP), so the error text is what is asserted on. The CI database has the stub
+# directus_files (id only, migration 030), so the fixture row sets just the id.
+FF_MIG=db/migrations/20261010000159_file_fingerprints.sql
+[[ -f "$FF_MIG" ]] && ok "found migration 159" || bad "migration 159 is missing ($FF_MIG)"
+FF_F='9d000000-0000-4000-8000-000000000001'
+FF_H64=$(printf 'a%.0s' $(seq 1 64))
+FF_H63=$(printf 'a%.0s' $(seq 1 63))
+FF_HUP=$(printf 'A%.0s' $(seq 1 64))
+ff_sql() { # ff_sql <statements>: run them after a fixture directus_files row, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_files (id) VALUES ('$FF_F');
+$1
+ROLLBACK;
+SQL
+}
+run_eq "file_fingerprints exists" "SELECT to_regclass('public.file_fingerprints')::TEXT" "file_fingerprints"
+run_eq "file_fingerprints has both indexes" \
+    "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'file_fingerprints' AND indexname IN ('file_fingerprints_content_idx', 'file_fingerprints_data_idx')" \
+    "file_fingerprints_content_idx,file_fingerprints_data_idx"
+run_eq "file_fingerprints_data_idx is partial (data_sha256 IS NOT NULL)" \
+    "SELECT count(*) FROM pg_indexes WHERE indexname = 'file_fingerprints_data_idx' AND indexdef LIKE '%WHERE (data_sha256 IS NOT NULL)%'" "1"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256, data_sha256, data_variable, data_rows, data_cols, size_bytes, source_mtime)
+    VALUES ('$FF_F', '$FF_H64', '$FF_H64', 'DATA', 10, 3, 1234, now());
+SELECT 'ff_row:' || status || ':' || data_variable || ':' || data_rows || 'x' || data_cols FROM file_fingerprints WHERE directus_files_id = '$FF_F';")
+grep -q 'ff_row:done:DATA:10x3' <<<"$ff_out" && ok "a done fingerprint for a file inserts (status defaults to done)" || bad "done fingerprint insert failed (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256) VALUES ('$FF_F', '$FF_H63');")
+grep -q 'check constraint' <<<"$ff_out" && ok "a 63-character content_sha256 is rejected (check_violation)" || bad "63-character content_sha256 was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256) VALUES ('$FF_F', '$FF_HUP');")
+grep -q 'check constraint' <<<"$ff_out" && ok "an upper-case content_sha256 is rejected (check_violation)" || bad "upper-case content_sha256 was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256, data_sha256) VALUES ('$FF_F', '$FF_H64', '$FF_H63');")
+grep -q 'check constraint' <<<"$ff_out" && ok "a 63-character data_sha256 is rejected (check_violation)" || bad "63-character data_sha256 was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256, data_variable) VALUES ('$FF_F', '$FF_H64', 'Data');")
+grep -q 'check constraint' <<<"$ff_out" && ok "a data_variable other than data / DATA is rejected" || bad "bad data_variable was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256, data_rows) VALUES ('$FF_F', '$FF_H64', -1);")
+grep -q 'check constraint' <<<"$ff_out" && ok "a negative data_rows is rejected" || bad "negative data_rows was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status, content_sha256) VALUES ('$FF_F', 'weird', '$FF_H64');")
+grep -q 'check constraint' <<<"$ff_out" && ok "an unknown status is rejected" || bad "unknown status was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status) VALUES ('$FF_F', 'done');")
+grep -q 'file_fingerprints_done_has_hash' <<<"$ff_out" && ok "status done with a NULL content_sha256 is rejected" || bad "done without content_sha256 was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status) VALUES ('9d000000-0000-4000-8000-000000000002', 'missing');")
+grep -q 'foreign key' <<<"$ff_out" && ok "a fingerprint for a file that does not exist is rejected (foreign key)" || bad "fingerprint without a file was not rejected (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status, error_message) VALUES ('$FF_F', 'missing', 'not on the share');
+SELECT 'ff_missing:' || status || ':' || coalesce(content_sha256, '<null>') || ':' || coalesce(data_sha256, '<null>') FROM file_fingerprints WHERE directus_files_id = '$FF_F';")
+grep -q 'ff_missing:missing:<null>:<null>' <<<"$ff_out" && ok "status missing with NULL hashes is accepted" || bad "missing fingerprint with NULL hashes failed (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, status, error_message) VALUES ('$FF_F', 'error', 'unreadable');
+SELECT 'ff_error:' || status FROM file_fingerprints WHERE directus_files_id = '$FF_F';")
+grep -q 'ff_error:error' <<<"$ff_out" && ok "status error with NULL hashes is accepted" || bad "error fingerprint with NULL hashes failed (output: $ff_out)"
+ff_out=$(ff_sql "INSERT INTO file_fingerprints (directus_files_id, content_sha256) VALUES ('$FF_F', '$FF_H64');
+DELETE FROM directus_files WHERE id = '$FF_F';
+SELECT 'ff_cascade:' || count(*) FROM file_fingerprints WHERE directus_files_id = '$FF_F';")
+grep -q 'ff_cascade:0' <<<"$ff_out" && ok "deleting the directus_files row removes its fingerprint" || bad "fingerprint survived its file's deletion (output: $ff_out)"
+run_eq "file_fingerprints has a table comment" "SELECT count(*) FROM pg_description WHERE objoid = 'public.file_fingerprints'::regclass AND objsubid = 0 AND description <> ''" "1"
+run_eq "every file_fingerprints column has a comment (without: none)" \
+    "SELECT coalesce(string_agg(a.attname, ', '), '') FROM pg_attribute a WHERE a.attrelid = 'public.file_fingerprints'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND coalesce(col_description(a.attrelid, a.attnum), '') = ''" ""
+run_eq "both file_fingerprints indexes have a comment" \
+    "SELECT count(*) FROM pg_class c WHERE c.relname IN ('file_fingerprints_content_idx', 'file_fingerprints_data_idx') AND coalesce(obj_description(c.oid, 'pg_class'), '') <> ''" "2"
+run_eq "data_sha256's comment says how the hash is taken (uint64 shape, float64, per-column digests, DATA)" \
+    "SELECT count(*) FROM pg_description WHERE objoid = 'public.file_fingerprints'::regclass AND objsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.file_fingerprints'::regclass AND attname = 'data_sha256') AND description ~* 'uint64' AND description ~* 'float64' AND description ~* 'each column' AND description ~ 'otherwise DATA'" "1"
 
 echo "== Lab Member filters put _some only where Directus accepts it =="
 # Directus 11 (api apply-query/filter) handles `_some`/`_none` only directly under an O2M field at the

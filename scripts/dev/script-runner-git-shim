@@ -1,0 +1,5 @@
+#!/bin/sh
+# A worktree's .git is a file pointing at a host path that does not exist in the container;
+# answer the one question tests/scripts asks (the repo root) and pass everything else on.
+if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then echo /repo; exit 0; fi
+exec /usr/bin/git "$@"

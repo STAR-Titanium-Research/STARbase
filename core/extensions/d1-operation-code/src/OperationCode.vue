@@ -2,30 +2,35 @@
 	<div class="d1-operation-code">
 		<v-input
 			:model-value="shownValue"
-			placeholder="auto-generated from the fields below…"
+			placeholder="built by the database on save…"
 			@update:model-value="onType"
 		>
 			<template #append>
 				<v-icon
-					v-tooltip="manual ? 'Regenerate from fields' : 'Auto-generated'"
-					:name="manual ? 'refresh' : 'auto_fix_high'"
-					:clickable="manual"
-					:class="{ active: !manual }"
+					v-if="showRefresh"
+					v-tooltip="'Back to automatic'"
+					name="refresh"
+					clickable
 					@click="regenerate"
 				/>
+				<v-icon v-else v-tooltip="'Automatic'" name="auto_fix_high" class="active" />
 			</template>
 		</v-input>
-		<small class="hint">
-			{{ manual ? 'Manual override — click ↻ to regenerate.' : 'Auto-generated; type to override.' }}
-			<template v-if="hasPlaceholder"> The operation number is a preview; the database assigns the final one on save.</template>
-		</small>
-		<small v-if="previewError" class="hint error">{{ previewError }}</small>
+		<small class="hint" :class="{ error: hintIsError }">{{ hint }}</small>
 	</div>
 </template>
 
 <script setup lang="ts">
-import { inject, ref, computed, watch, type Ref } from 'vue';
+// The database builds the operation code (trigger mfg_op_set_code, rule operation_code_for).
+// This box only previews that code (POST /d1-next-number/operation-code) and lets the user
+// take over by typing. In automatic mode it NEVER emits, so pass_code stays out of the save
+// payload and the database builds the code; typing emits, and the refresh icon emits null.
+// The mode (Automatic / Typed) of an existing operation comes from the endpoint's `automatic`, which the
+// server computes from the SAVED row (the trigger's own test), never from a preview of the form's
+// values: those are half-built while the form and other automatic interfaces mount.
+import { inject, ref, computed, watch, onMounted, onBeforeUnmount, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
+import { keyState, answerMatches, keyChangeResets, decideMode, onTyped, onRegenerate, shown, hint as hintFor, canRegenerate } from './state.js';
 
 const props = defineProps<{ value: string | null; primaryKey?: string | number | null }>();
 const emit = defineEmits<{ (e: 'input', value: string | null): void }>();
@@ -33,222 +38,146 @@ const emit = defineEmits<{ (e: 'input', value: string | null): void }>();
 const values = inject<Ref<Record<string, any>>>('values', ref({}));
 const api = useApi();
 
-// Existing records arrive with a value already set — never auto-clobber those.
-// `value` can populate a tick after mount, so also key off the primary key: a
-// real id (not '+') means an existing record we must never dirty on open.
-const isExistingItem = () => props.primaryKey != null && props.primaryKey !== '+';
-const manual = ref<boolean>(!!props.value || isExistingItem());
+const mode = ref<'auto' | 'typed'>('auto');
+// true once the first successful answer (or the user typing / pressing the refresh icon) has settled the
+// mode; from then on answers only change the displayed preview.
+const decided = ref(false);
+const preview = ref<string | null>(null);
+const previewHidden = ref(false); // 403: the user may not read the operation or sample
+const previewFailed = ref(false); // 500 / network / anything else
+const frozen = ref(false); // imported from the experiment sheets: the saved code is fixed
 
-// --- resolve the input sample's code from sample_id ---
-// The operation number and the sintering MF number are assigned by the database when the record
-// is saved (trigger on manufacturing_operations). The interface composes the readable part of the
-// code and leaves {seq} / {mf} placeholders for the database to fill; the estimates below only
-// feed the on-screen preview. A failed lookup shows an error and a "?" -- never a made-up number.
-const SEQ = '{seq}';
-const MF = '{mf}';
-const sampleCode = ref<string | null>(null);
-const seqEstimate = ref<number | null>(null);
-const previewError = ref<string>('');
-let lastSampleId: string | null = null;
-let sampleReq = 0;
-const sampleId = computed<string | null>(() => values.value?.sample_id ?? null);
-watch(
-	sampleId,
-	async (id) => {
-		if (id === lastSampleId) return;
-		lastSampleId = id;
-		const req = ++sampleReq;
-		if (!id) {
-			sampleCode.value = null;
-			seqEstimate.value = null;
-			return;
-		}
-		try {
-			const [res, agg] = await Promise.all([
-				api.get(`/items/physical_samples/${id}`, { params: { fields: ['sample_code'] } }),
-				isExistingItem()
-					? Promise.resolve(null)
-					: api.get('/items/manufacturing_operations', {
-							params: { filter: { sample_id: { _eq: id } }, aggregate: { max: 'operation_sequence' } },
-						}),
-			]);
-			if (req !== sampleReq) return; // a newer sample was picked meanwhile
-			sampleCode.value = res?.data?.data?.sample_code ?? null;
-			const m = agg ? Number(agg?.data?.data?.[0]?.max?.operation_sequence ?? 0) : null;
-			seqEstimate.value = m == null ? null : (Number.isFinite(m) ? m : 0) + 1;
-			previewError.value = '';
-		} catch {
-			if (req !== sampleReq) return;
-			sampleCode.value = null;
-			seqEstimate.value = null;
-			previewError.value = 'Could not read the sample or its operations - the preview number is unavailable.';
-		}
-	},
-	{ immediate: true },
-);
-
-// Render a number without trailing-zero noise: 80 → "80", 0.05 → "0.05".
-function num(v: unknown): string {
-	if (v === null || v === undefined || v === '') return '';
-	const n = Number(v);
-	if (Number.isNaN(n)) return '';
-	return String(parseFloat(n.toPrecision(6)));
-}
-
-// DD-MM-YY for the sintering code (FAST ops carry no sample, so the date + a global
-// counter are what make the code unique). Empty when no date is set yet.
-function dateCode(v: unknown): string {
-	if (!v) return '';
-	const d = new Date(v as string);
-	if (Number.isNaN(d.getTime())) return '';
-	const p = (x: number) => String(x).padStart(2, '0');
-	return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${String(d.getFullYear()).slice(-2)}`;
-}
-
-// Preview of the global sintering counter for a NEW sintering op: the next MF number after the
-// highest one in any sintering code. Preview only -- the database assigns the real {mf} number
-// (max+1 under a lock), so a reused or racing number can no longer be stored.
-const mfEstimate = ref<number | null>(null);
-watch(
-	() => values.value?.process_category,
-	async (cat) => {
-		if (cat !== 'sintering' || isExistingItem() || mfEstimate.value != null) return;
-		try {
-			const res = await api.get('/items/manufacturing_operations', {
-				params: { filter: { process_category: { _eq: 'sintering' } }, fields: ['pass_code'], limit: -1 },
-			});
-			let max = 0;
-			for (const r of res?.data?.data ?? []) {
-				const m = /(?:^|-)MF(\d{1,9})(?:-|$)/.exec(r.pass_code ?? '');
-				if (m) max = Math.max(max, parseInt(m[1], 10));
-			}
-			mfEstimate.value = max + 1;
-		} catch {
-			mfEstimate.value = null;
-			previewError.value = 'Could not read the existing sintering codes - the MF number preview is unavailable.';
-		}
-	},
-	{ immediate: true },
-);
-
-// Abbreviation maps for the typed dropdowns.
-const HT_TYPE: Record<string, string> = {
-	anneal: 'A', solution_treat: 'S', age: 'AG', quench: 'Q',
-	temper: 'T', stress_relieve: 'SR', normalise: 'N', other: 'X',
-};
-const HT_COOL: Record<string, string> = {
-	furnace: 'FC', air: 'AC', water_quench: 'WQ', oil_quench: 'OQ', forced_air: 'FA', other: 'X',
-};
-const DEFORM_TOKEN: Record<string, string> = {
-	rolling: 'DR', forging: 'DF', extrusion: 'DE', drawing: 'DD', other: 'DX',
-};
-
-// Compose the parameter-keyed code per process category:
-//   base = {sample}-{op token};  then -{param}_{param}…  (only the variables that are set)
-const autoCode = computed<string>(() => {
-	const v = values.value ?? {};
-	const sample = sampleCode.value ?? '';
-	const cat = (v.process_category ?? '') as string;
-
-	// Per-sample sequence number — the unique identifier every operation carries, so
-	// two ops on the same sample never collide even with identical parameters. For
-	// machining this is the facing/roughing pass number; for other methods it's just
-	// the Nth operation on the sample.
-	// A number the user typed (a machining pass number) or a saved record's own number is used as is;
-	// for a new record with a sample the database assigns it, so the code carries a placeholder.
-	const seq = v.operation_sequence;
-	const typedSeq = seq === '' || seq === null || seq === undefined ? '' : String(seq);
-	const seqStr = typedSeq || (!isExistingItem() && sampleCode.value ? SEQ : '');
-
-	let token = '';
-	let parts: string[] = [];
-
-	if (cat === 'machining') {
-		token = `${v.machining_operation_subtype ?? ''}${seqStr}`;
-		parts = [
-			num(v.machining_cutting_speed_m_per_min) && `${num(v.machining_cutting_speed_m_per_min)}MPM`,
-			num(v.machining_feed_mm_per_rev) && `${num(v.machining_feed_mm_per_rev)}feed`,
-			num(v.machining_axial_depth_of_cut_mm) && `${num(v.machining_axial_depth_of_cut_mm)}DoC`,
-		].filter(Boolean) as string[];
-	} else if (cat === 'sintering') {
-		// FAST/sintering ops usually have no sample link, so uniqueness comes from the
-		// date + a global counter:  DD-MM-YY-MF{NNNN}-{params}  (matches the backfill).
-		const dcode = dateCode(v.operation_date);
-		// A saved record keeps its MF number; a new one gets the database's next one.
-		const keptMf = isExistingItem() ? /(?:^|-)MF(\d{1,9})(?:-|$)/.exec(props.value ?? '')?.[1] : undefined;
-		const mf = `MF${keptMf ?? MF}`;
-		const sparams = [
-			num(v.sintering_max_temp_celsius) && `${num(v.sintering_max_temp_celsius)}C`,
-			num(v.sintering_max_force_kn) && `${num(v.sintering_max_force_kn)}kN`,
-			num(v.sintering_mould_diameter_mm) && `${num(v.sintering_mould_diameter_mm)}dia`,
-		].filter(Boolean).join('_');
-		return [dcode, mf, sparams].filter(Boolean).join('-');
-	} else if (cat === 'heat_treatment') {
-		token = `HT${HT_TYPE[v.ht_treatment_type] ?? ''}${seqStr}`;
-		parts = [
-			num(v.ht_peak_temp_celsius) && `${num(v.ht_peak_temp_celsius)}C`,
-			num(v.ht_hold_time_min) && `${num(v.ht_hold_time_min)}min`,
-			HT_COOL[v.ht_cooling_method],
-		].filter(Boolean) as string[];
-	} else if (cat === 'deformation') {
-		token = `${DEFORM_TOKEN[v.deform_deformation_type] ?? 'D'}${seqStr}`;
-		parts = [
-			num(v.deform_deformation_temp_celsius) && `${num(v.deform_deformation_temp_celsius)}C`,
-			num(v.deform_total_reduction_pct) && `${num(v.deform_total_reduction_pct)}pct`,
-			num(v.deform_pass_count) && `${num(v.deform_pass_count)}p`,
-		].filter(Boolean) as string[];
-	} else if (cat === 'additive') {
-		token = `${v.am_process_variant ?? 'AM'}${seqStr}`;
-		parts = [
-			num(v.am_laser_power_w) && `${num(v.am_laser_power_w)}W`,
-			num(v.am_scan_speed_mm_per_s) && `${num(v.am_scan_speed_mm_per_s)}mmps`,
-			num(v.am_layer_thickness_mm) && `${num(v.am_layer_thickness_mm)}mm`,
-		].filter(Boolean) as string[];
-	} else {
-		return sample && seqStr ? `${sample}-${seqStr}` : sample; // unknown category — sample + seq
+// The form sends changed fields only, so pass_code itself must not retrigger previews
+// (typing in the box would otherwise cause a request per keystroke).
+const watchKey = computed(() => {
+	const { pass_code: _ignored, ...rest } = values.value ?? {};
+	try {
+		return JSON.stringify(rest);
+	} catch {
+		return String(Math.random());
 	}
-
-	let code = sample;
-	if (token) code = code ? `${code}-${token}` : token;
-	if (code && parts.length) code = `${code}-${parts.join('_')}`;
-	return code;
 });
 
-// What the user sees: placeholders replaced by the preview numbers ("?" when unavailable).
-function preview(code: string | null | undefined): string {
-	if (!code) return code ?? '';
-	return code
-		.split(SEQ).join(seqEstimate.value != null ? String(seqEstimate.value) : '?')
-		.split(MF).join(mfEstimate.value != null ? String(mfEstimate.value) : '?');
-}
-const hasPlaceholder = computed(() => !manual.value && /\{(seq|mf)\}/.test(props.value ?? autoCode.value ?? ''));
-const shownValue = computed(() => preview(props.value));
+let timer: ReturnType<typeof setTimeout> | null = null;
+let requestCounter = 0;
 
-// While in auto mode, keep the field in sync with the composed code.
+// No wait for the form to hold the record: the mode does not depend on the values, and an answer built
+// from a half-loaded form is replaced by the next one (each change of the values previews again).
+// But the primary key must be there (keyState 'pending' sends nothing), and an answer counts only for
+// the key it was sent with (answerMatches).
+async function fetchPreview() {
+	const sentKey = props.primaryKey;
+	const ks = keyState(sentKey);
+	if (ks === 'pending') return;
+	const req = ++requestCounter;
+	try {
+		const res = await api.post('/d1-next-number/operation-code', {
+			values: values.value ?? {},
+			operation_id: ks === 'new' ? undefined : sentKey,
+		});
+		if (req !== requestCounter) return; // a newer request is in flight; drop this one
+		if (!answerMatches({ sentKey, currentKey: props.primaryKey })) return;
+		preview.value = res?.data?.code ?? null;
+		frozen.value = res?.data?.frozen === true;
+		previewHidden.value = false;
+		previewFailed.value = false;
+		const m = decideMode({
+			isNew: ks === 'new',
+			decided: decided.value,
+			automatic: res?.data?.automatic,
+			current: mode.value,
+		});
+		if (m !== null) {
+			mode.value = m;
+			decided.value = true;
+		}
+	} catch (err: any) {
+		if (req !== requestCounter) return;
+		if (!answerMatches({ sentKey, currentKey: props.primaryKey })) return;
+		preview.value = null;
+		// frozen is kept: it comes from the saved row (source_system), which a failed request does not change.
+		if (err?.response?.status === 403) {
+			previewHidden.value = true;
+			previewFailed.value = false;
+		} else {
+			previewHidden.value = false;
+			previewFailed.value = true;
+		}
+		// Mode stays undecided: a later successful answer decides it.
+	}
+}
+
+function schedule(delay: number) {
+	if (timer) clearTimeout(timer);
+	timer = setTimeout(() => {
+		timer = null;
+		void fetchPreview();
+	}, delay);
+}
+
+onMounted(() => schedule(0)); // next tick, so a late-arriving form state is included
+watch(watchKey, () => schedule(300));
+// The key can arrive after mount (pending -> ready): preview then. A switch to another ready key starts
+// over, so the new item's own answer decides its mode.
 watch(
-	autoCode,
-	(code) => {
-		if (isExistingItem()) return;   // never auto-emit for saved records
-		if (!manual.value && code && code !== props.value) emit('input', code);
+	() => props.primaryKey,
+	(newKey, oldKey) => {
+		if (keyChangeResets(oldKey, newKey)) {
+			requestCounter++; // drop anything in flight for the old key
+			decided.value = false;
+			mode.value = 'auto';
+			preview.value = null;
+			frozen.value = false;
+			previewHidden.value = false;
+			previewFailed.value = false;
+		}
+		if (keyState(newKey) !== 'pending') schedule(0);
 	},
-	{ immediate: true },
+);
+onBeforeUnmount(() => {
+	if (timer) clearTimeout(timer);
+	requestCounter++; // ignore anything still in flight
+});
+
+const shownValue = computed(() => {
+	// Before the first answer, or when no preview is available, show the saved code rather
+	// than an empty box (automatic mode never changes props.value).
+	const saved = props.value ?? '';
+	if (!decided.value) return saved;
+	if (mode.value === 'auto' && preview.value == null && (previewHidden.value || previewFailed.value)) return saved;
+	return shown({
+		mode: mode.value,
+		value: props.value,
+		preview: preview.value,
+		error: previewFailed.value,
+	});
+});
+
+const showRefresh = computed(() => canRegenerate({ mode: mode.value, frozen: frozen.value }));
+const hintIsError = computed(() => !frozen.value && mode.value === 'auto' && previewFailed.value);
+const hint = computed(() =>
+	hintFor({
+		mode: mode.value,
+		frozen: frozen.value,
+		hidden: previewHidden.value,
+		failed: previewFailed.value,
+		noPreview: decided.value && preview.value == null && !previewHidden.value && !previewFailed.value,
+		sintering: values.value?.process_category === 'sintering',
+	}),
 );
 
 function onType(val: string | null) {
-	// Typing the preview back (or clearing the box) returns to auto mode, which keeps the
-	// placeholders so the database still assigns the numbers; anything else is a manual override.
-	if (!val || val === preview(autoCode.value)) {
-		manual.value = false;
-		emit('input', val ? autoCode.value : val);
-		return;
-	}
-	manual.value = true;
-	emit('input', val);
+	const r = onTyped(val, preview.value);
+	mode.value = r.mode;
+	decided.value = true;
+	emit('input', r.emit);
 }
 
 function regenerate() {
-	manual.value = false;
-	if (autoCode.value) emit('input', autoCode.value);
+	const r = onRegenerate();
+	mode.value = r.mode;
+	decided.value = true;
+	emit('input', r.emit);
 }
 </script>
 

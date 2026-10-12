@@ -5,7 +5,7 @@
 **Goal:** Give samples, operations and tests a permanent short ID, and give every test a readable
 code built from its subject and type, assigned and kept up to date by the database.
 
-**Architecture:** Three dbmate migrations (144-146). Short IDs: a registry table `short_ids` that
+**Architecture:** Three dbmate migrations (150-152). Short IDs: a registry table `short_ids` that
 makes them unique across the three tables, a claim function and one generic trigger. Test codes:
 columns on `test_sessions`, a counter table so numbers are never reused, a BEFORE trigger that
 builds the code from the earliest-linked subject, and AFTER triggers on samples and edges so a
@@ -23,7 +23,7 @@ get their own plans after this one lands.
 - Work in the worktree `.claude/worktrees/t0-record-codes` on branch `feat/record-codes` (Task 1
   creates it). Never touch the main checkout, never apply anything to the live database, never run
   `scripts/configure_all.sh` or `scripts/configure_directus.sql`.
-- Migration versions: `20261010000144`, `20261010000145`, `20261010000146` (the latest anywhere is
+- Migration versions: `20261010000150`, `20261010000151`, `20261010000152` (the latest anywhere is
   `20261009000143`).
 - Every new table, column, function and trigger carries a `COMMENT` (text-to-SQL depends on them).
 - Every `migrate:down` undoes its `migrate:up` exactly, in reverse order.
@@ -196,10 +196,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Migration 144 — short IDs
+### Task 2: Migration 150 — short IDs
 
 **Files:**
-- Create: `db/migrations/20261010000144_short_ids.sql`
+- Create: `db/migrations/20261010000150_short_ids.sql`
 - Modify: `tests/phase1_schema.sh` (new section after the "Test subject junction" section, i.e.
   after the `ps_check "comments:5" …` line)
 
@@ -286,7 +286,7 @@ Expected: the new section's checks FAIL (`column "short_id" does not exist` in t
 
 - [ ] **Step 3: Write the migration**
 
-`db/migrations/20261010000144_short_ids.sql`:
+`db/migrations/20261010000150_short_ids.sql`:
 
 ```sql
 -- migrate:up
@@ -480,13 +480,13 @@ diff <(grep FAIL /tmp/t0a-baseline.txt) <(grep FAIL /tmp/t0a-2.txt)
 ```
 
 Expected: all 12 short-ID checks PASS; the FAIL diff is empty; the roundtrip prints
-`Rolling back: 20261010000144_short_ids.sql` and then `Applied: 20261010000144_short_ids.sql`
+`Rolling back: 20261010000150_short_ids.sql` and then `Applied: 20261010000150_short_ids.sql`
 with no error.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add db/migrations/20261010000144_short_ids.sql tests/phase1_schema.sh
+git add db/migrations/20261010000150_short_ids.sql tests/phase1_schema.sh
 git commit -m "feat(db): permanent short IDs for samples, operations and tests
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -494,10 +494,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: Migration 145 — the primary subject is the earliest linked
+### Task 3: Migration 151 — the primary subject is the earliest linked
 
 **Files:**
-- Create: `db/migrations/20261010000145_test_subject_linked_at.sql`
+- Create: `db/migrations/20261010000151_test_subject_linked_at.sql`
 - Modify: `tests/phase1_schema.sh` (the "Test subject junction" section: one new check, one label)
 
 **Interfaces:**
@@ -545,7 +545,7 @@ Expected: `FAIL the earliest linked subject stays primary …`.
 
 - [ ] **Step 3: Write the migration**
 
-`db/migrations/20261010000145_test_subject_linked_at.sql`:
+`db/migrations/20261010000151_test_subject_linked_at.sql`:
 
 ```sql
 -- migrate:up
@@ -696,12 +696,12 @@ diff <(grep FAIL /tmp/t0a-baseline.txt) <(grep FAIL /tmp/t0a-3.txt)
 ```
 
 Expected: `earliest` PASS, every existing "Test subject junction" and "Deleting samples and edges"
-check still PASS, empty FAIL diff, clean roundtrip of 145.
+check still PASS, empty FAIL diff, clean roundtrip of 151.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add db/migrations/20261010000145_test_subject_linked_at.sql tests/phase1_schema.sh
+git add db/migrations/20261010000151_test_subject_linked_at.sql tests/phase1_schema.sh
 git commit -m "feat(db): a test's primary subject is the earliest linked one
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -709,10 +709,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 4: Migration 146 — test codes
+### Task 4: Migration 152 — test codes
 
 **Files:**
-- Create: `db/migrations/20261010000146_test_codes.sql`
+- Create: `db/migrations/20261010000152_test_codes.sql`
 - Modify: `tests/phase1_schema.sh` (new section after the short-ID section from Task 2)
 
 **Interfaces:**
@@ -859,7 +859,7 @@ Expected: FAIL lines (`column "test_code" … does not exist`).
 
 - [ ] **Step 3: Write the migration**
 
-`db/migrations/20261010000146_test_codes.sql`:
+`db/migrations/20261010000152_test_codes.sql`:
 
 ```sql
 -- migrate:up
@@ -1150,12 +1150,12 @@ diff <(grep FAIL /tmp/t0a-baseline.txt) <(grep FAIL /tmp/t0a-4.txt)
 ```
 
 Expected: all 26 test-code checks PASS, the short-ID and subject sections still PASS, empty FAIL
-diff, and the roundtrip rolls back 146, 145, 144 and applies them again without an error.
+diff, and the roundtrip rolls back 152, 151, 150 and applies them again without an error.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add db/migrations/20261010000146_test_codes.sql tests/phase1_schema.sh
+git add db/migrations/20261010000152_test_codes.sql tests/phase1_schema.sh
 git commit -m "feat(db): test codes built from the subject and type, kept up to date by the database
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -1200,7 +1200,7 @@ Expected: `Results:` with exactly the baseline's 4 failures (empty diff), clean 
 - [ ] **Step 3: Update the stream status**
 
 In `docs/superpowers/plans/2026-10-09-explorer-round-2.md`, change the T0 status cell to:
-`**T0a built** on feat/record-codes (migrations 144-146, short IDs and test codes); awaiting Opus
+`**T0a built** on feat/record-codes (migrations 150-152, short IDs and test codes); awaiting Opus
 review; T0b next`.
 
 - [ ] **Step 4: Commit**
@@ -1214,19 +1214,80 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 6 (coordinator, not a worker): review, apply, check live
+### Task 6 (coordinator, not a worker): review, check, dry run, apply, check live
 
 - [ ] Opus review of `feat/record-codes` against `feat/explorer-restyle` with the repo's
   `migration-review` checklist (base ref: the merge commit's first parent), plus the six
   "Decisions this plan makes" above for explicit sign-off.
-- [ ] Dry run on a copy of the live database: `pg_dump -Fc` of the live DB restored into a
-  scratch container, `dbmate up`, then: every sample/operation/test has a `short_id`; no clash
-  report; `version` and `audit_logs` row counts unchanged by the back-fill.
-- [ ] Backup of the touched tables on live: `pg_dump -Fc -t physical_samples -t
+- [ ] **Pre-checks on live (read-only).** Each must return 0, or migration 150 is blocked until the
+  cause is fixed (run by the controller on 2026-10-10: all 0):
+  - `SELECT count(*) FROM manufacturing_operations WHERE pass_code ~ '\{(seq|mf)\}';`
+  - `SELECT count(*) FROM physical_samples WHERE sample_code ~ '\{seq\}';`
+  - duplicate UUIDs across the three tables (one registry, so a UUID must not appear twice):
+    `SELECT id FROM (SELECT sample_id id FROM physical_samples UNION ALL SELECT operation_id FROM
+    manufacturing_operations UNION ALL SELECT session_id FROM test_sessions) x GROUP BY id HAVING
+    count(*) > 1;` (no rows)
+  - user triggers not in their normal state on the three tables (the back-fill refuses them):
+    `SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled <> 'O' AND tgrelid IN
+    ('physical_samples'::regclass, 'manufacturing_operations'::regclass, 'test_sessions'::regclass);`
+- [ ] **Dry run on a restored copy.** `pg_dump -Fc` of the live DB restored into a scratch container,
+  `dbmate up` (time migration 150: that is the live lock window; it holds `lock_timeout = 10s`
+  and ACCESS EXCLUSIVE on the three tables while it back-fills). Post-checks, all against the copy:
+  - `SELECT length(short_id), count(*) FROM short_ids GROUP BY 1;` (8 for nearly all rows; longer
+    only on a clash)
+  - `SELECT count(*) FROM short_ids` = samples + operations + tests;
+  - every user trigger on the three tables back to `'O'` (the pre-check query above returns 0);
+  - `sum(version)` of the three tables and `count(*)` of `audit_logs` taken before `dbmate up` equal
+    the values after migration 150 (the back-fill must not bump versions or write audit rows).
+- [ ] **Backup** of the touched tables on live: `pg_dump -Fc -t physical_samples -t
   manufacturing_operations -t test_sessions -t test_sessions_subject -t directus_fields` into
   `backups/pre_t0a_<UTC timestamp>.dump`.
-- [ ] Copy the three migration files into the main checkout's `db/migrations` (untracked, as for
-  143), `dbmate status` shows exactly 144-146 pending, `dbmate up`, `docker restart
-  d1-database-directus-1`.
-- [ ] Live check: the sample, operation and test forms show a read-only **Short ID**; a new test
-  with a linked sample gets `{sample code}-SEM1`; typing a code keeps it.
+- [ ] **Apply in a quiet window.** Stop Directus (`docker stop d1-database-directus-1`) and any
+  crawler or importer that writes to the three tables. Copy the three migration files into the
+  main checkout's `db/migrations` (untracked, as for 143), `dbmate status` shows exactly 150-152
+  pending, then `dbmate up`. Apply only through dbmate: it runs each migration in one transaction,
+  while `psql -f` failing mid-back-fill would leave the user triggers disabled. Then start
+  Directus (`docker start d1-database-directus-1`, or `docker restart` if it was left running).
+- [ ] **Live check:** the sample, operation and test forms show a read-only **Short ID**; a new test
+  with a linked sample gets `{sample code}-SEM1`; typing a code keeps it; "Save as copy" on a coded
+  test that keeps the copied code is refused as a duplicate (codes are unique), and the same copy
+  with the code box cleared gets the next number (`{sample code}-SEM2`), not the source's code.
+- Dry run done 2026-10-10 on a copy of live (directus_revisions / directus_activity data left out):
+  migration 150 took 0.45 s, all three 1.3 s; 10,445 short IDs, all 8 characters; `sum(version)`
+  119,408 and 140,897 audit rows unchanged; all triggers back to 'O'; 10 Directus field rows.
+  Pre-checks on live the same day: all 0.
+
+## Outcome (2026-10-10)
+
+Applied to live after the maintainer's go-ahead: backup `backups/pre_t0a_20261010T121545Z.dump`;
+Directus stopped ~25 s; 150 in 0.43 s, 151 and 152 in 30 ms; 10,445 short IDs, all 8 characters;
+`sum(version)` and audit rows unchanged; triggers back to 'O'. Forms show **Short ID** (operation,
+sample, test) and **Test Code** with its hint; a rolled-back run on live gave
+`2-AA-MF-2023-3-23-SEM1`, then `SEM2`, a typed code kept, and `record_by_short_id` resolving.
+
+Carry into T0b: (1) assert the four test-code bookkeeping columns are NULL after a clone insert;
+(2) the cascade comment/COMMENT still say "same numbers" — the branch-5 fallback can change the
+number on a clash; (3) tighten test (d) (assert `test_code_number` and the typed test untouched);
+(4) triggers on code columns retyped by migration 116 must not use `UPDATE OF <col>` or `WHEN`;
+(5) writing the rule's own value marks a code typed (revisit with the §5 preview); (6) spec drift:
+`test_code_for()` does not exist yet, `record_by_short_id` returns `record_id`, `test_code` sits at
+sort 1; (7) the deferred harness and doc minors listed in the review history.
+
+## Live demo and two follow-up fixes (2026-10-10)
+
+- **153 (hotfix, live):** creating a sample through Directus failed ("short_id: Value is required")
+  because Directus treats a NOT NULL column without a default as required. `short_id` got a `''`
+  column default; the trigger still assigns the real value on every insert. Opus-reviewed after
+  the fact: acceptable as is.
+- **154 (live, backup `backups/pre_t0a_154_20261010T130937Z.dump`):** a test inserted with
+  `sample_id` already set (Directus "Save as copy", importers) never got a code; the trigger now
+  falls back to the directly written `sample_id` / `insert_edge_id` when the junction gives none.
+  Opus-reviewed: safe.
+- **Demo records on live (safe to delete):** sample `DEMO-T0A-001` (short ID `581a6d5e`) with tests
+  `DEMO-T0A-001-SEM1` (`a6a9ea90`), `-SEM2` (`0c7a914a`, re-coded once by hand after 154) and
+  `-SEM3` (`001bac96`). A copy that kept the code was refused as a duplicate.
+- **More carry-overs for T0b:** add `CHECK (short_id ~ '^[0-9a-f]{8,32}$')` on the three tables (an
+  insert with triggers off would now silently store `''`); document that a multi-row junction insert
+  naming an edge before a directly written sample keeps the sample-based code; the second 153 check is
+  near-vacuous; add a check where a junction names a different primary than a directly written
+  sample_id; schema filter on the information_schema check.

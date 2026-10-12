@@ -207,11 +207,22 @@ def repoint_file_references(
     Each UPDATE runs in a savepoint: a unique violation (the new file already has its
     own force-analysis row, say) leaves that reference on the old row rather than
     aborting the sweep. Multi-column FKs are never rewritten, only counted.
+
+    A fingerprint (file_fingerprints, one row per file) moves with the file: it is
+    re-pointed like any other reference, but when the new file already has its own
+    fingerprint the old file's is dropped first and the new one kept (same shape as
+    the junction dedupe below), so the sweep never trips over the primary key.
     """
     junction_parent = dict(_JUNCTIONS)
     remaining = 0
     for table, col, ncols in fks:
         if ncols == 1:
+            if table == "file_fingerprints":
+                cur.execute(
+                    "DELETE FROM file_fingerprints WHERE directus_files_id=%s AND EXISTS "
+                    "(SELECT 1 FROM file_fingerprints WHERE directus_files_id=%s)",
+                    (old_id, new_id),
+                )
             parent = junction_parent.get(table)
             if parent:
                 cur.execute(

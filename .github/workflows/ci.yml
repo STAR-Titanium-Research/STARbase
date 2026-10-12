@@ -178,7 +178,7 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q jq postgresql-client
           pip install -r scripts/requirements.txt pytest requests \
-            "numpy==2.2.*" "scipy==1.14.*" "scikit-learn==1.5.*"
+            "numpy==2.2.*" "scipy==1.14.*" "scikit-learn==1.5.*" "h5py==3.12.*"
 
       # REQUIRE_DB_TESTS=1 makes tests/scripts/conftest.py fail any skipped test: the DB-level
       # tests skip themselves when the database, migrations, psql, jq or curl are missing, and a

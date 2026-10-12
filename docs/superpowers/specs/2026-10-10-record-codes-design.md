@@ -1,7 +1,12 @@
 # Record codes: test codes, operation codes that follow their fields, short IDs and file hashes
 
 Status: **approved by the maintainer on 2026-10-10** ("spec approved", with Q48 answered (a)).
-Next: the implementation plan. Stream T0 of
+**T0a, T0b and T0c (Directus side) are live (migrations 150-158, the `d1-next-number` operation-code
+route, the `d1-operation-code` box); T0d is built on `feat/record-codes` (scripts only, nothing deployed).**
+**T0e (file fingerprints) LIVE 2026-10-11: migration 159 + `scripts/file_fingerprints.py`; the 187 linked files are hashed (183 done, 4 permanent errors).**
+Next: T0f after the maintainer's N/R hand-fix.
+**T0d built (no migration): the FAST importers write `sintering_run_number`, `scripts/finalize_fast_codes.py` is retired.**
+Stream T0 of
 [`docs/superpowers/plans/2026-10-09-explorer-round-2.md`](../plans/2026-10-09-explorer-round-2.md);
 it goes before N1 (navigation), whose finder and Tests index use what this adds. Every decision
 below was made by the maintainer in a grilling round on 2026-10-09/10 (questions Q16-Q47; the
@@ -73,7 +78,7 @@ numbers are kept so the record can be traced).
 | Q35 | Sintering code = `DD-MM-YY-MF{machine}-{run}[-{T}C_{F}kN_{D}dia]`, machine 25 or 250. The running-MF-counter rule is dropped. |
 | Q48 | The run is the number the FAST machine shows: typed by the person on a hand-logged operation, read from the file by the importer. The importer fills in an existing operation with the same machine and run instead of creating a duplicate. |
 | Q36 | The rules live only in the database. The form box and the Force dashboard show a live preview by asking it; the dashboard stops writing codes. A Force App release is part of T0. |
-| Q37 | All 10,048 FAST codes are rebuilt to the Q35 rule once; afterwards they follow the rules like any other. New FAST imports get their code from the database (retires the `finalize_fast_codes.py` step). |
+| Q37 | All 10,048 FAST codes are rebuilt to the Q35 rule once; afterwards they follow the rules like any other. *(Rebuild superseded 2026-10-11: measured no-op, see the T0d outcome note.)* New FAST imports get their code from the database (retires the `finalize_fast_codes.py` step). |
 | Q38 | The 151 machining operations imported from experiment sheets stay **frozen**: their codes match the archive file names. Their 6 `N/R` codes go on the hand-fix list. |
 | Q39 | When a sample's code changes, the automatic codes of its operations and tests follow (same numbers). Typed and frozen codes are left alone. |
 | Q41 | Samples, operations and tests get a short ID. |
@@ -217,7 +222,7 @@ that needs frozen codes is added to this list explicitly, in its own migration.
 **Trigger** `mfg_op_set_code` replaces `mfg_op_assign_numbers`, BEFORE INSERT OR UPDATE.
 Its name sorts after `mfg_op_derive_category`, so `process_category` is already set when it runs.
 
-1. *Frozen:* leave `pass_code` alone.
+1. *Frozen:* never renamed automatically. A person can still re-type the code, but clearing it (empty, or writing a `{seq}`/`{mf}` placeholder) keeps the saved code.
 2. *Automatic or typed?* On UPDATE the code is automatic when `OLD.pass_code =
    operation_code_for(OLD, old sample code)` (Q29). On INSERT it is automatic when `pass_code` is
    NULL/'' or contains a placeholder.
@@ -266,16 +271,21 @@ concurrently) before relying on it.
   text (typed); ↻ clears it (back to automatic). Hints: "Automatic: follows the fields below" /
   "Typed: kept as you wrote it — ↻ to go back to automatic". The browser copy of the rules is
   deleted.
-- **Force dashboard (and the standalone Force App, same package):** `computeAutoCode` is removed.
-  Its metadata panel shows the preview from the endpoint and no longer PATCHes `pass_code`;
-  "name.stale" in `metadataDoctor` compares the stored code with the endpoint's answer. One Force
-  App release, through the `force-app-release` / ship-release workflow.
+- **Force dashboard (and the standalone Force App, same package):** `computeAutoCode` is removed
+  and the metadata panel no longer PATCHes `pass_code`; after a save it shows the code the database
+  stored (read back from the PATCH). *Changed in T0c (2026-10-11):* no live preview inside the
+  dashboard (the Directus form has it), and the opt-in "name.stale" check is retired rather than
+  rewired (an automatic code cannot be stale any more and typed codes are intended). The Directus
+  module ships with T0b; the standalone Force App gets it at its next release (a PR to `main`,
+  the maintainer's decision).
 
 ### 6. FAST rebuild (Q37) and the importer
 
+*(Steps 1-3 and the expected size below are superseded 2026-10-11: measured no-op, see the T0d outcome note at the end of this section.)*
+
 One migration, after §3 is in place:
 
-1. Back-fill `sintering_run_number` from `source_run_uid` (`fast25|4624` → 4624); stop with an
+1. *(superseded 2026-10-11: measured no-op, see the T0d outcome note)* Back-fill `sintering_run_number` from `source_run_uid` (`fast25|4624` → 4624); stop with an
    error listing any FAST row it cannot parse.
 2. Check that (machine, run) is unique across sintering rows; stop with the clashes listed if not.
 3. Rebuild every FAST `pass_code` with `operation_code_for`. One UPDATE statement; the statement-
@@ -284,7 +294,7 @@ One migration, after §3 is in place:
    restores them exactly; it is also added to the `DROP TABLE` list of the migration-141 test, the
    same CI trap the form fix hit.
 
-**Expected size (measured 2026-10-09):** with UTC dates, every FAST code already matches the rule:
+**Expected size (measured 2026-10-09):** *(superseded 2026-10-11: measured no-op, see the T0d outcome note)* with UTC dates, every FAST code already matches the rule:
 0 date prefixes differ, 0 run numbers differ from `source_run_uid`, 0 duplicate runs, 0 short
 codes whose row has parameters, and the 293 "other" shapes are codes with only some parameters
 set, which the rule also writes. So the rebuild should change almost nothing; its real effect is
@@ -294,21 +304,34 @@ run lists every changed row for the reviewer.
 `scripts/finalize_fast_codes.py` is retired: the FAST importers leave `pass_code` NULL as now and
 set `sintering_run_number`, and the trigger builds the code on insert.
 
+T0d outcome (2026-10-11): the rebuild was measured on live and is a no-op, so no rebuild migration was written; the importers write `sintering_run_number`, adopt a hand-logged run of the same machine and run, and `finalize_fast_codes.py` is deleted.
+
 ### 7. File identity (Q43, Q45, Q46)
 
 - **Table `file_fingerprints`:** `directus_files_id UUID PRIMARY KEY` (FK, ON DELETE CASCADE),
   `content_sha256 TEXT` (the whole file), `data_sha256 TEXT` (`.mat` only: the *decoded* main
   force-data array, never the bytes on disk, because v7.3 files are HDF5 and their chunked or
-  compressed bytes change without the data changing. Defined as SHA-256 over: the array's shape
-  as two little-endian uint64, then its values as float64 little-endian in column-major order.
-  The variable read is the one `docs/force-file-standards.md` §2 names for the file's layout
-  version), `size_bytes BIGINT`,
+  compressed bytes change without the data changing. Defined as SHA-256 over: the array's
+  MATLAB shape as two little-endian uint64 (rows, cols), then, for each column in order, the
+  32-byte SHA-256 digest of that column's values as float64 little-endian (top to bottom).
+  *Amended 2026-10-11 during T0e:* the first wording hashed all values in one column-major
+  stream; real v7.3 force files are chunked 10 columns × 819 samples, so a column-major stream
+  re-reads an 11.8 GB file ~10× over the share, while per-column digests are computed in one
+  pass. The variable read is `data` when present, else `DATA` — taken from the variables, not
+  from `fileVersion` (22 files declare v1 but carry the v0.9 layout)), `size_bytes BIGINT`,
   `hashed_at TIMESTAMPTZ`. Index on each hash. `data_sha256` survives metadata-only edits (the
   future metadata migration), so an old file stays recognisable after it; a layout upgrade
   (v0.5 → v1.0) changes it, and the tool doing the upgrade records the new value.
 - **Back-fill:** the heavy-data worker hashes the 186 operation-linked files first, then walks the
   rest of `star` and `local` in the background, oldest first, resumable, throttled so the share
   stays usable. Re-hashed when `directus_files.modified_on` changes.
+  *As built (T0e, 2026-10-11):* a host script, `scripts/file_fingerprints.py`, not the heavy-data
+  worker (the worker has neither the share nor a database driver). It runs by hand:
+  `--phase linked` (files linked to operations, samples, tests and force analyses), then
+  `--phase all`. The staleness key is `filesize` plus the share mtime the indexer writes to
+  `metadata.modified` (falling back to `modified_on`). Each row has a status (`done` / `error` /
+  `missing`); failed rows are retried on the next run. When the indexer detects a moved file,
+  the fingerprint moves with the file's references.
 - **New files:** the code at capture time is the file name, with no ID (Q43). Phase 2 recording
   generates the operation's UUID (**random, v4**, so its short ID is random too, §1) when a
   capture starts, writes it into the file's metadata as `RecordID` (and `RecordShortID`), and
@@ -331,13 +354,16 @@ codes are allowed by UNIQUE and become automatic codes at their next edit (they 
 
 | Version | What |
 |---|---|
-| `…144_short_ids` | `short_id` on the three tables, back-fill, trigger, guard, `record_by_short_id()` |
-| `…145_test_subject_linked_at` | `linked_at`, primary subject = earliest linked |
-| `…146_test_codes` | test code columns, counters, `test_code_for()`, trigger, Directus field rows |
-| `…147_operation_codes_in_db` | `sintering_run_number`, `operation_code_for()`, `mfg_op_set_code` replacing `mfg_op_assign_numbers`, preview functions, sample/edge code cascade |
-| `…148_fast_code_rebuild` | back-fill run numbers, uniqueness check, rebuild the FAST codes |
-| `…149_file_fingerprints` | the table and its indexes |
-| later | `UNIQUE (pass_code)`, after the hand-fix |
+| `…150_short_ids` | `short_id` on the three tables, back-fill, trigger, guard, `record_by_short_id()` |
+| `…151_test_subject_linked_at` | `linked_at`, primary subject = earliest linked |
+| `…152_test_codes` | test code columns, counters, `test_code_for()`, trigger, Directus field rows |
+| `…155_short_id_format_check` | **T0b, built.** CHECK on the three `short_id` columns (8-32 lower-case hex) |
+| `…156_operation_code_rule` | **T0b, built.** `code_num()`, `sintering_run_number` and its unique index (per machine), `operation_code_for()` (machining token drops a two-letter method prefix), run-number back-fill |
+| `…157_operation_code_trigger` | **T0b, built.** `mfg_op_set_code` replacing 126's `mfg_op_assign_numbers` (automatic vs typed, renumbering, frozen experiment_sheet rows keep their code even when cleared), `operation_sequence` back-fill with ledger `d1_private.operation_sequence_backfill` |
+| `…158_operation_code_cascade_and_preview` | **T0b, built.** Sample-code cascade to automatic operations, statement-level rollup-lock triggers on `physical_samples` and `manufacturing_operations`, `preview_operation_code()` |
+| (none) | **T0d, built: no migration.** The importers write `sintering_run_number`; `finalize_fast_codes.py` retired. Migration 156 already back-filled the run numbers, and the rebuild measured as a no-op (see §6) |
+| next free | T0e: `file_fingerprints`, the table and its indexes (was planned as 155) |
+| later | T0f: `UNIQUE (pass_code)`, after the hand-fix |
 
 Each has a working `migrate:down`, comments on every new table and column, and its checks in
 `tests/phase1_schema.sh`. The latest live migration is `20261009000143`. Data-dictionary entries
@@ -379,11 +405,11 @@ The T0 worktree branches from `feat/explorer-restyle` **with `fix/restore-inline
 merged in first**, so migration 143 and its test fix (`21790784`) are in the tree and the
 `tests/phase1_schema.sh` edits do not conflict.
 
-1. **T0a** short IDs + test codes (migrations 144-146), with tests.
-2. **T0b** operation codes in Postgres + preview endpoint + the form box (147).
+1. **T0a** short IDs + test codes (migrations 150-152), with tests.
+2. **T0b** operation codes in Postgres + preview endpoint + the form box (155-158).
 3. **T0c** Force dashboard / force-plotting changes and the Force App release.
-4. **T0d** FAST rebuild (148) — backup of `manufacturing_operations` first; dry run; apply.
-5. **T0e** file fingerprints (149) + the worker's back-fill + the force-file-standard update.
+4. **T0d** FAST importers feed the rule (built, no migration; the rebuild was a no-op).
+5. **T0e** file fingerprints (next free) + the worker's back-fill + the force-file-standard update.
 6. **T0f** UNIQUE on `pass_code`, after the maintainer's hand-fix.
 
 Each stage: Opus migration review → backup of the touched tables → apply → Directus restart →
