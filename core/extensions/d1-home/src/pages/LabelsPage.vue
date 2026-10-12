@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
 	LoadState, PageShell, Section, blankTemplate, canEditTemplate, MAX_COPIES, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
-	sampleEntries, slotsPerPage, summaryText, type LabelSample, type LabelTemplate,
+	sampleEntries, slotsPerPage, summaryText, useRequestGate, type LabelSample, type LabelTemplate,
 } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 import { useExplorerHost } from '../explorerHost';
@@ -113,18 +113,28 @@ async function print(): Promise<void> {
 // ---- ?ids= and ?codes= --------------------------------------------------------------------------
 const selectionNote = ref('');
 const selectionError = ref('');
+// The samples the address put on the selection. A new ?ids= / ?codes= replaces them; the ones ticked by hand stay.
+let fromUrl: string[] = [];
+const queryGate = useRequestGate();
 async function applyQuery(): Promise<void> {
+	const token = queryGate.begin();
 	const { ids, codes } = parseSelectionQuery(route.query);
-	if (!ids.length && !codes.length) return;
 	selectionError.value = '';
 	selectionNote.value = '';
+	if (!ids.length && !codes.length) return;
 	try {
-		const { missing } = await samples.resolve(ids, codes);
+		const { found, missing } = await samples.lookup(ids, codes);
+		if (!queryGate.isCurrent(token)) return; // a newer address replaced this one
+		samples.removeMany(fromUrl);
+		samples.add(found);
+		fromUrl = found.map((s) => s.id);
 		if (missing.length) selectionNote.value = `Not found, or not visible to you: ${missing.join(', ')}.`;
 	} catch (e) {
+		if (!queryGate.isCurrent(token)) return;
 		selectionError.value = `Could not load the preselected samples: ${errorText(e)}`;
 	}
 }
+onBeforeUnmount(() => queryGate.cancel());
 watch(() => [route.query.ids, route.query.codes], () => void applyQuery());
 
 onMounted(() => {

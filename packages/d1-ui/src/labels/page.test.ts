@@ -22,6 +22,8 @@ describe('parseSelectionQuery', () => {
 	});
 	it('reads codes and tolerates missing or odd values', () => {
 		expect(parseSelectionQuery({ codes: 'S-1, S-2 ,S-1' }).codes).toEqual(['S-1', 'S-2']);
+		expect(parseSelectionQuery({ codes: 'S 1,S 2' }).codes).toEqual(['S 1', 'S 2']);
+		expect(parseSelectionQuery({ codes: ['A', 'B;C'] }).codes).toEqual(['A', 'B', 'C']);
 		expect(parseSelectionQuery({})).toEqual({ ids: [], codes: [] });
 		expect(parseSelectionQuery({ ids: null, codes: 3 })).toEqual({ ids: [], codes: [] });
 	});

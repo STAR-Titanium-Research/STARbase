@@ -29,7 +29,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export function parseSelectionQuery(query: Query): { ids: string[]; codes: string[] } {
 	return {
 		ids: unique(queryValues(query.ids).filter((x) => UUID_RE.test(x)).map((x) => x.toLowerCase())),
-		codes: unique(queryValues(query.codes)),
+		// split like the paste box: a code may contain spaces
+		codes: unique((Array.isArray(query.codes) ? query.codes : [query.codes]).flatMap((x) => (typeof x === 'string' ? parseCodes(x) : []))),
 	};
 }
 

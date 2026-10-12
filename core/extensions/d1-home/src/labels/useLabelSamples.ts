@@ -106,7 +106,7 @@ export function useLabelSamples() {
 	// ---- resolving ids and codes ------------------------------------------------------------------
 	// Adds the samples with these ids or codes to the selection, in the order asked, and returns what could not
 	// be found (missing, or not visible to this user).
-	async function resolve(ids: string[], codes: string[]): Promise<{ added: number; missing: string[] }> {
+	async function lookup(ids: string[], codes: string[]): Promise<{ found: LabelSample[]; missing: string[] }> {
 		const read = async (field: 'sample_id' | 'sample_code', values: string[]): Promise<Map<string, LabelSample>> => {
 			const out = new Map<string, LabelSample>();
 			for (const part of chunks(values, CHUNK)) {
@@ -134,14 +134,24 @@ export function useLabelSamples() {
 			if (s) found.push(s);
 			else missing.push(code);
 		}
+		return { found, missing };
+	}
+	async function resolve(ids: string[], codes: string[]): Promise<{ added: number; missing: string[] }> {
+		const { found, missing } = await lookup(ids, codes);
 		const before = selected.value.length;
 		add(found);
 		return { added: selected.value.length - before, missing };
 	}
+	// Takes these samples off the selection (the ones an earlier ?ids= / ?codes= put there).
+	function removeMany(ids: string[]): void {
+		const drop = new Set(ids);
+		selected.value = selected.value.filter((s) => !drop.has(s.id));
+		for (const id of drop) dropOverride(id);
+	}
 
 	return {
-		selected, add, remove, clear, copyOverrides, setCopies,
+		selected, add, remove, removeMany, clear, copyOverrides, setCopies,
 		search, projectId, campaignId, results, total, loading, error, runSearch,
-		projects, campaigns, optionsError, loadOptions, resolve,
+		projects, campaigns, optionsError, loadOptions, lookup, resolve,
 	};
 }
