@@ -14,9 +14,9 @@ from `feat/label-printing` once S2 is merged.
 
 | Stream | Worktree | Branch | Model | State |
 |---|---|---|---|---|
-| S1 migration | `.claude/worktrees/lp-s1` | `lp/s1-templates` | sonnet | not started |
-| S2 pure logic | `.claude/worktrees/lp-s2` | `lp/s2-logic` | sonnet | not started |
-| S4 cleanup | `.claude/worktrees/lp-s4` | `lp/s4-cleanup` | haiku | not started |
+| S1 migration | `.claude/worktrees/lp-s1` | `lp/s1-templates` | sonnet | in progress |
+| S2 pure logic | `.claude/worktrees/lp-s2` | `lp/s2-logic` | sonnet | in progress |
+| S4 cleanup | `.claude/worktrees/lp-s4` | `lp/s4-cleanup` | haiku | in progress |
 | S3 page | `.claude/worktrees/lp-s3` | `lp/s3-page` | sonnet | blocked on S1+S2 merge |
 | S5 scanning | `.claude/worktrees/lp-s5` | `feat/label-scan` | sonnet | blocked on S2 merge |
 
