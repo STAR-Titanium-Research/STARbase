@@ -5,7 +5,7 @@
   "scripts": {
     "build": "directus-extension build",
     "dev": "directus-extension build --watch",
-    "test": "node --import ./src/test-register.mjs --test src/index.test.mjs src/label.test.mjs"
+    "test": "node --import ./src/test-register.mjs --test src/index.test.mjs"
   },
   "keywords": [
     "directus",

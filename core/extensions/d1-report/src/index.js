@@ -16,20 +16,6 @@ import { defineEndpoint } from '@directus/extensions-sdk';
 import QRCode from 'qrcode';
 import { adminRecordUrl, renderSampleReport, renderOperationReport, renderTestReport } from './render.js';
 import { createAccess } from './access.js';
-import {
-	LABEL_JS,
-	MAX_LABELS,
-	capError,
-	initials,
-	labelDate,
-	orderRows,
-	parseSelection,
-	parseStart,
-	renderLabelPicker,
-	renderLabelSheet,
-	resolveLayout,
-	sampleRecordUrl,
-} from './label.js';
 
 // Report pages are our own self-contained HTML. Directus's global CSP blocks inline
 // scripts/handlers, so we (a) serve the toggle/print JS as a same-origin file and
@@ -204,103 +190,16 @@ export default defineEndpoint({
 			res.set('Content-Type', 'application/javascript; charset=utf-8').send(REPORT_JS);
 		});
 
-		// Sample labels. Same auth model as the reports: a signed-in user, and every row is
-		// read through ItemsService with the CALLER's accountability, so a sample they cannot
-		// read simply gets no label. The QR encodes the record's admin URL: scanning it
-		// opens the Directus app, which asks for sign-in; nothing public is exposed.
-		router.get('/label.js', (_req, res) => {
-			res.set('Content-Type', 'application/javascript; charset=utf-8').send(LABEL_JS);
+		// Label routes redirect to the Explorer labels page (no authentication required).
+		router.get('/label', (req, res) => {
+			const target = new URL('/admin/home/labels', 'http://localhost');
+			if (req.query.ids) target.searchParams.set('ids', req.query.ids);
+			if (req.query.codes) target.searchParams.set('codes', req.query.codes);
+			res.status(302).redirect(target.pathname + target.search);
 		});
 
-		router.get('/label', async (req, res) => {
-			if (!req.accountability?.user) return plain(res, 401, 'Authentication required.');
-
-			const sel = parseSelection(req.query);
-			if (sel.error) return plain(res, 400, sel.error);
-			const lay = resolveLayout(req.query.layout);
-			if (!lay) return plain(res, 400, 'Unknown layout. Use a4-21 or single-50x25.');
-			const start = parseStart(req.query.start, lay.layout);
-			if (start.error) return plain(res, 400, start.error);
-
-			try {
-				const a = await accessFor(req);
-				const clauses = [];
-				if (sel.ids.length) clauses.push({ sample_id: { _in: sel.ids } });
-				if (sel.codes.length) clauses.push({ sample_code: { _in: sel.codes } });
-				const rows = orderRows(
-					await a.list('physical_samples', clauses.length === 1 ? clauses[0] : { _or: clauses }),
-					sel
-				);
-				// Distinct samples, after codes resolved to ids (a code may repeat an id).
-				if (capError(rows)) return plain(res, 400, capError(rows));
-				// Same body whether the samples are missing or not permitted.
-				if (!rows.length) return notFound(res, 'Sample');
-
-				// Material and owner are shown only when the caller can read those collections.
-				const related = (collection, pk, key) => {
-					const ids = [...new Set(rows.map((r) => r[key]).filter(Boolean))];
-					return ids.length ? a.list(collection, { [pk]: { _in: ids } }) : [];
-				};
-				const [materials, people] = await Promise.all([
-					related('materials', 'material_id', 'material_id'),
-					related('people', 'person_id', 'owner_person_id'),
-				]);
-				const matById = new Map(materials.map((m) => [String(m.material_id), m]));
-				const personById = new Map(people.map((p) => [String(p.person_id), p]));
-
-				const haveIds = new Set(rows.map((r) => String(r.sample_id).toLowerCase()));
-				const haveCodes = new Set(rows.map((r) => String(r.sample_code)));
-				const missing = sel.ids.some((i) => !haveIds.has(i)) || sel.codes.some((c) => !haveCodes.has(c));
-
-				const labels = await Promise.all(
-					rows.map(async (r) => {
-						const m = matById.get(String(r.material_id));
-						return {
-							code: r.sample_code,
-							material: m ? m.common_name || m.alloy_code : '',
-							date: labelDate(r.manufactured_date, r.created_at),
-							owner: initials(personById.get(String(r.owner_person_id))?.full_name),
-							qrSvg: await QRCode.toString(sampleRecordUrl(env.PUBLIC_URL, r.sample_id), {
-								type: 'svg',
-								margin: 1,
-								errorCorrectionLevel: lay.layout.style.qrEcc,
-							}),
-						};
-					})
-				);
-
-				res.set('Content-Security-Policy', REPORT_CSP);
-				res.set('Content-Type', 'text/html; charset=utf-8').send(
-					renderLabelSheet({
-						labels,
-						layoutKey: lay.key,
-						skip: start.skip,
-						query: req.query,
-						notice: missing ? 'Some samples were not found or you may not read them; they have no label.' : '',
-					})
-				);
-			} catch (err) {
-				logger.error(`d1-report label failed: ${err.stack || err.message}`);
-				plain(res, 500, 'Label generation failed.');
-			}
-		});
-
-		router.get('/labels', async (req, res) => {
-			if (!req.accountability?.user) return plain(res, 401, 'Authentication required.');
-			const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 64) : '';
-			try {
-				const a = await accessFor(req);
-				const filter = q ? { sample_code: { _icontains: q } } : {};
-				const [rows, total] = await Promise.all([
-					a.list('physical_samples', filter, ['sample_id', 'sample_code'], ['-created_at'], MAX_LABELS),
-					a.count('physical_samples', filter),
-				]);
-				res.set('Content-Security-Policy', REPORT_CSP);
-				res.set('Content-Type', 'text/html; charset=utf-8').send(renderLabelPicker({ rows, q, total }));
-			} catch (err) {
-				logger.error(`d1-report label picker failed: ${err.stack || err.message}`);
-				plain(res, 500, 'Could not list samples.');
-			}
+		router.get('/labels', (req, res) => {
+			res.status(302).redirect('/admin/home/labels');
 		});
 
 		router.get('/sample/:id', async (req, res) => {
