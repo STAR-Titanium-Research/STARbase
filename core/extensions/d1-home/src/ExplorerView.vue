@@ -41,7 +41,12 @@ function onKeydown(e: KeyboardEvent) {
 	openFinder();
 }
 onMounted(() => window.addEventListener('keydown', onKeydown));
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
+onBeforeUnmount(() => {
+	window.removeEventListener('keydown', onKeydown);
+	// Every Explorer page has its own ExplorerView, and scanOpen is shared: a dialog still open when the
+	// page goes away (browser Back, a link) must not open again on the next page.
+	scanOpen.value = false;
+});
 </script>
 
 <template>
