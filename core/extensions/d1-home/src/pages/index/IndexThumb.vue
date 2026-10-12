@@ -57,13 +57,17 @@ const placeholder = computed(() => {
 </template>
 
 <style scoped>
-.d1-thumb { box-sizing: border-box; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; line-height: 1.15; }
+.d1-thumb { position: relative; box-sizing: border-box; width: 100%; height: 100%; min-width: 0; display: flex; align-items: center; justify-content: center; line-height: 1.15; }
 img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .ph { padding: 3px; text-align: center; font-size: var(--fs-xs, 10px); color: var(--d1-dim); overflow-wrap: anywhere; }
 
-/* The drawing keeps its own colours and proportions (SampleGeometry); here it only shrinks to the
-   box, without the tile's own frame (the box already has one). */
-.d1-thumb .drawing { width: 100%; height: 100%; box-sizing: border-box; padding: 4px; border: 0; border-radius: 0; background: transparent; }
-.drawing :deep(.canvas) { height: 100%; }
-.drawing :deep(.canvas svg) { width: auto; height: 100%; max-width: 100%; }
+/* The drawing keeps its own colours and proportions (SampleGeometry); here it only scales to fit the
+   box, whole (contain), without the tile's own frame (the box already has one). The drawing's SVG has
+   a viewBox but no size, so it is laid over the box (absolute, 100% x 100%) and the viewBox's own
+   meet scaling does the fitting; sizing it by `height: 100%` of a content-sized parent does not work
+   (the SVG then falls back to a default size and overflows the box). */
+.d1-thumb .drawing { position: absolute; inset: 0; width: auto; height: auto; box-sizing: border-box; padding: 4px; border: 0; border-radius: 0; background: transparent; }
+.drawing :deep(.canvas) { position: relative; width: 100%; height: 100%; }
+.drawing :deep(.canvas svg) { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; margin: 0; }
+.drawing :deep(.no-drawing) { font-size: var(--fs-xs, 10px); }
 </style>

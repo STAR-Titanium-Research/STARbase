@@ -5,6 +5,7 @@
 // the row's buttons. A click anywhere on the card does what the link does for a mouse.
 import type { CardFact } from './cardFacts';
 import { isPlainClick } from './cardFacts';
+import { hasTextSelection } from '../components/textSelection';
 
 const props = defineProps<{
 	link: string;
@@ -25,10 +26,16 @@ function onLink(e: MouseEvent): void {
 	e.preventDefault();
 	emit('open');
 }
+
+// A click anywhere on the card opens it, unless it ends a drag-select of the card's text.
+function onCard(): void {
+	if (hasTextSelection()) return;
+	emit('open');
+}
 </script>
 
 <template>
-	<article class="card" @click="emit('open')">
+	<article class="card" @click="onCard">
 		<div v-if="$slots.thumb" class="pic"><slot name="thumb" /></div>
 		<div class="body">
 			<a v-if="href" class="head" :class="{ mono }" :href="href" :aria-label="link ? undefined : 'Open'" @click="onLink">{{ link || '—' }}</a>

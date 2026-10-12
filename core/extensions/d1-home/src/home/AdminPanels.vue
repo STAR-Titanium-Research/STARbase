@@ -123,10 +123,16 @@ const nf = (n: number) => n.toLocaleString('en-GB');
 .dot.off { background: var(--d1-dim); }
 .facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; padding: 0; }
 .facts > div {
-	flex: 1 1 80px; min-width: 0; padding: 6px 10px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
+	/* Label above value. Directus's own stylesheet makes `dl > div` a row and `dd` a shrinking, ellipsised
+	   flex item, which cut "183" to "1…" in a narrow tile: the tile is a column here and the value never
+	   shrinks or truncates; a long label wraps instead. */
+	display: flex; flex-direction: column; flex: 1 1 80px; min-width: min-content; padding: 6px 10px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
 }
-.facts dt { font-size: var(--fs-xs); font-weight: 600; color: var(--d1-dim); white-space: nowrap; }
-.facts dd { margin: 0; font-size: var(--fs-lg, 15px); font-weight: 700; font-variant-numeric: tabular-nums; }
+.facts dt { display: block; font-size: var(--fs-xs); font-weight: 600; color: var(--d1-dim); overflow-wrap: anywhere; }
+.facts dd {
+	display: block; flex: none; margin: 0; overflow: visible; text-overflow: clip; white-space: nowrap;
+	color: var(--theme--foreground); font-size: var(--fs-lg, 15px); font-weight: 700; font-variant-numeric: tabular-nums;
+}
 .facts dd.bad { color: var(--d1-bad); }
 .facts dd.warn { color: var(--d1-warn); }
 .files { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }

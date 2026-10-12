@@ -61,6 +61,8 @@ const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
 const hasPlots = computed(() => plotKind(props.def.collection) !== null);
 // A sample's code is what its "Force (n)" button searches the operations list for.
 const plotCode = (row: Record<string, unknown>): string => (typeof row.sample_code === 'string' ? row.sample_code : '');
+// The row's name, for its buttons' accessible names (its first column, else its key).
+const rowLabel = (row: Record<string, unknown>): string => cellText(row, props.def.columns[0], props.def) || rowKey(row);
 const VIEW_OPTIONS = [
 	{ value: 'table', label: 'Table', icon: '☰' },
 	{ value: 'cards', label: 'Cards', icon: '▦' },
@@ -228,21 +230,21 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 					/>
 				</label>
 				<template v-for="chip in chips" :key="chip.field">
-				<button
-					v-if="chip.flag"
-					type="button"
-					class="flag"
-					:class="{ on: chip.value === 'true' }"
-					:aria-pressed="chip.value === 'true'"
-					@click="setFilter(chip.field, chip.value === 'true' ? '' : 'true')"
-				>{{ chip.label }}</button>
-				<label v-else class="field">
-					<span>{{ chip.label }}</span>
-					<select :value="chip.value" :aria-label="`Filter by ${chip.label.toLowerCase()}`" @change="setFilter(chip.field, ($event.target as HTMLSelectElement).value)">
-						<option value="">Any {{ chip.label.toLowerCase() }}</option>
-						<option v-for="o in chip.options" :key="o.value" :value="o.value">{{ o.label }}</option>
-					</select>
-				</label>
+					<button
+						v-if="chip.flag"
+						type="button"
+						class="flag"
+						:class="{ on: chip.value === 'true' }"
+						:aria-pressed="chip.value === 'true'"
+						@click="setFilter(chip.field, chip.value === 'true' ? '' : 'true')"
+					>{{ chip.label }}</button>
+					<label v-else class="field">
+						<span>{{ chip.label }}</span>
+						<select :value="chip.value" :aria-label="`Filter by ${chip.label.toLowerCase()}`" @change="setFilter(chip.field, ($event.target as HTMLSelectElement).value)">
+							<option value="">Any {{ chip.label.toLowerCase() }}</option>
+							<option v-for="o in chip.options" :key="o.value" :value="o.value">{{ o.label }}</option>
+						</select>
+					</label>
 				</template>
 				<button v-if="hasFilters" type="button" class="link clear" @click="clearFilters">Clear filters</button>
 			</div>
@@ -271,7 +273,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
 					<template v-if="$slots.footer || hasPlots" #footer="{ row }">
-						<RowPlotButtons v-if="hasPlots" :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :plots="plots[rowKey(row)]" />
+						<RowPlotButtons v-if="hasPlots" size="card" :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
 						<slot name="footer" :row="row" />
 					</template>
 				</CardGrid>
@@ -321,7 +323,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 									<template v-else>{{ cellText(row, c, def) }}</template>
 								</td>
 								<td v-if="hasPlots" class="plots">
-									<RowPlotButtons :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :plots="plots[rowKey(row)]" />
+									<RowPlotButtons :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
 								</td>
 							</tr>
 						</template>
@@ -399,6 +401,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 	background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: var(--d1-radius, 12px);
 	padding: 6px 16px 4px; box-shadow: var(--d1-shadow);
 }
+.panel { min-width: 0; }
 .panel.busy { opacity: 0.6; }
 .state-row { padding: 6px 0; }
 
