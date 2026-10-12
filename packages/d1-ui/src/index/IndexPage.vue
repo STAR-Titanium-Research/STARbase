@@ -202,7 +202,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
 								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
 							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
-								<td v-if="def.selectAction" class="fit">
+								<td v-if="def.selectAction" class="fit" @click.stop>
 									<input
 										type="checkbox"
 										:checked="isPicked(row)"
