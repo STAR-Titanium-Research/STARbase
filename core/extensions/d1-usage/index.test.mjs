@@ -167,13 +167,13 @@ test('validTarget accepts only known page keys and <collection>:<id> of the seve
     assert.deepEqual([...RECORD_COLLECTIONS].sort(), [
         'campaigns', 'equipment', 'manufacturing_operations', 'people', 'physical_samples', 'projects', 'test_sessions',
     ]);
-    for (const k of ['samples', 'action:log-operation', 'home']) assert.equal(validTarget('page', k), true, k);
+    for (const k of ['samples', 'action:log-operation', 'projects']) assert.equal(validTarget('page', k), true, k);
     for (const c of RECORD_COLLECTIONS) {
         assert.equal(validTarget('record', `${c}:${S1}`), true, c);
         assert.equal(validTarget('record', `${c}:42`), true, `${c} integer id`);
     }
     const bad = [
-        ['page', 'nope'], ['page', ''], ['page', 'action:'], ['page', `physical_samples:${S1}`],
+        ['page', 'nope'], ['page', 'my-samples'], ['page', 'home'], ['page', ''], ['page', 'action:'], ['page', `physical_samples:${S1}`],
         ['page', "samples'; DROP TABLE x;--"], ['page', 'x'.repeat(500)], ['page', 5], ['page', null], ['page', undefined],
         ['record', 'samples'], ['record', `directus_users:${S1}`], ['record', `physical_samples:`],
         ['record', `physical_samples:${S1.toUpperCase()}`], ['record', 'physical_samples:0'],
@@ -192,7 +192,7 @@ test('PAGE_KEYS is one literal list of quoted keys in the file (the kit drift te
     const keys = [...block[1].matchAll(/^\s*'([^']+)',\s*$/gm)].map((m) => m[1]);
     assert.deepEqual(keys, [...PAGE_KEYS]);
     assert.ok(PAGE_KEYS instanceof Set && PAGE_KEYS.size > 20);
-    for (const k of ['samples', 'my-samples', 'action:log-operation', 'action:register-sample']) assert.ok(PAGE_KEYS.has(k), k);
+    for (const k of ['samples', 'projects', 'force-dashboard', 'action:log-operation', 'action:register-sample']) assert.ok(PAGE_KEYS.has(k), k);
 });
 
 test('the default export is an endpoint with the right id', () => {

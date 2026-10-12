@@ -54,17 +54,16 @@ export const RECORD_COLLECTIONS = [
 
 // The page keys a client may ping. One literal list on purpose: the Explorer kit (packages/d1-ui,
 // usage.ts) keeps a copy and a drift test reads THIS FILE as text and compares the two, so keep one
-// quoted key per line and add keys here only (the d1-home task extends this same list).
-// Route slugs are the Explorer's (/home/<slug>); action:* are quick actions (weight 3).
+// quoted key per line and add keys here only (then in usage.ts: its test says what is missing).
+// Each key is a real destination the Explorer pings: an index page's slug (/home/<slug>, every
+// INDEX_DEFS entry plus the bespoke projects and people pages), a dashboard module's id (without its
+// d1- prefix), or a quick action (action:*, weight 3). Saved views ("My samples") are bookmarks of the
+// samples page, not pages of their own, so they have no key.
 export const PAGE_KEYS = new Set([
-    'home',
+    'campaigns',
     'samples',
-    'my-samples',
     'operations',
     'tests',
-    'campaigns',
-    'projects',
-    'people',
     'tools',
     'tool-boxes',
     'inserts',
@@ -81,10 +80,10 @@ export const PAGE_KEYS = new Set([
     'prep-recipes',
     'etchants',
     'fast-recipes',
-    'register-sample',
+    'projects',
+    'people',
     'force-dashboard',
     'fast-dashboard',
-    'fast-runs',
     'action:register-sample',
     'action:log-operation',
     'action:print-labels',

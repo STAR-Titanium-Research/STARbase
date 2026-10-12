@@ -10,9 +10,11 @@ import MyWork from './home/MyWork.vue';
 import LabStats from './home/LabStats.vue';
 import RecentActivity from './home/RecentActivity.vue';
 import AdminPanels from './home/AdminPanels.vue';
+import FrequentlyUsed from './home/FrequentlyUsed.vue';
 
 // Home is "my work" (docs/superpowers/specs/2026-10-06-explorer-pages-design.md, "Home"), laid out
-// calmly (N1b, decision 5): a greeting with the quick actions in it, one stats band, then a row of
+// calmly (N1b, decision 5): a greeting with the quick actions in it, the frequently-used card (two
+// short lists in one panel), one stats band, then a row of
 // two equal-height panels (what needs attention, your work), the admin panels (admins only) and the
 // recent activity. Every block is its own component in ./home/ and loads on its own, so one
 // forbidden collection never blanks Home, and none of them draws an empty box.
@@ -45,6 +47,7 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 				<QuickActions />
 			</section>
 
+			<FrequentlyUsed />
 			<LabStats />
 			<div class="row">
 				<NeedsAttention :is-admin="isAdmin" />
