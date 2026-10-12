@@ -111,11 +111,11 @@ describe('normaliseOverview', () => {
 
 describe('ownerless', () => {
 	const o = { samples: 3, campaigns: 0, machiningOperations: 4 };
-	it('links each row to its Explorer list', () => {
+	it('links each row to its Explorer list with the No owner chip on', () => {
 		expect(ownerlessRows(o).map((r) => [r.key, r.count, r.to])).toEqual([
-			['samples', 3, '/home/samples'],
-			['campaigns', 0, '/home/campaigns'],
-			['operations', 4, '/home/operations'],
+			['samples', 3, '/home/samples?f.no_owner=true'],
+			['campaigns', 0, '/home/campaigns?f.no_owner=true'],
+			['operations', 4, '/home/operations?f.no_owner=true'],
 		]);
 	});
 	it('totals the three', () => {

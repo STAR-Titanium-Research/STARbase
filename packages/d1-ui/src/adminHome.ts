@@ -6,7 +6,7 @@
 // can be null (that part's query failed), so every reader below treats a missing part as "could not
 // load", never as zero.
 
-import { collectionRoute } from './recordRoute';
+import { indexRoute } from './recordRoute';
 
 /** The crawler counts as online when its heartbeat is younger than this. */
 export const CRAWLER_ONLINE_MS = 30_000;
@@ -114,18 +114,21 @@ export function ago(iso: string | null | undefined, now: number = Date.now()): s
 	return `${Math.floor(s / 86_400)} d ago`;
 }
 
+const NO_OWNER = { 'f.no_owner': 'true' };
+
 export interface OwnerlessRow { key: string; label: string; count: number; to: string }
 
 /**
- * The ownerless panel's rows. Each links to its Explorer list: the index pages have no "no owner"
- * chip, so these are the plain lists. `machiningOperations` is machining only (the endpoint leaves the
- * legacy FAST imports out), which the label says.
+ * The ownerless panel's rows. Each links to its Explorer list with the "No owner" chip on
+ * (`f.no_owner=true`), so the list's total is the number on the row. `machiningOperations` is machining
+ * only (the endpoint leaves the legacy FAST imports out, and keeps a NULL category), which the label
+ * says; the operations list's chip applies the same filter.
  */
 export function ownerlessRows(o: Ownerless): OwnerlessRow[] {
 	return [
-		{ key: 'samples', label: 'Samples', count: o.samples, to: collectionRoute('physical_samples') },
-		{ key: 'campaigns', label: 'Campaigns', count: o.campaigns, to: collectionRoute('campaigns') },
-		{ key: 'operations', label: 'Machining operations', count: o.machiningOperations, to: collectionRoute('manufacturing_operations') },
+		{ key: 'samples', label: 'Samples', count: o.samples, to: indexRoute('physical_samples', { query: NO_OWNER }) },
+		{ key: 'campaigns', label: 'Campaigns', count: o.campaigns, to: indexRoute('campaigns', { query: NO_OWNER }) },
+		{ key: 'operations', label: 'Machining operations', count: o.machiningOperations, to: indexRoute('manufacturing_operations', { query: NO_OWNER }) },
 	];
 }
 

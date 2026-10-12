@@ -62,6 +62,23 @@ const hasForce: FilterDef = {
 	options: { kind: 'flag', filter: { force_analyses: { _some: { status: { _eq: 'done' } } } } },
 };
 
+// Records with no owner (what the admin Home's "Ownerless records" panel counts and links to).
+const noOwner: FilterDef = { field: 'no_owner', label: 'No owner', options: { kind: 'flag', filter: { owner_person_id: { _null: true } } } };
+// The operations list counts only machining ones, as the panel does: no owner, and not sintering, NULL
+// categories kept (a plain `_neq` would drop them). The legacy FAST imports never get an owner.
+const noOwnerMachining: FilterDef = {
+	field: 'no_owner', label: 'No owner (not sintering)',
+	options: {
+		kind: 'flag',
+		filter: {
+			_and: [
+				{ owner_person_id: { _null: true } },
+				{ _or: [{ process_category: { _null: true } }, { process_category: { _neq: 'sintering' } }] },
+			],
+		},
+	},
+};
+
 export const INDEX_DEFS: IndexDef[] = [
 	{
 		slug: 'campaigns', collection: 'campaigns', title: 'Campaigns', group: 'records', primaryKey: 'campaign_id',
@@ -72,7 +89,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('start_date', 'Start', 'date'), col('end_date', 'End', 'date'),
 		],
 		searchFields: ['campaign_code', 'name'],
-		filters: [project, enumFilter('status', 'Status'), enumFilter('campaign_type', 'Type')],
+		filters: [project, enumFilter('status', 'Status'), enumFilter('campaign_type', 'Type'), noOwner],
 		defaultSort: '-start_date', rowTarget: 'record',
 	},
 	{
@@ -85,7 +102,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('created_at', 'Created', 'date'),
 		],
 		searchFields: ['sample_code', 'nickname'],
-		filters: [project, enumFilter('current_status', 'Status'), material],
+		filters: [project, enumFilter('current_status', 'Status'), material, noOwner],
 		defaultSort: '-created_at', rowTarget: 'record', hasShortId: true,
 	},
 	{
@@ -98,7 +115,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('operation_date', 'Date', 'date'), col('operator_name', 'Operator'), col('outcome_notes', 'Outcome'),
 		],
 		searchFields: ['pass_code', 'sample_id.sample_code', 'operator_name'],
-		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory, hasForce],
+		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory, hasForce, noOwnerMachining],
 		defaultSort: '-operation_date', rowTarget: 'record', hasShortId: true,
 	},
 	{
