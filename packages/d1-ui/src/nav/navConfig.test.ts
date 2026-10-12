@@ -31,13 +31,13 @@ describe('NAV_GROUPS', () => {
 			'Prep recipes', 'Etchants', 'FAST recipes',
 		]);
 		expect(flat('tools')).toEqual([
-			['Print labels', '/d1-report/labels'], ['Report a bug', '/report-bug'], ['Data Studio', '/content'], ['Force Crawler', '/d1-force-crawler'],
+			['Print labels', '/home/labels'], ['Report a bug', '/report-bug'], ['Data Studio', '/content'], ['Force Crawler', '/d1-force-crawler'],
 		]);
 	});
 
-	it('opens Print labels in a new tab and marks only Force Crawler admin-only', () => {
+	it('opens no link in a new tab and marks only Force Crawler admin-only', () => {
 		const flat = NAV_GROUPS.flatMap((g) => g.links);
-		expect(flat.filter((l) => l.newTab).map((l) => l.label)).toEqual(['Print labels']);
+		expect(flat.filter((l) => l.newTab).map((l) => l.label)).toEqual([]);
 		expect(flat.filter((l) => l.adminOnly).map((l) => l.label)).toEqual(['Force Crawler']);
 	});
 
