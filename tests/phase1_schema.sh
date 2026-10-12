@@ -2555,6 +2555,17 @@ SELECT 'people_columns_left_out:' || string_agg(c.column_name, ',' ORDER BY c.co
 SELECT 'sample_read_has_co_owners:' || count(*) FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'physical_samples' AND action = 'read'
    AND permissions::jsonb @> '{"_or":[{"co_owners":{"_some":{"user_id":{"_eq":"\$CURRENT_USER"}}}}]}'::jsonb;
+SELECT 'access_tables_read:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND action = 'read' AND collection IN ('sample_access','operation_access','test_access','campaign_access','project_access')
+   AND permissions::jsonb = '{"person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}'::jsonb;
+SELECT 'access_tables_write:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND action <> 'read' AND collection IN ('sample_access','operation_access','test_access','campaign_access','project_access');
+SELECT 'params_tables_present:' || count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN
+  ('machining_params','sintering_params','heat_treatment_params','deformation_params','am_params','tensile_test_params',
+   'hardness_test_params','charpy_test_params','compression_test_params','sem_params','xrd_params');
+SELECT 'co_owner_rows_owner_only:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND collection = 'sample_co_owners' AND action IN ('update','delete')
+   AND permissions::jsonb = '{"sample_id":{"owner_person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb;
 SELECT 'rollup_read:' || permissions::text FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
 SQL
@@ -2565,6 +2576,10 @@ gen_n=$(grep -o '^generated:[0-9]*' <<<"$rl_out" | cut -d: -f2)
     || bad "the generator produced too few rules (psql output: $rl_out)"
 rl_check "stray:0" "no Lab Member row carries a filter that access_rules.json does not generate"
 rl_check "unlisted:0" "every Lab Member (collection, action) row in the database is listed in access_rules.json"
+rl_check "access_tables_read:5" "Lab Member reads the five access tables for the rows about themselves"
+rl_check "access_tables_write:0" "Lab Member has no create, update or delete grant on any access table (only the record-access endpoint writes them)"
+rl_check "params_tables_present:0" "the eleven *_params tables are gone (migration 20260623000032), so there is nothing to rule; access_rules.json keeps their stale grants only for these drift checks"
+rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
 rl_check "reference_filtered:0" "reference data, people and directus_files stay unfiltered"
 rl_check "ref_in_rules:0" "materials, equipment and raw_stock_lots have no rules"
 rl_check "audit_logs_rows:0" "Lab Member has no grant on audit_logs (admins only)"
@@ -2573,8 +2588,8 @@ rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
 rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,user_id" "people.update leaves out exactly the key, the login, the legacy id and the timestamp"
 rl_check "sample_read_has_co_owners:1" "the sample read filter matches co_owners._some.user_id (the M2M alias)"
-rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}' \
-    "project_rollup is readable only by the project's PI and investigators"
+rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"project_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"project_id":{"access":{"role":{"_in":["investigator"]}}}}]}]}' \
+    "project_rollup is readable only by the project's PI and investigators (old table and access role investigator)"
 for idx in idx_physical_samples_owner_person_id idx_physical_samples_project_id \
     idx_manufacturing_operations_owner_person_id idx_manufacturing_operations_project_id \
     idx_test_sessions_owner_person_id idx_test_sessions_project_id idx_campaigns_owner_person_id \
@@ -2749,6 +2764,11 @@ sf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SF")
 JR=db/migrations/20261012000161_lab_member_additional_operator_rules.sql
 jr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$JR")
 jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
+# 20261012000166 (record access rules) keeps its own backup table in d1_private and runs after 163: it goes down
+# first and comes up after 161, as on a real database.
+LA=db/migrations/20261012000166_lab_member_record_access_rules.sql
+la_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LA")
+la_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
 # 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql
@@ -2792,6 +2812,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$la_down
 $uu_down
 $jr_down
 $sf_down
@@ -2816,10 +2837,12 @@ SELECT 'up_people_update_fields:' || fields FROM directus_permissions WHERE poli
 SELECT 'up_people_create_validation:' || (validation::jsonb ? '_or') FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='create';
 $sf_up
 $jr_up
+$la_up
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
+$la_down
 $jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
@@ -2956,6 +2979,78 @@ rv_refuse "an alias name that another relation uses" \
     "UPDATE directus_relations SET one_field = NULL WHERE many_collection = 'test_sessions' AND many_field = 'project_id';
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('equipment', 'project_id', 'projects', 'sessions');" \
     "cannot name the alias projects.sessions"
+
+echo "== Migration 166: Lab Member record access rules apply, reapply and reverse =="
+# The database was migrated to the head, so 166 is applied: down must give main's rows back exactly (the frozen
+# generator output of 2026-10-12 is tests/scripts/fixtures/lab_member_rules_main.json), up must give the generated
+# rows, a second up must change nothing and keep the first backup, and the second down must restore the same rows
+# (ids included). Everything runs in a rolled-back transaction.
+rules_main_json=$(python3 -c "import json;print(json.dumps(json.load(open('tests/scripts/fixtures/lab_member_rules_main.json'))))")
+la_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+CREATE TEMP TABLE _gen AS
+  SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
+    AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+CREATE TEMP TABLE _main AS
+  SELECT * FROM json_to_recordset(\$m\$$rules_main_json\$m\$::json) AS x(collection text, action text, permissions jsonb);
+CREATE TEMP TABLE head_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
+SELECT 'head_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
+$la_down
+SELECT 'dn_backup:' || coalesce(to_regclass('d1_private.lab_member_access_rules_backup')::text, 'gone');
+SELECT 'dn_main_rows:' || count(*) FROM _main;
+SELECT 'dn_matches_main:' || count(*) FROM _main m JOIN directus_permissions p
+  ON p.policy = '$LM' AND p.collection = m.collection AND p.action = m.action AND p.permissions::jsonb = m.permissions;
+SELECT 'dn_access_rows:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND collection LIKE '%\_access';
+CREATE TEMP TABLE old_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
+$la_up
+SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
+  ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
+ AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
+ WHERE g.ruled;
+SELECT 'up_access_rows:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND collection LIKE '%\_access';
+SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
+SELECT 'up_backup_inserted:' || count(*) FROM d1_private.lab_member_access_rules_backup WHERE inserted;
+SELECT 'up_backup_commented:' || (obj_description('d1_private.lab_member_access_rules_backup'::regclass, 'pg_class') IS NOT NULL);
+SELECT 'up_llm_select:' || has_table_privilege('d1_llm_readonly', 'd1_private.lab_member_access_rules_backup', 'SELECT');
+SELECT 'up_in_dictionary:' || count(*) FROM v_schema_dictionary WHERE object_name LIKE 'lab\_member\_access%';
+CREATE TEMP TABLE up_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
+DROP TABLE _lm_access_rules;
+$la_up
+SELECT 'up2_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
+SELECT 'up2_unchanged:' || count(*) FROM ((SELECT to_jsonb(r) FROM up_rows r EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM')
+  UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' EXCEPT SELECT to_jsonb(r) FROM up_rows r)) x;
+SELECT 'up2_backup_still_old:' || count(*) FROM d1_private.lab_member_access_rules_backup b JOIN old_rows o ON o.id = b.id
+ WHERE b.permissions::jsonb IS DISTINCT FROM o.permissions::jsonb;
+$la_down
+SELECT 'dn2_exact:' || count(*) FROM ((SELECT to_jsonb(r) FROM old_rows r EXCEPT SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM')
+  UNION ALL (SELECT to_jsonb(p) FROM directus_permissions p WHERE p.policy = '$LM' EXCEPT SELECT to_jsonb(r) FROM old_rows r)) x;
+SELECT 'dn2_backup:' || coalesce(to_regclass('d1_private.lab_member_access_rules_backup')::text, 'gone');
+DROP TABLE _lm_access_rules;
+$la_up
+SELECT 'up3_exact_as_head:' || count(*) FROM ((SELECT permissions::jsonb, collection, action FROM head_rows EXCEPT SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM')
+  UNION ALL (SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM' EXCEPT SELECT permissions::jsonb, collection, action FROM head_rows)) x;
+ROLLBACK;
+SQL
+)
+la_check() { grep -qxF -- "$1" <<<"$la_out" && ok "$2" || bad "$2 (psql output: $la_out)"; }
+la_check "dn_backup:gone" "down drops the backup table"
+la_check "dn_main_rows:72" "(setup) main's frozen Lab Member filters hold 72 rows"
+la_check "dn_matches_main:72" "down: every ruled Lab Member row is exactly main's filter again"
+la_check "dn_access_rows:0" "down: the five access table rows it inserted are gone"
+la_n=$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
+[[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
+la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
+la_check "up_backup_inserted:5" "up: exactly the five access rows are recorded as inserted"
+la_check "up_backup_commented:true" "up: the backup table has a comment"
+la_check "up_llm_select:false" "up: the LLM role cannot read the backup"
+la_check "up_in_dictionary:0" "up: the backup is not in v_schema_dictionary (the Ask-DB prompt)"
+la_check "up2_unchanged:0" "a second up changes no Lab Member row"
+la_check "up2_backup_still_old:0" "a second up keeps the first backup (the old permissions)"
+la_check "dn2_exact:0" "down after a second up restores the rows exactly (ids, filters, fields)"
+la_check "dn2_backup:gone" "down after a second up drops the backup table"
+la_check "up3_exact_as_head:0" "up again gives the rows the database had at the head"
+[[ "$(grep -o '^up2_backup_rows:[0-9]*' <<<"$la_out" | cut -d: -f2)" == "$(grep -o '^up_backup_rows:[0-9]*' <<<"$la_out" | cut -d: -f2)" ]] \
+    && ok "a second up adds no backup rows" || bad "a second up changed the backup (psql output: $la_out)"
 
 echo "== Operation code rule: code_num, operation_code_for, the run number (T0b) =="
 # One rolled-back transaction. Rows for operation_code_for are built in memory with jsonb_populate_record.
@@ -3699,13 +3794,16 @@ grep -qx "illegal:1" <<<"$lint_neg" \
 MIG=db/migrations/20261010000160_lab_member_some_only_where_directus_accepts_it.sql
 mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
 mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
-gen_perm() { python3 -c 'import json,sys; c,a=sys.argv[1:3]; print(json.dumps(next(x["permissions"] for x in json.load(sys.stdin) if (x["collection"],x["action"])==(c,a))))' "$1" "$2" <<<"$rules_json"; }
+# 160 is a snapshot of the rules of 2026-10-10, so what it must leave is main's filters (the frozen fixture), not the
+# current generator output: 166 (record access) is taken down first and rewrites these rows again.
+gen_perm() { python3 -c 'import json,sys; c,a=sys.argv[1:3]; print(json.dumps(next(x["permissions"] for x in json.load(open("tests/scripts/fixtures/lab_member_rules_main.json")) if (x["collection"],x["action"])==(c,a))))' "$1" "$2"; }
 gen_mo_read=$(gen_perm manufacturing_operations read)
 gen_cs_update=$(gen_perm campaign_samples update)
 live_mo_read='{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
 live_cs_update='{"_or":[{"campaign_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
 sm_out=$($PSQL 2>&1 <<SQL
 BEGIN;
+$la_down
 $mig_down
 SELECT 'down_backup_gone:' || (to_regclass('d1_private.lab_member_some_fix_backup') IS NULL);
 UPDATE directus_permissions SET permissions = '$live_mo_read'

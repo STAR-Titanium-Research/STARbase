@@ -6,6 +6,8 @@
 // `_some ... can only be used with top level relational alias field` 400 (the Lab Member permission rows, see
 // task-6 report) they print `SMOKE SKIP <case>: <reason>` and do not fail the run; any other probe failure (401,
 // 403, 500, another 400) leaves them to run and FAIL. D1_SMOKE_REQUIRE_LM=1 (or true) makes the skip a FAIL.
+import { readFileSync } from 'node:fs';
+
 const BASE = process.env.DIRECTUS_URL;
 const TOKEN = process.env.TOKEN;
 const LM_TOKEN = process.env.LM_TOKEN;
@@ -290,5 +292,227 @@ await check('sample_rename_cascades', async () => {
   const typed = await readOp(typedOp.operation_id);
   expect(typed.pass_code === 'SMOKE-TYPED2', `typed op changed to ${typed.pass_code}`);
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Record access (A1a Task 2): the Lab Member rules of scripts/access_rules.json against a real Directus.
+// The harness loaded scripts/dev/access_matrix_fixture.sql into the copy (32 universes: every restricted/unrestricted
+// combination of a project, campaign, sample, operation and test, access lists, an old co-owner and investigator) and
+// computed, in plain SQL written from the spec's tables, what every fixture user may read, update and delete; the
+// answer is /fixture/expected.json. Every case below compares Directus with that answer.
+// ---------------------------------------------------------------------------------------------------------------
+let FX = null;
+try { FX = JSON.parse(readFileSync('/fixture/expected.json', 'utf8')); } catch { /* no fixture: the cases report it */ }
+function needFx() {
+  if (!FX) throw Object.assign(new Error('no access fixture in this run (the copy has no access tables, or D1_SMOKE_ACCESS=0)'), { skip: true });
+}
+const PK = {
+  physical_samples: 'sample_id', manufacturing_operations: 'operation_id', test_sessions: 'session_id',
+  campaigns: 'campaign_id', projects: 'project_id',
+};
+const NOTE = {
+  physical_samples: 'notes', manufacturing_operations: 'outcome_notes', test_sessions: 'notes',
+  campaigns: 'notes', projects: 'description',
+};
+const RECORD_KEYS = ['P', 'Q', 'C', 'C2', 'S', 'S2', 'O', 'O2', 'O3', 'O4', 'OF1', 'OF2', 'T'];
+const labels = new Map();
+const universe = (k) => FX.universes[k];
+if (FX) for (const u of FX.universes) for (const key of RECORD_KEYS) labels.set(u[key], `${key}#${u.k}`);
+const lab = (id) => labels.get(id) ?? id.slice(0, 8);
+// The update and delete matrices send one write per user and record; eight of the 32 universes (every flag on its own, the
+// all-open one, the all-restricted one and a mixed one) keep that to a few minutes. The read matrices cover all 32.
+const WRITE_UNIVERSES = new Set([0, 1, 2, 4, 8, 16, 21, 31]);
+const fixtureIds = (collection, all = true) => {
+  const keys = {
+    physical_samples: ['S', 'S2'], manufacturing_operations: ['O', 'O2', 'O3', 'O4', 'OF1', 'OF2'],
+    test_sessions: ['T'], campaigns: ['C', 'C2'], projects: ['P', 'Q'],
+  }[collection];
+  return FX.universes.filter((u) => all || WRITE_UNIVERSES.has(u.k)).flatMap((u) => keys.map((key) => u[key]));
+};
+const expectedRead = (user, collection) => [
+  ...FX.expected[user][collection].read,
+  ...(collection === 'manufacturing_operations' ? FX.real_amnesty_ops : []),
+].sort();
+
+async function listIds(collection, token, qs = '') {
+  const pk = PK[collection];
+  const r = await api('GET', `/items/${collection}?limit=-1&fields=${pk}&sort=${pk}${qs}`, undefined, token);
+  expect(r.status === 200, `GET ${collection}: status ${r.status}: ${errText(r)}`);
+  return r.body.data.map((row) => row[pk]);
+}
+const diff = (got, want) => {
+  const g = new Set(got), w = new Set(want);
+  return { extra: got.filter((x) => !w.has(x)), missing: want.filter((x) => !g.has(x)) };
+};
+const show = (ids) => ids.slice(0, 6).map(lab).join(',') + (ids.length > 6 ? `,...(${ids.length})` : '');
+
+// Every ruled collection answers 200 for a member (the `_some` rule of Directus 11.17: one illegal `_some` 400s
+// every collection whose rule reaches it).
+const RULED = [
+  'physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns', 'projects', 'sample_co_owners',
+  'sample_stock_provenance', 'sample_data_files', 'sample_genealogy', 'campaign_samples', 'operation_data_files',
+  'machining_force_analysis', 'fast_run_data', 'session_data_files', 'operation_additional_operators',
+  'session_additional_operators', 'test_sessions_subject', 'project_investigators', 'project_rollup', 'people',
+  'sample_access', 'operation_access', 'test_access', 'campaign_access', 'project_access',
+];
+await check('lm_access_every_ruled_collection_answers_200', async () => {
+  needFx();
+  const bad = [];
+  for (const user of ['stranger', 'owner', 'pi', 'viewer', 'editor', 'opOwner']) {
+    for (const collection of RULED) {
+      const r = await api('GET', `/items/${collection}?limit=3&meta=filter_count&fields=${PK[collection] ?? "*"}`, undefined, FX.users[user]);
+      if (r.status !== 200) bad.push(`${user} ${collection} -> ${r.status} ${errText(r).slice(0, 160)}`);
+    }
+  }
+  expect(!bad.length, bad.slice(0, 5).join(' | '));
+});
+
+// list, filter_count, a second page and no duplicate ids, for every fixture user, against the SQL evaluation
+for (const collection of Object.keys(PK)) {
+  await check(`lm_access_matrix_${collection}_read`, async () => {
+    needFx();
+    const problems = [];
+    for (const [user, token] of Object.entries(FX.users)) {
+      const want = expectedRead(user, collection);
+      const got = await listIds(collection, token);
+      const dups = got.length - new Set(got).size;
+      if (dups) problems.push(`${user}: ${dups} duplicate ids`);
+      const d = diff(got, want);
+      if (d.extra.length || d.missing.length) problems.push(`${user}: extra [${show(d.extra)}] missing [${show(d.missing)}]`);
+      const c = await api('GET', `/items/${collection}?limit=1&meta=filter_count&fields=${PK[collection]}`, undefined, token);
+      if (c.body?.meta?.filter_count !== want.length) problems.push(`${user}: filter_count ${c.body?.meta?.filter_count}, expected ${want.length}`);
+      const page = await api('GET', `/items/${collection}?limit=7&page=2&sort=${PK[collection]}&fields=${PK[collection]}`, undefined, token);
+      const p2 = (page.body?.data ?? []).map((row) => row[PK[collection]]);
+      if (JSON.stringify(p2) !== JSON.stringify(want.slice(7, 14))) problems.push(`${user}: page 2 differs`);
+    }
+    expect(!problems.length, problems.slice(0, 4).join(' | '));
+  });
+}
+
+// update: PATCH a harmless field as every user on every fixture record; 200 exactly where the SQL evaluation says so.
+// Then delete: a user who may not delete gets 403 on every record, and the one who may deletes it (leaf records first).
+const patchStatus = async (collection, id, token) =>
+  (await api('PATCH', `/items/${collection}/${id}?fields=${PK[collection]}`, { [NOTE[collection]]: 'smoke access' }, token)).status;
+for (const collection of Object.keys(PK)) {
+  await check(`lm_access_matrix_${collection}_update`, async () => {
+    needFx();
+    const problems = [];
+    for (const [user, token] of Object.entries(FX.users)) {
+      const can = new Set(FX.expected[user][collection].update);
+      for (const id of fixtureIds(collection, false)) {
+        const s = await patchStatus(collection, id, token);
+        if (can.has(id) ? s !== 200 : s !== 403) problems.push(`${user} PATCH ${lab(id)} -> ${s}, expected ${can.has(id) ? 200 : 403}`);
+      }
+    }
+    expect(!problems.length, `${problems.length} mismatches: ${problems.slice(0, 5).join(' | ')}`);
+  });
+}
+// named cases of the spec's cascade table (they are also inside the matrix; these name the intent)
+await check('lm_access_viewer_cannot_patch_editor_can', async () => {
+  needFx();
+  const u = universe(0);
+  for (const [collection, key] of [['physical_samples', 'S'], ['manufacturing_operations', 'O'], ['test_sessions', 'T'], ['campaigns', 'C']]) {
+    const v = await patchStatus(collection, u[key], FX.users.viewer);
+    const e = await patchStatus(collection, u[key], FX.users.editor);
+    expect(v === 403 && e === 200, `${collection}: viewer ${v} (want 403), editor ${e} (want 200)`);
+  }
+});
+
+await check('lm_access_sample_restricted_operation_invisible_to_its_own_owner', async () => {
+  needFx();
+  const u = universe(4); // the sample is restricted, nothing else
+  const ops = await listIds('manufacturing_operations', FX.users.opOwner);
+  const tests = await listIds('test_sessions', FX.users.opOwner);
+  for (const id of [u.O, u.O2]) expect(!ops.includes(id), `opOwner sees ${lab(id)} under a restricted sample`);
+  expect(!tests.includes(u.T), 'opOwner sees the test under a restricted sample');
+  const own = await listIds('manufacturing_operations', FX.users.owner);
+  expect(own.includes(u.O) && own.includes(u.O2), 'the sample owner no longer sees the operations of their restricted sample');
+  const direct = await api('GET', `/items/manufacturing_operations/${u.O}`, undefined, FX.users.opOwner);
+  expect(direct.status === 403, `GET of the hidden operation by id -> ${direct.status}, expected 403`);
+});
+
+await check('lm_access_restricted_project_and_campaign_cascade', async () => {
+  needFx();
+  const p = universe(1); // the project is restricted
+  const camps = await listIds('campaigns', FX.users.campaignOwner);
+  expect(!camps.includes(p.C), 'campaignOwner still sees the campaign of a restricted project');
+  const stranger = await listIds('physical_samples', FX.users.stranger);
+  expect(!stranger.includes(p.S), 'a stranger sees a sample of a restricted project');
+  const pi = await listIds('manufacturing_operations', FX.users.pi);
+  expect(pi.includes(p.O) && pi.includes(p.O3) && pi.includes(p.O4), 'the PI no longer reads everything in their restricted project');
+  const owner = await listIds('manufacturing_operations', FX.users.owner);
+  expect(!owner.includes(p.O) && !owner.includes(p.O2), 'the owner of the sample keeps the sample, not the operations under a restricted project (strict gates, spec section 1)');
+  const c = universe(2); // the campaign is restricted
+  const camp = await listIds('physical_samples', FX.users.campaignOwner);
+  expect(camp.includes(c.S) && camp.includes(c.S2), 'the owner of a restricted campaign loses the samples in it');
+  const inv = await listIds('campaigns', FX.users.inv);
+  expect(!inv.includes(c.C), 'an investigator of the project reaches a restricted campaign');
+  const invOps = await listIds('manufacturing_operations', FX.users.inv);
+  expect(!invOps.includes(c.O4), 'an investigator reads an operation whose campaign is restricted');
+});
+
+// params: the eleven *_params tables were folded into columns of the operation and test rows (migration 32), so they
+// follow those rows; there is no table left to rule.
+await check('lm_access_params_follow_their_operation', async () => {
+  needFx();
+  const ok = await api('GET', `/items/manufacturing_operations/${universe(4).O2}?fields=operation_id,machining_cutting_speed_m_per_min`, undefined, FX.users.owner);
+  expect(ok.status === 200 && 'machining_cutting_speed_m_per_min' in ok.body.data, `the owner reads an operation's inline parameters (${ok.status})`);
+  const hidden = await api('GET', `/items/manufacturing_operations/${universe(4).O2}?fields=operation_id,machining_cutting_speed_m_per_min`, undefined, FX.users.opOwner);
+  expect(hidden.status === 403, `the inline parameters of a hidden operation: status ${hidden.status}, expected 403`);
+});
+
+// the access tables: own rows only, and no member writes them (only the record-access endpoint does)
+await check('lm_access_tables_show_own_rows_only_and_take_no_writes', async () => {
+  needFx();
+  const mine = await api('GET', '/items/sample_access?limit=-1&fields=person_id.user_id,role', undefined, FX.users.viewer);
+  expect(mine.status === 200 && mine.body.data.length === 32 && mine.body.data.every((r) => r.role === 'view'), `viewer's own sample_access rows: ${mine.status} ${mine.body?.data?.length}`);
+  const none = await api('GET', '/items/sample_access?limit=-1', undefined, FX.users.stranger);
+  expect(none.status === 200 && none.body.data.length === 0, `a stranger sees ${none.body?.data?.length} sample_access rows`);
+  const u = universe(0);
+  const write = await api('POST', '/items/sample_access', { sample_id: u.S, person_id: u.P, role: 'view' }, FX.users.owner);
+  expect(write.status === 403, `a member creating a sample_access row: status ${write.status}, expected 403`);
+});
+
+// sample_co_owners: update and delete are the sample owner's now (a co-owner used to be able to repoint or remove
+// co-owner rows, which on a restricted sample is a leak). The guard on create lands in Task 3.
+await check('lm_access_co_owner_cannot_change_or_remove_co_owner_rows', async () => {
+  needFx();
+  const u = universe(31);
+  const patch = await api('PATCH', `/items/sample_co_owners/${u.coowner_row}`, { user_id: '00000000-0000-4000-8000-000000000000' }, FX.users.coowner);
+  expect(patch.status === 403, `co-owner PATCH user_id -> ${patch.status}, expected 403`);
+  const del = await api('DELETE', `/items/sample_co_owners/${u.coowner_row}`, undefined, FX.users.coowner);
+  expect(del.status === 403, `co-owner DELETE -> ${del.status}, expected 403`);
+  const other = await api('DELETE', `/items/sample_co_owners/${u.coowner_row}`, undefined, FX.users.stranger);
+  expect(other.status === 403, `stranger DELETE -> ${other.status}, expected 403`);
+  const owner = await api('DELETE', `/items/sample_co_owners/${u.coowner_row}`, undefined, FX.users.owner);
+  expect(owner.status === 204, `the sample's owner DELETE -> ${owner.status}, expected 204`);
+});
+
+// The delete matrices run last: they really delete the fixture records the cases above use.
+for (const collection of ['test_sessions', 'manufacturing_operations', 'physical_samples', 'campaigns', 'projects']) {
+  await check(`lm_access_matrix_${collection}_delete`, async () => {
+    needFx();
+    const problems = [];
+    const deleters = new Map();
+    for (const user of Object.keys(FX.users)) for (const id of FX.expected[user][collection].delete) deleters.set(id, [...(deleters.get(id) ?? []), user]);
+    for (const id of fixtureIds(collection, false)) {
+      for (const [user, token] of Object.entries(FX.users)) {
+        if ((deleters.get(id) ?? []).includes(user)) continue;
+        const r = await api('DELETE', `/items/${collection}/${id}`, undefined, token);
+        if (r.status !== 403) problems.push(`${user} DELETE ${lab(id)} -> ${r.status}, expected 403`);
+      }
+    }
+    // the owners who may delete do (a sample or campaign that still has records under it may refuse with a 4xx
+    // other than 403: that is the foreign key, not the rule)
+    const sub = new Set(fixtureIds(collection, false));
+    for (const [id, users] of deleters) {
+      if (!sub.has(id)) continue;
+      for (const user of users.slice(0, 1)) {
+        const r = await api('DELETE', `/items/${collection}/${id}`, undefined, FX.users[user]);
+        if (r.status === 403 || r.status >= 500) problems.push(`${user} DELETE ${lab(id)} -> ${r.status}, expected 204: ${errText(r).slice(0, 120)}`);
+      }
+    }
+    expect(!problems.length, `${problems.length} mismatches: ${problems.slice(0, 5).join(' | ')}`);
+  });
+}
 
 process.exit(failed ? 1 : 0);
