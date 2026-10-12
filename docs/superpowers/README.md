@@ -37,5 +37,7 @@ open.
 | [Diagnostics across a campaign](specs/2026-10-06-diagnostics-campaign-design.md) | Diagnostics | Implemented |
 | [Captures list: search, filter, bulk actions](specs/2026-10-06-captures-list-design.md) | force-app | Implemented |
 | [Explorer pages](specs/2026-10-06-explorer-pages-design.md) | Directus extensions | Implemented 2026-10-07 (PR pending); access restriction ([ADR-0011](../adr/0011-row-level-visibility.md)) not built |
+| [Rig test requests](specs/2026-10-11-rig-test-requests-design.md) | force-app / relay | **Design only** (phase 1 plan open) |
+| [Rig test requests: UI handoff](specs/2026-10-11-rig-test-requests-ui-handoff.md) | force-app UI | Describes the phase-1 UI as built |
 
 Add a row when a new spec lands, and update its Status line (and this table) when it ships.

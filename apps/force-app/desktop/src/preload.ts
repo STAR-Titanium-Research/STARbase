@@ -38,4 +38,7 @@ contextBridge.exposeInMainWorld('forceApp', {
   /** Opens a local capture's folder in the file browser. Main only allows paths inside the
    * backend's captures folder. */
   revealPath: (target: string): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('shell:reveal', target),
+  /** Rig tests: a desktop notification and a flashing taskbar button, only while the window isn't
+   * focused. Main checks that both are strings of at most 200 characters. */
+  notify: (title: string, body: string): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('notify:show', title, body),
 });

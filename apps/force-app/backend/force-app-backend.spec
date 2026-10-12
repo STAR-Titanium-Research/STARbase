@@ -20,6 +20,17 @@ hidden_imports = collect_submodules("uvicorn") + collect_submodules("scipy") + c
 datas = []
 binaries = []
 
+# Rig test requests (app/rig_test/catalog.py) resolve backlog item ids against catalog.md, the copy
+# of docs/runbooks/physical-test-backlog.md that was current at build time. The copy lands in the
+# gitignored build/ folder (nothing extra is committed) and is read from next to catalog.py when
+# frozen. SPECPATH is the folder holding this spec. Done here, not in build_frozen.ps1, because
+# the release workflow calls pyinstaller on this spec directly.
+import os  # noqa: E402
+import runpy  # noqa: E402
+
+_sync = runpy.run_path(os.path.join(SPECPATH, "scripts", "sync_rig_catalog.py"))["sync"]
+datas += [(str(_sync(os.path.join(SPECPATH, "build", "rig_test"))), "app/rig_test")]
+
 # h5py writes the MATLAB v7.3 .mat for long cuts (app/mat73.py, #194). It is imported lazily,
 # inside Mat73Writer.__init__, so a broken h5py/HDF5 install cannot stop the backend starting; the
 # static trace may therefore miss it, and its compiled extensions (h5py.defs,
