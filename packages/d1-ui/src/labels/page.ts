@@ -2,13 +2,13 @@
 // is shown first, who may change a template and exactly what a save sends. No Vue, no Directus imports.
 import { errField, errorText, isDuplicate } from '../format';
 import { templateFromRow, validateTemplate } from './template';
-import type { Arrangement, FieldKey, LabelField, LabelSample, LabelTemplate } from './types';
+import { QR_KEYS, type Arrangement, type LabelField, type LabelSample, type LabelTemplate, type QrKey } from './types';
 
 // Reads of physical_samples for the page: exactly what toLabelSample documents.
 export const LABEL_SAMPLE_FIELDS = [
 	'sample_id', 'sample_code', 'short_id', 'nickname',
 	'material_id.common_name', 'material_id.alloy_code',
-	'manufactured_date', 'created_at', 'owner_person_id.full_name',
+	'manufactured_date', 'created_at', 'owner_person_id.full_name', 'owner_person_id.email',
 ];
 
 // ---- what the URL and the paste box ask for -------------------------------------------------------
@@ -158,7 +158,7 @@ export function blankTemplate(): LabelTemplate {
 		labelWidthMm: 52.5, labelHeightMm: 59.4, marginTopMm: 0, marginLeftMm: 0, gapXMm: 0, gapYMm: 0, paddingMm: 2,
 		arrangement: 'qr_top', qrSizeMm: null,
 		fields: [{ key: 'sample_code', size: 'lg', bold: true }, { key: 'nickname', size: 'sm', bold: false }],
-		qrFields: [], isDefault: false, userCreated: null, dateCreated: null, userUpdated: null, dateUpdated: null,
+		qrFields: [...QR_KEYS], isDefault: false, userCreated: null, dateCreated: null, userUpdated: null, dateUpdated: null,
 	};
 }
 
@@ -187,7 +187,8 @@ export const MEMBER_COLUMNS = [
 // The body of a create or update. Admins also send is_default; everyone else sends the 18 content columns only.
 export function templatePayload(t: LabelTemplate, isAdmin: boolean): Record<string, unknown> {
 	const fields: LabelField[] = t.fields.map((f) => ({ key: f.key, size: f.size, bold: f.bold === true }));
-	const qrFields: FieldKey[] = [...new Set(t.qrFields)];
+	// An empty list means all, so a template saved with nothing ticked is stored as all.
+	const qrFields: QrKey[] = t.qrFields.length ? [...new Set(t.qrFields)] : [...QR_KEYS];
 	const body: Record<string, unknown> = {
 		name: t.name.trim(),
 		description: t.description?.trim() ? t.description.trim() : null,

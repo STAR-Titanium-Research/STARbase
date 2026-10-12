@@ -15,6 +15,8 @@ export interface RenderOptions {
 	outline?: boolean;
 	// Exact text width in mm (for example from canvas measureText); the default is a per-character estimate.
 	measure?: Measure;
+	// The lab contact (label_settings.contact_email) for the QR payload's Contact line; none when null or empty.
+	contactEmail?: string | null;
 }
 
 export interface RenderedLabels {
@@ -82,7 +84,7 @@ export function renderLabelDocument(
 			count++;
 			const lay = layoutLabel(sample, t, options.measure);
 			if (lay.clipped) clipped++;
-			const qrBox = lay.qr ? `<div class="qr" style="${boxStyle(lay.qr)}">${qrSvg(qr(buildQrPayload(sample, t.qrFields)))}</div>` : '';
+			const qrBox = lay.qr ? `<div class="qr" style="${boxStyle(lay.qr)}">${qrSvg(qr(buildQrPayload(sample, options.contactEmail ?? null, t.qrFields)))}</div>` : '';
 			const text = lay.lines
 				.filter((l) => l.text !== '')
 				.map(

@@ -22,7 +22,7 @@ const BROTHER = templateFromRow({
 });
 
 const sample = (n: number, over: Partial<LabelSample> = {}): LabelSample => ({
-	id: `id-${n}`, code: `S-${n}`, shortId: String(n).padStart(8, '0'), nickname: null, material: null, date: null, ownerInitials: null, ...over,
+	id: `id-${n}`, code: `S-${n}`, shortId: String(n).padStart(8, '0'), nickname: null, material: null, date: null, ownerInitials: null, ownerEmail: null, ...over,
 });
 const FAKE_QR = (_payload: string) => ({ size: 2, data: [1, 0, 0, 1] });
 const render = (samples: LabelSample[], t: LabelTemplate, opts?: { outline?: boolean }, start = 1) =>
@@ -86,10 +86,21 @@ describe('renderLabelDocument', () => {
 		const { html } = renderLabelDocument(paginate([sample(1, { nickname: 'bracket' })], { copies: 1, start: 1 }, t), t, (p) => {
 			seen.push(p);
 			return { size: 1, data: [1] };
-		});
-		expect(seen).toEqual(['D1 SAMPLE\nS-1 · 00000001\n"bracket"']);
+		}, { contactEmail: 'lab@example.org' });
+		expect(seen).toEqual(['D1 SAMPLE\nS-1 | 00000001\n"bracket"']);
 		expect(html).toContain('<div class="qr" style="');
 		expect(html).toContain('<svg viewBox="0 0 5 5"');
+	});
+	it('puts the contact email in the payload unless the template leaves it out', () => {
+		const seen: string[] = [];
+		const grab = (p: string) => (seen.push(p), { size: 1, data: [1] });
+		const s = sample(1, { ownerEmail: 'dp@example.org' });
+		renderLabelDocument(paginate([s], { copies: 1, start: 1 }, A4_4X5), A4_4X5, grab, { contactEmail: 'lab@example.org' });
+		expect(seen[0]).toBe('D1 SAMPLE\nS-1 | 00000001\ndp@example.org\nContact: lab@example.org');
+		seen.length = 0;
+		const t = { ...A4_4X5, qrFields: ['owner_email' as const] };
+		renderLabelDocument(paginate([s], { copies: 1, start: 1 }, t), t, grab, { contactEmail: 'lab@example.org' });
+		expect(seen[0]).toBe('D1 SAMPLE\nS-1 | 00000001\ndp@example.org');
 	});
 	it('draws no QR for a text-only template', () => {
 		const t = { ...A4_4X5, arrangement: 'text_only' as const };

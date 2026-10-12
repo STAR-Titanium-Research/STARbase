@@ -1,7 +1,7 @@
 // label_templates rows -> LabelTemplate, and the checks the template editor shows.
 import {
-	ARRANGEMENTS, FIELD_KEYS, FIELD_SIZES, MEDIA,
-	type Arrangement, type FieldKey, type LabelField, type LabelTemplate, type Media,
+	ARRANGEMENTS, FIELD_KEYS, FIELD_SIZES, MEDIA, QR_KEYS,
+	type Arrangement, type FieldKey, type LabelField, type LabelTemplate, type Media, type QrKey,
 } from './types';
 
 type Row = Record<string, unknown>;
@@ -50,10 +50,13 @@ function parseFields(v: unknown): LabelField[] {
 	return out;
 }
 
-function parseKeys(v: unknown): FieldKey[] {
-	const out: FieldKey[] = [];
-	for (const item of jsonArray(v)) if (FIELD_KEYS.includes(item as FieldKey) && !out.includes(item as FieldKey)) out.push(item as FieldKey);
-	return out;
+// The QR extras of a template. An empty or missing list (a row from before the QR carried everything, or a NULL)
+// means all of them, so the editor and the payload agree. Unknown entries, and the always-on sample_code and
+// short_id, are dropped.
+function parseQrKeys(v: unknown): QrKey[] {
+	const out: QrKey[] = [];
+	for (const item of jsonArray(v)) if (QR_KEYS.includes(item as QrKey) && !out.includes(item as QrKey)) out.push(item as QrKey);
+	return out.length ? out : [...QR_KEYS];
 }
 
 // Reads a label_templates row (snake_case, numerics as strings or numbers). Optional columns get the
@@ -98,7 +101,7 @@ export function templateFromRow(row: Row): LabelTemplate {
 		arrangement,
 		qrSizeMm: row.qr_size_mm === null || row.qr_size_mm === undefined || row.qr_size_mm === '' ? null : num(row.qr_size_mm),
 		fields: parseFields(row.fields),
-		qrFields: parseKeys(row.qr_fields),
+		qrFields: parseQrKeys(row.qr_fields),
 		isDefault: row.is_default === true,
 		userCreated: str(row.user_created),
 		dateCreated: str(row.date_created),

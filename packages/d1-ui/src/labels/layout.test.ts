@@ -21,7 +21,7 @@ const A4_4X5 = templateFromRow({
 });
 
 const sample = (over: Partial<LabelSample> = {}): LabelSample => ({
-	id: 'u', code: '1234-AA-MM-2026-10-12', shortId: '1a2b3c4d', nickname: null, material: null, date: null, ownerInitials: null, ...over,
+	id: 'u', code: '1234-AA-MM-2026-10-12', shortId: '1a2b3c4d', nickname: null, material: null, date: null, ownerInitials: null, ownerEmail: null, ...over,
 });
 
 describe('qr_left automatic QR size', () => {

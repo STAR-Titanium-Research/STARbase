@@ -123,13 +123,13 @@ export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints,
 
 // Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)
 export {
-	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, paginateCounts, fitText,
-	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, QR_HEADER, renderLabelDocument,
+	FIELD_KEYS, QR_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, paginateCounts, fitText,
+	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, effectiveQrKeys, QR_HEADER, renderLabelDocument,
 	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
 	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
 	saveErrorText, moveField, sampleEntries,
 } from './labels';
 export type {
-	FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
+	QrKey, FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
 	RenderOptions, RenderedLabels, QrModules, Measure, BrokenTemplate, CountedSample, LabelEntry,
 } from './labels';

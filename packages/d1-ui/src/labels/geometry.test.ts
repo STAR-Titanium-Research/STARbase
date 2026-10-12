@@ -17,7 +17,7 @@ const ROLL = templateFromRow({
 });
 
 const sample = (n: number): LabelSample => ({
-	id: `id-${n}`, code: `S-${n}`, shortId: String(n).padStart(8, '0'), nickname: null, material: null, date: null, ownerInitials: null,
+	id: `id-${n}`, code: `S-${n}`, shortId: String(n).padStart(8, '0'), nickname: null, material: null, date: null, ownerInitials: null, ownerEmail: null,
 });
 const codes = (pages: (LabelSample | null)[][]) => pages.map((p) => p.map((s) => (s ? s.code : null)));
 
