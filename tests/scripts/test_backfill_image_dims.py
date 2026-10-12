@@ -58,13 +58,19 @@ def test_zero_or_absurd_sizes_are_rejected():
     assert b.image_size(png(0, 5903)) is None
     assert b.image_size(jpeg(0, 3264)) is None
     assert b.image_size(webp_vp8x(2119, 1400)) == (2119, 1400)
-    assert b.image_size(png(70000, 100)) is None  # over 65535 on a side: a corrupt header
+    assert (
+        b.image_size(png(70000, 100)) is None
+    )  # over 65535 on a side: a corrupt header
 
 
 def test_jpeg_fill_bytes_before_a_marker_are_skipped():
     # FF FF before the APP1 marker and again before the SOF marker (fill bytes, legal in a JPEG)
     app1 = b"\xff\xff\xe1" + struct.pack(">H", 2 + 40) + b"\x00" * 40
-    sof = b"\xff\xff\xff\xc0" + struct.pack(">HBHHB", 11, 8, 3264, 4928, 1) + b"\x01\x11\x00"
+    sof = (
+        b"\xff\xff\xff\xc0"
+        + struct.pack(">HBHHB", 11, 8, 3264, 4928, 1)
+        + b"\x01\x11\x00"
+    )
     assert b.image_size(b"\xff\xd8" + app1 + sof + b"\xff\xd9") == (4928, 3264)
     # a stream that ends in fill bytes is unreadable, not an error
     assert b.image_size(b"\xff\xd8" + b"\xff" * 40) is None
