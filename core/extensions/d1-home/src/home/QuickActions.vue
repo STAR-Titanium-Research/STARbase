@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router';
 import { go } from './goto';
+import { openScan } from '../scan/scanState';
 
 // The things a researcher does every day, as big buttons. The other Explorer pages and the analysis
 // tools are in the sidebar, so they are not repeated here. There is no tile for Ask the database
@@ -11,13 +12,17 @@ const main: Action[] = [
 	{ label: 'Log an operation', sub: 'Record a manufacturing step', icon: 'precision_manufacturing', to: '/content/manufacturing_operations/+' },
 	{ label: 'Print labels', sub: 'Sample labels with QR codes', icon: 'label', to: '/home/labels' },
 ];
+// Not a page: opens the camera dialog (hosted by ExplorerView).
+const scan: Action = { label: 'Scan a label', sub: 'Open a sample from its QR code', icon: 'qr_code_scanner', to: '' };
+const tiles = [...main, scan];
 const router = useRouter();
+const choose = (a: Action) => (a === scan ? openScan() : go(router, a.to));
 </script>
 
 <template>
 	<section aria-label="Quick actions">
 		<div class="grid actions">
-			<button v-for="a in main" :key="a.label" class="card action" @click="go(router, a.to)">
+			<button v-for="a in tiles" :key="a.label" class="card action" @click="choose(a)">
 				<span class="chip"><v-icon :name="a.icon" small /></span>
 				<span class="a-text">
 					<span class="a-label">{{ a.label }}</span>

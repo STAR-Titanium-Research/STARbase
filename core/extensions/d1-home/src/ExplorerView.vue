@@ -2,6 +2,8 @@
 import { onBeforeUnmount, onMounted, provide, ref } from 'vue';
 import { EXPLORER_HOST, ExplorerNav, Finder, isFinderShortcut, isModalOpen } from '@d1/ui';
 import { useExplorerHost } from './explorerHost';
+import ScanDialog from './scan/ScanDialog.vue';
+import { openScan, scanOpen } from './scan/scanState';
 
 // The frame of every Explorer page in the Directus app: Directus's <private-view> with the
 // Explorer sidebar in its navigation column, and the ExplorerHost provided to everything inside.
@@ -15,6 +17,11 @@ provide(EXPLORER_HOST, useExplorerHost());
 const finderOpen = ref(false);
 const openFinder = () => {
 	finderOpen.value = true;
+};
+// The Finder's Scan button hands over to the camera dialog (the one Home's Scan tile also opens).
+const scanFromFinder = () => {
+	finderOpen.value = false;
+	openScan();
 };
 
 // A Directus drawer or dialog being open means the user is in the middle of a form: Ctrl K does
@@ -41,7 +48,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 	<private-view :title="title">
 		<template #navigation>
 			<ExplorerNav :show-brand="false" @open-finder="openFinder" />
-			<Finder v-if="finderOpen" @close="finderOpen = false" />
+			<Finder v-if="finderOpen" can-scan @close="finderOpen = false" @scan="scanFromFinder" />
+			<ScanDialog v-if="scanOpen" @close="scanOpen = false" />
 		</template>
 		<template v-for="(_, name) in $slots" :key="name" #[name]="slotProps">
 			<slot :name="name" v-bind="slotProps || {}" />
