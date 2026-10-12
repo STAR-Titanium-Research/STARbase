@@ -193,7 +193,7 @@ export function renderSampleReport(d) {
 	const shortId = String(s.sample_id).split('-')[0];
 	const dims = [
 		s.diameter_mm ? `Ø${num(s.diameter_mm, 2)}` : null,
-		s.inner_diameter_mm ? `ID${num(s.inner_diameter_mm, 2)}` : null,
+		s.form === 'ring' && s.inner_diameter_mm ? `ID${num(s.inner_diameter_mm, 2)}` : null,
 		s.length_mm ? `L${num(s.length_mm, 2)}` : null,
 		s.thickness_mm ? `t${num(s.thickness_mm, 2)}` : null,
 	].filter(Boolean).join(' × ');

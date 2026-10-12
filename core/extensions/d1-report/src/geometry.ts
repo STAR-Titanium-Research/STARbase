@@ -368,7 +368,7 @@ function drawGeometry(d: Dims): string {
 	const g = (d.form || '').toLowerCase();
 	if (!g || g === 'other') return '';
 	if (g.includes('powder')) return powderSvg();
-	if (g === 'ring') return cylSvg(num(d.diameter_mm, 60), num(d.thickness_mm ?? d.length_mm, 10), num(d.inner_diameter_mm, 20));
+	if (g === 'ring') return cylSvg(num(d.diameter_mm, 60), num(d.thickness_mm ?? d.length_mm, 10), num(d.inner_diameter_mm, 0));
 	if (g.includes('disc')) return cylSvg(num(d.diameter_mm, 30), num(d.thickness_mm ?? d.length_mm, 8));
 	if (isRoundBar(g)) return roundBarSvg(num(d.diameter_mm, 20), num(d.length_mm, 100));
 	if (isUprightCylinder(g)) return cylSvg(num(d.diameter_mm, 25), num(d.length_mm, 50));

@@ -75,6 +75,8 @@ test('ring: outer Ø, bore Ø (drawn on the top face) and thickness; dimsText li
 	assert.match(svg, />16.5</);
 	assert.equal((svg.match(/<ellipse/g) || []).length, 2);
 	assert.equal(dimsText({ form: 'ring', diameter_mm: 151, inner_diameter_mm: 19.5, thickness_mm: 16.5, width_mm: 36 }), 'Ø151 · ID19.5 · t16.5 · W36 mm');
+	// No bore entered: none drawn (the mass estimate also treats it as solid).
+	assert.equal((buildGeometry({ form: 'ring', diameter_mm: 60, thickness_mm: 10 }).match(/<ellipse/g) || []).length, 1);
 	// A bore as wide as the ring is ignored rather than drawn inside out.
 	assert.equal((buildGeometry({ form: 'ring', diameter_mm: 20, inner_diameter_mm: 25, thickness_mm: 5 }).match(/<ellipse/g) || []).length, 1);
 });

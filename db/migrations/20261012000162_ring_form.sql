@@ -6,12 +6,18 @@
 -- The form dropdown and the dimension conditions are rewritten in full rather than patched. On the
 -- production database they had lost round_bar (added by 20260930000114) to a later metadata
 -- rewrite, so this also puts round_bar back.
+--
+-- The bore-below-OD rule applies to ring rows only: a sample switched from ring to another form
+-- keeps its (hidden) bore, and an unrelated edit to it must not fail on a field the form no longer shows.
 
 ALTER TABLE physical_samples ADD COLUMN inner_diameter_mm NUMERIC(10, 4);
 ALTER TABLE physical_samples ADD CONSTRAINT physical_samples_inner_diameter_mm_check
 CHECK (
     inner_diameter_mm IS NULL
-    OR (inner_diameter_mm > 0 AND (diameter_mm IS NULL OR inner_diameter_mm < diameter_mm))
+    OR (
+        inner_diameter_mm > 0
+        AND (form IS DISTINCT FROM 'ring' OR diameter_mm IS NULL OR inner_diameter_mm < diameter_mm)
+    )
 );
 COMMENT ON COLUMN physical_samples.inner_diameter_mm
 IS 'Bore (inner) diameter in mm of a ring-form sample; diameter_mm is the outer diameter.';

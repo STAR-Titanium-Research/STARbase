@@ -310,6 +310,9 @@ SAVEPOINT bad_bore;
 INSERT INTO physical_samples (sample_code, form, diameter_mm, inner_diameter_mm) VALUES ('TEST-RING-002','ring',20,20);
 SELECT 'bore_check:missing';
 ROLLBACK TO SAVEPOINT bad_bore;
+UPDATE physical_samples SET form='disc', diameter_mm=15 WHERE sample_code='TEST-RING-001';
+SELECT 'stale_bore_disc:' || form FROM physical_samples WHERE sample_code='TEST-RING-001';
+UPDATE physical_samples SET form='ring', diameter_mm=151 WHERE sample_code='TEST-RING-001';
 $mig_down
 SELECT 'down_fields:' || count(*) FROM directus_fields
   WHERE collection='physical_samples' AND (options::text LIKE '%"ring"%' OR conditions::text LIKE '%"ring"%' OR field='inner_diameter_mm');
@@ -323,6 +326,7 @@ ring_check "up_form_choices:1" "up: Geometry dropdown offers ring (and round_bar
 ring_check "up_dim_fields:4" "up: Ø, inner Ø, width and thickness are shown for ring"
 grep -q "physical_samples_inner_diameter_mm_check" <<<"$ring_out" && ! grep -qx "bore_check:missing" <<<"$ring_out" \
   && ok "a bore as wide as the ring is refused" || bad "a bore as wide as the ring is refused (psql output: $ring_out)"
+ring_check "stale_bore_disc:disc" "a former ring with a hidden bore wider than its new Ø still saves as a disc"
 ring_check "down_fields:0" "down: ring removed from dropdown, conditions and fields"
 ring_check "down_form:disc" "down: ring samples are mapped to disc"
 ring_check "down_column:0" "down: inner_diameter_mm is dropped"

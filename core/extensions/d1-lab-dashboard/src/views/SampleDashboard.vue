@@ -83,6 +83,7 @@
 					<div class="d1-kv">
 						<span>Mass (g)</span><span>{{ selectedSample.mass_grams ?? '—' }}</span>
 						<span>Ø (mm)</span><span>{{ selectedSample.diameter_mm ?? '—' }}</span>
+						<template v-if="selectedSample.form === 'ring'"><span>Ø inner (mm)</span><span>{{ selectedSample.inner_diameter_mm ?? '—' }}</span></template>
 						<span>W × L × T (mm)</span>
 						<span>
 							{{ selectedSample.width_mm ?? '?' }} × {{ selectedSample.length_mm ?? '?' }} × {{ selectedSample.thickness_mm ?? '?' }}
@@ -237,6 +238,7 @@ async function fetchSamples() {
 				'location',
 				'mass_grams',
 				'diameter_mm',
+				'inner_diameter_mm',
 				'width_mm',
 				'length_mm',
 				'thickness_mm',
