@@ -2056,7 +2056,7 @@ rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
 rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,user_id" "people.update leaves out exactly the key, the login, the legacy id and the timestamp"
 rl_check "sample_read_has_co_owners:1" "the sample read filter matches co_owners._some.user_id (the M2M alias)"
-rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"project_id":{"secondary_investigators":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}' \
+rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}' \
     "project_rollup is readable only by the project's PI and investigators"
 for idx in idx_physical_samples_owner_person_id idx_physical_samples_project_id \
     idx_manufacturing_operations_owner_person_id idx_manufacturing_operations_project_id \
@@ -2200,6 +2200,17 @@ rm -rf "$RES_DIR"
 RV=db/migrations/20261007000141_lab_member_row_visibility.sql
 rv_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RV")
 rv_down=$(awk '/-- migrate:down/{f=1;next}f' "$RV")
+# 20261010000160 runs after this migration on every database: its backup table is in d1_private too
+# (so this migration's down only empties the schema once 160 is down), and it moves this migration's
+# snapshot filters onto the current generator's output (no `_some` where Directus rejects it).
+SF=db/migrations/20261010000160_lab_member_some_only_where_directus_accepts_it.sql
+sf_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$SF")
+sf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SF")
+# 20261012000161 runs after 160: it rules the additional-operators junctions (its backup is in
+# d1_private too, so it goes down first and comes up after 160, as on a real database).
+JR=db/migrations/20261012000161_lab_member_additional_operator_rules.sql
+jr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$JR")
+jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -2238,6 +2249,8 @@ DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$jr_down
+$sf_down
 $rv_down
 SELECT 'dn0_backup_table:' || coalesce(to_regclass('d1_private.lab_member_permissions_backup')::text, 'gone');
 SELECT 'dn0_schema:' || coalesce((SELECT nspname FROM pg_namespace WHERE nspname = 'd1_private'), 'gone');
@@ -2257,10 +2270,14 @@ SELECT 'up_audit_logs:' || count(*) FROM directus_permissions WHERE policy='$LM'
 SELECT 'up_people_actions:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions WHERE policy='$LM' AND collection='people';
 SELECT 'up_people_update_fields:' || fields FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='update';
 SELECT 'up_people_create_validation:' || (validation::jsonb ? '_or') FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='create';
+$sf_up
+$jr_up
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
+$jr_down
+$sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
 SELECT 'up_backup_exact:' || count(*) FROM (
   (SELECT to_jsonb(b) FROM before_rows b WHERE b.collection IN $rv_ruled EXCEPT SELECT to_jsonb(k) FROM d1_private.lab_member_permissions_backup k)
@@ -2329,7 +2346,7 @@ rv_check "up_people_actions:create,read,update" "up: Lab Member people delete is
 rv_check "up_people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "up: people update loses user_id"
 rv_check "up_people_create_validation:true" "up: people create gets the login validation"
 n_exact=$(grep -o '^up_exact:[0-9]*' <<<"$rv_out" | cut -d: -f2)
-[[ "${n_exact:-0}" -eq "${gen_n:-x}" ]] && ok "up: every ruled row matches the generated rules ($n_exact rows)" || bad "up: ruled rows differ from the generated rules (psql output: $rv_out)"
+[[ "${n_exact:-0}" -eq "${gen_n:-x}" ]] && ok "up, then 20261010000160: every ruled row matches the generated rules ($n_exact rows)" || bad "up: ruled rows differ from the generated rules (psql output: $rv_out)"
 n_backup=$(grep -o '^up_backup_rows:[0-9]*' <<<"$rv_out" | cut -d: -f2)
 [[ "${n_backup:-0}" -eq 9 ]] && ok "up: the backup holds the 9 seeded Lab Member rows of the changed collections" || bad "up: backup has ${n_backup:-?} rows, want 9 (psql output: $rv_out)"
 rv_check "up_backup_exact:0" "up: the backup rows equal the rows before the migration, ids included"
@@ -2395,6 +2412,121 @@ rv_refuse "an alias name that another relation uses" \
     "UPDATE directus_relations SET one_field = NULL WHERE many_collection = 'test_sessions' AND many_field = 'project_id';
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('equipment', 'project_id', 'projects', 'sessions');" \
     "cannot name the alias projects.sessions"
+
+echo "== Lab Member filters put _some only where Directus accepts it =="
+# Directus 11 (api apply-query/filter) handles `_some`/`_none` only directly under an O2M field at the
+# top of a query, or at the top of the subquery another legal `_some` opens. Anywhere else, e.g.
+# `sample_id.co_owners._some` (after a to-one hop), it throws `"_some" can only be used with top level
+# relational alias field`. A `_some` subquery also applies the related collection's own permission
+# rows, so one bad row 400s every collection whose rule reaches it: 20 Lab Member collections on
+# live after hotfix 20261009000142, which kept the outermost `_some` even where it was illegal
+# (migration 20261010000160). CI has no Directus, so this checks the stored JSON against that rule,
+# using directus_relations for which fields are O2M.
+SOME_LINT=$(mktemp)
+cat > "$SOME_LINT" <<'PY'
+import json, sys
+doc = json.loads(sys.stdin.read())
+o2m = {(r["one_collection"], r["one_field"]): r["many_collection"] for r in doc["relations"] if r["one_field"]}
+m2o = {(r["many_collection"], r["many_field"]): r["one_collection"] for r in doc["relations"] if r["one_collection"]}
+bad = []
+def scope(coll, node, top, where):
+    for key, val in (node or {}).items():
+        if key in ("_and", "_or"):
+            for sub in val:
+                scope(coll, sub, top, where)
+        elif not key.startswith("_") and isinstance(val, dict):
+            field(coll, key, val, top, where)
+def field(coll, key, val, top, where):
+    first = next(iter(val), None)
+    if first in ("_some", "_none"):
+        if top and (coll, key) in o2m:
+            scope(o2m[(coll, key)], val[first], True, where)
+        else:
+            bad.append(f"{where}: {coll}.{key}.{first}")
+        return
+    if any(k in ("_some", "_none") for k in val):
+        bad.append(f"{where}: {coll}.{key} ({'/'.join(val)})")
+    nxt = o2m.get((coll, key)) or m2o.get((coll, key))
+    for k, v in val.items():
+        if nxt and not k.startswith("_") and isinstance(v, dict):
+            field(nxt, k, v, False, where)
+for row in doc["rows"]:
+    for col in ("permissions", "validation"):
+        scope(row["collection"], row[col], True, f'{row["policy"]} {row["collection"]}.{row["action"]} {col}')
+print(f"illegal:{len(bad)}")
+for b in bad[:20]:
+    print("  " + b)
+PY
+some_rows_sql="json_build_object(
+  'relations', (SELECT coalesce(json_agg(json_build_object('many_collection', many_collection, 'many_field', many_field,
+                 'one_collection', one_collection, 'one_field', one_field)), '[]') FROM directus_relations),
+  'rows', (SELECT coalesce(json_agg(json_build_object('policy', policy, 'collection', collection, 'action', action,
+                 'permissions', permissions::json, 'validation', validation::json)), '[]') FROM directus_permissions))"
+lint_out=$($PSQL -c "SELECT $some_rows_sql" 2>&1 | python3 "$SOME_LINT" 2>&1)
+grep -qx "illegal:0" <<<"$lint_out" \
+    && ok "no stored permission or validation filter has a _some Directus would reject" \
+    || bad "a stored permission filter has a _some Directus 11 rejects (400s the whole policy): $lint_out"
+# The lint itself must catch the live failure: the hotfix-142 shape of manufacturing_operations.read.
+lint_neg=$(python3 "$SOME_LINT" 2>&1 <<'JSON'
+{"relations": [{"many_collection": "manufacturing_operations", "many_field": "sample_id", "one_collection": "physical_samples", "one_field": null},
+               {"many_collection": "sample_co_owners", "many_field": "sample_id", "one_collection": "physical_samples", "one_field": "co_owners"}],
+ "rows": [{"policy": "p", "collection": "manufacturing_operations", "action": "read", "validation": null,
+           "permissions": {"_or": [{"sample_id": {"co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}}}]}},
+          {"policy": "p", "collection": "physical_samples", "action": "read", "validation": null,
+           "permissions": {"_or": [{"co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}}]}}]}
+JSON
+)
+grep -qx "illegal:1" <<<"$lint_neg" \
+    && ok "the _some lint flags sample_id.co_owners._some (after a to-one hop) and passes top-level co_owners._some" \
+    || bad "the _some lint does not tell legal from illegal _some: $lint_neg"
+
+# Migration 20261010000160 from a live-shaped state: seed two rows as hotfix 142 left them on live
+# (a read and an update row with `_some` after a to-one hop), apply up, then down. Rolled back.
+MIG=db/migrations/20261010000160_lab_member_some_only_where_directus_accepts_it.sql
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
+gen_perm() { python3 -c 'import json,sys; c,a=sys.argv[1:3]; print(json.dumps(next(x["permissions"] for x in json.load(sys.stdin) if (x["collection"],x["action"])==(c,a))))' "$1" "$2" <<<"$rules_json"; }
+gen_mo_read=$(gen_perm manufacturing_operations read)
+gen_cs_update=$(gen_perm campaign_samples update)
+live_mo_read='{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
+live_cs_update='{"_or":[{"campaign_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
+sm_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$mig_down
+SELECT 'down_backup_gone:' || (to_regclass('d1_private.lab_member_some_fix_backup') IS NULL);
+UPDATE directus_permissions SET permissions = '$live_mo_read'
+ WHERE policy = '$LM' AND collection = 'manufacturing_operations' AND action = 'read';
+UPDATE directus_permissions SET permissions = '$live_cs_update'
+ WHERE policy = '$LM' AND collection = 'campaign_samples' AND action = 'update';
+CREATE TEMP TABLE _before AS SELECT id, policy, permissions::text AS p, validation::text AS v, fields FROM directus_permissions;
+SELECT 'pre_lint:' || $some_rows_sql;
+$mig_up
+SELECT 'up_mo_read:' || (permissions::jsonb = '$gen_mo_read'::jsonb) FROM directus_permissions
+ WHERE policy = '$LM' AND collection = 'manufacturing_operations' AND action = 'read';
+SELECT 'up_cs_update:' || (permissions::jsonb = '$gen_cs_update'::jsonb) FROM directus_permissions
+ WHERE policy = '$LM' AND collection = 'campaign_samples' AND action = 'update';
+SELECT 'up_other_untouched:' || count(*) FROM directus_permissions d FULL JOIN _before b USING (id)
+ WHERE d.id IS NULL OR b.id IS NULL OR d.validation::text IS DISTINCT FROM b.v OR d.fields IS DISTINCT FROM b.fields
+    OR (b.policy <> '$LM' AND d.permissions::text IS DISTINCT FROM b.p);
+SELECT 'up_lint:' || $some_rows_sql;
+$mig_down
+SELECT 'down_exact:' || count(*) FROM directus_permissions d FULL JOIN _before b USING (id)
+ WHERE (d.permissions::text, d.validation::text, d.fields) IS DISTINCT FROM (b.p, b.v, b.fields);
+ROLLBACK;
+SQL
+)
+sm_check() { grep -qxF -- "$1" <<<"$sm_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-400 <<<"$sm_out"))"; }
+pre_lint=$(sed -n 's/^pre_lint://p' <<<"$sm_out" | python3 "$SOME_LINT" 2>&1 | head -1)
+up_lint=$(sed -n 's/^up_lint://p' <<<"$sm_out" | python3 "$SOME_LINT" 2>&1)
+[[ "$pre_lint" =~ ^illegal:[1-9] ]] && ok "the live-shaped state before up fails the _some lint ($pre_lint)" \
+    || bad "the live-shaped state should fail the _some lint, got: $pre_lint"
+grep -qx "illegal:0" <<<"$up_lint" && ok "up: no Lab Member filter has an illegal _some" || bad "up: still illegal: $up_lint"
+sm_check "up_mo_read:true" "up: manufacturing_operations.read is the generated filter (amnesty kept)"
+sm_check "up_cs_update:true" "up: update rows are fixed too, not only reads (campaign_samples.update)"
+sm_check "up_other_untouched:0" "up: only Lab Member permissions change (validation, fields and other policies kept)"
+sm_check "down_exact:0" "down: every permission row is back exactly as before up"
+sm_check "down_backup_gone:true" "down: the backup table is dropped"
+rm -f "$SOME_LINT"
 
 echo "== Operator backfill is safe on an empty database =="
 # The generated backfill maps legacy Machine_Operators ids to people by name. Only ids a run still
