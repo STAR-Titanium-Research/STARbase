@@ -1276,14 +1276,17 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
   - `GET /bug-report-relay/rig-tests` over Tailscale with no `Authorization` header, or with
     `Authorization: Bearer made-up`, is refused with 403 `D1 sign-in rejected`. With a real D1
     access token (copy one from the force app's DevTools, `localStorage['force-app.auth']`) it
-    returns `{"ok": true, ...}`, and the relay log names that D1 user.
-  - Stop Directus for a moment: the same call gets 503 `D1 unavailable`.
+    returns `{"ok": true, ...}`, and the relay log names that D1 user. Treat that token as a password:
+    do not paste it into chat, tickets or logs; it expires within 15 minutes.
+  - Stop Directus for a moment: the same call gets 503 `D1 unavailable`. Wait more than 60 s after
+    the last accepted call first, or use a freshly copied token: accepted sign-ins are cached for
+    60 s, and a cached token never reaches Directus.
   - An issue that an allowlisted login both wrote and labelled is listed. One written by anyone
     else is not, even if you label it.
   - A comment through `POST /rig-tests/<n>/comment` on an issue without the label is refused.
   - An attempt to PATCH the rig's result comment is refused.
   - On a laptop plugged into the rig, signed in online: Settings → Rig tests says the PC takes
-    requests. Signed in offline, or signed out: it says "Sign in to D1 online to receive rig-test
+    requests. Signed in but offline: it says "Sign in to D1 online to receive rig-test
     requests", and the PC never polls. Left idle on the rig for more than 15 minutes, it keeps
     taking requests (the token is refreshed early).
   - An issue with more than 100 events, for example one with many label changes, is still
