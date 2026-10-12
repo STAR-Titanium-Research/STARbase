@@ -87,7 +87,11 @@ function stack(lines: Fitted[], x: number, y: number, w: number, align: TextLine
 	});
 }
 
-export function layoutLabel(s: LabelSample, t: LabelTemplate, measure: Measure = textWidthMm): LabelLayout {
+// `qrMinMm`: the edge an automatic QR code would like to have so that its modules stay scannable (render.ts works
+// it out from the payload). An automatic code grows towards it, up to the label's inner side, before the text gets
+// the rest: the text then shrinks or is cut (and the label is flagged) instead of the QR becoming too small to scan.
+// An explicit qr_size_mm is the template's own choice and is never changed.
+export function layoutLabel(s: LabelSample, t: LabelTemplate, measure: Measure = textWidthMm, qrMinMm = 0): LabelLayout {
 	const p = t.paddingMm;
 	const innerW = t.labelWidthMm - 2 * p;
 	const innerH = t.labelHeightMm - 2 * p;
@@ -106,7 +110,7 @@ export function layoutLabel(s: LabelSample, t: LabelTemplate, measure: Measure =
 		let q: number;
 		if (explicit !== null) q = Math.min(explicit, side);
 		else if (!fit.lines.length) q = side;
-		else q = Math.min(innerW, Math.max(innerH - sum(fit.lines) - GAP_MM, side * MIN_QR_SHARE));
+		else q = Math.min(side, Math.max(innerH - sum(fit.lines) - GAP_MM, side * MIN_QR_SHARE, qrMinMm));
 		const { kept, dropped } = fitHeight(fit.lines, Math.max(0, innerH - q - GAP_MM));
 		const textH = sum(kept);
 		const groupH = q + (kept.length ? GAP_MM + textH : 0);
@@ -125,7 +129,7 @@ export function layoutLabel(s: LabelSample, t: LabelTemplate, measure: Measure =
 	if (explicit !== null) q = Math.min(explicit, side);
 	else if (widest === 0) q = side;
 	// The text column is as wide as the widest field needs at its smallest size; the QR code gets the rest.
-	else q = Math.min(innerH, Math.max(innerW - GAP_MM - widest - 0.01, side * MIN_QR_SHARE));
+	else q = Math.min(side, Math.max(innerW - GAP_MM - widest - 0.01, side * MIN_QR_SHARE, qrMinMm));
 	const textW = Math.max(0, innerW - q - GAP_MM);
 	const fit = fitLines(s, t, textW, measure);
 	const { kept, dropped } = fitHeight(fit.lines, innerH);

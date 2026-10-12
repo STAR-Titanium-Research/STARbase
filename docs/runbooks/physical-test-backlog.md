@@ -852,6 +852,30 @@ migration 141 prints about ownerless records.
   number puts it back on the global value and the mark goes. Removing a chip and ticking it again starts from the
   global value.
 
+- [ ] **#247-L13 — Rich QR scans on a phone.** Set a lab contact on the labels page (admin, under Template:
+  "Contact on labels"), then print one label of a sample that has a nickname, a material and an owner with an email
+  on the A4 4×5 sheet, the 50×25 single and the Brother DK-22205 roll. Scan each with the stock camera of an iPhone
+  and of an Android phone. Each shows the whole text: `D1 SAMPLE`, the code and short ID, material and nickname,
+  date and owner initials, the owner's email and `Contact: <the lab email>`, with no login and no network. The
+  preview shows no "QR may be hard to scan" warning on A4 4×5 and the DK-22205. For the 50×25 use a sample with a
+  long code (about 22 characters) and an owner with a Sheffield-length email: the QR grows to the full label
+  height and the text beside it may shrink or be cut (the label is flagged as clipped), and it still scans; if
+  the preview does warn, the QR is too small for that payload on that label and the template needs a bigger label
+  or fewer QR extras. Also scan a label of a template with
+  "All (default)" unticked and only Date chosen: it shows just the code, short ID and date. A label of a sample
+  whose owner has no email scans without an email line. Since #247.
+
+- [ ] **#247-L14 — P-touch .lbx export.** Pick the Brother DK-22205 template on the labels page, tick 3 samples and
+  click "Download for P-touch (.lbx)": a `labels-<date>.zip` with three `<code>-1.lbx` files (one sample ticked,
+  one copy: a bare `<code>.lbx`). Unzip it and open one `.lbx` in P-touch Editor on the PC with the QL-700 (62 mm
+  roll loaded). It opens without an error, with the QR on the left and the code (bold), short ID and nickname to its
+  right, the label 62 mm wide and about 30 mm long, and P-touch keeps the QL-700 and the 62 mm continuous roll.
+  Print it. Scan the QR with a phone: the whole payload as in L13, with a non-ASCII letter (for example "é" in a
+  nickname) intact. The text on the label matches the preview, and nothing is cut at the edges. Not checked here:
+  there is no Brother driver on the dev PC, so P-touch Editor re-targeted the file to another printer and the paper
+  size and orientation (portrait, `format="259"`, QL-550 `printerID`) are unconfirmed. If P-touch asks to change the
+  paper, or the label comes out rotated, report it. Since the .lbx PR.
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

@@ -5,7 +5,12 @@ export type FieldSize = 'lg' | 'md' | 'sm';
 export type Arrangement = 'qr_top' | 'qr_left' | 'text_only';
 export type Media = 'sheet' | 'roll';
 
+// What a label's QR payload can carry besides the sample code and short id (which are always there).
+// A template picks from these; an empty list means all of them (see effectiveQrKeys in qrPayload.ts).
+export type QrKey = 'material' | 'nickname' | 'date' | 'owner_initials' | 'owner_email' | 'contact_email';
+
 export const FIELD_KEYS: readonly FieldKey[] = ['sample_code', 'short_id', 'nickname', 'material', 'date', 'owner_initials'];
+export const QR_KEYS: readonly QrKey[] = ['material', 'nickname', 'date', 'owner_initials', 'owner_email', 'contact_email'];
 export const FIELD_SIZES: readonly FieldSize[] = ['lg', 'md', 'sm'];
 export const ARRANGEMENTS: readonly Arrangement[] = ['qr_top', 'qr_left', 'text_only'];
 export const MEDIA: readonly Media[] = ['sheet', 'roll'];
@@ -37,7 +42,8 @@ export interface LabelTemplate {
 	arrangement: Arrangement;
 	qrSizeMm: number | null;
 	fields: LabelField[];
-	qrFields: FieldKey[];
+	// Extras written into the QR payload; [] (a legacy or empty column) means all of QR_KEYS.
+	qrFields: QrKey[];
 	isDefault: boolean;
 	userCreated: string | null;
 	dateCreated: string | null;
@@ -54,6 +60,8 @@ export interface LabelSample {
 	// YYYY-MM-DD
 	date: string | null;
 	ownerInitials: string | null;
+	// The owner's people.email. Goes into the QR payload only; it is not a printable text field.
+	ownerEmail: string | null;
 }
 
 // The value a field shows on the label, or '' when the sample has none.

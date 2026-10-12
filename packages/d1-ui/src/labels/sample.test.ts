@@ -38,7 +38,7 @@ describe('toLabelSample', () => {
 		material_id: { common_name: 'Ti-6Al-4V', alloy_code: 'T64' },
 		manufactured_date: '2026-10-01',
 		created_at: '2026-10-05T10:00:00Z',
-		owner_person_id: { full_name: 'Dennis Premoli' },
+		owner_person_id: { full_name: 'Dennis Premoli', email: ' dp@example.org ' },
 	};
 	it('maps a row as the page reads it', () => {
 		expect(toLabelSample(row)).toEqual({
@@ -49,11 +49,13 @@ describe('toLabelSample', () => {
 			material: 'Ti-6Al-4V',
 			date: '2026-10-01',
 			ownerInitials: 'DP',
+			ownerEmail: 'dp@example.org',
 		});
 	});
 	it('uses the alloy code when there is no common name, and tolerates missing relations', () => {
 		const s = toLabelSample({ ...row, material_id: { alloy_code: 'T64' }, owner_person_id: null, nickname: '' });
 		expect(s.material).toBe('T64');
+		expect(s.ownerEmail).toBeNull();
 		expect(s.ownerInitials).toBeNull();
 		expect(s.nickname).toBeNull();
 	});
@@ -72,7 +74,7 @@ describe('toLabelSample', () => {
 });
 
 describe('isPrintableSample', () => {
-	const ok = { id: 'u', code: 'S-1', shortId: '1a2b3c4d', nickname: null, material: null, date: null, ownerInitials: null };
+	const ok = { id: 'u', code: 'S-1', shortId: '1a2b3c4d', nickname: null, material: null, date: null, ownerInitials: null, ownerEmail: null };
 	it('needs a code and a hex short id', () => {
 		expect(isPrintableSample(ok)).toBe(true);
 		expect(isPrintableSample({ ...ok, code: '' })).toBe(false);

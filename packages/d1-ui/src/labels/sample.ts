@@ -42,8 +42,13 @@ function ownerInitials(row: Row): string {
 	return text(row.owner_initials).toUpperCase();
 }
 
+function ownerEmail(row: Row): string {
+	const rel = row.owner_person_id;
+	return isRow(rel) ? text(rel.email) : '';
+}
+
 // Reads: sample_id, sample_code, short_id, nickname, material_id.common_name / alloy_code (or a flat
-// `material`), manufactured_date, created_at, owner_person_id.full_name (or a flat `owner_initials`).
+// `material`), manufactured_date, created_at, owner_person_id.full_name and .email (or a flat `owner_initials`).
 // A missing short_id falls back to the first 8 hex characters of the id, which is how short ids are
 // assigned (a clash lengthens it, but the column is always set).
 export function toLabelSample(row: Row): LabelSample {
@@ -56,6 +61,7 @@ export function toLabelSample(row: Row): LabelSample {
 		material: materialName(row) || null,
 		date: labelDate(row.manufactured_date, row.created_at) || null,
 		ownerInitials: ownerInitials(row) || null,
+		ownerEmail: ownerEmail(row) || null,
 	};
 }
 

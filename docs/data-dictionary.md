@@ -46,6 +46,7 @@ Projects & campaigns
 
 Labels
   label_templates              printable label layouts (sheet or roll) for the Explorer labels page
+  label_settings               singleton: the lab contact email printed into every label's QR code
 
 Raw-material provenance
   raw_stock_lots               inbound material ledger

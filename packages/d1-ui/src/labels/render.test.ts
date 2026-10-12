@@ -22,7 +22,7 @@ const BROTHER = templateFromRow({
 });
 
 const sample = (n: number, over: Partial<LabelSample> = {}): LabelSample => ({
-	id: `id-${n}`, code: `S-${n}`, shortId: String(n).padStart(8, '0'), nickname: null, material: null, date: null, ownerInitials: null, ...over,
+	id: `id-${n}`, code: `S-${n}`, shortId: String(n).padStart(8, '0'), nickname: null, material: null, date: null, ownerInitials: null, ownerEmail: null, ...over,
 });
 const FAKE_QR = (_payload: string) => ({ size: 2, data: [1, 0, 0, 1] });
 const render = (samples: LabelSample[], t: LabelTemplate, opts?: { outline?: boolean }, start = 1) =>
@@ -86,10 +86,21 @@ describe('renderLabelDocument', () => {
 		const { html } = renderLabelDocument(paginate([sample(1, { nickname: 'bracket' })], { copies: 1, start: 1 }, t), t, (p) => {
 			seen.push(p);
 			return { size: 1, data: [1] };
-		});
-		expect(seen).toEqual(['D1 SAMPLE\nS-1 · 00000001\n"bracket"']);
+		}, { contactEmail: 'lab@example.org' });
+		expect(seen).toEqual(['D1 SAMPLE\nS-1 | 00000001\n"bracket"']);
 		expect(html).toContain('<div class="qr" style="');
 		expect(html).toContain('<svg viewBox="0 0 5 5"');
+	});
+	it('puts the contact email in the payload unless the template leaves it out', () => {
+		const seen: string[] = [];
+		const grab = (p: string) => (seen.push(p), { size: 1, data: [1] });
+		const s = sample(1, { ownerEmail: 'dp@example.org' });
+		renderLabelDocument(paginate([s], { copies: 1, start: 1 }, A4_4X5), A4_4X5, grab, { contactEmail: 'lab@example.org' });
+		expect(seen[0]).toBe('D1 SAMPLE\nS-1 | 00000001\ndp@example.org\nContact: lab@example.org');
+		seen.length = 0;
+		const t = { ...A4_4X5, qrFields: ['owner_email' as const] };
+		renderLabelDocument(paginate([s], { copies: 1, start: 1 }, t), t, grab, { contactEmail: 'lab@example.org' });
+		expect(seen[0]).toBe('D1 SAMPLE\nS-1 | 00000001\ndp@example.org');
 	});
 	it('draws no QR for a text-only template', () => {
 		const t = { ...A4_4X5, arrangement: 'text_only' as const };
@@ -228,5 +239,39 @@ describe('renderLabelDocument with unusable samples', () => {
 	});
 	it('reports none invalid for good samples', () => {
 		expect(render([sample(1)], A4_4X5).invalid).toBe(0);
+	});
+});
+
+describe('QR density', () => {
+	const SIZES = { M: 57, L: 49 } as const;
+	const levels: string[] = [];
+	const enc = (_p: string, level: 'M' | 'L') => (levels.push(level), { size: SIZES[level], data: [] as number[] });
+	const tiny = (w: number, h: number) =>
+		templateFromRow({ name: 't', media: 'roll', page_width_mm: w, page_height_mm: h, columns: 1, rows: 1, label_width_mm: w, label_height_mm: h, arrangement: 'qr_left', fields: [] });
+	const run = (t: LabelTemplate) => (levels.length = 0, renderLabelDocument(paginate([sample(1)], { copies: 1, start: 1 }, t), t, enc));
+
+	it('uses error correction M with comfortable modules and reports the module size', () => {
+		const out = run(BROTHER); // QR box 26 mm: 26 / 61 = 0.426 mm per module
+		expect(levels).toEqual(['M']);
+		expect(out.qrModuleMm).toBeCloseTo(26 / 61, 2);
+		expect(out.qrDense).toBe(0);
+	});
+	it('drops to L when M modules would be under 0.33 mm, and stays quiet while L is 0.3 mm or more', () => {
+		const out = run(tiny(50, 22)); // box 18 mm: M 18 / 61 = 0.295, L 18 / 53 = 0.34
+		expect(levels).toEqual(['M', 'L']);
+		expect(out.qrModuleMm).toBeCloseTo(18 / 53, 2);
+		expect(out.qrDense).toBe(0);
+	});
+	it('counts a label as dense when even L modules are under 0.3 mm', () => {
+		const out = run(tiny(40, 17)); // box 13 mm: L 13 / 53 = 0.245
+		expect(levels).toEqual(['M', 'L']);
+		expect(out.qrModuleMm).toBeCloseTo(13 / 53, 2);
+		expect(out.qrDense).toBe(1);
+	});
+	it('has no module size for a text-only template', () => {
+		const t = { ...A4_4X5, arrangement: 'text_only' as const };
+		const out = run(t);
+		expect(out.qrModuleMm).toBeNull();
+		expect(out.qrDense).toBe(0);
 	});
 });

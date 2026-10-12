@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { templateFromRow, validateTemplate } from './template';
+import { QR_KEYS } from './types';
 
 // The four seeds of the label_templates migration, as Directus returns them (numerics as strings).
 const A4_4X5 = {
@@ -38,7 +39,8 @@ describe('templateFromRow', () => {
 		expect(t.paddingMm).toBe(2);
 		expect(t.gapYMm).toBe(0);
 		expect(t.qrSizeMm).toBeNull();
-		expect(t.qrFields).toEqual([]);
+		expect(t.qrFields).toEqual([...QR_KEYS]); // an empty qr_fields means all
+		expect(templateFromRow({ ...L7160, qr_fields: null }).qrFields).toEqual([...QR_KEYS]);
 		expect(t.isDefault).toBe(false);
 		expect(t.description).toBeNull();
 		expect(t.userCreated).toBeNull();
@@ -56,10 +58,10 @@ describe('templateFromRow', () => {
 		const t = templateFromRow({
 			...A4_4X5,
 			fields: JSON.stringify([{ key: 'material', size: 'huge', bold: 1 }, { key: 'bogus' }, 'date', null]),
-			qr_fields: '["nickname","nope"]',
+			qr_fields: '["nickname","nope","sample_code","owner_email"]',
 		});
 		expect(t.fields).toEqual([{ key: 'material', size: 'md', bold: false }]);
-		expect(t.qrFields).toEqual(['nickname']);
+		expect(t.qrFields).toEqual(['nickname', 'owner_email']);
 	});
 	it('throws a readable error for a row that cannot be a template', () => {
 		expect(() => templateFromRow({ ...A4_4X5, label_width_mm: 'wide' })).toThrow(/label_width_mm/);

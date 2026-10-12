@@ -53,11 +53,14 @@ merge into `feat/label-printing` → S3 → review → PR A → S5 → PR B.
 | `arrangement` | text, not null | `'qr_top'`, `'qr_left'` or `'text_only'` |
 | `qr_size_mm` | numeric, null | null = largest square that fits |
 | `fields` | jsonb, not null, default `[]` | `[{ "key": FieldKey, "size": "lg"|"md"|"sm", "bold": bool }]` |
-| `qr_fields` | jsonb, not null, default `[]` | extra FieldKeys in the QR payload |
+| `qr_fields` | jsonb, not null, default `[]` | extras in the QR payload (`QrKey`s); empty or NULL means all, and the seeds list all six |
 | `is_default` | bool, default false | at most one true (partial unique index) |
 | `user_created`, `date_created`, `user_updated`, `date_updated` | Directus accountability | plus the repo's OCC/audit conventions |
 
 `FieldKey` = `sample_code` · `short_id` · `nickname` · `material` · `date` · `owner_initials`.
+`QrKey` = `material` · `nickname` · `date` · `owner_initials` · `owner_email` · `contact_email` (the code and short ID are always in the payload).
+
+Also `label_settings`: a singleton (`id` = 1 by CHECK) with `contact_email` (email CHECK) and the OCC/audit columns; Lab Members read, admins write; seeded `(1, NULL)`.
 
 **Permissions** (the same mechanism as other collections in the repo):
 - every lab role reads and creates;
@@ -85,9 +88,9 @@ validateTemplate(t): string[]            // human-readable problems (labels off 
 slotPositions(t): {x:number,y:number}[]  // mm, row-major
 paginate(samples, {copies, start}, t): (LabelSample|null)[][]   // null = skipped slot
 fitText(text, boxWidthMm, size, bold): { pt: number; clipped: boolean; text: string }
-buildQrPayload(s, extraKeys): string     // 'D1 SAMPLE\n<code> · <shortId>\n…'
+buildQrPayload(s, contactEmail, keys?): string  // 'D1 SAMPLE\n<code> | <shortId>\n<material> | "<nickname>"\n<date> | <initials>\n<ownerEmail>\nContact: <contactEmail>'; ASCII ' | ', empty values and empty lines dropped; keys default to all and [] means all
 parseQrPayload(text): { code: string; shortId: string; lines: string[] } | null
-renderLabelDocument(pages, t, qrSvg: (payload:string)=>string): { html: string; clipped: number }
+renderLabelDocument(pages, t, qr: (payload, level: 'M'|'L') => QrModules, { contactEmail? }): { html, clipped, invalid, qrModuleMm, qrDense }  // level M while modules >= 0.33 mm, else L; qrDense counts labels under 0.3 mm
   // a full HTML document: @page size, mm absolute positions, white labels, no external
   // resources. Used as iframe srcdoc for the preview AND for the print. Escapes everything.
 ```
@@ -105,7 +108,7 @@ Owns `packages/d1-ui/src/labels/**` and the export lines in `packages/d1-ui/src/
 with vitest. Port the useful parts of `core/extensions/d1-report/src/label.js` (date, initials,
 font sizing, pagination, validation) rather than reinventing them. No Vue and no Directus imports.
 Tests must cover: the 4×5 and L7160 positions, start offset and copies, a roll giving one label per page,
-clipping, payload round-trip (including `·` and newlines in a nickname), parse rejecting non-D1 text,
+clipping, payload round-trip (including ` | ` and newlines in a nickname, a missing email, nickname or contact, old ` · ` labels, printable ASCII), parse rejecting non-D1 text,
 and HTML escaping.
 
 ### S4: cleanup and redirects (haiku)
