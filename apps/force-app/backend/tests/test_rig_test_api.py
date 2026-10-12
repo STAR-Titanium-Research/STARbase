@@ -657,8 +657,34 @@ def test_put_and_delete_session_drive_the_pending_flags(client, rig):
 def test_an_unusable_session_token_is_422_and_changes_nothing(client, rig, token):
     r = client.put("/rig-tests/session", json={"access_token": token, "expires_at": 1})
     assert r.status_code == 422
-    assert SESSION_TOKEN not in r.text and (not token or token not in r.text)
-    assert relay.session_present() is True
+    assert not token or token not in r.text
+    assert relay._current_token() == SESSION_TOKEN
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"access_token": "distinct-secret-abc123"},
+        ["distinct-secret-abc123"],
+        {"access_token": "distinct-secret-abc123", "expires_at": True},
+        {"access_token": "distinct-secret-abc123", "expires_at": "soon"},
+    ],
+)
+def test_a_malformed_session_body_is_422_without_echoing_the_token(client, rig, body):
+    r = client.put("/rig-tests/session", json=body)
+    assert r.status_code == 422
+    assert "distinct-secret-abc123" not in r.text
+    assert relay._current_token() == SESSION_TOKEN
+
+
+def test_a_non_json_session_body_is_422(client, rig):
+    r = client.put(
+        "/rig-tests/session",
+        content=b"distinct-secret-abc123",
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 422 and "distinct-secret-abc123" not in r.text
+    assert relay._current_token() == SESSION_TOKEN
 
 
 def test_no_route_ever_returns_the_session_token(client, rig):

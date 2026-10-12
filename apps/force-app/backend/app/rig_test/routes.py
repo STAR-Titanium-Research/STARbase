@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -130,13 +130,6 @@ class AnswerBody(BaseModel):
     note: str | None = Field(None, max_length=1000)
 
 
-class SessionBody(BaseModel):
-    # No Field limits on purpose: pydantic's 422 echoes the rejected input, and this is a
-    # credential. relay.set_session checks it (1-4096 printable ASCII) without repeating it.
-    access_token: str
-    expires_at: float  # epoch ms
-
-
 # ---- routes ----------------------------------------------------------------------------------
 
 
@@ -153,10 +146,23 @@ def _relay_view(w: _Wiring) -> str:
 
 
 @router.put("/session")
-async def put_session(body: SessionBody) -> dict:
+async def put_session(request: Request) -> dict:
+    # Parsed by hand, not as a pydantic body: FastAPI's 422 for a body that fails validation
+    # serialises the offending input, and this is a credential. Every failure here is fixed text.
     w = _wiring()
     try:
-        changed = relay.set_session(body.access_token, body.expires_at)
+        body = await request.json()
+    except ValueError:
+        body = None
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("access_token"), str)
+        or isinstance(body.get("expires_at"), bool)
+        or not isinstance(body.get("expires_at"), int | float)
+    ):
+        raise HTTPException(422, "expected {access_token, expires_at}") from None
+    try:
+        changed = relay.set_session(body["access_token"], body["expires_at"])
     except ValueError:
         raise HTTPException(422, "not a usable access token") from None
     if changed:
