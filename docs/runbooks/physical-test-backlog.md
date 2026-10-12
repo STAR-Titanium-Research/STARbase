@@ -854,13 +854,18 @@ migration 141 prints about ownerless records.
   QL-700 62 mm roll scans too, and the camera stops when the dialog is closed or the tab is switched away
   and back. Since PR B (#TBD).
 - [ ] **#TBD-L15 — Scan a label with a USB scanner.** Plug a USB (keyboard-mode) barcode scanner into a PC, open
-  any Explorer page, press Ctrl K (or click the sidebar search box) and scan a printed label's QR code. Expect:
-  the Finder opens that sample without pressing anything, within about a quarter of a second after the scan, and
-  the box does not turn the label into one run-on line or lose its line breaks (if the scanner's Enter ends the
-  scan, nothing extra happens). If the scanner cannot type `·` the label still opens (the code is read after
-  `-` or `|` too). Scan a label for a deleted sample: the Finder stays open and shows the decoded label with
-  the reason. Paste the label's text (copy it from a phone's QR reader) into the box: it opens the sample at
-  once. Then type an ordinary search such as `S-01` and check the results list still works. Since PR B (#TBD).
+  any Explorer page, press Ctrl K (or click the sidebar search box) and scan a label's QR code, once with a label
+  printed after this change (its lines are separated by ` | `) and once with an older one (separated by `·`, which a
+  scanner cannot type: it types some other character or none). Expect: the Finder opens that sample within about a
+  quarter of a second after the scan, without pressing anything, and the box keeps the label's line breaks (it does
+  not become one run-on line). Turn Caps Lock on and scan again: the sample still opens. If the scanner sends no
+  Enter after the last line, a label with only a code line waits: press Enter and it opens. Scan a label for a
+  deleted sample: the Finder stays open and shows the decoded label with the reason; scan a second label straight
+  after (without clearing the box): it replaces the first and opens, it does not re-read the old one. Scan a label
+  whose short ID is wrong but whose code is right: a card offers the sample with "Open sample", and nothing opens
+  until you press it. Paste the label's text (copy it from a phone's QR reader) into the box: it opens the sample at
+  once. Then type an ordinary search such as `S-01` and check the results list still works; paste a few lines of
+  ordinary text: they become one line. Since PR B (#TBD).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

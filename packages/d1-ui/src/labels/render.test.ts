@@ -87,7 +87,7 @@ describe('renderLabelDocument', () => {
 			seen.push(p);
 			return { size: 1, data: [1] };
 		});
-		expect(seen).toEqual(['D1 SAMPLE\nS-1 · 00000001\n"bracket"']);
+		expect(seen).toEqual(['D1 SAMPLE\nS-1 | 00000001\n"bracket"']);
 		expect(html).toContain('<div class="qr" style="');
 		expect(html).toContain('<svg viewBox="0 0 5 5"');
 	});
