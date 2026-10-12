@@ -109,3 +109,13 @@ export { isFinderShortcut, isModalOpen } from './finder/finderNav';
 export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
 export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
 export { default as IndexPage } from './index/IndexPage.vue';
+
+// Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)
+export {
+	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, templateFromRow, validateTemplate, slotPositions, paginate, fitText,
+	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, QR_HEADER, renderLabelDocument,
+} from './labels';
+export type {
+	FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
+	RenderOptions, RenderedLabels,
+} from './labels';
