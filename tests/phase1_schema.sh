@@ -98,6 +98,157 @@ run_eq "every group-detail field carries the 'group' special" \
        AND (special IS NULL OR special NOT LIKE '%group%')" \
     "0"
 
+echo "== Directus field metadata is complete =="
+# Regression guard for the 2026-07/09 incident: scripts/configure_directus.sql was run on a migrated
+# database, its blanket DELETE FROM directus_fields removed the inline parameter field rows (and more),
+# and nothing noticed for weeks. The migration 20261009000143 restores them. On CI the migrations are
+# the only thing that writes Directus metadata, so these are real checks there too.
+run_eq "every inline parameter column has a directus_fields row" \
+    "SELECT count(*) FROM information_schema.columns AS c
+     WHERE c.table_schema = 'public'
+       AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am)_')
+         OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
+       AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name)" \
+    "0"
+# Every relation that names an alias (one_field) needs the alias field row, or the parent form loses
+# the panel. Known gaps that predate the incident, kept out so this stays a regression guard:
+#   * manufacturing_methods.operations and raw_stock_lots.provenance: relations from configure_directus.sql
+#     whose alias field rows have never existed anywhere;
+#   * campaigns.operations and campaigns.sessions: on CI the relation rows come from migration
+#     20261007000141, but the alias field rows come from scripts/configure_campaigns.sql, which CI
+#     does not run.
+run_eq "every relation alias has its directus_fields row (known gaps excepted)" \
+    "SELECT count(*) FROM directus_relations AS r
+     WHERE r.one_field IS NOT NULL
+       AND (r.one_collection, r.one_field) NOT IN (
+           ('manufacturing_methods', 'operations'), ('raw_stock_lots', 'provenance'),
+           ('campaigns', 'operations'), ('campaigns', 'sessions'))
+       AND NOT EXISTS (SELECT 1 FROM directus_fields AS f
+                       WHERE f.collection = r.one_collection AND f.field = r.one_field)" \
+    "0"
+run_eq "every field group points at a field row of the same collection" \
+    "SELECT count(*) FROM directus_fields AS f
+     WHERE f.\"group\" IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM directus_fields AS g WHERE g.collection = f.collection AND g.field = f.\"group\")" \
+    "0"
+run_eq "no (collection, field) has two directus_fields rows" \
+    "SELECT count(*) FROM (SELECT 1 FROM directus_fields GROUP BY collection, field HAVING count(*) > 1) AS d" \
+    "0"
+
+echo "== Directus field metadata: restore migration =="
+# directus_fields / directus_relations are empty stubs on CI, so reproduce the state the incident left
+# (inline rows, the four alias fields and the source_recipe_id relation gone; a customised inline row and
+# an owner picker present; the o2m relation of projects.rollup missing) in a rolled-back transaction, then
+# apply the migration's up twice and its down, asserting each step.
+RIM=db/migrations/20261009000143_restore_inline_param_field_meta.sql
+rim_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RIM")
+rim_down=$(awk '/-- migrate:down/{f=1;next}f' "$RIM")
+rim_inline="((collection = 'manufacturing_operations' AND field ~ '^(machining|sintering|ht|deform|am)_' AND field !~ '_group\$')
+         OR (collection = 'test_sessions' AND field ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))"
+rim_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
+DELETE FROM directus_fields WHERE $rim_inline
+  OR (collection = 'manufacturing_operations' AND field IN ('prep_steps', 'source_recipe_id', 'data_file_links'))
+  OR (collection = 'projects' AND field = 'rollup')
+  OR (collection = 'manufacturing_operations' AND field = 'owner_person_id');
+DELETE FROM directus_relations
+  WHERE (many_collection = 'manufacturing_operations' AND many_field = 'source_recipe_id')
+     OR (many_collection, many_field) IN (('prep_steps', 'operation_id'), ('operation_files', 'operation_id'), ('project_rollup', 'project_id'));
+-- the o2m relations that name two of the aliases exist; the one for projects.rollup does not (yet)
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+  ('prep_steps', 'operation_id', 'manufacturing_operations', 'prep_steps', 'delete'),
+  ('operation_files', 'operation_id', 'manufacturing_operations', 'data_file_links', 'delete');
+-- a row that is present and customised, and an owner picker set by 20261001000126_owner_picker_fields.sql: both must survive
+INSERT INTO directus_fields (collection, field, interface, note, "group") VALUES
+  ('manufacturing_operations', 'sintering_batch_number', 'input', 'custom note', NULL),
+  ('manufacturing_operations', 'owner_person_id', 'd1-owner-picker', NULL, NULL);
+SELECT 'seeded_missing:' || count(*) FROM information_schema.columns AS c
+  WHERE c.table_schema = 'public'
+    AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am)_')
+      OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
+    AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name);
+$rim_up
+SELECT 'up_missing:' || count(*) FROM information_schema.columns AS c
+  WHERE c.table_schema = 'public'
+    AND ((c.table_name = 'manufacturing_operations' AND c.column_name ~ '^(machining|sintering|ht|deform|am)_')
+      OR (c.table_name = 'test_sessions' AND c.column_name ~ '^(tensile|hardness|charpy|compression|sem|xrd)_'))
+    AND NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = c.table_name AND f.field = c.column_name);
+SELECT 'up_ops_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations'
+  AND field ~ '^(machining|sintering|ht|deform|am)_' AND field !~ '_group\$';
+SELECT 'up_sessions_rows:' || count(*) FROM directus_fields WHERE collection = 'test_sessions'
+  AND field ~ '^(tensile|hardness|charpy|compression|sem|xrd)_';
+SELECT 'up_custom_row:' || count(*) || ',' || max(note) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'up_owner_picker:' || count(*) || ',' || max(interface) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'owner_person_id';
+SELECT 'up_machine_group:' || count(*) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND "group" = 'sintering_machine_group';
+SELECT 'up_qa_group:' || count(*) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND "group" = 'sintering_qa_group';
+SELECT 'up_hidden_recipe_number:' || hidden FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'sintering_recipe_number';
+SELECT 'up_presets:' || count(*) FROM directus_fields
+  WHERE interface = 'select-dropdown' AND options::text LIKE '%allowOther%'
+    AND collection = 'test_sessions'
+    AND field IN ('sem_magnification_range', 'sem_coating_material', 'sem_etchant', 'xrd_radiation_source', 'xrd_detector_type');
+SELECT 'up_relation:' || count(*) || ',' || max(one_collection) FROM directus_relations
+  WHERE many_collection = 'manufacturing_operations' AND many_field = 'source_recipe_id';
+SELECT 'up_alias_with_relation:' || count(*) FROM directus_fields
+  WHERE (collection = 'manufacturing_operations' AND field IN ('prep_steps', 'source_recipe_id', 'data_file_links'));
+SELECT 'up_alias_without_relation:' || count(*) FROM directus_fields WHERE collection = 'projects' AND field = 'rollup';
+-- the missing relation arrives; the second run fills only that gap
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+  ('project_rollup', 'project_id', 'projects', 'rollup', 'nullify');
+$rim_up
+SELECT 'up2_rollup:' || count(*) FROM directus_fields WHERE collection = 'projects' AND field = 'rollup';
+SELECT 'up2_inline_rows:' || count(*) FROM directus_fields WHERE $rim_inline;
+SELECT 'up2_duplicates:' || count(*) FROM (SELECT 1 FROM directus_fields GROUP BY collection, field HAVING count(*) > 1) AS d;
+SELECT 'up2_relations:' || count(*) FROM directus_relations
+  WHERE many_collection = 'manufacturing_operations' AND many_field = 'source_recipe_id';
+$rim_down
+SELECT 'down_inline_rows:' || count(*) FROM directus_fields WHERE $rim_inline;
+SELECT 'down_custom_row:' || count(*) || ',' || max(note) || ',' || coalesce(max("group"), 'no group') FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'down_aliases:' || count(*) FROM directus_fields
+  WHERE (collection = 'manufacturing_operations' AND field IN ('prep_steps', 'source_recipe_id', 'data_file_links'))
+     OR (collection = 'projects' AND field = 'rollup');
+SELECT 'down_relation:' || count(*) FROM directus_relations
+  WHERE many_collection = 'manufacturing_operations' AND many_field = 'source_recipe_id';
+SELECT 'down_other_relations:' || count(*) FROM directus_relations
+  WHERE (many_collection, many_field) IN (('prep_steps', 'operation_id'), ('operation_files', 'operation_id'), ('project_rollup', 'project_id'));
+SELECT 'down_owner_picker:' || count(*) || ',' || max(interface) FROM directus_fields
+  WHERE collection = 'manufacturing_operations' AND field = 'owner_person_id';
+SELECT 'down_ledger:' || coalesce(to_regclass('d1_private.restore_inline_param_meta_changes')::text, 'dropped');
+ROLLBACK;
+SQL
+)
+rim_check() { grep -qx "$1" <<<"$rim_out" && ok "$2" || bad "$2 (psql output: $rim_out)"; }
+rim_check "seeded_missing:115" "setup: the incident state is reproduced (115 inline columns without a row; the 116th is the customised one)"
+rim_check "up_missing:0" "up: every inline parameter column has a row again"
+rim_check "up_ops_rows:56" "up: 56 manufacturing_operations parameter rows"
+rim_check "up_sessions_rows:60" "up: 60 test_sessions parameter rows"
+rim_check "up_custom_row:1,custom note" "up: a present, customised row is left as it is (not duplicated, not replaced)"
+rim_check "up_owner_picker:1,d1-owner-picker" "up: the d1-owner-picker interface of 20261001000126_owner_picker_fields.sql is untouched"
+rim_check "up_machine_group:10" "up: ten machine-sourced sintering fields are in the machine group"
+rim_check "up_qa_group:5" "up: five QA fields are in the QA group"
+rim_check "up_hidden_recipe_number:true" "up: the free-text sintering recipe number is hidden (migration 102)"
+rim_check "up_presets:5" "up: the five SEM/XRD dropdown presets are restored"
+rim_check "up_relation:1,prep_recipes" "up: manufacturing_operations.source_recipe_id is related to prep_recipes"
+rim_check "up_alias_with_relation:3" "up: prep_steps, source_recipe_id and data_file_links aliases are restored"
+rim_check "up_alias_without_relation:0" "up: an o2m alias whose relation is missing is not inserted"
+rim_check "up2_rollup:1" "up (second run): fills the gap once the relation exists"
+rim_check "up2_inline_rows:116" "up (second run): no inline row is added twice"
+rim_check "up2_duplicates:0" "up (second run): no (collection, field) is duplicated"
+rim_check "up2_relations:1" "up (second run): the relation is not duplicated"
+rim_check "down_inline_rows:1" "down: removes the inline rows it added and keeps the one that was there"
+rim_check "down_custom_row:1,custom note,no group" "down: the pre-existing row keeps its content and its group is cleared"
+rim_check "down_aliases:0" "down: removes the four alias fields"
+rim_check "down_relation:0" "down: removes the source_recipe_id relation"
+rim_check "down_other_relations:3" "down: leaves relations it did not add"
+rim_check "down_owner_picker:1,d1-owner-picker" "down: the owner picker is still untouched"
+rim_check "down_ledger:dropped" "down: drops its bookkeeping table"
+
 echo "== Sample geometry: round bar form migration =="
 # CI has no Directus bootstrap rows (directus_fields is an empty stub), so seed the pre-migration
 # state, apply the migration's up then down SQL, and assert both — all in a rolled-back transaction.
@@ -433,13 +584,15 @@ run_eq "campaign_type CHECK restricts to the two kinds" \
        AND check_clause LIKE '%machining_trial%'
        AND check_clause LIKE '%testing_campaign%'" \
     "1"
-# owner_person_id (062) and campaign_samples.campaign_id (087), plus the project_id link and the two
-# campaign_id links of operations and tests that migration 141 registers for the row filters (ADR-0011).
-run_eq "Directus relations for campaigns are registered (5)" \
-    "SELECT count(*) FROM directus_relations
+# owner_person_id (062), campaign_samples.campaign_id (087) and created_by (20261001000124), plus the
+# project_id link and the two campaign_id links of operations and tests that migration 141 registers
+# for the row filters (ADR-0011).
+run_eq "Directus relations for campaigns are registered (6)" \
+    "SELECT string_agg(many_collection || '.' || many_field || '->' || one_collection, ',' ORDER BY many_collection COLLATE \"C\", many_field COLLATE \"C\")
+     FROM directus_relations
      WHERE one_collection='campaigns' OR many_collection='campaigns'
         OR (many_collection IN ('manufacturing_operations','test_sessions') AND many_field='campaign_id')" \
-    "5"
+    "campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
 
 echo "== Audit trigger fires on INSERT =="
 # Insert a test sample and verify audit_logs captured it.
@@ -1903,7 +2056,7 @@ rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
 rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,user_id" "people.update leaves out exactly the key, the login, the legacy id and the timestamp"
 rl_check "sample_read_has_co_owners:1" "the sample read filter matches co_owners._some.user_id (the M2M alias)"
-rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"project_id":{"secondary_investigators":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}' \
+rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}' \
     "project_rollup is readable only by the project's PI and investigators"
 for idx in idx_physical_samples_owner_person_id idx_physical_samples_project_id \
     idx_manufacturing_operations_owner_person_id idx_manufacturing_operations_project_id \
@@ -2047,6 +2200,17 @@ rm -rf "$RES_DIR"
 RV=db/migrations/20261007000141_lab_member_row_visibility.sql
 rv_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RV")
 rv_down=$(awk '/-- migrate:down/{f=1;next}f' "$RV")
+# 20261010000160 runs after this migration on every database: its backup table is in d1_private too
+# (so this migration's down only empties the schema once 160 is down), and it moves this migration's
+# snapshot filters onto the current generator's output (no `_some` where Directus rejects it).
+SF=db/migrations/20261010000160_lab_member_some_only_where_directus_accepts_it.sql
+sf_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$SF")
+sf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SF")
+# 20261012000161 runs after 160: it rules the additional-operators junctions (its backup is in
+# d1_private too, so it goes down first and comes up after 160, as on a real database).
+JR=db/migrations/20261012000161_lab_member_additional_operator_rules.sql
+jr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$JR")
+jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -2080,9 +2244,13 @@ INSERT INTO physical_samples (sample_code) VALUES ('TEST-NOOWNER-001');
 "
 rv_out=$($PSQL 2>&1 <<SQL
 BEGIN;
+-- migration 143 keeps its ledger in d1_private; drop it (rolled back) so 141's down can drop the empty schema
+DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$jr_down
+$sf_down
 $rv_down
 SELECT 'dn0_backup_table:' || coalesce(to_regclass('d1_private.lab_member_permissions_backup')::text, 'gone');
 SELECT 'dn0_schema:' || coalesce((SELECT nspname FROM pg_namespace WHERE nspname = 'd1_private'), 'gone');
@@ -2102,10 +2270,14 @@ SELECT 'up_audit_logs:' || count(*) FROM directus_permissions WHERE policy='$LM'
 SELECT 'up_people_actions:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions WHERE policy='$LM' AND collection='people';
 SELECT 'up_people_update_fields:' || fields FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='update';
 SELECT 'up_people_create_validation:' || (validation::jsonb ? '_or') FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='create';
+$sf_up
+$jr_up
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
+$jr_down
+$sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
 SELECT 'up_backup_exact:' || count(*) FROM (
   (SELECT to_jsonb(b) FROM before_rows b WHERE b.collection IN $rv_ruled EXCEPT SELECT to_jsonb(k) FROM d1_private.lab_member_permissions_backup k)
@@ -2174,7 +2346,7 @@ rv_check "up_people_actions:create,read,update" "up: Lab Member people delete is
 rv_check "up_people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "up: people update loses user_id"
 rv_check "up_people_create_validation:true" "up: people create gets the login validation"
 n_exact=$(grep -o '^up_exact:[0-9]*' <<<"$rv_out" | cut -d: -f2)
-[[ "${n_exact:-0}" -eq "${gen_n:-x}" ]] && ok "up: every ruled row matches the generated rules ($n_exact rows)" || bad "up: ruled rows differ from the generated rules (psql output: $rv_out)"
+[[ "${n_exact:-0}" -eq "${gen_n:-x}" ]] && ok "up, then 20261010000160: every ruled row matches the generated rules ($n_exact rows)" || bad "up: ruled rows differ from the generated rules (psql output: $rv_out)"
 n_backup=$(grep -o '^up_backup_rows:[0-9]*' <<<"$rv_out" | cut -d: -f2)
 [[ "${n_backup:-0}" -eq 9 ]] && ok "up: the backup holds the 9 seeded Lab Member rows of the changed collections" || bad "up: backup has ${n_backup:-?} rows, want 9 (psql output: $rv_out)"
 rv_check "up_backup_exact:0" "up: the backup rows equal the rows before the migration, ids included"
@@ -2240,6 +2412,175 @@ rv_refuse "an alias name that another relation uses" \
     "UPDATE directus_relations SET one_field = NULL WHERE many_collection = 'test_sessions' AND many_field = 'project_id';
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('equipment', 'project_id', 'projects', 'sessions');" \
     "cannot name the alias projects.sessions"
+
+echo "== Lab Member filters put _some only where Directus accepts it =="
+# Directus 11 (api apply-query/filter) handles `_some`/`_none` only directly under an O2M field at the
+# top of a query, or at the top of the subquery another legal `_some` opens. Anywhere else, e.g.
+# `sample_id.co_owners._some` (after a to-one hop), it throws `"_some" can only be used with top level
+# relational alias field`. A `_some` subquery also applies the related collection's own permission
+# rows, so one bad row 400s every collection whose rule reaches it: 20 Lab Member collections on
+# live after hotfix 20261009000142, which kept the outermost `_some` even where it was illegal
+# (migration 20261010000160). CI has no Directus, so this checks the stored JSON against that rule,
+# using directus_relations for which fields are O2M.
+SOME_LINT=$(mktemp)
+cat > "$SOME_LINT" <<'PY'
+import json, sys
+doc = json.loads(sys.stdin.read())
+o2m = {(r["one_collection"], r["one_field"]): r["many_collection"] for r in doc["relations"] if r["one_field"]}
+m2o = {(r["many_collection"], r["many_field"]): r["one_collection"] for r in doc["relations"] if r["one_collection"]}
+bad = []
+def scope(coll, node, top, where):
+    for key, val in (node or {}).items():
+        if key in ("_and", "_or"):
+            for sub in val:
+                scope(coll, sub, top, where)
+        elif not key.startswith("_") and isinstance(val, dict):
+            field(coll, key, val, top, where)
+def field(coll, key, val, top, where):
+    first = next(iter(val), None)
+    if first in ("_some", "_none"):
+        if top and (coll, key) in o2m:
+            scope(o2m[(coll, key)], val[first], True, where)
+        else:
+            bad.append(f"{where}: {coll}.{key}.{first}")
+        return
+    if any(k in ("_some", "_none") for k in val):
+        bad.append(f"{where}: {coll}.{key} ({'/'.join(val)})")
+    nxt = o2m.get((coll, key)) or m2o.get((coll, key))
+    for k, v in val.items():
+        if nxt and not k.startswith("_") and isinstance(v, dict):
+            field(nxt, k, v, False, where)
+for row in doc["rows"]:
+    for col in ("permissions", "validation"):
+        scope(row["collection"], row[col], True, f'{row["policy"]} {row["collection"]}.{row["action"]} {col}')
+print(f"illegal:{len(bad)}")
+for b in bad[:20]:
+    print("  " + b)
+PY
+some_rows_sql="json_build_object(
+  'relations', (SELECT coalesce(json_agg(json_build_object('many_collection', many_collection, 'many_field', many_field,
+                 'one_collection', one_collection, 'one_field', one_field)), '[]') FROM directus_relations),
+  'rows', (SELECT coalesce(json_agg(json_build_object('policy', policy, 'collection', collection, 'action', action,
+                 'permissions', permissions::json, 'validation', validation::json)), '[]') FROM directus_permissions))"
+lint_out=$($PSQL -c "SELECT $some_rows_sql" 2>&1 | python3 "$SOME_LINT" 2>&1)
+grep -qx "illegal:0" <<<"$lint_out" \
+    && ok "no stored permission or validation filter has a _some Directus would reject" \
+    || bad "a stored permission filter has a _some Directus 11 rejects (400s the whole policy): $lint_out"
+# The lint itself must catch the live failure: the hotfix-142 shape of manufacturing_operations.read.
+lint_neg=$(python3 "$SOME_LINT" 2>&1 <<'JSON'
+{"relations": [{"many_collection": "manufacturing_operations", "many_field": "sample_id", "one_collection": "physical_samples", "one_field": null},
+               {"many_collection": "sample_co_owners", "many_field": "sample_id", "one_collection": "physical_samples", "one_field": "co_owners"}],
+ "rows": [{"policy": "p", "collection": "manufacturing_operations", "action": "read", "validation": null,
+           "permissions": {"_or": [{"sample_id": {"co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}}}]}},
+          {"policy": "p", "collection": "physical_samples", "action": "read", "validation": null,
+           "permissions": {"_or": [{"co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}}]}}]}
+JSON
+)
+grep -qx "illegal:1" <<<"$lint_neg" \
+    && ok "the _some lint flags sample_id.co_owners._some (after a to-one hop) and passes top-level co_owners._some" \
+    || bad "the _some lint does not tell legal from illegal _some: $lint_neg"
+
+# Migration 20261010000160 from a live-shaped state: seed two rows as hotfix 142 left them on live
+# (a read and an update row with `_some` after a to-one hop), apply up, then down. Rolled back.
+MIG=db/migrations/20261010000160_lab_member_some_only_where_directus_accepts_it.sql
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
+gen_perm() { python3 -c 'import json,sys; c,a=sys.argv[1:3]; print(json.dumps(next(x["permissions"] for x in json.load(sys.stdin) if (x["collection"],x["action"])==(c,a))))' "$1" "$2" <<<"$rules_json"; }
+gen_mo_read=$(gen_perm manufacturing_operations read)
+gen_cs_update=$(gen_perm campaign_samples update)
+live_mo_read='{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
+live_cs_update='{"_or":[{"campaign_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
+sm_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$mig_down
+SELECT 'down_backup_gone:' || (to_regclass('d1_private.lab_member_some_fix_backup') IS NULL);
+UPDATE directus_permissions SET permissions = '$live_mo_read'
+ WHERE policy = '$LM' AND collection = 'manufacturing_operations' AND action = 'read';
+UPDATE directus_permissions SET permissions = '$live_cs_update'
+ WHERE policy = '$LM' AND collection = 'campaign_samples' AND action = 'update';
+CREATE TEMP TABLE _before AS SELECT id, policy, permissions::text AS p, validation::text AS v, fields FROM directus_permissions;
+SELECT 'pre_lint:' || $some_rows_sql;
+$mig_up
+SELECT 'up_mo_read:' || (permissions::jsonb = '$gen_mo_read'::jsonb) FROM directus_permissions
+ WHERE policy = '$LM' AND collection = 'manufacturing_operations' AND action = 'read';
+SELECT 'up_cs_update:' || (permissions::jsonb = '$gen_cs_update'::jsonb) FROM directus_permissions
+ WHERE policy = '$LM' AND collection = 'campaign_samples' AND action = 'update';
+SELECT 'up_other_untouched:' || count(*) FROM directus_permissions d FULL JOIN _before b USING (id)
+ WHERE d.id IS NULL OR b.id IS NULL OR d.validation::text IS DISTINCT FROM b.v OR d.fields IS DISTINCT FROM b.fields
+    OR (b.policy <> '$LM' AND d.permissions::text IS DISTINCT FROM b.p);
+SELECT 'up_lint:' || $some_rows_sql;
+$mig_down
+SELECT 'down_exact:' || count(*) FROM directus_permissions d FULL JOIN _before b USING (id)
+ WHERE (d.permissions::text, d.validation::text, d.fields) IS DISTINCT FROM (b.p, b.v, b.fields);
+ROLLBACK;
+SQL
+)
+sm_check() { grep -qxF -- "$1" <<<"$sm_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-400 <<<"$sm_out"))"; }
+pre_lint=$(sed -n 's/^pre_lint://p' <<<"$sm_out" | python3 "$SOME_LINT" 2>&1 | head -1)
+up_lint=$(sed -n 's/^up_lint://p' <<<"$sm_out" | python3 "$SOME_LINT" 2>&1)
+[[ "$pre_lint" =~ ^illegal:[1-9] ]] && ok "the live-shaped state before up fails the _some lint ($pre_lint)" \
+    || bad "the live-shaped state should fail the _some lint, got: $pre_lint"
+grep -qx "illegal:0" <<<"$up_lint" && ok "up: no Lab Member filter has an illegal _some" || bad "up: still illegal: $up_lint"
+sm_check "up_mo_read:true" "up: manufacturing_operations.read is the generated filter (amnesty kept)"
+sm_check "up_cs_update:true" "up: update rows are fixed too, not only reads (campaign_samples.update)"
+sm_check "up_other_untouched:0" "up: only Lab Member permissions change (validation, fields and other policies kept)"
+sm_check "down_exact:0" "down: every permission row is back exactly as before up"
+sm_check "down_backup_gone:true" "down: the backup table is dropped"
+rm -f "$SOME_LINT"
+
+echo "== Operator backfill is safe on an empty database =="
+# The generated backfill maps legacy Machine_Operators ids to people by name. Only ids a run still
+# points at are mapped, so a fresh database (as CI builds) neither fails the name check nor gains
+# the NEW people. Each case runs the up SQL in its own rolled-back transaction (its temp table is
+# ON COMMIT DROP, but a second CREATE in one transaction would clash).
+OPB=db/migrations/20261001000123_operator_backfill.sql
+opb_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$OPB")
+opb_fixture="INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('c0000123-0000-4000-8000-0000000000a1', 'T-C-OB', 'operator backfill test method');
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000123-0000-4000-8000-0000000000d1', 'TEST-OB-001');"
+opb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+UPDATE manufacturing_operations SET operator = NULL WHERE operator IS NOT NULL;
+UPDATE test_sessions SET operator = NULL WHERE operator IS NOT NULL;
+CREATE TEMP TABLE _opb_before AS SELECT count(*) AS n FROM people;
+$opb_up
+SELECT 'empty_people_unchanged:' || ((SELECT count(*) FROM people) = (SELECT n FROM _opb_before));
+ROLLBACK;
+SQL
+)
+opb_check() { grep -qx "$1" <<<"$opb_out" && ok "$2" || bad "$2 (psql output: $opb_out)"; }
+opb_check "empty_people_unchanged:true" "no run points at an operator: up succeeds and adds no people"
+opb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$opb_fixture
+INSERT INTO "Machine_Operators" (id) VALUES (121), (228) ON CONFLICT (id) DO NOTHING;
+INSERT INTO people (person_id, full_name) VALUES ('c0000123-0000-4000-8000-0000000000f1', 'Nick Weston');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code, operator)
+VALUES ('c0000123-0000-4000-8000-0000000000c1', 'c0000123-0000-4000-8000-0000000000a1', 'c0000123-0000-4000-8000-0000000000d1', 'TEST-OB-OP', 121);
+INSERT INTO test_sessions (session_id, sample_id, operator)
+VALUES ('c0000123-0000-4000-8000-0000000000e1', 'c0000123-0000-4000-8000-0000000000d1', 228);
+$opb_up
+SELECT 'map:' || operator_person_id FROM manufacturing_operations WHERE operation_id = 'c0000123-0000-4000-8000-0000000000c1';
+SELECT 'new:' || p.full_name || '/' || p.is_operator FROM test_sessions s JOIN people p ON p.person_id = s.operator_person_id
+ WHERE s.session_id = 'c0000123-0000-4000-8000-0000000000e1';
+ROLLBACK;
+SQL
+)
+opb_check "map:c0000123-0000-4000-8000-0000000000f1" "a referenced MAP operator is linked to its person"
+opb_check "new:Kyle Marshall/true" "a referenced NEW operator gets a new operator person"
+opb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$opb_fixture
+INSERT INTO "Machine_Operators" (id) VALUES (113) ON CONFLICT (id) DO NOTHING;
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code, operator)
+VALUES ('c0000123-0000-4000-8000-0000000000c1', 'c0000123-0000-4000-8000-0000000000a1', 'c0000123-0000-4000-8000-0000000000d1', 'TEST-OB-OP', 113);
+$opb_up
+ROLLBACK;
+SQL
+)
+grep -qF "names missing or ambiguous in people: Xinzef" <<<"$opb_out" \
+    && ok "a referenced operator whose person is missing still fails, naming only that person" \
+    || bad "a referenced operator whose person is missing still fails, naming only that person (psql output: $opb_out)"
 
 echo "== Cleanup test rows =="
 $PSQL -c "

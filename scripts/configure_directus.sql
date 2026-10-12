@@ -4,6 +4,29 @@
 -- directus_fields and directus_relations have no unique constraint on their
 -- logical keys, only on id — so we DELETE existing rows then INSERT fresh.
 --
+-- ⚠ STALE BASELINE — DO NOT RE-RUN AGAINST A MIGRATED DATABASE.
+-- This has already gone wrong once: between 2026-07-05 and 2026-09-30 this file was run on its own
+-- against the live database. Its DELETE below removed every directus_fields row of the collections
+-- it owns; the 116 inline parameter field rows (configure_inline_params.sql was not run afterwards),
+-- the sintering group members of migration 101, migration 102's hidden flag and four relation alias
+-- fields were lost, and the operation and test forms ran ungrouped for weeks. Migration
+-- 20261009000143_restore_inline_param_field_meta put them back. configure_all.sh runs this file too.
+--
+-- This script's DELETE FROM directus_fields WHERE collection IN (...) wipes
+-- ALL field metadata for those collections, including anything added by later
+-- db/migrations/*_directus_meta.sql files (e.g. owner_person_id/
+-- operator_person_id/principal_investigator_person from 20260703000062, the
+-- test_sessions per-test-type fields from 20260703000059, campaign_samples
+-- from 20260710000087, etc.) — this script's own INSERT block below does not
+-- know about any of that, so re-running it silently reverts those forms.
+-- If a live DB ever needs this replayed (e.g. disaster recovery onto a fresh
+-- Directus with no migration history), you must also replay the migrate:up
+-- section of every later db/migrations/*.sql file that touches
+-- directus_fields/directus_relations for these collections, in chronological
+-- order, immediately afterward.
+-- Prefer adding a small targeted migration for any new field/collection
+-- instead of editing this file and re-running it.
+--
 -- Run:
 --   docker exec -i d1-database-postgres-1 psql -U d1 -d d1_database < scripts/configure_directus.sql
 -- =============================================================================
@@ -372,6 +395,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('physical_samples','test_sessions','o2m','list-o2m','{"template":"{{session_date}} – {{test_type}}","enableCreate":true}','related-values',NULL,false,false,32,'full',false,'[{"language":"en-US","translation":"Test Sessions"}]'),
 ('physical_samples','data_files','m2m','files','{"template":"{{directus_files_id.filename_download}}"}','related-values','{"template":"{{directus_files_id.filename_download}}"}',false,false,33,'full',false,'[{"language":"en-US","translation":"Linked Data Files"}]'),
 ('physical_samples','data_files_open','alias,no-data','d1-archive-links','{"relationField":"data_files"}',NULL,NULL,false,false,34,'full',false,'[{"language":"en-US","translation":"Open / Copy Linked Files"}]'),
+('physical_samples','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('physical_samples','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,40,'half',false,NULL),
 ('physical_samples','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,41,'half',false,NULL),
 ('physical_samples','version',NULL,'input',NULL,'raw',NULL,true,true,42,'half',false,NULL),
@@ -443,7 +467,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('insert_types','substrate',              NULL,'input',NULL,'raw',NULL,false,false,7,'half',false,NULL),
 ('insert_types','coating',                NULL,'input',NULL,'raw',NULL,false,false,8,'half',false,NULL),
 ('insert_types','mounting_style_code',    NULL,'input',NULL,'raw',NULL,false,false,9,'half',false,'[{"language":"en-US","translation":"Mounting Style Code (IFS)"}]'),
-('insert_types','edge_count',             NULL,'input','{"step":1,"min":1}','raw',NULL,false,false,10,'half',false,'[{"language":"en-US","translation":"Edge #"}]'),
+('insert_types','edge_count',             NULL,'input','{"step":1,"min":1}','raw',NULL,false,false,10,'half',false,'[{"language":"en-US","translation":"Usable Edges Per Insert"}]'),
 ('insert_types','inserts_per_box',        NULL,'input','{"step":1,"min":1}','raw',NULL,false,false,11,'half',false,'[{"language":"en-US","translation":"# Per Box"}]'),
 ('insert_types','nose_radius_mm',         NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,12,'half',false,'[{"language":"en-US","translation":"Nose Radius RE (mm)"}]'),
 ('insert_types','cutting_edge_length_mm', NULL,'input','{"step":0.001,"suffix":"mm"}','raw',NULL,false,false,13,'half',false,'[{"language":"en-US","translation":"Cutting Edge Length L (mm)"}]'),
@@ -470,6 +494,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('tool_boxes','project_id',        'm2o','select-dropdown-m2o','{"template":"{{project_code}} – {{project_name}}"}','related-values','{"template":"{{project_code}}"}',false,false,8,'half',false,'[{"language":"en-US","translation":"Primary Project"}]'),
 ('tool_boxes','notes',             NULL,'input-multiline',NULL,'raw',NULL,false,false,9,'full',false,NULL),
 ('tool_boxes','cutting_inserts',   'o2m','list-o2m','{"template":"{{insert_code}}","enableCreate":true}','related-values',NULL,false,false,10,'full',false,'[{"language":"en-US","translation":"Inserts in this Box"}]'),
+('tool_boxes','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('tool_boxes','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('tool_boxes','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('tool_boxes','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -477,7 +502,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- ── cutting_inserts ───────────────────────────────────────────────────────────
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('cutting_inserts','insert_id',      'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
-('cutting_inserts','insert_code',    NULL,'input',NULL,'raw',NULL,false,false,2,'half',true,'[{"language":"en-US","translation":"Insert ID"}]'),
+('cutting_inserts','insert_code',    NULL,'input','{"placeholder":"Auto-generated on save"}','raw',NULL,false,false,2,'half',false,'[{"language":"en-US","translation":"Insert ID"}]'),
 ('cutting_inserts','tool_box_id',    'm2o','select-dropdown-m2o','{"template":"{{tool_box_code}}"}','related-values','{"template":"{{tool_box_code}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Insert Box"}]'),
 ('cutting_inserts','insert_type_id', 'm2o','select-dropdown-m2o','{"template":"{{type_code}}"}','related-values','{"template":"{{type_code}}"}',false,false,4,'half',false,'[{"language":"en-US","translation":"Insert Type"}]'),
 ('cutting_inserts','insert_number',  NULL,'input','{"step":1}','raw',NULL,false,false,5,'half',false,'[{"language":"en-US","translation":"Position In Box"}]'),
@@ -486,7 +511,8 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('cutting_inserts','cascade_ownership','cast-boolean','toggle','{"label":"Apply to all edges below"}','boolean',NULL,false,false,8,'half',false,'[{"language":"en-US","translation":"Cascade Ownership to Edges"}]'),
 ('cutting_inserts','is_depleted',      'cast-boolean','toggle',NULL,'boolean',NULL,false,false,9,'half',false,'[{"language":"en-US","translation":"Depleted?"}]'),
 ('cutting_inserts','notes',            NULL,'input-multiline',NULL,'raw',NULL,false,false,10,'full',false,NULL),
-('cutting_inserts','insert_edges',     'o2m','list-o2m','{"template":"{{edge_code}} – {{edge_identifier}}","enableCreate":true}','related-values',NULL,false,false,11,'full',false,'[{"language":"en-US","translation":"Insert Edges"}]'),
+('cutting_inserts','insert_edges',     'o2m','list-o2m','{"template":"{{edge_code}}","enableCreate":true}','related-values',NULL,false,false,11,'full',false,'[{"language":"en-US","translation":"Insert Edges"}]'),
+('cutting_inserts','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('cutting_inserts','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('cutting_inserts','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('cutting_inserts','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -494,12 +520,13 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- ── insert_edges ──────────────────────────────────────────────────────────────
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('insert_edges','edge_id',         'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
-('insert_edges','edge_code',       NULL,'input',NULL,'raw',NULL,false,false,2,'half',true,'[{"language":"en-US","translation":"Edge ID"}]'),
+('insert_edges','edge_code',       NULL,'input','{"placeholder":"Auto-generated on save"}','raw',NULL,false,false,2,'half',false,'[{"language":"en-US","translation":"Edge ID"}]'),
 ('insert_edges','insert_id',       'm2o','select-dropdown-m2o','{"template":"{{insert_code}}"}','related-values','{"template":"{{insert_code}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Parent Insert"}]'),
 ('insert_edges','edge_identifier', NULL,'input',NULL,'raw',NULL,false,false,4,'half',false,'[{"language":"en-US","translation":"Edge Identifier"}]'),
 ('insert_edges','owner',          'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,false,5,'half',false,'[{"language":"en-US","translation":"Owner"}]'),
 ('insert_edges','is_used',        'cast-boolean','toggle',NULL,'boolean',NULL,false,false,6,'half',false,'[{"language":"en-US","translation":"Used?"}]'),
 ('insert_edges','notes',          NULL,'input-multiline',NULL,'raw',NULL,false,false,7,'full',false,NULL),
+('insert_edges','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('insert_edges','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('insert_edges','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('insert_edges','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL);
@@ -509,6 +536,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('manufacturing_operations','operation_id',           'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
 ('manufacturing_operations','sample_id',              'm2o','select-dropdown-m2o','{"template":"{{sample_code}} – {{nickname}}","enableCreate":true}','related-values','{"template":"{{sample_code}}"}',false,false,2,'half',false,'[{"language":"en-US","translation":"Input Sample / Workpiece"}]'),
 ('manufacturing_operations','output_sample_id',       'm2o','select-dropdown-m2o','{"template":"{{sample_code}} – {{nickname}}","enableCreate":true}','related-values','{"template":"{{sample_code}}"}',false,false,2,'half',false,'[{"language":"en-US","translation":"Output Sample (Produced)"}]'),
+('manufacturing_operations','campaign_id',            'm2o','select-dropdown-m2o','{"template":"{{name}}"}','related-values','{"template":"{{name}}"}',false,false,12,'half',false,'[{"language":"en-US","translation":"Campaign"}]'),
 ('manufacturing_operations','method_id',              'm2o','select-dropdown-m2o','{"template":"{{method_code}} – {{method_name}}"}','related-values','{"template":"{{method_code}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Manufacturing Method"}]'),
 -- process_category: scalar discriminator that drives which typed param panel shows (method_id is a relation, can''t drive conditions)
 -- process_category is auto-inferred from the selected Manufacturing Method by the
@@ -546,6 +574,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- Legacy / unused duplicate columns — registered hidden so they don't clutter the form
 ('manufacturing_operations','force_file_id',       NULL,'input',NULL,'raw',NULL,true,true,33,'half',false,NULL),
 ('manufacturing_operations','nc_program_file_uri', NULL,'input',NULL,'raw',NULL,true,true,34,'half',false,NULL),
+('manufacturing_operations','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('manufacturing_operations','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,30,'half',false,NULL),
 ('manufacturing_operations','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,31,'half',false,NULL),
 ('manufacturing_operations','version',NULL,'input',NULL,'raw',NULL,true,true,32,'half',false,NULL),
@@ -602,17 +631,20 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- ── projects ──────────────────────────────────────────────────────────────────
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('projects','project_id',                 'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
-('projects','project_code',               NULL,'input',NULL,'raw',NULL,false,false,2,'half',true,'[{"language":"en-US","translation":"Project Code"}]'),
+('projects','project_code',               NULL,'input','{"placeholder":"Auto-generated on save"}','raw',NULL,false,false,2,'half',false,'[{"language":"en-US","translation":"Project Code"}]'),
 ('projects','project_name',               NULL,'input',NULL,'raw',NULL,false,false,3,'half',true,'[{"language":"en-US","translation":"Project Name"}]'),
-('projects','principal_investigator_name',NULL,'input',NULL,'raw',NULL,false,false,4,'half',false,'[{"language":"en-US","translation":"Principal Investigator"}]'),
+('projects','principal_investigator',     'm2o','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,false,true,90,'half',false,'[{"language":"en-US","translation":"Principal Investigator (legacy — use the dropdown above)"}]'),
+('projects','principal_investigator_name',NULL,'input',NULL,'raw',NULL,false,true,4,'half',false,'[{"language":"en-US","translation":"Principal Investigator"}]'),
 ('projects','start_date',                 NULL,'datetime','{"type":"date"}','datetime',NULL,false,false,5,'half',false,NULL),
 ('projects','end_date',                   NULL,'datetime','{"type":"date"}','datetime',NULL,false,false,6,'half',false,NULL),
 ('projects','export_controlled',          'cast-boolean','toggle',NULL,'boolean',NULL,false,false,7,'half',false,'[{"language":"en-US","translation":"Export Controlled?"}]'),
 ('projects','is_active',                  'cast-boolean','toggle',NULL,'boolean',NULL,false,false,8,'half',false,'[{"language":"en-US","translation":"Active?"}]'),
 ('projects','description',                NULL,'input-multiline',NULL,'raw',NULL,false,false,9,'full',false,NULL),
-('projects','document_number',            NULL,'input',NULL,'raw',NULL,false,false,10,'half',false,'[{"language":"en-US","translation":"Document #"}]'),
+('projects','document_number',            NULL,'input',NULL,'raw',NULL,false,true,10,'half',false,'[{"language":"en-US","translation":"Document #"}]'),
+('projects','Image',                      'file','file-image','{"crop":false}','image',NULL,false,false,13,'half',false,'[{"language":"en-US","translation":"Image"}]'),
 ('projects','investigator_access_notice', 'alias,no-data','presentation-notice','{"text":"👥 Secondary investigators listed below will be recorded as having viewing access to all samples, operations, and test sessions connected to this project.","color":"blue"}',NULL,NULL,false,false,11,'full',false,NULL),
 ('projects','secondary_investigators',    'm2m','list-m2m','{"template":"{{user_id.first_name}} {{user_id.last_name}}","junction_field":"user_id"}','related-values','{"template":"{{user_id.first_name}} {{user_id.last_name}}"}',false,false,12,'full',false,'[{"language":"en-US","translation":"Secondary Investigators"}]'),
+('projects','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('projects','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,20,'half',false,NULL),
 ('projects','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,21,'half',false,NULL),
 ('projects','version',NULL,'input',NULL,'raw',NULL,true,true,22,'half',false,NULL),
@@ -626,6 +658,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('test_sessions','session_id',           'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
 ('test_sessions','sample_id',            'm2o','select-dropdown-m2o','{"template":"{{sample_code}} – {{nickname}}"}','related-values','{"template":"{{sample_code}}"}',false,false,2,'half',true,'[{"language":"en-US","translation":"Sample / Workpiece"}]'),
+('test_sessions','campaign_id',          'm2o','select-dropdown-m2o','{"template":"{{name}}"}','related-values','{"template":"{{name}}"}',false,false,10,'half',false,'[{"language":"en-US","translation":"Campaign"}]'),
 ('test_sessions','equipment_id',         'm2o','d1-machine-picker','{"categoryField":"test_category"}','related-values','{"template":"{{equipment_name}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Machine"}]'),
 ('test_sessions','insert_edge_id',       'm2o','select-dropdown-m2o','{"template":"{{edge_code}}"}','related-values','{"template":"{{edge_code}}"}',false,false,4,'half',false,'[{"language":"en-US","translation":"Insert Edge Used"}]'),
 ('test_sessions','project_id',           'm2o','select-dropdown-m2o','{"template":"{{project_code}} – {{project_name}}"}','related-values','{"template":"{{project_code}}"}',false,false,5,'half',false,'[{"language":"en-US","translation":"Project"}]'),
@@ -649,6 +682,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('test_sessions','data_files','m2m','files','{"template":"{{directus_files_id.filename_download}}"}','related-values','{"template":"{{directus_files_id.filename_download}}"}',false,false,31,'full',false,'[{"language":"en-US","translation":"Linked Data Files"}]'),
 ('test_sessions','report_button','alias,no-data','d1-report-button','{"label":"Generate test PDF"}',NULL,NULL,false,false,0,'full',false,'[{"language":"en-US","translation":"Report"}]'),
 ('test_sessions','data_files_open','alias,no-data','d1-archive-links','{"relationField":"data_files"}',NULL,NULL,false,false,32,'full',false,'[{"language":"en-US","translation":"Open / Copy Linked Files"}]'),
+('test_sessions','created_by','user-created','select-dropdown-m2o','{"template":"{{first_name}} {{last_name}}"}','user',NULL,true,false,98,'half',false,'[{"language":"en-US","translation":"Created by"}]'),
 ('test_sessions','created_at','date-created','datetime',NULL,'datetime',NULL,true,true,35,'half',false,NULL),
 ('test_sessions','updated_at','date-updated','datetime',NULL,'datetime',NULL,true,true,36,'half',false,NULL),
 ('test_sessions','version',NULL,'input',NULL,'raw',NULL,true,true,37,'half',false,NULL);
@@ -843,6 +877,8 @@ INSERT INTO directus_relations (many_collection, many_field, one_collection, one
 ('manufacturing_operations',  'method_id',        'manufacturing_methods',      'operations',                'nullify'),
 ('manufacturing_operations',  'tool_id',          'tools',                      NULL,                        'nullify'),
 ('manufacturing_operations',  'insert_edge_id',   'insert_edges',               NULL,                        'nullify'),
+('manufacturing_operations',  'campaign_id',      'campaigns',                  'operations',                'nullify'),
+-- one_field 'operations': the hidden alias the Lab Member project read rule (ADR-0011) filters on
 ('manufacturing_operations',  'project_id',       'projects',                   'operations',                'nullify'),
 -- output sample (produced by the operation) → O2M back-link on physical_samples
 ('manufacturing_operations',  'output_sample_id', 'physical_samples',           'produced_by_operations',    'nullify'),
@@ -868,6 +904,7 @@ INSERT INTO directus_relations (many_collection, many_field, one_collection, one
 -- test sessions: sample_id NOT NULL → delete sessions when sample is deleted
 ('test_sessions',             'sample_id',        'physical_samples',            'test_sessions',            'delete'),
 -- nullable FKs
+('test_sessions',             'campaign_id',      'campaigns',                   'sessions',                 'nullify'),
 ('test_sessions',             'equipment_id',     'equipment',                   'test_sessions',            'nullify'),
 ('test_sessions',             'insert_edge_id',   'insert_edges',                NULL,                       'nullify'),
 ('test_sessions',             'project_id',       'projects',                    'sessions',                 'nullify'),

@@ -6,7 +6,7 @@ import { gotoCreateForm, selectM2O, fieldByLabel, requireEnv } from '../helpers'
  * Campaigns group operations (machining trials) / test sessions (testing campaigns)
  * under a project. A child created with a campaign inherits the campaign's project,
  * default equipment/material (server hook `campaign-inherit`); its owner is its creator
- * (`d1-default-owner`, not the campaign's owner). The project
+ * (`d1-owner-default`, not the campaign's owner). The project
  * also fills live in the form via the `d1-project-inherit` interface.
  */
 const BASE = process.env.D1_BASE_URL || 'http://localhost:8055';
@@ -72,7 +72,7 @@ test('server hook: an operation created with a campaign inherits project + equip
 	try {
 		expect(op.project_id).toBe(projectId);
 		expect(op.equipment_id).toBe(equipmentId);
-		expect(op.owner_person_id).toBeTruthy(); // the creator (d1-default-owner), not the campaign owner
+		expect(op.owner_person_id).toBeTruthy(); // the creator (d1-owner-default), not the campaign owner
 	} finally {
 		await api.delete(`/items/manufacturing_operations/${op.operation_id}`, { headers: h });
 	}

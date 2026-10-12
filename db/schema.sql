@@ -165,17 +165,35 @@ $$;
 
 
 --
+-- Name: diag_requeue_on_recipe_change(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.diag_requeue_on_recipe_change() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.diag_recipe IS DISTINCT FROM OLD.diag_recipe
+       OR NEW.tool_setup_id IS DISTINCT FROM OLD.tool_setup_id THEN
+        NEW.diag_status := 'pending';
+        NEW.diag_requested_at := now();
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+
+--
 -- Name: expand_tool_box_intake(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
 CREATE FUNCTION public.expand_tool_box_intake(p_first_box_id uuid) RETURNS void
     LANGUAGE plpgsql
-    AS $$
+    AS $_$
 DECLARE
     v_box          tool_boxes%ROWTYPE;
     v_it           insert_types%ROWTYPE;
     v_short_code   TEXT;
-    v_base_seq     INTEGER;   -- boxes of this type that existed before this batch
+    v_base_seq     INTEGER;   -- highest existing sequence number for this insert type
     v_box_seq      INTEGER;
     v_box_id       UUID;
     v_box_code     TEXT;
@@ -211,10 +229,14 @@ BEGIN
         RAISE EXCEPTION 'expand_tool_box_intake: cannot derive short_code for insert_type %', v_box.insert_type_id;
     END IF;
 
-    -- Base sequence = boxes of this type that existed BEFORE this batch.
-    SELECT COUNT(*) INTO v_base_seq
+    -- Base sequence = highest box number that has ever existed under this
+    -- short_code prefix (the actual collision domain tool_box_code's unique
+    -- constraint lives in — see note above on why this isn't scoped to
+    -- insert_type_id).
+    SELECT COALESCE(MAX((regexp_match(tool_box_code, '-(\d+)$'))[1]::INTEGER), 0)
+    INTO   v_base_seq
     FROM   tool_boxes
-    WHERE  insert_type_id = v_box.insert_type_id
+    WHERE  tool_box_code LIKE v_short_code || '-%'
       AND  tool_box_id   <> p_first_box_id;
 
     -- Create N boxes (1..package_quantity). Box 1 = the row Directus created.
@@ -232,20 +254,28 @@ BEGIN
         ELSE
             -- Clone the first box's metadata into additional box rows.
             -- package_quantity = 0 is the sentinel that prevents the hook from
-            -- re-expanding these clone rows.
+            -- re-expanding these clone rows. project_id and owner_person_id are
+            -- carried over so every box in the batch keeps the same project and
+            -- owner as the box the user actually filled in.
             v_box_id := uuid_generate_v4();
             INSERT INTO tool_boxes (
                 tool_box_id,   tool_box_code,         insert_type_id,
                 description,   location,              owner,
-                notes,         package_quantity
+                notes,         package_quantity,      project_id,
+                owner_person_id
             ) VALUES (
                 v_box_id,      v_box_code,            v_box.insert_type_id,
                 v_box.description, v_box.location,    v_box.owner,
-                v_box.notes,   0
+                v_box.notes,   0,                     v_box.project_id,
+                v_box.owner_person_id
             );
         END IF;
 
         -- ── Cutting inserts for this box ──────────────────────────────────────
+        -- owner_person_id is intentionally left out of this INSERT: the
+        -- fill_cutting_insert_code BEFORE INSERT trigger backfills it from the
+        -- parent tool_box whenever it is NULL, so bulk expansion and manual
+        -- single-insert creation inherit ownership the same way.
         FOR v_ins_num IN 1 .. GREATEST(COALESCE(v_it.inserts_per_box, 0), 0) LOOP
             v_insert_id   := uuid_generate_v4();
             v_insert_code := v_box_code || '-' || v_ins_num;
@@ -275,7 +305,7 @@ BEGIN
 
     END LOOP;
 END;
-$$;
+$_$;
 
 
 --
@@ -454,6 +484,124 @@ COMMENT ON FUNCTION public.f_trace_stock_origins(p_sample_id uuid) IS 'Full reve
 
 
 --
+-- Name: fill_campaign_code(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fill_campaign_code() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.campaign_code IS NULL OR NEW.campaign_code = '' THEN
+        NEW.campaign_code := next_campaign_code();
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: fill_cutting_insert_code(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fill_cutting_insert_code() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_box_code TEXT;
+BEGIN
+    IF NEW.insert_number IS NULL THEN
+        SELECT COALESCE(MAX(insert_number), 0) + 1 INTO NEW.insert_number
+        FROM   cutting_inserts
+        WHERE  tool_box_id = NEW.tool_box_id;
+    END IF;
+
+    IF NEW.insert_code IS NULL OR NEW.insert_code = '' OR NEW.insert_code LIKE 'TMP-%' THEN
+        SELECT tool_box_code INTO v_box_code
+        FROM   tool_boxes
+        WHERE  tool_box_id = NEW.tool_box_id;
+        NEW.insert_code := COALESCE(v_box_code, 'BOX') || '-' || NEW.insert_number;
+    END IF;
+
+    IF NEW.owner_person_id IS NULL THEN
+        SELECT owner_person_id INTO NEW.owner_person_id
+        FROM   tool_boxes
+        WHERE  tool_box_id = NEW.tool_box_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: fill_insert_edge_code(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fill_insert_edge_code() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    v_insert_code TEXT;
+    v_edge_count  INTEGER;
+BEGIN
+    IF NEW.edge_identifier IS NULL OR NEW.edge_identifier = '' THEN
+        SELECT COUNT(*) INTO v_edge_count
+        FROM   insert_edges
+        WHERE  insert_id = NEW.insert_id;
+        NEW.edge_identifier := CHR(65 + v_edge_count); -- 'A' + existing count
+    END IF;
+
+    IF NEW.edge_code IS NULL OR NEW.edge_code = '' OR NEW.edge_code LIKE 'TMP-%' THEN
+        SELECT insert_code INTO v_insert_code
+        FROM   cutting_inserts
+        WHERE  insert_id = NEW.insert_id;
+        NEW.edge_code := COALESCE(v_insert_code, 'INS') || NEW.edge_identifier;
+    END IF;
+
+    IF NEW.owner_person_id IS NULL THEN
+        SELECT owner_person_id INTO NEW.owner_person_id
+        FROM   cutting_inserts
+        WHERE  insert_id = NEW.insert_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: fill_project_code(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fill_project_code() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.project_code IS NULL OR NEW.project_code = '' THEN
+        NEW.project_code := next_project_code();
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: fill_tool_box_code(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.fill_tool_box_code() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.tool_box_code IS NULL OR NEW.tool_box_code = '' THEN
+        NEW.tool_box_code := 'TMP-' || uuid_generate_v4()::TEXT;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+
+--
 -- Name: generate_force_file_id(text, numeric, numeric, numeric); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -560,6 +708,32 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+
+--
+-- Name: next_campaign_code(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.next_campaign_code() RETURNS text
+    LANGUAGE sql
+    AS $_$
+    SELECT (COALESCE(MAX(campaign_code::INTEGER), 0) + 1)::TEXT
+    FROM   campaigns
+    WHERE  campaign_code ~ '^[0-9]+$';
+$_$;
+
+
+--
+-- Name: next_project_code(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.next_project_code() RETURNS text
+    LANGUAGE sql
+    AS $_$
+    SELECT (COALESCE(MAX(project_code::INTEGER), 0) + 1)::TEXT
+    FROM   projects
+    WHERE  project_code ~ '^[0-9]+$';
+$_$;
 
 
 --
@@ -859,7 +1033,7 @@ CREATE TABLE public.campaigns (
     campaign_id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
     project_id uuid,
     campaign_type text NOT NULL,
-    campaign_code text,
+    campaign_code text DEFAULT ''::text,
     name text NOT NULL,
     owner uuid,
     default_equipment_id uuid,
@@ -889,7 +1063,7 @@ COMMENT ON TABLE public.campaigns IS 'Optional grouping under a project: machini
 
 CREATE TABLE public.cutting_inserts (
     insert_id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
-    insert_code character varying(64) NOT NULL,
+    insert_code character varying(64) DEFAULT ''::character varying NOT NULL,
     tool_box_id uuid NOT NULL,
     insert_type_id uuid,
     insert_number integer,
@@ -945,6 +1119,45 @@ COMMENT ON COLUMN public.cutting_inserts.location IS 'Physical storage location 
 --
 
 COMMENT ON COLUMN public.cutting_inserts.owner IS 'Owner / responsible person for this insert.';
+
+
+--
+-- Name: diag_layer; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.diag_layer (
+    layer_id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
+    analysis_id uuid NOT NULL,
+    name text NOT NULL,
+    role text NOT NULL,
+    geometry jsonb NOT NULL,
+    value jsonb,
+    version integer DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT diag_layer_role_ck CHECK ((role = ANY (ARRAY['mask'::text, 'label'::text, 'seed'::text])))
+);
+
+
+--
+-- Name: diag_recipes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.diag_recipes (
+    recipe_id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
+    name character varying(128) NOT NULL,
+    recipe jsonb NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE diag_recipes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.diag_recipes IS 'Named diagnostics recipe library; applying one copies its document onto machining_force_analysis.diag_recipe.';
 
 
 --
@@ -2096,9 +2309,9 @@ COMMENT ON COLUMN public.force_crawler_state.grid_pregen IS 'Pre-build the inter
 
 CREATE TABLE public.insert_edges (
     edge_id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
-    edge_code character varying(64) NOT NULL,
+    edge_code character varying(64) DEFAULT ''::character varying NOT NULL,
     insert_id uuid NOT NULL,
-    edge_identifier character varying(16) NOT NULL,
+    edge_identifier character varying(16) DEFAULT ''::character varying NOT NULL,
     is_used boolean DEFAULT false NOT NULL,
     notes text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2333,6 +2546,17 @@ CREATE TABLE public.machining_force_analysis (
     filter_baked boolean DEFAULT false NOT NULL,
     crop_start_idx_override bigint,
     crop_end_idx_override bigint,
+    diag_status text,
+    diag_path text,
+    diag_points bigint,
+    diag_error text,
+    diag_requested_at timestamp with time zone,
+    diag_version integer,
+    diag_metrics jsonb,
+    tool_setup_id uuid,
+    diag_recipe jsonb,
+    diag_recipe_hash text,
+    doctor_dismissed jsonb,
     CONSTRAINT machining_force_analysis_status_chk CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'processing'::character varying, 'done'::character varying, 'error'::character varying, 'skipped'::character varying])::text[])))
 );
 
@@ -2419,6 +2643,34 @@ COMMENT ON COLUMN public.machining_force_analysis.crop_start_idx_override IS 'Hu
 --
 
 COMMENT ON COLUMN public.machining_force_analysis.crop_end_idx_override IS 'Human-corrected cut-end sample index; NULL = follow the derived cut_end_idx.';
+
+
+--
+-- Name: COLUMN machining_force_analysis.tool_setup_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.machining_force_analysis.tool_setup_id IS 'Optional link to the tool_setup that supplies this cut''s mount_deg and h_matrix for the diagnostics pipeline. NULL means the pipeline uses the mount_deg=0.0/no-correction defaults, unchanged from Phases 1-5.';
+
+
+--
+-- Name: COLUMN machining_force_analysis.diag_recipe; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.machining_force_analysis.diag_recipe IS 'The recipe this cut''s diagnostics were built from. NULL means the built-in default (scripts/diag/recipe.py DEFAULT_RECIPE).';
+
+
+--
+-- Name: COLUMN machining_force_analysis.diag_recipe_hash; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.machining_force_analysis.diag_recipe_hash IS 'Identity of the recipe the CURRENT diag artifacts were baked from. Staleness has two independent axes: diag_version tracks code changes, this tracks configuration changes. A baked artifact is reusable only when both match.';
+
+
+--
+-- Name: COLUMN machining_force_analysis.doctor_dismissed; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.machining_force_analysis.doctor_dismissed IS 'Metadata Doctor dismissals, keyed by check id: {"<checkId>":{"sig","at","by"}}. A dismissal only suppresses a finding whose recomputed signature still matches, so it lapses when the compared values change.';
 
 
 --
@@ -3165,7 +3417,7 @@ CREATE TABLE public.project_rollup (
 
 CREATE TABLE public.projects (
     project_id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
-    project_code character varying(32) NOT NULL,
+    project_code character varying(32) DEFAULT ''::character varying NOT NULL,
     project_name text NOT NULL,
     description text,
     document_number text,
@@ -3774,7 +4026,7 @@ COMMENT ON TABLE public.test_sessions_subject IS 'M2A junction: the subject(s) a
 
 CREATE TABLE public.tool_boxes (
     tool_box_id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
-    tool_box_code character varying(64) DEFAULT ('TMP-'::text || (public.uuid_generate_v4())::text) NOT NULL,
+    tool_box_code character varying(64) DEFAULT ''::character varying NOT NULL,
     description text,
     location text,
     insert_type_id uuid,
@@ -3783,7 +4035,7 @@ CREATE TABLE public.tool_boxes (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     package_quantity integer,
     owner uuid,
-    cascade_ownership boolean DEFAULT false NOT NULL,
+    cascade_ownership boolean DEFAULT true NOT NULL,
     project_id uuid,
     owner_person_id uuid,
     version integer DEFAULT 1 NOT NULL
@@ -3823,6 +4075,36 @@ COMMENT ON COLUMN public.tool_boxes.package_quantity IS 'Number of boxes receive
 --
 
 COMMENT ON COLUMN public.tool_boxes.owner IS 'Owner / responsible person for this box.';
+
+
+--
+-- Name: tool_setup; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tool_setup (
+    setup_id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
+    setup_code character varying(64) NOT NULL,
+    mount_deg numeric DEFAULT 0 NOT NULL,
+    h_matrix jsonb,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    version integer DEFAULT 1 NOT NULL
+);
+
+
+--
+-- Name: TABLE tool_setup; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.tool_setup IS 'Mount geometry + H-matrix FRF correction for a dynamometer setup. Cuts reference a setup by FK (machining_force_analysis.tool_setup_id) rather than each carrying a near-duplicate FRF file.';
+
+
+--
+-- Name: COLUMN tool_setup.h_matrix; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.tool_setup.h_matrix IS 'Optional 3x3 correction matrix (row-major JSON array of arrays), applied to (Fx,Fy,Fz) before frame_transform. NULL = no correction (identity). Measuring an FRF is a bench procedure, out of scope for this app -- the worker only applies a supplied matrix.';
 
 
 --
@@ -4624,6 +4906,38 @@ ALTER TABLE ONLY public.cutting_inserts
 
 ALTER TABLE ONLY public.cutting_inserts
     ADD CONSTRAINT cutting_inserts_pkey PRIMARY KEY (insert_id);
+
+
+--
+-- Name: diag_layer diag_layer_name_uq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.diag_layer
+    ADD CONSTRAINT diag_layer_name_uq UNIQUE (analysis_id, name);
+
+
+--
+-- Name: diag_layer diag_layer_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.diag_layer
+    ADD CONSTRAINT diag_layer_pkey PRIMARY KEY (layer_id);
+
+
+--
+-- Name: diag_recipes diag_recipes_name_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.diag_recipes
+    ADD CONSTRAINT diag_recipes_name_unique UNIQUE (name);
+
+
+--
+-- Name: diag_recipes diag_recipes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.diag_recipes
+    ADD CONSTRAINT diag_recipes_pkey PRIMARY KEY (recipe_id);
 
 
 --
@@ -5459,6 +5773,22 @@ ALTER TABLE ONLY public.tool_boxes
 
 
 --
+-- Name: tool_setup tool_setup_code_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tool_setup
+    ADD CONSTRAINT tool_setup_code_unique UNIQUE (setup_code);
+
+
+--
+-- Name: tool_setup tool_setup_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tool_setup
+    ADD CONSTRAINT tool_setup_pkey PRIMARY KEY (setup_id);
+
+
+--
 -- Name: tools tools_code_unique; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5493,6 +5823,13 @@ CREATE INDEX campaign_samples_campaign_idx ON public.campaign_samples USING btre
 --
 
 CREATE INDEX campaign_samples_sample_idx ON public.campaign_samples USING btree (sample_id);
+
+
+--
+-- Name: diag_layer_analysis_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX diag_layer_analysis_idx ON public.diag_layer USING btree (analysis_id);
 
 
 --
@@ -5778,10 +6115,52 @@ CREATE TRIGGER audit_tool_boxes AFTER INSERT OR DELETE OR UPDATE ON public.tool_
 
 
 --
+-- Name: machining_force_analysis diag_requeue_on_recipe_change; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER diag_requeue_on_recipe_change BEFORE UPDATE ON public.machining_force_analysis FOR EACH ROW EXECUTE FUNCTION public.diag_requeue_on_recipe_change();
+
+
+--
 -- Name: etchants etchants_occ; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER etchants_occ BEFORE UPDATE ON public.etchants FOR EACH ROW EXECUTE FUNCTION public.occ_update_trigger_function();
+
+
+--
+-- Name: campaigns fill_campaign_code_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER fill_campaign_code_trigger BEFORE INSERT ON public.campaigns FOR EACH ROW EXECUTE FUNCTION public.fill_campaign_code();
+
+
+--
+-- Name: cutting_inserts fill_cutting_insert_code_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER fill_cutting_insert_code_trigger BEFORE INSERT ON public.cutting_inserts FOR EACH ROW EXECUTE FUNCTION public.fill_cutting_insert_code();
+
+
+--
+-- Name: insert_edges fill_insert_edge_code_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER fill_insert_edge_code_trigger BEFORE INSERT ON public.insert_edges FOR EACH ROW EXECUTE FUNCTION public.fill_insert_edge_code();
+
+
+--
+-- Name: projects fill_project_code_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER fill_project_code_trigger BEFORE INSERT ON public.projects FOR EACH ROW EXECUTE FUNCTION public.fill_project_code();
+
+
+--
+-- Name: tool_boxes fill_tool_box_code_trigger; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER fill_tool_box_code_trigger BEFORE INSERT ON public.tool_boxes FOR EACH ROW EXECUTE FUNCTION public.fill_tool_box_code();
 
 
 --
@@ -6011,6 +6390,14 @@ ALTER TABLE ONLY public.cutting_inserts
 
 ALTER TABLE ONLY public.cutting_inserts
     ADD CONSTRAINT cutting_inserts_tool_box_id_fkey FOREIGN KEY (tool_box_id) REFERENCES public.tool_boxes(tool_box_id) ON DELETE CASCADE;
+
+
+--
+-- Name: diag_layer diag_layer_analysis_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.diag_layer
+    ADD CONSTRAINT diag_layer_analysis_id_fkey FOREIGN KEY (analysis_id) REFERENCES public.machining_force_analysis(id) ON DELETE CASCADE;
 
 
 --
@@ -6555,6 +6942,14 @@ ALTER TABLE ONLY public.machining_force_analysis
 
 ALTER TABLE ONLY public.machining_force_analysis
     ADD CONSTRAINT machining_force_analysis_render_file_fkey FOREIGN KEY (render_file) REFERENCES public.directus_files(id) ON DELETE SET NULL;
+
+
+--
+-- Name: machining_force_analysis machining_force_analysis_tool_setup_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.machining_force_analysis
+    ADD CONSTRAINT machining_force_analysis_tool_setup_id_fkey FOREIGN KEY (tool_setup_id) REFERENCES public.tool_setup(setup_id) ON DELETE SET NULL;
 
 
 --
@@ -7179,4 +7574,20 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260722000100'),
     ('20260722000101'),
     ('20260723000102'),
-    ('20260828000103');
+    ('20260828000103'),
+    ('20260830000104'),
+    ('20260831000105'),
+    ('20260901000106'),
+    ('20260903000107'),
+    ('20260903000108'),
+    ('20260903000109'),
+    ('20260903000110'),
+    ('20260911000111'),
+    ('20260913000112'),
+    ('20260918000113'),
+    ('20260930000114'),
+    ('20260930000115'),
+    ('20260930000116'),
+    ('20260930000117'),
+    ('20260930000118'),
+    ('20260930000119');

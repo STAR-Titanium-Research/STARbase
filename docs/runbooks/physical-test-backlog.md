@@ -21,9 +21,17 @@ number. "Since" is the PR that shipped the code.
 
 ## A. Live Directus (local stack with real data)
 
-Start with `make up`, apply migrations (`make migrate`) and the configure scripts
-(`scripts/configure_all.sh`), restart Directus so new extensions load, then sign in as each role
-named in the step.
+Start with `make up` and apply migrations (`make migrate`); on a stack that already has its Directus
+configuration the migrations carry every metadata change, so there is nothing else to apply. Flush Redis and restart Directus so new
+extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
+`docker restart d1-database-directus-1`), then sign in as each role named in the step.
+
+> **Do not run `scripts/configure_all.sh` or `scripts/configure_directus.sql` on a database that
+> already has migrations applied.** They delete and re-insert the field metadata of whole collections
+> and silently undo what later migrations added. That happened on the live database between
+> 2026-07 and 2026-09 and cost the inline parameter fields, repaired by migration
+> `20261009000143_restore_inline_param_field_meta`. They are for a brand-new Directus only, or a
+> scratch database you can throw away.
 
 ### Permissions and migrations
 - [ ] **Migrations 133–135 on a real Directus database** (not the CI stub tables). `dbmate up`
@@ -52,8 +60,11 @@ named in the step.
 - [ ] **D12 — saved filters.** In Operations, Tests and Samples, the seven bookmarks appear for
   every role. "My operations"/"My samples" show only records whose owner person is linked to the
   signed-in user. "FAST runs, last 7 days", "Missing outcome", "Failed", "Needs analysis" and "No
-  location" match a hand count. Re-run `scripts/configure_directus.sql`: they are still there,
-  once each. Since #125.
+  location" match a hand count. Each bookmark exists once (`SELECT bookmark, count(*) FROM
+  directus_presets WHERE "user" IS NULL AND role IS NULL GROUP BY 1`). Migration
+  `20261006000135_saved_filter_bookmarks` creates them; do not re-run `scripts/configure_directus.sql`
+  to check this on a migrated database, it wipes field metadata (see the note at the top of section A).
+  Since #125.
 
 ### Ask-DB
 - [ ] **D1/D2 — chips and messages.** The five example chips run and answer. A query returning more
@@ -652,6 +663,22 @@ migration 141 prints about ownerless records.
 - [ ] **E5 — a secondary sample of a multi-sample test (known gap).** B co-owns only the second
   sample of a test with two samples: B cannot see the test (it is matched through its first sample).
   Record whether this matters to the lab. Since: Explorer pages E5 (PR pending).
+- [ ] **Migration 20261010000160 on live: Lab Member queries stop returning 400.** Before applying,
+  record `SELECT md5(string_agg(id||coalesce(permissions::text,'~'), ',' ORDER BY id)) FROM
+  directus_permissions`. Apply, then flush Redis and `docker restart` Directus (it caches permissions,
+  see `docs/runbooks/upgrade-2026-10-row-level-visibility.md`). Expect `UPDATE 36`
+  and 36 rows in `d1_private.lab_member_some_fix_backup`. As jsmcgowan1 (or any Lab Member), open
+  Home, Samples, Projects, Campaigns and Tests, and in the Data Studio open `physical_samples`,
+  `manufacturing_operations`, `equipment` and `materials`. Nothing returns `"_some" can only be used
+  with top level relational alias field`, and `docker logs d1-database-directus-1` shows no new 400 on
+  `/items/*`. A sample the user co-owns (not owns) and its operations and tests are visible. Editing
+  them saves. Deleting the sample is refused. They can create a sample and an operation on it. A
+  sample of a project where they are only a secondary investigator is visible. Junction creates go
+  through d1-access-guard: adding a co-owner to a sample they own saves, adding one to someone else's
+  sample is refused by d1-access-guard, and linking their own sample to their own campaign saves.
+  Then run `dbmate down`
+  once: the md5 matches the value recorded before applying, and the backup table is gone. Run
+  `up` again and restart Directus. Since: fix/lab-member-legal-some (PR pending).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

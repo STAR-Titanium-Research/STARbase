@@ -76,9 +76,32 @@ def expand(sets: dict, name: str, prefix: str = "", _stack: tuple = ()) -> list[
 
 
 def path_filter(path: str) -> dict:
-    """`a.b._some.c` -> {"a": {"b": {"_some": {"c": {"_eq": "$CURRENT_USER"}}}}}."""
+    """`a.b._some.c` -> {"a": {"b": {"_some": {"c": {"_eq": "$CURRENT_USER"}}}}}.
+
+    Directus's filter engine (apply-query/filter) only gives `_some`/`_none` their EXISTS-subquery
+    handling when the field immediately above them is a to-many relation reached with exactly one
+    hop from where that subquery started -- i.e. `_some` at path index 1, or immediately following
+    another legal `_some` (starting a fresh one-hop subquery of its own). Reached any other way --
+    through a preceding to-one hop, e.g. `project_id.secondary_investigators._some.user_id` -- it
+    falls through to `throw new InvalidQueryError("_some can only be used with top level
+    relational alias field")`. A chain of legal `_some`s (`samples._some.co_owners._some.user_id`,
+    confirmed against a running Directus) is fine: each one starts a new subquery at its own
+    top level. An illegal `_some` doesn't just break its own collection either -- the subquery
+    recurses into the related collection's OWN Lab Member rule (getCases), so one illegal `_some`
+    buried in, say, physical_samples.read throws for any other collection whose rule joins into
+    physical_samples. A bare relational filter with no `_some` still means "any row" in a
+    permission filter, so an illegal `_some` is simply dropped, not replaced.
+    """
+    parts = path.split(".")
+    legal_some: set[int] = set()
+    for i, p in enumerate(parts):
+        if p == "_some" and (i == 1 or (i - 2) in legal_some):
+            legal_some.add(i)
     node: dict = {"_eq": CURRENT_USER}
-    for key in reversed(path.split(".")):
+    for i in reversed(range(len(parts))):
+        key = parts[i]
+        if key == "_some" and i not in legal_some:
+            continue  # illegal position: drop it, Directus treats the hop as an implicit "any" join
         node = {key: node}
     return node
 
@@ -87,6 +110,19 @@ def set_filter(sets: dict, name: str) -> dict:
     paths = list(dict.fromkeys(expand(sets, name)))  # drop duplicates, keep order
     filters = [path_filter(p) for p in paths]
     return filters[0] if len(filters) == 1 else {"_or": filters}
+
+
+def amnesty_filter(columns: list[str]) -> dict:
+    """A record where every one of `columns` is NULL -- see 'orphan_amnesty' in access_rules.json."""
+    return {"_and": [{c: {"_null": True}} for c in columns]}
+
+
+def with_amnesty(base: dict, columns: list[str]) -> dict:
+    """OR `base` with the orphan-amnesty clause, flattening into an existing top-level _or."""
+    extra = amnesty_filter(columns)
+    if set(base) == {"_or"}:
+        return {"_or": [*base["_or"], extra]}
+    return {"_or": [base, extra]}
 
 
 def build_rows(doc: dict) -> list[dict]:
@@ -125,7 +161,11 @@ def build_rows(doc: dict) -> list[dict]:
                     f'{collection}.create: Directus ignores item filters on create; use "any"'
                 )
             else:
-                rows.append(row(collection, action, set_filter(sets, rule)))
+                filt = set_filter(sets, rule)
+                amnesty_cols = doc.get("orphan_amnesty", {}).get(collection)
+                if action == "read" and amnesty_cols:
+                    filt = with_amnesty(filt, amnesty_cols)
+                rows.append(row(collection, action, filt))
     for collection, actions in doc.get("custom", {}).items():
         if collection in doc["rules"]:
             raise RulesError(f"{collection} is both ruled and custom")
@@ -335,6 +375,12 @@ def resolve(doc: dict, db: dict) -> list[str]:
             problems.append(
                 f"owner_guard {collection}.{spec['field']}: not a relation to a table with column {spec['value_key']}"
             )
+    for collection, amnesty_cols in doc.get("orphan_amnesty", {}).items():
+        for col in amnesty_cols:
+            if f"{collection}.{col}" not in columns:
+                problems.append(
+                    f"orphan_amnesty {collection}: {collection}.{col} is not a column"
+                )
     return problems
 
 

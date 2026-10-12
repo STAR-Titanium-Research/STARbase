@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+# ################################################################################################
+# WARNING - DO NOT RUN THIS ON A DATABASE THAT ALREADY HAS MIGRATIONS APPLIED.
+# configure_directus.sql, the first file below, deletes every directus_fields row of the collections
+# it owns and re-inserts only its own, older, baseline; the other configure_*.sql files delete and
+# re-insert their own rows the same way. Anything that db/migrations/ added to that metadata since
+# (owner_person_id pickers, test_sessions per-type fields, FAST recipe groups, ...) is wiped and not
+# put back.
+# On the live database this happened in 2026-07/2026-09: configure_directus.sql was run alone, the
+# 116 inline parameter field rows, the sintering groups and four relation alias fields were lost, and
+# the forms ran ungrouped for weeks. Migration 20261009000143_restore_inline_param_field_meta repaired it.
+# Use this script only on a brand-new Directus or a scratch database you can throw away. To change
+# Directus metadata on a live database, write a migration (see CONTRIBUTING and the db-migration skill).
+# ################################################################################################
 # Apply all Directus configuration in the correct order, then flush + restart.
 # Order matters: inline params recreate fields that field-presets then customise.
 #

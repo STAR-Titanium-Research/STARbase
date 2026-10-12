@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-person-link",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Links (or creates) the people row for every new login, so one login = one person.",
+  "keywords": ["directus", "directus-extension", "directus-custom-hook"],
+  "directus:extension": {
+    "type": "hook",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

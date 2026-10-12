@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-owner-default",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Owner defaults to the logged-in researcher on create when left blank (login wins); row-level visibility (ADR-0011) matches on it.",
+  "keywords": ["directus", "directus-extension", "directus-custom-hook"],
+  "directus:extension": {
+    "type": "hook",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}
