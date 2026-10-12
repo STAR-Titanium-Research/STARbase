@@ -61,34 +61,58 @@ const summary = computed(() => (doc.value ? summaryText(doc.value) : ''));
 const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value);
 
 // ---- the template picker -------------------------------------------------------------------------
+// A draft opened with openDraft() has a snapshot; the editor is "dirty" when the draft no longer matches it.
+// Anything that would throw a dirty draft away asks first. The editor is keyed on draftKey, so each opened
+// draft starts with a clean form (no old error or half-answered delete confirmation).
+const draftKey = ref(0);
+let snapshot = '';
+const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== snapshot);
+function openDraft(t: LabelTemplate | null): void {
+	draft.value = t;
+	snapshot = t ? JSON.stringify(t) : '';
+	draftKey.value++;
+}
+const confirmDiscard = (): boolean => !dirty.value || window.confirm('Discard your unsaved changes to this template?');
+
 function onPick(e: Event): void {
-	const id = (e.target as HTMLSelectElement).value || null;
+	const select = e.target as HTMLSelectElement;
+	if (!confirmDiscard()) {
+		select.value = templates.selectedId.value ?? '';
+		return;
+	}
+	const id = select.value || null;
 	templates.select(id);
 	const t = templates.templates.value.find((x) => x.id === id);
-	if (draft.value && t) draft.value = draftOf(t);
+	if (draft.value && t) openDraft(draftOf(t));
 }
 const userId = computed(() => host.user.value?.id ?? null);
+// Save and Delete are offered on your own templates, or to an admin: the same rule as the database's row rule
+// (user_created = the signed-in user). useCanUpdate asks Directus about one saved record by id; here the answer is
+// needed for the draft before and while it is edited, from the row already read, so the rule is applied directly.
 const canEditDraft = computed(() => !!draft.value && canEditTemplate(draft.value, userId.value, host.isAdmin.value));
 const editLabel = computed(() => (draft.value ? 'Close editor' : 'Edit template'));
 
+function closeEditor(): void {
+	if (confirmDiscard()) openDraft(null);
+}
 function toggleEditor(): void {
-	if (draft.value) draft.value = null;
-	else if (templates.selected.value) draft.value = draftOf(templates.selected.value);
+	if (draft.value) closeEditor();
+	else if (templates.selected.value) openDraft(draftOf(templates.selected.value));
 }
 function newTemplate(): void {
-	draft.value = blankTemplate();
+	if (confirmDiscard()) openDraft(blankTemplate());
 }
 function copyTemplate(): void {
-	if (templates.selected.value) draft.value = copyAsNew(templates.selected.value);
+	if (templates.selected.value && confirmDiscard()) openDraft(copyAsNew(templates.selected.value));
 }
 async function onSaved(id: string): Promise<void> {
 	await templates.load(id);
 	templates.select(id);
 	const t = templates.selected.value;
-	draft.value = t ? draftOf(t) : null;
+	openDraft(t ? draftOf(t) : null);
 }
 async function onDeleted(): Promise<void> {
-	draft.value = null;
+	openDraft(null);
 	templates.select(null);
 	await templates.load();
 }
@@ -157,6 +181,7 @@ onMounted(() => {
 				<div class="col">
 					<Section v-if="draft" :title="draft.id ? `Edit template` : 'New template'">
 						<TemplateEditor
+							:key="draftKey"
 							:model-value="draft"
 							@update:model-value="draft = $event"
 							:can-edit="canEditDraft"
@@ -164,7 +189,7 @@ onMounted(() => {
 							:problems="problems"
 							@saved="onSaved"
 							@deleted="onDeleted"
-							@close="draft = null"
+							@close="closeEditor"
 						/>
 					</Section>
 					<SamplePicker :data="samples" v-model:copies="copies" @tidy-copies="tidyCopies" />
