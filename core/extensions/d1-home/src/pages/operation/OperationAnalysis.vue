@@ -24,6 +24,7 @@ const isMachining = computed(() => props.category === 'machining');
 <template>
 	<Section
 		v-if="isMachining"
+		id="force-analysis"
 		title="Force analysis"
 		:count="force.loading ? null : rows.length"
 		:empty="!force.loading && !force.error && !rows.length"
@@ -60,7 +61,9 @@ const isMachining = computed(() => props.category === 'machining');
 
 	<Section
 		v-if="category === 'sintering'"
+		id="fast-run"
 		title="FAST run"
+		:count="fast.loading ? null : fast.data ? 1 : 0"
 		:empty="!fast.loading && !fast.error && !fast.data"
 		empty-text="No FAST trace has been imported for this run yet."
 	>

@@ -19,7 +19,7 @@ const rows = computed(() =>
 </script>
 
 <template>
-	<Section title="Input and output samples" :count="rows.length" :empty="!rows.length" empty-text="No sample is linked to this operation.">
+	<Section title="Samples in and out" :count="rows.length" :empty="!rows.length" empty-text="No sample is linked to this operation.">
 		<ul class="rows">
 			<li v-for="r in rows" :key="r.role" class="row">
 				<span class="role" :class="r.role.toLowerCase()">{{ r.role }}</span>

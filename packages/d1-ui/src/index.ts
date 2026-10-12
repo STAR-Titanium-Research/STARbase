@@ -75,6 +75,12 @@ export { default as FactList } from './components/FactList.vue';
 export { default as PageContents } from './components/PageContents.vue';
 export type { Fact } from './record/facts';
 export type { ContentsEntry } from './record/contents';
+export { detailFacts } from './record/details';
+export {
+	operationKind, operationRailFacts, operationDetailBase, operationSampleCount, projectFact, campaignFact, sampleFact, personText,
+} from './record/operationFacts';
+export type { HiddenLinks } from './record/operationFacts';
+export { testTypeText, testSample, testRailFacts, testDetailBase, testSubjectCount } from './record/testFacts';
 export { default as KeyValueGrid } from './components/KeyValueGrid.vue';
 export type { KeyValue } from './components/KeyValueGrid.vue';
 export { default as ProgressBar } from './components/ProgressBar.vue';

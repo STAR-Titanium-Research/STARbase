@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { DataTable, KeyValueGrid, Section, TEST_DONE_STATUSES, TEST_STATUS_ORDER, summaryCount, summaryGroups } from '@d1/ui';
+import { DataTable, FactList, Section, TEST_DONE_STATUSES, TEST_STATUS_ORDER, summaryCount, summaryGroups } from '@d1/ui';
 
 // `summary_stats` grouped by the top-level key each worker writes under (basic, fft_analysis ...):
 // scalars as a key-value grid, lists of records as small tables. See summary.ts in @d1/ui.
@@ -23,7 +23,7 @@ const pending = computed(
 	>
 		<div v-for="g in groups" :key="g.key" class="group">
 			<h3>{{ g.title }}</h3>
-			<KeyValueGrid :items="g.entries.map((e) => ({ label: e.label, value: e.value, unit: e.unit }))" />
+			<FactList :facts="g.entries.map((e) => ({ label: e.label, value: e.value, unit: e.unit }))" />
 			<div v-for="t in g.tables" :key="t.label">
 				<h4>{{ t.label }}</h4>
 				<DataTable dense fit-content figures>

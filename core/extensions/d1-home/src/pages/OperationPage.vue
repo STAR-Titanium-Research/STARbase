@@ -2,16 +2,18 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, KeyValueGrid, LoadState, NotVisible, PageShell, RecordHeader, RecordLink, Section, asRecord, dataStudioRoute,
-	formatDate, formatQuantity, hasPassCode, operationHeading, processLabel, type KeyValue,
+	EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
+	detailFacts, hasPassCode, operationDetailBase, operationHeading, operationKind, operationRailFacts, operationSampleCount, type ContentsEntry,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
 import OperationSamples from './operation/OperationSamples.vue';
 import OperationAnalysis from './operation/OperationAnalysis.vue';
+import RecordDetails from './record/RecordDetails.vue';
 import SampleFiles from './sample/SampleFiles.vue';
 
 // Operation page: one manufacturing step with its parameters, samples in and out, analysis state
-// and files. Design: docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Operation").
+// and files. Design: docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Operation"), laid
+// out as a rail and panels by docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md.
 const props = defineProps<{ id: string }>();
 
 const { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, hiddenKnown, reload } = useOperationData(toRef(props, 'id'));
@@ -43,24 +45,32 @@ const pageTitle = computed(() => {
 	if (!op.value) return 'Operation';
 	return isCode.value ? `Operation ${code.value}` : code.value;
 });
-const operatorText = computed(() => asRecord(op.value?.operator_person_id)?.full_name || op.value?.operator_name || '');
 
-const overview = computed<KeyValue[]>(() => {
-	const o = op.value;
-	if (!o) return [];
-	// Samples and machine are in the header and the samples section, so not repeated here.
-	return [
-		{ label: 'Method', value: asRecord(o.method_id)?.method_name },
-		{ label: 'Step', value: o.operation_sequence },
-		{ label: 'Capture software', value: o.capture_software },
-		{ label: 'Capture frequency', value: formatQuantity(o.capture_frequency_khz), unit: 'kHz' },
-		{ label: 'Force file ID', value: o.force_file_id, mono: true },
-		{ label: 'Imported from', value: o.source_system },
-	];
-});
+// The rail's key facts, and the Details panel: the operation's own values and its parameters, minus
+// what the rail already shows.
+const railFacts = computed(() => operationRailFacts(op.value, hidden.value.data));
+const details = computed(() => detailFacts(operationDetailBase(op.value), params.value.data, railFacts.value));
 
 // Linked Directus files and legacy network-share paths read as one list.
 const allFiles = computed(() => [...files.value.data, ...shared.value.data]);
+
+// "On this page": the panels this operation has, in page order. A count is null while it loads.
+const contents = computed<ContentsEntry[]>(() => {
+	const o = op.value;
+	if (!o) return [];
+	const entries: ContentsEntry[] = [
+		{ id: 'details', title: 'Details', count: params.value.loading ? null : details.value.length || null },
+		{ id: 'samples', title: 'Samples in and out', count: operationSampleCount(o, hidden.value.data) },
+	];
+	if (o.process_category === 'machining') {
+		entries.push({ id: 'force-analysis', title: 'Force analysis', count: force.value.loading ? null : Math.min(force.value.data.length, LIST_CAP) });
+	}
+	if (o.process_category === 'sintering') {
+		entries.push({ id: 'fast-run', title: 'FAST run', count: fast.value.loading ? null : fast.value.data ? 1 : 0 });
+	}
+	entries.push({ id: 'files', title: 'Files', count: files.value.loading || shared.value.loading ? null : allFiles.value.length });
+	return entries;
+});
 
 const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(props.id)}`, '_blank', 'noopener');
 </script>
@@ -75,7 +85,8 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 			<LoadState v-else-if="error" :error="error" />
 
 			<template v-else-if="op">
-				<RecordHeader :code="code" :plain="!isCode" :title="processLabel(op.process_category)" kind="Operation" icon="precision_manufacturing">
+				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
+				<RecordLayout style="--d1-sticky-top: 70px">
 					<template #crumbs>
 						<router-link to="/home">Home</router-link>
 						<template v-if="project">
@@ -97,54 +108,46 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 							<RecordLink collection="physical_samples" :id="sample.sample_id">{{ sample.sample_code ? `Sample ${sample.sample_code}` : 'Sample' }}</RecordLink>
 						</template>
 					</template>
-					<template #meta>
-						<span>{{ formatDate(op.operation_date, 'Undated') }}</span>
-						<span v-if="asRecord(op.owner_person_id)">Owner: {{ asRecord(op.owner_person_id)!.full_name }}</span>
-						<span v-if="operatorText">Operator: {{ operatorText }}</span>
-						<span v-if="asRecord(op.equipment_id)">Machine: {{ asRecord(op.equipment_id)!.equipment_name }}</span>
+
+					<template #rail>
+						<RecordRail :kind="operationKind(op)" :code="code" :plain="!isCode" :facts="railFacts" :contents="contents">
+							<template #kind-icon><v-icon name="precision_manufacturing" x-small /></template>
+							<template #actions>
+								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+								<v-button small secondary @click="openReport"><v-icon name="picture_as_pdf" small left />Report</v-button>
+								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
+							</template>
+						</RecordRail>
 					</template>
-					<template #actions>
-						<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
-						<v-button small secondary @click="openReport"><v-icon name="picture_as_pdf" small left />Report</v-button>
-						<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
-					</template>
-				</RecordHeader>
 
-				<div class="d1-cols">
-					<Section title="Overview">
-						<KeyValueGrid :items="overview" />
-						<p v-if="op.outcome_notes" class="notes">{{ op.outcome_notes }}</p>
-					</Section>
-
-					<Section
-						title="Parameters"
-						:count="params.loading ? null : params.data.length || null"
-						:empty="!params.loading && !params.error && !params.data.length"
-						:empty-text="op.process_category ? 'No parameters recorded for this operation.' : 'This operation has no process category, so no parameter set applies.'"
-					>
-						<LoadState :loading="params.loading" :error="params.error">
-							<KeyValueGrid :items="params.data.map((p) => ({ label: p.label, value: p.value, unit: p.unit }))" />
-						</LoadState>
-					</Section>
-				</div>
-
-				<div class="d1-cols">
-					<OperationSamples
-						:input="op.sample_id"
-						:output="op.output_sample_id"
-						:input-hidden="!!hidden.data.sample_id"
-						:output-hidden="!!hidden.data.output_sample_id"
+					<RecordDetails
+						:facts="details"
+						:notes="op.outcome_notes"
+						:params-loading="params.loading"
+						:params-error="params.error"
+						:empty-text="op.process_category ? 'No details or parameters recorded for this operation.' : 'No details recorded, and no process category, so no parameter set applies.'"
 					/>
 
-					<OperationAnalysis :operation-id="id" :category="op.process_category" :force="force" :fast="fast" />
-				</div>
+					<div class="d1-cols">
+						<OperationSamples
+							id="samples"
+							:input="op.sample_id"
+							:output="op.output_sample_id"
+							:input-hidden="!!hidden.data.sample_id"
+							:output-hidden="!!hidden.data.output_sample_id"
+						/>
 
-				<SampleFiles
-					:files="allFiles"
-					:loading="files.loading || shared.loading"
-					:error="files.error || shared.error"
-					empty-text="No files linked to this operation."
-				/>
+						<OperationAnalysis :operation-id="id" :category="op.process_category" :force="force" :fast="fast" />
+					</div>
+
+					<SampleFiles
+						id="files"
+						:files="allFiles"
+						:loading="files.loading || shared.loading"
+						:error="files.error || shared.error"
+						empty-text="No files linked to this operation."
+					/>
+				</RecordLayout>
 
 				<EditDrawer
 					v-model="editing"
@@ -157,7 +160,3 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 		</PageShell>
 	</ExplorerView>
 </template>
-
-<style scoped>
-.notes { margin: 10px 0 0; font-size: var(--fs-md); line-height: 1.55; white-space: pre-wrap; color: var(--d1-dim); }
-</style>
