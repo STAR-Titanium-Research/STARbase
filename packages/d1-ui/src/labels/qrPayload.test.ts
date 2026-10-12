@@ -50,6 +50,19 @@ describe('parseQrPayload', () => {
 	it('tolerates CRLF, a trailing newline and a longer short id', () => {
 		expect(parseQrPayload('D1 SAMPLE\r\nS-1 · 0123456789abcdef\r\n')).toEqual({ code: 'S-1', shortId: '0123456789abcdef', lines: [] });
 	});
+	it('splits on lone CR as well as CRLF and LF', () => {
+		expect(parseQrPayload('D1 SAMPLE\rS-1 · 1a2b3c4d\rTi · "x"')).toEqual({ code: 'S-1', shortId: '1a2b3c4d', lines: ['Ti · "x"'] });
+		expect(parseQrPayload('D1 SAMPLE\r\nS-1 · 1a2b3c4d\r\nline')).toMatchObject({ lines: ['line'] });
+	});
+	it('reads a code line typed by a scanner that has no dot: " - " or " | "', () => {
+		expect(parseQrPayload('D1 SAMPLE\nS-0123 - 1a2b3c4d')).toEqual({ code: 'S-0123', shortId: '1a2b3c4d', lines: [] });
+		expect(parseQrPayload('D1 SAMPLE\nS-0123 | 1a2b3c4d\nextra')).toEqual({ code: 'S-0123', shortId: '1a2b3c4d', lines: ['extra'] });
+		expect(parseQrPayload('D1 SAMPLE\n10-AA-MF-2023-06-03 - 0123456789abcdef')).toMatchObject({ code: '10-AA-MF-2023-06-03' });
+	});
+	it('does not mistake a hyphenated code for a separator', () => {
+		expect(parseQrPayload('D1 SAMPLE\n10-AA-1a2b3c4d')).toBeNull();
+		expect(parseQrPayload('D1 SAMPLE\nS-1 -1a2b3c4d')).toBeNull();
+	});
 	it('rejects text that is not a D1 sample payload', () => {
 		expect(parseQrPayload('https://example.org/x')).toBeNull();
 		expect(parseQrPayload('')).toBeNull();
