@@ -114,8 +114,11 @@ export { default as IndexPage } from './index/IndexPage.vue';
 export {
 	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, fitText,
 	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, QR_HEADER, renderLabelDocument,
+	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
+	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
+	saveErrorText, moveField,
 } from './labels';
 export type {
 	FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
-	RenderOptions, RenderedLabels, QrModules, Measure,
+	RenderOptions, RenderedLabels, QrModules, Measure, BrokenTemplate,
 } from './labels';

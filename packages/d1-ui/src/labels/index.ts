@@ -14,3 +14,9 @@ export { renderLabelDocument } from './render';
 export type { QrModules } from './qrSvg';
 export type { Measure } from './fit';
 export type { RenderOptions, RenderedLabels } from './render';
+export {
+	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
+	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
+	saveErrorText, moveField,
+} from './page';
+export type { BrokenTemplate } from './page';
