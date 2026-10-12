@@ -58,3 +58,9 @@ export function toLabelSample(row: Row): LabelSample {
 		ownerInitials: ownerInitials(row) || null,
 	};
 }
+
+// A label needs a readable code and a short id (8 to 32 lower-case hex characters): without them the QR
+// payload could not be read back. The renderer skips samples that fail this and counts them.
+export function isPrintableSample(s: LabelSample): boolean {
+	return s.code.trim() !== '' && /^[0-9a-f]{8,32}$/.test(s.shortId);
+}

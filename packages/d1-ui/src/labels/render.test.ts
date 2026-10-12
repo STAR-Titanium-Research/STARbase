@@ -216,3 +216,17 @@ describe('layoutLabel', () => {
 		expect(lay.lines[0].align).toBe('left');
 	});
 });
+
+describe('renderLabelDocument with unusable samples', () => {
+	it('skips a sample with no code or short id, keeps its slot empty and counts it', () => {
+		const r = render([sample(1), sample(2, { code: '' }), sample(3, { shortId: '' }), sample(4)], A4_4X5);
+		expect(r.invalid).toBe(2);
+		expect(r.html.match(/class="label/g)).toHaveLength(2);
+		expect(r.html).toContain('(2 labels)');
+		expect(r.html).toContain('left:157.5mm;top:0mm'); // sample 4 is still in slot 4
+		expect(r.html).not.toContain('left:52.5mm;top:0mm');
+	});
+	it('reports none invalid for good samples', () => {
+		expect(render([sample(1)], A4_4X5).invalid).toBe(0);
+	});
+});

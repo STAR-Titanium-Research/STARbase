@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildQrPayload, parseQrPayload, QR_HEADER } from './qrPayload';
+import { isPrintableSample } from './sample';
 import type { LabelSample } from './types';
 
 const full: LabelSample = {
@@ -72,5 +73,37 @@ describe('parseQrPayload', () => {
 		expect(parseQrPayload('d1 sample\nS-1 · 1a2b3c4d')).toBeNull();
 		expect(parseQrPayload('Hello\nD1 SAMPLE\nS-1 · 1a2b3c4d')).toBeNull();
 		expect(parseQrPayload(null as unknown as string)).toBeNull();
+	});
+});
+
+describe('build then parse', () => {
+	const ALL = ['material', 'nickname', 'date', 'owner_initials'] as const;
+	const collapse = (v: string) => v.replace(/\s+/g, ' ').trim();
+	// Awkward but valid values: separators in the code, newlines and quotes in the nickname, unicode, long short ids.
+	const codes = ['S-0123', '10-AA-MF-2023-06-03', 'X · Y', 'A - deadbeef', 'A | b', ' padded ', 'Ünï-コード', 'a\nb', 'W'.repeat(40)];
+	const shortIds = ['1a2b3c4d', '0123456789abcdef', 'f'.repeat(32)];
+	const nicknames = [null, 'bracket A', 'a · b\nc · d', '"quoted"', '</svg><script>', 'line1\r\nline2\rline3', 'trailing   '];
+
+	it('round-trips code and short id for every valid sample, with every extra on', () => {
+		for (const code of codes) {
+			for (const shortId of shortIds) {
+				for (const nickname of nicknames) {
+					const s: LabelSample = { id: 'u', code, shortId, nickname, material: 'Ti-6Al-4V', date: '2026-10-01', ownerInitials: 'DP' };
+					expect(isPrintableSample(s)).toBe(true);
+					const parsed = parseQrPayload(buildQrPayload(s, ALL));
+					expect(parsed, JSON.stringify(s)).not.toBeNull();
+					expect(parsed!.code).toBe(collapse(code));
+					expect(parsed!.shortId).toBe(shortId);
+					expect(parsed!.lines.length).toBeLessThanOrEqual(2);
+				}
+			}
+		}
+	});
+	it('does not round-trip a sample without a code or short id, which the renderer refuses to print', () => {
+		const bad = { id: 'u', code: '', shortId: '1a2b3c4d', nickname: null, material: null, date: null, ownerInitials: null };
+		expect(isPrintableSample(bad)).toBe(false);
+		expect(parseQrPayload(buildQrPayload(bad, []))).toBeNull();
+		expect(isPrintableSample({ ...bad, code: 'S-1', shortId: '' })).toBe(false);
+		expect(parseQrPayload(buildQrPayload({ ...bad, code: 'S-1', shortId: '' }, []))).toBeNull();
 	});
 });

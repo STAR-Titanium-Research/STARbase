@@ -112,7 +112,7 @@ export { default as IndexPage } from './index/IndexPage.vue';
 
 // Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)
 export {
-	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, templateFromRow, validateTemplate, slotPositions, paginate, fitText,
+	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, fitText,
 	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, QR_HEADER, renderLabelDocument,
 } from './labels';
 export type {

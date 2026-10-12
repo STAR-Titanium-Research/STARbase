@@ -4,6 +4,7 @@
 import { slotPositions, round2 } from './geometry';
 import { layoutLabel, type Box } from './layout';
 import { buildQrPayload } from './qrPayload';
+import { isPrintableSample } from './sample';
 import { qrSvg, type QrModules } from './qrSvg';
 import type { Measure } from './fit';
 import type { LabelSample, LabelTemplate } from './types';
@@ -20,6 +21,8 @@ export interface RenderedLabels {
 	html: string;
 	// How many labels had a field cut off or dropped (not how many fields).
 	clipped: number;
+	// Samples left out because they have no code or no valid short id (see isPrintableSample). Their slot stays empty.
+	invalid: number;
 }
 
 // Nothing may load or run in the document: styles are inline, there are no scripts, and images may only be data.
@@ -67,13 +70,15 @@ export function renderLabelDocument(
 	const slots = slotPositions(t);
 	let clipped = 0;
 	let count = 0;
+	let invalid = 0;
 
 	const pageHtml = pages.map((page) => {
 		const labels = page.map((sample, i) => {
 			const slot = slots[i];
 			if (!slot) return '';
 			const frame = `left:${mm(slot.x)};top:${mm(slot.y)};width:${mm(t.labelWidthMm)};height:${mm(t.labelHeightMm)}`;
-			if (!sample) return outline ? `<div class="slot-skipped" style="${frame}"></div>` : '';
+			if (sample && !isPrintableSample(sample)) invalid++;
+			if (!sample || !isPrintableSample(sample)) return outline ? `<div class="slot-skipped" style="${frame}"></div>` : '';
 			count++;
 			const lay = layoutLabel(sample, t, options.measure);
 			if (lay.clipped) clipped++;
@@ -99,5 +104,5 @@ ${css(t, outline)}
 </style></head><body>
 ${pageHtml.join('\n')}
 </body></html>`;
-	return { html, clipped };
+	return { html, clipped, invalid };
 }

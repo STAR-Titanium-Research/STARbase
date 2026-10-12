@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initials, labelDate, toLabelSample } from './sample';
+import { initials, isPrintableSample, labelDate, toLabelSample } from './sample';
 
 describe('initials', () => {
 	it('takes the first and last word', () => {
@@ -68,5 +68,22 @@ describe('toLabelSample', () => {
 	it('falls back to the created date', () => {
 		expect(toLabelSample({ ...row, manufactured_date: null }).date).toBe('2026-10-05');
 		expect(toLabelSample({ ...row, manufactured_date: null, created_at: null }).date).toBeNull();
+	});
+});
+
+describe('isPrintableSample', () => {
+	const ok = { id: 'u', code: 'S-1', shortId: '1a2b3c4d', nickname: null, material: null, date: null, ownerInitials: null };
+	it('needs a code and a hex short id', () => {
+		expect(isPrintableSample(ok)).toBe(true);
+		expect(isPrintableSample({ ...ok, code: '' })).toBe(false);
+		expect(isPrintableSample({ ...ok, code: '  ' })).toBe(false);
+		expect(isPrintableSample({ ...ok, shortId: '' })).toBe(false);
+		expect(isPrintableSample({ ...ok, shortId: '1A2B3C4D' })).toBe(false);
+		expect(isPrintableSample({ ...ok, shortId: '1a2b3c4' })).toBe(false);
+		expect(isPrintableSample({ ...ok, shortId: '1a2b3c4d'.repeat(5) })).toBe(false);
+	});
+	it('is false for a row that toLabelSample could not fill', () => {
+		expect(isPrintableSample(toLabelSample({ sample_id: 'x' }))).toBe(false);
+		expect(isPrintableSample(toLabelSample({ sample_id: '1a2b3c4d-0000-4000-8000-000000000001', sample_code: 'S-1' }))).toBe(true);
 	});
 });

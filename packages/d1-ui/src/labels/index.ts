@@ -2,7 +2,7 @@
 // Pure functions only (no Vue, no Directus), so every part is unit-tested.
 export { FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA } from './types';
 export type { FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample } from './types';
-export { toLabelSample } from './sample';
+export { toLabelSample, isPrintableSample } from './sample';
 export { templateFromRow, validateTemplate } from './template';
 export { slotPositions, paginate } from './geometry';
 export type { Slot, PaginateOptions } from './geometry';
