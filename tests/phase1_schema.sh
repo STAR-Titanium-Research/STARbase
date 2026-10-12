@@ -632,13 +632,13 @@ run_eq "campaign_type CHECK restricts to the two kinds" \
     "1"
 # owner_person_id (062), campaign_samples.campaign_id (087) and created_by (20261001000124), plus the
 # project_id link and the two campaign_id links of operations and tests that migration 141 registers
-# for the row filters (ADR-0011).
-run_eq "Directus relations for campaigns are registered (6)" \
+# for the row filters (ADR-0011), plus the campaign_access list (migration 165, alias `access`).
+run_eq "Directus relations for campaigns are registered (7)" \
     "SELECT string_agg(many_collection || '.' || many_field || '->' || one_collection, ',' ORDER BY many_collection COLLATE \"C\", many_field COLLATE \"C\")
      FROM directus_relations
      WHERE one_collection='campaigns' OR many_collection='campaigns'
         OR (many_collection IN ('manufacturing_operations','test_sessions') AND many_field='campaign_id')" \
-    "campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
+    "campaign_access.campaign_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
 
 echo "== Audit trigger fires on INSERT =="
 # Insert a test sample and verify audit_logs captured it.
@@ -2675,6 +2675,9 @@ cfg_files=$(sed -n '/^FILES=(/,/^)/p' scripts/configure_all.sh | grep -o '[a-z_]
     echo "BEGIN;"
     # the person pickers migration 062 registered, as the migrations leave them (compared after the scripts)
     echo "CREATE TEMP TABLE people_pickers AS SELECT collection, field, special, interface, options::text AS options, display, display_options::text AS display_options, readonly, hidden, sort, width, required, translations::text AS translations FROM directus_fields WHERE field IN ('owner_person_id','operator_person_id','principal_investigator_person');"
+    # the record access metadata of migration 165 as the migrations leave it (compared after the scripts)
+    echo "CREATE TEMP TABLE ra_rel AS SELECT many_collection, many_field, one_collection, one_field, junction_field, one_deselect_action FROM directus_relations WHERE many_collection IN ('sample_access','operation_access','test_access','campaign_access','project_access');"
+    echo "CREATE TEMP TABLE ra_fld AS SELECT collection, field, special, interface, options::text AS options, display, readonly, hidden, sort, width, note FROM directus_fields WHERE field IN ('access','restricted') AND collection IN ('physical_samples','manufacturing_operations','test_sessions','campaigns','projects');"
     for f in $cfg_files; do sed -E '/^(BEGIN|COMMIT);[[:space:]]*$/d' "scripts/$f"; done
     echo '\t on'
     echo '\a'
@@ -2687,6 +2690,12 @@ cfg_files=$(sed -n '/^FILES=(/,/^)/p' scripts/configure_all.sh | grep -o '[a-z_]
     echo "SELECT 'b_pickers_changed:' || count(*) FROM (SELECT * FROM people_pickers EXCEPT SELECT collection, field, special, interface, options::text, display, display_options::text, readonly, hidden, sort, width, required, translations::text FROM directus_fields) x;"
     echo "SELECT 'b_picker_relations_lost:' || count(*) FROM (SELECT collection, field FROM people_pickers EXCEPT SELECT many_collection, many_field FROM directus_relations WHERE one_collection = 'people') x;"
     echo "SELECT 'b_legacy_visible:' || count(*) FROM directus_fields WHERE NOT hidden AND ((collection, field) IN (('physical_samples','owner'),('manufacturing_operations','owner'),('test_sessions','owner'),('campaigns','owner'),('etchants','owner'),('prep_recipes','owner'),('tool_boxes','owner'),('cutting_inserts','owner'),('insert_edges','owner'),('manufacturing_operations','operator'),('test_sessions','operator')));"
+    echo "SELECT 'b_access_rel_before:' || count(*) FROM ra_rel;"
+    echo "SELECT 'b_access_rel_changed:' || count(*) FROM ((SELECT * FROM ra_rel EXCEPT SELECT many_collection, many_field, one_collection, one_field, junction_field, one_deselect_action FROM directus_relations WHERE many_collection IN ('sample_access','operation_access','test_access','campaign_access','project_access')) UNION ALL (SELECT many_collection, many_field, one_collection, one_field, junction_field, one_deselect_action FROM directus_relations WHERE many_collection IN ('sample_access','operation_access','test_access','campaign_access','project_access') EXCEPT SELECT * FROM ra_rel)) x;"
+    echo "SELECT 'b_access_fld_before:' || count(*) FROM ra_fld;"
+    echo "SELECT 'b_access_fld_changed:' || count(*) FROM ((SELECT * FROM ra_fld EXCEPT SELECT collection, field, special, interface, options::text, display, readonly, hidden, sort, width, note FROM directus_fields WHERE field IN ('access','restricted') AND collection IN ('physical_samples','manufacturing_operations','test_sessions','campaigns','projects')) UNION ALL (SELECT collection, field, special, interface, options::text, display, readonly, hidden, sort, width, note FROM directus_fields WHERE field IN ('access','restricted') AND collection IN ('physical_samples','manufacturing_operations','test_sessions','campaigns','projects') EXCEPT SELECT * FROM ra_fld)) x;"
+    echo "SELECT 'b_access_aliases:' || string_agg(r.one_collection, ',' ORDER BY r.one_collection) FROM directus_relations r JOIN directus_fields f ON f.collection = r.one_collection AND f.field = 'access' WHERE r.one_field = 'access' AND f.hidden AND f.special = 'o2m';"
+    echo "SELECT 'b_restricted_fields:' || count(*) FROM directus_fields WHERE field = 'restricted' AND hidden AND readonly AND collection IN ('physical_samples','manufacturing_operations','test_sessions','campaigns','projects');"
     echo "ROLLBACK;"
 } > "$RES_DIR/configure.sql"
 cfg_out=$(psql "$DATABASE_URL" --no-psqlrc -X -q -v ON_ERROR_STOP=1 -f "$RES_DIR/configure.sql" 2>&1 | grep '^b_')
@@ -2707,6 +2716,18 @@ grep -qxF "b_picker_relations_lost:0" <<<"$cfg_out" && ok "the configure scripts
     || bad "a configure script drops the people relation of a person picker (output: $cfg_out)"
 grep -qxF "b_legacy_visible:0" <<<"$cfg_out" && ok "the legacy owner and operator backup columns stay hidden after the configure scripts" \
     || bad "a configure script makes a legacy owner/operator column visible again (output: $cfg_out)"
+grep -qxF "b_access_rel_before:10" <<<"$cfg_out" && ok "the migrations leave 10 record access relations (5 parent links with alias access, 5 person links)" \
+    || bad "expected 10 relations on the five access tables after the migrations (output: $cfg_out)"
+grep -qxF "b_access_rel_changed:0" <<<"$cfg_out" && ok "the configure scripts keep every record access relation exactly as migration 165 leaves it" \
+    || bad "a configure script drops or changes a record access relation (output: $cfg_out)"
+grep -qxF "b_access_fld_before:10" <<<"$cfg_out" && ok "the migrations leave 10 record access field rows (5 access aliases, 5 restricted)" \
+    || bad "expected 10 access/restricted field rows after the migrations (output: $cfg_out)"
+grep -qxF "b_access_fld_changed:0" <<<"$cfg_out" && ok "the configure scripts keep every access alias and restricted field row exactly as migration 165 leaves it" \
+    || bad "a configure script drops or changes an access alias or restricted field row (output: $cfg_out)"
+grep -qxF "b_access_aliases:campaigns,manufacturing_operations,physical_samples,projects,test_sessions" <<<"$cfg_out" && ok "after the configure scripts every record type still has a hidden o2m access alias over its relation" \
+    || bad "an access alias is missing after the configure scripts (output: $cfg_out)"
+grep -qxF "b_restricted_fields:5" <<<"$cfg_out" && ok "after the configure scripts the five restricted fields are still hidden and read-only" \
+    || bad "a restricted field is missing, visible or writable after the configure scripts (output: $cfg_out)"
 rm -rf "$RES_DIR"
 
 # The migration itself. Down first (to the real pre-migration state), then seed what the old script
@@ -3774,6 +3795,199 @@ SQL
 grep -qF "names missing or ambiguous in people: Xinzef" <<<"$opb_out" \
     && ok "a referenced operator whose person is missing still fails, naming only that person" \
     || bad "a referenced operator whose person is missing still fails, naming only that person (psql output: $opb_out)"
+
+echo "== Record access: restricted flag and access tables (migration 165) =="
+# Each check is its own rolled-back transaction (ids prefix a1000000-0000-4000-8000-). A rejected
+# statement aborts psql (ON_ERROR_STOP), so the error text is what is asserted on.
+RA_MIG=db/migrations/20261012000165_record_access.sql
+[[ -f "$RA_MIG" ]] && ok "found migration 165" || bad "migration 165 is missing ($RA_MIG)"
+RA_P1='a1000000-0000-4000-8000-0000000000a1'
+RA_P2='a1000000-0000-4000-8000-0000000000a2'
+RA_P3='a1000000-0000-4000-8000-0000000000a3'
+RA_S='a1000000-0000-4000-8000-0000000000b1'
+RA_M='a1000000-0000-4000-8000-0000000000b2'
+RA_O='a1000000-0000-4000-8000-0000000000b3'
+RA_T='a1000000-0000-4000-8000-0000000000b4'
+RA_C='a1000000-0000-4000-8000-0000000000b5'
+RA_J='a1000000-0000-4000-8000-0000000000b6'
+# the five tables: table:parent column:parent table:second role
+RA_TABLES="sample_access:sample_id:physical_samples:edit operation_access:operation_id:manufacturing_operations:edit test_access:session_id:test_sessions:edit campaign_access:campaign_id:campaigns:edit project_access:project_id:projects:investigator"
+RA_PARENT_ID() { case "$1" in sample_id) echo "$RA_S";; operation_id) echo "$RA_O";; session_id) echo "$RA_T";; campaign_id) echo "$RA_C";; project_id) echo "$RA_J";; esac; }
+ra_sql() { # ra_sql <statements>: run them after the fixture records, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO people (person_id, full_name) VALUES ('$RA_P1', 'RA One'), ('$RA_P2', 'RA Two'), ('$RA_P3', 'RA Three');
+INSERT INTO projects (project_id, project_code, project_name) VALUES ('$RA_J', 'ZZ-RA-001', 'record access probe');
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('$RA_S', 'TEST-RA-001');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name) VALUES ('$RA_M', 'T-RA', 'record access test method');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code) VALUES ('$RA_O', '$RA_M', '$RA_S', 'TEST-RA-OP');
+INSERT INTO test_sessions (session_id, sample_id) VALUES ('$RA_T', '$RA_S');
+INSERT INTO campaigns (campaign_id, name, campaign_type) VALUES ('$RA_C', 'RA campaign', 'machining_trial');
+$1
+ROLLBACK;
+SQL
+}
+run_eq "the five access tables exist" \
+    "SELECT string_agg(tablename, ',' ORDER BY tablename) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('sample_access','operation_access','test_access','campaign_access','project_access')" \
+    "campaign_access,operation_access,project_access,sample_access,test_access"
+for ra_spec in $RA_TABLES; do
+    IFS=: read -r ra_t ra_pc ra_pt ra_r2 <<<"$ra_spec"
+    ra_pid=$(RA_PARENT_ID "$ra_pc")
+    run_eq "$ra_t: columns, types and defaults are as specified" \
+        "SELECT string_agg(column_name || ' ' || data_type || ' ' || is_nullable || ' ' || coalesce(column_default, '-'), '; ' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '$ra_t'" \
+        "access_id uuid NO gen_random_uuid(); $ra_pc uuid NO -; person_id uuid NO -; role text NO -; added_by_person_id uuid YES -; created_at timestamp with time zone NO now()"
+    run_eq "$ra_t: primary key access_id, unique ($ra_pc, person_id), index on person_id" \
+        "SELECT (SELECT string_agg(a.attname, ',') FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey) WHERE i.indrelid = 'public.$ra_t'::regclass AND i.indisprimary)
+         || '/' || (SELECT string_agg(pg_get_constraintdef(c.oid), ',') FROM pg_constraint c WHERE c.conrelid = 'public.$ra_t'::regclass AND c.contype = 'u')
+         || '/' || (SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND tablename = '$ra_t' AND indexdef LIKE '%(person_id)%' AND indexname <> '${ra_t}_pkey')" \
+        "access_id/UNIQUE ($ra_pc, person_id)/1"
+    run_eq "$ra_t: parent and person foreign keys cascade, added_by_person_id is set NULL" \
+        "SELECT string_agg(a.attname || '>' || c.confrelid::regclass::text || ':' || c.confdeltype::text, ',' ORDER BY a.attname COLLATE \"C\") FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] WHERE c.conrelid = 'public.$ra_t'::regclass AND c.contype = 'f'" \
+        "$(printf '%s\n' 'added_by_person_id>people:n' 'person_id>people:c' "$ra_pc>$ra_pt:c" | LC_ALL=C sort | paste -sd, -)"
+    run_eq "$ra_t has the audit trigger of migration 121" \
+        "SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.$ra_t'::regclass AND NOT t.tgisinternal AND t.tgfoid = 'audit_trigger_function'::regproc AND (t.tgtype & 1) = 1 AND (t.tgtype & 4) = 4 AND (t.tgtype & 8) = 8 AND (t.tgtype & 16) = 16" "1"
+    run_eq "$ra_t has no OCC version column" \
+        "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '$ra_t' AND column_name = 'version'" "0"
+    # roles: view and $ra_r2 are accepted; the other table's second role, owner and NULL are not
+    ra_other=$([[ "$ra_r2" == edit ]] && echo investigator || echo edit)
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', '$RA_P1', 'view'), ('$ra_pid', '$RA_P2', '$ra_r2');
+SELECT 'ra_roles:' || string_agg(role, ',' ORDER BY role) FROM $ra_t WHERE $ra_pc = '$ra_pid';
+SELECT 'ra_defaults:' || (added_by_person_id IS NULL) || ':' || (created_at IS NOT NULL) || ':' || (access_id IS NOT NULL) FROM $ra_t WHERE person_id = '$RA_P1';")
+    grep -qx "ra_roles:$ra_r2,view" <<<"$ra_out" && ok "$ra_t accepts the roles view and $ra_r2" || bad "$ra_t does not accept view and $ra_r2 (output: $ra_out)"
+    grep -qx "ra_defaults:true:true:true" <<<"$ra_out" && ok "$ra_t fills access_id and created_at, and added_by_person_id stays NULL" || bad "$ra_t defaults are wrong (output: $ra_out)"
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', '$RA_P1', '$ra_other');")
+    grep -q "${ra_t}_role_check" <<<"$ra_out" && ok "$ra_t refuses the role $ra_other (check constraint)" || bad "$ra_t accepted the role $ra_other (output: $ra_out)"
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', '$RA_P1', 'owner');")
+    grep -q "${ra_t}_role_check" <<<"$ra_out" && ok "$ra_t refuses the role owner" || bad "$ra_t accepted the role owner (output: $ra_out)"
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', '$RA_P1', NULL);")
+    grep -q 'not-null constraint' <<<"$ra_out" && ok "$ra_t refuses a NULL role" || bad "$ra_t accepted a NULL role (output: $ra_out)"
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', '$RA_P1', 'view');
+INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', '$RA_P1', '$ra_r2');")
+    grep -q 'duplicate key' <<<"$ra_out" && ok "$ra_t: a person is listed once per record (unique key)" || bad "$ra_t listed a person twice on one record (output: $ra_out)"
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', 'a1000000-0000-4000-8000-0000000000ff', 'view');")
+    grep -q 'foreign key' <<<"$ra_out" && ok "$ra_t: a grant for a person that does not exist is refused" || bad "$ra_t accepted an unknown person (output: $ra_out)"
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('a1000000-0000-4000-8000-0000000000fe', '$RA_P1', 'view');")
+    grep -q 'foreign key' <<<"$ra_out" && ok "$ra_t: a grant on a record that does not exist is refused" || bad "$ra_t accepted an unknown record (output: $ra_out)"
+    # cascades: the person's rows go with the person (only theirs); the record's list goes with the record;
+    # deleting the person who added a grant keeps the grant and clears added_by_person_id
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role, added_by_person_id) VALUES ('$ra_pid', '$RA_P1', 'view', '$RA_P3'), ('$ra_pid', '$RA_P2', '$ra_r2', '$RA_P3');
+DELETE FROM people WHERE person_id = '$RA_P1';
+SELECT 'ra_person_cascade:' || string_agg(person_id::text, ',') FROM $ra_t;
+DELETE FROM people WHERE person_id = '$RA_P3';
+SELECT 'ra_added_by:' || count(*) || ':' || count(added_by_person_id) FROM $ra_t;")
+    grep -qx "ra_person_cascade:$RA_P2" <<<"$ra_out" && ok "$ra_t: deleting a person removes their access rows and only theirs" || bad "$ra_t rows did not follow their person (output: $ra_out)"
+    grep -qx "ra_added_by:1:0" <<<"$ra_out" && ok "$ra_t: deleting the person who added a grant keeps it and clears added_by_person_id" || bad "$ra_t added_by_person_id did not clear (output: $ra_out)"
+    case "$ra_pc" in
+        sample_id)    ra_del="DELETE FROM test_sessions WHERE sample_id = '$RA_S'; DELETE FROM manufacturing_operations WHERE sample_id = '$RA_S'; DELETE FROM physical_samples WHERE sample_id = '$RA_S';";;
+        operation_id) ra_del="DELETE FROM manufacturing_operations WHERE operation_id = '$RA_O';";;
+        session_id)   ra_del="DELETE FROM test_sessions WHERE session_id = '$RA_T';";;
+        campaign_id)  ra_del="DELETE FROM campaigns WHERE campaign_id = '$RA_C';";;
+        project_id)   ra_del="DELETE FROM projects WHERE project_id = '$RA_J';";;
+    esac
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', '$RA_P1', 'view'), ('$ra_pid', '$RA_P2', '$ra_r2');
+$ra_del
+SELECT 'ra_parent_cascade:' || count(*) FROM $ra_t;")
+    grep -qx "ra_parent_cascade:0" <<<"$ra_out" && ok "$ra_t: deleting the record removes its whole access list" || bad "$ra_t rows survived their record (output: $ra_out)"
+    ra_out=$(ra_sql "INSERT INTO $ra_t ($ra_pc, person_id, role) VALUES ('$ra_pid', '$RA_P1', 'view');
+UPDATE $ra_t SET role = '$ra_r2' WHERE person_id = '$RA_P1';
+DELETE FROM $ra_t WHERE person_id = '$RA_P1';
+SELECT 'ra_audit:' || string_agg(action_type, ',' ORDER BY log_id) FROM audit_logs WHERE table_name = '$ra_t';
+SELECT 'ra_audit_key:' || count(*) FROM audit_logs WHERE table_name = '$ra_t' AND record_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\$';
+SELECT 'ra_audit_changed:' || (changed_fields -> 'role' ->> 'old') || '>' || (changed_fields -> 'role' ->> 'new') FROM audit_logs WHERE table_name = '$ra_t' AND action_type = 'UPDATE';")
+    grep -qx "ra_audit:INSERT,UPDATE,DELETE" <<<"$ra_out" && ok "$ra_t: INSERT, UPDATE and DELETE each write an audit row" || bad "$ra_t audit rows are wrong (output: $ra_out)"
+    grep -qx "ra_audit_key:3" <<<"$ra_out" && ok "$ra_t: audit record_id is the access_id" || bad "$ra_t audit record_id is not the access_id (output: $ra_out)"
+    grep -qx "ra_audit_changed:view>$ra_r2" <<<"$ra_out" && ok "$ra_t: the audit row of a role change records old and new" || bad "$ra_t audit changed_fields is wrong (output: $ra_out)"
+    run_eq "$ra_t: the table, every column and the person index have comments (without: none)" \
+        "SELECT coalesce(string_agg(x, ', '), '') FROM (
+            SELECT c.relname AS x FROM pg_class c WHERE c.oid IN ('public.$ra_t'::regclass, 'public.${ra_t}_person_idx'::regclass) AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+            UNION ALL
+            SELECT a.attname FROM pg_attribute a WHERE a.attrelid = 'public.$ra_t'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND coalesce(col_description(a.attrelid, a.attnum), '') = '') q" ""
+done
+# the restricted flag
+RA_PARENTS="physical_samples manufacturing_operations test_sessions campaigns projects"
+for ra_pt in $RA_PARENTS; do
+    run_eq "$ra_pt.restricted is BOOLEAN NOT NULL DEFAULT false" \
+        "SELECT data_type || ' ' || is_nullable || ' ' || column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '$ra_pt' AND column_name = 'restricted'" \
+        "boolean NO false"
+    run_eq "$ra_pt: no row is restricted after the migration" "SELECT count(*) FROM $ra_pt WHERE restricted" "0"
+    run_eq "idx_${ra_pt}_restricted is a partial index WHERE restricted" \
+        "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND tablename = '$ra_pt' AND indexname = 'idx_${ra_pt}_restricted' AND indexdef LIKE '%(restricted) WHERE restricted%'" "1"
+    run_eq "$ra_pt.restricted and its index have comments" \
+        "SELECT (coalesce(col_description('public.$ra_pt'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.$ra_pt'::regclass AND attname = 'restricted')), '') <> '')::text || '/' || (coalesce(obj_description('public.idx_${ra_pt}_restricted'::regclass, 'pg_class'), '') <> '')::text" \
+        "true/true"
+done
+ra_out=$(ra_sql "SELECT 'ra_new_rows:' || ((SELECT restricted::int FROM physical_samples WHERE sample_id = '$RA_S') + (SELECT restricted::int FROM manufacturing_operations WHERE operation_id = '$RA_O') + (SELECT restricted::int FROM test_sessions WHERE session_id = '$RA_T') + (SELECT restricted::int FROM campaigns WHERE campaign_id = '$RA_C') + (SELECT restricted::int FROM projects WHERE project_id = '$RA_J'));")
+grep -qx "ra_new_rows:0" <<<"$ra_out" \
+    && ok "a record inserted without the column is unrestricted (the default, so no insert path needs to know the flag)" \
+    || bad "a new record is not unrestricted by default (output: $ra_out)"
+# Directus metadata as the migration leaves it
+run_eq "the five access tables are hidden Directus collections" \
+    "SELECT string_agg(collection, ',' ORDER BY collection) FROM directus_collections WHERE collection IN ('sample_access','operation_access','test_access','campaign_access','project_access') AND hidden" \
+    "campaign_access,operation_access,project_access,sample_access,test_access"
+run_eq "each parent foreign key has a relation with one_field 'access'" \
+    "SELECT string_agg(many_collection || '.' || many_field || '>' || one_collection, ',' ORDER BY many_collection) FROM directus_relations WHERE one_field = 'access'" \
+    "campaign_access.campaign_id>campaigns,operation_access.operation_id>manufacturing_operations,project_access.project_id>projects,sample_access.sample_id>physical_samples,test_access.session_id>test_sessions"
+run_eq "person_id of each access table has a relation to people, with no alias" \
+    "SELECT string_agg(many_collection, ',' ORDER BY many_collection) FROM directus_relations WHERE many_field = 'person_id' AND one_collection = 'people' AND one_field IS NULL AND many_collection IN ('sample_access','operation_access','test_access','campaign_access','project_access')" \
+    "campaign_access,operation_access,project_access,sample_access,test_access"
+run_eq "each relation exists once (no duplicates)" \
+    "SELECT count(*) FROM (SELECT many_collection, many_field FROM directus_relations WHERE many_collection IN ('sample_access','operation_access','test_access','campaign_access','project_access') GROUP BY 1, 2 HAVING count(*) > 1) d" "0"
+run_eq "the five 'access' alias fields are hidden o2m rows on the parents" \
+    "SELECT string_agg(collection, ',' ORDER BY collection) FROM directus_fields WHERE field = 'access' AND special = 'o2m' AND hidden AND collection IN ('physical_samples','manufacturing_operations','test_sessions','campaigns','projects')" \
+    "campaigns,manufacturing_operations,physical_samples,projects,test_sessions"
+run_eq "the five 'restricted' fields are hidden and read-only" \
+    "SELECT string_agg(collection, ',' ORDER BY collection) FROM directus_fields WHERE field = 'restricted' AND hidden AND readonly AND collection IN ('physical_samples','manufacturing_operations','test_sessions','campaigns','projects')" \
+    "campaigns,manufacturing_operations,physical_samples,projects,test_sessions"
+# every alias resolves: relation + alias field + a real column behind each side
+run_eq "every access alias resolves (relation, alias field and both columns exist; unresolved: none)" \
+    "SELECT coalesce(string_agg(r.many_collection, ', '), '') FROM directus_relations r
+     WHERE r.one_field = 'access'
+       AND (NOT EXISTS (SELECT 1 FROM directus_fields f WHERE f.collection = r.one_collection AND f.field = 'access')
+         OR NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = r.many_collection AND c.column_name = r.many_field)
+         OR NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = r.one_collection AND c.column_name = 'restricted'))" ""
+# down, then up again, in one rolled-back transaction: down removes everything (columns, tables, metadata),
+# up restores it, a relation that points somewhere else stops the migration
+ra_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RA_MIG")
+ra_down=$(awk '/-- migrate:down/{f=1;next}f' "$RA_MIG")
+ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+CREATE TEMP TABLE ra_before AS
+  SELECT (SELECT count(*) FROM directus_relations WHERE many_collection LIKE '%\_access') AS rels,
+         (SELECT count(*) FROM directus_fields WHERE field IN ('access','restricted')) AS flds,
+         (SELECT count(*) FROM directus_collections WHERE collection LIKE '%\_access') AS cols;
+$ra_down
+SELECT 'ra_down_tables:' || count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('sample_access','operation_access','test_access','campaign_access','project_access');
+SELECT 'ra_down_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'restricted' AND table_name IN ('physical_samples','manufacturing_operations','test_sessions','campaigns','projects');
+SELECT 'ra_down_indexes:' || count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname LIKE 'idx\_%\_restricted';
+SELECT 'ra_down_meta:' || (SELECT count(*) FROM directus_relations WHERE many_collection LIKE '%\_access') || '/' || (SELECT count(*) FROM directus_fields WHERE field IN ('access','restricted') OR collection LIKE '%\_access') || '/' || (SELECT count(*) FROM directus_collections WHERE collection LIKE '%\_access');
+$ra_up
+SELECT 'ra_up_again:' || (a.rels = (SELECT count(*) FROM directus_relations WHERE many_collection LIKE '%\_access')) || '/' || (a.flds = (SELECT count(*) FROM directus_fields WHERE field IN ('access','restricted'))) || '/' || (a.cols = (SELECT count(*) FROM directus_collections WHERE collection LIKE '%\_access')) FROM ra_before a;
+ROLLBACK;
+SQL
+)
+grep -qx "ra_down_tables:0" <<<"$ra_out" && ok "165 down drops the five tables" || bad "165 down left a table (output: $ra_out)"
+grep -qx "ra_down_columns:0" <<<"$ra_out" && ok "165 down drops the restricted columns" || bad "165 down left a restricted column (output: $ra_out)"
+grep -qx "ra_down_indexes:0" <<<"$ra_out" && ok "165 down drops the partial indexes" || bad "165 down left an index (output: $ra_out)"
+grep -qx "ra_down_meta:0/0/0" <<<"$ra_out" && ok "165 down removes the Directus relations, fields and collections it added" || bad "165 down left Directus metadata (output: $ra_out)"
+grep -qx "ra_up_again:true/true/true" <<<"$ra_out" && ok "165 up after down restores the same metadata" || bad "165 up after down differs (output: $ra_out)"
+ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+$ra_down
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('sample_access', 'sample_id', 'projects', NULL);
+$ra_up
+ROLLBACK;
+SQL
+)
+grep -q "access rules need" <<<"$ra_out" && ok "165 stops when a relation it needs already points at another collection" || bad "165 did not stop on a relation pointing elsewhere (output: $ra_out)"
+ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+$ra_down
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('campaign_samples', 'sample_id', 'physical_samples', 'access');
+$ra_up
+ROLLBACK;
+SQL
+)
+grep -q "already used by another relation" <<<"$ra_out" && ok "165 stops when the alias 'access' is already taken on a parent" || bad "165 did not stop on a taken alias (output: $ra_out)"
 
 echo "== Cleanup test rows =="
 $PSQL -c "

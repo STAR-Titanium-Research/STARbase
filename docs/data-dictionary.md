@@ -44,6 +44,13 @@ Projects & campaigns
   campaign_samples             M2M: samples in a campaign
   project_rollup               read-only cache of v_project_rollup, rebuilt by trigger
 
+Record access (A1a)
+  sample_access                who has access to a sample, by person (view / edit)
+  operation_access             the same for a manufacturing operation (view / edit)
+  test_access                  the same for a test session (view / edit)
+  campaign_access              the same for a campaign (view / edit)
+  project_access               the same for a project (view / investigator)
+
 Raw-material provenance
   raw_stock_lots               inbound material ledger
 
@@ -160,6 +167,7 @@ The central entity. Everything else points to or from here.
 | `export_controlled` | BOOLEAN | ITAR/ECJU flag; drives RBAC visibility |
 | `owner_person_id` | UUID FK | References `people.person_id`; the owner. Owner and co-owners may edit the sample; only the owner may delete it ([ADR-0011](adr/0011-row-level-visibility.md)) |
 | `co_owners_legacy` | TEXT | Legacy comma-separated co-owner e-mails from the AppSheet import (renamed from `co_owners`, migration `…140`). The live co-owners are the `sample_co_owners` rows, shown in Directus as the `co_owners` M2M field. Absent on databases that already dropped the column |
+| `restricted` | BOOLEAN NOT NULL DEFAULT false | Restricted record (migration `…165`, see "Record access" below). Hidden and read-only in Directus; changed only by the record-access endpoint |
 | `version` | INTEGER | OCC version counter (incremented by trigger on UPDATE) |
 | `updated_at` | TIMESTAMPTZ | Auto-updated by OCC trigger |
 
@@ -370,6 +378,40 @@ metadata-only edit of a `.mat` file. Rows are deleted with their file (`ON DELET
 Indexes: `file_fingerprints_content_idx` on `content_sha256` (duplicate and copy detection);
 `file_fingerprints_data_idx` on `data_sha256`, partial (`WHERE data_sha256 IS NOT NULL`).
 `CHECK`s: both hashes are 64 lower-case hex characters; `status = 'done'` needs a `content_sha256`.
+
+---
+
+### Record access: `sample_access`, `operation_access`, `test_access`, `campaign_access`, `project_access`
+
+Who has access to one record, by person (migration `…165`, A1a; spec
+`docs/superpowers/specs/2026-10-12-record-access-design.md`). There is one table per record type so
+that each parent has its own hidden `access` list for the Directus row filters. Keyed by **person**
+(`people.person_id`), not by login, so a person with no login can be listed; the grant starts working
+when an admin links the login (`people.user_id`). The five tables have the same shape. They are
+written only through the record-access endpoint and are audited (migration `…121` trigger); they have
+no OCC `version`. In A1a they are stored and hidden in Directus; the rules that read them arrive in
+later migrations, so until then they change nothing anyone can see.
+
+| Column | Type | Description |
+|---|---|---|
+| `access_id` | UUID PK | Surrogate key (`gen_random_uuid()`) |
+| `sample_id` / `operation_id` / `session_id` / `campaign_id` / `project_id` | UUID NOT NULL FK | The record (`physical_samples`, `manufacturing_operations`, `test_sessions`, `campaigns`, `projects`), named per table. `ON DELETE CASCADE`: the list goes with the record |
+| `person_id` | UUID NOT NULL FK | References `people.person_id`. `ON DELETE CASCADE`: a deleted person's grants go with them |
+| `role` | TEXT NOT NULL | `view` or `edit`; in `project_access` `view` or `investigator` (a secondary investigator) |
+| `added_by_person_id` | UUID FK | Who made the grant; `ON DELETE SET NULL` |
+| `created_at` | TIMESTAMPTZ NOT NULL | When the grant was made (default `now()`) |
+
+`UNIQUE (<record column>, person_id)`: a person is listed once per record. Index `<table>_person_idx`
+on `person_id`. `CHECK` on `role` as above (`<table>_role_check`). Directus: each table is a hidden
+collection; each parent has a hidden O2M alias `access` over its list, and `person_id` is a relation
+to `people` with no alias. The existing `sample_co_owners` and `project_investigators` stay honoured
+beside these (decision 17 of the spec).
+
+**`restricted`** (also migration `…165`): `BOOLEAN NOT NULL DEFAULT false` on `physical_samples`,
+`manufacturing_operations`, `test_sessions`, `campaigns` and `projects`, each with a partial index
+`idx_<table>_restricted ... WHERE restricted`. The default keeps every existing record unrestricted
+and stops Directus from treating the column as required. A hidden, read-only Directus field; no
+interface shows or changes it in A1a.
 
 ---
 

@@ -1004,6 +1004,45 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES ('projects', 'principal_investigator_person', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}","enableCreate":true}', 'related-values', '{"template":"{{full_name}}"}', FALSE, FALSE, 8, 'half', FALSE, '[{"language": "en-US", "translation": "Principal Investigator"}]');
 UPDATE directus_fields SET hidden = TRUE WHERE (collection, field) IN (('physical_samples','owner'), ('manufacturing_operations','owner'), ('test_sessions','owner'), ('tool_boxes','owner'), ('cutting_inserts','owner'), ('insert_edges','owner'), ('manufacturing_operations','operator'), ('test_sessions','operator'));
 
+-- ── record access (migration 165, A1a) ─────────────────────────────────────────
+-- The five access tables and the `restricted` flag. The field deletes above wipe the hidden `access`
+-- alias and the hidden read-only `restricted` field of physical_samples, manufacturing_operations,
+-- test_sessions and projects, and the relations of the access tables are kept here the same way as the
+-- owner relations: the record-access rules filter on `access._some.person_id.user_id`, which only works
+-- while the alias, the parent relation and the person_id -> people relation exist. (configure_campaigns.sql
+-- re-adds the campaign side, because it deletes everything that touches campaigns.) Same rows as
+-- migration 165; tests/phase1_schema.sh checks them after the scripts have run.
+DELETE FROM directus_relations WHERE many_collection IN ('sample_access','operation_access','test_access','campaign_access','project_access');
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+('sample_access',    'sample_id',    'physical_samples',         'access', 'delete'),
+('operation_access', 'operation_id', 'manufacturing_operations', 'access', 'delete'),
+('test_access',      'session_id',   'test_sessions',            'access', 'delete'),
+('campaign_access',  'campaign_id',  'campaigns',                'access', 'delete'),
+('project_access',   'project_id',   'projects',                 'access', 'delete'),
+('sample_access',    'person_id',    'people',                   NULL,     'nullify'),
+('operation_access', 'person_id',    'people',                   NULL,     'nullify'),
+('test_access',      'person_id',    'people',                   NULL,     'nullify'),
+('campaign_access',  'person_id',    'people',                   NULL,     'nullify'),
+('project_access',   'person_id',    'people',                   NULL,     'nullify');
+DELETE FROM directus_fields WHERE field IN ('access','restricted') AND collection IN ('physical_samples','manufacturing_operations','test_sessions','projects');
+INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, note) VALUES
+('physical_samples','access','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,90,'full',
+    'Hidden alias over sample_access.sample_id: the access list the record-access rules filter on (A1a).'),
+('manufacturing_operations','access','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,90,'full',
+    'Hidden alias over operation_access.operation_id: the access list the record-access rules filter on (A1a).'),
+('test_sessions','access','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,90,'full',
+    'Hidden alias over test_access.session_id: the access list the record-access rules filter on (A1a).'),
+('projects','access','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,90,'full',
+    'Hidden alias over project_access.project_id: the access list the record-access rules filter on (A1a).'),
+('physical_samples','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
+    'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.'),
+('manufacturing_operations','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
+    'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.'),
+('test_sessions','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
+    'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.'),
+('projects','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
+    'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.');
+
 COMMIT;
 
 -- Verify
