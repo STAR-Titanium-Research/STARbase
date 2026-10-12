@@ -105,6 +105,11 @@ services:
       CORS_ORIGIN: ${FORCE_APP_ORIGIN:-http://localhost:5180}
       # Auto-load local extensions (the actor-identity audit hook).
       EXTENSIONS_AUTO_RELOAD: "true"
+      # Thumbnails of the force figures (frm_fz PNGs, ~6,100 x 5,900 px, ~20 MB) for the Explorer's
+      # card view: Directus refuses to transform images over 6000 px and gives up after 7.5 s by
+      # default. The sizes must also be known (scripts/backfill_image_dims.py fills the NULL ones).
+      ASSETS_TRANSFORM_IMAGE_MAX_DIMENSION: "8000"
+      ASSETS_TRANSFORM_TIMEOUT: "30000"
       # NOTE: we deliberately do NOT declare a `star` storage location. The
       # archive files (directus_files.storage='star') are browse/link only — users
       # open them via UNC/Explorer (d1-archive-links), never downloaded through
