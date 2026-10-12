@@ -59,6 +59,7 @@ import functools
 import hashlib
 import logging
 import os
+import re
 import time
 from typing import Annotated, Literal
 from urllib.parse import parse_qs, quote, urlparse
@@ -360,6 +361,9 @@ _D1_CACHE_MAX = 256
 # sha256(token) -> (monotonic expiry, user). Accepted sign-ins only: a refusal is asked again.
 _d1_cache: dict[str, tuple[float, dict]] = {}
 _now = time.monotonic  # the sign-in cache's clock; tests replace it
+# A D1 access token is a JWT: printable ASCII only. Anything else is refused before Directus is asked
+# (httpx would raise on a non-ASCII header value, and the token must not end up in a traceback).
+_BEARER_RE = re.compile(r"[!-~]{1,4096}")
 
 
 class _D1Unavailable(Exception):  # noqa: N818 - name fixed by the task interface
@@ -419,7 +423,7 @@ async def _rig_gate(authorization: str, action: str) -> dict | JSONResponse | No
         return _failure("rig tests not configured")
     scheme, _, token = authorization.partition(" ")
     token = token.strip()
-    if scheme.lower() != "bearer" or not token:
+    if scheme.lower() != "bearer" or not _BEARER_RE.fullmatch(token):
         return JSONResponse(_failure(D1_REJECTED), status_code=403)
     try:
         user = await _d1_user(token)

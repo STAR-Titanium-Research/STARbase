@@ -590,6 +590,29 @@ def test_every_rig_endpoint_rejects_a_missing_or_refused_sign_in(gh, headers):
     assert gh.comments[9]["body"] == "progress"
 
 
+@pytest.mark.parametrize(
+    "token",
+    ["café".encode("latin-1"), b"\xff\xfe", b"a" * 4097, b"has\ttab"],
+    ids=["non-ascii", "high-bytes", "over-long", "control-char"],
+)
+def test_a_bearer_that_is_not_a_plausible_token_is_refused_before_directus(gh, token):
+    """Starlette decodes headers as latin-1; httpx would raise on a non-ASCII value, so such a
+    token must be a plain 403 and never reach Directus (nor a traceback)."""
+    gh.issue(5)
+    c = TestClient(srv.app)
+    headers = {"Authorization": b"Bearer " + token}
+    for r in (
+        c.get("/rig-tests", headers=headers),
+        c.post("/rig-tests/5/comment", json={"body": "hi"}, headers=headers),
+        c.patch("/rig-tests/5/comment/9", json={"body": "hi"}, headers=headers),
+        c.post("/rig-tests/5/state", json={"state": "done"}, headers=headers),
+    ):
+        assert r.status_code == 403
+        assert r.json() == {"ok": False, "reason": "D1 sign-in rejected"}
+    assert gh.d1.calls == 0
+    assert gh.calls == []
+
+
 def test_a_signed_in_operator_is_accepted_and_logged_without_the_token(gh, caplog):
     gh.issue(5)
     with caplog.at_level(logging.INFO, logger="bug-report-relay"):
