@@ -6,8 +6,8 @@
 -- fields that go into the QR payload.
 --
 -- Permissions (decision 6): every Lab Member reads and creates; update and delete only where
--- user_created is the signed-in user; admins (admin_access policy) can do everything. The Lab Member
--- rows are the ones scripts/access_rules.json generates for `label_templates` (set label.owner).
+-- user_created is the signed-in user (create and update cannot touch is_default or the system columns); admins (admin_access policy) can do everything. The Lab Member
+-- rows are the ones scripts/access_rules.json generates for `label_templates` (custom rows).
 -- Directus caches permissions: flush Redis and restart Directus after applying.
 
 CREATE TABLE label_templates (
@@ -186,16 +186,18 @@ SELECT * FROM (VALUES
 WHERE NOT EXISTS (SELECT 1 FROM directus_relations r WHERE r.many_collection = v.many_collection AND r.many_field = v.many_field);
 
 -- Lab Member permissions: the rows scripts/access_rules.json generates for label_templates
--- (`python3 scripts/gen_access_rules.py --values`): create and read unfiltered, update and delete
--- only where user_created is the signed-in user.
+-- (`python3 scripts/gen_access_rules.py --values`). Read is open. Create and update are limited to the
+-- content columns, so is_default, id and the system columns (user_created, user_updated,
+-- date_created, date_updated, updated_at, version) are admin-only. Update and delete only where
+-- user_created is the signed-in user.
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
-SELECT 'label_templates', v.action, v.permissions::json, '{}'::json, NULL, '*', '20000002-0000-0000-0000-000000000002'
+SELECT 'label_templates', v.action, v.permissions::json, '{}'::json, NULL, v.fields, '20000002-0000-0000-0000-000000000002'
 FROM (VALUES
-    ('create', '{}'),
-    ('read', '{}'),
-    ('update', '{"user_created":{"_eq":"$CURRENT_USER"}}'),
-    ('delete', '{"user_created":{"_eq":"$CURRENT_USER"}}')
-) v(action, permissions)
+    ('create', '{}', 'name,description,media,page_width_mm,page_height_mm,columns,rows,label_width_mm,label_height_mm,margin_top_mm,margin_left_mm,gap_x_mm,gap_y_mm,padding_mm,arrangement,qr_size_mm,fields,qr_fields'),
+    ('read', '{}', '*'),
+    ('update', '{"user_created":{"_eq":"$CURRENT_USER"}}', 'name,description,media,page_width_mm,page_height_mm,columns,rows,label_width_mm,label_height_mm,margin_top_mm,margin_left_mm,gap_x_mm,gap_y_mm,padding_mm,arrangement,qr_size_mm,fields,qr_fields'),
+    ('delete', '{"user_created":{"_eq":"$CURRENT_USER"}}', '*')
+) v(action, permissions, fields)
 WHERE NOT EXISTS (
     SELECT 1 FROM directus_permissions p
     WHERE p.policy = '20000002-0000-0000-0000-000000000002'

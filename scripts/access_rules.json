@@ -51,7 +51,6 @@
       "campaign_id.project_id.secondary_investigators._some.user_id"
     ],
     "campaign.owner": ["owner_person_id.user_id"],
-    "label.owner": ["user_created"],
     "campaign.read": [
       "owner_person_id.user_id",
       "project_id.principal_investigator_person.user_id",
@@ -100,7 +99,6 @@
     "manufacturing_operations": {"create": "any", "read": "record.read", "update": "record.update", "delete": "record.owner"},
     "test_sessions": {"create": "any", "read": "record.read", "update": "record.update", "delete": "record.owner"},
     "campaigns": {"create": "any", "read": "campaign.read", "update": "campaign.owner", "delete": "campaign.owner"},
-    "label_templates": {"create": "any", "read": "any", "update": "label.owner", "delete": "label.owner"},
     "projects": {"create": "any", "read": "project.read", "update": "project.pi", "delete": "project.pi"},
     "sample_co_owners": {"create": "any", "read": "link.sample.read", "update": "link.sample.editors", "delete": "link.sample.editors"},
     "sample_stock_provenance": {"create": "any", "read": "link.sample.read", "update": "link.sample.editors", "delete": "link.sample.editors"},
@@ -122,6 +120,12 @@
       "create": {"validation": {"_or": [{"user_id": {"_null": true}}, {"user_id": {"_eq": "$CURRENT_USER"}}]}},
       "read": {},
       "update": {"fields": ["full_name", "email", "is_operator", "is_researcher", "active", "notes"]}
+    },
+    "label_templates": {
+      "create": {"fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
+      "read": {},
+      "update": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}, "fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
+      "delete": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}}
     }
   },
   "guards": {

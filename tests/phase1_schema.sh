@@ -348,6 +348,8 @@ SELECT 'up_fields:' || count(*) FROM directus_fields WHERE collection='label_tem
 SELECT 'up_relations:' || count(*) FROM directus_relations WHERE many_collection='label_templates';
 SELECT 'up_perm_rows:' || string_agg(action || '=' || permissions::text, ';' ORDER BY action)
   FROM directus_permissions WHERE collection='label_templates' AND policy='20000002-0000-0000-0000-000000000002';
+SELECT 'up_perm_fields:' || string_agg(action || '=' || coalesce(array_length(string_to_array(fields, ','), 1), 0) || '/' || (fields ~ '(^|,)(id|is_default|user_created|user_updated|date_created|date_updated|updated_at|version)(,|$)'), ';' ORDER BY action)
+  FROM directus_permissions WHERE collection='label_templates' AND policy='20000002-0000-0000-0000-000000000002';
 SELECT 'up_comments:' || count(*) FROM information_schema.columns c
   WHERE c.table_name='label_templates' AND c.table_schema='public'
     AND col_description('label_templates'::regclass, c.ordinal_position::int) IS NULL;
@@ -391,6 +393,7 @@ lt_check "up_fields:26" "up: every column has a Directus field row"
 lt_check "up_relations:2" "up: user_created and user_updated relate to directus_users"
 lt_check 'up_perm_rows:create={};delete={"user_created":{"_eq":"$CURRENT_USER"}};read={};update={"user_created":{"_eq":"$CURRENT_USER"}}' \
     "up: Lab Members read and create freely, update and delete only their own rows"
+lt_check "up_perm_fields:create=18/false;delete=1/false;read=1/false;update=18/false"     "up: Lab Member create and update cannot set is_default, id or the system columns"
 lt_check "up_comments:0" "up: every column carries a COMMENT"
 lt_check "up_tbl_comment:true" "up: the table carries a COMMENT"
 lt_check "up_triggers:audit_label_templates,occ_label_templates" "up: OCC and audit triggers are attached"
@@ -2865,9 +2868,9 @@ SELECT 'up_people_update_fields:' || fields FROM directus_permissions WHERE poli
 SELECT 'up_people_create_validation:' || (validation::jsonb ? '_or') FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='create';
 $sf_up
 $jr_up
--- 20261012000163 (label_templates) runs after these and adds its four rows, which are the generated ones
+-- 20261012000163 (label_templates, a custom-rows collection) runs after these and adds its four rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, '*', '$LM' FROM _gen WHERE collection = 'label_templates';
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection = 'label_templates';
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
