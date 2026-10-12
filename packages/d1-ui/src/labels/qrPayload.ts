@@ -13,7 +13,7 @@ export const QR_HEADER = 'D1 SAMPLE';
 const SEP = ' · ';
 
 // One value on one line: line breaks and tabs become spaces so the line structure survives.
-const oneLine = (v: string): string => v.replace(/[\r\n\t  ]+/g, ' ').replace(/ {2,}/g, ' ').trim();
+const oneLine = (v: string): string => v.replace(/\s+/g, ' ').trim();
 
 export function buildQrPayload(s: LabelSample, extraKeys: readonly FieldKey[]): string {
 	const want = new Set(extraKeys);
