@@ -57,8 +57,8 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
    connects inbound to the rig, and the backend still listens on loopback only. The relay also
    authenticates its caller: every `/rig-tests*` call must carry the signed-in operator's D1
    (Directus) access token as `Authorization: Bearer`, which the web app lends to its local
-   backend while the session is online. The relay checks it with Directus (`/users/me`, active
-   user, cached 60 s) and logs which D1 user made each call. Without it a tailnet host could post
+   backend while the session is online. The relay checks it with Directus (`/users/me`, cached
+   60 s) and logs which D1 user made each call. Without it a tailnet host could post
    a forged result as the App bot. No credential is built into the app or stored on the PC, and
    the relay refuses to edit a comment that already holds a result. (Amended 2026-10-12; phase 1
    first shipped with a shared `X-Rig-Token`, which needed copying onto every laptop.)
@@ -145,7 +145,7 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
 
 ## Verification
 
-- Relay tests: a call with no bearer, one Directus rejects, or an inactive D1 user → 403 on every
+- Relay tests: a call with no bearer, or one Directus rejects → 403 on every
   endpoint, nothing sent to GitHub; Directus down → 503; a result comment can't be edited; label applied by a login not on the allowlist → the request is not listed; an
   action comment by a login not on the allowlist, or by the relay's own bot → it is not returned.
 - Backend tests: `/record/start` → 409 while an automated step runs (and free during an `ask`); accept → 409 while recording or

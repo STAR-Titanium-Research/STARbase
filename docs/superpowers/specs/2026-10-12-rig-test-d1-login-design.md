@@ -62,11 +62,16 @@ can authenticate rig-test calls instead.
   present, or `expires_at` already past, `_call` returns
   `{"ok": false, "kind": "signed_out", "reason": "Sign in to D1 online to receive rig-test requests"}`
   without contacting the relay.
-- A 403 from the relay with reason `D1 sign-in rejected` clears the session and returns
-  `kind: "signin_rejected"`. A 503 `D1 unavailable` is treated like an unreachable relay.
-- Eligibility: `eligibility.check` (hardware) is unchanged. `GET /rig-tests/eligibility` now
-  returns `hardware_ok` and `session` separately as well as the combined `eligible` and `reason`,
-  so the web knows when to keep the token fresh. The poller polls only when both are true.
+- A 403 from the relay with reason `D1 sign-in rejected` clears the session (only if it is still
+  the token that was refused) and returns `kind: "signin_rejected"`. A 503 `D1 unavailable` gets
+  `kind: "unreachable"`, so the outbox waits instead of counting it as a refusal.
+- Eligibility: `eligibility.check` (hardware) is unchanged. `GET /rig-tests/pending` (which the
+  web already polls every 30 s) and `GET /rig-tests/eligibility` gain `session` (bool),
+  `hardware_ok` (the last hardware check, or null before the first) and `/pending` also `relay`
+  (the poller's relay state), so the web knows when to send or refresh the token without
+  triggering a DAQmx enumeration. The poller polls only when hardware and session are both there.
+- `PUT /rig-tests/session` with a token different from the current one resets the poller's relay
+  state to `unknown`, so a rejection reported afterwards always refers to the new token.
 - Removed: `TOKEN_ENV`, `TOKEN_FILE`, `token()`, `set_config_dir()` and the `rig_test_token` file
   read. A leftover file is ignored.
 - A backend restart loses the session; the web re-sends it on the next store tick (it re-sends
@@ -76,12 +81,15 @@ can authenticate rig-test calls instead.
 
 - `_rig_gate` reads `Authorization: Bearer <token>`. Missing or malformed → 403
   `{"ok": false, "reason": "D1 sign-in rejected"}`.
-- It verifies the token with Directus: `GET {DIRECTUS_INTERNAL_URL}/users/me?fields=id,email,status`
+- It verifies the token with Directus: `GET {DIRECTUS_INTERNAL_URL}/users/me?fields=id,email`
   with that bearer, 5 s timeout. `DIRECTUS_INTERNAL_URL` defaults to `http://directus:8055`
-  (the relay and Directus share the `d1net` Docker network).
-  - 200 with `status == "active"` → accepted. The relay logs the D1 user id and email next to the
+  (the relay and Directus share the `d1net` Docker network). Only `id,email` are requested: a
+  non-admin user may not be allowed to read their own `status`, and Directus already refuses to
+  refresh a suspended user's session, so a suspended account loses access within one access-token
+  lifetime (15 min) plus the 60 s cache.
+  - 200 with a user `id` → accepted. The relay logs the D1 user id and email next to the
     action it performs (list, comment, edit, state).
-  - 401/403, or a user that isn't active → 403 `D1 sign-in rejected`.
+  - 401/403, or a 200 without a user `id` → 403 `D1 sign-in rejected`.
   - Timeout, connection error or 5xx → 503 `{"ok": false, "reason": "D1 unavailable"}`.
 - Accepted results are cached for 60 s, keyed by SHA-256 of the token (the token itself is never
   stored or logged). Rejections and errors are not cached. The cache holds at most 256
@@ -133,7 +141,7 @@ client and no compatibility period is needed.
 
 ## Testing
 
-- **Relay (pytest, Directus stubbed):** no header, a token Directus rejects, an inactive user →
+- **Relay (pytest, Directus stubbed):** no header, a token Directus rejects, a 200 without a user id →
   403 on every rig-test endpoint and nothing sent to GitHub; a valid user → 200; two calls within
   60 s → one Directus call; Directus down → 503; rejections not cached; the token never appears in
   logs or responses; `rig tests not configured` still wins when the allowlist is empty.
@@ -146,7 +154,7 @@ client and no compatibility period is needed.
   before expiry only while `hardware_ok`; Settings shows the signed-out and rejected messages.
 - **E2E:** update `web/e2e/rig-tests.spec.ts` for the session call and the signed-out state.
 - **Live (runbook §C):** on d1-server, the real relay with a real D1 access token → `ok: true`;
-  no header or a made-up token → 403; a suspended D1 user → 403.
+  no header or a made-up token → 403.
 
 ## Alternatives considered
 
