@@ -358,7 +358,7 @@ and `d1-fast-dashboard` are now built from the root with the other workspace ext
   the sign-in page, then `/admin/home/samples/<id>` (the Explorer page, usable on a phone). An old
   printed label (encodes `/admin/content/physical_samples/<id>`) still opens the Content form. The
   QR and the sample link on an operation report and a test report open the Explorer pages. Needs
-  `PUBLIC_URL` set to an address the phone can reach. Since: Explorer pages E4 (PR pending).
+  `PUBLIC_URL` set to an address the phone can reach. Since: Explorer pages E4 (PR pending). **Superseded by the Explorer labels page (PR #TBD).**
 - [ ] **E4 — Force and FAST dashboards land on the Explorer.** In the Force dashboard use the "open
   record" action on an operation and on a sample: both open `/admin/home/operations/<id>` and
   `/admin/home/samples/<id>`, and Back returns to the dashboard. In the FAST dashboard **Open** on
