@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Section, type UsageEntry } from '@d1/ui';
 import { MAX_SHOWN, SHOWN, useFrequentlyUsed } from './useFrequentlyUsed';
 import { pingVisit } from '../usagePing';
@@ -63,6 +63,17 @@ function onMenuKey(e: KeyboardEvent) {
 		items[to]?.focus();
 	}
 }
+// A click anywhere outside the strip and its button closes it (focus is left where the click put it).
+function onDocumentClick(e: MouseEvent) {
+	if (!menuOpen.value) return;
+	const t = e.target as Node | null;
+	if (t && (menuEl.value?.contains(t) || menuBtn.value?.contains(t))) return;
+	menuOpen.value = false;
+	confirming.value = false;
+}
+onMounted(() => document.addEventListener('click', onDocumentClick));
+onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick));
+
 async function confirmClear() {
 	closeMenu();
 	await clear();
@@ -118,13 +129,13 @@ function openedElsewhere(e: UsageEntry) {
 		<template v-else>
 			<p v-if="error" class="d1-note quiet" role="status">{{ error }}</p>
 			<div class="cols">
-				<div class="list" aria-label="Pages and actions">
+				<section class="list" aria-label="Pages and actions">
 					<h3 tabindex="-1">Pages &amp; actions</h3>
 					<ul>
 						<li v-for="e in shownPages" :key="e.target" class="row">
 							<a v-if="e.newTab" class="name" :href="e.to" target="_blank" rel="noopener" @click="openedElsewhere(e)">{{ e.label }}</a>
 							<router-link v-else class="name" :to="e.to">{{ e.label }}</router-link>
-							<span v-if="e.suggested" class="d1-tag suggested">Suggested</span>
+							<span v-if="e.suggested" class="suggested">Suggested</span>
 							<button
 								type="button"
 								class="icon-btn pin"
@@ -148,9 +159,9 @@ function openedElsewhere(e: UsageEntry) {
 						:aria-expanded="expanded.pages"
 						@click="expanded.pages = !expanded.pages"
 					>{{ expanded.pages ? 'Show fewer' : 'Show more' }}</button>
-				</div>
+				</section>
 
-				<div class="list" aria-label="Records">
+				<section class="list" aria-label="Records">
 					<h3 tabindex="-1">Records</h3>
 					<ul v-if="recordList.length">
 						<li v-for="e in shownRecords" :key="e.target" class="row">
@@ -179,7 +190,7 @@ function openedElsewhere(e: UsageEntry) {
 						:aria-expanded="expanded.records"
 						@click="expanded.records = !expanded.records"
 					>{{ expanded.records ? 'Show fewer' : 'Show more' }}</button>
-				</div>
+				</section>
 			</div>
 		</template>
 	</Section>
@@ -199,7 +210,12 @@ ul { list-style: none; margin: 0; padding: 0; }
 	color: var(--d1-accent, var(--theme--primary)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .name:hover { text-decoration: underline; }
-.suggested { flex: none; }
+/* Its own pill: the shared .d1-tag rule is scoped to RecordCard, so it does not reach this card. */
+.suggested {
+	flex: none; padding: 1px 7px; border-radius: 99px; font-size: var(--fs-xs); font-weight: 650; white-space: nowrap;
+	color: var(--d1-dim, var(--theme--foreground-subdued)); background: var(--d1-tile, var(--theme--background-subdued));
+	border: 1px solid var(--d1-line, var(--theme--border-color-subdued));
+}
 .icon-btn {
 	flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
 	font: inherit; font-size: 14px; line-height: 1; cursor: pointer; border: 0; border-radius: 6px; background: transparent;
@@ -213,6 +229,8 @@ ul { list-style: none; margin: 0; padding: 0; }
 .pin { filter: grayscale(1); opacity: 0.35; font-size: 12px; }
 .row:hover .pin, .pin:focus-visible { opacity: 0.8; }
 .pin.on { filter: none; opacity: 1; }
+/* No hover on a touch screen: the toggle rests at full strength (still grey until it is on). */
+@media (hover: none) { .pin { opacity: 1; } }
 .more { margin-top: 6px; padding: 2px 0; font: inherit; font-size: var(--fs-sm); font-weight: 600; cursor: pointer; border: 0; background: none; color: var(--d1-accent, var(--theme--primary)); }
 .more:hover { text-decoration: underline; }
 .quiet { margin: 0 0 8px; }

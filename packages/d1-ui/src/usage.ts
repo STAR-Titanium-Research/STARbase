@@ -100,7 +100,6 @@ const RECORD_SLUGS: Record<string, string> = {
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const INT_ID = /^[1-9][0-9]{0,17}$/;
 
 // A route's path, without its query, hash, trailing slash or the app's /admin base.
 function cleanPath(path: string): string {
@@ -118,16 +117,24 @@ export function pageTarget(path: string): string | null {
 	return m && SLUG_PAGES.has(m[1]) ? m[1] : null;
 }
 
-// "<collection>:<id>" for one of the seven collections with a uuid or positive-integer id, else null.
+// "<collection>:<id>" for one of the seven collections with a uuid id (all seven have uuid keys), else null.
 export function recordTarget(collection: string, id: string | number | null | undefined): string | null {
 	if (!RECORD_COLLECTIONS.includes(collection)) return null;
 	const value = String(id ?? '').toLowerCase();
-	return UUID.test(value) || INT_ID.test(value) ? `${collection}:${value}` : null;
+	return UUID.test(value) ? `${collection}:${value}` : null;
 }
 
-// What a route is, as a ping: a page key, or the record whose Explorer page it is. null = nothing to count.
+// What a route is, as a ping: a page key, or the record whose Explorer page it is. null = nothing to
+// count. An equipment item has no page of its own, only a drawer on the equipment list (?open=<id>):
+// opening one counts as a visit to that item. People have neither a page nor a drawer, so a person
+// is counted only when edited (the activity fold) or pinned.
 export function routeTarget(path: string): { kind: UsageKind; target: string } | null {
 	const page = pageTarget(path);
+	if (page === 'equipment') {
+		const open = new URLSearchParams(path.split('#')[0].split('?')[1] ?? '').get('open');
+		const target = open ? recordTarget('equipment', open) : null;
+		if (target) return { kind: 'record', target };
+	}
 	if (page) return { kind: 'page', target: page };
 	const m = /^\/home\/([^/]+)\/([^/]+)$/.exec(cleanPath(path));
 	const collection = m ? RECORD_SLUGS[m[1]] : undefined;
@@ -247,8 +254,10 @@ function recordDef(collection: string): RecordDef | null {
 // The GET /items/<collection> parameters that load the labels of these records in one request.
 export function recordRequest(collection: string, ids: string[]): { fields: string[]; filter: string; limit: number } | null {
 	const def = recordDef(collection);
-	if (!def || ids.length === 0) return null;
-	return { fields: def.fields, filter: JSON.stringify({ [def.idField]: { _in: ids } }), limit: ids.length };
+	// A non-uuid id would make Postgres reject the whole `_in` and drop every record of the collection.
+	const good = ids.filter((id) => UUID.test(id));
+	if (!def || good.length === 0) return null;
+	return { fields: def.fields, filter: JSON.stringify({ [def.idField]: { _in: good } }), limit: good.length };
 }
 
 // The entries for the rows a collection answered with. `used` is the endpoint's items of this

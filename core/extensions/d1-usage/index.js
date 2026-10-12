@@ -31,6 +31,9 @@ const HALF_LIFE_MS = 10 * 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOLD_LIMIT = 500;
 const FIRST_FOLD_LOOKBACK_DAYS = 30;
+// directus_activity ids are taken when a row is inserted but only become visible when its transaction
+// commits, so a short scan may move the cursor only past rows old enough to be committed by now.
+const FOLD_SAFETY_LAG_MS = 5 * 60 * 1000;
 const LIST_LIMIT = 15;
 // A faded score below this is dropped from the list (an unpinned item last used ~2 months ago).
 const MIN_SCORE = 0.01;
@@ -108,10 +111,9 @@ export function bump(prev, weight, at) {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const INT_ID = /^[1-9][0-9]{0,17}$/;
 
-// kind 'page': a known page key. kind 'record': "<collection>:<id>", id a lower-case uuid or a
-// positive integer as text. Anything else (wrong type, too long, unknown) is false.
+// kind 'page': a known page key. kind 'record': "<collection>:<id>", id a lower-case uuid (all seven
+// collections have uuid keys). Anything else (wrong type, too long, unknown) is false.
 export function validTarget(kind, target) {
     if (typeof target !== 'string' || target.length === 0 || target.length > MAX_TARGET_LENGTH) return false;
     if (kind === 'page') return PAGE_KEYS.has(target);
@@ -119,7 +121,7 @@ export function validTarget(kind, target) {
         const i = target.indexOf(':');
         if (i < 1) return false;
         const id = target.slice(i + 1);
-        return RECORD_COLLECTIONS.includes(target.slice(0, i)) && (UUID.test(id) || INT_ID.test(id));
+        return RECORD_COLLECTIONS.includes(target.slice(0, i)) && UUID.test(id);
     }
     return false;
 }
@@ -145,7 +147,8 @@ export const SQL = {
     setCursor:
         'INSERT INTO d1_private.user_usage_cursor (user_id, last_activity_id) VALUES (?, ?)'
         + ' ON CONFLICT (user_id) DO UPDATE SET last_activity_id = EXCLUDED.last_activity_id',
-    // The newest activity row older than the cutoff: walks the primary key backwards.
+    // The newest activity row older than the cutoff (the first fold's start, and the fold's safe cursor
+    // limit): walks the primary key backwards.
     startId: 'SELECT id FROM directus_activity WHERE "timestamp" < ? ORDER BY id DESC LIMIT 1',
     maxId: 'SELECT id FROM directus_activity ORDER BY id DESC LIMIT 1',
     // "user" is quoted: a bare user is the SQL keyword (the current database role), not the column.
@@ -262,9 +265,11 @@ export function mount(router, { database, logger }, clock = () => new Date()) {
                 const cutoff = new Date(toMs(now) - FIRST_FOLD_LOOKBACK_DAYS * DAY_MS);
                 cursor = Number(rowsOf(await trx.raw(SQL.startId, [cutoff]))[0]?.id ?? 0);
             }
-            // Read the newest activity id BEFORE the scan: everything up to it is visible to the scan, so
-            // a short scan may safely move the cursor there (a quiet user then never rescans old rows).
-            const newest = Number(rowsOf(await trx.raw(SQL.maxId))[0]?.id ?? 0);
+            // The newest activity id older than the safety lag: a short scan may move the cursor there (a
+            // quiet user then never rescans old rows) but no further, because a newer id may belong to a
+            // write of this user's that is still uncommitted (a long import) and would be skipped for good.
+            const safeCutoff = new Date(toMs(now) - FOLD_SAFETY_LAG_MS);
+            const newest = Number(rowsOf(await trx.raw(SQL.startId, [safeCutoff]))[0]?.id ?? 0);
             const acts = rowsOf(await trx.raw(SQL.activity, [user, cursor, ...RECORD_COLLECTIONS]));
             // Group by target, oldest first, so each row is read and written once.
             const byTarget = new Map();
@@ -288,7 +293,8 @@ export function mount(router, { database, logger }, clock = () => new Date()) {
                 });
             }
             // A full page (FOLD_LIMIT rows) means there may be more: stay at the last row read. A short
-            // page has read everything up to `newest`, so skip the user's non-matching rows too.
+            // page has read everything up to `newest` (the last folded row counts too), so skip the user's
+            // non-matching rows as well.
             if (acts.length < FOLD_LIMIT) last = Math.max(last, newest);
             if (!cur || last !== cursor) await trx.raw(SQL.setCursor, [user, last]);
         });

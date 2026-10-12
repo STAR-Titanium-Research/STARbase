@@ -73,9 +73,8 @@ describe('pageTarget', () => {
 });
 
 describe('recordTarget', () => {
-	it('builds collection:id for the seven collections with a uuid or an integer id', () => {
+	it('builds collection:id for the seven collections with a uuid id', () => {
 		expect(recordTarget('physical_samples', S1)).toBe(`physical_samples:${S1}`);
-		expect(recordTarget('equipment', 12)).toBe('equipment:12');
 		expect(recordTarget('people', S1.toUpperCase())).toBe(`people:${S1}`);
 		for (const c of RECORD_COLLECTIONS) expect(recordTarget(c, S1), c).toBe(`${c}:${S1}`);
 	});
@@ -87,6 +86,8 @@ describe('recordTarget', () => {
 		expect(recordTarget('physical_samples', undefined)).toBeNull();
 		expect(recordTarget('physical_samples', 'abc')).toBeNull();
 		expect(recordTarget('physical_samples', 0)).toBeNull();
+		expect(recordTarget('equipment', 12)).toBeNull();
+		expect(recordTarget('physical_samples', 123)).toBeNull();
 		expect(recordTarget('physical_samples', `${S1}:x`)).toBeNull();
 	});
 });
@@ -99,6 +100,15 @@ describe('routeTarget', () => {
 		expect(routeTarget(`/home/tests/${S1}`)).toEqual({ kind: 'record', target: `test_sessions:${S1}` });
 		expect(routeTarget(`/home/campaigns/${S1}`)).toEqual({ kind: 'record', target: `campaigns:${S1}` });
 		expect(routeTarget(`/home/projects/${S1}`)).toEqual({ kind: 'record', target: `projects:${S1}` });
+	});
+
+	it('counts an equipment drawer (?open=<uuid>) as a visit to that item, and only that', () => {
+		expect(routeTarget(`/home/equipment?open=${S1}`)).toEqual({ kind: 'record', target: `equipment:${S1}` });
+		expect(routeTarget(`/home/equipment?q=x&open=${S1}#top`)).toEqual({ kind: 'record', target: `equipment:${S1}` });
+		expect(routeTarget('/home/equipment?open=12')).toEqual({ kind: 'page', target: 'equipment' });
+		expect(routeTarget('/home/equipment')).toEqual({ kind: 'page', target: 'equipment' });
+		expect(routeTarget(`/home/tools?open=${S1}`)).toEqual({ kind: 'page', target: 'tools' });
+		expect(routeTarget(`/home/people?open=${S1}`)).toEqual({ kind: 'page', target: 'people' });
 	});
 
 	it('is null for anything else', () => {
@@ -209,12 +219,13 @@ describe('page entries', () => {
 
 describe('records', () => {
 	it('asks for the used ids of one collection in a single request', () => {
-		const req = recordRequest('physical_samples', [S1, 'b']);
+		const req = recordRequest('physical_samples', [S1, 'b', '123']);
 		expect(req).not.toBeNull();
-		expect(JSON.parse(req!.filter)).toEqual({ sample_id: { _in: [S1, 'b'] } });
+		expect(JSON.parse(req!.filter)).toEqual({ sample_id: { _in: [S1] } });
 		expect(req!.fields).toContain('sample_code');
-		expect(req!.limit).toBe(2);
+		expect(req!.limit).toBe(1);
 		expect(recordRequest('physical_samples', [])).toBeNull();
+		expect(recordRequest('physical_samples', ['123', 'x'])).toBeNull();
 		expect(recordRequest('tools', [S1])).toBeNull();
 	});
 

@@ -170,13 +170,13 @@ test('validTarget accepts only known page keys and <collection>:<id> of the seve
     for (const k of ['samples', 'action:log-operation', 'projects']) assert.equal(validTarget('page', k), true, k);
     for (const c of RECORD_COLLECTIONS) {
         assert.equal(validTarget('record', `${c}:${S1}`), true, c);
-        assert.equal(validTarget('record', `${c}:42`), true, `${c} integer id`);
+        assert.equal(validTarget('record', `${c}:42`), false, `${c} integer id (all keys are uuid)`);
     }
     const bad = [
         ['page', 'nope'], ['page', 'my-samples'], ['page', 'home'], ['page', ''], ['page', 'action:'], ['page', `physical_samples:${S1}`],
         ['page', "samples'; DROP TABLE x;--"], ['page', 'x'.repeat(500)], ['page', 5], ['page', null], ['page', undefined],
         ['record', 'samples'], ['record', `directus_users:${S1}`], ['record', `physical_samples:`],
-        ['record', `physical_samples:${S1.toUpperCase()}`], ['record', 'physical_samples:0'],
+        ['record', `physical_samples:${S1.toUpperCase()}`], ['record', 'physical_samples:0'], ['record', 'physical_samples:123'],
         ['record', 'physical_samples:-1'], ['record', 'physical_samples:1.5'], ['record', 'physical_samples:12345678901234567890'],
         ['record', `:${S1}`], ['record', `physical_samples:${S1}:x`], ['record', "physical_samples:1' OR '1'='1"],
         ['record', `physical_samples:${'1'.repeat(300)}`], ['record', 'campaigns'],
@@ -436,14 +436,35 @@ test('a user with no matching activity still gets the cursor moved to the newest
     const { db, call } = setup({ activity });
     await call('GET /', ALICE);
     assert.equal(db.state.cursors.get(ALICE), 3);
-    const newestRead = db.log.findIndex((l) => l.sql === SQL.maxId);
+    const safeRead = db.log.findIndex((l) => l.sql === SQL.startId && l.bindings[0].getTime() === T0.getTime() - 5 * 60 * 1000);
     const scan = db.log.findIndex((l) => l.sql === SQL.activity);
-    assert.ok(newestRead >= 0 && newestRead < scan, 'the newest id is read before the scan');
+    assert.ok(safeRead >= 0 && safeRead < scan, 'the newest id older than 5 minutes is read before the scan');
     // Later activity by her is found from the moved cursor.
     activity.push(act(4, ALICE, 'update', 'physical_samples', S2, at(-0.5)));
     const out = (await call('GET /', ALICE)).body;
     assert.deepEqual(out.records.map((r) => r.target), [`physical_samples:${S2}`]);
     assert.equal(db.state.cursors.get(ALICE), 4);
+});
+
+test('the cursor never passes activity younger than 5 minutes: a write still uncommitted is folded once it shows', async () => {
+    // Bob's id 4 is visible and recent; Alice's id 3 (a long import) has not committed yet.
+    const activity = [
+        act(1, BOB, 'update', 'physical_samples', S2, at(-1)),
+        act(4, BOB, 'update', 'physical_samples', S2, new Date(T0.getTime() - 60 * 1000)),
+    ];
+    const { db, clock, call } = setup({ activity });
+    await call('GET /', ALICE);
+    assert.equal(db.state.cursors.get(ALICE), 1, 'stops at the newest row older than 5 minutes');
+    // The import commits: its row has the lower id 3 and an old timestamp.
+    activity.push(act(3, ALICE, 'create', 'physical_samples', S1, new Date(T0.getTime() - 90 * 1000)));
+    clock.now = new Date(T0.getTime() + 10 * 60 * 1000);
+    const out = (await call('GET /', ALICE)).body;
+    assert.deepEqual(out.records.map((r) => r.target), [`physical_samples:${S1}`], 'the late row is folded, not skipped');
+    assert.equal(db.state.cursors.get(ALICE), 4, 'now old enough, the cursor moves on');
+    // The last folded row counts too: a row of hers newer than the lag moves the cursor to itself.
+    activity.push(act(5, ALICE, 'update', 'physical_samples', S1, new Date(clock.now.getTime() - 60 * 1000)));
+    await call('GET /', ALICE);
+    assert.equal(db.state.cursors.get(ALICE), 5);
 });
 
 test('later activity is folded on the next GET, advancing the cursor', async () => {
