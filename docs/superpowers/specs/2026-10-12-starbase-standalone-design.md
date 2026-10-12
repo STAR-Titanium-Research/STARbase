@@ -324,3 +324,23 @@ work is in two plans:
   holds whatever step 0 finds.
 - `2026-10-12-starbase-2-app.md` covers the app, the edit frame, the plot pages, the phone layout
   and deployment. It is an outline until the step-0 results are recorded here.
+
+## 9. Step-0 results (2026-10-12)
+
+Run on a local preview copy of the database (Directus 11 image from live, spike module `d1-spike-bare`),
+headless Chromium with both tailnet names mapped to the local machine. Plain HTTP throughout.
+
+| Check | Result | Consequence |
+|---|---|---|
+| (a) frame-ancestors setting | worked with the string form `CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS='self' http://starbase.tail54eeb6.ts.net:5191`; Directus sent `frame-ancestors 'self' http://starbase.tail54eeb6.ts.net:5191` (array form not needed, not tried) | frame the edit form in STARbase |
+| (b) bare module | renders: yes; module bar elements: 0 (the same selector finds 1 on a normal Data Studio page; the bare page contains only `#directus > #spike-bare`, no `.private-view`, navigation, sidebar or header) | form-only page as designed |
+| (b) framed + signed in | yes (cross-origin frame at `d1-server...:18057/admin/d1-spike-bare`, content visible; a signed-out browser framing it is redirected to `/admin/login?redirect=...`) | frame works as designed |
+| (c) cross-host session (STARbase → API, Data Studio, frame) | API from STARbase: yes (`/users/me` returned the member); Data Studio signed in: yes; frame signed in: yes. Cookie `directus_session_token`: host `d1-server...`, `SameSite=Lax`, HttpOnly, not Secure | shared session, no Bearer fallback needed |
+| (c) shared sign-out | yes (`/auth/logout` from STARbase left Data Studio at the login page) | sign-out from STARbase also signs out of Data Studio |
+| (c) axios query strings | `http://d1-server.tail54eeb6.ts.net:18057/items/physical_samples?fields%5B%5D=sample_id&fields%5B%5D=sample_code&filter%5Bsample_code%5D%5B_nnull%5D=true&limit=2` (HTTP 200, Directus parsed it; 0 rows for the Lab Member) | axios bracket-form `fields[]` and nested `filter[...]` work against Directus unchanged |
+| HSTS | http worked (no upgrade, no HTTPS needed) | plain HTTP is fine in this Chromium; real browsers on the live tailnet were not tested |
+
+Notes: the spike probe first used `fields: ['id', ...]`, which gave HTTP 403 because `physical_samples`
+has no `id` column (its key is `sample_id`); that was a bad probe field, not a query-string problem.
+Directus returns 403, not 400, for an unknown field. The check ran with both hostnames under one
+tailnet name (`tail54eeb6.ts.net`), the same-site layout STARbase will have.
