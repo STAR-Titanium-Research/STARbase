@@ -2055,6 +2055,11 @@ rv_down=$(awk '/-- migrate:down/{f=1;next}f' "$RV")
 SF=db/migrations/20261010000160_lab_member_some_only_where_directus_accepts_it.sql
 sf_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$SF")
 sf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SF")
+# 20261012000161 runs after 160: it rules the additional-operators junctions (its backup is in
+# d1_private too, so it goes down first and comes up after 160, as on a real database).
+JR=db/migrations/20261012000161_lab_member_additional_operator_rules.sql
+jr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$JR")
+jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -2091,6 +2096,7 @@ BEGIN;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$jr_down
 $sf_down
 $rv_down
 SELECT 'dn0_backup_table:' || coalesce(to_regclass('d1_private.lab_member_permissions_backup')::text, 'gone');
@@ -2112,10 +2118,12 @@ SELECT 'up_people_actions:' || string_agg(action, ',' ORDER BY action) FROM dire
 SELECT 'up_people_update_fields:' || fields FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='update';
 SELECT 'up_people_create_validation:' || (validation::jsonb ? '_or') FROM directus_permissions WHERE policy='$LM' AND collection='people' AND action='create';
 $sf_up
+$jr_up
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
+$jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
 SELECT 'up_backup_exact:' || count(*) FROM (

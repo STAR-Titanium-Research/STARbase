@@ -109,6 +109,8 @@
     "machining_force_analysis": {"create": "any", "read": "operation.read", "update": "operation.update"},
     "fast_run_data": {"read": "operation.read"},
     "session_data_files": {"create": "any", "read": "session.read", "update": "session.update", "delete": "session.update"},
+    "operation_additional_operators": {"create": "any", "read": "operation.read", "update": "operation.update", "delete": "operation.update"},
+    "session_additional_operators": {"create": "any", "read": "session.read", "update": "session.update", "delete": "session.update"},
     "test_sessions_subject": {"create": "any", "read": "subject.read", "update": "subject.update", "delete": "subject.update"},
     "project_investigators": {"create": "any", "read": "investigators.read", "update": "investigators.write", "delete": "investigators.write"},
     "project_rollup": {"read": "rollup.read"}
