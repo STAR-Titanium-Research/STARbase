@@ -9,6 +9,7 @@ import type { ColumnDef, IndexDef } from './indexConfig';
 import { indexDefByCollection } from './indexConfig';
 import { PAGE_SIZE, bookmarkSort, queryFromState } from './indexQuery';
 import type { IndexState } from './indexQuery';
+import { thumbFields } from './thumbs';
 
 type Row = Record<string, unknown>;
 
@@ -24,6 +25,8 @@ export function extraFields(def: IndexDef, readable: ReadonlySet<string> | null 
 	const out: string[] = [];
 	if (def.collection === 'manufacturing_operations' && def.columns.some((c) => c.field === 'pass_code')) out.push('operation_sequence');
 	if (def.collection === 'campaigns' && (!readable || readable.has('people'))) out.push('owner_person_id.full_name');
+	// The thumbnail's own fields (a sample's form and dimensions, an image list's file field).
+	out.push(...thumbFields(def.collection));
 	return out;
 }
 

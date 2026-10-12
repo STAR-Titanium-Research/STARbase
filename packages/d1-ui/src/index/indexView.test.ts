@@ -55,7 +55,11 @@ describe('cellText', () => {
 
 	it('asks for the step number only on the operations page', () => {
 		expect(extraFields(operations)).toEqual(['operation_sequence']);
-		expect(extraFields(samples)).toEqual([]);
+	});
+	it("adds the thumbnail fields: a sample's form and dimensions, an image list's file field", () => {
+		expect(extraFields(samples)).toEqual(['form', 'diameter_mm', 'length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm']);
+		expect(extraFields(indexDefBySlug('equipment')!)).toEqual(['image']);
+		expect(extraFields(indexDefBySlug('manufacturers')!)).toEqual(['Logo']);
 	});
 	it('asks for the owner of a campaign when people are readable', () => {
 		const campaigns = indexDefBySlug('campaigns')!;

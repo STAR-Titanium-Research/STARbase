@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { CampaignCard, IndexPage, campaignCardStats, indexDefBySlug } from '@d1/ui';
+import { CampaignCard, IndexPage, campaignCardStats, indexDefBySlug, thumbKind } from '@d1/ui';
 import type { CampaignStats } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
+import IndexThumb from './index/IndexThumb.vue';
 
 // The :slug route: one generic list page for every collection of INDEX_DEFS. The slug picks the
 // definition; an unknown one (a mistyped link, a page that was never made) says so and goes Home.
@@ -11,6 +12,9 @@ import ExplorerView from '../ExplorerView.vue';
 const props = defineProps<{ slug: string }>();
 const def = computed(() => indexDefBySlug(props.slug));
 const isCampaigns = computed(() => def.value?.collection === 'campaigns');
+// Samples, equipment, tools, insert types, manufacturers and operations have a picture per row (in a
+// roomy row and on a card): the `thumb` slot is only filled for those, so other lists draw none.
+const hasThumb = computed(() => !!def.value && thumbKind(def.value.collection) !== null);
 </script>
 
 <template>
@@ -19,6 +23,9 @@ const isCampaigns = computed(() => def.value?.collection === 'campaigns');
 		<IndexPage v-if="def" :key="def.slug" :def="def" :card-data="isCampaigns ? campaignCardStats : undefined">
 			<template v-if="isCampaigns" #card="{ row, data, loading }">
 				<CampaignCard :campaign="row" :stats="(data as CampaignStats | null)" :loading="loading" />
+			</template>
+			<template v-if="hasThumb" #thumb="{ row }">
+				<IndexThumb :def="def" :row="row" />
 			</template>
 		</IndexPage>
 		<div v-else class="missing">

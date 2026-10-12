@@ -277,7 +277,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
 								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
 							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
-								<td v-if="showThumb" class="thumb"><slot name="thumb" :row="row" /></td>
+								<td v-if="showThumb" class="thumb"><div class="thumb-box"><slot name="thumb" :row="row" /></div></td>
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
 										<a
@@ -399,7 +399,9 @@ th.num .sort { justify-content: flex-end; }
 	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
 	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
 }
-.skeleton .thumb .bar { width: 40px; height: 28px; border-radius: 4px; }
+/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load. */
+.thumb-box { box-sizing: border-box; width: 72px; height: 45px; overflow: hidden; border: 1px solid var(--d1-line); border-radius: 6px; background: var(--d1-tile); line-height: 0; }
+.skeleton .thumb .bar { width: 72px; height: 45px; border-radius: 6px; }
 
 .skeleton .bar {
 	display: block; height: 10px; width: 70%; border-radius: 5px;
