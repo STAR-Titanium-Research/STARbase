@@ -3,7 +3,10 @@
 // search, chip filters, a plain sortable table, paging, "+ New" and "Open in Data Studio". Rows go
 // to the record's Explorer page or open the edit drawer, per the def. All state lives in the URL
 // (see useIndexPage); the host (ExplorerView in d1-home) supplies the API and navigation.
-import { inject, ref, watch } from 'vue';
+// How the list is shown (table or cards, and the row density) is a per-browser preference kept
+// per list (listPrefs), not part of the URL. The parent can fill the `thumb` slot (a small picture
+// per row, shown as the first column at Roomy density).
+import { computed, inject, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { EXPLORER_HOST } from '../host';
 import type { ExplorerHost } from '../host';
@@ -13,9 +16,12 @@ import EditDrawer from '../components/EditDrawer.vue';
 import LoadState from '../components/LoadState.vue';
 import NotVisible from '../components/NotVisible.vue';
 import PageShell from '../components/PageShell.vue';
+import SegmentedControl from '../components/SegmentedControl.vue';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { PAGE_SIZE } from './indexQuery';
 import { cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
+import { readListPrefs, writeListPrefs } from './listPrefs';
+import type { Density, ListView } from './listPrefs';
 import { useIndexPage } from './useIndexPage';
 
 const props = defineProps<{ def: IndexDef }>();
@@ -30,6 +36,31 @@ const {
 	rows, total, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
 	reload, rowKey, relationSortable, setSearch, setBookmark, setFilter, setSort, setPage, clearFilters, closeOpen,
 } = useIndexPage(host, props.def, route, router);
+
+// ---- how the list is shown ----------------------------------------------------------------
+const slots = useSlots();
+const initial = readListPrefs(props.def.slug);
+const view = ref<ListView>(initial.view);
+const density = ref<Density>(initial.density);
+const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
+const VIEW_OPTIONS = [
+	{ value: 'table', label: 'Table', icon: '☰' },
+	{ value: 'cards', label: 'Cards', icon: '▦' },
+] as const;
+const DENSITY_OPTIONS = [
+	{ value: 'compact', label: 'Compact' },
+	{ value: 'normal', label: 'Normal' },
+	{ value: 'roomy', label: 'Roomy' },
+] as const;
+const saveListPrefs = () => writeListPrefs(props.def.slug, { view: view.value, density: density.value });
+function setView(v: ListView): void {
+	view.value = v;
+	saveListPrefs();
+}
+function setDensity(d: Density): void {
+	density.value = d;
+	saveListPrefs();
+}
 
 // ---- columns ------------------------------------------------------------------------------
 const sortable = (c: ColumnDef) => !c.relation || relationSortable(c.relation.collection);
@@ -93,6 +124,8 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 			<div class="head">
 				<span class="range" role="status">{{ rangeText(state.page, rows.length, total) }}</span>
 				<span class="spacer" />
+				<SegmentedControl :model-value="view" :options="VIEW_OPTIONS" label="View" @update:model-value="setView" />
+				<SegmentedControl :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="setDensity" />
 				<button
 					type="button"
 					class="btn"
@@ -154,9 +187,19 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 			</div>
 
 			<div v-else class="panel" :class="{ busy: loading && rows.length }" :aria-busy="loading">
-				<DataTable v-if="loading || rows.length">
+				<!-- Placeholder until the card view lands: the same rows as plain tiles (code and title). -->
+				<ul v-if="view === 'cards' && rows.length" class="card-grid">
+					<li v-for="row in rows" :key="rowKey(row)">
+						<button type="button" class="card" @click="openRow(row)">
+							<span class="card-code">{{ cellText(row, def.columns[0], def) || '—' }}</span>
+							<span v-if="def.columns[1]" class="card-title">{{ cellText(row, def.columns[1], def) }}</span>
+						</button>
+					</li>
+				</ul>
+				<DataTable v-else-if="loading || rows.length" :density="density">
 					<thead>
 						<tr>
+							<th v-if="showThumb" class="thumb" aria-hidden="true" />
 							<th v-for="c in def.columns" :key="c.field" :class="{ num: c.format === 'number' }" :aria-sort="ariaSort(c)">
 								<button v-if="sortable(c)" type="button" class="sort" @click="setSort(sortKey(c))">
 									{{ c.label }}<span class="arrow" aria-hidden="true">{{ arrow(c) }}</span>
@@ -168,6 +211,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 					<tbody>
 						<template v-if="loading && !rows.length">
 							<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
+								<td v-if="showThumb" class="thumb"><span class="bar" /></td>
 								<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
 							</tr>
 						</template>
@@ -175,6 +219,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
 								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
 							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
+								<td v-if="showThumb" class="thumb"><slot name="thumb" :row="row" /></td>
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
 										<a
@@ -290,6 +335,17 @@ th.num .sort { justify-content: flex-end; }
 .cell-link:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 3px; }
 /* Long free text (outcomes, notes) is cut instead of stretching the row. */
 .row td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.card-grid { list-style: none; margin: 6px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.card {
+	display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 12px; text-align: left;
+	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
+	color: var(--theme--foreground); font: inherit; cursor: pointer;
+}
+.card:hover { border-color: var(--d1-accent, var(--theme--primary)); }
+.card:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
+.card-code { font-weight: 600; overflow-wrap: anywhere; }
+.card-title { font-size: var(--fs-sm, 12px); color: var(--d1-dim); overflow-wrap: anywhere; }
 
 .skeleton .bar {
 	display: block; height: 10px; width: 70%; border-radius: 5px;
