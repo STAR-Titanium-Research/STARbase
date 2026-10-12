@@ -127,9 +127,9 @@ export {
 	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, effectiveQrKeys, QR_HEADER, renderLabelDocument, chooseQr, moduleMm, MIN_MODULE_MM, WARN_MODULE_MM, contactEmailOf, parseContactInput, contactLine, EMAIL_PATTERN,
 	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
 	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
-	saveErrorText, moveField, sampleEntries,
+	saveErrorText, moveField, sampleEntries, buildLbxDownload, isLbxTemplate, LBX_TAPE_MM,
 } from './labels';
 export type {
 	QrKey, FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
-	RenderOptions, RenderedLabels, QrModules, QrLevel, ChosenQr, Measure, BrokenTemplate, CountedSample, LabelEntry,
+	RenderOptions, RenderedLabels, QrModules, QrLevel, ChosenQr, Measure, BrokenTemplate, CountedSample, LabelEntry, LbxDownload,
 } from './labels';

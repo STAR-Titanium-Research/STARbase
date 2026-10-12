@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
 	LoadState, PageShell, Section, blankTemplate, canEditTemplate, MAX_COPIES, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
-	sampleEntries, slotsPerPage, summaryText, useRequestGate, type LabelSample, type LabelTemplate,
+	sampleEntries, slotsPerPage, summaryText, useRequestGate, buildLbxDownload, isLbxTemplate, type LabelSample, type LabelTemplate,
 } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 import { useExplorerHost } from '../explorerHost';
@@ -16,6 +16,7 @@ import { useLabelSamples } from '../labels/useLabelSamples';
 import { useLabelSettings } from '../labels/useLabelSettings';
 import { useLabelTemplates } from '../labels/useLabelTemplates';
 import { printLabels } from '../labels/printFrame';
+import { saveFile } from '../labels/saveFile';
 import '../labels/form.css';
 
 // Print labels: pick samples on the left, pick or edit a template on the right, check the live preview, print.
@@ -158,6 +159,25 @@ async function print(): Promise<void> {
 	}
 }
 
+// ---- download for P-touch (.lbx) ----------------------------------------------------------------
+// For the Brother QL-700 with the 62 mm roll: one .lbx per label for P-touch Editor on the PC that has the printer.
+// Same selection and copies as Print; a single label is a bare .lbx, several are one .zip.
+const showLbx = computed(() => isLbxTemplate(active.value));
+const canLbx = computed(() => showLbx.value && canPrint.value);
+const lbxError = ref('');
+function downloadLbx(): void {
+	const t = active.value;
+	if (!t || !canLbx.value) return;
+	lbxError.value = '';
+	try {
+		const out = buildLbxDownload(entries.value, t, settings.contactEmail.value);
+		if (!out) return;
+		saveFile(out.filename, out.mime, out.bytes);
+	} catch (e) {
+		lbxError.value = `The P-touch files could not be made: ${errorText(e)}`;
+	}
+}
+
 // ---- ?ids= and ?codes= --------------------------------------------------------------------------
 const selectionNote = ref('');
 const selectionError = ref('');
@@ -251,6 +271,7 @@ onMounted(() => {
 
 					<Section title="Preview">
 						<template #actions>
+							<button v-if="showLbx" type="button" class="lf-btn" :disabled="!canLbx" @click="downloadLbx">Download for P-touch (.lbx)</button>
 							<button type="button" class="lf-btn pri" :disabled="!canPrint || printing" @click="print">Print</button>
 						</template>
 						<LoadState v-if="!active" empty :empty-text="templates.loading.value ? 'Loading templates…' : 'No template to preview. Create one, or ask an admin.'" />
@@ -270,6 +291,10 @@ onMounted(() => {
 							<p v-if="active.media === 'roll'" class="d1-note hint">
 								Roll printers: in the print dialog choose the roll's paper size ({{ active.pageWidthMm }} mm wide) and 100% scale (no "fit to page").
 							</p>
+							<p v-if="showLbx" class="d1-note hint">
+								Download for P-touch (.lbx): open it in P-touch Editor on the PC with the QL-700, then print. Several labels download as one .zip of .lbx files.
+							</p>
+							<p v-if="lbxError" class="d1-note bad" role="alert">{{ lbxError }}</p>
 							<p v-if="printError" class="d1-note bad" role="alert">{{ printError }}</p>
 						</template>
 					</Section>
