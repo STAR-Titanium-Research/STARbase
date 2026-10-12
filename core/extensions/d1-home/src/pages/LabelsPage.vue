@@ -58,7 +58,7 @@ const tidyStart = () => { if (problems.value.length === 0) start.value = clampSt
 const tidyCopies = () => { copies.value = clampCopies(copies.value); };
 
 const summary = computed(() => (doc.value ? summaryText(doc.value) : ''));
-const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value);
+const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value && !renderError.value);
 
 // ---- the template picker -------------------------------------------------------------------------
 // A draft opened with openDraft() has a snapshot; the editor is "dirty" when the draft no longer matches it.
