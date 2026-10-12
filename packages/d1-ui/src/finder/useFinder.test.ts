@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import type { ExplorerHost } from '../host';
 import { buildNav } from '../nav/navConfig';
-import { FINDER_DEBOUNCE_MS, useFinder } from './useFinder';
+import { FINDER_DEBOUNCE_MS, SCAN_IDLE_MS, useFinder } from './useFinder';
 
 const visible = new Set(['physical_samples', 'manufacturing_operations', 'campaigns']);
 
@@ -117,5 +117,68 @@ describe('useFinder', () => {
 		expect(finder.hits.value.some((h) => h.group === 'Samples')).toBe(true);
 		finder.query.value = '12-';
 		expect(finder.hits.value.some((h) => h.group === 'Samples')).toBe(false);
+	});
+});
+
+describe('useFinder with a scanned label', () => {
+	const typed = 'D1 SAMPLE\rS-0123 - 1a2b3c4d\rTi-6Al-4V\r';
+	const sample = { data: { data: [{ sample_id: 'uuid-1', sample_code: 'S-0123', short_id: '1a2b3c4d' }] } };
+
+	function scanSetup(get: (path: string, params: any) => Promise<any>) {
+		const calls: Array<{ path: string; filter: any }> = [];
+		const host = { api: { get: (path: string, cfg?: any) => { calls.push({ path, filter: JSON.parse(cfg.params.filter) }); return get(path, cfg?.params); } } } as unknown as ExplorerHost;
+		const opened: string[] = [];
+		const finder = useFinder(host, ref(buildNav(visible, [], false)), ref<Set<string> | null>(visible), { onOpen: (to) => opened.push(to) });
+		return { finder, calls, opened };
+	}
+
+	it('opens the sample once the scanner has gone quiet, and runs no search', async () => {
+		const { finder, calls, opened } = scanSetup(async () => sample);
+		finder.query.value = typed;
+		expect(finder.scan.value).toEqual({ status: 'reading' });
+		expect(finder.hits.value).toEqual([]);
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(opened).toEqual(['/home/samples/uuid-1']);
+		expect(calls).toEqual([{ path: '/items/physical_samples', filter: { short_id: { _eq: '1a2b3c4d' } } }]);
+	});
+
+	it('waits while more of the label keeps arriving', async () => {
+		const { finder, calls, opened } = scanSetup(async () => sample);
+		finder.query.value = 'D1 SAMPLE\rS-0123 - 1a2b3c4d\r';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS - 50);
+		finder.query.value += '2026-10-01 - DP\r';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS - 50);
+		expect(calls).toEqual([]);
+		await vi.advanceTimersByTimeAsync(50);
+		expect(opened).toHaveLength(1);
+	});
+
+	it('reads a pasted label at once', async () => {
+		const { finder, opened } = scanSetup(async () => sample);
+		finder.query.value = typed;
+		finder.readScanNow();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(opened).toHaveLength(1);
+	});
+
+	it('shows the decoded label and the reason when the sample is not found, and opens nothing', async () => {
+		const { finder, opened } = scanSetup(async () => ({ data: { data: [] } }));
+		finder.query.value = typed;
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(opened).toEqual([]);
+		expect(finder.scan.value).toMatchObject({ status: 'done', outcome: { kind: 'failed', reason: 'not_found', code: 'S-0123', lines: ['Ti-6Al-4V'] } });
+	});
+
+	it('drops a lookup that was typed over, and leaves the scan when the text stops being one', async () => {
+		let release: (() => void) | undefined;
+		const { finder, opened } = scanSetup(() => new Promise((res) => { release = () => res(sample); }));
+		finder.query.value = typed;
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(finder.scan.value).toEqual({ status: 'resolving' });
+		finder.query.value = 'S-01';
+		release?.();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(opened).toEqual([]);
+		expect(finder.scan.value).toBeNull();
 	});
 });

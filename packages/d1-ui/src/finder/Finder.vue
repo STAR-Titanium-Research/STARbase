@@ -6,21 +6,34 @@
 // Keyboard: the input keeps focus the whole time and the arrow keys move an "active" option
 // (aria-activedescendant), so there is nothing else to tab to and Tab is simply held in the input.
 // Focus goes back to whatever had it before the dialog opened.
+//
+// A scanned label: a USB (keyboard) scanner types the label's lines with Enter (CR) between them,
+// and a paste carries real line breaks. So the box is a one-row textarea that keeps line breaks, Enter
+// while the text is a D1 label adds a line instead of opening a hit, and once the typing stops (or on a
+// paste) the label's sample is opened, or the decoded label and the reason are shown. See useFinder.
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import '../components/tokens.css';
 import { EXPLORER_HOST } from '../host';
 import { MIN_QUERY } from './finder';
+import ScanResultCard from './ScanResultCard.vue';
 import type { FinderHit } from './finder';
 import { moveIndex, toSections } from './finderNav';
+import { isScanStarted, normalizeScan } from './scan';
 import { useFinder } from './useFinder';
 import { useExplorerNav } from '../nav/useExplorerNav';
 
-const emit = defineEmits<{ (e: 'close'): void }>();
+const props = defineProps<{ canScan?: boolean }>();
+const emit = defineEmits<{ (e: 'close'): void; (e: 'scan'): void }>();
 
 const host = inject(EXPLORER_HOST);
 if (!host) throw new Error('Finder needs an ExplorerHost: render it inside ExplorerView');
 const { nav, visible } = useExplorerNav(host);
-const { query, hits, loading, searchable } = useFinder(host, nav, visible);
+const { query, hits, loading, searchable, scan, scanning, readScanNow } = useFinder(host, nav, visible, {
+	onOpen: (to) => {
+		host.navigate(to);
+		emit('close');
+	},
+});
 
 // Unique per instance, so two Explorer pages never share an id.
 const uid = `d1-finder-${Math.random().toString(36).slice(2, 8)}`;
@@ -28,7 +41,7 @@ const sections = computed(() => toSections(hits.value, uid));
 const active = ref(-1);
 const activeId = computed(() => (active.value >= 0 ? `${uid}-opt-${active.value}` : undefined));
 
-const input = ref<HTMLInputElement | null>(null);
+const input = ref<HTMLTextAreaElement | null>(null);
 const list = ref<HTMLElement | null>(null);
 
 // The best match is the one Enter opens; a new result list starts from it.
@@ -52,6 +65,16 @@ function pick(hit: FinderHit) {
 	emit('close');
 }
 
+// Pasted text is taken whole: a label arrives as one value, not as keystrokes, and a plain text box
+// would turn its line breaks into spaces.
+function onPaste(e: ClipboardEvent) {
+	const text = e.clipboardData?.getData('text') ?? '';
+	if (!isScanStarted(text)) return;
+	e.preventDefault();
+	query.value = normalizeScan(text);
+	readScanNow();
+}
+
 function onKeydown(e: KeyboardEvent) {
 	if (e.key === 'Escape') {
 		e.preventDefault();
@@ -63,6 +86,8 @@ function onKeydown(e: KeyboardEvent) {
 	} else if (e.key === 'Enter') {
 		// Enter that confirms an IME composition is not "open this".
 		if (e.isComposing) return;
+		// Part of a scanned label: the textarea adds the line break.
+		if (scanning.value) return;
 		e.preventDefault();
 		const hit = hits.value[active.value];
 		if (hit) pick(hit);
@@ -78,11 +103,13 @@ function onKeydown(e: KeyboardEvent) {
 	<Teleport to="body">
 		<div class="d1-kit d1-finder-backdrop" @mousedown.self="emit('close')">
 			<div class="d1-finder" role="dialog" aria-modal="true" aria-label="Find a record" @keydown="onKeydown">
-				<input
+				<div class="bar">
+				<textarea
 					ref="input"
 					v-model="query"
 					class="q"
-					type="text"
+					rows="1"
+					wrap="off"
 					role="combobox"
 					aria-label="Find a record"
 					aria-autocomplete="list"
@@ -92,9 +119,21 @@ function onKeydown(e: KeyboardEvent) {
 					placeholder="Find a record, page or saved view…"
 					autocomplete="off"
 					spellcheck="false"
+					@paste="onPaste"
 				/>
+				<!-- mousedown.prevent: a click must not take focus off the box. -->
+				<button v-if="props.canScan" type="button" class="scan" aria-label="Scan a label with the camera" title="Scan a label with the camera" tabindex="-1" @mousedown.prevent @click="emit('scan')">
+					<v-icon name="qr_code_scanner" small />
+					<span>Scan</span>
+				</button>
+				</div>
 
-				<div :id="`${uid}-list`" ref="list" class="results" role="listbox" aria-label="Results">
+				<div v-if="scanning" class="scanned">
+					<p v-if="!scan || scan.status !== 'done'" class="hint" role="status" aria-live="polite">{{ scan?.status === 'resolving' ? 'Opening the sample…' : 'Reading the label…' }}</p>
+					<ScanResultCard v-else-if="scan.outcome.kind !== 'open'" :outcome="scan.outcome" />
+				</div>
+
+				<div v-show="!scanning" :id="`${uid}-list`" ref="list" class="results" role="listbox" aria-label="Results">
 					<div v-for="s in sections" :key="s.headingId" role="group" :aria-labelledby="s.headingId" class="grp">
 						<div :id="s.headingId" class="head" role="presentation">{{ s.group }}</div>
 						<!-- mousedown.prevent: a click must not take focus off the input. -->
@@ -116,7 +155,7 @@ function onKeydown(e: KeyboardEvent) {
 					</div>
 				</div>
 
-				<p class="hint" role="status" aria-live="polite">
+				<p v-if="!scanning" class="hint" role="status" aria-live="polite">
 					<template v-if="!searchable">Type at least {{ MIN_QUERY }} characters.</template>
 					<template v-else-if="loading">Searching…</template>
 					<template v-else-if="!hits.length">No matches</template>
@@ -142,12 +181,20 @@ function onKeydown(e: KeyboardEvent) {
 	background: var(--d1-surface); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
 	overflow: hidden;
 }
+.bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--d1-line); }
+.bar:focus-within { box-shadow: inset 0 -2px 0 var(--d1-accent, var(--theme--primary)); }
+/* One row that looks like an input; the textarea only exists so a pasted or scanned label keeps its line breaks. */
 .q {
-	width: 100%; box-sizing: border-box; height: 44px; padding: 0 16px;
-	border: 0; border-bottom: 1px solid var(--d1-line); outline: none;
-	background: transparent; color: inherit; font: inherit; font-size: var(--fs-lg, 15px);
+	flex: 1; min-width: 0; box-sizing: border-box; height: 44px; padding: 12px 16px; resize: none; overflow: hidden;
+	border: 0; outline: none; white-space: nowrap;
+	background: transparent; color: inherit; font: inherit; font-size: var(--fs-lg, 15px); line-height: 20px;
 }
-.q:focus-visible { box-shadow: inset 0 -2px 0 var(--d1-accent, var(--theme--primary)); }
+.scan {
+	display: flex; align-items: center; gap: 6px; margin: 6px 8px 6px 0; padding: 0 12px; flex: 0 0 auto;
+	border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-tile); color: inherit;
+	font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer;
+}
+.scan:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .results { overflow-y: auto; padding: 4px 8px; }
 .head {
 	padding: 8px 8px 2px; font-size: var(--fs-xs, 11px); font-weight: 700;
