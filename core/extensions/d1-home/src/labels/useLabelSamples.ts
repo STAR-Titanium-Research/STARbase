@@ -9,6 +9,7 @@ import {
 // the signed-in user's: a sample they cannot read is reported as not found.
 
 export const PICKER_LIMIT = 100;
+export const OPTIONS_LIMIT = 200;
 const CHUNK = 50;
 const chunks = <T,>(xs: T[], n: number): T[][] => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
 
@@ -83,24 +84,36 @@ export function useLabelSamples() {
 		}
 	}
 
+	// The filters' choices. Each read stands alone (one forbidden list must not blank the other) and is capped:
+	// past OPTIONS_LIMIT the dropdown is cut and says so.
 	const projects = ref<Option[]>([]);
 	const campaigns = ref<Option[]>([]);
 	const optionsError = ref('');
 	async function loadOptions(): Promise<void> {
-		try {
-			const [p, c] = await Promise.all([
-				api.get('/items/projects', { params: { fields: ['project_id', 'project_code', 'project_name'], sort: ['project_code'], limit: -1 } }),
-				api.get('/items/campaigns', { params: { fields: ['campaign_id', 'campaign_code', 'name', 'project_id'], sort: ['campaign_code'], limit: -1 } }),
-			]);
-			projects.value = (p.data?.data ?? []).map((r: any) => ({ value: r.project_id, label: r.project_code || r.project_name || 'Project' }));
-			campaigns.value = (c.data?.data ?? []).map((r: any) => ({
+		const read = (collection: string, fields: string[], sort: string) =>
+			api.get(`/items/${collection}`, { params: { fields, sort: [sort], limit: OPTIONS_LIMIT, meta: 'filter_count' } });
+		const [p, c] = await Promise.allSettled([
+			read('projects', ['project_id', 'project_code', 'project_name'], 'project_code'),
+			read('campaigns', ['campaign_id', 'campaign_code', 'name', 'project_id'], 'campaign_code'),
+		]);
+		const notes: string[] = [];
+		const cut = (name: string, res: PromiseFulfilledResult<any>) => {
+			const total = res.value.data?.meta?.filter_count;
+			if (typeof total === 'number' && total > OPTIONS_LIMIT) notes.push(`The ${name} filter lists the first ${OPTIONS_LIMIT} of ${total}; search by code to reach the others.`);
+		};
+		if (p.status === 'fulfilled') {
+			projects.value = (p.value.data?.data ?? []).map((r: any) => ({ value: r.project_id, label: r.project_code || r.project_name || 'Project' }));
+			cut('project', p);
+		} else notes.push(`Could not load the project filter: ${errorText(p.reason)}`);
+		if (c.status === 'fulfilled') {
+			campaigns.value = (c.value.data?.data ?? []).map((r: any) => ({
 				value: r.campaign_id,
 				label: r.campaign_code || r.name || 'Campaign',
 				projectId: r.project_id && typeof r.project_id === 'object' ? r.project_id.project_id : r.project_id,
 			}));
-		} catch (e) {
-			optionsError.value = `Could not load the project and campaign filters: ${errorText(e)}`;
-		}
+			cut('campaign', c);
+		} else notes.push(`Could not load the campaign filter: ${errorText(c.reason)}`);
+		optionsError.value = notes.join(' ');
 	}
 
 	// ---- resolving ids and codes ------------------------------------------------------------------
