@@ -337,9 +337,10 @@ lt_out=$($PSQL 2>&1 <<SQL
 BEGIN;
 $lt_down
 SELECT 'down_table:' || coalesce(to_regclass('label_templates')::text, 'gone');
-SELECT 'down_meta:' || (SELECT count(*) FROM directus_fields WHERE collection='label_templates')
-  || ',' || (SELECT count(*) FROM directus_collections WHERE collection='label_templates')
-  || ',' || (SELECT count(*) FROM directus_permissions WHERE collection='label_templates')
+SELECT 'down_settings_table:' || coalesce(to_regclass('label_settings')::text, 'gone');
+SELECT 'down_meta:' || (SELECT count(*) FROM directus_fields WHERE collection IN ('label_templates', 'label_settings'))
+  || ',' || (SELECT count(*) FROM directus_collections WHERE collection IN ('label_templates', 'label_settings'))
+  || ',' || (SELECT count(*) FROM directus_permissions WHERE collection IN ('label_templates', 'label_settings'))
   || ',' || (SELECT count(*) FROM directus_relations WHERE many_collection='label_templates');
 $lt_up
 SELECT 'up_seeds:' || string_agg(name, '|' ORDER BY name) FROM label_templates;
@@ -392,6 +393,29 @@ ROLLBACK TO SAVEPOINT s4;
 UPDATE label_templates SET description = 'edited' WHERE name = 'L7160 21-up';
 SELECT 'occ_version:' || version FROM label_templates WHERE name = 'L7160 21-up';
 SELECT 'audit_updates:' || count(*) FROM audit_logs WHERE table_name = 'label_templates' AND action_type = 'UPDATE';
+SELECT 'up_qr_all:' || count(*) FROM label_templates WHERE jsonb_array_length(qr_fields) = 6 AND qr_fields ? 'owner_email' AND qr_fields ? 'contact_email';
+SELECT 'ls_row:' || count(*) || ',' || coalesce(max(contact_email), 'null') FROM label_settings;
+SELECT 'ls_meta:' || (SELECT count(*) FROM directus_fields WHERE collection='label_settings')
+  || ',' || (SELECT count(*) FROM directus_collections WHERE collection='label_settings' AND singleton);
+SELECT 'ls_perm:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions
+  WHERE collection='label_settings' AND policy='20000002-0000-0000-0000-000000000002';
+SELECT 'ls_comments:' || count(*) FROM information_schema.columns c
+  WHERE c.table_name='label_settings' AND c.table_schema='public'
+    AND col_description('label_settings'::regclass, c.ordinal_position::int) IS NULL;
+SELECT 'ls_triggers:' || string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger
+  WHERE tgrelid='label_settings'::regclass AND NOT tgisinternal;
+SAVEPOINT s5;
+INSERT INTO label_settings (id, contact_email) VALUES (2, NULL);
+SELECT 'ls_second_row:accepted';
+ROLLBACK TO SAVEPOINT s5;
+SAVEPOINT s6;
+UPDATE label_settings SET contact_email = 'not an email';
+SELECT 'ls_bad_email:accepted';
+ROLLBACK TO SAVEPOINT s6;
+SAVEPOINT s7;
+UPDATE label_settings SET contact_email = 'lab@example.org';
+SELECT 'ls_good_email:' || contact_email || ',v' || version FROM label_settings;
+ROLLBACK TO SAVEPOINT s7;
 $lt_down
 SELECT 'redown_table:' || coalesce(to_regclass('label_templates')::text, 'gone');
 ROLLBACK;
@@ -399,6 +423,7 @@ SQL
 )
 lt_check() { grep -qxF "$1" <<<"$lt_out" && ok "$2" || bad "$2 (psql output: $lt_out)"; }
 lt_check "down_table:gone" "down: label_templates is dropped"
+lt_check "down_settings_table:gone" "down: label_settings is dropped"
 lt_check "down_meta:0,0,0,0" "down: its Directus fields, collection, permissions and relations are removed"
 lt_check "up_seeds:50×25 single|A4 4×5|Brother DK-22205 62 mm|L7160 21-up" "up: the four template seeds are present"
 lt_check "up_default:A4 4×5" "up: A4 4×5 is the only default"
@@ -407,6 +432,15 @@ lt_check "up_relations:2" "up: user_created and user_updated relate to directus_
 lt_check 'up_perm_rows:create={};delete={"user_created":{"_eq":"$CURRENT_USER"}};read={};update={"user_created":{"_eq":"$CURRENT_USER"}}' \
     "up: Lab Members read and create freely, update and delete only their own rows"
 lt_check "up_perm_fields:create=18/false;delete=1/false;read=1/false;update=18/false"     "up: Lab Member create and update cannot set is_default, id or the system columns"
+lt_check "up_qr_all:4" "up: every seed template puts all six extras in the QR"
+lt_check "ls_row:1,null" "up: label_settings has its one row, with no contact yet"
+lt_check "ls_meta:5,1" "up: label_settings is a Directus singleton with a field row per column"
+lt_check "ls_perm:read" "up: Lab Members may only read label_settings"
+lt_check "ls_comments:0" "up: every label_settings column carries a COMMENT"
+lt_check "ls_triggers:audit_label_settings,occ_label_settings" "up: label_settings has the audit and OCC triggers"
+! grep -qx "ls_second_row:accepted" <<<"$lt_out" && ok "a second label_settings row is refused" || bad "a second label_settings row is refused"
+! grep -qx "ls_bad_email:accepted" <<<"$lt_out" && ok "a contact email without an @ is refused" || bad "a contact email without an @ is refused"
+lt_check "ls_good_email:lab@example.org,v2" "a valid contact email is accepted and bumps version"
 lt_check "up_comments:0" "up: every column carries a COMMENT"
 lt_check "up_tbl_comment:true" "up: the table carries a COMMENT"
 lt_check "up_triggers:audit_label_templates,label_templates_single_default,occ_label_templates" "up: audit, single-default and OCC triggers are attached"

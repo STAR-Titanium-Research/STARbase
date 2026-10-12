@@ -173,6 +173,7 @@
     "facilities": ["read"],
     "fast_recipes": ["read"],
     "force_crawler_state": ["read"],
+    "label_settings": ["read"],
     "directus_files": ["create", "read", "update", "delete"]
   }
 }
