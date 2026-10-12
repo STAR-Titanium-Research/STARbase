@@ -1,5 +1,7 @@
 # Rig test requests, phase 1: request, consent, operator steps, report
 
+> **Pointer (2026-10-12):** the shared rig token this plan describes was replaced by the operator's D1 sign-in; see the [amendment spec](../specs/2026-10-12-rig-test-d1-login-design.md).
+
 Spec: [`specs/2026-10-11-rig-test-requests-design.md`](../specs/2026-10-11-rig-test-requests-design.md).
 Decision: [ADR-0012](../../adr/0012-rig-test-requests-over-github-issues.md) (Proposed until
 phase 1 is merged). Delete this plan once phase 1 has shipped in a release and its backlog

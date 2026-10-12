@@ -2,6 +2,9 @@
 
 **Date:** 2026-10-11
 **Status:** Design only. Decision record: [ADR-0012](../../adr/0012-rig-test-requests-over-github-issues.md).
+**Amended 2026-10-12:** the shared rig token described below (`X-Rig-Token`,
+`RIG_TEST_RELAY_TOKEN`, `FORCE_APP_RIG_TEST_TOKEN`) is replaced by the operator's D1 sign-in; see
+[`2026-10-12-rig-test-d1-login-design.md`](2026-10-12-rig-test-d1-login-design.md).
 Phase 1 plan: [`plans/2026-10-11-rig-test-requests-phase1.md`](../plans/2026-10-11-rig-test-requests-phase1.md).
 The design choices come from a question-and-answer session with the maintainer on 2026-10-11.
 

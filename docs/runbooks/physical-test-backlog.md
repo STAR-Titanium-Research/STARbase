@@ -1267,26 +1267,29 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 
 ## C. d1-server and infrastructure
 
-- [ ] **Rig test relay settings.** In the relay's environment on d1-server, set:
-  - `RIG_TEST_ALLOWED_LOGINS=dpremoli`, plus the login Claude sessions comment as if it is
-    different;
-  - `RIG_TEST_RELAY_TOKEN` to a long random string.
-
-  Redeploy `bug-report-relay`. On the rig PC, put the same token in
-  `FORCE_APP_RIG_TEST_TOKEN`, or in the `rig_test_token` file in the app's config folder. Also set
-  `FORCE_APP_RIG_ID`, for example `force-rig-1`; without it the rig id is just `rig`. Check:
-  - `GET /bug-report-relay/rig-tests` over Tailscale, without the `X-Rig-Token` header, is refused
-    with 403. With the header it returns `{"ok": true, ...}`.
+- [ ] **Rig test relay settings.** In the relay's environment on d1-server, set
+  `RIG_TEST_ALLOWED_LOGINS=dpremoli,dennis-premoli-staff` (GitHub logins allowed to request rig
+  tests). No token: callers sign in with D1. Remove any leftover `RIG_TEST_RELAY_TOKEN` line from
+  `.env`, and delete `%LOCALAPPDATA%\force-app\rig_test_token` on any PC that has one. Redeploy
+  `bug-report-relay` (`docker compose up -d --build --no-deps bug-report-relay`). Optionally set
+  `FORCE_APP_RIG_ID` on a rig laptop; without it the rig id is just `rig`. Check:
+  - `GET /bug-report-relay/rig-tests` over Tailscale with no `Authorization` header, or with
+    `Authorization: Bearer made-up`, is refused with 403 `D1 sign-in rejected`. With a real D1
+    access token (copy one from the force app's DevTools, `localStorage['force-app.auth']`) it
+    returns `{"ok": true, ...}`, and the relay log names that D1 user.
+  - Stop Directus for a moment: the same call gets 503 `D1 unavailable`.
   - An issue that an allowlisted login both wrote and labelled is listed. One written by anyone
     else is not, even if you label it.
   - A comment through `POST /rig-tests/<n>/comment` on an issue without the label is refused.
   - An attempt to PATCH the rig's result comment is refused.
-  - With a wrong token on the rig PC, Settings → Rig tests says "The relay rejected this PC's
-    rig token". With no token, it shows how to set one, and the PC never polls.
+  - On a laptop plugged into the rig, signed in online: Settings → Rig tests says the PC takes
+    requests. Signed in offline, or signed out: it says "Sign in to D1 online to receive rig-test
+    requests", and the PC never polls. Left idle on the rig for more than 15 minutes, it keeps
+    taking requests (the token is refreshed early).
   - An issue with more than 100 events, for example one with many label changes, is still
     listed, because the latest labeller is found from the last page.
 
-  Since the rig test requests PR.
+  Since the rig test requests PR; sign-in check since the D1 login PR (#248).
 - [ ] **#190 migration 140 on d1-server.** Apply `20261008000140_machining_force_analysis_file_nullable`
   (`dbmate up`). Directus accepts a `machining_force_analysis` POST with `directus_files_id: null`
   and the field isn't required in its form. Set such a row to `pending` by hand with the
