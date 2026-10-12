@@ -95,16 +95,16 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
 - [ ] **D4 — permissions and dates.** A role that cannot read a sample gets "not found" for it in a
   label request. With `D1_TIMEZONE=Europe/London` set, a sample created just after midnight BST
   prints the right date. The picker shows "(200 of N)" when there are more than 200. Since #124. **Superseded by the Explorer labels page (PR #TBD).**
-- [ ] **Label templates — own rows (label-printing PR #TBD).** As a Lab Member, create a template in
+- [ ] **#TBD-L1 — Label templates — own rows.** As a Lab Member, create a template in
   `label_templates`: it saves. Update and delete it: allowed. Another member's template (and the four
   seeds) can be read but not updated or deleted.
-- [ ] **Label templates — seeds and Default (label-printing PR #TBD).** A Lab Member cannot edit a seed
+- [ ] **#TBD-L2 — Label templates — seeds and Default.** A Lab Member cannot edit a seed
   template, and the Default toggle (`is_default`) is not offered or not saved for them.
-- [ ] **Label templates — owner is forced (label-printing PR #TBD).** After a member creates a template,
+- [ ] **#TBD-L3 — Label templates — owner is forced.** After a member creates a template,
   `user_created` is that member, whatever the request body said.
-- [ ] **Label templates — Lab Admin (label-printing PR #TBD).** A Lab Admin can create, edit, delete and
+- [ ] **#TBD-L4 — Label templates — Lab Admin.** A Lab Admin can create, edit, delete and
   set Default on any template, including the seeds.
-- [ ] **Label templates — permissions apply (label-printing PR #TBD).** After the migration, flush Redis
+- [ ] **#TBD-L5 — Label templates — permissions apply.** After the migration, flush Redis
   and restart Directus: the rules above then hold, with no 403 on reading `label_templates`.
 
 ### Plot dashboard inside Directus
@@ -224,7 +224,7 @@ the rebuilt `d1-home`, `d1-lab-dashboard` and `d1-composition-bar` load, and app
   machining operations and **View FAST** on sintering ones opening the right run, and the file
   rows' copy-path buttons giving the same paths as the sample form. Narrow the browser below
   ~640 px wide (or open the page in a split view): the strip becomes a vertical list. **Print
-  label** and **Report** open in a new tab. Operations and tests that you click open their
+  label** opens the labels page in the same tab with this sample ticked (see the labels items below) and **Report** opens in a new tab. Operations and tests that you click open their
   Explorer pages (see the E4 items below). Dark theme: the page is readable. Since: Explorer pages E1 (PR pending).
 - [ ] **E1 — Sample page with hidden relatives.** As a role whose item filter hides some of that
   sample's relatives, operations or tests, open the page. Expect: the life strip shows only what
@@ -792,6 +792,53 @@ migration 141 prints about ownerless records.
   Then run `dbmate down`
   once: the md5 matches the value recorded before applying, and the backup table is gone. Run
   `up` again and restart Directus. Since: fix/lab-member-legal-some (PR pending).
+- [ ] **#TBD-L6 — Labels page — A4 4×5 sheet on the office laser.** Open
+  **Print labels** (sidebar), tick 6 samples, keep the **A4 4×5** template, press **Print**. In the
+  browser's print dialog choose A4, **100% scale** (not "fit to page") and no margins or headers. On
+  a plain sheet laid over the die-cut A4 4 × 5 sheet, each label (52.5 × 59.4 mm) has its QR code
+  and text inside its cell. Set **Start at label** to 3: the first two cells stay empty. Scan one QR
+  code with any phone camera: it reads as plain text (`D1 SAMPLE`, the code and short ID, ...). The
+  page itself follows light and dark mode, the labels stay white.
+- [ ] **#TBD-L7 — Labels page — QL-700 with DK-22205 through the Windows driver.** On
+  the PC the QL-700 is plugged into, open the labels page, tick 3 samples, choose **Brother DK-22205
+  62 mm** and press **Print**. In the print dialog pick the QL-700, paper **62 mm continuous** (the
+  driver's DK-22205 entry), **100% scale**. Expect: three labels, each its own page, 62 mm wide and
+  30 mm long, the QR code on the left and the code, short ID and nickname on the right, none cut off.
+  Scan one QR code. If the driver shrinks or crops the label, record the driver settings that work in
+  the wiki page on labels.
+- [ ] **#TBD-L8 — Labels page — template editor as a non-admin.** Sign in as a Lab
+  Member (not an admin), open the labels page, press **Edit template** on a seeded template: there is
+  **no Default switch**, **Save** is disabled, **Delete** is absent, and a line says the template is
+  not yours; **Save as new** with a new name works and selects the new template. On that template
+  **Save** and **Delete** are offered: change the padding and Save, then Delete it. Saving a template
+  under a name that already exists shows "A template with that name already exists" inside the editor.
+  Another member's template shows the same read-only state. Sign in as an admin: the Default switch
+  is there, and ticking it on another template moves the default.
+- [ ] **#TBD-L9 — Labels page — preselection from the record pages.** From a Sample
+  page (real data) press **Print label**: the labels page opens in the same tab with that sample
+  ticked. From **Samples**, tick two rows and press **Print labels for selected**: both are ticked
+  on the labels page. Open `/admin/home/labels?codes=<a real code>,NOPE`: the real one is ticked and
+  "Not found, or not visible to you: NOPE" is shown. The Print label button on a sample form (the
+  `d1-report-button` interface) goes to the same page.
+- [ ] **#TBD-L10 — Default swap is one write.** As an admin, on the labels page open a template that is not the
+  default, tick **Default template** and Save: it becomes the only default (check the Template list: only one
+  says "(default)"; reload to confirm). Then "Save as new" on a template with Default ticked and a name that already
+  exists: the save is refused with "A template with that name already exists" and the old default is still the
+  default. Save as new with a fresh name and Default ticked: the new template is the only default. "Save as new" on the
+  current default template (new name, Default left ticked as it was): the default does not move. Check
+  `v_audit_logs_with_actor` (`table_name = 'label_templates'`): the swap shows an UPDATE of the old default row turning
+  is_default off, with you as the actor, next to the INSERT or UPDATE of the new default.
+- [ ] **#TBD-L11 — Start at and Copies can be typed.** On a sheet template, click into **Start at label**, clear it
+  and type 4: it reads 4 (not 14), and the preview starts at the 4th cell. Type 99: it settles on the number of
+  cells on the page. Do the same with **Copies of each sample**: clear and type 4 gives 4; 5000 settles on 100; an
+  empty field becomes 1 when you leave it. While editing a template, a half-typed grid (empty Columns) does not
+  change Start at or show NaN anywhere.
+- [ ] **#TBD-L12 — Copies per sample.** Tick three samples. Each chip has its own number. Change the global
+  "Copies of each sample" to 2: every chip shows 2. Type 5 on one chip, then change the global value to 3: that
+  chip stays 5 and the others become 3. The summary line totals every copy (5 + 3 + 3 = 11 labels), the preview
+  shows the right number of labels for each sample, and the printed sheet matches. A chip with its own number is marked (a dot and an accent border); clearing its
+  number puts it back on the global value and the mark goes. Removing a chip and ticking it again starts from the
+  global value.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { paginate, slotPositions } from './geometry';
+import { paginate, paginateCounts, slotPositions } from './geometry';
 import { templateFromRow } from './template';
 import type { LabelSample } from './types';
 
@@ -79,5 +79,25 @@ describe('paginate', () => {
 	});
 	it('gives no pages for no samples, even with a start offset', () => {
 		expect(paginate([], { copies: 1, start: 4 }, A4_4X5)).toEqual([]);
+	});
+});
+
+describe('paginateCounts', () => {
+	const t = { ...A4_4X5, columns: 2, rows: 2 };
+	it('gives each sample its own number of copies', () => {
+		const items = [{ sample: sample(1), copies: 1 }, { sample: sample(2), copies: 3 }, { sample: sample(3), copies: 2 }];
+		expect(codes(paginateCounts(items, 1, t))).toEqual([['S-1', 'S-2', 'S-2', 'S-2'], ['S-3', 'S-3']]);
+	});
+	it('applies the start offset before the first sample', () => {
+		expect(codes(paginateCounts([{ sample: sample(1), copies: 2 }], 3, t))).toEqual([[null, null, 'S-1', 'S-1']]);
+	});
+	it('treats a bad count as 1, and a roll as one label per page', () => {
+		expect(codes(paginateCounts([{ sample: sample(1), copies: 0 }, { sample: sample(2), copies: Number.NaN }], 1, t))).toEqual([['S-1', 'S-2']]);
+		expect(codes(paginateCounts([{ sample: sample(1), copies: 2 }, { sample: sample(2), copies: 1 }], 9, ROLL))).toEqual([['S-1'], ['S-1'], ['S-2']]);
+		expect(paginateCounts([], 1, t)).toEqual([]);
+	});
+	it('agrees with paginate when every count is the same', () => {
+		const five = [1, 2, 3, 4, 5].map(sample);
+		expect(paginateCounts(five.map((x) => ({ sample: x, copies: 2 })), 2, t)).toEqual(paginate(five, { copies: 2, start: 2 }, t));
 	});
 });

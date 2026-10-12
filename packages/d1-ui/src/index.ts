@@ -107,15 +107,18 @@ export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';
 export { isFinderShortcut, isModalOpen } from './finder/finderNav';
 export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
-export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
+export type { IndexDef, ColumnDef, FilterDef, SelectAction } from './index/indexConfig';
 export { default as IndexPage } from './index/IndexPage.vue';
 
 // Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)
 export {
-	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, fitText,
+	FIELD_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, paginateCounts, fitText,
 	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, QR_HEADER, renderLabelDocument,
+	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
+	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
+	saveErrorText, moveField, sampleEntries,
 } from './labels';
 export type {
 	FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
-	RenderOptions, RenderedLabels, QrModules, Measure,
+	RenderOptions, RenderedLabels, QrModules, Measure, BrokenTemplate, CountedSample, LabelEntry,
 } from './labels';

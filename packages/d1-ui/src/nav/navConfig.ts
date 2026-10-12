@@ -85,7 +85,7 @@ export const NAV_GROUPS: NavGroup[] = [
 		label: 'Tools',
 		collapsible: false,
 		links: [
-			{ label: 'Print labels', to: '/d1-report/labels', newTab: true },
+			{ label: 'Print labels', to: '/home/labels' },
 			{ label: 'Report a bug', to: '/report-bug' },
 			{ label: 'Data Studio', to: '/content' },
 			{ label: 'Force Crawler', to: '/d1-force-crawler', adminOnly: true },

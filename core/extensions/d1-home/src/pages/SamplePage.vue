@@ -57,11 +57,10 @@ const contents = computed<ContentsEntry[]>(() => [
 	{ id: 'files', title: 'Files', count: files.value.loading ? null : files.value.data.length },
 ]);
 
-// /d1-report/* are endpoint pages (printable HTML), not app routes: open them in a new tab, same
-// session, as the Home page does.
-const openReport = (path: string) => window.open(path, '_blank', 'noopener');
-const printLabel = () => openReport(`/d1-report/label?ids=${encodeURIComponent(props.id)}`);
-const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(props.id)}`);
+// The report is an endpoint page (printable HTML), not an app route: open it in a new tab, same session.
+// Print label is an app page: the labels page, with this sample preselected.
+const labelsTo = computed(() => `/home/labels?ids=${encodeURIComponent(props.id)}`);
+const openReportPage = () => window.open(`/d1-report/sample/${encodeURIComponent(props.id)}`, '_blank', 'noopener');
 </script>
 
 <template>
@@ -103,7 +102,7 @@ const openReportPage = () => openReport(`/d1-report/sample/${encodeURIComponent(
 							</template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
-								<v-button small secondary @click="printLabel"><v-icon name="label" small left />Print label</v-button>
+								<v-button small secondary :to="labelsTo"><v-icon name="label" small left />Print label</v-button>
 								<v-button small secondary @click="openReportPage"><v-icon name="picture_as_pdf" small left />Report</v-button>
 								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
 							</template>
