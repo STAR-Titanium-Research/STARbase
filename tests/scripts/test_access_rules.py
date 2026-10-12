@@ -1905,21 +1905,28 @@ def test_a_restricted_operation_is_seen_only_by_owner_list_and_pi():
     }
 
 
-def test_rollup_is_for_the_pi_and_investigators_only():
+def test_rollup_pi_reads_every_row_investigators_only_unrestricted_ones():
+    """project_rollup carries `restricted` (migration 167): the PI reads every row of the project, an investigator
+    (old table or access role investigator) only the unrestricted ones, a Can view person or a stranger none."""
     w = World()
     base_people(w)
     w.project("P", pi="pi")
     w.investigator("P", "inv")
     w.grant("project", "P", "inv2", "investigator")
     w.grant("project", "P", "viewer", "view")
-    w.add("project_rollup", project_id="P")
-    row = w.t["project_rollup"][0]
-    got = {
-        u
-        for u in PEOPLE
-        if Directus(RULES, w, f"u_{u}").can("project_rollup", "read", row)
-    }
-    assert got == {"pi", "inv", "inv2"}
+    w.add("project_rollup", project_id="P", restricted=False)
+    w.add("project_rollup", project_id="P", restricted=True)
+    open_row, hidden_row = w.t["project_rollup"]
+
+    def readers(row):
+        return {
+            u
+            for u in PEOPLE
+            if Directus(RULES, w, f"u_{u}").can("project_rollup", "read", row)
+        }
+
+    assert readers(open_row) == {"pi", "inv", "inv2"}
+    assert readers(hidden_row) == {"pi"}
 
 
 # =================================================================================================
@@ -1996,6 +2003,7 @@ def _directus(drop=(), restricted=True):
     }
     if restricted:
         cols |= {f"{t}.restricted" for t in RECORDS}
+        cols.add("project_rollup.restricted")
     for key in drop:
         rel.pop(key)
     return {

@@ -2588,8 +2588,8 @@ rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
 rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,user_id" "people.update leaves out exactly the key, the login, the legacy id and the timestamp"
 rl_check "sample_read_has_co_owners:1" "the sample read filter matches co_owners._some.user_id (the M2M alias)"
-rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"project_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"project_id":{"access":{"role":{"_in":["investigator"]}}}}]}]}' \
-    "project_rollup is readable only by the project's PI and investigators (old table and access role investigator)"
+rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"restricted":{"_eq":false}},{"_or":[{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"project_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"project_id":{"access":{"role":{"_in":["investigator"]}}}}]}]}]}]}' \
+    "project_rollup: the project's PI reads every row, an investigator (old table or access role investigator) only restricted = false rows"
 for idx in idx_physical_samples_owner_person_id idx_physical_samples_project_id \
     idx_manufacturing_operations_owner_person_id idx_manufacturing_operations_project_id \
     idx_test_sessions_owner_person_id idx_test_sessions_project_id idx_campaigns_owner_person_id \
@@ -2769,6 +2769,11 @@ jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
 LA=db/migrations/20261012000166_lab_member_record_access_rules.sql
 la_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LA")
 la_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
+# 20261012000167 (rollup restricted) rewrites 166's project_rollup row and keeps its own backup in d1_private: it goes down
+# before 166 and comes up after it.
+RR=db/migrations/20261012000167_project_rollup_restricted.sql
+rr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RR")
+rr_down=$(awk '/-- migrate:down/{f=1;next}f' "$RR")
 # 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql
@@ -2812,6 +2817,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$rr_down
 $la_down
 $uu_down
 $jr_down
@@ -2838,10 +2844,12 @@ SELECT 'up_people_create_validation:' || (validation::jsonb ? '_or') FROM direct
 $sf_up
 $jr_up
 $la_up
+$rr_up
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
+$rr_down
 $la_down
 $jr_down
 $sf_down
@@ -2980,11 +2988,12 @@ rv_refuse "an alias name that another relation uses" \
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('equipment', 'project_id', 'projects', 'sessions');" \
     "cannot name the alias projects.sessions"
 
-echo "== Migration 166: Lab Member record access rules apply, reapply and reverse =="
-# The database was migrated to the head, so 166 is applied: down must give main's rows back exactly (the frozen
-# generator output of 2026-10-12 is tests/scripts/fixtures/lab_member_rules_main.json), up must give the generated
-# rows, a second up must change nothing and keep the first backup, and the second down must restore the same rows
-# (ids included). Everything runs in a rolled-back transaction.
+echo "== Migrations 166 and 167: Lab Member record access rules apply, reapply and reverse =="
+# The database was migrated to the head, so 166 and 167 are applied. 167 goes down first (it rewrites the project_rollup
+# row 166 left), then 166: main's rows must be back exactly (the frozen generator output of 2026-10-12 is
+# tests/scripts/fixtures/lab_member_rules_main.json). Up again must give 166's rows, a second up must change nothing
+# and keep the first backup, the second down must restore the same rows (ids included), and 166 + 167 up must give
+# the generated rows (the head). Everything runs in a rolled-back transaction.
 rules_main_json=$(python3 -c "import json;print(json.dumps(json.load(open('tests/scripts/fixtures/lab_member_rules_main.json'))))")
 la_out=$($PSQL 2>&1 <<SQL
 BEGIN;
@@ -2995,6 +3004,7 @@ CREATE TEMP TABLE _main AS
   SELECT * FROM json_to_recordset(\$m\$$rules_main_json\$m\$::json) AS x(collection text, action text, permissions jsonb);
 CREATE TEMP TABLE head_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
 SELECT 'head_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
+$rr_down
 $la_down
 SELECT 'dn_backup:' || coalesce(to_regclass('d1_private.lab_member_access_rules_backup')::text, 'gone');
 SELECT 'dn_main_rows:' || count(*) FROM _main;
@@ -3006,7 +3016,7 @@ $la_up
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
- WHERE g.ruled;
+ WHERE g.ruled AND g.collection <> 'project_rollup';
 SELECT 'up_access_rows:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND collection LIKE '%\_access';
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
 SELECT 'up_backup_inserted:' || count(*) FROM d1_private.lab_member_access_rules_backup WHERE inserted;
@@ -3027,18 +3037,25 @@ SELECT 'dn2_exact:' || count(*) FROM ((SELECT to_jsonb(r) FROM old_rows r EXCEPT
 SELECT 'dn2_backup:' || coalesce(to_regclass('d1_private.lab_member_access_rules_backup')::text, 'gone');
 DROP TABLE _lm_access_rules;
 $la_up
+$rr_up
 SELECT 'up3_exact_as_head:' || count(*) FROM ((SELECT permissions::jsonb, collection, action FROM head_rows EXCEPT SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM')
   UNION ALL (SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM' EXCEPT SELECT permissions::jsonb, collection, action FROM head_rows)) x;
+SELECT 'final_exact:' || count(*) FROM _gen g JOIN directus_permissions p
+  ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
+ AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
+ WHERE g.ruled;
 ROLLBACK;
 SQL
 )
-la_check() { grep -qxF -- "$1" <<<"$la_out" && ok "$2" || bad "$2 (psql output: $la_out)"; }
+la_check() { grep -qxF -- "$1" <<<"$la_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-600 <<<"$la_out"))"; }
 la_check "dn_backup:gone" "down drops the backup table"
 la_check "dn_main_rows:72" "(setup) main's frozen Lab Member filters hold 72 rows"
-la_check "dn_matches_main:72" "down: every ruled Lab Member row is exactly main's filter again"
+la_check "dn_matches_main:72" "167 down then 166 down: every ruled Lab Member row is exactly main's filter again"
 la_check "dn_access_rows:0" "down: the five access table rows it inserted are gone"
-la_n=$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
-[[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
+la_n=$(grep -o '^final_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
+[[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "166 + 167 up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
+[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 1 ))" ]] \
+    && ok "166 alone: every ruled row but project_rollup (167's) matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
 la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
 la_check "up_backup_inserted:5" "up: exactly the five access rows are recorded as inserted"
 la_check "up_backup_commented:true" "up: the backup table has a comment"
@@ -3051,6 +3068,82 @@ la_check "dn2_backup:gone" "down after a second up drops the backup table"
 la_check "up3_exact_as_head:0" "up again gives the rows the database had at the head"
 [[ "$(grep -o '^up2_backup_rows:[0-9]*' <<<"$la_out" | cut -d: -f2)" == "$(grep -o '^up_backup_rows:[0-9]*' <<<"$la_out" | cut -d: -f2)" ]] \
     && ok "a second up adds no backup rows" || bad "a second up changed the backup (psql output: $la_out)"
+
+echo "== Migration 167: the project rollup carries restricted =="
+# The cache (project_rollup) and the view behind it gain `restricted`; the refresh copies it; flipping a sample's flag
+# refreshes the cache; the Lab Member rule lets the PI read every row and an investigator only restricted = false rows.
+# All inside one rolled-back transaction: seed, check, then 167's down and up again.
+RR=db/migrations/20261012000167_project_rollup_restricted.sql
+rr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RR")
+rr_down=$(awk '/-- migrate:down/{f=1;next}f' "$RR")
+RRK=c0000000-0000-4000-8000-0000000000
+rr_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+INSERT INTO manufacturing_methods (method_id, method_code, method_name) VALUES ('${RRK}e1', 'T-RR-M', 'rollup restricted test');
+INSERT INTO projects (project_id, project_code, project_name) VALUES ('${RRK}b1', 'TRR-P', 'rollup restricted test');
+INSERT INTO campaigns (campaign_id, project_id, campaign_type, name, restricted) VALUES ('${RRK}f1', '${RRK}b1', 'testing_campaign', 'trr restricted campaign', true);
+INSERT INTO physical_samples (sample_id, sample_code, restricted) VALUES ('${RRK}d1', 'TRR-S1', true), ('${RRK}d2', 'TRR-S2', false);
+INSERT INTO tools (tool_id, tool_code, tool_name) VALUES ('${RRK}a1', 'TRR-TOOL-A', 'only restricted ops'), ('${RRK}a2', 'TRR-TOOL-B', 'restricted and open ops');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, project_id, campaign_id, tool_id, pass_code, restricted) VALUES
+    ('${RRK}c1', '${RRK}e1', '${RRK}d1', '${RRK}b1', NULL, '${RRK}a1', 'TRR-O1', false),   -- under a restricted sample
+    ('${RRK}c2', '${RRK}e1', '${RRK}d2', '${RRK}b1', NULL, '${RRK}a1', 'TRR-O2', true),    -- restricted itself
+    ('${RRK}c3', '${RRK}e1', '${RRK}d2', NULL, '${RRK}f1', '${RRK}a2', 'TRR-O3', false),   -- in a restricted campaign (project through it)
+    ('${RRK}c4', '${RRK}e1', '${RRK}d2', '${RRK}b1', NULL, '${RRK}a2', 'TRR-O4', false),   -- nothing restricted
+    ('${RRK}c5', '${RRK}e1', '${RRK}d2', '${RRK}b1', NULL, NULL, 'TRR-O5', false);
+SELECT 'col:' || is_nullable || '/' || column_default FROM information_schema.columns WHERE table_name = 'project_rollup' AND column_name = 'restricted';
+SELECT 'view_last_col:' || (SELECT attname FROM pg_attribute WHERE attrelid = 'v_project_rollup'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum DESC LIMIT 1);
+SELECT 'ops:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
+SELECT 'tools:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'tool' AND project_id = '${RRK}b1';
+SELECT 'samples:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'sample' AND project_id = '${RRK}b1';
+SELECT 'cache_eq_view:' || (SELECT count(*) FROM (SELECT row_id, restricted FROM project_rollup EXCEPT SELECT row_id, restricted FROM v_project_rollup) x);
+UPDATE physical_samples SET restricted = true WHERE sample_id = '${RRK}d2';
+SELECT 'flip_ops:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
+SELECT 'flip_tools:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'tool' AND project_id = '${RRK}b1';
+SELECT 'flip_samples:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'sample' AND project_id = '${RRK}b1';
+UPDATE physical_samples SET restricted = false WHERE sample_id = '${RRK}d2';
+SELECT 'unflip_ops:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
+SELECT 'rule_restricted:' || (permissions::jsonb @> '{"_or":[{"_and":[{"restricted":{"_eq":false}}]}]}'::jsonb) FROM directus_permissions WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
+SELECT 'backup:' || count(*) FROM d1_private.project_rollup_restricted_backup;
+SELECT 'trigger:' || count(*) FROM pg_trigger WHERE tgname = 'refresh_rollup_samples' AND tgrelid = 'physical_samples'::regclass;
+$rr_down
+SELECT 'dn_col:' || count(*) FROM information_schema.columns WHERE table_name = 'project_rollup' AND column_name = 'restricted';
+SELECT 'dn_view_col:' || count(*) FROM information_schema.columns WHERE table_name = 'v_project_rollup' AND column_name = 'restricted';
+SELECT 'dn_trigger:' || count(*) FROM pg_trigger WHERE tgname = 'refresh_rollup_samples';
+SELECT 'dn_rule_restricted:' || (permissions::jsonb::text LIKE '%"restricted"%') FROM directus_permissions WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
+SELECT 'dn_backup:' || coalesce(to_regclass('d1_private.project_rollup_restricted_backup')::text, 'gone');
+SELECT 'dn_view_comment:' || (obj_description('v_project_rollup'::regclass, 'pg_class') IS NOT NULL);
+SELECT 'dn_cache_eq_view:' || (SELECT count(*) FROM (SELECT row_id FROM project_rollup EXCEPT SELECT row_id FROM v_project_rollup) x);
+$rr_up
+SELECT 'up2_col:' || count(*) FROM information_schema.columns WHERE table_name = 'project_rollup' AND column_name = 'restricted';
+SELECT 'up2_ops:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
+SELECT 'up2_rule_restricted:' || (permissions::jsonb @> '{"_or":[{"_and":[{"restricted":{"_eq":false}}]}]}'::jsonb) FROM directus_permissions WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
+ROLLBACK;
+SQL
+)
+rr_check() { grep -qxF -- "$1" <<<"$rr_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-600 <<<"$rr_out"))"; }
+rr_check "col:NO/false" "project_rollup.restricted is NOT NULL DEFAULT false"
+rr_check "view_last_col:restricted" "v_project_rollup gains restricted as its last column"
+rr_check "ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=false,TRR-O5=false" "an operation row is restricted when the operation, its sample or its campaign is"
+rr_check "tools:TRR-TOOL-A=true,TRR-TOOL-B=false" "a tool used only by restricted operations is restricted, one with an open operation is not"
+rr_check "samples:TRR-S1=true,TRR-S2=false" "a sample row carries the sample's own flag"
+rr_check "cache_eq_view:0" "the cache equals the view (restricted included) after the inserts"
+rr_check "flip_ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=true,TRR-O5=true" "flipping a sample's flag refreshes the cache: its operations turn restricted"
+rr_check "flip_tools:TRR-TOOL-A=true,TRR-TOOL-B=true" "...and a tool whose every operation is now restricted turns restricted"
+rr_check "flip_samples:TRR-S1=true,TRR-S2=true" "...and the sample row follows"
+rr_check "unflip_ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=false,TRR-O5=false" "flipping it back restores the rows"
+rr_check "rule_restricted:true" "the Lab Member project_rollup rule tests restricted = false for investigators"
+rr_check "backup:1" "the old rule is kept in the backup table"
+rr_check "trigger:1" "a statement trigger on physical_samples refreshes the cache"
+rr_check "dn_col:0" "down: the column is gone"
+rr_check "dn_view_col:0" "down: the view is back without it"
+rr_check "dn_trigger:0" "down: the trigger is gone"
+rr_check "dn_rule_restricted:false" "down: the old Lab Member rule is back"
+rr_check "dn_backup:gone" "down: the backup table is dropped"
+rr_check "dn_view_comment:true" "down: the view keeps its comment"
+rr_check "dn_cache_eq_view:0" "down: the cache equals the old view"
+rr_check "up2_col:1" "a second up works (the column is back)"
+rr_check "up2_ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=false,TRR-O5=false" "a second up refills the cache"
+rr_check "up2_rule_restricted:true" "a second up puts the rule back"
 
 echo "== Operation code rule: code_num, operation_code_for, the run number (T0b) =="
 # One rolled-back transaction. Rows for operation_code_for are built in memory with jsonb_populate_record.
@@ -3803,6 +3896,7 @@ live_mo_read='{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"
 live_cs_update='{"_or":[{"campaign_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
 sm_out=$($PSQL 2>&1 <<SQL
 BEGIN;
+$rr_down
 $la_down
 $mig_down
 SELECT 'down_backup_gone:' || (to_regclass('d1_private.lab_member_some_fix_backup') IS NULL);
@@ -4049,6 +4143,9 @@ ra_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RA_MIG")
 ra_down=$(awk '/-- migrate:down/{f=1;next}f' "$RA_MIG")
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+-- 167 and 166 depend on 165's columns and tables, so they go down first (as on a real rollback)
+$rr_down
+$la_down
 CREATE TEMP TABLE ra_before AS
   SELECT (SELECT count(*) FROM directus_relations WHERE many_collection LIKE '%\_access') AS rels,
          (SELECT count(*) FROM directus_fields WHERE field IN ('access','restricted')) AS flds,
@@ -4070,6 +4167,8 @@ grep -qx "ra_down_meta:0/0/0" <<<"$ra_out" && ok "165 down removes the Directus 
 grep -qx "ra_up_again:true/true/true" <<<"$ra_out" && ok "165 up after down restores the same metadata" || bad "165 up after down differs (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$rr_down
+$la_down
 $ra_down
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('sample_access', 'sample_id', 'projects', NULL);
 $ra_up
@@ -4079,6 +4178,8 @@ SQL
 grep -q "access rules need" <<<"$ra_out" && ok "165 stops when a relation it needs already points at another collection" || bad "165 did not stop on a relation pointing elsewhere (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$rr_down
+$la_down
 $ra_down
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('campaign_samples', 'sample_id', 'physical_samples', 'access');
 $ra_up

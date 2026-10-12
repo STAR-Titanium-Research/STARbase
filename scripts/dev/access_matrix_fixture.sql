@@ -116,6 +116,9 @@ INSERT INTO test_access (session_id, person_id, role)
 SELECT ref.id('T' || k), ref.id('person-viewer'), 'view' FROM _u
 UNION ALL SELECT ref.id('T' || k), ref.id('person-editor'), 'edit' FROM _u;
 
+-- the rollup cache (a statement trigger per insert above already refreshed it; once more so the smoke starts from the live derivation)
+SELECT refresh_project_rollup();
+
 -- 4. the plain-SQL evaluation (spec section 1). u = a directus_users id. "me(person)": the person is u's.
 CREATE FUNCTION ref.me(person uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT person IS NOT NULL AND EXISTS (SELECT 1 FROM people WHERE person_id = person AND user_id = u) $$;
@@ -294,6 +297,15 @@ CREATE FUNCTION ref.expected_json() RETURNS text LANGUAGE sql STABLE AS $$
                                    'delete', ref.ids(c.kind, 'delete', f.user_id)))
                           FROM (VALUES ('physical_samples'), ('manufacturing_operations'), ('test_sessions'), ('campaigns'), ('projects')) AS c (kind)))
                        FROM ref.fixture_users f),
+        -- the rollup rows of the fixture projects each user may read: the PI every row, an investigator (old table or access
+        -- role investigator) the unrestricted ones (migration 167; before it the column does not exist and counts as false)
+        'rollup', (SELECT jsonb_object_agg(f.name, (
+                      SELECT coalesce(jsonb_agg(r.row_id ORDER BY r.row_id), '[]'::jsonb)
+                        FROM project_rollup r JOIN projects p ON p.project_id = r.project_id
+                       WHERE p.project_code LIKE 'FXP%'
+                         AND (ref.pi_of(r.project_id, f.user_id)
+                              OR (NOT coalesce((to_jsonb(r) ->> 'restricted')::boolean, false) AND ref.p_invs(r.project_id, f.user_id)))))
+                    FROM ref.fixture_users f),
         'real_amnesty_ops', (SELECT coalesce(jsonb_agg(operation_id ORDER BY operation_id), '[]') FROM manufacturing_operations
                               WHERE owner_person_id IS NULL AND project_id IS NULL AND campaign_id IS NULL AND NOT restricted
                                 AND operation_id NOT IN (SELECT id FROM ref.fx_ids WHERE kind = 'manufacturing_operations')),

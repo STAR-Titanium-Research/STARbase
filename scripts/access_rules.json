@@ -195,7 +195,10 @@
     "subject.update": [{"via": "test_sessions_id", "set": "record.update"}],
     "investigators.read": [{"via": "project_id", "set": "project.read"}],
     "investigators.write": [{"via": "project_id", "set": "project.pi"}],
-    "rollup.read": [{"via": "project_id", "set": "project.investigators"}]
+    "rollup.read": [
+      {"via": "project_id", "set": "project.pi"},
+      {"unless_restricted": [{"via": "project_id", "set": "project.invs"}]}
+    ]
   },
   "rules": {
     "physical_samples": {"create": "any", "read": "sample.read", "update": "sample.editors", "delete": "sample.owner"},

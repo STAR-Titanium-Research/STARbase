@@ -487,6 +487,25 @@ await check('lm_access_co_owner_cannot_change_or_remove_co_owner_rows', async ()
   expect(owner.status === 204, `the sample's owner DELETE -> ${owner.status}, expected 204`);
 });
 
+// project_rollup (migration 167): the PI reads every row of the project, an investigator only the unrestricted ones
+await check('lm_access_rollup_pi_reads_all_investigators_only_unrestricted', async () => {
+  needFx();
+  const ids = FX.universes.map((u) => u.P).join(',');
+  const problems = [];
+  let hidden = 0;
+  for (const [user, token] of Object.entries(FX.users)) {
+    const r = await api('GET', `/items/project_rollup?filter[project_id][_in]=${ids}&limit=-1&fields=row_id&sort=row_id`, undefined, token);
+    if (r.status !== 200) { problems.push(`${user}: status ${r.status}`); continue; }
+    const got = r.body.data.map((x) => x.row_id).sort();
+    const want = [...FX.rollup[user]].sort();
+    const d = diff(got, want);
+    if (d.extra.length || d.missing.length) problems.push(`${user}: extra ${d.extra.length} missing ${d.missing.length}`);
+    if (user === 'inv') hidden = FX.rollup.pi.length - want.length;
+  }
+  expect(!problems.length, problems.slice(0, 4).join(' | '));
+  expect(hidden > 0, 'the fixture has no restricted rollup row an investigator must not see');
+});
+
 // The delete matrices run last: they really delete the fixture records the cases above use.
 for (const collection of ['test_sessions', 'manufacturing_operations', 'physical_samples', 'campaigns', 'projects']) {
   await check(`lm_access_matrix_${collection}_delete`, async () => {
