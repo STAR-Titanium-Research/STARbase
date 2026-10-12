@@ -1,0 +1,92 @@
+/* Tokens of the Explorer pages, set on the page frame (PageShell) and on the campaign workbench,
+   and the helper classes the frame gives every page (.d1-cols, .d1-note, .d1-crumbs; at the end of
+   this file). The workbench also renders inside a Data Studio form. The look is the force app's (apps/force-app/web
+   styles.css, record/panels/PanelFrame.vue) carried into Directus: the same type scale and the same
+   opaque panel with a lid, but every colour derived from the active Directus theme, so light and
+   dark both work.
+
+   Type scale: every font-size in the kit and the pages is one of these, as var(--fs-sm, 12px) with
+   the px fallback (the convention of packages/force-plotting). 11px is the floor.
+     xs 11  badges, units, tile labels, table heads     lg 15  card codes, key values
+     sm 12  hints, meta, captions                       xl 18  banner title
+     md 13  body, tables, panel titles                  2xl 22 record code, big counts */
+:where(.d1-page, .d1-kit) {
+	--fs-xs: 11px;
+	--fs-sm: 12px;
+	--fs-md: 13px;
+	--fs-lg: 15px;
+	--fs-xl: 18px;
+	--fs-2xl: 22px;
+
+	/* A panel steps off the page ground, and a tile (a lid, a card inside a panel, a row hover)
+	   steps off the panel. Which theme colour is "one step" depends on the scheme, and the Data
+	   Studio sets color-scheme on <body> (body.light / body.dark), so light-dark() can choose:
+	     light  ground = background, panel = the input background (white in the lab's theme, else
+	            the ground itself, told apart by its hairline and shadow), tile = background-subdued
+	     dark   ground = background, panel = background-subdued, tile = background-normal
+	   which is the force app's own ladder (--bg, --bg-2, --surface). */
+	--d1-surface: light-dark(
+		var(--theme--form--field--input--background, var(--theme--background)),
+		var(--theme--background-subdued)
+	);
+	--d1-tile: light-dark(var(--theme--background-subdued), var(--theme--background-normal));
+	--d1-line: var(--theme--border-color-subdued);
+	--d1-radius: 12px;
+	--d1-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+
+	/* Secondary text. --theme--foreground-subdued is about 3.8:1 on the page ground, too faint for
+	   11px labels; mixing the foreground toward the ground keeps the hue and reaches about 6:1. */
+	--d1-dim: color-mix(in srgb, var(--theme--foreground) 68%, var(--theme--background));
+	/* Status inks. The theme's success / warning / danger are fills: as text on their own tinted
+	   background they are under 2:1. Mixing toward the text colour darkens them on a light theme and
+	   lightens them on a dark one. */
+	--d1-ok: color-mix(in srgb, var(--theme--success) 50%, var(--theme--foreground));
+	--d1-warn: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground));
+	--d1-bad: color-mix(in srgb, var(--theme--danger) 60%, var(--theme--foreground));
+
+	/* Accent: what the kit colours with the theme's primary as TEXT, an icon, a border, a fill or a
+	   tint (record links, the kind pill, count chips, tags, progress bars, the sparkline). The lab's
+	   dark theme has a primary of #18222F on a #0d1117 ground, about 1.1:1, so used directly all of
+	   those vanish. In a light scheme this is exactly the primary (nothing changes there). In a dark
+	   scheme the primary is lifted 65% of the way to the foreground: with the lab's colours that is
+	   #8b949e, 5.6:1 on the panel (#161b22), 6.2:1 on the ground and 4.8:1 on its own 12% tint.
+	   Always written var(--d1-accent, var(--theme--primary)): RecordLink, CompositionBar and
+	   Sparkline also render outside the page frame, where this is not set. Native Directus
+	   components keep the theme's primary and are not touched. */
+	--d1-accent: light-dark(
+		var(--theme--primary),
+		color-mix(in srgb, var(--theme--primary) 35%, var(--theme--foreground))
+	);
+	/* Text or icon on a solid accent fill (the active tab, the step number): white on the primary
+	   as before, the ground colour on the lifted dark accent (6.2:1; white on it would be 3.1:1). */
+	--d1-on-accent: light-dark(#fff, var(--theme--background));
+	--d1-tint: color-mix(in srgb, var(--d1-accent) 10%, transparent);
+}
+
+/* Helper classes the frame gives every page: two columns of blocks, a line of text between blocks,
+   the breadcrumb line. Unscoped and wrapped in :where() so they weigh (0,1,0) (the pseudo-class
+   and variant add only their own): any single-class scoped rule of a page (`.cap[data-v]`, 0,2,0)
+   overrides them. As `.d1-page[data-v] :deep(...)` they weighed (0,3,0) and silently won over every
+   page's own margin. */
+/* Blocks side by side while there is room, stacked when there is not. Each keeps its own height
+   (start, not stretch): stretched to the tallest, a short panel (three values beside ten) was mostly
+   empty. */
+:where(.d1-page, .d1-kit) .d1-cols {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+	gap: 16px;
+	align-items: start;
+}
+:where(.d1-page, .d1-kit) .d1-note { margin: 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
+:where(.d1-page, .d1-kit) .d1-note.warn { color: var(--d1-warn); }
+:where(.d1-page, .d1-kit) .d1-note.bad { color: var(--d1-bad); }
+:where(.d1-page, .d1-kit) :is(.d1-note, .d1-crumbs) a { color: var(--d1-accent, var(--theme--primary)); font-weight: 600; text-decoration: none; }
+:where(.d1-page, .d1-kit) :is(.d1-note, .d1-crumbs) a:hover { text-decoration: underline; }
+:where(.d1-page, .d1-kit) .d1-crumbs {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	font-size: var(--fs-sm, 12px);
+	color: var(--d1-dim);
+}

@@ -12,7 +12,12 @@ never tries to normalise EMD bytes.
 
 There is no Versuch->recipe foreign key, so `Bezeichnung` (the run's program title) is used
 as the recipe/title; the standalone ECS_Prog recipe catalog is intentionally not imported
-(nothing to link it to). pass_code is left NULL; finalize_fast_codes.py assigns it.
+(nothing to link it to).
+
+The machine's own run number (VersuchNr) is written to sintering_run_number and the database
+builds the operation code from it (trigger mfg_op_set_code): this script never writes pass_code.
+A hand-logged FAST 25 operation with the same run number and no source_run_uid is filled in
+instead of duplicated (fast_ops.adopt_hand_logged).
 
 Usage:
     DATABASE_URL=… python scripts/import_fast25.py "…/FAST Machines Data" [--dry-run]
@@ -33,6 +38,7 @@ import psycopg2.extras
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fast_mapping as fm
+import fast_ops
 import fast_recipes as frx
 
 METHOD_MF = "4b13b4f4-7f7e-5356-b93a-937ab527386d"
@@ -193,6 +199,113 @@ def read_versuch(data_root: str) -> list[dict]:
     return ops
 
 
+def write_operations(
+    cur,
+    ops: list[dict],
+    *,
+    op_to_id: dict,
+    code_to_mat: dict,
+    by_prog: dict,
+    resolve_owner,
+    equipment_id: str = EQUIP_25,
+    method_id: str = METHOD_MF,
+) -> tuple[int, int, int]:
+    """Upsert the parsed runs into manufacturing_operations and queue their EMD traces.
+
+    Returns (operations upserted, hand-logged operations adopted as
+    [(operation_id, run)], traces queued). The database
+    builds pass_code from the run number, so the code is never written here.
+    """
+    cols = [
+        "operation_id",
+        "method_id",
+        "equipment_id",
+        "process_category",
+        "source_run_uid",
+        "source_system",
+        "operation_date",
+        "operator",
+        "operator_name",
+        "owner",
+        "material_id",
+        "sintering_recipe_number",
+        "sintering_run_number",
+        "fast_recipe_id",
+        "sintering_batch_number",
+        "sintering_mass_grams",
+        "sintering_mould_diameter_mm",
+        "sintering_atmosphere",
+        "sintering_tc_pyro_control",
+        "sintering_max_force_kn",
+        "sintering_max_temp_celsius",
+        "sintering_material_type_note",
+        "outcome_notes",
+    ]
+    values = [
+        (
+            o["operation_id"],
+            method_id,
+            equipment_id,
+            "sintering",
+            o["source_run_uid"],
+            SOURCE_SYSTEM,
+            o["operation_date"],
+            op_to_id.get(o["operator_disp"]),
+            o["operator_name"],
+            resolve_owner(o),
+            code_to_mat.get(o["material_code"]) if o["material_code"] else None,
+            o["recipe_title"],
+            fast_ops.run_number(o["run_no"]),
+            by_prog.get(o["program_nr"]),
+            o["batch"],
+            o["mass_g"],
+            o["mould_mm"],
+            o["atmosphere"],
+            o["tc_pyro"],
+            o["force_kn"],
+            o["temp_c"],
+            o["material_text"],
+            o["notes"],
+        )
+        for o in ops
+    ]
+
+    set_clause = fast_ops.upsert_set_clause(cols)
+    # A hand-logged operation of this machine and run (typed by a person) becomes the imported run.
+    adopted = fast_ops.adopt_hand_logged(
+        cur,
+        equipment_id,
+        SOURCE_SYSTEM,
+        [(fast_ops.run_number(o["run_no"]), o["source_run_uid"]) for o in ops],
+    )
+    psycopg2.extras.execute_values(
+        cur,
+        f"INSERT INTO manufacturing_operations ({', '.join(cols)}) VALUES %s "
+        f"ON CONFLICT (source_run_uid) WHERE source_run_uid IS NOT NULL "
+        f"DO UPDATE SET {set_clause}, updated_at=now()",
+        values,
+        page_size=500,
+    )
+    # Enqueue the per-run EMD trace for decoding by fast_orchestrator (fast_his.decode_emd).
+    # Guard IS DISTINCT FROM 'done' so re-runs don't re-drain finished traces.
+    # An adopted operation keeps its own id, so read the ids back instead of using the derived ones.
+    ids = fast_ops.operation_ids_for(
+        cur, [o["source_run_uid"] for o in ops if o["emd_rel"]]
+    )
+    enq = [(ids[o["source_run_uid"]], o["emd_rel"]) for o in ops if o["emd_rel"]]
+    psycopg2.extras.execute_values(
+        cur,
+        "INSERT INTO fast_run_data (operation_id, status, machine_format, import_archive_path) "
+        "VALUES %s ON CONFLICT (operation_id) DO UPDATE "
+        "SET status='pending', machine_format=EXCLUDED.machine_format, "
+        "    import_archive_path=EXCLUDED.import_archive_path, error_message=NULL, updated_at=now() "
+        "WHERE fast_run_data.status IS DISTINCT FROM 'done'",
+        [(oid, "pending", "25", rel) for oid, rel in enq],
+        page_size=500,
+    )
+    return len(values), adopted, len(enq)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("data_root", help="path to the 'FAST Machines Data' folder")
@@ -302,95 +415,20 @@ def main() -> None:
     print(f"upserted {len(recipes)} FAST 25 recipes")
     by_prog = {r["program_nr"]: r["id"] for r in recipes}
 
-    cols = [
-        "operation_id",
-        "method_id",
-        "equipment_id",
-        "process_category",
-        "source_run_uid",
-        "source_system",
-        "operation_date",
-        "operator",
-        "operator_name",
-        "owner",
-        "material_id",
-        "sintering_recipe_number",
-        "fast_recipe_id",
-        "sintering_batch_number",
-        "sintering_mass_grams",
-        "sintering_mould_diameter_mm",
-        "sintering_atmosphere",
-        "sintering_tc_pyro_control",
-        "sintering_max_force_kn",
-        "sintering_max_temp_celsius",
-        "sintering_material_type_note",
-        "outcome_notes",
-    ]
-    values = [
-        (
-            o["operation_id"],
-            METHOD_MF,
-            EQUIP_25,
-            "sintering",
-            o["source_run_uid"],
-            SOURCE_SYSTEM,
-            o["operation_date"],
-            op_to_id.get(o["operator_disp"]),
-            o["operator_name"],
-            resolve_owner(o),
-            code_to_mat.get(o["material_code"]) if o["material_code"] else None,
-            o["recipe_title"],
-            by_prog.get(o["program_nr"]),
-            o["batch"],
-            o["mass_g"],
-            o["mould_mm"],
-            o["atmosphere"],
-            o["tc_pyro"],
-            o["force_kn"],
-            o["temp_c"],
-            o["material_text"],
-            o["notes"],
-        )
-        for o in ops
-    ]
-
-    update_cols = [
-        c
-        for c in cols
-        if c
-        not in (
-            "operation_id",
-            "source_run_uid",
-            "method_id",
-            "process_category",
-            "source_system",
-        )
-    ]
-    set_clause = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
-    psycopg2.extras.execute_values(
+    n_ops, adopted, queued = write_operations(
         cur,
-        f"INSERT INTO manufacturing_operations ({', '.join(cols)}) VALUES %s "
-        f"ON CONFLICT (source_run_uid) WHERE source_run_uid IS NOT NULL "
-        f"DO UPDATE SET {set_clause}, updated_at=now()",
-        values,
-        page_size=500,
+        ops,
+        op_to_id=op_to_id,
+        code_to_mat=code_to_mat,
+        by_prog=by_prog,
+        resolve_owner=resolve_owner,
     )
-    # Enqueue the per-run EMD trace for decoding by fast_orchestrator (fast_his.decode_emd).
-    # Guard IS DISTINCT FROM 'done' so re-runs don't re-drain finished traces.
-    enq = [(o["operation_id"], o["emd_rel"]) for o in ops if o["emd_rel"]]
-    psycopg2.extras.execute_values(
-        cur,
-        "INSERT INTO fast_run_data (operation_id, status, machine_format, import_archive_path) "
-        "VALUES %s ON CONFLICT (operation_id) DO UPDATE "
-        "SET status='pending', machine_format=EXCLUDED.machine_format, "
-        "    import_archive_path=EXCLUDED.import_archive_path, error_message=NULL, updated_at=now() "
-        "WHERE fast_run_data.status IS DISTINCT FROM 'done'",
-        [(oid, "pending", "25", rel) for oid, rel in enq],
-        page_size=500,
-    )
+    for op_id, run in adopted:
+        print(f"  filled in hand-logged operation {op_id} as run {run}")
     conn.commit()
     print(
-        f"upserted {len(values)} FAST 25 operations; enqueued {len(enq)} EMD traces (pending)"
+        f"upserted {n_ops} FAST 25 operations ({len(adopted)} hand-logged filled in); "
+        f"enqueued {queued} EMD traces (pending)"
     )
     cur.close()
     conn.close()

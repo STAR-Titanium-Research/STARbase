@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { RecordLink, Section, StatusBadge, asRecord, humanise, type TestSubjects } from '@d1/ui';
+import { RecordLink, Section, StatusBadge, asRecord, humanise, testSubjectCount, type TestSubjects } from '@d1/ui';
 
 // What the test was run on: the subjects of the test_sessions_subject junction (samples, or for
 // tool tests an insert edge). `sample` is the derived primary sample (test_sessions.sample_id, kept
@@ -20,13 +20,15 @@ const samples = computed(() => {
 	return out;
 });
 const hiddenCount = computed(() => Math.max(props.subjects.hidden, props.sampleHidden ? 1 : 0));
+// The row count is the kit's (the page's "On this page" entry uses the same function).
+const total = computed(() => testSubjectCount(props.sample, props.subjects, !!props.sampleHidden));
 </script>
 
 <template>
 	<Section
 		title="Subject"
-		:count="samples.length + subjects.others.length + hiddenCount"
-		:empty="!samples.length && !subjects.others.length && !hiddenCount"
+		:count="total"
+		:empty="total === 0"
 		empty-text="No sample or other subject is recorded for this test."
 	>
 		<ul class="rows">
@@ -50,21 +52,21 @@ const hiddenCount = computed(() => Math.max(props.subjects.hidden, props.sampleH
 </template>
 
 <style scoped>
-.rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--theme--border-color-subdued); border-radius: 10px; }
-.row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 10px 14px; font-size: 13.5px; }
-.row + .row { border-top: 1px solid var(--theme--border-color-subdued); }
+/* Rows of the panel itself: a role chip, the code, then what is known about the sample. */
+.rows { list-style: none; margin: 0; padding: 0; }
+.row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 7px 0; font-size: var(--fs-md); }
+.row:first-child { padding-top: 0; }
+.row + .row { border-top: 1px solid var(--d1-line); }
 .role {
 	min-width: 56px;
 	text-align: center;
-	font-size: 11px;
+	font-size: var(--fs-xs);
 	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	padding: 2px 10px;
+	padding: 1px 8px;
 	border-radius: 99px;
-	color: var(--theme--primary);
-	background: var(--theme--primary-background);
+	color: var(--d1-accent, var(--theme--primary));
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent);
 }
 .code { font-family: var(--theme--fonts--monospace--font-family, monospace); }
-.muted { color: var(--theme--foreground-subdued); }
+.muted { color: var(--d1-dim); }
 </style>

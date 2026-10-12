@@ -2,7 +2,7 @@
   "name": "directus-extension-d1-next-number",
   "version": "1.0.0",
   "type": "module",
-  "description": "GET /d1-next-number/sample returns the next free sample number for the interface's preview. The database trigger still assigns the real number on save.",
+  "description": "GET /d1-next-number/sample returns the next free sample number, and POST /d1-next-number/operation-code the operation code the rule would give, for the interface previews. The database triggers still assign the real values on save.",
   "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
   "directus:extension": {
     "type": "endpoint",

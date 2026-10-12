@@ -176,6 +176,20 @@ Reference channel calibration (`sensitivity`, pC/N, `physicalRange` 200 N, unit 
 to describe the acquired stream. **`metadata.Rate` is authoritative for `Fs`**; treat the
 LabAmp `samplingRate` as informational only.
 
+### 3.4 Record identity (new files only)
+
+Operation codes now follow their fields (the database rebuilds them), but a file name keeps the
+code it had at capture time. So the capture records the operation's identity in the file
+itself. Writers of **new** files only (Phase 2 recording) add two `metadata` fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `RecordID` | char | The operation's UUID (random, v4), generated when the capture starts; the operation is created in D1 with this id |
+| `RecordShortID` | char | The operation's short ID: the first 8 hex characters of `RecordID` (more if the database needed them to stay unique) |
+
+Old files are never given these fields (Q46): they are recognised by their fingerprints
+instead (§6). Readers key off `isfield`, so a file without them is still valid.
+
 ---
 
 ## 4. Layout signatures — column count is NOT enough
@@ -315,6 +329,43 @@ on v0.1 files and is the authoritative column map. The summed columns 2–4 are 
 
 **Permanent gaps.** Pre-v1.0 files have no `AmpSettings` — the amplifier calibration for those
 captures was never recorded and cannot be reconstructed. Accepted.
+
+### Fingerprints and migrations
+
+D1 stores two hashes per file in `file_fingerprints` (filled by
+[`scripts/file_fingerprints.py`](../scripts/file_fingerprints.py)):
+
+- **`content_sha256`**: SHA-256 of the whole file, byte for byte. Any edit changes it.
+- **`data_sha256`** (`.mat` only): a hash of the **decoded** force array, not of the bytes on
+  disk. v7.3 files are HDF5 (chunked, gzip-compressed), so their bytes can change while the data
+  does not. Definition:
+
+  ```
+  data_sha256 = SHA-256( uint64_le(rows) ‖ uint64_le(cols) ‖ D_1 ‖ D_2 ‖ … ‖ D_cols )
+  D_j         = SHA-256( column j's values as float64 little-endian, top to bottom )   (32-byte digest)
+  ```
+
+  `rows × cols` is the MATLAB shape (samples × channels). Integer and logical arrays are
+  converted to float64 first. An empty array hashes its shape and one SHA-256-of-nothing per
+  column. The array is the variable `data` if the file has one, otherwise `DATA`, decided from
+  the variables present, never from `fileVersion` (§4: 22 files declare v1 but carry the v0.9
+  layout). Check value: the 2 × 3 array `[1 2 3; 4 5 6]` hashes to
+  `31b27bca76dc86c7f8dbefde8e1541e793a4f2bafa2cf515c536467986c318f4`.
+
+  Why per-column digests: the large v7.3 captures are chunked as all 10 columns × 819 samples,
+  so one column-major stream would re-read an 11.8 GB file ten times; per-column digests are
+  computed in a single pass.
+
+Rules for any tool that edits a `.mat` file:
+
+1. A metadata-only edit (the partial writes above) keeps `data_sha256`. Once the archive
+   indexer has re-indexed the file (its size or modification time changed), the next
+   fingerprint run re-hashes it, and it is still recognised by its `data_sha256`.
+2. A migration that rewrites the force matrix (a layout upgrade such as v0.5 → v1.0) changes
+   `data_sha256`. The tool doing it must record the new value against the **same**
+   `directus_files` row and keep the old value in its own log, so the file's history stays
+   traceable.
+3. Old files are not rewritten to add `RecordID` (§3.4, Q46).
 
 ---
 

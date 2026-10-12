@@ -8,6 +8,7 @@ import ProjectsIndex from './pages/ProjectsIndex.vue';
 import ProjectPage from './pages/ProjectPage.vue';
 import OperationPage from './pages/OperationPage.vue';
 import TestPage from './pages/TestPage.vue';
+import IndexRoute from './pages/IndexRoute.vue';
 
 // A friendly landing page for lab users plus guided task screens, so day-to-day
 // work starts somewhere warm and simple instead of a raw collection form.
@@ -29,5 +30,7 @@ export default defineModule({
 		{ path: 'samples/:id', component: SamplePage, props: true },
 		{ path: 'operations/:id', component: OperationPage, props: true },
 		{ path: 'tests/:id', component: TestPage, props: true },
+		// After every static route (vue-router ranks static paths first): one list page per collection.
+		{ path: ':slug', component: IndexRoute, props: true },
 	],
 });

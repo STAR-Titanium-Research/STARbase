@@ -663,6 +663,97 @@ migration 141 prints about ownerless records.
 - [ ] **E5 — a secondary sample of a multi-sample test (known gap).** B co-owns only the second
   sample of a test with two samples: B cannot see the test (it is matched through its first sample).
   Record whether this matters to the lab. Since: Explorer pages E5 (PR pending).
+- [ ] **Restyle — dark theme.** Set your account's appearance to Dark and open Home, a Project, a
+  Campaign, a Sample and an Operation page. Expect: panels read as panels (a hairline and a lid a
+  shade off the body), the tile labels and table heads are readable, and the status pills
+  (Active, Analysed, Diagnostics built, Failed) have light ink on a dark tint, not the reverse.
+  Nothing is a fixed light colour except the sample drawing. Links and codes: the Dark theme is
+  `Directus Default` with no overrides, so its primary is the project colour (`#18222F`),
+  near-black on a near-black ground. The kit carries its own accent for its own text and fills
+  (record links, tags, count chips, progress bars; see the accent item below), so those read
+  without a theme change. Directus's own components still use the theme's primary: if the Edit
+  button or another primary `v-button` is unreadable, that needs a dark-theme primary in Settings,
+  not a change to the pages. Checked in the Light theme only on 2026-10-09 (the test account's
+  appearance is pinned to Light). Since: Explorer fixes F1, not yet in a PR.
+- [ ] **Restyle — Test page.** Open a test session that has parameters, subjects and results. Expect:
+  Overview and Parameters side by side as readout tiles (value above label, nothing cut with an
+  ellipsis), the Subject rows, and each results table only as wide as its figures with the first
+  column left-aligned and the rest right-aligned. The database had no test session on 2026-10-09,
+  so this page was not seen. Since: Explorer restyle, not yet in a PR.
+- [ ] **Restyle — Home as a member with work.** Sign in as a member who is PI on a project, owns a
+  campaign and owns samples. Expect: "My projects", "Campaigns I own" and "My latest samples" are
+  three panels in one row (stacked on a narrow window), each holding cards with the code, a tag at
+  the right, the name and one line of meta. Only the empty state was seen on 2026-10-09 (admin
+  account). Since: Explorer restyle, not yet in a PR.
+- [ ] **Explorer fixes F1 — an operation without a pass code.** Find an operation whose pass code
+  is empty and that has an input sample and a step number (Data Studio: `manufacturing_operations`
+  filtered `pass_code` is empty) and open `/admin/home/operations/<id>`. Expect: the heading reads
+  like `10-AA-MF-2023-3-31 · step 27` (its input sample and step) in the normal font, not
+  monospace; the tab title is the same text; nothing says just "Operation" as if it were a code.
+  The same text is the link text in the Sample page's Operations table, the Project page's
+  "Operations not in a campaign", Home's Recent activity and Needs attention (where no second
+  line repeats the sample), and the campaign page's Operations list and picker. In the sample's
+  life strip it is the card's label in the normal font (a pass code, a sample code and a lot code
+  stay monospace; a test's type does not) with no `#27` line under it, while an operation with a
+  pass code keeps its `#27` line. In the campaign matrix an uncoded operation that has a step is
+  in the column headed `#27`, which other samples' operations share only when they have the same
+  step and the same process category (a machining and a heat-treatment step 27 get two columns).
+  Hovering its cell shows `10-AA-MF-2023-3-31 · step 27` on the first line, with the sample named
+  once, and `Force analysis: <state>` on the next (a TEST cell is the one-line
+  `<sample> · <test type>: <state>`); an uncoded one without a step has a column of its own, even
+  when several samples have one. In the campaign's operation picker, typing a sample code (or part
+  of one) finds its uncoded operations, and typing a pass code still finds coded ones. Run the
+  picker check as a Lab Member as well as an admin: the search is a relational filter on
+  `sample_id.sample_code`, which a member's permissions can break. Since: Explorer fixes F1,
+  not yet in a PR.
+- [ ] **Explorer fixes F1 — an uncoded operation whose input sample you cannot see.** As a member
+  who can read an operation but not its input sample (the operation is in your project or
+  campaign, the input sample belongs to someone else and is outside your projects), open it.
+  Expect: the heading and tab title read `Uncoded operation · step N`, the same text the lists
+  give for it, never `<the output sample's code> · step N` (the step is numbered on the input
+  sample); the Samples section marks the input sample as not visible to you.
+  For an uncoded operation with no input sample at all and a visible output sample, the heading
+  reads `Operation on <output code>` with no step. No such record exists in the lab database, so
+  create one first: in the Data Studio add a `manufacturing_operations` record with a step number,
+  an Output sample, no Sample (input) and no pass code, then open it. Edit it (change the notes)
+  and save: the heading and tab title stay `Operation on <output code>` throughout, they do not
+  switch to `Uncoded operation · step N` and back. With the Output sample cleared as well, the
+  heading reads `Uncoded operation · step N`, as the lists do. Since: Explorer fixes F1, not yet
+  in a PR.
+- [ ] **Explorer fixes F1 — Projects count in "At a glance".** On Home, the strip has a Projects
+  tile between Tests and Campaigns, with a number, not a dash. Expect: as an admin it is every
+  project, as a member the number of projects you can read;
+  the tile opens the Explorer's Projects index (`/admin/home/projects`), not the Projects
+  collection in the Data Studio. Since: Explorer fixes F1, not yet in a PR.
+- [ ] **Explorer fixes F1 — Test page result tables.** Open a test session with processed results
+  that have a list of records ("Channels", "Top frequencies"). Expect: each table is only as wide
+  as its columns (not the whole page), the first column left-aligned and every other column,
+  heads included, right-aligned over its figures. Other tables (Sample page Operations, Home
+  Recent activity) are still full width with left-aligned heads. Since: Explorer fixes F1, not yet
+  in a PR.
+- [ ] **Explorer fixes F1 — accent colour on the dark theme.** Set the appearance to Dark and open
+  Home, a Project, a Campaign, a Sample, an Operation, People and Register a Sample. Expect:
+  breadcrumb and record links, the kind pill, section count chips, tags, the quick-action and
+  stat icon chips, progress bars, the activity sparkline and the buttons that look like links are
+  a visible grey-blue (about `#8b949e`), not near-black; the active People tab and the numbered
+  steps of Register a Sample have dark text on the light accent. In the campaign matrix, the
+  info-coloured cells and the picker's hover (they keep Directus's `primary-background`) are still
+  readable. Then switch to Light: the colours are the project's primary exactly as before. Since:
+  Explorer fixes F1, not yet in a PR.
+- [ ] **Explorer fixes F1 — side-by-side panels keep their own height.** Open an Operation with
+  few overview values and many parameters, and a Campaign with a short sample list beside a long
+  test list. Expect: each panel is only as tall as its content, the shorter one ends early with
+  the page background under it, not a half-empty panel. Since: Explorer fixes F1, not yet in a PR.
+- [ ] **Explorer fixes F1 — Ask the database and Dashboards have no entry on Home.** By the
+  maintainer's decision of 2026-10-09 Ask the database is hidden from Home for now, so on this
+  install it has no entry in the UI at all (its module is off in the module bar), and the
+  Dashboards module is being retired (its lineage graph is to be rebuilt). Expect: Home's quick
+  actions show no tile for either; on this install the lab dashboard is reachable only from a
+  Sample page's "Open lineage graph" until it is replaced (its module bar has `d1-lab-dashboard`
+  and `ask-db` disabled). A fresh install differs: `scripts/configure_directus.sql` enables
+  `d1-lab-dashboard` in the module bar, so there it is also in the bar; do not fail this item for
+  that. Check that the link still opens the graph for the sample. Since: Explorer fixes F1, not
+  yet in a PR.
 - [ ] **Migration 20261010000160 on live: Lab Member queries stop returning 400.** Before applying,
   record `SELECT md5(string_agg(id||coalesce(permissions::text,'~'), ',' ORDER BY id)) FROM
   directus_permissions`. Apply, then flush Redis and `docker restart` Directus (it caches permissions,

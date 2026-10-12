@@ -24,6 +24,6 @@ defineProps<{ what: string }>();
 	gap: 10px;
 }
 .d1-not-visible :deep(.v-icon) { --v-icon-color: var(--theme--foreground-subdued); }
-h2 { margin: 6px 0 0; font-size: 20px; }
-p { margin: 0 0 12px; color: var(--theme--foreground-subdued); }
+h2 { margin: 6px 0 0; font-size: var(--fs-xl, 18px); }
+p { margin: 0 0 12px; font-size: var(--fs-md, 13px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
 </style>

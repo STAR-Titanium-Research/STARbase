@@ -78,6 +78,7 @@ export function buildOverview({ samples = [], operations = [], tests = [], analy
 		return {
 			operation_id: o.operation_id,
 			pass_code: o.pass_code ?? null,
+			operation_sequence: typeof o.operation_sequence === 'number' ? o.operation_sequence : null,
 			process_category: o.process_category ?? null,
 			sample_id: relId(o.sample_id, 'sample_id'),
 			sample_code: relCode(o.sample_id),

@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import ExplorerView from '../ExplorerView.vue';
 import { computed, ref } from 'vue';
 import { useStores } from '@directus/extensions-sdk';
-import { LoadState, filterProjects, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
+import { LoadState, PageShell, filterProjects, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
 import { PROJECT_CAP, useProjectsIndex } from './projects/useProjectsIndex';
 import ProjectCard from './projects/ProjectCard.vue';
 
@@ -37,9 +38,9 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 </script>
 
 <template>
-	<private-view title="Projects">
-		<div class="projects-page">
-			<nav class="crumbs"><router-link to="/home">Home</router-link><span>›</span><span>Projects</span></nav>
+	<ExplorerView title="Projects">
+		<PageShell>
+			<nav class="d1-crumbs"><router-link to="/home">Home</router-link><span>›</span><span>Projects</span></nav>
 
 			<div class="filters">
 				<label class="field search">
@@ -58,6 +59,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 						<option v-for="o in statusOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
 					</select>
 				</label>
+				<span class="spacer" />
 				<v-button small secondary to="/content/projects/+"><v-icon name="add" small left />New project</v-button>
 			</div>
 
@@ -69,16 +71,16 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 				empty-text="No projects visible to you yet. If you expected some, you may not have been added as PI or investigator."
 			/>
 			<template v-else>
-				<p class="summary">
+				<p class="d1-note">
 					Showing {{ visible.length }} of {{ projects.length }} projects you can see.
 					<span v-if="projects.length >= PROJECT_CAP">Only the first {{ PROJECT_CAP }} are loaded.</span>
 				</p>
-				<p v-if="role !== 'all' && !userId" class="note">Your user could not be identified, so role filters match nothing.</p>
-				<p v-if="campaignCountsError" class="note" role="alert">{{ campaignCountsError }}</p>
-				<p v-if="sampleCountsError" class="note" role="alert">{{ sampleCountsError }}</p>
-				<p v-if="activityError" class="note" role="alert">{{ activityError }}</p>
-				<p v-if="rolesError" class="note" role="alert">{{ rolesError }}</p>
-				<p v-if="truncated" class="note">The activity charts are based on the newest records only (the lab has more than the page loads).</p>
+				<p v-if="role !== 'all' && !userId" class="d1-note warn">Your user could not be identified, so role filters match nothing.</p>
+				<p v-if="campaignCountsError" class="d1-note warn" role="alert">{{ campaignCountsError }}</p>
+				<p v-if="sampleCountsError" class="d1-note warn" role="alert">{{ sampleCountsError }}</p>
+				<p v-if="activityError" class="d1-note warn" role="alert">{{ activityError }}</p>
+				<p v-if="rolesError" class="d1-note warn" role="alert">{{ rolesError }}</p>
+				<p v-if="truncated" class="d1-note warn">The activity charts are based on the newest records only (the lab has more than the page loads).</p>
 				<LoadState v-if="!visible.length" empty empty-text="No project matches these filters." />
 				<div v-else class="grid">
 					<ProjectCard
@@ -92,31 +94,26 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 					/>
 				</div>
 			</template>
-		</div>
-	</private-view>
+		</PageShell>
+	</ExplorerView>
 </template>
 
 <style scoped>
-.projects-page {
-	max-width: 1180px;
-	margin: 0 auto;
-	padding: 24px 32px 64px;
-	font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif);
-	color: var(--theme--foreground);
+/* The filter bar is a panel of its own: the controls belong together and sit apart from the cards. */
+.filters {
+	display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; padding: 10px 14px;
+	background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: var(--d1-radius); box-shadow: var(--d1-shadow);
 }
-.crumbs { display: flex; gap: 6px; font-size: 13px; color: var(--theme--foreground-subdued); margin-bottom: 14px; }
-.crumbs a { color: var(--theme--primary); text-decoration: none; font-weight: 600; }
-.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; margin-bottom: 14px; }
-.field { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--theme--foreground-subdued); }
+.field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.01em; color: var(--d1-dim); }
 .field.search { flex: 1 1 220px; max-width: 360px; }
 .field input, .field select {
-	font: inherit; font-size: 14px; text-transform: none; letter-spacing: 0; font-weight: 400;
-	height: 36px; padding: 0 10px; border-radius: 8px;
+	font: inherit; font-size: var(--fs-md); letter-spacing: 0; font-weight: 400;
+	height: 34px; padding: 0 10px; border-radius: 8px;
 	border: 1px solid var(--theme--form--field--input--border-color, var(--theme--border-color));
 	background: var(--theme--form--field--input--background, var(--theme--background));
 	color: var(--theme--foreground);
 }
-.summary { margin: 0 0 8px; font-size: 13px; color: var(--theme--foreground-subdued); }
-.note { margin: 0 0 8px; font-size: 12.5px; color: var(--theme--warning); }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-top: 8px; }
+.field input:focus, .field select:focus { outline: none; border-color: var(--d1-accent, var(--theme--primary)); }
+.spacer { flex: 1; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 </style>

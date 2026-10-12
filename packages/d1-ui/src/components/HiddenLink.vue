@@ -11,5 +11,5 @@ defineProps<{ label: string }>();
 </template>
 
 <style scoped>
-.d1-hidden-link { font-style: italic; color: var(--theme--foreground-subdued); }
+.d1-hidden-link { font-style: italic; color: var(--d1-dim, var(--theme--foreground-subdued)); }
 </style>

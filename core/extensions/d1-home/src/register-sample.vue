@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import ExplorerView from './ExplorerView.vue';
+import { useExplorerHost } from './explorerHost';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
-import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, createdRecord, recordRoute } from '@d1/ui';
+import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, PageShell, createdRecord, recordRoute } from '@d1/ui';
 import { buildGeometry, dimsText, FORMS, FORM_FIELDS, PRESETS, fieldLabel } from './geometry';
 
 const api = useApi();
@@ -10,11 +12,9 @@ const router = useRouter();
 const { useUserStore } = useStores();
 const userStore = useUserStore() as any;
 // An admin reads every row, so a sample with no owner is still visible to them: only members need
-// a People row to see what they register.
-const isAdmin = computed(() => {
-	const u = userStore.currentUser;
-	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
-});
+// a People row to see what they register. The server's own answer, shared with the sidebar.
+// isAdmin starts as a guess: the no-person warning waits for adminKnown so it never flashes at an admin.
+const { isAdmin, adminKnown } = useExplorerHost();
 
 interface Opt { text: string; value: string; extra?: string }
 const materials = ref<Opt[]>([]);
@@ -125,7 +125,7 @@ async function submit() {
 		// row. Without one the sample would belong to nobody and its creator could not see it, so
 		// refuse up front instead of registering it into the void.
 		if (personId.value === undefined) personId.value = await lookupPerson();
-		if (personId.value === null && !isAdmin.value) {
+		if (personId.value === null && adminKnown.value && !isAdmin.value) {
 			error.value = NO_PERSON_MESSAGE;
 			return;
 		}
@@ -174,8 +174,8 @@ onMounted(async () => {
 </script>
 
 <template>
-	<private-view title="Register a Sample">
-		<div class="wrap">
+	<ExplorerView title="Register a Sample">
+		<PageShell narrow>
 			<!-- success -->
 			<div v-if="created" class="card done">
 				<v-icon name="check_circle" class="done-ic" />
@@ -197,10 +197,8 @@ onMounted(async () => {
 			</div>
 
 			<template v-else>
-				<div class="intro">
-					<h1>Register a Sample</h1>
-					<p>Pick the material and route — the sample code builds itself.</p>
-				</div>
+				<!-- No heading of its own: the header bar already says "Register a Sample". -->
+				<p class="intro">Pick the material and route — the sample code builds itself.</p>
 
 				<section class="card">
 					<h3><span class="step">1</span> Material &amp; route</h3>
@@ -246,15 +244,15 @@ onMounted(async () => {
 					<v-textarea v-model="f.notes" placeholder="Anything worth recording…" />
 				</section>
 
-				<p v-if="personId === null && !isAdmin && !error" class="err" role="alert">{{ NO_PERSON_MESSAGE }}</p>
+				<p v-if="personId === null && adminKnown && !isAdmin && !error" class="err" role="alert">{{ NO_PERSON_MESSAGE }}</p>
 				<p v-if="error" class="err">{{ error }}</p>
 				<div class="actions">
 					<v-button secondary @click="go('/home')">Cancel</v-button>
 					<v-button :disabled="!canSubmit" :loading="saving" large @click="submit"><v-icon name="add_circle" left />Register sample</v-button>
 				</div>
 			</template>
-		</div>
-	</private-view>
+		</PageShell>
+	</ExplorerView>
 </template>
 
 <script lang="ts">
@@ -262,14 +260,11 @@ export default { inheritAttrs: false };
 </script>
 
 <style scoped>
-.wrap { max-width: 780px; margin: 0 auto; padding: 24px 32px 64px; }
-.intro { margin-bottom: 20px; }
-.intro h1 { margin: 0; font-size: 24px; font-weight: 750; }
-.intro p { margin: 4px 0 0; color: var(--theme--foreground-subdued, #6b7684); }
+.intro { margin: 0; font-size: var(--fs-md); color: var(--d1-dim); }
 
 .geo-live { margin-top: 14px; display: flex; flex-direction: column; align-items: center; gap: 6px;
-	padding: 14px; background: var(--theme--background-subdued, #f5f7fa); border-radius: 10px; }
-.geo-live.empty span { color: var(--theme--foreground-subdued, #8a94a6); font-style: italic; font-size: 13px; }
+	padding: 14px; background: var(--d1-tile); border: 1px solid var(--d1-line); border-radius: 10px; }
+.geo-live.empty span { color: var(--d1-dim); font-size: var(--fs-md); }
 .dimgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 @media (max-width: 620px) { .dimgrid { grid-template-columns: repeat(2, 1fr); } }
 .geo-canvas :deep(svg) { width: 260px; max-width: 100%; height: auto; display: block; }
@@ -283,40 +278,42 @@ export default { inheritAttrs: false };
 	font-family: -apple-system, "Segoe UI", Roboto, sans-serif; paint-order: stroke; stroke: #fff; stroke-width: 2.5px; }
 .geo-canvas :deep(.gsupport) { fill: #94a3b8; stroke: #475569; stroke-width: 0.6; }
 .geo-canvas :deep(.gload) { stroke: #b91c1c; stroke-width: 1.4; }
-.geo-cap { font-size: 11px; color: var(--theme--foreground-subdued, #6b7684); text-transform: capitalize; }
+.geo-cap { font-size: var(--fs-xs); color: var(--d1-dim); text-transform: capitalize; }
 
+/* Each step is a panel of the page: the same surface, hairline and radius as a Section. The page
+   frame spaces them, so no margin of their own. */
 .card {
-	background: var(--theme--background, #fff);
-	border: 1px solid var(--theme--border-color-subdued, #e7ebf0);
-	border-radius: 14px; padding: 20px 22px; margin-bottom: 16px;
+	background: var(--d1-surface);
+	border: 1px solid var(--d1-line);
+	border-radius: var(--d1-radius); box-shadow: var(--d1-shadow); padding: 14px 16px 16px;
 }
-.card h3 { margin: 0 0 16px; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
-.step { width: 22px; height: 22px; border-radius: 50%; background: var(--theme--primary, #1d4ed8); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.card h3 { margin: 0 0 14px; font-size: var(--fs-md); font-weight: 650; letter-spacing: 0.01em; display: flex; align-items: center; gap: 8px; }
+.step { width: 20px; height: 20px; border-radius: 50%; background: var(--d1-accent, var(--theme--primary, #1d4ed8)); color: var(--d1-on-accent, #fff); display: grid; place-items: center; font-size: var(--fs-xs); font-weight: 700; }
 
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 14px; }
 .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .row:last-child, .row3:last-child { margin-bottom: 0; }
 .fld { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.fld label { font-size: 12px; font-weight: 600; color: var(--theme--foreground-subdued, #6b7684); }
+.fld label { font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); }
 .date { height: 44px; border: 2px solid var(--theme--border-color, #dfe3e8); border-radius: 8px; padding: 0 12px; font: inherit; background: var(--theme--background, #fff); color: var(--theme--foreground, #1e293b); }
 
 .code-preview .code-val {
 	height: 44px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px;
-	background: color-mix(in srgb, var(--theme--primary, #1d4ed8) 8%, transparent);
-	border: 1px dashed color-mix(in srgb, var(--theme--primary, #1d4ed8) 40%, transparent);
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary, #1d4ed8)) 8%, transparent);
+	border: 1px dashed color-mix(in srgb, var(--d1-accent, var(--theme--primary, #1d4ed8)) 40%, transparent);
 	font-family: var(--theme--fonts--monospace--font-family, 'SF Mono', Menlo, monospace); font-weight: 700;
-	color: var(--theme--primary, #1d4ed8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	color: var(--d1-accent, var(--theme--primary, #1d4ed8)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.muted { color: var(--theme--foreground-subdued, #98a2b3); font-family: inherit; font-weight: 400; }
+.muted { color: var(--d1-dim); font-family: inherit; font-weight: 400; }
 
-.actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
-.err { color: var(--theme--danger, #dc2626); margin: 8px 0; font-size: 13px; }
+.actions { display: flex; justify-content: flex-end; gap: 12px; }
+.err { color: var(--d1-bad); margin: 0; font-size: var(--fs-md); }
 
 .done { text-align: center; padding: 48px 24px; }
-.done-ic { --v-icon-size: 56px; --v-icon-color: #16a34a; }
-.done h2 { margin: 12px 0 4px; font-size: 20px; }
-.done .code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; font-size: 18px; color: var(--theme--primary, #1d4ed8); margin: 0 0 24px; }
-.done .hidden-note { margin: 0 0 24px; color: var(--theme--warning, #b45309); }
+.done-ic { --v-icon-size: 56px; --v-icon-color: var(--theme--success); }
+.done h2 { margin: 12px 0 4px; font-size: var(--fs-xl); }
+.done .code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; font-size: var(--fs-xl); color: var(--d1-accent, var(--theme--primary, #1d4ed8)); margin: 0 0 24px; }
+.done .hidden-note { margin: 0 0 24px; color: var(--d1-warn); }
 .done-actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
 
 @media (max-width: 720px) { .row, .row3 { grid-template-columns: 1fr; } }

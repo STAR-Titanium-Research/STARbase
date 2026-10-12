@@ -137,3 +137,15 @@ export async function inheritCampaignProject(
 		return isForbidden(e) ? '' : `${label} was added, but its project could not be set: ${errorText(e)}`;
 	}
 }
+
+// The operation picker's filter: operations in no campaign, of the campaign type's category (if
+// any), matching `search` in the pass code OR the sample code. The sample code matters because an
+// operation without a pass code is listed as `<sample code> · step n` and has nothing else to find
+// it by.
+export function operationPickerFilter(category: string | null, search: string): Record<string, unknown> {
+	const and: unknown[] = [{ campaign_id: { _null: true } }];
+	if (category) and.push({ process_category: { _eq: category } });
+	const q = search.trim();
+	if (q) and.push({ _or: [{ pass_code: { _icontains: q } }, { sample_id: { sample_code: { _icontains: q } } }] });
+	return { _and: and };
+}

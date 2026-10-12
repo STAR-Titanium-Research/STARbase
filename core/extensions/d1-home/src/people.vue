@@ -1,19 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { useApi, useStores } from '@directus/extensions-sdk';
-import { useRouter } from 'vue-router';
+import ExplorerView from './ExplorerView.vue';
+import { useExplorerHost } from './explorerHost';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useApi } from '@directus/extensions-sdk';
+import { useRoute, useRouter } from 'vue-router';
+import { PageShell } from '@d1/ui';
 
 const api = useApi();
 const router = useRouter();
-const userStore = useStores().useUserStore() as any;
+const route = useRoute();
 // Only an admin may link a login to a People row (ADR-0011: the link decides whose records a
-// person sees, so a member relinking it would inherit someone else's records). Directus keeps the
-// admin flag in different places across versions; if a non-admin is wrongly treated as one, the
-// server still refuses the write.
-const isAdmin = computed(() => {
-	const u = userStore.currentUser;
-	return Boolean(userStore.isAdmin ?? u?.admin_access ?? u?.role?.admin_access);
-});
+// person sees, so a member relinking it would inherit someone else's records). The host reads the
+// flag from the server; if a non-admin were wrongly shown the picker, the server still refuses the write.
+const { isAdmin } = useExplorerHost();
 const go = (to: string) => router.push(to);
 
 interface Person {
@@ -32,7 +31,11 @@ const people = ref<Person[]>([]);
 const users = ref<Opt[]>([]);
 const loading = ref(true);
 const filter = ref<'all' | 'researchers' | 'operators' | 'former' | 'nologin'>('all');
-const q = ref('');
+// The finder sends a People hit to /home/people?q=<name>: the search box starts with that text, and
+// follows it if the query changes while the page stays open (a second finder search).
+const routeQ = () => (typeof route.query.q === 'string' ? route.query.q : '');
+const q = ref(routeQ());
+watch(() => route.query.q, () => (q.value = routeQ()));
 
 // Edit / add dialog state.
 const dialog = ref(false);
@@ -45,21 +48,32 @@ function blank(): Person {
 	return { full_name: '', email: null, user_id: null, is_researcher: true, is_operator: false, active: true, notes: null };
 }
 
-async function load() {
-	loading.value = true;
+// The login list is only needed by the admin-only login picker. isAdmin starts as a guess and can
+// turn true after the page has loaded, so this runs again when it does.
+async function loadUsers() {
+	if (!isAdmin.value) return;
 	try {
-		// The login list is only needed by the admin-only login picker.
-		const [pr, ur] = await Promise.all([
-			api.get('/items/people', { params: { limit: -1, sort: ['full_name'] } }),
-			isAdmin.value
-				? api.get('/users', { params: { limit: -1, fields: ['id', 'first_name', 'last_name', 'email'], sort: ['first_name'] } })
-				: Promise.resolve(null),
-		]);
-		people.value = pr?.data?.data ?? [];
+		const ur = await api.get('/users', { params: { limit: -1, fields: ['id', 'first_name', 'last_name', 'email'], sort: ['first_name'] } });
 		users.value = (ur?.data?.data ?? []).map((u: any) => ({
 			text: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || u.id,
 			value: u.id,
 		}));
+	} catch {
+		users.value = [];
+	}
+}
+watch(isAdmin, (admin) => {
+	if (admin && !users.value.length) void loadUsers();
+});
+
+async function load() {
+	loading.value = true;
+	try {
+		const [pr] = await Promise.all([
+			api.get('/items/people', { params: { limit: -1, sort: ['full_name'] } }),
+			loadUsers(),
+		]);
+		people.value = pr?.data?.data ?? [];
 	} finally {
 		loading.value = false;
 	}
@@ -140,15 +154,15 @@ async function remove() {
 </script>
 
 <template>
-	<private-view title="People">
+	<ExplorerView title="People">
 		<template #headline><span class="crumb" @click="go('/home')">Home</span></template>
 		<template #title-outer:prepend>
 			<v-button class="header-icon" rounded icon secondary disabled><v-icon name="groups" /></v-button>
 		</template>
 
-		<div class="wrap">
+		<PageShell narrow>
+			<!-- No heading of its own: the header bar already says "People". -->
 			<div class="intro">
-				<h1>People</h1>
 				<p>Everyone attributed on records — researchers, operators, or both. Mark someone <b>Former</b> when they
 					leave; add a researcher even if they have no app login.</p>
 			</div>
@@ -183,7 +197,7 @@ async function remove() {
 					<v-icon name="chevron_right" class="go" />
 				</button>
 			</div>
-		</div>
+		</PageShell>
 
 		<v-dialog v-model="dialog" @esc="dialog = false">
 			<v-card class="edit-card">
@@ -216,7 +230,7 @@ async function remove() {
 				</v-card-actions>
 			</v-card>
 		</v-dialog>
-	</private-view>
+	</ExplorerView>
 </template>
 
 <script lang="ts">
@@ -225,41 +239,47 @@ export default { inheritAttrs: false };
 
 <style scoped>
 .crumb { cursor: pointer; }
-.wrap { max-width: 860px; margin: 0 auto; padding: 24px 32px 64px; }
-.intro h1 { margin: 0; font-size: 24px; font-weight: 750; }
-.intro p { margin: 4px 0 0; color: var(--theme--foreground-subdued, #6b7684); max-width: 62ch; }
+.intro p { margin: 0; max-width: 72ch; font-size: var(--fs-md); line-height: 1.5; color: var(--d1-dim); }
 
-.bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin: 20px 0 14px; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
-.tab { border: 1px solid var(--theme--border-color, #e2e8f0); background: var(--theme--background, #fff); border-radius: 99px;
-	padding: 5px 12px; font-size: 12px; font-weight: 600; color: var(--theme--foreground-subdued, #6b7684); cursor: pointer; }
-.tab.on { background: var(--theme--primary, #1d4ed8); border-color: var(--theme--primary, #1d4ed8); color: #fff; }
-.tab .tn { opacity: .7; font-weight: 700; margin-left: 3px; }
+/* The force app's chip: 26px, a pill, filled with the accent when it is the one chosen. */
+.tab { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border: 1px solid var(--d1-line); background: var(--d1-surface); border-radius: 99px;
+	font: inherit; font-size: var(--fs-sm); font-weight: 600; line-height: 1; color: var(--d1-dim); cursor: pointer; }
+.tab:hover { color: var(--theme--foreground); }
+.tab.on { background: var(--d1-accent, var(--theme--primary, #1d4ed8)); border-color: var(--d1-accent, var(--theme--primary, #1d4ed8)); color: var(--d1-on-accent, #fff); }
+.tab .tn { opacity: .75; font-weight: 700; margin-left: 5px; font-variant-numeric: tabular-nums; }
 .bar-right { display: flex; gap: 8px; align-items: center; }
-.search { max-width: 220px; }
+/* A fixed basis, not only a maximum: free to shrink, the field shrank to its icon and "Se…" and
+   the row never wrapped. Now the search and the button drop under the tabs when there is no room. */
+.search { flex: 0 0 220px; max-width: 100%; }
 
-.load, .empty { display: block; margin: 40px auto; text-align: center; color: var(--theme--foreground-subdued, #6b7684); }
+.load, .empty { display: block; margin: 40px auto; text-align: center; color: var(--d1-dim); }
 
-.list { display: flex; flex-direction: column; gap: 8px; }
-.prow { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; cursor: pointer;
-	background: var(--theme--background, #fff); border: 1px solid var(--theme--border-color-subdued, #edf0f4); border-radius: 12px; padding: 12px 14px; }
-.prow:hover { border-color: var(--theme--primary, #1d4ed8); box-shadow: 0 2px 10px rgba(29,78,216,.08); }
+/* One panel with a row per person, not a card per person: 40 cards were 40 boxes to read past. */
+.list { display: flex; flex-direction: column; background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: var(--d1-radius); box-shadow: var(--d1-shadow); overflow: hidden; }
+.prow { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; cursor: pointer; font: inherit; color: var(--theme--foreground);
+	background: transparent; border: 0; border-top: 1px solid var(--d1-line); padding: 8px 14px; }
+.prow:first-child { border-top: 0; }
+.prow:hover { background: var(--d1-tile); }
 .prow.former { opacity: .62; }
-.avatar { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto;
-	background: var(--theme--primary-background, #eef2ff); color: var(--theme--primary, #1d4ed8); }
+.avatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto;
+	background: var(--d1-tint); color: var(--d1-accent, var(--theme--primary)); --v-icon-color: var(--d1-accent, var(--theme--primary)); }
 .pinfo { flex: 1; min-width: 0; }
-.pname { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px; }
-.former-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #b91c1c;
-	background: #fef2f2; border: 1px solid #fecaca; border-radius: 99px; padding: 1px 6px; }
-.pmeta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
-.chip { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 99px;
-	background: var(--theme--background-subdued, #f1f5f9); color: var(--theme--foreground-subdued, #64748b); }
-.chip.researcher { background: #eef2ff; color: #4338ca; }
-.chip.operator { background: #ecfdf5; color: #047857; }
-.chip.login { background: #f0f9ff; color: #0369a1; }
-.chip.login.off { background: #f8fafc; color: #94a3b8; }
-.pemail { font-size: 11px; color: var(--theme--foreground-subdued, #94a3b8); }
-.go { color: var(--theme--foreground-subdued, #cbd5e1); flex: 0 0 auto; }
+.pname { font-weight: 650; font-size: var(--fs-md); display: flex; align-items: center; gap: 8px; }
+.former-tag { font-size: var(--fs-xs); font-weight: 700; color: var(--d1-bad);
+	background: color-mix(in srgb, var(--theme--danger) 14%, transparent); border-radius: 99px; padding: 1px 8px; }
+.pmeta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
+/* Who someone is, in the theme's own colours (they were fixed pastel hexes, unreadable on a dark
+   theme) and at 11px in sentence case (they were 10px capitals). */
+.chip { font-size: var(--fs-xs); font-weight: 700; padding: 1px 8px; border-radius: 99px;
+	background: var(--theme--background-normal); color: var(--d1-dim); }
+.chip.researcher { background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent); color: var(--d1-accent, var(--theme--primary)); }
+.chip.operator { background: color-mix(in srgb, var(--theme--success) 18%, transparent); color: var(--d1-ok); }
+.chip.login { background: transparent; box-shadow: inset 0 0 0 1px var(--theme--border-color); color: var(--theme--foreground); }
+.chip.login.off { color: var(--d1-dim); box-shadow: inset 0 0 0 1px var(--d1-line); }
+.pemail { font-size: var(--fs-sm); color: var(--d1-dim); }
+.go { --v-icon-color: var(--d1-dim); flex: 0 0 auto; }
 
 .edit-card { width: 520px; max-width: 94vw; }
 .edit-card .fld { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
@@ -270,6 +290,6 @@ export default { inheritAttrs: false };
 .tg .hint { font-weight: 400; color: var(--theme--foreground-subdued, #94a3b8); font-size: 11px; }
 .edit-card .fld > .hint { font-size: 11px; color: var(--theme--foreground-subdued, #94a3b8); }
 .spacer { flex: 1; }
-.del { --v-button-color: #b91c1c; }
-.err { color: #b91c1c; font-size: 12px; margin: 6px 0 0; }
+.del { --v-button-color: var(--theme--danger); }
+.err { color: var(--theme--danger); font-size: 12px; margin: 6px 0 0; }
 </style>

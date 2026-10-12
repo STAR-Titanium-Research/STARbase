@@ -217,7 +217,7 @@ export function useProjectData(id: Ref<string>) {
 			fill(looseOperations, token, 'operations outside campaigns', () =>
 				getItems('manufacturing_operations', {
 					filter: { _and: [byProject, { campaign_id: { _null: true } }] },
-					fields: ['operation_id', 'pass_code', 'process_category', 'operation_date', 'sample_id.sample_code'],
+					fields: ['operation_id', 'pass_code', 'operation_sequence', 'process_category', 'operation_date', 'sample_id.sample_code'],
 					sort: ['-operation_date'],
 					limit: LIST_CAP + 1,
 				}),

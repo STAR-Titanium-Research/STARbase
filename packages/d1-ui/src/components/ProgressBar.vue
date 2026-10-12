@@ -19,11 +19,18 @@ const pct = computed(() => (props.max > 0 ? Math.min(100, Math.max(0, (props.val
 .d1-progress { display: flex; align-items: center; gap: 10px; }
 .track {
 	flex: 1;
-	height: 8px;
+	height: 6px;
 	border-radius: 99px;
 	background: var(--theme--background-normal);
 	overflow: hidden;
 }
-.fill { height: 100%; border-radius: 99px; background: var(--theme--primary); transition: width 0.25s ease; }
-.text { font-size: 12px; color: var(--theme--foreground-subdued); white-space: nowrap; }
+.fill { height: 100%; border-radius: 99px; background: var(--d1-accent, var(--theme--primary)); transition: width 0.25s ease; }
+.text {
+	min-width: 52px;
+	text-align: right;
+	font-size: var(--fs-sm, 12px);
+	font-variant-numeric: tabular-nums;
+	color: var(--d1-dim, var(--theme--foreground-subdued));
+	white-space: nowrap;
+}
 </style>

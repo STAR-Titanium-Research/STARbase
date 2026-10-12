@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { analysisLink, errorText, formatDate, recordRoute, type AnalysisLink } from '@d1/ui';
-import { samplesBookmarkLink, SAMPLES_LIST } from './samplesBookmark';
+import { DataTable, Section, analysisLink, collectionRoute, errorText, formatDate, hasPassCode, operationLabel, recordRoute, type AnalysisLink } from '@d1/ui';
 
 // Recent activity: samples, operations and tests merged into one feed, each tagged with its kind,
 // newest first. Links go through recordRoute; a FAST run opens its Operation page like any other
 // operation and keeps a second action to its FAST dashboard (the kit's analysisLink).
 type Kind = 'sample' | 'operation' | 'fast' | 'test';
-interface Activity { kind: Kind; id: string; code: string; meta: string; date: string; to: string; extra?: AnalysisLink | null }
+// `plain`: the code is a description (an operation without a pass code), so it is not set in monospace.
+interface Activity { kind: Kind; id: string; code: string; meta: string; date: string; to: string; extra?: AnalysisLink | null; plain?: boolean }
 const KIND_LABEL: Record<Kind, string> = { sample: 'Sample', operation: 'Operation', fast: 'FAST', test: 'Test' };
 
 const api = useApi();
 const recent = ref<Activity[]>([]);
-const samplesLink = ref(SAMPLES_LIST);
+const samplesLink = collectionRoute('physical_samples');
 const error = ref('');
 
 // Each source loads on its own: one the role cannot read leaves the others in the feed, and the
@@ -36,14 +36,15 @@ const SOURCES: { label: string; read: () => Promise<Activity[]> }[] = [
 		label: 'operations',
 		read: async () => {
 			const res = await api.get('/items/manufacturing_operations', {
-				params: { sort: '-created_at', limit: 8, fields: ['operation_id', 'pass_code', 'created_at', 'process_category', 'sample_id.sample_code'] },
+				params: { sort: '-created_at', limit: 8, fields: ['operation_id', 'pass_code', 'operation_sequence', 'created_at', 'process_category', 'sample_id.sample_code'] },
 			});
 			return (res.data.data ?? []).map((r: any) => {
 				const isFast = r.process_category === 'sintering';
 				return {
 					kind: isFast ? ('fast' as const) : ('operation' as const),
-					id: r.operation_id, code: r.pass_code || r.sample_id?.sample_code || '—',
-					meta: r.sample_id?.sample_code || '—', date: r.created_at,
+					id: r.operation_id, code: operationLabel(r), plain: !hasPassCode(r),
+					// Without a pass code the label already names the sample: do not print it twice.
+					meta: hasPassCode(r) ? (r.sample_id?.sample_code || '—') : '', date: r.created_at,
 					to: recordRoute('manufacturing_operations', r.operation_id),
 					extra: isFast ? analysisLink(r.operation_id, r.process_category) : null,
 				};
@@ -66,7 +67,6 @@ const SOURCES: { label: string; read: () => Promise<Activity[]> }[] = [
 ];
 
 onMounted(async () => {
-	samplesBookmarkLink(api).then((to) => (samplesLink.value = to));
 	const results = await Promise.allSettled(SOURCES.map((s) => s.read()));
 	const failed: string[] = [];
 	const merged: Activity[] = [];
@@ -83,53 +83,38 @@ onMounted(async () => {
 </script>
 
 <template>
-	<section aria-labelledby="recent-h">
-		<div class="section-head">
-			<h2 id="recent-h">Recent activity</h2>
-			<router-link :to="samplesLink" class="link">View samples →</router-link>
-		</div>
-		<p v-if="error" class="error" role="alert">{{ error }}</p>
-		<div v-if="recent.length" class="recent-grid">
-			<div v-for="r in recent" :key="`${r.kind}-${r.id}`" class="rcard">
-				<span class="r-top">
-					<span class="r-kind" :class="`k-${r.kind}`">{{ KIND_LABEL[r.kind] }}</span>
-					<span class="r-date">{{ formatDate(r.date) }}</span>
-				</span>
-				<router-link :to="r.to" class="r-code">{{ r.code }}</router-link>
-				<span class="r-meta">{{ r.meta }}</span>
-				<router-link v-if="r.extra" :to="r.extra.to" class="r-extra">{{ r.extra.label }} →</router-link>
-			</div>
-		</div>
-		<p v-else-if="!error" class="empty">No activity yet.</p>
-	</section>
+	<Section title="Recent activity" :count="recent.length || null" :empty="!recent.length && !error" empty-text="No activity yet.">
+		<template #actions><router-link :to="samplesLink" class="link">View samples →</router-link></template>
+		<p v-if="error" class="d1-note bad error" role="alert">{{ error }}</p>
+		<!-- One row per record, newest first: nine cards made the eye zig-zag to read a list. The
+		     columns are as wide as their content and the last one takes the rest, so a row reads
+		     in one glance instead of across the whole page. -->
+		<DataTable v-if="recent.length">
+			<thead>
+				<tr><th class="fit">Created</th><th class="fit">Type</th><th class="fit">Record</th><th class="fit">Detail</th><th /></tr>
+			</thead>
+			<tbody>
+				<tr v-for="r in recent" :key="`${r.kind}-${r.id}`">
+					<td class="fit dim">{{ formatDate(r.date) }}</td>
+					<td class="fit"><span class="r-kind" :class="`k-${r.kind}`">{{ KIND_LABEL[r.kind] }}</span></td>
+					<td class="fit"><router-link :to="r.to" class="r-code" :class="{ mono: !r.plain }">{{ r.code }}</router-link></td>
+					<td class="fit dim">{{ r.meta }}</td>
+					<td class="actions"><router-link v-if="r.extra" :to="r.extra.to" class="link">{{ r.extra.label }} →</router-link></td>
+				</tr>
+			</tbody>
+		</DataTable>
+	</Section>
 </template>
 
 <style scoped>
-.section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
-.section-head h2 { margin: 0; font-size: 18px; font-weight: 750; }
-.link { color: var(--theme--primary); font-weight: 600; font-size: 13px; text-decoration: none; }
+.link { color: var(--d1-accent, var(--theme--primary)); font-weight: 600; font-size: var(--fs-sm); text-decoration: none; white-space: nowrap; }
 .link:hover { text-decoration: underline; }
-.recent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
-.rcard {
-	position: relative; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; min-width: 0;
-	border: 1px solid var(--theme--border-color-subdued); border-radius: 14px;
-	background: var(--theme--background); color: var(--theme--foreground);
-	transition: border-color 0.14s ease, box-shadow 0.14s ease;
-}
-.rcard:hover { border-color: var(--theme--primary); box-shadow: 0 10px 22px -16px rgba(15, 23, 42, 0.4); }
-.r-top { display: flex; align-items: center; justify-content: space-between; }
-.r-kind { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; padding: 2px 8px; border-radius: 99px; }
-.k-sample { color: var(--theme--primary); background: var(--theme--primary-background); }
-.k-operation { color: var(--theme--success); background: var(--theme--success-background); }
-.k-fast { color: var(--theme--warning); background: var(--theme--warning-background); }
-.k-test { color: var(--theme--foreground-subdued); background: var(--theme--background-normal); }
-.r-code { font-family: var(--theme--fonts--monospace--font-family, monospace); font-weight: 700; font-size: 14px; overflow-wrap: anywhere; color: inherit; text-decoration: none; }
-/* The whole card opens the record: the code link stretches over it, the extra action sits above. */
-.r-code::after { content: ''; position: absolute; inset: 0; border-radius: 14px; }
-.r-extra { position: relative; z-index: 1; align-self: flex-start; font-size: 12px; font-weight: 600; color: var(--theme--primary); text-decoration: none; }
-.r-extra:hover { text-decoration: underline; }
-.r-meta { font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.r-date { font-size: 11px; color: var(--theme--foreground-subdued); }
-.empty { color: var(--theme--foreground-subdued); }
-.error { margin: 0 0 12px; font-size: 13px; color: var(--theme--danger); }
+.error { margin-bottom: 8px; }
+.r-kind { display: inline-block; font-size: var(--fs-xs); font-weight: 700; padding: 1px 8px; border-radius: 99px; white-space: nowrap; }
+.k-sample { color: var(--d1-accent, var(--theme--primary)); background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, transparent); }
+.k-operation { color: var(--d1-ok); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
+.k-fast { color: var(--d1-warn); background: color-mix(in srgb, var(--theme--warning) 18%, transparent); }
+.k-test { color: var(--d1-dim); background: var(--theme--background-normal); }
+.r-code { color: var(--d1-accent, var(--theme--primary)); text-decoration: none; overflow-wrap: anywhere; }
+.r-code:hover { text-decoration: underline; }
 </style>

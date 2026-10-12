@@ -85,7 +85,7 @@ describe('campaign roll-up', () => {
 		const o = buildOverview({
 			samples: [{ sample_id: S10 }, { sample_id: S1 }],
 			operations: [
-				{ operation_id: 'o1', pass_code: 'P1', process_category: 'machining', sample_id: S1 },
+				{ operation_id: 'o1', pass_code: 'P1', operation_sequence: 7, process_category: 'machining', sample_id: S1 },
 				{ operation_id: 'o2', pass_code: 'P2', process_category: 'machining', sample_id: S1 },
 				{ operation_id: 'o3', pass_code: 'P3', process_category: 'machining', sample_id: S2 },
 				{ operation_id: 'o4', pass_code: 'F1', process_category: 'fast', sample_id: S2 },
@@ -121,6 +121,9 @@ describe('campaign roll-up', () => {
 		expect(o2.analysis).toBe('error');
 		expect(o2.analysis_error).toBe('bad file');
 		expect(o2.sample_code).toBe('9-A-1');
+		// The step travels with the row so a list can label an operation that has no pass code.
+		expect(o.opRows.find((r) => r.operation_id === 'o1')?.operation_sequence).toBe(7);
+		expect(o2.operation_sequence).toBeNull();
 	});
 
 	it('an empty campaign gives zeros, not NaN', () => {

@@ -7,12 +7,11 @@ defineProps<{ loading?: boolean; error?: string; empty?: boolean; emptyText?: st
 <template>
 	<div v-if="loading" class="d1-state"><v-progress-circular indeterminate small /> {{ loadingText ?? 'Loading…' }}</div>
 	<div v-else-if="error" class="d1-state d1-state-error" role="alert">{{ error }}</div>
-	<div v-else-if="empty" class="d1-state d1-state-empty">{{ emptyText ?? 'Nothing here yet.' }}</div>
+	<div v-else-if="empty" class="d1-state">{{ emptyText ?? 'Nothing here yet.' }}</div>
 	<slot v-else />
 </template>
 
 <style scoped>
-.d1-state { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 13px; color: var(--theme--foreground-subdued); }
-.d1-state-error { color: var(--theme--danger); }
-.d1-state-empty { font-style: italic; }
+.d1-state { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: var(--fs-sm, 12px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.d1-state-error { color: var(--d1-bad, var(--theme--danger)); }
 </style>

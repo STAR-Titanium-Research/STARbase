@@ -26,7 +26,6 @@ import ColorScaleEditor from './ColorScaleEditor.vue';
 import PlotModeFlyout from './PlotModeFlyout.vue';
 import { cacheGet, cachePut, decimateCache, parseCache, type Cache } from './liveCache';
 import { alignMeasuredRho, measuredRhoSpan, type TurningSpiralParams } from './path';
-import { computeAutoCode } from './operationCode';
 import { activeFindings, diagnose, worstSeverity, type Finding } from './metadataDoctor';
 import { computeSignalStats, resolveStatsWindow, type SignalStats } from './signalStats';
 import { statsCsvColumns } from './statsCsv';
@@ -1243,11 +1242,10 @@ function frmQuality(o: any): { level: string; label: string } {
 // this one "do the .mat and D1 agree". They get separate markers on purpose — folding a feed
 // conflict into "no plot data" would lose the distinction the user needs in order to act.
 //
-// The two noisy checks are opt-in (see metadataDoctor.ts): legacy pass_codes came from filenames
-// rather than computeAutoCode, and docs/force-file-standards.md §7 records that dates in filenames
-// and pass codes are frequently wrong — so both are informational and off until asked for.
+// The noisy check is opt-in (see metadataDoctor.ts): docs/force-file-standards.md §7 records that
+// dates in filenames and pass codes are frequently wrong — so it is informational and off until
+// asked for.
 const DOCTOR_OPTIONAL = [
-	{ id: 'name.stale', label: 'Name vs fields' },
 	{ id: 'date.trigger', label: 'Recording vs operation date' },
 ];
 const DOCTOR_OPTS_KEY = 'd1-force-doctor-opts';
@@ -1353,8 +1351,8 @@ async function selectOp(row: any) {
 					// machining_force_analysis's own columns, not the related operation's, so without
 					// this the edge grouping silently finds nothing and falls back to sample.
 					'operation_id.insert_edge_id', 'operation_id.machining_cutting_length_mm',
-					// Needed by computeAutoCode() (operationCode.ts) to regenerate the operation's name —
-					// without these the regenerated pass_code silently drops its parameter suffix.
+					// Needed to seed the editable cutting-parameter boxes (seedMetaFromDetail) and by the
+					// Metadata Doctor's feed/DoC/Vc pairs.
 					'operation_id.machining_cutting_speed_m_per_min', 'operation_id.machining_feed_mm_per_rev',
 					'operation_id.machining_axial_depth_of_cut_mm',
 					// Needed by the Metadata Doctor's diameter pair (metadataDoctor.ts). `*` above covers
@@ -1433,16 +1431,11 @@ const opSample = computed(() => op.value?.sample_id ?? null);
 const opLabel = computed(() => op.value?.pass_code || opSample.value?.sample_code || '—');
 
 // ---- Editable operation metadata (Subtype/Sequence/New edge/Coolant/Operator/cutting params/
-// notes/name) — the plotting view previously showed these read-only. Combined with the crop
+// notes) — the plotting view previously showed these read-only. Combined with the crop
 // save into one dialog (see saveChanges() below). Machine/Method (equipment_id/method_id
 // relations) stay read-only: editing them needs option-list fetches from collections not
-// otherwise touched in this package, and they don't feed name regeneration.
-// NOTE: this block must stay textually after `op`/`opSample` above — watch(regeneratedPassCode,
-// ...) below evaluates its source once, synchronously, at setup (even without immediate:true),
-// and regeneratedPassCode reads op.value; declaring it before op's own `const` throws a TDZ
-// ReferenceError the moment this component mounts (a plain function declaration like
-// seedMetaFromDetail would be hoisted and fine either way — it's specifically the eager
-// watch-of-a-computed pattern that requires this ordering).
+// otherwise touched in this package. The operation code is NOT edited or composed here: the
+// database builds it (trigger mfg_op_set_code) and saveChanges() reads it back after a save.
 const srcMeta = reactive({
 	subtype: '', sequence: null as number | null, newEdge: null as boolean | null, coolant: null as boolean | null,
 	operator: '', cuttingSpeed: null as number | null, feedMmPerRev: null as number | null, axialDoc: null as number | null,
@@ -1470,8 +1463,7 @@ const editOpFeedMmPerRev = ref<number | null>(null);   // machining_feed_mm_per_
 const editOpAxialDoc = ref<number | null>(null);       // machining_axial_depth_of_cut_mm
 // The operation record's own workpiece diameter. NOT the same field as the FRM "Diameter" control
 // above (that one is machining_force_analysis.outer_diameter, a geometry override for the spiral):
-// this is the operation's recorded stock diameter, and unlike the three params above it does not
-// feed computeAutoCode, so editing it never changes the operation name.
+// this is the operation's recorded stock diameter.
 const editOpWorkpieceDiam = ref<number | null>(null);  // machining_workpiece_diameter_mm
 const editOutcomeNotes = ref('');
 function seedMetaFromDetail() {
@@ -1497,24 +1489,10 @@ function seedMetaFromDetail() {
 	editOpWorkpieceDiam.value = srcMeta.workpieceDiam;
 	editOutcomeNotes.value = srcMeta.outcomeNotes;
 }
-// The name computeAutoCode() would produce from the currently-edited fields — recomputed live
-// so the combined-save dialog can show "old -> new" before the user confirms. Operation code and
-// Sequence are NOT user-editable (see edit-grid below): the code is purely a consequence of the
-// other fields, and Sequence is the key archive .mat filenames are matched to an operation by
-// (see docs/superpowers/specs .mat-operation-linking notes) — hand-editing it here would silently
-// desync that link, so it stays fixed at whatever seedMetaFromDetail() loaded.
-const regeneratedPassCode = computed(() => {
-	const o = op.value; if (!o) return '';
-	return computeAutoCode({
-		processCategory: o.process_category,
-		sampleCode: opSample.value?.sample_code ?? null,
-		operationSequence: srcMeta.sequence,
-		machiningOperationSubtype: editOpSubtype.value,
-		machiningCuttingSpeedMPerMin: editOpCuttingSpeed.value,
-		machiningFeedMmPerRev: editOpFeedMmPerRev.value,
-		machiningAxialDepthOfCutMm: editOpAxialDoc.value,
-	});
-});
+// Operation code and Sequence are NOT user-editable (see edit-grid below): the code is built by the
+// database from the operation's fields, and Sequence is the key archive .mat filenames are matched
+// to an operation by (see docs/superpowers/specs .mat-operation-linking notes) — hand-editing it
+// here would silently desync that link, so it stays fixed at whatever seedMetaFromDetail() loaded.
 const metaDirty = computed(() => {
 	if (!op.value) return false;
 	return editOpSubtype.value !== srcMeta.subtype
@@ -1525,8 +1503,7 @@ const metaDirty = computed(() => {
 		|| numDiffers(numOrNull(editOpFeedMmPerRev.value), srcMeta.feedMmPerRev)
 		|| numDiffers(numOrNull(editOpAxialDoc.value), srcMeta.axialDoc)
 		|| numDiffers(numOrNull(editOpWorkpieceDiam.value), srcMeta.workpieceDiam)
-		|| editOutcomeNotes.value !== srcMeta.outcomeNotes
-		|| (regeneratedPassCode.value !== '' && regeneratedPassCode.value !== srcMeta.passCode);
+		|| editOutcomeNotes.value !== srcMeta.outcomeNotes;
 });
 
 // ---- Metadata Doctor, selected operation ----------------------------------------------------
@@ -1555,10 +1532,8 @@ const ADOPT_TARGETS: Record<string, { ref: typeof editOpFeedMmPerRev; label: str
 function canAdopt(f: Finding): boolean {
 	return f.fix === 'adopt' && typeof f.matValue === 'number' && !!f.field && f.field in ADOPT_TARGETS;
 }
-// Feed/DoC/Vc all feed computeAutoCode, so adopting one can change the derived operation code —
-// that's surfaced as an ordinary "Operation code" row in the save-changes summary below, same as
-// any other consequence of an edited field. Nothing here writes pass_code directly: it is never
-// user-editable (see edit-grid), only ever the live output of regeneratedPassCode.
+// Adopting Feed/DoC/Vc can change the operation code the database builds on save; the dashboard
+// never writes pass_code itself — saveChanges() reads the stored code back after the PATCH.
 function adoptFinding(f: Finding) {
 	if (!canAdopt(f)) return;
 	const t = ADOPT_TARGETS[f.field!];
@@ -1569,10 +1544,6 @@ function adoptFinding(f: Finding) {
 }
 function applyFix(f: Finding) {
 	if (f.fix === 'adopt') return adoptFinding(f);
-	// The regenerated code is already live (regeneratedPassCode) and not user-editable, so
-	// there's nothing to "regenerate" — just reveal the box so the pending rename is visible
-	// in the save-changes summary before the user confirms.
-	if (f.fix === 'regen') { openPanel.value = 'detail'; return; }
 	if (f.fix === 'crop') return startCropFix();
 	if (f.fix === 'link') return openOpForm();
 }
@@ -1782,12 +1753,11 @@ function buildMetaPatch(): Record<string, any> {
 	if (numDiffers(numOrNull(editOpAxialDoc.value), srcMeta.axialDoc)) patch.machining_axial_depth_of_cut_mm = numOrNull(editOpAxialDoc.value);
 	if (numDiffers(numOrNull(editOpWorkpieceDiam.value), srcMeta.workpieceDiam)) patch.machining_workpiece_diameter_mm = numOrNull(editOpWorkpieceDiam.value);
 	if (editOutcomeNotes.value !== srcMeta.outcomeNotes) patch.outcome_notes = editOutcomeNotes.value || null;
-	if (regeneratedPassCode.value && regeneratedPassCode.value !== srcMeta.passCode) patch.pass_code = regeneratedPassCode.value;
 	return patch;
 }
 // What the confirmation dialog shows before writing — every changed field as old -> new, plus
-// the crop window (if dirty) and the resulting operation name (if it differs). Sequence has no
-// row here: it's not user-editable (see edit-grid), so it never differs from srcMeta.
+// the crop window (if dirty). The operation code has no row: the database builds it on save.
+// Sequence has no row either: it's not user-editable (see edit-grid), so it never differs from srcMeta.
 const changeSummary = computed(() => {
 	const rows: { label: string; from: string; to: string }[] = [];
 	const push = (label: string, from: string, to: string) => { if (from !== to) rows.push({ label, from, to }); };
@@ -1808,9 +1778,6 @@ const changeSummary = computed(() => {
 			to: `${cropStartSec.value.toFixed(1)}–${cropEndSec.value.toFixed(1)}s`,
 		});
 	}
-	if (regeneratedPassCode.value && regeneratedPassCode.value !== srcMeta.passCode) {
-		rows.push({ label: 'Operation code', from: fmtOrDash(srcMeta.passCode), to: regeneratedPassCode.value });
-	}
 	return rows;
 });
 const hasChanges = computed(() => metaDirty.value || (cropTouched.value && cropDirty.value));
@@ -1824,8 +1791,13 @@ async function saveChanges() {
 	try {
 		const patch = buildMetaPatch();
 		if (Object.keys(patch).length) {
-			await api.patch(`/items/manufacturing_operations/${o.operation_id}`, patch);
-			Object.assign(o, patch);   // optimistic update — op.value is detail.value.operation_id
+			const { data } = await api.patch(`/items/manufacturing_operations/${o.operation_id}`, patch, {
+				params: { fields: ['pass_code'] },
+			});
+			Object.assign(o, patch);   // optimistic update of the edited fields — op.value is detail.value.operation_id
+			// The code the database built from the saved fields. No data (e.g. a 204 when the user may no
+			// longer read the row) keeps the old code shown.
+			if (data?.data && 'pass_code' in data.data) o.pass_code = data.data.pass_code;
 			seedMetaFromDetail();      // re-snapshot srcMeta from the now-updated op
 		}
 	} catch (e: any) {
@@ -2627,10 +2599,10 @@ function fmtDateTime(v: string | null | undefined) {
 
 							<!-- Editable operation metadata: Subtype/New edge/Coolant/Operator/cutting params/
 							     notes. Machine/Method stay read-only above (see opMeta). Sequence and Operation
-							     code are shown here for context but are NOT editable: Operation code is purely
-							     a derived consequence of the fields around it, and Sequence is the key archive
+							     code are shown here for context but are NOT editable: Operation code is built by
+							     the database from the fields around it, and Sequence is the key archive
 							     .mat filenames are matched to an operation by, so hand-editing either from this
-							     panel would silently desync that link (see regeneratedPassCode above). Combined
+							     panel would silently desync that link. Combined
 							     with any pending crop edit into one "Save changes" summary dialog below. -->
 							<!-- Surface speed / Feed / Depth of cut / Workpiece Ø appear again under "Cut
 							     parameters" below, which reads as a duplicate until you know these two
@@ -2666,7 +2638,7 @@ function fmtDateTime(v: string | null | undefined) {
 								<label class="chk">New edge<input v-model="editOpNewEdge" type="checkbox" /></label>
 								<label class="chk">Coolant<input v-model="editOpCoolant" type="checkbox" /></label>
 								<label class="wide">Operation code
-									<input :value="regeneratedPassCode || fmtOrDash(srcMeta.passCode)" type="text" disabled :class="{ modified: !!regeneratedPassCode && regeneratedPassCode !== srcMeta.passCode }" title="Derived from Subtype/Sequence/cutting params + the sample code. Not editable here." />
+									<input :value="fmtOrDash(srcMeta.passCode)" type="text" disabled title="Built by the database from the operation's fields; it updates when you save. Not editable here." />
 								</label>
 								<label class="wide">Notes<textarea v-model="editOutcomeNotes" rows="2" :class="{ modified: editOutcomeNotes !== srcMeta.outcomeNotes }"></textarea></label>
 							</div>
@@ -3069,7 +3041,6 @@ function fmtDateTime(v: string | null | undefined) {
 												<button v-if="canAdopt(f)" class="doc-btn primary" @click="applyFix(f)">
 													Use .mat value in D1
 												</button>
-												<button v-else-if="f.fix === 'regen'" class="doc-btn primary" @click="applyFix(f)">Regenerate name</button>
 												<button v-else-if="f.fix === 'crop'" class="doc-btn primary" @click="applyFix(f)">Adjust crop…</button>
 												<button v-else-if="f.fix === 'link'" class="doc-btn primary" @click="applyFix(f)">Open record…</button>
 												<button class="doc-btn" :disabled="doctorBusy === f.id" @click="setDismissed(f, true)">Not a problem</button>

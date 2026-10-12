@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
 	campaignAssignPatch, changeOutcomeMessage, forbiddenWriteMessage, inheritCampaignProject, lostRaceMessage, projectInheritPatch,
-	notPermittedMessage, readCampaignProject, readCanUpdate,
+	notPermittedMessage, operationPickerFilter, readCampaignProject, readCanUpdate,
 } from './assign';
 
 describe('campaignAssignPatch', () => {
@@ -136,5 +136,29 @@ describe('inheritCampaignProject', () => {
 		expect(await inheritCampaignProject(apiWith('p1', vi.fn().mockRejectedValue(forbidden)), 'test_sessions', 'session_id', 't1', 'c1', 'T')).toBe('');
 		const msg = await inheritCampaignProject(apiWith('p1', vi.fn().mockRejectedValue(new Error('boom'))), 'test_sessions', 'session_id', 't1', 'c1', 'T');
 		expect(msg).toContain('T was added, but its project could not be set');
+	});
+});
+
+describe('operationPickerFilter', () => {
+	it('offers operations in no campaign, narrowed to the campaign type\'s category', () => {
+		expect(operationPickerFilter('machining', '')).toEqual({
+			_and: [{ campaign_id: { _null: true } }, { process_category: { _eq: 'machining' } }],
+		});
+		expect(operationPickerFilter(null, '   ')).toEqual({ _and: [{ campaign_id: { _null: true } }] });
+	});
+
+	it('searches the pass code and the sample code, since an uncoded operation is listed by its sample', () => {
+		expect(operationPickerFilter(null, ' S1 ')).toEqual({
+			_and: [
+				{ campaign_id: { _null: true } },
+				{ _or: [{ pass_code: { _icontains: 'S1' } }, { sample_id: { sample_code: { _icontains: 'S1' } } }] },
+			],
+		});
+	});
+
+	it('keeps the category and the search ANDed', () => {
+		const f = operationPickerFilter('sintering', 'x') as { _and: unknown[] };
+		expect(f._and).toHaveLength(3);
+		expect(f._and[1]).toEqual({ process_category: { _eq: 'sintering' } });
 	});
 });

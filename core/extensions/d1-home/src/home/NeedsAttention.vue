@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { LoadState, collectionRoute, errorText, useItems, useRequestGate } from '@d1/ui';
-import { bookmarkId } from './samplesBookmark';
+import {
+	BOOKMARK_VISIBILITY_FILTER, EXPLORER_HOST, LoadState, Section, collectionRoute, errorText, indexRoute, pickBookmarkId, useItems, useRequestGate,
+} from '@d1/ui';
 import { ATTENTION, ATTENTION_LIST_LIMIT, type AttentionDef, type AttentionItem } from './attention';
 
 // Counts of things that need a look. Each tile loads its own count (a role that cannot read one
@@ -13,6 +14,7 @@ const props = defineProps<{ isAdmin: boolean }>();
 
 const { getItems } = useItems();
 const api = useApi();
+const host = inject(EXPLORER_HOST, null);
 const gate = useRequestGate();
 
 const defs = computed(() => ATTENTION.filter((d) => !d.adminOnly || props.isAdmin));
@@ -54,32 +56,72 @@ async function toggle(def: AttentionDef) {
 	}
 }
 
+// The id of a named bookmark on a collection, or null when there is none (or the role cannot read
+// presets). Prefers the global bookmark, then a role's, then the user's own. An admin can read
+// every user's presets, so the request carries the sidebar's visibility filter and the result is
+// checked again against who is signed in: another user's private view is never linked.
+async function bookmarkId(collection: string, name: string): Promise<number | null> {
+	try {
+		const res = await api.get('/presets', {
+			params: {
+				filter: JSON.stringify({ _and: [BOOKMARK_VISIBILITY_FILTER, { bookmark: { _eq: name } }, { collection: { _eq: collection } }] }),
+				fields: ['id', 'user', 'role'],
+				sort: ['id'],
+				limit: -1,
+			},
+		});
+		return pickBookmarkId(res.data.data ?? [], host?.user.value ?? null);
+	} catch {
+		return null;
+	}
+}
+
 const openDef = computed(() => defs.value.find((d) => d.key === open.value) ?? null);
-// A tile whose filter exists as a Data Studio bookmark ("Failed") links to that filtered view,
-// found by name since its id differs between installs. Without it the link is the plain, unfiltered
-// collection and says so.
+// A tile whose filter exists as a saved view ("Failed") links to the Explorer list with that view
+// applied, found by name since its id differs between installs. Without it the link is the plain list.
 const bookmarkIds = ref<Record<string, number>>({});
 const moreLink = computed(() => {
 	const d = openDef.value;
 	if (!d) return null;
 	const id = bookmarkIds.value[d.key];
 	return id === undefined
-		? { to: collectionRoute(d.collection), text: 'Open the collection in the Data Studio (unfiltered)' }
-		: { to: `/content/${d.collection}?bookmark=${id}`, text: `Open the "${d.bookmark}" bookmark in the Data Studio` };
+		? { to: collectionRoute(d.collection), text: 'See the list' }
+		: { to: indexRoute(d.collection, { bookmark: id }), text: 'See all' };
 });
 const openCount = computed(() => (open.value ? (state.value[open.value]?.count ?? 0) : 0));
 
-onMounted(() => {
-	const token = gate.begin();
-	for (const d of defs.value) {
-		loadCount(d, token);
-		if (d.bookmark) {
-			bookmarkId(api, d.collection, d.bookmark).then((id) => {
-				if (id !== null) bookmarkIds.value = { ...bookmarkIds.value, [d.key]: id };
-			});
+// Counts load for the tiles shown, and again for a tile that appears later: the admin-only one
+// shows only once the host has learnt the user is an admin (it starts as a guess).
+const token = gate.begin();
+const started = new Set<string>();
+function loadBookmark(d: AttentionDef) {
+	if (!d.bookmark) return;
+	bookmarkId(d.collection, d.bookmark).then((id) => {
+		const next = { ...bookmarkIds.value };
+		if (id !== null) next[d.key] = id;
+		else delete next[d.key];
+		bookmarkIds.value = next;
+	});
+}
+watch(
+	defs,
+	(list) => {
+		for (const d of list) {
+			if (started.has(d.key)) continue;
+			started.add(d.key);
+			loadCount(d, token);
+			loadBookmark(d);
 		}
-	}
-});
+	},
+	{ immediate: true },
+);
+// Who is signed in arrives after the page does: pick the views again with it.
+watch(
+	() => host?.user.value?.id,
+	() => {
+		for (const d of defs.value) loadBookmark(d);
+	},
+);
 onBeforeUnmount(() => {
 	gate.cancel();
 	listGate.cancel();
@@ -89,9 +131,8 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 </script>
 
 <template>
-	<section class="attention" aria-labelledby="attention-h">
-		<div class="section-head"><h2 id="attention-h">Needs attention</h2></div>
-		<p class="sub">Counts of the records you can see.</p>
+	<Section title="Needs attention">
+		<template #actions><span class="sub">Counts of the records you can see</span></template>
 		<div class="tiles">
 			<button
 				v-for="d in defs"
@@ -103,57 +144,55 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 				:title="state[d.key]?.error || d.hint"
 				@click="toggle(d)"
 			>
-				<v-icon :name="d.icon" class="t-icon" />
 				<span class="t-value">{{ show(state[d.key]) }}</span>
-				<span class="t-label">{{ d.label }}</span>
+				<span class="t-label"><v-icon :name="d.icon" x-small class="t-icon" />{{ d.label }}</span>
 			</button>
 		</div>
 
-		<div v-if="openDef" class="panel">
+		<div v-if="openDef" class="list">
 			<LoadState :loading="list.loading" :error="list.error">
 				<ul class="items">
 					<li v-for="i in list.items" :key="i.id">
-						<router-link :to="i.to" class="i-title">{{ i.title }}</router-link>
+						<router-link :to="i.to" class="i-title" :class="{ plain: i.plain }">{{ i.title }}</router-link>
 						<span v-if="i.sub" class="i-sub">{{ i.sub }}</span>
 					</li>
 				</ul>
-				<p v-if="moreLink && openCount > list.items.length" class="more">
+				<p v-if="moreLink && openCount > list.items.length" class="d1-note more">
 					Showing {{ list.items.length }} of {{ openCount }}.
 					<router-link :to="moreLink.to">{{ moreLink.text }}</router-link>
 				</p>
 			</LoadState>
 		</div>
-	</section>
+	</Section>
 </template>
 
 <style scoped>
-.section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
-.section-head h2 { margin: 0; font-size: 18px; font-weight: 750; }
-.sub { margin: 0 0 10px; font-size: 13px; color: var(--theme--foreground-subdued); }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.sub { font-size: var(--fs-xs); color: var(--d1-dim); }
+/* 260px keeps the longest label ("Force analysis errors on my operations") on one line. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+/* A count the size of the Record page's readouts, with what it counts beside it. */
 .tile {
-	display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px 16px; text-align: left;
+	display: flex; align-items: center; gap: 12px; min-width: 0; padding: 8px 12px; text-align: left;
 	font: inherit; color: var(--theme--foreground); cursor: pointer;
-	border: 1px solid var(--theme--border-color-subdued); border-radius: 14px; background: var(--theme--background);
-	transition: border-color 0.14s ease, box-shadow 0.14s ease;
+	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
+	transition: border-color 0.12s ease;
 }
-.tile:disabled { cursor: default; opacity: 0.85; }
-.tile:not(:disabled):hover, .tile.open { border-color: var(--theme--primary); }
-.tile.hot { border-color: var(--theme--warning); }
-.tile.hot .t-value { color: var(--theme--warning); }
-.t-icon { --v-icon-color: var(--theme--foreground-subdued); margin-bottom: 4px; }
-.tile.hot .t-icon { --v-icon-color: var(--theme--warning); }
-.t-value { font-size: 26px; font-weight: 760; letter-spacing: -0.02em; }
-.t-label { font-size: 12.5px; color: var(--theme--foreground-subdued); font-weight: 600; }
-.panel {
-	margin-top: 12px; padding: 12px 16px; border-radius: 14px;
-	border: 1px solid var(--theme--border-color-subdued); background: var(--theme--background);
-}
-.items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.items li { display: flex; gap: 12px; align-items: baseline; }
-.i-title { color: var(--theme--primary); font-weight: 650; text-decoration: none; font-family: var(--theme--fonts--monospace--font-family, monospace); }
+.tile:disabled { cursor: default; }
+.tile:not(:disabled):hover, .tile.open { border-color: var(--d1-accent, var(--theme--primary)); }
+.tile.hot { border-color: var(--theme--warning); background: color-mix(in srgb, var(--theme--warning) 10%, var(--d1-surface)); }
+.tile.hot .t-value { color: var(--d1-warn); }
+.tile.hot.open { box-shadow: inset 0 0 0 1px var(--theme--warning); }
+.t-value { flex: none; min-width: 1.2em; font-size: var(--fs-2xl); font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.tile:disabled .t-value { color: var(--d1-dim); }
+.t-label { font-size: var(--fs-sm); font-weight: 600; line-height: 1.3; color: var(--d1-dim); }
+.t-icon { margin-right: 4px; vertical-align: -2px; --v-icon-color: var(--d1-dim); }
+.tile.hot .t-icon { --v-icon-color: var(--d1-warn); }
+.list { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--d1-line); }
+.items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.items li { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
+.i-title { color: var(--d1-accent, var(--theme--primary)); font-weight: 650; text-decoration: none; overflow-wrap: anywhere; font-family: var(--theme--fonts--monospace--font-family, monospace); }
+.i-title.plain { font-family: inherit; }
 .i-title:hover { text-decoration: underline; }
-.i-sub { font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.more { margin: 10px 0 0; font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.more a { color: var(--theme--primary); }
+.i-sub { font-size: var(--fs-sm); color: var(--d1-dim); }
+.more { margin-top: 10px; }
 </style>

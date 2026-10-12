@@ -7,9 +7,10 @@
 // link mapping and not the Vue components (the force app) imports "@d1/ui/recordRoute".
 
 // Links
-export { recordRoute, collectionRoute, dataStudioRoute } from './recordRoute';
+export { recordRoute, collectionRoute, dataStudioRoute, indexRoute } from './recordRoute';
 export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
+export { operationLabel, operationHeading, operationSampleLine, hasPassCode } from './operationLabel';
 export { rollupOperationsFilter, ROLLUP_OPERATION_FIELDS, rollupTargets } from './rollupLinks';
 export type { RollupTarget } from './rollupLinks';
 export { readHiddenLinks } from './hiddenLinks';
@@ -17,7 +18,7 @@ export { createdRecord, CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE } from './
 export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
 // Display helpers and error predicates
-export { formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden } from './format';
+export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden } from './format';
 export { humanise, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
 export { estimateMassGrams } from './mass';
 export { buildLife, truncatedNotes } from './life';
@@ -57,7 +58,9 @@ export {
 } from './canUpdate';
 
 // Components
-export { default as RecordHeader } from './components/RecordHeader.vue';
+export { default as PageShell } from './components/PageShell.vue';
+export { default as DataTable } from './components/DataTable.vue';
+export { default as RecordCard } from './components/RecordCard.vue';
 export { default as StatTile } from './components/StatTile.vue';
 export { default as StatusBadge } from './components/StatusBadge.vue';
 export { default as RecordLink } from './components/RecordLink.vue';
@@ -65,10 +68,44 @@ export { default as Section } from './components/Section.vue';
 export { default as LoadState } from './components/LoadState.vue';
 export { default as NotVisible } from './components/NotVisible.vue';
 export { default as HiddenLink } from './components/HiddenLink.vue';
-export { default as KeyValueGrid } from './components/KeyValueGrid.vue';
-export type { KeyValue } from './components/KeyValueGrid.vue';
+export { default as RecordLayout } from './components/RecordLayout.vue';
+export { default as RecordRail } from './components/RecordRail.vue';
+export { default as FactList } from './components/FactList.vue';
+export { default as PageContents } from './components/PageContents.vue';
+export type { Fact } from './record/facts';
+export type { ContentsEntry } from './record/contents';
+export { detailFacts, detailsCount } from './record/details';
+export {
+	operationKind, operationRailFacts, operationDetailBase, operationSampleCount, projectFact, campaignFact, sampleFact, personText,
+} from './record/operationFacts';
+export type { HiddenLinks } from './record/operationFacts';
+export { testTypeText, testSample, testRailFacts, testDetailBase, testSubjectCount } from './record/testFacts';
+export {
+	sampleDims, sampleKind, sampleMassText, sampleCampaigns, coOwnerText, sampleRailFacts, sampleDetailBase,
+} from './record/sampleFacts';
+export type { SampleDims } from './record/sampleFacts';
+export { dateRangeText, projectRailFacts, projectContents } from './record/projectFacts';
+export type { ProjectCounts as ProjectRailCounts, ProjectContentsInput } from './record/projectFacts';
+export { campaignCode, campaignRailFacts, campaignContents } from './record/campaignFacts';
+export type { CampaignCounts, CampaignContentsInput } from './record/campaignFacts';
 export { default as ProgressBar } from './components/ProgressBar.vue';
 export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
+export { default as CampaignProgressBars } from './campaign/CampaignProgress.vue';
+export { useCampaignData } from './campaign/useCampaignData';
+export type { CampaignData } from './campaign/useCampaignData';
+
+// Explorer navigation: host contract, sidebar tree, index-page configs
+export { EXPLORER_HOST } from './host';
+export { guessAdmin } from './hostAdmin';
+export type { ExplorerHost } from './host';
+export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser, pickBookmarkId, linkForBookmark } from './nav/navConfig';
+export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
+export { default as ExplorerNav } from './nav/ExplorerNav.vue';
+export { default as Finder } from './finder/Finder.vue';
+export { isFinderShortcut, isModalOpen } from './finder/finderNav';
+export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
+export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
+export { default as IndexPage } from './index/IndexPage.vue';

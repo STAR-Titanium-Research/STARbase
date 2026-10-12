@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { LIST_CAP, LoadState, Section, StatusBadge, analysisLink, formatDate, formatQuantity, type SectionState } from '@d1/ui';
+import { DataTable, LIST_CAP, LoadState, Section, StatusBadge, analysisLink, breakableParts, formatDate, formatQuantity, type SectionState } from '@d1/ui';
 
 // Analysis of the operation's data: the force analysis of each .mat file (machining) or the
 // imported FAST trace (sintering), with the dashboard that plots it. Cutting metrics stay in the
@@ -24,27 +24,28 @@ const isMachining = computed(() => props.category === 'machining');
 <template>
 	<Section
 		v-if="isMachining"
+		id="force-analysis"
 		title="Force analysis"
 		:count="force.loading ? null : rows.length"
 		:empty="!force.loading && !force.error && !rows.length"
 		empty-text="No force files have been picked up for analysis yet."
 	>
 		<template v-if="link && rows.length" #actions>
-			<v-button small secondary :to="link.to"><v-icon name="show_chart" small left />{{ link.label }}</v-button>
+			<v-button x-small secondary :to="link.to"><v-icon name="show_chart" x-small left />{{ link.label }}</v-button>
 		</template>
 		<LoadState :loading="force.loading" :error="force.error">
-			<p v-if="capped" class="capped">
+			<p v-if="capped" class="d1-note capped">
 				Showing the first {{ LIST_CAP }} force files. Open the Force dashboard for the rest.
 			</p>
-			<table class="d1-table">
-				<thead><tr><th>File</th><th>Analysis</th><th>Diagnostics</th><th>Processed</th></tr></thead>
+			<DataTable>
+				<thead><tr><th>File</th><th class="fit">Analysis</th><th class="fit">Diagnostics</th><th class="fit">Processed</th></tr></thead>
 				<tbody>
 					<template v-for="r in rows" :key="r.id">
-						<tr>
-							<td class="file">{{ fileName(r) }}</td>
-							<td><StatusBadge kind="force" :value="r.status" /></td>
-							<td><StatusBadge kind="diag" :value="r.diag_status" /></td>
-							<td>{{ formatDate(r.processed_at, '') }}</td>
+						<tr :class="{ failed: r.error_message || r.diag_error }">
+							<td class="file mono"><template v-for="(part, i) in breakableParts(fileName(r))" :key="i">{{ part }}<wbr /></template></td>
+							<td class="fit"><StatusBadge kind="force" :value="r.status" /></td>
+							<td class="fit"><StatusBadge kind="diag" :value="r.diag_status" /></td>
+							<td class="fit dim">{{ formatDate(r.processed_at, '') }}</td>
 						</tr>
 						<tr v-if="r.error_message || r.diag_error" class="errors">
 							<td colspan="4">
@@ -54,18 +55,20 @@ const isMachining = computed(() => props.category === 'machining');
 						</tr>
 					</template>
 				</tbody>
-			</table>
+			</DataTable>
 		</LoadState>
 	</Section>
 
 	<Section
 		v-if="category === 'sintering'"
+		id="fast-run"
 		title="FAST run"
+		:count="fast.loading ? null : fast.data ? 1 : 0"
 		:empty="!fast.loading && !fast.error && !fast.data"
 		empty-text="No FAST trace has been imported for this run yet."
 	>
 		<template v-if="link && fast.data" #actions>
-			<v-button small secondary :to="link.to"><v-icon name="show_chart" small left />{{ link.label }}</v-button>
+			<v-button x-small secondary :to="link.to"><v-icon name="show_chart" x-small left />{{ link.label }}</v-button>
 		</template>
 		<LoadState :loading="fast.loading" :error="fast.error">
 			<div v-if="fast.data" class="fast">
@@ -82,22 +85,16 @@ const isMachining = computed(() => props.category === 'machining');
 </template>
 
 <style scoped>
-.d1-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.d1-table th {
-	text-align: left;
-	padding: 6px 12px 6px 0;
-	font-size: 11px;
-	text-transform: uppercase;
-	letter-spacing: 0.05em;
-	font-weight: 600;
-	color: var(--theme--foreground-subdued);
-	border-bottom: 1px solid var(--theme--border-color);
-}
-.d1-table td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--theme--border-color-subdued); vertical-align: middle; }
-.file { overflow-wrap: anywhere; font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: 12.5px; }
-.capped { margin: 0 0 8px; font-size: 12.5px; color: var(--theme--foreground-subdued); }
-.errors td { padding-top: 0; }
-.err { margin: 0 0 4px; font-size: 12.5px; color: var(--theme--danger); overflow-wrap: anywhere; }
-.fast { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; font-size: 13.5px; }
+/* A long name wraps after an underscore, dash or dot (the <wbr> in the template), never one
+   character per line: `anywhere` would shrink the column's minimum to one character. */
+.file { overflow-wrap: break-word; word-break: normal; font-size: var(--fs-sm); }
+.capped { margin-bottom: 8px; }
+/* The reason a file failed sits under its file with no rule between them: the file row drops its
+   bottom border and the reason row its top padding. `tr.` raises both above DataTable's own
+   `.d1-table td` (which would otherwise tie, and stylesheet order would decide). */
+tr.failed td { border-bottom: 0; }
+tr.errors td { padding-top: 0; }
+.err { margin: 0 0 4px; font-size: var(--fs-sm); color: var(--d1-bad); overflow-wrap: anywhere; }
+.fast { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; font-size: var(--fs-md); }
 .fast .err { flex-basis: 100%; }
 </style>
