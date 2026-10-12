@@ -6,7 +6,11 @@
 //   crawler: { state: { desired_state, current_activity, last_heartbeat_at, processed_count, error_count } | null,
 //              analyses: { pending, processing, done, error } },
 //   ownerless: { samples, campaigns, machiningOperations },
+//   serverTime: ISO string | null,   the database's now(), the clock the heartbeat is stamped with
 // }
+//
+// serverTime exists so a browser with a wrong clock cannot misjudge the crawler: the Home panel says
+// "online" when serverTime - last_heartbeat_at < 30 s, never by comparing with its own clock.
 //
 // The counts behind the admin Home panels. directus_files.metadata is a json column, which Directus
 // cannot filter over REST, hence SQL here. Admin only: 401 without a signed-in user, 403 for anyone
@@ -86,6 +90,12 @@ export default {
                 };
             },
 
+            async serverTime() {
+                const t = (await database.raw('SELECT now() AS t'))?.rows?.[0]?.t;
+                if (t instanceof Date) return t.toISOString();
+                return t ? new Date(t).toISOString() : null;
+            },
+
             async ownerless() {
                 const [samples, campaigns, machiningOperations] = await Promise.all([
                     count(database, 'SELECT count(*)::int AS n FROM physical_samples WHERE owner_person_id IS NULL'),
@@ -125,6 +135,7 @@ export default {
                 fingerprints: out.fingerprints,
                 crawler: out.crawler,
                 ownerless: out.ownerless,
+                serverTime: out.serverTime,
             });
         });
     },

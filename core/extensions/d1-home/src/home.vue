@@ -28,7 +28,9 @@ const today = computed(() =>
 	new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
 );
 // The server's own answer (GET /policies/me/globals), read once for the whole Explorer by the host.
-const { isAdmin } = useExplorerHost();
+const { isAdmin, adminKnown } = useExplorerHost();
+// The admin panels call an admin-only endpoint, so they wait for the server's answer instead of the guess.
+const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 </script>
 
 <template>
@@ -48,7 +50,7 @@ const { isAdmin } = useExplorerHost();
 				<NeedsAttention :is-admin="isAdmin" />
 				<MyWork />
 			</div>
-			<AdminPanels :is-admin="isAdmin" />
+			<AdminPanels :is-admin="adminConfirmed" />
 			<RecentActivity />
 		</PageShell>
 	</ExplorerView>

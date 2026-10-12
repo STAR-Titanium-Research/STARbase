@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { RecordCard, Section, StatusBadge, campaignTypeLabel, formatDate, humanise, projectStatusLabel, recordRoute } from '@d1/ui';
+import { RecordCard, Section, StatusBadge, campaignTypeLabel, collectionRoute, formatDate, humanise, projectStatusLabel, recordRoute } from '@d1/ui';
 import { CARD_LIMIT, SAMPLE_LIMIT, useMyWork } from './useMyWork';
 
 // "Your work": the projects where I am PI or investigator, the campaigns I own and my newest
 // samples, as cards in one panel. A group with nothing in it is left out (not shown as an empty
 // box), so a researcher with only samples sees only samples. Every card is a link to its Explorer
-// page. The three reads still load and fail on their own (useMyWork).
+// page. Each group shows its first few cards (GROUP_SHOWN) and a "See all" link to the list, so a
+// busy researcher's panel stays about as tall as its neighbour. The three reads still load and fail
+// on their own (useMyWork).
+const GROUP_SHOWN = 5;
+const shown = <T,>(rows: T[]) => rows.slice(0, GROUP_SHOWN);
+// The reads are capped (CARD_LIMIT / SAMPLE_LIMIT), so a count at the cap is "at least".
+const more = (n: number, cap: number) => `See all (${n}${n >= cap ? '+' : ''})`;
 const { projects, campaigns, samples, hasPerson, partialProjects, partialSamples } = useMyWork();
 
 const loading = computed(() => projects.value.loading || campaigns.value.loading || samples.value.loading);
@@ -33,11 +39,11 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 		<section v-if="projects.data.length" class="group" aria-label="My projects">
 			<header>
 				<h3>My projects <span class="n">{{ projects.data.length }}</span></h3>
-				<router-link to="/home/projects" class="link" title="All projects you can see">All visible projects →</router-link>
+				<router-link v-if="projects.data.length > GROUP_SHOWN" to="/home/projects" class="link" title="All projects you can see">{{ more(projects.data.length, CARD_LIMIT) }} →</router-link>
 			</header>
 			<div class="cards">
 				<RecordCard
-					v-for="p in projects.data"
+					v-for="p in shown(projects.data)"
 					:key="p.project_id"
 					:to="recordRoute('projects', p.project_id)"
 					:code="p.project_code"
@@ -47,14 +53,16 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 					<template #meta>PI: {{ p.principal_investigator_person?.full_name || 'not set' }}</template>
 				</RecordCard>
 			</div>
-			<p v-if="projects.data.length >= CARD_LIMIT" class="d1-note cap"><router-link to="/home/projects">See every project</router-link></p>
 		</section>
 
 		<section v-if="campaigns.data.length" class="group" aria-label="Campaigns I own">
-			<header><h3>Campaigns I own <span class="n">{{ campaigns.data.length }}</span></h3></header>
+			<header>
+				<h3>Campaigns I own <span class="n">{{ campaigns.data.length }}</span></h3>
+				<router-link v-if="campaigns.data.length > GROUP_SHOWN" :to="collectionRoute('campaigns')" class="link" title="All campaigns you can see">{{ more(campaigns.data.length, CARD_LIMIT) }} →</router-link>
+			</header>
 			<div class="cards">
 				<RecordCard
-					v-for="c in campaigns.data"
+					v-for="c in shown(campaigns.data)"
 					:key="c.campaign_id"
 					:to="recordRoute('campaigns', c.campaign_id)"
 					:code="c.campaign_code || c.name"
@@ -72,11 +80,12 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 		<section v-if="samples.data.length" class="group" aria-label="My latest samples">
 			<header>
 				<h3>My latest samples <span class="n">{{ samples.data.length }}</span></h3>
-				<span class="cap-note">newest {{ SAMPLE_LIMIT }} by last update</span>
+				<router-link v-if="samples.data.length > GROUP_SHOWN" :to="collectionRoute('physical_samples')" class="link" :title="`Your newest ${SAMPLE_LIMIT} by last update; all samples you can see`">{{ more(samples.data.length, SAMPLE_LIMIT) }} →</router-link>
+				<span v-else class="cap-note">newest first</span>
 			</header>
 			<div class="cards">
 				<RecordCard
-					v-for="s in samples.data"
+					v-for="s in shown(samples.data)"
 					:key="s.sample_id"
 					:to="recordRoute('physical_samples', s.sample_id)"
 					:code="s.sample_code"
@@ -105,6 +114,5 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 .group h3 { margin: 0; font-size: var(--fs-sm); font-weight: 650; color: var(--d1-dim); text-transform: uppercase; letter-spacing: 0.04em; }
 .n { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
-.cap { margin-top: 8px; }
 .cap-note { font-size: var(--fs-xs); color: var(--d1-dim); white-space: nowrap; }
 </style>

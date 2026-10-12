@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Section, ago, crawlerOnline, formatDate, ownerlessRows, ownerlessTotal } from '@d1/ui';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { Section, ago, crawlerOnline, formatDate, overviewTime, ownerlessRows, ownerlessTotal } from '@d1/ui';
 import { useAdminOverview } from './useAdminOverview';
 
 // Three admin-only panels under the work panels: the force crawler's queue, files the indexer
@@ -8,18 +8,31 @@ import { useAdminOverview } from './useAdminOverview';
 // (useAdminOverview). The whole call failing is one quiet line, not three broken panels; a part that
 // failed on the server is null and only that panel's body says it could not load. No panel is ever
 // an empty box: each one says what it found, including "nothing" with a tick.
+// `isAdmin` here is the server-confirmed flag (home.vue), so a member never reaches the endpoint.
 const props = defineProps<{ isAdmin: boolean }>();
-const { data, error, loading } = useAdminOverview(computed(() => props.isAdmin));
+const { data, error, loading, fetchedAt } = useAdminOverview(computed(() => props.isAdmin));
 
-// "Online" and "x s ago" move with the clock between the data refreshes.
+// The crawler's verdict is made once per answer, against the database's own clock (the one the
+// heartbeat is stamped with): it neither follows the browser's clock nor drifts to "Offline" between
+// refreshes. Only the "x ago" texts move on with the time since the answer, on a slow tick that runs
+// for admins only and not while the tab is hidden.
 const now = ref(Date.now());
 let tick: ReturnType<typeof setInterval> | null = null;
-onMounted(() => { tick = setInterval(() => { now.value = Date.now(); }, 5000); });
+watch(
+	() => props.isAdmin,
+	(on) => {
+		if (tick) clearInterval(tick);
+		tick = on ? setInterval(() => { if (!document.hidden) now.value = Date.now(); }, 5000) : null;
+	},
+	{ immediate: true },
+);
 onBeforeUnmount(() => { if (tick) clearInterval(tick); });
 
+const serverTime = computed(() => data.value?.serverTime ?? null);
+const reference = computed(() => overviewTime(serverTime.value, fetchedAt.value, now.value));
 const crawler = computed(() => data.value?.crawler ?? null);
-const online = computed(() => crawlerOnline(crawler.value?.state?.last_heartbeat_at, now.value));
-const heartbeat = computed(() => ago(crawler.value?.state?.last_heartbeat_at, now.value));
+const online = computed(() => crawlerOnline(crawler.value?.state?.last_heartbeat_at, overviewTime(serverTime.value, fetchedAt.value)));
+const heartbeat = computed(() => ago(crawler.value?.state?.last_heartbeat_at, reference.value));
 const ownerless = computed(() => (data.value?.ownerless ? ownerlessRows(data.value.ownerless) : []));
 const ownerlessAll = computed(() => (data.value?.ownerless ? ownerlessTotal(data.value.ownerless) : 0));
 const nf = (n: number) => n.toLocaleString('en-GB');
@@ -66,7 +79,7 @@ const nf = (n: number) => n.toLocaleString('en-GB');
 						<ul class="files">
 							<li v-for="f in data.missingFiles.recent" :key="f.id">
 								<router-link :to="`/files/${f.id}`" class="name">{{ f.filename_download || f.id }}</router-link>
-								<span class="dim" :title="f.missing_since ? formatDate(f.missing_since) : ''">{{ f.missing_since ? ago(f.missing_since, now) : 'unknown' }}</span>
+								<span class="dim" :title="f.missing_since ? formatDate(f.missing_since) : ''">{{ f.missing_since ? ago(f.missing_since, reference) : 'unknown' }}</span>
 							</li>
 						</ul>
 					</template>

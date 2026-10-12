@@ -130,8 +130,13 @@ onBeforeUnmount(() => {
 });
 
 // Which rows to list, and whether to say "checking" or "nothing" instead (the rule is in @d1/ui adminHome.ts).
+// A failed count shows for an admin; for anyone else it is hidden (a role that cannot read a collection
+// would otherwise carry a permanent red row for it).
 const view = computed(() =>
-	attentionView(defs.value.map((d) => ({ key: d.key, count: state.value[d.key]?.count ?? null, error: state.value[d.key]?.error ?? '', loading: !state.value[d.key] || state.value[d.key].loading }))),
+	attentionView(
+		defs.value.map((d) => ({ key: d.key, count: state.value[d.key]?.count ?? null, error: state.value[d.key]?.error ?? '', loading: !state.value[d.key] || state.value[d.key].loading })),
+		props.isAdmin,
+	),
 );
 const shown = computed(() => defs.value.filter((d) => view.value.rows.includes(d.key)));
 

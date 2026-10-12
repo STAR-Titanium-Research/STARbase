@@ -55,6 +55,7 @@ function fakeDb(overrides = {}, calls = []) {
             }],
         },
         'FROM machining_force_analysis': { rows: [{ status: 'pending', n: '7' }, { status: 'done', n: '40' }] },
+        'now() AS t': { rows: [{ t: new Date('2026-10-12T09:00:10Z') }] },
         'FROM physical_samples': { rows: [{ n: '4' }] },
         'FROM campaigns': { rows: [{ n: '2' }] },
         'FROM manufacturing_operations': { rows: [{ n: '27' }] },
@@ -106,6 +107,7 @@ test('returns the full overview shape for an admin', async () => {
             analyses: { pending: 7, processing: 0, done: 40, error: 0 },
         },
         ownerless: { samples: 4, campaigns: 2, machiningOperations: 27 },
+        serverTime: '2026-10-12T09:00:10.000Z',
     });
 });
 
@@ -156,5 +158,13 @@ test('every part failing still answers 200 with nulls', async () => {
     };
     const r = await call(mount(database), admin);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { missingFiles: null, fingerprints: null, crawler: null, ownerless: null });
+    assert.deepEqual(r.body, { missingFiles: null, fingerprints: null, crawler: null, ownerless: null, serverTime: null });
+});
+
+test('serverTime is the database clock as ISO, and null when its query fails', async () => {
+    const ok = await call(mount(fakeDb({ 'now() AS t': { rows: [{ t: '2026-10-12T09:00:20Z' }] } })), admin);
+    assert.equal(ok.body.serverTime, '2026-10-12T09:00:20.000Z');
+    const bad = await call(mount(fakeDb({ 'now() AS t': new Error('x') })), admin);
+    assert.equal(bad.body.serverTime, null);
+    assert.equal(bad.body.crawler.state.processed_count, 5, 'other parts unaffected');
 });

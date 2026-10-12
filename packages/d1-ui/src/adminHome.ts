@@ -27,6 +27,8 @@ export interface AdminOverview {
 	fingerprints: Fingerprints | null;
 	crawler: Crawler | null;
 	ownerless: Ownerless | null;
+	/** The database's clock when the answer was made (ISO), or null. The reference for "online" and "x ago". */
+	serverTime: string | null;
 }
 
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -64,15 +66,40 @@ export function normaliseOverview(raw: unknown): AdminOverview | null {
 	const ol = isObj(raw.ownerless)
 		? { samples: num(raw.ownerless.samples), campaigns: num(raw.ownerless.campaigns), machiningOperations: num(raw.ownerless.machiningOperations) }
 		: null;
-	return { missingFiles: mf, fingerprints: fp, crawler, ownerless: ol };
+	return { missingFiles: mf, fingerprints: fp, crawler, ownerless: ol, serverTime: str(raw.serverTime) };
 }
 
-/** Online = a heartbeat younger than 30 s. A missing or unreadable heartbeat is offline; one from the future (clock skew) counts as just now. */
+/** A heartbeat further ahead of the reference than this is a mis-set clock, not a live crawler. */
+export const FUTURE_TOLERANCE_MS = 120_000;
+
+/**
+ * Online = a heartbeat younger than 30 s against `now`, which should be the database's clock
+ * (`overviewTime`), the one the heartbeat is stamped with. A missing or unreadable heartbeat is offline;
+ * one slightly ahead (clock jitter) counts as just now, one more than 2 minutes ahead is offline.
+ */
 export function crawlerOnline(lastHeartbeatAt: string | null | undefined, now: number = Date.now()): boolean {
 	if (!lastHeartbeatAt) return false;
 	const t = new Date(lastHeartbeatAt).getTime();
 	if (Number.isNaN(t)) return false;
-	return now - t < CRAWLER_ONLINE_MS;
+	const age = now - t;
+	return age < CRAWLER_ONLINE_MS && age > -FUTURE_TOLERANCE_MS;
+}
+
+/**
+ * The time to judge the data against, in ms: the database's clock as of the answer (`serverTime`; the
+ * browser's `fetchedAt` when it is missing or unreadable), plus the time passed since the answer
+ * arrived when `now` is given. Without `now` it is the moment of the answer itself, which is what
+ * "online" uses: that verdict is fixed per answer, so it cannot drift to Offline between refreshes.
+ */
+export function overviewTime(serverTime: string | null | undefined, fetchedAt: number, now: number = fetchedAt): number {
+	const server = serverTime ? new Date(serverTime).getTime() : NaN;
+	return (Number.isNaN(server) ? fetchedAt : server) + Math.max(0, now - fetchedAt);
+}
+
+/** True for a 401 or 403: the caller is not an admin (or not signed in), which is silence, not an error. */
+export function isAuthRefusal(e: any): boolean {
+	const status = e?.response?.status;
+	return status === 401 || status === 403;
 }
 
 /** "12 s ago", "5 min ago", "3 h ago", "2 d ago"; '' when the time is missing or unreadable. */
@@ -108,11 +135,12 @@ export interface AttentionTile { key: string; count: number | null; error: strin
 
 /**
  * What the Needs attention panel shows. `rows` are the keys to list: a tile with a count above zero,
- * or one that failed (a failure is shown, not hidden as zero). `status` is 'loading' while no row is
+ * or, when `showErrors`, one that failed (an admin sees a failure, not zero; a member whose role cannot read
+ * a collection is not shown a permanent error row for it). `status` is 'loading' while no row is
  * known yet and a count is still coming, 'clear' when every tile answered with nothing, else 'items'.
  */
-export function attentionView(tiles: AttentionTile[]): { rows: string[]; status: 'loading' | 'clear' | 'items' } {
-	const rows = tiles.filter((t) => !t.loading && (t.error !== '' || (t.count ?? 0) > 0)).map((t) => t.key);
+export function attentionView(tiles: AttentionTile[], showErrors = true): { rows: string[]; status: 'loading' | 'clear' | 'items' } {
+	const rows = tiles.filter((t) => !t.loading && ((showErrors && t.error !== '') || (t.count ?? 0) > 0)).map((t) => t.key);
 	if (rows.length) return { rows, status: 'items' };
 	return { rows, status: tiles.length === 0 || tiles.some((t) => t.loading) ? 'loading' : 'clear' };
 }

@@ -5,8 +5,8 @@ import { useRouter } from 'vue-router';
 import { collectionRoute } from '@d1/ui';
 import { go } from './goto';
 
-// The counts that Home always had, as one band across the top: six tiles in a row, wrapping to three
-// and then two on a narrow screen (never a lone tile on a second row). Every count reads as the signed-in
+// The counts that Home always had, as one band across the top: six tiles in a row down to a container of 640px (about a 950px window with the sidebar), then three
+// and then two (never a lone tile on a second row). Every count reads as the signed-in
 // user, so since ADR-0011 it is what that user may see (see "What you see" in the Explorer pages
 // wiki page for every path), not the lab's total. Lab Admins still see everything.
 const api = useApi();
@@ -82,8 +82,8 @@ onMounted(() => {
 	box-shadow: var(--d1-shadow);
 }
 .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
-@container (max-width: 720px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@container (max-width: 380px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 640px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (max-width: 340px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .stat {
 	display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; padding: 8px 12px; cursor: pointer;
 	font: inherit; color: var(--theme--foreground); text-align: left;
@@ -92,7 +92,7 @@ onMounted(() => {
 }
 .stat:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .s-value { font-size: var(--fs-2xl); font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
-.s-label { font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); white-space: nowrap; }
+.s-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); white-space: nowrap; }
 .s-icon { margin-right: 4px; vertical-align: -2px; --v-icon-color: var(--d1-dim); }
 .rule { margin-top: 8px; font-size: var(--fs-xs); color: var(--d1-dim); }
 .rule summary { cursor: pointer; font-weight: 600; width: fit-content; }
