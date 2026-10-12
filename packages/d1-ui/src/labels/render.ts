@@ -6,7 +6,7 @@ import { layoutLabel, type Box } from './layout';
 import { buildQrPayload } from './qrPayload';
 import { isPrintableSample } from './sample';
 import { qrSvg, type QrModules } from './qrSvg';
-import { chooseQr, WARN_MODULE_MM, type QrLevel } from './qrDensity';
+import { chooseQr, wantedQrMm, WARN_MODULE_MM, type QrLevel } from './qrDensity';
 import type { Measure } from './fit';
 import type { LabelSample, LabelTemplate } from './types';
 
@@ -65,16 +65,24 @@ function css(t: LabelTemplate, outline: boolean): string {
 	return rules.join('\n');
 }
 
-// `qr` turns a payload and an error-correction level into a QR module matrix (the shape of
+// `encode` turns a payload and an error-correction level into a QR module matrix (the shape of
 // `QRCode.create(payload, { errorCorrectionLevel }).modules`): M while the modules stay big enough, else L
 // (see chooseQr). The SVG is
 // drawn here, so no markup from the caller ever reaches the document, and all text is escaped.
 export function renderLabelDocument(
 	pages: (LabelSample | null)[][],
 	t: LabelTemplate,
-	qr: (payload: string, level: QrLevel) => QrModules,
+	encode: (payload: string, level: QrLevel) => QrModules,
 	options: RenderOptions = {}
 ): RenderedLabels {
+	// Each payload is encoded once per level for this document (the size wanted and the level chosen both ask).
+	const memo = new Map<string, QrModules>();
+	const qr = (payload: string, level: QrLevel): QrModules => {
+		const key = level + " " + payload;
+		let m = memo.get(key);
+		if (!m) memo.set(key, (m = encode(payload, level)));
+		return m;
+	};
 	const outline = options.outline === true;
 	const slots = slotPositions(t);
 	let clipped = 0;
@@ -91,11 +99,12 @@ export function renderLabelDocument(
 			if (sample && !isPrintableSample(sample)) invalid++;
 			if (!sample || !isPrintableSample(sample)) return outline ? `<div class="slot-skipped" style="${frame}"></div>` : '';
 			count++;
-			const lay = layoutLabel(sample, t, options.measure);
+			const payload = t.arrangement === 'text_only' ? '' : buildQrPayload(sample, options.contactEmail ?? null, t.qrFields);
+			const lay = layoutLabel(sample, t, options.measure, payload ? wantedQrMm(payload, qr) : 0);
 			if (lay.clipped) clipped++;
 			let qrBox = '';
 			if (lay.qr) {
-				const chosen = chooseQr(buildQrPayload(sample, options.contactEmail ?? null, t.qrFields), Math.min(lay.qr.w, lay.qr.h), qr);
+				const chosen = chooseQr(payload, Math.min(lay.qr.w, lay.qr.h), qr);
 				minModuleMm = minModuleMm === null ? chosen.moduleMm : Math.min(minModuleMm, chosen.moduleMm);
 				if (chosen.moduleMm < WARN_MODULE_MM) dense++;
 				qrBox = `<div class="qr" style="${boxStyle(lay.qr)}">${qrSvg(chosen.modules)}</div>`;

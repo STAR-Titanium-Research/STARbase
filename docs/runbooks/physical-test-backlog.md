@@ -857,7 +857,11 @@ migration 141 prints about ownerless records.
   on the A4 4×5 sheet, the 50×25 single and the Brother DK-22205 roll. Scan each with the stock camera of an iPhone
   and of an Android phone. Each shows the whole text: `D1 SAMPLE`, the code and short ID, material and nickname,
   date and owner initials, the owner's email and `Contact: <the lab email>`, with no login and no network. The
-  preview shows no "QR may be hard to scan" warning on these three. Also scan a label of a template with
+  preview shows no "QR may be hard to scan" warning on A4 4×5 and the DK-22205. For the 50×25 use a sample with a
+  long code (about 22 characters) and an owner with a Sheffield-length email: the QR grows to the full label
+  height and the text beside it may shrink or be cut (the label is flagged as clipped), and it still scans; if
+  the preview does warn, the QR is too small for that payload on that label and the template needs a bigger label
+  or fewer QR extras. Also scan a label of a template with
   "All (default)" unticked and only Date chosen: it shows just the code, short ID and date. A label of a sample
   whose owner has no email scans without an email line. Since #247.
 
