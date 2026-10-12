@@ -153,22 +153,20 @@ form is the admin fallback). Pre-built templates:
 drift off the die-cuts. This applies to office lasers (A4 sheets) and the Brother QL-700 label
 printer (62 mm roll on USB through its Windows driver).
 
-**What the QR code says.** Anyone with a phone camera can read it, with no login and no database
-access. It is plain text: `D1 SAMPLE`, then the sample code and short ID, the material and
-nickname, the date and owner initials, the owner's email and `Contact: <lab email>`. A value that
-is empty is left out. The lab contact email is one setting for the whole lab, shown under
-**Template** on the labels page ("Contact on labels: ..."); admins can change it there. A label
-that is too small for this much text drops to a lower error correction, and the preview warns
-"QR may be hard to scan on this label size" when it may not scan.
-
 Each label shows the sample code, a QR code, the material and date (manufactured if available,
 else created), and the owner's initials. Samples you may not read get no label (the page says so);
 material and owner appear only if your role can read those collections. Each field shrinks to a
 minimum size, then is cut off with "…"; the preview flags labels that were clipped.
 
 **QR and scanning.** The QR payload is self-describing plain text, readable by any phone with no
-login, so the QR is **not private**. It starts with `D1 SAMPLE`, then the sample code and short
-ID, then the fields the template chose (nickname, material, date, owner initials). The Finder
+login, network or database access, so anyone who finds a sample can identify it and contact the
+lab, and the QR is **not private**. It starts with `D1 SAMPLE`, then the sample code and short
+ID, the material and nickname, the date and owner initials, the owner's email and
+`Contact: <lab email>`; a value that is empty is left out, and a template can leave extras out
+(untick "All (default)"). The lab contact email is one setting for the whole lab, shown under
+**Template** on the labels page ("Contact on labels: ..."); admins change it there. A label too
+small for this much text drops to a lower error correction, and the preview warns "QR may be
+hard to scan on this label size" when it may not scan. The Finder
 can scan a printed label or a pasted payload to open the sample. **Old labels** (printed before
 these pages existed) encode `/admin/content/physical_samples/<id>`, the Data Studio form, which
 still works. Scanning with a phone opens that record in the Directus app, sign-in first if
