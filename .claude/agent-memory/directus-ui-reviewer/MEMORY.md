@@ -38,3 +38,6 @@
 - 2026-10-12: false alarm: a two-dot diff against a stream base that has moved on shows base-side edits (e.g. the plan Status table) as reverts by the branch. Use three-dot (`base...HEAD`) before blaming a worker.
 - 2026-10-12: not a finding: in Directus interfaces/modules `router.push` paths are relative to `/admin` (`/home/labels`, not `/admin/home/labels`); briefs that say `/admin/...` mean the browser URL.
 - 2026-10-12: label printing (spec 2026-10-12): the new QR payload is `D1 SAMPLE` plain text readable with no login, not a record URL. Flag docs/backlog that still say "QR opens the record" or "no sample data is public" for new labels.
+- 2026-10-12: labels: sample codes are `{seq}-{alloy}-{method}-{date}` (~18-22 chars). Test text fit with these, not `S-0123`; qr_left auto QR (55% of width) cut them on the DK-22205 and L7160 seeds (S2 review).
+- 2026-10-12: labels fitText em estimate (0.56/0.62) runs low for M/W, so CSS ellipsis cuts text that `clipped` misses. Check in Chrome: esbuild-bundle labels/index.ts, Playwright `launch({channel:'chrome'})` (bundled Chromium not installed), compare scrollWidth with clientWidth.
+- 2026-10-12: false negative: Playwright `page.setContent` did not enforce a `<meta>` CSP in my test, but a srcdoc iframe does. Test CSP/sandbox claims inside a srcdoc iframe.
