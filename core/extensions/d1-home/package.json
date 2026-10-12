@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@d1/ui": "*",
+    "jsqr": "^1.4.0",
     "qrcode": "^1.5.4"
   }
 }

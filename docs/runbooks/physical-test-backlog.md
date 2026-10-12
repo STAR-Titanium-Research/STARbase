@@ -851,6 +851,37 @@ migration 141 prints about ownerless records.
   shows the right number of labels for each sample, and the printed sheet matches. A chip with its own number is marked (a dot and an accent border); clearing its
   number puts it back on the global value and the mark goes. Removing a chip and ticking it again starts from the
   global value.
+- [ ] **#252-L1 — Scan a label with a phone (iPhone Safari).** On an iPhone on the lab network or Tailscale,
+  sign in at `https://d1-server.tail54eeb6.ts.net/admin`. Open **Home** and press **Scan a label**; allow the
+  camera when Safari asks. The rear camera shows. Hold it over a printed label's QR code: the dialog closes and
+  that sample's page opens. Open the Finder (the search box in the sidebar) and press **Scan**: the same dialog
+  opens. Close the dialog (Close, or tap outside it): the camera light goes off. Now scan a label for a sample
+  that was deleted, or one you may not see: the dialog stays open and shows the code, the short ID and the
+  other label lines with "No sample matches this label...", and **Scan again** restarts the camera. Scan a
+  non-D1 QR code (a web address, say): its text is shown as plain text, not as a link. In Safari's Settings
+  deny the camera for the site and open the dialog: it says permission was denied. Open the plain-HTTP
+  address instead (`http://d1-server...`): it says the camera needs the HTTPS address. Open the dialog and
+  lock the phone, then unlock it: the camera comes back and scanning resumes without reopening the dialog. Open the
+  dialog, then switch to the phone camera app and back: the dialog shows "The camera stopped..." (or, if it
+  had only been hidden, resumes), and **Try again** restarts it. Since #252.
+- [ ] **#252-L2 — Scan a label with a phone (Android Chrome).** The same checks as #TBD-L13 on an Android phone
+  in Chrome: the rear camera (not the front one) opens, a label scans from about 15 cm, a label printed on the
+  QL-700 62 mm roll scans too, and the camera light goes off when the dialog is closed. Lock/unlock mid-scan
+  resumes scanning, and opening the camera app and returning shows the "stopped" message or resumes, as on the
+  iPhone. Since #252.
+- [ ] **#252-L3 — Scan a label with a USB scanner.** Plug a USB (keyboard-mode) barcode scanner into a PC, open
+  any Explorer page, press Ctrl K (or click the sidebar search box) and scan a label's QR code, once with a label
+  printed after this change (its lines are separated by ` | `) and once with an older one (separated by `·`, which a
+  scanner cannot type: it types some other character or none). Expect: the Finder opens that sample within about a
+  quarter of a second after the scan, without pressing anything, and the box keeps the label's line breaks (it does
+  not become one run-on line). Turn Caps Lock on and scan again: the sample still opens. If the scanner sends no
+  Enter after the last line, a label with only a code line waits: press Enter and it opens. Scan a label for a
+  deleted sample: the Finder stays open and shows the decoded label with the reason; scan a second label straight
+  after (without clearing the box): it replaces the first and opens, it does not re-read the old one. Scan a label
+  whose short ID is wrong but whose code is right: a card offers the sample with "Open sample", and nothing opens
+  until you press it. Paste the label's text (copy it from a phone's QR reader) into the box: it opens the sample at
+  once. Then type an ordinary search such as `S-01` and check the results list still works; paste a few lines of
+  ordinary text: they become one line. Since #252.
 
 - [ ] **#247-L13 — Rich QR scans on a phone.** Set a lab contact on the labels page (admin, under Template:
   "Contact on labels"), then print one label of a sample that has a nickname, a material and an owner with an email
