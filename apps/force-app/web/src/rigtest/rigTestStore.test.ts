@@ -5,7 +5,7 @@ import { saveDialogOpen } from './saveDialogOpen';
 import type { PendingList, RigRequest, RigRun } from './rigTestLogic';
 
 const ok = <T,>(data: T): ApiResult<T> => ({ kind: 'ok', data });
-const pend = (requests: RigRequest[], extra: Partial<PendingList> = {}) => ok<PendingList>({ requests, snoozed: [], busy: false, ...extra });
+const pend = (requests: RigRequest[], extra: Partial<PendingList> = {}) => ok<PendingList>({ requests, snoozed: [], busy: false, session: true, hardwareOk: true, relay: 'ok', ...extra });
 const req = (n: number): RigRequest => ({
 	number: n, title: `Request ${n}`, url: `https://example/${n}`, requested_by: 'dpremoli', created_at: '2026-10-11T12:00:00Z',
 	items: [], estimate_s: { full: 600, automated: 0 }, needs_operator_steps: 2,
@@ -18,7 +18,7 @@ const q = { step: 0, text: 'Did the chip warn?', options: ['Yes', 'No'], expires
 
 function fakeApi(over: Partial<Record<keyof RigTestApi, any>> = {}) {
 	const api = {
-		getEligibility: vi.fn(async () => ok({ eligible: true, rig_id: 'rig', relay: 'ok' as const })),
+		getEligibility: vi.fn(async () => ok({ eligible: true, rig_id: 'rig', relay: 'ok' as const, session: true, hardwareOk: true })),
 		getPending: vi.fn(async () => pend([])),
 		getRun: vi.fn(async () => ok<RigRun | null>(null)),
 		getHistory: vi.fn(async () => ok([])),
@@ -27,6 +27,8 @@ function fakeApi(over: Partial<Record<keyof RigTestApi, any>> = {}) {
 		decline: vi.fn(async () => ok({ ok: true })),
 		answer: vi.fn(async () => ok({ ok: true })),
 		cancelRun: vi.fn(async () => ok({ ok: true })),
+		putSession: vi.fn(async () => ok({ ok: true })),
+		deleteSession: vi.fn(async () => ok({ ok: true })),
 		...over,
 	};
 	return api as typeof api & RigTestApi;

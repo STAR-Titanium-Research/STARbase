@@ -117,7 +117,7 @@ export function createRigTestStore(deps: RigTestDeps) {
 			const r = await api.getPending();
 			if (stopped) return;
 			if (r.kind === 'ok') { state.available = true; applyPending(r.data); }
-			else if (r.kind === 'missing') { state.available = false; applyPending({ requests: [], snoozed: [], busy: false }); }
+			else if (r.kind === 'missing') { state.available = false; applyPending({ requests: [], snoozed: [], busy: false, session: false, hardwareOk: null, relay: 'not_configured' }); }
 		} finally { pendingBusy = false; }
 	}
 
