@@ -64,8 +64,12 @@ export function clampCopies(v: unknown): number {
 	return Number.isFinite(n) ? Math.min(MAX_COPIES, Math.max(1, n)) : 1;
 }
 
-export const slotsPerPage = (t: Pick<LabelTemplate, 'columns' | 'rows' | 'media'>): number =>
-	t.media === 'roll' ? 1 : Math.max(1, t.columns * t.rows);
+// Labels on one page. A half-typed grid (empty or NaN columns in the editor) counts as one slot, never NaN.
+export function slotsPerPage(t: Pick<LabelTemplate, 'columns' | 'rows' | 'media'>): number {
+	if (t.media === 'roll') return 1;
+	const n = Math.floor(t.columns * t.rows);
+	return Number.isFinite(n) ? Math.max(1, n) : 1;
+}
 
 // Per-sample copies: an override typed on a sample wins; every other sample follows the global value, so
 // changing the global value changes exactly the samples that were not overridden.
@@ -79,8 +83,9 @@ export function sampleEntries(samples: LabelSample[], overrides: Record<string, 
 
 // "Start at": a whole slot from 1 to the number of slots on a page.
 export function clampStart(v: unknown, slots: number): number {
+	const max = Number.isFinite(slots) ? Math.max(1, Math.floor(slots)) : 1;
 	const n = Math.floor(Number(v));
-	return Number.isFinite(n) ? Math.min(Math.max(1, slots), Math.max(1, n)) : 1;
+	return Number.isFinite(n) ? Math.min(max, Math.max(1, n)) : 1;
 }
 
 // How many labels the pages hold (samples without a code or short id are skipped by the renderer and

@@ -47,13 +47,14 @@ const showStart = computed(() => active.value?.media === 'sheet' && slots.value 
 // "Start at" and the copies stay in range. While typing only an overshoot is pulled back (an empty or
 // half-typed field is left alone, or backspacing the "1" and typing "4" would give "14"); the field is made
 // whole on change (blur / Enter). The document clamps again at render time, so a half-typed value never prints wrong.
+// Only while the active template is valid: a half-typed grid in the editor must not move the field.
 watch([start, slots], () => {
-	if (Number.isFinite(start.value) && start.value > slots.value) start.value = slots.value;
+	if (problems.value.length === 0 && Number.isFinite(start.value) && start.value > slots.value) start.value = slots.value;
 });
 watch(copies, (v) => {
 	if (Number.isFinite(v) && v > MAX_COPIES) copies.value = MAX_COPIES;
 });
-const tidyStart = () => { start.value = clampStart(start.value, slots.value); };
+const tidyStart = () => { if (problems.value.length === 0) start.value = clampStart(start.value, slots.value); };
 const tidyCopies = () => { copies.value = clampCopies(copies.value); };
 
 const summary = computed(() => (doc.value ? summaryText(doc.value) : ''));

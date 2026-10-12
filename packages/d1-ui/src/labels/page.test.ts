@@ -56,6 +56,8 @@ describe('clamps', () => {
 		expect(clampStart('', 20)).toBe(1);
 		expect(clampStart('abc', 20)).toBe(1);
 		expect(clampStart(5, 1)).toBe(1);
+		expect(clampStart(5, NaN)).toBe(1);
+		expect(clampStart(NaN, NaN)).toBe(1);
 	});
 	it('keeps copies at 1..MAX_COPIES', () => {
 		expect(clampCopies(0)).toBe(1);
@@ -66,6 +68,9 @@ describe('clamps', () => {
 	it('counts slots: a roll is one whatever its grid says', () => {
 		expect(slotsPerPage({ media: 'sheet', columns: 4, rows: 5 })).toBe(20);
 		expect(slotsPerPage({ media: 'roll', columns: 1, rows: 1 })).toBe(1);
+		expect(slotsPerPage({ media: 'sheet', columns: NaN, rows: 5 })).toBe(1);
+		expect(slotsPerPage({ media: 'sheet', columns: '' as unknown as number, rows: 5 })).toBe(1);
+		expect(slotsPerPage({ media: 'sheet', columns: 3.7, rows: 2 })).toBe(7);
 	});
 });
 
