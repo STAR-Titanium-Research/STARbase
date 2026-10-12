@@ -9,6 +9,7 @@
 // A list with a designed card (campaigns) fills the `card` slot and may pass `cardData`, a loader
 // for what that card shows beyond the row (the campaigns' counts); it runs for the rows on screen,
 // in Cards view only, and the slot gets each row's entry as `data` (null while loading or missing).
+// The `footer` slot (a row's buttons) is drawn at the foot of a text card.
 import { computed, inject, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { EXPLORER_HOST } from '../host';
@@ -174,7 +175,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 						<option v-for="o in sortChoices" :key="o.value" :value="o.value">{{ o.label }}</option>
 					</select>
 				</label>
-				<SegmentedControl v-else :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="setDensity" />
+				<SegmentedControl :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="setDensity" />
 				<button
 					type="button"
 					class="btn"
@@ -251,6 +252,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" /></template>
+					<template v-if="$slots.footer" #footer="{ row }"><slot name="footer" :row="row" /></template>
 				</CardGrid>
 				<DataTable v-else-if="loading || rows.length" :density="density">
 					<thead>

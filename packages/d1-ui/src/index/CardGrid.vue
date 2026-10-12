@@ -52,6 +52,8 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 <style scoped>
 .card-grid { list-style: none; margin: 6px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .card-grid > li { min-width: 0; }
+/* Cards of one row share a height, the designed campaign card included. */
+.card-grid > li:not(.skeleton) > :deep(*) { height: 100%; }
 .skeleton {
 	display: flex; flex-direction: column; gap: 8px; height: 96px; padding: 12px;
 	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
