@@ -8,10 +8,12 @@ import {
 import ExplorerView from '../ExplorerView.vue';
 import { useExplorerHost } from '../explorerHost';
 import SamplePicker from '../labels/SamplePicker.vue';
+import ContactSetting from '../labels/ContactSetting.vue';
 import LabelPreview from '../labels/LabelPreview.vue';
 import TemplateEditor from '../labels/TemplateEditor.vue';
 import { useLabelDocument } from '../labels/useLabelDocument';
 import { useLabelSamples } from '../labels/useLabelSamples';
+import { useLabelSettings } from '../labels/useLabelSettings';
 import { useLabelTemplates } from '../labels/useLabelTemplates';
 import { printLabels } from '../labels/printFrame';
 import '../labels/form.css';
@@ -24,6 +26,7 @@ const route = useRoute();
 
 const templates = useLabelTemplates();
 const samples = useLabelSamples();
+const settings = useLabelSettings();
 const copies = ref(1);
 const start = ref(1);
 
@@ -34,13 +37,13 @@ const active = computed<LabelTemplate | null>(() => draft.value ?? templates.sel
 // With nothing ticked, the editor previews an example label so the layout can still be judged.
 const EXAMPLE: LabelSample = {
 	id: '00000000-0000-4000-8000-000000000000', code: 'S-0123', shortId: '1a2b3c4d', nickname: 'bracket A', material: 'Ti-6Al-4V',
-	date: '2026-10-01', ownerInitials: 'DP',
+	date: '2026-10-01', ownerInitials: 'DP', ownerEmail: 'owner@example.org',
 };
 const showingExample = computed(() => !!draft.value && samples.selected.value.length === 0);
 const previewSamples = computed(() => (showingExample.value ? [EXAMPLE] : samples.selected.value));
 
 const entries = computed(() => sampleEntries(previewSamples.value, showingExample.value ? {} : samples.copyOverrides.value, showingExample.value ? 1 : copies.value));
-const { doc, problems, rendering, error: renderError, forPrint } = useLabelDocument({ entries, start, template: active });
+const { doc, problems, rendering, error: renderError, forPrint } = useLabelDocument({ entries, start, template: active, contactEmail: settings.contactEmail });
 
 const slots = computed(() => (active.value ? slotsPerPage(active.value) : 1));
 const showStart = computed(() => active.value?.media === 'sheet' && slots.value > 1);
@@ -185,6 +188,7 @@ watch(() => JSON.stringify(parseSelectionQuery(route.query)), () => void applyQu
 
 onMounted(() => {
 	void templates.load();
+	void settings.load();
 	void samples.loadOptions();
 	void samples.runSearch();
 	void applyQuery();
@@ -237,6 +241,7 @@ onMounted(() => {
 								<button type="button" class="lf-btn" @click="newTemplate">New template</button>
 								<button type="button" class="lf-btn" :disabled="!templates.selected.value" @click="copyTemplate">Copy template</button>
 							</div>
+							<ContactSetting :settings="settings" :is-admin="host.isAdmin.value" />
 							<p v-if="templates.broken.value.length" class="d1-note warn">{{ templates.broken.value.length }} template{{ templates.broken.value.length === 1 ? ' is' : 's are' }} unreadable and shown greyed out above.</p>
 						</LoadState>
 					</Section>

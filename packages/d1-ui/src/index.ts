@@ -124,7 +124,7 @@ export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints,
 // Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)
 export {
 	FIELD_KEYS, QR_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, paginateCounts, fitText,
-	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, effectiveQrKeys, QR_HEADER, renderLabelDocument, chooseQr, moduleMm, MIN_MODULE_MM, WARN_MODULE_MM,
+	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, effectiveQrKeys, QR_HEADER, renderLabelDocument, chooseQr, moduleMm, MIN_MODULE_MM, WARN_MODULE_MM, contactEmailOf, parseContactInput, contactLine, EMAIL_PATTERN,
 	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
 	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
 	saveErrorText, moveField, sampleEntries,

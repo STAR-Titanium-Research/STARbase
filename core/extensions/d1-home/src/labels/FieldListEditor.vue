@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { FIELD_KEYS, FIELD_SIZES, moveField, type FieldKey, type FieldSize, type LabelField } from '@d1/ui';
+import { computed, ref } from 'vue';
+import { FIELD_KEYS, FIELD_SIZES, QR_KEYS, moveField, type FieldKey, type FieldSize, type LabelField, type QrKey } from '@d1/ui';
 import './form.css';
 
 // The ordered list of printed lines of a template (add, remove, reorder, size, bold) and the extra
-// fields that go into the QR payload. The code and short id are always in the payload, so only the
-// others are offered there.
-const props = defineProps<{ fields: LabelField[]; qrFields: FieldKey[]; disabled?: boolean }>();
-const emit = defineEmits<{ 'update:fields': [LabelField[]]; 'update:qrFields': [FieldKey[]] }>();
+// extras that go into the QR payload (everything by default). The code and short id are always in the
+// payload, so only the others are offered there.
+const props = defineProps<{ fields: LabelField[]; qrFields: QrKey[]; disabled?: boolean }>();
+const emit = defineEmits<{ 'update:fields': [LabelField[]]; 'update:qrFields': [QrKey[]] }>();
 
 const KEY_LABEL: Record<FieldKey, string> = {
 	sample_code: 'Sample code', short_id: 'Short ID', nickname: 'Nickname', material: 'Material', date: 'Date', owner_initials: 'Owner initials',
 };
 const SIZE_LABEL: Record<FieldSize, string> = { lg: 'Large', md: 'Normal', sm: 'Small' };
-const QR_EXTRAS: FieldKey[] = ['nickname', 'material', 'date', 'owner_initials'];
+const QR_LABEL: Record<QrKey, string> = {
+	material: 'Material', nickname: 'Nickname', date: 'Date', owner_initials: 'Owner initials', owner_email: 'Owner email', contact_email: 'Lab contact email',
+};
 
 const unused = computed(() => FIELD_KEYS.filter((k) => !props.fields.some((f) => f.key === k)));
 
@@ -22,8 +24,18 @@ const setField = (i: number, patch: Partial<LabelField>) =>
 const move = (i: number, to: number) => emit('update:fields', moveField(props.fields, i, to));
 const removeAt = (i: number) => emit('update:fields', props.fields.filter((_, j) => j !== i));
 const add = (key: FieldKey) => emit('update:fields', [...props.fields, { key, size: 'md', bold: false }]);
-const toggleQr = (key: FieldKey, on: boolean) =>
-	emit('update:qrFields', on ? [...props.qrFields.filter((k) => k !== key), key] : props.qrFields.filter((k) => k !== key));
+// "All (default)" is ticked while the template carries every extra (an empty list also means all). Unticking it
+// lets you leave some out; the last one stays, because an empty list reads as all.
+const custom = ref(props.qrFields.length > 0 && !QR_KEYS.every((k) => props.qrFields.includes(k)));
+const effective = computed<QrKey[]>(() => (custom.value ? props.qrFields : [...QR_KEYS]));
+const setAll = (on: boolean) => {
+	custom.value = !on;
+	if (on) emit('update:qrFields', [...QR_KEYS]);
+};
+const toggleQr = (key: QrKey, on: boolean) => {
+	const next = on ? QR_KEYS.filter((k) => k === key || effective.value.includes(k)) : effective.value.filter((k) => k !== key);
+	if (next.length) emit('update:qrFields', [...next]);
+};
 </script>
 
 <template>
@@ -51,11 +63,12 @@ const toggleQr = (key: FieldKey, on: boolean) =>
 
 		<p class="cap">Also in the QR code</p>
 		<div class="lf-row qr">
-			<label v-for="k in QR_EXTRAS" :key="k" class="lf-check">
-				<input type="checkbox" :checked="qrFields.includes(k)" :disabled="disabled" @change="toggleQr(k, ($event.target as HTMLInputElement).checked)" />{{ KEY_LABEL[k] }}
+			<label class="lf-check all"><input type="checkbox" :checked="!custom" :disabled="disabled" @change="setAll(($event.target as HTMLInputElement).checked)" />All (default)</label>
+			<label v-for="k in QR_KEYS" :key="k" class="lf-check">
+				<input type="checkbox" :checked="effective.includes(k)" :disabled="disabled || !custom" @change="toggleQr(k, ($event.target as HTMLInputElement).checked)" />{{ QR_LABEL[k] }}
 			</label>
 		</div>
-		<p class="d1-note">The sample code and short ID are always in the QR code.</p>
+		<p class="d1-note">The sample code and short ID are always in the QR code. The lab contact is set under Template.</p>
 	</div>
 </template>
 
@@ -69,5 +82,6 @@ const toggleQr = (key: FieldKey, on: boolean) =>
 /* In a narrow column the buttons drop to their own row, at the right. */
 .line .lf-btn:nth-of-type(1) { margin-left: auto; }
 .add { align-items: center; }
-.qr { gap: 16px; align-items: center; }
+.qr { gap: 8px 16px; align-items: center; }
+.all { font-weight: 650; }
 </style>

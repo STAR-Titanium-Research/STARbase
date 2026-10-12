@@ -10,6 +10,7 @@ export { fitText, SIZE_PT, MIN_PT } from './fit';
 export type { FittedText } from './fit';
 export { buildQrPayload, parseQrPayload, effectiveQrKeys, QR_HEADER } from './qrPayload';
 export type { ParsedQrPayload } from './qrPayload';
+export { contactEmailOf, parseContactInput, contactLine, EMAIL_PATTERN } from './settings';
 export { renderLabelDocument } from './render';
 export { chooseQr, moduleMm, MIN_MODULE_MM, WARN_MODULE_MM } from './qrDensity';
 export type { QrLevel, ChosenQr } from './qrDensity';
