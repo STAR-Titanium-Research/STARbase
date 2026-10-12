@@ -123,14 +123,14 @@ watch(
 <style scoped>
 .d1-panel { min-width: 0; }
 .title {
-	margin: 0 0 6px; padding: 0 10px;
+	margin: 0 0 6px; padding: 0 8px;
 	font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
 	color: var(--nav-dim);
 }
 .group { margin: 0; }
 .head {
 	display: flex; align-items: center; justify-content: space-between; width: 100%;
-	margin: 12px 0 4px; padding: 2px 10px;
+	margin: 12px 0 4px; padding: 2px 8px;
 	border: 0; border-radius: 7px; background: none; color: var(--nav-dim); text-align: left;
 	font: inherit; font-size: var(--fs-xs, 11px); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
 	cursor: pointer;
@@ -146,13 +146,14 @@ watch(
 .list, .subs { list-style: none; margin: 0; padding: 0; }
 .item {
 	display: flex; align-items: center; justify-content: space-between; gap: 6px;
-	padding: 4px 10px; border-radius: 7px;
+	padding: 4px 8px; border-radius: 7px;
 	color: var(--nav-fg); text-decoration: none;
 }
 .item:hover { background: var(--nav-hover); }
 .item.on { background: var(--nav-on); font-weight: 600; }
-.item.sub { padding-left: 22px; font-size: var(--fs-sm, 12px); }
-.label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item.sub { padding-left: 16px; font-size: var(--fs-sm, 12px); }
+/* A long label wraps onto a second line (the column beside the rail is narrow) rather than being cut off. */
+.label { min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
 .ext { font-size: var(--fs-xs, 11px); color: var(--nav-dim); }
 
 .head:focus-visible, .item:focus-visible {

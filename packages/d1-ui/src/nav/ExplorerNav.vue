@@ -17,7 +17,7 @@ import { EXPLORER_HOST } from '../host';
 import NavPanel from './NavPanel.vue';
 import NavRail from './NavRail.vue';
 import { readSection, writeSection } from './navState';
-import { activeSection, followPage, railSections, restoreSection } from './railModel';
+import { activeSection, followPage, railSections, restoreSection, startSection } from './railModel';
 import type { RailSectionId } from './railModel';
 import { useExplorerNav } from './useExplorerNav';
 
@@ -38,12 +38,13 @@ const sections = computed(() => railSections(nav.value));
 // The section holding the page you are on (marked on the rail; none for a page outside every
 // section), and the one whose panel is open.
 const current = computed<RailSectionId | null>(() => activeSection(sections.value, route.path, route.query));
-const selected = ref<RailSectionId>(followPage(sections.value, route.path, route.query));
-
-// The section remembered from the last visit to Home is restored once, when the sidebar mounts on
-// Home. The lists load after the first paint, so it waits (`pending`) until its section exists;
-// a rail click or a page change cancels it. After that the panel just follows the user.
-let pending: string | null = route.path === '/home' ? readSection() : null;
+// The section remembered from the last visit to Home is restored when the sidebar mounts on Home:
+// at once when the lists are already loaded (you came back to Home from another page; the nav state
+// outlives the page), else (`pending`) when they arrive after the first paint. A rail click or a page
+// change cancels it. After that the panel just follows the user.
+const start = startSection(sections.value, route.path, route.query, route.path === '/home' ? readSection() : null);
+const selected = ref<RailSectionId>(start.selected);
+let pending: string | null = start.pending;
 // True once the user has picked a section on this page: loading more sections then leaves it alone.
 let picked = false;
 
@@ -113,17 +114,20 @@ const section = computed(() => sections.value.find((s) => s.id === selected.valu
 	--nav-hover: var(--theme--navigation--list--background-hover, var(--d1-tint));
 	--nav-on: var(--theme--navigation--list--background-active, var(--d1-tint));
 	display: flex;
+	width: 100%;
 	align-items: flex-start;
 	font-family: var(--theme--navigation--list--font-family, var(--theme--fonts--sans--font-family, inherit));
 	font-size: var(--fs-md, 13px);
 	line-height: 1.4;
 	color: var(--nav-fg);
 }
-.body { flex: 1; min-width: 0; padding: 12px 8px 24px 6px; }
-.brand { padding: 4px 10px 10px; font-size: var(--fs-lg, 15px); font-weight: 700; }
+/* The panel takes everything beside the 60px rail. The host's navigation column is narrow (about 200px in
+   Directus, less its scrollbar), so the padding is small and long labels wrap (NavPanel). */
+.body { flex: 1 1 0; min-width: 0; padding: 12px 4px 24px 4px; }
+.brand { padding: 4px 8px 10px; font-size: var(--fs-lg, 15px); font-weight: 700; }
 .brand small { display: block; font-size: var(--fs-xs, 11px); font-weight: 400; color: var(--nav-dim); }
 
-.note { margin: 14px 10px 0; font-size: var(--fs-sm, 12px); color: var(--nav-dim); }
+.note { margin: 14px 8px 0; font-size: var(--fs-sm, 12px); color: var(--nav-dim); }
 .retry {
 	margin-left: 4px; padding: 0; border: 0; background: none; cursor: pointer;
 	font: inherit; font-weight: 600; color: var(--d1-accent, var(--theme--primary)); text-decoration: underline;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NAV_GROUPS, buildNav } from './navConfig';
 import type { Bookmark } from './navConfig';
-import { RAIL_SECTIONS, activeSection, followPage, railSections, restoreSection } from './railModel';
+import { RAIL_SECTIONS, activeSection, followPage, railSections, restoreSection, startSection } from './railModel';
 
 const allCollections = new Set(NAV_GROUPS.flatMap((g) => g.links).flatMap((l) => (l.collection ? [l.collection] : [])));
 const bm = (id: number, name: string, collection: string): Bookmark => ({
@@ -117,5 +117,27 @@ describe('restoreSection', () => {
 		expect(restoreSection(sections, null)).toBeNull();
 		expect(restoreSection(sections, 'nope')).toBeNull();
 		expect(restoreSection(railSections(buildNav(null, [], false)), 'kit')).toBeNull();
+	});
+});
+
+describe('startSection', () => {
+	const sections = railSections(adminNav());
+
+	// Coming back to Home from another page: the lists are already loaded when the sidebar mounts.
+	it('restores the remembered section at once when the sections are already there', () => {
+		expect(startSection(sections, '/home', {}, 'kit')).toEqual({ selected: 'kit', pending: null });
+	});
+
+	it('keeps the remembered section pending while its section has not loaded yet (a reload)', () => {
+		const early = railSections(buildNav(new Set(), [], false));
+		const r = startSection(early, '/home', {}, 'kit');
+		expect(r.selected).toBe('home');
+		expect(r.pending).toBe('kit');
+	});
+
+	it('follows the page when nothing is remembered or the memory is unknown', () => {
+		expect(startSection(sections, '/home', {}, null)).toEqual({ selected: 'home', pending: null });
+		expect(startSection(sections, '/home/samples', {}, null).selected).toBe('records');
+		expect(startSection(sections, '/home', {}, 'nope').selected).toBe('home');
 	});
 });

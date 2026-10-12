@@ -68,3 +68,17 @@ export function followPage(sections: RailSection[], path: string, query: Record<
 export function restoreSection(sections: RailSection[], stored: string | null): RailSectionId | null {
 	return sections.find((s) => s.id === stored)?.id ?? null;
 }
+
+// The section the panel opens on when the sidebar mounts: the remembered one when it exists (the
+// lists may already be loaded, as when you come back to Home from another page, or arrive later, as
+// on a reload), else the page's own. `pending` is what is still to be restored once the sections
+// load: null when it was applied here (or there was nothing to apply).
+export function startSection(
+	sections: RailSection[],
+	path: string,
+	query: Record<string, unknown>,
+	stored: string | null,
+): { selected: RailSectionId; pending: string | null } {
+	const restored = stored ? restoreSection(sections, stored) : null;
+	return { selected: restored ?? followPage(sections, path, query), pending: restored ? null : stored };
+}
