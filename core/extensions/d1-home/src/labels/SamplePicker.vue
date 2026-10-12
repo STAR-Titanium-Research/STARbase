@@ -151,6 +151,8 @@ const rangeText = computed(() => {
 .results { max-height: 360px; overflow: auto; }
 .results.busy { opacity: 0.6; }
 .row { cursor: pointer; }
+/* A long code or nickname is cut, not wrapped over three lines (the column is narrow). */
+.row td { white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .range { margin-top: 6px; }
 .picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; max-height: 110px; overflow: auto; }
 .pill {

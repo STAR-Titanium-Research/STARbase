@@ -39,7 +39,6 @@ const toggleQr = (key: FieldKey, on: boolean) =>
 					<option v-for="s in FIELD_SIZES" :key="s" :value="s">{{ SIZE_LABEL[s] }}</option>
 				</select>
 				<label class="lf-check"><input type="checkbox" :checked="f.bold" :disabled="disabled" @change="setField(i, { bold: ($event.target as HTMLInputElement).checked })" />Bold</label>
-				<span class="spacer" />
 				<button type="button" class="lf-btn icon" :disabled="disabled || i === 0" :aria-label="`Move ${KEY_LABEL[f.key]} up`" @click="move(i, i - 1)">↑</button>
 				<button type="button" class="lf-btn icon" :disabled="disabled || i === fields.length - 1" :aria-label="`Move ${KEY_LABEL[f.key]} down`" @click="move(i, i + 1)">↓</button>
 				<button type="button" class="lf-btn icon bad" :disabled="disabled" :aria-label="`Remove ${KEY_LABEL[f.key]}`" @click="removeAt(i)">×</button>
@@ -64,8 +63,8 @@ const toggleQr = (key: FieldKey, on: boolean) =>
 .fields { display: flex; flex-direction: column; gap: 8px; }
 .cap { margin: 4px 0 0; font-size: var(--fs-xs, 11px); font-weight: 650; color: var(--d1-dim); }
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.spacer { flex: 1; }
+.line { display: flex; align-items: center; gap: 8px; }
+.line select { flex: 1 1 90px; }
 .add { align-items: center; }
 .qr { gap: 16px; align-items: center; }
 </style>

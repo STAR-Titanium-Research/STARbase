@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, toRaw, watch } from 'vue';
 import { ARRANGEMENTS, MEDIA, copyAsNew, draftOf, type Arrangement, type LabelTemplate, type Media } from '@d1/ui';
 import FieldListEditor from './FieldListEditor.vue';
 import { useTemplateSave } from './useTemplateSave';
@@ -14,9 +14,11 @@ const props = defineProps<{ modelValue: LabelTemplate; canEdit: boolean; isAdmin
 const emit = defineEmits<{ 'update:modelValue': [LabelTemplate]; saved: [string]; deleted: []; close: [] }>();
 
 const local = reactive<LabelTemplate>(draftOf(props.modelValue));
-let lastEmitted: LabelTemplate = props.modelValue;
+let lastEmitted: LabelTemplate = toRaw(props.modelValue);
+// The parent stores what we emit in a ref, so it hands it back as a reactive proxy: compare the raw object, or
+// our own edit would look like a new draft and reset the form in a loop.
 watch(() => props.modelValue, (v) => {
-	if (v !== lastEmitted) Object.assign(local, draftOf(v));
+	if (toRaw(v) !== lastEmitted) Object.assign(local, draftOf(v));
 });
 watch(local, () => {
 	lastEmitted = draftOf(local);
