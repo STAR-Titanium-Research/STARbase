@@ -130,5 +130,5 @@ ${css(t, outline)}
 </style></head><body>
 ${pageHtml.join('\n')}
 </body></html>`;
-	return { html, clipped, invalid, qrModuleMm: minModuleMm === null ? null : round2(minModuleMm * 1000) / 1000, qrDense: dense };
+	return { html, clipped, invalid, qrModuleMm: minModuleMm === null ? null : Math.round(minModuleMm * 1000) / 1000, qrDense: dense };
 }
