@@ -8,6 +8,7 @@ import './form.css';
 // each. The ticked samples are kept apart from the results, so searching again never drops a pick.
 const props = defineProps<{ data: ReturnType<typeof useLabelSamples> }>();
 const copies = defineModel<number>('copies', { required: true });
+const emit = defineEmits<{ tidyCopies: [] }>();
 
 const d = props.data;
 const pasted = ref('');
@@ -66,7 +67,7 @@ async function addPasted(): Promise<void> {
 const rangeText = computed(() => {
 	const n = d.results.value.length;
 	const t = d.total.value;
-	return t !== null && t > n ? `Showing the first ${n} of ${t}. Narrow the search to see the rest.` : `${n} sample${n === 1 ? '' : 's'}`;
+	return t !== null && t > n ? `Showing the first ${n} of ${t} (the list is capped at ${PICKER_LIMIT}). Narrow the search to see the rest.` : `${n} sample${n === 1 ? '' : 's'}`;
 });
 </script>
 
@@ -118,7 +119,7 @@ const rangeText = computed(() => {
 			</DataTable>
 			<LoadState v-else-if="d.loading.value" loading loading-text="Loading samples…" />
 			<LoadState v-else empty :empty-text="filtered ? 'No samples match.' : 'No samples to show.'" />
-			<p v-if="d.results.value.length" class="d1-note range">{{ rangeText }} (the list is capped at {{ PICKER_LIMIT }}).</p>
+			<p v-if="d.results.value.length" class="d1-note range">{{ rangeText }}</p>
 		</div>
 
 		<div v-if="d.selected.value.length" class="picked" aria-label="Selected samples">
@@ -139,7 +140,7 @@ const rangeText = computed(() => {
 		</div>
 
 		<label class="lf-field copies">Copies of each sample
-			<input v-model.number="copies" type="number" min="1" :max="MAX_COPIES" step="1" />
+			<input v-model.number="copies" type="number" min="1" :max="MAX_COPIES" step="1" @change="emit('tidyCopies')" />
 		</label>
 	</Section>
 </template>

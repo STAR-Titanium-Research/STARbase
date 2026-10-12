@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
-	LoadState, PageShell, Section, blankTemplate, canEditTemplate, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
+	LoadState, PageShell, Section, blankTemplate, canEditTemplate, MAX_COPIES, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
 	slotsPerPage, summaryText, type LabelSample, type LabelTemplate,
 } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
@@ -43,15 +43,17 @@ const { doc, problems, rendering, forPrint } = useLabelDocument({ samples: previ
 
 const slots = computed(() => (active.value ? slotsPerPage(active.value) : 1));
 const showStart = computed(() => active.value?.media === 'sheet' && slots.value > 1);
-// "Start at" stays within the page, whatever is typed or the template becomes.
+// "Start at" and the copies stay in range. While typing only an overshoot is pulled back (an empty or
+// half-typed field is left alone, or backspacing the "1" and typing "4" would give "14"); the field is made
+// whole on change (blur / Enter). The document clamps again at render time, so a half-typed value never prints wrong.
 watch([start, slots], () => {
-	const n = clampStart(start.value, slots.value);
-	if (n !== start.value) start.value = n;
+	if (Number.isFinite(start.value) && start.value > slots.value) start.value = slots.value;
 });
 watch(copies, (v) => {
-	const n = clampCopies(v);
-	if (n !== v) copies.value = n;
+	if (Number.isFinite(v) && v > MAX_COPIES) copies.value = MAX_COPIES;
 });
+const tidyStart = () => { start.value = clampStart(start.value, slots.value); };
+const tidyCopies = () => { copies.value = clampCopies(copies.value); };
 
 const summary = computed(() => (doc.value ? summaryText(doc.value) : ''));
 const canPrint = computed(() => !!doc.value && doc.value.labels > 0 && problems.value.length === 0 && !showingExample.value);
@@ -154,7 +156,7 @@ onMounted(() => {
 							@close="draft = null"
 						/>
 					</Section>
-					<SamplePicker :data="samples" v-model:copies="copies" />
+					<SamplePicker :data="samples" v-model:copies="copies" @tidy-copies="tidyCopies" />
 				</div>
 
 				<div class="col">
@@ -169,7 +171,7 @@ onMounted(() => {
 									</select>
 								</label>
 								<label v-if="showStart" class="lf-field start">Start at label
-									<input v-model.number="start" type="number" min="1" :max="slots" step="1" />
+									<input v-model.number="start" type="number" min="1" :max="slots" step="1" @change="tidyStart" />
 								</label>
 							</div>
 							<div class="lf-row tools">
@@ -177,7 +179,7 @@ onMounted(() => {
 								<button type="button" class="lf-btn" @click="newTemplate">New template</button>
 								<button type="button" class="lf-btn" :disabled="!templates.selected.value" @click="copyTemplate">Copy template</button>
 							</div>
-							<p v-if="templates.broken.value.length" class="d1-note warn">{{ templates.broken.value.length }} template{{ templates.broken.value.length === 1 ? ' is' : 's are' }} unreadable and left out of the choices above.</p>
+							<p v-if="templates.broken.value.length" class="d1-note warn">{{ templates.broken.value.length }} template{{ templates.broken.value.length === 1 ? ' is' : 's are' }} unreadable and shown greyed out above.</p>
 						</LoadState>
 					</Section>
 
