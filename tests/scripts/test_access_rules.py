@@ -227,16 +227,22 @@ def test_path_filter_drops_only_illegal_some():
     }
     # legal chain: both `_some`s start a fresh one-hop subquery -- both kept.
     assert gen.path_filter("samples._some.co_owners._some.user_id") == {
-        "samples": {"_some": {"co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}}}
+        "samples": {
+            "_some": {"co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}}
+        }
     }
     # both illegal: each is reached through a preceding to-one hop -- both dropped.
     assert gen.path_filter(
         "sample_id.campaigns._some.campaign_id.project_id.secondary_investigators._some.user_id"
     ) == {
         "sample_id": {
-            "campaigns": {"campaign_id": {"project_id": {"secondary_investigators": {
-                "user_id": {"_eq": "$CURRENT_USER"}
-            }}}}
+            "campaigns": {
+                "campaign_id": {
+                    "project_id": {
+                        "secondary_investigators": {"user_id": {"_eq": "$CURRENT_USER"}}
+                    }
+                }
+            }
         }
     }
 
@@ -492,6 +498,8 @@ def _directus(drop=()):
         ("machining_force_analysis", "operation_id", "manufacturing_operations"),
         ("fast_run_data", "operation_id", "manufacturing_operations"),
         ("session_data_files", "session_id", "test_sessions"),
+        ("operation_additional_operators", "operation_id", "manufacturing_operations"),
+        ("session_additional_operators", "session_id", "test_sessions"),
         ("test_sessions_subject", "test_sessions_id", "test_sessions"),
         ("project_rollup", "project_id", "projects"),
     ]:
