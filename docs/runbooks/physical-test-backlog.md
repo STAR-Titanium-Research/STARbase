@@ -76,6 +76,7 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
 - [ ] **Ring on the Sample page and label.** The ring's Sample page shows `Ø… · ID… · t… · W… mm`,
   the drawing has the bore, and the mass estimate is π/4·(OD² − ID²)·t × density. The printed
   sample report lists `ID…` after the outer Ø.
+
 ### Ask-DB
 - [ ] **D1/D2 — chips and messages.** The five example chips run and answer. A query returning more
   than the row limit shows "Showing the first N rows". Stop the `llm-text-to-sql` container: the
