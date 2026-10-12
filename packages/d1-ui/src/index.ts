@@ -61,7 +61,6 @@ export {
 export { default as PageShell } from './components/PageShell.vue';
 export { default as DataTable } from './components/DataTable.vue';
 export { default as RecordCard } from './components/RecordCard.vue';
-export { default as RecordHeader } from './components/RecordHeader.vue';
 export { default as StatTile } from './components/StatTile.vue';
 export { default as StatusBadge } from './components/StatusBadge.vue';
 export { default as RecordLink } from './components/RecordLink.vue';
@@ -89,8 +88,6 @@ export { dateRangeText, projectRailFacts, projectContents } from './record/proje
 export type { ProjectCounts as ProjectRailCounts, ProjectContentsInput } from './record/projectFacts';
 export { campaignCode, campaignRailFacts, campaignContents } from './record/campaignFacts';
 export type { CampaignCounts, CampaignContentsInput } from './record/campaignFacts';
-export { default as KeyValueGrid } from './components/KeyValueGrid.vue';
-export type { KeyValue } from './components/KeyValueGrid.vue';
 export { default as ProgressBar } from './components/ProgressBar.vue';
 export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';

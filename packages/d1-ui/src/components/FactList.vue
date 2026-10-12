@@ -6,11 +6,11 @@ import { scrollToSection } from '../record/scrollTo';
 
 // Label/value rows: the label on the left in the secondary colour, the value on the right at weight
 // 600 with its unit after it, a hairline under each row. Used in the rail (one column) and in the
-// Details panels (as many columns as fit). Takes the items KeyValueGrid takes (label, value, mono,
+// Details panels (as many columns as fit). Takes the items the old KeyValueGrid took (label, value, mono,
 // to, unit) as a subset of `Fact`, so a call site changes one tag. Empty facts are left out.
 //
 // Built from div and span, not dl/dt/dd: the Data Studio styles every `dl > div`, `dt` and `dd` for
-// its own sidebar (a flex row, the value on one line cut with an ellipsis; KeyValueGrid had to set
+// its own sidebar (a flex row, the value on one line cut with an ellipsis; the old KeyValueGrid had to set
 // each of those properties again). Plain elements carry none of that, so only the rules below apply.
 const props = withDefaults(defineProps<{ facts: Fact[]; columns?: 'auto' | 1 }>(), { columns: 'auto' });
 const shown = computed(() => visibleFacts(props.facts));
