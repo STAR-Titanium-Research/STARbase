@@ -198,3 +198,22 @@ describe('useFinder after a failed scan', () => {
 		expect(finder.scan.value).toMatchObject({ status: 'done', outcome: { kind: 'failed', code: 'T-9' } });
 	});
 });
+
+describe('useFinder waits for a finished label', () => {
+	it('does not read a bare header or an unfinished code line on a pause; Enter finishes it', async () => {
+		const calls: string[] = [];
+		const host = { api: { get: async (p: string) => { calls.push(p); return { data: { data: [{ sample_id: 'u1', sample_code: 'S-1', short_id: '1a2b3c4d' }] } }; } } } as unknown as ExplorerHost;
+		const opened: string[] = [];
+		const finder = useFinder(host, ref(buildNav(visible, [], false)), ref<Set<string> | null>(visible), { onOpen: (to) => opened.push(to) });
+		finder.query.value = 'D1 SAMPLE';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS * 4);
+		finder.query.value = 'D1 SAMPLE\rS-1 | 1a2b3c4d';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS * 4);
+		expect(calls).toEqual([]);
+		expect(finder.scan.value).toEqual({ status: 'reading' });
+		// the user presses Enter: the box adds the line break
+		finder.query.value += '\r';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(opened).toEqual(['/home/samples/u1']);
+	});
+});

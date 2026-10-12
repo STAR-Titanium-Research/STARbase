@@ -140,7 +140,7 @@ function onKeydown(e: KeyboardEvent) {
 				</div>
 
 				<div v-if="scanning" class="scanned">
-					<p v-if="!scan || scan.status !== 'done'" class="hint" role="status" aria-live="polite">{{ scan?.status === 'resolving' ? 'Opening the sample…' : 'Reading the label…' }}</p>
+					<p v-if="!scan || scan.status !== 'done'" class="hint" role="status" aria-live="polite">{{ scan?.status === 'resolving' ? 'Opening the sample…' : 'Reading the label… press Enter if it does not open.' }}</p>
 					<ScanResultCard v-else-if="scan.outcome.kind !== 'open'" :outcome="scan.outcome" @open="openTo" />
 				</div>
 

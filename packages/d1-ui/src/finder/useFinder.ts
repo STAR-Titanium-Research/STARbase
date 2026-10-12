@@ -5,7 +5,7 @@ import type { VisibleNav } from '../nav/navConfig';
 import { useRequestGate } from '../composables/useRequestGate';
 import { isSearchable, localHits, mergeHits, sourceParams, toHits, visibleSources } from './finder';
 import type { FinderHit } from './finder';
-import { isScanStarted, resolveLabel } from './scan';
+import { isScanComplete, isScanStarted, resolveLabel } from './scan';
 import type { ScanOutcome } from './scan';
 
 // The finder's state: the query, and the hits for it. Pages and saved views are matched in the
@@ -90,7 +90,9 @@ export function useFinder(host: ExplorerHost, nav: Ref<VisibleNav>, visible: Ref
 				remote.value = null;
 				loading.value = false;
 				scan.value = { status: 'reading' };
-				timer = setTimeout(() => void settleScan(), SCAN_IDLE_MS);
+				// Only a label that has its code line and a line break after it is read on a pause; a bare
+				// header or half a code line waits for Enter (a pause mid-scan must not read half a label).
+				timer = setTimeout(() => { if (isScanComplete(q)) void settleScan(); }, SCAN_IDLE_MS);
 				return;
 			}
 			scan.value = null;

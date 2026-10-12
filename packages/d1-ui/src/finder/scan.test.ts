@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildQrPayload } from '../labels/qrPayload';
-import { displayText, fromLastHeader, isScanStarted, normalizeScan, resolveLabel } from './scan';
+import { displayText, fromLastHeader, isScanComplete, isScanStarted, normalizeScan, resolveLabel } from './scan';
 import type { ScanApi } from './scan';
 
 const PAYLOAD = 'D1 SAMPLE\nS-0123 · 1a2b3c4d\nTi-6Al-4V · "bracket A"\n2026-10-01 · DP';
@@ -112,5 +112,19 @@ describe('resolveLabel after an earlier scan', () => {
 		const a = api([[row]]);
 		await resolveLabel(a, 'D1 SAMPLE\nOLD-1 | 11111111\nD1 SAMPLE\nS-0123 | 1a2b3c4d');
 		expect(a.calls[0].filter).toEqual({ short_id: { _eq: '1a2b3c4d' } });
+	});
+});
+
+describe('isScanComplete', () => {
+	it('needs the code line to be followed by a line break', () => {
+		expect(isScanComplete('D1 SAMPLE')).toBe(false);
+		expect(isScanComplete('D1 SAMPLE\r')).toBe(false);
+		expect(isScanComplete('D1 SAMPLE\rS-1 | 1a2b3c4d')).toBe(false);
+		expect(isScanComplete('D1 SAMPLE\rS-1 | 1a2b3c4d\r')).toBe(true);
+		expect(isScanComplete('D1 SAMPLE\nS-1 | 1a2b3c4d\nTi-6Al-4V')).toBe(true);
+	});
+	it('counts from the last header and ignores other text', () => {
+		expect(isScanComplete('D1 SAMPLE\nA-1 | 11111111\nD1 SAMPLE\nS-1 | 1a2b3c4d')).toBe(false);
+		expect(isScanComplete('S-0123')).toBe(false);
 	});
 });

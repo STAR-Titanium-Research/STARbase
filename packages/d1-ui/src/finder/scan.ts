@@ -28,6 +28,20 @@ export function isScanStarted(text: string): boolean {
 	return typeof text === 'string' && text.trimStart().split(/\r\n|\r|\n/, 1)[0].trim() === QR_HEADER;
 }
 
+// A scan that can be read without waiting for more: the header, the code line AND something after the
+// code line (a line break at least). A scanner ends each line with Enter, so a code line with no Enter
+// after it may still be arriving; the user presses Enter to finish such a scan.
+export function isScanComplete(text: string): boolean {
+	if (!isScanStarted(text)) return false;
+	// Not trimmed at the end: the line break after the code line is what says that line is finished.
+	const lines = text.trimStart().split(/\r\n|\r|\n/);
+	let last = 0;
+	lines.forEach((l, i) => {
+		if (l.trim() === QR_HEADER) last = i;
+	});
+	return lines.length - last >= 3;
+}
+
 // Line breaks as LF, edges trimmed. A paste or scan is one value, not several submissions.
 export function normalizeScan(text: string): string {
 	return text.replace(/\r\n|\r/g, '\n').trim();
