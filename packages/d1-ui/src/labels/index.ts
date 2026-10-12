@@ -11,6 +11,8 @@ export type { FittedText } from './fit';
 export { buildQrPayload, parseQrPayload, effectiveQrKeys, QR_HEADER } from './qrPayload';
 export type { ParsedQrPayload } from './qrPayload';
 export { renderLabelDocument } from './render';
+export { chooseQr, moduleMm, MIN_MODULE_MM, WARN_MODULE_MM } from './qrDensity';
+export type { QrLevel, ChosenQr } from './qrDensity';
 export type { QrModules } from './qrSvg';
 export type { Measure } from './fit';
 export type { RenderOptions, RenderedLabels } from './render';

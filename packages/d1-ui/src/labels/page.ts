@@ -98,9 +98,11 @@ export function countLabels(pages: (LabelSample | null)[][], printable: (s: Labe
 }
 
 // "12 labels on 1 page · 1 clipped · 2 skipped (invalid)"
-export function summaryText(counts: { labels: number; pages: number; clipped: number; invalid: number }): string {
+// `qrDense` > 0 adds the warning that the QR modules are too small for a phone to read reliably.
+export function summaryText(counts: { labels: number; pages: number; clipped: number; invalid: number; qrDense?: number }): string {
 	const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 	const parts = [`${plural(counts.labels, 'label')} on ${plural(counts.pages, 'page')}`, `${counts.clipped} clipped`, `${counts.invalid} skipped (invalid)`];
+	if (counts.qrDense) parts.push('QR may be hard to scan on this label size');
 	return parts.join(' · ');
 }
 

@@ -241,3 +241,37 @@ describe('renderLabelDocument with unusable samples', () => {
 		expect(render([sample(1)], A4_4X5).invalid).toBe(0);
 	});
 });
+
+describe('QR density', () => {
+	const SIZES = { M: 57, L: 49 } as const;
+	const levels: string[] = [];
+	const enc = (_p: string, level: 'M' | 'L') => (levels.push(level), { size: SIZES[level], data: [] as number[] });
+	const tiny = (w: number, h: number) =>
+		templateFromRow({ name: 't', media: 'roll', page_width_mm: w, page_height_mm: h, columns: 1, rows: 1, label_width_mm: w, label_height_mm: h, arrangement: 'qr_left', fields: [] });
+	const run = (t: LabelTemplate) => (levels.length = 0, renderLabelDocument(paginate([sample(1)], { copies: 1, start: 1 }, t), t, enc));
+
+	it('uses error correction M with comfortable modules and reports the module size', () => {
+		const out = run(BROTHER); // QR box 26 mm: 26 / 61 = 0.426 mm per module
+		expect(levels).toEqual(['M']);
+		expect(out.qrModuleMm).toBeCloseTo(26 / 61, 2);
+		expect(out.qrDense).toBe(0);
+	});
+	it('drops to L when M modules would be under 0.33 mm, and stays quiet while L is 0.3 mm or more', () => {
+		const out = run(tiny(50, 22)); // box 18 mm: M 18 / 61 = 0.295, L 18 / 53 = 0.34
+		expect(levels).toEqual(['M', 'L']);
+		expect(out.qrModuleMm).toBeCloseTo(18 / 53, 2);
+		expect(out.qrDense).toBe(0);
+	});
+	it('counts a label as dense when even L modules are under 0.3 mm', () => {
+		const out = run(tiny(40, 17)); // box 13 mm: L 13 / 53 = 0.245
+		expect(levels).toEqual(['M', 'L']);
+		expect(out.qrModuleMm).toBeCloseTo(13 / 53, 2);
+		expect(out.qrDense).toBe(1);
+	});
+	it('has no module size for a text-only template', () => {
+		const t = { ...A4_4X5, arrangement: 'text_only' as const };
+		const out = run(t);
+		expect(out.qrModuleMm).toBeNull();
+		expect(out.qrDense).toBe(0);
+	});
+});

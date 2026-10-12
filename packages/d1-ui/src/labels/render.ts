@@ -6,6 +6,7 @@ import { layoutLabel, type Box } from './layout';
 import { buildQrPayload } from './qrPayload';
 import { isPrintableSample } from './sample';
 import { qrSvg, type QrModules } from './qrSvg';
+import { chooseQr, WARN_MODULE_MM, type QrLevel } from './qrDensity';
 import type { Measure } from './fit';
 import type { LabelSample, LabelTemplate } from './types';
 
@@ -25,6 +26,10 @@ export interface RenderedLabels {
 	clipped: number;
 	// Samples left out because they have no code or no valid short id (see isPrintableSample). Their slot stays empty.
 	invalid: number;
+	// The smallest QR module on any label, in mm (null when no label has a QR code).
+	qrModuleMm: number | null;
+	// How many labels have QR modules under WARN_MODULE_MM even at the lowest error correction: a phone may not read them.
+	qrDense: number;
 }
 
 // Nothing may load or run in the document: styles are inline, there are no scripts, and images may only be data.
@@ -60,12 +65,14 @@ function css(t: LabelTemplate, outline: boolean): string {
 	return rules.join('\n');
 }
 
-// `qr` turns a payload into a QR module matrix (the shape of `QRCode.create(payload).modules`). The SVG is
+// `qr` turns a payload and an error-correction level into a QR module matrix (the shape of
+// `QRCode.create(payload, { errorCorrectionLevel }).modules`): M while the modules stay big enough, else L
+// (see chooseQr). The SVG is
 // drawn here, so no markup from the caller ever reaches the document, and all text is escaped.
 export function renderLabelDocument(
 	pages: (LabelSample | null)[][],
 	t: LabelTemplate,
-	qr: (payload: string) => QrModules,
+	qr: (payload: string, level: QrLevel) => QrModules,
 	options: RenderOptions = {}
 ): RenderedLabels {
 	const outline = options.outline === true;
@@ -73,6 +80,8 @@ export function renderLabelDocument(
 	let clipped = 0;
 	let count = 0;
 	let invalid = 0;
+	let minModuleMm: number | null = null;
+	let dense = 0;
 
 	const pageHtml = pages.map((page) => {
 		const labels = page.map((sample, i) => {
@@ -84,7 +93,13 @@ export function renderLabelDocument(
 			count++;
 			const lay = layoutLabel(sample, t, options.measure);
 			if (lay.clipped) clipped++;
-			const qrBox = lay.qr ? `<div class="qr" style="${boxStyle(lay.qr)}">${qrSvg(qr(buildQrPayload(sample, options.contactEmail ?? null, t.qrFields)))}</div>` : '';
+			let qrBox = '';
+			if (lay.qr) {
+				const chosen = chooseQr(buildQrPayload(sample, options.contactEmail ?? null, t.qrFields), Math.min(lay.qr.w, lay.qr.h), qr);
+				minModuleMm = minModuleMm === null ? chosen.moduleMm : Math.min(minModuleMm, chosen.moduleMm);
+				if (chosen.moduleMm < WARN_MODULE_MM) dense++;
+				qrBox = `<div class="qr" style="${boxStyle(lay.qr)}">${qrSvg(chosen.modules)}</div>`;
+			}
 			const text = lay.lines
 				.filter((l) => l.text !== '')
 				.map(
@@ -106,5 +121,5 @@ ${css(t, outline)}
 </style></head><body>
 ${pageHtml.join('\n')}
 </body></html>`;
-	return { html, clipped, invalid };
+	return { html, clipped, invalid, qrModuleMm: minModuleMm === null ? null : round2(minModuleMm * 1000) / 1000, qrDense: dense };
 }

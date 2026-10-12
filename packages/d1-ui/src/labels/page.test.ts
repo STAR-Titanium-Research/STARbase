@@ -86,6 +86,10 @@ describe('summary', () => {
 	it('reads as the page shows it', () => {
 		expect(summaryText({ labels: 12, pages: 1, clipped: 1, invalid: 2 })).toBe('12 labels on 1 page · 1 clipped · 2 skipped (invalid)');
 		expect(summaryText({ labels: 1, pages: 2, clipped: 0, invalid: 0 })).toBe('1 label on 2 pages · 0 clipped · 0 skipped (invalid)');
+		expect(summaryText({ labels: 1, pages: 1, clipped: 0, invalid: 0, qrDense: 0 })).not.toContain('QR');
+		expect(summaryText({ labels: 1, pages: 1, clipped: 0, invalid: 0, qrDense: 1 })).toBe(
+			'1 label on 1 page · 0 clipped · 0 skipped (invalid) · QR may be hard to scan on this label size'
+		);
 	});
 });
 
