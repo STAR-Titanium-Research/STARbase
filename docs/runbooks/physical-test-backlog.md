@@ -95,6 +95,17 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
 - [ ] **D4 — permissions and dates.** A role that cannot read a sample gets "not found" for it in a
   label request. With `D1_TIMEZONE=Europe/London` set, a sample created just after midnight BST
   prints the right date. The picker shows "(200 of N)" when there are more than 200. Since #124.
+- [ ] **Label templates — own rows (label-printing PR #TBD).** As a Lab Member, create a template in
+  `label_templates`: it saves. Update and delete it: allowed. Another member's template (and the four
+  seeds) can be read but not updated or deleted.
+- [ ] **Label templates — seeds and Default (label-printing PR #TBD).** A Lab Member cannot edit a seed
+  template, and the Default toggle (`is_default`) is not offered or not saved for them.
+- [ ] **Label templates — owner is forced (label-printing PR #TBD).** After a member creates a template,
+  `user_created` is that member, whatever the request body said.
+- [ ] **Label templates — Lab Admin (label-printing PR #TBD).** A Lab Admin can create, edit, delete and
+  set Default on any template, including the seeds.
+- [ ] **Label templates — permissions apply (label-printing PR #TBD).** After the migration, flush Redis
+  and restart Directus: the rules above then hold, with no 403 on reading `label_templates`.
 
 ### Plot dashboard inside Directus
 - [ ] **P3 — links in the Directus module.** "Copy link" in the Directus-hosted Plot opens the same
