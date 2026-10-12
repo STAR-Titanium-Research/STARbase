@@ -137,7 +137,7 @@ layout live; **Print** sends the same markup to your printer.
 **Templates** are data, held in a collection. Each template defines page geometry (A4, roll,
 custom), label size and margins, gap between labels, label arrangement (QR on top, QR on left,
 or text only), the fields to show (sample code, short ID, nickname, material, date, owner
-initials), their sizes and bold on or off, and which fields go into the QR payload. Everyone can
+initials), their sizes and bold on or off, and which extras go into the QR payload (all of them unless you untick "All (default)"). Everyone can
 create a template and edit or delete their own; admins can edit or delete any (the plain Directus
 form is the admin fallback). Pre-built templates:
 
@@ -152,6 +152,14 @@ form is the admin fallback). Pre-built templates:
 **100 %** scale ("Actual size", not "Fit to page"), with **margins set to None**, or the labels
 drift off the die-cuts. This applies to office lasers (A4 sheets) and the Brother QL-700 label
 printer (62 mm roll on USB through its Windows driver).
+
+**What the QR code says.** Anyone with a phone camera can read it, with no login and no database
+access. It is plain text: `D1 SAMPLE`, then the sample code and short ID, the material and
+nickname, the date and owner initials, the owner's email and `Contact: <lab email>`. A value that
+is empty is left out. The lab contact email is one setting for the whole lab, shown under
+**Template** on the labels page ("Contact on labels: ..."); admins can change it there. A label
+that is too small for this much text drops to a lower error correction, and the preview warns
+"QR may be hard to scan on this label size" when it may not scan.
 
 Each label shows the sample code, a QR code, the material and date (manufactured if available,
 else created), and the owner's initials. Samples you may not read get no label (the page says so);

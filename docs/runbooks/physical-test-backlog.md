@@ -852,6 +852,15 @@ migration 141 prints about ownerless records.
   number puts it back on the global value and the mark goes. Removing a chip and ticking it again starts from the
   global value.
 
+- [ ] **#247-L13 — Rich QR scans on a phone.** Set a lab contact on the labels page (admin, under Template:
+  "Contact on labels"), then print one label of a sample that has a nickname, a material and an owner with an email
+  on the A4 4×5 sheet, the 50×25 single and the Brother DK-22205 roll. Scan each with the stock camera of an iPhone
+  and of an Android phone. Each shows the whole text: `D1 SAMPLE`, the code and short ID, material and nickname,
+  date and owner initials, the owner's email and `Contact: <the lab email>`, with no login and no network. The
+  preview shows no "QR may be hard to scan" warning on these three. Also scan a label of a template with
+  "All (default)" unticked and only Date chosen: it shows just the code, short ID and date. A label of a sample
+  whose owner has no email scans without an email line. Since #247.
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and
