@@ -2861,6 +2861,10 @@ sf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SF")
 JR=db/migrations/20261012000161_lab_member_additional_operator_rules.sql
 jr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$JR")
 jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
+# 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
+# migration's down only empties the schema (and drops it) once 163's down has run too.
+UU=db/migrations/20261012000163_user_usage.sql
+uu_down=$(awk '/-- migrate:down/{f=1;next}f' "$UU")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -2900,6 +2904,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$uu_down
 $jr_down
 $sf_down
 $rv_down
@@ -3592,6 +3597,152 @@ run_eq "both file_fingerprints indexes have a comment" \
     "SELECT count(*) FROM pg_class c WHERE c.relname IN ('file_fingerprints_content_idx', 'file_fingerprints_data_idx') AND coalesce(obj_description(c.oid, 'pg_class'), '') <> ''" "2"
 run_eq "data_sha256's comment says how the hash is taken (uint64 shape, float64, per-column digests, DATA)" \
     "SELECT count(*) FROM pg_description WHERE objoid = 'public.file_fingerprints'::regclass AND objsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.file_fingerprints'::regclass AND attname = 'data_sha256') AND description ~* 'uint64' AND description ~* 'float64' AND description ~* 'each column' AND description ~ 'otherwise DATA'" "1"
+
+echo "== Per-user usage scores (migration 163) =="
+# Each check is its own rolled-back transaction (users prefix 9e000000-0000-4000-8000-). A rejected
+# statement aborts psql (ON_ERROR_STOP), so the error text is what is asserted on. The CI database
+# has the stub directus_users (id only matters), so the fixture users set just the id.
+UU_MIG=db/migrations/20261012000163_user_usage.sql
+[[ -f "$UU_MIG" ]] && ok "found migration 163" || bad "migration 163 is missing ($UU_MIG)"
+UU_A='9e000000-0000-4000-8000-000000000001'
+UU_B='9e000000-0000-4000-8000-000000000002'
+uu_sql() { # uu_sql <statements>: run them after two fixture users, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_users (id) VALUES ('$UU_A'), ('$UU_B');
+$1
+ROLLBACK;
+SQL
+}
+run_eq "user_usage and user_usage_cursor are in d1_private" \
+    "SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname IN ('user_usage', 'user_usage_cursor')" \
+    "user_usage,user_usage_cursor"
+run_eq "neither table is in public (Directus would list it as a collection)" \
+    "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('user_usage', 'user_usage_cursor')" "0"
+run_eq "the (user_id, kind) index exists" \
+    "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND indexname = 'user_usage_user_kind_idx' AND indexdef LIKE '%(user_id, kind)%'" "1"
+run_eq "the tables are not in v_schema_dictionary (the Ask-DB prompt)" \
+    "SELECT count(*) FROM v_schema_dictionary WHERE object_name IN ('user_usage', 'user_usage_cursor')" "0"
+run_eq "d1_llm_readonly cannot read the usage tables" \
+    "SELECT has_table_privilege('d1_llm_readonly', 'd1_private.user_usage', 'SELECT') OR has_table_privilege('d1_llm_readonly', 'd1_private.user_usage_cursor', 'SELECT')" "f"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target, score) VALUES ('$UU_A', 'page', 'samples', 1.5);
+SELECT 'uu_row:' || score || ':' || pinned || ':' || coalesce(hidden_at::text, '<null>') FROM d1_private.user_usage WHERE user_id = '$UU_A';")
+grep -q 'uu_row:1.5:false:<null>' <<<"$uu_out" && ok "a usage row inserts with pinned false and not hidden by default" || bad "usage row insert failed (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'other', 'samples');")
+grep -q 'check constraint' <<<"$uu_out" && ok "a kind other than page / record is rejected" || bad "bad kind was not rejected (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples');
+INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples');")
+grep -q 'duplicate key' <<<"$uu_out" && ok "one row per user, kind and target (primary key)" || bad "duplicate usage row was not rejected (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples'), ('$UU_B', 'page', 'samples'), ('$UU_A', 'record', 'samples');
+SELECT 'uu_same_target:' || count(*) FROM d1_private.user_usage;")
+grep -q 'uu_same_target:3' <<<"$uu_out" && ok "two users (and two kinds) can hold the same target" || bad "same target for another user or kind failed (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('9e000000-0000-4000-8000-0000000000ff', 'page', 'samples');")
+grep -q 'foreign key' <<<"$uu_out" && ok "usage for a user that does not exist is rejected (foreign key)" || bad "usage without a user was not rejected (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples'), ('$UU_B', 'page', 'samples');
+INSERT INTO d1_private.user_usage_cursor (user_id, last_activity_id) VALUES ('$UU_A', 7), ('$UU_B', 9);
+DELETE FROM directus_users WHERE id = '$UU_A';
+SELECT 'uu_cascade:' || (SELECT count(*) FROM d1_private.user_usage) || ',' || (SELECT count(*) FROM d1_private.user_usage_cursor);")
+grep -q 'uu_cascade:1,1' <<<"$uu_out" && ok "deleting a user removes their usage rows and cursor, and only theirs" || bad "usage rows did not follow their user (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage_cursor (user_id, last_activity_id) VALUES ('$UU_A', 1), ('$UU_A', 2);")
+grep -q 'duplicate key' <<<"$uu_out" && ok "one cursor per user" || bad "second cursor for a user was not rejected (output: $uu_out)"
+run_eq "both tables and their columns and the index have comments (without: none)" \
+    "SELECT coalesce(string_agg(x, ', '), '') FROM (
+        SELECT c.relname AS x FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname IN ('user_usage', 'user_usage_cursor', 'user_usage_user_kind_idx')
+           AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname IN ('user_usage', 'user_usage_cursor') AND a.attnum > 0 AND NOT a.attisdropped
+           AND coalesce(col_description(a.attrelid, a.attnum), '') = '') q" ""
+# The d1-usage endpoint's own statements, run against Postgres. The strings below are the SQL constants of
+# core/extensions/d1-usage/index.js (`SQL`), with `?` placeholders as the endpoint sends them; a node test in
+# that extension fails if this file and index.js drift apart. Each is PREPAREd with ? turned into $1, $2, ...
+# directus_activity is Directus-managed (stub or absent in CI), so a TEMP table of the same name and shape
+# (from db/schema.sql) shadows it inside each rolled-back transaction.
+UU_SQL_LOCK="SELECT pg_advisory_xact_lock(hashtextextended(?::text, 0))"
+UU_SQL_GETROW="SELECT score, last_at, pinned, hidden_at FROM d1_private.user_usage WHERE user_id = ? AND kind = ? AND target = ?"
+UU_SQL_UPSERT="INSERT INTO d1_private.user_usage (user_id, kind, target, score, last_at, pinned, hidden_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, kind, target) DO UPDATE SET score = EXCLUDED.score, last_at = EXCLUDED.last_at, pinned = EXCLUDED.pinned, hidden_at = EXCLUDED.hidden_at"
+UU_SQL_LIST="SELECT kind, target, score, last_at, pinned FROM d1_private.user_usage WHERE user_id = ? AND (hidden_at IS NULL OR last_at > hidden_at)"
+UU_SQL_GETCURSOR="SELECT last_activity_id FROM d1_private.user_usage_cursor WHERE user_id = ?"
+UU_SQL_SETCURSOR="INSERT INTO d1_private.user_usage_cursor (user_id, last_activity_id) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET last_activity_id = EXCLUDED.last_activity_id"
+UU_SQL_STARTID="SELECT id FROM directus_activity WHERE \"timestamp\" < ? ORDER BY id DESC LIMIT 1"
+UU_SQL_MAXID="SELECT id FROM directus_activity ORDER BY id DESC LIMIT 1"
+UU_SQL_ACTIVITY="SELECT id, collection, item, \"timestamp\" FROM directus_activity WHERE \"user\" = ? AND id > ? AND action IN ('create', 'update') AND collection IN (?, ?, ?, ?, ?, ?, ?) ORDER BY id LIMIT 500"
+UU_SQL_DELUNPINNED="DELETE FROM d1_private.user_usage WHERE user_id = ? AND pinned = false"
+UU_SQL_ZEROPINNED="UPDATE d1_private.user_usage SET score = 0 WHERE user_id = ? AND pinned = true"
+uu_prepare() { # uu_prepare <name> <sql with ?>: a PREPARE with the placeholders numbered
+    printf 'PREPARE %s AS ' "$1"
+    awk '{ s = $0; out = ""; n = 0; while ((i = index(s, "?")) > 0) { n++; out = out substr(s, 1, i - 1) "$" n; s = substr(s, i + 1) } print out s ";" }' <<<"$2"
+}
+uu_stmt() { # uu_stmt <statements>: the real statements prepared, two users and a shadow directus_activity, then ROLLBACK
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_users (id) VALUES ('$UU_A'), ('$UU_B');
+CREATE TEMP TABLE directus_activity (id integer PRIMARY KEY, action varchar(45) NOT NULL, "user" uuid,
+    "timestamp" timestamptz NOT NULL DEFAULT now(), collection varchar(64) NOT NULL, item varchar(255) NOT NULL);
+$(uu_prepare lock "$UU_SQL_LOCK")
+$(uu_prepare getrow "$UU_SQL_GETROW")
+$(uu_prepare upsert "$UU_SQL_UPSERT")
+$(uu_prepare list "$UU_SQL_LIST")
+$(uu_prepare getcursor "$UU_SQL_GETCURSOR")
+$(uu_prepare setcursor "$UU_SQL_SETCURSOR")
+$(uu_prepare startid "$UU_SQL_STARTID")
+$(uu_prepare maxid "$UU_SQL_MAXID")
+$(uu_prepare activity "$UU_SQL_ACTIVITY")
+$(uu_prepare delunpinned "$UU_SQL_DELUNPINNED")
+$(uu_prepare zeropinned "$UU_SQL_ZEROPINNED")
+$1
+ROLLBACK;
+SQL
+}
+UU_TS="'2026-10-12 09:00:00+00'"
+uu_out=$(uu_stmt "EXECUTE lock('$UU_A');
+EXECUTE upsert('$UU_A', 'page', 'samples', 1, $UU_TS, false, NULL);
+EXECUTE upsert('$UU_B', 'page', 'samples', 7, $UU_TS, true, NULL);
+EXECUTE upsert('$UU_A', 'page', 'samples', 2.5, $UU_TS, true, NULL);
+SELECT 'uu_up:' || count(*) || ',' || (SELECT score || '/' || pinned FROM d1_private.user_usage WHERE user_id = '$UU_A') || ',' || (SELECT score FROM d1_private.user_usage WHERE user_id = '$UU_B') FROM d1_private.user_usage;
+CREATE TEMP TABLE got AS EXECUTE getrow('$UU_A', 'page', 'samples');
+CREATE TEMP TABLE got2 AS EXECUTE getrow('$UU_A', 'page', 'other');
+SELECT 'uu_get:' || (SELECT count(*) FROM got) || ',' || (SELECT count(*) FROM got2);")
+grep -q 'uu_up:2,2.5/true,7' <<<"$uu_out" && ok "the visit upsert's ON CONFLICT (user_id, kind, target) updates one user's row and leaves another user's alone" || bad "visit upsert gave the wrong rows (output: $uu_out)"
+grep -q 'uu_get:1,0' <<<"$uu_out" && ok "the row lookup finds the user's row and only that one" || bad "row lookup gave the wrong rows (output: $uu_out)"
+uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'visible', 1, $UU_TS, false, NULL);
+EXECUTE upsert('$UU_A', 'page', 'revisited', 1, '2026-10-12 10:00:00+00', false, '2026-10-12 09:00:00+00');
+EXECUTE upsert('$UU_A', 'page', 'hidden', 1, $UU_TS, false, '2026-10-12 09:00:00+00');
+EXECUTE upsert('$UU_A', 'record', 'hidden_later', 1, $UU_TS, false, '2026-10-12 11:00:00+00');
+EXECUTE upsert('$UU_B', 'page', 'bobs', 1, $UU_TS, false, NULL);
+CREATE TEMP TABLE listed AS EXECUTE list('$UU_A');
+SELECT 'uu_list:' || string_agg(kind || '/' || target, ',' ORDER BY target) FROM listed;")
+grep -qx 'uu_list:page/revisited,page/visible' <<<"$uu_out" && ok "the list predicate hides an item until it is used again after hidden_at, and returns only the caller's rows" || bad "list predicate gave the wrong rows (output: $uu_out)"
+uu_out=$(uu_stmt "INSERT INTO directus_activity (id, action, \"user\", collection, item)
+    SELECT g, 'update', '$UU_A', 'physical_samples', gen_random_uuid()::text FROM generate_series(1, 600) g;
+INSERT INTO directus_activity (id, action, \"user\", collection, item) VALUES
+    (601, 'update', '$UU_B', 'physical_samples', 'b'), (602, 'delete', '$UU_A', 'physical_samples', 'x'),
+    (603, 'create', '$UU_A', 'directus_users', 'y'), (604, 'create', '$UU_A', 'campaigns', 'z');
+UPDATE directus_activity SET \"timestamp\" = now() - interval '40 days' WHERE id <= 2;
+CREATE TEMP TABLE page1 AS EXECUTE activity('$UU_A', 0, 'physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns', 'projects', 'people', 'equipment');
+SELECT 'uu_fold1:' || count(*) || ',' || min(id) || ',' || max(id) || ',' || count(*) FILTER (WHERE id > 600) FROM page1;
+CREATE TEMP TABLE page2 AS EXECUTE activity('$UU_A', 550, 'physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns', 'projects', 'people', 'equipment');
+SELECT 'uu_fold2:' || count(*) || ',' || min(id) || ',' || max(id) || ',' || string_agg(DISTINCT collection, ',') FROM page2;
+CREATE TEMP TABLE sid AS EXECUTE startid(now() - interval '30 days');
+CREATE TEMP TABLE mid AS EXECUTE maxid;
+SELECT 'uu_ids:' || (SELECT id FROM sid) || ',' || (SELECT id FROM mid);")
+grep -q 'uu_fold1:500,1,500,0' <<<"$uu_out" && ok "the fold scan takes at most 500 of the user's rows, oldest id first, and no one else's" || bad "fold scan page 1 is wrong (output: $uu_out)"
+grep -q 'uu_fold2:51,551,604,campaigns,physical_samples' <<<"$uu_out" && ok "the fold scan from a cursor skips other users, deletes and other collections" || bad "fold scan from a cursor is wrong (output: $uu_out)"
+grep -q 'uu_ids:2,604' <<<"$uu_out" && ok "the first-fold start id is the newest activity older than the cutoff; the newest id is the maximum" || bad "start id / max id statements are wrong (output: $uu_out)"
+uu_out=$(uu_stmt "EXECUTE setcursor('$UU_A', 5);
+EXECUTE setcursor('$UU_A', 9);
+EXECUTE setcursor('$UU_B', 1);
+CREATE TEMP TABLE cur AS EXECUTE getcursor('$UU_A');
+SELECT 'uu_cursor:' || (SELECT last_activity_id FROM cur) || ',' || (SELECT count(*) FROM d1_private.user_usage_cursor);")
+grep -q 'uu_cursor:9,2' <<<"$uu_out" && ok "the cursor upsert keeps one row per user and the lookup returns the user's own" || bad "cursor statements are wrong (output: $uu_out)"
+uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'pinned', 4, $UU_TS, true, NULL);
+EXECUTE upsert('$UU_A', 'page', 'plain', 4, $UU_TS, false, NULL);
+EXECUTE upsert('$UU_B', 'page', 'plain', 4, $UU_TS, false, NULL);
+EXECUTE delunpinned('$UU_A');
+EXECUTE zeropinned('$UU_A');
+SELECT 'uu_clear2:' || coalesce(string_agg((user_id = '$UU_A')::text || '/' || target || '/' || score, ',' ORDER BY user_id, target), '') FROM d1_private.user_usage;")
+grep -q 'uu_clear2:true/pinned/0,false/plain/4' <<<"$uu_out" && ok "clear deletes the caller's unpinned rows, zeroes the pinned ones, and leaves other users' rows" || bad "clear statements gave the wrong rows (output: $uu_out)"
 
 echo "== Lab Member filters put _some only where Directus accepts it =="
 # Directus 11 (api apply-query/filter) handles `_some`/`_none` only directly under an O2M field at the

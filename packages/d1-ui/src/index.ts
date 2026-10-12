@@ -133,3 +133,11 @@ export type {
 	QrKey, FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
 	RenderOptions, RenderedLabels, QrModules, QrLevel, ChosenQr, Measure, BrokenTemplate, CountedSample, LabelEntry, LbxDownload,
 } from './labels';
+
+// Frequently used (Home panel and the visit pings; the server half is core/extensions/d1-usage)
+export {
+	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, pinEntry, readDismissed,
+	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, revertPin, routeTarget, splitRecordTarget, suggestedPageEntries,
+	withoutDismissed, writeDismissed,
+} from './usage';
+export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
