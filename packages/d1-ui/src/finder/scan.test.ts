@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildQrPayload } from '../labels/qrPayload';
-import { displayText, isScanStarted, normalizeScan, resolveLabel } from './scan';
+import { displayText, fromLastHeader, isScanStarted, normalizeScan, resolveLabel } from './scan';
 import type { ScanApi } from './scan';
 
 const PAYLOAD = 'D1 SAMPLE\nS-0123 · 1a2b3c4d\nTi-6Al-4V · "bracket A"\n2026-10-01 · DP';
@@ -91,5 +91,23 @@ describe('resolveLabel', () => {
 	});
 	it('flags a D1 header that cannot be read', async () => {
 		expect(await resolveLabel(api([]), 'D1 SAMPLE\ngarbage')).toMatchObject({ kind: 'text', looksLikeD1: true });
+	});
+});
+
+describe('fromLastHeader', () => {
+	it('keeps only the label after the last header, so a scan typed after an old one replaces it', () => {
+		expect(fromLastHeader('D1 SAMPLE\nA-1 | 11111111\nD1 SAMPLE\nB-2 | 22222222\n')).toBe('D1 SAMPLE\nB-2 | 22222222');
+	});
+	it('leaves a single label and other text alone', () => {
+		expect(fromLastHeader('D1 SAMPLE\rA-1 | 11111111\r')).toBe('D1 SAMPLE\nA-1 | 11111111');
+		expect(fromLastHeader('hello\nD1 SAMPLE')).toBe('hello\nD1 SAMPLE');
+	});
+});
+
+describe('resolveLabel after an earlier scan', () => {
+	it('reads the last label in the text', async () => {
+		const a = api([[row]]);
+		await resolveLabel(a, 'D1 SAMPLE\nOLD-1 | 11111111\nD1 SAMPLE\nS-0123 | 1a2b3c4d');
+		expect(a.calls[0].filter).toEqual({ short_id: { _eq: '1a2b3c4d' } });
 	});
 });

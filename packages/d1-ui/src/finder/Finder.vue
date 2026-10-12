@@ -33,6 +33,8 @@ const { query, hits, loading, searchable, scan, scanning, readScanNow } = useFin
 		host.navigate(to);
 		emit('close');
 	},
+	// The scanned text stays in the box: select it, so the next scan replaces it.
+	onSettled: () => void nextTick(() => input.value?.select()),
 });
 
 // Unique per instance, so two Explorer pages never share an id.
@@ -86,8 +88,12 @@ function onKeydown(e: KeyboardEvent) {
 	} else if (e.key === 'Enter') {
 		// Enter that confirms an IME composition is not "open this".
 		if (e.isComposing) return;
-		// Part of a scanned label: the textarea adds the line break.
-		if (scanning.value) return;
+		// Part of a scanned label: the textarea adds the line break. Once the scan is settled the text is
+		// selected, and Enter must not wipe it.
+		if (scanning.value) {
+			if (scan.value?.status === 'done') e.preventDefault();
+			return;
+		}
 		e.preventDefault();
 		const hit = hits.value[active.value];
 		if (hit) pick(hit);

@@ -182,3 +182,19 @@ describe('useFinder with a scanned label', () => {
 		expect(finder.scan.value).toBeNull();
 	});
 });
+
+describe('useFinder after a failed scan', () => {
+	it('says when a scan settled without opening, so the box can select its text', async () => {
+		const host = { api: { get: async () => ({ data: { data: [] } }) } } as unknown as ExplorerHost;
+		let settled = 0;
+		const finder = useFinder(host, ref(buildNav(visible, [], false)), ref<Set<string> | null>(visible), { onSettled: () => settled++ });
+		finder.query.value = 'D1 SAMPLE\rS-0123 - 1a2b3c4d\r';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(settled).toBe(1);
+		// the next scan lands after the old text (or replaces it): the last label is the one read
+		finder.query.value += 'D1 SAMPLE\rT-9 - 99999999\r';
+		await vi.advanceTimersByTimeAsync(SCAN_IDLE_MS);
+		expect(settled).toBe(2);
+		expect(finder.scan.value).toMatchObject({ status: 'done', outcome: { kind: 'failed', code: 'T-9' } });
+	});
+});

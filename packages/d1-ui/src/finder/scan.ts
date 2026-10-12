@@ -30,6 +30,19 @@ export function normalizeScan(text: string): string {
 	return text.replace(/\r\n|\r/g, '\n').trim();
 }
 
+// A box that still holds an earlier scan (a failed one stays on screen) gets the next label appended:
+// the label is what follows the LAST header line. Text that does not start with a header is unchanged.
+export function fromLastHeader(text: string): string {
+	const normalized = normalizeScan(text);
+	const lines = normalized.split('\n');
+	if (lines[0].trim() !== QR_HEADER) return normalized;
+	let last = 0;
+	lines.forEach((l, i) => {
+		if (l.trim() === QR_HEADER) last = i;
+	});
+	return lines.slice(last).join('\n');
+}
+
 const MAX_SHOWN = 1000;
 
 // Text from a QR code or scanner for display: control characters (other than line breaks and tabs)
@@ -58,7 +71,7 @@ function failure(err: any): { reason: FailReason; message: string } {
 // before the code was renamed still opens through its short id; one printed by hand may have only
 // the code). Reads as the signed-in user, so a deleted sample and one the user may not see look the same.
 export async function resolveLabel(api: ScanApi, text: string): Promise<ScanOutcome> {
-	const raw = normalizeScan(text);
+	const raw = fromLastHeader(text);
 	const parsed = parseQrPayload(raw);
 	if (!parsed) return { kind: 'text', text: raw, looksLikeD1: isScanStarted(raw) };
 	const label = { code: parsed.code, shortId: parsed.shortId, lines: parsed.lines };
