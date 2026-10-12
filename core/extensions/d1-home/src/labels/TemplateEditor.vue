@@ -10,7 +10,7 @@ import './form.css';
 // through the SDK as the signed-in user and are offered only where the server would allow them: on your own
 // templates, or as an admin. Anyone may create ("Save as new"). The Default switch is for admins only (the
 // column is admin-only in the database).
-const props = defineProps<{ modelValue: LabelTemplate; canEdit: boolean; isAdmin: boolean; all: LabelTemplate[]; problems: string[] }>();
+const props = defineProps<{ modelValue: LabelTemplate; canEdit: boolean; isAdmin: boolean; problems: string[] }>();
 const emit = defineEmits<{ 'update:modelValue': [LabelTemplate]; saved: [string]; deleted: []; close: [] }>();
 
 const local = reactive<LabelTemplate>(draftOf(props.modelValue));
@@ -63,13 +63,14 @@ const isNew = computed(() => !local.id);
 const canSave = computed(() => !props.problems.length && !busy.value);
 
 async function save(): Promise<void> {
-	const id = await update(draftOf(local), props.isAdmin, props.all);
+	const id = await update(draftOf(local), props.isAdmin);
 	if (id) emit('saved', id);
 }
 async function saveAsNew(): Promise<void> {
-	// An existing template saved as new needs its own name: the table's names are unique.
-	const draft = isNew.value ? draftOf(local) : copyAsNew(local, local.name);
-	const id = await create(draft, props.isAdmin, props.all);
+	// An existing template saved as new needs its own name: the table's names are unique. An admin's Default
+	// tick is kept (the database then moves the default to the new row).
+	const draft = isNew.value ? draftOf(local) : { ...copyAsNew(local, local.name), isDefault: props.isAdmin && local.isDefault };
+	const id = await create(draft, props.isAdmin);
 	if (id) emit('saved', id);
 }
 const confirmDelete = ref(false);

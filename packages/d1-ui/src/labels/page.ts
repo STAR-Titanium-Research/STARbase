@@ -1,5 +1,6 @@
 // Pure helpers of the labels page: what it reads, how it reads ?ids= and pasted codes, which template
 // is shown first, who may change a template and exactly what a save sends. No Vue, no Directus imports.
+import { errField, errorText, isDuplicate } from '../format';
 import { templateFromRow, validateTemplate } from './template';
 import type { Arrangement, FieldKey, LabelField, LabelSample, LabelTemplate } from './types';
 
@@ -195,9 +196,15 @@ export function templatePayload(t: LabelTemplate, isAdmin: boolean): Record<stri
 	return body;
 }
 
-// A save that fails on the unique name constraint says so in words.
-export function saveErrorText(message: string): string {
-	return /unique|duplicate/i.test(message) ? 'A template with that name already exists. Choose another name.' : message;
+// Words for a failed save. A unique-constraint failure names the column (Directus: RECORD_NOT_UNIQUE with
+// extensions.field); the template name is the one a user can fix. Anything else is the server's own message.
+export function saveErrorText(e: unknown, fallback = 'The template could not be saved.'): string {
+	if (isDuplicate(e)) {
+		return errField(e) === 'name'
+			? 'A template with that name already exists. Choose another name.'
+			: 'This template clashes with an existing one. Change it and try again.';
+	}
+	return errorText(e, fallback);
 }
 
 // Field list editing for the editor: pure, so the order logic is tested.

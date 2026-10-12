@@ -149,7 +149,6 @@ onMounted(() => {
 							@update:model-value="draft = $event"
 							:can-edit="canEditDraft"
 							:is-admin="host.isAdmin.value"
-							:all="templates.templates.value"
 							:problems="problems"
 							@saved="onSaved"
 							@deleted="onDeleted"

@@ -150,9 +150,15 @@ describe('draft helpers', () => {
 		expect(moveField([...f], 1, 1)).toEqual([...f]);
 		expect(moveField([...f], 0, 9)).toEqual([...f]);
 	});
-	it('explains a duplicate name', () => {
-		expect(saveErrorText('Field "name" has to be unique.')).toMatch(/already exists/);
-		expect(saveErrorText('Something else')).toBe('Something else');
+	it('explains a duplicate name by the column Directus names, not by matching text', () => {
+		const dup = (field?: string) => ({ response: { data: { errors: [{ message: 'x', extensions: { code: 'RECORD_NOT_UNIQUE', field } }] } } });
+		expect(saveErrorText(dup('name'))).toMatch(/name already exists/);
+		expect(saveErrorText(dup('other'))).toMatch(/clashes/);
+		expect(saveErrorText(dup())).toMatch(/clashes/);
+		// a message that merely says "unique" is not a duplicate
+		expect(saveErrorText({ response: { data: { errors: [{ message: 'unique is a word', extensions: { code: 'INVALID_PAYLOAD' } }] } } })).toBe('unique is a word');
+		expect(saveErrorText(new Error('Network Error'))).toBe('Network Error');
+		expect(saveErrorText({}, 'fallback')).toBe('fallback');
 	});
 });
 
