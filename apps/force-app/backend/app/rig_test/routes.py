@@ -36,6 +36,9 @@ class _Wiring:
     captures_root: Callable[[], str]
     poller: RigTestPoller
     runner: RigTestRunner
+    # The last hardware check, None before the first: the web refreshes the D1 token early only
+    # on a PC that is on the rig, and must not trigger a DAQmx enumeration to find out.
+    hardware: dict
 
 
 _w: _Wiring | None = None
@@ -52,7 +55,6 @@ def configure(
 ) -> None:
     global _w
     store = StateFile(os.path.join(config_dir, STATE_FILE))
-    relay.set_config_dir(config_dir)
     rig_runner = RigTestRunner(
         captures_root=captures_root,
         rig_id=eligibility.rig_id,
@@ -62,11 +64,14 @@ def configure(
     runner.install(rig_runner)
     interval = poll_interval_s or float(os.environ.get("FORCE_APP_RIG_TEST_POLL_S", "60"))
 
+    hardware: dict = {"ok": None}
+
     def eligible() -> tuple[bool, str | None]:
         ok, reason = eligibility.check(devices(), labamp())
-        if ok and not relay.token():
-            # No token, no polling: the relay would refuse every call anyway.
-            return False, relay.TOKEN_MISSING
+        hardware["ok"] = ok
+        if ok and not relay.session_present():
+            # Nobody signed in online: the relay would refuse every call anyway.
+            return False, relay.SIGNED_OUT
         return ok, reason
 
     poller = RigTestPoller(
@@ -77,7 +82,7 @@ def configure(
         rig_id=eligibility.rig_id,
         interval_s=interval,
     )
-    _w = _Wiring(is_busy, captures_root, poller, rig_runner)
+    _w = _Wiring(is_busy, captures_root, poller, rig_runner, hardware)
 
 
 def start_poller() -> None:
@@ -125,7 +130,44 @@ class AnswerBody(BaseModel):
     note: str | None = Field(None, max_length=1000)
 
 
+class SessionBody(BaseModel):
+    # No Field limits on purpose: pydantic's 422 echoes the rejected input, and this is a
+    # credential. relay.set_session checks it (1-4096 printable ASCII) without repeating it.
+    access_token: str
+    expires_at: float  # epoch ms
+
+
 # ---- routes ----------------------------------------------------------------------------------
+
+
+def _relay_view(w: _Wiring) -> str:
+    """The relay state Settings and the store show. A refused sign-in clears the session, so it
+    is checked before "signed_out" or the operator would never see why."""
+    if not bug_report.configured():
+        return "not_configured"
+    if w.poller.relay_state == "signin_rejected":
+        return "signin_rejected"
+    if not relay.session_present():
+        return "signed_out"
+    return w.poller.relay_state
+
+
+@router.put("/session")
+async def put_session(body: SessionBody) -> dict:
+    w = _wiring()
+    try:
+        changed = relay.set_session(body.access_token, body.expires_at)
+    except ValueError:
+        raise HTTPException(422, "not a usable access token") from None
+    if changed:
+        w.poller.relay_state = "unknown"  # a rejection seen from now on is about this token
+    return {"ok": True}
+
+
+@router.delete("/session")
+async def delete_session() -> dict:
+    relay.clear_session()
+    return {"ok": True}
 
 
 @router.get("/eligibility")
@@ -135,7 +177,9 @@ async def get_eligibility() -> dict:
     out: dict = {
         "eligible": ok,
         "rig_id": eligibility.rig_id(),
-        "relay": w.poller.relay_state if bug_report.configured() else "not_configured",
+        "relay": _relay_view(w),
+        "session": relay.session_present(),
+        "hardware_ok": w.hardware["ok"],
     }
     if reason:
         out["reason"] = reason
@@ -151,6 +195,9 @@ async def get_pending() -> dict:
         # The condition accept refuses on, so a web UI whose own status poll is stale stays in
         # badge mode instead of opening a dialog over a recording.
         "busy": w.is_busy() or recovery.any_in_flight(),
+        "session": relay.session_present(),
+        "hardware_ok": w.hardware["ok"],
+        "relay": _relay_view(w),
     }
 
 
