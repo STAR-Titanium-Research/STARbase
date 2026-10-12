@@ -2,13 +2,15 @@
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import {
-	BOOKMARK_VISIBILITY_FILTER, EXPLORER_HOST, LoadState, Section, collectionRoute, errorText, indexRoute, pickBookmarkId, useItems, useRequestGate,
+	BOOKMARK_VISIBILITY_FILTER, EXPLORER_HOST,
+	attentionView, LoadState, Section, collectionRoute, errorText, indexRoute, pickBookmarkId, useItems, useRequestGate,
 } from '@d1/ui';
 import { ATTENTION, ATTENTION_LIST_LIMIT, type AttentionDef, type AttentionItem } from './attention';
 
-// Counts of things that need a look. Each tile loads its own count (a role that cannot read one
-// collection still gets the others) and opens, on click, the matching records right below the
-// tiles, each linking to its Explorer page. The same filters typed into the Data Studio give the
+// Things that need a look: only the ones with something in them are listed (one "Nothing needs you"
+// line when none is). Each loads its own count (a role that cannot read one collection still gets
+// the others) and opens, on click, the matching records right under it, each linking to its
+// Explorer page. The same filters typed into the Data Studio give the
 // same numbers (see attention.ts).
 const props = defineProps<{ isAdmin: boolean }>();
 
@@ -127,52 +129,66 @@ onBeforeUnmount(() => {
 	listGate.cancel();
 });
 
+// Which rows to list, and whether to say "checking" or "nothing" instead (the rule is in @d1/ui adminHome.ts).
+// A failed count shows for an admin; for anyone else it is hidden (a role that cannot read a collection
+// would otherwise carry a permanent red row for it).
+const view = computed(() =>
+	attentionView(
+		defs.value.map((d) => ({ key: d.key, count: state.value[d.key]?.count ?? null, error: state.value[d.key]?.error ?? '', loading: !state.value[d.key] || state.value[d.key].loading })),
+		props.isAdmin,
+	),
+);
+const shown = computed(() => defs.value.filter((d) => view.value.rows.includes(d.key)));
+
 const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count === null ? '–' : s.count.toLocaleString('en-GB'));
 </script>
 
 <template>
 	<Section title="Needs attention">
 		<template #actions><span class="sub">Counts of the records you can see</span></template>
-		<div class="tiles">
-			<button
-				v-for="d in defs"
-				:key="d.key"
-				class="tile"
-				:class="{ hot: (state[d.key]?.count ?? 0) > 0, open: open === d.key }"
-				:disabled="!state[d.key] || state[d.key].loading || state[d.key].count === null || state[d.key].count === 0"
-				:aria-expanded="open === d.key"
-				:title="state[d.key]?.error || d.hint"
-				@click="toggle(d)"
-			>
-				<span class="t-value">{{ show(state[d.key]) }}</span>
-				<span class="t-label"><v-icon :name="d.icon" x-small class="t-icon" />{{ d.label }}</span>
-			</button>
-		</div>
-
-		<div v-if="openDef" class="list">
-			<LoadState :loading="list.loading" :error="list.error">
-				<ul class="items">
-					<li v-for="i in list.items" :key="i.id">
-						<router-link :to="i.to" class="i-title" :class="{ plain: i.plain }">{{ i.title }}</router-link>
-						<span v-if="i.sub" class="i-sub">{{ i.sub }}</span>
-					</li>
-				</ul>
-				<p v-if="moreLink && openCount > list.items.length" class="d1-note more">
-					Showing {{ list.items.length }} of {{ openCount }}.
-					<router-link :to="moreLink.to">{{ moreLink.text }}</router-link>
-				</p>
-			</LoadState>
-		</div>
+		<p v-if="view.status === 'loading'" class="d1-note">Checking…</p>
+		<p v-else-if="view.status === 'clear'" class="clear"><v-icon name="check_circle" small class="clear-icon" /> Nothing needs you</p>
+		<ul v-else class="rows">
+			<li v-for="d in shown" :key="d.key">
+				<button
+					class="tile"
+					:class="{ hot: (state[d.key]?.count ?? 0) > 0, open: open === d.key }"
+					:disabled="state[d.key]?.count === null || state[d.key]?.count === 0"
+					:aria-expanded="open === d.key"
+					:title="state[d.key]?.error || d.hint"
+					@click="toggle(d)"
+				>
+					<span class="t-value">{{ show(state[d.key]) }}</span>
+					<span class="t-label"><v-icon :name="d.icon" x-small class="t-icon" />{{ d.label }}</span>
+				</button>
+				<p v-if="state[d.key]?.error" class="d1-note bad">{{ state[d.key].error }}</p>
+				<div v-if="open === d.key" class="list">
+					<LoadState :loading="list.loading" :error="list.error">
+						<ul class="items">
+							<li v-for="i in list.items" :key="i.id">
+								<router-link :to="i.to" class="i-title" :class="{ plain: i.plain }">{{ i.title }}</router-link>
+								<span v-if="i.sub" class="i-sub">{{ i.sub }}</span>
+							</li>
+						</ul>
+						<p v-if="moreLink && openCount > list.items.length" class="d1-note more">
+							Showing {{ list.items.length }} of {{ openCount }}.
+							<router-link :to="moreLink.to">{{ moreLink.text }}</router-link>
+						</p>
+					</LoadState>
+				</div>
+			</li>
+		</ul>
 	</Section>
 </template>
 
 <style scoped>
 .sub { font-size: var(--fs-xs); color: var(--d1-dim); }
-/* 260px keeps the longest label ("Force analysis errors on my operations") on one line. */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
-/* A count the size of the Record page's readouts, with what it counts beside it. */
+.clear { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 600; color: var(--d1-ok); }
+.clear-icon { --v-icon-color: var(--d1-ok); }
+.rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+/* A count the size of the Record page's readouts, with what it counts beside it, one row per item. */
 .tile {
-	display: flex; align-items: center; gap: 12px; min-width: 0; padding: 8px 12px; text-align: left;
+	display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 8px 12px; text-align: left;
 	font: inherit; color: var(--theme--foreground); cursor: pointer;
 	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
 	transition: border-color 0.12s ease;
@@ -187,7 +203,7 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 .t-label { font-size: var(--fs-sm); font-weight: 600; line-height: 1.3; color: var(--d1-dim); }
 .t-icon { margin-right: 4px; vertical-align: -2px; --v-icon-color: var(--d1-dim); }
 .tile.hot .t-icon { --v-icon-color: var(--d1-warn); }
-.list { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--d1-line); }
+.list { margin-top: 8px; padding: 2px 4px 4px; }
 .items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .items li { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
 .i-title { color: var(--d1-accent, var(--theme--primary)); font-weight: 650; text-decoration: none; overflow-wrap: anywhere; font-family: var(--theme--fonts--monospace--font-family, monospace); }

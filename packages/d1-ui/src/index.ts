@@ -93,6 +93,9 @@ export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
+export { default as CampaignCard } from './campaign/CampaignCard.vue';
+export { campaignCardStats, loadCampaignStats } from './campaign/campaignCardStats';
+export type { CampaignStats } from './campaign/campaignCardStats';
 export { default as CampaignProgressBars } from './campaign/CampaignProgress.vue';
 export { useCampaignData } from './campaign/useCampaignData';
 export type { CampaignData } from './campaign/useCampaignData';
@@ -108,4 +111,12 @@ export { default as Finder } from './finder/Finder.vue';
 export { isFinderShortcut, isModalOpen } from './finder/finderNav';
 export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
 export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
+export { thumbKind, thumbFields, imageField, hasDrawableDims, fileId, assetThumbUrl } from './index/thumbs';
+export type { ThumbKind } from './index/thumbs';
+export { plotKind, plotRequests, mergePlots } from './index/plotData';
+export type { RowPlots } from './index/plotData';
 export { default as IndexPage } from './index/IndexPage.vue';
+
+// Admin Home rules (the crawler online test, the overview shape, the Needs attention rows)
+export { CRAWLER_ONLINE_MS, ago, attentionView, crawlerOnline, isAuthRefusal, normaliseOverview, overviewTime, ownerlessRows, ownerlessTotal } from './adminHome';
+export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints, MissingFiles, Ownerless, OwnerlessRow } from './adminHome';

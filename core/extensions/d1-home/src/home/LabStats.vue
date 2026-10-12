@@ -2,10 +2,11 @@
 import { onMounted, ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
-import { Section, collectionRoute } from '@d1/ui';
+import { collectionRoute } from '@d1/ui';
 import { go } from './goto';
 
-// The counts that Home always had, a quiet strip under "my work". Every count reads as the signed-in
+// The counts that Home always had, as one band across the top: six tiles in a row down to a container of 640px (about a 950px window with the sidebar), then three
+// and then two (never a lone tile on a second row). Every count reads as the signed-in
 // user, so since ADR-0011 it is what that user may see (see "What you see" in the Explorer pages
 // wiki page for every path), not the lab's total. Lab Admins still see everything.
 const api = useApi();
@@ -54,8 +55,7 @@ onMounted(() => {
 </script>
 
 <template>
-	<Section title="At a glance">
-		<template #actions><span class="sub">Counts of the records you can see</span></template>
+	<section class="band" aria-label="At a glance">
 		<div class="stats">
 			<button v-for="st in stats" :key="st.key" class="stat" @click="go(router, st.to)">
 				<span class="s-value">{{ st.value }}</span>
@@ -65,15 +65,25 @@ onMounted(() => {
 		<!-- The full rule, one click away: as a paragraph above the tiles it was the heaviest thing
 		     in the block. -->
 		<details class="rule">
-			<summary>Which records can I see?</summary>
+			<summary>Counts of the records you can see. Which are those?</summary>
 			<p>Yours, ones you co-own, those of projects where you are PI or investigator (including through the project's campaigns), campaigns you own or that hold a sample you own or co-own, projects where you own a campaign, sample, operation or test, and the operations and tests of samples you can see.</p>
 		</details>
-	</Section>
+	</section>
 </template>
 
 <style scoped>
-.sub { font-size: var(--fs-xs); color: var(--d1-dim); }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+/* A container query, not a viewport one: the Explorer's rail and panel take a variable share of the width. */
+.band {
+	container-type: inline-size;
+	padding: 10px 12px;
+	background: var(--d1-surface);
+	border: 1px solid var(--d1-line);
+	border-radius: var(--d1-radius);
+	box-shadow: var(--d1-shadow);
+}
+.stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+@container (max-width: 640px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (max-width: 340px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .stat {
 	display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; padding: 8px 12px; cursor: pointer;
 	font: inherit; color: var(--theme--foreground); text-align: left;
@@ -82,9 +92,9 @@ onMounted(() => {
 }
 .stat:hover { border-color: var(--d1-accent, var(--theme--primary)); }
 .s-value { font-size: var(--fs-2xl); font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
-.s-label { font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); white-space: nowrap; }
+.s-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-sm); font-weight: 600; color: var(--d1-dim); white-space: nowrap; }
 .s-icon { margin-right: 4px; vertical-align: -2px; --v-icon-color: var(--d1-dim); }
-.rule { margin-top: 10px; font-size: var(--fs-sm); color: var(--d1-dim); }
+.rule { margin-top: 8px; font-size: var(--fs-xs); color: var(--d1-dim); }
 .rule summary { cursor: pointer; font-weight: 600; width: fit-content; }
-.rule p { margin: 6px 0 0; max-width: 72ch; line-height: 1.5; }
+.rule p { margin: 6px 0 0; max-width: 72ch; line-height: 1.5; font-size: var(--fs-sm); }
 </style>

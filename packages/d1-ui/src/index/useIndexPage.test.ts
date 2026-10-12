@@ -238,7 +238,7 @@ describe('useIndexPage', () => {
 		await flush();
 		const fields = page.chips.value.map((c) => c.field);
 		// project and material are visible; status is an enum
-		expect(fields).toEqual(['project_id', 'current_status', 'material_id']);
+		expect(fields).toEqual(['project_id', 'current_status', 'material_id', 'no_owner']);
 		expect(page.chips.value.find((c) => c.field === 'current_status')!.options.map((o) => o.value)).toEqual(['active', 'archived']);
 		expect(page.chips.value.find((c) => c.field === 'project_id')!.options).toEqual([{ value: 'p1', label: 'STAR-01' }]);
 	});
@@ -366,5 +366,169 @@ describe('useIndexPage', () => {
 			expect(t.pushed).toHaveLength(after);
 			expect(t.route.query.q).toBeUndefined();
 		}
+	});
+});
+
+describe('useIndexPage plots (the Force / FAST buttons)', () => {
+	const operations = indexDefBySlug('operations')!;
+	// `rowsFor(page)`: the operation ids the list returns for a page (default: o1 and o2, whatever the page).
+	// A handler may return a promise, to answer a plot request late.
+	function opsSetup(handlers: Record<string, () => unknown>, rowsFor: (page: number) => string[] = () => ['o1', 'o2']) {
+		const calls: Call[] = [];
+		const api = {
+			get: vi.fn(async (path: string, config?: { params?: Record<string, any> }) => {
+				calls.push({ path, params: config?.params ?? {} });
+				if (path === '/collections') return { data: { data: ['manufacturing_operations', 'projects'].map((c) => ({ collection: c, meta: { hidden: false } })) } };
+				if (path === '/presets') return { data: { data: [] } };
+				if (path === '/items/manufacturing_operations') {
+					const ids = rowsFor(Number(config?.params?.page ?? 1));
+					return { data: { data: ids.map((operation_id) => ({ operation_id })), meta: { filter_count: 200 } } };
+				}
+				const h = handlers[path];
+				if (h) return { data: { data: await h() } };
+				throw { response: { status: 403 } };
+			}),
+		};
+		const host = { api, navigate: vi.fn(), openDataStudio: vi.fn(), isAdmin: ref(false), adminKnown: ref(true), user: ref(null) } as unknown as ExplorerHost;
+		const route = reactive<RouteLike>({ path: '/home/operations', query: {}, params: { slug: 'operations' } });
+		const router: RouterLike = { push: () => undefined, replace: () => undefined };
+		return { host, route, router, calls };
+	}
+
+	it('asks once per kind for the rows on screen and exposes what came back by row key', async () => {
+		const t = opsSetup({
+			'/items/machining_force_analysis': () => [{ operation_id: 'o1', frm_fz: 'f1' }],
+			'/items/fast_run_data': () => [{ operation_id: 'o2' }],
+		});
+		const page = useIndexPage(t.host, operations, t.route, t.router);
+		await flush();
+		await flush();
+		const force = t.calls.filter((c) => c.path === '/items/machining_force_analysis');
+		const fast = t.calls.filter((c) => c.path === '/items/fast_run_data');
+		expect(force).toHaveLength(1);
+		expect(fast).toHaveLength(1);
+		expect(JSON.parse(force[0].params.filter)._and[0]).toEqual({ operation_id: { _in: ['o1', 'o2'] } });
+		expect(page.plots.value).toEqual({
+			o1: { force: true, fast: false, frmFz: 'f1' },
+			o2: { force: false, fast: true, frmFz: null },
+		});
+	});
+
+	it('a failed plot request shows no buttons of that kind and never errors the list', async () => {
+		const t = opsSetup({ '/items/fast_run_data': () => [{ operation_id: 'o2' }] }); // force answers 403
+		const page = useIndexPage(t.host, operations, t.route, t.router);
+		await flush();
+		await flush();
+		expect(page.error.value).toBe('');
+		expect(page.forbidden.value).toBe(false);
+		expect(page.rows.value).toHaveLength(2);
+		expect(page.plots.value.o1).toEqual({ force: false, fast: false, frmFz: null });
+		expect(page.plots.value.o2.fast).toBe(true);
+	});
+
+	// A request the test answers by hand.
+	const deferred = <T,>() => {
+		let resolve!: (v: T) => void;
+		const promise = new Promise<T>((r) => { resolve = r; });
+		return { promise, resolve };
+	};
+
+	it('drops a slow plots answer that arrives after the user moved to another page', async () => {
+		const slow = deferred<unknown[]>();
+		let forceCalls = 0;
+		const t = opsSetup(
+			{
+				'/items/machining_force_analysis': () => (++forceCalls === 1 ? slow.promise : [{ operation_id: 'o3', frm_fz: 'new' }]),
+				'/items/fast_run_data': () => [],
+			},
+			(page) => (page === 1 ? ['o1', 'o2'] : ['o3']),
+		);
+		const page = useIndexPage(t.host, operations, t.route, t.router);
+		await flush();
+		t.route.query = { page: '2' };
+		await flush();
+		await flush();
+		expect(page.rows.value.map(page.rowKey)).toEqual(['o3']);
+		expect(page.plots.value).toEqual({ o3: { force: true, fast: false, frmFz: 'new' } });
+		// Page 1's answer comes in last and must not touch page 2's buttons.
+		slow.resolve([{ operation_id: 'o1', frm_fz: 'old' }]);
+		await flush();
+		await flush();
+		expect(Object.keys(page.plots.value)).toEqual(['o3']);
+		expect(page.plots.value.o3.frmFz).toBe('new');
+	});
+
+	it('clears the buttons on a reload and fills them again when the answers arrive', async () => {
+		const second = deferred<unknown[]>();
+		let forceCalls = 0;
+		const t = opsSetup({
+			'/items/machining_force_analysis': () => (++forceCalls === 1 ? [{ operation_id: 'o1', frm_fz: 'f1' }] : second.promise),
+			'/items/fast_run_data': () => [],
+		});
+		const page = useIndexPage(t.host, operations, t.route, t.router);
+		await flush();
+		await flush();
+		expect(page.plots.value.o1.force).toBe(true);
+		const reloaded = page.reload();
+		await flush();
+		await reloaded;
+		expect(page.plots.value).toEqual({}); // no stale buttons against the new rows
+		second.resolve([{ operation_id: 'o2', frm_fz: 'f2' }]);
+		await flush();
+		await flush();
+		expect(page.plots.value.o1.force).toBe(false);
+		expect(page.plots.value.o2).toEqual({ force: true, fast: false, frmFz: 'f2' });
+	});
+
+	it('a samples page asks once for the force rows of its samples and counts distinct operations', async () => {
+		const t = setup({});
+		const get = t.host.api.get as any;
+		const base = get.getMockImplementation() as (path: string, config?: any) => Promise<any>;
+		get.mockImplementation(async (path: string, config?: any) => {
+			if (path === '/items/machining_force_analysis') {
+				t.calls.push({ path, params: config?.params ?? {} });
+				return {
+					data: {
+						data: [
+							{ operation_id: { operation_id: 'o1', sample_id: 's1' } },
+							{ operation_id: { operation_id: 'o1', sample_id: 's1' } },
+							{ operation_id: { operation_id: 'o2', sample_id: 's1' } },
+						],
+					},
+				};
+			}
+			return base(path, config);
+		});
+		const page = useIndexPage(t.host, samples, t.route, t.router);
+		await flush();
+		await flush();
+		const asked = t.calls.filter((c) => c.path === '/items/machining_force_analysis');
+		expect(asked).toHaveLength(1);
+		expect(JSON.parse(asked[0].params.filter)._and[1]).toEqual({ operation_id: { sample_id: { _in: ['s1'] } } });
+		expect(page.plots.value.s1).toEqual({ force: true, fast: false, frmFz: null, forceCount: 2 });
+		expect(t.calls.filter((c) => c.path === '/items/fast_run_data')).toHaveLength(0);
+	});
+
+	// The flag chip's view model (it is a toggle, not a select): shown without waiting for any options
+	// request, and on once its URL value is set.
+	it('the "With force data" chip is a flag: no options request, on after setFilter', async () => {
+		const t = opsSetup({}, () => ['o1']);
+		const route = t.route;
+		const router: RouterLike = {
+			push: (to) => { route.query = to.query; },
+			replace: (to) => { route.query = to.query; },
+		};
+		const page = useIndexPage(t.host, operations, route, router);
+		await flush();
+		const hasForce = () => page.chips.value.find((c) => c.field === 'has_force');
+		expect(hasForce()).toEqual({ field: 'has_force', label: 'With force data', flag: true, options: [], value: '' });
+		expect(page.chips.value.at(-1)).toMatchObject({ field: 'no_owner', flag: true, options: [] });
+		page.setFilter('has_force', 'true');
+		await flush();
+		expect(hasForce()?.value).toBe('true');
+		const asked = (t.host.api.get as any).mock.calls.map((c: any[]) => c[0] as string);
+		// Options are loaded for the enum and relation chips only, never for a flag.
+		expect(asked.filter((p: string) => p === '/items/projects' || p === '/items/manufacturing_methods')).not.toHaveLength(0);
+		expect(asked.some((p: string) => p.includes('force_analyses') || p.includes('no_owner'))).toBe(false);
 	});
 });
