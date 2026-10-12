@@ -2684,6 +2684,10 @@ sf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SF")
 JR=db/migrations/20261012000161_lab_member_additional_operator_rules.sql
 jr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$JR")
 jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
+# 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
+# migration's down only empties the schema (and drops it) once 163's down has run too.
+UU=db/migrations/20261012000163_user_usage.sql
+uu_down=$(awk '/-- migrate:down/{f=1;next}f' "$UU")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -2723,6 +2727,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$uu_down
 $jr_down
 $sf_down
 $rv_down
@@ -3410,6 +3415,63 @@ run_eq "both file_fingerprints indexes have a comment" \
     "SELECT count(*) FROM pg_class c WHERE c.relname IN ('file_fingerprints_content_idx', 'file_fingerprints_data_idx') AND coalesce(obj_description(c.oid, 'pg_class'), '') <> ''" "2"
 run_eq "data_sha256's comment says how the hash is taken (uint64 shape, float64, per-column digests, DATA)" \
     "SELECT count(*) FROM pg_description WHERE objoid = 'public.file_fingerprints'::regclass AND objsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.file_fingerprints'::regclass AND attname = 'data_sha256') AND description ~* 'uint64' AND description ~* 'float64' AND description ~* 'each column' AND description ~ 'otherwise DATA'" "1"
+
+echo "== Per-user usage scores (migration 163) =="
+# Each check is its own rolled-back transaction (users prefix 9e000000-0000-4000-8000-). A rejected
+# statement aborts psql (ON_ERROR_STOP), so the error text is what is asserted on. The CI database
+# has the stub directus_users (id only matters), so the fixture users set just the id.
+UU_MIG=db/migrations/20261012000163_user_usage.sql
+[[ -f "$UU_MIG" ]] && ok "found migration 163" || bad "migration 163 is missing ($UU_MIG)"
+UU_A='9e000000-0000-4000-8000-000000000001'
+UU_B='9e000000-0000-4000-8000-000000000002'
+uu_sql() { # uu_sql <statements>: run them after two fixture users, in a transaction that is rolled back
+    $PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_users (id) VALUES ('$UU_A'), ('$UU_B');
+$1
+ROLLBACK;
+SQL
+}
+run_eq "user_usage and user_usage_cursor are in d1_private" \
+    "SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'd1_private' AND c.relname IN ('user_usage', 'user_usage_cursor')" \
+    "user_usage,user_usage_cursor"
+run_eq "neither table is in public (Directus would list it as a collection)" \
+    "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('user_usage', 'user_usage_cursor')" "0"
+run_eq "the (user_id, kind) index exists" \
+    "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND indexname = 'user_usage_user_kind_idx' AND indexdef LIKE '%(user_id, kind)%'" "1"
+run_eq "the tables are not in v_schema_dictionary (the Ask-DB prompt)" \
+    "SELECT count(*) FROM v_schema_dictionary WHERE object_name IN ('user_usage', 'user_usage_cursor')" "0"
+run_eq "d1_llm_readonly cannot read the usage tables" \
+    "SELECT has_table_privilege('d1_llm_readonly', 'd1_private.user_usage', 'SELECT') OR has_table_privilege('d1_llm_readonly', 'd1_private.user_usage_cursor', 'SELECT')" "f"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target, score) VALUES ('$UU_A', 'page', 'samples', 1.5);
+SELECT 'uu_row:' || score || ':' || pinned || ':' || coalesce(hidden_at::text, '<null>') FROM d1_private.user_usage WHERE user_id = '$UU_A';")
+grep -q 'uu_row:1.5:false:<null>' <<<"$uu_out" && ok "a usage row inserts with pinned false and not hidden by default" || bad "usage row insert failed (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'other', 'samples');")
+grep -q 'check constraint' <<<"$uu_out" && ok "a kind other than page / record is rejected" || bad "bad kind was not rejected (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples');
+INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples');")
+grep -q 'duplicate key' <<<"$uu_out" && ok "one row per user, kind and target (primary key)" || bad "duplicate usage row was not rejected (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples'), ('$UU_B', 'page', 'samples'), ('$UU_A', 'record', 'samples');
+SELECT 'uu_same_target:' || count(*) FROM d1_private.user_usage;")
+grep -q 'uu_same_target:3' <<<"$uu_out" && ok "two users (and two kinds) can hold the same target" || bad "same target for another user or kind failed (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('9e000000-0000-4000-8000-0000000000ff', 'page', 'samples');")
+grep -q 'foreign key' <<<"$uu_out" && ok "usage for a user that does not exist is rejected (foreign key)" || bad "usage without a user was not rejected (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples'), ('$UU_B', 'page', 'samples');
+INSERT INTO d1_private.user_usage_cursor (user_id, last_activity_id) VALUES ('$UU_A', 7), ('$UU_B', 9);
+DELETE FROM directus_users WHERE id = '$UU_A';
+SELECT 'uu_cascade:' || (SELECT count(*) FROM d1_private.user_usage) || ',' || (SELECT count(*) FROM d1_private.user_usage_cursor);")
+grep -q 'uu_cascade:1,1' <<<"$uu_out" && ok "deleting a user removes their usage rows and cursor, and only theirs" || bad "usage rows did not follow their user (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage_cursor (user_id, last_activity_id) VALUES ('$UU_A', 1), ('$UU_A', 2);")
+grep -q 'duplicate key' <<<"$uu_out" && ok "one cursor per user" || bad "second cursor for a user was not rejected (output: $uu_out)"
+run_eq "both tables and their columns and the index have comments (without: none)" \
+    "SELECT coalesce(string_agg(x, ', '), '') FROM (
+        SELECT c.relname AS x FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname IN ('user_usage', 'user_usage_cursor', 'user_usage_user_kind_idx')
+           AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname IN ('user_usage', 'user_usage_cursor') AND a.attnum > 0 AND NOT a.attisdropped
+           AND coalesce(col_description(a.attrelid, a.attnum), '') = '') q" ""
 
 echo "== Lab Member filters put _some only where Directus accepts it =="
 # Directus 11 (api apply-query/filter) handles `_some`/`_none` only directly under an O2M field at the
