@@ -104,7 +104,7 @@
         file_server
     }
     # The form-only edit page STARBase frames (core/extensions/d1-edit-frame, spec §3.4). Directus itself
-    # sends Cross-Origin-Opener-Policy: same-origin, which severs window.opener; the page's new-tab
+    # sends Cross-Origin-Opener-Policy: same-origin-allow-popups, which severs window.opener; the page's new-tab
     # fallback needs it to tell STARbase "saved". Relaxed for this one path only (header_down, so it
     # replaces the upstream value); every other Directus page keeps its own COOP.
     handle /admin/d1-edit/* {
@@ -121,7 +121,7 @@
 # cross-origin with the Directus session cookie; the CSP allows exactly that origin
 # (apps/starbase/web/src/csp.ts holds the same string, and its test compares them).
 :8090 {
-    header Content-Security-Policy "default-src 'self'; connect-src 'self' {$D1_SERVER_ORIGIN}; img-src 'self' data: blob: {$D1_SERVER_ORIGIN}; frame-src {$D1_SERVER_ORIGIN}; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    header Content-Security-Policy "default-src 'self'; connect-src 'self' {$D1_SERVER_ORIGIN}; img-src 'self' data: blob: {$D1_SERVER_ORIGIN}; frame-src {$D1_SERVER_ORIGIN}; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
     header X-Content-Type-Options nosniff
     header Referrer-Policy strict-origin-when-cross-origin
     # Where d1-server is: the app reads this at boot (apps/starbase/web/src/config.ts). One setting, here.

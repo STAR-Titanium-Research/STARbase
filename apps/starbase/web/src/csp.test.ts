@@ -20,9 +20,10 @@ describe("STARbase's CSP", () => {
 		expect(csp).toContain('frame-src https://d1-server.tail54eeb6.ts.net');
 		expect(csp).toContain("script-src 'self'");
 		expect(csp).toContain("frame-ancestors 'none'");
+		expect(csp).toContain("form-action 'self'");
 		expect(csp).not.toContain('*');
 	});
-	// Directus sends Cross-Origin-Opener-Policy: same-origin itself, which severs window.opener for the
+	// Directus sends Cross-Origin-Opener-Policy: same-origin-allow-popups itself, which severs window.opener for the
 	// edit page's new-tab fallback (the page posts "saved" back to STARbase). Caddy relaxes it for that
 	// one path on the d1-server site, and nowhere else.
 	it('relaxes COOP on /admin/d1-edit/* only, on the d1-server site', () => {

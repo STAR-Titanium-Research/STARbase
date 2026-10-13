@@ -17,5 +17,7 @@ export function starbaseCsp(d1: string): string {
 		"object-src 'none'",
 		"base-uri 'self'",
 		"frame-ancestors 'none'",
+		// The sign-in form posts through JS; a stray HTML form must not leave the origin (default-src does not cover this).
+		"form-action 'self'",
 	].join('; ');
 }
