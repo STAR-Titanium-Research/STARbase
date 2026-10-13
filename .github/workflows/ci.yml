@@ -321,6 +321,7 @@ jobs:
           npm run typecheck -w @d1/ui
           npm test -w @d1/fast-plotting
           npm run typecheck -w @d1/fast-plotting
+          npm run typecheck -w @d1/directus-host
       - name: Typecheck the Explorer pages, the lab dashboard and the campaign interface
         run: |
           npm run typecheck -w directus-extension-d1-home

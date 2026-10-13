@@ -10,6 +10,10 @@ import OperationPage from './pages/OperationPage.vue';
 import TestPage from './pages/TestPage.vue';
 import LabelsPage from './pages/LabelsPage.vue';
 import IndexRoute from './pages/IndexRoute.vue';
+import { installDirectusHost } from '@d1/directus-host';
+import { installUsagePings } from './usagePing';
+
+installDirectusHost({ onCreate: (host, router) => installUsagePings(router, host.api) });
 
 // A friendly landing page for lab users plus guided task screens, so day-to-day
 // work starts somewhere warm and simple instead of a raw collection form.

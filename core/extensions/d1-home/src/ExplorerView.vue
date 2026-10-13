@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, provide, ref } from 'vue';
-import { EXPLORER_HOST, ExplorerNav, Finder, isFinderShortcut, isModalOpen } from '@d1/ui';
-import { useExplorerHost } from './explorerHost';
+import { EXPLORER_HOST, ExplorerNav, Finder, isFinderShortcut, isModalOpen, useExplorerHost } from '@d1/ui';
 import ScanDialog from './scan/ScanDialog.vue';
 import { openScan, scanOpen } from './scan/scanState';
 

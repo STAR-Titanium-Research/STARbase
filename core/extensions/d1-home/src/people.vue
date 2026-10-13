@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import ExplorerView from './ExplorerView.vue';
-import { useExplorerHost } from './explorerHost';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
 import { useRoute, useRouter } from 'vue-router';
-import { PageShell } from '@d1/ui';
+import { PageShell, useExplorerHost } from '@d1/ui';
 
 const api = useApi();
 const router = useRouter();

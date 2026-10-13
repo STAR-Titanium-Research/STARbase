@@ -24,7 +24,7 @@ export const JOBS = {
     'core/extensions/d1-force-dashboard/', ...WORKSPACE_ROOT,
   ],
   directusUi: [
-    'packages/d1-ui/', 'packages/fast-plotting/', 'core/extensions/d1-home/', 'core/extensions/d1-lab-dashboard/',
+    'packages/d1-ui/', 'packages/fast-plotting/', 'packages/directus-host/', 'core/extensions/d1-home/', 'core/extensions/d1-lab-dashboard/',
     'core/extensions/d1-composition-bar/', 'core/extensions/d1-campaign-ops/',
     'core/extensions/d1-project-items/', 'core/extensions/d1-fast-dashboard/', ...WORKSPACE_ROOT,
   ],

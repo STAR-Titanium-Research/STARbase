@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import ExplorerView from './ExplorerView.vue';
-import { useExplorerHost } from './explorerHost';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
-import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, PageShell, createdRecord, recordRoute } from '@d1/ui';
+import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, PageShell, createdRecord, recordRoute, useExplorerHost } from '@d1/ui';
 import { buildGeometry, dimsText, FORMS, FORM_FIELDS, PRESETS, fieldLabel } from './geometry';
 
 const api = useApi();

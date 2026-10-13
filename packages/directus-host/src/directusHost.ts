@@ -1,12 +1,11 @@
 import { ref } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
-import { useRouter } from 'vue-router';
-import { guessAdmin, type ExplorerHost } from '@d1/ui';
-import { installUsagePings } from './usagePing';
+import { useRouter, type Router } from 'vue-router';
+import { guessAdmin, type ExplorerHost, type HostApi, type HostField } from '@d1/ui';
 
-// The Directus side of the Explorer's host contract (packages/d1-ui/src/host.ts). This and
-// ExplorerView.vue are the only places the Explorer knows it runs inside Directus; a standalone
-// app provides its own ExplorerHost and reuses the components unchanged.
+// The Directus side of the Explorer's host contract (packages/d1-ui/src/host.ts). A standalone
+// app provides its own ExplorerHost (setExplorerHostFactory) and reuses the components unchanged.
+// Every Directus extension that renders kit components installs this once (installDirectusHost).
 //
 // One host per signed-in user, created on first use and then shared: every page asks for it
 // (ExplorerView provides it to the sidebar; Home and People read isAdmin from it), and moving
@@ -15,10 +14,13 @@ import { installUsagePings } from './usagePing';
 // user's admin flag and sidebar.
 let current: { userId: string | null; host: ExplorerHost } | null = null;
 
-export function useExplorerHost(): ExplorerHost {
-	const api = useApi();
+export function useDirectusHost(opts: { onCreate?: (host: ExplorerHost, router: Router) => void } = {}): ExplorerHost {
+	// Everything built from Directus's injection-based composables is captured here, during setup:
+	// fieldsFor below runs later, outside any component, where useStores() would find nothing.
+	const api = useApi() as unknown as HostApi;
 	const router = useRouter();
-	const userStore = useStores().useUserStore() as any;
+	const stores = useStores();
+	const userStore = stores.useUserStore() as any;
 	const userId: string | null = userStore.currentUser?.id ?? null;
 	if (current && current.userId === userId) return current.host;
 
@@ -26,7 +28,10 @@ export function useExplorerHost(): ExplorerHost {
 	// almost everyone), then corrected by the server below. adminKnown says when the correction is in.
 	const isAdmin = ref(guessAdmin(userStore));
 	const adminKnown = ref(false);
-	const user = ref<{ id: string; first_name?: string; role?: string | null } | null>(null);
+	const seed = userStore.currentUser;
+	const user = ref<{ id: string; first_name?: string; role?: string | null } | null>(
+		seed ? { id: seed.id, first_name: seed.first_name, role: typeof seed.role === 'object' ? seed.role?.id ?? null : seed.role ?? null } : null,
+	);
 
 	// REST, not the store heuristic the pages used to guess with: GET /policies/me/globals is the
 	// server's own answer. A failure keeps the guess (a wrongly guessed admin only sees admin-only
@@ -49,17 +54,24 @@ export function useExplorerHost(): ExplorerHost {
 			user.value = null;
 		});
 
-	// The visit pings of the Frequently used panel: one router hook per signed-in user (see usagePing.ts).
-	installUsagePings(router, api);
-
 	const host: ExplorerHost = {
 		api,
 		navigate: (to) => void router.push(to),
 		openDataStudio: (path) => void router.push(path),
+		fieldsFor: async (collection) => {
+			if (typeof (stores as any).useFieldsStore === 'function') {
+				const defs = (stores as any).useFieldsStore().getFieldsForCollectionSorted(collection);
+				if (Array.isArray(defs) && defs.length) return defs as HostField[];
+			}
+			const { data } = await api.get(`/fields/${collection}`);
+			return data.data as HostField[];
+		},
 		isAdmin,
 		adminKnown,
 		user,
 	};
+	// The app's own hook (d1-home installs its usage pings here): once per signed-in user.
+	opts.onCreate?.(host, router);
 	current = { userId, host };
 	return host;
 }

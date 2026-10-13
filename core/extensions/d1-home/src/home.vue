@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import ExplorerView from './ExplorerView.vue';
-import { useExplorerHost } from './explorerHost';
 import { computed } from 'vue';
 import { useStores } from '@directus/extensions-sdk';
-import { PageShell } from '@d1/ui';
+import { PageShell, useExplorerHost } from '@d1/ui';
 import QuickActions from './home/QuickActions.vue';
 import NeedsAttention from './home/NeedsAttention.vue';
 import MyWork from './home/MyWork.vue';

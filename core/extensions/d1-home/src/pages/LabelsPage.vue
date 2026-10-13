@@ -3,10 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
 	LoadState, PageShell, Section, blankTemplate, canEditTemplate, MAX_COPIES, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
-	sampleEntries, slotsPerPage, summaryText, useRequestGate, buildLbxDownload, isLbxTemplate, type LabelSample, type LabelTemplate,
+	sampleEntries, slotsPerPage, summaryText, useRequestGate, buildLbxDownload, isLbxTemplate, useExplorerHost, type LabelSample, type LabelTemplate,
 } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
-import { useExplorerHost } from '../explorerHost';
 import SamplePicker from '../labels/SamplePicker.vue';
 import ContactSetting from '../labels/ContactSetting.vue';
 import LabelPreview from '../labels/LabelPreview.vue';

@@ -101,9 +101,9 @@ export { useCampaignData } from './campaign/useCampaignData';
 export type { CampaignData } from './campaign/useCampaignData';
 
 // Explorer navigation: host contract, sidebar tree, index-page configs
-export { EXPLORER_HOST } from './host';
+export { EXPLORER_HOST, setExplorerHostFactory, useExplorerHost } from './host';
 export { guessAdmin } from './hostAdmin';
-export type { ExplorerHost } from './host';
+export type { ExplorerHost, HostApi, HostField, HostRequestConfig, HostResponse } from './host';
 export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser, pickBookmarkId, linkForBookmark } from './nav/navConfig';
 export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
