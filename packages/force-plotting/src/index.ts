@@ -36,6 +36,9 @@ export { default as ColorBar } from './ColorBar.vue';
 export { default as ColorScaleEditor } from './ColorScaleEditor.vue';
 export { default as PlotModeFlyout } from './PlotModeFlyout.vue';
 export { default as ContextMenu } from './ContextMenu.vue';
+export { default as ThinkingOrb } from './ThinkingOrb.vue';
+export { orbFrame, orbPreset, ORB_PRESETS } from './thinkingOrb';
+export type { OrbDot, OrbOpts, OrbPreset } from './thinkingOrb';
 export {
 	pickNearest, pointInfo, formatPointInfo, recentreWindow, findNearestPathIndex,
 	octreePathParams,

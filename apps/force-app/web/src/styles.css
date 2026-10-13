@@ -325,8 +325,9 @@ button {
 }
 
 /* ---- Motion ----
-   One spinner for every loading icon: there were eleven private @keyframes copies turning at five
-   different speeds (0.7-1.1 s). Components just add class="spin" (or use these keyframes). */
+   Loading is shown with <ThinkingOrb> (@d1/force-plotting), the Fx/Fy/Fz dotted orb. `spin` is left
+   for icons that turn in place while their own action runs (a Refresh button's arrow): there were
+   eleven private @keyframes copies turning at five different speeds (0.7-1.1 s). */
 @keyframes spin {
 	to { transform: rotate(360deg); }
 }
@@ -364,7 +365,8 @@ textarea {
 }
 /* Reduced motion (an OS setting): no pulsing, blinking, sliding or fading. Nothing here depends on
    an animation to be understood — the alarm banner stays solid red and keeps its tone. Spinners
-   are the exception: they are state, and a frozen one reads as a hang, so they keep turning slowly. */
+   are the exception: they are state, and a frozen one reads as a hang, so they keep turning slowly
+   (the canvas loading orb slows itself the same way). */
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,
@@ -374,9 +376,7 @@ textarea {
 		transition-duration: 0.01ms !important;
 		scroll-behavior: auto !important;
 	}
-	.spin,
-	.spinner,
-	.v-progress-circular-shim {
+	.spin {
 		animation-duration: 2s !important;
 		animation-iteration-count: infinite !important;
 	}

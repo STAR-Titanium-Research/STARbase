@@ -7,6 +7,7 @@
 // backdrop either: the run keeps going and the operator should know where it is.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useDialog } from '../ui/useDialog';
+import { ThinkingOrb } from '@d1/force-plotting';
 import { confirmAndCancelRun } from './confirmCancel';
 import { rigTest } from './rigTestStore';
 import {
@@ -103,7 +104,7 @@ useDialog(panel, dismiss);
 				<p v-if="s.answerError" class="rm-err" role="alert"><span class="material-symbols-rounded">error</span>{{ s.answerError }}</p>
 			</section>
 			<p v-else-if="!finished && currentText" class="rm-working">
-				<span class="material-symbols-rounded spin">progress_activity</span>{{ minimisedText(run) }}
+				<ThinkingOrb :size="18" label="" />{{ minimisedText(run) }}
 			</p>
 
 			<ol class="rm-steps" aria-label="Steps">

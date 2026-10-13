@@ -7,6 +7,7 @@ import { useWorkspace } from '../workspace';
 import { formatDuration as fmt } from '../../format';
 import { channelColor } from '../types';
 import { theme } from '../../theme';
+import { ThinkingOrb } from '@d1/force-plotting';
 import { markerFraction, type TimelineMarker } from '../playback/markers';
 
 const w = useWorkspace();
@@ -71,9 +72,8 @@ function seekTo(m: TimelineMarker) { w.playback.seek(m.seekT ?? m.t, { commit: t
 			 to its own line instead. -->
 		<div class="row transport-main">
 			<button class="btn icon success play" :disabled="!p.loaded || w.replay.downloading" :title="p.playing ? 'Pause' : 'Play'" @click="w.playback.toggle()">
-				<span class="material-symbols-rounded" :class="{ spin: w.replay.downloading }">
-					{{ w.replay.downloading ? 'progress_activity' : p.playing ? 'pause' : 'play_arrow' }}
-				</span>
+				<ThinkingOrb v-if="w.replay.downloading" :size="18" label="Loading cut" />
+				<span v-else class="material-symbols-rounded">{{ p.playing ? 'pause' : 'play_arrow' }}</span>
 			</button>
 			<div class="scrub-wrap">
 				<input class="scrub" type="range" :min="p.t0" :max="tEnd" step="0.01"
@@ -97,7 +97,7 @@ function seekTo(m: TimelineMarker) { w.playback.seek(m.seekT ?? m.t, { commit: t
 			</span>
 		</div>
 		<p v-if="w.replay.downloading" class="hint loading">
-			<span class="material-symbols-rounded spin">progress_activity</span> Loading cut…
+			<ThinkingOrb :size="14" label="" /> Loading cut…
 		</p>
 		<p v-else-if="p.error" class="err">{{ p.error }}</p>
 		<p v-else-if="!p.loaded" class="hint">Pick a cut above to load it.</p>

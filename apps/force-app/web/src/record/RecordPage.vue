@@ -13,7 +13,7 @@ import { checkNidaqPresence } from './nidaqHardware';
 import { DEFAULT_LAYOUT, dockPanel, GRID_COLS, oppositeSide, parseDismissedIds, parseSavedLayout, type RecordPanelInst as Inst } from './recordLayout';
 import PanelFrame from './panels/PanelFrame.vue';
 import { PLOT_MODES, type PlotMode } from './plotModes';
-import { PlotModeFlyout } from '@d1/force-plotting';
+import { PlotModeFlyout, ThinkingOrb } from '@d1/force-plotting';
 import RecordingOptions from './panels/RecordingOptions.vue';
 import RecordingActions from './panels/RecordingActions.vue';
 import ForcePanel from './panels/ForcePanel.vue';
@@ -558,10 +558,10 @@ onBeforeUnmount(() => {
 						<span v-if="s.manifest?.config?.sample_name" class="rb-detail" :title="s.manifest.config.sample_name">{{ s.manifest.config.sample_name }}</span>
 					</div>
 					<button class="btn sm success" :disabled="!!recoveryBusy[s.id]" @click="recoverSession(s.id)">
-						<span class="material-symbols-rounded" :class="{ spin: recoveryBusy[s.id] }">{{ recoveryBusy[s.id] ? 'progress_activity' : 'healing' }}</span>{{ recoveryBusy[s.id] ? `Recovering… ${recoveryElapsed(s.id).toFixed(0)}s` : 'Recover' }}
+						<ThinkingOrb v-if="recoveryBusy[s.id]" :size="16" label="" /><span v-else class="material-symbols-rounded">healing</span>{{ recoveryBusy[s.id] ? `Recovering… ${recoveryElapsed(s.id).toFixed(0)}s` : 'Recover' }}
 					</button>
 					<button class="btn sm danger quiet" :disabled="!!recoveryBusy[s.id]" @click="discardSession(s.id)">
-						<span class="material-symbols-rounded" :class="{ spin: recoveryBusy[s.id] }">{{ recoveryBusy[s.id] ? 'progress_activity' : 'delete' }}</span>{{ recoveryBusy[s.id] ? `Discarding… ${recoveryElapsed(s.id).toFixed(0)}s` : 'Discard' }}
+						<ThinkingOrb v-if="recoveryBusy[s.id]" :size="16" label="" /><span v-else class="material-symbols-rounded">delete</span>{{ recoveryBusy[s.id] ? `Discarding… ${recoveryElapsed(s.id).toFixed(0)}s` : 'Discard' }}
 					</button>
 					<!-- #27: neither recovers nor discards -- just stops nagging about this one. The
 						 capture stays on disk exactly as-is (still visible to the health-doctor's

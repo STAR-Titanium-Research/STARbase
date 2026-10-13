@@ -13,7 +13,7 @@ import LiveFft from './LiveFft.vue';
 import LiveSpectrogram from './LiveSpectrogram.vue';
 import LiveWaterfall from './LiveWaterfall.vue';
 import LiveFrm from './LiveFrm.vue';
-import { COLORMAPS, colormapLabel, PlotModeFlyout, useAutoColorScale, type ColorScale } from '@d1/force-plotting';
+import { COLORMAPS, colormapLabel, PlotModeFlyout, ThinkingOrb, useAutoColorScale, type ColorScale } from '@d1/force-plotting';
 import { PLOT_MODES } from './plotModes';
 import { showWindowControl } from './panels/forcePlotView';
 import { buildPopoutQuery, CHANNEL_ORDER as ORDER, parsePopoutQuery, SUMMED_CHANNELS as SUMMED, type FrmAxis, type PolarAngle, type PolarRadius } from './popoutQuery';
@@ -186,7 +186,7 @@ onBeforeUnmount(() => {
 		</header>
 		<div class="body" @click="subsOpen = false">
 			<div v-if="!ready" class="syncing">
-				<span class="material-symbols-rounded spin">sync</span>
+				<ThinkingOrb :size="20" label="" />
 				<span>Syncing with parent…</span>
 			</div>
 			<template v-else>
