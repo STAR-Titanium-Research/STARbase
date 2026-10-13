@@ -10,7 +10,7 @@ import { test } from 'node:test';
 
 import endpoint from './index.js';
 import { readFileSync } from 'node:fs';
-import { adminRecordUrl, EXPLORER_PAGES } from './render.js';
+import { recordLink, EXPLORER_PAGES } from './render.js';
 
 const SID = '11111111-1111-4111-8111-111111111111';
 const OP_A = '22222222-2222-4222-8222-222222222222';
@@ -287,24 +287,6 @@ test('test session: forbidden, missing and malformed ids are indistinguishable',
 
 // ---- QR / in-report link target -------------------------------------------------------
 
-test('adminRecordUrl: records with an Explorer page open there', () => {
-	assert.equal(adminRecordUrl('https://lims.example.org', 'physical_samples', SID), `https://lims.example.org/admin/home/samples/${SID}`);
-	assert.equal(adminRecordUrl('https://lims.example.org', 'manufacturing_operations', OP_A), `https://lims.example.org/admin/home/operations/${OP_A}`);
-	assert.equal(adminRecordUrl('https://lims.example.org', 'test_sessions', TEST_ID), `https://lims.example.org/admin/home/tests/${TEST_ID}`);
-	assert.equal(adminRecordUrl('https://lims.example.org', 'campaigns', 'c1'), 'https://lims.example.org/admin/home/campaigns/c1');
-	assert.equal(adminRecordUrl('https://lims.example.org', 'projects', 'p1'), 'https://lims.example.org/admin/home/projects/p1');
-});
-
-test('adminRecordUrl: anything else goes to the Data Studio form', () => {
-	assert.equal(adminRecordUrl('https://lims.example.org', 'equipment', 'e1'), 'https://lims.example.org/admin/content/equipment/e1');
-});
-
-test('adminRecordUrl: trims trailing slashes and encodes the id', () => {
-	assert.equal(adminRecordUrl('https://lims.example.org///', 'physical_samples', 'a/b c'), 'https://lims.example.org/admin/home/samples/a%2Fb%20c');
-	assert.equal(adminRecordUrl('', 'physical_samples', 'x'), '/admin/home/samples/x');
-	assert.equal(adminRecordUrl(undefined, 'physical_samples', 'x'), '/admin/home/samples/x');
-});
-
 test('EXPLORER_PAGES matches RECORD_PAGES in the kit (packages/d1-ui/src/recordRoute.ts)', () => {
 	// d1-report cannot import the kit, so its copy of the table is checked against the source.
 	const src = readFileSync(new URL('../../../../packages/d1-ui/src/recordRoute.ts', import.meta.url), 'utf8');
@@ -314,17 +296,6 @@ test('EXPLORER_PAGES matches RECORD_PAGES in the kit (packages/d1-ui/src/recordR
 	for (const m of body[1].matchAll(/(\w+)\s*:\s*'\/home\/([^']+)'/g)) kit[m[1]] = m[2];
 	assert.ok(Object.keys(kit).length >= 5, 'parsed too few RECORD_PAGES entries');
 	assert.deepEqual(EXPLORER_PAGES, kit);
-});
-
-test('reports link back to the Explorer page of the record, not the Data Studio form', async () => {
-	const h = harness({ physical_samples: true, manufacturing_operations: true, test_sessions: true, people: true, sample_genealogy: true });
-	const sample = await get(h.routes, '/sample/:id', SID, user);
-	assert.ok(sample.out.body.includes(`/admin/home/samples/${SID}`), 'sample report');
-	assert.ok(!sample.out.body.includes('/admin/content/physical_samples/'), 'no Data Studio sample link left');
-	const op = await get(h.routes, '/operation/:id', OP_A, user);
-	assert.ok(op.out.body.includes(`/admin/home/operations/${OP_A}`), 'operation report QR target');
-	const t = await get(h.routes, '/test/:id', TEST_ID, user);
-	assert.ok(t.out.body.includes(`/admin/home/tests/${TEST_ID}`), 'test report QR target');
 });
 
 // ---- Label redirects to Explorer page ---------------------------------------------------
@@ -346,43 +317,6 @@ async function getRedirect(routes, route, query) {
 	return out;
 }
 
-test('GET /label redirects to /admin/home/labels with ids query parameter', async () => {
-	const { routes } = harness({});
-	const out = await getRedirect(routes, '/label', { ids: SID });
-	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, `https://lims.example.org/admin/home/labels?ids=${SID}`);
-});
-
-test('GET /label redirects to /admin/home/labels with codes query parameter', async () => {
-	const { routes } = harness({});
-	const out = await getRedirect(routes, '/label', { codes: 'S-001' });
-	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, `https://lims.example.org/admin/home/labels?codes=S-001`);
-});
-
-test('GET /label redirects to /admin/home/labels with both ids and codes', async () => {
-	const { routes } = harness({});
-	const out = await getRedirect(routes, '/label', { ids: SID, codes: 'S-001' });
-	assert.equal(out.status, 302);
-	assert.ok(out.redirectTo.startsWith('https://lims.example.org/admin/home/labels?'));
-	assert.ok(out.redirectTo.includes(`ids=${SID}`));
-	assert.ok(out.redirectTo.includes('codes=S-001'));
-});
-
-test('GET /label redirects to /admin/home/labels without query parameters', async () => {
-	const { routes } = harness({});
-	const out = await getRedirect(routes, '/label', {});
-	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, 'https://lims.example.org/admin/home/labels');
-});
-
-test('GET /labels redirects to /admin/home/labels', async () => {
-	const { routes } = harness({});
-	const out = await getRedirect(routes, '/labels', {});
-	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, 'https://lims.example.org/admin/home/labels');
-});
-
 test('GET /label encodes query parameters', async () => {
 	const { routes } = harness({});
 	const out = await getRedirect(routes, '/label', { codes: 'S 001&x=1' });
@@ -395,80 +329,53 @@ test('GET /label includes PUBLIC_URL as base when set', async () => {
 	const { routes } = harness({}, { PUBLIC_URL: 'https://d1.example.org/lab' });
 	const out = await getRedirect(routes, '/label', { ids: SID });
 	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, `https://d1.example.org/lab/admin/home/labels?ids=${SID}`);
+	assert.equal(out.redirectTo, `https://d1.example.org/lab/d1-links/go/p/labels?ids=${SID}`);
 });
 
 test('GET /label uses root-relative path when PUBLIC_URL is empty', async () => {
 	const { routes } = harness({}, { PUBLIC_URL: '' });
 	const out = await getRedirect(routes, '/label', { codes: 'S-001' });
 	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, '/admin/home/labels?codes=S-001');
+	assert.equal(out.redirectTo, '/d1-links/go/p/labels?codes=S-001');
 });
 
 test('GET /labels includes PUBLIC_URL as base when set', async () => {
 	const { routes } = harness({}, { PUBLIC_URL: 'https://d1.example.org/lab/' });
 	const out = await getRedirect(routes, '/labels', {});
 	assert.equal(out.status, 302);
-	assert.equal(out.redirectTo, 'https://d1.example.org/lab/admin/home/labels');
+	assert.equal(out.redirectTo, 'https://d1.example.org/lab/d1-links/go/p/labels');
 });
 
-// ---- STARBASE_URL: report links and label redirects go to STARbase (spec §3.6, Q16) ----------
+const LIMS = 'https://lims.example.org';
 
-const STAR_ENV = { PUBLIC_URL: 'https://lims.example.org', STARBASE_URL: 'https://starbase.example.org/' };
-
-test('adminRecordUrl: with a STARbase address, Explorer pages open in STARbase; other records stay on Data Studio', () => {
-	assert.equal(adminRecordUrl('https://lims.example.org', 'physical_samples', 'a/b', 'https://starbase.example.org/'), 'https://starbase.example.org/samples/a%2Fb');
-	assert.equal(adminRecordUrl('https://lims.example.org', 'projects', 'p1', 'https://starbase.example.org'), 'https://starbase.example.org/projects/p1');
-	assert.equal(adminRecordUrl('https://lims.example.org', 'equipment', 'e1', 'https://starbase.example.org'), 'https://lims.example.org/admin/content/equipment/e1');
-	assert.equal(adminRecordUrl('https://lims.example.org', 'projects', 'p1', ''), 'https://lims.example.org/admin/home/projects/p1');
+test('recordLink: the permanent link on the Directus host, whatever the collection', () => {
+	assert.equal(recordLink(LIMS, 'physical_samples', SID), `${LIMS}/d1-links/go/r/physical_samples/${SID}`);
+	assert.equal(recordLink(`${LIMS}///`, 'equipment', 'a/b c'), `${LIMS}/d1-links/go/r/equipment/a%2Fb%20c`);
+	assert.equal(recordLink('', 'projects', 'p1'), '/d1-links/go/r/projects/p1');
+	assert.equal(recordLink(undefined, 'projects', 'p1'), '/d1-links/go/r/projects/p1');
 });
 
-test('with STARBASE_URL set, every report links to STARbase and no Directus Home link is left', async () => {
-	const h = harness({ physical_samples: true, manufacturing_operations: true, test_sessions: true, people: true, sample_genealogy: true }, STAR_ENV);
-	const sample = await get(h.routes, '/sample/:id', SID, user);
-	assert.ok(sample.out.body.includes(`https://starbase.example.org/samples/${SID}`), 'sample report');
-	const op = await get(h.routes, '/operation/:id', OP_A, user);
-	assert.ok(op.out.body.includes(`https://starbase.example.org/operations/${OP_A}`), 'operation report');
-	assert.ok(op.out.body.includes(`https://starbase.example.org/samples/${SID}`), "operation report's sample link");
-	const t = await get(h.routes, '/test/:id', TEST_ID, user);
-	assert.ok(t.out.body.includes(`https://starbase.example.org/tests/${TEST_ID}`), 'test report');
-	for (const body of [sample.out.body, op.out.body, t.out.body]) assert.ok(!body.includes('/admin/home/'), 'a Directus Home link is left');
-});
-
-test('GET /label and /labels go to STARbase when STARBASE_URL is set', async () => {
-	const { routes } = harness({}, STAR_ENV);
-	assert.equal((await getRedirect(routes, '/label', { ids: SID, codes: 'S 1' })).redirectTo, `https://starbase.example.org/labels?ids=${SID}&codes=S+1`);
-	assert.equal((await getRedirect(routes, '/labels', {})).redirectTo, 'https://starbase.example.org/labels');
-});
-
-// Controller ruling: only an absolute http(s) address counts; anything else is "unset" and keeps today's Directus URLs.
-test('a STARBASE_URL that is not an absolute http(s) address counts as unset', async () => {
-	for (const bad of ['javascript:alert(1)', 'ftp://x.example', 'starbase.example.org', '/labels', '   ']) {
-		const env = { PUBLIC_URL: 'https://lims.example.org', STARBASE_URL: bad };
-		const { routes } = harness({}, env);
-		assert.equal((await getRedirect(routes, '/labels', {})).redirectTo, 'https://lims.example.org/admin/home/labels', bad);
-		assert.equal((await getRedirect(routes, '/label', { ids: SID })).redirectTo, `https://lims.example.org/admin/home/labels?ids=${SID}`, bad);
-		const h = harness({ physical_samples: true, people: true, sample_genealogy: true, manufacturing_operations: true, test_sessions: true }, env);
-		const s = await get(h.routes, '/sample/:id', SID, user);
-		assert.ok(s.out.body.includes(`https://lims.example.org/admin/home/samples/${SID}`), bad);
-		assert.ok(!s.out.body.includes('javascript:'), bad);
-	}
-	// http (not just https) is accepted, and surrounding whitespace is trimmed
-	const { routes } = harness({}, { PUBLIC_URL: 'https://lims.example.org', STARBASE_URL: ' http://127.0.0.1:5190/ ' });
-	assert.equal((await getRedirect(routes, '/labels', {})).redirectTo, 'http://127.0.0.1:5190/labels');
-});
-
-test('with STARBASE_URL unset, report links and label redirects are exactly the old Directus Home addresses', async () => {
-	const env = { PUBLIC_URL: 'https://lims.example.org' };
+test('every report links through permanent links, with no Directus Home or STARbase address in it', async () => {
+	const env = { PUBLIC_URL: LIMS, STARBASE_URL: 'https://starbase.example.org' };
 	const h = harness({ physical_samples: true, manufacturing_operations: true, test_sessions: true, people: true, sample_genealogy: true }, env);
 	const sample = await get(h.routes, '/sample/:id', SID, user);
-	assert.ok(sample.out.body.includes(`https://lims.example.org/admin/home/samples/${SID}`));
+	assert.ok(sample.out.body.includes(`${LIMS}/d1-links/go/r/physical_samples/${SID}`), 'sample report');
 	const op = await get(h.routes, '/operation/:id', OP_A, user);
-	assert.ok(op.out.body.includes(`https://lims.example.org/admin/home/operations/${OP_A}`));
-	assert.ok(op.out.body.includes(`https://lims.example.org/admin/home/samples/${SID}`));
+	assert.ok(op.out.body.includes(`${LIMS}/d1-links/go/r/manufacturing_operations/${OP_A}`), 'operation report');
+	assert.ok(op.out.body.includes(`${LIMS}/d1-links/go/r/physical_samples/${SID}`), "operation report's sample link");
 	const t = await get(h.routes, '/test/:id', TEST_ID, user);
-	assert.ok(t.out.body.includes(`https://lims.example.org/admin/home/tests/${TEST_ID}`));
-	assert.equal((await getRedirect(h.routes, '/label', { ids: SID, codes: 'S 1' })).redirectTo, `https://lims.example.org/admin/home/labels?ids=${SID}&codes=S+1`);
-	assert.equal((await getRedirect(h.routes, '/labels', {})).redirectTo, 'https://lims.example.org/admin/home/labels');
-	assert.equal(adminRecordUrl('https://lims.example.org', 'physical_samples', SID), `https://lims.example.org/admin/home/samples/${SID}`);
+	assert.ok(t.out.body.includes(`${LIMS}/d1-links/go/r/test_sessions/${TEST_ID}`), 'test report');
+	for (const body of [sample.out.body, op.out.body, t.out.body]) {
+		assert.ok(!body.includes('/admin/home/'), 'a Directus Home link is left');
+		assert.ok(!body.includes('starbase.example.org'), 'the front end is printed');
+	}
+});
+
+test('GET /label and /labels go to the labels page through the permanent link, query kept', async () => {
+	const { routes } = harness({}, { PUBLIC_URL: `${LIMS}/` });
+	assert.equal((await getRedirect(routes, '/label', { ids: SID, codes: 'S 1' })).redirectTo, `${LIMS}/d1-links/go/p/labels?ids=${SID}&codes=S+1`);
+	assert.equal((await getRedirect(routes, '/label', {})).redirectTo, `${LIMS}/d1-links/go/p/labels`);
+	assert.equal((await getRedirect(routes, '/labels', {})).redirectTo, `${LIMS}/d1-links/go/p/labels`);
+	const { routes: bare } = harness({}, {});
+	assert.equal((await getRedirect(bare, '/label', { codes: 'S-001' })).redirectTo, '/d1-links/go/p/labels?codes=S-001');
 });

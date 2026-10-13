@@ -19,18 +19,14 @@ export const EXPLORER_PAGES = {
 	projects: 'projects',
 };
 
-// Where report QR codes and in-report links open (sign-in required). A record with an Explorer page
-// opens there: in STARbase when `starbaseUrl` (STARBASE_URL) is set (spec §3.6, Q16), else in the
-// Directus Home module (/admin/home/samples/<id>). Any other record goes to its Data Studio form.
-// Both bases may carry trailing slashes. (Labels are printed from the labels page and encode a
+// Where report QR codes and in-report links point: the permanent link on the Directus host
+// (/d1-links/go/r/…, core/extensions/d1-links), which forwards to the record's STARbase page, or to its
+// Data Studio form when STARbase has none. The printed address names d1-server, never the front end
+// (spec 2026-10-13-directus-headless §5.1). (Labels are printed from the labels page and encode a
 // self-describing QR payload, not a link.)
-export function adminRecordUrl(publicUrl, collection, id, starbaseUrl = '') {
+export function recordLink(publicUrl, collection, id) {
 	const base = String(publicUrl || '').replace(/\/+$/, '');
-	const star = String(starbaseUrl || '').replace(/\/+$/, '');
-	const key = encodeURIComponent(String(id));
-	const page = EXPLORER_PAGES[collection];
-	if (page && star) return `${star}/${page}/${key}`;
-	return page ? `${base}/admin/home/${page}/${key}` : `${base}/admin/content/${collection}/${key}`;
+	return `${base}/d1-links/go/r/${collection}/${encodeURIComponent(String(id))}`;
 }
 
 export const esc = (v) =>
@@ -840,9 +836,9 @@ function fastAppendix(fastRun) {
 }
 
 export function renderOperationReport(d) {
-	const { op: o, qrSvg, recordUrl, publicUrl, starbaseUrl, fa, fastRun } = d;
+	const { op: o, qrSvg, recordUrl, publicUrl, fa, fastRun } = d;
 	const shortId = String(o.operation_id).split('-')[0];
-	const sampleUrl = adminRecordUrl(publicUrl, 'physical_samples', o.sample_id, starbaseUrl);
+	const sampleUrl = recordLink(publicUrl, 'physical_samples', o.sample_id);
 	const catLabel = CATEGORY_LABEL[o.process_category] || (o.process_category ? esc(o.process_category) : 'Operation');
 
 	const details = [
@@ -885,9 +881,9 @@ export function renderOperationReport(d) {
 }
 
 export function renderTestReport(d) {
-	const { test: t, qrSvg, recordUrl, publicUrl, starbaseUrl } = d;
+	const { test: t, qrSvg, recordUrl, publicUrl } = d;
 	const shortId = String(t.session_id).split('-')[0];
-	const sampleUrl = adminRecordUrl(publicUrl, 'physical_samples', t.sample_id, starbaseUrl);
+	const sampleUrl = recordLink(publicUrl, 'physical_samples', t.sample_id);
 	const typeLabel = t.test_type ? String(t.test_type).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Test';
 
 	const details = [
