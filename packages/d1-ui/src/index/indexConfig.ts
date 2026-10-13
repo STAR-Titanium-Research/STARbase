@@ -27,7 +27,7 @@ export interface IndexDef {
 	slug: string;
 	collection: string;
 	title: string;
-	group: 'records' | 'inventory' | 'resources';
+	group: 'records' | 'inventory' | 'reference';
 	primaryKey: string;
 	columns: ColumnDef[];
 	// The search box ORs _icontains over these; dotted paths reach through a relation.
@@ -199,7 +199,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		defaultSort: '-received_date', rowTarget: 'drawer',
 	},
 	{
-		slug: 'equipment', collection: 'equipment', title: 'Equipment', group: 'resources', primaryKey: 'equipment_id',
+		slug: 'equipment', collection: 'equipment', title: 'Equipment', group: 'reference', primaryKey: 'equipment_id',
 		columns: [
 			col('equipment_code', 'Code', 'code'), col('equipment_name', 'Name'), col('equipment_type', 'Type'),
 			rel('facility_id', 'Facility', 'facilities', 'name'),
@@ -210,7 +210,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		defaultSort: '-created_at', rowTarget: 'drawer',
 	},
 	{
-		slug: 'materials', collection: 'materials', title: 'Materials', group: 'resources', primaryKey: 'material_id',
+		slug: 'materials', collection: 'materials', title: 'Materials', group: 'reference', primaryKey: 'material_id',
 		columns: [
 			col('alloy_code', 'Alloy', 'code'), col('common_name', 'Name'),
 			rel('iso_code', 'ISO class', 'material_iso_classifications', 'iso_code'),
@@ -222,14 +222,14 @@ export const INDEX_DEFS: IndexDef[] = [
 		defaultSort: '-created_at', rowTarget: 'drawer',
 	},
 	{
-		slug: 'machine-operators', collection: 'Machine_Operators', title: 'Machine operators', group: 'resources', primaryKey: 'id',
+		slug: 'machine-operators', collection: 'Machine_Operators', title: 'Machine operators', group: 'reference', primaryKey: 'id',
 		columns: [col('Name', 'Name'), col('equipment', 'Equipment')],
 		searchFields: ['Name'],
 		filters: [],
 		defaultSort: 'Name', rowTarget: 'drawer',
 	},
 	{
-		slug: 'insert-types', collection: 'insert_types', title: 'Insert types', group: 'resources', primaryKey: 'insert_type_id',
+		slug: 'insert-types', collection: 'insert_types', title: 'Insert types', group: 'reference', primaryKey: 'insert_type_id',
 		columns: [
 			col('type_code', 'Type code', 'code'), col('short_code', 'Short code', 'code'),
 			rel('manufacturer_id', 'Manufacturer', 'manufacturers', 'name'),
@@ -240,49 +240,49 @@ export const INDEX_DEFS: IndexDef[] = [
 		defaultSort: '-created_at', rowTarget: 'drawer',
 	},
 	{
-		slug: 'iso-classes', collection: 'material_iso_classifications', title: 'ISO classes', group: 'resources', primaryKey: 'iso_code',
+		slug: 'iso-classes', collection: 'material_iso_classifications', title: 'ISO classes', group: 'reference', primaryKey: 'iso_code',
 		columns: [col('iso_code', 'ISO code', 'code'), col('description', 'Description')],
 		searchFields: ['iso_code', 'description'],
 		filters: [],
 		defaultSort: 'iso_code', rowTarget: 'drawer',
 	},
 	{
-		slug: 'methods', collection: 'manufacturing_methods', title: 'Methods', group: 'resources', primaryKey: 'method_id',
+		slug: 'methods', collection: 'manufacturing_methods', title: 'Methods', group: 'reference', primaryKey: 'method_id',
 		columns: [col('method_code', 'Code', 'code'), col('method_name', 'Name'), col('process_category', 'Process category')],
 		searchFields: ['method_code', 'method_name'],
 		filters: [processCategory],
 		defaultSort: 'method_code', rowTarget: 'drawer',
 	},
 	{
-		slug: 'manufacturers', collection: 'manufacturers', title: 'Manufacturers', group: 'resources', primaryKey: 'manufacturer_id',
+		slug: 'manufacturers', collection: 'manufacturers', title: 'Manufacturers', group: 'reference', primaryKey: 'manufacturer_id',
 		columns: [col('name', 'Name')],
 		searchFields: ['name'],
 		filters: [],
 		defaultSort: 'name', rowTarget: 'drawer',
 	},
 	{
-		slug: 'facilities', collection: 'facilities', title: 'Facilities', group: 'resources', primaryKey: 'facility_id',
+		slug: 'facilities', collection: 'facilities', title: 'Facilities', group: 'reference', primaryKey: 'facility_id',
 		columns: [col('code', 'Code', 'code'), col('name', 'Name')],
 		searchFields: ['code', 'name'],
 		filters: [],
 		defaultSort: 'code', rowTarget: 'drawer',
 	},
 	{
-		slug: 'prep-recipes', collection: 'prep_recipes', title: 'Prep recipes', group: 'resources', primaryKey: 'recipe_id',
+		slug: 'prep-recipes', collection: 'prep_recipes', title: 'Prep recipes', group: 'reference', primaryKey: 'recipe_id',
 		columns: [col('name', 'Name'), col('suited_materials', 'Suited materials'), col('created_at', 'Created', 'date')],
 		searchFields: ['name'],
 		filters: [],
 		defaultSort: '-created_at', rowTarget: 'drawer',
 	},
 	{
-		slug: 'etchants', collection: 'etchants', title: 'Etchants', group: 'resources', primaryKey: 'etchant_id',
+		slug: 'etchants', collection: 'etchants', title: 'Etchants', group: 'reference', primaryKey: 'etchant_id',
 		columns: [col('name', 'Name'), col('composition', 'Composition'), col('suited_metals', 'Suited metals')],
 		searchFields: ['name', 'composition'],
 		filters: [],
 		defaultSort: 'name', rowTarget: 'drawer',
 	},
 	{
-		slug: 'fast-recipes', collection: 'fast_recipes', title: 'FAST recipes', group: 'resources', primaryKey: 'id',
+		slug: 'fast-recipes', collection: 'fast_recipes', title: 'FAST recipes', group: 'reference', primaryKey: 'id',
 		columns: [
 			col('name', 'Name'), col('machine', 'Machine'), col('program_nr', 'Program', 'number'), col('group_name', 'Group'),
 			col('target_temp_c', 'Temp (°C)', 'number'), col('target_force_kn', 'Force (kN)', 'number'),

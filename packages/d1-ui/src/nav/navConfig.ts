@@ -1,4 +1,5 @@
 import { indexRoute } from '../recordRoute';
+import type { NavIconName } from './navIcons';
 
 // The sidebar tree, as data. Grouping is the lab's, not the Directus collection tree's (there,
 // samples sit under "inventory" and tests under "projects"). buildNav() then trims the tree to
@@ -6,6 +7,8 @@ import { indexRoute } from '../recordRoute';
 
 export interface NavLink {
 	label: string;
+	// The page's own 16px outline icon (see navIcons.ts).
+	icon: NavIconName;
 	// App route, without /admin.
 	to: string;
 	// The collection the user must be able to read for the entry to show; none = always shown.
@@ -15,7 +18,7 @@ export interface NavLink {
 }
 
 export interface NavGroup {
-	id: 'main' | 'dashboards' | 'records' | 'inventory' | 'resources' | 'tools';
+	id: 'main' | 'records' | 'analysis' | 'inventory' | 'reference' | 'more' | 'admin';
 	label: string | null;
 	collapsible: boolean;
 	links: NavLink[];
@@ -26,28 +29,28 @@ export const NAV_GROUPS: NavGroup[] = [
 		id: 'main',
 		label: null,
 		collapsible: false,
-		links: [{ label: 'Home', to: '/home' }],
-	},
-	{
-		id: 'dashboards',
-		label: 'Dashboards',
-		collapsible: false,
-		links: [
-			{ label: 'Force', to: '/d1-force-dashboard' },
-			{ label: 'FAST', to: '/d1-fast-dashboard' },
-		],
+		links: [{ label: 'Home', icon: 'home', to: '/home' }],
 	},
 	{
 		id: 'records',
 		label: 'Records',
 		collapsible: false,
 		links: [
-			{ label: 'Projects', to: '/home/projects', collection: 'projects' },
-			{ label: 'Campaigns', to: '/home/campaigns', collection: 'campaigns' },
-			{ label: 'Samples', to: '/home/samples', collection: 'physical_samples' },
-			{ label: 'Operations', to: '/home/operations', collection: 'manufacturing_operations' },
-			{ label: 'Tests', to: '/home/tests', collection: 'test_sessions' },
-			{ label: 'People', to: '/home/people', collection: 'people' },
+			{ label: 'Projects', icon: 'folder', to: '/home/projects', collection: 'projects' },
+			{ label: 'Campaigns', icon: 'flag', to: '/home/campaigns', collection: 'campaigns' },
+			{ label: 'Samples', icon: 'test-tube', to: '/home/samples', collection: 'physical_samples' },
+			{ label: 'Operations', icon: 'cog', to: '/home/operations', collection: 'manufacturing_operations' },
+			{ label: 'Tests', icon: 'clipboard-check', to: '/home/tests', collection: 'test_sessions' },
+			{ label: 'People', icon: 'users', to: '/home/people', collection: 'people' },
+		],
+	},
+	{
+		id: 'analysis',
+		label: 'Analysis',
+		collapsible: false,
+		links: [
+			{ label: 'Force plotter', icon: 'activity', to: '/d1-force-dashboard' },
+			{ label: 'FAST plotter', icon: 'zap', to: '/d1-fast-dashboard' },
 		],
 	},
 	{
@@ -55,40 +58,49 @@ export const NAV_GROUPS: NavGroup[] = [
 		label: 'Inventory',
 		collapsible: true,
 		links: [
-			{ label: 'Tools', to: '/home/tools', collection: 'tools' },
-			{ label: 'Tool boxes', to: '/home/tool-boxes', collection: 'tool_boxes' },
-			{ label: 'Cutting inserts', to: '/home/inserts', collection: 'cutting_inserts' },
-			{ label: 'Insert edges', to: '/home/edges', collection: 'insert_edges' },
-			{ label: 'Raw stock lots', to: '/home/stock-lots', collection: 'raw_stock_lots' },
+			{ label: 'Tools', icon: 'wrench', to: '/home/tools', collection: 'tools' },
+			{ label: 'Tool boxes', icon: 'briefcase', to: '/home/tool-boxes', collection: 'tool_boxes' },
+			{ label: 'Cutting inserts', icon: 'diamond', to: '/home/inserts', collection: 'cutting_inserts' },
+			{ label: 'Insert edges', icon: 'triangle-right', to: '/home/edges', collection: 'insert_edges' },
+			{ label: 'Raw stock lots', icon: 'cylinder', to: '/home/stock-lots', collection: 'raw_stock_lots' },
 		],
 	},
 	{
-		id: 'resources',
-		label: 'Resources',
+		id: 'reference',
+		label: 'Reference',
 		collapsible: true,
 		links: [
-			{ label: 'Equipment', to: '/home/equipment', collection: 'equipment' },
-			{ label: 'Materials', to: '/home/materials', collection: 'materials' },
-			{ label: 'Machine operators', to: '/home/machine-operators', collection: 'Machine_Operators' },
-			{ label: 'Insert types', to: '/home/insert-types', collection: 'insert_types' },
-			{ label: 'ISO classes', to: '/home/iso-classes', collection: 'material_iso_classifications' },
-			{ label: 'Methods', to: '/home/methods', collection: 'manufacturing_methods' },
-			{ label: 'Manufacturers', to: '/home/manufacturers', collection: 'manufacturers' },
-			{ label: 'Facilities', to: '/home/facilities', collection: 'facilities' },
-			{ label: 'Prep recipes', to: '/home/prep-recipes', collection: 'prep_recipes' },
-			{ label: 'Etchants', to: '/home/etchants', collection: 'etchants' },
-			{ label: 'FAST recipes', to: '/home/fast-recipes', collection: 'fast_recipes' },
+			{ label: 'Equipment', icon: 'drill', to: '/home/equipment', collection: 'equipment' },
+			{ label: 'Materials', icon: 'layers', to: '/home/materials', collection: 'materials' },
+			{ label: 'Machine operators', icon: 'hard-hat', to: '/home/machine-operators', collection: 'Machine_Operators' },
+			{ label: 'Insert types', icon: 'shapes', to: '/home/insert-types', collection: 'insert_types' },
+			{ label: 'ISO classes', icon: 'tag', to: '/home/iso-classes', collection: 'material_iso_classifications' },
+			{ label: 'Methods', icon: 'workflow', to: '/home/methods', collection: 'manufacturing_methods' },
+			{ label: 'Manufacturers', icon: 'factory', to: '/home/manufacturers', collection: 'manufacturers' },
+			{ label: 'Facilities', icon: 'building-2', to: '/home/facilities', collection: 'facilities' },
+			{ label: 'Prep recipes', icon: 'flask-conical', to: '/home/prep-recipes', collection: 'prep_recipes' },
+			{ label: 'Etchants', icon: 'droplet', to: '/home/etchants', collection: 'etchants' },
+			{ label: 'FAST recipes', icon: 'flame', to: '/home/fast-recipes', collection: 'fast_recipes' },
 		],
 	},
 	{
-		id: 'tools',
-		label: 'Tools',
+		id: 'more',
+		label: 'More',
 		collapsible: false,
 		links: [
-			{ label: 'Print labels', to: '/home/labels' },
-			{ label: 'Report a bug', to: '/report-bug' },
-			{ label: 'Data Studio', to: '/content' },
-			{ label: 'Force Crawler', to: '/d1-force-crawler', adminOnly: true },
+			{ label: 'Print labels', icon: 'printer', to: '/home/labels' },
+			{ label: 'Report a bug', icon: 'bug', to: '/report-bug' },
+			// The route arrives with the Settings page.
+			{ label: 'Settings', icon: 'settings', to: '/home/settings' },
+		],
+	},
+	{
+		id: 'admin',
+		label: 'Admin',
+		collapsible: false,
+		links: [
+			{ label: 'Data Studio', icon: 'database', to: '/content' },
+			{ label: 'Force Crawler', icon: 'radar', to: '/d1-force-crawler', adminOnly: true },
 		],
 	},
 ];

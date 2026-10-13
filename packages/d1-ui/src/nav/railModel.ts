@@ -22,9 +22,9 @@ export interface RailSection {
 export const RAIL_SECTIONS: Array<{ id: RailSectionId; label: string; icon: string; groupIds: NavGroup['id'][] }> = [
 	{ id: 'home', label: 'Home', icon: '⌂', groupIds: ['main'] },
 	{ id: 'records', label: 'Records', icon: '▦', groupIds: ['records'] },
-	{ id: 'analysis', label: 'Analysis', icon: '∿', groupIds: ['dashboards'] },
-	{ id: 'kit', label: 'Kit', icon: '⚙︎', groupIds: ['inventory', 'resources'] },
-	{ id: 'tools', label: 'Tools', icon: '☰', groupIds: ['tools'] },
+	{ id: 'analysis', label: 'Analysis', icon: '∿', groupIds: ['analysis'] },
+	{ id: 'kit', label: 'Kit', icon: '⚙︎', groupIds: ['inventory', 'reference'] },
+	{ id: 'tools', label: 'Tools', icon: '☰', groupIds: ['more', 'admin'] },
 ];
 
 // The sections this user has something to open in, each with its visible groups. A section none of

@@ -15,9 +15,9 @@ describe('RAIL_SECTIONS', () => {
 		expect(RAIL_SECTIONS.map((s) => [s.id, s.label, s.groupIds])).toEqual([
 			['home', 'Home', ['main']],
 			['records', 'Records', ['records']],
-			['analysis', 'Analysis', ['dashboards']],
-			['kit', 'Kit', ['inventory', 'resources']],
-			['tools', 'Tools', ['tools']],
+			['analysis', 'Analysis', ['analysis']],
+			['kit', 'Kit', ['inventory', 'reference']],
+			['tools', 'Tools', ['more', 'admin']],
 		]);
 	});
 
@@ -37,16 +37,16 @@ describe('railSections', () => {
 
 	it('keeps the order of the groups inside a section', () => {
 		const kit = railSections(adminNav()).find((s) => s.id === 'kit')!;
-		expect(kit.groups.map((g) => g.id)).toEqual(['inventory', 'resources']);
+		expect(kit.groups.map((g) => g.id)).toEqual(['inventory', 'reference']);
 	});
 
 	it('drops a section with no visible link', () => {
-		// Nothing readable (or the collections request failed): Home, Analysis (no collection needed) and Tools survive.
+		// Nothing readable (or the collections request failed): Home, Analysis (no collection needed) and Tools (More, Admin) survive.
 		const none = railSections(buildNav(null, [], false));
 		expect(none.map((s) => s.id)).toEqual(['home', 'analysis', 'tools']);
 		// A member without any Kit collection.
 		const noKit = new Set(allCollections);
-		for (const g of NAV_GROUPS.filter((x) => x.id === 'inventory' || x.id === 'resources')) {
+		for (const g of NAV_GROUPS.filter((x) => x.id === 'inventory' || x.id === 'reference')) {
 			for (const l of g.links) if (l.collection) noKit.delete(l.collection);
 		}
 		expect(railSections(buildNav(noKit, [], false)).map((s) => s.id)).toEqual(['home', 'records', 'analysis', 'tools']);
@@ -54,7 +54,7 @@ describe('railSections', () => {
 
 	it('keeps a section when only one of its groups has links', () => {
 		const some = new Set(allCollections);
-		for (const g of NAV_GROUPS.filter((x) => x.id === 'resources')) {
+		for (const g of NAV_GROUPS.filter((x) => x.id === 'reference')) {
 			for (const l of g.links) if (l.collection) some.delete(l.collection);
 		}
 		const kit = railSections(buildNav(some, [], false)).find((s) => s.id === 'kit')!;
@@ -63,7 +63,8 @@ describe('railSections', () => {
 
 	it('hides Force Crawler from a non-admin', () => {
 		const tools = railSections(buildNav(allCollections, [], false)).find((s) => s.id === 'tools')!;
-		expect(tools.groups[0].links.map((l) => l.label)).toEqual(['Print labels', 'Report a bug', 'Data Studio']);
+		expect(tools.groups.map((g) => g.id)).toEqual(['more', 'admin']);
+		expect(tools.groups.flatMap((g) => g.links.map((l) => l.label))).toEqual(['Print labels', 'Report a bug', 'Settings', 'Data Studio']);
 	});
 });
 

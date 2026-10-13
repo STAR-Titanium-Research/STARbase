@@ -3,9 +3,9 @@
 import { canonicalPath } from '../links';
 
 export const COLLAPSED_KEY = 'd1.nav.collapsed';
-// Inventory and Resources start collapsed (spec section 3); a group holding the current page is
+// Inventory and Reference start collapsed (spec section 3); a group holding the current page is
 // opened by the component regardless.
-export const DEFAULT_COLLAPSED: readonly string[] = ['inventory', 'resources'];
+export const DEFAULT_COLLAPSED: readonly string[] = ['inventory', 'reference'];
 
 // The stored value is a JSON array of group ids. Anything else (nothing stored, a broken value,
 // storage blocked) gives the default.
