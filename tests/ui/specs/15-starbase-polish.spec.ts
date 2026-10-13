@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { D1_BASE, STAR_BASE, adminApi, firstId, signInStarbase } from '../starbase/target';
+import { D1_BASE, D1_LOCAL, STAR_BASE, adminApi, firstId, signInStarbase } from '../starbase/target';
 
 // STARbase polish follow-ups (plan 2 final review), in a real browser against the d1-starbase preview:
 // the phone menu's backdrop, dialog Esc and focus return, and a failed plot download. Layout: ports
@@ -91,28 +91,38 @@ test('a failed asset download leaves the plot page where it is, and says so unde
 	await expect(page.locator('.fd').first()).toBeVisible();
 });
 
-test('a download that works saves the file from memory under the server name, without leaving the page', async ({ page }) => {
-	await signInStarbase(page, 'admin');
-	await page.goto(`${STAR_BASE}/operations`);
-	const href = await page.locator('a[href*="/plot/force?operation="]').first().getAttribute('href');
-	test.skip(!href, 'no Force operation in the preview');
-	await page.route(`${D1_BASE}/items/machining_force_analysis/*`, async (r) => {
-		const res = await r.fetch();
-		const body = await res.json();
-		body.data = { ...body.data, frm_fx: 'good-file', frm_fy: 'good-file', frm_fz: 'good-file', octree_status: null, live_cache_file: null };
-		await r.fulfill({ response: res, json: body });
+test('a download that works saves the real file under the name d1-server gives it, without leaving the page', async ({ page, playwright }) => {
+	// A REAL file in the preview's Directus (the file's record is the only thing faked: the operation's
+	// figure id is pointed at it), so the Content-Disposition header, and whether the browser may read it
+	// cross-origin (CORS_EXPOSED_HEADERS), are d1-server's own. No asset response is stubbed.
+	const api = await adminApi(playwright);
+	const up = await api.post(`${D1_LOCAL}/files`, {
+		multipart: { file: { name: 'FRM op7 Fx.csv', mimeType: 'text/csv', buffer: Buffer.from('a,b\n1,2\n') } },
 	});
-	const cors = { 'access-control-allow-origin': STAR_BASE, 'access-control-allow-credentials': 'true', 'access-control-expose-headers': 'Content-Disposition' };
-	await page.route(`${D1_BASE}/assets/**`, (r) =>
-		r.fulfill({ status: 200, contentType: 'image/png', headers: { ...cors, 'content-disposition': 'attachment; filename="FRM op7 Fx.png"' }, body: Buffer.from('not really a png') }),
-	);
-	await page.goto(STAR_BASE + href!);
-	const dl = page.getByTitle('Download this FRM image');
-	await expect(dl).toBeVisible({ timeout: 30_000 });
-	await page.evaluate(() => ((window as unknown as { __stay: number }).__stay = 1));
-	const [download] = await Promise.all([page.waitForEvent('download'), dl.click()]);
-	expect(download.suggestedFilename()).toBe('FRM op7 Fx.png');
-	expect(await page.evaluate(() => (window as unknown as { __stay?: number }).__stay)).toBe(1);
+	expect(up.ok(), 'upload a test file to the preview').toBeTruthy();
+	const fileId = (await up.json()).data.id as string;
+	try {
+		await signInStarbase(page, 'admin');
+		await page.goto(`${STAR_BASE}/operations`);
+		const href = await page.locator('a[href*="/plot/force?operation="]').first().getAttribute('href');
+		test.skip(!href, 'no Force operation in the preview');
+		await page.route(`${D1_BASE}/items/machining_force_analysis/*`, async (r) => {
+			const res = await r.fetch();
+			const body = await res.json();
+			body.data = { ...body.data, frm_fx: fileId, frm_fy: fileId, frm_fz: fileId, octree_status: null, live_cache_file: null };
+			await r.fulfill({ response: res, json: body });
+		});
+		await page.goto(STAR_BASE + href!);
+		const dl = page.getByTitle('Download this FRM image');
+		await expect(dl).toBeVisible({ timeout: 30_000 });
+		await page.evaluate(() => ((window as unknown as { __stay: number }).__stay = 1));
+		const [download] = await Promise.all([page.waitForEvent('download'), dl.click()]);
+		expect(download.suggestedFilename()).toBe('FRM op7 Fx.csv');
+		expect(await page.evaluate(() => (window as unknown as { __stay?: number }).__stay)).toBe(1);
+	} finally {
+		await api.delete(`${D1_LOCAL}/files/${fileId}`);
+		await api.dispose();
+	}
 });
 
 test('the edit dialog: closing it puts focus back on the Edit button', async ({ page, playwright }) => {

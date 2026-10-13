@@ -4,9 +4,11 @@ import { downloadFailureMessage } from './downloadError';
 const http = (status: number) => ({ message: `Request failed with status code ${status}`, response: { status } });
 
 describe('downloadFailureMessage', () => {
-	it('an expired session says to sign in again, not the raw axios text', () => {
+	it('a 401 says the session expired, not the raw axios text', () => {
 		expect(downloadFailureMessage(http(401))).toBe('Your session expired. Reload the page to sign in again.');
-		expect(downloadFailureMessage(http(403))).toBe('Your session expired. Reload the page to sign in again.');
+	});
+	it('a 403 is a refusal, not an expired session (the session guard has already checked it is alive)', () => {
+		expect(downloadFailureMessage(http(403))).toBe("You don't have access to that file.");
 	});
 	it('a missing file says so', () => {
 		expect(downloadFailureMessage(http(404))).toBe('That file is no longer available.');

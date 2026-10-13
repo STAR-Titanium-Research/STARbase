@@ -104,6 +104,9 @@ services:
       CORS_ENABLED: "true"
       CORS_ORIGIN: ${FORCE_APP_ORIGIN:-http://localhost:5180}${STARBASE_ORIGIN:+,${STARBASE_ORIGIN}}
       CORS_CREDENTIALS: "true"
+      # Browsers only let a cross-origin page read the headers listed here. STARbase reads Content-Disposition to
+      # name a downloaded file; setting this REPLACES Directus's default, so Content-Range stays in the list.
+      CORS_EXPOSED_HEADERS: "Content-Range,Content-Disposition"
       # STARbase frames the form-only edit page (/admin/d1-edit/…, spec §3.4); no other origin may.
       CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS: "'self'${STARBASE_ORIGIN:+ ${STARBASE_ORIGIN}}"
       # true behind the HTTPS tailnet entry (runbook step 3); false keeps plain-HTTP local use signed in.

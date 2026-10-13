@@ -2441,6 +2441,8 @@ function fmtDate(v: string) {
 // standalone), so the host adapter owns the actual download.
 // A host whose download fails (expired session, file gone) rejects; that shows under the FRM image.
 const downloadMsg = ref<string | null>(null);
+// The message is about the file just tried: a different operation or axis starts clean.
+watch(() => [detail.value?.id, axis.value], () => { downloadMsg.value = null; });
 function downloadFile(fileId: string) {
 	downloadMsg.value = null;
 	void Promise.resolve()

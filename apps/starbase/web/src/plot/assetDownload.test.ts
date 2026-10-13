@@ -17,8 +17,15 @@ describe('filenameFromDisposition', () => {
 		expect(filenameFromDisposition('attachment')).toBeNull();
 		expect(filenameFromDisposition('attachment; filename=""')).toBeNull();
 	});
-	it('drops any directory part', () => {
-		expect(filenameFromDisposition('attachment; filename="..\..\evil/x.mat"')).toBe('x.mat');
+	it('drops any directory part, with either slash', () => {
+		expect(filenameFromDisposition('attachment; filename="..\\..\\evil\\x.mat"')).toBe('x.mat');
+		expect(filenameFromDisposition('attachment; filename="../../evil/x.mat"')).toBe('x.mat');
+		expect(filenameFromDisposition("attachment; filename*=UTF-8''..%5C..%5Cevil%5Cx.mat")).toBe('x.mat');
+	});
+	it('never returns a dot name', () => {
+		expect(filenameFromDisposition('attachment; filename=".."')).toBeNull();
+		expect(filenameFromDisposition('attachment; filename="."')).toBeNull();
+		expect(filenameFromDisposition('attachment; filename="a/.."')).toBeNull();
 	});
 });
 
@@ -53,6 +60,22 @@ describe('saveBlob', () => {
 		vi.runAllTimers();
 		expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake-1');
 	});
+	it('revokes the object URL at once when the click throws (nothing was handed to the browser), and still removes the link', () => {
+		const blob = new Blob(['x']);
+		(document.createElement as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+			const a = { href: '', download: '', rel: '', click: vi.fn(() => { throw new Error('blocked'); }), remove: vi.fn() };
+			anchors.push(a);
+			return a;
+		});
+		expect(() => saveBlob(blob, 'run.mat')).toThrow('blocked');
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake-1');
+		expect(anchors[0].remove).toHaveBeenCalledTimes(1);
+	});
+	it('revokes the object URL when appendChild throws', () => {
+		(document.body.appendChild as ReturnType<typeof vi.fn>).mockImplementationOnce(() => { throw new Error('no body'); });
+		expect(() => saveBlob(new Blob(['x']), 'run.mat')).toThrow('no body');
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake-1');
+	});
 });
 
 describe('downloadAsset', () => {
@@ -70,11 +93,37 @@ describe('downloadAsset', () => {
 		expect(get).toHaveBeenCalledWith('/assets/f%201', { params: { download: '' }, responseType: 'blob' });
 		expect(save).toHaveBeenCalledWith(blob, 'op7_F2.mat');
 	});
-	it('falls back to the file id when the server sends no name (or it is not exposed to the page)', async () => {
+	it('falls back to the file id when the server sends no name and the type tells nothing', async () => {
 		const { api } = fakeApi(async () => ({ data: blob, headers: {} }));
 		const save = vi.fn();
 		await downloadAsset(api, 'abc-123', save);
 		expect(save).toHaveBeenCalledWith(blob, 'abc-123');
+	});
+	it.each([
+		['image/png', 'png'],
+		['text/csv; charset=utf-8', 'csv'],
+		['application/octet-stream', 'bin'],
+		['application/x-matlab-data', 'mat'],
+		['application/matlab', 'mat'],
+	])('with no readable name, a %s file is named <id>.%s', async (type, ext) => {
+		const typed = new Blob(['x'], { type });
+		const { api } = fakeApi(async () => ({ data: typed, headers: {} }));
+		const save = vi.fn();
+		await downloadAsset(api, 'abc-123', save);
+		expect(save).toHaveBeenCalledWith(typed, `abc-123.${ext}`);
+	});
+	it('an unknown type gets no extension', async () => {
+		const typed = new Blob(['x'], { type: 'application/x-weird' });
+		const { api } = fakeApi(async () => ({ data: typed, headers: {} }));
+		const save = vi.fn();
+		await downloadAsset(api, 'abc-123', save);
+		expect(save).toHaveBeenCalledWith(typed, 'abc-123');
+	});
+	it('a 200 whose body is not a file (a JSON error page) rejects and saves nothing', async () => {
+		const { api } = fakeApi(async () => ({ data: { errors: [{ message: 'nope' }] }, headers: {} }));
+		const save = vi.fn();
+		await expect(downloadAsset(api, 'f1', save)).rejects.toThrow('not a file');
+		expect(save).not.toHaveBeenCalled();
 	});
 	it.each([403, 404])('a %i rejects, saves nothing, and never navigates the tab', async (status) => {
 		const location = { href: 'https://starbase.example/plot/force?operation=1', assign: vi.fn(), replace: vi.fn() };

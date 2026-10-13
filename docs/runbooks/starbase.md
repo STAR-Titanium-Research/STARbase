@@ -56,6 +56,9 @@ new compose file gives:
 
 - Directus: `CORS_CREDENTIALS=true`, frame-ancestors `'self'`, `SESSION_COOKIE_SECURE=false` and
   `STARBASE_URL=""`. These are expected to match Directus's own defaults, so nothing should move.
+- Directus also gets `CORS_EXPOSED_HEADERS=Content-Range,Content-Disposition` so STARbase can read a download's
+  filename; the variable replaces Directus's default list, so `Content-Range` is kept. Until it is live,
+  downloads are named `<file id>.<ext>` (ext from the file's type) instead of the original name.
 - filter-service and diag-service now send `Access-Control-Allow-Credentials: true` for the Force App
   origins too (origins stay exact; a `*` is dropped). The Force App sends a Bearer token, which this does
   not affect.
@@ -63,7 +66,7 @@ new compose file gives:
 Check the rendered values before recreating anything:
 
 ```bash
-docker compose --profile starbase config | grep -E 'CORS_ORIGIN|CORS_ORIGINS|CORS_CREDENTIALS|FRAME_ANCESTORS|SESSION_COOKIE_SECURE|STARBASE_URL|D1_SERVER_ORIGIN'
+docker compose --profile starbase config | grep -E 'CORS_ORIGIN|CORS_ORIGINS|CORS_CREDENTIALS|CORS_EXPOSED_HEADERS|FRAME_ANCESTORS|SESSION_COOKIE_SECURE|STARBASE_URL|D1_SERVER_ORIGIN'
 ```
 
 Later, for Google sign-in (out of scope now): `AUTH_PROVIDERS=google`, `AUTH_GOOGLE_MODE=session`, and
