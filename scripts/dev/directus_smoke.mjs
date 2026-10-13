@@ -963,6 +963,85 @@ await check('ra_transfer_makes_the_new_owner_and_keeps_the_previous_one_as_can_e
   await noDrift('transfer');
 });
 
+// Fix round 1 (review I1, I2 and the campaign_samples delete ruling). Own records again (a restricted project, sample, campaign and two
+// operations), with the fixture editor listed on them: the editor may edit them but is not their owner.
+await check('ra_clearing_a_key_under_a_restricted_parent_needs_the_owner', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const method = await api('GET', '/items/manufacturing_methods?filter[process_category][_eq]=machining&limit=1&fields=method_id');
+  expect(method.status === 200 && method.body?.data?.[0]?.method_id, `no machining method: ${method.status}`);
+  const restrict = async (collection, id) => { const r = await api('PATCH', `/items/${collection}/${id}`, { restricted: true }); expect(r.status === 200, `restrict ${collection}: ${why(r)}`); };
+  const PX = await adminMake('projects', { project_code: `SMKRA-${raSuffix}-X`, project_name: 'Smoke restricted project', principal_investigator_person: RAW.pi.person }, 'project_id');
+  await restrict('projects', PX);
+  const sample = (n, extra) => adminMake('physical_samples', { sample_code: `SMKRA-${raSuffix}-${n}`, nickname: 'smoke', item_type: 'sample', current_status: 'active', owner_person_id: RAW.owner.person, ...extra }, 'sample_id');
+  const SP = await sample('P', { project_id: PX });           // an open sample in a restricted project
+  const SQ = await sample('Q', { project_id: RAW.PW });       // a restricted sample
+  const SO = await sample('O', { project_id: RAW.PW });       // an open sample, the operation's sample under the restricted campaign
+  await restrict('physical_samples', SQ);
+  const CR = await adminMake('campaigns', { project_id: RAW.PW, campaign_type: 'testing_campaign', name: `Smoke RA restricted ${raSuffix}`, owner_person_id: RAW.campaignOwner.person }, 'campaign_id');
+  await restrict('campaigns', CR);
+  const op = (sample_id, extra = {}) => adminMake('manufacturing_operations', { sample_id, method_id: method.body.data[0].method_id, machining_operation_subtype: 'F', machining_cutting_speed_m_per_min: 31, machining_feed_mm_per_rev: 0.1, machining_axial_depth_of_cut_mm: 1, owner_person_id: RAW.owner.person, ...extra }, 'operation_id');
+  const OS = await op(SQ);                                    // an operation on a restricted sample
+  const OC = await op(SO, { campaign_id: CR });               // an operation in a restricted campaign
+  for (const [table, fk, id] of [['sample_access', 'sample_id', SP], ['sample_access', 'sample_id', SQ], ['campaign_access', 'campaign_id', CR], ['operation_access', 'operation_id', OS], ['operation_access', 'operation_id', OC]]) {
+    await adminMake(table, { [fk]: id, person_id: RAW.editor.person, role: 'edit' }, 'access_id');
+  }
+  const clear = (collection, id, key) => api('PATCH', `/items/${collection}/${id}?fields=${PK[collection] ?? 'campaign_id'}`, { [key]: null }, t.editor);
+  const checks = [
+    ['physical_samples', SP, 'project_id', 'a sample out of a restricted project'],
+    ['manufacturing_operations', OS, 'sample_id', 'an operation off a restricted sample'],
+    ['manufacturing_operations', OC, 'campaign_id', 'an operation out of a restricted campaign'],
+    ['campaigns', CR, 'project_id', "a campaign's project"],
+  ];
+  for (const [collection, id, key, what] of checks) {
+    const r = await clear(collection, id, key);
+    expect(refusedBy(r, GUARD, 'restricted'), `editor clears ${key} of ${what}: ${why(r)}`);
+    const row = await api('GET', `/items/${collection}/${id}?fields=${key}`);
+    expect(row.body.data[key] !== null, `${what}: the key was cleared anyway`);
+  }
+  // the owner may clear a key of a record they own (the sample out of the restricted project)
+  const own = await api('PATCH', `/items/physical_samples/${SP}?fields=project_id`, { project_id: null }, t.owner);
+  expect(own.status === 200 && own.body.data.project_id === null, `owner clears project_id: ${why(own)}`);
+  await noDrift('clearing keys');
+});
+
+await check('ra_restricted_given_as_a_postgres_boolean_string_still_needs_the_owner', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  // SA is unrestricted and the fixture editor is on its list with Can edit
+  for (const spelling of ['t', 'yes', '1', 'ON']) {
+    const r = await api('PATCH', `/items/physical_samples/${RAW.SA}?fields=sample_id,restricted`, { restricted: spelling }, t.editor);
+    expect(refusedBy(r, GUARD, 'restricted'), `editor PATCH restricted:${JSON.stringify(spelling)}: ${why(r)}`);
+  }
+  const still = await api('GET', `/items/physical_samples/${RAW.SA}?fields=restricted`);
+  expect(still.body.data.restricted === false, 'the sample was restricted by an editor');
+  await noDrift('boolean spellings');
+});
+
+await check('ra_removing_a_sample_from_a_restricted_campaign_needs_the_campaigns_owner', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const sample = (n) => adminMake('physical_samples', { sample_code: `SMKRA-${raSuffix}-${n}`, nickname: 'smoke', item_type: 'sample', current_status: 'active', project_id: RAW.PW, owner_person_id: RAW.owner.person }, 'sample_id');
+  const S1 = await sample('D1');
+  const S2 = await sample('D2');
+  const CD = await adminMake('campaigns', { project_id: RAW.PW, campaign_type: 'testing_campaign', name: `Smoke RA detach ${raSuffix}`, owner_person_id: RAW.campaignOwner.person }, 'campaign_id');
+  const CO = await adminMake('campaigns', { project_id: RAW.PW, campaign_type: 'testing_campaign', name: `Smoke RA detach open ${raSuffix}`, owner_person_id: RAW.campaignOwner.person }, 'campaign_id');
+  const rowD = await adminMake('campaign_samples', { campaign_id: CD, sample_id: S1 }, 'id');
+  const rowO = await adminMake('campaign_samples', { campaign_id: CO, sample_id: S2 }, 'id');
+  const lock = await api('PATCH', `/items/campaigns/${CD}`, { restricted: true });
+  expect(lock.status === 200, `restrict the campaign: ${why(lock)}`);
+  // the sample's owner may detach from an open campaign, not from a restricted one
+  const open = await api('DELETE', `/items/campaign_samples/${rowO}`, undefined, t.owner);
+  expect(open.status === 204, `the sample owner detaches from an open campaign: ${open.status}`);
+  const refused = await api('DELETE', `/items/campaign_samples/${rowD}`, undefined, t.owner);
+  expect(refusedBy(refused, GUARD, 'junction'), `the sample owner detaches from a restricted campaign: ${why(refused)}`);
+  const still = await api('GET', `/items/campaign_samples?filter[id][_eq]=${rowD}&fields=id`);
+  expect(still.body.data.length === 1, 'the row was deleted anyway');
+  const ok = await api('DELETE', `/items/campaign_samples/${rowD}`, undefined, t.campaignOwner);
+  expect(ok.status === 204, `the campaign's owner detaches: ${ok.status} ${errText(ok)}`);
+  await noDrift('detach');
+});
+
 await check('ra_admin_overview_reports_the_readers_drift', async () => {
   const r = await api('GET', '/d1-admin-overview?refresh=1');
   expect(r.status === 200 && r.body.readers_drift && typeof r.body.readers_drift.checked_at === 'string', `overview: ${why(r)}`);

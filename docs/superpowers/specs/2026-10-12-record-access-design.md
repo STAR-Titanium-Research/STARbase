@@ -773,6 +773,14 @@ change the access-granting fields. Changes:
      created (anyone can create a project with themselves as PI) would otherwise make them `c_pi`, which lists them on every
      sample in the campaign, restricted ones included, and on every restricted operation and test with that campaign; the
      campaign owner owns none of those, so requiring the campaign owner alone does not close it.
+   - **Clearing a key is a move** (fix round 1): setting `project_id`, `campaign_id` or `sample_id` to null takes the record out of its
+     parent's gate, so it needs the delete rule exactly when the OLD parent (or the record, or its sample) is Restricted, and a campaign's
+     project can never be cleared without the campaign's delete rule. A key that is already empty is not a move.
+   - **`restricted` is compared the way Postgres reads a boolean** (`t/true/y/yes/on/1`, `f/false/n/no/off/0`, any case, padded or not);
+     any other spelling counts as a change, so the guard runs (`'t'` must not look unchanged over a stored false).
+   - **Removing a sample from a Restricted campaign** (a DELETE of a `campaign_samples` row, an `items.delete` filter) needs the campaign's
+     delete rule (its owner) or an admin: the campaign shields its operations and tests, and detaching the sample can unhide them. A campaign
+     that is not Restricted keeps the junction rule only.
 3. **Junction guards use the manage rule.** `guards.sample_co_owners` and `guards.project_investigators` get
    `"rule": "delete"` (the generator already looks the parent's filter up by `rule`). Messages: "Only the sample's
    owner can add co-owners." and "Only the project's principal investigator can add investigators."

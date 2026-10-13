@@ -104,7 +104,7 @@ Investigator* and *Secondary Investigators* fields of the project.
 | Co-owner of a sample | the sample's owner | the sample's owner | the sample's owner |
 | Investigator of a project | the PI | the PI | only the PI |
 | Test subject (the sample or insert edge a test acts on) | whoever may edit the test | same | only if you may edit that test (its owner, when the test or its sample is Restricted) |
-| Sample in a campaign | the campaign's owner or a Can edit person of it, or an owner or co-owner of the sample | same | only if you may edit **both** the campaign and the sample **and can see the sample** (its owner, when the sample is Restricted) |
+| Sample in a campaign | the campaign's owner or a Can edit person of it, or an owner or co-owner of the sample | same (only the campaign's owner, when the campaign is Restricted) | only if you may edit **both** the campaign and the sample **and can see the sample** (its owner, when the sample is Restricted) |
 | Fast run data, project rollup | nobody (read only) | nobody | nobody |
 | **People** | everything except the login (`user_id`) | admins only | a row with no login or your own |
 

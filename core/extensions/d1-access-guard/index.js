@@ -117,6 +117,7 @@ const UNREADABLE_SAMPLE = 'You cannot see that sample, so you cannot add it to a
 const RESTRICTED_SAMPLE = "Only the sample's owner can add a restricted sample to a campaign.";
 const RESTRICTED_TEST =
   "Only the test's owner can change the samples of a restricted test or of a test on a restricted sample.";
+const REMOVE_FROM_RESTRICTED_CAMPAIGN = "Only the campaign's owner can remove samples from a restricted campaign.";
 const CAMPAIGN_MOVE = "Only the campaign's owner can move it to another project.";
 const CAMPAIGN_CONTENT =
   'This campaign holds restricted records you do not own, so only an administrator can move it to another project.';
@@ -130,6 +131,21 @@ const OWNER_NOUNS = {
 const isDenied = (err) => err?.code === 'FORBIDDEN' || err?.status === 403;
 const isBlank = (value) => value === undefined || value === null || value === '';
 const toBool = (value) => value === true || value === 'true' || value === 1;
+
+// Postgres boolean input, as a payload value can reach a boolean column: t/true/y/yes/on/1 and f/false/n/no/off/0, any case,
+// padded or not. null = not recognised (including null and undefined): the caller treats that as a CHANGE so the guard runs;
+// it never reads an unknown spelling as "unchanged".
+const PG_TRUE = new Set(['t', 'true', 'y', 'yes', 'on', '1']);
+const PG_FALSE = new Set(['f', 'false', 'n', 'no', 'off', '0']);
+function pgBool(value) {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0) return false;
+  if (typeof value !== 'string') return null;
+  const text = value.trim().toLowerCase();
+  if (PG_TRUE.has(text)) return true;
+  if (PG_FALSE.has(text)) return false;
+  return null;
+}
 
 // Replace $CURRENT_USER anywhere in a filter (ItemsService does not, only the REST layer does).
 function substitute(node, user) {
@@ -274,7 +290,10 @@ export default ({ filter }, { services }) => {
   // (the write will fail, but not on a guess). A nested object with no key (a new person) is a change.
   function fieldChanged(spec, row, value) {
     if (!row) return true;
-    if (spec.field === 'restricted') return toBool(row.restricted) !== toBool(value);
+    if (spec.field === 'restricted') {
+      const next = pgBool(value);
+      return next === null || pgBool(row.restricted) !== next;
+    }
     const next = parentKey(value, spec.valueKey);
     const had = row[spec.field];
     return isBlank(had) ? next !== null : String(had) !== String(next);
@@ -337,8 +356,11 @@ export default ({ filter }, { services }) => {
       if (changedField) need.set(key, changedField.field === 'restricted' ? 'restricted' : 'owner');
       const moved = moves.filter((f) => {
         const next = parentKey(payload[f], f);
-        if (next === null) return false; // clearing grants nothing here (the database decides)
-        return next === undefined || !row || String(row[f]) !== String(next);
+        if (!row) return true;
+        // Clearing a key is a move too: it takes the record out of its parent's gate (an operation out of a restricted sample,
+        // a sample out of a restricted project), so it needs the owner whenever the OLD parent is restricted.
+        if (next === null) return !isBlank(row[f]);
+        return next === undefined || String(row[f]) !== String(next);
       });
       if (moved.length) movedKeys.set(key, moved);
     }
@@ -398,6 +420,25 @@ export default ({ filter }, { services }) => {
       if (!(await canPass(deleteCheck(collection), [key], context))) throw refuse(key, ...reasons[why]);
     }
   }
+
+  // Removing a sample from a Restricted campaign can unhide what the campaign shielded (its operations and tests), so it needs
+  // the campaign's owner (its delete rule); an admin is not checked. A campaign that is not Restricted keeps the junction rule.
+  filter('items.delete', async (payload, meta, context) => {
+    if (meta?.collection !== 'campaign_samples' || !checked(context)) return payload;
+    const keys = (Array.isArray(payload) ? payload : meta.keys ?? []).filter((k) => !isBlank(k) && typeof k !== 'object');
+    if (!keys.length) return payload;
+    const pk = context.schema?.collections?.campaign_samples?.primary ?? 'id';
+    const db = context.database;
+    const rows = await db('campaign_samples').whereIn(pk, keys).select(pk, 'campaign_id');
+    const campaignIds = [...new Set(rows.map((r) => r.campaign_id).filter((c) => !isBlank(c)))];
+    if (!campaignIds.length) return payload;
+    const campaigns = await db('campaigns').whereIn('campaign_id', campaignIds).select('campaign_id', 'restricted');
+    const locked = campaigns.filter((c) => toBool(c.restricted)).map((c) => c.campaign_id);
+    if (locked.length && !(await canPass(deleteCheck('campaigns'), locked, context))) {
+      throw forbidden(REMOVE_FROM_RESTRICTED_CAMPAIGN, { kind: 'junction', collection: 'campaign_samples', parent: 'campaigns', id: String(locked[0]) });
+    }
+    return payload;
+  });
 
   filter('items.create', async (payload, meta, context) => {
     if (!applies(meta?.collection, context) || !payload) return payload;

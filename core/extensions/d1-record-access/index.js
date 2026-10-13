@@ -78,6 +78,9 @@ export const COLLECTIONS = Object.fromEntries(
   }),
 );
 
+// COLLECTIONS is a plain object: only its own keys are collections ('constructor' and '__proto__' are not).
+const isCollection = (name) => typeof name === 'string' && Object.hasOwn(COLLECTIONS, name);
+
 const ROLE_RANK = { view: 1, edit: 2, investigator: 2 };
 
 class HttpError extends Error {
@@ -109,9 +112,10 @@ const ownerLabel = (collection) => (collection === 'projects' ? 'Principal inves
 
 // The Explorer page of a record, as the d1-home routes spell it (a test in this folder pins the map against them).
 export function recordLink(publicUrl, collection, id) {
-  const segment = COLLECTIONS[collection]?.segment;
-  if (!segment) return null;
+  const segment = isCollection(collection) ? COLLECTIONS[collection].segment : null;
   const base = String(publicUrl ?? '').trim().replace(/\/+$/, '');
+  // no PUBLIC_URL: no link (a relative one is useless in an email)
+  if (!segment || !base) return null;
   return `${base}/admin/home/${segment}/${encodeURIComponent(String(id))}`;
 }
 
@@ -126,17 +130,25 @@ const oneLine = (value) => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
 
 // The email: { subject, text, html }. Every interpolated value is HTML-escaped; nothing is a template. `transfer` is the
 // ownership-transfer wording ("made you the owner of").
-export function mailContent({ adder, role, kind, code, title, link, transfer = false }) {
+//
+// `blockedKind` ('project', 'campaign' or 'sample') means the person cannot read the record yet because that parent is Restricted and
+// does not list them: the mail then says who added them, the kind and code, and that they can open it once they have access to the
+// restricted <blockedKind>. It carries NO title and NO link (the title is the record's content, the link would only fail).
+export function mailContent({ adder, role, kind, code, title, link, transfer = false, blockedKind = null }) {
   const who = oneLine(adder) || 'Someone';
   const what = [oneLine(kind), oneLine(code)].filter(Boolean).join(' ') || 'a record';
   const verb = transfer ? 'made you the owner of' : 'gave you access to';
   const subject = `${who} ${verb} ${what}`;
-  const named = oneLine(title);
+  const blocked = oneLine(blockedKind);
+  const named = blocked ? '' : oneLine(title);
+  const openLink = blocked ? null : link;
   const roleLine = oneLine(role);
+  const wait = blocked ? `You will be able to open it once you have access to the restricted ${blocked}.` : null;
   const text = [
     `${who} ${verb} the ${what}${named ? ` (${named})` : ''}.`,
     roleLine ? `Your role: ${roleLine}.` : null,
-    link ? `Open it here: ${link}` : null,
+    wait,
+    openLink ? `Open it here: ${openLink}` : null,
     '',
     'If you did not expect this, you can ignore this email.',
   ]
@@ -145,7 +157,8 @@ export function mailContent({ adder, role, kind, code, title, link, transfer = f
   const html = [
     `<p><strong>${escapeHtml(who)}</strong> ${verb} the ${escapeHtml(what)}${named ? ` (${escapeHtml(named)})` : ''}.</p>`,
     roleLine ? `<p>Your role: <strong>${escapeHtml(roleLine)}</strong>.</p>` : '',
-    link ? `<p><a href="${escapeHtml(link)}">Open it in D1</a><br>${escapeHtml(link)}</p>` : '',
+    wait ? `<p>${escapeHtml(wait)}</p>` : '',
+    openLink ? `<p><a href="${escapeHtml(openLink)}">Open it in D1</a><br>${escapeHtml(openLink)}</p>` : '',
     '<p>If you did not expect this, you can ignore this email.</p>',
   ]
     .filter(Boolean)
@@ -196,6 +209,7 @@ export default {
     const { database, logger, services, env } = context;
     // logger methods must be called ON the logger (pino reads this), never detached
     const warn = (message) => logger?.warn?.(`${SOURCE}: ${message}`);
+    if (!trimmed(env?.PUBLIC_URL)) warn('PUBLIC_URL is not set: notification emails will carry no link to the record');
 
     const sendError = (res, err) => {
       const status = err instanceof HttpError ? err.status : 500;
@@ -209,7 +223,7 @@ export default {
         const acc = req.accountability;
         if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
         const collection = req.params?.collection;
-        const cfg = COLLECTIONS[collection];
+        const cfg = isCollection(collection) ? COLLECTIONS[collection] : null;
         if (!cfg) throw new HttpError(400, 'INVALID_PAYLOAD', 'That kind of record has no access list.');
         const id = req.params?.id;
         if (typeof id !== 'string' || !UUID.test(id)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The record id is not valid.');
@@ -220,8 +234,8 @@ export default {
     };
 
     // -- reads as the caller ---------------------------------------------------------------------------
-    const itemsFor = (req, collection) =>
-      new services.ItemsService(collection, { accountability: req.accountability, schema: req.schema });
+    const itemsFor = (req, collection, knex) =>
+      new services.ItemsService(collection, { accountability: req.accountability, schema: req.schema, ...(knex ? { knex } : {}) });
 
     // 404 for a record the caller cannot read (the read rule decides) or that does not exist.
     async function requireReadable({ req, cfg, id }) {
@@ -236,10 +250,10 @@ export default {
     }
 
     // admin, or the manage filter (the delete rule) matches the record as the caller
-    async function canManage({ req, acc, cfg, id }) {
+    async function canManage({ req, acc, cfg, id }, knex) {
       if (acc.admin === true) return true;
       try {
-        const rows = await itemsFor(req, cfg.collection).readByQuery({
+        const rows = await itemsFor(req, cfg.collection, knex).readByQuery({
           fields: [cfg.key],
           filter: { _and: [{ [cfg.key]: { _eq: id } }, substitute(cfg.manage, acc.user)] },
           limit: 1,
@@ -250,8 +264,9 @@ export default {
         throw err;
       }
     }
-    async function requireManage(args) {
-      if (!(await canManage(args))) {
+    // `knex`: the write transaction, so the check and the write see the same state (a transfer committed a moment ago is seen)
+    async function requireManage(args, knex) {
+      if (!(await canManage(args, knex))) {
         throw new HttpError(403, 'FORBIDDEN', 'Only the owner of this record (or an administrator) can change who has access.');
       }
     }
@@ -345,6 +360,13 @@ export default {
       }
     }
 
+    // The restricted parent that keeps this person from reading the record, or null.
+    async function blockedFor(db, cfg, record, person) {
+      const probe = { person_id: person.person_id, user_id: person.user_id ?? null, blocked_by: null };
+      await markBlocked(db, cfg, record, [probe]);
+      return probe.blocked_by;
+    }
+
     async function projectPi(db, cfg, record) {
       if (cfg.collection === 'projects') return isBlank(record[cfg.ownerField]) ? null : personById(db, record[cfg.ownerField]);
       if (isBlank(record.project_id)) return null;
@@ -377,9 +399,11 @@ export default {
         const to = recipientAddress(person, user);
         if (!to) return 'skipped';
         const { name } = await callerName(database, acc);
+        // a person who cannot read the record yet (a restricted parent does not list them) is told, without the title or the link
+        const blocked = await blockedFor(database, cfg, record, person);
         const content = mailContent({
           adder: name, role, kind: cfg.kind, code: firstOf(record, cfg.code), title: firstOf(record, cfg.title) !== firstOf(record, cfg.code) ? firstOf(record, cfg.title) : null,
-          link: recordLink(env?.PUBLIC_URL, cfg.collection, id), transfer,
+          link: recordLink(env?.PUBLIC_URL, cfg.collection, id), transfer, blockedKind: blocked?.kind ?? null,
         });
         const mail = new services.MailService({ schema: req.schema, knex: database });
         await withTimeout(mail.send({ to, subject: content.subject, html: content.html, text: content.text }), MAIL_TIMEOUT_MS);
@@ -441,9 +465,16 @@ export default {
     const upsertAccess = (trx, cfg, id, person, role, addedBy) =>
       trx(cfg.table).insert({ [cfg.fk]: id, person_id: person.person_id, role, added_by_person_id: addedBy }).onConflict([cfg.fk, 'person_id']).merge({ role });
 
+    // The entry as it reads now, for the answer. The change is already committed (and the mail sent), so a failure here is logged and
+    // answers entry: null instead of turning a committed change into a 500.
     async function entryOf(cfg, id, personId) {
-      const record = await loadRecord(database, cfg, id);
-      return (await buildEntries(database, cfg, id, record)).find((e) => String(e.person_id) === String(personId)) ?? null;
+      try {
+        const record = await loadRecord(database, cfg, id);
+        return (await buildEntries(database, cfg, id, record)).find((e) => String(e.person_id) === String(personId)) ?? null;
+      } catch (err) {
+        logger?.error?.(`${SOURCE}: the change to ${cfg.collection} ${id} is committed but reading it back failed: ${err?.stack || err?.message || err}`);
+        return null;
+      }
     }
 
     router.post('/:collection/:id/entries', route(async (args) => {
@@ -451,8 +482,8 @@ export default {
       const role = parseRole(cfg, req.body);
       const personId = parsePersonId(req.body.person_id);
       await requireReadable(args);
-      await requireManage(args);
       const done = await inTransaction(acc, async (trx) => {
+        await requireManage(args, trx);
         const record = await loadRecord(trx, cfg, id);
         const person = await requireActivePerson(trx, personId);
         if (!isBlank(record[cfg.ownerField]) && String(record[cfg.ownerField]) === String(person.person_id)) {
@@ -474,8 +505,8 @@ export default {
       const role = parseRole(cfg, req.body);
       const personId = parsePersonId(req.params.person_id);
       await requireReadable(args);
-      await requireManage(args);
       await inTransaction(acc, async (trx) => {
+        await requireManage(args, trx);
         const person = await personById(trx, personId);
         const had = person ? await rowsOf(trx, cfg, id, person) : { access: null, legacy: null };
         if (!person || (!had.access && !had.legacy)) throw new HttpError(404, 'NOT_FOUND', 'That person is not on the list.');
@@ -491,8 +522,8 @@ export default {
       const { req, res, acc, cfg, id } = args;
       const personId = parsePersonId(req.params.person_id);
       await requireReadable(args);
-      await requireManage(args);
       await inTransaction(acc, async (trx) => {
+        await requireManage(args, trx);
         const person = await personById(trx, personId);
         const had = person ? await rowsOf(trx, cfg, id, person) : { access: null, legacy: null };
         if (!person || (!had.access && !had.legacy)) throw new HttpError(404, 'NOT_FOUND', 'That person is not on the list.');
@@ -508,9 +539,9 @@ export default {
       if (!isObject(req.body)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a JSON body.');
       const personId = parsePersonId(req.body.person_id);
       await requireReadable(args);
-      await requireManage(args);
       const keepRole = cfg.collection === 'projects' ? 'investigator' : 'edit';
       const done = await inTransaction(acc, async (trx) => {
+        await requireManage(args, trx);
         const record = await loadRecord(trx, cfg, id);
         const next = await requireActivePerson(trx, personId);
         const previousId = record[cfg.ownerField];

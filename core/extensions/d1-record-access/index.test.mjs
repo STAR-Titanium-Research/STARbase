@@ -64,6 +64,7 @@ function makeDb(initial) {
   const over = (target, inTrx) => {
     const rowsOf = (table) => (target.tables[table] ??= []);
     const db = (table) => {
+      if (target.broken && !inTrx) throw new Error('connection lost');
       const preds = [];
       const rows = () => rowsOf(table).filter((r) => preds.every((p) => p(r)));
       const project = (row, cols) => (row === undefined ? undefined : cols.length ? Object.fromEntries(cols.map((c) => [c, row[c] ?? null])) : { ...row });
@@ -124,6 +125,7 @@ function makeDb(initial) {
     }
   };
   db.tables = () => store.tables;
+  db.breakReads = () => { store.broken = true; };
   db.log = log;
   return db;
 }
@@ -145,7 +147,7 @@ function mount({ tables = baseTables(), readable = () => true, manage = (c, id, 
     }
     async readByQuery(query) {
       const id = query.filter._and[0][keyOf(this.collection)]._eq;
-      calls.manage.push({ collection: this.collection, id, query, user: this.options.accountability.user });
+      calls.manage.push({ collection: this.collection, id, query, user: this.options.accountability.user, knex: this.options.knex, events: [...db.log.events] });
       return manage(this.collection, id, this.options.accountability.user) ? [{ [keyOf(this.collection)]: id }] : [];
     }
   }
@@ -223,7 +225,7 @@ test('401 without a user, on every route', async () => {
 
 test('the collection whitelist, the uuid and the role are checked (400)', async () => {
   const { handlers, db } = mount();
-  for (const collection of ['people', 'directus_users', 'sample_access', 'physical_samples; drop', '']) {
+  for (const collection of ['people', 'directus_users', 'sample_access', 'physical_samples; drop', '', 'constructor', '__proto__', 'toString', 'hasOwnProperty']) {
     assert.equal((await call(handlers['GET /:collection/:id'], { collection })).status, 400, String(collection));
   }
   assert.equal((await call(handlers['GET /:collection/:id'], { id: 'not-a-uuid' })).status, 400);
@@ -589,6 +591,9 @@ test('roleLabel and recordLink', () => {
   assert.equal(roleLabel('physical_samples', 'edit', 'co_owner'), 'Co-owner · can edit');
   assert.equal(roleLabel('projects', 'investigator', 'investigator'), 'Secondary investigator');
   assert.equal(recordLink('https://lab.example', 'samples_x', ID(1)), null);
+  for (const name of ['constructor', '__proto__', 'toString']) assert.equal(recordLink('https://lab.example', name, ID(1)), null, name);
+  assert.equal(recordLink('', 'physical_samples', SAMPLE), null, 'no PUBLIC_URL, no link');
+  assert.equal(recordLink(undefined, 'physical_samples', SAMPLE), null);
   assert.equal(recordLink('https://lab.example/', 'physical_samples', SAMPLE), `https://lab.example/admin/home/samples/${SAMPLE}`);
   assert.equal(recordLink('https://lab.example//', 'projects', 'a b'), 'https://lab.example/admin/home/projects/a%20b');
 });
@@ -767,4 +772,114 @@ test('a failing cache clear never fails the change', async () => {
   const r = await call(handlers['POST /:collection/:id/entries'], { body: { person_id: P.nologin, role: 'view' } });
   assert.equal(r.status, 200);
   assert.ok(warnings.some((w) => /could not clear the data cache: redis down/.test(w)));
+});
+
+// ---- review fix round 1 ---------------------------------------------------------------------------------------
+
+test('the manage check runs INSIDE the write transaction, on its connection, on every write route', async () => {
+  const world = baseTables();
+  world.sample_access.push({ access_id: 'a1', sample_id: SAMPLE, person_id: P.view, role: 'view', added_by_person_id: P.owner, created_at: new Date() });
+  const { handlers, calls, db } = mount({ tables: world });
+  await add(handlers, { person_id: P.nologin, role: 'view' });
+  await call(handlers['PATCH /:collection/:id/entries/:person_id'], { params: { person_id: P.view }, body: { role: 'edit' } });
+  await call(handlers['DELETE /:collection/:id/entries/:person_id'], { params: { person_id: P.view } });
+  await transfer(handlers, P.nologin);
+  const writes = calls.manage.filter((m) => m.user === U.owner);
+  assert.equal(writes.length, 4);
+  for (const m of writes) {
+    assert.equal(m.knex?.isTransaction, true, 'ItemsService got the transaction');
+    assert.equal(m.events.at(-1), 'begin', 'asked after the transaction began, before it ended');
+  }
+  // a refused manage check rolls the transaction back without a write
+  const refused = await add(handlers, { person_id: P.view, role: 'view' }, { acc: as(U.view) });
+  assert.equal(refused.status, 403);
+  assert.deepEqual(db.log.events.slice(-2), ['begin', 'rollback']);
+  assert.ok(db.log.writes.filter((w) => w.inTrx).every((w) => w.op !== 'insert' || w.row.person_id !== P.view));
+});
+
+test('a manage check that fails inside the transaction (ownership changed meanwhile) writes nothing', async () => {
+  let owner = U.owner;
+  const { handlers, db, calls } = mount({ manage: (c, id, user) => user === owner });
+  owner = U.view; // the transfer committed between the request arriving and the write
+  const r = await add(handlers, { person_id: P.nologin, role: 'view' });
+  assert.equal(r.status, 403);
+  assert.deepEqual(db.tables().sample_access, []);
+  assert.equal(calls.mail.sent.length, 0);
+});
+
+test('a person who cannot read the record yet is mailed without the title and the link, told which restricted parent to wait for', async () => {
+  const world = baseTables();
+  world.projects[0].restricted = true;
+  world.project_readers.push({ record_id: PROJECT, user_id: U.co });
+  const { handlers, calls } = mount({ tables: world });
+  const blocked = await add(handlers, { person_id: P.view, role: 'view' }); // vic: a login, not a reader of the restricted project
+  assert.equal(blocked.body.email, 'sent');
+  assert.ok(blocked.body.entry.blocked_by, 'the list says so too');
+  const m = calls.mail.sent[0];
+  assert.equal(m.to, 'vic@login.example');
+  assert.match(m.subject, /Olive Owner gave you access to sample SM-001/);
+  for (const body of [m.text, m.html]) {
+    assert.ok(body.includes('SM-001'), 'the kind and code are there');
+    assert.ok(body.includes('Olive Owner'), 'and who added them');
+    assert.ok(/once you have access to the restricted project/.test(body));
+    assert.ok(!body.includes('Bar A'), 'no title');
+    assert.ok(!body.includes('lab.example'), 'no link');
+    assert.ok(!body.includes('PRJ1') && !body.includes('Project One'), 'nothing of the parent either');
+  }
+  assert.ok(!m.html.includes('<a '));
+  // a person the project does list (its readers table) gets the ordinary mail with the title and the link
+  const listed = await add(handlers, { person_id: P.co, role: 'view' });
+  assert.equal(listed.body.entry.blocked_by, null);
+  assert.ok(calls.mail.sent[1].text.includes('Bar A') && calls.mail.sent[1].text.includes('https://lab.example/admin/home/samples/'));
+  // a login-less person who is not on the restricted project's list is blocked too
+  const nologin = await add(handlers, { person_id: P.nologin, role: 'view' });
+  assert.equal(nologin.body.email, 'sent');
+  assert.ok(!calls.mail.sent[2].text.includes('Bar A') && !calls.mail.sent[2].text.includes('lab.example'));
+});
+
+test('a transfer to a person the restricted parent does not list sends the blocked wording', async () => {
+  const world = baseTables();
+  world.campaigns[0].restricted = true;
+  const { handlers, calls } = mount({ tables: world });
+  const r = await call(handlers['POST /:collection/:id/transfer'], { collection: 'manufacturing_operations', id: OPERATION, body: { person_id: P.view } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.email, 'sent');
+  const m = calls.mail.sent[0];
+  assert.equal(m.subject, 'Olive Owner made you the owner of operation SM-001-F1');
+  assert.ok(/restricted campaign/.test(m.text) && !m.text.includes('lab.example'));
+});
+
+test('mailContent with blockedKind drops the title and the link even when they are passed', () => {
+  const m = mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1', title: 'Secret bar', link: 'https://x/y', blockedKind: 'project' });
+  assert.ok(!m.text.includes('Secret bar') && !m.html.includes('Secret bar') && !m.text.includes('https://x') && !m.html.includes('https://x'));
+  assert.ok(m.text.includes('You will be able to open it once you have access to the restricted project.'));
+  assert.ok(mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1', title: 'Bar', link: 'https://x/y' }).text.includes('https://x/y'));
+});
+
+test('without PUBLIC_URL: one warning at startup, and the mail carries no link', async () => {
+  const none = mount({ env: {} });
+  assert.equal(none.warnings.filter((w) => /PUBLIC_URL is not set/.test(w)).length, 1);
+  const r = await add(none.handlers, { person_id: P.nologin, role: 'view' });
+  assert.equal(r.body.email, 'sent');
+  assert.ok(!/admin\/home/.test(none.calls.mail.sent[0].text) && !none.calls.mail.sent[0].html.includes('<a '));
+  assert.ok(none.calls.mail.sent[0].text.includes('Bar A'));
+  assert.equal(none.warnings.filter((w) => /PUBLIC_URL/.test(w)).length, 1, 'still just the one');
+  assert.equal(mount().warnings.filter((w) => /PUBLIC_URL/.test(w)).length, 0);
+});
+
+test('a read-back that fails after the commit still answers 200 with the committed change, and logs it', async () => {
+  const { handlers, db, errors, calls } = mount();
+  const original = db.transaction;
+  db.transaction = async (fn) => {
+    const out = await original(fn);
+    db.breakReads(); // the connection drops right after the commit
+    return out;
+  };
+  const r = await add(handlers, { person_id: P.nologin, role: 'view' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.entry, null);
+  assert.equal(r.body.email, 'failed', 'the mail lookups need the database too, and a failure there is only a failed mail');
+  assert.equal(db.tables().sample_access.length, 1, 'the change is committed');
+  assert.ok(errors.some((e) => /committed but reading it back failed/.test(e)));
+  assert.equal(calls.mail.sent.length, 0);
 });
