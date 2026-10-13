@@ -41,7 +41,8 @@ Directus form, and a phone layout. Deployment files are written but not run.
   - no `docker compose` against the `d1-database` project, no `tailscale` command, no live Directus write;
   - the only compose calls allowed are parse-only `docker compose ... config` runs: Task 11's test
     (project name `d1-starbase-check`) and `tests/phase0_smoke.sh`;
-  - `docker run --rm caddy:2-alpine caddy validate` (Task 11) starts no service of the stack.
+  - Task 11's `caddy validate` run and its throwaway `d1-starbase-caddy-check` container (Step 7)
+    start no service of the stack.
 - **Previews:**
   - Only `D1_PREVIEW_NAME=d1-starbase D1_PREVIEW_PORT=18057`. Another session runs the default
     preview (`d1-preview`, port 18055), and nothing here may start, stop or overwrite it.
@@ -102,35 +103,11 @@ Directus form, and a phone layout. Deployment files are written but not run.
 
 ## Review Focus
 
-1. **Signed out somewhere else.** This happens after a Data Studio sign-out in another tab, or when
-   the session ends.
-   - The next STARbase request carries no cookie, and Directus answers it as the public role: **403,
-     not 401**.
-   - Expected: STARbase goes to `/signin?next=<this page>`. It does not show "You don't have
-     permission" panels.
-   - A Lab Member's genuine 403 while the session is alive stays the page's own message.
-   - Tests: `api.test.ts` in Task 2.
-2. **An untrusted or odd `next`.** Inputs: `//evil.example`, `https://evil.example`, `/\evil`,
-   `/signin?next=…`, a repeated `next=`.
-   - Expected: the user lands on `/`.
-   - A real deep link (a QR code opened on a phone while signed out, `/samples/a%2Fb?x=1`) must come
-     back unchanged after sign-in, through the password form and through the SSO return.
-   - Tests: `session.test.ts` and `guard.test.ts` in Task 2, and the deep-link e2e in Task 12.
-3. **The edit frame never says it is ready.** Causes: signed out inside the frame, a refused CSP, a
-   slow d1-server.
-   - Expected: after 8 s the dialog offers "Open in a new tab" rather than an empty box.
-   - The new-tab path refreshes the record page when STARbase gets focus back.
-   - A blocked pop-up says so.
-   - Tests: `editor.test.ts` in Task 7, and the refused-frame e2e in Task 12.
-4. **A stray or forged `postMessage`.** Sources: another origin, another window or tab, a different
-   record, malformed data.
-   - Expected: it is ignored, and the dialog stays as it was.
-   - Tests: `editFrame.test.ts` in Task 6 and `editor.test.ts` in Task 7.
-5. **d1-server unreachable.** Causes: a network error, a timeout, or a 5xx at boot.
-   - Expected: a full-page "Can't reach the database" with Retry. Never an endless spinner, and
-     never a bounce to `/signin`.
-   - After a successful Retry the user continues to the page, or to `/signin` if signed out.
-   - Tests: `session.test.ts` and `api.test.ts` in Task 2, and the unreachable check in Task 5.
+1. **Signed out elsewhere** (Data Studio sign-out, ended session): Directus answers the next request as the public role, **403 not 401**, and STARbase must go to `/signin?next=<page>`, while a live session's 403 stays the page's message. Tests: `api.test.ts` (Task 2), e2e (Task 12).
+2. **Untrusted `next`** (`//evil`, `https://…`, `/\evil`, `/signin…`, repeated): lands on `/`; a real deep link (`/samples/a%2Fb?x=1`, a QR code) comes back unchanged through password and SSO sign-in. Tests: `session.test.ts`, `guard.test.ts` (Task 2), e2e (Task 12).
+3. **The edit frame never says ready** (signed out in the frame, CSP refused, slow server): after 8 s the dialog offers a new tab, which refreshes the record on return; a blocked pop-up says so. Tests: `editor.test.ts` (Task 7), e2e (Task 12).
+4. **A stray or forged `postMessage`** (other origin, other window, other record, malformed): ignored, the dialog unchanged. Tests: `editFrame.test.ts` (Task 6), `editor.test.ts` (Task 7).
+5. **d1-server unreachable** (network error, timeout, 5xx at boot): a full-page "Can't reach the database" with Retry, never a spinner or a bounce to `/signin`. Tests: `session.test.ts`, `api.test.ts` (Task 2), the check in Task 5 Step 7.
 
 ## Decisions this plan makes (the spec does not settle them)
 
@@ -169,6 +146,12 @@ Directus form, and a phone layout. Deployment files are written but not run.
   covered by the e2e in Task 12.
 - **Phone cards default** is a STARbase-only switch (`setPhoneListDefault(true)`), so the Directus
   host keeps its table at every width. The default is never written to storage.
+- **The star mark** (`Star-Icon.svg`) is the favicon and the mark in the phone top bar. The desktop
+  sidebar shows the full logo above the Explorer rail. The rail itself (`@d1/ui` `NavRail`) has no
+  brand slot, and giving it one would change the Directus module too.
+- **Two more tasks than the outline.** Task 0 (per-name preview files) must run before any preview
+  starts, and the edit frame is split at the Directus/STARbase seam (Tasks 6 and 7) so each side
+  gets its own review gate.
 
 ## Files (what each new unit is for)
 
@@ -5408,7 +5391,7 @@ git push origin HEAD:feat/explorer-standalone
 
 Nothing in this task starts, stops or recreates a service of the stack. The checks are:
 - parse-only `docker compose config`, under the throwaway project name `d1-starbase-check`;
-- `caddy validate` in a throwaway container;
+- `caddy validate`, and one serve of the built app (Step 7), each in a throwaway container;
 - unit tests.
 
 **Files:**
@@ -5887,7 +5870,38 @@ If the compose test fails only on the nested `${STARBASE_ORIGIN:+,${STARBASE_ORI
 installed compose cannot nest inside `:+`, stop and report it to the maintainer. Do not fall back to a
 localhost default.
 
-- [ ] **Step 7: The runbook**
+- [ ] **Step 7: Serve the build the way production will**
+
+`caddy validate` only parses the file. Report QR codes open deep paths such as `/samples/<uuid>`, and in
+production only Caddy's SPA fallback serves them. Every e2e run uses `vite preview`, which has its
+own fallback. A broken `/config.json` would also go unnoticed, because `DEFAULT_DIRECTUS_URL`
+happens to be right. So serve the real build with the real Caddyfile once, in a throwaway container
+that is not compose and not the stack's proxy. Only 8090 is published, on `127.0.0.1:18090`.
+
+```bash
+npm run build -w starbase-web
+MSYS_NO_PATHCONV=1 docker run -d --name d1-starbase-caddy-check -p 127.0.0.1:18090:8090 \
+  -e D1_SERVER_ORIGIN=https://d1-server.tail54eeb6.ts.net \
+  -v "$(pwd -W)/infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  -v "$(pwd -W)/apps/starbase/web/dist:/srv/starbase:ro" caddy:2-alpine
+H=http://127.0.0.1:18090
+curl -fsS --retry 10 --retry-connrefused --retry-delay 1 "$H/config.json"; echo
+curl -fsSI "$H/samples/3f2b8a1c-0000-4000-8000-000000000001" | grep -iE '^(content-type|cache-control|content-security-policy):'
+curl -fsS "$H/samples/3f2b8a1c-0000-4000-8000-000000000001" | grep -c '<title>STARbase</title>'
+A=$(basename "$(ls apps/starbase/web/dist/assets/*.js | head -1)")
+curl -fsSI "$H/assets/$A" | grep -iE '^(cache-control|content-security-policy):'
+docker rm -f d1-starbase-caddy-check
+```
+
+Expected:
+- `/config.json` prints `{"directusUrl":"https://d1-server.tail54eeb6.ts.net"}`, which is valid JSON;
+- the deep path answers with `content-type: text/html`, `cache-control: no-cache`, and the CSP
+  naming `https://d1-server.tail54eeb6.ts.net` in `connect-src` and `frame-src`. Its body is
+  `index.html`, so the count is `1`;
+- the hashed asset answers with `cache-control: public, max-age=31536000, immutable`, and with the
+  same CSP.
+
+- [ ] **Step 8: The runbook**
 
 `docs/runbooks/starbase.md`:
 
@@ -6006,7 +6020,7 @@ Then empty `STARBASE_ORIGIN` and `STARBASE_URL` in `.env`, set `SESSION_COOKIE_S
 redirects return to the Directus Home module; nothing else changes.
 ````
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add apps/starbase/web infra/caddy/Caddyfile infra/tailscale/starbase-serve.json docker-compose.yml .env.example \
@@ -6356,8 +6370,10 @@ test('a credentialed write from a STARbase page passes CORS (People notes)', asy
 		const res = await patch;
 		personId = decodeURIComponent(new URL(res.url()).pathname.split('/').pop()!);
 		expect(res.status()).toBe(200);
-		expect(res.headers()['access-control-allow-origin']).toBe(STAR_BASE);
-		expect(res.headers()['access-control-allow-credentials']).toBe('true');
+		// allHeaders(), not headers(): Playwright's headers() leaves out security-related headers.
+		const headers = await res.allHeaders();
+		expect(headers['access-control-allow-origin']).toBe(STAR_BASE);
+		expect(headers['access-control-allow-credentials']).toBe('true');
 	} finally {
 		if (personId) await api.patch(`${D1_LOCAL}/items/people/${personId}`, { data: { notes: notesOf.get(personId) ?? null } });
 		await api.dispose();
