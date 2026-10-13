@@ -39,21 +39,21 @@ BEGIN;
 -- Directus only shows a module entry whose "enabled" is true, so every entry needs
 -- it: without it the rail renders empty. The third condition repairs a bar written
 -- by an earlier version of this script (which omitted the flag) without touching a
--- bar curated in the UI, since the UI always writes the flag.
--- Home is first and the Data Studio (content) follows the dashboards, the order migration
--- 20261007000138 gives an existing bar (docs/superpowers/specs/2026-10-06-explorer-pages-design.md).
+-- bar curated in the UI, since the UI always writes the flag. The second condition
+-- rewrites an old seeded bar that still lists Home, once; a curated bar has no Home.
+-- Home and the Force and FAST plotters are STARbase pages now (spec
+-- docs/superpowers/specs/2026-10-13-directus-headless-design.md §5.6), so they are not in the
+-- seed. The STARbase link tile needs the absolute server address, which this file cannot read:
+-- scripts/set_module_bar_starbase.sh adds it.
 UPDATE directus_settings SET module_bar = '[
-  {"type":"module","id":"home","enabled":true},
   {"type":"module","id":"users","enabled":true},
   {"type":"module","id":"files","enabled":true},
   {"type":"module","id":"insights","enabled":true},
   {"type":"module","id":"d1-lab-dashboard","enabled":true},
-  {"type":"module","id":"d1-force-dashboard","enabled":true},
-  {"type":"module","id":"d1-fast-dashboard","enabled":true},
   {"type":"module","id":"content","enabled":true},
   {"type":"module","id":"settings","enabled":true}
 ]' WHERE module_bar IS NULL
-      OR module_bar::text NOT LIKE '%d1-lab-dashboard%'
+      OR module_bar::text LIKE '%"home"%'
       OR module_bar::text NOT LIKE '%"enabled"%';
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ WHERE NOT EXISTS (
 -- Inventory is a single full list (no split); Manufacturing Operations is split
 -- into the two most common families: Machining and FAST. (user & role NULL = global)
 -- A bookmark only uses its own sort (never the default preset's), so each one sets it.
--- "Samples" is the view the d1-home module links to (resolved by name, not by id). It is
+-- "Samples" is the view STARbase's sidebar links to (resolved by name, not by id). It is
 -- updated in place, so a filter or columns curated in the UI survive a re-run.
 DELETE FROM directus_presets
 WHERE collection IN ('physical_samples','manufacturing_operations')
