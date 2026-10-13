@@ -171,6 +171,38 @@ test('the foot: Settings gear, theme toggle (saved, kept on reload), and the com
 	await page.context().close();
 });
 
+test('first paint: a chosen rail and theme are drawn before /d1-usage/nav answers (and kept if it fails)', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280);
+	await page.getByRole('button', { name: /^Theme: System/ }).click();
+	await page.getByRole('button', { name: /^Theme: Light/ }).click();
+	await page.getByRole('button', { name: 'Collapse the sidebar' }).click();
+	await expect.poll(() => [state.prefs.sidebarCollapsed, state.prefs.theme]).toEqual([true, 'dark']);
+
+	// The answer is held back: the reload must already be a 60px rail in the saved theme.
+	let release!: () => void;
+	state.holdNav = new Promise<void>((r) => (release = r));
+	const asked = page.waitForRequest((r) => r.url().endsWith('/d1-usage/nav'));
+	await page.reload();
+	await asked;
+	await expect(page.locator('aside.sb-side')).toBeVisible();
+	expect(await columnWidth(page), 'a rail at first paint, not 224px').toBe(60);
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+	release();
+	state.holdNav = null;
+	await expect.poll(() => state.usage.filter((u) => u === 'GET /d1-usage/nav').length).toBeGreaterThan(1);
+	expect(await columnWidth(page)).toBe(60);
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+	// A failed /nav leaves the remembered choices in force for the session.
+	state.failNav = true;
+	await page.reload();
+	await expect.poll(() => state.usage.filter((u) => u === 'GET /d1-usage/nav').length).toBeGreaterThan(2);
+	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+	expect(await columnWidth(page)).toBe(60);
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+	await page.context().close();
+});
+
 // Keyboard only: Tab to reach things, Enter to act. The page is left alone with the mouse.
 async function tabTo(page: Page, target: Locator, max = 60) {
 	for (let i = 0; i < max; i++) {

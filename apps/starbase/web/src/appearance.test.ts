@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyTheme, cacheTheme, cachedTheme, nextTheme } from './appearance';
+import { applyTheme, cacheTheme, cachedTheme, nextTheme, restoreTheme, syncTheme } from './appearance';
 
 function root() {
 	const attrs = new Map<string, string>();
@@ -44,5 +44,35 @@ describe('the cached choice', () => {
 		expect(cachedTheme(bad)).toBe('system');
 		expect(() => cacheTheme('dark', bad)).not.toThrow();
 		expect(cachedTheme(null)).toBe('system');
+	});
+});
+
+describe('restoreTheme and syncTheme', () => {
+	const store = (initial?: string) => {
+		const m = new Map<string, string>(initial ? [['starbase.theme', initial]] : []);
+		return { m, getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k) };
+	};
+	it('restoreTheme paints the cached choice before anything has loaded', () => {
+		const r = root();
+		restoreTheme(r, store('dark'));
+		expect(r.attrs.get('data-theme')).toBe('dark');
+	});
+	it('syncTheme does nothing until the preferences have loaded (the default "system" is not a choice)', () => {
+		const r = root();
+		const s = store('dark');
+		restoreTheme(r, s);
+		syncTheme(r, false, 'system', s);
+		expect(r.attrs.get('data-theme')).toBe('dark');
+		expect(s.m.get('starbase.theme')).toBe('dark');
+	});
+	it('syncTheme applies and caches the loaded choice, including a return to system', () => {
+		const r = root();
+		const s = store('dark');
+		syncTheme(r, true, 'light', s);
+		expect(r.attrs.get('data-theme')).toBe('light');
+		expect(s.m.get('starbase.theme')).toBe('light');
+		syncTheme(r, true, 'system', s);
+		expect(r.attrs.has('data-theme')).toBe(false);
+		expect(s.m.has('starbase.theme')).toBe(false);
 	});
 });

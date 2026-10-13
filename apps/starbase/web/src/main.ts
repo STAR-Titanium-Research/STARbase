@@ -16,8 +16,11 @@ import { createStarbaseRouter } from './router';
 import { createSession } from './session';
 import { needsReload } from './userSwitch';
 import { registerStandins } from './standins/register';
+import { restoreTheme } from './appearance';
 
 async function bootstrap() {
+	// The person's last theme choice, before anything is drawn (the saved preference confirms it once loaded).
+	restoreTheme(document.documentElement);
 	await loadRuntimeConfig();
 	const { directusUrl } = getConfig();
 	const api = createApi(directusUrl);

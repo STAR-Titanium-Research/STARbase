@@ -9,7 +9,8 @@ import { useWindowWidth } from './narrow';
 import { backdropDismiss } from './backdropDismiss';
 import { returnFocusToMenu } from './sheetFocus';
 import { DIALOG_SELECTOR, shortcutMode, useShellLayout } from './shellLayout';
-import { applyTheme, cacheTheme } from './appearance';
+import { syncTheme } from './appearance';
+import { cacheLayoutPrefs, cachedLayoutPrefs, pickLayoutPrefs } from './sidebarCache';
 
 // STARbase's chrome around every signed-in page (spec §3.3; explorer-sidebar-b2 decisions 7 and 8). The
 // sidebar's layout follows the window width and the person's saved choice (shellLayout.ts):
@@ -19,8 +20,31 @@ import { applyTheme, cacheTheme } from './appearance';
 // The overlay and the sheet are the same aria-modal dialog (the page behind is inert, Tab wraps inside, so
 // Ctrl+K stays shut while one is open). The finder is shared by all three.
 const width = useWindowWidth();
-const { prefs, setPref } = usePins();
-const shell = useShellLayout({ width, prefs, setPref });
+const { prefs, setPref, loaded } = usePins();
+// The layout reads the cached choice until /d1-usage/nav has answered (sidebarCache.ts), so a rail is a rail at first paint.
+const cached = ref(cachedLayoutPrefs());
+const layoutPrefs = computed(() => pickLayoutPrefs(loaded.value, prefs.value, cached.value));
+const shell = useShellLayout({
+	width,
+	prefs: layoutPrefs,
+	setPref: (k, v) => {
+		// A choice made before the answer arrives counts at once (the layout is still reading the cache).
+		if (!loaded.value) {
+			cached.value = { ...cached.value, [k]: v };
+			cacheLayoutPrefs(cached.value);
+		}
+		return setPref(k, v);
+	},
+});
+watch(
+	() => [loaded.value, prefs.value.sidebarCollapsed, prefs.value.autoCollapse] as const,
+	([isLoaded, sidebarCollapsed, autoCollapse]) => {
+		if (!isLoaded) return;
+		cached.value = { sidebarCollapsed, autoCollapse };
+		cacheLayoutPrefs(cached.value);
+	},
+	{ immediate: true },
+);
 const phone = computed(() => shell.layout.value.phone);
 
 const sheetOpen = ref(false);
@@ -58,13 +82,11 @@ const findFromModal = () => {
 // The rail's own controls ask for a layout; the sheet and the overlay close when the choice is made there.
 const onRequestMode = (mode: 'expanded' | 'rail', sectionId?: SectionId) => shell.requestMode(mode, sectionId);
 
-// Theme: the saved choice paints <html> (theme.css), and is remembered here for the next load.
+// Theme: the saved choice paints <html> (theme.css) once it has loaded, and is remembered for the next
+// load (main.ts restores the remembered one before the first render).
 watch(
-	() => prefs.value.theme,
-	(theme) => {
-		applyTheme(document.documentElement, theme);
-		cacheTheme(theme);
-	},
+	() => [loaded.value, prefs.value.theme] as const,
+	([isLoaded, theme]) => syncTheme(document.documentElement, isLoaded, theme),
 	{ immediate: true },
 );
 

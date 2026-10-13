@@ -18,6 +18,10 @@ export interface StubState {
 	prefs: Record<string, unknown>;
 	// "METHOD /path" of every request STARbase made to d1-usage, in order.
 	usage: string[];
+	// While set, GET /d1-usage/nav is not answered until it settles (first paint before the preferences load).
+	holdNav: Promise<void> | null;
+	// GET /d1-usage/nav answers 500.
+	failNav: boolean;
 }
 
 const COLLECTIONS = [
@@ -27,7 +31,7 @@ const COLLECTIONS = [
 ];
 
 export async function stubD1(context: BrowserContext): Promise<StubState> {
-	const state: StubState = { pins: [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }], prefs: {}, usage: [] };
+	const state: StubState = { pins: [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }], prefs: {}, usage: [], holdNav: null, failNav: false };
 	await pointAtD1(context);
 	const cors = {
 		'access-control-allow-origin': STAR_BASE,
@@ -51,6 +55,10 @@ export async function stubD1(context: BrowserContext): Promise<StubState> {
 		if (path === '/users/me') return json({ data: { id: 'u1', first_name: 'Ada', last_name: 'Lovelace', email: 'ada@example.org', role: 'r1' } });
 		if (path === '/policies/me/globals') return json({ data: { admin_access: true } });
 		if (path === '/collections') return json({ data: COLLECTIONS.map((collection) => ({ collection, meta: { hidden: false } })) });
+		if (path === '/d1-usage/nav') {
+			if (state.holdNav) await state.holdNav;
+			if (state.failNav) return json({ error: 'down' }, 500);
+		}
 		if (path === '/d1-usage/nav') return json({ pins: state.pins, prefs: state.prefs });
 		if (path === '/d1-usage/pin' && method === 'POST') {
 			const { kind, target, pinned } = body();
