@@ -7,6 +7,10 @@ body {
 	font-size: 13px;
 	-webkit-text-size-adjust: 100%;
 }
+/* An icon is a ligature: the glyph's name is text ("open_in_new") until the font loads (font-display: block
+   keeps it invisible, but not narrow), and at 375 px that wide text pushed the page sideways for a few hundred ms.
+   A fixed box one glyph wide, clipped, cannot widen the layout. Covers the VIcon stand-in and the plotters' own spans. */
+.material-symbols-rounded { width: 1em; height: 1em; flex: none; overflow: hidden; }
 /* Used by the VButton and VProgressCircular stand-ins' spinners. */
 @keyframes spin { to { transform: rotate(360deg); } }
 

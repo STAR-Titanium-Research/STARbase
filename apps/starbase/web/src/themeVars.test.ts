@@ -56,6 +56,16 @@ describe('STARbase buttons', () => {
 	});
 });
 
+describe('icon font first paint', () => {
+	it('a Material Symbols span is a fixed 1em box that clips, so ligature text cannot widen the layout', () => {
+		const styles = readFileSync(join(here, 'styles.css'), 'utf8');
+		const rule = styles.match(/^\.material-symbols-rounded\s*\{[^}]*\}/m)?.[0] ?? '';
+		expect(rule).not.toBe('');
+		expect(rule).toMatch(/width:\s*1em/);
+		expect(rule).toMatch(/overflow:\s*hidden/);
+	});
+});
+
 describe('theme.css', () => {
 	it('finds the variables it is meant to check', () => {
 		expect(used).toContain('--theme--primary');
