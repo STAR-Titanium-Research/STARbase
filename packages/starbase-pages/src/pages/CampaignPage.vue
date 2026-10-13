@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
@@ -101,9 +102,7 @@ const pin = computed(() => pinTargetForRecord('campaigns', props.id));
 							<template #kind-icon><v-icon name="folder_special" x-small /></template>
 							<template #status><StatusBadge kind="campaign" :value="campaign.status" /></template>
 							<template #actions>
-								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
-								<v-button small secondary @click="access = true"><v-icon name="group" small left />Who has access</v-button>
-								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
+								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true" />
 							</template>
 							<template #after-facts>
 								<CampaignProgressBars rail :overview="data.overview.value" :force-hidden="data.analysisUnavailable.value" :force-failed="!!data.analyses.value.error" />
