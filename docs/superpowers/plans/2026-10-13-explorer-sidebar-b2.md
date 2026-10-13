@@ -8,7 +8,7 @@ menus that STARbase's shell switches by window width. There is also a Settings p
 
 **Architecture:** The pure rules go in `packages/d1-ui/src/nav/sidebarModel.ts` (vitest). Per-user
 state goes behind the existing `d1-usage` endpoint, which gains pin order, saved-view pins and a
-preferences row (migration 165). `ExplorerNav` renders a mode it is given; STARbase's `AppShell`
+preferences row (migration 170). `ExplorerNav` renders a mode it is given; STARbase's `AppShell`
 chooses the mode from the window width and the saved preference. The Settings page lives in
 `packages/starbase-pages`, so both hosts get it.
 
@@ -33,7 +33,7 @@ and rebase onto `main` when it lands. Every path below is as it is on the STARba
 | S4 pin toggle, settings, docs | 10-12 | `.claude/worktrees/b2-settings` | `feat/sidebar-b2-settings` (from S3) | `directus-ui-implementer` | blocked on S3 |
 
 S1 and S2 run in parallel. The coordinator merges them into `feat/sidebar-b2`, then S3 and S4 stack on
-top. Review every stream with `directus-ui-reviewer`, and review migration 165 with `migration-review`.
+top. Review every stream with `directus-ui-reviewer`, and review migration 170 with `migration-review`.
 
 ## Global Constraints
 
@@ -88,10 +88,10 @@ top. Review every stream with `directus-ui-reviewer`, and review migration 165 w
 
 ---
 
-### Task 1: Migration 165 — pin order, view pins, user preferences
+### Task 1: Migration 170 — pin order, view pins, user preferences
 
 **Files:**
-- Create: `db/migrations/20261013000165_user_pins_and_prefs.sql`
+- Create: `db/migrations/20261013000170_user_pins_and_prefs.sql`
 
 **Interfaces:**
 - Produces:
@@ -106,7 +106,7 @@ top. Review every stream with `directus-ui-reviewer`, and review migration 165 w
 - [ ] **Step 2:** Prove it applies up, down and up again. Expected: all three succeed, and
   `\d d1_private.user_usage` shows `pin_order`.
 - [ ] **Step 3:** Run `migration-review` and fix what it reports.
-- [ ] **Step 4:** Commit: `feat(db): pin order, view pins and user prefs (migration 165)`.
+- [ ] **Step 4:** Commit: `feat(db): pin order, view pins and user prefs (migration 170)`.
 
 ### Task 2: `d1-usage` endpoint — nav, pin order, prefs, reset, Home without pins
 
@@ -501,7 +501,7 @@ top. Review every stream with `directus-ui-reviewer`, and review migration 165 w
 - [ ] **Step 1:** Add the backlog items that can only be checked on live Directus with real data:
   - **#B2-1 — Saved-view pins across people.** Pin a role-shared saved view and a personal one. As
     another member of that role, only the shared one is pinnable, and their pins are their own.
-  - **#B2-2 — Migration 165 on live.** It applies, existing U1 pins keep their order, and each person
+  - **#B2-2 — Migration 170 on live.** It applies, existing U1 pins keep their order, and each person
     gets Samples and Projects once.
   - **#B2-3 — Record pins after access changes.** Pin a record, then remove the person's access: the
     pin moves to Settings → "No longer available".

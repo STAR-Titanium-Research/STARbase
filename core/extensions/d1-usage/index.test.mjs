@@ -94,7 +94,7 @@ function fakeDb({ activity = [], failOnUpsertNumber = 0 } = {}) {
             for (const [k, r] of state.usage) if (k.startsWith(`${b[0]}|`) && r.pinned) r.score = 0;
             return { rows: [] };
         }
-        // -- pins and preferences (migration 165) --
+        // -- pins and preferences (migration 170) --
         const mine = (user) => [...state.usage].filter(([k]) => k.startsWith(`${user}|`));
         const split = (k) => {
             const [, kind, ...rest] = k.split('|');

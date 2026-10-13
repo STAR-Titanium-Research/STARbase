@@ -13,7 +13,7 @@
 //   POST /d1-usage/hide  {kind, target}                     -> 204   (also unpins)
 //   POST /d1-usage/clear                                    -> 204   drops unpinned rows, zeroes pinned ones
 //
-// Sidebar (spec docs/superpowers/specs/2026-10-13-explorer-sidebar-b2-design.md, migration 165):
+// Sidebar (spec docs/superpowers/specs/2026-10-13-explorer-sidebar-b2-design.md, migration 170):
 //   GET  /d1-usage/nav                                      -> { pins: [{kind, target}], prefs: {...} }
 //        every pinned row of every kind in pin_order; prefs as stored (the client fills defaults). The first
 //        call of a person (user_prefs.pins_seeded false) pins samples and projects (appended after any pins
@@ -185,7 +185,7 @@ export const SQL = {
         + ` ORDER BY id LIMIT ${FOLD_LIMIT}`,
     deleteUnpinned: 'DELETE FROM d1_private.user_usage WHERE user_id = ? AND pinned = false',
     zeroPinned: 'UPDATE d1_private.user_usage SET score = 0 WHERE user_id = ? AND pinned = true',
-    // -- sidebar pins and preferences (migration 165) --
+    // -- sidebar pins and preferences (migration 170) --
     // The person's pins, every kind, in order (the tie-break only matters for rows the order has not reached).
     getPins:
         'SELECT kind, target FROM d1_private.user_usage WHERE user_id = ? AND pinned = true'

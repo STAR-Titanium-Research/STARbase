@@ -147,7 +147,7 @@ Directus it never could.
 
 ## Data
 
-Migration `20261013000165_user_pins_and_prefs.sql`:
+Migration `20261013000170_user_pins_and_prefs.sql`:
 
 ```sql
 ALTER TABLE d1_private.user_usage

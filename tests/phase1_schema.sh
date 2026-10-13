@@ -2865,9 +2865,9 @@ jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql
 uu_down=$(awk '/-- migrate:down/{f=1;next}f' "$UU")
-# 20261013000165 (pin order, view pins, user_prefs) runs after 163 and adds d1_private.user_prefs, so its
+# 20261013000170 (pin order, view pins, user_prefs) runs after 163 and adds d1_private.user_prefs, so its
 # down goes first, as on a real database.
-UP=db/migrations/20261013000165_user_pins_and_prefs.sql
+UP=db/migrations/20261013000170_user_pins_and_prefs.sql
 up_down=$(awk '/-- migrate:down/{f=1;next}f' "$UP")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
@@ -3766,7 +3766,7 @@ EXECUTE delunpinned('$UU_A');
 EXECUTE zeropinned('$UU_A');
 SELECT 'uu_clear2:' || coalesce(string_agg((user_id = '$UU_A')::text || '/' || target || '/' || score, ',' ORDER BY user_id, target), '') FROM d1_private.user_usage;")
 grep -q 'uu_clear2:true/pinned/0,false/plain/4' <<<"$uu_out" && ok "clear deletes the caller's unpinned rows, zeroes the pinned ones, and leaves other users' rows" || bad "clear statements gave the wrong rows (output: $uu_out)"
-# The sidebar statements (migration 165), same way.
+# The sidebar statements (migration 170), same way.
 uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'visible', 1, $UU_TS, false, NULL);
 EXECUTE upsert('$UU_A', 'page', 'pinned', 1, $UU_TS, true, NULL);
 EXECUTE upsert('$UU_A', 'view', '12', 0, $UU_TS, false, NULL);
@@ -3846,9 +3846,9 @@ EXECUTE markseeded('$UU_A');
 SELECT 'uu_seed_ts:' || (updated_at > '2020-01-01') FROM d1_private.user_prefs;")
 grep -q 'uu_prefs_ts:t' <<<"$uu_out" && grep -q 'uu_seed_ts:t' <<<"$uu_out" && ok "every prefs write sets updated_at" || bad "updated_at not set on a prefs write (output: $uu_out)"
 
-echo "== Pin order, view pins and user preferences (migration 165) =="
+echo "== Pin order, view pins and user preferences (migration 170) =="
 # Same rolled-back-transaction pattern as migration 163 (fixture users UU_A / UU_B, set above).
-[[ -f "$UP" ]] && ok "found migration 165" || bad "migration 165 is missing ($UP)"
+[[ -f "$UP" ]] && ok "found migration 170" || bad "migration 170 is missing ($UP)"
 up_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$UP")
 run_eq "user_usage has pin_order (nullable integer)" \
     "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'user_usage' AND column_name = 'pin_order'" "integer:YES"
@@ -3860,7 +3860,7 @@ uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target, pinne
 SELECT 'up_view:' || kind || ':' || target || ':' || pin_order FROM d1_private.user_usage WHERE user_id = '$UU_A';")
 grep -q 'up_view:view:12:0' <<<"$uu_out" && ok "kind view is accepted, with a pin_order" || bad "view row insert failed (output: $uu_out)"
 uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'other', '1');")
-grep -q 'check constraint' <<<"$uu_out" && ok "a kind other than page / record / view is still rejected" || bad "bad kind was not rejected after migration 165 (output: $uu_out)"
+grep -q 'check constraint' <<<"$uu_out" && ok "a kind other than page / record / view is still rejected" || bad "bad kind was not rejected after migration 170 (output: $uu_out)"
 uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples');
 SELECT 'up_null:' || coalesce(pin_order::text, '<null>') FROM d1_private.user_usage WHERE user_id = '$UU_A';")
 grep -q 'up_null:<null>' <<<"$uu_out" && ok "pin_order is NULL until a row is pinned" || bad "pin_order default is not NULL (output: $uu_out)"
@@ -3883,7 +3883,7 @@ run_eq "user_prefs, its columns and pin_order have comments (without: none)" \
         SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE n.nspname = 'd1_private' AND a.attnum > 0 AND NOT a.attisdropped AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
            AND (c.relname = 'user_prefs' OR (c.relname = 'user_usage' AND a.attname = 'pin_order'))) q" ""
-# Back-fill and down: run 165's down (back to the 163 shape), seed pins out of order, run its up, check the numbering,
+# Back-fill and down: run 170's down (back to the 163 shape), seed pins out of order, run its up, check the numbering,
 # then add a view pin and run the down again (the view row goes, the order column goes, the old CHECK is back).
 uu_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;

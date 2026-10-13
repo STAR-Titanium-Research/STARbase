@@ -38,10 +38,10 @@ CREATE TABLE d1_private.user_prefs (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-COMMENT ON COLUMN d1_private.user_usage.kind IS 'page: an Explorer page or quick action. record: one record of the seven record collections. view: a saved view (a directus_presets bookmark; migration 165).';
+COMMENT ON COLUMN d1_private.user_usage.kind IS 'page: an Explorer page or quick action. record: one record of the seven record collections. view: a saved view (a directus_presets bookmark; migration 170).';
 COMMENT ON COLUMN d1_private.user_usage.target IS 'page: a route key such as samples, or action:log-operation. record: <collection>:<primary key>, e.g. physical_samples:<uuid>. view: the directus_presets id as text, a positive integer.';
-COMMENT ON COLUMN d1_private.user_usage.pin_order IS 'Position among this person''s pins, gapless from 0 across every kind (migration 165). NULL when the row is not pinned. A new pin goes last; a drop or reorder rewrites the whole order; unpinning clears it.';
-COMMENT ON TABLE d1_private.user_prefs IS 'One row per person: whether the default sidebar pins were given, and their sidebar / theme preferences (migration 165). Read and written only by the d1-usage endpoint, never through the items API (d1_private is outside the Directus schema scan). Per-user convenience data: no audit trigger.';
+COMMENT ON COLUMN d1_private.user_usage.pin_order IS 'Position among this person''s pins, gapless from 0 across every kind (migration 170). NULL when the row is not pinned. A new pin goes last; a drop or reorder rewrites the whole order; unpinning clears it.';
+COMMENT ON TABLE d1_private.user_prefs IS 'One row per person: whether the default sidebar pins were given, and their sidebar / theme preferences (migration 170). Read and written only by the d1-usage endpoint, never through the items API (d1_private is outside the Directus schema scan). Per-user convenience data: no audit trigger.';
 COMMENT ON COLUMN d1_private.user_prefs.user_id IS 'The directus_users.id these preferences belong to. The row goes with the user (ON DELETE CASCADE).';
 COMMENT ON COLUMN d1_private.user_prefs.pins_seeded IS 'TRUE once the default pins have been given to this person (once only, so a pin they remove does not come back).';
 COMMENT ON COLUMN d1_private.user_prefs.prefs IS 'Sidebar and theme preferences as JSON: {sidebarCollapsed, autoCollapse, theme}. The endpoint validates the keys and types and rejects unknown keys.';
