@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import {
-	useExplorerHost, AppLink, BOOKMARK_VISIBILITY_FILTER, EXPLORER_HOST,
+	useExplorerHost, AppLink, BOOKMARK_VISIBILITY_FILTER,
 	attentionView, LoadState, Section, collectionRoute, errorText, indexRoute, pickBookmarkId, useItems, useRequestGate,
 } from '@d1/ui';
 import { ATTENTION, ATTENTION_LIST_LIMIT, type AttentionDef, type AttentionItem } from './attention';
@@ -14,8 +14,8 @@ import { ATTENTION, ATTENTION_LIST_LIMIT, type AttentionDef, type AttentionItem 
 const props = defineProps<{ isAdmin: boolean }>();
 
 const { getItems } = useItems();
-const api = useExplorerHost().api;
-const host = inject(EXPLORER_HOST, null);
+const host = useExplorerHost();
+const api = host.api;
 const gate = useRequestGate();
 
 const defs = computed(() => ATTENTION.filter((d) => !d.adminOnly || props.isAdmin));
@@ -71,7 +71,7 @@ async function bookmarkId(collection: string, name: string): Promise<number | nu
 				limit: -1,
 			},
 		});
-		return pickBookmarkId(res.data.data ?? [], host?.user.value ?? null);
+		return pickBookmarkId(res.data.data ?? [], host.user.value);
 	} catch {
 		return null;
 	}
@@ -118,7 +118,7 @@ watch(
 );
 // Who is signed in arrives after the page does: pick the views again with it.
 watch(
-	() => host?.user.value?.id,
+	() => host.user.value?.id,
 	() => {
 		for (const d of defs.value) loadBookmark(d);
 	},

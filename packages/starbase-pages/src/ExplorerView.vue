@@ -6,7 +6,7 @@ import ScanDialog from './scan/ScanDialog.vue';
 import { scanOpen } from './scan/scanState';
 
 // Every page renders inside this: it hands the page's slots to the host's frame and provides the
-// host to the kit components that inject it (nav, finder, index page, scan dialog). A page uses it
+// host for any component that still injects it (the kit components now ask useExplorerHost() themselves, so they also work outside this view). A page uses it
 // where it used <private-view>: same title, same slots (headline, title-outer:prepend, actions, ...),
 // which are passed straight through.
 defineProps<{ title: string }>();

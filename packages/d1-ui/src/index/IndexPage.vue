@@ -12,9 +12,9 @@
 // The `footer` slot (a row's buttons) is drawn at the foot of a text card. Operations and samples
 // get their Force / FAST buttons from here (RowPlotButtons, filled by useIndexPage's `plots`); the
 // `thumb` slot also receives the row's `plots` (an operation's Fz figure comes from there).
-import { computed, inject, onBeforeUnmount, ref, useSlots, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { EXPLORER_HOST } from '../host';
+import { useExplorerHost } from '../host';
 import type { ExplorerHost } from '../host';
 import { linkHref } from '../links';
 import { recordRoute } from '../recordRoute';
@@ -43,9 +43,7 @@ const props = defineProps<{
 	cardData?: (host: ExplorerHost, rows: any[]) => Promise<ReadonlyMap<string, unknown>>;
 }>();
 
-const injected = inject(EXPLORER_HOST);
-if (!injected) throw new Error('IndexPage needs an ExplorerHost: render it inside ExplorerView');
-const host: ExplorerHost = injected;
+const host: ExplorerHost = useExplorerHost();
 const route = useRoute();
 const router = useRouter();
 

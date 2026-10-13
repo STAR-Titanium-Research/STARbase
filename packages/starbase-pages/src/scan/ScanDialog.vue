@@ -3,15 +3,14 @@
 // opens the sample it names. When it cannot (deleted, no access, server unreachable) or the code is
 // not a D1 label, it shows what was read and why, and offers to scan again. The camera is released
 // when the dialog closes or the page goes away.
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { EXPLORER_HOST, ScanResultCard, resolveLabel } from '@d1/ui';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useExplorerHost, ScanResultCard, resolveLabel } from '@d1/ui';
 import type { ScanOutcome } from '@d1/ui';
 import { useQrCamera } from './useQrCamera';
 
 const emit = defineEmits<{ (e: 'close'): void }>();
 
-const host = inject(EXPLORER_HOST);
-if (!host) throw new Error('ScanDialog needs an ExplorerHost: render it inside ExplorerView');
+const host = useExplorerHost();
 
 const outcome = ref<Exclude<ScanOutcome, { kind: 'open' }> | null>(null);
 const resolving = ref(false);
@@ -19,11 +18,11 @@ let closed = false;
 
 async function onText(text: string): Promise<void> {
 	resolving.value = true;
-	const out = await resolveLabel(host!.api, text);
+	const out = await resolveLabel(host.api, text);
 	resolving.value = false;
 	if (closed) return;
 	if (out.kind === 'open') {
-		host!.navigate(out.to);
+		host.navigate(out.to);
 		close();
 	} else {
 		outcome.value = out;
@@ -33,7 +32,7 @@ async function onText(text: string): Promise<void> {
 const { video, state, error, start } = useQrCamera((t) => void onText(t));
 
 function openTo(to: string): void {
-	host!.navigate(to);
+	host.navigate(to);
 	close();
 }
 

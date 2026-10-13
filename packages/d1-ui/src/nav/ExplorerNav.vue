@@ -10,10 +10,10 @@
 // Plain HTML, the kit's tokens and the host's navigation theme variables, so it can move to the
 // standalone app unchanged. The finder button only emits; the finder dialog is wired by the host
 // page.
-import { computed, inject, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import '../components/tokens.css';
-import { EXPLORER_HOST } from '../host';
+import { useExplorerHost } from '../host';
 import { canonicalPath } from '../links';
 import NavPanel from './NavPanel.vue';
 import NavRail from './NavRail.vue';
@@ -25,11 +25,10 @@ import { useExplorerNav } from './useExplorerNav';
 defineEmits<{ (e: 'open-finder'): void }>();
 
 // The brand block (name and tagline). Inside Directus the project header above the navigation
-// slot already shows it, so ExplorerView turns it off; the standalone app leaves it on.
+// slot already shows it, so DirectusFrame turns it off; the standalone app leaves it on.
 withDefaults(defineProps<{ showBrand?: boolean }>(), { showBrand: true });
 
-const host = inject(EXPLORER_HOST);
-if (!host) throw new Error('ExplorerNav needs an ExplorerHost: render it inside ExplorerView');
+const host = useExplorerHost();
 const { nav, loading, error, refresh } = useExplorerNav(host);
 
 const route = useRoute();
