@@ -7,8 +7,9 @@ import { crawlerAccess } from '../crawler/crawlerModel';
 
 // Force Crawler (admins only). The gate waits for the host to say whether this person is an admin, so a hard
 // reload as an admin is not bounced on the starting guess; the panel (and its polling) is only mounted once
-// they are allowed, so a non-admin makes no requests. The server enforces the same rule: the crawler tables
-// are not writable by anyone else.
+// they are allowed, so a non-admin makes no requests. This is a UI gate, not the permission: the daemon's
+// force_crawler_state is read-only for Lab Members on the server, but machining_force_analysis is updatable by a
+// Lab Member for operations they can edit (status included), so Retry / Recrawl are not server-restricted to admins.
 const host = useExplorerHost();
 const access = computed(() => crawlerAccess(host.adminKnown.value, host.isAdmin.value));
 </script>

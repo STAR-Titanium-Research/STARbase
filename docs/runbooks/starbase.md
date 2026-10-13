@@ -234,11 +234,12 @@ STARbase's own Report a bug page posts to the `d1-bug-report` Directus endpoint
 `in-app-report`, `starbase-report`, `bug` or `enhancement`, and `area:starbase`; the area and page the reporter
 picked are in the body, never labels. The relay is unchanged, and there is no "already reported" list.
 
-Deploy (maintainer's step, approve separately). The endpoint is plain JavaScript, so there is no build for it
-(`build:extensions` does not list it, like `d1-ask-endpoint`); the STARbase page ships with the usual
-`npm run build:starbase`:
+Deploy (maintainer's step, approve separately). The endpoint is plain JavaScript, so it has no build of its own
+(`build:extensions` does not list it, like `d1-ask-endpoint`); the STARbase pages ship with `npm run build:starbase`.
+The same branch changes `@d1/ui`, which the Directus extensions bundle, so rebuild those too:
 
-1. Check out the branch; `core/extensions` is mounted read-only into Directus, so the folder is already there.
+1. Check out the branch; `npm run build:extensions` and `npm run build:starbase`. `core/extensions` is mounted
+   read-only into Directus, so the new folder is already there.
 2. `docker compose exec -T redis redis-cli FLUSHALL`, then `docker compose restart directus` (extensions load at start).
 3. `BUG_REPORT_RELAY_URL` can stay unset: the endpoint defaults to `http://bug-report-relay:8211`, the compose service.
 4. Smoke: sign in to STARbase, open Report a bug, send a test report; the page shows the issue number. An unreachable
