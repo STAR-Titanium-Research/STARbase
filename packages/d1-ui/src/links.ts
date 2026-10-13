@@ -50,7 +50,11 @@ export function starbaseLinks(serverBase: string): LinkConfig {
 			return { kind: 'external', href: `${base}/admin${path}` };
 		},
 		canonical(routePath) {
-			if (startsWithSegment(routePath, '/plot')) return routePath;
+			// The plot pages are the dashboards in the Directus form (the inverse of resolve), so usage pings
+			// and "you are here" count /plot/force as /d1-force-dashboard in both hosts.
+			for (const [from, to] of PLOTS) {
+				if (startsWithSegment(routePath, to)) return from + routePath.slice(to.length);
+			}
 			return routePath === '/' || routePath.startsWith('/?') ? '/home' + routePath.slice(1) : '/home' + routePath;
 		},
 	};

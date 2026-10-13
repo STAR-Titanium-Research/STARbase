@@ -29,6 +29,8 @@ describe('STARbase pages stay host-neutral', () => {
 			expect(src, rel(f)).not.toMatch(/['"`]\/assets\//);
 			expect(src, rel(f)).not.toMatch(/window\.open\(/);
 			expect(src, rel(f)).not.toMatch(/\brouter\.push\(/);
+			// A raw href to a link's `to` skips the host's resolver (FrequentlyUsed's newTab once did).
+			expect(src, rel(f)).not.toMatch(/:href="[\w.]+\.to"/);
 		}
 	});
 });

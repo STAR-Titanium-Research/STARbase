@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { AppLink, Section, type UsageEntry } from '@d1/ui';
+import { useRouter } from 'vue-router';
+import { AppLink, Section, linkHref, type UsageEntry } from '@d1/ui';
 import { MAX_SHOWN, SHOWN, useFrequentlyUsed } from './useFrequentlyUsed';
 import { pingVisit } from '../usagePing';
+
+const router = useRouter();
 
 // "Frequently used": the pages, quick actions and records this user opens most, as one card with two
 // lists side by side (they stack when the card is narrow). Six items each, "Show more" up to fifteen;
@@ -133,7 +136,7 @@ function openedElsewhere(e: UsageEntry) {
 					<h3 tabindex="-1">Pages &amp; actions</h3>
 					<ul>
 						<li v-for="e in shownPages" :key="e.target" class="row">
-							<a v-if="e.newTab" class="name" :href="e.to" target="_blank" rel="noopener" @click="openedElsewhere(e)">{{ e.label }}</a>
+							<a v-if="e.newTab" class="name" :href="linkHref(e.to, router)" target="_blank" rel="noopener" @click="openedElsewhere(e)">{{ e.label }}</a>
 							<AppLink v-else class="name" :to="e.to">{{ e.label }}</AppLink>
 							<span v-if="e.suggested" class="suggested">Suggested</span>
 							<button

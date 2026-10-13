@@ -61,11 +61,21 @@ describe('STARbase', () => {
 		expect(canonicalPath('/?q=x')).toBe('/home?q=x');
 		expect(canonicalPath('/samples/a%2Fb')).toBe('/home/samples/a%2Fb');
 		expect(canonicalPath('/samples?bookmark=3')).toBe('/home/samples?bookmark=3');
-		expect(canonicalPath('/plot/force?operation=9')).toBe('/plot/force?operation=9');
+		expect(canonicalPath('/plot/force?operation=9')).toBe('/d1-force-dashboard?operation=9');
+		expect(canonicalPath('/plot/fast')).toBe('/d1-fast-dashboard');
+		expect(canonicalPath('/plotting')).toBe('/home/plotting');
 	});
 	it('round-trips every Explorer path', () => {
 		use();
 		for (const p of ['/home', '/home/samples/1', '/home/labels?ids=1,2', '/home/people']) {
+			const r = resolveLink(p);
+			expect(r.kind).toBe('route');
+			if (r.kind === 'route') expect(canonicalPath(r.to)).toBe(p);
+		}
+	});
+	it('round-trips the plot dashboards too', () => {
+		use();
+		for (const p of ['/d1-force-dashboard?operation=9', '/d1-fast-dashboard?operation=3', '/d1-force-dashboard']) {
 			const r = resolveLink(p);
 			expect(r.kind).toBe('route');
 			if (r.kind === 'route') expect(canonicalPath(r.to)).toBe(p);
@@ -105,5 +115,6 @@ describe('usage pings agree across hosts', () => {
 		configureLinks(starbaseLinks('https://d1.example'));
 		expect(routeTarget(canonicalPath(`/samples/${id}`))).toEqual(directus);
 		expect(routeTarget(canonicalPath('/samples'))).toEqual(routeTarget('/home/samples'));
+		expect(routeTarget(canonicalPath('/plot/fast?operation=3'))).toEqual({ kind: 'page', target: 'fast-dashboard' });
 	});
 });
