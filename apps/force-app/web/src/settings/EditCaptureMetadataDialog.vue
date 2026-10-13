@@ -19,6 +19,7 @@ import {
 import LookupField from '../record/panels/LookupField.vue';
 import { confirmAction } from '../ui/confirm';
 import { useDialog } from '../ui/useDialog';
+import { ThinkingOrb } from '@d1/force-plotting';
 import { preservedRecorderKeys } from '../recorder';
 
 const props = defineProps<{
@@ -269,7 +270,7 @@ async function confirmClose() {
 			</header>
 
 			<div v-if="loading" class="ecm-loading">
-				<span class="material-symbols-rounded spin">progress_activity</span> Loading current metadata…
+				<ThinkingOrb :size="16" label="" /> Loading current metadata…
 			</div>
 
 			<template v-else>

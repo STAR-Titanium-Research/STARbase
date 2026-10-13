@@ -123,6 +123,10 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
 - [ ] **P3 — links in the Directus module.** "Copy link" in the Directus-hosted Plot opens the same
   view in another browser. Check the browser's network tab: changing the view does not flood
   `PATCH /users/me/track/page`. Since #124.
+- [ ] **P11 — loading orb in the Directus Plot.** In the Directus-hosted Plot, load a cut in Figure,
+  Lite and Full: the FRM loading overlay shows the red/green/blue orb (Directus has none of the force
+  app's colour tokens, so it uses the built-in fallbacks); the other Plot spinners stay Directus's own.
+  Since the loading-orb PR.
 - [ ] **P2 — PNG export in Directus.** "Save chart as PNG" and "as SVG" download a correct image
   (Directus's CSP allows the `blob:` image used for the PNG). Since #125.
 
@@ -1085,6 +1089,13 @@ tool; a test cut on scrap stock is fine.
   shortcuts by keyboard, Open Captures Folder and About.
   — 2026-10-08, DP at the rig (your own installed 0.1.34): Alt shows the menu bar and the keyboard
   shortcuts work. The update prompt still needs a test release.
+- [ ] **R14 — loading orb in the packaged app.** Start the installed app: the "Starting the recorder
+  backend…" splash shows the turning red/green/blue dotted orb, sharp (not blurred) at the PC's
+  display scaling (100 % and 150 %). Sign in: the three dots of the Force App mark turn into the orb
+  until the sign-in finishes, and the title doesn't move. Open a capture in Settings > Captures, load a
+  cut on the Plot page and save a cut: each wait shows the orb, never the old ring. Switch
+  Settings > General to light and back while something is loading: the orb's colours follow. With
+  Windows "Show animations" off, the orb still turns, slowly. Since the loading-orb PR.
 
 ### Diagnostics page in the packaged app
 - [ ] **P10 — recipe dialogs and import/export.** In the packaged app, Save as (name + notes),

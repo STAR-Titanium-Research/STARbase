@@ -9,6 +9,7 @@ import { channelColor } from '../record/types';
 import { theme } from '../theme';
 import { nidaqApi, CORE_REFERENCEABLE, type Channel, type FormulaValidation } from './nidaqApi';
 import { useDialog } from '../ui/useDialog';
+import { ThinkingOrb } from '@d1/force-plotting';
 
 const props = defineProps<{
 	/** Existing channels, for the reference palette — only "hardware" ones are referenceable
@@ -108,7 +109,7 @@ function insertFunc(f: (typeof FUNCS)[number]) {
 			</label>
 
 			<div class="vcb-status" :class="{ ok: validation?.valid, bad: validation && !validation.valid }">
-				<template v-if="validating"><span class="material-symbols-rounded spin">progress_activity</span> checking…</template>
+				<template v-if="validating"><ThinkingOrb :size="14" label="" /> checking…</template>
 				<template v-else-if="validation?.valid"><span class="material-symbols-rounded">check_circle</span> valid — reads {{ validation.references?.join(', ') || 'nothing' }}</template>
 				<template v-else-if="validation && !validation.valid"><span class="material-symbols-rounded">error</span> {{ validation.error }}</template>
 				<template v-else>&nbsp;</template>

@@ -6,6 +6,7 @@ import { CHANGELOG } from '../changelog';
 import { groupNotes } from '../changelogGroups';
 import type { UpdateStatus } from '../electronBridge';
 import { getEligibility } from '../rigtest/rigTestApi';
+import { ThinkingOrb } from '@d1/force-plotting';
 import { closedNotifyBridge, closedNotifyWarning, loadClosedNotify, toggleClosedNotifyBox } from './closedNotify';
 
 // The changelog is static, so group each entry's notes once, not on every render.
@@ -157,7 +158,7 @@ onMounted(async () => {
 			 page. Held up for ~800ms by the main process before the process actually quits, so this has
 			 time to paint. -->
 		<div v-if="isElectron && updateStatus.state === 'installing'" class="install-overlay">
-			<span class="material-symbols-rounded spin">autorenew</span>
+			<ThinkingOrb :size="48" label="" />
 			<p>Installing version {{ updateStatus.version }}…</p>
 			<p class="sub">The app will close and reopen automatically — this takes a few seconds.</p>
 		</div>
@@ -204,7 +205,8 @@ h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
 
 .install-overlay { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
 	align-items: center; justify-content: center; gap: 6px; background: rgba(0,0,0,0.75); color: #fff; text-align: center; }
-.install-overlay .material-symbols-rounded { font-size: var(--icon-2xl); margin-bottom: 6px; }
+/* The overlay is near-black in both themes, so the orb keeps the dark theme's inks here. */
+.install-overlay .thinking-orb { margin-bottom: 6px; --fx-ink: #f87171; --fy-ink: #4ade80; --fz-ink: #60a5fa; --text-dim: rgba(255, 255, 255, 0.55); }
 .install-overlay p { margin: 0; font-size: var(--fs-lg); }
 .install-overlay .sub { font-size: var(--fs-sm); color: rgba(255,255,255,0.7); }
 
