@@ -1,10 +1,10 @@
 // The pure rules of the sidebar (no Vue): its five sections, how pins resolve to entries, how a
 // pinned list is reordered and cut, and the window-width rule for rail versus expanded.
 import { linkActive } from './navState';
-import { linkForBookmark } from './navConfig';
+import { NAV_GROUPS, linkForBookmark } from './navConfig';
 import type { VisibleNav } from './navConfig';
 import type { NavIconName } from './navIcons';
-import { pageTarget, splitRecordTarget } from '../usage';
+import { PAGES, pageTarget, splitRecordTarget } from '../usage';
 
 export type SectionId = 'records' | 'analysis' | 'inventory' | 'reference' | 'more';
 
@@ -134,6 +134,24 @@ export function sectionForPage(sections: SidebarSection[], path: string, query: 
 	return null;
 }
 
+// Page keys that have a link in the sidebar's configuration (whether or not this person sees it).
+// A pin of one of these resolves only through its link, so a page the person cannot see stays hidden.
+const NAV_PAGE_KEYS = new Set(NAV_GROUPS.flatMap((g) => g.links).flatMap((l) => pageTarget(l.to) ?? []));
+
+// The quick actions have no link in the sidebar, but Home suggests them and they can be pinned (spec
+// decision 5: task screens). They resolve from the kit's page table, with these icons.
+const FALLBACK_ICONS: Record<string, NavIconName> = {
+	'action:register-sample': 'circle-plus',
+	'action:log-operation': 'clipboard-plus',
+};
+
+function resolveUnlinkedPage(ref: PinRef): ResolvedPin | null {
+	if (NAV_PAGE_KEYS.has(ref.target)) return null;
+	const page = PAGES[ref.target];
+	if (!page) return null;
+	return { ref, label: page.label, hint: null, to: page.to, icon: FALLBACK_ICONS[ref.target] ?? 'more' };
+}
+
 export function pinKey(p: PinRef): string {
 	return `${p.kind}:${p.target}`;
 }
@@ -153,6 +171,7 @@ export function resolvePins(
 		if (ref.kind === 'page') {
 			const link = links.find((l) => l.pin?.target === ref.target);
 			if (link) resolved = { ref, label: link.label, hint: null, to: link.to, icon: link.icon };
+			else resolved = resolveUnlinkedPage(ref);
 		} else if (ref.kind === 'view') {
 			for (const link of links) {
 				const view = link.views.find((v) => v.pin.target === ref.target);

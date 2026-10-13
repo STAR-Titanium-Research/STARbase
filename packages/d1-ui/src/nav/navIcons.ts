@@ -283,6 +283,18 @@ const ICONS = icons({
 		{ tag: 'circle', attrs: { cx: '12', cy: '12', r: '2' } },
 		{ tag: 'path', attrs: { d: 'm13.41 10.59 5.66-5.66' } },
 	],
+	// Quick actions that have no sidebar link of their own, so a pin of one needs an icon.
+	'circle-plus': [
+		{ tag: 'circle', attrs: { cx: '12', cy: '12', r: '10' } },
+		{ tag: 'path', attrs: { d: 'M8 12h8' } },
+		{ tag: 'path', attrs: { d: 'M12 8v8' } },
+	],
+	'clipboard-plus': [
+		{ tag: 'rect', attrs: { width: '8', height: '4', x: '8', y: '2', rx: '1', ry: '1' } },
+		{ tag: 'path', attrs: { d: 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2' } },
+		{ tag: 'path', attrs: { d: 'M9 14h6' } },
+		{ tag: 'path', attrs: { d: 'M12 17v-6' } },
+	],
 	// Foot of the STARbase shell: sign out, and "System" in the theme toggle.
 	'log-out': [
 		{ tag: 'path', attrs: { d: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4' } },

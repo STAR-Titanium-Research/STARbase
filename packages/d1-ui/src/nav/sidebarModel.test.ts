@@ -6,7 +6,7 @@ import {
 	sidebarSections,
 } from './sidebarModel';
 import type { PinRef, RecordLabel } from './sidebarModel';
-import { pageTarget } from '../usage';
+import { PAGE_KEYS, PAGES, pageTarget } from '../usage';
 
 const everything = new Set(NAV_GROUPS.flatMap((g) => g.links).flatMap((l) => (l.collection ? [l.collection] : [])));
 const bm = (id: number, name: string, collection: string): Bookmark => ({
@@ -99,6 +99,53 @@ describe('resolvePins', () => {
 		expect(view.hint).toBe('Samples');
 		const page = shown.find((p) => p.ref.kind === 'page' && p.ref.target === 'samples')!;
 		expect(page).toMatchObject({ label: 'Samples', hint: null, to: '/home/samples', icon: samples.icon });
+	});
+});
+
+describe('resolvePins: pages with no nav link', () => {
+	const action = (target: string): PinRef => ({ kind: 'page', target });
+
+	it('resolves the quick actions from the kit\'s page table, with an icon', () => {
+		const { shown, unavailable } = resolvePins(
+			[action('action:register-sample'), action('action:log-operation')],
+			full(),
+			new Map(),
+		);
+		expect(unavailable).toEqual([]);
+		expect(shown).toEqual([
+			{ ref: action('action:register-sample'), label: 'Register a sample', hint: null, to: '/content/physical_samples/+', icon: 'circle-plus' },
+			{ ref: action('action:log-operation'), label: 'Log an operation', hint: null, to: '/content/manufacturing_operations/+', icon: 'clipboard-plus' },
+		]);
+	});
+
+	it('resolves them even when the person can see no collection at all', () => {
+		const sections = sidebarSections(buildNav(new Set(), [], false));
+		const { shown } = resolvePins([action('action:log-operation')], sections, new Map());
+		expect(shown.map((p) => p.label)).toEqual(['Log an operation']);
+	});
+
+	it('still hides a page that has a nav link the person cannot see', () => {
+		const sections = sidebarSections(buildNav(new Set(), [], false));
+		const { shown, unavailable } = resolvePins([action('tools')], sections, new Map());
+		expect(shown).toEqual([]);
+		expect(unavailable).toEqual([action('tools')]);
+	});
+
+	it('leaves a key this build does not know unavailable', () => {
+		const { unavailable } = resolvePins([action('action:nope')], full(), new Map());
+		expect(unavailable).toEqual([action('action:nope')]);
+	});
+
+	it('resolves every page key, by its nav link or the page table, when all links are visible', () => {
+		const keys = PAGE_KEYS.map(action);
+		const { shown, unavailable } = resolvePins(keys, full(), new Map());
+		expect(unavailable.map(pinKey)).toEqual([]);
+		expect(shown.map((p) => p.ref.target)).toEqual([...PAGE_KEYS]);
+		for (const p of shown) {
+			expect(p.label, p.ref.target).not.toBe('');
+			expect(p.to, p.ref.target).toBe(PAGES[p.ref.target].to);
+			expect(p.icon, p.ref.target).toBeTruthy();
+		}
 	});
 });
 
