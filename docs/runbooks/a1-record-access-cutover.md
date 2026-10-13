@@ -150,7 +150,7 @@ npm ci && npm run build:extensions     # d1-access-guard (new rules.json), d1-re
 npm run build:starbase                 # STARbase (apps/starbase/web) uses the same pages: the access dialog, "some hidden", mine.ts
 ```
 
-Directus is stopped, so nothing loads yet. The pages live in `packages/starbase-pages` and `@d1/ui`, which both hosts use:
+Directus is stopped, so nothing loads yet. The pages live in `packages/starbase-pages` and `@d1/ui`, served by
 STARbase. (Directus is headless since ADR-0015: d1-home is gone, so `build:starbase` is what ships the pages.)
 
 ## 5. Apply the migrations, then check the drift
