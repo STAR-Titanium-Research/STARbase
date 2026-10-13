@@ -305,6 +305,24 @@ test('Home: pinning a Frequently used row moves it into the sidebar and off Home
 const hasPinned = async (page: Page, label: string) => (await pinnedLabels(page)).some((l) => l.split('\n')[0].trim() === label);
 const headerPin = (page: Page) => page.locator('main').getByRole('button', { name: /^Pin(ned)?\b/ });
 
+test('Home: a quick action pinned from Frequently used (Log an operation) shows in Pinned, last, and survives a reload', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/');
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects']);
+	const panel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Frequently used' }) });
+	const pages = panel.getByRole('region', { name: 'Pages and actions' });
+	// No history: the panel offers the suggestions, and Log an operation is one of them.
+	await expect(pages.getByRole('link', { name: 'Log an operation' })).toBeVisible();
+	await pages.getByRole('button', { name: 'Pin Log an operation' }).click();
+	await expect.poll(() => pinTargets(state)).toEqual(['samples', 'projects', 'action:log-operation']);
+	await expect(pages.getByRole('link', { name: 'Log an operation' })).toHaveCount(0);
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects', 'Log an operation']);
+	await expect(pinned(page).getByRole('link', { name: 'Log an operation' })).toHaveAttribute('href', /\/content\/manufacturing_operations\/\+$/);
+
+	await page.reload();
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects', 'Log an operation']);
+	await page.context().close();
+});
+
 test('Pin toggle: on an index page, a saved view and a sample page; the sidebar and the button agree', async ({ browser }) => {
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 	const page = await context.newPage();
