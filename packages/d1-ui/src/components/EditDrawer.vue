@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, resolveComponent, watch } from 'vue';
 import { useExplorerHost, type HostField } from '../host';
-import { formFields } from '../editDrawer';
+import { editMode, formFields } from '../editDrawer';
 import { useEditSession } from '../composables/useEditSession';
 import { dataStudioRoute } from '../recordRoute';
 import { errorText } from '../format';
@@ -29,7 +29,14 @@ const host = useExplorerHost();
 const api = host.api;
 const gate = useRequestGate();
 
-const formAvailable = typeof resolveComponent('v-form') !== 'string';
+// STARbase edits in its own dialog (host.openEditor); Directus has v-form; anything else goes to Data Studio.
+const mode = editMode(typeof host.openEditor === 'function', () => typeof resolveComponent('v-form') !== 'string');
+const formAvailable = mode === 'drawer';
+// v-drawer and v-form are looked up only when this component is the one showing them. A template that names
+// them resolves them on every render, so STARbase (which has neither) would warn about two components it
+// never renders; <component :is> keeps the lookup out of its way.
+const VDrawer = formAvailable ? resolveComponent('v-drawer') : undefined;
+const VForm = formAvailable ? resolveComponent('v-form') : undefined;
 
 const item = ref<Record<string, any> | null>(null);
 const edits = ref<Record<string, any>>({});
@@ -43,6 +50,13 @@ const endpoint = () => `/items/${props.collection}/${encodeURIComponent(props.pr
 
 function close() {
 	emit('update:modelValue', false);
+}
+
+// The host's editor does the editing; the drawer only reports back, so the page refetches on 'saved'.
+async function editInHost() {
+	const result = await host.openEditor!(props.collection, props.primaryKey);
+	emit('update:modelValue', false);
+	if (result === 'saved') emit('saved');
 }
 
 // Save, the version check against someone else's save, and Cancel/Discard: shared with the edit frame.
@@ -89,7 +103,11 @@ watch(
 			gate.cancel();
 			return;
 		}
-		if (!formAvailable) {
+		if (mode === 'host') {
+			void editInHost();
+			return;
+		}
+		if (mode === 'data-studio') {
 			emit('update:modelValue', false);
 			host.openDataStudio(dataStudioRoute(props.collection, props.primaryKey));
 			return;
@@ -101,7 +119,8 @@ watch(
 </script>
 
 <template>
-	<v-drawer
+	<component
+		:is="VDrawer"
 		v-if="formAvailable"
 		:model-value="modelValue"
 		:title="title ?? 'Edit'"
@@ -135,7 +154,8 @@ watch(
 				</v-notice>
 				<v-notice v-for="msg in saveError" :key="msg" type="danger" class="notice">{{ msg }}</v-notice>
 
-				<v-form
+				<component
+					:is="VForm"
 					v-model="edits"
 					:fields="fields"
 					:initial-values="item"
@@ -155,7 +175,7 @@ watch(
 				</v-card-actions>
 			</v-card>
 		</v-dialog>
-	</v-drawer>
+	</component>
 </template>
 
 <style scoped>

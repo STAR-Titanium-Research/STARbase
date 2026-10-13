@@ -2,10 +2,11 @@
 import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useApp } from './context';
+import EditorDialog from './editor/EditorDialog.vue';
 import UnreachablePage from './pages/UnreachablePage.vue';
 import { shellView } from './shellView';
 
-const { session } = useApp();
+const { session, editor } = useApp();
 const router = useRouter();
 const route = useRoute();
 const retrying = ref(false);
@@ -28,4 +29,5 @@ async function retry() {
 <template>
 	<UnreachablePage v-if="view === 'unreachable'" :retrying="retrying" @retry="retry" />
 	<router-view v-else-if="view === 'route'" />
+	<EditorDialog :editor="editor" />
 </template>

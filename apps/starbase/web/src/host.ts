@@ -41,7 +41,7 @@ export function createStarbaseHost(deps: HostDeps): ExplorerHost {
 		adminKnown: session.adminKnown,
 		user: session.user as ExplorerHost['user'],
 	};
-	if (deps.openEditor) Object.assign(host, { openEditor: deps.openEditor });
+	if (deps.openEditor) host.openEditor = deps.openEditor;
 	return host;
 }
 

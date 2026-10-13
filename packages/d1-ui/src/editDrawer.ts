@@ -61,3 +61,13 @@ export function saveErrors(e: any, collection?: string): string[] {
 	const messages = list.map((x) => x?.message).filter(Boolean);
 	return messages.length ? messages : [e?.message || 'The record could not be saved.'];
 }
+
+export type EditMode = 'host' | 'drawer' | 'data-studio';
+
+// How a record page edits: the host's own editor when it has one (STARbase's framed form), else
+// Directus's v-form in a drawer, else the Data Studio form. `formAvailable` is only asked when there is
+// no host editor, so STARbase never looks up a v-form it does not have.
+export function editMode(hostEditor: boolean, formAvailable: () => boolean): EditMode {
+	if (hostEditor) return 'host';
+	return formAvailable() ? 'drawer' : 'data-studio';
+}

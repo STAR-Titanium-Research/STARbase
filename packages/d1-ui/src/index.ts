@@ -101,7 +101,8 @@ export {
 	EDIT_MESSAGE_TYPE, NEW_ITEM_ID, editFrameUrl, editMessage, frameReporter, frameTell, isEditMessage, loadTargetOrigin, readEditMessage, targetOriginFrom,
 } from './editFrame';
 export type { EditMessage, EditResult, ExpectedEditSource, MessageTarget } from './editFrame';
-export { createFormFields } from './editDrawer';
+export { createFormFields, editMode } from './editDrawer';
+export type { EditMode } from './editDrawer';
 export { useEditSession } from './composables/useEditSession';
 export type { EditSessionApi, EditSessionOptions } from './composables/useEditSession';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';

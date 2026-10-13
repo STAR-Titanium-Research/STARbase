@@ -31,6 +31,10 @@ export interface ExplorerHost {
 	openDataStudio(path: string): void;
 	// The collection's field definitions, sorted as Data Studio shows them.
 	fieldsFor(collection: string): Promise<HostField[]>;
+	// Edit a record in the host's own editor, resolving when the person is done. Optional: the Directus host
+	// has none (EditDrawer shows Directus's v-form in a drawer); STARbase frames d1-server's form-only page
+	// (spec §3.4). '+' as the id creates a record.
+	openEditor?(collection: string, id: string): Promise<'saved' | 'cancelled'>;
 	// Starts as the host's best synchronous guess and is corrected when the server answers, so a page
 	// that uses it must react to changes (watch it), not read it once.
 	isAdmin: Ref<boolean>;

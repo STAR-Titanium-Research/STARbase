@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildPatch, createFormFields, formFields, saveErrors, versionChanged, type FieldDef } from './editDrawer';
+import { describe, expect, it, vi } from 'vitest';
+import { buildPatch, createFormFields, editMode, formFields, saveErrors, versionChanged, type FieldDef } from './editDrawer';
 
 const defs: FieldDef[] = [
 	{ field: 'sample_id', schema: { is_primary_key: true } },
@@ -101,5 +101,17 @@ describe('createFormFields', () => {
 	});
 	it('formFields would show nothing for a new record, which is why create has its own rule', () => {
 		expect(formFields(defs, null)).toEqual([]);
+	});
+});
+
+describe('editMode', () => {
+	it("uses the host's editor when it has one, without asking for v-form", () => {
+		const probe = vi.fn(() => true);
+		expect(editMode(true, probe)).toBe('host');
+		expect(probe).not.toHaveBeenCalled();
+	});
+	it("else Directus's v-form in a drawer, else the Data Studio form", () => {
+		expect(editMode(false, () => true)).toBe('drawer');
+		expect(editMode(false, () => false)).toBe('data-studio');
 	});
 });

@@ -32,6 +32,13 @@ afterEach(() => {
 });
 
 describe('the STARbase host', () => {
+	it("openEditor is the dialog's, passed through", async () => {
+		const openEditor = vi.fn(async () => 'saved' as const);
+		const host = createStarbaseHost(deps({ openEditor }));
+		await expect(host.openEditor?.('physical_samples', 's1')).resolves.toBe('saved');
+		expect(openEditor).toHaveBeenCalledWith('physical_samples', 's1');
+	});
+
 	it('navigate takes Directus-form paths to STARbase routes', () => {
 		const d = deps();
 		const host = installStarbaseHost(d);

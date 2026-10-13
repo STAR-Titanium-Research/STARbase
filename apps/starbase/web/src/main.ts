@@ -9,6 +9,7 @@ import PlainFrame from './PlainFrame.vue';
 import { createApi, installSessionGuard } from './api';
 import { getConfig, loadRuntimeConfig } from './config';
 import { APP } from './context';
+import { createBrowserEditor } from './editor/browserEditor';
 import { installStarbaseHost } from './host';
 import { createStarbaseRouter } from './router';
 import { createSession } from './session';
@@ -20,6 +21,7 @@ async function bootstrap() {
 	const api = createApi(directusUrl);
 	const session = createSession(api);
 	const router = createStarbaseRouter(session);
+	const editor = createBrowserEditor(directusUrl);
 
 	// Any request that finds the session gone (signed out here, in Data Studio, or expired) lands on the
 	// sign-in page, coming back to where it was (spec §4).
@@ -36,13 +38,13 @@ async function bootstrap() {
 	watch(
 		() => session.user.value?.id,
 		(id) => {
-			if (id) installStarbaseHost({ api, session, router, directusUrl });
+			if (id) installStarbaseHost({ api, session, router, directusUrl, openEditor: (collection, id) => editor.open(collection, id) });
 		},
 		{ flush: 'sync', immediate: true },
 	);
 
 	const app = createApp(App);
-	app.provide(APP, { api, session, guard });
+	app.provide(APP, { api, session, guard, editor });
 	registerStandins(app);
 	app.use(router);
 	app.mount('#app');
