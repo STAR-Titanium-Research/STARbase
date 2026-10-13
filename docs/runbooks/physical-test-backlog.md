@@ -913,7 +913,7 @@ migration 141 prints about ownerless records.
   size and orientation (portrait, `format="259"`, QL-550 `printerID`) are unconfirmed. If P-touch asks to change the
   paper, or the label comes out rotated, report it. Since the .lbx PR.
 
-- [ ] **A1a-D1 — Who has access dialog on real Directus.** Needs migrations 165 to 167, the `d1-record-access` and
+- [ ] **A1a-D1 — Who has access dialog on real Directus.** Needs migrations 165 to 169, the `d1-record-access` and
   `d1-access-guard` endpoints and the rebuilt `d1-home`. As a Lab Member who owns a sample: **Who has access**
   opens, the add box finds people by name, a person with no login shows "can't sign in yet" and can still be added,
   a role change and Remove work, Transfer asks for confirmation and, once done, the Edit button and the rail owner
@@ -935,10 +935,11 @@ migration 141 prints about ownerless records.
   3. **Transfer** the sample to Ben: the confirm step names who stays; Ben gets the "transferred to you" email; Ada keeps
      access as Can edit; Ada can no longer add people.
   4. A co-owner can no longer add, change or remove co-owners (a deliberate change): try it and read the message.
-  5. API only (no screen turns it on in A1a): `PATCH /items/physical_samples/<id> {"restricted": true}` as the owner works, as a
-     Can edit person is refused (403), and a stranger no longer finds the sample or its operations; Home counts and the
+  5. API only (no screen turns it on in A1a): until A1b only an admin can restrict. `PATCH /items/physical_samples/<id>
+     {"restricted": true}` as the owner and as a Can edit person is refused (403, "Restricting a record is not available
+     yet"); as an admin it works, and a stranger no longer finds the sample or its operations; Home counts and the
      Projects index drop it for the stranger, and the admin overview's **readers drift count is 0** afterwards. Clear the
-     flag again.
+     flag again (as an admin). A member can edit their own People row and gets a 403 on someone else's.
   6. **Ask the database**: ask for the scratch sample by code while it is restricted (no rows, as if it did not exist), then
      unrestricted (rows). Ask for a count of samples: it never includes restricted ones.
   7. The Force App still records and saves a cut on a sample you can see, and nothing in any UI shows the Restrict switch.

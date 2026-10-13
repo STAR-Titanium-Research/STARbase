@@ -73,6 +73,9 @@ echo "[1/4] Dumping PostgreSQL …"
 # restoring into a populated database works without manual teardown.
 # The readers tables of migration 166 (who may read each record) are DERIVED data: their rows are rebuilt from the records by
 # d1_private.readers_rebuild(), so their data is left out of the dump (the restore ends with that rebuild and the drift check).
+# d1_private.hidden_records is derived too but is DUMPED (it is tiny, and comes from the same snapshot): the Ask-the-database role reads it through row
+# security, so after a hand restore that skipped the rebuild it must not be empty, or that role would see restricted records. The big readers tables
+# stay out: empty, Directus fails closed.
 dump_to_tmp "database" "${TMP_FILES[0]}" \
     docker compose exec -T postgres \
         pg_dump -U "$POSTGRES_USER" --clean --if-exists \
@@ -83,7 +86,7 @@ dump_to_tmp "database" "${TMP_FILES[0]}" \
             --exclude-table-data=public.project_readers \
             --exclude-table-data=public.campaign_sample_readers \
             --exclude-table-data=public.operation_open_to_all \
-            --exclude-table-data=d1_private.hidden_records \
+\
             "$POSTGRES_DB"
 
 echo "[2/4] Dumping roles (pg_dumpall --globals-only) …"

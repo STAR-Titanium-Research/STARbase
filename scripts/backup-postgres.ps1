@@ -127,8 +127,9 @@ try {
 
     # --- database archive -------------------------------------------------
     # The readers tables of migration 166 are derived data (d1_private.readers_rebuild() recomputes them): their rows are not dumped,
-    # and every restore ends with readers_rebuild() and the drift check (docs/runbooks/a1-record-access-cutover.md).
-    $derived = '--exclude-table-data=public.sample_readers --exclude-table-data=public.operation_readers --exclude-table-data=public.test_readers --exclude-table-data=public.campaign_readers --exclude-table-data=public.project_readers --exclude-table-data=public.campaign_sample_readers --exclude-table-data=public.operation_open_to_all --exclude-table-data=d1_private.hidden_records'
+    # and every restore ends with readers_rebuild() and the drift check (docs/runbooks/a1-record-access-cutover.md). d1_private.hidden_records
+    # IS dumped (tiny, same snapshot): the Ask-the-database role reads it through row security, so it must not be empty after a hand restore.
+    $derived = '--exclude-table-data=public.sample_readers --exclude-table-data=public.operation_readers --exclude-table-data=public.test_readers --exclude-table-data=public.campaign_readers --exclude-table-data=public.project_readers --exclude-table-data=public.campaign_sample_readers --exclude-table-data=public.operation_open_to_all'
     & $docker exec $Container sh -c "pg_dump -U `"`$POSTGRES_USER`" -d `"`$POSTGRES_DB`" -Fc $derived -f /tmp/backup.dump"
     if ($LASTEXITCODE -ne 0) { throw "pg_dump failed (exit $LASTEXITCODE)." }
 
