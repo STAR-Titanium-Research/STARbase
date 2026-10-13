@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { authStore } from './authStore';
 import { getConfig } from './config';
+import { ThinkingOrb } from '@d1/force-plotting';
 
 const router = useRouter();
 const route = useRoute();
@@ -42,8 +43,10 @@ async function submit() {
 		<div class="login-aura" aria-hidden="true"></div>
 		<form class="login-card" @submit.prevent="submit">
 			<div class="brand">
-				<span class="brand-mark">
-					<i class="dot fx"></i><i class="dot fy"></i><i class="dot fz"></i>
+				<!-- While signing in, the mark's three dots become the loading orb, in the same colours. -->
+				<span class="brand-mark" :class="{ busy }">
+					<ThinkingOrb v-if="busy" :size="26" label="Signing in" />
+					<template v-else><i class="dot fx"></i><i class="dot fy"></i><i class="dot fz"></i></template>
 				</span>
 				<h1>Force App</h1>
 			</div>
@@ -62,7 +65,6 @@ async function submit() {
 			<p v-if="error" class="error"><span class="material-symbols-rounded">error</span>{{ error }}</p>
 
 			<button class="btn primary submit" type="submit" :disabled="busy || !email || !password">
-				<span v-if="busy" class="spinner"></span>
 				<span>{{ busy ? 'Signing in…' : 'Sign in' }}</span>
 			</button>
 
@@ -140,6 +142,15 @@ async function submit() {
 	background: rgba(255, 255, 255, 0.05);
 	border: 1px solid var(--border);
 }
+/* Same outer size as the three dots (8 + 9 + 8 high, 8 + 3 × 9 + 2 × 4 + 8 wide, plus the border), so
+   the title doesn't shift when the orb takes over. */
+.brand-mark.busy {
+	width: 53px;
+	height: 27px;
+	padding: 0;
+	align-items: center;
+	justify-content: center;
+}
 .dot {
 	width: 9px;
 	height: 9px;
@@ -204,14 +215,6 @@ async function submit() {
 	margin-top: 6px;
 	font-size: var(--fs-lg);
 	border-radius: 10px;
-}
-.spinner {
-	width: 15px;
-	height: 15px;
-	border-radius: 50%;
-	border: 2px solid currentColor;
-	border-top-color: transparent;
-	animation: spin 0.9s linear infinite; /* global keyframes (styles.css) */
 }
 .offline-hint {
 	display: flex; gap: 8px; align-items: flex-start; margin: 14px 0 0;

@@ -15,6 +15,7 @@ import { authStore } from '../../authStore';
 import { describeRecordingFailure } from '../recordingErrors';
 import { matFormatNote, matSkipNote } from '../matLimit';
 import { spotlight } from '../../ui/spotlight';
+import { ThinkingOrb } from '@d1/force-plotting';
 import { saveDialogOpen } from '../../rigtest/saveDialogOpen';
 
 // Tells the rig-test prompt to stay a badge while this dialog is up (it would steal focus).
@@ -245,8 +246,9 @@ function startNew() {
 			<template v-if="loading">
 				<div class="scd-progress">
 					<div v-for="s in STAGES" :key="s.key" class="scd-stage" :class="stageStatus(s.key)">
-						<span class="scd-stage-icon material-symbols-rounded" :class="{ spin: stageStatus(s.key) === 'active' }">
-							{{ stageStatus(s.key) === 'done' ? 'check_circle' : stageStatus(s.key) === 'active' ? 'progress_activity' : 'radio_button_unchecked' }}
+						<ThinkingOrb v-if="stageStatus(s.key) === 'active'" :size="18" label="" />
+						<span v-else class="scd-stage-icon material-symbols-rounded">
+							{{ stageStatus(s.key) === 'done' ? 'check_circle' : 'radio_button_unchecked' }}
 						</span>
 						<span class="scd-stage-label">{{ s.label }}</span>
 						<span v-if="stageStatus(s.key) !== 'pending'" class="scd-stage-time">{{ stageElapsed(s.key).toFixed(1) }}s</span>
@@ -297,7 +299,7 @@ function startNew() {
 					@update:crop-start-sec="w.editCutStartSec.value = $event"
 					@update:crop-end-sec="w.editCutEndSec.value = $event" />
 				<div v-else class="scd-loading">
-					<span class="material-symbols-rounded spin">progress_activity</span>
+					<ThinkingOrb :size="48" label="" />
 					<span>Loading recorded trace…</span>
 				</div>
 			</div>
@@ -403,7 +405,6 @@ function startNew() {
 .scd-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 200px; color: var(--text); }
 .scd-loading b { font-size: var(--fs-lg); font-weight: 600; }
 .scd-loading-sub { font-size: var(--fs-sm); color: var(--text-dim); font-variant-numeric: tabular-nums; text-align: center; margin-top: 4px; }
-.scd-loading .spin { font-size: var(--icon-2xl); color: var(--accent); }
 .scd-progress { display: flex; flex-direction: column; gap: 4px; justify-content: center; min-height: 200px; padding: 8px 4px; }
 .scd-stage { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-size: var(--fs-md); color: var(--text-dim); }
 .scd-stage.active { color: var(--text); background: var(--surface); }

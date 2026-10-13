@@ -12,13 +12,19 @@ from `feat/label-printing` once S2 is merged.
 
 ## Status
 
-| Stream | Worktree | Branch | Model | State |
-|---|---|---|---|---|
-| S1 migration | `.claude/worktrees/lp-s1` | `lp/s1-templates` (migration renumbered to 164) | sonnet | merged |
-| S2 pure logic | `.claude/worktrees/lp-s2` | `lp/s2-logic` | sonnet | merged |
-| S4 cleanup | `.claude/worktrees/lp-s4` | `lp/s4-cleanup` | haiku | merged |
-| S3 page | `.claude/worktrees/lp-s3` | `lp/s3-page` | sonnet | merged |
-| S5 scanning | `.claude/worktrees/lp-s5` | `feat/label-scan` | sonnet | reviewed, PR B awaiting push |
+**Done, 2026-10-13.** Merged and deployed to live, with migration 164 applied. The worktrees and branches are removed. What remains are the physical checks `#247-L1`–`L14` and `#252-L1`–`L3` in `docs/runbooks/physical-test-backlog.md`.
+
+| Stream | Branch | Model | State |
+|---|---|---|---|
+| S1 migration (`label_templates`, later `label_settings`; renumbered 163 → 164) | `lp/s1-templates` | sonnet | merged in #247 |
+| S2 pure logic | `lp/s2-logic` | sonnet | merged in #247 |
+| S4 cleanup | `lp/s4-cleanup` | haiku | merged in #247 |
+| S3 page | `lp/s3-page` | sonnet | merged in #247 |
+| Rich QR payload, lab contact | `feat/label-printing` | sonnet | merged in #247 |
+| S5 scanning | `feat/label-scan` | sonnet | merged in #252 |
+| P-touch `.lbx` export | `feat/label-lbx` | sonnet | merged in #253 (via #247) |
+| One `.lbx` per sample | `fix/lbx-one-per-sample` | sonnet | merged in #255 |
+| Second preview (`D1_PREVIEW_NAME`) | `chore/preview-prefix` | haiku | merged in #251 |
 
 Order: S1, S2, S4 run in parallel → review (Opus, `directus-ui-reviewer` / `migration-review`) →
 merge into `feat/label-printing` → S3 → review → PR A → S5 → PR B.

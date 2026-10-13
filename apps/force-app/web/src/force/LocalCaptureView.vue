@@ -9,7 +9,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getConfig } from '../config';
-import { FrmCloud, parseCache, useAutoColorScale, type Cache } from '@d1/force-plotting';
+import { FrmCloud, parseCache, ThinkingOrb, useAutoColorScale, type Cache } from '@d1/force-plotting';
 import FinishedForcePlot from '../record/FinishedForcePlot.vue';
 import { uploadCaptureColdStart } from '../record/uploadCapture';
 import { cropWindowSec } from '../record/cropOverride';
@@ -95,7 +95,7 @@ function goToDbPlot() {
 		</header>
 
 		<div v-if="loading" class="lcv-loading">
-			<span class="material-symbols-rounded spin">progress_activity</span>
+			<ThinkingOrb :size="40" label="" />
 			<span>Loading capture…</span>
 		</div>
 
@@ -162,7 +162,6 @@ function goToDbPlot() {
 .lcv-title b { font-size: var(--fs-lg); }
 .lcv-sub { font-size: var(--fs-sm); color: var(--text-dim); }
 .lcv-loading, .lcv-err { display: flex; align-items: center; gap: 10px; justify-content: center; padding: 60px 0; color: var(--text-dim); }
-.lcv-loading .spin { font-size: var(--icon-xl); }
 .lcv-err { color: var(--danger); }
 .lcv-btn { margin-top: 6px; }
 .lcv-banner { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: color-mix(in srgb, var(--warn) 8%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); border-radius: 10px; font-size: var(--fs-md); color: var(--text); }
