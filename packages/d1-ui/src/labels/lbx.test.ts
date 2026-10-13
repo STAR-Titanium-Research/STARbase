@@ -212,18 +212,21 @@ describe('buildLbxDownload', () => {
 		// deflated, as P-touch's own files are (method 8 in the first local header)
 		expect(d.bytes[8]).toBe(8);
 	});
-	it('is a zip of one .lbx per label copy, named <code>-<n>.lbx', () => {
-		const d = buildLbxDownload([{ sample: sample(1), copies: 2 }, { sample: sample(2), copies: 1 }], BROTHER, CONTACT, now)!;
+	it('is a zip of one .lbx per sample, ignoring copies, named <code>.lbx or <code> (xN).lbx', () => {
+		const d = buildLbxDownload([{ sample: sample(1), copies: 3 }, { sample: sample(2), copies: 1 }], BROTHER, CONTACT, now)!;
 		expect(d.filename).toBe('labels-2026-10-12.zip');
 		expect(d.mime).toBe('application/zip');
-		expect(d.labels).toBe(3);
+		expect(d.labels).toBe(2);
 		const outer = unzipSync(d.bytes);
-		expect(Object.keys(outer)).toEqual(['S-1-1.lbx', 'S-1-2.lbx', 'S-2-1.lbx']);
-		expect(Object.keys(unzipSync(outer['S-2-1.lbx']))).toEqual(['label.xml', 'prop.xml']);
+		expect(Object.keys(outer)).toEqual(['S-1 (x3).lbx', 'S-2.lbx']);
+		expect(Object.keys(unzipSync(outer['S-2.lbx']))).toEqual(['label.xml', 'prop.xml']);
 	});
-	it('makes a bare .lbx of one sample with one copy, and a zip of one sample with copies', () => {
+	it('makes a bare .lbx of one sample whatever its copies, with the count in the name', () => {
 		expect(buildLbxDownload([{ sample: sample(1), copies: 1 }], BROTHER, null, now)!.filename).toBe('S-1.lbx');
-		expect(buildLbxDownload([{ sample: sample(1), copies: 3 }], BROTHER, null, now)!.filename).toBe('labels-2026-10-12.zip');
+		const d = buildLbxDownload([{ sample: sample(1), copies: 3 }], BROTHER, null, now)!;
+		expect(d.filename).toBe('S-1 (x3).lbx');
+		expect(d.labels).toBe(1);
+		expect(Object.keys(unzipSync(d.bytes))).toEqual(['label.xml', 'prop.xml']);
 	});
 	it('skips samples that cannot be printed and counts them', () => {
 		const d = buildLbxDownload([{ sample: sample(1, { shortId: 'nope' }), copies: 1 }, { sample: sample(2), copies: 1 }], BROTHER, null, now)!;
@@ -236,6 +239,8 @@ describe('buildLbxDownload', () => {
 		expect(lbxFileStem('A/B:C*D?')).toBe('A_B_C_D');
 		expect(lbxFileStem('..')).toBe('label');
 		const d = buildLbxDownload([{ sample: sample(1, { code: 'A/B' }), copies: 1 }, { sample: sample(2, { code: 'A:B' }), copies: 1 }], BROTHER, null, now)!;
-		expect(Object.keys(unzipSync(d.bytes))).toEqual(['A_B-1.lbx', 'A_B-1_2.lbx']);
+		expect(Object.keys(unzipSync(d.bytes))).toEqual(['A_B.lbx', 'A_B_2.lbx']);
+		const e = buildLbxDownload([{ sample: sample(1, { code: 'A/B' }), copies: 2 }, { sample: sample(2, { code: 'A:B' }), copies: 2 }], BROTHER, null, now)!;
+		expect(Object.keys(unzipSync(e.bytes))).toEqual(['A_B (x2).lbx', 'A_B_2 (x2).lbx']);
 	});
 });

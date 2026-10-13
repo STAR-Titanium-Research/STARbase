@@ -897,8 +897,10 @@ migration 141 prints about ownerless records.
   whose owner has no email scans without an email line. Since #247.
 
 - [ ] **#247-L14 — P-touch .lbx export.** Pick the Brother DK-22205 template on the labels page, tick 3 samples and
-  click "Download for P-touch (.lbx)": a `labels-<date>.zip` with three `<code>-1.lbx` files (one sample ticked,
-  one copy: a bare `<code>.lbx`). Unzip it and open one `.lbx` in P-touch Editor on the PC with the QL-700 (62 mm
+  click "Download for P-touch (.lbx)": a `labels-<date>.zip` with one `.lbx` per sample (three files), a sample with
+  more than one copy named `<code> (xN).lbx` (set 3 copies on one to see `(x3)`; one sample ticked downloads a bare
+  `.lbx`, still with `(xN)` in the name). A file carries no copy count: set the copies in P-touch Editor's Print
+  dialog. Unzip it and open one `.lbx` in P-touch Editor on the PC with the QL-700 (62 mm
   roll loaded). It opens without an error, with the QR on the left and the code (bold), short ID and nickname to its
   right, the label 62 mm wide and about 30 mm long, and P-touch keeps the QL-700 and the 62 mm continuous roll.
   Print it. Scan the QR with a phone: the whole payload as in L13, with a non-ASCII letter (for example "é" in a
