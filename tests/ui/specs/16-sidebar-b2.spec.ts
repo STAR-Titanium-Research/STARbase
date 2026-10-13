@@ -406,3 +406,119 @@ test('Pin toggle: the Projects page shows its default pin, unpinning there leave
 	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects', 'People']);
 	await page.context().close();
 });
+
+// Settings (decision 9): every control saves as it changes and is still there after a reload.
+test('Settings: the theme radio and Start collapsed persist after a reload', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/settings');
+	await expect(page.getByRole('heading', { name: 'Appearance' })).toBeVisible();
+	const html = page.locator('html');
+
+	await page.getByRole('radio', { name: 'Dark' }).check();
+	await expect(html).toHaveAttribute('data-theme', 'dark');
+	await expect.poll(() => state.prefs.theme).toBe('dark');
+	await page.reload();
+	await expect(page.getByRole('radio', { name: 'Dark' })).toBeChecked();
+	await expect(html).toHaveAttribute('data-theme', 'dark');
+
+	const startCollapsed = page.getByRole('checkbox', { name: 'Start collapsed' });
+	await expect(startCollapsed).not.toBeChecked();
+	await startCollapsed.check();
+	await expect.poll(() => state.prefs.sidebarCollapsed).toBe(true);
+	await page.reload();
+	await expect(page.getByRole('checkbox', { name: 'Start collapsed' })).toBeChecked();
+	await expect.poll(() => columnWidth(page)).toBe(60);
+
+	const auto = page.getByRole('checkbox', { name: 'Collapse automatically on narrow windows' });
+	await expect(auto).toBeChecked();
+	await auto.uncheck();
+	await expect.poll(() => state.prefs.autoCollapse).toBe(false);
+	await page.reload();
+	await expect(page.getByRole('checkbox', { name: 'Collapse automatically on narrow windows' })).not.toBeChecked();
+	await page.context().close();
+});
+
+test('Settings: a failed save says "Couldn\'t save", goes back to the stored value, and Retry saves it', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/settings');
+	await page.route('**/d1-usage/prefs', (r) => (r.request().method() === 'POST' ? r.fulfill({ status: 500, headers: { 'access-control-allow-origin': STAR_BASE, 'access-control-allow-credentials': 'true' }, json: {} }) : r.fallback()), { times: 1 });
+	const auto = page.getByRole('checkbox', { name: 'Collapse automatically on narrow windows' });
+	await expect(auto).toBeChecked();
+	await auto.uncheck();
+	await expect(page.getByRole('alert').filter({ hasText: "Couldn't save" })).toBeVisible();
+	await expect(auto).toBeChecked();
+	await page.getByRole('alert').getByRole('button', { name: 'Retry' }).click();
+	await expect.poll(() => state.prefs.autoCollapse).toBe(false);
+	await expect(page.getByRole('alert').filter({ hasText: "Couldn't save" })).toHaveCount(0);
+	await expect(auto).not.toBeChecked();
+	await page.context().close();
+});
+
+test('Settings: Move up reorders the sidebar; Reset to defaults (confirmed) leaves Samples, Projects', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/settings');
+	const list = page.getByRole('list', { name: 'Pinned pages' });
+	await expect(list.locator('li')).toHaveCount(2);
+	await pinOperations(page);
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects', 'Operations']);
+	await expect(list.locator('li .name')).toHaveText(['Samples', 'Projects', 'Operations']);
+
+	await list.getByRole('button', { name: 'Move Operations up' }).click();
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Operations', 'Projects']);
+	await expect(list.locator('li .name')).toHaveText(['Samples', 'Operations', 'Projects']);
+	await expect.poll(() => pinTargets(state)).toEqual(['samples', 'operations', 'projects']);
+	await expect(list.getByRole('button', { name: 'Move Operations up' })).toBeFocused();
+	await page.reload();
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Operations', 'Projects']);
+
+	// Cancel keeps the pins; confirming replaces them.
+	await page.getByRole('button', { name: 'Reset to defaults' }).click();
+	const dialog = page.getByRole('dialog');
+	await expect(dialog).toContainText('Replace your pins with Samples and Projects?');
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	await expect(dialog).toHaveCount(0);
+	expect(pinTargets(state)).toEqual(['samples', 'operations', 'projects']);
+	await page.getByRole('button', { name: 'Reset to defaults' }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'Reset', exact: true }).click();
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects']);
+	await expect(list.locator('li .name')).toHaveText(['Samples', 'Projects']);
+	expect(pinTargets(state)).toEqual(['samples', 'projects']);
+	await page.context().close();
+});
+
+test('Settings: a pin that cannot be resolved is listed under "No longer available", and Remove clears it', async ({ browser }) => {
+	const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+	const page = await context.newPage();
+	const state = await stubD1(context);
+	state.pins.push({ kind: 'page', target: 'gone-page' });
+	await page.goto(STAR_BASE + '/settings');
+	await expect(page.locator('aside nav.d1-nav')).toBeVisible();
+	const gone = page.locator('.gone');
+	await expect(gone.getByRole('heading', { name: 'No longer available' })).toBeVisible();
+	await expect(gone.locator('li')).toHaveCount(1);
+	await expect(gone.locator('li')).toContainText('gone-page');
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects']);
+
+	await gone.getByRole('button', { name: /^Remove / }).click();
+	await expect(gone).toHaveCount(0);
+	await expect.poll(() => pinTargets(state)).toEqual(['samples', 'projects']);
+	await page.reload();
+	await expect(page.locator('.gone')).toHaveCount(0);
+	await context.close();
+});
+
+test('Settings: Forget my list views and Clear my history', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/settings');
+	await page.evaluate(() => {
+		localStorage.setItem('d1.list.samples', '{"view":"cards","density":"roomy"}');
+		localStorage.setItem('starbase.theme', 'dark');
+	});
+	await page.getByRole('button', { name: 'Forget my list views' }).click();
+	await expect(page.getByText('Done. Every list starts from the default.')).toBeVisible();
+	expect(await page.evaluate(() => localStorage.getItem('d1.list.samples'))).toBeNull();
+	expect(await page.evaluate(() => localStorage.getItem('starbase.theme'))).toBe('dark');
+
+	await page.getByRole('button', { name: 'Clear my history' }).click();
+	await expect(page.getByText('History cleared.')).toBeVisible();
+	expect(state.usage).toContain('POST /d1-usage/clear');
+	// A reviewer's screenshot of the finished page (not part of the assertions): SETTINGS_SHOT=<path>.
+	if (process.env.SETTINGS_SHOT) await page.screenshot({ path: process.env.SETTINGS_SHOT, fullPage: true });
+	await page.context().close();
+});

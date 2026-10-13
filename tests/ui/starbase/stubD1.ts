@@ -104,6 +104,11 @@ export async function stubD1(context: BrowserContext): Promise<StubState> {
 			state.prefs = { ...state.prefs, ...body() };
 			return route.fulfill({ status: 204, headers: cors });
 		}
+		if (path === '/d1-usage/pins/reset' && method === 'POST') {
+			state.pins = [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }];
+			return route.fulfill({ status: 204, headers: cors });
+		}
+		if (path === '/d1-usage/clear' && method === 'POST') return route.fulfill({ status: 204, headers: cors });
 		if (path.startsWith('/d1-usage')) return json({ data: [] });
 		if (path === '/presets' && method === 'GET') {
 			return json({ data: state.bookmarks.map((b) => ({ ...b, user: null, role: null, filter: null, search: null, layout_query: null })) });
