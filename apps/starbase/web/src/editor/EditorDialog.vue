@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Editor } from './editor';
+import { useFocusReturn } from '../standins/focusReturn';
 
 // The edit dialog (spec §3.4). Esc and the backdrop do NOT close it: the edits are in the frame, which
 // STARbase cannot see, so closing is the close button, which asks first once the form is showing.
@@ -8,6 +9,8 @@ const props = defineProps<{ editor: Editor }>();
 const s = props.editor.state;
 const frameEl = ref<HTMLIFrameElement | null>(null);
 const confirmClose = ref(false);
+// Closing the form puts focus back on the Edit button that opened it.
+useFocusReturn(() => s.phase !== 'closed');
 const onMessage = (e: MessageEvent) => props.editor.onMessage(e);
 
 onMounted(() => {
