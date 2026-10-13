@@ -54,6 +54,7 @@ describe('pageTarget', () => {
 		expect(pageTarget('/content/physical_samples/+')).toBe('action:register-sample');
 		expect(pageTarget('/content/manufacturing_operations/+')).toBe('action:log-operation');
 		expect(pageTarget('/d1-report/labels')).toBe('action:print-labels');
+		expect(pageTarget('/home/labels')).toBe('action:print-labels');
 	});
 
 	it('ignores the query, a trailing slash and the /admin base', () => {
@@ -207,7 +208,7 @@ describe('mergeWithSuggestions', () => {
 describe('page entries', () => {
 	it('names a page and flags the print labels action as a new tab', () => {
 		expect(pageEntry('samples', true)).toEqual({ target: 'samples', label: 'Samples', to: '/home/samples', pinned: true, newTab: undefined });
-		expect(pageEntry('action:print-labels', false)?.newTab).toBe(true);
+		expect(pageEntry('action:print-labels', false)?.newTab).toBeFalsy();
 		expect(pageEntry('home', false)).toBeNull();
 	});
 

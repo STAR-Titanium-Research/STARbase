@@ -1,23 +1,28 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router';
 import { go } from './goto';
+import { openScan } from '../scan/scanState';
 import { pingVisit } from '../usagePing';
 
-// The things a researcher does every day, as three buttons in the Home greeting. The other Explorer
+// The things a researcher does every day, as buttons in the Home greeting (plus Scan a label). The other Explorer
 // pages and the analysis tools are in the sidebar, so they are not repeated here. There is no tile
 // for Ask the database (hidden for now, by decision on 2026-10-09) or for the Dashboards module
 // (being retired; its lineage graph is to be rebuilt).
 // `key` is the action's usage target (core/extensions/d1-usage PAGE_KEYS): opening one counts for the
 // Frequently used panel. The two forms are routes, which the router hook also sees (the ping filter
-// sends one of the two); Print labels opens a server page, so only this click can ping it.
+// sends one of the two); Print labels is a route too; Scan a label opens a dialog and is not pinged.
 interface Action { key: string; label: string; sub: string; icon: string; to: string; }
 const main: Action[] = [
 	{ key: 'action:register-sample', label: 'Register a sample', sub: 'Add a new physical sample', icon: 'add_circle', to: '/content/physical_samples/+' },
 	{ key: 'action:log-operation', label: 'Log an operation', sub: 'Record a manufacturing step', icon: 'precision_manufacturing', to: '/content/manufacturing_operations/+' },
-	{ key: 'action:print-labels', label: 'Print labels', sub: 'Sample labels with QR codes', icon: 'label', to: '/d1-report/labels' },
+	{ key: 'action:print-labels', label: 'Print labels', sub: 'Sample labels with QR codes', icon: 'label', to: '/home/labels' },
 ];
+// Not a page: opens the camera dialog (hosted by ExplorerView).
+const scan: Action = { key: 'action:scan', label: 'Scan a label', sub: 'Open a sample from its QR code', icon: 'qr_code_scanner', to: '' };
+const tiles = [...main, scan];
 const router = useRouter();
-function open(a: Action) {
+function choose(a: Action) {
+	if (a === scan) return openScan();
 	pingVisit('page', a.key);
 	go(router, a.to);
 }
@@ -25,7 +30,7 @@ function open(a: Action) {
 
 <template>
 	<nav class="actions" aria-label="Quick actions">
-		<button v-for="a in main" :key="a.label" class="action" :title="a.sub" @click="open(a)">
+		<button v-for="a in tiles" :key="a.label" class="action" :title="a.sub" @click="choose(a)">
 			<v-icon :name="a.icon" small />
 			<span>{{ a.label }}</span>
 		</button>

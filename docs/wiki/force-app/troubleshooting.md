@@ -87,6 +87,58 @@ doctor's *NI-DAQ runtime* row says which. Install the runtime from ni.com and re
 The Lab Amp source is set to mock. Enter the amp's URL on the [Lab Amp page](hardware.md#connection)
 and **Save connection**, or start the backend with `LABAMP_MODE=real`.
 
+### "Sign in to D1 online to receive rig-test requests"
+
+[Settings → Rig tests](settings.md#rig-tests) shows this when the PC is on the rig but nobody is
+signed in online. Rig tests use your D1 sign-in, and only a sign-in made **with a connection**
+counts. A session started [offline](working-offline.md), or one that has been signed out, does
+not. Sign in again while the PC can reach D1 (the *Directus* row of the Connectivity Doctor is
+green). Requests then arrive within about a minute.
+
+![Signed out](../images/force-app/rig-test-settings-signed-out.png)
+
+### "D1 didn't accept your sign-in: sign out and back in"
+
+The request relay asked D1 whether your sign-in is valid and D1 said no: the session was revoked,
+or the account was disabled or changed. The app already tried to renew the sign-in once. Sign out
+(the button at the bottom of the sidebar) and sign in again. If it comes back, ask the D1
+administrator whether your account is active.
+
+### "Request relay unreachable: new requests cannot arrive"
+
+The app could not get an answer from the **request relay**, the service on d1-server that reads
+the requests from GitHub, or the relay could not reach D1 to check your sign-in. Nothing is lost:
+requests wait on GitHub, and results from a finished run are kept and sent when the relay
+answers again. Check that the PC is on Tailscale and that the *Directus* row of the Connectivity
+Doctor is green, then press **Refresh** on the Rig tests tab. If it stays unreachable, tell the
+administrator: the `bug-report-relay` container on d1-server may be down (see
+[Administration](../database/administration.md#rig-test-requests)). The same relay serves
+[Report a Bug](settings.md#report-a-bug), so that tab usually fails too.
+
+A related message, *Request relay not configured on this PC*, means the relay is running but rig
+tests are switched off on it (no allowed GitHub logins, or no GitHub App). An administrator has to
+fix that.
+
+### "This PC does not take rig-test requests"
+
+[Settings → Rig tests](settings.md#rig-tests) says so when the PC is not recognised as the rig,
+and gives the reason. Requests are only offered on a PC with the real hardware, so a laptop at a
+desk never interrupts anyone:
+
+- **NI-DAQ is simulated: no DAQmx hardware found on this PC.** The backend is using the simulated
+  source. On the rig this means the NI-DAQmx runtime is not installed or the chassis is not
+  connected (see [NI-DAQ page shows a simulated chassis on the rig](#ni-daq-page-shows-a-simulated-chassis-on-the-rig)).
+- **No NI-DAQ chassis found on this PC.** The runtime is there but no chassis is plugged in.
+- **The Lab Amp is in mock mode.** See [Lab Amp shows "MOCK" on the rig](#lab-amp-shows-mock-on-the-rig).
+
+![Not on the rig](../images/force-app/rig-test-settings-not-rig.png)
+
+Fix the cause and press **Refresh**. If a rig-test request never arrives although the tab says
+the PC takes requests, check that the request names this PC's **Rig ID** (shown on the same tab)
+or no rig, and that the requester is allowed to ask (see
+[Requesting a test](rig-tests.md#requesting-a-test)). A request that fails these checks is
+skipped without a message.
+
 ### Capture drive choice reverts after a restart
 
 The settings folder could not be written. Settings must live in `%LOCALAPPDATA%\force-app`, not

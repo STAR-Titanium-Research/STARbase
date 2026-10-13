@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accept, answer, cancelRun, decline, detailText, getEligibility, getPending, getRun, snooze } from './rigTestApi';
+import { accept, answer, cancelRun, decline, detailText, getEligibility, getPending, getRun, putSession, deleteSession, snooze } from './rigTestApi';
 
 function stub(status: number, body: unknown) {
 	const f = vi.fn(async () => ({ ok: status >= 200 && status < 300, status, json: async () => body }));
@@ -29,17 +29,25 @@ describe('GET routes', () => {
 	});
 	it('GET /eligibility defaults relay to not_configured', async () => {
 		stub(200, { eligible: true, rig_id: 'rig-1' });
-		expect(await getEligibility()).toEqual({ kind: 'ok', data: { eligible: true, rig_id: 'rig-1', reason: undefined, relay: 'not_configured' } });
+		expect(await getEligibility()).toEqual({ kind: 'ok', data: { eligible: true, rig_id: 'rig-1', reason: undefined, relay: 'not_configured', session: false, hardwareOk: null } });
 	});
 	it('GET /eligibility keeps relay "unknown" (the relay has not been asked yet)', async () => {
 		stub(200, { eligible: true, rig_id: 'rig-1', relay: 'unknown' });
 		const r = await getEligibility();
 		expect(r.kind === 'ok' && r.data.relay).toBe('unknown');
 	});
-	it('GET /eligibility keeps relay "token_rejected" (the relay refused this PC\'s token)', async () => {
+	it('GET /eligibility keeps the sign-in states and reads session / hardware_ok', async () => {
+		stub(200, { eligible: false, rig_id: 'rig-1', relay: 'signin_rejected', session: false, hardware_ok: true });
+		const r = await getEligibility();
+		expect(r.kind === 'ok' && r.data).toMatchObject({ relay: 'signin_rejected', session: false, hardwareOk: true });
+		stub(200, { eligible: false, rig_id: 'rig-1', relay: 'signed_out' });
+		const s = await getEligibility();
+		expect(s.kind === 'ok' && s.data).toMatchObject({ relay: 'signed_out', session: false, hardwareOk: null });
+	});
+	it('an old relay state from an older backend reads as not configured', async () => {
 		stub(200, { eligible: true, rig_id: 'rig-1', relay: 'token_rejected' });
 		const r = await getEligibility();
-		expect(r.kind === 'ok' && r.data.relay).toBe('token_rejected');
+		expect(r.kind === 'ok' && r.data.relay).toBe('not_configured');
 	});
 	it('GET /pending returns requests, snoozed and busy', async () => {
 		stub(200, { requests: [{ number: 1 }], snoozed: [{ number: 2, snoozed_until: 'after_recording' }], busy: true });
@@ -104,5 +112,36 @@ describe('detailText', () => {
 		expect(detailText({ detail: [{ msg: 'bad until' }] }, 'x')).toBe('bad until');
 		expect(detailText({}, 'fallback')).toBe('fallback');
 		expect(detailText(null, 'fallback')).toBe('fallback');
+	});
+});
+
+describe('session routes', () => {
+	it('PUT /session sends the token and its expiry, DELETE clears it', async () => {
+		const f = stub(200, { ok: true });
+		expect((await putSession('tok', 123)).kind).toBe('ok');
+		const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toMatch(/\/rig-tests\/session$/);
+		expect(init.method).toBe('PUT');
+		expect(JSON.parse(String(init.body))).toEqual({ access_token: 'tok', expires_at: 123 });
+		await deleteSession();
+		const [, del] = f.mock.calls[1] as unknown as [string, RequestInit];
+		expect(del.method).toBe('DELETE');
+	});
+	it('a refused PUT is an error, not a throw', async () => {
+		stub(422, { detail: 'not a usable access token' });
+		expect(await putSession('bad token', 1)).toMatchObject({ kind: 'error', status: 422, detail: 'not a usable access token' });
+	});
+	it('PUT and DELETE /session carry a timeout signal, so a hung recorder cannot wedge the sync', async () => {
+		const f = stub(200, { ok: true });
+		await putSession('tok', 1);
+		await deleteSession();
+		for (const i of [0, 1]) {
+			const [, init] = f.mock.calls[i] as unknown as [string, RequestInit];
+			expect(init.signal).toBeInstanceOf(AbortSignal);
+		}
+	});
+	it('a timed-out PUT is an error, not a throw', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => { throw new DOMException('timed out', 'TimeoutError'); }));
+		expect(await putSession('tok', 1)).toMatchObject({ kind: 'error', status: 0 });
 	});
 });

@@ -101,12 +101,23 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
 ### Sample labels and QR
 - [ ] **D4 — label sheets.** From a sample form, "Print label" and "Print several labels"; from Home,
   the "Print labels" tile. Print the A4 sheet on L7160 (63.5 × 38.1 mm, 21-up) and one 50 × 25 mm
-  label: text and QR sit inside each label, the `start` offset skips used labels. Since #124.
+  label: text and QR sit inside each label, the `start` offset skips used labels. Since #124. **Superseded by the Explorer labels page (PR #247).**
 - [ ] **D4 — scan to open.** Scan a printed QR with a phone on the lab network: it asks to sign in,
-  then opens that sample's record. Nothing is visible without signing in. Since #124.
+  then opens that sample's record. Nothing is visible without signing in. Since #124. **Superseded by the Explorer labels page (PR #247).**
 - [ ] **D4 — permissions and dates.** A role that cannot read a sample gets "not found" for it in a
   label request. With `D1_TIMEZONE=Europe/London` set, a sample created just after midnight BST
-  prints the right date. The picker shows "(200 of N)" when there are more than 200. Since #124.
+  prints the right date. The picker shows "(200 of N)" when there are more than 200. Since #124. **Superseded by the Explorer labels page (PR #247).**
+- [ ] **#247-L1 — Label templates — own rows.** As a Lab Member, create a template in
+  `label_templates`: it saves. Update and delete it: allowed. Another member's template (and the four
+  seeds) can be read but not updated or deleted.
+- [ ] **#247-L2 — Label templates — seeds and Default.** A Lab Member cannot edit a seed
+  template, and the Default toggle (`is_default`) is not offered or not saved for them.
+- [ ] **#247-L3 — Label templates — owner is forced.** After a member creates a template,
+  `user_created` is that member, whatever the request body said.
+- [ ] **#247-L4 — Label templates — Lab Admin.** A Lab Admin can create, edit, delete and
+  set Default on any template, including the seeds.
+- [ ] **#247-L5 — Label templates — permissions apply.** After the migration, flush Redis
+  and restart Directus: the rules above then hold, with no 403 on reading `label_templates`.
 
 ### Plot dashboard inside Directus
 - [ ] **P3 — links in the Directus module.** "Copy link" in the Directus-hosted Plot opens the same
@@ -225,7 +236,7 @@ the rebuilt `d1-home`, `d1-lab-dashboard` and `d1-composition-bar` load, and app
   machining operations and **View FAST** on sintering ones opening the right run, and the file
   rows' copy-path buttons giving the same paths as the sample form. Narrow the browser below
   ~640 px wide (or open the page in a split view): the strip becomes a vertical list. **Print
-  label** and **Report** open in a new tab. Operations and tests that you click open their
+  label** opens the labels page in the same tab with this sample ticked (see the labels items below) and **Report** opens in a new tab. Operations and tests that you click open their
   Explorer pages (see the E4 items below). Dark theme: the page is readable. Since: Explorer pages E1 (PR pending).
 - [ ] **E1 — Sample page with hidden relatives.** As a role whose item filter hides some of that
   sample's relatives, operations or tests, open the page. Expect: the life strip shows only what
@@ -370,7 +381,7 @@ and `d1-fast-dashboard` are now built from the root with the other workspace ext
   the sign-in page, then `/admin/home/samples/<id>` (the Explorer page, usable on a phone). An old
   printed label (encodes `/admin/content/physical_samples/<id>`) still opens the Content form. The
   QR and the sample link on an operation report and a test report open the Explorer pages. Needs
-  `PUBLIC_URL` set to an address the phone can reach. Since: Explorer pages E4 (PR pending).
+  `PUBLIC_URL` set to an address the phone can reach. Since: Explorer pages E4 (PR pending). **Superseded by the Explorer labels page (PR #247).**
 - [ ] **E4 — Force and FAST dashboards land on the Explorer.** In the Force dashboard use the "open
   record" action on an operation and on a sample: both open `/admin/home/operations/<id>` and
   `/admin/home/samples/<id>`, and Back returns to the dashboard. In the FAST dashboard **Open** on
@@ -793,6 +804,110 @@ migration 141 prints about ownerless records.
   Then run `dbmate down`
   once: the md5 matches the value recorded before applying, and the backup table is gone. Run
   `up` again and restart Directus. Since: fix/lab-member-legal-some (PR pending).
+- [ ] **#247-L6 — Labels page — A4 4×5 sheet on the office laser.** Open
+  **Print labels** (sidebar), tick 6 samples, keep the **A4 4×5** template, press **Print**. In the
+  browser's print dialog choose A4, **100% scale** (not "fit to page") and no margins or headers. On
+  a plain sheet laid over the die-cut A4 4 × 5 sheet, each label (52.5 × 59.4 mm) has its QR code
+  and text inside its cell. Set **Start at label** to 3: the first two cells stay empty. Scan one QR
+  code with any phone camera: it reads as plain text (`D1 SAMPLE`, the code and short ID, ...). The
+  page itself follows light and dark mode, the labels stay white.
+- [ ] **#247-L7 — Labels page — QL-700 with DK-22205 through the Windows driver.** On
+  the PC the QL-700 is plugged into, open the labels page, tick 3 samples, choose **Brother DK-22205
+  62 mm** and press **Print**. In the print dialog pick the QL-700, paper **62 mm continuous** (the
+  driver's DK-22205 entry), **100% scale**. Expect: three labels, each its own page, 62 mm wide and
+  30 mm long, the QR code on the left and the code, short ID and nickname on the right, none cut off.
+  Scan one QR code. If the driver shrinks or crops the label, record the driver settings that work in
+  the wiki page on labels.
+- [ ] **#247-L8 — Labels page — template editor as a non-admin.** Sign in as a Lab
+  Member (not an admin), open the labels page, press **Edit template** on a seeded template: there is
+  **no Default switch**, **Save** is disabled, **Delete** is absent, and a line says the template is
+  not yours; **Save as new** with a new name works and selects the new template. On that template
+  **Save** and **Delete** are offered: change the padding and Save, then Delete it. Saving a template
+  under a name that already exists shows "A template with that name already exists" inside the editor.
+  Another member's template shows the same read-only state. Sign in as an admin: the Default switch
+  is there, and ticking it on another template moves the default.
+- [ ] **#247-L9 — Labels page — preselection from the record pages.** From a Sample
+  page (real data) press **Print label**: the labels page opens in the same tab with that sample
+  ticked. From **Samples**, tick two rows and press **Print labels for selected**: both are ticked
+  on the labels page. Open `/admin/home/labels?codes=<a real code>,NOPE`: the real one is ticked and
+  "Not found, or not visible to you: NOPE" is shown. The Print label button on a sample form (the
+  `d1-report-button` interface) goes to the same page.
+- [ ] **#247-L10 — Default swap is one write.** As an admin, on the labels page open a template that is not the
+  default, tick **Default template** and Save: it becomes the only default (check the Template list: only one
+  says "(default)"; reload to confirm). Then "Save as new" on a template with Default ticked and a name that already
+  exists: the save is refused with "A template with that name already exists" and the old default is still the
+  default. Save as new with a fresh name and Default ticked: the new template is the only default. "Save as new" on the
+  current default template (new name, Default left ticked as it was): the default does not move. Check
+  `v_audit_logs_with_actor` (`table_name = 'label_templates'`): the swap shows an UPDATE of the old default row turning
+  is_default off, with you as the actor, next to the INSERT or UPDATE of the new default.
+- [ ] **#247-L11 — Start at and Copies can be typed.** On a sheet template, click into **Start at label**, clear it
+  and type 4: it reads 4 (not 14), and the preview starts at the 4th cell. Type 99: it settles on the number of
+  cells on the page. Do the same with **Copies of each sample**: clear and type 4 gives 4; 5000 settles on 100; an
+  empty field becomes 1 when you leave it. While editing a template, a half-typed grid (empty Columns) does not
+  change Start at or show NaN anywhere.
+- [ ] **#247-L12 — Copies per sample.** Tick three samples. Each chip has its own number. Change the global
+  "Copies of each sample" to 2: every chip shows 2. Type 5 on one chip, then change the global value to 3: that
+  chip stays 5 and the others become 3. The summary line totals every copy (5 + 3 + 3 = 11 labels), the preview
+  shows the right number of labels for each sample, and the printed sheet matches. A chip with its own number is marked (a dot and an accent border); clearing its
+  number puts it back on the global value and the mark goes. Removing a chip and ticking it again starts from the
+  global value.
+- [ ] **#252-L1 — Scan a label with a phone (iPhone Safari).** On an iPhone on the lab network or Tailscale,
+  sign in at `https://d1-server.tail54eeb6.ts.net/admin`. Open **Home** and press **Scan a label**; allow the
+  camera when Safari asks. The rear camera shows. Hold it over a printed label's QR code: the dialog closes and
+  that sample's page opens. Open the Finder (the search box in the sidebar) and press **Scan**: the same dialog
+  opens. Close the dialog (Close, or tap outside it): the camera light goes off. Now scan a label for a sample
+  that was deleted, or one you may not see: the dialog stays open and shows the code, the short ID and the
+  other label lines with "No sample matches this label...", and **Scan again** restarts the camera. Scan a
+  non-D1 QR code (a web address, say): its text is shown as plain text, not as a link. In Safari's Settings
+  deny the camera for the site and open the dialog: it says permission was denied. Open the plain-HTTP
+  address instead (`http://d1-server...`): it says the camera needs the HTTPS address. Open the dialog and
+  lock the phone, then unlock it: the camera comes back and scanning resumes without reopening the dialog. Open the
+  dialog, then switch to the phone camera app and back: the dialog shows "The camera stopped..." (or, if it
+  had only been hidden, resumes), and **Try again** restarts it. Since #252.
+- [ ] **#252-L2 — Scan a label with a phone (Android Chrome).** The same checks as #TBD-L13 on an Android phone
+  in Chrome: the rear camera (not the front one) opens, a label scans from about 15 cm, a label printed on the
+  QL-700 62 mm roll scans too, and the camera light goes off when the dialog is closed. Lock/unlock mid-scan
+  resumes scanning, and opening the camera app and returning shows the "stopped" message or resumes, as on the
+  iPhone. Since #252.
+- [ ] **#252-L3 — Scan a label with a USB scanner.** Plug a USB (keyboard-mode) barcode scanner into a PC, open
+  any Explorer page, press Ctrl K (or click the sidebar search box) and scan a label's QR code, once with a label
+  printed after this change (its lines are separated by ` | `) and once with an older one (separated by `·`, which a
+  scanner cannot type: it types some other character or none). Expect: the Finder opens that sample within about a
+  quarter of a second after the scan, without pressing anything, and the box keeps the label's line breaks (it does
+  not become one run-on line). Turn Caps Lock on and scan again: the sample still opens. If the scanner sends no
+  Enter after the last line, a label with only a code line waits: press Enter and it opens. Scan a label for a
+  deleted sample: the Finder stays open and shows the decoded label with the reason; scan a second label straight
+  after (without clearing the box): it replaces the first and opens, it does not re-read the old one. Scan a label
+  whose short ID is wrong but whose code is right: a card offers the sample with "Open sample", and nothing opens
+  until you press it. Paste the label's text (copy it from a phone's QR reader) into the box: it opens the sample at
+  once. Then type an ordinary search such as `S-01` and check the results list still works; paste a few lines of
+  ordinary text: they become one line. Since #252.
+
+- [ ] **#247-L13 — Rich QR scans on a phone.** Set a lab contact on the labels page (admin, under Template:
+  "Contact on labels"), then print one label of a sample that has a nickname, a material and an owner with an email
+  on the A4 4×5 sheet, the 50×25 single and the Brother DK-22205 roll. Scan each with the stock camera of an iPhone
+  and of an Android phone. Each shows the whole text: `D1 SAMPLE`, the code and short ID, material and nickname,
+  date and owner initials, the owner's email and `Contact: <the lab email>`, with no login and no network. The
+  preview shows no "QR may be hard to scan" warning on A4 4×5 and the DK-22205. For the 50×25 use a sample with a
+  long code (about 22 characters) and an owner with a Sheffield-length email: the QR grows to the full label
+  height and the text beside it may shrink or be cut (the label is flagged as clipped), and it still scans; if
+  the preview does warn, the QR is too small for that payload on that label and the template needs a bigger label
+  or fewer QR extras. Also scan a label of a template with
+  "All (default)" unticked and only Date chosen: it shows just the code, short ID and date. A label of a sample
+  whose owner has no email scans without an email line. Since #247.
+
+- [ ] **#247-L14 — P-touch .lbx export.** Pick the Brother DK-22205 template on the labels page, tick 3 samples and
+  click "Download for P-touch (.lbx)": a `labels-<date>.zip` with one `.lbx` per sample (three files), a sample with
+  more than one copy named `<code> (xN).lbx` (set 3 copies on one to see `(x3)`; one sample ticked downloads a bare
+  `.lbx`, still with `(xN)` in the name). A file carries no copy count: set the copies in P-touch Editor's Print
+  dialog. Unzip it and open one `.lbx` in P-touch Editor on the PC with the QL-700 (62 mm
+  roll loaded). It opens without an error, with the QR on the left and the code (bold), short ID and nickname to its
+  right, the label 62 mm wide and about 30 mm long, and P-touch keeps the QL-700 and the 62 mm continuous roll.
+  Print it. Scan the QR with a phone: the whole payload as in L13, with a non-ASCII letter (for example "é" in a
+  nickname) intact. The text on the label matches the preview, and nothing is cut at the edges. Not checked here:
+  there is no Brother driver on the dev PC, so P-touch Editor re-targeted the file to another printer and the paper
+  size and orientation (portrait, `format="259"`, QL-550 `printerID`) are unconfirmed. If P-touch asks to change the
+  paper, or the label comes out rotated, report it. Since the .lbx PR.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
@@ -1267,26 +1382,32 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 
 ## C. d1-server and infrastructure
 
-- [ ] **Rig test relay settings.** In the relay's environment on d1-server, set:
-  - `RIG_TEST_ALLOWED_LOGINS=dpremoli`, plus the login Claude sessions comment as if it is
-    different;
-  - `RIG_TEST_RELAY_TOKEN` to a long random string.
-
-  Redeploy `bug-report-relay`. On the rig PC, put the same token in
-  `FORCE_APP_RIG_TEST_TOKEN`, or in the `rig_test_token` file in the app's config folder. Also set
-  `FORCE_APP_RIG_ID`, for example `force-rig-1`; without it the rig id is just `rig`. Check:
-  - `GET /bug-report-relay/rig-tests` over Tailscale, without the `X-Rig-Token` header, is refused
-    with 403. With the header it returns `{"ok": true, ...}`.
+- [ ] **Rig test relay settings.** In the relay's environment on d1-server, set
+  `RIG_TEST_ALLOWED_LOGINS=dpremoli,dennis-premoli-staff` (GitHub logins allowed to request rig
+  tests). No token: callers sign in with D1. Remove any leftover `RIG_TEST_RELAY_TOKEN` line from
+  `.env`, and delete `%LOCALAPPDATA%\force-app\rig_test_token` on any PC that has one. Redeploy
+  `bug-report-relay` (`docker compose up -d --build --no-deps bug-report-relay`). Optionally set
+  `FORCE_APP_RIG_ID` on a rig laptop; without it the rig id is just `rig`. Check:
+  - `GET /bug-report-relay/rig-tests` over Tailscale with no `Authorization` header, or with
+    `Authorization: Bearer made-up`, is refused with 403 `D1 sign-in rejected`. With a real D1
+    access token (copy one from the force app's DevTools, `localStorage['force-app.auth']`) it
+    returns `{"ok": true, ...}`, and the relay log names that D1 user. Treat that token as a password:
+    do not paste it into chat, tickets or logs; it expires within 15 minutes.
+  - Stop Directus for a moment: the same call gets 503 `D1 unavailable`. Wait more than 60 s after
+    the last accepted call first, or use a freshly copied token: accepted sign-ins are cached for
+    60 s, and a cached token never reaches Directus.
   - An issue that an allowlisted login both wrote and labelled is listed. One written by anyone
     else is not, even if you label it.
   - A comment through `POST /rig-tests/<n>/comment` on an issue without the label is refused.
   - An attempt to PATCH the rig's result comment is refused.
-  - With a wrong token on the rig PC, Settings → Rig tests says "The relay rejected this PC's
-    rig token". With no token, it shows how to set one, and the PC never polls.
+  - On a laptop plugged into the rig, signed in online: Settings → Rig tests says the PC takes
+    requests. Signed in but offline: it says "Sign in to D1 online to receive rig-test
+    requests", and the PC never polls. Left idle on the rig for more than 15 minutes, it keeps
+    taking requests (the token is refreshed early).
   - An issue with more than 100 events, for example one with many label changes, is still
     listed, because the latest labeller is found from the last page.
 
-  Since the rig test requests PR.
+  Since the rig test requests PR; sign-in check since the D1 login PR (#248).
 - [ ] **#190 migration 140 on d1-server.** Apply `20261008000140_machining_force_analysis_file_nullable`
   (`dbmate up`). Directus accepts a `machining_force_analysis` POST with `directus_files_id: null`
   and the field isn't required in its form. Set such a row to `pending` by hand with the

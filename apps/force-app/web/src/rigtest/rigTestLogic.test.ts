@@ -264,8 +264,10 @@ describe('parsePending: the requests, the snoozed ones and the busy flag', () =>
 	});
 	it('an older backend (only `requests`) means nothing snoozed and not busy', () => {
 		expect(parsePending({ requests: [{ number: 5 }] })).toMatchObject({ snoozed: [], busy: false });
-		expect(parsePending(null)).toEqual({ requests: [], snoozed: [], busy: false });
-		expect(parsePending({ busy: 'yes', snoozed: 4 })).toEqual({ requests: [], snoozed: [], busy: false });
+		expect(parsePending(null)).toEqual({ requests: [], snoozed: [], busy: false, session: false, hardwareOk: null, relay: 'not_configured' });
+		expect(parsePending({ busy: 'yes', snoozed: 4 })).toEqual({ requests: [], snoozed: [], busy: false, session: false, hardwareOk: null, relay: 'not_configured' });
+		expect(parsePending({ session: true, hardware_ok: false, relay: 'ok' })).toMatchObject({ session: true, hardwareOk: false, relay: 'ok' });
+		expect(parsePending({ session: 'yes', hardware_ok: 'no', relay: 'nope' })).toMatchObject({ session: false, hardwareOk: null, relay: 'not_configured' });
 	});
 	it('a run carries its title and link, empty from an older backend', () => {
 		expect(parseRun({ number: 7, state: 'running', title: 'R4 chips', url: 'https://x/7' })).toMatchObject({ title: 'R4 chips', url: 'https://x/7' });
@@ -280,8 +282,10 @@ describe('relayInfo and snoozedUntilText', () => {
 		expect(relayInfo('ok').text).toBe('Request relay reachable');
 		expect(relayInfo('unreachable').tone).toBe('bad');
 		expect(relayInfo(undefined).text).toMatch(/not configured/);
-		expect(relayInfo('token_rejected').tone).toBe('bad');
-		expect(relayInfo('token_rejected').text).toMatch(/rig token/);
+		expect(relayInfo('signin_rejected').tone).toBe('bad');
+		expect(relayInfo('signin_rejected').text).toBe("D1 didn't accept your sign-in: sign out and back in");
+		expect(relayInfo('signed_out').text).toBe('Sign in to D1 online to receive rig-test requests');
+		expect(relayInfo('signed_out').tone).toBe('dim');
 	});
 	it('says when a snoozed request comes back', () => {
 		expect(snoozedUntilText('after_recording')).toMatch(/next recording/);

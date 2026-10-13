@@ -32,6 +32,8 @@
 | **Operation type / subtype** | the kind of cut, e.g. *Turning – Facing* (MT-F), *Turning – Roughing* (MT-R) |
 | **Orchestrator** | `scripts/force_orchestrator.py` on d1-server: runs MATLAB processing, builds octrees, bakes filters and diagnostics |
 | **Pulses/rev (PPR)** | tacho pulses per spindle revolution |
+| **Rig ID** | the name a PC gives itself when it answers rig-test requests (`rig` unless an administrator sets `FORCE_APP_RIG_ID`); shown in Settings → About and Settings → Rig tests |
+| **Rig test** | a request, made from a GitHub issue, to run backlog checks on the rig; the operator can run, snooze or decline it and the answers are posted back (see [Rig tests](rig-tests.md)) |
 | **Rail hits** | samples at the amplifier's output limits, meaning the signal is clipped |
 | **Replay** | playing an archived cut through the live panels without recording |
 | **Sample** | the physical workpiece being machined (a D1 `samples` row) |

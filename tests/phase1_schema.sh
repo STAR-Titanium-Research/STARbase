@@ -327,6 +327,139 @@ ring_check "down_fields:0" "down: ring removed from dropdown, conditions and fie
 ring_check "down_form:disc" "down: ring samples are mapped to disc"
 ring_check "down_column:0" "down: inner_diameter_mm is dropped"
 
+echo "== Label templates migration =="
+# Run the file's down and up inside a rolled-back transaction (the Directus tables are stubs here, so
+# the metadata rows are asserted by counting what the migration wrote).
+LT=db/migrations/20261012000164_label_templates.sql
+lt_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LT")
+lt_down=$(awk '/-- migrate:down/{f=1;next}f' "$LT")
+lt_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$lt_down
+SELECT 'down_table:' || coalesce(to_regclass('label_templates')::text, 'gone');
+SELECT 'down_settings_table:' || coalesce(to_regclass('label_settings')::text, 'gone');
+SELECT 'down_meta:' || (SELECT count(*) FROM directus_fields WHERE collection IN ('label_templates', 'label_settings'))
+  || ',' || (SELECT count(*) FROM directus_collections WHERE collection IN ('label_templates', 'label_settings'))
+  || ',' || (SELECT count(*) FROM directus_permissions WHERE collection IN ('label_templates', 'label_settings'))
+  || ',' || (SELECT count(*) FROM directus_relations WHERE many_collection='label_templates');
+$lt_up
+SELECT 'up_seeds:' || string_agg(name, '|' ORDER BY name) FROM label_templates;
+SELECT 'up_default:' || string_agg(name, '|') FROM label_templates WHERE is_default;
+SELECT 'up_fields:' || count(*) FROM directus_fields WHERE collection='label_templates';
+SELECT 'up_relations:' || count(*) FROM directus_relations WHERE many_collection='label_templates';
+SELECT 'up_perm_rows:' || string_agg(action || '=' || permissions::text, ';' ORDER BY action)
+  FROM directus_permissions WHERE collection='label_templates' AND policy='20000002-0000-0000-0000-000000000002';
+SELECT 'up_perm_fields:' || string_agg(action || '=' || coalesce(array_length(string_to_array(fields, ','), 1), 0) || '/' || (fields ~ '(^|,)(id|is_default|user_created|user_updated|date_created|date_updated|updated_at|version)(,|$)'), ';' ORDER BY action)
+  FROM directus_permissions WHERE collection='label_templates' AND policy='20000002-0000-0000-0000-000000000002';
+SELECT 'up_comments:' || count(*) FROM information_schema.columns c
+  WHERE c.table_name='label_templates' AND c.table_schema='public'
+    AND col_description('label_templates'::regclass, c.ordinal_position::int) IS NULL;
+SELECT 'up_tbl_comment:' || (obj_description('label_templates'::regclass) IS NOT NULL);
+SELECT 'up_triggers:' || string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger
+  WHERE tgrelid='label_templates'::regclass AND NOT tgisinternal;
+SAVEPOINT s1;
+INSERT INTO label_templates (name, media, page_width_mm, page_height_mm, columns, rows, label_width_mm, label_height_mm, arrangement)
+  VALUES ('t-roll', 'roll', 50, 25, 2, 1, 50, 25, 'qr_left');
+SELECT 'roll_grid:accepted';
+ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s2;
+INSERT INTO label_templates (name, media, page_width_mm, page_height_mm, label_width_mm, label_height_mm, arrangement, is_default)
+  VALUES ('t-second-default', 'sheet', 210, 297, 50, 50, 'text_only', true);
+SELECT 'swap_insert:' || string_agg(name, '|') FROM label_templates WHERE is_default;
+UPDATE label_templates SET is_default = true WHERE name = 'L7160 21-up';
+SELECT 'swap_update:' || string_agg(name, '|') FROM label_templates WHERE is_default;
+UPDATE label_templates SET description = 'x' WHERE name = 'L7160 21-up';
+SELECT 'swap_unrelated_update:' || string_agg(name, '|') FROM label_templates WHERE is_default;
+ROLLBACK TO SAVEPOINT s2;
+SAVEPOINT s2b;
+-- a failed insert (duplicate name) with is_default must leave the old default in place
+DO \$\$ BEGIN
+  INSERT INTO label_templates (name, media, page_width_mm, page_height_mm, label_width_mm, label_height_mm, arrangement, is_default)
+    VALUES ('A4 4×5', 'sheet', 210, 297, 50, 50, 'text_only', true);
+EXCEPTION WHEN unique_violation THEN NULL;
+END \$\$;
+SELECT 'swap_failed_insert:' || string_agg(name, '|') FROM label_templates WHERE is_default;
+ROLLBACK TO SAVEPOINT s2b;
+SAVEPOINT s3;
+INSERT INTO label_templates (name, media, page_width_mm, page_height_mm, label_width_mm, label_height_mm, arrangement)
+  VALUES ('A4 4×5', 'sheet', 210, 297, 50, 50, 'text_only');
+SELECT 'dup_name:accepted';
+ROLLBACK TO SAVEPOINT s3;
+SAVEPOINT s4;
+INSERT INTO label_templates (name, media, page_width_mm, page_height_mm, label_width_mm, label_height_mm, arrangement)
+  VALUES ('t-bad-arr', 'sheet', 210, 297, 50, 50, 'qr_bottom');
+SELECT 'bad_arrangement:accepted';
+ROLLBACK TO SAVEPOINT s4;
+UPDATE label_templates SET description = 'edited' WHERE name = 'L7160 21-up';
+SELECT 'occ_version:' || version FROM label_templates WHERE name = 'L7160 21-up';
+SELECT 'audit_updates:' || count(*) FROM audit_logs WHERE table_name = 'label_templates' AND action_type = 'UPDATE';
+SELECT 'up_qr_all:' || count(*) FROM label_templates WHERE jsonb_array_length(qr_fields) = 6 AND qr_fields ? 'owner_email' AND qr_fields ? 'contact_email';
+SELECT 'ls_row:' || count(*) || ',' || coalesce(max(contact_email), 'null') FROM label_settings;
+SELECT 'ls_meta:' || (SELECT count(*) FROM directus_fields WHERE collection='label_settings')
+  || ',' || (SELECT count(*) FROM directus_collections WHERE collection='label_settings' AND singleton);
+SELECT 'ls_perm:' || string_agg(action, ',' ORDER BY action) FROM directus_permissions
+  WHERE collection='label_settings' AND policy='20000002-0000-0000-0000-000000000002';
+SELECT 'ls_comments:' || count(*) FROM information_schema.columns c
+  WHERE c.table_name='label_settings' AND c.table_schema='public'
+    AND col_description('label_settings'::regclass, c.ordinal_position::int) IS NULL;
+SELECT 'ls_triggers:' || string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger
+  WHERE tgrelid='label_settings'::regclass AND NOT tgisinternal;
+SAVEPOINT s5;
+INSERT INTO label_settings (id, contact_email) VALUES (2, NULL);
+SELECT 'ls_second_row:accepted';
+ROLLBACK TO SAVEPOINT s5;
+SAVEPOINT s6;
+UPDATE label_settings SET contact_email = 'not an email';
+SELECT 'ls_bad_email:accepted';
+ROLLBACK TO SAVEPOINT s6;
+SAVEPOINT s6b;
+UPDATE label_settings SET contact_email = 'a@bcd';
+SELECT 'ls_no_dot_email:accepted';
+ROLLBACK TO SAVEPOINT s6b;
+SAVEPOINT s7;
+UPDATE label_settings SET contact_email = 'lab@example.org';
+SELECT 'ls_good_email:' || contact_email || ',v' || version FROM label_settings;
+ROLLBACK TO SAVEPOINT s7;
+$lt_down
+SELECT 'redown_table:' || coalesce(to_regclass('label_templates')::text, 'gone');
+ROLLBACK;
+SQL
+)
+lt_check() { grep -qxF "$1" <<<"$lt_out" && ok "$2" || bad "$2 (psql output: $lt_out)"; }
+lt_check "down_table:gone" "down: label_templates is dropped"
+lt_check "down_settings_table:gone" "down: label_settings is dropped"
+lt_check "down_meta:0,0,0,0" "down: its Directus fields, collection, permissions and relations are removed"
+lt_check "up_seeds:50×25 single|A4 4×5|Brother DK-22205 62 mm|L7160 21-up" "up: the four template seeds are present"
+lt_check "up_default:A4 4×5" "up: A4 4×5 is the only default"
+lt_check "up_fields:26" "up: every column has a Directus field row"
+lt_check "up_relations:2" "up: user_created and user_updated relate to directus_users"
+lt_check 'up_perm_rows:create={};delete={"user_created":{"_eq":"$CURRENT_USER"}};read={};update={"user_created":{"_eq":"$CURRENT_USER"}}' \
+    "up: Lab Members read and create freely, update and delete only their own rows"
+lt_check "up_perm_fields:create=18/false;delete=1/false;read=1/false;update=18/false"     "up: Lab Member create and update cannot set is_default, id or the system columns"
+lt_check "up_qr_all:4" "up: every seed template puts all six extras in the QR"
+lt_check "ls_row:1,null" "up: label_settings has its one row, with no contact yet"
+lt_check "ls_meta:5,1" "up: label_settings is a Directus singleton with a field row per column"
+lt_check "ls_perm:read" "up: Lab Members may only read label_settings"
+lt_check "ls_comments:0" "up: every label_settings column carries a COMMENT"
+lt_check "ls_triggers:audit_label_settings,occ_label_settings" "up: label_settings has the audit and OCC triggers"
+! grep -qx "ls_second_row:accepted" <<<"$lt_out" && ok "a second label_settings row is refused" || bad "a second label_settings row is refused"
+! grep -qx "ls_bad_email:accepted" <<<"$lt_out" && ok "a contact email without an @ is refused" || bad "a contact email without an @ is refused"
+! grep -qx "ls_no_dot_email:accepted" <<<"$lt_out" && ok "a contact email with no dot after the @ (a@bcd) is refused" || bad "a contact email with no dot after the @ (a@bcd) is refused"
+lt_check "ls_good_email:lab@example.org,v2" "a valid contact email is accepted and bumps version"
+lt_check "up_comments:0" "up: every column carries a COMMENT"
+lt_check "up_tbl_comment:true" "up: the table carries a COMMENT"
+lt_check "up_triggers:audit_label_templates,label_templates_single_default,occ_label_templates" "up: audit, single-default and OCC triggers are attached"
+! grep -qx "roll_grid:accepted" <<<"$lt_out" && ok "a roll with 2 columns is refused" || bad "a roll with 2 columns is refused"
+lt_check "swap_insert:t-second-default" "inserting a default template clears the old default"
+lt_check "swap_update:L7160 21-up" "making a template the default clears the old default"
+lt_check "swap_unrelated_update:L7160 21-up" "an unrelated update keeps the default"
+lt_check "swap_failed_insert:A4 4×5" "a failed insert with is_default keeps the old default"
+! grep -qx "dup_name:accepted" <<<"$lt_out" && ok "a duplicate template name is refused" || bad "a duplicate template name is refused"
+! grep -qx "bad_arrangement:accepted" <<<"$lt_out" && ok "an unknown arrangement is refused" || bad "an unknown arrangement is refused"
+lt_check "occ_version:2" "an update bumps version"
+lt_check "audit_updates:1" "an update of a template is audited"
+lt_check "redown_table:gone" "down runs again after up"
+
 echo "== Sample geometry: legacy forms are back-filled =="
 # Seed old-vocabulary samples, apply the back-fill's up SQL, assert, then ROLLBACK.
 BACKFILL=db/migrations/20260930000115_backfill_legacy_geometry_forms.sql
@@ -2845,12 +2978,17 @@ $sf_up
 $jr_up
 $la_up
 $rr_up
+-- 20261012000164 (label_templates, a custom-rows collection) runs after these and adds its four rows, which are the generated ones
+INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection = 'label_templates';
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
 $rr_down
 $la_down
+-- the replay's own rows for label_templates go before the older migrations' down sections run
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection = 'label_templates';
 $jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;

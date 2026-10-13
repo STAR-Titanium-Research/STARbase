@@ -1,6 +1,8 @@
 """Tests for the bug-report relay: config gating, token caching, issue creation, rig tests."""
 
+import asyncio
 import json
+import logging
 from urllib.parse import unquote
 
 import httpx
@@ -16,13 +18,14 @@ def _reset_cache():
     yield
 
 
-RIG_TOKEN = "rig-secret-token"
+D1_TOKEN = "d1-access-token"
+USER = {"id": "d1-user-1", "email": "op@example.ac.uk"}
 
 
 @pytest.fixture
 def client():
-    # The rig PC's token on every call; tests of the token itself build their own client.
-    return TestClient(srv.app, headers={"X-Rig-Token": RIG_TOKEN})
+    # A signed-in operator's D1 token on every call; tests of the sign-in build their own client.
+    return TestClient(srv.app, headers={"Authorization": f"Bearer {D1_TOKEN}"})
 
 
 def test_health_reports_unconfigured_by_default(client, monkeypatch):
@@ -376,6 +379,21 @@ def test_overlong_title_is_a_422(client):
 # ---- rig test requests (ADR-0012) -------------------------------------------------------------
 
 
+class FakeDirectus:
+    """Stands in for Directus /users/me: token -> user; any other token is refused."""
+
+    def __init__(self):
+        self.users = {D1_TOKEN: USER}
+        self.down = False
+        self.calls = 0
+
+    async def __call__(self, token):
+        self.calls += 1
+        if self.down:
+            raise srv._D1Unavailable
+        return self.users.get(token)
+
+
 class FakeGitHub:
     """Just enough of the GitHub REST API for the rig-test endpoints. `calls` records every
     (method, path) so tests can assert what was NOT touched."""
@@ -511,10 +529,14 @@ def bot_comment(cid, n, body, **overrides):
 def gh(monkeypatch):
     _configure(monkeypatch)
     monkeypatch.setenv("RIG_TEST_ALLOWED_LOGINS", "maintainer, Other-Admin")
-    monkeypatch.setenv("RIG_TEST_RELAY_TOKEN", RIG_TOKEN)
+    monkeypatch.delenv("RIG_TEST_RELAY_TOKEN", raising=False)
+    srv._d1_cache.clear()
+    fake_d1 = FakeDirectus()
+    monkeypatch.setattr(srv, "_directus_me", fake_d1)
     srv._list_cache.update(key=None, expires=0.0, requests=[])
     srv._bot_login.clear()
     fake = FakeGitHub()
+    fake.d1 = fake_d1
     _patch_transport(monkeypatch, fake)
     return fake
 
@@ -535,33 +557,23 @@ def test_rig_tests_fail_closed_without_an_allowlist(client, gh, monkeypatch):
         assert r.status_code == 200
         assert r.json() == {"ok": False, "reason": "rig tests not configured"}
     assert gh.calls == []
-
-
-def test_rig_tests_fail_closed_without_a_relay_token(client, gh, monkeypatch):
-    gh.issue(5)
-    for value in (None, "", "  "):
-        if value is None:
-            monkeypatch.delenv("RIG_TEST_RELAY_TOKEN")
-        else:
-            monkeypatch.setenv("RIG_TEST_RELAY_TOKEN", value)
-        for r in _all_rig_endpoints(client):
-            assert r.status_code == 200
-            assert r.json() == {"ok": False, "reason": "rig tests not configured"}
-    assert gh.calls == []
+    assert gh.d1.calls == 0  # config is checked before Directus is asked
 
 
 @pytest.mark.parametrize(
     "headers",
     [
         {},
-        {"X-Rig-Token": ""},
-        {"X-Rig-Token": "wrong"},
-        {"X-Rig-Token": RIG_TOKEN + "x"},
+        {"Authorization": ""},
+        {"Authorization": "Bearer "},
+        {"Authorization": "Basic abc"},
+        {"Authorization": "Bearer not-a-d1-token"},
+        {"X-Rig-Token": "rig-secret-token"},  # the old shared token is gone
     ],
 )
-def test_every_rig_endpoint_rejects_a_missing_or_wrong_token(gh, headers):
-    """A tailnet host without the token can neither read nor write (M1): forging a result
-    comment is the case that mattered."""
+def test_every_rig_endpoint_rejects_a_missing_or_refused_sign_in(gh, headers):
+    """A tailnet host without a D1 sign-in can neither read nor write: forging a result comment
+    is the case that matters."""
     gh.issue(5)
     gh.comments[9] = bot_comment(9, 5, "progress")
     c = TestClient(srv.app)
@@ -573,25 +585,153 @@ def test_every_rig_endpoint_rejects_a_missing_or_wrong_token(gh, headers):
         c.post("/rig-tests/5/state", json={"state": "done"}, headers=headers),
     ):
         assert r.status_code == 403
-        assert r.json() == {"ok": False, "reason": "rig token rejected"}
+        assert r.json() == {"ok": False, "reason": "D1 sign-in rejected"}
     assert gh.calls == []
     assert gh.comments[9]["body"] == "progress"
 
 
-def test_the_right_token_is_accepted_on_a_get(gh):
+@pytest.mark.parametrize(
+    "token",
+    ["café".encode("latin-1"), b"\xff\xfe", b"a" * 4097, b"has\ttab"],
+    ids=["non-ascii", "high-bytes", "over-long", "control-char"],
+)
+def test_a_bearer_that_is_not_a_plausible_token_is_refused_before_directus(gh, token):
+    """Starlette decodes headers as latin-1; httpx would raise on a non-ASCII value, so such a
+    token must be a plain 403 and never reach Directus (nor a traceback)."""
     gh.issue(5)
-    r = TestClient(srv.app).get("/rig-tests", headers={"X-Rig-Token": RIG_TOKEN})
+    c = TestClient(srv.app)
+    headers = {"Authorization": b"Bearer " + token}
+    for r in (
+        c.get("/rig-tests", headers=headers),
+        c.post("/rig-tests/5/comment", json={"body": "hi"}, headers=headers),
+        c.patch("/rig-tests/5/comment/9", json={"body": "hi"}, headers=headers),
+        c.post("/rig-tests/5/state", json={"state": "done"}, headers=headers),
+    ):
+        assert r.status_code == 403
+        assert r.json() == {"ok": False, "reason": "D1 sign-in rejected"}
+    assert gh.d1.calls == 0
+    assert gh.calls == []
+
+
+def test_a_signed_in_operator_is_accepted_and_logged_without_the_token(gh, caplog):
+    gh.issue(5)
+    with caplog.at_level(logging.INFO, logger="bug-report-relay"):
+        r = TestClient(srv.app).get(
+            "/rig-tests", headers={"Authorization": f"Bearer {D1_TOKEN}"}
+        )
     assert r.status_code == 200 and r.json()["ok"] is True
+    assert "d1-user-1" in caplog.text and "op@example.ac.uk" in caplog.text
+    assert D1_TOKEN not in caplog.text
 
 
-def test_token_is_compared_in_constant_time(gh, monkeypatch):
-    seen = []
-    real = srv.hmac.compare_digest
+def test_an_accepted_sign_in_is_cached_for_60_s(client, gh, monkeypatch):
+    gh.issue(5)
+    clock = [1000.0]
     monkeypatch.setattr(
-        srv.hmac, "compare_digest", lambda a, b: seen.append(1) or real(a, b)
+        srv, "_now", lambda: clock[0]
+    )  # not time.monotonic: the event loop uses it
+    client.get("/rig-tests")
+    client.get("/rig-tests")
+    assert gh.d1.calls == 1
+    clock[0] += 61
+    client.get("/rig-tests")
+    assert gh.d1.calls == 2
+
+
+def test_a_refused_sign_in_is_not_cached(gh):
+    gh.issue(5)
+    c = TestClient(srv.app, headers={"Authorization": "Bearer later-valid"})
+    assert c.get("/rig-tests").status_code == 403
+    gh.d1.users["later-valid"] = USER
+    assert c.get("/rig-tests").status_code == 200
+
+
+def test_the_sign_in_cache_is_bounded(gh):
+    for i in range(300):
+        gh.d1.users[f"t{i}"] = USER
+        asyncio.run(srv._d1_user(f"t{i}"))
+    assert len(srv._d1_cache) <= 256
+    assert all("t" not in k for k in srv._d1_cache)  # keys are hashes, never the token
+
+
+def test_directus_down_is_503_and_nothing_reaches_github(client, gh):
+    gh.issue(5)
+    gh.d1.down = True
+    for r in _all_rig_endpoints(client):
+        assert r.status_code == 503
+        assert r.json() == {"ok": False, "reason": "D1 unavailable"}
+    assert gh.calls == []
+
+
+def test_directus_me_asks_users_me_with_the_bearer(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": USER})
+
+    _patch_transport(monkeypatch, handler)
+    monkeypatch.setenv("DIRECTUS_INTERNAL_URL", "http://d1.test:8055/")
+    assert asyncio.run(srv._directus_me(D1_TOKEN)) == USER
+    (req,) = seen
+    assert str(req.url).startswith("http://d1.test:8055/users/me?")
+    assert req.url.params["fields"] == "id,email"
+    assert req.headers["Authorization"] == f"Bearer {D1_TOKEN}"
+
+
+def test_directus_me_defaults_to_the_compose_service(monkeypatch):
+    seen = []
+    _patch_transport(
+        monkeypatch,
+        lambda r: seen.append(r) or httpx.Response(200, json={"data": USER}),
     )
-    TestClient(srv.app).get("/rig-tests", headers={"X-Rig-Token": "x"})
-    assert seen
+    monkeypatch.delenv("DIRECTUS_INTERNAL_URL", raising=False)
+    asyncio.run(srv._directus_me(D1_TOKEN))
+    assert str(seen[0].url).startswith("http://directus:8055/users/me")
+
+
+@pytest.mark.parametrize(
+    "status,body",
+    [
+        (401, {"errors": []}),
+        (403, {"errors": []}),
+        (200, {"data": {}}),
+        (200, {"data": None}),
+        (200, []),
+    ],
+)
+def test_directus_me_refusals_are_none(monkeypatch, status, body):
+    _patch_transport(monkeypatch, lambda r: httpx.Response(status, json=body))
+    assert asyncio.run(srv._directus_me(D1_TOKEN)) is None
+
+
+def _connect_error(request):
+    raise httpx.ConnectError("down", request=request)
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        lambda r: httpx.Response(500, json={}),
+        lambda r: httpx.Response(502, text="bad gateway"),
+        lambda r: httpx.Response(200, text="not json"),
+        _connect_error,
+    ],
+)
+def test_directus_me_failures_raise_unavailable(monkeypatch, handler):
+    _patch_transport(monkeypatch, handler)
+    with pytest.raises(srv._D1Unavailable):
+        asyncio.run(srv._directus_me(D1_TOKEN))
+
+
+def test_directus_me_with_a_malformed_url_is_unavailable_not_a_crash(monkeypatch):
+    monkeypatch.setenv("DIRECTUS_INTERNAL_URL", "http://[::1")
+    with pytest.raises(srv._D1Unavailable):
+        asyncio.run(srv._directus_me(D1_TOKEN))
+
+
+def test_httpx_is_not_logged_at_info():
+    assert logging.getLogger("httpx").level == logging.WARNING
 
 
 def test_rig_tests_fail_closed_without_the_github_app(client, gh, monkeypatch):
@@ -599,6 +739,7 @@ def test_rig_tests_fail_closed_without_the_github_app(client, gh, monkeypatch):
     for r in _all_rig_endpoints(client):
         assert r.json() == {"ok": False, "reason": "rig tests not configured"}
     assert gh.calls == []
+    assert gh.d1.calls == 0  # config is checked before Directus is asked
 
 
 def test_list_returns_requests_from_allowlisted_labellers(client, gh):

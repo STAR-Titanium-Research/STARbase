@@ -56,17 +56,6 @@ export function createAccess({ ItemsService, accountability, schema }) {
 		}
 	}
 
-	// How many rows match a filter among those the caller may read; 0 when forbidden.
-	async function count(collection, filter) {
-		try {
-			const rows = await svc(collection).readByQuery({ filter, aggregate: { count: ['*'] } });
-			return Number(rows?.[0]?.count) || 0;
-		} catch (err) {
-			if (isDenied(err)) return 0;
-			throw err;
-		}
-	}
-
 	// Can the caller read this collection at all (any row)?
 	async function canRead(collection) {
 		try {
@@ -86,5 +75,5 @@ export function createAccess({ ItemsService, accountability, schema }) {
 		return new Set(rows.map((r) => String(r[pk])));
 	}
 
-	return { one, first, list, count, canRead, readableIds };
+	return { one, first, list, canRead, readableIds };
 }

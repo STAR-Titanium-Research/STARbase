@@ -72,7 +72,7 @@ const EXTRA_PAGES: PageInfo[] = [
 	{ key: 'fast-dashboard', label: 'FAST dashboard', to: '/d1-fast-dashboard' },
 	{ key: 'action:register-sample', label: 'Register a sample', to: '/content/physical_samples/+' },
 	{ key: 'action:log-operation', label: 'Log an operation', to: '/content/manufacturing_operations/+' },
-	{ key: 'action:print-labels', label: 'Print labels', to: '/d1-report/labels', newTab: true },
+	{ key: 'action:print-labels', label: 'Print labels', to: '/home/labels' },
 ];
 
 export const PAGES: Record<string, PageInfo> = Object.fromEntries(
@@ -88,7 +88,8 @@ const DASHBOARD_PATHS: Record<string, string> = { '/d1-force-dashboard': 'force-
 const ACTION_PATHS: Record<string, string> = {
 	'/content/physical_samples/+': 'action:register-sample',
 	'/content/manufacturing_operations/+': 'action:log-operation',
-	'/d1-report/labels': 'action:print-labels',
+	'/home/labels': 'action:print-labels',
+	'/d1-report/labels': 'action:print-labels', // the old label page, now a redirect
 };
 // The Explorer page of one record: /home/<slug>/<id>.
 const RECORD_SLUGS: Record<string, string> = {

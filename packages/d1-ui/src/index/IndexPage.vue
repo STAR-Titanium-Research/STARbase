@@ -30,9 +30,10 @@ import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { PAGE_SIZE } from './indexQuery';
 import { plotKind } from './plotData';
-import { cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
+import { SELECT_MAX, cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
 import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { Density, ListView } from './listPrefs';
+import { useRowSelection } from './useRowSelection';
 import { useIndexPage } from './useIndexPage';
 
 const props = defineProps<{
@@ -131,6 +132,9 @@ function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
 	openRow(row);
 }
 
+// ---- ticked rows (defs with a selectAction): kept across pages, in the order ticked ----------------
+const sel = useRowSelection(props.def, rows, rowKey, (to) => host.navigate(to));
+
 // ---- cards ----------------------------------------------------------------------------------
 // With no column headers to click, the cards toolbar sorts through a select (the same URL sort).
 const sortChoices = computed(() => sortOptions(props.def, sort.value, (c) => sortable(c)));
@@ -178,6 +182,9 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 			<div class="head">
 				<span class="range" role="status">{{ rangeText(state.page, rows.length, total) }}</span>
 				<span class="spacer" />
+				<button v-if="def.selectAction" type="button" class="btn" :disabled="!sel.picked.value.length" @click="sel.run">
+					{{ def.selectAction.label }}{{ sel.picked.value.length ? ` (${sel.picked.value.length})` : '' }}
+				</button>
 				<SegmentedControl :model-value="view" :options="VIEW_OPTIONS" label="View" @update:model-value="setView" />
 				<label v-if="view === 'cards'" class="sortsel">
 					<span>Sort by</span>
@@ -272,7 +279,11 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
-					<template v-if="$slots.footer || hasPlots" #footer="{ row }">
+					<template v-if="$slots.footer || hasPlots || def.selectAction" #footer="{ row }">
+						<label v-if="def.selectAction" class="tick">
+							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="!sel.isPicked(row) && sel.full.value" @change="sel.toggle(row)" />
+							<span>Select</span>
+						</label>
 						<RowPlotButtons v-if="hasPlots" size="card" :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
 						<slot name="footer" :row="row" />
 					</template>
@@ -280,6 +291,9 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 				<DataTable v-else-if="loading || rows.length" :density="density">
 					<thead>
 						<tr>
+							<th v-if="def.selectAction" class="fit">
+								<input type="checkbox" :checked="sel.allPicked.value" aria-label="Tick every row on this page" @change="sel.togglePage" />
+							</th>
 							<th v-if="showThumb" class="thumb" aria-hidden="true" />
 							<th v-for="c in def.columns" :key="c.field" :class="{ num: c.format === 'number' }" :aria-sort="ariaSort(c)">
 								<button v-if="sortable(c)" type="button" class="sort" @click="setSort(sortKey(c))">
@@ -293,6 +307,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 					<tbody>
 						<template v-if="loading && !rows.length">
 							<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
+							<td v-if="def.selectAction" />
 								<td v-if="showThumb" class="thumb"><span class="bar" /></td>
 								<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
 								<td v-if="hasPlots" class="plots" />
@@ -302,6 +317,16 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
 								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
 							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
+							<td v-if="def.selectAction" class="fit" @click.stop>
+								<input
+									type="checkbox"
+									:checked="sel.isPicked(row)"
+									:disabled="!sel.isPicked(row) && sel.full.value"
+									aria-label="Tick this row"
+									@click.stop
+									@change="sel.toggle(row)"
+								/>
+							</td>
 								<td v-if="showThumb" class="thumb"><div class="thumb-box"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></div></td>
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
@@ -334,6 +359,8 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 					<button v-if="filtered || state.page > 1" type="button" class="link" @click="clearFilters">Clear filters</button>
 				</div>
 			</div>
+
+			<p v-if="def.selectAction && sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
 
 			<div v-if="!error && total !== null && total > 0" class="foot">
 				<span class="d1-note">Page {{ state.page }} of {{ Math.max(1, Math.ceil(total / PAGE_SIZE)) }}</span>
@@ -415,6 +442,7 @@ th.num .sort { justify-content: flex-end; }
 
 .row { cursor: pointer; }
 .plots { text-align: right; }
+.tick { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); cursor: pointer; }
 .row td.plots { overflow: visible; }
 .flag {
 	height: 30px; padding: 0 12px; border: 1px solid var(--theme--border-color); border-radius: 99px; background: var(--d1-surface);

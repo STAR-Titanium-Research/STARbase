@@ -3,6 +3,9 @@
 - **Status:** Proposed
 - **Date:** 2026-10-11
 - **Deciders:** Maintainer + Claude (force app, post-0.1.36)
+- **Amended:** 2026-10-12, decision 2: the relay authenticates callers by the operator's D1
+  sign-in instead of a shared rig token (many laptops connect to the rig in turn). Spec:
+  [`2026-10-12-rig-test-d1-login-design.md`](../superpowers/specs/2026-10-12-rig-test-d1-login-design.md).
 
 ## Context
 
@@ -26,7 +29,7 @@ Constraints:
   App key and files issues for the app (`POST /report`, `GET /issues`).
 - **The relay is reachable only over Tailscale**, and its older endpoints have no authentication
   of its own (`infra/caddy/Caddyfile`, `handle_path /bug-report-relay/*`); the rig-test endpoints
-  add a shared token (decision 2). Claude cloud sessions are not on
+  require a D1 sign-in (decision 2). Claude cloud sessions are not on
   the tailnet, so they can't reach the relay or the rig. They can reach GitHub.
 - **The backend only listens on loopback** (`app/origin_guard.py`). Nothing off the PC can talk to
   it directly, and that should stay true.
@@ -52,11 +55,13 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
    allowlisted login wrote it. Comments by the relay's own bot (`d1-database-bug-reporter[bot]`)
    are never read as commands. Anything else is dropped and logged. The rig app polls the relay; nothing
    connects inbound to the rig, and the backend still listens on loopback only. The relay also
-   authenticates its caller: every `/rig-tests*` call must carry a shared **rig token**
-   (`X-Rig-Token`, set on d1-server as `RIG_TEST_RELAY_TOKEN` and on the rig PC through
-   `FORCE_APP_RIG_TEST_TOKEN` or a `rig_test_token` file in its config folder). Without it a
-   tailnet host could post a forged result as the App bot. The token is not built into the app,
-   and the relay refuses to edit a comment that already holds a result.
+   authenticates its caller: every `/rig-tests*` call must carry the signed-in operator's D1
+   (Directus) access token as `Authorization: Bearer`, which the web app lends to its local
+   backend while the session is online. The relay checks it with Directus (`/users/me`, cached
+   60 s) and logs which D1 user made each call. Without it a tailnet host could post
+   a forged result as the App bot. No credential is built into the app or stored on the PC, and
+   the relay refuses to edit a comment that already holds a result. (Amended 2026-10-12; phase 1
+   first shipped with a shared `X-Rig-Token`, which needed copying onto every laptop.)
 
 3. **The rig runs only a fixed action vocabulary compiled into the app.** An action is a name and
    validated parameters (pydantic, with bounded ranges such as a recording of at most 120 s). No
@@ -77,8 +82,9 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
    disk.
 
 5. **Only the rig answers.** A backend answers requests only when it sees real NI-DAQ hardware and
-   a real Lab Amp. A request can also name one machine (`rig: <id>`). Office PCs and laptops never
-   see the prompt.
+   a real Lab Amp. A request can also name one machine (`rig: <id>`). Office PCs, and laptops
+   that aren't plugged into the rig, never see the prompt; a laptop that is plugged in is the rig
+   while it stays connected.
 
 6. **Results flow back as data, not repo writes.** The result comment carries a table for people
    and a hidden JSON block for machines. A cloud session ticks the backlog items in a normal PR.
@@ -111,14 +117,16 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
   covers issue events, comments and labels. It still gets no Contents permission.
 - Every round trip of the live loop goes rig → relay → GitHub → Claude and back. Expect 5 to 15 s
   per step, so live runs suit checks that take minutes, not tight interactive tuning.
-- Tailnet hosts can no longer write through the relay (or read requests) without the rig token.
-  The token is a shared secret held on d1-server and the rig PC; rotate it by changing both.
-  It protects the relay's endpoints, not GitHub: a person who can label and write issues as an
-  allowlisted login is still trusted by design.
+- Tailnet hosts can no longer write through the relay (or read requests) without a valid D1
+  sign-in. Any active D1 user may run rig tests; nothing needs installing or rotating per PC.
+  A PC sees requests and sends results only while someone is signed in online; results wait in
+  its outbox otherwise. The relay sees the operator's short-lived D1 access token and must use it
+  for nothing but `/users/me`. The sign-in protects the relay's endpoints, not GitHub: a person
+  who can label and write issues as an allowlisted login is still trusted by design.
 - The repository is public, so everything the rig posts is public. Results name the operator by
   initials only and the rig by a neutral id (`rig`, or `FORCE_APP_RIG_ID`), never a full name,
   email or the Windows hostname.
-- The relay's allowlist, the rig token and the app's action vocabulary are the security boundaries. A new
+- The relay's allowlist, the D1 sign-in check and the app's action vocabulary are the security boundaries. A new
   action that writes to hardware or disk needs a review against decision 3 and an update to this
   ADR.
 - Test captures upload to a dedicated Directus project, "Rig tests". Dashboards and campaign views
@@ -137,8 +145,8 @@ Issue #97 (remote viewing of a live session) asks a related question, but it is 
 
 ## Verification
 
-- Relay tests: a call with a missing or wrong `X-Rig-Token` → 403 on every endpoint, nothing sent
-  to GitHub; a result comment can't be edited; label applied by a login not on the allowlist → the request is not listed; an
+- Relay tests: a call with no bearer, or one Directus rejects → 403 on every
+  endpoint, nothing sent to GitHub; Directus down → 503; a result comment can't be edited; label applied by a login not on the allowlist → the request is not listed; an
   action comment by a login not on the allowlist, or by the relay's own bot → it is not returned.
 - Backend tests: `/record/start` → 409 while an automated step runs (and free during an `ask`); accept → 409 while recording or
   finalizing; Cancel and the hard time limit restore the captured amp state; a journal left by a

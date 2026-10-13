@@ -231,7 +231,13 @@
     "operation_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
     "test_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
     "campaign_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
-    "project_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}}
+    "project_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
+    "label_templates": {
+      "create": {"fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
+      "read": {},
+      "update": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}, "fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
+      "delete": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}}
+    }
   },
   "guards": {
     "sample_co_owners": [{"field": "sample_id", "parent": "physical_samples", "key": "sample_id", "rule": "delete"}],
@@ -292,6 +298,7 @@
     "facilities": ["read"],
     "fast_recipes": ["read"],
     "force_crawler_state": ["read"],
+    "label_settings": ["read"],
     "directus_files": ["create", "read", "update", "delete"]
   }
 }

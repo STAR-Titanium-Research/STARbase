@@ -39,10 +39,10 @@ function open() {
 // on the list view, so that is where "print labels for selected" lives.
 const isSample = computed(() => props.collection === 'physical_samples' && !isNew.value);
 function printLabel() {
-	window.open(`/d1-report/label?ids=${encodeURIComponent(String(props.primaryKey))}`, '_blank', 'noopener');
+	router.push(`/home/labels?ids=${encodeURIComponent(String(props.primaryKey))}`);
 }
 function printLabels() {
-	window.open('/d1-report/labels', '_blank', 'noopener');
+	router.push('/home/labels');
 }
 
 // "View Force Analysis" — only offered for a saved machining_operations record
@@ -128,9 +128,4 @@ function openFastAnalysis() {
 }
 .d1-report-button :deep(.v-button) { max-width: 100%; }
 .d1-report-button :deep(.v-button .button) { white-space: normal; height: auto; min-height: 44px; padding: 8px 14px; }
-.hint {
-	color: var(--theme--foreground-subdued, #6c7789);
-	font-size: 13px;
-	font-style: italic;
-}
 </style>
