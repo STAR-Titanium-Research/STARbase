@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-	assetUrl, canonicalPath, configureLinks, directusLinks, linkHref, openLink, resetLinks, resolveLink, serverUrl, starbaseLinks,
+	assetUrl, canonicalPath, configureLinks, directusLinks, linkHref, openLink, resetLinks, resetStarbaseUrl, resolveLink, serverUrl, starbaseLinks, starbaseUrlFor, starbaseUrlOnce,
 } from './links';
 import { routeTarget } from './usage';
 
@@ -116,5 +116,31 @@ describe('usage pings agree across hosts', () => {
 		expect(routeTarget(canonicalPath(`/samples/${id}`))).toEqual(directus);
 		expect(routeTarget(canonicalPath('/samples'))).toEqual(routeTarget('/home/samples'));
 		expect(routeTarget(canonicalPath('/plot/fast?operation=3'))).toEqual({ kind: 'page', target: 'fast-dashboard' });
+	});
+});
+
+describe('Open in STARbase (the Directus Home module)', () => {
+	const SB = 'https://starbase.tail54eeb6.ts.net/';
+	afterEach(() => resetStarbaseUrl());
+
+	it("maps the Home-module page to the same STARbase page, else STARbase's Home", () => {
+		expect(starbaseUrlFor(SB, '/home')).toBe('https://starbase.tail54eeb6.ts.net/');
+		expect(starbaseUrlFor(SB, '/home/samples/a%2Fb?x=1')).toBe('https://starbase.tail54eeb6.ts.net/samples/a%2Fb?x=1');
+		expect(starbaseUrlFor(SB, '/d1-force-dashboard?operation=9')).toBe('https://starbase.tail54eeb6.ts.net/plot/force?operation=9');
+		expect(starbaseUrlFor(SB, '/content/materials/7')).toBe('https://starbase.tail54eeb6.ts.net/');
+	});
+	it('asks d1-server once per page load', async () => {
+		const get = vi.fn(async () => ({ data: { starbaseUrl: 'https://starbase.example' } }));
+		expect(await starbaseUrlOnce({ get })).toBe('https://starbase.example');
+		await starbaseUrlOnce({ get });
+		expect(get).toHaveBeenCalledTimes(1);
+		expect(get).toHaveBeenCalledWith('/d1-links');
+	});
+	it('a missing endpoint (404 before deployment), null or a bad value hides the link', async () => {
+		expect(await starbaseUrlOnce({ get: async () => Promise.reject(Object.assign(new Error('404'), { response: { status: 404 } })) })).toBeNull();
+		resetStarbaseUrl();
+		expect(await starbaseUrlOnce({ get: async () => ({ data: { starbaseUrl: null } }) })).toBeNull();
+		resetStarbaseUrl();
+		expect(await starbaseUrlOnce({ get: async () => ({ data: { starbaseUrl: 'javascript:alert(1)' } }) })).toBeNull();
 	});
 });

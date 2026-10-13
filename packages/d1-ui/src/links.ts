@@ -95,3 +95,31 @@ export function linkHref(path: string, router: { resolve(to: string): { href: st
 	const r = resolveLink(path);
 	return r.kind === 'route' ? router.resolve(r.to).href : r.href;
 }
+
+// The STARbase address of a page shown in the Directus Home module (its "Open in STARbase" link):
+// '/home/samples/<id>?x=1' → '<starbaseUrl>/samples/<id>?x=1', the plot dashboards → the plot pages;
+// a page STARbase does not have opens its Home.
+export function starbaseUrlFor(starbaseUrl: string, directusPath: string): string {
+	const base = starbaseUrl.replace(/\/+$/, '');
+	const r = starbaseLinks('').resolve(directusPath);
+	return base + (r.kind === 'route' ? r.to : '/');
+}
+
+// GET /d1-links (core/extensions/d1-links): STARbase's address, or null while it is unset or the endpoint
+// is not there (404 before deployment). Asked once per page load, whatever the number of pages visited.
+let starbaseUrlRequest: Promise<string | null> | null = null;
+
+export function starbaseUrlOnce(api: { get(path: string): Promise<{ data: any }> }): Promise<string | null> {
+	starbaseUrlRequest ??= api.get('/d1-links').then(
+		(r) => {
+			const u = r.data?.starbaseUrl;
+			return typeof u === 'string' && /^https?:\/\//.test(u) ? u : null;
+		},
+		() => null,
+	);
+	return starbaseUrlRequest;
+}
+
+export function resetStarbaseUrl(): void {
+	starbaseUrlRequest = null;
+}

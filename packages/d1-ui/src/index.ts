@@ -8,7 +8,7 @@
 
 // Links
 export {
-	assetUrl, canonicalPath, configureLinks, directusLinks, linkHref, openLink, resetLinks, resolveLink, serverUrl, starbaseLinks,
+	assetUrl, canonicalPath, configureLinks, directusLinks, linkHref, openLink, resetLinks, resetStarbaseUrl, resolveLink, serverUrl, starbaseLinks, starbaseUrlFor, starbaseUrlOnce,
 } from './links';
 export type { LinkConfig, ResolvedLink } from './links';
 export { recordRoute, collectionRoute, dataStudioRoute, indexRoute } from './recordRoute';
