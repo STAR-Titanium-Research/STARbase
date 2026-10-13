@@ -20,7 +20,7 @@ echo "# changed files against $base: $(wc -l <<<"$files")"
 echo "pre-commit run --files $(tr '\n' ' ' <<<"$files")"
 echo "bash tests/phase0_smoke.sh"
 
-has '^(core/extensions/(d1-geometry-preview|d1-home|d1-report)/|scripts/sync_geometry\.sh)' && {
+has '^(core/extensions/(d1-geometry-preview|d1-report)/|packages/starbase-pages/src/|scripts/sync_geometry\.sh)' && {
   echo "bash scripts/sync_geometry.sh --check"
   echo "node --experimental-strip-types --test core/extensions/d1-geometry-preview/test/geometry.test.ts"
 }
