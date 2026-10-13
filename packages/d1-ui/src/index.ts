@@ -7,6 +7,10 @@
 // link mapping and not the Vue components (the force app) imports "@d1/ui/recordRoute".
 
 // Links
+export {
+	assetUrl, canonicalPath, configureLinks, directusLinks, linkHref, openLink, resetLinks, resolveLink, serverUrl, starbaseLinks,
+} from './links';
+export type { LinkConfig, ResolvedLink } from './links';
 export { recordRoute, collectionRoute, dataStudioRoute, indexRoute } from './recordRoute';
 export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
@@ -63,6 +67,7 @@ export { default as DataTable } from './components/DataTable.vue';
 export { default as RecordCard } from './components/RecordCard.vue';
 export { default as StatTile } from './components/StatTile.vue';
 export { default as StatusBadge } from './components/StatusBadge.vue';
+export { default as AppLink } from './components/AppLink.vue';
 export { default as RecordLink } from './components/RecordLink.vue';
 export { default as Section } from './components/Section.vue';
 export { default as LoadState } from './components/LoadState.vue';

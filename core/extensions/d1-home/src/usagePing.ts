@@ -1,5 +1,5 @@
 import type { Router } from 'vue-router';
-import { createRepeatFilter, routeTarget, type RepeatFilter, type UsageKind } from '@d1/ui';
+import { canonicalPath, createRepeatFilter, routeTarget, type RepeatFilter, type UsageKind } from '@d1/ui';
 
 // The visit pings of the "Frequently used" panel: POST /d1-usage/visit (core/extensions/d1-usage)
 // each time the signed-in user opens an Explorer page, a record page, a dashboard or a quick
@@ -32,7 +32,7 @@ export function pingVisit(kind: UsageKind, target: string): void {
 }
 
 function pingRoute(path: string): void {
-	const hit = routeTarget(path);
+	const hit = routeTarget(canonicalPath(path));
 	if (hit) pingVisit(hit.kind, hit.target);
 }
 

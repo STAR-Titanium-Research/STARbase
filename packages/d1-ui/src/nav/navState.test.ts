@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { configureLinks, resetLinks, starbaseLinks } from '../links';
 import { linkActive, parseCollapsed } from './navState';
 
 describe('parseCollapsed', () => {
@@ -42,5 +43,17 @@ describe('linkActive', () => {
 
 	it('takes the first value when the query repeats a key', () => {
 		expect(linkActive('/home/samples?bookmark=3', '/home/samples', { bookmark: ['3', '5'] })).toBe(true);
+	});
+});
+
+describe('linkActive on the STARbase host (routes without the /home prefix)', () => {
+	afterEach(() => resetLinks());
+	it('reads the current route in its Directus form', () => {
+		configureLinks(starbaseLinks('https://d1.example'));
+		expect(linkActive('/home', '/', {})).toBe(true);
+		expect(linkActive('/home', '/samples', {})).toBe(false);
+		expect(linkActive('/home/samples', '/samples', {})).toBe(true);
+		expect(linkActive('/home/samples', '/samples/12', {})).toBe(true);
+		expect(linkActive('/home/samples?bookmark=3', '/samples', { bookmark: '3' })).toBe(true);
 	});
 });

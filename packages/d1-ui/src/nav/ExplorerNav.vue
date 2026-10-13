@@ -14,6 +14,7 @@ import { computed, inject, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import '../components/tokens.css';
 import { EXPLORER_HOST } from '../host';
+import { canonicalPath } from '../links';
 import NavPanel from './NavPanel.vue';
 import NavRail from './NavRail.vue';
 import { readSection, writeSection } from './navState';
@@ -33,6 +34,9 @@ const { nav, loading, error, refresh } = useExplorerNav(host);
 
 const route = useRoute();
 
+// Home is '/home' in the Directus form whatever this host calls it (STARbase: '/').
+const onHome = () => canonicalPath(route.path) === '/home';
+
 const sections = computed(() => railSections(nav.value));
 
 // The section holding the page you are on (marked on the rail; none for a page outside every
@@ -42,7 +46,7 @@ const current = computed<RailSectionId | null>(() => activeSection(sections.valu
 // at once when the lists are already loaded (you came back to Home from another page; the nav state
 // outlives the page), else (`pending`) when they arrive after the first paint. A rail click or a page
 // change cancels it. After that the panel just follows the user.
-const start = startSection(sections.value, route.path, route.query, route.path === '/home' ? readSection() : null);
+const start = startSection(sections.value, route.path, route.query, onHome() ? readSection() : null);
 const selected = ref<RailSectionId>(start.selected);
 let pending: string | null = start.pending;
 // True once the user has picked a section on this page: loading more sections then leaves it alone.
@@ -80,7 +84,7 @@ function select(id: RailSectionId) {
 	pending = null;
 	// Remembered only from Home (where the panel is free to wander); elsewhere the panel goes back to
 	// following the page on the next navigation.
-	if (route.path === '/home') writeSection(id);
+	if (onHome()) writeSection(id);
 }
 
 const section = computed(() => sections.value.find((s) => s.id === selected.value) ?? sections.value[0]);

@@ -1,5 +1,6 @@
 // The small state rules of the sidebar, as plain functions so they can be tested without a DOM:
 // which entry is the current page, and which groups the user has collapsed.
+import { canonicalPath } from '../links';
 
 export const COLLAPSED_KEY = 'd1.nav.collapsed';
 // Inventory and Resources start collapsed (spec section 3); a group holding the current page is
@@ -47,7 +48,9 @@ function queryValue(query: Record<string, unknown>, key: string): string | null 
 //  - any other entry: its page, or a record page under it (/home/samples/12 lights up Samples);
 //    its own list page lights it up only when no saved view is selected, so that the bookmark
 //    entry below it is the one highlighted
-export function linkActive(to: string, path: string, query: Record<string, unknown>): boolean {
+export function linkActive(to: string, routePath: string, query: Record<string, unknown>): boolean {
+	// `to` is written as a Directus app path; the current route is this host's, so bring it to that form.
+	const path = canonicalPath(routePath);
 	const [base, qs = ''] = to.split('?');
 	const bookmark = new URLSearchParams(qs).get('bookmark');
 	if (bookmark !== null) return path === base && queryValue(query, 'bookmark') === bookmark;
