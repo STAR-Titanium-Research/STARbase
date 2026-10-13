@@ -58,7 +58,7 @@ export function fileId(value: unknown): string | null {
 	return null;
 }
 
-/** A small cropped WebP of a Directus file (the app is same-origin, so the session cookie authenticates the request). */
+/** A small WebP of a Directus file, fitted whole (contain, never cropped: insert and tool photos must show entire). Same-origin, so the session cookie authenticates the request. */
 export function assetThumbUrl(id: string, w = 320, h = 200): string {
-	return assetUrl(id, { width: w, height: h, fit: 'cover', format: 'webp' });
+	return assetUrl(id, { width: w, height: h, fit: 'contain', format: 'webp' });
 }

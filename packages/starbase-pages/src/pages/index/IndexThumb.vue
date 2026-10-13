@@ -58,7 +58,7 @@ const placeholder = computed(() => {
 
 <style scoped>
 .d1-thumb { position: relative; box-sizing: border-box; width: 100%; height: 100%; min-width: 0; display: flex; align-items: center; justify-content: center; line-height: 1.15; }
-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .ph { padding: 3px; text-align: center; font-size: var(--fs-xs, 10px); color: var(--d1-dim); overflow-wrap: anywhere; }
 
 /* The drawing keeps its own colours and proportions (SampleGeometry); here it only scales to fit the

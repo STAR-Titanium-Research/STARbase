@@ -61,8 +61,8 @@ function onCard(): void {
 	color: var(--theme--foreground); cursor: pointer; transition: border-color 0.12s ease;
 }
 .card:hover, .card:focus-within { border-color: var(--d1-accent, var(--theme--primary)); }
-.pic { height: 120px; display: grid; place-items: center; line-height: 0; overflow: hidden; background: var(--d1-surface); border-bottom: 1px solid var(--d1-line); }
-.pic :deep(img) { width: 100%; height: 100%; object-fit: cover; }
+.pic { height: 104px; display: grid; place-items: center; line-height: 0; overflow: hidden; background: var(--d1-surface); border-bottom: 1px solid var(--d1-line); }
+.pic :deep(img) { width: 100%; height: 100%; object-fit: contain; }
 .body { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 9px 11px 10px; flex: 1; }
 .head {
 	align-self: flex-start; max-width: 100%; padding: 0; border: 0; background: none; font: inherit; text-align: left;

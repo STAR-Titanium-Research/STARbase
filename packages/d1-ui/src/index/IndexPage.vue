@@ -475,7 +475,7 @@ th.num .sort { justify-content: flex-end; }
 	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
 	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
 }
-/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load. */
+/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load; the picture inside is contained (IndexThumb), never cropped. */
 .thumb-box { box-sizing: border-box; width: 72px; height: 45px; overflow: hidden; border: 1px solid var(--d1-line); border-radius: 6px; background: var(--d1-tile); line-height: 0; }
 .skeleton .thumb .bar { width: 72px; height: 45px; border-radius: 6px; }
 
