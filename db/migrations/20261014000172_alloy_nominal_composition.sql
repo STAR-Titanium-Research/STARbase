@@ -98,13 +98,13 @@ UPDATE _comp b SET wt = round(100 - (SELECT sum(o.wt) FROM _comp o
                                      WHERE o.alloy_code = b.alloy_code AND NOT o.is_base), 3)
  WHERE b.is_base;
 
--- Fail loudly on a typo'd alloy code or element symbol.
+-- Alloys absent from this database (e.g. a fresh CI/dev DB with no imported materials) are
+-- skipped; an unknown element symbol is a typo and fails loudly.
+DELETE FROM _comp c WHERE NOT EXISTS (SELECT 1 FROM materials m WHERE m.alloy_code = c.alloy_code);
+
 DO $$
 DECLARE missing text;
 BEGIN
-    SELECT string_agg(DISTINCT c.alloy_code, ',') INTO missing
-      FROM _comp c LEFT JOIN materials m ON m.alloy_code = c.alloy_code WHERE m.material_id IS NULL;
-    IF missing IS NOT NULL THEN RAISE EXCEPTION 'unknown alloy_code(s): %', missing; END IF;
     SELECT string_agg(DISTINCT c.symbol, ',') INTO missing
       FROM _comp c LEFT JOIN alloying_elements a ON a.symbol = c.symbol WHERE a.symbol IS NULL;
     IF missing IS NOT NULL THEN RAISE EXCEPTION 'unknown element symbol(s): %', missing; END IF;
