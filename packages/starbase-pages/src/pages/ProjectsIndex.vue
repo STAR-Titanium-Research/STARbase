@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref } from 'vue';
-import { AppLink, LoadState, useExplorerHost, PageShell, filterProjects, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
+import { useRoute } from 'vue-router';
+import { AppLink, LoadState, useExplorerHost, PageShell, PinToggle, canonicalPath, filterProjects, pinTargetForIndex, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
 import { PROJECT_CAP, useProjectsIndex } from './projects/useProjectsIndex';
 import ProjectCard from './projects/ProjectCard.vue';
 
@@ -9,6 +10,9 @@ import ProjectCard from './projects/ProjectCard.vue';
 // counts and a sparkline of operations and tests per week. Design:
 // docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Projects index").
 const host = useExplorerHost();
+const route = useRoute();
+// The header's Pin toggle: this page (a bespoke page, not IndexPage, so it asks for its own).
+const pinTarget = computed(() => pinTargetForIndex(canonicalPath(route.path), null));
 const userId = computed<string | null>(() => host.user.value?.id ?? null);
 
 const { projects, loading, error, campaignCounts, sampleCounts, campaignCountsError, sampleCountsError, activity, activityError, truncated, rolesError } =
@@ -59,6 +63,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 					</select>
 				</label>
 				<span class="spacer" />
+				<PinToggle v-if="pinTarget" :target="pinTarget" label="Projects" />
 				<v-button small secondary to="/content/projects/+"><v-icon name="add" small left />New project</v-button>
 			</div>
 

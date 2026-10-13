@@ -382,3 +382,27 @@ test('Pin toggle: a failed save puts the button back, and says nothing next to i
 	await expect(page.locator('main').getByText("Couldn't save your pins")).toHaveCount(0);
 	await page.context().close();
 });
+
+// Projects and People are bespoke pages (not IndexPage) with their own header toggle.
+test('Pin toggle: the Projects page shows its default pin, unpinning there leaves the sidebar; People pins too', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/projects');
+	await expect(headerPin(page)).toBeEnabled();
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	await expect(headerPin(page)).toHaveAttribute('aria-pressed', 'true');
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples']);
+	await expect.poll(() => pinTargets(state)).toEqual(['samples']);
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects']);
+
+	await page.goto(STAR_BASE + '/people');
+	await expect(headerPin(page)).toBeEnabled();
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	await expect.poll(() => pinTargets(state)).toEqual(['samples', 'projects', 'people']);
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects', 'People']);
+	await page.context().close();
+});

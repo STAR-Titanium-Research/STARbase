@@ -2,11 +2,13 @@
 import ExplorerView from './ExplorerView.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { PageShell, useExplorerHost } from '@d1/ui';
+import { PageShell, PinToggle, canonicalPath, pinTargetForIndex, useExplorerHost } from '@d1/ui';
 
 const host = useExplorerHost();
 const api = host.api;
 const route = useRoute();
+// The header's Pin toggle: this page (a bespoke page, not IndexPage, so it asks for its own).
+const pinTarget = computed(() => pinTargetForIndex(canonicalPath(route.path), null));
 // Only an admin may link a login to a People row (ADR-0011: the link decides whose records a
 // person sees, so a member relinking it would inherit someone else's records). The host reads the
 // flag from the server; if a non-admin were wrongly shown the picker, the server still refuses the write.
@@ -175,6 +177,7 @@ async function remove() {
 					<v-input v-model="q" class="search" placeholder="Search name / email…" :small="true">
 						<template #prepend><v-icon name="search" small /></template>
 					</v-input>
+					<PinToggle v-if="pinTarget" :target="pinTarget" label="People" />
 					<v-button small @click="openAdd"><v-icon name="person_add" left small />Add person</v-button>
 				</div>
 			</div>
