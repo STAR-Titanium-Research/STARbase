@@ -21,7 +21,7 @@ const OP1 = '22222222-bbbb-4bbb-8bbb-000000000001';
 // does not know. transaction() snapshots the state and restores it if the callback throws.
 // `log` records every statement; `txLog` the statements of each transaction (lock must come first).
 function fakeDb({ activity = [], failOnUpsertNumber = 0 } = {}) {
-    const state = { usage: new Map(), cursors: new Map(), activity };
+    const state = { usage: new Map(), cursors: new Map(), prefs: new Map(), activity };
     const log = [];
     const txLog = [];
     let upserts = 0;
@@ -41,14 +41,20 @@ function fakeDb({ activity = [], failOnUpsertNumber = 0 } = {}) {
         if (sql.startsWith('INSERT INTO d1_private.user_usage (')) {
             upserts += 1;
             if (failOnUpsertNumber && upserts === failOnUpsertNumber) throw new Error('boom');
-            state.usage.set(key(b[0], b[1], b[2]), { score: b[3], last_at: b[4], pinned: b[5], hidden_at: b[6] });
+            // ON CONFLICT leaves pin_order alone; a new row has none.
+            const prev = state.usage.get(key(b[0], b[1], b[2]));
+            state.usage.set(key(b[0], b[1], b[2]), {
+                score: b[3], last_at: b[4], pinned: b[5], hidden_at: b[6], pin_order: prev?.pin_order ?? null,
+            });
             return { rows: [] };
         }
         if (sql.startsWith('SELECT kind, target, score, last_at, pinned FROM d1_private.user_usage')) {
             assert.ok(sql.includes('user_id = ?'));
+            assert.ok(sql.includes("kind <> 'view' AND pinned = false"), 'Home leaves out view and pinned rows');
             return {
                 rows: [...state.usage]
-                    .filter(([k, r]) => k.startsWith(`${b[0]}|`) && (r.hidden_at == null || r.last_at > r.hidden_at))
+                    .filter(([k, r]) => k.startsWith(`${b[0]}|`) && !k.startsWith(`${b[0]}|view|`) && !r.pinned
+                        && (r.hidden_at == null || r.last_at > r.hidden_at))
                     .map(([k, r]) => {
                         const [, kind, ...rest] = k.split('|');
                         return { kind, target: rest.join('|'), score: r.score, last_at: r.last_at, pinned: r.pinned };
@@ -88,6 +94,67 @@ function fakeDb({ activity = [], failOnUpsertNumber = 0 } = {}) {
             for (const [k, r] of state.usage) if (k.startsWith(`${b[0]}|`) && r.pinned) r.score = 0;
             return { rows: [] };
         }
+        // -- pins and preferences (migration 165) --
+        const mine = (user) => [...state.usage].filter(([k]) => k.startsWith(`${user}|`));
+        const split = (k) => {
+            const [, kind, ...rest] = k.split('|');
+            return { kind, target: rest.join('|') };
+        };
+        if (sql.startsWith('SELECT kind, target FROM d1_private.user_usage')) {
+            assert.ok(sql.includes('user_id = ?') && sql.includes('ORDER BY pin_order'));
+            return {
+                rows: mine(b[0])
+                    .filter(([, r]) => r.pinned)
+                    .sort(([ka, ra], [kb, rb]) => (ra.pin_order ?? 1e9) - (rb.pin_order ?? 1e9) || (ka < kb ? -1 : 1))
+                    .map(([k]) => split(k)),
+            };
+        }
+        if (sql.startsWith('UPDATE d1_private.user_usage SET pin_order = (SELECT')) {
+            // bindings: user, user, kind, target. Appends only to a row without an order.
+            const r = state.usage.get(key(b[1], b[2], b[3]));
+            if (r && r.pin_order == null) {
+                const orders = mine(b[0]).map(([, x]) => x.pin_order).filter((o) => o != null);
+                r.pin_order = orders.length ? Math.max(...orders) + 1 : 0;
+            }
+            return { rows: [] };
+        }
+        if (sql.startsWith('UPDATE d1_private.user_usage SET pin_order = NULL WHERE user_id = ? AND kind = ?')) {
+            const r = state.usage.get(key(b[0], b[1], b[2]));
+            if (r) r.pin_order = null;
+            return { rows: [] };
+        }
+        if (sql.startsWith('UPDATE d1_private.user_usage u SET pin_order = r.n')) {
+            assert.deepEqual(b[0], b[1]);
+            const rows = mine(b[0]).filter(([, r]) => r.pin_order != null)
+                .sort(([ka, ra], [kb, rb]) => ra.pin_order - rb.pin_order || (ka < kb ? -1 : 1));
+            rows.forEach(([, r], i) => { r.pin_order = i; });
+            return { rows: [] };
+        }
+        if (sql.startsWith('UPDATE d1_private.user_usage SET pin_order = ? WHERE user_id = ?')) {
+            assert.ok(sql.includes('pinned = true'));
+            const r = state.usage.get(key(b[1], b[2], b[3]));
+            if (r && r.pinned) r.pin_order = b[0];
+            return { rows: [] };
+        }
+        if (sql.startsWith('UPDATE d1_private.user_usage SET pinned = false, pin_order = NULL')) {
+            for (const [, r] of mine(b[0])) if (r.pinned || r.pin_order != null) { r.pinned = false; r.pin_order = null; }
+            return { rows: [] };
+        }
+        if (sql.startsWith('SELECT pins_seeded, prefs FROM d1_private.user_prefs')) {
+            const r = state.prefs.get(b[0]);
+            return { rows: r ? [{ pins_seeded: r.pins_seeded, prefs: structuredClone(r.prefs) }] : [] };
+        }
+        if (sql.startsWith('INSERT INTO d1_private.user_prefs (user_id, pins_seeded)')) {
+            const r = state.prefs.get(b[0]) ?? { pins_seeded: false, prefs: {}, updated_at: null };
+            state.prefs.set(b[0], { ...r, pins_seeded: true, updated_at: 'now' });
+            return { rows: [] };
+        }
+        if (sql.startsWith('INSERT INTO d1_private.user_prefs (user_id, prefs)')) {
+            assert.equal(typeof b[1], 'string', 'prefs go in as one JSON text');
+            const r = state.prefs.get(b[0]) ?? { pins_seeded: false, prefs: {}, updated_at: null };
+            state.prefs.set(b[0], { ...r, prefs: { ...r.prefs, ...JSON.parse(b[1]) }, updated_at: 'now' });
+            return { rows: [] };
+        }
         throw new Error(`fakeDb: unknown SQL: ${sql}`);
     }
 
@@ -100,6 +167,7 @@ function fakeDb({ activity = [], failOnUpsertNumber = 0 } = {}) {
             const snap = {
                 usage: new Map([...state.usage].map(([k, v]) => [k, { ...v }])),
                 cursors: new Map(state.cursors),
+                prefs: new Map([...state.prefs].map(([k, v]) => [k, structuredClone(v)])),
             };
             const mine = [];
             txLog.push(mine);
@@ -109,6 +177,7 @@ function fakeDb({ activity = [], failOnUpsertNumber = 0 } = {}) {
             } catch (e) {
                 state.usage = snap.usage;
                 state.cursors = snap.cursors;
+                state.prefs = snap.prefs;
                 throw e;
             }
         },
@@ -185,6 +254,13 @@ test('validTarget accepts only known page keys and <collection>:<id> of the seve
     for (const [kind, target] of bad) assert.equal(validTarget(kind, target), false, `${kind} ${String(target).slice(0, 30)}`);
 });
 
+test('validTarget: kind view is a positive integer preset id as text', () => {
+    for (const t of ['1', '42', '2147483647']) assert.equal(validTarget('view', t), true, t);
+    const bad = ['x', '0', '', '-1', '01', '1.5', '1e3', ' 1', '2147483648', '12345678901', '1; DROP TABLE x', 'samples', 42, null, undefined, ['1']];
+    for (const t of bad) assert.equal(validTarget('view', t), false, String(t));
+    assert.equal(validTarget('page', '42'), false);
+});
+
 test('PAGE_KEYS is one literal list of quoted keys in the file (the kit drift test reads it as text)', () => {
     const src = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
     const block = src.match(/export const PAGE_KEYS = new Set\(\[([\s\S]*?)\]\);/);
@@ -208,6 +284,10 @@ const ROUTES = [
     ['POST /pin', { kind: 'page', target: 'samples', pinned: true }],
     ['POST /hide', { kind: 'page', target: 'samples' }],
     ['POST /clear', {}],
+    ['GET /nav', undefined],
+    ['POST /pin-order', { items: [] }],
+    ['POST /prefs', { theme: 'dark' }],
+    ['POST /pins/reset', {}],
 ];
 
 test('every route answers 401 without a signed-in user and runs no SQL', async () => {
@@ -232,6 +312,20 @@ test('invalid bodies get 400 and write nothing', async () => {
         ['POST /pin', { kind: 'page', target: 'samples' }],
         ['POST /pin', { kind: 'page', target: 'samples', pinned: 'yes' }],
         ['POST /pin', { kind: 'page', target: 'zzz', pinned: true }],
+        ['POST /pin', { kind: 'view', target: 'x', pinned: true }],
+        ['POST /pin', { kind: 'view', target: '0', pinned: true }],
+        ['POST /pin-order', undefined], ['POST /pin-order', {}], ['POST /pin-order', { items: 'samples' }],
+        ['POST /pin-order', { items: [{ kind: 'page', target: 'nope' }] }],
+        ['POST /pin-order', { items: [{ kind: 'view', target: '0' }] }],
+        ['POST /pin-order', { items: [{ kind: 'other', target: 'samples' }] }],
+        ['POST /pin-order', { items: ['samples'] }],
+        ['POST /prefs', undefined], ['POST /prefs', {}], ['POST /prefs', []], ['POST /prefs', 'dark'],
+        ['POST /prefs', { colour: 'red' }],
+        ['POST /prefs', { theme: 'dark', colour: 'red' }],
+        ['POST /prefs', { theme: 'blue' }], ['POST /prefs', { theme: true }],
+        ['POST /prefs', { sidebarCollapsed: 'yes' }], ['POST /prefs', { sidebarCollapsed: 1 }],
+        ['POST /prefs', { autoCollapse: null }],
+        ['POST /prefs', { __proto__: null, constructor: true }],
     ];
     for (const [route, body] of cases) {
         const r = await call(route, ALICE, body);
@@ -254,9 +348,16 @@ test('every statement sent is one of the constant SQL strings, and a lock comes 
     await call('POST /hide', ALICE, { kind: 'page', target: 'samples' });
     await call('GET /', ALICE);
     await call('POST /clear', ALICE);
+    await call('GET /nav', ALICE);
+    await call('POST /pin', ALICE, { kind: 'view', target: '42', pinned: true });
+    await call('POST /pin', ALICE, { kind: 'page', target: 'tests', pinned: true });
+    await call('POST /pin', ALICE, { kind: 'view', target: '42', pinned: false });
+    await call('POST /pin-order', ALICE, { items: [{ kind: 'page', target: 'tests' }, { kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }] });
+    await call('POST /prefs', ALICE, { theme: 'dark' });
+    await call('POST /pins/reset', ALICE);
     const allowed = new Set(Object.values(SQL));
     for (const { sql } of db.log) assert.ok(allowed.has(sql), `not a constant statement: ${sql}`);
-    assert.ok(db.txLog.length >= 5);
+    assert.ok(db.txLog.length >= 12);
     for (const tx of db.txLog) assert.equal(tx[0], SQL.lock, 'each transaction locks the user first');
 });
 
@@ -283,21 +384,31 @@ test('visit adds weight 1, action pages 3, and fades the old score first', async
     assert.equal(db.state.usage.get(`${ALICE}|record|physical_samples:${S1}`).score, 1);
 });
 
-test('GET returns scores decayed to now, pinned first, then by score; each list is separate', async () => {
+test('GET returns scores decayed to now, by score; each list is separate; pinned and view rows are left out', async () => {
     const { clock, call } = setup();
     await call('POST /visit', ALICE, { kind: 'page', target: 'samples' }); // 1 at T0
     await call('POST /visit', ALICE, { kind: 'page', target: 'tests' });
     await call('POST /visit', ALICE, { kind: 'page', target: 'tests' }); // 2 at T0
+    await call('POST /visit', ALICE, { kind: 'page', target: 'people' }); // pinned below: not listed
     await call('POST /visit', ALICE, { kind: 'record', target: `physical_samples:${S1}` });
-    await call('POST /pin', ALICE, { kind: 'page', target: 'equipment', pinned: true }); // score 0, pinned
+    await call('POST /visit', ALICE, { kind: 'record', target: `physical_samples:${S2}` }); // pinned below
+    await call('POST /visit', ALICE, { kind: 'view', target: '42' }); // a view is never a Home row
+    await call('POST /pin', ALICE, { kind: 'page', target: 'people', pinned: true });
+    await call('POST /pin', ALICE, { kind: 'page', target: 'equipment', pinned: true });
+    await call('POST /pin', ALICE, { kind: 'record', target: `physical_samples:${S2}`, pinned: true });
+    await call('POST /pin', ALICE, { kind: 'view', target: '7', pinned: true });
     clock.now = at(10);
     const out = (await call('GET /', ALICE)).body;
-    assert.deepEqual(out.pages.map((p) => p.target), ['equipment', 'tests', 'samples']);
-    assert.deepEqual(out.pages.map((p) => p.pinned), [true, false, false]);
-    assert.ok(Math.abs(out.pages[1].score - 1) < 1e-12);
-    assert.ok(Math.abs(out.pages[2].score - 0.5) < 1e-12);
+    assert.deepEqual(out.pages.map((p) => p.target), ['tests', 'samples']);
+    assert.ok(Math.abs(out.pages[0].score - 1) < 1e-12);
+    assert.ok(Math.abs(out.pages[1].score - 0.5) < 1e-12);
     assert.deepEqual(Object.keys(out.pages[0]).sort(), ['last_at', 'pinned', 'score', 'target']);
+    assert.deepEqual(out.pages.map((p) => p.pinned), [false, false]);
     assert.deepEqual(out.records.map((r) => r.target), [`physical_samples:${S1}`]);
+    // Unpinning an item puts it back in Home, at the score it earned.
+    await call('POST /pin', ALICE, { kind: 'page', target: 'people', pinned: false });
+    const again = (await call('GET /', ALICE)).body;
+    assert.deepEqual(again.pages.map((p) => p.target).sort(), ['people', 'samples', 'tests']);
 });
 
 test('lists are capped at 15 each, and an old unpinned score fades out of the list', async () => {
@@ -320,7 +431,7 @@ test('two users never see each other\'s rows', async () => {
     const b = (await call('GET /', BOB)).body;
     assert.deepEqual(a.pages.map((p) => p.target), ['samples']);
     assert.deepEqual(a.records.map((r) => r.target), [`physical_samples:${S1}`]);
-    assert.deepEqual(b.pages.map((p) => p.target), ['people', 'tests']);
+    assert.deepEqual(b.pages.map((p) => p.target), ['tests'], 'Bob\'s pinned page is not a Home row');
     assert.deepEqual(b.records, []);
     // A clear by Bob leaves Alice's rows alone.
     await call('POST /clear', BOB);
@@ -349,17 +460,17 @@ test('hiding something that has no row yet hides it until it is used', async () 
     assert.equal((await call('GET /', ALICE)).body.pages.length, 1);
 });
 
-test('pin upserts a missing row, pinning un-hides, hiding un-pins, unpinning a zero row drops it', async () => {
-    const { clock, call } = setup();
+test('pin upserts a missing row, pinning un-hides, hiding un-pins, an unpinned zero row is not listed', async () => {
+    const { db, clock, call } = setup();
     await call('POST /pin', ALICE, { kind: 'page', target: 'samples', pinned: true });
-    let out = (await call('GET /', ALICE)).body;
-    assert.deepEqual(out.pages.map((p) => [p.target, p.pinned, p.score]), [['samples', true, 0]]);
+    assert.deepEqual([...db.state.usage].map(([k, r]) => [k, r.pinned, r.score]), [[`${ALICE}|page|samples`, true, 0]]);
+    assert.deepEqual((await call('GET /', ALICE)).body.pages, [], 'pinned rows are not Home rows');
     clock.now = at(1);
     await call('POST /hide', ALICE, { kind: 'page', target: 'samples' });
-    assert.deepEqual((await call('GET /', ALICE)).body.pages, [], 'hide unpins and hides');
+    assert.equal(db.state.usage.get(`${ALICE}|page|samples`).pinned, false, 'hide unpins');
+    assert.notEqual(db.state.usage.get(`${ALICE}|page|samples`).hidden_at, null);
     await call('POST /pin', ALICE, { kind: 'page', target: 'samples', pinned: true });
-    out = (await call('GET /', ALICE)).body;
-    assert.equal(out.pages[0].pinned, true, 'pinning un-hides');
+    assert.equal(db.state.usage.get(`${ALICE}|page|samples`).hidden_at, null, 'pinning un-hides');
     await call('POST /pin', ALICE, { kind: 'page', target: 'samples', pinned: false });
     assert.deepEqual((await call('GET /', ALICE)).body.pages, [], 'nothing earned, nothing left to show');
 });
@@ -380,8 +491,9 @@ test('clear deletes unpinned rows, zeroes pinned ones, and does not refold old a
     assert.deepEqual([...db.state.usage].map(([k, r]) => [k, r.pinned, r.score]), [[`${ALICE}|page|tests`, true, 0]]);
     assert.equal(db.state.cursors.get(ALICE), 1, 'cursor moved to the newest activity id');
     const out = (await call('GET /', ALICE)).body;
-    assert.deepEqual(out.pages.map((p) => p.target), ['tests']);
+    assert.deepEqual(out.pages, [], 'the pinned page is not a Home row');
     assert.deepEqual(out.records, [], 'old activity is not folded back in');
+    assert.deepEqual(pinsOf(db, ALICE), ['page|tests=0'], 'the pin stays');
 });
 
 // -- the activity fold --------------------------------------------------------------------------
@@ -529,12 +641,300 @@ test('an edit older than a later hide does not un-hide the record; a newer edit 
     assert.deepEqual((await call('GET /', ALICE)).body.records.map((r) => r.target), [target]);
 });
 
-test('folded activity keeps a record\'s pin', async () => {
+test('folded activity keeps a record\'s pin and its place in the order', async () => {
     const activity = [act(1, ALICE, 'update', 'physical_samples', S1, at(-1))];
-    const { call } = setup({ activity });
+    const { db, call } = setup({ activity });
     const target = `physical_samples:${S1}`;
+    await call('POST /pin', ALICE, { kind: 'page', target: 'tests', pinned: true });
     await call('POST /pin', ALICE, { kind: 'record', target, pinned: true });
     const out = (await call('GET /', ALICE)).body;
-    assert.deepEqual(out.records.map((r) => [r.target, r.pinned]), [[target, true]]);
-    assert.ok(out.records[0].score > 2);
+    assert.deepEqual(out.records, [], 'a pinned record is not a Home row');
+    const row = db.state.usage.get(`${ALICE}|record|${target}`);
+    assert.equal(row.pinned, true);
+    assert.equal(row.pin_order, 1);
+    assert.ok(row.score > 2, 'the edit still counted');
+    // Unpinned, it shows in Home with that score.
+    await call('POST /pin', ALICE, { kind: 'record', target, pinned: false });
+    assert.deepEqual((await call('GET /', ALICE)).body.records.map((r) => r.target), [target]);
+});
+
+// -- sidebar pins, order and preferences --------------------------------------------------------
+
+const pg = (target) => ({ kind: 'page', target });
+const vw = (target) => ({ kind: 'view', target });
+const rc = (target) => ({ kind: 'record', target });
+const nav = async (call, user) => (await call('GET /nav', user)).body;
+const pinsOf = (db, user) => [...db.state.usage]
+    .filter(([k, r]) => k.startsWith(`${user}|`) && r.pinned)
+    .sort(([, x], [, y]) => x.pin_order - y.pin_order)
+    .map(([k, r]) => `${k.split('|').slice(1).join('|')}=${r.pin_order}`);
+
+test('nav seeds samples and projects once', async () => {
+    const { db, call } = setup();
+    const first = await nav(call, ALICE);
+    assert.deepEqual(first.pins, [pg('samples'), pg('projects')]);
+    assert.deepEqual(first.prefs, {});
+    assert.deepEqual(pinsOf(db, ALICE), ['page|samples=0', 'page|projects=1']);
+    assert.equal(db.state.prefs.get(ALICE).pins_seeded, true);
+    // The same again: nothing new.
+    assert.deepEqual((await nav(call, ALICE)).pins, [pg('samples'), pg('projects')]);
+    // Unpin both: the next GET does not bring them back.
+    await call('POST /pin', ALICE, { ...pg('samples'), pinned: false });
+    await call('POST /pin', ALICE, { ...pg('projects'), pinned: false });
+    assert.deepEqual((await nav(call, ALICE)).pins, []);
+    assert.deepEqual((await nav(call, ALICE)).pins, []);
+    // Another person is seeded on their own first call.
+    assert.deepEqual((await nav(call, BOB)).pins, [pg('samples'), pg('projects')]);
+});
+
+test('nav seeding runs in the GET\'s own transaction, lock first, and a failure seeds nothing', async () => {
+    const { db, call } = setup({ failOnUpsertNumber: 2 });
+    const r = await call('GET /nav', ALICE);
+    assert.equal(r.status, 500);
+    assert.equal(db.state.usage.size, 0, 'rolled back');
+    assert.equal(db.state.prefs.size, 0, 'pins_seeded not set either');
+    assert.equal(db.txLog.length, 1);
+    assert.equal(db.txLog[0][0], SQL.lock);
+    // The next call seeds properly.
+    assert.deepEqual((await nav(call, ALICE)).pins, [pg('samples'), pg('projects')]);
+});
+
+test('nav seeding for a person who already pinned in U1 appends samples and projects after their pins, once', async () => {
+    const { db, call } = setup();
+    // Pins made before the seed (the fake has no migration back-fill; pin appends 0, 1).
+    await call('POST /pin', ALICE, { ...pg('tests'), pinned: true });
+    await call('POST /pin', ALICE, { ...pg('samples'), pinned: true });
+    assert.deepEqual((await nav(call, ALICE)).pins, [pg('tests'), pg('samples'), pg('projects')]);
+    assert.deepEqual(pinsOf(db, ALICE), ['page|tests=0', 'page|samples=1', 'page|projects=2']);
+    await call('POST /pin', ALICE, { ...pg('projects'), pinned: false });
+    assert.deepEqual((await nav(call, ALICE)).pins, [pg('tests'), pg('samples')], 'seeded once');
+});
+
+test('setting prefs first does not count as seeding', async () => {
+    const { call } = setup();
+    await call('POST /prefs', ALICE, { theme: 'dark' });
+    const out = await nav(call, ALICE);
+    assert.deepEqual(out.pins, [pg('samples'), pg('projects')]);
+    assert.deepEqual(out.prefs, { theme: 'dark' });
+});
+
+test('nav orders pages, views and records together by pin_order', async () => {
+    const { call } = setup();
+    const rec = `physical_samples:${S1}`;
+    await call('POST /pin', ALICE, { ...vw('42'), pinned: true });
+    await call('POST /pin', ALICE, { ...pg('tests'), pinned: true });
+    await call('POST /pin', ALICE, { ...rc(rec), pinned: true });
+    await call('POST /pin', ALICE, { ...pg('equipment'), pinned: true });
+    // The person had pins before the first nav call: seeding appends samples and projects after them.
+    const out = await nav(call, ALICE);
+    assert.deepEqual(out.pins, [vw('42'), pg('tests'), rc(rec), pg('equipment'), pg('samples'), pg('projects')]);
+    assert.deepEqual(Object.keys(out.pins[0]).sort(), ['kind', 'target']);
+    await call('POST /pin-order', ALICE, { items: [rc(rec), pg('projects'), vw('42'), pg('equipment'), pg('samples'), pg('tests')] });
+    assert.deepEqual((await nav(call, ALICE)).pins, [rc(rec), pg('projects'), vw('42'), pg('equipment'), pg('samples'), pg('tests')]);
+});
+
+test('nav returns prefs as stored (no defaults filled in)', async () => {
+    const { call } = setup();
+    await call('POST /prefs', ALICE, { sidebarCollapsed: true });
+    assert.deepEqual((await nav(call, ALICE)).prefs, { sidebarCollapsed: true });
+    assert.deepEqual((await nav(call, BOB)).prefs, {});
+});
+
+test('pin appends to the end and unpin closes the gap', async () => {
+    const { db, call } = setup();
+    await nav(call, ALICE); // samples=0, projects=1
+    assert.equal((await call('POST /pin', ALICE, { ...vw('42'), pinned: true })).status, 204);
+    await call('POST /pin', ALICE, { ...pg('tests'), pinned: true });
+    await call('POST /pin', ALICE, { ...pg('people'), pinned: true });
+    assert.deepEqual(pinsOf(db, ALICE), ['page|samples=0', 'page|projects=1', 'view|42=2', 'page|tests=3', 'page|people=4']);
+    // Pinning something already pinned keeps its place.
+    await call('POST /pin', ALICE, { ...pg('projects'), pinned: true });
+    assert.deepEqual(pinsOf(db, ALICE), ['page|samples=0', 'page|projects=1', 'view|42=2', 'page|tests=3', 'page|people=4']);
+    // Unpin from the middle: later pins move up.
+    assert.equal((await call('POST /pin', ALICE, { ...pg('projects'), pinned: false })).status, 204);
+    assert.deepEqual(pinsOf(db, ALICE), ['page|samples=0', 'view|42=1', 'page|tests=2', 'page|people=3']);
+    assert.equal(db.state.usage.get(`${ALICE}|page|projects`).pin_order, null);
+    // Unpinning something never pinned changes nothing.
+    await call('POST /pin', ALICE, { ...pg('tools'), pinned: false });
+    assert.deepEqual(pinsOf(db, ALICE), ['page|samples=0', 'view|42=1', 'page|tests=2', 'page|people=3']);
+    // A new pin goes after the last.
+    await call('POST /pin', ALICE, { ...pg('projects'), pinned: true });
+    assert.equal(db.state.usage.get(`${ALICE}|page|projects`).pin_order, 4);
+});
+
+test('pin keeps a row\'s earned score and last_at', async () => {
+    const { db, clock, call } = setup();
+    await call('POST /visit', ALICE, { kind: 'page', target: 'tests' });
+    clock.now = at(3);
+    await call('POST /pin', ALICE, { ...pg('tests'), pinned: true });
+    const row = db.state.usage.get(`${ALICE}|page|tests`);
+    assert.equal(row.score, 1);
+    assert.equal(row.last_at.getTime(), T0.getTime());
+    assert.equal(row.pin_order, 0);
+});
+
+test('pin-order rewrites the order', async () => {
+    const { db, call } = setup();
+    await nav(call, ALICE);
+    await call('POST /pin', ALICE, { ...vw('7'), pinned: true });
+    const r = await call('POST /pin-order', ALICE, { items: [vw('7'), pg('projects'), pg('samples')] });
+    assert.equal(r.status, 204);
+    assert.deepEqual(pinsOf(db, ALICE), ['view|7=0', 'page|projects=1', 'page|samples=2']);
+    assert.deepEqual((await nav(call, ALICE)).pins, [vw('7'), pg('projects'), pg('samples')]);
+    // An empty list is right for a person with no pins.
+    await call('POST /pin', ALICE, { ...vw('7'), pinned: false });
+    await call('POST /pin', ALICE, { ...pg('projects'), pinned: false });
+    await call('POST /pin', ALICE, { ...pg('samples'), pinned: false });
+    assert.equal((await call('POST /pin-order', ALICE, { items: [] })).status, 204);
+});
+
+test('pin-order with a missing, extra, duplicate or foreign item is 409 and changes nothing', async () => {
+    const { db, call } = setup();
+    await nav(call, ALICE);
+    await call('POST /pin', ALICE, { ...vw('7'), pinned: true });
+    await call('POST /pin', BOB, { ...pg('people'), pinned: true });
+    const before = pinsOf(db, ALICE);
+    const bobBefore = pinsOf(db, BOB);
+    const stale = [
+        [pg('samples'), pg('projects')], // missing the view
+        [pg('samples'), pg('projects'), vw('7'), pg('tests')], // extra, not pinned
+        [pg('samples'), pg('projects'), vw('7'), pg('people')], // Bob's pin, not hers
+        [pg('samples'), pg('samples'), vw('7')], // duplicate, one missing
+        [pg('samples'), pg('samples'), pg('projects'), vw('7')], // duplicate
+        [pg('samples'), pg('projects'), vw('8')], // wrong view id
+        [],
+    ];
+    for (const items of stale) {
+        const r = await call('POST /pin-order', ALICE, { items });
+        assert.equal(r.status, 409, JSON.stringify(items));
+        assert.deepEqual(r.body, { error: 'pins changed' });
+        assert.deepEqual(pinsOf(db, ALICE), before);
+    }
+    assert.deepEqual(pinsOf(db, BOB), bobBefore);
+    const updates = db.log.filter((l) => l.sql === SQL.setPinOrder);
+    assert.equal(updates.length, 0, 'no order was written');
+    // A target that does not belong to its kind is malformed (400), not stale.
+    const r = await call('POST /pin-order', ALICE, { items: [pg('samples'), pg('projects'), pg('7')] });
+    assert.equal(r.status, 400);
+});
+
+test('pin-order is all-or-nothing: a failure while writing rolls the whole order back', async () => {
+    const { db, call } = setup();
+    await nav(call, ALICE);
+    await call('POST /pin', ALICE, { ...vw('7'), pinned: true });
+    const before = pinsOf(db, ALICE);
+    let n = 0;
+    const realTx = db.transaction;
+    db.transaction = (fn) => realTx((trx) => fn({
+        raw: async (sql, b) => {
+            if (sql === SQL.setPinOrder && (n += 1) === 2) throw new Error('boom');
+            return trx.raw(sql, b);
+        },
+    }));
+    const r = await call('POST /pin-order', ALICE, { items: [vw('7'), pg('projects'), pg('samples')] });
+    db.transaction = realTx;
+    assert.equal(r.status, 500);
+    assert.deepEqual(pinsOf(db, ALICE), before);
+});
+
+test('prefs merges known keys; unknown key or wrong type is 400', async () => {
+    const { db, logs, call } = setup();
+    assert.equal((await call('POST /prefs', ALICE, { theme: 'dark' })).status, 204);
+    assert.equal((await call('POST /prefs', ALICE, { sidebarCollapsed: true, autoCollapse: false })).status, 204);
+    assert.deepEqual(db.state.prefs.get(ALICE).prefs, { theme: 'dark', sidebarCollapsed: true, autoCollapse: false });
+    assert.equal((await call('POST /prefs', ALICE, { theme: 'system' })).status, 204);
+    assert.deepEqual(db.state.prefs.get(ALICE).prefs, { theme: 'system', sidebarCollapsed: true, autoCollapse: false });
+    assert.equal(db.state.prefs.get(ALICE).updated_at, 'now');
+    assert.ok(SQL.setPrefs.includes('updated_at = now()'), 'updated_at is set on every write');
+    assert.ok(SQL.setPrefs.includes('||'), 'merged, not replaced');
+    const before = structuredClone(db.state.prefs.get(ALICE));
+    const writes = db.log.length;
+    for (const body of [{ theme: 'blue' }, { colour: 'red' }, { theme: 'dark', pinsSeeded: true }, { autoCollapse: 'no' }, {}]) {
+        assert.equal((await call('POST /prefs', ALICE, body)).status, 400, JSON.stringify(body));
+    }
+    assert.deepEqual(db.state.prefs.get(ALICE), before, 'nothing written');
+    assert.equal(db.log.length, writes, 'no SQL for a bad body');
+    assert.equal(logs.error.length, 0);
+});
+
+test('prefs cannot reach pins_seeded and are per person', async () => {
+    const { db, call } = setup();
+    await call('POST /prefs', ALICE, { theme: 'light' });
+    assert.equal(db.state.prefs.get(ALICE).pins_seeded, false);
+    assert.equal(db.state.prefs.has(BOB), false);
+    assert.equal((await call('POST /prefs', ALICE, { pins_seeded: true })).status, 400);
+});
+
+test('pins/reset leaves exactly samples, projects', async () => {
+    const { db, call } = setup();
+    await nav(call, ALICE);
+    await call('POST /pin', ALICE, { ...vw('7'), pinned: true });
+    await call('POST /pin', ALICE, { ...pg('tests'), pinned: true });
+    await call('POST /pin', ALICE, { ...rc(`physical_samples:${S1}`), pinned: true });
+    await call('POST /pin-order', ALICE, { items: [pg('tests'), vw('7'), pg('projects'), rc(`physical_samples:${S1}`), pg('samples')] });
+    assert.equal((await call('POST /pins/reset', ALICE)).status, 204);
+    assert.deepEqual((await nav(call, ALICE)).pins, [pg('samples'), pg('projects')]);
+    assert.deepEqual(pinsOf(db, ALICE), ['page|samples=0', 'page|projects=1']);
+    for (const [k, r] of db.state.usage) {
+        if (k !== `${ALICE}|page|samples` && k !== `${ALICE}|page|projects`) {
+            assert.equal(r.pinned, false, k);
+            assert.equal(r.pin_order, null, k);
+        }
+    }
+    assert.equal(db.state.prefs.get(ALICE).pins_seeded, true);
+});
+
+test('pins/reset works for a person who was never seeded, and seeds only once', async () => {
+    const { db, call } = setup();
+    await call('POST /pin', ALICE, { ...pg('tests'), pinned: true });
+    assert.equal((await call('POST /pins/reset', ALICE)).status, 204);
+    assert.deepEqual(pinsOf(db, ALICE), ['page|samples=0', 'page|projects=1']);
+    assert.equal(db.state.prefs.get(ALICE).pins_seeded, true);
+    await call('POST /pin', ALICE, { ...pg('samples'), pinned: false });
+    assert.deepEqual((await nav(call, ALICE)).pins, [pg('projects')], 'not seeded again');
+});
+
+test('pins/reset keeps preferences and earned scores', async () => {
+    const { db, call } = setup();
+    await call('POST /prefs', ALICE, { theme: 'dark' });
+    await call('POST /visit', ALICE, { kind: 'page', target: 'tests' });
+    await call('POST /pins/reset', ALICE);
+    assert.deepEqual(db.state.prefs.get(ALICE).prefs, { theme: 'dark' });
+    assert.equal(db.state.usage.get(`${ALICE}|page|tests`).score, 1);
+});
+
+test('hide clears pin_order and closes the gap', async () => {
+    const { db, call } = setup();
+    await nav(call, ALICE);
+    await call('POST /pin', ALICE, { ...pg('tests'), pinned: true });
+    await call('POST /hide', ALICE, { ...pg('samples') });
+    assert.equal(db.state.usage.get(`${ALICE}|page|samples`).pin_order, null);
+    assert.deepEqual(pinsOf(db, ALICE), ['page|projects=0', 'page|tests=1']);
+    // Hiding a view unpins it too.
+    await call('POST /pin', ALICE, { ...vw('9'), pinned: true });
+    await call('POST /hide', ALICE, { ...vw('9') });
+    assert.deepEqual(pinsOf(db, ALICE), ['page|projects=0', 'page|tests=1']);
+});
+
+test('every new route touches only the caller\'s rows', async () => {
+    const { db, call } = setup();
+    await nav(call, ALICE);
+    await nav(call, BOB);
+    await call('POST /pin', BOB, { ...vw('5'), pinned: true });
+    await call('POST /prefs', BOB, { theme: 'dark' });
+    const bobPins = pinsOf(db, BOB);
+    const bobPrefs = structuredClone(db.state.prefs.get(BOB));
+    await call('POST /pin', ALICE, { ...pg('tests'), pinned: true });
+    await call('POST /pin', ALICE, { ...pg('samples'), pinned: false });
+    await call('POST /pin-order', ALICE, { items: [pg('tests'), pg('projects')] });
+    await call('POST /prefs', ALICE, { autoCollapse: true });
+    await call('POST /pins/reset', ALICE);
+    await call('POST /hide', ALICE, { ...pg('projects') });
+    assert.deepEqual(pinsOf(db, BOB), bobPins);
+    assert.deepEqual(db.state.prefs.get(BOB), bobPrefs);
+    assert.deepEqual((await nav(call, BOB)).pins, [pg('samples'), pg('projects'), vw('5')]);
+    // Every statement of the pin routes binds the caller as user.
+    const alice = db.log.filter((l) => l.bindings?.includes(ALICE));
+    assert.ok(alice.length > 0);
+    for (const l of db.log) if (l.bindings?.includes(BOB)) assert.ok(!l.bindings.includes(ALICE) || l.sql === SQL.lock, l.sql);
 });
