@@ -149,7 +149,8 @@ Directus form, and a phone layout. Deployment files are written but not run.
 - **Stand-in tests** render with `vue/server-renderer` and test pure helpers. The workspace has no
   DOM environment, and adding one for markup checks is not worth a new dependency. Interaction is
   covered by the e2e in Task 12.
-- **Phone cards default** is a STARbase-only switch (`setPhoneListDefault(true)`), so the Directus
+- **MAINTAINER OVERRIDE (2026-10-13): index pages stay as lists (the table) on phones too.** Task 9 does NOT add `setPhoneListDefault`, `defaultListPrefs`, `readSavedListPrefs` or `PHONE_LIST_MAX_WIDTH`, does not touch `listPrefs.ts`, and STARbase does not call any list-default switch; Task 12's phone test expects the table view. The struck text that follows is kept only for history.
+- ~~**Phone cards default**~~ (superseded) was a STARbase-only switch (`setPhoneListDefault(true)`), so the Directus
   host keeps its table at every width. The default is never written to storage.
 - **The star mark** (`Star-Icon.svg`) is the favicon and the mark in the phone top bar. The desktop
   sidebar shows the full logo above the Explorer rail. The rail itself (`@d1/ui` `NavRail`) has no
@@ -4855,6 +4856,8 @@ git push origin HEAD:feat/explorer-standalone
 
 ### Task 9: Phone layout
 
+> **Maintainer override (2026-10-13):** skip every step about the cards-on-phone list default (`setPhoneListDefault`, `defaultListPrefs`, `readSavedListPrefs`, `PHONE_LIST_MAX_WIDTH`, the `listPrefs` tests and the `main.ts` call). Index pages keep the table view at every width; the rest of this task (top bar, sheet, record pages at 375 px) stands. The commit message drops "cards by default on lists".
+
 **Files:**
 - Modify: `packages/d1-ui/src/index/listPrefs.ts`, `packages/d1-ui/src/index/listPrefs.test.ts`, `packages/d1-ui/src/index.ts`
 - Create: `apps/starbase/web/src/ShellFoot.vue`
@@ -6115,6 +6118,8 @@ git push origin HEAD:feat/explorer-standalone
 
 ---
 ### Task 12: End to end on the preview
+
+> **Maintainer override (2026-10-13):** the phone test expects index pages in the **table** view at 375 px (no cards default), with no sideways page scroll.
 
 The spec §5 flows are checked against the `d1-starbase` preview, with STARbase served by `vite preview`
 under the production CSP, in two layouts:
