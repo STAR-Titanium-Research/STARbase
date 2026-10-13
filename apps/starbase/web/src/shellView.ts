@@ -1,4 +1,4 @@
-import type { SessionState } from './session';
+import type { SessionState, SessionUser } from './session';
 
 export type ShellView = 'unreachable' | 'route' | 'none';
 
@@ -9,4 +9,10 @@ export type ShellView = 'unreachable' | 'route' | 'none';
 export function shellView(state: SessionState, isPublic: boolean): ShellView {
 	if (state === 'unreachable') return 'unreachable';
 	return isPublic || state === 'signed-in' ? 'route' : 'none';
+}
+
+// The name the shell shows for the signed-in user: the first name, else the email (not every account has a
+// first name), else nothing.
+export function userLabel(user: Pick<SessionUser, 'first_name' | 'email'> | null | undefined): string {
+	return user?.first_name?.trim() || user?.email?.trim() || '';
 }

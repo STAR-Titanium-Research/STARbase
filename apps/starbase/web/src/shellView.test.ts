@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shellView } from './shellView';
+import { shellView, userLabel } from './shellView';
 import type { SessionState } from './session';
 
 describe('shellView', () => {
@@ -18,4 +18,18 @@ describe('shellView', () => {
 			expect(shellView(state, false)).toBe(expected[state].page);
 		});
 	}
+});
+
+describe('userLabel', () => {
+	it('is the first name when there is one', () => {
+		expect(userLabel({ id: '1', role: null, first_name: 'Ada', email: 'ada@x.org' })).toBe('Ada');
+	});
+	it('falls back to the email when the first name is missing or blank', () => {
+		expect(userLabel({ id: '1', role: null, email: 'ada@x.org' })).toBe('ada@x.org');
+		expect(userLabel({ id: '1', role: null, first_name: '  ', email: 'ada@x.org' })).toBe('ada@x.org');
+	});
+	it('is empty with neither, or with nobody signed in', () => {
+		expect(userLabel({ id: '1', role: null })).toBe('');
+		expect(userLabel(null)).toBe('');
+	});
 });

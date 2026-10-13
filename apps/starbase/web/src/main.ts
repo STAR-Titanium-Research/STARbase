@@ -14,6 +14,7 @@ import { installStarbaseHost } from './host';
 import { plotRoutes } from './plot/routes';
 import { createStarbaseRouter } from './router';
 import { createSession } from './session';
+import { needsReload } from './userSwitch';
 import { registerStandins } from './standins/register';
 
 async function bootstrap() {
@@ -36,9 +37,16 @@ async function bootstrap() {
 	setPageFrame(PlainFrame);
 	// One Explorer host per signed-in user. 'sync' so it exists before the first page's setup runs (the
 	// guard sets the user, then the navigation renders the page).
+	let lastUserId: string | null = null;
 	watch(
 		() => session.user.value?.id,
 		(id) => {
+			// A different user signing in on this page load: start from a clean document (once; the reload has no last user).
+			if (needsReload(lastUserId, id)) {
+				window.location.reload();
+				return;
+			}
+			if (id) lastUserId = id;
 			if (id) installStarbaseHost({ api, session, router, directusUrl, openEditor: (collection, id) => editor.open(collection, id) });
 		},
 		{ flush: 'sync', immediate: true },
