@@ -13,8 +13,8 @@ import FrequentlyUsed from './home/FrequentlyUsed.vue';
 // Home is "my work" (docs/superpowers/specs/2026-10-06-explorer-pages-design.md, "Home"), laid out
 // calmly (N1b, decision 5): a greeting with the quick actions in it, the frequently-used card (two
 // short lists in one panel), one stats band, then a row of
-// two equal-height panels (what needs attention, your work), the admin panels (admins only) and the
-// recent activity. Every block is its own component in ./home/ and loads on its own, so one
+// two equal-height panels (what needs attention, your work) and the admin panels (admins only). The
+// recent activity is a side rail beside them (for everyone), under them when the page is narrow. Every block is its own component in ./home/ and loads on its own, so one
 // forbidden collection never blanks Home, and none of them draws an empty box.
 const host = useExplorerHost();
 
@@ -44,14 +44,18 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 				<QuickActions />
 			</section>
 
-			<FrequentlyUsed />
-			<LabStats />
-			<div class="row">
-				<NeedsAttention :is-admin="isAdmin" />
-				<MyWork />
+			<div class="home-grid">
+				<div class="home-main">
+					<FrequentlyUsed />
+					<LabStats />
+					<div class="row">
+						<NeedsAttention :is-admin="isAdmin" />
+						<MyWork />
+					</div>
+					<AdminPanels :is-admin="adminConfirmed" />
+				</div>
+				<aside class="home-rail" aria-label="Recent activity"><RecentActivity /></aside>
 			</div>
-			<AdminPanels :is-admin="adminConfirmed" />
-			<RecentActivity />
 		</PageShell>
 	</ExplorerView>
 </template>
@@ -70,6 +74,28 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 	box-shadow: 0 8px 20px -12px rgba(29, 78, 216, 0.5);
 }
 .hero-text { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 14px; min-width: 0; }
+/* Main column plus a recent-activity rail. The grid is a size container, so "narrow" is the width the
+   page has (not the window's: the sidebar and the Data Studio's own chrome take some). The rail
+   sticks under the host's header bar (--d1-header-offset: STARbase's PlainFrame sets it, the Data
+   Studio's 70px is the fallback) and scrolls inside itself; it is not position: fixed, which would
+   cover the shell's sticky bars. */
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; container-type: inline-size; }
+.home-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.home-rail {
+	position: sticky;
+	top: var(--d1-header-offset, 70px);
+	max-height: calc(100vh - var(--d1-header-offset, 70px) - 16px);
+	max-height: calc(100dvh - var(--d1-header-offset, 70px) - 16px);
+	overflow: auto;
+	min-width: 0;
+	/* overflow: auto clips what is drawn outside the box: room for the panel's shadow and focus outlines. */
+	padding: 2px 4px 8px;
+}
+/* Under ~1100px of page the rail goes back inline at the bottom of the main column. */
+@container (max-width: 1100px) {
+	.home-grid { grid-template-columns: minmax(0, 1fr); }
+	.home-rail { position: static; max-height: none; overflow: visible; padding: 0; }
+}
 /* Two panels of equal height: the grid stretches its items (the page's .d1-cols is align-items:start). */
 .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: stretch; }
 .hero h1 { margin: 0; font-size: var(--fs-xl, 18px); font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; }
