@@ -8,7 +8,7 @@
 // a request can't be accepted right now).
 import { JSON_HEADERS, recorderBase } from '../recorderHttp';
 import {
-	parseHistory, parsePending, parseRun,
+	parseHistory, parsePending, parseRelay, parseRun,
 	acceptBody,
 	type AcceptContext, type DeclineCode, type Eligibility, type PendingList, type RigRun, type RunSummary,
 } from './rigTestLogic';
@@ -29,13 +29,17 @@ export function detailText(body: unknown, fallback: string): string {
 	return fallback;
 }
 
-async function call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<ApiResult<unknown>> {
+/** The session routes feed a sync that must not wedge on a hung recorder. */
+const SESSION_TIMEOUT_MS = 10_000;
+
+async function call(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown, signal?: AbortSignal): Promise<ApiResult<unknown>> {
 	let res: Response;
 	try {
 		res = await fetch(`${recorderBase()}/rig-tests${path}`, {
 			method,
 			headers: body === undefined ? undefined : JSON_HEADERS,
 			body: body === undefined ? undefined : JSON.stringify(body),
+			signal,
 		});
 	} catch {
 		return { kind: 'error', status: 0, detail: "couldn't reach the recording backend" };
@@ -53,11 +57,13 @@ function map<T, U>(r: ApiResult<T>, f: (d: T) => U): ApiResult<U> {
 
 export async function getEligibility(): Promise<ApiResult<Eligibility>> {
 	return map(await call('GET', '/eligibility'), (d) => {
-		const e = (d ?? {}) as Partial<Eligibility>;
+		const e = (d ?? {}) as Partial<Eligibility> & { hardware_ok?: unknown };
 		return {
 			eligible: !!e.eligible, rig_id: typeof e.rig_id === 'string' ? e.rig_id : '',
 			reason: typeof e.reason === 'string' ? e.reason : undefined,
-			relay: e.relay === 'ok' || e.relay === 'unreachable' || e.relay === 'unknown' || e.relay === 'token_rejected' ? e.relay : 'not_configured',
+			relay: parseRelay(e.relay),
+			session: e.session === true,
+			hardwareOk: typeof e.hardware_ok === 'boolean' ? e.hardware_ok : null,
 		};
 	});
 }
@@ -87,6 +93,12 @@ export const answer = (step: number, option: string, note?: string) =>
 
 export const cancelRun = () => call('POST', '/run/cancel');
 
+/** Lend the signed-in operator's D1 access token to the recorder (it sends it to the relay). */
+export const putSession = (token: string, expiresAt: number) =>
+	call('PUT', '/session', { access_token: token, expires_at: expiresAt }, AbortSignal.timeout(SESSION_TIMEOUT_MS));
+
+export const deleteSession = () => call('DELETE', '/session', undefined, AbortSignal.timeout(SESSION_TIMEOUT_MS));
+
 /** The whole client, as the store takes it (tests pass a fake). */
-export const rigTestApi = { getEligibility, getPending, getRun, getHistory, accept, snooze, decline, answer, cancelRun };
+export const rigTestApi = { getEligibility, getPending, getRun, getHistory, accept, snooze, decline, answer, cancelRun, putSession, deleteSession };
 export type RigTestApi = typeof rigTestApi;
