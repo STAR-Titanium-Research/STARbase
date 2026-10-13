@@ -18,7 +18,7 @@ export { createdRecord, CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE } from './
 export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
 // Display helpers and error predicates
-export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden } from './format';
+export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
 export { humanise, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
 export { estimateMassGrams } from './mass';
 export { buildLife, truncatedNotes } from './life';

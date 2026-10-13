@@ -31,6 +31,8 @@ repos:
     hooks:
       - id: sqlfluff-lint
         args: ["--dialect", "postgres"]
+        # A dev-only perf script for a throwaway copy (psql variables and a lock probe that sqlfluff cannot parse): not part of the schema.
+        exclude: ^scripts/dev/perf_writes\.sql$
 
   # Dockerfiles
   - repo: https://github.com/hadolint/hadolint

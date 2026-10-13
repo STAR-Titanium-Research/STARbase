@@ -111,3 +111,22 @@ describe('mine filters', () => {
 		for (const [name, filter] of Object.entries(all)) expect(filterProblems(filter), name).toEqual([]);
 	});
 });
+
+// scripts/dev/directus_smoke.mjs sends samplesMine and projectsMine to a real Directus (the Lab Member must get 200 and the right ids). It
+// cannot import this TypeScript, so it carries the two filters as JSON literals; they must stay equal to the ones Home sends.
+describe('the smoke test sends the filters Home sends', () => {
+	it('carries samplesMine and projectsMine verbatim', async () => {
+		const { readFileSync } = await import('node:fs');
+		const { fileURLToPath } = await import('node:url');
+		const smoke = readFileSync(fileURLToPath(new URL('../../../scripts/dev/directus_smoke.mjs', import.meta.url)), 'utf8');
+		const literal = (name: string) => {
+			const start = `const ${name} = JSON.parse('`;
+			const at = smoke.indexOf(start);
+			expect(at, `${name} is in the smoke test`).toBeGreaterThanOrEqual(0);
+			const from = at + start.length;
+			return JSON.parse(smoke.slice(from, smoke.indexOf(`');`, from)));
+		};
+		expect(literal('SAMPLES_MINE')).toEqual(samplesMine);
+		expect(literal('PROJECTS_MINE')).toEqual(projectsMine);
+	});
+});

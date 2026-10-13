@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { breakableParts, errorText, formatDate, formatNumber, asRecord, formatQuantity, isDuplicate, isForbidden, isNotVisible } from './format';
+import { breakableParts, errorText, formatDate, formatNumber, asRecord, formatQuantity, isDuplicate, isFilterRefused, isForbidden, isNotVisible } from './format';
 
 describe('formatQuantity', () => {
 	it('trims trailing zeros of a database numeric string', () => {
@@ -83,6 +83,14 @@ describe('isForbidden and isDuplicate', () => {
 		expect(isForbidden(http(503))).toBe(false);
 		expect(isForbidden(new Error('Network Error'))).toBe(false);
 		expect(isForbidden(undefined)).toBe(false);
+	});
+
+	it('isFilterRefused is true for 400, 403, 404 and 5xx answers, not for a network failure or 401', () => {
+		const http = (status: number) => ({ response: { status } });
+		for (const s of [400, 403, 404, 500, 502, 503]) expect(isFilterRefused(http(s))).toBe(true);
+		for (const s of [200, 401, 409, 422]) expect(isFilterRefused(http(s))).toBe(false);
+		expect(isFilterRefused(new Error('Network Error'))).toBe(false);
+		expect(isFilterRefused(undefined)).toBe(false);
 	});
 
 	it('isDuplicate recognises a unique-constraint failure', () => {

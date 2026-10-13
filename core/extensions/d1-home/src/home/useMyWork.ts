@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref } from 'vue';
 import {
-	CURRENT_USER, campaignsMine, isForbidden, isNotVisible, ownedByMe, projectsMine, samplesMine, useItems,
+	CURRENT_USER, campaignsMine, isFilterRefused, ownedByMe, projectsMine, samplesMine, useItems,
 	useRequestGate, useSections,
 } from '@d1/ui';
 
@@ -28,9 +28,10 @@ export function useMyWork() {
 	const partialProjects = ref('');
 	const partialSamples = ref('');
 
-	// Try the full filter; if Directus refuses it (403 / not visible), fall back to the owner-only
-	// half and set the note. Any other failure (network, 5xx, a bad filter) is rethrown so the
-	// section shows the real error instead of a quietly narrower list.
+	// Try the full filter; if the server refuses it (400, 403, 404 or a 5xx: a role that may not read the
+	// junction, or a filter Directus rejects), fall back to the owner-only half and set the note, so a bad
+	// filter can never blank Home. A network failure is rethrown (the fallback would fail too) and the
+	// section shows the real error. If the fallback itself fails, that error is shown.
 	async function withFallback(
 		collection: string,
 		full: Record<string, unknown>,
@@ -41,7 +42,7 @@ export function useMyWork() {
 		try {
 			return await getItems(collection, { ...params, filter: full });
 		} catch (e: any) {
-			if (!isForbidden(e) && !isNotVisible(e)) throw e;
+			if (!isFilterRefused(e)) throw e;
 			const rows = await getItems(collection, { ...params, filter: fallback });
 			onFallback();
 			return rows;
