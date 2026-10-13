@@ -59,6 +59,17 @@
 // co-owner, only the PI adds an investigator). The Who-has-access endpoint (d1-record-access) writes the
 // access tables with system accountability after its own manage check, so it is not guarded here.
 //
+// "Involved" in the checks above means HIDDEN, not merely flagged: a record is involved when it is Restricted or when d1_private.hidden_records
+// lists it (restricted, or under a restricted project, campaign or sample; kept by the readers triggers of migration 166). The bare flag of a parent
+// is not enough: an operation on an unrestricted sample in a restricted project is gated by the project, and moving it away lifts that gate. The two
+// reads are united (flag OR hidden_records), so an empty hidden_records after a restore can only make the guard stricter, never looser.
+// test_sessions_subject is guarded on create, on repointing `item`/`collection`/`test_sessions_id` and on delete: the migration-139 trigger derives
+// test_sessions.sample_id from the rows, so changing or removing one moves the test between sample gates.
+//
+// Until A1b ships, NO non-admin may change `restricted` on any of the four record types, on update or at create (RESTRICT_ADMIN_ONLY below): the files
+// and octrees of a restricted record are not yet protected, so letting owners switch it would promise privacy the system cannot keep. Admins can. The
+// owner-only logic underneath stays for A1b.
+//
 // Admins, and calls with no accountability (flows, scripts, other extensions), are not checked.
 // Everyone else is, whatever their policy, because the rules are the Lab Member rules.
 //
@@ -83,6 +94,17 @@ const GUARDS = RULES.guards;
 const OWNER_GUARDS = RULES.ownerGuards ?? {};
 const RESTRICTED_KEYS = RULES.restrictedKeys ?? {};
 const CURRENT_USER = '$CURRENT_USER';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HIDDEN_TABLE = 'd1_private.hidden_records';
+
+// A1b TURNS THIS OFF. While true, only an administrator can set or change `restricted` (update, and create with restricted = true) on samples,
+// operations, tests and campaigns. A1b (which puts files and octrees behind the same readers) sets D1_A1B_RESTRICT_OPEN=true in the Directus
+// environment, or flips the default here, and owners then switch it themselves (the owner-only rule below still applies).
+export const RESTRICT_ADMIN_ONLY = true;
+const restrictAdminOnly = () => RESTRICT_ADMIN_ONLY && process.env.D1_A1B_RESTRICT_OPEN !== 'true';
+// the four record types and projects (a project's PI can restrict it, which hides its whole contents)
+const restrictable = (collection) => collection === 'projects' || OWNER_GUARDS[collection] !== undefined;
+const RESTRICT_REFUSED = 'Restricting a record is not available yet. Ask an administrator.';
 
 // The shape of a Directus ForbiddenError (status 403, code FORBIDDEN), without importing the package.
 // `reason` is shown to the person who made the request, so it is plain words (no table names, ids or
@@ -117,6 +139,7 @@ const UNREADABLE_SAMPLE = 'You cannot see that sample, so you cannot add it to a
 const RESTRICTED_SAMPLE = "Only the sample's owner can add a restricted sample to a campaign.";
 const RESTRICTED_TEST =
   "Only the test's owner can change the samples of a restricted test or of a test on a restricted sample.";
+const SUBJECT_MOVE = "Only the test's owner can change the samples of a test that sits under something restricted.";
 const REMOVE_FROM_RESTRICTED_CAMPAIGN = "Only the campaign's owner can remove samples from a restricted campaign.";
 const CAMPAIGN_MOVE = "Only the campaign's owner can move it to another project.";
 const CAMPAIGN_CONTENT =
@@ -232,9 +255,47 @@ export default ({ filter }, { services }) => {
     return row !== undefined && row !== null;
   }
 
+  // The ids (of one table) that are Restricted OR listed in d1_private.hidden_records, as strings. `table` is the collection name, `pk` its key.
+  // Ids that are not uuids are skipped for the hidden_records read (the column is a uuid); the flag read still sees them.
+  async function hiddenIn(db, table, pk, ids, { flag = true } = {}) {
+    const list = [...new Set(ids.filter((id) => !isBlank(id)).map(String))];
+    const out = new Set();
+    if (!list.length) return out;
+    if (flag) for (const r of await db(table).whereIn(pk, list).select(pk, 'restricted')) if (toBool(r.restricted)) out.add(String(r[pk]));
+    const uuids = list.filter((id) => UUID.test(id));
+    if (uuids.length) {
+      for (const r of await db(HIDDEN_TABLE).where('kind', table).whereIn('record_id', uuids).select('record_id')) out.add(String(r.record_id));
+    }
+    return out;
+  }
+
+  // The sample a test_sessions_subject row points at (the M2A `item`), or null when it points at something else or nothing.
+  const subjectSample = (row) =>
+    isBlank(row?.item) || typeof row.item === 'object' || (!isBlank(row.collection) && row.collection !== 'physical_samples') ? null : String(row.item);
+
+  // A change to the subject rows of tests moves each test between sample gates (the migration-139 trigger derives test_sessions.sample_id from the
+  // rows). When any of those tests, the sample a test is on, or a sample being added or removed is hidden, the caller must own the tests (their
+  // delete rule). Returns true when the change must be refused.
+  async function subjectChangeRefused(testIds, sampleIds, context) {
+    const db = context.database;
+    const tests = [...new Set(testIds.filter((t) => !isBlank(t)).map(String))];
+    if (!tests.length) return false;
+    const rows = await db('test_sessions').whereIn('session_id', tests).select('session_id', 'sample_id');
+    const samples = [...sampleIds, ...rows.map((r) => r.sample_id)].filter((s) => !isBlank(s));
+    const hidden =
+      (await hiddenIn(db, 'test_sessions', 'session_id', tests)).size > 0 ||
+      (await hiddenIn(db, 'physical_samples', 'sample_id', samples)).size > 0;
+    return hidden && !(await canPass(deleteCheck('test_sessions'), tests, context));
+  }
+
+  // Is this one record hidden (restricted, or under something restricted)?
+  async function isHidden(db, table, pk, id) {
+    return isBlank(id) ? false : (await hiddenIn(db, table, pk, [id])).has(String(id));
+  }
+
   // The rules that go beyond "the caller may update the parent", run once the update rule has passed.
   // Returns the message of a refusal, or null.
-  async function extraCheck(collection, check, id, context) {
+  async function extraCheck(collection, check, id, item, context) {
     const db = context.database;
     const user = context.accountability.user;
     if (collection === 'campaign_samples' && check.parent === 'physical_samples') {
@@ -243,19 +304,14 @@ export default ({ filter }, { services }) => {
       const reader = await db('sample_readers').where({ record_id: id, user_id: user }).first('record_id');
       if (!reader) return UNREADABLE_SAMPLE;
       // ... and, when the sample is Restricted, its owner.
-      const row = await db('physical_samples').where('sample_id', id).first('restricted');
-      if (toBool(row?.restricted) && !(await canPass(deleteCheck('physical_samples'), [id], context))) {
+      if ((await isHidden(db, 'physical_samples', 'sample_id', id)) && !(await canPass(deleteCheck('physical_samples'), [id], context))) {
         return RESTRICTED_SAMPLE;
       }
     }
     if (collection === 'test_sessions_subject' && check.parent === 'test_sessions') {
-      const row = await db('test_sessions').where('session_id', id).first('restricted', 'sample_id');
-      let restricted = toBool(row?.restricted);
-      if (!restricted && !isBlank(row?.sample_id)) {
-        const sample = await db('physical_samples').where('sample_id', row.sample_id).first('restricted');
-        restricted = toBool(sample?.restricted);
-      }
-      if (restricted && !(await canPass(deleteCheck('test_sessions'), [id], context))) return RESTRICTED_TEST;
+      // a hidden test, a test on a hidden sample, or a hidden sample being added needs the test's owner
+      const sample = subjectSample(item);
+      if (await subjectChangeRefused([id], sample ? [sample] : [], context)) return RESTRICTED_TEST;
     }
     return null;
   }
@@ -275,7 +331,7 @@ export default ({ filter }, { services }) => {
         }
         continue; // a parent created by this very request is the creator's to build: no further check
       }
-      const reason = await extraCheck(collection, check, id, context);
+      const reason = await extraCheck(collection, check, id, item, context);
       if (reason) throw refuse(reason);
     }
   }
@@ -352,6 +408,9 @@ export default ({ filter }, { services }) => {
     const movedKeys = new Map(); // record key -> the move fields whose value changes
     for (const key of keys) {
       const row = rows.get(String(key));
+      if (restrictAdminOnly() && touched.some((f) => f.field === 'restricted' && fieldChanged(f, row, payload.restricted))) {
+        throw forbidden(RESTRICT_REFUSED, { kind: 'restricted', collection, id: String(key) });
+      }
       const changedField = touched.find((f) => fieldChanged(f, row, payload[f.field]));
       if (changedField) need.set(key, changedField.field === 'restricted' ? 'restricted' : 'owner');
       const moved = moves.filter((f) => {
@@ -376,18 +435,18 @@ export default ({ filter }, { services }) => {
         }
         if (HAS_SAMPLE.has(collection) && !isBlank(row.sample_id)) wanted.sample_id.add(String(row.sample_id));
       }
+      // "restricted" here is HIDDEN: the flag or d1_private.hidden_records (an unrestricted sample in a restricted project is hidden)
       const restrictedIn = {};
       for (const [f, ids] of Object.entries(wanted)) {
-        restrictedIn[f] = new Set();
-        if (!ids.size) continue;
         const [table, pk] = MOVE_PARENTS[f];
-        const found = await db(table).whereIn(pk, [...ids]).select(pk, 'restricted');
-        for (const r of found) if (toBool(r.restricted)) restrictedIn[f].add(String(r[pk]));
+        restrictedIn[f] = await hiddenIn(db, table, pk, [...ids]);
       }
+      const ownHidden = await hiddenIn(db, collection, guard.key, [...movedKeys.keys()], { flag: false });
       for (const [key, moved] of movedKeys) {
         const row = rows.get(String(key)) ?? {};
         const involved =
           toBool(row.restricted) ||
+          ownHidden.has(String(key)) ||
           (HAS_SAMPLE.has(collection) && restrictedIn.sample_id.has(String(row.sample_id))) ||
           moved.some((f) => {
             const next = parentKey(payload[f], f);
@@ -424,23 +483,67 @@ export default ({ filter }, { services }) => {
   // Removing a sample from a Restricted campaign can unhide what the campaign shielded (its operations and tests), so it needs
   // the campaign's owner (its delete rule); an admin is not checked. A campaign that is not Restricted keeps the junction rule.
   filter('items.delete', async (payload, meta, context) => {
-    if (meta?.collection !== 'campaign_samples' || !checked(context)) return payload;
+    const collection = meta?.collection;
+    if ((collection !== 'campaign_samples' && collection !== 'test_sessions_subject') || !checked(context)) return payload;
     const keys = (Array.isArray(payload) ? payload : meta.keys ?? []).filter((k) => !isBlank(k) && typeof k !== 'object');
     if (!keys.length) return payload;
-    const pk = context.schema?.collections?.campaign_samples?.primary ?? 'id';
+    const pk = context.schema?.collections?.[collection]?.primary ?? 'id';
     const db = context.database;
+    if (collection === 'test_sessions_subject') {
+      // Removing a subject row can leave a test with no sample (it then leaves the sample's gate, the migration-139 trigger) or on another one
+      const rows = await db('test_sessions_subject').whereIn(pk, keys).select(pk, 'test_sessions_id', 'item', 'collection');
+      if (rows.length && (await subjectChangeRefused(rows.map((r) => r.test_sessions_id), rows.map(subjectSample).filter(Boolean), context))) {
+        throw forbidden(SUBJECT_MOVE, { kind: 'junction', collection, parent: 'test_sessions', id: String(rows[0].test_sessions_id) });
+      }
+      return payload;
+    }
     const rows = await db('campaign_samples').whereIn(pk, keys).select(pk, 'campaign_id');
     const campaignIds = [...new Set(rows.map((r) => r.campaign_id).filter((c) => !isBlank(c)))];
     if (!campaignIds.length) return payload;
-    const campaigns = await db('campaigns').whereIn('campaign_id', campaignIds).select('campaign_id', 'restricted');
-    const locked = campaigns.filter((c) => toBool(c.restricted)).map((c) => c.campaign_id);
+    // hidden, not just flagged: a campaign of a restricted project shields its samples' operations too
+    const locked = [...(await hiddenIn(db, 'campaigns', 'campaign_id', campaignIds))];
     if (locked.length && !(await canPass(deleteCheck('campaigns'), locked, context))) {
       throw forbidden(REMOVE_FROM_RESTRICTED_CAMPAIGN, { kind: 'junction', collection: 'campaign_samples', parent: 'campaigns', id: String(locked[0]) });
     }
     return payload;
   });
 
+  // Repointing `item`, `collection` or `test_sessions_id` of a subject row: the same rule as removing it (see subjectChangeRefused). A value sent
+  // unchanged (an editor saving the whole form) is not a change.
+  async function enforceSubjectUpdate(payload, meta, context) {
+    const touched = ['item', 'collection', 'test_sessions_id'].filter((field) => field in payload);
+    const keys = Array.isArray(meta.keys) ? meta.keys.filter((k) => !isBlank(k)) : [];
+    if (!touched.length || !keys.length) return;
+    const db = context.database;
+    const pk = context.schema?.collections?.test_sessions_subject?.primary ?? 'id';
+    const rows = await db('test_sessions_subject').whereIn(pk, keys).select(pk, 'test_sessions_id', 'item', 'collection');
+    const next = { ...payload };
+    if ('test_sessions_id' in payload) next.test_sessions_id = parentKey(payload.test_sessions_id, 'session_id');
+    const tests = new Set();
+    const samples = new Set();
+    let changed = rows.length === 0; // a row the database does not know: not a guess
+    for (const row of rows) {
+      const after = { ...row, ...Object.fromEntries(touched.map((f) => [f, next[f]])) };
+      if (touched.some((f) => String(next[f] ?? '') !== String(row[f] ?? ''))) changed = true;
+      tests.add(row.test_sessions_id);
+      if (!isBlank(after.test_sessions_id)) tests.add(after.test_sessions_id);
+      for (const s of [subjectSample(row), subjectSample(after)]) if (s) samples.add(s);
+    }
+    if (!changed) return;
+    if (await subjectChangeRefused([...tests], [...samples], context)) {
+      throw forbidden(SUBJECT_MOVE, { kind: 'junction', collection: 'test_sessions_subject', parent: 'test_sessions', id: String([...tests][0] ?? '') });
+    }
+  }
+
   filter('items.create', async (payload, meta, context) => {
+    // Until A1b, a non-admin cannot create a record already restricted (an explicit false, or no value, is fine)
+    if (restrictable(meta?.collection) && checked(context) && payload && restrictAdminOnly()) {
+      for (const item of Array.isArray(payload) ? payload : [payload]) {
+        if (item && typeof item === 'object' && !isBlank(item.restricted) && pgBool(item.restricted) !== false) {
+          throw forbidden(RESTRICT_REFUSED, { kind: 'restricted', collection: meta.collection, id: '' });
+        }
+      }
+    }
     if (!applies(meta?.collection, context) || !payload) return payload;
     for (const item of Array.isArray(payload) ? payload : [payload]) {
       if (item && typeof item === 'object') await enforce(meta.collection, item, null, context);
@@ -451,12 +554,24 @@ export default ({ filter }, { services }) => {
   filter('items.update', async (payload, meta, context) => {
     if (!checked(context) || !payload || typeof payload !== 'object') return payload;
     const collection = meta?.collection;
+    if (collection === 'projects' && restrictAdminOnly() && 'restricted' in payload) {
+      // projects have no owner guard (only the PI can update one), but the PI can restrict it: refused until A1b like the other four
+      const keys = Array.isArray(meta.keys) ? meta.keys.filter((key) => !isBlank(key)) : [];
+      const stored = keys.length ? await context.database('projects').whereIn('project_id', keys).select('project_id', 'restricted') : [];
+      const byKey = new Map(stored.map((r) => [String(r.project_id), r]));
+      for (const key of keys) {
+        if (fieldChanged({ field: 'restricted' }, byKey.get(String(key)), payload.restricted)) {
+          throw forbidden(RESTRICT_REFUSED, { kind: 'restricted', collection, id: String(key) });
+        }
+      }
+    }
     if (OWNER_GUARDS[collection]) {
       const keys = Array.isArray(meta.keys) ? meta.keys.filter((key) => !isBlank(key)) : [];
       if (keys.length) await enforceRecord(collection, payload, keys, context);
       return payload;
     }
     if (!applies(collection, context)) return payload;
+    if (collection === 'test_sessions_subject') await enforceSubjectUpdate(payload, meta, context);
     // Only an update that repoints a parent key can grant anything; checking the new target is
     // enough, because the row's old parent was already allowed when it was written. A key sent
     // with its current value (an editor saving the whole form) is not a change.
