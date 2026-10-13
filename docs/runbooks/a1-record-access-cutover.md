@@ -147,9 +147,11 @@ leave them.
 ```bash
 git pull
 npm ci && npm run build:extensions     # d1-access-guard (new rules.json), d1-record-access, d1-trace, d1-home, d1-lab-dashboard
+npm run build:starbase                 # STARbase (apps/starbase/web) uses the same pages: the access dialog, "some hidden", mine.ts
 ```
 
-Directus is stopped, so nothing loads yet.
+Directus is stopped, so nothing loads yet. The pages live in `packages/starbase-pages` and `@d1/ui`, which both hosts use:
+Data Studio (d1-home) and STARbase. Both builds are needed.
 
 ## 5. Apply the migrations, then check the drift
 
@@ -168,10 +170,11 @@ The migrations print `NOTICE`s (counts of rows changed); note them.
 ```bash
 docker compose exec -T redis redis-cli FLUSHALL
 docker compose start directus
+docker compose up -d --force-recreate proxy    # serves the new STARbase build
 ```
 
-(`bash scripts/configure_all.sh` re-applies the Directus metadata and keeps the new relations, aliases and hidden fields.)
-Directus reads relations, collections, permissions and extensions **at start-up**, so this single start sees all five
+Do **not** run `scripts/configure_all.sh` or `scripts/configure_directus.sql` on live: the migrations carry everything A1a
+needs. Directus reads relations, collections, permissions and extensions **at start-up**, so this single start sees all five
 migrations and the new extensions together. Do not let members back in until step 7 passes. Resume what step 3 paused only
 after step 7:
 
@@ -186,7 +189,7 @@ As a Lab Member account (a test member, not an admin; use a token or sign in):
 
 1. `GET /items/<collection>?limit=1` returns 200 for every ruled collection: `physical_samples`,
    `manufacturing_operations`, `test_sessions`, `campaigns`, `projects`, `campaign_samples`, `sample_co_owners`,
-   `project_investigators`, `project_rollup`, `people`, the params tables (for example `machining_params`), `sample_access`,
+   `project_investigators`, `project_rollup`, `people`, `machining_force_analysis`, `fast_run_data`, `sample_access`,
    `operation_access`, `test_access`, `campaign_access`, `project_access`. A 400 with `"_some" can only be used with
    top level relational alias field` means a rule is wrong or Directus was not restarted: stop and roll back (below).
 2. The Explorer pages open: Home counts, **Home "Your samples" and "Your projects"**, the Projects index, a sample page, an
@@ -203,6 +206,9 @@ As a Lab Member account (a test member, not an admin; use a token or sign in):
    restricted scratch sample's tree, and no query on the lab tables fails with "permission denied for schema d1_private" (the
    `USAGE` grant of migration 168). Check the role's policies are in force:
    `SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('physical_samples','manufacturing_operations','semantic_embeddings')` (all `t`).
+
+8. Repeat 2 and 4 in **STARbase** (https://starbase.tail54eeb6.ts.net), signed in as the same member: the dialog, Home's
+   "Your samples"/"Your projects" and the "some hidden" texts come from the same pages there.
 
 Also work through the A1 items in [`physical-test-backlog.md`](physical-test-backlog.md) with two members and an admin.
 
