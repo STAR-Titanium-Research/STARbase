@@ -2670,6 +2670,7 @@ SELECT 'unlisted:' || count(*) FROM directus_permissions p
    AND NOT EXISTS (SELECT 1 FROM _gen g WHERE g.collection = p.collection AND g.action = p.action);
 SELECT 'reference_filtered:' || count(*) FROM directus_permissions
  WHERE policy = '$LM' AND permissions::jsonb <> '{}'::jsonb
+   AND NOT (collection = 'people' AND action = 'update')  -- migration 169: a member updates only their own People row
    AND collection IN ('materials','material_iso_classifications','alloying_elements','material_alloying_elements',
                       'equipment','tools','tool_boxes','cutting_inserts','insert_edges','insert_types',
                       'raw_stock_lots','manufacturing_methods','people','facilities','fast_recipes',
@@ -2721,6 +2722,9 @@ SELECT 'co_owner_rows_owner_only:' || count(*) FROM directus_permissions
    AND permissions::jsonb = '{"sample_id":{"owner_person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb;
 SELECT 'rollup_read:' || permissions::text FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
+SELECT 'people_update_own_row:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND collection = 'people' AND action = 'update'
+   AND permissions::jsonb = '{"user_id":{"_eq":"\$CURRENT_USER"}}'::jsonb;
 SQL
 )
 rl_check() { grep -qxF -- "$1" <<<"$rl_out" && ok "$2" || bad "$2 (psql output: $rl_out)"; }
@@ -2733,9 +2737,10 @@ rl_check "access_tables_read:5" "Lab Member reads the five access tables for the
 rl_check "access_tables_write:0" "Lab Member has no create, update or delete grant on any access table (only the record-access endpoint writes them)"
 rl_check "params_tables_present:0" "the eleven *_params tables are gone (migration 20260623000032), so there is nothing to rule; access_rules.json keeps their stale grants only for these drift checks"
 rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
-rl_check "reference_filtered:0" "reference data, people and directus_files stay unfiltered"
+rl_check "reference_filtered:0" "reference data, people (but its own-row update) and directus_files stay unfiltered"
 rl_check "ref_in_rules:0" "materials, equipment and raw_stock_lots have no rules"
 rl_check "audit_logs_rows:0" "Lab Member has no grant on audit_logs (admins only)"
+rl_check "people_update_own_row:1" "Lab Member updates only their own People row (migration 169: people.user_id = \$CURRENT_USER); create and read stay open"
 rl_check "people_actions:create,read,update" "Lab Member can create, read and update people but not delete them"
 rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "Lab Member cannot update people.user_id (no relink takeover)"
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
@@ -2937,6 +2942,16 @@ rr_down=$(awk '/-- migrate:down/{f=1;next}f' "$RR")
 LL=db/migrations/20261012000168_llm_role_row_security.sql
 ll_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LL")
 ll_down=$(awk '/-- migrate:down/{f=1;next}f' "$LL")
+# 20261012000169 (a member updates only their own People row) is the last of the family and independent of the rest (it changes one
+# directus_permissions row and keeps its own backup in d1_private): it goes down with 168, before it, and comes up with it, after it,
+# so every sequence below that peels 168 also peels 169.
+PU=db/migrations/20261012000169_people_update_own_row.sql
+pu_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$PU")
+pu_down=$(awk '/-- migrate:down/{f=1;next}f' "$PU")
+ll_up="$ll_up
+$pu_up"
+ll_down="$pu_down
+$ll_down"
 # 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql
