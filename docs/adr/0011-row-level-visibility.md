@@ -1,7 +1,7 @@
 # ADR-0011 — Row-level visibility: people see the records they are involved in
 
 - **Status:** Accepted (2026-10-07; the owner's decisions are recorded below). **Amended by [ADR-0013](./0013-record-access.md) (2026-10-13):** a Who has access list and Restricted records, read visibility
-  materialised in readers tables; Ask-DB, d1-trace and the project rollup are closed (migrations 165 to 168); `core/roles.json` is deleted; the Ask-DB, d1-trace and machine-user
+  materialised in readers tables; Ask-DB, d1-trace and the project rollup are closed (migrations 165 to 169); `core/roles.json` is deleted; the Ask-DB, d1-trace and machine-user
   rows below describe the state at 2026-10-07.
 - **Date:** 2026-10-06 (proposed), 2026-10-07 (accepted)
 - **Deciders:** Maintainer + Claude (Phase 9 RBAC hardening; Explorer pages track)

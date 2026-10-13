@@ -256,7 +256,7 @@ CREATE INDEX sample_access_person_idx ON sample_access (person_id);
   endpoint writes them.
 - **Migration numbers.** `20261012000163_user_usage.sql` (PR #246) is on `origin/main` and live; `..164` is taken by
   `label_templates` on `feat/label-printing` and `feat/label-scan`. As of this revision the highest number on any
-  branch is 164 (`label_templates`, which has since landed on `origin/main`; this branch has not merged it yet and must, first), so A1a takes the next four free numbers, **165 to 168**: `..165` schema (restricted and the access
+  branch is 164 (`label_templates`, which has since landed on `origin/main`; this branch has not merged it yet and must, first), so A1a takes the next free numbers, **165 to 168**, and **169** (a member updates only their own People row; final review I3): `..165` schema (restricted and the access
   tables, done), `..166` the readers (tables, functions, triggers, backfill, Directus metadata) **and** the Lab Member rules
   that walk them, in that order in one file, `..167` project rollup (`restricted`), `..168` Ask-DB row security. The
   2026-10-13 revision rewrites 166 and 167 in place (they were never applied): 166 changes content, and is renamed
@@ -1018,7 +1018,7 @@ this sample" rather than the current text.
 
 | | Scope |
 |---|---|
-| **A1a** (plan: `2026-10-12-a1a-record-access.md`) | migration 165 (columns, five access tables, Directus metadata); generator and `access_rules.json`; migration 166 (readers tables, the `d1_private` function family, recompute triggers, backfill, `readers_drift()`, then the Lab Member permission rows: one-membership-test reads, update and delete on the reader term); migration 167 (`project_rollup.restricted` and trigger); `d1-access-guard` changes; `d1-record-access` endpoint and email; `d1-admin-overview` drift count; dialog and button (switch off); `mine.ts` extensions; campaign and d1-trace hidden texts; migration 168 (Ask-DB row security on `hidden_records`, `security_invoker` views); delete `core/roles.json` and `core/permissions.json` and what reads them; ADR, wiki, cutover runbook |
+| **A1a** (plan: `2026-10-12-a1a-record-access.md`) | migration 165 (columns, five access tables, Directus metadata); generator and `access_rules.json`; migration 166 (readers tables, the `d1_private` function family, recompute triggers, backfill, `readers_drift()`, then the Lab Member permission rows: one-membership-test reads, update and delete on the reader term); migration 167 (`project_rollup.restricted` and trigger); `d1-access-guard` changes; `d1-record-access` endpoint and email; `d1-admin-overview` drift count; dialog and button (switch off); `mine.ts` extensions; campaign and d1-trace hidden texts; migration 168 (Ask-DB row security on `hidden_records`, `security_invoker` views); migration 169 (`people.update` own row only); delete `core/roles.json` and `core/permissions.json` and what reads them; ADR, wiki, cutover runbook |
 | **A1b** | `directus_files` rule and its aliases; octree auth endpoint and Caddy change, Force App Bearer on octree/diag fetches; Force App lock badge and Restricted option; `RESTRICT_UI = true` and un-hide the `restricted` field; the guard's remaining A1a gap (creating under a restricted sample) |
 | **A2** (follow-up, decision 17) | retire `sample_co_owners` and `project_investigators`: migrate into the new tables with the "no People row" report, then drop the old path from the sets and the consumers |
 
@@ -1260,7 +1260,7 @@ everything in it), done in the writer's transaction.
 
 ## 12. Files this touches (A1a)
 
-`db/migrations/<next four free numbers, 165 to 168 at the time of writing>`: record access (done), readers tables with
+`db/migrations/<next free numbers, 165 to 169 at the time of writing>`: record access (done), readers tables with
 functions, triggers and backfill, project rollup, Lab Member rules, LLM role row security; `scripts/access_rules.json`,
 `scripts/gen_access_rules.py`, `scripts/configure_users_and_policies.sql` (generated block), `scripts/configure_directus.sql`
 (keep relations and fields, including the `readers` and `open_to_all` aliases); `core/extensions/d1-access-guard/{index.js,
@@ -1275,4 +1275,4 @@ index.test.mjs}` (the drift count); `core/extensions/d1-trace/index.js`;
 `core/apply.sh`, `core/README.md`, with the docs and `.env.example` references listed in plan Task 5;
 `.pre-commit-config.yaml`; `docs/adr/` (a new ADR amending 0011), `docs/wiki/database/roles-and-permissions.md`,
 `docs/data-dictionary.md`, `CONTRIBUTING.md` and `.claude/skills/db-migration/SKILL.md` (the `security_invoker` rule),
-`docs/runbooks/a1-record-access-cutover.md` (four migrations, backfill time, drift check).
+`docs/runbooks/a1-record-access-cutover.md` (five migrations, backfill time, drift check).

@@ -34,7 +34,10 @@ a sample page's campaigns 130x, member lists past 60 s. Decision 18 of the spec 
    **a co-owner can no longer add, change or remove co-owners** (a deliberate change from ADR-0011).
 6. **The `d1-record-access` endpoint** lists, adds, changes, removes and transfers, with an email on add and on transfer (a failed email never blocks the change).
 7. **A1a ships with the Restrict switch hidden** (`RESTRICT_UI = false`): the database and the Directus rules enforce it, no screen turns it on until A1b
-   closes the file and octree paths below.
+   closes the file and octree paths below. **Over the API only an admin can set or change `restricted` until A1b** (the guard's
+   `RESTRICT_ADMIN_ONLY`, maintainer ruling): an owner who could restrict through the API would believe a record private while its files
+   and octrees are not. A1b turns the switch off. A Lab Member also updates **only their own People row** (migration 169), because a People
+   row now decides who is a reader and who is mailed.
 
 ### Paths that bypass Directus, and what each does (the amendment to ADR-0011)
 
