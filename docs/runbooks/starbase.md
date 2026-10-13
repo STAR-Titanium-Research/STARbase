@@ -75,8 +75,8 @@ shows the button by itself once Directus lists the provider.
 ```bash
 npm ci
 npm run build:starbase                                   # apps/starbase/web/dist, served by Caddy on :8090
-npm run build -w directus-extension-d1-edit-frame        # the framed form page
-(cd core/extensions/d1-report && npm ci && npm run build)  # report links follow STARBASE_URL
+npm run build:extensions                                 # d1-home ("Open in STARbase", the edit drawer), d1-edit-frame and the other kit extensions
+(cd core/extensions/d1-report && npm ci && npm run build)  # report links follow STARBASE_URL (not a workspace, so its own build)
 docker compose up -d --force-recreate directus filter-service diag-service proxy
 docker compose --profile starbase up -d starbase
 docker compose logs --tail 50 starbase                   # expect the node to log in and the serve config to be applied
@@ -86,7 +86,7 @@ docker compose logs --tail 50 starbase                   # expect the node to lo
 
 Recreating `proxy` is what loads the new Caddyfile: the `:8090` site (STARbase, with its CSP, and a plain
 404 for a missing `/assets/*` file) and the `Cross-Origin-Opener-Policy: unsafe-none` override on
-`/admin/d1-edit/*`. Directus sends its own `same-origin` COOP, which would sever `window.opener` for the
+`/admin/d1-edit/*`. Directus sends its own `same-origin-allow-popups` COOP, which would sever `window.opener` for the
 edit page's new-tab fallback; Caddy relaxes it for that one path and nowhere else.
 
 ### 4a. Shared devices (maintainer's step, approve separately)
@@ -108,7 +108,7 @@ Run the `curl` lines from any device on the tailnet.
 3. `curl -sI https://d1-server.tail54eeb6.ts.net/admin/ | grep -i content-security-policy`: must contain
    `frame-ancestors 'self' https://starbase.tail54eeb6.ts.net`.
 4. `curl -sI https://d1-server.tail54eeb6.ts.net/admin/d1-edit/x/1 | grep -i cross-origin-opener-policy`: must
-   say `unsafe-none`. The same check on `/admin/` keeps Directus's own value (`same-origin`).
+   say `unsafe-none`. The same check on `/admin/` keeps Directus's own value (`same-origin-allow-popups`).
 5. Open `https://starbase.tail54eeb6.ts.net` over the tailnet: the sign-in page, with the STAR logo.
 6. Sign in. In another tab, open Data Studio: already signed in.
 7. Open a test record, **Edit**: the Directus form opens inside STARbase. Change a field, Save: the
@@ -125,9 +125,16 @@ Run the `curl` lines from any device on the tailnet.
 The frame posts only to `STARBASE_URL`'s origin (`GET /d1-links`). If that is unset or wrong, Save still
 works, but the dialog does not close on its own: the form says "Saved. You can close this form."
 
-If step 7 shows "The form didn't open here", step 3 (the frame setting) is the first thing to look at. The
-new-tab fallback works meanwhile; if it opens but Save does not close it or tell STARbase, step 4 (the COOP
-override) is the one to look at.
+If step 7 shows "The form didn't open here" (after about 8 seconds), there are two usual causes:
+
+- step 3 (the frame setting, `frame-ancestors`) does not allow STARbase's origin;
+- `STARBASE_URL` is missing or wrong, or its origin differs from `STARBASE_ORIGIN`. The frame cannot say
+  "ready" without a target origin. Check it by opening `https://d1-server.tail54eeb6.ts.net/d1-links` while
+  signed in: it must show STARbase's address.
+
+In that state the dialog's close button counts as cancelled, so the page does not refetch the saved value
+until a reload. The new-tab fallback works meanwhile; if it opens but Save does not close it or tell
+STARbase, step 4 (the COOP override) is the one to look at.
 
 ## Redeploying after a change (maintainer's step, approve separately)
 
@@ -137,7 +144,9 @@ docker compose up -d --force-recreate proxy
 ```
 
 (the same rhythm as the Force App's `/app/`). A change to `d1-edit-frame` also needs its build and a
-`directus` recreate.
+`directus` recreate. So does any change under `packages/d1-ui`, `packages/starbase-pages`,
+`packages/fast-plotting` or `packages/force-plotting`, which the Directus extensions bundle: run
+`npm run build:extensions`, then `docker compose up -d --force-recreate directus`.
 
 ## Rolling back (maintainer's step, approve separately)
 
@@ -147,11 +156,12 @@ Each item is separate; do them in this order.
    `docker compose --profile starbase rm -f starbase` to delete the stopped container.
 2. Admin console → Settings → Keys: **revoke** the STARbase auth key.
 3. Admin console → Machines: **remove** the `starbase` device (this also drops any shares from step 4a).
-4. Delete the device's saved state, so a later redeploy registers a fresh node. The exact name carries the
-   compose project prefix:
+4. Delete the device's saved state, so a later redeploy registers a fresh node. The volume name carries the
+   compose project prefix, so list it first and remove the name it shows:
 
    ```bash
-   docker volume rm d1-database_starbase-ts-state
+   docker volume ls | grep starbase-ts-state
+   docker volume rm <the name listed above>
    ```
 
 5. In `.env`, unset `STARBASE_URL`, `STARBASE_ORIGIN`, `D1_SERVER_ORIGIN` and `STARBASE_TS_AUTHKEY`, and set
