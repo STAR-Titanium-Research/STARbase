@@ -259,3 +259,42 @@ test('keyboard only: pin, move, the row menu, then the rail and its hover menu',
 	await expect(reference).toBeFocused();
 	await page.context().close();
 });
+
+// Home's "Frequently used" lists only what is not pinned: pinning a row sends it to the end of the sidebar's
+// Pinned list and takes it off Home; unpinning in the sidebar brings it back on the next load.
+test('Home: pinning a Frequently used row moves it into the sidebar and off Home; a failed pin puts it back', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/');
+	// Enough rows that the list stays full (it shows six) and no suggestions fill it.
+	state.usedPages = ['samples', 'operations', 'tests', 'campaigns', 'tools', 'equipment', 'materials', 'inserts'];
+	await page.reload();
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects']);
+	const panel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Frequently used' }) });
+	const pages = panel.getByRole('region', { name: 'Pages and actions' });
+	const names = () => pages.locator('li .name').allInnerTexts();
+	const first = ['Operations', 'Tests', 'Campaigns', 'Tools', 'Equipment', 'Materials'];
+	const afterOperations = ['Tests', 'Campaigns', 'Tools', 'Equipment', 'Materials', 'Cutting inserts'];
+	// Samples is pinned already, so the endpoint leaves it out of the list.
+	await expect.poll(names).toEqual(first);
+	await expect(pages.getByRole('button', { name: 'Pin Samples' })).toHaveCount(0);
+
+	// A failed save: the row leaves, then comes back in its place, and the sidebar is unchanged.
+	state.failPin = true;
+	await pages.getByRole('button', { name: 'Pin Tests' }).click();
+	await expect.poll(names).toEqual(first);
+	expect(pinTargets(state)).toEqual(['samples', 'projects']);
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects']);
+	state.failPin = false;
+
+	await pages.getByRole('button', { name: 'Pin Operations' }).click();
+	await expect.poll(names).toEqual(afterOperations);
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects', 'Operations']);
+	await expect.poll(() => pinTargets(state)).toEqual(['samples', 'projects', 'operations']);
+
+	// Still off Home after a reload (the endpoint leaves pinned rows out); unpinned, it is back on the next load.
+	await page.reload();
+	await expect.poll(names).toEqual(afterOperations);
+	state.pins = state.pins.filter((p) => p.target !== 'operations');
+	await page.reload();
+	await expect.poll(names).toEqual(first);
+	await page.context().close();
+});

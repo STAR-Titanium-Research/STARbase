@@ -22,6 +22,10 @@ export interface StubState {
 	holdNav: Promise<void> | null;
 	// GET /d1-usage/nav answers 500.
 	failNav: boolean;
+	// The page keys GET /d1-usage lists as used, best first. Like the real endpoint, the answer leaves out pinned pages.
+	usedPages: string[];
+	// POST /d1-usage/pin answers 500 (and changes nothing).
+	failPin: boolean;
 }
 
 const COLLECTIONS = [
@@ -31,7 +35,7 @@ const COLLECTIONS = [
 ];
 
 export async function stubD1(context: BrowserContext): Promise<StubState> {
-	const state: StubState = { pins: [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }], prefs: {}, usage: [], holdNav: null, failNav: false };
+	const state: StubState = { pins: [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }], prefs: {}, usage: [], holdNav: null, failNav: false, usedPages: [], failPin: false };
 	await pointAtD1(context);
 	const cors = {
 		'access-control-allow-origin': STAR_BASE,
@@ -60,7 +64,12 @@ export async function stubD1(context: BrowserContext): Promise<StubState> {
 			if (state.failNav) return json({ error: 'down' }, 500);
 		}
 		if (path === '/d1-usage/nav') return json({ pins: state.pins, prefs: state.prefs });
+		if (path === '/d1-usage' && method === 'GET') {
+			const left = state.usedPages.filter((k) => !state.pins.some((p) => p.kind === 'page' && p.target === k));
+			return json({ pages: left.map((target) => ({ target, pinned: false })), records: [] });
+		}
 		if (path === '/d1-usage/pin' && method === 'POST') {
+			if (state.failPin) return json({ error: 'down' }, 500);
 			const { kind, target, pinned } = body();
 			const pin: Pin = { kind, target };
 			state.pins = state.pins.filter((p) => !same(p, pin));
