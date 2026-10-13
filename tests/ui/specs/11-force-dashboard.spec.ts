@@ -209,8 +209,9 @@ test('force dashboard: Gridded in Full-res loads the interpolated-grid octree wi
 
 test('force crawler: grid density setting round-trips', async ({ page }) => {
 	// A Data Studio page, signed in on the Directus at D1_BASE_URL with D1_ADMIN_PASSWORD (helpers.ts throws at
-	// import without it, so it is loaded here). Skipped when unset: the default D1_BASE_URL is live.
-	test.skip(!process.env.D1_ADMIN_PASSWORD, 'needs D1_ADMIN_PASSWORD (and D1_BASE_URL for a non-default Directus)');
+	// import without it, so it is loaded here). Skipped unless BOTH are set: the default D1_BASE_URL
+	// (http://localhost:8055) is the live Directus, which this test must never sign into.
+	test.skip(!process.env.D1_ADMIN_PASSWORD || !process.env.D1_BASE_URL, 'needs D1_ADMIN_PASSWORD and D1_BASE_URL (a non-live Directus)');
 	const { login } = await import('../helpers');
 	await login(page);
 	await page.goto('/admin/d1-force-crawler', { waitUntil: 'domcontentloaded' });

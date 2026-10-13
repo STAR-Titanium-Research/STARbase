@@ -1,9 +1,8 @@
 // Every link a page makes is written as a path of the Directus app (whose root is /admin):
 // '/home/samples/<id>', '/content/<collection>/<id>', '/d1-force-dashboard?operation=<id>',
-// '/d1-report/sample/<id>'. The host decides what each one means. In the Directus module they are
-// routes as written (reports open on the server). In Data Studio, STARbase's pages are not there: '/home/…'
-// and the plot dashboards open STARbase in a new tab through the permanent links on this host
-// ('/d1-links/go…'), and Data Studio paths stay routes. In STARbase '/home/…' is its own route without
+// '/d1-report/sample/<id>'. The host decides what each one means. In Data Studio (the Directus host) the
+// Explorer's pages are gone: '/home/…' and the plot dashboards open STARbase in a new tab through the
+// permanent links on this host ('/d1-links/go…'), reports open on the server, and Data Studio paths stay routes. In STARbase '/home/…' is its own route without
 // the prefix, the two plot dashboards are its plot pages, and everything else opens d1-server in a
 // new tab. Pages never build URLs any other way, so there is one place to change per host.
 

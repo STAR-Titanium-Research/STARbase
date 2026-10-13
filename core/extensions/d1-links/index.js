@@ -6,10 +6,9 @@
 //   GET /d1-links/go/p/<path>[?query]          -> 302 to a STARbase page, query kept as sent
 //
 // Where STARbase answers, as d1-server's own setting (STARBASE_URL, the same one d1-report's QR codes
-// and links use; spec §3.6). Two readers: the edit frame (d1-edit-frame) posts its messages only to this
-// origin, and the Home module's quiet "Open in STARbase" link (Q12). null while it is unset, or when it is
-// not an absolute http(s) address: the frame then tells nobody, and the link stays hidden. Signed-in
-// users only. No build step (the d1-usage pattern): Directus loads this file as it is.
+// and links use; spec §3.6). One reader: the edit frame (d1-edit-frame) posts its messages only to this
+// origin. null while it is unset, or when it is not an absolute http(s) address: the frame then tells
+// nobody. Signed-in users only. No build step (the d1-usage pattern): Directus loads this file as it is.
 //
 // The three /go routes are the permanent links (spec §4): what a QR code, a label or a Force App link
 // carries, so it keeps working when a page moves. They are public (a phone scanning a QR code has no
@@ -51,7 +50,7 @@ export function goTarget(env, kind, parts, rawQuery = '') {
 		const [collection, id] = parts;
 		if (!COLLECTION.test(String(collection ?? '')) || id === undefined || id === '') return { status: 400, text: 'Bad record link.' };
 		const key = encodeURIComponent(String(id));
-		const page = RECORD_PAGES[collection];
+		const page = Object.hasOwn(RECORD_PAGES, collection) ? RECORD_PAGES[collection] : undefined;
 		if (page) return { status: 302, location: `${star}/${page}/${key}` };
 		const base = String(env?.PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
 		return { status: 302, location: `${base}/admin/content/${collection}/${key}` };

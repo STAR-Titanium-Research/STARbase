@@ -92,6 +92,13 @@ test('GET /go/r: any other collection opens its Data Studio form on PUBLIC_URL',
 	assert.equal(run(h, { params: { collection: 'equipment', id: 'e1' } }).location, 'https://d1.example.org/admin/content/equipment/e1');
 });
 
+test('GET /go/r: an Object.prototype name is no STARbase page (opens its Data Studio form)', () => {
+	const h = routes(STAR)['/go/r/:collection/:id'];
+	// 'constructor' is the one all-lowercase Object.prototype name (the others fail the collection pattern: 400).
+	assert.equal(run(h, { params: { collection: 'constructor', id: '1' } }).location, 'https://d1.example.org/admin/content/constructor/1');
+	assert.equal(run(h, { params: { collection: 'toString', id: '1' } }).status, 400);
+});
+
 test('GET /go/r: a bad collection is 400', () => {
 	const h = routes(STAR)['/go/r/:collection/:id'];
 	for (const c of ['Physical', '1abc', 'a-b', '../x', '']) assert.equal(run(h, { params: { collection: c, id: '1' } }).status, 400, c);

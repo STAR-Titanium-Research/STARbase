@@ -2,7 +2,7 @@
   "name": "directus-extension-d1-links",
   "version": "1.0.0",
   "type": "module",
-  "description": "/d1-links: where STARbase answers ({ starbaseUrl }): the edit frame's only postMessage target, and Data Studio's \"Open in STARbase\" link. STARBASE_URL, or null while it is unset.",
+  "description": "/d1-links: where STARbase answers ({ starbaseUrl }): the edit frame's only postMessage target (STARBASE_URL, or null while it is unset); and the public permanent links /d1-links/go… that forward to STARbase.",
   "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
   "directus:extension": {
     "type": "endpoint",

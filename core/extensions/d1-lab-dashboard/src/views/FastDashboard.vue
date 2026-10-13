@@ -39,12 +39,12 @@
 			<div v-if="!selectedOp" class="d1-empty">Select a FAST run</div>
 			<div v-else class="d1-detail">
 				<div class="d1-detail-section">
-					<router-link class="d1-open" :to="recordRoute('manufacturing_operations', selectedOp.operation_id)">
+					<AppLink class="d1-open" :to="recordRoute('manufacturing_operations', selectedOp.operation_id)">
 						<v-icon name="open_in_new" small />Open run
-					</router-link>
-					<router-link v-if="selectedOp.sample_id?.sample_id" class="d1-open" :to="recordRoute('physical_samples', selectedOp.sample_id.sample_id)">
+					</AppLink>
+					<AppLink v-if="selectedOp.sample_id?.sample_id" class="d1-open" :to="recordRoute('physical_samples', selectedOp.sample_id.sample_id)">
 						<v-icon name="open_in_new" small />Open sample
-					</router-link>
+					</AppLink>
 				</div>
 				<div class="d1-detail-section">
 					<h4>Identity</h4>
@@ -83,7 +83,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { useItems, useRequestGate, errorText, recordRoute } from '@d1/ui';
+import { useItems, useRequestGate, errorText, recordRoute, AppLink } from '@d1/ui';
 import NodeGraph from './NodeGraph.vue';
 
 const { getItems } = useItems();
