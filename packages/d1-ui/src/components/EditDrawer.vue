@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, resolveComponent, watch } from 'vue';
+import { ref, resolveComponent, watch } from 'vue';
 import { useExplorerHost, type HostField } from '../host';
-import { buildPatch, formFields, saveErrors, versionChanged } from '../editDrawer';
+import { formFields } from '../editDrawer';
+import { useEditSession } from '../composables/useEditSession';
 import { dataStudioRoute } from '../recordRoute';
 import { errorText } from '../format';
 import { useRequestGate } from '../composables/useRequestGate';
@@ -34,17 +35,29 @@ const item = ref<Record<string, any> | null>(null);
 const edits = ref<Record<string, any>>({});
 const loading = ref(false);
 const loadError = ref('');
-const saving = ref(false);
-const saveError = ref<string[]>([]);
-// Set when the record's version moved between opening the drawer and pressing Save.
-const conflict = ref<{ loaded: number; current: number } | null>(null);
-const confirmDiscard = ref(false);
 
 // The form fields, from the host (the Directus app's fields store, or GET /fields), filled by load().
 const fields = ref<HostField[]>([]);
-const hasEdits = computed(() => buildPatch(edits.value) !== null);
 
 const endpoint = () => `/items/${props.collection}/${encodeURIComponent(props.primaryKey)}`;
+
+function close() {
+	emit('update:modelValue', false);
+}
+
+// Save, the version check against someone else's save, and Cancel/Discard: shared with the edit frame.
+const { saving, saveError, conflict, confirmDiscard, hasEdits, reset, save, cancel, discard } = useEditSession({
+	api,
+	collection: () => props.collection,
+	endpoint,
+	item,
+	edits,
+	onSaved: () => {
+		emit('saved');
+		close();
+	},
+	onCancelled: close,
+});
 
 async function load() {
 	const token = gate.begin();
@@ -52,8 +65,7 @@ async function load() {
 	fields.value = [];
 	edits.value = {};
 	loadError.value = '';
-	saveError.value = [];
-	conflict.value = null;
+	reset();
 	loading.value = true;
 	try {
 		const res = await api.get(endpoint(), { params: { fields: ['*'] } });
@@ -86,47 +98,6 @@ watch(
 	},
 	{ immediate: true },
 );
-
-function close() {
-	emit('update:modelValue', false);
-}
-
-function cancel() {
-	if (hasEdits.value) confirmDiscard.value = true;
-	else close();
-}
-
-function discard() {
-	confirmDiscard.value = false;
-	close();
-}
-
-async function save(overwrite = false) {
-	const patch = buildPatch(edits.value);
-	if (!patch || saving.value) return;
-	saving.value = true;
-	saveError.value = [];
-	try {
-		// Re-read the version first: occ_update_trigger_function() bumps it on every update, so a
-		// different number means someone else saved while this drawer was open.
-		if (!overwrite && item.value && 'version' in item.value) {
-			const res = await api.get(endpoint(), { params: { fields: ['version'] } });
-			const current = res.data.data?.version;
-			if (versionChanged(item.value.version, current)) {
-				conflict.value = { loaded: Number(item.value.version), current: Number(current) };
-				return;
-			}
-		}
-		conflict.value = null;
-		await api.patch(endpoint(), patch);
-		emit('saved');
-		close();
-	} catch (e) {
-		saveError.value = saveErrors(e, props.collection);
-	} finally {
-		saving.value = false;
-	}
-}
 </script>
 
 <template>

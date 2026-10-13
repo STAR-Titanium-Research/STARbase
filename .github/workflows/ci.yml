@@ -328,6 +328,7 @@ jobs:
       - name: Typecheck the Explorer pages, the lab dashboard and the campaign interface
         run: |
           npm run typecheck -w directus-extension-d1-home
+          npm run typecheck -w directus-extension-d1-edit-frame
           npm run typecheck -w directus-extension-d1-lab-dashboard
           npm run typecheck -w directus-extension-d1-campaign-ops
       - name: Build the Directus extensions that use @d1/ui

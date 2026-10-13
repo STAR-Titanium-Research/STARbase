@@ -81,3 +81,7 @@ test('every image has a dockerfile and no internal fields leak into the output',
   }
   for (const s of plan([], EXT).pyServices) assert.equal('watch' in s, false);
 });
+
+test('the edit frame module plans the directusUi job', () => {
+  assert.equal(plan(['core/extensions/d1-edit-frame/src/EditFramePage.vue'], EXT).directusUi, true);
+});

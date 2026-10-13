@@ -97,6 +97,13 @@ export { default as ProgressBar } from './components/ProgressBar.vue';
 export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
+export {
+	EDIT_MESSAGE_TYPE, NEW_ITEM_ID, editFrameUrl, editMessage, frameReporter, frameTell, isEditMessage, loadTargetOrigin, readEditMessage, targetOriginFrom,
+} from './editFrame';
+export type { EditMessage, EditResult, ExpectedEditSource, MessageTarget } from './editFrame';
+export { createFormFields } from './editDrawer';
+export { useEditSession } from './composables/useEditSession';
+export type { EditSessionApi, EditSessionOptions } from './composables/useEditSession';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
 export { default as CampaignCard } from './campaign/CampaignCard.vue';
 export { campaignCardStats, loadCampaignStats } from './campaign/campaignCardStats';

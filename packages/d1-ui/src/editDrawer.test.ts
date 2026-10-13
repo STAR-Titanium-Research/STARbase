@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPatch, formFields, saveErrors, versionChanged, type FieldDef } from './editDrawer';
+import { buildPatch, createFormFields, formFields, saveErrors, versionChanged, type FieldDef } from './editDrawer';
 
 const defs: FieldDef[] = [
 	{ field: 'sample_id', schema: { is_primary_key: true } },
@@ -91,5 +91,15 @@ describe('saveErrors', () => {
 	it('falls back to the error message', () => {
 		expect(saveErrors(new Error('offline'))).toEqual(['offline']);
 		expect(saveErrors({})).toEqual(['The record could not be saved.']);
+	});
+});
+
+describe('createFormFields', () => {
+	it("a new record ('+') offers every field but the system ones and the hidden ones", () => {
+		expect(createFormFields(defs).map((f) => f.field)).toEqual(['sample_id', 'sample_code', 'owner', 'data_files_open']);
+		expect(createFormFields(defs, ['owner']).map((f) => f.field)).toEqual(['sample_id', 'sample_code', 'data_files_open']);
+	});
+	it('formFields would show nothing for a new record, which is why create has its own rule', () => {
+		expect(formFields(defs, null)).toEqual([]);
 	});
 });

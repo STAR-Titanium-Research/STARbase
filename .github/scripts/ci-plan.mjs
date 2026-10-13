@@ -25,7 +25,7 @@ export const JOBS = {
   ],
   directusUi: [
     'packages/d1-ui/', 'packages/fast-plotting/', 'packages/directus-host/', 'packages/starbase-pages/', 'packages/force-plotting/',
-    'apps/starbase/web/', 'core/extensions/d1-home/', 'core/extensions/d1-lab-dashboard/',
+    'apps/starbase/web/', 'core/extensions/d1-home/', 'core/extensions/d1-edit-frame/', 'core/extensions/d1-lab-dashboard/',
     'core/extensions/d1-composition-bar/', 'core/extensions/d1-campaign-ops/',
     'core/extensions/d1-project-items/', 'core/extensions/d1-fast-dashboard/', ...WORKSPACE_ROOT,
   ],

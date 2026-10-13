@@ -26,6 +26,13 @@ export function formFields(fields: FieldDef[], item: Record<string, unknown> | n
 	});
 }
 
+// A new record ('+'): every field the user could fill in, that is all but the system fields and the ones
+// the caller hides. formFields cannot be used: with no item yet, it would show nothing. The form itself
+// (v-form) leaves out hidden-in-form fields and shows read-only ones disabled.
+export function createFormFields(fields: FieldDef[], hidden: string[] = []): FieldDef[] {
+	return fields.filter((f) => !f.meta?.system && !hidden.includes(f.field));
+}
+
 // What is PATCHed: only the fields the form reports as changed. `edits` is the form's v-model,
 // which holds changes only; undefined values are dropped, null (clearing a field) is kept.
 // Nothing changed gives null, so the caller can skip the request.
