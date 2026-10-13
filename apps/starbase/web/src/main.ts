@@ -11,6 +11,7 @@ import { getConfig, loadRuntimeConfig } from './config';
 import { APP } from './context';
 import { createBrowserEditor } from './editor/browserEditor';
 import { installStarbaseHost } from './host';
+import { plotRoutes } from './plot/routes';
 import { createStarbaseRouter } from './router';
 import { createSession } from './session';
 import { registerStandins } from './standins/register';
@@ -20,7 +21,7 @@ async function bootstrap() {
 	const { directusUrl } = getConfig();
 	const api = createApi(directusUrl);
 	const session = createSession(api);
-	const router = createStarbaseRouter(session);
+	const router = createStarbaseRouter(session, plotRoutes);
 	const editor = createBrowserEditor(directusUrl);
 
 	// Any request that finds the session gone (signed out here, in Data Studio, or expired) lands on the
@@ -46,6 +47,8 @@ async function bootstrap() {
 	const app = createApp(App);
 	app.provide(APP, { api, session, guard, editor });
 	registerStandins(app);
+	// The plotters render <private-view title="…"> (written for Directus): here it is STARbase's page frame.
+	app.component('private-view', PlainFrame);
 	app.use(router);
 	app.mount('#app');
 }

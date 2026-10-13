@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import { configureLinks, resetLinks, resolveLink, starbaseLinks } from '@d1/ui';
+import { canonicalPath, configureLinks, resetLinks, resolveLink, routeTarget, starbaseLinks } from '@d1/ui';
 import {
 	CampaignPage, HomeView, IndexRoute, LabelsPage, OperationPage, PeopleView, ProjectPage, ProjectsIndex, RegisterSample, SamplePage, TestPage,
 } from '@d1/starbase-pages';
 import { buildRoutes } from './router';
+import { plotRoutes } from './plot/routes';
 
 afterEach(() => resetLinks());
 const memoryRouter = () => createRouter({ history: createMemoryHistory(), routes: buildRoutes() });
@@ -40,5 +41,34 @@ describe('STARbase routes', () => {
 		const router = memoryRouter();
 		await router.push('/home/samples/a%2Fb?x=1');
 		expect(router.currentRoute.value.fullPath).toBe('/samples/a%2Fb?x=1');
+	});
+});
+
+describe('the plot pages', () => {
+	it('are STARbase pages inside the shell, and the dashboards resolve to them', () => {
+		configureLinks(starbaseLinks('https://d1-server.tail54eeb6.ts.net'));
+		const router = createRouter({ history: createMemoryHistory(), routes: buildRoutes(plotRoutes) });
+		expect(router.resolve('/plot/force?operation=9').name).toBe('plot-force');
+		const fast = resolveLink('/d1-fast-dashboard?operation=3');
+		expect(fast).toEqual({ kind: 'route', to: '/plot/fast?operation=3' });
+		if (fast.kind === 'route') expect(router.resolve(fast.to).name).toBe('plot-fast');
+		expect(router.resolve('/plot/force').matched).toHaveLength(2);
+	});
+	// Carried decision (Task 8): a bare /plot is not a page. It would otherwise fall into the generic ':slug'
+	// index route ("There is no page called plot") and ping /home/plot as a usage target.
+	it('a bare /plot goes to the Force plotter, keeping its query, and is never the generic index page', async () => {
+		configureLinks(starbaseLinks('https://d1-server.tail54eeb6.ts.net'));
+		const router = createRouter({ history: createMemoryHistory(), routes: buildRoutes(plotRoutes) });
+		await router.push('/plot?operation=9');
+		expect(router.currentRoute.value.name).toBe('plot-force');
+		expect(router.currentRoute.value.fullPath).toBe('/plot/force?operation=9');
+		await router.push('/plot/');
+		expect(router.currentRoute.value.name).toBe('plot-force');
+	});
+	it('the plot pages count as the dashboards for usage pings and the nav; /plot counts as nothing', () => {
+		configureLinks(starbaseLinks('https://d1-server.tail54eeb6.ts.net'));
+		expect(canonicalPath('/plot/force?operation=9')).toBe('/d1-force-dashboard?operation=9');
+		expect(canonicalPath('/plot/fast?operation=3')).toBe('/d1-fast-dashboard?operation=3');
+		expect(routeTarget(canonicalPath('/plot'))).toBeNull();
 	});
 });
