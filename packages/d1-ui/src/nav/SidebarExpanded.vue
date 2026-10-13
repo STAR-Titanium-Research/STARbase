@@ -29,10 +29,12 @@ const root = ref<HTMLElement | null>(null);
 const pinsReady = computed(() => pins.loaded.value);
 
 // ---- Accordion: one section open at a time. The page you are on opens its section when you arrive on
-// it (and when the lists first load); after that only clicks open and close sections.
+// it (and when the lists first load); after that only clicks open and close sections. The key is the
+// path, not fullPath: index pages write their state (search, sort, drawer) into the query, and that
+// must not reopen a section the person collapsed.
 const openId = ref<SectionId | null>(null);
 watch(
-	() => `${route.fullPath}|${currentSection.value ?? ''}`,
+	() => `${route.path}|${currentSection.value ?? ''}`,
 	() => {
 		if (currentSection.value) openId.value = currentSection.value;
 	},

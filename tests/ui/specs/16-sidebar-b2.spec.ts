@@ -323,6 +323,23 @@ test('Home: a quick action pinned from Frequently used (Log an operation) shows 
 	await page.context().close();
 });
 
+test('a section you collapsed stays collapsed while the page writes its state into the query (search)', async ({ browser }) => {
+	const { page } = await start(browser, 1280, '/operations');
+	const records = page.getByRole('button', { name: /^Records/ }).first();
+	await expect(records).toHaveAttribute('aria-expanded', 'true');
+	await records.click();
+	await expect(records).toHaveAttribute('aria-expanded', 'false');
+	const search = page.getByRole('searchbox', { name: 'Search operations' });
+	await search.pressSequentially('turn', { delay: 40 });
+	await expect.poll(() => new URL(page.url()).searchParams.get('q') ?? page.url()).toContain('turn');
+	await expect(records).toHaveAttribute('aria-expanded', 'false');
+	// A real page change still opens the section of the page you arrive on.
+	await pinned(page).getByRole('link', { name: 'Samples' }).click();
+	await expect(page).toHaveURL(/\/samples/);
+	await expect(page.getByRole('button', { name: /^Records/ }).first()).toHaveAttribute('aria-expanded', 'true');
+	await page.context().close();
+});
+
 test('Pin toggle: on an index page, a saved view and a sample page; the sidebar and the button agree', async ({ browser }) => {
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 	const page = await context.newPage();
