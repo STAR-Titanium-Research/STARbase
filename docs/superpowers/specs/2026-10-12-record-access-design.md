@@ -112,9 +112,20 @@ Who has access to  Sample 25-0142                         [x]
   as Can edit (on a project: Secondary investigator). Only the new owner can change who has access."), Confirm.
   The previous owner is kept so a transfer never makes the record disappear for the person who made it; they can be
   removed afterwards. The new owner is removed from the access list (they are the owner now).
-- **Grants that cannot take effect.** If the record sits under a restricted sample, campaign or project that does
-  not list the person, the dialog says so on add and on transfer ("<name> cannot see <parent>, so this will not
-  take effect until its owner adds them"); the change is still made.
+- **Also through the sample (operations and tests).** An operation or test of an unrestricted sample, itself unrestricted, also
+  shows a read-only block "Also through <sample>": the sample's owner and its list, with the words "Change it on the sample".
+  It appears only when the caller can read the sample (the endpoint answers 404 otherwise and the block is not drawn), so it tells
+  the caller nothing the sample's own dialog does not. It is hidden as soon as either record is restricted. The block's sentence
+  "Everyone on the sample can see this <record> too" holds only while neither the record's campaign nor its project hides it
+  from them (the gates, section 1); the dialog does not compute that, so it is a statement about the sample's list, not a promise.
+- **Grants that cannot take effect.** After the write the endpoint asks the record's OWN readers table whether the person can
+  read it (the read rule itself, so it is exact whatever hides the record: a restricted sample, campaign or project, a campaign
+  shield, the sample's project). A person with a login who is not in it, or a person with no login, is *blocked*; the change is
+  still made. The dialog says so on add and on transfer ("<name> cannot see <parent>, so this will not take effect until its
+  owner adds them"). **The parent is named only to a caller who can read it** (the nearest of sample, campaign, project that the
+  person cannot read and the caller can); otherwise the words are generic ("cannot see this record yet, ... until they are given
+  access to what it sits under"), so a restricted parent's code is never sent to someone who cannot see it. A person with no
+  login already carries the "can't sign in yet" tag, so no second warning is drawn for them.
 - **The Restrict switch** (a toggle at the top of the dialog, "Restricted: only the people below can see this")
   exists in the component behind a flag that is off in A1a and on in A1b. Nothing in A1a draws it, and the Data
   Studio form field is hidden and read-only (section 8). In A1b the text on a campaign or project reads "hides this
@@ -759,6 +770,15 @@ change the access-granting fields. Changes:
    migration-139 trigger derives `test_sessions.sample_id` from the lowest subject row). Config:
    `"restricted_keys": {"physical_samples": ["project_id"], "manufacturing_operations": ["project_id","campaign_id","sample_id"], ...}`
    in `access_rules.json`, emitted into `rules.json`.
+   **"Restricted" in this paragraph means HIDDEN** (final review I1): the flag, OR the record is listed in `d1_private.hidden_records`
+   (restricted, or under a restricted project, campaign or sample; the readers triggers keep it). The bare flag of a parent is not
+   enough: an operation on an unrestricted sample in a restricted project is gated by the project, and moving it away lifts that
+   gate. The guard reads both and unites them (an empty `hidden_records` after a restore can only make it stricter). It applies
+   to the record itself, its current sample, and the old and new project, campaign and sample of the move, to the
+   `campaign_samples` rules below and to the DELETE of a `campaign_samples` row of a hidden campaign.
+   **`test_sessions_subject`** (the migration-139 trigger derives `test_sessions.sample_id` from its rows) is guarded on create, on
+   repointing `item`, `collection` or `test_sessions_id`, and on delete: when the test, the sample it is on, or a sample being
+   added or removed is hidden, the caller must pass the test's delete rule (its owner).
    **Two more guards close writes a member could use to gain read of what restriction hides** (the recompute propagates
    these edges correctly; the question is who may write them):
    - **`campaign_samples` create or repoint requires the caller to be a reader of the sample** (`sample_readers`, one
@@ -791,10 +811,17 @@ change the access-granting fields. Changes:
 5. **Ownership transfer.** A direct `PATCH owner_person_id` by the owner keeps working (Data Studio); the dialog
    uses the endpoint, which additionally keeps the previous owner and removes the new owner from the list. Admins and
    internal calls bypass the hook, as today.
-6. A create may still set `restricted = true` on a record the creator will own. Creating an operation or test
+6. From A1b a create may set `restricted = true` on a record the creator will own (in A1a rule 7 refuses it for non-admins). Creating an operation or test
    **under a restricted sample the creator cannot read** is not refused in A1a (known gap): the record is created and
    the creator cannot read it back, and the Force App then reports that the server did not return the new operation
    id, which is the existing "recording on a sample you cannot read is not possible" behaviour.
+
+7. **Until A1b, `restricted` is admin-only** (final review I4, ruled by the maintainer). `RESTRICT_ADMIN_ONLY = true` in the guard
+   (A1b turns it off, or sets `D1_A1B_RESTRICT_OPEN=true` in the Directus environment): any change of `restricted` on a sample,
+   operation, test, campaign or project by a non-admin is refused with kind `restricted` ("Restricting a record is not available
+   yet. Ask an administrator."), on update (the value differs from the stored one) and at create (`restricted` true). The owner-only
+   logic above stays underneath it for A1b. Why: `directus_files` is unfiltered and octrees are unauthenticated in A1a, so letting
+   an owner restrict a record would promise privacy the system cannot keep.
 
 ## 5. The record-access endpoint and the email
 
@@ -818,16 +845,27 @@ accepts a fixed set of collections (`physical_samples`, `manufacturing_operation
 - **Audit.** The writes run in one knex transaction that first does `SELECT set_config('d1.actor_identity',
   <user id>, true)`, so the audit trigger (migration 128) names the caller (system accountability would otherwise
   leave it empty); `added_by_person_id` is set from the caller's People row.
-- **`blocked_by`** per entry names the restricted parent (sample, campaign, project) that does not list that person
-  (a lookup of the person's login in the parent's readers table, or, for a person with no login, of their entry in the parent's access list, and the parent's `restricted` flag), which drives the
-  dialog's "will not take effect" line.
+- **`blocked_by`** per entry (and on the transfer answer: `POST .../transfer` returns `{ owner, email, blocked_by }`, which the kit
+  turns into the same line) is `null`, or `{ reason: 'parent' | 'no_login', collection, id, kind, code }`. It is read from the
+  record's own readers table after the write (final review I2): a login that is in it, or an admin (admins are not listed), is not
+  blocked; a login that is not, is blocked by a parent; a person with no login is `no_login`. `collection`, `id`, `kind` and
+  `code` name the nearest parent (sample, campaign, project) the person cannot read, and only when the CALLER can read that
+  parent; they are all null otherwise. The same rule governs `project_pi` in the GET: it is null for a caller who cannot read the
+  record's project.
 - **Read-your-write.** The access write fires the readers triggers in the same transaction, so the `GET` that follows a
   `POST`, `PATCH`, `DELETE` or transfer already shows the new readers, and the record's page reads the new state. With
   `CACHE_ENABLED` the endpoint clears the Directus data cache after commit (knex writes bypass the services that normally do).
 - **Mail recipient.** The address is `directus_users.email` when the person has a login (an admin-controlled
-  address), and `people.email` only for a login-less person. (Lab Member can edit `people.email` on any People row, so
-  mailing it for a person with a login would let any member redirect another's notifications; tightening
-  `people.update` to "email only on your own row" is a separate ADR-0011 follow-up.)
+  address), and `people.email` only for a login-less person. (Lab Member could edit `people.email` on any People row, so
+  mailing it for a person with a login would let any member redirect another's notifications. Final review I3, ruled by the
+  maintainer: a Lab Member may update **only their own People row** (`people.user_id = $CURRENT_USER`; migration 169, and
+  `custom.people.update.permissions` in `access_rules.json`); admins edit any row, and anyone may still create a person with no
+  login. Nothing in the Explorer depends on a member editing another person's row: `d1-person-link` runs with the system
+  accountability, the People page shows other rows read-only to a member, and the dialog only reads People.)
+- **Mail to a person who cannot read the record yet** (blocked, above): who added them, the role and the record's kind and code, and
+  generic wording only ("You cannot open it yet. You will be able to once the owner of what it sits under gives you access", or "...
+  once you have a D1 login and access to it" for a person with no login). No title, no link, and nothing of the parents above it
+  (no kind, code or PI name): the recipient may not be allowed to know they exist.
 - **Mail.** After the write commits, `new MailService({ schema, knex })` (`services.MailService`), then
   `mail.send({ to, subject, html, text })`, with the body built here from plain strings, every interpolated value
   HTML-escaped (no Liquid template to mount): adder's name, role label, record kind and code, and the link
@@ -986,7 +1024,7 @@ this sample" rather than the current text.
 
 A1a leaves a window in which the database enforces restriction but files and octrees still leak (a restricted
 operation's `.mat` or point cloud is reachable by whoever has its id). That is why no UI can turn it on until A1b:
-an owner could still set it through the API, and the release notes say so.
+an owner could still set it through the API, so the guard refuses it for everyone but admins until A1b (section 4, rule 7).
 
 ## 10. Testing
 
