@@ -27,13 +27,15 @@ and rebase onto `main` when it lands. Every path below is as it is on the STARba
 
 | Stream | Tasks | Worktree | Branch | Agent profile | State |
 |---|---|---|---|---|---|
-| S1 server | 1-2 | `.claude/worktrees/b2-server` | `feat/sidebar-b2-server` | `directus-ui-implementer` | not started (waits on base) |
-| S2 kit models | 3-5 | `.claude/worktrees/b2-models` | `feat/sidebar-b2-models` | `directus-ui-implementer` | not started (waits on base) |
-| S3 sidebar + shell | 6-9 | `.claude/worktrees/b2-ui` | `feat/sidebar-b2-ui` (from S1+S2) | `directus-ui-implementer` | blocked on S1, S2 |
-| S4 pin toggle, settings, docs | 10-12 | `.claude/worktrees/b2-settings` | `feat/sidebar-b2-settings` (from S3) | `directus-ui-implementer` | blocked on S3 |
+| S1 server | 1-2 | `.claude/worktrees/b2-server` | `feat/sidebar-b2-server` | `directus-ui-implementer` | done (reviewed), on `feat/sidebar-b2` → `claude/happy-sagan-875lo1` |
+| S2 kit models | 3-5 | `.claude/worktrees/b2-models` | `feat/sidebar-b2-models` | `directus-ui-implementer` | done (reviewed), on `feat/sidebar-b2` → `claude/happy-sagan-875lo1` |
+| S3 sidebar + shell | 6-9 | `.claude/worktrees/b2-ui` | `feat/sidebar-b2-ui` (from S1+S2) | `directus-ui-implementer` | done (reviewed), on `feat/sidebar-b2` → `claude/happy-sagan-875lo1` |
+| S4 pin toggle, settings, docs | 10-12 | `.claude/worktrees/b2-settings` | `feat/sidebar-b2-settings` (from S3) | `directus-ui-implementer` | done (reviewed), on `feat/sidebar-b2` → `claude/happy-sagan-875lo1` |
 
 S1 and S2 run in parallel. The coordinator merges them into `feat/sidebar-b2`, then S3 and S4 stack on
 top. Review every stream with `directus-ui-reviewer`, and review migration 170 with `migration-review`.
+
+Execution ran sequentially in one worktree (`feat/sidebar-b2`), not in the four worktrees above.
 
 ## Global Constraints
 

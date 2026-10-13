@@ -1,7 +1,10 @@
 # STARbase sidebar B2: one sidebar, icon rail, pins and settings (design)
 
 **Date:** 2026-10-13
-**Status:** Design only. Decisions taken with the maintainer on 2026-10-13: first from the mockup canvas
+**Status:** Implemented 2026-10-13 on `claude/happy-sagan-875lo1` (not yet merged). Main code paths:
+`packages/d1-ui/src/nav/`, `packages/starbase-pages/src/settings/` and `pages/SettingsPage.vue`,
+`apps/starbase/web/src/AppShell.vue`, `core/extensions/d1-usage/`,
+`db/migrations/20261013000170_user_pins_and_prefs.sql`. Decisions taken with the maintainer on 2026-10-13: first from the mockup canvas
 "D1 Sidebar Concepts" (claude.ai artifact, boards B2 and B2 collapsed), then refined in a grilling
 session. Plan: [`2026-10-13-explorer-sidebar-b2.md`](../plans/2026-10-13-explorer-sidebar-b2.md).
 **Builds on:** STARbase ([`2026-10-12-starbase-standalone-design.md`](2026-10-12-starbase-standalone-design.md),
@@ -213,7 +216,7 @@ Every route needs a signed-in person and touches only that person's rows, as now
   - `components/PinToggle.vue`: the Pin / Pinned header button, used by `IndexPage.vue` (it pins the
     saved view when `?bookmark=` is set) and by the record pages' frame.
 - **`packages/starbase-pages`:** a new `pages/SettingsPage.vue` at route `settings`, placed before
-  `:slug`. `home/useFrequentlyUsed.ts` refreshes the pins after a pin toggle.
+  `:slug`. `home/useFrequentlyUsed.ts` pins through the shared `usePins` state and filters its lists with it.
 - **`apps/starbase/web`:**
   - `AppShell.vue`: the grid column is `224px` or `60px` from `layoutFor` and the saved choice; the
     overlay is used at 768-999px; the shell passes `mode` and `:collapsible="true"` and reacts to
