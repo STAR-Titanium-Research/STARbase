@@ -231,7 +231,7 @@ The STARbase tile stays first in the bar; remove it under Settings → Appearanc
 STARbase's own Report a bug page posts to the `d1-bug-report` Directus endpoint
 (`core/extensions/d1-bug-report-endpoint`), which looks the reporter up from the session and forwards
 `{title, body, labels}` to the bug-report relay (`apps/force-app/bug-report-relay`). Issues carry the labels
-`in-app-report`, `starbase-report`, `bug` or `enhancement`, and `area:starbase`; the area and page the reporter
+`starbase-report`, `bug` or `enhancement`, and `area:starbase`; the area and page the reporter
 picked are in the body, never labels. The relay is unchanged, and there is no "already reported" list.
 
 Deploy (maintainer's step, approve separately). The endpoint is plain JavaScript, so it has no build of its own

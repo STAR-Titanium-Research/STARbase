@@ -16,7 +16,7 @@ const base = {
 test('buildIssue prefixes the title and labels by kind', () => {
     const r = buildIssue(base);
     assert.equal(r.title, '[Bug] Plot is blank');
-    assert.deepEqual(r.labels, ['in-app-report', 'starbase-report', 'bug', 'area:starbase']);
+    assert.deepEqual(r.labels, ['starbase-report', 'bug', 'area:starbase']);
 });
 
 test('buildIssue maps feature to enhancement and does not double the prefix', () => {
@@ -36,7 +36,7 @@ test('buildIssue falls back to bug / general for unknown kind and area', () => {
     const r = buildIssue({ ...base, kind: 'nonsense', area: 'security' });
     assert.ok(r.title.startsWith('[Bug]'));
     assert.match(r.body, /\*\*Area:\*\* general {2}\n/);
-    assert.deepEqual(r.labels, ['in-app-report', 'starbase-report', 'bug', 'area:starbase']);
+    assert.deepEqual(r.labels, ['starbase-report', 'bug', 'area:starbase']);
 });
 
 test('buildIssue rejects a blank title', () => {
@@ -197,7 +197,7 @@ test('POST /report forwards the built issue to the relay and returns its answer'
         assert.equal(calls[0].url, 'http://relay.test/report');
         const sent = JSON.parse(calls[0].init.body);
         assert.equal(sent.title, '[Bug] Plot is blank');
-        assert.deepEqual(sent.labels, ['in-app-report', 'starbase-report', 'bug', 'area:starbase']);
+        assert.deepEqual(sent.labels, ['starbase-report', 'bug', 'area:starbase']);
         assert.match(sent.body, /a@b\.ac\.uk \(Lab Member\)/);
     } finally {
         globalThis.fetch = realFetch;

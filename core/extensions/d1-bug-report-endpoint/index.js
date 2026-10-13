@@ -54,10 +54,10 @@ const fence = (text, limit) => [
     '```',
 ];
 
-// `in-app-report` is what the triage skill and the relay's /issues list look for; `starbase-report`
-// and `area:starbase` say where it came from. The picked area and page go in the body, not a label,
+// `starbase-report` and `area:starbase` say where it came from. Not `in-app-report`: that label feeds
+// the Force App's "already reported" list. The picked area and page go in the body, not a label,
 // so a reporter cannot mint labels in the issue tracker.
-const BASE_LABELS = ['in-app-report', 'starbase-report'];
+const BASE_LABELS = ['starbase-report'];
 
 // A literal backtick in the route would close the code span and let the rest render as markdown.
 const safeRoute = (route) =>
