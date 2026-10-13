@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { useRouter } from 'vue-router';
 
 const props = withDefaults(
 	defineProps<{
@@ -14,7 +13,6 @@ const props = withDefaults(
 );
 
 const api = useApi();
-const router = useRouter();
 
 // New (unsaved) items have primaryKey '+' — nothing to report yet.
 const isNew = computed(() => props.primaryKey == null || props.primaryKey === '+');
@@ -38,11 +36,17 @@ function open() {
 // for printing several (paste codes / tick samples) - Directus has no bulk-action hook
 // on the list view, so that is where "print labels for selected" lives.
 const isSample = computed(() => props.collection === 'physical_samples' && !isNew.value);
+// STARbase's pages open in a new tab through the permanent links on this host (spec §5.3). Never a
+// router push: this button also runs inside STARbase's framed editor, where a push would navigate
+// the frame.
+function openStarbase(path) {
+	window.open(`/d1-links/go/p/${path}`, '_blank', 'noopener');
+}
 function printLabel() {
-	router.push(`/home/labels?ids=${encodeURIComponent(String(props.primaryKey))}`);
+	openStarbase(`labels?ids=${encodeURIComponent(String(props.primaryKey))}`);
 }
 function printLabels() {
-	router.push('/home/labels');
+	openStarbase('labels');
 }
 
 // "View Force Analysis" — only offered for a saved machining_operations record
@@ -85,10 +89,10 @@ async function checkFastRun() {
 watch(() => [props.collection, props.primaryKey], () => { checkForceAnalysis(); checkFastRun(); }, { immediate: true });
 
 function openForceAnalysis() {
-	router.push(`/d1-force-dashboard?operation=${props.primaryKey}`);
+	openStarbase(`plot/force?operation=${encodeURIComponent(String(props.primaryKey))}`);
 }
 function openFastAnalysis() {
-	router.push(`/d1-fast-dashboard?operation=${props.primaryKey}`);
+	openStarbase(`plot/fast?operation=${encodeURIComponent(String(props.primaryKey))}`);
 }
 </script>
 

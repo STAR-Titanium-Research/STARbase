@@ -73,9 +73,9 @@
 						<span>Form</span><span>{{ selectedSample.form ?? '—' }}</span>
 						<span>Location</span><span>{{ selectedSample.location ?? '—' }}</span>
 					</div>
-					<router-link class="d1-open" :to="recordRoute('physical_samples', selectedSample.sample_id)">
+					<AppLink class="d1-open" :to="recordRoute('physical_samples', selectedSample.sample_id)">
 						<v-icon name="open_in_new" small />Open sample
-					</router-link>
+					</AppLink>
 				</div>
 
 				<div class="d1-detail-section">
@@ -119,9 +119,9 @@
 								<td>{{ op.insert_edge_id?.edge_code ?? '—' }}</td>
 								<td>{{ op.outcome ?? '—' }}</td>
 								<td>
-									<router-link class="d1-open" title="Open" :to="recordRoute('manufacturing_operations', op.operation_id)" @click.stop>
+									<AppLink class="d1-open" title="Open" :to="recordRoute('manufacturing_operations', op.operation_id)" @click.stop>
 										<v-icon name="open_in_new" small />
-									</router-link>
+									</AppLink>
 								</td>
 							</tr>
 						</tbody>
@@ -154,9 +154,9 @@
 					</span>
 					<span class="d1-secondary">{{ ts.equipment_id?.equipment_name ?? '—' }}</span>
 					<span class="d1-date">{{ formatDate(ts.session_date) }}</span>
-					<router-link class="d1-open" :to="recordRoute('test_sessions', ts.session_id)" @click.stop>
+					<AppLink class="d1-open" :to="recordRoute('test_sessions', ts.session_id)" @click.stop>
 						<v-icon name="open_in_new" small />Open test
-					</router-link>
+					</AppLink>
 				</div>
 				<div v-if="testSessions.length === 0" class="d1-empty">No test sessions</div>
 			</div>
@@ -175,7 +175,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { useItems, useRequestGate, errorText, recordRoute } from '@d1/ui';
+import { useItems, useRequestGate, errorText, recordRoute, AppLink } from '@d1/ui';
 import NodeGraph from './NodeGraph.vue';
 import SampleTimeline from './SampleTimeline.vue';
 

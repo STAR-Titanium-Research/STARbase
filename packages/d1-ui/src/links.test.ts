@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-	assetUrl, canonicalPath, configureLinks, directusLinks, linkHref, openLink, resetLinks, resetStarbaseUrl, resolveLink, serverUrl, starbaseLinks, starbaseUrlFor, starbaseUrlOnce,
+	assetUrl, canonicalPath, configureLinks, directusLinks, linkHref, openLink, resetLinks, resolveLink, serverUrl, starbaseLinks,
 } from './links';
 import { routeTarget } from './usage';
 
@@ -10,10 +10,15 @@ afterEach(() => {
 });
 
 describe('the Directus host (the default)', () => {
-	it('keeps every app path a route, as written', () => {
-		for (const p of ['/home', '/home/samples/a%2Fb', '/home/samples?bookmark=3', '/content/materials/7', '/d1-force-dashboard?operation=9']) {
-			expect(resolveLink(p)).toEqual({ kind: 'route', to: p });
-		}
+	it('sends STARbase pages to the permanent links in a new tab, Data Studio paths stay routes', () => {
+		expect(directusLinks.resolve('/home')).toEqual({ kind: 'external', href: '/d1-links/go' });
+		expect(directusLinks.resolve('/home/')).toEqual({ kind: 'external', href: '/d1-links/go' });
+		expect(directusLinks.resolve('/home/samples/a%2Fb?x=1')).toEqual({ kind: 'external', href: '/d1-links/go/p/samples/a%2Fb?x=1' });
+		expect(directusLinks.resolve('/home?tab=2')).toEqual({ kind: 'external', href: '/d1-links/go?tab=2' });
+		expect(directusLinks.resolve('/d1-force-dashboard?operation=9')).toEqual({ kind: 'external', href: '/d1-links/go/p/plot/force?operation=9' });
+		expect(directusLinks.resolve('/d1-fast-dashboard')).toEqual({ kind: 'external', href: '/d1-links/go/p/plot/fast' });
+		expect(directusLinks.resolve('/content/equipment/e1')).toEqual({ kind: 'route', to: '/content/equipment/e1' });
+		expect(directusLinks.resolve('/homework')).toEqual({ kind: 'route', to: '/homework' });
 	});
 	it('opens printable reports on the server, root-relative', () => {
 		expect(resolveLink('/d1-report/sample/5')).toEqual({ kind: 'external', href: '/d1-report/sample/5' });
@@ -94,8 +99,8 @@ describe('openLink / linkHref', () => {
 		const open = vi.fn();
 		// No DOM environment in this package's vitest (neither happy-dom nor jsdom is installed).
 		vi.stubGlobal('window', { open });
-		openLink('/home/samples/1', { push });
-		expect(push).toHaveBeenCalledWith('/home/samples/1');
+		openLink('/content/equipment/e1', { push });
+		expect(push).toHaveBeenCalledWith('/content/equipment/e1');
 		expect(open).not.toHaveBeenCalled();
 		openLink('/d1-report/sample/1', { push });
 		expect(open).toHaveBeenCalledWith('/d1-report/sample/1', '_blank', 'noopener');
@@ -103,7 +108,8 @@ describe('openLink / linkHref', () => {
 	});
 	it('gives a route its router href and an external link its own href', () => {
 		const router = { resolve: (to: string) => ({ href: `/admin${to}` }) };
-		expect(linkHref('/home/samples/1', router)).toBe('/admin/home/samples/1');
+		expect(linkHref('/content/equipment/e1', router)).toBe('/admin/content/equipment/e1');
+		expect(linkHref('/home/samples/1', router)).toBe('/d1-links/go/p/samples/1');
 		expect(linkHref('/d1-report/x', router)).toBe('/d1-report/x');
 	});
 });
@@ -116,31 +122,5 @@ describe('usage pings agree across hosts', () => {
 		expect(routeTarget(canonicalPath(`/samples/${id}`))).toEqual(directus);
 		expect(routeTarget(canonicalPath('/samples'))).toEqual(routeTarget('/home/samples'));
 		expect(routeTarget(canonicalPath('/plot/fast?operation=3'))).toEqual({ kind: 'page', target: 'fast-dashboard' });
-	});
-});
-
-describe('Open in STARbase (the Directus Home module)', () => {
-	const SB = 'https://starbase.tail54eeb6.ts.net/';
-	afterEach(() => resetStarbaseUrl());
-
-	it("maps the Home-module page to the same STARbase page, else STARbase's Home", () => {
-		expect(starbaseUrlFor(SB, '/home')).toBe('https://starbase.tail54eeb6.ts.net/');
-		expect(starbaseUrlFor(SB, '/home/samples/a%2Fb?x=1')).toBe('https://starbase.tail54eeb6.ts.net/samples/a%2Fb?x=1');
-		expect(starbaseUrlFor(SB, '/d1-force-dashboard?operation=9')).toBe('https://starbase.tail54eeb6.ts.net/plot/force?operation=9');
-		expect(starbaseUrlFor(SB, '/content/materials/7')).toBe('https://starbase.tail54eeb6.ts.net/');
-	});
-	it('asks d1-server once per page load', async () => {
-		const get = vi.fn(async () => ({ data: { starbaseUrl: 'https://starbase.example' } }));
-		expect(await starbaseUrlOnce({ get })).toBe('https://starbase.example');
-		await starbaseUrlOnce({ get });
-		expect(get).toHaveBeenCalledTimes(1);
-		expect(get).toHaveBeenCalledWith('/d1-links');
-	});
-	it('a missing endpoint (404 before deployment), null or a bad value hides the link', async () => {
-		expect(await starbaseUrlOnce({ get: async () => Promise.reject(Object.assign(new Error('404'), { response: { status: 404 } })) })).toBeNull();
-		resetStarbaseUrl();
-		expect(await starbaseUrlOnce({ get: async () => ({ data: { starbaseUrl: null } }) })).toBeNull();
-		resetStarbaseUrl();
-		expect(await starbaseUrlOnce({ get: async () => ({ data: { starbaseUrl: 'javascript:alert(1)' } }) })).toBeNull();
 	});
 });

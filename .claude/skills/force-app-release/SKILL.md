@@ -17,7 +17,7 @@ If `package.json` is already ahead of the latest tag (bumped but never tagged), 
 Release that version, adding any newer changes to its changelog entry.
 
 Commits touching the app since the last tag:
-!`t=$(git ls-remote --tags origin 'force-app-v*' 2>/dev/null | sed 's|.*refs/tags/||; s|\^{}||' | sort -uV | tail -1); git fetch -q --deepen=200 origin "refs/tags/$t:refs/tags/$t" 2>/dev/null; git log --no-merges --format='%h %s' "$t"..HEAD -- apps/force-app packages/force-plotting core/extensions/d1-force-dashboard 2>/dev/null | head -40 || echo "(tag not reachable in this clone)"`
+!`t=$(git ls-remote --tags origin 'force-app-v*' 2>/dev/null | sed 's|.*refs/tags/||; s|\^{}||' | sort -uV | tail -1); git fetch -q --deepen=200 origin "refs/tags/$t:refs/tags/$t" 2>/dev/null; git log --no-merges --format='%h %s' "$t"..HEAD -- apps/force-app packages/force-plotting 2>/dev/null | head -40 || echo "(tag not reachable in this clone)"`
 
 ## Steps
 

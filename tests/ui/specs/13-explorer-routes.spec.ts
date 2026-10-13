@@ -1,13 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { adminApi, findFirstId, firstId, signInStarbase } from '../starbase/target';
+import { STAR_BASE, adminApi, findFirstId, firstId, signInStarbase } from '../starbase/target';
 
-// Every page of the Home module (the future STARbase pages), as an admin and as a Lab Member, on
-// the preview copy of live: each must draw its page and the Explorer nav with no console error.
+// Every STARbase page (the nav config's routes plus a first record of each kind), as an admin and as a Lab Member,
+// on the preview copy of live: each must draw its page and the Explorer nav with no console error. The other kit
+// users (the campaign form, the lab dashboard) are Data Studio pages and are checked on Directus.
 // The route list is read from the nav config, so a page added there is checked without editing this.
 //   (cd tests/ui && npx playwright test specs/13-explorer-routes.spec.ts)
-// Needs: bash scripts/dev/explorer_preview.sh (from the repo root) running.
+// Needs: the d1-starbase preview and STARbase under vite preview (tests/ui/README.md, spec 14 section) running.
 
 const repo = join(__dirname, '..', '..', '..');
 const credsFile = process.env.D1_ROUTES_CREDENTIALS || join(repo, '.superpowers', 'preview-credentials.txt');
@@ -18,10 +19,9 @@ const creds = Object.fromEntries(
 );
 const ADMIN_BASE = (process.env.D1_ROUTES_ADMIN_BASE || creds.url).replace(/\/+$/, ''); // …/admin
 const SERVER = ADMIN_BASE.replace(/\/admin$/, '');
-// STARbase mode: D1_ROUTES_STARBASE=<STARbase origin> visits the same pages in the standalone app (paths
-// without /home, its own sign-in page). The Directus-only check (the other kit users) is skipped.
-const STARBASE = (process.env.D1_ROUTES_STARBASE || '').replace(/\/+$/, '');
-const appUrl = (path: string) => (STARBASE ? STARBASE + (path.replace(/^\/home(?=\/|$)/, '') || '/') : ADMIN_BASE + path);
+// The pages are STARbase's (paths without /home, its own sign-in page); D1_ROUTES_STARBASE names another origin.
+const STARBASE = (process.env.D1_ROUTES_STARBASE || STAR_BASE).replace(/\/+$/, '');
+const appUrl = (path: string) => STARBASE + (path.replace(/^\/home(?=\/|$)/, '') || '/');
 // The shared helpers (tests/ui/starbase/target.ts) read the same credentials file as this spec.
 process.env.STARBASE_E2E_CREDENTIALS ||= credsFile;
 
@@ -52,10 +52,11 @@ function splitCreds(who: 'admin' | 'member'): [string, string] {
 }
 
 async function signIn(page: Page, who: 'admin' | 'member') {
-	if (STARBASE) {
-		await signInStarbase(page, who, { star: STARBASE, d1: SERVER });
-		return;
-	}
+	await signInStarbase(page, who, { star: STARBASE, d1: SERVER });
+}
+
+// Data Studio's own sign-in, for the pages that are still Directus pages.
+async function signInDirectus(page: Page, who: 'admin' | 'member') {
 	const [email, password] = splitCreds(who);
 	await page.goto(`${SERVER}/admin/login`, { waitUntil: 'domcontentloaded' });
 	await page.locator('input[type="email"]').fill(email);
@@ -109,14 +110,13 @@ for (const who of ['admin', 'member'] as const) {
 		});
 
 		test('the other kit users still render', async ({ page, playwright }) => {
-			test.skip(!!STARBASE, 'Directus-only: the campaign form and the lab dashboard are Data Studio pages');
 			const errors: string[] = [];
 			collectErrors(page, errors);
 			const api = await adminApi(playwright, SERVER);
 			const adminCampaign = await findFirstId(api, 'campaigns', SERVER);
 			await api.dispose();
 			expect(adminCampaign, 'campaigns: an id to visit').not.toBeNull();
-			await signIn(page, who);
+			await signInDirectus(page, who);
 			errors.length = 0;
 
 			// A Lab Member may read only some campaigns, and Directus shows "Page Not Found" for one it may not

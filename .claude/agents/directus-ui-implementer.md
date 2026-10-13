@@ -1,6 +1,6 @@
 ---
 name: directus-ui-implementer
-description: Implements one stream of a docs/superpowers/plans/ plan in the custom Directus front end (packages/d1-ui, packages/starbase-pages, packages/directus-host, packages/fast-plotting, core/extensions/d1-home and the extensions that use the kit) inside its own git worktree. Commits after every step, never pushes, merges or rebases.
+description: Implements one stream of a docs/superpowers/plans/ plan in the custom Directus front end (packages/d1-ui, packages/starbase-pages, packages/directus-host, packages/fast-plotting, apps/starbase/web and the Directus extensions that use the kit) inside its own git worktree. Commits after every step, never pushes, merges or rebases.
 model: sonnet
 effort: high
 skills:

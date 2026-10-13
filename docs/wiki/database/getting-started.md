@@ -23,18 +23,17 @@ From left to right:
 
    | Icon | Module | What it is |
    |---|---|---|
-   | house | **Home** | the landing page, the formatted record pages and the guided *Register a sample* ([below](#the-home-page)) |
+   | rocket | **STARbase** | opens STARbase in a new tab: the landing page, the formatted record pages, the Force and FAST plotters and the guided *Register a sample* ([below](#the-home-page)) |
    | people | **User Directory** | Directus user accounts |
    | folder | **File Library** | uploaded files and indexed archive files |
    | chart | **Insights** | Directus's own dashboards |
    | grid | **Lab Dashboard** | the D1 overview of samples, machining and FAST ([Dashboards](dashboards-and-reports.md#lab-dashboard)) |
-   | line chart | **Force Analysis** | the machining force dashboard ([Force data](force-data.md)) |
-   | gauge | **FAST Analysis** | sintering traces ([FAST sintering data](fast-data.md)) |
    | cube | **Content** | the Data Studio: every collection (table) and its records |
    | cog | **Settings** | data model, roles, policies (administrators only) |
 
-   **Force Crawler** and **Ask the Database** are also modules. They are reached from the Home
-   page's tiles rather than the rail.
+   The Force and FAST plotters are STARbase pages now ([Force data](force-data.md),
+   [FAST sintering data](fast-data.md)). **Force Crawler** and **Ask the Database** are also
+   Directus modules, for now; a later phase of the move to STARbase takes them over.
 
 2. **The navigation panel**: in Content, the collections grouped into folders (*Inventory*,
    *Manufacturing Operations*, *Manufacturing Methods*…). Type in *Search Collection…* to find
@@ -47,7 +46,8 @@ From left to right:
 
 ![Home](../images/database/home.png)
 
-**Home** is the landing page, and it is about **your** work. From top to bottom:
+**Home** is STARbase's landing page (`https://starbase.tail54eeb6.ts.net/`), and it is about **your**
+work. From top to bottom:
 
 1. **Quick actions.** Three big buttons for what you do every day: *Register a sample*, *Log an
    operation* and *Print labels* (opens the in-app Labels page). Everything else is in the **sidebar** on the left: *Records*

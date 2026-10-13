@@ -1,8 +1,7 @@
 <script setup lang="ts">
 // The Explorer sidebar (explorer-sidebar-b2 spec): one dark sidebar with Find, Home, the person's
-// Pinned list and the five sections as an accordion (SidebarExpanded). It sits in the host's
-// navigation column (Directus) or in STARbase's shell, which decides the mode and listens to
-// `request-mode`; this component only renders what it is given and asks for a change.
+// Pinned list and the five sections as an accordion (SidebarExpanded). It sits in STARbase's shell,
+// which decides the mode and listens to `request-mode`; this component only renders what it is given and asks for a change.
 //
 // Plain HTML and the kit's tokens, so it works unchanged in both hosts. The finder button only
 // emits; the finder dialog is wired by the host page. In `rail` mode it is a 60px column of icons

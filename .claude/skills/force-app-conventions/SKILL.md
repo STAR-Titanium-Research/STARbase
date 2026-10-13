@@ -1,11 +1,11 @@
 ---
 name: force-app-conventions
-description: Background knowledge for any change to the force-capture app or its shared plotting. Covers the recorder backend, web UI, Electron shell, backup server, bug-report relay, @d1/force-plotting, the Directus force dashboard, the filter/diag services and the force file formats. Load before editing or reviewing files there. It lists the invariants that recent bugs came from.
+description: Background knowledge for any change to the force-capture app or its shared plotting. Covers the recorder backend, web UI, Electron shell, backup server, bug-report relay, @d1/force-plotting, STARbase's Force plotter, the filter/diag services and the force file formats. Load before editing or reviewing files there. It lists the invariants that recent bugs came from.
 user-invocable: false
 paths:
   - apps/force-app/**
   - packages/force-plotting/**
-  - core/extensions/d1-force-dashboard/**
+  - apps/starbase/web/src/plot/**
   - plugins/filter-service/**
   - plugins/diag-service/**
   - scripts/diag/**
@@ -46,7 +46,7 @@ human version.
    it can't, not crash.
 9. **Directus can't filter on keys inside JSON fields.** Anything you'll query goes in a real
    column, which means a migration (`db-migration` skill).
-10. **`setForceHost()` must run at bootstrap** in every host (web app and `d1-force-dashboard`), or
+10. **`setForceHost()` must run at bootstrap** in every host (the Force App's web app and STARbase's `/plot/force`), or
    FrmCloud throws. Plotting code reaches Directus, assets and services only through `ForceHost`
    (`packages/force-plotting/src/host.ts`), never by importing a host's client.
 11. **Persisted layouts outlive releases.** Adding a panel type to the Plot dashboard must not bump
@@ -68,7 +68,7 @@ human version.
 | web | `npm test -w force-app-web`, `npm run typecheck -w force-app-web`, `npm run lint:theme -w force-app-web` | `force-app-js` |
 | plotting | `npm test -w @d1/force-plotting`, `npm run typecheck -w @d1/force-plotting` | `force-app-js` |
 | desktop | `npm test -w force-app-desktop`, `npm run typecheck -w force-app-desktop`; `npm run test:e2e -w force-app-desktop` (packaged app) | unit: `force-app-js` + release; e2e: release only (Windows) |
-| Directus dashboard | `npm run build:extension` | `force-app-js` |
+| STARbase plotter host | `npm test -w starbase-web`, `npm run typecheck -w starbase-web`, `npm run build:starbase` | the "Explorer UI and STARbase" job |
 | filter / diag services | `python -m pytest` in `plugins/filter-service`, `plugins/diag-service` | `force-app-python` |
 | `scripts/diag` | `python -m pytest tests/scripts` | no (golden tests are machine-sensitive) |
 
@@ -85,7 +85,9 @@ release runner.
   developer's real backup config. Keep new config-writing tests behind the same isolation.
 - `diag-service` builds with the **repo root** as context and copies `scripts/diag/` verbatim. A
   change to `scripts/diag` is a change to the service.
-- After editing the Directus extension, rebuild (`npm run build:extension`) and
-  `docker restart d1-database-directus-1`. After editing the Caddyfile, `docker compose restart proxy`.
+- After editing `packages/force-plotting` or STARbase's plot pages, rebuild STARbase
+  (`npm run build:starbase`; the Caddy proxy serves `apps/starbase/web/dist`, so a
+  `docker compose up -d --force-recreate proxy` loads it). No Directus restart is needed: no Directus
+  extension hosts the plotter any more. After editing the Caddyfile, `docker compose restart proxy`.
 - `ELECTRON_RUN_AS_NODE=1` in the environment crashes the shell at `whenReady`. It isn't a code bug.
 - Backend Python follows ruff with line length 100 (`backend/pyproject.toml`).

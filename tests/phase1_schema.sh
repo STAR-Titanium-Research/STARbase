@@ -1786,6 +1786,43 @@ mb_check "idless_dup_home:home=false,?=true,users=true" "up: an entry with no id
 mb_check "no_dashboards:home,users,content" "up: without dashboards the Data Studio keeps its place"
 mb_check "null_kept:true" "a NULL module bar is left alone"
 
+echo "== Module bar: the STARbase duplicates leave; the STARbase link tile =="
+M171=db/migrations/20261013000171_module_bar_drop_starbase_duplicates.sql
+m171_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$M171")
+m171_down=$(awk '/-- migrate:down/{f=1;next}f' "$M171")
+link_sql=$(sed "s#:'public_url'#'https://d1.example.org/'#g" scripts/module_bar_starbase_link.sql)
+m171_bar='[{"type":"module","id":"home","enabled":true},{"type":"module","id":"users","enabled":true},{"type":"module","id":"files","enabled":true},{"type":"module","id":"insights","enabled":true},{"type":"module","id":"d1-lab-dashboard","enabled":true},{"type":"module","id":"d1-force-dashboard","enabled":true},{"type":"module","id":"d1-fast-dashboard","enabled":true},{"type":"module","id":"content","enabled":true},{"type":"module","id":"settings","enabled":true}]'
+m171_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+DELETE FROM directus_settings;
+INSERT INTO directus_settings (id, module_bar) VALUES (1, '$m171_bar');
+$m171_up
+SELECT 'up:' || ($mb_ids);
+$m171_up
+SELECT 'up_again:' || ($mb_ids);
+$link_sql
+SELECT 'link:' || ($mb_ids);
+SELECT 'link_url:' || (module_bar->0->>'url') || ',' || (module_bar->0->>'type') FROM directus_settings;
+$link_sql
+SELECT 'link_again:' || ($mb_ids);
+$m171_down
+SELECT 'down:' || ($mb_ids);
+UPDATE directus_settings SET module_bar = NULL;
+$m171_up
+$link_sql
+SELECT 'null_kept:' || (module_bar IS NULL) FROM directus_settings;
+ROLLBACK;
+SQL
+)
+m171_check() { grep -qx "$1" <<<"$m171_out" && ok "$2" || bad "$2 (psql output: $m171_out)"; }
+m171_check "up:users,files,insights,d1-lab-dashboard,content,settings" "171 up: Home and the two plotters leave, the rest keeps its order"
+m171_check "up_again:users,files,insights,d1-lab-dashboard,content,settings" "171 up: running it twice changes nothing"
+m171_check "link:starbase,users,files,insights,d1-lab-dashboard,content,settings" "link script: the STARbase tile goes first"
+m171_check "link_url:https://d1.example.org/d1-links/go,link" "link script: an absolute link to the permanent link, trailing slash dropped"
+m171_check "link_again:starbase,users,files,insights,d1-lab-dashboard,content,settings" "link script: running it twice keeps one tile"
+m171_check "down:home,starbase,users,files,insights,d1-lab-dashboard,d1-force-dashboard,d1-fast-dashboard,content,settings" "171 down: Home first, the plotters back before the Data Studio"
+m171_check "null_kept:true" "a NULL module bar is left alone by both"
+
 echo "== Test subject junction keeps test_sessions.sample_id / insert_edge_id in step =="
 # Form-created tests only write test_sessions_subject; the trigger derives the primary subject.
 # Explicit junction ids pin "lowest id wins". Everything is rolled back.

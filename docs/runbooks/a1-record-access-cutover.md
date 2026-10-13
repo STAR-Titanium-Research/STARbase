@@ -7,7 +7,7 @@ accounts. Design: ADR-0014 and the spec below.
 `20261012000166_record_readers_and_rules.sql`, `20261012000167_project_rollup_restricted.sql`,
 `20261012000168_llm_role_row_security.sql`, `20261012000169_people_update_own_row.sql` (confirm the numbers with
 `make migrate-status`; if main has gained migrations since, they must sort **below** 165 or be renumbered before the merge) and
-the extensions `d1-access-guard`, `d1-record-access`, `d1-trace` and the rebuilt `d1-home` and `d1-lab-dashboard`
+the extensions `d1-access-guard`, `d1-record-access`, `d1-trace` and the rebuilt `d1-lab-dashboard` and STARbase
 (`SampleTimeline.vue` changed). Design: `docs/superpowers/specs/2026-10-12-record-access-design.md`.
 
 ## The order, and why
@@ -102,7 +102,7 @@ $PSQL -c "COPY (SELECT c.* FROM sample_co_owners c WHERE NOT EXISTS (SELECT 1 FR
 wc -l backups/a1_dangling_*_${TS}.csv     # header + one line per row: 3 investigators (live, 2026-10-13), 0 co-owners
 ```
 
-Record the previous extension folders too (step 4 keeps them): `core/extensions/d1-access-guard`, `d1-trace`, `d1-home`,
+Record the previous extension folders too (step 4 keeps them): `core/extensions/d1-access-guard`, `d1-trace`,
 `d1-lab-dashboard` (a copy, or the previous git commit).
 
 ## 2. STOP: the maintainer's go for the cleanup
@@ -146,12 +146,12 @@ leave them.
 
 ```bash
 git pull
-npm ci && npm run build:extensions     # d1-access-guard (new rules.json), d1-record-access, d1-trace, d1-home, d1-lab-dashboard
+npm ci && npm run build:extensions     # d1-access-guard (new rules.json), d1-record-access, d1-trace, d1-lab-dashboard
 npm run build:starbase                 # STARbase (apps/starbase/web) uses the same pages: the access dialog, "some hidden", mine.ts
 ```
 
 Directus is stopped, so nothing loads yet. The pages live in `packages/starbase-pages` and `@d1/ui`, which both hosts use:
-Data Studio (d1-home) and STARbase. Both builds are needed.
+STARbase. (Directus is headless since ADR-0015: d1-home is gone, so `build:starbase` is what ships the pages.)
 
 ## 5. Apply the migrations, then check the drift
 
@@ -220,7 +220,7 @@ cutover: it must not load the old rules against the new schema or the other way 
 ```bash
 docker compose stop directus
 make migrate-down        # five times: 169, 168, 167, 166, 165, in that order
-# restore the previous extension builds (d1-access-guard, d1-trace, d1-home, d1-lab-dashboard; remove d1-record-access)
+# restore the previous extension builds (d1-access-guard, d1-trace, d1-lab-dashboard; remove d1-record-access)
 docker compose exec -T redis redis-cli FLUSHALL
 docker compose start directus
 ```
