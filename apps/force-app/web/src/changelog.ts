@@ -9,6 +9,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
 	{
+		version: '0.1.37',
+		date: '2026-10-13',
+		notes: [
+			'Rig tests: the lab admin can ask the PC plugged into the rig to run checks from the lab\'s test list. You are asked first and can run them now, snooze them, or decline with a reason. While you are recording or saving a cut, a new request only shows as a badge in the sidebar.',
+			'Rig tests: a run walks you through each check. Its window can be minimised to a bar at the bottom with the progress, the time left and Cancel. The results are posted back to whoever asked.',
+			'Rig tests use your D1 sign-in, so any laptop plugged into the rig can take them with no setup. They pause while you are signed in offline.',
+			'Settings > Rig tests shows whether this PC takes requests, any snoozed requests and the last runs. Settings > About shows this PC\'s rig ID.',
+			'A Windows notification and a flashing taskbar button when a rig-test request arrives while the app is in the background.',
+			'Fixed: a pop-out window could sign every window out after the main window renewed its sign-in.',
+		],
+	},
+	{
 		version: '0.1.36',
 		date: '2026-10-08',
 		notes: [
