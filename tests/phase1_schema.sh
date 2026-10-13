@@ -4901,6 +4901,21 @@ lc_check "up2_invoker_views:9" "168 up, twice: the nine views are security_invok
 lc_check "up2_samples:2" "168 up, twice: the role sees the same rows as before"
 lc_check "up2_embeddings:4" "168 up, twice: and the same embeddings"
 
+# a database without the role (a copy restored from a dump without the cluster's roles: the Directus smoke harness) applies 168 with a notice
+ll_norole=$($PSQL -q -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+$ll_down
+ALTER ROLE d1_llm_readonly RENAME TO d1_llm_readonly_renamed_by_test;
+$ll_up
+SELECT 'norole_policies:' || count(*) FROM pg_policy WHERE polname IN ('a1a_open', 'a1a_llm_hide');
+SELECT 'norole_rls:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relrowsecurity;
+ROLLBACK;
+SQL
+)
+lw_check() { grep -qxF -- "$1" <<<"$ll_norole" && ok "$2" || bad "$2 (wanted $1; got: $(grep -F -e "${1%%:*}:" -e ERROR <<<"$ll_norole" | head -3 | tr '\n' ' ' | cut -c1-300))"; }
+lw_check "norole_policies:0" "168 on a database without d1_llm_readonly: applies with a notice and creates no policy"
+lw_check "norole_rls:0" "168 on a database without d1_llm_readonly: enables no row security"
+
 echo "== Cleanup test rows =="
 $PSQL -c "
     DELETE FROM sample_genealogy

@@ -38,8 +38,12 @@ DO $do$
 DECLARE
     r record;
 BEGIN
+    -- Migrations 15 and 132 create the role, so it exists on every database that was migrated from scratch. A copy restored from a
+    -- dump without the cluster's roles (the Directus smoke harness) has none: there is nothing to restrict then, and a policy
+    -- naming a missing role cannot be created. The views below are still made security_invoker (harmless without the role).
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'd1_llm_readonly') THEN
-        RAISE EXCEPTION 'role d1_llm_readonly does not exist (migration 20261003000132 creates it)';
+        RAISE NOTICE 'role d1_llm_readonly does not exist: no row-level security policies created (migration 168)';
+        RETURN;
     END IF;
 
     GRANT USAGE ON SCHEMA d1_private TO d1_llm_readonly;
@@ -111,6 +115,9 @@ DECLARE
         'material_iso_classifications','materials','prep_recipe_steps','prep_recipes','raw_stock_lots','tool_boxes','tool_setup','tools'];
     bad text;
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'd1_llm_readonly') THEN
+        RETURN;
+    END IF;
     SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO bad
       FROM pg_class c
      WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p')
