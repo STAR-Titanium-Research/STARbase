@@ -32,7 +32,9 @@ const RECORDS: [string, string][] = [
 
 // Chrome logs every 4xx resource as a console error; a Lab Member's refused reads are handled by the
 // pages, so those are ignored here and real breakage is caught as a 5xx response (see visit()).
-const IGNORED_CONSOLE = [/favicon/i, /ResizeObserver loop/, /Failed to load resource/];
+// /home/labels previews the label document in a deliberately script-free sandboxed iframe (srcdoc, sandbox="allow-same-origin"; the
+// label HTML itself contains no script), so Chrome logs that the sandbox blocked a script (not from the label document; likely the host page or test browser injecting into every frame). Benign.
+const IGNORED_CONSOLE = [/favicon/i, /ResizeObserver loop/, /Failed to load resource/, /Blocked script execution in 'about:srcdoc'/];
 
 // "<email> <password>": split on the first space only, so a password may contain spaces.
 function splitCreds(who: 'admin' | 'member'): [string, string] {
