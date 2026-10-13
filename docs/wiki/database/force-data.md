@@ -38,15 +38,15 @@ You rarely edit these rows by hand. The dashboard below reads and writes them.
 
 ## Force Analysis (the dashboard)
 
-**Force Analysis** in the module bar is the same dashboard as the Force App's **Plot** page. The
-shared code lives in `packages/force-plotting`. Pick a sample, then a cut, to see its force
+**Force Analysis** is a STARbase page (`https://starbase.tail54eeb6.ts.net/plot/force`): the same
+dashboard as the Force App's **Plot** page. The shared code lives in `packages/force-plotting`. Pick a sample, then a cut, to see its force
 charts, spectra and FRM map, and to crop, filter, compare and correct it.
 
 ![Force Analysis in Directus](../images/database/force-analysis.png)
 
 The [Force App's Plot page documentation](../force-app/plot-dashboard.md) covers every panel and
-applies here unchanged. Inside Directus the dashboard uses your Directus session, so no
-separate sign-in is needed.
+applies here unchanged. In STARbase the dashboard uses your Directus session, so no
+separate sign-in is needed. (The screenshot above predates the move, when it was a Directus module.)
 
 ## Force Crawler (the processing queue)
 

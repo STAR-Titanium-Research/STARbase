@@ -62,9 +62,9 @@
 			<div v-if="!selectedOp" class="d1-empty">Select an operation</div>
 			<div v-else class="d1-detail">
 				<div class="d1-detail-section">
-					<router-link class="d1-open" :to="recordRoute('manufacturing_operations', selectedOp.operation_id)">
+					<AppLink class="d1-open" :to="recordRoute('manufacturing_operations', selectedOp.operation_id)">
 						<v-icon name="open_in_new" small />Open operation
-					</router-link>
+					</AppLink>
 				</div>
 				<div class="d1-detail-section">
 					<h4>Sample</h4>
@@ -73,9 +73,9 @@
 						<span>Nickname</span><span>{{ selectedOp.sample_id?.nickname ?? '—' }}</span>
 						<span>Material</span><span>{{ selectedOp.sample_id?.material_id?.common_name ?? '—' }}</span>
 					</div>
-					<router-link v-if="selectedOp.sample_id?.sample_id" class="d1-open" :to="recordRoute('physical_samples', selectedOp.sample_id.sample_id)">
+					<AppLink v-if="selectedOp.sample_id?.sample_id" class="d1-open" :to="recordRoute('physical_samples', selectedOp.sample_id.sample_id)">
 						<v-icon name="open_in_new" small />Open sample
-					</router-link>
+					</AppLink>
 				</div>
 				<div class="d1-detail-section">
 					<h4>Tooling</h4>
@@ -121,7 +121,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { useItems, useRequestGate, errorText, recordRoute } from '@d1/ui';
+import { useItems, useRequestGate, errorText, recordRoute, AppLink } from '@d1/ui';
 import NodeGraph from './NodeGraph.vue';
 
 const { getItems } = useItems();

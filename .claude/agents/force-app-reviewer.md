@@ -1,6 +1,6 @@
 ---
 name: force-app-reviewer
-description: Reviews a diff, branch or PR that touches the force app (apps/force-app, packages/force-plotting, core/extensions/d1-force-dashboard, plugins/filter-service, plugins/diag-service, scripts/diag) against the force-app invariants and returns ranked findings. Use PROACTIVELY after writing force-app code and before committing, or when asked to review force-app changes. Read-only.
+description: Reviews a diff, branch or PR that touches the force app (apps/force-app, packages/force-plotting, apps/starbase/web/src/plot, plugins/filter-service, plugins/diag-service, scripts/diag) against the force-app invariants and returns ranked findings. Use PROACTIVELY after writing force-app code and before committing, or when asked to review force-app changes. Read-only.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
 model: inherit

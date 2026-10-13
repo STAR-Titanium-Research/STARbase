@@ -251,3 +251,14 @@ test('phone (375 px): the menu sheet, index pages as lists, a record page with n
 		await context.close();
 	}
 });
+
+// The permanent links are public routes on d1-server that forward to STARBASE_URL (spec §4); the preview's
+// STARBASE_URL comes from preview-ports.env / preview-hosts.env, which is STAR_BASE in either layout. (The module
+// bar tile from scripts/module_bar_starbase_link.sql points at the same /d1-links/go; it is run by hand, not asserted here.)
+test('permanent links on d1-server forward to STARbase; the module bar has the STARbase tile', async ({ page, request }) => {
+	const r = await request.get(`${D1_BASE}/d1-links/go/p/plot/force?operation=1`, { maxRedirects: 0 });
+	expect(r.status()).toBe(302);
+	expect(r.headers()['location']).toBe(`${STAR_BASE}/plot/force?operation=1`);
+	const bad = await request.get(`${D1_BASE}/d1-links/go/p/a//b`, { maxRedirects: 0 });
+	expect(bad.status()).toBe(400);
+});

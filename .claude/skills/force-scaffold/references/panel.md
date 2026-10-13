@@ -21,7 +21,7 @@ accessible name, so tests must allow for that.
 - Add the type to `RPanelType`, an entry to `R_META` (title, icon), and the render branch.
 - **Never bump `RIGHT_KEY`** (`'d1-force-right-layout-v2'`). That wipes every operator's saved layout.
   Unknown types in a saved layout must be skipped.
-- The dashboard has two hosts (web app and `core/extensions/d1-force-dashboard`). Anything that
+- The dashboard has two hosts (the Force App's web app and STARbase's `/plot/force`, in `apps/starbase/web/src/plot`). Anything that
   needs Directus, assets or a service URL goes through `ForceHost` (`src/host.ts`). Check both hosts
   still typecheck: `npm run typecheck -w @d1/force-plotting`.
 

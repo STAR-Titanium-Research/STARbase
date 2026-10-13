@@ -14,7 +14,7 @@ describes the code.
 | `apps/force-app/backend/` | FastAPI recorder sidecar: acquisition sources (`sim`, `nidaq`), the `raw.d1raw` writer, finalize to `.mat` + live cache, Lab Amp proxy, recovery, live backup, logs, bug reports |
 | `apps/force-app/backup-server/` | the live-backup ingest server deployed on d1-server |
 | `apps/force-app/bug-report-relay/` | forwards in-app bug reports to GitHub issues |
-| `packages/force-plotting/` | shared plotting: `ForceDashboard` (the Plot page), `FrmCloud`, `PolarPlot`, the Diagnostics Workbench and the geometry modules. The Directus extension `core/extensions/d1-force-dashboard` hosts the same dashboard. |
+| `packages/force-plotting/` | shared plotting: `ForceDashboard` (the Plot page), `FrmCloud`, `PolarPlot`, the Diagnostics Workbench and the geometry modules. STARbase (`apps/starbase/web`, route `/plot/force`) hosts the same dashboard; the Directus extension that used to (`d1-force-dashboard`) was removed. |
 | `plugins/filter-service/` | FastAPI service for filter previews and spectra (`/run`, `/fft`, `/spectrogram`) |
 | `plugins/diag-service/` | the diagnostics preview service (`/diag`) |
 | `scripts/force_orchestrator.py`, `scripts/diag/`, `scripts/matlab/` | host-side processing: MATLAB `process_force.m`, octrees, diagnostics bakes |

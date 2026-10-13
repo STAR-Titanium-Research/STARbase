@@ -10,8 +10,8 @@ force, pressure, power, piston travel…) is stored as a normalised CSV and desc
 
 ## FAST Analysis (the dashboard)
 
-**FAST Analysis** in the module bar lists every FAST operation. Pick one to see its detail and
-plots:
+**FAST Analysis** is a STARbase page (`https://starbase.tail54eeb6.ts.net/plot/fast`, also on STARbase's
+Home sidebar). It lists every FAST operation. Pick one to see its detail and plots:
 
 ![FAST Analysis](../images/database/fast-analysis.png)
 

@@ -2,7 +2,7 @@
 // One list page for every collection, driven by an IndexDef (spec section 5): saved-view chips,
 // search, chip filters, a plain sortable table, paging, "+ New" and "Open in Data Studio". Rows go
 // to the record's Explorer page or open the edit drawer, per the def. All state lives in the URL
-// (see useIndexPage); the host (ExplorerView in d1-home) supplies the API and navigation.
+// (see useIndexPage); the host (STARbase's ExplorerView) supplies the API and navigation.
 // How the list is shown (table or cards, and the row density) is a per-browser preference kept
 // per list (listPrefs), not part of the URL. The parent can fill the `thumb` slot (a small picture
 // per row, shown as the first column at Roomy density, and the picture area of a text card).

@@ -22,6 +22,7 @@ Format: lightweight [MADR](https://adr.github.io/madr/)-style. Status is one of
 | [0011](./0011-row-level-visibility.md) | Row-level visibility: people see the records they are involved in | Accepted (2026-10-07) |
 | [0012](./0012-rig-test-requests-over-github-issues.md) | Rig test requests: GitHub issues as the command channel, a fixed action vocabulary on the rig | Proposed |
 | [0013](./0013-starbase-separate-tailnet-device-shared-directus-session.md) | STARbase: its own tailnet device, sharing Directus's session | Accepted (2026-10-12) |
+| [0015](./0015-directus-headless-starbase-is-the-only-front-end.md) | Directus goes headless; STARbase is the only front end, reached through permanent links | Proposed |
 
 New ADRs: copy the structure of an existing one, take the next number, and add a
 row above.

@@ -38,9 +38,15 @@ copy of the Force plotter.
 _Avoid_: force dashboard
 
 **Data Studio**:
-Directus's own admin interface: the forms, bulk tables, filter builder and admin settings.
-STARbase links to it, or embeds its form, instead of rebuilding those.
+Directus's own admin interface: the forms, bulk tables, filter builder and admin settings. It has
+no pages of the group's own; STARbase links to it, or embeds its form, instead of rebuilding those.
 _Avoid_: Directus admin, the backend
+
+**Permanent link**:
+An address on the database server for a record or a STARbase page, which forwards to wherever
+STARbase lives. Everything printed or linked from the database side uses one, so moving STARbase
+never breaks it.
+_Avoid_: permalink, QR link, deep link
 
 ### Navigation
 
@@ -79,6 +85,8 @@ _Avoid_: Resources, lookups, master data, Kit
   and the **plotters**.
 - A **record page** opens **Data Studio**'s form to edit its record.
 - The **Force plotter** in **STARbase** and the one in the **Force App** are the same component.
+- Report QR codes, label redirects and the **Force App** reach **STARbase** through a **permanent link**.
+
 - A **saved view** belongs to exactly one **index page**.
 - A **pin** points at one page, saved view or record. A pin to something the person can no longer see
   is kept but not shown.
@@ -86,7 +94,7 @@ _Avoid_: Resources, lookups, master data, Kit
 ## Flagged ambiguities
 
 - "The frontend", "the head" and "the Explorer" were all used for this app; "Home" was used both
-  for the landing page and for the whole Directus module that hosts the app today. Resolved: the
+  for the landing page and for the whole Directus module that once hosted the app. Resolved: the
   app is **STARbase** ("Explorer" was its working name), and **Home** is only its landing page.
 - "Kit" grouped both consumables and reference data, and "Tools" was both a sidebar section and an
   inventory index page. Resolved: the sections are **Inventory** and **Reference**, and the old "Tools"

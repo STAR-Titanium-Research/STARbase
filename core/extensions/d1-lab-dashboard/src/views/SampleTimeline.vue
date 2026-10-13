@@ -7,7 +7,7 @@
 				<h4>Raw stock</h4>
 				<ul>
 					<li v-for="s in data.stock_origins" :key="`${s.lot_id}|${s.via_sample_id}`" class="d1-tl-node d1-tl-stock">
-						<router-link :to="recordRoute('raw_stock_lots', s.lot_id)">{{ s.lot_code || 'Stock lot' }}</router-link>
+						<AppLink :to="recordRoute('raw_stock_lots', s.lot_id)">{{ s.lot_code || 'Stock lot' }}</AppLink>
 						<span class="d1-tl-sub">
 							{{ [s.stock_type, s.supplier_name].filter(Boolean).join(' · ') }}
 							<template v-if="s.mass_used_grams !== null"> · {{ s.mass_used_grams }} g used</template>
@@ -29,7 +29,7 @@
 						class="d1-tl-node"
 						:style="{ marginLeft: `${Math.min(a.indent, 6) * 10}px` }"
 					>
-						<router-link :to="recordRoute('physical_samples', a.sample_id)">{{ a.sample_code || 'Sample' }}</router-link>
+						<AppLink :to="recordRoute('physical_samples', a.sample_id)">{{ a.sample_code || 'Sample' }}</AppLink>
 						<span class="d1-tl-sub">
 							{{ [a.form, relation(a)].filter(Boolean).join(' · ') }}
 							<template v-if="a.through_hidden"> · via a sample you cannot see</template>
@@ -42,7 +42,7 @@
 				<h4>This sample</h4>
 				<ul>
 					<li class="d1-tl-node d1-tl-self">
-						<router-link :to="recordRoute('physical_samples', data.sample.sample_id)">{{ data.sample.sample_code ?? 'This sample' }}</router-link>
+						<AppLink :to="recordRoute('physical_samples', data.sample.sample_id)">{{ data.sample.sample_code ?? 'This sample' }}</AppLink>
 						<span class="d1-tl-sub">{{ data.sample.form ?? '' }}</span>
 					</li>
 				</ul>
@@ -54,7 +54,7 @@
 					<li v-for="e in data.events" :key="e.id" class="d1-tl-node d1-tl-event">
 						<span class="d1-tl-date">{{ formatDate(e.date) }}</span>
 						<span class="d1-tl-kind" :class="`kind--${e.type}`">{{ e.type === 'test_session' ? 'Test' : 'Operation' }}</span>
-						<router-link :to="recordRoute(e.collection, e.id)">{{ e.label ?? '—' }}</router-link>
+						<AppLink :to="recordRoute(e.collection, e.id)">{{ e.label ?? '—' }}</AppLink>
 						<span v-if="e.status" class="d1-tl-sub">{{ e.status }}</span>
 						<span v-else-if="e.sequence !== null" class="d1-tl-sub">#{{ e.sequence }}</span>
 					</li>
@@ -72,7 +72,7 @@
 						class="d1-tl-node"
 						:style="{ marginLeft: `${Math.min(d.indent, 6) * 10}px` }"
 					>
-						<router-link :to="recordRoute('physical_samples', d.sample_id)">{{ d.sample_code || 'Sample' }}</router-link>
+						<AppLink :to="recordRoute('physical_samples', d.sample_id)">{{ d.sample_code || 'Sample' }}</AppLink>
 						<span class="d1-tl-sub">
 							{{ [d.form, relation(d)].filter(Boolean).join(' · ') }}
 							<template v-if="d.through_hidden"> · via a sample you cannot see</template>
@@ -90,7 +90,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { useRequestGate, errorText, recordRoute } from '@d1/ui';
+import { useRequestGate, errorText, recordRoute, AppLink } from '@d1/ui';
 
 const props = defineProps<{ sampleId: string | null }>();
 const api = useApi();

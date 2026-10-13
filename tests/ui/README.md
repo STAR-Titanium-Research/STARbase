@@ -19,27 +19,30 @@ of bug that schema-level checks miss — e.g. a conditional panel that is wired 
 | `08-operation-code-autogen` | Manufacturing Operation: the operation code composes live from sample, sub-type, pass and cutting parameters, and a manual edit is kept. |
 | `09-campaign-inheritance` | Campaigns: a new operation inherits project and equipment from its campaign (the `campaign-inherit` hook) and is owned by its creator, and the form fills the project live. |
 | `10-ask-db-chat` | **Ask the Database** module: a stubbed proxy response renders the SQL block, result table, and Plotly chart; the `/d1-ask/chat` endpoint rejects unauthenticated requests (401) and passes the auth gate for a logged-in session. A live end-to-end smoke runs only with `D1_LLM_LIVE=1`. |
-| `11-force-dashboard` | Force Analysis module: sample → operation drill-down, signal charts and the per-axis FRM, including the Figure ⇄ Lite switch. Needs at least one processed `machining_force_analysis` row. |
+| `11-force-dashboard` | STARbase's Force plotter (`/plot/force`; it was the Directus Force Analysis module before phase 1 of going headless): sample → operation drill-down, signal charts and the per-axis FRM, including the Figure ⇄ Lite switch. Needs at least one processed `machining_force_analysis` row, and the STARbase preview set up as in the section below (each test signs in to STARbase). The Force Crawler test at the end still drives Data Studio. |
 | `12-force-crawler` | Force Crawler module: status, queue stats, settings and activity read from and written to `force_crawler_state`. |
-| `13-explorer-routes` | Home (Explorer) module: every page in the nav config plus a first record of each kind draws its body and nav with no console error, as an admin and as a Lab Member; the other kit users still render. Runs against the preview, not live: `bash scripts/dev/explorer_preview.sh`, then `cd tests/ui && npx playwright test specs/13-explorer-routes.spec.ts` (env `D1_ROUTES_CREDENTIALS`, `D1_ROUTES_ADMIN_BASE`). Also runs against STARbase with `D1_ROUTES_STARBASE=http://127.0.0.1:5190` (the Directus-only check is skipped). |
+| `13-explorer-routes` | Explorer pages: every page in the nav config plus a first record of each kind draws its body and nav with no console error, as an admin and as a Lab Member. These pages are STARbase's (the Home module is gone), so they always run on STARbase; the other kit users (the `d1-campaign-ops` interface and the `d1-lab-dashboard` module) still render in Data Studio. Runs against the preview, not live, with the STARbase setup in the section below (env `D1_ROUTES_CREDENTIALS`, `D1_ROUTES_ADMIN_BASE`, and `D1_ROUTES_STARBASE=http://127.0.0.1:5190` when STARbase is not at its default address). |
 | `14-starbase` | STARbase (`apps/starbase/web`) end to end: sign-in shared with Data Studio, a deep link through sign-in, editing through the framed Directus form and its new-tab fallback, a sign-out in Data Studio sending STARbase to sign in, a credentialed write, shared sign-out, the plot pages, the phone layout. Against the `d1-starbase` preview and `vite preview` (production CSP). Two layouts: ports (default) and `STARBASE_E2E_MODE=hosts`, step 0's two tailnet hostnames over local HTTPS (`tests/ui/starbase/hosts.ts`). Commands in plan 2, Task 12. |
 | `15-starbase-polish` | STARbase follow-ups from the plan-2 review, in a real browser: the phone menu stays open on a drag from the sheet onto the backdrop and closes on a tap there; a dialog (People, and the edit form) closes on Esc/backdrop and returns focus to its opener; a failed plot download (404) leaves the plot page in place and says so, a good one saves under the server's filename. Same setup as spec 14 (ports layout). Run: `cd tests/ui && npx playwright test specs/15-starbase-polish.spec.ts`. |
 | `16-sidebar-b2` | The Explorer sidebar in STARbase (explorer-sidebar-b2): pin Operations and reload, reorder by `Alt+↑`, collapse to the rail with a hover menu at 1280 px, `[` / `]`, the overlay at 900 px (Esc, backdrop, page, growing past 999 px), the sheet at 600 px, the theme toggle and the compact foot, and a keyboard-only pass, and pinning a row of Home's Frequently used list (it moves into the sidebar), and the Settings page (theme and sidebar switches persist, a failed save and Retry, Move up, Reset to defaults, "No longer available", Forget my list views, Clear my history). Needs only STARbase from `vite preview` (production CSP): d1-server is a stateful stand-in (`tests/ui/starbase/stubD1.ts`, routed in the browser), no Directus. Run: `npm run build -w starbase-web && STARBASE_D1_ORIGIN=http://127.0.0.1:18057 npm run preview -w starbase-web`, then `cd tests/ui && npx playwright test specs/16-sidebar-b2.spec.ts`. |
 
-## STARbase end to end (spec 14, and spec 13 against STARbase)
+## STARbase end to end (spec 14; specs 11 and 13 run here too)
 
-Needs the `d1-starbase` preview and STARbase served by `vite preview` (the production CSP). From the repo root:
+Needs the `d1-starbase` preview and STARbase served by `vite preview` (the production CSP). Specs 11 and 13
+(STARbase's Force plotter and the Explorer pages) have no Directus-only mode any more, so run them with this
+same setup; the last two commands below cover them. From the repo root:
 
 ```bash
 npm run build:extensions && npm run build -w starbase-web
 # ports layout: STARbase http://127.0.0.1:5190, Directus http://127.0.0.1:18057 (one host, plain HTTP)
 D1_PREVIEW_NAME=d1-starbase D1_PREVIEW_PORT=18057 D1_PREVIEW_ENV_FILE=tests/ui/starbase/preview-ports.env \
-  D1_PREVIEW_OVERLAY="d1-home d1-admin-overview d1-fast-dashboard d1-usage d1-campaign-ops d1-lab-dashboard d1-project-items d1-edit-frame d1-links d1-report" \
+  D1_PREVIEW_OVERLAY="d1-admin-overview d1-usage d1-campaign-ops d1-lab-dashboard d1-project-items d1-edit-frame d1-links d1-report" \
   bash scripts/dev/explorer_preview.sh
 STARBASE_D1_ORIGIN=http://127.0.0.1:18057 npm run preview -w starbase-web     # keep running (port 5190)
 CREDS="$PWD/.superpowers/preview-credentials-d1-starbase.txt"
 (cd tests/ui && STARBASE_E2E_CREDENTIALS="$CREDS" npx playwright test specs/14-starbase.spec.ts --retries=0)
 (cd tests/ui && D1_ROUTES_CREDENTIALS="$CREDS" D1_ROUTES_STARBASE=http://127.0.0.1:5190 npx playwright test specs/13-explorer-routes.spec.ts --retries=0)
+(cd tests/ui && STARBASE_E2E_CREDENTIALS="$CREDS" npx playwright test specs/11-force-dashboard.spec.ts --retries=0)
 ```
 
 The hosts layout is the production shape: two tailnet hostnames mapped to loopback in the test browser, HTTPS
@@ -56,7 +59,7 @@ The `verify_*.mjs` files are standalone Playwright scripts, each written to chec
 while it was being built. Run them from the repo root (`node tests/ui/verify_<name>.mjs`): they
 print what they find and save screenshots to `tests/ui/` (git-ignored), and about half also exit
 non-zero when a check fails. Most target the force-app dev server (`http://localhost:5180`,
-`npm run dev -w force-app-web`); the FAST and force-dashboard ones target Directus. They are not
+`npm run dev -w force-app-web`). They are not
 part of `npx playwright test`.
 
 ## Prerequisites

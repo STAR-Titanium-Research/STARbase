@@ -1,18 +1,18 @@
 ---
 name: directus-ui-conventions
-description: Background knowledge for any change to the custom Directus front end — the Explorer pages (packages/starbase-pages) and the Directus Home module that hosts them (core/extensions/d1-home), the shared @d1/ui kit (packages/d1-ui), the Directus host adapter (packages/directus-host), the FAST plotting (packages/fast-plotting), and the extensions that use it (d1-lab-dashboard, d1-campaign-ops, d1-project-items, d1-composition-bar, d1-fast-dashboard). Load before editing or reviewing files there. It lists the invariants that recent bugs came from.
+description: Background knowledge for any change to the custom front end — the Explorer pages (packages/starbase-pages) and STARbase, the app that hosts them (apps/starbase/web), the shared @d1/ui kit (packages/d1-ui), the Directus host adapter (packages/directus-host), the FAST plotting (packages/fast-plotting), and the Directus extensions that use the kit (d1-lab-dashboard, d1-campaign-ops, d1-project-items, d1-composition-bar, d1-edit-frame). Load before editing or reviewing files there. It lists the invariants that recent bugs came from.
 user-invocable: false
 paths:
   - packages/d1-ui/**
   - packages/starbase-pages/**
   - packages/directus-host/**
   - packages/fast-plotting/**
-  - core/extensions/d1-home/**
+  - apps/starbase/web/**
   - core/extensions/d1-lab-dashboard/**
   - core/extensions/d1-campaign-ops/**
   - core/extensions/d1-project-items/**
   - core/extensions/d1-composition-bar/**
-  - core/extensions/d1-fast-dashboard/**
+  - core/extensions/d1-edit-frame/**
 ---
 
 # Directus front end: what to know before changing it
@@ -60,7 +60,7 @@ copy its structure.
 10. **Geometry has one engine.** `geometry.ts` copies are kept identical by
     `scripts/sync_geometry.sh`. Never add a copy; import the one in `packages/starbase-pages`.
 11. **Live checks go in the backlog.** Anything only a real Directus can confirm goes into
-    `docs/runbooks/physical-test-backlog.md`, under "Explorer pages (Home module)", in the same
+    `docs/runbooks/physical-test-backlog.md`, under "Explorer pages (STARbase)", in the same
     change (see `CLAUDE.md`).
 
 12. **One "belongs to project" rule.** Nothing in the database copies a campaign's project onto its
@@ -74,16 +74,17 @@ copy its structure.
 ```bash
 npm ci                                  # when workspaces or dependencies changed
 npm test -w @d1/ui && npm run typecheck -w @d1/ui
-npm run typecheck -w directus-extension-d1-home -w directus-extension-d1-campaign-ops
-npm run build:extensions                # every workspace extension that uses the kit
+npm run typecheck -w starbase-web -w @d1/starbase-pages -w directus-extension-d1-campaign-ops
+npm run build:starbase                  # STARbase: Home, the record pages, the plotters
+npm run build:extensions                # every workspace Directus extension that uses the kit
 node --test core/extensions/*/index.test.mjs
 bash scripts/sync_geometry.sh --check
 ```
 
 `d1-lab-dashboard` has no typecheck script (older cytoscape type errors in `NodeGraph.vue`).
 
-Plus `npm run build:extension` and `npm test -w @d1/force-plotting` if you touched the force
-dashboard host, and `npm ci && npm test` in `core/extensions/d1-report` if you touched it.
+Plus `npm test -w @d1/force-plotting` (and `npm test -w starbase-web`) if you touched the force
+plotter or STARbase's plot pages, and `npm ci && npm test` in `core/extensions/d1-report` if you touched it.
 
 A headless render against a stubbed `/items` (Playwright and Chromium are preinstalled in cloud
 sessions; never run `playwright install`) is the only way to see a page without Directus. Keep the
