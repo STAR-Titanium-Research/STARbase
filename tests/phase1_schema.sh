@@ -3773,7 +3773,7 @@ EXECUTE upsert('$UU_A', 'view', '12', 0, $UU_TS, false, NULL);
 EXECUTE upsert('$UU_A', 'record', 'campaigns:x', 1, $UU_TS, false, NULL);
 CREATE TEMP TABLE listed AS EXECUTE list('$UU_A');
 SELECT 'uu_home:' || string_agg(kind || '/' || target, ',' ORDER BY target) FROM listed;")
-grep -qx 'uu_home:page/visible,record/campaigns:x' <<<"$uu_out" && ok "the Home list leaves out pinned rows and view rows" || bad "Home list predicate is wrong (output: $uu_out)"
+grep -qx 'uu_home:record/campaigns:x,page/visible' <<<"$uu_out" && ok "the Home list leaves out pinned rows and view rows" || bad "Home list predicate is wrong (output: $uu_out)"
 uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'a', 0, $UU_TS, true, NULL);
 EXECUTE pinappend('$UU_A', '$UU_A', 'page', 'a');
 EXECUTE upsert('$UU_A', 'view', '12', 0, $UU_TS, true, NULL);
