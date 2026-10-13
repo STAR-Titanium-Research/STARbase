@@ -47,7 +47,7 @@ PSQL='docker compose exec -T postgres psql -U d1 -d d1_database'
   --all-files`, `node --test`, the d1-ui vitest, `phase1_schema.sh`, `phase6_text_to_sql.sh` and the migration round trip; the
   other two gates are run by hand and recorded in the PR:
   ```bash
-  ROUNDTRIP=4 bash scripts/dev/schema_test_docker.sh        # includes the readers matrix (tests/readers_matrix.sh)
+  ROUNDTRIP=6 bash scripts/dev/schema_test_docker.sh        # 170 sits on top since #262; includes the readers matrix (tests/readers_matrix.sh)
   D1_SMOKE_REQUIRE_LM=1 D1_SMOKE_OVERLAYS="d1-next-number d1-access-guard d1-record-access d1-trace d1-admin-overview" \
     bash scripts/dev/directus_smoke.sh
   ```
@@ -72,10 +72,10 @@ PSQL='docker compose exec -T postgres psql -U d1 -d d1_database'
   read p95 is under 80 ms. Migrations 168 and 169 are instantaneous.
 - Check mail on live, the email on add depends on it:
   ```bash
-  docker compose exec directus printenv | grep -E '^(EMAIL_|PUBLIC_URL)' | sed 's/\(PASSWORD=\).*/\1***/'
+  docker compose exec directus printenv | grep -E '^(EMAIL_|PUBLIC_URL|STARBASE_URL)' | sed 's/\(PASSWORD=\).*/\1***/'
   ```
-  `EMAIL_TRANSPORT`, `EMAIL_FROM` and the transport's host/credentials must be set, and `PUBLIC_URL` must be the
-  address members open (the email links to `PUBLIC_URL/admin/home/...`). A wrong `PUBLIC_URL` does not block anything,
+  `EMAIL_TRANSPORT`, `EMAIL_FROM` and the transport's host/credentials must be set, and `STARBASE_URL` must be the
+  address members open (the email links to `STARBASE_URL/<segment>/<id>`; without it, `PUBLIC_URL/admin/home/...`, which is gone since ADR-0015). A wrong `PUBLIC_URL` does not block anything,
   it only sends bad links. A failing mail transport never blocks a change; the dialog says the email could not be sent.
 - **Backups and restores (readers tables).** The big readers tables (`sample_readers`, `operation_readers`, `test_readers`,
   `campaign_readers`, `project_readers`, `campaign_sample_readers`, `operation_open_to_all`) are derived data:
