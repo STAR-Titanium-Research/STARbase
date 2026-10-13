@@ -99,7 +99,7 @@ export const NAV_GROUPS: NavGroup[] = [
 		collapsible: false,
 		links: [
 			{ label: 'Data Studio', icon: 'database', to: '/content' },
-			{ label: 'Force Crawler', icon: 'radar', to: '/d1-force-crawler', adminOnly: true },
+			{ label: 'Force Crawler', icon: 'radar', to: '/crawler', adminOnly: true },
 		],
 	},
 ];
