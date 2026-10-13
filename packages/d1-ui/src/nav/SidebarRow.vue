@@ -53,6 +53,13 @@ function openMenu() {
 	if (el.value) emit('open-menu', el.value.getBoundingClientRect());
 }
 
+// Right-click opens the "⋯" menu; Home has none, so it keeps the browser's own.
+function onContextMenu(e: MouseEvent) {
+	if (props.plain) return;
+	e.preventDefault();
+	openMenu();
+}
+
 function onKeydown(e: KeyboardEvent) {
 	if (props.variant === 'pinned' && canPin.value && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
 		e.preventDefault();
@@ -84,7 +91,7 @@ defineExpose({
 		:draggable="canPin"
 		@dragstart="onDragStart"
 		@dragend="emit('dragend')"
-		@contextmenu.prevent="openMenu"
+		@contextmenu="onContextMenu"
 		@keydown="onKeydown"
 	>
 		<span v-if="variant === 'pinned' && canPin" class="grip" aria-hidden="true"><NavIcon name="grip-vertical" :size="12" /></span>

@@ -82,7 +82,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 	<div class="sb-shell" :class="{ phone: narrow }">
 		<aside v-if="!narrow" class="sb-side" aria-label="STARbase">
 			<router-link to="/" class="sb-brand" aria-label="STARbase Home"><BrandLogo /></router-link>
-			<ExplorerNav :show-brand="false" style="--d1-nav-offset: 64px" @open-finder="openFinder" />
+			<ExplorerNav :show-brand="false" @open-finder="openFinder" />
 			<ShellFoot />
 		</aside>
 		<header v-else class="sb-topbar" :inert="sheetOpen">
@@ -99,7 +99,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 					<BrandLogo />
 					<button ref="closeBtn" type="button" class="sb-icon-btn" aria-label="Close the menu" @click="sheetOpen = false"><v-icon name="close" /></button>
 				</div>
-				<ExplorerNav :show-brand="false" style="--d1-nav-offset: 56px" @open-finder="findFromSheet" />
+				<ExplorerNav :show-brand="false" @open-finder="findFromSheet" />
 				<ShellFoot />
 			</div>
 		</div>

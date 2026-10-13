@@ -96,6 +96,11 @@ export function linkHref(path: string, router: { resolve(to: string): { href: st
 	return r.kind === 'route' ? router.resolve(r.to).href : r.href;
 }
 
+// "Open in new tab" for a link written as a Directus app path: the same address linkHref gives.
+export function openLinkInNewTab(path: string, router: { resolve(to: string): { href: string } }): void {
+	window.open(linkHref(path, router), '_blank', 'noopener');
+}
+
 // The STARbase address of a page shown in the Directus Home module (its "Open in STARbase" link):
 // '/home/samples/<id>?x=1' → '<starbaseUrl>/samples/<id>?x=1', the plot dashboards → the plot pages;
 // a page STARbase does not have opens its Home.

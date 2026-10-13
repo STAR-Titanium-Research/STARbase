@@ -5,7 +5,7 @@
 // It is teleported to <body>, so no ancestor's overflow or transform clips or moves it.
 //
 // A real role="menu": the first enabled item is focused on open, Up/Down/Home/End move, Esc and Tab
-// close it, a click outside closes it. The caller returns focus to the "⋯" button on `close`.
+// close it, a click outside closes it. The caller returns focus to the "⋯" button when `close` says so.
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import NavIcon from './NavIcon.vue';
 import type { NavIconName } from './navIcons';
@@ -25,7 +25,9 @@ const props = defineProps<{
 	// The sidebar's right edge, in viewport pixels.
 	edge?: number;
 }>();
-const emit = defineEmits<{ (e: 'choose', id: string): void; (e: 'close'): void }>();
+// `close(true)` is Esc or Tab (focus goes back to the "⋯" button); a click outside or a resize closes
+// without it, so focus stays where the person put it.
+const emit = defineEmits<{ (e: 'choose', id: string): void; (e: 'close', refocus: boolean): void }>();
 
 const GAP = 4;
 const MARGIN = 8;
@@ -51,19 +53,23 @@ function onDocumentPointerDown(e: PointerEvent) {
 	if (!t || menu.value?.contains(t)) return;
 	// The "⋯" button that opened the menu toggles it itself.
 	if (t.closest('[aria-haspopup="menu"]')) return;
-	emit('close');
+	emit('close', false);
 }
 
 function onWindowChange() {
 	// A resize would leave the menu beside the wrong row.
-	emit('close');
+	emit('close', false);
 }
 
 function listen(on: boolean) {
 	if (typeof document === 'undefined') return; // server render
-	const fn = on ? 'addEventListener' : 'removeEventListener';
-	document[fn]('pointerdown', onDocumentPointerDown, true);
-	window[fn]('resize', onWindowChange);
+	if (on) {
+		document.addEventListener('pointerdown', onDocumentPointerDown as EventListener, true);
+		window.addEventListener('resize', onWindowChange);
+	} else {
+		document.removeEventListener('pointerdown', onDocumentPointerDown as EventListener, true);
+		window.removeEventListener('resize', onWindowChange);
+	}
 }
 
 watch(
@@ -91,12 +97,12 @@ function onKeydown(e: KeyboardEvent) {
 		e.preventDefault();
 		// Not the sheet's or the page's Esc as well.
 		e.stopPropagation();
-		emit('close');
+		emit('close', true);
 	} else if (e.key === 'ArrowDown') focus(at + 1);
 	else if (e.key === 'ArrowUp') focus(at <= 0 ? list.length - 1 : at - 1);
 	else if (e.key === 'Home') focus(0);
 	else if (e.key === 'End') focus(list.length - 1);
-	else if (e.key === 'Tab') emit('close');
+	else if (e.key === 'Tab') emit('close', true);
 }
 
 function choose(item: NavRowMenuItem) {

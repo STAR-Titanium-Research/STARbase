@@ -58,24 +58,3 @@ export function linkActive(to: string, routePath: string, query: Record<string, 
 	if (path.startsWith(`${base}/`)) return true;
 	return path === base && queryValue(query, 'bookmark') === null;
 }
-
-// The rail section the user last picked while on Home (the rail switches the panel without
-// navigating; elsewhere the panel follows the page and nothing is stored). A plain section id, or
-// null when nothing is stored or storage is blocked.
-export const SECTION_KEY = 'd1.nav.section';
-
-export function readSection(): string | null {
-	try {
-		return window.localStorage.getItem(SECTION_KEY);
-	} catch {
-		return null;
-	}
-}
-
-export function writeSection(id: string): void {
-	try {
-		window.localStorage.setItem(SECTION_KEY, id);
-	} catch {
-		// private mode or blocked storage: the choice just is not remembered
-	}
-}

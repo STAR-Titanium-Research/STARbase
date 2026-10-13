@@ -1,5 +1,5 @@
-// What the sidebar's row "⋯" menu holds (spec decision 6), and the two actions that touch the
-// browser. The item lists are plain data so they can be tested without a DOM.
+// What the sidebar's row "⋯" menu holds (spec decision 6), and the copy action that touches the
+// browser (opening a tab goes through links.ts). The item lists are plain data so they can be tested without a DOM.
 import type { NavIconName } from './navIcons';
 
 export type RowMenuAction = 'pin' | 'unpin' | 'up' | 'down' | 'new-tab' | 'copy';
@@ -42,10 +42,6 @@ export function rowMenuItems(o: RowMenuOptions): RowMenuItem[] {
 export function absoluteHref(href: string, origin: string): string {
 	if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return href;
 	return origin.replace(/\/+$/, '') + (href.startsWith('/') ? href : `/${href}`);
-}
-
-export function openInNewTab(href: string): void {
-	window.open(href, '_blank', 'noopener');
 }
 
 // Copies the absolute address; a blocked clipboard (an insecure page, a denied permission) is not an error.
