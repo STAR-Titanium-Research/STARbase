@@ -186,16 +186,24 @@ permanent links (`/d1-links/go…`). **Directus mounts `core/extensions` as it i
 leaves a removed extension's ignored `dist/` and `node_modules/` behind, where Directus keeps
 loading them, so step 2 deletes them by hand.
 
+0. Gate: the STARbase rollout above is done and `STARBASE_URL` is set in `.env`. Without it every
+   permanent link answers `503` and the old pages are already gone after this phase. Stop here if not.
 1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`, then
    `(cd core/extensions/d1-report && npm ci && npm run build)` and
    `(cd core/extensions/d1-report-button && npm ci && npm run build)`.
-2. Delete what is left of the three removed extensions, then check:
+2. Check the permanent links before anything is deleted. `d1-links` needs no build, but Directus loads
+   it only at start, so recreate once: `docker compose up -d --force-recreate directus`, then
+   `curl -sI https://d1-server.tail54eeb6.ts.net/d1-links/go` must answer `302` to
+   `https://starbase.tail54eeb6.ts.net/`. A `503` means `STARBASE_URL` is not in Directus's environment; a
+   `404` means the new `d1-links` is not loaded. **Stop and fix it if it is not a `302`.**
+3. Delete what is left of the three removed extensions:
    `rm -rf core/extensions/d1-home core/extensions/d1-force-dashboard core/extensions/d1-fast-dashboard`
    (PowerShell: `Remove-Item -Recurse -Force core/extensions/d1-home, core/extensions/d1-force-dashboard, core/extensions/d1-fast-dashboard`).
-3. `dbmate up` (migration 171), then `bash scripts/set_module_bar_starbase.sh`.
-4. `docker compose up -d --force-recreate directus`, then
+4. `make migrate-status` (171 pending), `make migrate` (migration 171), then
+   `bash scripts/set_module_bar_starbase.sh`.
+5. `docker compose up -d --force-recreate directus`, then
    `docker compose exec directus ls /directus/extensions`: the three names are gone.
-5. Smoke:
+6. Smoke:
    - `curl -sI https://d1-server.tail54eeb6.ts.net/d1-links/go/r/physical_samples/<id>` → `302`
      to `https://starbase.tail54eeb6.ts.net/samples/<id>`;
    - `curl -sI "https://d1-server.tail54eeb6.ts.net/d1-links/go/p/a//b"` → `400`;
@@ -204,8 +212,16 @@ loading them, so step 2 deletes them by hand.
    - a sample report's QR code opens the sample in STARbase;
    - on an operation's Data Studio form, "View Force Analysis" opens STARbase's plot in a new tab;
    - a project's items list links open STARbase.
-6. Force App: ship the release that contains "open record through the permanent link".
+7. Force App: ship the release that contains "open record through the permanent link".
 
-Rollback: `git checkout <previous commit>`, rebuild as in step 1, `dbmate rollback`, then recreate
-`directus`. The STARbase tile stays first in the bar; remove it under Settings → Appearance if
-wanted.
+Rollback, in this order:
+1. While still on the phase-1 commit (its migration file must exist): `make migrate-status`, then
+   `make migrate-down` (rolls back the newest applied migration, 171; it puts Home and the two plotters
+   back in the module bar).
+2. `git checkout <previous commit>`.
+3. Rebuild with that commit's scripts: `npm ci && npm run build:starbase && npm run build:extensions &&
+   npm run build:extension` (the separate script that builds `d1-force-dashboard`, whose tile the down migration restores),
+   and the two `d1-report` builds from step 1.
+4. `docker compose up -d --force-recreate directus`. The removed folders came back with the checkout.
+
+The STARbase tile stays first in the bar; remove it under Settings → Appearance if wanted.

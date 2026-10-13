@@ -222,14 +222,16 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
   required field (the sample code) and save: the Directus error text shows in the drawer and
   nothing is saved. As a role that may not update samples: the save error is shown, not a blank
   drawer. Since: Explorer pages E1 (PR pending).
-- [ ] **E1 — landing module after login.** Sign in as a Lab Member and as an admin from a fresh
+- [ ] **E1 — landing module after login.** *Superseded by headless phase 1 (migration 171): Directus
+  no longer has a Home module.* Sign in as a Lab Member and as an admin from a fresh
   browser session. Expect: Home is the first icon on the module bar, Content (the Data Studio)
   follows the three dashboards. Note which page the app opens after login: Home (first module) or
   Content. If it is Content, Directus does not land on the first module; the spec's "app.after
   redirect" is then a follow-up decision. Check that a bar curated in Settings > Appearance that
   already listed Home keeps it, first. `dbmate down` removes Home and moves Content to the front.
   Since: Explorer pages E1 (PR pending).
-- [ ] **E1 — module bar order.** After migration 138 the bar reads Home, User Directory, File
+- [ ] **E1 — module bar order.** *Superseded by headless phase 1 (migration 171): the bar no longer
+  has Home, Force Analysis or FAST Analysis, and starts with the STARbase tile.* After migration 138 the bar reads Home, User Directory, File
   Library, Insights, Lab Dashboard, Force Analysis, FAST Analysis, Content, Settings (for a bar
   that had the shipped order), and every icon still opens its module. On a fresh install
   (`scripts/configure_all.sh`) the same order is created. Since: Explorer pages E1 (PR pending).
