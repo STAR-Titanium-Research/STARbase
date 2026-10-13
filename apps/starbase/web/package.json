@@ -1,0 +1,31 @@
+{
+  "name": "starbase-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "STARbase: the STAR group's web app (Home, index and record pages, task screens, plotters), standalone on Directus's shared session (ADR-0013).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@d1/fast-plotting": "*",
+    "@d1/force-plotting": "*",
+    "@d1/starbase-pages": "*",
+    "@d1/ui": "*",
+    "axios": "^1.20.0",
+    "material-symbols": "^0.47.6",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^7.0.2",
+    "vite": "^6.0.7",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^2.2.0"
+  }
+}

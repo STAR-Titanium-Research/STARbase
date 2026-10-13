@@ -7,6 +7,7 @@
     "packages/*",
     "apps/force-app/web",
     "apps/force-app/desktop",
+    "apps/starbase/web",
     "core/extensions/d1-force-dashboard",
     "core/extensions/d1-home",
     "core/extensions/d1-lab-dashboard",
@@ -20,6 +21,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build:web": "npm run build -w force-app-web",
     "build:web:desktop": "npm run build:desktop -w force-app-web",
+    "build:starbase": "npm run build -w starbase-web",
     "build:extension": "npm run build -w directus-extension-d1-force-dashboard",
     "build:extensions": "npm run build -w directus-extension-d1-home -w directus-extension-d1-lab-dashboard -w directus-extension-d1-composition-bar -w directus-extension-d1-campaign-ops -w directus-extension-d1-project-items -w directus-extension-d1-fast-dashboard"
   }

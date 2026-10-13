@@ -40,6 +40,12 @@ test('changes under the STARbase packages plan the directusUi job', () => {
   }
 });
 
+test('the STARbase app and the force plotting it builds plan the directusUi job', () => {
+  for (const f of ['apps/starbase/web/src/main.ts', 'packages/force-plotting/src/host.ts']) {
+    assert.equal(plan([f], EXT).directusUi, true, f);
+  }
+});
+
 test('a migration runs the schema and script tests', () => {
   assert.deepEqual(plan(['db/migrations/20261008000140_x.sql'], EXT), { ...nothing, migrations: true, scripts: true });
 });

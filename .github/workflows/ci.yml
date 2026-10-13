@@ -300,7 +300,7 @@ jobs:
   # tests and typecheck, and a build of every Directus extension that imports it. Without the
   # builds a broken import in a page would only show up when someone rebuilds the extension.
   directus-ui:
-    name: Explorer UI (@d1/ui and the six extensions that use it)
+    name: Explorer UI and STARbase (@d1/ui, the extensions that use it, apps/starbase/web)
     needs: plan
     if: needs.plan.outputs.directusUi == 'true'
     runs-on: ubuntu-latest
@@ -332,6 +332,11 @@ jobs:
           npm run typecheck -w directus-extension-d1-campaign-ops
       - name: Build the Directus extensions that use @d1/ui
         run: npm run build:extensions
+      - name: "STARbase app: unit tests + typecheck + build"
+        run: |
+          npm test -w starbase-web
+          npm run typecheck -w starbase-web
+          npm run build -w starbase-web
 
   # Same Python and extras as the release build, which freezes the backend on 3.11 with the nidaq
   # extra. Without the extra, nidaqmx-dependent paths took the "package not installed" branch here
