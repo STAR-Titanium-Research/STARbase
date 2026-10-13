@@ -35,9 +35,11 @@
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--theme--primary: #18222f;
+		/* The lab navy (#18222f) is 1.2:1 on the dark background, so dark uses a lighter tint of it:
+		   6.6:1 on --theme--background, and the dark foreground on it is 6.6:1 (themeVars.test.ts). */
+		--theme--primary: #6b9bd6;
 		--theme--primary-background: color-mix(in srgb, var(--theme--background), var(--theme--primary) 10%);
-		--theme--primary-foreground: #ffffff;
+		--theme--primary-foreground: #0d1117;
 		--theme--secondary: #ff99dd;
 		--theme--success: #2ecda7;
 		--theme--warning: #ffa439;

@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { compileTemplate, parse } from '@vue/compiler-sfc';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSSRApp, h, resolveComponent, resolveDirective, withDirectives, type Component } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { configureLinks, resetLinks, shouldOpenFinder, starbaseLinks } from '@d1/ui';
+import { activateOnKey } from './clickableKey';
 import { fromInputValue, toInputValue } from './inputModel';
 import { registerStandins } from './register';
 import { DESELECT, optionKey, valueFor } from './selectModel';
@@ -84,6 +88,27 @@ describe('the other stand-ins', () => {
 		const clickable = (await render(v('v-icon', { name: 'download', clickable: true }))).html;
 		expect(clickable).toContain('role="button"');
 		expect(clickable).toContain('>download<');
+	});
+	it('a clickable v-icon has the key handler wired in its client render', () => {
+		// vitest compiles .vue for SSR, which drops event handlers, so compile the template for the browser
+		// and read the render code: onKeydown must be bound to activateOnKey, and only when `clickable`.
+		const sfc = parse(readFileSync(fileURLToPath(new URL('./VIcon.vue', import.meta.url)), 'utf8'));
+		const compiled = compileTemplate({ source: sfc.descriptor.template!.content, filename: 'VIcon.vue', id: 'v-icon', ssr: false });
+		expect(compiled.errors).toEqual([]);
+		expect(compiled.code).toMatch(/onKeydown:[^\n]*clickable[^\n]*activateOnKey/);
+		expect(sfc.descriptor.scriptSetup!.content).toContain("from './clickableKey'");
+	});
+	it('activateOnKey: Enter and Space click and prevent the default; other keys do nothing', () => {
+		const press = (key: string) => {
+			const click = vi.fn();
+			const preventDefault = vi.fn();
+			activateOnKey({ key, currentTarget: { click }, preventDefault });
+			return [click.mock.calls.length, preventDefault.mock.calls.length];
+		};
+		expect(press('Enter')).toEqual([1, 1]);
+		expect(press(' ')).toEqual([1, 1]);
+		expect(press('a')).toEqual([0, 0]);
+		expect(press('Tab')).toEqual([0, 0]);
 	});
 	it('v-notice: danger and warning are alerts, others a status', async () => {
 		expect((await render(v('v-notice', { type: 'danger' }, { default: () => 'Bad' }))).html).toContain('role="alert"');

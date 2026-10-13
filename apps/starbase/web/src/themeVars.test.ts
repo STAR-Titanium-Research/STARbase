@@ -15,6 +15,35 @@ const used = [...new Set(ROOTS.flatMap((r) => files(join(repo, r))).flatMap((f) 
 const css = readFileSync(join(here, 'theme.css'), 'utf8');
 const [light, dark] = css.split('@media (prefers-color-scheme: dark)');
 
+// WCAG 2.x relative luminance and contrast ratio, for #rrggbb values.
+const lin = (c: number) => ((c /= 255) <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const luminance = (hex: string) => {
+	const n = parseInt(hex.slice(1), 16);
+	return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+};
+const contrast = (a: string, b: string) => {
+	const [x, y] = [luminance(a), luminance(b)];
+	return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+const darkValue = (name: string) => (dark ?? '').match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`))?.[1] ?? '';
+
+describe('dark scheme legibility', () => {
+	it('the contrast helper is right (black on white is 21:1)', () => {
+		expect(contrast('#000000', '#ffffff')).toBeCloseTo(21, 5);
+	});
+	it('the primary colour is visible against the dark background (3:1)', () => {
+		const [primary, background] = [darkValue('--theme--primary'), darkValue('--theme--background')];
+		expect(primary).not.toBe('');
+		expect(background).not.toBe('');
+		expect(contrast(primary, background)).toBeGreaterThanOrEqual(3);
+	});
+	it('text on the dark primary reads (4.5:1)', () => {
+		const [primary, fg] = [darkValue('--theme--primary'), darkValue('--theme--primary-foreground')];
+		expect(fg).not.toBe('');
+		expect(contrast(fg, primary)).toBeGreaterThanOrEqual(4.5);
+	});
+});
+
 describe('theme.css', () => {
 	it('finds the variables it is meant to check', () => {
 		expect(used).toContain('--theme--primary');

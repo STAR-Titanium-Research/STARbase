@@ -27,7 +27,7 @@ const classes = computed(() => ({
 .v-button {
 	display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 36px; padding: 0 14px;
 	border: 1px solid var(--theme--border-color); border-radius: var(--theme--border-radius, 8px);
-	background: var(--theme--primary); color: var(--theme--foreground-inverted);
+	background: var(--theme--primary); color: var(--theme--primary-foreground);
 	font: inherit; font-size: var(--fs-md, 13px); font-weight: 600; text-decoration: none; white-space: nowrap; cursor: pointer;
 }
 .v-button.secondary { background: var(--theme--background-normal); color: var(--theme--foreground); }

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { activateOnKey } from './clickableKey';
 
 // Stand-in for Directus's <v-icon>: a Material Symbols glyph by name. Clickable icons (copy a path,
-// download) are buttons for the keyboard and screen readers; the page's @click falls through.
+// download) are buttons for the keyboard and screen readers: Enter and Space click them, and the
+// page's @click falls through.
 const props = defineProps<{ name?: string; xSmall?: boolean; small?: boolean; large?: boolean; xLarge?: boolean; left?: boolean; right?: boolean; clickable?: boolean }>();
 const size = computed(() => (props.xSmall ? 14 : props.small ? 18 : props.large ? 32 : props.xLarge ? 40 : 24));
 </script>
@@ -15,6 +17,7 @@ const size = computed(() => (props.xSmall ? 14 : props.small ? 18 : props.large 
 		:role="clickable ? 'button' : undefined"
 		:tabindex="clickable ? 0 : undefined"
 		:aria-hidden="clickable ? undefined : 'true'"
+		@keydown="clickable ? activateOnKey($event) : undefined"
 		>{{ name }}</span
 	>
 </template>
