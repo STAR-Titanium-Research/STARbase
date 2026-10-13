@@ -525,3 +525,21 @@ test('Settings: Forget my list views and Clear my history', async ({ browser }) 
 	if (process.env.SETTINGS_SHOT) { await page.evaluate(() => document.querySelectorAll('main, body').forEach((el) => el.scrollTo(0, 0))); await page.screenshot({ path: process.env.SETTINGS_SHOT }); };
 	await page.context().close();
 });
+
+test('Settings: a failed drag-drop says "Couldn\'t save", puts the order back, and Retry saves the dropped order', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/settings');
+	const list = page.getByRole('list', { name: 'Pinned pages' });
+	await expect(list.locator('li .name')).toHaveText(['Samples', 'Projects']);
+	await page.route('**/d1-usage/pin-order', (r) => (r.request().method() === 'POST' ? r.fulfill({ status: 500, headers: { 'access-control-allow-origin': STAR_BASE, 'access-control-allow-credentials': 'true' }, json: {} }) : r.fallback()), { times: 1 });
+	// Drop Projects on the top half of Samples.
+	await list.locator('li', { hasText: 'Projects' }).dragTo(list.locator('li', { hasText: 'Samples' }), { targetPosition: { x: 40, y: 3 } });
+	await expect(page.getByRole('alert').filter({ hasText: "Couldn't save" })).toBeVisible();
+	await expect(list.locator('li .name')).toHaveText(['Samples', 'Projects']);
+	expect(pinTargets(state)).toEqual(['samples', 'projects']);
+
+	await page.getByRole('alert').getByRole('button', { name: 'Retry' }).click();
+	await expect.poll(() => pinTargets(state)).toEqual(['projects', 'samples']);
+	await expect(list.locator('li .name')).toHaveText(['Projects', 'Samples']);
+	await expect(page.getByRole('alert').filter({ hasText: "Couldn't save" })).toHaveCount(0);
+	await page.context().close();
+});

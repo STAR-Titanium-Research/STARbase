@@ -129,7 +129,7 @@ export { layoutFor, pinKey } from './nav/sidebarModel';
 export type { PinRef, RecordLabel, ResolvedPin, SectionId, ShellLayout } from './nav/sidebarModel';
 export { useSidebarData } from './nav/useSidebarData';
 export { usePinDrag } from './nav/usePinDrag';
-export { moveAmongShown } from './nav/pinDrag';
+export { dropResult, moveAmongShown, sameOrder } from './nav/pinDrag';
 export { forgetListPrefs } from './index/listPrefs';
 export { default as NavIcon } from './nav/NavIcon.vue';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';

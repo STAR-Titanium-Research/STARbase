@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { NavIcon, Section, moveAmongShown, pinKey, usePinDrag, useSidebarData, type PinRef } from '@d1/ui';
+import { NavIcon, Section, dropResult, moveAmongShown, pinKey, sameOrder, usePinDrag, useSidebarData, type PinRef } from '@d1/ui';
 import SaveNote from './SaveNote.vue';
 import { unavailableLabel } from './pinLabels';
 import type { Saves } from './useSaves';
@@ -47,15 +47,23 @@ async function move(pin: PinRef, delta: -1 | 1, label: string): Promise<void> {
 
 const remove = (pin: PinRef): void => save(() => pins.toggle(pin));
 
-const { drag, dropAt, pinnedBlock, startDrag, endDrag, overRow, overBlock, leaveBlock, drop } = usePinDrag({
+const { drag, dropAt, pinnedBlock, startDrag, endDrag, overRow, overBlock, leaveBlock } = usePinDrag({
 	pins,
 	shown,
 	rowCount: () => shown.value.length,
 	ready: () => ready.value,
 });
+// The new order is worked out here, at drop time, so the save and its Retry are the same
+// `pins.reorder(next)` the Move buttons use (usePinDrag.drop would be re-run with no drag left).
 function onDrop(e: DragEvent): void {
-	// usePinDrag saves through usePins directly; tell Settings whether it stuck, as for the buttons.
-	save(() => drop(e));
+	e.preventDefault();
+	const item = drag.value;
+	const at = dropAt.value;
+	endDrag();
+	if (!item || at === null || !ready.value) return;
+	const { next } = dropResult(pins.pins.value, shown.value, item, at);
+	if (sameOrder(next, pins.pins.value)) return;
+	save(() => pins.reorder(next));
 }
 
 const confirmReset = ref(false);

@@ -90,7 +90,6 @@ export const NAV_GROUPS: NavGroup[] = [
 		links: [
 			{ label: 'Print labels', icon: 'printer', to: '/home/labels' },
 			{ label: 'Report a bug', icon: 'bug', to: '/report-bug' },
-			// The route arrives with the Settings page.
 			{ label: 'Settings', icon: 'settings', to: '/home/settings' },
 		],
 	},
