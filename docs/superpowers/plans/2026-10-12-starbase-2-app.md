@@ -93,7 +93,7 @@ Directus form, and a phone layout. Deployment files are written but not run.
     `registerStandins`, `PlainFrame`, `buildRoutes`, `createStarbaseRouter`, `createEditor`,
     `createBrowserEditor`, `EditorDialog`, `starbaseForceHost`, `starbaseFastHost`, `plotRoutes`,
     `useNarrow`, `starbaseCsp`;
-  - kit names in `@d1/ui`: `editFrameUrl`, `parentOriginFrom`, `readEditMessage`, `editMessage`,
+  - kit names in `@d1/ui`: `editFrameUrl`, `targetOriginFrom`, `frameTell`, `readEditMessage`, `editMessage`,
     `NEW_ITEM_ID`, `createFormFields`, `editMode`, `ExplorerHost.openEditor`, `starbaseUrlFor`,
     `starbaseUrlOnce`, `setPhoneListDefault`, `defaultListPrefs`, `readSavedListPrefs`,
     `PHONE_LIST_MAX_WIDTH`;
@@ -129,10 +129,15 @@ Directus form, and a phone layout. Deployment files are written but not run.
     lapsed answers 401 although the session lives. Task 2 Step 7 measures this on the preview.
 - **`/config.json` in production** is answered by Caddy from `D1_SERVER_ORIGIN`. There is no file
   in `dist/`, so the URL lives in one place, which is also where the CSP takes it from.
-- **The frame learns STARbase's origin from `?parent=`.**
-  - The frame posts only to that exact origin, and only when it is a valid http(s) origin.
-  - Directus's `frame-ancestors` already limits who can frame the page. A forged `parent` only sends
-    `{saved, collection, id}` to a window that opened the tab itself.
+- **The frame learns STARbase's origin from d1-server, never from its URL.**
+  - The frame reads `GET /d1-links` (`STARBASE_URL`, spec §3.6) and posts only to
+    `new URL(starbaseUrl).origin`. It does that both to the framing page and, opened as a new tab, to
+    `window.opener`.
+  - With no `STARBASE_URL`, or no endpoint, it posts nothing and says "Saved. You can close…" itself.
+  - A `?parent=` is ignored. `frame-ancestors` limits only framing: any page could open the new-tab URL
+    with its own `parent` and receive the save notices through `window.opener`.
+  - This is why `/d1-links` is built in Task 6, with the frame, and not with the Data Studio link in
+    Task 10.
 - **Fallback promise.**
   - In new-tab mode, `openEditor` resolves with the tab's own message when one arrives.
   - Otherwise it resolves `'saved'` on the next focus of the STARbase window, or when the user clicks
@@ -3207,16 +3212,20 @@ git push origin HEAD:feat/explorer-standalone
 The new Directus module page `/admin/d1-edit/<collection>/<id>` renders only Directus's `v-form`
 for one record, with Save and Cancel, and no `private-view`. Step 0 showed that such a page has no
 module bar. It tells the STARbase window that framed it, or the STARbase tab that opened it, that it
-is ready, saved or cancelled. It only ever posts to the exact origin it was given. `+` as the id
-creates a record.
+is ready, saved or cancelled. `+` as the id creates a record.
+
+It posts only to STARbase's own origin, which it learns from d1-server's setting: `GET /d1-links`
+returns `STARBASE_URL`. It never takes the origin from its own URL, which anyone can write. So this
+task also builds the `/d1-links` endpoint (spec §3.6). Task 10 adds Data Studio's link to it.
 
 **Files:**
 - Create: `packages/d1-ui/src/editFrame.ts`, `packages/d1-ui/src/editFrame.test.ts`
 - Modify: `packages/d1-ui/src/editDrawer.ts` (add `createFormFields`), `packages/d1-ui/src/editDrawer.test.ts`
 - Modify: `packages/d1-ui/package.json` (`exports`: `./editDrawer`, `./editFrame`), `packages/d1-ui/src/index.ts` (export the editFrame names)
+- Create: `core/extensions/d1-links/package.json`, `core/extensions/d1-links/index.js`, `core/extensions/d1-links/index.test.mjs`
 - Create: `core/extensions/d1-edit-frame/package.json`, `tsconfig.json`, `src/index.ts`, `src/EditFramePage.vue`
 - Modify: root `package.json` (`workspaces`, `build:extensions`), `.github/scripts/ci-plan.mjs`, `.github/scripts/ci-plan.test.mjs`, `.github/workflows/ci.yml`, `.claude/skills/ci-local/scripts/plan_checks.sh`
-- Modify: `core/README.md` (the module row)
+- Modify: `core/README.md` (the module row and the endpoint row), `tests/ui/starbase/preview-ports.env` (`STARBASE_URL`)
 
 **Interfaces:**
 - Produces in `@d1/ui`. These are also importable as `@d1/ui/editFrame`, with no Vue components
@@ -3228,8 +3237,10 @@ export const NEW_ITEM_ID = '+';
 export type EditResult = 'ready' | 'saved' | 'cancelled';
 export interface EditMessage { type: 'd1-edit'; result: EditResult; collection: string; id: string }
 export interface ExpectedEditSource { origin: string; source: unknown; collection: string; id: string }
-export function editFrameUrl(serverBase: string, collection: string, id: string, parentOrigin: string): string;
-export function parentOriginFrom(search: string): string | null;
+export interface MessageTarget { postMessage(message: unknown, targetOrigin: string): void }
+export function editFrameUrl(serverBase: string, collection: string, id: string): string;
+export function targetOriginFrom(starbaseUrl: unknown): string | null;   // GET /d1-links' value → the origin to post to
+export function frameTell(target: MessageTarget | null | undefined, targetOrigin: string | null, message: EditMessage): boolean;
 export function editMessage(result: EditResult, collection: string, id: string): EditMessage;
 export function isEditMessage(data: unknown): data is EditMessage;
 export function readEditMessage(event: { origin: string; source: unknown; data: unknown }, expected: ExpectedEditSource): EditMessage | null;
@@ -3237,47 +3248,132 @@ export function readEditMessage(event: { origin: string; source: unknown; data: 
 export function createFormFields(fields: FieldDef[], hidden?: string[]): FieldDef[];
 ```
 
+- The endpoint: `GET /d1-links` returns `{ starbaseUrl: string | null }` to a signed-in user and 401
+  to anyone else. It is built from `export function starbaseUrlFrom(env): string | null` and
+  `export function mount(router, env)` in `core/extensions/d1-links/index.js`.
 - The Directus module has `id: 'd1-edit'` and `hidden: true`, and its route is
   `:collection/:id` (props).
 
 - [ ] **Step 1: Write the failing tests**
 
+`core/extensions/d1-links/index.test.mjs`:
+
+```js
+// Run with: node --test core/extensions/d1-links/index.test.mjs   (CI's lint job runs every core/extensions/*/index.test.mjs)
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import ext, { mount, starbaseUrlFrom } from './index.js';
+
+function call(env, accountability = { user: 'u1' }) {
+	let handler;
+	mount({ get: (path, fn) => { assert.equal(path, '/'); handler = fn; } }, env);
+	const out = { status: 200, headers: {}, body: undefined };
+	const res = {
+		status(c) { out.status = c; return res; },
+		set(k, v) { out.headers[k] = v; return res; },
+		json(b) { out.body = b; return res; },
+	};
+	handler({ accountability }, res);
+	return out;
+}
+
+test('starbaseUrlFrom: an http(s) address without its trailing slash, else null', () => {
+	assert.equal(starbaseUrlFrom({ STARBASE_URL: 'https://starbase.tail54eeb6.ts.net/' }), 'https://starbase.tail54eeb6.ts.net');
+	assert.equal(starbaseUrlFrom({ STARBASE_URL: '  ' }), null);
+	assert.equal(starbaseUrlFrom({}), null);
+	assert.equal(starbaseUrlFrom(undefined), null);
+	assert.equal(starbaseUrlFrom({ STARBASE_URL: 'javascript:alert(1)' }), null);
+	assert.equal(starbaseUrlFrom({ STARBASE_URL: 'not a url' }), null);
+});
+
+test('GET /d1-links tells a signed-in user where STARbase is', () => {
+	const out = call({ STARBASE_URL: 'https://starbase.tail54eeb6.ts.net' });
+	assert.equal(out.status, 200);
+	assert.deepEqual(out.body, { starbaseUrl: 'https://starbase.tail54eeb6.ts.net' });
+	assert.equal(out.headers['Cache-Control'], 'no-store');
+});
+
+test('unset: null, so the edit frame tells nobody and Data Studio hides its link', () => {
+	assert.deepEqual(call({}).body, { starbaseUrl: null });
+});
+
+test('not signed in: 401', () => {
+	assert.equal(call({ STARBASE_URL: 'https://s.example' }, null).status, 401);
+	assert.equal(call({ STARBASE_URL: 'https://s.example' }, { user: null }).status, 401);
+});
+
+test('mounts at /d1-links', () => {
+	assert.equal(ext.id, 'd1-links');
+});
+```
+
 `packages/d1-ui/src/editFrame.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { editFrameUrl, editMessage, isEditMessage, NEW_ITEM_ID, parentOriginFrom, readEditMessage } from './editFrame';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it, vi } from 'vitest';
+import { editFrameUrl, editMessage, frameTell, isEditMessage, NEW_ITEM_ID, readEditMessage, targetOriginFrom } from './editFrame';
 
 const D1 = 'https://d1-server.tail54eeb6.ts.net';
 const STAR = 'https://starbase.tail54eeb6.ts.net';
 
 describe('editFrameUrl', () => {
-	it("is d1-server's form-only page, with STARbase's origin to answer to", () => {
-		expect(editFrameUrl(`${D1}/`, 'physical_samples', 'abc', STAR)).toBe(
-			`${D1}/admin/d1-edit/physical_samples/abc?parent=${encodeURIComponent(STAR)}`,
-		);
+	it("is d1-server's form-only page for the record, and carries no origin of its own", () => {
+		expect(editFrameUrl(`${D1}/`, 'physical_samples', 'abc')).toBe(`${D1}/admin/d1-edit/physical_samples/abc`);
+		expect(editFrameUrl(D1, 'physical_samples', 'abc')).not.toContain('parent');
 	});
 	it('encodes an id with a slash, a space or a percent, and the frame gets the same id back (Review Focus 4)', () => {
-		const url = editFrameUrl(D1, 'physical_samples', 'a/b c%', STAR);
-		expect(url).toContain('/admin/d1-edit/physical_samples/a%2Fb%20c%25?');
+		const url = editFrameUrl(D1, 'physical_samples', 'a/b c%');
+		expect(url).toBe(`${D1}/admin/d1-edit/physical_samples/a%2Fb%20c%25`);
 		const segment = new URL(url).pathname.split('/').pop()!;
 		expect(decodeURIComponent(segment)).toBe('a/b c%');
 	});
 	it("keeps '+' (a new record) as Data Studio writes it", () => {
-		expect(editFrameUrl(D1, 'projects', NEW_ITEM_ID, STAR)).toContain('/admin/d1-edit/projects/+?parent=');
+		expect(editFrameUrl(D1, 'projects', NEW_ITEM_ID)).toBe(`${D1}/admin/d1-edit/projects/+`);
 	});
 });
 
-describe('parentOriginFrom', () => {
-	it('accepts an exact http(s) origin', () => {
-		expect(parentOriginFrom(`?parent=${encodeURIComponent(STAR)}`)).toBe(STAR);
-		expect(parentOriginFrom(`?parent=${encodeURIComponent('http://127.0.0.1:5190')}`)).toBe('http://127.0.0.1:5190');
+describe('targetOriginFrom: where the frame may post, from GET /d1-links (STARBASE_URL)', () => {
+	it("is the origin of d1-server's STARbase address", () => {
+		expect(targetOriginFrom(`${STAR}/`)).toBe(STAR);
+		expect(targetOriginFrom('https://starbase.example:5191/app')).toBe('https://starbase.example:5191');
+		expect(targetOriginFrom('http://127.0.0.1:5190')).toBe('http://127.0.0.1:5190');
 	});
-	it('refuses anything that is not exactly an origin', () => {
-		for (const p of [`${STAR}/samples`, `${STAR}/`, 'javascript:alert(1)', 'https://user@starbase.example', '*', '', 'null']) {
-			expect(parentOriginFrom(`?parent=${encodeURIComponent(p)}`), p).toBeNull();
-		}
-		expect(parentOriginFrom('')).toBeNull();
+	it('is null when the setting is missing or not an http(s) address', () => {
+		for (const v of [null, undefined, '', '  ', 'javascript:alert(1)', 'not a url', 42, {}]) expect(targetOriginFrom(v), String(v)).toBeNull();
+	});
+});
+
+describe('frameTell: the frame side of the origin check', () => {
+	it("posts to STARbase at its exact origin, never '*'", () => {
+		const postMessage = vi.fn();
+		expect(frameTell({ postMessage }, STAR, editMessage('saved', 'physical_samples', 's1'))).toBe(true);
+		expect(postMessage).toHaveBeenCalledWith(editMessage('saved', 'physical_samples', 's1'), STAR);
+	});
+	it('posts nothing without a target origin (STARBASE_URL unset, or /d1-links missing), or without a window', () => {
+		const postMessage = vi.fn();
+		expect(frameTell({ postMessage }, null, editMessage('saved', 'physical_samples', 's1'))).toBe(false);
+		expect(frameTell(null, STAR, editMessage('saved', 'physical_samples', 's1'))).toBe(false);
+		expect(postMessage).not.toHaveBeenCalled();
+	});
+});
+
+describe('the frame page (core/extensions/d1-edit-frame)', () => {
+	// The page itself has no test runner of its own (a Directus module); this pins where its origin comes from.
+	const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+	const src = readFileSync(join(repo, 'core', 'extensions', 'd1-edit-frame', 'src', 'EditFramePage.vue'), 'utf8');
+
+	it('takes the target origin from GET /d1-links, and ignores its own URL (a ?parent= changes nothing)', () => {
+		expect(src).toContain("api.get('/d1-links')");
+		expect(src).toContain('targetOriginFrom(');
+		expect(src).toContain('frameTell(');
+		expect(src).not.toMatch(/location\.(search|href|hash)|URLSearchParams|parent=/);
+	});
+	it('posts only through frameTell', () => {
+		expect(src).not.toMatch(/\.postMessage\(/);
 	});
 });
 
@@ -3329,8 +3425,15 @@ describe('createFormFields', () => {
 });
 ```
 
-Run: `npm test -w @d1/ui -- editFrame editDrawer`
-Expected: FAIL. `./editFrame` is missing, and `createFormFields` is not exported.
+Run:
+```bash
+node --test core/extensions/d1-links/index.test.mjs
+npm test -w @d1/ui -- editFrame editDrawer
+```
+Expected: FAIL.
+- `d1-links/index.js` and `./editFrame` are missing.
+- `createFormFields` is not exported.
+- The frame-page check cannot read `EditFramePage.vue` yet. It passes after Step 4.
 
 - [ ] **Step 2: Implement the protocol and `createFormFields`**
 
@@ -3340,8 +3443,9 @@ Expected: FAIL. `./editFrame` is missing, and `createFormFields` is not exported
 // The edit frame's messages (spec §3.4). d1-server's form-only page /admin/d1-edit/<collection>/<id>
 // tells the window that opened it (STARbase's edit dialog, or the STARbase tab that opened it as a new
 // tab) that it is ready, saved or cancelled. Origins are checked both ways:
-//   - the frame posts only to the exact origin it was given in ?parent= (and Directus's frame-ancestors
-//     decides who may frame the page at all), never to '*';
+//   - the frame posts only to STARbase's origin as d1-server knows it (GET /d1-links → STARBASE_URL,
+//     targetOriginFrom), through frameTell, never to '*' and never to an origin taken from its own URL
+//     (anyone can write a URL; frame-ancestors only limits framing, not the new-tab path);
 //   - STARbase reads only messages from d1-server's origin, from its own frame or tab, about the record
 //     it opened (readEditMessage).
 
@@ -3365,23 +3469,34 @@ export interface ExpectedEditSource {
 	id: string;
 }
 
-export function editFrameUrl(serverBase: string, collection: string, id: string, parentOrigin: string): string {
-	const base = serverBase.replace(/\/+$/, '');
-	const key = id === NEW_ITEM_ID ? NEW_ITEM_ID : encodeURIComponent(id);
-	return `${base}/admin/d1-edit/${encodeURIComponent(collection)}/${key}?parent=${encodeURIComponent(parentOrigin)}`;
+export interface MessageTarget {
+	postMessage(message: unknown, targetOrigin: string): void;
 }
 
-// The frame's own ?parent=, if it is exactly an http(s) origin (no path, no user, no trailing slash).
-export function parentOriginFrom(search: string): string | null {
-	const raw = new URLSearchParams(search).get('parent');
-	if (!raw) return null;
+export function editFrameUrl(serverBase: string, collection: string, id: string): string {
+	const base = serverBase.replace(/\/+$/, '');
+	const key = id === NEW_ITEM_ID ? NEW_ITEM_ID : encodeURIComponent(id);
+	return `${base}/admin/d1-edit/${encodeURIComponent(collection)}/${key}`;
+}
+
+// The origin the frame may post to: that of GET /d1-links' starbaseUrl (STARBASE_URL), or null when it is
+// unset or not an http(s) address.
+export function targetOriginFrom(starbaseUrl: unknown): string | null {
+	if (typeof starbaseUrl !== 'string' || starbaseUrl.trim() === '') return null;
 	try {
-		const u = new URL(raw);
-		if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-		return u.origin === raw ? raw : null;
+		const u = new URL(starbaseUrl.trim());
+		return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null;
 	} catch {
 		return null;
 	}
+}
+
+// The frame's only way to post: to `target` (the framing page, or window.opener in a new tab) at exactly
+// `targetOrigin`. Without either, nothing is posted, and the frame shows its own "Saved" instead.
+export function frameTell(target: MessageTarget | null | undefined, targetOrigin: string | null, message: EditMessage): boolean {
+	if (!target || !targetOrigin) return false;
+	target.postMessage(message, targetOrigin);
+	return true;
 }
 
 export function editMessage(result: EditResult, collection: string, id: string): EditMessage {
@@ -3437,16 +3552,86 @@ In `packages/d1-ui/src/index.ts`, after the `EditDrawer` component export, add:
 
 ```ts
 export {
-	EDIT_MESSAGE_TYPE, NEW_ITEM_ID, editFrameUrl, editMessage, isEditMessage, parentOriginFrom, readEditMessage,
+	EDIT_MESSAGE_TYPE, NEW_ITEM_ID, editFrameUrl, editMessage, frameTell, isEditMessage, readEditMessage, targetOriginFrom,
 } from './editFrame';
-export type { EditMessage, EditResult, ExpectedEditSource } from './editFrame';
+export type { EditMessage, EditResult, ExpectedEditSource, MessageTarget } from './editFrame';
 export { createFormFields } from './editDrawer';
 ```
 
-Run: `npm test -w @d1/ui && npm run typecheck -w @d1/ui`
-Expected: all pass.
+Run: `npm test -w @d1/ui -- editFrame editDrawer`
+Expected: every test passes except the frame-page check, which passes after Step 4.
 
-- [ ] **Step 3: The Directus module**
+- [ ] **Step 3: The `/d1-links` endpoint**
+
+`core/extensions/d1-links/package.json`:
+
+```json
+{
+  "name": "directus-extension-d1-links",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "/d1-links: where STARbase answers ({ starbaseUrl }): the edit frame's only postMessage target, and Data Studio's \"Open in STARbase\" link. STARBASE_URL, or null while it is unset.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}
+```
+
+`core/extensions/d1-links/index.js`:
+
+```js
+// Directus endpoint: d1-links  (mounted at /d1-links)
+//
+//   GET /d1-links -> { starbaseUrl: string | null }
+//
+// Where STARbase answers, as d1-server's own setting (STARBASE_URL, the same one d1-report's QR codes
+// and links use; spec §3.6). Two readers: the edit frame (d1-edit-frame) posts its messages only to this
+// origin, and the Home module's quiet "Open in STARbase" link (Q12). null while it is unset: the frame
+// then tells nobody, and the link stays hidden. Signed-in users only. No build step (the d1-usage
+// pattern): Directus loads this file as it is.
+
+export function starbaseUrlFrom(env) {
+	const raw = String(env?.STARBASE_URL ?? '').trim().replace(/\/+$/, '');
+	if (!raw) return null;
+	try {
+		const u = new URL(raw);
+		return u.protocol === 'https:' || u.protocol === 'http:' ? raw : null;
+	} catch {
+		return null;
+	}
+}
+
+export function mount(router, env) {
+	router.get('/', (req, res) => {
+		if (!req.accountability?.user) return res.status(401).json({ errors: [{ message: 'Authentication required.' }] });
+		res.set('Cache-Control', 'no-store');
+		return res.json({ starbaseUrl: starbaseUrlFrom(env) });
+	});
+}
+
+export default {
+	id: 'd1-links',
+	handler: (router, { env }) => mount(router, env),
+};
+```
+
+In `core/README.md`, in the **endpoint** row, add after the `d1-usage` entry:
+`, d1-links (/d1-links: { starbaseUrl }, STARBASE_URL or null; the edit frame's postMessage target and Data Studio's "Open in STARbase" link)`.
+
+The preview Directus needs the setting too. Add one line to `tests/ui/starbase/preview-ports.env`:
+
+```
+STARBASE_URL=http://127.0.0.1:5190
+```
+
+Run: `node --test core/extensions/d1-links/index.test.mjs`
+Expected: 5 pass.
+
+- [ ] **Step 4: The Directus module**
 
 ```bash
 mkdir -p core/extensions/d1-edit-frame/src
@@ -3494,7 +3679,7 @@ import EditFramePage from './EditFramePage.vue';
 
 // The form-only record page that STARbase frames (spec §3.4). Step 0 (spec §9, check b) showed that a
 // module page without <private-view> renders with no module bar or navigation. Hidden from the module
-// bar: it is only ever opened by URL, /admin/d1-edit/<collection>/<id>?parent=<STARbase origin>.
+// bar: it is only ever opened by URL, /admin/d1-edit/<collection>/<id>.
 export default defineModule({
 	id: 'd1-edit',
 	name: 'Edit (STARbase)',
@@ -3512,7 +3697,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 // Subpath imports: the pure helpers only, not the kit's Vue components.
 import { buildPatch, createFormFields, formFields, saveErrors, versionChanged, type FieldDef } from '@d1/ui/editDrawer';
-import { editMessage, NEW_ITEM_ID, parentOriginFrom, type EditResult } from '@d1/ui/editFrame';
+import { editMessage, frameTell, NEW_ITEM_ID, targetOriginFrom, type EditResult } from '@d1/ui/editFrame';
 
 // One record in Directus's own form (v-form: every custom interface works), with Save and Cancel and
 // nothing else, for STARbase to frame. The same checks as the kit's EditDrawer: only changed fields
@@ -3521,7 +3706,8 @@ const props = defineProps<{ collection: string; id: string }>();
 
 const api = useApi();
 const fieldsStore = useStores().useFieldsStore();
-const parentOrigin = parentOriginFrom(window.location.search);
+// STARbase's origin as d1-server knows it (GET /d1-links), set on mount; null = tell nobody.
+const targetOrigin = ref<string | null>(null);
 const creating = computed(() => props.id === NEW_ITEM_ID);
 
 const item = ref<Record<string, any> | null>(null);
@@ -3538,13 +3724,14 @@ const hasEdits = computed(() => buildPatch(edits.value) !== null);
 const endpoint = () => `/items/${props.collection}/${encodeURIComponent(props.id)}`;
 const primaryKeyField = computed(() => fields.value.find((f) => f.schema?.is_primary_key)?.field ?? 'id');
 const framed = window.parent !== window;
+// After Save or Cancel: framed and told, STARbase closes the dialog; otherwise this page says what to do.
+const closeHint = computed(() => (framed && targetOrigin.value ? '' : framed ? ' You can close this form.' : ' You can close this tab.'));
 
-// Tell STARbase: the page framing this one, or the STARbase tab that opened it in a new tab. Only to
-// the exact origin from ?parent= (none, or not a valid origin: tell nobody).
+// Tell STARbase: the page framing this one, or (opened as a new tab) the STARbase tab that opened it, and
+// only at STARbase's origin as d1-server knows it (targetOrigin, from GET /d1-links). Without it,
+// frameTell posts nothing and this page says itself that the form can be closed.
 function tell(result: EditResult, id = props.id) {
-	if (!parentOrigin) return;
-	const target: Window | null = framed ? window.parent : window.opener;
-	target?.postMessage(editMessage(result, props.collection, id), parentOrigin);
+	frameTell(framed ? window.parent : window.opener, targetOrigin.value, editMessage(result, props.collection, id));
 }
 
 function messageOf(e: any): string {
@@ -3621,10 +3808,18 @@ function discard() {
 	finish('cancelled');
 }
 
-onMounted(() => {
+onMounted(async () => {
+	void load();
+	// Who to tell: STARbase's origin from d1-server's own setting (GET /d1-links → STARBASE_URL), never from
+	// this page's URL, which anyone can write. Unset, or the endpoint missing: tell nobody.
+	try {
+		const res = await api.get('/d1-links');
+		targetOrigin.value = targetOriginFrom(res.data?.starbaseUrl);
+	} catch {
+		targetOrigin.value = null;
+	}
 	// Rendering at all means Directus has a session here: STARbase stops waiting (its "ready" timeout).
 	tell('ready');
-	void load();
 });
 </script>
 
@@ -3639,8 +3834,8 @@ onMounted(() => {
 		</header>
 
 		<main class="body">
-			<v-notice v-if="done === 'saved'" type="success">Saved.{{ framed ? '' : ' You can close this tab.' }}</v-notice>
-			<v-notice v-else-if="done === 'cancelled'" type="info">Nothing was saved.{{ framed ? '' : ' You can close this tab.' }}</v-notice>
+			<v-notice v-if="done === 'saved'" type="success">Saved.{{ closeHint }}</v-notice>
+			<v-notice v-else-if="done === 'cancelled'" type="info">Nothing was saved.{{ closeHint }}</v-notice>
 			<v-notice v-else-if="loadError" type="danger">{{ loadError }}</v-notice>
 			<v-progress-linear v-else-if="loading" indeterminate />
 			<template v-else-if="item">
@@ -3690,7 +3885,7 @@ In `core/README.md`, in the **module** row of the extensions table, add after `d
 In the line listing the workspace extensions (line 46, beginning `` `d1-home`, `d1-lab-dashboard` ``),
 add `` `d1-edit-frame` ``.
 
-- [ ] **Step 4: Workspace and CI**
+- [ ] **Step 5: Workspace and CI**
 
 - Root `package.json`:
   - add `"core/extensions/d1-edit-frame"` to `workspaces`, after `"core/extensions/d1-home"`;
@@ -3716,37 +3911,44 @@ test('the edit frame module plans the directusUi job', () => {
 
 ```bash
 npm install
+npm test -w @d1/ui && npm run typecheck -w @d1/ui
 npm run typecheck -w directus-extension-d1-edit-frame
 npm run build -w directus-extension-d1-edit-frame
 node --test .github/scripts/ci-plan.test.mjs
 ```
 
 Expected:
-- the typecheck is clean;
+- every `@d1/ui` test passes, the frame-page check included, and the typechecks are clean;
 - `core/extensions/d1-edit-frame/dist/index.js` is written;
 - the ci-plan tests pass.
 
-- [ ] **Step 5: Check it on the preview, as a top-level page**
+- [ ] **Step 6: Check it on the preview, as a top-level page**
 
 ```bash
 npm run build:extensions
 export D1_PREVIEW_NAME=d1-starbase D1_PREVIEW_PORT=18057 D1_PREVIEW_ENV_FILE=tests/ui/starbase/preview-ports.env
-export D1_PREVIEW_OVERLAY="d1-home d1-admin-overview d1-fast-dashboard d1-campaign-ops d1-lab-dashboard d1-project-items d1-usage d1-edit-frame"
+export D1_PREVIEW_OVERLAY="d1-home d1-admin-overview d1-fast-dashboard d1-campaign-ops d1-lab-dashboard d1-project-items d1-usage d1-edit-frame d1-links"
 bash scripts/dev/explorer_preview.sh --stop; bash scripts/dev/explorer_preview.sh
 ```
 
 In the Browser pane, sign in to `http://127.0.0.1:18057/admin` as the admin. Pick a sample id
-with `GET /items/physical_samples?limit=1&fields=sample_id`, then open
-`http://127.0.0.1:18057/admin/d1-edit/physical_samples/<id>?parent=http%3A%2F%2F127.0.0.1%3A5190`.
+with `GET /items/physical_samples?limit=1&fields=sample_id`. Then open
+`http://127.0.0.1:18057/admin/d1-edit/physical_samples/<id>?parent=https%3A%2F%2Fevil.example`, a
+forged `parent` that must change nothing.
 
 Check:
+- `GET http://127.0.0.1:18057/d1-links` answers `{"starbaseUrl":"http://127.0.0.1:5190"}`;
 - `document.querySelectorAll('.module-bar').length` is `0` (use `javascript_tool`);
 - the form's fields are visible (`.v-form .field` count > 0);
-- change one text field and Save. "Saved." appears, and `GET /items/physical_samples/<id>` shows the
-  new value. Put the old value back the same way. This is the copy, so writing to it is allowed;
+- change one text field and Save. "Saved. You can close this tab." appears, and
+  `GET /items/physical_samples/<id>` shows the new value. Put the old value back the same way. This
+  is the copy, so writing to it is allowed;
+- before saving, run `window.opener = { postMessage: (m, o) => (window.__told = [m, o]) }` in
+  `javascript_tool`. After Save, `window.__told[1]` is `'http://127.0.0.1:5190'`: the setting's origin,
+  not the forged one;
 - `http://127.0.0.1:18057/admin/d1-edit/projects/+` shows an empty form with fields.
 
-- [ ] **Step 6: The Directus regression run, then commit**
+- [ ] **Step 7: The Directus regression run, then commit**
 
 ```bash
 CREDS="$PWD/.superpowers/preview-credentials-d1-starbase.txt"
@@ -3756,8 +3958,8 @@ CREDS="$PWD/.superpowers/preview-credentials-d1-starbase.txt"
 Expected: `4 passed`.
 
 ```bash
-git add packages/d1-ui core/extensions/d1-edit-frame core/README.md package.json package-lock.json .github .claude/skills/ci-local/scripts/plan_checks.sh
-git commit -m "feat(edit-frame): a form-only Directus page STARbase frames, and the message protocol both sides check
+git add packages/d1-ui core/extensions/d1-edit-frame core/extensions/d1-links core/README.md tests/ui/starbase/preview-ports.env package.json package-lock.json .github .claude/skills/ci-local/scripts/plan_checks.sh
+git commit -m "feat(edit-frame): a form-only Directus page STARbase frames; it posts only to STARBASE_URL's origin (/d1-links)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git push origin HEAD:feat/explorer-standalone
@@ -3785,7 +3987,7 @@ export function editMode(hostEditor: boolean, formAvailable: () => boolean): Edi
 // apps/starbase/web/src/editor/editor.ts
 export type EditorPhase = 'closed' | 'loading' | 'ready' | 'refused' | 'tab';
 export interface EditorState { phase: EditorPhase; url: string; collection: string; id: string; blocked: boolean }
-export interface EditorDeps { serverBase: string; appOrigin: string; readyTimeoutMs?: number;
+export interface EditorDeps { serverBase: string; readyTimeoutMs?: number;
   openTab(url: string): Window | null; onWindowFocus(cb: () => void): () => void }
 export const READY_TIMEOUT_MS = 8000;
 export function createEditor(deps: EditorDeps): Editor;  // { state, open, attachFrame, onMessage, openInTab, close, done }
@@ -3808,7 +4010,7 @@ const STAR = 'https://starbase.tail54eeb6.ts.net';
 function setup(tab: object | null = { name: 'tab' }) {
 	let focus: (() => void) | null = null;
 	const openTab = vi.fn(() => tab as Window | null);
-	const editor = createEditor({ serverBase: D1, appOrigin: STAR, openTab, onWindowFocus: (cb) => ((focus = cb), () => (focus = null)) });
+	const editor = createEditor({ serverBase: D1, openTab, onWindowFocus: (cb) => ((focus = cb), () => (focus = null)) });
 	const frame = { name: 'frame' };
 	editor.attachFrame(() => frame);
 	return { editor, frame, openTab, focus: () => focus?.() };
@@ -3823,7 +4025,7 @@ describe('the edit dialog', () => {
 		const { editor, frame } = setup();
 		const done = editor.open('physical_samples', 'a/b');
 		expect(editor.state.phase).toBe('loading');
-		expect(editor.state.url).toBe(`${D1}/admin/d1-edit/physical_samples/a%2Fb?parent=${encodeURIComponent(STAR)}`);
+		expect(editor.state.url).toBe(`${D1}/admin/d1-edit/physical_samples/a%2Fb`);
 		editor.onMessage(from(frame, editMessage('ready', 'physical_samples', 'a/b')));
 		expect(editor.state.phase).toBe('ready');
 		editor.onMessage(from(frame, editMessage('saved', 'physical_samples', 'a/b')));
@@ -4038,7 +4240,6 @@ export interface EditorState {
 }
 export interface EditorDeps {
 	serverBase: string;
-	appOrigin: string;
 	readyTimeoutMs?: number;
 	openTab(url: string): Window | null;
 	onWindowFocus(cb: () => void): () => void;
@@ -4073,7 +4274,7 @@ export function createEditor(deps: EditorDeps) {
 
 	function open(collection: string, id: string): Promise<'saved' | 'cancelled'> {
 		if (resolve) finish('cancelled');
-		Object.assign(state, { phase: 'loading', url: editFrameUrl(deps.serverBase, collection, id, deps.appOrigin), collection, id, blocked: false });
+		Object.assign(state, { phase: 'loading', url: editFrameUrl(deps.serverBase, collection, id), collection, id, blocked: false });
 		timer = setTimeout(() => {
 			timer = null;
 			if (state.phase === 'loading') state.phase = 'refused';
@@ -4130,8 +4331,7 @@ import { createEditor, type Editor } from './editor';
 export function createBrowserEditor(serverBase: string): Editor {
 	return createEditor({
 		serverBase,
-		appOrigin: window.location.origin,
-		// Not 'noopener': the form page answers through window.opener, to this exact origin only.
+		// Not 'noopener': the form page answers through window.opener, at STARbase's origin as d1-server knows it (STARBASE_URL) only.
 		openTab: (url) => window.open(url, '_blank'),
 		onWindowFocus: (cb) => {
 			const h = () => cb();
@@ -4980,7 +5180,7 @@ Then call `resize_window({ preset: 'desktop' })`.
 ```bash
 npm run build:extensions
 export D1_PREVIEW_NAME=d1-starbase D1_PREVIEW_PORT=18057 D1_PREVIEW_ENV_FILE=tests/ui/starbase/preview-ports.env
-export D1_PREVIEW_OVERLAY="d1-home d1-admin-overview d1-fast-dashboard d1-campaign-ops d1-lab-dashboard d1-project-items d1-usage d1-edit-frame"
+export D1_PREVIEW_OVERLAY="d1-home d1-admin-overview d1-fast-dashboard d1-campaign-ops d1-lab-dashboard d1-project-items d1-usage d1-edit-frame d1-links"
 bash scripts/dev/explorer_preview.sh --stop; bash scripts/dev/explorer_preview.sh
 CREDS="$PWD/.superpowers/preview-credentials-d1-starbase.txt"
 (cd tests/ui && D1_ROUTES_CREDENTIALS="$CREDS" npx playwright test specs/13-explorer-routes.spec.ts --retries=0)
@@ -4997,21 +5197,17 @@ git push origin HEAD:feat/explorer-standalone
 ```
 
 ---
-### Task 10: Links out of the database (`/d1-links`, "Open in STARbase", report links)
+### Task 10: Links out of the database ("Open in STARbase", report links)
 
 **Files:**
-- Create: `core/extensions/d1-links/package.json`, `core/extensions/d1-links/index.js`, `core/extensions/d1-links/index.test.mjs`
 - Modify: `packages/d1-ui/src/links.ts` (`starbaseUrlFor`, `starbaseUrlOnce`, `resetStarbaseUrl`), `packages/d1-ui/src/links.test.ts`, `packages/d1-ui/src/index.ts`
 - Modify: `core/extensions/d1-home/src/DirectusFrame.vue`
 - Modify: `core/extensions/d1-report/src/render.js`, `core/extensions/d1-report/src/index.js`, `core/extensions/d1-report/src/index.test.mjs`
-- Modify: `core/README.md` (the endpoint row), `tests/ui/starbase/preview-ports.env`
+- Modify: `core/README.md` (the d1-report entry)
 
 **Interfaces:**
+- Consumes: `GET /d1-links` → `{ starbaseUrl }` (Task 6).
 - Produces:
-  - `GET /d1-links` returns `{ starbaseUrl: string | null }` to a signed-in user, and 401 to anyone
-    else;
-  - `export function starbaseUrlFrom(env): string | null` and `export function mount(router, env)`
-    in `d1-links/index.js`;
   - in `@d1/ui`:
     - `starbaseUrlFor(starbaseUrl: string, directusPath: string): string`;
     - `starbaseUrlOnce(api: { get(path: string): Promise<{ data: any }> }): Promise<string | null>`;
@@ -5019,58 +5215,6 @@ git push origin HEAD:feat/explorer-standalone
   - in `d1-report`: `adminRecordUrl(publicUrl, collection, id, starbaseUrl = '')`.
 
 - [ ] **Step 1: Write the failing tests**
-
-`core/extensions/d1-links/index.test.mjs`:
-
-```js
-// Run with: node --test core/extensions/d1-links/index.test.mjs   (CI's lint job runs every core/extensions/*/index.test.mjs)
-import assert from 'node:assert/strict';
-import { test } from 'node:test';
-
-import ext, { mount, starbaseUrlFrom } from './index.js';
-
-function call(env, accountability = { user: 'u1' }) {
-	let handler;
-	mount({ get: (path, fn) => { assert.equal(path, '/'); handler = fn; } }, env);
-	const out = { status: 200, headers: {}, body: undefined };
-	const res = {
-		status(c) { out.status = c; return res; },
-		set(k, v) { out.headers[k] = v; return res; },
-		json(b) { out.body = b; return res; },
-	};
-	handler({ accountability }, res);
-	return out;
-}
-
-test('starbaseUrlFrom: an http(s) address without its trailing slash, else null', () => {
-	assert.equal(starbaseUrlFrom({ STARBASE_URL: 'https://starbase.tail54eeb6.ts.net/' }), 'https://starbase.tail54eeb6.ts.net');
-	assert.equal(starbaseUrlFrom({ STARBASE_URL: '  ' }), null);
-	assert.equal(starbaseUrlFrom({}), null);
-	assert.equal(starbaseUrlFrom(undefined), null);
-	assert.equal(starbaseUrlFrom({ STARBASE_URL: 'javascript:alert(1)' }), null);
-	assert.equal(starbaseUrlFrom({ STARBASE_URL: 'not a url' }), null);
-});
-
-test('GET /d1-links tells a signed-in user where STARbase is', () => {
-	const out = call({ STARBASE_URL: 'https://starbase.tail54eeb6.ts.net' });
-	assert.equal(out.status, 200);
-	assert.deepEqual(out.body, { starbaseUrl: 'https://starbase.tail54eeb6.ts.net' });
-	assert.equal(out.headers['Cache-Control'], 'no-store');
-});
-
-test('unset: null, so Data Studio hides its link', () => {
-	assert.deepEqual(call({}).body, { starbaseUrl: null });
-});
-
-test('not signed in: 401', () => {
-	assert.equal(call({ STARBASE_URL: 'https://s.example' }, null).status, 401);
-	assert.equal(call({ STARBASE_URL: 'https://s.example' }, { user: null }).status, 401);
-});
-
-test('mounts at /d1-links', () => {
-	assert.equal(ext.id, 'd1-links');
-});
-```
 
 Append to `packages/d1-ui/src/links.test.ts`. Add `resetStarbaseUrl`, `starbaseUrlFor` and
 `starbaseUrlOnce` to its import from `./links`.
@@ -5140,71 +5284,13 @@ test('GET /label and /labels go to STARbase when STARBASE_URL is set', async () 
 
 Run:
 ```bash
-node --test core/extensions/d1-links/index.test.mjs
 npm test -w @d1/ui -- links.test
 (cd core/extensions/d1-report && npm ci --no-audit --no-fund && npm test)
 ```
-Expected: FAIL. `d1-links/index.js` is missing, the `@d1/ui` names are not exported, and
+Expected: FAIL. The `@d1/ui` names are not exported, and
 d1-report's new tests fail.
 
-- [ ] **Step 2: The `/d1-links` endpoint**
-
-`core/extensions/d1-links/package.json`:
-
-```json
-{
-  "name": "directus-extension-d1-links",
-  "version": "1.0.0",
-  "type": "module",
-  "description": "/d1-links: where STARbase answers ({ starbaseUrl }), for Data Studio's \"Open in STARbase\" link. STARBASE_URL, or null while it is unset.",
-  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
-  "directus:extension": {
-    "type": "endpoint",
-    "path": "index.js",
-    "source": "index.js",
-    "host": "^11.0.0"
-  }
-}
-```
-
-`core/extensions/d1-links/index.js`:
-
-```js
-// Directus endpoint: d1-links  (mounted at /d1-links)
-//
-//   GET /d1-links -> { starbaseUrl: string | null }
-//
-// Where STARbase answers, for the Data Studio side: the Home module's quiet "Open in STARbase" link
-// reads it (spec §3.6, Q12). It is STARBASE_URL from the environment, the same setting d1-report's QR
-// codes and links use, and null while it is unset (the link then stays hidden). Signed-in users only.
-// No build step (the d1-usage pattern): Directus loads this file as it is.
-
-export function starbaseUrlFrom(env) {
-	const raw = String(env?.STARBASE_URL ?? '').trim().replace(/\/+$/, '');
-	if (!raw) return null;
-	try {
-		const u = new URL(raw);
-		return u.protocol === 'https:' || u.protocol === 'http:' ? raw : null;
-	} catch {
-		return null;
-	}
-}
-
-export function mount(router, env) {
-	router.get('/', (req, res) => {
-		if (!req.accountability?.user) return res.status(401).json({ errors: [{ message: 'Authentication required.' }] });
-		res.set('Cache-Control', 'no-store');
-		return res.json({ starbaseUrl: starbaseUrlFrom(env) });
-	});
-}
-
-export default {
-	id: 'd1-links',
-	handler: (router, { env }) => mount(router, env),
-};
-```
-
-- [ ] **Step 3: The kit helpers and the Directus link**
+- [ ] **Step 2: The kit helpers and the Directus link**
 
 Append to `packages/d1-ui/src/links.ts`:
 
@@ -5275,7 +5361,7 @@ const starbaseHref = computed(() => (starbaseUrl.value ? starbaseUrlFor(starbase
 .d1-open-starbase:hover { text-decoration: underline; }
 ```
 
-- [ ] **Step 4: Reports and label redirects learn `STARBASE_URL`**
+- [ ] **Step 3: Reports and label redirects learn `STARBASE_URL`**
 
 In `core/extensions/d1-report/src/render.js`, replace `adminRecordUrl` and its comment with:
 
@@ -5341,16 +5427,8 @@ route that link through `adminRecordUrl(…, starbaseUrl)` as well.
 
 In `core/README.md`, in the **endpoint** row, change the `d1-report` description to end
 "…`/label` and `/labels` redirect to the labels page (STARbase's once `STARBASE_URL` is set)".
-Then add after the `d1-usage` entry:
-`, d1-links (/d1-links: { starbaseUrl } for Data Studio's "Open in STARbase" link; STARBASE_URL or null)`.
 
-Add one line to `tests/ui/starbase/preview-ports.env`:
-
-```
-STARBASE_URL=http://127.0.0.1:5190
-```
-
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 4: Run the tests**
 
 ```bash
 node --test core/extensions/*/index.test.mjs
@@ -5361,7 +5439,7 @@ npm run typecheck -w directus-extension-d1-home
 
 Expected: every test passes, the typechecks are clean, and the d1-report build succeeds.
 
-- [ ] **Step 6: The Directus regression run, and see the link**
+- [ ] **Step 5: The Directus regression run, and see the link**
 
 ```bash
 npm run build:extensions
@@ -5375,11 +5453,11 @@ CREDS="$PWD/.superpowers/preview-credentials-d1-starbase.txt"
 Expected: `4 passed`. In the Browser pane, open `http://127.0.0.1:18057/admin/home/samples` as the
 member. Under the sidebar, "Open in STARbase" links to `http://127.0.0.1:5190/samples`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add core/extensions/d1-links core/extensions/d1-home/src/DirectusFrame.vue core/extensions/d1-report/src packages/d1-ui core/README.md tests/ui/starbase/preview-ports.env
-git commit -m "feat(starbase): /d1-links and Data Studio's Open in STARbase; report links and label redirects follow STARBASE_URL
+git add core/extensions/d1-home/src/DirectusFrame.vue core/extensions/d1-report/src packages/d1-ui core/README.md
+git commit -m "feat(starbase): Data Studio's Open in STARbase; report links and label redirects follow STARBASE_URL
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git push origin HEAD:feat/explorer-standalone
@@ -5994,6 +6072,9 @@ docker compose logs --tail 50 starbase                   # expect the node to lo
 7. Sign out of STARbase: Data Studio is signed out too.
 8. On a phone (if it is on the tailnet): the top bar and menu, a list as cards, a record page.
 9. Real Safari / iOS, if anyone has it: steps 1–3. Step 0 tested Chromium only (spec §9).
+
+The frame posts only to `STARBASE_URL`'s origin (`GET /d1-links`). If that is unset or wrong, Save still
+works, but the dialog does not close on its own: the form says "Saved. You can close this form."
 
 If step 3 shows "The form didn't open here", check that the frame setting reached Directus:
 `curl -sI https://d1-server.tail54eeb6.ts.net/admin/ | grep -i content-security-policy` must contain
