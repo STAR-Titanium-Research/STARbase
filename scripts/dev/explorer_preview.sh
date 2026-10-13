@@ -5,11 +5,11 @@
 #   3. create two local test users ON THE COPY (an admin and a Lab Member, random passwords written to the
 #      git-ignored .superpowers/preview-credentials.txt),
 #   4. start Directus (live's exact image and asset settings) on a merged extensions folder (live's built
-#      extensions, with this worktree's D1_PREVIEW_OVERLAY extensions in their place, default d1-home and
+#      extensions, with this worktree's D1_PREVIEW_OVERLAY extensions in their place, default d1-edit-frame, d1-links and
 #      d1-admin-overview), published on 127.0.0.1:18055 only, and leave it running.
 # The copy has no uploaded files (an empty preview-only volume), so picture thumbnails show their placeholders;
-# sample drawings need no files. Stop and remove everything with --stop. Build d1-home first:
-#   npm run build -w directus-extension-d1-home
+# sample drawings need no files. Stop and remove everything with --stop. Build the extensions first:
+#   npm run build:extensions
 #
 # Usage: bash scripts/dev/explorer_preview.sh [--stop]   (from the repo root)
 # Options (environment):
@@ -28,7 +28,7 @@ MAIN_CHECKOUT="${D1_MAIN_CHECKOUT:-D:\\Users\\CMBE Admn 3214022001\\Documents\\G
 NAME="${D1_PREVIEW_NAME:-d1-preview}"; NET="$NAME"; PG="${NAME}-pg"; DX="${NAME}-directus"; PORT="${D1_PREVIEW_PORT:-18055}"
 LIVE_PG=d1-database-postgres-1; LIVE_DX=d1-database-directus-1
 FILES_VOL="${NAME}-uploads"
-OVERLAY="${D1_PREVIEW_OVERLAY:-d1-home d1-admin-overview}"
+OVERLAY="${D1_PREVIEW_OVERLAY:-d1-edit-frame d1-links d1-admin-overview}"
 ENV_FILE="${D1_PREVIEW_ENV_FILE:-}"
 EXTRA_EXT="${D1_PREVIEW_EXTRA_EXT:-}"
 PUBLIC="${D1_PREVIEW_PUBLIC_URL:-http://127.0.0.1:$PORT}"
@@ -49,7 +49,7 @@ copy_ext() { tar -C "$1" --exclude=node_modules --exclude=src -cf - . | tar -C "
 if [[ "${1:-}" == "--stop" ]]; then
   stop; docker volume rm "$FILES_VOL" >/dev/null 2>&1; rm -rf "$CREDS" "$EXT_DIR"; echo "preview stopped"; exit 0
 fi
-[[ -f core/extensions/d1-home/dist/index.js ]] || abort "build d1-home first (npm run build -w directus-extension-d1-home)"
+[[ -f core/extensions/d1-edit-frame/dist/index.js ]] || abort "build the extensions first (npm run build:extensions)"
 
 stop
 # --- merged extensions: live's, then this worktree's overlay extensions replacing theirs

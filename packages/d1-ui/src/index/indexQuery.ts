@@ -91,7 +91,7 @@ function searchClause(def: IndexDef, q: string): Record<string, unknown> | null 
 }
 
 // Params for GET /items/<collection>. `fields` and `sort` are arrays (axios sends them as
-// fields[]=a&fields[]=b, which Directus accepts, and the d1-home pages already do the same);
+// fields[]=a&fields[]=b, which Directus accepts, and the STARbase pages already do the same);
 // `filter` is a JSON string, which Directus parses from the query string. A chip whose field
 // the page does not offer is dropped, so a hand-edited URL cannot send Directus an unknown field.
 // `readable` is the set of collections the user may read (null = not known: every relation is

@@ -90,7 +90,7 @@ function regularTicks(x0, x1, plotW, targetPx = 55) {
 }
 
 // Static (non-interactive) SVG force/RPM envelope, for the print report. Mirrors
-// d1-force-dashboard/src/ForceChart.vue's math (env kind + crop-window shading,
+// packages/force-plotting/src/ForceChart.vue's math (env kind + crop-window shading,
 // regular x-ticks) at a fixed small size — no ResizeObserver/hover needed since
 // this is print-only.
 function miniEnvelopeSvg(series, { color = '#1d4ed8', width = 300, height = 118, xUnit = 's', yUnit = 'N', cropStart, cropEnd } = {}) {

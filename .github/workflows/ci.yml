@@ -294,10 +294,8 @@ jobs:
         run: |
           npm test -w force-app-desktop
           npm run typecheck -w force-app-desktop
-      - name: Build the web app (desktop base) and the Directus force dashboard
-        run: |
-          npm run build:web:desktop
-          npm run build:extension
+      - name: Build the web app (desktop base)
+        run: npm run build:web:desktop
 
   # The Explorer pages (docs/superpowers/specs/2026-10-06-explorer-pages-design.md): the shared kit's
   # tests and typecheck, and a build of every Directus extension that imports it. Without the
@@ -328,9 +326,8 @@ jobs:
           npm run typecheck -w @d1/directus-host
           npm test -w @d1/starbase-pages
           npm run typecheck -w @d1/starbase-pages
-      - name: Typecheck the Explorer pages, the lab dashboard and the campaign interface
+      - name: Typecheck the edit frame, the lab dashboard and the campaign interface
         run: |
-          npm run typecheck -w directus-extension-d1-home
           npm run typecheck -w directus-extension-d1-edit-frame
           npm run typecheck -w directus-extension-d1-lab-dashboard
           npm run typecheck -w directus-extension-d1-campaign-ops

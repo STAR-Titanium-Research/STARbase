@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The Explorer sidebar (N1b decision 1): an icon rail that picks a section, and a panel beside it
 // with that section's lists and each collection's saved views nested under it. It sits in the
-// host's navigation column; the host supplies the ExplorerHost (ExplorerView in d1-home) and this
+// host's navigation column; the host supplies the ExplorerHost (STARbase's ExplorerView) and this
 // component only reads it.
 //
 // The panel follows the page (the section holding the current link is shown), and the rail can

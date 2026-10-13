@@ -1,5 +1,6 @@
 // node --test .github/scripts/ci-plan.test.mjs   (run by CI's lint job)
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { test } from 'node:test';
 import { IMAGES, JOBS, PY_SERVICES, plan } from './ci-plan.mjs';
 
@@ -89,5 +90,13 @@ test('the edit frame module plans the directusUi job', () => {
 test('a Caddyfile change plans the directusUi job (the CSP test reads the Caddyfile)', () => {
   for (const f of ['infra/caddy/Caddyfile']) {
     assert.equal(plan([f], EXT).directusUi, true, f);
+  }
+});
+
+test('no job watches an extension that no longer exists', () => {
+  for (const [job, paths] of Object.entries(JOBS)) {
+    for (const p of paths) {
+      if (p.startsWith('core/extensions/')) assert.ok(existsSync(new URL(`../../${p}`, import.meta.url)), `${job} watches missing ${p}`);
+    }
   }
 });
