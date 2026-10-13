@@ -46,7 +46,7 @@ test('buildIssue rejects a blank title', () => {
 test('buildIssue never turns a scope into a label, whatever the client sends', () => {
     const r = buildIssue({ ...base, area: 'data-entry', scope: 'manufacturing_operations' });
     assert.ok(r.labels.every((l) => !l.startsWith('collection:') && !l.startsWith('page:')));
-    assert.equal(r.labels.length, 4);
+    assert.equal(r.labels.length, 3);
 });
 
 test('buildIssue puts the area and a valid scope in the body', () => {
