@@ -80,16 +80,29 @@ export interface RunSummary {
 /** A snoozed request: `snoozed_until` is an ISO 8601 instant, or "after_recording". */
 export interface SnoozedRequest extends RigRequest { snoozed_until: string }
 
-/** GET /rig-tests/pending. `busy`: the recorder is recording, saving or recovering a capture. */
-export interface PendingList { requests: RigRequest[]; snoozed: SnoozedRequest[]; busy: boolean }
+export type RelayState = 'ok' | 'unreachable' | 'not_configured' | 'unknown' | 'signed_out' | 'signin_rejected';
+const RELAY_STATES: readonly RelayState[] = ['ok', 'unreachable', 'not_configured', 'unknown', 'signed_out', 'signin_rejected'];
+/** The recorder's relay state; anything this build doesn't know reads as "not configured". */
+export function parseRelay(x: unknown): RelayState {
+	return RELAY_STATES.includes(x as RelayState) ? (x as RelayState) : 'not_configured';
+}
 
-export type RelayState = 'ok' | 'unreachable' | 'not_configured' | 'unknown' | 'token_rejected';
+/** GET /rig-tests/pending. `busy`: the recorder is recording, saving or recovering a capture.
+ *  `session` / `hardwareOk` / `relay` tell the session sync when to send or refresh the D1 token. */
+export interface PendingList {
+	requests: RigRequest[]; snoozed: SnoozedRequest[]; busy: boolean;
+	session: boolean; hardwareOk: boolean | null; relay: RelayState;
+}
 
 export interface Eligibility {
 	eligible: boolean;
 	rig_id: string;
 	reason?: string;
 	relay: RelayState;
+	/** The recorder holds an unexpired D1 access token from this app. */
+	session: boolean;
+	/** The last hardware check: on the rig (true), not (false), not checked yet (null). */
+	hardwareOk: boolean | null;
 }
 
 // ---- parsing (the backend may be an older or newer build than this UI expects) -----------------
@@ -145,10 +158,15 @@ export function parseRequests(raw: unknown): RigRequest[] {
 
 /** GET /rig-tests/pending. An older backend sends only `requests`: no snoozed list, not busy. */
 export function parsePending(raw: unknown): PendingList {
-	const r = (raw ?? {}) as { requests?: unknown; snoozed?: unknown; busy?: unknown };
+	const r = (raw ?? {}) as { requests?: unknown; snoozed?: unknown; busy?: unknown; session?: unknown; hardware_ok?: unknown; relay?: unknown };
 	const rawSnoozed = (Array.isArray(r.snoozed) ? r.snoozed : []).filter((x) => x && typeof x.number === 'number');
 	const snoozed = parseRequestList(rawSnoozed).map((x, i) => ({ ...x, snoozed_until: str(rawSnoozed[i].snoozed_until) }));
-	return { requests: parseRequests(raw), snoozed, busy: r.busy === true };
+	return {
+		requests: parseRequests(raw), snoozed, busy: r.busy === true,
+		session: r.session === true,
+		hardwareOk: typeof r.hardware_ok === 'boolean' ? r.hardware_ok : null,
+		relay: parseRelay(r.relay),
+	};
 }
 
 export function parseHistory(raw: unknown): RunSummary[] {
@@ -348,7 +366,8 @@ export function relayInfo(relay: RelayState | undefined): RelayInfo {
 		case 'ok': return { text: 'Request relay reachable', tone: 'ok', icon: 'cloud_done' };
 		case 'unreachable': return { text: 'Request relay unreachable: new requests cannot arrive', tone: 'bad', icon: 'cloud_off' };
 		case 'unknown': return { text: 'Request relay not checked yet', tone: 'dim', icon: 'cloud_sync' };
-		case 'token_rejected': return { text: 'The relay rejected this PC\'s rig token: it must match the one set on the server', tone: 'bad', icon: 'key_off' };
+		case 'signed_out': return { text: 'Sign in to D1 online to receive rig-test requests', tone: 'dim', icon: 'login' };
+		case 'signin_rejected': return { text: "D1 didn't accept your sign-in: sign out and back in", tone: 'bad', icon: 'key_off' };
 		default: return { text: 'Request relay not configured on this PC', tone: 'dim', icon: 'cloud_off' };
 	}
 }

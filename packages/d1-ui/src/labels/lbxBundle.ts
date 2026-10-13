@@ -1,6 +1,7 @@
-// The .lbx files of a label selection: one .lbx per label copy (a P-touch Editor file holds one label), named
-// `<code>-<n>.lbx`, bundled into `labels-<date>.zip`; a single label is a bare .lbx. Also the rule for when
-// the page offers the download at all.
+// The .lbx files of a label selection: one .lbx per sample (a P-touch Editor file holds one label and no copy
+// count: copies are set in the P-touch Print dialog), named `<code>.lbx`, or `<code> (x3).lbx` when more than one
+// copy was asked for. Several samples are bundled into `labels-<date>.zip`; one sample is a bare .lbx. Also the
+// rule for when the page offers the download at all.
 import { zipSync, strToU8 } from 'fflate';
 import { buildLbxLabelXml, buildPropXml, LBX_TAPE_MM } from './lbx';
 import { isPrintableSample } from './sample';
@@ -16,7 +17,7 @@ export interface LbxDownload {
 	filename: string;
 	mime: string;
 	bytes: Uint8Array;
-	// .lbx files in it (1 is a bare .lbx, more are a .zip of them)
+	// .lbx files in it, one per sample (1 is a bare .lbx, more are a .zip of them)
 	labels: number;
 	// Samples left out because they have no code or no valid short id (as the print leaves them out).
 	invalid: number;
@@ -41,7 +42,7 @@ export function zipLbx(labelXml: string, propXml: string, mtime: Date): Uint8Arr
 
 // `entries` are the selected samples with their copy counts. null when there is nothing to download.
 export function buildLbxDownload(entries: LabelEntry[], t: LabelTemplate, contactEmail: string | null, now: Date = new Date()): LbxDownload | null {
-	const files: { name: string; stem: string; bytes: Uint8Array }[] = [];
+	const files: { name: string; bytes: Uint8Array }[] = [];
 	const used = new Set<string>();
 	let invalid = 0;
 	for (const { sample, copies } of entries) {
@@ -51,18 +52,18 @@ export function buildLbxDownload(entries: LabelEntry[], t: LabelTemplate, contac
 		}
 		const xml = buildLbxLabelXml(sample, t, contactEmail);
 		const bytes = zipLbx(xml, buildPropXml(sample.code, now), now);
-		for (let n = 1; n <= copies; n++) {
-			let name = `${lbxFileStem(sample.code)}-${n}.lbx`;
-			for (let k = 2; used.has(name.toLowerCase()); k++) name = `${lbxFileStem(sample.code)}-${n}_${k}.lbx`;
-			used.add(name.toLowerCase());
-			files.push({ name, stem: lbxFileStem(sample.code), bytes });
-		}
+		const stem = lbxFileStem(sample.code);
+		// The file cannot carry a copy count; the name shows how many were asked for.
+		const count = Math.floor(copies);
+		const suffix = count > 1 ? ` (x${count})` : '';
+		let name = `${stem}${suffix}.lbx`;
+		for (let k = 2; used.has(name.toLowerCase()); k++) name = `${stem}_${k}${suffix}.lbx`;
+		used.add(name.toLowerCase());
+		files.push({ name, bytes });
 	}
 	if (!files.length) return null;
-	if (files.length === 1) {
-		// A single label is the bare file, named after the sample (no copy number).
-		return { filename: `${files[0].stem}.lbx`, mime: LBX_MIME, bytes: files[0].bytes, labels: 1, invalid };
-	}
+	// One sample is the bare file, whatever its copy count.
+	if (files.length === 1) return { filename: files[0].name, mime: LBX_MIME, bytes: files[0].bytes, labels: 1, invalid };
 	const zip: Record<string, [Uint8Array, { level: 0; mtime: Date }]> = {};
 	// The .lbx files are zips already: stored, not deflated again.
 	for (const f of files) zip[f.name] = [f.bytes, { level: 0, mtime: now }];

@@ -2,8 +2,10 @@
 
 import json
 import os
+import time
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,6 +17,7 @@ from app.rig_test.poller import StateFile
 
 from .test_rig_test_support import FakeRelay, issue, wait_for
 
+SESSION_TOKEN = "test-d1-token-abcdef"
 ASK = "steps:\n  - ask: Is the light on?"
 LOCK_MESSAGE = "a rig test is running (issue #231); cancel it from the rig-test window"
 
@@ -37,8 +40,7 @@ def rig(monkeypatch, tmp_path, fake):
     monkeypatch.setenv("FORCE_APP_RIG_TEST_ALLOW_SIM", "1")
     monkeypatch.setenv("FORCE_APP_BUG_REPORT_RELAY_URL", "http://test-relay.invalid")
     monkeypatch.setenv("FORCE_APP_RIG_ID", "rig-1")
-    monkeypatch.setenv("FORCE_APP_RIG_TEST_TOKEN", "test-rig-token")
-    monkeypatch.setattr(relay, "_config_dir", relay._config_dir)  # configure() below sets it
+    relay.set_session(SESSION_TOKEN, (time.time() + 3600) * 1000)
     monkeypatch.setattr(routes, "_w", routes._w)  # undone after the test
     monkeypatch.setattr(runner_mod, "_runner", runner_mod._runner)
     routes.configure(
@@ -52,6 +54,7 @@ def rig(monkeypatch, tmp_path, fake):
     yield wiring
     wiring.runner.cancel()
     wiring.runner.join()
+    relay.clear_session()
 
 
 @pytest.fixture
@@ -211,7 +214,7 @@ def test_pending_reports_busy_and_lists_the_snoozed_requests(client, rig, fake, 
     fake.requests = [issue(231, ASK), issue(232, ASK), issue(233, ASK)]
     rig.poller.poll_once()
     body = client.get("/rig-tests/pending").json()
-    assert set(body) == {"requests", "snoozed", "busy"}
+    assert set(body) == {"requests", "snoozed", "busy", "session", "hardware_ok", "relay"}
     assert body["busy"] is False and body["snoozed"] == []
     client.post("/rig-tests/232/snooze", json={"until": "2999-01-01T10:00:00"})
     client.post("/rig-tests/233/snooze", json={"until": "after_recording"})
@@ -261,7 +264,9 @@ def test_a_damaged_state_file_does_not_break_pending(client, rig, tmp_path):
         config_dir=str(tmp_path / "cfg"),
     )
     r = client.get("/rig-tests/pending")
-    assert r.status_code == 200 and r.json() == {"requests": [], "snoozed": [], "busy": False}
+    assert r.status_code == 200
+    body = r.json()
+    assert (body["requests"], body["snoozed"], body["busy"]) == ([], [], False)
 
 
 def test_the_run_carries_the_title_and_url_of_its_issue(client, rig, fake):
@@ -631,3 +636,155 @@ def test_state_file_survives_a_restart(rig, fake, client, tmp_path):
     client.post("/rig-tests/231/snooze", json={"until": "2999-01-01T10:00:00"})
     again = StateFile(str(tmp_path / "cfg" / "rig_tests_state.json"))
     assert "231" in again.get("snoozes") and again.get("pending")[0]["number"] == 231
+
+
+# ---- the operator's D1 session ---------------------------------------------------------------
+
+
+def test_put_and_delete_session_drive_the_pending_flags(client, rig):
+    relay.clear_session()
+    assert client.get("/rig-tests/pending").json()["session"] is False
+    r = client.put(
+        "/rig-tests/session",
+        json={"access_token": "new-d1-token", "expires_at": (time.time() + 600) * 1000},
+    )
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert client.get("/rig-tests/pending").json()["session"] is True
+    assert client.delete("/rig-tests/session").json() == {"ok": True}
+    assert client.get("/rig-tests/pending").json()["session"] is False
+
+
+@pytest.mark.parametrize("token", ["", "has space", "x" * 5000])
+def test_an_unusable_session_token_is_422_and_changes_nothing(client, rig, token):
+    r = client.put("/rig-tests/session", json={"access_token": token, "expires_at": 1})
+    assert r.status_code == 422
+    assert not token or token not in r.text
+    assert relay._current_token() == SESSION_TOKEN
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"access_token": "distinct-secret-abc123"},
+        ["distinct-secret-abc123"],
+        {"access_token": "distinct-secret-abc123", "expires_at": True},
+        {"access_token": "distinct-secret-abc123", "expires_at": "soon"},
+    ],
+)
+def test_a_malformed_session_body_is_422_without_echoing_the_token(client, rig, body):
+    r = client.put("/rig-tests/session", json=body)
+    assert r.status_code == 422
+    assert "distinct-secret-abc123" not in r.text
+    assert relay._current_token() == SESSION_TOKEN
+
+
+def test_a_non_json_session_body_is_422(client, rig):
+    r = client.put(
+        "/rig-tests/session",
+        content=b"distinct-secret-abc123",
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 422 and "distinct-secret-abc123" not in r.text
+    assert relay._current_token() == SESSION_TOKEN
+
+
+def test_no_route_ever_returns_the_session_token(client, rig):
+    client.put(
+        "/rig-tests/session",
+        json={"access_token": "secret-d1-token-xyz", "expires_at": (time.time() + 600) * 1000},
+    )
+    for path in (
+        "/rig-tests/eligibility",
+        "/rig-tests/pending",
+        "/rig-tests/run",
+        "/rig-tests/history",
+    ):
+        assert "secret-d1-token-xyz" not in client.get(path).text
+
+
+def test_signed_out_pc_is_not_eligible_and_never_polls(client, rig, fake, monkeypatch):
+    relay.clear_session()
+    fake.requests = [issue(231)]
+    monkeypatch.setattr(
+        relay, "list_requests", lambda: pytest.fail("the relay must not be asked while signed out")
+    )
+    rig.poller.poll_once()
+    body = client.get("/rig-tests/eligibility").json()
+    assert body["eligible"] is False and body["reason"] == relay.SIGNED_OUT
+    assert body["session"] is False and body["hardware_ok"] is True
+    pending = client.get("/rig-tests/pending").json()
+    assert pending["requests"] == [] and pending["relay"] == "signed_out"
+    assert pending["hardware_ok"] is True
+
+
+def test_hardware_ok_is_null_until_the_first_check(client, rig):
+    assert client.get("/rig-tests/pending").json()["hardware_ok"] is None
+
+
+def test_a_new_token_resets_the_relay_state(client, rig):
+    rig.poller.relay_state = "signin_rejected"
+    client.put(
+        "/rig-tests/session",
+        json={"access_token": "another-token", "expires_at": (time.time() + 600) * 1000},
+    )
+    assert rig.poller.relay_state == "unknown"
+    rig.poller.relay_state = "ok"
+    client.put(
+        "/rig-tests/session",
+        json={"access_token": "another-token", "expires_at": (time.time() + 900) * 1000},
+    )
+    assert rig.poller.relay_state == "ok"  # same token: nothing to reset
+
+
+def test_a_rejection_is_reported_even_though_the_session_was_cleared(client, rig):
+    rig.poller.relay_state = "signin_rejected"
+    relay.clear_session()
+    assert client.get("/rig-tests/pending").json()["relay"] == "signin_rejected"
+    assert client.get("/rig-tests/eligibility").json()["relay"] == "signin_rejected"
+
+
+def test_a_rejection_seen_while_flushing_the_outbox_reaches_pending(client, rig, fake, monkeypatch):
+    """The refusal arrives on the outbox's comment, not on a list call, and the poller never lists
+    once the session is gone: it must still tell the web, or the web re-sends the dead token."""
+    rig.poller._store.outbox_add(231, "### Rig test result: done", "done")
+    monkeypatch.setattr(
+        relay,
+        "post_comment",
+        lambda n, b: relay._call("POST", f"/rig-tests/{n}/comment", {"body": b}),
+    )
+    monkeypatch.setattr(
+        relay.httpx,
+        "request",
+        lambda *a, **k: httpx.Response(403, json={"ok": False, "reason": relay.SIGNIN_REJECTED}),
+    )
+    rig.poller.poll_once()
+    body = client.get("/rig-tests/pending").json()
+    assert body["relay"] == "signin_rejected" and body["session"] is False
+    assert rig.poller._store.get("outbox")  # still queued: the entry was not the problem
+
+
+def test_a_huge_or_non_finite_expiry_is_422_and_changes_nothing(client, rig):
+    before = dict(relay._session)
+    huge = client.put(
+        "/rig-tests/session", json={"access_token": "distinct-secret-abc123", "expires_at": 10**400}
+    )
+    assert huge.status_code == 422 and "distinct-secret-abc123" not in huge.text
+    for literal in ("NaN", "Infinity", "-Infinity"):
+        r = client.put(
+            "/rig-tests/session",
+            content=f'{{"access_token": "distinct-secret-abc123", "expires_at": {literal}}}'.encode(),
+            headers={"content-type": "application/json"},
+        )
+        assert r.status_code == 422 and "distinct-secret-abc123" not in r.text
+    assert relay._session == before and relay._current_token() == SESSION_TOKEN
+
+
+def test_set_session_validates_the_expiry_before_swapping_the_token():
+    relay.clear_session()
+    relay.set_session("first-token", 123.0)
+    with pytest.raises(ValueError):
+        relay.set_session("second-token", float("nan"))
+    with pytest.raises(OverflowError):
+        relay.set_session("second-token", 10**400)
+    assert relay._session == {"token": "first-token", "expires_at": 123.0}
+    relay.clear_session()

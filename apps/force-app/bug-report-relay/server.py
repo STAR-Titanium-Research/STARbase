@@ -18,8 +18,8 @@ Configure via env vars:
     GITHUB_REPO                    "owner/repo", defaults to this monorepo
     RIG_TEST_ALLOWED_LOGINS        comma-separated GitHub logins (case-insensitive) allowed to
                                     request rig tests; empty = rig tests off
-    RIG_TEST_RELAY_TOKEN           shared secret the rig PC sends in the X-Rig-Token header on
-                                    every /rig-tests call; empty = rig tests off
+    DIRECTUS_INTERNAL_URL          where the relay asks Directus who a D1 token belongs to;
+                                    default http://directus:8055 (same Docker network)
 
 Rig test requests (ADR-0012, docs/superpowers/specs/2026-10-11-rig-test-requests-design.md). The
 app on the rig PC polls these; none of them runs anything here:
@@ -36,15 +36,15 @@ app on the rig PC polls these; none of them runs anything here:
 Trust: a command is trusted by its GitHub authorship (who opened the issue and who applied the
 label: both must be allowlisted, since the author can edit the block after the label is on), never
 by who called the relay. Callers are not trusted by network position either: every /rig-tests*
-call, reads included, must carry the shared rig token in X-Rig-Token (constant-time compare), so a
-tailnet host that lacks it can neither read requests nor post a forged result as the App bot. The
-token lives in the relay's env and on the rig PC's config folder, never in the app build. Even
-with the token, every write re-checks that the issue is open, is not a PR, carries the label, was
-opened by an allowlisted login and was labelled by one, and the relay will not edit a comment that
-holds a result marker (the rig only ever edits its progress comment). With
-RIG_TEST_ALLOWED_LOGINS or the token empty, or the App unconfigured, every rig-test endpoint
-answers {"ok": false, "reason": "rig tests not configured"}; a wrong or missing token gets
-HTTP 403 {"ok": false, "reason": "rig token rejected"}.
+call, reads included, must carry the signed-in operator's D1 access token as `Authorization:
+Bearer`, which the relay checks with Directus /users/me (accepted users cached 60 s, by hash) and
+logs the D1 user it belongs to. The token is used for nothing else and never logged. Even signed
+in, every write re-checks that the issue is open, is not a PR, carries the label, was opened by an allowlisted login and was labelled
+by one, and the relay will not edit a comment that holds a result marker. With
+RIG_TEST_ALLOWED_LOGINS empty, or the App unconfigured, every rig-test endpoint answers
+{"ok": false, "reason": "rig tests not configured"}; a missing or refused sign-in gets HTTP 403
+{"ok": false, "reason": "D1 sign-in rejected"}, and Directus being unreachable HTTP 503
+{"ok": false, "reason": "D1 unavailable"}.
 
 If any of the App ID / private key / installation ID is missing, /report fails closed with a
 clear "not configured" reason rather than raising — callers should surface that as a runtime
@@ -56,9 +56,10 @@ from __future__ import annotations
 
 import calendar
 import functools
-import hmac
+import hashlib
 import logging
 import os
+import re
 import time
 from typing import Annotated, Literal
 from urllib.parse import parse_qs, quote, urlparse
@@ -73,6 +74,14 @@ GITHUB_API = "https://api.github.com"
 DEFAULT_REPO = "dpremoli/D1-Database"
 
 log = logging.getLogger("bug-report-relay")
+if (
+    not logging.getLogger().handlers
+):  # uvicorn configures only its own loggers; pytest adds its own
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+# httpx logs every request at INFO, which would be a line per Directus and GitHub call.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = FastAPI()
 
@@ -347,18 +356,88 @@ def _author(issue: dict) -> str | None:
 RESULT_MARKER = "<!-- rig-test-result"
 
 
-def _rig_token() -> str:
-    return os.environ.get("RIG_TEST_RELAY_TOKEN", "").strip()
+D1_REJECTED = "D1 sign-in rejected"
+D1_UNAVAILABLE = "D1 unavailable"
+_D1_TTL_S = 60.0
+_D1_CACHE_MAX = 256
+# sha256(token) -> (monotonic expiry, user). Accepted sign-ins only: a refusal is asked again.
+_d1_cache: dict[str, tuple[float, dict]] = {}
+_now = time.monotonic  # the sign-in cache's clock; tests replace it
+# A D1 access token is a JWT: printable ASCII only. Anything else is refused before Directus is asked
+# (httpx would raise on a non-ASCII header value, and the token must not end up in a traceback).
+_BEARER_RE = re.compile(r"[!-~]{1,4096}")
 
 
-def _rig_gate(token: str) -> dict | JSONResponse | None:
-    """Fail closed: no allowlist, no GitHub App or no relay token means no rig-test endpoint does
-    anything. Otherwise the caller must present the shared token (every method, reads too)."""
-    wanted = _rig_token()
-    if not _allowed_logins() or not configured() or not wanted:
+class _D1Unavailable(Exception):  # noqa: N818 - name fixed by the task interface
+    """Directus could not say whether the token is good (down, timeout, 5xx, garbage)."""
+
+
+def _directus_url() -> str:
+    return os.environ.get("DIRECTUS_INTERNAL_URL", "http://directus:8055").rstrip("/")
+
+
+async def _directus_me(token: str) -> dict | None:
+    """The D1 user this access token belongs to, or None when Directus refuses it. Only id and
+    email are asked for: a non-admin may not read their own status, and a suspended user's session
+    can't be refreshed anyway, so it lapses within one access-token lifetime."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            res = await client.get(
+                f"{_directus_url()}/users/me",
+                params={"fields": "id,email"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError:
+        raise _D1Unavailable from None
+    except Exception:  # noqa: BLE001 - e.g. httpx.InvalidURL from a malformed DIRECTUS_INTERNAL_URL
+        raise _D1Unavailable from None
+    if res.status_code in (401, 403):
+        return None
+    if res.status_code != 200:
+        raise _D1Unavailable
+    try:
+        body = res.json()
+    except ValueError:
+        raise _D1Unavailable from None
+    user = body.get("data") if isinstance(body, dict) else None
+    return user if isinstance(user, dict) and user.get("id") else None
+
+
+async def _d1_user(token: str) -> dict | None:
+    key = hashlib.sha256(token.encode()).hexdigest()
+    now = _now()
+    hit = _d1_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    user = await _directus_me(token)
+    if user is not None:
+        _d1_cache.pop(key, None)
+        while len(_d1_cache) >= _D1_CACHE_MAX:
+            _d1_cache.pop(
+                next(iter(_d1_cache))
+            )  # oldest first (dicts keep insertion order)
+        _d1_cache[key] = (now + _D1_TTL_S, user)
+    return user
+
+
+async def _rig_gate(authorization: str, action: str) -> dict | JSONResponse | None:
+    """Fail closed: no allowlist or no GitHub App means no rig-test endpoint does anything.
+    Otherwise the caller must be signed in to D1 (every method, reads too)."""
+    if not _allowed_logins() or not configured():
         return _failure("rig tests not configured")
-    if not hmac.compare_digest(token.encode(), wanted.encode()):
-        return JSONResponse(_failure("rig token rejected"), status_code=403)
+    scheme, _, token = authorization.partition(" ")
+    token = token.strip()
+    if scheme.lower() != "bearer" or not _BEARER_RE.fullmatch(token):
+        return JSONResponse(_failure(D1_REJECTED), status_code=403)
+    try:
+        user = await _d1_user(token)
+    except _D1Unavailable:
+        return JSONResponse(_failure(D1_UNAVAILABLE), status_code=503)
+    if user is None:
+        return JSONResponse(_failure(D1_REJECTED), status_code=403)
+    log.info(
+        "rig-test %s by D1 user %s (%s)", action, user.get("id"), user.get("email")
+    )
     return None
 
 
@@ -465,11 +544,11 @@ _list_cache: dict = {"key": None, "expires": 0.0, "requests": []}
 
 @app.get("/rig-tests")
 @_never_raise
-async def rig_tests(x_rig_token: Annotated[str, Header()] = "") -> dict:
+async def rig_tests(authorization: Annotated[str, Header()] = "") -> dict:
     """Pending rig-test requests, or {"ok": False, "reason": ...}. An issue is listed only if its
     author and the login that most recently applied the label are both allowlisted. Cached for
     30 s."""
-    if (gate := _rig_gate(x_rig_token)) is not None:
+    if (gate := await _rig_gate(authorization, "list")) is not None:
         return gate
     allowed = _allowed_logins()
     if _list_cache["key"] == allowed and time.monotonic() < _list_cache["expires"]:
@@ -542,9 +621,9 @@ class StateRequest(BaseModel):
 @app.post("/rig-tests/{n}/comment")
 @_never_raise
 async def rig_test_comment(
-    n: int, req: CommentRequest, x_rig_token: Annotated[str, Header()] = ""
+    n: int, req: CommentRequest, authorization: Annotated[str, Header()] = ""
 ) -> dict:
-    if (gate := _rig_gate(x_rig_token)) is not None:
+    if (gate := await _rig_gate(authorization, f"comment on #{n}")) is not None:
         return gate
     _, err = await _rig_issue(n)
     if err:
@@ -606,9 +685,11 @@ async def rig_test_edit_comment(
     n: int,
     comment_id: int,
     req: CommentRequest,
-    x_rig_token: Annotated[str, Header()] = "",
+    authorization: Annotated[str, Header()] = "",
 ) -> dict:
-    if (gate := _rig_gate(x_rig_token)) is not None:
+    if (
+        gate := await _rig_gate(authorization, f"edit comment {comment_id} on #{n}")
+    ) is not None:
         return gate
     _, err = await _rig_issue(n)
     if err:
@@ -630,10 +711,10 @@ async def rig_test_edit_comment(
 @app.post("/rig-tests/{n}/state")
 @_never_raise
 async def rig_test_state(
-    n: int, req: StateRequest, x_rig_token: Annotated[str, Header()] = ""
+    n: int, req: StateRequest, authorization: Annotated[str, Header()] = ""
 ) -> dict:
     """Set the one rig-test:<state> label on issue n and remove the others."""
-    if (gate := _rig_gate(x_rig_token)) is not None:
+    if (gate := await _rig_gate(authorization, f"state on #{n}")) is not None:
         return gate
     issue, err = await _rig_issue(n)
     if err:

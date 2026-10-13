@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiResult, RigTestApi } from './rigTestApi';
 import { PENDING_POLL_MS, RUN_POLL_MS, createRigTestStore } from './rigTestStore';
+import { createSessionSync } from './rigTestSession';
 import { saveDialogOpen } from './saveDialogOpen';
 import type { PendingList, RigRequest, RigRun } from './rigTestLogic';
 
 const ok = <T,>(data: T): ApiResult<T> => ({ kind: 'ok', data });
-const pend = (requests: RigRequest[], extra: Partial<PendingList> = {}) => ok<PendingList>({ requests, snoozed: [], busy: false, ...extra });
+const pend = (requests: RigRequest[], extra: Partial<PendingList> = {}) => ok<PendingList>({ requests, snoozed: [], busy: false, session: true, hardwareOk: true, relay: 'ok', ...extra });
 const req = (n: number): RigRequest => ({
 	number: n, title: `Request ${n}`, url: `https://example/${n}`, requested_by: 'dpremoli', created_at: '2026-10-11T12:00:00Z',
 	items: [], estimate_s: { full: 600, automated: 0 }, needs_operator_steps: 2,
@@ -18,7 +19,7 @@ const q = { step: 0, text: 'Did the chip warn?', options: ['Yes', 'No'], expires
 
 function fakeApi(over: Partial<Record<keyof RigTestApi, any>> = {}) {
 	const api = {
-		getEligibility: vi.fn(async () => ok({ eligible: true, rig_id: 'rig', relay: 'ok' as const })),
+		getEligibility: vi.fn(async () => ok({ eligible: true, rig_id: 'rig', relay: 'ok' as const, session: true, hardwareOk: true })),
 		getPending: vi.fn(async () => pend([])),
 		getRun: vi.fn(async () => ok<RigRun | null>(null)),
 		getHistory: vi.fn(async () => ok([])),
@@ -27,6 +28,8 @@ function fakeApi(over: Partial<Record<keyof RigTestApi, any>> = {}) {
 		decline: vi.fn(async () => ok({ ok: true })),
 		answer: vi.fn(async () => ok({ ok: true })),
 		cancelRun: vi.fn(async () => ok({ ok: true })),
+		putSession: vi.fn(async () => ok({ ok: true })),
+		deleteSession: vi.fn(async () => ok({ ok: true })),
 		...over,
 	};
 	return api as typeof api & RigTestApi;
@@ -412,5 +415,80 @@ describe('a run in progress', () => {
 		expect(api.cancelRun).toHaveBeenCalledTimes(1);
 		expect(api.getRun).toHaveBeenCalledTimes(2);
 		store.stop();
+	});
+});
+
+describe('session sync', () => {
+	it('passes each pending answer to the session sync, and stop() releases it', async () => {
+		const session = { sync: vi.fn(async () => {}), release: vi.fn(async () => {}), stamp: vi.fn(() => 7) };
+		const api = fakeApi({ getPending: vi.fn(async () => pend([], { session: false, hardwareOk: true, relay: 'signed_out' })) });
+		const store = createRigTestStore({ api, notify: vi.fn(), now: () => Date.now(), acceptContext: async () => ({ uploadBusy: false }), session });
+		const stop = store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(session.sync).toHaveBeenCalledWith({ session: false, hardwareOk: true, relay: 'signed_out', askedAt: 7 });
+		stop();
+		expect(session.release).toHaveBeenCalledTimes(1);
+	});
+
+	it('a sign-in change re-reads pending right away', async () => {
+		let fire = () => {};
+		const onAuthChange = vi.fn((cb: () => void) => { fire = cb; return () => { fire = () => {}; }; });
+		const api = fakeApi();
+		const store = createRigTestStore({ api, notify: vi.fn(), now: () => Date.now(), acceptContext: async () => ({ uploadBusy: false }), onAuthChange });
+		const stop = store.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(1);
+		fire();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(2);
+		stop();
+		fire(); // unwatched on stop
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.getPending).toHaveBeenCalledTimes(2);
+	});
+
+	it('a refresh after a rejection does not get the fresh token rejected by a stale /pending', async () => {
+		const auth = { token: 'tok-1' };
+		let fire: () => void = () => {};
+		const onAuthChange = (cb: () => void) => { fire = cb; return () => { fire = () => {}; }; };
+		const putCalls: string[] = [];
+		let finishRetryPut: () => void = () => {};
+		const api = fakeApi({
+			putSession: vi.fn((t: string) => {
+				putCalls.push(t);
+				if (t !== 'tok-1-r') return Promise.resolve(ok({ ok: true }));
+				return new Promise((res) => { finishRetryPut = () => res(ok({ ok: true })); });
+			}),
+		});
+		const session = createSessionSync({
+			api,
+			auth: {
+				online: () => true, accessToken: () => auth.token, expiresAt: () => Date.now() + 15 * 60_000,
+				// What the real auth store does: swap the token; its watcher then re-reads /pending.
+				refresh: async () => { auth.token = 'tok-1-r'; queueMicrotask(() => fire()); return true; },
+			},
+			now: () => Date.now(),
+		});
+		const store = createRigTestStore({ api, notify: vi.fn(), now: () => Date.now(), acceptContext: async () => ({ uploadBusy: false }), session, onAuthChange });
+		store.setRecordingPhase(null);
+		const answers = [
+			pend([], { session: false, relay: 'ok' }),               // 1. tok-1 is lent
+			pend([], { session: false, relay: 'signin_rejected' }),  // 2. the relay refused it; the recorder dropped it
+			pend([], { session: false, relay: 'signin_rejected' }),  // 3. the refresh's re-read, answered before the new PUT landed
+			pend([], { session: true, relay: 'ok' }),                // 4. the next tick: the new token is accepted
+		];
+		api.getPending.mockImplementation(async () => answers.shift() ?? pend([]));
+		const stop = store.start();
+		await vi.advanceTimersByTimeAsync(0);                        // 1
+		await vi.advanceTimersByTimeAsync(PENDING_POLL_MS);          // 2, then 3 from the auth change; the retry PUT is held
+		await vi.advanceTimersByTimeAsync(0);
+		expect(putCalls).toEqual(['tok-1', 'tok-1-r']);
+		finishRetryPut();
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(PENDING_POLL_MS);          // 4
+		expect(api.getPending).toHaveBeenCalledTimes(4);
+		expect(api.deleteSession).not.toHaveBeenCalled();
+		expect(putCalls).toEqual(['tok-1', 'tok-1-r']);
+		stop();
 	});
 });

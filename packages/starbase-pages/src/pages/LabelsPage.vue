@@ -159,8 +159,9 @@ async function print(): Promise<void> {
 }
 
 // ---- download for P-touch (.lbx) ----------------------------------------------------------------
-// For the Brother QL-700 with the 62 mm roll: one .lbx per label for P-touch Editor on the PC that has the printer.
-// Same selection and copies as Print; a single label is a bare .lbx, several are one .zip.
+// For the Brother QL-700 with the 62 mm roll: one .lbx per sample for P-touch Editor on the PC that has the printer.
+// Same selection as Print; a .lbx has no copy count (set in P-touch's Print dialog), so the file name carries it.
+// A single sample is a bare .lbx, several are one .zip.
 const showLbx = computed(() => isLbxTemplate(active.value));
 const canLbx = computed(() => showLbx.value && canPrint.value);
 const lbxError = ref('');
@@ -291,7 +292,7 @@ onMounted(() => {
 								Roll printers: in the print dialog choose the roll's paper size ({{ active.pageWidthMm }} mm wide) and 100% scale (no "fit to page").
 							</p>
 							<p v-if="showLbx" class="d1-note hint">
-								Download for P-touch (.lbx): open it in P-touch Editor on the PC with the QL-700, then print. Several labels download as one .zip of .lbx files.
+								One file per sample. Open in P-touch Editor on the PC with the QL-700 and set the number of copies in its Print dialog (the file name shows how many you asked for).
 							</p>
 							<p v-if="lbxError" class="d1-note bad" role="alert">{{ lbxError }}</p>
 							<p v-if="printError" class="d1-note bad" role="alert">{{ printError }}</p>
