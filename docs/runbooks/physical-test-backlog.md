@@ -913,6 +913,18 @@ migration 141 prints about ownerless records.
   size and orientation (portrait, `format="259"`, QL-550 `printerID`) are unconfirmed. If P-touch asks to change the
   paper, or the label comes out rotated, report it. Since the .lbx PR.
 
+- [ ] **B2-S1 — Settings inside Directus, and as a Lab Member.** In Data Studio open **Home**, then go to
+  `/admin/home/settings` (the sidebar's gear is STARbase-only, so type the address, or use More → Settings if
+  Directus's sidebar lists it). The page opens with the Home crumbs and the tab title "Settings". **Appearance** says
+  "Theme is set in your Directus account." and its link opens your Directus account page. **Sidebar** shows
+  "Start collapsed" and "Collapse automatically on narrow windows" both greyed out, each with "Applies in STARbase".
+  **Pinned** lists your pins from the Directus sidebar in order: Move up and Move down reorder them (the sidebar
+  follows), Remove unpins, and **Reset to defaults** asks "Replace your pins with Samples and Projects?" and then
+  leaves exactly Samples and Projects. A pin whose page you cannot read (try one on a collection your role has no
+  access to) is under "No longer available" and Remove clears it. **Forget my list views** and **Clear my history**
+  work. Repeat the Pinned and history parts signed in as a Lab Member: every one of them works. Since explorer
+  sidebar B2 (Settings page, PR pending).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

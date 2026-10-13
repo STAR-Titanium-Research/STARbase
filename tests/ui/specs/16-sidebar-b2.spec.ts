@@ -453,10 +453,13 @@ test('Settings: a failed save says "Couldn\'t save", goes back to the stored val
 });
 
 test('Settings: Move up reorders the sidebar; Reset to defaults (confirmed) leaves Samples, Projects', async ({ browser }) => {
-	const { page, state } = await start(browser, 1280, '/settings');
+	const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+	const page = await context.newPage();
+	const state = await stubD1(context);
+	state.pins.push({ kind: 'page', target: 'operations' });
+	await page.goto(STAR_BASE + '/settings');
+	await expect(page.locator('aside nav.d1-nav')).toBeVisible();
 	const list = page.getByRole('list', { name: 'Pinned pages' });
-	await expect(list.locator('li')).toHaveCount(2);
-	await pinOperations(page);
 	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects', 'Operations']);
 	await expect(list.locator('li .name')).toHaveText(['Samples', 'Projects', 'Operations']);
 
@@ -480,7 +483,7 @@ test('Settings: Move up reorders the sidebar; Reset to defaults (confirmed) leav
 	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects']);
 	await expect(list.locator('li .name')).toHaveText(['Samples', 'Projects']);
 	expect(pinTargets(state)).toEqual(['samples', 'projects']);
-	await page.context().close();
+	await context.close();
 });
 
 test('Settings: a pin that cannot be resolved is listed under "No longer available", and Remove clears it', async ({ browser }) => {
@@ -505,7 +508,7 @@ test('Settings: a pin that cannot be resolved is listed under "No longer availab
 });
 
 test('Settings: Forget my list views and Clear my history', async ({ browser }) => {
-	const { page, state } = await start(browser, 1280, '/settings');
+	const { page, state } = await start(browser, 1280, '/settings', 1000);
 	await page.evaluate(() => {
 		localStorage.setItem('d1.list.samples', '{"view":"cards","density":"roomy"}');
 		localStorage.setItem('starbase.theme', 'dark');
@@ -519,6 +522,6 @@ test('Settings: Forget my list views and Clear my history', async ({ browser }) 
 	await expect(page.getByText('History cleared.')).toBeVisible();
 	expect(state.usage).toContain('POST /d1-usage/clear');
 	// A reviewer's screenshot of the finished page (not part of the assertions): SETTINGS_SHOT=<path>.
-	if (process.env.SETTINGS_SHOT) await page.screenshot({ path: process.env.SETTINGS_SHOT, fullPage: true });
+	if (process.env.SETTINGS_SHOT) { await page.evaluate(() => document.querySelectorAll('main, body').forEach((el) => el.scrollTo(0, 0))); await page.screenshot({ path: process.env.SETTINGS_SHOT }); };
 	await page.context().close();
 });

@@ -38,9 +38,11 @@ async function move(pin: PinRef, delta: -1 | 1, label: string): Promise<void> {
 	spoken.value = `Moved ${label} to position ${at + 1} of ${shown.value.length}`;
 	// The row moves in the DOM, which can drop focus: put it back (on the other button at either end).
 	await nextTick();
-	const row = [...(listBlock.value?.querySelectorAll<HTMLElement>('[data-pin-row]') ?? [])].find((el) => el.dataset.pin === pinKey(pin));
-	const want = row?.querySelector<HTMLButtonElement>(`[data-move="${delta === -1 ? 'up' : 'down'}"]`);
-	(want && !want.disabled ? want : row?.querySelector<HTMLButtonElement>('button:not(:disabled)'))?.focus();
+	const key = pinKey(pin).replace(/["\\]/g, '\\$&');
+	const row = listBlock.value?.querySelector(`[data-pin-row][data-pin="${key}"]`) as HTMLElement | null | undefined;
+	const want = row?.querySelector(`[data-move="${delta === -1 ? 'up' : 'down'}"]`) as HTMLButtonElement | null | undefined;
+	const focus = want && !want.disabled ? want : (row?.querySelector('button:not(:disabled)') as HTMLButtonElement | null | undefined);
+	focus?.focus();
 }
 
 const remove = (pin: PinRef): void => save(() => pins.toggle(pin));
