@@ -8,6 +8,7 @@ export { default as ProjectPage } from './pages/ProjectPage.vue';
 export { default as OperationPage } from './pages/OperationPage.vue';
 export { default as TestPage } from './pages/TestPage.vue';
 export { default as LabelsPage } from './pages/LabelsPage.vue';
+export { default as SettingsPage } from './pages/SettingsPage.vue';
 export { default as IndexRoute } from './pages/IndexRoute.vue';
 export { installUsagePings, pingVisit } from './usagePing';
 export { setPageFrame, usePageFrame } from './frame';

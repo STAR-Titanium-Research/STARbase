@@ -3,8 +3,9 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, openLink, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
+	AppLink, openLink, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
 	detailFacts, detailsCount, hasPassCode, operationDetailBase, operationHeading, operationKind, operationRailFacts, operationSampleCount, type ContentsEntry,
+	pinTargetForRecord,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
 import OperationSamples from './operation/OperationSamples.vue';
@@ -75,6 +76,8 @@ const contents = computed<ContentsEntry[]>(() => {
 });
 
 const openReport = () => openLink(`/d1-report/operation/${encodeURIComponent(props.id)}`, router);
+
+const pin = computed(() => pinTargetForRecord('manufacturing_operations', props.id));
 </script>
 
 <template>
@@ -110,6 +113,8 @@ const openReport = () => openLink(`/d1-report/operation/${encodeURIComponent(pro
 							<RecordLink collection="physical_samples" :id="sample.sample_id">{{ sample.sample_code ? `Sample ${sample.sample_code}` : 'Sample' }}</RecordLink>
 						</template>
 					</template>
+
+					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail :kind="operationKind(op)" :code="code" :plain="!isCode" :facts="railFacts" :contents="contents">

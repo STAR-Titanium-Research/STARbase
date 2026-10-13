@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextRadioIndex, readListPrefs, writeListPrefs } from './listPrefs';
+import { forgetListPrefs, nextRadioIndex, readListPrefs, writeListPrefs } from './listPrefs';
 
 function fakeStorage(initial: Record<string, string> = {}): Storage {
 	const m = new Map(Object.entries(initial));
@@ -71,5 +71,28 @@ describe('nextRadioIndex', () => {
 		expect(nextRadioIndex(3, 1, 'End')).toBe(2);
 		expect(nextRadioIndex(3, 1, 'Enter')).toBeNull();
 		expect(nextRadioIndex(0, 0, 'ArrowRight')).toBeNull();
+	});
+});
+
+describe('forgetListPrefs', () => {
+	it('clears only list-pref keys', () => {
+		const storage = fakeStorage({
+			'd1.list.samples': '{"view":"cards","density":"roomy"}',
+			'd1.list.projects': '{"view":"cards"}',
+			'starbase.theme': 'dark',
+			'd1.listing': 'keep',
+			other: 'x',
+		});
+		forgetListPrefs(storage);
+		expect(storage.getItem('d1.list.samples')).toBeNull();
+		expect(storage.getItem('d1.list.projects')).toBeNull();
+		expect(storage.getItem('starbase.theme')).toBe('dark');
+		expect(storage.getItem('d1.listing')).toBe('keep');
+		expect(storage.getItem('other')).toBe('x');
+		expect(readListPrefs('samples', storage)).toEqual({ view: 'table', density: 'normal' });
+	});
+	it('does nothing without storage, and survives storage that throws', () => {
+		expect(() => forgetListPrefs(null)).not.toThrow();
+		expect(() => forgetListPrefs(throwing())).not.toThrow();
 	});
 });

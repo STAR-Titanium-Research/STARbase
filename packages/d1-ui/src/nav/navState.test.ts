@@ -3,15 +3,15 @@ import { configureLinks, resetLinks, starbaseLinks } from '../links';
 import { linkActive, parseCollapsed } from './navState';
 
 describe('parseCollapsed', () => {
-	it('defaults to Inventory and Resources collapsed', () => {
-		expect(parseCollapsed(null)).toEqual(['inventory', 'resources']);
-		expect(parseCollapsed('not json')).toEqual(['inventory', 'resources']);
-		expect(parseCollapsed('{"a":1}')).toEqual(['inventory', 'resources']);
-		expect(parseCollapsed('[1,2]')).toEqual(['inventory', 'resources']);
+	it('defaults to Inventory and Reference collapsed', () => {
+		expect(parseCollapsed(null)).toEqual(['inventory', 'reference']);
+		expect(parseCollapsed('not json')).toEqual(['inventory', 'reference']);
+		expect(parseCollapsed('{"a":1}')).toEqual(['inventory', 'reference']);
+		expect(parseCollapsed('[1,2]')).toEqual(['inventory', 'reference']);
 	});
 
 	it('reads what the user left, including everything open', () => {
-		expect(parseCollapsed('["resources"]')).toEqual(['resources']);
+		expect(parseCollapsed('["reference"]')).toEqual(['reference']);
 		expect(parseCollapsed('[]')).toEqual([]);
 	});
 });

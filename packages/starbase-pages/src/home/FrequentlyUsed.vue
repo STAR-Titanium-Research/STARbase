@@ -8,11 +8,11 @@ import { pingVisit } from '../usagePing';
 const router = useRouter();
 
 // "Frequently used": the pages, quick actions and records this user opens most, as one card with two
-// lists side by side (they stack when the card is narrow). Six items each, "Show more" up to fifteen;
-// pinned first. Every row has a pin toggle and an x that hides it. A new user, or one with little
-// history, sees suggested pages (tagged) until real use fills the list; an x on a suggestion hides it
-// in this browser only. The menu holds "Clear my history" behind a confirm step; clearing keeps the
-// pins. Only this user's own list is ever shown.
+// lists side by side (they stack when the card is narrow). Six items each, "Show more" up to fifteen.
+// Every row has a pin button (pins are shown in the sidebar only: a pinned row leaves this card) and an
+// x that hides it. A new user, or one with little history, sees suggested pages (tagged) until real use fills the list; an x on a suggestion hides it
+// in this browser only. The menu holds "Clear my history" behind a confirm step; pins are not history
+// and are kept. Only this user's own list is ever shown.
 const { pageList, recordList, loading, loadFailed, error, pin, hide, dismissSuggestion, clear } = useFrequentlyUsed();
 
 const expanded = ref({ pages: false, records: false });
@@ -89,6 +89,11 @@ function keepFocus(ev: Event) {
 	const near = (row?.nextElementSibling ?? row?.previousElementSibling) as HTMLElement | null;
 	(near?.querySelector<HTMLElement>('.name') ?? row?.closest('.list')?.querySelector<HTMLElement>('h3'))?.focus();
 }
+// Pinning takes the row off the list, so focus moves on like it does for the x.
+function onPin(ev: Event, which: 'pages' | 'records', e: UsageEntry) {
+	keepFocus(ev);
+	void pin(which, e);
+}
 // x on a used item hides it (saved on the server); on a suggestion it only dismisses it here.
 function remove(ev: Event, which: 'pages' | 'records', e: UsageEntry) {
 	keepFocus(ev);
@@ -142,10 +147,8 @@ function openedElsewhere(e: UsageEntry) {
 							<button
 								type="button"
 								class="icon-btn pin"
-								:class="{ on: e.pinned }"
 								:aria-label="`Pin ${e.label}`"
-								:aria-pressed="e.pinned"
-								@click="pin('pages', e)"
+								@click="onPin($event, 'pages', e)"
 							><span aria-hidden="true">📌</span></button>
 							<button
 								type="button"
@@ -172,10 +175,8 @@ function openedElsewhere(e: UsageEntry) {
 							<button
 								type="button"
 								class="icon-btn pin"
-								:class="{ on: e.pinned }"
 								:aria-label="`Pin ${e.label}`"
-								:aria-pressed="e.pinned"
-								@click="pin('records', e)"
+								@click="onPin($event, 'records', e)"
 							><span aria-hidden="true">📌</span></button>
 							<button
 								type="button"
@@ -228,11 +229,10 @@ ul { list-style: none; margin: 0; padding: 0; }
 .icon-btn:focus-visible, .name:focus-visible, .more:focus-visible, .text-btn:focus-visible, .menu-btn:focus-visible {
 	outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px;
 }
-/* An unpinned pin is a ghost until the row is hovered or the button focused; a pinned one is lit. */
+/* The pin button is a ghost until the row is hovered or the button focused. */
 .pin { filter: grayscale(1); opacity: 0.35; font-size: 12px; }
 .row:hover .pin, .pin:focus-visible { opacity: 0.8; }
-.pin.on { filter: none; opacity: 1; }
-/* No hover on a touch screen: the toggle rests at full strength (still grey until it is on). */
+/* No hover on a touch screen: the button rests at full strength. */
 @media (hover: none) { .pin { opacity: 1; } }
 .more { margin-top: 6px; padding: 2px 0; font: inherit; font-size: var(--fs-sm); font-weight: 600; cursor: pointer; border: 0; background: none; color: var(--d1-accent, var(--theme--primary)); }
 .more:hover { text-decoration: underline; }

@@ -13,7 +13,8 @@ export const LIST_VIEWS: readonly ListView[] = ['table', 'cards'];
 export const DENSITIES: readonly Density[] = ['compact', 'normal', 'roomy'];
 export const DEFAULT_LIST_PREFS: Readonly<ListPrefs> = { view: 'table', density: 'normal' };
 
-export const listPrefsKey = (slug: string): string => `d1.list.${slug}`;
+const KEY_PREFIX = 'd1.list.';
+export const listPrefsKey = (slug: string): string => `${KEY_PREFIX}${slug}`;
 
 function browserStorage(): Storage | null {
 	try {
@@ -47,6 +48,22 @@ export function writeListPrefs(slug: string, prefs: ListPrefs, storage: Storage 
 		storage?.setItem(listPrefsKey(slug), JSON.stringify({ view: prefs.view, density: prefs.density }));
 	} catch {
 		// private mode or blocked storage: the choice just is not remembered
+	}
+}
+
+// Settings → Index pages → "Forget my list views": removes every list's saved view and density, and only
+// those (the keys under this module's prefix), so the next visit to each list starts at the defaults.
+export function forgetListPrefs(storage: Storage | null = browserStorage()): void {
+	try {
+		if (!storage) return;
+		const keys: string[] = [];
+		for (let i = 0; i < storage.length; i++) {
+			const k = storage.key(i);
+			if (k && k.startsWith(KEY_PREFIX)) keys.push(k);
+		}
+		for (const k of keys) storage.removeItem(k);
+	} catch {
+		// blocked storage: nothing was remembered, so nothing is forgotten
 	}
 }
 

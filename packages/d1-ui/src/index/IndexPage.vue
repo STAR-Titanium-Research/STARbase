@@ -23,6 +23,9 @@ import DataTable from '../components/DataTable.vue';
 import EditDrawer from '../components/EditDrawer.vue';
 import LoadState from '../components/LoadState.vue';
 import NotVisible from '../components/NotVisible.vue';
+import PinToggle from '../components/PinToggle.vue';
+import { pinTargetForIndex } from '../components/pinTarget';
+import { canonicalPath } from '../links';
 import PageShell from '../components/PageShell.vue';
 import SegmentedControl from '../components/SegmentedControl.vue';
 import { useRequestGate } from '../composables/useRequestGate';
@@ -170,6 +173,13 @@ watch(
 onBeforeUnmount(() => cardGate.cancel());
 
 const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
+
+// ---- pin ------------------------------------------------------------------------------------
+// The header's Pin toggle pins the saved view when one is open, else the page. A saved view that is
+// not available (deleted, or not the person's to see) is not pinnable, and the page is not offered
+// in its place: the toggle would then say something other than what is shown.
+const pinTarget = computed(() => (bookmarkUnavailable.value ? null : pinTargetForIndex(canonicalPath(route.path), state.value.bookmark)));
+const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.value.find((b) => b.id === state.value.bookmark)?.bookmark ?? props.def.title) : props.def.title));
 </script>
 
 <template>
@@ -182,6 +192,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 			<div class="head">
 				<span class="range" role="status">{{ rangeText(state.page, rows.length, total) }}</span>
 				<span class="spacer" />
+				<PinToggle v-if="pinTarget" :target="pinTarget" :label="pinLabel" />
 				<button v-if="def.selectAction" type="button" class="btn" :disabled="!sel.picked.value.length" @click="sel.run">
 					{{ def.selectAction.label }}{{ sel.picked.value.length ? ` (${sel.picked.value.length})` : '' }}
 				</button>
