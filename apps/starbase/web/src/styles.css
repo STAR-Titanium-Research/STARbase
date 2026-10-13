@@ -34,3 +34,9 @@ body {
 .sb-or { margin: 0; text-align: center; color: var(--theme--foreground-subdued); }
 .sb-error { margin: 0; color: var(--theme--danger); }
 .sb-hint { margin: 0; font-size: 12px; color: var(--theme--foreground-subdued); }
+
+/* Phone (< 768 px, spec §3.3): the pages' side padding (PageShell reads --content-padding) shrinks so a
+   record page fits 375 px with no sideways scroll. */
+@media (max-width: 767px) {
+	:root { --content-padding: 16px; }
+}
