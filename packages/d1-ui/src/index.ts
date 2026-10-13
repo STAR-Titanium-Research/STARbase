@@ -113,7 +113,8 @@ export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser
 export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';
-export { isFinderShortcut, isModalOpen } from './finder/finderNav';
+export { isFinderShortcut, isModalOpen, shouldOpenFinder } from './finder/finderNav';
+export { useFinderShortcut } from './finder/useFinderShortcut';
 export { default as ScanResultCard } from './finder/ScanResultCard.vue';
 export { isScanStarted, normalizeScan, displayText, resolveLabel } from './finder/scan';
 export type { ScanApi, ScanOutcome, FailReason } from './finder/scan';

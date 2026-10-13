@@ -60,3 +60,23 @@ export function isFinderShortcut(e: { key: string; ctrlKey: boolean; metaKey: bo
 export function isTypingKey(e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean }): boolean {
 	return e.key.length === 1 && e.key !== ' ' && !e.ctrlKey && !e.metaKey && !e.altKey;
 }
+
+// A Directus drawer or dialog being open means the user is in the middle of a form: Ctrl K does not
+// pull the finder over it. Directus mounts every open drawer and dialog into #dialog-outlet (empty
+// otherwise; checked in Directus 11.17), plus any other aria-modal dialog that is not the finder. Not
+// `.v-overlay.active` (at narrow widths Directus's own navigation drawer is an "active" absolute overlay
+// whenever the nav is shown) and not `.v-dialog .content` (that wrapper is always in the DOM).
+const MODAL_SELECTOR = '#dialog-outlet > *, [role="dialog"][aria-modal="true"]:not(.d1-finder)';
+
+// The keydown decision of the finder shortcut: should this press open the finder? It also keeps the
+// browser's own Ctrl K (focus the search bar) away on every finder shortcut, whether or not the finder
+// then opens, as the Directus frame always did: that is why it calls preventDefault.
+export function shouldOpenFinder(
+	e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; preventDefault(): void },
+	finderOpen: boolean,
+	doc: { querySelector(selector: string): unknown },
+): boolean {
+	if (!isFinderShortcut(e)) return false;
+	e.preventDefault();
+	return !finderOpen && !isModalOpen(doc, MODAL_SELECTOR);
+}
