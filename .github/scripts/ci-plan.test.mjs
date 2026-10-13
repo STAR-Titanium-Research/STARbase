@@ -85,3 +85,9 @@ test('every image has a dockerfile and no internal fields leak into the output',
 test('the edit frame module plans the directusUi job', () => {
   assert.equal(plan(['core/extensions/d1-edit-frame/src/EditFramePage.vue'], EXT).directusUi, true);
 });
+
+test('a Caddyfile change plans the directusUi job (the CSP test reads the Caddyfile)', () => {
+  for (const f of ['infra/caddy/Caddyfile']) {
+    assert.equal(plan([f], EXT).directusUi, true, f);
+  }
+});

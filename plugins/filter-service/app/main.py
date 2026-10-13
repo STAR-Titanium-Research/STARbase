@@ -36,21 +36,31 @@ LRU_CAP = int(os.environ.get("CACHE_LRU", "4"))
 
 app = FastAPI(title="d1-filter-service")
 
-# CORS for the standalone Force App (apps/force-app/web), which
-# calls this service from its own origin. `expose_headers` is
-# essential: the browser reads X-Filter-Skipped / X-Filter-Stride
-# off the response; cross-origin those are hidden unless exposed.
-_cors_origins = [
-    o.strip() for o in os.environ.get("FILTER_CORS_ORIGINS", "").split(",") if o.strip()
-]
-if _cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_cors_origins,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
-        expose_headers=["X-Filter-Skipped", "X-Filter-Ms", "X-Filter-Stride"],
-    )
+
+# CORS for the standalone apps (Force App: Bearer token; STARbase: the Directus session cookie), which call
+# this service from their own origins. `expose_headers` is essential: the browser reads X-Filter-Skipped /
+# X-Filter-Stride off the response; cross-origin those are hidden unless exposed.
+def cors_options(origins_env: str) -> dict | None:
+    """CORSMiddleware options for the comma-separated FILTER_CORS_ORIGINS, or None for none.
+
+    Credentials are allowed: STARbase calls with the Directus session cookie (ADR-0013), which this
+    service forwards to Directus. The Force App sends a Bearer token instead, which is not harmed.
+    Origins are exact; a '*' is dropped (a wildcard must never be combined with credentials)."""
+    origins = [o.strip() for o in origins_env.split(",") if o.strip() and o.strip() != "*"]
+    if not origins:
+        return None
+    return {
+        "allow_origins": origins,
+        "allow_credentials": True,
+        "allow_methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Authorization", "Content-Type"],
+        "expose_headers": ["X-Filter-Skipped", "X-Filter-Ms", "X-Filter-Stride"],
+    }
+
+
+_cors = cors_options(os.environ.get("FILTER_CORS_ORIGINS", ""))
+if _cors:
+    app.add_middleware(CORSMiddleware, **_cors)
 
 _lru: OrderedDict[str, Cache] = OrderedDict()
 # The filter maths runs in the threadpool (a multi-second chain must not freeze the event loop

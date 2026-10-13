@@ -19,6 +19,7 @@ echo "# changed files against $base: $(wc -l <<<"$files")"
 # shellcheck disable=SC2086
 echo "pre-commit run --files $(tr '\n' ' ' <<<"$files")"
 echo "bash tests/phase0_smoke.sh"
+has '^(docker-compose\.yml|\.env\.example|infra/(caddy|tailscale)/)' && echo "node --test tests/starbase_compose.test.mjs && npm test -w starbase-web -- csp   # CI: lint, directus-ui"
 
 has '^(core/extensions/(d1-geometry-preview|d1-report)/|packages/starbase-pages/src/|scripts/sync_geometry\.sh)' && {
   echo "bash scripts/sync_geometry.sh --check"

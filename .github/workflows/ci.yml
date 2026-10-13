@@ -87,6 +87,9 @@ jobs:
       - name: Extension endpoint tests
         if: ${{ !cancelled() }}
         run: node --test core/extensions/*/index.test.mjs
+      - name: "STARbase compose wiring (parse-only)"
+        if: ${{ !cancelled() }}
+        run: node --test tests/starbase_compose.test.mjs
       # d1-ask-db's and d1-report's own suites run in the `extensions` job, after their npm ci.
       - name: CI plan tests
         if: ${{ !cancelled() }}

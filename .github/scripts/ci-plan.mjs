@@ -23,9 +23,10 @@ export const JOBS = {
     'apps/force-app/web/', 'apps/force-app/desktop/', 'packages/force-plotting/', 'packages/d1-ui/',
     'core/extensions/d1-force-dashboard/', ...WORKSPACE_ROOT,
   ],
+  // infra/caddy/: apps/starbase/web/src/csp.test.ts reads the Caddyfile (the :8090 CSP and the d1-edit COOP).
   directusUi: [
     'packages/d1-ui/', 'packages/fast-plotting/', 'packages/directus-host/', 'packages/starbase-pages/', 'packages/force-plotting/',
-    'apps/starbase/web/', 'core/extensions/d1-home/', 'core/extensions/d1-edit-frame/', 'core/extensions/d1-lab-dashboard/',
+    'apps/starbase/web/', 'infra/caddy/', 'core/extensions/d1-home/', 'core/extensions/d1-edit-frame/', 'core/extensions/d1-lab-dashboard/',
     'core/extensions/d1-composition-bar/', 'core/extensions/d1-campaign-ops/',
     'core/extensions/d1-project-items/', 'core/extensions/d1-fast-dashboard/', ...WORKSPACE_ROOT,
   ],

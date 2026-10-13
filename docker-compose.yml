@@ -98,11 +98,19 @@ services:
       ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASSWORD:?Set DIRECTUS_ADMIN_PASSWORD in .env (openssl rand -hex 32)}
       # Public URL used for link generation; override in .env for production.
       PUBLIC_URL: ${DIRECTUS_PUBLIC_URL:-http://localhost:80}
-      # CORS for the standalone Force App (apps/force-app/web). It runs on its OWN origin and
-      # calls Directus (/items, /assets, /auth) cross-origin with Bearer tokens, so Directus
-      # must echo CORS headers for that origin. Comma-separate multiple origins in .env.
+      # CORS for the standalone apps on their own origins: the Force App (apps/force-app/web, Bearer
+      # tokens) and STARbase (apps/starbase/web, the Directus session cookie, ADR-0013), each from its own
+      # variable. An unset STARBASE_ORIGIN adds nothing. Comma-separate several Force App origins in .env.
       CORS_ENABLED: "true"
-      CORS_ORIGIN: ${FORCE_APP_ORIGIN:-http://localhost:5180}
+      CORS_ORIGIN: ${FORCE_APP_ORIGIN:-http://localhost:5180}${STARBASE_ORIGIN:+,${STARBASE_ORIGIN}}
+      CORS_CREDENTIALS: "true"
+      # STARbase frames the form-only edit page (/admin/d1-edit/…, spec §3.4); no other origin may.
+      CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS: "'self'${STARBASE_ORIGIN:+ ${STARBASE_ORIGIN}}"
+      # true behind the HTTPS tailnet entry (runbook step 3); false keeps plain-HTTP local use signed in.
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-false}"
+      # STARbase's address for report QR codes and links, the label redirects and Data Studio's "Open in
+      # STARbase" (d1-report, d1-links; spec §3.6). Unset: the Directus Home module.
+      STARBASE_URL: ${STARBASE_URL:-}
       # Auto-load local extensions (the actor-identity audit hook).
       EXTENSIONS_AUTO_RELOAD: "true"
       # Thumbnails of the force figures (frm_fz PNGs, ~6,100 x 5,900 px, ~20 MB) for the Explorer's
@@ -321,9 +329,10 @@ services:
     environment:
       DIRECTUS_URL: http://directus:8055
       CACHE_LRU: "4"
-      # CORS for the standalone Force App: it calls /filter/* cross-origin with a Bearer token
-      # (forwarded to Directus for asset authz) and reads the X-Filter-* response headers.
-      FILTER_CORS_ORIGINS: ${FORCE_APP_ORIGIN:-http://localhost:5180}
+      # CORS for the standalone apps: the Force App calls /filter/* with a Bearer token, STARbase with the
+      # Directus session cookie (credentials allowed, exact origins only); both are forwarded to Directus
+      # for asset authz. The X-Filter-* response headers are exposed.
+      FILTER_CORS_ORIGINS: ${FORCE_APP_ORIGIN:-http://localhost:5180}${STARBASE_ORIGIN:+,${STARBASE_ORIGIN}}
     healthcheck:
       test:
         - "CMD"
@@ -352,8 +361,8 @@ services:
     environment:
       DIRECTUS_URL: http://directus:8055
       OCTREE_ROOT: /srv/octrees
-      # CORS for the standalone Force App, which calls /diag/* cross-origin with a Bearer token.
-      DIAG_CORS_ORIGINS: ${FORCE_APP_ORIGIN:-http://localhost:5180}
+      # CORS for the standalone apps (Force App: Bearer; STARbase: the session cookie, credentials allowed).
+      DIAG_CORS_ORIGINS: ${FORCE_APP_ORIGIN:-http://localhost:5180}${STARBASE_ORIGIN:+,${STARBASE_ORIGIN}}
     volumes:
       - ./infra/octrees:/srv/octrees:ro   # read base.d1an off the same mount Caddy serves
     healthcheck:
@@ -452,13 +461,36 @@ services:
     # same-origin proxy — it runs on the host because it needs the DAQ hardware, not in a container.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      # d1-server's origin as STARbase calls it: Caddy's :8090 site answers /config.json and builds the CSP from it.
+      D1_SERVER_ORIGIN: ${D1_SERVER_ORIGIN:-https://d1-server.tail54eeb6.ts.net}
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./infra/octrees:/srv/octrees:ro          # Potree octrees, served same-origin (Phase 2)
       - ./infra/force-app-updates:/srv/force-app-updates:ro   # Electron auto-update feed
       - ./apps/force-app/web/dist:/srv/force-app:ro   # standalone Force App SPA, served at /app/
+      - ./apps/starbase/web/dist:/srv/starbase:ro   # STARbase SPA, served on :8090 (not published; the starbase device proxies to it)
       - caddy-data:/data
       - caddy-config:/config
+    networks: [d1net]
+
+  # STARbase's own tailnet device (ADR-0013, spec §3.7): https://starbase.<tailnet>.ts.net → proxy:8090.
+  # Opt-in profile, so the stack still starts without its auth key:
+  #   docker compose --profile starbase up -d starbase        (docs/runbooks/starbase.md, step 4)
+  starbase:
+    image: tailscale/tailscale:stable
+    profiles: ["starbase"]
+    restart: unless-stopped
+    depends_on: [proxy]
+    environment:
+      TS_HOSTNAME: starbase
+      TS_AUTHKEY: ${STARBASE_TS_AUTHKEY:-}
+      TS_EXTRA_ARGS: --advertise-tags=tag:starbase
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/starbase-serve.json
+    volumes:
+      - starbase-ts-state:/var/lib/tailscale
+      - ./infra/tailscale:/config:ro
     networks: [d1net]
 
   # One-off indexer for the SMB archive (`make index-archive`). Opt-in profile so a plain
@@ -485,6 +517,7 @@ volumes:
   directus-uploads:
   caddy-data:
   caddy-config:
+  starbase-ts-state:
   ollama-models:
   # In-flight recording backups (multi-GB raw D1RW files, auto-purged after
   # BACKUP_RETENTION_HOURS). Named so they survive `docker compose up --force-recreate`.
