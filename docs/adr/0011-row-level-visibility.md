@@ -1,6 +1,8 @@
 # ADR-0011 — Row-level visibility: people see the records they are involved in
 
-- **Status:** Accepted (2026-10-07; the owner's decisions are recorded below)
+- **Status:** Accepted (2026-10-07; the owner's decisions are recorded below). **Amended by [ADR-0014](./0014-record-access.md) (2026-10-13):** a Who has access list and Restricted records, read visibility
+  materialised in readers tables; Ask-DB, d1-trace and the project rollup are closed (migrations 165 to 169); `core/roles.json` is deleted; the Ask-DB, d1-trace and machine-user
+  rows below describe the state at 2026-10-07.
 - **Date:** 2026-10-06 (proposed), 2026-10-07 (accepted)
 - **Deciders:** Maintainer + Claude (Phase 9 RBAC hardening; Explorer pages track)
 
@@ -270,16 +272,16 @@ Two schema changes make the filters expressible:
 
 | Path | Under this ADR |
 |---|---|
-| `d1-trace` endpoint | Already correct: SQL functions find ids, then every record is re-read through `ItemsService`. Unreadable relatives show as "N not visible to you" |
+| `d1-trace` endpoint | Already correct: SQL functions find ids, then every record is re-read through `ItemsService`. Unreadable relatives show as "N not visible to you" (ADR-0014: now a boolean per group and "some records hidden", never a count) |
 | `d1-report` endpoints | `ItemsService` checks, then root-knex `v_*` views only for ids shown readable. The views also join `projects`, so the sample report blanks `project_code`, `project_name` and the document number unless the caller can read that project (a record can be visible through its sample or campaign while its project is not). The operation and test reports read the project through `ItemsService` and were already correct |
 | `project_rollup` (cache table read by `d1-project-items`) | Lab Member read is limited to the project's PI and investigators. The Explorer project page reads the real collections instead |
-| Ask-DB (`llm_readonly` Postgres role) | **Unchanged: known gap** (below) |
+| Ask-DB (`llm_readonly` Postgres role) | **Unchanged: known gap** (below). *Closed by ADR-0014 / migration 168 (row-level security keyed on the role)* |
 | `directus_files` / `/assets` | Unchanged: known gap (below) |
-| Machine users (Operator / Researcher / Administrator roles, `core/roles.json`) | Unchanged: crawler, workers and equipment nodes need everything |
+| Machine users (Operator / Researcher / Administrator roles, `core/roles.json`) | Unchanged: crawler, workers and equipment nodes need everything. *ADR-0014: `core/roles.json`, `core/permissions.json` and `core/apply.sh` are deleted; machine users are Administrator users* |
 
 ## Known gaps (accepted)
 
-- **Ask-DB.** The `llm_readonly` role (ADR-0009) reads every lab table, so a question typed into
+- **Ask-DB (closed by ADR-0014, migration 168).** The `llm_readonly` role (ADR-0009) read every lab table, so a question typed into
   Ask-DB can return rows the asking user cannot open elsewhere. The owner accepted this for now.
   Revisit by restricting Ask-DB to Lab Admins, or by a scoped mode (the "access table" in
   "Alternatives considered" is the escape hatch). Not changed here.
@@ -394,7 +396,7 @@ Two schema changes make the filters expressible:
 - ADR-0002 (Directus as a swappable adapter), ADR-0005 (RBAC structure; Phase 9 row filter),
   ADR-0009 (Ask-DB read-only role)
 - `scripts/access_rules.json`, `scripts/gen_access_rules.py`, `scripts/configure_users_and_policies.sql`,
-  `core/roles.json`
+  `core/roles.json` (deleted by ADR-0014)
 - `db/migrations/20260703000060_people_table.sql`, `20260703000061_people_repoint.sql`,
   `20260703000062_people_directus_meta.sql`, `20260622000029_sample_co_owners.sql`,
   `20260623000030_project_investigators.sql`, `20260710000087_campaign_redesign.sql`,

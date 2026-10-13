@@ -56,6 +56,12 @@ export const relCode = (v: any): string | null => (v && typeof v === 'object' ? 
 export const hiddenSampleCount = (junction: any[] | null | undefined): number =>
 	(junction ?? []).filter((j) => j && relId(j.sample_id, 'sample_id') === null).length;
 
+// What the pages say about samples they may not see. No numbers: a count would tell a reader how many records they cannot
+// see, which for a Restricted record is itself information (A1a decision 15; the d1-trace flags are booleans for the same reason).
+export const HIDDEN_SAMPLES_TEXT = 'Some samples in this campaign are hidden from you.';
+export const HIDDEN_SAMPLES_UNIT = '+ some hidden';
+export const UNPLACED_TEXT = 'Some operations and tests belong to samples you cannot see, so they have no row.';
+
 export interface OverviewInput {
 	samples?: any[];
 	operations?: any[];

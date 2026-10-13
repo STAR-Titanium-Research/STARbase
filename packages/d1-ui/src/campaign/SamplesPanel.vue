@@ -9,6 +9,7 @@ import RecordLink from '../components/RecordLink.vue';
 import Section from '../components/Section.vue';
 import PickerBox from './PickerBox.vue';
 import { forbiddenWriteMessage, inheritCampaignProject } from './assign';
+import { HIDDEN_SAMPLES_TEXT } from './rollup';
 import { LIST_CAP, type SectionState } from '../composables/useSections';
 
 // The campaign's samples (the `campaign_samples` junction, plus samples that only appear through an
@@ -149,7 +150,7 @@ async function remove(id: string, code?: string | null) {
 			</table>
 			<p v-else-if="!hiddenCount" class="d1-cempty">No samples yet.</p>
 			<p v-if="hiddenCount" class="d1-cempty">
-				{{ hiddenCount }} {{ hiddenCount === 1 ? 'sample' : 'samples' }} not visible to you.
+				{{ HIDDEN_SAMPLES_TEXT }}
 			</p>
 			<p v-if="rows.length > LIST_CAP" class="d1-ccap">Showing the first {{ LIST_CAP }} of {{ rows.length }} samples. The matrix above has them all.</p>
 		</LoadState>

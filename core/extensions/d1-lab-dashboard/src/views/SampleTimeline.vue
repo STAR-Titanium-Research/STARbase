@@ -15,14 +15,14 @@
 							<template v-if="s.through_hidden"> · via a sample you cannot see</template>
 						</span>
 					</li>
-					<li v-if="data.hidden.stock_origins" class="d1-tl-hidden">{{ hiddenText(data.hidden.stock_origins) }}</li>
+					<li v-if="data.hidden.stock_origins" class="d1-tl-hidden">{{ hiddenText() }}</li>
 				</ul>
 			</section>
 
 			<section v-if="ancestors.length || data.hidden.ancestors">
 				<h4>Ancestors</h4>
 				<ul>
-					<li v-if="data.hidden.ancestors" class="d1-tl-hidden">{{ hiddenText(data.hidden.ancestors) }}</li>
+					<li v-if="data.hidden.ancestors" class="d1-tl-hidden">{{ hiddenText() }}</li>
 					<li
 						v-for="a in ancestors"
 						:key="a.sample_id"
@@ -49,7 +49,7 @@
 			</section>
 
 			<section>
-				<h4>Operations and tests ({{ data.events.length + data.hidden.events }})</h4>
+				<h4>Operations and tests ({{ data.events.length }}{{ data.hidden.events ? ' and some hidden' : '' }})</h4>
 				<ul>
 					<li v-for="e in data.events" :key="e.id" class="d1-tl-node d1-tl-event">
 						<span class="d1-tl-date">{{ formatDate(e.date) }}</span>
@@ -58,7 +58,7 @@
 						<span v-if="e.status" class="d1-tl-sub">{{ e.status }}</span>
 						<span v-else-if="e.sequence !== null" class="d1-tl-sub">#{{ e.sequence }}</span>
 					</li>
-					<li v-if="data.hidden.events" class="d1-tl-hidden">{{ hiddenText(data.hidden.events) }}</li>
+					<li v-if="data.hidden.events" class="d1-tl-hidden">{{ hiddenText() }}</li>
 					<li v-if="!data.events.length && !data.hidden.events" class="d1-tl-empty">No operations or tests recorded.</li>
 				</ul>
 			</section>
@@ -78,7 +78,7 @@
 							<template v-if="d.through_hidden"> · via a sample you cannot see</template>
 						</span>
 					</li>
-					<li v-if="data.hidden.descendants" class="d1-tl-hidden">{{ hiddenText(data.hidden.descendants) }}</li>
+					<li v-if="data.hidden.descendants" class="d1-tl-hidden">{{ hiddenText() }}</li>
 				</ul>
 			</section>
 
@@ -151,8 +151,9 @@ function relation(n: any): string {
 	return parts.join(', ');
 }
 
-function hiddenText(n: number): string {
-	return `${n} ${n === 1 ? 'item is' : 'items are'} not visible to you`;
+// d1-trace says only whether a group has records the caller cannot read (a boolean), never how many.
+function hiddenText(): string {
+	return 'Some records are not visible to you';
 }
 
 function formatDate(d: string | null): string {

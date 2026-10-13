@@ -44,6 +44,16 @@ Projects & campaigns
   campaign_samples             M2M: samples in a campaign
   project_rollup               read-only cache of v_project_rollup, rebuilt by trigger
 
+Record access (A1a)
+  sample_access                who has access to a sample, by person (view / edit)
+  operation_access             the same for a manufacturing operation (view / edit)
+  test_access                  the same for a test session (view / edit)
+  campaign_access              the same for a campaign (view / edit)
+  project_access               the same for a project (view / investigator)
+  sample_readers, operation_readers, test_readers, campaign_readers, project_readers, campaign_sample_readers
+                               derived: which login may read each record (kept by triggers; never edited)
+  operation_open_to_all        derived: the ownerless operations every member may read
+
 Labels
   label_templates              printable label layouts (sheet or roll) for the Explorer labels page
   label_settings               singleton: the lab contact email printed into every label's QR code
@@ -164,6 +174,7 @@ The central entity. Everything else points to or from here.
 | `export_controlled` | BOOLEAN | ITAR/ECJU flag; drives RBAC visibility |
 | `owner_person_id` | UUID FK | References `people.person_id`; the owner. Owner and co-owners may edit the sample; only the owner may delete it ([ADR-0011](adr/0011-row-level-visibility.md)) |
 | `co_owners_legacy` | TEXT | Legacy comma-separated co-owner e-mails from the AppSheet import (renamed from `co_owners`, migration `…140`). The live co-owners are the `sample_co_owners` rows, shown in Directus as the `co_owners` M2M field. Absent on databases that already dropped the column |
+| `restricted` | BOOLEAN NOT NULL DEFAULT false | Restricted record (migration `…165`, see "Record access" below). Hidden and read-only in Directus; changed only by the record-access endpoint |
 | `version` | INTEGER | OCC version counter (incremented by trigger on UPDATE) |
 | `updated_at` | TIMESTAMPTZ | Auto-updated by OCC trigger |
 
@@ -377,6 +388,58 @@ Indexes: `file_fingerprints_content_idx` on `content_sha256` (duplicate and copy
 
 ---
 
+### Record access: `sample_access`, `operation_access`, `test_access`, `campaign_access`, `project_access`
+
+Who has access to one record, by person (migration `…165`, A1a; spec
+`docs/superpowers/specs/2026-10-12-record-access-design.md`). There is one table per record type so
+that each parent has its own hidden `access` list for the Directus row filters. Keyed by **person**
+(`people.person_id`), not by login, so a person with no login can be listed; the grant starts working
+when an admin links the login (`people.user_id`). The five tables have the same shape. They are
+written only through the record-access endpoint and are audited (migration `…121` trigger); they have
+no OCC `version`. In A1a they are stored and hidden in Directus; the rules that read them arrive in
+later migrations, so until then they change nothing anyone can see.
+
+| Column | Type | Description |
+|---|---|---|
+| `access_id` | UUID PK | Surrogate key (`gen_random_uuid()`) |
+| `sample_id` / `operation_id` / `session_id` / `campaign_id` / `project_id` | UUID NOT NULL FK | The record (`physical_samples`, `manufacturing_operations`, `test_sessions`, `campaigns`, `projects`), named per table. `ON DELETE CASCADE`: the list goes with the record |
+| `person_id` | UUID NOT NULL FK | References `people.person_id`. `ON DELETE CASCADE`: a deleted person's grants go with them |
+| `role` | TEXT NOT NULL | `view` or `edit`; in `project_access` `view` or `investigator` (a secondary investigator) |
+| `added_by_person_id` | UUID FK | Who made the grant; `ON DELETE SET NULL` |
+| `created_at` | TIMESTAMPTZ NOT NULL | When the grant was made (default `now()`) |
+
+`UNIQUE (<record column>, person_id)`: a person is listed once per record. Index `<table>_person_idx`
+on `person_id`. `CHECK` on `role` as above (`<table>_role_check`). Directus: each table is a hidden
+collection; each parent has a hidden O2M alias `access` over its list, and `person_id` is a relation
+to `people` with no alias. The existing `sample_co_owners` and `project_investigators` stay honoured
+beside these (decision 17 of the spec).
+
+**`restricted`** (also migration `…165`): `BOOLEAN NOT NULL DEFAULT false` on `physical_samples`,
+`manufacturing_operations`, `test_sessions`, `campaigns` and `projects`, each with a partial index
+`idx_<table>_restricted ... WHERE restricted`. The default keeps every existing record unrestricted
+and stops Directus from treating the column as required. A hidden, read-only Directus field; no
+interface shows or changes it in A1a.
+
+### Readers tables (derived): `sample_readers`, `operation_readers`, `test_readers`, `campaign_readers`, `project_readers`, `campaign_sample_readers`, `operation_open_to_all`, and `d1_private.hidden_records`
+
+Who can **read** each record, stored (migration `…166`, A1a; ADR-0014). They are derived data: the SQL function family
+`d1_private.readers_of_<type>()` states the rule, the tables hold its answer, statement triggers on every input table recompute
+what a write could change, and the Directus read rule of the five record types is one membership test on the table. Nothing writes
+them by hand; the dumps leave their data out and a restore ends with `d1_private.readers_rebuild()`.
+`d1_private.readers_drift()` lists every row where a table and its function disagree (empty is correct), `readers_drift_count()` counts them
+(the admin overview shows it, `scripts/a1_readers_drift_check.sh` logs it).
+
+| Table | Columns | Meaning |
+|---|---|---|
+| `sample_readers`, `operation_readers`, `test_readers`, `campaign_readers`, `project_readers` | `reader_id` BIGINT identity PK, `record_id` UUID FK (`ON DELETE CASCADE`), `user_id` UUID FK to `directus_users` (`ON DELETE CASCADE`), `UNIQUE (record_id, user_id)` | This login may read this record. Keyed by **login**, not person; admins are not listed |
+| `campaign_sample_readers` | the same, `record_id` is a `campaign_samples.id` | Who may read the junction row |
+| `operation_open_to_all` | `reader_id` identity PK, `record_id` UUID UNIQUE FK to `manufacturing_operations` | The ownerless runs every member may read (the narrowed orphan amnesty) |
+| `d1_private.hidden_records` | `kind` TEXT (`physical_samples`, `manufacturing_operations`, `test_sessions`, `campaigns`, `projects`), `record_id` UUID, primary key `(kind, record_id)` | The records the Ask-the-database role must not see: restricted, or under a restricted project, campaign or sample. Read through `d1_private.is_hidden(kind, id)` (SECURITY DEFINER) by the role's row-level-security policies of migration `…168`; not granted to any role |
+
+The public tables are hidden Directus collections and are not audited. They are listed in `v_schema_dictionary` like every public table, but `d1_llm_readonly` has no grant on them (and the plugin filters its prompt by privilege), so Ask-DB never offers or reads them.
+
+---
+
 ### `raw_stock_lots`
 
 Inbound material ledger — new entity with no equivalent in legacy AppSheet data.
@@ -487,4 +550,5 @@ WHERE  sample_id  = '<uuid>'
   never `audit_logs`, `people` or any `directus_*` table. It is `default_transaction_read_only` with a statement timeout.
   LLM-generated SQL is additionally validated by the plugin's SQL guard before it
   runs (ADR-0009, `docs/runbooks/text-to-sql.md`). The login role used by the
-  plugin must inherit `d1_llm_readonly` and never be the superuser.
+  plugin must inherit `d1_llm_readonly` and never be the superuser. Since migration `…168` row-level security hides restricted records
+  (and everything under them) from that role and the granted views are `security_invoker` (ADR-0014); `d1_private.hidden_records` is not granted to it.

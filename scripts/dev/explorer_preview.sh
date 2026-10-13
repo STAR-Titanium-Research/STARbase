@@ -85,6 +85,12 @@ ps=("${PIPESTATUS[@]}"); [[ ${ps[0]} -eq 0 && ${ps[1]} -eq 0 ]] || abort "pg_dum
 rout=$(docker exec "$PG" pg_restore -U d1 -d d1_database --no-owner --role=d1 /tmp/live.dump 2>&1)
 bad=$(grep -A1 '^pg_restore: error:' <<<"$rout" | grep -v -- '^--$' | paste - - | grep -vE 'role "[^"]+" does not exist.*Command was: (GRANT|REVOKE) ' || true)
 [[ -z "$bad" ]] || abort "restore" "$bad"
+# Record access (A1a): migration 166 refuses dangling legacy logins (live has 3); clean them on the COPY first, as the
+# runbook does on live after the maintainer's go.
+if [[ -f scripts/a1_clean_dangling_legacy_logins.sql && \
+      "$(psql_copy -Atc "SELECT to_regclass('public.project_investigators') IS NOT NULL")" == t ]]; then
+  cl=$(psql_copy -v apply=1 -f - < scripts/a1_clean_dangling_legacy_logins.sql 2>&1) || abort "clean dangling logins on the copy" "$cl"
+fi
 out=$(docker run --rm --network "$NET" -e DATABASE_URL="$URL" -v "$REPO/db:/db" ghcr.io/amacneil/dbmate:2 --no-dump-schema up 2>&1) \
   || abort "dbmate up" "$out"
 echo "$out" | grep -E '^Applying' || echo "no pending migrations"

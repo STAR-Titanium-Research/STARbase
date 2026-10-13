@@ -41,6 +41,13 @@ Migration count: !`ls db/migrations/*.sql | wc -l` (see the CI rollback gotcha b
   `20261007000141_lab_member_row_visibility.sql`; `--values` prints them). Reference data goes in
   the file's `unfiltered` list. phase1 fails when the stored permissions drift from the file.
 
+- A view granted to `d1_llm_readonly` (the nine `v_*` views of migration `…132`, and any later grant) must be created
+  `WITH (security_invoker = true)`. **`CREATE OR REPLACE VIEW` without the `WITH (...)` clause resets that option and
+  silently re-opens the Ask-DB row-security bypass** (migration `…168`, ADR-0014); say it again every time you redefine
+  one. A new table you grant to that role needs row-level-security policies like migration 168's (or an entry in
+  the reference list in `tests/phase1_schema.sh` if it holds no record data). A view that is security-invoker
+  must not read `d1_private.hidden_records` directly: use `d1_private.is_hidden()`. phase1 asserts both.
+
 ## Verify — don't stop at "it looks right"
 
 1. Lint: `pre-commit run sqlfluff-lint --files db/migrations/<file>` (or `make lint`).

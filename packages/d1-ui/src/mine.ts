@@ -8,6 +8,13 @@
 // `secondary_investigators` (project_investigators.user_id). The older `owner` and
 // `principal_investigator` UUID columns are hidden backups and are not used.
 //
+// A1a adds the hidden O2M alias `access` (sample_access, project_access: person_id, role) beside the old M2M aliases. A person
+// listed with role edit on a sample is a co-owner; a project_access row with role investigator is a secondary investigator.
+// DIRECTUS CONSTRAINTS (spec section 3): a relation key is read by its FIRST key only, so `access: {person_id: ..., role: ...}`
+// would silently drop the role (every viewer would count as a co-owner), and a `_some` body must be one plain chain. Two
+// conditions on one row of a to-many relation are an `_and` of two BARE paths through the same alias (Directus joins an alias
+// once per query path, so both hold on the same row). mine.test.ts walks every filter here and refuses the other forms.
+//
 // The Data Studio bookmarks "My operations" and "My samples" (migration 135) use the same
 // owner path, so the counts agree with them for owner-only filters.
 
@@ -17,7 +24,14 @@ type Filter = Record<string, unknown>;
 
 export const ownedByMe: Filter = { owner_person_id: { user_id: { _eq: CURRENT_USER } } };
 
-export const coOwnedByMe: Filter = { co_owners: { _some: { user_id: { _eq: CURRENT_USER } } } };
+// The same row of an alias: this person, with this role (bare paths, never a sibling key or a _some with two conditions).
+const accessRoleMine = (role: string): Filter => ({
+	_and: [{ access: { person_id: { user_id: { _eq: CURRENT_USER } } } }, { access: { role: { _eq: role } } }],
+});
+
+export const coOwnedByMe: Filter = {
+	_or: [{ co_owners: { _some: { user_id: { _eq: CURRENT_USER } } } }, accessRoleMine('edit')],
+};
 
 export const samplesMine: Filter = { _or: [ownedByMe, coOwnedByMe] };
 
@@ -25,6 +39,7 @@ export const projectsMine: Filter = {
 	_or: [
 		{ principal_investigator_person: { user_id: { _eq: CURRENT_USER } } },
 		{ secondary_investigators: { _some: { user_id: { _eq: CURRENT_USER } } } },
+		accessRoleMine('investigator'),
 	],
 };
 

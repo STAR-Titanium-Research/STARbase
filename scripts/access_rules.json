@@ -1,126 +1,156 @@
 {
   "_comment": [
-    "Single source of the Lab Member row-level visibility rules (ADR-0011, docs/adr/0011-row-level-visibility.md).",
+    "Single source of the Lab Member row-level visibility rules (ADR-0011, docs/adr/0011-row-level-visibility.md; A1 record access,",
+    "docs/superpowers/specs/2026-10-12-record-access-design.md).",
     "scripts/gen_access_rules.py turns this file into the Lab Member directus_permissions rows. Its output is pasted into",
     "scripts/configure_users_and_policies.sql (gen_access_rules.py --write) and into the migration that applies it;",
     "tests/phase1_schema.sh and tests/scripts/test_access_rules.py fail when either drifts from this file.",
-    "A rule is a set of paths, OR-ed together. Each path ends at a user column that must equal the signed-in user",
-    "($CURRENT_USER). {\"via\": \"sample_id\", \"set\": \"sample.read\"} prefixes every path of another set with a relation field; {\"set\": ...} includes it as is.",
-    "'rules' lists, per collection and action, the set that filters it, or \"any\" for no filter. Directus does not apply item",
+    "READ visibility is not written here: who can read a record is decided in SQL (d1_private.readers_of_*, migration 166) and stored in",
+    "the <type>_readers tables, kept by triggers. A read rule is therefore one of: {\"readers\": \"some\"} (a record type: the top-level",
+    "`readers` alias, `readers: {_some: {user_id: $CURRENT_USER}}`; with \"open_to_all\": true for the orphan amnesty, an OR with the",
+    "`open_to_all` alias), or, for a child of a record, a set that reaches the parent's readers through one bare hop (`reader.*` below).",
+    "UPDATE, DELETE and MANAGE stay Directus filters (a record's manage rule is its delete rule): the reader term AND the editor/owner test.",
+    "A rule is a SET: a list (OR) or {\"and\": [...]} (AND). An item is a user-leaf path that ends at a user column that must equal the signed-in user",
+    "($CURRENT_USER); {\"set\": ..., \"via\": \"sample_id\"} (another set with every path prefixed by a relation field, which must be to-one; no via = as is);",
+    "{\"reader\": \"bare\"} (the bare hop `readers.user_id = $CURRENT_USER` at the row's prefix: the caller is a reader of the record; used with via",
+    "for children and in update/delete rules, never as a `_some`); {\"path\", \"at\", \"where\"} (a user leaf plus `role _in [...]` on the same row",
+    "of the junction `at`); {\"field\", \"eq\" | \"null\"} (a literal leaf); {\"unless_restricted\": [...]} (restricted = false AND the items, on the row the",
+    "prefix points at); and nested {\"and\": [...]} / {\"or\": [...]}. See the docstring of scripts/gen_access_rules.py.",
+    "Directus 11.17 accepts `_some` only directly under a top-level O2M: the generator drops the others (a bare to-many hop means \"any joined row\").",
+    "A legal `_some` also applies the related collection's rule FOR THE SAME ACTION to the rows it looks at, so the readers tables' own read rule is",
+    "trivial (own rows) and an update or delete rule must not use one (sample_co_owners update is owner-only: `co_owners._some` in sample.editors",
+    "would stop every co-owner from editing); update and delete read the bare hop `readers.user_id`, which applies no rule.",
+    "Directus reads a relation key by its first key only and fails a `_some` whose body is not one plain chain, so a role test is an AND of two bare paths.",
+    "'rules' lists, per collection and action, the set that filters it (or the read kind above), or \"any\" for no filter. Directus does not apply item",
     "filters to create, so create is always \"any\". 'unfiltered' is every other Lab Member grant: reference data and the rows",
     "added by later migrations. A new collection that holds lab data needs an entry in 'rules', not in 'unfiltered'.",
+    "The eleven *_params tables in 'unfiltered' no longer exist (migration 20260623000032 folded them into columns of manufacturing_operations and",
+    "test_sessions, so they follow those rows' rules); their stale rows stay here only so the drift checks see every row in directus_permissions.",
     "'custom' holds the rows that need more than a filter: per collection and action, any of permissions, validation and",
     "fields (a list; written as the comma-separated text Directus stores). 'guards' lists the junctions whose rows grant",
     "visibility: Directus does not filter create, so the d1-access-guard hook (core/extensions/d1-access-guard) refuses",
-    "to create or repoint one unless the caller passes the parent's update rule. A junction also counts when a column a",
+    "to create or repoint one unless the caller passes the parent's rule named by 'rule' (default update). A junction also counts when a column a",
     "read path uses is derived from it: test_sessions.sample_id is kept equal to the first sample of test_sessions_subject",
     "(migration 139), so adding a subject row to a test can change who reads that test. gen_access_rules.py writes that rule",
     "into core/extensions/d1-access-guard/rules.json. 'field' is the junction's FK to the parent, 'key' the parent's primary key.",
-    "'owner_guards' lists the records whose update rule is wider than their delete rule (co-owners may update a sample, only the",
-    "owner may delete it). Changing the owner column there would hand delete rights to the editor, so the same hook refuses an",
-    "update that changes 'field' unless the caller passes the record's delete rule (they are its current owner). 'key' is the",
-    "record's primary key, 'value_key' the primary key of the table 'field' points to. gen_access_rules.py fails when a ruled",
+    "'owner_guards' lists the records whose update rule is wider than their delete rule (co-owners and Can edit people may update, only the",
+    "owner may delete). Changing one of their 'fields' (the owner column, restricted) would hand delete or visibility rights to the editor, so the",
+    "same hook refuses an update that changes one unless the caller passes the record's delete rule (they are its current owner). 'key' is the",
+    "record's primary key, a field's 'value_key' the primary key of the table the field points to. gen_access_rules.py fails when a ruled",
     "collection has different update and delete filters and no entry here.",
-    "'orphan_amnesty' ORs an extra clause into a collection's read rule: every record where ALL of the listed columns are NULL",
-    "is readable by every Lab Member, not just through a project/campaign/co-owner. For pre-ADR-0011 legacy rows that will",
-    "never get a real owner (migration 20261009000141: ~7254 FAST sintering runs with no owner, operator, project or",
-    "campaign), the alternative is admin-only visibility, which is worse than leaving them open. Scoped to read only --",
-    "update/delete still require real ownership, so nobody can edit or delete these on nobody's behalf."
+    "'restricted_keys' lists, per record type, the keys that move a record between parents (and so change who sees it): when the record or an old",
+    "or new parent is restricted, the hook asks for the record's delete rule. 'record_access' tells d1-record-access (the endpoint that is the only",
+    "writer of the five *_access tables) where each record type keeps its access list."
   ],
   "policy": "20000002-0000-0000-0000-000000000002",
   "sets": {
-    "sample.owner": ["owner_person_id.user_id"],
-    "sample.editors": ["owner_person_id.user_id", "co_owners._some.user_id"],
-    "sample.read": [
-      {"set": "sample.editors"},
-      "project_id.principal_investigator_person.user_id",
-      "project_id.secondary_investigators._some.user_id",
-      "campaigns._some.campaign_id.owner_person_id.user_id",
-      "campaigns._some.campaign_id.project_id.principal_investigator_person.user_id",
-      "campaigns._some.campaign_id.project_id.secondary_investigators._some.user_id"
+    "reader": [{"reader": "bare"}],
+    "reader.sample": [{"via": "sample_id", "set": "reader"}],
+    "reader.genealogy": [
+      {"via": "child_sample_id", "set": "reader"},
+      {"via": "parent_sample_id", "set": "reader"}
     ],
-    "record.owner": ["owner_person_id.user_id"],
-    "record.update": ["owner_person_id.user_id", {"via": "sample_id", "set": "sample.editors"}],
-    "record.read": [
-      "owner_person_id.user_id",
-      {"via": "sample_id", "set": "sample.read"},
-      "project_id.principal_investigator_person.user_id",
-      "project_id.secondary_investigators._some.user_id",
-      "campaign_id.owner_person_id.user_id",
-      "campaign_id.project_id.principal_investigator_person.user_id",
-      "campaign_id.project_id.secondary_investigators._some.user_id"
-    ],
-    "campaign.owner": ["owner_person_id.user_id"],
-    "campaign.read": [
-      "owner_person_id.user_id",
-      "project_id.principal_investigator_person.user_id",
-      "project_id.secondary_investigators._some.user_id",
-      "samples._some.sample_id.owner_person_id.user_id",
-      "samples._some.sample_id.co_owners._some.user_id"
+    "reader.operation": [{"via": "operation_id", "set": "reader"}],
+    "reader.session": [{"via": "session_id", "set": "reader"}],
+    "reader.subject": [{"via": "test_sessions_id", "set": "reader"}],
+    "reader.project": [{"via": "project_id", "set": "reader"}],
+
+    "project.invs": [
+      "secondary_investigators._some.user_id",
+      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["investigator"]}}
     ],
     "project.pi": ["principal_investigator_person.user_id"],
-    "project.investigators": ["principal_investigator_person.user_id", "secondary_investigators._some.user_id"],
-    "project.read": [
-      "principal_investigator_person.user_id",
-      "secondary_investigators._some.user_id",
-      "campaigns._some.owner_person_id.user_id",
-      "samples._some.owner_person_id.user_id",
-      "samples._some.co_owners._some.user_id",
-      "operations._some.owner_person_id.user_id",
-      "sessions._some.owner_person_id.user_id"
+    "project.investigators": ["principal_investigator_person.user_id", {"set": "project.invs"}],
+
+    "sample.editors": [
+      "owner_person_id.user_id",
+      "co_owners.user_id",
+      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit"]}}
     ],
-    "link.sample.read": [{"via": "sample_id", "set": "sample.read"}],
+    "sample.owner": ["owner_person_id.user_id"],
+    "link.sample.owner": [{"via": "sample_id", "set": "sample.owner"}],
     "link.sample.editors": [{"via": "sample_id", "set": "sample.editors"}],
-    "genealogy.read": [
-      {"via": "child_sample_id", "set": "sample.read"},
-      {"via": "parent_sample_id", "set": "sample.read"}
-    ],
     "genealogy.write": [{"via": "child_sample_id", "set": "sample.editors"}],
-    "campaign_samples.read": [
-      {"via": "campaign_id", "set": "campaign.read"},
-      {"via": "sample_id", "set": "sample.read"}
+    "campaign_samples.write": {
+      "and": [
+        {"set": "reader"},
+        {"or": [{"via": "campaign_id", "set": "campaign.owner"}, {"via": "sample_id", "set": "sample.editors"}]}
+      ]
+    },
+
+    "record.editors": [
+      "owner_person_id.user_id",
+      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit"]}}
     ],
-    "campaign_samples.write": [
-      {"via": "campaign_id", "set": "campaign.owner"},
-      {"via": "sample_id", "set": "sample.editors"}
-    ],
-    "operation.read": [{"via": "operation_id", "set": "record.read"}],
+    "record.owner": ["owner_person_id.user_id"],
+    "record.update": {
+      "and": [
+        {"set": "reader"},
+        {"or": [{"set": "record.editors"}, {"unless_restricted": [{"via": "sample_id", "set": "sample.editors"}]}]}
+      ]
+    },
+    "record.delete": {"and": [{"set": "reader"}, {"set": "record.owner"}]},
     "operation.update": [{"via": "operation_id", "set": "record.update"}],
-    "session.read": [{"via": "session_id", "set": "record.read"}],
     "session.update": [{"via": "session_id", "set": "record.update"}],
-    "subject.read": [{"via": "test_sessions_id", "set": "record.read"}],
     "subject.update": [{"via": "test_sessions_id", "set": "record.update"}],
-    "investigators.read": [{"via": "project_id", "set": "project.read"}],
+
+    "campaign.update": {
+      "and": [
+        {"set": "reader"},
+        {"or": [
+          "owner_person_id.user_id",
+          {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit"]}}
+        ]}
+      ]
+    },
+    "campaign.manage": {"and": [{"set": "reader"}, "owner_person_id.user_id"]},
+    "campaign.owner": ["owner_person_id.user_id"],
+
     "investigators.write": [{"via": "project_id", "set": "project.pi"}],
-    "rollup.read": [{"via": "project_id", "set": "project.investigators"}]
+    "rollup.read": [
+      {"via": "project_id", "set": "project.pi"},
+      {"unless_restricted": [{"via": "project_id", "set": "project.invs"}]}
+    ]
   },
   "rules": {
-    "physical_samples": {"create": "any", "read": "sample.read", "update": "sample.editors", "delete": "sample.owner"},
-    "manufacturing_operations": {"create": "any", "read": "record.read", "update": "record.update", "delete": "record.owner"},
-    "test_sessions": {"create": "any", "read": "record.read", "update": "record.update", "delete": "record.owner"},
-    "campaigns": {"create": "any", "read": "campaign.read", "update": "campaign.owner", "delete": "campaign.owner"},
-    "projects": {"create": "any", "read": "project.read", "update": "project.pi", "delete": "project.pi"},
-    "sample_co_owners": {"create": "any", "read": "link.sample.read", "update": "link.sample.editors", "delete": "link.sample.editors"},
-    "sample_stock_provenance": {"create": "any", "read": "link.sample.read", "update": "link.sample.editors", "delete": "link.sample.editors"},
-    "sample_data_files": {"create": "any", "read": "link.sample.read", "update": "link.sample.editors", "delete": "link.sample.editors"},
-    "sample_genealogy": {"create": "any", "read": "genealogy.read", "update": "genealogy.write", "delete": "genealogy.write"},
-    "campaign_samples": {"create": "any", "read": "campaign_samples.read", "update": "campaign_samples.write", "delete": "campaign_samples.write"},
-    "operation_data_files": {"create": "any", "read": "operation.read", "update": "operation.update", "delete": "operation.update"},
-    "machining_force_analysis": {"create": "any", "read": "operation.read", "update": "operation.update"},
-    "fast_run_data": {"read": "operation.read"},
-    "session_data_files": {"create": "any", "read": "session.read", "update": "session.update", "delete": "session.update"},
-    "operation_additional_operators": {"create": "any", "read": "operation.read", "update": "operation.update", "delete": "operation.update"},
-    "session_additional_operators": {"create": "any", "read": "session.read", "update": "session.update", "delete": "session.update"},
-    "test_sessions_subject": {"create": "any", "read": "subject.read", "update": "subject.update", "delete": "subject.update"},
-    "project_investigators": {"create": "any", "read": "investigators.read", "update": "investigators.write", "delete": "investigators.write"},
+    "physical_samples": {"create": "any", "read": {"readers": "some"}, "update": "sample.editors", "delete": "sample.owner"},
+    "manufacturing_operations": {"create": "any", "read": {"readers": "some", "open_to_all": true}, "update": "record.update", "delete": "record.delete"},
+    "test_sessions": {"create": "any", "read": {"readers": "some"}, "update": "record.update", "delete": "record.delete"},
+    "campaigns": {"create": "any", "read": {"readers": "some"}, "update": "campaign.update", "delete": "campaign.manage"},
+    "projects": {"create": "any", "read": {"readers": "some"}, "update": "project.pi", "delete": "project.pi"},
+    "sample_co_owners": {"create": "any", "read": "reader.sample", "update": "link.sample.owner", "delete": "link.sample.owner"},
+    "sample_stock_provenance": {"create": "any", "read": "reader.sample", "update": "link.sample.editors", "delete": "link.sample.editors"},
+    "sample_data_files": {"create": "any", "read": "reader.sample", "update": "link.sample.editors", "delete": "link.sample.editors"},
+    "sample_genealogy": {"create": "any", "read": "reader.genealogy", "update": "genealogy.write", "delete": "genealogy.write"},
+    "campaign_samples": {"create": "any", "read": {"readers": "some"}, "update": "campaign_samples.write", "delete": "campaign_samples.write"},
+    "operation_data_files": {"create": "any", "read": "reader.operation", "update": "operation.update", "delete": "operation.update"},
+    "machining_force_analysis": {"create": "any", "read": "reader.operation", "update": "operation.update"},
+    "fast_run_data": {"read": "reader.operation"},
+    "session_data_files": {"create": "any", "read": "reader.session", "update": "session.update", "delete": "session.update"},
+    "operation_additional_operators": {"create": "any", "read": "reader.operation", "update": "operation.update", "delete": "operation.update"},
+    "session_additional_operators": {"create": "any", "read": "reader.session", "update": "session.update", "delete": "session.update"},
+    "test_sessions_subject": {"create": "any", "read": "reader.subject", "update": "subject.update", "delete": "subject.update"},
+    "project_investigators": {"create": "any", "read": "reader.project", "update": "investigators.write", "delete": "investigators.write"},
     "project_rollup": {"read": "rollup.read"}
   },
   "custom": {
     "people": {
       "create": {"validation": {"_or": [{"user_id": {"_null": true}}, {"user_id": {"_eq": "$CURRENT_USER"}}]}},
       "read": {},
-      "update": {"fields": ["full_name", "email", "is_operator", "is_researcher", "active", "notes"]}
+      "update": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}, "fields": ["full_name", "email", "is_operator", "is_researcher", "active", "notes"]}
     },
+    "sample_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
+    "operation_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
+    "test_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
+    "campaign_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
+    "project_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
+    "sample_readers": {"read": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}}},
+    "operation_readers": {"read": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}}},
+    "test_readers": {"read": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}}},
+    "campaign_readers": {"read": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}}},
+    "project_readers": {"read": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}}},
+    "campaign_sample_readers": {"read": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}}},
+    "operation_open_to_all": {"read": {}},
     "label_templates": {
       "create": {"fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
       "read": {},
@@ -129,8 +159,8 @@
     }
   },
   "guards": {
-    "sample_co_owners": [{"field": "sample_id", "parent": "physical_samples", "key": "sample_id", "rule": "update"}],
-    "project_investigators": [{"field": "project_id", "parent": "projects", "key": "project_id", "rule": "update"}],
+    "sample_co_owners": [{"field": "sample_id", "parent": "physical_samples", "key": "sample_id", "rule": "delete"}],
+    "project_investigators": [{"field": "project_id", "parent": "projects", "key": "project_id", "rule": "delete"}],
     "campaign_samples": [
       {"field": "campaign_id", "parent": "campaigns", "key": "campaign_id", "rule": "update"},
       {"field": "sample_id", "parent": "physical_samples", "key": "sample_id", "rule": "update"}
@@ -138,12 +168,23 @@
     "test_sessions_subject": [{"field": "test_sessions_id", "parent": "test_sessions", "key": "session_id", "rule": "update"}]
   },
   "owner_guards": {
-    "physical_samples": {"field": "owner_person_id", "key": "sample_id", "value_key": "person_id"},
-    "manufacturing_operations": {"field": "owner_person_id", "key": "operation_id", "value_key": "person_id"},
-    "test_sessions": {"field": "owner_person_id", "key": "session_id", "value_key": "person_id"}
+    "physical_samples": {"key": "sample_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "restricted"}]},
+    "manufacturing_operations": {"key": "operation_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "restricted"}]},
+    "test_sessions": {"key": "session_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "restricted"}]},
+    "campaigns": {"key": "campaign_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "restricted"}]}
   },
-  "orphan_amnesty": {
-    "manufacturing_operations": ["owner_person_id", "project_id", "campaign_id"]
+  "restricted_keys": {
+    "physical_samples": ["project_id"],
+    "manufacturing_operations": ["project_id", "campaign_id", "sample_id"],
+    "test_sessions": ["project_id", "campaign_id", "sample_id"],
+    "campaigns": ["project_id"]
+  },
+  "record_access": {
+    "physical_samples": {"table": "sample_access", "fk": "sample_id", "key": "sample_id", "owner_field": "owner_person_id", "roles": ["view", "edit"]},
+    "manufacturing_operations": {"table": "operation_access", "fk": "operation_id", "key": "operation_id", "owner_field": "owner_person_id", "roles": ["view", "edit"]},
+    "test_sessions": {"table": "test_access", "fk": "session_id", "key": "session_id", "owner_field": "owner_person_id", "roles": ["view", "edit"]},
+    "campaigns": {"table": "campaign_access", "fk": "campaign_id", "key": "campaign_id", "owner_field": "owner_person_id", "roles": ["view", "edit"]},
+    "projects": {"table": "project_access", "fk": "project_id", "key": "project_id", "owner_field": "principal_investigator_person", "roles": ["view", "investigator"]}
   },
   "unfiltered": {
     "machining_params": ["create", "read", "update", "delete"],

@@ -33,7 +33,7 @@ Run each command above. Where one fails:
 - **Nothing that must stay out of git is staged**: `.env`, tokens, real lab data, files over 2 MB.
   Experimental data belongs in MinIO.
 - **Infrastructure as code.** If the change needs a manual step (Directus UI click, `psql` edit,
-  one-off script), it isn't done. Put it in a migration, `core/apply.sh` or compose.
+  one-off script), it isn't done. Put it in a migration, a `scripts/configure_*.sql` file or compose.
 
 ## Commit message
 

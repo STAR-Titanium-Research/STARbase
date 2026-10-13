@@ -686,8 +686,9 @@ must treat `data: null` on a PATCH as an OCC signal, not a general error.
 
 ### 13.1 Token provisioning
 
-Machine user tokens are provisioned during initial setup by `core/apply.sh`.
-The token is printed once at creation time and must be stored in a secrets
+Machine user tokens are created by hand during initial setup: a Directus user on the Administrator role
+with a generated static token (`core/apply.sh` and the Phase 3 Operator role were retired in A1a, ADR-0014).
+The token is shown once at creation time and must be stored in a secrets
 vault (e.g., HashiCorp Vault, lab password manager, or `.env` for dev).
 
 ### 13.2 Listing machine users (Administrator only)
@@ -759,7 +760,7 @@ Response when healthy:
 { "status": "ok" }
 ```
 
-Useful for container readiness probes and `apply.sh` startup polling.
+Useful for container readiness probes and startup polling.
 
 ---
 

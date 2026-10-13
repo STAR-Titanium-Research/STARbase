@@ -3,7 +3,7 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, openLink, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
+	AppLink, openLink, AccessDialog, EditDrawer, HIDDEN_CAMPAIGNS_LABEL, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
 	buildLife, dataStudioRoute, detailFacts, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleRailFacts, truncatedNotes,
 	type ContentsEntry,
 	pinTargetForRecord,
@@ -26,6 +26,8 @@ const { sample, loading, notVisible, error, elements, campaigns, operations, tes
 	useSampleData(toRef(props, 'id'));
 
 const editing = ref(false);
+// "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
+const access = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
 // or a reader through a sample may read it but not edit it).
 const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('physical_samples', toRef(props, 'id'));
@@ -94,7 +96,7 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 							<RecordLink collection="campaigns" :id="c.campaign_id">{{ c.campaign_code ? `Campaign ${c.campaign_code}` : c.name || 'Campaign' }}</RecordLink>
 						</template>
 						<template v-if="campaignRows.hidden > 0">
-							<span>›</span><HiddenLink :label="campaignRows.hidden === 1 ? 'Campaign' : `${campaignRows.hidden} campaigns`" />
+							<span>›</span><HiddenLink :label="HIDDEN_CAMPAIGNS_LABEL" />
 						</template>
 					</template>
 
@@ -109,6 +111,7 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 							</template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+								<v-button small secondary @click="access = true"><v-icon name="group" small left />Who has access</v-button>
 								<v-button small secondary :to="labelsTo"><v-icon name="label" small left />Print label</v-button>
 								<v-button small secondary @click="openReportPage"><v-icon name="picture_as_pdf" small left />Report</v-button>
 								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
@@ -141,6 +144,7 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 					<SampleFiles id="files" :files="files.data" :loading="files.loading" :error="files.error" />
 				</RecordLayout>
 
+				<AccessDialog v-model="access" collection="physical_samples" :id="id" :title="pageTitle" @changed="onSaved" />
 				<EditDrawer
 					v-model="editing"
 					collection="physical_samples"

@@ -41,6 +41,16 @@ export function isNotVisible(e: any): boolean {
 	return status === 403 || status === 404;
 }
 
+/**
+ * A read that the server answered but would not do with this filter: 400 (a filter Directus rejects), 403 / 404 (not allowed or not
+ * visible) or any 5xx (a rule that blows up server-side). For a read that has a narrower fallback (Home's "mine" lists): the fallback
+ * runs, so one bad filter never blanks the page. A network failure (no response) and 401 are not this: they would fail the fallback too.
+ */
+export function isFilterRefused(e: any): boolean {
+	const status = e?.response?.status;
+	return status === 400 || status === 403 || status === 404 || (typeof status === 'number' && status >= 500) || errCode(e) === 'FORBIDDEN';
+}
+
 export function isDuplicate(e: any): boolean {
 	return errCode(e) === 'RECORD_NOT_UNIQUE';
 }

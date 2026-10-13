@@ -45,7 +45,7 @@ const total = computed(() => testSubjectCount(props.sample, props.subjects, !!pr
 			</li>
 			<li v-if="hiddenCount" class="row">
 				<span class="role">Sample</span>
-				<span class="muted">{{ hiddenCount === 1 ? '1 subject' : `${hiddenCount} subjects` }} not visible to you</span>
+				<span class="muted">Some subjects are not visible to you</span>
 			</li>
 		</ul>
 	</Section>

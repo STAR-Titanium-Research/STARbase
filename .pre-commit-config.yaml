@@ -31,6 +31,8 @@ repos:
     hooks:
       - id: sqlfluff-lint
         args: ["--dialect", "postgres"]
+        # A dev-only perf script for a throwaway copy (psql variables and a lock probe that sqlfluff cannot parse): not part of the schema.
+        exclude: ^scripts/dev/perf_writes\.sql$
 
   # Dockerfiles
   - repo: https://github.com/hadolint/hadolint
@@ -48,8 +50,8 @@ repos:
         pass_filenames: false
         files: ^(core/extensions/(d1-geometry-preview|d1-report)|packages/starbase-pages)/src/
       - id: access-rules-in-sync
-        name: Lab Member permission block and d1-access-guard rules match access_rules.json
+        name: Lab Member permission block, d1-access-guard and d1-record-access rules match access_rules.json
         entry: python3 scripts/gen_access_rules.py --check
         language: system
         pass_filenames: false
-        files: ^(scripts/(access_rules\.json|gen_access_rules\.py|configure_users_and_policies\.sql)|core/extensions/d1-access-guard/rules\.json)$
+        files: ^(scripts/(access_rules\.json|gen_access_rules\.py|configure_users_and_policies\.sql)|core/extensions/d1-(access-guard|record-access)/rules\.json)$

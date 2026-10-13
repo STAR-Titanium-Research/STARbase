@@ -22,7 +22,7 @@ export { createdRecord, CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE } from './
 export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
 // Display helpers and error predicates
-export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden } from './format';
+export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
 export { humanise, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
 export { estimateMassGrams } from './mass';
 export { buildLife, truncatedNotes } from './life';
@@ -88,7 +88,7 @@ export {
 export type { HiddenLinks } from './record/operationFacts';
 export { testTypeText, testSample, testRailFacts, testDetailBase, testSubjectCount } from './record/testFacts';
 export {
-	sampleDims, sampleKind, sampleMassText, sampleCampaigns, coOwnerText, sampleRailFacts, sampleDetailBase,
+	sampleDims, sampleKind, sampleMassText, sampleCampaigns, HIDDEN_CAMPAIGNS_LABEL, coOwnerText, sampleRailFacts, sampleDetailBase,
 } from './record/sampleFacts';
 export type { SampleDims } from './record/sampleFacts';
 export { dateRangeText, projectRailFacts, projectContents } from './record/projectFacts';
@@ -107,6 +107,9 @@ export { createFormFields, editMode } from './editDrawer';
 export type { EditMode } from './editDrawer';
 export { useEditSession } from './composables/useEditSession';
 export type { EditSessionApi, EditSessionOptions } from './composables/useEditSession';
+// Who has access (the dialog of the record pages; the endpoint is core/extensions/d1-record-access)
+export { default as AccessDialog } from './components/AccessDialog.vue';
+export { RESTRICT_UI } from './access/accessModel';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
 export { default as CampaignCard } from './campaign/CampaignCard.vue';
 export { campaignCardStats, loadCampaignStats } from './campaign/campaignCardStats';

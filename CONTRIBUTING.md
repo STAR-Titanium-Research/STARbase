@@ -49,6 +49,10 @@ left for CI to discover):
   `scripts/access_rules.json` (`rules`, not `unfiltered`), run
   `python3 scripts/gen_access_rules.py --write` and add a migration that applies the new rows
   (copy `20261007000141_lab_member_row_visibility.sql`). Reference data goes in `unfiltered`.
+- **Views granted to the Ask-DB role:** any later `CREATE OR REPLACE VIEW` of a view granted to `d1_llm_readonly`
+  must be created `WITH (security_invoker = true)`. `CREATE OR REPLACE` without it resets the option and silently
+  re-opens the row-security bypass (ADR-0014). A table granted to that role needs a row-level-security policy or a
+  place in the reference list; `tests/phase1_schema.sh` fails otherwise.
 - **Plugins/services:** unit tests beside the code; integration tests in
   [`tests/`](./tests/).
 - **Foundation:** `bash tests/phase0_smoke.sh` validates repo structure, env

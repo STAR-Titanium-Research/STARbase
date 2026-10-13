@@ -2,7 +2,7 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
+	AppLink, AccessDialog, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
 	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
 	pinTargetForRecord,
 } from '@d1/ui';
@@ -24,6 +24,8 @@ const {
 } = useProjectData(toRef(props, 'id'));
 
 const editing = ref(false);
+// "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
+const access = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
 // or a reader through a sample may read it but not edit it).
 const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('projects', toRef(props, 'id'));
@@ -83,6 +85,7 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 							</template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+								<v-button small secondary @click="access = true"><v-icon name="group" small left />Who has access</v-button>
 								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
 							</template>
 							<template #after-facts>
@@ -135,6 +138,7 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 					</div>
 				</RecordLayout>
 
+				<AccessDialog v-model="access" collection="projects" :id="id" :title="`Project ${code}`" @changed="onSaved" />
 				<EditDrawer
 					v-model="editing"
 					collection="projects"

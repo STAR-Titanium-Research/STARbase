@@ -7,7 +7,7 @@
 #   3. apply the worktree's pending dbmate migrations (the copy already has what live has),
 #   4. set a random admin API token on the COPY only,
 #   5. start Directus (the live container's exact image, live's extensions mounted read-only,
-#      plus the worktree's d1-next-number overlaid) on the copy,
+#      plus the worktree's extensions named in D1_SMOKE_OVERLAYS overlaid) on the copy,
 #   6. run scripts/dev/directus_smoke.mjs against it: one `SMOKE PASS|FAIL <case>` line per case.
 # Exit status is non-zero on any FAIL or any harness failure; cleanup always runs.
 #
@@ -22,6 +22,27 @@
 # <reason>` and the run still exits 0; any other probe failure makes them FAIL. D1_SMOKE_REQUIRE_LM=1 (or true)
 # turns the skip into a FAIL; unset, 0 or anything else leaves it off.
 #
+# D1_SMOKE_OVERLAYS="d1-next-number d1-access-guard ..." (default d1-next-number) lists the extension folders of this
+# worktree that replace live's at /directus/extensions/<name> (whole folders, so a rules.json travels with its
+# extension). Every A1a run is
+#   D1_SMOKE_REQUIRE_LM=1 D1_SMOKE_OVERLAYS="d1-next-number d1-access-guard d1-record-access d1-trace d1-admin-overview" bash scripts/dev/directus_smoke.sh
+# (d1-admin-overview carries the readers_drift count the ra_* cases read after every case; live's copy of it has none yet.)
+# (an overlay name with no folder in this worktree is a harness failure).
+#
+# Record access (A1a): migration 166 refuses to run while sample_co_owners or project_investigators hold a row whose login no
+# longer exists (live has 3), so the harness first runs scripts/a1_clean_dangling_legacy_logins.sql with apply=1 on the COPY (the
+# same file the runbook names for live; it runs in the "before" runs too, so the two runs see the same data).
+# When the copy has the access tables (migration 165), scripts/dev/access_matrix_oracle.sql (schema ref, the independent
+# plain-SQL model) and scripts/dev/access_matrix_fixture.sql are loaded into the COPY before Directus starts: fixture people
+# with logins, every restricted/unrestricted combination of a project, campaign, sample, operation and test, access lists, and
+# the oracle's evaluation of who may read, update and delete what. Its answer is handed to the lm_access_* cases
+# (D1_SMOKE_ACCESS=0 skips it). With migration 166 applied the recompute triggers maintain the readers tables while the fixture
+# loads, and the harness asserts d1_private.readers_drift_count() = 0 afterwards.
+# D1_SMOKE_MODE=seed loads it and leaves the copy running for hand measurement. D1_SMOKE_MODE=perf loads scripts/dev/seed_access_fixture.sql (restricted records, access rows, big projects) into the
+# copy instead and runs scripts/dev/directus_perf.mjs: p50/p95 per list request for a stranger and a member
+# (use --skip 20261012000166 --skip 20261012000167 for "before"). D1_SMOKE_KEEP=1 leaves the copy running for debugging
+# (docker rm -fv d1-smoke-directus d1-smoke-pg; docker network rm d1-smoke).
+#
 # Usage: [D1_SMOKE_REQUIRE_LM=1] bash scripts/dev/directus_smoke.sh [--skip <migration-version>...]   (from the repo root)
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
@@ -35,6 +56,13 @@ DB_PASS="smoke-$(rhex 8)"
 URL="postgres://d1:$DB_PASS@$PG:5432/d1_database?sslmode=disable"
 SKIPS=()
 TMPDB=
+FXDIR=
+EXTDIR=
+OVERLAYS="${D1_SMOKE_OVERLAYS:-d1-next-number}"
+MODE="${D1_SMOKE_MODE:-cases}"
+for o in $OVERLAYS; do
+  [[ -d "core/extensions/$o" ]] || { echo "FAIL harness: D1_SMOKE_OVERLAYS names core/extensions/$o, which is not in this worktree"; exit 2; }
+done
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,8 +76,15 @@ cleanup() {
   docker rm -fv "$DX" "$PG" >/dev/null 2>&1
   docker network rm "$NET" >/dev/null 2>&1
   [[ -n "$TMPDB" ]] && rm -rf "$TMPDB"
+  [[ -n "$FXDIR" ]] && rm -rf "$FXDIR"
+  [[ -n "$EXTDIR" ]] && rm -rf "$EXTDIR"
+  return 0
 }
-trap cleanup EXIT
+if [[ "${D1_SMOKE_KEEP:-}" == 1 ]]; then
+  trap 'echo "kept: containers d1-smoke-directus and d1-smoke-pg on network d1-smoke"' EXIT
+else
+  trap cleanup EXIT
+fi
 # abort <stage> <exit> [output]: greppable FAIL line, then the stage's output; cleanup runs via the trap.
 abort() { echo "FAIL harness: $1 (exit $2)"; [[ -n "${3:-}" ]] && echo "$3"; exit 1; }
 psql_copy() { docker exec -i "$PG" psql -U d1 -d d1_database -X -q -v ON_ERROR_STOP=1 "$@"; }
@@ -128,6 +163,12 @@ fi
 
 dbmate() { docker run --rm --network "$NET" -e DATABASE_URL="$URL" -v "$DBDIR:/db" \
   ghcr.io/amacneil/dbmate:2 --no-dump-schema "$@" 2>&1; }
+# migration 166 refuses dangling legacy logins (live has 3 project_investigators rows of deleted users): clean them on the copy
+# first, exactly as the runbook does on live. A copy from before the legacy tables existed has nothing to clean.
+if [[ "$(psql_copy -Atc "SELECT to_regclass('public.sample_co_owners') IS NOT NULL AND to_regclass('public.project_investigators') IS NOT NULL")" == t ]]; then
+  cl=$(psql_copy -v apply=1 -f - < scripts/a1_clean_dangling_legacy_logins.sql 2>&1) || abort "clean dangling legacy logins on the copy" $? "$cl"
+  echo "cleaned dangling legacy logins on the copy: $(grep '^DELETE' <<<"$cl" | tr '\n' ' ')"
+fi
 out=$(dbmate up); rc=$?
 [[ $rc -eq 0 ]] && echo "$out" | tail -3 || abort "dbmate up" $rc "$out"
 
@@ -157,14 +198,55 @@ lm_user=$(psql_copy -Atc "
   SELECT id FROM u") || abort "create Lab Member smoke user" $?
 [[ -n "$lm_user" ]] || abort "no Lab Member role in the copy to create the smoke user in" 1
 
-# --- Directus: the live container's exact image; live's extensions + this worktree's d1-next-number
+# --- record access: the fixture (people with logins, the restricted/unrestricted matrix, a plain-SQL evaluation of the
+# rules) or, in perf mode, the seed. Both only ever touch the copy, before Directus starts.
+FXDIR=$(mktemp -d)
+FXMOUNT="$(cygpath -m "$FXDIR" 2>/dev/null || echo "$FXDIR")"
+has_access=$(psql_copy -Atc "SELECT to_regclass('public.sample_access') IS NOT NULL")
+has_readers=$(psql_copy -Atc "SELECT to_regproc('d1_private.readers_rebuild') IS NOT NULL")
+if [[ "$has_access" == t && ( "$MODE" == perf || "$MODE" == seed ) ]]; then
+  t1=$SECONDS
+  psql_copy -f - < scripts/dev/seed_access_fixture.sql >/dev/null || abort "perf seed (scripts/dev/seed_access_fixture.sql)" $?
+  echo "seeded the copy in $((SECONDS - t1))s: $(psql_copy -Atc "SELECT (SELECT count(*) FROM physical_samples) || ' samples, ' || (SELECT count(*) FROM manufacturing_operations) || ' operations, ' || (SELECT count(*) FROM sample_access) || ' sample access rows'")"
+  if [[ "$has_readers" == t ]]; then
+    # the readers tables were maintained by the triggers during the seed; a full rebuild must then change nothing, and the drift
+    # check must be empty. Both are timed (the gate records the backfill time and the drift function's run time).
+    t1=$(date +%s%3N)
+    psql_copy -c "SELECT d1_private.readers_rebuild()" >/dev/null || abort "readers_rebuild() on the seeded copy" $?
+    t2=$(date +%s%3N)
+    drift=$(psql_copy -Atc "SELECT d1_private.readers_drift_count()") || abort "readers_drift_count() on the seeded copy" $?
+    t3=$(date +%s%3N)
+    echo "readers_rebuild() on the seeded copy: $((t2 - t1)) ms; readers_drift_count() = $drift in $((t3 - t2)) ms"
+    [[ "$drift" == 0 ]] || abort "readers drift after the seed is not empty ($drift rows)" 1 "$(psql_copy -Atc "SELECT kind, problem, count(*) FROM d1_private.readers_drift() GROUP BY 1, 2")"
+  fi
+elif [[ "$has_access" == t && "${D1_SMOKE_ACCESS:-1}" != 0 ]]; then
+  cat scripts/dev/access_matrix_oracle.sql scripts/dev/access_matrix_fixture.sql | psql_copy -f - >/dev/null || abort "access matrix oracle and fixture (scripts/dev/access_matrix_oracle.sql, access_matrix_fixture.sql)" $?
+  psql_copy -Atc "SELECT ref.expected_json()" > "$FXDIR/expected.json" || abort "access matrix: plain-SQL evaluation" $?
+  echo "access matrix: $(psql_copy -Atc "SELECT count(*) FROM ref.fixture_users") fixture users, expected ids computed in SQL"
+  if [[ "$has_readers" == t ]]; then
+    drift=$(psql_copy -Atc "SELECT d1_private.readers_drift_count()") || abort "readers_drift_count() after the fixture" $?
+    [[ "$drift" == 0 ]] || abort "readers drift after the fixture is not empty ($drift rows)" 1 "$(psql_copy -Atc "SELECT kind, problem, count(*) FROM d1_private.readers_drift() GROUP BY 1, 2")"
+    echo "readers_drift() after the fixture: empty"
+  fi
+fi
+
+# --- Directus: the live container's exact image; live's extensions + this worktree's overlays
 IMAGE=$(docker inspect "$LIVE_DX" --format '{{.Image}}') || abort "docker inspect $LIVE_DX" $?
+# One merged extensions folder: live's built extensions (the main checkout's), then each overlay of this worktree in
+# place of live's (a whole folder, so its rules.json travels with it). A merged copy rather than nested bind mounts,
+# because an overlay that live does not have yet (d1-record-access) has no mount point in a read-only folder.
+EXTDIR=$(mktemp -d)
+copy_ext() { tar -C "$1" --exclude=node_modules --exclude=src -cf - . | tar -C "$2" -xf -; }
+copy_ext "$(cygpath -u "$MAIN_CHECKOUT" 2>/dev/null || echo "$MAIN_CHECKOUT")/core/extensions" "$EXTDIR" || abort "copy live's extensions" $?
+for o in $OVERLAYS; do
+  rm -rf "${EXTDIR:?}/$o"; mkdir -p "$EXTDIR/$o"; copy_ext "core/extensions/$o" "$EXTDIR/$o" || abort "copy overlay $o" $?
+done
+EXTMOUNT="$(cygpath -m "$EXTDIR" 2>/dev/null || echo "$EXTDIR")"
 docker run -d --name "$DX" --network "$NET" \
   -e KEY="$(rhex 16)" -e SECRET="$(rhex 32)" \
   -e DB_CLIENT=pg -e DB_HOST="$PG" -e DB_PORT=5432 -e DB_DATABASE=d1_database -e DB_USER=d1 -e DB_PASSWORD="$DB_PASS" \
   -e PUBLIC_URL="http://$DX:8055" -e EXTENSIONS_AUTO_RELOAD=false -e D1_TIMEZONE=Europe/London \
-  -v "$MAIN_CHECKOUT\\core\\extensions:/directus/extensions:ro" \
-  -v "$REPO/core/extensions/d1-next-number:/directus/extensions/d1-next-number:ro" \
+  -v "$EXTMOUNT:/directus/extensions:ro" \
   "$IMAGE" >/dev/null || abort "directus container start" $?
 ready=
 for _ in $(seq 1 120); do
@@ -174,11 +256,55 @@ for _ in $(seq 1 120); do
 done
 [[ -n "$ready" ]] || abort "directus not healthy after 120s" 1 "$(docker logs --tail 60 "$DX" 2>&1)"
 
+# D1_SMOKE_MODE=seed: the seeded copy with Directus running, left for hand measurement (EXPLAIN, rule experiments)
+if [[ "$MODE" == seed ]]; then
+  echo "seeded copy ready: containers $DX and $PG on network $NET (docker rm -fv $DX $PG; docker network rm $NET)"
+  trap - EXIT; exit 0
+fi
+
 # --- cases
-cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e LM_TOKEN="$LM_TOKEN" -e D1_SMOKE_REQUIRE_LM="${D1_SMOKE_REQUIRE_LM:-}" \
-  -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_smoke.mjs 2>&1)
-crc=$?
+SCRIPT=directus_smoke.mjs; [[ "$MODE" == perf ]] && SCRIPT=directus_perf.mjs
+if [[ "$MODE" == perf && "${D1_SMOKE_PERF_SKIP_READS:-}" == 1 ]]; then
+  cout="PERF skipped (D1_SMOKE_PERF_SKIP_READS=1: only the write paths run)"; crc=0
+else
+  cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e LM_TOKEN="$LM_TOKEN" -e D1_SMOKE_REQUIRE_LM="${D1_SMOKE_REQUIRE_LM:-}" \
+    -e D1_SMOKE_PERF_N="${D1_SMOKE_PERF_N:-20}" -v "$FXMOUNT:/fixture:ro" \
+    -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/$SCRIPT 2>&1)
+  crc=$?
+fi
 echo "$cout"
+if [[ "$MODE" == perf ]]; then
+  grep -q '^PERF ' <<<"$cout" || { echo "FAIL harness: perf: no PERF lines in the output"; exit 1; }
+  # The write paths (performance gate): the SQL-level writers (scripts/dev/perf_writes.sql, D1_SMOKE_PERFW_N repetitions, each rolled back), then
+  # the same through Directus (scripts/dev/directus_perf_writes.mjs), then the UI writes of a member while an import transaction is held open.
+  # Peak pg_locks per scenario are printed as PERFLOCKS lines.
+  echo "--- write paths (PERFW lines: scenario, milliseconds; median over the repetitions below) ---"
+  wall=""
+  for rep in $(seq 1 "${D1_SMOKE_PERFW_N:-3}"); do
+    wo=$(psql_copy -v rep="$rep" -f - < scripts/dev/perf_writes.sql 2>&1) || { echo "FAIL harness: perf_writes.sql rep $rep"; echo "$wo"; exit 1; }
+    wall+="$wo"$'\n'
+  done
+  grep -E '^PERFINFO' <<<"$wall" | sort -u
+  grep -E '^PERFLOCKS' <<<"$wall" | sort -u
+  awk '/^PERFW /{ v[$2] = v[$2] " " $3 }
+       END { for (k in v) { m = split(v[k], a, " "); for (i = 1; i <= m; i++) for (j = i + 1; j <= m; j++) if (a[j] + 0 < a[i] + 0) { t = a[i]; a[i] = a[j]; a[j] = t }
+                            printf "PERFW %s n=%d p50=%d max=%d\n", k, m, a[int((m + 1) / 2)], a[m] } }' <<<"$wall" | sort
+  node_writes() { docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e D1_SMOKE_PERF_N="${D1_SMOKE_PERFW_N:-3}" "$@" \
+    -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_perf_writes.mjs 2>&1; }
+  D1_PERF_WRITES_ONLY='^(force_app_upload|coowner_added_big_sample|tests_with_subjects_x20|campaign_add_50_samples|link_login_big_pi)$'
+  node_writes -e D1_PERF_WRITES_ONLY="$D1_PERF_WRITES_ONLY" || crc=1
+  # UI writes while an import transaction is open: the importer's INSERT ... (3000 FAST runs) stays uncommitted for UI_WAIT seconds and a
+  # sample, a test and a campaign note are saved meanwhile (the global readers lock and the rollup lock make them wait for its commit).
+  UI_WAIT="${D1_SMOKE_UI_WAIT:-8}"
+  ( psql_copy -c "BEGIN; INSERT INTO manufacturing_operations (operation_id, method_id, source_system, pass_code, sintering_run_number, source_run_uid)
+      SELECT md5('pw-ui-' || g)::uuid, (SELECT method_id FROM manufacturing_methods WHERE method_code = 'MF'), 'fast_25', 'PWUI' || g, 900000 + g, 'pw-ui-uid-' || g FROM generate_series(1, 3000) g;
+      SELECT pg_sleep($UI_WAIT); ROLLBACK;" >/dev/null 2>&1 ) &
+  sleep 3
+  echo "--- UI writes while an import transaction is held open for ${UI_WAIT}s (a write that waits for its commit shows about $((UI_WAIT - 3))s) ---"
+  node_writes -e D1_PERF_WRITES_ONLY='^ui_write_wait$' || crc=1
+  wait
+  exit "$crc"
+fi
 
 # --- file case (T0e): a file that has a file_fingerprints row can still be deleted through Directus, and the
 # row goes with it (ON DELETE CASCADE). Upload and delete run in node; the fingerprint insert needs psql here.
@@ -198,6 +324,30 @@ if [[ "$(psql_copy -Atc "SELECT to_regclass('public.file_fingerprints') IS NOT N
   fi
   echo "$fline"; cout+=$'\n'"$fline"
   [[ "$fline" == "SMOKE FAIL"* && $crc -eq 0 ]] && crc=1
+fi
+# Email path (A1a Task 3): the smoke Directus has no mail server, so every notification the ra_* cases trigger answers email: failed. The
+# endpoint logs a warning for each ("d1-record-access: email for ..."); the node cases print a NOTE line when they saw one, and the
+# line must then be in Directus's own log: the captured log of the failure path (the fake-transport cases are in the extension's node tests).
+if grep -q '^SMOKE NOTE ra_expect_email_warning' <<<"$cout"; then
+  # captured first: `docker logs | grep -q` under pipefail fails when grep exits early and docker logs gets SIGPIPE
+  dlog=$(docker logs "$DX" 2>&1)
+  if grep -q 'd1-record-access: email for' <<<"$dlog"; then eline="SMOKE PASS ra_email_failure_is_logged"
+  else eline="SMOKE FAIL ra_email_failure_is_logged: the cases saw email: failed but Directus logged no warning"; fi
+  echo "$eline"; cout+=$'\n'"$eline"
+  [[ "$eline" == "SMOKE FAIL"* && $crc -eq 0 ]] && crc=1
+fi
+# On a failed case show the end of Directus's own log: the route logs the cause of a 500 there.
+grep -q '^SMOKE FAIL ' <<<"$cout" && { echo "--- directus log (tail) ---"; docker logs --tail 40 "$DX" 2>&1 | cut -c1-600; }
+# A failure outside check() (image pull, the .mjs throwing) prints no SMOKE lines: flag it as a harness failure.
+if ! grep -q '^SMOKE ' <<<"$cout"; then
+  echo "FAIL harness: cases (exit $crc): no SMOKE lines in the output"; exit 1
+elif [[ $crc -ne 0 ]] && ! grep -q '^SMOKE FAIL ' <<<"$cout"; then
+  echo "FAIL harness: cases (exit $crc): non-zero exit without a SMOKE FAIL line"; exit 1
+fi
+exit "$crc"
+
+'"$eline"
+  [[ "$eline" == "SMOKE FAIL"* && $crc -eq 0 ]] && crc=1
 fi
 # On a failed case show the end of Directus's own log: the route logs the cause of a 500 there.
 grep -q '^SMOKE FAIL ' <<<"$cout" && { echo "--- directus log (tail) ---"; docker logs --tail 40 "$DX" 2>&1 | cut -c1-600; }

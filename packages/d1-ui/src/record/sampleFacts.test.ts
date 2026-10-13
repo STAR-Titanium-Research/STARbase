@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coOwnerText, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleMassText, sampleRailFacts } from './sampleFacts';
+import { HIDDEN_CAMPAIGNS_LABEL, coOwnerText, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleMassText, sampleRailFacts } from './sampleFacts';
 
 const sample = {
 	sample_id: 's1',
@@ -85,10 +85,11 @@ describe('sampleRailFacts', () => {
 		const facts = sampleRailFacts(sample, '', [...rows, { campaign_id: null }], {});
 		const f = byLabel(facts, 'Campaigns');
 		expect(f?.list).toHaveLength(9);
-		expect(f?.list?.[8]).toEqual({ label: 'Campaign', hidden: true });
-		// One list entry standing for two hidden links.
+		expect(f?.list?.[8]).toEqual({ label: 'Some campaigns', hidden: true });
+		// One list entry standing for two hidden links: no number, however many are hidden.
 		const two = byLabel(sampleRailFacts(sample, '', [{ campaign_id: null }, { campaign_id: null }], {}), 'Campaigns');
-		expect(two?.list).toEqual([{ label: '2 campaigns', hidden: true }]);
+		expect(two?.list).toEqual([{ label: 'Some campaigns', hidden: true }]);
+		expect(HIDDEN_CAMPAIGNS_LABEL).not.toMatch(/\d/);
 	});
 
 	it('marks a hidden project, and a project that came back as a bare id', () => {

@@ -1004,6 +1004,93 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES ('projects', 'principal_investigator_person', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}","enableCreate":true}', 'related-values', '{"template":"{{full_name}}"}', FALSE, FALSE, 8, 'half', FALSE, '[{"language": "en-US", "translation": "Principal Investigator"}]');
 UPDATE directus_fields SET hidden = TRUE WHERE (collection, field) IN (('physical_samples','owner'), ('manufacturing_operations','owner'), ('test_sessions','owner'), ('tool_boxes','owner'), ('cutting_inserts','owner'), ('insert_edges','owner'), ('manufacturing_operations','operator'), ('test_sessions','operator'));
 
+-- ── record access (migration 165, A1a) ─────────────────────────────────────────
+-- The five access tables and the `restricted` flag. The field deletes above wipe the hidden `access`
+-- alias and the hidden read-only `restricted` field of physical_samples, manufacturing_operations,
+-- test_sessions and projects, and the relations of the access tables are kept here the same way as the
+-- owner relations: the record-access rules filter on `access._some.person_id.user_id`, which only works
+-- while the alias, the parent relation and the person_id -> people relation exist. (configure_campaigns.sql
+-- re-adds the campaign side, because it deletes everything that touches campaigns.) Same rows as
+-- migration 165; tests/phase1_schema.sh checks them after the scripts have run.
+DELETE FROM directus_relations WHERE many_collection IN ('sample_access','operation_access','test_access','campaign_access','project_access');
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+('sample_access',    'sample_id',    'physical_samples',         'access', 'delete'),
+('operation_access', 'operation_id', 'manufacturing_operations', 'access', 'delete'),
+('test_access',      'session_id',   'test_sessions',            'access', 'delete'),
+('campaign_access',  'campaign_id',  'campaigns',                'access', 'delete'),
+('project_access',   'project_id',   'projects',                 'access', 'delete'),
+('sample_access',    'person_id',    'people',                   NULL,     'nullify'),
+('operation_access', 'person_id',    'people',                   NULL,     'nullify'),
+('test_access',      'person_id',    'people',                   NULL,     'nullify'),
+('campaign_access',  'person_id',    'people',                   NULL,     'nullify'),
+('project_access',   'person_id',    'people',                   NULL,     'nullify');
+DELETE FROM directus_fields WHERE field IN ('access','restricted') AND collection IN ('physical_samples','manufacturing_operations','test_sessions','projects');
+INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, note) VALUES
+('physical_samples','access','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,90,'full',
+    'Hidden alias over sample_access.sample_id: the access list the record-access rules filter on (A1a).'),
+('manufacturing_operations','access','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,90,'full',
+    'Hidden alias over operation_access.operation_id: the access list the record-access rules filter on (A1a).'),
+('test_sessions','access','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,90,'full',
+    'Hidden alias over test_access.session_id: the access list the record-access rules filter on (A1a).'),
+('projects','access','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,90,'full',
+    'Hidden alias over project_access.project_id: the access list the record-access rules filter on (A1a).'),
+('physical_samples','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
+    'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.'),
+('manufacturing_operations','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
+    'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.'),
+('test_sessions','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
+    'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.'),
+('projects','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
+    'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.');
+
+-- ── record readers (migration 166, A1a) ────────────────────────────────────────
+-- The derived readers tables and their `readers` / `open_to_all` aliases: every Lab Member read rule of the five record types, of
+-- campaign_samples and of their children is a membership test on them (`readers._some.user_id`, `<fk>.readers.user_id`), which only
+-- works while the hidden collection, the record_id -> parent relation with the alias, the user_id -> directus_users relation and the
+-- hidden alias field exist. The deletes above wipe the alias fields of the parents and the relations that touch them; re-added here with
+-- the same rows as migration 166 (configure_campaigns.sql re-adds the campaigns side). tests/phase1_schema.sh checks them after the scripts.
+INSERT INTO directus_collections (collection, icon, note, hidden, sort)
+SELECT v.collection, 'lock', v.note, TRUE, v.sort
+FROM (VALUES
+    ('sample_readers', 'Derived: who may read each sample (A1a, migration 166); written only by the recompute triggers', 97),
+    ('operation_readers', 'Derived: who may read each operation (A1a, migration 166); written only by the recompute triggers', 98),
+    ('test_readers', 'Derived: who may read each test session (A1a, migration 166); written only by the recompute triggers', 99),
+    ('campaign_readers', 'Derived: who may read each campaign (A1a, migration 166); written only by the recompute triggers', 100),
+    ('project_readers', 'Derived: who may read each project (A1a, migration 166); written only by the recompute triggers', 101),
+    ('campaign_sample_readers', 'Derived: who may read each campaign_samples row (A1a, migration 166); written only by the recompute triggers', 102),
+    ('operation_open_to_all', 'Derived: the operations every member may read, the narrowed orphan amnesty (A1a, migration 166)', 103)
+) AS v (collection, note, sort)
+WHERE NOT EXISTS (SELECT 1 FROM directus_collections AS c WHERE c.collection = v.collection);
+DELETE FROM directus_relations WHERE many_collection IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all');
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+('sample_readers',          'record_id', 'physical_samples',         'readers',     'delete'),
+('operation_readers',       'record_id', 'manufacturing_operations', 'readers',     'delete'),
+('test_readers',            'record_id', 'test_sessions',            'readers',     'delete'),
+('campaign_readers',        'record_id', 'campaigns',                'readers',     'delete'),
+('project_readers',         'record_id', 'projects',                 'readers',     'delete'),
+('campaign_sample_readers', 'record_id', 'campaign_samples',         'readers',     'delete'),
+('operation_open_to_all',   'record_id', 'manufacturing_operations', 'open_to_all', 'delete'),
+('sample_readers',          'user_id',   'directus_users',           NULL,          'nullify'),
+('operation_readers',       'user_id',   'directus_users',           NULL,          'nullify'),
+('test_readers',            'user_id',   'directus_users',           NULL,          'nullify'),
+('campaign_readers',        'user_id',   'directus_users',           NULL,          'nullify'),
+('project_readers',         'user_id',   'directus_users',           NULL,          'nullify'),
+('campaign_sample_readers', 'user_id',   'directus_users',           NULL,          'nullify');
+DELETE FROM directus_fields WHERE field IN ('readers','open_to_all') AND collection IN ('physical_samples','manufacturing_operations','test_sessions','projects','campaign_samples');
+INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, note) VALUES
+('physical_samples','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over sample_readers.record_id: who may read the sample, the membership test the read rule uses (A1a, migration 166).'),
+('manufacturing_operations','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over operation_readers.record_id: who may read the operation, the membership test the read rule uses (A1a, migration 166).'),
+('manufacturing_operations','open_to_all','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,94,'full',
+    'Hidden alias over operation_open_to_all.record_id: the amnesty leaf of the operations read rule (A1a, migration 166).'),
+('test_sessions','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over test_readers.record_id: who may read the test session, the membership test the read rule uses (A1a, migration 166).'),
+('projects','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over project_readers.record_id: who may read the project, the membership test the read rule uses (A1a, migration 166).'),
+('campaign_samples','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over campaign_sample_readers.record_id: who may read the junction row, the membership test the read rule uses (A1a, migration 166).');
+
 COMMIT;
 
 -- Verify

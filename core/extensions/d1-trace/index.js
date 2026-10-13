@@ -1,7 +1,7 @@
 // Directus endpoint: d1-trace  (mounted at /d1-trace)
 //
 // GET /d1-trace/sample/:id  ->  the sample's cradle-to-grave story:
-//   { sample, stock_origins[], ancestors[], events[], descendants[], hidden{}, truncated{} }
+//   { sample, stock_origins[], ancestors[], events[], descendants[], hidden{ stock_origins, ancestors, events, descendants: boolean }, truncated{} }
 //
 // The four traceability functions (db/migrations/20260619000014_traceability.sql; the two genealogy
 // walks are plpgsql since 20261006000136) run as the database owner, so they ignore Directus
@@ -9,7 +9,7 @@
 // node each was reached from). Every value it returns
 // (codes, forms, labels, dates, status, relationship type, fraction, mass) is then read through
 // Directus's ItemsService with req.accountability, so a record the caller cannot read is dropped
-// and only counted, and a field the role cannot read is simply absent. A sample the caller cannot
+// and only flagged (a boolean per group, never a count), and a field the role cannot read is simply absent. A sample the caller cannot
 // read is a 404 (the same as a missing one). Design:
 // docs/superpowers/specs/2026-10-06-sample-timeline-and-campaign-overview-design.md
 //
@@ -225,7 +225,8 @@ export default {
                 ]);
                 const okSamples = new Set(samples.keys());
 
-                const hidden = { stock_origins: 0, ancestors: 0, events: 0, descendants: 0 };
+                // Booleans, never counts: a number would tell the caller how many records they may not see (spec section 8).
+                const hidden = { stock_origins: false, ancestors: false, events: false, descendants: false };
 
                 // Lineage rows are distinct samples already. A row is "through hidden" when every path
                 // to it passes an unreadable sample; the relationship edge (type, fraction) comes from
@@ -236,7 +237,7 @@ export default {
                     const edges = [];
                     for (const r of rows) {
                         if (!okSamples.has(r.sample_id)) {
-                            hidden[name]++;
+                            hidden[name] = true;
                             continue;
                         }
                         const through = !reach.has(r.sample_id);
@@ -280,7 +281,7 @@ export default {
                     readableStock.map((r) => [r.via_sample_id, r.lot_id]),
                 );
                 const hiddenLots = new Set(stockRows.filter((r) => !lots.has(r.lot_id)).map((r) => r.lot_id));
-                hidden.stock_origins = hiddenLots.size;
+                hidden.stock_origins = hiddenLots.size > 0;
                 const stock_origins = readableStock.map((r) => {
                     const lot = lots.get(r.lot_id);
                     const via = samples.get(r.via_sample_id);
@@ -307,7 +308,7 @@ export default {
                     const isOp = e.event_type === 'manufacturing_operation';
                     const row = isOp ? ops.get(e.event_id) : e.event_type === 'test_session' ? tests.get(e.event_id) : null;
                     if (!row) {
-                        hidden.events++;
+                        hidden.events = true;
                         continue;
                     }
                     // Only identifying fields are passed on; operator names and file pointers are

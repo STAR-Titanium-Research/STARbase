@@ -82,7 +82,7 @@ describe('buildLife', () => {
 		expect(subs).toEqual(['powder · Acme · 4.5 g used · via A1', 'bar · cut from, fraction 0.5', 'disc', '#3', 'failed']);
 	});
 
-	it('puts a "not visible" marker next to each hidden group, never in the middle of another', () => {
+	it('puts a "some records hidden" marker next to each hidden group, never in the middle of another', () => {
 		const t = base();
 		t.hidden = { stock_origins: 1, ancestors: 2, events: 3, descendants: 1 };
 		t.ancestors = [{ depth: 1, sample_id: 'a1', sample_code: 'A1', form: null, relationship_type: null, fraction: null, through_hidden: true }];
@@ -96,18 +96,29 @@ describe('buildLife', () => {
 			'hidden-descendants',
 		]);
 		expect(items.filter((i) => i.kind === 'hidden').map((i) => i.label)).toEqual([
-			'1 not visible to you',
-			'2 not visible to you',
-			'3 not visible to you',
-			'1 not visible to you',
+			'some records hidden',
+			'some records hidden',
+			'some records hidden',
+			'some records hidden',
 		]);
 		expect(items.find((i) => i.key === 'ancestor-a1')!.throughHidden).toBe(true);
 	});
 });
 
 describe('hiddenText', () => {
-	it('is the same wording as the timeline', () => {
-		expect(hiddenText(5)).toBe('5 not visible to you');
+	it('prints no number, whatever the response carries', () => {
+		expect(hiddenText(5)).toBe('some records hidden');
+		expect(hiddenText(true)).toBe('some records hidden');
+		expect(hiddenText()).toBe('some records hidden');
+		expect(hiddenText(5)).not.toMatch(/[0-9]/);
+	});
+
+	it('takes booleans from d1-trace: a marker for true, none for false, in the same places', () => {
+		const t = base();
+		t.hidden = { stock_origins: false, ancestors: true, events: true, descendants: false };
+		const items = buildLife(t);
+		expect(items.filter((i) => i.kind === 'hidden').map((i) => i.key)).toEqual(['hidden-ancestors', 'hidden-events']);
+		expect(items.filter((i) => i.kind === 'hidden').map((i) => i.label)).toEqual(['some records hidden', 'some records hidden']);
 	});
 });
 

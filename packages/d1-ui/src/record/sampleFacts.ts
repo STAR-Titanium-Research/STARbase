@@ -57,6 +57,9 @@ export function sampleMassText(sample: Rec | null | undefined): string {
 
 /** The campaigns a sample belongs to, from its `campaign_samples` rows: the campaigns the user may
  *  read, and how many links came back with no campaign (hidden by row-level visibility, ADR-0011). */
+/** The label of the one hidden-campaign entry: never a number (how many campaigns a reader may not see is itself restricted information). */
+export const HIDDEN_CAMPAIGNS_LABEL = 'Some campaigns';
+
 export function sampleCampaigns(rows: Rec[]): { campaigns: Rec[]; hidden: number } {
 	const campaigns = rows.map((r) => asRecord(r?.campaign_id)).filter((c): c is Rec => !!c?.campaign_id);
 	return { campaigns, hidden: rows.length - campaigns.length };
@@ -87,7 +90,7 @@ export function sampleRailFacts(sample: Rec | null | undefined, dimensions: stri
 		label: c.campaign_code ? `Campaign ${c.campaign_code}` : c.name || 'Campaign',
 		to: recordRoute('campaigns', c.campaign_id),
 	}));
-	if (hiddenCampaigns > 0) campaignList.push({ label: hiddenCampaigns === 1 ? 'Campaign' : `${hiddenCampaigns} campaigns`, hidden: true });
+	if (hiddenCampaigns > 0) campaignList.push({ label: HIDDEN_CAMPAIGNS_LABEL, hidden: true });
 	return [
 		{ label: 'Material', value: material?.common_name || material?.alloy_code },
 		{ label: 'Dimensions', value: dimensions },

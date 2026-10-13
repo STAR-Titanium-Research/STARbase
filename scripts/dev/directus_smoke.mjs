@@ -6,6 +6,8 @@
 // `_some ... can only be used with top level relational alias field` 400 (the Lab Member permission rows, see
 // task-6 report) they print `SMOKE SKIP <case>: <reason>` and do not fail the run; any other probe failure (401,
 // 403, 500, another 400) leaves them to run and FAIL. D1_SMOKE_REQUIRE_LM=1 (or true) makes the skip a FAIL.
+import { readFileSync } from 'node:fs';
+
 const BASE = process.env.DIRECTUS_URL;
 const TOKEN = process.env.TOKEN;
 const LM_TOKEN = process.env.LM_TOKEN;
@@ -64,7 +66,9 @@ await check('create_test_with_subject', async () => {
   expect(test.test_code === `${sampleCode}-SEM1`, `test_code ${test.test_code}, expected ${sampleCode}-SEM1`);
 });
 
-const DROP = ['session_id', 'short_id', 'created_at', 'updated_at', 'version', 'subject', 'created_by'];
+// `fields=*` also returns the hidden o2m aliases of migrations 165 and 166 (`access`, `readers`: the ids of the access and readers rows); a
+// client that re-POSTs a GET body must drop them (the readers rows belong to the source record, and the Lab Member has no write grant on them)
+const DROP = ['session_id', 'short_id', 'created_at', 'updated_at', 'version', 'subject', 'created_by', 'access', 'readers'];
 async function copyOfTest() {
   const r = await api('GET', `/items/test_sessions/${test.session_id}?fields=*`);
   expect(r.status === 200, `read test: status ${r.status}: ${errText(r)}`);
@@ -290,5 +294,935 @@ await check('sample_rename_cascades', async () => {
   const typed = await readOp(typedOp.operation_id);
   expect(typed.pass_code === 'SMOKE-TYPED2', `typed op changed to ${typed.pass_code}`);
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Record access (A1a Task 2): the Lab Member rules of scripts/access_rules.json against a real Directus.
+// The harness loaded scripts/dev/access_matrix_fixture.sql into the copy (32 universes: every restricted/unrestricted
+// combination of a project, campaign, sample, operation and test, access lists, an old co-owner and investigator) and
+// computed, in plain SQL written from the spec's tables, what every fixture user may read, update and delete; the
+// answer is /fixture/expected.json. Every case below compares Directus with that answer.
+// ---------------------------------------------------------------------------------------------------------------
+let FX = null;
+try { FX = JSON.parse(readFileSync('/fixture/expected.json', 'utf8')); } catch { /* no fixture: the cases report it */ }
+function needFx() {
+  if (!FX) throw Object.assign(new Error('no access fixture in this run (the copy has no access tables, or D1_SMOKE_ACCESS=0)'), { skip: true });
+}
+const PK = {
+  physical_samples: 'sample_id', manufacturing_operations: 'operation_id', test_sessions: 'session_id',
+  campaigns: 'campaign_id', projects: 'project_id',
+};
+const NOTE = {
+  physical_samples: 'notes', manufacturing_operations: 'outcome_notes', test_sessions: 'notes',
+  campaigns: 'notes', projects: 'description',
+};
+const RECORD_KEYS = ['P', 'Q', 'C', 'C2', 'S', 'S2', 'O', 'O2', 'O3', 'O4', 'OF1', 'OF2', 'T'];
+const labels = new Map();
+const universe = (k) => FX.universes[k];
+if (FX) for (const u of FX.universes) for (const key of RECORD_KEYS) labels.set(u[key], `${key}#${u.k}`);
+const lab = (id) => labels.get(id) ?? id.slice(0, 8);
+// The update and delete matrices send one write per user and record; eight of the 32 universes (every flag on its own, the
+// all-open one, the all-restricted one and a mixed one) keep that to a few minutes. The read matrices cover all 32.
+const WRITE_UNIVERSES = new Set([0, 1, 2, 4, 8, 16, 21, 31]);
+const fixtureIds = (collection, all = true) => {
+  const keys = {
+    physical_samples: ['S', 'S2'], manufacturing_operations: ['O', 'O2', 'O3', 'O4', 'OF1', 'OF2'],
+    test_sessions: ['T'], campaigns: ['C', 'C2'], projects: ['P', 'Q'],
+  }[collection];
+  return FX.universes.filter((u) => all || WRITE_UNIVERSES.has(u.k)).flatMap((u) => keys.map((key) => u[key]));
+};
+const expectedRead = (user, collection) => [
+  ...FX.expected[user][collection].read,
+  ...(collection === 'manufacturing_operations' ? FX.real_amnesty_ops : []),
+].sort();
+
+async function listIds(collection, token, qs = '') {
+  const pk = PK[collection];
+  const r = await api('GET', `/items/${collection}?limit=-1&fields=${pk}&sort=${pk}${qs}`, undefined, token);
+  expect(r.status === 200, `GET ${collection}: status ${r.status}: ${errText(r)}`);
+  return r.body.data.map((row) => row[pk]);
+}
+const diff = (got, want) => {
+  const g = new Set(got), w = new Set(want);
+  return { extra: got.filter((x) => !w.has(x)), missing: want.filter((x) => !g.has(x)) };
+};
+const show = (ids) => ids.slice(0, 6).map(lab).join(',') + (ids.length > 6 ? `,...(${ids.length})` : '');
+
+// Every ruled collection answers 200 for a member (the `_some` rule of Directus 11.17: one illegal `_some` 400s
+// every collection whose rule reaches it).
+const RULED = [
+  'physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns', 'projects', 'sample_co_owners',
+  'sample_stock_provenance', 'sample_data_files', 'sample_genealogy', 'campaign_samples', 'operation_data_files',
+  'machining_force_analysis', 'fast_run_data', 'session_data_files', 'operation_additional_operators',
+  'session_additional_operators', 'test_sessions_subject', 'project_investigators', 'project_rollup', 'people',
+  'sample_access', 'operation_access', 'test_access', 'campaign_access', 'project_access',
+];
+await check('lm_access_every_ruled_collection_answers_200', async () => {
+  needFx();
+  const bad = [];
+  for (const user of ['stranger', 'owner', 'pi', 'viewer', 'editor', 'opOwner']) {
+    for (const collection of RULED) {
+      const r = await api('GET', `/items/${collection}?limit=3&meta=filter_count&fields=${PK[collection] ?? "*"}`, undefined, FX.users[user]);
+      if (r.status !== 200) bad.push(`${user} ${collection} -> ${r.status} ${errText(r).slice(0, 160)}`);
+    }
+  }
+  expect(!bad.length, bad.slice(0, 5).join(' | '));
+});
+
+// list, filter_count, a second page and no duplicate ids, for every fixture user, against the SQL evaluation
+for (const collection of Object.keys(PK)) {
+  await check(`lm_access_matrix_${collection}_read`, async () => {
+    needFx();
+    const problems = [];
+    for (const [user, token] of Object.entries(FX.users)) {
+      const want = expectedRead(user, collection);
+      const got = await listIds(collection, token);
+      const dups = got.length - new Set(got).size;
+      if (dups) problems.push(`${user}: ${dups} duplicate ids`);
+      const d = diff(got, want);
+      if (d.extra.length || d.missing.length) problems.push(`${user}: extra [${show(d.extra)}] missing [${show(d.missing)}]`);
+      const c = await api('GET', `/items/${collection}?limit=1&meta=filter_count&fields=${PK[collection]}`, undefined, token);
+      if (c.body?.meta?.filter_count !== want.length) problems.push(`${user}: filter_count ${c.body?.meta?.filter_count}, expected ${want.length}`);
+      const page = await api('GET', `/items/${collection}?limit=7&page=2&sort=${PK[collection]}&fields=${PK[collection]}`, undefined, token);
+      const p2 = (page.body?.data ?? []).map((row) => row[PK[collection]]);
+      if (JSON.stringify(p2) !== JSON.stringify(want.slice(7, 14))) problems.push(`${user}: page 2 differs`);
+    }
+    expect(!problems.length, problems.slice(0, 4).join(' | '));
+  });
+}
+
+// update: PATCH a harmless field as every user on every fixture record; 200 exactly where the SQL evaluation says so.
+// Then delete: a user who may not delete gets 403 on every record, and the one who may deletes it (leaf records first).
+const patchStatus = async (collection, id, token) =>
+  (await api('PATCH', `/items/${collection}/${id}?fields=${PK[collection]}`, { [NOTE[collection]]: 'smoke access' }, token)).status;
+for (const collection of Object.keys(PK)) {
+  await check(`lm_access_matrix_${collection}_update`, async () => {
+    needFx();
+    const problems = [];
+    for (const [user, token] of Object.entries(FX.users)) {
+      const can = new Set(FX.expected[user][collection].update);
+      for (const id of fixtureIds(collection, false)) {
+        const s = await patchStatus(collection, id, token);
+        if (can.has(id) ? s !== 200 : s !== 403) problems.push(`${user} PATCH ${lab(id)} -> ${s}, expected ${can.has(id) ? 200 : 403}`);
+      }
+    }
+    expect(!problems.length, `${problems.length} mismatches: ${problems.slice(0, 5).join(' | ')}`);
+  });
+}
+// named cases of the spec's cascade table (they are also inside the matrix; these name the intent)
+await check('lm_access_viewer_cannot_patch_editor_can', async () => {
+  needFx();
+  const u = universe(0);
+  for (const [collection, key] of [['physical_samples', 'S'], ['manufacturing_operations', 'O'], ['test_sessions', 'T'], ['campaigns', 'C']]) {
+    const v = await patchStatus(collection, u[key], FX.users.viewer);
+    const e = await patchStatus(collection, u[key], FX.users.editor);
+    expect(v === 403 && e === 200, `${collection}: viewer ${v} (want 403), editor ${e} (want 200)`);
+  }
+});
+
+await check('lm_access_sample_restricted_operation_invisible_to_its_own_owner', async () => {
+  needFx();
+  const u = universe(4); // the sample is restricted, nothing else
+  const ops = await listIds('manufacturing_operations', FX.users.opOwner);
+  const tests = await listIds('test_sessions', FX.users.opOwner);
+  for (const id of [u.O, u.O2]) expect(!ops.includes(id), `opOwner sees ${lab(id)} under a restricted sample`);
+  expect(!tests.includes(u.T), 'opOwner sees the test under a restricted sample');
+  const own = await listIds('manufacturing_operations', FX.users.owner);
+  expect(own.includes(u.O) && own.includes(u.O2), 'the sample owner no longer sees the operations of their restricted sample');
+  const direct = await api('GET', `/items/manufacturing_operations/${u.O}`, undefined, FX.users.opOwner);
+  expect(direct.status === 403, `GET of the hidden operation by id -> ${direct.status}, expected 403`);
+});
+
+await check('lm_access_restricted_project_and_campaign_cascade', async () => {
+  needFx();
+  const p = universe(1); // the project is restricted
+  const camps = await listIds('campaigns', FX.users.campaignOwner);
+  expect(!camps.includes(p.C), 'campaignOwner still sees the campaign of a restricted project');
+  const stranger = await listIds('physical_samples', FX.users.stranger);
+  expect(!stranger.includes(p.S), 'a stranger sees a sample of a restricted project');
+  const pi = await listIds('manufacturing_operations', FX.users.pi);
+  expect(pi.includes(p.O) && pi.includes(p.O3) && pi.includes(p.O4), 'the PI no longer reads everything in their restricted project');
+  const owner = await listIds('manufacturing_operations', FX.users.owner);
+  expect(!owner.includes(p.O) && !owner.includes(p.O2), 'the owner of the sample keeps the sample, not the operations under a restricted project (strict gates, spec section 1)');
+  const c = universe(2); // the campaign is restricted
+  const camp = await listIds('physical_samples', FX.users.campaignOwner);
+  expect(camp.includes(c.S) && camp.includes(c.S2), 'the owner of a restricted campaign loses the samples in it');
+  const inv = await listIds('campaigns', FX.users.inv);
+  expect(!inv.includes(c.C), 'an investigator of the project reaches a restricted campaign');
+  const invOps = await listIds('manufacturing_operations', FX.users.inv);
+  expect(!invOps.includes(c.O4), 'an investigator reads an operation whose campaign is restricted');
+});
+
+// params: the eleven *_params tables were folded into columns of the operation and test rows (migration 32), so they
+// follow those rows; there is no table left to rule.
+await check('lm_access_params_follow_their_operation', async () => {
+  needFx();
+  const ok = await api('GET', `/items/manufacturing_operations/${universe(4).O2}?fields=operation_id,machining_cutting_speed_m_per_min`, undefined, FX.users.owner);
+  expect(ok.status === 200 && 'machining_cutting_speed_m_per_min' in ok.body.data, `the owner reads an operation's inline parameters (${ok.status})`);
+  const hidden = await api('GET', `/items/manufacturing_operations/${universe(4).O2}?fields=operation_id,machining_cutting_speed_m_per_min`, undefined, FX.users.opOwner);
+  expect(hidden.status === 403, `the inline parameters of a hidden operation: status ${hidden.status}, expected 403`);
+});
+
+// the access tables: own rows only, and no member writes them (only the record-access endpoint does)
+await check('lm_access_tables_show_own_rows_only_and_take_no_writes', async () => {
+  needFx();
+  const mine = await api('GET', '/items/sample_access?limit=-1&fields=person_id.user_id,role', undefined, FX.users.viewer);
+  expect(mine.status === 200 && mine.body.data.length === 32 && mine.body.data.every((r) => r.role === 'view'), `viewer's own sample_access rows: ${mine.status} ${mine.body?.data?.length}`);
+  const none = await api('GET', '/items/sample_access?limit=-1', undefined, FX.users.stranger);
+  expect(none.status === 200 && none.body.data.length === 0, `a stranger sees ${none.body?.data?.length} sample_access rows`);
+  const u = universe(0);
+  const write = await api('POST', '/items/sample_access', { sample_id: u.S, person_id: u.P, role: 'view' }, FX.users.owner);
+  expect(write.status === 403, `a member creating a sample_access row: status ${write.status}, expected 403`);
+});
+
+// --- readers-based rules (migration 166): the child collections read through ONE bare hop to the parent's readers table, campaign_samples
+// through its own readers alias, sample_genealogy through the one two-hop OR left. Each is compared with the oracle's answer for the
+// parent (the fixture adds child rows to every universe), with no duplicate rows and with filter_count and paging in step.
+const CHILD_FILTER = {
+  manufacturing_operations: () => fixtureIds('manufacturing_operations'),
+  test_sessions: () => fixtureIds('test_sessions'),
+  physical_samples: () => fixtureIds('physical_samples'),
+  projects: () => fixtureIds('projects'),
+};
+// [child collection, the fk to the parent, parent collection, which oracle list answers it]
+const CHILDREN = [
+  ['machining_force_analysis', 'operation_id', 'manufacturing_operations', 'op_ordinary'],
+  ['fast_run_data', 'operation_id', 'manufacturing_operations', 'op_ordinary'],
+  ['operation_additional_operators', 'operation_id', 'manufacturing_operations', 'op_ordinary'],
+  ['session_additional_operators', 'session_id', 'test_sessions', 'read'],
+  ['test_sessions_subject', 'test_sessions_id', 'test_sessions', 'read'],
+  ['sample_co_owners', 'sample_id', 'physical_samples', 'read'],
+  ['project_investigators', 'project_id', 'projects', 'read'],
+];
+for (const [child, fk, parent, listName] of CHILDREN) {
+  await check(`lm_access_child_${child}_reads_through_the_parents_readers`, async () => {
+    needFx();
+    const inList = CHILD_FILTER[parent]().join(',');
+    const base = `/items/${child}?limit=-1&fields=${fk}&filter[${fk}][_in]=${inList}`;
+    const adminRes = await api('GET', base);
+    expect(adminRes.status === 200, `admin GET ${child}: ${adminRes.status} ${errText(adminRes)}`);
+    const withChildren = new Set(adminRes.body.data.map((r) => r[fk]));
+    expect(withChildren.size > 0, `the fixture has no ${child} rows`);
+    const problems = [];
+    for (const [user, token] of Object.entries(FX.users)) {
+      const readable = listName === 'op_ordinary' ? FX.extra[user].op_ordinary : FX.expected[user][parent].read;
+      const want = readable.filter((id) => withChildren.has(id));
+      const r = await api('GET', base, undefined, token);
+      if (r.status !== 200) { problems.push(`${user}: status ${r.status} ${errText(r).slice(0, 120)}`); continue; }
+      const rows = r.body.data.map((x) => x[fk]);
+      if (rows.length !== new Set(rows).size) problems.push(`${user}: ${rows.length - new Set(rows).size} duplicate rows`);
+      const d = diff([...new Set(rows)], want);
+      if (d.extra.length || d.missing.length) problems.push(`${user}: extra [${show(d.extra)}] missing [${show(d.missing)}]`);
+      const c = await api('GET', `/items/${child}?limit=1&meta=filter_count&fields=${fk}&filter[${fk}][_in]=${inList}`, undefined, token);
+      if (c.body?.meta?.filter_count !== rows.length) problems.push(`${user}: filter_count ${c.body?.meta?.filter_count}, rows ${rows.length}`);
+    }
+    expect(!problems.length, problems.slice(0, 4).join(' | '));
+  });
+}
+
+// campaign_samples: ONE top-level `_some` on campaign_sample_readers (the junction's readers: readers of the sample, or, for an
+// unrestricted sample, readers of its campaign); sample_genealogy: the one two-hop rule (an edge is readable by readers of its child or parent)
+await check('lm_access_campaign_samples_read_through_their_own_readers', async () => {
+  needFx();
+  const inList = fixtureIds('campaigns').join(',');
+  const problems = [];
+  for (const [user, token] of Object.entries(FX.users)) {
+    const r = await api('GET', `/items/campaign_samples?limit=-1&fields=id&sort=id&filter[campaign_id][_in]=${inList}`, undefined, token);
+    if (r.status !== 200) { problems.push(`${user}: status ${r.status} ${errText(r).slice(0, 120)}`); continue; }
+    const got = r.body.data.map((x) => x.id);
+    if (got.length !== new Set(got).size) problems.push(`${user}: duplicate junction rows`);
+    const d = diff(got, FX.extra[user].junction);
+    if (d.extra.length || d.missing.length) problems.push(`${user}: extra ${d.extra.length} missing ${d.missing.length}`);
+    const c = await api('GET', `/items/campaign_samples?limit=1&meta=filter_count&fields=id&filter[campaign_id][_in]=${inList}`, undefined, token);
+    if (c.body?.meta?.filter_count !== FX.extra[user].junction.length) problems.push(`${user}: filter_count ${c.body?.meta?.filter_count}, expected ${FX.extra[user].junction.length}`);
+    const p2 = await api('GET', `/items/campaign_samples?limit=7&page=2&sort=id&fields=id&filter[campaign_id][_in]=${inList}`, undefined, token);
+    if (JSON.stringify((p2.body?.data ?? []).map((x) => x.id)) !== JSON.stringify([...FX.extra[user].junction].sort().slice(7, 14))) problems.push(`${user}: page 2 differs`);
+  }
+  expect(!problems.length, problems.slice(0, 4).join(' | '));
+});
+
+await check('lm_access_sample_genealogy_two_hop_rule_no_duplicates', async () => {
+  needFx();
+  const inList = fixtureIds('physical_samples').join(',');
+  const problems = [];
+  for (const [user, token] of Object.entries(FX.users)) {
+    const r = await api('GET', `/items/sample_genealogy?limit=-1&fields=child_sample_id&filter[child_sample_id][_in]=${inList}`, undefined, token);
+    if (r.status !== 200) { problems.push(`${user}: status ${r.status} ${errText(r).slice(0, 120)}`); continue; }
+    const got = r.body.data.map((x) => x.child_sample_id);
+    if (got.length !== new Set(got).size) problems.push(`${user}: duplicate edges (${got.length} rows)`);
+    const d = diff([...new Set(got)], FX.extra[user].genealogy);
+    if (d.extra.length || d.missing.length) problems.push(`${user}: extra ${d.extra.length} missing ${d.missing.length}`);
+    const c = await api('GET', `/items/sample_genealogy?limit=1&meta=filter_count&fields=child_sample_id&filter[child_sample_id][_in]=${inList}`, undefined, token);
+    if (c.body?.meta?.filter_count !== got.length) problems.push(`${user}: filter_count ${c.body?.meta?.filter_count}, rows ${got.length}`);
+  }
+  expect(!problems.length, problems.slice(0, 4).join(' | '));
+});
+
+// the amnesty leaf: ownerless runs open to everyone are readable by a stranger, their children are not (no inheritance)
+await check('lm_access_amnesty_leaf_reads_the_run_not_its_children', async () => {
+  needFx();
+  const u = universe(0);
+  const ops = await listIds('manufacturing_operations', FX.users.stranger);
+  expect(ops.includes(u.OF1) && ops.includes(u.OF2), 'a stranger does not read the ownerless runs of the all-open universe');
+  const child = await api('GET', `/items/machining_force_analysis?limit=-1&fields=operation_id&filter[operation_id][_in]=${u.OF1},${u.OF2}`, undefined, FX.users.stranger);
+  expect(child.status === 200 && child.body.data.length === 0, `a stranger reads ${child.body?.data?.length} analysis rows of the amnesty runs (children do not inherit the amnesty)`);
+  // narrowed: an ownerless run on a sample held only by a restricted campaign is NOT open to everyone (universe 2: C restricted, S not)
+  const r = universe(2);
+  const open = await listIds('manufacturing_operations', FX.users.stranger);
+  expect(!open.includes(r.OF2), 'the ownerless run on a sample held only by a restricted campaign is still open to a stranger (the amnesty is narrowed)');
+});
+
+// an operation on a sample that sits only in a restricted campaign is invisible to its owner (ruling 19), not to the sample's owner
+await check('lm_access_operation_under_a_restricted_campaigns_sample_is_invisible_to_its_owner', async () => {
+  needFx();
+  const u = universe(2); // the campaign is restricted, nothing else
+  const ops = await listIds('manufacturing_operations', FX.users.opOwner);
+  expect(!ops.includes(u.O2), 'opOwner reads an operation on a sample held only by a restricted campaign (ruling 19)');
+  const owner = await listIds('manufacturing_operations', FX.users.owner);
+  expect(owner.includes(u.O2), 'the sample owner no longer reads the operation of their own sample');
+  const direct = await api('GET', `/items/manufacturing_operations/${u.O2}`, undefined, FX.users.opOwner);
+  expect(direct.status === 403, `GET of the shielded operation by id -> ${direct.status}, expected 403`);
+});
+
+// update and delete are never wider than read: for every user and type, the oracle's update and delete ids are inside its read ids
+await check('lm_access_update_and_delete_ids_are_subsets_of_read_ids', async () => {
+  needFx();
+  const bad = [];
+  for (const user of Object.keys(FX.users)) {
+    for (const collection of Object.keys(PK)) {
+      const read = new Set(FX.expected[user][collection].read);
+      for (const action of ['update', 'delete']) {
+        const wider = FX.expected[user][collection][action].filter((id) => !read.has(id));
+        if (wider.length) bad.push(`${user} ${collection} ${action}: ${wider.length} id(s) beyond read`);
+      }
+    }
+  }
+  expect(!bad.length, bad.slice(0, 4).join(' | '));
+});
+
+// the junction guard of this task part: a co-owner cannot repoint a co-owner row (403, shown above); a stranger cannot create access rows
+await check('lm_access_restricted_project_hides_everything_inside_from_a_stranger_not_from_the_pi', async () => {
+  needFx();
+  const p = universe(1);
+  const stranger = { campaigns: await listIds('campaigns', FX.users.stranger), samples: await listIds('physical_samples', FX.users.stranger),
+    ops: await listIds('manufacturing_operations', FX.users.stranger), tests: await listIds('test_sessions', FX.users.stranger) };
+  expect(!stranger.campaigns.includes(p.C) && !stranger.samples.includes(p.S) && !stranger.ops.includes(p.O) && !stranger.tests.includes(p.T),
+    'a stranger reads something inside a restricted project');
+  const pi = { campaigns: await listIds('campaigns', FX.users.pi), samples: await listIds('physical_samples', FX.users.pi),
+    ops: await listIds('manufacturing_operations', FX.users.pi), tests: await listIds('test_sessions', FX.users.pi) };
+  expect(pi.campaigns.includes(p.C) && pi.samples.includes(p.S) && pi.ops.includes(p.O) && pi.tests.includes(p.T), 'the PI does not read everything in their restricted project');
+});
+
+// the Directus rules never answer with a duplicate: every ruled collection, as a member with an access list of several people
+await check('lm_access_no_duplicates_in_any_record_list', async () => {
+  needFx();
+  const bad = [];
+  for (const user of ['stranger', 'viewer', 'editor', 'pi', 'inv']) {
+    for (const collection of Object.keys(PK)) {
+      const got = await listIds(collection, FX.users[user]);
+      if (got.length !== new Set(got).size) bad.push(`${user} ${collection}: ${got.length - new Set(got).size} duplicates`);
+    }
+  }
+  expect(!bad.length, bad.slice(0, 4).join(' | '));
+});
+
+// the hidden `readers` alias fields keep read permission `*` on the parents; the readers tables themselves are readable only for one's own login. A member who
+// asks for readers.user_id gets only their own rows, and a filter on someone else's readers row never widens what they read (review finding 7)
+await check('lm_access_readers_alias_gives_a_member_nothing_beyond_their_own_rows', async () => {
+  needFx();
+  const me = await api('GET', '/users/me?fields=id', undefined, FX.users.viewer);
+  const other = await api('GET', '/users/me?fields=id', undefined, FX.users.owner);
+  expect(me.status === 200 && other.status === 200, 'could not read the two logins');
+  const mine = me.body.data.id, theirs = other.body.data.id;
+  const readable = await listIds('physical_samples', FX.users.viewer);
+  expect(readable.length > 0, 'the viewer reads no sample');
+  const r = await api('GET', `/items/physical_samples?limit=-1&fields=sample_id,readers.user_id&filter[sample_id][_in]=${readable.slice(0, 100).join(',')}`, undefined, FX.users.viewer);
+  if (r.status === 200) {
+    const foreign = [];
+    for (const row of r.body.data) for (const x of row.readers || []) { const uid = typeof x === 'object' ? x.user_id : x; if (uid && uid !== mine) foreign.push(uid); }
+    expect(!foreign.length, `readers.user_id shows ${foreign.length} other login(s) to a member (first: ${foreign[0]})`);
+  } else {
+    expect(r.status === 403, `fields=readers.user_id -> ${r.status}, expected 200 with own rows only or 403`);
+  }
+  const f = await api('GET', `/items/physical_samples?limit=-1&fields=sample_id&filter[readers][user_id][_eq]=${theirs}`, undefined, FX.users.viewer);
+  if (f.status === 200) {
+    const set = new Set(readable);
+    const wider = f.body.data.map((x) => x.sample_id).filter((id) => !set.has(id));
+    expect(!wider.length, `a filter on another login's readers row widens the viewer's samples by ${wider.length}`);
+  } else {
+    expect([400, 403].includes(f.status), `filter[readers][user_id] -> ${f.status}`);
+  }
+});
+
+// sample_co_owners: update and delete are the sample owner's now (a co-owner used to be able to repoint or remove
+// co-owner rows, which on a restricted sample is a leak). The guard on create lands in Task 3.
+await check('lm_access_co_owner_cannot_change_or_remove_co_owner_rows', async () => {
+  needFx();
+  const u = universe(31);
+  const patch = await api('PATCH', `/items/sample_co_owners/${u.coowner_row}`, { user_id: '00000000-0000-4000-8000-000000000000' }, FX.users.coowner);
+  expect(patch.status === 403, `co-owner PATCH user_id -> ${patch.status}, expected 403`);
+  const del = await api('DELETE', `/items/sample_co_owners/${u.coowner_row}`, undefined, FX.users.coowner);
+  expect(del.status === 403, `co-owner DELETE -> ${del.status}, expected 403`);
+  const other = await api('DELETE', `/items/sample_co_owners/${u.coowner_row}`, undefined, FX.users.stranger);
+  expect(other.status === 403, `stranger DELETE -> ${other.status}, expected 403`);
+  const owner = await api('DELETE', `/items/sample_co_owners/${u.coowner_row}`, undefined, FX.users.owner);
+  expect(owner.status === 204, `the sample's owner DELETE -> ${owner.status}, expected 204`);
+});
+
+// project_rollup (migration 167): the PI reads every row of the project, an investigator only the unrestricted ones
+await check('lm_access_rollup_pi_reads_all_investigators_only_unrestricted', async () => {
+  needFx();
+  const ids = FX.universes.map((u) => u.P).join(',');
+  const problems = [];
+  let hidden = 0;
+  for (const [user, token] of Object.entries(FX.users)) {
+    const r = await api('GET', `/items/project_rollup?filter[project_id][_in]=${ids}&limit=-1&fields=row_id&sort=row_id`, undefined, token);
+    if (r.status !== 200) { problems.push(`${user}: status ${r.status}`); continue; }
+    const got = r.body.data.map((x) => x.row_id).sort();
+    const want = [...FX.rollup[user]].sort();
+    const d = diff(got, want);
+    if (d.extra.length || d.missing.length) problems.push(`${user}: extra ${d.extra.length} missing ${d.missing.length}`);
+    if (user === 'inv') hidden = FX.rollup.pi.length - want.length;
+  }
+  expect(!problems.length, problems.slice(0, 4).join(' | '));
+  expect(hidden > 0, 'the fixture has no restricted rollup row an investigator must not see');
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Record access (A1a Task 3): the d1-record-access endpoint, the d1-access-guard rules of section 4, and the readers drift
+// count of /d1-admin-overview, against a real Directus. These cases build their OWN records (a small "world" made with the
+// admin token) instead of using the 32 fixture universes: they change access lists, owners and the restricted flag, which
+// would shift what the delete matrices below expect. The fixture users (people with logins) act on them. The smoke Directus
+// has no mail server (no EMAIL_*, the default sendmail transport has no binary), so an email attempt answers `failed`; the
+// case asserts that and that the change stood; the harness then looks for the warning in Directus's own log (a
+// `SMOKE NOTE ra_expect_email_warning` line asks for it).
+// ---------------------------------------------------------------------------------------------------------------
+const RA = '/d1-record-access';
+const raSuffix = Math.random().toString(36).slice(2, 7).toUpperCase().padEnd(5, '0');
+let RAW = null; // the world: ids of what the cases below act on
+let emailsFailed = 0;
+
+const GUARD = 'd1-access-guard';
+const refusedBy = (r, source, kind) => r.status === 403 && r.body?.errors?.[0]?.extensions?.source === source && (!kind || r.body.errors[0].extensions.kind === kind);
+const why = (r) => `${r.status} ${errText(r).slice(0, 200)}`;
+
+async function personOfUser(name) {
+  const me = await api('GET', '/users/me?fields=id', undefined, FX.users[name]);
+  expect(me.status === 200, `users/me as ${name}: ${me.status}`);
+  const p = await api('GET', `/items/people?filter[user_id][_eq]=${me.body.data.id}&fields=person_id&limit=1`);
+  expect(p.status === 200 && p.body.data[0], `no People row for the fixture user ${name}`);
+  return { user: me.body.data.id, person: p.body.data[0].person_id };
+}
+async function adminMake(collection, body, key) {
+  const r = await api('POST', `/items/${collection}?fields=${key}`, body);
+  expect(r.status === 200, `admin create ${collection}: ${why(r)}`);
+  return r.body.data[key];
+}
+// d1_private.readers_drift_count() through the admin overview (?refresh=1 skips its one-minute cache): 0 after every case
+async function noDrift(label) {
+  const r = await api('GET', '/d1-admin-overview?refresh=1');
+  expect(r.status === 200, `${label}: /d1-admin-overview ${why(r)}`);
+  const drift = r.body?.readers_drift;
+  expect(drift && drift.count === 0 && drift.flagged === false, `${label}: readers drift ${JSON.stringify(drift)}`);
+}
+const entriesOf = async (collection, id, token) => {
+  const r = await api('GET', `${RA}/${collection}/${id}`, undefined, token);
+  expect(r.status === 200, `GET ${RA}/${collection}: ${why(r)}`);
+  return r.body;
+};
+const addEntry = (collection, id, person_id, role, token) => api('POST', `${RA}/${collection}/${id}/entries`, { person_id, role }, token);
+const noteEmail = (r) => { if (r.body?.email === 'failed') emailsFailed++; };
+
+await check('ra_world_setup', async () => {
+  needFx();
+  const [owner, coowner, viewer, editor, stranger, campaignOwner, pi] =
+    await Promise.all(['owner', 'coowner', 'viewer', 'editor', 'stranger', 'campaignOwner', 'pi'].map(personOfUser));
+  const nologin = await api('GET', `/items/people?filter[full_name][_eq]=${encodeURIComponent('Fx nologin')}&fields=person_id&limit=1`);
+  expect(nologin.body?.data?.[0], 'the fixture has no login-less person');
+  const mailed = await adminMake('people', { full_name: `Smoke Mailed ${raSuffix}`, email: `smoke-ra-${raSuffix.toLowerCase()}@example.invalid`, is_researcher: true, active: true }, 'person_id');
+  const proj = (n, who) => adminMake('projects', { project_code: `SMKRA-${raSuffix}-${n}`, project_name: `Smoke record access ${n}`, principal_investigator_person: who.person }, 'project_id');
+  const PW = await proj('W', pi);
+  const PW2 = await proj('W2', pi);
+  const PM = await proj('M', campaignOwner); // a project the campaign owner "created": they are its PI
+  const sample = (n, extra = {}) => adminMake('physical_samples', { sample_code: `SMKRA-${raSuffix}-${n}`, nickname: 'smoke', item_type: 'sample', current_status: 'active', project_id: PW, owner_person_id: owner.person, ...extra }, 'sample_id');
+  const SA = await sample('A'); // the list, add, change, remove, transfer cases
+  const SB = await sample('B'); // the restricted flag and a restricted move
+  const SR = await sample('R'); // restricted, held by the campaign, not readable by its owner
+  const SU = await sample('U'); // unrestricted, in the unrestricted campaign
+  const SX = await sample('X'); // restricted, the campaign owner's attempt to attach it
+  const camp = (n, extra = {}) => adminMake('campaigns', { project_id: PW, campaign_type: 'testing_campaign', name: `Smoke RA ${n} ${raSuffix}`, owner_person_id: campaignOwner.person, ...extra }, 'campaign_id');
+  const CW = await camp('with restricted');
+  const CU = await camp('unrestricted');
+  const CE = await camp('editable');
+  for (const [campaign_id, sample_id] of [[CW, SR], [CU, SU]]) await adminMake('campaign_samples', { campaign_id, sample_id }, 'id');
+  for (const id of [SR, SX]) { const r = await api('PATCH', `/items/physical_samples/${id}`, { restricted: true }); expect(r.status === 200, `restrict ${id}: ${why(r)}`); }
+  await adminMake('sample_co_owners', { sample_id: SA, user_id: coowner.user }, 'id'); // an old-table co-owner of SA
+  await adminMake('campaign_access', { campaign_id: CE, person_id: editor.person, role: 'edit' }, 'access_id'); // a Can edit person of CE
+  await adminMake('campaign_samples', { campaign_id: CE, sample_id: SR }, 'id');
+  RAW = { owner, coowner, viewer, editor, stranger, campaignOwner, pi, nologin: nologin.body.data[0].person_id, mailed, PW, PW2, PM, SA, SB, SR, SU, SX, CW, CU, CE };
+  await noDrift('world');
+});
+
+await check('ra_owner_adds_people_and_the_email_failure_never_blocks_the_change', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  // a login-less person with no address: nothing to mail
+  const a = await addEntry('physical_samples', RAW.SA, RAW.nologin, 'view', t.owner);
+  expect(a.status === 200 && a.body.email === 'skipped', `add a person with no address: ${why(a)}`);
+  expect(a.body.entry.can_sign_in === false && a.body.entry.label === 'Can view', `entry ${JSON.stringify(a.body.entry)}`);
+  // a login-less person with an address, and a person with a login: the mail cannot be sent here, the change stands
+  for (const [person, role] of [[RAW.mailed, 'edit'], [RAW.viewer.person, 'view'], [RAW.editor.person, 'edit']]) {
+    const r = await addEntry('physical_samples', RAW.SA, person, role, t.owner);
+    expect(r.status === 200, `add ${person}: ${why(r)}`);
+    expect(['failed', 'skipped'].includes(r.body.email), `no mail server here, expected failed or skipped, got ${r.body.email}`);
+    noteEmail(r);
+  }
+  const list = await entriesOf('physical_samples', RAW.SA, t.owner);
+  expect(list.can_manage === true && list.entries.length === 5, `owner's list: can_manage ${list.can_manage}, ${list.entries.length} entries (4 added + the old co-owner)`);
+  const co = list.entries.find((e) => e.source === 'co_owner');
+  expect(co && co.label.startsWith('Co-owner'), `the old co-owner is listed as one: ${JSON.stringify(co)}`);
+  // adding the owner is a 409, an unknown role is a 400, a person twice is a role change with no mail
+  const owner409 = await addEntry('physical_samples', RAW.SA, RAW.owner.person, 'view', t.owner);
+  expect(owner409.status === 409, `adding the owner: ${why(owner409)}`);
+  const bad = await addEntry('physical_samples', RAW.SA, RAW.viewer.person, 'investigator', t.owner);
+  expect(bad.status === 400, `an investigator on a sample: ${why(bad)}`);
+  const again = await addEntry('physical_samples', RAW.SA, RAW.mailed, 'view', t.owner);
+  expect(again.status === 200 && again.body.email === 'skipped' && again.body.entry.role === 'view', `re-adding: ${why(again)}`);
+  await noDrift('owner adds');
+});
+
+await check('ra_non_owners_can_list_and_cannot_manage', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  for (const who of ['viewer', 'editor', 'coowner']) {
+    const list = await entriesOf('physical_samples', RAW.SA, t[who]);
+    expect(list.can_manage === false, `${who}: can_manage ${list.can_manage}`);
+    const add = await addEntry('physical_samples', RAW.SA, RAW.stranger.person, 'view', t[who]);
+    expect(refusedBy(add, 'd1-record-access'), `${who} POST entries: ${why(add)}`);
+    const patch = await api('PATCH', `${RA}/physical_samples/${RAW.SA}/entries/${RAW.viewer.person}`, { role: 'edit' }, t[who]);
+    expect(refusedBy(patch, 'd1-record-access'), `${who} PATCH entries: ${why(patch)}`);
+    const del = await api('DELETE', `${RA}/physical_samples/${RAW.SA}/entries/${RAW.viewer.person}`, undefined, t[who]);
+    expect(refusedBy(del, 'd1-record-access'), `${who} DELETE entries: ${why(del)}`);
+    const tr = await api('POST', `${RA}/physical_samples/${RAW.SA}/transfer`, { person_id: RAW.stranger.person }, t[who]);
+    expect(refusedBy(tr, 'd1-record-access'), `${who} transfer: ${why(tr)}`);
+  }
+  // a stranger cannot even see the record: 404, and nothing is written
+  const hidden = await api('GET', `${RA}/physical_samples/${RAW.SA}`, undefined, t.stranger);
+  expect(hidden.status === 404, `stranger GET: ${why(hidden)}`);
+  const w = await addEntry('physical_samples', RAW.SA, RAW.stranger.person, 'view', t.stranger);
+  expect(w.status === 404, `stranger POST: ${why(w)}`);
+  const anon = await fetch(`${BASE}${RA}/physical_samples/${RAW.SA}`);
+  expect(anon.status === 401, `no token: ${anon.status}`);
+  const after = await entriesOf('physical_samples', RAW.SA, t.owner);
+  expect(after.entries.length === 5, `the list changed under a refused caller: ${after.entries.length}`);
+  await noDrift('non-owners');
+});
+
+await check('ra_owner_changes_a_role_and_removes_and_the_co_owner_row_goes_with_it', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const up = await api('PATCH', `${RA}/physical_samples/${RAW.SA}/entries/${RAW.viewer.person}`, { role: 'edit' }, t.owner);
+  expect(up.status === 200 && up.body.entry.role === 'edit', `PATCH: ${why(up)}`);
+  // the old co-owner row is converted by a write for that person
+  const conv = await api('PATCH', `${RA}/physical_samples/${RAW.SA}/entries/${RAW.coowner.person}`, { role: 'view' }, t.owner);
+  expect(conv.status === 200 && conv.body.entry.source === 'access' && conv.body.entry.role === 'view', `convert the co-owner: ${why(conv)}`);
+  const left = await api('GET', `/items/sample_co_owners?filter[sample_id][_eq]=${RAW.SA}&fields=id`);
+  expect(left.body.data.length === 0, `the old co-owner row is still there (${left.body.data.length})`);
+  const del = await api('DELETE', `${RA}/physical_samples/${RAW.SA}/entries/${RAW.mailed}`, undefined, t.owner);
+  expect(del.status === 200, `DELETE: ${why(del)}`);
+  const again = await api('DELETE', `${RA}/physical_samples/${RAW.SA}/entries/${RAW.mailed}`, undefined, t.owner);
+  expect(again.status === 404, `DELETE twice: ${why(again)}`);
+  await noDrift('role change and remove');
+});
+
+await check('ra_a_change_through_the_endpoint_is_readable_at_once_by_the_added_person', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const before = await api('GET', `/items/physical_samples/${RAW.SX}?fields=sample_id`, undefined, t.stranger);
+  expect(before.status === 403, `the stranger reads a restricted sample before being added: ${before.status}`);
+  const add = await addEntry('physical_samples', RAW.SX, RAW.stranger.person, 'view', t.owner);
+  expect(add.status === 200, `add: ${why(add)}`);
+  noteEmail(add);
+  const now = await api('GET', `/items/physical_samples/${RAW.SX}?fields=sample_id`, undefined, t.stranger);
+  expect(now.status === 200, `read-your-write: the added person gets ${now.status}`);
+  const del = await api('DELETE', `${RA}/physical_samples/${RAW.SX}/entries/${RAW.stranger.person}`, undefined, t.owner);
+  expect(del.status === 200, `remove: ${why(del)}`);
+  const gone = await api('GET', `/items/physical_samples/${RAW.SX}?fields=sample_id`, undefined, t.stranger);
+  expect(gone.status === 403, `after the removal the stranger gets ${gone.status}`);
+  await noDrift('read your write');
+});
+
+// A1b switch (maintainer ruling, d1-access-guard RESTRICT_ADMIN_ONLY): until A1b NO member may change `restricted`, not even the owner or
+// the PI; admins can. The owner-only logic that stays underneath it is covered by the guard's node tests (the smoke Directus runs with the switch
+// closed, as live will).
+await check('ra_restricted_is_admin_only_until_a1b', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const add = await addEntry('physical_samples', RAW.SB, RAW.editor.person, 'edit', t.owner);
+  expect(add.status === 200, `add the editor: ${why(add)}`);
+  noteEmail(add);
+  const edit = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id`, { nickname: 'edited by the editor' }, t.editor);
+  expect(edit.status === 200, `a Can edit person edits an ordinary field: ${why(edit)}`);
+  const asEditor = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id`, { restricted: true }, t.editor);
+  expect(refusedBy(asEditor, GUARD, 'restricted'), `editor PATCH restricted: ${why(asEditor)}`);
+  const asOwner = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id`, { restricted: true }, t.owner);
+  expect(refusedBy(asOwner, GUARD, 'restricted'), `the OWNER PATCH restricted: ${why(asOwner)}`);
+  const asPi = await api('PATCH', `/items/projects/${RAW.PW2}?fields=project_id`, { restricted: true }, t.pi);
+  expect(refusedBy(asPi, GUARD, 'restricted'), `the project's PI PATCH restricted: ${why(asPi)}`);
+  const created = await api('POST', '/items/physical_samples?fields=sample_id', { sample_code: `SMKRA-${raSuffix}-RC`, nickname: 'smoke', item_type: 'sample', current_status: 'active', restricted: true }, t.owner);
+  expect(refusedBy(created, GUARD, 'restricted'), `a member creates a sample already restricted: ${why(created)}`);
+  const open = await api('POST', '/items/physical_samples?fields=sample_id', { sample_code: `SMKRA-${raSuffix}-RO`, nickname: 'smoke', item_type: 'sample', current_status: 'active', restricted: false }, t.owner);
+  expect(open.status === 200, `a member creates an ordinary sample (restricted false): ${why(open)}`);
+  const still = await api('GET', `/items/physical_samples/${RAW.SB}?fields=restricted`);
+  expect(still.body.data.restricted === false, 'a member restricted the sample anyway');
+  // an admin can; the owner and the editor then cannot lift it, and a form save with the stored value is fine
+  const ok = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id,restricted`, { restricted: true });
+  expect(ok.status === 200 && ok.body.data.restricted === true, `admin PATCH restricted: ${why(ok)}`);
+  const piOk = await api('PATCH', `/items/projects/${RAW.PW2}?fields=restricted`, { restricted: true });
+  expect(piOk.status === 200, `admin restricts a project: ${why(piOk)}`);
+  await api('PATCH', `/items/projects/${RAW.PW2}`, { restricted: false });
+  for (const who of ['editor', 'owner']) {
+    const unlock = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id`, { restricted: false }, t[who]);
+    expect(refusedBy(unlock, GUARD, 'restricted'), `${who} lifts the restriction: ${why(unlock)}`);
+  }
+  const same = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id`, { restricted: true, nickname: 'saved again' }, t.editor);
+  expect(same.status === 200, `editor saves the form with the unchanged flag: ${why(same)}`);
+  await noDrift('restricted flag');
+});
+
+await check('ra_editor_cannot_move_a_restricted_sample_to_another_project', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  // SB is restricted and the editor is on its list (the case above)
+  const move = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id`, { project_id: RAW.PW2 }, t.editor);
+  expect(refusedBy(move, GUARD, 'restricted'), `editor PATCH project_id of a restricted sample: ${why(move)}`);
+  const owner = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id,project_id`, { project_id: RAW.PW2 }, t.owner);
+  expect(owner.status === 200 && owner.body.data.project_id === RAW.PW2, `the owner moves it: ${why(owner)}`);
+  const back = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id`, { project_id: RAW.PW }, t.owner);
+  expect(back.status === 200, `and back: ${why(back)}`);
+  // lift the restriction (an admin: members cannot until A1b), then a move by the editor is an ordinary edit again
+  await api('PATCH', `/items/physical_samples/${RAW.SB}`, { restricted: false });
+  const open = await api('PATCH', `/items/physical_samples/${RAW.SB}?fields=sample_id`, { project_id: RAW.PW2 }, t.editor);
+  expect(open.status === 200, `an unrestricted move by the editor: ${why(open)}`);
+  await api('PATCH', `/items/physical_samples/${RAW.SB}`, { project_id: RAW.PW }, t.owner);
+  await noDrift('restricted move');
+});
+
+await check('ra_campaign_owner_cannot_move_a_campaign_holding_restricted_records_into_their_own_project', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  // CW holds the restricted sample SR, which the campaign owner does not own (and cannot read): the move is the admin's
+  const move = await api('PATCH', `/items/campaigns/${RAW.CW}?fields=campaign_id`, { project_id: RAW.PM }, t.campaignOwner);
+  expect(refusedBy(move, GUARD, 'restricted'), `campaign owner PATCH project_id (holds a restricted sample): ${why(move)}`);
+  const stays = await api('GET', `/items/campaigns/${RAW.CW}?fields=project_id`);
+  expect(stays.body.data.project_id === RAW.PW, 'the campaign moved anyway');
+  // a Can edit person of a campaign is refused even when nothing in it is restricted (CE holds SR too; the owner rule decides first)
+  const editor = await api('PATCH', `/items/campaigns/${RAW.CE}?fields=campaign_id`, { project_id: RAW.PM }, t.editor);
+  expect(refusedBy(editor, GUARD, 'restricted'), `Can edit person PATCH project_id: ${why(editor)}`);
+  // the owner of an unrestricted campaign holding only unrestricted records may move it
+  const ok = await api('PATCH', `/items/campaigns/${RAW.CU}?fields=campaign_id,project_id`, { project_id: RAW.PM }, t.campaignOwner);
+  expect(ok.status === 200 && ok.body.data.project_id === RAW.PM, `campaign owner moves an unrestricted campaign: ${why(ok)}`);
+  // an admin may move the one that holds restricted records
+  const admin = await api('PATCH', `/items/campaigns/${RAW.CW}?fields=project_id`, { project_id: RAW.PW2 });
+  expect(admin.status === 200 && admin.body.data.project_id === RAW.PW2, `admin moves the restricted one: ${why(admin)}`);
+  await api('PATCH', `/items/campaigns/${RAW.CW}`, { project_id: RAW.PW });
+  await noDrift('campaign project move');
+});
+
+await check('ra_campaign_samples_insert_for_an_unreadable_sample_is_403', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  // SX is restricted and the campaign owner is not on its list
+  const r = await api('POST', '/items/campaign_samples', { campaign_id: RAW.CW, sample_id: RAW.SX }, t.campaignOwner);
+  expect(refusedBy(r, GUARD, 'junction'), `campaign owner attaches a sample they cannot read: ${why(r)}`);
+  const none = await api('GET', `/items/campaign_samples?filter[campaign_id][_eq]=${RAW.CW}&filter[sample_id][_eq]=${RAW.SX}&fields=id`);
+  expect(none.body.data.length === 0, 'the row was written anyway');
+  // an unrestricted sample the owner of the campaign does own is fine for its owner ('owner' owns SA and is no campaign owner: refused on the campaign)
+  const wrongCampaign = await api('POST', '/items/campaign_samples', { campaign_id: RAW.CW, sample_id: RAW.SA }, t.owner);
+  expect(wrongCampaign.status === 403, `a sample owner attaching to someone else's campaign: ${wrongCampaign.status}`);
+  await noDrift('campaign_samples insert');
+});
+
+await check('ra_co_owner_cannot_add_a_co_owner_and_the_owner_can', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const sneak = await api('POST', '/items/sample_co_owners', { sample_id: RAW.SB, user_id: RAW.stranger.user }, t.editor);
+  expect(refusedBy(sneak, GUARD, 'junction'), `an editor adds a co-owner: ${why(sneak)}`);
+  // the old-table co-owner of SA (converted earlier) is gone; make a fresh one for the check
+  const legacy = await adminMake('sample_co_owners', { sample_id: RAW.SA, user_id: RAW.coowner.user }, 'id');
+  const byCo = await api('POST', '/items/sample_co_owners', { sample_id: RAW.SA, user_id: RAW.stranger.user }, t.coowner);
+  expect(refusedBy(byCo, GUARD, 'junction'), `a co-owner adds a co-owner: ${why(byCo)}`);
+  const patch = await api('PATCH', `/items/sample_co_owners/${legacy}`, { user_id: RAW.stranger.user }, t.coowner);
+  const del = await api('DELETE', `/items/sample_co_owners/${legacy}`, undefined, t.coowner);
+  expect(patch.status === 403 && del.status === 403, `a co-owner changes or deletes a co-owner row: ${patch.status} / ${del.status}`);
+  const owner = await api('POST', '/items/sample_co_owners?fields=id', { sample_id: RAW.SA, user_id: RAW.stranger.user }, t.owner);
+  expect(owner.status === 200, `the owner adds a co-owner: ${why(owner)}`);
+  const read = await api('GET', `/items/physical_samples/${RAW.SA}?fields=sample_id`, undefined, t.stranger);
+  expect(read.status === 200, `the new co-owner reads the sample: ${read.status}`);
+  await noDrift('co-owner junction');
+});
+
+await check('ra_transfer_makes_the_new_owner_and_keeps_the_previous_one_as_can_edit', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const r = await api('POST', `${RA}/physical_samples/${RAW.SB}/transfer`, { person_id: RAW.viewer.person }, t.owner);
+  expect(r.status === 200 && r.body.owner.person_id === RAW.viewer.person, `transfer: ${why(r)}`);
+  expect(['failed', 'skipped'].includes(r.body.email), `transfer mail: ${r.body.email}`);
+  noteEmail(r);
+  const asNew = await entriesOf('physical_samples', RAW.SB, t.viewer);
+  expect(asNew.can_manage === true && asNew.owner.person_id === RAW.viewer.person, `the new owner manages: ${JSON.stringify(asNew.owner)} ${asNew.can_manage}`);
+  const prev = asNew.entries.find((e) => e.person_id === RAW.owner.person);
+  expect(prev && prev.role === 'edit' && prev.label === 'Can edit', `the previous owner stays as Can edit: ${JSON.stringify(prev)}`);
+  expect(!asNew.entries.some((e) => e.person_id === RAW.viewer.person), 'the new owner is not an entry');
+  const old = await entriesOf('physical_samples', RAW.SB, t.owner);
+  expect(old.can_manage === false, 'the previous owner still manages');
+  const back = await api('POST', `${RA}/physical_samples/${RAW.SB}/transfer`, { person_id: RAW.owner.person }, t.viewer);
+  expect(back.status === 200, `transfer back: ${why(back)}`);
+  noteEmail(back);
+  await noDrift('transfer');
+});
+
+// Fix round 1 (review I1, I2 and the campaign_samples delete ruling). Own records again (a restricted project, sample, campaign and two
+// operations), with the fixture editor listed on them: the editor may edit them but is not their owner.
+await check('ra_clearing_a_key_under_a_restricted_parent_needs_the_owner', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const method = await api('GET', '/items/manufacturing_methods?filter[process_category][_eq]=machining&limit=1&fields=method_id');
+  expect(method.status === 200 && method.body?.data?.[0]?.method_id, `no machining method: ${method.status}`);
+  const restrict = async (collection, id) => { const r = await api('PATCH', `/items/${collection}/${id}`, { restricted: true }); expect(r.status === 200, `restrict ${collection}: ${why(r)}`); };
+  const PX = await adminMake('projects', { project_code: `SMKRA-${raSuffix}-X`, project_name: 'Smoke restricted project', principal_investigator_person: RAW.pi.person }, 'project_id');
+  await restrict('projects', PX);
+  const sample = (n, extra) => adminMake('physical_samples', { sample_code: `SMKRA-${raSuffix}-${n}`, nickname: 'smoke', item_type: 'sample', current_status: 'active', owner_person_id: RAW.owner.person, ...extra }, 'sample_id');
+  const SP = await sample('P', { project_id: PX });           // an open sample in a restricted project
+  const SQ = await sample('Q', { project_id: RAW.PW });       // a restricted sample
+  const SO = await sample('O', { project_id: RAW.PW });       // an open sample, the operation's sample under the restricted campaign
+  await restrict('physical_samples', SQ);
+  const CR = await adminMake('campaigns', { project_id: RAW.PW, campaign_type: 'testing_campaign', name: `Smoke RA restricted ${raSuffix}`, owner_person_id: RAW.campaignOwner.person }, 'campaign_id');
+  await restrict('campaigns', CR);
+  const op = (sample_id, extra = {}) => adminMake('manufacturing_operations', { sample_id, method_id: method.body.data[0].method_id, machining_operation_subtype: 'F', machining_cutting_speed_m_per_min: 31, machining_feed_mm_per_rev: 0.1, machining_axial_depth_of_cut_mm: 1, owner_person_id: RAW.owner.person, ...extra }, 'operation_id');
+  const OS = await op(SQ);                                    // an operation on a restricted sample
+  const OC = await op(SO, { campaign_id: CR });               // an operation in a restricted campaign
+  for (const [table, fk, id] of [['sample_access', 'sample_id', SP], ['sample_access', 'sample_id', SQ], ['campaign_access', 'campaign_id', CR], ['operation_access', 'operation_id', OS], ['operation_access', 'operation_id', OC]]) {
+    await adminMake(table, { [fk]: id, person_id: RAW.editor.person, role: 'edit' }, 'access_id');
+  }
+  const clear = (collection, id, key) => api('PATCH', `/items/${collection}/${id}?fields=${PK[collection] ?? 'campaign_id'}`, { [key]: null }, t.editor);
+  const checks = [
+    ['physical_samples', SP, 'project_id', 'a sample out of a restricted project'],
+    ['manufacturing_operations', OS, 'sample_id', 'an operation off a restricted sample'],
+    ['manufacturing_operations', OC, 'campaign_id', 'an operation out of a restricted campaign'],
+    ['campaigns', CR, 'project_id', "a campaign's project"],
+  ];
+  for (const [collection, id, key, what] of checks) {
+    const r = await clear(collection, id, key);
+    expect(refusedBy(r, GUARD, 'restricted'), `editor clears ${key} of ${what}: ${why(r)}`);
+    const row = await api('GET', `/items/${collection}/${id}?fields=${key}`);
+    expect(row.body.data[key] !== null, `${what}: the key was cleared anyway`);
+  }
+  // the owner may clear a key of a record they own (the sample out of the restricted project)
+  const own = await api('PATCH', `/items/physical_samples/${SP}?fields=project_id`, { project_id: null }, t.owner);
+  expect(own.status === 200 && own.body.data.project_id === null, `owner clears project_id: ${why(own)}`);
+  await noDrift('clearing keys');
+});
+
+await check('ra_restricted_given_as_a_postgres_boolean_string_still_needs_the_owner', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  // SA is unrestricted and the fixture editor is on its list with Can edit
+  for (const spelling of ['t', 'yes', '1', 'ON']) {
+    const r = await api('PATCH', `/items/physical_samples/${RAW.SA}?fields=sample_id,restricted`, { restricted: spelling }, t.editor);
+    expect(refusedBy(r, GUARD, 'restricted'), `editor PATCH restricted:${JSON.stringify(spelling)}: ${why(r)}`);
+  }
+  const still = await api('GET', `/items/physical_samples/${RAW.SA}?fields=restricted`);
+  expect(still.body.data.restricted === false, 'the sample was restricted by an editor');
+  await noDrift('boolean spellings');
+});
+
+await check('ra_removing_a_sample_from_a_restricted_campaign_needs_the_campaigns_owner', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const sample = (n) => adminMake('physical_samples', { sample_code: `SMKRA-${raSuffix}-${n}`, nickname: 'smoke', item_type: 'sample', current_status: 'active', project_id: RAW.PW, owner_person_id: RAW.owner.person }, 'sample_id');
+  const S1 = await sample('D1');
+  const S2 = await sample('D2');
+  const CD = await adminMake('campaigns', { project_id: RAW.PW, campaign_type: 'testing_campaign', name: `Smoke RA detach ${raSuffix}`, owner_person_id: RAW.campaignOwner.person }, 'campaign_id');
+  const CO = await adminMake('campaigns', { project_id: RAW.PW, campaign_type: 'testing_campaign', name: `Smoke RA detach open ${raSuffix}`, owner_person_id: RAW.campaignOwner.person }, 'campaign_id');
+  const rowD = await adminMake('campaign_samples', { campaign_id: CD, sample_id: S1 }, 'id');
+  const rowO = await adminMake('campaign_samples', { campaign_id: CO, sample_id: S2 }, 'id');
+  const lock = await api('PATCH', `/items/campaigns/${CD}`, { restricted: true });
+  expect(lock.status === 200, `restrict the campaign: ${why(lock)}`);
+  // the sample's owner may detach from an open campaign, not from a restricted one
+  const open = await api('DELETE', `/items/campaign_samples/${rowO}`, undefined, t.owner);
+  expect(open.status === 204, `the sample owner detaches from an open campaign: ${open.status}`);
+  const refused = await api('DELETE', `/items/campaign_samples/${rowD}`, undefined, t.owner);
+  expect(refusedBy(refused, GUARD, 'junction'), `the sample owner detaches from a restricted campaign: ${why(refused)}`);
+  const still = await api('GET', `/items/campaign_samples?filter[id][_eq]=${rowD}&fields=id`);
+  expect(still.body.data.length === 1, 'the row was deleted anyway');
+  const ok = await api('DELETE', `/items/campaign_samples/${rowD}`, undefined, t.campaignOwner);
+  expect(ok.status === 204, `the campaign's owner detaches: ${ok.status} ${errText(ok)}`);
+  await noDrift('detach');
+});
+
+// A member edits only their OWN People row (migration 169, final review I3): a People row decides who is a reader and who is mailed.
+await check('ra_member_edits_only_their_own_people_row', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const other = await api('PATCH', `/items/people/${RAW.mailed}?fields=person_id`, { email: 'redirected@example.invalid' }, t.stranger);
+  expect(other.status === 403, `a member edits someone else's People row: ${why(other)}`);
+  const rename = await api('PATCH', `/items/people/${RAW.owner.person}?fields=person_id`, { full_name: 'Somebody Else' }, t.stranger);
+  expect(rename.status === 403, `a member renames another member: ${why(rename)}`);
+  const own = await api('PATCH', `/items/people/${RAW.stranger.person}?fields=person_id,notes`, { notes: `own row ${raSuffix}` }, t.stranger);
+  expect(own.status === 200 && own.body.data.notes === `own row ${raSuffix}`, `a member edits their own row: ${why(own)}`);
+  const admin = await api('PATCH', `/items/people/${RAW.mailed}?fields=person_id,notes`, { notes: `admin ${raSuffix}` });
+  expect(admin.status === 200, `an admin edits any row: ${why(admin)}`);
+  const added = await api('POST', '/items/people?fields=person_id', { full_name: `Smoke Added ${raSuffix}`, is_researcher: true, active: true }, t.stranger);
+  expect(added.status === 200, `a member can still add a person with no login: ${why(added)}`);
+  await noDrift('people rows');
+});
+
+// Home's "Your samples" and "Your projects" (packages/d1-ui/src/mine.ts): the filters must be accepted by Directus (200), whatever the
+// member's role on the record. mine.test.ts pins these two literals against samplesMine and projectsMine.
+const SAMPLES_MINE = JSON.parse('{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_or":[{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"access":{"role":{"_eq":"edit"}}}]}]}]}');
+const PROJECTS_MINE = JSON.parse('{"_or":[{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}},{"secondary_investigators":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"access":{"role":{"_eq":"investigator"}}}]}]}');
+await check('lm_home_your_samples_and_your_projects_filters_answer_200_with_the_right_ids', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const sample = (n, owner) => adminMake('physical_samples', { sample_code: `SMKRA-${raSuffix}-${n}`, nickname: 'smoke', item_type: 'sample', current_status: 'active', project_id: RAW.PW, owner_person_id: owner.person }, 'sample_id');
+  const M1 = await sample('M1', RAW.owner);          // the owner's
+  const M2 = await sample('M2', RAW.stranger);       // the co-owner is listed with Can edit (an access row)
+  const M3 = await sample('M3', RAW.stranger);       // the co-owner is only Can view
+  const M4 = await sample('M4', RAW.stranger);       // the co-owner is an old-table co-owner
+  await adminMake('sample_access', { sample_id: M2, person_id: RAW.coowner.person, role: 'edit' }, 'access_id');
+  await adminMake('sample_access', { sample_id: M3, person_id: RAW.coowner.person, role: 'view' }, 'access_id');
+  await adminMake('sample_co_owners', { sample_id: M4, user_id: RAW.coowner.user }, 'id');
+  const mine = async (collection, filter, token) => {
+    const pk = PK[collection];
+    const r = await api('GET', `/items/${collection}?filter=${encodeURIComponent(JSON.stringify(filter))}&fields=${pk}&limit=-1&meta=filter_count`, undefined, token);
+    expect(r.status === 200, `${collection} mine as a member: status ${r.status} ${errText(r).slice(0, 200)}`);
+    const ids = r.body.data.map((row) => row[pk]);
+    expect(r.body.meta.filter_count === ids.length, `${collection}: filter_count ${r.body.meta.filter_count} but ${ids.length} rows`);
+    expect(new Set(ids).size === ids.length, `${collection}: a row twice`);
+    return new Set(ids);
+  };
+  const owner = await mine('physical_samples', SAMPLES_MINE, t.owner);
+  expect(owner.has(M1), 'the owner lacks their own sample');
+  expect(![M2, M3, M4].some((id) => owner.has(id)), 'the owner sees samples that are not theirs');
+  const co = await mine('physical_samples', SAMPLES_MINE, t.coowner);
+  expect([M2, M4].every((id) => co.has(id)), `the co-owner lacks a sample they edit: ${[M2, M4].filter((id) => !co.has(id))}`);
+  expect(!co.has(M3) && !co.has(M1), 'a Can view person or a stranger counted as a co-owner');
+  const pa = await adminMake('projects', { project_code: `SMKRA-${raSuffix}-MP`, project_name: 'Smoke mine', principal_investigator_person: RAW.pi.person }, 'project_id');
+  await adminMake('project_access', { project_id: pa, person_id: RAW.viewer.person, role: 'investigator' }, 'access_id');
+  await adminMake('project_access', { project_id: pa, person_id: RAW.stranger.person, role: 'view' }, 'access_id');
+  const pi = await mine('projects', PROJECTS_MINE, t.pi);
+  const sec = await mine('projects', PROJECTS_MINE, t.viewer);
+  const view = await mine('projects', PROJECTS_MINE, t.stranger);
+  expect(pi.has(pa), 'the PI lacks their project');
+  expect(sec.has(pa), 'a Secondary investigator lacks the project');
+  expect(!view.has(pa), 'a Can view person counts as an investigator');
+  await noDrift('mine filters');
+});
+
+// Final review I1: a move out from under a restriction needs the owner when the record is hidden only THROUGH a restricted project (neither it nor
+// its sample or campaign carries the flag), for the subject rows of a test, and for detaching a sample from such a campaign.
+await check('ra_moves_out_from_under_a_restricted_project_need_the_owner', async () => {
+  expect(RAW, 'no world (ra_world_setup failed)');
+  const t = FX.users;
+  const method = await api('GET', '/items/manufacturing_methods?filter[process_category][_eq]=machining&limit=1&fields=method_id');
+  expect(method.status === 200 && method.body?.data?.[0]?.method_id, `no machining method: ${method.status}`);
+  const PH = await adminMake('projects', { project_code: `SMKRA-${raSuffix}-H`, project_name: 'Smoke hidden project', principal_investigator_person: RAW.pi.person }, 'project_id');
+  for (const who of [RAW.owner, RAW.editor]) await adminMake('project_access', { project_id: PH, person_id: who.person, role: 'view' }, 'access_id'); // so both can read what is in it
+  const sample = (n, project_id) => adminMake('physical_samples', { sample_code: `SMKRA-${raSuffix}-${n}`, nickname: 'smoke', item_type: 'sample', current_status: 'active', project_id, owner_person_id: RAW.owner.person }, 'sample_id');
+  const SH = await sample('H', PH);      // an unrestricted sample in the restricted project
+  const SO = await sample('HO', RAW.PW); // an open sample elsewhere
+  const CH = await adminMake('campaigns', { project_id: PH, campaign_type: 'testing_campaign', name: `Smoke RA hidden ${raSuffix}`, owner_person_id: RAW.owner.person }, 'campaign_id'); // unrestricted, inside it
+  await adminMake('sample_access', { sample_id: SH, person_id: RAW.editor.person, role: 'edit' }, 'access_id');
+  const link = await adminMake('campaign_samples', { campaign_id: CH, sample_id: SH }, 'id');
+  const tr = await api('POST', '/items/test_sessions?fields=session_id', { test_type: 'sem', status: 'registered', owner_person_id: RAW.owner.person, subject: { create: [{ collection: 'physical_samples', item: { sample_id: SH } }], update: [], delete: [] } });
+  expect(tr.status === 200, `create the test: ${why(tr)}`);
+  const T = tr.body.data.session_id;
+  await adminMake('test_access', { session_id: T, person_id: RAW.editor.person, role: 'edit' }, 'access_id');
+  const op = (sample_id, extra = {}) => adminMake('manufacturing_operations', { sample_id, method_id: method.body.data[0].method_id, machining_operation_subtype: 'F', machining_cutting_speed_m_per_min: 33, machining_feed_mm_per_rev: 0.1, machining_axial_depth_of_cut_mm: 1, owner_person_id: RAW.owner.person, ...extra }, 'operation_id');
+  const OH = await op(SH);                    // an operation on the hidden sample
+  const OC = await op(SO, { campaign_id: CH }); // an operation on an open sample, in the campaign of the restricted project
+  for (const id of [OH, OC]) await adminMake('operation_access', { operation_id: id, person_id: RAW.editor.person, role: 'edit' }, 'access_id');
+  const lock = await api('PATCH', `/items/projects/${PH}`, { restricted: true });
+  expect(lock.status === 200, `restrict the project: ${why(lock)}`);
+  for (const [collection, id] of [['physical_samples', SH], ['test_sessions', T], ['manufacturing_operations', OH], ['manufacturing_operations', OC], ['campaigns', CH]]) {
+    const seen = await api('GET', `/items/${collection}/${id}?fields=${PK[collection] ?? 'campaign_id'}`, undefined, t.editor);
+    expect(seen.status === 200, `the editor cannot read ${collection} ${id} to begin with (the setup): ${why(seen)}`);
+  }
+  const subjectRow = (await api('GET', `/items/test_sessions_subject?filter[test_sessions_id][_eq]=${T}&fields=id,item`)).body.data[0];
+  expect(subjectRow, 'the test has no subject row');
+  // (a) repointing a subject row off the hidden sample
+  const a = await api('PATCH', `/items/test_sessions_subject/${subjectRow.id}`, { item: SO }, t.editor);
+  expect(refusedBy(a, GUARD, 'junction'), `editor repoints the subject row: ${why(a)}`);
+  const unchanged = await api('GET', `/items/test_sessions_subject/${subjectRow.id}?fields=item`);
+  expect(unchanged.body.data.item === subjectRow.item, 'the subject row moved anyway');
+  // (c) an operation off the hidden sample, and out of the campaign of the restricted project
+  for (const [id, payload] of [[OH, { sample_id: SO }], [OH, { sample_id: null }], [OC, { campaign_id: null }]]) {
+    const r = await api('PATCH', `/items/manufacturing_operations/${id}?fields=operation_id`, payload, t.editor);
+    expect(refusedBy(r, GUARD, 'restricted'), `editor PATCH ${JSON.stringify(payload)}: ${why(r)}`);
+  }
+  const owned = await api('PATCH', `/items/manufacturing_operations/${OC}?fields=campaign_id`, { campaign_id: null }, t.owner);
+  expect(owned.status === 200 && owned.body.data.campaign_id === null, `the owner moves it: ${why(owned)}`);
+  await api('PATCH', `/items/manufacturing_operations/${OC}`, { campaign_id: CH }, t.owner);
+  // (b) deleting the only subject row
+  const b = await api('DELETE', `/items/test_sessions_subject/${subjectRow.id}`, undefined, t.editor);
+  expect(refusedBy(b, GUARD, 'junction'), `editor deletes the subject row: ${why(b)}`);
+  const stays = await api('GET', `/items/test_sessions_subject?filter[id][_eq]=${subjectRow.id}&fields=id`);
+  expect(stays.body.data.length === 1, 'the subject row was deleted anyway');
+  // (d) detaching the sample from the unrestricted campaign of the restricted project
+  const d = await api('DELETE', `/items/campaign_samples/${link}`, undefined, t.editor);
+  expect(refusedBy(d, GUARD, 'junction'), `editor detaches the sample: ${why(d)}`);
+  // blocked_by comes from the record's readers: a stranger added to the operation cannot read it (the project is restricted and does not list them)
+  const addStranger = await addEntry('manufacturing_operations', OH, RAW.stranger.person, 'view', t.owner);
+  expect(addStranger.status === 200, `add the stranger: ${why(addStranger)}`);
+  noteEmail(addStranger);
+  const blocked = addStranger.body.entry?.blocked_by;
+  expect(blocked && blocked.reason === 'parent', `blocked_by of a person who cannot read it: ${JSON.stringify(blocked)}`);
+  const xfer = await api('POST', `${RA}/manufacturing_operations/${OH}/transfer`, { person_id: RAW.stranger.person }, t.owner);
+  expect(xfer.status === 200 && xfer.body.blocked_by && xfer.body.blocked_by.reason === 'parent', `the transfer answers blocked_by: ${why(xfer)}`);
+  noteEmail(xfer);
+  // the owner (and the admin) are not stopped
+  const del = await api('DELETE', `/items/campaign_samples/${link}`, undefined, t.owner);
+  expect(del.status === 204, `the campaign's owner detaches: ${del.status} ${errText(del)}`);
+  await noDrift('moves out of a restricted project');
+});
+
+await check('ra_admin_overview_reports_the_readers_drift', async () => {
+  const r = await api('GET', '/d1-admin-overview?refresh=1');
+  expect(r.status === 200 && r.body.readers_drift && typeof r.body.readers_drift.checked_at === 'string', `overview: ${why(r)}`);
+  expect(r.body.readers_drift.count === 0 && r.body.readers_drift.flagged === false, `drift ${JSON.stringify(r.body.readers_drift)}`);
+  needFx();
+  const member = await api('GET', '/d1-admin-overview', undefined, FX.users.owner);
+  expect(member.status === 403, `a member reads the overview: ${member.status}`);
+});
+
+if (emailsFailed > 0) console.log(`SMOKE NOTE ra_expect_email_warning ${emailsFailed}`);
+
+// The delete matrices run last: they really delete the fixture records the cases above use.
+for (const collection of ['test_sessions', 'manufacturing_operations', 'physical_samples', 'campaigns', 'projects']) {
+  await check(`lm_access_matrix_${collection}_delete`, async () => {
+    needFx();
+    const problems = [];
+    const deleters = new Map();
+    for (const user of Object.keys(FX.users)) for (const id of FX.expected[user][collection].delete) deleters.set(id, [...(deleters.get(id) ?? []), user]);
+    for (const id of fixtureIds(collection, false)) {
+      for (const [user, token] of Object.entries(FX.users)) {
+        if ((deleters.get(id) ?? []).includes(user)) continue;
+        const r = await api('DELETE', `/items/${collection}/${id}`, undefined, token);
+        if (r.status !== 403) problems.push(`${user} DELETE ${lab(id)} -> ${r.status}, expected 403`);
+      }
+    }
+    // the owners who may delete do (a sample or campaign that still has records under it may refuse with a 4xx
+    // other than 403: that is the foreign key, not the rule)
+    const sub = new Set(fixtureIds(collection, false));
+    for (const [id, users] of deleters) {
+      if (!sub.has(id)) continue;
+      for (const user of users.slice(0, 1)) {
+        const r = await api('DELETE', `/items/${collection}/${id}`, undefined, FX.users[user]);
+        if (r.status === 403 || r.status >= 500) problems.push(`${user} DELETE ${lab(id)} -> ${r.status}, expected 204: ${errText(r).slice(0, 120)}`);
+      }
+    }
+    expect(!problems.length, `${problems.length} mismatches: ${problems.slice(0, 5).join(' | ')}`);
+  });
+}
 
 process.exit(failed ? 1 : 0);

@@ -3,7 +3,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import hook from './index.js';
+import hook, { RESTRICT_ADMIN_ONLY } from './index.js';
+
+// Until A1b a non-admin cannot change `restricted` at all (RESTRICT_ADMIN_ONLY). Most tests below exercise the owner-only logic that stays underneath
+// it for A1b, so the switch is opened for the whole file; the "until A1b" tests close it again around their own calls.
+process.env.D1_A1B_RESTRICT_OPEN = 'true';
+async function untilA1b(work) {
+  delete process.env.D1_A1B_RESTRICT_OPEN;
+  try {
+    return await work();
+  } finally {
+    process.env.D1_A1B_RESTRICT_OPEN = 'true';
+  }
+}
 
 const RULES = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8')).guards;
 
@@ -20,42 +32,90 @@ function mount({ canUpdate = () => true, readError = null } = {}) {
     async readByQuery(query) {
       log.reads.push({ collection: this.collection, query });
       if (readError) throw readError;
-      const id = query.filter._and[0][query.fields[0]]._eq;
-      return canUpdate(this.collection, id) ? [{ [query.fields[0]]: id }] : [];
+      const field = query.fields[0];
+      const cond = query.filter._and[0][field];
+      if (cond._in) return cond._in.filter((id) => canUpdate(this.collection, id, query)).map((id) => ({ [field]: id }));
+      const id = cond._eq;
+      return canUpdate(this.collection, id, query) ? [{ [field]: id }] : [];
     }
   }
   hook({ filter: (name, fn) => (filters[name] = fn) }, { services: { ItemsService } });
   return { filters, log };
 }
 
-// db(table).whereIn(pk, keys).select(...) -> the rows of `existing`.
-// db(table).where(column, id).whereRaw(sql).first(column) -> the row when `table:id` is in `created`
-// (the parent was written by this transaction), else undefined. An entry `table:id@N` is a row written
-// here whose OCC version is N (N > 1: it existed and was UPDATED here); a plain `table:id` was inserted
-// here (version 1). The fake applies the `version = 1` part of the SQL, as Postgres would.
-function fakeDb(existing = [], created = []) {
+// A knex stand-in. Three kinds of query:
+//   db(table).whereIn(pk, keys).select(...) -> the rows of `existing` (or of `tables[table]` when given);
+//   db(table).where(column, id).whereRaw(sql).first(column) -> the row when `table:id` is in `created`
+//     (the parent was written by this transaction), else undefined. An entry `table:id@N` is a row written
+//     here whose OCC version is N (N > 1: it existed and was UPDATED here); a plain `table:id` was inserted
+//     here (version 1). The fake applies the `version = 1` part of the SQL, as Postgres would;
+//   the A1a reads (sample_readers, restricted flags, a campaign's contents): where(column, id) or
+//     where({column: value}) with first / select, answered from `tables[table]` when that table is given. An
+//     unlisted table answers "present and unrestricted" to first() and no rows to select(), so the older tests
+//     need not know about them.
+// `calls` records the first two shapes only (what the older tests assert on); `lookups` the A1a reads.
+function fakeDb(existing = [], created = [], tables = {}) {
+  // d1_private.hidden_records is always there (empty unless a test lists rows): the guard reads it for every move
+  if (!tables['d1_private.hidden_records']) tables = { ...tables, 'd1_private.hidden_records': [] };
   const calls = [];
-  const db = (table) => ({
-    whereIn: (column, keys) => ({
-      select: async (...columns) => {
-        calls.push({ table, column, keys, columns });
+  const lookups = [];
+  const db = (table) => {
+    const preds = [];
+    const q = {};
+    const rows = () => (tables[table] ?? []).filter((r) => preds.every((p) => p(r)));
+    let whereIn = null;
+    let eq = null;
+    q.whereIn = (column, keys) => {
+      whereIn = { column, keys };
+      preds.push((r) => keys.map(String).includes(String(r[column])));
+      return q;
+    };
+    q.where = (a, v) => {
+      if (a && typeof a === 'object') {
+        for (const [k, x] of Object.entries(a)) preds.push((r) => String(r[k]) === String(x));
+      } else {
+        eq = { column: a, id: v };
+        preds.push((r) => String(r[a]) === String(v));
+      }
+      return q;
+    };
+    let sql = null;
+    q.whereRaw = (text) => {
+      sql = text;
+      return q;
+    };
+    const project = (row, columns) => (columns.length ? Object.fromEntries(columns.map((c) => [c, row[c]])) : row);
+    q.select = async (...columns) => {
+      if (tables[table]) {
+        lookups.push({ table, op: 'select', columns });
+        return rows().map((r) => project(r, columns));
+      }
+      if (whereIn) {
+        calls.push({ table, column: whereIn.column, keys: whereIn.keys, columns });
         return existing;
-      },
-    }),
-    where: (column, id) => ({
-      whereRaw: (sql) => ({
-        first: async (selected) => {
-          calls.push({ table, column, id, sql, selected });
-          const entry = created.find((c) => c === `${table}:${id}` || c.startsWith(`${table}:${id}@`));
-          if (!entry) return undefined;
-          const version = entry.includes('@') ? Number(entry.split('@')[1]) : 1;
-          if (/version\s*=\s*1/.test(sql) && version !== 1) return undefined;
-          return { [column]: id };
-        },
-      }),
-    }),
-  });
+      }
+      lookups.push({ table, op: 'select', columns });
+      return [];
+    };
+    q.first = async (...selected) => {
+      if (sql) {
+        const column = eq.column;
+        const id = eq.id;
+        calls.push({ table, column, id, sql, selected: selected[0] });
+        const entry = created.find((c) => c === `${table}:${id}` || c.startsWith(`${table}:${id}@`));
+        if (!entry) return undefined;
+        const version = entry.includes('@') ? Number(entry.split('@')[1]) : 1;
+        if (/version\s*=\s*1/.test(sql) && version !== 1) return undefined;
+        return { [column]: id };
+      }
+      lookups.push({ table, op: 'first', selected });
+      if (tables[table]) return rows()[0];
+      return { record_id: 'present', restricted: false, sample_id: null };
+    };
+    return q;
+  };
   db.calls = calls;
+  db.lookups = lookups;
   return db;
 }
 
@@ -74,15 +134,15 @@ const denied = (re) => (err) => {
   assert.equal(err.code, 'FORBIDDEN');
   assert.equal(err.extensions.code, 'FORBIDDEN');
   assert.equal(err.extensions.source, 'd1-access-guard');
-  assert.ok(['junction', 'owner'].includes(err.extensions.kind), err.extensions.kind);
+  assert.ok(['junction', 'owner', 'restricted'].includes(err.extensions.kind), err.extensions.kind);
   assert.match(`${err.extensions.parent ?? err.extensions.collection} ${err.extensions.id}`, re);
   assert.equal(err.extensions.reason, err.message);
   assert.doesNotMatch(err.message, /_|ADR|[0-9a-f]{8}-|\b(s|p|c|t|k|o)\d\b/i, 'the message is plain words');
   return true;
 };
 
-test('registers an items.create and an items.update filter', () => {
-  assert.deepEqual(Object.keys(mount().filters).sort(), ['items.create', 'items.update']);
+test('registers an items.create, an items.delete and an items.update filter', () => {
+  assert.deepEqual(Object.keys(mount().filters).sort(), ['items.create', 'items.delete', 'items.update']);
 });
 
 test('the shipped rules guard exactly the four visibility junctions', () => {
@@ -101,7 +161,7 @@ test('the shipped rules guard exactly the four visibility junctions', () => {
   }
 });
 
-test('sample_co_owners create: allowed when the caller may update the sample', async () => {
+test('sample_co_owners create: allowed when the caller may manage the sample (its owner)', async () => {
   const { filters, log } = mount();
   const payload = { sample_id: 's1', user_id: 'u9' };
   assert.equal(await filters['items.create'](payload, { collection: 'sample_co_owners' }, ctx()), payload);
@@ -114,7 +174,8 @@ test('sample_co_owners create: allowed when the caller may update the sample', a
   const sent = JSON.stringify(query.filter._and[1]);
   assert.ok(sent.includes('user-1'), 'the caller replaces $CURRENT_USER');
   assert.ok(!sent.includes('$CURRENT_USER'));
-  assert.ok(sent.includes('co_owners'), "it is the sample's update rule: owner or co-owner");
+  assert.ok(!sent.includes('co_owners'), "it is the sample's delete rule since A1: the owner, not a co-owner");
+  assert.ok(sent.includes('owner_person_id'));
 });
 
 test('the read runs as the caller, inside the request transaction', async () => {
@@ -486,13 +547,16 @@ function ownerDb(existing) {
 
 test('the shipped rules guard the owner column where update is wider than delete', () => {
   const guards = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8')).ownerGuards;
-  assert.deepEqual(Object.keys(guards).sort(), ['manufacturing_operations', 'physical_samples', 'test_sessions']);
+  assert.deepEqual(Object.keys(guards).sort(), ['campaigns', 'manufacturing_operations', 'physical_samples', 'test_sessions']);
   for (const [collection, g] of Object.entries(guards)) {
     assert.equal(g.field, 'owner_person_id', collection);
     assert.equal(g.valueKey, 'person_id', collection);
-    // the delete rule: the owner only, not the co-owners the update rule also lets in
+    // the delete rule: the owner (with the restriction gates of operations, tests and campaigns, which
+    // mention co-owners of the sample), never a plain "any editor"; scripts/gen_access_rules.py's pytest
+    // proves who passes it. The generated list also names restricted as an owner-only field.
     assert.ok(JSON.stringify(g.filter).includes('$CURRENT_USER'), collection);
-    assert.ok(!JSON.stringify(g.filter).includes('co_owners'), collection);
+    assert.ok(JSON.stringify(g.filter).includes('owner_person_id'), collection);
+    assert.deepEqual(g.fields.map((f) => f.field), ['owner_person_id', 'restricted'], collection);
   }
 });
 
@@ -504,7 +568,7 @@ test('owner change: a co-owner (who cannot delete) is refused', async () => {
     denied(/physical_samples s1/),
   );
   assert.deepEqual(database.calls, [
-    { table: 'physical_samples', column: 'sample_id', keys: ['s1'], columns: ['sample_id', 'owner_person_id'] },
+    { table: 'physical_samples', column: 'sample_id', keys: ['s1'], columns: ['sample_id', 'owner_person_id', 'restricted'] },
   ]);
   // the check is the delete rule (owner only), run as the caller on the sample itself
   const [{ collection, query }] = log.reads;
@@ -549,16 +613,28 @@ test('owner change: admins and internal calls are not checked', async () => {
   assert.equal(database.calls.length, 0);
 });
 
-test('owner change: a payload without the owner field is untouched', async () => {
+test('owner change: a payload without a guarded field is untouched', async () => {
   const { filters, log } = mount({ canUpdate: () => false });
   const database = ownerDb([{ sample_id: 's1', owner_person_id: 'p1' }]);
-  const payload = { sample_code: 'X-2', project_id: 'p9' };
+  const payload = { sample_code: 'X-2', notes: 'x' };
   assert.equal(
     await filters['items.update'](payload, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database })),
     payload,
   );
   assert.equal(log.reads.length, 0);
   assert.equal(database.calls.length, 0);
+});
+
+// A move of a record that touches nothing Restricted is the editor's to make (the old project_id behaviour).
+test('a move of an unrestricted record by an editor still passes, after reading the flags', async () => {
+  const { filters, log } = mount({ canUpdate: () => false });
+  const database = ownerDb([{ sample_id: 's1', owner_person_id: 'p1', restricted: false, project_id: 'p-old' }]);
+  const payload = { sample_code: 'X-2', project_id: 'p9' };
+  assert.equal(
+    await filters['items.update'](payload, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database })),
+    payload,
+  );
+  assert.equal(log.reads.length, 0);
 });
 
 test('owner change: sending the current owner back (a form save) is not a change', async () => {
@@ -658,7 +734,7 @@ test('owner change: a 403 from the read means "not the owner"; other errors are 
 test('owner change: collections without an owner guard, and creates, are left alone', async () => {
   const { filters, log } = mount({ canUpdate: () => false });
   const database = ownerDb([{ id: 1, owner_person_id: 'p1' }]);
-  for (const collection of ['campaigns', 'projects', 'etchants', 'sample_co_owners']) {
+  for (const collection of ['projects', 'etchants', 'sample_co_owners']) {
     await filters['items.update']({ owner_person_id: 'p2' }, { collection, keys: [1] }, ctx({ database }));
   }
   await filters['items.create']({ owner_person_id: 'p2' }, { collection: 'physical_samples' }, ctx({ database }));
@@ -674,9 +750,9 @@ test('refusal texts and details, by what was refused', async () => {
   const { filters } = mount({ canUpdate: () => false });
   const create = (collection, payload) => refusal(filters['items.create'](payload, { collection }, ctx()));
   const cases = [
-    ['sample_co_owners', { sample_id: 's1', user_id: 'u' }, 'You can only add this to a sample you own or co-own.', 'physical_samples'],
-    ['campaign_samples', { campaign_id: 'c1', sample_id: 's1' }, "Only the campaign's owner can add samples to it.", 'campaigns'],
-    ['project_investigators', { project_id: 'p1', user_id: 'u' }, "Only the project's principal investigator can add investigators to it.", 'projects'],
+    ['sample_co_owners', { sample_id: 's1', user_id: 'u' }, "Only the sample's owner can add co-owners.", 'physical_samples'],
+    ['campaign_samples', { campaign_id: 'c1', sample_id: 's1' }, 'You can only add samples to a campaign you own or can edit.', 'campaigns'],
+    ['project_investigators', { project_id: 'p1', user_id: 'u' }, "Only the project's principal investigator can add investigators.", 'projects'],
     ['test_sessions_subject', { test_sessions_id: 't1', collection: 'physical_samples', item: 'x' }, 'You can only change the samples of a test you own, or of a test on a sample you own or co-own.', 'test_sessions'],
   ];
   for (const [collection, payload, message, parent] of cases) {
@@ -703,4 +779,674 @@ test('refusal text of an owner change, by record', async () => {
       code: 'FORBIDDEN', reason: err.message, source: 'd1-access-guard', kind: 'owner', collection, id: 'k1',
     });
   }
+});
+
+// ---- A1a: owner-only Restricted, restricted-aware moves, and the two campaign guards ------------------
+
+// The tests below tell the update rule (an editor passes) from the delete rule (only the owner passes)
+// by the filter sent: the update rules name the access list or the co-owners, the delete rules do not.
+const isDeleteRule = (query) => !/access|co_owners/.test(JSON.stringify(query.filter));
+// "Everyone may update; only the listed records are owned by the caller."
+const ownsOnly = (...owned) => (collection, id, query) => !isDeleteRule(query) || owned.includes(`${collection}:${id}`);
+const kindOf = (err) => [err.extensions.kind, err.message];
+
+test('the shipped rules list the guarded fields, the moving keys and the two junction rules', () => {
+  const rules = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8'));
+  assert.deepEqual(rules.restrictedKeys.campaigns, ['project_id']);
+  assert.deepEqual(rules.restrictedKeys.manufacturing_operations, ['project_id', 'campaign_id', 'sample_id']);
+  // the junction guards of the co-owner and the investigator are the parent's DELETE rule (the owner / the PI)
+  for (const collection of ['sample_co_owners', 'project_investigators']) {
+    const [check] = RULES[collection];
+    assert.ok(!/co_owners|access/.test(JSON.stringify(check.filter)), `${collection}: the owner, not an editor`);
+    assert.ok(JSON.stringify(check.filter).includes('$CURRENT_USER'));
+  }
+});
+
+test('restricted: the owner switches it; a co-owner and a Can edit person are refused (kind restricted)', async () => {
+  const database = ownerDb([{ sample_id: 's1', owner_person_id: 'p1', restricted: false }]);
+  const meta = { collection: 'physical_samples', keys: ['s1'] };
+  const owner = mount({ canUpdate: ownsOnly('physical_samples:s1') });
+  assert.deepEqual(await owner.filters['items.update']({ restricted: true }, meta, ctx({ database })), { restricted: true });
+  for (const who of ['a co-owner', 'a Can edit person']) {
+    const editor = mount({ canUpdate: ownsOnly() });
+    const err = await refusal(editor.filters['items.update']({ restricted: true }, meta, ctx({ database })));
+    assert.deepEqual(kindOf(err), ['restricted', "Only the sample's owner can restrict it or lift the restriction."], who);
+    assert.deepEqual([err.extensions.collection, err.extensions.id], ['physical_samples', 's1']);
+    assert.ok(isDeleteRule(editor.log.reads[0].query), 'the owner rule (delete) decided');
+  }
+});
+
+test('restricted: lifting it needs the owner too, a value sent unchanged does not, and every guarded record type is covered', async () => {
+  const cases = [
+    ['physical_samples', 'sample_id'],
+    ['manufacturing_operations', 'operation_id'],
+    ['test_sessions', 'session_id'],
+    ['campaigns', 'campaign_id'],
+  ];
+  for (const [collection, pk] of cases) {
+    const lock = ownerDb([{ [pk]: 'k1', owner_person_id: 'p1', restricted: true }]);
+    const editor = mount({ canUpdate: ownsOnly() });
+    const err = await refusal(editor.filters['items.update']({ restricted: false }, { collection, keys: ['k1'] }, ctx({ database: lock })));
+    assert.equal(err.extensions.kind, 'restricted', collection);
+    // an editor saving the whole form: the same value comes back, which is not a change
+    await editor.filters['items.update']({ restricted: true, notes: 'x' }, { collection, keys: ['k1'] }, ctx({ database: lock }));
+    await editor.filters['items.update']({ restricted: 'true' }, { collection, keys: ['k1'] }, ctx({ database: lock }));
+    const open = ownerDb([{ [pk]: 'k1', owner_person_id: 'p1', restricted: false }]);
+    await editor.filters['items.update']({ restricted: false }, { collection, keys: ['k1'] }, ctx({ database: open }));
+  }
+});
+
+test('restricted: admins and internal calls are not checked; a batch is checked per key', async () => {
+  const database = ownerDb([
+    { sample_id: 's1', owner_person_id: 'p1', restricted: false },
+    { sample_id: 's2', owner_person_id: 'p2', restricted: false },
+  ]);
+  const meta = { collection: 'physical_samples', keys: ['s1', 's2'] };
+  const none = mount({ canUpdate: ownsOnly() });
+  await none.filters['items.update']({ restricted: true }, meta, ctx({ database, accountability: { user: 'a', admin: true } }));
+  await none.filters['items.update']({ restricted: true }, meta, ctx({ database, accountability: null }));
+  assert.equal(none.log.reads.length, 0);
+  const some = mount({ canUpdate: ownsOnly('physical_samples:s1') });
+  const err = await refusal(some.filters['items.update']({ restricted: true }, meta, ctx({ database })));
+  assert.equal(err.extensions.id, 's2');
+  assert.deepEqual(some.log.reads.map((r) => r.query.filter._and[0].sample_id._eq), ['s1', 's2']);
+});
+
+test('restricted: a payload that changes the owner and the flag is refused as an owner change', async () => {
+  const database = ownerDb([{ sample_id: 's1', owner_person_id: 'p1', restricted: false }]);
+  const { filters } = mount({ canUpdate: ownsOnly() });
+  const err = await refusal(filters['items.update']({ owner_person_id: 'p2', restricted: true }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database })));
+  assert.equal(err.extensions.kind, 'owner');
+});
+
+// ---- moves of a restricted record -------------------------------------------------------------------
+
+const sampleTables = (extra = {}) => ({
+  physical_samples: [
+    { sample_id: 's-open', owner_person_id: 'p1', restricted: false, project_id: 'pj-open' },
+    { sample_id: 's-locked', owner_person_id: 'p1', restricted: true, project_id: 'pj-open' },
+    { sample_id: 's-in-locked-project', owner_person_id: 'p1', restricted: false, project_id: 'pj-locked' },
+  ],
+  projects: [
+    { project_id: 'pj-open', restricted: false },
+    { project_id: 'pj-open2', restricted: false },
+    { project_id: 'pj-locked', restricted: true },
+    { project_id: 'pj-locked2', restricted: true },
+  ],
+  ...extra,
+});
+
+test('moving a restricted sample, or a sample out of or into a restricted project, needs the owner', async () => {
+  const meta = (key) => ({ collection: 'physical_samples', keys: [key] });
+  const moves = [
+    ['s-locked', 'pj-open2', 'the sample itself is restricted'],
+    ['s-in-locked-project', 'pj-open2', 'out of a restricted project'],
+    ['s-open', 'pj-locked', 'into a restricted project'],
+  ];
+  for (const [key, to, why] of moves) {
+    const editor = mount({ canUpdate: ownsOnly() });
+    const err = await refusal(editor.filters['items.update']({ project_id: to }, meta(key), ctx({ database: fakeDb([], [], sampleTables()) })));
+    assert.deepEqual(kindOf(err), ['restricted', "Only the sample's owner can move it into or out of something restricted."], why);
+    // the owner passes
+    const owner = mount({ canUpdate: ownsOnly(`physical_samples:${key}`) });
+    await owner.filters['items.update']({ project_id: to }, meta(key), ctx({ database: fakeDb([], [], sampleTables()) }));
+  }
+});
+
+test('a move that touches nothing restricted, or the same value, passes for an editor', async () => {
+  const { filters, log } = mount({ canUpdate: ownsOnly() });
+  const meta = { collection: 'physical_samples', keys: ['s-open'] };
+  await filters['items.update']({ project_id: 'pj-open2' }, meta, ctx({ database: fakeDb([], [], sampleTables()) }));
+  await filters['items.update']({ project_id: 'pj-open', notes: 'form save' }, { collection: 'physical_samples', keys: ['s-locked'] }, ctx({ database: fakeDb([], [], sampleTables()) }));
+  await filters['items.update']({ project_id: { project_id: 'pj-open' } }, { collection: 'physical_samples', keys: ['s-locked'] }, ctx({ database: fakeDb([], [], sampleTables()) }));
+  assert.equal(log.reads.length, 0);
+  // a nested object that names the new project is read by its key
+  await assert.rejects(
+    filters['items.update']({ project_id: { project_id: 'pj-locked' } }, meta, ctx({ database: fakeDb([], [], sampleTables()) })),
+    denied(/physical_samples s-open/),
+  );
+});
+
+test('operations and tests: moving between campaigns, samples and projects of a restricted parent needs the owner', async () => {
+  for (const collection of ['manufacturing_operations', 'test_sessions']) {
+    const pk = collection === 'test_sessions' ? 'session_id' : 'operation_id';
+    const tables = {
+      [collection]: [
+        { [pk]: 'r1', owner_person_id: 'p1', restricted: false, project_id: 'pj-open', campaign_id: 'c-open', sample_id: 's-open' },
+        { [pk]: 'r2', owner_person_id: 'p1', restricted: false, project_id: 'pj-open', campaign_id: 'c-open', sample_id: 's-locked' },
+        { [pk]: 'r3', owner_person_id: 'p1', restricted: true, project_id: 'pj-open', campaign_id: 'c-open', sample_id: 's-open' },
+      ],
+      physical_samples: sampleTables().physical_samples,
+      projects: sampleTables().projects,
+      campaigns: [{ campaign_id: 'c-open', restricted: false }, { campaign_id: 'c-open2', restricted: false }, { campaign_id: 'c-locked', restricted: true }],
+    };
+    const attempt = async (key, payload, canUpdate = ownsOnly()) =>
+      refusal(mount({ canUpdate }).filters['items.update'](payload, { collection, keys: [key] }, ctx({ database: fakeDb([], [], tables) })));
+    const refusedFor = async (key, payload) => {
+      const err = await attempt(key, payload);
+      assert.equal(err.extensions.kind, 'restricted', `${collection} ${JSON.stringify(payload)}`);
+    };
+    await refusedFor('r1', { campaign_id: 'c-locked' });          // into a restricted campaign
+    await refusedFor('r1', { sample_id: 's-locked' });            // onto a restricted sample
+    await refusedFor('r2', { project_id: 'pj-open2' });           // the current sample is restricted
+    await refusedFor('r2', { sample_id: 's-open' });              // off a restricted sample
+    await refusedFor('r3', { campaign_id: 'c-open2' });           // the record itself is restricted
+    await refusedFor('r1', { project_id: 'pj-locked' });          // into a restricted project
+    // the owner passes, and an unrestricted move by an editor passes
+    await mount({ canUpdate: ownsOnly(`${collection}:r2`) }).filters['items.update']({ project_id: 'pj-open2' }, { collection, keys: ['r2'] }, ctx({ database: fakeDb([], [], tables) }));
+    await mount({ canUpdate: ownsOnly() }).filters['items.update']({ campaign_id: 'c-open2', project_id: 'pj-open2' }, { collection, keys: ['r1'] }, ctx({ database: fakeDb([], [], tables) }));
+  }
+});
+
+test('a move is checked per key in a batch and not at all for admins and internal calls', async () => {
+  const tables = sampleTables();
+  const meta = { collection: 'physical_samples', keys: ['s-open', 's-locked'] };
+  const owner = mount({ canUpdate: ownsOnly('physical_samples:s-locked') });
+  await owner.filters['items.update']({ project_id: 'pj-open2' }, meta, ctx({ database: fakeDb([], [], tables) })); // only s-locked needs the owner
+  assert.deepEqual(owner.log.reads.map((r) => r.query.filter._and[0].sample_id._eq), ['s-locked']);
+  await assert.rejects(mount({ canUpdate: ownsOnly() }).filters['items.update']({ project_id: 'pj-open2' }, meta, ctx({ database: fakeDb([], [], tables) })), denied(/s-locked/));
+  const free = mount({ canUpdate: ownsOnly() });
+  await free.filters['items.update']({ project_id: 'pj-open2' }, meta, ctx({ database: fakeDb([], [], tables), accountability: { user: 'a', admin: true } }));
+  await free.filters['items.update']({ project_id: 'pj-open2' }, meta, ctx({ database: fakeDb([], [], tables), accountability: null }));
+  assert.equal(free.log.reads.length, 0);
+});
+
+// ---- campaign_samples: the sample must be one the caller can read, and a restricted one needs its owner ----
+
+const readers = (...ids) => ({ sample_readers: ids.map((id) => ({ record_id: id, user_id: 'user-1' })) });
+
+test('campaign_samples create: a sample the caller cannot read is refused even when the update rule would pass', async () => {
+  const { filters } = mount({ canUpdate: ownsOnly() });
+  const database = fakeDb([], [], { ...readers('s-readable'), physical_samples: [{ sample_id: 's-readable', restricted: false }, { sample_id: 's-hidden', restricted: false }] });
+  const meta = { collection: 'campaign_samples' };
+  await filters['items.create']({ campaign_id: 'c1', sample_id: 's-readable' }, meta, ctx({ database }));
+  const err = await refusal(filters['items.create']({ campaign_id: 'c1', sample_id: 's-hidden' }, meta, ctx({ database })));
+  assert.deepEqual(kindOf(err), ['junction', 'You cannot see that sample, so you cannot add it to a campaign.']);
+  assert.deepEqual([err.extensions.parent, err.extensions.id], ['physical_samples', 's-hidden']);
+  // the lookup is one sample_readers read for the caller, in the request's transaction
+  const lookup = database.lookups.find((l) => l.table === 'sample_readers');
+  assert.deepEqual(lookup, { table: 'sample_readers', op: 'first', selected: ['record_id'] });
+});
+
+test('campaign_samples create: a restricted sample needs its owner (the delete rule), an unrestricted one does not', async () => {
+  const tables = { ...readers('s-locked', 's-open'), physical_samples: [{ sample_id: 's-locked', restricted: true }, { sample_id: 's-open', restricted: false }] };
+  const meta = { collection: 'campaign_samples' };
+  const editor = mount({ canUpdate: ownsOnly() });
+  await editor.filters['items.create']({ campaign_id: 'c1', sample_id: 's-open' }, meta, ctx({ database: fakeDb([], [], tables) }));
+  const err = await refusal(editor.filters['items.create']({ campaign_id: 'c1', sample_id: 's-locked' }, meta, ctx({ database: fakeDb([], [], tables) })));
+  assert.deepEqual(kindOf(err), ['junction', "Only the sample's owner can add a restricted sample to a campaign."]);
+  const owner = mount({ canUpdate: ownsOnly('physical_samples:s-locked') });
+  await owner.filters['items.create']({ campaign_id: 'c1', sample_id: 's-locked' }, meta, ctx({ database: fakeDb([], [], tables) }));
+});
+
+test('campaign_samples update: repointing to an unreadable or restricted sample is checked, a new sample made here is not', async () => {
+  const tables = { ...readers('s-open'), physical_samples: [{ sample_id: 's-open', restricted: false }], campaign_samples: [{ id: 5, campaign_id: 'c1', sample_id: 's-open' }] };
+  const meta = { collection: 'campaign_samples', keys: [5] };
+  const { filters } = mount({ canUpdate: ownsOnly() });
+  const db = () => fakeDb([{ id: 5, campaign_id: 'c1', sample_id: 's-open' }], [], tables);
+  await assert.rejects(filters['items.update']({ sample_id: 's-hidden' }, meta, ctx({ database: db() })), denied(/physical_samples s-hidden/));
+  // a sample inserted by this very request: the update rule fails, the new-here exemption holds, the reader lookup is skipped
+  const created = fakeDb([{ id: 5, campaign_id: 'c1', sample_id: 's-open' }], ['physical_samples:s-new'], tables);
+  const noUpdate = mount({ canUpdate: (c) => c !== 'physical_samples' });
+  await noUpdate.filters['items.update']({ sample_id: 's-new' }, meta, ctx({ database: created }));
+  assert.ok(!created.lookups.some((l) => l.table === 'sample_readers'));
+});
+
+test('campaign_samples create: a sample created in this request needs no reader row', async () => {
+  const { filters } = mount({ canUpdate: () => false });
+  const database = fakeDb([], ['campaigns:c-new', 'physical_samples:s-new'], { sample_readers: [] });
+  await filters['items.create']({ campaign_id: 'c-new', sample_id: 's-new' }, { collection: 'campaign_samples' }, ctx({ database }));
+});
+
+// ---- test_sessions_subject: a restricted test, or a test on a restricted sample, needs the test's owner ----
+
+test('test_sessions_subject create: a restricted test or a test on a restricted sample needs the test owner', async () => {
+  const tables = {
+    test_sessions: [
+      { session_id: 't-open', restricted: false, sample_id: 's-open' },
+      { session_id: 't-locked', restricted: true, sample_id: 's-open' },
+      { session_id: 't-on-locked', restricted: false, sample_id: 's-locked' },
+      { session_id: 't-empty', restricted: false, sample_id: null },
+    ],
+    physical_samples: [{ sample_id: 's-open', restricted: false }, { sample_id: 's-locked', restricted: true }],
+  };
+  const meta = { collection: 'test_sessions_subject' };
+  const subject = (id) => ({ test_sessions_id: id, collection: 'physical_samples', item: 'x' });
+  const editor = mount({ canUpdate: ownsOnly() });
+  for (const ok of ['t-open', 't-empty']) await editor.filters['items.create'](subject(ok), meta, ctx({ database: fakeDb([], [], tables) }));
+  for (const id of ['t-locked', 't-on-locked']) {
+    const err = await refusal(editor.filters['items.create'](subject(id), meta, ctx({ database: fakeDb([], [], tables) })));
+    assert.deepEqual(kindOf(err), ['junction', "Only the test's owner can change the samples of a restricted test or of a test on a restricted sample."], id);
+    const owner = mount({ canUpdate: ownsOnly(`test_sessions:${id}`) });
+    await owner.filters['items.create'](subject(id), meta, ctx({ database: fakeDb([], [], tables) }));
+  }
+});
+
+// ---- a campaign's project change ----------------------------------------------------------------------
+
+function campaignWorld(extra = {}) {
+  return {
+    campaigns: [{ campaign_id: 'c1', owner_person_id: 'p1', restricted: false, project_id: 'pj-open' }],
+    campaign_samples: [{ id: 1, campaign_id: 'c1', sample_id: 's-open' }, { id: 2, campaign_id: 'c1', sample_id: 's-locked' }, { id: 3, campaign_id: 'c2', sample_id: 's-x' }],
+    physical_samples: [
+      { sample_id: 's-open', restricted: false, project_id: 'pj-open' },
+      { sample_id: 's-locked', restricted: true, project_id: 'pj-open' },
+      { sample_id: 's-in-locked-project', restricted: false, project_id: 'pj-locked' },
+      { sample_id: 's-x', restricted: true, project_id: 'pj-open' },
+    ],
+    projects: sampleTables().projects,
+    manufacturing_operations: [],
+    test_sessions: [],
+    ...extra,
+  };
+}
+const moveCampaign = (canUpdate, tables, payload = { project_id: 'pj-mine' }, accountability) =>
+  mount({ canUpdate }).filters['items.update'](payload, { collection: 'campaigns', keys: ['c1'] }, ctx({ database: fakeDb([], [], tables), ...(accountability !== undefined ? { accountability } : {}) }));
+
+test('a campaign project change: a Can edit person is refused, the owner of an unrestricted campaign passes', async () => {
+  const unrestricted = campaignWorld({ campaign_samples: [{ id: 1, campaign_id: 'c1', sample_id: 's-open' }] });
+  const editor = await refusal(moveCampaign(ownsOnly(), unrestricted));
+  assert.deepEqual(kindOf(editor), ['restricted', "Only the campaign's owner can move it to another project."]);
+  await moveCampaign(ownsOnly('campaigns:c1'), unrestricted);
+  // the same value, or no change of project, is not a move
+  await moveCampaign(ownsOnly(), unrestricted, { project_id: 'pj-open', notes: 'form save' });
+});
+
+test('a campaign project change: the owner is refused while the campaign holds a restricted sample they do not own', async () => {
+  const tables = campaignWorld();
+  const err = await refusal(moveCampaign(ownsOnly('campaigns:c1'), tables));
+  assert.deepEqual(kindOf(err), ['restricted', 'This campaign holds restricted records you do not own, so only an administrator can move it to another project.']);
+  await moveCampaign(ownsOnly('campaigns:c1', 'physical_samples:s-locked'), tables); // owns everything restricted in it
+});
+
+test('a campaign project change: a restricted operation or test with that campaign, or a sample of a restricted project, counts', async () => {
+  const base = { campaign_samples: [{ id: 1, campaign_id: 'c1', sample_id: 's-open' }] };
+  const withOp = campaignWorld({ ...base, manufacturing_operations: [{ operation_id: 'o1', campaign_id: 'c1', restricted: true }, { operation_id: 'o2', campaign_id: 'c1', restricted: false }] });
+  await assert.rejects(moveCampaign(ownsOnly('campaigns:c1'), withOp), denied(/campaigns c1/));
+  await moveCampaign(ownsOnly('campaigns:c1', 'manufacturing_operations:o1'), withOp);
+  const withTest = campaignWorld({ ...base, test_sessions: [{ session_id: 't1', campaign_id: 'c1', restricted: true }] });
+  await assert.rejects(moveCampaign(ownsOnly('campaigns:c1'), withTest), denied(/campaigns c1/));
+  await moveCampaign(ownsOnly('campaigns:c1', 'test_sessions:t1'), withTest);
+  const inLockedProject = campaignWorld({ campaign_samples: [{ id: 1, campaign_id: 'c1', sample_id: 's-in-locked-project' }] });
+  await assert.rejects(moveCampaign(ownsOnly('campaigns:c1'), inLockedProject), denied(/campaigns c1/));
+  await moveCampaign(ownsOnly('campaigns:c1', 'physical_samples:s-in-locked-project'), inLockedProject);
+  // the rows of ANOTHER campaign do not count
+  await moveCampaign(ownsOnly('campaigns:c1'), campaignWorld({ campaign_samples: [{ id: 1, campaign_id: 'c1', sample_id: 's-open' }, { id: 3, campaign_id: 'c2', sample_id: 's-x' }] }));
+});
+
+test('a campaign project change: the owners of what is restricted are asked in one read per record type', async () => {
+  const tables = campaignWorld({
+    campaign_samples: [{ id: 1, campaign_id: 'c1', sample_id: 's-locked' }, { id: 2, campaign_id: 'c1', sample_id: 's-x' }],
+  });
+  const owner = mount({ canUpdate: ownsOnly('campaigns:c1', 'physical_samples:s-locked', 'physical_samples:s-x') });
+  await owner.filters['items.update']({ project_id: 'pj-mine' }, { collection: 'campaigns', keys: ['c1'] }, ctx({ database: fakeDb([], [], tables) }));
+  const sampleReads = owner.log.reads.filter((r) => r.collection === 'physical_samples');
+  assert.equal(sampleReads.length, 1);
+  assert.deepEqual(sampleReads[0].query.filter._and[0], { sample_id: { _in: ['s-locked', 's-x'] } });
+  // one sample not owned: refused
+  await assert.rejects(moveCampaign(ownsOnly('campaigns:c1', 'physical_samples:s-locked'), tables), denied(/campaigns c1/));
+});
+
+test('a campaign project change by an admin or an internal call is not checked; an owner change in the same payload still checks the contents', async () => {
+  const tables = campaignWorld();
+  await moveCampaign(ownsOnly(), tables, { project_id: 'pj-mine' }, { user: 'a', admin: true });
+  await moveCampaign(ownsOnly(), tables, { project_id: 'pj-mine' }, null);
+  await assert.rejects(moveCampaign(ownsOnly('campaigns:c1'), tables, { project_id: 'pj-mine', owner_person_id: 'p2' }), denied(/campaigns c1/));
+});
+
+test('a refused move names the record and keeps the plain-words contract', async () => {
+  const err = await refusal(moveCampaign(ownsOnly(), campaignWorld()));
+  assert.deepEqual(
+    { ...err.extensions },
+    { code: 'FORBIDDEN', reason: err.message, source: 'd1-access-guard', kind: 'restricted', collection: 'campaigns', id: 'c1' },
+  );
+});
+
+// ---- clearing a gating key is a move (review I1) ----------------------------------------------------------
+
+test("clearing project_id, campaign_id or sample_id takes a record out of its parent's gate: the owner is needed when the OLD parent is restricted", async () => {
+  const tables = sampleTables();
+  const clear = (collection, key, payload, canUpdate = ownsOnly()) =>
+    refusal(mount({ canUpdate }).filters['items.update'](payload, { collection, keys: [key] }, ctx({ database: fakeDb([], [], tables) })));
+  // a sample out of a restricted project, a restricted sample out of an open one
+  for (const key of ['s-in-locked-project', 's-locked']) {
+    const err = await clear('physical_samples', key, { project_id: null });
+    assert.deepEqual(kindOf(err), ['restricted', "Only the sample's owner can move it into or out of something restricted."], key);
+    await mount({ canUpdate: ownsOnly(`physical_samples:${key}`) }).filters['items.update']({ project_id: null }, { collection: 'physical_samples', keys: [key] }, ctx({ database: fakeDb([], [], tables) }));
+  }
+  // an unrestricted sample out of an unrestricted project: an editor may
+  await mount({ canUpdate: ownsOnly() }).filters['items.update']({ project_id: null }, { collection: 'physical_samples', keys: ['s-open'] }, ctx({ database: fakeDb([], [], tables) }));
+  // clearing a key that is already empty is not a move
+  tables.physical_samples.push({ sample_id: 's-none', owner_person_id: 'p1', restricted: true, project_id: null });
+  await mount({ canUpdate: ownsOnly() }).filters['items.update']({ project_id: null }, { collection: 'physical_samples', keys: ['s-none'] }, ctx({ database: fakeDb([], [], tables) }));
+  // operations and tests: out of a restricted sample, out of a restricted campaign
+  for (const collection of ['manufacturing_operations', 'test_sessions']) {
+    const pk = collection === 'test_sessions' ? 'session_id' : 'operation_id';
+    const t = {
+      [collection]: [{ [pk]: 'r1', owner_person_id: 'p1', restricted: false, project_id: 'pj-open', campaign_id: 'c-locked', sample_id: 's-locked' }],
+      physical_samples: tables.physical_samples,
+      projects: tables.projects,
+      campaigns: [{ campaign_id: 'c-locked', restricted: true }],
+    };
+    for (const payload of [{ sample_id: null }, { campaign_id: null }]) {
+      const err = await refusal(mount({ canUpdate: ownsOnly() }).filters['items.update'](payload, { collection, keys: ['r1'] }, ctx({ database: fakeDb([], [], t) })));
+      assert.equal(err.extensions.kind, 'restricted', `${collection} ${JSON.stringify(payload)}`);
+      await mount({ canUpdate: ownsOnly(`${collection}:r1`) }).filters['items.update'](payload, { collection, keys: ['r1'] }, ctx({ database: fakeDb([], [], t) }));
+    }
+  }
+});
+
+test('clearing campaigns.project_id needs the campaign owner, and the owner of what is restricted in it', async () => {
+  const tables = campaignWorld();
+  const clear = (canUpdate) => moveCampaign(canUpdate, tables, { project_id: null });
+  assert.deepEqual(kindOf(await refusal(clear(ownsOnly()))), ['restricted', "Only the campaign's owner can move it to another project."]);
+  await assert.rejects(clear(ownsOnly('campaigns:c1')), denied(/campaigns c1/)); // holds a restricted sample they do not own
+  await clear(ownsOnly('campaigns:c1', 'physical_samples:s-locked'));
+});
+
+// ---- the restricted flag spelled the Postgres way (review I2) ---------------------------------------------
+
+test('restricted: every Postgres spelling of the stored value is "unchanged", every other spelling is a change', async () => {
+  const stored = (value) => ownerDb([{ sample_id: 's1', owner_person_id: 'p1', restricted: value }]);
+  const meta = { collection: 'physical_samples', keys: ['s1'] };
+  const passes = async (value, sent) => {
+    const { filters, log } = mount({ canUpdate: ownsOnly() });
+    await filters['items.update']({ restricted: sent }, meta, ctx({ database: stored(value) }));
+    assert.equal(log.reads.length, 0, `${JSON.stringify(sent)} over ${value}`);
+  };
+  const refused = async (value, sent) => {
+    const { filters } = mount({ canUpdate: ownsOnly() });
+    const err = await refusal(filters['items.update']({ restricted: sent }, meta, ctx({ database: stored(value) })));
+    assert.equal(err.extensions.kind, 'restricted', `${JSON.stringify(sent)} over ${value}`);
+  };
+  // stored false: only false spellings are unchanged; 't', '1', 'yes', 'ON', ' Y ' restrict the record (refused for an editor)
+  for (const sent of [false, 'false', 'f', 'F', 'no', 'N', 'off', 'OFF', '0', 0, ' false ']) await passes(false, sent);
+  for (const sent of [true, 'true', 't', 'T', '1', 1, 'yes', 'y', 'on', 'ON', ' Y ', 'TRUE']) await refused(false, sent);
+  // stored true: the mirror image
+  for (const sent of [true, 'true', 't', '1', 1, 'yes', 'y', 'on', ' TRUE ']) await passes(true, sent);
+  for (const sent of [false, 'false', 'f', '0', 0, 'no', 'n', 'off']) await refused(true, sent);
+  // anything not recognised is a change (the guard runs, the database then decides)
+  for (const sent of [null, undefined, '', 'maybe', 'tru', 'ye', 2, {}, []]) {
+    await refused(false, sent);
+    await refused(true, sent);
+  }
+});
+
+// ---- removing a sample from a restricted campaign (review M5, ruling) -----------------------------------
+
+test('campaign_samples delete: a restricted campaign needs the campaign owner, an open one does not, admins are not checked', async () => {
+  const tables = {
+    campaigns: [{ campaign_id: 'c-open', restricted: false }, { campaign_id: 'c-locked', restricted: true }],
+    campaign_samples: [{ id: 1, campaign_id: 'c-open', sample_id: 's1' }, { id: 2, campaign_id: 'c-locked', sample_id: 's2' }, { id: 3, campaign_id: 'c-locked', sample_id: 's3' }],
+  };
+  const del = (canUpdate, keys, accountability) =>
+    mount({ canUpdate }).filters['items.delete'](keys, { collection: 'campaign_samples' }, ctx({ database: fakeDb([], [], tables), ...(accountability !== undefined ? { accountability } : {}) }));
+  await del(ownsOnly(), [1]);
+  const err = await refusal(del(ownsOnly(), [2]));
+  assert.deepEqual(kindOf(err), ['junction', "Only the campaign's owner can remove samples from a restricted campaign."]);
+  assert.deepEqual([err.extensions.parent, err.extensions.id], ['campaigns', 'c-locked']);
+  await del(ownsOnly('campaigns:c-locked'), [2, 3]);
+  await del(ownsOnly('campaigns:c-locked'), [1, 2]);
+  await assert.rejects(del(ownsOnly(), [1, 3]), denied(/campaigns c-locked/));
+  const free = mount({ canUpdate: ownsOnly() });
+  await free.filters['items.delete']([2], { collection: 'campaign_samples' }, ctx({ database: fakeDb([], [], tables), accountability: { user: 'a', admin: true } }));
+  await free.filters['items.delete']([2], { collection: 'campaign_samples' }, ctx({ database: fakeDb([], [], tables), accountability: null }));
+  assert.equal(free.log.reads.length, 0);
+  // other collections are not this hook's business
+  await mount({ canUpdate: ownsOnly() }).filters['items.delete']([2], { collection: 'sample_co_owners' }, ctx({ database: fakeDb([], [], tables) }));
+});
+
+// ---- the update rule is NOT granted to everyone (review M7) --------------------------------------------------
+
+test('campaign_samples create: a reader whose update rule on the sample is not granted (a Can view person) is refused; an editor who is a reader passes', async () => {
+  const tables = { ...readers('s1'), physical_samples: [{ sample_id: 's1', restricted: false }] };
+  const meta = { collection: 'campaign_samples' };
+  const campaignOnly = (c) => c === 'campaigns'; // the campaign's update rule passes, the sample's does not
+  await assert.rejects(
+    mount({ canUpdate: campaignOnly }).filters['items.create']({ campaign_id: 'c1', sample_id: 's1' }, meta, ctx({ database: fakeDb([], [], tables) })),
+    denied(/physical_samples s1/),
+  );
+  // the update rule passes but the person is no reader (a legacy co-owner of a sample in a restricted project): refused
+  await assert.rejects(
+    mount({ canUpdate: () => true }).filters['items.create']({ campaign_id: 'c1', sample_id: 's1' }, meta, ctx({ database: fakeDb([], [], { ...tables, sample_readers: [] }) })),
+    denied(/physical_samples s1/),
+  );
+  await mount({ canUpdate: () => true }).filters['items.create']({ campaign_id: 'c1', sample_id: 's1' }, meta, ctx({ database: fakeDb([], [], tables) }));
+});
+
+// ---- A1a final review I1: "involved" is decided from hidden_records, not the parent's own flag ---------------
+
+const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const hid = (kind, ...ids) => ids.map((record_id) => ({ kind, record_id }));
+const HIDDEN = 'd1_private.hidden_records';
+
+test('the shipped switch is ON in A1a: restrictions are admin-only until A1b flips it', () => {
+  assert.equal(RESTRICT_ADMIN_ONLY, true);
+});
+
+test('I1 (a): repointing a subject row off a hidden sample needs the test owner, whether the hiding is a flag or only a restricted project', async () => {
+  const T = ID(1);
+  const S = ID(2);
+  const S3 = ID(3);
+  const meta = { collection: 'test_sessions_subject', keys: [10] };
+  // the sample S is hidden only through hidden_records (its project is restricted: neither S nor T carries the flag)
+  const tables = {
+    test_sessions_subject: [{ id: 10, test_sessions_id: T, item: S, collection: 'physical_samples' }],
+    test_sessions: [{ session_id: T, restricted: false, sample_id: S }],
+    physical_samples: [{ sample_id: S, restricted: false }, { sample_id: S3, restricted: false }],
+    [HIDDEN]: [...hid('physical_samples', S), ...hid('test_sessions', T)],
+  };
+  const db = () => fakeDb([], [], tables);
+  const editor = mount({ canUpdate: ownsOnly() }); // a co-owner of S passes the update rule, not the delete rule
+  const err = await refusal(editor.filters['items.update']({ item: S3 }, meta, ctx({ database: db() })));
+  assert.deepEqual(kindOf(err), ['junction', "Only the test's owner can change the samples of a test that sits under something restricted."]);
+  assert.deepEqual([err.extensions.parent, err.extensions.id], ['test_sessions', T]);
+  await mount({ canUpdate: ownsOnly(`test_sessions:${T}`) }).filters['items.update']({ item: S3 }, meta, ctx({ database: db() }));
+  // the same value (a form save) is not a move, and a change of an unrelated field is not either
+  await editor.filters['items.update']({ item: S, collection: 'physical_samples' }, meta, ctx({ database: db() }));
+  // moving it ONTO a hidden sample is involved too, even when the test is open
+  const open = { ...tables, test_sessions: [{ session_id: T, restricted: false, sample_id: S3 }], [HIDDEN]: hid('physical_samples', S), test_sessions_subject: [{ id: 10, test_sessions_id: T, item: S3, collection: 'physical_samples' }] };
+  await assert.rejects(editor.filters['items.update']({ item: S }, meta, ctx({ database: fakeDb([], [], open) })), denied(/test_sessions /));
+  // nothing hidden: an editor may repoint it
+  await editor.filters['items.update']({ item: S3 }, meta, ctx({ database: fakeDb([], [], { ...tables, [HIDDEN]: [], physical_samples: [{ sample_id: S, restricted: false }, { sample_id: S3, restricted: false }] }) }));
+  // admins and internal calls are not checked
+  await editor.filters['items.update']({ item: S3 }, meta, ctx({ database: db(), accountability: { user: 'a', admin: true } }));
+  await editor.filters['items.update']({ item: S3 }, meta, ctx({ database: db(), accountability: null }));
+});
+
+test('I1 (b): deleting a subject row of a hidden test, or of a hidden sample, needs the test owner; an open one does not', async () => {
+  const T = ID(1);
+  const S = ID(2);
+  const TO = ID(4);
+  const tables = {
+    test_sessions_subject: [{ id: 10, test_sessions_id: T, item: S, collection: 'physical_samples' }, { id: 11, test_sessions_id: TO, item: ID(5), collection: 'physical_samples' }],
+    test_sessions: [{ session_id: T, restricted: false, sample_id: S }, { session_id: TO, restricted: false, sample_id: ID(5) }],
+    physical_samples: [{ sample_id: S, restricted: false }, { sample_id: ID(5), restricted: false }],
+    [HIDDEN]: hid('physical_samples', S),
+  };
+  const del = (canUpdate, keys, accountability) =>
+    mount({ canUpdate }).filters['items.delete'](keys, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables), ...(accountability !== undefined ? { accountability } : {}) }));
+  const err = await refusal(del(ownsOnly(), [10]));
+  assert.deepEqual(kindOf(err), ['junction', "Only the test's owner can change the samples of a test that sits under something restricted."]);
+  await del(ownsOnly(`test_sessions:${T}`), [10]);
+  await del(ownsOnly(), [11]); // nothing hidden
+  await assert.rejects(del(ownsOnly(), [10, 11]), denied(/test_sessions /));
+  await del(ownsOnly(), [10], { user: 'a', admin: true });
+  await del(ownsOnly(), [10], null);
+});
+
+test('I1 (b2): creating a subject row on a hidden sample for an open test is refused for an editor', async () => {
+  const T = ID(1);
+  const S = ID(2);
+  const tables = {
+    test_sessions: [{ session_id: T, restricted: false, sample_id: null }],
+    physical_samples: [{ sample_id: S, restricted: false }],
+    [HIDDEN]: hid('physical_samples', S),
+  };
+  const meta = { collection: 'test_sessions_subject' };
+  const row = { test_sessions_id: T, collection: 'physical_samples', item: S };
+  await assert.rejects(mount({ canUpdate: ownsOnly() }).filters['items.create'](row, meta, ctx({ database: fakeDb([], [], tables) })), denied(/test_sessions /));
+  await mount({ canUpdate: ownsOnly(`test_sessions:${T}`) }).filters['items.create'](row, meta, ctx({ database: fakeDb([], [], tables) }));
+  await mount({ canUpdate: ownsOnly() }).filters['items.create']({ ...row, item: ID(9) }, meta, ctx({ database: fakeDb([], [], { ...tables, [HIDDEN]: [] }) }));
+});
+
+test('I1 (c): an operation or test moves off a sample, a campaign or a project that is hidden only through a restricted project: the owner is needed', async () => {
+  const O = ID(20);
+  const S2 = ID(21);
+  const S3 = ID(22);
+  const C = ID(23);
+  const P = ID(24);
+  for (const collection of ['manufacturing_operations', 'test_sessions']) {
+    const pk = collection === 'test_sessions' ? 'session_id' : 'operation_id';
+    // every flag is false: S2, C and the record are hidden only because P is restricted (hidden_records says so)
+    const tables = {
+      [collection]: [{ [pk]: O, owner_person_id: 'p1', restricted: false, project_id: null, campaign_id: C, sample_id: S2 }],
+      physical_samples: [{ sample_id: S2, restricted: false }, { sample_id: S3, restricted: false }],
+      campaigns: [{ campaign_id: C, restricted: false }, { campaign_id: ID(25), restricted: false }],
+      projects: [{ project_id: P, restricted: false }, { project_id: ID(26), restricted: false }],
+      [HIDDEN]: [...hid('physical_samples', S2), ...hid('campaigns', C), ...hid(collection, O)],
+    };
+    const payloads = [{ sample_id: S3 }, { sample_id: null }, { campaign_id: null }, { campaign_id: ID(25) }, { project_id: ID(26) }];
+    for (const payload of payloads) {
+      const meta = { collection, keys: [O] };
+      const err = await refusal(mount({ canUpdate: ownsOnly() }).filters['items.update'](payload, meta, ctx({ database: fakeDb([], [], tables) })));
+      assert.equal(err.extensions.kind, 'restricted', `${collection} ${JSON.stringify(payload)}`);
+      await mount({ canUpdate: ownsOnly(`${collection}:${O}`) }).filters['items.update'](payload, meta, ctx({ database: fakeDb([], [], tables) }));
+    }
+    // the same payloads for a record that is NOT hidden: an editor may do them
+    const open = { ...tables, [HIDDEN]: [] };
+    for (const payload of payloads) await mount({ canUpdate: ownsOnly() }).filters['items.update'](payload, { collection, keys: [O] }, ctx({ database: fakeDb([], [], open) }));
+  }
+});
+
+test('I1 (c2): a sample that a hidden campaign shields (hidden_records only) cannot be moved to another project by an editor', async () => {
+  const S = ID(30);
+  const tables = {
+    physical_samples: [{ sample_id: S, owner_person_id: 'p1', restricted: false, project_id: ID(31) }],
+    projects: [{ project_id: ID(31), restricted: false }, { project_id: ID(32), restricted: false }],
+    [HIDDEN]: hid('physical_samples', S),
+  };
+  const meta = { collection: 'physical_samples', keys: [S] };
+  await assert.rejects(mount({ canUpdate: ownsOnly() }).filters['items.update']({ project_id: ID(32) }, meta, ctx({ database: fakeDb([], [], tables) })), denied(/physical_samples /));
+  await mount({ canUpdate: ownsOnly(`physical_samples:${S}`) }).filters['items.update']({ project_id: ID(32) }, meta, ctx({ database: fakeDb([], [], tables) }));
+});
+
+test('I1 (d): removing a sample from an unrestricted campaign of a restricted project (hidden_records) needs the campaign owner', async () => {
+  const C = ID(40);
+  const COPEN = ID(41);
+  const tables = {
+    campaigns: [{ campaign_id: C, restricted: false }, { campaign_id: COPEN, restricted: false }],
+    campaign_samples: [{ id: 1, campaign_id: C, sample_id: ID(42) }, { id: 2, campaign_id: COPEN, sample_id: ID(43) }],
+    [HIDDEN]: hid('campaigns', C),
+  };
+  const del = (canUpdate, keys) => mount({ canUpdate }).filters['items.delete'](keys, { collection: 'campaign_samples' }, ctx({ database: fakeDb([], [], tables) }));
+  const err = await refusal(del(ownsOnly(), [1]));
+  assert.deepEqual(kindOf(err), ['junction', "Only the campaign's owner can remove samples from a restricted campaign."]);
+  await del(ownsOnly(`campaigns:${C}`), [1]);
+  await del(ownsOnly(), [2]); // a visible campaign keeps the junction rule only
+});
+
+test('an empty or missing hidden_records row never makes the guard looser: the flag alone still counts', async () => {
+  const S = ID(50);
+  const tables = {
+    physical_samples: [{ sample_id: S, owner_person_id: 'p1', restricted: true, project_id: ID(51) }],
+    projects: [{ project_id: ID(51), restricted: false }, { project_id: ID(52), restricted: false }],
+    [HIDDEN]: [],
+  };
+  await assert.rejects(
+    mount({ canUpdate: ownsOnly() }).filters['items.update']({ project_id: ID(52) }, { collection: 'physical_samples', keys: [S] }, ctx({ database: fakeDb([], [], tables) })),
+    denied(/physical_samples /),
+  );
+});
+
+// ---- A1b switch (maintainer ruling): no non-admin may change `restricted` in A1a --------------------------------
+
+test('until A1b: an owner (or a co-owner, or an editor) PATCHing restricted on any of the four records is refused; an admin is not', async () => {
+  await untilA1b(async () => {
+    for (const [collection, pk] of [['physical_samples', 'sample_id'], ['manufacturing_operations', 'operation_id'], ['test_sessions', 'session_id'], ['campaigns', 'campaign_id']]) {
+      const database = () => ownerDb([{ [pk]: 'k1', owner_person_id: 'p1', restricted: false }]);
+      const meta = { collection, keys: ['k1'] };
+      // the OWNER passes the delete rule and is still refused
+      for (const who of ['owner', 'editor']) {
+        const { filters } = mount({ canUpdate: who === 'owner' ? () => true : ownsOnly() });
+        const err = await refusal(filters['items.update']({ restricted: true }, meta, ctx({ database: database() })));
+        assert.deepEqual(kindOf(err), ['restricted', 'Restricting a record is not available yet. Ask an administrator.'], `${collection} ${who}`);
+        assert.equal(err.extensions.collection, collection);
+      }
+      const { filters } = mount({ canUpdate: () => true });
+      // lifting it, and a value spelled the other way, are changes too
+      const locked = ownerDb([{ [pk]: 'k1', owner_person_id: 'p1', restricted: true }]);
+      await assert.rejects(filters['items.update']({ restricted: false }, meta, ctx({ database: locked })), denied(new RegExp(collection)));
+      await assert.rejects(filters['items.update']({ restricted: 't', notes: 'x' }, meta, ctx({ database: database() })), denied(new RegExp(collection)));
+      // a form save that sends the stored value, and any other field, still pass
+      await filters['items.update']({ restricted: false, notes: 'x' }, meta, ctx({ database: database() }));
+      await filters['items.update']({ notes: 'x' }, meta, ctx({ database: database() }));
+      // admins and internal calls
+      await filters['items.update']({ restricted: true }, meta, ctx({ database: database(), accountability: { user: 'a', admin: true } }));
+      await filters['items.update']({ restricted: true }, meta, ctx({ database: database(), accountability: null }));
+    }
+  });
+});
+
+test('until A1b: a project PI PATCHing restricted on a project is refused, an admin is not, a form save is fine', async () => {
+  await untilA1b(async () => {
+    const tables = { projects: [{ project_id: 'pj1', restricted: false }] };
+    const meta = { collection: 'projects', keys: ['pj1'] };
+    const { filters } = mount({ canUpdate: () => true });
+    const err = await refusal(filters['items.update']({ restricted: true }, meta, ctx({ database: fakeDb([], [], tables) })));
+    assert.deepEqual(kindOf(err), ['restricted', 'Restricting a record is not available yet. Ask an administrator.']);
+    await filters['items.update']({ restricted: false, notes: 'x' }, meta, ctx({ database: fakeDb([], [], tables) }));
+    await filters['items.update']({ restricted: true }, meta, ctx({ database: fakeDb([], [], tables), accountability: { user: 'a', admin: true } }));
+  });
+});
+
+test('until A1b: creating a record already restricted is refused for a member, creating an open one is not', async () => {
+  await untilA1b(async () => {
+    const { filters } = mount({ canUpdate: () => true });
+    for (const collection of ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns', 'projects']) {
+      const meta = { collection };
+      const err = await refusal(filters['items.create']({ restricted: true }, meta, ctx()));
+      assert.equal(err.extensions.kind, 'restricted', collection);
+      await assert.rejects(filters['items.create']([{ restricted: false }, { restricted: 'yes' }], meta, ctx()), denied(new RegExp(collection)));
+      await filters['items.create']({ restricted: false }, meta, ctx());
+      await filters['items.create']({ restricted: 'f' }, meta, ctx());
+      await filters['items.create']({ notes: 'x' }, meta, ctx());
+      await filters['items.create']({ restricted: true }, meta, ctx({ accountability: { user: 'a', admin: true } }));
+      await filters['items.create']({ restricted: true }, meta, ctx({ accountability: null }));
+    }
+  });
+});
+
+test('with the switch open (A1b), the owner-only rules underneath apply again: the owner may restrict, an editor may not', async () => {
+  const meta = { collection: 'physical_samples', keys: ['s1'] };
+  const database = () => ownerDb([{ sample_id: 's1', owner_person_id: 'p1', restricted: false }]);
+  await mount({ canUpdate: () => true }).filters['items.update']({ restricted: true }, meta, ctx({ database: database() }));
+  const err = await refusal(mount({ canUpdate: ownsOnly() }).filters['items.update']({ restricted: true }, meta, ctx({ database: database() })));
+  assert.equal(err.message, "Only the sample's owner can restrict it or lift the restriction.");
+});
+
+test('I1: a nested { sample_id } item is read like a bare id, on update and on create', async () => {
+  const T = ID(60);
+  const S = ID(61);
+  const S3 = ID(62);
+  const tables = {
+    test_sessions_subject: [{ id: 10, test_sessions_id: T, item: S3, collection: 'physical_samples' }],
+    test_sessions: [{ session_id: T, restricted: false, sample_id: S3 }],
+    physical_samples: [{ sample_id: S, restricted: false }, { sample_id: S3, restricted: false }],
+    [HIDDEN]: hid('physical_samples', S),
+  };
+  const editor = () => mount({ canUpdate: ownsOnly() });
+  // moving onto the hidden sample S with the nested form, from an open one
+  await assert.rejects(
+    editor().filters['items.update']({ item: { sample_id: S } }, { collection: 'test_sessions_subject', keys: [10] }, ctx({ database: fakeDb([], [], tables) })),
+    denied(/test_sessions /),
+  );
+  // the same nested value as stored is not a move; a nested object naming the open sample is fine
+  await editor().filters['items.update']({ item: { sample_id: S3 } }, { collection: 'test_sessions_subject', keys: [10] }, ctx({ database: fakeDb([], [], tables) }));
+  // creating a subject row on the hidden sample with the nested form
+  const row = { test_sessions_id: T, collection: 'physical_samples', item: { sample_id: S } };
+  await assert.rejects(editor().filters['items.create'](row, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) })), denied(/test_sessions /));
+  await mount({ canUpdate: ownsOnly(`test_sessions:${T}`) }).filters['items.create'](row, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) }));
+  // a nested item of another collection is not a sample
+  await editor().filters['items.create']({ ...row, collection: 'something_else' }, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) }));
 });

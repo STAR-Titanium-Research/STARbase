@@ -29,17 +29,26 @@ policy parts of that script, not the real accounts (see the [developer guide](de
 
 ![The User Directory](../images/database/users.png)
 
-### Machine users and the Phase 3 roles
+### Machine users
 
-`core/roles.json` and `core/permissions.json` define an older role model from
-[ADR-0005](../../adr/0005-directus-rbac-structure.md):
+The live system has three roles: **Administrator**, **Lab Admin** and **Lab Member**. Machine users (the
+workers, the force crawler, equipment nodes such as the rig's `Rig_1_Fast_Sampling_Node`) are Directus users on the
+Administrator role with a static token, created by hand in the User Directory. The older Phase 3 model of
+[ADR-0005](../../adr/0005-directus-rbac-structure.md) (Operator and Researcher roles, `core/roles.json`,
+`core/permissions.json`, `core/apply.sh`) was deleted in A1a ([ADR-0014](../../adr/0014-record-access.md)); nothing read it.
+See the [API contract](../../api-contract.md).
 
-- **Operator:** writes samples, operations, tests and tooling;
-- **Researcher:** reads everything, including the audit log;
-- **Administrator**.
+### Restricted records and Ask the database
 
-`core/apply.sh` creates them. Machine users such as the rig's `Rig_1_Fast_Sampling_Node` use
-the Operator role with a static token. See the [API contract](../../api-contract.md).
+Any sample, operation, test, campaign or project can be switched to **Restricted** (by its owner or an admin; the switch
+is hidden in the UI until A1b, so today it is set only through the API). A Restricted record is read only by its owner,
+the people listed on it, the project's PI and admins, and everything under it (a restricted project's campaigns, samples,
+operations and tests; a restricted campaign's operations and tests; a restricted sample's operations, tests, files and
+analyses) follows. Who can read each record is **stored** in the `<type>_readers` tables (kept by triggers; the admin
+overview shows a drift count that must be 0), so a list is one indexed lookup. **Ask the database** reads through its own
+Postgres role and never sees a Restricted record or anything under one (row-level security keyed on that role, migration
+168), whoever asks. The owner of a Restricted record's own questions do not see it either. A restricted record's attached
+files and point clouds are still reachable by anyone who has their id until A1b.
 
 ### Lab Member and files
 
@@ -101,23 +110,33 @@ Investigator* and *Secondary Investigators* fields of the project.
 | Campaign | owner | owner | anyone |
 | Project | PI | PI | anyone |
 | Attached rows (genealogy, stock provenance, data files, force analyses) | whoever may edit the record they belong to | same, except force analyses (no delete) | anyone, except the rows below |
-| Co-owner of a sample | whoever may edit the sample | same | only if you may edit that sample |
+| Co-owner of a sample | the sample's owner | the sample's owner | the sample's owner |
 | Investigator of a project | the PI | the PI | only the PI |
-| Test subject (the sample or insert edge a test acts on) | whoever may edit the test | same | only if you may edit that test |
-| Sample in a campaign | the campaign's owner, or an owner or co-owner of the sample | same | only if you may edit **both** the campaign and the sample |
+| Test subject (the sample or insert edge a test acts on) | whoever may edit the test | same | only if you may edit that test (its owner, when the test or its sample is Restricted) |
+| Sample in a campaign | the campaign's owner or a Can edit person of it, or an owner or co-owner of the sample | same (only the campaign's owner, when the campaign is Restricted) | only if you may edit **both** the campaign and the sample **and can see the sample** (its owner, when the sample is Restricted) |
 | Fast run data, project rollup | nobody (read only) | nobody | nobody |
 | **People** | everything except the login (`user_id`) | admins only | a row with no login or your own |
+
+Who has access (A1a): the people on a record's access list (**Can view**, **Can edit**; on a project **Can view**, **Secondary
+investigator**) are managed through the *Who has access* dialog, which calls the `d1-record-access` endpoint: the **owner** of the
+record (the PI of a project) and admins can add, change and remove people and transfer ownership; everyone who can read the record can
+see the list. Adding someone, or transferring a record to them, sends them an email (to their login's address, or the People address for
+a person with no login); a failed email never blocks the change. Co-owners can no longer add other co-owners.
 
 Being PI or investigator of a project, or owning a campaign a sample is in, lets you **read** that
 sample, not edit it. A new sample, operation, test or campaign is created with you as its owner
 (the `d1-default-owner` hook), so you can always open what you just made. Changing the *Owner* of a
 record hands it over: you lose edit rights if you are not also a co-owner. Only a record's owner can
-change its Owner (samples, operations and tests; the `d1-access-guard` hook refuses anyone else,
-including a co-owner, so nobody can give themselves delete rights). Admins can always change it.
+change its Owner (samples, operations, tests and campaigns; the `d1-access-guard` hook refuses anyone else,
+including a co-owner or a Can edit person, so nobody can give themselves delete rights). The same hook reserves two more things to the
+owner: switching a record to or from **Restricted**, and moving a record into or out of something Restricted (a Restricted project,
+campaign or sample, or a Restricted record itself). Changing a campaign's project always needs the campaign's owner, and when the campaign
+holds a Restricted sample, operation or test (or a sample of a Restricted project) its owner must also own each of those, otherwise only an
+admin can move it. Admins can always change all of this.
 
 The rows that grant access (co-owners, investigators, samples in a campaign, a test's subjects) cannot be used to grant
 yourself access: creating one, or moving it to another sample, project, campaign or test, is refused
-unless you may edit the record it attaches to (the `d1-access-guard` hook; the error says which).
+unless you may edit the record it attaches to, or, for co-owners and investigators, own it (the `d1-access-guard` hook; the error says which).
 So to put a sample in someone else's campaign, add that person as a co-owner of the sample first and
 let them add it. Only an admin can link a login to a People row: a member who could would inherit
 that person's records.

@@ -4,7 +4,7 @@ import ProgressBar from '../components/ProgressBar.vue';
 import StatTile from '../components/StatTile.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 import { TEST_STATUS_ORDER } from '../status';
-import type { Overview } from './rollup';
+import { HIDDEN_SAMPLES_TEXT, type Overview } from './rollup';
 
 // Counts and progress bars of a campaign, from the roll-up (`buildOverview`). `rail`: only the bars, bare
 // and stacked, for the Campaign page's rail (its counts are rail facts there, and the hidden-samples
@@ -37,8 +37,7 @@ const p = computed(() => props.overview.progress);
 			<StatTile label="Test sessions" :value="overview.counts.tests" icon="biotech" hint="Test sessions you can see in this campaign" />
 		</div>
 		<p v-if="overview.counts.hiddenSamples && !rail" class="hidden-note">
-			{{ overview.counts.hiddenSamples }} {{ overview.counts.hiddenSamples === 1 ? 'sample' : 'samples' }} in this campaign not visible to you
-			(counted on the campaign card, not in the tiles).
+			{{ HIDDEN_SAMPLES_TEXT }}
 		</p>
 		<div class="bars">
 			<div class="row">
