@@ -2,7 +2,7 @@
 import ExplorerView from './ExplorerView.vue';
 import { useExplorerHost } from './explorerHost';
 import { computed, onMounted, ref, watch } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
+import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRoute, useRouter } from 'vue-router';
 import { PageShell } from '@d1/ui';
 
@@ -14,6 +14,9 @@ const route = useRoute();
 // flag from the server; if a non-admin were wrongly shown the picker, the server still refuses the write.
 const { isAdmin } = useExplorerHost();
 const go = (to: string) => router.push(to);
+// A member can edit only their OWN People row (the server refuses the rest: a People row now decides who is a reader and who is mailed, A1a). Anyone
+// may still add a person; only an admin edits it afterwards.
+const myId = (useStores().useUserStore() as any).currentUser?.id ?? null;
 
 interface Person {
 	person_id?: string;
@@ -42,6 +45,7 @@ const dialog = ref(false);
 const saving = ref(false);
 const draft = ref<Person>(blank());
 const isNew = computed(() => !draft.value.person_id);
+const canEditDraft = computed(() => isNew.value || isAdmin.value || (!!myId && draft.value.user_id === myId));
 const err = ref('');
 
 function blank(): Person {
@@ -220,13 +224,14 @@ async function remove() {
 						<label class="tg"><v-checkbox v-model="draft.active" /> Active <span class="hint">(uncheck if they've left the group)</span></label>
 					</div>
 					<div class="fld"><label>Notes</label><v-textarea v-model="draft.notes" placeholder="Optional" /></div>
+					<p v-if="!canEditDraft" class="hint">You can only change your own entry. An admin can edit anyone's.</p>
 					<p v-if="err" class="err">{{ err }}</p>
 				</v-card-text>
 				<v-card-actions>
 					<v-button v-if="!isNew && isAdmin" secondary class="del" :loading="saving" @click="remove"><v-icon name="delete" left small />Delete</v-button>
 					<div class="spacer" />
 					<v-button secondary @click="dialog = false">Cancel</v-button>
-					<v-button :loading="saving" @click="save">{{ isNew ? 'Add person' : 'Save' }}</v-button>
+					<v-button :loading="saving" :disabled="!canEditDraft" @click="save">{{ isNew ? 'Add person' : 'Save' }}</v-button>
 				</v-card-actions>
 			</v-card>
 		</v-dialog>

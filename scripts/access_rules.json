@@ -137,7 +137,7 @@
     "people": {
       "create": {"validation": {"_or": [{"user_id": {"_null": true}}, {"user_id": {"_eq": "$CURRENT_USER"}}]}},
       "read": {},
-      "update": {"fields": ["full_name", "email", "is_operator", "is_researcher", "active", "notes"]}
+      "update": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}, "fields": ["full_name", "email", "is_operator", "is_researcher", "active", "notes"]}
     },
     "sample_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
     "operation_access": {"read": {"permissions": {"person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}},
