@@ -920,6 +920,26 @@ migration 141 prints about ownerless records.
   through the new access rows (the `mine.ts` filters send `access` as two bare paths; if Directus answers 400 or 500
   there, say so). Campaign pages say "Some samples in this campaign are hidden from you." with no number.
 
+- [ ] **A1a-P1 — Two-user record access check (after the cutover).** Needs two Lab Member accounts (call them
+  Ada and Ben, with working mailboxes) and an admin, the A1a migrations applied, Directus restarted, and mail set up.
+  1. As Ada create a scratch sample; Ben cannot see it unless he is in its project. As Ada open **Who has access**, add Ben
+     as **Can view**: an email reaches Ben naming the sample and Ada, with a link that opens the sample page; the dialog lists
+     Ben. Ben sees the sample and cannot edit it; Ben's dialog shows the list read-only. Change Ben to **Can edit**: Ben can
+     edit, no second email. Remove Ben: he loses the sample at once (refresh), no email.
+  2. Add a person who has no login: the dialog says "can't sign in yet" and still lists them. An admin links their login
+     in People; they can now see the sample. Their grant needed no new entry.
+  3. **Transfer** the sample to Ben: the confirm step names who stays; Ben gets the "transferred to you" email; Ada keeps
+     access as Can edit; Ada can no longer add people.
+  4. A co-owner can no longer add, change or remove co-owners (a deliberate change): try it and read the message.
+  5. API only (no screen turns it on in A1a): `PATCH /items/physical_samples/<id> {"restricted": true}` as the owner works, as a
+     Can edit person is refused (403), and a stranger no longer finds the sample or its operations; Home counts and the
+     Projects index drop it for the stranger, and the admin overview's **readers drift count is 0** afterwards. Clear the
+     flag again.
+  6. **Ask the database**: ask for the scratch sample by code while it is restricted (no rows, as if it did not exist), then
+     unrestricted (rows). Ask for a count of samples: it never includes restricted ones.
+  7. The Force App still records and saves a cut on a sample you can see, and nothing in any UI shows the Restrict switch.
+  Known and expected until A1b: a restricted operation's files and octrees can still be opened by anyone with their id.
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

@@ -50,6 +50,9 @@ Record access (A1a)
   test_access                  the same for a test session (view / edit)
   campaign_access              the same for a campaign (view / edit)
   project_access               the same for a project (view / investigator)
+  sample_readers, operation_readers, test_readers, campaign_readers, project_readers, campaign_sample_readers
+                               derived: which login may read each record (kept by triggers; never edited)
+  operation_open_to_all        derived: the ownerless operations every member may read
 
 Labels
   label_templates              printable label layouts (sheet or roll) for the Explorer labels page
@@ -417,6 +420,24 @@ beside these (decision 17 of the spec).
 and stops Directus from treating the column as required. A hidden, read-only Directus field; no
 interface shows or changes it in A1a.
 
+### Readers tables (derived): `sample_readers`, `operation_readers`, `test_readers`, `campaign_readers`, `project_readers`, `campaign_sample_readers`, `operation_open_to_all`, and `d1_private.hidden_records`
+
+Who can **read** each record, stored (migration `…166`, A1a; ADR-0013). They are derived data: the SQL function family
+`d1_private.readers_of_<type>()` states the rule, the tables hold its answer, statement triggers on every input table recompute
+what a write could change, and the Directus read rule of the five record types is one membership test on the table. Nothing writes
+them by hand; the dumps leave their data out and a restore ends with `d1_private.readers_rebuild()`.
+`d1_private.readers_drift()` lists every row where a table and its function disagree (empty is correct), `readers_drift_count()` counts them
+(the admin overview shows it, `scripts/a1_readers_drift_check.sh` logs it).
+
+| Table | Columns | Meaning |
+|---|---|---|
+| `sample_readers`, `operation_readers`, `test_readers`, `campaign_readers`, `project_readers` | `reader_id` BIGINT identity PK, `record_id` UUID FK (`ON DELETE CASCADE`), `user_id` UUID FK to `directus_users` (`ON DELETE CASCADE`), `UNIQUE (record_id, user_id)` | This login may read this record. Keyed by **login**, not person; admins are not listed |
+| `campaign_sample_readers` | the same, `record_id` is a `campaign_samples.id` | Who may read the junction row |
+| `operation_open_to_all` | `reader_id` identity PK, `record_id` UUID UNIQUE FK to `manufacturing_operations` | The ownerless runs every member may read (the narrowed orphan amnesty) |
+| `d1_private.hidden_records` | `kind` TEXT (`physical_samples`, `manufacturing_operations`, `test_sessions`, `campaigns`, `projects`), `record_id` UUID, primary key `(kind, record_id)` | The records the Ask-the-database role must not see: restricted, or under a restricted project, campaign or sample. Read through `d1_private.is_hidden(kind, id)` (SECURITY DEFINER) by the role's row-level-security policies of migration `…168`; not granted to any role |
+
+The public tables are hidden Directus collections and are not audited. They are listed in `v_schema_dictionary` like every public table, but `d1_llm_readonly` has no grant on them (and the plugin filters its prompt by privilege), so Ask-DB never offers or reads them.
+
 ---
 
 ### `raw_stock_lots`
@@ -529,4 +550,5 @@ WHERE  sample_id  = '<uuid>'
   never `audit_logs`, `people` or any `directus_*` table. It is `default_transaction_read_only` with a statement timeout.
   LLM-generated SQL is additionally validated by the plugin's SQL guard before it
   runs (ADR-0009, `docs/runbooks/text-to-sql.md`). The login role used by the
-  plugin must inherit `d1_llm_readonly` and never be the superuser.
+  plugin must inherit `d1_llm_readonly` and never be the superuser. Since migration `…168` row-level security hides restricted records
+  (and everything under them) from that role and the granted views are `security_invoker` (ADR-0013); `d1_private.hidden_records` is not granted to it.

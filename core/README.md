@@ -7,11 +7,10 @@ logic the system depends on**
 
 Directus configuration is version-controlled so it is reproducible and
 reviewable. Directus **introspects** the schema; it must never alter structure.
-The configuration lives in three places:
+The configuration lives in two places:
 
 | Where | What | Applied by |
 |---|---|---|
-| `roles.json`, `permissions.json` | The Phase 3 Operator / Researcher / Administrator roles and their permission matrix | `apply.sh` |
 | [`../scripts/configure_*.sql`](../scripts/README.md#directus-configuration) | Collections, fields, relations and presets; the Lab Admin / Lab Member roles and user accounts | `../scripts/configure_all.sh`, plus `configure_users_and_policies.sql` |
 | `extensions/` | Hooks, endpoints, modules and interfaces (below) | Bind-mounted into the Directus container |
 
@@ -21,21 +20,16 @@ The configuration lives in three places:
 # 1. Stack must be up and migrations applied
 make up && make migrate && make seed
 
-# 2. Phase 3 roles + the Rig_1 machine user
-DIRECTUS_URL=http://localhost:8055 \
-DIRECTUS_ADMIN_EMAIL=admin@example.com \
-DIRECTUS_ADMIN_PASSWORD=your_password \
-bash core/apply.sh
-
-# 3. Collections, fields and relations, then a Redis flush + Directus restart
+# 2. Collections, fields and relations, then a Redis flush + Directus restart
 bash scripts/configure_all.sh
 ```
 
-`apply.sh` is idempotent — roles and machine users it finds already existing
-are skipped. The Rig_1 machine token is printed once to stdout; store it in
-your secrets manager (1Password, Vault, etc.). It also writes a Directus schema
-snapshot to `core/schema-snapshot.yaml` for diffing; the snapshot is not
-committed.
+Machine users (the workers, the force crawler, equipment nodes) are Directus users on the
+**Administrator** role with a static token created by hand (Settings, User Directory); store the
+token in your secrets manager. The Phase 3 `roles.json`, `permissions.json` and `apply.sh`
+(Operator and Researcher roles) were deleted with the record-access work
+([ADR-0013](../docs/adr/0013-record-access.md)); use `npx directus schema snapshot` if you want a
+schema snapshot to diff.
 
 ## Extensions (`core/extensions/`)
 
@@ -53,8 +47,8 @@ changes across the bind mount (ADR-0010).
 
 | Type | Extensions |
 |---|---|
-| **hook** — server-side logic | `actor-identity` (sets the audit actor for API writes; update/delete fall back to `directus_activity`, see below), `campaign-inherit`, `d1-access-guard` (ADR-0011: refuses co-owner, investigator and campaign-sample rows the caller may not grant), `d1-default-owner` (defaults the owner, or a project's PI, to the creator), `d1-equipment-code` |
-| **endpoint** — custom API routes | `d1-ask-endpoint` (`/d1-ask`), `d1-report` (`/d1-report`: printable sample, operation and test reports; `/label` and `/labels` redirect to the in-app Explorer labels page), `d1-next-number` (`/d1-next-number/sample`: preview of the next sample number), `d1-admin-overview` (`/d1-admin-overview`, admin only: the counts behind the admin Home panels: missing files, fingerprints, force crawler queue, ownerless records), `d1-trace` (`/d1-trace/sample/:id`: a sample's lineage and event timeline, filtered to what the caller may read), `d1-usage` (`/d1-usage`: per-user "Frequently used" scores for the Explorer Home, stored in `d1_private.user_usage`; each route touches only the signed-in user's own rows) |
+| **hook** — server-side logic | `actor-identity` (sets the audit actor for API writes; update/delete fall back to `directus_activity`, see below), `campaign-inherit`, `d1-access-guard` (ADR-0011, ADR-0013: refuses co-owner, investigator and campaign-sample rows the caller may not grant, and owner and Restricted changes by anyone but the owner), `d1-default-owner` (defaults the owner, or a project's PI, to the creator), `d1-equipment-code` |
+| **endpoint** — custom API routes | `d1-ask-endpoint` (`/d1-ask`), `d1-report` (`/d1-report`: printable sample, operation and test reports; `/label` and `/labels` redirect to the in-app Explorer labels page), `d1-next-number` (`/d1-next-number/sample`: preview of the next sample number), `d1-admin-overview` (`/d1-admin-overview`, admin only: the counts behind the admin Home panels: missing files, fingerprints, force crawler queue, ownerless records), `d1-record-access` (`/d1-record-access/...`: the Who has access list of a record, add, change, remove, transfer, with the email), `d1-trace` (`/d1-trace/sample/:id`: a sample's lineage and event timeline, filtered to what the caller may read; hidden groups are booleans, never counts), `d1-usage` (`/d1-usage`: per-user "Frequently used" scores for the Explorer Home, stored in `d1_private.user_usage`; each route touches only the signed-in user's own rows) |
 | **module** — full-page apps | `d1-home`, `d1-lab-dashboard`, `d1-ask-db` (Ask the Database), `d1-force-dashboard` (force analysis, built on [`packages/force-plotting`](../packages/force-plotting/)), `d1-force-crawler` (drives `scripts/force_orchestrator.py --daemon`), `d1-fast-dashboard` (FAST sintering traces) |
 | **interface** — form fields | code builders (`d1-sample-code`, `d1-operation-code`); inherit-from-parent pickers (`d1-material-inherit`, `d1-project-inherit`, `d1-edge-new-toggle`); category display (`d1-process-category` reads `manufacturing_methods.process_category`; Postgres applies it on save; `d1-test-category`); `d1-machine-picker`, `d1-campaign-ops`, `d1-project-items`, `d1-composition-bar`, `d1-geometry-preview`, `d1-file-link`, `d1-archive-links`, `d1-report-button` (report and label buttons on sample / operation / test forms) |
 
@@ -87,15 +81,13 @@ Human accounts use two roles, created with the lab's user accounts by
 | **Lab Admin** | Full administrative access |
 | **Lab Member** | App access + CRUD on the lab collections; later migrations (`*_lab_member_*.sql` and others) extend it per collection |
 
-The Phase 3 role model from [ADR-0005](../docs/adr/0005-directus-rbac-structure.md)
-is still defined in `roles.json` / `permissions.json`, and machine users are
-provisioned on it:
+Machine users are Directus users on the **Administrator** role with a static bearer token. The
+Phase 3 Operator and Researcher roles of [ADR-0005](../docs/adr/0005-directus-rbac-structure.md)
+no longer exist in the repo (`roles.json`, `permissions.json` and `apply.sh` were deleted, ADR-0013).
 
-| Role | Access |
-|---|---|
-| **Operator** | Create + update samples (not `export_controlled`), operations, test sessions, tooling; read reference tables; no audit_logs. Machine users (e.g. `Rig_1_Fast_Sampling_Node`) use this role with a static bearer token |
-| **Researcher** | Read everything, including audit_logs; no writes |
-| **Administrator** | Full access + system settings |
+Who can read, change and share each record is described in
+[ADR-0011](../docs/adr/0011-row-level-visibility.md) and [ADR-0013](../docs/adr/0013-record-access.md)
+(the Who has access list and Restricted records).
 
 See also the [API contract](../docs/api-contract.md), and the [D1 Database wiki](../docs/wiki/database/README.md)
 for an illustrated guide to what these extensions look like in use.

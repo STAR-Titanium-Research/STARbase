@@ -21,6 +21,7 @@ Format: lightweight [MADR](https://adr.github.io/madr/)-style. Status is one of
 | [0010](./0010-force-app-extraction-and-electron-packaging.md) | Force-app: shared plotting package, repo extraction, Electron packaging | Accepted (steps 0, 1, 3, 4 done; repo split not executed) |
 | [0011](./0011-row-level-visibility.md) | Row-level visibility: people see the records they are involved in | Accepted (2026-10-07) |
 | [0012](./0012-rig-test-requests-over-github-issues.md) | Rig test requests: GitHub issues as the command channel, a fixed action vocabulary on the rig | Proposed |
+| [0013](./0013-record-access.md) | Record access: a Who has access list, Restricted records, materialised readers; Ask-DB row security | Accepted for A1a (2026-10-13); amends 0011 |
 
 New ADRs: copy the structure of an existing one, take the next number, and add a
 row above.

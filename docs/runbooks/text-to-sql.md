@@ -68,6 +68,15 @@ re-granted). `app/lib/sql_guard.py` enforces the same deny-list a second time an
 also rejects side-effect and SQL-running functions (`query_to_xml`,
 `pg_read_file`, `set_config`, …) and `FOR UPDATE`. See ADR-0009's status note.
 
+**Row-level security (migration `…168`, ADR-0013).** The role never sees a Restricted record, whoever asks: each record-bound
+granted table has a restrictive `FOR SELECT TO d1_llm_readonly` policy over `d1_private.is_hidden()`, the nine `v_*` views are
+`security_invoker`, and a permissive `FOR ALL TO PUBLIC` policy leaves other roles (`d1_embedder`) as they were. The role has `USAGE`
+on schema `d1_private` and `EXECUTE` on `is_hidden` for the policies to run, and no grant on `d1_private.hidden_records` or the
+readers tables. A table or view granted to the role later needs a policy or a `security_invoker` view (phase1 fails otherwise); a
+`CREATE OR REPLACE VIEW` of a granted view must say `WITH (security_invoker = true)`. If every query on the record tables fails with
+"permission denied for schema d1_private", the `USAGE` grant is missing. The embedding backfill (`d1_embedder`) keeps writing:
+INSERT and UPDATE are not restricted.
+
 Who may ask: `/d1-ask` serves admins and users with app access only (API-only
 tokens get 403). It forwards only the last 20 messages (4000 characters each),
 the plugin caps `row_limit` at 1000, and both refuse to run (503) when

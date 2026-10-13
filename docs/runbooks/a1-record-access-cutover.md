@@ -2,10 +2,11 @@
 
 **System:** D1-Database
 **Scope:** the maintainer applies the A1a release to the running compose stack with real data and real Lab Member
-accounts. Written before the release exists; fill in the real migration numbers and timings from the PR when it lands.
-**Applies to:** the four A1a migrations (`record_access`, `lab_member_record_access_rules`,
-`project_rollup_restricted`, `llm_role_row_security`; numbered 165 to 168 at the time of writing; confirm with
-`make migrate-status`) and the extensions `d1-access-guard`, `d1-record-access`, `d1-trace` and the rebuilt
+accounts. Design: ADR-0013 and the spec below.
+**Applies to:** the four A1a migrations, in this order: `20261012000165_record_access.sql`,
+`20261012000166_record_readers_and_rules.sql`, `20261012000167_project_rollup_restricted.sql`,
+`20261012000168_llm_role_row_security.sql` (confirm the numbers with `make migrate-status`; if main has gained migrations
+since, they must sort **below** 165 or be renumbered before the merge) and the extensions `d1-access-guard`, `d1-record-access`, `d1-trace` and the rebuilt
 `d1-home`. Design: `docs/superpowers/specs/2026-10-12-record-access-design.md`.
 
 **Order matters.** The permission rows of the second migration walk the new hidden `access` aliases of the first.
@@ -18,9 +19,23 @@ A1b), but the rules and the endpoint are live from the restart.
 
 ## 0. Before the window
 
-- On the branch: `git fetch && git merge origin/main`; confirm `ls db/migrations | tail -6` shows 163 and any later
+- On the branch: `git fetch && git merge origin/main`; confirm `ls db/migrations | tail -6` shows 164 and any later
   numbers **below** A1a's four, and that CI is green (migrations round trip, node tests, vitest, smoke with
   `D1_SMOKE_REQUIRE_LM=1`). A migration numbered below the newest recorded one is skipped silently by dbmate.
+- **Read-only preflight (run it on live before the window; it changes nothing).**
+  ```sql
+  -- dangling logins: rows naming a login that no longer exists (must be 0 and 0, else clean up first, below)
+  SELECT (SELECT count(*) FROM sample_co_owners c WHERE NOT EXISTS (SELECT 1 FROM directus_users u WHERE u.id = c.user_id)) AS dangling_co_owners,
+         (SELECT count(*) FROM project_investigators c WHERE NOT EXISTS (SELECT 1 FROM directus_users u WHERE u.id = c.user_id)) AS dangling_investigators;
+  -- those two columns must have no foreign key to directus_users yet (migration 166 adds them): expect 0 rows
+  SELECT conrelid::regclass, conname FROM pg_constraint
+   WHERE contype = 'f' AND confrelid = 'directus_users'::regclass AND conrelid IN ('sample_co_owners'::regclass, 'project_investigators'::regclass);
+  SHOW max_locks_per_transaction;   -- the big cascades peaked at 159 to 177 locks per transaction on the seeded copy with the default 64 and no failure
+  SHOW max_connections;             -- default 100; the backfill and the cascades use one connection each
+  ```
+  If either dangling count is not 0, run the cleanup below **first** (the migration refuses to run otherwise). If the `pg_constraint`
+  query returns rows, someone added a foreign key by hand: read it before the window (it may make the cleanup unnecessary).
+  `max_locks_per_transaction` below 64 would need raising (a restart) before the window; at the default it is fine.
 - **Dangling legacy logins (a hard stop of migration 166).** `sample_co_owners.user_id` and `project_investigators.user_id`
   have no foreign key today, so a deleted login left dangling rows (live had 3 `project_investigators` rows of deleted users
   on 2026-10-13, none in `sample_co_owners`, no `people` row with a dead login). Migration 166 adds `ON DELETE CASCADE`
@@ -40,7 +55,9 @@ A1b), but the rules and the endpoint are live from the restart.
   After any other restore (a `pg_restore`, a data-only load, `session_replication_role = replica`, a disabled trigger) run
   `SELECT d1_private.readers_rebuild(); SELECT d1_private.readers_drift_count();` by hand: the count must be 0.
 - Read the PR's performance table (p95 per list request as a stranger and as a member on the seeded copy). Do not
-  proceed if it is over the stated limit.
+  proceed if it is over the stated limit. Measured on the seeded copy (1665 samples, 14285 operations; live is smaller): migration
+  166 applies in 0.66 s including the backfill, `readers_rebuild()` takes 0.73 s and `readers_drift_count()` 0.73 s, and every
+  read p95 is under 80 ms. Migration 168 is instantaneous (policies and view options only).
 - Check mail on live, the email on add depends on it:
   ```bash
   docker compose exec directus printenv | grep -E '^(EMAIL_|PUBLIC_URL)' | sed 's/\(PASSWORD=\).*/\1***/'
@@ -54,7 +71,7 @@ A1b), but the rules and the endpoint are live from the restart.
 ```bash
 make backup
 ls -l backups/ | tail -4          # note the file name: this is the rollback point
-make migrate-status               # note the last applied migration (should be 163 or later, before A1a)
+make migrate-status               # note the last applied migration (should be 164 or later, before A1a)
 ```
 
 Record the name of the previous extension folders too (step 2 keeps them).
@@ -67,6 +84,15 @@ npm ci && npm run build:extensions     # d1-access-guard (new rules.json), d1-re
 make migrate                           # applies the four A1a migrations
 make migrate-status                    # no pending migrations
 ```
+
+**Check the drift immediately after the migrations** (the backfill leaves the readers tables equal to the functions, so this is the proof):
+
+```bash
+docker compose exec -T postgres psql -U d1 -d d1_database -c "SELECT count(*) FROM d1_private.readers_drift()"   # must be 0
+```
+
+If it is not 0, run `SELECT d1_private.readers_rebuild();` and check again; if it is still not 0, stop and roll back. Do the same
+after **any** restore (below).
 
 Keep the previous `core/extensions/d1-access-guard`, `d1-trace` and `d1-home` builds (a copy, or the previous git
 commit) for the rollback. Migration 167 refreshes `project_rollup`; it may take a moment on a large instance.
@@ -103,7 +129,9 @@ As a Lab Member account (a test member, not an admin; use a token or sign in):
    `PATCH /items/physical_samples/<id> {"restricted": true}`, then clear it again) is invisible and `PATCH`ing
    `restricted` as a non-owner is refused.
 6. As an admin: everything still readable; as `d1_llm_app` (Ask the database): a question returns rows and none of the
-   restricted scratch sample's tree.
+   restricted scratch sample's tree, and no query on the lab tables fails with "permission denied for schema d1_private" (the
+   `USAGE` grant of migration 168). Check the role's policies are in force:
+   `SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('physical_samples','manufacturing_operations','semantic_embeddings')` (all `t`).
 
 Also work through the A1 items in [`physical-test-backlog.md`](physical-test-backlog.md) with two members and an admin.
 
@@ -114,7 +142,22 @@ Also work through the A1 items in [`physical-test-backlog.md`](physical-test-bac
 - Until A1b, a restricted record's attached files (`directus_files`) and octrees are still reachable by anyone who has
   their id; do not tell members that Restricted protects files yet, and do not turn the switch on in the UI.
 - The embedding backfill (`d1_embedder`) must keep writing: check the next run of the embedder or
-  `docker compose logs --tail 50 llm-text-to-sql`; migration 168 keeps its INSERT and UPDATE.
+  `docker compose logs --tail 50 llm-text-to-sql`; migration 168 keeps its INSERT and UPDATE (the permissive policy is `FOR ALL`).
+- **Schedule the drift check.** `scripts/a1_readers_drift_check.sh` logs the drift count and exits non-zero when it is not 0 (1) or
+  cannot be read (2). Run it nightly (next to the Postgres backup task) and after every import or restore:
+  ```bash
+  D1_DRIFT_PSQL='docker compose exec -T postgres psql -U d1 -d d1_database' D1_DRIFT_LOG=./backups/readers-drift.log \
+    bash scripts/a1_readers_drift_check.sh
+  ```
+  (On the Windows host: a scheduled task that runs it through Git Bash, with the working directory the repo.) The admin overview
+  shows the same count (cached 60 s; `?refresh=1`). A non-zero count means a write bypassed the triggers (a restore, a
+  trigger-disabled import, a direct write to a readers table): `SELECT d1_private.readers_rebuild();`.
+- **After a restore.** The dumps leave the derived tables' data out (`infra/backup/backup.sh`); `infra/backup/restore.sh` rebuilds
+  and checks. For any other restore, run `SELECT d1_private.readers_rebuild();` and then
+  `SELECT count(*) FROM d1_private.readers_drift();` (must be 0) before letting members back in.
+- **A `TRUNCATE` of `test_sessions_subject`** removes the subject rows but does not clear `test_sessions.sample_id`, which migration
+  139's row trigger derives from them, so each test keeps pointing at its old primary sample and the readers follow that stale
+  sample. After one, restore the subject rows (or fix `sample_id` by hand) and run `SELECT d1_private.readers_rebuild();`.
 
 - Writes to samples, operations, tests, campaigns, projects, their access lists and `campaign_samples` take one global lock
   (`d1_readers`) at the start of the statement and hold it to the end of the transaction, so an import transaction that stays

@@ -3,8 +3,8 @@
 # OCC, manufacturing operation creation, machine token auth, and audit log
 # capture via the REST API.
 #
-# Requires a running Directus instance with the Phase 1 schema applied and
-# core/apply.sh already executed.
+# Requires a running Directus instance with the Phase 1 schema applied. The optional machine-token and
+# Researcher checks need the user or token to exist (core/apply.sh and the Operator/Researcher roles are retired).
 #
 # Usage:
 #   DIRECTUS_URL=http://localhost:8055 \

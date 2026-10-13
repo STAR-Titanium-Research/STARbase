@@ -81,7 +81,7 @@ export {
 export type { HiddenLinks } from './record/operationFacts';
 export { testTypeText, testSample, testRailFacts, testDetailBase, testSubjectCount } from './record/testFacts';
 export {
-	sampleDims, sampleKind, sampleMassText, sampleCampaigns, coOwnerText, sampleRailFacts, sampleDetailBase,
+	sampleDims, sampleKind, sampleMassText, sampleCampaigns, HIDDEN_CAMPAIGNS_LABEL, coOwnerText, sampleRailFacts, sampleDetailBase,
 } from './record/sampleFacts';
 export type { SampleDims } from './record/sampleFacts';
 export { dateRangeText, projectRailFacts, projectContents } from './record/projectFacts';

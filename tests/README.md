@@ -10,7 +10,7 @@ the code they cover: each plugin's `tests/`, `apps/force-app/*/tests/`, and the
 | `phase1_schema.sh` | Core tables and views, seeds, code-generation functions, audit and OCC triggers, genealogy | `make schema-test` (needs `DATABASE_URL`) | yes |
 | `phase6_text_to_sql.sh` | AI-readiness views and the read-only `d1_llm_readonly` role | `make ai-test` (superuser `DATABASE_URL`) | yes |
 | `phase7_traceability.sh` | Recursive lineage functions | `make traceability-test` | yes |
-| `phase3_api.sh` | Directus RBAC, machine-token auth, OCC and audit through the REST API | see the script header (running stack + `core/apply.sh`) | no |
+| `phase3_api.sh` | Directus RBAC, machine-token auth, OCC and audit through the REST API | see the script header (running stack) | no |
 | `phase4_heavy_data.sh` | Heavy-data upload pipeline end to end | `make phase4-test` (running stack + `MACHINE_TOKEN`) | no |
 | `scripts/` | pytest suite for `scripts/diag`, the orchestrators, the FAST helpers and the scripts' own behaviour (legacy migration, archive indexer, FAST log clearing, `configure_all.sh`, the shell tests' assertions) | `python -m pytest tests/scripts` (deps: `scripts/requirements.txt` + `numpy scipy scikit-learn pytest`; set `DATABASE_URL` to a migrated Postgres for the DB-level tests, they skip without it) | yes (`script-tests`) |
 | `ui/` | Playwright tests against the real Directus admin UI | see [`ui/README.md`](./ui/README.md) | no |

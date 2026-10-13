@@ -2,7 +2,7 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
+	AccessDialog, EditDrawer, HIDDEN_CAMPAIGNS_LABEL, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
 	buildLife, dataStudioRoute, detailFacts, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleRailFacts, truncatedNotes,
 	type ContentsEntry,
 } from '@d1/ui';
@@ -91,7 +91,7 @@ const openReportPage = () => window.open(`/d1-report/sample/${encodeURIComponent
 							<RecordLink collection="campaigns" :id="c.campaign_id">{{ c.campaign_code ? `Campaign ${c.campaign_code}` : c.name || 'Campaign' }}</RecordLink>
 						</template>
 						<template v-if="campaignRows.hidden > 0">
-							<span>›</span><HiddenLink :label="campaignRows.hidden === 1 ? 'Campaign' : `${campaignRows.hidden} campaigns`" />
+							<span>›</span><HiddenLink :label="HIDDEN_CAMPAIGNS_LABEL" />
 						</template>
 					</template>
 

@@ -3,13 +3,13 @@
 #
 # Prerequisites (all must be running):
 #   make up && make migrate && make seed && make bootstrap-minio
-#   core/apply.sh run (Phase 3) to provision machine user
+#   a machine user (Administrator role) with a static token
 #   heavy-data-worker running with WORKER_DIRECTUS_TOKEN set
 #
 # Environment:
 #   WORKER_URL      default http://localhost:8080
 #   DIRECTUS_URL    default http://localhost:8055
-#   MACHINE_TOKEN   Operator machine token from core/apply.sh (required)
+#   MACHINE_TOKEN   static token of a machine user on the Administrator role (required)
 #   WORKER_WEBHOOK_SECRET  the same value as in .env (required): the worker rejects every
 #                   request without it in X-Worker-Secret. `set -a; . ./.env; set +a` loads it.
 #   MINIO_RESOLVE_IP  address that the presigned URLs' host `minio` resolves to for the part

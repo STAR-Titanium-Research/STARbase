@@ -236,8 +236,8 @@ are read at runtime from the container environment; none may be hard-coded.
 
 Set all required variables in your `.env` file (copied from `.env.example`)
 or in the Docker Compose `environment:` block. The `WORKER_DIRECTUS_TOKEN`
-value is printed once by `bash core/apply.sh` when the machine user is
-created; store it immediately.
+value is the static token of a machine user on the Administrator role (Directus, Settings,
+User Directory); store it when it is shown.
 
 ---
 

@@ -261,7 +261,7 @@ test('a fully readable sample returns the whole story, in order, and reads with 
     assert.equal(b.events[0].sequence, 1);
     assert.equal(b.events[2].date, null);
     assert.equal(b.events[1].status, 'processed');
-    assert.deepEqual(b.hidden, { stock_origins: 0, ancestors: 0, events: 0, descendants: 0 });
+    assert.deepEqual(b.hidden, { stock_origins: false, ancestors: false, events: false, descendants: false });
     for (const rd of reads) assert.equal(rd.opts.accountability, user);
 });
 
@@ -285,7 +285,7 @@ test('unreadable records are dropped and only counted; their codes do not appear
     assert.deepEqual(b.descendants, []);
     assert.deepEqual(b.stock_origins, []);
     assert.deepEqual(b.events.map((e) => e.id), [OP1, OP2]);
-    assert.deepEqual(b.hidden, { stock_origins: 1, ancestors: 1, events: 1, descendants: 1 });
+    assert.deepEqual(b.hidden, { stock_origins: true, ancestors: true, events: true, descendants: true });
     const text = JSON.stringify(b);
     for (const secret of ['9-AA-0', '9-AA-2', 'LOT-1', 'tensile', PARENT, CHILD, TS1, LOT1]) {
         assert.ok(!text.includes(secret), `${secret} leaked`);
@@ -315,8 +315,8 @@ test('a collection the role has no access to at all reads as all hidden, not an 
     const r = await call(handler, user);
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.events.map((e) => e.id), [OP1, OP2]);
-    assert.equal(r.body.hidden.events, 1);
-    assert.equal(r.body.hidden.stock_origins, 1);
+    assert.equal(r.body.hidden.events, true);
+    assert.equal(r.body.hidden.stock_origins, true);
 });
 
 test('a sample with no genealogy or events returns empty lists', async () => {
@@ -379,7 +379,7 @@ test('diamond ancestors: the shared ancestor is returned once', async () => {
     assert.deepEqual(b.ancestors.map((x) => x.sample_code), ['D-B', 'D-C', 'D-A']);
     assert.equal(b.ancestors.filter((x) => x.sample_id === A).length, 1);
     assert.ok(b.ancestors.every((x) => !x.through_hidden));
-    assert.deepEqual(b.hidden, { stock_origins: 0, ancestors: 0, events: 0, descendants: 0 });
+    assert.deepEqual(b.hidden, { stock_origins: false, ancestors: false, events: false, descendants: false });
 });
 
 test('diamond descendants: the shared descendant is returned once', async () => {
@@ -394,14 +394,14 @@ test('diamond with one branch hidden: through_hidden only when EVERY path is hid
     const one = diamond([A, C, D], D);
     const a = (await call(one.handler, user, D)).body;
     assert.deepEqual(a.ancestors.map((x) => [x.sample_code, x.through_hidden]), [['D-C', false], ['D-A', false]]);
-    assert.equal(a.hidden.ancestors, 1);
+    assert.equal(a.hidden.ancestors, true);
     // the edge shown for A comes from the readable branch (C -> A is derived_from, not cut_from)
     assert.equal(a.ancestors[1].relationship_type, 'derived_from');
     // both B and C unreadable: every path to A is hidden
     const both = diamond([A, D], D);
     const b = (await call(both.handler, user, D)).body;
     assert.deepEqual(b.ancestors.map((x) => [x.sample_code, x.through_hidden]), [['D-A', true]]);
-    assert.equal(b.hidden.ancestors, 2);
+    assert.equal(b.hidden.ancestors, true); // two hidden ancestors, still one boolean
 });
 
 test('a cycle back-edge never supplies the edge shown: the shallowest readable step does', async () => {
@@ -431,12 +431,22 @@ test('a cycle back-edge never supplies the edge shown: the shallowest readable s
     assert.deepEqual(b.descendants.map((x) => [x.sample_code, x.relationship_type]), [['D-B', 'cut_from'], ['D-D', 'cut_from'], ['D-E', 'cut_from']]);
 });
 
-test('a hidden sample reached by two paths is counted once', async () => {
+test('a hidden sample reached by two paths is flagged once, as a boolean', async () => {
     const { handler } = diamond([B, C, D], D); // A unreadable, but reached by two routes
     const b = (await call(handler, user, D)).body;
     assert.deepEqual(b.ancestors.map((x) => x.sample_code), ['D-B', 'D-C']);
-    assert.equal(b.hidden.ancestors, 1);
+    assert.equal(b.hidden.ancestors, true);
     assert.ok(!JSON.stringify(b).includes('D-A'));
+});
+
+test('hidden holds only booleans, however many records are hidden: no count of unreadable records leaves the endpoint', async () => {
+    // B and C unreadable (two hidden ancestors), A readable only through them
+    const { handler } = diamond([A, D], D);
+    const b = (await call(handler, user, D)).body;
+    assert.deepEqual(Object.keys(b.hidden).sort(), ['ancestors', 'descendants', 'events', 'stock_origins']);
+    for (const [group, v] of Object.entries(b.hidden)) assert.equal(typeof v, 'boolean', `hidden.${group} is a boolean`);
+    assert.equal(b.hidden.ancestors, true);
+    assert.ok(!/"hidden":\{[^}]*\d/.test(JSON.stringify(b)), 'no digit inside the hidden object');
 });
 
 test('a lot reached through two paths to the same ancestor is listed once', async () => {
@@ -608,7 +618,7 @@ test('a truncated ancestors list does not mark a row hidden because a step was c
     const { handler, D } = truncatedAncestors();
     const b = (await call(handler, user)).body;
     assert.equal(b.truncated.ancestors, true);
-    assert.equal(b.hidden.ancestors, 1); // B
+    assert.equal(b.hidden.ancestors, true); // B
     assert.equal(b.ancestors.length, 499);
     assert.equal(b.ancestors.find((a) => a.sample_id === D).through_hidden, false);
 });

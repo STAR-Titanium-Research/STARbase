@@ -24,7 +24,14 @@ PSQL="psql $DATABASE_URL --no-psqlrc -t -A"
 LLM_USER="phase6_llm_app"
 LLM_PW="phase6_pw"
 
-cleanup() { $PSQL -c "DROP ROLE IF EXISTS $LLM_USER" >/dev/null 2>&1; }
+cleanup() {
+    # the row-security fixture below is committed (the login role reads it from its own connection): remove it
+    $PSQL -c "DELETE FROM manufacturing_operations WHERE outcome_notes = 'P6RLS';
+              DELETE FROM test_sessions WHERE notes = 'P6RLS';
+              DELETE FROM physical_samples WHERE sample_code LIKE 'P6RLS-%';
+              DELETE FROM semantic_embeddings WHERE content_hash = 'p6rls'" >/dev/null 2>&1
+    $PSQL -c "DROP ROLE IF EXISTS $LLM_USER" >/dev/null 2>&1
+}
 trap cleanup EXIT
 
 pass=0; fail=0
@@ -264,6 +271,70 @@ run_eq "cosine <=> query executes against semantic_embeddings" \
        LIMIT 1
      ) AS _probe
      UNION ALL SELECT 'y' LIMIT 1" "y"
+
+echo "== Row-level security (migration 168): the Ask-DB login never sees a restricted record =="
+# A restricted sample with an operation, a test and an embedding; an unrestricted one with the same. Read through the login role's
+# own connection (the plugin's path), then a flip of the flag (the cleanup trap deletes the rows either way).
+P6V="('['||array_to_string(array_fill(0.1::real, ARRAY[768]),',')||']')::vector"
+$PSQL -c "
+    INSERT INTO physical_samples (sample_id, sample_code, restricted, notes) VALUES
+      ('e1680000-0000-4000-8000-0000000006a1', 'P6RLS-RESTRICTED', true, 'secret note'),
+      ('e1680000-0000-4000-8000-0000000006a2', 'P6RLS-OPEN', false, 'open note');
+    INSERT INTO manufacturing_operations (operation_id, sample_id, method_id, outcome_notes) VALUES
+      ('e1680000-0000-4000-8000-0000000006b1', 'e1680000-0000-4000-8000-0000000006a1', (SELECT method_id FROM manufacturing_methods ORDER BY method_code LIMIT 1), 'P6RLS'),
+      ('e1680000-0000-4000-8000-0000000006b2', 'e1680000-0000-4000-8000-0000000006a2', (SELECT method_id FROM manufacturing_methods ORDER BY method_code LIMIT 1), 'P6RLS');
+    INSERT INTO test_sessions (session_id, sample_id, notes) VALUES
+      ('e1680000-0000-4000-8000-0000000006c1', 'e1680000-0000-4000-8000-0000000006a1', 'P6RLS'),
+      ('e1680000-0000-4000-8000-0000000006c2', 'e1680000-0000-4000-8000-0000000006a2', 'P6RLS');
+    INSERT INTO semantic_embeddings (source_table, source_id, source_column, content_text, content_hash, embedding, model_name) VALUES
+      ('physical_samples', 'e1680000-0000-4000-8000-0000000006a1', 'notes', 'secret note', 'p6rls', $P6V, 'p6'),
+      ('physical_samples', 'e1680000-0000-4000-8000-0000000006a2', 'notes', 'open note', 'p6rls', $P6V, 'p6');" >/dev/null 2>&1 \
+    && ok "row-security fixture inserted (one restricted and one open sample, each with an operation, a test and an embedding)" \
+    || bad "row-security fixture could not be inserted"
+llm_one() { PGPASSWORD="$LLM_PW" psql "${LLM_DSN}" --no-psqlrc -t -A -c "$1" 2>&1; }
+llm_eq() {
+    local label="$1" sql="$2" want="$3" got
+    got=$(llm_one "$sql")
+    [[ "$got" == "$want" ]] && ok "$label" || bad "$label (got '$got', want '$want')"
+}
+run_eq "the owner role sees both samples (row security does not apply to it)" \
+    "SELECT count(*) FROM physical_samples WHERE sample_code LIKE 'P6RLS-%'" "2"
+llm_eq "the login sees only the unrestricted sample" \
+    "SELECT string_agg(sample_code, ',') FROM physical_samples WHERE sample_code LIKE 'P6RLS-%'" "P6RLS-OPEN"
+llm_eq "the login sees only the unrestricted sample's operation" \
+    "SELECT count(*) FROM manufacturing_operations WHERE outcome_notes = 'P6RLS'" "1"
+llm_eq "the login sees only the unrestricted sample's test" \
+    "SELECT count(*) FROM test_sessions WHERE notes = 'P6RLS'" "1"
+llm_eq "the login finds only the unrestricted sample through a view" \
+    "SELECT string_agg(sample_code, ',') FROM v_complete_sample_history WHERE sample_code LIKE 'P6RLS-%'" "P6RLS-OPEN"
+llm_eq "the operations view hides the restricted sample's operation" \
+    "SELECT count(*) FROM v_manufacturing_operations_full WHERE outcome_notes = 'P6RLS'" "1"
+llm_eq "the embedding search sees only the unrestricted sample's note" \
+    "SELECT string_agg(content_text, ',') FROM semantic_embeddings WHERE content_hash = 'p6rls'" "open note"
+llm_eq "a restricted sample's note is not in the nearest-neighbour result either" \
+    "SELECT count(*) FROM (SELECT content_text FROM semantic_embeddings ORDER BY embedding <=> $P6V LIMIT 500) x WHERE content_text = 'secret note'" "0"
+# the grants that make the policies run, and no more
+llm_eq "the login may use schema d1_private (the policies need it)" \
+    "SELECT has_schema_privilege('d1_private', 'USAGE')" "t"
+deny "the login cannot read the hidden set" \
+    "SELECT count(*) FROM d1_private.hidden_records"
+deny "the login cannot read the readers tables" \
+    "SELECT count(*) FROM sample_readers"
+deny "the login cannot read a d1_private backup table" \
+    "SELECT count(*) FROM d1_private.lab_member_access_rules_backup"
+# a flip of the flag changes what the login sees at once
+$PSQL -c "UPDATE physical_samples SET restricted = false WHERE sample_code = 'P6RLS-RESTRICTED'" >/dev/null 2>&1
+llm_eq "unrestricting the sample shows it to the login" \
+    "SELECT count(*) FROM physical_samples WHERE sample_code LIKE 'P6RLS-%'" "2"
+$PSQL -c "UPDATE physical_samples SET restricted = true WHERE sample_code = 'P6RLS-OPEN'" >/dev/null 2>&1
+llm_eq "restricting the other sample hides it, its operation and its test at once" \
+    "SELECT (SELECT count(*) FROM physical_samples WHERE sample_code = 'P6RLS-OPEN') || '/' || (SELECT count(*) FROM manufacturing_operations WHERE outcome_notes = 'P6RLS' AND sample_id = 'e1680000-0000-4000-8000-0000000006a2') || '/' || (SELECT count(*) FROM test_sessions WHERE notes = 'P6RLS' AND sample_id = 'e1680000-0000-4000-8000-0000000006a2')" "0/0/0"
+run_eq "the recompute kept hidden_records in step (drift 0)" "SELECT d1_private.readers_drift_count()" "0"
+# the hand-made embedder role (docs/runbooks/text-to-sql.md), when this database has it, must still write: the permissive policy is FOR ALL
+run_eq "d1_embedder, when it exists, can still INSERT and UPDATE semantic_embeddings (permissive policy FOR ALL TO PUBLIC)" \
+    "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'd1_embedder') THEN 'ok'
+                 WHEN EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'semantic_embeddings'::regclass AND p.polname = 'a1a_open' AND p.polcmd = '*' AND p.polpermissive AND p.polroles = ARRAY[0::oid]) THEN 'ok'
+                 ELSE 'BROKEN' END" "ok"
 
 echo
 echo "Phase 6: $pass passed, $fail failed"

@@ -23,15 +23,12 @@ Before bringing up the heavy-data pipeline, confirm the following:
   make bootstrap-minio
   ```
 
-- Phase 3 has been applied (Directus running, schema migrated, Operator machine
-  user provisioned via `core/apply.sh`):
-
-  ```bash
-  bash core/apply.sh
-  ```
-
-  The script prints the `WORKER_DIRECTUS_TOKEN` value once at creation time.
-  Copy it before the terminal session ends.
+- Directus is running with the schema migrated, and a **machine user exists** for the workers: in Directus
+  (Settings, User Directory) create a user on the **Administrator** role and generate its static token. The
+  live system has only the Administrator, Lab Admin and Lab Member roles: the Phase 3 Operator role and its
+  `core/apply.sh` bootstrap script were retired with the record-access work (A1a, ADR-0013). The workers
+  need a role that can create operations and files; Administrator is what the live machine users use.
+  Copy the token when it is shown; it is the `WORKER_DIRECTUS_TOKEN` value.
 
 ---
 
@@ -39,7 +36,7 @@ Before bringing up the heavy-data pipeline, confirm the following:
 
 ### 2.1 Set the worker token in .env
 
-Add the token printed by `core/apply.sh` to `.env`:
+Add the machine user's static token (section 1) to `.env`:
 
 ```bash
 WORKER_DIRECTUS_TOKEN=<paste-token-here>
@@ -284,7 +281,7 @@ curl -sf \
 
 ```bash
 set -a; . ./.env; set +a          # WORKER_WEBHOOK_SECRET (required), D1_BIND_ADDR
-MACHINE_TOKEN=<Operator token from core/apply.sh> make phase4-test
+MACHINE_TOKEN=<static token of a machine user on the Administrator role> make phase4-test
 ```
 
 This spins up the full stack, uploads a synthetic `.d1f` file, registers a

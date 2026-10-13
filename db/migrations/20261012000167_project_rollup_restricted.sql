@@ -19,7 +19,8 @@
 --     (the column did not exist), see migration 166. What it overwrites is kept in
 --     d1_private.project_rollup_restricted_backup for `down`.
 -- Apply TOGETHER WITH migration 166 and the Task 3 extensions (see 166's header); flush Redis and restart Directus.
--- Note for Task 5 (migration 168): v_project_rollup is granted to d1_llm_readonly and gets security_invoker there.
+-- The view reads the hidden set through d1_private.is_hidden() (SECURITY DEFINER), not from the table: migration 168 makes this view
+-- security_invoker for d1_llm_readonly, and that role has no grant on d1_private.hidden_records (it only gets EXECUTE on is_hidden).
 SET LOCAL lock_timeout = '10s';
 
 ALTER TABLE project_rollup ADD COLUMN restricted BOOLEAN NOT NULL DEFAULT false;
@@ -51,8 +52,7 @@ WITH ops AS (
            o.output_sample_id, o.source_recipe_id, o.gcode_file, o.source_run_uid,
            o.source_system, o.sintering_mass_grams, o.material_id, o.campaign_id,
            COALESCE(o.project_id, c.project_id) AS proj,
-           EXISTS (SELECT 1 FROM d1_private.hidden_records h
-                    WHERE h.kind = 'manufacturing_operations' AND h.record_id = o.operation_id) AS op_restricted
+           d1_private.is_hidden('manufacturing_operations', o.operation_id) AS op_restricted
     FROM manufacturing_operations o
     LEFT JOIN campaigns c ON c.campaign_id = o.campaign_id
     WHERE COALESCE(o.project_id, c.project_id) IS NOT NULL
@@ -81,7 +81,7 @@ GROUP BY proj, ci.insert_id, ci.insert_code
 UNION ALL
 SELECT DISTINCT md5('sample:' || proj::text || ':' || s.sample_id::text), proj,
        'sample', s.sample_code, s.nickname, NULL::uuid,
-       EXISTS (SELECT 1 FROM d1_private.hidden_records h WHERE h.kind = 'physical_samples' AND h.record_id = s.sample_id)
+       d1_private.is_hidden('physical_samples', s.sample_id)
 FROM ops JOIN physical_samples s ON s.sample_id = ops.sample_id
 UNION ALL
 SELECT md5('material:' || proj::text || ':' || m.material_id::text), proj,

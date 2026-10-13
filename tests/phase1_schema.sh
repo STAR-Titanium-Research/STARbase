@@ -2933,6 +2933,10 @@ la_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
 RR=db/migrations/20261012000167_project_rollup_restricted.sql
 rr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$RR")
 rr_down=$(awk '/-- migrate:down/{f=1;next}f' "$RR")
+# 20261012000168 (Ask-DB row security) sits on top of 166's is_hidden and 167's view: it goes down before 167 and up after it.
+LL=db/migrations/20261012000168_llm_role_row_security.sql
+ll_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LL")
+ll_down=$(awk '/-- migrate:down/{f=1;next}f' "$LL")
 # 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql
@@ -2976,6 +2980,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$ll_down
 $rr_down
 $la_down
 $uu_down
@@ -3004,6 +3009,7 @@ $sf_up
 $jr_up
 $la_up
 $rr_up
+$ll_up
 -- 20261012000164 (label_templates, a custom-rows collection) runs after these and adds its four rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
   SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection = 'label_templates';
@@ -3011,6 +3017,7 @@ SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
  WHERE g.ruled;
+$ll_down
 $rr_down
 $la_down
 -- the replay's own rows for label_templates go before the older migrations' down sections run
@@ -3316,6 +3323,7 @@ rd_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
 RDK=d0000000-0000-4000-8000-0000000000
 rd_dangling=$($PSQL -v ON_ERROR_STOP=0 2>&1 <<SQL
 BEGIN;
+$ll_down
 $rr_down
 $la_down
 INSERT INTO projects (project_id, project_code, project_name) VALUES ('${RDK}a1', 'TRD-P', 'readers preflight');
@@ -3336,6 +3344,7 @@ grep -q "^applied" <<<"$rd_clean_apply" && ok "scripts/a1_clean_dangling_legacy_
 # the same two DELETEs, then 166 applies and adds both foreign keys
 rd_after=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$ll_down
 $rr_down
 $la_down
 INSERT INTO projects (project_id, project_code, project_name) VALUES ('${RDK}a1', 'TRD-P', 'readers preflight');
@@ -3361,6 +3370,7 @@ SELECT 'up2_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n
   UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
   UNION ALL SELECT 'open', count(*) FROM operation_open_to_all UNION ALL SELECT 'hidden', count(*) FROM d1_private.hidden_records EXCEPT SELECT * FROM rd_before) x;
 -- down removes everything it created
+$ll_down
 $rr_down
 $la_down
 SELECT 'dn_tables:' || count(*) FROM pg_tables WHERE tablename IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all') OR (schemaname = 'd1_private' AND tablename IN ('hidden_records', 'readers_added_fks'));
@@ -3375,6 +3385,7 @@ SELECT 'dn_rollup_unlocked:' || (position('d1_readers' IN prosrc) = 0) FROM pg_p
 DROP TABLE IF EXISTS _lm_access_rules;
 $la_up
 $rr_up
+$ll_up
 SELECT 'up3_drift:' || d1_private.readers_drift_count();
 SELECT 'up3_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n FROM sample_readers UNION ALL SELECT 'operation_readers', count(*) FROM operation_readers
   UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
@@ -3411,6 +3422,7 @@ CREATE TEMP TABLE _main AS
   SELECT * FROM json_to_recordset(\$m\$$rules_main_json\$m\$::json) AS x(collection text, action text, permissions jsonb);
 CREATE TEMP TABLE head_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
 SELECT 'head_backup_rows:' || count(*) FROM d1_private.lab_member_access_rules_backup;
+$ll_down
 $rr_down
 $la_down
 SELECT 'dn_backup:' || coalesce(to_regclass('d1_private.lab_member_access_rules_backup')::text, 'gone');
@@ -3445,6 +3457,7 @@ SELECT 'dn2_backup:' || coalesce(to_regclass('d1_private.lab_member_access_rules
 DROP TABLE _lm_access_rules;
 $la_up
 $rr_up
+$ll_up
 SELECT 'up3_exact_as_head:' || count(*) FROM ((SELECT permissions::jsonb, collection, action FROM head_rows EXCEPT SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM')
   UNION ALL (SELECT permissions::jsonb, collection, action FROM directus_permissions WHERE policy = '$LM' EXCEPT SELECT permissions::jsonb, collection, action FROM head_rows)) x;
 SELECT 'final_exact:' || count(*) FROM _gen g JOIN directus_permissions p
@@ -3537,6 +3550,7 @@ INSERT INTO campaigns (campaign_id, project_id, campaign_type, name, restricted)
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, campaign_id, pass_code) VALUES ('${RRK}c6', '${RRK}e1', '${RRK}d2', '${RRK}f2', 'TRR-O6');
 SELECT 'inproject:' || (SELECT restricted FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b2' AND code = 'TRR-O6') || '/' || d1_private.is_hidden('manufacturing_operations', '${RRK}c6');
 SELECT 'drift:' || d1_private.readers_drift_count();
+$ll_down
 $rr_down
 SELECT 'dn_col:' || count(*) FROM information_schema.columns WHERE table_name = 'project_rollup' AND column_name = 'restricted';
 SELECT 'dn_view_col:' || count(*) FROM information_schema.columns WHERE table_name = 'v_project_rollup' AND column_name = 'restricted';
@@ -3546,6 +3560,7 @@ SELECT 'dn_backup:' || coalesce(to_regclass('d1_private.project_rollup_restricte
 SELECT 'dn_view_comment:' || (obj_description('v_project_rollup'::regclass, 'pg_class') IS NOT NULL);
 SELECT 'dn_cache_eq_view:' || (SELECT count(*) FROM (SELECT row_id FROM project_rollup EXCEPT SELECT row_id FROM v_project_rollup) x);
 $rr_up
+$ll_up
 SELECT 'up2_col:' || count(*) FROM information_schema.columns WHERE table_name = 'project_rollup' AND column_name = 'restricted';
 SELECT 'up2_ops:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
 SELECT 'up2_rule_restricted:' || (permissions::jsonb @> '{"_or":[{"_and":[{"restricted":{"_eq":false}}]}]}'::jsonb) FROM directus_permissions WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
@@ -4336,6 +4351,7 @@ live_mo_read='{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"
 live_cs_update='{"_or":[{"campaign_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}}]}'
 sm_out=$($PSQL 2>&1 <<SQL
 BEGIN;
+$ll_down
 $rr_down
 $la_down
 $mig_down
@@ -4584,6 +4600,7 @@ ra_down=$(awk '/-- migrate:down/{f=1;next}f' "$RA_MIG")
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
 -- 167 and 166 depend on 165's columns and tables, so they go down first (as on a real rollback)
+$ll_down
 $rr_down
 $la_down
 CREATE TEMP TABLE ra_before AS
@@ -4607,6 +4624,7 @@ grep -qx "ra_down_meta:0/0/0" <<<"$ra_out" && ok "165 down removes the Directus 
 grep -qx "ra_up_again:true/true/true" <<<"$ra_out" && ok "165 up after down restores the same metadata" || bad "165 up after down differs (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$ll_down
 $rr_down
 $la_down
 $ra_down
@@ -4618,6 +4636,7 @@ SQL
 grep -q "access rules need" <<<"$ra_out" && ok "165 stops when a relation it needs already points at another collection" || bad "165 did not stop on a relation pointing elsewhere (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$ll_down
 $rr_down
 $la_down
 $ra_down
@@ -4627,6 +4646,260 @@ ROLLBACK;
 SQL
 )
 grep -q "already used by another relation" <<<"$ra_out" && ok "165 stops when the alias 'access' is already taken on a parent" || bad "165 did not stop on a taken alias (output: $ra_out)"
+
+echo "== Migration 168: Ask-DB row-level security (policies, security_invoker views, d1_embedder, reapply and reverse) =="
+# Everything runs in rolled-back transactions as the owner (d1, which bypasses row security) with SET LOCAL ROLE d1_llm_readonly /
+# d1_llm_app to read as the Ask-DB role, and a throwaway embedder-like role. Fixture (LLK = key prefix):
+#   restricted project PR holding campaign CR (not restricted itself) with sample SC; restricted sample SR (operation, test, files,
+#   force analysis); open project PO and campaign CO; open samples SO and S2; operations OO (open), ORR (on SR), OC (on SC), OCAMP
+#   (open sample, campaign CR) and OX (restricted flag, open sample); one embedding per source, a lot note, an unknown source and an orphan.
+LLK=e1680000-0000-4000-8000-0000000000
+LL_VEC="('['||array_to_string(array_fill(0.1::real, ARRAY[768]),',')||']')::vector"
+LL_TABLES="physical_samples manufacturing_operations test_sessions campaigns projects campaign_samples sample_genealogy sample_stock_provenance sample_co_owners sample_data_files operation_data_files operation_files prep_steps machining_force_analysis fast_run_data diag_layer session_data_files test_sessions_subject project_investigators semantic_embeddings"
+# the test database may hold other samples and genealogy edges (earlier sections), so those two are counted by the fixture's key
+ll_where() { case "$1" in
+    physical_samples) echo "WHERE sample_code LIKE 'FXRLS-%'" ;;
+    sample_genealogy) echo "WHERE child_sample_id::text LIKE 'e1680000%' OR parent_sample_id::text LIKE 'e1680000%'" ;;
+esac; }
+ll_counts() { local t; for t in $LL_TABLES; do printf "SELECT '%s:%s:' || count(*) FROM %s %s;\n" "$1" "$t" "$t" "$(ll_where "$t")"; done; }
+ll_views() { cat <<VSQL
+SELECT '$1_rollup_hidden_project:' || count(*) FROM project_rollup WHERE project_id = '${LLK}a1';
+SELECT '$1_rollup_open_project:' || (count(*) > 0) FROM project_rollup WHERE project_id = '${LLK}a2';
+SELECT '$1_view_rollup_hidden_project:' || count(*) FROM v_project_rollup WHERE project_id = '${LLK}a1';
+SELECT '$1_view_rollup_open_project:' || (count(*) > 0) FROM v_project_rollup WHERE project_id = '${LLK}a2';
+SELECT '$1_view_samples:' || coalesce(string_agg(sample_code, ',' ORDER BY sample_code), '') FROM v_complete_sample_history WHERE sample_code LIKE 'FXRLS-%';
+SELECT '$1_view_ops:' || count(*) FROM v_manufacturing_operations_full WHERE outcome_notes = 'fx';
+SELECT '$1_view_tests:' || count(*) FROM v_test_sessions_full WHERE session_id IN ('${LLK}91', '${LLK}92');
+SELECT '$1_view_genealogy:' || count(*) FROM v_sample_genealogy_flat WHERE child_sample_code LIKE 'FXRLS-%' OR parent_sample_code LIKE 'FXRLS-%';
+SELECT '$1_view_stock:' || coalesce(string_agg(sample_code, ',' ORDER BY sample_code), '') FROM v_stock_provenance WHERE sample_code LIKE 'FXRLS-%';
+VSQL
+}
+ll_fixture="
+INSERT INTO directus_users (id) VALUES ('${LLK}01');
+INSERT INTO directus_files (id) VALUES ('${LLK}f1'), ('${LLK}f2');
+INSERT INTO projects (project_id, project_code, project_name, restricted) VALUES ('${LLK}a1', 'FXRLS-PR', 'x', true), ('${LLK}a2', 'FXRLS-PO', 'x', false);
+INSERT INTO campaigns (campaign_id, project_id, campaign_type, name, restricted) VALUES
+  ('${LLK}b1', '${LLK}a1', 'testing_campaign', 'FXRLS under the restricted project', false), ('${LLK}b2', '${LLK}a2', 'testing_campaign', 'FXRLS open', false);
+INSERT INTO physical_samples (sample_id, sample_code, restricted) VALUES
+  ('${LLK}c1', 'FXRLS-SR', true), ('${LLK}c2', 'FXRLS-SO', false), ('${LLK}c3', 'FXRLS-S2', false), ('${LLK}c4', 'FXRLS-SC', false);
+INSERT INTO campaign_samples (campaign_id, sample_id) VALUES ('${LLK}b1', '${LLK}c4'), ('${LLK}b2', '${LLK}c2'), ('${LLK}b2', '${LLK}c1');
+INSERT INTO sample_genealogy (child_sample_id, parent_sample_id) VALUES ('${LLK}c2', '${LLK}c3'), ('${LLK}c2', '${LLK}c1'), ('${LLK}c1', '${LLK}c3');
+INSERT INTO raw_stock_lots (lot_id, lot_code, stock_type, inbound_mass_grams, remaining_mass_grams, notes) VALUES ('${LLK}d1', 'FXRLS-LOT', 'powder', 1, 1, 'lot note');
+INSERT INTO sample_stock_provenance (sample_id, lot_id) VALUES ('${LLK}c1', '${LLK}d1'), ('${LLK}c2', '${LLK}d1');
+INSERT INTO sample_co_owners (sample_id, user_id) VALUES ('${LLK}c1', '${LLK}01'), ('${LLK}c2', '${LLK}01');
+INSERT INTO project_investigators (project_id, user_id) VALUES ('${LLK}a1', '${LLK}01'), ('${LLK}a2', '${LLK}01');
+INSERT INTO sample_data_files (sample_id, directus_files_id) VALUES ('${LLK}c1', '${LLK}f1'), ('${LLK}c2', '${LLK}f2');
+INSERT INTO manufacturing_operations (operation_id, sample_id, method_id, project_id, campaign_id, restricted, outcome_notes) VALUES
+  ('${LLK}e1', '${LLK}c1', (SELECT method_id FROM manufacturing_methods ORDER BY method_code LIMIT 1), '${LLK}a1', NULL, false, 'fx'),
+  ('${LLK}e2', '${LLK}c2', (SELECT method_id FROM manufacturing_methods ORDER BY method_code LIMIT 1), '${LLK}a2', '${LLK}b2', false, 'fx'),
+  ('${LLK}e3', '${LLK}c4', (SELECT method_id FROM manufacturing_methods ORDER BY method_code LIMIT 1), NULL, NULL, false, 'fx'),
+  ('${LLK}e4', '${LLK}c2', (SELECT method_id FROM manufacturing_methods ORDER BY method_code LIMIT 1), NULL, '${LLK}b1', false, 'fx'),
+  ('${LLK}e5', '${LLK}c2', (SELECT method_id FROM manufacturing_methods ORDER BY method_code LIMIT 1), NULL, NULL, true, 'fx');
+INSERT INTO operation_data_files (operation_id, directus_files_id) VALUES ('${LLK}e1', '${LLK}f1'), ('${LLK}e2', '${LLK}f2');
+INSERT INTO operation_files (operation_id, file_path) VALUES ('${LLK}e1', '/fx/1'), ('${LLK}e2', '/fx/2');
+INSERT INTO prep_steps (operation_id) VALUES ('${LLK}e1'), ('${LLK}e2');
+INSERT INTO machining_force_analysis (id, operation_id) VALUES ('${LLK}71', '${LLK}e1'), ('${LLK}72', '${LLK}e2');
+INSERT INTO fast_run_data (operation_id) VALUES ('${LLK}e1'), ('${LLK}e2');
+INSERT INTO diag_layer (analysis_id, name, role, geometry) VALUES ('${LLK}71', 'fx', 'mask', '{}'), ('${LLK}72', 'fx', 'mask', '{}');
+INSERT INTO test_sessions (session_id, sample_id) VALUES ('${LLK}91', '${LLK}c1'), ('${LLK}92', '${LLK}c2');
+INSERT INTO session_data_files (session_id, directus_files_id) VALUES ('${LLK}91', '${LLK}f1'), ('${LLK}92', '${LLK}f2');
+INSERT INTO test_sessions_subject (test_sessions_id, collection, item) VALUES ('${LLK}91', 'physical_samples', '${LLK}c1'), ('${LLK}92', 'physical_samples', '${LLK}c2');
+INSERT INTO semantic_embeddings (source_table, source_id, source_column, content_text, content_hash, embedding, model_name)
+  SELECT v.t, v.i::uuid, 'notes', 'fx', 'h', $LL_VEC, 'm' FROM (VALUES
+    ('physical_samples', '${LLK}c1'), ('physical_samples', '${LLK}c2'), ('manufacturing_operations', '${LLK}e1'), ('manufacturing_operations', '${LLK}e2'),
+    ('test_sessions', '${LLK}91'), ('test_sessions', '${LLK}92'), ('raw_stock_lots', '${LLK}d1'), ('campaigns', '${LLK}b2'),
+    ('physical_samples', '${LLK}ff')) AS v (t, i);
+SELECT 'fixture_drift:' || d1_private.readers_drift_count();
+"
+ll_out=$($PSQL -q -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+$ll_fixture
+$(ll_counts own)
+SET LOCAL ROLE d1_llm_readonly;
+$(ll_counts llm)
+$(ll_views llm)
+SELECT 'llm_all_views_readable:' || count(*) FROM (SELECT count(*) FROM v_complete_sample_history UNION ALL SELECT count(*) FROM v_llm_query_targets UNION ALL SELECT count(*) FROM v_manufacturing_operations_full UNION ALL SELECT count(*) FROM v_project_rollup UNION ALL SELECT count(*) FROM v_sample_genealogy_flat UNION ALL SELECT count(*) FROM v_schema_dictionary UNION ALL SELECT count(*) FROM v_stock_provenance UNION ALL SELECT count(*) FROM v_test_sessions_full UNION ALL SELECT count(*) FROM v_tooling_hierarchy) x;
+SELECT 'llm_lot_visible:' || count(*) FROM raw_stock_lots WHERE lot_id = '${LLK}d1';
+RESET ROLE;
+SET LOCAL ROLE d1_llm_app;
+$(ll_counts app)
+RESET ROLE;
+SELECT 'owner_rollup_hidden_project:' || (count(*) > 0) FROM project_rollup WHERE project_id = '${LLK}a1';
+SELECT 'owner_view_ops:' || count(*) FROM v_manufacturing_operations_full WHERE outcome_notes = 'fx';
+-- the usage grant is what makes the five record tables readable at all; the hidden set itself stays ungranted
+SELECT 'grant_usage:' || has_schema_privilege('d1_llm_readonly', 'd1_private', 'USAGE');
+SELECT 'grant_execute:' || has_function_privilege('d1_llm_readonly', 'd1_private.is_hidden(text, uuid)', 'EXECUTE');
+SELECT 'grant_public_usage:' || has_schema_privilege('public', 'd1_private', 'USAGE');
+SELECT 'ungranted_d1_private_tables:' || count(*) FROM pg_class c WHERE c.relnamespace = 'd1_private'::regnamespace AND c.relkind IN ('r', 'v', 'p') AND has_table_privilege('d1_llm_readonly', c.oid, 'SELECT');
+-- completeness: every granted table has row security or is a named reference table; every granted view is security_invoker
+SELECT 'unprotected_tables:' || coalesce(string_agg(c.relname, ',' ORDER BY c.relname), 'none') FROM pg_class c
+ WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p') AND has_table_privilege('d1_llm_readonly', c.oid, 'SELECT') AND NOT c.relrowsecurity
+   AND c.relname <> ALL (ARRAY['alloying_elements','cutting_inserts','diag_recipes','equipment','etchants','facilities','fast_recipes','filter_profiles','insert_edges','insert_types','manufacturers','manufacturing_methods','material_alloying_elements','material_iso_classifications','materials','prep_recipe_steps','prep_recipes','raw_stock_lots','tool_boxes','tool_setup','tools']);
+SELECT 'reference_tables:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND has_table_privilege('d1_llm_readonly', c.oid, 'SELECT') AND NOT c.relrowsecurity;
+SELECT 'rls_tables:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relrowsecurity AND NOT c.relforcerowsecurity AND has_table_privilege('d1_llm_readonly', c.oid, 'SELECT');
+SELECT 'rls_tables_with_both_policies:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relrowsecurity
+   AND (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'a1a_open' AND p.polpermissive AND p.polcmd = '*' AND p.polroles = ARRAY[0::oid]) = 1
+   AND (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'a1a_llm_hide' AND NOT p.polpermissive AND p.polcmd = 'r' AND p.polroles = ARRAY['d1_llm_readonly'::regrole::oid]) = 1;
+SELECT 'views_not_invoker:' || coalesce(string_agg(c.relname, ',' ORDER BY c.relname), 'none') FROM pg_class c
+ WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('v', 'm') AND has_table_privilege('d1_llm_readonly', c.oid, 'SELECT') AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false);
+SELECT 'granted_views:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'v' AND has_table_privilege('d1_llm_readonly', c.oid, 'SELECT');
+-- semantic_embeddings: every source the embedder backfills (v_embeddings_source_notes) is named in the policy; anything else is denied
+SELECT 'embedding_sources_not_in_policy:' || coalesce(string_agg(s.t, ',' ORDER BY s.t), 'none')
+  FROM (SELECT DISTINCT (regexp_matches(pg_get_viewdef('v_embeddings_source_notes'::regclass), '''(\w+)''::text AS source_table', 'g'))[1] AS t) s
+ WHERE position('''' || s.t || '''' IN (SELECT pg_get_expr(p.polqual, p.polrelid) FROM pg_policy p WHERE p.polrelid = 'semantic_embeddings'::regclass AND p.polname = 'a1a_llm_hide')) = 0;
+SELECT 'embedding_sources:' || count(DISTINCT t) FROM (SELECT (regexp_matches(pg_get_viewdef('v_embeddings_source_notes'::regclass), '''(\w+)''::text AS source_table', 'g'))[1] AS t) x;
+-- d1_embedder: SELECT, INSERT and UPDATE by hand-made grants; the backfill's INSERT ... ON CONFLICT DO UPDATE must keep working
+CREATE ROLE p1_embedder NOLOGIN;
+GRANT USAGE ON SCHEMA public TO p1_embedder;
+GRANT SELECT, INSERT, UPDATE ON semantic_embeddings TO p1_embedder;
+SET LOCAL ROLE p1_embedder;
+SELECT 'embedder_sees_all:' || count(*) FROM semantic_embeddings;
+INSERT INTO semantic_embeddings (source_table, source_id, source_column, content_text, content_hash, embedding, model_name)
+  VALUES ('physical_samples', '${LLK}c1', 'notes_new', 'fresh', 'h1', $LL_VEC, 'm');
+INSERT INTO semantic_embeddings (source_table, source_id, source_column, content_text, content_hash, embedding, model_name)
+  VALUES ('physical_samples', '${LLK}c1', 'notes_new', 'changed', 'h2', $LL_VEC, 'm')
+  ON CONFLICT (source_table, source_id, source_column, model_name) DO UPDATE SET content_text = EXCLUDED.content_text, content_hash = EXCLUDED.content_hash, updated_at = now();
+SELECT 'embedder_upsert:' || content_text || '/' || content_hash FROM semantic_embeddings WHERE source_id = '${LLK}c1' AND source_column = 'notes_new';
+UPDATE semantic_embeddings SET content_hash = 'h3' WHERE source_id = '${LLK}c1' AND source_column = 'notes_new';
+SELECT 'embedder_update:' || content_hash FROM semantic_embeddings WHERE source_id = '${LLK}c1' AND source_column = 'notes_new';
+RESET ROLE;
+ROLLBACK;
+SQL
+)
+ll_check() { grep -qxF -- "$1" <<<"$ll_out" && ok "$2" || bad "$2 (wanted $1; got: $(grep -F -e "${1%%:*}:" -e ERROR <<<"$ll_out" | head -3 | tr '
+' ' ' | cut -c1-300))"; }
+if grep -q "^ERROR" <<<"$ll_out"; then bad "the Ask-DB row security fixture ran into an error: $(grep -m3 -A2 '^ERROR' <<<"$ll_out" | cut -c1-400)"; fi
+ll_check "fixture_drift:0" "168: the fixture leaves readers_drift() empty (hidden_records is in step)"
+# table: rows the owner sees (all the fixture's rows) : rows the Ask-DB role sees
+LL_EXPECT="physical_samples:4:2 manufacturing_operations:5:1 test_sessions:2:1 campaigns:2:1 projects:2:1 campaign_samples:3:1 sample_genealogy:3:1 sample_stock_provenance:2:1 sample_co_owners:2:1 sample_data_files:2:1 operation_data_files:2:1 operation_files:2:1 prep_steps:2:1 machining_force_analysis:2:1 fast_run_data:2:1 diag_layer:2:1 session_data_files:2:1 test_sessions_subject:2:1 project_investigators:2:1 semantic_embeddings:9:4"
+for e in $LL_EXPECT; do
+    IFS=: read -r t n_own n_llm <<<"$e"
+    ll_check "own:$t:$n_own" "168: the owner role (d1) sees every $t row ($n_own: row security does not apply to the owner)"
+    ll_check "llm:$t:$n_llm" "168: d1_llm_readonly sees $n_llm of the $n_own $t rows (no restricted tree)"
+    ll_check "app:$t:$n_llm" "168: d1_llm_app (the plugin's member login) is covered by the same policies on $t"
+done
+ll_check "llm_rollup_hidden_project:0" "168: project_rollup rows of the restricted project are hidden from the role"
+ll_check "llm_rollup_open_project:true" "168: project_rollup rows of the open project are readable"
+ll_check "owner_rollup_hidden_project:true" "168: the owner still sees the restricted project's rollup rows"
+ll_check "llm_view_rollup_hidden_project:0" "168: v_project_rollup (security_invoker, reads the hidden set through is_hidden) hides the restricted project"
+ll_check "llm_view_rollup_open_project:true" "168: v_project_rollup still lists the open project"
+ll_check "llm_view_samples:FXRLS-S2,FXRLS-SO" "168: v_complete_sample_history lists only the unrestricted samples (no restricted sample, none under the restricted project)"
+ll_check "llm_view_ops:1" "168: v_manufacturing_operations_full lists only the open operation"
+ll_check "owner_view_ops:5" "168: the owner sees all five operations through the view"
+ll_check "llm_view_tests:1" "168: v_test_sessions_full lists only the open test"
+ll_check "llm_view_genealogy:1" "168: v_sample_genealogy_flat lists only the edge between two visible samples"
+ll_check "llm_view_stock:FXRLS-SO" "168: v_stock_provenance lists only the visible sample"
+ll_check "llm_all_views_readable:9" "168: all nine granted views still answer for the role (usage and execute grants are in place)"
+ll_check "llm_lot_visible:1" "168: reference tables stay readable (a stock lot)"
+ll_check "grant_usage:true" "168: the role has USAGE on d1_private (a policy runs with the querying role's privileges)"
+ll_check "grant_execute:true" "168: the role may EXECUTE d1_private.is_hidden"
+ll_check "grant_public_usage:false" "168: PUBLIC still has no USAGE on d1_private"
+ll_check "ungranted_d1_private_tables:0" "168: no d1_private table is readable by the role (hidden_records and the backups stay ungranted)"
+ll_check "unprotected_tables:none" "168: every table granted to d1_llm_readonly has row security on or is a named reference table"
+ll_check "reference_tables:21" "168: the reference list is current (21 granted tables without row security, all named)"
+ll_check "rls_tables:21" "168: 21 granted tables have row security on, none is FORCEd"
+ll_check "rls_tables_with_both_policies:21" "168: each has the permissive FOR ALL TO PUBLIC policy and the restrictive FOR SELECT TO d1_llm_readonly one"
+ll_check "views_not_invoker:none" "168: every view granted to d1_llm_readonly is security_invoker (a CREATE OR REPLACE VIEW without WITH (security_invoker = true) fails here)"
+ll_check "granted_views:9" "168: nine views are granted to the role"
+ll_check "embedding_sources_not_in_policy:none" "168: every source v_embeddings_source_notes embeds is named in the semantic_embeddings policy"
+ll_check "embedding_sources:4" "168: the embedder backfills four sources today (samples, operations, tests, stock lots), all named in the policy"
+ll_check "embedder_sees_all:9" "168: a d1_embedder-like role (SELECT, INSERT, UPDATE grants) still sees every embedding row"
+ll_check "embedder_upsert:changed/h2" "168: the embedder's INSERT ... ON CONFLICT DO UPDATE still works"
+ll_check "embedder_update:h3" "168: the embedder's UPDATE still works"
+
+# a flip of restricted, a move into a restricted campaign and an unrestricting change what the role sees at once
+ll_flip=$($PSQL -q -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+$ll_fixture
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'flip0_samples:' || count(*) FROM physical_samples WHERE sample_code LIKE 'FXRLS-%';
+SELECT 'flip0_ops:' || count(*) FROM manufacturing_operations;
+RESET ROLE;
+UPDATE physical_samples SET restricted = true WHERE sample_id = '${LLK}c2';
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'flip1_samples:' || count(*) FROM physical_samples WHERE sample_code LIKE 'FXRLS-%';
+SELECT 'flip1_ops:' || count(*) FROM manufacturing_operations;
+SELECT 'flip1_embeddings:' || count(*) FROM semantic_embeddings;
+RESET ROLE;
+UPDATE physical_samples SET restricted = false WHERE sample_id = '${LLK}c2';
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'flip2_samples:' || count(*) FROM physical_samples WHERE sample_code LIKE 'FXRLS-%';
+RESET ROLE;
+INSERT INTO campaign_samples (campaign_id, sample_id) VALUES ('${LLK}b1', '${LLK}c3');
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'move_in_samples:' || count(*) FROM physical_samples WHERE sample_code LIKE 'FXRLS-%';
+SELECT 'move_in_genealogy:' || count(*) FROM sample_genealogy WHERE child_sample_id::text LIKE 'e1680000%' OR parent_sample_id::text LIKE 'e1680000%';
+RESET ROLE;
+DELETE FROM campaign_samples WHERE campaign_id = '${LLK}b1' AND sample_id = '${LLK}c3';
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'move_out_samples:' || count(*) FROM physical_samples WHERE sample_code LIKE 'FXRLS-%';
+RESET ROLE;
+UPDATE projects SET restricted = false WHERE project_id = '${LLK}a1';
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'unrestrict_project_projects:' || count(*) FROM projects;
+SELECT 'unrestrict_project_campaigns:' || count(*) FROM campaigns;
+SELECT 'unrestrict_project_rollup:' || (count(*) > 0) FROM project_rollup WHERE project_id = '${LLK}a1';
+RESET ROLE;
+UPDATE projects SET restricted = true WHERE project_id = '${LLK}a2';
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'restrict_open_project_ops:' || count(*) FROM manufacturing_operations;
+SELECT 'restrict_open_project_rollup:' || count(*) FROM project_rollup WHERE project_id = '${LLK}a2';
+RESET ROLE;
+ROLLBACK;
+SQL
+)
+lf_check() { grep -qxF -- "$1" <<<"$ll_flip" && ok "$2" || bad "$2 (wanted $1; got: $(grep -F -e "${1%%:*}:" -e ERROR <<<"$ll_flip" | head -3 | tr '
+' ' ' | cut -c1-300))"; }
+lf_check "flip0_samples:2" "168: before the flips the role sees the two open samples"
+lf_check "flip1_samples:1" "168: restricting an open sample hides it from the role in the same transaction"
+lf_check "flip1_ops:0" "168: and its operation"
+lf_check "flip1_embeddings:1" "168: and its embeddings, its operation's and its test's (only the stock lot's note stays)"
+lf_check "flip2_samples:2" "168: unrestricting it brings it back"
+lf_check "move_in_samples:1" "168: a sample added to a campaign of a restricted project is hidden at once"
+lf_check "move_in_genealogy:0" "168: and so is every genealogy edge to it"
+lf_check "move_out_samples:2" "168: removing it brings it back"
+lf_check "unrestrict_project_projects:2" "168: unrestricting the project shows it"
+lf_check "unrestrict_project_campaigns:2" "168: and its campaign"
+lf_check "unrestrict_project_rollup:true" "168: and its rollup rows"
+lf_check "restrict_open_project_ops:1" "168: restricting the open project hides the operation in it and the one on a sample of its campaign (one open operation is left)"
+lf_check "restrict_open_project_rollup:0" "168: and its rollup rows"
+
+# apply, reapply, reverse: down turns row security, the view option and the grants off; up (twice) puts them back
+ll_cycle=$($PSQL -q -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+$ll_fixture
+$ll_down
+SELECT 'dn_rls:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relrowsecurity;
+SELECT 'dn_policies:' || count(*) FROM pg_policy WHERE polname IN ('a1a_open', 'a1a_llm_hide');
+SELECT 'dn_invoker_views:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'v' AND 'security_invoker=true' = ANY (coalesce(c.reloptions, ARRAY[]::text[])) AND has_table_privilege('d1_llm_readonly', c.oid, 'SELECT');
+SELECT 'dn_usage:' || has_schema_privilege('d1_llm_readonly', 'd1_private', 'USAGE');
+SELECT 'dn_execute:' || has_function_privilege('d1_llm_readonly', 'd1_private.is_hidden(text, uuid)', 'EXECUTE');
+SELECT 'dn_grants_kept:' || has_table_privilege('d1_llm_readonly', 'physical_samples', 'SELECT') || '/' || has_table_privilege('d1_llm_readonly', 'v_project_rollup', 'SELECT');
+$ll_up
+$ll_up
+SELECT 'up2_rls:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relrowsecurity;
+SELECT 'up2_policies:' || count(*) FROM pg_policy WHERE polname IN ('a1a_open', 'a1a_llm_hide');
+SELECT 'up2_invoker_views:' || count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'v' AND 'security_invoker=true' = ANY (coalesce(c.reloptions, ARRAY[]::text[])) AND has_table_privilege('d1_llm_readonly', c.oid, 'SELECT');
+SET LOCAL ROLE d1_llm_readonly;
+SELECT 'up2_samples:' || count(*) FROM physical_samples WHERE sample_code LIKE 'FXRLS-%';
+SELECT 'up2_embeddings:' || count(*) FROM semantic_embeddings;
+RESET ROLE;
+ROLLBACK;
+SQL
+)
+lc_check() { grep -qxF -- "$1" <<<"$ll_cycle" && ok "$2" || bad "$2 (wanted $1; got: $(grep -F -e "${1%%:*}:" -e ERROR <<<"$ll_cycle" | head -3 | tr '
+' ' ' | cut -c1-300))"; }
+lc_check "dn_rls:0" "168 down: row security is off on every table"
+lc_check "dn_policies:0" "168 down: both policies are gone everywhere"
+lc_check "dn_invoker_views:0" "168 down: the views are not security_invoker any more"
+lc_check "dn_usage:false" "168 down: the USAGE grant is revoked"
+lc_check "dn_execute:false" "168 down: the EXECUTE grant is revoked"
+lc_check "dn_grants_kept:true/true" "168 down: the table and view grants of migration 132 are untouched"
+lc_check "up2_rls:21" "168 up, twice: row security is on for the 21 record-bound tables"
+lc_check "up2_policies:42" "168 up, twice: 42 policies, no duplicates"
+lc_check "up2_invoker_views:9" "168 up, twice: the nine views are security_invoker again"
+lc_check "up2_samples:2" "168 up, twice: the role sees the same rows as before"
+lc_check "up2_embeddings:4" "168 up, twice: and the same embeddings"
 
 echo "== Cleanup test rows =="
 $PSQL -c "

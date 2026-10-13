@@ -112,6 +112,16 @@ DENY = [
     ("directus_activity", "SELECT collection FROM directus_activity"),
     ("directus_revisions", "SELECT data FROM directus_revisions"),
     ("semantic_embeddings", "SELECT content_text FROM semantic_embeddings"),
+    # Row security (migration 168) hides restricted records from the role through d1_private.is_hidden() and the ungranted
+    # d1_private.hidden_records. The role has USAGE on d1_private so the policies can run, so the guard is what keeps the model
+    # from calling the function or reading the table itself: schema-qualified calls and every schema but public are refused.
+    ("is_hidden_call", "SELECT d1_private.is_hidden('physical_samples', sample_id) FROM v_complete_sample_history"),
+    ("is_hidden_in_where", "SELECT sample_code FROM v_complete_sample_history WHERE d1_private.is_hidden('physical_samples', sample_id)"),
+    ("is_hidden_quoted", "SELECT \"d1_private\".\"is_hidden\"('physical_samples', sample_id) FROM v_complete_sample_history"),
+    ("is_hidden_unqualified", "SELECT is_hidden('physical_samples', sample_id) FROM v_complete_sample_history"),
+    ("hidden_records_table", "SELECT * FROM d1_private.hidden_records"),
+    ("d1_private_readers", "SELECT * FROM d1_private.readers_drift()"),
+    ("d1_private_in_subquery", "SELECT * FROM v_complete_sample_history WHERE sample_id IN (SELECT record_id FROM d1_private.hidden_records)"),
     # Postgres system catalogs stay blocked.
     ("information_schema", "SELECT * FROM information_schema.tables"),
     ("pg_catalog", "SELECT * FROM pg_catalog.pg_roles"),

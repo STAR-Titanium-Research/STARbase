@@ -29,17 +29,26 @@ policy parts of that script, not the real accounts (see the [developer guide](de
 
 ![The User Directory](../images/database/users.png)
 
-### Machine users and the Phase 3 roles
+### Machine users
 
-`core/roles.json` and `core/permissions.json` define an older role model from
-[ADR-0005](../../adr/0005-directus-rbac-structure.md):
+The live system has three roles: **Administrator**, **Lab Admin** and **Lab Member**. Machine users (the
+workers, the force crawler, equipment nodes such as the rig's `Rig_1_Fast_Sampling_Node`) are Directus users on the
+Administrator role with a static token, created by hand in the User Directory. The older Phase 3 model of
+[ADR-0005](../../adr/0005-directus-rbac-structure.md) (Operator and Researcher roles, `core/roles.json`,
+`core/permissions.json`, `core/apply.sh`) was deleted in A1a ([ADR-0013](../../adr/0013-record-access.md)); nothing read it.
+See the [API contract](../../api-contract.md).
 
-- **Operator:** writes samples, operations, tests and tooling;
-- **Researcher:** reads everything, including the audit log;
-- **Administrator**.
+### Restricted records and Ask the database
 
-`core/apply.sh` creates them. Machine users such as the rig's `Rig_1_Fast_Sampling_Node` use
-the Operator role with a static token. See the [API contract](../../api-contract.md).
+Any sample, operation, test, campaign or project can be switched to **Restricted** (by its owner or an admin; the switch
+is hidden in the UI until A1b, so today it is set only through the API). A Restricted record is read only by its owner,
+the people listed on it, the project's PI and admins, and everything under it (a restricted project's campaigns, samples,
+operations and tests; a restricted campaign's operations and tests; a restricted sample's operations, tests, files and
+analyses) follows. Who can read each record is **stored** in the `<type>_readers` tables (kept by triggers; the admin
+overview shows a drift count that must be 0), so a list is one indexed lookup. **Ask the database** reads through its own
+Postgres role and never sees a Restricted record or anything under one (row-level security keyed on that role, migration
+168), whoever asks. The owner of a Restricted record's own questions do not see it either. A restricted record's attached
+files and point clouds are still reachable by anyone who has their id until A1b.
 
 ### Lab Member and files
 

@@ -10,7 +10,6 @@
 | `db/seeds/` | reference data for dev (`001_reference_data.sql`) |
 | `db/schema.sql` | a schema-only snapshot of production, for reference and diffing (nothing applies it) |
 | `core/extensions/` | the Directus extensions: hooks, endpoints, modules, interfaces |
-| `core/roles.json`, `core/permissions.json`, `core/apply.sh` | the Phase 3 role model and machine users |
 | `scripts/configure_*.sql` | Directus metadata as code |
 | `scripts/` | orchestrators, importers, backfills, MATLAB |
 | `plugins/` | compute plugins (filter, diagnostics, text-to-SQL, heavy data, analysis) |
