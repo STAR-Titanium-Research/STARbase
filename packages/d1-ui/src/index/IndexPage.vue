@@ -33,7 +33,7 @@ import CardGrid from './CardGrid.vue';
 import RowPlotButtons from './RowPlotButtons.vue';
 import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { PAGE_SIZE } from './indexQuery';
+import { PAGE_SIZE, toggledBookmark } from './indexQuery';
 import { plotKind } from './plotData';
 import { SELECT_MAX, cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
 import { readListPrefs, writeListPrefs } from './listPrefs';
@@ -220,7 +220,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 						type="button"
 						class="chip-main"
 						:aria-pressed="state.bookmark === b.id"
-						@click="state.bookmark === b.id ? undefined : setBookmark(b.id)"
+						@click="setBookmark(toggledBookmark(state.bookmark, b.id))"
 					>{{ b.bookmark }}</button>
 					<button
 						v-if="state.bookmark === b.id"
