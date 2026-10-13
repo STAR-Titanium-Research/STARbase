@@ -1,7 +1,9 @@
 // Every link a page makes is written as a path of the Directus app (whose root is /admin):
 // '/home/samples/<id>', '/content/<collection>/<id>', '/d1-force-dashboard?operation=<id>',
 // '/d1-report/sample/<id>'. The host decides what each one means. In the Directus module they are
-// routes as written (reports open on the server). In STARbase '/home/…' is its own route without
+// routes as written (reports open on the server). In Data Studio, STARbase's pages are not there: '/home/…'
+// and the plot dashboards open STARbase in a new tab through the permanent links on this host
+// ('/d1-links/go…'), and Data Studio paths stay routes. In STARbase '/home/…' is its own route without
 // the prefix, the two plot dashboards are its plot pages, and everything else opens d1-server in a
 // new tab. Pages never build URLs any other way, so there is one place to change per host.
 
@@ -19,12 +21,6 @@ export interface LinkConfig {
 
 const REPORT = /^\/d1-report\//;
 
-export const directusLinks: LinkConfig = {
-	serverBase: '',
-	resolve: (path) => (REPORT.test(path) ? { kind: 'external', href: path } : { kind: 'route', to: path }),
-	canonical: (routePath) => routePath,
-};
-
 const PLOTS: [string, string][] = [
 	['/d1-force-dashboard', '/plot/force'],
 	['/d1-fast-dashboard', '/plot/fast'],
@@ -33,6 +29,31 @@ const PLOTS: [string, string][] = [
 function startsWithSegment(path: string, prefix: string): boolean {
 	return path === prefix || path.startsWith(prefix + '/') || path.startsWith(prefix + '?');
 }
+
+// Data Studio no longer has STARbase's pages (spec 2026-10-13-directus-headless §5.4): they open
+// STARbase through the permanent links on this host, which forward to wherever STARbase lives.
+function toPermanent(path: string): string | null {
+	if (startsWithSegment(path, '/home')) {
+		const rest = path.slice('/home'.length); // '', '/', '/samples/1?x', '?tab=2'
+		if (rest === '' || rest === '/') return '/d1-links/go';
+		if (rest.startsWith('?')) return '/d1-links/go' + rest;
+		return '/d1-links/go/p' + rest;
+	}
+	for (const [from, to] of PLOTS) {
+		if (startsWithSegment(path, from)) return '/d1-links/go/p' + to + path.slice(from.length);
+	}
+	return null;
+}
+
+export const directusLinks: LinkConfig = {
+	serverBase: '',
+	resolve: (path) => {
+		if (REPORT.test(path)) return { kind: 'external', href: path };
+		const href = toPermanent(path);
+		return href ? { kind: 'external', href } : { kind: 'route', to: path };
+	},
+	canonical: (routePath) => routePath,
+};
 
 export function starbaseLinks(serverBase: string): LinkConfig {
 	const base = serverBase.replace(/\/+$/, '');
@@ -94,32 +115,4 @@ export function openLink(path: string, router: { push(to: string): unknown }): v
 export function linkHref(path: string, router: { resolve(to: string): { href: string } }): string {
 	const r = resolveLink(path);
 	return r.kind === 'route' ? router.resolve(r.to).href : r.href;
-}
-
-// The STARbase address of a page shown in the Directus Home module (its "Open in STARbase" link):
-// '/home/samples/<id>?x=1' → '<starbaseUrl>/samples/<id>?x=1', the plot dashboards → the plot pages;
-// a page STARbase does not have opens its Home.
-export function starbaseUrlFor(starbaseUrl: string, directusPath: string): string {
-	const base = starbaseUrl.replace(/\/+$/, '');
-	const r = starbaseLinks('').resolve(directusPath);
-	return base + (r.kind === 'route' ? r.to : '/');
-}
-
-// GET /d1-links (core/extensions/d1-links): STARbase's address, or null while it is unset or the endpoint
-// is not there (404 before deployment). Asked once per page load, whatever the number of pages visited.
-let starbaseUrlRequest: Promise<string | null> | null = null;
-
-export function starbaseUrlOnce(api: { get(path: string): Promise<{ data: any }> }): Promise<string | null> {
-	starbaseUrlRequest ??= api.get('/d1-links').then(
-		(r) => {
-			const u = r.data?.starbaseUrl;
-			return typeof u === 'string' && /^https?:\/\//.test(u) ? u : null;
-		},
-		() => null,
-	);
-	return starbaseUrlRequest;
-}
-
-export function resetStarbaseUrl(): void {
-	starbaseUrlRequest = null;
 }

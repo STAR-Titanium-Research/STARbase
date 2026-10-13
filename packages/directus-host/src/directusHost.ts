@@ -1,7 +1,7 @@
 import { ref } from 'vue';
 import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter, type Router } from 'vue-router';
-import { guessAdmin, type ExplorerHost, type HostApi, type HostField } from '@d1/ui';
+import { guessAdmin, openLink, type ExplorerHost, type HostApi, type HostField } from '@d1/ui';
 
 // The Directus side of the Explorer's host contract (packages/d1-ui/src/host.ts). A standalone
 // app provides its own ExplorerHost (setExplorerHostFactory) and reuses the components unchanged.
@@ -56,8 +56,8 @@ export function useDirectusHost(opts: { onCreate?: (host: ExplorerHost, router: 
 
 	const host: ExplorerHost = {
 		api,
-		navigate: (to) => void router.push(to),
-		openDataStudio: (path) => void router.push(path),
+		navigate: (to) => openLink(to, router),
+		openDataStudio: (path) => openLink(path, router),
 		fieldsFor: async (collection) => {
 			if (typeof (stores as any).useFieldsStore === 'function') {
 				const defs = (stores as any).useFieldsStore().getFieldsForCollectionSorted(collection);
@@ -70,7 +70,7 @@ export function useDirectusHost(opts: { onCreate?: (host: ExplorerHost, router: 
 		adminKnown,
 		user,
 	};
-	// The app's own hook (d1-home installs its usage pings here): once per signed-in user.
+	// (an app's own hook, once per signed-in user)
 	opts.onCreate?.(host, router);
 	current = { userId, host };
 	return host;
