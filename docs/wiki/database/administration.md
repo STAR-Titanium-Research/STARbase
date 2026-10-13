@@ -106,6 +106,47 @@ On the Windows host, `EXTENSIONS_AUTO_RELOAD` does not see changes across the bi
 always restart. [`core/README.md`](../../../core/README.md#extensions-coreextensions) lists every
 extension and what it does.
 
+## Rig test requests
+
+The `bug-report-relay` container also serves the Force App's [rig tests](../force-app/rig-tests.md):
+the app on a rig PC asks it for open GitHub issues labelled `rig-test-request`, and posts the
+results back through it. The relay holds the GitHub App key, so the rigs never do. Two settings
+control it, both in the `.env` next to `docker-compose.yml` on d1-server:
+
+| Variable | What it does |
+|---|---|
+| `RIG_TEST_ALLOWED_LOGINS` | comma-separated GitHub logins (not case-sensitive) who may request rig tests. **Empty switches rig tests off**: every rig-test endpoint answers "rig tests not configured". Both the login that opened an issue and the login that applied the label must be on the list. |
+| `DIRECTUS_INTERNAL_URL` | where the relay asks Directus who a caller is. The default `http://directus:8055` is right for the stock stack (the relay and Directus share a Docker network). Change it only if the relay cannot reach Directus there. |
+
+The relay needs no other secret. A rig PC proves who it is with the **signed-in operator's D1
+access token**, which the relay checks against Directus (`/users/me`) and caches for 60 seconds.
+Any active D1 user at a rig can therefore receive requests, with nothing to install or rotate per
+laptop. A disabled account loses access within about 16 minutes (an access token's lifetime plus
+the cache). Each call is logged with the D1 user it came from (`docker compose logs
+bug-report-relay`); the issue itself only ever shows the operator's initials.
+
+Environment changes need the container **recreated**, not just restarted:
+
+```bash
+# edit .env, then:
+docker compose up -d --no-deps bug-report-relay
+docker compose logs --tail 20 bug-report-relay
+```
+
+After changing the relay's code, add `--build` to the first command.
+
+**On a rig laptop** one optional setting exists: the Windows user environment variable
+`FORCE_APP_RIG_ID`, which names the rig (for example `force-rig-1`). It is what a request's `rig:`
+line is matched against, and it is shown in the app under Settings → About. Without it the rig is
+called `rig`. Restart the Force App after setting it. The ID appears on public GitHub comments, so
+use a lab name for the rig, never a person's name or the computer's name.
+
+**If requests never arrive**, check in this order: `RIG_TEST_ALLOWED_LOGINS` is set and contains
+the requester; the relay logs show the rig's calls (a 403 *D1 sign-in rejected* means the operator's
+token was refused, a 503 *D1 unavailable* that the relay cannot reach Directus); and the rig itself
+reports why it is not eligible under Settings → Rig tests
+([Troubleshooting](../force-app/troubleshooting.md#this-pc-does-not-take-rig-test-requests)).
+
 ## Importing data
 
 One-off and re-runnable importers are in `scripts/` (legacy AppSheet data, archive indexing,

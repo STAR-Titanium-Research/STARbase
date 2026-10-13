@@ -107,6 +107,40 @@ force-app-release → Run workflow* on `main`. [CI and releases](../../ci-cd.md)
 task on d1-server republishes it to the update feed within about five minutes, and installed apps
 pick it up from there (see [force-app-operations.md](../../force-app-operations.md#deploying-the-auto-publish-task)).
 
+## Rig tests
+
+[Rig tests](rig-tests.md) let a maintainer ask the rig PC to run backlog checks from a GitHub issue.
+The decision is [ADR-0012](../../adr/0012-rig-test-requests-over-github-issues.md); the design is
+[the request spec](../../superpowers/specs/2026-10-11-rig-test-requests-design.md), amended by
+[the D1 sign-in spec](../../superpowers/specs/2026-10-12-rig-test-d1-login-design.md), which
+replaced a shared rig token with the operator's own D1 sign-in. Where the two disagree, the
+sign-in spec and the code win. The pieces:
+
+| Where | What |
+|---|---|
+| `apps/force-app/backend/app/rig_test/` | `eligibility.py` (only real NI-DAQ plus a real Lab Amp; the rig ID), `poller.py` (polls every 60 s while idle; keeps snoozes, declines and an outbox of results the relay did not take), `relay.py` (the client; holds the D1 access token **in memory only**), `catalog.py` (parses a request and resolves its item ids), `runner.py` (the run state machine, answer windows, time limit), `report.py` (the comments), `routes.py` (loopback REST under `/rig-tests`) |
+| `apps/force-app/bug-report-relay/server.py` | the `/rig-tests` endpoints (list, comment, edit a comment, set a state). Each call must carry `Authorization: Bearer <D1 access token>`, which the relay checks against Directus `/users/me`; it also re-checks the GitHub side (open issue, labelled, opened and labelled by an allowlisted login). See [Administration](../database/administration.md#rig-test-requests). |
+| `apps/force-app/web/src/rigtest/` | `rigTestStore.ts` (polling and state), `rigTestLogic.ts` (every decision as plain, unit-tested functions: prompt or badge, texts, decline reasons), `rigTestSession.ts` (lends the D1 token to the recorder), and the prompt, request card, run modal and bottom bar. `settings/RigTestsSettings.vue` is the Settings tab. |
+
+Things to know:
+
+- **The catalogue is the backlog.** `force-app-backend.spec` bundles a copy of
+  `docs/runbooks/physical-test-backlog.md` (via `scripts/sync_rig_catalog.py`) as `catalog.md`, so
+  a release can only run the items it was built with. Give each new rig item a bold id
+  (`**R12 — …**`) in the same PR that adds it.
+- **A request is data.** Items are resolved from the bundled catalogue, and only `ask` and `note`
+  steps exist; nothing in an issue is executed.
+- **The token never leaves memory.** The web app sends the short-lived access token with
+  `PUT /rig-tests/session` and deletes it on sign-out or when the session goes offline. No route
+  returns it and it is scrubbed from logs and errors.
+- **Prompts must not cover a cut.** The prompt and the run window hold back while a recording is
+  running or being saved (`rigBlocked()` in `rigTestLogic.ts`); the Save dialog stays above them
+  (`z-order.test.ts`).
+- **Testing on a dev machine.** `FORCE_APP_RIG_TEST_ALLOW_SIM=1` makes a simulated PC eligible, but
+  only if `FORCE_APP_BUG_REPORT_RELAY_URL` names a relay other than the production one, so a
+  developer never answers real requests. `apps/force-app/web/e2e/rig-tests.spec.ts` drives the UI
+  with both backends stubbed in the browser.
+
 ## Things worth knowing before changing code
 
 - **Recording state lives in the backend**, not the page. The Record page reconnects to it; the

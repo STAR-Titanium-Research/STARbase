@@ -11,6 +11,7 @@ User and developer guides for the two applications in this repository, with scre
 
 - **Operating the rig?** [Force App → Getting started](force-app/getting-started.md), then
   [Recording a cut](force-app/recording.md).
+- **Asked to run a test at the rig, or want one run?** [Rig tests](force-app/rig-tests.md).
 - **Reviewing results?** [The Plot dashboard](force-app/plot-dashboard.md). The same dashboard is
   *Force Analysis* in Directus.
 - **Registering samples and logging work?** [D1 Database → Getting started](database/getting-started.md),
@@ -30,7 +31,9 @@ its simulated signal source and mock Lab Amp, Directus 11 with the D1 extensions
 **demo dataset**. Demo people are `Demo PI`, `Demo Researcher` and `Demo
 Operator`, all at `example.com`; the project is `DEMO-001`; samples are `101`–`104`. No real lab
 data, people or measurements appear. Where a screenshot needed something the local stack could
-not produce, its caption says what was substituted.
+not produce, its caption says what was substituted. The rig-test screenshots were taken on 13 October 2026 from the Force App on `main`
+(the 0.1.37 changes) with a scripted recorder backend, because the demo stack has no rig: they show
+the demo requester `demo-maintainer`, issue `#901` and the rig ID `force-rig-1`.
 
 The wiki lives in the repository (`docs/wiki/`), so it is reviewed and versioned with the code it
 describes. To refresh a screenshot, rebuild the demo stack as described in the developer guides

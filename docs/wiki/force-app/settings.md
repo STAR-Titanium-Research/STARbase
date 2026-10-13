@@ -2,7 +2,7 @@
 
 [← Force App wiki](README.md)
 
-**Settings** has nine tabs. You can link straight to one with `/settings?tab=<id>`, for example
+**Settings** has ten tabs. You can link straight to one with `/settings?tab=<id>`, for example
 `/settings?tab=logs`.
 
 - [General](#general)
@@ -13,6 +13,7 @@
 - [Local Captures](#local-captures)
 - [Logs](#logs)
 - [Report a Bug](#report-a-bug)
+- [Rig tests](#rig-tests)
 - [About](#about)
 
 ## General
@@ -182,6 +183,20 @@ Reports go through the **bug-report relay** on d1-server. The red message in the
 (*could not reach the bug-report relay: 403*) is what you see when the relay is unreachable, as
 it was on the demo stack.
 
+## Rig tests
+
+![Settings → Rig tests](../images/force-app/rig-test-settings.png)
+
+Requests from the lab admin to run checks on the rig, and what happened to them. The tab shows
+whether this PC takes requests (and the reason if not), whether the request relay is reachable,
+the **Rig ID**, the requests **Waiting for you** and **Snoozed**, and **Recent runs**. Each waiting
+request has the same **Run now**, **Snooze** and **Decline** buttons as the dialog that pops up
+when it arrives. **Refresh** (top right) re-checks all of it.
+
+It is the one place to answer a request that was held back while you were recording. The whole
+feature is explained in [Rig tests](rig-tests.md); if the tab says this PC does not take requests,
+see [Troubleshooting](troubleshooting.md#this-pc-does-not-take-rig-test-requests).
+
 ## About
 
 ![Settings → About](../images/force-app/settings-about.png)
@@ -189,3 +204,9 @@ it was on the demo stack.
 The installed version, **Check for updates** / **Update now** (desktop app only), and **What's
 new**: the changelog bundled with each build, newest first, with a link to all releases on
 GitHub.
+
+Under the version is this PC's **Rig ID**, the name it uses when it answers a
+[rig-test request](rig-tests.md#settings--rig-tests). It is `rig` unless an administrator set
+another for this laptop, and a request's `rig:` line must match it.
+
+![Settings → About, the Rig ID line](../images/force-app/rig-test-about.png)
