@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clickAction, MENU_MAX_HEIGHT, placeMenu } from './railMenu';
+import { clickAction, MENU_MAX_HEIGHT, placeMenu, scrollMovedAnchor } from './railMenu';
 
 const vp = { viewportWidth: 1280, viewportHeight: 800 };
 
@@ -41,5 +41,16 @@ describe('clickAction', () => {
 		expect(clickAction('touch', true)).toBe('close');
 		expect(clickAction('', true)).toBe('close');
 		expect(clickAction('pen', false)).toBe('open');
+	});
+});
+
+describe('scrollMovedAnchor', () => {
+	it('ignores a scroll that left the icon where the menu was placed', () => {
+		expect(scrollMovedAnchor(291, 291)).toBe(false);
+		expect(scrollMovedAnchor(291, 291.5)).toBe(false);
+	});
+	it('reports a scroll that moved the icon', () => {
+		expect(scrollMovedAnchor(291, 251)).toBe(true);
+		expect(scrollMovedAnchor(291, 293)).toBe(true);
 	});
 });

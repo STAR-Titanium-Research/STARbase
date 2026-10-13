@@ -37,3 +37,10 @@ export function clickAction(pointerType: string, isOpen: boolean): 'open' | 'clo
 	if (pointerType === 'mouse') return isOpen ? 'keep' : 'open';
 	return isOpen ? 'close' : 'open';
 }
+
+// A scroll closes an open menu only if it moved the icon the menu is placed beside. A keyboard focus
+// that scrolls the rail to reveal the icon fires its scroll event after the menu opened (the menu was
+// placed after that scroll), and must not close it.
+export function scrollMovedAnchor(anchorTop: number, currentTop: number): boolean {
+	return Math.abs(anchorTop - currentTop) > 1;
+}

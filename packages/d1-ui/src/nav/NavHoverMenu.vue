@@ -12,7 +12,7 @@ import NavIcon from './NavIcon.vue';
 import SidebarRow from './SidebarRow.vue';
 import { pinKey } from './sidebarModel';
 import type { PinRef, ResolvedPin, SidebarLink, SidebarSection, SidebarView } from './sidebarModel';
-import { placeMenu } from './railMenu';
+import { placeMenu, scrollMovedAnchor } from './railMenu';
 import { viewAsRow } from './sidebarRows';
 import { useSidebarData } from './useSidebarData';
 
@@ -53,9 +53,15 @@ const togglePin = (ref_: PinRef | null) => {
 const linkKey = (l: SidebarLink) => l.to;
 const viewKey = (v: SidebarView) => `view:${v.id}`;
 
-// Fixed to the window, so it would be left behind by a scroll or resize of the page.
+// Fixed to the window, so it would be left behind by a scroll that moves its icon, or by a resize.
 function onWindowChange(e: Event) {
-	if (e.type === 'scroll' && menu.value?.contains(e.target as Node)) return;
+	if (e.type === 'scroll') {
+		if (menu.value?.contains(e.target as Node)) return;
+		// The icon's wrapper is the menu's parent; a scroll that left it in place (focus revealing the
+		// icon in a scrolled rail) keeps the menu open.
+		const wrapper = menu.value?.parentElement;
+		if (wrapper && props.anchor && !scrollMovedAnchor(props.anchor.top, wrapper.getBoundingClientRect().top + 2)) return;
+	}
 	emit('close', false);
 }
 function onKeydown(e: KeyboardEvent) {
