@@ -6,6 +6,7 @@ import { openScan } from '@d1/starbase-pages';
 import BrandLogo from './BrandLogo.vue';
 import ShellFoot from './ShellFoot.vue';
 import { useNarrow } from './narrow';
+import { backdropDismiss } from './backdropDismiss';
 import { returnFocusToMenu } from './sheetFocus';
 
 // STARbase's chrome around every signed-in page (spec §3.3). Desktop: the brand, the Explorer sidebar
@@ -23,6 +24,14 @@ const { finderOpen, openFinder, closeFinder } = useFinderShortcut();
 const scanFromFinder = () => {
 	closeFinder();
 	openScan();
+};
+// Backdrop: remember where the press started; the click closes the sheet only if it also ended there.
+let pressedBackdrop = false;
+const onBackdropDown = (e: PointerEvent) => (pressedBackdrop = e.target === e.currentTarget);
+const onBackdropClick = (e: MouseEvent) => {
+	const started = pressedBackdrop;
+	pressedBackdrop = false;
+	if (backdropDismiss(started, e.target === e.currentTarget)) sheetOpen.value = false;
 };
 const findFromSheet = () => {
 	handedOff = true;
@@ -84,7 +93,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 
 		<main class="sb-content" :inert="narrow && sheetOpen"><router-view /></main>
 
-		<div v-if="narrow && sheetOpen" class="sb-sheet-backdrop" @click.self="sheetOpen = false">
+		<div v-if="narrow && sheetOpen" class="sb-sheet-backdrop" @pointerdown="onBackdropDown" @click="onBackdropClick">
 			<div ref="sheetEl" class="sb-sheet" role="dialog" aria-modal="true" aria-label="Pages">
 				<div class="sb-sheet-head">
 					<BrandLogo />
