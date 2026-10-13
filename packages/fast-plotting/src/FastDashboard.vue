@@ -391,15 +391,6 @@ async function pollImport(opId: string, gen: number) {
 }
 
 // ---------------------------------------------------------------- helpers
-// In-app download: Directus serves files at /assets/<id>; ?download forces a save
-// with the file's filename_download (the orchestrator named it <op_code>.csv).
-function downloadFile(fileId: string) {
-	const a = document.createElement('a');
-	a.href = `/assets/${fileId}?download`;
-	a.rel = 'noopener';
-	document.body.appendChild(a); a.click(); a.remove();
-}
-
 function fmt(v: any, d = 1): string { if (v == null || v === '') return '—'; const n = Number(v); return Number.isFinite(n) ? (Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(d)) : '—'; }
 function fmtDate(v: string) { return v ? new Date(v).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'; }
 function fmtDur(s: any) { const n = Number(s); if (!Number.isFinite(n)) return '—'; const m = Math.floor(n / 60); return m >= 1 ? `${m}m ${Math.round(n % 60)}s` : `${Math.round(n)}s`; }

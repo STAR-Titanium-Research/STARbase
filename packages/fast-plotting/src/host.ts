@@ -5,13 +5,12 @@ import type { AxiosInstance } from 'axios';
  *
  * Much smaller than ForceHost (see packages/force-plotting/src/host.ts): every FAST network
  * call is a plain axios request through `api`, and both environments' `api` instance already
- * handles its own auth transparently -- Directus's `useApi()` via the session cookie, the
- * standalone app's client via a Bearer-token request interceptor with its own 401-refresh retry
- * (see apps/starbase/web, plan 2). There is no raw-`fetch` sidecar seam to bridge here,
- * so no authHeaders/refreshAuth/fetchCredentials -- authorizedFetch's whole reason to exist.
+ * handles its own auth transparently -- Directus's own client and STARbase (spec section 9) both
+ * ride the shared Directus session cookie, so no Bearer interceptor or refresh retry is involved.
+ * There is no raw-`fetch` sidecar seam to bridge here, so no authHeaders/refreshAuth/fetchCredentials.
  */
 export interface FastHost {
-	/** Authenticated axios instance: Directus's `useApi()` or the standalone Bearer client. */
+	/** Authenticated axios instance (session cookie in both hosts). */
 	api: AxiosInstance;
 	/** Open a Directus record editor for the given collection and primary key. */
 	openRecord(collection: string, id: string): void;

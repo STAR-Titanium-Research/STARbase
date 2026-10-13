@@ -11,7 +11,6 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@d1/ui": "*",
     "axios": "^1.20.0",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
