@@ -8,12 +8,12 @@ const D1 = 'https://d1-server.tail54eeb6.ts.net';
 function deps(recovery: 'retry' | 'fail' | 'signed-out' = 'retry') {
 	const config = { directusUrl: D1, filterUrl: `${D1}/filter`, diagUrl: `${D1}/diag`, octreeUrl: `${D1}/octrees` };
 	const d = {
-		api: { name: 'the STARbase axios instance' } as unknown as PlotDeps['api'],
+		api: { name: 'the STARbase axios instance', get: vi.fn() } as unknown as PlotDeps['api'],
 		session: { user: ref({ id: 'u1', first_name: 'Ada', role: 'r1' }), isAdmin: ref(true) },
 		guard: { recover: vi.fn(async () => recovery) },
 		router: { push: vi.fn() },
 		config: () => config,
-		download: vi.fn(),
+		save: vi.fn(),
 	};
 	return { d: d as unknown as PlotDeps & typeof d, config };
 }
@@ -47,11 +47,19 @@ describe('the Force plotter in STARbase (the cookie variant, spec §3.5)', () =>
 		expect(await starbaseForceHost(deps('fail').d).refreshAuth!()).toBe(false);
 		expect(await starbaseForceHost(deps('signed-out').d).refreshAuth!()).toBe(false);
 	});
-	it('downloads a file from d1-server with ?download=', async () => {
-		configureLinks(starbaseLinks(D1));
+	it('downloads a file through the credentialed api (the tab never navigates)', async () => {
 		const { d } = deps();
+		const blob = new Blob(['x']);
+		vi.mocked(d.api.get).mockResolvedValue({ data: blob, headers: { 'content-disposition': 'attachment; filename="op1_F1.mat"' } });
 		await starbaseForceHost(d).downloadAsset('f 1');
-		expect(d.download).toHaveBeenCalledWith(`${D1}/assets/f%201?download=`);
+		expect(d.api.get).toHaveBeenCalledWith('/assets/f%201', { params: { download: '' }, responseType: 'blob' });
+		expect(d.save).toHaveBeenCalledWith(blob, 'op1_F1.mat');
+	});
+	it('a failed download rejects (the plotter reports it) and saves nothing', async () => {
+		const { d } = deps();
+		vi.mocked(d.api.get).mockRejectedValue(Object.assign(new Error('403'), { response: { status: 403 } }));
+		await expect(starbaseForceHost(d).downloadAsset('f1')).rejects.toThrow('403');
+		expect(d.save).not.toHaveBeenCalled();
 	});
 	it('the current user carries the server-side admin flag (policies, not roles)', () => {
 		const { d } = deps();
