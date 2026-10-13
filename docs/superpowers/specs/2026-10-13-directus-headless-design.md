@@ -5,7 +5,7 @@
 - **Deciders:** Maintainer + Claude (headless interview, 2026-10-13)
 - **Builds on:** [STARbase standalone spec](2026-10-12-starbase-standalone-design.md),
   [ADR-0013](../../adr/0013-starbase-separate-tailnet-device-shared-directus-session.md)
-- **Decision record:** [ADR-0014](../../adr/0014-directus-headless-starbase-is-the-only-front-end.md)
+- **Decision record:** [ADR-0015](../../adr/0015-directus-headless-starbase-is-the-only-front-end.md)
 
 ## 1. Outcome
 

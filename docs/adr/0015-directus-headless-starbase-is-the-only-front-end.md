@@ -1,4 +1,4 @@
-# ADR-0014: Directus goes headless and STARbase is the only front end
+# ADR-0015: Directus goes headless and STARbase is the only front end
 
 - **Status:** Proposed (2026-10-13)
 - **Date:** 2026-10-13
