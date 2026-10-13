@@ -25,6 +25,13 @@ const PLOTS: [string, string][] = [
 	['/d1-fast-dashboard', '/plot/fast'],
 ];
 
+// STARbase's own pages that have no /home form (they never existed in Data Studio): written with the
+// same path in both hosts. In STARbase they are plain routes; Data Studio opens them through the
+// permanent links. Add a page here AND to starbaseRoutes, or STARbase sends it to /admin/<path>.
+export const LOCAL_PAGES: readonly string[] = ['/report-bug', '/crawler'];
+
+const isLocalPage = (path: string): boolean => LOCAL_PAGES.some((p) => startsWithSegment(path, p));
+
 function startsWithSegment(path: string, prefix: string): boolean {
 	return path === prefix || path.startsWith(prefix + '/') || path.startsWith(prefix + '?');
 }
@@ -41,6 +48,7 @@ function toPermanent(path: string): string | null {
 	for (const [from, to] of PLOTS) {
 		if (startsWithSegment(path, from)) return '/d1-links/go/p' + to + path.slice(from.length);
 	}
+	if (isLocalPage(path)) return '/d1-links/go/p' + path;
 	return null;
 }
 
@@ -66,6 +74,7 @@ export function starbaseLinks(serverBase: string): LinkConfig {
 			for (const [from, to] of PLOTS) {
 				if (startsWithSegment(path, from)) return { kind: 'route', to: to + path.slice(from.length) };
 			}
+			if (isLocalPage(path)) return { kind: 'route', to: path };
 			if (REPORT.test(path)) return { kind: 'external', href: base + path };
 			return { kind: 'external', href: `${base}/admin${path}` };
 		},
@@ -75,6 +84,7 @@ export function starbaseLinks(serverBase: string): LinkConfig {
 			for (const [from, to] of PLOTS) {
 				if (startsWithSegment(routePath, to)) return from + routePath.slice(to.length);
 			}
+			if (isLocalPage(routePath)) return routePath;
 			return routePath === '/' || routePath.startsWith('/?') ? '/home' + routePath.slice(1) : '/home' + routePath;
 		},
 	};

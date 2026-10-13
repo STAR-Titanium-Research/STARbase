@@ -20,6 +20,11 @@ describe('the Directus host (the default)', () => {
 		expect(directusLinks.resolve('/content/equipment/e1')).toEqual({ kind: 'route', to: '/content/equipment/e1' });
 		expect(directusLinks.resolve('/homework')).toEqual({ kind: 'route', to: '/homework' });
 	});
+	it('opens STARbase-only pages through the permanent links too', () => {
+		expect(directusLinks.resolve('/report-bug')).toEqual({ kind: 'external', href: '/d1-links/go/p/report-bug' });
+		expect(directusLinks.resolve('/crawler?x=1')).toEqual({ kind: 'external', href: '/d1-links/go/p/crawler?x=1' });
+		expect(directusLinks.resolve('/crawlers')).toEqual({ kind: 'route', to: '/crawlers' });
+	});
 	it('opens printable reports on the server, root-relative', () => {
 		expect(resolveLink('/d1-report/sample/5')).toEqual({ kind: 'external', href: '/d1-report/sample/5' });
 	});
@@ -52,6 +57,20 @@ describe('STARbase', () => {
 		expect(resolveLink('/d1-force-dashboard?operation=9')).toEqual({ kind: 'route', to: '/plot/force?operation=9' });
 		expect(resolveLink('/d1-fast-dashboard?operation=9')).toEqual({ kind: 'route', to: '/plot/fast?operation=9' });
 		expect(resolveLink('/d1-force-dashboard')).toEqual({ kind: 'route', to: '/plot/force' });
+	});
+	it('keeps its own pages (Report a bug, Force crawler) as routes, not Data Studio pages', () => {
+		use();
+		expect(resolveLink('/report-bug')).toEqual({ kind: 'route', to: '/report-bug' });
+		expect(resolveLink('/crawler')).toEqual({ kind: 'route', to: '/crawler' });
+		expect(resolveLink('/crawler?x=1')).toEqual({ kind: 'route', to: '/crawler?x=1' });
+		expect(resolveLink('/crawlers')).toEqual({ kind: 'external', href: `${D1}/admin/crawlers` });
+		expect(canonicalPath('/report-bug')).toBe('/report-bug');
+		expect(canonicalPath('/crawler')).toBe('/crawler');
+		for (const p of ['/report-bug', '/crawler']) {
+			const r = resolveLink(p);
+			expect(r.kind).toBe('route');
+			if (r.kind === 'route') expect(canonicalPath(r.to)).toBe(p);
+		}
 	});
 	it('sends everything else to d1-server', () => {
 		use();

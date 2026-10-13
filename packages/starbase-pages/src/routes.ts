@@ -10,6 +10,7 @@ import OperationPage from './pages/OperationPage.vue';
 import TestPage from './pages/TestPage.vue';
 import LabelsPage from './pages/LabelsPage.vue';
 import SettingsPage from './pages/SettingsPage.vue';
+import ReportBugPage from './pages/ReportBugPage.vue';
 import IndexRoute from './pages/IndexRoute.vue';
 
 // Every STARbase page, relative to where the host mounts them: the Directus module at /home, the
@@ -26,6 +27,8 @@ export const starbaseRoutes: RouteRecordRaw[] = [
 	{ path: 'tests/:id', component: TestPage, props: true },
 	{ path: 'labels', component: LabelsPage },
 	{ path: 'settings', component: SettingsPage },
+	// No /home form (links.ts LOCAL_PAGES): written as '/report-bug' in the nav, in both hosts.
+	{ path: 'report-bug', component: ReportBugPage },
 	// After every static route: one list page per collection.
 	{ path: ':slug', component: IndexRoute, props: true },
 ];
