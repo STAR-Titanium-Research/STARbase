@@ -44,6 +44,18 @@ describe('dark scheme legibility', () => {
 	});
 });
 
+describe('STARbase buttons', () => {
+	// --theme--foreground-inverted is #fff in both schemes (2.9:1 on the dark primary); --theme--primary-foreground
+	// is the pairing VButton uses and the one the 4.5:1 test above checks.
+	it('.sb-primary reads in --theme--primary-foreground on --theme--primary', () => {
+		const styles = readFileSync(join(here, 'styles.css'), 'utf8');
+		const rule = styles.match(/\.sb-primary\s*\{[^}]*\}/)?.[0] ?? '';
+		expect(rule).not.toBe('');
+		expect(rule).toMatch(/background:\s*var\(--theme--primary\)/);
+		expect(rule).toMatch(/[^-]color:\s*var\(--theme--primary-foreground\)/);
+	});
+});
+
 describe('theme.css', () => {
 	it('finds the variables it is meant to check', () => {
 		expect(used).toContain('--theme--primary');
