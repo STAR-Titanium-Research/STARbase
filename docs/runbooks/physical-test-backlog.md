@@ -958,8 +958,8 @@ migration 141 prints about ownerless records.
 - [ ] **B2-6 — Keyboard and screen reader.** In Chrome, Firefox and Safari, tab to a rail icon: its hover menu opens
   on focus and closes on Esc. In a short window (about 520 px high) tab to the lower rail icons: their menus stay
   open and fully on screen while focused. With a pin focused, Alt+↑ and Alt+↓ move it up and down. With a screen
-  reader (NVDA or VoiceOver) pinning, unpinning and reordering are announced ("Pinned", "Unpinned", "Moved to
-  position N"). Since explorer sidebar B2. PR: B2 sidebar (claude/happy-sagan-875lo1).
+  reader (NVDA or VoiceOver) reordering announces "Moved <name> to position N of M", and the pin button reads as
+  pressed when pinned and not pressed when not (pinning has no spoken message of its own). Since explorer sidebar B2. PR: B2 sidebar (claude/happy-sagan-875lo1).
 
 - [ ] **B2-7 — STARbase layout and first paint on live.** Against live Directus data, at 1000 px wide or more, choose
   the rail, reload: it opens as the rail with no jump to the expanded sidebar and back; do the same for expanded.
