@@ -197,7 +197,7 @@ defineExpose({
 	background: var(--d1-side-bar);
 }
 .row.dragging { opacity: 0.45; }
-.row.nested { padding-left: 24px; min-height: 30px; font-size: var(--fs-sm, 12px); }
+.row.nested { padding-left: 34px; min-height: 30px; font-size: var(--fs-sm, 12px); }
 
 .link {
 	display: flex;

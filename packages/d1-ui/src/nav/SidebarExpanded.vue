@@ -371,15 +371,15 @@ const sectionCurrent = (id: SectionId) => currentSection.value === id;
 
 .top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .find {
-	display: flex; flex: 1 1 auto; align-items: center; gap: 8px; min-width: 0; min-height: 34px; padding: 0 10px;
+	display: flex; flex: 1 1 auto; align-items: center; gap: 6px; min-width: 0; min-height: 34px; padding: 0 8px;
 	border: 1px solid var(--d1-side-hairline); border-radius: 8px; background: transparent; color: var(--d1-side-dim);
 	font: inherit; text-align: left; cursor: pointer;
 }
 .find:hover { background: var(--d1-side-hover); color: #fff; }
 .find-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kbd {
-	flex: none; padding: 0 5px; border: 1px solid var(--d1-side-hairline); border-radius: 4px;
-	font: inherit; font-size: var(--fs-xs, 11px); color: var(--d1-side-sub);
+	flex: none; padding: 0 4px; border: 1px solid var(--d1-side-hairline); border-radius: 4px;
+	font: inherit; font-size: 10px; color: var(--d1-side-sub);
 }
 .collapse {
 	display: inline-flex; flex: none; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0;
