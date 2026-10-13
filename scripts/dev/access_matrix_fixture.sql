@@ -1,5 +1,6 @@
--- Record access fixture for scripts/dev/directus_smoke.sh. COPY ONLY: the harness loads this into the throwaway
--- copy of live before Directus starts; never run it against a real database.
+-- Record access fixture for scripts/dev/directus_smoke.sh and tests/readers_matrix.sh. COPY ONLY: the harness loads this into the
+-- throwaway copy of live before Directus starts (after scripts/dev/access_matrix_oracle.sql, which defines schema ref: the
+-- independent plain-SQL model, the two intended changes of spec section 1 included); never run it against a real database.
 --
 -- Spec docs/superpowers/specs/2026-10-12-record-access-design.md section 10. Fixture people (all with logins unless
 -- noted): owner (owns the samples), coowner (an old sample_co_owners row), viewer (view access), editor (edit access),
@@ -16,12 +17,9 @@
 --   test T (S, P, C; owner opOwner; access: viewer view, editor edit)
 -- and then the plain-SQL evaluation of the rules in schema ref (written from the spec's tables, not from the
 -- generated filters) with ref.expected_json(): for every fixture user and the five record types, the ids that user
--- may read, update and delete. The smoke compares Directus's answers with it.
+-- may read, update and delete. The smoke compares Directus's answers with it. The fixture is inserted AFTER migration 166, so the
+-- recompute triggers maintain the readers tables while it loads (the harness then asserts d1_private.readers_drift() is empty).
 \set ON_ERROR_STOP on
-
-CREATE SCHEMA ref;
-
-CREATE FUNCTION ref.id(label text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $$ SELECT md5('smoke-access-' || label)::uuid $$;
 
 CREATE TABLE ref.fixture_users (name text PRIMARY KEY, user_id uuid, person_id uuid, token text);
 
@@ -30,13 +28,14 @@ INSERT INTO ref.fixture_users (name, user_id, person_id, token)
 SELECT n, ref.id('user-' || n), ref.id('person-' || n), 'smoke-fx-' || n
   FROM unnest(ARRAY['owner', 'coowner', 'viewer', 'editor', 'inv', 'inv2', 'pi', 'campaignOwner', 'opOwner', 'qpi', 'stranger']) AS n;
 
+-- the Lab Member role when the database has one (the smoke copy); none in the bare schema test, where the role does not matter
 INSERT INTO directus_users (id, email, status, role, token, first_name, last_name)
-SELECT f.user_id, 'fx-' || lower(f.name) || '@example.invalid', 'active', r.id, f.token, 'Fx', f.name
-  FROM ref.fixture_users f,
+SELECT f.user_id, 'fx-' || lower(f.name) || '@example.invalid', 'active',
        (SELECT r.id FROM directus_roles r
           JOIN directus_access a ON a.role = r.id
           JOIN directus_policies p ON p.id = a.policy
-         WHERE r.name = 'Lab Member' AND NOT p.admin_access LIMIT 1) r;
+         WHERE r.name = 'Lab Member' AND NOT p.admin_access LIMIT 1), f.token, 'Fx', f.name
+  FROM ref.fixture_users f;
 
 INSERT INTO people (person_id, full_name, user_id, is_researcher, active)
 SELECT f.person_id, 'Fx ' || f.name, f.user_id, true, true FROM ref.fixture_users f;
@@ -119,144 +118,6 @@ UNION ALL SELECT ref.id('T' || k), ref.id('person-editor'), 'edit' FROM _u;
 -- the rollup cache (a statement trigger per insert above already refreshed it; once more so the smoke starts from the live derivation)
 SELECT refresh_project_rollup();
 
--- 4. the plain-SQL evaluation (spec section 1). u = a directus_users id. "me(person)": the person is u's.
-CREATE FUNCTION ref.me(person uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT person IS NOT NULL AND EXISTS (SELECT 1 FROM people WHERE person_id = person AND user_id = u) $$;
-
-CREATE FUNCTION ref.pi_of(project uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM projects x WHERE x.project_id = project AND ref.me(x.principal_investigator_person, u)) $$;
-
--- on the project's list: PI, an old investigator row, any access entry
-CREATE FUNCTION ref.p_listed(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.pi_of(p, u)
-        OR EXISTS (SELECT 1 FROM project_investigators i WHERE i.project_id = p AND i.user_id = u)
-        OR EXISTS (SELECT 1 FROM project_access a WHERE a.project_id = p AND ref.me(a.person_id, u)) $$;
-
--- an investigator: an old investigator row or an access entry with role investigator (not the PI)
-CREATE FUNCTION ref.p_invs(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM project_investigators i WHERE i.project_id = p AND i.user_id = u)
-        OR EXISTS (SELECT 1 FROM project_access a WHERE a.project_id = p AND a.role = 'investigator' AND ref.me(a.person_id, u)) $$;
-
--- P: no project, an unrestricted project, or on its list
-CREATE FUNCTION ref.gate_p(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT p IS NULL OR EXISTS (SELECT 1 FROM projects x WHERE x.project_id = p AND (NOT x.restricted OR ref.p_listed(p, u))) $$;
-
-CREATE FUNCTION ref.c_pi(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.pi_of(x.project_id, u)) $$;
-
-CREATE FUNCTION ref.c_listed(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.me(x.owner_person_id, u))
-        OR EXISTS (SELECT 1 FROM campaign_access a WHERE a.campaign_id = c AND ref.me(a.person_id, u))
-        OR ref.c_pi(c, u) $$;
-
--- C: no campaign, or (unrestricted or on its list) and its project lets the caller in
-CREATE FUNCTION ref.gate_c(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT c IS NULL OR EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c
-                                   AND (NOT x.restricted OR ref.c_listed(c, u)) AND ref.gate_p(x.project_id, u)) $$;
-
--- on a sample's list: owner, co-owner, access entry, PI of its project, PI of a campaign's project
-CREATE FUNCTION ref.s_listed(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM physical_samples x WHERE x.sample_id = s
-                      AND (ref.me(x.owner_person_id, u) OR ref.pi_of(x.project_id, u)))
-        OR EXISTS (SELECT 1 FROM sample_co_owners o WHERE o.sample_id = s AND o.user_id = u)
-        OR EXISTS (SELECT 1 FROM sample_access a WHERE a.sample_id = s AND ref.me(a.person_id, u))
-        OR EXISTS (SELECT 1 FROM campaign_samples cs WHERE cs.sample_id = s AND ref.c_pi(cs.campaign_id, u)) $$;
-
-CREATE FUNCTION ref.gate_s(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT s IS NULL OR EXISTS (SELECT 1 FROM physical_samples x WHERE x.sample_id = s AND (NOT x.restricted OR ref.s_listed(s, u))) $$;
-
-CREATE FUNCTION ref.s_editor(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM physical_samples x WHERE x.sample_id = s AND ref.me(x.owner_person_id, u))
-        OR EXISTS (SELECT 1 FROM sample_co_owners o WHERE o.sample_id = s AND o.user_id = u)
-        OR EXISTS (SELECT 1 FROM sample_access a WHERE a.sample_id = s AND a.role = 'edit' AND ref.me(a.person_id, u)) $$;
-
-CREATE FUNCTION ref.s_read(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
-        SELECT 1 FROM physical_samples x WHERE x.sample_id = s AND (
-            ref.s_listed(s, u)
-            OR (NOT x.restricted AND (
-                ref.p_invs(x.project_id, u)
-                OR EXISTS (SELECT 1 FROM campaign_samples cs JOIN campaigns c ON c.campaign_id = cs.campaign_id
-                            WHERE cs.sample_id = s
-                              AND ((ref.me(c.owner_person_id, u) AND ref.gate_p(c.project_id, u))
-                                   OR (NOT c.restricted AND ref.p_invs(c.project_id, u)))))))) $$;
-
--- operations and tests: gates (S, P of the sample's project, P, C), then the record's own rule
-CREATE FUNCTION ref.rec_gates(sample uuid, project uuid, campaign uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.gate_s(sample, u)
-       AND (sample IS NULL OR ref.gate_p((SELECT x.project_id FROM physical_samples x WHERE x.sample_id = sample), u))
-       AND ref.gate_p(project, u)
-       AND ref.gate_c(campaign, u) $$;
-
-CREATE FUNCTION ref.rec_read(restricted boolean, owner uuid, project uuid, campaign uuid, sample uuid, acc_any boolean, u uuid, amnesty boolean)
-RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT (ref.rec_gates(sample, project, campaign, u) AND (
-                ref.me(owner, u) OR acc_any OR ref.pi_of(project, u) OR ref.c_pi(campaign, u)
-                OR (NOT restricted AND (
-                    ref.s_read(sample, u) OR ref.p_invs(project, u)
-                    OR EXISTS (SELECT 1 FROM campaigns c WHERE c.campaign_id = campaign
-                                  AND (ref.me(c.owner_person_id, u) OR ref.p_invs(c.project_id, u)))))))
-        OR (amnesty AND owner IS NULL AND project IS NULL AND campaign IS NULL AND NOT restricted
-            AND ref.gate_s(sample, u)
-            AND (sample IS NULL OR ref.gate_p((SELECT x.project_id FROM physical_samples x WHERE x.sample_id = sample), u))) $$;
-
-CREATE FUNCTION ref.rec_update(restricted boolean, owner uuid, project uuid, campaign uuid, sample uuid, acc_edit boolean, u uuid)
-RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_gates(sample, project, campaign, u)
-       AND (ref.me(owner, u) OR acc_edit OR (NOT restricted AND sample IS NOT NULL AND ref.s_editor(sample, u))) $$;
-
-CREATE FUNCTION ref.rec_delete(owner uuid, project uuid, campaign uuid, sample uuid, u uuid)
-RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_gates(sample, project, campaign, u) AND ref.me(owner, u) $$;
-
-CREATE FUNCTION ref.op_read(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
-                        EXISTS (SELECT 1 FROM operation_access a WHERE a.operation_id = x.operation_id AND ref.me(a.person_id, u)), u, true)
-      FROM manufacturing_operations x WHERE x.operation_id = o $$;
-CREATE FUNCTION ref.op_update(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_update(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
-                          EXISTS (SELECT 1 FROM operation_access a WHERE a.operation_id = x.operation_id AND a.role = 'edit' AND ref.me(a.person_id, u)), u)
-      FROM manufacturing_operations x WHERE x.operation_id = o $$;
-CREATE FUNCTION ref.op_delete(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_delete(x.owner_person_id, x.project_id, x.campaign_id, x.sample_id, u)
-      FROM manufacturing_operations x WHERE x.operation_id = o $$;
-
-CREATE FUNCTION ref.test_read(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
-                        EXISTS (SELECT 1 FROM test_access a WHERE a.session_id = x.session_id AND ref.me(a.person_id, u)), u, false)
-      FROM test_sessions x WHERE x.session_id = t $$;
-CREATE FUNCTION ref.test_update(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_update(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
-                          EXISTS (SELECT 1 FROM test_access a WHERE a.session_id = x.session_id AND a.role = 'edit' AND ref.me(a.person_id, u)), u)
-      FROM test_sessions x WHERE x.session_id = t $$;
-CREATE FUNCTION ref.test_delete(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_delete(x.owner_person_id, x.project_id, x.campaign_id, x.sample_id, u)
-      FROM test_sessions x WHERE x.session_id = t $$;
-
-CREATE FUNCTION ref.c_read(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
-        SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.gate_p(x.project_id, u) AND (
-            ref.c_listed(c, u)
-            OR (NOT x.restricted AND (
-                ref.p_invs(x.project_id, u)
-                OR EXISTS (SELECT 1 FROM campaign_samples cs WHERE cs.campaign_id = c AND ref.s_editor(cs.sample_id, u)))))) $$;
-CREATE FUNCTION ref.c_update(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.gate_p(x.project_id, u)
-                      AND (ref.me(x.owner_person_id, u)
-                           OR EXISTS (SELECT 1 FROM campaign_access a WHERE a.campaign_id = c AND a.role = 'edit' AND ref.me(a.person_id, u)))) $$;
-CREATE FUNCTION ref.c_delete(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.gate_p(x.project_id, u) AND ref.me(x.owner_person_id, u)) $$;
-
-CREATE FUNCTION ref.pj_read(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
-        SELECT 1 FROM projects x WHERE x.project_id = p AND (
-            ref.p_listed(p, u)
-            OR (NOT x.restricted AND (
-                EXISTS (SELECT 1 FROM campaigns c WHERE c.project_id = p AND ref.me(c.owner_person_id, u) AND ref.c_read(c.campaign_id, u))
-                OR EXISTS (SELECT 1 FROM physical_samples s WHERE s.project_id = p AND ref.s_editor(s.sample_id, u) AND ref.s_read(s.sample_id, u))
-                OR EXISTS (SELECT 1 FROM manufacturing_operations o WHERE o.project_id = p AND ref.me(o.owner_person_id, u) AND ref.op_read(o.operation_id, u))
-                OR EXISTS (SELECT 1 FROM test_sessions t WHERE t.project_id = p AND ref.me(t.owner_person_id, u) AND ref.test_read(t.session_id, u)))))) $$;
-
 CREATE FUNCTION ref.ids(kind text, action text, u uuid) RETURNS jsonb LANGUAGE plpgsql STABLE AS $$
 DECLARE
     out jsonb;
@@ -306,9 +167,10 @@ CREATE FUNCTION ref.expected_json() RETURNS text LANGUAGE sql STABLE AS $$
                          AND (ref.pi_of(r.project_id, f.user_id)
                               OR (NOT coalesce((to_jsonb(r) ->> 'restricted')::boolean, false) AND ref.p_invs(r.project_id, f.user_id)))))
                     FROM ref.fixture_users f),
-        'real_amnesty_ops', (SELECT coalesce(jsonb_agg(operation_id ORDER BY operation_id), '[]') FROM manufacturing_operations
-                              WHERE owner_person_id IS NULL AND project_id IS NULL AND campaign_id IS NULL AND NOT restricted
-                                AND operation_id NOT IN (SELECT id FROM ref.fx_ids WHERE kind = 'manufacturing_operations')),
+        -- the real operations every member reads (the narrowed amnesty, ref.amnesty_open): the copy's ownerless legacy runs
+        'real_amnesty_ops', (SELECT coalesce(jsonb_agg(o.operation_id ORDER BY o.operation_id), '[]') FROM manufacturing_operations o
+                              WHERE ref.amnesty_open(o.owner_person_id, o.project_id, o.campaign_id, o.restricted, o.sample_id)
+                                AND o.operation_id NOT IN (SELECT id FROM ref.fx_ids WHERE kind = 'manufacturing_operations')),
         'universes', (SELECT jsonb_agg(jsonb_build_object(
                           'k', k, 'P', ref.id('P' || k), 'Q', ref.id('Q' || k), 'C', ref.id('C' || k), 'C2', ref.id('C2_' || k),
                           'S', ref.id('S' || k), 'S2', ref.id('S2_' || k),

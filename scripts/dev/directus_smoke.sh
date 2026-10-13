@@ -28,10 +28,15 @@
 #   D1_SMOKE_REQUIRE_LM=1 D1_SMOKE_OVERLAYS="d1-next-number d1-access-guard d1-record-access d1-trace" bash scripts/dev/directus_smoke.sh
 # (an overlay name with no folder in this worktree is a harness failure).
 #
-# Record access (A1a): when the copy has the access tables (migration 165), scripts/dev/access_matrix_fixture.sql is
-# loaded into the COPY before Directus starts: fixture people with logins, every restricted/unrestricted combination
-# of a project, campaign, sample, operation and test, access lists, and a plain-SQL evaluation of who may read, update
-# and delete what. Its answer is handed to the lm_access_* cases (D1_SMOKE_ACCESS=0 skips it).
+# Record access (A1a): migration 166 refuses to run while sample_co_owners or project_investigators hold a row whose login no
+# longer exists (live has 3), so the harness first runs scripts/a1_clean_dangling_legacy_logins.sql with apply=1 on the COPY (the
+# same file the runbook names for live; it runs in the "before" runs too, so the two runs see the same data).
+# When the copy has the access tables (migration 165), scripts/dev/access_matrix_oracle.sql (schema ref, the independent
+# plain-SQL model) and scripts/dev/access_matrix_fixture.sql are loaded into the COPY before Directus starts: fixture people
+# with logins, every restricted/unrestricted combination of a project, campaign, sample, operation and test, access lists, and
+# the oracle's evaluation of who may read, update and delete what. Its answer is handed to the lm_access_* cases
+# (D1_SMOKE_ACCESS=0 skips it). With migration 166 applied the recompute triggers maintain the readers tables while the fixture
+# loads, and the harness asserts d1_private.readers_drift_count() = 0 afterwards.
 # D1_SMOKE_MODE=seed loads it and leaves the copy running for hand measurement. D1_SMOKE_MODE=perf loads scripts/dev/seed_access_fixture.sql (restricted records, access rows, big projects) into the
 # copy instead and runs scripts/dev/directus_perf.mjs: p50/p95 per list request for a stranger and a member
 # (use --skip 20261012000166 --skip 20261012000167 for "before"). D1_SMOKE_KEEP=1 leaves the copy running for debugging
@@ -157,6 +162,12 @@ fi
 
 dbmate() { docker run --rm --network "$NET" -e DATABASE_URL="$URL" -v "$DBDIR:/db" \
   ghcr.io/amacneil/dbmate:2 --no-dump-schema "$@" 2>&1; }
+# migration 166 refuses dangling legacy logins (live has 3 project_investigators rows of deleted users): clean them on the copy
+# first, exactly as the runbook does on live. A copy from before the legacy tables existed has nothing to clean.
+if [[ "$(psql_copy -Atc "SELECT to_regclass('public.sample_co_owners') IS NOT NULL AND to_regclass('public.project_investigators') IS NOT NULL")" == t ]]; then
+  cl=$(psql_copy -v apply=1 -f - < scripts/a1_clean_dangling_legacy_logins.sql 2>&1) || abort "clean dangling legacy logins on the copy" $? "$cl"
+  echo "cleaned dangling legacy logins on the copy: $(grep '^DELETE' <<<"$cl" | tr '\n' ' ')"
+fi
 out=$(dbmate up); rc=$?
 [[ $rc -eq 0 ]] && echo "$out" | tail -3 || abort "dbmate up" $rc "$out"
 
@@ -191,13 +202,31 @@ lm_user=$(psql_copy -Atc "
 FXDIR=$(mktemp -d)
 FXMOUNT="$(cygpath -m "$FXDIR" 2>/dev/null || echo "$FXDIR")"
 has_access=$(psql_copy -Atc "SELECT to_regclass('public.sample_access') IS NOT NULL")
+has_readers=$(psql_copy -Atc "SELECT to_regproc('d1_private.readers_rebuild') IS NOT NULL")
 if [[ "$has_access" == t && ( "$MODE" == perf || "$MODE" == seed ) ]]; then
+  t1=$SECONDS
   psql_copy -f - < scripts/dev/seed_access_fixture.sql >/dev/null || abort "perf seed (scripts/dev/seed_access_fixture.sql)" $?
-  echo "seeded the copy: $(psql_copy -Atc "SELECT (SELECT count(*) FROM physical_samples) || ' samples, ' || (SELECT count(*) FROM manufacturing_operations) || ' operations, ' || (SELECT count(*) FROM sample_access) || ' sample access rows'")"
+  echo "seeded the copy in $((SECONDS - t1))s: $(psql_copy -Atc "SELECT (SELECT count(*) FROM physical_samples) || ' samples, ' || (SELECT count(*) FROM manufacturing_operations) || ' operations, ' || (SELECT count(*) FROM sample_access) || ' sample access rows'")"
+  if [[ "$has_readers" == t ]]; then
+    # the readers tables were maintained by the triggers during the seed; a full rebuild must then change nothing, and the drift
+    # check must be empty. Both are timed (the gate records the backfill time and the drift function's run time).
+    t1=$(date +%s%3N)
+    psql_copy -c "SELECT d1_private.readers_rebuild()" >/dev/null || abort "readers_rebuild() on the seeded copy" $?
+    t2=$(date +%s%3N)
+    drift=$(psql_copy -Atc "SELECT d1_private.readers_drift_count()") || abort "readers_drift_count() on the seeded copy" $?
+    t3=$(date +%s%3N)
+    echo "readers_rebuild() on the seeded copy: $((t2 - t1)) ms; readers_drift_count() = $drift in $((t3 - t2)) ms"
+    [[ "$drift" == 0 ]] || abort "readers drift after the seed is not empty ($drift rows)" 1 "$(psql_copy -Atc "SELECT kind, problem, count(*) FROM d1_private.readers_drift() GROUP BY 1, 2")"
+  fi
 elif [[ "$has_access" == t && "${D1_SMOKE_ACCESS:-1}" != 0 ]]; then
-  psql_copy -f - < scripts/dev/access_matrix_fixture.sql >/dev/null || abort "access matrix fixture (scripts/dev/access_matrix_fixture.sql)" $?
+  cat scripts/dev/access_matrix_oracle.sql scripts/dev/access_matrix_fixture.sql | psql_copy -f - >/dev/null || abort "access matrix oracle and fixture (scripts/dev/access_matrix_oracle.sql, access_matrix_fixture.sql)" $?
   psql_copy -Atc "SELECT ref.expected_json()" > "$FXDIR/expected.json" || abort "access matrix: plain-SQL evaluation" $?
   echo "access matrix: $(psql_copy -Atc "SELECT count(*) FROM ref.fixture_users") fixture users, expected ids computed in SQL"
+  if [[ "$has_readers" == t ]]; then
+    drift=$(psql_copy -Atc "SELECT d1_private.readers_drift_count()") || abort "readers_drift_count() after the fixture" $?
+    [[ "$drift" == 0 ]] || abort "readers drift after the fixture is not empty ($drift rows)" 1 "$(psql_copy -Atc "SELECT kind, problem, count(*) FROM d1_private.readers_drift() GROUP BY 1, 2")"
+    echo "readers_drift() after the fixture: empty"
+  fi
 fi
 
 # --- Directus: the live container's exact image; live's extensions + this worktree's overlays

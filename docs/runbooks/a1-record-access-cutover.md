@@ -21,6 +21,24 @@ A1b), but the rules and the endpoint are live from the restart.
 - On the branch: `git fetch && git merge origin/main`; confirm `ls db/migrations | tail -6` shows 163 and any later
   numbers **below** A1a's four, and that CI is green (migrations round trip, node tests, vitest, smoke with
   `D1_SMOKE_REQUIRE_LM=1`). A migration numbered below the newest recorded one is skipped silently by dbmate.
+- **Dangling legacy logins (a hard stop of migration 166).** `sample_co_owners.user_id` and `project_investigators.user_id`
+  have no foreign key today, so a deleted login left dangling rows (live had 3 `project_investigators` rows of deleted users
+  on 2026-10-13, none in `sample_co_owners`, no `people` row with a dead login). Migration 166 adds `ON DELETE CASCADE`
+  foreign keys to `directus_users` and **refuses to run while any dangling row exists**, with a message that points here.
+  Look first, then delete deliberately (the maintainer's decision; a dangling row grants nothing, no one can sign in as a
+  deleted login):
+  ```bash
+  psql "$DATABASE_URL" -f scripts/a1_clean_dangling_legacy_logins.sql                # dry run: lists the rows, rolls back
+  psql "$DATABASE_URL" -v apply=1 -f scripts/a1_clean_dangling_legacy_logins.sql     # deletes them
+  ```
+  The harness copies run the same script with `apply=1` before the migrations. Migration 166 prints the counts it found
+  (`NOTICE: A1a readers preflight: ...`) and the backfill's row counts and drift (`NOTICE: A1a readers backfill: ...`).
+- **Backups and restores (readers tables).** The readers tables (`sample_readers`, `operation_readers`, `test_readers`,
+  `campaign_readers`, `project_readers`, `campaign_sample_readers`, `operation_open_to_all`) and `d1_private.hidden_records`
+  are derived data: `infra/backup/backup.sh` and `scripts/backup-postgres.ps1` leave their data out of the dump
+  (`--exclude-table-data`), and `infra/backup/restore.sh` ends with `SELECT d1_private.readers_rebuild()` and the drift check.
+  After any other restore (a `pg_restore`, a data-only load, `session_replication_role = replica`, a disabled trigger) run
+  `SELECT d1_private.readers_rebuild(); SELECT d1_private.readers_drift_count();` by hand: the count must be 0.
 - Read the PR's performance table (p95 per list request as a stranger and as a member on the seeded copy). Do not
   proceed if it is over the stated limit.
 - Check mail on live, the email on add depends on it:

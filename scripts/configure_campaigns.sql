@@ -137,4 +137,17 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('campaigns','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
     'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.');
 
+-- ── record readers (migration 166, A1a) ────────────────────────────────────────
+-- The relations above delete everything that touches campaigns, which takes campaign_readers.record_id -> campaigns (alias `readers`) and
+-- the hidden `readers` alias of campaigns with them; the read rule of campaigns is a membership test on them. Re-added with the same rows
+-- as migration 166 (configure_directus.sql keeps the other record types and campaign_samples).
+DELETE FROM directus_relations WHERE many_collection = 'campaign_readers';
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+('campaign_readers', 'record_id', 'campaigns',      'readers', 'delete'),
+('campaign_readers', 'user_id',   'directus_users', NULL,      'nullify');
+DELETE FROM directus_fields WHERE collection = 'campaigns' AND field = 'readers';
+INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, note) VALUES
+('campaigns','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over campaign_readers.record_id: who may read the campaign, the membership test the read rule uses (A1a, migration 166).');
+
 COMMIT;

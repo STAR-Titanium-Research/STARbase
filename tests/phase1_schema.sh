@@ -766,12 +766,12 @@ run_eq "campaign_type CHECK restricts to the two kinds" \
 # owner_person_id (062), campaign_samples.campaign_id (087) and created_by (20261001000124), plus the
 # project_id link and the two campaign_id links of operations and tests that migration 141 registers
 # for the row filters (ADR-0011), plus the campaign_access list (migration 165, alias `access`).
-run_eq "Directus relations for campaigns are registered (7)" \
+run_eq "Directus relations for campaigns are registered (8)" \
     "SELECT string_agg(many_collection || '.' || many_field || '->' || one_collection, ',' ORDER BY many_collection COLLATE \"C\", many_field COLLATE \"C\")
      FROM directus_relations
      WHERE one_collection='campaigns' OR many_collection='campaigns'
         OR (many_collection IN ('manufacturing_operations','test_sessions') AND many_field='campaign_id')" \
-    "campaign_access.campaign_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
+    "campaign_access.campaign_id->campaigns,campaign_readers.record_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
 
 echo "== Audit trigger fires on INSERT =="
 # Insert a test sample and verify audit_logs captured it.
@@ -931,7 +931,9 @@ echo "== Audit coverage: every business table, keyed by its primary key (review 
 # hashes of directus_files rows, written only by scripts/file_fingerprints.py and recomputable at
 # any time, so an audit row would record nothing a re-run cannot). Migration 141's backup of Directus
 # permission rows lives in the private schema d1_private, so this public-schema check never sees it.
-AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints'"
+# The readers tables of migration 166 (sample_readers, operation_readers, test_readers, campaign_readers, project_readers,
+# campaign_sample_readers, operation_open_to_all) are derived caches written only by the recompute triggers: not audited either.
+AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints','sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all'"
 run_eq "every business table has an audit trigger (missing: none)" \
     "SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -2643,6 +2645,9 @@ echo "== Lab Member row-level visibility (ADR-0011) =="
 # CI has no live Directus, so the stored permission JSON is what can be tested: the Lab Member rows
 # must carry exactly the filters scripts/gen_access_rules.py generates from scripts/access_rules.json.
 LM=20000002-0000-0000-0000-000000000002
+# 0 until the Lab Member rows are appended to migration 166 (the second part of the file, after the readers): the checks of
+# those rows only run once the migration carries them
+LA_RULES=$(grep -c 'lab_member_access_rules_backup' db/migrations/20261012000166_record_readers_and_rules.sql)
 rules_json=$(python3 scripts/gen_access_rules.py --json)
 python3 scripts/gen_access_rules.py --check >/dev/null 2>&1 \
     && ok "configure_users_and_policies.sql and the d1-access-guard rules.json carry the generated rules (no drift from access_rules.json)" \
@@ -2705,14 +2710,18 @@ SQL
 )
 rl_check() { grep -qxF -- "$1" <<<"$rl_out" && ok "$2" || bad "$2 (psql output: $rl_out)"; }
 gen_n=$(grep -o '^generated:[0-9]*' <<<"$rl_out" | cut -d: -f2)
+if (( LA_RULES )); then
 [[ "${gen_n:-0}" -gt 40 ]] && rl_check "exact:$gen_n" "every ruled Lab Member row carries exactly the generated permissions, validation and fields ($gen_n rows)" \
     || bad "the generator produced too few rules (psql output: $rl_out)"
 rl_check "stray:0" "no Lab Member row carries a filter that access_rules.json does not generate"
+else
+    echo "  SKIP the Lab Member rows equal the generator's output (the rules part of migration 166 is not in the file yet)"
+fi
 rl_check "unlisted:0" "every Lab Member (collection, action) row in the database is listed in access_rules.json"
-rl_check "access_tables_read:5" "Lab Member reads the five access tables for the rows about themselves"
+(( LA_RULES )) && rl_check "access_tables_read:5" "Lab Member reads the five access tables for the rows about themselves"
 rl_check "access_tables_write:0" "Lab Member has no create, update or delete grant on any access table (only the record-access endpoint writes them)"
 rl_check "params_tables_present:0" "the eleven *_params tables are gone (migration 20260623000032), so there is nothing to rule; access_rules.json keeps their stale grants only for these drift checks"
-rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
+(( LA_RULES )) && rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
 rl_check "reference_filtered:0" "reference data, people and directus_files stay unfiltered"
 rl_check "ref_in_rules:0" "materials, equipment and raw_stock_lots have no rules"
 rl_check "audit_logs_rows:0" "Lab Member has no grant on audit_logs (admins only)"
@@ -2720,7 +2729,7 @@ rl_check "people_actions:create,read,update" "Lab Member can create, read and up
 rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "Lab Member cannot update people.user_id (no relink takeover)"
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
 rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,user_id" "people.update leaves out exactly the key, the login, the legacy id and the timestamp"
-rl_check "sample_read_has_co_owners:1" "the sample read filter matches co_owners._some.user_id (the M2M alias)"
+(( LA_RULES )) && rl_check "sample_read_has_co_owners:1" "the sample read filter matches co_owners._some.user_id (the M2M alias)"
 rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"restricted":{"_eq":false}},{"_or":[{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"project_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"project_id":{"access":{"role":{"_in":["investigator"]}}}}]}]}]}]}' \
     "project_rollup: the project's PI reads every row, an investigator (old table or access role investigator) only restricted = false rows"
 for idx in idx_physical_samples_owner_person_id idx_physical_samples_project_id \
@@ -2899,7 +2908,7 @@ jr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$JR")
 jr_down=$(awk '/-- migrate:down/{f=1;next}f' "$JR")
 # 20261012000166 (record access rules) keeps its own backup table in d1_private and runs after 163: it goes down
 # first and comes up after 161, as on a real database.
-LA=db/migrations/20261012000166_lab_member_record_access_rules.sql
+LA=db/migrations/20261012000166_record_readers_and_rules.sql
 la_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LA")
 la_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
 # 20261012000167 (rollup restricted) rewrites 166's project_rollup row and keeps its own backup in d1_private: it goes down
@@ -3059,7 +3068,11 @@ rv_check "up_people_actions:create,read,update" "up: Lab Member people delete is
 rv_check "up_people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "up: people update loses user_id"
 rv_check "up_people_create_validation:true" "up: people create gets the login validation"
 n_exact=$(grep -o '^up_exact:[0-9]*' <<<"$rv_out" | cut -d: -f2)
+if (( LA_RULES )); then
 [[ "${n_exact:-0}" -eq "${gen_n:-x}" ]] && ok "up, then 20261010000160: every ruled row matches the generated rules ($n_exact rows)" || bad "up: ruled rows differ from the generated rules (psql output: $rv_out)"
+else
+    echo "  SKIP up, then 20261010000160: every ruled row matches the generated rules (the rules part of migration 166 is not in the file yet)"
+fi
 n_backup=$(grep -o '^up_backup_rows:[0-9]*' <<<"$rv_out" | cut -d: -f2)
 [[ "${n_backup:-0}" -eq 9 ]] && ok "up: the backup holds the 9 seeded Lab Member rows of the changed collections" || bad "up: backup has ${n_backup:-?} rows, want 9 (psql output: $rv_out)"
 rv_check "up_backup_exact:0" "up: the backup rows equal the rows before the migration, ids included"
@@ -3126,6 +3139,222 @@ rv_refuse "an alias name that another relation uses" \
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field) VALUES ('equipment', 'project_id', 'projects', 'sessions');" \
     "cannot name the alias projects.sessions"
 
+echo "== Migration 166: the record readers (tables, functions, triggers, backfill, metadata) =="
+# The readers tables materialise who may read each record (spec section 2); tests/readers_matrix.sh proves the contents (the
+# mutation matrix, the oracle, the random differential test). Here: the shape of everything the migration creates, the dangling-login
+# preflight, the metadata, and that the migration reapplies and reverses.
+rd_out=$($PSQL 2>&1 <<SQL
+SELECT 'drift:' || d1_private.readers_drift_count();
+SELECT 'table:' || t || ':' || (SELECT string_agg(c.column_name || '/' || c.is_nullable || '/' || coalesce(c.identity_generation, '-'), ',' ORDER BY c.ordinal_position)
+                                 FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = t)
+  FROM unnest(ARRAY['sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers']) t;
+SELECT 'open_table:' || (SELECT string_agg(c.column_name || '/' || c.is_nullable || '/' || coalesce(c.identity_generation, '-'), ',' ORDER BY c.ordinal_position)
+                          FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = 'operation_open_to_all');
+-- keys: primary key reader_id, UNIQUE (record_id, user_id) (UNIQUE (record_id) for the open set), an index on user_id, cascading foreign keys
+SELECT 'keys:' || t || ':' || (SELECT string_agg(pg_get_constraintdef(c.oid), ' | ' ORDER BY c.contype, pg_get_constraintdef(c.oid)) FROM pg_constraint c WHERE c.conrelid = ('public.' || t)::regclass)
+  FROM unnest(ARRAY['sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all']) t;
+SELECT 'user_index:' || t || ':' || count(*) FROM unnest(ARRAY['sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers']) t
+  JOIN pg_indexes i ON i.schemaname = 'public' AND i.tablename = t AND i.indexdef LIKE '%(user_id)' GROUP BY t;
+SELECT 'hidden_records:' || (SELECT string_agg(column_name || '/' || is_nullable, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'hidden_records')
+       || ':' || (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'd1_private.hidden_records'::regclass AND contype = 'p');
+SELECT 'comments:' || count(*) FILTER (WHERE obj_description(c.oid, 'pg_class') IS NULL) || '/' || (SELECT count(*) FROM information_schema.columns k WHERE k.table_schema = 'public'
+         AND k.table_name = ANY (ARRAY['sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all'])
+         AND col_description(('public.' || k.table_name)::regclass, k.ordinal_position::int) IS NULL)
+  FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY (ARRAY['sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all']);
+-- the legacy user_id columns have foreign keys to directus_users, ON DELETE CASCADE
+SELECT 'legacy_fk:' || (SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.sample_co_owners'::regclass AND contype = 'f' AND confrelid = 'public.directus_users'::regclass AND confdeltype = 'c')
+       || '/' || (SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.project_investigators'::regclass AND contype = 'f' AND confrelid = 'public.directus_users'::regclass AND confdeltype = 'c');
+-- derived data: no audit trigger, no grant to the LLM role (when it exists)
+SELECT 'audited:' || count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgfoid = 'audit_trigger_function'::regproc
+   AND t.tgrelid = ANY (ARRAY['sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all']::regclass[]);
+SELECT 'llm_grants:' || CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'd1_llm_readonly')
+       THEN (SELECT count(*) FROM unnest(ARRAY['public.sample_readers','public.operation_readers','public.test_readers','public.campaign_readers','public.project_readers','public.campaign_sample_readers','public.operation_open_to_all','d1_private.hidden_records']) t
+              WHERE has_table_privilege('d1_llm_readonly', t, 'SELECT'))::text ELSE '0' END;
+SELECT 'in_dictionary:' || count(DISTINCT object_name) FROM v_schema_dictionary WHERE object_name = ANY (ARRAY['sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all']);
+-- the functions: SECURITY DEFINER with a pinned search_path where they write or are called by the policies
+SELECT 'definer:' || string_agg(p.proname || '=' || (p.prosecdef AND p.proconfig::text LIKE '%search_path=pg_catalog, public%'), ',' ORDER BY p.proname)
+  FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace
+   AND p.proname IN ('refresh_readers','sync_readers','readers_rebuild','is_hidden','trg_readers_lock','trg_readers_truncate','trg_readers_people_upd');
+SELECT 'trigger_functions_definer:' || count(*) FILTER (WHERE p.prosecdef AND p.proconfig::text LIKE '%search_path=pg_catalog, public%') || '/' || count(*)
+  FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND p.proname LIKE 'trg\_readers\_%';
+SELECT 'stable:' || string_agg(p.proname || '=' || p.provolatile::text, ',' ORDER BY p.proname)
+  FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace
+   AND p.proname IN ('readers_of_sample','readers_of_operation','readers_of_test','readers_of_campaign','readers_of_project','readers_of_campaign_sample','operation_open_of','hidden_of','readers_closure','readers_drift','readers_drift_count','is_hidden');
+SELECT 'refresh_volatile:' || (SELECT provolatile::text FROM pg_proc WHERE proname = 'refresh_readers' AND pronamespace = 'd1_private'::regnamespace);
+SELECT 'refresh_not_public:' || (NOT has_function_privilege('public', 'd1_private.refresh_readers(uuid[],uuid[],uuid[],uuid[],uuid[],uuid[],uuid[],uuid[],uuid[])', 'EXECUTE'));
+-- the lock order: the global readers lock comes first in refresh_readers (before any read), readers_rebuild and refresh_project_rollup
+SELECT 'lock_first:' || (position('pg_advisory_xact_lock' IN prosrc) < position('readers_closure' IN prosrc)) FROM pg_proc WHERE proname = 'refresh_readers' AND pronamespace = 'd1_private'::regnamespace;
+SELECT 'rollup_lock_order:' || (position('d1_readers' IN prosrc) > 0 AND position('d1_readers' IN prosrc) < position('refresh_project_rollup' IN prosrc)) FROM pg_proc WHERE proname = 'refresh_project_rollup' AND pronamespace = 'public'::regnamespace;
+SELECT 'isolation_check:' || (position('read committed' IN prosrc) > 0) FROM pg_proc WHERE proname = 'refresh_readers' AND pronamespace = 'd1_private'::regnamespace;
+-- the Directus metadata the rules walk
+SELECT 'meta_collections:' || count(*) || '/' || count(*) FILTER (WHERE hidden) FROM directus_collections WHERE collection IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all');
+SELECT 'meta_relations:' || count(*) FILTER (WHERE one_field IN ('readers','open_to_all')) || '/' || count(*) FILTER (WHERE one_collection = 'directus_users' AND one_field IS NULL)
+  FROM directus_relations WHERE many_collection IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all');
+SELECT 'meta_fields:' || count(*) || '/' || count(*) FILTER (WHERE hidden AND readonly AND special = 'o2m') FROM directus_fields
+ WHERE (field = 'readers' AND collection IN ('physical_samples','manufacturing_operations','test_sessions','campaigns','projects','campaign_samples')) OR (collection = 'manufacturing_operations' AND field = 'open_to_all');
+-- every readers alias resolves: relation + alias field + a real column behind each side
+SELECT 'alias_unresolved:' || coalesce(string_agg(r.many_collection, ','), '') FROM directus_relations r
+ WHERE r.one_field IN ('readers', 'open_to_all')
+   AND (NOT EXISTS (SELECT 1 FROM directus_fields f WHERE f.collection = r.one_collection AND f.field = r.one_field)
+     OR NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = r.many_collection AND c.column_name = r.many_field));
+SQL
+)
+rd_check() { grep -qxF -- "$1" <<<"$rd_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-700 <<<"$rd_out"))"; }
+rd_check "drift:0" "the backfill left readers_drift() empty (every readers table equals the functions)"
+for t in sample_readers operation_readers test_readers campaign_readers project_readers campaign_sample_readers; do
+    rd_check "table:$t:reader_id/NO/ALWAYS,record_id/NO/-,user_id/NO/-" "$t: reader_id (identity), record_id and user_id, all NOT NULL"
+    rd_check "user_index:$t:1" "$t has an index on user_id (the membership test)"
+done
+rd_check "open_table:reader_id/NO/ALWAYS,record_id/NO/-" "operation_open_to_all: reader_id (identity) and record_id"
+for spec in sample_readers:physical_samples:sample_id operation_readers:manufacturing_operations:operation_id test_readers:test_sessions:session_id campaign_readers:campaigns:campaign_id project_readers:projects:project_id campaign_sample_readers:campaign_samples:id; do
+    IFS=: read -r t parent pk <<<"$spec"
+    rd_check "keys:$t:FOREIGN KEY (record_id) REFERENCES $parent($pk) ON DELETE CASCADE | FOREIGN KEY (user_id) REFERENCES directus_users(id) ON DELETE CASCADE | PRIMARY KEY (reader_id) | UNIQUE (record_id, user_id)" \
+             "$t: primary key, UNIQUE (record_id, user_id), cascading foreign keys to $parent and directus_users"
+done
+rd_check "keys:operation_open_to_all:FOREIGN KEY (record_id) REFERENCES manufacturing_operations(operation_id) ON DELETE CASCADE | PRIMARY KEY (reader_id) | UNIQUE (record_id)" "operation_open_to_all: primary key, UNIQUE (record_id), cascading foreign key"
+rd_check "hidden_records:kind/NO,record_id/NO:PRIMARY KEY (kind, record_id)" "d1_private.hidden_records(kind, record_id) with a composite key and no foreign key"
+rd_check "comments:0/0" "every readers table and column carries a COMMENT"
+rd_check "legacy_fk:1/1" "sample_co_owners.user_id and project_investigators.user_id have ON DELETE CASCADE foreign keys to directus_users"
+rd_check "audited:0" "the readers tables carry no audit trigger (derived data)"
+rd_check "llm_grants:0" "no readers table and not hidden_records is granted to d1_llm_readonly"
+rd_check "in_dictionary:7" "the readers tables are listed in v_schema_dictionary like every public table (decided: left listed; the LLM role has no grant on them, so a query fails with permission denied)"
+rd_check "definer:is_hidden=true,readers_rebuild=true,refresh_readers=true,sync_readers=true,trg_readers_lock=true,trg_readers_people_upd=true,trg_readers_truncate=true" "the write functions and is_hidden are SECURITY DEFINER with a pinned search_path"
+rd_check "stable:hidden_of=s,is_hidden=s,operation_open_of=s,readers_closure=s,readers_drift=s,readers_drift_count=s,readers_of_campaign=s,readers_of_campaign_sample=s,readers_of_operation=s,readers_of_project=s,readers_of_sample=s,readers_of_test=s" "the readers_of_* family, operation_open_of, hidden_of, the closure and the drift check are STABLE"
+rd_check "refresh_volatile:v" "refresh_readers is VOLATILE (each statement takes a fresh snapshot)"
+rd_check "refresh_not_public:true" "refresh_readers is not executable by PUBLIC"
+rd_check "lock_first:true" "refresh_readers takes the global advisory lock before it reads (the closure)"
+rd_check "rollup_lock_order:true" "refresh_project_rollup takes the readers lock before the rollup lock (lock order)"
+rd_check "isolation_check:true" "refresh_readers checks for READ COMMITTED"
+rd_check "meta_collections:7/7" "the seven readers collections exist in Directus and are hidden"
+rd_check "meta_relations:7/6" "seven record_id -> parent relations carry the readers or open_to_all alias, six user_id relations point to directus_users with no alias"
+rd_check "meta_fields:7/7" "the seven hidden read-only alias fields exist (readers on six collections, open_to_all on operations)"
+rd_check "alias_unresolved:" "every readers alias resolves (relation, alias field and both columns)"
+# trigger coverage (spec section 2): one statement trigger per row of the table, with transition tables, and a TRUNCATE trigger per input table
+RD_TRIG_TABLES="physical_samples manufacturing_operations test_sessions campaigns projects project_investigators project_access campaign_samples sample_co_owners sample_access operation_access test_access campaign_access"
+rd_trig_expect=""
+for t in $RD_TRIG_TABLES; do for ev in ins upd del; do rd_trig_expect+="${t}_readers_${ev}|$t "; done; done
+rd_trig_expect+="people_readers_upd|people "
+rd_trunc_expect=""
+for t in physical_samples manufacturing_operations test_sessions campaigns projects sample_access operation_access test_access campaign_access project_access campaign_samples sample_co_owners project_investigators people directus_users; do
+    rd_trunc_expect+="${t}_readers_trunc|$t "
+done
+trig_out=$($PSQL 2>&1 <<SQL
+SELECT 'row_triggers:' || count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+ WHERE NOT t.tgisinternal AND t.tgname LIKE '%\_readers\_%' AND t.tgname !~ '_(trunc|lock)$';
+SELECT 'bad_shape:' || coalesce(string_agg(t.tgname, ','), '') FROM pg_trigger t
+ WHERE NOT t.tgisinternal AND t.tgname ~ '_readers_(ins|upd|del)$'
+   AND NOT ((t.tgtype & 1) = 0 AND (t.tgtype & 2) = 0                                   -- FOR EACH STATEMENT, AFTER
+            AND (t.tgnewtable IS NOT NULL OR t.tgoldtable IS NOT NULL)                   -- with transition tables
+            AND t.tgattr::text = ''                                                    -- no UPDATE OF column list (not allowed with transition tables)
+            AND ((t.tgname LIKE '%\_ins' AND (t.tgtype & 4) = 4 AND t.tgnewtable IS NOT NULL AND t.tgoldtable IS NULL)
+              OR (t.tgname LIKE '%\_upd' AND (t.tgtype & 16) = 16 AND t.tgnewtable IS NOT NULL AND t.tgoldtable IS NOT NULL)
+              OR (t.tgname LIKE '%\_del' AND (t.tgtype & 8) = 8 AND t.tgoldtable IS NOT NULL AND t.tgnewtable IS NULL)));
+SELECT 'trunc_bad:' || coalesce(string_agg(t.tgname, ','), '') FROM pg_trigger t
+ WHERE NOT t.tgisinternal AND t.tgname LIKE '%\_readers\_trunc' AND NOT ((t.tgtype & 1) = 0 AND (t.tgtype & 32) = 32 AND (t.tgtype & 2) = 0);
+SELECT 'lock_bad:' || coalesce(string_agg(t.tgname, ','), '') FROM pg_trigger t
+ WHERE NOT t.tgisinternal AND t.tgname LIKE '%\_readers\_lock' AND NOT ((t.tgtype & 1) = 0 AND (t.tgtype & 2) = 2 AND (t.tgtype & 4) = 4 AND (t.tgtype & 8) = 8 AND (t.tgtype & 16) = 16);
+-- they fire before the rollup's (sorted by name): the readers triggers sort before refresh_rollup_*
+SELECT 'order_ok:' || (SELECT bool_and(r.tgname < 'refresh_rollup_') FROM pg_trigger r WHERE NOT r.tgisinternal AND r.tgname ~ '_readers_(ins|upd|del)$' AND r.tgrelid IN ('manufacturing_operations'::regclass, 'campaigns'::regclass, 'physical_samples'::regclass));
+SELECT 'lock_before_rollup_lock:' || ('manufacturing_operations_readers_lock' < 'mfg_op_rollup_lock' AND 'physical_samples_readers_lock' < 'physical_samples_rollup_lock');
+SQL
+)
+trig_check() { grep -qxF -- "$1" <<<"$trig_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-500 <<<"$trig_out"))"; }
+for pair in $rd_trig_expect $rd_trunc_expect manufacturing_operations_readers_lock\|manufacturing_operations physical_samples_readers_lock\|physical_samples; do
+    IFS='|' read -r name tbl <<<"$pair"
+    n=$($PSQL -c "SELECT count(*) FROM pg_trigger WHERE tgname = '$name' AND tgrelid = 'public.$tbl'::regclass AND NOT tgisinternal")
+    [[ "$n" == 1 ]] && ok "trigger $name exists on $tbl" || bad "trigger $name is missing on $tbl"
+done
+trig_check "row_triggers:40" "40 insert, update and delete triggers (13 tables x 3, plus people update)"
+trig_check "bad_shape:" "every insert, update and delete trigger is a statement-level AFTER trigger with transition tables and no column list"
+trig_check "trunc_bad:" "every TRUNCATE trigger is a statement-level AFTER TRUNCATE trigger"
+trig_check "lock_bad:" "the lock triggers are BEFORE STATEMENT on insert, update and delete"
+trig_check "order_ok:true" "the readers triggers sort before refresh_rollup_* (readers lock first)"
+trig_check "lock_before_rollup_lock:true" "the BEFORE-statement readers lock sorts before the rollup lock triggers of migrations 126, 127 and 157"
+
+# the dangling-login preflight, the reapply and the reverse, in one rolled-back transaction each
+rd_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$LA")
+rd_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
+RDK=d0000000-0000-4000-8000-0000000000
+rd_dangling=$($PSQL -v ON_ERROR_STOP=0 2>&1 <<SQL
+BEGIN;
+$rr_down
+$la_down
+INSERT INTO projects (project_id, project_code, project_name) VALUES ('${RDK}a1', 'TRD-P', 'readers preflight');
+INSERT INTO project_investigators (project_id, user_id) VALUES ('${RDK}a1', '${RDK}e1');
+$la_up
+ROLLBACK;
+SQL
+)
+grep -q "name a login that no longer exists" <<<"$rd_dangling" && grep -q "scripts/a1_clean_dangling_legacy_logins.sql" <<<"$rd_dangling" && grep -q "1 project_investigators row" <<<"$rd_dangling" \
+    && ok "166 stops with a clear message that names the cleanup step when a legacy row names a deleted login" \
+    || bad "166 did not stop on a dangling project_investigators.user_id row (psql output: $(cut -c1-500 <<<"$rd_dangling"))"
+# the operator's cleanup script: dry run by default, apply=1 deletes; here the database has no dangling rows, so both change nothing and say so
+rd_clean=$(psql "$DATABASE_URL" --no-psqlrc -X -q -v ON_ERROR_STOP=1 -f scripts/a1_clean_dangling_legacy_logins.sql 2>&1)
+rd_clean_apply=$(psql "$DATABASE_URL" --no-psqlrc -X -q -v ON_ERROR_STOP=1 -v apply=1 -f scripts/a1_clean_dangling_legacy_logins.sql 2>&1)
+grep -q "dry run: nothing was changed" <<<"$rd_clean" && ok "scripts/a1_clean_dangling_legacy_logins.sql is a dry run by default (it lists the rows and rolls back)" \
+    || bad "the cleanup script did not run as a dry run (psql output: $(cut -c1-400 <<<"$rd_clean"))"
+grep -q "^applied" <<<"$rd_clean_apply" && ok "scripts/a1_clean_dangling_legacy_logins.sql with apply=1 commits" || bad "the cleanup script with apply=1 did not commit (psql output: $(cut -c1-400 <<<"$rd_clean_apply"))"
+# the same two DELETEs, then 166 applies and adds both foreign keys
+rd_after=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+$rr_down
+$la_down
+INSERT INTO projects (project_id, project_code, project_name) VALUES ('${RDK}a1', 'TRD-P', 'readers preflight');
+INSERT INTO project_investigators (project_id, user_id) VALUES ('${RDK}a1', '${RDK}e1');
+DELETE FROM sample_co_owners c WHERE NOT EXISTS (SELECT 1 FROM directus_users u WHERE u.id = c.user_id);
+DELETE FROM project_investigators i WHERE NOT EXISTS (SELECT 1 FROM directus_users u WHERE u.id = i.user_id);
+$la_up
+SELECT 'after_cleanup_up:ok';
+ROLLBACK;
+SQL
+)
+grep -q "^after_cleanup_up:ok" <<<"$rd_after" && ok "after the dangling rows are removed 166 applies and adds both foreign keys" || bad "166 did not apply after the cleanup (psql output: $(cut -c1-500 <<<"$rd_after"))"
+rd_cycle=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+CREATE TEMP TABLE rd_before AS SELECT 'sample_readers' AS k, count(*) AS n FROM sample_readers UNION ALL SELECT 'operation_readers', count(*) FROM operation_readers
+  UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
+  UNION ALL SELECT 'open', count(*) FROM operation_open_to_all UNION ALL SELECT 'hidden', count(*) FROM d1_private.hidden_records;
+-- a second up changes nothing and leaves no drift
+$la_up
+SELECT 'up2_drift:' || d1_private.readers_drift_count();
+SELECT 'up2_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n FROM sample_readers UNION ALL SELECT 'operation_readers', count(*) FROM operation_readers
+  UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
+  UNION ALL SELECT 'open', count(*) FROM operation_open_to_all UNION ALL SELECT 'hidden', count(*) FROM d1_private.hidden_records EXCEPT SELECT * FROM rd_before) x;
+-- down removes everything it created
+$rr_down
+$la_down
+SELECT 'dn_tables:' || count(*) FROM pg_tables WHERE tablename IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all') OR (schemaname = 'd1_private' AND tablename = 'hidden_records');
+SELECT 'dn_functions:' || count(*) FROM pg_proc WHERE pronamespace = 'd1_private'::regnamespace AND (proname LIKE 'readers\_%' OR proname LIKE 'trg\_readers\_%' OR proname IN ('refresh_readers','sync_readers','is_hidden','hidden_of','operation_open_of','can_read_sample','s_read','rec_read'));
+SELECT 'dn_triggers:' || count(*) FROM pg_trigger WHERE tgname LIKE '%\_readers\_%';
+SELECT 'dn_views:' || count(*) FROM pg_views WHERE schemaname = 'd1_private' AND viewname LIKE 'v\_%';
+SELECT 'dn_meta:' || (SELECT count(*) FROM directus_relations WHERE many_collection LIKE '%\_readers' OR many_collection = 'operation_open_to_all') || '/' || (SELECT count(*) FROM directus_fields WHERE field IN ('readers','open_to_all') OR collection LIKE '%\_readers' OR collection = 'operation_open_to_all')
+       || '/' || (SELECT count(*) FROM directus_collections WHERE collection LIKE '%\_readers' OR collection = 'operation_open_to_all');
+SELECT 'dn_fks:' || count(*) FROM pg_constraint WHERE conname IN ('sample_co_owners_user_id_fkey','project_investigators_user_id_fkey');
+SELECT 'dn_rollup_unlocked:' || (position('d1_readers' IN prosrc) = 0) FROM pg_proc WHERE proname = 'refresh_project_rollup' AND pronamespace = 'public'::regnamespace;
+-- and up again gives the same tables, drift empty
+$la_up
+$rr_up
+SELECT 'up3_drift:' || d1_private.readers_drift_count();
+SELECT 'up3_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n FROM sample_readers UNION ALL SELECT 'operation_readers', count(*) FROM operation_readers
+  UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
+  UNION ALL SELECT 'open', count(*) FROM operation_open_to_all UNION ALL SELECT 'hidden', count(*) FROM d1_private.hidden_records EXCEPT SELECT * FROM rd_before) x;
+ROLLBACK;
+SQL
+)
+rc_check() { grep -qxF -- "$1" <<<"$rd_cycle" && ok "$2" || bad "$2 (psql output: $(cut -c1-600 <<<"$rd_cycle"))"; }
+rc_check "up2_drift:0" "a second up leaves readers_drift() empty"
+rc_check "up2_same:0" "a second up changes no row count (the backfill is a zero diff)"
+rc_check "dn_tables:0" "down drops the seven readers tables and hidden_records"
+rc_check "dn_functions:0" "down drops every d1_private function it created"
+rc_check "dn_triggers:0" "down drops every readers trigger"
+rc_check "dn_views:0" "down drops the pair-relation views"
+rc_check "dn_meta:0/0/0" "down removes the Directus relations, fields and collections it added"
+rc_check "dn_fks:0" "down drops the two legacy foreign keys it added"
+rc_check "dn_rollup_unlocked:true" "down restores refresh_project_rollup() without the readers lock"
+rc_check "up3_drift:0" "up after down gives drift 0"
+rc_check "up3_same:0" "up after down rebuilds the same readers tables"
+
+if (( LA_RULES )); then
 echo "== Migrations 166 and 167: Lab Member record access rules apply, reapply and reverse =="
 # The database was migrated to the head, so 166 and 167 are applied. 167 goes down first (it rewrites the project_rollup
 # row 166 left), then 166: main's rows must be back exactly (the frozen generator output of 2026-10-12 is
@@ -3206,6 +3435,9 @@ la_check "dn2_backup:gone" "down after a second up drops the backup table"
 la_check "up3_exact_as_head:0" "up again gives the rows the database had at the head"
 [[ "$(grep -o '^up2_backup_rows:[0-9]*' <<<"$la_out" | cut -d: -f2)" == "$(grep -o '^up_backup_rows:[0-9]*' <<<"$la_out" | cut -d: -f2)" ]] \
     && ok "a second up adds no backup rows" || bad "a second up changed the backup (psql output: $la_out)"
+else
+    echo "  SKIP the Lab Member rules of migration 166 (not in the file yet)"
+fi
 
 echo "== Migration 167: the project rollup carries restricted =="
 # The cache (project_rollup) and the view behind it gain `restricted`; the refresh copies it; flipping a sample's flag

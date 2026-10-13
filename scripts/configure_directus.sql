@@ -1043,6 +1043,54 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 ('projects','restricted','cast-boolean','toggle',NULL,'boolean',TRUE,TRUE,91,'half',
     'Restricted record (A1a). Hidden and read-only until the Restrict switch ships; changed only by the record-access endpoint.');
 
+-- ── record readers (migration 166, A1a) ────────────────────────────────────────
+-- The derived readers tables and their `readers` / `open_to_all` aliases: every Lab Member read rule of the five record types, of
+-- campaign_samples and of their children is a membership test on them (`readers._some.user_id`, `<fk>.readers.user_id`), which only
+-- works while the hidden collection, the record_id -> parent relation with the alias, the user_id -> directus_users relation and the
+-- hidden alias field exist. The deletes above wipe the alias fields of the parents and the relations that touch them; re-added here with
+-- the same rows as migration 166 (configure_campaigns.sql re-adds the campaigns side). tests/phase1_schema.sh checks them after the scripts.
+INSERT INTO directus_collections (collection, icon, note, hidden, sort)
+SELECT v.collection, 'lock', v.note, TRUE, v.sort
+FROM (VALUES
+    ('sample_readers', 'Derived: who may read each sample (A1a, migration 166); written only by the recompute triggers', 97),
+    ('operation_readers', 'Derived: who may read each operation (A1a, migration 166); written only by the recompute triggers', 98),
+    ('test_readers', 'Derived: who may read each test session (A1a, migration 166); written only by the recompute triggers', 99),
+    ('campaign_readers', 'Derived: who may read each campaign (A1a, migration 166); written only by the recompute triggers', 100),
+    ('project_readers', 'Derived: who may read each project (A1a, migration 166); written only by the recompute triggers', 101),
+    ('campaign_sample_readers', 'Derived: who may read each campaign_samples row (A1a, migration 166); written only by the recompute triggers', 102),
+    ('operation_open_to_all', 'Derived: the operations every member may read, the narrowed orphan amnesty (A1a, migration 166)', 103)
+) AS v (collection, note, sort)
+WHERE NOT EXISTS (SELECT 1 FROM directus_collections AS c WHERE c.collection = v.collection);
+DELETE FROM directus_relations WHERE many_collection IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all');
+INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
+('sample_readers',          'record_id', 'physical_samples',         'readers',     'delete'),
+('operation_readers',       'record_id', 'manufacturing_operations', 'readers',     'delete'),
+('test_readers',            'record_id', 'test_sessions',            'readers',     'delete'),
+('campaign_readers',        'record_id', 'campaigns',                'readers',     'delete'),
+('project_readers',         'record_id', 'projects',                 'readers',     'delete'),
+('campaign_sample_readers', 'record_id', 'campaign_samples',         'readers',     'delete'),
+('operation_open_to_all',   'record_id', 'manufacturing_operations', 'open_to_all', 'delete'),
+('sample_readers',          'user_id',   'directus_users',           NULL,          'nullify'),
+('operation_readers',       'user_id',   'directus_users',           NULL,          'nullify'),
+('test_readers',            'user_id',   'directus_users',           NULL,          'nullify'),
+('campaign_readers',        'user_id',   'directus_users',           NULL,          'nullify'),
+('project_readers',         'user_id',   'directus_users',           NULL,          'nullify'),
+('campaign_sample_readers', 'user_id',   'directus_users',           NULL,          'nullify');
+DELETE FROM directus_fields WHERE field IN ('readers','open_to_all') AND collection IN ('physical_samples','manufacturing_operations','test_sessions','projects','campaign_samples');
+INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, note) VALUES
+('physical_samples','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over sample_readers.record_id: who may read the sample, the membership test the read rule uses (A1a, migration 166).'),
+('manufacturing_operations','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over operation_readers.record_id: who may read the operation, the membership test the read rule uses (A1a, migration 166).'),
+('manufacturing_operations','open_to_all','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,94,'full',
+    'Hidden alias over operation_open_to_all.record_id: the amnesty leaf of the operations read rule (A1a, migration 166).'),
+('test_sessions','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over test_readers.record_id: who may read the test session, the membership test the read rule uses (A1a, migration 166).'),
+('projects','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over project_readers.record_id: who may read the project, the membership test the read rule uses (A1a, migration 166).'),
+('campaign_samples','readers','o2m','list-o2m','{"enableCreate":false,"enableSelect":false}','related-values',TRUE,TRUE,93,'full',
+    'Hidden alias over campaign_sample_readers.record_id: who may read the junction row, the membership test the read rule uses (A1a, migration 166).');
+
 COMMIT;
 
 -- Verify

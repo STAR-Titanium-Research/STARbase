@@ -119,6 +119,23 @@ if ! zcat "$BACKUP_DIR/$BACKUP_FILE" \
     fail "restore FAILED and was rolled back; '$POSTGRES_DB' is unchanged. See the psql error above."
 fi
 
+# The readers tables (migration 166) are not in the dump (derived data): rebuild them and check there is no drift. Skipped silently
+# on a dump from before migration 166 (the function does not exist).
+echo "      Rebuilding the readers tables (d1_private.readers_rebuild) …"
+docker compose exec -T postgres \
+    psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q -v ON_ERROR_STOP=1 -At <<'SQL' || fail "the restore succeeded but readers_rebuild() failed: run SELECT d1_private.readers_rebuild() by hand"
+DO $$
+BEGIN
+    IF to_regproc('d1_private.readers_rebuild') IS NOT NULL THEN
+        PERFORM d1_private.readers_rebuild();
+        IF d1_private.readers_drift_count() <> 0 THEN
+            RAISE EXCEPTION 'readers_drift() is not empty after readers_rebuild()';
+        END IF;
+    END IF;
+END
+$$;
+SQL
+
 echo "[3/3] Restore complete."
 echo
 echo "  Verify: make schema-test"
