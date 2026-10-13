@@ -1424,3 +1424,29 @@ test('with the switch open (A1b), the owner-only rules underneath apply again: t
   const err = await refusal(mount({ canUpdate: ownsOnly() }).filters['items.update']({ restricted: true }, meta, ctx({ database: database() })));
   assert.equal(err.message, "Only the sample's owner can restrict it or lift the restriction.");
 });
+
+test('I1: a nested { sample_id } item is read like a bare id, on update and on create', async () => {
+  const T = ID(60);
+  const S = ID(61);
+  const S3 = ID(62);
+  const tables = {
+    test_sessions_subject: [{ id: 10, test_sessions_id: T, item: S3, collection: 'physical_samples' }],
+    test_sessions: [{ session_id: T, restricted: false, sample_id: S3 }],
+    physical_samples: [{ sample_id: S, restricted: false }, { sample_id: S3, restricted: false }],
+    [HIDDEN]: hid('physical_samples', S),
+  };
+  const editor = () => mount({ canUpdate: ownsOnly() });
+  // moving onto the hidden sample S with the nested form, from an open one
+  await assert.rejects(
+    editor().filters['items.update']({ item: { sample_id: S } }, { collection: 'test_sessions_subject', keys: [10] }, ctx({ database: fakeDb([], [], tables) })),
+    denied(/test_sessions /),
+  );
+  // the same nested value as stored is not a move; a nested object naming the open sample is fine
+  await editor().filters['items.update']({ item: { sample_id: S3 } }, { collection: 'test_sessions_subject', keys: [10] }, ctx({ database: fakeDb([], [], tables) }));
+  // creating a subject row on the hidden sample with the nested form
+  const row = { test_sessions_id: T, collection: 'physical_samples', item: { sample_id: S } };
+  await assert.rejects(editor().filters['items.create'](row, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) })), denied(/test_sessions /));
+  await mount({ canUpdate: ownsOnly(`test_sessions:${T}`) }).filters['items.create'](row, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) }));
+  // a nested item of another collection is not a sample
+  await editor().filters['items.create']({ ...row, collection: 'something_else' }, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) }));
+});

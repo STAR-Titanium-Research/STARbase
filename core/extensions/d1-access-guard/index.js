@@ -270,8 +270,12 @@ export default ({ filter }, { services }) => {
   }
 
   // The sample a test_sessions_subject row points at (the M2A `item`), or null when it points at something else or nothing.
-  const subjectSample = (row) =>
-    isBlank(row?.item) || typeof row.item === 'object' || (!isBlank(row.collection) && row.collection !== 'physical_samples') ? null : String(row.item);
+  // `item` is a bare id, or a nested object `{ sample_id }` as Directus clients send it when they create the sample in the same request.
+  const subjectSample = (row) => {
+    if (isBlank(row?.item) || (!isBlank(row.collection) && row.collection !== 'physical_samples')) return null;
+    const id = typeof row.item === 'object' ? row.item.sample_id : row.item;
+    return isBlank(id) ? null : String(id);
+  };
 
   // A change to the subject rows of tests moves each test between sample gates (the migration-139 trigger derives test_sessions.sample_id from the
   // rows). When any of those tests, the sample a test is on, or a sample being added or removed is hidden, the caller must own the tests (their
@@ -524,7 +528,13 @@ export default ({ filter }, { services }) => {
     let changed = rows.length === 0; // a row the database does not know: not a guess
     for (const row of rows) {
       const after = { ...row, ...Object.fromEntries(touched.map((f) => [f, next[f]])) };
-      if (touched.some((f) => String(next[f] ?? '') !== String(row[f] ?? ''))) changed = true;
+      if (
+        String(after.test_sessions_id ?? '') !== String(row.test_sessions_id ?? '') ||
+        String(after.collection ?? '') !== String(row.collection ?? '') ||
+        String(subjectSample(after) ?? '') !== String(subjectSample(row) ?? '')
+      ) {
+        changed = true;
+      }
       tests.add(row.test_sessions_id);
       if (!isBlank(after.test_sessions_id)) tests.add(after.test_sessions_id);
       for (const s of [subjectSample(row), subjectSample(after)]) if (s) samples.add(s);
