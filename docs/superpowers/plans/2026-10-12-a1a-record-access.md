@@ -30,7 +30,7 @@ vitest, Python 3 (generator and pytest), bash harnesses.
 ## Global Constraints
 
 - **Migration numbers.** `20261012000163_user_usage.sql` is on `origin/main` and live (PR #246);
-  `20261012000164_label_templates.sql` is on `feat/label-printing` and `feat/label-scan`. As of 2026-10-12 the highest
+  `20261012000164_label_templates.sql` was on `feat/label-printing` and `feat/label-scan` and **has since landed on `origin/main`; this branch has not merged it, so step (1) below is mandatory before any migration is written**. As of 2026-10-12 the highest
   number on any branch is 164, so A1a takes **165 to 168**: `..165_record_access.sql` (done),
   `..166_record_readers_and_rules.sql` (the file written as `..166_lab_member_record_access_rules.sql`, never applied,
   renamed and rewritten in place: first the readers tables, functions, triggers, backfill and Directus metadata, then the
@@ -91,16 +91,16 @@ vitest, Python 3 (generator and pytest), bash harnesses.
    table (`tests/readers_matrix.sh`); after each mutation `readers_drift()` is empty for **all** records, not only the
    touched ones; the function equals the `ref.*` oracle on the 32 universes. Review the coverage table against the
    function: every input the function reads must have a trigger row, and the "not inputs" list must really be unread.
-   Includes the cases that skip triggers (a disabled trigger is *detected*, `readers_rebuild()` repairs it).
-3. **The functions read base tables only**, never a readers table; candidates come from the positive paths (no
-   records x users cross join); the recompute locks sorted ids and computes in a later statement; the diff does not churn;
+   Includes both race cases (A: an operation repointed onto S vs restricting S; B: a `campaign_samples` insert vs restricting C's project) in both commit orders, the cases that skip triggers (a disabled trigger is *detected*, `readers_rebuild()` repairs it), and the seeded randomised differential test against `ref.*`.
+3. **The functions read base tables only**, never a readers table; candidates come from the positive paths, inner-joined to `directus_users` (no
+   records x users cross join); the recompute takes ONE global advisory lock before reading anything, expands and computes in later statements under READ COMMITTED (and raises otherwise), refreshes the rollup after the `hidden_records` diff; the diff does not churn;
    the trigger functions are `SECURITY DEFINER` with a pinned `search_path`; triggers carry no visibility logic.
 4. **The Directus constraints.** No generated or hand-written filter has a `_some` anywhere but index 1 / after a legal
    `_some`; no sibling keys beside a relation key; no `_some` with a non-chain body; every `via` is an M2O; update and
    delete use a bare hop to readers, never `readers._some`; the readers tables' read rule is trivial. The single-`EXISTS`
    read rules, the one-hop child rules (no duplicates, `filter_count`) and the role test in the update filters work on a
    real Directus (viewer cannot update, editor can).
-5. **Manage = owner (PI) or admin, nothing else.** A co-owner, a Can edit person cannot add, change or remove
+5. **Manage = owner (PI) or admin, nothing else.** A `campaign_samples` row needs a reader of the sample; moving a campaign's project needs its owner and every restricted record in it. A co-owner, a Can edit person cannot add, change or remove
    anyone (including through `PATCH`/`DELETE` of `sample_co_owners`), change `restricted`, move a restricted record
    by changing `project_id`/`campaign_id`/`sample_id`/subject rows, or hand the record over, by endpoint or by
    `PATCH /items`.
@@ -190,12 +190,12 @@ last (2d'). Four sub-steps, each its own commit.
 - `d1_private` (migration 166): `readers_of_sample(uuid[])`, `readers_of_operation`, `readers_of_test`,
   `readers_of_campaign`, `readers_of_project` each returning `(record_id uuid, user_id uuid)`; `operation_open_of(uuid[])`;
   `hidden_of(kind text, uuid[])`; the promoted `ref.*` predicates (`can_read_<type>(id, user)` and their helpers);
-  `readers_closure(...)`, `refresh_readers(seed_s, seed_o, seed_t, seed_c, seed_p, touch_s, touch_c, touch_p uuid[])`,
+  `readers_closure(...)`, `refresh_readers(seed_s, seed_o, seed_t, seed_c, seed_p, touch_s, touch_c, touch_p, touch_j uuid[])` (one global advisory lock first, spec section 2),
   `readers_rebuild()`, `readers_drift()` returning `(kind, record_id, user_id, problem)`, `readers_drift_count()`,
   `is_hidden(kind text, id uuid)` (SECURITY DEFINER, for Task 5).
 - Tables: `sample_readers`, `operation_readers`, `test_readers`, `campaign_readers`, `project_readers`
   (`reader_id` identity PK, `record_id` FK `ON DELETE CASCADE`, `user_id` FK -> `directus_users(id)` `ON DELETE CASCADE`,
-  `UNIQUE (record_id, user_id)`, index on `user_id`), `operation_open_to_all(record_id PK FK)`,
+  `UNIQUE (record_id, user_id)`, index on `user_id`), `campaign_sample_readers(record_id -> campaign_samples.id)` (the same layout), `operation_open_to_all` (identity PK + `UNIQUE (record_id)`), the two legacy `user_id` foreign keys,
   `d1_private.hidden_records(kind, record_id)`. Directus: hidden collections, relations `record_id -> parent` with
   `one_field = 'readers'` (`'open_to_all'`), `user_id -> directus_users` (no alias), hidden alias fields.
 - Triggers: one `..._readers_ins|upd|del` statement trigger per row of the spec's trigger-coverage table (transition
@@ -204,15 +204,15 @@ last (2d'). Four sub-steps, each its own commit.
   child rules by `via` plus the reader item; update, delete and manage of operations, tests and campaigns = reader term AND
   editor/owner test; the read-only sets, the gate sets, `each` and the old `orphan_amnesty` shape removed.
 - Lab Member rows (second part of migration 166): reads per spec section 3 (one `readers._some` per type; the operations rule ORs the
-  `open_to_all` leaf; children one bare hop; `campaign_samples` and `sample_genealogy` as in the spec's table;
+  `open_to_all` leaf; children one bare hop; `campaign_samples` one `_some` on `campaign_sample_readers`, `sample_genealogy` the two-hop `OR`;
   `project_rollup` unchanged), update/delete/manage on the reader term, own-rows read rows for the five readers tables,
-  `operation_open_to_all` and the five access tables.
+  `campaign_sample_readers`, `operation_open_to_all` and the five access tables.
 
 **2a'. Engine (pure, fast; no database)**
 - [ ] **Tests first** (`tests/scripts/test_access_rules.py`): the `reader` bare-hop item (with and without `via`); the
   `readers` some rule only at the root of a collection and never under `via`; the `open_to_all` leaf; child rules are
-  exactly `{<fk>: {readers: {user_id: {_eq: $CURRENT_USER}}}}` with a to-one `<fk>`, and the two-hop `OR` rules
-  (`campaign_samples`, `sample_genealogy`) have the spec's shape; update, delete and manage of operations, tests and
+  exactly `{<fk>: {readers: {user_id: {_eq: $CURRENT_USER}}}}` with a to-one `<fk>`, and the `campaign_samples` rule (one `_some` on `campaign_sample_readers`) and the one remaining two-hop `OR` rule
+  and the two-hop `OR` rule of `sample_genealogy` have the spec's shape; update, delete and manage of operations, tests and
   campaigns contain the reader term and the owner/editor test (a role test is an AND of two bare paths); a walk of
   every generated rule asserting no `_some` outside index 1 / after a legal `_some`, no sibling key beside a relation key,
   every `via` an M2O, no `readers._some` in an update or delete filter; `resolve()` for a missing `readers`/`open_to_all`
@@ -223,55 +223,83 @@ last (2d'). Four sub-steps, each its own commit.
 - [ ] Gates: `--check`, pytest. Commit `refactor(access): generator emits readers-based read rules and reader-term update/delete`.
 
 **2b'. Readers tables, functions, triggers (first part of migration 166)**
-- [ ] Preflight: the migration-number check of Global Constraints.
-- [ ] Read first: spec section 2 ("The readers tables") and section 1 (the exact gate, the amnesty);
-  `scripts/dev/access_matrix_fixture.sql` (`ref.*`); migration 139 (the `test_sessions.sample_id` sync trigger),
+- [ ] Preflight: the migration-number check of Global Constraints, **after merging `origin/main`** (164, `label_templates`,
+  has landed there and this branch does not have it yet). **Data preflight (read-only, on the copy first; the coordinator runs
+  the same on live before the window):** count dangling `sample_co_owners.user_id` and `project_investigators.user_id` (no
+  matching `directus_users` row) and confirm with `pg_constraint` that neither column has a foreign key. Dangling rows: report
+  them and clean them up first (an explicit runbook step, not a silent `DELETE` in the migration); none: the migration adds
+  `FOREIGN KEY (user_id) REFERENCES directus_users (id) ON DELETE CASCADE` to both before the readers part.
+- [ ] Read first: spec section 2 ("The readers tables", the recompute protocol, the coverage table) and section 1 (the exact
+  gate, the amnesty); `scripts/dev/access_matrix_fixture.sql` (`ref.*`); migration 139 (the `test_sessions.sample_id` sync
+  trigger, per-row `UPDATE`s) and the existing `refresh_project_rollup()` and its triggers (its own global advisory lock);
   migration 121 (`audit_trigger_function`: `SECURITY DEFINER`, pinned `search_path`), 141 and 165 (relations and hidden alias
   patterns); `scripts/configure_directus.sql`.
-- [ ] **Tests first.** In `tests/phase1_schema.sh`: the six tables and their constraints; every coverage-table trigger
-  exists (a list in the test); the functions exist, are `SECURITY DEFINER` where required with a pinned `search_path`; the
-  readers tables are in `AUDIT_EXCLUDED` and not granted to `d1_llm_readonly`; the Directus metadata resolves and survives
-  `configure_all.sh`; the backfill leaves `readers_drift()` empty. In `tests/readers_matrix.sh`: **one case per row of the
-  spec's trigger-coverage table** and each mutation class of spec section 10 (including the multi-row, `COPY`, `TRUNCATE`,
-  rollback, disabled-trigger and no-op-update cases, and the concurrent-session cases: session 1 inserts `campaign_samples (S, C)` while session 2 restricts C, committed in both orders, S correct afterwards, plus a forced lock-order deadlock that aborts one writer cleanly), each ending in an empty `readers_drift()` over
-  all records plus one explicit effect; and the function = `ref.*` oracle on the 32 universes x 11 users. Watch them fail.
+- [ ] **Tests first.** In `tests/phase1_schema.sh`: the readers tables, `campaign_sample_readers` and `operation_open_to_all`
+  with their constraints; the legacy `user_id` foreign keys; every coverage-table trigger exists (a list in the test, incl. a
+  `TRUNCATE` trigger on each table named in row 49); the functions exist, are `SECURITY DEFINER` where required with a pinned
+  `search_path`; the derived tables are in `AUDIT_EXCLUDED` and not granted to `d1_llm_readonly`; the Directus metadata
+  resolves and survives `configure_all.sh`; the backfill leaves `readers_drift()` empty. In `tests/readers_matrix.sh`: **one
+  case per row of the spec's trigger-coverage table** and every mutation class of spec section 10 (the deletes, the swaps, the
+  importer's `ON CONFLICT DO UPDATE`, the rollup and Ask-DB cases, the dangling-login case, no-op and savepoint cases); the
+  **concurrency cases 0, A and B in both commit orders**, the login-unlinked-while-added case, the forced deadlock and the
+  `REPEATABLE READ` raise; the backfill and a big-project restrict **on default `max_locks_per_transaction`**; the
+  function = `ref.*` oracle on the 32 universes x 11 users; and the **seeded randomised differential test** (random universes
+  against `ref.*` as a full cross product, then random mutation sequences with `readers_drift()` after every step; the seed
+  is fixed and printed on failure). Watch them fail.
 - [ ] **Functions.** Promote the `ref.*` helpers to `d1_private.*` (same shapes), apply the two intended changes once (the
-  exact campaign gate S\*, the narrowed amnesty), write `readers_of_<type>` as candidates-then-predicate (base tables only,
-  never a readers table), `operation_open_of`, `hidden_of`, `readers_closure`, `refresh_readers` (VOLATILE plpgsql; lock the sorted seeds and touches, expand the closure in a later statement, lock the added ids, then compute in a later statement; spec section 2, "Recompute"; diff, never delete-all),
-  `readers_rebuild`, `readers_drift`,
-  `readers_drift_count`, `is_hidden`. If a predicate is too slow at 14k operations, write a set-based version **behind the
-  same signature** and keep the equivalence test green.
+  exact campaign gate S\*, the narrowed amnesty), write `readers_of_<type>` and `readers_of_campaign_sample` as
+  candidates-then-predicate (base tables only, never a readers table; **every candidate query inner-joins `directus_users`**),
+  `operation_open_of`, `hidden_of`, `readers_closure` (incl. the junction set `J*`), `readers_rebuild`, `readers_drift`,
+  `readers_drift_count`, `is_hidden`, and **`refresh_readers`: VOLATILE plpgsql under `READ COMMITTED` (it raises otherwise),
+  taking ONE global `pg_advisory_xact_lock(hashtextextended('d1_readers', 0))` before anything is read, then expanding the
+  closure and computing in later statements, diff, never delete-all, then `refresh_project_rollup()` when the
+  `hidden_records` diff is non-empty (spec section 2, "Recompute")**; `readers_rebuild` takes the same lock. Name the readers
+  triggers so they fire before the rollup's (`..._readers_...` sorts before `refresh_rollup_...`): readers lock first, always.
+  If a predicate is too slow at 14k operations, write a set-based version **behind the same signature** and keep the
+  equivalence tests green.
 - [ ] **Triggers.** Per coverage-table row: statement-level `AFTER` triggers with transition tables, one per event (Postgres
   allows neither a column list nor several events with transition tables), the update function joining old and new and
-  returning at once when no tracked column changed; seeds and touches exactly as the table says (OLD and NEW rows); the
-  people trigger gathers every record referencing the person; `TRUNCATE` calls `readers_rebuild()`. **No visibility logic in
-  a trigger.**
-- [ ] **Metadata and housekeeping.** Hidden collections, relations with `one_field = 'readers'` / `'open_to_all'`, hidden
-  alias fields, `scripts/configure_directus.sql` keeps them, no audit trigger, no grant to the LLM role; decide whether
-  `v_schema_dictionary` lists them. **Backfill:** end the migration with `SELECT d1_private.readers_rebuild()` and a
-  `NOTICE` of the row counts; `down` drops triggers, functions and tables and removes the metadata it added.
+  returning at once when no tracked column changed; seeds and touches exactly as the table says (OLD and NEW rows, including
+  `touch_j` for junction rows); the people trigger gathers every record referencing the person; the delete triggers also
+  remove the deleted ids from `hidden_records`; `TRUNCATE` calls `readers_rebuild()`. **No visibility logic in a trigger.**
+- [ ] **Metadata and housekeeping.** Hidden collections, relations with `one_field = 'readers'` (on the five parents and on
+  `campaign_samples`) and `'open_to_all'`, hidden alias fields (no read permission on the alias fields if Directus still
+  resolves the rules without it), `scripts/configure_directus.sql` keeps them, no audit trigger, no grant to the LLM role;
+  decide whether `v_schema_dictionary` lists them. **Backfill:** end the readers part with `SELECT
+  d1_private.readers_rebuild()` and a `NOTICE` of the row counts; `down` drops triggers, functions and tables, removes the
+  metadata it added and drops the two legacy foreign keys it added. Backups: `infra/backup/backup.sh` and
+  `scripts/backup-postgres.ps1` exclude the derived tables' data (`--exclude-table-data`); every restore ends with
+  `readers_rebuild()` and the drift check.
 - [ ] **Oracle.** Update `access_matrix_fixture.sql`'s `ref.*` for the two intended changes only, and list in the report
   exactly which fixture expectations changed (the operations and tests of a sample that sits only in a restricted campaign,
-  universes `k & 7 = 2`: C restricted, P and S not; O2 for its owner, OF2 for users the sample is shielded from) and that none changed for the amnesty
-  narrowing.
+  universes `k & 7 = 2`: C restricted, P and S not; O2 for its owner, OF2 for users the sample is shielded from) and that none
+  changed for the amnesty narrowing.
 - [ ] Gates: `bash scripts/dev/schema_test_docker.sh` with `ROUNDTRIP=1` (this migration) and the matrix test; phase1; the
   matrix green; `readers_drift()` empty after the backfill on the restored copy. **Record** the backfill time, the drift
-  function's run time, and the time of one statement inserting 1000 operations with and without the triggers.
+  function's run time, the time of one statement inserting 1000 operations with and without the triggers, and the peak
+  `pg_locks` count of the backfill.
 - [ ] Commit `feat(access): readers tables, visibility functions and recompute triggers (migration 166)`.
 
 **2c'. Rollup (migration 167, in place)**
-- [ ] Check `20261012000167_project_rollup_restricted.sql` against the new 166: it still refines the `project_rollup` row that
-  166's rule block carries (the `restricted` column only exists from 167, so 166's snapshot of that row has no restricted test and
-  167 overwrites it, as written); fix any header text that describes the old 166 contents. The statement trigger on
-  `physical_samples UPDATE OF restricted` stays and is independent of the readers triggers. Check phase1's rollup assertions.
+- [ ] **Derive `project_rollup.restricted` from `hidden_records`** (spec section 3, "project_rollup"): an `operation` row is
+  restricted iff the operation is hidden, a `sample` row iff the sample is hidden, tool, edge, insert, material and equipment
+  rows iff every operation behind them is (`bool_and`); this replaces the first attempt's own-flags rule, which missed a
+  restricted project's campaign, the sample's other campaigns and the sample's project. The refresh function reads
+  `hidden_records` (it exists from 166) and is called by `refresh_readers` after the `hidden_records` diff when it is
+  non-empty; keep the existing triggers on operations and campaigns and the `physical_samples` one.
+- [ ] Check the file against the new 166: it still refines the `project_rollup` Lab Member row that 166's rule block carries
+  (the column only exists from 167); fix any header text that describes the old 166 contents. phase1 first: an operation in a
+  restricted project's campaign and one on a sample held only by a restricted campaign have `restricted = true` after the
+  refresh and are hidden from an investigator; a `campaign_samples` insert and a `projects.restricted` flip refresh the
+  cache (no rollup trigger fires for them today); the PI still reads every row; extend the smoke rollup cases.
 - [ ] Gates: `bash scripts/dev/schema_test_docker.sh` (ROUNDTRIP=1 for 167); smoke rollup cases.
-- [ ] Commit `refactor(access): migration 167 header follows the readers migration` (skip the commit if nothing needed changing).
+- [ ] Commit `fix(access): project rollup restricted follows hidden_records (migration 167)`.
 
 **2d'. Lab Member rows, smoke, performance gate (second part of migration 166)**
 - [ ] Append to `..166_record_readers_and_rules.sql` (after the readers part, so the aliases exist) the Lab Member rows: a snapshot of
   `python3 scripts/gen_access_rules.py --values` for every collection whose rule changed, in the style of 160/161: back up what
   it overwrites into `d1_private.lab_member_access_rules_backup` for `down`; update rows whose permissions or validation
-  differ, insert missing rows (the five readers tables, `operation_open_to_all`, the five access tables); the header names the
+  differ, insert missing rows (the five readers tables, `campaign_sample_readers`, `operation_open_to_all`, the five access tables); the header names the
   Directus restart and Redis flush and says it must be applied together with 167 and the Task 3 extensions; the `down` removes the rules block first, then the readers.
 - [ ] **phase1**: the Lab Member rows equal the generator output (existing); the readers and access tables have no Lab Member
   write grants and read only own rows; no rule path outside the legal shapes (`--resolve` after the migrations and after
@@ -279,7 +307,7 @@ last (2d'). Four sub-steps, each its own commit.
 - [ ] **Smoke cases** in `scripts/dev/directus_smoke.mjs` (`lm_*`), spec section 10: **the 41 cases of the first attempt must
   still pass** (run with the overlay command of Global Constraints; the expected ids come from the oracle, and the
   expectation changes of 2b' are listed in the report, not silently updated); the single-`EXISTS` read rules answer 200
-  with correct ids, `filter_count`, paging and **no duplicates** for every ruled collection incl. the two-hop children; the
+  with correct ids, `filter_count`, paging and **no duplicates** for every ruled collection incl. `sample_genealogy` (the one two-hop rule) and `campaign_samples` (one `_some` on `campaign_sample_readers`); the
   amnesty leaf; update and delete ids are a subset of read ids; the role test works (viewer cannot `PATCH`, editor can); an
   operation under a restricted sample, and on a sample in a restricted campaign, is invisible to its owner; the cascade of
   spec section 1; a co-owner's `PATCH user_id` and `DELETE` of a `sample_co_owners` row are 403 (guard parts land in
@@ -294,14 +322,20 @@ last (2d'). Four sub-steps, each its own commit.
     counts; a sample page's children and its campaigns list; the child lists **as the Force App queries them**
     (`GET /items/machining_force_analysis` as `apps/force-app/web/src/record/directusLookups.ts` builds it, `fast_run_data`,
     `operation_data_files`). **Limit: p95 under 300 ms per list request and no duplicates.**
-  - **Writes, end to end (request or import wall time):** the FAST importer's bulk insert (`scripts/import_fast25.py`
-    shape, a few thousand operations in one statement); the force crawler's writes (`scripts/force_orchestrator.py`); a
-    Force App upload (`POST /files` then `machining_force_analysis`, the sequence of `uploadCapture.ts`); a **co-owner change
-    on a big sample**. **Limit: at most 2x today's time** for each; also report, without a limit, restricting a large project
-    and changing its PI (the cascades), with the closure sizes.
+  - **Writes, end to end (request or import wall time), before and after on the same copy:** the FAST importer's bulk
+    insert (`scripts/import_fast25.py` shape, a few thousand operations in one statement) **and its real
+    `INSERT ... ON CONFLICT (operation_id) DO UPDATE` re-import** (lines 284 and 299; both trigger sets fire); the force
+    crawler's writes (`scripts/force_orchestrator.py`); a Force App upload (`POST /files` then `machining_force_analysis`, the
+    sequence of `uploadCapture.ts`); a **co-owner change on a big sample**; and the **per-row recompute paths**: creating N
+    tests with subjects (migration 139's per-subject `UPDATE`), adding 50 samples to a large campaign through Directus
+    (one `campaign_samples` insert per statement), and **linking the login of a PI of a large project** (the row 45 cascade).
+    **Limit: at most 2x today's time** for each. Also report, without a limit, restricting a large project and changing its
+    PI (the cascades), with the closure sizes; **how long ordinary UI writes wait while an import transaction is open** (the
+    global lock; the importer commits in batches); and the **peak `pg_locks` count during the backfill and the big cascades,
+    on default lock settings** (they must succeed).
   - Record the table in the commit body, plus the backfill time, `readers_drift()` time and table sizes.
   - **If it fails:** `EXPLAIN (ANALYZE, BUFFERS)` on the slowest SQL first (enable Directus query logging on the copy);
-    reads: indexes, or a different shape for the two-hop children; writes: row-level `AFTER UPDATE OF <tracked columns>`
+    reads: indexes, or build the `sample_genealogy` shape (spec section 3); writes: row-level `AFTER UPDATE OF <tracked columns>`
     triggers on `manufacturing_operations` and `test_sessions` instead of the transition-table update triggers, or a
     set-based predicate, re-running the matrix. If it still fails, stop and report; do not ship.
 - [ ] Gates: `--check`; pytest; `bash scripts/dev/schema_test_docker.sh` (ROUNDTRIP=2: migrations 166 and 167 together);
@@ -331,7 +365,12 @@ last (2d'). Four sub-steps, each its own commit.
 - Guard: `ownerGuards[collection] = { key, fields:[{field,valueKey?}], filter }`; an update naming any field with a
   changed value must pass the delete rule (403 `extensions.kind` `'owner'` or `'restricted'`); `restrictedKeys`
   (spec section 4, item 2) and the `campaign_samples` / `test_sessions_subject` restricted-aware rule; junction guards
-  use the parent's delete rule for `sample_co_owners` and `project_investigators`.
+  use the parent's delete rule for `sample_co_owners` and `project_investigators`. **Two more guards (spec section 4, item 2):**
+  creating or repointing a `campaign_samples` row requires the caller to be a **reader of the sample** (a `sample_readers`
+  lookup; plus its owner when the sample is restricted); and a change of `campaigns.project_id` needs the campaign's delete
+  rule (a Can edit person is refused) and, when the campaign holds a restricted sample, a restricted operation or test with
+  that `campaign_id`, or a sample of a restricted project, also **each of those records' delete rule**, else only an admin may
+  move it.
 - Admin overview: `GET /d1-admin-overview` gains `readers_drift: { count, checked_at }` from `d1_private.readers_drift_count()`;
   a non-zero count is flagged in its output. If `readers_drift()` takes more than a second on the seeded copy (Task 2b's
   recorded time) the value is cached for a minute and `?refresh=1` recomputes. No rebuild endpoint: repair is `SELECT
@@ -347,7 +386,11 @@ last (2d'). Four sub-steps, each its own commit.
   an editor changing `project_id`/`campaign_id`/`sample_id` of a restricted record, out of or into a restricted
   project, campaign or sample, is 403 and the owner passes; a non-restricted move by an editor still passes; adding a
   restricted sample to a campaign needs the sample's owner; a subject row on a test whose sample is restricted needs
-  the test's owner; messages.
+  the test's owner; **adding a `campaign_samples` row for a sample the caller cannot read is 403 (a reader of an unrestricted
+  sample passes; a restricted sample needs its owner); changing a campaign's `project_id` is 403 for a Can edit person, 403 for
+  the campaign owner when the campaign holds a restricted sample, restricted operation or test, or a sample of a restricted
+  project they do not own (including moving it into a project they created themselves), passes for the owner of everything in
+  it and for an admin**; messages.
 - [ ] Tests first, endpoint (fake `ItemsService`, `MailService`, knex like `d1-admin-overview`'s tests): 401; the
   collection whitelist; 404 on unreadable; manage matrix per role (owner, co-owner, Can edit, viewer, stranger, admin,
   no-owner record is admin-only); add sends exactly one mail, a role change none, self-add none, a person with no
@@ -369,7 +412,7 @@ last (2d'). Four sub-steps, each its own commit.
 - [ ] Smoke cases (with the overlay command): as owner add a login-less person (no mail address) and a person with an
   address (the smoke Directus has no mail server, so assert `email` is `failed` or `skipped` and the change stands); list
   as a viewer (`can_manage = false`); `PATCH /items` of `restricted` as the owner (200) and as an editor (403); an
-  editor's `PATCH project_id` of a restricted sample (403); a co-owner's `PATCH`/`DELETE` of a `sample_co_owners` row
+  editor's `PATCH project_id` of a restricted sample (403); a campaign owner's `PATCH project_id` of a campaign into a project they created (403 when it holds restricted records they do not own); a `campaign_samples` insert for an unreadable sample (403); a co-owner's `PATCH`/`DELETE` of a `sample_co_owners` row
   (403); a change through the endpoint is readable immediately as the added person (read-your-write); the admin overview
   reports a drift count of 0 after each case.
 - [ ] Tests first, admin overview (`core/extensions/d1-admin-overview/index.test.mjs`): the drift count is returned, a non-zero
@@ -459,7 +502,7 @@ last (2d'). Four sub-steps, each its own commit.
   one line, `NOT d1_private.is_hidden('<collection>', <pk>)`**: `is_hidden` and the `hidden_records` table it reads are
   built and maintained by migration 166 (the same recompute and triggers as the readers tables, spec section 7), so this
   migration holds no restriction logic of its own and no hand-written parent subqueries; the table is not granted to the
-  role, `EXECUTE` on `is_hidden` is. Children: `<fk> IN (SELECT <pk> FROM <parent>)`, both ends for `campaign_samples` and
+  role, `USAGE` on schema `d1_private` and `EXECUTE` on `is_hidden` are (a policy expression runs with the querying role's privileges; without `USAGE` every query on the five tables fails with "permission denied for schema" and Ask-DB breaks). Children: `<fk> IN (SELECT <pk> FROM <parent>)`, both ends for `campaign_samples` and
   `sample_genealogy`; `project_rollup`: `NOT restricted` and the project visible; `semantic_embeddings`: `CASE source_table
   ... ELSE false END`. `ALTER VIEW ... SET (security_invoker = true)` for **all nine** granted `v_*` views
   (including `v_project_rollup`, which is granted without it); `down` drops policies, disables RLS and resets the views.
@@ -478,7 +521,7 @@ last (2d'). Four sub-steps, each its own commit.
   grants can still INSERT and `INSERT ... ON CONFLICT DO UPDATE` `semantic_embeddings` after the migration**; **every
   table granted to `d1_llm_readonly` has RLS enabled or is in the named reference list** (so a new grant without a
   policy fails); **every view granted to `d1_llm_readonly` has `security_invoker=true` in `pg_class.reloptions`**;
-  the SQL guard still rejects `SELECT d1_private.is_hidden(...)` (schema-qualified calls and non-public schemas); a flip of `restricted` (and a move into a restricted campaign) changes what the role sees at once (the recompute keeps
+  Ask-DB still works for the role (a restricted and an unrestricted row behave as expected: the `USAGE` grant is present); the SQL guard still rejects `SELECT d1_private.is_hidden(...)` (schema-qualified calls and non-public schemas); a flip of `restricted` (and a move into a restricted campaign) changes what the role sees at once (the recompute keeps
   `hidden_records` in step); migration 168 applies, reapplies and reverses cleanly.
 - [ ] Implement migration 168. Gate: `bash scripts/dev/schema_test_docker.sh` (ROUNDTRIP=1) and, if the harness supports
   it, `tests/phase6_text_to_sql.sh`.
@@ -493,7 +536,7 @@ last (2d'). Four sub-steps, each its own commit.
   documentation and the script depends on the Operator role or its token. Live has only Administrator, Lab Admin and
   Lab Member. Then delete the two files (and `apply.sh` if retired) and fix every reference.
 - [ ] Docs: the ADR, the wiki page, the physical-test checklist, the migration skill and CONTRIBUTING rule, the cutover
-  runbook (four migrations; the backfill time and drift-check time recorded in Task 2b'; a step that runs `SELECT count(*) FROM
+  runbook (four migrations; the backfill time and drift-check time recorded in Task 2b'; **a read-only preflight before the window: the dangling-login counts (`sample_co_owners.user_id` and `project_investigators.user_id` with no `directus_users` row) and a `pg_constraint` check that those columns have no foreign key, to be cleaned up first if non-zero; `SHOW max_locks_per_transaction`, `SHOW max_connections`**; a scheduled drift check (a small script run nightly and after imports that logs a non-zero `readers_drift_count()`); a restore step (exclude derived tables' data from dumps, then `readers_rebuild()`); a note that a `TRUNCATE` of `test_sessions_subject` leaves `test_sessions.sample_id` stale; a step that runs `SELECT count(*) FROM
   d1_private.readers_drift()` after the migrations and after any restore, and says to run `d1_private.readers_rebuild()` if it
   is not zero), `docs/data-dictionary.md` (the readers tables, `operation_open_to_all`) if Task 1 left anything.
 - [ ] **Final gates** (all must be green; `ROUNDTRIP=4` = the four new migrations):
