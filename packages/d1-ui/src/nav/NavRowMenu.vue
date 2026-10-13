@@ -72,9 +72,11 @@ function listen(on: boolean) {
 	}
 }
 
+// Opens (or moves) the menu: beside the row it is for, with the first item focused. Opening it from
+// another row while it is open changes `anchor` but not `open`, so both are watched.
 watch(
-	() => props.open,
-	async (open) => {
+	() => [props.open, props.anchor] as const,
+	async ([open]) => {
 		listen(open);
 		if (!open) return;
 		place();

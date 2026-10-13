@@ -7,23 +7,22 @@
 // menu only report what was asked. The data is shared per host (useSidebarData), so nothing is
 // fetched twice. Plain HTML and the kit's tokens: it works unchanged in Directus and in STARbase.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import { linkHref, openLinkInNewTab } from '../links';
+import { useRoute } from 'vue-router';
 import NavIcon from './NavIcon.vue';
 import NavRowMenu from './NavRowMenu.vue';
 import SidebarRow from './SidebarRow.vue';
-import { dropIndex, dropResult, moveAmongShown, sameOrder } from './pinDrag';
-import { copyLink, rowMenuItems } from './rowMenu';
+import { moveAmongShown } from './pinDrag';
 import { pinnedListCut, pinKey } from './sidebarModel';
-import type { PinRef, ResolvedPin, SectionId, SidebarLink, SidebarView } from './sidebarModel';
+import type { PinRef, SectionId, SidebarLink, SidebarView } from './sidebarModel';
 import { HOME_LINK, viewAsRow } from './sidebarRows';
+import { usePinDrag } from './usePinDrag';
+import { useRowMenu } from './useRowMenu';
 import { useSidebarData } from './useSidebarData';
 
 withDefaults(defineProps<{ collapsible?: boolean }>(), { collapsible: false });
 defineEmits<{ (e: 'open-finder'): void; (e: 'request-mode', mode: 'expanded' | 'rail', sectionId?: SectionId): void }>();
 
 const route = useRoute();
-const router = useRouter();
 const { sections, resolved, isCurrent, currentSection, loading, error, refresh, pins } = useSidebarData();
 
 const root = ref<HTMLElement | null>(null);
@@ -80,128 +79,27 @@ async function movePin(ref_: PinRef, delta: -1 | 1) {
 	rowRefs.get(`pin:${key}`)?.focusLink();
 }
 
-// ---- Drag (HTML5 events). `drag` is the pin being dragged: a row of Pinned (reorder) or of a section (pin).
-const drag = ref<PinRef | null>(null);
-// Where the drop would land among the rows shown (0 = before the first, the row count = after the last).
-const dropAt = ref<number | null>(null);
-const pinnedBlock = ref<HTMLElement | null>(null);
-
-const dragIsNew = computed(() => !!drag.value && !pins.isPinned(drag.value));
-
-function startDrag(ref_: PinRef | null, e: DragEvent) {
-	if (!ref_ || !pinsReady.value) {
-		e.preventDefault();
-		return;
-	}
-	drag.value = { kind: ref_.kind, target: ref_.target };
-}
-function endDrag() {
-	drag.value = null;
-	dropAt.value = null;
-}
-
-function overRow(index: number, e: DragEvent) {
-	if (!drag.value) return;
-	e.preventDefault();
-	if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-	const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-	dropAt.value = dropIndex(index, rect.height ? (e.clientY - rect.top) / rect.height : 0);
-}
-function overBlock(e: DragEvent) {
-	if (!drag.value) return;
-	e.preventDefault();
-	if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-	// Anywhere that is not a row (the heading, the empty list, the "Drop here to pin" zone): at the end.
-	if (!(e.target as Element).closest('[data-pin-row]')) dropAt.value = cut.value.shown.length;
-}
-function leaveBlock(e: DragEvent) {
-	if (!pinnedBlock.value?.contains(e.relatedTarget as Node | null)) dropAt.value = null;
-}
-
-async function drop(e: DragEvent) {
-	e.preventDefault();
-	const item = drag.value;
-	const at = dropAt.value;
-	endDrag();
-	if (!item || at === null || !pinsReady.value) return;
-	const { next, pinFirst } = dropResult(pins.pins.value, resolved.value.shown, item, at);
-	if (pinFirst) {
-		await pins.toggle(item);
-		// The pin failed (the list says so): there is nothing to place.
-		if (!pins.isPinned(item)) return;
-	}
-	if (!sameOrder(next, pins.pins.value)) await pins.reorder(next);
-}
-
-// ---- Row menu
-interface OpenMenu {
-	key: string;
-	kind: 'section' | 'pinned';
-	to: string;
-	ref: PinRef | null;
-	label: string;
-	anchor: DOMRect;
-	edge: number;
-	button: () => void;
-}
-const menu = ref<OpenMenu | null>(null);
-
-function openMenu(key: string, kind: 'section' | 'pinned', item: { to: string; label: string }, ref_: PinRef | null, anchor: DOMRect) {
-	// The "⋯" button toggles its own menu.
-	if (menu.value?.key === key) {
-		menu.value = null;
-		return;
-	}
-	menu.value = {
-		key, kind, to: item.to, ref: ref_, label: item.label, anchor,
-		// The sidebar's right edge: the menu opens beside it, not over the list.
-		edge: root.value?.getBoundingClientRect().right ?? anchor.right,
-		button: () => rowRefs.get(key)?.focusMenuButton(),
-	};
-}
-
-function closeMenu(refocus: boolean) {
-	const m = menu.value;
-	menu.value = null;
-	if (refocus && m) void nextTick(m.button);
-}
-
-const menuItems = computed(() => {
-	const m = menu.value;
-	if (!m) return [];
-	const index = m.ref ? resolved.value.shown.findIndex((r) => pinKey(r.ref) === pinKey(m.ref!)) : -1;
-	return rowMenuItems({
-		kind: m.kind,
-		pinned: !!m.ref && pins.isPinned(m.ref),
-		canPin: pinsReady.value && !!m.ref,
-		index,
-		count: resolved.value.shown.length,
-	});
+const { drag, dropAt, dragIsNew, pinnedBlock, startDrag, endDrag, overRow, overBlock, leaveBlock, drop } = usePinDrag({
+	pins,
+	shown: computed(() => resolved.value.shown),
+	rowCount: () => cut.value.shown.length,
+	ready: () => pinsReady.value,
 });
 
-async function choose(id: string) {
-	const m = menu.value;
-	if (!m) return;
-	closeMenu(true);
-	if (id === 'pin' || id === 'unpin') {
-		if (m.ref) void pins.toggle(m.ref);
-	} else if (id === 'up' || id === 'down') {
-		if (m.ref) void movePin(m.ref, id === 'up' ? -1 : 1);
-	} else if (id === 'new-tab') {
-		openLinkInNewTab(m.to, router);
-	} else if (id === 'copy') {
-		say((await copyLink(linkHref(m.to, router))) ? 'Link copied' : "Couldn't copy the link");
-	}
-}
-
-// Another page, a new window size or the list changing under it: the menu would sit beside the wrong row.
-watch(() => route.fullPath, () => { menu.value = null; });
+const { menu, items: menuItems, openMenu, closeMenu, choose } = useRowMenu({
+	pins,
+	shown: computed(() => resolved.value.shown),
+	ready: () => pinsReady.value,
+	root,
+	focusButton: (key) => rowRefs.get(key)?.focusMenuButton(),
+	movePin: (ref_, delta) => void movePin(ref_, delta),
+	say,
+});
 
 const togglePin = (ref_: PinRef | null) => {
 	if (ref_ && pinsReady.value) void pins.toggle(ref_);
 };
 
-const pinRef = (item: SidebarLink | ResolvedPin): PinRef | null => ('ref' in item ? item.ref : item.pin);
 const linkKey = (l: SidebarLink) => l.to;
 const viewKey = (v: SidebarView) => `view:${v.id}`;
 const sectionCurrent = (id: SectionId) => currentSection.value === id;
