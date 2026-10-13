@@ -13,7 +13,10 @@
 #
 # Usage: bash scripts/dev/explorer_preview.sh [--stop]   (from the repo root)
 # Options (environment):
-#   D1_PREVIEW_ENV_FILE=<file>     extra Directus settings, docker --env-file format (CORS, CSP, ...)
+#   D1_PREVIEW_NAME=<name>         container/network prefix (default d1-preview); any other name also gets
+#                                  its own credentials file .superpowers/preview-credentials-<name>.txt
+#   D1_PREVIEW_PORT=<port>         published port (default 18055)
+#   D1_PREVIEW_ENV_FILE=<file>    extra Directus settings, docker --env-file format (CORS, CSP, ...)
 #   D1_PREVIEW_PUBLIC_URL=<url>    PUBLIC_URL for the preview (default http://127.0.0.1:$PORT)
 #   D1_PREVIEW_EXTRA_EXT="<dir>…"  built extension folders (package.json + dist/) to add, e.g. a spike
 # Example with custom name prefix:
@@ -29,8 +32,13 @@ OVERLAY="${D1_PREVIEW_OVERLAY:-d1-home d1-admin-overview}"
 ENV_FILE="${D1_PREVIEW_ENV_FILE:-}"
 EXTRA_EXT="${D1_PREVIEW_EXTRA_EXT:-}"
 PUBLIC="${D1_PREVIEW_PUBLIC_URL:-http://127.0.0.1:$PORT}"
-CREDS=.superpowers/preview-credentials.txt
-EXT_DIR=.superpowers/preview-extensions
+# Files of ONE preview. The default name keeps the old paths; any other name gets its own, so a second
+# preview (another session) never deletes or overwrites the first one's credentials or its mounted
+# extensions folder (start clears EXT_DIR, --stop removes CREDS and EXT_DIR).
+if [[ "$NAME" == d1-preview ]]; then SUFFIX=""; else SUFFIX="-$NAME"; fi
+CREDS=.superpowers/preview-credentials${SUFFIX}.txt
+EXT_DIR=.superpowers/preview-extensions${SUFFIX}
+RESP=.superpowers/preview-resp${SUFFIX}.json
 rhex() { openssl rand -hex "$1" 2>/dev/null || od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
 stop() { docker rm -fv "$DX" "$PG" >/dev/null 2>&1; docker network rm "$NET" >/dev/null 2>&1; }
 abort() { echo "FAIL preview: $1"; [[ -n "${2:-}" ]] && echo "$2"; stop; exit 1; }
@@ -118,9 +126,9 @@ curl -fs "http://127.0.0.1:$PORT/server/health" >/dev/null || abort "directus no
 # Passwords through the API so Directus hashes them.
 for pair in "$admin_id:$ADMIN_PASS" "$lm_id:$LM_PASS"; do
   mkdir -p .superpowers
-  code=$(curl -s -o .superpowers/preview-resp.json -w '%{http_code}' -X PATCH "http://127.0.0.1:$PORT/users/${pair%%:*}" \
+  code=$(curl -s -o "$RESP" -w '%{http_code}' -X PATCH "http://127.0.0.1:$PORT/users/${pair%%:*}" \
     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "{\"password\":\"${pair#*:}\"}")
-  [[ "$code" == 2* ]] || abort "set password (HTTP $code)" "$(cat .superpowers/preview-resp.json 2>/dev/null)"
+  [[ "$code" == 2* ]] || abort "set password (HTTP $code)" "$(cat "$RESP" 2>/dev/null)"
 done
 mkdir -p .superpowers
 printf 'url=http://127.0.0.1:%s/admin\nadmin=%s %s\nmember=%s %s\n' "$PORT" "$ADMIN_EMAIL" "$ADMIN_PASS" "$LM_EMAIL" "$LM_PASS" > "$CREDS"
