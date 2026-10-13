@@ -25,20 +25,32 @@ access_rules.json is the single source of the row-level visibility rules. This s
              one_collection, one_field], ...], "columns": ["table.column", ...],
              "fields": ["collection.field", ...]} (tests/phase1_schema.sh dumps it)
 
+Read visibility itself is not written in access_rules.json: who can read a record is computed in SQL
+(d1_private.readers_of_*, migration 166) and stored in the <type>_readers tables. A read rule is
+  {"readers": "some"}             `readers: {_some: {user_id: $CURRENT_USER}}`, the membership test on the hidden
+                                  top-level `readers` O2M alias of a record type (and of campaign_samples); only ever
+                                  at the root of a collection, never under a via
+  {"readers": "some", "open_to_all": true}
+                                  the same OR the orphan-amnesty leaf `open_to_all: {_some: {record_id: {_nnull: true}}}`
+                                  (operation_open_to_all is readable by every member)
+  "<set>"                         a set, for the children of a record: one bare to-one hop to the parent's readers table
+Update, delete and manage (a record's manage rule is its delete rule) stay sets, built from the reader item below.
+
 A rule is a SET: a list (the OR of its items) or {"and": [...]} (the AND of its items). An item is
 
   "owner_person_id.user_id"       a user leaf: a path that ends at a user column that must equal `$CURRENT_USER`,
                                   e.g. `co_owners._some.user_id` becomes
                                   {"co_owners": {"_some": {"user_id": {"_eq": "$CURRENT_USER"}}}}
   {"set": "x", "via": "sample_id"} another set, with every path put behind a to-ONE relation (`via` must be an M2O)
+  {"reader": "bare"}              the bare hop `readers.user_id = $CURRENT_USER` at the row's prefix (the caller is a
+                                  reader of the record; with a via, of the parent: {"operation_id": {"readers": ...}}).
+                                  Never a `_some`: a legal `_some` applies the readers table's own rule for the action,
+                                  and a hop through a to-one relation is not top-level
   {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit"]}}
                                   a user leaf plus `role _in [...]` on the same row of the junction `at`
   {"field": "restricted", "eq": false} / {"field": "sample_id", "null": true}
                                   a literal leaf on a column (the field may be a to-one chain, "campaign_id.restricted")
   {"unless_restricted": [...]}    AND(restricted = false, OR(items)), on the row the prefix points at
-  {"each": "campaigns", "items": [...]}
-                                  conditions that must hold on ONE row of a to-many alias (items are relative to the
-                                  junction), written as an AND of paths through the bare alias
   {"and": [...]}  {"or": [...]}   nesting
 
 The sets are built into a tree first (a `via` prefix is distributed onto the leaves, never wrapped around an
@@ -84,8 +96,6 @@ def load(path: Path = RULES_FILE) -> dict:
 #   ("user", parts, where, at)        a user leaf; `parts` is the whole path from the collection the rule is on
 #   ("lit", parts, op, value)         a literal leaf ({parts...: {op: value}})
 #   ("and", [nodes]) / ("or", [nodes])
-#   ("each", base, alias, [nodes])    the AND of the nodes on one row of the to-many `alias`; `base` = len(prefix)
-#                                     at the alias (the nodes carry prefix + alias in front of their own path)
 # `parts` keep the literal "_some" tokens of a user path: whether one is emitted is decided in path_filter().
 
 
@@ -172,26 +182,18 @@ def build_item(
         if "eq" in keys:
             return ("lit", parts, "_eq", item["eq"])
         return ("lit", parts, "_null", item["null"])
+    if keys == {"reader"}:
+        if item["reader"] != "bare":
+            raise RulesError(
+                f'set {where_from!r}: the reader item is {{"reader": "bare"}}: {item!r}'
+            )
+        return ("user", prefix + ("readers", "user_id"), None, None)
     if keys == {"unless_restricted"}:
         return (
             "and",
             [
                 ("lit", prefix + ("restricted",), "_eq", False),
                 ("or", sub(item["unless_restricted"])),
-            ],
-        )
-    if "each" in keys:
-        if keys != {"each", "items"} or not item["items"]:
-            raise RulesError(f"set {where_from!r}: bad each item {item!r}")
-        alias = item["each"]
-        inner = prefix + (alias,)
-        return (
-            "each",
-            len(prefix),
-            alias,
-            [
-                build_item(sets, i, inner, stack, vias, where_from)
-                for i in item["items"]
             ],
         )
     if keys == {"and"} or keys == {"or"}:
@@ -291,44 +293,50 @@ def emit(node: tuple) -> dict:
         return path_filter(list(parts), leaf={op: value})
     if kind in ("and", "or"):
         return combine(f"_{kind}", [emit(child) for child in node[1]])
-    # `each`: conditions on one row of a to-many alias. They are written as paths through the bare alias (every
-    # path of a query shares its joined alias, so they hold on the same row); the `_some` form
-    # {alias: {_some: {_and: [...]}}} is the textbook one and Directus 500s on it.
-    return combine("_and", [emit(child) for child in node[3]])
+    raise RulesError(f"unknown tree node {kind!r}")
 
 
 def set_filter(sets: dict, name: str) -> dict:
     return emit(build_set(sets, name))
 
 
-def amnesty_filter(spec: dict, sets: dict | None = None) -> dict:
-    """A record where every column of spec["null"] is NULL (and, with restricted_false, the record is not
-    restricted, and, with `also`, a set holds) -- see 'orphan_amnesty' in access_rules.json."""
-    extra = set(spec) - {"null", "restricted_false", "also"}
-    if extra or not spec.get("null"):
-        raise RulesError(f"orphan_amnesty: needs null columns, unknown {sorted(extra)}")
-    clauses = [{c: {"_null": True}} for c in spec["null"]]
-    if spec.get("restricted_false"):
-        clauses.append({"restricted": {"_eq": False}})
-    if "also" in spec:
-        if sets is None:
-            raise RulesError("orphan_amnesty: `also` needs the sets")
-        clauses.append(set_filter(sets, spec["also"]))
-    return combine("_and", clauses)
+READ_KEYS = {"readers", "open_to_all"}
 
 
-def with_amnesty(base: dict, spec: dict, sets: dict | None = None) -> dict:
-    """OR `base` with the orphan-amnesty clause, flattening into an existing top-level _or."""
-    return combine("_or", [base, amnesty_filter(spec, sets)])
+def is_read_kind(rule: object) -> bool:
+    return isinstance(rule, dict)
+
+
+def read_kind_filter(collection: str, rule: dict) -> dict:
+    """The read filter of {"readers": "some"[, "open_to_all": true]}: a membership test on the hidden top-level
+    `readers` alias, OR (operations) the `open_to_all` leaf (every member may read an operation in operation_open_to_all)."""
+    if set(rule) - READ_KEYS or rule.get("readers") != "some":
+        raise RulesError(
+            f'{collection}.read: a read kind is {{"readers": "some"}} with an optional "open_to_all": true, not {rule!r}'
+        )
+    if "open_to_all" in rule and rule["open_to_all"] is not True:
+        raise RulesError(f'{collection}.read: "open_to_all" is true or absent')
+    readers = {"readers": {"_some": {"user_id": {"_eq": CURRENT_USER}}}}
+    if rule.get("open_to_all"):
+        return {
+            "_or": [
+                readers,
+                {"open_to_all": {"_some": {"record_id": {"_nnull": True}}}},
+            ]
+        }
+    return readers
 
 
 def rule_filter(doc: dict, collection: str, action: str) -> dict:
-    """The permission filter of a ruled collection and action (read gets its orphan amnesty)."""
-    filt = set_filter(doc["sets"], doc["rules"][collection][action])
-    amnesty = doc.get("orphan_amnesty", {}).get(collection)
-    if action == "read" and amnesty:
-        filt = with_amnesty(filt, amnesty, doc["sets"])
-    return filt
+    """The permission filter of a ruled collection and action."""
+    rule = doc["rules"][collection][action]
+    if is_read_kind(rule):
+        if action != "read":
+            raise RulesError(
+                f"{collection}.{action}: the readers rule kinds are for read only; update and delete use the bare reader hop"
+            )
+        return read_kind_filter(collection, rule)
+    return set_filter(doc["sets"], rule)
 
 
 def build_rows(doc: dict) -> list[dict]:
@@ -460,7 +468,7 @@ def hook_rules(doc: dict) -> dict:
         for check in checks:
             parent, action = check["parent"], check.get("rule", "update")
             rule = rules.get(parent, {}).get(action)
-            if rule is None or rule == "any":
+            if rule is None or rule == "any" or is_read_kind(rule):
                 raise RulesError(f"guard {junction}: {parent}.{action} has no filter")
             out.append(
                 {
@@ -502,7 +510,7 @@ def owner_guards(doc: dict) -> dict:
             rules.get(collection, {}).get("delete"),
         )
         for action, rule in (("update", update), ("delete", delete)):
-            if rule is None or rule == "any":
+            if rule is None or rule == "any" or is_read_kind(rule):
                 raise RulesError(f"owner_guard {collection}: {action} has no filter")
         if set(spec) != {"key", "fields"} or not spec["fields"]:
             raise RulesError(
@@ -527,7 +535,7 @@ def owner_guards(doc: dict) -> dict:
         }
     for collection, actions in rules.items():
         update, delete = actions.get("update"), actions.get("delete")
-        if update is None or delete is None or update == "any" or delete == "any":
+        if update is None or delete is None or "any" in (update, delete):
             continue
         if collection not in declared and set_filter(sets, update) != set_filter(
             sets, delete
@@ -582,7 +590,7 @@ def resolve(doc: dict, db: dict) -> list[str]:
     Walks every leaf of every rule from its collection. A relation field is followed through
     `relations` (many side by `many_field`, one side by `one_field`); the many side must be a
     column and the one side (an alias) a field row of its collection; the last part must be a column.
-    `where` columns must exist on the junction, `at` and `each` must be to-many aliases, a literal leaf
+    `where` columns must exist on the junction, `at` must be a to-many alias, a literal leaf
     must name a column, and every `via` must be a to-one hop (a to-many hop would turn an AND into "some
     row and some row" instead of "one row that satisfies both").
     """
@@ -632,17 +640,6 @@ def resolve(doc: dict, db: dict) -> list[str]:
             for child in node[1]:
                 walk_node(collection, label, child)
             return
-        if kind == "each":
-            _, base, alias, children = node
-            for child in children:
-                walk_node(collection, label, child)
-            leaf = children[0]
-            while leaf[0] in ("and", "or", "each"):
-                leaf = leaf[-1][0]
-            hops = [p for p in leaf[1] if p != "_some"][: base + 1]
-            if hops and hops[-1] == alias:
-                alias_target(collection, f"{label}: each {alias}", hops)
-            return
         parts = [p for p in node[1] if p != "_some"]
         text = f"{label}: {'.'.join(node[1])}"
         table = follow(collection, text, parts[:-1])
@@ -672,11 +669,27 @@ def resolve(doc: dict, db: dict) -> list[str]:
                     )
                 table = nxt[0]
 
+    def readers_alias(collection: str, label: str, alias: str, column: str) -> None:
+        """A read kind needs the hidden top-level O2M alias (a relation with one_field = alias, a field row for it)
+        over a table that has the column the rule tests."""
+        nxt = step(collection, alias)
+        if nxt is None or nxt[1] != "o2m":
+            problems.append(
+                f"{label}: {collection}.{alias} is not a to-many alias Directus knows (relation with one_field, and a field row)"
+            )
+        elif f"{nxt[0]}.{column}" not in columns:
+            problems.append(f"{label}: {nxt[0]}.{column} is not a column")
+
     for collection, actions in doc["rules"].items():
         for action, rule in actions.items():
             if rule == "any":
                 continue
             label = f"{collection}.{action}"
+            if is_read_kind(rule):
+                readers_alias(collection, label, "readers", "user_id")
+                if rule.get("open_to_all"):
+                    readers_alias(collection, label, "open_to_all", "record_id")
+                continue
             walk_node(collection, label, build_set(doc["sets"], rule))
             walk_vias(collection, label, rule)
     for junction, checks in doc.get("guards", {}).items():
@@ -713,20 +726,6 @@ def resolve(doc: dict, db: dict) -> list[str]:
                 problems.append(
                     f"restricted_keys {collection}: {collection}.{column} is not a column"
                 )
-    for collection, spec in doc.get("orphan_amnesty", {}).items():
-        for col in spec.get("null", []):
-            if f"{collection}.{col}" not in columns:
-                problems.append(
-                    f"orphan_amnesty {collection}: {collection}.{col} is not a column"
-                )
-        if spec.get("restricted_false") and f"{collection}.restricted" not in columns:
-            problems.append(
-                f"orphan_amnesty {collection}: {collection}.restricted is not a column"
-            )
-        if "also" in spec:
-            label = f"orphan_amnesty {collection}"
-            walk_node(collection, label, build_set(doc["sets"], spec["also"]))
-            walk_vias(collection, label, spec["also"])
     for collection, spec in doc.get("record_access", {}).items():
         for table, column in (
             (spec["table"], spec["fk"]),

@@ -5,7 +5,13 @@ they skip otherwise (the CI job sets REQUIRE_DB_TESTS=1, so a skip there fails t
 tests/phase1_schema.sh also resolves every rule path against the Directus metadata that the
 configure_*.sql scripts leave behind.
 
-The semantic tests use a small fixture evaluator that models Directus, not SQL intuition:
+READ visibility is not tested here: it lives in the SQL function family (d1_private.readers_of_*, migration 166) and is
+tested by tests/readers_matrix.sh (the mutation matrix, the differential test against the independent oracle ref.*) and by
+the Directus smoke. What this file tests is the generator and its output: the shapes Directus accepts, the read kinds
+(`readers` some, `open_to_all`), the one-hop child rules, the update, delete and manage filters (the reader term AND the
+editor or owner test), the guards and the rule files.
+
+The update/delete/manage tests use a small fixture evaluator that models Directus, not SQL intuition:
   * a legal `_some` (directly under a top-level to-many alias) is an EXISTS subquery, and the related
     collection's own Lab Member read rule applies to the rows it looks at;
   * a dropped `_some` (a bare to-many hop) is a LEFT JOIN: every bare hop of one filter is ONE joined alias,
@@ -16,7 +22,6 @@ The semantic tests use a small fixture evaluator that models Directus, not SQL i
 import importlib.util
 import json
 import os
-import random
 import shutil
 import subprocess
 from pathlib import Path
@@ -35,7 +40,7 @@ DOC = gen.load()
 ROWS = gen.build_rows(DOC)
 BY_KEY = {(r["collection"], r["action"]): r for r in ROWS}
 RULES = {k: r["permissions"] for k, r in BY_KEY.items()}
-# Lab Member filters of main before A1 (generator output on 2026-10-12, frozen so equivalence needs no git history).
+# Lab Member filters of main before A1 (generator output on 2026-10-12, frozen so no git history is needed).
 MAIN = {
     (r["collection"], r["action"]): r["permissions"]
     for r in json.loads((FIXTURES / "lab_member_rules_main.json").read_text())
@@ -55,7 +60,21 @@ PATH_TAILS = (
     "co_owners.user_id",
     "secondary_investigators.user_id",
     "person_id.user_id",
+    "readers.user_id",
 )
+
+# the five record types and what hangs off them
+RECORDS = [
+    "physical_samples",
+    "manufacturing_operations",
+    "test_sessions",
+    "campaigns",
+    "projects",
+]
+READERS = {
+    "physical_samples": "sample_readers", "manufacturing_operations": "operation_readers", "test_sessions": "test_readers",
+    "campaigns": "campaign_readers", "projects": "project_readers", "campaign_samples": "campaign_sample_readers",
+}  # fmt: skip
 
 
 def _paths(collection, action):
@@ -67,7 +86,7 @@ def _paths(collection, action):
 def _rule_paths():
     for collection, actions in DOC["rules"].items():
         for action, rule in actions.items():
-            if rule != "any":
+            if rule != "any" and not isinstance(rule, dict):
                 yield collection, action, _paths(collection, action)
 
 
@@ -75,13 +94,7 @@ def _rule_paths():
 # The fixture evaluator
 # =================================================================================================
 
-COMPARATORS = {"_eq", "_null", "_in"}
-
-
-def _access(parent, table, fk):
-    return {
-        "access": ("o2m", table, fk),
-    }
+COMPARATORS = {"_eq", "_null", "_in", "_nnull"}
 
 
 SCHEMA = {
@@ -95,6 +108,7 @@ SCHEMA = {
         "samples": ("o2m", "physical_samples", "project_id"),
         "operations": ("o2m", "manufacturing_operations", "project_id"),
         "sessions": ("o2m", "test_sessions", "project_id"),
+        "readers": ("o2m", "project_readers", "record_id"),
     },
     "campaigns": {
         "pk": "campaign_id",
@@ -102,6 +116,7 @@ SCHEMA = {
         "project_id": ("m2o", "projects"),
         "access": ("o2m", "campaign_access", "campaign_id"),
         "samples": ("o2m", "campaign_samples", "campaign_id"),
+        "readers": ("o2m", "campaign_readers", "record_id"),
     },
     "physical_samples": {
         "pk": "sample_id",
@@ -110,6 +125,7 @@ SCHEMA = {
         "co_owners": ("o2m", "sample_co_owners", "sample_id"),
         "access": ("o2m", "sample_access", "sample_id"),
         "campaigns": ("o2m", "campaign_samples", "sample_id"),
+        "readers": ("o2m", "sample_readers", "record_id"),
     },
     "manufacturing_operations": {
         "pk": "operation_id",
@@ -118,6 +134,8 @@ SCHEMA = {
         "campaign_id": ("m2o", "campaigns"),
         "sample_id": ("m2o", "physical_samples"),
         "access": ("o2m", "operation_access", "operation_id"),
+        "readers": ("o2m", "operation_readers", "record_id"),
+        "open_to_all": ("o2m", "operation_open_to_all", "record_id"),
     },
     "test_sessions": {
         "pk": "session_id",
@@ -126,6 +144,7 @@ SCHEMA = {
         "campaign_id": ("m2o", "campaigns"),
         "sample_id": ("m2o", "physical_samples"),
         "access": ("o2m", "test_access", "session_id"),
+        "readers": ("o2m", "test_readers", "record_id"),
     },
     "project_investigators": {"pk": "_n", "project_id": ("m2o", "projects")},
     "sample_co_owners": {"pk": "_n", "sample_id": ("m2o", "physical_samples")},
@@ -133,7 +152,15 @@ SCHEMA = {
         "pk": "_n",
         "campaign_id": ("m2o", "campaigns"),
         "sample_id": ("m2o", "physical_samples"),
+        "readers": ("o2m", "campaign_sample_readers", "record_id"),
     },
+    "sample_readers": {"pk": "_n", "record_id": ("m2o", "physical_samples")},
+    "operation_readers": {"pk": "_n", "record_id": ("m2o", "manufacturing_operations")},
+    "operation_open_to_all": {"pk": "_n", "record_id": ("m2o", "manufacturing_operations")},
+    "test_readers": {"pk": "_n", "record_id": ("m2o", "test_sessions")},
+    "campaign_readers": {"pk": "_n", "record_id": ("m2o", "campaigns")},
+    "project_readers": {"pk": "_n", "record_id": ("m2o", "projects")},
+    "campaign_sample_readers": {"pk": "_n", "record_id": ("m2o", "campaign_samples")},
     "sample_access": {"pk": "_n", "sample_id": ("m2o", "physical_samples"), "person_id": ("m2o", "people")},
     "operation_access": {"pk": "_n", "operation_id": ("m2o", "manufacturing_operations"), "person_id": ("m2o", "people")},
     "test_access": {"pk": "_n", "session_id": ("m2o", "test_sessions"), "person_id": ("m2o", "people")},
@@ -141,6 +168,7 @@ SCHEMA = {
     "project_access": {"pk": "_n", "project_id": ("m2o", "projects"), "person_id": ("m2o", "people")},
     "sample_data_files": {"pk": "_n", "sample_id": ("m2o", "physical_samples")},
     "operation_data_files": {"pk": "_n", "operation_id": ("m2o", "manufacturing_operations")},
+    "machining_force_analysis": {"pk": "_n", "operation_id": ("m2o", "manufacturing_operations")},
     "session_data_files": {"pk": "_n", "session_id": ("m2o", "test_sessions")},
     "test_sessions_subject": {"pk": "_n", "test_sessions_id": ("m2o", "test_sessions")},
     "project_rollup": {"pk": "_n", "project_id": ("m2o", "projects")},
@@ -228,6 +256,14 @@ class World:
     def grant(self, kind, key, person, role):
         table, fk = ACCESS[kind]
         return self.add(table, **{fk: key, "person_id": f"p_{person}", "role": role})
+
+    def readers(self, table, key, *users):
+        """The materialised readers of a record (what migration 166's functions put in <type>_readers)."""
+        for user in users:
+            self.add(READERS[table], record_id=key, user_id=f"u_{user}")
+
+    def open_to_all(self, key):
+        return self.add("operation_open_to_all", record_id=key)
 
 
 ACCESS = {
@@ -363,6 +399,8 @@ class Directus:
         for op, want in comparators.items():
             if op == "_null":
                 ok = (actual is None) == want
+            elif op == "_nnull":
+                ok = (actual is not None) == want
             elif actual is None:
                 ok = False
             elif op == "_eq":
@@ -374,336 +412,9 @@ class Directus:
         return True
 
 
-def visible(rules, world, users, tables, action="read"):
-    out = {}
-    for user in users:
-        d = Directus(rules, world, user)
-        for table in tables:
-            out[(user, table)] = d.ids(table, action)
-    return out
-
-
 def users_of(world):
     return [p["user_id"] for p in world.t["people"] if p["user_id"]]
 
-
-RECORDS = [
-    "physical_samples",
-    "manufacturing_operations",
-    "test_sessions",
-    "campaigns",
-    "projects",
-]
-CHILDREN = [
-    "sample_data_files", "operation_data_files", "session_data_files", "test_sessions_subject",
-    "project_investigators", "sample_co_owners", "campaign_samples",
-]  # fmt: skip
-
-
-# =================================================================================================
-# A plain reading of spec section 1 (not built from the generated filters)
-# =================================================================================================
-
-
-class Reference:
-    def __init__(self, world, user):
-        self.w, self.u = world, user
-        self.d = Directus({}, world, user)
-
-    def usr(self, person_id):
-        p = self.d.find("people", person_id)
-        return p["user_id"] if p else None
-
-    def me(self, person_id):
-        return person_id is not None and self.usr(person_id) == self.u
-
-    def rows(self, table, **kw):
-        return [r for r in self.w.t[table] if all(r.get(k) == v for k, v in kw.items())]
-
-    def f(self, table, key):
-        return self.d.find(table, key)
-
-    # projects
-    def p_listed(self, p):
-        k = p["project_id"]
-        return (
-            self.me(p["principal_investigator_person"])
-            or any(
-                r["user_id"] == self.u
-                for r in self.rows("project_investigators", project_id=k)
-            )
-            or any(
-                self.me(r["person_id"])
-                for r in self.rows("project_access", project_id=k)
-            )
-        )
-
-    def p_invs(self, p):
-        if p is None:
-            return False
-        k = p["project_id"]
-        return any(
-            r["user_id"] == self.u
-            for r in self.rows("project_investigators", project_id=k)
-        ) or any(
-            self.me(r["person_id"]) and r["role"] == "investigator"
-            for r in self.rows("project_access", project_id=k)
-        )
-
-    def gate_p(self, project_key):
-        p = self.f("projects", project_key)
-        return p is None or not p["restricted"] or self.p_listed(p)
-
-    # campaigns
-    def c_pi(self, c):
-        p = self.f("projects", c["project_id"])
-        return p is not None and self.me(p["principal_investigator_person"])
-
-    def c_listed(self, c):
-        return (
-            self.me(c["owner_person_id"])
-            or any(
-                self.me(r["person_id"])
-                for r in self.rows("campaign_access", campaign_id=c["campaign_id"])
-            )
-            or self.c_pi(c)
-        )
-
-    def gate_c(self, campaign_key):
-        c = self.f("campaigns", campaign_key)
-        return c is None or (
-            (not c["restricted"] or self.c_listed(c)) and self.gate_p(c["project_id"])
-        )
-
-    # samples
-    def camps(self, s):
-        return [
-            self.f("campaigns", r["campaign_id"])
-            for r in self.rows("campaign_samples", sample_id=s["sample_id"])
-        ]
-
-    def s_listed(self, s):
-        k = s["sample_id"]
-        pr = self.f("projects", s["project_id"])
-        return (
-            self.me(s["owner_person_id"])
-            or any(
-                r["user_id"] == self.u
-                for r in self.rows("sample_co_owners", sample_id=k)
-            )
-            or any(
-                self.me(r["person_id"]) for r in self.rows("sample_access", sample_id=k)
-            )
-            or (pr is not None and self.me(pr["principal_investigator_person"]))
-            or any(self.c_pi(c) for c in self.camps(s))
-        )
-
-    def gate_s(self, sample_key):
-        s = self.f("physical_samples", sample_key)
-        return s is None or not s["restricted"] or self.s_listed(s)
-
-    def s_editor(self, s):
-        k = s["sample_id"]
-        return (
-            self.me(s["owner_person_id"])
-            or any(
-                r["user_id"] == self.u
-                for r in self.rows("sample_co_owners", sample_id=k)
-            )
-            or any(
-                self.me(r["person_id"]) and r["role"] == "edit"
-                for r in self.rows("sample_access", sample_id=k)
-            )
-        )
-
-    def s_read(self, s):
-        if s is None:
-            return False
-        if self.s_listed(s):
-            return True
-        if s["restricted"]:
-            return False
-        return (
-            self.p_invs(self.f("projects", s["project_id"]))
-            or any(
-                self.me(c["owner_person_id"]) and self.gate_p(c["project_id"])
-                for c in self.camps(s)
-            )
-            or any(
-                not c["restricted"] and self.p_invs(self.f("projects", c["project_id"]))
-                for c in self.camps(s)
-            )
-        )
-
-    # operations and tests
-    def gates(self, r):
-        s = self.f("physical_samples", r["sample_id"])
-        return (
-            self.gate_s(r["sample_id"])
-            and (s is None or self.gate_p(s["project_id"]))
-            and self.gate_p(r["project_id"])
-            and self.gate_c(r["campaign_id"])
-        )
-
-    def r_listed(self, table, r):
-        k = r[SCHEMA[table]["pk"]]
-        access = {
-            "manufacturing_operations": "operation_access",
-            "test_sessions": "test_access",
-        }[table]
-        fk = SCHEMA[table]["pk"]
-        pr = self.f("projects", r["project_id"])
-        c = self.f("campaigns", r["campaign_id"])
-        return (
-            self.me(r["owner_person_id"])
-            or any(self.me(a["person_id"]) for a in self.rows(access, **{fk: k}))
-            or (pr is not None and self.me(pr["principal_investigator_person"]))
-            or (c is not None and self.c_pi(c))
-        )
-
-    def r_inherited(self, r):
-        c = self.f("campaigns", r["campaign_id"])
-        return (
-            self.s_read(self.f("physical_samples", r["sample_id"]))
-            or self.p_invs(self.f("projects", r["project_id"]))
-            or (c is not None and self.me(c["owner_person_id"]))
-            or (c is not None and self.p_invs(self.f("projects", c["project_id"])))
-        )
-
-    def r_read(self, table, r, amnesty=True):
-        if self.gates(r) and (
-            self.r_listed(table, r) or (not r["restricted"] and self.r_inherited(r))
-        ):
-            return True
-        if amnesty and table == "manufacturing_operations":
-            s = self.f("physical_samples", r["sample_id"])
-            return (
-                r["owner_person_id"] is None and r["project_id"] is None and r["campaign_id"] is None
-                and not r["restricted"] and self.gate_s(r["sample_id"]) and (s is None or self.gate_p(s["project_id"]))
-            )  # fmt: skip
-        return False
-
-    def r_update(self, table, r):
-        if not self.gates(r):
-            return False
-        access = {
-            "manufacturing_operations": "operation_access",
-            "test_sessions": "test_access",
-        }[table]
-        fk, k = SCHEMA[table]["pk"], r[SCHEMA[table]["pk"]]
-        s = self.f("physical_samples", r["sample_id"])
-        return (
-            self.me(r["owner_person_id"])
-            or any(
-                self.me(a["person_id"]) and a["role"] == "edit"
-                for a in self.rows(access, **{fk: k})
-            )
-            or (not r["restricted"] and s is not None and self.s_editor(s))
-        )
-
-    def r_delete(self, r):
-        return self.gates(r) and self.me(r["owner_person_id"])
-
-    # campaigns
-    def c_read(self, c):
-        k = c["campaign_id"]
-        if not self.gate_p(c["project_id"]):
-            return False
-        if self.c_listed(c):
-            return True
-        if c["restricted"]:
-            return False
-        if self.p_invs(self.f("projects", c["project_id"])):
-            return True
-        for r in self.rows("campaign_samples", campaign_id=k):
-            s = self.f("physical_samples", r["sample_id"])
-            if self.s_editor(s) and (self.me(s["owner_person_id"]) or self.s_listed(s)):
-                return True
-        return False
-
-    def c_update(self, c):
-        return self.gate_p(c["project_id"]) and (
-            self.me(c["owner_person_id"])
-            or any(
-                self.me(a["person_id"]) and a["role"] == "edit"
-                for a in self.rows("campaign_access", campaign_id=c["campaign_id"])
-            )
-        )
-
-    def c_delete(self, c):
-        return self.gate_p(c["project_id"]) and self.me(c["owner_person_id"])
-
-    # projects
-    def pj_read(self, p):
-        if self.p_listed(p):
-            return True
-        if p["restricted"]:
-            return False
-        k = p["project_id"]
-        if any(
-            self.me(c["owner_person_id"]) and self.c_read(c)
-            for c in self.rows("campaigns", project_id=k)
-        ):
-            return True
-        if any(
-            self.s_editor(s) and self.s_read(s)
-            for s in self.rows("physical_samples", project_id=k)
-        ):
-            return True
-        for table in ("manufacturing_operations", "test_sessions"):
-            if any(
-                self.me(r["owner_person_id"]) and self.r_read(table, r)
-                for r in self.rows(table, project_id=k)
-            ):
-                return True
-        return False
-
-    def ids(self, table, action):
-        pk = SCHEMA[table]["pk"]
-        out = set()
-        for r in self.w.t[table]:
-            if table == "physical_samples":
-                ok = {
-                    "read": self.s_read(r),
-                    "update": self.s_editor(r),
-                    "delete": self.me(r["owner_person_id"]),
-                }[action]
-            elif table in ("manufacturing_operations", "test_sessions"):
-                ok = {
-                    "read": lambda: self.r_read(table, r),
-                    "update": lambda: self.r_update(table, r),
-                    "delete": lambda: self.r_delete(r),
-                }[action]()
-            elif table == "campaigns":
-                ok = {
-                    "read": self.c_read,
-                    "update": self.c_update,
-                    "delete": self.c_delete,
-                }[action](r)
-            elif table == "projects":
-                ok = (
-                    self.pj_read(r)
-                    if action == "read"
-                    else self.me(r["principal_investigator_person"])
-                )
-            if ok:
-                out.add(r[pk])
-        return out
-
-
-def reference_ids(world, users, tables=RECORDS):
-    return {
-        (u, t, a): Reference(world, u).ids(t, a)
-        for u in users
-        for t in tables
-        for a in ("read", "update", "delete")
-        if not (t == "projects" and a == "update")
-    }
-
-
-# =================================================================================================
-# Worlds
-# =================================================================================================
 
 PEOPLE = [
     "owner",
@@ -722,131 +433,6 @@ def base_people(w):
     for name in PEOPLE:
         w.person(name)
     w.person("nologin", login=False)
-
-
-def random_world(seed, restricted=True, access=True, legacy=True):
-    r = random.Random(seed)
-    w = World()
-    base_people(w)
-    names = PEOPLE + ["nologin"]
-    logins = PEOPLE
-
-    def pick(xs, p_none):
-        return None if r.random() < p_none else r.choice(xs)
-
-    def flag():
-        return restricted and r.random() < 0.3
-
-    projects = [f"P{i}" for i in range(3)]
-    for p in projects:
-        w.project(p, pi=pick(logins, 0.1), restricted=flag())
-        if legacy:
-            for _ in range(r.choice([0, 0, 1, 2])):
-                w.investigator(p, r.choice(logins))
-        if access:
-            for _ in range(r.choice([0, 0, 1, 2])):
-                w.grant(
-                    "project", p, r.choice(names), r.choice(["view", "investigator"])
-                )
-    campaigns = [f"C{i}" for i in range(4)]
-    for c in campaigns:
-        w.campaign(
-            c, project=pick(projects, 0.3), owner=pick(logins, 0.1), restricted=flag()
-        )
-        if access:
-            for _ in range(r.choice([0, 0, 1, 2])):
-                w.grant("campaign", c, r.choice(names), r.choice(["view", "edit"]))
-    samples = [f"S{i}" for i in range(6)]
-    for s in samples:
-        w.sample(
-            s, project=pick(projects, 0.4), owner=pick(logins, 0.1), restricted=flag()
-        )
-        for c in r.sample(campaigns, r.choice([0, 1, 1, 2])):
-            w.in_campaign(c, s)
-        if legacy:
-            for _ in range(r.choice([0, 0, 1, 2])):
-                w.coowner(s, r.choice(logins))
-        if access:
-            for _ in range(r.choice([0, 0, 1, 2])):
-                w.grant("sample", s, r.choice(names), r.choice(["view", "edit"]))
-    for table, keys in (
-        ("manufacturing_operations", [f"O{i}" for i in range(8)]),
-        ("test_sessions", [f"T{i}" for i in range(4)]),
-    ):
-        for k in keys:
-            orphan = table == "manufacturing_operations" and r.random() < 0.3
-            rec = w.record(
-                table, k,
-                sample=pick(samples, 0.15),
-                project=None if orphan else pick(projects, 0.5),
-                campaign=None if orphan else pick(campaigns, 0.5),
-                owner=None if orphan else pick(logins, 0.25),
-                restricted=flag(),
-            )  # fmt: skip
-            if access and r.random() < 0.4:
-                w.grant(
-                    "operation" if table == "manufacturing_operations" else "test",
-                    k,
-                    r.choice(names),
-                    r.choice(["view", "edit"]),
-                )
-            kind = (
-                "operation_data_files"
-                if table == "manufacturing_operations"
-                else "session_data_files"
-            )
-            fk = "operation_id" if table == "manufacturing_operations" else "session_id"
-            w.add(kind, **{fk: k})
-            if table == "test_sessions":
-                w.add("test_sessions_subject", test_sessions_id=k)
-            del rec
-    for s in samples:
-        w.add("sample_data_files", sample_id=s)
-    return w
-
-
-def swap_legacy_for_access(world):
-    """The same people on the same records, as access rows instead of sample_co_owners / project_investigators."""
-    w = World()
-    w.t = {k: [dict(r) for r in v] for k, v in world.t.items()}
-    w.n = world.n
-    for row in w.t.pop("sample_co_owners"):
-        w.t["sample_access"].append(
-            {
-                "sample_id": row["sample_id"],
-                "person_id": "p_" + row["user_id"][2:],
-                "role": "edit",
-                "_n": row["_n"],
-            }
-        )
-    for row in w.t.pop("project_investigators"):
-        w.t["project_access"].append(
-            {
-                "project_id": row["project_id"],
-                "person_id": "p_" + row["user_id"][2:],
-                "role": "investigator",
-                "_n": row["_n"],
-            }
-        )
-    w.t["sample_co_owners"] = []
-    w.t["project_investigators"] = []
-    return w
-
-
-def drop_access_rows(world):
-    w = World()
-    w.t = {
-        k: ([] if k.endswith("_access") else [dict(r) for r in v])
-        for k, v in world.t.items()
-    }
-    return w
-
-
-def match_all(world, rules, users=None):
-    users = users or users_of(world)
-    return visible(
-        rules, world, users, RECORDS + [c for c in CHILDREN if (c, "read") in rules]
-    )
 
 
 # =================================================================================================
@@ -933,10 +519,12 @@ def test_every_leaf_matches_the_signed_in_user_or_the_restricted_flag():
 
     for row in ROWS:
         for key, value in leaves(row["permissions"]):
-            assert (key, value) in {
-                ("user_id", "$CURRENT_USER"),
-                ("restricted", False),
-            }, (
+            allowed = {("user_id", "$CURRENT_USER"), ("restricted", False)}
+            if (
+                row["collection"] == "label_templates"
+            ):  # migration 164: a member edits their own templates
+                allowed.add(("user_created", "$CURRENT_USER"))
+            assert (key, value) in allowed, (
                 row["collection"],
                 row["action"],
                 key,
@@ -955,6 +543,20 @@ def test_access_tables_are_readable_for_own_rows_only_and_never_writable():
     ):
         assert BY_KEY[(table, "read")]["permissions"] == me, table
         assert {a for (c, a) in BY_KEY if c == table} == {"read"}, table
+
+
+def test_readers_tables_show_a_member_their_own_rows_only_and_take_no_writes():
+    """A legal `readers._some` applies the readers table's own rule for the action inside it, so that rule must be
+    trivial (own rows, no relation hop, no recursion into the parent's read rule)."""
+    mine = {"user_id": {"_eq": "$CURRENT_USER"}}
+    for table in (
+        "sample_readers", "operation_readers", "test_readers", "campaign_readers", "project_readers", "campaign_sample_readers",
+    ):  # fmt: skip
+        assert BY_KEY[(table, "read")]["permissions"] == mine, table
+        assert BY_KEY[(table, "read")]["fields"] == "*"
+        assert {a for (c, a) in BY_KEY if c == table} == {"read"}, table
+    # every member may read the open set (it is the amnesty leaf: record_id is not null)
+    assert BY_KEY[("operation_open_to_all", "read")]["permissions"] == {}
 
 
 def test_params_tables_listed_as_unfiltered_are_the_stale_ones():
@@ -1066,8 +668,9 @@ SETS = {
     "via_unl": [{"via": "sample_id", "set": "unl"}],
     "via_and": [{"via": "sample_id", "set": "and"}],
     "via_field": [{"via": "sample_id", "set": "mix"}],
-    "each": [{"each": "campaigns", "items": [{"and": ["campaign_id.owner_person_id.user_id", {"field": "campaign_id.restricted", "eq": False}]}]}],
-    "each_via": [{"via": "sample_id", "set": "each"}],
+    "rd": [{"reader": "bare"}],
+    "rd_via": [{"via": "sample_id", "set": "rd"}],
+    "rd_or_own": [{"set": "rd_via"}, "owner_person_id.user_id"],
 }  # fmt: skip
 R = {"restricted": {"_eq": False}}
 OWN = {"owner_person_id": {"user_id": U}}
@@ -1104,19 +707,31 @@ def test_and_sets_keep_their_and_under_a_via_and_field_leaves_move_behind_it():
     }
 
 
-def test_each_is_an_and_of_paths_through_the_bare_alias_never_a_some_body():
-    own_c = {"campaign_id": {"owner_person_id": {"user_id": U}}}
-    unr_c = {"campaign_id": {"restricted": {"_eq": False}}}
-    # {alias: {_some: {_and: [...]}}} is what the spec first said; Directus 11.17 answers it with a 500
-    assert gen.set_filter(SETS, "each") == {
-        "_and": [{"campaigns": own_c}, {"campaigns": unr_c}]
-    }
-    assert gen.set_filter(SETS, "each_via") == {
-        "_and": [
-            {"sample_id": {"campaigns": own_c}},
-            {"sample_id": {"campaigns": unr_c}},
-        ]
-    }
+def test_the_reader_item_is_the_bare_hop_to_the_readers_alias_with_and_without_a_via():
+    """{"reader": "bare"} is `readers.user_id = $CURRENT_USER` at the row's prefix: never a `_some` (a legal `_some`
+    applies the readers table's own rule for the action, and behind a to-one hop it is not top-level)."""
+    mine = {"readers": {"user_id": U}}
+    assert gen.set_filter(SETS, "rd") == mine
+    assert gen.set_filter(SETS, "rd_via") == {"sample_id": mine}
+    assert gen.set_filter(SETS, "rd_or_own") == {"_or": [{"sample_id": mine}, OWN]}
+    assert "_some" not in json.dumps(gen.set_filter(SETS, "rd_via"))
+
+
+def test_a_reader_item_other_than_bare_is_rejected():
+    for bad in ("some", "", None, ["bare"]):
+        with pytest.raises(gen.RulesError):
+            gen.set_filter({"x": [{"reader": bad}]}, "x")
+    with pytest.raises(gen.RulesError):
+        gen.set_filter({"x": [{"reader": "bare", "via": "a"}]}, "x")
+
+
+def test_the_each_item_and_the_orphan_amnesty_shape_are_gone():
+    """read equivalence moved to SQL; `each` only existed for the old read-only sets, the amnesty is operation_open_to_all."""
+    with pytest.raises(gen.RulesError):
+        gen.set_filter({"x": [{"each": "a", "items": ["b.user_id"]}]}, "x")
+    assert "orphan_amnesty" not in DOC
+    assert not hasattr(gen, "amnesty_filter") and not hasattr(gen, "with_amnesty")
+    assert "each" not in json.dumps(DOC["sets"])
 
 
 def test_bad_items_are_rejected():
@@ -1124,7 +739,6 @@ def test_bad_items_are_rejected():
         {"x": [{"field": "a"}]},
         {"x": [{"path": "a.b"}]},
         {"x": [{"path": "a.b", "at": "z", "where": {}}]},
-        {"x": [{"each": "a", "items": []}]},
         {"x": [{"unless_restricted": []}]},
         {"x": [{"nonsense": 1}]},
         {"x": {"xor": ["a.b"]}},
@@ -1153,7 +767,7 @@ def _walk_relations(node, root_depth=0, problems=None, path=()):
             if root_depth > 0:
                 problems.append((path, key, "logical operator under a relation key"))
             _walk_relations(value, root_depth, problems, path)
-        elif key in ("_eq", "_null", "_in"):
+        elif key in ("_eq", "_null", "_in", "_nnull"):
             continue
         elif key == "_some":
             if root_depth != 1:
@@ -1174,7 +788,7 @@ def _walk_relations(node, root_depth=0, problems=None, path=()):
 
 def test_no_generated_filter_has_an_illegal_some_or_an_operator_under_a_relation_key():
     """`resolve()` only checks that relations exist, not that Directus accepts the filter shape, so this
-    walks every generated filter (every row, the amnesty clause, the hook and endpoint rules)."""
+    walks every generated filter (every row, the hook and endpoint rules)."""
     bad = {k: p for k, r in BY_KEY.items() if (p := _walk_relations(r["permissions"]))}
     assert not bad, bad
     hook = gen.hook_rules(DOC)
@@ -1201,26 +815,165 @@ def test_the_shape_walker_catches_what_it_is_for():
     )
 
 
+def _leaves(node):
+    if isinstance(node, dict):
+        if set(node) <= COMPARATORS:
+            return 1
+        return sum(_leaves(v) for v in node.values())
+    if isinstance(node, list):
+        return sum(_leaves(v) for v in node)
+    return 0
+
+
 def test_filters_have_the_documented_sizes():
-    """Not a limit: a tripwire so a change that doubles a filter is noticed (the performance gate of the
-    plan watches the real cost). Counts leaves of the ruled operation, test, sample, campaign and project reads."""
+    """A tripwire (the performance gate measures the real cost): the five record types read through ONE membership test
+    (two leaves for operations with the amnesty), and the 76-leaf read filter of the first attempt is gone."""
+    sizes = {c: _leaves(BY_KEY[(c, "read")]["permissions"]) for c in RECORDS}
+    assert sizes == {
+        "physical_samples": 1,
+        "manufacturing_operations": 2,
+        "test_sessions": 1,
+        "campaigns": 1,
+        "projects": 1,
+    }
+    assert _leaves(BY_KEY[("campaign_samples", "read")]["permissions"]) == 1
+    for (collection, action), row in BY_KEY.items():
+        if action == "read" and collection in DOC["rules"]:
+            assert (
+                _leaves(row["permissions"]) <= 3 or collection == "project_rollup"
+            ), collection
+        if action in ("update", "delete") and collection in DOC["rules"]:
+            assert _leaves(row["permissions"]) < 20, (collection, action)
 
-    def count(node):
-        if isinstance(node, dict):
-            if set(node) <= COMPARATORS:
-                return 1
-            return sum(count(v) for v in node.values())
-        if isinstance(node, list):
-            return sum(count(v) for v in node)
-        return 0
 
-    sizes = {c: count(BY_KEY[(c, "read")]["permissions"]) for c in RECORDS}
-    assert sizes["manufacturing_operations"] < 90 and sizes["test_sessions"] < 70
+def test_read_rules_are_the_membership_test_a_one_hop_child_rule_or_the_rollup():
+    some = {"readers": {"_some": {"user_id": U}}}
+    for collection in RECORDS + ["campaign_samples"]:
+        got = RULES[(collection, "read")]
+        want = (
+            {"_or": [some, {"open_to_all": {"_some": {"record_id": {"_nnull": True}}}}]}
+            if collection == "manufacturing_operations"
+            else some
+        )
+        assert got == want, collection
+    # a child of a record: one bare to-one hop to the parent's readers, and nothing else
+    for collection, fk in (
+        ("sample_co_owners", "sample_id"), ("sample_stock_provenance", "sample_id"), ("sample_data_files", "sample_id"),
+        ("operation_data_files", "operation_id"), ("machining_force_analysis", "operation_id"),
+        ("fast_run_data", "operation_id"), ("operation_additional_operators", "operation_id"),
+        ("session_data_files", "session_id"), ("session_additional_operators", "session_id"),
+        ("test_sessions_subject", "test_sessions_id"), ("project_investigators", "project_id"),
+    ):  # fmt: skip
+        assert RULES[(collection, "read")] == {
+            fk: {"readers": {"user_id": U}}
+        }, collection
+    # the one two-hop rule left: an edge is readable by readers of its child or its parent
+    assert RULES[("sample_genealogy", "read")] == {
+        "_or": [
+            {"child_sample_id": {"readers": {"user_id": U}}},
+            {"parent_sample_id": {"readers": {"user_id": U}}},
+        ]
+    }
+    # the rollup is not read through project_id.readers (a wider audience): the PI, investigators on unrestricted rows
+    rollup = json.dumps(RULES[("project_rollup", "read")])
     assert (
-        sizes["physical_samples"] < 30
-        and sizes["campaigns"] < 25
-        and sizes["projects"] < 20
+        "readers" not in rollup
+        and "principal_investigator_person" in rollup
+        and '"restricted"' in rollup
     )
+
+
+def test_no_read_rule_of_a_record_type_or_child_contains_a_gate_leaf():
+    """The gates live in SQL now: no read filter names the restricted flag, a campaign, a project or an access list
+    (project_rollup keeps its set-based rule)."""
+    for (collection, action), row in BY_KEY.items():
+        if (
+            action != "read"
+            or collection not in DOC["rules"]
+            or collection == "project_rollup"
+        ):
+            continue
+        text = json.dumps(row["permissions"])
+        for word in (
+            "restricted",
+            "access",
+            "co_owners",
+            "secondary_investigators",
+            "owner_person_id",
+            "campaign_id",
+            'project_id": {"prin',
+        ):
+            assert word not in text.replace("child_sample_id", "").replace(
+                "parent_sample_id", ""
+            ), (collection, word)
+
+
+def test_the_removed_sets_are_gone_and_nothing_references_them():
+    removed = {
+        "sample.inherited", "sample.read", "sample.listed", "sample.pass", "record.listed", "record.inherited", "record.read",
+        "campaign.inherited", "campaign.read", "campaign.listed", "campaign.pass", "project.inherited", "project.read",
+        "project.listed", "project.pass", "link.sample.read", "genealogy.read", "operation.read", "session.read",
+        "subject.read", "investigators.read", "campaign_samples.read", "has.project_ok", "has.campaign_ok", "gates.sample",
+        "record.gates", "amnesty.gates",
+    }  # fmt: skip
+    assert not removed & set(DOC["sets"])
+    text = json.dumps(DOC["rules"]) + json.dumps(DOC["sets"])
+    for name in removed:
+        assert f'"{name}"' not in text, name
+
+
+def test_read_kinds_are_validated_and_only_for_read():
+    for bad in (
+        {"readers": "all"},
+        {"open_to_all": True},
+        {"readers": "some", "extra": 1},
+        {"readers": "some", "open_to_all": False},
+    ):
+        with pytest.raises(gen.RulesError):
+            gen.read_kind_filter("c", bad)
+    doc = {
+        **DOC,
+        "rules": {
+            **DOC["rules"],
+            "campaigns": {
+                "create": "any",
+                "read": {"readers": "some"},
+                "update": {"readers": "some"},
+            },
+        },
+    }
+    with pytest.raises(gen.RulesError, match="read only"):
+        gen.rule_filter(doc, "campaigns", "update")
+    # a guard or owner guard cannot be built from a read kind
+    with pytest.raises(gen.RulesError):
+        gen.hook_rules(
+            {
+                **DOC,
+                "guards": {
+                    "campaign_samples": [
+                        {
+                            "field": "campaign_id",
+                            "parent": "campaigns",
+                            "key": "campaign_id",
+                            "rule": "read",
+                        }
+                    ]
+                },
+            }
+        )
+
+
+def test_the_readers_alias_is_never_under_a_some_in_a_child_rule_and_a_some_only_at_the_root():
+    """`readers: {_some: ...}` only at the root of a collection (its own top-level alias); everywhere else, and in every
+    child rule, the hop is bare (the readers alias is behind a to-one relation there, so a `_some` would be illegal)."""
+    for (collection, action), row in BY_KEY.items():
+        text = json.dumps(row["permissions"])
+        if collection in RECORDS + ["campaign_samples"] and action == "read":
+            assert text.startswith('{"readers": {"_some"') or text.startswith(
+                '{"_or": [{"readers": {"_some"'
+            ), collection
+            continue
+        assert '"readers": {"_some"' not in text, (collection, action)
 
 
 @pytest.mark.parametrize("collection,action,paths", list(_rule_paths()))
@@ -1236,36 +989,21 @@ def test_every_path_ends_at_a_user_column(collection, action, paths):
 
 
 def test_guards_cover_every_junction_that_grants_visibility():
-    """Any junction a read path goes through must be guarded (create is never filtered). The *_access
-    tables are the exception by design: Lab Member has no write grant on them, the endpoint writes them."""
-    grants = set()
-    for _c, _a, paths in _rule_paths():
-        for path in paths:
-            if "co_owners" in path:
-                grants.add("sample_co_owners")
-            if "secondary_investigators" in path:
-                grants.add("project_investigators")
-            parts = [p for p in path.split(".") if p != "_some"]
-            # test_sessions.sample_id is derived from the first sample of the test_sessions_subject
-            # junction (migration 139), so a read path through it is a junction grant too
-            if _c == "test_sessions" and parts[0] == "sample_id":
-                grants.add("test_sessions_subject")
-            for a, b in zip(parts, parts[1:]):
-                if (a, b) in (("campaigns", "campaign_id"), ("samples", "sample_id")):
-                    grants.add("campaign_samples")
-    assert grants == set(DOC["guards"])
+    """Any junction whose rows feed d1_private.readers_of_* must be guarded (create is never filtered): co-owners, the
+    legacy investigators, the campaign junction, and the test subjects (test_sessions.sample_id is derived from the first
+    subject, migration 139). The *_access and readers tables are the exception by design: Lab Member has no write grant
+    on them, the endpoint and the trigger functions write them."""
+    assert set(DOC["guards"]) == {
+        "sample_co_owners", "project_investigators", "campaign_samples", "test_sessions_subject",
+    }  # fmt: skip
+    for junction in DOC["guards"]:
+        assert "create" in DOC["rules"][junction], junction
     for table in (
-        "sample_access",
-        "operation_access",
-        "test_access",
-        "campaign_access",
-        "project_access",
-    ):
-        assert not {a for (c, a) in BY_KEY if c == table} & {
-            "create",
-            "update",
-            "delete",
-        }
+        "sample_access", "operation_access", "test_access", "campaign_access", "project_access",
+        "sample_readers", "operation_readers", "test_readers", "campaign_readers", "project_readers",
+        "campaign_sample_readers", "operation_open_to_all",
+    ):  # fmt: skip
+        assert {a for (c, a) in BY_KEY if c == table} == {"read"}, table
     rules = gen.hook_rules(DOC)["guards"]
     assert set(rules) == set(DOC["guards"])
     assert [c["parent"] for c in rules["campaign_samples"]] == [
@@ -1414,519 +1152,234 @@ def test_record_rules_carry_the_read_and_manage_filters_of_the_five_record_types
 
 
 # =================================================================================================
-# Amnesty
+# Update, delete and manage: the reader term AND the editor or owner test (the evaluator, with readers rows given by hand)
 # =================================================================================================
 
+READER_TERM = {"readers": {"user_id": U}}
 
-def test_amnesty_filter_takes_the_extra_gate_and_the_restricted_test():
-    spec = {"null": ["a", "b"], "restricted_false": True, "also": "u"}
-    assert gen.amnesty_filter(spec, SETS) == {
-        "_and": [{"a": {"_null": True}}, {"b": {"_null": True}}, R, OWN]
+
+def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_test():
+    """Operations, tests and campaigns: update = reader AND (owner, Can edit, or, unless restricted, an editor of the
+    sample); delete (= the manage rule) = reader AND owner. A role test is an AND of two bare paths through the same
+    `access` alias (Directus reads a relation key by its first key only), never a sibling key."""
+    for collection in ("manufacturing_operations", "test_sessions", "campaigns"):
+        for action in ("update", "delete"):
+            f = RULES[(collection, action)]
+            assert f["_and"][0] == READER_TERM, (collection, action)
+            assert "_some" not in json.dumps(f), (collection, action)
+        assert RULES[(collection, "delete")] == {"_and": [READER_TERM, OWN]}, collection
+    edit_role = [
+        {"access": {"person_id": {"user_id": U}}},
+        {"access": {"role": {"_in": ["edit"]}}},
+    ]
+    assert RULES[("campaigns", "update")] == {
+        "_and": [READER_TERM, {"_or": [OWN, {"_and": edit_role}]}]
     }
-    assert gen.amnesty_filter({"null": ["a"]}) == {"a": {"_null": True}}
-    assert gen.with_amnesty({"_or": [OWN, R]}, {"null": ["a"]}) == {
-        "_or": [OWN, R, {"a": {"_null": True}}]
-    }
-    for bad in ({"null": []}, {"null": ["a"], "x": 1}):
-        with pytest.raises(gen.RulesError):
-            gen.amnesty_filter(bad, SETS)
-    with pytest.raises(gen.RulesError):
-        gen.amnesty_filter({"null": ["a"], "also": "u"})
+    assert RULES[("manufacturing_operations", "update")]["_and"][1]["_or"][:2] == [
+        OWN,
+        {"_and": edit_role},
+    ]
+    # samples and projects need no reader term: the editors and the PI are on the list, hence readers
+    assert RULES[("physical_samples", "delete")] == OWN
+    assert (
+        RULES[("projects", "update")]
+        == RULES[("projects", "delete")]
+        == {"principal_investigator_person": {"user_id": U}}
+    )
+    # the manage rule the endpoint ships is the delete rule
+    for collection, rec in gen.record_rules(DOC)["records"].items():
+        assert rec["manage"] == RULES[(collection, "delete")], collection
 
 
-def test_orphan_amnesty_opens_read_only_for_fully_unowned_unrestricted_operations():
-    """~7254 pre-ADR-0011 FAST runs have no owner, operator, project or campaign and never will
-    (migration 20261009000141): admin-only visibility helps nobody, so read is opened to every Lab Member
-    for exactly that shape of record, unless the record or what it hangs on is restricted. Update and
-    delete still need a real owner; test_sessions and the children get no amnesty."""
+def _op_world():
+    """S (owner owner, co-owner coowner), operation O on S (owned by opOwner, access: viewer view, editor edit)."""
     w = World()
     base_people(w)
-    w.project("P", pi="pi")
-    w.sample("S", project="P", owner="owner")
-    w.sample("SR", project="P", owner="owner", restricted=True)
-    w.project("PR", pi="pi", restricted=True)
-    w.sample("SP", project="PR", owner="owner")
-    w.op("free")
-    w.op("free_s", sample="S")
-    w.op("restricted", restricted=True)
-    w.op("under_restricted_sample", sample="SR")
-    w.op("under_restricted_project_sample", sample="SP")
-    w.test("t_free")
-    w.add("operation_data_files", operation_id="free")
-    d = Directus(RULES, w, "u_stranger")
-    assert d.ids("manufacturing_operations", "read") == {"free", "free_s"}
-    assert d.ids("manufacturing_operations", "update") == set()
-    assert d.ids("manufacturing_operations", "delete") == set()
-    assert d.ids("test_sessions", "read") == set()
-    assert d.ids("operation_data_files", "read") == set(), "children get no amnesty"
-    assert gen.amnesty_filter(
-        DOC["orphan_amnesty"]["manufacturing_operations"], DOC["sets"]
-    ) == {
-        "_and": [
-            {"owner_person_id": {"_null": True}},
-            {"project_id": {"_null": True}},
-            {"campaign_id": {"_null": True}},
-            R,
-            *gen.combine("_and", [gen.set_filter(DOC["sets"], "amnesty.gates")])[
-                "_and"
-            ],
-        ]
-    }
+    w.person("opOwner")
+    w.sample("S", owner="owner")
+    w.coowner("S", "coowner")
+    w.op("O", sample="S", owner="opOwner")
+    w.grant("operation", "O", "viewer", "view")
+    w.grant("operation", "O", "editor", "edit")
+    w.add("machining_force_analysis", operation_id="O")
+    return w
 
 
-# =================================================================================================
-# Equivalence with main, restricted never widens, legacy = access, the cascade table
-# =================================================================================================
-
-SEEDS = range(40)
+def _can(w, user, table, action):
+    d = Directus(RULES, w, user)
+    return {r[SCHEMA[table]["pk"]] for r in w.t[table] if d.can(table, action, r)}
 
 
-def test_with_nothing_restricted_every_user_sees_exactly_todays_ids():
-    """(i) The new filters give today's visible ids for every fixture user when nothing is restricted and no
-    access rows exist. Intended difference: sample_co_owners update/delete (owner only, checked below)."""
-    differs = {("sample_co_owners", "update"), ("sample_co_owners", "delete")}
-    tables = RECORDS + [c for c in CHILDREN if (c, "read") in MAIN]
-    for seed in SEEDS:
-        w = random_world(seed, restricted=False, access=False)
-        for user in users_of(w):
-            new, old = Directus(RULES, w, user), Directus(MAIN, w, user)
-            for table in tables:
-                for action in ("read", "update", "delete"):
-                    if (table, action) in differs or (table, action) not in MAIN:
-                        continue
-                    assert new.ids(table, action) == old.ids(table, action), (
-                        seed,
-                        user,
-                        table,
-                        action,
-                    )
+def test_a_view_person_reads_but_cannot_update_and_an_edit_person_can_when_both_are_readers():
+    w = _op_world()
+    w.readers(
+        "manufacturing_operations",
+        "O",
+        "opOwner",
+        "viewer",
+        "editor",
+        "owner",
+        "coowner",
+    )
+    assert _can(w, "u_viewer", "manufacturing_operations", "update") == set()
+    assert _can(w, "u_editor", "manufacturing_operations", "update") == {"O"}
+    assert _can(w, "u_opOwner", "manufacturing_operations", "update") == {"O"}
+    assert _can(w, "u_opOwner", "manufacturing_operations", "delete") == {"O"}
+    assert _can(w, "u_editor", "manufacturing_operations", "delete") == set()
+    # an editor of the unrestricted operation's sample may update it (not delete)
+    assert _can(w, "u_owner", "manufacturing_operations", "update") == {"O"}
+    assert _can(w, "u_coowner", "manufacturing_operations", "update") == {"O"}
+    assert _can(w, "u_owner", "manufacturing_operations", "delete") == set()
+    assert _can(w, "u_stranger", "manufacturing_operations", "update") == set()
+
+
+def test_update_and_delete_need_the_reader_term_so_an_owner_who_is_hidden_the_record_changes_nothing():
+    """The shielding of ruling 19 (an operation under a sample hidden by a restricted campaign) is in the readers table,
+    not in the filter: the operation's own owner is not a reader, so they cannot update or delete it either."""
+    w = _op_world()
+    w.readers(
+        "manufacturing_operations", "O", "owner"
+    )  # opOwner, editor and the rest are not readers
+    for user in ("u_opOwner", "u_editor", "u_coowner"):
+        assert _can(w, user, "manufacturing_operations", "update") == set(), user
+        assert _can(w, user, "manufacturing_operations", "delete") == set(), user
+        assert _can(w, user, "machining_force_analysis", "update") == set(), user
+    assert _can(w, "u_owner", "manufacturing_operations", "update") == {"O"}
+
+
+def test_a_restricted_operation_is_not_updated_through_the_samples_editors():
+    w = _op_world()
+    w.t["manufacturing_operations"][0]["restricted"] = True
+    w.readers(
+        "manufacturing_operations",
+        "O",
+        "opOwner",
+        "viewer",
+        "editor",
+        "owner",
+        "coowner",
+    )
+    assert _can(w, "u_owner", "manufacturing_operations", "update") == set()
+    assert _can(w, "u_coowner", "manufacturing_operations", "update") == set()
+    assert _can(w, "u_opOwner", "manufacturing_operations", "update") == {"O"}
+    assert _can(w, "u_editor", "manufacturing_operations", "update") == {"O"}
+
+
+def test_children_follow_their_parents_update_rule_through_one_bare_hop():
+    w = _op_world()
+    w.readers("manufacturing_operations", "O", "opOwner", "viewer", "editor", "owner")
+    only = {w.t["machining_force_analysis"][0]["_n"]}
+    assert _can(w, "u_editor", "machining_force_analysis", "update") == only
+    assert _can(w, "u_viewer", "machining_force_analysis", "update") == set()
+    # read: a reader of the operation reads the analysis (one bare hop), an owner who is not a reader does not
+    assert _can(w, "u_viewer", "machining_force_analysis", "read") == only
+    assert _can(w, "u_coowner", "machining_force_analysis", "read") == set()
+    assert _can(w, "u_stranger", "machining_force_analysis", "read") == set()
+
+
+def test_campaigns_update_is_reader_and_owner_or_edit_and_delete_is_reader_and_owner():
+    w = World()
+    base_people(w)
+    w.person("campOwner")
+    w.campaign("C", owner="campOwner")
+    w.grant("campaign", "C", "editor", "edit")
+    w.grant("campaign", "C", "viewer", "view")
+    w.readers("campaigns", "C", "campOwner", "editor", "viewer")
+    assert _can(w, "u_campOwner", "campaigns", "update") == {"C"}
+    assert _can(w, "u_campOwner", "campaigns", "delete") == {"C"}
+    assert _can(w, "u_editor", "campaigns", "update") == {"C"}
+    assert _can(w, "u_editor", "campaigns", "delete") == set()
+    assert _can(w, "u_viewer", "campaigns", "update") == set()
+    # the project gate lives in the readers table: an owner the project hides the campaign from loses the write too
+    w2 = World()
+    base_people(w2)
+    w2.person("campOwner")
+    w2.campaign("C", owner="campOwner")
+    assert _can(w2, "u_campOwner", "campaigns", "update") == set()
+    assert _can(w2, "u_campOwner", "campaigns", "delete") == set()
 
 
 def test_sample_co_owners_update_and_delete_are_owner_only():
     w = World()
     base_people(w)
     w.sample("S", owner="owner")
-    w.coowner("S", "coowner")
-    w.coowner("S", "viewer")
-    w.sample("S2", owner="viewer")
-    row = w.add("sample_co_owners", sample_id="S2", user_id="u_stranger")
-    for table in ("sample_co_owners",):
+    row = w.coowner("S", "coowner")
+    w.readers("physical_samples", "S", "owner", "coowner")
+    for action in ("update", "delete"):
+        assert _can(w, "u_owner", "sample_co_owners", action) == {row["_n"]}
+        assert (
+            _can(w, "u_coowner", "sample_co_owners", action) == set()
+        ), "a co-owner can no longer change or remove co-owners"
+        assert _can(w, "u_stranger", "sample_co_owners", action) == set()
+    old = Directus(MAIN, w, "u_coowner")
+    assert any(
+        old.can("sample_co_owners", "update", r) for r in w.t["sample_co_owners"]
+    ), "today a co-owner could"
+
+
+def test_update_and_delete_ids_are_a_subset_of_read_ids_for_operations():
+    """Structural, because update and delete contain the reader term and read is the readers table or the amnesty."""
+    w = _op_world()
+    w.readers("manufacturing_operations", "O", "opOwner", "viewer", "editor", "owner")
+    w.op(
+        "OF"
+    )  # an ownerless run in operation_open_to_all: everyone reads it, nobody updates or deletes it
+    w.open_to_all("OF")
+    for user in users_of(w):
+        read = _can(w, user, "manufacturing_operations", "read")
         for action in ("update", "delete"):
-            ids = lambda user: {  # noqa: E731
-                r["_n"]
-                for r in w.t[table]
-                if Directus(RULES, w, user).can(table, action, r)
-            }
-            assert ids("u_owner") == {
-                r["_n"] for r in w.t[table] if r["sample_id"] == "S"
-            }
-            assert (
-                ids("u_coowner") == set()
-            ), "a co-owner can no longer change or remove co-owners"
-            assert ids("u_viewer") == {row["_n"]}
-            assert ids("u_stranger") == set()
-            old = Directus(MAIN, w, "u_coowner")
-            assert any(
-                old.can(table, action, r) for r in w.t[table]
-            ), "today a co-owner could"
+            assert _can(w, user, "manufacturing_operations", action) <= read, (
+                user,
+                action,
+            )
+    assert _can(w, "u_stranger", "manufacturing_operations", "read") == {"OF"}
+    assert _can(w, "u_stranger", "manufacturing_operations", "update") == set()
 
 
-def test_restricted_never_widens_update_and_delete_are_subsets_of_read():
-    """(ii) over random worlds with restricted records and access rows, and: switching a record to restricted
-    never makes anything visible to anyone who could not see it before."""
-    for seed in SEEDS:
-        w = random_world(seed)
-        for user in users_of(w):
-            d = Directus(RULES, w, user)
-            for table in RECORDS:
-                read = d.ids(table, "read")
-                for action in ("update", "delete"):
-                    assert d.ids(table, action) <= read, (seed, user, table, action)
-            for table in (
-                "operation_data_files",
-                "session_data_files",
-                "sample_data_files",
-            ):
-                if (table, "update") in RULES and (table, "read") in RULES:
-                    assert d.ids(table, "update") <= d.ids(table, "read"), (
-                        seed,
-                        user,
-                        table,
-                    )
+def test_the_open_to_all_leaf_is_a_some_on_the_open_set_and_children_do_not_inherit_it():
+    w = _op_world()
+    w.op("OF")
+    w.open_to_all("OF")
+    w.add("machining_force_analysis", operation_id="OF")
+    assert "OF" in _can(w, "u_stranger", "manufacturing_operations", "read")
+    assert (
+        _can(w, "u_stranger", "machining_force_analysis", "read") == set()
+    ), "children do not inherit the amnesty"
 
 
-def test_switching_one_record_to_restricted_only_ever_removes_visibility():
-    for seed in range(15):
-        w = random_world(seed, restricted=False)
-        before = {k: v for k, v in match_all(w, RULES).items()}
-        flips = [(t, r) for t in RECORDS for r in w.t[t]]
-        for table, row in random.Random(seed).sample(flips, 6):
-            row["restricted"] = True
-            after = match_all(w, RULES)
-            for key in before:
-                assert after[key] <= before[key], (
-                    seed,
-                    table,
-                    row[SCHEMA[table]["pk"]],
-                    key,
-                )
-            row["restricted"] = False
+def test_a_readers_row_of_another_user_does_not_make_the_caller_a_reader():
+    """The membership test is `user_id = $CURRENT_USER` on the same joined row, not 'the record has readers'."""
+    w = _op_world()
+    w.readers("manufacturing_operations", "O", "viewer")
+    assert _can(w, "u_viewer", "manufacturing_operations", "read") == {"O"}
+    assert _can(w, "u_stranger", "manufacturing_operations", "read") == set()
+    assert _can(w, "u_editor", "manufacturing_operations", "update") == set()
 
 
-def test_the_generated_rules_equal_a_plain_reading_of_the_spec_on_random_worlds():
-    """The independent check: spec section 1 written as plain Python (class Reference) against the generated
-    filters run through the Directus model, for read, update and delete of the five record types."""
-    for seed in SEEDS:
-        w = random_world(seed)
-        users = users_of(w)
-        ref = reference_ids(w, users)
-        for user in users:
-            d = Directus(RULES, w, user)
-            for table in RECORDS:
-                for action in ("read", "update", "delete"):
-                    if table == "projects" and action == "update":
-                        action = "delete"  # the same filter: the PI
-                    assert d.ids(table, action) == ref[(user, table, action)], (
-                        seed,
-                        user,
-                        table,
-                        action,
-                    )
-
-
-def test_children_follow_their_parent():
-    for seed in range(15):
-        w = random_world(seed)
-        for user in users_of(w):
-            d = Directus(RULES, w, user)
-            ops = Reference(w, user).ids("manufacturing_operations", "read")
-            # the children are not given the orphan amnesty (the rule is per collection): only the gates and own rule
-            ref = Reference(w, user)
-            plain_ops = {
-                r["operation_id"]
-                for r in w.t["manufacturing_operations"]
-                if ref.r_read("manufacturing_operations", r, amnesty=False)
-            }
-            assert ops >= plain_ops
-            files = {r["_n"]: r["operation_id"] for r in w.t["operation_data_files"]}
-            got = {
-                files[r["_n"]]
-                for r in w.t["operation_data_files"]
-                if d.can("operation_data_files", "read", r)
-            }
-            assert got == plain_ops, (seed, user)
-            tests = ref.ids("test_sessions", "read")
-            subj = {
-                r["_n"]: r["test_sessions_id"] for r in w.t["test_sessions_subject"]
-            }
-            got = {
-                subj[r["_n"]]
-                for r in w.t["test_sessions_subject"]
-                if d.can("test_sessions_subject", "read", r)
-            }
-            assert got == tests, (seed, user)
-            samples = ref.ids("physical_samples", "read")
-            got = {
-                r["sample_id"]
-                for r in w.t["sample_data_files"]
-                if d.can("sample_data_files", "read", r)
-            }
-            assert got == samples & {
-                r["sample_id"] for r in w.t["sample_data_files"]
-            }, (seed, user)
-            projects = ref.ids("projects", "read")
-            got = {
-                r["project_id"]
-                for r in w.t["project_investigators"]
-                if d.can("project_investigators", "read", r)
-            }
-            # the bare (via) form has no junction rule inside it, so for an unrestricted project it can be a little
-            # wider than the project page (as it is today); a restricted project's rows are the list's alone
-            open_projects = {
-                r["project_id"] for r in w.t["projects"] if not r["restricted"]
-            }
-            assert got - open_projects <= projects, (seed, user)
-
-
-def test_a_legacy_co_owner_and_an_access_edit_person_see_exactly_the_same_ids_everywhere():
-    """(iii) Including the project page (decision 17: the old tables and the new ones are a union)."""
-    for seed in SEEDS:
-        w = random_world(seed, legacy=True)
-        swapped = swap_legacy_for_access(w)
-        users = users_of(w)
-        legacy_tables = RECORDS + [
-            "sample_data_files",
-            "operation_data_files",
-            "session_data_files",
-            "test_sessions_subject",
-        ]
-        for action in ("read", "update", "delete"):
-            a = visible(RULES, w, users, legacy_tables, action)
-            b = visible(RULES, swapped, users, legacy_tables, action)
-            for key in a:
-                if key[1] == "projects" and action == "update":
-                    continue
-                assert a[key] == b[key], (seed, key, action)
-
-
-def test_a_view_person_reads_but_cannot_update_and_an_edit_person_can():
+def test_campaign_samples_write_needs_the_junctions_own_reader_term():
+    """The campaign's owner or the sample's editors may change a junction row, but never one they cannot read (update and
+    delete are never wider than read): the owner of a campaign that a restricted project hides from them, or that holds a
+    restricted sample, is not a reader of the junction row (campaign_sample_readers), so the bare hop refuses them."""
+    for action in ("update", "delete"):
+        f = RULES[("campaign_samples", action)]
+        assert f["_and"][0] == READER_TERM, action
+        assert "_some" not in json.dumps(f), action
     w = World()
     base_people(w)
+    w.person("campOwner")
+    w.campaign("C", owner="campOwner")
     w.sample("S", owner="owner")
-    w.grant("sample", "S", "viewer", "view")
-    w.grant("sample", "S", "editor", "edit")
-    w.op("O", sample="S", owner="owner")
-    w.test("T", sample="S", owner="owner")
-    w.campaign("C", owner="campaignOwner")
-    w.grant("campaign", "C", "viewer", "view")
-    w.grant("campaign", "C", "editor", "edit")
-    w.op("O2", owner="owner")
-    w.grant("operation", "O2", "viewer", "view")
-    w.grant("operation", "O2", "editor", "edit")
-    for user, can_read, can_edit in (
-        ("viewer", True, False),
-        ("editor", True, True),
-        ("stranger", False, False),
-    ):
-        d = Directus(RULES, w, f"u_{user}")
-        assert ("S" in d.ids("physical_samples", "read")) is can_read
-        assert ("S" in d.ids("physical_samples", "update")) is can_edit
-        assert "S" not in d.ids("physical_samples", "delete")
-        # a person who can edit the sample edits its unrestricted operations and tests; a viewer does not
-        assert ("O" in d.ids("manufacturing_operations", "update")) is can_edit
-        assert ("T" in d.ids("test_sessions", "update")) is can_edit
-        assert ("C" in d.ids("campaigns", "read")) is can_read
-        assert ("C" in d.ids("campaigns", "update")) is can_edit
-        assert "C" not in d.ids("campaigns", "delete")
-        assert ("O2" in d.ids("manufacturing_operations", "read")) is can_read
-        assert ("O2" in d.ids("manufacturing_operations", "update")) is can_edit
-        assert "O2" not in d.ids("manufacturing_operations", "delete")
-
-
-def test_pi_and_investigator_access_is_read_only():
-    """Owner decision 4 (2026-10-07): PI and investigator access through a project is read-only."""
-    w = World()
-    base_people(w)
-    w.project("P", pi="pi")
-    w.investigator("P", "inv")
-    w.grant("project", "P", "inv2", "investigator")
-    w.campaign("C", project="P", owner="campaignOwner")
-    w.sample("S", project="P", owner="owner")
-    w.op("O", sample="S", project="P", campaign="C", owner="owner")
-    w.test("T", sample="S", project="P", owner="owner")
-    for user in ("pi", "inv", "inv2"):
-        d = Directus(RULES, w, f"u_{user}")
-        assert "S" in d.ids("physical_samples", "read")
-        assert "C" in d.ids("campaigns", "read")
-        assert {"O"} == d.ids("manufacturing_operations", "read")
-        assert {"T"} == d.ids("test_sessions", "read")
-        for table in (
-            "physical_samples",
-            "manufacturing_operations",
-            "test_sessions",
-            "campaigns",
-        ):
-            for action in ("update", "delete"):
-                assert d.ids(table, action) == set(), (user, table, action)
-        assert ("P" in d.ids("projects", "update")) is (user == "pi")
-        assert ("P" in d.ids("projects", "delete")) is (user == "pi")
-    d = Directus(RULES, w, "u_stranger")
-    assert all(not d.ids(t, "read") for t in RECORDS)
-
-
-def test_the_cascade_of_spec_section_1_case_by_case():
-    """(iv) restricted project, restricted campaign, a sample in two campaigns, an orphan FAST operation."""
-    w = World()
-    base_people(w)
-    w.project("P", pi="pi", restricted=True)
-    w.investigator("P", "inv")
-    w.grant("project", "P", "viewer", "view")
-    w.campaign("C", project="P", owner="campaignOwner")
-    w.sample("S", project="P", owner="owner")
-    w.in_campaign("C", "S")
-    w.op("O", sample="S", project="P", owner="owner")
-    w.test("T", sample="S", project="P", owner="owner")
-    w.add("operation_data_files", operation_id="O")
-    seen = lambda user, table: Directus(RULES, w, f"u_{user}").ids(table, "read")  # noqa: E731
-
-    # a restricted project: its campaigns, samples, operations and tests are visible to people on its list
-    assert seen("pi", "projects") == {"P"} and seen("viewer", "projects") == {"P"}
-    assert seen("inv", "projects") == {
-        "P"
-    }, "the old investigators table is a list entry"
-    assert seen("stranger", "projects") == set() and seen("owner", "projects") == set()
-    assert seen("pi", "campaigns") == {"C"} and seen("stranger", "campaigns") == set()
-    assert (
-        seen("campaignOwner", "campaigns") == set()
-    ), "the campaign owner is shut out of a restricted project"
-    # the PI always sees everything; the owner keeps the sample (the owner exception), not the operation (strict gates)
-    assert seen("pi", "physical_samples") == {"S"} and seen(
-        "owner", "physical_samples"
-    ) == {"S"}
-    assert seen("pi", "manufacturing_operations") == {"O"} and seen(
-        "pi", "test_sessions"
-    ) == {"T"}
-    assert (
-        seen("owner", "manufacturing_operations") == set()
-        and seen("owner", "test_sessions") == set()
-    )
-    assert seen("stranger", "physical_samples") == set()
-    # people on the list who are not the PI see the project, not what is inside (they are not investigators)
-    assert seen("viewer", "manufacturing_operations") == set()
-    assert seen("inv", "manufacturing_operations") == {
-        "O"
-    }, "an investigator on the list reads the unrestricted contents"
-    # attached rows follow the operation
-    pi_files = Directus(RULES, w, "u_pi")
-    assert [
-        pi_files.can("operation_data_files", "read", r)
-        for r in w.t["operation_data_files"]
-    ] == [True]
-    owner_files = Directus(RULES, w, "u_owner")
-    assert [
-        owner_files.can("operation_data_files", "read", r)
-        for r in w.t["operation_data_files"]
-    ] == [False]
-
-    # a restricted campaign: its operations and tests are hidden; the samples are not hidden from their owner
-    w2 = World()
-    base_people(w2)
-    w2.project("P", pi="pi")
-    w2.investigator("P", "inv")
-    w2.campaign("C", project="P", owner="campaignOwner", restricted=True)
-    w2.campaign("C2", project="P", owner="campaignOwner")
-    w2.sample("S", project="P", owner="owner")
-    w2.sample("S2", owner="owner")
-    w2.in_campaign("C", "S")
-    w2.in_campaign("C", "S2")
-    w2.in_campaign("C2", "S2")
-    w2.op("OC", campaign="C", owner="owner")
-    w2.op("OS", sample="S", owner="owner")
-    w2.test("TC", campaign="C", owner="owner")
-    seen2 = lambda user, table: Directus(RULES, w2, f"u_{user}").ids(table, "read")  # noqa: E731
-    assert seen2("pi", "campaigns") == {"C", "C2"} and seen2(
-        "campaignOwner", "campaigns"
-    ) == {"C", "C2"}
-    assert seen2("inv", "campaigns") == {
-        "C2"
-    }, "an investigator no longer reaches a restricted campaign"
-    assert seen2("stranger", "campaigns") == set()
-    assert seen2("pi", "manufacturing_operations") == {"OC", "OS"}
-    assert seen2("campaignOwner", "manufacturing_operations") == {
-        "OC",
-        "OS",
-    }, "OS inherits its sample, which the campaign owner reads"
-    assert seen2("owner", "manufacturing_operations") == {
-        "OS"
-    }, "the owner of an operation in a restricted campaign is shut out"
-    assert seen2("owner", "test_sessions") == set() and seen2(
-        "campaignOwner", "test_sessions"
-    ) == {"TC"}
-    # a sample in a restricted campaign: its owner and the project's PI keep it, the investigator loses the inherited way
-    assert seen2("owner", "physical_samples") == {"S", "S2"} and seen2(
-        "pi", "physical_samples"
-    ) == {"S", "S2"}
-    assert seen2("inv", "physical_samples") == {
-        "S",
-        "S2",
-    }, "S via the project, S2 via the open campaign C2"
-    assert seen2("campaignOwner", "physical_samples") == {"S", "S2"}
-
-    # a sample in two campaigns stays visible through any campaign that still lets the caller in
-    w3 = World()
-    base_people(w3)
-    w3.project("P", pi="pi", restricted=True)
-    w3.campaign("Cin", project="P", owner="campaignOwner")
-    w3.campaign("Cout", owner="inv")
-    w3.sample("S", owner="owner")
-    w3.in_campaign("Cin", "S")
-    w3.in_campaign("Cout", "S")
-    seen3 = lambda user, table: Directus(RULES, w3, f"u_{user}").ids(table, "read")  # noqa: E731
-    assert seen3("inv", "physical_samples") == {
-        "S"
-    }, "the owner of the open campaign Cout reaches it"
-    assert (
-        seen3("campaignOwner", "physical_samples") == set()
-    ), "Cin hides behind the restricted project"
-    assert seen3("pi", "physical_samples") == {
-        "S"
-    }, "the PI of a campaign's project always does"
-
-    # an orphan FAST operation: readable by every member until it or the sample it hangs on is restricted
-    w4 = World()
-    base_people(w4)
-    w4.sample("S", owner="owner", restricted=True)
-    w4.op("orphan")
-    w4.op("under", sample="S")
-    seen4 = lambda user: Directus(RULES, w4, f"u_{user}").ids(  # noqa: E731
-        "manufacturing_operations", "read"
-    )
-    assert seen4("stranger") == {
-        "orphan"
-    }, "the orphan is open, the operation on the restricted sample is not"
-    assert seen4("owner") == {
-        "orphan",
-        "under",
-    }, "the sample's list reads the operations under it"
-    w4.t["manufacturing_operations"][0]["restricted"] = True
-    assert seen4("stranger") == set() and seen4("owner") == {"under"}
-
-
-def test_a_sample_restricted_operation_is_invisible_to_its_own_owner():
-    w = World()
-    base_people(w)
-    w.sample("S", owner="owner", restricted=True)
-    w.op("O", sample="S", owner="campaignOwner")
-    w.test("T", sample="S", owner="campaignOwner")
-    for table, key in (("manufacturing_operations", "O"), ("test_sessions", "T")):
-        assert key not in Directus(RULES, w, "u_campaignOwner").ids(
-            table, "read"
-        )  # the operation's own owner
-        assert key in Directus(RULES, w, "u_owner").ids(
-            table, "read"
-        )  # the sample's owner is on its list
-
-
-def test_a_restricted_operation_is_seen_only_by_owner_list_and_pi():
-    w = World()
-    base_people(w)
-    w.project("P", pi="pi")
-    w.sample("S", owner="owner", project="P")
-    w.op("O", sample="S", project="P", owner="campaignOwner", restricted=True)
-    w.grant("operation", "O", "viewer", "view")
-    seen = {
-        u: Directus(RULES, w, f"u_{u}").ids("manufacturing_operations", "read")
-        for u in PEOPLE
-    }
-    assert {u for u, ids in seen.items() if "O" in ids} == {
-        "campaignOwner",
-        "viewer",
-        "pi",
-    }
-
-
-def test_rollup_pi_reads_every_row_investigators_only_unrestricted_ones():
-    """project_rollup carries `restricted` (migration 167): the PI reads every row of the project, an investigator
-    (old table or access role investigator) only the unrestricted ones, a Can view person or a stranger none."""
-    w = World()
-    base_people(w)
-    w.project("P", pi="pi")
-    w.investigator("P", "inv")
-    w.grant("project", "P", "inv2", "investigator")
-    w.grant("project", "P", "viewer", "view")
-    w.add("project_rollup", project_id="P", restricted=False)
-    w.add("project_rollup", project_id="P", restricted=True)
-    open_row, hidden_row = w.t["project_rollup"]
-
-    def readers(row):
-        return {
-            u
-            for u in PEOPLE
-            if Directus(RULES, w, f"u_{u}").can("project_rollup", "read", row)
-        }
-
-    assert readers(open_row) == {"pi", "inv", "inv2"}
-    assert readers(hidden_row) == {"pi"}
+    row = w.in_campaign("C", "S")
+    # no readers row for campOwner: the sample is restricted and not theirs (or the project hides the campaign)
+    w.readers("campaign_samples", row["_n"], "owner")
+    assert _can(w, "u_campOwner", "campaign_samples", "update") == set()
+    assert _can(w, "u_campOwner", "campaign_samples", "delete") == set()
+    assert _can(w, "u_owner", "campaign_samples", "update") == {
+        row["_n"]
+    }, "the sample's owner reads and edits the row"
+    w.readers("campaign_samples", row["_n"], "campOwner")
+    assert _can(w, "u_campOwner", "campaign_samples", "update") == {row["_n"]}
+    assert _can(w, "u_stranger", "campaign_samples", "update") == set()
 
 
 # =================================================================================================
@@ -1973,6 +1426,15 @@ def _directus(drop=(), restricted=True):
         m2o(table, fk, parent, "access")
         m2o(table, "person_id", "people")
         cols.add(f"{table}.role")
+    # the readers tables (migration 166): record_id -> parent with the hidden alias `readers` (`open_to_all` for the amnesty set)
+    for table, parent in (
+        ("sample_readers", "physical_samples"), ("operation_readers", "manufacturing_operations"),
+        ("test_readers", "test_sessions"), ("campaign_readers", "campaigns"), ("project_readers", "projects"),
+        ("campaign_sample_readers", "campaign_samples"),
+    ):  # fmt: skip
+        m2o(table, "record_id", parent, "readers")
+        cols.add(f"{table}.user_id")
+    m2o("operation_open_to_all", "record_id", "manufacturing_operations", "open_to_all")
     for t, f, one in [
         ("sample_stock_provenance", "sample_id", "physical_samples"),
         ("sample_data_files", "sample_id", "physical_samples"),
@@ -2023,9 +1485,15 @@ def test_resolver_accepts_a_complete_database():
         (("physical_samples", "owner_person_id"), "physical_samples.owner_person_id"),
         (("campaigns", "owner_person_id"), "campaigns.owner_person_id"),
         (("campaign_samples", "campaign_id"), "campaign_samples.campaign_id"),
-        (("manufacturing_operations", "project_id"), "projects.operations"),
+        (("project_investigators", "project_id"), "projects.secondary_investigators"),
         (("sample_access", "sample_id"), "access"),
         (("project_access", "person_id"), "project_access.person_id"),
+        (("sample_readers", "record_id"), "physical_samples.readers"),
+        (
+            ("operation_open_to_all", "record_id"),
+            "manufacturing_operations.open_to_all",
+        ),
+        (("campaign_sample_readers", "record_id"), "campaign_samples.readers"),
     ],
 )
 def test_resolver_reports_a_deleted_relation(dropped, needle):
@@ -2035,33 +1503,41 @@ def test_resolver_reports_a_deleted_relation(dropped, needle):
 
 def test_resolver_needs_the_alias_field_row_and_the_user_column():
     db = _directus()
-    db["fields"].remove("projects.samples")
-    assert any("projects.samples" in p for p in gen.resolve(DOC, db))
+    db["fields"].remove("projects.secondary_investigators")
+    assert any("projects.secondary_investigators" in p for p in gen.resolve(DOC, db))
     db = _directus()
     db["columns"].remove("people.user_id")
     assert any("people.user_id is not a column" in p for p in gen.resolve(DOC, db))
     db = _directus()
     db["fields"].remove("physical_samples.access")
     assert any("physical_samples.access" in p for p in gen.resolve(DOC, db))
+    # the readers aliases of the read kinds: a missing field row, a missing alias, a missing user_id column
+    for alias in (
+        "physical_samples.readers",
+        "manufacturing_operations.open_to_all",
+        "campaign_samples.readers",
+    ):
+        db = _directus()
+        db["fields"].remove(alias)
+        assert any(alias in p for p in gen.resolve(DOC, db)), alias
+    db = _directus()
+    db["columns"].remove("sample_readers.user_id")
+    assert any("sample_readers.user_id" in p for p in gen.resolve(DOC, db))
+    db = _directus()
+    db["columns"].remove("operation_open_to_all.record_id")
+    assert any("operation_open_to_all.record_id" in p for p in gen.resolve(DOC, db))
 
 
 def test_resolver_reports_a_missing_restricted_column_a_missing_where_column_and_a_bad_alias():
     problems = gen.resolve(DOC, _directus(restricted=False))
     assert any("physical_samples.restricted is not a column" in p for p in problems)
-    assert any(
-        "orphan_amnesty manufacturing_operations" in p and "restricted" in p
-        for p in problems
-    )
     db = _directus()
     db["columns"].remove("project_access.role")
     assert any(
         "where project_access.role is not a column" in p for p in gen.resolve(DOC, db)
     )
-    # `at` and `each` must name a to-many alias: here `campaign_id` (a to-one) is used as one
+    # `at` must name a to-many alias: here `project_id` (a to-one) is used as one
     bad = {**DOC, "sets": {**DOC["sets"], "bad": [{"path": "project_id.principal_investigator_person.user_id", "at": "project_id", "where": {"restricted": [True]}}]},
-           "rules": {**DOC["rules"], "physical_samples": {**DOC["rules"]["physical_samples"], "read": "bad"}}}  # fmt: skip
-    assert any("is not a to-many alias" in p for p in gen.resolve(bad, _directus()))
-    bad = {**DOC, "sets": {**DOC["sets"], "bad": [{"each": "project_id", "items": ["principal_investigator_person.user_id"]}]},
            "rules": {**DOC["rules"], "physical_samples": {**DOC["rules"]["physical_samples"], "read": "bad"}}}  # fmt: skip
     assert any("is not a to-many alias" in p for p in gen.resolve(bad, _directus()))
 
