@@ -49,19 +49,40 @@ function loadPersisted(): Partial<AuthState> {
 	}
 }
 
-const persisted = loadPersisted();
-// An offline session outlives a reload (the operator must not be signed out by restarting the
+// The stored session, under the rules for taking it up: at load, and whenever another window changes
+// it. An offline session outlives a reload (the operator must not be signed out by restarting the
 // app mid-shift with no network), but only while the account's verifier entry still exists and is
 // in date: forgetting or revoking the account must end its session too, not just block new ones.
-const offlineStillValid = !!persisted.offline && offlineEntryValid(persisted.user?.email);
-const state = reactive<AuthState>({
-	accessToken: persisted.accessToken ?? null,
-	refreshToken: persisted.refreshToken ?? null,
-	expiresAt: persisted.expiresAt ?? 0,
-	user: offlineStillValid || persisted.refreshToken || persisted.accessToken ? (persisted.user ?? null) : null,
-	offline: offlineStillValid,
-	offlineVerifiedAt: offlineStillValid ? (persisted.offlineVerifiedAt ?? 0) : 0,
-});
+function storedSession(): AuthState {
+	const persisted = loadPersisted();
+	const offlineStillValid = !!persisted.offline && offlineEntryValid(persisted.user?.email);
+	return {
+		accessToken: persisted.accessToken ?? null,
+		refreshToken: persisted.refreshToken ?? null,
+		expiresAt: persisted.expiresAt ?? 0,
+		user: offlineStillValid || persisted.refreshToken || persisted.accessToken ? (persisted.user ?? null) : null,
+		offline: offlineStillValid,
+		offlineVerifiedAt: offlineStillValid ? (persisted.offlineVerifiedAt ?? 0) : 0,
+	};
+}
+
+const state = reactive<AuthState>(storedSession());
+
+// Take up whatever another window stored (nothing stored reads as signed out). In memory only: it
+// must never write back, or two windows would answer each other's storage events forever.
+function adoptStoredSession() {
+	Object.assign(state, storedSession());
+}
+
+// Every window (the main one, each pop-out) holds the session in memory, and Directus rotates the
+// refresh token on every refresh. Follow the other windows' sign-ins, refreshes and sign-outs so a
+// pop-out never refreshes with a token the main window has already spent. (`storage` fires only in
+// the windows that did NOT make the change; a null key is a localStorage.clear().)
+if (typeof window !== 'undefined') {
+	window.addEventListener('storage', (e) => {
+		if (e.key === LS_KEY || e.key === null) adoptStoredSession();
+	});
+}
 
 function persist() {
 	// Persist the refresh token (survives reload) + last known user for a warm start. The
@@ -155,21 +176,45 @@ export const authStore = {
 		if (refreshing) return refreshing;
 		refreshing = (async () => {
 			try {
-				const res = await authClient().post('/auth/refresh', { refresh_token: state.refreshToken, mode: 'json' });
-				const data = res.data?.data ?? {};
-				state.accessToken = data.access_token ?? null;
-				state.refreshToken = data.refresh_token ?? state.refreshToken;
-				state.expiresAt = Date.now() + (Number(data.expires) || 0);
-				persist();
-				// The server just vouched for this account: restart its offline window.
-				if (state.user?.email) touchOfflineVerified(state.user.email);
-				return !!state.accessToken;
-			} catch (e: any) {
-				// Only a refusal means the session is over. An unreachable server (or a proxy 5xx)
-				// says nothing about the refresh token, and clearing it here signed operators out
-				// the moment the network dropped.
-				const status = e?.response?.status;
-				if (status === 400 || status === 401 || status === 403) this.clear();
+				// Two tries at most: a refusal can just mean another window spent this token first.
+				for (let attempt = 0; attempt < 2; attempt++) {
+					const sent = state.refreshToken;
+					if (!sent) return false;
+					try {
+						const res = await authClient().post('/auth/refresh', { refresh_token: sent, mode: 'json' });
+						// Another window signed out, or in as someone else, while this was on the wire (a
+						// competing refresh can't succeed with the same token): its session wins. Writing
+						// these tokens back would revive a signed-out session or pin them to another user.
+						if (state.refreshToken !== sent) return !!state.accessToken;
+						const data = res.data?.data ?? {};
+						state.accessToken = data.access_token ?? null;
+						state.refreshToken = data.refresh_token ?? state.refreshToken;
+						state.expiresAt = Date.now() + (Number(data.expires) || 0);
+						persist();
+						// The server just vouched for this account: restart its offline window.
+						if (state.user?.email) touchOfflineVerified(state.user.email);
+						return !!state.accessToken;
+					} catch (e: any) {
+						// Only a refusal means the session is over. An unreachable server (or a proxy 5xx)
+						// says nothing about the refresh token, and clearing it here signed operators out
+						// the moment the network dropped.
+						const status = e?.response?.status;
+						if (status !== 400 && status !== 401 && status !== 403) return false;
+						// Directus rotates the token on every refresh, so another window may already have
+						// refreshed and stored a newer one. Compare with the token SENT (a storage event may
+						// have updated the state mid-flight), never with the state.
+						const stored = loadPersisted().refreshToken ?? null;
+						if (stored === sent) {
+							this.clear(); // nothing newer anywhere: the session really is over
+							return false;
+						}
+						// Newer token stored: retry with it once. Another window signed out (nothing stored),
+						// or stored yet another session after the retry: follow it in memory -- clearing the
+						// store here would sign out a session this window never held.
+						adoptStoredSession();
+						if (!stored || attempt > 0) return false;
+					}
+				}
 				return false;
 			} finally {
 				refreshing = null;
