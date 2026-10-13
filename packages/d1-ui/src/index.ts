@@ -121,6 +121,9 @@ export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser
 export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
 export { NAV_ICONS } from './nav/navIcons';
 export type { NavIconName, IconNode } from './nav/navIcons';
+export { usePins, DEFAULT_PREFS } from './nav/usePins';
+export type { NavPrefs, PinsState } from './nav/usePins';
+export type { PinRef, RecordLabel } from './nav/sidebarModel';
 export { default as NavIcon } from './nav/NavIcon.vue';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';
