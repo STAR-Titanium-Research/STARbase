@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ExplorerNav, Finder, useFinderShortcut } from '@d1/ui';
 import { openScan } from '@d1/starbase-pages';
 import BrandLogo from './BrandLogo.vue';
 import ShellFoot from './ShellFoot.vue';
 import { useNarrow } from './narrow';
+import { returnFocusToMenu } from './sheetFocus';
 
 // STARbase's chrome around every signed-in page (spec §3.3). Desktop: the brand, the Explorer sidebar
 // (rail and panel, from @d1/ui) and its foot beside the page. Phone (< 768 px): a top bar with a menu
@@ -13,6 +14,9 @@ import { useNarrow } from './narrow';
 // while it is open), and a find button. The finder is shared by both.
 const narrow = useNarrow();
 const sheetOpen = ref(false);
+const menuBtn = ref<HTMLButtonElement | null>(null);
+const closeBtn = ref<HTMLButtonElement | null>(null);
+let handedOff = false;
 const route = useRoute();
 const { finderOpen, openFinder, closeFinder } = useFinderShortcut();
 
@@ -21,17 +25,45 @@ const scanFromFinder = () => {
 	openScan();
 };
 const findFromSheet = () => {
+	handedOff = true;
 	sheetOpen.value = false;
 	openFinder();
 };
+
+// Focus: into the sheet on open (its close button; the page behind it is inert, so Tab stays in the sheet),
+// and back to the Menu button on every way of closing it.
+watch(sheetOpen, async (open) => {
+	if (open) {
+		handedOff = false;
+		await nextTick();
+		closeBtn.value?.focus();
+	} else {
+		await nextTick();
+		if (returnFocusToMenu({ narrow: narrow.value, handedOff })) menuBtn.value?.focus();
+		handedOff = false;
+	}
+});
 
 // The sheet closes when a page is chosen, when the window grows past phone width, and on Esc.
 watch(() => route.fullPath, () => (sheetOpen.value = false));
 watch(narrow, (isNarrow) => {
 	if (!isNarrow) sheetOpen.value = false;
 });
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+const sheetEl = ref<HTMLElement | null>(null);
 const onKey = (e: KeyboardEvent) => {
-	if (e.key === 'Escape' && sheetOpen.value) sheetOpen.value = false;
+	if (!sheetOpen.value) return;
+	if (e.key === 'Escape') sheetOpen.value = false;
+	if (e.key === 'Tab' && sheetEl.value) {
+		// Tab wraps inside the sheet (the page behind is inert, so this is only the edge, where focus would leave for the browser's own chrome).
+		const items = [...sheetEl.value.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+		const first = items[0];
+		const last = items[items.length - 1];
+		const active = document.activeElement;
+		if (!first || !last) return;
+		if (e.shiftKey && (active === first || !sheetEl.value.contains(active))) { e.preventDefault(); last.focus(); }
+		else if (!e.shiftKey && (active === last || !sheetEl.value.contains(active))) { e.preventDefault(); first.focus(); }
+	}
 };
 onMounted(() => window.addEventListener('keydown', onKey));
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
@@ -44,19 +76,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 			<ExplorerNav :show-brand="false" style="--d1-nav-offset: 64px" @open-finder="openFinder" />
 			<ShellFoot />
 		</aside>
-		<header v-else class="sb-topbar">
-			<button type="button" class="sb-icon-btn" aria-label="Menu" :aria-expanded="sheetOpen" @click="sheetOpen = true"><v-icon name="menu" /></button>
+		<header v-else class="sb-topbar" :inert="sheetOpen">
+			<button ref="menuBtn" type="button" class="sb-icon-btn" aria-label="Menu" :aria-expanded="sheetOpen" @click="sheetOpen = true"><v-icon name="menu" /></button>
 			<router-link to="/" class="sb-brand" aria-label="STARbase Home"><BrandLogo compact /></router-link>
 			<button type="button" class="sb-icon-btn" aria-label="Find a record" @click="openFinder"><v-icon name="search" /></button>
 		</header>
 
-		<main class="sb-content"><router-view /></main>
+		<main class="sb-content" :inert="narrow && sheetOpen"><router-view /></main>
 
-		<div v-if="narrow && sheetOpen" class="sb-sheet-backdrop" @mousedown.self="sheetOpen = false">
-			<div class="sb-sheet" role="dialog" aria-modal="true" aria-label="Pages">
+		<div v-if="narrow && sheetOpen" class="sb-sheet-backdrop" @click.self="sheetOpen = false">
+			<div ref="sheetEl" class="sb-sheet" role="dialog" aria-modal="true" aria-label="Pages">
 				<div class="sb-sheet-head">
 					<BrandLogo />
-					<button type="button" class="sb-icon-btn" aria-label="Close the menu" @click="sheetOpen = false"><v-icon name="close" /></button>
+					<button ref="closeBtn" type="button" class="sb-icon-btn" aria-label="Close the menu" @click="sheetOpen = false"><v-icon name="close" /></button>
 				</div>
 				<ExplorerNav :show-brand="false" style="--d1-nav-offset: 56px" @open-finder="findFromSheet" />
 				<ShellFoot />
@@ -74,10 +106,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 	background: var(--theme--background-subdued); border-right: 1px solid var(--theme--border-color-subdued);
 }
 .sb-brand { display: flex; align-items: center; height: 64px; padding: 0 16px; flex: none; text-decoration: none; }
-.sb-content { min-width: 0; height: 100dvh; overflow-y: auto; overflow-x: hidden; }
+.sb-content { min-width: 0; height: 100dvh; overflow-y: auto; }
 
 .sb-shell.phone { grid-template-columns: minmax(0, 1fr); grid-template-rows: 56px minmax(0, 1fr); }
 .sb-shell.phone .sb-content { height: calc(100dvh - 56px); }
+@media (max-width: 767px) {
+	.sb-content { overflow-x: hidden; } /* a wide child never gives the page a sideways scroll on a phone */
+}
 .sb-topbar {
 	display: flex; align-items: center; justify-content: space-between; height: 56px; padding: 0 8px;
 	background: var(--theme--background-subdued); border-bottom: 1px solid var(--theme--border-color-subdued);
