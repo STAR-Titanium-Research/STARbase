@@ -28,7 +28,10 @@ export async function refreshSession(api: AxiosInstance): Promise<RefreshOutcome
 		await api.post('/auth/refresh', { mode: 'session' }, { sbNoGuard: true });
 		return 'ok';
 	} catch (e) {
-		return (e as AxiosError).response ? 'refused' : 'unreachable';
+		// Only Directus saying "no such session" (400 invalid/missing token, 401, 403) is a refusal. A gateway
+		// 502/503/504, a 429 or no answer is d1-server not being reachable: never a reason to sign anyone out.
+		const status = (e as AxiosError).response?.status;
+		return status === 400 || status === 401 || status === 403 ? 'refused' : 'unreachable';
 	}
 }
 

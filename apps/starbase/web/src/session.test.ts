@@ -44,6 +44,13 @@ describe('createSession', () => {
 		expect(session.user.value).toBeNull();
 	});
 
+	it('load: a renewal answered by a gateway blip is unreachable, not signed out', async () => {
+		for (const blip of [502, 429]) {
+			const { session } = setup((key) => (key === 'POST /auth/refresh' ? blip : 401));
+			expect(await session.load(), String(blip)).toBe('unreachable');
+		}
+	});
+
 	it('load: no answer, a timeout or a 5xx is unreachable, not signed out (Review Focus 5)', async () => {
 		expect(await setup(() => 'network').session.load()).toBe('unreachable');
 		expect(await setup(() => 502).session.load()).toBe('unreachable');

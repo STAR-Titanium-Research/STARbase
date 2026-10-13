@@ -68,6 +68,21 @@ describe('the session guard', () => {
 		expect(onSignedOut).not.toHaveBeenCalled();
 	});
 
+	it('a renewal answered by a gateway blip (502) or a rate limit (429) does not sign out', async () => {
+		for (const blip of [502, 503, 504, 429]) {
+			const { api, calls, onSignedOut } = setup((key) => (key === 'GET /items/x' ? 401 : key === 'POST /auth/refresh' ? blip : 404));
+			expect(statusOf(await api.get('/items/x').catch((e) => e)), String(blip)).toBe(401);
+			expect(calls).toEqual(['GET /items/x', 'POST /auth/refresh']);
+			expect(onSignedOut, String(blip)).not.toHaveBeenCalled();
+		}
+	});
+
+	it('a renewal refused with 401 signs out', async () => {
+		const { api, onSignedOut } = setup((key) => (key === 'GET /items/x' ? 401 : key === 'POST /auth/refresh' ? 401 : 404));
+		expect(statusOf(await api.get('/items/x').catch((e) => e))).toBe(401);
+		expect(onSignedOut).toHaveBeenCalledTimes(1);
+	});
+
 	it('concurrent 401s share one renewal', async () => {
 		const seen = new Set<string>();
 		const { api, calls } = setup((key) => {
@@ -116,6 +131,17 @@ describe('refreshSession and sessionAlive', () => {
 		expect(await refreshSession(api)).toBe('refused');
 		fakeServer(api, () => 'network');
 		expect(await refreshSession(api)).toBe('unreachable');
+	});
+	it('only 400, 401 and 403 are a refusal; 5xx and 429 are no answer', async () => {
+		const api = createApi(D1);
+		for (const s of [400, 401, 403]) {
+			fakeServer(api, () => s);
+			expect(await refreshSession(api), String(s)).toBe('refused');
+		}
+		for (const s of [429, 500, 502, 503, 504]) {
+			fakeServer(api, () => s);
+			expect(await refreshSession(api), String(s)).toBe('unreachable');
+		}
 	});
 	it('a session is alive unless /users/me says 401 or 403 (no answer counts as alive)', async () => {
 		const api = createApi(D1);
