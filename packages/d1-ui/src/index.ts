@@ -161,8 +161,8 @@ export type {
 
 // Frequently used (Home panel and the visit pings; the server half is core/extensions/d1-usage)
 export {
-	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, pinEntry, readDismissed,
-	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, revertPin, routeTarget, splitRecordTarget, suggestedPageEntries,
-	withoutDismissed, writeDismissed,
+	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, readDismissed,
+	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget, suggestedPageEntries,
+	withoutDismissed, withoutPinned, writeDismissed,
 } from './usage';
 export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
