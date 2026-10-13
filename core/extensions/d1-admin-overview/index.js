@@ -6,8 +6,15 @@
 //   crawler: { state: { desired_state, current_activity, last_heartbeat_at, processed_count, error_count } | null,
 //              analyses: { pending, processing, done, error } },
 //   ownerless: { samples, campaigns, machiningOperations },
+//   readers_drift: { count, checked_at, flagged } | null,   record access (A1a, migration 166)
 //   serverTime: ISO string | null,   the database's now(), the clock the heartbeat is stamped with
 // }
+//
+// readers_drift is d1_private.readers_drift_count(): how many rows the materialised readers tables (who may read what) differ
+// from the SQL functions that define them. 0 is healthy; `flagged` is true for anything else, for the Home panel to show as a
+// warning (the repair is `SELECT d1_private.readers_rebuild()` by an operator; there is no rebuild endpoint). The count
+// recomputes every readers table (728 ms on the seeded copy of live, Task 2), so the value is cached for a minute and
+// `?refresh=1` recomputes it. null before migration 166 (no such function) or when the query fails.
 //
 // serverTime exists so a browser with a wrong clock cannot misjudge the crawler: the Home panel says
 // "online" when serverTime - last_heartbeat_at < 30 s, never by comparing with its own clock.
@@ -38,9 +45,13 @@ const count = async (database, sql) => toCount((await database.raw(sql))?.rows?.
 
 const MISSING = "(metadata::jsonb->>'missing') = 'true'";
 
+// How long a readers_drift answer is reused (the count recomputes every readers table).
+const DRIFT_TTL_MS = 60_000;
+
 export default {
     id: 'd1-admin-overview',
     handler: (router, { database, logger }) => {
+        let driftCache = null; // { value, at } of the last readers_drift answer
         const parts = {
             async missingFiles() {
                 const n = await count(database, `SELECT count(*)::int AS n FROM directus_files WHERE ${MISSING}`);
@@ -90,6 +101,27 @@ export default {
                 };
             },
 
+            async readers_drift(req) {
+                const refresh = ['1', 'true'].includes(String(req?.query?.refresh ?? ''));
+                if (!refresh && driftCache && Date.now() - driftCache.at < DRIFT_TTL_MS) return driftCache.value;
+                // The function comes from migration 166: an older database has none.
+                const reg = await database.raw("SELECT to_regproc('d1_private.readers_drift_count') AS f");
+                if (!reg?.rows?.[0]?.f) return null;
+                const out = await database.raw(
+                    'SELECT d1_private.readers_drift_count() AS n, now() AS checked_at',
+                );
+                const row = out?.rows?.[0] ?? {};
+                const at = row.checked_at instanceof Date ? row.checked_at : new Date(row.checked_at);
+                const n = toCount(row.n);
+                const value = {
+                    count: n,
+                    checked_at: Number.isNaN(at.getTime()) ? null : at.toISOString(),
+                    flagged: n !== 0,
+                };
+                driftCache = { value, at: Date.now() };
+                return value;
+            },
+
             async serverTime() {
                 const t = (await database.raw('SELECT now() AS t'))?.rows?.[0]?.t;
                 if (t instanceof Date) return t.toISOString();
@@ -122,7 +154,7 @@ export default {
             await Promise.all(
                 Object.entries(parts).map(async ([name, read]) => {
                     try {
-                        out[name] = await read();
+                        out[name] = await read(req);
                     } catch (e) {
                         logger.warn(`d1-admin-overview: ${name}: ${e?.message || e}`);
                         out[name] = null;
@@ -135,6 +167,7 @@ export default {
                 fingerprints: out.fingerprints,
                 crawler: out.crawler,
                 ownerless: out.ownerless,
+                readers_drift: out.readers_drift,
                 serverTime: out.serverTime,
             });
         });

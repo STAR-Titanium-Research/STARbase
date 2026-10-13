@@ -827,9 +827,12 @@ accepts a fixed set of collections (`physical_samples`, `manufacturing_operation
   five-entry map and a kit test pins that map against `recordRoute`. **The send is wrapped in `try/catch` and in a
   10-second timeout** (nodemailer's defaults are minutes when the host is unreachable): any failure (no `EMAIL_*`,
   SMTP refusal, timeout, no address) returns `email: 'failed' | 'skipped'` and logs a warning; the write is never
-  rolled back. No mail to the adder. **The exact `MailService.send` option shape and base-template wrapping must be
-  checked against the Directus 11.17 source in the running image before coding**; if `html` is not accepted without
-  a template, ship one `.liquid` file in the extension folder and pass `template`.
+  rolled back. No mail to the adder. **Checked against the image (Directus 11.17.4, @directus/api 35.2.0), 2026-10-13:** `send(data, options)` takes `{ to, subject, html, text }`
+  and hands them to nodemailer; `html` is used as given (only a `template` makes it render a `.liquid` file and wrap it), so no template
+  file is shipped; every line of `html` is trimmed; `from` defaults to `EMAIL_FROM`; the constructor calls `getMailer()`, which throws on an
+  unknown `EMAIL_TRANSPORT`, so it is built inside the same `try/catch` as `send`. Clearing the data cache: an extension gets no cache handle,
+  so the endpoint calls `new services.UtilsService({ schema, accountability: { admin: true } }).clearCache({ system: false })` after the commit
+  when `CACHE_ENABLED` is on.
 - **Why an endpoint, not an `items.create` hook on the access tables:** the endpoint already knows the adder, the
   role and the record, and a hook would also email for bulk or scripted inserts.
 - One email per new grant; a person is on a record at most once (unique key), so re-adding is a role change with no

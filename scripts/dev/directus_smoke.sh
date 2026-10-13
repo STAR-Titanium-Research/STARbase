@@ -25,7 +25,8 @@
 # D1_SMOKE_OVERLAYS="d1-next-number d1-access-guard ..." (default d1-next-number) lists the extension folders of this
 # worktree that replace live's at /directus/extensions/<name> (whole folders, so a rules.json travels with its
 # extension). Every A1a run is
-#   D1_SMOKE_REQUIRE_LM=1 D1_SMOKE_OVERLAYS="d1-next-number d1-access-guard d1-record-access d1-trace" bash scripts/dev/directus_smoke.sh
+#   D1_SMOKE_REQUIRE_LM=1 D1_SMOKE_OVERLAYS="d1-next-number d1-access-guard d1-record-access d1-trace d1-admin-overview" bash scripts/dev/directus_smoke.sh
+# (d1-admin-overview carries the readers_drift count the ra_* cases read after every case; live's copy of it has none yet.)
 # (an overlay name with no folder in this worktree is a harness failure).
 #
 # Record access (A1a): migration 166 refuses to run while sample_co_owners or project_investigators hold a row whose login no
@@ -323,6 +324,30 @@ if [[ "$(psql_copy -Atc "SELECT to_regclass('public.file_fingerprints') IS NOT N
   fi
   echo "$fline"; cout+=$'\n'"$fline"
   [[ "$fline" == "SMOKE FAIL"* && $crc -eq 0 ]] && crc=1
+fi
+# Email path (A1a Task 3): the smoke Directus has no mail server, so every notification the ra_* cases trigger answers email: failed. The
+# endpoint logs a warning for each ("d1-record-access: email for ..."); the node cases print a NOTE line when they saw one, and the
+# line must then be in Directus's own log: the captured log of the failure path (the fake-transport cases are in the extension's node tests).
+if grep -q '^SMOKE NOTE ra_expect_email_warning' <<<"$cout"; then
+  # captured first: `docker logs | grep -q` under pipefail fails when grep exits early and docker logs gets SIGPIPE
+  dlog=$(docker logs "$DX" 2>&1)
+  if grep -q 'd1-record-access: email for' <<<"$dlog"; then eline="SMOKE PASS ra_email_failure_is_logged"
+  else eline="SMOKE FAIL ra_email_failure_is_logged: the cases saw email: failed but Directus logged no warning"; fi
+  echo "$eline"; cout+=$'\n'"$eline"
+  [[ "$eline" == "SMOKE FAIL"* && $crc -eq 0 ]] && crc=1
+fi
+# On a failed case show the end of Directus's own log: the route logs the cause of a 500 there.
+grep -q '^SMOKE FAIL ' <<<"$cout" && { echo "--- directus log (tail) ---"; docker logs --tail 40 "$DX" 2>&1 | cut -c1-600; }
+# A failure outside check() (image pull, the .mjs throwing) prints no SMOKE lines: flag it as a harness failure.
+if ! grep -q '^SMOKE ' <<<"$cout"; then
+  echo "FAIL harness: cases (exit $crc): no SMOKE lines in the output"; exit 1
+elif [[ $crc -ne 0 ]] && ! grep -q '^SMOKE FAIL ' <<<"$cout"; then
+  echo "FAIL harness: cases (exit $crc): non-zero exit without a SMOKE FAIL line"; exit 1
+fi
+exit "$crc"
+
+'"$eline"
+  [[ "$eline" == "SMOKE FAIL"* && $crc -eq 0 ]] && crc=1
 fi
 # On a failed case show the end of Directus's own log: the route logs the cause of a 500 there.
 grep -q '^SMOKE FAIL ' <<<"$cout" && { echo "--- directus log (tail) ---"; docker logs --tail 40 "$DX" 2>&1 | cut -c1-600; }
