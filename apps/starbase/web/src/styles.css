@@ -1,0 +1,36 @@
+/* STARbase's base styles. The colours are the theme's (theme.css); pages bring their own (the kit's tokens.css). */
+html, body, #app { height: 100%; margin: 0; }
+body {
+	background: var(--theme--background);
+	color: var(--theme--foreground);
+	font-family: var(--theme--fonts--sans--font-family);
+	font-size: 13px;
+	-webkit-text-size-adjust: 100%;
+}
+/* Used by the VButton and VProgressCircular stand-ins' spinners. */
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* The sign-in, SSO-return and unreachable pages: one centred card. */
+.sb-center { min-height: 100dvh; display: grid; place-items: center; padding: 16px; box-sizing: border-box; }
+.sb-card {
+	width: min(380px, 100%); box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; padding: 28px 24px;
+	border: 1px solid var(--theme--border-color-subdued); border-radius: 14px; background: var(--theme--background-subdued);
+}
+.sb-card h1 { margin: 4px 0 0; font-size: 18px; }
+.sb-field { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 12px; }
+.sb-field input {
+	min-height: 38px; padding: 0 10px; font: inherit; font-weight: 400; font-size: 14px; color: var(--theme--foreground);
+	border: 1px solid var(--theme--form--field--input--border-color); border-radius: 8px; background: var(--theme--form--field--input--background);
+}
+.sb-primary {
+	display: inline-flex; justify-content: center; align-items: center; min-height: 40px; border: 0; border-radius: 8px;
+	background: var(--theme--primary); color: var(--theme--foreground-inverted); font: inherit; font-weight: 700; text-decoration: none; cursor: pointer;
+}
+.sb-primary:disabled { opacity: 0.6; }
+.sb-provider {
+	display: flex; justify-content: center; align-items: center; min-height: 38px; border-radius: 8px; text-decoration: none;
+	border: 1px solid var(--theme--border-color); color: var(--theme--foreground);
+}
+.sb-or { margin: 0; text-align: center; color: var(--theme--foreground-subdued); }
+.sb-error { margin: 0; color: var(--theme--danger); }
+.sb-hint { margin: 0; font-size: 12px; color: var(--theme--foreground-subdued); }

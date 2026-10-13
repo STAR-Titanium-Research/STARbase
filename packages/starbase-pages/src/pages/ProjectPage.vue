@@ -62,7 +62,7 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 
 			<template v-else-if="project">
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
-				<RecordLayout style="--d1-sticky-top: 70px">
+				<RecordLayout style="--d1-sticky-top: var(--d1-header-offset, 70px)">
 					<template #crumbs>
 						<AppLink to="/home">Home</AppLink>
 						<span>›</span>

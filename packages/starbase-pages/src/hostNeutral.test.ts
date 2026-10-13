@@ -33,4 +33,8 @@ describe('STARbase pages stay host-neutral', () => {
 			expect(src, rel(f)).not.toMatch(/:href="[\w.]+\.to"/);
 		}
 	});
+	it('leave the sticky offset to the host frame', () => {
+		// The Data Studio header is 70px; STARbase's frame is not. Pages fall back to 70px, frames say.
+		for (const f of files) expect(readFileSync(f, 'utf8'), rel(f)).not.toMatch(/--d1-sticky-top:\s*\d/);
+	});
 });

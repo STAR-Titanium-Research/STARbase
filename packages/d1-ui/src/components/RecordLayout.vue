@@ -6,9 +6,9 @@ import './tokens.css';
 //
 // Sticky offset: the rail sticks at `top: var(--d1-sticky-top, 0px)` and its height is capped to the
 // window under it. The default is 0px (no bar above). The page inside the Data Studio sets the height
-// of the Directus header bar plus a gap on its own root (`style="--d1-sticky-top: 70px"`, with a
-// unit), because only the host knows it. Sections scroll to the same offset (Section's
-// scroll-margin-top).
+// of the host's header bar plus a gap on its own root (`style="--d1-sticky-top: var(--d1-header-offset, 70px)"`:
+// the Data Studio header is 70px with its gap, and STARbase's PlainFrame sets --d1-header-offset), because
+// only the host knows it. Sections scroll to the same offset (Section's scroll-margin-top).
 // Sticky also needs every ancestor up to the scroll container to leave `overflow` at visible.
 //
 // Narrow: the layout root is a size container, and under 1000px of its own width (not the width of

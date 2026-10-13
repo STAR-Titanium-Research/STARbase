@@ -77,7 +77,7 @@ const openReport = () => openLink(`/d1-report/test/${encodeURIComponent(props.id
 
 			<template v-else-if="t">
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
-				<RecordLayout style="--d1-sticky-top: 70px">
+				<RecordLayout style="--d1-sticky-top: var(--d1-header-offset, 70px)">
 					<template #crumbs>
 						<AppLink to="/home">Home</AppLink>
 						<template v-if="project">
