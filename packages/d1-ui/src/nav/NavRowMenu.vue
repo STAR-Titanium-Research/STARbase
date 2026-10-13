@@ -45,7 +45,7 @@ function place() {
 	pos.value = { left, top };
 }
 
-const buttons = () => [...(menu.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+const buttons = (): HTMLElement[] => Array.from(menu.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
 const enabled = () => buttons().filter((b) => b.getAttribute('aria-disabled') !== 'true');
 
 function onDocumentPointerDown(e: PointerEvent) {
