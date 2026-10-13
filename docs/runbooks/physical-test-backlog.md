@@ -930,48 +930,46 @@ migration 141 prints about ownerless records.
   your sidebar and survive a reload. Sign in as another member of the same role: only the role-shared view can be
   pinned (the personal one is not offered), and pinning it adds it to their sidebar without touching yours. Their
   pins, their order and their unpins are their own: unpin it as them and it stays pinned for you. Since explorer
-  sidebar B2. PR: B2 sidebar (claude/happy-sagan-875lo1).
+  sidebar B2. PR #262.
 
 - [ ] **B2-2 — Migration 170 on live.** Apply `20261013000170_user_pins_and_prefs` (renumbered from 165) to the live
   database. It applies without an error. Existing U1 pins are numbered newest-used first for every person (as U1's Home listed them), and each person gets
   Samples and Projects once (no duplicate rows, none for a person who already had them). Run `dbmate down` then
-  `up` on a copy first if you want to see it reverse. Since explorer sidebar B2. PR: B2 sidebar
-  (claude/happy-sagan-875lo1).
+  `up` on a copy first if you want to see it reverse. Since explorer sidebar B2. PR #262.
 
 - [ ] **B2-3 — Record pins after access changes.** Pin a record (a sample, say) from its page header, then remove
   that person's access to it (change the owner, or take the role's read permission away). On their next load the
   pin leaves the sidebar and appears under Settings → Pinned → "No longer available", where Remove clears it. Give
   the access back: the pin does not return by itself, and pinning the record again works. Since explorer sidebar B2.
-  PR: B2 sidebar (claude/happy-sagan-875lo1).
+  PR #262.
 
 - [ ] **B2-4 — Sidebar inside Directus (d1-home).** In Data Studio open **Home**. The sidebar is always the
   expanded one, with no collapse button. It shows Pinned, the section accordion (one section open at a time) and the
   ⋯ menu to the right of each row. Pin and unpin a section and a record: the change shows at once and is still there
-  after a reload. The Data Studio link in the sidebar opens Data Studio. Since explorer sidebar B2. PR: B2 sidebar
-  (claude/happy-sagan-875lo1).
+  after a reload. The Data Studio link in the sidebar opens Data Studio. Since explorer sidebar B2. PR #262.
 
 - [ ] **B2-5 — Real drag and touch.** With a real mouse in Chrome and in Firefox, drag a section row into Pinned (it
   pins) and drag a pin above and below its neighbours (the order changes and survives a reload). On a phone or
   tablet, the pin and ⋯ buttons are visible without hovering, and the rail's menus open on tap and close on a tap
-  elsewhere. Since explorer sidebar B2. PR: B2 sidebar (claude/happy-sagan-875lo1).
+  elsewhere. Since explorer sidebar B2. PR #262.
 
 - [ ] **B2-6 — Keyboard and screen reader.** In Chrome, Firefox and Safari, tab to a rail icon: its hover menu opens
   on focus and closes on Esc. In a short window (about 520 px high) tab to the lower rail icons: their menus stay
   open and fully on screen while focused. With a pin focused, Alt+↑ and Alt+↓ move it up and down. With a screen
   reader (NVDA or VoiceOver) reordering announces "Moved <name> to position N of M", and the pin button reads as
-  pressed when pinned and not pressed when not (pinning has no spoken message of its own). Since explorer sidebar B2. PR: B2 sidebar (claude/happy-sagan-875lo1).
+  pressed when pinned and not pressed when not (pinning has no spoken message of its own). Since explorer sidebar B2. PR #262.
 
 - [ ] **B2-7 — STARbase layout and first paint on live.** Against live Directus data, at 1000 px wide or more, choose
   the rail, reload: it opens as the rail with no jump to the expanded sidebar and back; do the same for expanded.
   At 768 to 999 px the rail opens over the page and closes with Esc or a click outside. Under 768 px the phone sheet
   opens from the menu button. Choose Light or Dark in the sidebar (or Settings), reload and open a deep link in a
   new tab: the chosen theme shows on the first paint, with no flash of the other one. Since explorer sidebar B2.
-  PR: B2 sidebar (claude/happy-sagan-875lo1).
+  PR #262.
 
 - [ ] **B2-8 — Existing STARbase e2e against the preview stack.** Start the docker preview (`d1-starbase` and
   Directus) and run `tests/ui` specs `14-starbase` and `15-starbase-polish` (they need Directus) and the new
   `16-sidebar-b2` against it. All three pass; a failure in 14 or 15 is a regression from the sidebar change. Since
-  explorer sidebar B2. PR: B2 sidebar (claude/happy-sagan-875lo1).
+  explorer sidebar B2. PR #262.
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

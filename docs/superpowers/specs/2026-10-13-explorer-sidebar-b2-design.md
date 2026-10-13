@@ -1,7 +1,7 @@
 # STARbase sidebar B2: one sidebar, icon rail, pins and settings (design)
 
 **Date:** 2026-10-13
-**Status:** Implemented 2026-10-13 on `claude/happy-sagan-875lo1` (not yet merged). Main code paths:
+**Status:** Implemented 2026-10-13 in PR #262 (not yet merged). Main code paths:
 `packages/d1-ui/src/nav/`, `packages/starbase-pages/src/settings/` and `pages/SettingsPage.vue`,
 `apps/starbase/web/src/AppShell.vue`, `core/extensions/d1-usage/`,
 `db/migrations/20261013000170_user_pins_and_prefs.sql`. Decisions taken with the maintainer on 2026-10-13: first from the mockup canvas
