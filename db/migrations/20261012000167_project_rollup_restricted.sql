@@ -3,12 +3,17 @@
 -- section 3, "Everything attached follows its record"). project_rollup is a cache of v_project_rollup that the Explorer's
 -- project page reads as the signed-in user. A Restricted record must not leak through it, so:
 --   * project_rollup.restricted BOOLEAN NOT NULL DEFAULT false (default false: existing rows stay as visible as before);
---   * v_project_rollup gains `restricted` as its LAST column (CREATE OR REPLACE VIEW may only append). An operation row
---     is restricted when the operation, its sample or its campaign is; a sample row when the sample is; the tool, edge,
---     insert, material and equipment rows are derived from operations and are restricted only when EVERY operation
---     behind them is (bool_and). The view keeps its grant to d1_llm_readonly and its comment;
---   * refresh_project_rollup() copies the column; a statement trigger on physical_samples UPDATE OF restricted refreshes
---     the cache (the operations and campaigns triggers already do);
+--   * v_project_rollup gains `restricted` as its LAST column (CREATE OR REPLACE VIEW may only append), DERIVED FROM
+--     d1_private.hidden_records (migration 166), not from the operation's own flags: an operation row is restricted iff the
+--     operation is hidden (restricted, or under a restricted project, campaign or sample, including the sample's other campaigns
+--     and the campaign's project); a sample row iff the sample is hidden; the tool, edge, insert, material and equipment rows are
+--     derived from operations and are restricted only when EVERY operation behind them is (bool_and). The first attempt's own-flags
+--     rule missed a restricted project's campaign, the sample's other campaigns and the sample's project. The view keeps its grant
+--     to d1_llm_readonly and its comment;
+--   * refresh_project_rollup() copies the column and takes the readers lock before its own (lock order: readers lock, then rollup
+--     lock, as in 166); d1_private.refresh_readers() calls it whenever the hidden_records diff is not empty, which also covers
+--     campaign_samples and projects.restricted, which fire no rollup trigger. A statement trigger on physical_samples UPDATE OF
+--     restricted refreshes the cache too (the operations and campaigns triggers already do);
 --   * the Lab Member read row of project_rollup: the PI of the project reads every row, an investigator (old table or
 --     access role investigator) only restricted = false rows. Before this migration the rule had no restricted test
 --     (the column did not exist), see migration 166. What it overwrites is kept in
@@ -18,7 +23,7 @@
 SET LOCAL lock_timeout = '10s';
 
 ALTER TABLE project_rollup ADD COLUMN restricted BOOLEAN NOT NULL DEFAULT false;
-COMMENT ON COLUMN project_rollup.restricted IS 'True when the row derives from a Restricted record (an operation, its sample or its campaign; a restricted sample; a tool, edge, insert, material or equipment used only by restricted operations). The Lab Member rule lets the project''s PI read every row and investigators only restricted = false rows.';
+COMMENT ON COLUMN project_rollup.restricted IS 'True when the row derives from a hidden record (d1_private.hidden_records: an operation that is restricted or under a restricted project, campaign or sample; a hidden sample; a tool, edge, insert, material or equipment used only by hidden operations). The Lab Member rule lets the project''s PI read every row and investigators only restricted = false rows.';
 
 CREATE OR REPLACE VIEW v_project_rollup AS
 WITH ops AS (
@@ -46,10 +51,10 @@ WITH ops AS (
            o.output_sample_id, o.source_recipe_id, o.gcode_file, o.source_run_uid,
            o.source_system, o.sintering_mass_grams, o.material_id, o.campaign_id,
            COALESCE(o.project_id, c.project_id) AS proj,
-           (o.restricted OR COALESCE(s0.restricted, false) OR COALESCE(c.restricted, false)) AS op_restricted
+           EXISTS (SELECT 1 FROM d1_private.hidden_records h
+                    WHERE h.kind = 'manufacturing_operations' AND h.record_id = o.operation_id) AS op_restricted
     FROM manufacturing_operations o
     LEFT JOIN campaigns c ON c.campaign_id = o.campaign_id
-    LEFT JOIN physical_samples s0 ON s0.sample_id = o.sample_id
     WHERE COALESCE(o.project_id, c.project_id) IS NOT NULL
 )
 SELECT md5('operation:' || operation_id::text) AS row_id, proj AS project_id,
@@ -75,7 +80,8 @@ FROM ops JOIN insert_edges e ON e.edge_id = ops.insert_edge_id
 GROUP BY proj, ci.insert_id, ci.insert_code
 UNION ALL
 SELECT DISTINCT md5('sample:' || proj::text || ':' || s.sample_id::text), proj,
-       'sample', s.sample_code, s.nickname, NULL::uuid, s.restricted
+       'sample', s.sample_code, s.nickname, NULL::uuid,
+       EXISTS (SELECT 1 FROM d1_private.hidden_records h WHERE h.kind = 'physical_samples' AND h.record_id = s.sample_id)
 FROM ops JOIN physical_samples s ON s.sample_id = ops.sample_id
 UNION ALL
 SELECT md5('material:' || proj::text || ':' || m.material_id::text), proj,
@@ -90,7 +96,8 @@ GROUP BY proj, eq.equipment_id, eq.equipment_code, eq.equipment_name;
 
 CREATE OR REPLACE FUNCTION refresh_project_rollup() RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
-    -- Fixed key; xact-scoped so it is released on COMMIT or ROLLBACK.
+    -- Lock order (migration 166): the readers lock, then the rollup lock. Fixed keys; xact-scoped, released on COMMIT or ROLLBACK.
+    PERFORM pg_advisory_xact_lock(hashtextextended('d1_readers', 0));
     PERFORM pg_advisory_xact_lock(hashtextextended('refresh_project_rollup', 0));
     DELETE FROM project_rollup;
     INSERT INTO project_rollup (row_id, project_id, kind, code, detail, campaign_id, restricted)
@@ -101,7 +108,7 @@ $$;
 CREATE TRIGGER refresh_rollup_samples
     AFTER UPDATE OF restricted ON physical_samples
     FOR EACH STATEMENT EXECUTE FUNCTION trg_refresh_project_rollup();
-COMMENT ON TRIGGER refresh_rollup_samples ON physical_samples IS 'Flipping a sample''s restricted flag refreshes the project_rollup cache (its sample row and the operation rows under it carry the flag).';
+COMMENT ON TRIGGER refresh_rollup_samples ON physical_samples IS 'Flipping a sample''s restricted flag refreshes the project_rollup cache (its sample row and the operation rows under it carry the flag). Fires after physical_samples_readers_upd, which has already updated hidden_records.';
 
 SELECT refresh_project_rollup();
 
@@ -136,7 +143,8 @@ DROP TRIGGER IF EXISTS refresh_rollup_samples ON physical_samples;
 
 CREATE OR REPLACE FUNCTION refresh_project_rollup() RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
-    -- Fixed key; xact-scoped so it is released on COMMIT or ROLLBACK.
+    -- Lock order (migration 166): the readers lock, then the rollup lock. Fixed keys; xact-scoped, released on COMMIT or ROLLBACK.
+    PERFORM pg_advisory_xact_lock(hashtextextended('d1_readers', 0));
     PERFORM pg_advisory_xact_lock(hashtextextended('refresh_project_rollup', 0));
     DELETE FROM project_rollup;
     INSERT INTO project_rollup (row_id, project_id, kind, code, detail, campaign_id)

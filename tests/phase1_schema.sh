@@ -3475,6 +3475,31 @@ SELECT 'unflip_ops:' || string_agg(code || '=' || restricted, ',' ORDER BY code)
 SELECT 'rule_restricted:' || (permissions::jsonb @> '{"_or":[{"_and":[{"restricted":{"_eq":false}}]}]}'::jsonb) FROM directus_permissions WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
 SELECT 'backup:' || count(*) FROM d1_private.project_rollup_restricted_backup;
 SELECT 'trigger:' || count(*) FROM pg_trigger WHERE tgname = 'refresh_rollup_samples' AND tgrelid = 'physical_samples'::regclass;
+-- restricted is DERIVED from d1_private.hidden_records (the readers of migration 166), so it also follows what the own flags missed:
+-- a campaign_samples row, a projects.restricted flip (neither fires a rollup trigger), a restricted project's campaign, a sample's other campaign
+INSERT INTO campaign_samples (campaign_id, sample_id) VALUES ('${RRK}f1', '${RRK}d2');
+SELECT 'cs_ops:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
+SELECT 'cs_sample:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'sample' AND project_id = '${RRK}b1';
+DELETE FROM campaign_samples WHERE campaign_id = '${RRK}f1' AND sample_id = '${RRK}d2';
+SELECT 'cs_back:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
+UPDATE projects SET restricted = true WHERE project_id = '${RRK}b1';
+SELECT 'pj_flip:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
+UPDATE projects SET restricted = false WHERE project_id = '${RRK}b1';
+SELECT 'pj_back:' || string_agg(code || '=' || restricted, ',' ORDER BY code) FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1';
+-- an operation on a sample held only by a restricted campaign (the campaign is neither the operation's nor the sample's own flag)
+INSERT INTO campaigns (campaign_id, project_id, campaign_type, name, restricted) VALUES ('${RRK}f3', NULL, 'testing_campaign', 'trr sample campaign', true);
+INSERT INTO physical_samples (sample_id, sample_code, restricted) VALUES ('${RRK}d3', 'TRR-S3', false);
+INSERT INTO campaign_samples (campaign_id, sample_id) VALUES ('${RRK}f3', '${RRK}d3');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, project_id, pass_code) VALUES ('${RRK}c7', '${RRK}e1', '${RRK}d3', '${RRK}b1', 'TRR-O7');
+SELECT 'heldby:' || (SELECT restricted FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b1' AND code = 'TRR-O7')
+       || '/' || (SELECT restricted FROM project_rollup WHERE kind = 'sample' AND project_id = '${RRK}b1' AND code = 'TRR-S3')
+       || '/' || d1_private.is_hidden('manufacturing_operations', '${RRK}c7') || '/' || d1_private.is_hidden('physical_samples', '${RRK}d3');
+-- an operation in a restricted PROJECT's campaign: restricted although neither its own flag nor its campaign's is set
+INSERT INTO projects (project_id, project_code, project_name, restricted) VALUES ('${RRK}b2', 'TRR-P2', 'rollup restricted project', true);
+INSERT INTO campaigns (campaign_id, project_id, campaign_type, name, restricted) VALUES ('${RRK}f2', '${RRK}b2', 'testing_campaign', 'trr campaign of a restricted project', false);
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, campaign_id, pass_code) VALUES ('${RRK}c6', '${RRK}e1', '${RRK}d2', '${RRK}f2', 'TRR-O6');
+SELECT 'inproject:' || (SELECT restricted FROM project_rollup WHERE kind = 'operation' AND project_id = '${RRK}b2' AND code = 'TRR-O6') || '/' || d1_private.is_hidden('manufacturing_operations', '${RRK}c6');
+SELECT 'drift:' || d1_private.readers_drift_count();
 $rr_down
 SELECT 'dn_col:' || count(*) FROM information_schema.columns WHERE table_name = 'project_rollup' AND column_name = 'restricted';
 SELECT 'dn_view_col:' || count(*) FROM information_schema.columns WHERE table_name = 'v_project_rollup' AND column_name = 'restricted';
@@ -3501,6 +3526,14 @@ rr_check "flip_ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=true,TRR-O5=true" 
 rr_check "flip_tools:TRR-TOOL-A=true,TRR-TOOL-B=true" "...and a tool whose every operation is now restricted turns restricted"
 rr_check "flip_samples:TRR-S1=true,TRR-S2=true" "...and the sample row follows"
 rr_check "unflip_ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=false,TRR-O5=false" "flipping it back restores the rows"
+rr_check "cs_ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=true,TRR-O5=true" "a campaign_samples insert refreshes the cache: the operations on a sample that joined a restricted campaign turn restricted"
+rr_check "cs_sample:TRR-S1=true,TRR-S2=true" "...and so does the sample row"
+rr_check "cs_back:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=false,TRR-O5=false" "deleting the junction row restores them"
+rr_check "pj_flip:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=true,TRR-O5=true" "flipping projects.restricted refreshes the cache (no rollup trigger fires for it): everything in the project is restricted"
+rr_check "pj_back:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=false,TRR-O5=false" "...and flipping it back restores the rows"
+rr_check "heldby:true/true/true/true" "an operation on a sample held only by a restricted campaign is restricted in the rollup and hidden from the Ask-DB role (own flags alone missed it)"
+rr_check "inproject:true/true" "an operation in a restricted project's campaign is restricted in the rollup and hidden from the Ask-DB role"
+rr_check "drift:0" "the readers tables are right after all of it"
 rr_check "rule_restricted:true" "the Lab Member project_rollup rule tests restricted = false for investigators"
 rr_check "backup:1" "the old rule is kept in the backup table"
 rr_check "trigger:1" "a statement trigger on physical_samples refreshes the cache"
@@ -3512,7 +3545,7 @@ rr_check "dn_backup:gone" "down: the backup table is dropped"
 rr_check "dn_view_comment:true" "down: the view keeps its comment"
 rr_check "dn_cache_eq_view:0" "down: the cache equals the old view"
 rr_check "up2_col:1" "a second up works (the column is back)"
-rr_check "up2_ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=false,TRR-O5=false" "a second up refills the cache"
+rr_check "up2_ops:TRR-O1=true,TRR-O2=true,TRR-O3=true,TRR-O4=false,TRR-O5=false,TRR-O7=true" "a second up refills the cache (restricted derived from hidden_records again)"
 rr_check "up2_rule_restricted:true" "a second up puts the rule back"
 
 echo "== Operation code rule: code_num, operation_code_for, the run number (T0b) =="

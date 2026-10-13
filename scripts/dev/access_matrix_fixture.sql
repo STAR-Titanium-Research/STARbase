@@ -115,6 +115,19 @@ INSERT INTO test_access (session_id, person_id, role)
 SELECT ref.id('T' || k), ref.id('person-viewer'), 'view' FROM _u
 UNION ALL SELECT ref.id('T' || k), ref.id('person-editor'), 'edit' FROM _u;
 
+-- The restricted flag a project_rollup row must carry (migration 167: derived from hidden records, not from the operation's own flags).
+-- An operation row: the operation is hidden; a sample row: the sample is hidden; the other kinds (tool, edge, insert, material, equipment) are
+-- derived from operations (restricted only when every operation behind them is): the cached flag is used for those.
+CREATE TABLE ref.rollup_map (rid text PRIMARY KEY, kind text, collection text, id uuid);
+INSERT INTO ref.rollup_map
+SELECT md5('operation:' || id::text), 'operation', 'manufacturing_operations', id FROM ref.fx_ids WHERE kind = 'manufacturing_operations'
+UNION
+SELECT md5('sample:' || coalesce(o.project_id, c.project_id)::text || ':' || o.sample_id::text), 'sample', 'physical_samples', o.sample_id
+  FROM manufacturing_operations o LEFT JOIN campaigns c ON c.campaign_id = o.campaign_id
+ WHERE o.operation_id IN (SELECT id FROM ref.fx_ids WHERE kind = 'manufacturing_operations') AND o.sample_id IS NOT NULL AND coalesce(o.project_id, c.project_id) IS NOT NULL;
+CREATE OR REPLACE FUNCTION ref.rollup_restricted(rid text, kind text, project uuid, cached boolean) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT coalesce((SELECT ref.hidden(m.collection, m.id) FROM ref.rollup_map m WHERE m.rid = rollup_restricted.rid AND m.kind = rollup_restricted.kind), cached) $$;
+
 -- the rollup cache (a statement trigger per insert above already refreshed it; once more so the smoke starts from the live derivation)
 SELECT refresh_project_rollup();
 
@@ -165,7 +178,8 @@ CREATE FUNCTION ref.expected_json() RETURNS text LANGUAGE sql STABLE AS $$
                         FROM project_rollup r JOIN projects p ON p.project_id = r.project_id
                        WHERE p.project_code LIKE 'FXP%'
                          AND (ref.pi_of(r.project_id, f.user_id)
-                              OR (NOT coalesce((to_jsonb(r) ->> 'restricted')::boolean, false) AND ref.p_invs(r.project_id, f.user_id)))))
+                              OR (NOT ref.rollup_restricted(r.row_id, r.kind, r.project_id, coalesce((to_jsonb(r) ->> 'restricted')::boolean, false))
+                                  AND ref.p_invs(r.project_id, f.user_id)))))
                     FROM ref.fixture_users f),
         -- the real operations every member reads (the narrowed amnesty, ref.amnesty_open): the copy's ownerless legacy runs
         'real_amnesty_ops', (SELECT coalesce(jsonb_agg(o.operation_id ORDER BY o.operation_id), '[]') FROM manufacturing_operations o
