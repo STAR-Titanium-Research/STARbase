@@ -4,6 +4,8 @@
 // machining operation (force: needs the second request of the list page; until a row carries it the
 // slot shows a placeholder). Pure: no Vue, no network.
 
+import { assetUrl } from '../links';
+
 type Row = Record<string, unknown>;
 
 export type ThumbKind = 'geometry' | 'image' | 'force' | null;
@@ -58,5 +60,5 @@ export function fileId(value: unknown): string | null {
 
 /** A small cropped WebP of a Directus file (the app is same-origin, so the session cookie authenticates the request). */
 export function assetThumbUrl(id: string, w = 320, h = 200): string {
-	return `/assets/${encodeURIComponent(id)}?width=${w}&height=${h}&fit=cover&format=webp`;
+	return assetUrl(id, { width: w, height: h, fit: 'cover', format: 'webp' });
 }

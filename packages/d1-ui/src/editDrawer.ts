@@ -26,6 +26,13 @@ export function formFields(fields: FieldDef[], item: Record<string, unknown> | n
 	});
 }
 
+// A new record ('+'): every field the user could fill in, that is all but the system fields and the ones
+// the caller hides. formFields cannot be used: with no item yet, it would show nothing. The form itself
+// (v-form) leaves out hidden-in-form fields and shows read-only ones disabled.
+export function createFormFields(fields: FieldDef[], hidden: string[] = []): FieldDef[] {
+	return fields.filter((f) => !f.meta?.system && !hidden.includes(f.field));
+}
+
 // What is PATCHed: only the fields the form reports as changed. `edits` is the form's v-model,
 // which holds changes only; undefined values are dropped, null (clearing a field) is kept.
 // Nothing changed gives null, so the caller can skip the request.
@@ -53,4 +60,14 @@ export function saveErrors(e: any, collection?: string): string[] {
 	const list: any[] = e?.response?.data?.errors ?? [];
 	const messages = list.map((x) => x?.message).filter(Boolean);
 	return messages.length ? messages : [e?.message || 'The record could not be saved.'];
+}
+
+export type EditMode = 'host' | 'drawer' | 'data-studio';
+
+// How a record page edits: the host's own editor when it has one (STARbase's framed form), else
+// Directus's v-form in a drawer, else the Data Studio form. `formAvailable` is only asked when there is
+// no host editor, so STARbase never looks up a v-form it does not have.
+export function editMode(hostEditor: boolean, formAvailable: () => boolean): EditMode {
+	if (hostEditor) return 'host';
+	return formAvailable() ? 'drawer' : 'data-studio';
 }

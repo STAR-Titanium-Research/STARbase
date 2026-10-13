@@ -4,6 +4,9 @@ import MachiningDashboard from './views/MachiningDashboard.vue';
 import SampleDashboard from './views/SampleDashboard.vue';
 import FastDashboard from './views/FastDashboard.vue';
 import NodeGraph from './views/NodeGraph.vue';
+import { installDirectusHost } from '@d1/directus-host';
+
+installDirectusHost();
 
 export default defineModule({
 	id: 'd1-lab-dashboard',

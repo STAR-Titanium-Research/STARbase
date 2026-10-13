@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import AppLink from './AppLink.vue';
 // A count with a label, as the force app's stat tile; a link when `to` is given.
 defineProps<{ label: string; value: string | number; icon?: string; to?: string; hint?: string }>();
 </script>
 
 <template>
-	<component :is="to ? 'router-link' : 'div'" :to="to" class="d1-tile" :class="{ link: !!to }" :title="hint">
+	<component :is="to ? AppLink : 'div'" :to="to" class="d1-tile" :class="{ link: !!to }" :title="hint">
 		<span v-if="icon" class="icon"><v-icon :name="icon" small /></span>
 		<span class="text">
 			<span class="value">{{ value }}</span>

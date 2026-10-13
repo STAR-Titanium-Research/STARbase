@@ -1,5 +1,8 @@
 import { defineInterface } from '@directus/extensions-sdk';
 import CampaignOps from './CampaignOps.vue';
+import { installDirectusHost } from '@d1/directus-host';
+
+installDirectusHost();
 
 // Campaign operations manager whose "add" search is pre-filtered by the campaign's
 // type — a Machining Trial only offers machining operations, etc. Assigning/removing

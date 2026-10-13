@@ -34,6 +34,18 @@ test('@d1/ui changes run both JS jobs, a root lockfile change too', () => {
   }
 });
 
+test('changes under the STARbase packages plan the directusUi job', () => {
+  for (const f of ['packages/starbase-pages/src/index.ts', 'packages/fast-plotting/src/host.ts', 'packages/directus-host/src/directusHost.ts']) {
+    assert.equal(plan([f], EXT).directusUi, true, f);
+  }
+});
+
+test('the STARbase app and the force plotting it builds plan the directusUi job', () => {
+  for (const f of ['apps/starbase/web/src/main.ts', 'packages/force-plotting/src/host.ts']) {
+    assert.equal(plan([f], EXT).directusUi, true, f);
+  }
+});
+
 test('a migration runs the schema and script tests', () => {
   assert.deepEqual(plan(['db/migrations/20261008000140_x.sql'], EXT), { ...nothing, migrations: true, scripts: true });
 });
@@ -68,4 +80,14 @@ test('every image has a dockerfile and no internal fields leak into the output',
     assert.equal('watch' in i, false);
   }
   for (const s of plan([], EXT).pyServices) assert.equal('watch' in s, false);
+});
+
+test('the edit frame module plans the directusUi job', () => {
+  assert.equal(plan(['core/extensions/d1-edit-frame/src/EditFramePage.vue'], EXT).directusUi, true);
+});
+
+test('a Caddyfile change plans the directusUi job (the CSP test reads the Caddyfile)', () => {
+  for (const f of ['infra/caddy/Caddyfile']) {
+    assert.equal(plan([f], EXT).directusUi, true, f);
+  }
 });

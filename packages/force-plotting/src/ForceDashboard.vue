@@ -4,6 +4,7 @@ import { GridLayout, GridItem } from 'grid-layout-plus';
 import { useRoute, useRouter } from 'vue-router';
 import ForceChart from './ForceChart.vue';
 import type { HoverSource } from './chartHover';
+import { downloadFailureMessage } from './downloadError';
 import { pickMode, type FrmMode } from './frmMode';
 import { perKeyComputed } from './perKeyComputed';
 import LoadingOverlay from './LoadingOverlay.vue';
@@ -2438,7 +2439,16 @@ function fmtDate(v: string) {
 }
 // Asset auth differs per environment (same-origin cookie in Directus, cross-origin Bearer
 // standalone), so the host adapter owns the actual download.
-function downloadFile(fileId: string) { void host.downloadAsset(fileId); }
+// A host whose download fails (expired session, file gone) rejects; that shows under the FRM image.
+const downloadMsg = ref<string | null>(null);
+// The message is about the file just tried: a different operation or axis starts clean.
+watch(() => [detail.value?.id, axis.value], () => { downloadMsg.value = null; });
+function downloadFile(fileId: string) {
+	downloadMsg.value = null;
+	void Promise.resolve()
+		.then(() => host.downloadAsset(fileId))
+		.catch((e) => { downloadMsg.value = downloadFailureMessage(e); });
+}
 
 // "Download this FRM image": in an interactive view (live cloud or octree) export the CURRENT
 // viewport — whatever zoom/pan is on screen — straight from the canvas. Only the static image
@@ -3158,6 +3168,7 @@ function fmtDateTime(v: string | null | undefined) {
 								<img v-else-if="frmUrl" :src="frmUrl" :alt="`FRM ${axis}`" />
 								<div v-else class="empty">No {{ axis }} fingerprint</div>
 								<div v-if="octreeMsg && !liveOn" class="render-msg frm-render-msg">{{ octreeMsg }}</div>
+								<div v-if="downloadMsg" class="render-msg frm-render-msg" role="alert">{{ downloadMsg }}</div>
 								<LoadingOverlay v-if="frmLoadOverlay" :stage="frmLoadOverlay" />
 							</div>
 						</div>

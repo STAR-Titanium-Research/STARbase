@@ -7,6 +7,8 @@
 // query, so its own active classes are switched off on the links.
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { linkHref } from '../links';
+import AppLink from '../components/AppLink.vue';
 import { linkForBookmark } from './navConfig';
 import type { Bookmark } from './navConfig';
 import { linkActive, readCollapsed, writeCollapsed } from './navState';
@@ -20,11 +22,9 @@ const router = useRouter();
 const active = (to: string) => linkActive(to, route.path, route.query);
 const bookmarkTo = (b: Bookmark) => linkForBookmark(b);
 
-// /d1-report/* is an API page, not an app route: open it from the server root, as the Home
-// buttons do (home/goto.ts). An app route resolves with the app's base path.
-function newTabHref(to: string): string {
-	return to.startsWith('/d1-report/') ? to : router.resolve(to).href;
-}
+// A link's href for "open in a new tab": the host decides what the path is (an app route resolves
+// with the app's base path; a report opens from the server root).
+const newTabHref = (to: string): string => linkHref(to, router);
 
 // Collapsible groups. `collapsed` is what the user chose (remembered in this browser); `forced`
 // holds the groups opened because the current page is inside them, which is not remembered.
@@ -88,7 +88,7 @@ watch(
 						<span class="ext" aria-hidden="true">↗</span>
 						<span class="sr">(opens in a new tab)</span>
 					</a>
-					<router-link
+					<AppLink
 						v-else
 						class="item"
 						:class="{ on: active(link.to) }"
@@ -98,11 +98,11 @@ watch(
 						:aria-current="active(link.to) ? 'page' : undefined"
 					>
 						<span class="label" :title="link.label">{{ link.label }}</span>
-					</router-link>
+					</AppLink>
 
 					<ul v-if="link.bookmarks.length" class="subs" :aria-label="`${link.label} saved views`">
 						<li v-for="b in link.bookmarks" :key="b.id">
-							<router-link
+							<AppLink
 								class="item sub"
 								:class="{ on: active(bookmarkTo(b)) }"
 								active-class=""
@@ -111,7 +111,7 @@ watch(
 								:aria-current="active(bookmarkTo(b)) ? 'page' : undefined"
 							>
 								<span class="label" :title="b.bookmark">{{ b.bookmark }}</span>
-							</router-link>
+							</AppLink>
 						</li>
 					</ul>
 				</li>

@@ -19,8 +19,9 @@ echo "# changed files against $base: $(wc -l <<<"$files")"
 # shellcheck disable=SC2086
 echo "pre-commit run --files $(tr '\n' ' ' <<<"$files")"
 echo "bash tests/phase0_smoke.sh"
+has '^(docker-compose\.yml|\.env\.example|infra/(caddy|tailscale)/)' && echo "node --test tests/starbase_compose.test.mjs && npm test -w starbase-web -- csp   # CI: lint, directus-ui"
 
-has '^(core/extensions/(d1-geometry-preview|d1-home|d1-report)/|scripts/sync_geometry\.sh)' && {
+has '^(core/extensions/(d1-geometry-preview|d1-report)/|packages/starbase-pages/src/|scripts/sync_geometry\.sh)' && {
   echo "bash scripts/sync_geometry.sh --check"
   echo "node --experimental-strip-types --test core/extensions/d1-geometry-preview/test/geometry.test.ts"
 }
@@ -57,8 +58,8 @@ has '^(apps/force-app/web/|packages/force-plotting/)' && \
 has '^apps/force-app/desktop/' && \
   echo "npm test -w force-app-desktop && npm run typecheck -w force-app-desktop   # CI: force-app-js"
 has '^core/extensions/d1-force-dashboard/' && echo "npm run build:extension   # CI: force-app-js"
-has '^(packages/d1-ui/|core/extensions/(d1-home|d1-lab-dashboard|d1-composition-bar|d1-campaign-ops|d1-project-items|d1-fast-dashboard)/)' && \
-  echo "npm test -w @d1/ui && npm run typecheck -w @d1/ui && npm run typecheck -w directus-extension-d1-home -w directus-extension-d1-lab-dashboard -w directus-extension-d1-campaign-ops && npm run build:extensions   # CI: directus-ui"
+has '^(packages/(d1-ui|starbase-pages|fast-plotting|directus-host|force-plotting)/|apps/starbase/web/|core/extensions/(d1-home|d1-edit-frame|d1-lab-dashboard|d1-composition-bar|d1-campaign-ops|d1-project-items|d1-fast-dashboard)/)' && \
+  echo "npm test -w @d1/ui && npm run typecheck -w @d1/ui && npm test -w @d1/fast-plotting && npm run typecheck -w @d1/fast-plotting && npm test -w @d1/directus-host && npm run typecheck -w @d1/directus-host && npm test -w @d1/starbase-pages && npm run typecheck -w @d1/starbase-pages && npm run typecheck -w directus-extension-d1-home -w directus-extension-d1-lab-dashboard -w directus-extension-d1-campaign-ops -w directus-extension-d1-edit-frame && npm run build:extensions && npm test -w starbase-web && npm run typecheck -w starbase-web && npm run build -w starbase-web   # CI: directus-ui"
 has '^apps/force-app/backend/' && echo "(cd apps/force-app/backend && pip install -e '.[dev,nidaq]' && python -m pytest -q)   # CI: force-app-backend, with the nidaq extra like the release"
 for s in backup-server bug-report-relay; do
   has "^apps/force-app/$s/" && echo "(cd apps/force-app/$s && python -m pytest -q)   # CI: python-services"

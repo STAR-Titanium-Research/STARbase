@@ -46,7 +46,7 @@ repos:
         entry: bash scripts/sync_geometry.sh --check
         language: system
         pass_filenames: false
-        files: ^core/extensions/(d1-geometry-preview|d1-home|d1-report)/src/
+        files: ^(core/extensions/(d1-geometry-preview|d1-report)|packages/starbase-pages)/src/
       - id: access-rules-in-sync
         name: Lab Member permission block and d1-access-guard rules match access_rules.json
         entry: python3 scripts/gen_access_rules.py --check

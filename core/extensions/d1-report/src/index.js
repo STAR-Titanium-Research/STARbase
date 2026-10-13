@@ -1,7 +1,8 @@
 // Directus endpoint: d1-report (mounted at /d1-report)
 //
-// GET /d1-report/label[?ids=<uuid,...>][&codes=<sample code,...>] -> 302 redirect to /admin/home/labels
-// GET /d1-report/labels -> 302 redirect to /admin/home/labels
+// GET /d1-report/label[?ids=<uuid,...>][&codes=<sample code,...>] -> 302 redirect to the labels page:
+// STARbase's when STARBASE_URL is set (an absolute http(s) address), else /admin/home/labels
+// GET /d1-report/labels -> 302 redirect to the same labels page
 // (Both carry query parameters over. The in-app Explorer labels page replaced these routes.)
 //
 // GET /d1-report/sample/:id  -> a print-ready (A4, ≤2 page) HTML "Sample Overview"
@@ -185,24 +186,38 @@ export default defineEndpoint({
 		const plain = (res, status, text) => res.status(status).type('text/plain').send(text);
 		const notFound = (res, what) => plain(res, 404, `${what} not found.`);
 
+		// STARbase's address once it is deployed (STARBASE_URL, spec §3.6); '' until then, and for anything
+		// that is not an absolute http(s) address (the same guard as d1-links), which keeps today's Directus URLs.
+		const starbaseUrl = () => {
+			const raw = String(env.STARBASE_URL || '').trim().replace(/\/+$/, '');
+			try {
+				const u = new URL(raw);
+				return u.protocol === 'https:' || u.protocol === 'http:' ? raw : '';
+			} catch {
+				return '';
+			}
+		};
+
 		// Same-origin toggle/print script (keeps us within Directus's script-src 'self').
 		router.get('/report.js', (_req, res) => {
 			res.set('Content-Type', 'application/javascript; charset=utf-8').send(REPORT_JS);
 		});
 
-		// Label routes redirect to the Explorer labels page (no authentication required).
-		// Build the redirect location using PUBLIC_URL like adminRecordUrl does.
+		// Label routes redirect to the labels page (no authentication required): STARbase's when it is
+		// deployed, else the Directus Home module's.
 		router.get('/label', (req, res) => {
+			const star = starbaseUrl();
 			const base = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
-			const target = new URL('/admin/home/labels', 'http://localhost');
+			const target = new URL(star ? '/labels' : '/admin/home/labels', 'http://localhost');
 			if (req.query.ids) target.searchParams.set('ids', req.query.ids);
 			if (req.query.codes) target.searchParams.set('codes', req.query.codes);
-			res.status(302).redirect(base + target.pathname + target.search);
+			res.status(302).redirect((star || base) + target.pathname + target.search);
 		});
 
 		router.get('/labels', (req, res) => {
+			const star = starbaseUrl();
 			const base = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
-			res.status(302).redirect(base + '/admin/home/labels');
+			res.status(302).redirect(star ? `${star}/labels` : `${base}/admin/home/labels`);
 		});
 
 		router.get('/sample/:id', async (req, res) => {
@@ -324,7 +339,7 @@ export default defineEndpoint({
 				tests.forEach((row) => blankProject(row, testProject[String(row.session_id)]));
 
 				const publicUrl = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
-				const recordUrl = adminRecordUrl(publicUrl, 'physical_samples', sid);
+				const recordUrl = adminRecordUrl(publicUrl, 'physical_samples', sid, starbaseUrl());
 				const qrSvg = await QRCode.toString(recordUrl, {
 					type: 'svg',
 					margin: 0,
@@ -409,12 +424,12 @@ export default defineEndpoint({
 						: null;
 
 				const publicUrl = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
-				const recordUrl = adminRecordUrl(publicUrl, 'manufacturing_operations', id);
+				const recordUrl = adminRecordUrl(publicUrl, 'manufacturing_operations', id, starbaseUrl());
 				const qrSvg = await QRCode.toString(recordUrl, { type: 'svg', margin: 0, errorCorrectionLevel: 'M' });
 
 				res.set('Content-Security-Policy', REPORT_CSP);
 				res.set('Content-Type', 'text/html; charset=utf-8').send(
-					renderOperationReport({ op, fa, fastRun, qrSvg, recordUrl, publicUrl })
+					renderOperationReport({ op, fa, fastRun, qrSvg, recordUrl, publicUrl, starbaseUrl: starbaseUrl() })
 				);
 			} catch (err) {
 				logger.error(`d1-report operation failed for ${id}: ${err.stack || err.message}`);
@@ -451,12 +466,12 @@ export default defineEndpoint({
 				};
 
 				const publicUrl = String(env.PUBLIC_URL || '').replace(/\/+$/, '');
-				const recordUrl = adminRecordUrl(publicUrl, 'test_sessions', id);
+				const recordUrl = adminRecordUrl(publicUrl, 'test_sessions', id, starbaseUrl());
 				const qrSvg = await QRCode.toString(recordUrl, { type: 'svg', margin: 0, errorCorrectionLevel: 'M' });
 
 				res.set('Content-Security-Policy', REPORT_CSP);
 				res.set('Content-Type', 'text/html; charset=utf-8').send(
-					renderTestReport({ test: t, qrSvg, recordUrl, publicUrl })
+					renderTestReport({ test: t, qrSvg, recordUrl, publicUrl, starbaseUrl: starbaseUrl() })
 				);
 			} catch (err) {
 				logger.error(`d1-report test failed for ${id}: ${err.stack || err.message}`);

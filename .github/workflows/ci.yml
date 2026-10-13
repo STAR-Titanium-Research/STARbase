@@ -87,6 +87,9 @@ jobs:
       - name: Extension endpoint tests
         if: ${{ !cancelled() }}
         run: node --test core/extensions/*/index.test.mjs
+      - name: "STARbase compose wiring (parse-only)"
+        if: ${{ !cancelled() }}
+        run: node --test tests/starbase_compose.test.mjs
       # d1-ask-db's and d1-report's own suites run in the `extensions` job, after their npm ci.
       - name: CI plan tests
         if: ${{ !cancelled() }}
@@ -300,7 +303,7 @@ jobs:
   # tests and typecheck, and a build of every Directus extension that imports it. Without the
   # builds a broken import in a page would only show up when someone rebuilds the extension.
   directus-ui:
-    name: Explorer UI (@d1/ui and the six extensions that use it)
+    name: Explorer UI and STARbase (@d1/ui, the extensions that use it, apps/starbase/web)
     needs: plan
     if: needs.plan.outputs.directusUi == 'true'
     runs-on: ubuntu-latest
@@ -319,13 +322,25 @@ jobs:
         run: |
           npm test -w @d1/ui
           npm run typecheck -w @d1/ui
+          npm test -w @d1/fast-plotting
+          npm run typecheck -w @d1/fast-plotting
+          npm test -w @d1/directus-host
+          npm run typecheck -w @d1/directus-host
+          npm test -w @d1/starbase-pages
+          npm run typecheck -w @d1/starbase-pages
       - name: Typecheck the Explorer pages, the lab dashboard and the campaign interface
         run: |
           npm run typecheck -w directus-extension-d1-home
+          npm run typecheck -w directus-extension-d1-edit-frame
           npm run typecheck -w directus-extension-d1-lab-dashboard
           npm run typecheck -w directus-extension-d1-campaign-ops
       - name: Build the Directus extensions that use @d1/ui
         run: npm run build:extensions
+      - name: "STARbase app: unit tests + typecheck + build"
+        run: |
+          npm test -w starbase-web
+          npm run typecheck -w starbase-web
+          npm run build -w starbase-web
 
   # Same Python and extras as the release build, which freezes the backend on 3.11 with the nidaq
   # extra. Without the extra, nidaqmx-dependent paths took the "package not installed" branch here

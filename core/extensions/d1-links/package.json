@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-links",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "/d1-links: where STARbase answers ({ starbaseUrl }): the edit frame's only postMessage target, and Data Studio's \"Open in STARbase\" link. STARBASE_URL, or null while it is unset.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

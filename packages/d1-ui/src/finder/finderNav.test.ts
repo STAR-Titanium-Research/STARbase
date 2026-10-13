@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinderHit } from './finder';
-import { isFinderShortcut, isModalOpen, isTypingKey, moveIndex, optionId, toSections } from './finderNav';
+import { isFinderShortcut, isModalOpen, isTypingKey, moveIndex, optionId, shouldOpenFinder, toSections } from './finderNav';
 
 const hit = (group: FinderHit['group'], label: string): FinderHit => ({ group, label, to: `/x/${label}`, rank: 3 });
 
@@ -84,5 +84,37 @@ describe('isTypingKey', () => {
 		expect(isTypingKey({ key: 'k', ctrlKey: true })).toBe(false);
 		expect(isTypingKey({ key: 'k', metaKey: true })).toBe(false);
 		expect(isTypingKey({ key: 'a', altKey: true })).toBe(false);
+	});
+});
+
+describe('shouldOpenFinder', () => {
+	const press = (over: Record<string, unknown> = {}) => ({
+		key: 'k', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, prevented: 0,
+		preventDefault() { this.prevented++; }, ...over,
+	});
+	const doc = (modal: boolean) => ({ querySelector: () => (modal ? {} : null) });
+
+	it('opens on Ctrl K with the finder closed and no modal', () => {
+		const e = press();
+		expect(shouldOpenFinder(e, false, doc(false))).toBe(true);
+		expect(e.prevented).toBe(1);
+	});
+	it('does not open when the finder is already open', () => {
+		expect(shouldOpenFinder(press(), true, doc(false))).toBe(false);
+	});
+	it('does not open over a drawer or dialog', () => {
+		expect(shouldOpenFinder(press(), false, doc(true))).toBe(false);
+	});
+	it('ignores a plain k and leaves it alone', () => {
+		const e = press({ ctrlKey: false });
+		expect(shouldOpenFinder(e, false, doc(false))).toBe(false);
+		expect(e.prevented).toBe(0);
+	});
+	it("still keeps the browser's own Ctrl K away when it does not open", () => {
+		const open = press();
+		shouldOpenFinder(open, true, doc(false));
+		const modal = press();
+		shouldOpenFinder(modal, false, doc(true));
+		expect([open.prevented, modal.prevented]).toEqual([1, 1]);
 	});
 });

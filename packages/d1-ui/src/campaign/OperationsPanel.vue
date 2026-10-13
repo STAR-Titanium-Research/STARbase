@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
+import { useExplorerHost } from '../host';
 import { errorText } from '../format';
 import { hasPassCode, operationLabel } from '../operationLabel';
 import { processLabel } from '../process';
@@ -29,7 +29,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
-const api = useApi();
+const api = useExplorerHost().api;
 const { getItems } = useItems();
 const gate = useRequestGate();
 

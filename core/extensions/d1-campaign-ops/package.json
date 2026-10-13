@@ -21,6 +21,7 @@
     "host": "^11.0.0"
   },
   "dependencies": {
+    "@d1/directus-host": "*",
     "@d1/ui": "*"
   }
 }

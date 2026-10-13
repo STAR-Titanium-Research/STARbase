@@ -1,0 +1,28 @@
+{
+  "name": "directus-extension-d1-edit-frame",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "The form-only record page STARbase frames: /admin/d1-edit/<collection>/<id>, Directus's own v-form with Save and Cancel, no module bar or navigation (spec §3.4).",
+  "scripts": {
+    "build": "directus-extension build",
+    "dev": "directus-extension build --watch",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "keywords": ["directus", "directus-extension", "directus-custom-module"],
+  "devDependencies": {
+    "@directus/extensions-sdk": "^17",
+    "@vue/compiler-sfc": "^3.5.43",
+    "typescript": "^7",
+    "vue": "^3",
+    "vue-tsc": "^2.2.0"
+  },
+  "directus:extension": {
+    "type": "module",
+    "path": "dist/index.js",
+    "source": "src/index.ts",
+    "host": "^11.0.0"
+  },
+  "dependencies": {
+    "@d1/ui": "*"
+  }
+}
