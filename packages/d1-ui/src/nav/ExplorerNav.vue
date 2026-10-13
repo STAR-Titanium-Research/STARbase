@@ -5,9 +5,11 @@
 // `request-mode`; this component only renders what it is given and asks for a change.
 //
 // Plain HTML and the kit's tokens, so it works unchanged in both hosts. The finder button only
-// emits; the finder dialog is wired by the host page. The rail mode comes with SidebarRail.
+// emits; the finder dialog is wired by the host page. In `rail` mode it is a 60px column of icons
+// with hover menus (SidebarRail); the host's mark goes in the `#mark` slot there.
 import '../components/tokens.css';
 import SidebarExpanded from './SidebarExpanded.vue';
+import SidebarRail from './SidebarRail.vue';
 import type { SectionId } from './sidebarModel';
 
 // The brand block (name and tagline). Inside Directus the project header above the navigation
@@ -26,17 +28,28 @@ defineEmits<{
 </script>
 
 <template>
-	<nav class="d1-kit d1-nav" aria-label="STARbase">
-		<div v-if="showBrand" class="brand">
-			STARBase
-			<small>A sisyphean pursuit</small>
-		</div>
-
-		<SidebarExpanded
+	<nav class="d1-kit d1-nav" :class="{ rail: mode === 'rail' }" aria-label="STARbase">
+		<SidebarRail
+			v-if="mode === 'rail'"
 			:collapsible="collapsible"
 			@open-finder="$emit('open-finder')"
 			@request-mode="(m, s) => $emit('request-mode', m, s)"
-		/>
+		>
+			<template v-if="$slots.mark" #mark><slot name="mark" /></template>
+		</SidebarRail>
+
+		<template v-else>
+			<div v-if="showBrand" class="brand">
+				STARBase
+				<small>A sisyphean pursuit</small>
+			</div>
+
+			<SidebarExpanded
+				:collapsible="collapsible"
+				@open-finder="$emit('open-finder')"
+				@request-mode="(m, s) => $emit('request-mode', m, s)"
+			/>
+		</template>
 	</nav>
 </template>
 
@@ -53,6 +66,8 @@ defineEmits<{
 	font-size: var(--fs-md, 13px);
 	line-height: 1.4;
 }
+/* The rail is its own 60px: icons centred in it, no side padding. */
+.d1-nav.rail { display: flex; flex-direction: column; width: 60px; padding: 8px 0 12px; }
 .brand { padding: 4px 8px 10px; font-size: var(--fs-lg, 15px); font-weight: 700; color: #fff; }
 .brand small { display: block; font-size: var(--fs-xs, 11px); font-weight: 400; color: var(--d1-side-dim); }
 </style>
