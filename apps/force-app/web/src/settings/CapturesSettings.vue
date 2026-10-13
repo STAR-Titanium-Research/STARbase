@@ -30,6 +30,7 @@ import {
 import { canRevealPaths, copyText, revealPath } from '../localPaths';
 import { focusIdFrom } from '../ui/focusLink';
 import { spotlight } from '../ui/spotlight';
+import { ThinkingOrb } from '@d1/force-plotting';
 
 interface Capture {
 	id: string;
@@ -813,7 +814,8 @@ onMounted(async () => {
 		</div>
 
 		<div v-if="uploadRun" class="progress" role="status">
-			<span class="material-symbols-rounded" :class="{ spin: uploadingAll }">{{ uploadingAll ? 'progress_activity' : 'cloud_done' }}</span>
+			<ThinkingOrb v-if="uploadingAll" :size="18" label="" />
+			<span v-else class="material-symbols-rounded">cloud_done</span>
 			<span class="ptext">{{ uploadProgressText(uploadRun) }}</span>
 			<progress :max="uploadRun.total" :value="uploadRun.done"></progress>
 			<button v-if="uploadingAll" class="btn sm" :disabled="uploadRun.cancelRequested" @click="cancelUploadAll">Cancel</button>
@@ -861,7 +863,7 @@ onMounted(async () => {
 		</div>
 
 		<div v-if="bulk" class="progress" role="status">
-			<span class="material-symbols-rounded spin">progress_activity</span>
+			<ThinkingOrb :size="18" label="" />
 			<span class="ptext">Deleting {{ Math.min(bulk.done + 1, bulk.total) }} of {{ bulk.total }}: {{ bulk.current }}</span>
 			<progress :max="bulk.total" :value="bulk.done"></progress>
 			<button class="btn sm" :disabled="bulk.cancel" @click="cancelBulk">{{ bulk.cancel ? 'Cancelling…' : 'Cancel' }}</button>
@@ -1016,7 +1018,8 @@ onMounted(async () => {
 					<span class="material-symbols-rounded">edit</span>Edit
 				</button>
 				<button v-if="!c.finalized && c.recoverable && !c.recording && !c.discarding" class="btn sm success" :disabled="!!busy[c.id] || c.recovering" :title="c.recovering ? 'A recover or restore is already running for this recording' : 'Finalize this interrupted recording so it can be used'" @click="recover(c)">
-					<span class="material-symbols-rounded" :class="{ spin: busy[c.id] === 'recovering' }">{{ busy[c.id] === 'recovering' ? 'progress_activity' : 'healing' }}</span>
+					<ThinkingOrb v-if="busy[c.id] === 'recovering'" :size="16" label="" />
+					<span v-else class="material-symbols-rounded">healing</span>
 					{{ busy[c.id] === 'recovering' ? 'Recovering…' : 'Recover' }}
 				</button>
 				<button v-if="canUpload(c) || busy[c.id] === 'uploading'" class="btn sm" :disabled="!!busy[c.id] || uploadingAll || !!bulk" :title="uploadingAll ? 'Upload all is running' : bulk ? 'A delete is running' : ''" @click="upload(c)">
