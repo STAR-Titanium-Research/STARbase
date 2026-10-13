@@ -2,8 +2,9 @@
 // The rail (explorer-sidebar-b2 spec, decision 7): the sidebar as a 60px column of icons. From the
 // top: the host's mark (`#mark` slot), Find, Home, one icon per pin (with more than 6, five and a
 // "+n" button), a short divider, the five section icons and, when `collapsible`, the expand button.
-// Every icon has an aria-label and, on hover and on keyboard focus, a tooltip pill. A section icon
-// (and "+n") opens a hover menu (NavHoverMenu) with that section's pages; see useRailMenu.
+// Every icon has an aria-label; the link and button icons also show a tooltip pill on hover and on
+// keyboard focus (useRailTip). A section icon (and "+n") opens a hover menu (NavHoverMenu) instead,
+// whose header names it; see useRailMenu.
 //
 // The data is the same as the expanded sidebar's (useSidebarData), so both modes show the same
 // sections and pins. Plain HTML and the kit's tokens: it works unchanged in Directus and STARbase.
@@ -15,6 +16,7 @@ import { pinKey, railPins } from './sidebarModel';
 import type { SectionId } from './sidebarModel';
 import { HOME_LINK } from './sidebarRows';
 import { useRailMenu } from './useRailMenu';
+import { useRailTip } from './useRailTip';
 import { useSidebarData } from './useSidebarData';
 
 withDefaults(defineProps<{ collapsible?: boolean }>(), { collapsible: false });
@@ -25,6 +27,7 @@ const rail = computed(() => railPins(resolved.value.shown));
 const overflowCurrent = computed(() => rail.value.overflow.some((p) => isCurrent(p.to)));
 
 const menus = useRailMenu();
+const { tip, tipEvents } = useRailTip();
 const OVERFLOW = 'overflow';
 const secKey = (id: SectionId) => `sec:${id}`;
 
@@ -36,7 +39,7 @@ const setSlot = (key: string, el: unknown) => {
 };
 function closeMenu(key: string, refocus: boolean) {
 	menus.close(key);
-	if (refocus) slots.get(key)?.querySelector<HTMLElement>('.icon')?.focus();
+	if (refocus) menus.focusIcon(slots.get(key));
 }
 </script>
 
@@ -44,21 +47,25 @@ function closeMenu(key: string, refocus: boolean) {
 	<div class="rail">
 		<div v-if="$slots.mark" class="mark"><slot name="mark" /></div>
 
-		<div class="slot">
+		<div class="slot" v-on="tipEvents('Find a record', 'Ctrl K')">
 			<button type="button" class="icon" aria-haspopup="dialog" aria-label="Find a record (Ctrl K)" @click="$emit('open-finder')">
 				<NavIcon name="search" :size="20" />
 			</button>
-			<span class="tip" aria-hidden="true">Find a record <kbd>Ctrl K</kbd></span>
 		</div>
 
-		<div class="slot" :class="{ current: isCurrent(HOME_LINK.to) }">
+		<div class="slot" :class="{ current: isCurrent(HOME_LINK.to) }" v-on="tipEvents('Home')">
 			<AppLink class="icon" active-class="" exact-active-class="" :to="HOME_LINK.to" aria-label="Home" :aria-current="isCurrent(HOME_LINK.to) ? 'page' : undefined">
 				<NavIcon :name="HOME_LINK.icon" :size="20" />
 			</AppLink>
-			<span class="tip" aria-hidden="true">Home</span>
 		</div>
 
-		<div v-for="p in rail.shown" :key="pinKey(p.ref)" class="slot" :class="{ current: isCurrent(p.to) }">
+		<div
+			v-for="p in rail.shown"
+			:key="pinKey(p.ref)"
+			class="slot"
+			:class="{ current: isCurrent(p.to) }"
+			v-on="tipEvents(p.hint ? `${p.label} · ${p.hint}` : p.label)"
+		>
 			<AppLink
 				class="icon pin"
 				active-class=""
@@ -69,7 +76,6 @@ function closeMenu(key: string, refocus: boolean) {
 			>
 				<NavIcon :name="p.icon" :size="18" />
 			</AppLink>
-			<span class="tip" aria-hidden="true">{{ p.label }}<template v-if="p.hint"> · {{ p.hint }}</template></span>
 		</div>
 
 		<div
@@ -130,12 +136,15 @@ function closeMenu(key: string, refocus: boolean) {
 
 		<div class="spacer" />
 
-		<div v-if="collapsible" class="slot">
+		<div v-if="collapsible" class="slot" v-on="tipEvents('Expand sidebar')">
 			<button type="button" class="icon" aria-label="Expand sidebar" @click="$emit('request-mode', 'expanded')">
 				<NavIcon name="panel-left-open" :size="20" />
 			</button>
-			<span class="tip" aria-hidden="true">Expand sidebar</span>
 		</div>
+
+		<span v-if="tip" class="tip" aria-hidden="true" :style="{ top: `${tip.top}px`, left: `${tip.left}px` }">
+			{{ tip.text }}<kbd v-if="tip.kbd">{{ tip.kbd }}</kbd>
+		</span>
 	</div>
 </template>
 
@@ -160,16 +169,13 @@ function closeMenu(key: string, refocus: boolean) {
 .slot.current > .icon { background: var(--d1-side-current); color: #fff; }
 .icon:focus-visible { outline: 2px solid var(--d1-side-bar); outline-offset: -2px; }
 
-/* The tooltip pill, to the right of the icon on hover and on keyboard focus. position: fixed with no
-   offsets keeps it where it falls in the slot (vertically centred, from the icon's left) but outside
-   any scrolling or clipping ancestor of the rail. */
+/* The tooltip pill (useRailTip): fixed, beside the icon, vertically centred on it. */
 .tip {
-	position: fixed; z-index: 60; display: none; margin-left: 52px; padding: 4px 9px; border-radius: 6px;
+	position: fixed; z-index: 60; transform: translateY(-50%); padding: 4px 9px; border-radius: 6px;
 	background: var(--d1-side-current); color: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 	font-size: 13px; line-height: 1.3; white-space: nowrap; pointer-events: none;
 }
-.tip kbd { margin-left: 4px; font: inherit; font-size: 11px; color: var(--d1-side-dim); }
-.slot:hover > .tip, .slot:has(> .icon:focus-visible) > .tip { display: block; }
+.tip kbd { margin-left: 8px; font: inherit; font-size: 11px; color: var(--d1-side-dim); }
 
 .divider { width: 28px; height: 0; margin: 8px auto; border: 0; border-top: 1px solid var(--d1-side-hairline); }
 .spacer { flex: 1 1 auto; min-height: 12px; }
