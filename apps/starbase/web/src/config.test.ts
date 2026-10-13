@@ -1,13 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_DIRECTUS_URL, getConfig, loadRuntimeConfig, resolveConfig, type ConfigEnv } from './config';
+import { DEFAULT_DIRECTUS_URL, DEV_DIRECTUS_URL, getConfig, loadRuntimeConfig, resolveConfig, type ConfigEnv } from './config';
 
 const D1 = DEFAULT_DIRECTUS_URL;
+const DEV = DEV_DIRECTUS_URL;
 
 describe('resolveConfig', () => {
-	it('defaults to d1-server and the sidecars at their paths on it', () => {
-		expect(resolveConfig({}, null)).toEqual({
+	it('a production build defaults to d1-server and the sidecars at their paths on it', () => {
+		expect(resolveConfig({}, null, false)).toEqual({
 			directusUrl: D1, filterUrl: `${D1}/filter`, diagUrl: `${D1}/diag`, octreeUrl: `${D1}/octrees`,
 		});
+	});
+	it('a dev build defaults to the d1-starbase preview, never to live', () => {
+		expect(DEV).toBe('http://127.0.0.1:18057');
+		expect(resolveConfig({}, null, true)).toEqual({
+			directusUrl: DEV, filterUrl: `${DEV}/filter`, diagUrl: `${DEV}/diag`, octreeUrl: `${DEV}/octrees`,
+		});
+		expect(resolveConfig({ VITE_DIRECTUS_URL: 'http://127.0.0.1:9' }, null, true).directusUrl).toBe('http://127.0.0.1:9');
+		expect(resolveConfig({}, { directusUrl: 'https://d1.example' }, true).directusUrl).toBe('https://d1.example');
 	});
 	it('derives the sidecars from a directusUrl alone (production config.json is just that)', () => {
 		expect(resolveConfig({}, { directusUrl: 'https://d1.example/' })).toEqual({
@@ -16,12 +25,25 @@ describe('resolveConfig', () => {
 	});
 	it('runtime beats build time, an explicit sidecar beats the derived one, trailing slashes go', () => {
 		const env: ConfigEnv = { VITE_DIRECTUS_URL: 'http://127.0.0.1:18057', VITE_FILTER_URL: 'http://127.0.0.1:8000/' };
-		expect(resolveConfig(env, null).filterUrl).toBe('http://127.0.0.1:8000');
-		expect(resolveConfig(env, { directusUrl: 'https://d1.example' }).directusUrl).toBe('https://d1.example');
-		expect(resolveConfig(env, { octreeUrl: 'https://o.example//' }).octreeUrl).toBe('https://o.example');
+		expect(resolveConfig(env, null, false).filterUrl).toBe('http://127.0.0.1:8000');
+		expect(resolveConfig(env, { directusUrl: 'https://d1.example' }, false).directusUrl).toBe('https://d1.example');
+		expect(resolveConfig(env, { octreeUrl: 'https://o.example//' }, false).octreeUrl).toBe('https://o.example');
+	});
+	it('build-time sidecars still win when config.json is silent about directusUrl', () => {
+		const env: ConfigEnv = { VITE_DIRECTUS_URL: 'http://127.0.0.1:18057', VITE_DIAG_URL: 'http://127.0.0.1:8001' };
+		const c = resolveConfig(env, { octreeUrl: 'https://o.example' }, false);
+		expect(c.diagUrl).toBe('http://127.0.0.1:8001');
+		expect(c.filterUrl).toBe('http://127.0.0.1:18057/filter');
+		expect(c.octreeUrl).toBe('https://o.example');
+	});
+	it('sidecars follow a runtime-moved origin: build-time sidecars are ignored when config.json sets directusUrl', () => {
+		const env: ConfigEnv = { VITE_DIRECTUS_URL: 'http://127.0.0.1:18057', VITE_FILTER_URL: 'http://127.0.0.1:8000', VITE_DIAG_URL: 'http://127.0.0.1:8001', VITE_OCTREE_URL: 'http://127.0.0.1:8002' };
+		expect(resolveConfig(env, { directusUrl: 'https://d1.example', diagUrl: 'https://diag.example/' }, false)).toEqual({
+			directusUrl: 'https://d1.example', filterUrl: 'https://d1.example/filter', diagUrl: 'https://diag.example', octreeUrl: 'https://d1.example/octrees',
+		});
 	});
 	it('blank values count as unset', () => {
-		expect(resolveConfig({ VITE_DIRECTUS_URL: '  ' }, { directusUrl: '' }).directusUrl).toBe(D1);
+		expect(resolveConfig({ VITE_DIRECTUS_URL: '  ' }, { directusUrl: '' }, false).directusUrl).toBe(D1);
 	});
 });
 
