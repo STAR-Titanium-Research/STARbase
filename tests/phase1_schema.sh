@@ -2645,9 +2645,6 @@ echo "== Lab Member row-level visibility (ADR-0011) =="
 # CI has no live Directus, so the stored permission JSON is what can be tested: the Lab Member rows
 # must carry exactly the filters scripts/gen_access_rules.py generates from scripts/access_rules.json.
 LM=20000002-0000-0000-0000-000000000002
-# 0 until the Lab Member rows are appended to migration 166 (the second part of the file, after the readers): the checks of
-# those rows only run once the migration carries them
-LA_RULES=$(grep -c 'lab_member_access_rules_backup' db/migrations/20261012000166_record_readers_and_rules.sql)
 rules_json=$(python3 scripts/gen_access_rules.py --json)
 python3 scripts/gen_access_rules.py --check >/dev/null 2>&1 \
     && ok "configure_users_and_policies.sql and the d1-access-guard rules.json carry the generated rules (no drift from access_rules.json)" \
@@ -2690,9 +2687,27 @@ SELECT 'people_columns_left_out:' || string_agg(c.column_name, ',' ORDER BY c.co
  WHERE c.table_schema = 'public' AND c.table_name = 'people'
    AND c.column_name <> ALL (string_to_array((SELECT fields FROM directus_permissions
         WHERE policy = '$LM' AND collection = 'people' AND action = 'update'), ','));
-SELECT 'sample_read_has_co_owners:' || count(*) FROM directus_permissions
- WHERE policy = '$LM' AND collection = 'physical_samples' AND action = 'read'
-   AND permissions::jsonb @> '{"_or":[{"co_owners":{"_some":{"user_id":{"_eq":"\$CURRENT_USER"}}}}]}'::jsonb;
+-- read visibility is the readers tables: one membership test per record type, the amnesty leaf for operations, one bare hop for children
+SELECT 'read_membership:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND action = 'read' AND collection IN ('physical_samples','test_sessions','campaigns','projects','campaign_samples')
+   AND permissions::jsonb = '{"readers":{"_some":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb;
+SELECT 'ops_read_amnesty:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND collection = 'manufacturing_operations' AND action = 'read'
+   AND permissions::jsonb = '{"_or":[{"readers":{"_some":{"user_id":{"_eq":"\$CURRENT_USER"}}}},{"open_to_all":{"_some":{"record_id":{"_nnull":true}}}}]}'::jsonb;
+SELECT 'child_one_hop:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND action = 'read'
+   AND permissions::jsonb IN ('{"operation_id":{"readers":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb, '{"session_id":{"readers":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb,
+                              '{"sample_id":{"readers":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb, '{"project_id":{"readers":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb,
+                              '{"test_sessions_id":{"readers":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb);
+SELECT 'update_delete_no_some:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND action IN ('update','delete') AND permissions::text LIKE '%_some%';
+SELECT 'readers_tables_read:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND action = 'read' AND collection IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers')
+   AND permissions::jsonb = '{"user_id":{"_eq":"\$CURRENT_USER"}}'::jsonb AND fields = '*';
+SELECT 'open_set_read:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND action = 'read' AND collection = 'operation_open_to_all' AND permissions::jsonb = '{}'::jsonb;
+SELECT 'readers_tables_write:' || count(*) FROM directus_permissions
+ WHERE policy = '$LM' AND action <> 'read' AND collection IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all');
 SELECT 'access_tables_read:' || count(*) FROM directus_permissions
  WHERE policy = '$LM' AND action = 'read' AND collection IN ('sample_access','operation_access','test_access','campaign_access','project_access')
    AND permissions::jsonb = '{"person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}'::jsonb;
@@ -2710,18 +2725,14 @@ SQL
 )
 rl_check() { grep -qxF -- "$1" <<<"$rl_out" && ok "$2" || bad "$2 (psql output: $rl_out)"; }
 gen_n=$(grep -o '^generated:[0-9]*' <<<"$rl_out" | cut -d: -f2)
-if (( LA_RULES )); then
 [[ "${gen_n:-0}" -gt 40 ]] && rl_check "exact:$gen_n" "every ruled Lab Member row carries exactly the generated permissions, validation and fields ($gen_n rows)" \
     || bad "the generator produced too few rules (psql output: $rl_out)"
 rl_check "stray:0" "no Lab Member row carries a filter that access_rules.json does not generate"
-else
-    echo "  SKIP the Lab Member rows equal the generator's output (the rules part of migration 166 is not in the file yet)"
-fi
 rl_check "unlisted:0" "every Lab Member (collection, action) row in the database is listed in access_rules.json"
-(( LA_RULES )) && rl_check "access_tables_read:5" "Lab Member reads the five access tables for the rows about themselves"
+rl_check "access_tables_read:5" "Lab Member reads the five access tables for the rows about themselves"
 rl_check "access_tables_write:0" "Lab Member has no create, update or delete grant on any access table (only the record-access endpoint writes them)"
 rl_check "params_tables_present:0" "the eleven *_params tables are gone (migration 20260623000032), so there is nothing to rule; access_rules.json keeps their stale grants only for these drift checks"
-(( LA_RULES )) && rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
+rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
 rl_check "reference_filtered:0" "reference data, people and directus_files stay unfiltered"
 rl_check "ref_in_rules:0" "materials, equipment and raw_stock_lots have no rules"
 rl_check "audit_logs_rows:0" "Lab Member has no grant on audit_logs (admins only)"
@@ -2729,7 +2740,13 @@ rl_check "people_actions:create,read,update" "Lab Member can create, read and up
 rl_check "people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "Lab Member cannot update people.user_id (no relink takeover)"
 rl_check "people_create_validation:true" "a Lab Member can only create a People row with no login or their own"
 rl_check "people_columns_left_out:created_at,legacy_machine_operator_id,person_id,user_id" "people.update leaves out exactly the key, the login, the legacy id and the timestamp"
-(( LA_RULES )) && rl_check "sample_read_has_co_owners:1" "the sample read filter matches co_owners._some.user_id (the M2M alias)"
+rl_check "read_membership:5" "samples, tests, campaigns, projects and campaign_samples read through ONE membership test on their readers table"
+rl_check "ops_read_amnesty:1" "operations read through the readers table OR the open_to_all leaf (the narrowed amnesty)"
+rl_check "child_one_hop:11" "every child of a record reads through one bare hop to its parent's readers (11 collections)"
+rl_check "update_delete_no_some:0" "no update or delete filter contains a _some (a legal _some would apply the readers table's own rule for the action)"
+rl_check "readers_tables_read:6" "Lab Member reads the six readers tables for their own rows only (user_id = the caller)"
+rl_check "open_set_read:1" "Lab Member reads operation_open_to_all without a filter"
+rl_check "readers_tables_write:0" "Lab Member has no create, update or delete grant on any readers table (only the recompute triggers write them)"
 rl_check 'rollup_read:{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"restricted":{"_eq":false}},{"_or":[{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"project_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"project_id":{"access":{"role":{"_in":["investigator"]}}}}]}]}]}]}' \
     "project_rollup: the project's PI reads every row, an investigator (old table or access role investigator) only restricted = false rows"
 for idx in idx_physical_samples_owner_person_id idx_physical_samples_project_id \
@@ -3068,11 +3085,7 @@ rv_check "up_people_actions:create,read,update" "up: Lab Member people delete is
 rv_check "up_people_update_fields:full_name,email,is_operator,is_researcher,active,notes" "up: people update loses user_id"
 rv_check "up_people_create_validation:true" "up: people create gets the login validation"
 n_exact=$(grep -o '^up_exact:[0-9]*' <<<"$rv_out" | cut -d: -f2)
-if (( LA_RULES )); then
 [[ "${n_exact:-0}" -eq "${gen_n:-x}" ]] && ok "up, then 20261010000160: every ruled row matches the generated rules ($n_exact rows)" || bad "up: ruled rows differ from the generated rules (psql output: $rv_out)"
-else
-    echo "  SKIP up, then 20261010000160: every ruled row matches the generated rules (the rules part of migration 166 is not in the file yet)"
-fi
 n_backup=$(grep -o '^up_backup_rows:[0-9]*' <<<"$rv_out" | cut -d: -f2)
 [[ "${n_backup:-0}" -eq 9 ]] && ok "up: the backup holds the 9 seeded Lab Member rows of the changed collections" || bad "up: backup has ${n_backup:-?} rows, want 9 (psql output: $rv_out)"
 rv_check "up_backup_exact:0" "up: the backup rows equal the rows before the migration, ids included"
@@ -3314,7 +3327,8 @@ BEGIN;
 CREATE TEMP TABLE rd_before AS SELECT 'sample_readers' AS k, count(*) AS n FROM sample_readers UNION ALL SELECT 'operation_readers', count(*) FROM operation_readers
   UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
   UNION ALL SELECT 'open', count(*) FROM operation_open_to_all UNION ALL SELECT 'hidden', count(*) FROM d1_private.hidden_records;
--- a second up changes nothing and leaves no drift
+-- a second up changes nothing and leaves no drift (the Lab Member rows part keeps a temp table until commit)
+DROP TABLE IF EXISTS _lm_access_rules;
 $la_up
 SELECT 'up2_drift:' || d1_private.readers_drift_count();
 SELECT 'up2_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n FROM sample_readers UNION ALL SELECT 'operation_readers', count(*) FROM operation_readers
@@ -3332,6 +3346,7 @@ SELECT 'dn_meta:' || (SELECT count(*) FROM directus_relations WHERE many_collect
 SELECT 'dn_fks:' || count(*) FROM pg_constraint WHERE conname IN ('sample_co_owners_user_id_fkey','project_investigators_user_id_fkey');
 SELECT 'dn_rollup_unlocked:' || (position('d1_readers' IN prosrc) = 0) FROM pg_proc WHERE proname = 'refresh_project_rollup' AND pronamespace = 'public'::regnamespace;
 -- and up again gives the same tables, drift empty
+DROP TABLE IF EXISTS _lm_access_rules;
 $la_up
 $rr_up
 SELECT 'up3_drift:' || d1_private.readers_drift_count();
@@ -3354,7 +3369,6 @@ rc_check "dn_rollup_unlocked:true" "down restores refresh_project_rollup() witho
 rc_check "up3_drift:0" "up after down gives drift 0"
 rc_check "up3_same:0" "up after down rebuilds the same readers tables"
 
-if (( LA_RULES )); then
 echo "== Migrations 166 and 167: Lab Member record access rules apply, reapply and reverse =="
 # The database was migrated to the head, so 166 and 167 are applied. 167 goes down first (it rewrites the project_rollup
 # row 166 left), then 166: main's rows must be back exactly (the frozen generator output of 2026-10-12 is
@@ -3424,7 +3438,7 @@ la_n=$(grep -o '^final_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
 [[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 1 ))" ]] \
     && ok "166 alone: every ruled row but project_rollup (167's) matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
 la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
-la_check "up_backup_inserted:5" "up: exactly the five access rows are recorded as inserted"
+la_check "up_backup_inserted:12" "up: exactly the twelve new rows (five access tables, six readers tables, operation_open_to_all) are recorded as inserted"
 la_check "up_backup_commented:true" "up: the backup table has a comment"
 la_check "up_llm_select:false" "up: the LLM role cannot read the backup"
 la_check "up_in_dictionary:0" "up: the backup is not in v_schema_dictionary (the Ask-DB prompt)"
@@ -3435,9 +3449,6 @@ la_check "dn2_backup:gone" "down after a second up drops the backup table"
 la_check "up3_exact_as_head:0" "up again gives the rows the database had at the head"
 [[ "$(grep -o '^up2_backup_rows:[0-9]*' <<<"$la_out" | cut -d: -f2)" == "$(grep -o '^up_backup_rows:[0-9]*' <<<"$la_out" | cut -d: -f2)" ]] \
     && ok "a second up adds no backup rows" || bad "a second up changed the backup (psql output: $la_out)"
-else
-    echo "  SKIP the Lab Member rules of migration 166 (not in the file yet)"
-fi
 
 echo "== Migration 167: the project rollup carries restricted =="
 # The cache (project_rollup) and the view behind it gain `restricted`; the refresh copies it; flipping a sample's flag

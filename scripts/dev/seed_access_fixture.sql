@@ -3,13 +3,30 @@
 -- database. Live has no access rows and nothing restricted, so an unseeded copy shows almost no fan-out. This adds,
 -- on top of the copy's own data (about 170 samples, 10k operations, 9 projects):
 --   4 large synthetic projects (project 3 is restricted) and 12 campaigns (campaign 5 is restricted)
---   1500 samples (8% restricted, 70% in a project), each in 1 to 3 campaigns (so several campaigns of big projects)
+--   :n_samples (1500) samples (8% restricted, 70% in a project), each in 1 to 3 campaigns (so several campaigns of big projects)
 --   an access list of 4 people on a quarter of the samples, on every campaign and every project (one investigator)
 --   300 old co-owner rows, 4000 operations on those samples (8% restricted, a third with a project, a third with a
 --   campaign, a few with an access list) and 600 tests (9% restricted)
 -- and two Lab Members with tokens: perf-stranger (involved in nothing: the rules scan everything and return only
 -- the orphan FAST runs) and perf-member (co-owner of 20 samples, investigator of two projects, owner of 30 operations).
 \set ON_ERROR_STOP on
+-- sizes (psql -v n_samples=3000 ...; the defaults are the gate's seed)
+\if :{?n_samples}
+\else
+  \set n_samples 1500
+\endif
+\if :{?n_ops}
+\else
+  \set n_ops 4000
+\endif
+\if :{?n_tests}
+\else
+  \set n_tests 600
+\endif
+\if :{?n_analyses}
+\else
+  \set n_analyses 2500
+\endif
 SELECT setseed(0.42);
 
 CREATE SCHEMA perf;
@@ -41,14 +58,14 @@ SELECT perf.id('C' || i), perf.id('P' || (1 + i % 4)), 'testing_campaign', 'Perf
 -- samples: 1500, in 1 to 3 campaigns
 INSERT INTO physical_samples (sample_id, sample_code, project_id, owner_person_id, restricted)
 SELECT perf.id('S' || i), 'PFS' || i, CASE WHEN i % 10 < 7 THEN perf.id('P' || (1 + i % 4)) END, perf.any_person('so' || i), i % 12 = 0
-  FROM generate_series(1, 1500) i;
+  FROM generate_series(1, :n_samples) i;
 INSERT INTO campaign_samples (campaign_id, sample_id)
 SELECT perf.id('C' || c), perf.id('S' || i)
-  FROM generate_series(1, 1500) i, LATERAL unnest(ARRAY[1 + i % 12, 1 + (i * 7) % 12] || CASE WHEN i % 5 = 0 THEN ARRAY[1 + (i * 5) % 12] ELSE ARRAY[]::int[] END) AS c
+  FROM generate_series(1, :n_samples) i, LATERAL unnest(ARRAY[1 + i % 12, 1 + (i * 7) % 12] || CASE WHEN i % 5 = 0 THEN ARRAY[1 + (i * 5) % 12] ELSE ARRAY[]::int[] END) AS c
 ON CONFLICT DO NOTHING;
 INSERT INTO sample_co_owners (sample_id, user_id)
 SELECT DISTINCT ON (s) perf.id('S' || s), p.user_id
-  FROM generate_series(1, 1500, 5) s, LATERAL (SELECT user_id FROM people WHERE user_id IS NOT NULL AND full_name NOT LIKE 'Perf %' ORDER BY md5(person_id::text || 'cow' || s) LIMIT 1) p
+  FROM generate_series(1, :n_samples, 5) s, LATERAL (SELECT user_id FROM people WHERE user_id IS NOT NULL AND full_name NOT LIKE 'Perf %' ORDER BY md5(person_id::text || 'cow' || s) LIMIT 1) p
 ON CONFLICT DO NOTHING;
 -- the member: co-owner of 20 samples, investigator of projects 1 and 2
 INSERT INTO sample_co_owners (sample_id, user_id) SELECT perf.id('S' || (i * 70 + 1)), perf.id('user-member') FROM generate_series(0, 19) i ON CONFLICT DO NOTHING;
@@ -57,18 +74,18 @@ INSERT INTO project_investigators (project_id, user_id) VALUES (perf.id('P1'), p
 -- operations: 4000 on those samples
 INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, project_id, campaign_id, owner_person_id, restricted)
 SELECT perf.id('O' || i), (SELECT method_id FROM manufacturing_methods WHERE method_code = 'HT'),
-       perf.id('S' || (1 + i % 1500)),
+       perf.id('S' || (1 + i % :n_samples)),
        CASE WHEN i % 3 = 0 THEN perf.id('P' || (1 + i % 4)) END,
        CASE WHEN i % 3 = 1 THEN perf.id('C' || (1 + i % 12)) END,
        CASE WHEN i % 130 = 0 THEN perf.id('person-member') WHEN i % 5 <> 0 THEN perf.any_person('oo' || i) END,
        i % 13 = 0
-  FROM generate_series(1, 4000) i;
+  FROM generate_series(1, :n_ops) i;
 INSERT INTO test_sessions (session_id, test_type, project_id, campaign_id, owner_person_id, restricted)
 SELECT perf.id('T' || i), 'hardness', CASE WHEN i % 3 = 0 THEN perf.id('P' || (1 + i % 4)) END, CASE WHEN i % 3 = 1 THEN perf.id('C' || (1 + i % 12)) END,
        perf.any_person('to' || i), i % 11 = 0
-  FROM generate_series(1, 600) i;
+  FROM generate_series(1, :n_tests) i;
 INSERT INTO test_sessions_subject (test_sessions_id, collection, item)
-SELECT perf.id('T' || i), 'physical_samples', perf.id('S' || (1 + (i * 3) % 1500))::text FROM generate_series(1, 600) i;
+SELECT perf.id('T' || i), 'physical_samples', perf.id('S' || (1 + (i * 3) % :n_samples))::text FROM generate_series(1, :n_tests) i;
 
 -- access lists: 4 people on every project and campaign, on a quarter of the samples, on 160 operations
 INSERT INTO project_access (project_id, person_id, role)
@@ -79,8 +96,17 @@ SELECT perf.id('C' || i), perf.any_person('ca' || i || '-' || j), CASE WHEN j = 
   FROM generate_series(1, 12) i, generate_series(1, 4) j ON CONFLICT DO NOTHING;
 INSERT INTO sample_access (sample_id, person_id, role)
 SELECT perf.id('S' || i), perf.any_person('sa' || i || '-' || j), CASE WHEN j = 1 THEN 'edit' ELSE 'view' END
-  FROM generate_series(1, 1500, 4) i, generate_series(1, 4) j ON CONFLICT DO NOTHING;
+  FROM generate_series(1, :n_samples, 4) i, generate_series(1, 4) j ON CONFLICT DO NOTHING;
 INSERT INTO operation_access (operation_id, person_id, role)
-SELECT perf.id('O' || i), perf.any_person('oa' || i || '-' || j), 'view' FROM generate_series(1, 4000, 25) i, generate_series(1, 3) j ON CONFLICT DO NOTHING;
+SELECT perf.id('O' || i), perf.any_person('oa' || i || '-' || j), 'view' FROM generate_series(1, :n_ops, 25) i, generate_series(1, 3) j ON CONFLICT DO NOTHING;
+
+-- the child lists the Force App queries (machining_force_analysis by the operation, fast_run_data, operation_data_files): analysis rows on a
+-- share of the seeded operations and on real operations of the copy (the real FAST runs, the amnesty set), fast_run_data on the seeded ones
+INSERT INTO machining_force_analysis (operation_id, status, peak_fx, peak_fy, peak_fz)
+SELECT o.operation_id, 'done', 10 + (row_number() OVER ())::int % 90, 5 + (row_number() OVER ())::int % 40, 20 + (row_number() OVER ())::int % 120
+  FROM (SELECT operation_id FROM manufacturing_operations ORDER BY md5(operation_id::text) LIMIT :n_analyses) o
+ WHERE NOT EXISTS (SELECT 1 FROM machining_force_analysis a WHERE a.operation_id = o.operation_id);
+INSERT INTO fast_run_data (operation_id, status)
+SELECT perf.id('O' || i), 'done' FROM generate_series(1, :n_ops, 3) i ON CONFLICT DO NOTHING;
 
 ANALYZE;

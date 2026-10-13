@@ -66,7 +66,9 @@ await check('create_test_with_subject', async () => {
   expect(test.test_code === `${sampleCode}-SEM1`, `test_code ${test.test_code}, expected ${sampleCode}-SEM1`);
 });
 
-const DROP = ['session_id', 'short_id', 'created_at', 'updated_at', 'version', 'subject', 'created_by'];
+// `fields=*` also returns the hidden o2m aliases of migrations 165 and 166 (`access`, `readers`: the ids of the access and readers rows); a
+// client that re-POSTs a GET body must drop them (the readers rows belong to the source record, and the Lab Member has no write grant on them)
+const DROP = ['session_id', 'short_id', 'created_at', 'updated_at', 'version', 'subject', 'created_by', 'access', 'readers'];
 async function copyOfTest() {
   const r = await api('GET', `/items/test_sessions/${test.session_id}?fields=*`);
   expect(r.status === 200, `read test: status ${r.status}: ${errText(r)}`);
@@ -470,6 +472,157 @@ await check('lm_access_tables_show_own_rows_only_and_take_no_writes', async () =
   const u = universe(0);
   const write = await api('POST', '/items/sample_access', { sample_id: u.S, person_id: u.P, role: 'view' }, FX.users.owner);
   expect(write.status === 403, `a member creating a sample_access row: status ${write.status}, expected 403`);
+});
+
+// --- readers-based rules (migration 166): the child collections read through ONE bare hop to the parent's readers table, campaign_samples
+// through its own readers alias, sample_genealogy through the one two-hop OR left. Each is compared with the oracle's answer for the
+// parent (the fixture adds child rows to every universe), with no duplicate rows and with filter_count and paging in step.
+const CHILD_FILTER = {
+  manufacturing_operations: () => fixtureIds('manufacturing_operations'),
+  test_sessions: () => fixtureIds('test_sessions'),
+  physical_samples: () => fixtureIds('physical_samples'),
+  projects: () => fixtureIds('projects'),
+};
+// [child collection, the fk to the parent, parent collection, which oracle list answers it]
+const CHILDREN = [
+  ['machining_force_analysis', 'operation_id', 'manufacturing_operations', 'op_ordinary'],
+  ['fast_run_data', 'operation_id', 'manufacturing_operations', 'op_ordinary'],
+  ['operation_additional_operators', 'operation_id', 'manufacturing_operations', 'op_ordinary'],
+  ['session_additional_operators', 'session_id', 'test_sessions', 'read'],
+  ['test_sessions_subject', 'test_sessions_id', 'test_sessions', 'read'],
+  ['sample_co_owners', 'sample_id', 'physical_samples', 'read'],
+  ['project_investigators', 'project_id', 'projects', 'read'],
+];
+for (const [child, fk, parent, listName] of CHILDREN) {
+  await check(`lm_access_child_${child}_reads_through_the_parents_readers`, async () => {
+    needFx();
+    const inList = CHILD_FILTER[parent]().join(',');
+    const base = `/items/${child}?limit=-1&fields=${fk}&filter[${fk}][_in]=${inList}`;
+    const adminRes = await api('GET', base);
+    expect(adminRes.status === 200, `admin GET ${child}: ${adminRes.status} ${errText(adminRes)}`);
+    const withChildren = new Set(adminRes.body.data.map((r) => r[fk]));
+    expect(withChildren.size > 0, `the fixture has no ${child} rows`);
+    const problems = [];
+    for (const [user, token] of Object.entries(FX.users)) {
+      const readable = listName === 'op_ordinary' ? FX.extra[user].op_ordinary : FX.expected[user][parent].read;
+      const want = readable.filter((id) => withChildren.has(id));
+      const r = await api('GET', base, undefined, token);
+      if (r.status !== 200) { problems.push(`${user}: status ${r.status} ${errText(r).slice(0, 120)}`); continue; }
+      const rows = r.body.data.map((x) => x[fk]);
+      if (rows.length !== new Set(rows).size) problems.push(`${user}: ${rows.length - new Set(rows).size} duplicate rows`);
+      const d = diff([...new Set(rows)], want);
+      if (d.extra.length || d.missing.length) problems.push(`${user}: extra [${show(d.extra)}] missing [${show(d.missing)}]`);
+      const c = await api('GET', `/items/${child}?limit=1&meta=filter_count&fields=${fk}&filter[${fk}][_in]=${inList}`, undefined, token);
+      if (c.body?.meta?.filter_count !== rows.length) problems.push(`${user}: filter_count ${c.body?.meta?.filter_count}, rows ${rows.length}`);
+    }
+    expect(!problems.length, problems.slice(0, 4).join(' | '));
+  });
+}
+
+// campaign_samples: ONE top-level `_some` on campaign_sample_readers (the junction's readers: readers of the sample, or, for an
+// unrestricted sample, readers of its campaign); sample_genealogy: the one two-hop rule (an edge is readable by readers of its child or parent)
+await check('lm_access_campaign_samples_read_through_their_own_readers', async () => {
+  needFx();
+  const inList = fixtureIds('campaigns').join(',');
+  const problems = [];
+  for (const [user, token] of Object.entries(FX.users)) {
+    const r = await api('GET', `/items/campaign_samples?limit=-1&fields=id&sort=id&filter[campaign_id][_in]=${inList}`, undefined, token);
+    if (r.status !== 200) { problems.push(`${user}: status ${r.status} ${errText(r).slice(0, 120)}`); continue; }
+    const got = r.body.data.map((x) => x.id);
+    if (got.length !== new Set(got).size) problems.push(`${user}: duplicate junction rows`);
+    const d = diff(got, FX.extra[user].junction);
+    if (d.extra.length || d.missing.length) problems.push(`${user}: extra ${d.extra.length} missing ${d.missing.length}`);
+    const c = await api('GET', `/items/campaign_samples?limit=1&meta=filter_count&fields=id&filter[campaign_id][_in]=${inList}`, undefined, token);
+    if (c.body?.meta?.filter_count !== FX.extra[user].junction.length) problems.push(`${user}: filter_count ${c.body?.meta?.filter_count}, expected ${FX.extra[user].junction.length}`);
+    const p2 = await api('GET', `/items/campaign_samples?limit=7&page=2&sort=id&fields=id&filter[campaign_id][_in]=${inList}`, undefined, token);
+    if (JSON.stringify((p2.body?.data ?? []).map((x) => x.id)) !== JSON.stringify([...FX.extra[user].junction].sort().slice(7, 14))) problems.push(`${user}: page 2 differs`);
+  }
+  expect(!problems.length, problems.slice(0, 4).join(' | '));
+});
+
+await check('lm_access_sample_genealogy_two_hop_rule_no_duplicates', async () => {
+  needFx();
+  const inList = fixtureIds('physical_samples').join(',');
+  const problems = [];
+  for (const [user, token] of Object.entries(FX.users)) {
+    const r = await api('GET', `/items/sample_genealogy?limit=-1&fields=child_sample_id&filter[child_sample_id][_in]=${inList}`, undefined, token);
+    if (r.status !== 200) { problems.push(`${user}: status ${r.status} ${errText(r).slice(0, 120)}`); continue; }
+    const got = r.body.data.map((x) => x.child_sample_id);
+    if (got.length !== new Set(got).size) problems.push(`${user}: duplicate edges (${got.length} rows)`);
+    const d = diff([...new Set(got)], FX.extra[user].genealogy);
+    if (d.extra.length || d.missing.length) problems.push(`${user}: extra ${d.extra.length} missing ${d.missing.length}`);
+    const c = await api('GET', `/items/sample_genealogy?limit=1&meta=filter_count&fields=child_sample_id&filter[child_sample_id][_in]=${inList}`, undefined, token);
+    if (c.body?.meta?.filter_count !== got.length) problems.push(`${user}: filter_count ${c.body?.meta?.filter_count}, rows ${got.length}`);
+  }
+  expect(!problems.length, problems.slice(0, 4).join(' | '));
+});
+
+// the amnesty leaf: ownerless runs open to everyone are readable by a stranger, their children are not (no inheritance)
+await check('lm_access_amnesty_leaf_reads_the_run_not_its_children', async () => {
+  needFx();
+  const u = universe(0);
+  const ops = await listIds('manufacturing_operations', FX.users.stranger);
+  expect(ops.includes(u.OF1) && ops.includes(u.OF2), 'a stranger does not read the ownerless runs of the all-open universe');
+  const child = await api('GET', `/items/machining_force_analysis?limit=-1&fields=operation_id&filter[operation_id][_in]=${u.OF1},${u.OF2}`, undefined, FX.users.stranger);
+  expect(child.status === 200 && child.body.data.length === 0, `a stranger reads ${child.body?.data?.length} analysis rows of the amnesty runs (children do not inherit the amnesty)`);
+  // narrowed: an ownerless run on a sample held only by a restricted campaign is NOT open to everyone (universe 2: C restricted, S not)
+  const r = universe(2);
+  const open = await listIds('manufacturing_operations', FX.users.stranger);
+  expect(!open.includes(r.OF2), 'the ownerless run on a sample held only by a restricted campaign is still open to a stranger (the amnesty is narrowed)');
+});
+
+// an operation on a sample that sits only in a restricted campaign is invisible to its owner (ruling 19), not to the sample's owner
+await check('lm_access_operation_under_a_restricted_campaigns_sample_is_invisible_to_its_owner', async () => {
+  needFx();
+  const u = universe(2); // the campaign is restricted, nothing else
+  const ops = await listIds('manufacturing_operations', FX.users.opOwner);
+  expect(!ops.includes(u.O2), 'opOwner reads an operation on a sample held only by a restricted campaign (ruling 19)');
+  const owner = await listIds('manufacturing_operations', FX.users.owner);
+  expect(owner.includes(u.O2), 'the sample owner no longer reads the operation of their own sample');
+  const direct = await api('GET', `/items/manufacturing_operations/${u.O2}`, undefined, FX.users.opOwner);
+  expect(direct.status === 403, `GET of the shielded operation by id -> ${direct.status}, expected 403`);
+});
+
+// update and delete are never wider than read: for every user and type, the oracle's update and delete ids are inside its read ids
+await check('lm_access_update_and_delete_ids_are_subsets_of_read_ids', async () => {
+  needFx();
+  const bad = [];
+  for (const user of Object.keys(FX.users)) {
+    for (const collection of Object.keys(PK)) {
+      const read = new Set(FX.expected[user][collection].read);
+      for (const action of ['update', 'delete']) {
+        const wider = FX.expected[user][collection][action].filter((id) => !read.has(id));
+        if (wider.length) bad.push(`${user} ${collection} ${action}: ${wider.length} id(s) beyond read`);
+      }
+    }
+  }
+  expect(!bad.length, bad.slice(0, 4).join(' | '));
+});
+
+// the junction guard of this task part: a co-owner cannot repoint a co-owner row (403, shown above); a stranger cannot create access rows
+await check('lm_access_restricted_project_hides_everything_inside_from_a_stranger_not_from_the_pi', async () => {
+  needFx();
+  const p = universe(1);
+  const stranger = { campaigns: await listIds('campaigns', FX.users.stranger), samples: await listIds('physical_samples', FX.users.stranger),
+    ops: await listIds('manufacturing_operations', FX.users.stranger), tests: await listIds('test_sessions', FX.users.stranger) };
+  expect(!stranger.campaigns.includes(p.C) && !stranger.samples.includes(p.S) && !stranger.ops.includes(p.O) && !stranger.tests.includes(p.T),
+    'a stranger reads something inside a restricted project');
+  const pi = { campaigns: await listIds('campaigns', FX.users.pi), samples: await listIds('physical_samples', FX.users.pi),
+    ops: await listIds('manufacturing_operations', FX.users.pi), tests: await listIds('test_sessions', FX.users.pi) };
+  expect(pi.campaigns.includes(p.C) && pi.samples.includes(p.S) && pi.ops.includes(p.O) && pi.tests.includes(p.T), 'the PI does not read everything in their restricted project');
+});
+
+// the Directus rules never answer with a duplicate: every ruled collection, as a member with an access list of several people
+await check('lm_access_no_duplicates_in_any_record_list', async () => {
+  needFx();
+  const bad = [];
+  for (const user of ['stranger', 'viewer', 'editor', 'pi', 'inv']) {
+    for (const collection of Object.keys(PK)) {
+      const got = await listIds(collection, FX.users[user]);
+      if (got.length !== new Set(got).size) bad.push(`${user} ${collection}: ${got.length - new Set(got).size} duplicates`);
+    }
+  }
+  expect(!bad.length, bad.slice(0, 4).join(' | '));
 });
 
 // sample_co_owners: update and delete are the sample owner's now (a co-owner used to be able to repoint or remove

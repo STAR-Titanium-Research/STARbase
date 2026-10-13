@@ -198,70 +198,112 @@ CREATE OR REPLACE FUNCTION d1_private.person_login(person uuid) RETURNS uuid LAN
 COMMENT ON FUNCTION d1_private.person_login(uuid) IS 'The login (directus_users.id) of a person, or NULL when the person has no login (or it was deleted). The candidate queries of readers_of_* reach every login through this inner join, so a dangling user_id is never emitted as a reader.';
 
 -- "me(person)": the person is the login u's
-CREATE OR REPLACE FUNCTION d1_private.me(person uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT person IS NOT NULL AND EXISTS (SELECT 1 FROM public.people p WHERE p.person_id = person AND p.user_id = u) $$;
+-- The helpers are plpgsql (RETURN (SELECT ...)), not LANGUAGE sql: a SQL function whose body has a subquery is never inlined and is re-planned
+-- on every query that calls it, which made a per-pair evaluation of the readers of one project cost 20 ms; plpgsql keeps the plan for the session.
+CREATE OR REPLACE FUNCTION d1_private.me(person uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT person IS NOT NULL AND EXISTS (SELECT 1 FROM public.people p WHERE p.person_id = person AND p.user_id = u));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.pi_of(project uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.projects x WHERE x.project_id = project AND d1_private.me(x.principal_investigator_person, u)) $$;
+CREATE OR REPLACE FUNCTION d1_private.pi_of(project uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.projects x WHERE x.project_id = project AND d1_private.me(x.principal_investigator_person, u)));
+END
+$$;
 
 -- on the project's list: the PI, an old investigator row, any access entry
-CREATE OR REPLACE FUNCTION d1_private.p_listed(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT d1_private.pi_of(p, u)
+CREATE OR REPLACE FUNCTION d1_private.p_listed(p uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT d1_private.pi_of(p, u)
         OR EXISTS (SELECT 1 FROM public.project_investigators i WHERE i.project_id = p AND i.user_id = u)
-        OR EXISTS (SELECT 1 FROM public.project_access a WHERE a.project_id = p AND d1_private.me(a.person_id, u)) $$;
+        OR EXISTS (SELECT 1 FROM public.project_access a WHERE a.project_id = p AND d1_private.me(a.person_id, u)));
+END
+$$;
 
 -- an investigator: an old investigator row or an access entry with role investigator (not the PI)
-CREATE OR REPLACE FUNCTION d1_private.p_invs(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.project_investigators i WHERE i.project_id = p AND i.user_id = u)
-        OR EXISTS (SELECT 1 FROM public.project_access a WHERE a.project_id = p AND a.role = 'investigator' AND d1_private.me(a.person_id, u)) $$;
+CREATE OR REPLACE FUNCTION d1_private.p_invs(p uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.project_investigators i WHERE i.project_id = p AND i.user_id = u)
+        OR EXISTS (SELECT 1 FROM public.project_access a WHERE a.project_id = p AND a.role = 'investigator' AND d1_private.me(a.person_id, u)));
+END
+$$;
 
 -- P: no project, an unrestricted project, or on its list
-CREATE OR REPLACE FUNCTION d1_private.gate_p(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT p IS NULL OR EXISTS (SELECT 1 FROM public.projects x WHERE x.project_id = p AND (NOT x.restricted OR d1_private.p_listed(p, u))) $$;
+CREATE OR REPLACE FUNCTION d1_private.gate_p(p uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT p IS NULL OR EXISTS (SELECT 1 FROM public.projects x WHERE x.project_id = p AND (NOT x.restricted OR d1_private.p_listed(p, u))));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.c_pi(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.campaigns x WHERE x.campaign_id = c AND d1_private.pi_of(x.project_id, u)) $$;
+CREATE OR REPLACE FUNCTION d1_private.c_pi(c uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.campaigns x WHERE x.campaign_id = c AND d1_private.pi_of(x.project_id, u)));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.c_listed(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.campaigns x WHERE x.campaign_id = c AND d1_private.me(x.owner_person_id, u))
+CREATE OR REPLACE FUNCTION d1_private.c_listed(c uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.campaigns x WHERE x.campaign_id = c AND d1_private.me(x.owner_person_id, u))
         OR EXISTS (SELECT 1 FROM public.campaign_access a WHERE a.campaign_id = c AND d1_private.me(a.person_id, u))
-        OR d1_private.c_pi(c, u) $$;
+        OR d1_private.c_pi(c, u));
+END
+$$;
 
 -- C: no campaign, or (unrestricted or on its list) and its project lets the caller in
-CREATE OR REPLACE FUNCTION d1_private.gate_c(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT c IS NULL OR EXISTS (SELECT 1 FROM public.campaigns x WHERE x.campaign_id = c
-                                   AND (NOT x.restricted OR d1_private.c_listed(c, u)) AND d1_private.gate_p(x.project_id, u)) $$;
+CREATE OR REPLACE FUNCTION d1_private.gate_c(c uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT c IS NULL OR EXISTS (SELECT 1 FROM public.campaigns x WHERE x.campaign_id = c
+                                   AND (NOT x.restricted OR d1_private.c_listed(c, u)) AND d1_private.gate_p(x.project_id, u)));
+END
+$$;
 
 -- on a sample's list: owner, co-owner, access entry, PI of its project, PI of a campaign's project
-CREATE OR REPLACE FUNCTION d1_private.s_listed(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s
+CREATE OR REPLACE FUNCTION d1_private.s_listed(s uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s
                       AND (d1_private.me(x.owner_person_id, u) OR d1_private.pi_of(x.project_id, u)))
         OR EXISTS (SELECT 1 FROM public.sample_co_owners o WHERE o.sample_id = s AND o.user_id = u)
         OR EXISTS (SELECT 1 FROM public.sample_access a WHERE a.sample_id = s AND d1_private.me(a.person_id, u))
-        OR EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.sample_id = s AND d1_private.c_pi(cs.campaign_id, u)) $$;
+        OR EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.sample_id = s AND d1_private.c_pi(cs.campaign_id, u)));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.gate_s(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT s IS NULL OR EXISTS (SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s AND (NOT x.restricted OR d1_private.s_listed(s, u))) $$;
+CREATE OR REPLACE FUNCTION d1_private.gate_s(s uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT s IS NULL OR EXISTS (SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s AND (NOT x.restricted OR d1_private.s_listed(s, u))));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.s_editor(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s AND d1_private.me(x.owner_person_id, u))
+CREATE OR REPLACE FUNCTION d1_private.s_editor(s uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s AND d1_private.me(x.owner_person_id, u))
         OR EXISTS (SELECT 1 FROM public.sample_co_owners o WHERE o.sample_id = s AND o.user_id = u)
-        OR EXISTS (SELECT 1 FROM public.sample_access a WHERE a.sample_id = s AND a.role = 'edit' AND d1_private.me(a.person_id, u)) $$;
+        OR EXISTS (SELECT 1 FROM public.sample_access a WHERE a.sample_id = s AND a.role = 'edit' AND d1_private.me(a.person_id, u)));
+END
+$$;
 
 -- campaign-shielded from u (ruling 19): the sample is in at least one campaign and no campaign of it lets u in
-CREATE OR REPLACE FUNCTION d1_private.s_shielded(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.sample_id = s)
-       AND NOT EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.sample_id = s AND d1_private.gate_c(cs.campaign_id, u)) $$;
+CREATE OR REPLACE FUNCTION d1_private.s_shielded(s uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.sample_id = s)
+       AND NOT EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.sample_id = s AND d1_private.gate_c(cs.campaign_id, u)));
+END
+$$;
 
 -- S*: the gate an operation or test passes on its sample: no sample; or the sample is unrestricted or lists u, AND (u is on the
 -- sample's list, or investigates the sample's own project, or the sample is not campaign-shielded from u)
-CREATE OR REPLACE FUNCTION d1_private.gate_s_star(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT s IS NULL OR EXISTS (SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s
+CREATE OR REPLACE FUNCTION d1_private.gate_s_star(s uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT s IS NULL OR EXISTS (SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s
                                    AND (NOT x.restricted OR d1_private.s_listed(s, u))
-                                   AND (d1_private.s_listed(s, u) OR d1_private.p_invs(x.project_id, u) OR NOT d1_private.s_shielded(s, u))) $$;
+                                   AND (d1_private.s_listed(s, u) OR d1_private.p_invs(x.project_id, u) OR NOT d1_private.s_shielded(s, u))));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.s_read(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
+CREATE OR REPLACE FUNCTION d1_private.s_read(s uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (
         SELECT 1 FROM public.physical_samples x WHERE x.sample_id = s AND (
             d1_private.s_listed(s, u)
             OR (NOT x.restricted AND (
@@ -269,71 +311,103 @@ CREATE OR REPLACE FUNCTION d1_private.s_read(s uuid, u uuid) RETURNS boolean LAN
                 OR EXISTS (SELECT 1 FROM public.campaign_samples cs JOIN public.campaigns c ON c.campaign_id = cs.campaign_id
                             WHERE cs.sample_id = s
                               AND ((d1_private.me(c.owner_person_id, u) AND d1_private.gate_p(c.project_id, u))
-                                   OR (NOT c.restricted AND d1_private.p_invs(c.project_id, u)))))))) $$;
+                                   OR (NOT c.restricted AND d1_private.p_invs(c.project_id, u)))))))));
+END
+$$;
 
 -- operations and tests: the gates (S*, P of the sample's project, P of its project, C), then the record's own rule
-CREATE OR REPLACE FUNCTION d1_private.rec_gates(sample uuid, project uuid, campaign uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT d1_private.gate_s_star(sample, u)
+CREATE OR REPLACE FUNCTION d1_private.rec_gates(sample uuid, project uuid, campaign uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT d1_private.gate_s_star(sample, u)
        AND (sample IS NULL OR d1_private.gate_p((SELECT x.project_id FROM public.physical_samples x WHERE x.sample_id = sample), u))
        AND d1_private.gate_p(project, u)
-       AND d1_private.gate_c(campaign, u) $$;
+       AND d1_private.gate_c(campaign, u));
+END
+$$;
 
 -- the ordinary read of an operation or test (the orphan amnesty is operation_open_of, not part of it)
 CREATE OR REPLACE FUNCTION d1_private.rec_read(restricted boolean, owner uuid, project uuid, campaign uuid, sample uuid, acc_any boolean, u uuid)
-RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT d1_private.rec_gates(sample, project, campaign, u) AND (
+RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT d1_private.rec_gates(sample, project, campaign, u) AND (
                 d1_private.me(owner, u) OR acc_any OR d1_private.pi_of(project, u) OR d1_private.c_pi(campaign, u)
                 OR (NOT restricted AND (
                     d1_private.s_read(sample, u) OR d1_private.p_invs(project, u)
                     OR EXISTS (SELECT 1 FROM public.campaigns c WHERE c.campaign_id = campaign
-                                  AND (d1_private.me(c.owner_person_id, u) OR d1_private.p_invs(c.project_id, u)))))) $$;
+                                  AND (d1_private.me(c.owner_person_id, u) OR d1_private.p_invs(c.project_id, u)))))));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.can_read_sample(id uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT d1_private.s_read(id, u) $$;
+CREATE OR REPLACE FUNCTION d1_private.can_read_sample(id uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT d1_private.s_read(id, u));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.can_read_operation(id uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT d1_private.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
+CREATE OR REPLACE FUNCTION d1_private.can_read_operation(id uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT d1_private.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
                                EXISTS (SELECT 1 FROM public.operation_access a WHERE a.operation_id = x.operation_id AND d1_private.me(a.person_id, u)), u)
-      FROM public.manufacturing_operations x WHERE x.operation_id = id $$;
+      FROM public.manufacturing_operations x WHERE x.operation_id = id);
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.can_read_test(id uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT d1_private.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
+CREATE OR REPLACE FUNCTION d1_private.can_read_test(id uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT d1_private.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
                                EXISTS (SELECT 1 FROM public.test_access a WHERE a.session_id = x.session_id AND d1_private.me(a.person_id, u)), u)
-      FROM public.test_sessions x WHERE x.session_id = id $$;
+      FROM public.test_sessions x WHERE x.session_id = id);
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.can_read_campaign(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
+CREATE OR REPLACE FUNCTION d1_private.can_read_campaign(c uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (
         SELECT 1 FROM public.campaigns x WHERE x.campaign_id = c AND d1_private.gate_p(x.project_id, u) AND (
             d1_private.c_listed(c, u)
             OR (NOT x.restricted AND (
                 d1_private.p_invs(x.project_id, u)
-                OR EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.campaign_id = c AND d1_private.s_editor(cs.sample_id, u)))))) $$;
+                OR EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.campaign_id = c AND d1_private.s_editor(cs.sample_id, u)))))));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.can_read_project(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (
+CREATE OR REPLACE FUNCTION d1_private.can_read_project(p uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (
         SELECT 1 FROM public.projects x WHERE x.project_id = p AND (
             d1_private.p_listed(p, u)
             OR (NOT x.restricted AND (
                 EXISTS (SELECT 1 FROM public.campaigns c WHERE c.project_id = p AND d1_private.me(c.owner_person_id, u) AND d1_private.can_read_campaign(c.campaign_id, u))
                 OR EXISTS (SELECT 1 FROM public.physical_samples s WHERE s.project_id = p AND d1_private.s_editor(s.sample_id, u) AND d1_private.s_read(s.sample_id, u))
                 OR EXISTS (SELECT 1 FROM public.manufacturing_operations o WHERE o.project_id = p AND d1_private.me(o.owner_person_id, u) AND d1_private.can_read_operation(o.operation_id, u))
-                OR EXISTS (SELECT 1 FROM public.test_sessions t WHERE t.project_id = p AND d1_private.me(t.owner_person_id, u) AND d1_private.can_read_test(t.session_id, u)))))) $$;
+                OR EXISTS (SELECT 1 FROM public.test_sessions t WHERE t.project_id = p AND d1_private.me(t.owner_person_id, u) AND d1_private.can_read_test(t.session_id, u)))))));
+END
+$$;
 
 -- a campaign_samples row: readers of its sample, or (the sample unrestricted and) readers of its campaign
-CREATE OR REPLACE FUNCTION d1_private.can_read_campaign_sample(j uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.campaign_samples cs JOIN public.physical_samples s ON s.sample_id = cs.sample_id
-                    WHERE cs.id = j AND (d1_private.s_read(cs.sample_id, u) OR (NOT s.restricted AND d1_private.can_read_campaign(cs.campaign_id, u)))) $$;
+CREATE OR REPLACE FUNCTION d1_private.can_read_campaign_sample(j uuid, u uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.campaign_samples cs JOIN public.physical_samples s ON s.sample_id = cs.sample_id
+                    WHERE cs.id = j AND (d1_private.s_read(cs.sample_id, u) OR (NOT s.restricted AND d1_private.can_read_campaign(cs.campaign_id, u)))));
+END
+$$;
 
 -- hidden from the Ask-the-database role (spec section 7): written straight from the flags
-CREATE OR REPLACE FUNCTION d1_private.campaign_hidden(c uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.campaigns x LEFT JOIN public.projects p ON p.project_id = x.project_id
-                    WHERE x.campaign_id = c AND (x.restricted OR coalesce(p.restricted, false))) $$;
+CREATE OR REPLACE FUNCTION d1_private.campaign_hidden(c uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.campaigns x LEFT JOIN public.projects p ON p.project_id = x.project_id
+                    WHERE x.campaign_id = c AND (x.restricted OR coalesce(p.restricted, false))));
+END
+$$;
 
-CREATE OR REPLACE FUNCTION d1_private.sample_hidden(s uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM public.physical_samples x LEFT JOIN public.projects p ON p.project_id = x.project_id
+CREATE OR REPLACE FUNCTION d1_private.sample_hidden(s uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN (SELECT EXISTS (SELECT 1 FROM public.physical_samples x LEFT JOIN public.projects p ON p.project_id = x.project_id
                     WHERE x.sample_id = s
                       AND (x.restricted OR coalesce(p.restricted, false)
-                           OR EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.sample_id = s AND d1_private.campaign_hidden(cs.campaign_id)))) $$;
+                           OR EXISTS (SELECT 1 FROM public.campaign_samples cs WHERE cs.sample_id = s AND d1_private.campaign_hidden(cs.campaign_id)))));
+END
+$$;
 
 -- 4. Candidates: for each record the union of every login the positive paths can reach. Every branch reaches a login through an
 -- inner join to directus_users (person_login(), or the join itself for the legacy user_id columns). The per-pair predicate
@@ -479,9 +553,9 @@ CREATE OR REPLACE FUNCTION d1_private.readers_of_campaign_spec(ids uuid[]) RETUR
     SELECT c.record_id, c.user_id FROM d1_private.campaign_candidates(ids) c WHERE d1_private.can_read_campaign(c.record_id, c.user_id) $$;
 COMMENT ON FUNCTION d1_private.readers_of_campaign_spec(uuid[]) IS 'The rule as candidates then the per-pair predicate (the executable specification of readers_of_campaign).';
 
-CREATE OR REPLACE FUNCTION d1_private.readers_of_project(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
+CREATE OR REPLACE FUNCTION d1_private.readers_of_project_spec(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
     SELECT c.record_id, c.user_id FROM d1_private.project_candidates(ids) c WHERE d1_private.can_read_project(c.record_id, c.user_id) $$;
-COMMENT ON FUNCTION d1_private.readers_of_project(uuid[]) IS 'Every login that may read each project (project_readers materialises it).';
+COMMENT ON FUNCTION d1_private.readers_of_project_spec(uuid[]) IS 'The rule as candidates then the per-pair predicate (the executable specification of readers_of_project).';
 
 -- the logins that may read each campaign_samples row (ids are junction ids): readers of its sample, or, for an unrestricted
 -- sample, readers of its campaign
@@ -501,17 +575,23 @@ COMMENT ON FUNCTION d1_private.readers_of_campaign_sample_spec(uuid[]) IS 'The r
 -- sets with one query per type: the positive paths with their gates written inline against pair relations (views over the base
 -- tables), so a project-sized recompute is a few hundred milliseconds. tests/readers_matrix.sh asserts three-way equality: these = the
 -- *_spec functions = the independent oracle ref.* (scripts/dev/access_matrix_oracle.sql), for every record and user of the fixture and of
--- the random universes. The pair relations read base tables only and reach every login through an inner join to directus_users.
+-- the random universes. The pair relations read base tables only; every user_id they emit is a foreign key to directus_users (people.user_id,
+-- and the sample_co_owners and project_investigators columns this migration constrains), so no join to the logins is needed, where the
+-- candidate functions above join them to stay defensive.
+-- The five production functions below are plpgsql wrappers (RETURN QUERY) of one static query each, so the plan is cached per session: the SQL
+-- language re-plans a query of this size on every call (6 to 20 ms each on the seeded copy, more than the work itself for a small closure),
+-- plpgsql plans it for the first five calls and then reuses a generic plan, which on the seeded copy runs a 14 thousand operation array as
+-- fast as a custom plan does.
 CREATE OR REPLACE VIEW d1_private.v_login_person AS
-    SELECT p.person_id, p.user_id FROM public.people p JOIN public.directus_users l ON l.id = p.user_id;
-COMMENT ON VIEW d1_private.v_login_person IS 'People that have a login that exists (people.user_id inner-joined to directus_users): how the pair relations below reach a login.';
+    SELECT p.person_id, p.user_id FROM public.people p WHERE p.user_id IS NOT NULL;
+COMMENT ON VIEW d1_private.v_login_person IS 'People that have a login (people.user_id is a foreign key to directus_users, so it exists): how the pair relations below reach a login.';
 
 CREATE OR REPLACE VIEW d1_private.v_p_pi AS
     SELECT x.project_id, lp.user_id FROM public.projects x JOIN d1_private.v_login_person lp ON lp.person_id = x.principal_investigator_person;
 COMMENT ON VIEW d1_private.v_p_pi IS '(project, login): the project''s principal investigator.';
 
 CREATE OR REPLACE VIEW d1_private.v_p_invs AS
-    SELECT i.project_id, i.user_id FROM public.project_investigators i JOIN public.directus_users l ON l.id = i.user_id
+    SELECT i.project_id, i.user_id FROM public.project_investigators i
     UNION ALL
     SELECT a.project_id, lp.user_id FROM public.project_access a JOIN d1_private.v_login_person lp ON lp.person_id = a.person_id WHERE a.role = 'investigator';
 COMMENT ON VIEW d1_private.v_p_invs IS '(project, login): an investigator of the project (an old investigator row or an access entry with role investigator), not the PI.';
@@ -519,7 +599,7 @@ COMMENT ON VIEW d1_private.v_p_invs IS '(project, login): an investigator of the
 CREATE OR REPLACE VIEW d1_private.v_p_list AS
     SELECT pi.project_id, pi.user_id FROM d1_private.v_p_pi pi
     UNION ALL
-    SELECT i.project_id, i.user_id FROM public.project_investigators i JOIN public.directus_users l ON l.id = i.user_id
+    SELECT i.project_id, i.user_id FROM public.project_investigators i
     UNION ALL
     SELECT a.project_id, lp.user_id FROM public.project_access a JOIN d1_private.v_login_person lp ON lp.person_id = a.person_id;
 COMMENT ON VIEW d1_private.v_p_list IS '(project, login): on the project''s list: the PI, an old investigator row, any access entry (the gate P passes for a restricted project).';
@@ -535,7 +615,7 @@ COMMENT ON VIEW d1_private.v_c_list IS '(campaign, login): on the campaign''s li
 CREATE OR REPLACE VIEW d1_private.v_s_editor AS
     SELECT s.sample_id, lp.user_id FROM public.physical_samples s JOIN d1_private.v_login_person lp ON lp.person_id = s.owner_person_id
     UNION ALL
-    SELECT o.sample_id, o.user_id FROM public.sample_co_owners o JOIN public.directus_users l ON l.id = o.user_id
+    SELECT o.sample_id, o.user_id FROM public.sample_co_owners o
     UNION ALL
     SELECT a.sample_id, lp.user_id FROM public.sample_access a JOIN d1_private.v_login_person lp ON lp.person_id = a.person_id WHERE a.role = 'edit';
 COMMENT ON VIEW d1_private.v_s_editor IS '(sample, login): an editor of the sample: its owner, a co-owner, a Can edit entry.';
@@ -550,7 +630,9 @@ CREATE OR REPLACE VIEW d1_private.v_s_list AS
     SELECT cs.sample_id, pi.user_id FROM public.campaign_samples cs JOIN public.campaigns c ON c.campaign_id = cs.campaign_id JOIN d1_private.v_p_pi pi ON pi.project_id = c.project_id;
 COMMENT ON VIEW d1_private.v_s_list IS '(sample, login): on the sample''s list: owner, co-owner, any access entry, the PI of its project, the PI of a campaign''s project.';
 
-CREATE OR REPLACE FUNCTION d1_private.readers_of_sample(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
+CREATE OR REPLACE FUNCTION d1_private.readers_of_sample(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$
+BEGIN
+    RETURN QUERY
     SELECT DISTINCT r.record_id, r.user_id FROM (
         -- on the list: always a reader
         SELECT l.sample_id AS record_id, l.user_id FROM d1_private.v_s_list l WHERE l.sample_id = ANY (ids)
@@ -575,10 +657,14 @@ CREATE OR REPLACE FUNCTION d1_private.readers_of_sample(ids uuid[]) RETURNS TABL
           JOIN campaigns c ON c.campaign_id = cs.campaign_id
           JOIN d1_private.v_p_invs i ON i.project_id = c.project_id
          WHERE cs.sample_id = ANY (ids) AND NOT s.restricted AND NOT c.restricted
-    ) r $$;
+    ) r;
+END
+$$;
 COMMENT ON FUNCTION d1_private.readers_of_sample(uuid[]) IS 'Every login that may read each sample (the single statement of the rule; sample_readers materialises it): the logins on its list, and for an unrestricted sample the investigators of its project, the owners of the campaigns it is in (while the campaign''s project lets them in) and the investigators of an unrestricted campaign''s project. Set-based; equal to readers_of_sample_spec() and to the oracle ref.s_read.';
 
-CREATE OR REPLACE FUNCTION d1_private.readers_of_campaign(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
+CREATE OR REPLACE FUNCTION d1_private.readers_of_campaign(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$
+BEGIN
+    RETURN QUERY
     SELECT DISTINCT x.record_id, x.user_id FROM (
         SELECT l.campaign_id AS record_id, l.user_id FROM d1_private.v_c_list l WHERE l.campaign_id = ANY (ids)
         UNION ALL
@@ -592,10 +678,20 @@ CREATE OR REPLACE FUNCTION d1_private.readers_of_campaign(ids uuid[]) RETURNS TA
     JOIN campaigns c ON c.campaign_id = x.record_id
     LEFT JOIN projects p ON p.project_id = c.project_id
     WHERE p.project_id IS NULL OR NOT p.restricted
-       OR EXISTS (SELECT 1 FROM d1_private.v_p_list pl WHERE pl.project_id = p.project_id AND pl.user_id = x.user_id) $$;
+       OR EXISTS (SELECT 1 FROM d1_private.v_p_list pl WHERE pl.project_id = p.project_id AND pl.user_id = x.user_id);
+END
+$$;
 COMMENT ON FUNCTION d1_private.readers_of_campaign(uuid[]) IS 'Every login that may read each campaign (campaign_readers materialises it): the logins on its list, and for an unrestricted campaign the investigators of its project and the editors of its samples, all while its project lets them in. Set-based; equal to readers_of_campaign_spec() and to the oracle ref.c_read.';
 
-CREATE OR REPLACE FUNCTION d1_private.readers_of_operation(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
+-- Order dependence (performance): readers_of_operation and readers_of_test take the readers of an operation's sample from sample_readers,
+-- readers_of_campaign_sample takes those of its sample and campaign from sample_readers / campaign_readers, and readers_of_project takes the
+-- owners that can read their operations / tests from operation_readers / test_readers, instead of recomputing them. sync_readers() and
+-- readers_rebuild() bring the tables up in that order (samples, operations, tests, campaigns, projects, junction rows) and every record whose
+-- readers could have changed is in the closure, so each table is current when the next is derived from it; tests/readers_matrix.sh asserts the
+-- equality with the *_spec functions and the oracle on the synced fixture and after every random mutation.
+CREATE OR REPLACE FUNCTION d1_private.readers_of_operation(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$
+BEGIN
+    RETURN QUERY
     WITH o AS MATERIALIZED (SELECT x.operation_id, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id, x.restricted
                               FROM manufacturing_operations x WHERE x.operation_id = ANY (ids)),
     paths AS (
@@ -615,7 +711,7 @@ CREATE OR REPLACE FUNCTION d1_private.readers_of_operation(ids uuid[]) RETURNS T
         SELECT o.operation_id, i.user_id FROM o JOIN campaigns c ON c.campaign_id = o.campaign_id JOIN d1_private.v_p_invs i ON i.project_id = c.project_id WHERE NOT o.restricted
         UNION ALL
         SELECT o.operation_id, r.user_id FROM o
-          JOIN d1_private.readers_of_sample(ARRAY(SELECT DISTINCT y.sample_id FROM o y WHERE NOT y.restricted AND y.sample_id IS NOT NULL)) r ON r.record_id = o.sample_id
+          JOIN sample_readers r ON r.record_id = o.sample_id
          WHERE NOT o.restricted
     )
     SELECT DISTINCT pa.rid, pa.uid FROM paths pa
@@ -644,10 +740,14 @@ CREATE OR REPLACE FUNCTION d1_private.readers_of_operation(ids uuid[]) RETURNS T
                                              LEFT JOIN projects xp ON xp.project_id = xc.project_id
                                             WHERE x.sample_id = s.sample_id
                                               AND (NOT xc.restricted OR EXISTS (SELECT 1 FROM d1_private.v_c_list cl WHERE cl.campaign_id = xc.campaign_id AND cl.user_id = pa.uid))
-                                              AND (xp.project_id IS NULL OR NOT xp.restricted OR EXISTS (SELECT 1 FROM d1_private.v_p_list pl WHERE pl.project_id = xp.project_id AND pl.user_id = pa.uid))))))) $$;
+                                              AND (xp.project_id IS NULL OR NOT xp.restricted OR EXISTS (SELECT 1 FROM d1_private.v_p_list pl WHERE pl.project_id = xp.project_id AND pl.user_id = pa.uid)))))));
+END
+$$;
 COMMENT ON FUNCTION d1_private.readers_of_operation(uuid[]) IS 'Every login that may read each operation by the ordinary path (operation_readers materialises it; the ownerless runs open to everyone are operation_open_of()): the positive paths (owner, access entry, the PI of its project and of its campaign''s project, and for an unrestricted operation the investigators, the campaign owner, the readers of its sample) kept when the gates hold (P of its project and of its sample''s project, C of its campaign, the exact S* of its sample). Set-based; equal to readers_of_operation_spec() and to the oracle.';
 
-CREATE OR REPLACE FUNCTION d1_private.readers_of_test(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
+CREATE OR REPLACE FUNCTION d1_private.readers_of_test(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$
+BEGIN
+    RETURN QUERY
     WITH o AS MATERIALIZED (SELECT x.session_id AS operation_id, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id, x.restricted
                               FROM test_sessions x WHERE x.session_id = ANY (ids)),
     paths AS (
@@ -666,7 +766,7 @@ CREATE OR REPLACE FUNCTION d1_private.readers_of_test(ids uuid[]) RETURNS TABLE 
         SELECT o.operation_id, i.user_id FROM o JOIN campaigns c ON c.campaign_id = o.campaign_id JOIN d1_private.v_p_invs i ON i.project_id = c.project_id WHERE NOT o.restricted
         UNION ALL
         SELECT o.operation_id, r.user_id FROM o
-          JOIN d1_private.readers_of_sample(ARRAY(SELECT DISTINCT y.sample_id FROM o y WHERE NOT y.restricted AND y.sample_id IS NOT NULL)) r ON r.record_id = o.sample_id
+          JOIN sample_readers r ON r.record_id = o.sample_id
          WHERE NOT o.restricted
     )
     SELECT DISTINCT pa.rid, pa.uid FROM paths pa
@@ -691,21 +791,61 @@ CREATE OR REPLACE FUNCTION d1_private.readers_of_test(ids uuid[]) RETURNS TABLE 
                                              LEFT JOIN projects xp ON xp.project_id = xc.project_id
                                             WHERE x.sample_id = s.sample_id
                                               AND (NOT xc.restricted OR EXISTS (SELECT 1 FROM d1_private.v_c_list cl WHERE cl.campaign_id = xc.campaign_id AND cl.user_id = pa.uid))
-                                              AND (xp.project_id IS NULL OR NOT xp.restricted OR EXISTS (SELECT 1 FROM d1_private.v_p_list pl WHERE pl.project_id = xp.project_id AND pl.user_id = pa.uid))))))) $$;
+                                              AND (xp.project_id IS NULL OR NOT xp.restricted OR EXISTS (SELECT 1 FROM d1_private.v_p_list pl WHERE pl.project_id = xp.project_id AND pl.user_id = pa.uid)))))));
+END
+$$;
 COMMENT ON FUNCTION d1_private.readers_of_test(uuid[]) IS 'Every login that may read each test session (test_readers materialises it): the same paths and gates as readers_of_operation, with test_access. Set-based; equal to readers_of_test_spec() and to the oracle.';
 
-CREATE OR REPLACE FUNCTION d1_private.readers_of_campaign_sample(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
+CREATE OR REPLACE FUNCTION d1_private.readers_of_campaign_sample(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$
+BEGIN
+    RETURN QUERY
     SELECT DISTINCT q.record_id, q.user_id FROM (
-        SELECT cs.id AS record_id, r.user_id FROM campaign_samples cs
-          JOIN d1_private.readers_of_sample(ARRAY(SELECT x.sample_id FROM campaign_samples x WHERE x.id = ANY (ids))) r ON r.record_id = cs.sample_id
-         WHERE cs.id = ANY (ids)
+        SELECT cs.id AS record_id, r.user_id FROM campaign_samples cs JOIN sample_readers r ON r.record_id = cs.sample_id WHERE cs.id = ANY (ids)
         UNION ALL
         SELECT cs.id, r.user_id FROM campaign_samples cs
           JOIN physical_samples s ON s.sample_id = cs.sample_id AND NOT s.restricted
-          JOIN d1_private.readers_of_campaign(ARRAY(SELECT x.campaign_id FROM campaign_samples x WHERE x.id = ANY (ids))) r ON r.record_id = cs.campaign_id
+          JOIN campaign_readers r ON r.record_id = cs.campaign_id
          WHERE cs.id = ANY (ids)
-    ) q $$;
-COMMENT ON FUNCTION d1_private.readers_of_campaign_sample(uuid[]) IS 'Every login that may read each campaign_samples row (ids are campaign_samples.id): readers of its sample, or, for an unrestricted sample, readers of its campaign (campaign_sample_readers materialises it). Composed from readers_of_sample and readers_of_campaign; equal to readers_of_campaign_sample_spec() and to the oracle ref.cs_read.';
+    ) q;
+END
+$$;
+COMMENT ON FUNCTION d1_private.readers_of_campaign_sample(uuid[]) IS 'Every login that may read each campaign_samples row (ids are campaign_samples.id): readers of its sample, or, for an unrestricted sample, readers of its campaign (campaign_sample_readers materialises it). Composed from sample_readers and campaign_readers, which sync_readers() has just brought up to date (it recomputes samples and campaigns before the junction rows), and equal to readers_of_campaign_sample_spec() and to the oracle ref.cs_read whenever those tables are in sync.';
+
+CREATE OR REPLACE FUNCTION d1_private.readers_of_project(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$
+BEGIN
+    RETURN QUERY
+    -- the unrestricted projects among ids (a restricted project is read by its list alone)
+    WITH pr AS MATERIALIZED (SELECT x.project_id FROM projects x WHERE x.project_id = ANY (ids) AND NOT x.restricted),
+    -- the samples of those projects: their editors read the project
+    ps AS MATERIALIZED (SELECT s.sample_id, s.project_id, s.owner_person_id FROM physical_samples s
+                         WHERE s.project_id = ANY (ids) AND EXISTS (SELECT 1 FROM pr WHERE pr.project_id = s.project_id))
+    -- the list of the project (PI, investigators, access entries)
+    SELECT l.project_id, l.user_id FROM d1_private.v_p_list l WHERE l.project_id = ANY (ids)
+    UNION
+    -- the owner of a campaign of an unrestricted project (on the campaign's list; the project's gate P passes everyone)
+    SELECT c.project_id, lp.user_id FROM campaigns c JOIN pr ON pr.project_id = c.project_id JOIN d1_private.v_login_person lp ON lp.person_id = c.owner_person_id
+    UNION
+    -- the editors of its samples (on the sample's list)
+    SELECT ps.project_id, lp.user_id FROM ps JOIN d1_private.v_login_person lp ON lp.person_id = ps.owner_person_id
+    UNION
+    SELECT ps.project_id, o.user_id FROM ps JOIN sample_co_owners o ON o.sample_id = ps.sample_id
+    UNION
+    SELECT ps.project_id, lp.user_id FROM ps JOIN sample_access a ON a.sample_id = ps.sample_id AND a.role = 'edit' JOIN d1_private.v_login_person lp ON lp.person_id = a.person_id
+    UNION
+    -- the owner of an operation / test in it that they can read: operation_readers / test_readers already hold exactly that (the ordinary
+    -- read; sync_readers() recomputes operations and tests before projects, and every operation whose readers could have changed is in its closure)
+    SELECT o.project_id, pe.user_id FROM manufacturing_operations o JOIN pr ON pr.project_id = o.project_id
+      JOIN people pe ON pe.person_id = o.owner_person_id AND pe.user_id IS NOT NULL
+      JOIN operation_readers r ON r.record_id = o.operation_id AND r.user_id = pe.user_id
+     WHERE o.project_id = ANY (ids)
+    UNION
+    SELECT t.project_id, pe.user_id FROM test_sessions t JOIN pr ON pr.project_id = t.project_id
+      JOIN people pe ON pe.person_id = t.owner_person_id AND pe.user_id IS NOT NULL
+      JOIN test_readers r ON r.record_id = t.session_id AND r.user_id = pe.user_id
+     WHERE t.project_id = ANY (ids);
+END
+$$;
+COMMENT ON FUNCTION d1_private.readers_of_project(uuid[]) IS 'Every login that may read each project (project_readers materialises it): its list, and for an unrestricted project the owners of its campaigns, the editors of its samples and the owners of operations and tests in it that can read them (taken from operation_readers and test_readers, which sync_readers() has just brought up to date, and which hold exactly the per-pair can_read_operation / can_read_test). Equal to readers_of_project_spec() and to the oracle ref.p_read whenever those tables are in sync.';
 
 -- the operations every member may read: ownerless (owner, project and campaign null), unrestricted, and on no sample, or on an
 -- unrestricted sample with an open project (none or unrestricted) that is in no campaign or in at least one campaign open to everyone
@@ -788,73 +928,95 @@ BEGIN
                              || ARRAY(SELECT s.project_id FROM physical_samples s WHERE s.sample_id = ANY (s_all))
                              || ARRAY(SELECT o.project_id FROM manufacturing_operations o WHERE o.operation_id = ANY (o_all))
                              || ARRAY(SELECT t.project_id FROM test_sessions t WHERE t.session_id = ANY (t_all)));
-    -- J*: the junction rows of a sample in S* or a campaign in C*, and the touched junction rows
-    j_all := d1_private.uniq(touch_j || ARRAY(SELECT cs.id FROM campaign_samples cs WHERE cs.sample_id = ANY (s_all) OR cs.campaign_id = ANY (c_all)));
+    -- J*: the junction rows of a sample in S* and the touched junction rows. The rows of a campaign in C* are added by sync_readers() only when
+    -- that campaign's readers CHANGED (a junction row's readers are the sample's readers or, for an unrestricted sample, the campaign's, so an
+    -- unchanged campaign leaves the rest of its rows alone: adding a sample to a campaign of 800 samples touches 1 row, not 800)
+    j_all := d1_private.uniq(touch_j || ARRAY(SELECT cs.id FROM campaign_samples cs WHERE cs.sample_id = ANY (s_all)));
 END
 $$;
-COMMENT ON FUNCTION d1_private.readers_closure(uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[]) IS 'What a set of seeds makes stale (spec section 2, closure table): the samples, operations, tests, campaigns, projects and campaign_samples rows whose readers must be recomputed. Seeds are records whose own inputs changed; touches are parents that only need their own recompute. STABLE: it runs in the statement that follows the lock, so it reads everything the previous holder committed.';
+COMMENT ON FUNCTION d1_private.readers_closure(uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[]) IS 'What a set of seeds makes stale (spec section 2, closure table): the samples, operations, tests, campaigns, projects and campaign_samples rows whose readers must be recomputed. Seeds are records whose own inputs changed; touches are parents that only need their own recompute. The junction rows are those of a sample in S* and the touched ones; sync_readers() adds the rows of a campaign whose readers changed. STABLE: it runs in the statement that follows the lock, so it reads everything the previous holder committed.';
 
 -- the diff: for each type, delete the rows of the closure the function no longer returns, insert the missing ones (never delete-all)
 CREATE OR REPLACE FUNCTION d1_private.sync_readers(s_all uuid[], o_all uuid[], t_all uuid[], c_all uuid[], p_all uuid[], j_all uuid[])
 RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE
     hidden_changes BIGINT;
+    changed_c uuid[];
 BEGIN
-    WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_sample(s_all) w),
-         gone AS (DELETE FROM sample_readers r WHERE r.record_id = ANY (s_all)
-                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
-    INSERT INTO sample_readers (record_id, user_id)
-    SELECT w.record_id, w.user_id FROM want w
-     WHERE NOT EXISTS (SELECT 1 FROM sample_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
-    ON CONFLICT (record_id, user_id) DO NOTHING;
+    IF coalesce(cardinality(s_all), 0) > 0 THEN
+        WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_sample(s_all) w),
+             gone AS (DELETE FROM sample_readers r WHERE r.record_id = ANY (s_all)
+                         AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
+        INSERT INTO sample_readers (record_id, user_id)
+        SELECT w.record_id, w.user_id FROM want w
+         WHERE NOT EXISTS (SELECT 1 FROM sample_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
+        ON CONFLICT (record_id, user_id) DO NOTHING;
+    END IF;
 
-    WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_operation(o_all) w),
-         gone AS (DELETE FROM operation_readers r WHERE r.record_id = ANY (o_all)
-                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
-    INSERT INTO operation_readers (record_id, user_id)
-    SELECT w.record_id, w.user_id FROM want w
-     WHERE NOT EXISTS (SELECT 1 FROM operation_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
-    ON CONFLICT (record_id, user_id) DO NOTHING;
+    IF coalesce(cardinality(o_all), 0) > 0 THEN
+        WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_operation(o_all) w),
+             gone AS (DELETE FROM operation_readers r WHERE r.record_id = ANY (o_all)
+                         AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
+        INSERT INTO operation_readers (record_id, user_id)
+        SELECT w.record_id, w.user_id FROM want w
+         WHERE NOT EXISTS (SELECT 1 FROM operation_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
+        ON CONFLICT (record_id, user_id) DO NOTHING;
+    END IF;
 
-    WITH want AS MATERIALIZED (SELECT w.record_id FROM d1_private.operation_open_of(o_all) w),
-         gone AS (DELETE FROM operation_open_to_all r WHERE r.record_id = ANY (o_all)
-                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id))
-    INSERT INTO operation_open_to_all (record_id)
-    SELECT w.record_id FROM want w
-     WHERE NOT EXISTS (SELECT 1 FROM operation_open_to_all r WHERE r.record_id = w.record_id)
-    ON CONFLICT (record_id) DO NOTHING;
+    IF coalesce(cardinality(o_all), 0) > 0 THEN
+        WITH want AS MATERIALIZED (SELECT w.record_id FROM d1_private.operation_open_of(o_all) w),
+             gone AS (DELETE FROM operation_open_to_all r WHERE r.record_id = ANY (o_all)
+                         AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id))
+        INSERT INTO operation_open_to_all (record_id)
+        SELECT w.record_id FROM want w
+         WHERE NOT EXISTS (SELECT 1 FROM operation_open_to_all r WHERE r.record_id = w.record_id)
+        ON CONFLICT (record_id) DO NOTHING;
+    END IF;
 
-    WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_test(t_all) w),
-         gone AS (DELETE FROM test_readers r WHERE r.record_id = ANY (t_all)
-                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
-    INSERT INTO test_readers (record_id, user_id)
-    SELECT w.record_id, w.user_id FROM want w
-     WHERE NOT EXISTS (SELECT 1 FROM test_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
-    ON CONFLICT (record_id, user_id) DO NOTHING;
+    IF coalesce(cardinality(t_all), 0) > 0 THEN
+        WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_test(t_all) w),
+             gone AS (DELETE FROM test_readers r WHERE r.record_id = ANY (t_all)
+                         AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
+        INSERT INTO test_readers (record_id, user_id)
+        SELECT w.record_id, w.user_id FROM want w
+         WHERE NOT EXISTS (SELECT 1 FROM test_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
+        ON CONFLICT (record_id, user_id) DO NOTHING;
+    END IF;
 
-    WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_campaign(c_all) w),
-         gone AS (DELETE FROM campaign_readers r WHERE r.record_id = ANY (c_all)
-                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
-    INSERT INTO campaign_readers (record_id, user_id)
-    SELECT w.record_id, w.user_id FROM want w
-     WHERE NOT EXISTS (SELECT 1 FROM campaign_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
-    ON CONFLICT (record_id, user_id) DO NOTHING;
+    -- the campaigns whose readers changed: their junction rows are recomputed too (below)
+    IF coalesce(cardinality(c_all), 0) > 0 THEN
+        WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_campaign(c_all) w),
+             gone AS (DELETE FROM campaign_readers r WHERE r.record_id = ANY (c_all)
+                         AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id) RETURNING r.record_id),
+             added AS (INSERT INTO campaign_readers (record_id, user_id)
+                       SELECT w.record_id, w.user_id FROM want w
+                        WHERE NOT EXISTS (SELECT 1 FROM campaign_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
+                       ON CONFLICT (record_id, user_id) DO NOTHING RETURNING record_id)
+        SELECT array_agg(DISTINCT u.record_id) INTO changed_c FROM (SELECT g.record_id FROM gone g UNION ALL SELECT a.record_id FROM added a) u;
+    END IF;
 
-    WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_project(p_all) w),
-         gone AS (DELETE FROM project_readers r WHERE r.record_id = ANY (p_all)
-                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
-    INSERT INTO project_readers (record_id, user_id)
-    SELECT w.record_id, w.user_id FROM want w
-     WHERE NOT EXISTS (SELECT 1 FROM project_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
-    ON CONFLICT (record_id, user_id) DO NOTHING;
+    IF coalesce(cardinality(p_all), 0) > 0 THEN
+        WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_project(p_all) w),
+             gone AS (DELETE FROM project_readers r WHERE r.record_id = ANY (p_all)
+                         AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
+        INSERT INTO project_readers (record_id, user_id)
+        SELECT w.record_id, w.user_id FROM want w
+         WHERE NOT EXISTS (SELECT 1 FROM project_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
+        ON CONFLICT (record_id, user_id) DO NOTHING;
+    END IF;
 
-    WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_campaign_sample(j_all) w),
-         gone AS (DELETE FROM campaign_sample_readers r WHERE r.record_id = ANY (j_all)
-                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
-    INSERT INTO campaign_sample_readers (record_id, user_id)
-    SELECT w.record_id, w.user_id FROM want w
-     WHERE NOT EXISTS (SELECT 1 FROM campaign_sample_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
-    ON CONFLICT (record_id, user_id) DO NOTHING;
+    IF changed_c IS NOT NULL THEN
+        j_all := d1_private.uniq(j_all || ARRAY(SELECT cs.id FROM campaign_samples cs WHERE cs.campaign_id = ANY (changed_c)));
+    END IF;
+    IF coalesce(cardinality(j_all), 0) > 0 THEN
+        WITH want AS MATERIALIZED (SELECT w.record_id, w.user_id FROM d1_private.readers_of_campaign_sample(j_all) w),
+             gone AS (DELETE FROM campaign_sample_readers r WHERE r.record_id = ANY (j_all)
+                         AND NOT EXISTS (SELECT 1 FROM want w WHERE w.record_id = r.record_id AND w.user_id = r.user_id))
+        INSERT INTO campaign_sample_readers (record_id, user_id)
+        SELECT w.record_id, w.user_id FROM want w
+         WHERE NOT EXISTS (SELECT 1 FROM campaign_sample_readers r WHERE r.record_id = w.record_id AND r.user_id = w.user_id)
+        ON CONFLICT (record_id, user_id) DO NOTHING;
+    END IF;
 
     -- hidden_records has no foreign key: this diff also drops the rows of records that no longer exist (their ids are seeds)
     WITH want AS MATERIALIZED (
@@ -871,13 +1033,16 @@ BEGIN
                  OR (h.kind = 'campaigns' AND h.record_id = ANY (c_all))
                  OR (h.kind = 'projects' AND h.record_id = ANY (p_all))),
          gone AS (DELETE FROM d1_private.hidden_records h USING have x WHERE h.kind = x.kind AND h.record_id = x.record_id
-                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.kind = x.kind AND w.record_id = x.record_id) RETURNING 1),
+                     AND NOT EXISTS (SELECT 1 FROM want w WHERE w.kind = x.kind AND w.record_id = x.record_id) RETURNING x.kind),
          added AS (INSERT INTO d1_private.hidden_records (kind, record_id)
                    SELECT w.kind, w.record_id FROM want w WHERE NOT EXISTS (SELECT 1 FROM have x WHERE x.kind = w.kind AND x.record_id = w.record_id)
-                   RETURNING 1)
-    SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM added) INTO hidden_changes;
+                   RETURNING kind)
+    SELECT (SELECT count(*) FROM gone WHERE kind IN ('physical_samples', 'manufacturing_operations'))
+         + (SELECT count(*) FROM added WHERE kind IN ('physical_samples', 'manufacturing_operations')) INTO hidden_changes;
 
-    -- the rollup's restricted column is derived from hidden_records, so it follows the diff, and is written after it
+    -- the rollup's restricted column is derived from hidden_records (the operation and sample rows), so it follows the diff of those two kinds, and
+    -- is written after it. A campaign or project that turns restricted changes the hidden status of its operations, which the diff of the operations
+    -- shows; a test session's hidden status is not in the rollup, so a test insert or delete no longer rebuilds the whole cache.
     IF hidden_changes > 0 THEN
         PERFORM public.refresh_project_rollup();
     END IF;
@@ -2015,8 +2180,161 @@ BEGIN
 END
 $$;
 
+-- 10. The Lab Member rows (second part of this migration; spec section 3). Read visibility is the readers tables above, so the read
+-- rule of each record type is ONE membership test on them (`readers._some.user_id = $CURRENT_USER`; the operations rule ORs the
+-- `open_to_all` leaf, the narrowed orphan amnesty), a child of a record reads through one bare hop to its parent's readers
+-- (`operation_id.readers.user_id`), campaign_samples through its own `readers` alias, sample_genealogy through the one two-hop OR left;
+-- update, delete and manage of operations, tests and campaigns are the reader term AND the editor or owner test (a bare hop, never
+-- `_some`: a legal `_some` applies the readers table's own rule for the action), campaign_samples update and delete need the junction's
+-- own reader term too; sample_co_owners update and delete are owner-only (before, any co-owner could repoint or delete a co-owner row,
+-- which on a restricted sample leaks it). The five access tables, the readers tables, campaign_sample_readers and operation_open_to_all
+-- get a Lab Member read row (own rows only, operation_open_to_all every row) and no other grant: only the recompute triggers and the
+-- record-access endpoint write them. project_rollup is untouched here (migration 167 refines it). The eleven *_params tables have no
+-- rows to rule: migration 20260623000032 dropped them (their fields are columns of manufacturing_operations and test_sessions).
+--
+-- The rows are `python3 scripts/gen_access_rules.py --values --only <the collections above>` (a snapshot of the rules on 2026-10-13, as in
+-- 20261012000161). A Lab Member row whose permissions or validation differ is updated; a missing row is inserted (fields '*'). What it
+-- changes or adds is kept in d1_private.lab_member_access_rules_backup for `down`, which removes this block FIRST (before the readers).
+--
+-- Apply this TOGETHER WITH migration 167 and the Task 3 extensions of the same release (d1-access-guard with the owner-only restricted
+-- field and the manage-rule junction guards, and d1-record-access, the only writer of the access tables). Directus caches permissions
+-- and reads relations at start-up: flush Redis and restart Directus after applying.
+
+CREATE TABLE IF NOT EXISTS d1_private.lab_member_access_rules_backup (
+    id          INTEGER PRIMARY KEY,
+    permissions JSON,
+    validation  JSON,
+    inserted    BOOLEAN NOT NULL DEFAULT FALSE
+);
+COMMENT ON TABLE d1_private.lab_member_access_rules_backup IS
+    'Migration 20261012000166: the Lab Member permission rows it changed (directus_permissions.id with the old permissions and validation) or inserted (inserted = true). `migrate:down` restores or deletes them and drops the table.';
+
+CREATE TEMP TABLE _lm_access_rules (collection TEXT, action TEXT, filter JSON, validation JSON, fields TEXT) ON COMMIT DROP;
+INSERT INTO _lm_access_rules (collection, action, filter, validation, fields) VALUES
+    ('physical_samples', 'create', '{}', '{}', '*'),
+    ('physical_samples', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('physical_samples', 'update', '{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_and":[{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"access":{"role":{"_in":["edit"]}}}]}]}', '{}', '*'),
+    ('physical_samples', 'delete', '{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('manufacturing_operations', 'create', '{}', '{}', '*'),
+    ('manufacturing_operations', 'read', '{"_or":[{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"open_to_all":{"_some":{"record_id":{"_nnull":true}}}}]}', '{}', '*'),
+    ('manufacturing_operations', 'update', '{"_and":[{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_and":[{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"access":{"role":{"_in":["edit"]}}}]},{"_and":[{"restricted":{"_eq":false}},{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}]}]}]}', '{}', '*'),
+    ('manufacturing_operations', 'delete', '{"_and":[{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}},{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}]}', '{}', '*'),
+    ('test_sessions', 'create', '{}', '{}', '*'),
+    ('test_sessions', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('test_sessions', 'update', '{"_and":[{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_and":[{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"access":{"role":{"_in":["edit"]}}}]},{"_and":[{"restricted":{"_eq":false}},{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}]}]}]}', '{}', '*'),
+    ('test_sessions', 'delete', '{"_and":[{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}},{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}]}', '{}', '*'),
+    ('campaigns', 'create', '{}', '{}', '*'),
+    ('campaigns', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('campaigns', 'update', '{"_and":[{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_or":[{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_and":[{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"access":{"role":{"_in":["edit"]}}}]}]}]}', '{}', '*'),
+    ('campaigns', 'delete', '{"_and":[{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}},{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}]}', '{}', '*'),
+    ('projects', 'create', '{}', '{}', '*'),
+    ('projects', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('projects', 'update', '{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('projects', 'delete', '{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('sample_co_owners', 'create', '{}', '{}', '*'),
+    ('sample_co_owners', 'read', '{"sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('sample_co_owners', 'update', '{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('sample_co_owners', 'delete', '{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('sample_stock_provenance', 'create', '{}', '{}', '*'),
+    ('sample_stock_provenance', 'read', '{"sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('sample_stock_provenance', 'update', '{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}', '{}', '*'),
+    ('sample_stock_provenance', 'delete', '{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}', '{}', '*'),
+    ('sample_data_files', 'create', '{}', '{}', '*'),
+    ('sample_data_files', 'read', '{"sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('sample_data_files', 'update', '{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}', '{}', '*'),
+    ('sample_data_files', 'delete', '{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}', '{}', '*'),
+    ('sample_genealogy', 'create', '{}', '{}', '*'),
+    ('sample_genealogy', 'read', '{"_or":[{"child_sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"parent_sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}', '{}', '*'),
+    ('sample_genealogy', 'update', '{"_or":[{"child_sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"child_sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"child_sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"child_sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}', '{}', '*'),
+    ('sample_genealogy', 'delete', '{"_or":[{"child_sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"child_sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"child_sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"child_sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}', '{}', '*'),
+    ('campaign_samples', 'create', '{}', '{}', '*'),
+    ('campaign_samples', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('campaign_samples', 'update', '{"_and":[{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_or":[{"campaign_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}]}', '{}', '*'),
+    ('campaign_samples', 'delete', '{"_and":[{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}},{"_or":[{"campaign_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["edit"]}}}}]}]}]}', '{}', '*'),
+    ('operation_data_files', 'create', '{}', '{}', '*'),
+    ('operation_data_files', 'read', '{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('operation_data_files', 'update', '{"_and":[{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"operation_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"operation_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"operation_id":{"restricted":{"_eq":false}}},{"_or":[{"operation_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"operation_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"operation_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('operation_data_files', 'delete', '{"_and":[{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"operation_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"operation_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"operation_id":{"restricted":{"_eq":false}}},{"_or":[{"operation_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"operation_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"operation_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('machining_force_analysis', 'create', '{}', '{}', '*'),
+    ('machining_force_analysis', 'read', '{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('machining_force_analysis', 'update', '{"_and":[{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"operation_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"operation_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"operation_id":{"restricted":{"_eq":false}}},{"_or":[{"operation_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"operation_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"operation_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('fast_run_data', 'read', '{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('session_data_files', 'create', '{}', '{}', '*'),
+    ('session_data_files', 'read', '{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('session_data_files', 'update', '{"_and":[{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"session_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"session_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"session_id":{"restricted":{"_eq":false}}},{"_or":[{"session_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"session_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"session_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('session_data_files', 'delete', '{"_and":[{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"session_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"session_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"session_id":{"restricted":{"_eq":false}}},{"_or":[{"session_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"session_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"session_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('operation_additional_operators', 'create', '{}', '{}', '*'),
+    ('operation_additional_operators', 'read', '{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('operation_additional_operators', 'update', '{"_and":[{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"operation_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"operation_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"operation_id":{"restricted":{"_eq":false}}},{"_or":[{"operation_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"operation_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"operation_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('operation_additional_operators', 'delete', '{"_and":[{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"operation_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"operation_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"operation_id":{"restricted":{"_eq":false}}},{"_or":[{"operation_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"operation_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"operation_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"operation_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('session_additional_operators', 'create', '{}', '{}', '*'),
+    ('session_additional_operators', 'read', '{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('session_additional_operators', 'update', '{"_and":[{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"session_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"session_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"session_id":{"restricted":{"_eq":false}}},{"_or":[{"session_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"session_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"session_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('session_additional_operators', 'delete', '{"_and":[{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"session_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"session_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"session_id":{"restricted":{"_eq":false}}},{"_or":[{"session_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"session_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"session_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"session_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('test_sessions_subject', 'create', '{}', '{}', '*'),
+    ('test_sessions_subject', 'read', '{"test_sessions_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('test_sessions_subject', 'update', '{"_and":[{"test_sessions_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"test_sessions_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"test_sessions_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"test_sessions_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"test_sessions_id":{"restricted":{"_eq":false}}},{"_or":[{"test_sessions_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"test_sessions_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"test_sessions_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"test_sessions_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('test_sessions_subject', 'delete', '{"_and":[{"test_sessions_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_or":[{"test_sessions_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"test_sessions_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"test_sessions_id":{"access":{"role":{"_in":["edit"]}}}}]},{"_and":[{"test_sessions_id":{"restricted":{"_eq":false}}},{"_or":[{"test_sessions_id":{"sample_id":{"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"test_sessions_id":{"sample_id":{"co_owners":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"_and":[{"test_sessions_id":{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}}},{"test_sessions_id":{"sample_id":{"access":{"role":{"_in":["edit"]}}}}}]}]}]}]}]}', '{}', '*'),
+    ('project_investigators', 'create', '{}', '{}', '*'),
+    ('project_investigators', 'read', '{"project_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('project_investigators', 'update', '{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('project_investigators', 'delete', '{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
+    ('sample_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('operation_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('test_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('campaign_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('project_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('sample_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
+    ('operation_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
+    ('test_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
+    ('campaign_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
+    ('project_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
+    ('campaign_sample_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
+    ('operation_open_to_all', 'read', '{}', '{}', '*');
+
+-- First keep the rows that are about to change, then change exactly those.
+INSERT INTO d1_private.lab_member_access_rules_backup (id, permissions, validation)
+SELECT p.id, p.permissions, p.validation
+  FROM directus_permissions p
+  JOIN _lm_access_rules g ON g.collection = p.collection AND g.action = p.action
+ WHERE p.policy = '20000002-0000-0000-0000-000000000002'
+   AND (p.permissions::jsonb IS DISTINCT FROM g.filter::jsonb
+        OR p.validation::jsonb IS DISTINCT FROM g.validation::jsonb)
+ON CONFLICT (id) DO NOTHING;
+
+UPDATE directus_permissions p
+   SET permissions = g.filter, validation = g.validation
+  FROM _lm_access_rules g, d1_private.lab_member_access_rules_backup b
+ WHERE b.id = p.id AND NOT b.inserted
+   AND g.collection = p.collection AND g.action = p.action;
+
+WITH added AS (
+    INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
+    SELECT g.collection, g.action, g.filter, g.validation, g.fields, '20000002-0000-0000-0000-000000000002'
+      FROM _lm_access_rules g
+     WHERE NOT EXISTS (SELECT 1 FROM directus_permissions p
+                        WHERE p.policy = '20000002-0000-0000-0000-000000000002'
+                          AND p.collection = g.collection AND p.action = g.action)
+    RETURNING id
+)
+INSERT INTO d1_private.lab_member_access_rules_backup (id, inserted)
+SELECT id, TRUE FROM added;
+
+
 -- migrate:down
 SET LOCAL lock_timeout = '10s';
+
+-- the Lab Member rows first (they walk the readers aliases), then the readers
+DELETE FROM directus_permissions p
+ USING d1_private.lab_member_access_rules_backup b
+ WHERE b.id = p.id AND b.inserted;
+
+UPDATE directus_permissions p
+   SET permissions = b.permissions, validation = b.validation
+  FROM d1_private.lab_member_access_rules_backup b
+ WHERE b.id = p.id AND NOT b.inserted;
+
+DROP TABLE IF EXISTS d1_private.lab_member_access_rules_backup;
 
 DROP TRIGGER IF EXISTS physical_samples_readers_ins ON physical_samples;
 DROP TRIGGER IF EXISTS physical_samples_readers_upd ON physical_samples;
@@ -2149,7 +2467,7 @@ BEGIN
                     'campaign_hidden', 'sample_hidden', 'project_logins', 'sample_candidates', 'campaign_candidates',
                     'operation_candidates', 'test_candidates', 'project_candidates', 'readers_of_sample', 'readers_of_operation',
                     'readers_of_test', 'readers_of_campaign', 'readers_of_project', 'readers_of_campaign_sample', 'operation_open_of',
-                    'readers_of_sample_spec', 'readers_of_operation_spec', 'readers_of_test_spec', 'readers_of_campaign_spec', 'readers_of_campaign_sample_spec',
+                    'readers_of_sample_spec', 'readers_of_operation_spec', 'readers_of_test_spec', 'readers_of_campaign_spec', 'readers_of_campaign_sample_spec', 'readers_of_project_spec',
                     'hidden_of', 'is_hidden', 'readers_closure', 'sync_readers', 'refresh_readers', 'readers_rebuild',
                     'trg_readers_lock', 'readers_drift', 'readers_drift_count'])
     LOOP

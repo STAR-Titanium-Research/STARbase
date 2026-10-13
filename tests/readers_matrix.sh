@@ -232,10 +232,13 @@ UNION ALL SELECT 'test ' || count(*) FROM (
 UNION ALL SELECT 'campaign ' || count(*) FROM (
   (SELECT * FROM d1_private.readers_of_campaign(ARRAY(SELECT campaign_id FROM campaigns)) EXCEPT SELECT * FROM d1_private.readers_of_campaign_spec(ARRAY(SELECT campaign_id FROM campaigns)))
   UNION ALL (SELECT * FROM d1_private.readers_of_campaign_spec(ARRAY(SELECT campaign_id FROM campaigns)) EXCEPT SELECT * FROM d1_private.readers_of_campaign(ARRAY(SELECT campaign_id FROM campaigns)))) x
+UNION ALL SELECT 'project ' || count(*) FROM (
+  (SELECT * FROM d1_private.readers_of_project(ARRAY(SELECT project_id FROM projects)) EXCEPT SELECT * FROM d1_private.readers_of_project_spec(ARRAY(SELECT project_id FROM projects)))
+  UNION ALL (SELECT * FROM d1_private.readers_of_project_spec(ARRAY(SELECT project_id FROM projects)) EXCEPT SELECT * FROM d1_private.readers_of_project(ARRAY(SELECT project_id FROM projects)))) x
 UNION ALL SELECT 'junction ' || count(*) FROM (
   (SELECT * FROM d1_private.readers_of_campaign_sample(ARRAY(SELECT id FROM campaign_samples)) EXCEPT SELECT * FROM d1_private.readers_of_campaign_sample_spec(ARRAY(SELECT id FROM campaign_samples)))
   UNION ALL (SELECT * FROM d1_private.readers_of_campaign_sample_spec(ARRAY(SELECT id FROM campaign_samples)) EXCEPT SELECT * FROM d1_private.readers_of_campaign_sample(ARRAY(SELECT id FROM campaign_samples)))) x") || true
-for t in sample operation test campaign junction; do
+for t in sample operation test campaign project junction; do
   n=$(grep "^$t " <<<"$spec" | cut -d' ' -f2)
   [[ "$n" == 0 ]] && ok "set-based readers_of_$t = the candidates-then-predicate specification (readers_of_${t}_spec)" || bad "readers_of_$t differs from its _spec: $n pair(s) ($spec)"
 done

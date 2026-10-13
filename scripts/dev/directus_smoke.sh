@@ -263,14 +263,46 @@ fi
 
 # --- cases
 SCRIPT=directus_smoke.mjs; [[ "$MODE" == perf ]] && SCRIPT=directus_perf.mjs
-cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e LM_TOKEN="$LM_TOKEN" -e D1_SMOKE_REQUIRE_LM="${D1_SMOKE_REQUIRE_LM:-}" \
-  -e D1_SMOKE_PERF_N="${D1_SMOKE_PERF_N:-20}" -v "$FXMOUNT:/fixture:ro" \
-  -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/$SCRIPT 2>&1)
-crc=$?
+if [[ "$MODE" == perf && "${D1_SMOKE_PERF_SKIP_READS:-}" == 1 ]]; then
+  cout="PERF skipped (D1_SMOKE_PERF_SKIP_READS=1: only the write paths run)"; crc=0
+else
+  cout=$(docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e LM_TOKEN="$LM_TOKEN" -e D1_SMOKE_REQUIRE_LM="${D1_SMOKE_REQUIRE_LM:-}" \
+    -e D1_SMOKE_PERF_N="${D1_SMOKE_PERF_N:-20}" -v "$FXMOUNT:/fixture:ro" \
+    -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/$SCRIPT 2>&1)
+  crc=$?
+fi
 echo "$cout"
 if [[ "$MODE" == perf ]]; then
-  grep -q '^PERF ' <<<"$cout" && exit "$crc"
-  echo "FAIL harness: perf: no PERF lines in the output"; exit 1
+  grep -q '^PERF ' <<<"$cout" || { echo "FAIL harness: perf: no PERF lines in the output"; exit 1; }
+  # The write paths (performance gate): the SQL-level writers (scripts/dev/perf_writes.sql, D1_SMOKE_PERFW_N repetitions, each rolled back), then
+  # the same through Directus (scripts/dev/directus_perf_writes.mjs), then the UI writes of a member while an import transaction is held open.
+  # Peak pg_locks per scenario are printed as PERFLOCKS lines.
+  echo "--- write paths (PERFW lines: scenario, milliseconds; median over the repetitions below) ---"
+  wall=""
+  for rep in $(seq 1 "${D1_SMOKE_PERFW_N:-3}"); do
+    wo=$(psql_copy -v rep="$rep" -f - < scripts/dev/perf_writes.sql 2>&1) || { echo "FAIL harness: perf_writes.sql rep $rep"; echo "$wo"; exit 1; }
+    wall+="$wo"$'\n'
+  done
+  grep -E '^PERFINFO' <<<"$wall" | sort -u
+  grep -E '^PERFLOCKS' <<<"$wall" | sort -u
+  awk '/^PERFW /{ v[$2] = v[$2] " " $3 }
+       END { for (k in v) { m = split(v[k], a, " "); for (i = 1; i <= m; i++) for (j = i + 1; j <= m; j++) if (a[j] + 0 < a[i] + 0) { t = a[i]; a[i] = a[j]; a[j] = t }
+                            printf "PERFW %s n=%d p50=%d max=%d\n", k, m, a[int((m + 1) / 2)], a[m] } }' <<<"$wall" | sort
+  node_writes() { docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e D1_SMOKE_PERF_N="${D1_SMOKE_PERFW_N:-3}" "$@" \
+    -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_perf_writes.mjs 2>&1; }
+  D1_PERF_WRITES_ONLY='^(force_app_upload|coowner_added_big_sample|tests_with_subjects_x20|campaign_add_50_samples|link_login_big_pi)$'
+  node_writes -e D1_PERF_WRITES_ONLY="$D1_PERF_WRITES_ONLY" || crc=1
+  # UI writes while an import transaction is open: the importer's INSERT ... (3000 FAST runs) stays uncommitted for UI_WAIT seconds and a
+  # sample, a test and a campaign note are saved meanwhile (the global readers lock and the rollup lock make them wait for its commit).
+  UI_WAIT="${D1_SMOKE_UI_WAIT:-8}"
+  ( psql_copy -c "BEGIN; INSERT INTO manufacturing_operations (operation_id, method_id, source_system, pass_code, sintering_run_number, source_run_uid)
+      SELECT md5('pw-ui-' || g)::uuid, (SELECT method_id FROM manufacturing_methods WHERE method_code = 'MF'), 'fast_25', 'PWUI' || g, 900000 + g, 'pw-ui-uid-' || g FROM generate_series(1, 3000) g;
+      SELECT pg_sleep($UI_WAIT); ROLLBACK;" >/dev/null 2>&1 ) &
+  sleep 3
+  echo "--- UI writes while an import transaction is held open for ${UI_WAIT}s (a write that waits for its commit shows about $((UI_WAIT - 3))s) ---"
+  node_writes -e D1_PERF_WRITES_ONLY='^ui_write_wait$' || crc=1
+  wait
+  exit "$crc"
 fi
 
 # --- file case (T0e): a file that has a file_fingerprints row can still be deleted through Directus, and the

@@ -115,6 +115,15 @@ INSERT INTO test_access (session_id, person_id, role)
 SELECT ref.id('T' || k), ref.id('person-viewer'), 'view' FROM _u
 UNION ALL SELECT ref.id('T' || k), ref.id('person-editor'), 'edit' FROM _u;
 
+-- children of the records (migration 166: each reads through its parent's readers table; smoke cases lm_access_child_*): an analysis row, a
+-- FAST run data row and an additional operator on every fixture operation, an additional operator on every test, a genealogy edge from S2
+-- to S in every universe (the old co-owner and investigator rows and the test subject rows exist above)
+INSERT INTO machining_force_analysis (operation_id) SELECT id FROM ref.fx_ids WHERE kind = 'manufacturing_operations';
+INSERT INTO fast_run_data (operation_id) SELECT id FROM ref.fx_ids WHERE kind = 'manufacturing_operations';
+INSERT INTO operation_additional_operators (operation_id, person_id) SELECT id, ref.id('person-viewer') FROM ref.fx_ids WHERE kind = 'manufacturing_operations';
+INSERT INTO session_additional_operators (session_id, person_id) SELECT id, ref.id('person-viewer') FROM ref.fx_ids WHERE kind = 'test_sessions';
+INSERT INTO sample_genealogy (child_sample_id, parent_sample_id) SELECT ref.id('S' || k), ref.id('S2_' || k) FROM _u;
+
 -- The restricted flag a project_rollup row must carry (migration 167: derived from hidden records, not from the operation's own flags).
 -- An operation row: the operation is hidden; a sample row: the sample is hidden; the other kinds (tool, edge, insert, material, equipment) are
 -- derived from operations (restricted only when every operation behind them is): the cached flag is used for those.
@@ -180,6 +189,17 @@ CREATE FUNCTION ref.expected_json() RETURNS text LANGUAGE sql STABLE AS $$
                          AND (ref.pi_of(r.project_id, f.user_id)
                               OR (NOT ref.rollup_restricted(r.row_id, r.kind, r.project_id, coalesce((to_jsonb(r) ->> 'restricted')::boolean, false))
                                   AND ref.p_invs(r.project_id, f.user_id)))))
+                    FROM ref.fixture_users f),
+        -- what the child and junction cases compare with: the operations a user reads by the ORDINARY path (the amnesty runs' children are not
+        -- inherited), the campaign_samples rows and the genealogy edges (by child sample) of the fixture a user reads
+        'extra', (SELECT jsonb_object_agg(f.name, jsonb_build_object(
+                      'op_ordinary', (SELECT coalesce(jsonb_agg(x.id ORDER BY x.id), '[]') FROM ref.fx_ids x
+                                       WHERE x.kind = 'manufacturing_operations' AND coalesce(ref.op_read_ordinary(x.id, f.user_id), false)),
+                      'junction', (SELECT coalesce(jsonb_agg(cs.id ORDER BY cs.id), '[]') FROM campaign_samples cs
+                                    WHERE cs.campaign_id IN (SELECT id FROM ref.fx_ids WHERE kind = 'campaigns') AND ref.cs_read(cs.id, f.user_id)),
+                      'genealogy', (SELECT coalesce(jsonb_agg(g.child_sample_id ORDER BY g.child_sample_id), '[]') FROM sample_genealogy g
+                                     WHERE g.child_sample_id IN (SELECT id FROM ref.fx_ids WHERE kind = 'physical_samples')
+                                       AND (ref.s_read(g.child_sample_id, f.user_id) OR ref.s_read(g.parent_sample_id, f.user_id)))))
                     FROM ref.fixture_users f),
         -- the real operations every member reads (the narrowed amnesty, ref.amnesty_open): the copy's ownerless legacy runs
         'real_amnesty_ops', (SELECT coalesce(jsonb_agg(o.operation_id ORDER BY o.operation_id), '[]') FROM manufacturing_operations o

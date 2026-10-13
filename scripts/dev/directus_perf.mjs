@@ -153,7 +153,33 @@ const anOp = (await admin('/items/manufacturing_operations?' + q({ filter: { sam
 const aProject = (await admin('/items/projects?' + q({ filter: { project_code: { _eq: 'PFP1' } }, limit: 1, fields: ['project_id'] })))?.[0]?.project_id;
 const aCampaign = (await admin('/items/campaigns?' + q({ filter: { name: { _starts_with: 'Perf campaign' } }, limit: 1, fields: ['campaign_id'] })))?.[0]?.campaign_id;
 
-let requests = [...INDEX];
+// The Force App's list requests (apps/force-app/web/src/record/directusLookups.ts searchPastOperations, workspace.ts replay search,
+// uploadResume.ts findAnalysisRow, settings/captureUploadState.ts fetchAnalysisRows) and the other child lists of an operation.
+const analysed = (await admin('/items/machining_force_analysis?' + q({ filter: { operation_id: { _nnull: true } }, limit: 80, sort: ['-created_at'], fields: ['operation_id'] }))) ?? [];
+const analysedIds = analysed.map((r) => r.operation_id);
+const anAnalysedOp = analysedIds[0];
+const FORCE = [
+  ['force_past_operations', '/items/machining_force_analysis?' + q({
+    filter: { status: { _eq: 'done' } }, limit: 15, sort: ['-created_at'],
+    fields: ['id', 'peak_fx', 'peak_fy', 'peak_fz', 'operation_id.pass_code', 'operation_id.sample_id.sample_code', 'operation_id.sample_id.nickname'] })],
+  ['force_past_operations_search', '/items/machining_force_analysis?' + q({
+    filter: { status: { _eq: 'done' }, _or: [{ operation_id: { pass_code: { _icontains: 'PF' } } }, { operation_id: { sample_id: { sample_code: { _icontains: 'PFS1' } } } }, { operation_id: { sample_id: { nickname: { _icontains: 'PF' } } } }] },
+    limit: 15, sort: ['-created_at'],
+    fields: ['id', 'peak_fx', 'peak_fy', 'peak_fz', 'operation_id.pass_code', 'operation_id.sample_id.sample_code', 'operation_id.sample_id.nickname'] })],
+  ['force_replay_search', '/items/machining_force_analysis?' + q({
+    filter: { status: { _eq: 'done' } }, limit: 25, sort: ['-created_at'],
+    fields: ['id', 'status', 'operation_id.operation_id', 'operation_id.pass_code', 'operation_id.sample_id.sample_code', 'operation_id.sample_id.nickname'] })],
+  ['force_analysis_rows_in', '/items/machining_force_analysis?' + q({ filter: { operation_id: { _in: analysedIds } }, fields: ['operation_id', 'live_cache_file', 'directus_files_id'], limit: -1 })],
+  ['force_analysis_count', '/items/machining_force_analysis?' + q({ aggregate: { count: '*' }, limit: 1 })],
+  ['fast_run_data_list', '/items/fast_run_data?' + q({ fields: ['operation_id', 'status'], limit: 50, meta: 'filter_count' })],
+  ['operation_data_files_list', '/items/operation_data_files?' + q({ fields: ['operation_id', 'directus_files_id'], limit: 50, meta: 'filter_count' })],
+];
+if (anAnalysedOp) {
+  FORCE.push(['force_analysis_for_op', '/items/machining_force_analysis?' + q({ filter: { operation_id: { _eq: anAnalysedOp } }, fields: ['id', 'live_cache_file', 'directus_files_id'], limit: 10 })]);
+  FORCE.push(['fast_run_data_for_op', '/items/fast_run_data?' + q({ filter: { operation_id: { _eq: anAnalysedOp } }, fields: ['operation_id', 'status'], limit: 10 })]);
+  FORCE.push(['operation_data_files_for_op', '/items/operation_data_files?' + q({ filter: { operation_id: { _eq: anAnalysedOp } }, fields: ['operation_id', 'directus_files_id'], limit: 10 })]);
+}
+let requests = [...INDEX, ...FORCE];
 if (coOwned) requests.push(...samplePage('co_owned', coOwned));
 if (hiddenSample) requests.push(...samplePage('restricted', hiddenSample));
 if (anOp) requests.push(...operationPage('co_owned', anOp));
@@ -183,7 +209,11 @@ for (const user of USERS) {
     for (let i = 0; i < n; i++) times.push((await get(path, TOKENS[user])).ms);
     times.sort((a, b) => a - b);
     const rows = first.body?.meta?.filter_count ?? (Array.isArray(first.body?.data) ? first.body.data.length : first.status === 200 ? 1 : 0);
-    console.log(`PERF ${user} ${label} n=${n} p50=${pct(times, 50).toFixed(0)} p95=${pct(times, 95).toFixed(0)} max=${times[times.length - 1].toFixed(0)} rows=${rows}${first.status === 403 ? ' (403 not visible)' : ''}`);
+    // duplicates: a list whose first field is a key must not repeat it (the readers rules are EXISTS tests, so none may)
+    const data = Array.isArray(first.body?.data) ? first.body.data : [];
+    const key = data.length && !('count' in data[0]) ? Object.keys(data[0])[0] : null;
+    const dups = key ? data.length - new Set(data.map((r) => JSON.stringify(r[key]))).size : 0;
+    console.log(`PERF ${user} ${label} n=${n} p50=${pct(times, 50).toFixed(0)} p95=${pct(times, 95).toFixed(0)} max=${times[times.length - 1].toFixed(0)} rows=${rows} dups=${dups}${first.status === 403 ? ' (403 not visible)' : ''}`);
   }
 }
 // one save as a co-owner (the sample's editors may save): PATCH notes with a narrow read-back, N times
