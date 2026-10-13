@@ -5,9 +5,10 @@
 --
 -- user_usage gets a third kind, `view` (a saved view: a directus_presets bookmark, target = the preset id as
 -- text), and a pin_order column that numbers a person's pins, gapless from 0, across all kinds. The U1 pins
--- that already exist have no order yet, so they are numbered here by last_at (oldest first) per person: their
--- sidebar order stays stable and a new pin goes after them. user_prefs holds one row per person (whether the
--- default pins were given, and the sidebar / theme preferences).
+-- that already exist have no order yet, so they are numbered here by last_at (newest first) per person: U1's
+-- Home listed pins highest score first, so the most recently used pin stays first, and a new pin goes after
+-- them. user_prefs holds one row per person (whether the default pins were given, and the sidebar / theme
+-- preferences).
 --
 -- Both tables stay in d1_private (migration 141), outside the Directus schema scan, reached only through the
 -- d1-usage endpoint, with no audit trigger: this is derived, per-user convenience data (as in migration 163).
@@ -19,13 +20,13 @@ ALTER TABLE d1_private.user_usage
     ADD CONSTRAINT user_usage_kind_check CHECK (kind IN ('page', 'record', 'view')),
     ADD COLUMN pin_order INTEGER;
 
--- Back-fill: number each person's existing pins by last_at, oldest first, from 0. The kind and target
+-- Back-fill: number each person's existing pins by last_at, newest first, from 0. The kind and target
 -- tie-break keeps the result deterministic when two pins share a timestamp. Unpinned rows stay NULL.
 UPDATE d1_private.user_usage AS u
    SET pin_order = n.pin_order
   FROM (
       SELECT user_id, kind, target,
-             (ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY last_at, kind, target) - 1)::INTEGER AS pin_order
+             (ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY last_at DESC, kind ASC, target ASC) - 1)::INTEGER AS pin_order
         FROM d1_private.user_usage
        WHERE pinned
   ) AS n

@@ -3912,7 +3912,7 @@ INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'view
 ROLLBACK;
 SQL
 )
-grep -q 'up_bf_a:physical_samples:x=0,tests=1,samples=2' <<<"$uu_out" && ok "up numbers existing pins by last_at, oldest first, from 0" || bad "back-fill order is wrong (output: $uu_out)"
+grep -q 'up_bf_a:samples=0,tests=1,physical_samples:x=2' <<<"$uu_out" && ok "up numbers existing pins by last_at, newest first (as U1 showed them), from 0" || bad "back-fill order is wrong (output: $uu_out)"
 grep -q 'up_bf_b:samples=0,tests=1' <<<"$uu_out" && ok "up numbers each user's pins separately (ties broken by kind, target)" || bad "second user's back-fill is wrong (output: $uu_out)"
 grep -q 'up_bf_unpinned:<null>' <<<"$uu_out" && ok "up leaves unpinned rows without a pin_order" || bad "unpinned row got a pin_order (output: $uu_out)"
 grep -q 'up_dn_kinds:page,record' <<<"$uu_out" && grep -q 'up_dn_rows:6' <<<"$uu_out" && ok "down deletes the view rows and keeps the page and record rows" || bad "down left the wrong rows (output: $uu_out)"
