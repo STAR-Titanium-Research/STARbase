@@ -41,7 +41,7 @@ onBeforeUnmount(() => {
 
 <template>
 	<Teleport to="body">
-		<div v-if="modelValue" class="v-dialog-backdrop" @mousedown.self="emit('esc')">
+		<div v-if="modelValue" class="v-dialog-backdrop" @mousedown.self.prevent="emit('esc')">
 			<div ref="box" class="v-dialog" role="dialog" aria-modal="true"><slot /></div>
 		</div>
 	</Teleport>
