@@ -76,7 +76,10 @@ watch(modalOpen, async (open) => {
 		handedOff = false;
 		opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		await nextTick();
-		const first = closeBtn.value ?? sheetEl.value?.querySelector<HTMLElement>('button[aria-label="Collapse the sidebar"], ' + FOCUSABLE);
+		const first =
+			closeBtn.value ??
+			sheetEl.value?.querySelector<HTMLElement>('button[aria-label="Collapse the sidebar"]') ??
+			sheetEl.value?.querySelector<HTMLElement>(FOCUSABLE);
 		first?.focus();
 	} else {
 		await nextTick();
