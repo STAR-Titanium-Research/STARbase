@@ -1,16 +1,22 @@
-import { test, expect } from '../fixtures';
+import { test, expect } from '@playwright/test';
+import { STAR_BASE, signInStarbase } from '../starbase/target';
 
 /**
- * The d1-force-dashboard module: a home-styled force-analysis explorer.
+ * STARbase's Force plotter page (/plot/force): a home-styled force-analysis explorer.
  * Layout: Samples (top-left) + Operations (bottom-left), bidirectionally linked;
  * selected sample info + operation info on the right; three stacked signal charts
  * with a Force/FFT toggle beside the per-axis (Fx/Fy/Fz) FRM fingerprint.
  *
  * Requires at least one processed machining_force_analysis row (status='done').
  * Populate with: scripts/force_orchestrator.py --discover --run.
+ *
+ * Run against the d1-starbase preview with STARbase under vite preview (tests/ui/README.md, spec 14
+ * section): each test signs in to STARbase as the preview admin first. The Force Crawler test at the
+ * end is a Data Studio page and still signs in to Directus.
  */
 test('force dashboard: drill sample → operation → charts + FRM, with toggles', async ({ page }, testInfo) => {
-	await page.goto('/admin/d1-force-dashboard', { waitUntil: 'domcontentloaded' });
+	await signInStarbase(page, 'admin');
+	await page.goto(`${STAR_BASE}/plot/force`, { waitUntil: 'domcontentloaded' });
 
 	// Hero renders (compact badge banner). Generous timeout: this is usually the first test
 	// to hit Directus after a restart, and cold extension bundling can take >30s.
@@ -87,6 +93,7 @@ test('force dashboard: drill sample → operation → charts + FRM, with toggles
 });
 
 test('force dashboard: F11 op — switch Figure ⇄ Lite back and forth without TDZ/render errors', async ({ page }) => {
+	await signInStarbase(page, 'admin');
 	// Regression for the "Cannot access 'X' before initialization" TDZ errors that hit
 	// when transitioning between the static Figure (PNG) and the Lite point cloud (and back).
 	// The Full (octree) view needs the same-origin Caddy mount, so it is covered by the
@@ -103,7 +110,7 @@ test('force dashboard: F11 op — switch Figure ⇄ Lite back and forth without 
 			errors.push(`[${m.type()}] ${m.text()}`);
 	});
 
-	await page.goto(`/admin/d1-force-dashboard?operation=${OP}`, { waitUntil: 'domcontentloaded' });
+	await page.goto(`${STAR_BASE}/plot/force?operation=${OP}`, { waitUntil: 'domcontentloaded' });
 
 	const seg = (label: string) => page.locator('.frm-col .segmode .segbtn', { hasText: label });
 	const figureBtn = seg('Figure'), liteBtn = seg('Lite');
@@ -139,7 +146,8 @@ test('force dashboard: F11 op — switch Figure ⇄ Lite back and forth without 
 });
 
 test('force dashboard: selecting an operation highlights its sample without filtering the operations list', async ({ page }) => {
-	await page.goto('/admin/d1-force-dashboard', { waitUntil: 'domcontentloaded' });
+	await signInStarbase(page, 'admin');
+	await page.goto(`${STAR_BASE}/plot/force`, { waitUntil: 'domcontentloaded' });
 
 	const samples = page.locator('.panel-samples .rowcard');
 	const ops = page.locator('.panel-ops .rowcard');
@@ -169,6 +177,7 @@ test('force dashboard: selecting an operation highlights its sample without filt
 });
 
 test('force dashboard: Gridded in Full-res loads the interpolated-grid octree with a fidelity chip', async ({ page }) => {
+	await signInStarbase(page, 'admin');
 	// The grid octree fixture is built on the host (MATLAB + PotreeConverter), so this only
 	// runs where that build exists — same convention as the other octree host checks.
 	test.skip(!process.env.FORCE_HOST_TESTS, 'needs a host-built grid octree (FORCE_HOST_TESTS)');
@@ -177,7 +186,7 @@ test('force dashboard: Gridded in Full-res loads the interpolated-grid octree wi
 	const errors: string[] = [];
 	page.on('pageerror', (e) => errors.push(String(e.stack || e.message)));
 
-	await page.goto(`/admin/d1-force-dashboard?operation=${OP}`, { waitUntil: 'domcontentloaded' });
+	await page.goto(`${STAR_BASE}/plot/force?operation=${OP}`, { waitUntil: 'domcontentloaded' });
 
 	// Enter Full (octree) via the segmented selector. Available once the raw octree is built.
 	const fullBtn = page.locator('.frm-col .segmode .segbtn', { hasText: 'Full' });
@@ -199,6 +208,11 @@ test('force dashboard: Gridded in Full-res loads the interpolated-grid octree wi
 });
 
 test('force crawler: grid density setting round-trips', async ({ page }) => {
+	// A Data Studio page, signed in on the Directus at D1_BASE_URL with D1_ADMIN_PASSWORD (helpers.ts throws at
+	// import without it, so it is loaded here). Skipped when unset: the default D1_BASE_URL is live.
+	test.skip(!process.env.D1_ADMIN_PASSWORD, 'needs D1_ADMIN_PASSWORD (and D1_BASE_URL for a non-default Directus)');
+	const { login } = await import('../helpers');
+	await login(page);
 	await page.goto('/admin/d1-force-crawler', { waitUntil: 'domcontentloaded' });
 
 	const dens = page.locator('label:has-text("Grid density") input');
