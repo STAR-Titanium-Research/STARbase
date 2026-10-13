@@ -40,6 +40,9 @@ Directus Home module.
      - `fieldsFor` = `GET /fields/<c>`.
    - It is installed with `setExplorerHostFactory`, alongside `configureLinks(starbaseLinks(directusUrl))`.
    - `installUsagePings(router, api)`, so pings use `canonicalPath`.
+   - Review note: the `/plot/*` usage-ping mapping needs a deliberate choice (the plot pages are not
+     in plan 1's route table, so `canonicalPath` has no entry for them), and `FrequentlyUsed`'s
+     `newTab` raw `href` is not yet built through `resolveLink`. Both were ledger deferrals from plan 1.
 4. **Stand-ins for Directus components.**
    - `v-icon` and `v-progress-circular` copied from the Force App.
    - New stand-ins: `v-button` (`to` goes through `resolveLink`), `v-input`, `v-select`,
@@ -48,6 +51,11 @@ Directus Home module.
    - Theme: the ~20 `--theme--*` variables, starting from the Force App's compat layer
      (`styles.css`/`theme.ts`).
    - A unit test per stand-in for the props the pages use.
+   - Review note: the `v-dialog` and `v-drawer` stand-ins must set `role="dialog"` and
+     `aria-modal="true"`, because `shouldOpenFinder`'s modal check relies on them to keep Ctrl+K from
+     opening the finder over an open dialog.
+   - Review note: `--d1-sticky-top: 70px` is hard-coded in five record pages for the Data Studio header;
+     the STARbase header height must either match it or the shell must override the variable.
 5. **Shell, branding, sign-in pages.**
    - `AppShell`: ExplorerNav plus Finder via `useFinderShortcut`, and the brand header with the
      light and dark logo SVGs copied from the STAR shared drive into `public/brand/`.
@@ -56,6 +64,8 @@ Directus Home module.
    - `/signin/done` handles the SSO return.
    - The "can't reach the database" state.
    - The router mounts `starbaseRoutes` at `/`, with a `/home/:rest(.*)*` redirect as a safety net.
+   - Review note: `starbaseRoutes` are relative paths, and vue-router rejects top-level relative
+     paths. They must be the `children` of a `/` parent route, which is the AppShell route.
 6. **Edit frame (depends on step 0).**
    - `core/extensions/d1-edit-frame`, a form-only module page. It reuses `editDrawer.ts`'s pure
      helpers and talks to its parent through `postMessage`, with origin checks on both sides.
@@ -66,6 +76,9 @@ Directus Home module.
    - `/plot/force` uses the cookie (or Bearer) `ForceHost` variant from spec §3.5.
    - `/plot/fast` uses `setFastHost`.
    - Both are lazy-loaded routes.
+   - Review note: both plotters render `<private-view>`, and the Force App relies on Vue rendering it as
+     an unknown element with its default slot. STARbase may do the same, or register a pass-through
+     component for it. `FastDashboard` ping/link deferrals from Task 3 apply to the `/plot/fast` route too.
 8. **Phone layout.**
    - Below 768 px: a top bar plus a sheet for the nav.
    - Cards by default on index pages, via a pure `defaultListPrefs(width, saved)` with tests.
