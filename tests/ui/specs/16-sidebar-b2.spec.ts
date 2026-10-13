@@ -553,7 +553,18 @@ test('Settings: Forget my list views and Clear my history', async ({ browser }) 
 	expect(await page.evaluate(() => localStorage.getItem('d1.list.samples'))).toBeNull();
 	expect(await page.evaluate(() => localStorage.getItem('starbase.theme'))).toBe('dark');
 
+	// Clearing asks first (Home's own words); Cancel sends nothing and puts the button back.
 	await page.getByRole('button', { name: 'Clear my history' }).click();
+	await expect(page.getByText('Clear your history? Pinned items stay.')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
+	expect(state.usage).not.toContain('POST /d1-usage/clear');
+	await page.getByRole('button', { name: 'Cancel' }).click();
+	await expect(page.getByText('Clear your history? Pinned items stay.')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Clear my history' })).toBeFocused();
+	expect(state.usage).not.toContain('POST /d1-usage/clear');
+
+	await page.getByRole('button', { name: 'Clear my history' }).click();
+	await page.getByRole('button', { name: 'Clear', exact: true }).click();
 	await expect(page.getByText('History cleared.')).toBeVisible();
 	expect(state.usage).toContain('POST /d1-usage/clear');
 	// A reviewer's screenshot of the finished page (not part of the assertions): SETTINGS_SHOT=<path>.
