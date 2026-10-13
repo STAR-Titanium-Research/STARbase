@@ -50,15 +50,25 @@ BEGIN
 END
 $$;
 
+CREATE SCHEMA IF NOT EXISTS d1_private;
+CREATE TABLE IF NOT EXISTS d1_private.readers_added_fks (
+    table_name TEXT NOT NULL,
+    conname    TEXT NOT NULL,
+    PRIMARY KEY (table_name, conname)
+);
+COMMENT ON TABLE d1_private.readers_added_fks IS 'Migration 166: the foreign keys user_id -> directus_users that the migration itself added (not the ones that already existed), so `migrate:down` drops only those.';
+
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = 'public.sample_co_owners'::regclass AND c.contype = 'f'
                       AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.sample_co_owners'::regclass AND attname = 'user_id')]) THEN
         ALTER TABLE sample_co_owners ADD CONSTRAINT sample_co_owners_user_id_fkey FOREIGN KEY (user_id) REFERENCES directus_users (id) ON DELETE CASCADE;
+        INSERT INTO d1_private.readers_added_fks VALUES ('sample_co_owners', 'sample_co_owners_user_id_fkey') ON CONFLICT DO NOTHING;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = 'public.project_investigators'::regclass AND c.contype = 'f'
                       AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.project_investigators'::regclass AND attname = 'user_id')]) THEN
         ALTER TABLE project_investigators ADD CONSTRAINT project_investigators_user_id_fkey FOREIGN KEY (user_id) REFERENCES directus_users (id) ON DELETE CASCADE;
+        INSERT INTO d1_private.readers_added_fks VALUES ('project_investigators', 'project_investigators_user_id_fkey') ON CONFLICT DO NOTHING;
     END IF;
 END
 $$;
@@ -862,6 +872,9 @@ COMMENT ON FUNCTION d1_private.operation_open_of(uuid[]) IS 'The operations ever
 
 CREATE OR REPLACE FUNCTION d1_private.hidden_of(kind text, ids uuid[]) RETURNS TABLE (record_id uuid) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$
 BEGIN
+    IF coalesce(cardinality(ids), 0) = 0 THEN
+        RETURN;
+    END IF;
     IF kind = 'projects' THEN
         RETURN QUERY SELECT p.project_id FROM projects p WHERE p.project_id = ANY (ids) AND p.restricted;
     ELSIF kind = 'campaigns' THEN
@@ -937,6 +950,13 @@ $$;
 COMMENT ON FUNCTION d1_private.readers_closure(uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[]) IS 'What a set of seeds makes stale (spec section 2, closure table): the samples, operations, tests, campaigns, projects and campaign_samples rows whose readers must be recomputed. Seeds are records whose own inputs changed; touches are parents that only need their own recompute. The junction rows are those of a sample in S* and the touched ones; sync_readers() adds the rows of a campaign whose readers changed. STABLE: it runs in the statement that follows the lock, so it reads everything the previous holder committed.';
 
 -- the diff: for each type, delete the rows of the closure the function no longer returns, insert the missing ones (never delete-all)
+--
+-- !!! THE ORDER OF THE BLOCKS BELOW IS LOAD-BEARING. samples -> operations (+ operation_open_to_all) -> tests -> campaigns -> projects ->
+-- !!! junction rows. readers_of_operation and readers_of_test read sample_readers; readers_of_campaign_sample reads sample_readers and
+-- !!! campaign_readers; readers_of_project reads operation_readers and test_readers. Each block is its own statement (a fresh snapshot), so
+-- !!! the table a function reads is already current for every id it reads. Reorder or merge the blocks and a reader row is derived from a
+-- !!! stale layer. tests/readers_matrix.sh fails when a type is recomputed before a table its function reads (spec section 2, rule 1).
+-- !!! The *_spec functions are order-independent and pure: use them to answer a hypothetical state.
 CREATE OR REPLACE FUNCTION d1_private.sync_readers(s_all uuid[], o_all uuid[], t_all uuid[], c_all uuid[], p_all uuid[], j_all uuid[])
 RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE
@@ -1069,6 +1089,8 @@ END
 $$;
 COMMENT ON FUNCTION d1_private.refresh_readers(uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[]) IS 'Recompute the readers affected by a change (spec section 2): seeds are records whose own inputs changed (samples, operations, tests, campaigns, projects), touches are parents that only need their own recompute (samples, campaigns, projects, campaign_samples rows). One global advisory lock first, the closure and the diff in later statements; raises unless READ COMMITTED. Called only by the statement triggers.';
 
+-- !!! readers_rebuild() relies on sync_readers() recomputing the layers in dependency order (see the note on sync_readers): samples,
+-- !!! operations, tests, campaigns, projects, junction rows. That order, not the size of the id arrays, is what makes one pass complete.
 CREATE OR REPLACE FUNCTION d1_private.readers_rebuild() RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
     IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
@@ -2071,6 +2093,9 @@ COMMENT ON TRIGGER directus_users_readers_trunc ON directus_users IS 'A TRUNCATE
 DROP TRIGGER IF EXISTS physical_samples_readers_lock ON physical_samples;
 CREATE TRIGGER physical_samples_readers_lock BEFORE INSERT OR UPDATE OR DELETE ON physical_samples FOR EACH STATEMENT EXECUTE FUNCTION d1_private.trg_readers_lock();
 COMMENT ON TRIGGER physical_samples_readers_lock ON physical_samples IS 'Takes the global readers lock before the statement''s row triggers take the rollup lock (migrations 126, 127, 157): the lock order is always readers lock, then rollup lock (A1a, migration 166).';
+DROP TRIGGER IF EXISTS people_readers_lock ON people;
+CREATE TRIGGER people_readers_lock BEFORE UPDATE OF user_id ON people FOR EACH STATEMENT EXECUTE FUNCTION d1_private.trg_readers_lock();
+COMMENT ON TRIGGER people_readers_lock ON people IS 'Takes the global readers lock BEFORE the statement locks the people row (user_id is UNIQUE, so the update takes FOR UPDATE on it) and before people_readers_upd gathers its seeds from the base tables: otherwise an UPDATE of people.user_id deadlocks with a write that holds the readers lock and wants the person''s row (an owner change takes FOR KEY SHARE on it), and a record attached to the person between the seed gather and the lock is missed (A1a, migration 166).';
 DROP TRIGGER IF EXISTS manufacturing_operations_readers_lock ON manufacturing_operations;
 CREATE TRIGGER manufacturing_operations_readers_lock BEFORE INSERT OR UPDATE OR DELETE ON manufacturing_operations FOR EACH STATEMENT EXECUTE FUNCTION d1_private.trg_readers_lock();
 COMMENT ON TRIGGER manufacturing_operations_readers_lock ON manufacturing_operations IS 'Takes the global readers lock before the statement''s row triggers take the rollup lock (migrations 126, 127, 157): the lock order is always readers lock, then rollup lock (A1a, migration 166).';
@@ -2079,6 +2104,9 @@ COMMENT ON TRIGGER manufacturing_operations_readers_lock ON manufacturing_operat
 REVOKE ALL ON FUNCTION d1_private.refresh_readers(uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[], uuid[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.sync_readers(uuid[], uuid[], uuid[], uuid[], uuid[], uuid[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.readers_rebuild() FROM PUBLIC;
+-- is_hidden is SECURITY DEFINER: schema USAGE keeps it unreachable for members today, and it must not depend on that alone; the Ask-DB role is granted
+-- it by the migration that creates the role's policies
+REVOKE ALL ON FUNCTION d1_private.is_hidden(text, uuid) FROM PUBLIC;
 
 -- 8. The Directus metadata the rules walk (as migration 165 does for the access lists): hidden collections, the parent relations
 -- with the hidden O2M alias `readers` (`open_to_all` for the amnesty set), the readers' user_id -> directus_users relations
@@ -2393,6 +2421,7 @@ DROP TRIGGER IF EXISTS people_readers_trunc ON people;
 DROP TRIGGER IF EXISTS directus_users_readers_trunc ON directus_users;
 DROP TRIGGER IF EXISTS physical_samples_readers_lock ON physical_samples;
 DROP TRIGGER IF EXISTS manufacturing_operations_readers_lock ON manufacturing_operations;
+DROP TRIGGER IF EXISTS people_readers_lock ON people;
 DROP FUNCTION IF EXISTS d1_private.trg_readers_physical_samples_ins();
 DROP FUNCTION IF EXISTS d1_private.trg_readers_physical_samples_upd();
 DROP FUNCTION IF EXISTS d1_private.trg_readers_physical_samples_del();
@@ -2496,5 +2525,14 @@ DROP TABLE IF EXISTS operation_readers;
 DROP TABLE IF EXISTS sample_readers;
 DROP TABLE IF EXISTS d1_private.hidden_records;
 
-ALTER TABLE sample_co_owners DROP CONSTRAINT IF EXISTS sample_co_owners_user_id_fkey;
-ALTER TABLE project_investigators DROP CONSTRAINT IF EXISTS project_investigators_user_id_fkey;
+-- only the foreign keys this migration added (a pre-existing one stays)
+DO $$
+DECLARE
+    r record;
+BEGIN
+    FOR r IN SELECT table_name, conname FROM d1_private.readers_added_fks LOOP
+        EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT IF EXISTS %I', r.table_name, r.conname);
+    END LOOP;
+END
+$$;
+DROP TABLE IF EXISTS d1_private.readers_added_fks;

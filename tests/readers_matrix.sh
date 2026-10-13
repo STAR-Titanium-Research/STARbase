@@ -11,7 +11,8 @@
 #   4. the concurrency cases (two sessions, each in both commit orders): 0 (campaign_samples insert against restricting the campaign),
 #      A (an operation repointed onto S against restricting S, removing its co-owner, adding it to a restricted campaign), B (a
 #      campaign_samples insert against restricting the campaign's PROJECT), a login unlinked while the same person is added to a record,
-#      and a forced lock-order deadlock with a row lock;
+#      or made the owner of a sample, a forced lock-order deadlock with a row lock, and the people-row deadlock (people.user_id update against an
+#      owner change; it must not happen with people_readers_lock and must happen without it);
 #   5. the backfill and a big-project restrict on DEFAULT max_locks_per_transaction, with the peak pg_locks count;
 #   6. the seeded randomised differential test: random universes against the oracle as a full users x records cross product, then random
 #      mutation sequences with readers_drift() after every step (the seed is fixed and printed on failure).
@@ -1200,7 +1201,7 @@ SQL
 # Concurrency: two sessions, each in both commit orders. The session that runs its statement first holds the global readers lock
 # until it commits (3 s); the other waits at the lock, and must then see everything the first committed.
 # ------------------------------------------------------------------------------------------------------------------------------
-echo "== Concurrency: cases 0, A, B, a login unlinked while added, a forced deadlock =="
+echo "== Concurrency: cases 0, A, B, a login unlinked while added or made owner, the forced deadlocks =="
 # conc <label> <setup sql> <session 1 sql> <session 2 sql> <check sql: one row 'ok' on success>   (@L@ is the order-specific label)
 conc() {
   local label="$1" setup="$2" s1="$3" s2="$4" check="$5" order first second lbl f1 f2 out drift res
@@ -1262,6 +1263,8 @@ conc cL "$SETUP_L" \
      "UPDATE people SET user_id = NULL WHERE person_id = m.id('@L@pe')" \
      "INSERT INTO sample_access (sample_id, person_id, role) VALUES (m.id('@L@s'), m.id('@L@pe'), 'view')" \
      "SELECT CASE WHEN NOT m.rd('sample', m.id('@L@s'), m.id('@L@u')) THEN 'ok' ELSE 'an unlinked login is still a reader' END"
+# a login unlinked while the same person becomes the owner of a sample (the people.user_id update takes the person's row lock; people_readers_lock takes the readers lock first)
+conc cP "$SETUP_L"      "UPDATE people SET user_id = NULL WHERE person_id = m.id('@L@pe')"      "UPDATE physical_samples SET owner_person_id = m.id('@L@pe') WHERE sample_id = m.id('@L@s')"      "SELECT CASE WHEN NOT m.rd('sample', m.id('@L@s'), m.id('@L@u')) AND (SELECT owner_person_id FROM physical_samples WHERE sample_id = m.id('@L@s')) = m.id('@L@pe') THEN 'ok' ELSE 'the unlinked login still reads the sample it was made owner of, or the owner change was lost' END"
 
 # a forced lock-order deadlock with a row lock: session 1 holds a row (SELECT ... FOR UPDATE takes no readers lock) and wants the readers lock, session 2 holds
 # the readers lock (every statement on physical_samples takes it) and wants that row
@@ -1281,6 +1284,37 @@ for order in a; do
   else bad "forced deadlock: deadlocks=$nd drift=$drift committed restricted flags=$nrestricted output: $out"; fi
   break
 done
+
+# The people-row deadlock (review finding 2): session 1 holds the readers lock (a sample statement) and then makes P the owner of a sample (a foreign key
+# KEY SHARE on P's row); session 2, one second in, updates people.user_id of P (a FOR UPDATE on that row, UNIQUE column). Without people_readers_lock session 2
+# takes the row first and waits for the readers lock in its AFTER trigger while session 1 waits for the row: a deadlock. With it session 2 waits at the lock
+# BEFORE it touches the row, so both commit. The second round drops the trigger and must deadlock (the test can fail).
+people_deadlock() {
+  local mode="$1" lbl="pdl_$1" f1 f2 out nd drift own ul
+  qf "$FIX_URL" <<<"INSERT INTO directus_users (id, email, status, first_name, last_name) VALUES (m.id('${lbl}u'), '${lbl}@example.invalid', 'active', 'P', 'D');
+                    INSERT INTO people (person_id, full_name, user_id, is_researcher, active) VALUES (m.id('${lbl}pe'), 'P ${lbl}', m.id('${lbl}u'), true, true);
+                    SELECT m.mk_sample('${lbl}X', NULL, 'a'); SELECT m.mk_sample('${lbl}Y', NULL, 'a');" >/dev/null
+  f1=$(mktemp); f2=$(mktemp)
+  ( psql "$FIX_URL" --no-psqlrc -X -t -A -q -c "BEGIN; UPDATE physical_samples SET restricted = true WHERE sample_id = m.id('${lbl}X'); SELECT pg_sleep(2); UPDATE physical_samples SET owner_person_id = m.id('${lbl}pe') WHERE sample_id = m.id('${lbl}Y'); COMMIT;" >"$f1" 2>&1 ) &
+  sleep 1
+  ( psql "$FIX_URL" --no-psqlrc -X -t -A -q -c "BEGIN; UPDATE people SET user_id = NULL WHERE person_id = m.id('${lbl}pe'); COMMIT;" >"$f2" 2>&1 ) &
+  wait
+  out="$(cat "$f1" "$f2")"; rm -f "$f1" "$f2"
+  nd=$(grep -c "deadlock detected" <<<"$out")
+  drift=$(q "$FIX_URL" "SELECT d1_private.readers_drift_count()")
+  own=$(q "$FIX_URL" "SELECT count(*) FROM physical_samples WHERE sample_id = m.id('${lbl}Y') AND owner_person_id = m.id('${lbl}pe')")
+  ul=$(q "$FIX_URL" "SELECT count(*) FROM people WHERE person_id = m.id('${lbl}pe') AND user_id IS NULL")
+  echo "$nd $drift $own $ul"
+}
+res=$(people_deadlock with)
+if [[ "$res" == "0 0 1 1" ]]; then ok "a people.user_id update against an owner change (the people-row deadlock): no deadlock with people_readers_lock, both commit, drift empty"
+else bad "people-row deadlock with people_readers_lock: deadlocks drift owner-set unlinked = '$res'"; fi
+q "$FIX_URL" "DROP TRIGGER people_readers_lock ON people" >/dev/null
+res=$(people_deadlock without)
+q "$FIX_URL" "CREATE TRIGGER people_readers_lock BEFORE UPDATE OF user_id ON people FOR EACH STATEMENT EXECUTE FUNCTION d1_private.trg_readers_lock()" >/dev/null
+if [[ "${res%% *}" == 1 ]]; then ok "the same pair deadlocks (40P01) when people_readers_lock is dropped: the test can fail ($res)"
+else bad "without people_readers_lock the pair did not deadlock ($res): the test does not exercise the row-lock order"; fi
+[[ "$(q "$FIX_URL" "SELECT count(*) FROM pg_trigger WHERE tgname = 'people_readers_lock' AND NOT tgisinternal")" == 1 ]] && ok "people_readers_lock restored" || bad "people_readers_lock was not restored"
 
 # ------------------------------------------------------------------------------------------------------------------------------
 # The backfill and a big-project restrict on DEFAULT lock settings, with the peak pg_locks count
@@ -1418,7 +1452,7 @@ END $$;
 
 -- one random mutation (an invalid one, refused by a constraint, is skipped; anything else is a failure)
 CREATE OR REPLACE FUNCTION m.rmutate(step int) RETURNS text LANGUAGE plpgsql AS $$
-DECLARE kind int := m.rn(16); sm uuid[]; op uuid[]; ts uuid[]; cm uuid[]; pj uuid[]; r uuid; tbl text; what text;
+DECLARE kind int := m.rn(20); sm uuid[]; op uuid[]; ts uuid[]; cm uuid[]; pj uuid[]; r uuid; tbl text; what text;
 BEGIN
     sm := ARRAY(SELECT sample_id FROM physical_samples WHERE sample_code LIKE 'M-x%'); op := ARRAY(SELECT operation_id FROM manufacturing_operations WHERE pass_code IS NULL OR true ORDER BY operation_id);
     ts := ARRAY(SELECT session_id FROM test_sessions WHERE test_type = 'hardness' ORDER BY session_id); cm := ARRAY(SELECT campaign_id FROM campaigns WHERE name LIKE 'M x%');
@@ -1489,6 +1523,34 @@ BEGIN
             ELSIF what = 't' THEN DELETE FROM test_sessions WHERE session_id = m.rid(ts);
             ELSIF what = 's' THEN DELETE FROM physical_samples WHERE sample_id = m.rid(sm);
             ELSE DELETE FROM campaigns WHERE campaign_id = m.rid(cm); END IF;
+        ELSIF kind = 16 THEN
+            -- a person is deleted (owners set null, access rows and legacy rows cascade) and, half the time, comes back with or without the login
+            what := m.rperson(0);
+            IF what <> 'z' THEN
+                DELETE FROM people WHERE person_id = m.pe(what);
+                IF m.rp(0.6) THEN
+                    INSERT INTO people (person_id, full_name, user_id, is_researcher, active) VALUES (m.pe(what), 'M again ' || what, CASE WHEN m.rp(0.5) THEN m.u(what) END, true, true);
+                END IF;
+            END IF;
+        ELSIF kind = 17 THEN
+            -- a login is deleted (readers rows and legacy rows cascade, people.user_id is set null) and, half the time, created again and linked
+            what := (ARRAY['a','b','c','d','e','f'])[1 + m.rn(6)];
+            DELETE FROM directus_users WHERE id = m.u(what);
+            IF m.rp(0.6) THEN
+                INSERT INTO directus_users (id, email, status, first_name, last_name) VALUES (m.u(what), 'm-' || what || '@example.invalid', 'active', 'M', what);
+                IF m.rp(0.6) THEN UPDATE people SET user_id = m.u(what) WHERE person_id = m.pe(what) AND user_id IS NULL; END IF;
+            END IF;
+        ELSIF kind = 18 THEN
+            -- a project is deleted (campaigns set null; samples, operations or tests may refuse it)
+            DELETE FROM projects WHERE project_id = m.rid(pj);
+        ELSIF kind = 19 THEN
+            -- multi-row statements: two rows of a table in one UPDATE
+            what := (ARRAY['s','o','c','w'])[1 + m.rn(4)];
+            IF what = 's' THEN UPDATE physical_samples SET restricted = NOT restricted WHERE sample_id IN (m.rid(sm), m.rid(sm));
+            ELSIF what = 'o' THEN UPDATE manufacturing_operations SET owner_person_id = m.pe(m.rperson(0.3)) WHERE operation_id IN (m.rid(op), m.rid(op));
+            ELSIF what = 'c' THEN UPDATE campaigns SET project_id = m.ridn(pj, 0.3), restricted = NOT restricted WHERE campaign_id IN (m.rid(cm), m.rid(cm));
+            ELSE UPDATE people SET user_id = CASE WHEN user_id IS NULL THEN m.u(CASE person_id WHEN m.pe('a') THEN 'a' WHEN m.pe('b') THEN 'b' ELSE 'c' END) ELSE NULL END
+                  WHERE person_id IN (m.pe('a'), m.pe('b'), m.pe('c')); END IF;
         ELSE
             -- a test's derived sample through its subject rows
             r := m.rid(ts);

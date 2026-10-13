@@ -357,15 +357,41 @@ narrowed amnesty, section 1) are made once, there. On top of them:
 The readers tables **materialise** these functions; the triggers only say which ids to recompute. Rules for the
 functions (they are what the review and the tests check):
 
-1. **They read base tables only, never a readers table.** Recompute order then does not matter, and nothing can go
-   stale inside one statement.
-2. **Candidates, then the predicate.** For each record the candidate users are the union of every login the positive
-   paths can reach (owner; co-owners; access entries; the PI and the investigators of its project; for a sample also
-   its campaigns' owners and project PIs and investigators; for a campaign also the editors of its samples; for a
-   campaign's), and the per-pair predicate (`can_read_<type>(id, user)`, the promoted `ref.*` evaluation: listed, or
-   unrestricted and inherited, and the gates) keeps the ones that pass. It never crosses records with users. **Every
-   candidate query inner-joins `directus_users`**, so a dangling `user_id` can never be emitted as a reader (the foreign key
-   of the readers table would refuse it and abort the writer's transaction).
+1. **Order-dependent by design: a function may read the readers tables of the types that precede it.** (This revises the
+   first draft, which said the functions read base tables only.) The production `readers_of_*` are set-based, and for speed
+   four of them take an upstream layer from its materialised table instead of recomputing it:
+   `readers_of_operation` and `readers_of_test` read the sample's readers from `sample_readers`;
+   `readers_of_campaign_sample` reads `sample_readers` and `campaign_readers`; `readers_of_project` reads the owners that
+   can read their operations and tests from `operation_readers` and `test_readers`. Recomputing those layers per call was
+   what put the write gate out of reach (a one-record refresh cost 70 to 100 ms, now about 10). The dependency graph is
+   acyclic (samples and campaigns read base tables only, operations and tests read samples, projects read operations and
+   tests, junction rows read samples and campaigns; nothing reads `project_readers`), and **the order in which
+   `sync_readers()` recomputes the types is load-bearing: samples, operations (with `operation_open_to_all`), tests,
+   campaigns, projects, then junction rows**. Each type's closure contains every id whose readers can change, and each
+   type is diffed in its own statement (a fresh snapshot), so when a function reads an upstream table that table is already
+   current for every id it reads. `readers_rebuild()` runs the same function over every id in the same order, so it repairs
+   even an arbitrarily wrong upstream layer in one pass. Two consequences, both accepted:
+   (a) these functions answer correctly **only on a synced database**: for a hypothetical state ("who would be able to read
+   this if...", a preview in a later task) call the `*_spec` functions, which stay pure; and (b) `readers_drift()` computes
+   the upper layers from the *stored* lower layers, so a corrupt lower layer is reported at its own level and the layers
+   derived from it are consistent with it and not reported; that is intended (the root cause is reported, one rebuild fixes
+   every layer, and an empty drift implies equality with a from-scratch recompute by induction over the layers). The
+   `*_spec` functions (candidates, then the predicate) and the independent oracle `ref.*` are never order-dependent, and the
+   test asserts production = spec = oracle on every record and user of every universe. A static check
+   (`tests/readers_matrix.sh`) fails when the call order inside `sync_readers()` puts a type before one of the tables its
+   function reads.
+2. **Candidates, then the predicate (the `*_spec` functions), and a set-based equal for production.** For each record the
+   candidate users are the union of every login the positive paths can reach (owner; co-owners; access entries; the PI and
+   the investigators of its project; for a sample also its campaigns' owners and project PIs and investigators; for a
+   campaign also the editors of its samples; for a project the owners of what is in it), and the per-pair predicate
+   (`can_read_<type>(id, user)`, the promoted `ref.*` evaluation: listed, or unrestricted and inherited, and the gates)
+   keeps the ones that pass. It never crosses records with users. **The `*_spec` candidate queries inner-join
+   `directus_users`**, so a dangling `user_id` can never be emitted as a reader. **The production set-based functions do not
+   join it**: every `user_id` they read is a foreign key to `directus_users` (`people.user_id` since migration 060, ON DELETE
+   SET NULL; `sample_co_owners.user_id` and `project_investigators.user_id` gain `ON DELETE CASCADE` keys in migration 166,
+   added only after the preflight found no dangling row), so a login that no longer exists cannot be reached, and the join
+   cost about 1 ms per call over ten relations. This holds exactly as long as those foreign keys exist; the matrix compares
+   production with the `*_spec` functions (which do join) on every universe.
 3. **Search path pinned, `STABLE`, no side effects.** A set-based rewrite of a predicate for speed is allowed only while
    the equivalence test below stays green against the fixture's independent oracle.
 4. **The oracle stays.** `ref.*` remains in the fixture as an independent plain-SQL model (written from the spec's
@@ -409,8 +435,9 @@ existing `refresh_project_rollup()` already takes a global transaction-level adv
 statement triggers fire on every statement, so writes to the hot table already serialise today; what is new is that sample,
 test, access and junction writes join them. Consequences handled elsewhere: the importer commits in batches (the write gate
 measures how long UI writes wait while an import transaction is open); a deadlock with ordinary row locks is still possible
-(`40P01`, which Directus reports as a 500 and does not retry): the importer and the crawler retry, the endpoint reports it, and
-nothing is left half-applied; the backfill and a big-project cascade must run on **default lock settings** (the gate records
+(`40P01`, which Directus reports as a 500 and does not retry; **no retry is built in A1a: the importer, the crawler and the
+endpoint report it, and a retry wrapper around their write transactions is a named follow-up**; nothing is left
+half-applied, which the forced-deadlock test asserts); the backfill and a big-project cascade must run on **default lock settings** (the gate records
 the peak `pg_locks` count, which is now one advisory lock plus the row locks).
 
 *Seeds* are records whose **own** inputs changed (taken from both the OLD and the NEW row, so a moved record reaches its
@@ -426,7 +453,7 @@ old and new parents); the closure follows what depends on them. *Touches* are pa
 | `S*` | seed and touched samples, samples whose project is a seed project, and samples in `Cd` |
 | `O*`, `T*` | seed operations (tests), those whose project is a seed project, whose campaign is in `Cd`, or whose sample is in `S*` |
 | `P*` | seed and touched projects, and the `project_id` of every record in `C*`, `S*`, `O*`, `T*` (a project's readers include the owners of what is in it, which depends on the derived reads of those records) |
-| `J*` | the `campaign_samples` rows whose sample is in `S*` or whose campaign is in `C*`, and touched junction rows (`touch_j`); likewise the `sample_genealogy` rows whose child or parent is in `S*` if the genealogy shape is built (below) |
+| `J*` | the `campaign_samples` rows whose sample is in `S*`, and touched junction rows (`touch_j`); the rows of a campaign in `C*` are added by `sync_readers()` only when that campaign's readers changed (a junction row's readers are its sample's readers or, for an unrestricted sample, its campaign's, so an unchanged campaign leaves its rows alone); likewise the `sample_genealogy` rows whose child or parent is in `S*` if the genealogy shape is built (below) |
 
 The relation is acyclic: samples, campaigns, operations and tests depend on base tables only, projects depend on the
 other four, and the junction rows depend on samples and campaigns, so one pass is complete. Restricting or changing the PI
@@ -510,7 +537,7 @@ manufacturing_operations, `ts` test_sessions, `ca` campaigns, `pr` projects) and
 | 42 | `test_access` UPDATE (`person_id`, `session_id`; the role is not read) | `rec_read` | `ta_upd` | T = old and new record ids | the test; its project |
 | 43 | `campaign_access` INSERT / DELETE | `c_listed`, `gate_c`, `s_read` | `ca_acc_ins`, `ca_acc_del` | C = record ids | as 22 |
 | 44 | `campaign_access` UPDATE (`person_id`, `campaign_id`; the role is not read) | same | `ca_acc_upd` | C = old and new record ids | as 22 |
-| 45 | `people.user_id` (login linked, unlinked or changed) | `me()` everywhere | `pe_upd` | seeds: every record whose owner, PI or access entry is this person, per type (S O T C P) | the closure of all of them (a person who is PI of a project recomputes the project's contents) |
+| 45 | `people.user_id` (login linked, unlinked or changed) | `me()` everywhere | `people_readers_lock` (BEFORE STATEMENT, takes the global lock before the row lock and before the seeds are gathered) and `pe_upd` | seeds: every record whose owner, PI or access entry is this person, per type (S O T C P) | the closure of all of them (a person who is PI of a project recomputes the project's contents) |
 | 46 | `people` DELETE | owners and the PI are set null (rows 2, 7, 14, 22, 27 fire), access rows cascade (rows 32, 33 and 37 to 44 fire), `sample_co_owners` and `project_investigators` rows cascade by their `person_id` foreign key (rows 30 and 35 fire) | none of its own; the referential actions | | |
 | 47 | `people` INSERT | nothing references a person that does not exist yet | none | | |
 | 48 | `directus_users` DELETE | readers rows cascade; `people.user_id` is set null (row 45 fires); `sample_co_owners.user_id` and `project_investigators.user_id` **gain `ON DELETE CASCADE` foreign keys to `directus_users` in migration 166** (they have none today, so a deleted login left dangling rows that the function would try to insert as readers), after a preflight count and cleanup of dangling rows; then rows 30 and 35 fire | none of its own | | |
@@ -989,8 +1016,11 @@ combination of restricted/unrestricted for S, O, T, C, P (`scripts/dev/access_ma
   checked): *(0)* session 1 inserts `campaign_samples (S, C)` while session 2 restricts C; *(A)* session 1 repoints an
   operation (or a test) onto S, or inserts one on S, while session 2 restricts S, removes S's co-owner or adds S to a
   restricted campaign (the attaching write seeds only the operation); *(B)* session 1 inserts `campaign_samples (S, C)` while
-  session 2 restricts **C's project**; a login unlinked while the same person is added to a record; and a forced
-  lock-order deadlock with a row lock, which aborts one writer cleanly with nothing stale. `refresh_readers` is also run
+  session 2 restricts **C's project**; a login unlinked while the same person is added to a record, and while the same
+  person is made the owner of a sample (both orders: the `people_readers_lock` trigger takes the lock before the people row
+  lock); a forced lock-order deadlock with a row lock, which aborts one writer cleanly with nothing stale; and the
+  people-row deadlock (a `people.user_id` update against an owner change), which must not occur and which the test shows
+  does occur when the trigger is removed. `refresh_readers` is also run
   under `REPEATABLE READ` and must raise.
 - **A seeded randomised differential test** (`tests/readers_matrix.sh`, fixed seed printed on failure): generate small random
   universes (random flags, edges, lists, logins: a sample in two campaigns of different projects with mixed flags, a sample
@@ -1142,7 +1172,7 @@ everything in it), done in the writer's transaction.
 - The orphan amnesty covers only runs that are open to everyone; an ownerless run under a restricted ancestor follows the
   ordinary path (section 1).
 - A campaign reader still sees the junction row, and so the id, of an unrestricted sample that is hidden from them by its project or by campaign shielding.
-- Deadlocks (`40P01`) surface as a 500 in Directus, which does not retry; the importer and the crawler retry, the endpoint reports it. A `TRUNCATE` of `test_sessions_subject` leaves `test_sessions.sample_id` stale (migration 139's behaviour, not the readers'; the readers follow the column): one line in the runbook.
+- Deadlocks (`40P01`) surface as a 500 in Directus, which does not retry, and the importer, the crawler and the endpoint do not retry them either (a bounded retry around their write transactions is a named follow-up, not built in A1a); nothing is left half-applied. The variants: a writer that takes a parent row lock (a foreign-key `KEY SHARE` by inserting a test, junction, co-owner or access row) before its first readers lock can deadlock with a parent DELETE or key update, which takes the readers lock first and then the row; the same shape for the delete of a campaign, project, person or login. Non-key updates (`restricted`, owner, project) take `NO KEY UPDATE` and do not conflict with `KEY SHARE`, so only parent deletes and unique or primary-key updates are exposed. The `people.user_id` variant is closed by the `people_readers_lock` trigger (below). A `TRUNCATE` of `test_sessions_subject` leaves `test_sessions.sample_id` stale (migration 139's behaviour, not the readers'; the readers follow the column): one line in the runbook.
 
 **Decided** (maintainer, 2026-10-12 and 2026-10-13):
 1. Restricting a **campaign or project cascades** (decision 13), and the operation/test gate on the sample's campaigns is

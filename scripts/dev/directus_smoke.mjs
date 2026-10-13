@@ -625,6 +625,34 @@ await check('lm_access_no_duplicates_in_any_record_list', async () => {
   expect(!bad.length, bad.slice(0, 4).join(' | '));
 });
 
+// the hidden `readers` alias fields keep read permission `*` on the parents; the readers tables themselves are readable only for one's own login. A member who
+// asks for readers.user_id gets only their own rows, and a filter on someone else's readers row never widens what they read (review finding 7)
+await check('lm_access_readers_alias_gives_a_member_nothing_beyond_their_own_rows', async () => {
+  needFx();
+  const me = await api('GET', '/users/me?fields=id', undefined, FX.users.viewer);
+  const other = await api('GET', '/users/me?fields=id', undefined, FX.users.owner);
+  expect(me.status === 200 && other.status === 200, 'could not read the two logins');
+  const mine = me.body.data.id, theirs = other.body.data.id;
+  const readable = await listIds('physical_samples', FX.users.viewer);
+  expect(readable.length > 0, 'the viewer reads no sample');
+  const r = await api('GET', `/items/physical_samples?limit=-1&fields=sample_id,readers.user_id&filter[sample_id][_in]=${readable.slice(0, 100).join(',')}`, undefined, FX.users.viewer);
+  if (r.status === 200) {
+    const foreign = [];
+    for (const row of r.body.data) for (const x of row.readers || []) { const uid = typeof x === 'object' ? x.user_id : x; if (uid && uid !== mine) foreign.push(uid); }
+    expect(!foreign.length, `readers.user_id shows ${foreign.length} other login(s) to a member (first: ${foreign[0]})`);
+  } else {
+    expect(r.status === 403, `fields=readers.user_id -> ${r.status}, expected 200 with own rows only or 403`);
+  }
+  const f = await api('GET', `/items/physical_samples?limit=-1&fields=sample_id&filter[readers][user_id][_eq]=${theirs}`, undefined, FX.users.viewer);
+  if (f.status === 200) {
+    const set = new Set(readable);
+    const wider = f.body.data.map((x) => x.sample_id).filter((id) => !set.has(id));
+    expect(!wider.length, `a filter on another login's readers row widens the viewer's samples by ${wider.length}`);
+  } else {
+    expect([400, 403].includes(f.status), `filter[readers][user_id] -> ${f.status}`);
+  }
+});
+
 // sample_co_owners: update and delete are the sample owner's now (a co-owner used to be able to repoint or remove
 // co-owner rows, which on a restricted sample is a leak). The guard on create lands in Task 3.
 await check('lm_access_co_owner_cannot_change_or_remove_co_owner_rows', async () => {

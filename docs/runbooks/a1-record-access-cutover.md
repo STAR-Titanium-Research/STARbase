@@ -116,6 +116,15 @@ Also work through the A1 items in [`physical-test-backlog.md`](physical-test-bac
 - The embedding backfill (`d1_embedder`) must keep writing: check the next run of the embedder or
   `docker compose logs --tail 50 llm-text-to-sql`; migration 168 keeps its INSERT and UPDATE.
 
+- Writes to samples, operations, tests, campaigns, projects, their access lists and `campaign_samples` take one global lock
+  (`d1_readers`) at the start of the statement and hold it to the end of the transaction, so an import transaction that stays
+  open blocks members' saves of those records until it commits (measured on the seeded copy: a UI sample save waits the length
+  of the open import, 7 s in the test, as it already did through the project rollup lock; test and campaign-note saves did not
+  wait). Keep import transactions short (the importer commits in batches). A rare deadlock (`40P01`) aborts one writer cleanly;
+  neither Directus nor the importer retries it (a bounded retry is a named follow-up), so re-run the failed save or batch.
+- The readers tables are derived data: `readers_drift_count()` should be 0 (the admin overview shows it); after a restore or
+  if it is not 0, run `SELECT d1_private.readers_rebuild();` (about a second on the live data).
+
 ## Rolling back
 
 Preferred, if the smoke read fails or the performance is unacceptable:

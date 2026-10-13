@@ -3195,10 +3195,27 @@ SELECT 'stable:' || string_agg(p.proname || '=' || p.provolatile::text, ',' ORDE
    AND p.proname IN ('readers_of_sample','readers_of_operation','readers_of_test','readers_of_campaign','readers_of_project','readers_of_campaign_sample','operation_open_of','hidden_of','readers_closure','readers_drift','readers_drift_count','is_hidden');
 SELECT 'refresh_volatile:' || (SELECT provolatile::text FROM pg_proc WHERE proname = 'refresh_readers' AND pronamespace = 'd1_private'::regnamespace);
 SELECT 'refresh_not_public:' || (NOT has_function_privilege('public', 'd1_private.refresh_readers(uuid[],uuid[],uuid[],uuid[],uuid[],uuid[],uuid[],uuid[],uuid[])', 'EXECUTE'));
+SELECT 'is_hidden_not_public:' || (NOT has_function_privilege('public', 'd1_private.is_hidden(text,uuid)', 'EXECUTE'));
 -- the lock order: the global readers lock comes first in refresh_readers (before any read), readers_rebuild and refresh_project_rollup
 SELECT 'lock_first:' || (position('pg_advisory_xact_lock' IN prosrc) < position('readers_closure' IN prosrc)) FROM pg_proc WHERE proname = 'refresh_readers' AND pronamespace = 'd1_private'::regnamespace;
 SELECT 'rollup_lock_order:' || (position('d1_readers' IN prosrc) > 0 AND position('d1_readers' IN prosrc) < position('refresh_project_rollup' IN prosrc)) FROM pg_proc WHERE proname = 'refresh_project_rollup' AND pronamespace = 'public'::regnamespace;
 SELECT 'isolation_check:' || (position('read committed' IN prosrc) > 0) FROM pg_proc WHERE proname = 'refresh_readers' AND pronamespace = 'd1_private'::regnamespace;
+-- the order of the recompute inside sync_readers is load-bearing (spec section 2, rule 1): a readers_of_* function that reads another type's readers
+-- table must be called after that type's block. Dependencies are found from the function sources, so a new dependency is checked without editing this.
+CREATE TEMP VIEW rd_sync_order AS
+WITH fn(t, f) AS (VALUES ('sample', 'readers_of_sample'), ('operation', 'readers_of_operation'), ('test', 'readers_of_test'),
+                         ('campaign', 'readers_of_campaign'), ('project', 'readers_of_project'), ('campaign_sample', 'readers_of_campaign_sample')),
+     tbl(t, tn) AS (VALUES ('sample', 'sample_readers'), ('operation', 'operation_readers'), ('test', 'test_readers'),
+                           ('campaign', 'campaign_readers'), ('project', 'project_readers'), ('campaign_sample', 'campaign_sample_readers')),
+     deps AS (SELECT f.f AS user_f, h.f AS dep_f FROM fn f
+                JOIN pg_proc p ON p.proname = f.f AND p.pronamespace = 'd1_private'::regnamespace
+                JOIN tbl g ON p.prosrc ~ ('\y' || g.tn || '\y') JOIN fn h ON h.t = g.t WHERE h.t <> f.t)
+SELECT user_f, dep_f FROM deps;
+SELECT 'sync_order:' || count(*) FILTER (WHERE position(d.user_f || '(' IN s.prosrc) <= position(d.dep_f || '(' IN s.prosrc)) || '/' || count(*)
+  FROM rd_sync_order d, pg_proc s WHERE s.proname = 'sync_readers' AND s.pronamespace = 'd1_private'::regnamespace;
+-- the same check on a sync_readers whose project block comes first: it must see violations (the check can fail)
+SELECT 'sync_order_sabotaged:' || count(*) FILTER (WHERE position(d.user_f || '(' IN ('readers_of_project(' || s.prosrc)) <= position(d.dep_f || '(' IN ('readers_of_project(' || s.prosrc))) || '/' || count(*)
+  FROM rd_sync_order d, pg_proc s WHERE s.proname = 'sync_readers' AND s.pronamespace = 'd1_private'::regnamespace;
 -- the Directus metadata the rules walk
 SELECT 'meta_collections:' || count(*) || '/' || count(*) FILTER (WHERE hidden) FROM directus_collections WHERE collection IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all');
 SELECT 'meta_relations:' || count(*) FILTER (WHERE one_field IN ('readers','open_to_all')) || '/' || count(*) FILTER (WHERE one_collection = 'directus_users' AND one_field IS NULL)
@@ -3235,6 +3252,9 @@ rd_check "definer:is_hidden=true,readers_rebuild=true,refresh_readers=true,sync_
 rd_check "stable:hidden_of=s,is_hidden=s,operation_open_of=s,readers_closure=s,readers_drift=s,readers_drift_count=s,readers_of_campaign=s,readers_of_campaign_sample=s,readers_of_operation=s,readers_of_project=s,readers_of_sample=s,readers_of_test=s" "the readers_of_* family, operation_open_of, hidden_of, the closure and the drift check are STABLE"
 rd_check "refresh_volatile:v" "refresh_readers is VOLATILE (each statement takes a fresh snapshot)"
 rd_check "refresh_not_public:true" "refresh_readers is not executable by PUBLIC"
+rd_check "is_hidden_not_public:true" "is_hidden is not executable by PUBLIC (the Ask-DB grant belongs to its own migration)"
+rd_check "sync_order:0/6" "sync_readers recomputes every type after the readers tables its function reads (6 dependencies found from the sources: operation, test and junction rows on samples, junction rows on campaigns, projects on operations and tests)"
+rd_check "sync_order_sabotaged:2/6" "the order check fails when the project block is moved first"
 rd_check "lock_first:true" "refresh_readers takes the global advisory lock before it reads (the closure)"
 rd_check "rollup_lock_order:true" "refresh_project_rollup takes the readers lock before the rollup lock (lock order)"
 rd_check "isolation_check:true" "refresh_readers checks for READ COMMITTED"
@@ -3265,14 +3285,19 @@ SELECT 'bad_shape:' || coalesce(string_agg(t.tgname, ','), '') FROM pg_trigger t
 SELECT 'trunc_bad:' || coalesce(string_agg(t.tgname, ','), '') FROM pg_trigger t
  WHERE NOT t.tgisinternal AND t.tgname LIKE '%\_readers\_trunc' AND NOT ((t.tgtype & 1) = 0 AND (t.tgtype & 32) = 32 AND (t.tgtype & 2) = 0);
 SELECT 'lock_bad:' || coalesce(string_agg(t.tgname, ','), '') FROM pg_trigger t
- WHERE NOT t.tgisinternal AND t.tgname LIKE '%\_readers\_lock' AND NOT ((t.tgtype & 1) = 0 AND (t.tgtype & 2) = 2 AND (t.tgtype & 4) = 4 AND (t.tgtype & 8) = 8 AND (t.tgtype & 16) = 16);
+ WHERE NOT t.tgisinternal AND t.tgname LIKE '%\_readers\_lock' AND t.tgname <> 'people_readers_lock' AND NOT ((t.tgtype & 1) = 0 AND (t.tgtype & 2) = 2 AND (t.tgtype & 4) = 4 AND (t.tgtype & 8) = 8 AND (t.tgtype & 16) = 16);
+-- the people lock: BEFORE STATEMENT UPDATE OF user_id only (the seeds of people_readers_upd are gathered after it, and it precedes the row lock)
+SELECT 'people_lock_shape:' || (SELECT (t.tgtype & 1) = 0 AND (t.tgtype & 2) = 2 AND (t.tgtype & 4) = 0 AND (t.tgtype & 8) = 0 AND (t.tgtype & 16) = 16
+                                       AND t.tgattr::text = (SELECT attnum::text FROM pg_attribute WHERE attrelid = 'people'::regclass AND attname = 'user_id')
+                                       AND t.tgfoid = 'd1_private.trg_readers_lock'::regproc
+                                  FROM pg_trigger t WHERE t.tgname = 'people_readers_lock' AND t.tgrelid = 'people'::regclass);
 -- they fire before the rollup's (sorted by name): the readers triggers sort before refresh_rollup_*
 SELECT 'order_ok:' || (SELECT bool_and(r.tgname < 'refresh_rollup_') FROM pg_trigger r WHERE NOT r.tgisinternal AND r.tgname ~ '_readers_(ins|upd|del)$' AND r.tgrelid IN ('manufacturing_operations'::regclass, 'campaigns'::regclass, 'physical_samples'::regclass));
 SELECT 'lock_before_rollup_lock:' || ('manufacturing_operations_readers_lock' < 'mfg_op_rollup_lock' AND 'physical_samples_readers_lock' < 'physical_samples_rollup_lock');
 SQL
 )
 trig_check() { grep -qxF -- "$1" <<<"$trig_out" && ok "$2" || bad "$2 (psql output: $(cut -c1-500 <<<"$trig_out"))"; }
-for pair in $rd_trig_expect $rd_trunc_expect manufacturing_operations_readers_lock\|manufacturing_operations physical_samples_readers_lock\|physical_samples; do
+for pair in $rd_trig_expect $rd_trunc_expect manufacturing_operations_readers_lock\|manufacturing_operations physical_samples_readers_lock\|physical_samples people_readers_lock\|people; do
     IFS='|' read -r name tbl <<<"$pair"
     n=$($PSQL -c "SELECT count(*) FROM pg_trigger WHERE tgname = '$name' AND tgrelid = 'public.$tbl'::regclass AND NOT tgisinternal")
     [[ "$n" == 1 ]] && ok "trigger $name exists on $tbl" || bad "trigger $name is missing on $tbl"
@@ -3281,6 +3306,7 @@ trig_check "row_triggers:40" "40 insert, update and delete triggers (13 tables x
 trig_check "bad_shape:" "every insert, update and delete trigger is a statement-level AFTER trigger with transition tables and no column list"
 trig_check "trunc_bad:" "every TRUNCATE trigger is a statement-level AFTER TRUNCATE trigger"
 trig_check "lock_bad:" "the lock triggers are BEFORE STATEMENT on insert, update and delete"
+trig_check "people_lock_shape:true" "people_readers_lock is BEFORE STATEMENT UPDATE OF user_id and calls trg_readers_lock (the seeds of people_readers_upd are gathered under the lock)"
 trig_check "order_ok:true" "the readers triggers sort before refresh_rollup_* (readers lock first)"
 trig_check "lock_before_rollup_lock:true" "the BEFORE-statement readers lock sorts before the rollup lock triggers of migrations 126, 127 and 157"
 
@@ -3337,7 +3363,7 @@ SELECT 'up2_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n
 -- down removes everything it created
 $rr_down
 $la_down
-SELECT 'dn_tables:' || count(*) FROM pg_tables WHERE tablename IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all') OR (schemaname = 'd1_private' AND tablename = 'hidden_records');
+SELECT 'dn_tables:' || count(*) FROM pg_tables WHERE tablename IN ('sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all') OR (schemaname = 'd1_private' AND tablename IN ('hidden_records', 'readers_added_fks'));
 SELECT 'dn_functions:' || count(*) FROM pg_proc WHERE pronamespace = 'd1_private'::regnamespace AND (proname LIKE 'readers\_%' OR proname LIKE 'trg\_readers\_%' OR proname IN ('refresh_readers','sync_readers','is_hidden','hidden_of','operation_open_of','can_read_sample','s_read','rec_read'));
 SELECT 'dn_triggers:' || count(*) FROM pg_trigger WHERE tgname LIKE '%\_readers\_%';
 SELECT 'dn_views:' || count(*) FROM pg_views WHERE schemaname = 'd1_private' AND viewname LIKE 'v\_%';
