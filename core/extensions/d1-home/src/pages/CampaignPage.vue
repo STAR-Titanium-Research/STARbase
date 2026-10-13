@@ -2,7 +2,7 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	CampaignProgressBars, CampaignWorkbench, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout,
+	CampaignProgressBars, CampaignWorkbench, AccessDialog, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout,
 	RecordLink, RecordRail, Section, StatusBadge, campaignCode, campaignContents, campaignRailFacts, dataStudioRoute, type ContentsEntry,
 } from '@d1/ui';
 import { useCampaignRecord } from './campaign/useCampaignRecord';
@@ -20,6 +20,8 @@ const { campaign, loading, notVisible, error, hidden, reload } = useCampaignReco
 // An invisible or failed campaign reads nothing: an empty id makes the composable's load() return early.
 const data = useCampaignData(computed(() => (notVisible.value || error.value ? '' : props.id)));
 const editing = ref(false);
+// "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
+const access = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
 // or a reader through a sample may read it but not edit it).
 const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('campaigns', toRef(props, 'id'));
@@ -95,6 +97,7 @@ const contents = computed<ContentsEntry[]>(() => {
 							<template #status><StatusBadge kind="campaign" :value="campaign.status" /></template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+								<v-button small secondary @click="access = true"><v-icon name="group" small left />Who has access</v-button>
 								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
 							</template>
 							<template #after-facts>
@@ -115,6 +118,7 @@ const contents = computed<ContentsEntry[]>(() => {
 					/>
 				</RecordLayout>
 
+				<AccessDialog v-model="access" collection="campaigns" :id="id" :title="`Campaign ${code}`" @changed="onSaved" />
 				<EditDrawer
 					v-model="editing"
 					collection="campaigns"

@@ -2,7 +2,7 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
+	AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
 	buildLife, dataStudioRoute, detailFacts, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleRailFacts, truncatedNotes,
 	type ContentsEntry,
 } from '@d1/ui';
@@ -23,6 +23,8 @@ const { sample, loading, notVisible, error, elements, campaigns, operations, tes
 	useSampleData(toRef(props, 'id'));
 
 const editing = ref(false);
+// "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
+const access = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
 // or a reader through a sample may read it but not edit it).
 const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('physical_samples', toRef(props, 'id'));
@@ -102,6 +104,7 @@ const openReportPage = () => window.open(`/d1-report/sample/${encodeURIComponent
 							</template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+								<v-button small secondary @click="access = true"><v-icon name="group" small left />Who has access</v-button>
 								<v-button small secondary :to="labelsTo"><v-icon name="label" small left />Print label</v-button>
 								<v-button small secondary @click="openReportPage"><v-icon name="picture_as_pdf" small left />Report</v-button>
 								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
@@ -134,6 +137,7 @@ const openReportPage = () => window.open(`/d1-report/sample/${encodeURIComponent
 					<SampleFiles id="files" :files="files.data" :loading="files.loading" :error="files.error" />
 				</RecordLayout>
 
+				<AccessDialog v-model="access" collection="physical_samples" :id="id" :title="pageTitle" @changed="onSaved" />
 				<EditDrawer
 					v-model="editing"
 					collection="physical_samples"

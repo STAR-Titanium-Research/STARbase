@@ -909,6 +909,17 @@ migration 141 prints about ownerless records.
   size and orientation (portrait, `format="259"`, QL-550 `printerID`) are unconfirmed. If P-touch asks to change the
   paper, or the label comes out rotated, report it. Since the .lbx PR.
 
+- [ ] **A1a-D1 — Who has access dialog on real Directus.** Needs migrations 165 to 167, the `d1-record-access` and
+  `d1-access-guard` endpoints and the rebuilt `d1-home`. As a Lab Member who owns a sample: **Who has access**
+  opens, the add box finds people by name, a person with no login shows "can't sign in yet" and can still be added,
+  a role change and Remove work, Transfer asks for confirmation and, once done, the Edit button and the rail owner
+  follow the new owner. As a co-owner the list is read-only ("Only <owner> can change who has access."). On an
+  operation or test of an unrestricted sample the sample's people appear read-only under "Also through". No page
+  draws a Restrict switch. With no mail server the add says "Added. The email could not be sent." Then Home's
+  "Your samples" and "Your projects" still list the records where you are a co-owner or Secondary investigator
+  through the new access rows (the `mine.ts` filters send `access` as two bare paths; if Directus answers 400 or 500
+  there, say so). Campaign pages say "Some samples in this campaign are hidden from you." with no number.
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

@@ -33,6 +33,26 @@ describe('Explorer sources stay host-neutral', () => {
 	});
 });
 
+// The "Who has access" dialog (access/ and its two components) talks to the host's api and never to the SDK.
+describe('access dialog stays host-neutral', () => {
+	const files = [
+		...sources(join(here, 'access')).filter((f) => !f.endsWith('.test.ts')),
+		join(here, 'components', 'AccessDialog.vue'),
+		join(here, 'components', 'AccessPersonPicker.vue'),
+	];
+
+	it('finds the files it is meant to check', () => {
+		expect(files.some((f) => f.endsWith('accessModel.ts'))).toBe(true);
+		expect(files.some((f) => f.endsWith('useAccess.ts'))).toBe(true);
+		expect(files.some((f) => f.endsWith('AccessDialog.vue'))).toBe(true);
+		expect(files.some((f) => f.endsWith('AccessPersonPicker.vue'))).toBe(true);
+	});
+
+	it('does not mention the Directus extensions SDK', () => {
+		for (const f of files) expect(readFileSync(f, 'utf8'), f).not.toContain(FORBIDDEN);
+	});
+});
+
 // The record-page kit (rail layout, rail, fact list, contents) is meant to run outside the Data
 // Studio too: no Directus components (`<v-icon>`, `<v-button>`: the page passes icons and buttons in
 // through slots) and no extensions SDK.

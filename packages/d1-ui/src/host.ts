@@ -4,7 +4,13 @@
 import type { InjectionKey, Ref } from 'vue';
 
 export interface ExplorerHost {
-	api: { get(path: string, config?: { params?: Record<string, unknown> }): Promise<{ data: any }> };
+	api: {
+		get(path: string, config?: { params?: Record<string, unknown> }): Promise<{ data: any }>;
+		// Writes: the "Who has access" dialog calls the d1-record-access endpoint with these (the SDK's axios has them).
+		post(path: string, body?: unknown, config?: { params?: Record<string, unknown> }): Promise<{ data: any }>;
+		patch(path: string, body?: unknown, config?: { params?: Record<string, unknown> }): Promise<{ data: any }>;
+		delete(path: string, config?: { params?: Record<string, unknown> }): Promise<{ data: any }>;
+	};
 	// An app route without the host's base path, e.g. '/home/samples?bookmark=3'.
 	navigate(to: string): void;
 	// A Data Studio path, e.g. '/content/samples'.

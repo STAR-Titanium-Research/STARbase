@@ -9,6 +9,7 @@
 // operation or test).
 
 import { campaignTypeLabel } from '../campaign/campaignType';
+import { HIDDEN_SAMPLES_UNIT } from '../campaign/rollup';
 import { asRecord } from '../format';
 import { indexRoute, recordRoute } from '../recordRoute';
 import type { Fact } from './facts';
@@ -63,7 +64,7 @@ export function campaignRailFacts(campaign: Rec | null | undefined, hidden: Hidd
 				// Samples you may not see sit in the list but not in the number: said once, after it.
 				failed.samples
 					? { label: 'Samples', value: '–' }
-					: { label: 'Samples', value: num(counts.samples), unit: counts.hiddenSamples ? `+ ${counts.hiddenSamples} not visible to you` : undefined },
+					: { label: 'Samples', value: num(counts.samples), unit: counts.hiddenSamples ? HIDDEN_SAMPLES_UNIT : undefined },
 				failed.operations
 					? { label: 'Operations', value: '–' }
 					: { label: 'Operations', value: num(counts.operations), to: indexRoute('manufacturing_operations', { query: { 'f.campaign_id': id } }) },

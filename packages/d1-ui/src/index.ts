@@ -92,6 +92,9 @@ export { default as ProgressBar } from './components/ProgressBar.vue';
 export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
+// Who has access (the dialog of the record pages; the endpoint is core/extensions/d1-record-access)
+export { default as AccessDialog } from './components/AccessDialog.vue';
+export { RESTRICT_UI } from './access/accessModel';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
 export { default as CampaignCard } from './campaign/CampaignCard.vue';
 export { campaignCardStats, loadCampaignStats } from './campaign/campaignCardStats';

@@ -59,7 +59,7 @@ describe('campaignRailFacts', () => {
 		expect(plain?.to).toBeUndefined();
 		expect(plain?.unit).toBeUndefined();
 		const hidden = byLabel(campaignRailFacts(campaign, {}, { ...counts, hiddenSamples: 2 }), 'Samples');
-		expect(hidden).toMatchObject({ value: '12', unit: '+ 2 not visible to you' });
+		expect(hidden).toMatchObject({ value: '12', unit: '+ some hidden' });
 	});
 
 	it('shows a dash with no link for a count whose read failed, never a wrong 0', () => {

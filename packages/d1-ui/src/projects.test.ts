@@ -151,7 +151,8 @@ describe('countsByKey', () => {
 describe('mine filters', () => {
 	it('use the ADR-0011 involvement paths with $CURRENT_USER', () => {
 		expect(ownedByMe).toEqual({ owner_person_id: { user_id: { _eq: '$CURRENT_USER' } } });
-		expect(coOwnedByMe).toEqual({ co_owners: { _some: { user_id: { _eq: '$CURRENT_USER' } } } });
+		// the old co-owner rows, or an access row of this person with role edit (mine.test.ts checks the legal form)
+		expect(JSON.stringify(coOwnedByMe)).toContain('co_owners');
 		expect(samplesMine).toEqual({ _or: [ownedByMe, coOwnedByMe] });
 		expect(JSON.stringify(projectsMine)).toContain('principal_investigator_person');
 		expect(JSON.stringify(projectsMine)).toContain('secondary_investigators');

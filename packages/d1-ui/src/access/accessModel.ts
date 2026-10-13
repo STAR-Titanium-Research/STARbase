@@ -1,0 +1,193 @@
+// The "Who has access" dialog's pure parts (spec docs/superpowers/specs/2026-10-12-record-access-design.md sections 1 and 6):
+// role labels per record type, ordering, who may change what, the texts, and the people search. No Vue, no host.
+//
+// The data comes from GET /d1-record-access/:collection/:id (core/extensions/d1-record-access). Its entries are the
+// access table and the old co-owner / investigator rows merged by person, strongest role first.
+
+export type AccessCollection = 'physical_samples' | 'manufacturing_operations' | 'test_sessions' | 'campaigns' | 'projects';
+
+export const ACCESS_COLLECTIONS: AccessCollection[] = ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns', 'projects'];
+
+export const isAccessCollection = (collection: string): collection is AccessCollection =>
+	(ACCESS_COLLECTIONS as string[]).includes(collection);
+
+/** The Restrict switch (spec section 1): the component exists, nothing draws it until A1b flips this one line. */
+export const RESTRICT_UI = false;
+
+export interface AccessPerson {
+	person_id: string;
+	name: string;
+	can_sign_in: boolean;
+}
+
+/** The nearest Restricted parent that does not list the person (nearest first on the server: sample, campaign, project). */
+export interface BlockedBy {
+	collection: string;
+	id: string;
+	kind: string;
+	code: string | null;
+}
+
+export interface AccessEntry {
+	/** null: an old co-owner / investigator whose login has no People row. Listed, but cannot be changed or removed. */
+	person_id: string | null;
+	name: string;
+	role: string;
+	/** The server's wording; the dialog words roles itself (entryLabel) so a sample's Can edit always reads as a co-owner. */
+	label?: string;
+	source: 'access' | 'co_owner' | 'investigator';
+	can_sign_in: boolean;
+	added_by: string | null;
+	added_at: string | null;
+	blocked_by: BlockedBy | null;
+}
+
+export interface AccessList {
+	restricted: boolean;
+	owner: AccessPerson | null;
+	project_pi: AccessPerson | null;
+	can_manage: boolean;
+	entries: AccessEntry[];
+}
+
+/** A People row as the add box reads it (`user_id` is the login). */
+export interface PersonHit {
+	person_id: string;
+	full_name: string;
+	user_id?: string | null;
+}
+
+export interface RoleOption {
+	role: 'view' | 'edit' | 'investigator';
+	label: string;
+}
+
+/** The roles a record type offers, in order. Projects: Can view and Secondary investigator; nobody but the PI edits one. */
+export function ROLE_LABELS(collection: string): RoleOption[] {
+	return collection === 'projects'
+		? [
+				{ role: 'view', label: 'Can view' },
+				{ role: 'investigator', label: 'Secondary investigator' },
+			]
+		: [
+				{ role: 'view', label: 'Can view' },
+				{ role: 'edit', label: 'Can edit' },
+			];
+}
+
+/** The words next to the owner: a project's owner is its principal investigator. */
+export const ownerWord = (collection: string): string => (collection === 'projects' ? 'Principal investigator' : 'Owner');
+
+/** What a record is called in a sentence ("this sample"). */
+export function recordWord(collection: string): string {
+	switch (collection) {
+		case 'physical_samples': return 'sample';
+		case 'manufacturing_operations': return 'operation';
+		case 'test_sessions': return 'test';
+		case 'campaigns': return 'campaign';
+		case 'projects': return 'project';
+		default: return 'record';
+	}
+}
+
+/** The role as the list prints it. On a sample a Can edit person is a co-owner. */
+export function entryLabel(entry: Pick<AccessEntry, 'role' | 'source'>, collection: string): string {
+	if (entry.role === 'investigator') return 'Secondary investigator';
+	if (entry.role === 'edit') return collection === 'physical_samples' ? 'Co-owner · can edit' : 'Can edit';
+	if (entry.role === 'view') return 'Can view';
+	return entry.role;
+}
+
+const RANK: Record<string, number> = { investigator: 2, edit: 2, view: 1 };
+
+/** Strongest role first, then by name. Returns a new array. */
+export function sortEntries<T extends Pick<AccessEntry, 'role' | 'name'>>(entries: T[]): T[] {
+	return [...entries].sort((a, b) => (RANK[b.role] ?? 0) - (RANK[a.role] ?? 0) || a.name.localeCompare(b.name));
+}
+
+/** Role selector and Remove are drawn only for a manager, and never for a row the endpoint cannot address (no People row). */
+export const canChangeRole = (entry: Pick<AccessEntry, 'person_id'>, canManage: boolean): boolean => canManage && !!entry.person_id;
+
+/** Active people whose name contains the text: the add box's request (the same /items/people the People page reads). */
+export function peopleSearchQuery(text: string, limit = 8): Record<string, unknown> {
+	return {
+		filter: { _and: [{ active: { _eq: true } }, { full_name: { _icontains: text.trim() } }] },
+		fields: ['person_id', 'full_name', 'user_id'],
+		sort: ['full_name'],
+		limit,
+	};
+}
+
+/** A person with no login can be added, but the grant starts working only when an admin links a login to them. */
+export const isLoginless = (person: { user_id?: string | null; can_sign_in?: boolean }): boolean =>
+	person.can_sign_in !== undefined ? !person.can_sign_in : !person.user_id;
+
+export const LOGINLESS_NOTE = "can't sign in yet";
+
+/** The two letters in a person's avatar circle: first letters of the first and last word. */
+export function initials(name: string): string {
+	const words = name.trim().split(/\s+/).filter(Boolean);
+	if (!words.length) return '?';
+	const first = words[0][0];
+	const last = words.length > 1 ? words[words.length - 1][0] : '';
+	return (first + last).toUpperCase();
+}
+
+/** Search hits without the people already on the list, the owner and the project's PI (they have access already). */
+export function addable(hits: PersonHit[], list: Pick<AccessList, 'owner' | 'entries'>): PersonHit[] {
+	const taken = new Set<string>();
+	if (list.owner) taken.add(list.owner.person_id);
+	for (const e of list.entries) if (e.person_id) taken.add(e.person_id);
+	return hits.filter((h) => !taken.has(h.person_id));
+}
+
+/**
+ * The confirm step of an ownership transfer. The previous owner stays on the record (Can edit; Secondary investigator on a
+ * project) so the record never disappears for the person who made it. `byOwner`: the person asking is the owner, so "you stay";
+ * an admin transferring someone else's record reads "<name> stays". No previous owner: nobody stays.
+ */
+export function transferConfirmText(from: string | null, to: string, collection: string, byOwner = true): string {
+	const kept = ROLE_LABELS(collection).find((r) => r.role === (collection === 'projects' ? 'investigator' : 'edit'))!.label;
+	const becomes = `${to} becomes ${collection === 'projects' ? 'the principal investigator' : 'the owner'}.`;
+	const stays = from ? ` ${byOwner ? 'You stay' : `${from} stays`} on the record as ${kept}.` : '';
+	return `${becomes}${stays} Only the new ${collection === 'projects' ? 'principal investigator' : 'owner'} can change who has access.`;
+}
+
+/** What a person who may read but not manage sees instead of the controls. */
+export function noManagerText(owner: Pick<AccessPerson, 'name'> | null): string {
+	return owner ? `Only ${owner.name} can change who has access.` : 'Only an admin can change who has access.';
+}
+
+/** "<name> cannot see <parent>, so this will not take effect until its owner adds them." Null when nothing blocks the grant. */
+export function blockedText(entry: Pick<AccessEntry, 'name' | 'blocked_by'>): string | null {
+	const b = entry.blocked_by;
+	if (!b) return null;
+	const parent = [b.kind, b.code].filter(Boolean).join(' ') || 'a record above this one';
+	return `${entry.name} cannot see ${parent}, so this will not take effect until its owner adds them.`;
+}
+
+/** The project PI line under the list (a project's own PI is its owner, so there is no extra line there). */
+export function piNote(list: Pick<AccessList, 'project_pi'>, collection: string): string | null {
+	if (collection === 'projects' || !list.project_pi) return null;
+	return `Project PI: ${list.project_pi.name}, sees everything in the project.`;
+}
+
+/** Record kind (as the endpoint names it) -> the Explorer route segment. A test pins this against recordRoute(). */
+export const RECORD_LINK_KINDS: Record<string, string> = {
+	sample: 'samples',
+	operation: 'operations',
+	test: 'tests',
+	campaign: 'campaigns',
+	project: 'projects',
+};
+
+/** An operation or test on an unrestricted sample is also reachable through the sample's list (read-only in the dialog). */
+export function showInherited(own: Pick<AccessList, 'restricted'>, parent: Pick<AccessList, 'restricted'> | null): boolean {
+	return !!parent && !own.restricted && !parent.restricted;
+}
+
+/** The email result of a write as one quiet line, or null when nothing needs saying. */
+export function emailNote(email: string | undefined, what: 'added' | 'owner'): string | null {
+	if (email !== 'failed') return null;
+	return what === 'added' ? 'Added. The email could not be sent.' : 'Ownership transferred. The email could not be sent.';
+}

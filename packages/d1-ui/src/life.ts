@@ -3,7 +3,9 @@
 // descendants. The page lays the list out as a horizontal strip (or a vertical list when narrow).
 //
 // Everything in the response was already filtered through the caller's permissions by the endpoint:
-// what they may not read is only counted (`hidden`), and shows as a "N not visible to you" marker.
+// what they may not read is only flagged (`hidden`), and shows as a "some records hidden" marker. d1-trace sends booleans now
+// (a count would tell a reader how many records they cannot see, which for a Restricted record is information); this file
+// accepts a number as well, so it works against an older d1-trace.
 
 import { hasPassCode, operationLabel } from './operationLabel';
 import { recordRoute } from './recordRoute';
@@ -32,7 +34,7 @@ export interface TraceResponse {
 		sequence: number | null;
 		status: string | null;
 	}[];
-	hidden: { stock_origins: number; ancestors: number; events: number; descendants: number };
+	hidden: { stock_origins: number | boolean; ancestors: number | boolean; events: number | boolean; descendants: number | boolean };
 	truncated: Record<string, boolean>;
 }
 
@@ -63,8 +65,10 @@ export interface LifeItem {
 	throughHidden: boolean;
 }
 
-export function hiddenText(n: number): string {
-	return `${n} not visible to you`;
+// The marker text: never a number, whatever the response carries.
+export const HIDDEN_MARKER_TEXT = 'some records hidden';
+export function hiddenText(_hidden?: number | boolean): string {
+	return HIDDEN_MARKER_TEXT;
 }
 
 function relation(n: TraceRelative): string {
@@ -76,10 +80,10 @@ function relation(n: TraceRelative): string {
 
 const join = (parts: (string | null | undefined | false)[]): string => parts.filter(Boolean).join(' · ');
 
-function hiddenMarker(group: string, n: number): LifeItem[] {
-	if (!n) return [];
+function hiddenMarker(group: string, hidden: number | boolean): LifeItem[] {
+	if (!hidden) return [];
 	return [
-		{ key: `hidden-${group}`, kind: 'hidden', label: hiddenText(n), sub: '', date: null, to: null, throughHidden: false, isCode: false },
+		{ key: `hidden-${group}`, kind: 'hidden', label: hiddenText(hidden), sub: '', date: null, to: null, throughHidden: false, isCode: false },
 	];
 }
 

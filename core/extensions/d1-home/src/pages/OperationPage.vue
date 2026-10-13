@@ -2,7 +2,7 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
+	AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
 	detailFacts, detailsCount, hasPassCode, operationDetailBase, operationHeading, operationKind, operationRailFacts, operationSampleCount, type ContentsEntry,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
@@ -19,9 +19,15 @@ const props = defineProps<{ id: string }>();
 const { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, hiddenKnown, reload } = useOperationData(toRef(props, 'id'));
 
 const editing = ref(false);
+// "Who has access": the dialog of the record's owner list; a change can alter who may edit (a transfer), so it ends like a save.
+const access = ref(false);
 // Edit is offered unless the server says this user may not change the record (an investigator
 // or a reader through a sample may read it but not edit it).
 const { canUpdate, refresh: refreshCanUpdate } = useCanUpdate('manufacturing_operations', toRef(props, 'id'));
+const accessParent = computed(() => {
+	const s = asRecord(op.value?.sample_id);
+	return s?.sample_id ? { collection: 'physical_samples', id: String(s.sample_id), label: s.sample_code ? `sample ${s.sample_code}` : 'the sample' } : null;
+});
 // A save can change who may edit the record (the Owner field), so ask again.
 function onSaved() {
 	reload();
@@ -114,6 +120,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 							<template #kind-icon><v-icon name="precision_manufacturing" x-small /></template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
+								<v-button small secondary @click="access = true"><v-icon name="group" small left />Who has access</v-button>
 								<v-button small secondary @click="openReport"><v-icon name="picture_as_pdf" small left />Report</v-button>
 								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
 							</template>
@@ -148,6 +155,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 					/>
 				</RecordLayout>
 
+				<AccessDialog v-model="access" collection="manufacturing_operations" :id="id" :title="pageTitle" :parent="accessParent" @changed="onSaved" />
 				<EditDrawer
 					v-model="editing"
 					collection="manufacturing_operations"

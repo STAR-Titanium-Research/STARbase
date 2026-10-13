@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TEST_STATUS_ORDER } from '../status';
-import { analysisState, buildOverview, countsTowardForceProgress, diagState, hiddenSampleCount } from './rollup';
+import { HIDDEN_SAMPLES_TEXT, HIDDEN_SAMPLES_UNIT, UNPLACED_TEXT, analysisState, buildOverview, countsTowardForceProgress, diagState, hiddenSampleCount } from './rollup';
 
 // Ported from core/extensions/d1-campaign-ops/index.test.mjs (node:test); the cases are unchanged.
 describe('campaign roll-up', () => {
@@ -149,6 +149,12 @@ describe('campaign roll-up', () => {
 	it('counts junction rows with a hidden (null) sample, not bare ids or readable samples', () => {
 		expect(hiddenSampleCount([{ sample_id: null }, { sample_id: 'bare-id' }, { sample_id: { sample_id: 's1' } }, { sample_id: null }])).toBe(2);
 		expect(hiddenSampleCount(undefined)).toBe(0);
+	});
+
+	it('says "some hidden" without a number', () => {
+		for (const text of [HIDDEN_SAMPLES_TEXT, HIDDEN_SAMPLES_UNIT, UNPLACED_TEXT]) expect(text).not.toMatch(/[0-9]/);
+		expect(HIDDEN_SAMPLES_TEXT).toBe('Some samples in this campaign are hidden from you.');
+		expect(HIDDEN_SAMPLES_UNIT).toContain('some hidden');
 	});
 
 	it('tests complete counts processed and analysed (the migration-0013 vocabulary), not the retired complete', () => {

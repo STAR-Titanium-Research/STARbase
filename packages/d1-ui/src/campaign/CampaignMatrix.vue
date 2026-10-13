@@ -4,6 +4,7 @@ import { recordRoute } from '../recordRoute';
 import { TEST_GLYPH, statusStyle } from '../status';
 import RecordLink from '../components/RecordLink.vue';
 import { cellHeading, type Matrix, type MatrixCell } from './matrix';
+import { UNPLACED_TEXT } from './rollup';
 
 // The sample x step matrix of a campaign (see matrix.ts). The sample column is pinned and the grid
 // scrolls both ways, so 50+ samples and many steps stay readable. A cell is a link to the operation
@@ -63,7 +64,7 @@ const LEGEND = [
 	<div class="d1-matrix">
 		<p v-if="forceHidden" class="note">Force-analysis state is not visible to your role, so operations show no state.</p>
 		<p v-if="matrix.unplaced.operations || matrix.unplaced.tests" class="note">
-			{{ matrix.unplaced.operations }} operation(s) and {{ matrix.unplaced.tests }} test(s) belong to samples you cannot see, so they have no row.
+			{{ UNPLACED_TEXT }}
 		</p>
 		<div class="scroll">
 			<table>
