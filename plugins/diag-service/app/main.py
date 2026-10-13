@@ -74,7 +74,9 @@ def cors_options(origins_env: str) -> dict | None:
     Credentials are allowed: STARbase calls with the Directus session cookie (ADR-0013), which this
     service forwards to Directus. The Force App sends a Bearer token instead, which is not harmed.
     Origins are exact; a '*' is dropped (a wildcard must never be combined with credentials)."""
-    origins = [o.strip() for o in origins_env.split(",") if o.strip() and o.strip() != "*"]
+    origins = [
+        o.strip() for o in origins_env.split(",") if o.strip() and o.strip() != "*"
+    ]
     if not origins:
         return None
     return {

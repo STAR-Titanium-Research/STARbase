@@ -9,7 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-for _p in (os.path.join(_REPO, "scripts"), os.path.join(_REPO, "plugins", "diag-service")):
+for _p in (
+    os.path.join(_REPO, "scripts"),
+    os.path.join(_REPO, "plugins", "diag-service"),
+):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -42,7 +45,11 @@ def test_a_wildcard_is_never_allowed():
 def test_starbase_gets_a_credentialed_preflight():
     r = _client(f"http://localhost:5180,{STAR}").options(
         "/health",
-        headers={"Origin": STAR, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"},
+        headers={
+            "Origin": STAR,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
     )
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == STAR
@@ -50,6 +57,11 @@ def test_starbase_gets_a_credentialed_preflight():
 
 
 def test_another_origin_is_refused():
-    r = _client(STAR).options("/health", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+    r = _client(STAR).options(
+        "/health",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
     assert "access-control-allow-origin" not in r.headers
-
