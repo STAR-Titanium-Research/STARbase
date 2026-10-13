@@ -13,6 +13,6 @@ export function shellView(state: SessionState, isPublic: boolean): ShellView {
 
 // The name the shell shows for the signed-in user: the first name, else the email (not every account has a
 // first name), else nothing.
-export function userLabel(user: Pick<SessionUser, 'first_name' | 'email'> | null | undefined): string {
+export function userLabel(user: SessionUser | null | undefined): string {
 	return user?.first_name?.trim() || user?.email?.trim() || '';
 }
