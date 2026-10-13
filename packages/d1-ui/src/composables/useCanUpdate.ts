@@ -1,4 +1,4 @@
-import { useApi } from '@directus/extensions-sdk';
+import { useExplorerHost } from '../host';
 import type { Ref } from 'vue';
 import { createCanUpdate } from './createCanUpdate';
 
@@ -8,5 +8,5 @@ import { createCanUpdate } from './createCanUpdate';
 // when `id` changes; call `refresh()` after a save, which can change who may edit (the Owner field).
 // A null / empty `id` asks nothing.
 export function useCanUpdate(collection: string, id: Ref<string | null | undefined>) {
-	return createCanUpdate(useApi(), collection, id);
+	return createCanUpdate(useExplorerHost().api, collection, id);
 }

@@ -12,9 +12,9 @@
 // and a paste carries real line breaks. So the box is a one-row textarea that keeps line breaks, Enter
 // while the text is a D1 label adds a line instead of opening a hit, and once the typing stops (or on a
 // paste) the label's sample is opened, or the decoded label and the reason are shown. See useFinder.
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import '../components/tokens.css';
-import { EXPLORER_HOST } from '../host';
+import { useExplorerHost } from '../host';
 import { MIN_QUERY } from './finder';
 import ScanResultCard from './ScanResultCard.vue';
 import type { FinderHit } from './finder';
@@ -26,8 +26,7 @@ import { useExplorerNav } from '../nav/useExplorerNav';
 const props = defineProps<{ canScan?: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'scan'): void }>();
 
-const host = inject(EXPLORER_HOST);
-if (!host) throw new Error('Finder needs an ExplorerHost: render it inside ExplorerView');
+const host = useExplorerHost();
 const { nav, visible } = useExplorerNav(host);
 const { query, hits, loading, searchable, scan, scanning, readScanNow } = useFinder(host, nav, visible, {
 	onOpen: (to) => {
@@ -65,12 +64,12 @@ onBeforeUnmount(() => {
 });
 
 function openTo(to: string) {
-	host!.navigate(to);
+	host.navigate(to);
 	emit('close');
 }
 
 function pick(hit: FinderHit) {
-	host!.navigate(hit.to);
+	host.navigate(hit.to);
 	emit('close');
 }
 

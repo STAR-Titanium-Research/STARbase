@@ -14,7 +14,6 @@
   ],
   "devDependencies": {
     "@directus/extensions-sdk": "^17",
-    "@types/qrcode": "^1.5.6",
     "@vue/compiler-sfc": "^3.5.43",
     "typescript": "^7",
     "vue": "^3",
@@ -27,8 +26,8 @@
     "host": "^11.0.0"
   },
   "dependencies": {
-    "@d1/ui": "*",
-    "jsqr": "^1.4.0",
-    "qrcode": "^1.5.4"
+    "@d1/directus-host": "*",
+    "@d1/starbase-pages": "*",
+    "@d1/ui": "*"
   }
 }

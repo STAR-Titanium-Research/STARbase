@@ -1,0 +1,24 @@
+{
+  "name": "@d1/directus-host",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The Directus side of the Explorer host contract (@d1/ui host.ts), shared by every Directus extension that uses the kit.",
+  "main": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@d1/ui": "*",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@directus/extensions-sdk": "^17",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^2.2.0"
+  }
+}

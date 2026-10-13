@@ -1,5 +1,8 @@
 import { defineInterface } from '@directus/extensions-sdk';
 import ProjectItems from './ProjectItems.vue';
+import { installDirectusHost } from '@d1/directus-host';
+
+installDirectusHost();
 
 // A read-only, presentation interface for the project form: one unified view of all
 // the project's items (operations, equipment, tools, insert boxes, samples, tests)

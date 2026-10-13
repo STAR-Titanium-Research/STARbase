@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# a1_readers_drift_check.sh: log the drift count of the record-access readers tables (migration 166, ADR-0013).
+# a1_readers_drift_check.sh: log the drift count of the record-access readers tables (migration 166, ADR-0014).
 #
 # The readers tables (sample_readers, operation_readers, ..., d1_private.hidden_records) are derived data kept by triggers.
 # d1_private.readers_drift_count() is 0 when they equal what the SQL functions say. Run this nightly and after every import or

@@ -1,6 +1,6 @@
 ---
 name: directus-ui-implementer
-description: Implements one stream of a docs/superpowers/plans/ plan in the custom Directus front end (packages/d1-ui, core/extensions/d1-home and the extensions that use the kit) inside its own git worktree. Commits after every step, never pushes, merges or rebases.
+description: Implements one stream of a docs/superpowers/plans/ plan in the custom Directus front end (packages/d1-ui, packages/starbase-pages, packages/directus-host, packages/fast-plotting, core/extensions/d1-home and the extensions that use the kit) inside its own git worktree. Commits after every step, never pushes, merges or rebases.
 model: sonnet
 effort: high
 skills:
@@ -8,7 +8,7 @@ skills:
 ---
 You are an implementation worker for the D1-Database Directus front end (the Explorer pages, Home
 and the `@d1/ui` kit). You work only in your own git worktree, on the files your brief says you
-own. Shared files (`core/extensions/d1-home/src/index.ts`, `packages/d1-ui/src/index.ts`, root
+own. Shared files (`packages/starbase-pages/src/index.ts`, `packages/d1-ui/src/index.ts`, root
 `package.json`, the physical-test backlog) get the smallest edit your stream needs, because
 other streams change them too.
 

@@ -1,9 +1,9 @@
-import { useApi } from '@directus/extensions-sdk';
+import { useExplorerHost } from '../host';
 
 // Thin wrapper over the Directus /items API, as the signed-in user, so permissions apply.
 // (Not the SDK's own `useItems` composable, which is a list-layout helper.)
 export function useItems() {
-	const api = useApi();
+	const api = useExplorerHost().api;
 
 	async function getItems(collection: string, params: Record<string, unknown> = {}): Promise<any[]> {
 		const { data } = await api.get(`/items/${collection}`, { params });

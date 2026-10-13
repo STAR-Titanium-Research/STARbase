@@ -7,6 +7,10 @@
 // link mapping and not the Vue components (the force app) imports "@d1/ui/recordRoute".
 
 // Links
+export {
+	assetUrl, canonicalPath, configureLinks, directusLinks, linkHref, openLink, resetLinks, resetStarbaseUrl, resolveLink, serverUrl, starbaseLinks, starbaseUrlFor, starbaseUrlOnce,
+} from './links';
+export type { LinkConfig, ResolvedLink } from './links';
 export { recordRoute, collectionRoute, dataStudioRoute, indexRoute } from './recordRoute';
 export { analysisLink, processLabel } from './process';
 export type { AnalysisLink } from './process';
@@ -63,6 +67,7 @@ export { default as DataTable } from './components/DataTable.vue';
 export { default as RecordCard } from './components/RecordCard.vue';
 export { default as StatTile } from './components/StatTile.vue';
 export { default as StatusBadge } from './components/StatusBadge.vue';
+export { default as AppLink } from './components/AppLink.vue';
 export { default as RecordLink } from './components/RecordLink.vue';
 export { default as Section } from './components/Section.vue';
 export { default as LoadState } from './components/LoadState.vue';
@@ -92,6 +97,14 @@ export { default as ProgressBar } from './components/ProgressBar.vue';
 export { default as Sparkline } from './components/Sparkline.vue';
 export { default as CompositionBar } from './components/CompositionBar.vue';
 export { default as EditDrawer } from './components/EditDrawer.vue';
+export {
+	EDIT_MESSAGE_TYPE, NEW_ITEM_ID, editFrameUrl, editMessage, frameReporter, frameTell, isEditMessage, loadTargetOrigin, readEditMessage, targetOriginFrom,
+} from './editFrame';
+export type { EditMessage, EditResult, ExpectedEditSource, MessageTarget } from './editFrame';
+export { createFormFields, editMode } from './editDrawer';
+export type { EditMode } from './editDrawer';
+export { useEditSession } from './composables/useEditSession';
+export type { EditSessionApi, EditSessionOptions } from './composables/useEditSession';
 // Who has access (the dialog of the record pages; the endpoint is core/extensions/d1-record-access)
 export { default as AccessDialog } from './components/AccessDialog.vue';
 export { RESTRICT_UI } from './access/accessModel';
@@ -104,14 +117,15 @@ export { useCampaignData } from './campaign/useCampaignData';
 export type { CampaignData } from './campaign/useCampaignData';
 
 // Explorer navigation: host contract, sidebar tree, index-page configs
-export { EXPLORER_HOST } from './host';
+export { EXPLORER_HOST, setExplorerHostFactory, useExplorerHost } from './host';
 export { guessAdmin } from './hostAdmin';
-export type { ExplorerHost } from './host';
+export type { ExplorerHost, HostApi, HostField, HostRequestConfig, HostResponse } from './host';
 export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser, pickBookmarkId, linkForBookmark } from './nav/navConfig';
 export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';
-export { isFinderShortcut, isModalOpen } from './finder/finderNav';
+export { isFinderShortcut, isModalOpen, shouldOpenFinder } from './finder/finderNav';
+export { useFinderShortcut } from './finder/useFinderShortcut';
 export { default as ScanResultCard } from './finder/ScanResultCard.vue';
 export { isScanStarted, normalizeScan, displayText, resolveLabel } from './finder/scan';
 export type { ScanApi, ScanOutcome, FailReason } from './finder/scan';

@@ -15,6 +15,7 @@
     "vue-tsc": "^2.2.0"
   },
   "dependencies": {
+    "@d1/directus-host": "*",
     "@d1/ui": "*",
     "cytoscape": "^3.30"
   },

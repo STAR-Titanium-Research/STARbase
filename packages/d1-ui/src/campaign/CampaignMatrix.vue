@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppLink from '../components/AppLink.vue';
 import { computed } from 'vue';
 import { recordRoute } from '../recordRoute';
 import { TEST_GLYPH, statusStyle } from '../status';
@@ -84,7 +85,7 @@ const LEGEND = [
 							<v-icon v-if="row.notInCampaign" name="link_off" x-small class="off" title="Has an operation or test in this campaign but is not in its sample list" />
 						</th>
 						<td v-for="(entry, c) in views[r]" :key="matrix.columns[c].key">
-							<router-link
+							<AppLink
 								v-if="entry"
 								:to="recordRoute(entry.cell.collection, entry.cell.id)"
 								:class="['cell', `tone--${entry.view.tone}`]"
@@ -94,7 +95,7 @@ const LEGEND = [
 								{{ entry.view.glyph }}
 								<span v-if="entry.cell.count > 1" class="count">{{ entry.cell.count }}</span>
 								<span v-if="entry.view.diagTone" :class="['diag', `tone--${entry.view.diagTone}`]" />
-							</router-link>
+							</AppLink>
 						</td>
 					</tr>
 				</tbody>

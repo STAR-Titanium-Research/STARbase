@@ -2,7 +2,7 @@
 
 **System:** D1-Database
 **Scope:** the maintainer applies the A1a release to the running compose stack with real data and real Lab Member
-accounts. Design: ADR-0013 and the spec below.
+accounts. Design: ADR-0014 and the spec below.
 **Applies to:** the five A1a migrations, in this order: `20261012000165_record_access.sql`,
 `20261012000166_record_readers_and_rules.sql`, `20261012000167_project_rollup_restricted.sql`,
 `20261012000168_llm_role_row_security.sql`, `20261012000169_people_update_own_row.sql` (confirm the numbers with

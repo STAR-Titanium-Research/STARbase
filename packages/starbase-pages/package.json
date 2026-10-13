@@ -1,0 +1,27 @@
+{
+  "name": "@d1/starbase-pages",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "STARbase's pages (Home, index and record pages, task screens). Host-neutral; mounted by the Directus Home module and by apps/starbase/web.",
+  "main": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@d1/ui": "*",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.6",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^2.2.0"
+  }
+}

@@ -19,17 +19,33 @@ function sources(path: string): string[] {
 	return readdirSync(path).flatMap((name) => sources(join(path, name)));
 }
 
-describe('Explorer sources stay host-neutral', () => {
-	const files = ['nav', 'index', 'finder'].flatMap((d) => sources(join(here, d))).concat(sources(join(here, 'host.ts')));
+// The whole kit is host-neutral: STARbase renders it outside Directus. Directus is reached only
+// through the host (host.ts) and links go through links.ts / AppLink.
+describe('the kit stays host-neutral', () => {
+	const files = sources(here).filter((f) => !f.endsWith('.test.ts'));
+	const rel = (f: string) => f.slice(here.length + 1).replace(/\\/g, '/');
 
 	it('finds the files it is meant to check', () => {
 		expect(files.some((f) => f.endsWith('navConfig.ts'))).toBe(true);
-		expect(files.some((f) => f.endsWith('indexConfig.ts'))).toBe(true);
-		expect(files.some((f) => f.endsWith('host.ts'))).toBe(true);
+		expect(files.some((f) => f.endsWith('EditDrawer.vue'))).toBe(true);
 	});
 
-	it('does not mention the Directus extensions SDK', () => {
-		for (const f of files) expect(readFileSync(f, 'utf8'), f).not.toContain(FORBIDDEN);
+	it('does not use the Directus extensions SDK', () => {
+		for (const f of files) {
+			const src = readFileSync(f, 'utf8');
+			expect(src, rel(f)).not.toContain(FORBIDDEN);
+			expect(src, rel(f)).not.toMatch(/\buse(Api|Stores)\(/);
+		}
+	});
+
+	it('builds links and asset URLs only through links.ts', () => {
+		const allowed = ['links.ts', 'components/AppLink.vue'];
+		for (const f of files.filter((f) => !allowed.includes(rel(f)))) {
+			const src = readFileSync(f, 'utf8');
+			expect(src, rel(f)).not.toMatch(/<router-link\b|['"`]router-link['"`]/);
+			expect(src, rel(f)).not.toMatch(/['"`]\/assets\//);
+			expect(src, rel(f)).not.toMatch(/window\.open\(/);
+		}
 	});
 });
 

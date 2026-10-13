@@ -1,5 +1,5 @@
 import { defineModule } from '@directus/extensions-sdk';
-import FastDashboard from './FastDashboard.vue';
+import DirectusFastDashboard from './DirectusFastDashboard.vue';
 
 // Standalone FAST (spark-plasma sintering) explorer, styled like the FRM force
 // dashboard: sample -> operation -> sintering metadata -> a responsive grid of up
@@ -9,5 +9,5 @@ export default defineModule({
 	id: 'd1-fast-dashboard',
 	name: 'FAST Analysis',
 	icon: 'whatshot',
-	routes: [{ path: '', component: FastDashboard }],
+	routes: [{ path: '', component: DirectusFastDashboard }],
 });

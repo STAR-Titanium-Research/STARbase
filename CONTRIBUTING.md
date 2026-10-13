@@ -51,7 +51,7 @@ left for CI to discover):
   (copy `20261007000141_lab_member_row_visibility.sql`). Reference data goes in `unfiltered`.
 - **Views granted to the Ask-DB role:** any later `CREATE OR REPLACE VIEW` of a view granted to `d1_llm_readonly`
   must be created `WITH (security_invoker = true)`. `CREATE OR REPLACE` without it resets the option and silently
-  re-opens the row-security bypass (ADR-0013). A table granted to that role needs a row-level-security policy or a
+  re-opens the row-security bypass (ADR-0014). A table granted to that role needs a row-level-security policy or a
   place in the reference list; `tests/phase1_schema.sh` fails otherwise.
 - **Plugins/services:** unit tests beside the code; integration tests in
   [`tests/`](./tests/).

@@ -7,7 +7,7 @@
   Member (`scripts/configure_users_and_policies.sql`). The three roles below
   remain defined and are what machine users are provisioned on — see
   [`core/README.md`](../../core/README.md#roles).
-- **Update (2026-10-13, ADR-0013):** `core/roles.json`, `core/permissions.json` and `core/apply.sh`
+- **Update (2026-10-13, ADR-0014):** `core/roles.json`, `core/permissions.json` and `core/apply.sh`
   (the Operator, Researcher and Administrator roles and their bootstrap script) are **deleted**:
   nothing read them, the live system has only Administrator, Lab Admin and Lab Member, and machine users
   are Administrator users with a static token created by hand. The paragraphs below are the 2026-06-18

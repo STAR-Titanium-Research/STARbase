@@ -58,7 +58,7 @@ unless you were asked to.
   maintainer's machine. A failure after a numpy/scipy version difference isn't proof of a bug.
   Read `tests/scripts/diag/regenerate_goldens.py` before regenerating anything, and never
   regenerate to hide a real diff.
-- The geometry engine is vendored into `d1-geometry-preview`, `d1-home` and `d1-report`. Edit
+- The geometry engine is vendored into `d1-geometry-preview`, `packages/starbase-pages` and `d1-report`. Edit
   the canonical copy in `d1-geometry-preview`, then run
   `bash scripts/sync_geometry.sh`. A hand-edit to one copy fails the pre-commit hook and CI.
 - `phase3_api.sh`, `phase4_heavy_data.sh` and `tests/ui/` need the full stack and aren't in CI. Run

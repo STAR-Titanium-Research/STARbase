@@ -422,7 +422,7 @@ interface shows or changes it in A1a.
 
 ### Readers tables (derived): `sample_readers`, `operation_readers`, `test_readers`, `campaign_readers`, `project_readers`, `campaign_sample_readers`, `operation_open_to_all`, and `d1_private.hidden_records`
 
-Who can **read** each record, stored (migration `…166`, A1a; ADR-0013). They are derived data: the SQL function family
+Who can **read** each record, stored (migration `…166`, A1a; ADR-0014). They are derived data: the SQL function family
 `d1_private.readers_of_<type>()` states the rule, the tables hold its answer, statement triggers on every input table recompute
 what a write could change, and the Directus read rule of the five record types is one membership test on the table. Nothing writes
 them by hand; the dumps leave their data out and a restore ends with `d1_private.readers_rebuild()`.
@@ -551,4 +551,4 @@ WHERE  sample_id  = '<uuid>'
   LLM-generated SQL is additionally validated by the plugin's SQL guard before it
   runs (ADR-0009, `docs/runbooks/text-to-sql.md`). The login role used by the
   plugin must inherit `d1_llm_readonly` and never be the superuser. Since migration `…168` row-level security hides restricted records
-  (and everything under them) from that role and the granted views are `security_invoker` (ADR-0013); `d1_private.hidden_records` is not granted to it.
+  (and everything under them) from that role and the granted views are `security_invoker` (ADR-0014); `d1_private.hidden_records` is not granted to it.

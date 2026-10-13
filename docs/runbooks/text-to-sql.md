@@ -68,7 +68,7 @@ re-granted). `app/lib/sql_guard.py` enforces the same deny-list a second time an
 also rejects side-effect and SQL-running functions (`query_to_xml`,
 `pg_read_file`, `set_config`, …) and `FOR UPDATE`. See ADR-0009's status note.
 
-**Row-level security (migration `…168`, ADR-0013).** The role never sees a Restricted record, whoever asks: each record-bound
+**Row-level security (migration `…168`, ADR-0014).** The role never sees a Restricted record, whoever asks: each record-bound
 granted table has a restrictive `FOR SELECT TO d1_llm_readonly` policy over `d1_private.is_hidden()`, the nine `v_*` views are
 `security_invoker`, and a permissive `FOR ALL TO PUBLIC` policy leaves other roles (`d1_embedder`) as they were. The role has `USAGE`
 on schema `d1_private` and `EXECUTE` on `is_hidden` for the policies to run, and no grant on `d1_private.hidden_records` or the

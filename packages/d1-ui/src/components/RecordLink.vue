@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppLink from './AppLink.vue';
 import { computed } from 'vue';
 import { recordRoute } from '../recordRoute';
 
@@ -8,7 +9,7 @@ const to = computed(() => (props.id === null || props.id === undefined ? null : 
 </script>
 
 <template>
-	<router-link v-if="to" :to="to" class="d1-record-link"><slot /></router-link>
+	<AppLink v-if="to" :to="to" class="d1-record-link"><slot /></AppLink>
 	<span v-else><slot /></span>
 </template>
 

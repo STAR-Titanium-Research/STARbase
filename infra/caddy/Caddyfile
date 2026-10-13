@@ -103,5 +103,49 @@
         header @html Cache-Control "no-cache"
         file_server
     }
+    # The form-only edit page STARBase frames (core/extensions/d1-edit-frame, spec §3.4). Directus itself
+    # sends Cross-Origin-Opener-Policy: same-origin-allow-popups, which severs window.opener; the page's new-tab
+    # fallback needs it to tell STARbase "saved". Relaxed for this one path only (header_down, so it
+    # replaces the upstream value); every other Directus page keeps its own COOP.
+    handle /admin/d1-edit/* {
+        reverse_proxy directus:8055 {
+            header_down Cross-Origin-Opener-Policy unsafe-none
+        }
+    }
     reverse_proxy directus:8055
+}
+
+# STARbase (apps/starbase/web, built into dist/; ADR-0013, docs/runbooks/starbase.md). The `starbase`
+# container (docker-compose.yml, profile starbase) runs tailscale serve: HTTPS 443 on its own tailnet
+# device → http://proxy:8090. This port is never published on the host. STARbase calls d1-server
+# cross-origin with the Directus session cookie; the CSP allows exactly that origin
+# (apps/starbase/web/src/csp.ts holds the same string, and its test compares them).
+:8090 {
+    header Content-Security-Policy "default-src 'self'; connect-src 'self' {$D1_SERVER_ORIGIN}; img-src 'self' data: blob: {$D1_SERVER_ORIGIN}; frame-src {$D1_SERVER_ORIGIN}; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+    header X-Content-Type-Options nosniff
+    header Referrer-Policy strict-origin-when-cross-origin
+    # Where d1-server is: the app reads this at boot (apps/starbase/web/src/config.ts). One setting, here.
+    handle /config.json {
+        header Content-Type application/json
+        header Cache-Control no-cache
+        respond `{"directusUrl":"{$D1_SERVER_ORIGIN}"}` 200
+    }
+    # Hashed bundles never change, so a file that exists is immutable. A MISSING one is a plain 404 (never
+    # index.html: a stale tab asking for an old hash must not get HTML served as a year-cached script),
+    # and a 404 is not cached.
+    handle /assets/* {
+        root * /srv/starbase
+        @found file {path}
+        header @found Cache-Control "public, max-age=31536000, immutable"
+        @missing not file {path}
+        header @missing Cache-Control no-store
+        file_server
+    }
+    # Everything else (index.html, the SPA routes) revalidates, and falls back to index.html.
+    handle {
+        root * /srv/starbase
+        header Cache-Control no-cache
+        try_files {path} /index.html
+        file_server
+    }
 }

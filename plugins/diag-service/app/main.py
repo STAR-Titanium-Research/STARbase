@@ -66,16 +66,25 @@ def _octree_root() -> str:
 
 app = FastAPI(title="d1-diag-service")
 
-_cors = [
-    o.strip() for o in os.environ.get("DIAG_CORS_ORIGINS", "").split(",") if o.strip()
-]
-if _cors:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_cors,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
-        expose_headers=[
+
+# CORS for the standalone apps (Force App: Bearer token; STARbase: the Directus session cookie).
+def cors_options(origins_env: str) -> dict | None:
+    """CORSMiddleware options for the comma-separated DIAG_CORS_ORIGINS, or None for none.
+
+    Credentials are allowed: STARbase calls with the Directus session cookie (ADR-0013), which this
+    service forwards to Directus. The Force App sends a Bearer token instead, which is not harmed.
+    Origins are exact; a '*' is dropped (a wildcard must never be combined with credentials)."""
+    origins = [
+        o.strip() for o in origins_env.split(",") if o.strip() and o.strip() != "*"
+    ]
+    if not origins:
+        return None
+    return {
+        "allow_origins": origins,
+        "allow_credentials": True,
+        "allow_methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Authorization", "Content-Type"],
+        "expose_headers": [
             "X-Diag-Cache",
             "X-Diag-Ms",
             "X-Diag-Preview",
@@ -83,7 +92,12 @@ if _cors:
             "X-Diag-Viewport-N",
             "X-Diag-Viewport-Cols",
         ],
-    )
+    }
+
+
+_cors = cors_options(os.environ.get("DIAG_CORS_ORIGINS", ""))
+if _cors:
+    app.add_middleware(CORSMiddleware, **_cors)
 
 # base.d1an parsed columns, keyed by diag_path -> (file signature, columns) (~18k rows x 5
 # float64 ~= 730 KB each).

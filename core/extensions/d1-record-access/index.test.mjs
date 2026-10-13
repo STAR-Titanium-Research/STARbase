@@ -656,8 +656,8 @@ test('roleLabel and recordLink', () => {
   assert.equal(recordLink('https://lab.example//', 'projects', 'a b'), 'https://lab.example/admin/home/projects/a%20b');
 });
 
-test('the link map is the five d1-home routes, and recordRoute\'s', () => {
-  const index = readFileSync(new URL('../d1-home/src/index.ts', import.meta.url), 'utf8');
+test('the link map is the five STARbase page routes, and recordRoute\'s', () => {
+  const index = readFileSync(new URL('../../../packages/starbase-pages/src/routes.ts', import.meta.url), 'utf8');
   const routes = Object.fromEntries([...index.matchAll(/path: '([a-z]+)\/:id', component: (\w+)Page/g)].map((m) => [m[2], m[1]]));
   assert.deepEqual(routes, { Project: 'projects', Campaign: 'campaigns', Sample: 'samples', Operation: 'operations', Test: 'tests' });
   const byPage = { physical_samples: 'Sample', manufacturing_operations: 'Operation', test_sessions: 'Test', campaigns: 'Campaign', projects: 'Project' };

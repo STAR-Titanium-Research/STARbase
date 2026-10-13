@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Status note (2026-10-13):** migration `20261012000168_llm_role_row_security.sql` adds row-level security on the role (a restricted
   record, and everything under it, is invisible to Ask-DB) and makes the granted views `security_invoker`; see
-  [ADR-0013](./0013-record-access.md).
+  [ADR-0014](./0014-record-access.md).
 - **Date:** 2026-06-19
 - **Deciders:** Maintainer + Claude (Phase 6)
 - **Status note (2026-10-03):** the read surface is back to an **explicit allow-list**,

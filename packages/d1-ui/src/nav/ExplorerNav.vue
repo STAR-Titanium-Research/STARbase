@@ -10,10 +10,11 @@
 // Plain HTML, the kit's tokens and the host's navigation theme variables, so it can move to the
 // standalone app unchanged. The finder button only emits; the finder dialog is wired by the host
 // page.
-import { computed, inject, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import '../components/tokens.css';
-import { EXPLORER_HOST } from '../host';
+import { useExplorerHost } from '../host';
+import { canonicalPath } from '../links';
 import NavPanel from './NavPanel.vue';
 import NavRail from './NavRail.vue';
 import { readSection, writeSection } from './navState';
@@ -24,14 +25,16 @@ import { useExplorerNav } from './useExplorerNav';
 defineEmits<{ (e: 'open-finder'): void }>();
 
 // The brand block (name and tagline). Inside Directus the project header above the navigation
-// slot already shows it, so ExplorerView turns it off; the standalone app leaves it on.
+// slot already shows it, so DirectusFrame turns it off; the standalone app leaves it on.
 withDefaults(defineProps<{ showBrand?: boolean }>(), { showBrand: true });
 
-const host = inject(EXPLORER_HOST);
-if (!host) throw new Error('ExplorerNav needs an ExplorerHost: render it inside ExplorerView');
+const host = useExplorerHost();
 const { nav, loading, error, refresh } = useExplorerNav(host);
 
 const route = useRoute();
+
+// Home is '/home' in the Directus form whatever this host calls it (STARbase: '/').
+const onHome = () => canonicalPath(route.path) === '/home';
 
 const sections = computed(() => railSections(nav.value));
 
@@ -42,7 +45,7 @@ const current = computed<RailSectionId | null>(() => activeSection(sections.valu
 // at once when the lists are already loaded (you came back to Home from another page; the nav state
 // outlives the page), else (`pending`) when they arrive after the first paint. A rail click or a page
 // change cancels it. After that the panel just follows the user.
-const start = startSection(sections.value, route.path, route.query, route.path === '/home' ? readSection() : null);
+const start = startSection(sections.value, route.path, route.query, onHome() ? readSection() : null);
 const selected = ref<RailSectionId>(start.selected);
 let pending: string | null = start.pending;
 // True once the user has picked a section on this page: loading more sections then leaves it alone.
@@ -80,7 +83,7 @@ function select(id: RailSectionId) {
 	pending = null;
 	// Remembered only from Home (where the panel is free to wander); elsewhere the panel goes back to
 	// following the page on the next navigation.
-	if (route.path === '/home') writeSection(id);
+	if (onHome()) writeSection(id);
 }
 
 const section = computed(() => sections.value.find((s) => s.id === selected.value) ?? sections.value[0]);

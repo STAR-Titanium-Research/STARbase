@@ -35,7 +35,7 @@ The live system has three roles: **Administrator**, **Lab Admin** and **Lab Memb
 workers, the force crawler, equipment nodes such as the rig's `Rig_1_Fast_Sampling_Node`) are Directus users on the
 Administrator role with a static token, created by hand in the User Directory. The older Phase 3 model of
 [ADR-0005](../../adr/0005-directus-rbac-structure.md) (Operator and Researcher roles, `core/roles.json`,
-`core/permissions.json`, `core/apply.sh`) was deleted in A1a ([ADR-0013](../../adr/0013-record-access.md)); nothing read it.
+`core/permissions.json`, `core/apply.sh`) was deleted in A1a ([ADR-0014](../../adr/0014-record-access.md)); nothing read it.
 See the [API contract](../../api-contract.md).
 
 ### Restricted records and Ask the database

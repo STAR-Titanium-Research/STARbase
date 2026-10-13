@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
+import { useExplorerHost } from '../host';
 import { errorText, formatDate } from '../format';
 import { useItems } from '../composables/useItems';
 import { useRequestGate } from '../composables/useRequestGate';
@@ -20,7 +20,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: 'changed'): void }>();
 
-const api = useApi();
+const api = useExplorerHost().api;
 const { getItems } = useItems();
 const gate = useRequestGate();
 

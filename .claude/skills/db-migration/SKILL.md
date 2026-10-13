@@ -43,7 +43,7 @@ Migration count: !`ls db/migrations/*.sql | wc -l` (see the CI rollback gotcha b
 
 - A view granted to `d1_llm_readonly` (the nine `v_*` views of migration `…132`, and any later grant) must be created
   `WITH (security_invoker = true)`. **`CREATE OR REPLACE VIEW` without the `WITH (...)` clause resets that option and
-  silently re-opens the Ask-DB row-security bypass** (migration `…168`, ADR-0013); say it again every time you redefine
+  silently re-opens the Ask-DB row-security bypass** (migration `…168`, ADR-0014); say it again every time you redefine
   one. A new table you grant to that role needs row-level-security policies like migration 168's (or an entry in
   the reference list in `tests/phase1_schema.sh` if it holds no record data). A view that is security-invoker
   must not read `d1_private.hidden_records` directly: use `d1_private.is_hidden()`. phase1 asserts both.

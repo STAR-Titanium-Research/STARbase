@@ -687,7 +687,7 @@ must treat `data: null` on a PATCH as an OCC signal, not a general error.
 ### 13.1 Token provisioning
 
 Machine user tokens are created by hand during initial setup: a Directus user on the Administrator role
-with a generated static token (`core/apply.sh` and the Phase 3 Operator role were retired in A1a, ADR-0013).
+with a generated static token (`core/apply.sh` and the Phase 3 Operator role were retired in A1a, ADR-0014).
 The token is shown once at creation time and must be stored in a secrets
 vault (e.g., HashiCorp Vault, lab password manager, or `.env` for dev).
 

@@ -26,7 +26,7 @@ Before bringing up the heavy-data pipeline, confirm the following:
 - Directus is running with the schema migrated, and a **machine user exists** for the workers: in Directus
   (Settings, User Directory) create a user on the **Administrator** role and generate its static token. The
   live system has only the Administrator, Lab Admin and Lab Member roles: the Phase 3 Operator role and its
-  `core/apply.sh` bootstrap script were retired with the record-access work (A1a, ADR-0013). The workers
+  `core/apply.sh` bootstrap script were retired with the record-access work (A1a, ADR-0014). The workers
   need a role that can create operations and files; Administrator is what the live machine users use.
   Copy the token when it is shown; it is the `WORKER_DIRECTUS_TOKEN` value.
 
