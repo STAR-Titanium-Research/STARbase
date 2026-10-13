@@ -7,6 +7,7 @@
 import type { IndexDef } from './indexConfig';
 import { cardFacts, cardHead } from './cardFacts';
 import TextCard from './TextCard.vue';
+import { rowAccent } from './accent';
 
 type Row = Record<string, unknown>;
 
@@ -39,6 +40,7 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 					:sub="cardHead(def, row).sub"
 					:facts="cardFacts(def, row)"
 					:href="hrefFor(row)"
+					:accent="rowAccent(def, row)"
 					@open="emit('open', row)"
 				>
 					<template v-if="$slots.thumb" #thumb><slot name="thumb" :row="row" /></template>

@@ -29,6 +29,8 @@ export function extraFields(def: IndexDef, readable: ReadonlySet<string> | null 
 	if (def.collection === 'campaigns' && (!readable || readable.has('people'))) out.push('owner_person_id.full_name');
 	// The thumbnail's own fields (a sample's form and dimensions, an image list's file field).
 	out.push(...thumbFields(def.collection));
+	// The row's accent colour (the ISO classes' colour_hex).
+	if (def.accentField && !def.columns.some((c) => c.field === def.accentField)) out.push(def.accentField);
 	return out;
 }
 

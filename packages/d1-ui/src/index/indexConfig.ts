@@ -43,6 +43,8 @@ export interface IndexDef {
 	hasShortId?: boolean;
 	// Rows can be ticked, and one button sends the ticked keys to an app page as ?<param>=a,b,c.
 	selectAction?: SelectAction;
+	// A column holding a #rrggbb colour per row: the cards get a stripe and a swatch in it (accent.ts).
+	accentField?: string;
 }
 
 export interface SelectAction {
@@ -244,7 +246,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		columns: [col('iso_code', 'ISO code', 'code'), col('description', 'Description')],
 		searchFields: ['iso_code', 'description'],
 		filters: [],
-		defaultSort: 'iso_code', rowTarget: 'drawer',
+		defaultSort: 'iso_code', rowTarget: 'drawer', accentField: 'colour_hex',
 	},
 	{
 		slug: 'methods', collection: 'manufacturing_methods', title: 'Methods', group: 'reference', primaryKey: 'method_id',
