@@ -4,8 +4,9 @@ import { activateOnKey } from './clickableKey';
 
 // Stand-in for Directus's <v-icon>: a Material Symbols glyph by name. Clickable icons (copy a path,
 // download) are buttons for the keyboard and screen readers: Enter and Space click them, and the
-// page's @click falls through.
-const props = defineProps<{ name?: string; xSmall?: boolean; small?: boolean; large?: boolean; xLarge?: boolean; left?: boolean; right?: boolean; clickable?: boolean }>();
+// page's @click falls through. A `title` names the icon for screen readers (role="img" when it is not clickable);
+// without one a plain icon is decorative and hidden from them.
+const props = defineProps<{ name?: string; xSmall?: boolean; small?: boolean; large?: boolean; xLarge?: boolean; left?: boolean; right?: boolean; clickable?: boolean; title?: string }>();
 const size = computed(() => (props.xSmall ? 14 : props.small ? 18 : props.large ? 32 : props.xLarge ? 40 : 24));
 </script>
 
@@ -14,9 +15,11 @@ const size = computed(() => (props.xSmall ? 14 : props.small ? 18 : props.large 
 		class="material-symbols-rounded v-icon"
 		:class="{ left, right, clickable }"
 		:style="{ fontSize: size + 'px' }"
-		:role="clickable ? 'button' : undefined"
+		:title="title"
+		:role="clickable ? 'button' : title ? 'img' : undefined"
+		:aria-label="title || undefined"
 		:tabindex="clickable ? 0 : undefined"
-		:aria-hidden="clickable ? undefined : 'true'"
+		:aria-hidden="clickable || title ? undefined : 'true'"
 		@keydown="clickable ? activateOnKey($event) : undefined"
 		>{{ name }}</span
 	>

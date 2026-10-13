@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue';
+
 const props = withDefaults(defineProps<{ type?: 'info' | 'success' | 'warning' | 'danger' }>(), { type: 'info' });
-const role = props.type === 'danger' || props.type === 'warning' ? 'alert' : 'status';
+const role = computed(() => (props.type === 'danger' || props.type === 'warning' ? 'alert' : 'status'));
 </script>
 
 <template>

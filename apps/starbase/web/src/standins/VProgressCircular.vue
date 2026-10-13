@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue';
+
 // Stand-in for <v-progress-circular indeterminate />: a CSS ring (the `spin` keyframes are in styles.css).
 const props = defineProps<{ indeterminate?: boolean; xSmall?: boolean; small?: boolean; large?: boolean }>();
-const dim = props.xSmall ? 14 : props.small ? 18 : props.large ? 40 : 28;
+const dim = computed(() => (props.xSmall ? 14 : props.small ? 18 : props.large ? 40 : 28));
 </script>
 
 <template>

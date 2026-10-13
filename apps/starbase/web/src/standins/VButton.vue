@@ -30,6 +30,8 @@ const classes = computed(() => ({
 	background: var(--theme--primary); color: var(--theme--primary-foreground);
 	font: inherit; font-size: var(--fs-md, 13px); font-weight: 600; text-decoration: none; white-space: nowrap; cursor: pointer;
 }
+.v-button :deep(.v-icon.left) { margin-right: 0; } /* the button's gap spaces its icons; v-icon's own margin would double it */
+.v-button :deep(.v-icon.right) { margin-left: 0; }
 .v-button.secondary { background: var(--theme--background-normal); color: var(--theme--foreground); }
 .v-button.danger { background: var(--theme--danger); border-color: var(--theme--danger); color: #fff; }
 .v-button.warning { background: var(--theme--warning); border-color: var(--theme--warning); color: #111; }
