@@ -321,6 +321,7 @@ jobs:
           npm run typecheck -w @d1/ui
           npm test -w @d1/fast-plotting
           npm run typecheck -w @d1/fast-plotting
+          npm test -w @d1/directus-host
           npm run typecheck -w @d1/directus-host
           npm test -w @d1/starbase-pages
           npm run typecheck -w @d1/starbase-pages

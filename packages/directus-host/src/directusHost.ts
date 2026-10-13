@@ -48,10 +48,10 @@ export function useDirectusHost(opts: { onCreate?: (host: ExplorerHost, router: 
 	api
 		.get('/users/me', { params: { fields: 'id,first_name,role' } })
 		.then((res) => {
-			user.value = res.data?.data ?? null;
+			if (res.data?.data) user.value = res.data.data;
 		})
 		.catch(() => {
-			user.value = null;
+			// Keep the store seed: Home, ProjectsIndex and register-sample read it, and a failed lookup is no reason to forget who is signed in.
 		});
 
 	const host: ExplorerHost = {
