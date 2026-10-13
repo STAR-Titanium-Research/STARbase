@@ -5,6 +5,7 @@
 // button is only drawn when the row has that data; a row without any shows nothing. A click on a
 // button does not also open the row.
 import { computed } from 'vue';
+import AppLink from '../components/AppLink.vue';
 import { analysisLink } from '../process';
 import { indexRoute } from '../recordRoute';
 import type { RowPlots } from './plotData';
@@ -34,9 +35,9 @@ const sample = computed(() => {
 
 <template>
 	<span v-if="force || fast || sample" class="plots" :class="size === 'card' ? 's-card' : 's-row'">
-		<router-link v-if="force" :to="force.to" class="plot" title="Open in the Force dashboard" :aria-label="`Force dashboard${who}`" @click.stop>Force</router-link>
-		<router-link v-if="fast" :to="fast.to" class="plot" title="Open in the FAST dashboard" :aria-label="`FAST dashboard${who}`" @click.stop>FAST</router-link>
-		<router-link v-if="sample" :to="sample.to" class="plot" title="Operations of this sample with force data" :aria-label="`${sample.label}: operations with force data${who}`" @click.stop>{{ sample.label }}</router-link>
+		<AppLink v-if="force" :to="force.to" class="plot" title="Open in the Force dashboard" :aria-label="`Force dashboard${who}`" @click.stop>Force</AppLink>
+		<AppLink v-if="fast" :to="fast.to" class="plot" title="Open in the FAST dashboard" :aria-label="`FAST dashboard${who}`" @click.stop>FAST</AppLink>
+		<AppLink v-if="sample" :to="sample.to" class="plot" title="Operations of this sample with force data" :aria-label="`${sample.label}: operations with force data${who}`" @click.stop>{{ sample.label }}</AppLink>
 	</span>
 </template>
 

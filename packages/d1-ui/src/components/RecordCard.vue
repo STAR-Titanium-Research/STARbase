@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppLink from './AppLink.vue';
 import { hasTextSelection } from './textSelection';
 // A record as a card: its code, a tag beside it, its name, a line of meta, then anything else
 // (counts, a progress bar, a chart). The whole card is the link. Inside a panel it is a tile one
@@ -15,7 +16,7 @@ function onClickCapture(e: MouseEvent): void {
 </script>
 
 <template>
-	<component :is="to ? 'router-link' : 'div'" :to="to || undefined" class="d1-card" :class="{ link: !!to, raised }" @click.capture="onClickCapture">
+	<component :is="to ? AppLink : 'div'" :to="to || undefined" class="d1-card" :class="{ link: !!to, raised }" @click.capture="onClickCapture">
 		<span class="top">
 			<span class="code">{{ code }}</span>
 			<slot name="tag" />

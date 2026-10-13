@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, resolveComponent, watch } from 'vue';
-import { useRouter } from 'vue-router';
-import { useApi, useStores } from '@directus/extensions-sdk';
-import { buildPatch, formFields, saveErrors, versionChanged, type FieldDef } from '../editDrawer';
+import { useExplorerHost, type HostField } from '../host';
+import { buildPatch, formFields, saveErrors, versionChanged } from '../editDrawer';
 import { dataStudioRoute } from '../recordRoute';
 import { errorText } from '../format';
 import { useRequestGate } from '../composables/useRequestGate';
@@ -12,10 +11,9 @@ import { useRequestGate } from '../composables/useRequestGate';
 // geometry preview ...) work unchanged. The record is read and PATCHed through /items as the
 // signed-in user; only the changed fields are sent.
 //
-// Both v-form and the fields store are available to module extensions (checked against the
-// Directus source: components/register.ts registers VForm and VDrawer globally, and useSystem()
-// provides useFieldsStore through useStores()). If either is ever missing, the drawer does not
-// open and the page goes to the Data Studio form instead.
+// v-form is available to module extensions (checked against the Directus source: components/register.ts
+// registers VForm and VDrawer globally). If it is ever missing, the drawer does not open and the
+// page goes to the Data Studio form instead (through the host). The field definitions come from the host.
 const props = defineProps<{
 	modelValue: boolean;
 	collection: string;
@@ -26,12 +24,11 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: 'update:modelValue', open: boolean): void; (e: 'saved'): void }>();
 
-const api = useApi();
-const router = useRouter();
-const stores = useStores();
+const host = useExplorerHost();
+const api = host.api;
 const gate = useRequestGate();
 
-const formAvailable = typeof resolveComponent('v-form') !== 'string' && typeof stores.useFieldsStore === 'function';
+const formAvailable = typeof resolveComponent('v-form') !== 'string';
 
 const item = ref<Record<string, any> | null>(null);
 const edits = ref<Record<string, any>>({});
@@ -43,11 +40,8 @@ const saveError = ref<string[]>([]);
 const conflict = ref<{ loaded: number; current: number } | null>(null);
 const confirmDiscard = ref(false);
 
-const fields = computed<FieldDef[]>(() => {
-	if (!formAvailable) return [];
-	const all = stores.useFieldsStore().getFieldsForCollectionSorted(props.collection) as FieldDef[];
-	return formFields(all, item.value, props.hiddenFields);
-});
+// The form fields, from the host (the Directus app's fields store, or GET /fields), filled by load().
+const fields = ref<HostField[]>([]);
 const hasEdits = computed(() => buildPatch(edits.value) !== null);
 
 const endpoint = () => `/items/${props.collection}/${encodeURIComponent(props.primaryKey)}`;
@@ -55,6 +49,7 @@ const endpoint = () => `/items/${props.collection}/${encodeURIComponent(props.pr
 async function load() {
 	const token = gate.begin();
 	item.value = null;
+	fields.value = [];
 	edits.value = {};
 	loadError.value = '';
 	saveError.value = [];
@@ -63,7 +58,11 @@ async function load() {
 	try {
 		const res = await api.get(endpoint(), { params: { fields: ['*'] } });
 		if (!gate.isCurrent(token)) return;
-		item.value = res.data.data;
+		const loaded = res.data.data;
+		const defs = await host.fieldsFor(props.collection);
+		if (!gate.isCurrent(token)) return;
+		item.value = loaded;
+		fields.value = formFields(defs, loaded, props.hiddenFields);
 	} catch (e) {
 		if (gate.isCurrent(token)) loadError.value = `Could not load the record: ${errorText(e)}`;
 	} finally {
@@ -80,7 +79,7 @@ watch(
 		}
 		if (!formAvailable) {
 			emit('update:modelValue', false);
-			router.push(dataStudioRoute(props.collection, props.primaryKey));
+			host.openDataStudio(dataStudioRoute(props.collection, props.primaryKey));
 			return;
 		}
 		load();

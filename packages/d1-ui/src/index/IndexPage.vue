@@ -16,7 +16,9 @@ import { computed, inject, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { EXPLORER_HOST } from '../host';
 import type { ExplorerHost } from '../host';
+import { linkHref } from '../links';
 import { recordRoute } from '../recordRoute';
+import AppLink from '../components/AppLink.vue';
 import DataTable from '../components/DataTable.vue';
 import EditDrawer from '../components/EditDrawer.vue';
 import LoadState from '../components/LoadState.vue';
@@ -124,7 +126,7 @@ function onDrawer(open: boolean): void {
 // The record link in a row's first cell is a real <a>, so the browser's own link actions work
 // (open in a new tab, copy the address). A plain click goes through the host like every other
 // navigation; a modified click is left to the browser, and neither reaches the row's own handler.
-const rowHref = (row: Record<string, unknown>): string => router.resolve(recordRoute(props.def.collection, rowKey(row))).href;
+const rowHref = (row: Record<string, unknown>): string => linkHref(recordRoute(props.def.collection, rowKey(row)), router);
 function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
 	e.stopPropagation();
 	if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
@@ -174,7 +176,7 @@ const skeletonRows = Array.from({ length: 8 }, (_, i) => i);
 
 <template>
 	<PageShell>
-		<nav class="d1-crumbs"><router-link to="/home">Home</router-link><span>›</span><span>{{ def.title }}</span></nav>
+		<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ def.title }}</span></nav>
 
 		<NotVisible v-if="forbidden" :what="`${def.title.toLowerCase()} list`" />
 

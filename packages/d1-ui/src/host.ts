@@ -12,7 +12,7 @@ export interface HostRequestConfig {
 export interface HostResponse {
 	data: any;
 }
-// Axios-shaped on purpose: Directus's useApi() is axios, and so is STARbase's client, so a failed
+// Axios-shaped on purpose: Directus's own API client is axios, and so is STARbase's client, so a failed
 // request rejects the same way in both (e.response.status, which errorText/isForbidden read).
 export interface HostApi {
 	get(path: string, config?: HostRequestConfig): Promise<HostResponse>;

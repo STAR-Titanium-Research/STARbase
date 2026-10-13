@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppLink from './AppLink.vue';
 import { computed, ref } from 'vue';
 import HiddenLink from './HiddenLink.vue';
 import { capList, visibleFacts, type Fact } from '../record/facts';
@@ -33,7 +34,7 @@ const listed = (f: Fact) => capList(f.list ?? [], expanded.value.has(f.label) ? 
 			<span v-if="f.list?.length" class="value items">
 				<template v-for="(item, i) in listed(f).shown" :key="i">
 					<HiddenLink v-if="item.hidden" :label="item.label" />
-					<router-link v-else-if="item.to" :to="item.to" class="link">{{ item.label }}</router-link>
+					<AppLink v-else-if="item.to" :to="item.to" class="link">{{ item.label }}</AppLink>
 					<span v-else>{{ item.label }}</span>
 				</template>
 				<button v-if="listed(f).more > 0" type="button" class="more" aria-expanded="false" @click="toggle(f.label)">{{ listed(f).more }} more</button>
@@ -44,7 +45,7 @@ const listed = (f: Fact) => capList(f.list ?? [], expanded.value.has(f.label) ? 
 					<HiddenLink v-if="text(f.value)" :label="text(f.value)" />
 					<span v-else class="not-visible">not visible to you</span>
 				</template>
-				<router-link v-else-if="f.to" :to="f.to" class="link">{{ text(f.value) }}</router-link>
+				<AppLink v-else-if="f.to" :to="f.to" class="link">{{ text(f.value) }}</AppLink>
 				<a v-else-if="f.anchor" :href="`#${f.anchor}`" class="link" @click="scrollToSection(f.anchor, $event)">{{ text(f.value) }}</a>
 				<template v-else>{{ text(f.value) }}</template>
 				<span v-if="f.unit && !f.hidden" class="unit">{{ f.unit }}</span>
