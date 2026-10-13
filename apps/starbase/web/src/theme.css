@@ -1,0 +1,65 @@
+/* The Directus theme variables the shared pages read (--theme--*), outside Directus. Light is the lab's
+   "Directus Color Match" on the project colour #18222F, dark is "Directus Default" (values from
+   @directus/themes and the lab's directus_settings). STARbase follows the system scheme; color-scheme
+   lets the kit's light-dark() choose. Every variable used is checked by themeVars.test.ts. */
+:root {
+	color-scheme: light dark;
+	--project-color: #18222f;
+	--theme--primary: #18222f;
+	--theme--primary-background: color-mix(in srgb, var(--theme--background), var(--theme--primary) 10%);
+	--theme--primary-foreground: #ffffff;
+	--theme--secondary: #ff99dd;
+	--theme--success: #2ecda7;
+	--theme--warning: #ffa439;
+	--theme--danger: #e35169;
+	--theme--danger-background: color-mix(in srgb, var(--theme--background), var(--theme--danger) 10%);
+	--theme--foreground: color-mix(in srgb, #000000, #18222f 70%);
+	--theme--foreground-subdued: color-mix(in srgb, #ffffff, #18222f 60%);
+	--theme--foreground-inverted: #ffffff;
+	--theme--background: color-mix(in srgb, #ffffff, #18222f 7%);
+	--theme--background-normal: color-mix(in srgb, #ffffff, #18222f 15%);
+	--theme--background-subdued: color-mix(in srgb, #ffffff, #18222f 10%);
+	--theme--background-accent: color-mix(in srgb, #ffffff, #18222f 20%);
+	--theme--border-color: color-mix(in srgb, #ffffff, #18222f 20%);
+	--theme--border-color-subdued: color-mix(in srgb, #ffffff, #18222f 15%);
+	--theme--border-radius: 8px;
+	--theme--form--field--input--background: #ffffff;
+	--theme--form--field--input--border-color: var(--theme--border-color);
+	--theme--fonts--sans--font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	--theme--fonts--monospace--font-family: 'Fira Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
+	--theme--navigation--list--foreground: var(--theme--foreground);
+	--theme--navigation--list--font-family: var(--theme--fonts--sans--font-family);
+	--theme--navigation--list--background-hover: var(--theme--background-normal);
+	--theme--navigation--list--background-active: var(--theme--background-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--theme--primary: #18222f;
+		--theme--primary-background: color-mix(in srgb, var(--theme--background), var(--theme--primary) 10%);
+		--theme--primary-foreground: #ffffff;
+		--theme--secondary: #ff99dd;
+		--theme--success: #2ecda7;
+		--theme--warning: #ffa439;
+		--theme--danger: #e35169;
+		--theme--danger-background: color-mix(in srgb, var(--theme--background), var(--theme--danger) 10%);
+		--theme--foreground: #c9d1d9;
+		--theme--foreground-subdued: #666672;
+		--theme--foreground-inverted: #ffffff;
+		--theme--background: #0d1117;
+		--theme--background-normal: #21262e;
+		--theme--background-subdued: #161b22;
+		--theme--background-accent: #30363d;
+		--theme--border-color: #21262e;
+		--theme--border-color-subdued: #21262d;
+		--theme--border-radius: 8px;
+		--theme--form--field--input--background: #161b22;
+		--theme--form--field--input--border-color: #30363d;
+		--theme--fonts--sans--font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+		--theme--fonts--monospace--font-family: 'Fira Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
+		--theme--navigation--list--foreground: var(--theme--foreground);
+		--theme--navigation--list--font-family: var(--theme--fonts--sans--font-family);
+		--theme--navigation--list--background-hover: var(--theme--background-normal);
+		--theme--navigation--list--background-active: var(--theme--background-accent);
+	}
+}
