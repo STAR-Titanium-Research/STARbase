@@ -1,17 +1,19 @@
 import { defineModule } from '@directus/extensions-sdk';
-import HomeView from './home.vue';
-import RegisterSample from './register-sample.vue';
-import PeopleView from './people.vue';
-import SamplePage from './pages/SamplePage.vue';
-import CampaignPage from './pages/CampaignPage.vue';
-import ProjectsIndex from './pages/ProjectsIndex.vue';
-import ProjectPage from './pages/ProjectPage.vue';
-import OperationPage from './pages/OperationPage.vue';
-import TestPage from './pages/TestPage.vue';
-import LabelsPage from './pages/LabelsPage.vue';
-import IndexRoute from './pages/IndexRoute.vue';
+import {
+	HomeView,
+	RegisterSample,
+	PeopleView,
+	SamplePage,
+	CampaignPage,
+	ProjectsIndex,
+	ProjectPage,
+	OperationPage,
+	TestPage,
+	LabelsPage,
+	IndexRoute,
+	installUsagePings,
+} from '@d1/starbase-pages';
 import { installDirectusHost } from '@d1/directus-host';
-import { installUsagePings } from './usagePing';
 
 installDirectusHost({ onCreate: (host, router) => installUsagePings(router, host.api) });
 

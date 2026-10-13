@@ -1,0 +1,12 @@
+export { default as HomeView } from './home.vue';
+export { default as RegisterSample } from './register-sample.vue';
+export { default as PeopleView } from './people.vue';
+export { default as SamplePage } from './pages/SamplePage.vue';
+export { default as CampaignPage } from './pages/CampaignPage.vue';
+export { default as ProjectsIndex } from './pages/ProjectsIndex.vue';
+export { default as ProjectPage } from './pages/ProjectPage.vue';
+export { default as OperationPage } from './pages/OperationPage.vue';
+export { default as TestPage } from './pages/TestPage.vue';
+export { default as LabelsPage } from './pages/LabelsPage.vue';
+export { default as IndexRoute } from './pages/IndexRoute.vue';
+export { installUsagePings, pingVisit } from './usagePing';
