@@ -2,8 +2,9 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
+	AppLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
 	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
+	pinTargetForRecord,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
 import CampaignCards from './projects/CampaignCards.vue';
@@ -49,6 +50,8 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 	tests: rows(looseTests.value),
 	equipment: equipment.value.loading ? null : equipment.value.data.length,
 }));
+
+const pin = computed(() => pinTargetForRecord('projects', props.id));
 </script>
 
 <template>
@@ -68,6 +71,8 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 						<span>›</span>
 						<AppLink to="/home/projects">Projects</AppLink>
 					</template>
+
+					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail kind="Project" :code="code" :title="project.project_name" :facts="railFacts" :contents="contents">

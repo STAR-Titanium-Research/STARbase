@@ -115,3 +115,8 @@ export function linkHref(path: string, router: { resolve(to: string): { href: st
 	const r = resolveLink(path);
 	return r.kind === 'route' ? router.resolve(r.to).href : r.href;
 }
+
+// "Open in new tab" for a link written as a Directus app path: the same address linkHref gives.
+export function openLinkInNewTab(path: string, router: { resolve(to: string): { href: string } }): void {
+	window.open(linkHref(path, router), '_blank', 'noopener');
+}

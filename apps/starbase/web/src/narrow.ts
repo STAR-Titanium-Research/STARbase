@@ -17,3 +17,14 @@ export function useNarrow(): Ref<boolean> {
 	onBeforeUnmount(() => mq?.removeEventListener('change', onChange));
 	return narrow;
 }
+
+// The window's inner width, live (the shell's sidebar layout is a function of it, see shellLayout.ts).
+export function useWindowWidth(): Ref<number> {
+	const width = ref(typeof window !== 'undefined' ? window.innerWidth : 1280);
+	const onResize = () => (width.value = window.innerWidth);
+	if (typeof window !== 'undefined') window.addEventListener('resize', onResize);
+	onBeforeUnmount(() => {
+		if (typeof window !== 'undefined') window.removeEventListener('resize', onResize);
+	});
+	return width;
+}

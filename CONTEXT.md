@@ -18,7 +18,7 @@ STARbase's landing page: the lab view for everyone, and the admin overview for a
 
 **Index page**:
 A STARbase page that lists the records of one kind, with search and a few fixed filters.
-_Avoid_: list view, collection page
+_Avoid_: list view, collection page, list
 
 **Record page**:
 A STARbase page about a single Project, Campaign, Sample, Operation or Test.
@@ -48,6 +48,37 @@ STARbase lives. Everything printed or linked from the database side uses one, so
 never breaks it.
 _Avoid_: permalink, QR link, deep link
 
+### Navigation
+
+**Page**:
+Any STARbase destination a person can go to: Home, an index page, a record page, a task screen or a
+plotter.
+_Avoid_: route, slug, module, link
+
+**Saved view**:
+An index page with a named, saved filter, search and layout, owned by one person or shared with their
+role or the whole group.
+_Avoid_: bookmark, preset, filter
+
+**Pin**:
+A person's own shortcut to an index page, saved view, task screen, plotter or record, kept in the order
+they choose. There is one pin per thing per person: pinning it on Home and in the sidebar is the same act.
+_Avoid_: favourite, star, bookmark
+
+**Section**:
+One of the sidebar's top-level groups of pages: Records, Analysis, Inventory, Reference, More.
+_Avoid_: module, tab, category
+
+**Inventory**:
+The section for the physical things the lab holds and uses up: tools, tool boxes, cutting inserts, insert
+edges, raw stock lots.
+_Avoid_: Kit, stock
+
+**Reference**:
+The section for the lab's reference data that records point to: equipment, materials, machine operators,
+insert types, ISO classes, methods, manufacturers, facilities, prep recipes, etchants, FAST recipes.
+_Avoid_: Resources, lookups, master data, Kit
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
@@ -56,8 +87,17 @@ _Avoid_: permalink, QR link, deep link
 - The **Force plotter** in **STARbase** and the one in the **Force App** are the same component.
 - Report QR codes, label redirects and the **Force App** reach **STARbase** through a **permanent link**.
 
+- A **saved view** belongs to exactly one **index page**.
+- A **pin** points at one page, saved view or record. A pin to something the person can no longer see
+  is kept but not shown.
+
 ## Flagged ambiguities
 
 - "The frontend", "the head" and "the Explorer" were all used for this app; "Home" was used both
   for the landing page and for the whole Directus module that once hosted the app. Resolved: the
   app is **STARbase** ("Explorer" was its working name), and **Home** is only its landing page.
+- "Kit" grouped both consumables and reference data, and "Tools" was both a sidebar section and an
+  inventory index page. Resolved: the sections are **Inventory** and **Reference**, and the old "Tools"
+  section is **More**.
+- Pins on Home ("Frequently used") and pins in the sidebar were heading towards two different ideas.
+  Resolved: one **pin**.

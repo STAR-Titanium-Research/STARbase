@@ -3,9 +3,10 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, openLink, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
+	AppLink, openLink, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
 	buildLife, dataStudioRoute, detailFacts, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleRailFacts, truncatedNotes,
 	type ContentsEntry,
+	pinTargetForRecord,
 } from '@d1/ui';
 import { dimsText } from '../geometry';
 import { useSampleData } from './sample/useSampleData';
@@ -63,6 +64,8 @@ const contents = computed<ContentsEntry[]>(() => [
 // Print label is an app page: the labels page, with this sample preselected.
 const labelsTo = computed(() => `/home/labels?ids=${encodeURIComponent(props.id)}`);
 const openReportPage = () => openLink(`/d1-report/sample/${encodeURIComponent(props.id)}`, router);
+
+const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 </script>
 
 <template>
@@ -94,6 +97,8 @@ const openReportPage = () => openLink(`/d1-report/sample/${encodeURIComponent(pr
 							<span>›</span><HiddenLink :label="campaignRows.hidden === 1 ? 'Campaign' : `${campaignRows.hidden} campaigns`" />
 						</template>
 					</template>
+
+					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail :kind="sampleKind(sample)" :code="code" :title="sample.nickname" :facts="railFacts" :contents="contents">

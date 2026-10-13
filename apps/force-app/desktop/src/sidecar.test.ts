@@ -1,5 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { isPortFree } from './port';
 import { SidecarSupervisor, type SidecarState } from './sidecar';
 
 const FIXTURE = path.join(__dirname, '__fixtures__', 'fake-backend.js');
@@ -9,9 +13,35 @@ async function waitFor(cond: () => boolean, timeoutMs: number): Promise<void> {
   while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
 }
 
-function freePort(): number {
-  // Test-only: a high random port. Real probing is covered by port.test.ts.
-  return 39000 + Math.floor(Math.random() * 5000);
+// Fixture ports come from below every OS's ephemeral range (Linux 32768+, Windows and macOS
+// 49152+). The old random pick from 39000-44000 sat inside Linux's, where the OS hands ports out to
+// outgoing connections, these tests' own health checks included: on CI the fixture now and then
+// found its port taken and died at listen() with EADDRINUSE. No port is given out twice in a run,
+// and each is checked bindable on the fixture's own address, which also skips Windows' reserved ranges.
+const PORT_BASE = 20000;
+const PORT_SPAN = 10000;
+let nextPort = PORT_BASE + Math.floor(Math.random() * PORT_SPAN);
+
+async function freePort(): Promise<number> {
+  for (let tries = 0; tries < 100; tries++) {
+    const port = nextPort;
+    nextPort = PORT_BASE + ((nextPort - PORT_BASE + 1) % PORT_SPAN);
+    if (await isPortFree(port, '127.0.0.1')) return port;
+  }
+  throw new Error('no free fixture port');
+}
+
+/** Supervisor options pointing at a fixture backend of the test's own: its port, its args, and a
+ * health URL with a token only that process answers to, so 'ready' can never come from some other
+ * process holding the port. */
+async function backend(...extraArgs: string[]) {
+  const port = await freePort();
+  const token = randomUUID();
+  return {
+    port,
+    args: [FIXTURE, String(port), `--token=${token}`, ...extraArgs],
+    healthUrl: `http://127.0.0.1:${port}/health/${token}`,
+  };
 }
 
 describe('SidecarSupervisor', () => {
@@ -19,16 +49,14 @@ describe('SidecarSupervisor', () => {
 
   afterEach(async () => {
     await sup?.stop();
+    sup = undefined;
   });
 
   it('reaches ready once the fixture backend answers /health', async () => {
-    const port = freePort();
     const states: SidecarState[] = [];
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port)],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend()),
       readyTimeoutMs: 5000,
       onStateChange: (s) => states.push(s),
     });
@@ -39,12 +67,9 @@ describe('SidecarSupervisor', () => {
   });
 
   it('reports crashed if the process never becomes healthy in time', async () => {
-    const port = freePort();
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port), '--delay=999999'],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend('--delay=999999')),
       readyTimeoutMs: 1000,
       maxRestarts: 0,
     });
@@ -53,13 +78,10 @@ describe('SidecarSupervisor', () => {
   });
 
   it('restarts with backoff after the process dies, then gives up after maxRestarts', async () => {
-    const port = freePort();
     const states: SidecarState[] = [];
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port)],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend()),
       readyTimeoutMs: 5000,
       maxRestarts: 1,
       onStateChange: (s) => states.push(s),
@@ -81,12 +103,9 @@ describe('SidecarSupervisor', () => {
   }, 15000);
 
   it('restart() replaces a running backend with a new process and ends ready (R11)', async () => {
-    const port = freePort();
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port)],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend()),
       readyTimeoutMs: 5000,
     });
     await sup.start();
@@ -98,12 +117,9 @@ describe('SidecarSupervisor', () => {
   }, 15000);
 
   it('restart() while a crash restart is waiting out its backoff leaves exactly one backend (R11)', async () => {
-    const port = freePort();
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port)],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend()),
       readyTimeoutMs: 5000,
     });
     await sup.start();
@@ -122,19 +138,17 @@ describe('SidecarSupervisor', () => {
   // stop() kills the tree with Windows `taskkill` (killTree), so this only means anything on
   // Windows. It runs in force-app-release.yml (windows-latest); the Linux CI job skips it.
   it.skipIf(process.platform !== 'win32')('stop() terminates the process so a later health request fails', async () => {
-    const port = freePort();
+    const b = await backend();
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port)],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...b,
       readyTimeoutMs: 5000,
     });
     await sup.start();
     expect(sup.getState()).toBe('ready');
     await sup.stop();
     await expect(
-      fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) }),
+      fetch(b.healthUrl, { signal: AbortSignal.timeout(500) }),
     ).rejects.toThrow();
   });
 
@@ -142,32 +156,27 @@ describe('SidecarSupervisor', () => {
     // Each request writes 2 KB to stdout synchronously, as uvicorn's access log does. 300 of
     // them is ~600 KB, far past a pipe's OS buffer — so this hangs at the first write that finds
     // the pipe full unless the supervisor drains stdout.
-    const port = freePort();
+    const b = await backend('--chatty=2048');
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port), '--chatty=2048'],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...b,
       readyTimeoutMs: 5000,
     });
     await sup.start();
     expect(sup.getState()).toBe('ready');
     for (let i = 0; i < 300; i++) {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(b.healthUrl, { signal: AbortSignal.timeout(2000) });
       expect(res.ok).toBe(true);
       await res.text();
     }
   }, 30000);
 
   it('restarts a backend that stays up but stops answering /health (#106)', async () => {
-    const port = freePort();
     const states: SidecarState[] = [];
     sup = new SidecarSupervisor({
       exePath: process.execPath,
       // Wedges its event loop 1 s after starting: the process is alive, so no exit ever fires.
-      args: [FIXTURE, String(port), '--hang-after=1000'],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend('--hang-after=1000')),
       readyTimeoutMs: 5000,
       livenessIntervalMs: 200,
       livenessTimeoutMs: 200,
@@ -184,12 +193,9 @@ describe('SidecarSupervisor', () => {
   }, 15000);
 
   it('does not restart a healthy backend', async () => {
-    const port = freePort();
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port)],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend()),
       readyTimeoutMs: 5000,
       livenessIntervalMs: 100,
       livenessTimeoutMs: 500,
@@ -202,15 +208,12 @@ describe('SidecarSupervisor', () => {
   });
 
   it('forgives restarts once the backend has stayed up for the stable window', async () => {
-    const port = freePort();
     const states: SidecarState[] = [];
     sup = new SidecarSupervisor({
       exePath: process.execPath,
       // Hangs 1.5 s into every life. With maxRestarts 1 a second hang would be the give-up state
       // unless the first restart had been forgiven in between.
-      args: [FIXTURE, String(port), '--hang-after=1500'],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend('--hang-after=1500')),
       readyTimeoutMs: 5000,
       maxRestarts: 1,
       livenessIntervalMs: 100,
@@ -226,12 +229,9 @@ describe('SidecarSupervisor', () => {
 
   // Review 2.9: a backend that dies while starting.
   it('fails fast when the process exits during startup instead of waiting out the timeout', async () => {
-    const port = freePort();
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port), '--delay=999999', '--exit-after=100'],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend('--delay=999999', '--exit-after=100')),
       readyTimeoutMs: 15_000,
       maxRestarts: 0,
     });
@@ -243,13 +243,10 @@ describe('SidecarSupervisor', () => {
   });
 
   it('start() settles only after the restarts, and reports the failure once', async () => {
-    const port = freePort();
     const states: SidecarState[] = [];
     sup = new SidecarSupervisor({
       exePath: process.execPath,
-      args: [FIXTURE, String(port), '--delay=999999', '--exit-after=100'],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      ...(await backend('--delay=999999', '--exit-after=100')),
       readyTimeoutMs: 1500,
       maxRestarts: 1,
       onStateChange: (s) => states.push(s),
@@ -265,21 +262,22 @@ describe('SidecarSupervisor', () => {
   });
 
   it('a startup that dies once and then comes up ends ready, awaited by start()', async () => {
-    const port = freePort();
     // First launch dies at once; the supervisor's restart uses the same args, so make the first
-    // process the only one that exits: it exits only if the port is still unbound by anything else.
-    const marker = path.join(require('node:os').tmpdir(), `fb-${port}.once`);
-    sup = new SidecarSupervisor({
-      exePath: process.execPath,
-      args: [FIXTURE, String(port), `--exit-once=${marker}`],
-      port,
-      healthUrl: `http://127.0.0.1:${port}/health`,
-      readyTimeoutMs: 5000,
-      maxRestarts: 2,
-    });
-    await sup.start();
-    expect(sup.getState()).toBe('ready');
-    expect(sup.getRestartCount()).toBe(1);
-    require('node:fs').rmSync(marker, { force: true });
+    // process the only one that exits: it leaves a marker file that later launches find. The marker
+    // lives in a fresh directory, so a leftover from an earlier, aborted run can never be found.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-'));
+    try {
+      sup = new SidecarSupervisor({
+        exePath: process.execPath,
+        ...(await backend(`--exit-once=${path.join(dir, 'once')}`)),
+        readyTimeoutMs: 5000,
+        maxRestarts: 2,
+      });
+      await sup.start();
+      expect(sup.getState()).toBe('ready');
+      expect(sup.getRestartCount()).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

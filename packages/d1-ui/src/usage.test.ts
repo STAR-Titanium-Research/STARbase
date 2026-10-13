@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { INDEX_DEFS } from './index/indexConfig';
 import {
 	DISMISSED_KEY, PAGES, PAGE_KEYS, RECORD_COLLECTIONS, SUGGESTED_PAGES, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget,
-	pinEntry, readDismissed, recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, revertPin, routeTarget, splitRecordTarget,
-	suggestedPageEntries, withoutDismissed, writeDismissed, type UsageEntry,
+	readDismissed, recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget,
+	suggestedPageEntries, withoutDismissed, withoutPinned, writeDismissed, type UsageEntry,
 } from './usage';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -265,34 +265,29 @@ describe('records', () => {
 	});
 });
 
-describe('list changes revert one entry, never the whole list', () => {
-	const e = (target: string, pinned = false): UsageEntry => ({ target, label: target, to: '/x', pinned });
-	const names = (l: UsageEntry[]) => l.map((x) => `${x.target}${x.pinned ? '*' : ''}`);
+describe('list changes', () => {
+	const e = (target: string): UsageEntry => ({ target, label: target, to: '/x', pinned: false });
+	const names = (l: UsageEntry[]) => l.map((x) => x.target);
 
-	it('pinEntry pins in place, adds a suggestion as a real entry, and sorts pinned first', () => {
-		expect(names(pinEntry([e('a'), e('b')], e('b'), true))).toEqual(['b*', 'a']);
-		const added = pinEntry([e('a')], { ...e('s'), suggested: true }, true);
-		expect(names(added)).toEqual(['s*', 'a']);
-		expect(added[0].suggested).toBeUndefined();
+	it('withoutPinned drops the pinned entries of that kind, keeps the order, and does not mix kinds', () => {
+		const pinned = new Set(['page:b', 'record:c']);
+		const isPinned = (p: { kind: string; target: string }) => pinned.has(`${p.kind}:${p.target}`);
+		expect(names(withoutPinned([e('a'), e('b'), e('c')], 'page', isPinned))).toEqual(['a', 'c']);
+		expect(names(withoutPinned([e('a'), e('b'), e('c')], 'record', isPinned))).toEqual(['a', 'b']);
+		// The pin is undone (a failed save): the same call brings the entry back in its place.
+		pinned.clear();
+		expect(names(withoutPinned([e('a'), e('b'), e('c')], 'page', isPinned))).toEqual(['a', 'b', 'c']);
 	});
 
-	it('a failed pin of A does not bring back a hidden B', () => {
-		const before = [e('a'), e('b')];
-		const afterPin = pinEntry(before, e('a'), true);
-		const { list: afterHide } = removeEntry(afterPin, 'b');
-		expect(names(revertPin(afterHide, 'a', e('a')))).toEqual(['a']);
+	it('withoutPinned ignores the vestigial pinned field of an entry', () => {
+		const lit = { ...e('a'), pinned: true };
+		expect(names(withoutPinned([lit, e('b')], 'page', () => false))).toEqual(['a', 'b']);
 	});
 
-	it('reverting a pin that added a suggestion removes it; one already hidden stays hidden', () => {
-		expect(names(revertPin([e('s', true), e('a')], 's', null))).toEqual(['a']);
-		expect(names(revertPin([e('a')], 'gone', e('gone')))).toEqual(['a']);
-	});
-
-	it('a failed hide of A restores only A, and leaves a later pin of C alone', () => {
+	it('a failed hide of A restores only A, at its old place', () => {
 		const { list, index } = removeEntry([e('a'), e('b'), e('c')], 'a');
 		expect(index).toBe(0);
-		const later = pinEntry(list, e('c'), true);
-		expect(names(restoreEntry(later, e('a'), index))).toEqual(['c*', 'a', 'b']);
+		expect(names(restoreEntry(list, e('a'), index))).toEqual(['a', 'b', 'c']);
 	});
 
 	it('restoreEntry clamps the place and does not duplicate', () => {

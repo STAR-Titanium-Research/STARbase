@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NAV_ICONS } from './navIcons';
 import { BOOKMARK_VISIBILITY_FILTER, NAV_GROUPS, bookmarkVisibleToUser, buildNav, linkForBookmark, pickBookmarkId } from './navConfig';
 import type { Bookmark } from './navConfig';
 
@@ -14,25 +15,31 @@ const labels = (nav: ReturnType<typeof buildNav>, id: string) => nav.groups.find
 
 describe('NAV_GROUPS', () => {
 	it('has the groups of the spec in order', () => {
-		expect(NAV_GROUPS.map((g) => g.id)).toEqual(['main', 'dashboards', 'records', 'inventory', 'resources', 'tools']);
-		expect(NAV_GROUPS.map((g) => g.collapsible)).toEqual([false, false, false, true, true, false]);
+		expect(NAV_GROUPS.map((g) => g.id)).toEqual(['main', 'records', 'analysis', 'inventory', 'reference', 'more', 'admin']);
+		expect(NAV_GROUPS.map((g) => g.collapsible)).toEqual([false, false, false, true, true, false, false]);
 		expect(NAV_GROUPS[0].label).toBeNull();
 	});
 
 	it('has the link labels and routes of the spec in order', () => {
 		const flat = (id: string) => NAV_GROUPS.find((g) => g.id === id)!.links.map((l) => [l.label, l.to]);
 		expect(flat('main')).toEqual([['Home', '/home']]);
-		expect(flat('dashboards')).toEqual([['Force', '/d1-force-dashboard'], ['FAST', '/d1-fast-dashboard']]);
+		expect(flat('analysis')).toEqual([['Force plotter', '/d1-force-dashboard'], ['FAST plotter', '/d1-fast-dashboard']]);
 		expect(flat('records').map(([l]) => l)).toEqual(['Projects', 'Campaigns', 'Samples', 'Operations', 'Tests', 'People']);
 		expect(flat('records')[0]).toEqual(['Projects', '/home/projects']);
 		expect(flat('inventory').map(([l]) => l)).toEqual(['Tools', 'Tool boxes', 'Cutting inserts', 'Insert edges', 'Raw stock lots']);
-		expect(flat('resources').map(([l]) => l)).toEqual([
+		expect(flat('reference').map(([l]) => l)).toEqual([
 			'Equipment', 'Materials', 'Machine operators', 'Insert types', 'ISO classes', 'Methods', 'Manufacturers', 'Facilities',
 			'Prep recipes', 'Etchants', 'FAST recipes',
 		]);
-		expect(flat('tools')).toEqual([
-			['Print labels', '/home/labels'], ['Report a bug', '/report-bug'], ['Data Studio', '/content'], ['Force Crawler', '/d1-force-crawler'],
-		]);
+		expect(flat('more')).toEqual([['Print labels', '/home/labels'], ['Report a bug', '/report-bug'], ['Settings', '/home/settings']]);
+		expect(flat('admin')).toEqual([['Data Studio', '/content'], ['Force Crawler', '/d1-force-crawler']]);
+	});
+
+	it('gives every link an icon that NAV_ICONS has', () => {
+		for (const l of NAV_GROUPS.flatMap((g) => g.links)) {
+			expect(l.icon, l.label).toBeTruthy();
+			expect(Object.keys(NAV_ICONS), l.label).toContain(l.icon);
+		}
 	});
 
 	it('opens no link in a new tab and marks only Force Crawler admin-only', () => {
@@ -60,21 +67,22 @@ describe('buildNav', () => {
 		const nav = buildNav(memberCollections, [], false);
 		const all = nav.groups.flatMap((g) => g.links.map((l) => l.label));
 		for (const gone of ['Etchants', 'Prep recipes', 'Machine operators', 'Force Crawler']) expect(all).not.toContain(gone);
-		expect(labels(nav, 'resources')).toHaveLength(8);
+		expect(labels(nav, 'reference')).toHaveLength(8);
 		expect(all).toContain('Samples');
 	});
 
 	it('keeps only the entries without a collection when /collections failed', () => {
 		const nav = buildNav(null, [bm(1, 'View', 'physical_samples')], false);
-		expect(nav.groups.map((g) => g.id)).toEqual(['main', 'dashboards', 'tools']);
+		expect(nav.groups.map((g) => g.id)).toEqual(['main', 'analysis', 'more', 'admin']);
 		expect(labels(nav, 'main')).toEqual(['Home']);
-		expect(labels(nav, 'dashboards')).toEqual(['Force', 'FAST']);
-		expect(labels(nav, 'tools')).toEqual(['Print labels', 'Report a bug', 'Data Studio']);
+		expect(labels(nav, 'analysis')).toEqual(['Force plotter', 'FAST plotter']);
+		expect(labels(nav, 'more')).toEqual(['Print labels', 'Report a bug', 'Settings']);
+		expect(labels(nav, 'admin')).toEqual(['Data Studio']);
 	});
 
 	it('shows Force Crawler to admins only', () => {
-		expect(labels(buildNav(null, [], true), 'tools')).toContain('Force Crawler');
-		expect(labels(buildNav(null, [], false), 'tools')).not.toContain('Force Crawler');
+		expect(labels(buildNav(null, [], true), 'admin')).toContain('Force Crawler');
+		expect(labels(buildNav(null, [], false), 'admin')).not.toContain('Force Crawler');
 	});
 
 	it('drops a group left with no visible entry', () => {
@@ -82,7 +90,7 @@ describe('buildNav', () => {
 		for (const c of ['tools', 'tool_boxes', 'cutting_inserts', 'insert_edges', 'raw_stock_lots']) noInventory.delete(c);
 		const nav = buildNav(noInventory, [], true);
 		expect(nav.groups.map((g) => g.id)).not.toContain('inventory');
-		expect(nav.groups.map((g) => g.id)).toContain('resources');
+		expect(nav.groups.map((g) => g.id)).toContain('reference');
 	});
 
 	it('nests bookmarks under their collection: global, then role, then own, A-Z in each', () => {
