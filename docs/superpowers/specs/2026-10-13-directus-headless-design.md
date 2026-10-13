@@ -127,6 +127,13 @@ Rules:
 - These links are always external links in a new tab.
 - `links.test.ts` pins this.
 
+### 5.4a Access-notification emails (`d1-record-access`, from A1a / PR #259)
+- `recordLink()` in `core/extensions/d1-record-access/index.js` links to
+  `${PUBLIC_URL}/d1-links/go/r/<collection>/<id>`. Today it uses `STARBASE_URL`, with an
+  `/admin/home` fallback.
+- This is a one-line change. Whichever of #259 and phase 1 merges second makes it (agreed with the
+  A1a session, 2026-10-13).
+
 ### 5.5 Remove the three modules
 - Delete `core/extensions/d1-home`, `d1-force-dashboard` and `d1-fast-dashboard`.
 - Remove them from the root `package.json` workspaces and from the `build:extension` and
