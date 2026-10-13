@@ -654,6 +654,10 @@ test('roleLabel and recordLink', () => {
   assert.equal(recordLink(undefined, 'physical_samples', SAMPLE), null);
   assert.equal(recordLink('https://lab.example/', 'physical_samples', SAMPLE), `https://lab.example/admin/home/samples/${SAMPLE}`);
   assert.equal(recordLink('https://lab.example//', 'projects', 'a b'), 'https://lab.example/admin/home/projects/a%20b');
+  // STARbase wins when set; it serves the pages at its root
+  assert.equal(recordLink('https://lab.example', 'physical_samples', SAMPLE, 'https://starbase.example/'), `https://starbase.example/samples/${SAMPLE}`);
+  assert.equal(recordLink('', 'projects', 'a b', 'https://starbase.example'), 'https://starbase.example/projects/a%20b');
+  assert.equal(recordLink('', 'samples_x', ID(1), 'https://starbase.example'), null);
 });
 
 test('the link map is the five STARbase page routes, and recordRoute\'s', () => {
@@ -938,7 +942,7 @@ test('without PUBLIC_URL: one warning at startup, and the mail carries no link',
   const noUrl = baseTables();
   noUrl.sample_readers.push({ record_id: SAMPLE, user_id: U.co });
   const none = mount({ env: {}, tables: noUrl });
-  assert.equal(none.warnings.filter((w) => /PUBLIC_URL is not set/.test(w)).length, 1);
+  assert.equal(none.warnings.filter((w) => /STARBASE_URL nor PUBLIC_URL is set/.test(w)).length, 1);
   const r = await add(none.handlers, { person_id: P.co, role: 'view' });
   assert.equal(r.body.email, 'sent');
   assert.ok(!/admin\/home/.test(none.calls.mail.sent[0].text) && !none.calls.mail.sent[0].html.includes('<a '));

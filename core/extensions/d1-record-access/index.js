@@ -113,13 +113,17 @@ export function roleLabel(collection, role, source = 'access') {
 
 const ownerLabel = (collection) => (collection === 'projects' ? 'Principal investigator' : 'Owner');
 
-// The Explorer page of a record, as the d1-home routes spell it (a test in this folder pins the map against them).
-export function recordLink(publicUrl, collection, id) {
+// The Explorer page of a record (a test in this folder pins the segment map against the starbase-pages routes).
+// STARbase (STARBASE_URL) serves the pages at its root; without it, Directus's Explorer module under /admin/home.
+export function recordLink(publicUrl, collection, id, starbaseUrl) {
   const segment = isCollection(collection) ? COLLECTIONS[collection].segment : null;
+  if (!segment) return null;
+  const tail = `${segment}/${encodeURIComponent(String(id))}`;
+  const starbase = String(starbaseUrl ?? '').trim().replace(/\/+$/, '');
+  if (starbase) return `${starbase}/${tail}`;
   const base = String(publicUrl ?? '').trim().replace(/\/+$/, '');
-  // no PUBLIC_URL: no link (a relative one is useless in an email)
-  if (!segment || !base) return null;
-  return `${base}/admin/home/${segment}/${encodeURIComponent(String(id))}`;
+  // neither set: no link (a relative one is useless in an email)
+  return base ? `${base}/admin/home/${tail}` : null;
 }
 
 const escapeHtml = (value) =>
@@ -217,7 +221,7 @@ export default {
     const { database, logger, services, env } = context;
     // logger methods must be called ON the logger (pino reads this), never detached
     const warn = (message) => logger?.warn?.(`${SOURCE}: ${message}`);
-    if (!trimmed(env?.PUBLIC_URL)) warn('PUBLIC_URL is not set: notification emails will carry no link to the record');
+    if (!trimmed(env?.PUBLIC_URL) && !trimmed(env?.STARBASE_URL)) warn('Neither STARBASE_URL nor PUBLIC_URL is set: notification emails will carry no link to the record');
 
     const sendError = (res, err) => {
       const status = err instanceof HttpError ? err.status : 500;
@@ -455,7 +459,7 @@ export default {
         const stop = blocked === undefined ? await blockedFor(database, cfg, id, record, person, acc) : blocked;
         const content = mailContent({
           adder: name, role, kind: cfg.kind, code: firstOf(record, cfg.code), title: firstOf(record, cfg.title) !== firstOf(record, cfg.code) ? firstOf(record, cfg.title) : null,
-          link: recordLink(env?.PUBLIC_URL, cfg.collection, id), transfer, blockedReason: stop?.reason ?? null,
+          link: recordLink(env?.PUBLIC_URL, cfg.collection, id, env?.STARBASE_URL), transfer, blockedReason: stop?.reason ?? null,
         });
         const mail = new services.MailService({ schema: req.schema, knex: database });
         await withTimeout(mail.send({ to, subject: content.subject, html: content.html, text: content.text }), MAIL_TIMEOUT_MS);
