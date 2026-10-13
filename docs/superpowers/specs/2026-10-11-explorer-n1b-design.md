@@ -10,7 +10,9 @@ option, and an admin Home without half-empty panels of different heights.
 
 ## Decisions
 
-1. **Sidebar: option B, an icon rail plus a panel.** A dark icon rail picks a section (Home,
+1. **Sidebar: option B, an icon rail plus a panel.** *(Superseded on 2026-10-13 by
+   [the B2 sidebar spec](2026-10-13-explorer-sidebar-b2-design.md): one sidebar with an accordion,
+   a collapsed icon rail, pins and settings.)* A dark icon rail picks a section (Home,
    Records, Analysis, Kit = inventory and resources, Tools); the panel beside it shows only that
    section's lists, with the open list's saved views under it. The Explorer will run as its own site
    on the tailnet, so the second icon bar next to Directus's module bar is temporary. (The "Recent"
