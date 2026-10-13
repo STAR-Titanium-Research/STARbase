@@ -2,8 +2,9 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	AppLink, CampaignProgressBars, CampaignWorkbench, AccessDialog, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout,
+	AppLink, CampaignProgressBars, CampaignWorkbench, AccessDialog, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, PinToggle, RecordLayout,
 	RecordLink, RecordRail, Section, StatusBadge, campaignCode, campaignContents, campaignRailFacts, dataStudioRoute, type ContentsEntry,
+	pinTargetForRecord,
 } from '@d1/ui';
 import { useCampaignRecord } from './campaign/useCampaignRecord';
 
@@ -64,6 +65,8 @@ const contents = computed<ContentsEntry[]>(() => {
 		operations: unknown(ops) ? null : o.opRows.length,
 	});
 });
+
+const pin = computed(() => pinTargetForRecord('campaigns', props.id));
 </script>
 
 <template>
@@ -90,6 +93,8 @@ const contents = computed<ContentsEntry[]>(() => {
 							<span>›</span><HiddenLink label="Project" />
 						</template>
 					</template>
+
+					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="code" /></template>
 
 					<template #rail>
 						<RecordRail kind="Campaign" :code="code" :title="subtitle" :facts="railFacts" :contents="contents">

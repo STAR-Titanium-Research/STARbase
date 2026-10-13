@@ -63,6 +63,20 @@
 	--d1-tint: color-mix(in srgb, var(--d1-accent) 10%, transparent);
 }
 
+/* The sidebar is dark in both themes (explorer-sidebar-b2 spec, decision 11), whatever the page
+   follows. Provisional values until STARbase has a DESIGN.md; sub is 5.0:1 on the ground. The row
+   menu is teleported to <body>, so it carries .d1-side-menu to get them too. */
+:where(.d1-kit, .d1-side-menu) {
+	--d1-side-ground: #11181f;
+	--d1-side-text: #d3d9e0;
+	--d1-side-dim: #9aa5b1;
+	--d1-side-sub: #7f8a97;
+	--d1-side-hairline: #263240;
+	--d1-side-hover: #1c2630;
+	--d1-side-current: #253140;
+	--d1-side-bar: #8ab4f8;
+}
+
 /* Helper classes the frame gives every page: two columns of blocks, a line of text between blocks,
    the breadcrumb line. Unscoped and wrapped in :where() so they weigh (0,1,0) (the pseudo-class
    and variant add only their own): any single-class scoped rule of a page (`.cap[data-v]`, 0,2,0)

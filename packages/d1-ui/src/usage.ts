@@ -177,7 +177,8 @@ export function createRepeatFilter(windowMs = 10 * 60 * 1000, now: () => number 
 	return Object.assign(send, { peek, mark, unmark });
 }
 
-// One list entry as the panel shows it.
+// One list entry as the panel shows it. `pinned` is the endpoint's vestigial field (always false
+// now that pinned rows are left out of GET /d1-usage); the panel never reads it.
 export interface UsageEntry {
 	target: string;
 	label: string;
@@ -285,27 +286,12 @@ export function splitRecordTarget(target: string): { collection: string; id: str
 
 // -- List changes (pure, so the panel's optimistic updates and their reverts are tested) -------------
 
-// Pinned first; the order inside each band is kept (the endpoint ranked it).
-export function sortPinned<T extends { pinned: boolean }>(list: T[]): T[] {
-	return [...list].sort((a, b) => Number(b.pinned) - Number(a.pinned));
-}
-
-// The list with this entry pinned or unpinned; an entry not in the list yet (a suggestion) is added,
-// no longer marked suggested.
-export function pinEntry(list: UsageEntry[], entry: UsageEntry, pinned: boolean): UsageEntry[] {
-	const has = list.some((e) => e.target === entry.target);
-	const next = has
-		? list.map((e) => (e.target === entry.target ? { ...e, pinned } : e))
-		: [...list, { ...entry, pinned, suggested: undefined }];
-	return sortPinned(next);
-}
-
-// Undo pinEntry for one entry on the CURRENT list, leaving every other entry as it is: `previous` is
-// the entry as it was before (null = it was not in the list, so remove it). An entry that has since
-// left the list (hidden) is not brought back.
-export function revertPin(list: UsageEntry[], target: string, previous: UsageEntry | null): UsageEntry[] {
-	if (!previous) return list.filter((e) => e.target !== target);
-	return sortPinned(list.map((e) => (e.target === target ? { ...e, pinned: previous.pinned } : e)));
+// The list without the entries that are pinned (as `isPinned` says: the shared sidebar pins state).
+// Pins live in the sidebar only, so a pinned row leaves the panel the moment it is pinned, and comes
+// back in its old place if the pin is undone (a failed save rolls the pin back). `kind` is how the
+// panel's list is pinned: 'page' for pages and quick actions, 'record' for records.
+export function withoutPinned<T extends { target: string }>(list: T[], kind: 'page' | 'record', isPinned: (p: { kind: 'page' | 'record'; target: string }) => boolean): T[] {
+	return list.filter((e) => !isPinned({ kind, target: e.target }));
 }
 
 // The list without this entry, and where it was (for restoreEntry).
@@ -314,11 +300,11 @@ export function removeEntry(list: UsageEntry[], target: string): { list: UsageEn
 }
 
 // Put a removed entry back at about its old place (clamped to the list as it is now), unless it is
-// already there. Touches no other entry (pinned ones still come first).
+// already there. Touches no other entry.
 export function restoreEntry(list: UsageEntry[], entry: UsageEntry, index: number): UsageEntry[] {
 	if (list.some((e) => e.target === entry.target)) return list;
 	const at = Math.max(0, Math.min(index, list.length));
-	return sortPinned([...list.slice(0, at), entry, ...list.slice(at)]);
+	return [...list.slice(0, at), entry, ...list.slice(at)];
 }
 
 // -- Dismissed suggestions (a per-browser convenience, never sent to the server) --------------------

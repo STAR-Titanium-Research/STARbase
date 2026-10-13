@@ -1,89 +1,165 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { ExplorerNav, Finder, useFinderShortcut } from '@d1/ui';
+import { Finder, useFinderShortcut, usePins, type SectionId } from '@d1/ui';
 import { openScan } from '@d1/starbase-pages';
 import BrandLogo from './BrandLogo.vue';
-import ShellFoot from './ShellFoot.vue';
-import { useNarrow } from './narrow';
+import ShellSidebar from './ShellSidebar.vue';
+import { useWindowWidth } from './narrow';
 import { backdropDismiss } from './backdropDismiss';
 import { returnFocusToMenu } from './sheetFocus';
+import { DIALOG_SELECTOR, shortcutMode, useShellLayout } from './shellLayout';
+import { syncTheme } from './appearance';
+import { cacheLayoutPrefs, cachedLayoutPrefs, pickLayoutPrefs } from './sidebarCache';
 
-// STARbase's chrome around every signed-in page (spec §3.3). Desktop: the brand, the Explorer sidebar
-// (rail and panel, from @d1/ui) and its foot beside the page. Phone (< 768 px): a top bar with a menu
-// button that opens the same sidebar as a full-height sheet (an aria-modal dialog, so Ctrl+K stays shut
-// while it is open), and a find button. The finder is shared by both.
-const narrow = useNarrow();
+// STARbase's chrome around every signed-in page (spec §3.3; explorer-sidebar-b2 decisions 7 and 8). The
+// sidebar's layout follows the window width and the person's saved choice (shellLayout.ts):
+//   >= 1000 px   a 224px column, or a 60px rail when they collapsed it ([ and ] too);
+//   768-999 px   a rail; expanding opens the sidebar over the page, closing on Esc, a backdrop click or a page;
+//   < 768 px     a top bar whose Menu button opens the sidebar as a full-height sheet.
+// The overlay and the sheet are the same aria-modal dialog (the page behind is inert, Tab wraps inside, so
+// Ctrl+K stays shut while one is open). The finder is shared by all three.
+const width = useWindowWidth();
+const { prefs, setPref, loaded } = usePins();
+// The layout reads the cached choice until /d1-usage/nav has answered (sidebarCache.ts), so a rail is a rail at first paint.
+const cached = ref(cachedLayoutPrefs());
+const layoutPrefs = computed(() => pickLayoutPrefs(loaded.value, prefs.value, cached.value));
+const shell = useShellLayout({
+	width,
+	prefs: layoutPrefs,
+	setPref: (k, v) => {
+		// A choice made before the answer arrives counts at once (the layout is still reading the cache).
+		if (!loaded.value) {
+			cached.value = { ...cached.value, [k]: v };
+			cacheLayoutPrefs(cached.value);
+		}
+		return setPref(k, v);
+	},
+});
+watch(
+	() => [loaded.value, prefs.value.sidebarCollapsed, prefs.value.autoCollapse] as const,
+	([isLoaded, sidebarCollapsed, autoCollapse]) => {
+		if (!isLoaded) return;
+		cached.value = { sidebarCollapsed, autoCollapse };
+		cacheLayoutPrefs(cached.value);
+	},
+	{ immediate: true },
+);
+const phone = computed(() => shell.layout.value.phone);
+
 const sheetOpen = ref(false);
+const modalOpen = computed(() => (phone.value ? sheetOpen.value : shell.overlayOpen.value));
 const menuBtn = ref<HTMLButtonElement | null>(null);
 const closeBtn = ref<HTMLButtonElement | null>(null);
+const sideEl = ref<HTMLElement | null>(null);
+const sheetEl = ref<HTMLElement | null>(null);
 let handedOff = false;
 const route = useRoute();
 const { finderOpen, openFinder, closeFinder } = useFinderShortcut();
 
+const closeModal = () => {
+	if (phone.value) sheetOpen.value = false;
+	else shell.closeOverlay();
+};
 const scanFromFinder = () => {
 	closeFinder();
 	openScan();
 };
-// Backdrop: remember where the press started; the click closes the sheet only if it also ended there.
+// Backdrop: remember where the press started; the click closes only if it also ended there.
 let pressedBackdrop = false;
 const onBackdropDown = (e: PointerEvent) => (pressedBackdrop = e.target === e.currentTarget);
 const onBackdropClick = (e: MouseEvent) => {
 	const started = pressedBackdrop;
 	pressedBackdrop = false;
-	if (backdropDismiss(started, e.target === e.currentTarget)) sheetOpen.value = false;
+	if (backdropDismiss(started, e.target === e.currentTarget)) closeModal();
 };
-const findFromSheet = () => {
+const findFromModal = () => {
 	handedOff = true;
-	sheetOpen.value = false;
+	closeModal();
 	openFinder();
 };
 
-// Focus: into the sheet on open (its close button; the page behind it is inert, so Tab stays in the sheet),
-// and back to the Menu button on every way of closing it.
-watch(sheetOpen, async (open) => {
+// The rail's own controls ask for a layout; the sheet and the overlay close when the choice is made there.
+const onRequestMode = (mode: 'expanded' | 'rail', sectionId?: SectionId) => shell.requestMode(mode, sectionId);
+
+// Theme: the saved choice paints <html> (theme.css) once it has loaded, and is remembered for the next
+// load (main.ts restores the remembered one before the first render).
+watch(
+	() => [loaded.value, prefs.value.theme] as const,
+	([isLoaded, theme]) => syncTheme(document.documentElement, isLoaded, theme),
+	{ immediate: true },
+);
+
+// Focus: into the dialog on open (the sheet's close button; the overlay's collapse button), and back to what
+// opened it on every way of closing it (the Menu button; the element that had focus, else the rail's Expand).
+let opener: HTMLElement | null = null;
+watch(modalOpen, async (open) => {
 	if (open) {
 		handedOff = false;
+		opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		await nextTick();
-		closeBtn.value?.focus();
+		const first =
+			closeBtn.value ??
+			sheetEl.value?.querySelector<HTMLElement>('button[aria-label="Collapse the sidebar"]') ??
+			sheetEl.value?.querySelector<HTMLElement>(FOCUSABLE);
+		first?.focus();
 	} else {
 		await nextTick();
-		if (returnFocusToMenu({ narrow: narrow.value, handedOff })) menuBtn.value?.focus();
+		if (phone.value) {
+			if (returnFocusToMenu({ narrow: phone.value, handedOff })) menuBtn.value?.focus();
+		} else if (!handedOff) {
+			const back = opener?.isConnected ? opener : sideEl.value?.querySelector<HTMLElement>('button[aria-label="Expand sidebar"]');
+			back?.focus();
+		}
 		handedOff = false;
+		opener = null;
 	}
 });
 
-// The sheet closes when a page is chosen, when the window grows past phone width, and on Esc.
-watch(() => route.fullPath, () => (sheetOpen.value = false));
-watch(narrow, (isNarrow) => {
-	if (!isNarrow) sheetOpen.value = false;
+// The dialog closes when a page is chosen, and when the window leaves the layout that has it.
+watch(() => route.fullPath, () => {
+	sheetOpen.value = false;
+	shell.closeOverlay();
 });
+watch(phone, (isPhone) => {
+	if (!isPhone) sheetOpen.value = false;
+});
+
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
-const sheetEl = ref<HTMLElement | null>(null);
 const onKey = (e: KeyboardEvent) => {
-	if (!sheetOpen.value) return;
-	if (e.key === 'Escape') sheetOpen.value = false;
-	if (e.key === 'Tab' && sheetEl.value) {
-		// Tab wraps inside the sheet (the page behind is inert, so this is only the edge, where focus would leave for the browser's own chrome).
-		const items = [...sheetEl.value.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
-		const first = items[0];
-		const last = items[items.length - 1];
-		const active = document.activeElement;
-		if (!first || !last) return;
-		if (e.shiftKey && (active === first || !sheetEl.value.contains(active))) { e.preventDefault(); last.focus(); }
-		else if (!e.shiftKey && (active === last || !sheetEl.value.contains(active))) { e.preventDefault(); first.focus(); }
+	if (modalOpen.value) {
+		if (e.key === 'Escape') closeModal();
+		if (e.key === 'Tab' && sheetEl.value) {
+			// Tab wraps inside the dialog (the page behind is inert, so this is only the edge, where focus would leave for the browser's own chrome).
+			const items = [...sheetEl.value.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+			const first = items[0];
+			const last = items[items.length - 1];
+			const active = document.activeElement;
+			if (!first || !last) return;
+			if (e.shiftKey && (active === first || !sheetEl.value.contains(active))) { e.preventDefault(); last.focus(); }
+			else if (!e.shiftKey && (active === last || !sheetEl.value.contains(active))) { e.preventDefault(); first.focus(); }
+		}
+		return;
 	}
+	// [ and ] collapse and expand the sidebar (not on a phone, not while typing or with a dialog open).
+	if (phone.value) return;
+	const mode = shortcutMode(e, !!document.querySelector(DIALOG_SELECTOR));
+	if (mode) onRequestMode(mode);
 };
 onMounted(() => window.addEventListener('keydown', onKey));
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </script>
 
 <template>
-	<div class="sb-shell" :class="{ phone: narrow }">
-		<aside v-if="!narrow" class="sb-side" aria-label="STARbase">
-			<router-link to="/" class="sb-brand" aria-label="STARbase Home"><BrandLogo /></router-link>
-			<ExplorerNav :show-brand="false" style="--d1-nav-offset: 64px" @open-finder="openFinder" />
-			<ShellFoot />
+	<div class="sb-shell" :class="{ phone, rail: shell.mode.value === 'rail' }" :style="{ '--sb-side-w': shell.sideWidth.value }">
+		<aside v-if="!phone" ref="sideEl" class="sb-side d1-kit" aria-label="STARbase" :inert="modalOpen">
+			<ShellSidebar
+				:mode="shell.mode.value"
+				collapsible
+				:open-section="shell.openSection.value"
+				@open-finder="openFinder"
+				@request-mode="onRequestMode"
+			/>
 		</aside>
 		<header v-else class="sb-topbar" :inert="sheetOpen">
 			<button ref="menuBtn" type="button" class="sb-icon-btn" aria-label="Menu" :aria-expanded="sheetOpen" @click="sheetOpen = true"><v-icon name="menu" /></button>
@@ -91,16 +167,22 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 			<button type="button" class="sb-icon-btn" aria-label="Find a record" @click="openFinder"><v-icon name="search" /></button>
 		</header>
 
-		<main class="sb-content" :inert="narrow && sheetOpen"><router-view /></main>
+		<main class="sb-content" :inert="modalOpen"><router-view /></main>
 
-		<div v-if="narrow && sheetOpen" class="sb-sheet-backdrop" @pointerdown="onBackdropDown" @click="onBackdropClick">
-			<div ref="sheetEl" class="sb-sheet" role="dialog" aria-modal="true" aria-label="Pages">
-				<div class="sb-sheet-head">
-					<BrandLogo />
+		<div v-if="modalOpen" class="sb-sheet-backdrop" :class="{ overlay: !phone }" @pointerdown="onBackdropDown" @click="onBackdropClick">
+			<div ref="sheetEl" class="sb-sheet d1-kit" :class="{ overlay: !phone }" role="dialog" aria-modal="true" aria-label="Pages">
+				<div v-if="phone" class="sb-sheet-head">
+					<BrandLogo on-dark />
 					<button ref="closeBtn" type="button" class="sb-icon-btn" aria-label="Close the menu" @click="sheetOpen = false"><v-icon name="close" /></button>
 				</div>
-				<ExplorerNav :show-brand="false" style="--d1-nav-offset: 56px" @open-finder="findFromSheet" />
-				<ShellFoot />
+				<ShellSidebar
+					mode="expanded"
+					:collapsible="!phone"
+					:brand="!phone"
+					:open-section="shell.openSection.value"
+					@open-finder="findFromModal"
+					@request-mode="onRequestMode"
+				/>
 			</div>
 		</div>
 
@@ -109,10 +191,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </template>
 
 <style scoped>
-.sb-shell { display: grid; grid-template-columns: 272px minmax(0, 1fr); height: 100dvh; }
+.sb-shell { display: grid; grid-template-columns: var(--sb-side-w, 224px) minmax(0, 1fr); height: 100dvh; }
 .sb-side {
-	display: flex; flex-direction: column; min-height: 0; overflow-y: auto;
-	background: var(--theme--background-subdued); border-right: 1px solid var(--theme--border-color-subdued);
+	display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto;
+	background: var(--d1-side-ground); border-right: 1px solid var(--d1-side-hairline);
 }
 .sb-brand { display: flex; align-items: center; height: 64px; padding: 0 16px; flex: none; text-decoration: none; }
 .sb-content { min-width: 0; height: 100dvh; overflow-y: auto; }
@@ -133,9 +215,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 }
 .sb-icon-btn:focus-visible { outline: 2px solid var(--theme--primary); }
 .sb-sheet-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.4); }
+.sb-sheet-backdrop.overlay { background: rgba(13, 17, 23, 0.35); }
 .sb-sheet {
 	display: flex; flex-direction: column; width: min(340px, 88vw); height: 100dvh; overflow-y: auto;
-	background: var(--theme--background-subdued); box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
+	background: var(--d1-side-ground); box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
 }
+/* Over the page at 768-999 px: the expanded sidebar's own 224px, on top of the rail it opened from. */
+.sb-sheet.overlay { width: 224px; }
 .sb-sheet-head { display: flex; align-items: center; justify-content: space-between; height: 56px; padding: 0 8px 0 16px; flex: none; }
+.sb-sheet-head .sb-icon-btn { color: var(--d1-side-text); }
+.sb-sheet-head .sb-icon-btn:focus-visible { outline-color: var(--d1-side-bar); }
 </style>

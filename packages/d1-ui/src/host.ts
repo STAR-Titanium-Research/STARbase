@@ -35,6 +35,9 @@ export interface ExplorerHost {
 	// has none (EditDrawer shows Directus's v-form in a drawer); STARbase frames d1-server's form-only page
 	// (spec §3.4). '+' as the id creates a record.
 	openEditor?(collection: string, id: string): Promise<'saved' | 'cancelled'>;
+	// Who draws the app's theme and sidebar layout. 'own': the host does (STARbase), so Settings offers the
+	// theme and the sidebar switches. Unset: Directus does, so Settings shows them as set elsewhere.
+	appearance?: 'own' | 'directus';
 	// Starts as the host's best synchronous guess and is corrected when the server answers, so a page
 	// that uses it must react to changes (watch it), not read it once.
 	isAdmin: Ref<boolean>;

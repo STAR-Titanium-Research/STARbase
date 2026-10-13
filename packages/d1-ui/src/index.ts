@@ -74,6 +74,8 @@ export { default as LoadState } from './components/LoadState.vue';
 export { default as NotVisible } from './components/NotVisible.vue';
 export { default as HiddenLink } from './components/HiddenLink.vue';
 export { default as RecordLayout } from './components/RecordLayout.vue';
+export { default as PinToggle } from './components/PinToggle.vue';
+export { pinTargetForIndex, pinTargetForRecord } from './components/pinTarget';
 export { default as RecordRail } from './components/RecordRail.vue';
 export { default as FactList } from './components/FactList.vue';
 export { default as PageContents } from './components/PageContents.vue';
@@ -122,6 +124,17 @@ export { guessAdmin } from './hostAdmin';
 export type { ExplorerHost, HostApi, HostField, HostRequestConfig, HostResponse } from './host';
 export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser, pickBookmarkId, linkForBookmark } from './nav/navConfig';
 export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
+export { NAV_ICONS } from './nav/navIcons';
+export type { NavIconName, IconNode } from './nav/navIcons';
+export { usePins, DEFAULT_PREFS } from './nav/usePins';
+export type { NavPrefs, PinsState } from './nav/usePins';
+export { layoutFor, pinKey } from './nav/sidebarModel';
+export type { PinRef, RecordLabel, ResolvedPin, SectionId, ShellLayout } from './nav/sidebarModel';
+export { useSidebarData } from './nav/useSidebarData';
+export { usePinDrag } from './nav/usePinDrag';
+export { dropResult, moveAmongShown, sameOrder } from './nav/pinDrag';
+export { forgetListPrefs } from './index/listPrefs';
+export { default as NavIcon } from './nav/NavIcon.vue';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';
 export { isFinderShortcut, isModalOpen, shouldOpenFinder } from './finder/finderNav';
@@ -157,8 +170,8 @@ export type {
 
 // Frequently used (Home panel and the visit pings; the server half is core/extensions/d1-usage)
 export {
-	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, pinEntry, readDismissed,
-	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, revertPin, routeTarget, splitRecordTarget, suggestedPageEntries,
-	withoutDismissed, writeDismissed,
+	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, readDismissed,
+	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget, suggestedPageEntries,
+	withoutDismissed, withoutPinned, writeDismissed,
 } from './usage';
 export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';

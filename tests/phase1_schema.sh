@@ -2956,6 +2956,10 @@ $ll_down"
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql
 uu_down=$(awk '/-- migrate:down/{f=1;next}f' "$UU")
+# 20261013000170 (pin order, view pins, user_prefs) runs after 163 and adds d1_private.user_prefs, so its
+# down goes first, as on a real database.
+UP=db/migrations/20261013000170_user_pins_and_prefs.sql
+up_down=$(awk '/-- migrate:down/{f=1;next}f' "$UP")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -2995,6 +2999,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$up_down
 $ll_down
 $rr_down
 $la_down
@@ -4203,7 +4208,7 @@ run_eq "both tables and their columns and the index have comments (without: none
 UU_SQL_LOCK="SELECT pg_advisory_xact_lock(hashtextextended(?::text, 0))"
 UU_SQL_GETROW="SELECT score, last_at, pinned, hidden_at FROM d1_private.user_usage WHERE user_id = ? AND kind = ? AND target = ?"
 UU_SQL_UPSERT="INSERT INTO d1_private.user_usage (user_id, kind, target, score, last_at, pinned, hidden_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, kind, target) DO UPDATE SET score = EXCLUDED.score, last_at = EXCLUDED.last_at, pinned = EXCLUDED.pinned, hidden_at = EXCLUDED.hidden_at"
-UU_SQL_LIST="SELECT kind, target, score, last_at, pinned FROM d1_private.user_usage WHERE user_id = ? AND (hidden_at IS NULL OR last_at > hidden_at)"
+UU_SQL_LIST="SELECT kind, target, score, last_at, pinned FROM d1_private.user_usage WHERE user_id = ? AND kind <> 'view' AND pinned = false AND (hidden_at IS NULL OR last_at > hidden_at)"
 UU_SQL_GETCURSOR="SELECT last_activity_id FROM d1_private.user_usage_cursor WHERE user_id = ?"
 UU_SQL_SETCURSOR="INSERT INTO d1_private.user_usage_cursor (user_id, last_activity_id) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET last_activity_id = EXCLUDED.last_activity_id"
 UU_SQL_STARTID="SELECT id FROM directus_activity WHERE \"timestamp\" < ? ORDER BY id DESC LIMIT 1"
@@ -4211,6 +4216,15 @@ UU_SQL_MAXID="SELECT id FROM directus_activity ORDER BY id DESC LIMIT 1"
 UU_SQL_ACTIVITY="SELECT id, collection, item, \"timestamp\" FROM directus_activity WHERE \"user\" = ? AND id > ? AND action IN ('create', 'update') AND collection IN (?, ?, ?, ?, ?, ?, ?) ORDER BY id LIMIT 500"
 UU_SQL_DELUNPINNED="DELETE FROM d1_private.user_usage WHERE user_id = ? AND pinned = false"
 UU_SQL_ZEROPINNED="UPDATE d1_private.user_usage SET score = 0 WHERE user_id = ? AND pinned = true"
+UU_SQL_GETPINS="SELECT kind, target FROM d1_private.user_usage WHERE user_id = ? AND pinned = true ORDER BY pin_order, kind, target"
+UU_SQL_PINAPPEND="UPDATE d1_private.user_usage SET pin_order = (SELECT coalesce(max(pin_order), -1) + 1 FROM d1_private.user_usage WHERE user_id = ? AND pin_order IS NOT NULL) WHERE user_id = ? AND kind = ? AND target = ? AND pin_order IS NULL"
+UU_SQL_CLEARPINORDER="UPDATE d1_private.user_usage SET pin_order = NULL WHERE user_id = ? AND kind = ? AND target = ?"
+UU_SQL_COMPACTPINS="UPDATE d1_private.user_usage u SET pin_order = r.n FROM (SELECT kind, target, row_number() OVER (ORDER BY pin_order, kind, target) - 1 AS n FROM d1_private.user_usage WHERE user_id = ? AND pin_order IS NOT NULL) r WHERE u.user_id = ? AND u.kind = r.kind AND u.target = r.target"
+UU_SQL_SETPINORDER="UPDATE d1_private.user_usage SET pin_order = ? WHERE user_id = ? AND kind = ? AND target = ? AND pinned = true"
+UU_SQL_UNPINALL="UPDATE d1_private.user_usage SET pinned = false, pin_order = NULL WHERE user_id = ? AND (pinned = true OR pin_order IS NOT NULL)"
+UU_SQL_GETPREFS="SELECT pins_seeded, prefs FROM d1_private.user_prefs WHERE user_id = ?"
+UU_SQL_MARKSEEDED="INSERT INTO d1_private.user_prefs (user_id, pins_seeded) VALUES (?, true) ON CONFLICT (user_id) DO UPDATE SET pins_seeded = true, updated_at = now()"
+UU_SQL_SETPREFS="INSERT INTO d1_private.user_prefs (user_id, prefs) VALUES (?, ?::jsonb) ON CONFLICT (user_id) DO UPDATE SET prefs = d1_private.user_prefs.prefs || EXCLUDED.prefs, updated_at = now()"
 uu_prepare() { # uu_prepare <name> <sql with ?>: a PREPARE with the placeholders numbered
     printf 'PREPARE %s AS ' "$1"
     awk '{ s = $0; out = ""; n = 0; while ((i = index(s, "?")) > 0) { n++; out = out substr(s, 1, i - 1) "$" n; s = substr(s, i + 1) } print out s ";" }' <<<"$2"
@@ -4232,6 +4246,15 @@ $(uu_prepare maxid "$UU_SQL_MAXID")
 $(uu_prepare activity "$UU_SQL_ACTIVITY")
 $(uu_prepare delunpinned "$UU_SQL_DELUNPINNED")
 $(uu_prepare zeropinned "$UU_SQL_ZEROPINNED")
+$(uu_prepare getpins "$UU_SQL_GETPINS")
+$(uu_prepare pinappend "$UU_SQL_PINAPPEND")
+$(uu_prepare clearpinorder "$UU_SQL_CLEARPINORDER")
+$(uu_prepare compactpins "$UU_SQL_COMPACTPINS")
+$(uu_prepare setpinorder "$UU_SQL_SETPINORDER")
+$(uu_prepare unpinall "$UU_SQL_UNPINALL")
+$(uu_prepare getprefs "$UU_SQL_GETPREFS")
+$(uu_prepare markseeded "$UU_SQL_MARKSEEDED")
+$(uu_prepare setprefs "$UU_SQL_SETPREFS")
 $1
 ROLLBACK;
 SQL
@@ -4284,6 +4307,159 @@ EXECUTE delunpinned('$UU_A');
 EXECUTE zeropinned('$UU_A');
 SELECT 'uu_clear2:' || coalesce(string_agg((user_id = '$UU_A')::text || '/' || target || '/' || score, ',' ORDER BY user_id, target), '') FROM d1_private.user_usage;")
 grep -q 'uu_clear2:true/pinned/0,false/plain/4' <<<"$uu_out" && ok "clear deletes the caller's unpinned rows, zeroes the pinned ones, and leaves other users' rows" || bad "clear statements gave the wrong rows (output: $uu_out)"
+# The sidebar statements (migration 170), same way.
+uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'visible', 1, $UU_TS, false, NULL);
+EXECUTE upsert('$UU_A', 'page', 'pinned', 1, $UU_TS, true, NULL);
+EXECUTE upsert('$UU_A', 'view', '12', 0, $UU_TS, false, NULL);
+EXECUTE upsert('$UU_A', 'record', 'campaigns:x', 1, $UU_TS, false, NULL);
+CREATE TEMP TABLE listed AS EXECUTE list('$UU_A');
+SELECT 'uu_home:' || string_agg(kind || '/' || target, ',' ORDER BY target) FROM listed;")
+grep -qx 'uu_home:record/campaigns:x,page/visible' <<<"$uu_out" && ok "the Home list leaves out pinned rows and view rows" || bad "Home list predicate is wrong (output: $uu_out)"
+uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'a', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'page', 'a');
+EXECUTE upsert('$UU_A', 'view', '12', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'view', '12');
+EXECUTE upsert('$UU_A', 'record', 'campaigns:x', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'record', 'campaigns:x');
+EXECUTE upsert('$UU_B', 'page', 'a', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_B', '$UU_B', 'page', 'a');
+EXECUTE pinappend('$UU_A', '$UU_A', 'page', 'a');
+CREATE TEMP TABLE pins AS EXECUTE getpins('$UU_A');
+SELECT 'uu_pins1:' || (SELECT string_agg(kind || '/' || target, ',') FROM pins);
+SELECT 'uu_pins1b:' || string_agg(target || '=' || pin_order, ',' ORDER BY user_id, pin_order) FROM d1_private.user_usage;")
+grep -q 'uu_pins1:page/a,view/12,record/campaigns:x' <<<"$uu_out" && ok "a new pin goes last, whatever its kind, and the pin list is in order" || bad "pin append or list is wrong (output: $uu_out)"
+grep -q 'uu_pins1b:a=0,12=1,campaigns:x=2,a=0' <<<"$uu_out" && ok "pinning again keeps the place, and another user's order starts at 0 on its own" || bad "pin append is not per user or not idempotent (output: $uu_out)"
+uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'a', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'page', 'a');
+EXECUTE upsert('$UU_A', 'page', 'b', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'page', 'b');
+EXECUTE upsert('$UU_A', 'page', 'c', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'page', 'c');
+EXECUTE upsert('$UU_B', 'page', 'a', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_B', '$UU_B', 'page', 'a');
+EXECUTE upsert('$UU_B', 'page', 'b', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_B', '$UU_B', 'page', 'b');
+EXECUTE upsert('$UU_A', 'page', 'a', 0, $UU_TS, false, NULL);
+EXECUTE clearpinorder('$UU_A', 'page', 'a');
+EXECUTE compactpins('$UU_A', '$UU_A');
+SELECT 'uu_gap:' || string_agg((user_id = '$UU_A')::text || '/' || target || '=' || coalesce(pin_order::text, 'null'), ',' ORDER BY user_id, target) FROM d1_private.user_usage;")
+grep -q 'uu_gap:true/a=null,true/b=0,true/c=1,false/a=0,false/b=1' <<<"$uu_out" && ok "an unpin clears its order and compaction closes the gap, for that user only" || bad "gap closing is wrong (output: $uu_out)"
+uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'a', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'page', 'a');
+EXECUTE upsert('$UU_A', 'view', '12', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'view', '12');
+EXECUTE upsert('$UU_A', 'page', 'plain', 3, $UU_TS, false, NULL);
+EXECUTE upsert('$UU_B', 'page', 'a', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_B', '$UU_B', 'page', 'a');
+EXECUTE setpinorder(1, '$UU_A', 'page', 'a');
+EXECUTE setpinorder(0, '$UU_A', 'view', '12');
+EXECUTE setpinorder(7, '$UU_A', 'page', 'plain');
+EXECUTE setpinorder(9, '$UU_A', 'page', 'a');
+EXECUTE setpinorder(1, '$UU_A', 'page', 'a');
+CREATE TEMP TABLE pins AS EXECUTE getpins('$UU_A');
+SELECT 'uu_reorder:' || (SELECT string_agg(kind || '/' || target, ',') FROM pins) || ',' || (SELECT coalesce(pin_order::text, 'null') FROM d1_private.user_usage WHERE user_id = '$UU_A' AND target = 'plain') || ',' || (SELECT pin_order FROM d1_private.user_usage WHERE user_id = '$UU_B');")
+grep -q 'uu_reorder:view/12,page/a,null,0' <<<"$uu_out" && ok "setting the order writes the caller's pinned rows only (not unpinned rows, not other users)" || bad "set order is wrong (output: $uu_out)"
+uu_out=$(uu_stmt "EXECUTE upsert('$UU_A', 'page', 'a', 2, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'page', 'a');
+EXECUTE upsert('$UU_A', 'view', '12', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_A', '$UU_A', 'view', '12');
+EXECUTE upsert('$UU_B', 'page', 'a', 0, $UU_TS, true, NULL);
+EXECUTE pinappend('$UU_B', '$UU_B', 'page', 'a');
+EXECUTE unpinall('$UU_A');
+SELECT 'uu_unpinall:' || string_agg((user_id = '$UU_A')::text || '/' || target || '/' || pinned || '/' || coalesce(pin_order::text, 'null') || '/' || score, ',' ORDER BY user_id, target) FROM d1_private.user_usage;")
+grep -q 'uu_unpinall:true/12/false/null/0,true/a/false/null/2,false/a/true/0/0' <<<"$uu_out" && ok "unpin-all clears the caller's pins and orders, keeps scores, and leaves other users alone" || bad "unpin-all is wrong (output: $uu_out)"
+uu_out=$(uu_stmt "CREATE TEMP TABLE p0 AS EXECUTE getprefs('$UU_A');
+EXECUTE setprefs('$UU_A', '{\"theme\": \"dark\"}');
+EXECUTE setprefs('$UU_A', '{\"sidebarCollapsed\": true, \"theme\": \"light\"}');
+EXECUTE markseeded('$UU_A');
+EXECUTE setprefs('$UU_B', '{\"autoCollapse\": false}');
+EXECUTE markseeded('$UU_A');
+CREATE TEMP TABLE p1 AS EXECUTE getprefs('$UU_A');
+CREATE TEMP TABLE p2 AS EXECUTE getprefs('$UU_B');
+SELECT 'uu_prefs:' || (SELECT count(*) FROM p0) || ',' || (SELECT pins_seeded || ':' || (prefs->>'theme') || ':' || (prefs->>'sidebarCollapsed') FROM p1) || ',' || (SELECT pins_seeded || ':' || (prefs->>'autoCollapse') FROM p2) || ',' || (SELECT count(*) FROM d1_private.user_prefs);")
+grep -q 'uu_prefs:0,true:light:true,false:false,2' <<<"$uu_out" && ok "prefs upsert merges keys, marking seeded keeps them, a first prefs write leaves pins_seeded false, one row per user" || bad "prefs statements are wrong (output: $uu_out)"
+uu_out=$(uu_stmt "EXECUTE setprefs('$UU_A', '{}');
+UPDATE d1_private.user_prefs SET updated_at = '2000-01-01';
+EXECUTE setprefs('$UU_A', '{\"theme\": \"dark\"}');
+SELECT 'uu_prefs_ts:' || (updated_at > '2020-01-01') FROM d1_private.user_prefs;
+UPDATE d1_private.user_prefs SET updated_at = '2000-01-01';
+EXECUTE markseeded('$UU_A');
+SELECT 'uu_seed_ts:' || (updated_at > '2020-01-01') FROM d1_private.user_prefs;")
+grep -q 'uu_prefs_ts:t' <<<"$uu_out" && grep -q 'uu_seed_ts:t' <<<"$uu_out" && ok "every prefs write sets updated_at" || bad "updated_at not set on a prefs write (output: $uu_out)"
+
+echo "== Pin order, view pins and user preferences (migration 170) =="
+# Same rolled-back-transaction pattern as migration 163 (fixture users UU_A / UU_B, set above).
+[[ -f "$UP" ]] && ok "found migration 170" || bad "migration 170 is missing ($UP)"
+up_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$UP")
+run_eq "user_usage has pin_order (nullable integer)" \
+    "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'user_usage' AND column_name = 'pin_order'" "integer:YES"
+run_eq "user_prefs is in d1_private, not public, and not in v_schema_dictionary" \
+    "SELECT (SELECT count(*) FROM pg_tables WHERE schemaname = 'd1_private' AND tablename = 'user_prefs') || ',' || (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'user_prefs') || ',' || (SELECT count(*) FROM v_schema_dictionary WHERE object_name = 'user_prefs')" "1,0,0"
+run_eq "d1_llm_readonly cannot read user_prefs" \
+    "SELECT has_table_privilege('d1_llm_readonly', 'd1_private.user_prefs', 'SELECT')" "f"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target, pinned, pin_order) VALUES ('$UU_A', 'view', '12', true, 0);
+SELECT 'up_view:' || kind || ':' || target || ':' || pin_order FROM d1_private.user_usage WHERE user_id = '$UU_A';")
+grep -q 'up_view:view:12:0' <<<"$uu_out" && ok "kind view is accepted, with a pin_order" || bad "view row insert failed (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'other', '1');")
+grep -q 'check constraint' <<<"$uu_out" && ok "a kind other than page / record / view is still rejected" || bad "bad kind was not rejected after migration 170 (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'page', 'samples');
+SELECT 'up_null:' || coalesce(pin_order::text, '<null>') FROM d1_private.user_usage WHERE user_id = '$UU_A';")
+grep -q 'up_null:<null>' <<<"$uu_out" && ok "pin_order is NULL until a row is pinned" || bad "pin_order default is not NULL (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_prefs (user_id) VALUES ('$UU_A');
+SELECT 'up_prefs:' || pins_seeded || ':' || prefs || ':' || (updated_at IS NOT NULL) FROM d1_private.user_prefs WHERE user_id = '$UU_A';")
+grep -q 'up_prefs:false:{}:true' <<<"$uu_out" && ok "a preferences row defaults to pins_seeded false and empty prefs" || bad "user_prefs defaults are wrong (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_prefs (user_id) VALUES ('$UU_A'), ('$UU_A');")
+grep -q 'duplicate key' <<<"$uu_out" && ok "one preferences row per user" || bad "second preferences row was not rejected (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_prefs (user_id) VALUES ('9e000000-0000-4000-8000-0000000000ff');")
+grep -q 'foreign key' <<<"$uu_out" && ok "preferences for a user that does not exist are rejected (foreign key)" || bad "prefs without a user were not rejected (output: $uu_out)"
+uu_out=$(uu_sql "INSERT INTO d1_private.user_prefs (user_id) VALUES ('$UU_A'), ('$UU_B');
+DELETE FROM directus_users WHERE id = '$UU_A';
+SELECT 'up_cascade:' || count(*) FROM d1_private.user_prefs;")
+grep -q 'up_cascade:1' <<<"$uu_out" && ok "deleting a user removes their preferences row, and only theirs" || bad "prefs did not follow their user (output: $uu_out)"
+run_eq "user_prefs, its columns and pin_order have comments (without: none)" \
+    "SELECT coalesce(string_agg(x, ', '), '') FROM (
+        SELECT c.relname AS x FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND c.relname = 'user_prefs' AND coalesce(obj_description(c.oid, 'pg_class'), '') = ''
+        UNION ALL
+        SELECT c.relname || '.' || a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'd1_private' AND a.attnum > 0 AND NOT a.attisdropped AND coalesce(col_description(a.attrelid, a.attnum), '') = ''
+           AND (c.relname = 'user_prefs' OR (c.relname = 'user_usage' AND a.attname = 'pin_order'))) q" ""
+# Back-fill and down: run 170's down (back to the 163 shape), seed pins out of order, run its up, check the numbering,
+# then add a view pin and run the down again (the view row goes, the order column goes, the old CHECK is back).
+uu_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
+BEGIN;
+INSERT INTO directus_users (id) VALUES ('$UU_A'), ('$UU_B');
+$up_down
+INSERT INTO d1_private.user_usage (user_id, kind, target, pinned, last_at) VALUES
+  ('$UU_A', 'page',   'samples',            true,  '2026-10-03'),
+  ('$UU_A', 'record', 'physical_samples:x', true,  '2026-10-01'),
+  ('$UU_A', 'page',   'tests',              true,  '2026-10-02'),
+  ('$UU_A', 'page',   'people',             false, '2026-09-01'),
+  ('$UU_B', 'page',   'samples',            true,  '2026-10-05'),
+  ('$UU_B', 'page',   'tests',              true,  '2026-10-05');
+$up_up
+SELECT 'up_bf_a:' || string_agg(target || '=' || pin_order, ',' ORDER BY pin_order) FROM d1_private.user_usage WHERE user_id = '$UU_A' AND pinned;
+SELECT 'up_bf_b:' || string_agg(target || '=' || pin_order, ',' ORDER BY pin_order) FROM d1_private.user_usage WHERE user_id = '$UU_B' AND pinned;
+SELECT 'up_bf_unpinned:' || coalesce(pin_order::text, '<null>') FROM d1_private.user_usage WHERE user_id = '$UU_A' AND target = 'people';
+INSERT INTO d1_private.user_usage (user_id, kind, target, pinned, pin_order) VALUES ('$UU_A', 'view', '12', true, 3);
+$up_down
+SELECT 'up_dn_kinds:' || string_agg(DISTINCT kind, ',') FROM d1_private.user_usage;
+SELECT 'up_dn_rows:' || count(*) FROM d1_private.user_usage;
+SELECT 'up_dn_pinned:' || count(*) FROM d1_private.user_usage WHERE pinned;
+SELECT 'up_dn_column:' || count(*) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'user_usage' AND column_name = 'pin_order';
+SELECT 'up_dn_prefs:' || coalesce(to_regclass('d1_private.user_prefs')::text, 'gone');
+SAVEPOINT s;
+INSERT INTO d1_private.user_usage (user_id, kind, target) VALUES ('$UU_A', 'view', '13');
+ROLLBACK;
+SQL
+)
+grep -q 'up_bf_a:samples=0,tests=1,physical_samples:x=2' <<<"$uu_out" && ok "up numbers existing pins by last_at, newest first (as U1 showed them), from 0" || bad "back-fill order is wrong (output: $uu_out)"
+grep -q 'up_bf_b:samples=0,tests=1' <<<"$uu_out" && ok "up numbers each user's pins separately (ties broken by kind, target)" || bad "second user's back-fill is wrong (output: $uu_out)"
+grep -q 'up_bf_unpinned:<null>' <<<"$uu_out" && ok "up leaves unpinned rows without a pin_order" || bad "unpinned row got a pin_order (output: $uu_out)"
+grep -q 'up_dn_kinds:page,record' <<<"$uu_out" && grep -q 'up_dn_rows:6' <<<"$uu_out" && ok "down deletes the view rows and keeps the page and record rows" || bad "down left the wrong rows (output: $uu_out)"
+grep -q 'up_dn_pinned:5' <<<"$uu_out" && ok "down keeps pinned = true on the page and record pins" || bad "down lost pinned flags (output: $uu_out)"
+grep -q 'up_dn_column:0' <<<"$uu_out" && grep -q 'up_dn_prefs:gone' <<<"$uu_out" && ok "down drops pin_order and user_prefs" || bad "down left pin_order or user_prefs (output: $uu_out)"
+grep -q 'check constraint' <<<"$uu_out" && ok "down restores the old CHECK (kind view is rejected again)" || bad "down did not restore the CHECK (output: $uu_out)"
 
 echo "== Lab Member filters put _some only where Directus accepts it =="
 # Directus 11 (api apply-query/filter) handles `_some`/`_none` only directly under an O2M field at the

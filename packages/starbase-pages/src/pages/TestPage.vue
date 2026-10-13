@@ -3,9 +3,10 @@ import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, openLink, AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, StatusBadge, asRecord,
+	AppLink, openLink, AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, StatusBadge, asRecord,
 	dataStudioRoute, detailFacts, detailsCount, formatDate, summaryCount, summaryGroups, testDetailBase, testRailFacts, testSample, testSubjectCount, testTypeText,
 	type ContentsEntry,
+	pinTargetForRecord,
 } from '@d1/ui';
 import { useTestData } from './test/useTestData';
 import TestSubjects from './test/TestSubjects.vue';
@@ -70,6 +71,8 @@ const contents = computed<ContentsEntry[]>(() => {
 });
 
 const openReport = () => openLink(`/d1-report/test/${encodeURIComponent(props.id)}`, router);
+
+const pin = computed(() => pinTargetForRecord('test_sessions', props.id));
 </script>
 
 <template>
@@ -108,6 +111,8 @@ const openReport = () => openLink(`/d1-report/test/${encodeURIComponent(props.id
 							<span>›</span><HiddenLink label="Sample" />
 						</template>
 					</template>
+
+					<template v-if="pin" #title-actions><PinToggle :target="pin" :label="typeText" /></template>
 
 					<template #rail>
 						<RecordRail kind="Test" :code="typeText" :facts="railFacts" :contents="contents">

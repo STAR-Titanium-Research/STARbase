@@ -37,6 +37,7 @@ export function createStarbaseHost(deps: HostDeps): ExplorerHost {
 			const { data } = await api.get(`/fields/${encodeURIComponent(collection)}`);
 			return sortFields((data?.data ?? []) as HostField[]);
 		},
+		appearance: 'own',
 		isAdmin: session.isAdmin,
 		adminKnown: session.adminKnown,
 		user: session.user as ExplorerHost['user'],
