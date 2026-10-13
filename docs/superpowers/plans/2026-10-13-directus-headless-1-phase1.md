@@ -134,16 +134,18 @@ test('GET /go/r: a bad collection is 400', () => {
 
 test('GET /go/p: a STARbase page, query kept as sent', () => {
 	const h = routes(STAR)[P];
-	const out = run(h, { params: { 0: 'plot/force' }, originalUrl: '/d1-links/go/p/plot/force?operation=9&x=a%20b' });
+	const out = run(h, { originalUrl: '/d1-links/go/p/plot/force?operation=9&x=a%20b' });
 	assert.equal(out.status, 302);
 	assert.equal(out.location, 'https://starbase.example.org/plot/force?operation=9&x=a%20b');
-	assert.equal(run(h, { params: { 0: 'labels' }, originalUrl: '/d1-links/go/p/labels' }).location, 'https://starbase.example.org/labels');
+	assert.equal(run(h, { originalUrl: '/d1-links/go/p/labels' }).location, 'https://starbase.example.org/labels');
+	// The raw path is split before decoding, so an encoded slash stays inside its segment.
+	assert.equal(run(h, { originalUrl: '/d1-links/go/p/samples/a%2Fb' }).location, 'https://starbase.example.org/samples/a%2Fb');
 });
 
 test('GET /go/p: never leaves STARbase (.., //, backslash, scheme, empty segment) → 400', () => {
 	const h = routes(STAR)[P];
-	for (const bad of ['../x', 'a/../../x', '..', '.', 'a//b', '/evil.example', 'a\\b', 'https:/x', 'javascript:alert(1)', 'a/']) {
-		const out = run(h, { params: { 0: bad }, originalUrl: '/d1-links/go/p/' + bad });
+	for (const bad of ['../x', 'a/../../x', '..', '.', '%2e%2e/x', 'a//b', '/evil.example', 'a\\b', 'a%5Cb', 'https:/x', 'javascript:alert(1)', 'a/', '%E0%A4%A']) {
+		const out = run(h, { originalUrl: '/d1-links/go/p/' + bad });
 		assert.equal(out.status, 400, bad);
 		assert.equal(out.location, undefined, bad);
 	}
@@ -152,7 +154,7 @@ test('GET /go/p: never leaves STARbase (.., //, backslash, scheme, empty segment
 test('STARBASE_URL unset or not http(s): every /go route answers 503 with plain text', () => {
 	for (const env of [{}, { STARBASE_URL: 'javascript:alert(1)' }, { STARBASE_URL: '/x' }]) {
 		const r = routes(env);
-		for (const [h, req] of [[r['/go'], {}], [r['/go/r/:collection/:id'], { params: { collection: 'projects', id: '1' } }], [r[P], { params: { 0: 'labels' } }]]) {
+		for (const [h, req] of [[r['/go'], {}], [r['/go/r/:collection/:id'], { params: { collection: 'projects', id: '1' } }], [r[P], { originalUrl: '/d1-links/go/p/labels' }]]) {
 			const out = run(h, req);
 			assert.equal(out.status, 503);
 			assert.equal(out.type, 'text/plain');
@@ -207,7 +209,7 @@ export function goTarget(env, kind, parts, rawQuery = '') {
 	}
 	// 'p': every segment must be a plain name: no empty segment (// or a trailing /), no . or .., no
 	// backslash, no colon (a scheme). The result is checked to stay on STARbase's origin as well.
-	if (parts.some((s) => s === '' || s === '.' || s === '..' || s.includes('\\') || s.includes(':'))) {
+	if (parts.some((s) => s === null || s === '' || s === '.' || s === '..' || s.includes('\\') || s.includes(':'))) {
 		return { status: 400, text: 'Bad page link.' };
 	}
 	const location = `${star}/${parts.map(encodeURIComponent).join('/')}${rawQuery}`;
@@ -221,11 +223,19 @@ function answer(res, t) {
 	return res.status(t.status).type('text/plain').send(t.text);
 }
 
-const rawQueryOf = (req) => {
+// The page path and query exactly as sent: the raw path is split into segments BEFORE decoding, so an
+// encoded slash (%2F) stays inside its segment; a segment that does not decode becomes null (a 400).
+function pageParts(req) {
 	const u = String(req.originalUrl ?? '');
-	const i = u.indexOf('?');
-	return i < 0 ? '' : u.slice(i);
-};
+	const q = u.indexOf('?');
+	const path = q < 0 ? u : u.slice(0, q);
+	const at = path.indexOf('/go/p/');
+	const raw = at < 0 ? '' : path.slice(at + '/go/p/'.length);
+	const parts = raw.split('/').map((seg) => {
+		try { return decodeURIComponent(seg); } catch { return null; }
+	});
+	return { parts, rawQuery: q < 0 ? '' : u.slice(q) };
+}
 
 export function mount(router, env) {
 	router.get('/', (req, res) => {
@@ -237,12 +247,18 @@ export function mount(router, env) {
 	// They read nothing from the database.
 	router.get('/go', (_req, res) => answer(res, goTarget(env, 'home', [])));
 	router.get('/go/r/:collection/:id', (req, res) => answer(res, goTarget(env, 'r', [req.params.collection, req.params.id])));
-	router.get(/^\/go\/p\/(.*)$/, (req, res) => answer(res, goTarget(env, 'p', String(req.params[0] ?? '').split('/'), rawQueryOf(req))));
+	router.get(/^\/go\/p\/(.*)$/, (req, res) => {
+		const { parts, rawQuery } = pageParts(req);
+		return answer(res, goTarget(env, 'p', parts, rawQuery));
+	});
 }
 ```
 
-  Note that `'a/'.split('/')` ends in `''`, so a trailing slash is a 400 (as in the test), and
-  `'/evil.example'` starts with `''`.
+  Notes:
+  - `'a/'.split('/')` ends in `''`, so a trailing slash is a 400 (as in the test).
+  - `'/evil.example'` starts with `''`.
+  - The handler ignores `req.params[0]`, because express has already decoded it.
+  - The `r` route can use `req.params.id` decoded, since `:id` never spans a raw `/`.
 
 - [ ] **Step 4: Run the tests and watch them pass.**
   Run: `node --test core/extensions/d1-links/index.test.mjs`
