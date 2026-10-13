@@ -146,12 +146,18 @@ Rules:
   `hostNeutral` stay.
 
 ### 5.6 Module bar
-- A new migration (the next free number at the time; A1a holds 165–169 and side-menu B2 holds 170)
-  removes the `home`, `d1-force-dashboard` and `d1-fast-dashboard` entries.
-- It puts first `{"type":"link","id":"starbase","name":"STARbase","url":"/d1-links/go","icon":"rocket_launch","enabled":true}`
-  (step-0 check S1).
-- It keeps everything else in its order. It is idempotent, and leaves a NULL bar alone.
-- `scripts/configure_directus.sql` writes the same bar for fresh installs.
+- A new migration, `20261013000171` (A1a holds 165–169 and side-menu B2 holds 170), removes the
+  `home`, `d1-force-dashboard` and `d1-fast-dashboard` entries.
+  - It keeps everything else in its order.
+  - It is idempotent, and leaves a NULL bar alone.
+  - Its `down` puts the three back.
+- The STARbase tile needs an **absolute** address (S1, answered below), and a migration cannot read
+  env. So `scripts/module_bar_starbase_link.sql` puts it first in the bar.
+  - The tile is `{"type":"link","id":"starbase","name":"STARbase","url":"<PUBLIC_URL>/d1-links/go","icon":"rocket_launch","enabled":true}`.
+  - It is run by `scripts/set_module_bar_starbase.sh`, which reads `DIRECTUS_PUBLIC_URL` from
+    `.env`. It is idempotent: it replaces any existing `starbase` entry, and leaves a NULL bar alone.
+  - The rollout runs it once. It is not part of `configure_all.sh`, which must never run on live.
+- `scripts/configure_directus.sql` writes the bar without the three tiles for fresh installs.
 
 ### 5.7 Tests, preview and docs
 - UI spec 11 (`11-force-dashboard`) moves to STARbase `/plot/force`.
@@ -261,7 +267,7 @@ Phase 1:
    `d1-report` build.
 2. Delete what is left of `core/extensions/d1-home`, `d1-force-dashboard` and `d1-fast-dashboard`.
    Check `docker compose exec directus ls /directus/extensions` shows them gone.
-3. Run the module-bar migration (dbmate).
+3. Run the module-bar migration (dbmate), then `bash scripts/set_module_bar_starbase.sh`.
 4. `docker compose up -d --force-recreate directus proxy`.
 5. Smoke:
    - the module bar shows the STARbase tile, and it opens STARbase;
@@ -281,16 +287,17 @@ recreate. The removed folders come back with the checkout.
 
 ## 8. Step-0 checks (before the plans are final)
 
-- **S1. Module-bar link tile with a relative URL.** Does Directus 11.17 render
-  `{"type":"link","url":"/d1-links/go"}` as a working link on the same host? If not, the migration
-  writes the absolute `${PUBLIC_URL}/d1-links/go`. A migration cannot read env, so the plan then
-  writes it from a one-off script instead.
+- **S1. Module-bar link tile with a relative URL. Answered (2026-10-13):** no. Directus's
+  `module-bar.vue` turns a `url` starting with `/` into a router `to`, so it would open inside
+  `/admin`. Any other `url` becomes an `href`. The tile is therefore written with the absolute
+  address by a script (§5.6).
 - **S2. Plotly under STARbase's CSP.** Bar, line and scatter charts render with `script-src 'self'`
   and no `'unsafe-eval'`. If they do not, the Ask chart uses Plotly's SVG-only partial bundle or a
   lighter library. That is decided in the plan, and the CSP is not loosened.
 - **S3. Vue Flow and elkjs under the same CSP**, including whether elkjs needs a worker (STARbase
   allows `worker-src 'self' blob:`).
-- **S4. `d1-access-guard`** does not block the public `/d1-links/go` routes.
+- **S4. `d1-access-guard`. Answered (2026-10-13):** it only hooks item writes on four junction
+  collections, so it cannot touch an endpoint route.
 
 ## 9. Testing
 
