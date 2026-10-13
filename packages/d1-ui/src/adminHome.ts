@@ -1,4 +1,4 @@
-// The pure rules behind the admin Home (core/extensions/d1-home/src/home): what the admin overview
+// The pure rules behind the admin Home (packages/starbase-pages/src/home): what the admin overview
 // endpoint's JSON means, when the crawler counts as online, which "Needs attention" rows show and
 // what an ownerless row links to. No Vue and no SDK, so it is unit-tested here.
 //

@@ -1,6 +1,6 @@
 ---
 name: directus-ui-reviewer
-description: Reviews a diff, branch or PR that touches the custom Directus front end (packages/d1-ui, core/extensions/d1-home, d1-lab-dashboard, d1-campaign-ops, d1-project-items, d1-composition-bar, and the record links in d1-report and the dashboards) against the directus-ui invariants and returns ranked findings. Use PROACTIVELY after writing that code and before merging a plan stream. Read-only.
+description: Reviews a diff, branch or PR that touches the custom Directus front end (packages/d1-ui, packages/starbase-pages, packages/directus-host, packages/fast-plotting, core/extensions/d1-home, d1-lab-dashboard, d1-campaign-ops, d1-project-items, d1-composition-bar, and the record links in d1-report and the dashboards) against the directus-ui invariants and returns ranked findings. Use PROACTIVELY after writing that code and before merging a plan stream. Read-only.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
 model: inherit

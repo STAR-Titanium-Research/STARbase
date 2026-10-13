@@ -57,8 +57,8 @@ has '^(apps/force-app/web/|packages/force-plotting/)' && \
 has '^apps/force-app/desktop/' && \
   echo "npm test -w force-app-desktop && npm run typecheck -w force-app-desktop   # CI: force-app-js"
 has '^core/extensions/d1-force-dashboard/' && echo "npm run build:extension   # CI: force-app-js"
-has '^(packages/(d1-ui|starbase-pages)/|core/extensions/(d1-home|d1-lab-dashboard|d1-composition-bar|d1-campaign-ops|d1-project-items|d1-fast-dashboard)/)' && \
-  echo "npm test -w @d1/ui && npm run typecheck -w @d1/ui && npm test -w @d1/starbase-pages && npm run typecheck -w @d1/starbase-pages && npm run typecheck -w directus-extension-d1-home -w directus-extension-d1-lab-dashboard -w directus-extension-d1-campaign-ops && npm run build:extensions   # CI: directus-ui"
+has '^(packages/(d1-ui|starbase-pages|fast-plotting|directus-host)/|core/extensions/(d1-home|d1-lab-dashboard|d1-composition-bar|d1-campaign-ops|d1-project-items|d1-fast-dashboard)/)' && \
+  echo "npm test -w @d1/ui && npm run typecheck -w @d1/ui && npm test -w @d1/fast-plotting && npm run typecheck -w @d1/fast-plotting && npm test -w @d1/directus-host && npm run typecheck -w @d1/directus-host && npm test -w @d1/starbase-pages && npm run typecheck -w @d1/starbase-pages && npm run typecheck -w directus-extension-d1-home -w directus-extension-d1-lab-dashboard -w directus-extension-d1-campaign-ops && npm run build:extensions   # CI: directus-ui"
 has '^apps/force-app/backend/' && echo "(cd apps/force-app/backend && pip install -e '.[dev,nidaq]' && python -m pytest -q)   # CI: force-app-backend, with the nidaq extra like the release"
 for s in backup-server bug-report-relay; do
   has "^apps/force-app/$s/" && echo "(cd apps/force-app/$s && python -m pytest -q)   # CI: python-services"

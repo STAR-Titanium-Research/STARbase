@@ -1,9 +1,12 @@
 ---
 name: directus-ui-conventions
-description: Background knowledge for any change to the custom Directus front end — the Explorer pages and Home (core/extensions/d1-home), the shared @d1/ui kit (packages/d1-ui), and the extensions that use it (d1-lab-dashboard, d1-campaign-ops, d1-project-items, d1-composition-bar, d1-fast-dashboard). Load before editing or reviewing files there. It lists the invariants that recent bugs came from.
+description: Background knowledge for any change to the custom Directus front end — the Explorer pages (packages/starbase-pages) and the Directus Home module that hosts them (core/extensions/d1-home), the shared @d1/ui kit (packages/d1-ui), the Directus host adapter (packages/directus-host), the FAST plotting (packages/fast-plotting), and the extensions that use it (d1-lab-dashboard, d1-campaign-ops, d1-project-items, d1-composition-bar, d1-fast-dashboard). Load before editing or reviewing files there. It lists the invariants that recent bugs came from.
 user-invocable: false
 paths:
   - packages/d1-ui/**
+  - packages/starbase-pages/**
+  - packages/directus-host/**
+  - packages/fast-plotting/**
   - core/extensions/d1-home/**
   - core/extensions/d1-lab-dashboard/**
   - core/extensions/d1-campaign-ops/**
@@ -16,7 +19,7 @@ paths:
 
 The design is [`docs/superpowers/specs/2026-10-06-explorer-pages-design.md`](../../../docs/superpowers/specs/2026-10-06-explorer-pages-design.md).
 Who may see what is [ADR-0011](../../../docs/adr/0011-row-level-visibility.md). The Sample page
-(`core/extensions/d1-home/src/pages/SamplePage.vue`, `pages/sample/*`) is the reference page:
+(`packages/starbase-pages/src/pages/SamplePage.vue`, `pages/sample/*`) is the reference page:
 copy its structure.
 
 ## Invariants
@@ -55,7 +58,7 @@ copy its structure.
 
    `d1-report` and the other extensions are not workspaces: build those in their own folder.
 10. **Geometry has one engine.** `geometry.ts` copies are kept identical by
-    `scripts/sync_geometry.sh`. Never add a copy; import d1-home's.
+    `scripts/sync_geometry.sh`. Never add a copy; import the one in `packages/starbase-pages`.
 11. **Live checks go in the backlog.** Anything only a real Directus can confirm goes into
     `docs/runbooks/physical-test-backlog.md`, under "Explorer pages (Home module)", in the same
     change (see `CLAUDE.md`).

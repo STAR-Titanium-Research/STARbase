@@ -34,6 +34,12 @@ test('@d1/ui changes run both JS jobs, a root lockfile change too', () => {
   }
 });
 
+test('changes under the STARbase packages plan the directusUi job', () => {
+  for (const f of ['packages/starbase-pages/src/index.ts', 'packages/fast-plotting/src/host.ts', 'packages/directus-host/src/directusHost.ts']) {
+    assert.equal(plan([f], EXT).directusUi, true, f);
+  }
+});
+
 test('a migration runs the schema and script tests', () => {
   assert.deepEqual(plan(['db/migrations/20261008000140_x.sql'], EXT), { ...nothing, migrations: true, scripts: true });
 });
