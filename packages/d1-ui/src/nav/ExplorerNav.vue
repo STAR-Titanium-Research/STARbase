@@ -15,10 +15,13 @@ import type { SectionId } from './sidebarModel';
 // The brand block (name and tagline). Inside Directus the project header above the navigation
 // slot already shows it, so DirectusFrame turns it off; STARbase's shell draws its own logo.
 // `mode` is the layout asked for; `collapsible` shows the collapse button (STARbase only).
-withDefaults(defineProps<{ showBrand?: boolean; mode?: 'expanded' | 'rail'; collapsible?: boolean }>(), {
+// `openSection` is the accordion section to open when the expanded sidebar appears (the shell
+// passes the one a rail hover menu's header asked for); unset, the current page's section opens.
+withDefaults(defineProps<{ showBrand?: boolean; mode?: 'expanded' | 'rail'; collapsible?: boolean; openSection?: SectionId | null }>(), {
 	showBrand: true,
 	mode: 'expanded',
 	collapsible: false,
+	openSection: null,
 });
 
 defineEmits<{
@@ -46,6 +49,7 @@ defineEmits<{
 
 			<SidebarExpanded
 				:collapsible="collapsible"
+				:open-section="openSection"
 				@open-finder="$emit('open-finder')"
 				@request-mode="(m, s) => $emit('request-mode', m, s)"
 			/>

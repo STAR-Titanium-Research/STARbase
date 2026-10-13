@@ -19,7 +19,7 @@ import { usePinDrag } from './usePinDrag';
 import { useRowMenu } from './useRowMenu';
 import { useSidebarData } from './useSidebarData';
 
-withDefaults(defineProps<{ collapsible?: boolean }>(), { collapsible: false });
+const props = withDefaults(defineProps<{ collapsible?: boolean; openSection?: SectionId | null }>(), { collapsible: false, openSection: null });
 defineEmits<{ (e: 'open-finder'): void; (e: 'request-mode', mode: 'expanded' | 'rail', sectionId?: SectionId): void }>();
 
 const route = useRoute();
@@ -38,6 +38,8 @@ watch(
 	},
 	{ immediate: true },
 );
+// A section the host asked for (the rail's hover menu header) opens, over the current page's.
+watch(() => props.openSection, (id) => { if (id) openId.value = id; }, { immediate: true });
 const toggleSection = (id: SectionId) => {
 	openId.value = openId.value === id ? null : id;
 };

@@ -283,6 +283,17 @@ const ICONS = icons({
 		{ tag: 'circle', attrs: { cx: '12', cy: '12', r: '2' } },
 		{ tag: 'path', attrs: { d: 'm13.41 10.59 5.66-5.66' } },
 	],
+	// Foot of the STARbase shell: sign out, and "System" in the theme toggle.
+	'log-out': [
+		{ tag: 'path', attrs: { d: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4' } },
+		{ tag: 'polyline', attrs: { points: '16 17 21 12 16 7' } },
+		{ tag: 'line', attrs: { x1: '21', x2: '9', y1: '12', y2: '12' } },
+	],
+	monitor: [
+		{ tag: 'rect', attrs: { width: '20', height: '14', x: '2', y: '3', rx: '2' } },
+		{ tag: 'line', attrs: { x1: '8', x2: '16', y1: '21', y2: '21' } },
+		{ tag: 'line', attrs: { x1: '12', x2: '12', y1: '17', y2: '21' } },
+	],
 });
 
 export type NavIconName = keyof typeof ICONS;

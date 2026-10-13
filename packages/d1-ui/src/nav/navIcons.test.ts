@@ -8,7 +8,7 @@ describe('NAV_ICONS', () => {
 		const names = [
 			'search', 'home', 'pin', 'ellipsis', 'settings', 'moon', 'sun', 'panel-left-close', 'panel-left-open', 'chevron-down',
 			'chevron-right', 'grip-vertical', 'x', 'external-link', 'link', 'arrow-up', 'arrow-down', 'filter',
-			'records', 'analysis', 'inventory', 'reference', 'more',
+			'records', 'analysis', 'inventory', 'reference', 'more', 'log-out', 'monitor',
 		];
 		for (const n of names) expect(Object.keys(NAV_ICONS), n).toContain(n);
 	});
