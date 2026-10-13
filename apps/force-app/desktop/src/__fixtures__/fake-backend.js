@@ -1,5 +1,7 @@
 // Minimal HTTP fixture standing in for the real recorder backend in sidecar tests.
-// Args: <port> [--delay=<ms>] [--chatty=<bytes>] [--hang-after=<ms>]
+// Args: <port> [--token=<t>] [--delay=<ms>] [--chatty=<bytes>] [--hang-after=<ms>]
+//   token:      serve health on /health/<token> only, so a test's health check can be answered
+//               by the process that test started and by nothing else that holds the port
 //   delay:      how long /health returns 503 before flipping to 200
 //   chatty:     bytes written to stdout per request, synchronously, as uvicorn's access log is:
 //               once nobody drains the pipe, that write blocks the whole server (#106)
@@ -14,6 +16,8 @@ const arg = (name) => {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
   return a ? Number(a.split('=')[1]) : 0;
 };
+const token = (process.argv.find((x) => x.startsWith('--token=')) || '').split('=')[1];
+const healthPath = token ? `/health/${token}` : '/health';
 const delayMs = arg('delay');
 const chattyBytes = arg('chatty');
 const hangAfterMs = arg('hang-after');
@@ -29,7 +33,7 @@ const line = chattyBytes ? Buffer.alloc(chattyBytes, 'x') : null;
 
 const server = http.createServer((req, res) => {
   if (line) fs.writeSync(1, line);
-  if (req.url === '/health') {
+  if (req.url === healthPath) {
     if (Date.now() - startedAt < delayMs) {
       res.writeHead(503).end();
       return;
@@ -39,7 +43,9 @@ const server = http.createServer((req, res) => {
   }
   res.writeHead(404).end();
 });
-server.listen(port);
+// Loopback only, as the health URL and the real backend use: the wildcard address also clashed
+// with any socket on any interface that happened to use the port.
+server.listen(port, '127.0.0.1');
 
 if (exitAfterMs) setTimeout(() => process.exit(3), exitAfterMs);
 
