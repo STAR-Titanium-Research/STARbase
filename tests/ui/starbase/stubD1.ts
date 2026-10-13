@@ -26,7 +26,24 @@ export interface StubState {
 	usedPages: string[];
 	// POST /d1-usage/pin answers 500 (and changes nothing).
 	failPin: boolean;
+	// The saved views GET /presets lists (none by default, so the sidebar shows no views).
+	bookmarks: StubBookmark[];
 }
+
+export interface StubBookmark {
+	id: number;
+	bookmark: string;
+	collection: string;
+}
+
+// The one record the stand-in has: a sample. GET /items/physical_samples/<id> answers it, and so does the
+// list read (by id) that gives a pinned record its code in the sidebar.
+export const STUB_SAMPLE = {
+	sample_id: '123e4567-e89b-42d3-a456-426614174000',
+	sample_code: 'S-0042',
+	nickname: 'Test coupon',
+	current_status: 'available',
+};
 
 const COLLECTIONS = [
 	'campaigns', 'cutting_inserts', 'equipment', 'etchants', 'facilities', 'fast_recipes', 'insert_edges', 'insert_types',
@@ -35,7 +52,7 @@ const COLLECTIONS = [
 ];
 
 export async function stubD1(context: BrowserContext): Promise<StubState> {
-	const state: StubState = { pins: [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }], prefs: {}, usage: [], holdNav: null, failNav: false, usedPages: [], failPin: false };
+	const state: StubState = { pins: [{ kind: 'page', target: 'samples' }, { kind: 'page', target: 'projects' }], prefs: {}, usage: [], holdNav: null, failNav: false, usedPages: [], failPin: false, bookmarks: [] };
 	await pointAtD1(context);
 	const cors = {
 		'access-control-allow-origin': STAR_BASE,
@@ -88,6 +105,14 @@ export async function stubD1(context: BrowserContext): Promise<StubState> {
 			return route.fulfill({ status: 204, headers: cors });
 		}
 		if (path.startsWith('/d1-usage')) return json({ data: [] });
+		if (path === '/presets' && method === 'GET') {
+			return json({ data: state.bookmarks.map((b) => ({ ...b, user: null, role: null, filter: null, search: null, layout_query: null })) });
+		}
+		const sample = /^\/items\/physical_samples(?:\/([^/]+))?$/.exec(path);
+		if (sample && method === 'GET') {
+			if (sample[1]) return sample[1] === STUB_SAMPLE.sample_id ? json({ data: STUB_SAMPLE }) : json({ errors: [{ extensions: { code: 'FORBIDDEN' } }] }, 403);
+			if ((url.searchParams.get('filter') ?? '').includes(STUB_SAMPLE.sample_id)) return json({ data: [STUB_SAMPLE] });
+		}
 		// Everything else a page reads: an empty answer.
 		return json({ data: method === 'GET' && /\/(items|presets|fields)\b/.test(path) ? [] : {} });
 	});

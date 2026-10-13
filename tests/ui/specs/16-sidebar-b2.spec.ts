@@ -1,6 +1,6 @@
 import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import { STAR_BASE } from '../starbase/target';
-import { stubD1, type StubState } from '../starbase/stubD1';
+import { STUB_SAMPLE, stubD1, type StubState } from '../starbase/stubD1';
 
 // The Explorer sidebar (explorer-sidebar-b2) in STARbase, in a real browser: pins that survive a reload,
 // reorder by keyboard, the rail and its hover menus at 1280 px, the overlay at 900 px, the sheet at 600 px,
@@ -296,5 +296,89 @@ test('Home: pinning a Frequently used row moves it into the sidebar and off Home
 	state.pins = state.pins.filter((p) => p.target !== 'operations');
 	await page.reload();
 	await expect.poll(names).toEqual(first);
+	await page.context().close();
+});
+
+// The Pin / Pinned toggle in the header of an index page, a saved view and a record page. It shares the
+// pins with the sidebar: pinning updates both at once, unpinning in the sidebar resets the button.
+// A pinned row's text can carry a second line (where it is), so rows are matched by how they start.
+const hasPinned = async (page: Page, label: string) => (await pinnedLabels(page)).some((l) => l.split('\n')[0].trim() === label);
+const headerPin = (page: Page) => page.locator('main').getByRole('button', { name: /^Pin(ned)?\b/ });
+
+test('Pin toggle: on an index page, a saved view and a sample page; the sidebar and the button agree', async ({ browser }) => {
+	const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+	const page = await context.newPage();
+	const state = await stubD1(context);
+	state.bookmarks = [{ id: 11, bookmark: 'Active samples', collection: 'physical_samples' }];
+	const record = `physical_samples:${STUB_SAMPLE.sample_id}`;
+
+	// An index page that is not pinned: "Pin" (disabled only until the pins load), and Pinned at once.
+	await page.goto(STAR_BASE + '/operations');
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await expect(headerPin(page)).toHaveAttribute('aria-pressed', 'false');
+	await expect(headerPin(page)).toBeEnabled();
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	await expect(headerPin(page)).toHaveAttribute('aria-pressed', 'true');
+	await expect.poll(() => pinnedLabels(page)).toEqual(['Samples', 'Projects', 'Operations']);
+	await expect.poll(() => pinTargets(state)).toEqual(['samples', 'projects', 'operations']);
+
+	// Unpinning in the sidebar resets the button.
+	await pinned(page).getByRole('link', { name: 'Operations' }).hover();
+	await pinned(page).getByRole('button', { name: 'Pin Operations' }).click();
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await expect(headerPin(page)).toHaveAttribute('aria-pressed', 'false');
+	await expect.poll(() => pinTargets(state)).toEqual(['samples', 'projects']);
+
+	// Samples is pinned (a default pin): the page says Pinned. With a saved view open the toggle is the view's.
+	await page.goto(STAR_BASE + '/samples');
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	await page.goto(STAR_BASE + '/samples?bookmark=11');
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await expect(headerPin(page)).toHaveAttribute('aria-pressed', 'false');
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	await expect.poll(() => state.pins.map((p) => `${p.kind}:${p.target}`)).toEqual(['page:samples', 'page:projects', 'view:11']);
+	await expect.poll(() => hasPinned(page, 'Active samples')).toBe(true);
+	// The whole list is still the page's own pin, unchanged.
+	await page.goto(STAR_BASE + '/samples');
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+
+	// A sample's page: Pin, then Pinned at once, and the sidebar row carries the sample's code.
+	await page.goto(STAR_BASE + `/samples/${STUB_SAMPLE.sample_id}`);
+	await expect(page.getByRole('heading', { name: STUB_SAMPLE.sample_code, exact: true })).toBeVisible();
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	await expect.poll(() => pinTargets(state)).toContain(record);
+	await expect.poll(() => hasPinned(page, STUB_SAMPLE.sample_code)).toBe(true);
+
+	// It is still pinned after a reload, and unpinning in the sidebar resets the button.
+	await page.reload();
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	const row = pinned(page).locator('.row').filter({ has: page.getByRole('link', { name: STUB_SAMPLE.sample_code }) });
+	await row.hover();
+	await row.getByRole('button', { name: /^Pin / }).click();
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await expect.poll(() => pinTargets(state)).not.toContain(record);
+
+	// Unpinning from the header takes the row out of the sidebar again.
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pinned/);
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await expect.poll(() => hasPinned(page, STUB_SAMPLE.sample_code)).toBe(false);
+	await context.close();
+});
+
+test('Pin toggle: a failed save puts the button back, and says nothing next to it', async ({ browser }) => {
+	const { page, state } = await start(browser, 1280, '/operations');
+	state.failPin = true;
+	await expect(headerPin(page)).toBeEnabled();
+	await headerPin(page).click();
+	await expect(headerPin(page)).toHaveText(/^Pin(?!ned)/);
+	await expect(headerPin(page)).toHaveAttribute('aria-pressed', 'false');
+	expect(pinTargets(state)).toEqual(['samples', 'projects']);
+	await expect(page.locator('main').getByText("Couldn't save your pins")).toHaveCount(0);
 	await page.context().close();
 });
