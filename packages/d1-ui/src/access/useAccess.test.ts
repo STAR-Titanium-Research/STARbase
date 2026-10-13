@@ -83,6 +83,21 @@ describe('useAccess', () => {
 		expect(b.note.value).toContain('could not be sent');
 	});
 
+	it('tells the owner when the new owner cannot read the record yet (named parent, generic, or no login), as on add', async () => {
+		const run = async (blocked_by: unknown) => {
+			const a = useAccess(fakeApi({ post: () => ({ email: 'sent', owner: { name: 'Vic' }, blocked_by }) }), () => ({ collection: 'manufacturing_operations', id: 'o1' }));
+			await a.load();
+			await a.transferTo('q');
+			return a.note.value;
+		};
+		expect(await run({ reason: 'parent', collection: 'physical_samples', id: 's', kind: 'sample', code: 'SM-1' })).toBe(
+			'Ownership transferred. Vic cannot see sample SM-1, so this will not take effect until its owner adds them.',
+		);
+		expect(await run({ reason: 'parent', collection: null, id: null, kind: null, code: null })).toContain('Vic cannot see this record yet');
+		expect(await run({ reason: 'no_login', collection: null, id: null, kind: null, code: null })).toBe('Ownership transferred.');
+		expect(await run(null)).toBe('Ownership transferred.');
+	});
+
 	it('reads the sample behind an operation and shows it only when neither is restricted', async () => {
 		const sample = listBody({ owner: { person_id: 'o', name: 'Ada', can_sign_in: true }, entries: [{ person_id: 'p', name: 'Edith', role: 'view' }] });
 		const api = fakeApi({ get: (path) => (path.includes('physical_samples') ? sample : listBody()) });

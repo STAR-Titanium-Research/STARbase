@@ -20,11 +20,16 @@ export interface AccessPerson {
 	can_sign_in: boolean;
 }
 
-/** The nearest Restricted parent that does not list the person (nearest first on the server: sample, campaign, project). */
+/**
+ * Why a person cannot read the record yet. `no_login`: they have no login (the "can't sign in yet" tag already says it).
+ * `parent`: they have a login that is not among the record's readers; collection, id, kind and code name the nearest parent they cannot
+ * read, and are all null when the server will not name one (the caller cannot read it either): the text is then generic.
+ */
 export interface BlockedBy {
-	collection: string;
-	id: string;
-	kind: string;
+	reason?: 'parent' | 'no_login';
+	collection: string | null;
+	id: string | null;
+	kind: string | null;
 	code: string | null;
 }
 
@@ -158,11 +163,15 @@ export function noManagerText(owner: Pick<AccessPerson, 'name'> | null): string 
 	return owner ? `Only ${owner.name} can change who has access.` : 'Only an admin can change who has access.';
 }
 
-/** "<name> cannot see <parent>, so this will not take effect until its owner adds them." Null when nothing blocks the grant. */
-export function blockedText(entry: Pick<AccessEntry, 'name' | 'blocked_by'>): string | null {
+/**
+ * "<name> cannot see <parent>, so this will not take effect until its owner adds them." Null when nothing blocks the grant, and for a
+ * person with no login (the "can't sign in yet" tag says that). With no parent named (the caller may not know it exists) the words are generic.
+ */
+export function blockedText(entry: { name: string; blocked_by?: BlockedBy | null }): string | null {
 	const b = entry.blocked_by;
-	if (!b) return null;
-	const parent = [b.kind, b.code].filter(Boolean).join(' ') || 'a record above this one';
+	if (!b || b.reason === 'no_login') return null;
+	const parent = [b.kind, b.code].filter(Boolean).join(' ');
+	if (!parent) return `${entry.name} cannot see this record yet, so this will not take effect until they are given access to what it sits under.`;
 	return `${entry.name} cannot see ${parent}, so this will not take effect until its owner adds them.`;
 }
 

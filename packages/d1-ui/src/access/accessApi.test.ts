@@ -55,8 +55,13 @@ describe('writes', () => {
 	});
 	it('transfers ownership', async () => {
 		const api = fakeApi({ post: vi.fn(async () => ({ data: { owner: {}, email: 'sent' } })) });
-		expect(await transfer(api, 'physical_samples', 's1', 'q')).toEqual({ ok: true, data: { email: 'sent' } });
+		expect(await transfer(api, 'physical_samples', 's1', 'q')).toEqual({ ok: true, data: { email: 'sent', owner: {}, blocked_by: null } });
 		expect(api.post).toHaveBeenCalledWith('/d1-record-access/physical_samples/s1/transfer', { person_id: 'q' });
+	});
+	it('hands back blocked_by of the new owner from a transfer', async () => {
+		const blocked_by = { reason: 'parent', collection: 'projects', id: 'p', kind: 'project', code: 'P-7' };
+		const api = fakeApi({ post: vi.fn(async () => ({ data: { owner: { name: 'Edith' }, email: 'sent', blocked_by } })) });
+		expect(await transfer(api, 'manufacturing_operations', 'o1', 'q')).toEqual({ ok: true, data: { email: 'sent', owner: { name: 'Edith' }, blocked_by } });
 	});
 	it('falls back to the error text when the server cannot be reached', async () => {
 		const res = await setRole(fakeApi({ patch: vi.fn(async () => { throw new Error('Network Error'); }) }), 'projects', 'p', 'q', 'view');

@@ -40,6 +40,7 @@ const { list, parentList, loading, busy, error, note } = access;
 const uid = `d1-access-${Math.random().toString(36).slice(2, 8)}`;
 const dialog = ref<HTMLElement | null>(null);
 const done = ref<HTMLButtonElement | null>(null);
+const heading = ref<HTMLElement | null>(null);
 const addBox = ref<InstanceType<typeof AccessPersonPicker> | null>(null);
 const transferBox = ref<InstanceType<typeof AccessPersonPicker> | null>(null);
 let opener: HTMLElement | null = null;
@@ -92,13 +93,26 @@ function close() {
 	if (opener?.isConnected) void nextTick(() => opener?.focus());
 }
 
+// After a write the control that had focus (Remove, Add, Confirm) is gone: keep focus inside the dialog, on the add box when there is
+// one, else on the heading, so a keyboard or screen-reader user is not dropped on the page behind.
+async function refocus() {
+	await nextTick();
+	(addBox.value?.focus ? addBox.value : heading.value)?.focus?.();
+}
 async function addPicked() {
 	if (!picked.value || busy.value) return;
 	if (await access.add(picked.value.person_id, pickedRole.value)) reset();
+	await refocus();
 }
 async function confirmTransfer() {
 	if (!transferTarget.value || busy.value) return;
 	if (await access.transferTo(transferTarget.value.person_id)) reset();
+	await refocus();
+}
+async function removeEntry(entry: AccessEntry) {
+	if (!entry.person_id || busy.value) return;
+	await access.remove(entry.person_id);
+	await refocus();
 }
 function onRole(entry: AccessEntry, ev: Event) {
 	if (entry.person_id) void access.changeRole(entry.person_id, (ev.target as HTMLSelectElement).value);
@@ -136,7 +150,7 @@ function onKeydown(e: KeyboardEvent) {
 		<div v-if="modelValue" class="d1-kit d1-access-backdrop" @mousedown.self="close">
 			<div ref="dialog" class="d1-access" role="dialog" aria-modal="true" :aria-labelledby="`${uid}-title`" @keydown="onKeydown">
 				<header class="top">
-					<h2 :id="`${uid}-title`">Who has access to <span class="rec">{{ title || `this ${word}` }}</span></h2>
+					<h2 :id="`${uid}-title`" ref="heading" tabindex="-1">Who has access to <span class="rec">{{ title || `this ${word}` }}</span></h2>
 					<button type="button" class="x" aria-label="Close" @click="close">&times;</button>
 				</header>
 
@@ -182,14 +196,14 @@ function onKeydown(e: KeyboardEvent) {
 								<span class="who">
 									<span class="name">{{ e.name }}</span>
 									<span v-if="!e.can_sign_in" class="tag">{{ LOGINLESS_NOTE }}</span>
-									<span v-if="canManage && !e.person_id" class="tag">earlier entry, no People record: an admin can change it</span>
+									<span v-if="canManage && !e.person_id" class="tag">earlier entry with no People record, so it cannot be changed here</span>
 									<span v-if="blockedText(e)" class="warn">{{ blockedText(e) }}</span>
 								</span>
 								<template v-if="canChangeRole(e, canManage)">
 									<select :value="e.role" :aria-label="`Role of ${e.name}`" :disabled="busy" @change="onRole(e, $event)">
 										<option v-for="r in roles" :key="r.role" :value="r.role">{{ r.label }}</option>
 									</select>
-									<button type="button" class="btn" :aria-label="`Remove ${e.name}`" :disabled="busy" @click="e.person_id && access.remove(e.person_id)">Remove</button>
+									<button type="button" class="btn" :aria-label="`Remove ${e.name}`" :disabled="busy" @click="removeEntry(e)">Remove</button>
 								</template>
 								<span v-else class="role">{{ entryLabel(e, collection) }}</span>
 							</li>
@@ -198,7 +212,7 @@ function onKeydown(e: KeyboardEvent) {
 
 						<section v-if="parentList" class="inherited">
 							<h3>Also through {{ parent?.label || 'the sample' }}</h3>
-							<p class="hint">Everyone on the sample can see this {{ word }} too. Change it on the sample.</p>
+							<p class="hint">The people listed on the sample can see this {{ word }} too, unless a campaign or project hides it from them. Change it on the sample.</p>
 							<ul class="rows" :aria-label="`People with access through the sample`">
 								<li v-if="parentList.owner" class="row">
 									<span class="av" aria-hidden="true">{{ initials(parentList.owner.name) }}</span>
@@ -255,6 +269,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 .top { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px 10px; border-bottom: 1px solid var(--d1-line); }
 .top h2 { flex: 1; min-width: 0; margin: 0; font-size: var(--fs-lg, 15px); font-weight: 600; }
+.top h2:focus { outline: none; }
 .rec { overflow-wrap: anywhere; }
 .x { border: 0; background: transparent; color: inherit; font-size: 22px; line-height: 1; padding: 0 4px; cursor: pointer; border-radius: 6px; }
 .x:hover { background: var(--d1-tile); }

@@ -5,7 +5,7 @@ import { ref } from 'vue';
 import { errorText } from '../format';
 import { useRequestGate } from '../composables/useRequestGate';
 import { addEntry, loadAccess, removeEntry, setRole, transfer, type AccessApi } from './accessApi';
-import { emailNote, isAccessCollection, showInherited, type AccessList } from './accessModel';
+import { blockedText, emailNote, isAccessCollection, showInherited, type AccessList } from './accessModel';
 
 export interface AccessTarget {
 	collection: string;
@@ -100,7 +100,10 @@ export function useAccess(api: AccessApi, target: () => AccessTarget, onChanged:
 		write(async () => {
 			const t = target();
 			const res = await transfer(api, t.collection, t.id, personId);
-			return res.ok ? { ok: true as const, message: emailNote(res.data.email, 'owner') ?? 'Ownership transferred.' } : res;
+			if (!res.ok) return res;
+			// the change is made either way; a new owner who cannot read the record yet is told so, as on add
+			const blocked = blockedText({ name: res.data.owner?.name ?? 'The new owner', blocked_by: res.data.blocked_by });
+			return { ok: true as const, message: [emailNote(res.data.email, 'owner') ?? 'Ownership transferred.', blocked].filter(Boolean).join(' ') };
 		});
 
 	// The Restrict switch (hidden until A1b): restricting is a PATCH of the record, owner only (the guard decides).

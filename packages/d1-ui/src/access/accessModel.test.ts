@@ -106,6 +106,12 @@ describe('texts', () => {
 			'Edith Ford cannot see project P-7, so this will not take effect until its owner adds them.',
 		);
 		expect(blockedText(entry({ blocked_by: { collection: 'campaigns', id: 'x', kind: 'campaign', code: null } }))).toContain('cannot see campaign,');
+		// no parent named (the caller cannot read it): generic words, nothing of the parent
+		expect(blockedText(entry({ blocked_by: { reason: 'parent', collection: null, id: null, kind: null, code: null } }))).toBe(
+			'Edith Ford cannot see this record yet, so this will not take effect until they are given access to what it sits under.',
+		);
+		// no login: the "can't sign in yet" tag says it
+		expect(blockedText(entry({ blocked_by: { reason: 'no_login', collection: null, id: null, kind: null, code: null } }))).toBeNull();
 	});
 	it('names the project PI on a record inside a project, not on the project itself', () => {
 		const list = { project_pi: { person_id: 'q', name: 'Dr Ibis Jones', can_sign_in: true } };

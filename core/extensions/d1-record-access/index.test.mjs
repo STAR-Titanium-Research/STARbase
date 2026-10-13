@@ -52,7 +52,8 @@ const baseTables = () => ({
   projects: [{ project_id: PROJECT, principal_investigator_person: P.pi, restricted: false, project_code: 'PRJ1', project_name: 'Project One' }],
   sample_access: [], operation_access: [], test_access: [], campaign_access: [], project_access: [],
   sample_co_owners: [], project_investigators: [],
-  sample_readers: [], campaign_readers: [], project_readers: [],
+  sample_readers: [], operation_readers: [], test_readers: [], campaign_readers: [], project_readers: [],
+  directus_access: [], directus_policies: [],
 });
 
 // ---- a tiny in-memory knex: just the calls the endpoint makes, with transactions that roll back -----------
@@ -327,6 +328,8 @@ test('GET: restricted, the owner, the project PI and the merged entries with the
     { access_id: 'a2', sample_id: SAMPLE, person_id: P.nologin, role: 'edit', added_by_person_id: P.owner, created_at: new Date('2026-10-02T10:00:00Z') },
   );
   world.sample_co_owners.push({ id: 1, sample_id: SAMPLE, user_id: U.co }, { id: 2, sample_id: SAMPLE, user_id: U.orphan });
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.co }, { record_id: SAMPLE, user_id: U.view }, { record_id: SAMPLE, user_id: U.orphan });
+  world.project_readers.push({ record_id: PROJECT, user_id: U.owner }); // the caller reads the project, so its PI is named
   const { handlers } = mount({ tables: world });
   const r = await call(handlers['GET /:collection/:id']);
   assert.equal(r.status, 200);
@@ -336,7 +339,7 @@ test('GET: restricted, the owner, the project PI and the merged entries with the
   assert.equal(r.body.can_manage, true);
   const by = Object.fromEntries(r.body.entries.map((e) => [e.name, e]));
   assert.deepEqual(by['Cory Coowner'], { person_id: P.co, name: 'Cory Coowner', role: 'edit', label: 'Co-owner · can edit', source: 'co_owner', can_sign_in: true, added_by: null, added_at: null, blocked_by: null });
-  assert.deepEqual(by['Nell Nologin'], { person_id: P.nologin, name: 'Nell Nologin', role: 'edit', label: 'Can edit', source: 'access', can_sign_in: false, added_by: 'Olive Owner', added_at: '2026-10-02T10:00:00.000Z', blocked_by: null });
+  assert.deepEqual(by['Nell Nologin'], { person_id: P.nologin, name: 'Nell Nologin', role: 'edit', label: 'Can edit', source: 'access', can_sign_in: false, added_by: 'Olive Owner', added_at: '2026-10-02T10:00:00.000Z', blocked_by: { reason: 'no_login', collection: null, id: null, kind: null, code: null } });
   assert.equal(by['Vic Viewer'].label, 'Can view');
   // a login with no People row is listed by its login's name, with no person to manage
   assert.deepEqual([by['Olga Orphan'].person_id, by['Olga Orphan'].source, by['Olga Orphan'].can_sign_in], [null, 'co_owner', true]);
@@ -369,33 +372,88 @@ test('the owner never appears as an entry, even with a stale row', async () => {
   assert.deepEqual((await call(handlers['GET /:collection/:id'])).body.entries, []);
 });
 
-test('blocked_by names the nearest restricted parent that does not list the person (login via the readers table, no login via the access list)', async () => {
+const NONE = { collection: null, id: null, kind: null, code: null };
+const entryFor = (rows, name) => Object.fromEntries(rows.map((e) => [e.name, e]))[name];
+const grant = (table, key, recordId, personId) => ({ access_id: `g-${table}-${personId}`, [key]: recordId, person_id: personId, role: 'view', added_by_person_id: P.owner, created_at: new Date() });
+
+test('blocked_by asks the record\'s OWN readers table: a login that is in it is not blocked, a login that is not is, a person with no login always is', async () => {
+  const world = baseTables();
+  world.sample_access.push(grant('sample_access', 'sample_id', SAMPLE, P.view), grant('sample_access', 'sample_id', SAMPLE, P.co), grant('sample_access', 'sample_id', SAMPLE, P.nologin), grant('sample_access', 'sample_id', SAMPLE, P.stranger));
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.view }, { record_id: SAMPLE, user_id: U.co });
+  const { handlers } = mount({ tables: world });
+  const list = (await call(handlers['GET /:collection/:id'])).body.entries;
+  assert.equal(entryFor(list, 'Vic Viewer').blocked_by, null);
+  assert.equal(entryFor(list, 'Cory Coowner').blocked_by, null);
+  assert.deepEqual(entryFor(list, 'Nell Nologin').blocked_by, { reason: 'no_login', ...NONE });
+  // a login with no readers row: blocked; the caller reads no parent of the sample (not a project reader), so nothing of the parent is named
+  assert.deepEqual(entryFor(list, 'Sam Stranger').blocked_by, { reason: 'parent', ...NONE });
+});
+
+test('a sample in a restricted project: a person added to the sample IS a reader (the project gates no sample), so there is no false "will not take effect"', async () => {
   const world = baseTables();
   world.projects[0].restricted = true;
-  world.sample_access.push(
-    { access_id: 'a1', sample_id: SAMPLE, person_id: P.view, role: 'view', added_by_person_id: P.owner, created_at: new Date() },
-    { access_id: 'a2', sample_id: SAMPLE, person_id: P.co, role: 'view', added_by_person_id: P.owner, created_at: new Date() },
-    { access_id: 'a3', sample_id: SAMPLE, person_id: P.nologin, role: 'view', added_by_person_id: P.owner, created_at: new Date() },
-    { access_id: 'a4', sample_id: SAMPLE, person_id: P.nomail, role: 'view', added_by_person_id: P.owner, created_at: new Date() },
-  );
-  world.project_readers.push({ record_id: PROJECT, user_id: U.co });
-  world.project_access.push({ access_id: 'p1', project_id: PROJECT, person_id: P.nologin, role: 'view', added_by_person_id: P.pi, created_at: new Date() });
-  const { handlers } = mount({ tables: world });
-  const entries = Object.fromEntries((await call(handlers['GET /:collection/:id'])).body.entries.map((e) => [e.name, e]));
-  assert.deepEqual(entries['Vic Viewer'].blocked_by, { collection: 'projects', id: PROJECT, kind: 'project', code: 'PRJ1' });
-  assert.equal(entries['Cory Coowner'].blocked_by, null, 'the login is a reader of the project');
-  assert.equal(entries['Nell Nologin'].blocked_by, null, 'no login, but on the project list');
-  assert.equal(entries['Nadia Nomail'].blocked_by.collection, 'projects', 'no login and not on the project list');
-  // an unrestricted parent blocks nobody; operations look at sample, campaign and project, nearest first
-  const open = baseTables();
-  open.operation_access.push({ access_id: 'o1', operation_id: OPERATION, person_id: P.view, role: 'view', added_by_person_id: P.owner, created_at: new Date() });
-  open.physical_samples[0].restricted = true;
-  open.campaigns[0].restricted = true;
-  const op = mount({ tables: open });
-  const got = (await call(op.handlers['GET /:collection/:id'], { collection: 'manufacturing_operations', id: OPERATION })).body.entries[0];
-  assert.deepEqual([got.blocked_by.collection, got.blocked_by.code], ['physical_samples', 'SM-001']);
-  const none = mount({ tables: (() => { const w = baseTables(); w.operation_access.push({ access_id: 'o1', operation_id: OPERATION, person_id: P.view, role: 'view', added_by_person_id: P.owner, created_at: new Date() }); return w; })() });
-  assert.equal((await call(none.handlers['GET /:collection/:id'], { collection: 'manufacturing_operations', id: OPERATION })).body.entries[0].blocked_by, null);
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.view });
+  const { handlers, calls } = mount({ tables: world });
+  const r = await add(handlers, { person_id: P.view, role: 'view' });
+  assert.equal(r.body.entry.blocked_by, null);
+  assert.ok(calls.mail.sent[0].text.includes('Bar A') && calls.mail.sent[0].text.includes('lab.example'), 'and the mail carries the title and the link');
+});
+
+test('a parent is named only to a caller who can read it, and never its code or PI to anyone else', async () => {
+  const world = baseTables();
+  world.projects[0].restricted = true;
+  world.sample_access.push(grant('sample_access', 'sample_id', SAMPLE, P.stranger));
+  const hidden = mount({ tables: world });
+  const blind = await call(hidden.handlers['GET /:collection/:id']); // the owner reads the sample but NOT its restricted project
+  assert.deepEqual(entryFor(blind.body.entries, 'Sam Stranger').blocked_by, { reason: 'parent', ...NONE });
+  assert.equal(blind.body.project_pi, null, 'the PI of a project the caller cannot read is not named');
+  assert.ok(!JSON.stringify(blind.body).includes('PRJ1') && !JSON.stringify(blind.body).includes('Pia PI'));
+  // the same list for someone who reads the project: the parent is named
+  const sighted = baseTables();
+  sighted.projects[0].restricted = true;
+  sighted.sample_access.push(grant('sample_access', 'sample_id', SAMPLE, P.stranger));
+  sighted.project_readers.push({ record_id: PROJECT, user_id: U.owner });
+  const seen = await call(mount({ tables: sighted }).handlers['GET /:collection/:id']);
+  assert.deepEqual(entryFor(seen.body.entries, 'Sam Stranger').blocked_by, { reason: 'parent', collection: 'projects', id: PROJECT, kind: 'project', code: 'PRJ1' });
+  assert.equal(seen.body.project_pi.name, 'Pia PI');
+  // an admin reads every parent
+  const asAdmin = await call(mount({ tables: world }).handlers['GET /:collection/:id'], { acc: admin });
+  assert.equal(entryFor(asAdmin.body.entries, 'Sam Stranger').blocked_by.code, 'PRJ1');
+});
+
+test('operations: blocked by the sample, the campaign or the project from the readers table; hidden by a gate no parent explains is generic; admins are never blocked', async () => {
+  const base = () => {
+    const w = baseTables();
+    w.operation_access.push(grant('operation_access', 'operation_id', OPERATION, P.view));
+    w.sample_readers.push({ record_id: SAMPLE, user_id: U.owner });
+    w.campaign_readers.push({ record_id: CAMPAIGN, user_id: U.owner });
+    w.project_readers.push({ record_id: PROJECT, user_id: U.owner });
+    return w;
+  };
+  const vic = (w, table, id) => w[table].push({ record_id: id, user_id: U.view });
+  const get = async (world, acc = owner) =>
+    entryFor((await call(mount({ tables: world }).handlers['GET /:collection/:id'], { collection: 'manufacturing_operations', id: OPERATION, acc })).body.entries, 'Vic Viewer').blocked_by;
+  // 1. not a reader of the sample (nor of anything else): the nearest parent is the sample
+  assert.deepEqual(await get(base()), { reason: 'parent', collection: 'physical_samples', id: SAMPLE, kind: 'sample', code: 'SM-001' });
+  // 2. a reader of the sample, not of the campaign
+  const w2 = base(); vic(w2, 'sample_readers', SAMPLE);
+  assert.deepEqual(await get(w2), { reason: 'parent', collection: 'campaigns', id: CAMPAIGN, kind: 'campaign', code: 'CMP-1' });
+  // 3. a reader of the sample and the campaign, not of the project
+  const w3 = base(); vic(w3, 'sample_readers', SAMPLE); vic(w3, 'campaign_readers', CAMPAIGN);
+  assert.deepEqual(await get(w3), { reason: 'parent', collection: 'projects', id: PROJECT, kind: 'project', code: 'PRJ1' });
+  // 4. a reader of every parent but not of the operation (campaign shielding, the sample's own project): no parent explains it
+  const w4 = base(); vic(w4, 'sample_readers', SAMPLE); vic(w4, 'campaign_readers', CAMPAIGN); vic(w4, 'project_readers', PROJECT);
+  assert.deepEqual(await get(w4), { reason: 'parent', ...NONE });
+  // 5. in the operation's own readers: not blocked, whatever the parents say
+  const w5 = base(); vic(w5, 'operation_readers', OPERATION);
+  assert.equal(await get(w5), null);
+  // 6. an admin is not listed in any readers table and is not blocked
+  const w6 = base(); w6.directus_users.find((u) => u.id === U.view).role = ID(900); w6.directus_access.push({ role: ID(900), user: null, policy: ID(901) }); w6.directus_policies.push({ id: ID(901), admin_access: true });
+  assert.equal(await get(w6), null);
+  // 7. a test: the same walk through test_readers
+  const w7 = base(); w7.test_access.push(grant('test_access', 'session_id', TEST, P.view)); vic(w7, 'test_readers', TEST);
+  const t = entryFor((await call(mount({ tables: w7 }).handlers['GET /:collection/:id'], { collection: 'test_sessions', id: TEST })).body.entries, 'Vic Viewer');
+  assert.equal(t.blocked_by, null);
 });
 
 // ---- adding ---------------------------------------------------------------------------------------------------------
@@ -678,10 +736,11 @@ test('transfer: sets the owner, keeps the previous owner as Can edit, drops the 
   const world = baseTables();
   world.sample_access.push({ access_id: 'a1', sample_id: SAMPLE, person_id: P.view, role: 'view', added_by_person_id: P.owner, created_at: new Date() });
   world.sample_co_owners.push({ id: 1, sample_id: SAMPLE, user_id: U.view }, { id: 2, sample_id: SAMPLE, user_id: U.owner });
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.view });
   const { handlers, db, calls } = mount({ tables: world });
   const r = await transfer(handlers, P.view);
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, { owner: { person_id: P.view, name: 'Vic Viewer', can_sign_in: true }, email: 'sent' });
+  assert.deepEqual(r.body, { owner: { person_id: P.view, name: 'Vic Viewer', can_sign_in: true }, email: 'sent', blocked_by: null });
   assert.equal(db.tables().physical_samples[0].owner_person_id, P.view);
   assert.deepEqual(db.tables().sample_access.map((x) => [x.person_id, x.role]), [[P.owner, 'edit']], 'the new owner has no row, the previous owner is Can edit');
   assert.deepEqual(db.tables().sample_co_owners, [], 'both old rows are gone');
@@ -807,59 +866,80 @@ test('a manage check that fails inside the transaction (ownership changed meanwh
   assert.equal(calls.mail.sent.length, 0);
 });
 
-test('a person who cannot read the record yet is mailed without the title and the link, told which restricted parent to wait for', async () => {
+test('a person who cannot read the record yet is mailed the generic wording: no title, no link, nothing of any parent', async () => {
   const world = baseTables();
   world.projects[0].restricted = true;
-  world.project_readers.push({ record_id: PROJECT, user_id: U.co });
+  world.project_readers.push({ record_id: PROJECT, user_id: U.owner }); // the caller can read the project, so the response may name it
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.co });
   const { handlers, calls } = mount({ tables: world });
-  const blocked = await add(handlers, { person_id: P.view, role: 'view' }); // vic: a login, not a reader of the restricted project
+  const blocked = await add(handlers, { person_id: P.view, role: 'view' }); // vic: a login, not in the sample's readers
   assert.equal(blocked.body.email, 'sent');
   assert.ok(blocked.body.entry.blocked_by, 'the list says so too');
   const m = calls.mail.sent[0];
   assert.equal(m.to, 'vic@login.example');
   assert.match(m.subject, /Olive Owner gave you access to sample SM-001/);
   for (const body of [m.text, m.html]) {
-    assert.ok(body.includes('SM-001'), 'the kind and code are there');
+    assert.ok(body.includes('SM-001'), 'the kind and code of the record are there');
     assert.ok(body.includes('Olive Owner'), 'and who added them');
-    assert.ok(/once you have access to the restricted project/.test(body));
+    assert.ok(/You cannot open it yet/.test(body));
     assert.ok(!body.includes('Bar A'), 'no title');
     assert.ok(!body.includes('lab.example'), 'no link');
-    assert.ok(!body.includes('PRJ1') && !body.includes('Project One'), 'nothing of the parent either');
+    assert.ok(!/restricted|PRJ1|Project One|Pia/.test(body), 'nothing of the parent');
   }
   assert.ok(!m.html.includes('<a '));
-  // a person the project does list (its readers table) gets the ordinary mail with the title and the link
+  // a person in the record's own readers gets the ordinary mail with the title and the link
   const listed = await add(handlers, { person_id: P.co, role: 'view' });
   assert.equal(listed.body.entry.blocked_by, null);
   assert.ok(calls.mail.sent[1].text.includes('Bar A') && calls.mail.sent[1].text.includes('https://lab.example/admin/home/samples/'));
-  // a login-less person who is not on the restricted project's list is blocked too
+  // a person with no login is blocked too, with its own wording
   const nologin = await add(handlers, { person_id: P.nologin, role: 'view' });
   assert.equal(nologin.body.email, 'sent');
+  assert.deepEqual(nologin.body.entry.blocked_by, { reason: 'no_login', ...NONE });
   assert.ok(!calls.mail.sent[2].text.includes('Bar A') && !calls.mail.sent[2].text.includes('lab.example'));
+  assert.match(calls.mail.sent[2].text, /once you have a D1 login/);
 });
 
-test('a transfer to a person the restricted parent does not list sends the blocked wording', async () => {
+test('a transfer returns blocked_by of the new owner (null when they can read it) and mails the generic wording to a blocked one', async () => {
   const world = baseTables();
   world.campaigns[0].restricted = true;
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.owner });
+  world.campaign_readers.push({ record_id: CAMPAIGN, user_id: U.owner });
   const { handlers, calls } = mount({ tables: world });
   const r = await call(handlers['POST /:collection/:id/transfer'], { collection: 'manufacturing_operations', id: OPERATION, body: { person_id: P.view } });
   assert.equal(r.status, 200);
   assert.equal(r.body.email, 'sent');
+  assert.deepEqual(r.body.blocked_by, { reason: 'parent', collection: 'physical_samples', id: SAMPLE, kind: 'sample', code: 'SM-001' });
   const m = calls.mail.sent[0];
   assert.equal(m.subject, 'Olive Owner made you the owner of operation SM-001-F1');
-  assert.ok(/restricted campaign/.test(m.text) && !m.text.includes('lab.example'));
+  assert.ok(/You cannot open it yet/.test(m.text) && !m.text.includes('lab.example') && !/campaign/i.test(m.text));
+  // the new owner is in the record's readers (the owner path): not blocked, ordinary mail
+  const ok = baseTables();
+  ok.operation_readers.push({ record_id: OPERATION, user_id: U.view });
+  const fine = mount({ tables: ok });
+  const r2 = await call(fine.handlers['POST /:collection/:id/transfer'], { collection: 'manufacturing_operations', id: OPERATION, body: { person_id: P.view } });
+  assert.equal(r2.body.blocked_by, null);
+  assert.ok(fine.calls.mail.sent[0].text.includes('lab.example'));
+  // a transfer to a person with no login says so
+  const none = await call(fine.handlers['POST /:collection/:id/transfer'], { collection: 'test_sessions', id: TEST, body: { person_id: P.nologin } });
+  assert.deepEqual(none.body.blocked_by, { reason: 'no_login', ...NONE });
 });
 
-test('mailContent with blockedKind drops the title and the link even when they are passed', () => {
-  const m = mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1', title: 'Secret bar', link: 'https://x/y', blockedKind: 'project' });
-  assert.ok(!m.text.includes('Secret bar') && !m.html.includes('Secret bar') && !m.text.includes('https://x') && !m.html.includes('https://x'));
-  assert.ok(m.text.includes('You will be able to open it once you have access to the restricted project.'));
+test('mailContent: blockedReason drops the title and the link even when they are passed', () => {
+  for (const blockedReason of ['parent', 'no_login']) {
+    const m = mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1', title: 'Secret bar', link: 'https://x/y', blockedReason });
+    assert.ok(!m.text.includes('Secret bar') && !m.html.includes('Secret bar') && !m.text.includes('https://x') && !m.html.includes('https://x'));
+  }
+  assert.ok(mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1', blockedReason: 'parent' }).text.includes('You cannot open it yet.'));
+  assert.ok(mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1', blockedReason: 'no_login' }).text.includes('D1 login'));
   assert.ok(mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1', title: 'Bar', link: 'https://x/y' }).text.includes('https://x/y'));
 });
 
 test('without PUBLIC_URL: one warning at startup, and the mail carries no link', async () => {
-  const none = mount({ env: {} });
+  const noUrl = baseTables();
+  noUrl.sample_readers.push({ record_id: SAMPLE, user_id: U.co });
+  const none = mount({ env: {}, tables: noUrl });
   assert.equal(none.warnings.filter((w) => /PUBLIC_URL is not set/.test(w)).length, 1);
-  const r = await add(none.handlers, { person_id: P.nologin, role: 'view' });
+  const r = await add(none.handlers, { person_id: P.co, role: 'view' });
   assert.equal(r.body.email, 'sent');
   assert.ok(!/admin\/home/.test(none.calls.mail.sent[0].text) && !none.calls.mail.sent[0].html.includes('<a '));
   assert.ok(none.calls.mail.sent[0].text.includes('Bar A'));

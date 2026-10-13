@@ -7,11 +7,14 @@
 //   GET    /d1-record-access/:collection/:id
 //     -> { restricted, owner, project_pi, can_manage,
 //          entries: [{ person_id, name, role, label, source: 'access'|'co_owner'|'investigator', can_sign_in,
-//                      added_by, added_at, blocked_by }] }
+//                      added_by, added_at, blocked_by }] }      (project_pi is null for a caller who cannot read that project)
 //   POST   /d1-record-access/:collection/:id/entries            { person_id, role }  -> { entry, email: 'sent'|'skipped'|'failed' }
 //   PATCH  /d1-record-access/:collection/:id/entries/:person_id { role }              -> { entry }
 //   DELETE /d1-record-access/:collection/:id/entries/:person_id                        -> { removed: true }
-//   POST   /d1-record-access/:collection/:id/transfer           { person_id }         -> { owner, email }
+//   POST   /d1-record-access/:collection/:id/transfer           { person_id }         -> { owner, email, blocked_by }
+//   blocked_by (entries, add, transfer): null, or { reason: 'parent' | 'no_login', collection, id, kind, code }. The person is blocked when
+//   they have a login that is not in the record's OWN readers table (and is not an admin), or have no login. collection/id/kind/code name
+//   the nearest parent they cannot read, only when the CALLER can read that parent, else they are null (generic wording).
 //
 // collection is one of physical_samples, manufacturing_operations, test_sessions, campaigns, projects. Roles: samples,
 // operations, tests and campaigns have `view` (Can view) and `edit` (Can edit); projects have `view` and `investigator`
@@ -62,11 +65,11 @@ const PARENTS = {
   sample_id: { collection: 'physical_samples', kind: 'sample', key: 'sample_id', readers: 'sample_readers', access: 'sample_access', ownerField: 'owner_person_id', code: ['sample_code'] },
 };
 const DETAILS = {
-  physical_samples: { kind: 'sample', segment: 'samples', code: ['sample_code'], title: ['nickname'], parents: ['project_id'], legacy: { table: 'sample_co_owners', fk: 'sample_id', role: 'edit' } },
-  manufacturing_operations: { kind: 'operation', segment: 'operations', code: ['pass_code'], title: [], parents: ['sample_id', 'campaign_id', 'project_id'], legacy: null },
-  test_sessions: { kind: 'test', segment: 'tests', code: ['test_code'], title: ['test_type'], parents: ['sample_id', 'campaign_id', 'project_id'], legacy: null },
-  campaigns: { kind: 'campaign', segment: 'campaigns', code: ['campaign_code', 'name'], title: [], parents: ['project_id'], legacy: null },
-  projects: { kind: 'project', segment: 'projects', code: ['project_code', 'project_name'], title: ['project_name'], parents: [], legacy: { table: 'project_investigators', fk: 'project_id', role: 'investigator' } },
+  physical_samples: { readers: 'sample_readers', kind: 'sample', segment: 'samples', code: ['sample_code'], title: ['nickname'], parents: ['project_id'], legacy: { table: 'sample_co_owners', fk: 'sample_id', role: 'edit' } },
+  manufacturing_operations: { readers: 'operation_readers', kind: 'operation', segment: 'operations', code: ['pass_code'], title: [], parents: ['sample_id', 'campaign_id', 'project_id'], legacy: null },
+  test_sessions: { readers: 'test_readers', kind: 'test', segment: 'tests', code: ['test_code'], title: ['test_type'], parents: ['sample_id', 'campaign_id', 'project_id'], legacy: null },
+  campaigns: { readers: 'campaign_readers', kind: 'campaign', segment: 'campaigns', code: ['campaign_code', 'name'], title: [], parents: ['project_id'], legacy: null },
+  projects: { readers: 'project_readers', kind: 'project', segment: 'projects', code: ['project_code', 'project_name'], title: ['project_name'], parents: [], legacy: { table: 'project_investigators', fk: 'project_id', role: 'investigator' } },
 };
 
 // collection -> { kind, segment, table, fk, key, ownerField, roles, manage, code, title, parents, legacy }
@@ -131,19 +134,24 @@ const oneLine = (value) => String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
 // The email: { subject, text, html }. Every interpolated value is HTML-escaped; nothing is a template. `transfer` is the
 // ownership-transfer wording ("made you the owner of").
 //
-// `blockedKind` ('project', 'campaign' or 'sample') means the person cannot read the record yet because that parent is Restricted and
-// does not list them: the mail then says who added them, the kind and code, and that they can open it once they have access to the
-// restricted <blockedKind>. It carries NO title and NO link (the title is the record's content, the link would only fail).
-export function mailContent({ adder, role, kind, code, title, link, transfer = false, blockedKind = null }) {
+// `blockedReason` ('parent' or 'no_login') means the person cannot read the record yet: something above it hides it from them
+// ('parent'), or they have no login ('no_login'). The mail then says who added them, the record's kind and code, and the GENERIC
+// wording for the reason. It carries NO title, NO link (the title is the record's content, the link would only fail) and nothing of
+// the parents above the record (their kind, code or the PI): the recipient may not be allowed to know they exist.
+export function mailContent({ adder, role, kind, code, title, link, transfer = false, blockedReason = null }) {
   const who = oneLine(adder) || 'Someone';
   const what = [oneLine(kind), oneLine(code)].filter(Boolean).join(' ') || 'a record';
   const verb = transfer ? 'made you the owner of' : 'gave you access to';
   const subject = `${who} ${verb} ${what}`;
-  const blocked = oneLine(blockedKind);
+  const blocked = Boolean(blockedReason);
   const named = blocked ? '' : oneLine(title);
   const openLink = blocked ? null : link;
   const roleLine = oneLine(role);
-  const wait = blocked ? `You will be able to open it once you have access to the restricted ${blocked}.` : null;
+  const wait = !blocked
+    ? null
+    : blockedReason === 'no_login'
+      ? 'You will be able to open it once you have a D1 login and access to it.'
+      : 'You cannot open it yet. You will be able to once the owner of what it sits under gives you access.';
   const text = [
     `${who} ${verb} the ${what}${named ? ` (${named})` : ''}.`,
     roleLine ? `Your role: ${roleLine}.` : null,
@@ -288,7 +296,7 @@ export default {
     }
 
     // The merged entries: the access table plus the old co-owner / investigator rows, one per person, strongest role.
-    async function buildEntries(db, cfg, id, record) {
+    async function buildEntries(db, cfg, id, record, acc) {
       const accessRows = await db(cfg.table).where(cfg.fk, id).select('person_id', 'role', 'added_by_person_id', 'created_at');
       const legacyRows = cfg.legacy ? await db(cfg.legacy.table).where(cfg.legacy.fk, id).select('user_id') : [];
 
@@ -329,42 +337,84 @@ export default {
         });
       }
       const entries = [...merged.values()];
-      await markBlocked(db, cfg, record, entries);
+      await markBlocked(db, cfg, id, record, entries, acc);
       return entries
         .sort((a, b) => ROLE_RANK[b.role] - ROLE_RANK[a.role] || a.name.localeCompare(b.name))
         .map(({ user_id, ...entry }) => ({ ...entry, label: roleLabel(cfg.collection, entry.role, entry.source), blocked_by: entry.blocked_by ?? null }));
     }
 
-    // blocked_by: the nearest Restricted parent (sample, campaign, project) that does not list the person. A person with a
-    // login is listed when that login is in the parent's readers table; a person with no login when they are on the parent's
-    // access list or are its owner.
-    async function markBlocked(db, cfg, record, entries) {
-      if (!entries.length) return;
+    // blocked_by: can this person read the record now? Asked of the record's OWN readers table (the read rule itself, kept in step by the
+    // triggers of migration 166, so it is exact whatever hides the record: a restricted sample, campaign or project, a campaign shield,
+    // the sample's project). A person with a login who is in the table (or an admin: admins are not listed) is not blocked; a person
+    // with a login who is not is blocked by a parent; a person with NO login is blocked until an admin links one.
+    //   { reason: 'parent' | 'no_login', collection, id, kind, code }
+    // collection, id, kind and code name the nearest parent (sample, campaign, project) that the person cannot read, and ONLY when the
+    // CALLER can read that parent: a restricted parent's code is never sent to someone who cannot see it. Otherwise they are all null
+    // and the dialog and the email use the generic words.
+    const NO_PARENT = { collection: null, id: null, kind: null, code: null };
+    const blockedLogin = () => ({ reason: 'no_login', ...NO_PARENT });
+
+    async function isAdminLogin(db, userId) {
+      const user = await db('directus_users').where('id', userId).first('role');
+      const direct = await db('directus_access').where('user', userId).select('policy');
+      const viaRole = !isBlank(user?.role) ? await db('directus_access').where('role', user.role).select('policy') : [];
+      const policies = [...new Set([...direct, ...viaRole].map((a) => a.policy).filter((v) => !isBlank(v)))];
+      if (!policies.length) return false;
+      return Boolean(await db('directus_policies').whereIn('id', policies).where('admin_access', true).first('id'));
+    }
+
+    async function readersAmong(db, table, recordId, userIds) {
+      if (!userIds.length) return new Set();
+      const rows = await db(table).where('record_id', recordId).whereIn('user_id', userIds).select('user_id');
+      return new Set(rows.map((r) => String(r.user_id)));
+    }
+
+    // Fills entry.blocked_by (null, or the object above) for every entry. Each entry needs `user_id` (the login or null) and `person_id`.
+    async function markBlocked(db, cfg, id, record, entries, acc) {
+      const logins = [...new Set(entries.filter((e) => !isBlank(e.user_id)).map((e) => String(e.user_id)))];
+      const readers = await readersAmong(db, cfg.readers, id, logins);
+      const pending = [];
+      for (const entry of entries) {
+        if (isBlank(entry.user_id)) entry.blocked_by = blockedLogin();
+        else if (readers.has(String(entry.user_id))) entry.blocked_by = null;
+        else pending.push(entry);
+      }
+      const blocked = [];
+      for (const entry of pending) {
+        if (await isAdminLogin(db, entry.user_id)) entry.blocked_by = null;
+        else blocked.push(entry);
+      }
+      if (!blocked.length) return;
+      const named = new Map(); // user id -> the nearest parent the caller can read and the person cannot
       for (const column of cfg.parents) {
         const parentId = record[column];
         const parent = PARENTS[column];
         if (isBlank(parentId)) continue;
-        const row = await db(parent.collection).where(parent.key, parentId).first(parent.key, 'restricted', parent.ownerField, ...parent.code);
-        if (!row || !toBool(row.restricted)) continue;
-        const logins = [...new Set(entries.filter((e) => !isBlank(e.user_id)).map((e) => e.user_id))];
-        const readerSet = new Set();
-        if (logins.length) for (const r of await db(parent.readers).where('record_id', parentId).whereIn('user_id', logins).select('user_id')) readerSet.add(String(r.user_id));
-        const loginless = [...new Set(entries.filter((e) => isBlank(e.user_id) && !isBlank(e.person_id)).map((e) => e.person_id))];
-        const listed = new Set(isBlank(row[parent.ownerField]) ? [] : [String(row[parent.ownerField])]);
-        if (loginless.length) for (const r of await db(parent.access).where(parent.key, parentId).whereIn('person_id', loginless).select('person_id')) listed.add(String(r.person_id));
-        for (const entry of entries) {
-          if (entry.blocked_by) continue;
-          const ok = !isBlank(entry.user_id) ? readerSet.has(String(entry.user_id)) : !isBlank(entry.person_id) && listed.has(String(entry.person_id));
-          if (!ok) entry.blocked_by = { collection: parent.collection, id: String(parentId), kind: parent.kind, code: firstOf(row, parent.code) };
-        }
+        const callerReads = acc.admin === true || (await readersAmong(db, parent.readers, parentId, [String(acc.user)])).size > 0;
+        if (!callerReads) continue;
+        const theirs = await readersAmong(db, parent.readers, parentId, [...new Set(blocked.map((e) => String(e.user_id)))]);
+        const open = blocked.filter((e) => !theirs.has(String(e.user_id)) && !named.has(String(e.user_id)));
+        if (!open.length) continue;
+        const row = await db(parent.collection).where(parent.key, parentId).first(parent.key, ...parent.code);
+        if (!row) continue;
+        for (const e of open) named.set(String(e.user_id), { collection: parent.collection, id: String(parentId), kind: parent.kind, code: firstOf(row, parent.code) });
       }
+      for (const entry of blocked) entry.blocked_by = { reason: 'parent', ...(named.get(String(entry.user_id)) ?? NO_PARENT) };
     }
 
-    // The restricted parent that keeps this person from reading the record, or null.
-    async function blockedFor(db, cfg, record, person) {
+    // The blocked_by of one person (a recipient, a new owner), or null.
+    async function blockedFor(db, cfg, id, record, person, acc) {
       const probe = { person_id: person.person_id, user_id: person.user_id ?? null, blocked_by: null };
-      await markBlocked(db, cfg, record, [probe]);
+      await markBlocked(db, cfg, id, record, [probe], acc);
       return probe.blocked_by;
+    }
+
+    // Can the caller read the record's parent (project, campaign, sample)? A projects record is its own project, already readable.
+    async function callerReadsParent({ acc, cfg }, column, record) {
+      if (cfg.collection === 'projects' || acc.admin === true) return true;
+      const parentId = record[column];
+      if (isBlank(parentId)) return true;
+      return (await readersAmong(database, PARENTS[column].readers, parentId, [String(acc.user)])).size > 0;
     }
 
     async function projectPi(db, cfg, record) {
@@ -392,18 +442,20 @@ export default {
     }
 
     // 'sent' | 'skipped' | 'failed'. Never throws.
-    async function sendMail({ req, acc, cfg, id, record, person, role, transfer }) {
+    // `blocked`: the person's blocked_by when the caller already has it (the transfer answers with it), else it is looked up here.
+    async function sendMail({ req, acc, cfg, id, record, person, role, transfer, blocked }) {
       try {
         if (isBlank(person?.person_id) || String(person.user_id ?? '') === String(acc.user)) return 'skipped'; // never mail the adder
         const user = isBlank(person.user_id) ? null : await database('directus_users').where('id', person.user_id).first('email');
         const to = recipientAddress(person, user);
         if (!to) return 'skipped';
         const { name } = await callerName(database, acc);
-        // a person who cannot read the record yet (a restricted parent does not list them) is told, without the title or the link
-        const blocked = await blockedFor(database, cfg, record, person);
+        // a person who cannot read the record yet (their own readers row is missing, or they have no login) is mailed the generic
+        // wording: no title, no link, nothing of the parents above the record
+        const stop = blocked === undefined ? await blockedFor(database, cfg, id, record, person, acc) : blocked;
         const content = mailContent({
           adder: name, role, kind: cfg.kind, code: firstOf(record, cfg.code), title: firstOf(record, cfg.title) !== firstOf(record, cfg.code) ? firstOf(record, cfg.title) : null,
-          link: recordLink(env?.PUBLIC_URL, cfg.collection, id), transfer, blockedKind: blocked?.kind ?? null,
+          link: recordLink(env?.PUBLIC_URL, cfg.collection, id), transfer, blockedReason: stop?.reason ?? null,
         });
         const mail = new services.MailService({ schema: req.schema, knex: database });
         await withTimeout(mail.send({ to, subject: content.subject, html: content.html, text: content.text }), MAIL_TIMEOUT_MS);
@@ -416,13 +468,14 @@ export default {
 
     // -- the routes ------------------------------------------------------------------------------------------
     router.get('/:collection/:id', route(async (args) => {
-      const { res, cfg, id } = args;
+      const { res, cfg, id, acc } = args;
       await requireReadable(args);
       const record = await loadRecord(database, cfg, id);
       const owner = isBlank(record[cfg.ownerField]) ? null : await personById(database, record[cfg.ownerField]);
-      const pi = await projectPi(database, cfg, record);
+      // the project's PI is named only to a caller who can read that project (a sample reader need not): no hidden parent's details
+      const pi = (await callerReadsParent(args, 'project_id', record)) ? await projectPi(database, cfg, record) : null;
       const manage = await canManage(args);
-      const entries = await buildEntries(database, cfg, id, record);
+      const entries = await buildEntries(database, cfg, id, record, acc);
       res.json({ restricted: toBool(record.restricted), owner: personRef(owner), project_pi: personRef(pi), can_manage: manage, entries });
     }));
 
@@ -467,10 +520,10 @@ export default {
 
     // The entry as it reads now, for the answer. The change is already committed (and the mail sent), so a failure here is logged and
     // answers entry: null instead of turning a committed change into a 500.
-    async function entryOf(cfg, id, personId) {
+    async function entryOf(cfg, id, personId, acc) {
       try {
         const record = await loadRecord(database, cfg, id);
-        return (await buildEntries(database, cfg, id, record)).find((e) => String(e.person_id) === String(personId)) ?? null;
+        return (await buildEntries(database, cfg, id, record, acc)).find((e) => String(e.person_id) === String(personId)) ?? null;
       } catch (err) {
         logger?.error?.(`${SOURCE}: the change to ${cfg.collection} ${id} is committed but reading it back failed: ${err?.stack || err?.message || err}`);
         return null;
@@ -497,7 +550,7 @@ export default {
       });
       await clearDataCache(req);
       const email = done.newGrant ? await sendMail({ req, acc, cfg, id, record: done.record, person: done.person, role: roleLabel(cfg.collection, role), transfer: false }) : 'skipped';
-      res.json({ entry: await entryOf(cfg, id, personId), email });
+      res.json({ entry: await entryOf(cfg, id, personId, acc), email });
     }));
 
     router.patch('/:collection/:id/entries/:person_id', route(async (args) => {
@@ -515,7 +568,7 @@ export default {
         await dropLegacy(trx, cfg, id, person);
       });
       await clearDataCache(req);
-      res.json({ entry: await entryOf(cfg, id, personId), email: 'skipped' });
+      res.json({ entry: await entryOf(cfg, id, personId, acc), email: 'skipped' });
     }));
 
     router.delete('/:collection/:id/entries/:person_id', route(async (args) => {
@@ -562,8 +615,18 @@ export default {
         return { record, next };
       });
       await clearDataCache(req);
-      const email = await sendMail({ req, acc, cfg, id, record: done.record, person: done.next, role: ownerLabel(cfg.collection), transfer: true });
-      res.json({ owner: personRef(done.next), email });
+      // blocked_by of the new owner (the spec: the dialog says so "on add and on transfer"); the change is made either way. A failed
+      // lookup answers null here and the generic mail wording (the safe side).
+      let blocked_by = null;
+      let blockedKnown = true;
+      try {
+        blocked_by = await blockedFor(database, cfg, id, done.record, done.next, acc);
+      } catch (err) {
+        blockedKnown = false;
+        logger?.error?.(`${SOURCE}: blocked_by of the new owner of ${cfg.collection} ${id} could not be read: ${err?.stack || err?.message || err}`);
+      }
+      const email = await sendMail({ req, acc, cfg, id, record: done.record, person: done.next, role: ownerLabel(cfg.collection), transfer: true, blocked: blockedKnown ? blocked_by : { reason: 'parent' } });
+      res.json({ owner: personRef(done.next), email, blocked_by });
     }));
   },
 };

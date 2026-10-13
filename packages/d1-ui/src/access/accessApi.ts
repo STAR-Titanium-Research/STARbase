@@ -4,7 +4,7 @@
 // The endpoint answers with the bare JSON (no `data` wrapper), /items answers with `{ data: [...] }`.
 import type { ExplorerHost } from '../host';
 import { errorText } from '../format';
-import { peopleSearchQuery, type AccessEntry, type AccessList, type PersonHit } from './accessModel';
+import { peopleSearchQuery, type AccessEntry, type AccessList, type BlockedBy, type PersonHit } from './accessModel';
 
 export type AccessApi = ExplorerHost['api'];
 
@@ -53,10 +53,16 @@ export const removeEntry = (api: AccessApi, collection: string, id: string, pers
 		return true as const;
 	});
 
-export const transfer = (api: AccessApi, collection: string, id: string, personId: string): Promise<Outcome<{ email: EmailResult }>> =>
+/** The new owner's name and `blocked_by` come back too: the dialog says when they cannot read the record yet (the change is made anyway). */
+export const transfer = (
+	api: AccessApi,
+	collection: string,
+	id: string,
+	personId: string,
+): Promise<Outcome<{ email: EmailResult; owner: { name: string } | null; blocked_by: BlockedBy | null }>> =>
 	run(async () => {
 		const body = (await api.post(`${base(collection, id)}/transfer`, { person_id: personId })).data ?? {};
-		return { email: body.email ?? 'skipped' };
+		return { email: body.email ?? 'skipped', owner: body.owner ?? null, blocked_by: body.blocked_by ?? null };
 	});
 
 /** Active people by name. An empty search is not sent. */
