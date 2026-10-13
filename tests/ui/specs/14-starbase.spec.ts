@@ -182,6 +182,10 @@ test('the Force and FAST plot pages mount in STARbase, and their record links ro
 	page.on('response', (r) => {
 		if (r.status() >= 500) crashes.push(`${r.status()} ${r.url()}`);
 	});
+	// The 403 asset noise is tolerated, but a CSP refusal means the production policy blocks something STARbase needs.
+	page.on('console', (m) => {
+		if (/Refused to/i.test(m.text())) crashes.push(m.text());
+	});
 	const onStar = (re: RegExp) => (u: URL) => u.origin === new URL(STAR_BASE).origin && re.test(u.pathname);
 	await signInStarbase(page, 'admin');
 	// Real Force and FAST operations are the ones the Operations list links to.
@@ -230,14 +234,19 @@ test('phone (375 px): the menu sheet, index pages as lists, a record page with n
 		await expect(menu).toBeFocused();
 		// Index pages stay lists on a phone (maintainer override): a table, not cards.
 		await page.goto(`${STAR_BASE}/samples`);
+		// No sideways scroll in the content area, and none at page level (the document itself). Polled: until the
+		// icon font loads, a ligature icon briefly renders as wide text and overflows the page for a few hundred ms.
+		const fits = () =>
+			page.evaluate(() => {
+				const c = document.querySelector('.sb-content')!;
+				const d = document.documentElement;
+				return { content: c.scrollWidth <= c.clientWidth, page: d.scrollWidth <= d.clientWidth };
+			});
 		await expect(page.locator('table.d1-table').first()).toBeVisible();
+		await expect.poll(fits, { message: 'no sideways scroll on /samples at 375 px' }).toEqual({ content: true, page: true });
 		await page.goto(`${STAR_BASE}/samples/${encodeURIComponent(id)}`);
 		await expect(page.locator('.d1-record-layout').first()).toBeVisible();
-		const fits = await page.evaluate(() => {
-			const c = document.querySelector('.sb-content')!;
-			return c.scrollWidth <= c.clientWidth;
-		});
-		expect(fits, 'no sideways scroll at 375 px').toBe(true);
+		await expect.poll(fits, { message: 'no sideways scroll on the record page at 375 px' }).toEqual({ content: true, page: true });
 	} finally {
 		await context.close();
 	}

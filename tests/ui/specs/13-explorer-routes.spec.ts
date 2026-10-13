@@ -11,7 +11,8 @@ import { adminApi, findFirstId, firstId, signInStarbase } from '../starbase/targ
 
 const repo = join(__dirname, '..', '..', '..');
 const credsFile = process.env.D1_ROUTES_CREDENTIALS || join(repo, '.superpowers', 'preview-credentials.txt');
-const CRASH = /Unexpected Error|no Explorer host/i;
+// "No such page" is STARbase's frame for an unknown route: a nav link with no STARbase page must fail.
+const CRASH = /Unexpected Error|no Explorer host|No such page/i;
 const creds = Object.fromEntries(
 	readFileSync(credsFile, 'utf8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
 );
