@@ -21,7 +21,32 @@ of bug that schema-level checks miss — e.g. a conditional panel that is wired 
 | `10-ask-db-chat` | **Ask the Database** module: a stubbed proxy response renders the SQL block, result table, and Plotly chart; the `/d1-ask/chat` endpoint rejects unauthenticated requests (401) and passes the auth gate for a logged-in session. A live end-to-end smoke runs only with `D1_LLM_LIVE=1`. |
 | `11-force-dashboard` | Force Analysis module: sample → operation drill-down, signal charts and the per-axis FRM, including the Figure ⇄ Lite switch. Needs at least one processed `machining_force_analysis` row. |
 | `12-force-crawler` | Force Crawler module: status, queue stats, settings and activity read from and written to `force_crawler_state`. |
-| `13-explorer-routes` | Home (Explorer) module: every page in the nav config plus a first record of each kind draws its body and nav with no console error, as an admin and as a Lab Member; the other kit users still render. Runs against the preview, not live: `bash scripts/dev/explorer_preview.sh`, then `cd tests/ui && npx playwright test specs/13-explorer-routes.spec.ts` (env `D1_ROUTES_CREDENTIALS`, `D1_ROUTES_ADMIN_BASE`). |
+| `13-explorer-routes` | Home (Explorer) module: every page in the nav config plus a first record of each kind draws its body and nav with no console error, as an admin and as a Lab Member; the other kit users still render. Runs against the preview, not live: `bash scripts/dev/explorer_preview.sh`, then `cd tests/ui && npx playwright test specs/13-explorer-routes.spec.ts` (env `D1_ROUTES_CREDENTIALS`, `D1_ROUTES_ADMIN_BASE`). Also runs against STARbase with `D1_ROUTES_STARBASE=http://127.0.0.1:5190` (the Directus-only check is skipped). |
+| `14-starbase` | STARbase (`apps/starbase/web`) end to end: sign-in shared with Data Studio, a deep link through sign-in, editing through the framed Directus form and its new-tab fallback, a sign-out in Data Studio sending STARbase to sign in, a credentialed write, shared sign-out, the plot pages, the phone layout. Against the `d1-starbase` preview and `vite preview` (production CSP). Two layouts: ports (default) and `STARBASE_E2E_MODE=hosts`, step 0's two tailnet hostnames over local HTTPS (`tests/ui/starbase/hosts.ts`). Commands in plan 2, Task 12. |
+
+## STARbase end to end (spec 14, and spec 13 against STARbase)
+
+Needs the `d1-starbase` preview and STARbase served by `vite preview` (the production CSP). From the repo root:
+
+```bash
+npm run build:extensions && npm run build -w starbase-web
+# ports layout: STARbase http://127.0.0.1:5190, Directus http://127.0.0.1:18057 (one host, plain HTTP)
+D1_PREVIEW_NAME=d1-starbase D1_PREVIEW_PORT=18057 D1_PREVIEW_ENV_FILE=tests/ui/starbase/preview-ports.env \
+  D1_PREVIEW_OVERLAY="d1-home d1-admin-overview d1-fast-dashboard d1-usage d1-campaign-ops d1-lab-dashboard d1-project-items d1-edit-frame d1-links d1-report" \
+  bash scripts/dev/explorer_preview.sh
+STARBASE_D1_ORIGIN=http://127.0.0.1:18057 npm run preview -w starbase-web     # keep running (port 5190)
+CREDS="$PWD/.superpowers/preview-credentials-d1-starbase.txt"
+(cd tests/ui && STARBASE_E2E_CREDENTIALS="$CREDS" npx playwright test specs/14-starbase.spec.ts --retries=0)
+(cd tests/ui && D1_ROUTES_CREDENTIALS="$CREDS" D1_ROUTES_STARBASE=http://127.0.0.1:5190 npx playwright test specs/13-explorer-routes.spec.ts --retries=0)
+```
+
+The hosts layout is the production shape: two tailnet hostnames mapped to loopback in the test browser, HTTPS
+with a throwaway certificate (made with `openssl`), a Secure session cookie. Restart the preview with
+`D1_PREVIEW_ENV_FILE=tests/ui/starbase/preview-hosts.env D1_PREVIEW_PUBLIC_URL=https://d1-server.tail54eeb6.ts.net:18443`
+(same name, port and overlay), restart `vite preview` with
+`STARBASE_D1_ORIGIN=https://d1-server.tail54eeb6.ts.net:18443`, then run spec 14 with `STARBASE_E2E_MODE=hosts`.
+The spec starts its own HTTPS proxies on 5191 and 18443. Spec 14 turns Playwright's trace off: FAST's plot page
+lists 10,000+ runs and the trace snapshots stall it.
 
 ## Ad-hoc verification scripts
 

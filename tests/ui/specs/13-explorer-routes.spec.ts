@@ -1,6 +1,7 @@
-import { test, expect, type APIRequestContext, type Page, type PlaywrightWorkerArgs } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { adminApi, findFirstId, firstId, signInStarbase } from '../starbase/target';
 
 // Every page of the Home module (the future STARbase pages), as an admin and as a Lab Member, on
 // the preview copy of live: each must draw its page and the Explorer nav with no console error.
@@ -16,6 +17,12 @@ const creds = Object.fromEntries(
 );
 const ADMIN_BASE = (process.env.D1_ROUTES_ADMIN_BASE || creds.url).replace(/\/+$/, ''); // …/admin
 const SERVER = ADMIN_BASE.replace(/\/admin$/, '');
+// STARbase mode: D1_ROUTES_STARBASE=<STARbase origin> visits the same pages in the standalone app (paths
+// without /home, its own sign-in page). The Directus-only check (the other kit users) is skipped.
+const STARBASE = (process.env.D1_ROUTES_STARBASE || '').replace(/\/+$/, '');
+const appUrl = (path: string) => (STARBASE ? STARBASE + (path.replace(/^\/home(?=\/|$)/, '') || '/') : ADMIN_BASE + path);
+// The shared helpers (tests/ui/starbase/target.ts) read the same credentials file as this spec.
+process.env.STARBASE_E2E_CREDENTIALS ||= credsFile;
 
 const navSource = readFileSync(join(repo, 'packages', 'd1-ui', 'src', 'nav', 'navConfig.ts'), 'utf8');
 const NAV_ROUTES = [...new Set([...navSource.matchAll(/to: '(\/home[^'?]*)'/g)].map((m) => m[1]))];
@@ -44,6 +51,10 @@ function splitCreds(who: 'admin' | 'member'): [string, string] {
 }
 
 async function signIn(page: Page, who: 'admin' | 'member') {
+	if (STARBASE) {
+		await signInStarbase(page, who, { star: STARBASE, d1: SERVER });
+		return;
+	}
 	const [email, password] = splitCreds(who);
 	await page.goto(`${SERVER}/admin/login`, { waitUntil: 'domcontentloaded' });
 	await page.locator('input[type="email"]').fill(email);
@@ -52,29 +63,7 @@ async function signIn(page: Page, who: 'admin' | 'member') {
 	await page.waitForURL((u) => !u.pathname.endsWith('/login'), { timeout: 30_000 });
 }
 
-// Not every collection's primary key is `id` (physical_samples uses `sample_id`), so ask for it.
-// Record ids come from an admin API session, so both accounts visit the same pages.
-async function firstId(api: APIRequestContext, collection: string): Promise<string | null> {
-	const f = await api.get(`${SERVER}/fields/${collection}`);
-	if (!f.ok()) return null;
-	const fields = (await f.json()).data as { field: string; schema?: { is_primary_key?: boolean } }[];
-	const pk = fields.find((x) => x.schema?.is_primary_key)?.field;
-	if (!pk) return null;
-	const r = await api.get(`${SERVER}/items/${collection}?limit=1&fields=${encodeURIComponent(pk)}`);
-	if (!r.ok()) return null;
-	const rows = (await r.json()).data as Record<string, string>[];
-	return rows[0]?.[pk] ?? null;
-}
-
-async function adminApi(playwright: PlaywrightWorkerArgs['playwright']): Promise<APIRequestContext> {
-	const [email, password] = splitCreds('admin');
-	const anon = await playwright.request.newContext();
-	const login = await anon.post(`${SERVER}/auth/login`, { data: { email, password, mode: 'json' } });
-	expect(login.ok(), 'admin API login').toBeTruthy();
-	const token = (await login.json()).data.access_token as string;
-	await anon.dispose();
-	return playwright.request.newContext({ extraHTTPHeaders: { Authorization: `Bearer ${token}` } });
-}
+// Record ids come from an admin API session (the shared helpers in tests/ui/starbase/target.ts), so both accounts visit the same pages.
 
 // Collects page errors, 5xx responses and unignored console errors into `errors`.
 function collectErrors(page: Page, errors: string[]) {
@@ -89,7 +78,7 @@ function collectErrors(page: Page, errors: string[]) {
 
 async function visit(page: Page, path: string, errors: string[]) {
 	errors.length = 0;
-	await page.goto(`${ADMIN_BASE}${path}`, { waitUntil: 'networkidle' });
+	await page.goto(appUrl(path), { waitUntil: 'networkidle' });
 	// A record the Lab Member may not read draws NotVisible, which sits inside PageShell (.d1-page): it counts as drawn.
 	await expect(page.locator('.d1-page').first(), `${path}: page body`).toBeVisible();
 	await expect(page.locator('nav.d1-nav').first(), `${path}: Explorer nav`).toBeVisible();
@@ -104,13 +93,12 @@ for (const who of ['admin', 'member'] as const) {
 		test('every page draws with no console error', async ({ page, playwright }) => {
 			const errors: string[] = [];
 			collectErrors(page, errors);
-			const api = await adminApi(playwright);
+			const api = await adminApi(playwright, SERVER);
 			const records: string[] = [];
 			for (const [collection, prefix] of RECORDS) {
-				const id = await firstId(api, collection);
-				// The admin sees every record, so a missing id means the lookup broke.
-				expect(id, `${collection}: an id to visit`).not.toBeNull();
-				records.push(prefix + encodeURIComponent(id!));
+				// The admin sees every record, so a missing id fails inside firstId.
+				const id = await firstId(api, collection, SERVER);
+				records.push(prefix + encodeURIComponent(id));
 			}
 			await api.dispose();
 			await signIn(page, who);
@@ -120,10 +108,11 @@ for (const who of ['admin', 'member'] as const) {
 		});
 
 		test('the other kit users still render', async ({ page, playwright }) => {
+			test.skip(!!STARBASE, 'Directus-only: the campaign form and the lab dashboard are Data Studio pages');
 			const errors: string[] = [];
 			collectErrors(page, errors);
-			const api = await adminApi(playwright);
-			const adminCampaign = await firstId(api, 'campaigns');
+			const api = await adminApi(playwright, SERVER);
+			const adminCampaign = await findFirstId(api, 'campaigns', SERVER);
 			await api.dispose();
 			expect(adminCampaign, 'campaigns: an id to visit').not.toBeNull();
 			await signIn(page, who);
@@ -131,7 +120,7 @@ for (const who of ['admin', 'member'] as const) {
 
 			// A Lab Member may read only some campaigns, and Directus shows "Page Not Found" for one it may not
 			// read, so the member opens a campaign it can read itself (its own session), if it has any.
-			const campaign = who === 'admin' ? adminCampaign : await firstId(page.request, 'campaigns');
+			const campaign = who === 'admin' ? adminCampaign : await findFirstId(page.request, 'campaigns', SERVER);
 			if (campaign) {
 				// d1-campaign-ops: the interface root (.co) sits inside the campaign form.
 				await page.goto(`${ADMIN_BASE}/content/campaigns/${encodeURIComponent(campaign)}`, { waitUntil: 'networkidle' });
