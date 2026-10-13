@@ -1,19 +1,17 @@
 <script setup lang="ts">
 import ExplorerView from './ExplorerView.vue';
 import { computed, onMounted, ref, watch } from 'vue';
-import { useApi, useStores } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
-import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, PageShell, createdRecord, recordRoute, useExplorerHost } from '@d1/ui';
+import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, PageShell, createdRecord, openLink, recordRoute, useExplorerHost } from '@d1/ui';
 import { buildGeometry, dimsText, FORMS, FORM_FIELDS, PRESETS, fieldLabel } from './geometry';
 
-const api = useApi();
+const host = useExplorerHost();
+const api = host.api;
 const router = useRouter();
-const { useUserStore } = useStores();
-const userStore = useUserStore() as any;
 // An admin reads every row, so a sample with no owner is still visible to them: only members need
 // a People row to see what they register. The server's own answer, shared with the sidebar.
 // isAdmin starts as a guess: the no-person warning waits for adminKnown so it never flashes at an admin.
-const { isAdmin, adminKnown } = useExplorerHost();
+const { isAdmin, adminKnown } = host;
 
 interface Opt { text: string; value: string; extra?: string }
 const materials = ref<Opt[]>([]);
@@ -56,7 +54,7 @@ const createdHidden = ref(false);
 const personId = ref<string | null | undefined>(undefined);
 
 async function lookupPerson(): Promise<string | null | undefined> {
-	const uid = (userStore.currentUser as any)?.id;
+	const uid = host.user.value?.id;
 	if (!uid) return undefined;
 	try {
 		const pr = await api.get('/items/people', {
@@ -67,6 +65,16 @@ async function lookupPerson(): Promise<string | null | undefined> {
 		return undefined; // unknown: let the server decide
 	}
 }
+
+// The host's user may arrive after setup (STARbase signs in asynchronously), so look the person up
+// when the id becomes known rather than once.
+watch(
+	() => host.user.value?.id,
+	(id) => {
+		if (id) lookupPerson().then((p) => (personId.value = p));
+	},
+	{ immediate: true },
+);
 
 // Live parametric isometric preview + the dimension inputs relevant to the chosen
 // form. Picking a standard test coupon fills its standard dimensions, which then
@@ -155,11 +163,10 @@ function resetForm() {
 	nextSequence().then((n) => (seq.value = n));
 }
 
-const go = (to: string) => router.push(to); // router base is already /admin
-const openReport = (id: string) => window.open(`/d1-report/sample/${id}`, '_blank', 'noopener');
+const go = (to: string) => host.navigate(to);
+const openReport = (id: string) => openLink(`/d1-report/sample/${id}`, router);
 
 onMounted(async () => {
-	lookupPerson().then((p) => (personId.value = p));
 	const [m, me, p, s] = await Promise.all([
 		api.get('/items/materials', { params: { fields: ['material_id', 'common_name', 'alloy_code'], sort: 'common_name', limit: -1 } }),
 		api.get('/items/manufacturing_methods', { params: { fields: ['method_id', 'method_name', 'method_code'], sort: 'method_name', limit: -1 } }),

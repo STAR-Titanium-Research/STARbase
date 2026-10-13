@@ -1,12 +1,11 @@
 import { ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { saveErrorText, templatePayload, type LabelTemplate } from '@d1/ui';
+import { useExplorerHost, saveErrorText, templatePayload, type LabelTemplate } from '@d1/ui';
 
 // Save, Save as new and Delete of the template editor, as the signed-in user (Directus decides what they may
 // do; the editor only hides what the server would refuse). `error` is the inline message of the last failure.
 // Making a template the default is one write: a database trigger clears the previous default.
 export function useTemplateSave() {
-	const api = useApi();
+	const api = useExplorerHost().api;
 	const busy = ref(false);
 	const error = ref('');
 

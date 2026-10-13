@@ -1,6 +1,5 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { classifyTemplates, errorText, pickTemplate, useRequestGate, type BrokenTemplate, type LabelTemplate } from '@d1/ui';
+import { useExplorerHost, classifyTemplates, errorText, pickTemplate, useRequestGate, type BrokenTemplate, type LabelTemplate } from '@d1/ui';
 
 // The label_templates the signed-in user may read, as the page's picker shows them. A row that cannot be
 // read as a template is listed as broken (disabled, with the reason) and never blanks the picker.
@@ -24,7 +23,7 @@ function remember(id: string | null): void {
 }
 
 export function useLabelTemplates() {
-	const api = useApi();
+	const api = useExplorerHost().api;
 	const gate = useRequestGate();
 	onBeforeUnmount(() => gate.cancel());
 	const templates = ref<LabelTemplate[]>([]);

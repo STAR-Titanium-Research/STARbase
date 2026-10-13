@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref } from 'vue';
-import { useStores } from '@directus/extensions-sdk';
-import { LoadState, PageShell, filterProjects, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
+import { AppLink, LoadState, useExplorerHost, PageShell, filterProjects, projectRole, type RoleFilter, type StatusFilter } from '@d1/ui';
 import { PROJECT_CAP, useProjectsIndex } from './projects/useProjectsIndex';
 import ProjectCard from './projects/ProjectCard.vue';
 
 // Projects index: every project the signed-in user can read, as cards with the people, dates,
 // counts and a sparkline of operations and tests per week. Design:
 // docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Projects index").
-const { useUserStore } = useStores();
-const userId = computed<string | null>(() => (useUserStore().currentUser as any)?.id ?? null);
+const host = useExplorerHost();
+const userId = computed<string | null>(() => host.user.value?.id ?? null);
 
 const { projects, loading, error, campaignCounts, sampleCounts, campaignCountsError, sampleCountsError, activity, activityError, truncated, rolesError } =
 	useProjectsIndex();
@@ -40,7 +39,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 <template>
 	<ExplorerView title="Projects">
 		<PageShell>
-			<nav class="d1-crumbs"><router-link to="/home">Home</router-link><span>›</span><span>Projects</span></nav>
+			<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>Projects</span></nav>
 
 			<div class="filters">
 				<label class="field search">

@@ -1,6 +1,5 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { LIST_CAP, errorText, isNotVisible, readHiddenLinks, useItems, useRequestGate, useSections, type LinkedFile, type SectionState, linkedFiles, type TraceResponse } from '@d1/ui';
+import { useExplorerHost, LIST_CAP, errorText, isNotVisible, readHiddenLinks, useItems, useRequestGate, useSections, type LinkedFile, type SectionState, linkedFiles, type TraceResponse } from '@d1/ui';
 
 // Everything the Sample page reads, as the signed-in user (so Directus permissions apply). The
 // sample itself decides between "page" and "Not found or not visible to you"; everything else is a
@@ -25,7 +24,7 @@ const SAMPLE_FIELDS = [
 const LINK_FIELDS = ['project_id'];
 
 export function useSampleData(id: Ref<string>) {
-	const api = useApi();
+	const api = useExplorerHost().api;
 	const { getItem, getItems } = useItems();
 	const gate = useRequestGate();
 	const { section, fill } = useSections(gate);

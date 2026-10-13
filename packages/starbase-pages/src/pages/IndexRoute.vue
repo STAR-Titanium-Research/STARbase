@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { CampaignCard, IndexPage, campaignCardStats, indexDefBySlug, thumbKind } from '@d1/ui';
+import { AppLink, CampaignCard, IndexPage, campaignCardStats, indexDefBySlug, thumbKind } from '@d1/ui';
 import type { CampaignStats } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 import IndexThumb from './index/IndexThumb.vue';
@@ -31,7 +31,7 @@ const hasThumb = computed(() => !!def.value && thumbKind(def.value.collection) !
 		<div v-else class="missing">
 			<h2>No such page</h2>
 			<p>There is no page called "{{ slug }}".</p>
-			<router-link to="/home">Back to Home</router-link>
+			<AppLink to="/home">Back to Home</AppLink>
 		</div>
 	</ExplorerView>
 </template>

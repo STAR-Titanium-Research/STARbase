@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
-	LoadState, PageShell, Section, blankTemplate, canEditTemplate, MAX_COPIES, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
+	AppLink, LoadState, PageShell, Section, blankTemplate, canEditTemplate, MAX_COPIES, clampCopies, clampStart, copyAsNew, draftOf, errorText, parseSelectionQuery,
 	sampleEntries, slotsPerPage, summaryText, useRequestGate, buildLbxDownload, isLbxTemplate, useExplorerHost, type LabelSample, type LabelTemplate,
 } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
@@ -220,7 +220,7 @@ onMounted(() => {
 <template>
 	<ExplorerView title="Print labels">
 		<PageShell>
-			<nav class="d1-crumbs"><router-link to="/home">Home</router-link><span>›</span><span>Print labels</span></nav>
+			<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>Print labels</span></nav>
 
 			<p v-if="selectionError" class="d1-note bad" role="alert">{{ selectionError }}</p>
 			<p v-if="selectionNote" class="d1-note warn" role="status">{{ selectionNote }}</p>

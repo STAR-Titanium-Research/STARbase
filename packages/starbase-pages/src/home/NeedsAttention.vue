@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
 import {
-	BOOKMARK_VISIBILITY_FILTER, EXPLORER_HOST,
+	useExplorerHost, AppLink, BOOKMARK_VISIBILITY_FILTER, EXPLORER_HOST,
 	attentionView, LoadState, Section, collectionRoute, errorText, indexRoute, pickBookmarkId, useItems, useRequestGate,
 } from '@d1/ui';
 import { ATTENTION, ATTENTION_LIST_LIMIT, type AttentionDef, type AttentionItem } from './attention';
@@ -15,7 +14,7 @@ import { ATTENTION, ATTENTION_LIST_LIMIT, type AttentionDef, type AttentionItem 
 const props = defineProps<{ isAdmin: boolean }>();
 
 const { getItems } = useItems();
-const api = useApi();
+const api = useExplorerHost().api;
 const host = inject(EXPLORER_HOST, null);
 const gate = useRequestGate();
 
@@ -166,13 +165,13 @@ const show = (s: TileState | undefined) => (!s || s.loading ? '…' : s.count ==
 					<LoadState :loading="list.loading" :error="list.error">
 						<ul class="items">
 							<li v-for="i in list.items" :key="i.id">
-								<router-link :to="i.to" class="i-title" :class="{ plain: i.plain }">{{ i.title }}</router-link>
+								<AppLink :to="i.to" class="i-title" :class="{ plain: i.plain }">{{ i.title }}</AppLink>
 								<span v-if="i.sub" class="i-sub">{{ i.sub }}</span>
 							</li>
 						</ul>
 						<p v-if="moreLink && openCount > list.items.length" class="d1-note more">
 							Showing {{ list.items.length }} of {{ openCount }}.
-							<router-link :to="moreLink.to">{{ moreLink.text }}</router-link>
+							<AppLink :to="moreLink.to">{{ moreLink.text }}</AppLink>
 						</p>
 					</LoadState>
 				</div>

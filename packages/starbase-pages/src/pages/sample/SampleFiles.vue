@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { Section, LoadState, type LinkedFile } from '@d1/ui';
+import { Section, LoadState, assetUrl, type LinkedFile } from '@d1/ui';
 
 // Linked data files, as the d1-archive-links interface shows them: files from the lab archive
 // get copy-path buttons (paste into Windows Explorer), files uploaded to Directus a download link.
@@ -50,7 +50,7 @@ async function copy(text: string, key: string) {
 							<v-icon v-tooltip="'Open (only works with the d1file:// handler or a permissive browser)'" name="open_in_new" clickable small />
 						</a>
 					</template>
-					<a v-else :href="`/assets/${f.id}?download`" target="_blank" rel="noopener">
+					<a v-else :href="assetUrl(f.id, { download: '' })" target="_blank" rel="noopener">
 						<v-icon v-tooltip="'Download'" name="download" clickable small />
 					</a>
 				</li>

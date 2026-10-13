@@ -1,6 +1,5 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { errorText, isAuthRefusal, normaliseOverview, useRequestGate, type AdminOverview } from '@d1/ui';
+import { useExplorerHost, errorText, isAuthRefusal, normaliseOverview, useRequestGate, type AdminOverview } from '@d1/ui';
 
 // The admin panels' numbers: GET /d1-admin-overview (core/extensions/d1-admin-overview), read only
 // while `active` is true, which the caller sets from the server-confirmed admin flag (not the
@@ -16,7 +15,7 @@ export const REFRESH_MS = 30_000;
 const TIMEOUT_MS = 20_000;
 
 export function useAdminOverview(active: Ref<boolean>) {
-	const api = useApi();
+	const api = useExplorerHost().api;
 	const gate = useRequestGate();
 	const data = ref<AdminOverview | null>(null);
 	const error = ref('');

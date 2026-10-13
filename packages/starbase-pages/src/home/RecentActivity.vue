@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { DataTable, Section, analysisLink, collectionRoute, errorText, formatDate, hasPassCode, operationLabel, recordRoute, type AnalysisLink } from '@d1/ui';
+import { useExplorerHost, AppLink, DataTable, Section, analysisLink, collectionRoute, errorText, formatDate, hasPassCode, operationLabel, recordRoute, type AnalysisLink } from '@d1/ui';
 
 // Recent activity: samples, operations and tests merged into one feed, each tagged with its kind,
 // newest first. Links go through recordRoute; a FAST run opens its Operation page like any other
@@ -11,7 +10,7 @@ type Kind = 'sample' | 'operation' | 'fast' | 'test';
 interface Activity { kind: Kind; id: string; code: string; meta: string; date: string; to: string; extra?: AnalysisLink | null; plain?: boolean }
 const KIND_LABEL: Record<Kind, string> = { sample: 'Sample', operation: 'Operation', fast: 'FAST', test: 'Test' };
 
-const api = useApi();
+const api = useExplorerHost().api;
 const recent = ref<Activity[]>([]);
 const samplesLink = collectionRoute('physical_samples');
 const error = ref('');
@@ -84,7 +83,7 @@ onMounted(async () => {
 
 <template>
 	<Section title="Recent activity" :count="recent.length || null" :empty="!recent.length && !error" empty-text="No activity yet.">
-		<template #actions><router-link :to="samplesLink" class="link">View samples →</router-link></template>
+		<template #actions><AppLink :to="samplesLink" class="link">View samples →</AppLink></template>
 		<p v-if="error" class="d1-note bad error" role="alert">{{ error }}</p>
 		<!-- One row per record, newest first: nine cards made the eye zig-zag to read a list. The
 		     columns are as wide as their content and the last one takes the rest, so a row reads
@@ -97,9 +96,9 @@ onMounted(async () => {
 				<tr v-for="r in recent" :key="`${r.kind}-${r.id}`">
 					<td class="fit dim">{{ formatDate(r.date) }}</td>
 					<td class="fit"><span class="r-kind" :class="`k-${r.kind}`">{{ KIND_LABEL[r.kind] }}</span></td>
-					<td class="fit"><router-link :to="r.to" class="r-code" :class="{ mono: !r.plain }">{{ r.code }}</router-link></td>
+					<td class="fit"><AppLink :to="r.to" class="r-code" :class="{ mono: !r.plain }">{{ r.code }}</AppLink></td>
 					<td class="fit dim">{{ r.meta }}</td>
-					<td class="actions"><router-link v-if="r.extra" :to="r.extra.to" class="link">{{ r.extra.label }} →</router-link></td>
+					<td class="actions"><AppLink v-if="r.extra" :to="r.extra.to" class="link">{{ r.extra.label }} →</AppLink></td>
 				</tr>
 			</tbody>
 		</DataTable>

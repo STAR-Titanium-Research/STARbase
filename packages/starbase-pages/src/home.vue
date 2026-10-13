@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import ExplorerView from './ExplorerView.vue';
 import { computed } from 'vue';
-import { useStores } from '@directus/extensions-sdk';
 import { PageShell, useExplorerHost } from '@d1/ui';
 import QuickActions from './home/QuickActions.vue';
 import NeedsAttention from './home/NeedsAttention.vue';
@@ -17,10 +16,9 @@ import FrequentlyUsed from './home/FrequentlyUsed.vue';
 // two equal-height panels (what needs attention, your work), the admin panels (admins only) and the
 // recent activity. Every block is its own component in ./home/ and loads on its own, so one
 // forbidden collection never blanks Home, and none of them draws an empty box.
-const { useUserStore } = useStores();
-const userStore = useUserStore() as any;
+const host = useExplorerHost();
 
-const firstName = computed(() => userStore.currentUser?.first_name || 'there');
+const firstName = computed(() => host.user.value?.first_name || 'there');
 const greeting = computed(() => {
 	const h = new Date().getHours();
 	return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
@@ -29,7 +27,7 @@ const today = computed(() =>
 	new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }),
 );
 // The server's own answer (GET /policies/me/globals), read once for the whole Explorer by the host.
-const { isAdmin, adminKnown } = useExplorerHost();
+const { isAdmin, adminKnown } = host;
 // The admin panels call an admin-only endpoint, so they wait for the server's answer instead of the guess.
 const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 </script>

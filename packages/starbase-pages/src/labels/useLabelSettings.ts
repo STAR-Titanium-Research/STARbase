@@ -1,12 +1,11 @@
 import { ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { contactEmailOf, errorText, parseContactInput } from '@d1/ui';
+import { useExplorerHost, contactEmailOf, errorText, parseContactInput } from '@d1/ui';
 
 // The label_settings singleton: the lab contact email every label's QR code carries. Everyone reads it (one
 // GET, as the signed-in user); only an admin can write it (Directus refuses anyone else, so the page shows the
 // edit box to admins only and a refusal still shows as the inline error). One PATCH saves it.
 export function useLabelSettings() {
-	const api = useApi();
+	const api = useExplorerHost().api;
 	const contactEmail = ref<string | null>(null);
 	const loaded = ref(false);
 	const loadError = ref('');

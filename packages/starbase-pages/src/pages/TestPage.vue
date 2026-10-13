@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
+import { useRouter } from 'vue-router';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, StatusBadge, asRecord,
+	AppLink, openLink, EditDrawer, HiddenLink, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, StatusBadge, asRecord,
 	dataStudioRoute, detailFacts, detailsCount, formatDate, summaryCount, summaryGroups, testDetailBase, testRailFacts, testSample, testSubjectCount, testTypeText,
 	type ContentsEntry,
 } from '@d1/ui';
@@ -17,6 +18,7 @@ import SampleFiles from './sample/SampleFiles.vue';
 // ("Test session"), laid out as a rail and panels by
 // docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md.
 const props = defineProps<{ id: string }>();
+const router = useRouter();
 
 const { test, loading, notVisible, error, params, subjects, files, hidden, reload } = useTestData(toRef(props, 'id'));
 
@@ -61,7 +63,7 @@ const contents = computed<ContentsEntry[]>(() => {
 	];
 });
 
-const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props.id)}`, '_blank', 'noopener');
+const openReport = () => openLink(`/d1-report/test/${encodeURIComponent(props.id)}`, router);
 </script>
 
 <template>
@@ -77,7 +79,7 @@ const openReport = () => window.open(`/d1-report/test/${encodeURIComponent(props
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
 				<RecordLayout style="--d1-sticky-top: 70px">
 					<template #crumbs>
-						<router-link to="/home">Home</router-link>
+						<AppLink to="/home">Home</AppLink>
 						<template v-if="project">
 							<span>›</span>
 							<RecordLink collection="projects" :id="project.project_id">Project {{ project.project_code }}</RecordLink>

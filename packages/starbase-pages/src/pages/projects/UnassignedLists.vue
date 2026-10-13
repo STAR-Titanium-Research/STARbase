@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, formatDate, hasPassCode, indexRoute, operationLabel, processLabel, type SectionState,
+	AppLink, DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, formatDate, hasPassCode, indexRoute, operationLabel, processLabel, type SectionState,
 } from '@d1/ui';
 
 // "Not in a campaign": records that carry this project but no campaign. Three short lists, each
@@ -34,7 +34,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.samples)" class="d1-note cap">Showing the first {{ LIST_CAP }}. <router-link :to="forThisProject('physical_samples')">{{ seeAll('samples') }}</router-link>.</p>
+			<p v-if="capped(props.samples)" class="d1-note cap">Showing the first {{ LIST_CAP }}. <AppLink :to="forThisProject('physical_samples')">{{ seeAll('samples') }}</AppLink>.</p>
 		</LoadState>
 	</Section>
 
@@ -51,7 +51,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.operations)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="forThisProject('manufacturing_operations')">{{ seeAll('operations') }}</router-link>.</p>
+			<p v-if="capped(props.operations)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <AppLink :to="forThisProject('manufacturing_operations')">{{ seeAll('operations') }}</AppLink>.</p>
 		</LoadState>
 	</Section>
 
@@ -68,7 +68,7 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 					</tr>
 				</tbody>
 			</DataTable>
-			<p v-if="capped(props.tests)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <router-link :to="forThisProject('test_sessions')">{{ seeAll('tests') }}</router-link>.</p>
+			<p v-if="capped(props.tests)" class="d1-note cap">Showing the newest {{ LIST_CAP }}. <AppLink :to="forThisProject('test_sessions')">{{ seeAll('tests') }}</AppLink>.</p>
 		</LoadState>
 	</Section>
 </template>

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
+import { useRouter } from 'vue-router';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
+	AppLink, openLink, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
 	detailFacts, detailsCount, hasPassCode, operationDetailBase, operationHeading, operationKind, operationRailFacts, operationSampleCount, type ContentsEntry,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
@@ -15,6 +16,7 @@ import SampleFiles from './sample/SampleFiles.vue';
 // and files. Design: docs/superpowers/specs/2026-10-06-explorer-pages-design.md ("Operation"), laid
 // out as a rail and panels by docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md.
 const props = defineProps<{ id: string }>();
+const router = useRouter();
 
 const { operation, loading, notVisible, error, params, force, fast, files, shared, hidden, hiddenKnown, reload } = useOperationData(toRef(props, 'id'));
 
@@ -72,7 +74,7 @@ const contents = computed<ContentsEntry[]>(() => {
 	return entries;
 });
 
-const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(props.id)}`, '_blank', 'noopener');
+const openReport = () => openLink(`/d1-report/operation/${encodeURIComponent(props.id)}`, router);
 </script>
 
 <template>
@@ -88,7 +90,7 @@ const openReport = () => window.open(`/d1-report/operation/${encodeURIComponent(
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
 				<RecordLayout style="--d1-sticky-top: 70px">
 					<template #crumbs>
-						<router-link to="/home">Home</router-link>
+						<AppLink to="/home">Home</AppLink>
 						<template v-if="project">
 							<span>›</span>
 							<RecordLink collection="projects" :id="project.project_id">Project {{ project.project_code }}</RecordLink>

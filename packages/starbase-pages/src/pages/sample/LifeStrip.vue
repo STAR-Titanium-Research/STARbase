@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue';
-import { formatDate, type LifeItem } from '@d1/ui';
+import { AppLink, formatDate, type LifeItem } from '@d1/ui';
 
 // The life of the sample as a left-to-right strip: stock, ancestors, this sample, operations and
 // tests by date, descendants. It scrolls sideways and opens centred on this sample. On a narrow
@@ -47,7 +47,7 @@ const KIND_LABEL: Record<string, string> = {
 			>
 				<span class="dot" />
 				<span class="kind">{{ KIND_LABEL[item.kind] }}</span>
-				<router-link v-if="item.to" :to="item.to" class="label" :class="{ code: item.isCode }">{{ item.label }}</router-link>
+				<AppLink v-if="item.to" :to="item.to" class="label" :class="{ code: item.isCode }">{{ item.label }}</AppLink>
 				<span v-else class="label" :class="{ code: item.isCode, plain: item.kind === 'hidden' }">{{ item.label }}</span>
 				<span v-if="item.sub" class="sub">{{ item.sub }}</span>
 				<span v-if="item.date" class="date">{{ formatDate(item.date, 'undated') }}</span>

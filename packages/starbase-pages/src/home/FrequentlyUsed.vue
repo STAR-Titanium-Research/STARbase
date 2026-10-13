@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Section, type UsageEntry } from '@d1/ui';
+import { AppLink, Section, type UsageEntry } from '@d1/ui';
 import { MAX_SHOWN, SHOWN, useFrequentlyUsed } from './useFrequentlyUsed';
 import { pingVisit } from '../usagePing';
 
@@ -134,7 +134,7 @@ function openedElsewhere(e: UsageEntry) {
 					<ul>
 						<li v-for="e in shownPages" :key="e.target" class="row">
 							<a v-if="e.newTab" class="name" :href="e.to" target="_blank" rel="noopener" @click="openedElsewhere(e)">{{ e.label }}</a>
-							<router-link v-else class="name" :to="e.to">{{ e.label }}</router-link>
+							<AppLink v-else class="name" :to="e.to">{{ e.label }}</AppLink>
 							<span v-if="e.suggested" class="suggested">Suggested</span>
 							<button
 								type="button"
@@ -165,7 +165,7 @@ function openedElsewhere(e: UsageEntry) {
 					<h3 tabindex="-1">Records</h3>
 					<ul v-if="recordList.length">
 						<li v-for="e in shownRecords" :key="e.target" class="row">
-							<router-link class="name" :to="e.to">{{ e.label }}</router-link>
+							<AppLink class="name" :to="e.to">{{ e.label }}</AppLink>
 							<button
 								type="button"
 								class="icon-btn pin"

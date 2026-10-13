@@ -2,7 +2,7 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	CampaignProgressBars, CampaignWorkbench, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout,
+	AppLink, CampaignProgressBars, CampaignWorkbench, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, RecordLayout,
 	RecordLink, RecordRail, Section, StatusBadge, campaignCode, campaignContents, campaignRailFacts, dataStudioRoute, type ContentsEntry,
 } from '@d1/ui';
 import { useCampaignRecord } from './campaign/useCampaignRecord';
@@ -77,7 +77,7 @@ const contents = computed<ContentsEntry[]>(() => {
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
 				<RecordLayout style="--d1-sticky-top: 70px">
 					<template #crumbs>
-						<router-link to="/home">Home</router-link>
+						<AppLink to="/home">Home</AppLink>
 						<template v-if="campaign.project_id">
 							<span>›</span>
 							<RecordLink collection="projects" :id="campaign.project_id.project_id">

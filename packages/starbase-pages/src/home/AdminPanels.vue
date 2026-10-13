@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { Section, ago, crawlerOnline, formatDate, overviewTime, ownerlessRows, ownerlessTotal } from '@d1/ui';
+import { AppLink, Section, ago, crawlerOnline, formatDate, overviewTime, ownerlessRows, ownerlessTotal } from '@d1/ui';
 import { useAdminOverview } from './useAdminOverview';
 
 // Three admin-only panels under the work panels: the force crawler's queue, files the indexer
@@ -44,7 +44,7 @@ const nf = (n: number) => n.toLocaleString('en-GB');
 		<p v-else-if="error && !data" class="d1-note quiet" role="status">The admin overview is not available right now ({{ error }}).</p>
 		<div v-else-if="data" class="panels">
 			<Section title="Force crawler">
-				<template #actions><router-link to="/d1-force-crawler" class="link">Open crawler →</router-link></template>
+				<template #actions><AppLink to="/d1-force-crawler" class="link">Open crawler →</AppLink></template>
 				<p v-if="!crawler" class="d1-note">Could not load the crawler status.</p>
 				<template v-else>
 					<p v-if="!crawler.state" class="status"><span class="dot off" /> No crawler has reported in yet</p>
@@ -70,7 +70,7 @@ const nf = (n: number) => n.toLocaleString('en-GB');
 			</Section>
 
 			<Section title="Files missing on the share" :count="data.missingFiles ? data.missingFiles.count : null">
-				<template #actions><router-link to="/files" class="link">Files →</router-link></template>
+				<template #actions><AppLink to="/files" class="link">Files →</AppLink></template>
 				<p v-if="!data.missingFiles" class="d1-note">Could not load the missing-file list.</p>
 				<template v-else>
 					<p v-if="data.missingFiles.count === 0" class="status"><span class="dot on" /> No file is flagged missing ✓</p>
@@ -78,7 +78,7 @@ const nf = (n: number) => n.toLocaleString('en-GB');
 						<p class="d1-note">Latest {{ data.missingFiles.recent.length }} of {{ nf(data.missingFiles.count) }}, newest first</p>
 						<ul class="files">
 							<li v-for="f in data.missingFiles.recent" :key="f.id">
-								<router-link :to="`/files/${f.id}`" class="name">{{ f.filename_download || f.id }}</router-link>
+								<AppLink :to="`/files/${f.id}`" class="name">{{ f.filename_download || f.id }}</AppLink>
 								<span class="dim" :title="f.missing_since ? formatDate(f.missing_since) : ''">{{ f.missing_since ? ago(f.missing_since, reference) : 'unknown' }}</span>
 							</li>
 						</ul>
@@ -97,11 +97,11 @@ const nf = (n: number) => n.toLocaleString('en-GB');
 				<p v-else-if="ownerlessAll === 0" class="status"><span class="dot on" /> Every record has an owner ✓</p>
 				<ul v-else class="owners">
 					<li v-for="r in ownerless" :key="r.key">
-						<router-link :to="r.to" class="owner-row" :class="{ zero: r.count === 0 }">
+						<AppLink :to="r.to" class="owner-row" :class="{ zero: r.count === 0 }">
 							<span class="o-count">{{ nf(r.count) }}</span>
 							<span class="o-label">{{ r.label }}</span>
 							<span class="o-go">→</span>
-						</router-link>
+						</AppLink>
 					</li>
 				</ul>
 			</Section>

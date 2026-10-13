@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
 import { useRouter } from 'vue-router';
-import { collectionRoute } from '@d1/ui';
+import { useExplorerHost, collectionRoute } from '@d1/ui';
 import { go } from './goto';
 
 // The counts that Home always had, as one band across the top: six tiles in a row down to a container of 640px (about a 950px window with the sidebar), then three
 // and then two (never a lone tile on a second row). Every count reads as the signed-in
 // user, so since ADR-0011 it is what that user may see (see "What you see" in the Explorer pages
 // wiki page for every path), not the lab's total. Lab Admins still see everything.
-const api = useApi();
+const api = useExplorerHost().api;
 const router = useRouter();
 
 // Tiles are keyed, not positional: fill() finds its tile by key, so adding or reordering a tile

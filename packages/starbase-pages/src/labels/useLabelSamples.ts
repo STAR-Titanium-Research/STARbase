@@ -1,7 +1,6 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
 import {
-	LABEL_SAMPLE_FIELDS, clampCopies, errorText, pickerFilter, sampleProjectScopeFilter, toLabelSample, useRequestGate, type LabelSample,
+	useExplorerHost, LABEL_SAMPLE_FIELDS, clampCopies, errorText, pickerFilter, sampleProjectScopeFilter, toLabelSample, useRequestGate, type LabelSample,
 } from '@d1/ui';
 
 // The samples of the labels page: what is ticked (kept apart from the search results, so a new search never
@@ -20,7 +19,7 @@ export interface Option {
 }
 
 export function useLabelSamples() {
-	const api = useApi();
+	const api = useExplorerHost().api;
 	const gate = useRequestGate();
 	onBeforeUnmount(() => gate.cancel());
 

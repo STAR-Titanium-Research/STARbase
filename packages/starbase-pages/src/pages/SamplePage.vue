@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
+import { useRouter } from 'vue-router';
 import {
-	EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
+	AppLink, openLink, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, Section, StatusBadge,
 	buildLife, dataStudioRoute, detailFacts, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleRailFacts, truncatedNotes,
 	type ContentsEntry,
 } from '@d1/ui';
@@ -18,6 +19,7 @@ import SampleFiles from './sample/SampleFiles.vue';
 // link to its own page. Design: docs/superpowers/specs/2026-10-06-explorer-pages-design.md, laid out
 // as a rail (with the drawing in it) and panels by docs/superpowers/specs/2026-10-09-explorer-rail-layout-design.md.
 const props = defineProps<{ id: string }>();
+const router = useRouter();
 
 const { sample, loading, notVisible, error, elements, campaigns, operations, tests, files, trace, hidden, reload } =
 	useSampleData(toRef(props, 'id'));
@@ -60,7 +62,7 @@ const contents = computed<ContentsEntry[]>(() => [
 // The report is an endpoint page (printable HTML), not an app route: open it in a new tab, same session.
 // Print label is an app page: the labels page, with this sample preselected.
 const labelsTo = computed(() => `/home/labels?ids=${encodeURIComponent(props.id)}`);
-const openReportPage = () => window.open(`/d1-report/sample/${encodeURIComponent(props.id)}`, '_blank', 'noopener');
+const openReportPage = () => openLink(`/d1-report/sample/${encodeURIComponent(props.id)}`, router);
 </script>
 
 <template>
@@ -76,7 +78,7 @@ const openReportPage = () => window.open(`/d1-report/sample/${encodeURIComponent
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
 				<RecordLayout style="--d1-sticky-top: 70px">
 					<template #crumbs>
-						<router-link to="/home">Home</router-link>
+						<AppLink to="/home">Home</AppLink>
 						<template v-if="project?.project_id">
 							<span>›</span>
 							<RecordLink collection="projects" :id="project.project_id">Project {{ project.project_code }}</RecordLink>

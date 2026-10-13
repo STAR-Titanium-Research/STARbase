@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-	DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, analysisLink, formatDate, indexRoute, hasPassCode, operationLabel, processLabel, type SectionState,
+	AppLink, DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, analysisLink, formatDate, indexRoute, hasPassCode, operationLabel, processLabel, type SectionState,
 } from '@d1/ui';
 
 // The sample's operations and tests as tables: each row links to its page, tests carry their
@@ -33,16 +33,16 @@ const forThisSample = (collection: string) => indexRoute(collection, props.sampl
 						<td :class="{ dim: !o.operation_date }">{{ formatDate(o.operation_date, 'undated') }}</td>
 						<td>{{ o.equipment_id?.equipment_name ?? '' }}</td>
 						<td class="actions">
-							<router-link v-if="analysisLink(o.operation_id, o.process_category)" :to="analysisLink(o.operation_id, o.process_category)!.to" class="action">
+							<AppLink v-if="analysisLink(o.operation_id, o.process_category)" :to="analysisLink(o.operation_id, o.process_category)!.to" class="action">
 								{{ analysisLink(o.operation_id, o.process_category)!.label }}
-							</router-link>
+							</AppLink>
 						</td>
 					</tr>
 				</tbody>
 			</DataTable>
 			<p v-if="opsCapped" class="d1-note cap">
 				Showing the first {{ LIST_CAP }} operations.
-				<router-link :to="forThisSample('manufacturing_operations')">{{ sampleCode ? "See all of this sample's operations" : 'See the full list' }}</router-link>.
+				<AppLink :to="forThisSample('manufacturing_operations')">{{ sampleCode ? "See all of this sample's operations" : 'See the full list' }}</AppLink>.
 			</p>
 		</LoadState>
 	</Section>
@@ -65,7 +65,7 @@ const forThisSample = (collection: string) => indexRoute(collection, props.sampl
 			</DataTable>
 			<p v-if="testsCapped" class="d1-note cap">
 				Showing the first {{ LIST_CAP }} tests.
-				<router-link :to="forThisSample('test_sessions')">{{ sampleCode ? "See all of this sample's tests" : 'See the full list' }}</router-link>.
+				<AppLink :to="forThisSample('test_sessions')">{{ sampleCode ? "See all of this sample's tests" : 'See the full list' }}</AppLink>.
 			</p>
 		</LoadState>
 	</Section>

@@ -1,7 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
 import {
-	RECORD_COLLECTIONS, mergeWithSuggestions, pageEntry, pinEntry, readDismissed, recordEntries, recordRequest, removeEntry, restoreEntry,
+	useExplorerHost, RECORD_COLLECTIONS, mergeWithSuggestions, pageEntry, pinEntry, readDismissed, recordEntries, recordRequest, removeEntry, restoreEntry,
 	revertPin, splitRecordTarget, suggestedPageEntries, useRequestGate, withoutDismissed, writeDismissed, type UsageEntry,
 } from '@d1/ui';
 
@@ -18,7 +17,7 @@ export const MAX_SHOWN = 15;
 type Which = 'pages' | 'records';
 
 export function useFrequentlyUsed() {
-	const api = useApi();
+	const api = useExplorerHost().api;
 	const gate = useRequestGate();
 	const pages = ref<UsageEntry[]>([]);
 	const records = ref<UsageEntry[]>([]);

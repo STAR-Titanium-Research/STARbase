@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CampaignCard, LIST_CAP, LoadState, Section, indexRoute, type SectionState } from '@d1/ui';
+import { AppLink, CampaignCard, LIST_CAP, LoadState, Section, indexRoute, type SectionState } from '@d1/ui';
 import { computed } from 'vue';
 
 // The project's campaigns as cards (the kit's CampaignCard, the same one the campaigns list shows):
@@ -25,7 +25,7 @@ const capped = computed(() => props.campaigns.data.length > LIST_CAP);
 			<div class="grid">
 				<CampaignCard v-for="c in rows" :key="c.campaign_id" :campaign="c" :stats="c.stats" />
 			</div>
-			<p v-if="capped" class="d1-note cap">Showing the first {{ LIST_CAP }} campaigns. <router-link :to="allCampaigns">{{ projectId ? "See all of this project's campaigns" : 'See the full list' }}</router-link>.</p>
+			<p v-if="capped" class="d1-note cap">Showing the first {{ LIST_CAP }} campaigns. <AppLink :to="allCampaigns">{{ projectId ? "See all of this project's campaigns" : 'See the full list' }}</AppLink>.</p>
 		</LoadState>
 	</Section>
 </template>

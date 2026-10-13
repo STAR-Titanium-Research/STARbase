@@ -1,18 +1,17 @@
 <script setup lang="ts">
 import ExplorerView from './ExplorerView.vue';
 import { computed, onMounted, ref, watch } from 'vue';
-import { useApi } from '@directus/extensions-sdk';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
 import { PageShell, useExplorerHost } from '@d1/ui';
 
-const api = useApi();
-const router = useRouter();
+const host = useExplorerHost();
+const api = host.api;
 const route = useRoute();
 // Only an admin may link a login to a People row (ADR-0011: the link decides whose records a
 // person sees, so a member relinking it would inherit someone else's records). The host reads the
 // flag from the server; if a non-admin were wrongly shown the picker, the server still refuses the write.
-const { isAdmin } = useExplorerHost();
-const go = (to: string) => router.push(to);
+const { isAdmin } = host;
+const go = (to: string) => host.navigate(to);
 
 interface Person {
 	person_id?: string;

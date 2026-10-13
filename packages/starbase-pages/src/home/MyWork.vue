@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { RecordCard, Section, StatusBadge, campaignTypeLabel, collectionRoute, formatDate, humanise, projectStatusLabel, recordRoute } from '@d1/ui';
+import { AppLink, RecordCard, Section, StatusBadge, campaignTypeLabel, collectionRoute, formatDate, humanise, projectStatusLabel, recordRoute } from '@d1/ui';
 import { CARD_LIMIT, SAMPLE_LIMIT, useMyWork } from './useMyWork';
 
 // "Your work": the projects where I am PI or investigator, the campaigns I own and my newest
@@ -24,7 +24,7 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 	<Section title="Your work">
 		<p v-if="hasPerson === false" class="notice" role="note">
 			Your login is not linked to a person record, so samples and campaigns you own cannot be found.
-			Ask an admin to link it on the <router-link to="/home/people">People</router-link> page. Projects where you are an
+			Ask an admin to link it on the <AppLink to="/home/people">People</AppLink> page. Projects where you are an
 			investigator, and samples you co-own, still show.
 		</p>
 		<p v-if="partialProjects" class="notice" role="note">{{ partialProjects }}</p>
@@ -39,7 +39,7 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 		<section v-if="projects.data.length" class="group" aria-label="My projects">
 			<header>
 				<h3>My projects <span class="n">{{ projects.data.length }}</span></h3>
-				<router-link v-if="projects.data.length > GROUP_SHOWN" to="/home/projects" class="link" title="All projects you can see">{{ more(projects.data.length, CARD_LIMIT) }} →</router-link>
+				<AppLink v-if="projects.data.length > GROUP_SHOWN" to="/home/projects" class="link" title="All projects you can see">{{ more(projects.data.length, CARD_LIMIT) }} →</AppLink>
 			</header>
 			<div class="cards">
 				<RecordCard
@@ -58,7 +58,7 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 		<section v-if="campaigns.data.length" class="group" aria-label="Campaigns I own">
 			<header>
 				<h3>Campaigns I own <span class="n">{{ campaigns.data.length }}</span></h3>
-				<router-link v-if="campaigns.data.length > GROUP_SHOWN" :to="collectionRoute('campaigns')" class="link" title="All campaigns you can see">{{ more(campaigns.data.length, CARD_LIMIT) }} →</router-link>
+				<AppLink v-if="campaigns.data.length > GROUP_SHOWN" :to="collectionRoute('campaigns')" class="link" title="All campaigns you can see">{{ more(campaigns.data.length, CARD_LIMIT) }} →</AppLink>
 			</header>
 			<div class="cards">
 				<RecordCard
@@ -80,7 +80,7 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 		<section v-if="samples.data.length" class="group" aria-label="My latest samples">
 			<header>
 				<h3>My latest samples <span class="n">{{ samples.data.length }}</span></h3>
-				<router-link v-if="samples.data.length > GROUP_SHOWN" :to="collectionRoute('physical_samples')" class="link" :title="`Your newest ${SAMPLE_LIMIT} by last update; all samples you can see`">{{ more(samples.data.length, SAMPLE_LIMIT) }} →</router-link>
+				<AppLink v-if="samples.data.length > GROUP_SHOWN" :to="collectionRoute('physical_samples')" class="link" :title="`Your newest ${SAMPLE_LIMIT} by last update; all samples you can see`">{{ more(samples.data.length, SAMPLE_LIMIT) }} →</AppLink>
 				<span v-else class="cap-note">newest first</span>
 			</header>
 			<div class="cards">

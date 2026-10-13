@@ -2,7 +2,7 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import {
-	EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
+	AppLink, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
 	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
@@ -64,9 +64,9 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
 				<RecordLayout style="--d1-sticky-top: 70px">
 					<template #crumbs>
-						<router-link to="/home">Home</router-link>
+						<AppLink to="/home">Home</AppLink>
 						<span>›</span>
-						<router-link to="/home/projects">Projects</router-link>
+						<AppLink to="/home/projects">Projects</AppLink>
 					</template>
 
 					<template #rail>
