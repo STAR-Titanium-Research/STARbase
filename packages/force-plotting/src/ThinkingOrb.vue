@@ -33,8 +33,12 @@ let running = false;
 let onScreen = true;
 let io: IntersectionObserver | null = null;
 let themeObserver: MutationObserver | null = null;
+// Fires when the display scale changes (window dragged to another monitor, Ctrl +/-), so the
+// backing store can be resized instead of the orb turning blurry. Re-armed for each new scale.
+let dprMq: MediaQueryList | null = null;
 const reducedMq = typeof matchMedia === 'undefined' ? null : matchMedia('(prefers-reduced-motion: reduce)');
-const REDUCED_SPEED = 0.25;
+// The same ratio as the CSS spinners' reduced-motion rule in the force app (0.9 s → 2 s a turn).
+const REDUCED_SPEED = 0.45;
 
 function readColours() {
 	if (!canvas.value) return;
@@ -52,6 +56,13 @@ function setup() {
 	el.height = Math.round(props.size * dpr);
 	ctx = el.getContext('2d');
 	ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+	dprMq?.removeEventListener('change', onDprChange);
+	dprMq = typeof matchMedia === 'undefined' ? null : matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+	dprMq?.addEventListener('change', onDprChange);
+}
+function onDprChange() {
+	setup();
+	refresh();
 }
 
 function draw(t: number) {
@@ -97,8 +108,9 @@ onMounted(() => {
 	readColours();
 	setup();
 	if (typeof IntersectionObserver !== 'undefined' && canvas.value) {
-		io = new IntersectionObserver(([entry]) => {
-			onScreen = entry.isIntersecting;
+		// Entries come oldest first; after a quick v-show toggle only the last one is current.
+		io = new IntersectionObserver((entries) => {
+			onScreen = entries[entries.length - 1].isIntersecting;
 			if (onScreen) start();
 			else stop();
 		});
@@ -120,6 +132,7 @@ onBeforeUnmount(() => {
 	stop();
 	io?.disconnect();
 	themeObserver?.disconnect();
+	dprMq?.removeEventListener('change', onDprChange);
 	document.removeEventListener('visibilitychange', onVisibility);
 	reducedMq?.removeEventListener('change', refresh);
 });

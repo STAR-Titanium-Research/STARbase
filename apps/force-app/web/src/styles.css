@@ -218,6 +218,11 @@ button {
 .btn.danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
 .btn.success { color: #05210f; background: #22c55e; border-color: #22c55e; }
 .btn.success:hover:not(:disabled) { background: #16a34a; border-color: #16a34a; }
+/* The loading orb reads its colours from these tokens. On a solid green, red or amber button one
+   strand would vanish into the fill (Fy green on .success), so there it is drawn in the button's ink. */
+.btn.success:not(.quiet) .thinking-orb { --fx-ink: #05210f; --fy-ink: #05210f; --fz-ink: #05210f; --text-dim: rgba(5, 33, 15, 0.5); }
+.btn.danger:not(.quiet) .thinking-orb { --fx-ink: #fff; --fy-ink: #fff; --fz-ink: #fff; --text-dim: rgba(255, 255, 255, 0.5); }
+.btn.primary .thinking-orb { --fx-ink: var(--accent-ink); --fy-ink: var(--accent-ink); --fz-ink: var(--accent-ink); --text-dim: color-mix(in srgb, var(--accent-ink) 50%, transparent); }
 .btn.quiet { color: var(--text-dim); background: transparent; border-color: transparent; }
 .btn.quiet:hover:not(:disabled) { color: var(--text); background: var(--surface-2); border-color: transparent; }
 /* A delete button repeated on every row of a list: red text rather than a red block per row. */
@@ -366,7 +371,7 @@ textarea {
 /* Reduced motion (an OS setting): no pulsing, blinking, sliding or fading. Nothing here depends on
    an animation to be understood — the alarm banner stays solid red and keeps its tone. Spinners
    are the exception: they are state, and a frozen one reads as a hang, so they keep turning slowly
-   (the canvas loading orb slows itself the same way). */
+   (the canvas loading orb slows itself by the same ratio, 0.45). */
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,

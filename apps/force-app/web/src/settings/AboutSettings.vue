@@ -205,7 +205,8 @@ h2 { margin: 0 0 4px; font-size: var(--fs-xl); }
 
 .install-overlay { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
 	align-items: center; justify-content: center; gap: 6px; background: rgba(0,0,0,0.75); color: #fff; text-align: center; }
-.install-overlay .thinking-orb { margin-bottom: 6px; }
+/* The overlay is near-black in both themes, so the orb keeps the dark theme's inks here. */
+.install-overlay .thinking-orb { margin-bottom: 6px; --fx-ink: #f87171; --fy-ink: #4ade80; --fz-ink: #60a5fa; --text-dim: rgba(255, 255, 255, 0.55); }
 .install-overlay p { margin: 0; font-size: var(--fs-lg); }
 .install-overlay .sub { font-size: var(--fs-sm); color: rgba(255,255,255,0.7); }
 

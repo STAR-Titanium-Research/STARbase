@@ -70,7 +70,7 @@
       }
       // Reduced motion slows the orb rather than freezing it: a still one reads as a hang.
       (function loop() {
-        frame((performance.now() / 1000) * SPEED * (reduced.matches ? 0.25 : 1));
+        frame((performance.now() / 1000) * SPEED * (reduced.matches ? 0.45 : 1));
         requestAnimationFrame(loop);
       })();
     })();
