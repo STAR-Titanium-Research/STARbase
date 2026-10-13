@@ -922,7 +922,7 @@ migration 141 prints about ownerless records.
   follows), Remove unpins, and **Reset to defaults** asks "Replace your pins with Samples and Projects?" and then
   leaves exactly Samples and Projects. A pin whose page you cannot read (try one on a collection your role has no
   access to) is under "No longer available" and Remove clears it. **Forget my list views** and **Clear my history**
-  work. Repeat the Pinned and history parts signed in as a Lab Member: every one of them works. Since explorer
+  work (Clear asks "Clear your history? Pinned items stay." first, and Cancel sends nothing). Repeat the Pinned and history parts signed in as a Lab Member: every one of them works. Since explorer
   sidebar B2 (Settings page, PR pending).
 
 - [ ] **B2-1 — Saved-view pins across people.** As a person with a role that shares saved views, pin a role-shared
@@ -933,7 +933,7 @@ migration 141 prints about ownerless records.
   sidebar B2. PR: B2 sidebar (claude/happy-sagan-875lo1).
 
 - [ ] **B2-2 — Migration 170 on live.** Apply `20261013000170_user_pins_and_prefs` (renumbered from 165) to the live
-  database. It applies without an error. Existing U1 pins keep their order for every person, and each person gets
+  database. It applies without an error. Existing U1 pins are numbered newest-used first for every person (as U1's Home listed them), and each person gets
   Samples and Projects once (no duplicate rows, none for a person who already had them). Run `dbmate down` then
   `up` on a copy first if you want to see it reverse. Since explorer sidebar B2. PR: B2 sidebar
   (claude/happy-sagan-875lo1).
