@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onMounted } from 'vue';
 import BrandLogo from '../BrandLogo.vue';
 import { getConfig } from '../config';
 
@@ -6,6 +7,10 @@ import { getConfig } from '../config';
 defineProps<{ retrying?: boolean }>();
 defineEmits<{ (e: 'retry'): void }>();
 const server = getConfig().directusUrl;
+// The previous page's title must not linger on this one.
+onMounted(() => {
+	document.title = "STARbase — can't reach the database";
+});
 </script>
 
 <template>
