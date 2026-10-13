@@ -109,8 +109,12 @@ export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
 export { default as ExplorerNav } from './nav/ExplorerNav.vue';
 export { default as Finder } from './finder/Finder.vue';
 export { isFinderShortcut, isModalOpen } from './finder/finderNav';
+export { default as ScanResultCard } from './finder/ScanResultCard.vue';
+export { isScanStarted, normalizeScan, displayText, resolveLabel } from './finder/scan';
+export type { ScanApi, ScanOutcome, FailReason } from './finder/scan';
+export { cameraSupport, cameraErrorMessage, decodeSize, DECODE_INTERVAL_MS } from './finder/scanCamera';
 export { INDEX_DEFS, indexDefBySlug, indexDefByCollection } from './index/indexConfig';
-export type { IndexDef, ColumnDef, FilterDef } from './index/indexConfig';
+export type { IndexDef, ColumnDef, FilterDef, SelectAction } from './index/indexConfig';
 export { thumbKind, thumbFields, imageField, hasDrawableDims, fileId, assetThumbUrl } from './index/thumbs';
 export type { ThumbKind } from './index/thumbs';
 export { plotKind, plotRequests, mergePlots } from './index/plotData';
@@ -120,3 +124,24 @@ export { default as IndexPage } from './index/IndexPage.vue';
 // Admin Home rules (the crawler online test, the overview shape, the Needs attention rows)
 export { CRAWLER_ONLINE_MS, ago, attentionView, crawlerOnline, isAuthRefusal, normaliseOverview, overviewTime, ownerlessRows, ownerlessTotal } from './adminHome';
 export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints, MissingFiles, Ownerless, OwnerlessRow } from './adminHome';
+
+// Label printing (pure logic: templates, pagination, text fit, QR payload, HTML renderer)
+export {
+	FIELD_KEYS, QR_KEYS, FIELD_SIZES, ARRANGEMENTS, MEDIA, toLabelSample, isPrintableSample, templateFromRow, validateTemplate, slotPositions, paginate, paginateCounts, fitText,
+	SIZE_PT, MIN_PT, buildQrPayload, parseQrPayload, effectiveQrKeys, QR_HEADER, renderLabelDocument, chooseQr, moduleMm, MIN_MODULE_MM, WARN_MODULE_MM, contactEmailOf, parseContactInput, contactLine, EMAIL_PATTERN,
+	LABEL_SAMPLE_FIELDS, MAX_COPIES, MEMBER_COLUMNS, parseSelectionQuery, parseCodes, pickerFilter, clampCopies, clampStart, slotsPerPage,
+	countLabels, summaryText, classifyTemplates, pickTemplate, canEditTemplate, blankTemplate, copyAsNew, draftOf, templatePayload,
+	saveErrorText, moveField, sampleEntries, buildLbxDownload, isLbxTemplate, LBX_TAPE_MM,
+} from './labels';
+export type {
+	QrKey, FieldKey, FieldSize, Arrangement, Media, LabelField, LabelTemplate, LabelSample, Slot, PaginateOptions, FittedText, ParsedQrPayload,
+	RenderOptions, RenderedLabels, QrModules, QrLevel, ChosenQr, Measure, BrokenTemplate, CountedSample, LabelEntry, LbxDownload,
+} from './labels';
+
+// Frequently used (Home panel and the visit pings; the server half is core/extensions/d1-usage)
+export {
+	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, pinEntry, readDismissed,
+	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, revertPin, routeTarget, splitRecordTarget, suggestedPageEntries,
+	withoutDismissed, writeDismissed,
+} from './usage';
+export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';

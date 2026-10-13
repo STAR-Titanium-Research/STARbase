@@ -53,7 +53,7 @@ Click a sample on **Home** (recent activity) or in a dashboard and it opens as a
 - **The header** shows the code, nickname and status, the project and campaign as links, and the
   owner. **Edit** opens the same form as Content in a drawer (changes save without leaving the
   page, and you are warned if someone else saved the record while it was open). **Print label**
-  and **Report** open in a new tab. **Data Studio** opens the Content form.
+  opens the in-app Labels page with this sample preselected; **Report** opens in a new tab. **Data Studio** opens the Content form.
 - **Overview** draws the sample at its real dimensions, shows the material with its composition
   bar, and lists the key facts. A sample without a measured mass shows an estimate from its
   dimensions and the material density.

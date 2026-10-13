@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FinderHit } from './finder';
-import { isFinderShortcut, isModalOpen, moveIndex, optionId, toSections } from './finderNav';
+import { isFinderShortcut, isModalOpen, isTypingKey, moveIndex, optionId, toSections } from './finderNav';
 
 const hit = (group: FinderHit['group'], label: string): FinderHit => ({ group, label, to: `/x/${label}`, rank: 3 });
 
@@ -70,5 +70,19 @@ describe('isModalOpen', () => {
 		expect(isModalOpen(doc(true), '#some-outlet > *')).toBe(true);
 		expect(isModalOpen(doc(false), '#some-outlet > *')).toBe(false);
 		expect(asked).toEqual(['#some-outlet > *', '#some-outlet > *']);
+	});
+});
+
+describe('isTypingKey', () => {
+	it('is true for a printable character', () => {
+		expect(isTypingKey({ key: 'D' })).toBe(true);
+		expect(isTypingKey({ key: '|' })).toBe(true);
+		expect(isTypingKey({ key: '1', ctrlKey: false })).toBe(true);
+	});
+	it('is false for Space, Enter, Tab, arrows and shortcuts', () => {
+		for (const key of [' ', 'Enter', 'Tab', 'ArrowDown', 'Escape', 'Shift']) expect(isTypingKey({ key })).toBe(false);
+		expect(isTypingKey({ key: 'k', ctrlKey: true })).toBe(false);
+		expect(isTypingKey({ key: 'k', metaKey: true })).toBe(false);
+		expect(isTypingKey({ key: 'a', altKey: true })).toBe(false);
 	});
 });

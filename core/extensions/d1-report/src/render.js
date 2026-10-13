@@ -19,10 +19,10 @@ export const EXPLORER_PAGES = {
 	projects: 'projects',
 };
 
-// The Directus app page for a record: what report QR codes, label QR codes and in-report links
-// open (sign-in required). A record with an Explorer page opens there (/admin/home/samples/<id>);
-// any other goes to its Data Studio form. Labels printed before the Explorer pages existed point
-// at /admin/content/..., which still works. `publicUrl` may carry trailing slashes.
+// The Directus app page for a record: where report QR codes and in-report links open (sign-in
+// required). A record with an Explorer page opens there (/admin/home/samples/<id>); any other
+// goes to its Data Studio form. `publicUrl` may carry trailing slashes. (Labels are now printed
+// from the Explorer labels page and encode a self-describing QR payload, not a Directus link.)
 export function adminRecordUrl(publicUrl, collection, id) {
 	const base = String(publicUrl || '').replace(/\/+$/, '');
 	const key = encodeURIComponent(String(id));

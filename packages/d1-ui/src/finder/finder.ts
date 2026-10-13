@@ -175,9 +175,7 @@ export function localHits(q: string, nav: VisibleNav): FinderHit[] {
 	const hits: FinderHit[] = [];
 	for (const group of nav.groups) {
 		for (const link of group.links) {
-			// A link that opens in a new tab (Print labels) is a server page, not an app route: the
-			// finder navigates with the host's router and cannot open it, so it is not offered.
-			if (!link.newTab && link.label.toLowerCase().includes(needle)) {
+			if (link.label.toLowerCase().includes(needle)) {
 				hits.push({ group: 'Pages', label: link.label, to: link.to, rank: rankHit(q, link.label, false) });
 			}
 			for (const b of link.bookmarks) {
