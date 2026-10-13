@@ -74,6 +74,8 @@ export { default as LoadState } from './components/LoadState.vue';
 export { default as NotVisible } from './components/NotVisible.vue';
 export { default as HiddenLink } from './components/HiddenLink.vue';
 export { default as RecordLayout } from './components/RecordLayout.vue';
+export { default as PinToggle } from './components/PinToggle.vue';
+export { pinTargetForIndex, pinTargetForRecord } from './components/pinTarget';
 export { default as RecordRail } from './components/RecordRail.vue';
 export { default as FactList } from './components/FactList.vue';
 export { default as PageContents } from './components/PageContents.vue';
