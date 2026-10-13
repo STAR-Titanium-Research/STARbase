@@ -48,7 +48,7 @@ At the bottom of the form, related records are listed and can be added in place:
 ## The Sample page
 
 Click a sample on **Home** (recent activity) or in a dashboard and it opens as a formatted page,
-`/admin/home/samples/<id>`, instead of the Content form:
+`https://starbase.tail54eeb6.ts.net/samples/<id>`, instead of the Content form:
 
 - **The header** shows the code, nickname and status, the project and campaign as links, and the
   owner. **Edit** opens the same form as Content in a drawer (changes save without leaving the

@@ -1,20 +1,20 @@
 # Explorer pages
 
 The **Explorer pages** are formatted pages for the main records, so that you can follow a piece of
-work from a project down to one test without opening a Directus form. They live in the **Home**
-module (`/admin/home/...`) and every record link on Home, on the dashboards and on the pages
-themselves leads to them. Everything on them is read as **you**, so you only see what your role
+work from a project down to one test without opening a Directus form. They live in **STARbase**
+(`https://starbase.tail54eeb6.ts.net/...`), and every record link on Home, on the dashboards, on
+the pages themselves and in Data Studio leads to them. Everything on them is read as **you**, so you only see what your role
 may read; a record that does not exist and one you may not read look the same
 (*Not found or not visible to you*, with a button back to Home).
 
 | Page | Address | Reached from |
 |---|---|---|
-| [Projects index](#projects-index) | `/admin/home/projects` | the sidebar: Records → *Projects*, or **Ctrl K** (finder) |
-| [Project](#project) | `/admin/home/projects/<id>` | a project card |
-| [Campaign](#campaign) | `/admin/home/campaigns/<id>` | a campaign card, or a breadcrumb |
-| [Sample](samples.md#the-sample-page) | `/admin/home/samples/<id>` | any sample code |
-| [Operation](#operation) | `/admin/home/operations/<id>` | any pass code |
-| [Test](#test) | `/admin/home/tests/<id>` | any test |
+| [Projects index](#projects-index) | `https://starbase.tail54eeb6.ts.net/projects` | the sidebar: Records → *Projects*, or **Ctrl K** (finder) |
+| [Project](#project) | `https://starbase.tail54eeb6.ts.net/projects/<id>` | a project card |
+| [Campaign](#campaign) | `https://starbase.tail54eeb6.ts.net/campaigns/<id>` | a campaign card, or a breadcrumb |
+| [Sample](samples.md#the-sample-page) | `https://starbase.tail54eeb6.ts.net/samples/<id>` | any sample code |
+| [Operation](#operation) | `https://starbase.tail54eeb6.ts.net/operations/<id>` | any pass code |
+| [Test](#test) | `https://starbase.tail54eeb6.ts.net/tests/<id>` | any test |
 
 The breadcrumb at the top of a page (`Home › Project › Campaign › Sample`) is the way back up.
 Every page has **Edit** (the [Edit drawer](#the-edit-drawer)) and **Data Studio**, which opens the

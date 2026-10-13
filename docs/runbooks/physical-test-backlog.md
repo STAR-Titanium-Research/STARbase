@@ -200,9 +200,11 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
   error. The batch `PATCH /items/test_sessions` answer lists the changed row for a role that may
   read test sessions, so a normal add never shows the "already in another campaign" note. Since #127.
 
-### Explorer pages (Home module)
-Restart Directus after `npm ci` and `npm run build:extensions` at the repo root so
-the rebuilt `d1-home`, `d1-lab-dashboard` and `d1-composition-bar` load, and apply migrations 138 and 139.
+### Explorer pages (STARbase)
+These checks were written when the pages were the Directus Home module (`d1-home`, removed in phase 1
+of going headless); the addresses now are STARbase's. Restart Directus after `npm ci` and
+`npm run build:extensions` at the repo root so the rebuilt `d1-lab-dashboard` and
+`d1-composition-bar` load, and apply migrations 138 and 139.
 
 - [ ] **E1 — edit drawer saves through real interfaces.** On a sample page click **Edit**. Expect:
   the drawer shows the same form as Content (sample code builder, material and project pickers,
@@ -231,7 +233,7 @@ the rebuilt `d1-home`, `d1-lab-dashboard` and `d1-composition-bar` load, and app
   Library, Insights, Lab Dashboard, Force Analysis, FAST Analysis, Content, Settings (for a bar
   that had the shipped order), and every icon still opens its module. On a fresh install
   (`scripts/configure_all.sh`) the same order is created. Since: Explorer pages E1 (PR pending).
-- [ ] **E1 — Sample page on real data.** Open `/admin/home/samples/<id>` for a sample with a parent,
+- [ ] **E1 — Sample page on real data.** Open `https://starbase.tail54eeb6.ts.net/samples/<id>` for a sample with a parent,
   children, a raw stock lot, machining and FAST operations, tests and linked archive files. Expect:
   the header (code, nickname, status, project and campaign links, owner), the geometry drawing at
   the right proportions, the material's composition bar equal to the material form's, a measured
@@ -255,7 +257,7 @@ the rebuilt `d1-home`, `d1-lab-dashboard` and `d1-composition-bar` load, and app
   FAST runs on Home still open the FAST dashboard. Since: Explorer pages E1 (PR pending).
 
 #### Campaign page (E2)
-- [ ] **E2 — Campaign page on a real campaign with force data.** Open `/admin/home/campaigns/<id>` for
+- [ ] **E2 — Campaign page on a real campaign with force data.** Open `https://starbase.tail54eeb6.ts.net/campaigns/<id>` for
   a machining trial whose operations have force files in several states (done, pending, an error,
   one with every file skipped, one with several files for one operation). Expect: the header shows
   code, name, type, project breadcrumb, owner, status, dates and, where set, default equipment and
@@ -308,7 +310,7 @@ the rebuilt `d1-home`, `d1-lab-dashboard` and `d1-composition-bar` load, and app
   for a Lab Member and present for an admin: if it is missing for an admin, the admin flag is not
   where `home.vue` looks (`userStore.isAdmin`, `currentUser.admin_access`). Since: Explorer pages
   E3 (PR pending).
-- [ ] **E3 — Projects index.** Open `/admin/home/projects` (Home > *All projects*). Expect one card
+- [ ] **E3 — Projects index.** Open `https://starbase.tail54eeb6.ts.net/projects` (Home > *All projects*). Expect one card
   per readable project, with the campaign and sample counts equal to the Data Studio lists filtered
   by project, the PI name, and "You are PI" / "You are investigator" badges that match the project
   form. *My role* (PI, investigator, either), *Status* and the code/name search narrow the cards.
@@ -345,10 +347,10 @@ the rebuilt `d1-home`, `d1-lab-dashboard` and `d1-composition-bar` load, and app
 
 #### Operation and Test pages (E4)
 After `npm ci` and `npm run build:extensions` at the repo root, restart Directus: `d1-project-items`
-and `d1-fast-dashboard` are now built from the root with the other workspace extensions, and
-`d1-report` is rebuilt in its own folder (`npm ci && npm run build`).
+is built from the root with the other workspace extensions (`d1-fast-dashboard`, which this note once
+named, was removed in phase 1 of going headless), and `d1-report` is rebuilt in its own folder (`npm ci && npm run build`).
 
-- [ ] **E4 — parameters per process category on real data.** Open `/admin/home/operations/<id>` for
+- [ ] **E4 — parameters per process category on real data.** Open `https://starbase.tail54eeb6.ts.net/operations/<id>` for
   one operation of each category you have (machining, FAST sintering, heat treatment, deformation,
   additive, sample preparation). Expect: the Parameters grid shows only that category's fields, with
   the same labels and values as the Content form's panel, the unit after each measured value (the
@@ -356,7 +358,7 @@ and `d1-fast-dashboard` are now built from the root with the other workspace ext
   not `water_quench`), toggles as Yes / No, and a very small number readable (not "0"). Fields left
   empty are not listed. An operation with no process category says so. Sample preparation has no
   parameter columns, so it shows the empty line. Repeat for a test of each type you have (tensile,
-  hardness, charpy, compression, SEM, XRD, tribology, fatigue, CT ...) on `/admin/home/tests/<id>`.
+  hardness, charpy, compression, SEM, XRD, tribology, fatigue, CT ...) on `https://starbase.tail54eeb6.ts.net/tests/<id>`.
   Since: Explorer pages E4 (PR pending).
 - [ ] **E4 — operation page states.** On a machining operation with several `.mat` files in
   different states: each file shows its Analysis and Diagnostics badges, the error text of a failed
@@ -382,13 +384,13 @@ and `d1-fast-dashboard` are now built from the root with the other workspace ext
   link to its Content form. Since: Explorer pages E4 (PR pending).
 - [ ] **E4 — QR scan opens the Sample page.** Print a label (Sample page > Print label, or
   `/d1-report/label`) from the rebuilt app and scan it with a phone that is not signed in. Expect:
-  the sign-in page, then `/admin/home/samples/<id>` (the Explorer page, usable on a phone). An old
+  the sign-in page, then `https://starbase.tail54eeb6.ts.net/samples/<id>` (the Explorer page, usable on a phone). An old
   printed label (encodes `/admin/content/physical_samples/<id>`) still opens the Content form. The
   QR and the sample link on an operation report and a test report open the Explorer pages. Needs
   `PUBLIC_URL` set to an address the phone can reach. Since: Explorer pages E4 (PR pending). **Superseded by the Explorer labels page (PR #247).**
-- [ ] **E4 — Force and FAST dashboards land on the Explorer.** In the Force dashboard use the "open
-  record" action on an operation and on a sample: both open `/admin/home/operations/<id>` and
-  `/admin/home/samples/<id>`, and Back returns to the dashboard. In the FAST dashboard **Open** on
+- [ ] **E4 — Force and FAST dashboards land on the Explorer.** In STARbase's Force plotter (`/plot/force`) use the "open
+  record" action on an operation and on a sample: both open `https://starbase.tail54eeb6.ts.net/operations/<id>` and
+  `https://starbase.tail54eeb6.ts.net/samples/<id>`, and Back returns to the dashboard. In the FAST plotter (`/plot/fast`) **Open** on
   a run opens the Operation page; opening the recipe still opens its Content form. Since: Explorer
   pages E4 (PR pending).
 - [ ] **E4 — project items links and lineage graph.** In a project's Content form, the Project
@@ -725,7 +727,7 @@ migration 141 prints about ownerless records.
   account). Since: Explorer restyle, not yet in a PR.
 - [ ] **Explorer fixes F1 — an operation without a pass code.** Find an operation whose pass code
   is empty and that has an input sample and a step number (Data Studio: `manufacturing_operations`
-  filtered `pass_code` is empty) and open `/admin/home/operations/<id>`. Expect: the heading reads
+  filtered `pass_code` is empty) and open `https://starbase.tail54eeb6.ts.net/operations/<id>`. Expect: the heading reads
   like `10-AA-MF-2023-3-31 · step 27` (its input sample and step) in the normal font, not
   monospace; the tab title is the same text; nothing says just "Operation" as if it were a code.
   The same text is the link text in the Sample page's Operations table, the Project page's
@@ -761,7 +763,7 @@ migration 141 prints about ownerless records.
 - [ ] **Explorer fixes F1 — Projects count in "At a glance".** On Home, the strip has a Projects
   tile between Tests and Campaigns, with a number, not a dash. Expect: as an admin it is every
   project, as a member the number of projects you can read;
-  the tile opens the Explorer's Projects index (`/admin/home/projects`), not the Projects
+  the tile opens the Explorer's Projects index (`https://starbase.tail54eeb6.ts.net/projects`), not the Projects
   collection in the Data Studio. Since: Explorer fixes F1, not yet in a PR.
 - [ ] **Explorer fixes F1 — Test page result tables.** Open a test session with processed results
   that have a list of records ("Channels", "Top frequencies"). Expect: each table is only as wide
@@ -833,7 +835,7 @@ migration 141 prints about ownerless records.
 - [ ] **#247-L9 — Labels page — preselection from the record pages.** From a Sample
   page (real data) press **Print label**: the labels page opens in the same tab with that sample
   ticked. From **Samples**, tick two rows and press **Print labels for selected**: both are ticked
-  on the labels page. Open `/admin/home/labels?codes=<a real code>,NOPE`: the real one is ticked and
+  on the labels page. Open `https://starbase.tail54eeb6.ts.net/labels?codes=<a real code>,NOPE`: the real one is ticked and
   "Not found, or not visible to you: NOPE" is shown. The Print label button on a sample form (the
   `d1-report-button` interface) goes to the same page.
 - [ ] **#247-L10 — Default swap is one write.** As an admin, on the labels page open a template that is not the

@@ -263,20 +263,25 @@ deleted by hand**:
   `node_modules/`, so Directus would keep loading it.
 
 Phase 1:
-1. `git pull`, `npm ci`, `npm run build:starbase` and `npm run build:extensions`, then the
-   `d1-report` build.
-2. Delete what is left of `core/extensions/d1-home`, `d1-force-dashboard` and `d1-fast-dashboard`.
-   Check `docker compose exec directus ls /directus/extensions` shows them gone.
-3. Run the module-bar migration (dbmate), then `bash scripts/set_module_bar_starbase.sh`.
-4. `docker compose up -d --force-recreate directus proxy`.
+1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`, then
+   `(cd core/extensions/d1-report && npm ci && npm run build)` and
+   `(cd core/extensions/d1-report-button && npm ci && npm run build)`.
+2. Delete what is left of the three removed extensions, then check:
+   `rm -rf core/extensions/d1-home core/extensions/d1-force-dashboard core/extensions/d1-fast-dashboard`
+   (PowerShell: `Remove-Item -Recurse -Force core/extensions/d1-home, core/extensions/d1-force-dashboard, core/extensions/d1-fast-dashboard`).
+3. `dbmate up` (migration 171), then `bash scripts/set_module_bar_starbase.sh`.
+4. `docker compose up -d --force-recreate directus`, then
+   `docker compose exec directus ls /directus/extensions`: the three names are gone.
 5. Smoke:
-   - the module bar shows the STARbase tile, and it opens STARbase;
-   - a sample report's QR opens the STARbase sample page through `/d1-links/go/r/…`;
-   - `/d1-report/labels` lands on STARbase Labels;
-   - `curl -sI …/d1-links/go/p/../x` answers `400`;
-   - the Data Studio report button opens STARbase's plot in a new tab;
-   - a project's items interface links open STARbase.
-6. Force App release with the new `openRecord`.
+   - `curl -sI https://d1-server.tail54eeb6.ts.net/d1-links/go/r/physical_samples/<id>` → `302`
+     to `https://starbase.tail54eeb6.ts.net/samples/<id>`;
+   - `curl -sI "https://d1-server.tail54eeb6.ts.net/d1-links/go/p/a//b"` → `400`;
+   - in Data Studio, the module bar's first tile is STARbase and opens it; Home and the Force/FAST
+     tiles are gone;
+   - a sample report's QR code opens the sample in STARbase;
+   - on an operation's Data Studio form, "View Force Analysis" opens STARbase's plot in a new tab;
+   - a project's items list links open STARbase.
+6. Force App: ship the release that contains "open record through the permanent link".
 
 Phase 2: the same rhythm, with `npm ci` picking up Vue Flow, elkjs and plotly. The three folders go
 in step 2 and the second migration runs in step 3. The smoke covers `/graph`, `/crawler` (as admin

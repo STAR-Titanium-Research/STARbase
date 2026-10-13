@@ -13,7 +13,7 @@ User and developer guides for the two applications in this repository, with scre
   [Recording a cut](force-app/recording.md).
 - **Asked to run a test at the rig, or want one run?** [Rig tests](force-app/rig-tests.md).
 - **Reviewing results?** [The Plot dashboard](force-app/plot-dashboard.md). The same dashboard is
-  *Force Analysis* in Directus.
+  *Force Analysis* in STARbase.
 - **Registering samples and logging work?** [D1 Database → Getting started](database/getting-started.md),
   then [Samples](database/samples.md) and [Operations and tests](database/operations-and-tests.md).
 - **Following a project, campaign or sample?** [Explorer pages](database/explorer-pages.md).

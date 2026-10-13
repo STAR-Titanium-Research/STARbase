@@ -3,8 +3,7 @@
 [← Force App wiki](README.md)
 
 **Plot** is where finished cuts are reviewed. The same dashboard (`packages/force-plotting`) also
-runs inside Directus as the *Force Analysis* module, so everything here works the same in the
-browser.
+runs in STARbase (`/plot/force`), so everything here works the same in the browser.
 
 ![The Plot dashboard](../images/force-app/plot-dashboard.png)
 
@@ -302,7 +301,7 @@ Z series (`zs`), an unsaved crop preview (`crop`) and a locked colour-scale rang
 a link names that the cut cannot show (for example Lite on a cut with no live cache) is ignored
 and the default is used. The address updates a moment after each change without adding browser
 history entries; the Compare set only includes cuts from your own list, so a recipient who cannot
-see one of them simply does not get it. It works the same in the Directus *Force Analysis* module.
+see one of them simply does not get it. It works the same in STARbase's Force plotter.
 
 ## Adding panels
 

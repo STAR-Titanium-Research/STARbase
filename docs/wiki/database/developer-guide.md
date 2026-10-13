@@ -14,8 +14,8 @@
 | `scripts/configure_*.sql` | Directus metadata as code |
 | `scripts/` | orchestrators, importers, backfills, MATLAB |
 | `plugins/` | compute plugins (filter, diagnostics, text-to-SQL, heavy data, analysis) |
-| `packages/force-plotting/` | the Force Analysis dashboard, shared with the Force App |
-| `packages/d1-ui/` | the Explorer pages' kit (`@d1/ui`): `recordRoute`, status vocabularies, shared components and the edit drawer; used by `d1-home`, `d1-lab-dashboard`, `d1-composition-bar`, `d1-campaign-ops`, `d1-project-items` and `d1-fast-dashboard` |
+| `packages/force-plotting/` | the Force Analysis dashboard, shared with the Force App and STARbase (`/plot/force`) |
+| `packages/d1-ui/` | the Explorer pages' kit (`@d1/ui`): `recordRoute`, status vocabularies, shared components and the edit drawer; used by STARbase (`apps/starbase/web`, with its pages in `packages/starbase-pages`) and by `d1-lab-dashboard`, `d1-composition-bar`, `d1-campaign-ops` and `d1-project-items` |
 | `tests/` | schema, traceability, text-to-SQL and UI tests |
 
 Start with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) for the rules (migrations only, `COMMENT`
@@ -70,9 +70,10 @@ Everything also runs natively, which is how the screenshots were made:
 3. [dbmate](https://github.com/amacneil/dbmate): `dbmate --migrations-dir db/migrations up`.
 4. `psql -f` each configure script in the order `configure_all.sh` uses, then restart Directus.
 5. Build each extension (`npm ci && npm run build` in its folder) and restart Directus. The ones that
-   import shared source (`d1-force-dashboard`, `d1-home`, `d1-lab-dashboard`, `d1-composition-bar`,
-   `d1-campaign-ops`, `d1-project-items`, `d1-fast-dashboard`) are workspaces of the repo root: run
-   `npm ci` there, then `npm run build:extension` and `npm run build:extensions`.
+   import shared source (`d1-edit-frame`, `d1-lab-dashboard`, `d1-composition-bar`,
+   `d1-campaign-ops`, `d1-project-items`) are workspaces of the repo root: run
+   `npm ci` there, then `npm run build:extensions`. STARbase (Home, the record pages and the
+   Force/FAST plotters) builds with `npm run build:starbase`.
 
 ## Demo data
 

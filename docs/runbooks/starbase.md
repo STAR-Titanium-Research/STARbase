@@ -2,8 +2,9 @@
 
 STARbase (`apps/starbase/web`) is the group's web app at `https://starbase.tail54eeb6.ts.net`, on its own
 tailnet device, signing in with Directus's own session ([ADR-0013](../adr/0013-starbase-separate-tailnet-device-shared-directus-session.md),
-[spec](../superpowers/specs/2026-10-12-starbase-standalone-design.md)). It runs beside the Directus Home
-module; nothing is removed.
+[spec](../superpowers/specs/2026-10-12-starbase-standalone-design.md)). It started beside the Directus Home
+module; Directus has since lost Home and the two plotter modules (see
+[Phase 1 of going headless](#phase-1-of-going-headless-spec-2026-10-13-directus-headless) below).
 
 Every step below is the maintainer's, on d1-server, each approved on its own. Nothing here runs from a
 development session.
@@ -78,7 +79,7 @@ shows the button by itself once Directus lists the provider.
 ```bash
 npm ci
 npm run build:starbase                                   # apps/starbase/web/dist, served by Caddy on :8090
-npm run build:extensions                                 # d1-home ("Open in STARbase", the edit drawer), d1-edit-frame and the other kit extensions
+npm run build:extensions                                 # d1-edit-frame, d1-lab-dashboard, d1-composition-bar, d1-campaign-ops, d1-project-items
 (cd core/extensions/d1-report && npm ci && npm run build)  # report links follow STARBASE_URL (not a workspace, so its own build)
 docker compose up -d --force-recreate directus filter-service diag-service proxy
 docker compose --profile starbase up -d starbase
@@ -119,11 +120,10 @@ Run the `curl` lines from any device on the tailnet.
 8. Plot one force operation (`/plot/force?operation=<id>`): the signals draw, the **FRM map** streams
    (`/octrees`), a **filter preview** answers (`/filter`), and a **diagnostics preview** answers (`/diag`).
    Download a file from the plot page: it saves as an attachment and the plot page stays where it was.
-9. In Data Studio's Home module, "Open in STARbase" is under the sidebar and opens the same page.
-10. Print a sample report: its QR code and link open the STARbase record page.
-11. Sign out of STARbase: Data Studio is signed out too.
-12. On a phone (if it is on the tailnet): the top bar and menu, a list, a record page.
-13. Real Safari / iOS, if anyone has it: steps 5–7. Step 0 tested Chromium only (spec §9).
+9. Print a sample report: its QR code and link open the STARbase record page.
+10. Sign out of STARbase: Data Studio is signed out too.
+11. On a phone (if it is on the tailnet): the top bar and menu, a list, a record page.
+12. Real Safari / iOS, if anyone has it: steps 5–7. Step 0 tested Chromium only (spec §9).
 
 The frame posts only to `STARBASE_URL`'s origin (`GET /d1-links`). If that is unset or wrong, Save still
 works, but the dialog does not close on its own: the form says "Saved. You can close this form."
@@ -172,7 +172,40 @@ Each item is separate; do them in this order.
 6. Recreate what read them:
    `docker compose up -d --force-recreate directus filter-service diag-service proxy`.
 
-Reports and the label redirects return to the Directus Home module; nothing else changes.
+With `STARBASE_URL` unset, the permanent links (`/d1-links/go…`) answer `503` with a plain text message, so a
+report's QR code scan shows that message: the Directus Home module is gone (Phase 1 of going headless,
+below), so there is nothing for them to fall back to. Roll back that phase first if you need the old pages.
 
 **Warning:** report QR codes and labels printed while `STARBASE_URL` was set point at the STARbase address.
 Once it is gone they stop resolving (the host no longer exists), so reprint any that are still in use.
+
+## Phase 1 of going headless (spec 2026-10-13-directus-headless)
+
+Directus loses Home and the two plotter modules; everything Directus prints or opens goes through the
+permanent links (`/d1-links/go…`). **Directus mounts `core/extensions` as it is**, and `git pull`
+leaves a removed extension's ignored `dist/` and `node_modules/` behind, where Directus keeps
+loading them, so step 2 deletes them by hand.
+
+1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`, then
+   `(cd core/extensions/d1-report && npm ci && npm run build)` and
+   `(cd core/extensions/d1-report-button && npm ci && npm run build)`.
+2. Delete what is left of the three removed extensions, then check:
+   `rm -rf core/extensions/d1-home core/extensions/d1-force-dashboard core/extensions/d1-fast-dashboard`
+   (PowerShell: `Remove-Item -Recurse -Force core/extensions/d1-home, core/extensions/d1-force-dashboard, core/extensions/d1-fast-dashboard`).
+3. `dbmate up` (migration 171), then `bash scripts/set_module_bar_starbase.sh`.
+4. `docker compose up -d --force-recreate directus`, then
+   `docker compose exec directus ls /directus/extensions`: the three names are gone.
+5. Smoke:
+   - `curl -sI https://d1-server.tail54eeb6.ts.net/d1-links/go/r/physical_samples/<id>` → `302`
+     to `https://starbase.tail54eeb6.ts.net/samples/<id>`;
+   - `curl -sI "https://d1-server.tail54eeb6.ts.net/d1-links/go/p/a//b"` → `400`;
+   - in Data Studio, the module bar's first tile is STARbase and opens it; Home and the Force/FAST
+     tiles are gone;
+   - a sample report's QR code opens the sample in STARbase;
+   - on an operation's Data Studio form, "View Force Analysis" opens STARbase's plot in a new tab;
+   - a project's items list links open STARbase.
+6. Force App: ship the release that contains "open record through the permanent link".
+
+Rollback: `git checkout <previous commit>`, rebuild as in step 1, `dbmate rollback`, then recreate
+`directus`. The STARbase tile stays first in the bar; remove it under Settings → Appearance if
+wanted.
