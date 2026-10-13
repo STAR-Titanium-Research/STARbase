@@ -23,13 +23,6 @@ Add the tag, owned by you, and let the people who reach d1-server reach STARbase
 { "src": ["<the d1-server audience>"], "dst": ["tag:starbase"], "ip": ["443"] }
 ```
 
-### 1a. Shared devices (maintainer's step, approve separately)
-
-If d1-server is shared with anyone outside the tailnet (device sharing), share `starbase` with the same
-people: access rules do not reach share recipients. First confirm in the admin console that a tagged
-device can be shared this way. Do this once the device exists (after step 4); until then those people
-cannot reach STARbase.
-
 ## 2. Auth key (maintainer's step, approve separately)
 
 Admin console → Settings → Keys → Generate auth key: **reusable**, **not ephemeral** (the device keeps
@@ -50,10 +43,27 @@ D1_SERVER_ORIGIN=https://d1-server.tail54eeb6.ts.net
 
 `docker-compose.yml` joins `STARBASE_ORIGIN` onto Directus's `CORS_ORIGIN` (with `CORS_CREDENTIALS=true`),
 onto `FILTER_CORS_ORIGINS` and `DIAG_CORS_ORIGINS`, and onto
-`CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS` (`'self' <STARbase>`). Check them before going on:
+`CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS` (`'self' <STARbase>`).
+
+**`SESSION_COOKIE_SECURE` is your choice.** `true` is right for the HTTPS tailnet entry, and the smoke check
+below is written for it. But a Secure cookie is not sent over plain HTTP, so Data Studio sign-in breaks over
+plain HTTP from anywhere that is not `localhost` (for example `http://<lan-address>/`), and in Safari even on
+`localhost`. If anyone signs in that way, leave it `false`: it works everywhere, with a weaker cookie. The
+compose default stays `false`, so nothing changes until you set it.
+
+**What changes for the existing services when they are recreated.** Even with `STARBASE_ORIGIN` unset, the
+new compose file gives:
+
+- Directus: `CORS_CREDENTIALS=true`, frame-ancestors `'self'`, `SESSION_COOKIE_SECURE=false` and
+  `STARBASE_URL=""`. These are expected to match Directus's own defaults, so nothing should move.
+- filter-service and diag-service now send `Access-Control-Allow-Credentials: true` for the Force App
+  origins too (origins stay exact; a `*` is dropped). The Force App sends a Bearer token, which this does
+  not affect.
+
+Check the rendered values before recreating anything:
 
 ```bash
-docker compose config | grep -E 'CORS_ORIGIN|CORS_ORIGINS|FRAME_ANCESTORS|SESSION_COOKIE_SECURE|STARBASE_URL'
+docker compose --profile starbase config | grep -E 'CORS_ORIGIN|CORS_ORIGINS|CORS_CREDENTIALS|FRAME_ANCESTORS|SESSION_COOKIE_SECURE|STARBASE_URL|D1_SERVER_ORIGIN'
 ```
 
 Later, for Google sign-in (out of scope now): `AUTH_PROVIDERS=google`, `AUTH_GOOGLE_MODE=session`, and
@@ -74,35 +84,50 @@ docker compose logs --tail 50 starbase                   # expect the node to lo
 
 `d1-links` (`/d1-links`) needs no build.
 
-Recreating `proxy` is what loads the new Caddyfile: the `:8090` site (STARbase, with its CSP) and the
-`Cross-Origin-Opener-Policy: unsafe-none` override on `/admin/d1-edit/*`. Directus sends its own
-`same-origin` COOP, which would sever `window.opener` for the edit page's new-tab fallback; Caddy
-relaxes it for that one path and nowhere else.
+Recreating `proxy` is what loads the new Caddyfile: the `:8090` site (STARbase, with its CSP, and a plain
+404 for a missing `/assets/*` file) and the `Cross-Origin-Opener-Policy: unsafe-none` override on
+`/admin/d1-edit/*`. Directus sends its own `same-origin` COOP, which would sever `window.opener` for the
+edit page's new-tab fallback; Caddy relaxes it for that one path and nowhere else.
+
+### 4a. Shared devices (maintainer's step, approve separately)
+
+Only once the `starbase` device exists (step 4 has run and it shows in the admin console). If d1-server is
+shared with anyone outside the tailnet (device sharing), share `starbase` with the same people: access
+rules (step 1) do not reach share recipients. First confirm in the admin console that a tagged device can be
+shared this way. Until this is done those people cannot reach STARbase.
 
 ## 5. Smoke check (maintainer's step, with someone on a second device)
 
-1. Open `https://starbase.tail54eeb6.ts.net` over the tailnet: the sign-in page, with the STAR logo.
-2. Sign in. In another tab, open Data Studio: already signed in.
-3. Open a test record, **Edit**: the Directus form opens inside STARbase. Change a field, Save: the
+Run the `curl` lines from any device on the tailnet.
+
+1. `curl -sI https://starbase.tail54eeb6.ts.net/`: answers `200` and has a `content-security-policy` header
+   that names `https://d1-server.tail54eeb6.ts.net` in `connect-src` and `frame-src`.
+2. `curl -s https://starbase.tail54eeb6.ts.net/config.json`: prints
+   `{"directusUrl":"https://d1-server.tail54eeb6.ts.net"}`. And
+   `curl -sI https://starbase.tail54eeb6.ts.net/assets/nope.js` answers `404` (not the app's HTML).
+3. `curl -sI https://d1-server.tail54eeb6.ts.net/admin/ | grep -i content-security-policy`: must contain
+   `frame-ancestors 'self' https://starbase.tail54eeb6.ts.net`.
+4. `curl -sI https://d1-server.tail54eeb6.ts.net/admin/d1-edit/x/1 | grep -i cross-origin-opener-policy`: must
+   say `unsafe-none`. The same check on `/admin/` keeps Directus's own value (`same-origin`).
+5. Open `https://starbase.tail54eeb6.ts.net` over the tailnet: the sign-in page, with the STAR logo.
+6. Sign in. In another tab, open Data Studio: already signed in.
+7. Open a test record, **Edit**: the Directus form opens inside STARbase. Change a field, Save: the
    dialog closes and the page shows the new value. Put it back.
-4. Plot one force operation (`/plot/force?operation=<id>`): the signals draw, the **FRM map** streams
+8. Plot one force operation (`/plot/force?operation=<id>`): the signals draw, the **FRM map** streams
    (`/octrees`), a **filter preview** answers (`/filter`), and a **diagnostics preview** answers (`/diag`).
    Download a file from the plot page: it saves as an attachment and the plot page stays where it was.
-5. In Data Studio's Home module, "Open in STARbase" is under the sidebar and opens the same page.
-6. Print a sample report: its QR code and link open the STARbase record page.
-7. Sign out of STARbase: Data Studio is signed out too.
-8. On a phone (if it is on the tailnet): the top bar and menu, a list, a record page.
-9. Real Safari / iOS, if anyone has it: steps 1–3. Step 0 tested Chromium only (spec §9).
+9. In Data Studio's Home module, "Open in STARbase" is under the sidebar and opens the same page.
+10. Print a sample report: its QR code and link open the STARbase record page.
+11. Sign out of STARbase: Data Studio is signed out too.
+12. On a phone (if it is on the tailnet): the top bar and menu, a list, a record page.
+13. Real Safari / iOS, if anyone has it: steps 5–7. Step 0 tested Chromium only (spec §9).
 
 The frame posts only to `STARBASE_URL`'s origin (`GET /d1-links`). If that is unset or wrong, Save still
 works, but the dialog does not close on its own: the form says "Saved. You can close this form."
 
-If step 3 shows "The form didn't open here", check that the frame setting reached Directus:
-`curl -sI https://d1-server.tail54eeb6.ts.net/admin/ | grep -i content-security-policy` must contain
-`frame-ancestors 'self' https://starbase.tail54eeb6.ts.net`. The new-tab fallback works meanwhile. If the
-fallback opens but Save does not close it or tell STARbase, check the COOP override:
-`curl -sI https://d1-server.tail54eeb6.ts.net/admin/d1-edit/x/1 | grep -i cross-origin-opener-policy` must say
-`unsafe-none`, while `/admin/` keeps Directus's own value.
+If step 7 shows "The form didn't open here", step 3 (the frame setting) is the first thing to look at. The
+new-tab fallback works meanwhile; if it opens but Save does not close it or tell STARbase, step 4 (the COOP
+override) is the one to look at.
 
 ## Redeploying after a change (maintainer's step, approve separately)
 
@@ -116,10 +141,25 @@ docker compose up -d --force-recreate proxy
 
 ## Rolling back (maintainer's step, approve separately)
 
-```bash
-docker compose --profile starbase stop starbase
-```
+Each item is separate; do them in this order.
 
-Then empty `STARBASE_ORIGIN` and `STARBASE_URL` in `.env`, set `SESSION_COOKIE_SECURE` as it was, and
-`docker compose up -d --force-recreate directus filter-service diag-service proxy`. Reports and the label
-redirects return to the Directus Home module; nothing else changes.
+1. Stop the device: `docker compose --profile starbase stop starbase`, then
+   `docker compose --profile starbase rm -f starbase` to delete the stopped container.
+2. Admin console → Settings → Keys: **revoke** the STARbase auth key.
+3. Admin console → Machines: **remove** the `starbase` device (this also drops any shares from step 4a).
+4. Delete the device's saved state, so a later redeploy registers a fresh node. The exact name carries the
+   compose project prefix:
+
+   ```bash
+   docker volume rm d1-database_starbase-ts-state
+   ```
+
+5. In `.env`, unset `STARBASE_URL`, `STARBASE_ORIGIN`, `D1_SERVER_ORIGIN` and `STARBASE_TS_AUTHKEY`, and set
+   `SESSION_COOKIE_SECURE` as it was before step 3. Optionally drop the `tag:starbase` policy rule from step 1.
+6. Recreate what read them:
+   `docker compose up -d --force-recreate directus filter-service diag-service proxy`.
+
+Reports and the label redirects return to the Directus Home module; nothing else changes.
+
+**Warning:** report QR codes and labels printed while `STARBASE_URL` was set point at the STARbase address.
+Once it is gone they stop resolving (the host no longer exists), so reprint any that are still in use.

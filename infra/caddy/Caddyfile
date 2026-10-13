@@ -130,13 +130,21 @@
         header Cache-Control no-cache
         respond `{"directusUrl":"{$D1_SERVER_ORIGIN}"}` 200
     }
+    # Hashed bundles never change, so a file that exists is immutable. A MISSING one is a plain 404 (never
+    # index.html: a stale tab asking for an old hash must not get HTML served as a year-cached script),
+    # and a 404 is not cached.
+    handle /assets/* {
+        root * /srv/starbase
+        @found file {path}
+        header @found Cache-Control "public, max-age=31536000, immutable"
+        @missing not file {path}
+        header @missing Cache-Control no-store
+        file_server
+    }
+    # Everything else (index.html, the SPA routes) revalidates, and falls back to index.html.
     handle {
         root * /srv/starbase
-        # Hashed bundles never change; everything else (index.html, the SPA routes) revalidates.
-        @assets path /assets/*
-        header @assets Cache-Control "public, max-age=31536000, immutable"
-        @app not path /assets/*
-        header @app Cache-Control no-cache
+        header Cache-Control no-cache
         try_files {path} /index.html
         file_server
     }

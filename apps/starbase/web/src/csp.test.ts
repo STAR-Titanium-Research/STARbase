@@ -38,4 +38,23 @@ describe("STARbase's CSP", () => {
 		const sites = [...code.slice(0, block!.index).matchAll(/^(:\d+)\s*\{/gm)];
 		expect(sites.at(-1)![1]).toBe(':80');
 	});
+	// A missing hashed bundle must be a plain 404. Falling through to the SPA's index.html would serve HTML as a
+	// script with "immutable" caching, and a stale tab would keep it for a year.
+	it('answers a missing /assets/* with a 404, and only falls back to index.html outside it', () => {
+		const caddy = readFileSync(join(repo, 'infra', 'caddy', 'Caddyfile'), 'utf8');
+		const code = caddy.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+		const site = code.slice(code.indexOf(':8090 {'));
+		const assets = site.match(/^ {4}handle \/assets\/\*\s*\{\n[\s\S]*?\n {4}\}/m);
+		expect(assets, 'a `handle /assets/*` block on the :8090 site').not.toBeNull();
+		expect(assets![0]).not.toContain('try_files');
+		expect(assets![0]).toContain('file_server');
+		// immutable only for a file that exists (a matcher), never as a blanket header; a miss is not cached
+		expect(assets![0]).toContain('@found file {path}');
+		expect(assets![0]).toContain('header @found Cache-Control "public, max-age=31536000, immutable"');
+		expect(assets![0]).not.toMatch(/^\s*header Cache-Control .*immutable/m);
+		expect(assets![0]).toContain('header @missing Cache-Control no-store');
+		const spa = site.match(/^ {4}handle \{\n[\s\S]*?\n {4}\}/m);
+		expect(spa![0]).toContain('try_files {path} /index.html');
+		expect(site.indexOf(assets![0])).toBeLessThan(site.indexOf(spa![0]));
+	});
 });
