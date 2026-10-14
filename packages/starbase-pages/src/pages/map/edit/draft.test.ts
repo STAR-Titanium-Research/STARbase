@@ -1,0 +1,398 @@
+import { describe, expect, it } from 'vitest';
+import type { DraftBody, DraftOperation, DraftSample, DraftTest } from '@d1/ui';
+import {
+	apply, canWire, emptyBody, inputSampleOf, isInPlace, itemOf, newFromValues, newKeys, nextKey, outputSampleOf, subjectsOf, wireInto, wireProblem,
+	type DraftAction,
+} from './draft';
+
+/** Applies actions one after another. */
+const run = (actions: DraftAction[], from: DraftBody = emptyBody()): DraftBody => actions.reduce((b, a) => apply(b, a), from);
+const op = (b: DraftBody, key: string) => itemOf(b, key) as DraftOperation;
+const kinds = (b: DraftBody) => b.items.map((i) => `${i.key}:${i.kind}`);
+
+/** s: a sample n1, with a blank operation n2 (row n3) wired from it. */
+const sampleAndOp = (): DraftBody =>
+	run([
+		{ type: 'addSample', values: { sample_code: '{seq}-Ti64-MF-2026-10-14' } },
+		{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'turn' }, from: { key: 'n1' } },
+	]);
+
+describe('keys', () => {
+	it('count up from the highest key in the body, rows included', () => {
+		expect(nextKey(emptyBody())).toBe('n1');
+		const b = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank' }, rows: 3 }]);
+		expect(b.items.map((i) => i.key)).toEqual(['n1']);
+		expect(op(b, 'n1').rows.map((r) => r.key)).toEqual(['n2', 'n3', 'n4']);
+		expect(nextKey(b)).toBe('n5');
+	});
+
+	it('take the highest key plus one, so a removed last key comes round again', () => {
+		const b = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'remove', key: 'n2' }, { type: 'addSample' }]);
+		expect(kinds(b)).toEqual(['n1:sample', 'n2:sample']);
+	});
+
+	it('newKeys lists what an action added', () => {
+		const before = run([{ type: 'addSample' }]);
+		const after = apply(before, { type: 'addSample' });
+		expect(newKeys(before, after)).toEqual(['n2']);
+	});
+});
+
+describe('purity', () => {
+	it('never changes the body it is given', () => {
+		const before = sampleAndOp();
+		const frozen = JSON.stringify(before);
+		for (const a of [
+			{ type: 'addSample' },
+			{ type: 'duplicate', key: 'n2', n: 2 },
+			{ type: 'setValues', key: 'n2', values: { machine_id: 'm' } },
+			{ type: 'remove', key: 'n2' },
+			{ type: 'addOutputRow', key: 'n2' },
+			{ type: 'move', key: 'n1', x: 1, y: 2 },
+			{ type: 'setProject', projectId: 'p' },
+		] as DraftAction[]) {
+			const after = apply(before, a);
+			expect(after).not.toBe(before);
+			expect(JSON.stringify(before)).toBe(frozen);
+		}
+	});
+
+	it('returns the same body when nothing can change', () => {
+		const b = sampleAndOp();
+		expect(apply(b, { type: 'remove', key: 'nope' })).toBe(b);
+		expect(apply(b, { type: 'setValues', key: 'n2', values: { method_id: 'turn' } })).toBe(b);
+		expect(apply(b, { type: 'unwire', from: { key: 'n1' }, to: { key: 'n2', row: 5 } })).toBe(b);
+		expect(apply(b, { type: 'setProject', projectId: null })).toBe(b);
+	});
+});
+
+describe('addSample / addExistingSamples', () => {
+	it('adds a sample with its values and position', () => {
+		const b = run([{ type: 'addSample', values: { form: 'disc' }, at: { x: 10, y: 20 } }]);
+		expect(b.items[0]).toEqual({ key: 'n1', kind: 'sample', values: { form: 'disc' } });
+		expect(b.positions.n1).toEqual({ x: 10, y: 20 });
+	});
+
+	it('wires a new sample from an operation row (a new output)', () => {
+		const b = apply(sampleAndOp(), { type: 'addSample', from: { key: 'n2', row: 0 } });
+		expect(b.wires).toContainEqual({ from: { key: 'n2', row: 0 }, to: { key: 'n4' } });
+		expect(outputSampleOf(b, 'n2')).toBe('n4');
+	});
+
+	it('picked samples land as a column, once each', () => {
+		const pick: DraftAction = { type: 'addExistingSamples', samples: [{ id: 's1', version: 3 }, { id: 's2', version: 1 }], at: { x: 0, y: 100 } };
+		const b = apply(emptyBody(), pick);
+		expect(b.items.map((i) => i.existing)).toEqual([{ id: 's1', version: 3 }, { id: 's2', version: 1 }]);
+		expect(b.items.every((i) => Object.keys(i.values).length === 0)).toBe(true);
+		expect(b.positions.n1.y).toBeLessThan(b.positions.n2.y);
+		// Picking s1 again adds nothing and returns the body.
+		expect(apply(b, { type: 'addExistingSamples', samples: [{ id: 's1', version: 3 }] })).toBe(b);
+	});
+});
+
+describe('addContainer', () => {
+	it('blank operation takes the method; blank test the test type', () => {
+		const b = run([
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'cut' } },
+			{ type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' } },
+		]);
+		expect(b.items[0]).toMatchObject({ kind: 'operation', workState: 'planned', values: { method_id: 'cut' } });
+		expect(b.items[1]).toMatchObject({ kind: 'test', workState: 'planned', values: { test_type: 'tensile' } });
+	});
+
+	it('from a template copies its values as they are', () => {
+		const b = run([{ type: 'addContainer', kind: 'operation', source: { from: 'template', values: { method_id: 'm', notes: 'keep', feed_rate: 0.2 } }, workState: 'done' }]);
+		expect(b.items[0].values).toEqual({ method_id: 'm', notes: 'keep', feed_rate: 0.2 });
+		expect((b.items[0] as DraftOperation).workState).toBe('done');
+	});
+
+	it('new from copies an existing record without its date, sample, notes and code', () => {
+		const record = {
+			operation_id: 'op-1', method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2, operation_date: '2026-01-02', sample_id: 's', output_sample_id: 'o',
+			notes: 'n', pass_code: 'P1', work_state: 'done', batch_id: 'b',
+		};
+		expect(newFromValues(record)).toEqual({ method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2 });
+		const b = run([{ type: 'addContainer', kind: 'operation', source: { from: 'newFrom', values: record } }]);
+		expect(b.items[0].values).toEqual({ method_id: 'm', equipment_id: 'e', tool_id: 't', feed_rate: 0.2 });
+	});
+
+	it('wires the sample it was added from into every row, and several rows are a cut', () => {
+		const b = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, rows: 3, from: { key: 'n1' } }]);
+		expect(op(b, 'n2').rows).toHaveLength(3);
+		expect(b.wires).toHaveLength(3);
+		expect(b.wires.map((w) => w.to.row)).toEqual([0, 1, 2]);
+	});
+
+	it('wires a sample to a test as one of its subjects', () => {
+		const b = run([
+			{ type: 'addSample' },
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'hardness' }, from: { key: 'n1' } },
+			{ type: 'wire', from: { key: 'n2' }, to: { key: 'n3' } },
+		]);
+		expect(subjectsOf(b, 'n3')).toEqual(['n1', 'n2']);
+	});
+});
+
+describe('attach', () => {
+	it('adds an existing operation to give an input, once', () => {
+		const b = run([{ type: 'addSample' }, { type: 'attach', operation: { id: 'op-9', version: 4 }, workState: 'planned', from: { key: 'n1' } }]);
+		expect(b.items[1]).toMatchObject({ kind: 'operation', existing: { id: 'op-9', version: 4 }, attach: true, workState: 'planned' });
+		expect(inputSampleOf(b, { key: 'n2', row: 0 })).toBe('n1');
+		expect(apply(b, { type: 'attach', operation: { id: 'op-9', version: 4 }, workState: 'planned' })).toBe(b);
+	});
+
+	it('an existing operation that is not being attached takes no wires', () => {
+		const b = run([{ type: 'addSample' }]);
+		const withExisting: DraftBody = {
+			...b,
+			items: [...b.items, { key: 'n2', kind: 'operation', workState: 'done', existing: { id: 'o', version: 1 }, values: {}, rows: [{ key: 'n3' }] }],
+		};
+		expect(wireProblem(withExisting, { key: 'n1' }, { key: 'n2', row: 0 })).toMatch(/attached/);
+	});
+});
+
+describe('rows', () => {
+	it('addOutputRow adds a row that takes the same input sample', () => {
+		const b = apply(sampleAndOp(), { type: 'addOutputRow', key: 'n2' });
+		expect(op(b, 'n2').rows).toHaveLength(2);
+		expect(inputSampleOf(b, { key: 'n2', row: 1 })).toBe('n1');
+		expect(wireInto(b, 'n2', 0)?.from).toEqual({ key: 'n1' });
+	});
+
+	it('addOutputRow is refused on tests, samples and records that already exist', () => {
+		const b = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'test', source: { from: 'blank' } }]);
+		expect(apply(b, { type: 'addOutputRow', key: 'n1' })).toBe(b);
+		expect(apply(b, { type: 'addOutputRow', key: 'n2' })).toBe(b);
+		const attached = run([{ type: 'attach', operation: { id: 'o', version: 1 }, workState: 'done' }]);
+		expect(apply(attached, { type: 'addOutputRow', key: 'n1' })).toBe(attached);
+	});
+
+	it('a cut: one operation, four rows, four new samples', () => {
+		let b = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'cut' }, from: { key: 'n1' } }]);
+		for (let i = 0; i < 3; i += 1) b = apply(b, { type: 'addOutputRow', key: 'n2' });
+		for (let row = 0; row < 4; row += 1) b = apply(b, { type: 'addSample', from: { key: 'n2', row } });
+		expect(op(b, 'n2').rows).toHaveLength(4);
+		expect(b.items.filter((i) => i.kind === 'sample')).toHaveLength(5);
+		expect(isInPlace(b, op(b, 'n2'))).toBe(false);
+	});
+});
+
+describe('wire / unwire', () => {
+	it('wires a sample to an operation row, an operation row to a new sample, and takes them off again', () => {
+		let b = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]);
+		b = apply(b, { type: 'wire', from: { key: 'n1' }, to: { key: 'n3' } });
+		b = apply(b, { type: 'wire', from: { key: 'n3', row: 0 }, to: { key: 'n2' } });
+		expect(b.wires).toEqual([
+			{ from: { key: 'n1' }, to: { key: 'n3', row: 0 } },
+			{ from: { key: 'n3', row: 0 }, to: { key: 'n2' } },
+		]);
+		const off = apply(b, { type: 'unwire', from: { key: 'n1' }, to: { key: 'n3' } });
+		expect(off.wires).toHaveLength(1);
+	});
+
+	it('refuses what does not fit, with a reason', () => {
+		const b = sampleAndOp();
+		const two = apply(b, { type: 'addSample' }); // n4
+		expect(wireProblem(two, { key: 'n1' }, { key: 'n4' })).toMatch(/through an operation/);
+		expect(wireProblem(two, { key: 'n4' }, { key: 'n2', row: 0 })).toMatch(/already has a sample/);
+		expect(wireProblem(two, { key: 'n1' }, { key: 'n1' })).toMatch(/itself/);
+		expect(wireProblem(two, { key: 'n1' }, { key: 'zz' })).toMatch(/not in the draft/);
+		const test = apply(two, { type: 'addContainer', kind: 'test', source: { from: 'blank' } }); // n5
+		expect(canWire(test, { key: 'n5' }, { key: 'n4' })).toBe(false);
+		expect(apply(test, { type: 'wire', from: { key: 'n5' }, to: { key: 'n4' } })).toBe(test);
+	});
+
+	it('one operation row makes one sample, and a sample has one maker', () => {
+		let b = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]);
+		b = apply(b, { type: 'wire', from: { key: 'n4', row: 0 }, to: { key: 'n2' } });
+		expect(wireProblem(b, { key: 'n4', row: 0 }, { key: 'n3' })).toMatch(/already goes to a sample/);
+		expect(wireProblem(b, { key: 'n6', row: 0 }, { key: 'n2' })).toMatch(/already made by another operation/);
+	});
+
+	it('an existing sample cannot be made by an operation, but an operation can leave it in place', () => {
+		let b = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
+		b = apply(b, { type: 'addExistingSamples', samples: [{ id: 't', version: 1 }] }); // n4
+		expect(wireProblem(b, { key: 'n2', row: 0 }, { key: 'n4' })).toMatch(/already exists/);
+		expect(wireProblem(b, { key: 'n2', row: 0 }, { key: 'n1' })).toBeNull();
+	});
+
+	it('refuses a circle but allows the wire back to the sample an operation took in', () => {
+		const b = sampleAndOp();
+		expect(canWire(b, { key: 'n2', row: 0 }, { key: 'n1' })).toBe(true);
+		let c = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]); // n4 made by n2
+		c = apply(c, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n4' } }); // n5
+		expect(wireProblem(c, { key: 'n5', row: 0 }, { key: 'n1' })).toMatch(/circle/);
+	});
+
+	it('a wire to a whole operation feeds each row that has no input', () => {
+		let b = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, rows: 2 }]);
+		b = apply(b, { type: 'wire', from: { key: 'n1' }, to: { key: 'n2' } });
+		expect(b.wires).toHaveLength(2);
+	});
+
+	it('operation to operation wires an in-place continuation of the same sample', () => {
+		let b = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]);
+		b = apply(b, { type: 'wire', from: { key: 'n2', row: 0 }, to: { key: 'n4' } });
+		expect(inputSampleOf(b, { key: 'n4', row: 0 })).toBe('n1');
+		const t = apply(b, { type: 'addContainer', kind: 'test', source: { from: 'blank' }, from: { key: 'n4', row: 0 } });
+		expect(subjectsOf(t, t.items[t.items.length - 1].key)).toEqual(['n1']);
+	});
+});
+
+describe('setValues / setWorkState', () => {
+	it('merges values and drops those set to undefined', () => {
+		let b = sampleAndOp();
+		b = apply(b, { type: 'setValues', key: 'n2', values: { equipment_id: 'e', notes: 'x' } });
+		b = apply(b, { type: 'setValues', key: 'n2', values: { notes: undefined } });
+		expect(b.items[1].values).toEqual({ method_id: 'turn', equipment_id: 'e' });
+	});
+
+	it('flips an operation or a test between planned and done, never a sample', () => {
+		let b = sampleAndOp();
+		b = apply(b, { type: 'setWorkState', key: 'n2', workState: 'done' });
+		expect(op(b, 'n2').workState).toBe('done');
+		expect(apply(b, { type: 'setWorkState', key: 'n1', workState: 'done' })).toBe(b);
+	});
+});
+
+describe('duplicate', () => {
+	it('a sample is a new sample with the same details and no wires', () => {
+		const b = run([{ type: 'addSample', values: { form: 'disc', diameter_mm: 20 }, at: { x: 0, y: 0 } }, { type: 'duplicate', key: 'n1', n: 2 }]);
+		expect(b.items).toHaveLength(3);
+		expect(b.items[1].values).toEqual({ form: 'disc', diameter_mm: 20 });
+		expect(b.items[2].values).toEqual({ form: 'disc', diameter_mm: 20 });
+		expect(b.items.every((i) => !i.existing)).toBe(true);
+		expect(b.wires).toHaveLength(0);
+		expect(Object.keys(b.positions)).toHaveLength(3);
+	});
+
+	it('copies of an in-place operation chain after the original as further passes', () => {
+		// sample n1 → turning n2 (in place, back to n1)
+		const base = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'turn' }, from: { key: 'n1' } },
+			{ type: 'wire', from: { key: 'n2', row: 0 }, to: { key: 'n1' } },
+			{ type: 'setValues', key: 'n2', values: { depth_of_cut_mm: 0.5 } },
+			{ type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'hardness' }, from: { key: 'n1' } },
+		]);
+		const b = apply(base, { type: 'duplicate', key: 'n2', n: 3 });
+		const ops = b.items.filter((i) => i.kind === 'operation') as DraftOperation[];
+		expect(ops).toHaveLength(4);
+		// The copies sit right after the original, before the test, in order.
+		expect(b.items.map((i) => i.kind)).toEqual(['sample', 'operation', 'operation', 'operation', 'operation', 'test']);
+		for (const copy of ops.slice(1)) {
+			expect(copy.values).toEqual({ method_id: 'turn', depth_of_cut_mm: 0.5 });
+			expect(inputSampleOf(b, { key: copy.key, row: 0 })).toBe('n1');
+			expect(b.wires).toContainEqual({ from: { key: copy.key, row: 0 }, to: { key: 'n1' } });
+			expect(isInPlace(b, copy)).toBe(true);
+			expect(copy.rows).toHaveLength(1);
+		}
+		// Keys are all different.
+		const keys = [...b.items.map((i) => i.key), ...ops.flatMap((o) => o.rows.map((r) => r.key))];
+		expect(new Set(keys).size).toBe(keys.length);
+	});
+
+	it('a cut copies with the same input wires and open outputs', () => {
+		let b = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'cut' }, rows: 2, from: { key: 'n1' } }]);
+		b = apply(b, { type: 'addSample', from: { key: 'n2', row: 0 } });
+		b = apply(b, { type: 'addSample', from: { key: 'n2', row: 1 } });
+		const before = b.wires.length;
+		b = apply(b, { type: 'duplicate', key: 'n2' });
+		const copy = b.items.find((i) => i.key !== 'n2' && i.kind === 'operation') as DraftOperation;
+		expect(copy.rows).toHaveLength(2);
+		expect(b.wires.length).toBe(before + 2);
+		expect(inputSampleOf(b, { key: copy.key, row: 1 })).toBe('n1');
+		expect(outputSampleOf(b, copy.key, 0)).toBeNull();
+		expect(outputSampleOf(b, copy.key, 1)).toBeNull();
+	});
+
+	it('a test copies with the same subjects', () => {
+		let b = run([{ type: 'addSample' }, { type: 'addSample' }, { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 't' }, from: { key: 'n1' } }, { type: 'wire', from: { key: 'n2' }, to: { key: 'n3' } }]);
+		b = apply(b, { type: 'duplicate', key: 'n3', n: 2 });
+		const tests = b.items.filter((i): i is DraftTest => i.kind === 'test');
+		expect(tests).toHaveLength(3);
+		for (const t of tests) expect(subjectsOf(b, t.key)).toEqual(['n1', 'n2']);
+	});
+
+	it('duplicating an existing record is new from: its record without date, sample, notes and code', () => {
+		const record = { method_id: 'm', feed_rate: 0.3, operation_date: '2026-01-01', notes: 'old' };
+		let b = run([{ type: 'attach', operation: { id: 'o', version: 2 }, workState: 'done', values: { feed_rate: 0.4 } }]);
+		b = apply(b, { type: 'duplicate', key: 'n1', record });
+		const copy = b.items[1] as DraftOperation;
+		expect(copy.existing).toBeUndefined();
+		expect(copy.attach).toBeUndefined();
+		expect(copy.values).toEqual({ method_id: 'm', feed_rate: 0.4 });
+	});
+
+	it('N is at least 1 and at most 99', () => {
+		const b = run([{ type: 'addSample' }]);
+		expect(apply(b, { type: 'duplicate', key: 'n1', n: 0 }).items).toHaveLength(2);
+		expect(apply(b, { type: 'duplicate', key: 'n1', n: 500 }).items).toHaveLength(100);
+	});
+});
+
+describe('addPass', () => {
+	it('puts a pass on a sample that is already in the draft, wired in and back', () => {
+		const b = run([{ type: 'addSample' }, { type: 'addPass', sample: { key: 'n1' }, values: { method_id: 'turn', operation_date: '2026-01-01', notes: 'x' } }]);
+		expect(b.items[1]).toMatchObject({ kind: 'operation', values: { method_id: 'turn' } });
+		expect(inputSampleOf(b, { key: 'n2', row: 0 })).toBe('n1');
+		expect(isInPlace(b, op(b, 'n2'))).toBe(true);
+	});
+
+	it('adds an existing sample to the draft first (a pass on a stack that is on the map)', () => {
+		const b = run([{ type: 'addPass', sample: { id: 's-1', version: 5 }, values: { method_id: 'turn' }, workState: 'done' }]);
+		expect(b.items[0]).toMatchObject({ kind: 'sample', existing: { id: 's-1', version: 5 } });
+		expect(b.items[1]).toMatchObject({ kind: 'operation', workState: 'done' });
+		// A second pass reuses the sample's card.
+		const c = apply(b, { type: 'addPass', sample: { id: 's-1', version: 5 }, values: { method_id: 'turn' } });
+		expect(c.items.filter((i) => i.kind === 'sample')).toHaveLength(1);
+		expect(c.items.filter((i) => i.kind === 'operation')).toHaveLength(2);
+	});
+
+	it('after a draft pass takes its settings and goes right after it', () => {
+		let b = run([{ type: 'addPass', sample: { id: 's', version: 1 }, values: { method_id: 'turn', feed_rate: 1 } }, { type: 'addContainer', kind: 'test', source: { from: 'blank' } }]);
+		b = apply(b, { type: 'addPass', sample: { key: 'n1' }, after: 'n2' });
+		expect(b.items.map((i) => i.kind)).toEqual(['sample', 'operation', 'operation', 'test']);
+		expect(b.items[2].values).toEqual({ method_id: 'turn', feed_rate: 1 });
+	});
+});
+
+describe('remove', () => {
+	it('drops a new item with its wires and position', () => {
+		let b = sampleAndOp();
+		b = apply(b, { type: 'move', key: 'n2', x: 5, y: 5 });
+		const c = apply(b, { type: 'remove', key: 'n2' });
+		expect(c.items.map((i) => i.key)).toEqual(['n1']);
+		expect(c.wires).toEqual([]);
+		expect(c.positions.n2).toBeUndefined();
+	});
+
+	it('marks an existing planned record to be deleted at Create when asked, and only drops it otherwise', () => {
+		const b = run([{ type: 'attach', operation: { id: 'o', version: 1 }, workState: 'planned' }]);
+		const marked = apply(b, { type: 'remove', key: 'n1', deleteRecord: true });
+		expect(marked.items[0].remove).toBe(true);
+		expect(apply(marked, { type: 'remove', key: 'n1', deleteRecord: true })).toBe(marked);
+		expect(apply(b, { type: 'remove', key: 'n1' }).items).toHaveLength(0);
+	});
+});
+
+describe('move / project / campaign', () => {
+	it('records positions, the project and the campaign', () => {
+		let b = run([{ type: 'addSample' }]);
+		b = apply(b, { type: 'move', key: 'n1', x: 3, y: 4 });
+		b = apply(b, { type: 'setProject', projectId: 'p1' });
+		b = apply(b, { type: 'setCampaign', campaignId: 'c1' });
+		expect(b).toMatchObject({ projectId: 'p1', campaignId: 'c1', positions: { n1: { x: 3, y: 4 } } });
+		expect(apply(b, { type: 'move', key: 'zz', x: 1, y: 1 })).toBe(b);
+	});
+});
+
+describe('types', () => {
+	it('a built body is a DraftBody version 1', () => {
+		const b: DraftBody = sampleAndOp();
+		expect(b.v).toBe(1);
+		const s = b.items[0] as DraftSample;
+		expect(s.kind).toBe('sample');
+	});
+});
