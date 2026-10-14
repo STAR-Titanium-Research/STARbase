@@ -25,7 +25,8 @@ const SHOWN_WHEN_FOLDED = 2;
 const FOLD_ABOVE = 3;
 
 const style = computed(() => KINDS[props.data.kind]);
-const showCode = computed(() => !!props.data.code && !props.data.title.includes(props.data.code));
+// A probable batch shows the method, not the first row's code (it would stand for the whole batch).
+const showCode = computed(() => !!props.data.code && !props.data.probable && !props.data.title.includes(props.data.code));
 
 interface RowView {
 	row: SampleRow;

@@ -101,6 +101,7 @@ describe('ContainerNode', () => {
 		const [c] = containers(cutOf(2), true);
 		const html = await render(ContainerNode, { id: c.id, data: c });
 		expect(text(html)).toContain('Probable batch');
+		expect(text(html)).not.toContain(c.code); // the method is shown, not the first row's code
 		expect(html).toMatch(/class="[^"]*\bprobable\b/);
 		const [solo] = containers(cutOf(1));
 		expect(await render(ContainerNode, { id: solo.id, data: solo })).not.toMatch(/class="[^"]*\bprobable\b/);
@@ -284,6 +285,12 @@ describe('WireEdge', () => {
 		expect(wireClass(fat)).toContain('fat');
 		const stock = await render(WireEdge, edgeProps({ data: { wire: { ...wire, flow: 'stock' }, tooltip: [] } }));
 		expect(stock).toContain('flow-stock');
+	});
+
+	it('puts the tooltip lines on the hit path for the page to show', async () => {
+		const lines = wireTooltip(wire, new Map([...byId, ['s:s1', nodes[0]]]));
+		const html = await render(WireEdge, edgeProps({ data: { wire, tooltip: lines } }));
+		expect(/data-tip="([^"]*)"/.exec(html)?.[1]).toBe('S-0412-A · Sample\nfrom OP-17\ninto OP-18');
 	});
 });
 

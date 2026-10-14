@@ -5,7 +5,7 @@ import type { Wire } from '../model/types';
 import { useMapActions, wireHandlers } from './actions';
 
 // A wire (spec §6.3, D17): a bezier coloured by what flows (sample, or stock), thicker when it carries
-// a folded bundle. A wide transparent path takes the hover (the page shows the tooltip from `tooltip`,
+// a folded bundle. A wide transparent path takes the hover (the page shows the tooltip from its data-tip,
 // lines made by wireTooltip) and Ctrl/⌘+click, which selects and centres the wire's origin. No label.
 // The page marks wires `.hi` / `.dim` on the edge's own wrapper while a card is hovered (mapTokens.css).
 const props = defineProps<{
@@ -33,6 +33,8 @@ const path = computed(
 		})[0],
 );
 const wire = computed(() => props.data.wire);
+// The tooltip text, one line per fact; the page reads it from the hovered path (el.dataset.tip).
+const tip = computed(() => props.data.tooltip.join('\n'));
 const on = wireHandlers(actions, () => props.data.wire);
 const colour = computed(() => (wire.value.flow === 'stock' ? 'var(--k-material)' : 'var(--k-sample)'));
 </script>
@@ -40,7 +42,7 @@ const colour = computed(() => (wire.value.flow === 'stock' ? 'var(--k-material)'
 <template>
 	<g class="d1-wire" :style="{ '--k': colour }">
 		<path class="wire" :class="[`flow-${wire.flow}`, { fat: wire.bundled }]" :d="path" />
-		<path class="hit" :d="path" @mouseenter="on.enter" @mouseleave="on.leave" @click="on.click" />
+		<path class="hit" :d="path" :data-tip="tip" @mouseenter="on.enter" @mouseleave="on.leave" @click="on.click" />
 	</g>
 </template>
 
