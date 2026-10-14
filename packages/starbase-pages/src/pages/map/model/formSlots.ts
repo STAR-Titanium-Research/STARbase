@@ -15,6 +15,8 @@ export interface RelationDef {
   collection: string;
   /** The column of `collection` the relation points at, when the server said (the loader reads the related record by it). */
   key?: string;
+  /** A files-style many-to-many alias (read through its junction), not a many-to-one: it has no column to expand. */
+  alias?: true;
 }
 
 type Kind = 'operation' | 'test';

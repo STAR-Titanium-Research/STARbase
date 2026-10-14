@@ -275,7 +275,7 @@ const TEST_ROOTS = rootsOf([...TEST_FIELDS, ...SUBJECT_FIELDS, 'batch_id']);
 function extrasOf(defs: RelationDef[] | undefined, roots: Set<string>): Extra[] {
   const out: Extra[] = [];
   for (const d of defs ?? []) {
-    if (roots.has(d.field) || out.some((e) => e.field === d.field)) continue;
+    if (d.alias || roots.has(d.field) || out.some((e) => e.field === d.field)) continue;
     const next = [...out, { field: d.field, collection: d.collection, key: d.key }];
     if (encodedQuerySize({ fields: next.map((e) => `${e.field}.*`) }) > EXTRA_BUDGET) break;
     out.push(next[next.length - 1]);
@@ -620,11 +620,11 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
 
   const meta = new Map<string, Json>(fields.map((f) => [String(f.field), f.meta ?? {}]));
   const defs: (RelationDef & { sort: number })[] = [];
-  const add = (field: string, target: string | null | undefined, key?: string | null) => {
+  const add = (field: string, target: string | null | undefined, key?: string | null, alias = false) => {
     const m = meta.get(field);
     if (!m || m.hidden || !target || defs.some((d) => d.field === field)) return;
     const label = str(Array.isArray(m.translations) ? m.translations[0]?.translation : null) ?? humanise(field);
-    defs.push({ field, label, collection: target, ...(key ? { key } : {}), sort: num(m.sort) ?? Number.MAX_SAFE_INTEGER });
+    defs.push({ field, label, collection: target, ...(key ? { key } : {}), ...(alias ? { alias: true as const } : {}), sort: num(m.sort) ?? Number.MAX_SAFE_INTEGER });
   };
 
   for (const rel of relations) {
@@ -639,7 +639,7 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
       try {
         const far = ((await api.get(`/relations/${many}`)).data?.data ?? []) as Json[];
         const leg = far.find((r) => (r.meta?.many_field ?? r.field) === m.junction_field && (r.meta?.many_collection ?? r.collection) === many);
-        add(m.one_field, leg?.related_collection ?? leg?.meta?.one_collection);
+        add(m.one_field, leg?.related_collection ?? leg?.meta?.one_collection, null, true);
       } catch (e) {
         if (!isNotVisible(e)) throw e;
       }

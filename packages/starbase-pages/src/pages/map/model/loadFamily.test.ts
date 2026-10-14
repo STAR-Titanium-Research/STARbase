@@ -517,7 +517,7 @@ describe('loadRelationDefs', () => {
       return { data: [] };
     });
     expect(await loadRelationDefs(api, 'test_sessions')).toEqual([
-      { field: 'session_data_files', label: 'Session data files', collection: 'directus_files' },
+      { field: 'session_data_files', label: 'Session data files', collection: 'directus_files', alias: true },
     ]);
   });
 
@@ -758,6 +758,15 @@ describe('loadFamily: every relation on the form (I7)', () => {
     expect(asked).not.toContain('sample_id.*'); // shown elsewhere on the container
     expect(data.operations[0].relations.cutting_fluid_id).toEqual({ collection: 'cutting_fluids', id: 'cf1', code: 'CF-1' });
     expect(fieldsOf(calls, '/items/test_sessions')).toContain('rig_id.*');
+  });
+
+  it('a files-style alias (many-to-many) is not asked for as if it were a many-to-one', async () => {
+    const withAlias = { operation: [{ field: 'attached_files', label: 'Attached files', collection: 'directus_files', alias: true as const }, FLUID], test: [] };
+    const { api, calls } = fakeApi(answer([opRow()]));
+    await loadFamily(api, 'root', withAlias);
+    const asked = fieldsOf(calls, '/items/manufacturing_operations');
+    expect(asked).not.toContain('attached_files.*');
+    expect(asked).toContain('cutting_fluid_id.*');
   });
 
   it('a relation the person may not read, or an empty one, is no ref', async () => {

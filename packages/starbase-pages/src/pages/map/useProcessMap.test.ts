@@ -772,6 +772,7 @@ describe('expand: loading more (D15, spec 7)', () => {
     const { map } = await toolFan();
     const seen = hints(map);
     const fam = familyOfX(0);
+    fam.operations[0] = { ...fam.operations[0], date: '2026-09-28T09:00:00Z' }; // the family read of u0: the same day as its twin (the family's copy of a row is the one drawn)
     fam.samples.push(mkSample('z0'));
     fam.operations.push(mkOp({ id: 'twin', sampleId: 'x0', outputSampleId: 'z0', date: '2026-09-28T10:00:00Z', methodName: 'Turning', methodId: fam.operations[0].methodId }));
     family.mockResolvedValue(fam);

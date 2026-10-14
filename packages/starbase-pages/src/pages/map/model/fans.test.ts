@@ -145,6 +145,17 @@ describe('mergeProcessData', () => {
     expect(mergeProcessData(base, mkData({ samples: [mkSample('b')] })).mergedFamilies).toBeUndefined();
   });
 
+  it('the copy of an operation or test the family read replaces the one the fan read, which carries no form relations (I7)', () => {
+    const rel = { collection: 'cutting_fluids', id: 'cf1', code: 'CF-1' };
+    const fanOp = mkOp({ id: 'u1', sampleId: 'x1' });
+    const base = fanData(tool, fanPage('tools', { items: [fanOp], total: 1 }, 1));
+    const add = mkData({ samples: [mkSample('x1')], operations: [{ ...fanOp, relations: { cutting_fluid_id: rel } }], tests: [mkTest({ id: 't1', subjectSampleIds: ['x1'], relations: { rig_id: rel } })] });
+    const merged = mergeProcessData(base, add);
+    expect(merged.operations).toHaveLength(1);
+    expect(merged.operations[0].relations.cutting_fluid_id).toEqual(rel);
+    expect(merged.tests[0].relations.rig_id).toEqual(rel);
+  });
+
   it('drops the fan items the family now holds in full, in the focus fan and in side fans', () => {
     const fanOps = [mkOp({ id: 'u0', sampleId: 'x0' }), mkOp({ id: 'u1', sampleId: 'x1' })];
     const base = withSideFan(fanData(tool, fanPage('tools', { items: fanOps, total: 2 }, 1)), { collection: 'equipment', id: 'e1', code: 'NLX', kind: 'equipment' }, fanPage('equipment', { items: [mkOp({ id: 'e1op' })], total: 1 }, 1));

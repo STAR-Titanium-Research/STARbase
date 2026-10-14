@@ -84,6 +84,13 @@ const byId = <T extends { id: string }>(base: T[], add: T[]): T[] => {
   return [...base, ...add.filter((r) => !seen.has(r.id))];
 };
 
+/** `base` in its order, a row `add` also holds replaced by add's copy, then the rows only `add` has. */
+const byIdNewer = <T extends { id: string }>(base: T[], add: T[]): T[] => {
+  const newer = new Map(add.map((r) => [r.id, r]));
+  const seen = new Set(base.map((r) => r.id));
+  return [...base.map((r) => newer.get(r.id) ?? r), ...add.filter((r) => !seen.has(r.id))];
+};
+
 /**
  * Adds a page to the fan of the record `rootKey` (`<collection>:<id>`): the primary fan, or the side fan
  * with that root. A record the map already holds (an operation whose family is loaded) is not listed a
@@ -128,8 +135,9 @@ const uniqueBy = <T>(rows: T[], key: (r: T) => string): T[] => [...new Map(rows.
  * in for the collapsed one.
  */
 export function mergeProcessData(base: ProcessData, add: ProcessData): ProcessData {
-  const operations = byId(base.operations, add.operations);
-  const tests = byId(base.tests, add.tests);
+  // The family's copy wins: a fan read carries no form relations, a family read does.
+  const operations = byIdNewer(base.operations, add.operations);
+  const tests = byIdNewer(base.tests, add.tests);
   const gone = new Set([...add.operations.map((o) => o.id), ...add.tests.map((t) => t.id)]);
   const prune = <F extends Fan>(fan: F): F => ({ ...fan, items: fan.items.filter((i) => i.collection === COLLECTION.sample || !gone.has(i.id)) });
   const merged: ProcessData = {
