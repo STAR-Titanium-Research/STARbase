@@ -17,7 +17,7 @@ test.describe('Manufacturing Operation — method drives inline parameter fields
 
 	test('a machining method shows machining fields inline only', async ({ page }, testInfo) => {
 		await gotoCreateForm(page, 'manufacturing_operations');
-		await selectM2O(page, 'Manufacturing Method', 'Machining (General)');
+		await selectM2O(page, 'Method', 'Machining (General)');
 		await page.waitForTimeout(1200); // method → category lookup → conditions
 
 		await testInfo.attach('after-machining-method', {
@@ -40,7 +40,7 @@ test.describe('Manufacturing Operation — method drives inline parameter fields
 	for (const method of ['Turning', 'Milling']) {
 		test(`${method} method renders machining params without an error boundary`, async ({ page }) => {
 			await gotoCreateForm(page, 'manufacturing_operations');
-			await selectM2O(page, 'Manufacturing Method', method);
+			await selectM2O(page, 'Method', method);
 			await page.waitForTimeout(1200);
 
 			expect(await isFieldVisible(page, 'Cutting Speed Vc')).toBeTruthy();
@@ -50,7 +50,7 @@ test.describe('Manufacturing Operation — method drives inline parameter fields
 
 	test('a FAST/SPS method shows sintering fields inline only', async ({ page }) => {
 		await gotoCreateForm(page, 'manufacturing_operations');
-		await selectM2O(page, 'Manufacturing Method', 'FAST/SPS Sintering');
+		await selectM2O(page, 'Method', 'FAST/SPS Sintering');
 		await page.waitForTimeout(1200);
 
 		expect(await isFieldVisible(page, 'Mould Diameter')).toBeTruthy();
@@ -59,7 +59,7 @@ test.describe('Manufacturing Operation — method drives inline parameter fields
 
 	test('an additive method shows AM fields inline only', async ({ page }) => {
 		await gotoCreateForm(page, 'manufacturing_operations');
-		await selectM2O(page, 'Manufacturing Method', 'Additive Manufacturing');
+		await selectM2O(page, 'Method', 'Additive Manufacturing');
 		await page.waitForTimeout(1200);
 
 		expect(await isFieldVisible(page, 'Layer Thickness')).toBeTruthy();

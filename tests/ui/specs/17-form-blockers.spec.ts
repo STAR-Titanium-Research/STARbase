@@ -34,11 +34,11 @@ async function saveAndCapture(page: Page, collection: string) {
 	return resp;
 }
 
-test('a test session saves from the form with only a subject picked', async ({ page }) => {
+test('a test session saves from the form with a subject and the date picked', async ({ page }) => {
 	const sample = (await (await api.get('/items/physical_samples?limit=1&sort=-created_at&fields=sample_id,sample_code', { headers: h })).json()).data[0];
 	await gotoCreateForm(page, 'test_sessions');
 	await selectDropdown(page, 'Test Type', 'Hardness');
-	const subject = fieldByLabel(page, 'Subject (sample or edge)');
+	const subject = fieldByLabel(page, 'Subject');
 	await subject.getByRole('button', { name: /add existing/i }).click();
 	await page.locator('.v-menu-content').last().locator('.v-list-item').first().click(); // the samples collection
 	const drawer = page.locator('.v-drawer').last();
@@ -48,6 +48,11 @@ test('a test session saves from the form with only a subject picked', async ({ p
 	await drawer.locator('tbody tr').filter({ hasText: sample.sample_code }).first().click();
 	await drawer.locator('header .v-button').last().click();
 	await expect(subject).toContainText(sample.sample_code);
+
+	// Session Date is required in the form since migration 174
+	await fieldByLabel(page, 'Session Date').locator('.interface button').first().click();
+	await page.locator('.v-menu-content .calendar-cell-trigger:not([data-outside-view])').first().click(); // any day of the month shown
+	await page.keyboard.press('Escape');
 
 	const resp = await saveAndCapture(page, 'test_sessions');
 	expect(resp.status()).toBe(200);
