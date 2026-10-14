@@ -117,7 +117,8 @@ function containerInfo(id: string, data: ProcessData, node: ContainerNode): Reco
     kind: node.kind,
     ref,
     // A probable batch has no code of its own; the first row's would stand for all of them.
-    code: node.probable ? node.title : node.code,
+    // (A recorded batch whose code was not read has none either: a dash, and the title says "Batch".)
+    code: node.probable ? node.title : node.code || '–',
     plain: node.probable || undefined,
     title: node.probable ? undefined : node.title,
     status: node.status,

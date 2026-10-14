@@ -319,22 +319,29 @@ function fieldsWith(fields: string[], { extras, batch }: Optional): string[] {
   return [...fields, ...(batch ? BATCH_FIELDS : []), ...extraFields(extras)];
 }
 
+/** Directus saying no to the request (a field the role may not read, a relation it cannot expand): 400, 403, 404. Not a 5xx or a network failure. */
+const isRefusal = (e: any): boolean => [400, 403, 404].includes(e?.response?.status);
+
 /**
- * A list read that also asks for the batch and the extra relation fields. Directus refusing them (a field the role
- * may not read, a relation it cannot expand) is not the map's problem: the read is made again without the extras,
- * then without the batch, then with the fixed fields only.
+ * A list read that also asks for the batch and the extra relation fields. Directus refusing them is not the map's
+ * problem: the read is made again with less. First with the extras and no batch, then with the batch and no extras
+ * (each optional part can be the refused one), then with the fixed fields only. Only a refusal is retried; a server
+ * or network error is thrown at once.
  */
 async function readList(api: HostApi, collection: string, params: Record<string, unknown>, optional: Optional): Promise<{ rows: Json[]; total: number | null }> {
   const fixed = params.fields as string[];
-  const tiers = [fieldsWith(fixed, optional), fieldsWith(fixed, { ...optional, extras: [] }), fixed].filter((f, i, all) => i === 0 || f.length < all[i - 1].length);
-  for (const [i, fields] of tiers.entries()) {
+  const { extras, batch } = optional;
+  const tiers: string[][] = [fieldsWith(fixed, optional)];
+  if (batch && extras.length) tiers.push(fieldsWith(fixed, { extras, batch: false }), fieldsWith(fixed, { extras: [], batch }));
+  if (batch || extras.length) tiers.push(fixed);
+  for (const fields of tiers.slice(0, -1)) {
     try {
       return await getList(api, collection, { ...params, fields });
     } catch (e) {
-      if (i === tiers.length - 1) throw e;
+      if (!isRefusal(e)) throw e;
     }
   }
-  throw new Error('unreachable');
+  return getList(api, collection, { ...params, fields: tiers[tiers.length - 1] });
 }
 
 const CODE_KEYS = ['code', 'name', 'title', 'label', 'full_name', 'common_name', 'filename_download'];

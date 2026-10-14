@@ -147,8 +147,8 @@ describe('loadFamily', () => {
     const call = reqs[0];
     expect(call.params.limit).toBe(-1);
     expect(call.params.fields).toContain('sintering_batch_number');
-    // slice 2 adds batch_id; asking for it now would refuse the whole read
-    expect(call.params.fields).not.toContain('batch_id');
+    // without runtime defs (the fallback path) batch_id is not asked for
+    expect(call.params.fields).not.toContain('batch_id.code');
   });
 
   it('asks for tests through the subject junction of physical samples', async () => {
@@ -873,6 +873,25 @@ describe('loadFamily: recorded batches (slice 2)', () => {
     expect(data.operations.map((o) => o.id)).toEqual(['o1']);
     expect(data.operations[0].batchId).toBeNull();
     expect(calls.some((c) => c.path === '/items/manufacturing_operations' && !(c.params.fields as string[]).some((f) => f.startsWith('batch_id')))).toBe(true);
+  });
+
+  it('a refused batch read still reads the extra relations; a 5xx is not retried', async () => {
+    const DEFS = [...OP_DEFS, { field: 'cutting_fluid_id', label: 'Cutting fluid', collection: 'cutting_fluids', key: 'fluid_id' }];
+    const { api, calls } = fakeApi((path, params) => {
+      const fields = params.fields as string[] | undefined;
+      if (path === '/items/manufacturing_operations' && fields?.some((f) => f.startsWith('batch_id'))) return httpError(403);
+      return answer([opRow('o1', { cutting_fluid_id: { fluid_id: 'cf1', fluid_code: 'CF-1' } })])(path, params);
+    });
+    const data = await loadFamily(api, 'root', { operation: DEFS, test: [] });
+    expect(data.operations[0].relations.cutting_fluid_id).toEqual({ collection: 'cutting_fluids', id: 'cf1', code: 'CF-1' });
+    const later = calls.filter((c) => c.path === '/items/manufacturing_operations' && !(c.params.fields as string[]).some((f) => f.startsWith('batch_id')));
+    expect(later.length).toBeGreaterThan(0);
+    expect(later.every((c) => (c.params.fields as string[]).includes('cutting_fluid_id.*'))).toBe(true);
+
+    const boom = fakeApi((path) => (path === '/items/manufacturing_operations' ? httpError(500) : answer([])(path, {})));
+    await expect(loadFamily(boom.api, 'root', withBatch)).rejects.toThrow('HTTP 500');
+    // one request per column (sample_id, output_sample_id), none repeated with fewer fields
+    expect(boom.calls.filter((c) => c.path === '/items/manufacturing_operations')).toHaveLength(2);
   });
 
   it('the batch fields count in the chunk size: every request of 320 family ids stays within 6000 encoded bytes', async () => {

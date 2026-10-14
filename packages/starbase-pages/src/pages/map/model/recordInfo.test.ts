@@ -76,6 +76,18 @@ describe('recordInfo', () => {
     expect(fact(info, 'Operations')).toBe(2);
   });
 
+  it('a recorded batch is titled with its code; one whose code was not read is titled "Batch" with a dash, not "Batch" twice', () => {
+    const rows = ['a', 'b'].map((sid) => mkOp({ id: 'r' + sid, methodName: 'Anneal', sampleId: sid, batchId: 'b3' }));
+    const named = mkData({ samples: [mkSample('a'), mkSample('b')], operations: rows, batchCodes: { b3: 'B-0003' } });
+    const unnamed = mkData({ samples: [mkSample('a'), mkSample('b')], operations: rows });
+    const infoOf = (d: ProcessData) => {
+      const g = build(d);
+      return recordInfo(d, g, g.nodes.find((n) => n.type === 'container')!.id)!;
+    };
+    expect(infoOf(named)).toMatchObject({ code: 'B-0003', title: 'Batch B-0003' });
+    expect(infoOf(unnamed)).toMatchObject({ code: '–', title: 'Batch' });
+  });
+
   it('a junction is described by its lineage and opens the parent sample', () => {
     const d = mkData({ samples: [mkSample('s'), mkSample('a')], lineage: [mkLineage('s', 'a', 'cut_from', 0.5)] });
     const g = build(d);

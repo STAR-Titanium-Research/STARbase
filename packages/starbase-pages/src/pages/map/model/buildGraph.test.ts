@@ -259,7 +259,7 @@ describe('buildGraph: grouped cuts and bundling', () => {
     });
     const c = container(build(data), 'batch:B1');
     expect(c.title).toBe('Batch');
-    expect(c.code).toBe('Batch');
+    expect(c.code).toBe('');
   });
 
   it('keeps the first row slots for a multi-row group', () => {

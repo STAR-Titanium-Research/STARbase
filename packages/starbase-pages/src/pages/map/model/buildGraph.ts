@@ -120,6 +120,17 @@ function stockLotNode(lot: StockOrigin): RecordNode {
   };
 }
 
+/**
+ * The title and the code of a container. A recorded batch is "Batch B-0003" and its code; one whose code was not read
+ * is just "Batch" with no code. A probable batch is named by its method (it has no code of its own); a single row
+ * by its method and its own code.
+ */
+function containerNames(group: Group, base: string, rowCode: string): { title: string; code: string } {
+  const batch = group.batch;
+  if (batch?.recorded) return batch.code ? { title: `Batch ${batch.code}`, code: batch.code } : { title: 'Batch', code: '' };
+  return { title: batch ? `Probable batch · ${base}` : base, code: rowCode };
+}
+
 export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphOpts): ProcessGraph {
   const maxRows = opts.maxRows ?? DEFAULT_MAX_ROWS;
   const knownSamples = new Set(data.samples.map((s) => s.id));
@@ -287,8 +298,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
     const method =
       first && group.kind === 'operation' ? (first as OpRow).methodName : (first as TestRow | undefined)?.testType;
     const base = method || (group.kind === 'operation' ? 'Operation' : 'Test');
-    const recorded = group.batch && group.batch.recorded ? group.batch : null;
-    const title = recorded ? (recorded.code ? `Batch ${recorded.code}` : 'Batch') : group.batch ? `Probable batch · ${base}` : base;
+    const { title, code } = containerNames(group, base, first?.code ?? group.id);
     const statuses = new Set(records.map((r) => r.status));
 
     containers.push({
@@ -297,7 +307,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       kind: group.kind,
       group,
       title,
-      code: recorded ? (recorded.code ?? 'Batch') : (first?.code ?? group.id),
+      code,
       status: statuses.size === 1 ? (first?.status ?? null) : undefined,
       category,
       rows: sampleRows,
