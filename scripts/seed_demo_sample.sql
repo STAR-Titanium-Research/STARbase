@@ -31,15 +31,15 @@ INSERT INTO physical_samples
   mass_grams, diameter_mm, length_mm, manufactured_date, current_status, manufacturing_route, notes, created_at)
 VALUES
  ('DEMO-TI64-BILLET','f6787f01-e840-5e81-86cf-279d968248ea',(SELECT project_id FROM projects WHERE project_code='DEMO-PA'),
-  '39be2287-8c25-5f80-8c68-803cdaca77a1','FAST billet','D1 Store, Sheffield','As-sintered','billet',
+  '39be2287-8c25-5f80-8c68-803cdaca77a1','FAST billet','D1 Store, Sheffield','as_produced','cylinder',
   1200,40,120,'2024-02-10','active','FAST/SPS','Parent billet — FAST/SPS sintered Ti-64 powder (500 g).','2024-02-10'),
  ('DEMO-TI64-001','f6787f01-e840-5e81-86cf-279d968248ea',(SELECT project_id FROM projects WHERE project_code='DEMO-PA'),
-  '39be2287-8c25-5f80-8c68-803cdaca77a1','Machinability disc','D1 Lab, Sir Robert Hadfield Building, Sheffield','Machined','disc',
+  '39be2287-8c25-5f80-8c68-803cdaca77a1','Machinability disc','D1 Lab, Sir Robert Hadfield Building, Sheffield','medium_machined','disc',
   480,80,15,'2024-03-15','active','FAST/SPS → turned','Primary demonstration sample: cut from the FAST billet, turned across a roughing and a finishing campaign, tensile-tested, then sectioned into two child coupons.','2024-03-15'),
  ('DEMO-TI64-C1','f6787f01-e840-5e81-86cf-279d968248ea',(SELECT project_id FROM projects WHERE project_code='DEMO-PB'),
-  '39be2287-8c25-5f80-8c68-803cdaca77a1','Tensile coupon','D1 Lab, Sheffield','Ground','coupon',95,10,60,'2024-07-05','active',NULL,'Child coupon sectioned for tensile testing.','2024-07-05'),
+  '39be2287-8c25-5f80-8c68-803cdaca77a1','Tensile coupon','D1 Lab, Sheffield','ground','tensile_coupon',95,10,60,'2024-07-05','active',NULL,'Child coupon sectioned for tensile testing.','2024-07-05'),
  ('DEMO-TI64-C2','f6787f01-e840-5e81-86cf-279d968248ea',(SELECT project_id FROM projects WHERE project_code='DEMO-PB'),
-  '39be2287-8c25-5f80-8c68-803cdaca77a1','SEM coupon','D1 Lab, Sheffield','Polished','coupon',40,10,10,'2024-07-12','active',NULL,'Child coupon sectioned for electron microscopy.','2024-07-12');
+  '39be2287-8c25-5f80-8c68-803cdaca77a1','SEM coupon','D1 Lab, Sheffield','polished','tensile_coupon',40,10,10,'2024-07-12','active',NULL,'Child coupon sectioned for electron microscopy.','2024-07-12');
 
 INSERT INTO sample_genealogy (parent_sample_id, child_sample_id, relationship_type, fraction, created_at)
 SELECT p.sample_id,c.sample_id,'cut_from',0.40,'2024-03-15'::timestamptz FROM physical_samples p, physical_samples c

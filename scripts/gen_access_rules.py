@@ -25,6 +25,10 @@ access_rules.json is the single source of the row-level visibility rules. This s
              one_collection, one_field], ...], "columns": ["table.column", ...],
              "fields": ["collection.field", ...]} (tests/phase1_schema.sh dumps it)
 
+A ruled row grants every field ("*") unless "rule_fields" names a "field_sets" list for its (collection, action): Directus
+has no "all but", so leaving a field out of a policy means listing all the others. Used so Lab Members cannot edit
+`co_owners` and `secondary_investigators` in the form (read stays "*": STARbase reads both).
+
 Read visibility itself is not written in access_rules.json: who can read a record is computed in SQL
 (d1_private.readers_of_*, migration 166) and stored in the <type>_readers tables. A read rule is
   {"readers": "some"}             `readers: {_some: {user_id: $CURRENT_USER}}`, the membership test on the hidden
@@ -339,10 +343,43 @@ def rule_filter(doc: dict, collection: str, action: str) -> dict:
     return set_filter(doc["sets"], rule)
 
 
+def rule_fields(doc: dict, collection: str, action: str) -> str:
+    """The `fields` of a ruled row: "*", or the comma list of the named field set that
+    `rule_fields` gives this (collection, action). A list is how a policy leaves a field out
+    (Directus has no "all but"), so it must name every other column and alias; tests/phase1_schema.sh
+    checks that nothing but the intended fields is missing."""
+    spec = doc.get("rule_fields", {}).get(collection, {})
+    unknown = set(spec) - set(ACTIONS)
+    if unknown:
+        raise RulesError(
+            f"rule_fields {collection}: unknown action(s) {sorted(unknown)}"
+        )
+    if action not in spec:
+        return "*"
+    if action not in doc["rules"].get(collection, {}):
+        raise RulesError(
+            f"rule_fields {collection}.{action}: the collection has no such rule"
+        )
+    name = spec[action]
+    names = doc.get("field_sets", {}).get(name)
+    if (
+        not names
+        or len(names) != len(set(names))
+        or not all(isinstance(n, str) and n for n in names)
+    ):
+        raise RulesError(
+            f"rule_fields {collection}.{action}: field set {name!r} is missing, empty or has duplicates"
+        )
+    return ",".join(names)
+
+
 def build_rows(doc: dict) -> list[dict]:
     """Every Lab Member row: filtered collections first, then custom rows, then unfiltered grants."""
     policy = doc["policy"]
     rows: list[dict] = []
+    for collection in doc.get("rule_fields", {}):
+        if collection not in doc["rules"]:
+            raise RulesError(f"rule_fields: {collection} has no rules")
 
     def row(
         collection: str,
@@ -369,14 +406,28 @@ def build_rows(doc: dict) -> list[dict]:
                 continue
             rule = actions[action]
             if rule == "any":
-                rows.append(row(collection, action, {}))
+                rows.append(
+                    row(
+                        collection,
+                        action,
+                        {},
+                        None,
+                        rule_fields(doc, collection, action),
+                    )
+                )
             elif action == "create":
                 raise RulesError(
                     f'{collection}.create: Directus ignores item filters on create; use "any"'
                 )
             else:
                 rows.append(
-                    row(collection, action, rule_filter(doc, collection, action))
+                    row(
+                        collection,
+                        action,
+                        rule_filter(doc, collection, action),
+                        None,
+                        rule_fields(doc, collection, action),
+                    )
                 )
     for collection, actions in doc.get("custom", {}).items():
         if collection in doc["rules"]:

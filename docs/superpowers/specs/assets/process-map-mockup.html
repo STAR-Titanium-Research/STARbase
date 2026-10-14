@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Process Map Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<style>
+/* ---- STARbase theme.css (verbatim values) ---- */
+:root {
+	color-scheme: light dark;
+	--theme--primary: #18222f;
+	--theme--primary-foreground: #ffffff;
+	--theme--success: #2ecda7; --theme--warning: #ffa439; --theme--danger: #e35169;
+	--theme--foreground: color-mix(in srgb, #000000, #18222f 70%);
+	--theme--foreground-subdued: color-mix(in srgb, #ffffff, #18222f 60%);
+	--theme--background: color-mix(in srgb, #ffffff, #18222f 7%);
+	--theme--background-normal: color-mix(in srgb, #ffffff, #18222f 15%);
+	--theme--background-subdued: color-mix(in srgb, #ffffff, #18222f 10%);
+	--theme--background-accent: color-mix(in srgb, #ffffff, #18222f 20%);
+	--theme--border-color: color-mix(in srgb, #ffffff, #18222f 20%);
+	--theme--border-color-subdued: color-mix(in srgb, #ffffff, #18222f 15%);
+	--theme--border-radius: 8px;
+	--theme--form--field--input--background: #ffffff;
+	--theme--fonts--sans--font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	--theme--fonts--monospace--font-family: 'Fira Mono', 'JetBrains Mono', Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		--theme--primary: #6b9bd6; --theme--primary-foreground: #0d1117;
+		--theme--foreground: #c9d1d9; --theme--foreground-subdued: #666672;
+		--theme--background: #0d1117; --theme--background-normal: #21262e; --theme--background-subdued: #161b22; --theme--background-accent: #30363d;
+		--theme--border-color: #21262e; --theme--border-color-subdued: #21262d;
+		--theme--form--field--input--background: #161b22;
+	}
+}
+:root[data-theme="dark"] {
+	color-scheme: dark;
+	--theme--primary: #6b9bd6; --theme--primary-foreground: #0d1117;
+	--theme--foreground: #c9d1d9; --theme--foreground-subdued: #666672;
+	--theme--background: #0d1117; --theme--background-normal: #21262e; --theme--background-subdued: #161b22; --theme--background-accent: #30363d;
+	--theme--border-color: #21262e; --theme--border-color-subdued: #21262d;
+	--theme--form--field--input--background: #161b22;
+}
+:root[data-theme="light"] { color-scheme: light; }
+
+/* ---- @d1/ui tokens.css ---- */
+:root {
+	--fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 18px; --fs-2xl: 22px;
+	--d1-surface: light-dark(var(--theme--form--field--input--background), var(--theme--background-subdued));
+	--d1-tile: light-dark(var(--theme--background-subdued), var(--theme--background-normal));
+	--d1-line: var(--theme--border-color-subdued);
+	--d1-radius: 12px;
+	--d1-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+	--d1-shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.18);
+	--d1-dim: color-mix(in srgb, var(--theme--foreground) 68%, var(--theme--background));
+	--d1-accent: light-dark(var(--theme--primary), color-mix(in srgb, var(--theme--primary) 35%, var(--theme--foreground)));
+	--d1-tint: color-mix(in srgb, var(--d1-accent) 10%, transparent);
+	--d1-side-ground: #11181f; --d1-side-text: #d3d9e0; --d1-side-dim: #9aa5b1; --d1-side-sub: #7f8a97;
+	--d1-side-hairline: #263240; --d1-side-hover: #1c2630; --d1-side-current: #253140; --d1-side-bar: #8ab4f8;
+	/* The graph's kind colours: today's 10-type palette, inked toward the text colour like the status inks. */
+	--k-sample: #9C27B0; --k-op: #FF9800; --k-test: #00ACC1; --k-equipment: #607D8B; --k-tool: #795548;
+	--k-edge: #E91E63; --k-material: #4CAF50; --k-project: #673AB7;
+	--k-recipe: #7CB342; --k-file: #546E7A; --k-person: #5C6BC0; --k-campaign: #26A69A;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+	background: var(--theme--background); color: var(--theme--foreground);
+	font-family: var(--theme--fonts--sans--font-family); font-size: var(--fs-md); line-height: 1.45;
+	display: flex; overflow: hidden;
+}
+.mono { font-family: var(--theme--fonts--monospace--font-family); }
+svg.lucide { width: 16px; height: 16px; stroke-width: 2; flex: none; }
+
+/* ---- STARbase shell sidebar (224px, dark in both themes) ---- */
+.side { width: 224px; flex: none; background: var(--d1-side-ground); color: var(--d1-side-text); display: flex; flex-direction: column; padding: 12px 8px; gap: 2px; overflow-y: auto; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 6px 10px 14px; font-weight: 700; font-size: 15px; letter-spacing: .01em; color: #fff; }
+.brand .mark { width: 28px; height: 28px; border-radius: 8px; background: #8ab4f8; color: #11181f; display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+.find { display: flex; align-items: center; gap: 8px; margin: 0 4px 10px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--d1-side-hairline); color: var(--d1-side-sub); font-size: var(--fs-sm); }
+.find kbd { margin-left: auto; font: 10.5px var(--theme--fonts--monospace--font-family); border: 1px solid var(--d1-side-hairline); border-radius: 4px; padding: 0 4px; }
+.side .sec { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--d1-side-sub); padding: 12px 10px 4px; }
+.side a { position: relative; display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 8px; color: var(--d1-side-text); text-decoration: none; font-size: var(--fs-md); }
+.side a svg { color: var(--d1-side-dim); }
+.side a:hover { background: var(--d1-side-hover); }
+.side a.cur { background: var(--d1-side-current); color: #fff; }
+.side a.cur::before { content: ''; position: absolute; left: -8px; top: 6px; bottom: 6px; width: 3px; border-radius: 0 3px 3px 0; background: var(--d1-side-bar); }
+.side a.cur svg { color: var(--d1-side-bar); }
+.side a .new { margin-left: auto; font-size: 10px; font-weight: 700; padding: 0 6px; border-radius: 99px; background: #8ab4f8; color: #11181f; }
+
+/* ---- Page frame (PageShell) ---- */
+.d1-page { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; padding: 20px 32px 20px; }
+.top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.d1-crumbs { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--d1-dim); }
+.d1-crumbs a { color: var(--d1-accent); font-weight: 600; text-decoration: none; }
+.title-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; }
+.rail { overflow: auto; min-height: 0; padding: 2px 4px 8px; display: flex; flex-direction: column; gap: 16px; }
+
+/* ---- v-button (STARbase stand-in) ---- */
+.v-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 36px; padding: 0 14px; border: 1px solid var(--theme--border-color);
+	border-radius: var(--theme--border-radius); background: var(--theme--primary); color: var(--theme--primary-foreground); font: inherit; font-size: var(--fs-md); font-weight: 600; cursor: pointer; white-space: nowrap; }
+.v-button.secondary { background: var(--theme--background-normal); color: var(--theme--foreground); }
+.v-button.small { min-height: 30px; padding: 0 10px; font-size: var(--fs-sm); }
+.v-button.icon { width: 36px; padding: 0; } .v-button.icon.small { width: 30px; }
+.v-button.rounded { border-radius: 999px; }
+.v-button svg.lucide { width: 15px; height: 15px; }
+
+/* ---- RecordRail ---- */
+.d1-record-rail { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: var(--d1-radius); box-shadow: var(--d1-shadow); }
+.ident { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ident .line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.kind { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .01em; padding: 2px 9px; border-radius: 99px;
+	color: color-mix(in srgb, var(--k) 62%, var(--theme--foreground)); background: color-mix(in srgb, var(--k) 14%, transparent); }
+.kind svg.lucide { width: 12px; height: 12px; }
+.ident h1 { margin: 0; font-size: var(--fs-xl); font-weight: 700; line-height: 1.25; letter-spacing: -.01em; font-family: var(--theme--fonts--monospace--font-family); overflow-wrap: anywhere; }
+.ident .title { margin: 0; color: var(--d1-dim); }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.d1-facts { margin: 0; }
+.d1-facts .row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 28px; padding: 4px 0; border-bottom: 1px solid var(--d1-line); }
+.d1-facts .row:last-child { border-bottom: 0; }
+.d1-facts dt { color: var(--d1-dim); } .d1-facts dd { margin: 0; text-align: right; font-weight: 500; }
+.d1-badge { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: var(--fs-xs); font-weight: 700; line-height: 1.6; white-space: nowrap; }
+.tone--success { color: color-mix(in srgb, var(--theme--success) 50%, var(--theme--foreground)); background: color-mix(in srgb, var(--theme--success) 18%, transparent); }
+.tone--warning { color: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground)); background: color-mix(in srgb, var(--theme--warning) 18%, transparent); }
+.thumb { width: 100%; height: 110px; border-radius: 10px; background: var(--d1-tile); display: grid; place-items: center; color: var(--d1-dim); }
+
+/* ---- Section (panel with a lid) ---- */
+.d1-section { background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: var(--d1-radius); box-shadow: var(--d1-shadow); overflow: hidden; }
+.d1-section .head { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 14px; background: var(--d1-tile); border-bottom: 1px solid var(--d1-line); cursor: pointer; user-select: none; }
+.d1-section .head svg.lucide { width: 14px; height: 14px; color: var(--d1-dim); }
+.d1-section h2 { margin: 0; font-size: var(--fs-md); font-weight: 650; letter-spacing: .01em; }
+.count { font-size: var(--fs-xs); font-weight: 700; font-variant-numeric: tabular-nums; padding: 1px 7px; border-radius: 99px; color: var(--d1-accent); background: color-mix(in srgb, var(--d1-accent) 12%, transparent); }
+.spacer { flex: 1; }
+.d1-section .body { padding: 12px 14px; }
+.d1-section.closed .body { display: none; }
+
+.rel { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--d1-dim); margin: 10px 0 4px; }
+.rel:first-child { margin-top: 0; }
+.conn { display: flex; align-items: center; gap: 8px; padding: 5px 8px; margin: 0 -8px; border-radius: 8px; cursor: pointer; }
+.conn:hover { background: var(--d1-tile); }
+.conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--k); flex: none; }
+.conn .c { font-family: var(--theme--fonts--monospace--font-family); font-size: var(--fs-sm); font-weight: 700; color: var(--d1-accent); }
+.conn .d { color: var(--d1-dim); margin-left: auto; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 99px; border: 1px solid var(--d1-line); background: var(--d1-surface); font-size: var(--fs-sm); cursor: pointer; user-select: none; }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--k); }
+.chip .n { color: var(--d1-dim); font-variant-numeric: tabular-nums; }
+.chip.off { opacity: .45; }
+.chip.off .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--k); }
+
+/* SegmentedControl */
+.seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 9px; background: var(--d1-tile); border: 1px solid var(--d1-line); }
+.seg button { border: 0; background: transparent; color: var(--theme--foreground); padding: 4px 10px; border-radius: 7px; font: inherit; font-size: var(--fs-sm); font-weight: 600; cursor: pointer; }
+.seg button.on { background: var(--d1-accent); color: light-dark(#fff, var(--theme--background)); }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field + .field { margin-top: 12px; }
+.field label { font-size: var(--fs-sm); color: var(--d1-dim); }
+
+/* ---- Graph panel ---- */
+.graph-panel { display: flex; flex-direction: column; min-height: 0; }
+.graph-panel .head { cursor: default; }
+.search { display: flex; align-items: center; gap: 6px; height: 30px; width: 280px; padding: 0 10px; border-radius: var(--theme--border-radius); border: 1px solid var(--theme--border-color);
+	background: var(--theme--form--field--input--background); color: var(--d1-dim); font-size: var(--fs-sm); }
+.search svg.lucide { width: 14px; height: 14px; }
+.canvas { flex: 1; position: relative; overflow: hidden; cursor: grab; background-color: var(--theme--background);
+	background-image: radial-gradient(circle, color-mix(in srgb, var(--theme--foreground) 14%, transparent) 1px, transparent 1px); background-size: 20px 20px; }
+.canvas.panning { cursor: grabbing; }
+.world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+svg.edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+svg.edges path { fill: none; stroke: color-mix(in srgb, var(--k) 70%, var(--theme--border-color)); stroke-width: 2.4; transition: opacity .15s, stroke-width .15s; }
+svg.edges path.hi { stroke: var(--k); stroke-width: 3.2; }
+svg.edges path.dim { opacity: .2; }
+/* The sample riding a wire: a chip at the wire's middle, as data on a Blender noodle. */
+.carry { position: absolute; transform: translate(-50%, -50%); font: 700 10.5px var(--theme--fonts--monospace--font-family); padding: 1px 7px; border-radius: 99px; white-space: nowrap;
+	color: color-mix(in srgb, var(--k) 62%, var(--theme--foreground)); background: color-mix(in srgb, var(--k) 14%, var(--theme--background)); border: 1px solid color-mix(in srgb, var(--k) 30%, transparent); pointer-events: none; transition: opacity .15s; }
+.carry.dim { opacity: .2; }
+
+/* Project frame (a Blender frame node): everything inside belongs to the project. */
+.frame { position: absolute; border-radius: 16px; background: color-mix(in srgb, var(--k-project) 5%, transparent); border: 1px dashed color-mix(in srgb, var(--k-project) 35%, transparent); cursor: pointer; }
+.frame .flabel { position: absolute; left: 14px; top: 10px; display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--d1-dim); }
+.frame .flabel b { font-family: var(--theme--fonts--monospace--font-family); color: color-mix(in srgb, var(--k-project) 62%, var(--theme--foreground)); }
+
+/* Nodes */
+.node { position: absolute; width: 220px; background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: var(--d1-radius); box-shadow: var(--d1-shadow);
+	cursor: pointer; transition: border-color .12s, box-shadow .12s, opacity .15s; }
+.node:hover { border-color: var(--d1-accent); box-shadow: var(--d1-shadow-lg); }
+.node.focal { outline: 2px solid var(--d1-accent); outline-offset: 0; box-shadow: 0 0 0 6px var(--d1-tint), var(--d1-shadow); }
+.node.dim { opacity: .3; }
+.node .nb { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.node .ntop { display: flex; align-items: center; gap: 6px; }
+.node .ntop .d1-badge { margin-left: auto; }
+.node .code { font-family: var(--theme--fonts--monospace--font-family); font-size: var(--fs-md); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node .meta { font-size: var(--fs-sm); color: var(--d1-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Operation = container node: a coloured header, sockets row, the slots inside, the settings. */
+.node.op { width: 310px; overflow: visible; }
+.op .ohead { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 11px 11px 0 0;
+	background: color-mix(in srgb, var(--k-op) 16%, var(--d1-surface)); border-bottom: 1px solid color-mix(in srgb, var(--k-op) 30%, var(--d1-line)); }
+.op .ohead { white-space: nowrap; }
+.op .ohead .m { font-weight: 700; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.op .ohead .c { font-family: var(--theme--fonts--monospace--font-family); font-size: var(--fs-sm); color: var(--d1-dim); }
+.op .ohead .d1-badge { margin-left: auto; }
+.op .iorows { padding: 6px 0 8px; }
+.op .orow { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 3px 14px; font-size: var(--fs-sm); color: var(--d1-dim); min-height: 24px; }
+.op .orow > span { position: relative; }
+/* A sample passing straight through (in place): a faint line from its in socket to its out socket. */
+.op .orow .pass { height: 0; border-top: 1px dashed color-mix(in srgb, var(--k-sample) 45%, transparent); }
+.op .orow.bundle, .op .orow.fold { cursor: pointer; font-weight: 600; color: color-mix(in srgb, var(--k-sample) 62%, var(--theme--foreground)); }
+.op .orow.bundle:hover, .op .orow.fold:hover { background: var(--d1-tint); }
+.op .orow.fold { grid-template-columns: 1fr auto 1fr; font-weight: 500; color: var(--d1-dim); }
+.sock.fat { width: 16px; height: 16px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--k) 60%, var(--theme--border-color)), 0 0 0 4px color-mix(in srgb, var(--k) 20%, transparent); }
+.op .orow .sock.in { left: -21px; } .op .orow .sock.out { right: -21px; }
+.op .orow .sock.fat.in { left: -23px; } .op .orow .sock.fat.out { right: -23px; }
+.op .slots { margin: 0 10px; padding: 6px; border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); display: flex; flex-direction: column; gap: 4px; }
+.op .slots .lab { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--d1-dim); padding: 2px 4px 0; }
+.slot { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px; background: var(--d1-surface); border: 1px solid var(--d1-line); transition: border-color .12s, opacity .15s; }
+.slot:hover { border-color: var(--k); }
+.slot.focal { outline: 2px solid var(--d1-accent); }
+.slot .si { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; flex: none; color: color-mix(in srgb, var(--k) 62%, var(--theme--foreground)); background: color-mix(in srgb, var(--k) 14%, transparent); }
+.slot .si svg.lucide { width: 13px; height: 13px; }
+.slot .sr { font-size: var(--fs-xs); color: var(--d1-dim); width: 64px; flex: none; }
+.slot .sc { font-family: var(--theme--fonts--monospace--font-family); font-size: var(--fs-sm); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slot .d1-badge { margin-left: auto; }
+.op .params { padding: 8px 14px 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; font-size: var(--fs-sm); }
+.op .params div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--d1-line); padding: 2px 0; }
+.op .params dt { color: var(--d1-dim); } .op .params dd { margin: 0; font-weight: 600; }
+
+/* Sockets: Blender-style dots on the node's edge, coloured by what flows through them. */
+.sock { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--k); border: 2px solid var(--d1-surface); box-shadow: 0 0 0 1px color-mix(in srgb, var(--k) 60%, var(--theme--border-color)); top: 50%; transform: translateY(-50%); }
+.sock.in { left: -21px; } .sock.out { right: -21px; }
+.node:not(.op) > .sock.in { left: -7px; } .node:not(.op) > .sock.out { right: -7px; }
+
+/* Sectioning: a small junction node, one sample in, its pieces out. */
+.node.junction { width: 150px; border-style: dashed; background: var(--d1-surface); }
+.junction .nb { gap: 2px; }
+.junction .outs { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 10px; font-size: var(--fs-xs); color: var(--d1-dim); text-align: right; }
+.junction .outs span { position: relative; }
+.junction .outs .sock.out { right: -19px; }
+
+/* The rest of what the form recorded: folded under "+N more", lighter rows. */
+.slot.more-toggle { justify-content: center; color: var(--d1-dim); font-size: var(--fs-sm); font-weight: 600; background: transparent; border-style: dashed; cursor: pointer; }
+.slot.minor { background: transparent; border-color: transparent; padding: 3px 8px; }
+.slot.minor .sc { font-weight: 600; font-family: inherit; }
+.slot .spark { margin-left: auto; color: var(--k); flex: none; }
+.dthumb { border-radius: 10px; background: var(--d1-tile); border: 1px solid var(--d1-line); padding: 6px 8px 4px; }
+.dthumb .cap { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-xs); color: var(--d1-dim); }
+.dthumb svg { display: block; width: 100%; height: 64px; }
+
+svg.edges path.fat { stroke-width: 5; }
+svg.edges path.hit { stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
+svg.edges path.hi + path.hit { cursor: pointer; }
+.sock { cursor: crosshair; }
+.sock:hover { transform: translateY(-50%) scale(1.35); }
+/* Blender-style: hover a wire or a socket to see what it connects. */
+.tip { position: absolute; z-index: 30; pointer-events: none; opacity: 0; transition: opacity .1s; max-width: 280px; padding: 6px 10px; border-radius: 8px;
+	background: var(--theme--foreground); color: var(--theme--background); font-size: var(--fs-sm); line-height: 1.4; box-shadow: var(--d1-shadow-lg); }
+.tip.show { opacity: 1; }
+.tip b { font-family: var(--theme--fonts--monospace--font-family); }
+.tip .tk { margin-top: 4px; opacity: .7; font-size: var(--fs-xs); }
+.toast { position: absolute; left: 50%; top: 14px; transform: translate(-50%, -6px); z-index: 30; opacity: 0; transition: opacity .15s, transform .15s; pointer-events: none;
+	padding: 7px 14px; border-radius: 99px; background: var(--theme--foreground); color: var(--theme--background); font-size: var(--fs-sm); }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+/* The expand button on a card: a click on the card only selects it. */
+.xbtn { margin-left: 4px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--theme--border-color); background: var(--d1-surface); color: var(--d1-dim); display: grid; place-items: center; cursor: pointer; padding: 0; flex: none; }
+.xbtn:hover { color: var(--d1-on-accent, #fff); background: var(--d1-accent); border-color: var(--d1-accent); }
+.xbtn svg.lucide { width: 12px; height: 12px; }
+.node .ntop .d1-badge + .xbtn { margin-left: 4px; }
+.node .ntop .kind + .xbtn { margin-left: auto; }
+.op .ohead .xbtn { margin-left: 6px; }
+
+/* Hover card = RecordRail identity + facts, raised */
+.hover { position: absolute; width: 300px; z-index: 20; pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s; box-shadow: var(--d1-shadow-lg); }
+.hover.show { opacity: 1; transform: none; }
+.hover .d1-record-rail { box-shadow: var(--d1-shadow-lg); gap: 10px; }
+.hover .ident h1 { font-size: var(--fs-lg); }
+.hover .htop { display: flex; gap: 12px; align-items: flex-start; }
+.hover .thumb { width: 64px; height: 64px; flex: none; }
+.d1-counts { display: flex; flex-wrap: wrap; gap: 0 14px; font-size: var(--fs-sm); color: var(--d1-dim); }
+.d1-counts b { font-size: var(--fs-md); color: var(--theme--foreground); font-variant-numeric: tabular-nums; }
+.hint { font-size: var(--fs-sm); color: var(--d1-dim); border-top: 1px solid var(--d1-line); padding-top: 8px; }
+kbd { font: 600 10.5px var(--theme--fonts--monospace--font-family); border: 1px solid var(--theme--border-color); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--d1-tile); }
+
+.ctrls { position: absolute; left: 12px; bottom: 12px; display: flex; flex-direction: column; background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: 10px; box-shadow: var(--d1-shadow); overflow: hidden; }
+.ctrls button { width: 32px; height: 30px; border: 0; background: transparent; color: var(--theme--foreground); display: grid; place-items: center; cursor: pointer; }
+.ctrls button + button { border-top: 1px solid var(--d1-line); }
+.ctrls svg.lucide { width: 15px; height: 15px; }
+.mini { position: absolute; right: 12px; bottom: 12px; width: 180px; height: 104px; background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: 10px; box-shadow: var(--d1-shadow); }
+.note { position: absolute; right: 12px; top: 12px; max-width: 260px; padding: 8px 12px; border-radius: 10px; font-size: var(--fs-sm);
+	color: color-mix(in srgb, var(--theme--warning) 50%, var(--theme--foreground)); background: color-mix(in srgb, var(--theme--warning) 14%, var(--d1-surface)); border: 1px solid color-mix(in srgb, var(--theme--warning) 35%, transparent); }
+</style>
+</head>
+<body>
+<nav class="side" aria-label="STARbase">
+	<div class="brand"><span class="mark">★</span>STARbase</div>
+	<div class="find"><i data-lucide="search"></i>Find anything<kbd>Ctrl K</kbd></div>
+	<a href="#"><i data-lucide="home"></i>Home</a>
+	<div class="sec">Records</div>
+	<a href="#"><i data-lucide="folder"></i>Projects</a>
+	<a href="#"><i data-lucide="flag"></i>Campaigns</a>
+	<a href="#"><i data-lucide="test-tube"></i>Samples</a>
+	<a href="#"><i data-lucide="cog"></i>Operations</a>
+	<a href="#"><i data-lucide="clipboard-check"></i>Tests</a>
+	<a href="#"><i data-lucide="users"></i>People</a>
+	<div class="sec">Analysis</div>
+	<a href="#"><i data-lucide="activity"></i>Force plotter</a>
+	<a href="#"><i data-lucide="zap"></i>FAST plotter</a>
+	<a href="#" class="cur"><i data-lucide="workflow"></i>Process map<span class="new">NEW</span></a>
+	<div class="sec">Inventory</div>
+	<a href="#"><i data-lucide="wrench"></i>Tools</a>
+	<a href="#"><i data-lucide="diamond"></i>Cutting inserts</a>
+	<div class="sec">Reference</div>
+	<a href="#"><i data-lucide="drill"></i>Equipment</a>
+	<a href="#"><i data-lucide="layers"></i>Materials</a>
+</nav>
+
+<div class="d1-page">
+	<div class="top">
+		<div class="d1-crumbs"><a href="#">Samples</a><span>/</span><a href="#" id="crumbBack">S-0412</a><span>/</span><span>Process map</span></div>
+		<div class="title-actions">
+			<button class="v-button secondary small"><i data-lucide="link"></i>Copy link</button>
+			<button class="v-button secondary small"><i data-lucide="image-down"></i>Save PNG</button>
+		</div>
+	</div>
+
+	<div class="grid">
+		<aside class="rail" id="rail"></aside>
+
+		<section class="d1-section graph-panel">
+			<header class="head">
+				<h2>Process map</h2><span class="count" id="nCount">0</span>
+				<span class="spacer"></span>
+				<div class="search"><i data-lucide="search"></i>Search samples, operations, tools…</div>
+				<div class="seg"><button class="on">Left → right</button><button>Top → down</button></div>
+				<button class="v-button secondary small icon" title="Fit" onclick="fit()"><i data-lucide="maximize"></i></button>
+				<button class="v-button secondary small icon" title="Clear"><i data-lucide="eraser"></i></button>
+			</header>
+			<main class="canvas" id="canvas">
+				<div class="world" id="world"><svg class="edges" id="edges" width="2800" height="700"></svg></div>
+				<div class="hover" id="hover"></div>
+				<div class="note">Hover a wire or socket to see what it connects; Ctrl+click a wire to jump to where it came from. Click a card to select it; ＋ expands. Mockup data, fixed layout.</div>
+				<div class="ctrls"><button title="Zoom in" onclick="zoomBy(1.15)"><i data-lucide="plus"></i></button><button title="Zoom out" onclick="zoomBy(1/1.15)"><i data-lucide="minus"></i></button><button title="Fit" onclick="fit()"><i data-lucide="maximize"></i></button></div>
+				<svg class="mini" id="mini" viewBox="0 -60 1900 560" preserveAspectRatio="xMidYMid meet"></svg>
+			</main>
+		</section>
+	</div>
+</div>
+
+<script>
+const TYPES = {
+	material: { label: 'Material', k: 'var(--k-material)', icon: 'layers' },
+	project: { label: 'Project', k: 'var(--k-project)', icon: 'folder' },
+	sample: { label: 'Sample', k: 'var(--k-sample)', icon: 'test-tube' },
+	op: { label: 'Operation', k: 'var(--k-op)', icon: 'cog' },
+	test: { label: 'Test', k: 'var(--k-test)', icon: 'clipboard-check' },
+	equipment: { label: 'Equipment', k: 'var(--k-equipment)', icon: 'drill' },
+	tool: { label: 'Tool', k: 'var(--k-tool)', icon: 'wrench' },
+	edge: { label: 'Insert edge', k: 'var(--k-edge)', icon: 'triangle-right' },
+	recipe: { label: 'Recipe', k: 'var(--k-recipe)', icon: 'flame' },
+	file: { label: 'Data file', k: 'var(--k-file)', icon: 'file-chart-line' },
+	person: { label: 'Person', k: 'var(--k-person)', icon: 'user' },
+	campaign: { label: 'Campaign', k: 'var(--k-campaign)', icon: 'flag' },
+};
+// Every record on the page: the nodes, and the slots inside operations.
+const R = {
+	prj: { t: 'project', code: 'PRJ-007', ctx: 'FAST forging trials', facts: { Lead: 'Owner A', Started: 'Mar 2026' }, counts: [['24', 'samples'], ['61', 'operations']] },
+	mat: { t: 'material', code: 'Ti-6Al-4V ELI', ctx: 'Powder · Grade 23', facts: { Supplier: 'AP&C', Form: 'Powder 15–53 µm' }, counts: [['38', 'samples']], more: 37 },
+	opF: { t: 'op', code: 'OP-0412-F1', ctx: 'FAST/SPS sintering · 03 Sep', status: ['success', 'Complete'], facts: { Machine: 'FAST 25', 'Max temp': '1100 °C', Force: '50 kN', Dwell: '30 min' }, counts: [['1', 'run file']], data: 'fast' },
+	eqF: { t: 'equipment', code: 'FAST 25', ctx: 'FCT HP D 25 · FAST/SPS press', facts: { Type: 'FAST/SPS press', Room: 'D1 lab' }, counts: [['412', 'operations']] },
+	rcpF: { t: 'recipe', code: 'FR-110', ctx: 'FAST recipe · 1100 °C / 50 kN', facts: { Ramp: '100 °C/min', Dwell: '30 min' }, counts: [['44', 'operations']] },
+	runF: { t: 'file', code: 'run_0412.emd', ctx: 'FAST run data · 41 min', facts: { Channels: '12', Size: '3.1 MB' }, counts: [], data: 'fast' },
+	s0412: { t: 'sample', code: 'S-0412', ctx: 'FAST disc · Ø80 × 12 mm', status: ['success', 'Available'], facts: { Material: 'Ti-6Al-4V ELI', Project: 'PRJ-007', Location: 'Cab 3 · Shelf B', Created: '03 Sep 2026' }, counts: [['1', 'made by'], ['4', 'pieces']], thumb: 'disc' },
+	c1: { t: 'sample', code: 'S-0412-A', ctx: 'Quarter · 40 × 40 × 12 mm', status: ['success', 'Available'], facts: { Parent: 'S-0412', Relation: 'Sectioned', Fraction: '0.25' }, counts: [['2', 'operations'], ['1', 'test']], thumb: 'half' },
+	c2: { t: 'sample', code: 'S-0412-B', ctx: 'Quarter · 40 × 40 × 12 mm', status: ['warning', 'Consumed'], facts: { Parent: 'S-0412', Relation: 'Sectioned', Fraction: '0.25' }, counts: [['1', 'operation'], ['1', 'test']], thumb: 'half' },
+	c3: { t: 'sample', code: 'S-0412-C', ctx: 'Quarter · 40 × 40 × 12 mm', status: ['success', 'Available'], facts: { Parent: 'S-0412', Relation: 'Sectioned', Fraction: '0.25' }, counts: [['1', 'operation']], thumb: 'half' },
+	c4: { t: 'sample', code: 'S-0412-D', ctx: 'Quarter · 40 × 40 × 12 mm', status: ['success', 'Available'], facts: { Parent: 'S-0412', Relation: 'Sectioned', Fraction: '0.25' }, counts: [['1', 'operation']], thumb: 'half' },
+	opP: { t: 'op', code: 'OP-0412-P1', ctx: 'Grinding & polishing · 08 Sep · batch of 4', status: ['success', 'Complete'], facts: { Machine: 'Tegramin-30', Recipe: 'PR-Ti-02', Samples: '4' }, counts: [['4', 'samples']] },
+	eqP: { t: 'equipment', code: 'Tegramin-30', ctx: 'Struers grinder/polisher', facts: { Type: 'Grinder/polisher', Room: 'Metallography' }, counts: [['880', 'operations']] },
+	rcpP: { t: 'recipe', code: 'PR-Ti-02', ctx: 'Prep recipe · Ti mirror polish', facts: { Steps: '5', Final: 'OP-S 0.04 µm' }, counts: [['120', 'operations']] },
+	opT: { t: 'op', code: 'OP-0412A-T1', ctx: 'CNC turning · 10 Sep', status: ['success', 'Complete'], facts: { Machine: 'Mazak QT-200', 'Cut speed': '60 m/min', Feed: '0.15 mm/rev' }, counts: [['1', 'force file']], data: 'force' },
+	eqT: { t: 'equipment', code: 'Mazak QT-200', ctx: 'CNC lathe', facts: { Type: 'CNC lathe', Room: 'D1 lab' }, counts: [['230', 'operations']] },
+	tool: { t: 'tool', code: 'T-12', ctx: 'Turning holder · PCLNR', facts: { Box: 'BOX-03' }, counts: [['57', 'operations']] },
+	ins: { t: 'edge', code: 'CNMG-0007-E2', ctx: 'Insert edge 2 of 4', status: ['warning', 'Worn'], facts: { Insert: 'CNMG 120408', Uses: '9' }, counts: [['9', 'operations']] },
+	frcT: { t: 'file', code: 'force_0412A.mat', ctx: 'Force data · 3 passes', facts: { Channels: 'Fx Fy Fz', Rate: '10 kHz' }, counts: [], data: 'force' },
+	pA: { t: 'person', code: 'Operator A', ctx: 'Machine operator', facts: { Team: 'Machining' }, counts: [['310', 'operations']] },
+	pB: { t: 'person', code: 'Owner B', ctx: 'Record owner', facts: { Team: 'FAST' }, counts: [['92', 'records']] },
+	cmp: { t: 'campaign', code: 'CMP-03', ctx: 'Disc forging campaign', facts: { Status: 'Running' }, counts: [['12', 'samples']] },
+	tst1: { t: 'test', code: 'TS-0418', ctx: 'Tensile · 14 Sep', status: ['success', 'Passed'], facts: { Standard: 'ASTM E8', UTS: '958 MPa', Elongation: '14 %' }, counts: [['1', 'file']], data: 'tensile' },
+	tst2: { t: 'test', code: 'TS-0421', ctx: 'Hardness · 15 Sep', status: ['success', 'Passed'], facts: { Method: 'Vickers HV10', Mean: '338 HV' }, counts: [['1', 'file']] },
+};
+// Nodes. An operation is a container: one row per sample going through it (in on the left, out on the right),
+// then what was used ("Inside"), then its key settings. Past 3 sample rows the rest fold into one bundled row.
+const NODES = [
+	{ id: 'mat', kind: 'record', x: 60, y: 230, outs: ['material'] },
+	{ id: 'opF', kind: 'op', x: 360, y: 140, method: 'FAST/SPS sintering',
+		rows: [{ in: ['Powder', 'material'], out: ['Sample made', 'sample'] }],
+		slots: [['eqF', 'Machine'], ['rcpF', 'Recipe'], ['runF', 'Run data']], more: [['pA', 'Operator'], ['pB', 'Owner'], ['cmp', 'Campaign']],
+		params: { 'Max temp': '1100 °C', Force: '50 kN', Dwell: '30 min', Mould: 'Ø80 mm' } },
+	{ id: 's0412', kind: 'record', x: 760, y: 220, ins: ['sample'], outs: ['sample'] },
+	{ id: 'sec1', kind: 'junction', x: 1060, y: 190, label: 'Sectioned', pieces: ['A · 0.25', 'B · 0.25', 'C · 0.25', 'D · 0.25'] },
+	{ id: 'c1', kind: 'record', x: 1300, y: 40, ins: ['sample'], outs: ['sample'] },
+	{ id: 'c2', kind: 'record', x: 1300, y: 160, ins: ['sample'], outs: ['sample'] },
+	{ id: 'c3', kind: 'record', x: 1300, y: 280, ins: ['sample'], outs: ['sample'] },
+	{ id: 'c4', kind: 'record', x: 1300, y: 400, ins: ['sample'], outs: ['sample'] },
+	{ id: 'opP', kind: 'op', x: 1620, y: 120, method: 'Grinding & polishing',
+		rows: [{ in: ['Workpiece', 'sample'], out: ['Workpiece', 'sample'], s: 'c1' }, { in: ['Workpiece', 'sample'], out: ['Workpiece', 'sample'], s: 'c2' },
+			{ in: ['Workpiece', 'sample'], out: ['Workpiece', 'sample'], s: 'c3' }, { in: ['Workpiece', 'sample'], out: ['Workpiece', 'sample'], s: 'c4' }],
+		slots: [['eqP', 'Machine'], ['rcpP', 'Recipe']], more: [['pA', 'Operator'], ['pB', 'Owner']],
+		params: { Steps: '5', Final: '0.04 µm', Force: '25 N', Time: '18 min' } },
+	{ id: 'opT', kind: 'op', x: 2040, y: 0, method: 'CNC turning',
+		rows: [{ in: ['Workpiece', 'sample'], out: ['Workpiece', 'sample'], s: 'c1' }],
+		slots: [['eqT', 'Machine'], ['tool', 'Tool'], ['ins', 'Insert edge'], ['frcT', 'Force data']], more: [['pA', 'Operator'], ['pB', 'Owner'], ['cmp', 'Campaign']],
+		params: { 'Cut speed': '60 m/min', Feed: '0.15 mm/rev', 'Depth of cut': '0.5 mm', Coolant: 'Flood' } },
+	{ id: 'tst1', kind: 'record', x: 2440, y: 90, ins: ['sample'] },
+	{ id: 'tst2', kind: 'record', x: 2040, y: 420, ins: ['sample'] },
+];
+// Wires: [from node, from socket, to node, to socket, what flows]
+const WIRES = [
+	['mat', 0, 'opF', 0, 'material'], ['opF', 0, 's0412', 0, 'sample'], ['s0412', 0, 'sec1', 0, 'sample'],
+	['sec1', 0, 'c1', 0, 'sample'], ['sec1', 1, 'c2', 0, 'sample'], ['sec1', 2, 'c3', 0, 'sample'], ['sec1', 3, 'c4', 0, 'sample'],
+	['c1', 0, 'opP', 0, 'sample'], ['c2', 0, 'opP', 1, 'sample'], ['c3', 0, 'opP', 2, 'sample'], ['c4', 0, 'opP', 3, 'sample'],
+	['opP', 0, 'opT', 0, 'sample'], ['opT', 0, 'tst1', 0, 'sample'], ['opP', 1, 'tst2', 0, 'sample'],
+];
+const MAX_ROWS = 3, FOLDED_ROWS = 2; // up to 3 sample rows shown; past that, 2 rows and a bundle
+let selected = 's0412';
+const hidden = new Set(), closed = new Set(), openMore = new Set(), openRows = new Set();
+const nodeById = Object.fromEntries(NODES.map(n => [n.id, n]));
+const slotOwner = {};
+for (const n of NODES) for (const [rid] of [...(n.slots || []), ...(n.more || [])]) slotOwner[rid] ??= n.id;
+const world = document.getElementById('world'), edgesSvg = document.getElementById('edges');
+const hover = document.getElementById('hover'), canvas = document.getElementById('canvas');
+const tip = document.createElement('div'); tip.className = 'tip'; canvas.appendChild(tip);
+const toast = document.createElement('div'); toast.className = 'toast'; canvas.appendChild(toast);
+
+const icon = name => `<i data-lucide="${name}"></i>`;
+const kindPill = t => `<span class="kind" style="--k:${TYPES[t].k}">${icon(TYPES[t].icon)}${TYPES[t].label}</span>`;
+const badge = s => s ? `<span class="d1-badge tone--${s[0]}">${s[1]}</span>` : '';
+const facts = f => `<dl class="d1-facts">${Object.entries(f).map(([k, v]) => `<div class="row"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
+const sockEl = (dir, i, flow, extra = '') => `<span class="sock ${dir}${extra}" data-dir="${dir}" data-i="${i}" style="--k:${TYPES[flow].k}"></span>`;
+const SPARK = { force: 'M0,30 L8,28 L16,12 L24,14 L32,10 L40,13 L48,9 L56,12 L64,30', fast: 'M0,30 L14,26 L28,12 L48,8 L64,8', tensile: 'M0,30 L10,10 L40,6 L56,9 L64,30' };
+const spark = d => `<svg class="spark" width="42" height="18" viewBox="0 0 64 32"><path d="${SPARK[d]}" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg>`;
+function dataThumb(d) {
+	const L = {
+		force: [['Fx', 'var(--k-op)', 'M0,52 L20,50 L30,20 L60,24 L90,18 L120,22 L150,16 L180,20 L210,18 L230,50 L260,52'], ['Fy', 'var(--k-test)', 'M0,54 L20,53 L30,36 L60,38 L90,34 L120,37 L150,33 L180,36 L210,34 L230,53 L260,54'], ['Fz', 'var(--k-sample)', 'M0,56 L20,56 L30,46 L60,47 L90,45 L120,46 L150,44 L180,46 L210,45 L230,56 L260,56']],
+		fast: [['Temp', 'var(--theme--danger)', 'M0,58 L50,52 L110,14 L200,10 L230,30 L260,50'], ['Force', 'var(--k-equipment)', 'M0,56 L40,30 L200,30 L215,56 L260,56']],
+		tensile: [['Stress', 'var(--k-test)', 'M0,60 L40,14 L120,8 L200,12 L230,20 L236,60']],
+	}[d];
+	const cap = { force: 'Force data · 3 passes', fast: 'FAST run · temp + force', tensile: 'Stress–strain' }[d];
+	return `<div class="dthumb"><div class="cap"><span>${cap}</span><span>${L.map(l => `<span style="color:${l[1]}">● ${l[0]}</span>`).join(' ')}</span></div><svg viewBox="0 0 260 64" preserveAspectRatio="none">${L.map(l => `<path d="${l[2]}" fill="none" stroke="${l[1]}" stroke-width="1.8" vector-effect="non-scaling-stroke"/>`).join('')}</svg></div>`;
+}
+function thumb(kind, s) {
+	if (kind === 'disc') return `<svg width="${s}" height="${s}" viewBox="0 0 48 48"><ellipse cx="24" cy="20" rx="20" ry="7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4 20v8c0 4 9 7 20 7s20-3 20-7v-8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
+	if (kind === 'half') return `<svg width="${s}" height="${s}" viewBox="0 0 48 48"><path d="M24 13a20 7 0 0 1 20 7v8a20 7 0 0 1-20 7z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
+	return '';
+}
+const nodeVisible = n => !(n.kind === 'record' && hidden.has(R[n.id].t));
+const wireVisible = w => nodeVisible(nodeById[w[0]]) && nodeVisible(nodeById[w[2]]);
+// Rows shown for an operation, and which shown socket a hidden row's wire lands on (the bundle).
+function shownRows(n) {
+	if (!n.rows || n.rows.length <= MAX_ROWS || openRows.has(n.id)) return { rows: n.rows || [], bundle: null };
+	return { rows: n.rows.slice(0, FOLDED_ROWS), bundle: n.rows.length - FOLDED_ROWS };
+}
+function socketIndex(nid, i) { const n = nodeById[nid]; if (n.kind !== 'op') return i; const { bundle } = shownRows(n); return bundle && i >= FOLDED_ROWS ? 'b' : i; }
+const label = rid => `${R[rid].code} · ${TYPES[R[rid].t].label}`;
+function neighbours(id) {
+	const nid = slotOwner[id] || id, out = new Set([nid]);
+	for (const w of WIRES) { if (w[0] === nid) out.add(w[2]); if (w[2] === nid) out.add(w[0]); }
+	return out;
+}
+// What is really on the far end: a junction is passed through to the sample it came from.
+// The sample a wire carries: the row it leaves an operation by, or the sample card it leaves.
+function carried(w) { const n = nodeById[w[0]]; if (n.kind === 'op') return n.rows[w[1]]?.s ?? (n.rows[w[1]]?.out?.[1] === 'sample' ? 's0412' : null); if (n.kind === 'junction') return null; return R[w[0]].t === 'sample' ? w[0] : null; }
+const origin = nid => nid === 'sec1' ? 's0412' : nid;
+
+function nodeHtml(n) {
+	const xbtn = R[n.id]?.more || ['eqF', 'mat'].includes(n.id) || n.kind === 'record' ? `<button class="xbtn" title="Expand: load more connections" data-x="${n.id}">${icon('plus')}</button>` : '';
+	if (n.kind === 'op') {
+		const r = R[n.id], { rows, bundle } = shownRows(n);
+		return `<div class="ohead">${icon('cog')}<span class="m">${n.method}</span><span class="c">${r.code}</span>${badge(r.status)}<button class="xbtn in-head" title="Expand" data-x="${n.id}">${icon('plus')}</button></div>
+			<div class="iorows">${rows.map((row, i) => `<div class="orow"><span>${row.in ? sockEl('in', i, row.in[1]) + row.in[0] + (n.rows.length > 1 && row.s ? ' ' + (i + 1) : '') : ''}</span><span class="${row.in && row.out && row.in[1] === row.out[1] ? 'pass' : ''}"></span><span>${row.out ? row.out[0] + sockEl('out', i, row.out[1]) : ''}</span></div>`).join('')}
+			${bundle ? `<div class="orow bundle" data-rows="${n.id}"><span>${sockEl('in', 'b', 'sample', ' fat')}+ ${bundle} more samples</span><span></span><span>${sockEl('out', 'b', 'sample', ' fat')}</span></div>` : ''}
+			${openRows.has(n.id) ? `<div class="orow fold" data-rows="${n.id}"><span></span><span>Fold samples</span><span></span></div>` : ''}</div>
+			<div class="slots"><div class="lab">Inside</div>${n.slots.filter(([rid]) => !hidden.has(R[rid].t)).map(([rid, role]) => {
+				const s = R[rid];
+				return `<div class="slot ${rid === selected ? 'focal' : ''}" data-rid="${rid}" style="--k:${TYPES[s.t].k}"><span class="si">${icon(TYPES[s.t].icon)}</span><span class="sr">${role}</span><span class="sc">${s.code}</span>${s.data ? spark(s.data) : badge(s.status)}</div>`;
+			}).join('')}${openMore.has(n.id) ? n.more.map(([rid, role]) => { const s = R[rid]; return `<div class="slot minor" data-rid="${rid}" style="--k:${TYPES[s.t].k}"><span class="si">${icon(TYPES[s.t].icon)}</span><span class="sr">${role}</span><span class="sc">${s.code}</span></div>`; }).join('') : ''}
+			${n.more?.length ? `<div class="slot more-toggle" data-more="${n.id}">${openMore.has(n.id) ? 'Show fewer' : `+ ${n.more.length} more from the form`}</div>` : ''}</div>
+			${hidden.has('_params') ? '' : `<dl class="params">${Object.entries(n.params).map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>`}`;
+	}
+	if (n.kind === 'junction') return `${sockEl('in', 0, 'sample')}<div class="nb"><span class="kind" style="--k:var(--k-sample)">${icon('scissors')}${n.label}</span><span class="meta">No operation logged</span></div>
+		<div class="outs">${n.pieces.map((p, i) => `<span>${p}${sockEl('out', i, 'sample')}</span>`).join('')}</div>`;
+	const r = R[n.id];
+	return `${(n.ins || []).map((f, i) => sockEl('in', i, f)).join('')}<div class="nb"><div class="ntop">${kindPill(r.t)}${badge(r.status)}${xbtn}</div><div class="code">${r.code}</div><div class="meta">${r.ctx}</div></div>${(n.outs || []).map((f, i) => sockEl('out', i, f)).join('')}`;
+}
+
+function render() {
+	world.querySelectorAll('.node,.frame').forEach(el => el.remove());
+	for (const n of NODES) {
+		if (!nodeVisible(n)) continue;
+		const el = document.createElement('div');
+		el.className = `node ${n.kind}` + (n.id === selected ? ' focal' : '');
+		el.style.left = n.x + 'px'; el.style.top = n.y + 'px'; el.dataset.id = n.id; el.tabIndex = 0;
+		el.innerHTML = nodeHtml(n);
+		if (n.kind !== 'junction') {
+			el.addEventListener('mouseenter', () => showHover(n.id, el));
+			el.addEventListener('mouseleave', hideHover);
+			el.addEventListener('click', () => select(n.id));
+		}
+		el.querySelectorAll('.xbtn').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); say(`Expand ${R[b.dataset.x].code}: loads its next connections (one step).`); }));
+		el.querySelectorAll('.more-toggle').forEach(t => t.addEventListener('click', e => { e.stopPropagation(); const id = t.dataset.more; openMore.has(id) ? openMore.delete(id) : openMore.add(id); render(); }));
+		el.querySelectorAll('.orow[data-rows]').forEach(t => t.addEventListener('click', e => { e.stopPropagation(); const id = t.dataset.rows; openRows.has(id) ? openRows.delete(id) : openRows.add(id); render(); }));
+		el.querySelectorAll('.slot[data-rid]').forEach(s => {
+			s.addEventListener('mouseenter', e => { e.stopPropagation(); showHover(s.dataset.rid, s); });
+			s.addEventListener('mouseleave', e => { e.stopPropagation(); showHover(n.id, el); });
+			s.addEventListener('click', e => { e.stopPropagation(); select(s.dataset.rid); });
+		});
+		el.querySelectorAll('.sock').forEach(s => {
+			s.addEventListener('mouseenter', e => { e.stopPropagation(); hideHover(); const ws = wiresAtSocket(n.id, s.dataset.dir, s.dataset.i); showTip(e, ws.map(w => label(origin(s.dataset.dir === 'in' ? w[0] : w[2]))).join('<br>') || 'Not connected'); });
+			s.addEventListener('mouseleave', hideTip);
+		});
+		world.appendChild(el);
+	}
+	const b = bounds();
+	const fr = document.createElement('div');
+	fr.className = 'frame';
+	Object.assign(fr.style, { left: b.x0 - 30 + 'px', top: b.y0 - 50 + 'px', width: b.w + 60 + 'px', height: b.h + 80 + 'px' });
+	fr.innerHTML = `<div class="flabel">${kindPill('project')}<b>PRJ-007</b>FAST forging trials</div>`;
+	fr.querySelector('.flabel').addEventListener('click', () => select('prj'));
+	fr.querySelector('.flabel').addEventListener('mouseenter', () => showHover('prj', fr.querySelector('.flabel')));
+	fr.querySelector('.flabel').addEventListener('mouseleave', hideHover);
+	world.prepend(fr);
+	lucide.createIcons();
+	drawWires(); renderRail(); renderMini();
+	document.getElementById('nCount').textContent = Object.keys(R).filter(id => !hidden.has(R[id].t)).length;
+	document.getElementById('crumbBack').textContent = R[selected].code;
+}
+function wiresAtSocket(nid, dir, i) {
+	return WIRES.filter(w => wireVisible(w) && (dir === 'out' ? w[0] === nid && String(socketIndex(nid, w[1])) === String(i) : w[2] === nid && String(socketIndex(nid, w[3])) === String(i)));
+}
+function sockPos(nid, dir, i) {
+	const el = world.querySelector(`.node[data-id="${nid}"] .sock[data-dir="${dir}"][data-i="${socketIndex(nid, i)}"]`);
+	const r = el.getBoundingClientRect(), w = world.getBoundingClientRect();
+	return [(r.left + r.width / 2 - w.left) / k, (r.top + r.height / 2 - w.top) / k];
+}
+function drawWires(hiId) {
+	const hiNode = hiId ? (slotOwner[hiId] || hiId) : null;
+	let s = '';
+	WIRES.forEach((w, idx) => {
+		if (!wireVisible(w)) return;
+		const [x1, y1] = sockPos(w[0], 'out', w[1]), [x2, y2] = sockPos(w[2], 'in', w[3]);
+		const dx = Math.max(60, (x2 - x1) * .5);
+		const touch = hiNode && (w[0] === hiNode || w[2] === hiNode);
+		const fat = socketIndex(w[0], w[1]) === 'b' || socketIndex(w[2], w[3]) === 'b';
+		const d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+		s += `<path class="${hiId ? (touch ? 'hi' : 'dim') : ''}${fat ? ' fat' : ''}" style="--k:${TYPES[w[4]].k}" d="${d}"/><path class="hit" data-w="${idx}" d="${d}"/>`;
+	});
+	edgesSvg.innerHTML = s;
+	edgesSvg.querySelectorAll('.hit').forEach(h => {
+		const w = WIRES[h.dataset.w];
+		h.addEventListener('mouseenter', e => { h.previousSibling.classList.add('hi'); const sm = carried(w); showTip(e, `${sm ? `<b>${R[sm].code}</b> · Sample<br>` : ''}from <b>${R[origin(w[0])].code}</b><br>into <b>${R[w[2]].code}</b><div class="tk">Ctrl+click to go to ${R[origin(w[0])].code}</div>`); });
+		h.addEventListener('mousemove', moveTip);
+		h.addEventListener('mouseleave', () => { h.previousSibling.classList.remove('hi'); hideTip(); });
+		h.addEventListener('click', e => { if (e.ctrlKey || e.metaKey) { hideTip(); select(origin(w[0])); centre(origin(w[0]), k); } });
+	});
+}
+function showTip(e, html) { tip.innerHTML = html; tip.classList.add('show'); moveTip(e); }
+function moveTip(e) { const c = canvas.getBoundingClientRect(); tip.style.left = e.clientX - c.left + 14 + 'px'; tip.style.top = e.clientY - c.top + 14 + 'px'; }
+function hideTip() { tip.classList.remove('show'); }
+function say(t) { toast.textContent = t; toast.classList.add('show'); clearTimeout(say.t); say.t = setTimeout(() => toast.classList.remove('show'), 2200); }
+function showHover(rid, el) {
+	const n = R[rid];
+	hover.innerHTML = `<div class="d1-record-rail">
+		<div class="htop">${n.thumb ? `<div class="thumb">${thumb(n.thumb, 44)}</div>` : ''}
+			<div class="ident"><div class="line">${kindPill(n.t)}${badge(n.status)}</div><h1>${n.code}</h1><p class="title">${n.ctx}</p></div></div>
+		${n.data ? dataThumb(n.data) : ''}
+		${facts(n.facts)}
+		<div class="d1-counts">${(n.counts || []).map(([v, l]) => `<span><b>${v}</b> ${l}</span>`).join('')}</div>
+		<div class="hint">Click to select · ＋ expand · <kbd>O</kbd> open record</div></div>`;
+	lucide.createIcons();
+	const r = el.getBoundingClientRect(), c = canvas.getBoundingClientRect();
+	let left = r.right - c.left + 16, top = r.top - c.top - 8;
+	if (left + 300 > c.width - 8) left = r.left - c.left - 316;
+	if (left < 8) { left = Math.max(8, Math.min(r.left - c.left, c.width - 308)); top = r.bottom - c.top + 10; }
+	top = Math.max(8, Math.min(top, c.height - 340));
+	hover.style.left = left + 'px'; hover.style.top = top + 'px';
+	hover.classList.add('show');
+	const near = neighbours(rid);
+	world.querySelectorAll('.node').forEach(x => x.classList.toggle('dim', !near.has(x.dataset.id)));
+	drawWires(rid);
+}
+function hideHover() { hover.classList.remove('show'); world.querySelectorAll('.node').forEach(x => x.classList.remove('dim')); drawWires(); }
+function select(rid) { selected = rid; hideHover(); render(); }
+
+function section(id, title, count, body) {
+	return `<section class="d1-section ${closed.has(id) ? 'closed' : ''}" data-sec="${id}"><header class="head">${icon(closed.has(id) ? 'chevron-right' : 'chevron-down')}<h2>${title}</h2>${count != null ? `<span class="count">${count}</span>` : ''}</header><div class="body">${body}</div></section>`;
+}
+const connRow = (rid, extra) => `<div class="conn" data-go="${rid}" style="--k:${TYPES[R[rid].t].k}"><span class="dot"></span><span class="c">${R[rid].code}</span><span class="d">${extra ?? R[rid].ctx.split(' · ')[0]}</span></div>`;
+function connections(rid) {
+	const g = {};
+	const add = (rel, id, extra) => { const list = (g[rel] ||= []); if (!list.some(x => x[0] === id)) list.push([id, extra]); };
+	if (slotOwner[rid]) { for (const n of NODES) if ([...(n.slots || []), ...(n.more || [])].some(([s]) => s === rid)) add('Used in', n.id, R[n.id].ctx.split(' · ')[0]); }
+	else if (rid === 'prj') for (const id of ['s0412', 'c1', 'c2', 'c3', 'c4', 'opF', 'opP', 'opT']) add('In this project', id);
+	else {
+		const nd = nodeById[rid];
+		for (const [s, role] of nd.slots || []) add('Inside', s, role);
+		for (const w of WIRES) {
+			if (w[2] === rid) add('Came in from', origin(w[0]), w[0] === 'sec1' ? 'sectioned' : undefined);
+			if (w[0] === rid) {
+				if (w[2] === 'sec1') for (const v of WIRES.filter(v => v[0] === 'sec1')) add('Went on to', v[2], 'sectioned');
+				else add('Went on to', w[2]);
+			}
+		}
+		if (R[rid].t === 'sample') add('Project', 'prj');
+	}
+	return g;
+}
+function renderRail() {
+	const n = R[selected];
+	const tally = {};
+	for (const id in R) tally[R[id].t] = (tally[R[id].t] || 0) + 1;
+	const g = connections(selected);
+	const total = Object.values(g).flat().length;
+	document.getElementById('rail').innerHTML = `
+		<div class="d1-record-rail">
+			<div class="ident"><div class="line">${kindPill(n.t)}${badge(n.status)}</div><h1>${n.code}</h1><p class="title">${n.ctx}</p></div>
+			<div class="actions">
+				<button class="v-button small">${icon('external-link')}Open record</button>
+				<button class="v-button secondary small" onclick="say('Expand ${n.code}: loads its next connections (one step).')">${icon('plus')}Expand</button>
+				<button class="v-button secondary small" onclick="centre(selected, k)">${icon('locate-fixed')}Centre</button>
+			</div>
+			${n.thumb ? `<div class="thumb">${thumb(n.thumb, 90)}</div>` : ''}
+			${n.data ? dataThumb(n.data) : ''}
+			${facts(n.facts)}
+		</div>
+		${section('conn', 'Connections', total, Object.entries(g).map(([rel, list]) => `<div class="rel">${rel}</div>` + list.map(([id, ex]) => connRow(id, ex)).join('')).join(''))}
+		${section('show', 'Show', null, `<div class="chips">${Object.entries(TYPES).filter(([k]) => !['project', 'person', 'campaign'].includes(k)).map(([k, t]) => `<span class="chip ${hidden.has(k) ? 'off' : ''}" data-t="${k}" style="--k:${t.k}"><span class="dot"></span>${t.label}<span class="n">${tally[k] || 0}</span></span>`).join('')}
+			<span class="chip ${hidden.has('_params') ? 'off' : ''}" data-t="_params" style="--k:var(--d1-dim)"><span class="dot"></span>Settings</span></div>`)}
+		${section('reach', 'Reach', null, `<div class="field"><label>Steps from the selected record</label><div class="seg"><button>1</button><button class="on">2</button><button>3</button><button>Whole history</button></div></div>`)}`;
+	document.querySelectorAll('.chip').forEach(c => c.onclick = () => { const t = c.dataset.t; if (t === 'op') return; hidden.has(t) ? hidden.delete(t) : hidden.add(t); render(); });
+	document.querySelectorAll('.d1-section[data-sec] .head').forEach(h => h.onclick = () => { const id = h.parentElement.dataset.sec; closed.has(id) ? closed.delete(id) : closed.add(id); renderRail(); });
+	document.querySelectorAll('.conn').forEach(c => {
+		c.onclick = () => { select(c.dataset.go); centre(c.dataset.go, k); };
+		c.onmouseenter = () => { const id = c.dataset.go; const el = world.querySelector(`.slot[data-rid="${id}"]`) || world.querySelector(`.node[data-id="${id}"]`) || world.querySelector('.flabel'); if (el) showHover(id, el); };
+		c.onmouseleave = hideHover;
+	});
+	lucide.createIcons();
+}
+function bounds() {
+	const els = [...world.querySelectorAll('.node')];
+	const x0 = Math.min(...els.map(e => e.offsetLeft)), y0 = Math.min(...els.map(e => e.offsetTop));
+	return { x0, y0, w: Math.max(...els.map(e => e.offsetLeft + e.offsetWidth)) - x0, h: Math.max(...els.map(e => e.offsetTop + e.offsetHeight)) - y0 };
+}
+function renderMini() {
+	const b = bounds(), pad = 60;
+	const mini = document.getElementById('mini');
+	mini.setAttribute('viewBox', `${b.x0 - pad} ${b.y0 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`);
+	mini.innerHTML = [...world.querySelectorAll('.node')].map(e => {
+		const t = R[e.dataset.id]?.t;
+		return `<rect x="${e.offsetLeft}" y="${e.offsetTop}" width="${e.offsetWidth}" height="${e.offsetHeight}" rx="14" fill="${t ? TYPES[t].k : 'var(--d1-dim)'}" opacity=".65"/>`;
+	}).join('');
+}
+
+let tx = 0, ty = 0, k = 1;
+const apply = () => world.style.transform = `translate(${tx}px,${ty}px) scale(${k})`;
+function zoomBy(f, cx, cy) { const c = canvas.getBoundingClientRect(); cx ??= c.width / 2; cy ??= c.height / 2; tx = cx - (cx - tx) * f; ty = cy - (cy - ty) * f; k *= f; apply(); }
+function fit() { const c = canvas.getBoundingClientRect(), b = bounds(); k = Math.min((c.width - 60) / (b.w + 60), (c.height - 80) / (b.h + 100), 1.1); tx = (c.width - b.w * k) / 2 - b.x0 * k; ty = (c.height - b.h * k) / 2 - b.y0 * k; apply(); }
+function centre(id, z) { const c = canvas.getBoundingClientRect(), el = world.querySelector(`.node[data-id="${slotOwner[id] || id}"]`) || world.querySelector('.flabel'); k = z ?? 0.8; tx = c.width / 2 - (el.offsetLeft + el.offsetWidth / 2) * k; ty = c.height / 2 - (el.offsetTop + el.offsetHeight / 2) * k; apply(); }
+canvas.addEventListener('wheel', e => { e.preventDefault(); const c = canvas.getBoundingClientRect(); zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1, e.clientX - c.left, e.clientY - c.top); }, { passive: false });
+let drag = null;
+canvas.addEventListener('mousedown', e => { if (e.target.closest('.node,.ctrls,.mini,.flabel') || e.target.classList.contains('hit')) return; drag = [e.clientX - tx, e.clientY - ty]; canvas.classList.add('panning'); });
+addEventListener('mousemove', e => { if (!drag) return; tx = e.clientX - drag[0]; ty = e.clientY - drag[1]; apply(); });
+addEventListener('mouseup', () => { drag = null; canvas.classList.remove('panning'); });
+render(); centre('opP', 0.75);
+</script>
+</body>
+</html>

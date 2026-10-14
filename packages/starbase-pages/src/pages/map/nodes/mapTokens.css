@@ -1,0 +1,30 @@
+/* The Process map's palette and look. The page root carries .d1-process-map (Task 7); every colour is
+   a kind colour `--k-*` (the old graph's palette, spec §6.2) or a theme / kit token.
+
+   Ink rule: a coloured thing sets `--k`; text on it uses `.k-ink` (below), which mixes `--k` toward
+   the text colour exactly as `--d1-ok` does, so light and dark both pass contrast. */
+.d1-process-map {
+	--k-sample: #9c27b0;
+	--k-op: #ff9800;
+	--k-test: #00acc1;
+	--k-equipment: #607d8b;
+	--k-tool: #795548;
+	--k-edge: #e91e63;
+	--k-material: #4caf50;
+	--k-project: #673ab7;
+	--k-recipe: #7cb342;
+	--k-file: #546e7a;
+	--k-person: #5c6bc0;
+	--k-campaign: #26a69a;
+}
+
+.d1-process-map .k-ink { color: color-mix(in srgb, var(--k) 62%, var(--theme--foreground)); }
+.d1-process-map .k-tint { background: color-mix(in srgb, var(--k) 14%, transparent); }
+
+/* While a card or slot is hovered the page marks everything else .dim and its own wires .hi (§6.3). */
+.d1-process-map .vue-flow__node { transition: opacity 0.15s; }
+.d1-process-map .vue-flow__node.dim { opacity: 0.3; }
+.d1-process-map .vue-flow__edge.dim { opacity: 0.2; }
+.d1-process-map .vue-flow__edge .wire { transition: stroke-width 0.15s; }
+.d1-process-map .vue-flow__edge.hi .wire { stroke: var(--k); stroke-width: 3.2px; }
+.d1-process-map .vue-flow__edge.hi .wire.fat { stroke-width: 6px; }

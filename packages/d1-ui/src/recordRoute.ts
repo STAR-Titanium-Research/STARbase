@@ -13,6 +13,10 @@ const RECORD_PAGES: Record<string, string> = {
 	test_sessions: '/home/tests',
 	campaigns: '/home/campaigns',
 	projects: '/home/projects',
+	// One page renders all three, so moving inside a tool box never remounts it.
+	tool_boxes: '/home/tool-boxes',
+	cutting_inserts: '/home/inserts',
+	insert_edges: '/home/edges',
 };
 
 // Collections that have an Explorer index page (a list rather than one record): the generic index

@@ -561,7 +561,7 @@ test('the shipped rules guard the owner column where update is wider than delete
   }
 });
 
-// ---- team ownership (migration 177): owner_team_id is guarded like owner_person_id -------------------
+// ---- team ownership (migration 183): owner_team_id is guarded like owner_person_id -------------------
 
 // A stand-in that answers each rule as the database would for a person who is `owner`, a team `manager` or a plain team `member`
 // of a team-owned record: the delete rule names the manager's `manage` row and no Can edit role, the update rule names `edit`.

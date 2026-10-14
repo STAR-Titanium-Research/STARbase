@@ -147,9 +147,9 @@ Used in the People list, the person panel, "Who has access", record rails (owner
 
 ## 2. Data model
 
-New migrations from **174** (main is at 172, and fix/form-qa takes 173; check other open branches before claiming).
+New migrations from **180** (main took 173 to 175 and 183; the stack was renumbered 180 to 184 after merging main; check other open branches before claiming).
 
-> **Superseded in part by plan 2 (§10).** Teams are migrations **175** and **176** (174 is the People admin, E8). The access tables,
+> **Superseded in part by plan 2 (§10).** Teams are migrations **181** and **182** (180 is the People admin, E8). The access tables,
 > `team_members`' key and the bookkeeping below are built differently: see E10 to E13. The SQL in this section is the original
 > design, not what shipped.
 
@@ -431,8 +431,9 @@ Where building PR 1 (the admin People page, `docs/superpowers/plans/2026-10-14-p
 - **E7** `email_sent` means "handed to Directus's mailer". Directus sends invites fire-and-forget, so a delivery failure shows only
   in its log; the UI says "sent", never "delivered". A mail error that does surface keeps the login and its link and gives
   `email_sent: false` (the page then points to Resend).
-- **E8 Migration number.** The People admin functions are migration **174** (`20261014000174_people_admin.sql`), not 173:
-  `fix/form-qa` claims 173. The attention counts follow the People page: `login_without_person` counts only active, invited or
+- **E8 Migration number.** The People admin functions are migration **180** (`20261014000180_people_admin.sql`). They were first
+  numbered 173, then 174 (`fix/form-qa` claimed 173); main then gained 173 to 175 and 183 (form blockers, form layout, form
+  values, batches), so the people-and-teams stack was renumbered to start at 180. The attention counts follow the People page: `login_without_person` counts only active, invited or
   suspended logins (archived and draft ones are not listed), and an invited login with no person is in both `login_without_person`
   and `invite_not_accepted`.
 - **E9 Audit trail and header invite.** `PATCH /logins` writes through Directus's `UsersService.updateOne` as the caller (the
@@ -479,13 +480,13 @@ they disagree; each ruling was made while building, with the maintainer's standi
   PR 2 reads `team_members` through `/items` (the People page's Team menu for a member). The deferred constraint "a team with members has a
   manager" is a constraint trigger at commit (23514 "A team must keep at least one manager"); the endpoint answers it as 409
   `LAST_MANAGER`, "Make someone else a manager first". `teams.name` is unique on `lower(btrim(name))`.
-- **E13 Migrations 175 and 176, not 174; 176 replaces 174's functions (§2).** 175 is `teams`, `team_members`, `team_events` and their
-  triggers; 176 is the team grants, derived rows, pending tables, guards, `d1_private.team_decide()`, `team_pending_actionable()`,
-  `team_drift()` / `team_drift_count()` and `team_kinds()`. 176 also replaces migration 174's three people-admin functions:
+- **E13 Migrations 181 and 182 (first numbered 175 and 176, renumbered with the stack); 182 replaces 180's functions (§2).** 181 is `teams`, `team_members`, `team_events` and their
+  triggers; 182 is the team grants, derived rows, pending tables, guards, `d1_private.team_decide()`, `team_pending_actionable()`,
+  `team_drift()` / `team_drift_count()` and `team_kinds()`. 182 also replaces migration 180's three people-admin functions:
   `person_access_list(p, 'teams')` lists the derived rows (source `team`, "granted by" the team's name) and **'shared' and 'investigator'
   leave them out** (so a count does not double); `person_access` returns `(owns, shared, investigator, teams, waiting)` (a new return type:
-  dropped and created); `people_attention` gains the key `former_in_team` (E3, E5). 176 also changes the person upsert target of
-  `d1-record-access`: **deploy the new `d1-record-access` together with 176** (runbook "Teams (PR 2)"). The database gate is
+  dropped and created); `people_attention` gains the key `former_in_team` (E3, E5). 182 also changes the person upsert target of
+  `d1-record-access`: **deploy the new `d1-record-access` together with 182** (runbook "Teams (PR 2)"). The database gate is
   `ROUNDTRIP=2 bash scripts/dev/schema_test_docker.sh` (Ruling G1): `ROUNDTRIP=6` would also roll back main's migration 172, whose re-up
   fails when the reference seed is loaded (already so on main).
 - **E14 Ruling D2: when approval is asked (decision 12, §2.1 last paragraph).** A pending row is **actionable** (shown on Home, in
@@ -509,7 +510,7 @@ they disagree; each ruling was made while building, with the maintainer's standi
   administrator manages every team and every record's team entries.
 - **E16 People page.** The Team menu takes the teams from `GET /d1-teams` (a brief list); an admin's rows get their teams from `GET
   /d1-people-admin/people`, a member's rows from `GET /items/team_members?fields=team_id,person_id&limit=-1` (a Lab Member may read it)
-  (Ruling P1). The person panel's "Through teams" line and "Waiting for approval: N records (M owners)" use the 176 functions. People and
+  (Ruling P1). The person panel's "Through teams" line and "Waiting for approval: N records (M owners)" use the 182 functions. People and
   Teams are a switch in the list bar (`?view=teams`; the default is left out of the address); switching drops the other view's filters.
 - **E17 `TeamCard` is a disclosure, not a dialog (§1.3).** The trigger (any element that names the team) carries `aria-expanded` and
   `aria-controls`; the card is `role="group"` labelled "Team <name>", takes no focus (focus stays on the trigger), says its content through
@@ -525,19 +526,19 @@ they disagree; each ruling was made while building, with the maintainer's standi
   per list request and writes at most 2x** the "before" time; "every list under 80 ms p95" was A1a's measured result, not its gate. The two
   team writers each have an absolute limit of 500 ms (`scripts/dev/perf_compare.py` flags them): `team_join_100_records` and
   `team_grant_20_members` (SQL in `scripts/dev/perf_writes.sql`, through Directus in `scripts/dev/directus_perf_writes.mjs`). They have no
-  "before" (the tables do not exist without 175 and 176), so they are judged against 500 ms only. Measured 2026-10-14 on the seeded copy (`perf_compare.py` before/after: GATE PASS, worst read
+  "before" (the tables do not exist without 181 and 182), so they are judged against 500 ms only. Measured 2026-10-14 on the seeded copy (`perf_compare.py` before/after: GATE PASS, worst read
   p95 143 ms, worst write ratio x1.00): `team_join_100_records` 115 ms and `team_grant_20_members` 81 ms through Directus (59 and 17 ms in SQL).
 - **E21 Preview and tests.** `scripts/dev/explorer_preview.sh`'s default overlay gains `d1-teams` and `d1-person-link`.
   `tests/ui/specs/18-teams.spec.ts` covers the E2E of §6 (grant, pending and approve, decline, Trust future members, leave, the members
   card, last manager, the People/Teams switch); it creates its own logins, people, teams and a Restricted sample and removes them. Spec 17's
   person panel now has four count lines (Through teams).
-- **E22 Final review of plan 2 (corrections to the above).** (1) `team_events` has **no Lab Member read row** (migration 175, `access_rules.json`):
+- **E22 Final review of plan 2 (corrections to the above).** (1) `team_events` has **no Lab Member read row** (migration 181, `access_rules.json`):
   its events name records and people a reader may not see; `GET /d1-teams/:id` serves the history, and an event about a record the caller
   cannot read keeps only kind, time and actor (no `person_id`, `person_name`, record or `detail`). (2) **Waiting for you is owner-only**:
   `GET /d1-teams/pending` and `POST /d1-teams/pending/decide` without `records` act on records the caller owns, an Administrator included;
   an Administrator approves or declines one record at a time in Who has access. (3) A committed write never answers 500: the reads after
   the commit (the team read back for the answer, the people for the mail) are logged and answer what is known, as `d1-record-access` does.
-  (4) `decide` deduplicates `records` by collection and id. (5) Migration 176 adds `teams_lock_first` (BEFORE DELETE, statement level, the
+  (4) `decide` deduplicates `records` by collection and id. (5) Migration 182 adds `teams_lock_first` (BEFORE DELETE, statement level, the
   readers lock first: a team delete cannot deadlock with a member or grant insert) and `d1_private.team_pending_guard` on the five
   `<type>_team_pending` tables (BEFORE INSERT/UPDATE/DELETE; refused unless `d1.team_sync = 'on'`, a DELETE at trigger depth > 1 or an
   UPDATE at depth > 1 that changes only `decided_by_person_id`), a guard like E11's, not a security boundary. (6) An open members card
@@ -547,7 +548,7 @@ they disagree; each ruling was made while building, with the maintainer's standi
 
 Where building PR 3 (Team ownership, `docs/superpowers/plans/2026-10-14-people-3-team-ownership.md`) differs from, or settles, the text above.
 These win over §1 to §7 where they disagree; each ruling was made while building, with the maintainer's standing instruction to continue.
-Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the `manage` level, the bookkeeping and the readers) and **178**
+Migrations are **183** (`team_ownership`: `owner_team_id`, the owner grant, the `manage` level, the bookkeeping and the readers) and **184**
 (`team_ownership_rules`: the regenerated Lab Member rows); they ship together (E25).
 
 - **E23 Ruling O1: the `manage` access level, and managers are the owner wherever the owner is tested (decision 13, §2, §3.2, §3.3).** An
@@ -557,7 +558,7 @@ Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the 
   (not `project_access`: a team is never a PI) and a CHECK lets only the bookkeeping write it (`manage` requires `team_access_id`). Wherever
   SQL or `scripts/access_rules.json` treats `edit` as an editor, `manage` counts too; **wherever the owner is tested, a `manage` row counts
   as the owner**: the Lab Member delete and manage filters, the owner guards (`owner_person_id`, `owner_team_id`, `restricted`), and the
-  approval test (`team_pending_actionable`). Review of migration 177 extended this to the owner-elevation paths of the readers (a campaign
+  approval test (`team_pending_actionable`). Review of migration 183 extended this to the owner-elevation paths of the readers (a campaign
   owner reading its samples, an owner reading its project, a campaign owner reading its operations), the matrix oracle and
   `suspended_owns_records`, so a team's managers read what a person owner reads; and the **orphan amnesty** (an unrestricted operation with
   no owner, project or campaign is open to every member) now needs no team owner either, so a team-owned orphan operation is not open to
@@ -567,13 +568,13 @@ Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the 
   act on shared teams only: PATCH, DELETE and the add on the owning team answer 409 `TEAM_OWNS_RECORD`, members and decide answer 404 as
   if it were not listed. `GET /d1-teams/:id` still lists the owner grant among a team's records with role `own` (the page labels it
   "Owns", and `counts.owns` is counted from the record tables), and `hidden_count` counts them.
-- **E25 Migrations 177 and 178 deploy together, with their extensions.** 177 alone would let an editor write `owner_team_id` through the
-  API and make their own team the owner (the Directus `readonly` flag only affects forms; the owner guards that refuse it are 178's rules and
+- **E25 Migrations 183 and 184 deploy together, with their extensions.** 183 alone would let an editor write `owner_team_id` through the
+  API and make their own team the owner (the Directus `readonly` flag only affects forms; the owner guards that refuse it are 184's rules and
   `d1-access-guard`'s generated `rules.json`). Deploy `d1-access-guard`, `d1-owner-default`, `d1-record-access`, `d1-teams` and
-  `d1-admin-overview` (its ownerless counts need the column) in the same release (runbook "Team ownership (PR 3)"). 178's down restores
-  the previous Lab Member rows from `d1_private.team_ownership_rules_backup`; 177's down refuses (0A000) while any record has an
+  `d1-admin-overview` (its ownerless counts need the column) in the same release (runbook "Team ownership (PR 3)"). 184's down restores
+  the previous Lab Member rows from `d1_private.team_ownership_rules_backup`; 183's down refuses (0A000) while any record has an
   `owner_team_id`. `configure_directus.sql` and `configure_campaigns.sql` register the `owner_team_id` to `teams` relation (they delete
-  all relations of the record tables, so `configure_all.sh` would otherwise drop the one 177 made).
+  all relations of the record tables, so `configure_all.sh` would otherwise drop the one 183 made).
 - **E26 Ruling O3: a record becomes team-owned only through Transfer (Q15).** `d1-access-guard` refuses a non-blank `owner_team_id` on
   `items.create` of a sample, operation, test or campaign for a non-admin (403 FORBIDDEN, "A record becomes team-owned through Transfer
   ownership"; also nested and batch creates); `d1-owner-default` never gives a record created with `owner_team_id` a person owner (an
@@ -608,7 +609,7 @@ Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the 
   force-error tile (`forceErrorOnMyOperations` = `ownedByMe AND …`). Also open: the samples fallback filter on Home now carries the team
   clause (a role that cannot filter on `owner_team_id` gets an error instead of the owner-only fallback; Lab Member can).
 - **E31 Preview and tests.** `scripts/dev/explorer_preview.sh` needs `d1-owner-default d1-access-guard` in the overlay for spec 19 (the
-  README's overlay line has them; the preview applies 177 and 178). `tests/ui/specs/19-team-ownership.spec.ts` is the E2E on real Directus
+  README's overlay line has them; the preview applies 183 and 184). `tests/ui/specs/19-team-ownership.spec.ts` is the E2E on real Directus
   and Postgres, with its own logins, people, teams, samples and operations (removed in `finally`): a person-to-team transfer in the
   browser (owner row, hidden owner grant, previous owner kept as Can edit), a manager and a plain member of the same team on the same
   record (**the person and the role conditions of the delete and manage rules bind to the same access row**: the member's `edit` row does
@@ -619,8 +620,8 @@ Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the 
   (owner grant and derived rows gone, members lose access, the team then deletes), and the team-owned orphan operation (read by a member,
   refused to a stranger, while an ownerless one is open). **Not covered:** the mails (no transport in the preview), the My work and
   team-filter views of team-owned records in a browser (the pure-function tests cover them) and the E30 readers.
-  **Performance (E20's gate, 2026-10-14, seeded copy of live, 177 and 178 withheld against applied):** worst read p95 144 ms (a stranger's
-  `co_owned_operation_all_fields`, 38 to 144 ms, from 177; every other read within x1.7), writes at most x1.53, the team writers 30 and 71 ms
+  **Performance (E20's gate, 2026-10-14, seeded copy of live, 183 and 184 withheld against applied):** worst read p95 144 ms (a stranger's
+  `co_owned_operation_all_fields`, 38 to 144 ms, from 183; every other read within x1.7), writes at most x1.53, the team writers 30 and 71 ms
   in SQL and 106 and 123 ms through Directus (limit 500 ms). `perf_compare.py` prints FAIL for them because it sets the Directus "after" lines against the SQL-only "before" (x7.07, x3.42); like for
   like in SQL they are x2.0 and x1.97 (n=3 medians of a few milliseconds), and through Directus they have no "before".
   Details and the caveat about two machine-loaded runs: runbook "Team ownership (PR 3)".

@@ -111,7 +111,7 @@ function makeDb(initial, hook = null) {
           onConflict: (conflict) => ({
             merge: async (patch) => {
               if (!conflict?.partialIndex) {
-                // the own-entry unique key is a PARTIAL index since migration 176: a plain column list cannot infer it
+                // the own-entry unique key is a PARTIAL index since migration 182: a plain column list cannot infer it
                 throw Object.assign(new Error('there is no unique or exclusion constraint matching the ON CONFLICT specification'), { code: '42P10' });
               }
               const cols = conflict.partialIndex.columns;
@@ -1029,7 +1029,7 @@ test('a read-back that fails after the commit still answers 200 with the committ
   assert.equal(calls.mail.sent.length, 0);
 });
 
-// ---- teams in who-has-access (migration 176) -------------------------------------------------------------------------
+// ---- teams in who-has-access (migration 182) -------------------------------------------------------------------------
 
 // What the database does for the team functions, in the in-memory world: team_pending_actionable answers `actionable(ta, person)`;
 // team_decide approves (the pending row goes, a derived row appears) or declines (the row stays, declined). Every call is recorded.
@@ -1412,7 +1412,7 @@ test('mailContent: via adds "via <team>" to the subject and the body, HTML-escap
   assert.ok(!/via/.test(mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1' }).subject));
 });
 
-// ---- team ownership (migration 177, People 3 Task 3) ---------------------------------------------------------------------
+// ---- team ownership (migration 183, People 3 Task 3) ---------------------------------------------------------------------
 // The database makes the owner grant (role own) and its derived rows (manage / edit) when owner_team_id is set; this in-memory world has
 // no triggers, so the tests look at what the ENDPOINT writes and answers, and put the grant and rows in the world where a read needs them.
 

@@ -21,6 +21,14 @@ const bm = (over: Partial<Bookmark> = {}): Bookmark => ({
 });
 
 describe('cellText', () => {
+	it('shows the label of a coded dropdown, never the stored code', () => {
+		expect(cellText({ form: 'tensile_coupon' }, col(samples, 'form'), samples)).toBe('Tensile coupon (ISO 6892)');
+		expect(cellText({ form: 'legacy_shape' }, col(samples, 'form'), samples)).toBe('Legacy shape');
+		expect(cellText({ form: null }, col(samples, 'form'), samples)).toBe('');
+		const equipment = indexDefBySlug('equipment')!;
+		expect(cellText({ equipment_type: 'Sample_Prep' }, col(equipment, 'equipment_type'), equipment)).toBe('Sample prep');
+	});
+
 	it('shows a relation by its display value, never a bare key', () => {
 		const material = col(samples, 'material_id');
 		expect(cellText({ material_id: { alloy_code: 'Ti64' } }, material, samples)).toBe('Ti64');
@@ -213,6 +221,15 @@ describe('chip options', () => {
 		expect(enumOptionParams('status')).toEqual({ groupBy: ['status'], aggregate: { count: '*' }, limit: 200 });
 		const rows = [{ status: 'planned' }, { status: 'active' }, { status: null }, { status: '' }, { status: 'active' }, { status: 'Complete' }];
 		expect(enumOptions(rows, 'status').map((o) => o.value)).toEqual(['active', 'Complete', 'planned']);
+	});
+
+	it('labels the enum chips of a coded dropdown, sorted by label, and keeps the stored value', () => {
+		const rows = [{ equipment_type: 'Sample_Prep' }, { equipment_type: 'FAST' }, { equipment_type: 'Binder_Jet_Printer' }];
+		expect(enumOptions(rows, 'equipment_type', 'equipmentType')).toEqual([
+			{ value: 'Binder_Jet_Printer', label: 'Binder jet printer' },
+			{ value: 'FAST', label: 'FAST' },
+			{ value: 'Sample_Prep', label: 'Sample prep' },
+		]);
 	});
 
 	it('offers yes and no for a boolean', () => {

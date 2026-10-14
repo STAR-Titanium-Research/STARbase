@@ -15,7 +15,7 @@
 - **Ruling D1 (data model, overrides spec decision 10 / §2.2 and ADR-0016 decision 3):** no `<type>_editors` / `<type>_managers` tables and no change to `scripts/access_rules.json` or the Directus rules. Team access is expanded into derived rows in `<type>_access` (`team_access_id` set). Task 9 amends the spec (erratum) and ADR-0016. Reason: the derived rows reuse the readers machinery, the Restricted gates and the existing edit filters; the ADR design needed a new generator item kind, new aliases in three places, editors oracles that do not exist and a rewrite of every Lab Member update/delete rule, gated by a matrix CI does not run.
 - **Ruling D2 ("would raise access"):** a pending row is *actionable* (shown on Home, in emails, in "N waiting") only while approving it would raise that person's access: for a `view` grant (or `investigator`) the person's login is not in `<type>_readers` for the record; for an `edit` grant the person has no `edit`-level `<type>_access` row (direct or derived) on the record and is not its owner, co-owner (`sample_co_owners`) or PI.
 - Words follow `CONTEXT.md`: **team**, **team manager**, **pending member**, **Trust future members**, **access level** (Can view, Can edit, Investigator). Never "group" for a team.
-- Migrations start at **175** (main is at 172, #278 owns 173, PR 1 owns 174); check `git ls-tree` of open branches before committing a number.
+- Migrations start at **181** (originally 175; renumbered after main took 173-177, PR 1 owns 180); check `git ls-tree` of open branches before committing a number.
 - Every migration that creates or drops anything in `d1_private` joins the hard-coded down-block chain in `tests/phase1_schema.sh` (~2957–3040, newest first; see PR 1's `pa_down`), and `scripts/ci/migration_roundtrip.sh` must stay clean.
 - New tables are **not** granted to `d1_llm_readonly`.
 - Database gate (GitHub CI does not run it): `ROUNDTRIP=6 bash scripts/dev/schema_test_docker.sh` (phase1, readers matrix, people_admin, teams) — 0 failures; paste the summary into the PR body. Compare failures against `main`, never against this branch's own earlier commits.
@@ -38,8 +38,8 @@
 
 | File | Responsibility |
 |---|---|
-| `db/migrations/20261014000175_teams.sql` | `teams`, `team_members`, `team_events`; manager constraint; Directus metadata; Lab Member read rows |
-| `db/migrations/20261014000176_team_access.sql` | `<type>_team_access` ×5, `<type>_team_pending` ×5, `team_access_id` on `<type>_access` + uniques, bookkeeping + guard triggers, `d1_private.team_decide()`, `d1_private.team_drift()`, history writes; replaces 174's three functions (source `team`, key `former_in_team`) |
+| `db/migrations/20261014000181_teams.sql` | `teams`, `team_members`, `team_events`; manager constraint; Directus metadata; Lab Member read rows |
+| `db/migrations/20261014000182_team_access.sql` | `<type>_team_access` ×5, `<type>_team_pending` ×5, `team_access_id` on `<type>_access` + uniques, bookkeeping + guard triggers, `d1_private.team_decide()`, `d1_private.team_drift()`, history writes; replaces 180's three functions (source `team`, key `former_in_team`) |
 | `tests/teams.sh` | SQL tests (rolled-back cases on a TEMPLATE copy, like `tests/people_admin.sh`) |
 | `tests/readers_matrix.sh` | new mutation cases for team grants |
 | `core/extensions/d1-teams/` | the teams endpoint |
@@ -53,9 +53,9 @@
 
 ---
 
-### Task 1: teams, members, history (migration 175)
+### Task 1: teams, members, history (migration 181)
 
-**Files:** Create `db/migrations/20261014000175_teams.sql`, `tests/teams.sh`; Modify `tests/phase1_schema.sh` (down chain if anything lands in `d1_private`), `.github/workflows/ci.yml` (run `bash tests/teams.sh` after `tests/people_admin.sh`), `scripts/dev/schema_test_docker.sh` (run it too), `scripts/configure_users_and_policies.sql` (Lab Member read rows for the three tables, outside the generated block).
+**Files:** Create `db/migrations/20261014000181_teams.sql`, `tests/teams.sh`; Modify `tests/phase1_schema.sh` (down chain if anything lands in `d1_private`), `.github/workflows/ci.yml` (run `bash tests/teams.sh` after `tests/people_admin.sh`), `scripts/dev/schema_test_docker.sh` (run it too), `scripts/configure_users_and_policies.sql` (Lab Member read rows for the three tables, outside the generated block).
 
 **Interfaces — produces:**
 ```sql
@@ -78,11 +78,11 @@ team_events(event_id bigint generated always as identity primary key, team_id uu
 
 - [ ] **Step 1: failing SQL tests** in `tests/teams.sh` (harness copied from `tests/people_admin.sh`): `name_is_unique_case_insensitive`; `colour_must_be_in_palette`; `team_needs_a_manager` (team with one non-manager member → commit raises; with a manager → ok; removing the last manager in its own transaction → raises; deleting the team → ok); `history_records_member_changes` (actor from `d1.actor_identity`); `not_granted_to_llm_role`.
 - [ ] **Step 2:** run → FAIL. **Step 3:** write the migration (+ down). **Step 4:** run → PASS; `bash scripts/ci/migration_roundtrip.sh` clean; phase1 0 failures.
-- [ ] **Step 5: Commit** `feat(db): teams, members and history (migration 175)`
+- [ ] **Step 5: Commit** `feat(db): teams, members and history (migration 181)`
 
-### Task 2: team grants expanded into derived access rows (migration 176)
+### Task 2: team grants expanded into derived access rows (migration 182)
 
-**Files:** Create `db/migrations/20261014000176_team_access.sql`; Modify `tests/teams.sh`, `tests/readers_matrix.sh`, `tests/phase1_schema.sh` (down chain), `tests/people_admin.sh` (new source/key expectations).
+**Files:** Create `db/migrations/20261014000182_team_access.sql`; Modify `tests/teams.sh`, `tests/readers_matrix.sh`, `tests/phase1_schema.sh` (down chain), `tests/people_admin.sh` (new source/key expectations).
 
 **Interfaces — produces:**
 ```sql
@@ -112,13 +112,13 @@ alter table <T>_access add column team_access_id uuid references <T>_team_access
 - `d1_private.team_decide(collection text, team_access_id uuid, person_id uuid, decision text) returns void` (`'approve'|'decline'`): approve → delete the pending row, insert the derived row; decline → state `declined`; event `approved`/`declined` with the record; raises when there is no pending/declined row.
 - `d1_private.team_pending_actionable(collection text, team_access_id uuid, person_id uuid) returns boolean` — Ruling D2.
 - `d1_private.team_drift() returns table (collection text, team_access_id uuid, person_id uuid, problem text)` — derived rows vs active members (`missing`, `extra`, `role`); empty when healthy.
-- Replace migration 174's functions (same signatures): `person_access_list(p, which)` gains `which = 'teams'` (derived rows, `source = 'team'`, `granted_by` = team name) and excludes derived rows from `'shared'`; `person_access` returns `(owns, shared, investigator, teams int, waiting int)` — new return type → `DROP FUNCTION` + `CREATE` (callers in d1-people-admin updated in Task 5); `people_attention()` gains key `former_in_team` (people with `active = false` in any team).
+- Replace migration 180's functions (same signatures): `person_access_list(p, which)` gains `which = 'teams'` (derived rows, `source = 'team'`, `granted_by` = team name) and excludes derived rows from `'shared'`; `person_access` returns `(owns, shared, investigator, teams int, waiting int)` — new return type → `DROP FUNCTION` + `CREATE` (callers in d1-people-admin updated in Task 5); `people_attention()` gains key `former_in_team` (people with `active = false` in any team).
 - The existing readers triggers on `<T>_access` fire on derived inserts/deletes unchanged (their `upd` guard tuple also must include `team_access_id`).
 
 - [ ] **Step 1: failing tests** in `tests/teams.sh`: `grant_creates_rows_for_members` (and `sample_readers` gains their logins); `join_without_trust_is_pending` (no derived row, no readers row, `team_pending_actionable` true); `join_with_trust_is_active`; `approve_and_decline` (approve → derived + readers; decline → `declined`, not actionable; approve after decline works); `trust_turned_on_activates_pending_not_declined`; `role_change_follows_grant` (view→edit gives update rights: Lab Member update filter on `physical_samples` evaluated via the readers/edit SQL equivalent — assert an `edit` derived row exists); `leave_removes_access_and_readers`; `restricted_record_team_grant`; `derived_rows_are_guarded` (direct insert/update/delete refused; grant delete and parent delete cascade fine); `direct_and_team_rows_coexist` (person with a direct `view` row and a team `edit` row: two rows, both removable independently); `team_drift_is_empty_and_detects`; `actionable_rule_D2` (view grant to someone already a reader → false; edit grant to the owner → false); `person_access_sources` (team rows counted under `teams`, not `shared`; `waiting` counts actionable pending); `former_in_team_attention`.
 - [ ] In `tests/readers_matrix.sh` add mutation cases `m.c_team_grant`, `m.c_team_join`, `m.c_team_leave`, `m.c_team_trust`, `m.c_team_delete` (each asserts `readers_drift()` empty after the mutation and after its reversal, like the existing cases); register them in the run list.
-- [ ] **Step 2:** FAIL. **Step 3:** migration (+ down that restores 174's functions and the original unique constraints). **Step 4:** `ROUNDTRIP=6 bash scripts/dev/schema_test_docker.sh` → phase1 0, readers matrix 0 failures, people_admin and teams pass.
-- [ ] **Step 5: Commit** `feat(db): team grants as derived access rows, pending joiners, drift check (migration 176)`
+- [ ] **Step 2:** FAIL. **Step 3:** migration (+ down that restores 180's functions and the original unique constraints). **Step 4:** `ROUNDTRIP=6 bash scripts/dev/schema_test_docker.sh` → phase1 0, readers matrix 0 failures, people_admin and teams pass.
+- [ ] **Step 5: Commit** `feat(db): team grants as derived access rows, pending joiners, drift check (migration 182)`
 
 ### Task 3: `d1-teams` endpoint
 
@@ -189,7 +189,7 @@ alter table <T>_access add column team_access_id uuid references <T>_team_access
 
 ### Task 8: E2E, perf scenarios, docs
 
-**Files:** Create `tests/ui/specs/18-teams.spec.ts`; Modify `tests/ui/README.md`, `scripts/dev/explorer_preview.sh` (default overlay + `d1-teams`, `d1-person-link`), `scripts/dev/directus_perf_writes.mjs` / `perf_writes.sql` (scenarios `team_join_100_records`, `team_grant_20_members`), `docs/runbooks/starbase.md` ("Teams (PR 2)": migrations 175–176, restart directus, run `SELECT * FROM d1_private.team_drift()` = 0 rows), `docs/superpowers/specs/2026-10-14-people-and-teams-design.md` (§10 errata plan 2: Ruling D1 replaces §2.2; Ruling D2; perf gate 300 ms not 80 ms; logo overwrite gap in §7), `docs/adr/0016-teams.md` (decision 3 amended: derived rows, with the reason; status stays Proposed), `core/README.md`.
+**Files:** Create `tests/ui/specs/18-teams.spec.ts`; Modify `tests/ui/README.md`, `scripts/dev/explorer_preview.sh` (default overlay + `d1-teams`, `d1-person-link`), `scripts/dev/directus_perf_writes.mjs` / `perf_writes.sql` (scenarios `team_join_100_records`, `team_grant_20_members`), `docs/runbooks/starbase.md` ("Teams (PR 2)": migrations 181–182, restart directus, run `SELECT * FROM d1_private.team_drift()` = 0 rows), `docs/superpowers/specs/2026-10-14-people-and-teams-design.md` (§10 errata plan 2: Ruling D1 replaces §2.2; Ruling D2; perf gate 300 ms not 80 ms; logo overwrite gap in §7), `docs/adr/0016-teams.md` (decision 3 amended: derived rows, with the reason; status stays Proposed), `core/README.md`.
 
 - [ ] **Step 1: spec 18** (preview as in plan 1 Task 9, overlay incl. `d1-teams d1-record-access d1-people-admin d1-person-link`): admin creates a team, adds the member as manager; member shares a sample they own with the team… (use admin-created fixtures via `adminApi`): (a) team grant gives an active member read + edit (open the sample page as that member); (b) a new joiner without trust is pending — cannot read; owner sees Waiting for you, approves → can read; (c) trust future members → next joiner reads at once; (d) leaving removes access; (e) hover/focus on a team row in Who-has-access shows the members card; (f) last-manager leave refused with the message; (g) People/Teams switch and team page load for a member. Specs 13, 15, 17 still pass.
 - [ ] **Step 2:** run spec 18 + 13 + 15 + 17 on the preview → PASS. Run `D1_SMOKE_MODE=perf` before/after with `perf_compare.py` if the preview supports it; otherwise record why in the report and leave it as a runbook step.

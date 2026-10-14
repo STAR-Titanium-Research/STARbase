@@ -45,6 +45,18 @@ const replaySurfaceSpeed = computed(() => (Math.PI * w.replay.diam * w.replay.rp
 // Depth of cut: the schema splits axial/radial: prefer radial (the conventional "depth of cut" in
 // turning) and fall back to axial when only that was recorded.
 const replayDepthOfCut = computed(() => w.machining.radial_doc || w.machining.axial_doc || '—');
+// #288: the depths of cut had no input on the Record page once MetadataPanel.vue stopped being
+// mounted, so every cut uploaded without them. They sit with the other cut parameters now. The
+// machining fields are strings (metaObj() trims them, setupPrefs stores strings) while StatTile's
+// input writes numbers, so convert at the boundary: a cleared or invalid field is ''.
+function docModel(key: 'radial_doc' | 'axial_doc') {
+	return computed<number | string>({
+		get: () => w.machining[key],
+		set: (v) => { w.machining[key] = typeof v === 'number' && Number.isFinite(v) ? String(v) : ''; },
+	});
+}
+const radialDoc = docModel('radial_doc');
+const axialDoc = docModel('axial_doc');
 function fmtDuration(sec: number): string {
 	if (!Number.isFinite(sec) || sec <= 0) return '—';
 	const m = Math.floor(sec / 60), s = Math.round(sec % 60);
@@ -78,8 +90,7 @@ function mergeDiam() { w.cfg.inner_diam = 0; diamSplit.value = false; }
 // is the baseline that's always open: per the earlier field-frequency review these change far more
 // often between cuts than Machine/Operator do, so they're worth the space on any screen. Post-cut
 // opens next as height allows (only relevant once the cut is done, so the least useful to show
-// while setting one up). Coolant & geometry now live in MetadataPanel.vue's Advanced section, not
-// here. Acquisition's processing toggles used to be a third card here but live in the footer now,
+// while setting one up). The depths of cut are tiles in the cut-parameter grid above (#288). Acquisition's processing toggles used to be a third card here but live in the footer now,
 // next to Start — see RecordingActions.vue.
 //
 // `touched` records a card the OPERATOR has manually toggled, so a later resize (dragging the grid
@@ -188,6 +199,10 @@ onBeforeUnmount(() => {
 			<div class="stat-grid">
 				<StatTile editable label="Spindle" unit="RPM" v-model="w.cfg.rpm" :disabled="w.locked.value" />
 				<StatTile editable label="Feed" unit="mm/rev" step="0.01" v-model="w.cfg.feed" :disabled="w.locked.value" />
+				<StatTile editable label="Depth of cut" unit="mm" step="0.01" v-model="radialDoc" :disabled="w.locked.value"
+					title="Radial depth of cut (ap in turning)" data-testid="radial-doc" />
+				<StatTile editable label="Axial DoC" unit="mm" step="0.01" v-model="axialDoc" :disabled="w.locked.value"
+					title="Axial depth of cut" data-testid="axial-doc" />
 				<!-- Diameter: one tile (solid stock assumed) unless split — see script comment. -->
 				<StatTile v-if="!diamSplit" editable label="Diameter" unit="mm" v-model="w.cfg.diam" :disabled="w.locked.value"
 					class="span2" title="Double-click to split into outer/inner, for tube or annular stock" @dblclick="splitDiam" />

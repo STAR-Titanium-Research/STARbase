@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { RecordLink, Section, StatusBadge, asRecord, humanise, testSubjectCount, type TestSubjects } from '@d1/ui';
+import { RecordLink, Section, StatusBadge, asRecord, choiceLabel, humanise, testSubjectCount, type TestSubjects } from '@d1/ui';
 
 // What the test was run on: the subjects of the test_sessions_subject junction (samples, or for
 // tool tests an insert edge). `sample` is the derived primary sample (test_sessions.sample_id, kept
@@ -36,7 +36,7 @@ const total = computed(() => testSubjectCount(props.sample, props.subjects, !!pr
 				<span class="role">Sample</span>
 				<RecordLink collection="physical_samples" :id="s.sample_id" class="code">{{ s.sample_code || 'Sample' }}</RecordLink>
 				<span v-if="s.nickname" class="muted">{{ s.nickname }}</span>
-				<span v-if="s.form" class="muted">{{ s.form }}</span>
+				<span v-if="s.form" class="muted">{{ choiceLabel('geometry', s.form) }}</span>
 				<StatusBadge kind="sample" :value="s.current_status" />
 			</li>
 			<li v-for="o in subjects.others" :key="o.collection + o.item" class="row">

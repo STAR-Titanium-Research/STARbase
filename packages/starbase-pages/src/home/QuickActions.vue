@@ -7,7 +7,7 @@ import { pingVisit } from '../usagePing';
 // The things a researcher does every day, as buttons in the Home greeting (plus Scan a label). The other Explorer
 // pages and the analysis tools are in the sidebar, so they are not repeated here. There is no tile
 // for Ask the database (hidden for now, by decision on 2026-10-09) or for the Dashboards module
-// (being retired; its lineage graph is to be rebuilt).
+// (being retired).
 // `key` is the action's usage target (core/extensions/d1-usage PAGE_KEYS): opening one counts for the
 // Frequently used panel. The two forms are routes, which the router hook also sees (the ping filter
 // sends one of the two); Print labels is a route too; Scan a label opens a dialog and is not pinged.

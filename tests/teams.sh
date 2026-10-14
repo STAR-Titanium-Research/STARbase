@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Teams (People 2, Task 1, migration 20261014000175): the teams, team_members and team_events tables, the "a team keeps a manager" deferred
-# constraint, the history triggers and the Directus registration. Team grants (Task 2, migration 20261014000176): a grant on a record expands
+# Teams (People 2, Task 1, migration 20261014000181): the teams, team_members and team_events tables, the "a team keeps a manager" deferred
+# constraint, the history triggers and the Directus registration. Team grants (Task 2, migration 20261014000182): a grant on a record expands
 # into derived <type>_access rows for the team's members, joiners wait as pending rows unless the grant trusts new members, the guard on the
 # derived rows, team_decide, team_pending_actionable (Ruling D2), team_drift, and the people-admin functions' team sources.
 # Most cases run in BEGIN ... ROLLBACK on a COPY of the migrated database
@@ -359,7 +359,7 @@ COMMIT;
 SQL
 
 # ------------------------------------------------------------------------------------------------------------------------------
-# Team grants (migration 176). The shared fixture: an owner O, members A (manager) and B of team T, two more people C and D outside
+# Team grants (migration 182). The shared fixture: an owner O, members A (manager) and B of team T, two more people C and D outside
 # the team, every one with a login; a sample S owned by O and a Restricted sample R owned by O. The ids are in the temp table tf, read
 # with pg_temp.tf(kind); pg_temp.rd(login, sample) says whether the login is in sample_readers for the sample.
 # ------------------------------------------------------------------------------------------------------------------------------
@@ -920,7 +920,7 @@ END $$;
 SQL
 
 # ------------------------------------------------------------------------------------------------------------------------------
-# Team ownership (migration 177, People 3 Task 1): owner_team_id, the owner grant (role own) and the manage rows. The shared team fixture:
+# Team ownership (migration 183, People 3 Task 1): owner_team_id, the owner grant (role own) and the manage rows. The shared team fixture:
 # team T has the manager A and the member B; C and D are outside; the samples S and R are owned by O.
 # ------------------------------------------------------------------------------------------------------------------------------
 echo "== Team ownership: owner_team_id, the owner grant, manage rows =="
@@ -1475,7 +1475,7 @@ team_delete_lock_order_case() {
 }
 team_delete_lock_order_case
 
-# --- two sessions: owner_team_id written on a campaign while a team is deleted (migration 177). Session 2 holds the readers lock (a write to
+# --- two sessions: owner_team_id written on a campaign while a team is deleted (migration 183). Session 2 holds the readers lock (a write to
 # physical_samples takes it first) and 2 s later deletes the team; session 1, one second in, makes the team the owner of a campaign (the foreign key
 # takes KEY SHARE on the team row). campaigns has no readers lock before its rows are locked, so without the BEFORE STATEMENT trigger
 # campaigns_owner_team_lock session 1 locks the campaign and the team row and then waits for the readers lock (in the owner-grant trigger) while

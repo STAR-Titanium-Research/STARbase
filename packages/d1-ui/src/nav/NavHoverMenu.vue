@@ -11,9 +11,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import NavIcon from './NavIcon.vue';
 import SidebarRow from './SidebarRow.vue';
 import { pinKey } from './sidebarModel';
-import type { PinRef, ResolvedPin, SidebarLink, SidebarSection, SidebarView } from './sidebarModel';
+import type { PinRef, ResolvedPin, SidebarLink, SidebarSection } from './sidebarModel';
 import { placeMenu, scrollMovedAnchor } from './railMenu';
-import { viewAsRow } from './sidebarRows';
 import { useSidebarData } from './useSidebarData';
 
 const props = defineProps<{
@@ -51,7 +50,6 @@ const togglePin = (ref_: PinRef | null) => {
 	if (ref_ && pinsReady.value) void pinState.toggle(ref_);
 };
 const linkKey = (l: SidebarLink) => l.to;
-const viewKey = (v: SidebarView) => `view:${v.id}`;
 
 // Fixed to the window, so it would be left behind by a scroll that moves its icon, or by a resize.
 function onWindowChange(e: Event) {
@@ -120,21 +118,6 @@ watch(() => props.anchor, place);
 								@toggle-pin="togglePin(link.pin)"
 								@dragstart="$event.preventDefault()"
 							/>
-							<ul v-if="link.views.length" class="rows" :aria-label="`${link.label} saved views`">
-								<li v-for="view in link.views" :key="viewKey(view)">
-									<SidebarRow
-										:item="viewAsRow(link, view)"
-										variant="section"
-										plain
-										nested
-										:pinned="pinState.isPinned(view.pin)"
-										:current="isCurrent(view.to)"
-										:pins-ready="pinsReady"
-										@toggle-pin="togglePin(view.pin)"
-										@dragstart="$event.preventDefault()"
-									/>
-								</li>
-							</ul>
 						</li>
 					</ul>
 				</template>

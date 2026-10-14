@@ -58,6 +58,9 @@ Labels
   label_templates              printable label layouts (sheet or roll) for the Explorer labels page
   label_settings               singleton: the lab contact email printed into every label's QR code
 
+Batches
+  batches                      a job done on several samples together (B-0001, ...); manufacturing_operations and test_sessions point at it with batch_id
+
 Raw-material provenance
   raw_stock_lots               inbound material ledger
 

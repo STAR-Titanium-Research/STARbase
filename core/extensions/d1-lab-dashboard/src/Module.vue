@@ -20,9 +20,6 @@
 			<router-link to="/d1-lab-dashboard/fast">
 				<v-button :secondary="!isFast" small>FAST</v-button>
 			</router-link>
-			<router-link to="/d1-lab-dashboard/graph">
-				<v-button :secondary="!isGraph" small>Node Graph</v-button>
-			</router-link>
 		</template>
 
 		<router-view />
@@ -37,5 +34,4 @@ const route = useRoute();
 const isMachining = computed(() => route.path.includes('machining'));
 const isSamples = computed(() => route.path.includes('samples'));
 const isFast = computed(() => route.path.includes('fast'));
-const isGraph = computed(() => route.path.includes('graph'));
 </script>

@@ -571,6 +571,61 @@ def test_params_tables_listed_as_unfiltered_are_the_stale_ones():
     assert not stale & set(DOC["rules"])
 
 
+def test_members_cannot_edit_co_owners_or_secondary_investigators_in_the_form():
+    """Plan 2026-10-14-form-layout, decision 5: the two share-with-others aliases leave the create and update field lists of
+    their record's Lab Member rows. Read, delete and every other rule stay "*": STARbase reads both aliases and Directus
+    answers a read of a field the policy lacks with HTTP 403."""
+    for collection, left_out in (
+        ("physical_samples", "co_owners"),
+        ("projects", "secondary_investigators"),
+    ):
+        lists = {}
+        for action in ("create", "update"):
+            fields = BY_KEY[(collection, action)]["fields"]
+            assert fields != "*"
+            names = fields.split(",")
+            assert len(names) == len(set(names))
+            assert left_out not in names
+            lists[action] = names
+        assert lists["create"] == lists["update"]
+        for action in ("read", "delete"):
+            assert BY_KEY[(collection, action)]["fields"] == "*"
+    # no other ruled row names a field list
+    listed = {
+        k for k, r in BY_KEY.items() if r["fields"] != "*" and k[0] in DOC["rules"]
+    }
+    assert listed == {
+        ("physical_samples", "create"), ("physical_samples", "update"),
+        ("projects", "create"), ("projects", "update"),
+    }  # fmt: skip
+
+
+def test_rule_fields_are_validated():
+    with pytest.raises(gen.RulesError):  # a list that does not exist
+        gen.build_rows({**DOC, "rule_fields": {"projects": {"update": "nope"}}})
+    with pytest.raises(gen.RulesError):  # an action the collection has no list for
+        gen.build_rows(
+            {**DOC, "rule_fields": {"projects": {"read": "x"}, "people": {}}}
+        )
+    with pytest.raises(gen.RulesError):  # a collection without rules
+        gen.build_rows(
+            {
+                **DOC,
+                "rule_fields": {
+                    "materials": {"update": "project.not_secondary_investigators"}
+                },
+            }
+        )
+    with pytest.raises(gen.RulesError):  # duplicates
+        gen.build_rows(
+            {
+                **DOC,
+                "field_sets": {"d": ["a", "a"]},
+                "rule_fields": {"projects": {"update": "d"}},
+            }
+        )
+
+
 def test_set_cycles_and_unknown_sets_are_rejected():
     with pytest.raises(gen.RulesError):
         gen.expand({"a": [{"set": "a"}]}, "a")
@@ -1168,7 +1223,7 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
             f = RULES[(collection, action)]
             assert f["_and"][0] == READER_TERM, (collection, action)
             assert "_some" not in json.dumps(f), (collection, action)
-    # a team-owned record (migration 177): the team's managers hold a derived `manage` row and act as the owner,
+    # a team-owned record (migration 183): the team's managers hold a derived `manage` row and act as the owner,
     # its other members hold `edit` and act as editors (Ruling O1)
     edit_role = [
         {"access": {"person_id": {"user_id": U}}},
@@ -1732,7 +1787,7 @@ def test_no_update_delete_or_manage_filter_contains_a_some():
 
 
 # =================================================================================================
-# Team ownership (migration 177, Ruling O1): a team-owned record has no owner_person_id; the team's managers hold a
+# Team ownership (migration 183, Ruling O1): a team-owned record has no owner_person_id; the team's managers hold a
 # derived `manage` row and act as the owner, its other members hold `edit` and act as editors
 # =================================================================================================
 
@@ -1803,7 +1858,7 @@ def test_a_manager_owns_the_children_a_sample_owner_would():
 
 
 def test_a_demoted_manager_loses_the_owner_powers_at_once():
-    """Demotion rewrites the derived role from manage to edit (migration 177): the same rules then refuse delete."""
+    """Demotion rewrites the derived role from manage to edit (migration 183): the same rules then refuse delete."""
     w = _team_owned_world()
     for row in (
         w.t["sample_access"]

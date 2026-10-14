@@ -40,6 +40,7 @@ const ALL_FIELDS = [
   ['campaigns', 'owner_person_id'],
   ['manufacturing_operations', 'owner_person_id'],
   ['test_sessions', 'owner_person_id'],
+  ['batches', 'owner_person_id'],
   ['projects', 'principal_investigator_person'],
 ];
 
@@ -159,7 +160,7 @@ test('an array payload (createMany) fills every blank item with one lookup', asy
   assert.equal(db.calls.length, 1);
 });
 
-// Team ownership (migration 177): num_nonnulls(owner_person_id, owner_team_id) <= 1, so a record
+// Team ownership (migration 183): num_nonnulls(owner_person_id, owner_team_id) <= 1, so a record
 // created for a team must not also get the creator as person owner.
 for (const collection of ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns']) {
   test(`${collection}: a new record that sets owner_team_id gets no person owner, and no lookup`, async () => {

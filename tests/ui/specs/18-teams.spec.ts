@@ -4,7 +4,7 @@ import { D1_LOCAL, STAR_BASE, account, adminApi, pointAtD1 } from '../starbase/t
 // Teams (People 2: d1-teams + d1-record-access team entries + STARbase Teams view, team page, Who has access and Home "Waiting for
 // you"), in a real browser against the d1-starbase preview, ports layout, same setup as spec 14 (tests/ui/README.md). The preview
 // overlay needs d1-teams, d1-record-access, d1-people-admin and d1-person-link (the preview script's default has them). Migrations
-// 175 and 176 are on the preview copy. Run: npx playwright test specs/18-teams.spec.ts
+// 181 and 182 are on the preview copy. Run: npx playwright test specs/18-teams.spec.ts
 //
 // Cast, all made by the tests and removed in `finally`: the preview Lab Member ("Preview Member", M) creates the teams and is their
 // manager; OWNER owns a Restricted sample; JOINER and OTHER are further Lab Members with a person each (d1-person-link makes the

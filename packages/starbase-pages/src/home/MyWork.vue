@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { AppLink, RecordCard, Section, StatusBadge, campaignTypeLabel, collectionRoute, formatDate, humanise, projectStatusLabel, recordRoute } from '@d1/ui';
+import { AppLink, RecordCard, Section, StatusBadge, campaignTypeLabel, choiceLabel, collectionRoute, formatDate, humanise, projectStatusLabel, recordRoute } from '@d1/ui';
 import { CARD_LIMIT, SAMPLE_LIMIT, useMyWork } from './useMyWork';
 
 // "Your work": the projects where I am PI or investigator, the campaigns I own and my newest
@@ -90,7 +90,7 @@ const anything = computed(() => projects.value.data.length + campaigns.value.dat
 					:key="s.sample_id"
 					:to="recordRoute('physical_samples', s.sample_id)"
 					:code="s.sample_code"
-					:name="s.material_id?.common_name || s.form || '—'"
+					:name="s.material_id?.common_name || choiceLabel('geometry', s.form) || '—'"
 				>
 					<template #tag><StatusBadge kind="sample" :value="s.current_status" /></template>
 					<template #meta>Updated {{ formatDate(s.updated_at, '—') }}</template>

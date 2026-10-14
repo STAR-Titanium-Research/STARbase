@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { assetThumbUrl, fileId, hasDrawableDims, humanise, imageField, sampleDims, thumbKind } from '@d1/ui';
+import { assetThumbUrl, choiceLabel, fileId, hasDrawableDims, imageField, sampleDims, thumbKind } from '@d1/ui';
 import type { IndexDef, RowPlots } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
 
@@ -41,7 +41,7 @@ watch(src, () => { failed.value = false; });
 const placeholder = computed(() => {
 	if (kind.value === 'geometry') {
 		const form = typeof props.row.form === 'string' ? props.row.form.trim() : '';
-		return form ? humanise(form) : 'No drawing';
+		return form ? choiceLabel('geometry', form) : 'No drawing';
 	}
 	if (kind.value === 'force' && props.row.process_category !== 'sintering') return 'No force figure yet';
 	return props.def.collection === 'manufacturers' ? 'No logo' : 'No picture';
@@ -58,7 +58,7 @@ const placeholder = computed(() => {
 
 <style scoped>
 .d1-thumb { position: relative; box-sizing: border-box; width: 100%; height: 100%; min-width: 0; display: flex; align-items: center; justify-content: center; line-height: 1.15; }
-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .ph { padding: 3px; text-align: center; font-size: var(--fs-xs, 10px); color: var(--d1-dim); overflow-wrap: anywhere; }
 
 /* The drawing keeps its own colours and proportions (SampleGeometry); here it only scales to fit the

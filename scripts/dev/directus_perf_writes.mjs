@@ -10,7 +10,7 @@
 //   campaign_add_50_samples   50 x POST /items/campaign_samples into the largest campaign of the large project (what Directus does for M2M writes)
 //   link_login_big_pi         PATCH /items/people/<PI of the large project> {user_id}: row 45's cascade over the project's whole content (admin)
 //   team_join_100_records     POST /d1-teams/<team>/members: a person joins a team given Can edit on 100 records (every grant trusts new members:
-//                             100 derived access rows and their readers recompute; People 2, needs migrations 175 and 176 and the d1-teams and
+//                             100 derived access rows and their readers recompute; People 2, needs migrations 181 and 182 and the d1-teams and
 //                             d1-record-access extensions; skipped when /d1-teams does not answer)
 //   team_grant_20_members     POST /d1-record-access/physical_samples/<big sample>/entries {team_id, role}: a team of 20 is given Can edit on the big sample
 //   ui_write_wait_<kind>      a PATCH of a sample / test / campaign note as a member WHILE the harness holds an import transaction open
