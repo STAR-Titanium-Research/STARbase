@@ -270,7 +270,11 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
   their date range. Click it: every step shows, the first hidden one where the split node was, and
   the strip scrolls sideways. **Fold the steps in between** puts the split back. Resize the window:
   the split re-fits. Below ~640 px wide the vertical list shows at most 8 steps the same way. A
-  sample whose steps fit shows no split. Since: compact life strip (PR pending).
+  sample whose steps fit shows no split. On a sample blended from many parents (six or more), the
+  oldest parents fold into their own split and **This sample** stays visible. With the keyboard, Tab
+  to a split and press Enter: focus lands on the first step it showed. Press Enter on **Fold the
+  steps in between**: focus returns to the split. A screen reader reads each chip as its pass code
+  (or test and status), not as "#17". Since: compact life strip (PR pending).
 - [ ] **E1 — links from Home and the dashboards.** On Home, the recent-activity sample cards and, in
   the Lab Dashboard, "Open sample" and the timeline entries open the Sample page; operation and test
   links open their Explorer pages (E4).

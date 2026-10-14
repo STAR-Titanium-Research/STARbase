@@ -4,11 +4,11 @@ import { AppLink, chipText, chipTitle, daySummary, fitSplit, groupLife, splitSum
 
 // The life of the sample as a left-to-right strip: stock, ancestors, this sample, then one node per
 // day of operations and tests (a chip per record, the full pass code in its tooltip), descendants.
-// When the steps are wider than the panel, the start (through this sample) and the latest steps
-// stay and the middle ones fold into a split node; clicking it shows them all, and the strip then
-// scrolls sideways. On a narrow container (a tablet, a split view) the same list becomes a vertical
-// timeline, split the same way once it has more than NARROW_STEPS steps. The Operations and Tests panels below list every record in full; this
-// strip tells the story.
+// When the steps are wider than the panel, the start, this sample and the latest steps stay and the
+// others fold into split nodes (fitSplit); clicking one shows them all, and the strip then scrolls
+// sideways. On a narrow container (a tablet, a split view) the same list becomes a vertical
+// timeline, folded the same way once it has more than NARROW_STEPS steps. The Operations and Tests
+// panels below list every record in full; this strip tells the story.
 const props = defineProps<{ items: LifeItem[] }>();
 const steps = computed(() => groupLife(props.items));
 
@@ -38,7 +38,7 @@ const widths = ref<number[] | null>(null);
 const available = ref(0);
 const expanded = ref(false);
 const selfIndex = computed(() => steps.value.findIndex((s) => s.type === 'item' && s.item.kind === 'self'));
-// The vertical list has no width to fill, so it shows at most NARROW_STEPS steps, the split counted as one.
+// The vertical list has no width to fill, so it shows at most NARROW_STEPS steps, each split counted as one.
 const NARROW_STEPS = 8;
 const fit = computed(() => {
 	if (available.value <= 0) return null;
@@ -49,13 +49,19 @@ const fit = computed(() => {
 });
 const split = computed(() => (expanded.value ? null : fit.value));
 
-type Row = LifeStep | { type: 'split'; key: string; hidden: LifeStep[] };
+// The steps, with each folded run replaced by one split node. `from` is the run's first step.
+type Row = LifeStep | { type: 'split'; key: string; from: number; hidden: LifeStep[] };
 const rows = computed<Row[]>(() => {
-	const all: Row[] = steps.value;
-	const s = split.value;
-	if (!s) return all;
-	const hidden = steps.value.slice(s.head, steps.value.length - s.tail);
-	return [...all.slice(0, s.head), { type: 'split', key: 'split', hidden }, ...all.slice(all.length - s.tail)];
+	const all = steps.value;
+	const runs = split.value?.hidden ?? [];
+	const out: Row[] = [];
+	let i = 0;
+	for (const [from, to] of runs) {
+		out.push(...all.slice(i, from), { type: 'split', key: `split-${from}`, from, hidden: all.slice(from, to) });
+		i = to;
+	}
+	out.push(...all.slice(i));
+	return out;
 });
 
 function centreOnSelf() {
@@ -69,24 +75,33 @@ async function measure() {
 	widths.value = null;
 	await nextTick();
 	const s = strip.value;
-	if (s && available.value > NARROW) widths.value = Array.from(s.children, (el) => (el as HTMLElement).getBoundingClientRect().width);
+	// Only the horizontal layout's widths count: in the vertical one every step is the panel's width.
+	if (s && available.value > NARROW && getComputedStyle(s).flexDirection === 'row') {
+		widths.value = Array.from(s.children, (el) => (el as HTMLElement).getBoundingClientRect().width);
+	}
 	await nextTick();
 	centreOnSelf();
 }
 
-// Show the folded steps, scrolled so the first of them sits where the split node was.
-async function expandSplit(event: MouseEvent) {
+const foldBtn = ref<HTMLButtonElement | null>(null);
+
+// Show every step, scrolled so the first one the clicked split hid sits where it was. The split
+// node goes away, so focus moves to that step's first link (or to the Fold button).
+async function expandSplit(event: MouseEvent, from: number) {
 	const s = strip.value;
 	const at = (event.currentTarget as HTMLElement).closest('li')!.offsetLeft - (s?.scrollLeft ?? 0);
-	const first = split.value?.head ?? 0;
 	expanded.value = true;
 	await nextTick();
-	const el = s?.children[first] as HTMLElement | undefined;
+	const el = s?.children[from] as HTMLElement | undefined;
 	if (s && el && available.value > NARROW) s.scrollLeft = el.offsetLeft - at;
+	(el?.querySelector<HTMLElement>('a, button') ?? foldBtn.value)?.focus();
 }
-function collapseSplit() {
+// Fold again; the Fold button goes away, so focus moves to the first split node.
+async function collapseSplit() {
 	expanded.value = false;
 	if (strip.value) strip.value.scrollLeft = 0;
+	await nextTick();
+	strip.value?.querySelector<HTMLElement>('.split-btn')?.focus();
 }
 
 let observer: ResizeObserver | null = null;
@@ -124,7 +139,7 @@ const KIND_LABEL: Record<string, string> = {
 		<ol ref="strip" class="strip">
 			<template v-for="row in rows" :key="row.key">
 				<li v-if="row.type === 'split'" class="node split">
-					<button type="button" class="split-btn" :aria-expanded="false" title="Show the steps in between" @click="expandSplit">
+					<button type="button" class="split-btn" title="Show the steps in between" @click="expandSplit($event, row.from)">
 						<span class="dot" />
 						<span class="kind">{{ splitSummary(row.hidden).label }}</span>
 						<span v-for="line in splitSummary(row.hidden).lines" :key="line" class="sub">{{ line }}</span>
@@ -137,11 +152,11 @@ const KIND_LABEL: Record<string, string> = {
 					<span class="label">{{ daySummary(row) }}</span>
 					<ul class="chips">
 						<li v-for="item in shown(row)" :key="item.key">
-							<AppLink v-if="item.to" :to="item.to" class="chip" :class="`chip--${item.kind}`" :title="chipTitle(item)">{{ chipText(item) }}</AppLink>
+							<AppLink v-if="item.to" :to="item.to" class="chip" :class="`chip--${item.kind}`" :title="chipTitle(item)" :aria-label="chipTitle(item)">{{ chipText(item) }}</AppLink>
 							<span v-else class="chip" :class="`chip--${item.kind}`" :title="chipTitle(item)">{{ chipText(item) }}</span>
 						</li>
 					</ul>
-					<button v-if="row.items.length > CHIP_CAP" type="button" class="more" @click="toggle(row)">
+					<button v-if="row.items.length > CHIP_CAP" type="button" class="more" :aria-expanded="open.has(row.key)" @click="toggle(row)">
 						{{ open.has(row.key) ? 'Show fewer' : `+${row.items.length - CHIP_CAP} more` }}
 					</button>
 				</li>
@@ -162,7 +177,7 @@ const KIND_LABEL: Record<string, string> = {
 				</li>
 			</template>
 		</ol>
-		<button v-if="expanded && fit" type="button" class="more fold" @click="collapseSplit">Fold the steps in between</button>
+		<button v-if="expanded && fit" ref="foldBtn" type="button" class="more fold" @click="collapseSplit">Fold the steps in between</button>
 	</div>
 </template>
 

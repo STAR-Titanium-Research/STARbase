@@ -257,9 +257,11 @@ and test reports only.
   operations, so operations and tests are grouped into one node per day: the date, "N operations ·
   M tests", and a chip per record (`#<step>` for an operation, its full pass code in the tooltip),
   folded after 16 behind "+N more". The Operations and Tests tables below list them in full.
-  When the steps are still wider than the panel, the start (through this sample) and the latest
-  steps stay, and the middle ones fold into one dashed "N more steps" node (counts and date range)
-  that expands on click (`fitSplit` measures each step). The vertical list folds after 8 steps. Below it is the "N not
+  When the steps are still wider than the panel, the first step, this sample and the latest steps
+  stay, and the others fold into a dashed "N more steps" node (counts and date range) that expands
+  on click (`fitSplit` measures each step). Normally the start through this sample stays and one
+  run in the middle folds; past a long line of parents the oldest parents fold too (two split
+  nodes), so this sample never does. The vertical list folds after 8 steps. Below it is the "N not
   visible to you" marker. **Deviation (E4):** the lineage graph is not drawn inline (that would
   pull the `NodeGraph` cytoscape view into the page bundle); an **Open lineage graph** button
   opens the Lab Dashboard graph centred on the sample (`?sample=<id>`).

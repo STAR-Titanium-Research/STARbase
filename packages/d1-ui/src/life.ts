@@ -220,7 +220,7 @@ export function groupLife(items: LifeItem[]): LifeStep[] {
 		}
 		const dayText = formatDate(item.date, 'Undated');
 		if (!day || day.dayText !== dayText) {
-			day = { type: 'day', key: `day-${dayText}`, dayText, items: [], operations: 0, tests: 0 };
+			day = { type: 'day', key: `day-${dayText}-${steps.length}`, dayText, items: [], operations: 0, tests: 0 };
 			steps.push(day);
 		}
 		day.items.push(item);

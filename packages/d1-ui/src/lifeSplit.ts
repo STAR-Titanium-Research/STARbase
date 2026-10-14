@@ -1,49 +1,72 @@
-// When the life strip's steps are wider than the panel, the strip keeps the start and the latest
-// steps and folds the middle ones into one "split" node the reader can expand. Which steps stay is
+// When the life strip's steps are wider than the panel, the strip keeps the start, this sample and
+// the latest steps and folds the others into "split" nodes the reader can expand. Which steps stay is
 // decided from the measured width of each step, so the strip fits the panel without scrolling.
 
 import { daySummary, type LifeStep } from './life';
 
 export interface LifeSplit {
-	/** Steps shown before the split. */
-	head: number;
-	/** Steps shown after it (the latest). */
-	tail: number;
+	/** The folded runs of steps, `[from, to)`, in order: one split node each. */
+	hidden: [number, number][];
 }
 
 /**
- * The longest start and end that fit `available` pixels with the split node (`splitWidth`) between
- * them, or null when every step fits. The first and last steps always show. The start grows first
- * to reach step `keep` (this sample), then the end and the start take turns, the end first.
+ * Which steps fold so the rest fit `available` pixels, each folded run drawn as one split node
+ * (`splitWidth`); null when every step fits. The first and last steps and step `keep` (this
+ * sample) always show. The start grows to reach `keep`; then the end and the steps after `keep`
+ * take turns, the end first, and one run folds. When the start cannot reach `keep` (a long line of
+ * parents), the oldest steps after the first fold instead: the end, the steps after `keep` and the
+ * nearest steps before it take turns, and two runs fold.
  */
 export function fitSplit(widths: number[], available: number, splitWidth: number, keep = -1): LifeSplit | null {
 	const n = widths.length;
-	const total = widths.reduce((a, b) => a + b, 0);
-	if (total <= available || n < 3) return null;
-	let head = 1;
-	let tail = 1;
-	let used = widths[0] + widths[n - 1] + splitWidth;
-	const room = () => n - head - tail > 1;
-	while (head <= keep && room() && used + widths[head] <= available) used += widths[head++];
-	let tailOpen = true;
-	let headOpen = true;
-	while (room() && (tailOpen || headOpen)) {
-		if (tailOpen) {
-			const w = widths[n - 1 - tail];
-			if (used + w <= available) {
-				used += w;
-				tail++;
-			} else tailOpen = false;
+	if (n < 3 || widths.reduce((a, b) => a + b, 0) <= available) return null;
+	let shown: boolean[] = [];
+	const reset = () => {
+		shown = widths.map((_, i) => i === 0 || i === n - 1 || i === keep);
+	};
+	const cost = () => {
+		let c = 0;
+		for (let i = 0; i < n; i++) {
+			if (shown[i]) c += widths[i];
+			else if (i === 0 || shown[i - 1]) c += splitWidth;
 		}
-		if (headOpen && room()) {
-			const w = widths[head];
-			if (used + w <= available) {
-				used += w;
-				head++;
-			} else headOpen = false;
+		return c;
+	};
+	const show = (i: number): boolean => {
+		shown[i] = true;
+		if (cost() <= available) return true;
+		shown[i] = false;
+		return false;
+	};
+	// Each grower reveals the next hidden step in its direction, until one does not fit.
+	const grow = (growers: { at: number; step: number }[]) => {
+		const open = growers.map(() => true);
+		while (open.some(Boolean)) {
+			growers.forEach((g, k) => {
+				if (!open[k]) return;
+				while (g.at >= 0 && g.at < n && shown[g.at]) g.at += g.step;
+				if (g.at < 0 || g.at >= n || !show(g.at)) open[k] = false;
+			});
 		}
+	};
+
+	reset();
+	let h = 1;
+	while (h < keep && show(h)) h++;
+	if (h >= keep) grow([{ at: n - 2, step: -1 }, { at: h, step: 1 }]);
+	else {
+		reset();
+		grow([{ at: n - 2, step: -1 }, { at: keep + 1, step: 1 }, { at: keep - 1, step: -1 }]);
 	}
-	return { head, tail };
+
+	const hidden: [number, number][] = [];
+	for (let i = 0; i < n; i++) {
+		if (shown[i]) continue;
+		const from = i;
+		while (i < n && !shown[i]) i++;
+		hidden.push([from, i]);
+	}
+	return hidden.length ? { hidden } : null;
 }
 
 const plural = (n: number, one: string, many: string): string => (n ? `${n} ${n === 1 ? one : many}` : '');

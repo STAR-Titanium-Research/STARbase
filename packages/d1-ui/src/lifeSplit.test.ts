@@ -10,24 +10,38 @@ describe('fitSplit', () => {
 
 	it('keeps the start and the latest steps, the end first, and hides the middle', () => {
 		// 10 steps of 100px in 600px with a 100px split: 5 steps show.
-		expect(fitSplit(Array(10).fill(100), 600, 100)).toEqual({ head: 2, tail: 3 });
+		expect(fitSplit(Array(10).fill(100), 600, 100)).toEqual({ hidden: [[2, 7]] });
 	});
 
 	it('grows the start to reach this sample before sharing the room', () => {
-		expect(fitSplit(Array(10).fill(100), 600, 100, 3)).toEqual({ head: 4, tail: 1 });
-		expect(fitSplit(Array(10).fill(100), 800, 100, 3)).toEqual({ head: 5, tail: 2 });
+		expect(fitSplit(Array(10).fill(100), 600, 100, 3)).toEqual({ hidden: [[4, 9]] });
+		expect(fitSplit(Array(10).fill(100), 800, 100, 3)).toEqual({ hidden: [[5, 8]] });
 	});
 
 	it('keeps filling the other side when one side has a wide step next', () => {
 		// The step before the end is 400px: it cannot join, but the start still grows.
-		expect(fitSplit([100, 100, 100, 100, 100, 400, 100], 500, 100)).toEqual({ head: 3, tail: 1 });
+		expect(fitSplit([100, 100, 100, 100, 100, 400, 100], 500, 100)).toEqual({ hidden: [[3, 6]] });
 	});
 
 	it('always hides at least one step and shows the first and last, even when they alone overflow', () => {
-		const s = fitSplit([500, 100, 100, 500], 600, 100)!;
-		expect(s).toEqual({ head: 1, tail: 1 });
-		const all = fitSplit(Array(4).fill(100), 399, 10)!;
-		expect(all.head + all.tail).toBe(3);
+		expect(fitSplit([500, 100, 100, 500], 600, 100)).toEqual({ hidden: [[1, 3]] });
+		expect(fitSplit(Array(4).fill(100), 399, 10)).toEqual({ hidden: [[1, 2]] });
+	});
+
+	it('never folds this sample: past a long line of parents it folds the oldest ones instead', () => {
+		// stock, 8 parents of 200px, this sample (9), 12 days, a child.
+		const widths = [100, ...Array(8).fill(200), 150, ...Array(12).fill(100), 150];
+		const s = fitSplit(widths, 1000, 100, 9)!;
+		expect(s).toEqual({ hidden: [[1, 8], [11, 21]] });
+		expect(s.hidden.some(([a, b]) => a <= 9 && 9 < b)).toBe(false);
+	});
+
+	it('keeps this sample in the vertical list too (a budget in steps)', () => {
+		const ones = Array(20).fill(1);
+		const s = fitSplit(ones, 8, 1, 9)!;
+		expect(s.hidden.some(([a, b]) => a <= 9 && 9 < b)).toBe(false);
+		const shown = 20 - s.hidden.reduce((n, [a, b]) => n + b - a, 0);
+		expect(shown + s.hidden.length).toBeLessThanOrEqual(8);
 	});
 });
 

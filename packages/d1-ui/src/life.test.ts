@@ -226,8 +226,11 @@ describe('groupLife', () => {
 
 	it('gives every step a distinct key', () => {
 		const t = base();
-		t.events = [op('o1', '2023-03-31', 1), op('o2', '2023-04-01', 2), op('o3', null, null)];
-		const keys = groupLife(buildLife(t)).map((s) => s.key);
+		// An undated event among dated ones (a date the reader may not see) makes two "Undated" days.
+		t.events = [op('o1', '2023-03-31', 1), op('o4', null, 4), op('o2', '2023-04-01', 2), op('o3', null, null)];
+		const steps = groupLife(buildLife(t));
+		expect(steps.filter((s) => s.type === 'day' && s.dayText === 'Undated')).toHaveLength(2);
+		const keys = steps.map((s) => s.key);
 		expect(new Set(keys).size).toBe(keys.length);
 	});
 });
