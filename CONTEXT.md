@@ -100,7 +100,13 @@ _Avoid_: corner, cutting edge (for the record)
 The letter that says where an edge sits on its insert. Letters run clockwise from the insert's
 reference mark: the top face first (A, B, …), then the underside (C, D, …) on a double-sided insert,
 with C directly under A. Only corners that can cut get a letter. Old edges named `fA`, `fC` use the same
-letters; the `f` means nothing.
+letters; the `f` means nothing. When the insert type's edge count is lower than its cutting corners,
+only that many corners get letters, from A.
+
+**Tipped insert**:
+A cutting insert whose cutting edge is a brazed tip of a superhard material (PCD, PCBN), usually one per
+insert and sold one insert per box. Each tip is one insert edge.
+_Avoid_: PCD box (for the insert), diamond insert
 
 ## Relationships
 

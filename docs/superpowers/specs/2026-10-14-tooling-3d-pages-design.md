@@ -94,3 +94,22 @@ The rail keeps the standard Sample-page order: identity, actions, facts, then "O
 - Route test: one route record for all three kinds.
 - Headless render against a stubbed `/items` (kept out of the repo) for screenshots.
 - Physical test backlog: open a real box on real data, in light and dark, and on a machine without WebGL.
+
+## Addendum 2026-10-14: tall side rail and tipped inserts
+
+Requested after the first review of PR #286 and approved in conversation.
+
+- **The stage is a tall side rail.** The 3D stage moves out of the main column into the left rail, in
+  the `RecordRail` `#extra` slot (as the Sample drawing is), below identity and actions. The rail widens to
+  about 360 px on tooling pages only (a rail-width variable on `RecordLayout`, default 300 px), and stays
+  sticky. The stage is portrait (about 360 × 560 px).
+- **The box turns 90°.** `slotGrid` is portrait: the long side of the tray runs down the stage (10 → 2
+  columns × 5 rows), numbered in reading order. The camera frames the tall tray; the 2D grid is portrait too.
+- **3D by stage size.** 3D needs the stage to be at least about 260 px wide and 360 px tall, not 600 px
+  wide. When the layout stacks (narrow window), the stage sits above the panels.
+- **Edge count caps the cutting corners.** When `insert_types.edge_count` is below the shape's cutting
+  corners, only the first `edge_count` corners cut (from A), and the insert is single-sided.
+- **Tipped inserts (PCD, PCBN, CBN).** Detected from the insert type's substrate, material class, type code
+  or ISO designation. Each cutting corner gets a brazed tip pad in a lighter, diamond-grey material.
+- **One-insert boxes.** A box holding one insert draws as a small single case, and the box framing opens
+  close on that insert.
