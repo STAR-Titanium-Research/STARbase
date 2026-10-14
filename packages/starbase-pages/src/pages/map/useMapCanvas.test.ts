@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { nextTick, reactive, shallowRef } from 'vue';
+import { nextTick, reactive, type ShallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { mkData, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRecordRef, loadRelationDefs, loadUsedIn } from './model/loadFamily';
@@ -83,7 +83,7 @@ const settle = async () => {
   for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
   await nextTick();
 };
-const nodesOf = () => (store.nodes as ReturnType<typeof shallowRef<FakeNode[]>>).value;
+const nodesOf = () => (store.nodes as ShallowRef<FakeNode[]>).value;
 const at = (id: string) => nodesOf().find((n) => n.id === id)!.position;
 
 const toolOps = (n: number) => Array.from({ length: n }, (_, i) => mkOp({ id: `u${i}`, code: `OP-${i}`, methodName: 'Turning', date: `2026-09-${String(28 - i).padStart(2, '0')}T09:00:00Z`, sampleId: `x${i}`, outputSampleId: `y${i}` }));
@@ -105,7 +105,7 @@ async function open() {
 
 beforeEach(() => {
   store.layouts = 0;
-  (store.nodes as ReturnType<typeof shallowRef<FakeNode[]>>).value = [];
+  (store.nodes as ShallowRef<FakeNode[]>).value = [];
   vi.mocked(loadFamily).mockReset();
   vi.mocked(loadRecordRef).mockReset();
   vi.mocked(loadUsedIn).mockReset();
