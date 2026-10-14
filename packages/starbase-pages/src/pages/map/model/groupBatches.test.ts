@@ -255,6 +255,16 @@ describe('groupBatches', () => {
     }
   });
 
+  it('in-place passes on one sample on one day are never a probable batch (I1)', () => {
+    const passes = [1, 2, 3].map(() => op({ category: 'machining', sampleId: 's1', outputSampleId: null, equipmentId: 'lathe', date: DAY }));
+    const groups = groupBatches(passes, [], { probable: true });
+    expect(groups).toHaveLength(3);
+    expect(multi(groups)).toHaveLength(0);
+    // an output that is the input itself is still in place
+    const same = [1, 2].map(() => op({ category: 'machining', sampleId: 's1', outputSampleId: 's1', equipmentId: 'lathe', date: DAY }));
+    expect(multi(groupBatches(same, [], { probable: true }))).toHaveLength(0);
+  });
+
   it('the same-input rule needs a known input sample', () => {
     const rows = [1, 2].map(() => op({ category: 'machining', sampleId: null, equipmentId: 'saw', date: DAY }));
     expect(multi(groupBatches(rows, [], { probable: true }))).toHaveLength(0);

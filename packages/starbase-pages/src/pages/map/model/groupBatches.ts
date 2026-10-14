@@ -92,9 +92,10 @@ export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesO
       for (const r of list) claimed.add(r.id);
     };
 
-    // Same input sample (any category): a cut into pieces.
+    // Same input sample (any category): a cut into pieces. Each row must make its own piece: passes that leave
+    // the sample where it is (turning, polishing, in place) are a sequence, never a batch.
     for (const list of bucket(candidates, (o) =>
-      o.sampleId ? keyOf(o.sampleId, o.methodId, o.equipmentId, utcDay(o.date)) : null,
+      o.sampleId && o.outputSampleId && o.outputSampleId !== o.sampleId ? keyOf(o.sampleId, o.methodId, o.equipmentId, utcDay(o.date)) : null,
     )) {
       probable(list);
     }

@@ -1178,3 +1178,27 @@ describe('expands in one tick and across focuses', () => {
     expect(containersOf(map)).toHaveLength(40);
   });
 });
+
+describe('a piece outside the family (C1)', () => {
+  const DAY = '2026-03-04T09:00:00Z';
+  const seenFromA = (): ProcessData =>
+    mkData({
+      focus: { collection: 'physical_samples', id: 'a', code: 'A', kind: 'sample' },
+      samples: [mkSample('s'), mkSample('a')],
+      operations: ['a', 'b'].map((p) => mkOp({ id: `cut-${p}`, sampleId: 's', outputSampleId: p, date: DAY, methodName: 'Cut', equipmentId: 'saw' })),
+    });
+
+  it('plus on its card opens its family and the card becomes the real sample', async () => {
+    family.mockResolvedValue(seenFromA());
+    const { map } = setup({ focus: 'physical_samples:a', reach: 'all' });
+    await settle();
+    expect(map.nodes.value.find((n) => n.id === 's:b')).toMatchObject({ kind: 'sample', ref: { id: 'b', code: 'another piece' } });
+    family.mockResolvedValue(
+      mkData({ samples: [mkSample('s'), mkSample('b', { code: 'S-1B' })], operations: [mkOp({ id: 'cut-b', sampleId: 's', outputSampleId: 'b', date: DAY, methodName: 'Cut', equipmentId: 'saw' })] }),
+    );
+    await map.expand('s:b');
+    await settle();
+    expect(family).toHaveBeenLastCalledWith(api, 'b');
+    expect(map.graph.value?.nodes.find((n) => n.id === 's:b')).toMatchObject({ ref: { code: 'S-1B' } });
+  });
+});

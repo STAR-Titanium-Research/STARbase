@@ -103,6 +103,11 @@ export interface ProcessData {
   stock: StockOrigin[];
   hidden: { ancestors: boolean; descendants: boolean; events: boolean; stock: boolean };
   truncated: boolean;
+  /**
+   * Codes of samples that operations of the family made but that are outside it (the sibling pieces of a cut,
+   * seen from one piece): they are drawn as small cards, "another piece" when the code was not read.
+   */
+  pieces?: Record<string, { code: string; form: string | null }>;
   /** Opened on a record that is used by operations or samples (spec D20): the used-in fan of the focus. */
   fan?: Fan;
   /** Used-in fans merged in with ＋ on a record inside the map (a tool, a machine, a material...). */

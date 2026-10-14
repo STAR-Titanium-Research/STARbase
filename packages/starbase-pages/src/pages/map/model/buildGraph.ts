@@ -41,6 +41,8 @@ export const fanRootId = (r: Pick<Ref, 'collection' | 'id'>): string => (r.colle
 export const moreNodeId = (r: Pick<Ref, 'collection' | 'id'>): string => `more:${r.collection}:${r.id}`;
 
 const DEFAULT_MAX_ROWS = 3;
+/** What a sample card outside the loaded family is called when its code was not read. */
+export const OTHER_PIECE = 'another piece';
 /** Rows still shown on their own sockets once a container folds (spec D8: show 2, fold the rest). */
 const SHOWN_WHEN_FOLDED = 2;
 
@@ -56,7 +58,7 @@ interface Planned {
   kind: 'operation' | 'test';
   /** Known samples this row takes in. */
   inSamples: string[];
-  /** The new sample this row makes (operation with an output sample other than its input). */
+  /** The new sample this row makes (operation with an output sample other than its input); may be outside the loaded family. */
   outSample: string | null;
   /** False for a destructive test: nothing leaves it. */
   hasOut: boolean;
@@ -154,13 +156,15 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
         const op = opById.get(id);
         if (!op) continue;
         const input = known(op.sampleId);
-        const output = known(op.outputSampleId);
-        if (!input && !output) continue; // nothing to draw a row for
+        // A branch is decided from the row itself, not from what is loaded: the pieces a cut made that are
+        // outside the family (the siblings of the piece the map opened on) are still pieces, not in-place work.
+        const output = op.outputSampleId && op.outputSampleId !== op.sampleId ? op.outputSampleId : null;
+        if (!input && !(output && knownSamples.has(output))) continue; // nothing to draw a row for
         p = {
           rec: op,
           kind: 'operation',
           inSamples: input ? [input] : [],
-          outSample: output && output !== input ? output : null,
+          outSample: output,
           hasOut: true,
           powderBatch: op.powderBatch?.trim() || null,
         };
@@ -230,7 +234,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       // making operation with no lot but a powder-batch text gets the text-only card (D12).
       const outStock = p.outSample ? stockBySample.get(p.outSample) ?? [] : [];
       const lots = p.outSample && makingOp.get(p.outSample)?.id === p.rec.id ? outStock : [];
-      const powder = p.outSample && p.powderBatch && !outStock.length ? p.powderBatch : null;
+      const powder = known(p.outSample) && p.powderBatch && !outStock.length ? p.powderBatch : null;
 
       const inSocket = new Map<string, string>();
       let firstIn: string | undefined;
@@ -405,7 +409,12 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
   }
 
   // ---- 6. sample cards: one input socket per incoming wire (D11), folded past maxRows --------
-  const sampleNodes: RecordNode[] = data.samples.map((s) => {
+  // A piece some operation made that is outside the loaded family (a sibling of the piece the map opened
+  // on) is a small card of its own: "another piece" until the person opens it with ＋.
+  const stubs = [...incoming.keys()]
+    .filter((id) => !knownSamples.has(id))
+    .map((id) => ({ id, code: data.pieces?.[id]?.code ?? OTHER_PIECE, form: data.pieces?.[id]?.form ?? null, status: null, projectId: null }));
+  const sampleNodes: RecordNode[] = [...data.samples, ...stubs].map((s) => {
     const nodeId = `s:${s.id}`;
     const list = incoming.get(s.id) ?? [];
     const folded = list.length > maxRows;

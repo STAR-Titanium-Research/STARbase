@@ -7,6 +7,7 @@
 import { formatDate, humanise, processLabel, type Fact } from '@d1/ui';
 import { LINEAGE_LABEL, kindOfCollection } from '../nodes/kinds';
 import { refKey } from '../nodes/actions';
+import { OTHER_PIECE } from './buildGraph';
 import { nodeOfSocket } from './sockets';
 import type { ContainerNode, Kind, MapNode, OpRow, ProcessData, ProcessGraph, Ref, SampleRec, TestRow } from './types';
 
@@ -144,7 +145,9 @@ function nodeInfo(id: string, node: MapNode, data: ProcessData, graph: ProcessGr
 
   if (node.kind === 'sample') {
     const rec = data.samples.find((s) => `s:${s.id}` === node.id);
-    return rec ? sampleInfo(id, data, rec) : null;
+    if (rec) return sampleInfo(id, data, rec);
+    // A piece some operation made, outside the loaded family: all the map knows is its card.
+    return { id, kind: 'sample', ref: node.ref, code: node.ref.code, plain: node.ref.code === OTHER_PIECE || undefined, title: node.meta ? humanise(node.meta) : undefined, status: null, facts: [], counts: [], geometry: null, dataOf: null };
   }
 
   const fed = new Set(graph.wires.filter((w) => nodeOfSocket(w.from) === node.id).map((w) => nodeOfSocket(w.to))).size;

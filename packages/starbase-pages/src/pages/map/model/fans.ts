@@ -141,6 +141,9 @@ export function mergeProcessData(base: ProcessData, add: ProcessData): ProcessDa
     stock: uniqueBy([...base.stock, ...add.stock], stockKey) as StockOrigin[],
     truncated: base.truncated || add.truncated,
   };
+  const pieces = Object.entries({ ...base.pieces, ...add.pieces }).filter(([id]) => !merged.samples.some((smp) => smp.id === id));
+  if (pieces.length) merged.pieces = Object.fromEntries(pieces);
+  else delete merged.pieces;
   if (base.fan) merged.fan = prune(base.fan);
   if (base.sideFans) merged.sideFans = base.sideFans.map(prune);
   return merged;

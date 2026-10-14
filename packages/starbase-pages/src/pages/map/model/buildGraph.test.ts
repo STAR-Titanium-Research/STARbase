@@ -583,3 +583,51 @@ describe('buildGraph: used-in fans (D20)', () => {
     expect(buildFan(data).hidden).toEqual([{ nodeId: 'f:tools:t1', side: 'out' }]);
   });
 });
+
+describe('buildGraph: a family seen from one cut piece (C1)', () => {
+  const DAY = '2026-03-04T09:00:00Z';
+  // S was cut into A, B and C on one day; the map opened on A, so B and C are outside the family.
+  const seenFromA = () =>
+    mkData({
+      focus: { collection: 'physical_samples', id: 'a', code: 'A', kind: 'sample' },
+      samples: sam('s', 'a'),
+      operations: ['a', 'b', 'c'].map((p) => mkOp({ id: `cut-${p}`, sampleId: 's', outputSampleId: p, date: DAY, methodName: 'Wire cut', equipmentId: 'eq1' })),
+    });
+
+  it('one cut container with an output per piece; the pieces outside the family are small cards', () => {
+    const g = build(seenFromA(), { probable: true });
+    const cuts = g.nodes.filter((n): n is ContainerNode => n.type === 'container');
+    expect(cuts).toHaveLength(1);
+    const c = cuts[0];
+    expect(c.rows.map((r) => r.inPlace)).toEqual([undefined, undefined, undefined]);
+    expect(c.rows.map((r) => r.sampleId)).toEqual(['a', 'b', 'c']);
+    expect(c.rows.map((r) => r.out)).toEqual([`${c.id}:out:0`, `${c.id}:out:1`, `${c.id}:out:2`]);
+    expect(wire(g, `${c.id}:out:0`, 's:a:in:0')).toBeDefined();
+    for (const [i, p] of ['b', 'c'].entries()) {
+      expect(record(g, `s:${p}`)).toMatchObject({ kind: 'sample', ref: { collection: 'physical_samples', id: p, code: 'another piece' }, ins: [`s:${p}:in:0`] });
+      expect(wire(g, `${c.id}:out:${i + 1}`, `s:${p}:in:0`)).toMatchObject({ carries: p, flow: 'sample' });
+    }
+  });
+
+  it('the parent is not chained through its other pieces (no probable batch either)', () => {
+    const g = build(seenFromA(), { probable: false });
+    // each cut takes S in from its own card: nothing leaves one cut to feed another
+    for (const p of ['a', 'b', 'c']) expect(wire(g, 's:s:out:0', `op:cut-${p}:in:0`)).toBeDefined();
+    expect(g.wires.filter((w) => w.from.startsWith('op:cut-') && w.to.startsWith('op:cut-'))).toEqual([]);
+    expect(g.nodes.filter((n) => n.type === 'container' && n.rows.some((r) => r.inPlace))).toEqual([]);
+  });
+
+  it('a piece outside the family shows its code when the loader found it', () => {
+    const data = { ...seenFromA(), pieces: { b: { code: 'S-1B', form: 'disc' } } };
+    const g = build(data, { probable: true });
+    expect(record(g, 's:b').ref.code).toBe('S-1B');
+    expect(record(g, 's:b').meta).toBe('disc');
+    expect(record(g, 's:c').ref.code).toBe('another piece');
+  });
+
+  it('a cut whose piece is the focus stays a branch when its output is loaded', () => {
+    const g = build(seenFromA(), { probable: false });
+    expect(wire(g, 'op:cut-a:out:0', 's:a:in:0')).toBeDefined();
+    expect(wire(g, 'op:cut-b:out:0', 's:b:in:0')).toBeDefined();
+  });
+});

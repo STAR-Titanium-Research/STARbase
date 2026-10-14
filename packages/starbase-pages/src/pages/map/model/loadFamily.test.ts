@@ -677,3 +677,42 @@ describe('loadStepRow and sampleOfRow', () => {
     await expect(loadStepRow(api, { collection: 'tools', id: 'x' })).rejects.toThrow(/not an operation or a test/);
   });
 });
+
+describe('loadFamily: the pieces outside the family (C1)', () => {
+  // S was cut into A (the map's sample), B and C: the trace names S and A only.
+  const cutsOfS = (path: string, params: Record<string, any>, extra?: () => unknown): unknown => {
+    if (path.startsWith('/d1-trace/')) {
+      return trace({ sample: { sample_id: 'a', sample_code: 'A', form: null }, ancestors: [{ ...relative('s'), relationship_type: 'cut_from' }] });
+    }
+    if (path === '/items/manufacturing_operations') {
+      const col = Object.keys(JSON.parse(params.filter))[0];
+      const rows = ['a', 'b', 'c'].map((p) => ({ operation_id: `cut-${p}`, sample_id: 's', output_sample_id: p, process_category: 'machining' }));
+      return { data: col === 'sample_id' ? rows : rows.filter((r) => r.output_sample_id === 'a') };
+    }
+    if (path === '/items/physical_samples') {
+      const wanted: string[] = JSON.parse(params.filter).sample_id._in;
+      return extra ? extra() : { data: wanted.map((id) => ({ sample_id: id, sample_code: `CODE-${id}`, form: 'disc' })) };
+    }
+    return { data: [] };
+  };
+
+  it('reads the codes of the outputs that are not in the family, in one extra request of their own', async () => {
+    const { api, calls } = fakeApi((path, params) => cutsOfS(path, params));
+    const data = await loadFamily(api, 'a');
+    expect(data.samples.map((s) => s.id).sort()).toEqual(['a', 's']);
+    expect(data.pieces).toEqual({ b: { code: 'CODE-b', form: 'disc' }, c: { code: 'CODE-c', form: 'disc' } });
+    const asked = calls.filter((c) => c.path === '/items/physical_samples').map((c) => JSON.parse(c.params.filter).sample_id._in.slice().sort());
+    expect(asked).toEqual(expect.arrayContaining([['b', 'c']]));
+  });
+
+  it('a refused read of those pieces leaves them without a code, not the map without a family', async () => {
+    const { api } = fakeApi((path, params) =>
+      path === '/items/physical_samples' && JSON.parse(params.filter).sample_id._in.includes('b')
+        ? httpError(403)
+        : cutsOfS(path, params),
+    );
+    const data = await loadFamily(api, 'a');
+    expect(data.operations).toHaveLength(3);
+    expect(data.pieces ?? {}).toEqual({});
+  });
+});

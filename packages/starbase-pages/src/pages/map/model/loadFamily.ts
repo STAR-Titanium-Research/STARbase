@@ -462,6 +462,25 @@ async function loadSamples(api: HostApi, trace: TraceResponse, ids: string[]): P
   );
 }
 
+/**
+ * The code and form of the samples that operations of the family made but that are outside it: the sibling
+ * pieces of a cut, seen from one piece. Best effort: a refused read leaves them as "another piece".
+ */
+async function loadPieces(api: HostApi, operations: OpRow[], family: string[]): Promise<ProcessData['pieces']> {
+  const inFamily = new Set(family);
+  const outside = unique(operations.map((o) => o.outputSampleId).filter((id): id is string => !!id && !inFamily.has(id)));
+  if (!outside.length) return undefined;
+  const out: NonNullable<ProcessData['pieces']> = {};
+  try {
+    const build = (chunk: string[]) => ({ filter: JSON.stringify({ sample_id: { _in: chunk } }), fields: ['sample_id', 'sample_code', 'form'], limit: -1 });
+    const pages = await Promise.all(chunkByBudget(outside, build).map((chunk) => getList(api, 'physical_samples', build(chunk))));
+    for (const page of pages) for (const r of page.rows) out[String(r.sample_id)] = { code: str(r.sample_code) ?? String(r.sample_id), form: str(r.form) };
+  } catch {
+    return undefined; // a code is a nicety: the card says "another piece"
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /** Spec §7 steps 1-4 for one sample: the whole family, not just what the Reach slider will show. */
 export async function loadFamily(api: HostApi, sampleId: string): Promise<ProcessData> {
   const trace = (await api.get(`/d1-trace/sample/${encodeURIComponent(sampleId)}`)).data as TraceResponse;
@@ -474,6 +493,7 @@ export async function loadFamily(api: HostApi, sampleId: string): Promise<Proces
     loadLineage(api, ids),
     loadSamples(api, trace, ids),
   ]);
+  const pieces = await loadPieces(api, operations, ids);
 
   const stock = new Map<string, StockOrigin>();
   for (const s of trace.stock_origins) {
@@ -501,6 +521,7 @@ export async function loadFamily(api: HostApi, sampleId: string): Promise<Proces
       events: !!trace.hidden?.events || testRead.refused,
     },
     truncated: Object.values(trace.truncated ?? {}).some(Boolean),
+    ...(pieces ? { pieces } : {}),
   };
 }
 

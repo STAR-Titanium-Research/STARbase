@@ -94,3 +94,24 @@ describe('recordInfo', () => {
     expect(recordInfo(data, graph, 'nope')).toBeNull();
   });
 });
+
+describe('recordInfo: a family seen from one cut piece (C1)', () => {
+  const DAY = '2026-03-04T09:00:00Z';
+  const seen = mkData({
+    focus: { collection: 'physical_samples', id: 'a', code: 'A', kind: 'sample' },
+    samples: [mkSample('s'), mkSample('a')],
+    operations: ['a', 'b', 'c'].map((p) => mkOp({ id: `cut-${p}`, sampleId: 's', outputSampleId: p, date: DAY, methodName: 'Cut', equipmentId: 'saw' })),
+  });
+  const g = build(seen, () => [], true);
+
+  it('the parent says it made the 3 pieces the drawing shows', () => {
+    const info = recordInfo(seen, g, 's:s')!;
+    expect(info.counts).toContainEqual({ value: 3, label: 'pieces' });
+    expect(g.nodes.filter((n) => n.type === 'record' && n.kind === 'sample').length - 1).toBe(3); // the parent is the fourth card
+  });
+
+  it('a piece outside the family still has a card to hover: its code and the way to open it', () => {
+    const info = recordInfo(seen, g, 's:b')!;
+    expect(info).toMatchObject({ kind: 'sample', code: 'another piece', ref: { collection: 'physical_samples', id: 'b' } });
+  });
+});

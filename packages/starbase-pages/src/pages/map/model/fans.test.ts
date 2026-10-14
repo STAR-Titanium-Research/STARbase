@@ -123,6 +123,14 @@ describe('mergeProcessData', () => {
     expect(merged.truncated).toBe(true);
   });
 
+  it('keeps the codes of the pieces outside the family, and drops those a family now holds (C1)', () => {
+    const base = { ...family(), pieces: { b: { code: 'S-1B', form: null }, c: { code: 'S-1C', form: null } } };
+    const add = { ...mkData({ samples: [mkSample('b')] }), pieces: { d: { code: 'S-1D', form: 'disc' } } };
+    const merged = mergeProcessData(base, add);
+    expect(merged.pieces).toEqual({ c: { code: 'S-1C', form: null }, d: { code: 'S-1D', form: 'disc' } });
+    expect(mergeProcessData(family(), mkData()).pieces).toBeUndefined();
+  });
+
   it('drops the fan items the family now holds in full, in the focus fan and in side fans', () => {
     const fanOps = [mkOp({ id: 'u0', sampleId: 'x0' }), mkOp({ id: 'u1', sampleId: 'x1' })];
     const base = withSideFan(fanData(tool, fanPage('tools', { items: fanOps, total: 2 }, 1)), { collection: 'equipment', id: 'e1', code: 'NLX', kind: 'equipment' }, fanPage('equipment', { items: [mkOp({ id: 'e1op' })], total: 1 }, 1));
