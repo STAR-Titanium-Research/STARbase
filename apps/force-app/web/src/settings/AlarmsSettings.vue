@@ -5,6 +5,10 @@ import { confirmAction } from '../ui/confirm';
 const a = alarmController;
 function save() { a.saveCfg(); }
 
+function onForceThreshold() {
+	a.commitForceThreshold();
+	save();
+}
 function onWarnPercent() {
 	const p = Math.round(Number(a.config.warnPercent));
 	a.config.warnPercent = Number.isFinite(p) ? Math.min(99, Math.max(1, p)) : 80;
@@ -75,7 +79,7 @@ async function setEnabled(key: ToggleKey, ev: Event) {
 
 		<div class="grp">
 			<label class="chk"><input type="checkbox" :checked="a.config.forceEnabled" @change="setEnabled('forceEnabled', $event)" /> High-force alarm</label>
-			<label class="thr">Trip at ≥ <input type="number" v-model.number="a.config.forceThreshold" :disabled="!a.config.forceEnabled" @change="save" /> N (per-axis peak)</label>
+			<label class="thr">Trip at ≥ <input type="number" min="1" v-model.number="a.config.forceThreshold" :disabled="!a.config.forceEnabled" @change="onForceThreshold" /> N (per-axis peak)</label>
 			<p class="hint">Default ~400 N peak; set to a safe fraction of your dynamometer / setup limit.</p>
 			<label class="chk sub"><input type="checkbox" v-model="a.config.warnEnabled" :disabled="!a.config.forceEnabled" @change="save" /> Early warning</label>
 			<label class="thr">Warn at ≥ <input type="number" min="1" max="99" v-model.number="a.config.warnPercent" :disabled="!a.config.forceEnabled || !a.config.warnEnabled" @change="onWarnPercent" /> % of the limit<span v-if="a.warnLevel != null" class="calc">({{ a.warnLevel.toFixed(0) }} N)</span></label>
