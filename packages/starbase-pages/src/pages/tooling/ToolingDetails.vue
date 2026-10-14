@@ -11,12 +11,17 @@ defineProps<{ facts: Fact[]; notes?: string | null; loading?: boolean; warning?:
 		<LoadState :loading="loading" loading-text="Loading details…">
 			<p v-if="warning" class="d1-note warn warning" role="status">{{ warning }}</p>
 			<FactList :facts="facts" />
-			<p v-if="notes" class="notes">{{ notes }}</p>
+			<div v-if="notes" class="notes-block">
+				<span class="label">Notes</span>
+				<p class="notes">{{ notes }}</p>
+			</div>
 		</LoadState>
 	</Section>
 </template>
 
 <style scoped>
 .warning { margin-bottom: 10px; font-weight: 600; }
-.notes { margin: 10px 0 0; font-size: var(--fs-md); line-height: 1.55; white-space: pre-wrap; color: var(--d1-dim); }
+.notes-block { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; }
+.label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.01em; color: var(--d1-dim); }
+.notes { margin: 0; font-size: var(--fs-md); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
