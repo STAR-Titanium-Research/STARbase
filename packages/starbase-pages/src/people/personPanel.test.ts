@@ -1,7 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { AccessRecord } from './peopleApi';
 import type { PeopleRow } from './peopleQuery';
-import { canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote } from './personPanel';
+import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
 
 const row = (status: string | null | undefined): PeopleRow => ({
 	kind: 'person',
@@ -64,6 +65,19 @@ describe('words', () => {
 	});
 });
 
+describe('teams on the panel', () => {
+	it('has a Through teams row that lists like the others', () => {
+		expect(ACCESS_LISTS.map((l) => l.id)).toEqual(['owns', 'shared', 'investigator', 'teams']);
+		expect(ACCESS_LISTS.find((l) => l.id === 'teams')?.label).toBe('Through teams');
+	});
+	it('waitingLine says how many records and owners, or nothing when none are waiting', () => {
+		expect(waitingLine({ waiting: 3, waiting_owners: 2 })).toBe('Waiting for approval: 3 records (2 owners)');
+		expect(waitingLine({ waiting: 1, waiting_owners: 1 })).toBe('Waiting for approval: 1 record (1 owner)');
+		expect(waitingLine({ waiting: 0, waiting_owners: 0 })).toBeNull();
+		expect(waitingLine(null)).toBeNull();
+	});
+});
+
 describe('sourceNote', () => {
 	const rec = (source: string | null, kind = 'project'): AccessRecord => ({
 		collection: 'projects',
@@ -95,4 +109,16 @@ describe('escapeClosesPanel', () => {
 	it('leaves Esc to whatever already took it', () => expect(escapeClosesPanel({ key: 'Escape', defaultPrevented: true }, null, false)).toBe(false));
 	it('leaves Esc to a select', () => expect(escapeClosesPanel(esc, 'SELECT', false)).toBe(false));
 	it('leaves Esc to an open dialog or menu', () => expect(escapeClosesPanel(esc, null, true)).toBe(false));
+});
+
+describe('an open members card owns Esc', () => {
+	// PersonPanel listens on window (capture), which runs before TeamCard's document listener: the panel can only leave the Esc to an
+	// open card by seeing it as an open overlay. TeamCard marks its popover data-open-menu and swallows the key.
+	const card = readFileSync(new URL('../../../d1-ui/src/teams/TeamCard.vue', import.meta.url), 'utf8');
+	it('the panel counts [data-open-menu] as an open overlay', () => expect(ESC_OWNER_SELECTOR).toContain('[data-open-menu]'));
+	it('the card popover carries data-open-menu', () => expect(card).toMatch(/ref="pop"\s+data-open-menu/));
+	it('the card Escape handler stops the event for every listener and prevents the default', () => {
+		const handler = card.slice(card.indexOf('function onDocKey'), card.indexOf('function onDocPointer'));
+		for (const call of ['e.stopPropagation()', 'e.stopImmediatePropagation()', 'e.preventDefault()']) expect(handler).toContain(call);
+	});
 });

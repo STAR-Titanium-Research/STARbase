@@ -15,7 +15,7 @@
 # names it reports to people and runs dbmate again. CI will need its own fix (tracked separately).
 #
 # Also runs tests/readers_matrix.sh (the readers mutation matrix, the oracle and the randomised differential test) and
-# tests/people_admin.sh (the People admin attention and access functions) after phase1.
+# tests/people_admin.sh (the People admin attention and access functions) and tests/teams.sh (teams, manager rule, history, team grants) after phase1.
 # Usage: bash scripts/dev/schema_test_docker.sh        (from the repository root)
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
@@ -84,6 +84,12 @@ docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL
   bash tests/people_admin.sh 2>&1
 prc=$?
 [[ $prc -ne 0 && $trc -eq 0 ]] && trc=$prc
+
+# Teams (migrations 181, 182): tables, the manager rule, history, Directus registration, team grants, on a copy of this database (tests/teams.sh).
+docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL" "$RUNNER" \
+  bash tests/teams.sh 2>&1
+tmrc=$?
+[[ $tmrc -ne 0 && $trc -eq 0 ]] && trc=$tmrc
 
 if [[ -n "${ROUNDTRIP:-}" ]]; then
   echo "== roundtrip: rollback x $ROUNDTRIP, then up"

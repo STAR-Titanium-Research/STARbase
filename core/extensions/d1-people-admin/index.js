@@ -5,13 +5,17 @@
 //   GET /d1-people-admin/people
 //     -> { can_administer_accounts, roles: [{ id, name }],
 //          people: [{ person_id, full_name, email, is_researcher, is_operator, active, notes, user_id, created_at,
-//                     login: null | { status, role_id, role_name, last_access, email }, attention: [key] }],
+//                     login: null | { status, role_id, role_name, last_access, email }, attention: [key],
+//                     teams: [{ team_id, name, color, logo, is_manager }] }],
 //          logins_without_person: [{ user_id, email, first_name, last_name, status, role_id, role_name, last_access }] }
 //   GET /d1-people-admin/attention
 //     -> { items: [{ key, count }] }      (d1_private.people_attention(); zero counts omitted)
-//   GET /d1-people-admin/people/:person_id/access[?list=owns|shared|investigator]
-//     -> { owns, shared, investigator }   (d1_private.person_access: three counts)
-//        + records: [{ collection, id, kind, code, title, level, source, granted_by, added_at }] for the asked list
+//   GET /d1-people-admin/people/:person_id/access[?list=owns|shared|investigator|teams]
+//     -> { owns, shared, investigator, teams, waiting, waiting_owners }   (d1_private.person_access: five counts; teams = the rows their teams
+//        give them, waiting = their pending rows on team grants worth asking about (Ruling D2), waiting_owners = how many distinct owners
+//        those records have)
+//        + records: [{ collection, id, kind, code, title, level, source, granted_by, added_at }] for the asked list (teams: source 'team',
+//          granted_by the team's name)
 //   PATCH /d1-people-admin/logins/:user_id   body { role?: uuid, status?: 'active' | 'suspended' }
 //     -> { user_id, role_id, role_name, status }
 //        Account administrators only (403 ACCOUNTS_ADMIN_ONLY for a Lab Admin or anyone else). The role must exist in directus_roles (400).
@@ -45,7 +49,7 @@
 // the USER with no role (the preview's admin) is an account administrator; the Lab Admin is not.
 //
 // Counting rule for /attention (migration 180): login_without_person and invite_not_accepted are counted by cardinality(user_ids), every
-// other key by cardinality(person_ids). Summing both arrays would count a person who has a login twice.
+// other key (former_in_team among them) by cardinality(person_ids). Summing both arrays would count a person who has a login twice.
 //
 // Errors use the Directus shape { errors: [{ message, extensions: { code, source: 'd1-people-admin' } }] }.
 
@@ -58,7 +62,7 @@ const DEFAULT_LAB_MEMBER_ROLE_ID = '10000001-0000-0000-0000-000000000002';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // The accountability Directus's UsersService runs under for an invite: the caller is already checked, and d1.actor_identity names them.
 const SYSTEM_ADMIN = { user: null, role: null, admin: true, app: false };
-const LISTS = ['owns', 'shared', 'investigator'];
+const LISTS = ['owns', 'shared', 'investigator', 'teams'];
 const CHUNK = 1000;
 const STATUSES = ['active', 'suspended'];
 const toBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
@@ -144,14 +148,27 @@ export default {
     // d1_private.people_attention() rows: { key, person_ids, user_ids }
     const attentionRows = async () => (await database.raw('SELECT key, person_ids, user_ids FROM d1_private.people_attention()'))?.rows ?? [];
 
+    // One query for every membership: team_members joined with teams, in team-name order.
+    const membershipRows = async () =>
+      (await database.raw(
+        'SELECT tm.person_id, t.team_id, t.name, t.color, t.logo, tm.is_manager FROM team_members tm JOIN teams t ON t.team_id = tm.team_id ORDER BY lower(t.name), t.team_id',
+      ))?.rows ?? [];
+
     router.get('/people', route(async ({ res, admin, accounts }) => {
       requireAdmin(admin);
-      const [people, users, roles, attention] = await Promise.all([
+      const [people, users, roles, attention, memberships] = await Promise.all([
         database('people').select('person_id', 'full_name', 'email', 'is_researcher', 'is_operator', 'active', 'notes', 'user_id', 'created_at'),
         database('directus_users').select('id', 'email', 'first_name', 'last_name', 'status', 'role', 'last_access'),
         database('directus_roles').select('id', 'name'),
         attentionRows(),
+        membershipRows(),
       ]);
+      const teamsOf = new Map(); // person_id -> their teams
+      for (const m of memberships) {
+        teamsOf.set(String(m.person_id), [...(teamsOf.get(String(m.person_id)) ?? []), {
+          team_id: m.team_id, name: m.name, color: m.color ?? 'teal', logo: m.logo ?? null, is_manager: m.is_manager === true,
+        }]);
+      }
       const roleName = new Map(roles.map((r) => [String(r.id), r.name ?? null]));
       const userById = new Map(users.map((u) => [String(u.id), u]));
       const loginOf = (u) => ({
@@ -183,6 +200,7 @@ export default {
           created_at: iso(p.created_at),
           login: user ? loginOf(user) : null,
           attention: keysOf.get(String(p.person_id)) ?? [],
+          teams: teamsOf.get(String(p.person_id)) ?? [],
         };
       }).sort(byText('full_name'));
 
@@ -440,13 +458,33 @@ export default {
       }
       if (!person) throw new HttpError(404, 'NOT_FOUND', 'That person does not exist.');
       const which = req.query?.list;
-      if (!isBlank(which) && !LISTS.includes(which)) throw new HttpError(400, 'INVALID_QUERY', 'list must be owns, shared or investigator.');
+      if (!isBlank(which) && !LISTS.includes(which)) throw new HttpError(400, 'INVALID_QUERY', 'list must be owns, shared, investigator or teams.');
 
-      const counts = (await database.raw('SELECT owns, shared, investigator FROM d1_private.person_access(?)', [personId]))?.rows?.[0] ?? {};
-      const body = { owns: Number(counts.owns) || 0, shared: Number(counts.shared) || 0, investigator: Number(counts.investigator) || 0 };
+      const counts = (await database.raw('SELECT owns, shared, investigator, teams, waiting FROM d1_private.person_access(?)', [personId]))?.rows?.[0] ?? {};
+      const waiting = Number(counts.waiting) || 0;
+      const body = {
+        owns: Number(counts.owns) || 0,
+        shared: Number(counts.shared) || 0,
+        investigator: Number(counts.investigator) || 0,
+        teams: Number(counts.teams) || 0,
+        waiting,
+        waiting_owners: waiting ? await waitingOwners(personId) : 0,
+      };
       if (!isBlank(which)) body.records = await recordsOf({ personId, which, viewer: admin ? null : String(acc.user) });
       res.json(body);
     }));
+
+    // How many distinct owners the person's waiting records have: the pending rows d1_private.person_access counts as waiting (pending, and
+    // d1_private.team_pending_actionable says approving would raise their access), each joined to its record's owner column.
+    async function waitingOwners(personId) {
+      const kinds = Object.values(COLLECTIONS);
+      const parts = kinds.map((c) =>
+        `SELECT r.${c.ownerField} AS owner FROM ${c.kind}_team_pending x JOIN ${c.kind}_team_access g ON g.team_access_id = x.team_access_id JOIN ${c.collection} r ON r.${c.key} = g.${c.key} WHERE x.person_id = ? AND x.state = 'pending' AND d1_private.team_pending_actionable('${c.collection}', x.team_access_id, ?)`,
+      );
+      const sql = `SELECT count(DISTINCT w.owner)::int AS owners FROM (${parts.join(' UNION ALL ')}) w WHERE w.owner IS NOT NULL`;
+      const row = (await database.raw(sql, kinds.flatMap(() => [personId, personId])))?.rows?.[0];
+      return Number(row?.owners) || 0;
+    }
 
     // The records behind one count, with code and title read from each record. `viewer` (a non-administrator) leaves out the
     // records their own readers row does not list: counted above, not listed here.

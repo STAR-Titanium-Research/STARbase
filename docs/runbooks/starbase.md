@@ -252,6 +252,65 @@ invite routes answer `503`.
 Rollback: `make migrate-down` (180), `git checkout <previous commit>`, rebuild as in step 1, recreate `directus` and `proxy`.
 A login invited meanwhile stays (an invited user is an ordinary Directus user).
 
+## Teams (PR 2) (maintainer's step, approve separately)
+
+Teams: migrations 181 (`teams`, `team_members`, `team_events`) and 182 (team grants, the derived access rows, the pending tables, the
+SQL functions), the new `d1-teams` endpoint, the team routes of `d1-record-access` and STARbase's Teams view, team page, members card
+and Home "Waiting for you". **No new `.env` keys.**
+
+**Deploy `d1-record-access` together with migration 182.** 182 splits `UNIQUE (record, person_id)` on the five access tables into two
+partial unique indexes, so the person-entry upsert of the old `d1-record-access` (`ON CONFLICT (record, person_id)`) no longer matches
+an index and every add-person call fails until the new build (its upsert names `WHERE team_access_id IS NULL`) is loaded. Never apply 182
+and leave the old extension running; the steps below do both in one go. `d1-teams` is a new extension folder inside the mounted
+`core/extensions` directory: it needs no registration, only the recreate in step 4.
+
+1. `git pull && npm ci && npm run build:starbase && npm run build:extensions` (same stash advice as the People admin section above).
+2. Back up (`docs/runbooks/backup-restore.md`), then `make migrate-status` (181 and 182 pending) and `make migrate`. 182 gives no team
+   access to anybody (no grants exist yet), so existing readers do not change.
+3. Check the derived rows and the readers, both must be clean:
+   ```sql
+   SELECT * FROM d1_private.team_drift();            -- 0 rows
+   SELECT d1_private.readers_drift_count();          -- 0
+   ```
+4. Reload Directus on the new extensions and a clean permission cache. **Between `make migrate` (182) and this step the old
+   `d1-record-access` is still running, and adding a person through Who has access fails (its upsert no longer matches an index): keep that
+   window short, go straight from step 2 to here (step 3 is SQL only and can wait until Directus is back).** In order:
+   ```bash
+   docker compose stop directus                      # first: a running Directus would re-cache stale permissions after a flush
+   # Redis also holds the rq queues of heavy-data-worker and analysis-worker. FLUSHALL drops queued and in-flight jobs, so check first:
+   docker compose exec heavy-data-worker sh -c 'rq info --url "$REDIS_URL"'     # every queue: 0 queued, 0 failed, and no worker busy
+   docker compose exec -T redis redis-cli FLUSHALL   # only when rq info shows nothing queued, nothing failed and no busy worker; otherwise wait for a quiet window
+   docker compose up -d directus                     # (--force-recreate if the extension folder or .env changed)
+   docker compose up -d --force-recreate proxy       # the new STARbase build
+   ```
+   Alternative that leaves Redis alone (skip the `rq info` check and the flush): start Directus (`docker compose up -d --force-recreate
+   directus`) and, as an administrator, run `POST /utils/cache/clear` **immediately after Directus starts and before the proxy is recreated or
+   anyone is let back in**, so no cached permission answer from before the migration is served (Directus caches permissions; the reference
+   is docs/runbooks/upgrade-2026-10-row-level-visibility.md step 3). Then recreate proxy.
+5. Smoke: People shows the People | Teams switch; New team creates one and opens `/home/teams/<id>`; on a sample you own, Who has
+   access → add the team, then add a person to the team: that person is "waiting" (Home "Waiting for you" for the owner) until
+   approved or until Trust future members is ticked. `curl -s -o /dev/null -w '%{http_code}' https://d1-server.tail54eeb6.ts.net/d1-teams`
+   without a session is `401`. Joiner and team mails need the `EMAIL_*` settings (see the People admin section).
+
+Known behaviour: a derived row (an `<type>_access` row with `team_access_id` set) cannot be edited by hand, not even by an
+Administrator in Data Studio (42501 "Team access rows are managed by the team's grant"); change the team's grant instead. If the
+drift check ever shows rows (`missing`, `extra` or `role`, per grant and person), remove the team's grant on that record and add it
+again from Who has access (the grant's triggers rebuild its derived rows); do not edit derived rows by hand.
+
+Performance: the write paths `team_join_100_records` and `team_grant_20_members` are in `scripts/dev/perf_writes.sql` and
+`scripts/dev/directus_perf_writes.mjs`. The gate (p95 < 300 ms per list request, writes at most 2x, the two team writers under 500 ms) was
+run on 2026-10-14 on the seeded copy of live, before (`--skip 20261014000180 --skip 20261014000181 --skip 20261014000182`, overlays
+`d1-next-number d1-access-guard d1-record-access d1-trace d1-admin-overview`) and after (the same plus `d1-teams d1-people-admin
+d1-person-link`), with `D1_SMOKE_MODE=perf D1_SMOKE_REQUIRE_LM=1 bash scripts/dev/directus_smoke.sh` and
+`py -3 scripts/dev/perf_compare.py before.log after.log`: GATE PASS, worst read p95 143 ms, worst write ratio x1.00,
+`team_join_100_records` 115 ms and `team_grant_20_members` 81 ms through Directus (59 ms and 17 ms in SQL). Re-run it on the
+maintainer's machine if the copy of live has changed a lot; the procedure is in `docs/runbooks/a1-record-access-cutover.md`.
+
+Rollback: `make migrate-down` twice (182, then 181; 182's down deletes the derived rows and restores the old unique constraints),
+`git checkout <previous commit>`, rebuild, then reload exactly as in step 4: `docker compose stop directus`, flush Redis only after `rq info`
+shows nothing queued, nothing failed and no busy worker (or, instead of the flush, start Directus and run `POST /utils/cache/clear` as an
+administrator at once), start `directus`, recreate `proxy`. Deploy the previous `d1-record-access` at the same time. Teams, their members and history are lost with 181's down.
+
 ## Recorded batches (migration 177, process map slice 2)
 
 Recorded batches (ADR-0017): a `batches` table, a nullable `batch_id` on `manufacturing_operations` and

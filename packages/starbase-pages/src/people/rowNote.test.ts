@@ -26,5 +26,6 @@ describe('rowNote', () => {
 		expect(rowNote(row({ attention: ['suspended_owns_records'], login: login('suspended') }))).toBe('Suspended'));
 	it('otherwise gives the first note', () => expect(rowNote(row({ attention: ['possible_duplicate', 'missing_email'] }))).toBe('Possible duplicate'));
 	it('falls back to the attention wording for an unknown key', () => expect(rowNote(row({ attention: ['something_new'] }))).toBe('something_new'));
+	it('names a Former person who is still in a team', () => expect(rowNote(row({ attention: ['former_in_team'], active: false }))).toBe('Former, still in a team'));
 	it('has no note on a login without a person', () => expect(rowNote(row({ kind: 'login', attention: ['login_without_person'] }))).toBeNull());
 });

@@ -1,6 +1,6 @@
 // What the person panel decides, apart from drawing it: which login action a viewer may use, how an access record is worded, and
 // whether an Esc press belongs to the panel. No Vue, so it is unit-tested.
-import type { AccessList, AccessRecord } from './peopleApi';
+import type { AccessList, AccessRecord, PersonAccess } from './peopleApi';
 import type { PeopleRow } from './peopleQuery';
 
 export type LoginActionKind = 'suspend' | 'reactivate' | 'resend' | 'invite';
@@ -46,9 +46,18 @@ export const ACCESS_LISTS: { id: AccessList; label: string }[] = [
 	{ id: 'owns', label: 'Owns' },
 	{ id: 'shared', label: 'Shared with them' },
 	{ id: 'investigator', label: 'Investigator' },
+	{ id: 'teams', label: 'Through teams' },
 ];
 
 export const countLabel = (n: number): string => `${n} ${n === 1 ? 'record' : 'records'}`;
+
+/** "Waiting for approval: 3 records (2 owners)", or null when nothing is waiting. */
+export function waitingLine(a: Pick<PersonAccess, 'waiting' | 'waiting_owners'> | null | undefined): string | null {
+	const n = a?.waiting ?? 0;
+	if (n <= 0) return null;
+	const m = a?.waiting_owners ?? 0;
+	return `Waiting for approval: ${countLabel(n)} (${m} ${m === 1 ? 'owner' : 'owners'})`;
+}
 
 const LEVELS: Record<string, string> = {
 	owner: 'Owner',
@@ -79,6 +88,8 @@ export function sourceNote(rec: AccessRecord, admin: boolean): SourceNote {
 			return { remove: false, text: 'old entry, change on the project' };
 		case 'pi':
 			return { remove: false, text: 'change on the project' };
+		case 'team':
+			return { remove: false, text: 'through the team' };
 		default:
 			return { remove: false, text: `change on the ${(rec.kind ?? 'record').toLowerCase()}` };
 	}
