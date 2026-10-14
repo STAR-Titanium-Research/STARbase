@@ -46,7 +46,8 @@ const show = (n: number | undefined) => (n === undefined ? '–' : n.toLocaleStr
 			<StatusBadge kind="campaign" :value="campaign.status" />
 		</template>
 		<template #meta>
-			<span>Owner: {{ campaign.owner_person_id?.full_name || 'not set' }}</span>
+			<!-- Undefined: the owner was not asked for (the campaigns index skips it when people is unreadable). -->
+			<span v-if="campaign.owner_person_id !== undefined">Owner: {{ campaign.owner_person_id?.full_name || 'not set' }}</span>
 			<span>{{ dates }}</span>
 		</template>
 		<span class="d1-counts" title="Counts only what you can see">

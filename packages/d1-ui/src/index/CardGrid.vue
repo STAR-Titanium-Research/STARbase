@@ -63,6 +63,8 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 	display: flex; flex-direction: column; gap: 8px; height: 96px; padding: 12px;
 	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
 }
+/* The wide grid's cards are raised (the campaign card): its skeletons match, so rows do not jump. */
+.card-grid.wide .skeleton { height: 150px; padding: 12px 14px; border-radius: var(--d1-radius, 12px); background: var(--d1-surface); box-shadow: var(--d1-shadow); }
 .bar {
 	display: block; height: 10px; width: 60%; border-radius: 5px;
 	background: linear-gradient(90deg, var(--d1-tile) 25%, var(--d1-line) 50%, var(--d1-tile) 75%);
