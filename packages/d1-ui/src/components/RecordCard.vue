@@ -28,7 +28,9 @@ function onClickCapture(e: MouseEvent): void {
 </template>
 
 <style scoped>
+/* border-box: a card the grid stretches to its row (`height: 100%`) keeps its padding inside the row. */
 .d1-card {
+	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
