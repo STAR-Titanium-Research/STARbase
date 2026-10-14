@@ -11,9 +11,9 @@ import TeamTile from './TeamTile.vue';
 // a person who cannot sign in yet), "and N more", and Open team (the team's page). Escape or leaving closes it; a tap on the trigger keeps it
 // open until the next tap, Escape or a tap outside. The team is read once per page (the cache in teamsApi) the first time the card opens.
 //
-// The trigger (the default slot) gets the slot props `open`, `popId` and `triggerAttrs` (aria-haspopup, aria-expanded, aria-controls): bind them
+// The trigger (the default slot) gets the slot props `open`, `popId` and `triggerAttrs` (aria-expanded, aria-controls): bind them
 // on the element that opens the card, <template #default="{ triggerAttrs }"><button v-bind="triggerAttrs">, so a screen reader hears that a card
-// opened. The card says its content in a live region. When the team changes (a member added or removed through teamsApi) a mounted card forgets
+// opened. The card does not take focus, so it is a disclosure (no aria-haspopup, role=group); it says its content through a live region of the root that is always in the page. When the team changes (a member added or removed through teamsApi) a mounted card forgets
 // what it showed and reads again the next time it is open.
 //
 // The popover is position: fixed, placed from the trigger's box and kept on screen, so a dialog's or a panel's overflow does not clip it.
@@ -41,6 +41,9 @@ const pos = ref({ left: 0, top: 0 });
 let timer: ReturnType<typeof setTimeout> | null = null;
 let mute = false;
 
+// What the root's live region says: nothing while closed; on opening "Loading the team…", then the team (or the failure). The region itself is
+// never inside the v-if, so a screen reader already watches it when its text first appears.
+const announce = computed(() => (open.value ? cardStatus(team.value, members.value.length, failed.value) : ''));
 const attrs = computed(() => triggerAttrs(open.value, uid));
 
 const team = computed(() => detail.value?.team ?? null);
@@ -193,21 +196,20 @@ onBeforeUnmount(() => {
 
 <template>
 	<span ref="root" class="d1-team-card" @pointerenter="onEnter" @pointerleave="onLeave" @focusin="onFocusIn" @focusout="onFocusOut" @click="onClick">
+		<span class="sr" role="status" aria-live="polite">{{ announce }}</span>
 		<slot :open="open" :popId="uid" :triggerAttrs="attrs" />
 		<div
 			v-if="open"
 			:id="uid"
 			ref="pop"
 			class="d1-kit pop"
-			role="dialog"
+			role="group"
 			:aria-label="team ? `Team ${team.name}` : 'Team'"
 			:style="{ left: `${pos.left}px`, top: `${pos.top}px` }"
 			@pointerenter="(e: PointerEvent) => isMouse(e) && clearTimer()"
 			@pointerleave="onLeave"
 			@click.stop
 		>
-			<!-- the live region is in the card from the moment it opens, so the change from Loading to the team is announced -->
-			<span class="sr" role="status" aria-live="polite">{{ cardStatus(team, members.length, failed) }}</span>
 			<p v-if="failed" class="msg err" aria-hidden="true">{{ failed }}</p>
 			<p v-else-if="!team" class="msg" aria-hidden="true">Loading…</p>
 			<template v-else>
