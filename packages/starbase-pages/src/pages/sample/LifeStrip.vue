@@ -172,7 +172,8 @@ const KIND_LABEL: Record<string, string> = {
 .strip {
 	list-style: none;
 	margin: 0;
-	padding: 0 0 8px;
+	/* 4px on top: overflow-x clips vertically too, and this sample's larger dot with its ring reaches 4px above the line. */
+	padding: 4px 0 8px;
 	display: flex;
 	overflow-x: auto;
 }
