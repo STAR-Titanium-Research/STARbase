@@ -1045,8 +1045,13 @@ migration 141 prints about ownerless records.
   edge: the page becomes that edge, with its tests and operations merged newest first, each opening its own page, and
   **View forces** on machining operations opening the Force plotter for that operation. Open **Cutting inserts** and
   **Insert edges** from the index pages: the rows open these pages. An edge marked fresh that has a test or operation
-  shows "Marked fresh, but N tests or operations used this edge." (check one in the Data Studio first). Edit opens the
-  collection's own form in the drawer and saving refreshes the page. Check light and dark. Since: tooling pages, S3.
+  shows "Marked fresh, but N tests or operations used this edge." (check one in the Data Studio first). On the box,
+  the inserts list's last column shows "N marked fresh, but used" for an insert with such edges, and the insert page's
+  Edges list shows the same warning per edge. Create a test whose subjects are **two edges of the same insert** (the
+  Data Studio's test form, two insert edges as subjects): it must appear in the history of **both** edges, and count
+  once for each in the box's warnings (an edge marked fresh with only that test still warns). Edit opens the
+  collection's own form in the drawer and saving refreshes the page. Check light and dark. Since: tooling pages, S3;
+  review fixes (test subjects through the junction).
 - [ ] **TOOL-2 — Moving inside a box keeps the page.** On a real box, click insert, edge, then use the browser Back and
   Forward buttons. Expect: the address changes each time, the 3D view stays on screen and only the camera moves (no flash,
   no reload of the stage, the network tab shows no new read of the box's inserts or edges, only the clicked record and,
@@ -1055,8 +1060,8 @@ migration 141 prints about ownerless records.
   you". Since: tooling pages, S3.
 - [ ] **TOOL-3 — The 3D stage on a real GPU.** On a lab PC (light and dark theme) open a real box. Expect: the tray
   and inserts draw crisply with no jagged edges; the camera eases (about 0.4 s) to an insert and to an edge; the focused
-  insert lifts out of its pocket; edge letters on the hidden underside are faded; the next fresh edge glows and stops
-  pulsing when the tab is hidden; with the OS set to reduce motion, moves are instant and nothing pulses. The fan stays
+  insert lifts out of its pocket; edge letters on the hidden underside are faded; the next fresh edge glows, pulses for
+  about 2.4 s after each move and then rests at full strength (and does not pulse in a hidden tab); with the OS set to reduce motion, moves are instant and nothing pulses. The fan stays
   quiet when the page sits idle (no render loop at rest). Then turn WebGL off (Chrome `chrome://flags` → disable
   WebGL, or Firefox `webgl.disabled`) and reload: the 2D slot grid shows, with the same clicks and addresses. Shrink
   the window below 600 px wide: the 2D grid too. Since: tooling pages, S2.
