@@ -16,6 +16,7 @@
 //   A missing provide falls back to RIGHT / nothing open / nothing selected / nothing hidden.
 
 import { computed, inject, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue';
+import { isKeyboardFocus } from '../keyboard';
 import type { Dir } from '../model/elkInput';
 import type { Ref as RecordRef } from '../model/types';
 
@@ -96,11 +97,27 @@ export const wireHandlers = (a: MapActions, wire: () => { id: string; origin: st
 	},
 });
 
-/** A socket (Handle): hover or focus reports it, so the page can list the wires on it. */
+/** Sockets whose keyboard focus is on the hover stack, so a blur pops exactly what its focus pushed. */
+const focusHeld = new WeakSet<object>();
+
+/**
+ * A socket (Handle): hover or keyboard focus reports it, so the page can list the wires on it. A
+ * pointer click also focuses the socket; that is not a second hover (mouseenter already pushed it and
+ * mouseleave pops once), so only `:focus-visible` focus counts, and blur pops only what focus pushed.
+ */
 export const socketHandlers = (a: MapActions, socket: () => string) => {
 	const enter = (e: Pick<Ev, 'currentTarget'>) => a.hover(socket(), e.currentTarget as HTMLElement);
 	const leave = () => a.hover(null);
-	return { enter, leave, focus: enter, blur: leave };
+	const focus = (e: Pick<Ev, 'currentTarget'>) => {
+		const el = e.currentTarget as object;
+		if (!isKeyboardFocus(el) || focusHeld.has(el)) return;
+		focusHeld.add(el);
+		enter(e);
+	};
+	const blur = (e: Pick<Ev, 'currentTarget'>) => {
+		if (focusHeld.delete(e.currentTarget as object)) leave();
+	};
+	return { enter, leave, focus, blur };
 };
 
 /**

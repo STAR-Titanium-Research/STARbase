@@ -9,7 +9,7 @@ import { MiniMap } from '@vue-flow/minimap';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
-import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, openLink, recordRoute, useExplorerHost } from '@d1/ui';
+import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, useExplorerHost } from '@d1/ui';
 import type { Dir } from './model/elkInput';
 import { recordWord } from './model/fans';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
@@ -18,8 +18,8 @@ import HoverCard from './HoverCard.vue';
 import MapRail from './MapRail.vue';
 import MapSheet from './MapSheet.vue';
 import WireTip from './WireTip.vue';
-import { keyTarget, mapElement, mapKey } from './keyboard';
-import { createLongPress, createPointerKind } from './useLongPress';
+import { createPointerKind } from './useLongPress';
+import { useMapInput } from './useMapInput';
 import { miniMapColor, useMapCanvas } from './useMapCanvas';
 import { useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
@@ -144,60 +144,8 @@ const railCentre = () => map.selectedId.value && map.select(map.selectedId.value
 const setReach = (r: Reach) => map.setReach(r);
 const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setReach };
 
-// ---- keyboard (spec D23) ---------------------------------------------------------------------------
-/** One keydown for the whole canvas: it only acts on what has focus, and never while a field takes the key. */
-function onCanvasKey(e: KeyboardEvent) {
-	pointerKind.keyboard();
-	const t = keyTarget(e.target);
-	if (t.typing) return;
-	if (e.key === 'Escape') return map.clearHover();
-	// A button or link keeps Enter for itself.
-	const { action, id } = mapKey(e, e.key === 'Enter' && t.control ? null : t.id);
-	if (!id || action === 'none') return;
-	e.preventDefault();
-	if (action === 'select') actions.select(id);
-	else if (action === 'expand') actions.expand(id);
-	else {
-		// The same address as the rail's Open record; a junction or the "+N more" stub has no record.
-		const rec = map.info(id)?.ref;
-		if (rec) openLink(recordRoute(rec.collection, rec.id), router);
-	}
-}
-/** Focus on a card that is off the screen pans to it; the browser would scroll the clipped canvas. */
-function onCanvasFocusIn(e: FocusEvent) {
-	const found = mapElement(e.target);
-	if (!found) return;
-	for (let el = e.target as HTMLElement | null; el; el = el.parentElement) {
-		el.scrollLeft = 0;
-		el.scrollTop = 0;
-		if (el === canvasEl.value) break;
-	}
-	canvas.reveal(found.id);
-}
-
-// ---- touch (spec D24) ------------------------------------------------------------------------------
-const longPress = createLongPress<{ id: string; el: HTMLElement }>(({ id, el }) => map.holdHover(id, el));
-function onPointerDown(e: PointerEvent) {
-	pointerKind.note(e.pointerType);
-	if (e.pointerType !== 'touch') {
-		longPress.consumeFired(); // a long press whose click never came must not swallow a mouse click later
-		return;
-	}
-	map.clearHover(); // a card from the last long press goes with the next touch
-	const found = e.isPrimary ? mapElement(e.target) : null; // a second finger is a pinch
-	if (found) longPress.start(e.clientX, e.clientY, { id: found.id, el: found.el as HTMLElement });
-	else longPress.cancel();
-}
-function onPointerMove(e: PointerEvent) {
-	pointerKind.note(e.pointerType);
-	if (e.pointerType === 'touch') longPress.move(e.clientX, e.clientY);
-}
-/** The tap that ends a long press is not a tap: it must not also select. */
-function onClickCapture(e: MouseEvent) {
-	if (!longPress.consumeFired()) return;
-	e.stopPropagation();
-	e.preventDefault();
-}
+// Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
+const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
 
 // The wire tooltip's last line: where Ctrl/⌘+click goes.
 const tipHint = computed(() => {
@@ -280,14 +228,14 @@ onBeforeUnmount(() => {
 							class="pm-canvas"
 							:class="{ pending: !canvas.laidOut.value }"
 							@mouseleave="map.clearHover()"
-							@keydown="onCanvasKey"
-							@focusin="onCanvasFocusIn"
-							@pointerdown.capture="onPointerDown"
-							@pointermove.capture="onPointerMove"
-							@pointerup.capture="longPress.cancel()"
-							@pointercancel.capture="longPress.cancel()"
-							@click.capture="onClickCapture"
-							@contextmenu="pointerKind.touch && $event.preventDefault()"
+							@keydown="input.onKey"
+							@focusin="input.onFocusIn"
+							@pointerdown.capture="input.onPointerDown"
+							@pointermove.capture="input.onPointerMove"
+							@pointerup.capture="input.onPointerEnd"
+							@pointercancel.capture="input.onPointerEnd"
+							@click.capture="input.onClickCapture"
+							@contextmenu="input.onContextMenu"
 						>
 							<VueFlow
 								:node-types="canvas.nodeTypes"

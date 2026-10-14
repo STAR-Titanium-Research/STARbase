@@ -497,17 +497,37 @@ describe('keyboard and screen readers (spec D23)', () => {
 		expect(html).toContain('aria-label="Output socket"');
 	});
 
-	it('a focused socket reports itself like a hovered one, and blur lets go', () => {
+	it('a keyboard-focused socket reports itself like a hovered one, and blur lets go', () => {
 		const a = spies();
-		const el = {} as HTMLElement;
+		const el = { matches: (sel: string) => sel === ':focus-visible' } as unknown as HTMLElement;
 		const h = socketHandlers(a, () => 'op:o1:in:0');
 		h.focus({ currentTarget: el });
-		h.blur();
+		h.blur({ currentTarget: el });
 		expect(a.calls).toEqual([['hover', 'op:o1:in:0', el], ['hover', null]]);
 
 		const p = socketProps(a, 'op:o1:out:0', 'out');
 		p.onFocus({ currentTarget: el });
 		expect(a.calls[2]).toEqual(['hover', 'op:o1:out:0', el]);
+		p.onBlur({ currentTarget: el }); // a fresh handler set (a re-render) still pops what the focus pushed
+		expect(a.calls[3]).toEqual(['hover', null]);
+	});
+
+	it('a mouse click on a socket (pointer focus) leaves the hover stack as mouseenter / mouseleave made it', () => {
+		const a = spies();
+		const el = { matches: () => false } as unknown as HTMLElement;
+		const h = socketHandlers(a, () => 'op:o1:in:0');
+		h.enter({ currentTarget: el });
+		h.focus({ currentTarget: el }); // not :focus-visible: no second push
+		h.leave();
+		h.blur({ currentTarget: el }); // and no pop of something it never pushed
+		expect(a.calls).toEqual([['hover', 'op:o1:in:0', el], ['hover', null]]);
+	});
+
+	it('focus without :focus-visible support counts as keyboard focus (the safe side)', () => {
+		const a = spies();
+		const el = {} as HTMLElement; // no matches(): the check throws
+		socketHandlers(a, () => 's').focus({ currentTarget: el });
+		expect(a.calls).toEqual([['hover', 's', el]]);
 	});
 
 	it('Inside records carry their ref key, for the canvas keydown', async () => {

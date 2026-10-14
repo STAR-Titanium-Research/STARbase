@@ -66,3 +66,24 @@ export function keyTarget(target: unknown): { id: string | null; typing: boolean
 	const socket = !!el.closest('.vue-flow__handle');
 	return { id: socket ? null : (mapElement(el)?.id ?? null), typing, control };
 }
+
+/**
+ * Did focus arrive by keyboard? A mouse click on a socket or card also focuses it, and that must not
+ * act like keyboard navigation (no hover stack entry, no pan). `:focus-visible` tells the two apart; a
+ * browser or stand-in that cannot answer counts as keyboard (the safe side: the page just reveals).
+ */
+export function isKeyboardFocus(target: unknown): boolean {
+	try {
+		return (target as { matches(sel: string): boolean }).matches(':focus-visible');
+	} catch {
+		return true;
+	}
+}
+
+/** The card (Vue Flow node wrapper) holding `target`, whatever inside it is focused: a slot's owning card, not the slot's own key. */
+export function cardOf(target: unknown): { id: string; el: ElLike } | null {
+	const el = target as ElLike | null;
+	if (!el || typeof el.closest !== 'function') return null;
+	const card = el.closest('.vue-flow__node');
+	return card?.dataset?.id ? { id: card.dataset.id, el: card } : null;
+}
