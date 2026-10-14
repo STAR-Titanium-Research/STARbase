@@ -144,7 +144,7 @@ Used in the People list, the person panel, "Who has access", record rails (owner
 
 ## 2. Data model
 
-New migrations from **173** (main is at 172; check other open branches before claiming).
+New migrations from **174** (main is at 172, and fix/form-qa takes 173; check other open branches before claiming).
 
 ```sql
 CREATE TABLE teams (
@@ -346,6 +346,8 @@ runbook section added in PR 2 (as A1a's cutover: backup, apply, `rights_rebuild(
 - Ask-DB does not see teams (no grant); questions about team membership are not answerable there.
 - The last-Administrator rule is enforced only by `d1-people-admin`: Data Studio's `/users` page can still demote or suspend the
   last Administrator.
+- A Lab Admin has `admin_access`, so Data Studio `/users` lets them change any role (their own included) and suspend logins; the
+  People page's Lab Admin limits are page policy, not a security boundary.
 - Invite delivery failures show only in the Directus log: Directus sends the invite mail without waiting, so the page can say
   "sent" but never "delivered" (E7).
 
@@ -371,3 +373,11 @@ Where building PR 1 (the admin People page, `docs/superpowers/plans/2026-10-14-p
 - **E7** `email_sent` means "handed to Directus's mailer". Directus sends invites fire-and-forget, so a delivery failure shows only
   in its log; the UI says "sent", never "delivered". A mail error that does surface keeps the login and its link and gives
   `email_sent: false` (the page then points to Resend).
+- **E8 Migration number.** The People admin functions are migration **174** (`20261014000174_people_admin.sql`), not 173:
+  `fix/form-qa` claims 173. The attention counts follow the People page: `login_without_person` counts only active, invited or
+  suspended logins (archived and draft ones are not listed), and an invited login with no person is in both `login_without_person`
+  and `invite_not_accepted`.
+- **E9 Audit trail and header invite.** `PATCH /logins` writes through Directus's `UsersService.updateOne` as the caller (the
+  change is in `directus_activity` / `directus_revisions` under their name). A header invite with no person chosen links the one
+  unlinked person who has that e-mail (several: 409 `PERSON_AMBIGUOUS`); every person the endpoint links becomes a researcher.
+  An invite that has not been accepted cannot be suspended (409 `NOT_ACTIVE`).

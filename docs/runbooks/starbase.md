@@ -188,7 +188,9 @@ loading them, so step 2 deletes them by hand.
 
 0. Gate: the STARbase rollout above is done and `STARBASE_URL` is set in `.env`. Without it every
    permanent link answers `503` and the old pages are already gone after this phase. Stop here if not.
-1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`, then
+1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`. d1-server has the maintainer's uncommitted
+   `docker-compose.yml` edits (the `EMAIL_*` settings), so `git pull` may refuse or conflict: `git stash` first and `git stash pop`
+   after (merge by hand if it conflicts), or merge the compose file yourself. Do not discard them: invites need that mail setup. then
    `(cd core/extensions/d1-report && npm ci && npm run build)` and
    `(cd core/extensions/d1-report-button && npm ci && npm run build)`.
 2. Check the permanent links before anything is deleted. `d1-links` needs no build, but Directus loads
@@ -228,13 +230,15 @@ The STARbase tile stays first in the bar; remove it under Settings → Appearanc
 
 ## People admin (PR 1) (maintainer's step, approve separately)
 
-The admin People page: `d1-people-admin` (a Directus endpoint), migration 173 and STARbase's `/people` and `/accept-invite`.
+The admin People page: `d1-people-admin` (a Directus endpoint), migration 174 and STARbase's `/people` and `/accept-invite`.
 **No new `.env` keys.** `USER_INVITE_URL_ALLOW_LIST` is derived from `STARBASE_URL` in `docker-compose.yml`
 (`${STARBASE_URL}/accept-invite`), so `STARBASE_URL` must already be set (the STARbase rollout above); while it is blank the
 invite routes answer `503`.
 
-1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`.
-2. `make migrate-status` (173 pending), then `make migrate` (migration 173: the SQL functions behind the attention line and a
+1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`. d1-server has the maintainer's uncommitted
+   `docker-compose.yml` edits (the `EMAIL_*` settings), so `git pull` may refuse or conflict: `git stash` first and `git stash pop`
+   after (merge by hand if it conflicts), or merge the compose file yourself. Do not discard them: invites need that mail setup.
+2. `make migrate-status` (174 pending), then `make migrate` (migration 174: the SQL functions behind the attention line and a
    person's access counts).
 3. `docker compose up -d --force-recreate directus`. The recreate is what makes Directus load `d1-people-admin` and pick up
    `USER_INVITE_URL_ALLOW_LIST`; a plain `restart` is not enough for a changed environment. Then
@@ -245,5 +249,5 @@ invite routes answer `503`.
 5. Smoke: People shows the "needs attention" line and the Role menu; a person's panel shows Account and Access;
    `curl -s -o /dev/null -w '%{http_code}' https://d1-server.tail54eeb6.ts.net/d1-people-admin/people` without a session is `401`.
 
-Rollback: `make migrate-down` (173), `git checkout <previous commit>`, rebuild as in step 1, recreate `directus` and `proxy`.
+Rollback: `make migrate-down` (174), `git checkout <previous commit>`, rebuild as in step 1, recreate `directus` and `proxy`.
 A login invited meanwhile stays (an invited user is an ordinary Directus user).
