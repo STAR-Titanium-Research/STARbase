@@ -52,6 +52,15 @@ export interface OpRow {
   relations: Record<string, Ref | null>;
   settings: Record<string, unknown>;
   projectId: string | null;
+  /**
+   * Planned work (ADR-0019): 'planned' when the record is laid out but not carried out. Missing means done: every record read
+   * without the work-state field (not asked for, or not migrated yet) is drawn done.
+   */
+  workState?: 'planned';
+  /** When a planned record is meant to happen; `date` carries it for a planned record with no date of its own. */
+  plannedDate?: string | null;
+  /** A draft item (edit mode), drawn dashed with a "Draft" tint; never loaded, only made by toGraph. */
+  draft?: true;
 }
 
 export interface TestRow {
@@ -67,6 +76,15 @@ export interface TestRow {
   relations: Record<string, Ref | null>;
   settings: Record<string, unknown>;
   projectId: string | null;
+  /**
+   * Planned work (ADR-0019): 'planned' when the record is laid out but not carried out. Missing means done: every record read
+   * without the work-state field (not asked for, or not migrated yet) is drawn done.
+   */
+  workState?: 'planned';
+  /** When a planned record is meant to happen; `date` carries it for a planned record with no date of its own. */
+  plannedDate?: string | null;
+  /** A draft item (edit mode), drawn dashed with a "Draft" tint; never loaded, only made by toGraph. */
+  draft?: true;
 }
 
 export interface SampleRec {
@@ -77,6 +95,8 @@ export interface SampleRec {
   projectId: string | null;
   materialRef: Ref | null;
   facts: Record<string, string>;
+  /** A draft sample (edit mode); see `OpRow.draft`. A planned sample is one whose `status` is 'planned'. */
+  draft?: true;
 }
 
 export interface LineageRow {
@@ -186,6 +206,10 @@ export type RecordNode = {
   ins: string[];
   outs: string[];
   projectId?: string | null;
+  /** A planned sample (status 'planned'): drawn ghosted. */
+  planned?: true;
+  /** A draft sample: drawn dashed with a "Draft" tint. */
+  draft?: true;
 };
 
 export type ContainerNode = {
@@ -212,6 +236,10 @@ export type ContainerNode = {
   /** The date line a collapsed container shows. */
   meta?: string;
   probable: boolean;
+  /** Every row is planned work: drawn ghosted with a "Planned" pill. */
+  planned?: true;
+  /** Every row is a draft item: drawn dashed with a "Draft" tint. */
+  draft?: true;
 };
 
 /** The "+N more" stub that ends a used-in fan: clicking it loads the next page. */

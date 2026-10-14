@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { HostApi, TraceResponse } from '@d1/ui';
 import { isNotVisible } from '@d1/ui';
-import { chunkByBudget, encodedQuerySize, loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './loadFamily';
+import { chunkByBudget, encodedQuerySize, loadFamily, loadFormRead, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './loadFamily';
 
 interface Call {
   path: string;
@@ -909,6 +909,90 @@ describe('loadFamily: recorded batches (slice 2)', () => {
     const { api } = fakeApi(() => ({ data: opRow('o1') }));
     const row = await loadStepRow(api, { collection: 'manufacturing_operations', id: 'o1' });
     expect(row).toMatchObject({ id: 'o1', batchId: null });
+  });
+});
+
+describe('loadFamily: planned work (ADR-0019)', () => {
+  const WORK = ['work_state', 'planned_date'];
+  const both = { operation: [], test: [], workFields: { operation: WORK, test: WORK } };
+  const opRow = (id: string, extra: Record<string, unknown> = {}) => ({ operation_id: id, sample_id: 'root', output_sample_id: null, process_category: 'machining', ...extra });
+  const testRow = (id: string, extra: Record<string, unknown> = {}) => ({ session_id: id, sample_id: 'root', ...extra });
+  const answer = (ops: unknown[], tests: unknown[] = [], samples: unknown[] = []): Handler => (path) => {
+    if (path.startsWith('/d1-trace/')) return trace();
+    if (path === '/items/manufacturing_operations') return { data: ops };
+    if (path === '/items/test_sessions') return { data: tests };
+    if (path === '/items/physical_samples') return { data: samples };
+    return { data: [] };
+  };
+  const requested = (calls: Call[], path: string) => calls.filter((c) => c.path === path).flatMap((c) => c.params.fields as string[]);
+
+  it('asks for work_state and planned_date only when the forms list them', async () => {
+    const without = fakeApi(answer([opRow('o1')], [testRow('t1')]));
+    await loadFamily(without.api, 'root', { operation: [], test: [] });
+    await loadFamily(without.api, 'root');
+    for (const path of ['/items/manufacturing_operations', '/items/test_sessions']) {
+      expect(requested(without.calls, path).filter((f) => WORK.includes(f))).toEqual([]);
+    }
+    const listed = fakeApi(answer([opRow('o1')], [testRow('t1')]));
+    await loadFamily(listed.api, 'root', both);
+    for (const path of ['/items/manufacturing_operations', '/items/test_sessions']) expect(requested(listed.calls, path)).toEqual(expect.arrayContaining(WORK));
+  });
+
+  it('gates each form on its own list, and each field on being listed', async () => {
+    const { api, calls } = fakeApi(answer([opRow('o1')], [testRow('t1')]));
+    await loadFamily(api, 'root', { operation: [], test: [], workFields: { operation: ['work_state'], test: [] } });
+    expect(requested(calls, '/items/manufacturing_operations')).toContain('work_state');
+    expect(requested(calls, '/items/manufacturing_operations')).not.toContain('planned_date');
+    expect(requested(calls, '/items/test_sessions').filter((f) => WORK.includes(f))).toEqual([]);
+  });
+
+  it('a planned row is planned, with its planned date standing in for the date; anything else is done', async () => {
+    const { api } = fakeApi(
+      answer(
+        [opRow('o1', { work_state: 'planned', planned_date: '2026-11-03', operation_date: null }), opRow('o2', { work_state: 'done', operation_date: '2026-09-01' }), opRow('o3')],
+        [testRow('t1', { work_state: 'planned', planned_date: '2026-11-04' }), testRow('t2', { work_state: 'done' })],
+      ),
+    );
+    const data = await loadFamily(api, 'root', both);
+    expect(data.operations.map((o) => [o.workState, o.date])).toEqual([['planned', '2026-11-03'], [undefined, '2026-09-01'], [undefined, null]]);
+    expect(data.operations[0].plannedDate).toBe('2026-11-03');
+    expect(data.tests.map((t) => [t.workState, t.date])).toEqual([['planned', '2026-11-04'], [undefined, null]]);
+  });
+
+  it('a planned row that has its own date keeps it', async () => {
+    const { api } = fakeApi(answer([opRow('o1', { work_state: 'planned', planned_date: '2026-11-03', operation_date: '2026-10-01' })]));
+    expect((await loadFamily(api, 'root', both)).operations[0].date).toBe('2026-10-01');
+  });
+
+  it('a row with no work state is done', async () => {
+    const { api } = fakeApi(answer([opRow('o2')]));
+    expect((await loadFamily(api, 'root', { operation: [], test: [] })).operations[0].workState).toBeUndefined();
+  });
+
+  it('a planned sample keeps its status', async () => {
+    const { api } = fakeApi(answer([], [], [{ sample_id: 'root', sample_code: 'S-ROOT', current_status: 'planned' }]));
+    expect((await loadFamily(api, 'root', both)).samples.find((s) => s.id === 'root')?.status).toBe('planned');
+  });
+
+  it('a refused work-state read degrades to the plain list instead of failing the map', async () => {
+    const { api, calls } = fakeApi((path, params) => {
+      if (path === '/items/manufacturing_operations' && (params.fields as string[]).includes('work_state')) return httpError(403);
+      return answer([opRow('o1')])(path, params);
+    });
+    const data = await loadFamily(api, 'root', both);
+    expect(data.operations.map((o) => o.id)).toEqual(['o1']);
+    expect(data.operations[0].workState).toBeUndefined();
+    expect(calls.some((c) => c.path === '/items/manufacturing_operations' && !(c.params.fields as string[]).includes('work_state'))).toBe(true);
+  });
+
+  it('loadFormRead lists the work fields a collection has, from the same /fields answer', async () => {
+    const answerFields = (fields: string[]): Handler => (path) => (path.startsWith('/fields/') ? { data: fields.map((field) => ({ field, meta: { sort: 1 } })) } : { data: [] });
+    const full = fakeApi(answerFields(['operation_id', 'work_state', 'planned_date']));
+    expect(await loadFormRead(full.api, 'manufacturing_operations')).toEqual({ defs: null, work: ['work_state', 'planned_date'] });
+    expect(full.calls.filter((c) => c.path === '/fields/manufacturing_operations')).toHaveLength(1);
+    expect((await loadFormRead(fakeApi(answerFields(['operation_id'])).api, 'manufacturing_operations')).work).toEqual([]);
+    const refused = fakeApi(() => httpError(403));
+    expect(await loadFormRead(refused.api, 'manufacturing_operations')).toEqual({ defs: null, work: [] });
   });
 });
 

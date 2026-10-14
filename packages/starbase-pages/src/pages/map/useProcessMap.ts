@@ -12,7 +12,7 @@ import { groupBatches } from './model/groupBatches';
 import { hoverFocus, socketSubjects, type HoverFocus } from './model/hoverFocus';
 import { createHoverStack, type Hovered } from './model/hoverStack';
 import { fanData, fanKindOf, fanNodeIds, fanPage, fanRowIds, focusPlan, hasFan, mergeProcessData, withFanPage, withSideFan } from './model/fans';
-import { loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow, type FormDefs } from './model/loadFamily';
+import { loadFamily, loadFormRead, loadRecordRef, loadStepRow, loadUsedIn, parseFocus, sampleOfRow, type FormDefs } from './model/loadFamily';
 import { shownNodes } from './model/reach';
 import { flipKeys, keysOfGroup, nodesWithKey, resolveSelection, selectionKey, stableKeys } from './model/viewState';
 import { recordInfo, type RecordInfo } from './model/recordInfo';
@@ -121,13 +121,15 @@ function loadDefs(api: HostApi): Promise<DefsByKind> {
   if (!cached) {
     // A refused or failed read is not fatal: the known relations of each form stand in (spec §7 step 5).
     const read = (collection: string, kind: 'operation' | 'test') =>
-      loadRelationDefs(api, collection)
-        .catch(() => null)
-        .then((defs) => ({ defs: defs ?? FALLBACK_RELATIONS[kind], runtime: !!defs }));
+      loadFormRead(api, collection)
+        .catch(() => ({ defs: null, work: [] as string[] }))
+        .then(({ defs, work }) => ({ defs: defs ?? FALLBACK_RELATIONS[kind], runtime: !!defs, work }));
     cached = Promise.all([read('manufacturing_operations', 'operation'), read('test_sessions', 'test')]).then(([operation, test]) => ({
       operation: operation.defs,
       test: test.defs,
       runtime: operation.runtime && test.runtime,
+      // Only when a form lists them (ADR-0019): a database without the planned-work migration is read as before.
+      ...(operation.work.length || test.work.length ? { workFields: { operation: operation.work, test: test.work } } : {}),
     }));
     defsCache.set(api, cached);
   }
@@ -336,7 +338,14 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
    */
   async function loadFamilyAndDefs(sampleId: string): Promise<{ family: ProcessData; defs: DefsByKind }> {
     const relationDefs = await loadDefs(api);
-    const family = await loadFamily(api, sampleId, ...(relationDefs.runtime ? [{ operation: relationDefs.operation, test: relationDefs.test }] : []));
+    const { workFields } = relationDefs;
+    // The relations only when read at runtime; the work-state fields whenever a form lists them (alone, they ask for no relation).
+    const forms: FormDefs | null = relationDefs.runtime
+      ? { operation: relationDefs.operation, test: relationDefs.test, ...(workFields ? { workFields } : {}) }
+      : workFields
+        ? { operation: [], test: [], workFields }
+        : null;
+    const family = await loadFamily(api, sampleId, ...(forms ? [forms] : []));
     return { family, defs: relationDefs };
   }
 
