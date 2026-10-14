@@ -62,25 +62,45 @@ const familySample = async (api: APIRequestContext, readable?: APIRequestContext
 
 /**
  * Make up to `max` family samples readable to the preview's Lab Member by listing the member's person as "Can view" on them
- * (sample_access, role view; the readers tables follow by trigger). Returns the access rows it created, to be removed by
- * `revokeAccess`; a sample the member can already read through an existing row is left alone.
+ * (sample_access, role view; the readers tables follow by trigger). Each access row it creates is pushed onto `created` at once
+ * (the caller owns the array, so a failure half-way still cleans up what exists); a sample the member can already read through
+ * an existing row is left alone. Returns how many family samples the member may now read through such a row.
+ * The direct insert is a deliberate test shortcut: the d1-record-access endpoint would email the member and set added_by.
+ * It writes only to the preview copy: it refuses any other host.
  */
-async function grantMemberView(api: APIRequestContext, max = 4): Promise<string[]> {
+async function grantMemberView(api: APIRequestContext, created: string[], max = 4): Promise<number> {
+	const host = new URL(SERVER).hostname;
+	if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) throw new Error(`refusing to write test access rows to ${SERVER}: not a local preview`);
 	const [email] = account('member');
 	const user = (await rows(api, `/users?limit=1&fields=id&filter[email][_eq]=${encodeURIComponent(email)}`))[0];
 	const person = user && (await rows(api, `/items/people?limit=1&fields=person_id&filter[user_id][_eq]=${user.id}`))[0];
-	if (!person) return [];
-	const created: string[] = [];
+	if (!person) return 0;
+	let readable = 0;
 	for (const s of await familySamples(api, undefined, max)) {
 		const existing = await rows(api, `/items/sample_access?limit=1&fields=access_id&filter[sample_id][_eq]=${s.id}&filter[person_id][_eq]=${person.person_id}`);
-		if (existing.length) continue;
+		if (existing.length) {
+			readable++;
+			continue;
+		}
 		const res = await api.post(`${SERVER}/items/sample_access`, { data: { sample_id: s.id, person_id: person.person_id, role: 'view' } });
-		if (res.ok()) created.push(String(((await res.json()).data as Json).access_id));
+		if (!res.ok()) continue;
+		created.push(String(((await res.json()).data as Json).access_id));
+		readable++;
 	}
-	return created;
+	return readable;
 }
+/** Delete the access rows the run created; one failed delete does not stop the rest, and the leftovers are named. */
 async function revokeAccess(api: APIRequestContext, ids: string[]): Promise<void> {
-	for (const id of ids) await api.delete(`${SERVER}/items/sample_access/${id}`);
+	const left: string[] = [];
+	for (const id of ids) {
+		try {
+			const res = await api.delete(`${SERVER}/items/sample_access/${id}`);
+			if (!res.ok()) left.push(id);
+		} catch {
+			left.push(id);
+		}
+	}
+	if (left.length) throw new Error(`could not remove ${left.length} test sample_access row(s): ${left.join(', ')}`);
 }
 
 const mapUrl = (collection: string, id: string) => `${STARBASE}/map?focus=${collection}:${encodeURIComponent(id)}`;
@@ -155,19 +175,22 @@ for (const who of ['admin', 'member'] as const) {
 
 		let admin: APIRequestContext;
 		let sample: { id: string; code: string } | null = null;
-		let granted: string[] = [];
+		const granted: string[] = [];
 		test.beforeAll(async ({ playwright }) => {
 			admin = await adminApi(playwright, SERVER);
 			// The admin reads every sample; the Lab Member reads none on a fresh copy, so it is given a few to view (put
 			// back in afterAll) and finds its own sample in its own session in the first test.
 			if (who === 'admin') sample = await familySample(admin);
-			else granted = await grantMemberView(admin);
+			else if (await familySample(admin)) {
+				// The copy has family samples, so a member with none to read means the setup broke: fail, do not skip.
+				expect(await grantMemberView(admin, granted), 'the Lab Member can read a family sample after the grant').toBeGreaterThan(0);
+			}
 		});
 		test.afterAll(async () => {
 			try {
-				await revokeAccess(admin, granted);
+				if (admin) await revokeAccess(admin, granted);
 			} finally {
-				await admin.dispose();
+				await admin?.dispose();
 			}
 		});
 
