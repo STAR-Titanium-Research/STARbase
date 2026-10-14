@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildToolingModel, type EdgeRow, type InsertRow, type ToolingFocus } from '@d1/ui';
-import { escapeFocus, focusAnnouncement, hoverLabel, stepFocus, unplacedEdges } from './stageNav';
+import { escapeFocus, focusAnnouncement, hoverLabel, stageFits3d, stepFocus, unplacedEdges } from './stageNav';
 
 const ins = (n: number | null, depleted = false): InsertRow => ({
 	insert_id: `i${n ?? 'x'}`, insert_code: `X-${n ?? 'x'}`, insert_number: n, is_depleted: depleted,
@@ -111,5 +111,19 @@ describe('focusAnnouncement', () => {
 	it('is empty for an id the model does not have', () => {
 		expect(focusAnnouncement(model, I('nope'))).toBe('');
 		expect(focusAnnouncement(model, E('i1', 'nope'))).toBe('');
+	});
+});
+
+describe('stageFits3d', () => {
+	it('needs the stage itself to be at least 260 wide and 360 tall', () => {
+		expect(stageFits3d(260, 360)).toBe(true);
+		expect(stageFits3d(350, 560)).toBe(true);
+		expect(stageFits3d(259, 560)).toBe(false);
+		expect(stageFits3d(350, 359)).toBe(false);
+	});
+
+	it('does not need a wide stage: a portrait rail stage is 3D, and an unmeasured stage is not', () => {
+		expect(stageFits3d(318, 520)).toBe(true);
+		expect(stageFits3d(0, 0)).toBe(false);
 	});
 });

@@ -92,7 +92,10 @@ function pickEdge(e: ToolingEdge): void {
 .grid2d {
 	box-sizing: border-box;
 	width: 100%;
-	padding: 20px;
+	min-height: 100%;
+	display: flex;
+	flex-direction: column;
+	padding: 14px;
 	font-family: var(--theme--fonts--sans--font-family, 'Inter', system-ui, sans-serif);
 	color: var(--theme--foreground);
 }
@@ -100,9 +103,10 @@ function pickEdge(e: ToolingEdge): void {
 .slots {
 	display: grid;
 	grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+	grid-auto-rows: minmax(64px, 1fr);
 	gap: 8px;
-	max-width: 880px;
-	margin: 0 auto;
+	flex: 1;
+	width: 100%;
 }
 .slot {
 	position: relative;
