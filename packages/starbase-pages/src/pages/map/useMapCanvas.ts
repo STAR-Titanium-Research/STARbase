@@ -72,6 +72,8 @@ export function useMapCanvas(map: ProcessMap) {
   let token = 0;
   /** Where the last layout put each node and how big it was then: for nodes that are rebuilt (hidden chips, folds) but were not dragged, and to tell cards that are new, or that grew. */
   const placed = new Map<string, Box>();
+  /** Cards the person dragged this visit: they stay where they were dropped, whatever else changes, until Re-layout, a new direction or a new focus. */
+  const dragged = new Set<string>();
   /** The expand being drawn: new cards start at the card that was expanded instead of the origin. */
   let merging: MergeHint | null = null;
 
@@ -211,10 +213,10 @@ export function useMapCanvas(map: ProcessMap) {
         const here: Record<string, Box> = {};
         for (const n of vf.getNodes.value) {
           const was = placed.get(n.id);
-          if (was && !merges.some((m) => m.replace?.includes(n.id))) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
+          if (was && (dragged.has(n.id) || !merges.some((m) => m.replace?.includes(n.id)))) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
         }
         const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
-        positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors: merges.flatMap((m) => (m.anchor ? [m.anchor] : [])) });
+        positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors: merges.flatMap((m) => (m.anchor ? [m.anchor] : [])), pinned: dragged });
         for (const id of Object.keys(positions)) if (!here[id]) instant.add(id);
       }
       for (const n of vf.getNodes.value) {
@@ -235,6 +237,10 @@ export function useMapCanvas(map: ProcessMap) {
       laidOut.value = true; // show the nodes where they are rather than nothing
     }
   }
+
+  vf.onNodeDragStop((e) => {
+    for (const n of e.nodes ?? [e.node]) dragged.add(n.id);
+  });
 
   /** Run a layout once every node is measured: now when they are, else when Vue Flow says they are. `merges`: the expands (spec §6.7) it is for, none for a full layout. */
   async function scheduleLayout(merges: MergeHint[] | null = null): Promise<void> {
@@ -297,7 +303,12 @@ export function useMapCanvas(map: ProcessMap) {
 
   /** Re-layout (spec D18): every card back where ELK puts it, including the ones that were dragged. */
   async function relayout(): Promise<void> {
+    dragged.clear();
     await scheduleLayout();
+  }
+  /** A card changed size (a fold, "+N more from the form"): lay out again, but every card stays where it is; room is made round the one that grew. */
+  async function reflow(): Promise<void> {
+    await scheduleLayout([]);
   }
 
   // ---- reacting to the page state -----------------------------------------------------------------
@@ -308,17 +319,20 @@ export function useMapCanvas(map: ProcessMap) {
       laidOut.value = false;
       needsFit = true;
       placed.clear();
+      dragged.clear();
       token++;
     },
   );
-  // The shown set, the Show chips, a fold or the direction changed: rebuild and lay out again. An expand
-  // (the page says so with a merge hint) lays out only what is new; everything else lays out everything.
+  // The shown set (a Show chip, Reach, a fold, an expand, "+N more") changed: rebuild and lay out what is new. Cards that
+  // were already placed keep their places (spec D18); the merge hints say where the new ones go after an expand. Only a
+  // new direction lays everything out again, like Re-layout.
   let lastDir = map.dir.value;
   watch([() => map.nodes.value, () => map.dir.value], () => {
     const turned = map.dir.value !== lastDir;
     lastDir = map.dir.value;
     const hints = map.takeMergeHints();
-    const merges = turned || !placed.size || !hints.length ? null : hints;
+    if (turned) dragged.clear();
+    const merges = turned || !placed.size ? null : hints;
     merging = merges?.find((m) => m.anchor) ?? null;
     // A collapsed container that opened may come back under another id (a batch): it takes the old one's place and size.
     for (const merge of merges ?? []) {
@@ -327,6 +341,13 @@ export function useMapCanvas(map: ProcessMap) {
         const was = vf.findNode(merge.from!)?.position ?? from;
         placed.set(merge.anchor, { ...from, x: was.x, y: was.y });
       }
+    }
+    // Cards that are gone are forgotten: one that comes back is a new card, placed beside what it is wired to.
+    const drawn = new Set(map.nodes.value.map((n) => n.id));
+    for (const id of [...placed.keys()]) {
+      if (drawn.has(id)) continue;
+      placed.delete(id);
+      dragged.delete(id);
     }
     rebuild();
     merging = null;
@@ -383,5 +404,5 @@ export function useMapCanvas(map: ProcessMap) {
     return { x: x0 - FRAME_PAD, y: y0 - FRAME_PAD - FRAME_LABEL, width: x1 - x0 + FRAME_PAD * 2, height: y1 - y0 + FRAME_PAD * 2 + FRAME_LABEL };
   });
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, fit, fitFocus, remeasure, reveal, frame, whenSettled };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, reflow, fit, fitFocus, remeasure, reveal, frame, whenSettled };
 }

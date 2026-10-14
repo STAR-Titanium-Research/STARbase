@@ -33,6 +33,8 @@ export interface PlaceInput {
   dir: Dir;
   /** The cards the person expanded (on the map before and after); usually one, more when two expands share a layout. */
   anchors?: string[];
+  /** Cards the person dragged: a card that grew never pushes these aside (they stay where they were dropped). */
+  pinned?: ReadonlySet<string>;
 }
 
 /** Room kept between cards the layout moves. */
@@ -78,7 +80,7 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
     const id = queue.shift()!;
     const box = fixed.get(id)!;
     for (const [otherId, other] of fixed) {
-      if (otherId === id || !overlaps(box, other) || axis.start(other) < axis.start(box)) continue;
+      if (otherId === id || input.pinned?.has(otherId) || !overlaps(box, other) || axis.start(other) < axis.start(box)) continue;
       axis.set(other, axis.end(box) + GAP);
       moved.add(otherId);
       queue.push(otherId);

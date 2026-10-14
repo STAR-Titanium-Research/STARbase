@@ -101,6 +101,19 @@ describe('placeMerged (spec 6.7)', () => {
     expect(out.d).toBeUndefined(); // not in the way
   });
 
+  it('a pinned (dragged) card is not pushed by a card that grew; the others still make room', () => {
+    const out = placeMerged({
+      elk: {},
+      sizes: { a: { width: 100, height: 200 }, b: size, c: size },
+      placed: { a: box(0, 0), b: box(0, 60), c: box(0, 120) },
+      edges: [],
+      dir: 'RIGHT',
+      pinned: new Set(['b']),
+    });
+    expect(out.b).toBeUndefined();
+    expect(out.c.y).toBeGreaterThanOrEqual(200);
+  });
+
   it('with nothing placed it is ELK as it is', () => {
     const elk = { a: { x: 0, y: 0 }, b: { x: 200, y: 10 } };
     expect(placeMerged({ elk, sizes: sizes('a', 'b'), placed: {}, edges: [], dir: 'RIGHT' })).toEqual(elk);

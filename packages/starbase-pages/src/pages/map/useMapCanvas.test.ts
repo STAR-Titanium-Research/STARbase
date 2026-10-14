@@ -17,7 +17,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -52,6 +52,7 @@ vi.mock('@vue-flow/core', async (orig) => {
       }
     },
     onNodesInitialized: () => undefined,
+    onNodeDragStop: (fn: (e: { node: { id: string }; nodes: { id: string }[] }) => void) => void store.dragStops.push(fn),
     fitView: async () => true,
     setCenter: async () => true,
   };
@@ -86,6 +87,23 @@ const settle = async () => {
 };
 const nodesOf = () => (store.nodes as ShallowRef<FakeNode[]>).value;
 const at = (id: string) => nodesOf().find((n) => n.id === id)!.position;
+/** The person drags a card to `to` and lets go: Vue Flow moves it, then reports the drag stop. */
+const drag = (id: string, to: { x: number; y: number }) => {
+  nodesOf().find((n) => n.id === id)!.position = { ...to };
+  for (const fn of store.dragStops) fn({ node: { id }, nodes: [{ id }] });
+};
+const noOverlaps = (involving: string[]) => {
+  const boxes = nodesOf().map((n) => ({ id: n.id, ...n.position, width: n.dimensions.width, height: n.dimensions.height }));
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i];
+      const b = boxes[j];
+      if (!involving.includes(a.id) && !involving.includes(b.id)) continue; // (the fake's one-column layout is not collision-free for cards it laid out itself)
+      const apart = a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+      expect(apart, `${a.id} and ${b.id} overlap`).toBe(true);
+    }
+  }
+};
 
 const toolOps = (n: number) => Array.from({ length: n }, (_, i) => mkOp({ id: `u${i}`, code: `OP-${i}`, methodName: 'Turning', date: `2026-09-${String(28 - i).padStart(2, '0')}T09:00:00Z`, sampleId: `x${i}`, outputSampleId: `y${i}` }));
 const familyOfX = (i: number): ProcessData =>
@@ -107,6 +125,7 @@ async function open() {
 beforeEach(() => {
   store.layouts = 0;
   store.gate = null;
+  store.dragStops.length = 0;
   (store.nodes as ShallowRef<FakeNode[]>).value = [];
   vi.mocked(loadFamily).mockReset();
   vi.mocked(loadRecordRef).mockReset();
@@ -215,6 +234,141 @@ describe('useMapCanvas: an expand keeps what is placed (spec 6.7)', () => {
     await settle();
     expect(at('op:u3').x).toBe(0);
     expect(at('op:u3').y).toBeLessThan(900);
+  });
+});
+
+// A chain a - b - c - d - e (one operation between each pair) with a stock lot on a, focused on a.
+const chain = () =>
+  mkData({
+    samples: ['a', 'b', 'c', 'd', 'e'].map((id) => mkSample(id)),
+    stock: [{ lotId: 'l1', lotCode: 'LOT-1', supplier: null, massUsedGrams: null, sampleId: 'a' }],
+    operations: [
+      mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'M' }),
+      mkOp({ id: 'o2', sampleId: 'b', outputSampleId: 'c', date: '2026-09-02T09:00:00Z', methodName: 'M' }),
+      mkOp({ id: 'o3', sampleId: 'c', outputSampleId: 'd', date: '2026-09-03T09:00:00Z', methodName: 'M' }),
+      mkOp({ id: 'o4', sampleId: 'd', outputSampleId: 'e', date: '2026-09-04T09:00:00Z', methodName: 'M' }),
+    ],
+  });
+async function openChain(query: Record<string, unknown> = {}) {
+  vi.mocked(loadFamily).mockResolvedValue(chain());
+  const route = reactive({ path: '/map', query: { focus: 'physical_samples:a', reach: '1', ...query } as Record<string, unknown> });
+  const map = useProcessMap(api, route, { replace: async (to) => void (route.query = to.query) });
+  const canvas = useMapCanvas(map);
+  await settle();
+  return { map, canvas, route };
+}
+
+describe('useMapCanvas: a dragged card stays put when what is shown changes (spec D18)', () => {
+  it('a dragged card keeps its position when a Show chip hides another kind', async () => {
+    const { map } = await openChain();
+    expect(nodesOf().some((n) => n.id === 'lot:l1')).toBe(true);
+    drag('s:b', { x: 900, y: 900 });
+    const before = new Map(nodesOf().map((n) => [n.id, { ...n.position }]));
+    const layouts = store.layouts;
+
+    map.toggleKind('stock_lot');
+    await settle();
+
+    expect(store.layouts).toBe(layouts + 1);
+    expect(nodesOf().some((n) => n.id === 'lot:l1')).toBe(false);
+    expect(at('s:b')).toEqual({ x: 900, y: 900 });
+    // Nothing else was laid out again either: the lot just disappears.
+    for (const n of nodesOf()) expect(n.position, n.id).toEqual(before.get(n.id));
+  });
+
+  it('a card that comes back with its Show chip is placed beside its neighbour, not on a dragged card', async () => {
+    const { map } = await openChain();
+    map.toggleKind('stock_lot');
+    await settle();
+    const home = { ...at('s:a') };
+    drag('s:a', { x: home.x, y: home.y + 500 });
+    map.toggleKind('stock_lot');
+    await settle();
+    expect(nodesOf().some((n) => n.id === 'lot:l1')).toBe(true);
+    expect(at('s:a')).toEqual({ x: home.x, y: home.y + 500 });
+    noOverlaps(['lot:l1']);
+  });
+
+  it('a dragged card keeps its position when Reach changes; the cards a larger Reach adds do not land on it', async () => {
+    const { map } = await openChain();
+    expect(nodesOf().some((n) => n.id === 's:d')).toBe(false);
+    drag('s:a', { x: 700, y: 700 });
+    const before = new Map(nodesOf().map((n) => [n.id, { ...n.position }]));
+
+    map.setReach(3);
+    await settle();
+
+    expect(nodesOf().some((n) => n.id === 's:d')).toBe(true);
+    expect(at('s:a')).toEqual({ x: 700, y: 700 });
+    for (const [id, was] of before) expect(at(id), id).toEqual(was);
+    noOverlaps(nodesOf().filter((n) => !before.has(n.id)).map((n) => n.id));
+  });
+
+  it('a smaller Reach just drops the cards that fall away; the rest stay where they were', async () => {
+    const { map } = await openChain({ reach: '3' });
+    drag('s:a', { x: 700, y: 700 });
+    const before = new Map(nodesOf().map((n) => [n.id, { ...n.position }]));
+    map.setReach(1);
+    await settle();
+    expect(nodesOf().some((n) => n.id === 's:d')).toBe(false);
+    for (const n of nodesOf()) expect(n.position, n.id).toEqual(before.get(n.id));
+  });
+
+  it('a dragged card keeps its position when "+N more from the form" opens (the card grows, its neighbours make room)', async () => {
+    const { map, canvas } = await openChain({ reach: 'all' });
+    const group = map.nodes.value.find((n) => n.type === 'container')!;
+    drag('s:e', { x: 900, y: 900 });
+    const layouts = store.layouts;
+    map.toggleMore(group.id);
+    await canvas.remeasure(group.id);
+    await canvas.reflow();
+    await settle();
+    expect(store.layouts).toBe(layouts + 1);
+    expect(at('s:e')).toEqual({ x: 900, y: 900 });
+  });
+
+  it('a card that is dragged is not pushed aside by a card that grew', async () => {
+    const { map } = await open();
+    drag('op:u1', { ...at('op:u1') }); // dropped where it was (under u0), so it is pinned there
+    const was = { ...at('op:u1') };
+    const u2 = { ...at('op:u2') };
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0'); // u0 grows to 200 px: it would cover the cards under it
+    await settle();
+    expect(at('op:u1')).toEqual(was);
+    // a card that was not dragged is made room for
+    expect(at('op:u2').y).toBeGreaterThan(u2.y);
+  });
+
+  it('Re-layout puts every card back, dragged ones too, after a Show or Reach change', async () => {
+    const { map, canvas } = await openChain();
+    drag('s:b', { x: 900, y: 900 });
+    map.toggleKind('stock_lot');
+    map.setReach(3);
+    await settle();
+    expect(at('s:b')).toEqual({ x: 900, y: 900 });
+    await canvas.relayout();
+    await settle();
+    expect(at('s:b').x).toBe(0);
+    expect(at('s:b').y).toBeLessThan(900);
+  });
+
+  it('a new direction lays everything out again, like Re-layout', async () => {
+    const { map } = await openChain();
+    drag('s:b', { x: 900, y: 900 });
+    map.setDir('DOWN');
+    await settle();
+    expect(at('s:b').x).toBe(0);
+    expect(at('s:b').y).toBeLessThan(900);
+  });
+
+  it('a new focus forgets the drags', async () => {
+    const { route } = await openChain();
+    drag('s:b', { x: 900, y: 900 });
+    route.query = { focus: 'physical_samples:c', reach: '1' };
+    await settle();
+    expect(at('s:b').x).toBe(0);
+    expect(at('s:b').y).toBeLessThan(900);
   });
 });
 
