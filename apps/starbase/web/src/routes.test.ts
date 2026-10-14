@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { canonicalPath, configureLinks, resetLinks, resolveLink, routeTarget, starbaseLinks } from '@d1/ui';
 import {
-	CampaignPage, HomeView, IndexRoute, LabelsPage, OperationPage, PeopleView, ProjectPage, ProjectsIndex, CrawlerPage, RegisterSample, ReportBugPage, SamplePage, TestPage,
+	CampaignPage, HomeView, IndexRoute, LabelsPage, OperationPage, PeopleView, ProjectPage, ProjectsIndex, CrawlerPage, RegisterSample, ReportBugPage, SamplePage, TeamPage, TestPage,
 } from '@d1/starbase-pages';
+import AcceptInvite from './pages/AcceptInvite.vue';
 import { buildRoutes } from './router';
 import { plotRoutes } from './plot/routes';
 
@@ -17,7 +18,7 @@ describe('STARbase routes', () => {
 		const cases: [string, unknown][] = [
 			['/home', HomeView], ['/home/register-sample', RegisterSample], ['/home/people', PeopleView], ['/home/projects', ProjectsIndex],
 			['/home/projects/p1', ProjectPage], ['/home/campaigns/c1', CampaignPage], ['/home/samples/a%2Fb', SamplePage],
-			['/home/operations/o1', OperationPage], ['/home/tests/t1', TestPage], ['/home/labels?ids=1,2', LabelsPage], ['/home/samples', IndexRoute],
+			['/home/operations/o1', OperationPage], ['/home/teams/t1', TeamPage], ['/home/tests/t1', TestPage], ['/home/labels?ids=1,2', LabelsPage], ['/home/samples', IndexRoute],
 			['/report-bug', ReportBugPage], ['/crawler', CrawlerPage],
 		];
 		for (const [path, component] of cases) {
@@ -37,6 +38,13 @@ describe('STARbase routes', () => {
 			expect(r.meta.public, p).toBe(true);
 			expect(r.matched, p).toHaveLength(1);
 		}
+	});
+	it('/accept-invite resolves to AcceptInvite and is public, outside the shell', () => {
+		const r = memoryRouter().resolve('/accept-invite?token=abc');
+		expect(r.name).toBe('accept-invite');
+		expect(r.matched.at(-1)?.components?.default).toBe(AcceptInvite);
+		expect(r.meta.public).toBe(true);
+		expect(r.matched).toHaveLength(1);
 	});
 	it('an old /home link redirects with its query and encoding', async () => {
 		const router = memoryRouter();

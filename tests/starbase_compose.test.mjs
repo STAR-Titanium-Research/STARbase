@@ -33,6 +33,7 @@ test('without STARBASE_ORIGIN nothing is added: no trailing comma, no extra orig
 	assert.equal(c.services['diag-service'].environment.DIAG_CORS_ORIGINS, 'http://localhost:5180');
 	assert.equal(c.services.directus.environment.CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS, "'self'");
 	assert.equal(c.services.directus.environment.SESSION_COOKIE_SECURE, 'false');
+	assert.equal(c.services.directus.environment.USER_INVITE_URL_ALLOW_LIST, ''); // no STARBASE_URL: nothing is allowed (the invite endpoint answers 503)
 	assert.equal(c.services.starbase, undefined);
 });
 
@@ -44,6 +45,7 @@ test('with STARBASE_ORIGIN, the three CORS lists and the frame setting gain exac
 	assert.equal(c.services['diag-service'].environment.DIAG_CORS_ORIGINS, `http://localhost:5180,${STAR}`);
 	assert.equal(c.services.directus.environment.CONTENT_SECURITY_POLICY_DIRECTIVES__FRAME_ANCESTORS, `'self' ${STAR}`);
 	assert.equal(c.services.directus.environment.STARBASE_URL, STAR);
+	assert.equal(c.services.directus.environment.USER_INVITE_URL_ALLOW_LIST, `${STAR}/accept-invite`);
 	assert.equal(c.services.directus.environment.SESSION_COOKIE_SECURE, 'true');
 });
 
@@ -60,4 +62,8 @@ test('the proxy serves the built STARbase on :8090 without publishing it', { ski
 	assert.ok(p.volumes.some((v) => v.target === '/srv/starbase'));
 	assert.ok(!(p.ports ?? []).some((x) => String(x.target) === '8090'));
 	assert.equal(p.environment.D1_SERVER_ORIGIN, 'https://d1-server.tail54eeb6.ts.net');
+});
+
+test('Directus may invite only to STARBASE_URL/accept-invite (USER_INVITE_URL_ALLOW_LIST)', { skip: !docker }, () => {
+	assert.equal(config(['STARBASE_URL=https://sb.example']).services.directus.environment.USER_INVITE_URL_ALLOW_LIST, 'https://sb.example/accept-invite');
 });

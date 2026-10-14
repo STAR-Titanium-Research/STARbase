@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, type Router, type RouteRecordRaw } from 'vue-router';
 import { starbaseRoutes } from '@d1/starbase-pages';
 import AppShell from './AppShell.vue';
+import AcceptInvite from './pages/AcceptInvite.vue';
 import SignInDone from './pages/SignInDone.vue';
 import SignInPage from './pages/SignInPage.vue';
 import { guardDecision, homeRedirect } from './guard';
@@ -13,6 +14,7 @@ export function buildRoutes(extraChildren: RouteRecordRaw[] = []): RouteRecordRa
 	return [
 		{ path: '/signin', name: 'signin', component: SignInPage, meta: { public: true } },
 		{ path: '/signin/done', name: 'signin-done', component: SignInDone, meta: { public: true } },
+		{ path: '/accept-invite', name: 'accept-invite', component: AcceptInvite, meta: { public: true } },
 		{ path: '/home/:rest(.*)*', redirect: (to) => homeRedirect(to.fullPath) },
 		{ path: '/', component: AppShell, children: [...extraChildren, ...starbaseRoutes] },
 	];
@@ -21,9 +23,9 @@ export function buildRoutes(extraChildren: RouteRecordRaw[] = []): RouteRecordRa
 export function createStarbaseRouter(session: Session, extraChildren: RouteRecordRaw[] = []): Router {
 	const router = createRouter({ history: createWebHistory('/'), routes: buildRoutes(extraChildren) });
 	router.beforeEach(async (to) => guardDecision(to, await session.ensure()));
-	// The page frame sets the tab title for signed-in pages; the sign-in pages have no frame.
+	// The page frame sets the tab title for signed-in pages; the public pages (sign-in, accept-invite) have no frame.
 	router.afterEach((to) => {
-		if (to.meta.public === true && typeof document !== 'undefined') document.title = 'Sign in · STARbase';
+		if (to.meta.public === true && typeof document !== 'undefined') document.title = to.name === 'accept-invite' ? 'Set your password · STARbase' : 'Sign in · STARbase';
 	});
 	return router;
 }
