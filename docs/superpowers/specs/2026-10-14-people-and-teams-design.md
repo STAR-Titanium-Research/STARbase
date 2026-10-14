@@ -617,3 +617,7 @@ Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the 
   (owner grant and derived rows gone, members lose access, the team then deletes), and the team-owned orphan operation (read by a member,
   refused to a stranger, while an ownerless one is open). **Not covered:** the mails (no transport in the preview), the My work and
   team-filter views of team-owned records in a browser (the pure-function tests cover them) and the E30 readers.
+  **Performance (E20's gate, 2026-10-14, seeded copy of live, 177 and 178 withheld against applied):** worst read p95 144 ms (a stranger's
+  `co_owned_operation_all_fields`, 38 to 144 ms, from 177; every other read within x1.7), writes at most x1.53, the team writers 30 and 71 ms
+  in SQL and 106 and 123 ms through Directus (limit 500 ms). `perf_compare.py` prints FAIL only because those two writers now have a "before".
+  Details and the caveat about two machine-loaded runs: runbook "Team ownership (PR 3)".
