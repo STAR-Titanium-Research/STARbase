@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { OPERATION_DEFS, SAMPLE_DEFS, TEST_DEFS } from './fieldDefs.fixtures';
-import { choiceText, displayText, fieldViews, formTree, isEmptyValue, missingRequired, toFormFields } from './fieldModel';
+import { choiceText, displayText, effectiveValues, fieldViews, formTree, hasShown, isEmptyValue, missingRequired, toFormFields, withValue } from './fieldModel';
 import type { FormField, FormNode } from './fieldModel';
 
 const byName = (fields: FormField[], name: string): FormField => {
@@ -72,8 +72,8 @@ describe('toFormFields: samples', () => {
 		expect(form.choices[4]).toEqual({ text: 'Tensile coupon (ISO 6892)', value: 'tensile_coupon' });
 		expect(form.allowOther).toBe(true);
 		expect(byName(fields, 'current_status').allowOther).toBe(false);
-		expect(byName(fields, 'material_id').related).toEqual({ collection: 'materials', template: '{{common_name}} ({{alloy_code}})' });
-		expect(byName(fields, 'owner_person_id').related).toEqual({ collection: 'people', template: '{{full_name}}' });
+		expect(byName(fields, 'material_id').related).toEqual({ collection: 'materials', key: 'material_id', template: '{{common_name}} ({{alloy_code}})' });
+		expect(byName(fields, 'owner_person_id').related).toEqual({ collection: 'people', key: 'person_id', template: '{{full_name}}' });
 		expect(byName(fields, 'diameter_mm').related).toBeNull();
 	});
 
@@ -115,7 +115,7 @@ describe('toFormFields: operations and tests', () => {
 	it('takes the related collection from `relations` when a definition carries no foreign key', () => {
 		const def = { field: 'owner', type: 'uuid', meta: { special: ['m2o'], interface: 'select-dropdown-m2o' } };
 		expect(toFormFields([def])[0].kind).toBe('external');
-		expect(toFormFields([def], { relations: { owner: 'people' } })[0]).toMatchObject({ kind: 'person', related: { collection: 'people' } });
+		expect(toFormFields([def], { relations: { owner: 'people' } })[0]).toMatchObject({ kind: 'person', related: { collection: 'people', key: null } });
 	});
 
 	it('a foreign key is a record picker even without the m2o special; a file is external', () => {
@@ -268,5 +268,34 @@ describe('values as text', () => {
 		expect(displayText(byName(fields, 'co_owners'), [1, 2, 3])).toBe('3 items');
 		expect(displayText(byName(fields, 'sample_code'), { a: 1 })).toBe('{"a":1}');
 		expect(displayText(byName(fields, 'diameter_mm'), '12.5')).toBe('12.5');
+	});
+});
+
+describe('values', () => {
+	it('withValue sets a field, removes it when cleared, keeps 0 and false, and does not touch the original', () => {
+		const base = { a: 1, b: 'x' };
+		expect(withValue(base, 'a', 2)).toEqual({ a: 2, b: 'x' });
+		expect(withValue(base, 'b', '')).toEqual({ a: 1 });
+		expect(withValue(base, 'b', null)).toEqual({ a: 1 });
+		expect(withValue(base, 'c', 0)).toEqual({ a: 1, b: 'x', c: 0 });
+		expect(withValue(base, 'c', false)).toEqual({ a: 1, b: 'x', c: false });
+		expect(base).toEqual({ a: 1, b: 'x' });
+	});
+
+	it('effectiveValues: an own value wins, an empty one shows what is inherited', () => {
+		expect(effectiveValues({ a: 1 }, { a: 9, b: 8 })).toEqual({ a: 1, b: 8 });
+		expect(effectiveValues({ a: '' }, { a: 9 })).toEqual({ a: 9 });
+		expect(effectiveValues({ a: 0 }, { a: 9 })).toEqual({ a: 0 });
+		expect(effectiveValues({ a: 1 })).toEqual({ a: 1 });
+		expect(effectiveValues({ z: null }, { a: 9 })).toEqual({ a: 9, z: null });
+	});
+
+	it('hasShown is false for a group with nothing in it showing', () => {
+		const fields = toFormFields(OPERATION_DEFS);
+		const tree = formTree(fields);
+		const sintering = tree.find((n) => n.field.field === 'grp_sintering');
+		if (!sintering) throw new Error('no sintering group');
+		expect(hasShown(sintering, fieldViews(fields, { process_category: 'machining' }))).toBe(false);
+		expect(hasShown(sintering, fieldViews(fields, { process_category: 'sintering' }))).toBe(true);
 	});
 });

@@ -59,8 +59,8 @@ export interface FormField {
 	step: number | null;
 	/** Whole numbers only (integer columns). */
 	integer: boolean;
-	/** For kind 'record' / 'person': where the id points, and the display template of the field's options. */
-	related: { collection: string; template: string | null } | null;
+	/** For kind 'record' / 'person': where the id points (collection and its key column), and the display template of the field's options. */
+	related: { collection: string; key: string | null; template: string | null } | null;
 	/** Groups only: starts collapsed. */
 	collapsed: boolean;
 }
@@ -127,7 +127,7 @@ function conditionsOf(def: FieldDef): FieldCondition[] {
 function relatedOf(def: FieldDef, opts: FormFieldOptions): FormField['related'] {
 	const collection = str(def.schema?.foreign_key_table) ?? opts.relations?.[def.field] ?? null;
 	if (!collection) return null;
-	return { collection, template: str(def.meta?.options?.template) };
+	return { collection, key: str(def.schema?.foreign_key_column), template: str(def.meta?.options?.template) };
 }
 
 function kindOf(def: FieldDef, related: FormField['related'], choices: FieldChoice[]): FieldKind {
@@ -294,6 +294,28 @@ export function isEmptyValue(v: unknown): boolean {
 	if (typeof v === 'string') return v.trim() === '';
 	if (Array.isArray(v)) return v.length === 0;
 	return false;
+}
+
+/** `values` with one field set; an empty value (cleared) removes the key, so an inherited value shows again. 0 and false stay. */
+export function withValue(values: Values, field: string, value: unknown): Values {
+	const next = { ...values };
+	if (isEmptyValue(value)) delete next[field];
+	else next[field] = value;
+	return next;
+}
+
+/** True when something in this node shows: a field that is not hidden, or a group with such a field in it. */
+export function hasShown(node: FormNode, views: ReadonlyMap<string, FieldView>): boolean {
+	if (node.field.kind !== 'group') return !views.get(node.field.field)?.hidden;
+	return node.children.some((c) => hasShown(c, views));
+}
+
+/** `own` over `inherited`: a field with a value of its own keeps it, one left empty shows what it inherits. */
+export function effectiveValues(own: Values, inherited?: Values): Values {
+	if (!inherited) return own;
+	const out: Values = { ...inherited };
+	for (const [k, v] of Object.entries(own)) if (!isEmptyValue(v) || !(k in out)) out[k] = v;
+	return out;
 }
 
 /** The shown, writable, required fields that have no value yet, in form order. Groups never count. */

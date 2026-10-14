@@ -170,6 +170,13 @@ export { default as IndexPage } from './index/IndexPage.vue';
 export { default as RowMapButton } from './index/RowMapButton.vue';
 export { MAP_ROW_COLLECTIONS, mapPath } from './mapLink';
 
+// Generated form (STARbase's own form from Directus field definitions; ADR-0018)
+export { default as FieldForm } from './form/FieldForm.vue';
+export { toFormFields, formTree, fieldViews, missingRequired, effectiveValues, withValue, isEmptyValue } from './form/fieldModel';
+export type { FieldDef, FieldKind, FieldView, FormField, FormNode } from './form/fieldModel';
+export { applyConditions, matchesRule } from './form/conditions';
+export type { FieldCondition, Values as FormValues } from './form/conditions';
+
 // Admin Home rules (the crawler online test, the overview shape, the Needs attention rows)
 export { CRAWLER_ONLINE_MS, ago, attentionView, crawlerOnline, isAuthRefusal, normaliseOverview, overviewTime, ownerlessRows, ownerlessTotal } from './adminHome';
 export type { AdminOverview, AttentionTile, Crawler, CrawlerState, Fingerprints, MissingFiles, Ownerless, OwnerlessRow } from './adminHome';

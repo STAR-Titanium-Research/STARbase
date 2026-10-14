@@ -27,6 +27,7 @@ interface Spec {
 	conditions?: unknown[] | null;
 	group?: string | null;
 	fk?: string;
+	fkKey?: string;
 	pk?: boolean;
 }
 
@@ -41,7 +42,7 @@ function def(collection: string, field: string, s: Spec = {}): FieldDef {
 			data_type: s.type === 'decimal' ? 'numeric' : (s.type ?? 'text'),
 			is_nullable: true,
 			is_primary_key: !!s.pk,
-			...(s.fk ? { foreign_key_table: s.fk, foreign_key_column: `${s.fk}_id` } : {}),
+			...(s.fk ? { foreign_key_table: s.fk, foreign_key_column: s.fkKey ?? 'id' } : {}),
 		},
 		meta: {
 			collection,
@@ -119,6 +120,7 @@ export const SAMPLE_DEFS: FieldDef[] = [
 		interface: 'select-dropdown-m2o',
 		options: { template: '{{common_name}} ({{alloy_code}})' },
 		fk: 'materials',
+		fkKey: 'material_id',
 		group: 'grp_material',
 		sort: 20,
 		label: 'Material',
@@ -150,6 +152,7 @@ export const SAMPLE_DEFS: FieldDef[] = [
 		interface: 'select-dropdown-m2o',
 		options: { template: '{{full_name}}', enableCreate: false },
 		fk: 'people',
+		fkKey: 'person_id',
 		group: 'grp_who_where',
 		sort: 10,
 		label: 'Owner',
@@ -178,6 +181,7 @@ export const OPERATION_DEFS: FieldDef[] = [
 		interface: 'select-dropdown-m2o',
 		options: { template: '{{method_code}} – {{method_name}}' },
 		fk: 'manufacturing_methods',
+		fkKey: 'method_id',
 		group: 'grp_what',
 		sort: 10,
 		label: 'Method',
@@ -190,6 +194,7 @@ export const OPERATION_DEFS: FieldDef[] = [
 		interface: 'select-dropdown-m2o',
 		options: { template: '{{sample_code}} – {{nickname}}', enableCreate: true },
 		fk: 'physical_samples',
+		fkKey: 'sample_id',
 		group: 'grp_what',
 		sort: 30,
 		label: 'Input sample',
@@ -219,6 +224,7 @@ export const OPERATION_DEFS: FieldDef[] = [
 		interface: 'select-dropdown-m2o',
 		options: { template: '{{tool_code}} – {{tool_name}}' },
 		fk: 'tools',
+		fkKey: 'tool_id',
 		group: 'grp_tooling',
 		sort: 10,
 		label: 'Tool',
