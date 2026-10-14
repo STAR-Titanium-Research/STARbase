@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { Handle } from '@vue-flow/core';
 import type { JunctionNode } from '../model/types';
-import { socketHandlers, useMapActions, useMapView } from './actions';
+import { useMapView, useSocketProps } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, LINEAGE_LABEL, kindVar } from './kinds';
 
@@ -11,8 +11,7 @@ import { KINDS, LINEAGE_LABEL, kindVar } from './kinds';
 const props = defineProps<{ id: string; data: JunctionNode; selected?: boolean }>();
 defineOptions({ inheritAttrs: false });
 const { direction } = useMapView();
-const actions = useMapActions();
-const sock = (id: string) => socketHandlers(actions, () => id);
+const sockProps = useSocketProps();
 
 const style = KINDS.junction;
 const label = computed(() => LINEAGE_LABEL[props.data.lineageType]);
@@ -28,8 +27,7 @@ const fraction = (f: number | null) => (f === null ? '' : String(Number(f.toPrec
 			:position="handlePosition(direction, 'in')"
 			:connectable="false"
 			:style="edgeStyle(direction, 'in', 0, 1)"
-			@mouseenter="sock(data.in).enter"
-			@mouseleave="sock(data.in).leave"
+			v-bind="sockProps(data.in, 'in')"
 		/>
 		<div class="nb">
 			<span class="kind k-ink k-tint"><v-icon :name="style.icon" x-small />{{ label }}</span>
@@ -44,8 +42,7 @@ const fraction = (f: number | null) => (f === null ? '' : String(Number(f.toPrec
 					type="source"
 					:position="handlePosition(direction, 'out')"
 					:connectable="false"
-					@mouseenter="sock(o.socket).enter"
-					@mouseleave="sock(o.socket).leave"
+					v-bind="sockProps(o.socket, 'out')"
 				/>
 			</span>
 		</div>

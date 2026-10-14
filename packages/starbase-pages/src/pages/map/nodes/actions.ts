@@ -12,6 +12,7 @@
 //   refKey of the record selected in the rail, so an Inside slot can show it as focal.
 //   `hiddenSides` is which side of a node has records the person may not read (spec D21), from the
 //   graph's hidden markers; a node draws the "some records hidden" pill there.
+//   `socketLabel` names what a socket connects, for screen readers.
 //   A missing provide falls back to RIGHT / nothing open / nothing selected / nothing hidden.
 
 import { computed, inject, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue';
@@ -31,6 +32,8 @@ export interface MapView {
 	moreOpen: Ref<ReadonlySet<string>>;
 	selectedRef: Ref<string | null>;
 	hiddenSides?: Ref<ReadonlyMap<string, ReadonlySet<'in' | 'out'>>>;
+	/** What a socket connects, for its aria-label (spec D23): "Input: S-0412-A · Sample". The page builds it from the wires. */
+	socketLabel?: (socket: string, side: 'in' | 'out') => string;
 }
 
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');
@@ -93,8 +96,33 @@ export const wireHandlers = (a: MapActions, wire: () => { id: string; origin: st
 	},
 });
 
-/** A socket (Handle): hover reports it, so the page can list the wires on it. */
-export const socketHandlers = (a: MapActions, socket: () => string) => ({
-	enter: (e: Pick<Ev, 'currentTarget'>) => a.hover(socket(), e.currentTarget as HTMLElement),
-	leave: () => a.hover(null),
-});
+/** A socket (Handle): hover or focus reports it, so the page can list the wires on it. */
+export const socketHandlers = (a: MapActions, socket: () => string) => {
+	const enter = (e: Pick<Ev, 'currentTarget'>) => a.hover(socket(), e.currentTarget as HTMLElement);
+	const leave = () => a.hover(null);
+	return { enter, leave, focus: enter, blur: leave };
+};
+
+/**
+ * What a socket's Handle binds (spec D23): a tab stop named for what it connects, whose hover and focus
+ * both report it. `label` is the page's `socketLabel`; without one it only says which side it is.
+ */
+export const socketProps = (a: MapActions, socket: string, side: 'in' | 'out', label?: (socket: string, side: 'in' | 'out') => string) => {
+	const h = socketHandlers(a, () => socket);
+	return {
+		tabindex: 0,
+		role: 'group',
+		'aria-label': label?.(socket, side) ?? (side === 'in' ? 'Input socket' : 'Output socket'),
+		onMouseenter: h.enter,
+		onMouseleave: h.leave,
+		onFocus: h.focus,
+		onBlur: h.blur,
+	};
+};
+
+/** `socketProps` for the component in hand: `v-bind="sockProps(id, 'in')"` on a Handle. */
+export function useSocketProps(): (socket: string, side: 'in' | 'out') => ReturnType<typeof socketProps> {
+	const actions = useMapActions();
+	const view = useMapView();
+	return (socket, side) => socketProps(actions, socket, side, view.socketLabel);
+}

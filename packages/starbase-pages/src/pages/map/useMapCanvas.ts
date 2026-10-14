@@ -16,6 +16,7 @@ import ContainerNode from './nodes/ContainerNode.vue';
 import JunctionNode from './nodes/JunctionNode.vue';
 import RecordNode from './nodes/RecordNode.vue';
 import WireEdge from './nodes/WireEdge.vue';
+import { cardLabel } from './nodes/a11y';
 import { KINDS } from './nodes/kinds';
 import { wireTooltip } from './nodes/wireTooltip';
 import MoreNode from './nodes/MoreNode.vue';
@@ -89,6 +90,9 @@ export function useMapCanvas(map: ProcessMap) {
       data: n,
       draggable: true,
       selectable: false,
+      // The card's wrapper is its tab stop (spec D23) and is named for screen readers; the "+N more" stub is its own button.
+      focusable: n.type !== 'more',
+      ariaLabel: cardLabel(n) ?? undefined,
     }));
     const edges: Edge[] = (map.graph.value?.wires ?? [])
       .filter((w) => byId.has(nodeOfSocket(w.from)) && byId.has(nodeOfSocket(w.to)))
@@ -302,6 +306,20 @@ export function useMapCanvas(map: ProcessMap) {
     },
   );
 
+  /** Keyboard focus reached a card that is off the screen: pan to it (a browser would scroll the clipped canvas instead). */
+  function reveal(id: string): void {
+    const node = vf.findNode(id);
+    if (!node) return;
+    const { x, y } = node.computedPosition;
+    const { width, height } = node.dimensions;
+    const v = vf.viewport.value;
+    const view = vf.dimensions.value;
+    const left = x * v.zoom + v.x;
+    const top = y * v.zoom + v.y;
+    if (left >= 0 && top >= 0 && left + width * v.zoom <= view.width && top + height * v.zoom <= view.height) return;
+    void vf.setCenter(x + width / 2, y + height / 2, { zoom: v.zoom, duration: reducedMotion() ? 0 : 200 });
+  }
+
   /** After a fold or the "+N more" toggle a card changes size: tell Vue Flow, so its sockets and wires follow. */
   async function remeasure(...ids: string[]): Promise<void> {
     await nextTick();
@@ -327,6 +345,6 @@ export function useMapCanvas(map: ProcessMap) {
     return { x: x0 - FRAME_PAD, y: y0 - FRAME_PAD - FRAME_LABEL, width: x1 - x0 + FRAME_PAD * 2, height: y1 - y0 + FRAME_PAD * 2 + FRAME_LABEL };
   });
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, fit, fitFocus, remeasure, frame };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, fit, fitFocus, remeasure, reveal, frame };
 }
 

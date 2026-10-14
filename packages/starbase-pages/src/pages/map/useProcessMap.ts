@@ -721,10 +721,18 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   /** The hover card (spec D16): the hovered card or slot, once the pointer has rested on it for 250 ms. */
   const card = shallowRef<{ id: string; el: HTMLElement; info: RecordInfo } | null>(null);
+  /** The next hover raises its card at once (a long press on a phone has waited already) instead of after the rest. */
+  let cardNow = false;
+  const holdHover = (id: string, el: HTMLElement) => {
+    cardNow = true;
+    hover(id, el);
+  };
   watch(hovered, (h) => {
     if (cardTimer) clearTimeout(cardTimer);
     cardTimer = null;
     card.value = null;
+    const delay = cardNow ? 0 : HOVER_DELAY_MS;
+    cardNow = false;
     if (!h?.el) return;
     const resting = h;
     cardTimer = setTimeout(() => {
@@ -732,7 +740,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const now = hovered.value;
       const found = now && now.id === resting.id && now.el ? info(now.id) : null;
       if (found && now?.el) card.value = { id: now.id, el: now.el, info: found };
-    }, HOVER_DELAY_MS);
+    }, delay);
   });
 
   return {
@@ -772,6 +780,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     selectedRefKey,
     centreRequest,
     hover,
+    holdHover,
     clearHover,
     hovered,
     tooltip,

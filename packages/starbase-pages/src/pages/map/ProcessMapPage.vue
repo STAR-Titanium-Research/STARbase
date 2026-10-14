@@ -9,26 +9,35 @@ import { MiniMap } from '@vue-flow/minimap';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
-import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, useExplorerHost } from '@d1/ui';
+import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, openLink, recordRoute, useExplorerHost } from '@d1/ui';
 import type { Dir } from './model/elkInput';
 import { recordWord } from './model/fans';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
+import { socketLabeller } from './nodes/a11y';
 import HoverCard from './HoverCard.vue';
 import MapRail from './MapRail.vue';
+import MapSheet from './MapSheet.vue';
 import WireTip from './WireTip.vue';
+import { keyTarget, mapElement, mapKey } from './keyboard';
+import { createLongPress, createPointerKind } from './useLongPress';
 import { miniMapColor, useMapCanvas } from './useMapCanvas';
+import { useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
 import { useProcessMap, type Reach } from './useProcessMap';
 
 // The Process map (spec D1-D3, §6.1): a record's family as a map of what was done to it. The page frame,
 // the crumb line, the rail (left, 300 px) and the map panel. The state is useProcessMap's, the drawing
 // is useMapCanvas's; this file puts them together: the rail (MapRail), the hover card (HoverCard, after
-// a 250 ms rest), the wire and socket tooltip (WireTip) and the data previews they show.
+// a 250 ms rest), the wire and socket tooltip (WireTip) and the data previews they show. Keyboard
+// (keyboard.ts) and touch (useLongPress.ts, the bottom sheet MapSheet) are wired here too (spec D23, D24).
 const host = useExplorerHost();
 const route = useRoute();
 const router = useRouter();
 const map = useProcessMap(host.api, route, router);
 const canvas = useMapCanvas(map);
+/** Below 768 px: the rail is a bottom sheet, the minimap is gone, a long press shows the hover card. */
+const phone = useIsPhone();
+const pointerKind = createPointerKind();
 
 // What the node and wire components call (nodes/actions.ts).
 const actions: MapActions = {
@@ -37,7 +46,11 @@ const actions: MapActions = {
 		void map.expand(id); // loads what is missing, shows what is one step beyond
 		void canvas.remeasure(id);
 	},
-	hover: (id, el) => map.hover(id, el),
+	// A finger's tap sends an emulated mouseenter; the card is for a long press (below), not for every tap.
+	hover: (id, el) => {
+		if (id !== null && pointerKind.touch) return;
+		map.hover(id, el);
+	},
 	toggleRows: (id) => map.toggleRows(id),
 	toggleMore: (id) => {
 		map.toggleMore(id);
@@ -45,7 +58,16 @@ const actions: MapActions = {
 		void canvas.remeasure(id).then(() => canvas.relayout());
 	},
 };
-const view: MapView = { direction: map.dir, moreOpen: map.moreOpen, selectedRef: map.selectedRefKey, hiddenSides: map.hiddenSides };
+// What a socket connects, for its aria-label: one pass over the wires per graph, not per socket.
+const drawnNodes = computed(() => new Map(map.nodes.value.map((n) => [n.id, n])));
+const labelSocket = computed(() => socketLabeller(map.graph.value?.wires ?? [], drawnNodes.value));
+const view: MapView = {
+	direction: map.dir,
+	moreOpen: map.moreOpen,
+	selectedRef: map.selectedRefKey,
+	hiddenSides: map.hiddenSides,
+	socketLabel: (socket, side) => labelSocket.value(socket, side),
+};
 provide(MAP_ACTIONS, actions);
 provide(MAP_VIEW, view);
 
@@ -105,9 +127,77 @@ const railSelect = (id: string) => {
 	map.clearHover(); // the card of the row the pointer is on would stay behind where the map is about to move
 	map.select(id, { centre: true });
 };
+/** The rail's props, one object for its two homes: the left column, and on a phone the bottom sheet. */
+const railProps = computed(() => ({
+	info: map.selectedInfo.value,
+	preview: selectedPreview.value,
+	onMap: map.selectedOnMap.value,
+	connections: map.connections.value,
+	highlight: map.socketHighlight.value,
+	presentKinds: map.presentKinds.value,
+	hiddenKinds: map.hiddenKinds.value,
+	probable: map.probable.value,
+	reach: map.reach.value,
+}));
 const railExpand = () => map.selectedId.value && actions.expand(map.selectedId.value);
 const railCentre = () => map.selectedId.value && map.select(map.selectedId.value, { centre: true });
 const setReach = (r: Reach) => map.setReach(r);
+const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setReach };
+
+// ---- keyboard (spec D23) ---------------------------------------------------------------------------
+/** One keydown for the whole canvas: it only acts on what has focus, and never while a field takes the key. */
+function onCanvasKey(e: KeyboardEvent) {
+	pointerKind.keyboard();
+	const t = keyTarget(e.target);
+	if (t.typing) return;
+	if (e.key === 'Escape') return map.clearHover();
+	// A button or link keeps Enter for itself.
+	const { action, id } = mapKey(e, e.key === 'Enter' && t.control ? null : t.id);
+	if (!id || action === 'none') return;
+	e.preventDefault();
+	if (action === 'select') actions.select(id);
+	else if (action === 'expand') actions.expand(id);
+	else {
+		// The same address as the rail's Open record; a junction or the "+N more" stub has no record.
+		const rec = map.info(id)?.ref;
+		if (rec) openLink(recordRoute(rec.collection, rec.id), router);
+	}
+}
+/** Focus on a card that is off the screen pans to it; the browser would scroll the clipped canvas. */
+function onCanvasFocusIn(e: FocusEvent) {
+	const found = mapElement(e.target);
+	if (!found) return;
+	for (let el = e.target as HTMLElement | null; el; el = el.parentElement) {
+		el.scrollLeft = 0;
+		el.scrollTop = 0;
+		if (el === canvasEl.value) break;
+	}
+	canvas.reveal(found.id);
+}
+
+// ---- touch (spec D24) ------------------------------------------------------------------------------
+const longPress = createLongPress<{ id: string; el: HTMLElement }>(({ id, el }) => map.holdHover(id, el));
+function onPointerDown(e: PointerEvent) {
+	pointerKind.note(e.pointerType);
+	if (e.pointerType !== 'touch') {
+		longPress.consumeFired(); // a long press whose click never came must not swallow a mouse click later
+		return;
+	}
+	map.clearHover(); // a card from the last long press goes with the next touch
+	const found = e.isPrimary ? mapElement(e.target) : null; // a second finger is a pinch
+	if (found) longPress.start(e.clientX, e.clientY, { id: found.id, el: found.el as HTMLElement });
+	else longPress.cancel();
+}
+function onPointerMove(e: PointerEvent) {
+	pointerKind.note(e.pointerType);
+	if (e.pointerType === 'touch') longPress.move(e.clientX, e.clientY);
+}
+/** The tap that ends a long press is not a tap: it must not also select. */
+function onClickCapture(e: MouseEvent) {
+	if (!longPress.consumeFired()) return;
+	e.stopPropagation();
+	e.preventDefault();
+}
 
 // The wire tooltip's last line: where Ctrl/⌘+click goes.
 const tipHint = computed(() => {
@@ -153,80 +243,83 @@ onBeforeUnmount(() => {
 				</div>
 			</Section>
 
-			<RecordLayout v-else class="d1-process-map" style="--d1-sticky-top: var(--d1-header-offset, 70px)">
-				<template #crumbs>
-					<AppLink :to="indexRoute(focusCollection)">{{ focusWord.many }}</AppLink>
-					<span>›</span>
-					<RecordLink :collection="focusCollection" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
-					<span>›</span>
-					<span>Process map</span>
-				</template>
-
-				<template #title-actions>
-					<v-button small secondary @click="copyLink"><v-icon name="link" small /> {{ copied ? 'Copied' : 'Copy link' }}</v-button>
-				</template>
-
-				<template #rail>
-					<MapRail
-						:info="map.selectedInfo.value"
-						:preview="selectedPreview"
-						:on-map="map.selectedOnMap.value"
-						:connections="map.connections.value"
-						:highlight="map.socketHighlight.value"
-						:present-kinds="map.presentKinds.value"
-						:hidden-kinds="map.hiddenKinds.value"
-						:probable="map.probable.value"
-						:reach="map.reach.value"
-						@expand="railExpand"
-						@centre="railCentre"
-						@hover="railHover"
-						@select="railSelect"
-						@toggle-kind="map.toggleKind"
-						@set-probable="map.setProbable"
-						@set-reach="setReach"
-					/>
-				</template>
-
-				<Section class="pm-panel" title="Process map">
-					<template #actions>
-						<v-button small secondary @click="finderOpen = true"><v-icon name="search" small /> Find a record</v-button>
-						<SegmentedControl :model-value="map.dir.value" :options="DIRECTIONS" label="Direction" @update:model-value="map.setDir" />
-						<v-button small secondary @click="canvas.relayout()">Re-layout</v-button>
-						<v-button small secondary @click="canvas.fit()">Fit</v-button>
-						<v-button small secondary @click="map.clearFocus()">Clear</v-button>
+			<template v-else>
+				<RecordLayout class="d1-process-map" style="--d1-sticky-top: var(--d1-header-offset, 70px)">
+					<template #crumbs>
+						<AppLink :to="indexRoute(focusCollection)">{{ focusWord.many }}</AppLink>
+						<span>›</span>
+						<RecordLink :collection="focusCollection" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
+						<span>›</span>
+						<span>Process map</span>
 					</template>
-
-					<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
-					<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
-					<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
-					<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
-
-					<div ref="canvasEl" class="pm-canvas" :class="{ pending: !canvas.laidOut.value }" @mouseleave="map.clearHover()">
-						<VueFlow
-							:node-types="canvas.nodeTypes"
-							:edge-types="canvas.edgeTypes"
-							:nodes-draggable="true"
-							:nodes-connectable="false"
-							:elements-selectable="false"
-							:zoom-on-double-click="false"
-							:min-zoom="0.1"
-							:max-zoom="1.6"
-							:only-render-visible-elements="false"
+	
+					<template #title-actions>
+						<v-button small secondary @click="copyLink"><v-icon name="link" small /> {{ copied ? 'Copied' : 'Copy link' }}</v-button>
+					</template>
+	
+					<template v-if="!phone" #rail>
+						<MapRail v-bind="railProps" v-on="railEvents" />
+					</template>
+	
+					<Section class="pm-panel" title="Process map">
+						<template #actions>
+							<v-button small secondary @click="finderOpen = true"><v-icon name="search" small /> Find a record</v-button>
+							<SegmentedControl :model-value="map.dir.value" :options="DIRECTIONS" label="Direction" @update:model-value="map.setDir" />
+							<v-button small secondary @click="canvas.relayout()">Re-layout</v-button>
+							<v-button small secondary @click="canvas.fit()">Fit</v-button>
+							<v-button small secondary @click="map.clearFocus()">Clear</v-button>
+						</template>
+	
+						<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
+						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
+						<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
+						<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
+	
+						<div
+							ref="canvasEl"
+							class="pm-canvas"
+							:class="{ pending: !canvas.laidOut.value }"
+							@mouseleave="map.clearHover()"
+							@keydown="onCanvasKey"
+							@focusin="onCanvasFocusIn"
+							@pointerdown.capture="onPointerDown"
+							@pointermove.capture="onPointerMove"
+							@pointerup.capture="longPress.cancel()"
+							@pointercancel.capture="longPress.cancel()"
+							@click.capture="onClickCapture"
+							@contextmenu="pointerKind.touch && $event.preventDefault()"
 						>
-							<template #zoom-pane>
-								<div v-if="frameStyle && frameLabel" class="pm-frame" :style="frameStyle">
-									<span class="pm-frame-label k-ink">{{ frameLabel }}</span>
-								</div>
-							</template>
-							<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
-							<MiniMap pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
-							<Controls :show-interactive="false" />
-						</VueFlow>
-						<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
-						<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
-					</div>
-				</Section>
-			</RecordLayout>
+							<VueFlow
+								:node-types="canvas.nodeTypes"
+								:edge-types="canvas.edgeTypes"
+								:nodes-draggable="true"
+								:nodes-focusable="true"
+								:edges-focusable="false"
+								:nodes-connectable="false"
+								:elements-selectable="false"
+								:zoom-on-double-click="false"
+								:min-zoom="0.1"
+								:max-zoom="1.6"
+								:only-render-visible-elements="false"
+							>
+								<template #zoom-pane>
+									<div v-if="frameStyle && frameLabel" class="pm-frame" :style="frameStyle">
+										<span class="pm-frame-label k-ink">{{ frameLabel }}</span>
+									</div>
+								</template>
+								<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
+								<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
+								<Controls :show-interactive="false" />
+							</VueFlow>
+							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
+							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
+						</div>
+					</Section>
+				</RecordLayout>
+				<MapSheet v-if="phone" :title="map.selectedInfo.value?.code ?? 'Nothing selected'">
+					<MapRail v-bind="railProps" v-on="railEvents" />
+				</MapSheet>
+			</template>
 		</PageShell>
 		<Finder v-if="finderOpen" :pick-record="(r) => map.setFocus(r.collection, r.id)" @close="finderOpen = false" />
 	</ExplorerView>
@@ -290,8 +383,8 @@ onBeforeUnmount(() => {
 .pm-canvas :deep(.vue-flow__controls-button:hover) { background: var(--d1-tile); }
 .pm-canvas :deep(.vue-flow__controls-button svg) { fill: currentColor; }
 .pm-canvas :deep(.vue-flow__minimap) { background: var(--d1-surface); border: 1px solid var(--d1-line); border-radius: 8px; overflow: hidden; }
-/* Phones pinch and pan the map; the minimap would cover it (spec D24). */
-@media (max-width: 767px) {
-	.pm-canvas :deep(.vue-flow__minimap) { display: none; }
+/* Phones pinch and pan the map (spec D24): the minimap is not drawn there (v-if), and a long press must not select text or raise the system menu. */
+@media (pointer: coarse) {
+	.pm-canvas { -webkit-touch-callout: none; user-select: none; }
 }
 </style>

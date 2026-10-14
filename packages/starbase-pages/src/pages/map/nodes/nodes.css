@@ -77,3 +77,8 @@
 .d1-process-map .sock.row.out { right: -21px; }
 .d1-process-map .sock.row.fat.in { left: -23px; }
 .d1-process-map .sock.row.fat.out { right: -23px; }
+
+/* Keyboard focus (spec D23): the card's Vue Flow wrapper is the tab stop, so its ring is drawn on the card; sockets get a ring too. */
+.d1-process-map .vue-flow__node:focus { outline: none; }
+.d1-process-map .vue-flow__node:focus-visible > .node { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
+.d1-process-map .sock:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 3px; }

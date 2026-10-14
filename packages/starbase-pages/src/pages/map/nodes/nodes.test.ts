@@ -4,7 +4,8 @@ import { renderToString } from 'vue/server-renderer';
 import { buildGraph } from '../model/buildGraph';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from '../model/fixtures';
 import type { ContainerNode as ContainerData, JunctionNode as JunctionData, MapNode, ProcessData, RecordNode as RecordData, Slot, Wire } from '../model/types';
-import { MAP_ACTIONS, MAP_VIEW, cardHandlers, recordHandlers, refKey, stopping, wireHandlers, type MapActions, type MapView } from './actions';
+import { MAP_ACTIONS, MAP_VIEW, cardHandlers, recordHandlers, refKey, socketHandlers, socketProps, stopping, wireHandlers, type MapActions, type MapView } from './actions';
+import { cardLabel, socketLabeller } from './a11y';
 import ContainerNode from './ContainerNode.vue';
 import JunctionNode from './JunctionNode.vue';
 import MoreNode from './MoreNode.vue';
@@ -466,5 +467,71 @@ describe('used-in fan cards (D20)', () => {
 		const a = spies();
 		stopping(() => a.expand('more:tools:t1'))({ stopPropagation() {} });
 		expect(a.calls).toEqual([['expand', 'more:tools:t1']]);
+	});
+});
+
+describe('keyboard and screen readers (spec D23)', () => {
+	const sample: RecordData = { id: 's:s1', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 's1', code: 'S-0412-A' }, status: 'active', ins: ['s:s1:in:0'], outs: ['s:s1:out:0'] };
+	const label = (socket: string, side: 'in' | 'out') => `${side}:${socket}`;
+
+	it('every socket is a tab stop named for what it connects, in a card, a container and a junction', async () => {
+		const rec = await render(RecordNode, { id: sample.id, data: sample }, { socketLabel: label });
+		expect(rec.match(/tabindex="0"/g)).toHaveLength(2);
+		expect(rec).toContain('aria-label="in:s:s1:in:0"');
+		expect(rec).toContain('aria-label="out:s:s1:out:0"');
+
+		const [c] = containers(cutOf(4), true);
+		const html = await render(ContainerNode, { id: c.id, data: c }, { socketLabel: label });
+		const socks = [...html.matchAll(/<span class="sock[^"]*"[^>]*>/g)].map((m) => m[0]);
+		expect(socks).toHaveLength(4); // the shared input, two own outputs, the bundle output
+		for (const s of socks) expect(s).toMatch(/tabindex="0"[^>]*aria-label="(in|out):/);
+
+		const j: JunctionData = { id: 'j:s1:cut_from', type: 'junction', lineageType: 'cut_from', parentId: 's1', in: 'j:s1:cut_from:in:0', outs: [{ socket: 'j:s1:cut_from:out:0', childId: 'c1', fraction: 0.5 }] };
+		const jh = await render(JunctionNode, { id: j.id, data: j }, { socketLabel: label });
+		expect(jh.match(/tabindex="0"/g)).toHaveLength(2);
+	});
+
+	it('without a page behind it a socket still says which side it is', async () => {
+		const html = await render(RecordNode, { id: sample.id, data: sample });
+		expect(html).toContain('aria-label="Input socket"');
+		expect(html).toContain('aria-label="Output socket"');
+	});
+
+	it('a focused socket reports itself like a hovered one, and blur lets go', () => {
+		const a = spies();
+		const el = {} as HTMLElement;
+		const h = socketHandlers(a, () => 'op:o1:in:0');
+		h.focus({ currentTarget: el });
+		h.blur();
+		expect(a.calls).toEqual([['hover', 'op:o1:in:0', el], ['hover', null]]);
+
+		const p = socketProps(a, 'op:o1:out:0', 'out');
+		p.onFocus({ currentTarget: el });
+		expect(a.calls[2]).toEqual(['hover', 'op:o1:out:0', el]);
+	});
+
+	it('Inside records carry their ref key, for the canvas keydown', async () => {
+		const slot: Slot = { field: 'tool_id', role: 'Tool', ref: refOf('tools', 't1', 'T-1'), major: true };
+		expect(await render(SlotRow, { item: slot })).toContain('data-map-id="tools:t1"');
+	});
+
+	it('names cards: code and kind, the method for a container, the lineage type for a junction', () => {
+		expect(cardLabel(sample)).toBe('S-0412-A, Sample');
+		const [c] = containers(cutOf(1));
+		expect(cardLabel(c)).toMatch(/, Operation$/);
+		const j: JunctionData = { id: 'j:s1:cut_from', type: 'junction', lineageType: 'cut_from', parentId: 's1', in: 'x', outs: [] };
+		expect(cardLabel(j)).toBe('Cut from, Lineage');
+		expect(cardLabel({ id: 'more:tools:t1', type: 'more', remaining: 3 } as unknown as MapNode)).toBeNull();
+	});
+
+	it('labels a socket with the lines of its tooltip, grouping the wires once', () => {
+		const op: ContainerData = containers(cutOf(1))[0];
+		const nodes = new Map<string, MapNode>([[sample.id, sample], [op.id, op]]);
+		const wires: Wire[] = [{ id: 'w', from: 's:s1:out:0', to: `${op.id}:in:0`, carries: 's1', flow: 'sample', bundled: false, origin: 's:s1' }];
+		const labelOf = socketLabeller(wires, nodes);
+		expect(labelOf(`${op.id}:in:0`, 'in')).toBe('Input: S-0412-A · Sample');
+		expect(labelOf('s:s1:out:0', 'out')).toBe('Output: S-0412-A · Sample');
+		expect(labelOf('s:s9:out:0', 'out')).toBe('Output: Not connected');
+		expect(labelOf(`${op.id}:in:0`, 'in')).toBe(socketLabeller(wires, nodes)(`${op.id}:in:0`, 'in')); // same answer however asked
 	});
 });

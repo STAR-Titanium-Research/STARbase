@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { Handle } from '@vue-flow/core';
 import { StatusBadge } from '@d1/ui';
 import type { RecordNode } from '../model/types';
-import { cardHandlers, socketHandlers, useHiddenSides, useMapActions, useMapView } from './actions';
+import { cardHandlers, useHiddenSides, useMapActions, useMapView, useSocketProps } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import HiddenPill from './HiddenPill.vue';
 import { KINDS, kindVar, statusKindOf } from './kinds';
@@ -19,7 +19,7 @@ const style = computed(() => KINDS[props.data.kind]);
 // Stock flows (lots, powder batches, material) wire in the material colour, samples in the sample colour.
 const flow = computed(() => (['stock_lot', 'powder_batch', 'material'].includes(props.data.kind) ? 'var(--k-material)' : 'var(--k-sample)'));
 const card = cardHandlers(actions, () => props.id);
-const sock = (id: string) => socketHandlers(actions, () => id);
+const sockProps = useSocketProps();
 const hiddenSides = useHiddenSides(() => props.id);
 </script>
 
@@ -39,8 +39,7 @@ const hiddenSides = useHiddenSides(() => props.id);
 			class="sock"
 			type="target"
 			:position="handlePosition(direction, 'in')"
-			@mouseenter="sock(s).enter"
-			@mouseleave="sock(s).leave"
+			v-bind="sockProps(s, 'in')"
 			:connectable="false"
 			:style="edgeStyle(direction, 'in', i, data.ins.length)"
 		/>
@@ -61,8 +60,7 @@ const hiddenSides = useHiddenSides(() => props.id);
 			class="sock"
 			type="source"
 			:position="handlePosition(direction, 'out')"
-			@mouseenter="sock(s).enter"
-			@mouseleave="sock(s).leave"
+			v-bind="sockProps(s, 'out')"
 			:connectable="false"
 			:style="edgeStyle(direction, 'out', i, data.outs.length)"
 		/>
