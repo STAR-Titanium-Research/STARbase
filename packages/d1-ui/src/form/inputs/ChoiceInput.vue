@@ -12,6 +12,10 @@ const props = defineProps<{
 	id: string;
 	disabled?: boolean;
 	inherited?: boolean;
+	/** The live required state (a condition can change it) and the aria hooks the form passes (see FieldInput). */
+	required?: boolean;
+	invalid?: boolean;
+	describedby?: string;
 }>();
 const emit = defineEmits<{ (e: 'update:value', value: unknown): void; (e: 'blur'): void }>();
 
@@ -45,16 +49,16 @@ function typeOther(e: Event): void {
 
 <template>
 	<div class="d1-choice" :class="{ inherited }">
-		<div v-if="radio" :id="id" class="radios" role="radiogroup" :aria-label="field.label" :aria-required="field.required || undefined">
+		<div v-if="radio" :id="id" class="radios" role="radiogroup" :aria-label="field.label" :aria-required="required || undefined" :aria-invalid="invalid || undefined" :aria-describedby="describedby">
 			<label v-for="c in field.choices" :key="String(c.value)" class="radio">
 				<input type="radio" :name="id" :value="String(c.value)" :checked="selected === String(c.value)" :disabled="disabled" @change="pick(String(c.value))" @blur="emit('blur')" />
 				<span>{{ c.text }}</span>
 			</label>
-			<button v-if="!field.required && selected !== '' && !disabled" type="button" class="link" @click="pick('')">Clear</button>
+			<button v-if="!required && selected !== '' && !disabled" type="button" class="link" @click="pick('')">Clear</button>
 		</div>
 		<template v-else>
-			<select :id="id" class="sel" :value="selected" :disabled="disabled" :aria-required="field.required || undefined" @change="choose" @blur="emit('blur')">
-				<option value="">{{ field.required ? 'Choose…' : 'Not set' }}</option>
+			<select :id="id" class="sel" :value="selected" :disabled="disabled" :aria-required="required || undefined" :aria-invalid="invalid || undefined" :aria-describedby="describedby" @change="choose" @blur="emit('blur')">
+				<option value="">{{ required ? 'Choose…' : 'Not set' }}</option>
 				<option v-for="c in field.choices" :key="String(c.value)" :value="String(c.value)">{{ c.text }}</option>
 				<option v-if="field.allowOther" :value="OTHER">Other…</option>
 			</select>
@@ -80,6 +84,7 @@ function typeOther(e: Event): void {
 	border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface); color: inherit;
 	font: inherit; font-size: var(--fs-md, 13px);
 }
+.sel[aria-invalid='true'], .other[aria-invalid='true'] { border-color: var(--d1-bad); }
 .sel:focus, .other:focus { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: -1px; }
 .sel:disabled, .other:disabled { opacity: 0.7; }
 .inherited .sel, .inherited .other { color: var(--d1-dim); font-style: italic; }

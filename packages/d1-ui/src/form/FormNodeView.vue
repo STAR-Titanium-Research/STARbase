@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import Section from '../components/Section.vue';
 import FieldInput from './FieldInput.vue';
 import { hasShown, isEmptyValue } from './fieldModel';
+import { inputProblem, inputText } from './inputValue';
 import type { FieldView, FormField, FormNode } from './fieldModel';
 import type { Values } from './conditions';
 
@@ -40,6 +41,15 @@ const value = computed(() => (isInherited.value ? inheritedValue.value : ownValu
 const disabled = computed(() => !!props.readonly || !!view.value?.readonly);
 const missing = computed(() => !!view.value?.required && isEmptyValue(value.value) && (!!props.showMissing || props.touched.has(field.value.field)));
 const inputId = computed(() => `${props.idPrefix}-${field.value.field}`);
+// One message element per field, always in the page (a live region that is inserted together with its text is often not
+// announced): it says "Required." or what is wrong with a typed number, and is empty otherwise. The input points at it
+// (and at the note) with aria-describedby.
+const noteId = computed(() => `${inputId.value}-note`);
+const msgId = computed(() => `${inputId.value}-msg`);
+const typedProblem = ref<string | null>(null);
+const problem = computed(() => typedProblem.value ?? (field.value.kind === 'number' ? inputProblem(field.value, inputText(field.value, value.value)) : null));
+const message = computed(() => (missing.value ? 'Required.' : (problem.value ?? '')));
+const describedby = computed(() => (field.value.note ? `${noteId.value} ${msgId.value}` : msgId.value));
 const full = computed(() => field.value.width === 'full' || field.value.kind === 'textarea' || field.value.kind === 'radio');
 </script>
 
@@ -99,12 +109,16 @@ const full = computed(() => field.value.width === 'full' || field.value.kind ===
 				:disabled="disabled"
 				:inherited="isInherited"
 				:options="view?.options"
+				:required="view?.required"
+				:invalid="missing"
+				:describedby="describedby"
 				@update:value="emit('change', field, $event)"
+				@problem="typedProblem = $event"
 				@blur="emit('touch', field)"
 				@open-external="emit('openExternal', field)"
 			/>
-			<p v-if="field.note" class="note">{{ field.note }}</p>
-			<p v-if="missing" class="miss" role="status">Required.</p>
+			<p v-if="field.note" :id="noteId" class="note">{{ field.note }}</p>
+			<p :id="msgId" class="miss" role="status" aria-live="polite">{{ message }}</p>
 		</div>
 	</template>
 </template>
@@ -119,6 +133,7 @@ const full = computed(() => field.value.width === 'full' || field.value.kind ===
 .tag { font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim); border: 1px solid var(--d1-line); border-radius: 99px; padding: 0 6px; }
 .note { margin: 0; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 .miss { margin: 0; font-size: var(--fs-xs, 11px); color: var(--d1-bad); }
+.miss:empty { display: none; }
 .row.missing :deep(.ctl), .row.missing :deep(.sel), .row.missing :deep(.q) { border-color: var(--d1-bad); }
 .sub { min-width: 0; padding-top: 4px; border-top: 1px solid var(--d1-line); }
 .sub h3 { margin: 6px 0 8px; font-size: var(--fs-sm, 12px); font-weight: 650; letter-spacing: 0.01em; color: var(--d1-dim); }

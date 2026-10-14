@@ -147,10 +147,63 @@ describe('FieldForm', () => {
 	it('marks a required field that is empty once the person has been into it, or on showMissing', async () => {
 		const quiet = await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: { item_type: 'sample' } });
 		expect(quiet).not.toContain('Required.');
+		expect(quiet).not.toContain('aria-invalid');
 		const flagged = await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: { item_type: 'sample' }, showMissing: true });
-		expect(row(flagged, 'material_id')).toContain('class="miss"');
+		expect(row(flagged, 'material_id')).toContain('Required.');
 		expect(row(flagged, 'form')).toContain('Required.');
+		expect(row(flagged, 'form')).toContain('aria-invalid="true"');
+		expect(row(flagged, 'material_id')).toContain('aria-invalid="true"');
 		expect(row(flagged, 'nickname')).not.toContain('Required.');
+		expect(row(flagged, 'nickname')).not.toContain('aria-invalid');
+	});
+
+	it('every field has its message element in the page from the start, empty until there is something to say', async () => {
+		const html = await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: { item_type: 'sample' } });
+		const nick = row(html, 'nickname');
+		expect(nick).toMatch(/<p id="d1-form-physical_samples-nickname-msg" class="miss" role="status" aria-live="polite"[^>]*><\/p>/);
+		expect(nick).toContain('aria-describedby="d1-form-physical_samples-nickname-msg"');
+		const flagged = await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: { item_type: 'sample' }, showMissing: true });
+		expect(row(flagged, 'material_id')).toMatch(/<p id="d1-form-physical_samples-material_id-msg" class="miss" role="status"[^>]*>Required\.<\/p>/);
+	});
+
+	it('the input is described by its note as well as the message', async () => {
+		const html = await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: { item_type: 'sample', form: 'disc' } });
+		const d = row(html, 'diameter_mm');
+		expect(d).toContain('aria-describedby="d1-form-physical_samples-diameter_mm-note d1-form-physical_samples-diameter_mm-msg"');
+		expect(d).toContain('id="d1-form-physical_samples-diameter_mm-note"');
+	});
+
+	it('aria-required follows the live state: a condition that makes a field required sets it, one that does not leaves it off', async () => {
+		const machining = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: { process_category: 'machining', nc_program_text: '' } });
+		expect(row(machining, 'sample_id')).toContain('aria-required="true"');
+		const sintering = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: { process_category: 'sintering', nc_program_text: '' } });
+		expect(row(sintering, 'sample_id')).not.toContain('aria-required');
+		expect(row(machining, 'method_id')).toContain('aria-required="true"');
+		expect(row(machining, 'operation_date')).toContain('aria-required="true"');
+	});
+
+	it('a condition that makes a select required changes its blank option', async () => {
+		const fields = toFormFields([
+			{ field: 'kind', type: 'string' },
+			{ field: 'pick', type: 'string', meta: { interface: 'select-dropdown', options: { choices: [{ text: 'A', value: 'a' }] }, conditions: [{ rule: { kind: { _eq: 'x' } }, required: true }] } },
+		]);
+		expect(await render({ collection: 'c', fields, modelValue: { kind: 'x' } })).toContain('Choose…');
+		expect(await render({ collection: 'c', fields, modelValue: { kind: 'y' } })).toContain('Not set');
+	});
+
+	it('flags a number the column cannot hold: decimals in a whole-number field, outside min / max', async () => {
+		const fields = toFormFields([
+			{ field: 'n', type: 'integer', meta: { options: { min: 1, max: 10 } } },
+			{ field: 'm', type: 'decimal', meta: { options: { max: 5 } } },
+		]);
+		const html = await render({ collection: 'c', fields, modelValue: { n: 2.5, m: 6 } });
+		expect(row(html, 'n')).toContain('Whole numbers only.');
+		expect(row(html, 'n')).toContain('aria-invalid="true"');
+		expect(row(html, 'm')).toContain('At most 5.');
+		const low = await render({ collection: 'c', fields, modelValue: { n: 0, m: 1 } });
+		expect(row(low, 'n')).toContain('At least 1.');
+		expect(row(low, 'm')).not.toContain('aria-invalid');
+		expect(row(await render({ collection: 'c', fields, modelValue: { n: 3, m: 5 } }), 'n')).not.toContain('aria-invalid');
 	});
 
 	it('accepts fields already made by toFormFields', async () => {
