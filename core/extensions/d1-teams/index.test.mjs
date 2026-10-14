@@ -307,7 +307,7 @@ const names = (list) => list.map((x) => x.full_name ?? x.name);
 test('401 without a user, on every route', async () => {
   const { handlers } = mount();
   const routes = ['GET /', 'GET /pending', 'GET /:id', 'POST /', 'PATCH /:id', 'DELETE /:id', 'POST /:id/members', 'PATCH /:id/members/:person_id',
-    'DELETE /:id/members/:person_id', 'POST /pending/decide'];
+    'DELETE /:id/members/:person_id', 'POST /pending/decide', 'GET /mine/recent', 'GET /:id/records'];
   for (const route of routes) {
     const r = await call(handlers[route], { acc: { user: null }, params: { id: T.additive, person_id: P.bob } });
     assert.equal(r.status, 401, route);
