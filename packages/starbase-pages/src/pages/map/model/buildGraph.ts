@@ -28,6 +28,8 @@ export interface BuildGraphOpts {
   slots: (row: OpRow | TestRow, kind: 'operation' | 'test') => Slot[];
   /** More rows than this fold: rows from index 2 on share the bundle sockets. Default 3. */
   maxRows?: number;
+  /** Container (group) ids the person unfolded: they keep every row on its own socket. */
+  unfolded?: ReadonlySet<string>;
 }
 
 const DEFAULT_MAX_ROWS = 3;
@@ -207,7 +209,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
   for (const group of groups) {
     const rows = plannedByGroup.get(group.id) ?? [];
     const nodeId = group.id;
-    const folded = rows.length > maxRows;
+    const folded = rows.length > maxRows && !opts.unfolded?.has(group.id);
     const bundledAt = (i: number) => folded && i >= SHOWN_WHEN_FOLDED;
 
     let nextIn = 0;

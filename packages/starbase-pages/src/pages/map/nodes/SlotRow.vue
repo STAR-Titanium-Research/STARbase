@@ -33,7 +33,7 @@ const on = (r: RecordRef) => recordHandlers(actions, () => r);
 
 <template>
 	<div class="slot-wrap">
-		<div class="slot" :class="{ focal, minor }" :style="{ '--k': color }">
+		<div class="slot nodrag nopan" :class="{ focal, minor }" :style="{ '--k': color }">
 			<span class="si k-ink k-tint"><v-icon :name="icon" x-small /></span>
 			<span class="sr">{{ item.role }}</span>
 			<span
@@ -55,7 +55,7 @@ const on = (r: RecordRef) => recordHandlers(actions, () => r);
 			<li
 				v-for="v in values"
 				:key="refKey(v)"
-				class="sc"
+				class="sc nodrag nopan"
 				role="button"
 				tabindex="0"
 				@mouseenter="on(v).enter"

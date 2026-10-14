@@ -8,8 +8,9 @@ export type Dir = 'RIGHT' | 'DOWN';
 export type Sizes = Record<string, { width: number; height: number }>;
 
 const PORT_SIZE = 12;
-/** Used until Vue Flow has measured a node. */
+/** Used until Vue Flow has measured a node (it reports 0x0 before that, so non-positive means unmeasured). */
 const FALLBACK_SIZE = { width: 160, height: 60 };
+const measured = (s: { width: number; height: number } | undefined) => !!s && s.width > 0 && s.height > 0;
 
 /** Row order, a socket shared by rows once, the bundle socket last. */
 function ordered(sockets: (string | undefined)[]): string[] {
@@ -46,7 +47,7 @@ export function elkInput(graph: ProcessGraph, shown: Set<string>, sizes: Sizes, 
     const { ins, outs } = socketsOf(node);
     ins.forEach((s) => portIds.add(s));
     outs.forEach((s) => portIds.add(s));
-    const size = sizes[node.id] ?? FALLBACK_SIZE;
+    const size = measured(sizes[node.id]) ? sizes[node.id] : FALLBACK_SIZE;
     children.push({
       id: node.id,
       width: size.width,

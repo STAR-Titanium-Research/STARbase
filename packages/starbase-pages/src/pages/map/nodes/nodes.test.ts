@@ -191,7 +191,7 @@ describe('RecordNode', () => {
 		expect(t).toContain('S-0412-A');
 		expect(t).toContain('Active');
 		expect(t).toContain('Ti-6Al-4V');
-		expect(html).toContain('class="xbtn"');
+		expect(html).toContain('class="xbtn nodrag nopan"');
 		expect(html).toContain('aria-label="Expand"');
 		expect(ids(html)).toEqual(['s:s1:in:0', 's:s1:out:0']);
 	});
@@ -359,5 +359,30 @@ describe('event handlers', () => {
 		w.enter(enter);
 		w.leave();
 		expect(a.calls).toEqual([['hover', 'a:out:0>b:in:0', enter.currentTarget], ['hover', null]]);
+	});
+});
+
+describe('controls inside cards do not start a Vue Flow drag or pan', () => {
+	const noDrag = (html: string, marker: RegExp) => {
+		const m = marker.exec(html);
+		expect(m, String(marker)).not.toBeNull();
+		expect(m![0]).toMatch(/\bnodrag\b/);
+		expect(m![0]).toMatch(/\bnopan\b/);
+	};
+
+	it('the ＋ button, bundle row, fold row and "+N more from the form" toggle', async () => {
+		const [folded] = containers(cutOf(4), true, () => [machine('NLX-1'), minor('operator', 'Operator', 'Ada')]);
+		const html = await render(ContainerNode, { id: folded.id, data: folded });
+		noDrag(html, /<button class="xbtn[^"]*"/);
+		noDrag(html, /class="orow bundle[^"]*"/);
+		noDrag(html, /class="slot more-toggle[^"]*"/);
+		const unfolded: ContainerData = { ...folded, bundled: false };
+		noDrag(await render(ContainerNode, { id: folded.id, data: unfolded }), /class="orow fold[^"]*"/);
+	});
+
+	it('the ＋ button of a record card and every slot row', async () => {
+		const rec: RecordData = { id: 's:a', type: 'record', kind: 'sample', ref: refOf('physical_samples', 'a', 'S-A'), ins: [], outs: [] };
+		noDrag(await render(RecordNode, { id: rec.id, data: rec }), /<button class="xbtn[^"]*"/);
+		noDrag(await render(SlotRow, { item: machine('NLX-1') }), /class="slot [^"]*"/);
 	});
 });

@@ -8,12 +8,12 @@ import SettingsPage from './pages/SettingsPage.vue';
 describe('starbaseRoutes', () => {
 	const paths = starbaseRoutes.map((r) => r.path);
 	it('has every page of the Home module', () => {
-		for (const p of ['', 'register-sample', 'people', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', 'report-bug', 'crawler', ':slug']) {
+		for (const p of ['', 'register-sample', 'people', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', 'report-bug', 'crawler', 'map', ':slug']) {
 			expect(paths).toContain(p);
 		}
 	});
 	it('has no other route', () => {
-		expect(paths).toHaveLength(14);
+		expect(paths).toHaveLength(15);
 	});
 	it('settings resolves to SettingsPage, not IndexRoute', () => {
 		const settings = starbaseRoutes.find((r) => r.path === 'settings');
@@ -28,6 +28,11 @@ describe('starbaseRoutes', () => {
 	it('crawler resolves to CrawlerPage, ahead of the catch-all', () => {
 		expect(starbaseRoutes.find((r) => r.path === 'crawler')?.component).toBe(CrawlerPage);
 		expect(paths.indexOf('crawler')).toBeLessThan(paths.indexOf(':slug'));
+	});
+	it('map is a lazy route ahead of the catch-all, so the Process map code loads only when opened', () => {
+		const map = starbaseRoutes.find((r) => r.path === 'map');
+		expect(typeof map?.component).toBe('function');
+		expect(paths.indexOf('map')).toBeLessThan(paths.indexOf(':slug'));
 	});
 	it('puts the catch-all index route last, so static paths win', () => {
 		expect(paths[paths.length - 1]).toBe(':slug');

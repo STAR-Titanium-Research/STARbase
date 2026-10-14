@@ -8,7 +8,12 @@ let elk: Promise<ELK> | null = null;
 
 /** One bundled (no worker) ELK instance, imported on first use. */
 function getElk(): Promise<ELK> {
-  elk ??= import('elkjs/lib/elk.bundled.js').then((m) => new m.default());
+  elk ??= import('elkjs/lib/elk.bundled.js')
+    .then((m) => new m.default())
+    .catch((e) => {
+      elk = null; // a failed import (an offline chunk) is not cached: the next layout tries again
+      throw e;
+    });
   return elk;
 }
 

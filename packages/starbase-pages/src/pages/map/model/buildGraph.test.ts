@@ -210,6 +210,16 @@ describe('buildGraph: grouped cuts and bundling', () => {
     expect(wire(g, `${c.id}:out:b`, 's:c3:in:0')).toMatchObject({ bundled: true, carries: 'c3' });
   });
 
+  it('an unfolded container keeps every row on its own sockets', () => {
+    const data = cut(4);
+    const folded = build(data, { probable: true }).nodes.find((n): n is ContainerNode => n.type === 'container')!;
+    const g = buildGraph(data, groupsOf(data, true), { slots, unfolded: new Set([folded.id]) });
+    const c = g.nodes.find((n): n is ContainerNode => n.type === 'container')!;
+    expect(c.bundled).toBe(false);
+    expect(c.rows.map((r) => r.out)).toEqual([0, 1, 2, 3].map((i) => `${c.id}:out:${i}`));
+    expect(g.wires.some((w) => w.bundled)).toBe(false);
+  });
+
   it('three rows do not fold', () => {
     const g = build(cut(3), { probable: true });
     const c = g.nodes.find((n): n is ContainerNode => n.type === 'container')!;

@@ -43,7 +43,7 @@ const card = cardHandlers(actions, () => props.id);
 			<div class="ntop">
 				<span class="kind k-ink k-tint"><v-icon :name="style.icon" x-small />{{ style.label }}</span>
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
-				<button class="xbtn" type="button" aria-label="Expand" @click="card.expand"><v-icon name="add" x-small /></button>
+				<button class="xbtn nodrag nopan" type="button" aria-label="Expand" @click="card.expand"><v-icon name="add" x-small /></button>
 			</div>
 			<div class="code">{{ data.ref.code }}</div>
 			<div v-if="data.meta" class="meta">{{ data.meta }}</div>

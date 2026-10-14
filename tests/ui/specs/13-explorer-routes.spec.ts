@@ -27,7 +27,7 @@ process.env.STARBASE_E2E_CREDENTIALS ||= credsFile;
 
 const navSource = readFileSync(join(repo, 'packages', 'd1-ui', 'src', 'nav', 'navConfig.ts'), 'utf8');
 const NAV_ROUTES = [...new Set([...navSource.matchAll(/to: '(\/home[^'?]*)'/g)].map((m) => m[1]))];
-const EXTRA_ROUTES = ['/home/register-sample', '/home/people', '/home/labels'];
+const EXTRA_ROUTES = ['/home/register-sample', '/home/people', '/home/labels', '/map'];
 const ROUTES = [...new Set([...NAV_ROUTES, ...EXTRA_ROUTES])];
 
 const RECORDS: [string, string][] = [

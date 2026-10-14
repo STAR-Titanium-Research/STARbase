@@ -72,6 +72,16 @@ describe('STARbase', () => {
 			if (r.kind === 'route') expect(canonicalPath(r.to)).toBe(p);
 		}
 	});
+	it('keeps the Process map (/map?focus=…&reach=…) as a route and canonicalPath keeps focus and reach', () => {
+		use();
+		const q = '/map?focus=physical_samples:3f2a&reach=all';
+		expect(resolveLink('/map')).toEqual({ kind: 'route', to: '/map' });
+		expect(resolveLink(q)).toEqual({ kind: 'route', to: q });
+		expect(resolveLink('/maps')).toEqual({ kind: 'external', href: `${D1}/admin/maps` });
+		expect(canonicalPath(q)).toBe(q);
+		expect(canonicalPath('/map')).toBe('/map');
+		expect(directusLinks.resolve(q)).toEqual({ kind: 'external', href: '/d1-links/go/p' + q });
+	});
 	it('maps old /d1-force-crawler links (and subpaths) to its own /crawler page', () => {
 		use();
 		expect(resolveLink('/d1-force-crawler')).toEqual({ kind: 'route', to: '/crawler' });

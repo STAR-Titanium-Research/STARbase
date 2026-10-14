@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { useElkLayout } from './useElkLayout';
 import type { ProcessGraph } from './model/types';
 
@@ -18,5 +18,25 @@ describe('useElkLayout', () => {
     const pos = await useElkLayout().layout(graph, new Set(['a', 'b']), { a: size, b: size }, 'RIGHT');
     expect(Object.keys(pos).sort()).toEqual(['a', 'b']);
     expect(pos.b.x).toBeGreaterThan(pos.a.x + 100);
+  });
+});
+
+describe('useElkLayout import failure', () => {
+  it('does not cache a rejected import: the next layout tries again', async () => {
+    vi.resetModules();
+    let made = 0;
+    vi.doMock('elkjs/lib/elk.bundled.js', () => ({
+      default: class {
+        constructor() {
+          if (++made === 1) throw new Error('chunk failed');
+        }
+        layout = async () => ({ id: 'root', children: [] });
+      },
+    }));
+    const { useElkLayout: fresh } = await import('./useElkLayout');
+    const g: ProcessGraph = { nodes: [], wires: [], hidden: [], truncated: false };
+    await expect(fresh().layout(g, new Set(), {}, 'RIGHT')).rejects.toThrow('chunk failed');
+    await expect(fresh().layout(g, new Set(), {}, 'RIGHT')).resolves.toEqual({});
+    vi.doUnmock('elkjs/lib/elk.bundled.js');
   });
 });

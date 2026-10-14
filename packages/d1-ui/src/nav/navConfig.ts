@@ -51,6 +51,7 @@ export const NAV_GROUPS: NavGroup[] = [
 		links: [
 			{ label: 'Force plotter', icon: 'activity', to: '/d1-force-dashboard' },
 			{ label: 'FAST plotter', icon: 'zap', to: '/d1-fast-dashboard' },
+			{ label: 'Process map', icon: 'workflow', to: '/map' },
 		],
 	},
 	{

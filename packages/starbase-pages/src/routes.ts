@@ -32,6 +32,8 @@ export const starbaseRoutes: RouteRecordRaw[] = [
 	{ path: 'report-bug', component: ReportBugPage },
 	// Admins only: the page checks (CrawlerPage), and the nav entry is adminOnly too.
 	{ path: 'crawler', component: CrawlerPage },
+	// The Process map: lazy, so Vue Flow and ELK load only when someone opens it. No /home form (links.ts LOCAL_PAGES).
+	{ path: 'map', component: () => import('./pages/map/ProcessMapPage.vue') },
 	// After every static route: one list page per collection.
 	{ path: ':slug', component: IndexRoute, props: true },
 ];

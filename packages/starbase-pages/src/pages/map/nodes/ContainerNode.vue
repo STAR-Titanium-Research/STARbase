@@ -77,7 +77,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<span class="m">{{ data.title }}</span>
 			<span v-if="showCode" class="c">{{ data.code }}</span>
 			<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
-			<button class="xbtn" type="button" aria-label="Expand" @click="card.expand"><v-icon name="add" x-small /></button>
+			<button class="xbtn nodrag nopan" type="button" aria-label="Expand" @click="card.expand"><v-icon name="add" x-small /></button>
 		</div>
 
 		<div v-if="data.rows.length" class="iorows">
@@ -92,7 +92,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 					<Handle v-if="r.out" :id="r.out" class="sock row out" type="source" :position="outPos" :connectable="false" />
 				</span>
 			</div>
-			<div v-if="hidden.length" class="orow bundle" role="button" tabindex="0" @click="refold" @keydown.enter="refold">
+			<div v-if="hidden.length" class="orow bundle nodrag nopan" role="button" tabindex="0" @click="refold" @keydown.enter="refold">
 				<span>
 					<Handle v-if="bundleIn" :id="bundleIn" class="sock row in fat" type="target" :position="inPos" :connectable="false" />
 					{{ `+${hidden.length} more samples` }}
@@ -102,7 +102,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 					<Handle v-if="bundleOut" :id="bundleOut" class="sock row out fat" type="source" :position="outPos" :connectable="false" />
 				</span>
 			</div>
-			<div v-if="canFold" class="orow fold" role="button" tabindex="0" @click="refold" @keydown.enter="refold">
+			<div v-if="canFold" class="orow fold nodrag nopan" role="button" tabindex="0" @click="refold" @keydown.enter="refold">
 				<span></span><span>Fold samples</span><span></span>
 			</div>
 		</div>
@@ -113,7 +113,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<template v-if="open">
 				<SlotRow v-for="s in minors" :key="s.field" :item="s" minor />
 			</template>
-			<div v-if="minors.length" class="slot more-toggle" role="button" tabindex="0" @click="toggleMore" @keydown.enter="toggleMore">
+			<div v-if="minors.length" class="slot more-toggle nodrag nopan" role="button" tabindex="0" @click="toggleMore" @keydown.enter="toggleMore">
 				{{ moreText }}
 			</div>
 		</div>

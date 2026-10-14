@@ -135,6 +135,14 @@ describe('elkInput', () => {
     expect(a.height).toBeGreaterThan(0);
   });
 
+  it('treats a 0x0 or negative size (Vue Flow before it measures) as unmeasured', () => {
+    const root = elkInput(graph(), all(graph()), { 's:a': { width: 0, height: 0 }, 's:b': { width: 100, height: -1 } }, 'RIGHT');
+    for (const id of ['s:a', 's:b']) {
+      expect(child(root, id).width).toBeGreaterThan(0);
+      expect(child(root, id).height).toBeGreaterThan(0);
+    }
+  });
+
   it('hidden nodes and their wires are left out', () => {
     const g = graph();
     const shown = new Set(['s:a', 'op:cut']);
