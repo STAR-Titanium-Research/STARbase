@@ -14,7 +14,8 @@
 # database because its operator names are not in people. When that happens the script adds the
 # names it reports to people and runs dbmate again. CI will need its own fix (tracked separately).
 #
-# Also runs tests/readers_matrix.sh (the readers mutation matrix, the oracle and the randomised differential test) after phase1.
+# Also runs tests/readers_matrix.sh (the readers mutation matrix, the oracle and the randomised differential test) and
+# tests/people_admin.sh (the People admin attention and access functions) after phase1.
 # Usage: bash scripts/dev/schema_test_docker.sh        (from the repository root)
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
@@ -77,6 +78,12 @@ docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL
   bash tests/readers_matrix.sh 2>&1
 mrc=$?
 [[ $mrc -ne 0 && $trc -eq 0 ]] && trc=$mrc
+
+# The People admin SQL functions (migration 173): attention and access, on a copy of this database (tests/people_admin.sh).
+docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL" "$RUNNER" \
+  bash tests/people_admin.sh 2>&1
+prc=$?
+[[ $prc -ne 0 && $trc -eq 0 ]] && trc=$prc
 
 if [[ -n "${ROUNDTRIP:-}" ]]; then
   echo "== roundtrip: rollback x $ROUNDTRIP, then up"
