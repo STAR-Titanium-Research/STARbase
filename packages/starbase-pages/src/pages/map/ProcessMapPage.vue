@@ -98,12 +98,16 @@ const frameStyle = computed(() => {
 // ---- the rail, the hover card and the data they show -----------------------------------------------
 const canvasEl = ref<HTMLElement | null>(null);
 
-// Data previews (the Fz figure, FAST run data) are read once when a family arrives, for all its
-// operations, so hovering and selecting only look the answer up (no request per hover).
+// Data previews (the Fz figure, FAST run data) are read when operations arrive, so hovering and selecting only
+// look the answer up (no request per hover). An expand reads just the operations it added; a new focus (the data
+// is cleared first) starts afresh.
 const dataPreviews = useDataPreviews(host.api);
 watch(
 	() => map.data.value,
-	(d) => dataPreviews.load((d?.operations ?? []).map((o) => ({ collection: 'manufacturing_operations', id: o.id, code: o.code }))),
+	(d) => {
+		if (!d) dataPreviews.reset();
+		else dataPreviews.load(d.operations.map((o) => ({ collection: 'manufacturing_operations', id: o.id, code: o.code })));
+	},
 	{ immediate: true },
 );
 const selectedPreview = computed(() => {

@@ -33,6 +33,35 @@ describe('useDataPreviews', () => {
     expect(p.previews.value).toEqual({});
   });
 
+  it('an expand asks only for the operations it brought, and keeps the answers it already has (I5)', async () => {
+    const { api, get } = fakeApi();
+    const p = useDataPreviews(api);
+    p.load([op('a'), op('b')]);
+    await tick();
+    expect(get).toHaveBeenCalledTimes(2);
+    p.load([op('a'), op('b'), op('c')]); // the map grew by c
+    await tick();
+    expect(get).toHaveBeenCalledTimes(4);
+    const ids = (call: number) => JSON.stringify(get.mock.calls[call]);
+    expect(ids(2)).toContain('c');
+    expect(ids(2)).not.toContain('"a"');
+    expect(p.previews.value.a).toMatchObject({ kind: 'force', imageFileId: 'fz' }); // not blanked while c is read
+    expect(p.previews.value.c.kind).toBe('none');
+    p.load([op('a'), op('b'), op('c')]); // nothing new: nothing asked
+    await tick();
+    expect(get).toHaveBeenCalledTimes(4);
+  });
+
+  it('an old answer that arrives after the next expand still lands next to the new one', async () => {
+    const { api } = fakeApi();
+    const p = useDataPreviews(api);
+    p.load([op('a')]);
+    p.load([op('a'), op('b')]);
+    await tick();
+    await tick();
+    expect(Object.keys(p.previews.value).sort()).toEqual(['a', 'b']);
+  });
+
   it('a new family forgets the old answers, and a slow answer from the old one is dropped', async () => {
     let release: () => void = () => {};
     const slow = new Promise<void>((r) => (release = r));
@@ -42,7 +71,8 @@ describe('useDataPreviews', () => {
     });
     const p = useDataPreviews({ get } as unknown as HostApi);
     p.load([op('a')]);
-    p.load([op('z')]); // another family
+    p.reset(); // another family
+    p.load([op('z')]);
     release();
     await tick();
     await tick();
