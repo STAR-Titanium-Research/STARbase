@@ -7,7 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { focusParent, type ToolingFocus, type ToolingModel } from '@d1/ui';
 import SlotGrid2D from './SlotGrid2D.vue';
 import { targetToFocus, type PickTarget } from './scene/pick';
-import { hoverLabel, NAV_KEYS, stepFocus, unplacedEdges, type NavKey } from './stageNav';
+import { focusAnnouncement, hoverLabel, NAV_KEYS, stepFocus, unplacedEdges, type NavKey } from './stageNav';
 import { hasWebGL } from './webgl';
 import type { ToolingScene } from './scene/toolingScene'; // type only: erased, three.js is not imported here
 
@@ -33,6 +33,7 @@ const use3d = computed(() => webgl.value && !failed.value && !prefer2d.value && 
 const canToggle = computed(() => webgl.value && !failed.value && width.value >= MIN_3D_WIDTH);
 const parent = computed(() => focusParent(props.focus));
 const unplaced = computed(() => unplacedEdges(props.model, props.focus));
+const announcement = computed(() => focusAnnouncement(props.model, props.focus));
 const empty = computed(() => props.model.inserts.length === 0);
 const large = computed(() => props.model.inserts.length > LARGE_BOX);
 
@@ -67,7 +68,7 @@ async function start(): Promise<void> {
 		loading.value = false;
 		return;
 	}
-	s.onPick((t: PickTarget) => { grab(); emit('select', targetToFocus(t)); });
+	s.onPick((t: PickTarget) => { grab(); select(targetToFocus(t)); });
 	s.onHover((t, x, y) => {
 		hover.value = t ? { text: hoverLabel(props.model, t), x, y } : null;
 	});
@@ -111,9 +112,27 @@ onBeforeUnmount(() => {
 	stop();
 });
 
-function select(f: ToolingFocus | null): void {
-	if (f) emit('select', f);
+// Selecting can remove the element that had the keyboard focus (a slot button in the 2D grid, the Up button, an
+// edge that is no longer drawn), which drops focus to <body> and ends the arrow keys and Esc. So after every
+// select, once the page has moved the focus (the route changes a little later than the emit), the stage root
+// takes the focus back if it is not inside the stage any more.
+let refocusUntil = 0;
+function refocus(): void {
+	const el = root.value;
+	if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
 }
+
+function select(f: ToolingFocus | null): void {
+	if (!f) return;
+	emit('select', f);
+	refocusUntil = Date.now() + 1500;
+	void nextTick(refocus);
+}
+watch(() => focusKey(props.focus), () => {
+	if (Date.now() >= refocusUntil) return;
+	refocusUntil = 0;
+	refocus();
+}, { flush: 'post' });
 
 function selectEdge(edgeId: string): void {
 	if (props.focus.kind !== 'box') emit('select', { kind: 'edge', insertId: props.focus.insertId, edgeId });
@@ -184,6 +203,7 @@ function grab(): void {
 				<button type="button" class="link" @click="prefer2d = true">Show the 2D grid</button>
 			</span>
 		</div>
+		<p class="sr-only" role="status" aria-live="polite">{{ announcement }}</p>
 		<p id="tstage-keys" class="sr-only">Arrow keys step between inserts or edges, Page Up and Page Down move between inserts, Escape goes up a level.</p>
 	</section>
 </template>

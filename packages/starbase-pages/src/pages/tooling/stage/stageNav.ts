@@ -26,6 +26,27 @@ export function hoverLabel(model: ToolingModel, target: PickTarget): string {
 	return `${name} · ${fresh}/${insert.edges.length} fresh`;
 }
 
+// What a screen reader hears when the focus moves: "Insert 3, 2 of 4 edges fresh", "Edge 3B, used, top face".
+export function focusAnnouncement(model: ToolingModel, focus: ToolingFocus): string {
+	if (focus.kind === 'box') {
+		const n = model.inserts.length;
+		return `Tool box${model.boxCode ? ` ${model.boxCode}` : ''}, ${n} ${n === 1 ? 'insert' : 'inserts'}`;
+	}
+	const insert = model.inserts.find((i) => i.id === focus.insertId);
+	if (!insert) return '';
+	const name = insertName(model, insert.id);
+	if (focus.kind === 'insert') {
+		if (insert.depleted) return `Insert ${name}, depleted`;
+		if (insert.edges.length === 0) return `Insert ${name}, no edges`;
+		return `Insert ${name}, ${insert.edges.filter((e) => !e.used).length} of ${insert.edges.length} edges fresh`;
+	}
+	const e = insert.edges.find((x) => x.id === focus.edgeId);
+	if (!e) return '';
+	return `Edge ${name}${e.letter ?? e.identifier}, ${e.used ? 'used' : 'fresh'}, ${placementWords(e)}`;
+}
+
+const placementWords = (e: ToolingEdge): string => (!e.placement ? 'position unknown' : e.placement.face === 'top' ? 'top face' : 'underside');
+
 // Edges of the focused insert that have no place on the drawing: listed as chips, still selectable.
 export function unplacedEdges(model: ToolingModel, focus: ToolingFocus): ToolingEdge[] {
 	if (focus.kind === 'box') return [];

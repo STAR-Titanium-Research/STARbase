@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildToolingModel, type EdgeRow, type InsertRow, type ToolingFocus } from '@d1/ui';
-import { escapeFocus, hoverLabel, stepFocus, unplacedEdges } from './stageNav';
+import { escapeFocus, focusAnnouncement, hoverLabel, stepFocus, unplacedEdges } from './stageNav';
 
 const ins = (n: number | null, depleted = false): InsertRow => ({
 	insert_id: `i${n ?? 'x'}`, insert_code: `X-${n ?? 'x'}`, insert_number: n, is_depleted: depleted,
@@ -91,5 +91,25 @@ describe('escapeFocus', () => {
 		expect(escapeFocus(E('i1', 'i1A'))).toEqual(I('i1'));
 		expect(escapeFocus(I('i1'))).toEqual(BOX);
 		expect(escapeFocus(BOX)).toBeNull();
+	});
+});
+
+describe('focusAnnouncement', () => {
+	it('announces the box with its insert count', () => {
+		expect(focusAnnouncement(model, BOX)).toBe('Tool box B, 4 inserts');
+	});
+	it('announces an insert with its fresh edges, or why it has none', () => {
+		expect(focusAnnouncement(model, I('i1'))).toBe('Insert 1, 2 of 4 edges fresh');
+		expect(focusAnnouncement(model, I('i3'))).toBe('Insert 3, depleted');
+		expect(focusAnnouncement(model, I('ix'))).toBe('Insert X-x, no edges');
+	});
+	it('announces an edge with its state and face', () => {
+		expect(focusAnnouncement(model, E('i1', 'i1B'))).toBe('Edge 1B, used, top face');
+		expect(focusAnnouncement(model, E('i1', 'i1C'))).toBe('Edge 1C, fresh, underside');
+		expect(focusAnnouncement(model, E('i2', 'i2E'))).toBe('Edge 2E, fresh, position unknown');
+	});
+	it('is empty for an id the model does not have', () => {
+		expect(focusAnnouncement(model, I('nope'))).toBe('');
+		expect(focusAnnouncement(model, E('i1', 'nope'))).toBe('');
 	});
 });
