@@ -55,6 +55,8 @@ describe('access dialog stays host-neutral', () => {
 		...sources(join(here, 'access')).filter((f) => !f.endsWith('.test.ts')),
 		join(here, 'components', 'AccessDialog.vue'),
 		join(here, 'components', 'AccessPersonPicker.vue'),
+		...sources(join(here, 'teams')).filter((f) => !f.endsWith('.test.ts')),
+		join(here, 'components', 'AccessTeamRow.vue'),
 	];
 
 	it('finds the files it is meant to check', () => {
