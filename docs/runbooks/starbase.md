@@ -277,16 +277,16 @@ and leave the old extension running; the steps below do both in one go. `d1-team
    window short, go straight from step 2 to here (step 3 is SQL only and can wait until Directus is back).** In order:
    ```bash
    docker compose stop directus                      # first: a running Directus would re-cache stale permissions after a flush
-   # Redis also holds the rq queues of heavy-data-worker and analysis-worker. FLUSHALL drops their queued jobs, so check them first:
-   docker compose exec heavy-data-worker sh -c 'rq info --url "$REDIS_URL"'     # the queues (heavy-data, analysis) must show 0 queued
-   docker compose exec -T redis redis-cli FLUSHALL   # only when they are empty, or in a quiet window nobody has uploads in flight
+   # Redis also holds the rq queues of heavy-data-worker and analysis-worker. FLUSHALL drops queued and in-flight jobs, so check first:
+   docker compose exec heavy-data-worker sh -c 'rq info --url "$REDIS_URL"'     # every queue: 0 queued, 0 failed, and no worker busy
+   docker compose exec -T redis redis-cli FLUSHALL   # only when rq info shows nothing queued, nothing failed and no busy worker; otherwise wait for a quiet window
    docker compose up -d directus                     # (--force-recreate if the extension folder or .env changed)
    docker compose up -d --force-recreate proxy       # the new STARbase build
    ```
-   Alternative that leaves Redis alone: start Directus (`docker compose up -d --force-recreate directus`) and, as an administrator,
-   `POST /utils/cache/clear` (as docs/runbooks/upgrade-2026-10-row-level-visibility.md step 3 offers); a Directus restart reads the new
-   relations and the new extension anyway, the cache clear only drops cached permission answers. (`rq info` for the analysis queue
-   is the same command run in `analysis-worker` if `heavy-data-worker` does not list it.)
+   Alternative that leaves Redis alone (skip the `rq info` check and the flush): start Directus (`docker compose up -d --force-recreate
+   directus`) and, as an administrator, run `POST /utils/cache/clear` **immediately after Directus starts and before the proxy is recreated or
+   anyone is let back in**, so no cached permission answer from before the migration is served (Directus caches permissions; the reference
+   is docs/runbooks/upgrade-2026-10-row-level-visibility.md step 3). Then recreate proxy.
 5. Smoke: People shows the People | Teams switch; New team creates one and opens `/home/teams/<id>`; on a sample you own, Who has
    access → add the team, then add a person to the team: that person is "waiting" (Home "Waiting for you" for the owner) until
    approved or until Trust future members is ticked. `curl -s -o /dev/null -w '%{http_code}' https://d1-server.tail54eeb6.ts.net/d1-teams`
@@ -307,5 +307,6 @@ d1-person-link`), with `D1_SMOKE_MODE=perf D1_SMOKE_REQUIRE_LM=1 bash scripts/de
 maintainer's machine if the copy of live has changed a lot; the procedure is in `docs/runbooks/a1-record-access-cutover.md`.
 
 Rollback: `make migrate-down` twice (176, then 175; 176's down deletes the derived rows and restores the old unique constraints),
-`git checkout <previous commit>`, rebuild, flush Redis and recreate `directus` and `proxy`. Deploy the previous `d1-record-access`
-at the same time. Teams, their members and history are lost with 175's down.
+`git checkout <previous commit>`, rebuild, then reload exactly as in step 4: `docker compose stop directus`, flush Redis only after `rq info`
+shows nothing queued, nothing failed and no busy worker (or, instead of the flush, start Directus and run `POST /utils/cache/clear` as an
+administrator at once), start `directus`, recreate `proxy`. Deploy the previous `d1-record-access` at the same time. Teams, their members and history are lost with 175's down.
