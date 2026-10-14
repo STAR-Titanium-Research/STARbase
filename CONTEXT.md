@@ -79,6 +79,26 @@ The section for the lab's reference data that records point to: equipment, mater
 insert types, ISO classes, methods, manufacturers, facilities, prep recipes, etchants, FAST recipes.
 _Avoid_: Resources, lookups, master data, Kit
 
+### Samples and their history
+
+**Process map**:
+The STARbase page that shows how samples came to be: the samples, the operations and tests they went
+through, and what was used in each (machine, tool, insert edge, recipe, data). Samples flow left to
+right through the operations.
+_Avoid_: lineage graph, node graph, connections graph, graph
+
+**Lineage**:
+The parent → child link between two samples: a sample cut from, sintered from, powder from or
+derived from another. Lineage is only ever between samples.
+_Avoid_: genealogy (the table's name), ancestry, lineage graph (for the page)
+
+**Batch**:
+Several operations, or several tests, done together as one job on several samples (four quarters
+polished in one run). Each sample still has its own operation or test record; the batch is what ties
+them together. A batch someone recorded is a **batch**; a group the process map only guesses from
+matching method, machine, day and recipe is a **probable batch**, and is shown as such.
+_Avoid_: run (a FAST run is one operation), group, set
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
@@ -101,3 +121,6 @@ _Avoid_: Resources, lookups, master data, Kit
   section is **More**.
 - Pins on Home ("Frequently used") and pins in the sidebar were heading towards two different ideas.
   Resolved: one **pin**.
+- "Lineage graph" named both the parent → child links between samples and the page that drew them
+  with everything else. Resolved: **lineage** is only the link between samples; the page is the
+  **process map**.
