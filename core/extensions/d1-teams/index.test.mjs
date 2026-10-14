@@ -1155,3 +1155,141 @@ test('decide: a manager of the owning team decides the records the team owns; a 
   const all = await call(handlers['POST /pending/decide'], { acc: member(U.fay), body: { team_id: T.additive, person_id: P.cy, decision: 'decline' } });
   assert.deepEqual([all.status, all.body.decided], [200, 1]);
 });
+
+// ---- the records of a team and the recent ones (People 4, Ruling M1) ------------------------------------------
+
+const S_OWNED = ID(11);
+const OP = ID(21);
+const sampleStamps = { [S.one]: '2026-10-05T10:00:00Z', [S.two]: '2026-10-02T10:00:00Z', [S.three]: '2026-10-07T10:00:00Z' };
+
+// baseTables plus: Additive OWNS sample SM-010 (with its hidden 'own' grant row) and operation OP-1; every record has updated_at.
+// Ann reads SM-001, SM-003, SM-010 and OP-1; she does not read SM-002 or the project.
+function recordsWorld() {
+  const tables = baseTables();
+  for (const s of tables.physical_samples) s.updated_at = sampleStamps[s.sample_id];
+  tables.projects[0].updated_at = '2026-10-01T10:00:00Z';
+  tables.physical_samples.push({ sample_id: S_OWNED, sample_code: 'SM-010', nickname: 'Team bar', owner_person_id: null, owner_team_id: T.additive, updated_at: '2026-10-09T10:00:00Z' });
+  tables.sample_team_access.push({ team_access_id: ID(410), sample_id: S_OWNED, team_id: T.additive, role: 'own', trust_new_members: true });
+  tables.sample_readers.push({ record_id: S_OWNED, user_id: U.ann });
+  tables.manufacturing_operations = [{ operation_id: OP, pass_code: 'OP-1', owner_person_id: null, owner_team_id: T.additive, updated_at: '2026-10-08T10:00:00Z' }];
+  tables.operation_readers = [{ record_id: OP, user_id: U.ann }];
+  return tables;
+}
+const idsOf = (r) => r.body.ids;
+
+test('GET /mine/recent and GET /:id/records are registered before GET /:id', () => {
+  const { order } = mount();
+  assert.ok(order.indexOf('GET /mine/recent') < order.indexOf('GET /:id'));
+  assert.ok(order.indexOf('GET /:id/records') < order.indexOf('GET /:id'));
+});
+
+test('GET /:id/records: the owned and the granted records, once each, only those the caller reads, newest first', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const r = await call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples' } });
+  assert.equal(r.status, 200);
+  // SM-010 is owned AND has an 'own' grant row: once. SM-002 (not readable by Ann) never appears.
+  assert.deepEqual(idsOf(r), [S_OWNED, S.three, S.one]);
+  assert.equal(r.body.truncated, false);
+  const ops = await call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'manufacturing_operations' } });
+  assert.deepEqual(idsOf(ops), [OP]);
+  const none = await call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'campaigns' } });
+  assert.deepEqual(none.body, { ids: [], truncated: false });
+});
+
+test('GET /:id/records: a hidden team record is absent for a viewer who cannot read it, present for one who can and for an administrator', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const query = { collection: 'physical_samples' };
+  const stranger = await call(handlers['GET /:id/records'], { acc: member(U.stranger), params: { id: T.additive }, query });
+  assert.deepEqual(stranger.body, { ids: [], truncated: false }); // a non-member who reads nothing learns nothing
+  const fay = await call(handlers['GET /:id/records'], { acc: member(U.fay), params: { id: T.additive }, query });
+  assert.deepEqual(idsOf(fay), [S.two]); // Fay reads only SM-002
+  const adm = await call(handlers['GET /:id/records'], { acc: admin(U.admin), params: { id: T.additive }, query });
+  assert.deepEqual(idsOf(adm), [S_OWNED, S.three, S.one, S.two]);
+});
+
+test('GET /:id/records: a project has grants only (no owner team); the investigator grant counts', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const query = { collection: 'projects' };
+  const eve = await call(handlers['GET /:id/records'], { acc: member(U.eve), params: { id: T.additive }, query });
+  assert.deepEqual(idsOf(eve), [PROJECT]);
+  const ann = await call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id: T.additive }, query });
+  assert.deepEqual(idsOf(ann), []);
+});
+
+test('GET /:id/records: limit truncates the newest first and says so; the cap is 500 with a truncated flag', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const base = { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples', limit: '2' } };
+  const two = await call(handlers['GET /:id/records'], base);
+  assert.deepEqual([idsOf(two), two.body.truncated], [[S_OWNED, S.three], true]);
+  const three = await call(handlers['GET /:id/records'], { ...base, query: { ...base.query, limit: '3' } });
+  assert.deepEqual([idsOf(three).length, three.body.truncated], [3, false]);
+
+  const big = recordsWorld();
+  for (let i = 0; i < 600; i += 1) {
+    const id = ID(10000 + i);
+    big.physical_samples.push({ sample_id: id, sample_code: `BIG-${i}`, nickname: null, owner_person_id: null, owner_team_id: T.additive, updated_at: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString() });
+    big.sample_readers.push({ record_id: id, user_id: U.ann });
+  }
+  const h = mount({ tables: big }).handlers['GET /:id/records'];
+  const dflt = await call(h, { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples' } });
+  assert.equal(idsOf(dflt).length, 500);
+  assert.equal(dflt.body.truncated, true);
+  assert.equal(idsOf(dflt)[0], S_OWNED); // newest first (2026-10-09 beats the January stamps)
+  const huge = await call(h, { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples', limit: '9999' } });
+  assert.equal(idsOf(huge).length, 500);
+});
+
+test('GET /:id/records: a bad collection or limit is 400, an unknown team 404, a malformed id 400', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const get = (id, query) => call(handlers['GET /:id/records'], { acc: member(U.ann), params: { id }, query });
+  for (const query of [{}, { collection: 'people' }, { collection: 'constructor' }, { collection: 'physical_samples', limit: '0' }, { collection: 'physical_samples', limit: 'x' }, { collection: 'physical_samples', limit: '1.5' }]) {
+    const r = await get(T.additive, query);
+    assert.deepEqual([r.status, errorOf(r).extensions.code], [400, 'INVALID_PAYLOAD'], JSON.stringify(query));
+  }
+  assert.equal((await get(ID(999), { collection: 'physical_samples' })).status, 404);
+  assert.equal((await get('nope', { collection: 'physical_samples' })).status, 400);
+  const anon = await call(handlers['GET /:id/records'], { acc: { user: null }, params: { id: T.additive }, query: { collection: 'campaigns' } });
+  assert.equal(anon.status, 401);
+});
+
+test('GET /mine/recent: the readable records of the caller\'s teams, newest first, with team name and colour', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const r = await call(handlers['GET /mine/recent'], { acc: member(U.ann) });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.items.map((i) => [i.collection, i.id, i.kind, i.code, i.title, i.team_id, i.team_name, i.team_color, i.changed_at]), [
+    ['physical_samples', S_OWNED, 'sample', 'SM-010', 'Team bar', T.additive, 'Additive', 'teal', '2026-10-09T10:00:00.000Z'],
+    ['manufacturing_operations', OP, 'operation', 'OP-1', null, T.additive, 'Additive', 'teal', '2026-10-08T10:00:00.000Z'],
+    ['physical_samples', S.three, 'sample', 'SM-003', 'Disc', T.additive, 'Additive', 'teal', '2026-10-07T10:00:00.000Z'],
+    ['physical_samples', S.one, 'sample', 'SM-001', 'Bar A', T.additive, 'Additive', 'teal', '2026-10-05T10:00:00.000Z'],
+  ]);
+  const two = await call(handlers['GET /mine/recent'], { acc: member(U.ann), query: { limit: '2' } });
+  assert.deepEqual(two.body.items.map((i) => i.code), ['SM-010', 'OP-1']);
+});
+
+test('GET /mine/recent: only the caller\'s own teams and only what they read; nothing for no team or no person', async () => {
+  const { handlers } = mount({ tables: recordsWorld() });
+  const bob = await call(handlers['GET /mine/recent'], { acc: member(U.bob) }); // in Additive, reads none of its records
+  assert.deepEqual(bob.body, { items: [] });
+  const fay = await call(handlers['GET /mine/recent'], { acc: member(U.fay) }); // manages Beta (no records); not in Additive
+  assert.deepEqual(fay.body, { items: [] });
+  for (const user of [U.stranger, U.noperson]) assert.deepEqual((await call(handlers['GET /mine/recent'], { acc: member(user) })).body, { items: [] });
+  const bad = await call(handlers['GET /mine/recent'], { acc: member(U.ann), query: { limit: '0' } });
+  assert.equal(bad.status, 400);
+});
+
+test('GET /mine/recent: a record granted to two of the caller\'s teams is listed once (the first team by name); an administrator in a team reads all of its records', async () => {
+  const tables = recordsWorld();
+  tables.team_members.push({ member_id: ID(690), team_id: T.beta, person_id: P.ann, is_manager: false, joined_at: '2026-10-04T00:00:00Z' });
+  tables.sample_team_access.push({ team_access_id: ID(411), sample_id: S.three, team_id: T.beta, role: 'view', trust_new_members: false });
+  const { handlers } = mount({ tables });
+  const r = await call(handlers['GET /mine/recent'], { acc: member(U.ann) });
+  const three = r.body.items.filter((i) => i.id === S.three);
+  assert.deepEqual(three.map((i) => i.team_name), ['Additive']);
+  assert.equal(r.body.items.length, 4);
+
+  const adminTables = recordsWorld();
+  adminTables.team_members.push({ member_id: ID(691), team_id: T.additive, person_id: P.adm, is_manager: false, joined_at: '2026-10-04T00:00:00Z' });
+  adminTables.people.push({ person_id: P.adm, full_name: 'Adm In', email: null, user_id: U.admin });
+  const adm = await call(mount({ tables: adminTables }).handlers['GET /mine/recent'], { acc: admin(U.admin) });
+  assert.deepEqual(adm.body.items.map((i) => i.code), ['SM-010', 'OP-1', 'SM-003', 'SM-001', 'SM-002', 'PRJ1']);
+});
