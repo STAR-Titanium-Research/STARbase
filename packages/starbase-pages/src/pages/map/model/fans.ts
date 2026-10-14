@@ -36,18 +36,21 @@ export interface FanPage {
   tests: TestRow[];
   samples: SampleRec[];
   items: Ref[];
-  total: number;
-  remaining: number;
+  total: number | null;
+  /** Null: more to load, no number to show (spec D21). */
+  remaining: number | null;
 }
 
 /**
  * A `loadUsedIn` result as a page of the fan of `collection` (`page` is 1-based). "+N more" is counted from the
  * server's total and the pages read, never from the rows drawn: a stock lot page can hold fewer operations than
- * it has samples, and a page with none is not the end.
+ * it has samples, and a page with none is not the end. A null total (a campaign or stock lot: their junction counts
+ * include records the person may not read, spec D21) gives a null count, shown as "More".
  */
 export function fanPage(collection: string, used: UsedIn, page: number): FanPage {
-  const total = Math.max(used.total, used.testsTotal ?? 0);
-  const remaining = Math.max(0, total - FAN_PAGE * Math.max(1, page));
+  // A null total (campaign, stock lot) never becomes a number: paging goes on while pages come back full (D21).
+  const total = used.total === null ? null : Math.max(used.total, used.testsTotal ?? 0);
+  const remaining = total === null ? (used.more ? null : 0) : Math.max(0, total - FAN_PAGE * Math.max(1, page));
   if (SAMPLE_FAN_COLLECTIONS.has(collection)) {
     const samples = used.items as SampleRec[];
     return { operations: [], tests: [], samples, items: samples.map((s) => rowRef(COLLECTION.sample, s)), total, remaining };

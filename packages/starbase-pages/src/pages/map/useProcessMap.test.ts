@@ -811,16 +811,21 @@ describe('expand: loading more (D15, spec 7)', () => {
 
   it('a stock lot page with no operations is not the end: "+N more" stays and loads the next page', async () => {
     recordRef.mockResolvedValue({ collection: 'raw_stock_lots', id: 'l1', code: 'LOT-1' });
-    usedIn.mockResolvedValue({ items: [], total: 45 });
+    usedIn.mockResolvedValue({ items: [], total: null, more: true });
     const { map } = setup({ focus: 'raw_stock_lots:l1' });
     await settle();
     expect(map.focusNodeId.value).toBe('lot:l1');
-    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBe(25);
-    usedIn.mockResolvedValue({ items: toolOps(2), total: 45 });
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBeNull(); // "More": no count of samples the person may not read
+    usedIn.mockResolvedValue({ items: toolOps(2), total: null, more: true });
     await map.expand('more:raw_stock_lots:l1');
     await settle();
     expect(containersOf(map)).toHaveLength(2);
-    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBe(5);
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBeNull();
+    usedIn.mockResolvedValue({ items: toolOps(1, 10), total: null, more: false }); // a short page ends the paging
+    await map.expand('more:raw_stock_lots:l1');
+    await settle();
+    expect(containersOf(map)).toHaveLength(3);
+    expect(map.graph.value!.nodes.some((n) => n.type === 'more')).toBe(false);
   });
 
   it('a sample card of a fan opens its family once; after that the plus button reveals what is one step beyond it', async () => {

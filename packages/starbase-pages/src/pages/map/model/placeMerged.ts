@@ -7,7 +7,8 @@
 // placed is shifted so that it lines up with that card; a group wired to nothing placed (the used-in fan of
 // a record in an Inside tray) is put beside the card the person expanded. A card that grew (a collapsed
 // container that was opened) keeps its place and pushes the placed cards it now overlaps along the cross
-// axis, instead of lying on top of them.
+// axis, instead of lying on top of them. Only DRAGGED cards are guaranteed to stay where they are; a card
+// that merely grew may itself be pushed to keep the gap.
 
 import type { Dir } from './elkInput';
 

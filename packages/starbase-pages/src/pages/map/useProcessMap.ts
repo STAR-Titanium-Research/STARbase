@@ -706,7 +706,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const key = refKey(node.ref);
       if (!fanRoots(d).has(key)) return openSideFan(node.ref, id);
       const remaining = d.fan && key === `${d.focus.collection}:${d.focus.id}` ? (d.fan.remaining ?? 0) : ((d.sideFans ?? []).find((f) => refKey(f.root) === key)?.remaining ?? 0);
-      if (remaining > 0) return loadMore(key);
+      if (remaining !== 0) return loadMore(key);
     }
     if (!node) {
       const slot = slotRecord(id);

@@ -6,6 +6,7 @@
 
 import type {
   ContainerNode,
+  Fan,
   Group,
   JunctionNode,
   Kind,
@@ -373,7 +374,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
 
   // ---- 4b. used-in fans (D20): the record, a collapsed container or a sample card per item, "+N more" -----
   const fanNodes: MapNode[] = [];
-  const fans: { root: Ref & { kind: Kind }; items: Ref[]; remaining: number }[] = [];
+  const fans: { root: Ref & { kind: Kind }; items: Ref[]; remaining: number | null }[] = [];
   if (data.fan) fans.push({ root: data.focus, items: data.fan.items, remaining: remainingOf(data.fan) });
   for (const f of data.sideFans ?? []) fans.push({ root: f.root, items: f.items, remaining: remainingOf(f) });
   for (const fan of fans) {
@@ -397,7 +398,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       fanNodes.push(node);
       addWire(rootOut, node.rows[0].in!, null, 'stock', rootId);
     }
-    if (fan.remaining > 0) {
+    if (fan.remaining !== 0) {
       fanNodes.push({ id: moreNodeId(fan.root), type: 'more', of: `${fan.root.collection}:${fan.root.id}`, remaining: fan.remaining } satisfies MoreNode);
     }
   }
@@ -486,7 +487,7 @@ function focusNodeId(data: ProcessData, groups: Group[], present: Set<string>): 
   return firstSample && present.has(`s:${firstSample.id}`) ? `s:${firstSample.id}` : null;
 }
 
-const remainingOf = (f: { items: Ref[]; total: number; remaining?: number }): number => Math.max(0, f.remaining ?? f.total - f.items.length);
+const remainingOf = (f: Fan): number | null => (f.remaining === null ? null : Math.max(0, f.remaining ?? (f.total ?? 0) - f.items.length));
 
 /** A used-in fan item as a header-only container: its sample flow is loaded when the person expands it. */
 function collapsedContainer(kind: 'operation' | 'test', row: OpRow | TestRow): ContainerNode {

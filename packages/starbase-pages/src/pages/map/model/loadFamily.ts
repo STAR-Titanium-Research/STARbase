@@ -711,8 +711,14 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
 
 export interface UsedIn {
   items: OpRow[] | TestRow[] | SampleRec[];
-  /** `meta.filter_count` of the main list: "+N more" is `total - 20 * page`. */
-  total: number;
+  /**
+   * `meta.filter_count` of the main list: "+N more" is `total - 20 * page`. Null where the count comes from a junction or
+   * provenance table whose rows the person may not read through the target (campaign samples, stock-lot provenance):
+   * that count would include hidden records, so no number is passed on (spec D21) and `more` says if a next page exists.
+   */
+  total: number | null;
+  /** With a null `total`: the junction page came back full, so another page may exist. */
+  more?: boolean;
   /** Equipment and insert edges: the tests that used them (same page), and how many there are. */
   tests?: TestRow[];
   testsTotal?: number;
@@ -736,7 +742,7 @@ const SAMPLE_FAN: Record<string, (id: string) => Json> = {
 /**
  * One page (`page` is 1-based, 20 rows) of what used a record. Operations and tests come newest first;
  * a stock lot is read through `sample_stock_provenance`: one page of its samples, then the operations that
- * made them (`output_sample_id`), so `total` counts samples and a page may hold fewer operations.
+ * made them (`output_sample_id`), so a page may hold fewer operations than samples (and none at all).
  */
 export async function loadUsedIn(api: HostApi, ref: { collection: string; id: string }, page: number): Promise<UsedIn> {
   const p = Math.max(1, Math.floor(page) || 1);
@@ -768,9 +774,10 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
       sort: ['sample_id.sample_code'],
       ...paged,
     });
-    // A sample the person may not read comes back null: no card, and no count of them.
+    // A sample the person may not read comes back null: no card, and no count of them. The junction's count includes
+    // them, so it is not passed on: paging goes on until a page comes back short.
     const items = res.rows.map((r) => r.sample_id).filter((s): s is Json => !!s && typeof s === 'object').map(mapSample);
-    return { items, total: res.total ?? items.length };
+    return { items, total: null, more: res.rows.length >= FAN_PAGE };
   }
 
   const sampleFilter = SAMPLE_FAN[ref.collection];
@@ -792,15 +799,16 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
       ...paged,
     });
     const sampleIds = unique(prov.rows.map((r) => idOf(r.sample_id)).filter((s): s is string => !!s));
-    const total = prov.total ?? sampleIds.length;
-    if (!sampleIds.length) return { items: [], total };
+    // As for a campaign: the provenance count includes samples the person may not read, so only "is there a next page".
+    const more = prov.rows.length >= FAN_PAGE;
+    if (!sampleIds.length) return { items: [], total: null, more };
     const ops = await getList(api, 'manufacturing_operations', {
       filter: JSON.stringify({ output_sample_id: { _in: sampleIds } }),
       fields: OPERATION_FIELDS,
       sort: ['-operation_date'],
       limit: -1,
     });
-    return { items: ops.rows.map((r) => mapOperation(r)), total };
+    return { items: ops.rows.map((r) => mapOperation(r)), total: null, more };
   }
 
   throw new Error(`No used-in fan for ${ref.collection}`);
