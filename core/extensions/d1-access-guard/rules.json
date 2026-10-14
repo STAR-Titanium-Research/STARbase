@@ -7,11 +7,37 @@
         "parent": "physical_samples",
         "key": "sample_id",
         "filter": {
-          "owner_person_id": {
-            "user_id": {
-              "_eq": "$CURRENT_USER"
+          "_or": [
+            {
+              "owner_person_id": {
+                "user_id": {
+                  "_eq": "$CURRENT_USER"
+                }
+              }
+            },
+            {
+              "_and": [
+                {
+                  "access": {
+                    "person_id": {
+                      "user_id": {
+                        "_eq": "$CURRENT_USER"
+                      }
+                    }
+                  }
+                },
+                {
+                  "access": {
+                    "role": {
+                      "_in": [
+                        "manage"
+                      ]
+                    }
+                  }
+                }
+              ]
             }
-          }
+          ]
         }
       }
     ],
@@ -67,7 +93,8 @@
                       "access": {
                         "role": {
                           "_in": [
-                            "edit"
+                            "edit",
+                            "manage"
                           ]
                         }
                       }
@@ -114,7 +141,8 @@
                   "access": {
                     "role": {
                       "_in": [
-                        "edit"
+                        "edit",
+                        "manage"
                       ]
                     }
                   }
@@ -163,7 +191,8 @@
                       "access": {
                         "role": {
                           "_in": [
-                            "edit"
+                            "edit",
+                            "manage"
                           ]
                         }
                       }
@@ -215,7 +244,8 @@
                                 "access": {
                                   "role": {
                                     "_in": [
-                                      "edit"
+                                      "edit",
+                                      "manage"
                                     ]
                                   }
                                 }
@@ -243,17 +273,47 @@
           "valueKey": "person_id"
         },
         {
+          "field": "owner_team_id",
+          "valueKey": "team_id"
+        },
+        {
           "field": "restricted"
         }
       ],
       "field": "owner_person_id",
       "valueKey": "person_id",
       "filter": {
-        "owner_person_id": {
-          "user_id": {
-            "_eq": "$CURRENT_USER"
+        "_or": [
+          {
+            "owner_person_id": {
+              "user_id": {
+                "_eq": "$CURRENT_USER"
+              }
+            }
+          },
+          {
+            "_and": [
+              {
+                "access": {
+                  "person_id": {
+                    "user_id": {
+                      "_eq": "$CURRENT_USER"
+                    }
+                  }
+                }
+              },
+              {
+                "access": {
+                  "role": {
+                    "_in": [
+                      "manage"
+                    ]
+                  }
+                }
+              }
+            ]
           }
-        }
+        ]
       }
     },
     "manufacturing_operations": {
@@ -262,6 +322,10 @@
         {
           "field": "owner_person_id",
           "valueKey": "person_id"
+        },
+        {
+          "field": "owner_team_id",
+          "valueKey": "team_id"
         },
         {
           "field": "restricted"
@@ -279,11 +343,37 @@
             }
           },
           {
-            "owner_person_id": {
-              "user_id": {
-                "_eq": "$CURRENT_USER"
+            "_or": [
+              {
+                "owner_person_id": {
+                  "user_id": {
+                    "_eq": "$CURRENT_USER"
+                  }
+                }
+              },
+              {
+                "_and": [
+                  {
+                    "access": {
+                      "person_id": {
+                        "user_id": {
+                          "_eq": "$CURRENT_USER"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "access": {
+                      "role": {
+                        "_in": [
+                          "manage"
+                        ]
+                      }
+                    }
+                  }
+                ]
               }
-            }
+            ]
           }
         ]
       }
@@ -296,36 +386,8 @@
           "valueKey": "person_id"
         },
         {
-          "field": "restricted"
-        }
-      ],
-      "field": "owner_person_id",
-      "valueKey": "person_id",
-      "filter": {
-        "_and": [
-          {
-            "readers": {
-              "user_id": {
-                "_eq": "$CURRENT_USER"
-              }
-            }
-          },
-          {
-            "owner_person_id": {
-              "user_id": {
-                "_eq": "$CURRENT_USER"
-              }
-            }
-          }
-        ]
-      }
-    },
-    "campaigns": {
-      "key": "campaign_id",
-      "fields": [
-        {
-          "field": "owner_person_id",
-          "valueKey": "person_id"
+          "field": "owner_team_id",
+          "valueKey": "team_id"
         },
         {
           "field": "restricted"
@@ -343,11 +405,99 @@
             }
           },
           {
-            "owner_person_id": {
+            "_or": [
+              {
+                "owner_person_id": {
+                  "user_id": {
+                    "_eq": "$CURRENT_USER"
+                  }
+                }
+              },
+              {
+                "_and": [
+                  {
+                    "access": {
+                      "person_id": {
+                        "user_id": {
+                          "_eq": "$CURRENT_USER"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "access": {
+                      "role": {
+                        "_in": [
+                          "manage"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "campaigns": {
+      "key": "campaign_id",
+      "fields": [
+        {
+          "field": "owner_person_id",
+          "valueKey": "person_id"
+        },
+        {
+          "field": "owner_team_id",
+          "valueKey": "team_id"
+        },
+        {
+          "field": "restricted"
+        }
+      ],
+      "field": "owner_person_id",
+      "valueKey": "person_id",
+      "filter": {
+        "_and": [
+          {
+            "readers": {
               "user_id": {
                 "_eq": "$CURRENT_USER"
               }
             }
+          },
+          {
+            "_or": [
+              {
+                "owner_person_id": {
+                  "user_id": {
+                    "_eq": "$CURRENT_USER"
+                  }
+                }
+              },
+              {
+                "_and": [
+                  {
+                    "access": {
+                      "person_id": {
+                        "user_id": {
+                          "_eq": "$CURRENT_USER"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "access": {
+                      "role": {
+                        "_in": [
+                          "manage"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
           }
         ]
       }

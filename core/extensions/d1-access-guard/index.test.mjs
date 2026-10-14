@@ -556,8 +556,92 @@ test('the shipped rules guard the owner column where update is wider than delete
     // proves who passes it. The generated list also names restricted as an owner-only field.
     assert.ok(JSON.stringify(g.filter).includes('$CURRENT_USER'), collection);
     assert.ok(JSON.stringify(g.filter).includes('owner_person_id'), collection);
-    assert.deepEqual(g.fields.map((f) => f.field), ['owner_person_id', 'restricted'], collection);
+    assert.deepEqual(g.fields.map((f) => f.field), ['owner_person_id', 'owner_team_id', 'restricted'], collection);
   }
+});
+
+// ---- team ownership (migration 177): owner_team_id is guarded like owner_person_id -------------------
+
+// A stand-in that answers each rule as the database would for a person who is `owner`, a team `manager` or a plain team `member`
+// of a team-owned record: the delete rule names the manager's `manage` row and no Can edit role, the update rule names `edit`.
+const roleOf = (query) => {
+  const text = JSON.stringify(query.filter);
+  return { names_edit: /"edit"/.test(text), names_manage: /"manage"/.test(text) };
+};
+
+test('the shipped rules guard owner_team_id with the same delete rule as owner_person_id, in each of the four records', () => {
+  const guards = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8')).ownerGuards;
+  for (const [collection, g] of Object.entries(guards)) {
+    assert.deepEqual(g.fields[1], { field: 'owner_team_id', valueKey: 'team_id' }, collection);
+    const rule = JSON.stringify(g.filter);
+    // the delete rule: the person owner, or a manager of the owning team (derived `manage` row); never the `edit` role
+    assert.ok(rule.includes('owner_person_id') && rule.includes('"manage"'), collection);
+    assert.ok(!rule.includes('"edit"'), `${collection}: a plain member of the owning team (edit) must not pass`);
+  }
+});
+
+test('owner_team_id change: a plain member of the owning team (edit, not manage) is refused', async () => {
+  // the fake plays the database: only a rule that names `manage` and not the Can edit role lets the caller through when they hold
+  // an `edit` row; a manager (manage row) passes the delete rule and the update rule alike
+  for (const [collection, pk] of [['physical_samples', 'sample_id'], ['manufacturing_operations', 'operation_id'], ['test_sessions', 'session_id'], ['campaigns', 'campaign_id']]) {
+    const asMember = (_c, _id, query) => {
+      const { names_edit, names_manage } = roleOf(query);
+      return names_edit && names_manage; // the update rule (edit, manage) passes a member; the delete rule (manage only) does not
+    };
+    const { filters, log } = mount({ canUpdate: asMember });
+    const database = ownerDb([{ [pk]: 'k1', owner_person_id: null, owner_team_id: 'team-a' }]);
+    await assert.rejects(
+      filters['items.update']({ owner_team_id: 'team-b' }, { collection, keys: ['k1'] }, ctx({ database })),
+      denied(new RegExp(`${collection} k1`)),
+      collection,
+    );
+    assert.equal(log.reads.length, 1, collection);
+  }
+});
+
+test('owner_team_id change: a manager of the owning team (manage row) may hand the record over, set or clear the team', async () => {
+  const asManager = (_c, _id, query) => roleOf(query).names_manage; // both rules name `manage`
+  for (const [collection, pk] of [['physical_samples', 'sample_id'], ['manufacturing_operations', 'operation_id'], ['test_sessions', 'session_id'], ['campaigns', 'campaign_id']]) {
+    for (const next of ['team-b', null, { team_id: 'team-b' }]) {
+      const { filters, log } = mount({ canUpdate: asManager });
+      const payload = { owner_team_id: next };
+      const database = ownerDb([{ [pk]: 'k1', owner_person_id: null, owner_team_id: 'team-a' }]);
+      assert.equal(await filters['items.update'](payload, { collection, keys: ['k1'] }, ctx({ database })), payload);
+      assert.equal(log.reads.length, 1, collection);
+    }
+  }
+});
+
+test('owner_team_id change: the same team sent back (a form save) is not a change; a member who changes nothing else is not asked', async () => {
+  const { filters, log } = mount({ canUpdate: () => false });
+  const database = ownerDb([{ sample_id: 's1', owner_person_id: null, owner_team_id: 'team-a' }]);
+  await filters['items.update']({ owner_team_id: 'team-a', notes: 'x' }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database }));
+  await filters['items.update']({ owner_team_id: { team_id: 'team-a' } }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database }));
+  await filters['items.update']({ notes: 'x' }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database }));
+  assert.equal(log.reads.length, 0);
+});
+
+test('owner_team_id change: setting a team on an unowned record, or on a person-owned one, needs the delete rule', async () => {
+  for (const row of [{ owner_person_id: null, owner_team_id: null }, { owner_person_id: 'p1', owner_team_id: null }]) {
+    const { filters, log } = mount({ canUpdate: () => false });
+    const database = ownerDb([{ sample_id: 's1', ...row }]);
+    await assert.rejects(
+      filters['items.update']({ owner_team_id: 'team-a' }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database })),
+      denied(/physical_samples s1/),
+    );
+    assert.equal(log.reads.length, 1);
+  }
+});
+
+test('owner_team_id change: refusal is the owner kind; admins and internal calls are not checked', async () => {
+  const { filters } = mount({ canUpdate: () => false });
+  const database = ownerDb([{ session_id: 't1', owner_person_id: null, owner_team_id: 'team-a' }]);
+  const err = await refusal(filters['items.update']({ owner_team_id: 'team-b' }, { collection: 'test_sessions', keys: ['t1'] }, ctx({ database })));
+  assert.equal(err.extensions.kind, 'owner');
+  assert.equal(err.extensions.collection, 'test_sessions');
+  const meta = { collection: 'test_sessions', keys: ['t1'] };
+  await filters['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database, accountability: { user: 'a', admin: true } }));
+  await filters['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database, accountability: null }));
 });
 
 test('owner change: a co-owner (who cannot delete) is refused', async () => {
@@ -568,7 +652,7 @@ test('owner change: a co-owner (who cannot delete) is refused', async () => {
     denied(/physical_samples s1/),
   );
   assert.deepEqual(database.calls, [
-    { table: 'physical_samples', column: 'sample_id', keys: ['s1'], columns: ['sample_id', 'owner_person_id', 'restricted'] },
+    { table: 'physical_samples', column: 'sample_id', keys: ['s1'], columns: ['sample_id', 'owner_person_id', 'owner_team_id', 'restricted'] },
   ]);
   // the check is the delete rule (owner only), run as the caller on the sample itself
   const [{ collection, query }] = log.reads;
@@ -784,8 +868,8 @@ test('refusal text of an owner change, by record', async () => {
 // ---- A1a: owner-only Restricted, restricted-aware moves, and the two campaign guards ------------------
 
 // The tests below tell the update rule (an editor passes) from the delete rule (only the owner passes)
-// by the filter sent: the update rules name the access list or the co-owners, the delete rules do not.
-const isDeleteRule = (query) => !/access|co_owners/.test(JSON.stringify(query.filter));
+// by the filter sent: the update rules name the Can edit role or the co-owners, the delete rules do not (a team manager's `manage` row is in both).
+const isDeleteRule = (query) => !/"edit"|co_owners/.test(JSON.stringify(query.filter));
 // "Everyone may update; only the listed records are owned by the caller."
 const ownsOnly = (...owned) => (collection, id, query) => !isDeleteRule(query) || owned.includes(`${collection}:${id}`);
 const kindOf = (err) => [err.extensions.kind, err.message];
@@ -797,7 +881,7 @@ test('the shipped rules list the guarded fields, the moving keys and the two jun
   // the junction guards of the co-owner and the investigator are the parent's DELETE rule (the owner / the PI)
   for (const collection of ['sample_co_owners', 'project_investigators']) {
     const [check] = RULES[collection];
-    assert.ok(!/co_owners|access/.test(JSON.stringify(check.filter)), `${collection}: the owner, not an editor`);
+    assert.ok(!/"edit"|co_owners/.test(JSON.stringify(check.filter)), `${collection}: the owner, not an editor`);
     assert.ok(JSON.stringify(check.filter).includes('$CURRENT_USER'));
   }
 });
