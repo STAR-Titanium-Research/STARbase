@@ -11,13 +11,25 @@ export interface LabelSpec {
 	text: string;
 	anchor: [number, number, number]; // world, before the insert's lift
 	insertId?: string; // the anchor rides up with this insert's lift
+	// An edge's face (+1 top, -1 underside) and its corner's outward direction in the ground plane: the pill fades
+	// while both face away from the camera, i.e. the edge is behind the insert body (an underside letter seen from above).
+	faceY?: 1 | -1;
+	outward?: [number, number];
 	tone: LabelTone;
 	selected?: boolean;
 	target: PickTarget | null; // what a click on the pill selects
 	title: string; // accessible name
 }
 
-interface Entry { spec: LabelSpec; el: HTMLElement; x: number; y: number; z: number; hidden: boolean }
+interface Entry { spec: LabelSpec; el: HTMLElement; x: number; y: number; z: number; hidden: boolean; occluded: boolean }
+
+// Is an edge anchor behind the insert body, seen from `toCamera` (anchor → camera)?
+export function edgeOccluded(spec: Pick<LabelSpec, 'faceY' | 'outward'>, toCamera: [number, number, number]): boolean {
+	if (!spec.faceY || !spec.outward) return false;
+	const facing = spec.faceY * toCamera[1] > 0;
+	const side = spec.outward[0] * toCamera[0] + spec.outward[1] * toCamera[2] > 0;
+	return !facing && !side;
+}
 
 export class LabelLayer {
 	private entries = new Map<string, Entry>();
@@ -66,7 +78,7 @@ export class LabelLayer {
 		for (const spec of specs) {
 			let e = this.entries.get(spec.key);
 			if (e) this.entries.delete(spec.key);
-			else e = { spec, el: this.build(spec), x: NaN, y: NaN, z: 0, hidden: true };
+			else e = { spec, el: this.build(spec), x: NaN, y: NaN, z: 0, hidden: true, occluded: false };
 			this.paint(e, spec);
 			next.set(spec.key, e);
 		}
@@ -77,7 +89,14 @@ export class LabelLayer {
 	update(camera: Camera, width: number, height: number, liftOf: (insertId: string) => number): void {
 		for (const e of this.entries.values()) {
 			const a = e.spec.anchor;
-			this.v.set(a[0], a[1] + (e.spec.insertId ? liftOf(e.spec.insertId) : 0), a[2]).project(camera);
+			const ay = a[1] + (e.spec.insertId ? liftOf(e.spec.insertId) : 0);
+			const cam = camera.position;
+			const occluded = edgeOccluded(e.spec, [cam.x - a[0], cam.y - ay, cam.z - a[2]]);
+			if (occluded !== e.occluded) {
+				e.occluded = occluded;
+				e.el.classList.toggle('is-occluded', occluded);
+			}
+			this.v.set(a[0], ay, a[2]).project(camera);
 			const x = (this.v.x * 0.5 + 0.5) * width;
 			const y = (-this.v.y * 0.5 + 0.5) * height;
 			const hidden = this.v.z > 1 || this.v.z < -1 || x < -40 || y < -40 || x > width + 40 || y > height + 40;

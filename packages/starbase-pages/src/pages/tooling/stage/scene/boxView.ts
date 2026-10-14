@@ -213,6 +213,7 @@ export class BoxView {
 			out.push({
 				key: `edge:${e.id}`, text: e.letter, insertId: insert.id,
 				anchor: [c[0] + a[0], c[1] + a[1], c[2] + a[2]] as [number, number, number],
+				faceY: e.placement.face === 'top' ? 1 : -1, outward: [a[0], a[2]],
 				tone: e.used ? 'dim' : 'ok',
 				selected: focus.kind === 'edge' && focus.edgeId === e.id,
 				target: { kind: 'edge', insertId: insert.id, edgeId: e.id },

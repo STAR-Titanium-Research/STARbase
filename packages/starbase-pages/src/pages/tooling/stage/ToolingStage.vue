@@ -339,6 +339,7 @@ button.d1-tstage-pill:focus-visible { outline: 2px solid var(--d1-accent, var(--
 	border-color: var(--d1-accent, var(--theme--primary));
 	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 16%, var(--d1-surface, var(--theme--background)));
 }
+.d1-tstage-pill.is-occluded:not(.is-selected):not(:hover) { opacity: 0.4; transform-origin: center; filter: saturate(0.4); }
 .d1-tstage-tip {
 	position: absolute;
 	z-index: 20000;
