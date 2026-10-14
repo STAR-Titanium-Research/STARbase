@@ -1037,6 +1037,23 @@ migration 141 prints about ownerless records.
   campaigns: its Campaigns panel shows the same card as a tile inside the panel. Check light and dark. Since
   branch `claude/serene-fermi-6nxf5e` (campaign cards follow the Projects design).
 
+- [ ] **TOOL-1 — Tooling pages on real data.** In STARbase open **Tool boxes**, then a real box with inserts and
+  edges. Expect: the box page with its insert type facts (ISO designation, manufacturer, coating, substrate, edges per
+  insert), the four state counts (fresh, partly used, used, depleted) adding up to the inserts list, and a **Next fresh
+  edge** card that links to the right edge (the lowest-numbered part-used insert's first fresh letter). Click an insert
+  in the stage (or the inserts list): the page becomes that insert, with its details, notes and edge list. Click an
+  edge: the page becomes that edge, with its tests and operations merged newest first, each opening its own page, and
+  **View forces** on machining operations opening the Force plotter for that operation. Open **Cutting inserts** and
+  **Insert edges** from the index pages: the rows open these pages. An edge marked fresh that has a test or operation
+  shows "Marked fresh, but N tests or operations used this edge." (check one in the Data Studio first). Edit opens the
+  collection's own form in the drawer and saving refreshes the page. Check light and dark. Since: tooling pages, S3.
+- [ ] **TOOL-2 — Moving inside a box keeps the page.** On a real box, click insert, edge, then use the browser Back and
+  Forward buttons. Expect: the address changes each time, the 3D view stays on screen and only the camera moves (no flash,
+  no reload of the stage, the network tab shows no new read of the box's inserts or edges, only the clicked record and,
+  for an edge, its history), and Back returns to the previous insert or the box. Going to another box (a link, or the
+  address bar) loads that box. A box, insert or edge id you may not read (or made up) shows "Not found or not visible to
+  you". Since: tooling pages, S3.
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and
