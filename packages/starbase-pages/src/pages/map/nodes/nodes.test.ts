@@ -286,6 +286,12 @@ describe('WireEdge', () => {
 		expect(lines).toEqual(['S-0412-A · Sample', 'from S-0412-A', 'into Cut from']);
 	});
 
+	it('names an unnamed batch container by its title, never blank', () => {
+		const batch: MapNode = { id: 'batch:b9', type: 'container', kind: 'operation', group: { id: 'batch:b9', kind: 'operation', rowIds: ['o2'], batch: { recorded: true, code: null } }, title: 'Batch', code: '', category: 'machining', rows: [], slots: [], settings: [], bundled: false, probable: false };
+		const lines = wireTooltip({ ...wire, to: 'batch:b9:in:0', carries: null }, new Map([...byId, [batch.id, batch]]));
+		expect(lines).toEqual(['from OP-17', 'into Batch']);
+	});
+
 	const edgeProps = (over: Record<string, unknown> = {}) => ({
 		id: wire.id,
 		source: 'op:o1',

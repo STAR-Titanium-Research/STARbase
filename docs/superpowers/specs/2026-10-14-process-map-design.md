@@ -276,8 +276,9 @@ newer focus cancels older work. Errors show with `errorText` in the map panel, k
 - Migration (next free number across all branches; the pattern of `20261012000164_label_templates.sql`:
   comments, OCC + audit triggers, `directus_collections`/`directus_fields`/`directus_relations` rows, Lab
   Member permissions mirrored in `scripts/access_rules.json`): table `batches` (`batch_id` uuid pk,
-  `code` text unique not null **default** `'B-' || lpad(nextval('batches_code_seq')::text, 4, '0')` —
-  a default, so Directus does not treat it as required; `d1-next-number` has no prefix config and needs
+  `code` text unique not null **default** `batches_next_code()` (`'B-'` and the next `batches_code_seq` number padded to at
+  least four digits, never truncated: B-9999, B-10000; a plain `lpad(n, 4, '0')` would cut B-10000 to B-1000) —
+  a default, so Directus does not treat it as required, plus a `BEFORE INSERT` trigger that fills a blank code; `d1-next-number` has no prefix config and needs
   no change), `batch_date` date, `notes` text, `owner_person_id` → people, the house audit columns),
   and **nullable** `batch_id` (FK `ON DELETE SET NULL`,
   indexed) on `manufacturing_operations` and `test_sessions`. Directus metadata for the collection and

@@ -43,7 +43,7 @@ A FAST sintering operation, with its recipe, machine settings and QA fields:
 | Category | Parameters |
 |---|---|
 | **Machining** | operation sub-type (facing, roughing…), spindle speed, cutting speed Vc, feed, axial (ap) and radial (ae) depth of cut, cutting length, workpiece diameter, insert edge, new edge used?, coolant used and pressure, tachometer used?, force data captured?, chips collected and reference code, experiment-sheet link |
-| **Sintering (FAST/SPS)** | recipe and recipe #, batch #, mould diameter, atmosphere, TC/pyrometer control, charge mass, peak temperature, force, voltage and power, top/bottom PTC temperatures, CoSHH reference, and the linked **FAST run** trace |
+| **Sintering (FAST/SPS)** | recipe and recipe #, **Powder batch**, mould diameter, atmosphere, TC/pyrometer control, charge mass, peak temperature, force, voltage and power, top/bottom PTC temperatures, CoSHH reference, and the linked **FAST run** trace |
 | **Heat treatment** | treatment type, atmosphere, peak temperature, and the rest of the cycle |
 | **Sample preparation** | the recipe and its editable steps ([Sample preparation](samples.md#sample-preparation)) |
 
@@ -60,6 +60,18 @@ sub-type and **Pass #**, and for machining, the cutting parameters:
 **Pass #** (`operation_sequence`) is assigned automatically, per sample, so every operation's
 code is unique. The Force App's Plot page shows the same code and regenerates it when a
 parameter is corrected (see the [Force App wiki](../force-app/plot-dashboard.md#correcting-an-operations-metadata)).
+
+### Batches
+
+When several samples are processed together as one job (a heat-treatment load, a polishing run, a set of tests on one
+day), record it as a **batch**: under **Batches** create one (leave **Code** alone and it becomes B-0001, B-0002, ...),
+then pick it in the **Batch** field of each operation or test session in that job. Every sample keeps its own operation
+or test row; the batch only ties them together, and the [Process map](explorer-pages.md) draws them as one container
+titled "Batch B-…". Anyone in the lab can create a batch; only its owner (and admins) can edit or delete it, and
+deleting a batch leaves its operations and tests as they were.
+
+**Powder batch** (on a FAST sintering operation) is not a batch in this sense: it is the powder batch typed on the
+press, e.g. TIMET 45-150, a free-text name for a raw stock lot that is not linked to anything.
 
 ## Test sessions
 

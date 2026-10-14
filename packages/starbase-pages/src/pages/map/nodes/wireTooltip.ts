@@ -5,12 +5,12 @@ import { LINEAGE_LABEL, KINDS } from './kinds';
 import { nodeOfSocket } from '../model/sockets';
 import type { MapNode, Wire } from '../model/types';
 
-/** What a node is called in a tooltip: its code, or for a junction the lineage type. */
+/** What a node is called in a tooltip: its code, else its title (an unnamed batch), or for a junction the lineage type. */
 export function nodeLabel(node: MapNode | undefined): string | null {
 	if (!node) return null;
 	if (node.type === 'junction') return LINEAGE_LABEL[node.lineageType];
 	if (node.type === 'more') return null;
-	return node.type === 'record' ? node.ref.code : node.code;
+	return node.type === 'record' ? node.ref.code : node.code || node.title;
 }
 
 /**

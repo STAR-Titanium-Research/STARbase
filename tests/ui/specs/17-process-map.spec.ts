@@ -409,3 +409,56 @@ test.describe('Process map on a phone (admin)', () => {
 		expect(errors).toEqual([]);
 	});
 });
+
+// A recorded batch (spec §9, ADR-0017): a batch row created through the API with two operations of one family
+// attached to it draws as ONE container titled "Batch B-…" holding both rows. The batch and the batch_id values
+// are put back afterwards (a batch is deleted last; batch_id is ON DELETE SET NULL anyway). Needs the batches
+// migration (the preview applies it) and a sample with two unbatched operations.
+test.describe('Process map recorded batch (admin)', () => {
+	test.setTimeout(120_000);
+	test.use({ viewport: { width: 1400, height: 900 } });
+
+	test('two operations of one family in a recorded batch draw as one "Batch B-…" container', async ({ page, playwright }) => {
+		const errors = watchErrors(page, IGNORED_CONSOLE);
+		const admin = await adminApi(playwright, SERVER);
+		let batchId: string | null = null;
+		const attached: string[] = [];
+		try {
+			const batchField = await admin.get(`${SERVER}/fields/manufacturing_operations/batch_id`);
+			test.skip(!batchField.ok(), 'the copy has no batch_id on operations (the batches migration is not applied)');
+			const ops = await rows(admin, '/items/manufacturing_operations?limit=-1&fields=operation_id,sample_id&filter[sample_id][_nnull]=true&filter[batch_id][_null]=true');
+			const bySample = new Map<string, string[]>();
+			for (const o of ops) {
+				const s = str(o.sample_id);
+				if (s) bySample.set(s, [...(bySample.get(s) ?? []), String(o.operation_id)]);
+			}
+			const pick = [...bySample].find(([, ids]) => ids.length >= 2);
+			test.skip(!pick, 'the copy has no sample with two unbatched operations');
+			const [sampleId, opIds] = pick!;
+
+			const made = await admin.post(`${SERVER}/items/batches`, { data: { notes: 'E2E process map scenario' } });
+			expect(made.ok(), 'create a batch with the code left out').toBeTruthy();
+			const batch = (await made.json()).data as { batch_id: string; code: string };
+			batchId = batch.batch_id;
+			expect(batch.code).toMatch(/^B-\d{4,}$/);
+			for (const id of opIds.slice(0, 2)) {
+				const r = await admin.patch(`${SERVER}/items/manufacturing_operations/${id}`, { data: { batch_id: batchId } });
+				expect(r.ok(), `attach operation ${id} to the batch`).toBeTruthy();
+				attached.push(id);
+			}
+
+			await signInStarbase(page, 'admin', ORIGINS);
+			await openMap(page, SAMPLES, sampleId);
+			const container = page.locator('.vue-flow__node-container').filter({ has: page.locator('.ohead .m', { hasText: `Batch ${batch.code}` }) });
+			await expect(container, 'one container for the recorded batch').toHaveCount(1);
+			await expect(container.locator('.orow:not(.fold):not(.bundle)'), 'one row per operation').toHaveCount(2);
+			await expect(page.locator('body')).not.toContainText(/lineage graph/i);
+			expect(errors).toEqual([]);
+		} finally {
+			// Back to how the copy was: batch_id cleared first, then the batch (the delete would also null them).
+			for (const id of attached) await admin.patch(`${SERVER}/items/manufacturing_operations/${id}`, { data: { batch_id: null } });
+			if (batchId) await admin.delete(`${SERVER}/items/batches/${batchId}`);
+			await admin.dispose();
+		}
+	});
+});
