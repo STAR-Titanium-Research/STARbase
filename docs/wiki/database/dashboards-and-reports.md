@@ -7,9 +7,9 @@ Beyond Directus's own record lists, D1 adds its own views. [Force Analysis](forc
 
 ## Lab Dashboard
 
-**Lab Dashboard** in the module bar is an overview in four tabs. Each tab is a chain of columns:
-pick something on the left and the columns to its right fill in. The **Connections** column on the
-right draws a graph of the selected record's neighbours.
+**Lab Dashboard** in the module bar is an overview in three tabs. Each tab is a chain of columns:
+pick something on the left and the columns to its right fill in. The old Connections column and Node Graph tab
+are gone: use the **Process map** (STARbase `/map`) to follow how a sample, operation or tool is connected.
 
 ### Samples
 
@@ -40,14 +40,12 @@ parameters. The connection graph links the operation to its sample, edge and mac
 FAST sintering runs with their sinter-cycle summary (peak temperature and force, mould
 diameter, atmosphere, recipe, batch). For the full traces, use [FAST Analysis](fast-data.md).
 
-### Node Graph
+### Process map
 
-A full-screen version of the connections graph. Search for a sample, operation (by its code),
-machine, insert, edge or box, pick it from the results, and the graph draws its neighbours:
-material and project, operations and tests, machine, tooling, parent samples. Click any node to
-explore outward from it. Each exploration adds to the graph; ✕ clears it and ⌖ re-fits it.
-
-![Lab Dashboard, Node Graph tab](../images/database/lab-node-graph.png)
+The Node Graph tab and the Connections column that used to sit in these dashboards were replaced by the
+**Process map** (STARbase `/map`). It draws a sample's family (parents, children, and the operations and tests
+between them) and, for a tool, machine, insert edge, stock lot, recipe or material, the operations that used it.
+Open it from the **Process map** button on a record page or index row, or from the Analysis section of the sidebar.
 
 ## Ask the Database
 

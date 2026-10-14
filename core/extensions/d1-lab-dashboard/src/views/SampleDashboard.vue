@@ -107,11 +107,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							<tr
-								v-for="op in operations"
-								:key="op.operation_id"
-								class="d1-table-row"
-							>
+							<tr v-for="op in operations" :key="op.operation_id">
 								<td>{{ formatDate(op.operation_date) }}</td>
 								<td>{{ op.method_id?.method_name ?? '—' }}</td>
 								<td>{{ op.equipment_id?.equipment_name ?? '—' }}</td>
@@ -537,14 +533,6 @@ onBeforeUnmount(() => {
 	color: var(--theme--foreground-subdued, #64748b);
 	font-weight: 600;
 	font-size: 11px;
-}
-
-.d1-table-row {
-	cursor: pointer;
-}
-
-.d1-table-row:hover td {
-	background: var(--theme--background-accent, #eef2f7);
 }
 
 .d1-table td {
