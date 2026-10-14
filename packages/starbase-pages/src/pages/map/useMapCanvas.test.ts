@@ -224,20 +224,25 @@ describe('useMapCanvas: whenSettled (the export waits for the layout)', () => {
     expect(await canvas.whenSettled()).toBe(true);
   });
 
-  it('waits for a layout that is running, then says true', async () => {
+  it('waits for a layout that is running, then says true as soon as it ends (no poll interval to wait out)', async () => {
     const { canvas, map } = await open();
     let release!: () => void;
     store.gate = new Promise<void>((r) => (release = r));
     vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
     void map.expand('op:u0');
     await settle(); // the layout has started and is held by the gate
-    let done: boolean | null = null;
-    void canvas.whenSettled(2000).then((v) => (done = v));
-    await settle();
-    expect(done).toBeNull();
-    release();
-    await settle();
-    expect(done).toBe(true);
+    vi.useFakeTimers(); // the clock stands still: only the layout ending can settle it
+    try {
+      let done: boolean | null = null;
+      void canvas.whenSettled(2000).then((v) => (done = v));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(done).toBeNull(); // still laying out, well inside the time it was given
+      release();
+      await vi.advanceTimersByTimeAsync(0); // microtasks only: no time passes
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('gives up after the time it was given, so the export can tell the person instead of photographing a moving map', async () => {
@@ -246,6 +251,16 @@ describe('useMapCanvas: whenSettled (the export waits for the layout)', () => {
     vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
     void map.expand('op:u0');
     await settle();
-    expect(await canvas.whenSettled(60)).toBe(false);
+    vi.useFakeTimers();
+    try {
+      let done: boolean | null = null;
+      void canvas.whenSettled(60).then((v) => (done = v));
+      await vi.advanceTimersByTimeAsync(59);
+      expect(done).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

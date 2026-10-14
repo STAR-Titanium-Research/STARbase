@@ -63,6 +63,9 @@ export function useMapCanvas(map: ProcessMap) {
   let pending = false;
   /** Layouts (and the move to their places) in progress: the export waits for none (whenSettled). */
   let running = 0;
+  const busy = () => pending || running > 0;
+  const settledWaiters = new Set<() => void>();
+  const notifySettled = () => [...settledWaiters].forEach((check) => check());
   /** The pending layout is an expand (new cards go beside what is placed), not a full layout; a full one wins when both are asked for. */
   let pendingMerges: MergeHint[] = [];
   let pendingFull = true;
@@ -179,6 +182,7 @@ export function useMapCanvas(map: ProcessMap) {
       await layoutOnce();
     } finally {
       running--;
+      notifySettled();
     }
   }
 
@@ -257,12 +261,21 @@ export function useMapCanvas(map: ProcessMap) {
    */
   async function whenSettled(timeoutMs = 2000): Promise<boolean> {
     await nextTick(); // a change made this tick has asked for its layout by now
-    const until = Date.now() + timeoutMs;
-    while (pending || running > 0) {
-      if (Date.now() >= until) return false;
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    return true;
+    if (!busy()) return true;
+    // No polling: the layout that ends wakes the waiters (a poll interval is a race against whoever checks just after it ends).
+    return new Promise<boolean>((resolve) => {
+      const check = () => {
+        if (busy()) return;
+        clearTimeout(timer);
+        settledWaiters.delete(check);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        settledWaiters.delete(check);
+        resolve(false);
+      }, timeoutMs);
+      settledWaiters.add(check);
+    });
   }
 
   // ---- viewport ---------------------------------------------------------------------------------
