@@ -42,7 +42,11 @@ export class LabelLayer {
 		text.className = 'd1-tstage-pill__text';
 		el.append(dot, text);
 		const target = spec.target;
-		if (target) el.addEventListener('click', (ev) => { ev.stopPropagation(); this.onClick(target); });
+		if (target) {
+			// A pill must not take keyboard focus from the stage, or Esc and the arrow keys would stop working.
+			el.addEventListener('mousedown', (ev) => ev.preventDefault());
+			el.addEventListener('click', (ev) => { ev.stopPropagation(); this.onClick(target); });
+		}
 		this.root.appendChild(el);
 		return el;
 	}

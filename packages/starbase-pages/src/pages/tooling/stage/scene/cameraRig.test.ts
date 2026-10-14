@@ -49,12 +49,14 @@ describe('framings', () => {
 		expect(c.position[2]).toBeGreaterThan(centre[2] + 5);
 	});
 
-	it('frameEdge is close enough to read the nose radius (the view is about 10 x RE wide)', () => {
+	it('frameEdge is close enough to read the nose radius (the view is about 18 x RE high)', () => {
 		const f = frameEdge(centre, model.geometry, model.outline, { face: 'top', corner: 0 }, 2.2);
 		const insert = frameInsert(centre, model.geometry, model.outline, 2.2);
-		expect(f.distance).toBeLessThan(insert.distance / 2);
-		const visibleWidth = 2 * f.distance * Math.tan(Math.atan(Math.tan((32 * Math.PI) / 360) * 2.2));
-		expect(visibleWidth).toBeLessThan(model.geometry.noseRadiusMm * 10 * 6);
+		expect(f.distance).toBeLessThan(insert.distance * 0.6);
+		const visibleHeight = 2 * f.distance * Math.tan((32 * Math.PI) / 360);
+		expect(visibleHeight).toBeCloseTo(model.geometry.noseRadiusMm * 18, 0);
+		// the nose is still wide enough on screen to read: at least 4% of the view height
+		expect(model.geometry.noseRadiusMm / visibleHeight).toBeGreaterThan(0.04);
 	});
 
 	it('frameEdge targets the underside for a bottom edge, from a flatter angle', () => {

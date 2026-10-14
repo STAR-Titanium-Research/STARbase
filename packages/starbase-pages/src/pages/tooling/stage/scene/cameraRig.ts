@@ -95,8 +95,9 @@ export function frameEdge(
 	const reach = Math.max(tip - 0.6, 0);
 	const faceY = placement.face === 'top' ? geom.thicknessMm / 2 : -geom.thicknessMm / 2;
 	const target: Vec3 = [centre[0] + dir[0] * reach, centre[1] + faceY, centre[2] + dir[1] * reach];
-	const span = Math.min(13, Math.max(7, re * 10)); // visible width, mm: enough to read the nose radius
-	const distance = fitDistance(span / 2, span / 2.6, aspect, fovDeg, 1);
+	// Visible height in mm: about 18 x the nose radius, so the radius reads and the insert's shape still shows.
+	const span = Math.min(24, Math.max(12, re * 18));
+	const distance = fitDistance(span / 2, span / 2, aspect, fovDeg, 1);
 	const polar = placement.face === 'top' ? EDGE_POLAR_TOP : EDGE_POLAR_BOTTOM;
 	return framingAt(target, distance, polar, Math.atan2(dir[0], dir[1]));
 }

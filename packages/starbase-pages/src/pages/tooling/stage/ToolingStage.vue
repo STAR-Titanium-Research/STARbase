@@ -67,7 +67,7 @@ async function start(): Promise<void> {
 		loading.value = false;
 		return;
 	}
-	s.onPick((t: PickTarget) => emit('select', targetToFocus(t)));
+	s.onPick((t: PickTarget) => { grab(); emit('select', targetToFocus(t)); });
 	s.onHover((t, x, y) => {
 		hover.value = t ? { text: hoverLabel(props.model, t), x, y } : null;
 	});
@@ -150,7 +150,7 @@ function grab(): void {
 		<div ref="viewEl" class="tstage__view" :class="{ flat: !use3d }">
 			<template v-if="use3d">
 				<canvas ref="canvasEl" class="tstage__canvas" aria-hidden="true" @pointerdown="grab"></canvas>
-				<div ref="overlayEl" class="tstage__labels"></div>
+				<div ref="overlayEl" class="tstage__labels" @pointerdown="grab"></div>
 				<div v-if="loading" class="tstage__skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
 				<div v-if="hover" class="d1-tstage-tip" :style="{ left: `${hover.x}px`, top: `${hover.y}px` }">{{ hover.text }}</div>
 			</template>

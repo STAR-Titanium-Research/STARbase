@@ -19,7 +19,7 @@ import type { Vec3 } from './cameraRig';
 
 const SELECTED_RADIUS_MM = 0.36;
 const HOVER_RADIUS_MM = 0.3;
-const HALO_RADIUS_MM = 0.62;
+const HALO_RADIUS_MM = 0.5;
 const PICK_RADIUS_MM = 1.1; // fat invisible tubes: an edge is easy to aim at
 const PICK_LAYER = 1; // never rendered, only raycast
 
@@ -173,7 +173,7 @@ export class BoxView {
 		this.overlay(this.hovered, hoverEdge ? hoverEdge.edgeId : null, HOVER_RADIUS_MM, hoverEdge?.insertId ?? '', hoverEdge ? lift(hoverEdge.insertId) : 0);
 		const next = state.nextFresh && state.nextFresh.edgeId !== selEdge ? state.nextFresh : null;
 		this.overlay(this.halo, next ? next.edgeId : null, HALO_RADIUS_MM, next?.insertId ?? '', next ? lift(next.insertId) : 0);
-		this.mats.edge.halo.opacity = 0.3 + 0.5 * state.pulse;
+		this.mats.edge.halo.opacity = 0.22 + 0.5 * state.pulse;
 	}
 
 	// Meshes a click or hover can hit: the inserts and their rings, and the fat edge tubes of the focused insert.

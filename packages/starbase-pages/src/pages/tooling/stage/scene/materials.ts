@@ -34,11 +34,11 @@ export class SceneMaterials {
 	readonly shadow = new MeshBasicMaterial({ color: 0x000000, transparent: true, depthWrite: false, toneMapped: false });
 	readonly ring: Record<RingTone, MeshBasicMaterial> = {
 		fresh: flat(), 'partly-used': flat(), used: flat(0.85), depleted: flat(GHOST_OPACITY),
-		selected: flat(), hover: flat(0.7),
+		selected: flat(0.6), hover: flat(0.4),
 	};
 	readonly edge: Record<EdgeTone, MeshBasicMaterial> = {
 		fresh: flat(), used: flat(), freshGhost: flat(GHOST_OPACITY), usedGhost: flat(GHOST_OPACITY),
-		selected: flat(), hover: flat(0.8), halo: flat(0.6),
+		selected: flat(), hover: flat(0.85), halo: flat(0.6),
 	};
 	isDark = false;
 
@@ -63,9 +63,9 @@ export class SceneMaterials {
 		setColor(this.edge.freshGhost.color, p.ok);
 		setColor(this.edge.used.color, p.dim);
 		setColor(this.edge.usedGhost.color, p.dim);
-		setColor(this.edge.selected.color, p.accent);
-		setColor(this.edge.hover.color, p.accent);
-		setColor(this.edge.halo.color, p.accent);
+		setColor(this.edge.selected.color, p.pick);
+		setColor(this.edge.hover.color, p.pick);
+		setColor(this.edge.halo.color, p.ok);
 	}
 
 	// Exposure for the ACES curve: a touch lower on a dark stage so the carbide does not wash out.

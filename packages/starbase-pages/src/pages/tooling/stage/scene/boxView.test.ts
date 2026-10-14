@@ -9,7 +9,7 @@ const rgb = (r: number, g: number, b: number): Rgba => ({ r, g, b, a: 1 });
 const palette = (dark: boolean): Palette => ({
 	tile: dark ? rgb(0.08, 0.1, 0.13) : rgb(0.9, 0.91, 0.93), tray: rgb(0.5, 0.5, 0.5), ink: rgb(0.1, 0.1, 0.1),
 	body: rgb(0.3, 0.3, 0.32), mark: rgb(0.6, 0.6, 0.6), ok: rgb(0.1, 0.6, 0.3), warn: rgb(0.8, 0.5, 0.1),
-	dim: rgb(0.5, 0.5, 0.55), accent: rgb(0.2, 0.4, 0.8),
+	dim: rgb(0.5, 0.5, 0.55), accent: rgb(0.2, 0.4, 0.8), pick: rgb(0.6, 0.7, 0.9),
 });
 
 const inserts: InsertRow[] = Array.from({ length: 10 }, (_, i) => ({

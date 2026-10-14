@@ -157,7 +157,7 @@ button.slot:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--pri
 	font-weight: 600;
 	color: var(--d1-dim, var(--theme--foreground-subdued));
 }
-svg { width: 100%; max-height: 300px; overflow: visible; }
+svg { width: 100%; max-height: 280px; }
 .body {
 	fill: color-mix(in srgb, var(--theme--foreground) 14%, var(--d1-tile, var(--theme--background-subdued)));
 	stroke: color-mix(in srgb, var(--theme--foreground) 55%, transparent);

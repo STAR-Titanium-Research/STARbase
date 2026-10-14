@@ -17,7 +17,7 @@ export function outline2d(geom: InsertGeometry, outline: InsertOutline): Outline
 	const pts = outline.points;
 	const path = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${f(x)} ${f(-y)}`).join(' ') + ' Z';
 	const reach = Math.max(geom.icMm / 2, ...outline.corners.map((c) => Math.hypot(c.x, c.y) + geom.noseRadiusMm));
-	const pad = 3.6;
+	const pad = 5;
 	const half = reach + pad;
 	const viewBox = `${f(-half)} ${f(-half)} ${f(2 * half)} ${f(2 * half)}`;
 
