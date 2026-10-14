@@ -123,12 +123,15 @@ async function cast(pw: Pw): Promise<Cast> {
 		for (const r of track.records) await step(`delete ${r.collection} ${r.id}`, () => admin.delete(`${D1}/items/${r.collection}/${r.id}`));
 		for (const id of track.teams) await step(`delete team ${id}`, () => admin.delete(`${TEAMS}/${id}`));
 		for (const id of created.people) await step(`delete person ${id}`, () => admin.delete(`${D1}/items/people/${id}`));
-		// a person made by d1-person-link after the poll gave up is found by its user
+		// a person made by d1-person-link after the poll gave up is found by its user: the lookup and each delete are steps of their own
 		for (const id of created.users) {
-			await step(`delete the person of user ${id}`, async () => {
-				const found = ((await (await admin.get(`${D1}/items/people?filter[user_id][_eq]=${id}&fields=person_id`)).json()).data ?? []) as { person_id: string }[];
-				for (const p of found) await admin.delete(`${D1}/items/people/${p.person_id}`);
+			const found: string[] = [];
+			await step(`look up the person of user ${id}`, async () => {
+				const r = await admin.get(`${D1}/items/people?filter[user_id][_eq]=${id}&fields=person_id`);
+				if (r.ok()) found.push(...(((await r.json()).data ?? []) as { person_id: string }[]).map((p) => p.person_id));
+				return r;
 			});
+			for (const pid of found) await step(`delete the person ${pid} of user ${id}`, () => admin.delete(`${D1}/items/people/${pid}`));
 			await step(`delete user ${id}`, () => admin.delete(`${D1}/users/${id}`));
 		}
 		for (const a of apis) await step('dispose an API context', () => a.dispose());
