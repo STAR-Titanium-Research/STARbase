@@ -4,15 +4,17 @@ import { boxRailFacts, edgeRailFacts, insertRailFacts, placementText, typeFacts 
 import { visibleFacts } from '../record/facts';
 
 const type = {
-	type_code: 'CNMG120408-MF', iso_designation: 'CNMG 12 04 08-MF', manufacturer: 'old text', manufacturer_id: { name: 'Sandvik' },
+	type_code: 'CNMG120408-MF', iso_designation: 'CNMG 12 04 08-MF', manufacturer: 'old text', manufacturer_id: 'm1',
 	coating: 'TiAlN', substrate: null, material_class: '', edge_count: 8, inserts_per_box: '10',
 };
 
 describe('typeFacts', () => {
-	it('reads the maker from the manufacturer relation, then the legacy text', () => {
-		const facts = typeFacts(type);
-		expect(facts.find((f) => f.label === 'Manufacturer')?.value).toBe('Sandvik');
-		expect(typeFacts({ ...type, manufacturer_id: null }).find((f) => f.label === 'Manufacturer')?.value).toBe('old text');
+	it('reads the maker from the separately read manufacturer name, then the type\'s own text', () => {
+		const maker = (name?: string | null) => typeFacts(type, null, name).find((f) => f.label === 'Manufacturer')?.value;
+		expect(maker('Sandvik')).toBe('Sandvik');
+		expect(maker('')).toBe('old text'); // the role may not read manufacturers
+		expect(maker(undefined)).toBe('old text');
+		expect(typeFacts({ ...type, manufacturer: null }).find((f) => f.label === 'Manufacturer')?.value).toBe('');
 	});
 	it('leaves out what the type does not say', () => {
 		const labels = visibleFacts(typeFacts(type)).map((f) => f.label);

@@ -14,9 +14,12 @@ import {
 //     stage never has to remount.
 // An edge's history, and the per-edge history counts of the box, are sections that fail on their own.
 
+// The read that decides the page and the model keeps only the record's own columns and the raw foreign key of
+// the manufacturer: expanding `manufacturer_id.name` would 403 the whole read, and turn all three routes into
+// "Not found", for a role that may not read `manufacturers`. The maker's name has its own section below.
 const TYPE_FIELDS = [
 	'insert_type_id.insert_type_id', 'insert_type_id.type_code', 'insert_type_id.iso_designation', 'insert_type_id.manufacturer',
-	'insert_type_id.manufacturer_id.name', 'insert_type_id.coating', 'insert_type_id.substrate', 'insert_type_id.material_class',
+	'insert_type_id.manufacturer_id', 'insert_type_id.coating', 'insert_type_id.substrate', 'insert_type_id.material_class',
 	'insert_type_id.inserts_per_box', 'insert_type_id.edge_count', 'insert_type_id.nose_radius_mm', 'insert_type_id.cutting_edge_length_mm',
 	'insert_type_id.included_angle_deg', 'insert_type_id.fixing_hole_diameter_mm',
 ];
@@ -64,6 +67,8 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 	const operations = section<any[]>([]);
 	// History rows (tests plus operations) per edge id, for the whole box.
 	const edgeCounts = modelSection<Map<string, number>>(new Map());
+	// The insert type's maker, read on its own (see TYPE_FIELDS); '' falls back to the type's `manufacturer` text.
+	const manufacturer = modelSection<string>('');
 
 	let pendingBox: string | null = null;
 	let boxCache: { id: string; row: any } | null = null;
@@ -87,12 +92,14 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 			model.value = null;
 			box.value = null;
 			edgeCounts.value = { data: new Map(), loading: false, error: '' };
+			manufacturer.value = { data: '', loading: false, error: '' };
 		}
 		const token = modelGate.begin();
 		pendingBox = boxId;
 		modelLoading.value = true;
 		modelError.value = '';
 		let built: ToolingModel;
+		let boxData: any;
 		try {
 			const cached = boxCache?.id === boxId ? boxCache.row : null;
 			boxCache = null;
@@ -102,6 +109,7 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 				getItems('insert_edges', { filter: { insert_id: { tool_box_id: { _eq: boxId } } }, fields: MODEL_EDGE_FIELDS, limit: MAX_EDGES }),
 			]);
 			if (!modelGate.isCurrent(token)) return;
+			boxData = boxRow;
 			box.value = boxRow;
 			built = buildToolingModel(boxRow, boxRow.insert_type_id ?? null, inserts, edges);
 			model.value = built;
@@ -117,7 +125,18 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 			}
 		}
 		const edgeIds = built.inserts.flatMap((i) => i.edges.map((e) => e.id));
-		await modelFill(edgeCounts, token, 'the usage history of the edges', async () => {
+		const makerId = typeof boxData.insert_type_id?.manufacturer_id === 'string' ? boxData.insert_type_id.manufacturer_id : '';
+		const readMaker = makerId
+			? modelFill(
+					manufacturer, token, 'the manufacturer',
+					async () => {
+						const row = await getItem('manufacturers', makerId, { fields: ['name'] });
+						return typeof row?.name === 'string' ? row.name.trim() : '';
+					},
+					isNotVisible, // not readable by this role: the type's own `manufacturer` text is shown instead
+				)
+			: Promise.resolve();
+		await Promise.all([readMaker, modelFill(edgeCounts, token, 'the usage history of the edges', async () => {
 			// An edge is "used" when `is_used` says so; these counts only back the "marked fresh, but used" warnings.
 			const grouped = (collection: string) =>
 				getItems(collection, {
@@ -139,7 +158,7 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 			};
 			const [t, o] = await Promise.all([testCounts(), grouped('manufacturing_operations')]);
 			return mergeEdgeCounts(t, countsByKey(o, 'insert_edge_id'));
-		});
+		})]);
 	}
 
 	async function load(force = false) {
@@ -250,7 +269,7 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 
 	return {
 		kind, state, loading, modelLoading, error: computed(() => error.value || modelError.value),
-		record: current, box, model, focus, nextFresh, history, tests, operations, edgeCounts,
+		record: current, box, model, focus, nextFresh, history, tests, operations, edgeCounts, manufacturer,
 		reload: () => load(true),
 	};
 }

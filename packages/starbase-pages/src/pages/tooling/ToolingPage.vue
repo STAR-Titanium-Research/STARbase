@@ -24,7 +24,7 @@ import EdgePanels from './EdgePanels.vue';
 const props = defineProps<{ kind: string; id: string }>();
 const router = useRouter();
 
-const { state, error, record, box, model, focus, nextFresh, tests, operations, edgeCounts, reload } = useToolingData(toRef(props, 'kind'), toRef(props, 'id'));
+const { state, error, record, box, model, focus, nextFresh, tests, operations, edgeCounts, manufacturer, reload } = useToolingData(toRef(props, 'kind'), toRef(props, 'id'));
 
 const focusKind = computed(() => focusKindOf(props.kind) ?? 'box');
 const collection = computed(() => FOCUS_COLLECTION[focusKind.value]);
@@ -144,7 +144,7 @@ const contents = computed<ContentsEntry[]>(() => {
 					<ToolingStage :model="model" :focus="focus" :next-fresh="nextFresh" @select="onSelect" />
 
 					<template v-if="focusKind === 'box'">
-						<BoxPanels :model="model" :type="box?.insert_type_id ?? null" :next-fresh="nextFresh" :counts="edgeCounts" />
+						<BoxPanels :model="model" :type="box?.insert_type_id ?? null" :next-fresh="nextFresh" :counts="edgeCounts" :manufacturer="manufacturer" />
 						<ToolingDetails :facts="details" :notes="notes" />
 					</template>
 					<template v-else-if="insert && edge">

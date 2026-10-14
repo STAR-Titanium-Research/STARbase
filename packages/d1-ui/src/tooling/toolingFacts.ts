@@ -22,10 +22,13 @@ export function placementText(edge: Pick<ToolingEdge, 'placement' | 'letter'>): 
 	return edge.placement.face === 'top' ? 'Top face' : 'Underside';
 }
 
-/** The insert type's facts: ISO designation, maker, coating, substrate, class and edges per insert. */
-export function typeFacts(type: any, geometry?: InsertGeometry | null): Fact[] {
+/**
+ * The insert type's facts: ISO designation, maker, coating, substrate, class and edges per insert. `makerName` is the
+ * `manufacturers` row's name, read on its own (a role may not read it); without it the type's `manufacturer` text is used.
+ */
+export function typeFacts(type: any, geometry?: InsertGeometry | null, makerName?: string | null): Fact[] {
 	if (!type) return [];
-	const maker = text(type.manufacturer_id?.name) || text(type.manufacturer);
+	const maker = text(makerName) || text(type.manufacturer);
 	const fromGeometry = geometry ? geometry.edgesPerFace * (geometry.doubleSided ? 2 : 1) : null;
 	return [
 		{ label: 'Type', value: text(type.type_code), mono: true },

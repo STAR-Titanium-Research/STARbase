@@ -13,10 +13,11 @@ const props = defineProps<{
 	type: any;
 	nextFresh: { insertId: string; edgeId: string } | null;
 	counts: SectionState<Map<string, number>>;
+	manufacturer: SectionState<string>;
 }>();
 
 const tally = computed(() => stateCounts(props.model));
-const facts = computed(() => typeFacts(props.type, props.model.geometry));
+const facts = computed(() => typeFacts(props.type, props.model.geometry, props.manufacturer.data));
 
 // The next fresh edge and, if tests or operations are linked to it, the warning.
 const next = computed(() => {
@@ -61,6 +62,7 @@ const rows = computed(() =>
 
 	<Section id="type" title="Insert type" :empty="!facts.some((f) => f.value !== null && f.value !== '')" empty-text="No insert type is set for this box.">
 		<FactList :facts="facts" />
+		<LoadState v-if="manufacturer.error" :error="manufacturer.error" />
 	</Section>
 
 	<Section id="inserts" title="Inserts" :count="model.inserts.length" :empty="!model.inserts.length" empty-text="No inserts visible to you.">
