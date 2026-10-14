@@ -26,7 +26,9 @@ export const GEOMETRY_CHOICES: Choice[] = [
 	{ value: 'bar', text: 'Bar' },
 	{ value: 'round_bar', text: 'Round bar' },
 	{ value: 'tensile_coupon', text: 'Tensile coupon (ISO 6892)' },
-	{ value: 'bend_bar', text: 'Bend / fatigue bar (ISO 7438)' },
+	{ value: 'fatigue_specimen', text: 'Fatigue specimen' },
+	{ value: 'bend_bar', text: 'Bend bar (ISO 7438)' },
+	{ value: 'charpy_specimen', text: 'Charpy specimen (ISO 148-1)' },
 	{ value: 'powder', text: 'Powder / Compact' },
 	{ value: 'other', text: 'Other' },
 ];

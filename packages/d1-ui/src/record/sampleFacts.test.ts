@@ -116,7 +116,7 @@ describe('sampleRailFacts', () => {
 
 describe('labels, not codes', () => {
 	it('the kind line and the surface finish read the choice label', () => {
-		expect(sampleKind({ form: 'bend_bar' })).toBe('Sample · Bend / fatigue bar (ISO 7438)');
+		expect(sampleKind({ form: 'bend_bar' })).toBe('Sample · Bend bar (ISO 7438)');
 		const finish = (v: string) => sampleDetailBase({ ...sample, surface_finish: v }).find((f) => f.label === 'Surface finish')?.value;
 		expect(finish('medium_machined')).toBe('Medium machined');
 		expect(finish('as_produced')).toBe('As produced');

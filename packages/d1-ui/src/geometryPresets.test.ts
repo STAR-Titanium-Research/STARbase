@@ -16,10 +16,30 @@ describe('coupon presets (decision 15)', () => {
 		expect(presetsFor('bend_bar')).toHaveLength(1);
 		expect(presetDims('bend_bar', 'plain_bar')).toEqual({ length_mm: 100, width_mm: 15 });
 	});
-	it('no preset ever sets the thickness, and only sets dimensions the form shows', () => {
+	it('the fatigue specimen offers two typical flat specimens, thickness left to the user', () => {
+		expect(Object.fromEntries(presetsFor('fatigue_specimen').map((p) => [p.id, p.dims]))).toEqual({
+			astm_e466_flat: { gauge_length_mm: 25, gauge_width_mm: 10, length_mm: 100, width_mm: 20 },
+			iso_1099_flat: { gauge_length_mm: 30, gauge_width_mm: 12, length_mm: 120, width_mm: 25 },
+		});
+		expect(presetsFor('fatigue_specimen').map((p) => p.text)).toEqual(['ASTM E466 flat (typical)', 'ISO 1099 flat (typical)']);
+		expect(FORM_FIELDS.fatigue_specimen).toEqual(FORM_FIELDS.tensile_coupon);
+	});
+	it('the Charpy specimen offers the full size and three sub-sizes, thickness included', () => {
+		expect(presetsFor('charpy_specimen').map((p) => p.dims)).toEqual([
+			{ length_mm: 55, width_mm: 10, thickness_mm: 10 },
+			{ length_mm: 55, width_mm: 10, thickness_mm: 7.5 },
+			{ length_mm: 55, width_mm: 10, thickness_mm: 5 },
+			{ length_mm: 55, width_mm: 10, thickness_mm: 2.5 },
+		]);
+		expect(presetLabel(presetsFor('charpy_specimen')[0])).toBe('Full size 55 × 10 × 10');
+		expect(FORM_FIELDS.charpy_specimen).toEqual(['length_mm', 'width_mm', 'thickness_mm']);
+		expect(matchingPreset('charpy_specimen', { length_mm: 55, width_mm: 10, thickness_mm: '5.0' })).toBe('sub_5');
+		expect(matchingPreset('charpy_specimen', { length_mm: 55, width_mm: 10, thickness_mm: 6 })).toBeNull();
+	});
+	it('only the Charpy specimen presets the thickness, and every preset sets only dimensions the form shows', () => {
 		for (const [form, list] of Object.entries(PRESETS)) {
 			for (const p of list) {
-				expect(Object.keys(p.dims)).not.toContain('thickness_mm');
+				if (form !== 'charpy_specimen') expect(Object.keys(p.dims)).not.toContain('thickness_mm');
 				for (const k of Object.keys(p.dims)) expect(FORM_FIELDS[form], `${form}.${p.id}.${k}`).toContain(k);
 			}
 		}

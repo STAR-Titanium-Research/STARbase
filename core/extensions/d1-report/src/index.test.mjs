@@ -386,7 +386,7 @@ test('the PDF shows choice labels, not stored codes', () => {
 		surfaceFinish: 'medium_machined', ops: [{ operation_id: 'o1', pass_code: 'P1', method_name: 'Turning', machining_operation_subtype: 'MT-F' }], parents: [],
 		children: [{ child_sample_code: '1-Y', child_form: 'bend_bar' }], tests: [], qrSvg: '', recordUrl: '/x',
 	});
-	for (const text of ['Medium machined', 'Tensile coupon (ISO 6892)', 'Turning · Turning – Facing', 'Bend / fatigue bar (ISO 7438)']) {
+	for (const text of ['Medium machined', 'Tensile coupon (ISO 6892)', 'Turning · Turning – Facing', 'Bend bar (ISO 7438)']) {
 		assert.ok(sample.includes(text), text);
 	}
 	for (const code of ['medium_machined', '>tensile_coupon<', 'MT-F', 'bend_bar']) assert.ok(!sample.includes(code), `still shows ${code}`);

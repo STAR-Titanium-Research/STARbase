@@ -7,7 +7,9 @@ import { humanise } from './status';
 describe('choiceLabel', () => {
 	it('gives the label of a stored value', () => {
 		expect(choiceLabel('geometry', 'tensile_coupon')).toBe('Tensile coupon (ISO 6892)');
-		expect(choiceLabel('geometry', 'bend_bar')).toBe('Bend / fatigue bar (ISO 7438)');
+		expect(choiceLabel('geometry', 'bend_bar')).toBe('Bend bar (ISO 7438)');
+		expect(choiceLabel('geometry', 'fatigue_specimen')).toBe('Fatigue specimen');
+		expect(choiceLabel('geometry', 'charpy_specimen')).toBe('Charpy specimen (ISO 148-1)');
 		expect(choiceLabel('surfaceFinish', 'medium_machined')).toBe('Medium machined');
 		expect(choiceLabel('surfaceFinish', 'as_produced')).toBe('As produced');
 		expect(choiceLabel('equipmentType', 'Sample_Prep')).toBe('Sample prep');

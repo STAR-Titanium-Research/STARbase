@@ -45,7 +45,7 @@ const num = (x: any): number | null => {
 
 const geoSvg = computed(() => buildGeometry(v.value as any));
 
-// "Standard" picker: the named standards of the chosen form (tensile coupon, bend bar). It shows the
+// "Standard" picker: the named standards of the chosen form (tensile coupon, fatigue specimen, bend bar, Charpy specimen). It shows the
 // standard the dimensions already equal, else nothing selected ("Custom"). Picking one fills the
 // dimensions it fixes; thickness is never touched, and every field stays editable.
 const presetItems = computed(() => presetsFor(v.value.form).map((p) => ({ text: presetLabel(p), value: p.id })));
