@@ -105,6 +105,8 @@ const restrictAdminOnly = () => RESTRICT_ADMIN_ONLY && process.env.D1_A1B_RESTRI
 // the four record types and projects (a project's PI can restrict it, which hides its whole contents)
 const restrictable = (collection) => collection === 'projects' || OWNER_GUARDS[collection] !== undefined;
 const RESTRICT_REFUSED = 'Restricting a record is not available yet. Ask an administrator.';
+// Ruling O3 (People 3): a record becomes team-owned only through Transfer ownership (d1-record-access), never by a create payload.
+const TEAM_OWN_REFUSED = 'A record becomes team-owned through Transfer ownership';
 
 // The shape of a Directus ForbiddenError (status 403, code FORBIDDEN), without importing the package.
 // `reason` is shown to the person who made the request, so it is plain words (no table names, ids or
@@ -546,6 +548,15 @@ export default ({ filter }, { services }) => {
   }
 
   filter('items.create', async (payload, meta, context) => {
+    // Ruling O3: a non-admin cannot create a record that is already owned by a team (the owner grant and its manage rows would be made
+    // with nobody having agreed to it); Transfer ownership is the only way a record becomes team-owned. A blank value is fine.
+    if (OWNER_GUARDS[meta?.collection] !== undefined && checked(context) && payload) {
+      for (const item of Array.isArray(payload) ? payload : [payload]) {
+        if (item && typeof item === 'object' && !isBlank(item.owner_team_id)) {
+          throw forbidden(TEAM_OWN_REFUSED, { kind: 'owner', collection: meta.collection, id: '' });
+        }
+      }
+    }
     // Until A1b, a non-admin cannot create a record already restricted (an explicit false, or no value, is fine)
     if (restrictable(meta?.collection) && checked(context) && payload && restrictAdminOnly()) {
       for (const item of Array.isArray(payload) ? payload : [payload]) {

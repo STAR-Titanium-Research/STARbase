@@ -1534,3 +1534,48 @@ test('I1: a nested { sample_id } item is read like a bare id, on update and on c
   // a nested item of another collection is not a sample
   await editor().filters['items.create']({ ...row, collection: 'something_else' }, { collection: 'test_sessions_subject' }, ctx({ database: fakeDb([], [], tables) }));
 });
+
+// ---- Ruling O3: a record becomes team-owned only through Transfer ownership ---------------------------------
+
+const OWNABLE = ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns'];
+
+test('a non-admin cannot create a record with owner_team_id (Ruling O3), on all four ownable collections', async () => {
+  const { filters } = mount();
+  for (const collection of OWNABLE) {
+    await assert.rejects(
+      filters['items.create']({ owner_team_id: 'team-1' }, { collection }, ctx()),
+      (err) => {
+        assert.equal(err.status, 403);
+        assert.equal(err.code, 'FORBIDDEN');
+        assert.equal(err.message, 'A record becomes team-owned through Transfer ownership');
+        assert.equal(err.extensions.source, 'd1-access-guard');
+        assert.equal(err.extensions.kind, 'owner');
+        assert.equal(err.extensions.collection, collection);
+        return true;
+      },
+      collection,
+    );
+  }
+});
+
+test('a batch create is refused when any item sets owner_team_id; a nested team object counts too', async () => {
+  const { filters } = mount();
+  await assert.rejects(filters['items.create']([{ nickname: 'a' }, { owner_team_id: 'team-1' }], { collection: 'physical_samples' }, ctx()), /Transfer ownership/);
+  await assert.rejects(filters['items.create']({ owner_team_id: { team_id: 'team-1' } }, { collection: 'campaigns' }, ctx()), /Transfer ownership/);
+});
+
+test('owner_team_id null, empty or absent is fine on create; so is a person owner', async () => {
+  const { filters } = mount();
+  for (const payload of [{ nickname: 'a' }, { owner_team_id: null }, { owner_team_id: '' }, { owner_person_id: 'p1', owner_team_id: null }]) {
+    assert.equal(await filters['items.create'](payload, { collection: 'physical_samples' }, ctx()), payload);
+  }
+});
+
+test('an admin and an internal call may create a team-owned record; other collections are not touched', async () => {
+  const { filters } = mount();
+  const payload = { owner_team_id: 'team-1' };
+  assert.equal(await filters['items.create'](payload, { collection: 'physical_samples' }, ctx({ accountability: { user: 'a', admin: true } })), payload);
+  assert.equal(await filters['items.create'](payload, { collection: 'physical_samples' }, ctx({ accountability: null })), payload);
+  assert.equal(await filters['items.create'](payload, { collection: 'projects' }, ctx()), payload);
+  assert.equal(await filters['items.create'](payload, { collection: 'sample_genealogy' }, ctx()), payload);
+});
