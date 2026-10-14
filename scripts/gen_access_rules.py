@@ -351,15 +351,25 @@ def rule_fields(doc: dict, collection: str, action: str) -> str:
     spec = doc.get("rule_fields", {}).get(collection, {})
     unknown = set(spec) - set(ACTIONS)
     if unknown:
-        raise RulesError(f"rule_fields {collection}: unknown action(s) {sorted(unknown)}")
+        raise RulesError(
+            f"rule_fields {collection}: unknown action(s) {sorted(unknown)}"
+        )
     if action not in spec:
         return "*"
     if action not in doc["rules"].get(collection, {}):
-        raise RulesError(f"rule_fields {collection}.{action}: the collection has no such rule")
+        raise RulesError(
+            f"rule_fields {collection}.{action}: the collection has no such rule"
+        )
     name = spec[action]
     names = doc.get("field_sets", {}).get(name)
-    if not names or len(names) != len(set(names)) or not all(isinstance(n, str) and n for n in names):
-        raise RulesError(f"rule_fields {collection}.{action}: field set {name!r} is missing, empty or has duplicates")
+    if (
+        not names
+        or len(names) != len(set(names))
+        or not all(isinstance(n, str) and n for n in names)
+    ):
+        raise RulesError(
+            f"rule_fields {collection}.{action}: field set {name!r} is missing, empty or has duplicates"
+        )
     return ",".join(names)
 
 
