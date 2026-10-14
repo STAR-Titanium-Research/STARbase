@@ -607,6 +607,80 @@ BEGIN
 END $$;
 SQL
 
+run_case_fx pending_rows_are_guarded <<'SQL'
+DO $$
+DECLARE g uuid; g2 uuid; s uuid := pg_temp.tf('s'); pc uuid := pg_temp.tf('pc'); pd uuid := pg_temp.tf('pd'); decider uuid; du uuid; s2 uuid; ok boolean; msg text; st text;
+BEGIN
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, pg_temp.tf('team'), 'view') RETURNING team_access_id INTO g;
+    INSERT INTO team_members (team_id, person_id) VALUES (pg_temp.tf('team'), pc), (pg_temp.tf('team'), pd);
+    ASSERT (SELECT count(*) FROM sample_team_pending WHERE team_access_id = g) = 2, 'both joiners are pending (the bookkeeping writes with the flag)';
+    -- direct insert, update and delete are refused
+    ok := false;
+    BEGIN
+        INSERT INTO sample_team_pending (team_access_id, person_id, state) VALUES (g, pg_temp.tf('po'), 'pending');
+    EXCEPTION WHEN insufficient_privilege THEN GET STACKED DIAGNOSTICS msg = MESSAGE_TEXT, st = RETURNED_SQLSTATE; ok := true;
+    END;
+    ASSERT ok AND st = '42501' AND msg = 'Pending team members are managed by the team''s grant', format('insert refused (%s %s)', st, msg);
+    ok := false;
+    BEGIN UPDATE sample_team_pending SET state = 'declined' WHERE team_access_id = g AND person_id = pc; EXCEPTION WHEN insufficient_privilege THEN ok := true; END;
+    ASSERT ok, 'update of a pending row refused';
+    ok := false;
+    BEGIN DELETE FROM sample_team_pending WHERE team_access_id = g AND person_id = pc; EXCEPTION WHEN insufficient_privilege THEN ok := true; END;
+    ASSERT ok, 'delete of a pending row refused';
+    ASSERT (SELECT count(*) FROM sample_team_pending WHERE team_access_id = g AND state = 'pending') = 2, 'nothing changed';
+    -- the same statements pass inside the bookkeeping (the flag)
+    PERFORM set_config('d1.team_sync', 'on', true);
+    UPDATE sample_team_pending SET state = 'declined' WHERE team_access_id = g AND person_id = pd;
+    DELETE FROM sample_team_pending WHERE team_access_id = g AND person_id = pd;
+    INSERT INTO sample_team_pending (team_access_id, person_id, state) VALUES (g, pd, 'pending');
+    PERFORM set_config('d1.team_sync', '', true);
+    ASSERT (SELECT state FROM sample_team_pending WHERE team_access_id = g AND person_id = pd) = 'pending', 'the flag lets the bookkeeping write';
+    -- team_decide writes with the flag; the decider is then deleted: decided_by_person_id SET NULL is a cascade UPDATE and passes
+    du := gen_random_uuid();
+    INSERT INTO directus_users (id, email, status) VALUES (du, 'tf-decider-' || du || '@example.invalid', 'active');
+    INSERT INTO people (full_name, user_id) VALUES ('TF Decider', du) RETURNING person_id INTO decider;
+    PERFORM set_config('d1.actor_identity', du::text, true);
+    PERFORM d1_private.team_decide('physical_samples', g, pc, 'decline');
+    ASSERT (SELECT decided_by_person_id FROM sample_team_pending WHERE team_access_id = g AND person_id = pc) = decider, 'declined by the decider';
+    DELETE FROM people WHERE person_id = decider;
+    ASSERT (SELECT state = 'declined' AND decided_by_person_id IS NULL AND decided_at IS NOT NULL FROM sample_team_pending WHERE team_access_id = g AND person_id = pc),
+        'the decider''s delete clears decided_by_person_id and keeps the declined row';
+    -- a deleted person, a member removed, a deleted record, grant and team: their pending rows go
+    DELETE FROM people WHERE person_id = pd;
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_team_pending WHERE person_id = pd), 'a deleted person''s pending row goes';
+    DELETE FROM team_members WHERE team_id = pg_temp.tf('team') AND person_id = pc;
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_team_pending WHERE person_id = pc), 'a removed member''s declined row goes';
+    INSERT INTO physical_samples (sample_code) VALUES ('TF-PG-' || left(g::text, 8)) RETURNING sample_id INTO s2;
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s2, pg_temp.tf('team'), 'edit') RETURNING team_access_id INTO g2;
+    INSERT INTO team_members (team_id, person_id) VALUES (pg_temp.tf('team'), pc);
+    ASSERT (SELECT count(*) FROM sample_team_pending WHERE team_access_id IN (g, g2)) = 2, 'pending again, on two grants';
+    DELETE FROM physical_samples WHERE sample_id = s2;
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_team_pending WHERE team_access_id = g2), 'a deleted record''s pending rows go';
+    DELETE FROM sample_team_access WHERE team_access_id = g;
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_team_pending WHERE team_access_id = g), 'a deleted grant''s pending rows go';
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, pg_temp.tf('team'), 'view') RETURNING team_access_id INTO g;
+    DELETE FROM teams WHERE team_id = pg_temp.tf('team');
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_team_pending WHERE team_access_id = g), 'a deleted team''s pending rows go';
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
+run_case_fx guards_and_lock_triggers_cover_every_table <<'SQL'
+DO $$
+DECLARE k record;
+BEGIN
+    FOR k IN SELECT * FROM d1_private.team_kinds() LOOP
+        ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = format('public.%I', k.kind || '_team_pending')::regclass
+                          AND tgname = k.kind || '_team_pending_team_guard' AND NOT tgisinternal AND tgenabled = 'O'),
+            format('%s_team_pending has its guard', k.kind);
+        ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = format('public.%I', k.kind || '_team_access')::regclass
+                          AND tgname = k.kind || '_team_access_lock_first' AND NOT tgisinternal),
+            format('%s_team_access has its lock-first trigger', k.kind);
+    END LOOP;
+    ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.teams'::regclass AND tgname = 'teams_lock_first' AND NOT tgisinternal), 'teams has its lock-first trigger';
+END $$;
+SQL
+
 run_case_fx direct_and_team_rows_coexist <<'SQL'
 DO $$
 DECLARE g uuid; s uuid := pg_temp.tf('r'); pa uuid := pg_temp.tf('pa'); ua uuid := pg_temp.tf('ua');
@@ -904,6 +978,30 @@ lock_order_case() {
 }
 lock_order_case
 
+# --- two sessions: deleting a team. Session 1 holds the readers lock (a write to physical_samples takes it first) and 2 s later adds a member to
+# the team (the foreign key takes KEY SHARE on the team row); session 2 deletes the team in between. Without the BEFORE DELETE statement trigger
+# on teams, session 2 locks the team row first and then, cascading into team_members (team_member_sync), waits for the readers lock: a deadlock
+# (40P01). With it, session 2 waits for the readers lock before it locks any row; session 1 commits, then the delete takes the new member with it.
+team_delete_lock_order_case() {
+  local d=8 team m x f1 f2 o1 o2 got
+  team="${d}b000000-0000-4000-8000-0000000000e1"; m="${d}a000000-0000-4000-8000-0000000000e1"; x="${d}a000000-0000-4000-8000-0000000000e2"
+  psql "$TM_URL" --no-psqlrc -X -q -v ON_ERROR_STOP=1 -c "
+    INSERT INTO people (person_id, full_name) VALUES ('$m', 'TM E1'), ('$x', 'TM E2');
+    INSERT INTO teams (team_id, name) VALUES ('$team', 'TM Delete order');
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES ('$team', '$m', true);" >/dev/null 2>&1 \
+    || { bad "team delete lock order (two sessions): setup failed"; return; }
+  f1=$(mktemp); f2=$(mktemp)
+  ( psql "$TM_URL" --no-psqlrc -X -t -A -q -v ON_ERROR_STOP=1 -c "BEGIN; UPDATE physical_samples SET restricted = restricted WHERE false; SELECT pg_sleep(2); INSERT INTO team_members (team_id, person_id) VALUES ('$team', '$x'); COMMIT;" >"$f1" 2>&1 ) &
+  sleep 1
+  ( psql "$TM_URL" --no-psqlrc -X -t -A -q -v ON_ERROR_STOP=1 -c "BEGIN; DELETE FROM teams WHERE team_id = '$team'; COMMIT;" >"$f2" 2>&1 ) &
+  wait
+  o1=$(cat "$f1"); o2=$(cat "$f2"); rm -f "$f1" "$f2"
+  got=$(psql "$TM_URL" --no-psqlrc -X -t -A -q -c "SELECT (SELECT count(*) FROM teams WHERE team_id = '$team') || '/' || (SELECT count(*) FROM team_members WHERE team_id = '$team')")
+  if [[ "$got" == "0/0" ]] && ! grep -qi 'deadlock' <<<"$o1$o2"; then ok "team delete lock order (two sessions): a team deleted while a member is added under the readers lock: both commit, no deadlock"
+  else bad "team delete lock order (two sessions): team/members left $got (expected 0/0); session 1: $o1; session 2: $o2"; fi
+}
+team_delete_lock_order_case
+
 run_case not_granted_to_llm_role <<'SQL'
 DO $$
 DECLARE t text; f text;
@@ -917,7 +1015,7 @@ BEGIN
     FOREACH f IN ARRAY ARRAY['d1_private.team_actor_person()', 'd1_private.team_has_manager()', 'd1_private.teams_history()', 'd1_private.team_members_history()',
                              'd1_private.team_decide(text, uuid, uuid, text)', 'd1_private.team_pending_actionable(text, uuid, uuid)', 'd1_private.team_drift()',
                              'd1_private.team_drift_count()', 'd1_private.team_grant_sync()', 'd1_private.team_member_sync()', 'd1_private.team_access_guard()',
-                             'd1_private.team_lock()', 'd1_private.team_kinds()', 'd1_private.team_readers_lock()'] LOOP
+                             'd1_private.team_lock()', 'd1_private.team_kinds()', 'd1_private.team_readers_lock()', 'd1_private.team_pending_guard()'] LOOP
         ASSERT NOT has_function_privilege('d1_llm_readonly', f, 'EXECUTE'), format('%s must not be executable by d1_llm_readonly', f);
     END LOOP;
 END $$;

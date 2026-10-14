@@ -34,9 +34,14 @@
 -- (added_by_person_id SET NULL); an INSERT never does. A statement from Data Studio, the API or psql runs at depth 1 and is refused. It is a
 -- guard against mistakes, not a security boundary: a session that can run SQL can set the flag itself.
 --
--- Lock order: BEFORE STATEMENT triggers (<table>_lock_first) on team_members and the five <type>_team_access tables take the global readers lock
--- (d1_private.team_readers_lock: the body of 166's trg_readers_lock, as people_readers_lock does there) before the statement takes any row or foreign-key lock, so a team
--- change cannot deadlock with a write that holds the readers lock and wants the same people or record row.
+-- The same guard on the five <type>_team_pending tables (d1_private.team_pending_guard, BEFORE INSERT/UPDATE/DELETE): a pending or declined row
+-- is written only by the bookkeeping, team_decide (d1.team_sync = 'on') or a foreign-key cascade (a DELETE at depth > 1: a deleted grant, record,
+-- team or person; an UPDATE at depth > 1 that changes only decided_by_person_id, the SET NULL of a deleted person).
+--
+-- Lock order: BEFORE STATEMENT triggers (<table>_lock_first) on team_members, the five <type>_team_access tables and a DELETE on teams take the
+-- global readers lock (d1_private.team_readers_lock: the body of 166's trg_readers_lock, as people_readers_lock does there) before the statement
+-- takes any row or foreign-key lock, so a team change (or a team delete, which cascades into grants, members and derived rows) cannot deadlock
+-- with a write that holds the readers lock and wants the same people, record or team row.
 --
 -- Functions (d1_private, SECURITY DEFINER, EXECUTE revoked from PUBLIC, not granted to the Ask-the-database role):
 --   team_decide(collection, team_access_id, person_id, 'approve' | 'decline'), team_pending_actionable(collection, team_access_id,
@@ -245,6 +250,36 @@ END
 $$;
 COMMENT ON FUNCTION d1_private.team_access_guard() IS 'Row trigger function of the five <kind>_access tables, BEFORE INSERT / UPDATE / DELETE: inserting, changing or deleting a row whose old or new team_access_id is set (a derived row, or turning a person''s own entry into one) raises insufficient_privilege (42501) "Team access rows are managed by the team''s grant", unless the transaction setting d1.team_sync is on (the bookkeeping triggers and team_decide set it) or it is a foreign-key cascade inside another trigger (pg_trigger_depth() > 1): a DELETE (a deleted grant, record, team or person) or an UPDATE that keeps team_access_id (added_by_person_id SET NULL); an INSERT is never let through that way. Rows with team_access_id NULL pass. A guard against edits behind the bookkeeping (Data Studio, the API), not a security boundary. Migration 176.';
 
+-- The pending tables are written only by the bookkeeping (and cascades).
+CREATE OR REPLACE FUNCTION d1_private.team_pending_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+    cascade boolean;
+BEGIN
+    -- a foreign-key cascade runs inside the referential trigger (depth > 1): it deletes a row (its grant, record, person or team went) or
+    -- sets decided_by_person_id NULL (its decider was deleted); it never inserts one or changes who waits or what they wait for
+    cascade := pg_trigger_depth() > 1 AND CASE TG_OP
+                                               WHEN 'DELETE' THEN true
+                                               WHEN 'UPDATE' THEN OLD.team_access_id = NEW.team_access_id AND OLD.person_id = NEW.person_id
+                                                                   AND OLD.state = NEW.state AND OLD.decided_at IS NOT DISTINCT FROM NEW.decided_at
+                                               ELSE false END;
+    IF coalesce(current_setting('d1.team_sync', true), '') <> 'on' AND NOT cascade THEN
+        RAISE EXCEPTION 'Pending team members are managed by the team''s grant'
+            USING ERRCODE = 'insufficient_privilege', TABLE = TG_TABLE_NAME,
+                  DETAIL = 'A pending or declined row follows the team''s members and the grant''s trust setting (the team bookkeeping and team_decide write it).',
+                  HINT = 'Approve or decline through the teams endpoint, or change the team''s members or grant.';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END
+$$;
+COMMENT ON FUNCTION d1_private.team_pending_guard() IS 'Row trigger function of the five <kind>_team_pending tables, BEFORE INSERT / UPDATE / DELETE: raises insufficient_privilege (42501) "Pending team members are managed by the team''s grant" unless the transaction setting d1.team_sync is on (the bookkeeping triggers and team_decide set it) or it is a foreign-key cascade inside another trigger (pg_trigger_depth() > 1): a DELETE (a deleted grant, record, team or person) or an UPDATE that changes only decided_by_person_id (SET NULL). An INSERT never passes that way. A guard against edits behind the bookkeeping (Data Studio, the API), not a security boundary. Migration 176.';
+
 -- 3. Tables, the access-table column and indexes, triggers.
 DO $do$
 DECLARE
@@ -311,6 +346,7 @@ BEGIN
                           EXECUTE FUNCTION d1_private.team_grant_sync(%2$L)', ta, k.kind, k.fk);
         EXECUTE format('CREATE TRIGGER %1$s_sync_del AFTER DELETE ON public.%1$I FOR EACH ROW EXECUTE FUNCTION d1_private.team_grant_sync(%2$L)', ta, k.kind);
         EXECUTE format('CREATE TRIGGER %1$s_team_guard BEFORE INSERT OR UPDATE OR DELETE ON public.%1$I FOR EACH ROW EXECUTE FUNCTION d1_private.team_access_guard()', acc);
+        EXECUTE format('CREATE TRIGGER %1$s_team_guard BEFORE INSERT OR UPDATE OR DELETE ON public.%1$I FOR EACH ROW EXECUTE FUNCTION d1_private.team_pending_guard()', tp);
         -- the readers lock before the statement takes any row or foreign-key lock (lock order: readers lock first, as people_readers_lock in 166)
         EXECUTE format('CREATE TRIGGER %1$s_lock_first BEFORE INSERT OR UPDATE OR DELETE ON public.%1$I FOR EACH STATEMENT EXECUTE FUNCTION d1_private.team_readers_lock()', ta);
         EXECUTE format('COMMENT ON TRIGGER %1$s_lock_first ON public.%1$I IS %2$L', ta, 'Takes the global readers lock before the statement locks any row (the record and team foreign keys) and before the bookkeeping writes derived rows: otherwise a grant written while another transaction holds the readers lock and wants the same record row (a delete of the record) deadlocks (migration 176).');
@@ -355,6 +391,10 @@ CREATE TRIGGER team_members_access_sync_upd
 CREATE TRIGGER team_members_lock_first
     BEFORE INSERT OR UPDATE OR DELETE ON team_members
     FOR EACH STATEMENT EXECUTE FUNCTION d1_private.team_readers_lock();
+CREATE TRIGGER teams_lock_first
+    BEFORE DELETE ON teams
+    FOR EACH STATEMENT EXECUTE FUNCTION d1_private.team_readers_lock();
+COMMENT ON TRIGGER teams_lock_first ON teams IS 'Takes the global readers lock before a DELETE of teams locks any row or cascades into team_members and the grant tables: otherwise deleting a team (which then deletes its members, grants and derived rows) while another transaction holds the readers lock and adds a member or a grant of that team deadlocks (migration 176).';
 COMMENT ON TRIGGER team_members_lock_first ON team_members IS 'Takes the global readers lock before the statement locks any row (the team and person foreign keys take KEY SHARE on them) and before team_member_sync writes derived rows: otherwise a member added while another transaction holds the readers lock and updates the person (people.user_id, FOR UPDATE on the row) deadlocks (migration 176).';
 
 -- The access tables now hold own entries and derived team rows.
@@ -807,6 +847,7 @@ REVOKE ALL ON FUNCTION d1_private.team_readers_lock() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_grant_sync() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_member_sync() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_access_guard() FROM PUBLIC;
+REVOKE ALL ON FUNCTION d1_private.team_pending_guard() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_decide(text, uuid, uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_pending_actionable(text, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_drift() FROM PUBLIC;
@@ -1082,6 +1123,7 @@ DROP TRIGGER IF EXISTS team_members_access_sync_ins ON team_members;
 DROP TRIGGER IF EXISTS team_members_access_sync_del ON team_members;
 DROP TRIGGER IF EXISTS team_members_access_sync_upd ON team_members;
 DROP TRIGGER IF EXISTS team_members_lock_first ON team_members;
+DROP TRIGGER IF EXISTS teams_lock_first ON teams;
 DO $do$
 DECLARE
     k   record;
@@ -1105,6 +1147,7 @@ DROP FUNCTION IF EXISTS d1_private.team_drift_count();
 DROP FUNCTION IF EXISTS d1_private.team_drift();
 DROP FUNCTION IF EXISTS d1_private.team_pending_actionable(text, uuid, uuid);
 DROP FUNCTION IF EXISTS d1_private.team_decide(text, uuid, uuid, text);
+DROP FUNCTION IF EXISTS d1_private.team_pending_guard();
 DROP FUNCTION IF EXISTS d1_private.team_access_guard();
 DROP FUNCTION IF EXISTS d1_private.team_member_sync();
 DROP FUNCTION IF EXISTS d1_private.team_grant_sync();
