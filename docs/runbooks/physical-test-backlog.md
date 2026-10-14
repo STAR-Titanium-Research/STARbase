@@ -1053,6 +1053,17 @@ migration 141 prints about ownerless records.
   for an edge, its history), and Back returns to the previous insert or the box. Going to another box (a link, or the
   address bar) loads that box. A box, insert or edge id you may not read (or made up) shows "Not found or not visible to
   you". Since: tooling pages, S3.
+- [ ] **TOOL-3 — The 3D stage on a real GPU.** On a lab PC (light and dark theme) open a real box. Expect: the tray
+  and inserts draw crisply with no jagged edges; the camera eases (about 0.4 s) to an insert and to an edge; the focused
+  insert lifts out of its pocket; edge letters on the hidden underside are faded; the next fresh edge glows and stops
+  pulsing when the tab is hidden; with the OS set to reduce motion, moves are instant and nothing pulses. The fan stays
+  quiet when the page sits idle (no render loop at rest). Then turn WebGL off (Chrome `chrome://flags` → disable
+  WebGL, or Firefox `webgl.disabled`) and reload: the 2D slot grid shows, with the same clicks and addresses. Shrink
+  the window below 600 px wide: the 2D grid too. Since: tooling pages, S2.
+- [ ] **TOOL-4 — Edge letters match the physical insert.** Take a used CNMG from a real box, hold it with the reference
+  mark up, and compare with its insert page. Expect: A is the corner nearest the mark, B the next cutting corner
+  clockwise, C directly under A and D under B, and the edges marked used on the page are the worn ones. Repeat with a
+  single-sided insert (CCMT): only A and B. Since: tooling pages (lettering rule in `CONTEXT.md` › Tooling).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
