@@ -20,6 +20,7 @@ import type {
   TestRow,
   Wire,
 } from './types';
+import { keySettings, mergeSettings, mergeSlots } from './formSlots';
 
 export interface BuildGraphOpts {
   /** Inside-tray slots of one operation or test row. */
@@ -94,7 +95,7 @@ const keyOf = (rec: OpRow | TestRow, sequence: number | null): StepKey => ({
 });
 
 /** The node a socket id belongs to. */
-const nodeOfSocket = (socket: string) => socket.replace(/:(?:in|out):[^:]+$/, '');
+export const nodeOfSocket = (socket: string) => socket.replace(/:(?:in|out):[^:]+$/, '');
 const isBundleSocket = (socket: string) => socket.endsWith(':b');
 
 function stockLotNode(lot: StockOrigin): RecordNode {
@@ -265,11 +266,11 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       if (p.outSample && out) pushIncoming(p.outSample, { from: out, origin: nodeId, carries: p.outSample, flow: 'sample' });
     });
 
-    const records = group.rowIds
-      .map((id) => (group.kind === 'operation' ? opById.get(id) : testById.get(id)))
-      .filter((r): r is OpRow | TestRow => !!r);
+    // Only rows that are drawn feed the Inside tray and the settings (not skipped rows).
+    const records = rows.map((p) => p.rec);
     const first = records[0];
-    const slots = records.map((r) => opts.slots(r, group.kind));
+    const category: ProcessCategory | 'test' =
+      group.kind === 'test' ? 'test' : (((first as OpRow | undefined)?.category ?? null) as ProcessCategory);
 
     const method =
       first && group.kind === 'operation' ? (first as OpRow).methodName : (first as TestRow | undefined)?.testType;
@@ -286,10 +287,10 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       title,
       code: recorded ? recorded.code : (first?.code ?? group.id),
       status: statuses.size === 1 ? (first?.status ?? null) : undefined,
-      category: group.kind === 'test' ? 'test' : (((first as OpRow | undefined)?.category ?? null) as ProcessCategory),
+      category,
       rows: sampleRows,
-      slots: slots[0] ?? [],
-      settings: [],
+      slots: mergeSlots(records.map((r) => opts.slots(r, group.kind))),
+      settings: mergeSettings(records.map((r) => keySettings(r, category))),
       bundled: folded,
       probable: !!group.batch && !group.batch.recorded,
     });

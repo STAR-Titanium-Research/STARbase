@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildGraph } from './buildGraph';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkStock, mkTest } from './fixtures';
+import { FALLBACK_RELATIONS, formSlots } from './formSlots';
 import type { ContainerNode, MapNode, ProcessData, ProcessGraph, RecordNode } from './types';
 
 const slots = () => [];
@@ -399,5 +400,62 @@ describe('buildGraph: structure', () => {
     expect(container(g, 'test:tt').rows).toHaveLength(1);
     expect(wire(g, 's:a:out:0', 'test:tt:in:0')).toBeDefined();
     expect(wire(g, 's:b:out:0', 'test:tt:in:0')).toBeDefined();
+  });
+});
+
+describe('buildGraph: Inside tray and settings of a container', () => {
+  const ref = (collection: string, id: string) => ({ collection, id, code: id.toUpperCase() });
+
+  it('a probable batch merges the slots and settings of its rows', () => {
+    const mk = (id: string, tool: string, feed: number) =>
+      mkOp({
+        id,
+        sampleId: 's1',
+        outputSampleId: `s${id}`,
+        methodId: 'mill',
+        methodName: 'Milling',
+        category: 'machining',
+        equipmentId: 'e1',
+        date: '2026-03-02T09:00:00Z',
+        relations: { equipment_id: ref('equipment', 'e1'), tool_id: ref('tools', tool) },
+        settings: { machining_cutting_speed_m_per_min: 120, machining_feed_mm_per_rev: feed },
+      });
+    const data = mkData({
+      samples: sam('s1', 'sa', 'sb'),
+      operations: [mk('a', 't1', 0.1), mk('b', 't2', 0.2)],
+    });
+    const g = buildGraph(data, groupsOf(data, true), {
+      slots: (row, kind) => formSlots(row, kind, FALLBACK_RELATIONS[kind]),
+    });
+    const c = g.nodes.find((n) => n.type === 'container') as ContainerNode;
+
+    expect(c.probable).toBe(true);
+    expect(c.slots.filter((s) => s.role === 'Machine')).toHaveLength(1);
+    expect(c.slots.find((s) => s.role === 'Machine')?.ref?.id).toBe('e1');
+    const tools = c.slots.filter((s) => s.role === 'Tool');
+    expect(tools).toHaveLength(1);
+    expect(tools[0].values).toHaveLength(2);
+    expect(c.settings).toEqual([
+      { label: 'Cutting speed', value: '120 m/min' },
+      { label: 'Feed', value: 'varies' },
+    ]);
+  });
+
+  it('rows that are not drawn feed neither the slots nor the settings', () => {
+    const seen: string[] = [];
+    const data = mkData({
+      samples: sam('s1', 's2'),
+      operations: [
+        mkOp({ id: 'd', sampleId: 's1', outputSampleId: 's2', batchId: 'B1' }),
+        mkOp({ id: 'x', sampleId: 'unknown', outputSampleId: null, batchId: 'B1' }),
+      ],
+    });
+    buildGraph(data, groupsOf(data), {
+      slots: (row) => {
+        seen.push(row.id);
+        return [];
+      },
+    });
+    expect(seen).toEqual(['d']);
   });
 });
