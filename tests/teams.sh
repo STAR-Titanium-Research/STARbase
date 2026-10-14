@@ -1516,7 +1516,8 @@ BEGIN
                              'd1_private.team_decide(text, uuid, uuid, text)', 'd1_private.team_pending_actionable(text, uuid, uuid)', 'd1_private.team_drift()',
                              'd1_private.team_drift_count()', 'd1_private.team_grant_sync()', 'd1_private.team_member_sync()', 'd1_private.team_access_guard()',
                              'd1_private.team_lock()', 'd1_private.team_kinds()', 'd1_private.team_readers_lock()', 'd1_private.team_pending_guard()',
-                             'd1_private.team_derived_role(text, boolean)', 'd1_private.team_grant_guard()', 'd1_private.team_owner_sync()', 'd1_private.team_manager_sync()'] LOOP
+                             'd1_private.team_derived_role(text, boolean)', 'd1_private.team_grant_guard()', 'd1_private.team_owner_sync()', 'd1_private.team_manager_sync()',
+                             'd1_private.c_owner(uuid, uuid)', 'd1_private.o_owner(uuid, uuid)', 'd1_private.t_owner(uuid, uuid)'] LOOP
         ASSERT NOT has_function_privilege('d1_llm_readonly', f, 'EXECUTE'), format('%s must not be executable by d1_llm_readonly', f);
     END LOOP;
 END $$;

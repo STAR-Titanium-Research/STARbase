@@ -1111,6 +1111,9 @@ REVOKE ALL ON FUNCTION d1_private.team_derived_role(text, boolean) FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_grant_guard() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_owner_sync() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_manager_sync() FROM PUBLIC;
+REVOKE ALL ON FUNCTION d1_private.c_owner(uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION d1_private.o_owner(uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION d1_private.t_owner(uuid, uuid) FROM PUBLIC;
 
 -- migrate:down
 SET LOCAL lock_timeout = '10s';
