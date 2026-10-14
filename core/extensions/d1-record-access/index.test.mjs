@@ -1533,15 +1533,27 @@ test('transfer to a team mails the team\'s managers once each (not the adder), "
   assert.equal(s.body.owner.managers.length, 2);
 });
 
-test('transfer to a team: a failing mail leaves it standing; a team with no manager to mail answers skipped', async () => {
+test('transfer to a team: a team with no manager is refused 409 TEAM_HAS_NO_MANAGER (Ruling O4) and nothing is written', async () => {
+  const { handlers, db, calls } = mount();
+  const e = await transferTeam(handlers, T.empty);
+  assert.deepEqual([e.status, errorOf(e).extensions.code], [409, 'TEAM_HAS_NO_MANAGER']);
+  assert.equal(errorOf(e).message, 'That team has no manager to look after the record — add a manager first');
+  assert.equal(db.log.writes.length, 0, 'no UPDATE, no access row');
+  assert.deepEqual(db.log.events.slice(-1), ['rollback']);
+  const sample = db.tables().physical_samples[0];
+  assert.deepEqual([sample.owner_person_id, sample.owner_team_id ?? null], [P.owner, null]);
+  assert.equal(calls.mail.sent.length, 0);
+  // a team whose members are all non-managers (Alpha) is refused too
+  const plain = mount();
+  assert.equal(errorOf(await transferTeam(plain.handlers, T.alpha)).extensions.code, 'TEAM_HAS_NO_MANAGER');
+  assert.equal(plain.db.log.writes.length, 0);
+});
+
+test('transfer to a team: a failing mail leaves it standing', async () => {
   const failing = mount({ mail: { fail: true } });
   const r = await transferTeam(failing.handlers, T.beta);
   assert.deepEqual([r.status, r.body.email], [200, 'failed']);
   assert.equal(failing.db.tables().physical_samples[0].owner_team_id, T.beta);
-  const empty = mount();
-  const e = await transferTeam(empty.handlers, T.empty);
-  assert.deepEqual([e.status, e.body.email, e.body.emails], [200, 'skipped', { sent: 0, skipped: 0, failed: 0 }]);
-  assert.equal(empty.calls.mail.sent.length, 0);
 });
 
 test('transfer to a team: a project is 409 NOT_OWNABLE_BY_TEAM; the four ownable types work; the team is validated; same team 409; person+team 400', async () => {
@@ -1567,7 +1579,9 @@ test('transfer to a team: a project is 409 NOT_OWNABLE_BY_TEAM; the four ownable
 });
 
 test('transfer to a team needs the manage right: a plain member and a stranger get 403 and nothing changes; a manager of the owning team may', async () => {
-  const { handlers, db } = mount({ tables: teamOwned(), manage: viaManagers });
+  const world = teamOwned();
+  world.team_members.find((m) => m.team_id === T.alpha && m.person_id === P.owner).is_manager = true; // Alpha needs a manager to own (Ruling O4)
+  const { handlers, db } = mount({ tables: world, manage: viaManagers });
   for (const user of [U.co, U.stranger]) {
     const r = await transferTeam(handlers, T.alpha, { acc: as(user) });
     assert.equal(r.status, 403, String(user));
@@ -1582,7 +1596,9 @@ test('transfer to a team needs the manage right: a plain member and a stranger g
 });
 
 test('transfer from a team to a team: owner_team_id moves; there is no person owner to keep, so no access row is written', async () => {
-  const { handlers, db } = mount({ tables: teamOwned(), manage: viaManagers });
+  const world = teamOwned();
+  world.team_members.find((m) => m.team_id === T.alpha && m.person_id === P.owner).is_manager = true; // Alpha needs a manager to own (Ruling O4)
+  const { handlers, db } = mount({ tables: world, manage: viaManagers });
   const r = await transferTeam(handlers, T.alpha, { acc: asVic });
   assert.equal(r.status, 200);
   const sample = db.tables().physical_samples[0];

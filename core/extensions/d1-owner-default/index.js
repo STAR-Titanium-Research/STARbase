@@ -31,9 +31,10 @@ export const OWNER_FIELDS = {
 	projects: 'principal_investigator_person',
 };
 
-// The four record types a team can own (migration 177): owner_team_id is set through a transfer or at
-// create, and num_nonnulls(owner_person_id, owner_team_id) <= 1, so a record created for a team must not
-// also get its creator as person owner. Projects are not ownable by a team.
+// The four record types a team can own (migration 177): a record becomes team-owned through Transfer
+// ownership; d1-access-guard refuses owner_team_id on a non-admin create (Ruling O3), so only an admin (or
+// an internal call) reaches the branch below with it set. num_nonnulls(owner_person_id, owner_team_id) <= 1,
+// so a record created for a team must not also get its creator as person owner. Projects are not ownable by a team.
 const TEAM_OWNABLE = new Set(['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns']);
 
 const isBlank = (v) => v === undefined || v === null || v === '';

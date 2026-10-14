@@ -41,7 +41,7 @@
 //
 // Errors (the Directus shape { errors: [{ message, extensions: { code, source: 'd1-record-access' } }] }): 401 no user;
 // 400 unknown collection, bad uuid, role or person; 404 a record the caller cannot read (or that does not exist); 403 FORBIDDEN
-// when the caller may not manage it; 409 adding or transferring to the owner (CONFLICT), NOT_OWNABLE_BY_TEAM, TEAM_OWNS_RECORD.
+// when the caller may not manage it; 409 adding or transferring to the owner (CONFLICT), NOT_OWNABLE_BY_TEAM, TEAM_HAS_NO_MANAGER (a team with no manager cannot own a record, Ruling O4), TEAM_OWNS_RECORD.
 //
 // How a request runs:
 //   * readable = ItemsService.readOne as the caller (the real read rule decides), manage = the record's DELETE rule (rules.json
@@ -877,6 +877,10 @@ export default {
           team = await trx('teams').where('team_id', targetId).first('team_id', 'name');
           if (!team) throw new HttpError(400, 'INVALID_PAYLOAD', 'That team does not exist.');
           if (!isBlank(record.owner_team_id) && String(record.owner_team_id) === String(team.team_id)) throw new HttpError(409, 'CONFLICT', 'That team is the owner already.');
+          // Ruling O4: a record owned by a team nobody manages could be changed by administrators only
+          if (!(await trx('team_members').where('team_id', team.team_id).where('is_manager', true).first('person_id'))) {
+            throw new HttpError(409, 'TEAM_HAS_NO_MANAGER', 'That team has no manager to look after the record — add a manager first');
+          }
           await trx(cfg.collection).where(cfg.key, id).update({ owner_team_id: team.team_id, [cfg.ownerField]: null });
         } else {
           next = await requireActivePerson(trx, targetId);
