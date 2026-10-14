@@ -147,7 +147,10 @@ function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null } = 
         const knex = this.opts.knex;
         const user = await knex('directus_users').whereRaw('LOWER(??) = ?', ['email', email.toLowerCase()]).first();
         if (!user) await knex('directus_users').insert({ email, role, status: 'invited', first_name: null, last_name: null, last_access: null });
-        else if (user.status === 'invited' && user.role !== role) await knex('directus_users').where('id', user.id).update({ role });
+        else if (user.status === 'invited' && user.role !== role) {
+          if (mailFail === 'update') throw new Error('role update refused');
+          await knex('directus_users').where('id', user.id).update({ role });
+        }
         if (mailFail === 'after') throw new Error('mail down');
       }
     },
@@ -752,4 +755,13 @@ test('resend: a mail failure reports email_sent false', async () => {
   assert.equal(r.status, 200);
   assert.deepEqual(r.body, { email_sent: false });
   assert.equal(warnings.length, 1);
+});
+
+test('a failed role change on an invited login is an error, not a mail failure', async () => {
+  const { handlers, tables, db, warnings } = mount({ env: ENV, mailFail: 'update' });
+  const r = await invite(handlers, admin(U.superAdmin), { email: 'bob@login.example', role: R.lab });
+  assert.equal(r.status, 500);
+  assert.equal(userRow(tables, U.bob).role, R.member); // unchanged
+  assert.equal(db.log.tx.every((t) => !t.committed), true); // rolled back
+  assert.equal(warnings.length, 0);
 });

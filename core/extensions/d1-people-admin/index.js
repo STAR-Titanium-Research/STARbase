@@ -305,7 +305,7 @@ export default {
       db('directus_users').whereRaw('LOWER(??) = ?', ['email', email.toLowerCase()]).first('id', 'email', 'status', 'role');
 
     // Calls inviteUser on the transaction; true when the mail was handed off, false when it failed but the invited login exists.
-    async function sendInvite(trx, req, email, roleId, url) {
+    async function sendInvite(trx, req, email, roleId, url, existed) {
       const users = new services.UsersService({ schema: req.schema, accountability: SYSTEM_ADMIN, knex: trx });
       try {
         await users.inviteUser(email, roleId, url);
@@ -313,7 +313,10 @@ export default {
       } catch (err) {
         let kept = null;
         try { kept = await loginByEmail(trx, email); } catch { /* an aborted transaction: report the first error instead */ }
-        if (kept?.status !== 'invited') throw err;
+        // Swallow only when the invited login is there as asked: made by this call, or already holding the requested role. Anything else
+        // (e.g. a role update that failed, such as a USER_INVITE_URL_ALLOW_LIST out of step with STARBASE_URL) is a real failure: roll back.
+        const asRequested = kept?.status === 'invited' && (!existed || String(kept.role ?? '') === String(roleId ?? ''));
+        if (!asRequested) throw err;
         logger?.warn?.(`${SOURCE}: the invitation mail for login ${kept.id} was not sent: ${err?.message || err}`);
         return false;
       }
@@ -363,7 +366,7 @@ export default {
 
         // an invited login keeps its role unless an account administrator asks for another one
         const inviteRole = existing && !(accounts && hasRole) ? existing.role : roleId;
-        const emailSent = await sendInvite(trx, req, existing?.email ?? email, inviteRole, url);
+        const emailSent = await sendInvite(trx, req, existing?.email ?? email, inviteRole, url, Boolean(existing));
 
         const login = await loginByEmail(trx, email);
         if (!login) throw new Error('inviteUser returned without leaving a login');
@@ -390,7 +393,7 @@ export default {
         const login = await trx('directus_users').where('id', userId).first('id', 'email', 'status', 'role');
         if (!login) throw new HttpError(404, 'NOT_FOUND', 'That login does not exist.');
         if (login.status !== 'invited') throw new HttpError(409, 'NOT_INVITED', 'Only an invited login can be sent a new invite.');
-        return sendInvite(trx, req, login.email, login.role, url);
+        return sendInvite(trx, req, login.email, login.role, url, true);
       });
       res.json({ email_sent: emailSent });
     }));
