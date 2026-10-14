@@ -268,6 +268,23 @@ export const SQL = {
       'SELECT version, work_state AS state, sample_id FROM manufacturing_operations WHERE operation_id = ? FOR UPDATE',
     test_sessions: 'SELECT version, work_state AS state, NULL AS sample_id FROM test_sessions WHERE session_id = ? FOR UPDATE',
   },
+  // Templates. A template is visible to its creator, to callers with its role (scope role) and to everyone (scope global).
+  // Bindings of listTemplates: the caller, the caller's role (or null).
+  listTemplates:
+    'SELECT template_id, user_id, scope, role_id, name, collection, values, version, updated_at FROM d1_private.process_templates'
+    + " WHERE user_id = ? OR scope = 'global' OR (scope = 'role' AND role_id = ?::uuid) ORDER BY lower(name), template_id",
+  getTemplate:
+    'SELECT template_id, user_id, scope, role_id, name, collection, values, version, updated_at'
+    + ' FROM d1_private.process_templates WHERE template_id = ?',
+  insertTemplate:
+    'INSERT INTO d1_private.process_templates (user_id, scope, role_id, name, collection, values) VALUES (?, ?, ?, ?, ?, ?::jsonb)'
+    + ' RETURNING template_id, user_id, scope, role_id, name, collection, values, version, updated_at',
+  // Bindings: name, scope, role, values JSON, id, the version the edit was made against.
+  updateTemplate:
+    'UPDATE d1_private.process_templates SET name = ?, scope = ?, role_id = ?, values = ?::jsonb,'
+    + ' version = version + 1, updated_at = now() WHERE template_id = ? AND version = ?'
+    + ' RETURNING template_id, user_id, scope, role_id, name, collection, values, version, updated_at',
+  deleteTemplate: 'DELETE FROM d1_private.process_templates WHERE template_id = ?',
   // Mark done: is this person there, and which person is the caller (a researcher's row first, as d1-owner-default does).
   personExists: 'SELECT person_id FROM people WHERE person_id = ?',
   personOfUser: 'SELECT person_id FROM people WHERE user_id = ? ORDER BY is_researcher DESC, person_id LIMIT 1',
@@ -678,6 +695,38 @@ export function buildPlan(body, ctx = {}) {
 
 export const computeChecks = (body, ctx) => buildPlan(body, ctx).checks;
 
+// ---- templates (pure) ---------------------------------------------------------------------------------------------------
+
+export const TEMPLATE_SCOPES = ['private', 'role', 'global'];
+export const TEMPLATE_COLLECTIONS = ['manufacturing_operations', 'test_sessions'];
+const TEMPLATE_KIND = { manufacturing_operations: 'operation', test_sessions: 'test' };
+const TEMPLATE_VALUES_CHARS = 100_000;
+
+// A template's prefilled fields: an object of field names (none of the wiring-owned ones) that includes what makes it an
+// operation (method_id) or a test (test_type). Returns { ok: true, values } or { ok: false, message }.
+export function validateTemplateValues(collection, values) {
+  const kind = TEMPLATE_KIND[collection];
+  if (!kind) return fail('A template makes operations or tests.');
+  if (!isObject(values)) return fail('values must be an object.');
+  for (const field of Object.keys(values)) {
+    if (!FIELD.test(field)) return fail(`values has a field name that is not allowed: ${field.slice(0, 40)}.`);
+    if (RESERVED_FIELDS[kind].includes(field)) return fail(`values must not set ${field}: the wiring and the server decide it.`);
+  }
+  if (JSON.stringify(values).length > TEMPLATE_VALUES_CHARS) return fail('The template is too large.');
+  if (kind === 'operation' && !(typeof values.method_id === 'string' && UUID.test(values.method_id))) {
+    return fail('An operation template needs a method.');
+  }
+  if (kind === 'test' && isBlank(values.test_type)) return fail('A test template needs a test type.');
+  return { ok: true, values };
+}
+
+// Who may see a template: its creator, callers with its role (scope role), everyone (scope global).
+export function templateVisibleTo(t, acc) {
+  return String(t.user_id) === String(acc.user)
+    || t.scope === 'global'
+    || (t.scope === 'role' && !!acc.role && String(t.role_id) === String(acc.role));
+}
+
 // ---- writing: values and failures (pure) ---------------------------------------------------------------------------------
 
 // What a card's values become as the payload of a new record: blank values are left out (an empty string would not cast to a
@@ -945,6 +994,113 @@ export function mount(router, context, clock = () => new Date()) {
   };
   const staleChecks = (key, text) =>
     new HttpError(409, 'CHECKS', 'Something changed, so nothing was created. Review the checks.', { checks: [{ key, level: 'block', text }] });
+
+  // -- templates (spec E11) ------------------------------------------------------------------------------------------------
+
+  const templateOut = (r) => ({
+    id: r.template_id,
+    name: r.name,
+    scope: r.scope,
+    role_id: r.role_id ?? null,
+    collection: r.collection,
+    values: typeof r.values === 'string' ? JSON.parse(r.values) : r.values,
+    user_id: r.user_id,
+    updated_at: toIso(r.updated_at),
+    version: Number(r.version),
+  });
+  // The role a template of this scope is shared with: the caller's own, except that an administrator may name any role.
+  const roleFor = (scope, requested, acc) => {
+    if (scope !== 'role') return null;
+    if (requested !== undefined && requested !== null && !(typeof requested === 'string' && UUID.test(requested))) {
+      throw new HttpError(400, 'INVALID_PAYLOAD', 'role_id must be a role id.');
+    }
+    const role = requested ? requested.toLowerCase() : (acc.role ? String(acc.role).toLowerCase() : null);
+    if (!role) throw new HttpError(400, 'INVALID_PAYLOAD', 'You have no account role to share this with.');
+    if (requested && acc.admin !== true && role !== String(acc.role ?? '').toLowerCase()) {
+      throw new HttpError(400, 'INVALID_PAYLOAD', 'A template can only be shared with your own account role.');
+    }
+    return role;
+  };
+  const scopeOf = (v) => {
+    if (typeof v !== 'string' || !TEMPLATE_SCOPES.includes(v)) {
+      throw new HttpError(400, 'INVALID_PAYLOAD', 'scope must be private, role or global.');
+    }
+    return v;
+  };
+  const templateRow = async (id) => rowsOf(await database.raw(SQL.getTemplate, [id]))[0];
+  const visibleTemplate = async (acc, id) => {
+    const row = await templateRow(id);
+    // An administrator can reach any template by its id (to tidy shared ones); everyone else only those they can see.
+    if (!row || !(acc.admin === true || templateVisibleTo(row, acc))) throw new HttpError(404, 'NOT_FOUND', 'That template does not exist.');
+    return row;
+  };
+  const editable = (acc, row) => {
+    if (String(row.user_id) !== String(acc.user) && acc.admin !== true) {
+      throw new HttpError(403, 'FORBIDDEN', 'Only the person who made a template, or an administrator, can change it.');
+    }
+  };
+
+  router.get('/templates', route(async ({ res, acc }) => {
+    const rows = rowsOf(await database.raw(SQL.listTemplates, [acc.user, acc.role ?? null]));
+    res.json({ data: rows.map(templateOut) });
+  }));
+
+  router.get('/templates/:id', route(async ({ req, res, acc }) => {
+    res.json({ data: templateOut(await visibleTemplate(acc, idParam(req, 'template'))) });
+  }));
+
+  router.post('/templates', route(async ({ req, res, acc }) => {
+    const b = req.body;
+    if (!isObject(b)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a JSON body with { name, collection, values, scope? }.');
+    const name = validateName(b.name);
+    if (!name.ok) throw new HttpError(400, 'INVALID_PAYLOAD', name.message);
+    if (typeof b.collection !== 'string' || !TEMPLATE_COLLECTIONS.includes(b.collection)) {
+      throw new HttpError(400, 'INVALID_PAYLOAD', 'collection must be manufacturing_operations or test_sessions.');
+    }
+    const scope = b.scope === undefined || b.scope === null ? 'private' : scopeOf(b.scope);
+    const role = roleFor(scope, b.role_id, acc);
+    const values = validateTemplateValues(b.collection, b.values);
+    if (!values.ok) throw new HttpError(400, 'INVALID_PAYLOAD', values.message);
+    const [row] = rowsOf(await database.raw(SQL.insertTemplate, [acc.user, scope, role, name.name, b.collection, JSON.stringify(values.values)]));
+    res.status(201).json({ data: templateOut(row) });
+  }));
+
+  router.patch('/templates/:id', route(async ({ req, res, acc }) => {
+    const id = idParam(req, 'template');
+    const b = req.body;
+    if (!isObject(b)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a JSON body with { name?, scope?, values?, version }.');
+    if (!isInt(b.version, 1)) throw new HttpError(400, 'INVALID_PAYLOAD', 'version must be the version this edit was made against.');
+    if (['name', 'scope', 'role_id', 'values'].every((f) => b[f] === undefined)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send something to change.');
+    if (b.collection !== undefined) throw new HttpError(400, 'INVALID_PAYLOAD', 'A template always makes the same kind of record.');
+    const row = await visibleTemplate(acc, id);
+    editable(acc, row);
+    let name = row.name;
+    if (b.name !== undefined) {
+      const n = validateName(b.name);
+      if (!n.ok) throw new HttpError(400, 'INVALID_PAYLOAD', n.message);
+      name = n.name;
+    }
+    const scope = b.scope === undefined ? row.scope : scopeOf(b.scope);
+    // Keeping the role scope keeps the role unless a new one is named.
+    const role = scope === 'role' && b.role_id === undefined && row.scope === 'role' ? row.role_id : roleFor(scope, b.role_id, acc);
+    let values = typeof row.values === 'string' ? JSON.parse(row.values) : row.values;
+    if (b.values !== undefined) {
+      const v = validateTemplateValues(row.collection, b.values);
+      if (!v.ok) throw new HttpError(400, 'INVALID_PAYLOAD', v.message);
+      values = v.values;
+    }
+    const [saved] = rowsOf(await database.raw(SQL.updateTemplate, [name, scope, role, JSON.stringify(values), id, b.version]));
+    if (saved) return res.json({ data: templateOut(saved) });
+    if (!(await templateRow(id))) throw new HttpError(404, 'NOT_FOUND', 'That template does not exist.');
+    throw new HttpError(409, 'CONFLICT', 'This template changed since you opened it. Reload it to see the latest version.');
+  }));
+
+  router.delete('/templates/:id', route(async ({ req, res, acc }) => {
+    const id = idParam(req, 'template');
+    editable(acc, await visibleTemplate(acc, id));
+    await database.raw(SQL.deleteTemplate, [id]);
+    res.status(204).end();
+  }));
 
   // -- mark done (spec 6.2, ADR-0019) ---------------------------------------------------------------------------------------
 

@@ -4,7 +4,8 @@ import { test } from 'node:test';
 
 import endpoint, {
   COLLECTION_PK, HttpError, KIND_COLLECTION, LIMITS, RESERVED_FIELDS, SQL, buildPlan, computeChecks, mount, orderOperations,
-  cleanValues, dayOf, describeFailure, editValues, parseRequired, summarise, validateDraftBody, validateName,
+  cleanValues, dayOf, describeFailure, editValues, parseRequired, summarise, templateVisibleTo, validateDraftBody, validateName,
+  validateTemplateValues,
 } from './index.js';
 
 // ---- fakes -----------------------------------------------------------------------------------------------------------
@@ -12,6 +13,8 @@ import endpoint, {
 const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ALICE = ID(1);
 const BOB = ID(2);
+const ROLE_A = ID(81);
+const ROLE_B = ID(82);
 const NOW = new Date('2026-10-14T09:00:00.000Z');
 
 // An Express-ish router that remembers its handlers, and a response that remembers what was sent.
@@ -40,6 +43,7 @@ function fakeWorld() {
     ops: [], // every write ItemsService was asked for, in order
     codeSeq: 0, failOn: null, lockVersions: new Map(),
     people: [], // { person_id, user_id, is_researcher }
+    templates: [],
   };
 }
 // Transactions: the fake keeps a copy of what a transaction may change and puts it back when the transaction throws.
@@ -161,6 +165,29 @@ function fakeDatabase(world) {
       }
       case SQL.setActor:
         return { rows: [] };
+      case SQL.listTemplates:
+        return { rows: world.templates.filter((t) => t.user_id === b[0] || t.scope === 'global' || (t.scope === 'role' && t.role_id === b[1]))
+          .sort((x, y) => x.name.toLowerCase().localeCompare(y.name.toLowerCase()) || x.template_id.localeCompare(y.template_id)).map((t) => ({ ...t })) };
+      case SQL.getTemplate:
+        return { rows: world.templates.filter((t) => t.template_id === b[0]).map((t) => ({ ...t })) };
+      case SQL.insertTemplate: {
+        const t = {
+          template_id: ID(800 + (world.seq += 1)), user_id: b[0], scope: b[1], role_id: b[2], name: b[3], collection: b[4],
+          values: JSON.parse(b[5]), version: 1, updated_at: stamp(),
+        };
+        world.templates.push(t);
+        return { rows: [{ ...t }] };
+      }
+      case SQL.updateTemplate: {
+        const [name, scope, role, values, id, version] = b;
+        const t = world.templates.find((x) => x.template_id === id && x.version === version);
+        if (!t) return { rows: [] };
+        Object.assign(t, { name, scope, role_id: role, values: JSON.parse(values), version: t.version + 1, updated_at: stamp() });
+        return { rows: [{ ...t }] };
+      }
+      case SQL.deleteTemplate:
+        world.templates = world.templates.filter((t) => t.template_id !== b[0]);
+        return { rows: [] };
       case SQL.personExists:
         return { rows: world.people.filter((p) => p.person_id === b[0]).map((p) => ({ person_id: p.person_id })) };
       case SQL.personOfUser:
@@ -222,11 +249,11 @@ function setup({ env = {} } = {}) {
   const logger = { error: (m) => logged.push(m), warn: (m) => logged.push(m) };
   const fake = fakeServices(world);
   mount(router, { database: fakeDatabase(world), logger, services: { ItemsService: fake.ItemsService, UtilsService }, getSchema: async () => ({ schema: true }), env }, () => NOW);
-  const call = async (method, path, { user = ALICE, params = {}, body, admin = false } = {}) => {
+  const call = async (method, path, { user = ALICE, params = {}, body, admin = false, role = ROLE_A } = {}) => {
     const handler = router.routes.get(`${method} ${path}`);
     assert.ok(handler, `no route ${method} ${path}`);
     const res = fakeRes();
-    await handler({ accountability: user ? { user, admin } : null, params, body }, res);
+    await handler({ accountability: user ? { user, admin, role } : null, params, body }, res);
     return res;
   };
   return { world, router, call, logged, log: fake.log, cleared };
@@ -1588,4 +1615,198 @@ test('mark-done: bad input is a 400, a missing user a 401, and the cache is clea
   assert.equal((await markDone(env, ok, null)).statusCode, 401);
   assert.equal((await markDone(env, { ...ok, date: '2024-02-29', personId: null })).statusCode, 200);
   assert.equal(env.cleared.length, 1);
+});
+
+// ---- templates -------------------------------------------------------------------------------------------------------
+
+const cutTemplate = (extra = {}) => ({ name: 'Cut 2 mm', collection: 'manufacturing_operations', values: { method_id: METHOD, machining_feed_mm_per_rev: 0.2 }, ...extra });
+const hardTemplate = (extra = {}) => ({ name: 'Hardness HV10', collection: 'test_sessions', values: { test_type: 'hardness' }, ...extra });
+const tpl = (env, body, opts = {}) => env.call('POST', '/templates', { body, ...opts });
+
+test('validateTemplateValues: the fields that make an operation or a test, nothing the wiring owns', () => {
+  assert.equal(validateTemplateValues('manufacturing_operations', { method_id: METHOD, notes: 'x' }).ok, true);
+  assert.equal(validateTemplateValues('test_sessions', { test_type: 'hardness' }).ok, true);
+  const bad = [
+    ['samples', {}, /operations or tests/],
+    ['manufacturing_operations', [], /object/],
+    ['manufacturing_operations', {}, /needs a method/],
+    ['manufacturing_operations', { method_id: 'x' }, /needs a method/],
+    ['manufacturing_operations', { method_id: METHOD, sample_id: ID(1) }, /sample_id/],
+    ['manufacturing_operations', { method_id: METHOD, work_state: 'done' }, /work_state/],
+    ['manufacturing_operations', { method_id: METHOD, 'Bad Field': 1 }, /field name/],
+    ['test_sessions', {}, /needs a test type/],
+    ['test_sessions', { test_type: ' ' }, /needs a test type/],
+    ['test_sessions', { test_type: 'x', subject: [] }, /subject/],
+    ['test_sessions', { test_type: 'x', notes: 'x'.repeat(100_001) }, /too large/],
+  ];
+  for (const [collection, values, message] of bad) {
+    const out = validateTemplateValues(collection, values);
+    assert.equal(out.ok, false, JSON.stringify([collection, values]));
+    assert.match(out.message, message);
+  }
+});
+
+test('templateVisibleTo: the creator, the role, everyone', () => {
+  const t = (scope, extra = {}) => ({ user_id: ALICE, scope, role_id: null, ...extra });
+  assert.equal(templateVisibleTo(t('private'), { user: ALICE }), true);
+  assert.equal(templateVisibleTo(t('private'), { user: BOB, role: ROLE_A }), false);
+  assert.equal(templateVisibleTo(t('role', { role_id: ROLE_A }), { user: BOB, role: ROLE_A }), true);
+  assert.equal(templateVisibleTo(t('role', { role_id: ROLE_A }), { user: BOB, role: ROLE_B }), false);
+  assert.equal(templateVisibleTo(t('role', { role_id: ROLE_A }), { user: BOB }), false);
+  assert.equal(templateVisibleTo(t('global'), { user: BOB }), true);
+});
+
+test('POST /templates: private by default, the caller\'s role for role scope, everyone for global', async () => {
+  const env = setup();
+  const priv = await tpl(env, cutTemplate());
+  assert.equal(priv.statusCode, 201);
+  assert.deepEqual(priv.body.data, {
+    id: priv.body.data.id, name: 'Cut 2 mm', scope: 'private', role_id: null, collection: 'manufacturing_operations',
+    values: { method_id: METHOD, machining_feed_mm_per_rev: 0.2 }, user_id: ALICE, updated_at: priv.body.data.updated_at, version: 1,
+  });
+  assert.match(priv.body.data.updated_at, /^2026-10-14T09:00:/);
+  const role = await tpl(env, hardTemplate({ scope: 'role' }));
+  assert.deepEqual([role.body.data.scope, role.body.data.role_id], ['role', ROLE_A]);
+  const global = await tpl(env, hardTemplate({ name: ' Global one ', scope: 'global', role_id: ROLE_B }));
+  assert.deepEqual([global.body.data.scope, global.body.data.role_id, global.body.data.name], ['global', null, 'Global one']);
+  assert.equal(env.world.templates.length, 3);
+});
+
+test('POST /templates: a role can only be shared with your own, unless you are an administrator', async () => {
+  const env = setup();
+  const own = await tpl(env, cutTemplate({ scope: 'role', role_id: ROLE_A.toUpperCase() }));
+  assert.equal(own.statusCode, 201);
+  assert.equal(own.body.data.role_id, ROLE_A);
+  const other = await tpl(env, cutTemplate({ scope: 'role', role_id: ROLE_B }));
+  assert.equal(other.statusCode, 400);
+  assert.match(other.body.errors[0].message, /your own account role/);
+  const admin = await tpl(env, cutTemplate({ scope: 'role', role_id: ROLE_B }), { admin: true });
+  assert.equal(admin.statusCode, 201);
+  assert.equal(admin.body.data.role_id, ROLE_B);
+  const noRole = await tpl(env, cutTemplate({ scope: 'role' }), { role: null });
+  assert.equal(noRole.statusCode, 400);
+  assert.match(noRole.body.errors[0].message, /no account role/);
+  assert.equal(env.world.templates.length, 2);
+});
+
+test('POST /templates: bad input is a 400 and stores nothing', async () => {
+  const env = setup();
+  const bad = [
+    undefined, [], {}, cutTemplate({ name: ' ' }), cutTemplate({ name: undefined }), cutTemplate({ collection: 'physical_samples' }),
+    cutTemplate({ collection: undefined }), cutTemplate({ scope: 'team' }), cutTemplate({ scope: 5 }), cutTemplate({ values: undefined }),
+    cutTemplate({ values: { machining_feed_mm_per_rev: 1 } }), cutTemplate({ scope: 'role', role_id: 'x' }),
+    cutTemplate({ values: { method_id: METHOD, sample_id: ID(1) } }), hardTemplate({ values: {} }),
+  ];
+  for (const body of bad) {
+    const res = await tpl(env, body);
+    assert.equal(res.statusCode, 400, JSON.stringify(body));
+    assert.equal(res.body.errors[0].extensions.code, 'INVALID_PAYLOAD');
+  }
+  assert.equal(env.world.templates.length, 0);
+});
+
+test('GET /templates: yours, your role\'s and everyone\'s, by name; never another person\'s private ones', async () => {
+  const env = setup();
+  await tpl(env, cutTemplate({ name: 'b mine' }));
+  await tpl(env, hardTemplate({ name: 'A role', scope: 'role' }));
+  await tpl(env, hardTemplate({ name: 'c global', scope: 'global' }));
+  await tpl(env, cutTemplate({ name: 'Bobs private' }), { user: BOB, role: ROLE_B });
+  await tpl(env, cutTemplate({ name: 'Bobs role' , scope: 'role' }), { user: BOB, role: ROLE_B });
+  const names = async (opts) => (await env.call('GET', '/templates', opts)).body.data.map((t) => t.name);
+  assert.deepEqual(await names({}), ['A role', 'b mine', 'c global']);
+  // another person in role A sees the role template and the global one, not Alice's private one
+  assert.deepEqual(await names({ user: ID(3), role: ROLE_A }), ['A role', 'c global']);
+  // in role B they see Bob's role template instead, and Bob also sees his own private one
+  assert.deepEqual(await names({ user: ID(3), role: ROLE_B }), ['Bobs role', 'c global']);
+  assert.deepEqual(await names({ user: BOB, role: ROLE_B }), ['Bobs private', 'Bobs role', 'c global']);
+  assert.deepEqual(await names({ user: ID(3), role: null }), ['c global']);
+  const first = (await env.call('GET', '/templates')).body.data[0];
+  assert.deepEqual(Object.keys(first).sort(), ['collection', 'id', 'name', 'role_id', 'scope', 'updated_at', 'user_id', 'values', 'version']);
+});
+
+test('GET /templates/:id: visible ones only (an administrator can reach any by its id)', async () => {
+  const env = setup();
+  const priv = (await tpl(env, cutTemplate())).body.data;
+  const role = (await tpl(env, hardTemplate({ scope: 'role' }))).body.data;
+  const get = (id, opts) => env.call('GET', '/templates/:id', { params: { id }, ...opts });
+  assert.equal((await get(priv.id)).statusCode, 200);
+  assert.deepEqual((await get(priv.id)).body.data, priv);
+  assert.equal((await get(priv.id, { user: BOB })).statusCode, 404);
+  assert.equal((await get(role.id, { user: BOB, role: ROLE_A })).statusCode, 200);
+  assert.equal((await get(role.id, { user: BOB, role: ROLE_B })).statusCode, 404);
+  assert.equal((await get(priv.id, { user: BOB, admin: true })).statusCode, 200);
+  assert.equal((await get(ID(404))).statusCode, 404);
+  assert.equal((await get('nope')).statusCode, 404);
+});
+
+test('PATCH /templates/:id: the creator edits against a version; a stale edit is a 409', async () => {
+  const env = setup();
+  const made = (await tpl(env, cutTemplate())).body.data;
+  const patch = (body, opts) => env.call('PATCH', '/templates/:id', { params: { id: made.id }, body, ...opts });
+  const renamed = await patch({ name: ' Cut 3 mm ', version: 1 });
+  assert.equal(renamed.statusCode, 200);
+  assert.deepEqual([renamed.body.data.name, renamed.body.data.version, renamed.body.data.values], ['Cut 3 mm', 2, made.values]);
+  const values = { method_id: METHOD, machining_feed_mm_per_rev: 0.3 };
+  const edited = await patch({ values, version: 2 });
+  assert.deepEqual([edited.body.data.values, edited.body.data.version, edited.body.data.name], [values, 3, 'Cut 3 mm']);
+  const shared = await patch({ scope: 'role', version: 3 });
+  assert.deepEqual([shared.body.data.scope, shared.body.data.role_id], ['role', ROLE_A]);
+  const kept = await patch({ name: 'Still role', version: 4 });
+  assert.deepEqual([kept.body.data.scope, kept.body.data.role_id], ['role', ROLE_A], 'keeping the role scope keeps its role');
+  const back = await patch({ scope: 'private', version: 5 });
+  assert.deepEqual([back.body.data.scope, back.body.data.role_id], ['private', null]);
+
+  const stale = await patch({ name: 'Too late', version: 1 });
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.body.errors[0].extensions.code, 'CONFLICT');
+  assert.equal(env.world.templates[0].name, 'Still role');
+});
+
+test('PATCH /templates/:id: nobody else edits it, and bad input is a 400', async () => {
+  const env = setup();
+  const global = (await tpl(env, cutTemplate({ scope: 'global' }))).body.data;
+  const patch = (body, opts = {}) => env.call('PATCH', '/templates/:id', { params: { id: global.id }, body, ...opts });
+  const other = await patch({ name: 'Mine now', version: 1 }, { user: BOB, role: ROLE_B });
+  assert.equal(other.statusCode, 403, 'visible to everyone, but only the creator edits');
+  assert.equal(other.body.errors[0].extensions.code, 'FORBIDDEN');
+  assert.equal(env.world.templates[0].name, 'Cut 2 mm');
+  const admin = await patch({ name: 'Tidied', version: 1 }, { user: BOB, admin: true });
+  assert.equal(admin.statusCode, 200);
+  assert.equal(admin.body.data.user_id, ALICE, 'an administrator\'s edit does not take over the template');
+  const hidden = (await tpl(env, cutTemplate({ name: 'private' }))).body.data;
+  assert.equal((await env.call('PATCH', '/templates/:id', { user: BOB, params: { id: hidden.id }, body: { name: 'x', version: 1 } })).statusCode, 404);
+  for (const body of [
+    undefined, [], {}, { version: 2 }, { name: 'x' }, { name: 'x', version: 0 }, { name: ' ', version: 2 }, { scope: 'team', version: 2 },
+    { values: {}, version: 2 }, { values: { method_id: METHOD, sample_id: ID(1) }, version: 2 }, { collection: 'test_sessions', name: 'x', version: 2 },
+    { scope: 'role', role_id: 'x', version: 2 }, { scope: 'role', role_id: ROLE_B, version: 2 },
+  ]) {
+    const res = await patch(body);
+    assert.equal(res.statusCode, 400, JSON.stringify(body));
+  }
+  assert.equal((await env.call('PATCH', '/templates/:id', { params: { id: ID(404) }, body: { name: 'x', version: 1 } })).statusCode, 404);
+});
+
+test('PATCH /templates/:id: a test template\'s values are checked as a test\'s', async () => {
+  const env = setup();
+  const made = (await tpl(env, hardTemplate())).body.data;
+  const res = await env.call('PATCH', '/templates/:id', { params: { id: made.id }, body: { values: { method_id: METHOD }, version: 1 } });
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.errors[0].message, /test type/);
+});
+
+test('DELETE /templates/:id: the creator or an administrator; another person gets 403 or 404 and it stays', async () => {
+  const env = setup();
+  const global = (await tpl(env, cutTemplate({ scope: 'global' }))).body.data;
+  const priv = (await tpl(env, cutTemplate({ name: 'private' }))).body.data;
+  const del = (id, opts) => env.call('DELETE', '/templates/:id', { params: { id }, ...opts });
+  assert.equal((await del(global.id, { user: BOB })).statusCode, 403);
+  assert.equal((await del(priv.id, { user: BOB })).statusCode, 404);
+  assert.equal(env.world.templates.length, 2);
+  const mine = await del(priv.id);
+  assert.equal(mine.statusCode, 204);
+  assert.equal(mine.ended, true);
+  assert.deepEqual(env.world.templates.map((t) => t.id ?? t.template_id), [global.id]);
+  assert.equal((await del(global.id, { user: BOB, admin: true })).statusCode, 204);
+  assert.equal(env.world.templates.length, 0);
+  assert.equal((await del(global.id)).statusCode, 404);
 });
