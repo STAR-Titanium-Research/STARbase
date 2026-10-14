@@ -5,7 +5,7 @@
 -- and the Directus registration.
 --
 --   * teams          one row per team: name (unique ignoring case and blanks), colour from a fixed palette, optional logo, description;
---   * team_members   a person in a team, with a manager flag; the primary key is (team, person); a person is in a team once;
+--   * team_members   a person in a team, with a manager flag; a surrogate key (Directus wants one primary-key field) and a person is in a team once (unique team, person);
 --   * team_events    the history of a team: created, renamed, members added, removed, made or unmade manager. The kinds that
 --                    only the sharing code writes (shared, unshared, approved, declined, trust_set, trust_unset) are allowed now so that
 --                    migration 176 does not have to change the check.
@@ -45,11 +45,13 @@ CREATE TABLE teams (
 CREATE UNIQUE INDEX teams_name_key ON teams (lower(btrim(name)));
 
 CREATE TABLE team_members (
+    member_id UUID NOT NULL DEFAULT gen_random_uuid(),
     team_id UUID NOT NULL,
     person_id UUID NOT NULL,
     is_manager BOOLEAN NOT NULL DEFAULT false,
     joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT team_members_pkey PRIMARY KEY (team_id, person_id),
+    CONSTRAINT team_members_pkey PRIMARY KEY (member_id),
+    CONSTRAINT team_members_team_id_person_id_key UNIQUE (team_id, person_id),
     CONSTRAINT team_members_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams (team_id) ON DELETE CASCADE,
     CONSTRAINT team_members_person_id_fkey FOREIGN KEY (person_id) REFERENCES people (person_id) ON DELETE CASCADE
 );
@@ -84,7 +86,8 @@ COMMENT ON COLUMN teams.created_by_person_id IS 'The person who created the team
 COMMENT ON COLUMN teams.created_at IS 'When the team was created.';
 COMMENT ON INDEX teams_name_key IS 'Two teams cannot share a name, ignoring case and surrounding blanks.';
 
-COMMENT ON TABLE team_members IS 'A person in a team. A team with at least one member has at least one manager (checked at commit by d1_private.team_has_manager()). Written through the teams endpoint; audited. Rows go with the team and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE team_members IS 'A person in a team. A team with at least one member has at least one manager (checked at commit by d1_private.team_has_manager(), which locks the team row so concurrent checks serialise). Written through the teams endpoint; audited. Rows go with the team and with the person (ON DELETE CASCADE).';
+COMMENT ON COLUMN team_members.member_id IS 'Surrogate key of the membership (Directus needs a single primary-key field); a person is in a team once (team_members_team_id_person_id_key).';
 COMMENT ON COLUMN team_members.team_id IS 'The team (teams.team_id). Deleted with it.';
 COMMENT ON COLUMN team_members.person_id IS 'The member (people.person_id), not a login. Deleted with the person.';
 COMMENT ON COLUMN team_members.is_manager IS 'True for a team manager: can add and remove members, edit the team, and approve pending members. A team keeps at least one while it has members.';
@@ -130,6 +133,9 @@ BEGIN
                                               WHEN 'DELETE' THEN ARRAY[OLD.team_id]
                                               ELSE ARRAY[OLD.team_id, NEW.team_id] END) AS x
     LOOP
+        -- serialise the checks of one team: two transactions that each remove or demote one of two managers would otherwise both
+        -- pass (each sees the other's manager still in place). The second check waits for the first commit, then sees its result.
+        PERFORM 1 FROM teams WHERE team_id = t FOR NO KEY UPDATE;   -- no row (a deleted team) = nothing to lock or check
         IF EXISTS (SELECT 1 FROM team_members m WHERE m.team_id = t)
            AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.team_id = t AND m.is_manager) THEN
             RAISE EXCEPTION 'A team must keep at least one manager'
@@ -141,7 +147,7 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.team_has_manager() IS 'Deferred constraint trigger function of team_members (INITIALLY DEFERRED, so judged at COMMIT): a team with at least one member and no manager raises check_violation (23514) "A team must keep at least one manager". A team with no members passes. Migration 175.';
+COMMENT ON FUNCTION d1_private.team_has_manager() IS 'Deferred constraint trigger function of team_members (INITIALLY DEFERRED, so judged at COMMIT; it first locks the team row FOR NO KEY UPDATE so two transactions removing different managers are checked one after the other): a team with at least one member and no manager raises check_violation (23514) "A team must keep at least one manager". A team with no members passes. Migration 175.';
 
 CREATE OR REPLACE FUNCTION d1_private.teams_history()
 RETURNS trigger
@@ -274,7 +280,7 @@ END
 $$;
 
 INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, required, note)
-SELECT v.collection, v.field, v.special, v.interface, v.options::json, v.display, v.readonly, FALSE, v.sort, v.width, v.required, v.note
+SELECT v.collection, v.field, v.special, v.interface, v.options::json, v.display, v.readonly, (v.field = 'member_id'), v.sort, v.width, v.required, v.note
 FROM (VALUES
     ('teams', 'name', NULL, 'input', NULL, 'raw', FALSE, 1, 'half', TRUE, NULL),
     ('teams', 'color', NULL, 'select-dropdown',
@@ -286,6 +292,7 @@ FROM (VALUES
     ('teams', 'created_at', NULL, 'datetime', NULL, 'datetime', TRUE, 6, 'half', FALSE, NULL),
     ('teams', 'members', 'o2m', 'list-o2m', '{"template":"{{person_id.full_name}}","enableCreate":false,"enableSelect":false}', 'related-values', TRUE, 7, 'full', FALSE,
         'The members of the team (team_members.team_id); changed through the teams endpoint'),
+    ('team_members', 'member_id', 'uuid', 'input', NULL, 'raw', TRUE, 0, 'half', FALSE, 'Surrogate key'),
     ('team_members', 'team_id', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}","enableCreate":false}', 'related-values', FALSE, 1, 'half', TRUE, NULL),
     ('team_members', 'person_id', 'm2o', 'select-dropdown-m2o', '{"template":"{{full_name}}","enableCreate":false}', 'related-values', FALSE, 2, 'half', TRUE, NULL),
     ('team_members', 'is_manager', 'cast-boolean', 'boolean', NULL, 'boolean', FALSE, 3, 'half', FALSE, NULL),

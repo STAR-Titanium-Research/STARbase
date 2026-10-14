@@ -186,6 +186,58 @@ UPDATE team_members SET team_id = '7b000000-0000-4000-8000-000000000042'
 COMMIT;
 SQL
 
+# --- two sessions: removing DIFFERENT managers of one team at the same time. Each commit-time check would see the other's manager still
+# in place and pass, leaving a team without a manager; the check locks the team row, so the second waits and then sees the first's result.
+# Session 1 runs its check early (SET CONSTRAINTS ALL IMMEDIATE: it passes, B is still a manager) and then keeps its transaction open for 3 s;
+# session 2 starts 1 s later and commits at once. Without the lock both pass (session 2 still sees A as a manager, session 1 has already
+# been judged) and the team ends with none; with it session 2 waits for session 1, then sees A demoted and is refused.
+# Run in both orders (which manager each session removes): exactly one commit may succeed.
+# conc_pair <label> <hex digit for the ids> <session 1 sql> <session 2 sql>   (@A@ and @B@ are the two managers)
+conc_pair() {
+  local label="$1" d="$2" s1="$3" s2="$4" team a b f1 f2 n e1 e2
+  team="${d}b000000-0000-4000-8000-0000000000b1"; a="${d}a000000-0000-4000-8000-0000000000a1"; b="${d}a000000-0000-4000-8000-0000000000a2"
+  s1="${s1//@A@/$a}"; s1="${s1//@B@/$b}"; s2="${s2//@A@/$a}"; s2="${s2//@B@/$b}"
+  psql "$TM_URL" --no-psqlrc -X -q -v ON_ERROR_STOP=1 -c "
+    INSERT INTO people (person_id, full_name) VALUES ('$a', 'TM C1 $label'), ('$b', 'TM C2 $label');
+    INSERT INTO teams (team_id, name) VALUES ('$team', 'TM Concurrent $label');
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES ('$team', '$a', true), ('$team', '$b', true);" >/dev/null 2>&1 \
+    || { bad "team_needs_a_manager (concurrent, $label): setup failed"; return; }
+  f1=$(mktemp); f2=$(mktemp)
+  ( psql "$TM_URL" --no-psqlrc -X -t -A -q -v VERBOSITY=verbose -c "BEGIN; $s1; SET CONSTRAINTS ALL IMMEDIATE; SELECT pg_sleep(3); COMMIT;" >"$f1" 2>&1 ) &
+  sleep 1
+  ( psql "$TM_URL" --no-psqlrc -X -t -A -q -v VERBOSITY=verbose -c "BEGIN; $s2; COMMIT;" >"$f2" 2>&1 ) &
+  wait
+  e1=$(grep -c '23514' "$f1"); e2=$(grep -c '23514' "$f2"); rm -f "$f1" "$f2"
+  n=$(psql "$TM_URL" --no-psqlrc -X -t -A -q -c "SELECT count(*) FROM team_members WHERE team_id = '$team' AND is_manager")
+  if [[ $((e1 + e2)) -eq 1 && "$n" -eq 1 ]]; then ok "team_needs_a_manager (two sessions, $label): exactly one of the two managers could go, $n manager left"
+  else bad "team_needs_a_manager (two sessions, $label): $((e1 + e2)) of 2 commits refused and $n managers left (expected 1 and 1)"; fi
+}
+conc_pair demote_then_delete c \
+  "UPDATE team_members SET is_manager = false WHERE person_id = '@A@'" \
+  "DELETE FROM team_members WHERE person_id = '@B@'"
+conc_pair delete_then_demote d \
+  "DELETE FROM team_members WHERE person_id = '@B@'" \
+  "UPDATE team_members SET is_manager = false WHERE person_id = '@A@'"
+
+run_case team_member_is_unique_per_person <<'SQL'
+DO $$
+DECLARE t uuid; p uuid; m1 uuid; m2 uuid;
+BEGIN
+    INSERT INTO people (full_name) VALUES ('TM Unique') RETURNING person_id INTO p;
+    INSERT INTO teams (name) VALUES ('TM Unique team') RETURNING team_id INTO t;
+    INSERT INTO team_members (team_id, person_id) VALUES (t, p) RETURNING member_id INTO m1;
+    ASSERT m1 IS NOT NULL, 'a membership has a surrogate key (member_id)';
+    BEGIN
+        INSERT INTO team_members (team_id, person_id) VALUES (t, p);
+        RAISE EXCEPTION 'the same person was added to the same team twice';
+    EXCEPTION WHEN unique_violation THEN NULL;
+    END;
+    INSERT INTO team_members (team_id, person_id) VALUES (t, p) ON CONFLICT (team_id, person_id) DO NOTHING;
+    ASSERT (SELECT count(*) FROM team_members WHERE team_id = t) = 1, 'ON CONFLICT (team_id, person_id) works';
+    ASSERT (SELECT count(*) FROM pg_index i WHERE i.indrelid = 'team_members'::regclass AND i.indisprimary AND i.indnatts = 1) = 1, 'a single-column primary key (Directus)';
+END $$;
+SQL
+
 # --- history ---
 run_case history_records_member_changes <<'SQL'
 DO $$
@@ -269,8 +321,8 @@ BEGIN
     INSERT INTO teams (name) VALUES ('TM Audit team') RETURNING team_id INTO t;
     INSERT INTO team_members (team_id, person_id, is_manager) VALUES (t, p, true);
     ASSERT EXISTS (SELECT 1 FROM audit_logs WHERE table_name = 'teams' AND record_id = t::text AND action_type = 'INSERT'), 'teams is audited';
-    ASSERT EXISTS (SELECT 1 FROM audit_logs WHERE table_name = 'team_members' AND record_id = t::text || ':' || p::text AND action_type = 'INSERT'),
-        'team_members is audited, keyed by team and person';
+    ASSERT EXISTS (SELECT 1 FROM audit_logs WHERE table_name = 'team_members' AND record_id = (SELECT member_id::text FROM team_members WHERE team_id = t AND person_id = p) AND action_type = 'INSERT'),
+        'team_members is audited, keyed by member_id';
     ASSERT NOT EXISTS (SELECT 1 FROM audit_logs WHERE table_name = 'team_events'), 'team_events is the history itself and is not audited';
 END $$;
 SQL
@@ -286,6 +338,7 @@ BEGIN
     ASSERT EXISTS (SELECT 1 FROM directus_relations WHERE many_collection = 'team_members' AND many_field = 'person_id' AND one_collection = 'people'), 'team_members.person_id -> people';
     ASSERT EXISTS (SELECT 1 FROM directus_relations WHERE many_collection = 'teams' AND many_field = 'logo' AND one_collection = 'directus_files'), 'teams.logo -> directus_files';
     ASSERT EXISTS (SELECT 1 FROM directus_fields WHERE collection = 'teams' AND field = 'members' AND special LIKE '%o2m%'), 'the members alias field is registered';
+    ASSERT EXISTS (SELECT 1 FROM directus_fields WHERE collection = 'team_members' AND field = 'member_id' AND hidden), 'the surrogate key is registered and hidden';
     ASSERT (SELECT string_agg(collection || ':' || action, ',' ORDER BY collection) FROM directus_permissions
              WHERE policy = lm AND collection IN ('teams', 'team_members', 'team_events')) = 'team_events:read,team_members:read,teams:read',
         'a Lab Member has read and only read on the three';
