@@ -1115,6 +1115,78 @@ bs_check "role_gone:0" "deleting a role deletes the templates shared with it"
 bs_check "user_gone:0,0,1" "deleting a login deletes its drafts and templates, and only theirs"
 bs_check "redown_tables:0" "down after up drops both tables"
 
+echo "== Form condition fixes (migration 187) =="
+# Migration 174's "Hide until saved once" and "show when it has a value" rules used _empty / _nempty, which in Directus 11 mean
+# '' and not-'' (null counts as nempty). Directus is a stub here, so seed the 174 rules, run the up and the down, and read
+# the conditions back, all in a rolled-back transaction.
+CF=db/migrations/20261014000187_form_condition_fixes.sql
+cf_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$CF")
+cf_down=$(awk '/-- migrate:down/{f=1;next}f' "$CF")
+cf_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+DELETE FROM directus_fields WHERE (field = 'grp_related' AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions'))
+   OR (collection = 'manufacturing_operations' AND field IN ('machining_legacy_insert_edge_id', 'machining_legacy_machining_uid',
+       'file_storage_pointer', 'capture_software', 'capture_frequency_khz', 'nc_program_text', 'nc_program_file_uri'))
+   OR (collection = 'physical_samples' AND field = 'capture_software');
+INSERT INTO directus_fields (collection, field, interface, conditions)
+SELECT c, 'grp_related', 'group-detail',
+       '[{"name":"Hide until saved once","rule":{"_and":[{"short_id":{"_empty":true}}]},"hidden":true}]'::json
+FROM unnest(ARRAY['physical_samples', 'manufacturing_operations', 'test_sessions']) AS c;
+INSERT INTO directus_fields (collection, field, interface, conditions)
+SELECT 'manufacturing_operations', f, 'input',
+       ('[{"name":"show when it has a value","rule":{"_and":[{"' || f || '":{"_nempty":true}}]},"hidden":false,"readonly":false,"required":false}]')::json
+FROM unnest(ARRAY['machining_legacy_insert_edge_id', 'machining_legacy_machining_uid', 'file_storage_pointer', 'capture_software',
+                  'capture_frequency_khz', 'nc_program_text', 'nc_program_file_uri']) AS f;
+-- the same shape on another collection, and a field whose rule is not one of the six: both must be left alone
+INSERT INTO directus_fields (collection, field, interface, conditions)
+VALUES ('physical_samples', 'capture_software', 'input',
+        '[{"name":"show when it has a value","rule":{"_and":[{"capture_software":{"_nempty":true}}]},"hidden":false}]');
+CREATE TEMP TABLE _before AS SELECT collection, field, conditions::jsonb AS c FROM directus_fields
+  WHERE (field = 'grp_related' AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions'))
+     OR (collection = 'manufacturing_operations' AND field IN ('machining_legacy_insert_edge_id', 'machining_legacy_machining_uid',
+         'file_storage_pointer', 'capture_software', 'capture_frequency_khz', 'nc_program_text', 'nc_program_file_uri'))
+     OR (collection = 'physical_samples' AND field = 'capture_software');
+$cf_up
+SELECT 'up_group:' || string_agg(collection || '=' || (conditions::jsonb -> 0 -> 'rule' = '{"_and":[{"short_id":{"_null":true}}]}'::jsonb)
+  || '/' || (conditions::jsonb -> 0 ->> 'name') || '/' || (conditions::jsonb -> 0 ->> 'hidden') || '/' || jsonb_array_length(conditions::jsonb), ',' ORDER BY collection)
+  FROM directus_fields WHERE field = 'grp_related' AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions');
+SELECT 'up_fields:' || string_agg(field || '=' || (conditions::jsonb -> 0 -> 'rule' = jsonb_build_object('_and', jsonb_build_array(
+    jsonb_build_object(field, jsonb_build_object('_nnull', true)), jsonb_build_object(field, jsonb_build_object('_neq', '')))))
+  || '/' || (conditions::jsonb -> 0 ->> 'name') || '/' || (conditions::jsonb -> 0 ->> 'hidden') || '/' || (conditions::jsonb -> 0 ->> 'readonly')
+  || '/' || (conditions::jsonb -> 0 ->> 'required'), ',' ORDER BY field)
+  FROM directus_fields WHERE collection = 'manufacturing_operations'
+    AND field IN ('machining_legacy_insert_edge_id', 'machining_legacy_machining_uid', 'file_storage_pointer', 'capture_software', 'capture_frequency_khz', 'nc_program_text');
+SELECT 'up_untouched:' || (SELECT (conditions::jsonb = b.c) FROM directus_fields f JOIN _before b USING (collection, field)
+    WHERE f.collection = 'manufacturing_operations' AND f.field = 'nc_program_file_uri')
+  || '/' || (SELECT (conditions::jsonb = b.c) FROM directus_fields f JOIN _before b USING (collection, field)
+    WHERE f.collection = 'physical_samples' AND f.field = 'capture_software');
+SELECT 'up_no_old_rules:' || count(*) FROM directus_fields WHERE conditions::text LIKE '%"_empty"%' AND collection IN ('physical_samples', 'manufacturing_operations', 'test_sessions')
+  AND (field = 'grp_related' OR (collection = 'manufacturing_operations' AND field <> 'nc_program_file_uri'));
+$cf_down
+SELECT 'down_restored:' || (SELECT count(*) FROM directus_fields f JOIN _before b USING (collection, field) WHERE f.conditions::jsonb = b.c)
+  || '/' || (SELECT count(*) FROM _before);
+$cf_up
+SELECT 'reup:' || (SELECT conditions::jsonb -> 0 -> 'rule' = '{"_and":[{"short_id":{"_null":true}}]}'::jsonb FROM directus_fields
+    WHERE field = 'grp_related' AND collection = 'test_sessions')
+  || '/' || (SELECT conditions::jsonb -> 0 -> 'rule' = '{"_and":[{"nc_program_text":{"_nnull":true}},{"nc_program_text":{"_neq":""}}]}'::jsonb
+    FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'nc_program_text');
+$cf_up
+SELECT 'up_twice:' || (SELECT conditions::jsonb -> 0 -> 'rule' = '{"_and":[{"nc_program_text":{"_nnull":true}},{"nc_program_text":{"_neq":""}}]}'::jsonb
+    FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'nc_program_text');
+ROLLBACK;
+SQL
+)
+cf_check() { grep -qxF "$1" <<<"$cf_out" && ok "$2" || bad "$2 (psql output: $cf_out)"; }
+cf_check "up_group:manufacturing_operations=true/Hide until saved once/true/1,physical_samples=true/Hide until saved once/true/1,test_sessions=true/Hide until saved once/true/1" \
+    "up: Related records is hidden until saved once on short_id _null, for samples, operations and tests, rule name and flag unchanged"
+cf_check "up_fields:capture_frequency_khz=true/show when it has a value/false/false/false,capture_software=true/show when it has a value/false/false/false,file_storage_pointer=true/show when it has a value/false/false/false,machining_legacy_insert_edge_id=true/show when it has a value/false/false/false,machining_legacy_machining_uid=true/show when it has a value/false/false/false,nc_program_text=true/show when it has a value/false/false/false" \
+    "up: the six 'show when it has a value' rules are not null and not '', with their name and flags unchanged"
+cf_check "up_untouched:true/true" "up: a field outside the six, and the same field name on samples, keep their rule"
+cf_check "up_no_old_rules:0" "up: no _empty / _nempty is left in the nine rows"
+cf_check "down_restored:11/11" "down: the nine rules mean what migration 174 wrote again, and the two untouched rows are as they were"
+cf_check "reup:true/true" "up again after down gives the corrected rules"
+cf_check "up_twice:true" "up run on already-corrected rules changes nothing"
+
 echo "== Sample geometry: legacy forms are back-filled =="
 # Seed old-vocabulary samples, apply the back-fill's up SQL, assert, then ROLLBACK.
 BACKFILL=db/migrations/20260930000115_backfill_legacy_geometry_forms.sql
