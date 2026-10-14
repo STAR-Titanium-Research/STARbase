@@ -308,6 +308,21 @@ describe('useProcessMap', () => {
     expect(map.status.value).toBe('error');
   });
 
+  it('the Finder pick loads a record the map can open, and declines one it cannot, leaving the map as it is (I6)', async () => {
+    family.mockResolvedValue(small());
+    const { map, replace } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    replace.mockClear();
+    for (const collection of ['people', 'tools_box', 'cutting_inserts']) {
+      expect(map.pickRecord({ collection, id: 'x1' })).toBe(false);
+    }
+    expect(replace).not.toHaveBeenCalled();
+    expect(map.status.value).toBe('ready');
+    expect(map.pickRecord({ collection: 'physical_samples', id: 's2' })).not.toBe(false);
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(map.pickRecord({ collection: 'tools', id: 't1' })).not.toBe(false);
+  });
+
   it('localStorage that throws (or is missing) does not break toggleKind, setProbable or reading', async () => {
     const boom = () => {
       throw new Error('denied');

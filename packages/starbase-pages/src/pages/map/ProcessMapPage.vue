@@ -273,7 +273,7 @@ onBeforeUnmount(() => {
 				</MapSheet>
 			</template>
 		</PageShell>
-		<Finder v-if="finderOpen" :pick-record="(r) => map.setFocus(r.collection, r.id)" @close="finderOpen = false" />
+		<Finder v-if="finderOpen" :pick-record="map.pickRecord" @close="finderOpen = false" />
 	</ExplorerView>
 </template>
 

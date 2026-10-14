@@ -134,6 +134,12 @@ describe('openHit', () => {
 		expect(calls).toEqual([['pick', { collection: 'physical_samples', id: 's1' }]]);
 	});
 
+	it('a pickRecord that declines (returns false) leaves the hit to navigate, as if the host had none', () => {
+		const calls: unknown[] = [];
+		openHit(sample, (to) => calls.push(['navigate', to]), (r) => { calls.push(['pick', r]); return false; });
+		expect(calls).toEqual([['pick', { collection: 'physical_samples', id: 's1' }], ['navigate', '/home/samples/s1']]);
+	});
+
 	it('with pickRecord, a hit that is not a record (a page) still navigates', () => {
 		const calls: unknown[] = [];
 		openHit(hit('Pages', 'Samples'), (to) => calls.push(['navigate', to]), (r) => calls.push(['pick', r]));

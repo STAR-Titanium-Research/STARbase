@@ -183,6 +183,12 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     }
     void router.replace({ path: route.path, query: { ...query, focus: `${collection}:${id}`, reach: String(reach.value) } });
   }
+  /** The Finder picked a record: the map takes one it can open, and declines the rest (false), so the Finder navigates as it does anywhere else. */
+  function pickRecord(record: { collection: string; id: string }): boolean {
+    if (!focusPlan(record.collection)) return false;
+    setFocus(record.collection, record.id);
+    return true;
+  }
   /** "Clear": back to the search-first page, keeping the other query keys. */
   function clearFocus(): void {
     const query: Record<string, string> = {};
@@ -783,6 +789,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     setReach,
     clearFocus,
     setFocus,
+    pickRecord,
     dir,
     setDir,
     probable,

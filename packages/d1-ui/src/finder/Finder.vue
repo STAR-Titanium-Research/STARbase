@@ -24,8 +24,8 @@ import { useFinder } from './useFinder';
 import { useExplorerNav } from '../nav/useExplorerNav';
 
 // `pickRecord`: a host that wants the record itself (the Process map loads it) gets it instead of the
-// navigation; Pages and Saved views, which are not records, still navigate.
-const props = defineProps<{ canScan?: boolean; pickRecord?: (record: { collection: string; id: string }) => void }>();
+// navigation, unless it returns false (a record it cannot take); Pages and Saved views, which are not records, still navigate.
+const props = defineProps<{ canScan?: boolean; pickRecord?: (record: { collection: string; id: string }) => boolean | void }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'scan'): void }>();
 
 const host = useExplorerHost();
