@@ -12,7 +12,7 @@
 //   PATCH  /d1-record-access/:collection/:id/entries/:person_id { role }              -> { entry }
 //   DELETE /d1-record-access/:collection/:id/entries/:person_id                        -> { removed: true }
 //   POST   /d1-record-access/:collection/:id/transfer           { person_id }         -> { owner, email, blocked_by }
-//   Teams (migration 176): GET also answers teams: [{ team_access_id, team_id, name, color, logo, member_count, role,
+//   Teams (migration 182): GET also answers teams: [{ team_access_id, team_id, name, color, logo, member_count, role,
 //   trust_new_members, waiting, declined }] (waiting = pending joiners worth asking about, Ruling D2; declined = declined joiners).
 //   POST   /d1-record-access/:collection/:id/entries            { team_id, role }     -> { team, email: 'sent'|'skipped'|'failed', emails }
 //   PATCH  /d1-record-access/:collection/:id/entries/team/:team_id   { role?, trust_new_members? }  -> { team }

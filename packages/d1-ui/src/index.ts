@@ -23,10 +23,15 @@ export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
 // Display helpers and error predicates
 export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
-export { humanise, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
+export { humanise, statusStyle, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
+export type { Tone } from './status';
+export { CHOICES, choiceKindFor, choiceLabel } from './choiceLabels';
+export type { Choice, ChoiceKind } from './choiceLabels';
 export { estimateMassGrams } from './mass';
-export { buildLife, truncatedNotes } from './life';
-export type { LifeItem, TraceResponse } from './life';
+export { buildLife, chipText, chipTitle, daySummary, groupLife, truncatedNotes } from './life';
+export { fitSplit, splitSummary } from './lifeSplit';
+export type { LifeSplit } from './lifeSplit';
+export type { LifeDay, LifeItem, LifeStep, TraceResponse } from './life';
 export { linkedFiles, shareFiles } from './linkedFiles';
 export type { LinkedFile } from './linkedFiles';
 export { paramColumns, paramRows } from './params';
@@ -162,6 +167,8 @@ export type { ThumbKind } from './index/thumbs';
 export { plotKind, plotRequests, mergePlots } from './index/plotData';
 export type { RowPlots } from './index/plotData';
 export { default as IndexPage } from './index/IndexPage.vue';
+export { default as RowMapButton } from './index/RowMapButton.vue';
+export { MAP_ROW_COLLECTIONS, mapPath } from './mapLink';
 
 // Admin Home rules (the crawler online test, the overview shape, the Needs attention rows)
 export { CRAWLER_ONLINE_MS, ago, attentionView, crawlerOnline, isAuthRefusal, normaliseOverview, overviewTime, ownerlessRows, ownerlessTotal } from './adminHome';
@@ -187,3 +194,26 @@ export {
 	withoutDismissed, withoutPinned, writeDismissed,
 } from './usage';
 export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
+
+// Tooling record pages (pure logic: ISO 1832 designations, insert outline, edge letters, tray grid, model)
+export { parseIsoDesignation, SHAPE_ANGLE_DEG } from './tooling/isoDesignation';
+export type { IsoInsert, ShapeLetter } from './tooling/isoDesignation';
+export { resolveInsertGeometry, insertOutline, DEFAULT_IC_MM, DEFAULT_THICKNESS_MM, DEFAULT_NOSE_RADIUS_MM } from './tooling/insertGeometry';
+export type { InsertGeometry, InsertCorner, InsertOutline, InsertTypeRow, TipMaterial } from './tooling/insertGeometry';
+export { normaliseEdgeLetter, placeEdge } from './tooling/edgePlacement';
+export type { EdgePlacement } from './tooling/edgePlacement';
+export { slotGrid } from './tooling/boxLayout';
+export type { SlotCell, SlotGrid } from './tooling/boxLayout';
+export { buildToolingModel, insertState, nextFreshEdge, edgeUsageMismatch, focusParent, focusRoute } from './tooling/toolingModel';
+export type {
+	BoxRow, InsertRow, EdgeRow, InsertState, ToolingEdge, ToolingInsert, ToolingModel, ToolingFocus,
+} from './tooling/toolingModel';
+export {
+	focusKindOf, focusFromRoute, stateCounts, findInsert, findEdge, insertLabel, edgeLabel, toolingTitle, mismatchText, freshWithHistory, mergeHistory,
+	FOCUS_COLLECTION, FOCUS_KIND_LABEL, FOCUS_NOUN, STATE_ORDER, STATE_LABEL,
+} from './tooling/toolingView';
+export type { FocusKind, FreshWithHistory, HistoryEntry } from './tooling/toolingView';
+export { COUNT_CHUNK, chunkIds, edgeTestsFilter, edgeJunctionCountParams, junctionCountsByEdge, mergeEdgeCounts } from './tooling/edgeHistory';
+export {
+	placementText, typeFacts, boxProjectHidden, boxRailFacts, boxDetailFacts, insertRailFacts, insertDetailFacts, edgeRailFacts, edgeDetailFacts,
+} from './tooling/toolingFacts';

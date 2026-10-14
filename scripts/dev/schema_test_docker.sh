@@ -79,13 +79,13 @@ docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL
 mrc=$?
 [[ $mrc -ne 0 && $trc -eq 0 ]] && trc=$mrc
 
-# The People admin SQL functions (migration 174): attention and access, on a copy of this database (tests/people_admin.sh).
+# The People admin SQL functions (migration 180): attention and access, on a copy of this database (tests/people_admin.sh).
 docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL" "$RUNNER" \
   bash tests/people_admin.sh 2>&1
 prc=$?
 [[ $prc -ne 0 && $trc -eq 0 ]] && trc=$prc
 
-# Teams (migrations 175, 176): tables, the manager rule, history, Directus registration, team grants, on a copy of this database (tests/teams.sh).
+# Teams (migrations 181, 182): tables, the manager rule, history, Directus registration, team grants, on a copy of this database (tests/teams.sh).
 docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL" "$RUNNER" \
   bash tests/teams.sh 2>&1
 tmrc=$?

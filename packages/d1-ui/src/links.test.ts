@@ -20,6 +20,11 @@ describe('the Directus host (the default)', () => {
 		expect(directusLinks.resolve('/content/equipment/e1')).toEqual({ kind: 'route', to: '/content/equipment/e1' });
 		expect(directusLinks.resolve('/homework')).toEqual({ kind: 'route', to: '/homework' });
 	});
+	it('opens STARbase-only pages through the permanent links too', () => {
+		expect(directusLinks.resolve('/report-bug')).toEqual({ kind: 'external', href: '/d1-links/go/p/report-bug' });
+		expect(directusLinks.resolve('/crawler?x=1')).toEqual({ kind: 'external', href: '/d1-links/go/p/crawler?x=1' });
+		expect(directusLinks.resolve('/crawlers')).toEqual({ kind: 'route', to: '/crawlers' });
+	});
 	it('opens printable reports on the server, root-relative', () => {
 		expect(resolveLink('/d1-report/sample/5')).toEqual({ kind: 'external', href: '/d1-report/sample/5' });
 	});
@@ -53,10 +58,40 @@ describe('STARbase', () => {
 		expect(resolveLink('/d1-fast-dashboard?operation=9')).toEqual({ kind: 'route', to: '/plot/fast?operation=9' });
 		expect(resolveLink('/d1-force-dashboard')).toEqual({ kind: 'route', to: '/plot/force' });
 	});
+	it('keeps its own pages (Report a bug, Force crawler) as routes, not Data Studio pages', () => {
+		use();
+		expect(resolveLink('/report-bug')).toEqual({ kind: 'route', to: '/report-bug' });
+		expect(resolveLink('/crawler')).toEqual({ kind: 'route', to: '/crawler' });
+		expect(resolveLink('/crawler?x=1')).toEqual({ kind: 'route', to: '/crawler?x=1' });
+		expect(resolveLink('/crawlers')).toEqual({ kind: 'external', href: `${D1}/admin/crawlers` });
+		expect(canonicalPath('/report-bug')).toBe('/report-bug');
+		expect(canonicalPath('/crawler')).toBe('/crawler');
+		for (const p of ['/report-bug', '/crawler']) {
+			const r = resolveLink(p);
+			expect(r.kind).toBe('route');
+			if (r.kind === 'route') expect(canonicalPath(r.to)).toBe(p);
+		}
+	});
+	it('keeps the Process map (/map?focus=…&reach=…) as a route and canonicalPath keeps focus and reach', () => {
+		use();
+		const q = '/map?focus=physical_samples:3f2a&reach=all';
+		expect(resolveLink('/map')).toEqual({ kind: 'route', to: '/map' });
+		expect(resolveLink(q)).toEqual({ kind: 'route', to: q });
+		expect(resolveLink('/maps')).toEqual({ kind: 'external', href: `${D1}/admin/maps` });
+		expect(canonicalPath(q)).toBe(q);
+		expect(canonicalPath('/map')).toBe('/map');
+		expect(directusLinks.resolve(q)).toEqual({ kind: 'external', href: '/d1-links/go/p' + q });
+	});
+	it('maps old /d1-force-crawler links (and subpaths) to its own /crawler page', () => {
+		use();
+		expect(resolveLink('/d1-force-crawler')).toEqual({ kind: 'route', to: '/crawler' });
+		expect(resolveLink('/d1-force-crawler?x=1')).toEqual({ kind: 'route', to: '/crawler?x=1' });
+		expect(resolveLink('/d1-force-crawler/jobs/3')).toEqual({ kind: 'route', to: '/crawler/jobs/3' });
+		expect(resolveLink('/d1-force-crawlers')).toEqual({ kind: 'external', href: `${D1}/admin/d1-force-crawlers` });
+	});
 	it('sends everything else to d1-server', () => {
 		use();
 		expect(resolveLink('/content/materials/7')).toEqual({ kind: 'external', href: `${D1}/admin/content/materials/7` });
-		expect(resolveLink('/d1-lab-dashboard/graph?sample=1')).toEqual({ kind: 'external', href: `${D1}/admin/d1-lab-dashboard/graph?sample=1` });
 		expect(resolveLink('/d1-report/sample/5')).toEqual({ kind: 'external', href: `${D1}/d1-report/sample/5` });
 		expect(resolveLink('/homework')).toEqual({ kind: 'external', href: `${D1}/admin/homework` });
 	});

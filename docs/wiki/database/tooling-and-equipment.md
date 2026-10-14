@@ -45,6 +45,76 @@ An edge records whether it has been used. When you pick an edge on a machining o
 You can still change it. Recording the edge on every pass is what makes the Force App's
 [wear trend](../force-app/plot-dashboard.md#wear-trend-and-metadata-doctor) work.
 
+## The tool box page
+
+In STARbase a tool box, one of its inserts and one of their edges are a single page with a 3D model of
+the box in the side rail. Open it from Inventory → **Tool boxes**, **Cutting inserts** or **Insert
+edges**, or from any box, insert or edge code on another page.
+
+![A tool box in STARbase: the box model in the side rail, its state counts and next fresh edge beside it](../images/database/tooling-box.png)
+
+*The tooling screenshots were taken from STARbase against stubbed demo records (the local demo stack
+has no tool boxes yet); the codes, people and project are demo values.*
+
+| You are on | Address | The model shows | Beside it |
+|---|---|---|---|
+| the **box** | `/tool-boxes/<id>` | the tray, its numbered inserts coloured by state | how many inserts are fresh, partly used, used or depleted; the **Next fresh edge**; the insert type; the inserts |
+| an **insert** | `/inserts/<id>` | that insert lifted out of its pocket, with its lettered edges | the insert's details and notes, and its edges with their state |
+| an **edge** | `/edges/<id>` | a close view of that edge, highlighted | the edge's details and its **history**: every test and operation run with it, newest first |
+
+![An insert: lifted out of its pocket, with its lettered edges](../images/database/tooling-insert.png)
+
+![An edge: the close view, and the edge's history](../images/database/tooling-edge.png)
+
+- **Moving around.** Click an insert in the model (or in a list) to go to it, then click one of its
+  edges. **Esc**, the **Up** button or the breadcrumb goes back up a level; the arrow keys step to the
+  next insert or edge, and **Page Up / Page Down** to the next insert. Drag to turn the model and
+  scroll to zoom; **Reset view** puts it back. Each step is its own address, so the browser's Back
+  button, a pin or a copied link land on the same view.
+- **Colours.** Green is fresh, amber partly used, grey used; a depleted insert is faded. The
+  **next fresh edge** glows briefly when you arrive.
+- **Next fresh edge.** The box suggests the edge to use next: the first fresh edge (A, B, C, D in
+  that order) on the lowest-numbered insert that is already partly used, so inserts are used up
+  before new ones are opened, and a two-sided insert's top face before its underside. With no partly
+  used insert, it is the first fresh edge of the lowest-numbered insert.
+- **Used is what the edge says.** An edge counts as used when its **Used?** toggle is on. If tests or
+  operations name an edge that is still marked fresh, the page warns *Marked fresh, but N tests or
+  operations used this edge*: switch it on in the edge's **Edit**.
+- **History.** An edge's history lists the tests that name it (also as one of several subjects) and
+  the machining passes run with it; **View forces** opens the pass in the Force plotter.
+- **Without 3D.** On a computer without WebGL, or in a narrow window, the model is replaced by a flat
+  grid of the slots and an outline of the insert, with the same clicks and addresses. **2D grid**
+  switches to it on purpose.
+
+### How the shape and the letters are drawn
+
+The model is drawn from the insert type, not from a CAD file:
+
+- the **ISO designation** gives the shape (C, D, S, T, V, W, R), whether the insert is one- or
+  two-sided, the hole, the size, the thickness and the nose radius (for example `CNMG 12 04 08`:
+  80° rhombic, two-sided, 12.7 mm, 4.76 mm thick, 0.8 mm nose);
+- a value filled in on the insert type (**Nose Radius RE**, **Cutting Edge Length L**, **Included
+  Angle ESPR**, **Fixing Hole Ø**) wins over the designation;
+- **Usable Edges Per Insert** caps the cutting corners: an insert type with fewer edges than its shape has
+  cutting corners gets letters on that many corners only, from A;
+- if the designation cannot be read, a plain shape is drawn from the edge count, with *Shape not
+  recognised*.
+
+The chip breaker is not modelled: the top face is flat.
+
+Edge letters follow the lab's rule: hold the insert with its **reference mark** up; **A** is the
+cutting corner nearest the mark, and the letters run **clockwise**, top face first. On a two-sided
+insert the underside continues the letters with **C directly under A** (and D under B on a CNMG).
+Only corners that cut get a letter: a CNMG has A–D, a single-sided CCMT only A and B. Old edges
+named `fA`, `fC` use the same letters.
+
+**Tipped inserts (PCD, PCBN).** A tipped insert comes one per small box and has one cutting edge, the
+brazed tip. Give its insert type a **Usable Edges Per Insert** of 1 and a **Substrate** of *PCD*,
+*PCBN* or *CBN* (a type code or designation ending in one of those works too): the box draws as a single small case, the tip shows in a lighter diamond finish on
+corner A, and the insert has edge A only.
+
+![A PCD box: one tipped insert in a single case](../images/database/tooling-pcd.png)
+
 ## Machines and equipment
 
 **Machines / Equipment** lists every machine and instrument, grouped under **Facilities** (the

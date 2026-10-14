@@ -188,7 +188,7 @@ function makeDb(tables, rawAnswers) {
     }
     return { rows: [] };
   };
-  // A transaction: the same tables, restored when the work throws. At COMMIT the deferred constraint of migration 175 is judged:
+  // A transaction: the same tables, restored when the work throws. At COMMIT the deferred constraint of migration 181 is judged:
   // a team with members and no manager rolls everything back with SQLSTATE 23514 (thrown by the transaction call, not the callback).
   db.transaction = async (work) => {
     const snapshot = structuredClone(tables);

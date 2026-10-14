@@ -44,7 +44,7 @@ const nf = (n: number) => n.toLocaleString('en-GB');
 		<p v-else-if="error && !data" class="d1-note quiet" role="status">The admin overview is not available right now ({{ error }}).</p>
 		<div v-else-if="data" class="panels">
 			<Section title="Force crawler">
-				<template #actions><AppLink to="/d1-force-crawler" class="link">Open crawler →</AppLink></template>
+				<template #actions><AppLink to="/crawler" class="link">Open crawler →</AppLink></template>
 				<p v-if="!crawler" class="d1-note">Could not load the crawler status.</p>
 				<template v-else>
 					<p v-if="!crawler.state" class="status"><span class="dot off" /> No crawler has reported in yet</p>

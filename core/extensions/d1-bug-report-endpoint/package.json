@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-bug-report-endpoint",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Server-side bridge from STARbase's Report a bug page to the bug-report relay, which files the GitHub issue. Requires a logged-in user; reporter identity comes from the session, never the client.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}

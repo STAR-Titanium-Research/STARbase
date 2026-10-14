@@ -1,7 +1,7 @@
 // Directus endpoint: d1-teams  (mounted at /d1-teams)
 //
 // Teams, their members and managers, and the approvals of members who joined after a record was shared with the team
-// (People 2, spec docs/superpowers/specs/2026-10-14-people-and-teams-design.md sections 2 and 3.1; tables of migrations 175 and 176).
+// (People 2, spec docs/superpowers/specs/2026-10-14-people-and-teams-design.md sections 2 and 3.1; tables of migrations 181 and 182).
 // Teams and membership change ONLY through this endpoint (a Lab Member's Directus rights on the team tables are read-only).
 //
 //   GET    /d1-teams                       -> { teams: [{ team_id, name, description, color, logo, member_count,
@@ -25,7 +25,7 @@
 //        their records. owned_edit stays 0 until teams can own records (PR 3).
 //   PATCH  /d1-teams/:id/members/:person_id  { is_manager }   manager or administrator
 //   DELETE /d1-teams/:id/members/:person_id  manager, administrator, or the person themself
-//        The last manager cannot leave or be demoted while others remain: the deferred constraint of migration 175 raises 23514 at COMMIT,
+//        The last manager cannot leave or be demoted while others remain: the deferred constraint of migration 181 raises 23514 at COMMIT,
 //        which is answered as 409 LAST_MANAGER "Make someone else a manager first".
 //   GET    /d1-teams/pending               -> { items: [{ team_id, team_name, person_id, full_name, records: [{ collection, id, kind, code,
 //                                               title, role }] }] }  the actionable pending rows on records the caller OWNS (owner column,
@@ -238,7 +238,7 @@ export default {
     // ---- writing helpers ---------------------------------------------------------------------------------
 
     // Postgres errors of a team write -> an HttpError. `what`: 'team' (the name is unique) or 'member' (a person is in a team once).
-    // 23514 is the deferred manager rule of migration 175, judged at COMMIT; the other two check constraints of `teams`
+    // 23514 is the deferred manager rule of migration 181, judged at COMMIT; the other two check constraints of `teams`
     // (teams_color_check, teams_name_not_blank) are validated in code and stay an internal error if they ever fire.
     function mapDbError(err, what) {
       if (err instanceof HttpError) return err;
@@ -631,7 +631,7 @@ export default {
       const joiner = [...(await loadPeople(database, [body.person_id])).values()][0];
       if (!joiner) throw new HttpError(404, 'NOT_FOUND', 'That person does not exist.');
 
-      // The triggers of migration 176 give the joiner a derived row (a grant that trusts new members) or a pending row (any other) for each
+      // The triggers of migration 182 give the joiner a derived row (a grant that trusts new members) or a pending row (any other) for each
       // grant of the team; the pending rows are visible in this transaction right after the insert.
       const pending = await write(acc, async (trx) => {
         await trx('team_members').insert({ team_id: team.team_id, person_id: joiner.person_id, is_manager: body.is_manager === true });

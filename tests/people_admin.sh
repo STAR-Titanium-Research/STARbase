@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The People admin SQL functions (People 1, Task 1, migration 20261014000174): d1_private.people_attention(), person_access() and
+# The People admin SQL functions (People 1, Task 1, migration 20261014000180): d1_private.people_attention(), person_access() and
 # person_access_list(). Each case runs in BEGIN ... ROLLBACK on a COPY of the migrated database (CREATE DATABASE ... TEMPLATE),
 # so nothing is left behind and the migrated database itself is never touched.
 # Usage: DATABASE_URL=postgres://d1:pw@host:5432/d1_test bash tests/people_admin.sh      (run by CI and scripts/dev/schema_test_docker.sh)
@@ -172,7 +172,7 @@ BEGIN
     ASSERT r.owns = 4, format('owns 2 samples + 1 campaign + PI of 1 project = 4, got %s', r.owns);
     ASSERT r.shared = 2, format('shared: sample_access edit + co-owner = 2, got %s', r.shared);
     ASSERT r.investigator = 1, format('investigator = 1, got %s', r.investigator);
-    ASSERT r.teams = 0 AND r.waiting = 0, format('no team access and nothing waiting (migration 176 columns), got %s and %s', r.teams, r.waiting);
+    ASSERT r.teams = 0 AND r.waiting = 0, format('no team access and nothing waiting (migration 182 columns), got %s and %s', r.teams, r.waiting);
     ASSERT NOT EXISTS (SELECT 1 FROM d1_private.person_access_list((SELECT id FROM pa WHERE kind = 'person'), 'teams')), 'which = teams is accepted and empty';
     -- a person with nothing: one row of zeros
     SELECT * INTO r FROM d1_private.person_access((SELECT id FROM pa WHERE kind = 'adder'));

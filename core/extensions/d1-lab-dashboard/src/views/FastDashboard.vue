@@ -72,19 +72,12 @@
 				</div>
 			</div>
 		</div>
-
-		<!-- Panel 3: Node graph -->
-		<div class="d1-panel d1-panel--graph">
-			<div class="d1-panel-header"><v-icon name="hub" /><h3>Connections</h3></div>
-			<NodeGraph ref="graphRef" class="d1-graph" />
-		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useItems, useRequestGate, errorText, recordRoute, AppLink } from '@d1/ui';
-import NodeGraph from './NodeGraph.vue';
 
 const { getItems } = useItems();
 
@@ -94,7 +87,6 @@ const opsError = ref('');
 const opsGate = useRequestGate();
 const search = ref('');
 const selectedOp = ref<any | null>(null);
-const graphRef = ref<InstanceType<typeof NodeGraph> | null>(null);
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedFetch() {
@@ -130,7 +122,6 @@ async function fetchOps() {
 
 function selectOp(op: any) {
 	selectedOp.value = op;
-	graphRef.value?.loadNeighbors('manufacturing_operations', op.operation_id);
 }
 
 function fmt(v: any, unit: string): string {
@@ -158,7 +149,7 @@ onBeforeUnmount(() => {
 
 .d1-fast {
 	display: grid;
-	grid-template-columns: 280px 1fr 340px;
+	grid-template-columns: 280px 1fr;
 	gap: 14px;
 	height: calc(100vh - 120px);
 	padding: 14px;
@@ -218,5 +209,4 @@ onBeforeUnmount(() => {
 .d1-kv span:nth-child(odd) { color: var(--theme--foreground-subdued, #64748b); }
 .d1-kv span:nth-child(even) { font-weight: 600; }
 .d1-notes { font-size: 13px; margin: 0; white-space: pre-wrap; }
-.d1-graph { flex: 1; min-height: 0; }
 </style>

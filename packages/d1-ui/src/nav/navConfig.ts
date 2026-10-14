@@ -51,6 +51,7 @@ export const NAV_GROUPS: NavGroup[] = [
 		links: [
 			{ label: 'Force plotter', icon: 'activity', to: '/d1-force-dashboard' },
 			{ label: 'FAST plotter', icon: 'zap', to: '/d1-fast-dashboard' },
+			{ label: 'Process map', icon: 'workflow', to: '/map' },
 		],
 	},
 	{
@@ -99,7 +100,7 @@ export const NAV_GROUPS: NavGroup[] = [
 		collapsible: false,
 		links: [
 			{ label: 'Data Studio', icon: 'database', to: '/content' },
-			{ label: 'Force Crawler', icon: 'radar', to: '/d1-force-crawler', adminOnly: true },
+			{ label: 'Force Crawler', icon: 'radar', to: '/crawler', adminOnly: true },
 		],
 	},
 ];

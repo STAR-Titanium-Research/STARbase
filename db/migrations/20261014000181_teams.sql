@@ -1,6 +1,6 @@
 -- migrate:up
 -- Teams (People 2, Task 1; spec docs/superpowers/specs/2026-10-14-people-and-teams-design.md sections 2.1 and 2.5).
--- A team is a named group of people that a record's owner can give access to as one entry (the grants arrive with migration 176).
+-- A team is a named group of people that a record's owner can give access to as one entry (the grants arrive with migration 182).
 -- This migration is the groundwork: the three tables, the rule that a team keeps a manager, the history of who joined and left,
 -- and the Directus registration.
 --
@@ -8,7 +8,7 @@
 --   * team_members   a person in a team, with a manager flag; a surrogate key (Directus wants one primary-key field) and a person is in a team once (unique team, person);
 --   * team_events    the history of a team: created, renamed, members added, removed, made or unmade manager. The kinds that
 --                    only the sharing code writes (shared, unshared, approved, declined, trust_set, trust_unset) are allowed now so that
---                    migration 176 does not have to change the check.
+--                    migration 182 does not have to change the check.
 --
 -- A team with at least one member must have at least one manager. The check is a deferred constraint trigger, so it runs at COMMIT:
 -- a team can be created and its first manager added in one transaction, and a manager can be swapped for another in one transaction,
@@ -76,7 +76,7 @@ CREATE TABLE team_events (
 );
 CREATE INDEX team_events_team_idx ON team_events (team_id, event_id);
 
-COMMENT ON TABLE teams IS 'A named group of people that a record''s owner can give access to as one entry (migration 176 adds the grants). Written through the teams endpoint; audited. Deleting a team deletes its members and its history.';
+COMMENT ON TABLE teams IS 'A named group of people that a record''s owner can give access to as one entry (migration 182 adds the grants). Written through the teams endpoint; audited. Deleting a team deletes its members and its history.';
 COMMENT ON COLUMN teams.team_id IS 'Surrogate key of the team.';
 COMMENT ON COLUMN teams.name IS 'The team''s name. Unique ignoring case and surrounding blanks (teams_name_key); never blank.';
 COMMENT ON COLUMN teams.description IS 'What the team is for; optional.';
@@ -94,7 +94,7 @@ COMMENT ON COLUMN team_members.is_manager IS 'True for a team manager: can add a
 COMMENT ON COLUMN team_members.joined_at IS 'When the person joined the team.';
 COMMENT ON INDEX team_members_person_idx IS 'Finds the teams of one person.';
 
-COMMENT ON TABLE team_events IS 'The history of a team, in order of event_id. Written by the triggers on teams and team_members (created, renamed, member_added, member_removed, manager_set, manager_unset) and by the sharing code of migration 176 (shared, unshared, approved, declined, trust_set, trust_unset). Not audited itself. Deleted with the team.';
+COMMENT ON TABLE team_events IS 'The history of a team, in order of event_id. Written by the triggers on teams and team_members (created, renamed, member_added, member_removed, manager_set, manager_unset) and by the sharing code of migration 182 (shared, unshared, approved, declined, trust_set, trust_unset). Not audited itself. Deleted with the team.';
 COMMENT ON COLUMN team_events.event_id IS 'Order of the events (identity).';
 COMMENT ON COLUMN team_events.team_id IS 'The team the event belongs to (teams.team_id). Deleted with it.';
 COMMENT ON COLUMN team_events.at IS 'When it happened.';
@@ -117,7 +117,7 @@ AS $$
      WHERE pe.user_id::text = lower(nullif(btrim(current_setting('d1.actor_identity', true)), ''))
      LIMIT 1
 $$;
-COMMENT ON FUNCTION d1_private.team_actor_person() IS 'The person whose login is the current actor (the transaction setting d1.actor_identity, set by the actor-identity hook), or NULL when it is unset, is not a user id or matches no person. Used by the team history triggers. Migration 175.';
+COMMENT ON FUNCTION d1_private.team_actor_person() IS 'The person whose login is the current actor (the transaction setting d1.actor_identity, set by the actor-identity hook), or NULL when it is unset, is not a user id or matches no person. Used by the team history triggers. Migration 181.';
 
 -- A team that has members must have a manager. Deferred, so it is judged at commit on the final state.
 CREATE OR REPLACE FUNCTION d1_private.team_has_manager()
@@ -156,7 +156,7 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.team_has_manager() IS 'Deferred constraint trigger function of team_members (INITIALLY DEFERRED, so judged at COMMIT; it first locks the team row FOR NO KEY UPDATE so two transactions removing different managers are checked one after the other; the old and new team of a moved member are locked in team_id order): a team with at least one member and no manager raises check_violation (23514) "A team must keep at least one manager". A team with no members passes. Raises feature_not_supported (0A000) outside READ COMMITTED, where the lock would not make the check see a concurrent commit. Migration 175.';
+COMMENT ON FUNCTION d1_private.team_has_manager() IS 'Deferred constraint trigger function of team_members (INITIALLY DEFERRED, so judged at COMMIT; it first locks the team row FOR NO KEY UPDATE so two transactions removing different managers are checked one after the other; the old and new team of a moved member are locked in team_id order): a team with at least one member and no manager raises check_violation (23514) "A team must keep at least one manager". A team with no members passes. Raises feature_not_supported (0A000) outside READ COMMITTED, where the lock would not make the check see a concurrent commit. Migration 181.';
 
 CREATE OR REPLACE FUNCTION d1_private.teams_history()
 RETURNS trigger
@@ -174,7 +174,7 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.teams_history() IS 'History trigger function of teams: an insert logs created {name}, a name change logs renamed {from, to}. The actor comes from d1.actor_identity (d1_private.team_actor_person). Migration 175.';
+COMMENT ON FUNCTION d1_private.teams_history() IS 'History trigger function of teams: an insert logs created {name}, a name change logs renamed {from, to}. The actor comes from d1.actor_identity (d1_private.team_actor_person). Migration 181.';
 
 CREATE OR REPLACE FUNCTION d1_private.team_members_history()
 RETURNS trigger
@@ -200,7 +200,7 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.team_members_history() IS 'History trigger function of team_members: an insert logs member_added {is_manager}, a delete logs member_removed {was_manager} (nothing when the team itself is being deleted; person_id is NULL when the person is being deleted too), an is_manager change logs manager_set or manager_unset. The actor comes from d1.actor_identity. Migration 175.';
+COMMENT ON FUNCTION d1_private.team_members_history() IS 'History trigger function of team_members: an insert logs member_added {is_manager}, a delete logs member_removed {was_manager} (nothing when the team itself is being deleted; person_id is NULL when the person is being deleted too), an is_manager change logs manager_set or manager_unset. The actor comes from d1.actor_identity. Migration 181.';
 
 -- Nobody calls these directly: they run as triggers.
 REVOKE ALL ON FUNCTION d1_private.team_actor_person() FROM PUBLIC;

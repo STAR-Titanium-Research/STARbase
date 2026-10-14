@@ -60,7 +60,7 @@ Click a sample on **Home** (recent activity) or in a dashboard and it opens as a
 - **Life of the sample** is a left-to-right strip: raw stock, parents, this sample, its operations
   and tests by date, and its children. Everything in it is a link. Records you are not allowed to
   read are not shown, only counted as "N not visible to you". On a narrow window the strip
-  becomes a vertical list. **Open lineage graph** opens the Lab Dashboard graph centred on the sample.
+  becomes a vertical list. The **Process map** button in the rail opens the Process map (STARbase `/map`) on the sample.
 - **Operations** and **Tests** are tables with status badges. Machining operations have **View
   forces** and FAST runs **View FAST**.
 - **Files** lists the linked data files, with buttons to copy their path on the group share.

@@ -6,7 +6,7 @@
 #   2. the mutation matrix: one case per row of the spec's trigger-coverage table (rows 1 to 51) and every mutation class of
 #      section 10. Each case mutates, asserts d1_private.readers_drift() is EMPTY FOR ALL RECORDS (not only the touched ones), asserts at
 #      least one explicit effect, reverses the mutation and asserts both again. Cases run in a subtransaction that is rolled back.
-#      The c_team_* cases (migration 176) do the same for team grants: grant, join, leave, trust and a deleted team;
+#      The c_team_* cases (migration 182) do the same for team grants: grant, join, leave, trust and a deleted team;
 #   3. the multi-form cases that need their own transaction or session: COPY, a 1000-row insert, the importer's ON CONFLICT DO UPDATE,
 #      TRUNCATE of every input table, a disabled trigger (detected by readers_drift, repaired by readers_rebuild), REPEATABLE READ (raises);
 #   4. the concurrency cases (two sessions, each in both commit orders): 0 (campaign_samples insert against restricting the campaign),
@@ -1090,7 +1090,7 @@ BEGIN
     PERFORM m.done();
 END $$;
 
--- team grants (migration 176): a grant on a record expands into derived <type>_access rows for the team's members, so the readers
+-- team grants (migration 182): a grant on a record expands into derived <type>_access rows for the team's members, so the readers
 -- triggers of the access tables keep the readers tables right through every team change (grant, join, leave, trust, team deleted)
 CREATE OR REPLACE FUNCTION m.mk_team(l text, mgr text, others text[] DEFAULT ARRAY[]::text[]) RETURNS uuid LANGUAGE plpgsql AS $$
 BEGIN

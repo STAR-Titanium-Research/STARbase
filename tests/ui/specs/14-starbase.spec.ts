@@ -1,6 +1,6 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { HOSTS_LAUNCH_ARGS, startHostsLayout } from '../starbase/hosts';
-import { D1_BASE, D1_LOCAL, MODE, STAR_BASE, adminApi, fillSignIn, firstId, pointAtD1, signInStarbase } from '../starbase/target';
+import { D1_BASE, D1_LOCAL, MODE, STAR_BASE, adminApi, fillSignIn, firstId, pointAtD1, signInStarbase, watchErrors } from '../starbase/target';
 
 // STARbase end to end (spec §5) on the d1-starbase preview, with STARbase served by `vite preview` under
 // its production CSP. How to run both layouts: tests/ui/README.md, spec 14.
@@ -19,20 +19,6 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
 	await layout?.close();
 });
-
-// What means STARbase broke: page errors, 5xx, a CSP refusal or any other console error. "Failed to load
-// resource" lines are 4xx reads the pages handle (a Lab Member's refused lists) and missing sidecars.
-function watchErrors(page: Page): string[] {
-	const errors: string[] = [];
-	page.on('pageerror', (e) => errors.push(String(e)));
-	page.on('response', (r) => {
-		if (r.status() >= 500) errors.push(`${r.status()} ${r.url()}`);
-	});
-	page.on('console', (m) => {
-		if (m.type() === 'error' && !/Failed to load resource|favicon/i.test(m.text())) errors.push(m.text());
-	});
-	return errors;
-}
 
 test('sign in on STARbase, and Data Studio is signed in too', async ({ page, context }) => {
 	const errors = watchErrors(page);

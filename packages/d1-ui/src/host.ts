@@ -43,7 +43,7 @@ export interface ExplorerHost {
 	isAdmin: Ref<boolean>;
 	// False until the server has answered (or failed to): while false, isAdmin may still be a guess.
 	adminKnown: Ref<boolean>;
-	user: Ref<{ id: string; first_name?: string; role?: string | null } | null>;
+	user: Ref<{ id: string; first_name?: string; last_name?: string; email?: string; role?: string | null } | null>;
 }
 
 export const EXPLORER_HOST: InjectionKey<ExplorerHost> = Symbol('ExplorerHost');

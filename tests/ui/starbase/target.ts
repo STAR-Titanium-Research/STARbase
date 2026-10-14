@@ -93,3 +93,17 @@ export async function firstId(api: APIRequestContext, collection: string, d1: st
 	expect(id, `${collection}: a record to use`).toBeTruthy();
 	return id!;
 }
+
+// What means STARbase broke: page errors, 5xx, a CSP refusal or any other console error. "Failed to load resource" lines
+// are 4xx reads the pages handle (a Lab Member's refused lists) and missing sidecars; `ignore` adds more patterns.
+export function watchErrors(page: Page, ignore: RegExp[] = []): string[] {
+	const errors: string[] = [];
+	page.on('pageerror', (e) => errors.push(String(e)));
+	page.on('response', (r) => {
+		if (r.status() >= 500) errors.push(`${r.status()} ${r.url()}`);
+	});
+	page.on('console', (m) => {
+		if (m.type() === 'error' && !/Failed to load resource|favicon/i.test(m.text()) && !ignore.some((r) => r.test(m.text()))) errors.push(m.text());
+	});
+	return errors;
+}

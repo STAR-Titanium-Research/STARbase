@@ -11,10 +11,12 @@ import { gotoCreateForm, selectM2O, selectDropdown, fieldByLabel } from '../help
  */
 test('machining operation → machine list shows only machining-capable equipment', async ({ page }, testInfo) => {
 	await gotoCreateForm(page, 'manufacturing_operations');
-	await selectM2O(page, 'Manufacturing Method', 'Machining (General)');
+	await selectM2O(page, 'Method', 'Machining (General)');
 	await page.waitForTimeout(1500); // method → process_category → picker query
 
 	const machine = fieldByLabel(page, 'Machine');
+	// the form is taller now (Field groups): bring the field into view first, the picker's v-select has no box of its own
+	await machine.scrollIntoViewIfNeeded();
 	await machine.locator('.v-select:not(.facility-select)').first().click();
 	await page.waitForTimeout(800);
 
@@ -37,6 +39,8 @@ test('SEM test → machine list shows the imaging (nde) instruments, not the lat
 	const machine = fieldByLabel(page, 'Machine');
 	// nde machines span several facilities → facility tier appears first; the
 	// machine tier is the last select.
+	// the form is taller now (Field groups): bring the field into view first, the picker's v-select has no box of its own
+	await machine.scrollIntoViewIfNeeded();
 	await machine.locator('.v-select:not(.facility-select)').first().click();
 	await page.waitForTimeout(800);
 

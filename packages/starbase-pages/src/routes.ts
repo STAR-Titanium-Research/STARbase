@@ -11,7 +11,10 @@ import OperationPage from './pages/OperationPage.vue';
 import TestPage from './pages/TestPage.vue';
 import LabelsPage from './pages/LabelsPage.vue';
 import SettingsPage from './pages/SettingsPage.vue';
+import ReportBugPage from './pages/ReportBugPage.vue';
+import CrawlerPage from './pages/CrawlerPage.vue';
 import IndexRoute from './pages/IndexRoute.vue';
+import ToolingPage from './pages/tooling/ToolingPage.vue';
 
 // Every STARbase page, relative to where the host mounts them: the Directus module at /home, the
 // standalone app at /. The catch-all index route stays last (vue-router ranks static paths first anyway).
@@ -26,8 +29,17 @@ export const starbaseRoutes: RouteRecordRaw[] = [
 	{ path: 'samples/:id', component: SamplePage, props: true },
 	{ path: 'operations/:id', component: OperationPage, props: true },
 	{ path: 'tests/:id', component: TestPage, props: true },
+	// One record for a tool box, a cutting insert and an insert edge: moving between them keeps the
+	// page (and the 3D stage's WebGL context) mounted. Before the catch-all so ':slug' never sees them.
+	{ path: ':kind(tool-boxes|inserts|edges)/:id', component: ToolingPage, props: true },
 	{ path: 'labels', component: LabelsPage },
 	{ path: 'settings', component: SettingsPage },
+	// No /home form (links.ts LOCAL_PAGES): written as '/report-bug' and '/crawler' in the nav, in both hosts.
+	{ path: 'report-bug', component: ReportBugPage },
+	// Admins only: the page checks (CrawlerPage), and the nav entry is adminOnly too.
+	{ path: 'crawler', component: CrawlerPage },
+	// The Process map: lazy, so Vue Flow and ELK load only when someone opens it. No /home form (links.ts LOCAL_PAGES).
+	{ path: 'map', component: () => import('./pages/map/ProcessMapPage.vue') },
 	// After every static route: one list page per collection.
 	{ path: ':slug', component: IndexRoute, props: true },
 ];

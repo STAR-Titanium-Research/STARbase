@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Teams (People 2, Task 1, migration 20261014000175): the teams, team_members and team_events tables, the "a team keeps a manager" deferred
-# constraint, the history triggers and the Directus registration. Team grants (Task 2, migration 20261014000176): a grant on a record expands
+# Teams (People 2, Task 1, migration 20261014000181): the teams, team_members and team_events tables, the "a team keeps a manager" deferred
+# constraint, the history triggers and the Directus registration. Team grants (Task 2, migration 20261014000182): a grant on a record expands
 # into derived <type>_access rows for the team's members, joiners wait as pending rows unless the grant trusts new members, the guard on the
 # derived rows, team_decide, team_pending_actionable (Ruling D2), team_drift, and the people-admin functions' team sources.
 # Most cases run in BEGIN ... ROLLBACK on a COPY of the migrated database
@@ -359,7 +359,7 @@ COMMIT;
 SQL
 
 # ------------------------------------------------------------------------------------------------------------------------------
-# Team grants (migration 176). The shared fixture: an owner O, members A (manager) and B of team T, two more people C and D outside
+# Team grants (migration 182). The shared fixture: an owner O, members A (manager) and B of team T, two more people C and D outside
 # the team, every one with a login; a sample S owned by O and a Restricted sample R owned by O. The ids are in the temp table tf, read
 # with pg_temp.tf(kind); pg_temp.rd(login, sample) says whether the login is in sample_readers for the sample.
 # ------------------------------------------------------------------------------------------------------------------------------
