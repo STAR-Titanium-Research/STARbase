@@ -25,6 +25,8 @@ export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
 export { humanise, statusStyle, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
 export type { Tone } from './status';
+export { CHOICES, choiceKindFor, choiceLabel } from './choiceLabels';
+export type { Choice, ChoiceKind } from './choiceLabels';
 export { estimateMassGrams } from './mass';
 export { buildLife, chipText, chipTitle, daySummary, groupLife, truncatedNotes } from './life';
 export { fitSplit, splitSummary } from './lifeSplit';

@@ -48,6 +48,18 @@ STARbase lives. Everything printed or linked from the database side uses one, so
 never breaks it.
 _Avoid_: permalink, QR link, deep link
 
+### Records and forms
+
+**Sample**:
+A physical piece of material the lab makes, cuts or tests. The rows Data Studio lists as items are
+Samples, except the rig kit stored with them (see Flagged ambiguities).
+_Avoid_: Item, physical sample, workpiece (except as the input of an Operation)
+
+**Field group**:
+A headed block of fields inside a Data Studio form, such as "Geometry" or "Who & where". Some are
+folded away until opened ("Related records", "Legacy / system").
+_Avoid_: section (the sidebar's word), panel, part
+
 ### Navigation
 
 **Page**:
@@ -101,3 +113,6 @@ _Avoid_: Resources, lookups, master data, Kit
   section is **More**.
 - Pins on Home ("Frequently used") and pins in the sidebar were heading towards two different ideas.
   Resolved: one **pin**.
+- "Item" and "Sample" were both used for the same records, whose Item Type also allowed Equipment and
+  Miscellaneous; the 16 Equipment rows are rig kit (dyno, cases, hand tools). Resolved: the record is a
+  **Sample**. The rig kit belongs in **Inventory**; that move is not made yet.

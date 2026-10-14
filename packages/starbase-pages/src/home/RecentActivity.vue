@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { useExplorerHost, AppLink, Section, analysisLink, collectionRoute, errorText, hasPassCode, operationLabel, recordRoute } from '@d1/ui';
+import { useExplorerHost, AppLink, Section, analysisLink, choiceLabel, collectionRoute, errorText, hasPassCode, operationLabel, recordRoute } from '@d1/ui';
 import { KIND_ICON, detailLine, mergeActivity, relativeTime, type Activity } from './activity';
 
 // Recent activity: samples, operations and tests merged into one feed, each tagged with its kind,
@@ -23,7 +23,7 @@ const SOURCES: { label: string; read: () => Promise<Activity[]> }[] = [
 			});
 			return (res.data.data ?? []).map((r: any) => ({
 				kind: 'sample' as const, id: r.sample_id, code: r.sample_code,
-				meta: r.material_id?.common_name || r.form || '—', date: r.created_at,
+				meta: r.material_id?.common_name || choiceLabel('geometry', r.form) || '—', date: r.created_at,
 				to: recordRoute('physical_samples', r.sample_id),
 			}));
 		},

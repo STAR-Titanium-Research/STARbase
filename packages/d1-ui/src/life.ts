@@ -7,6 +7,7 @@
 // (a count would tell a reader how many records they cannot see, which for a Restricted record is information); this file
 // accepts a number as well, so it works against an older d1-trace.
 
+import { choiceLabel } from './choiceLabels';
 import { formatDate } from './format';
 import { hasPassCode, operationLabel } from './operationLabel';
 import { recordRoute } from './recordRoute';
@@ -121,7 +122,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 			kind: 'ancestor',
 			label: a.sample_code || 'Sample',
 			isCode: !!a.sample_code,
-			sub: join([a.form, relation(a)]),
+			sub: join([choiceLabel('geometry', a.form), relation(a)]),
 			date: null,
 			to: recordRoute('physical_samples', a.sample_id),
 			throughHidden: a.through_hidden,
@@ -133,7 +134,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 		kind: 'self',
 		label: trace.sample.sample_code ?? 'This sample',
 		isCode: !!trace.sample.sample_code,
-		sub: trace.sample.form ?? '',
+		sub: choiceLabel('geometry', trace.sample.form),
 		date: null,
 		to: null,
 		throughHidden: false,
@@ -163,7 +164,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 			kind: 'descendant',
 			label: d.sample_code || 'Sample',
 			isCode: !!d.sample_code,
-			sub: join([d.form, relation(d)]),
+			sub: join([choiceLabel('geometry', d.form), relation(d)]),
 			date: null,
 			to: recordRoute('physical_samples', d.sample_id),
 			throughHidden: d.through_hidden,

@@ -15,7 +15,7 @@ describe('buildLife', () => {
 	it('is just this sample when nothing is related', () => {
 		const items = buildLife(base());
 		expect(items).toHaveLength(1);
-		expect(items[0]).toMatchObject({ kind: 'self', label: '12-AA-FAST', sub: 'disc', to: null });
+		expect(items[0]).toMatchObject({ kind: 'self', label: '12-AA-FAST', sub: 'Disc', to: null });
 	});
 
 	it('orders stock, ancestors (oldest first), self, events, descendants (nearest first)', () => {
@@ -79,7 +79,7 @@ describe('buildLife', () => {
 			{ type: 'test_session', collection: 'test_sessions', id: 't1', date: null, label: 'tensile', sequence: null, status: 'failed' },
 		];
 		const subs = buildLife(t).map((i) => i.sub);
-		expect(subs).toEqual(['powder · Acme · 4.5 g used · via A1', 'bar · cut from, fraction 0.5', 'disc', '#3', 'failed']);
+		expect(subs).toEqual(['powder · Acme · 4.5 g used · via A1', 'Bar · cut from, fraction 0.5', 'Disc', '#3', 'failed']);
 	});
 
 	it('puts a "some records hidden" marker next to each hidden group, never in the middle of another', () => {

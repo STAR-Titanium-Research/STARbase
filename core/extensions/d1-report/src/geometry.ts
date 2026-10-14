@@ -3,7 +3,7 @@
 // Draws a scaled 3-D (isometric, z-up) view of a specimen from its real dimensions,
 // with dimension markers like a technical drawing. The shape stretches with the
 // measurements (a long thin plate looks long and thin), and standard test coupons
-// (ASTM E8 tensile, bend bar) start from standard dimensions that stay editable.
+// (tensile, bend bar) can be filled from a named standard (PRESETS) that stays editable.
 
 export interface Dims {
 	form: string | null;
@@ -16,12 +16,76 @@ export interface Dims {
 	gauge_width_mm?: number | null;
 }
 
-// Standard presets. Tensile = ASTM E8/E8M sheet-type (12.5 mm wide reduced section,
-// 50 mm gauge, 200 mm long, 20 mm grip). Bend/fatigue = a plain rectangular bar.
-export const PRESETS: Record<string, Partial<Dims>> = {
-	tensile_coupon: { length_mm: 200, width_mm: 20, thickness_mm: 3, gauge_length_mm: 50, gauge_width_mm: 12.5 },
-	bend_bar: { length_mm: 100, width_mm: 15, thickness_mm: 10 },
+// Standard presets: named dimension sets for the forms that have a standard (decision 15 of
+// docs/superpowers/plans/2026-10-14-form-layout.md). Picking one fills the dimension fields, which then stay
+// editable. Thickness is not preset (it is the one dimension that differs from piece to piece), except for the
+// Charpy specimen, whose sub-size variants are defined by it. The values are to be checked against the
+// standards by the maintainer; the ASTM E466 and ISO 1099 fatigue ones are TYPICAL values, since those
+// standards give ranges, not one specimen.
+export type DimKey = 'diameter_mm' | 'inner_diameter_mm' | 'length_mm' | 'width_mm' | 'thickness_mm' | 'gauge_length_mm' | 'gauge_width_mm';
+
+export interface Preset {
+	id: string;
+	text: string;
+	// Only the dimensions the standard fixes; thickness_mm only for the Charpy specimen.
+	dims: Partial<Record<DimKey, number>>;
+	// false: `text` already names the size, so the picker does not append the dimensions.
+	showDims?: boolean;
+}
+
+export const PRESETS: Record<string, Preset[]> = {
+	tensile_coupon: [
+		{ id: 'astm_e8_sheet', text: 'ASTM E8/E8M sheet', dims: { gauge_length_mm: 50, gauge_width_mm: 12.5, length_mm: 200, width_mm: 20 } },
+		{ id: 'astm_e8_subsize', text: 'ASTM E8/E8M subsize', dims: { gauge_length_mm: 25, gauge_width_mm: 6, length_mm: 100, width_mm: 10 } },
+		{ id: 'iso_6892_1_type1', text: 'ISO 6892-1 type 1', dims: { gauge_length_mm: 50, gauge_width_mm: 12.5, length_mm: 200, width_mm: 20 } },
+		{ id: 'iso_6892_1_type2', text: 'ISO 6892-1 type 2', dims: { gauge_length_mm: 80, gauge_width_mm: 20, length_mm: 250, width_mm: 30 } },
+	],
+	// Typical flat fatigue specimens (the standards give ranges); thickness is left to the user.
+	fatigue_specimen: [
+		{ id: 'astm_e466_flat', text: 'ASTM E466 flat (typical)', dims: { gauge_length_mm: 25, gauge_width_mm: 10, length_mm: 100, width_mm: 20 } },
+		{ id: 'iso_1099_flat', text: 'ISO 1099 flat (typical)', dims: { gauge_length_mm: 30, gauge_width_mm: 12, length_mm: 120, width_mm: 25 } },
+	],
+	bend_bar: [
+		{ id: 'plain_bar', text: 'Plain bar', dims: { length_mm: 100, width_mm: 15 } },
+	],
+	// ISO 148-1: 55 mm long, 10 mm wide; the sub-size specimens differ in thickness, so it IS preset here.
+	charpy_specimen: [
+		{ id: 'full_size', text: 'Full size 55 × 10 × 10', dims: { length_mm: 55, width_mm: 10, thickness_mm: 10 }, showDims: false },
+		{ id: 'sub_7_5', text: 'Sub-size 7.5 (55 × 10 × 7.5)', dims: { length_mm: 55, width_mm: 10, thickness_mm: 7.5 }, showDims: false },
+		{ id: 'sub_5', text: 'Sub-size 5 (55 × 10 × 5)', dims: { length_mm: 55, width_mm: 10, thickness_mm: 5 }, showDims: false },
+		{ id: 'sub_2_5', text: 'Sub-size 2.5 (55 × 10 × 2.5)', dims: { length_mm: 55, width_mm: 10, thickness_mm: 2.5 }, showDims: false },
+	],
 };
+
+export function presetsFor(form: string | null | undefined): Preset[] {
+	return PRESETS[(form || '').toLowerCase()] ?? [];
+}
+
+// The dimensions a preset fills (a copy), or null when the form has no such preset.
+export function presetDims(form: string | null | undefined, id: string): Partial<Record<DimKey, number>> | null {
+	const p = presetsFor(form).find((x) => x.id === id);
+	return p ? { ...p.dims } : null;
+}
+
+const PRESET_SHORT: Partial<Record<DimKey, string>> = { length_mm: 'L', width_mm: 'W', gauge_length_mm: 'G', gauge_width_mm: 'Wg' };
+
+// What the picker shows: "ASTM E8/E8M sheet (L 200, W 20, G 50, Wg 12.5 mm)".
+export function presetLabel(p: Preset): string {
+	if (p.showDims === false) return p.text;
+	const keys: DimKey[] = ['length_mm', 'width_mm', 'gauge_length_mm', 'gauge_width_mm'];
+	const parts = keys.filter((k) => p.dims[k] != null).map((k) => `${PRESET_SHORT[k]} ${p.dims[k]}`);
+	return parts.length ? `${p.text} (${parts.join(', ')} mm)` : p.text;
+}
+
+// The preset whose dimensions all equal the current values (numbers or numeric strings), else null:
+// the picker shows the standard the record already matches, and "Custom" once a dimension is edited.
+export function matchingPreset(form: string | null | undefined, values: Record<string, unknown>): string | null {
+	for (const p of presetsFor(form)) {
+		const keys = Object.keys(p.dims) as DimKey[];
+		if (keys.every((k) => Number(values[k]) === p.dims[k] && values[k] !== null && values[k] !== '')) return p.id;
+	}
+	return null;
+}
 
 // Which dimension inputs are relevant per form.
 export const FORM_FIELDS: Record<string, string[]> = {
@@ -34,7 +98,9 @@ export const FORM_FIELDS: Record<string, string[]> = {
 	block: ['width_mm', 'length_mm', 'thickness_mm'],
 	plate: ['width_mm', 'length_mm', 'thickness_mm'],
 	tensile_coupon: ['length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm'],
+	fatigue_specimen: ['length_mm', 'width_mm', 'thickness_mm', 'gauge_length_mm', 'gauge_width_mm'],
 	bend_bar: ['length_mm', 'width_mm', 'thickness_mm'],
+	charpy_specimen: ['length_mm', 'width_mm', 'thickness_mm'],
 	powder: [],
 	other: [],
 };
@@ -53,9 +119,11 @@ export const FORMS = [
 	{ text: 'Plate', value: 'plate' },
 	{ text: 'Bar', value: 'bar' },
 	{ text: 'Round bar', value: 'round_bar' },
-	{ text: 'Tensile coupon (ASTM E8)', value: 'tensile_coupon' },
-	{ text: 'Bend / fatigue bar', value: 'bend_bar' },
-	{ text: 'Powder / compact', value: 'powder' },
+	{ text: 'Tensile coupon (ISO 6892)', value: 'tensile_coupon' },
+	{ text: 'Fatigue specimen', value: 'fatigue_specimen' },
+	{ text: 'Bend bar (ISO 7438)', value: 'bend_bar' },
+	{ text: 'Charpy specimen (ISO 148-1)', value: 'charpy_specimen' },
+	{ text: 'Powder / Compact', value: 'powder' },
 	{ text: 'Other', value: 'other' },
 ];
 
@@ -339,7 +407,7 @@ function couponSvg(L: number, W: number, T: number, Lg: number, Wg: number): str
 	return svgWrap(walls.map((w) => faceSvg(w, to)).join('') + faceSvg(top, to) + drawDims(dims, to, sink), sink);
 }
 
-// Bend / fatigue bar: a long box with two supports and a central load arrow (3-pt).
+// Bend bar: a long box with two supports and a central load arrow (3-pt).
 function bendSvg(L: number, W: number, H: number): string {
 	const off = 0.16 * Math.max(L, W, H);
 	const { faces, dims } = boxFacesDims(W, L, H, off);
@@ -356,6 +424,20 @@ function bendSvg(L: number, W: number, H: number): string {
 	markers += `<line x1="${f1(c[0])}" y1="${f1(c[1] - 22)}" x2="${f1(c[0])}" y2="${f1(c[1] - 2)}" class="gload" marker-end="url(#gar)"/>`;
 	sink.push([c[0], c[1] - 24]);
 	return svgWrap(faces.map((f) => faceSvg(f, to)).join('') + drawDims(dims, to, sink) + markers, sink);
+}
+
+// Charpy specimen: a bar with a V-notch groove across the top face at mid-length (the notch profile shows
+// on the near side face). Schematic: the notch is drawn a little wider than the 45 degree, 2 mm one so it reads.
+function charpySvg(L: number, W: number, H: number): string {
+	const off = 0.16 * Math.max(L, W, H);
+	const { faces, dims } = boxFacesDims(W, L, H, off);
+	const { to } = fitter(faces, dims, []);
+	const sink: P2[] = [];
+	const d = Math.min(2, H * 0.4), hw = d * 0.7, y0 = L / 2;
+	const poly = (pts: P3[]) => faceSvg({ pts, cls: 'gh' }, to);
+	const notch = poly([[0, y0 - hw, H], [W, y0 - hw, H], [W, y0 + hw, H], [0, y0 + hw, H]])
+		+ poly([[W, y0 - hw, H], [W, y0 + hw, H], [W, y0, H - d]]);
+	return svgWrap(faces.map((f) => faceSvg(f, to)).join('') + notch + drawDims(dims, to, sink), sink);
 }
 
 function powderSvg(): string {
@@ -389,12 +471,13 @@ function drawGeometry(d: Dims): string {
 	if (g.includes('disc')) return cylSvg(num(d.diameter_mm, 30), num(d.thickness_mm ?? d.length_mm, 8));
 	if (isRoundBar(g)) return roundBarSvg(num(d.diameter_mm, 20), num(d.length_mm, 100));
 	if (isUprightCylinder(g)) return cylSvg(num(d.diameter_mm, 25), num(d.length_mm, 50));
-	if (g.includes('tensile') || g.includes('coupon')) {
+	if (g === 'fatigue_specimen' || g.includes('tensile') || g.includes('coupon')) {
 		const L = num(d.length_mm, 200), W = num(d.width_mm, 20), T = num(d.thickness_mm, 3);
 		const Lg = Math.min(num(d.gauge_length_mm, 50), L * 0.9);
 		const Wg = Math.min(num(d.gauge_width_mm, 12.5), W * 0.95);
 		return couponSvg(L, W, T, Lg, Wg);
 	}
+	if (g === 'charpy_specimen') return charpySvg(num(d.length_mm, 55), num(d.width_mm, 10), num(d.thickness_mm, 10));
 	if (g.includes('bend')) return bendSvg(num(d.length_mm, 100), num(d.width_mm, 15), num(d.thickness_mm, 10));
 	// block / plate / bar → box
 	return boxSvg(num(d.width_mm, 24), num(d.length_mm, 40), num(d.thickness_mm, g.includes('plate') ? 5 : 20));

@@ -2,6 +2,8 @@
 // options, and the one rule the URL needs beyond indexQuery.ts (a saved view's own search fills the
 // search box when the URL has none). No Vue and no network, so it is all unit-tested.
 
+import { choiceKindFor, choiceLabel } from '../choiceLabels';
+import type { ChoiceKind } from '../choiceLabels';
 import { formatDate, formatNumber } from '../format';
 import { operationLabel } from '../operationLabel';
 import type { Bookmark } from '../nav/navConfig';
@@ -49,6 +51,8 @@ export function cellText(row: Row, col: ColumnDef, def: IndexDef): string {
 		return operationLabel(row as Parameters<typeof operationLabel>[0]);
 	}
 	if (value === null || value === undefined || value === '') return '';
+	const choice = choiceKindFor(def.collection, col.field);
+	if (choice) return choiceLabel(choice, value);
 	switch (col.format) {
 		case 'date':
 			return formatDate(String(value));
@@ -189,7 +193,8 @@ export function enumOptionParams(field: string): Record<string, unknown> {
 }
 
 // Distinct non-empty values from the groupBy rows, A-Z.
-export function enumOptions(rows: unknown, field: string): ChipOption[] {
+// `kind`: the column is one of the four coded dropdowns (choiceKindFor), so its chips read the label, not the code.
+export function enumOptions(rows: unknown, field: string, kind: ChoiceKind | null = null): ChipOption[] {
 	const list = Array.isArray(rows) ? rows : [];
 	const seen = new Set<string>();
 	for (const r of list) {
@@ -198,7 +203,8 @@ export function enumOptions(rows: unknown, field: string): ChipOption[] {
 		if (v === null || v === undefined || v === '') continue;
 		seen.add(String(v));
 	}
-	return [...seen].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).map((v) => ({ value: v, label: v }));
+	return [...seen].map((v) => ({ value: v, label: kind ? choiceLabel(kind, v) : v }))
+		.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 }
 
 export const BOOL_OPTIONS: ChipOption[] = [
