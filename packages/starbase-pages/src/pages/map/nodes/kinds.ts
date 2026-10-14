@@ -3,7 +3,7 @@
 // Colours are the `--k-*` custom properties of mapTokens.css; stock lots and powder batches share the
 // material colour because their wires carry stock.
 
-import type { Kind, LineageRow } from '../model/types';
+import type { Kind, LineageRow, Ref } from '../model/types';
 import './mapTokens.css';
 import './nodes.css';
 
@@ -62,6 +62,8 @@ const BY_COLLECTION: Record<string, Kind> = {
 	fast_recipes: 'recipe',
 	prep_recipes: 'recipe',
 	directus_files: 'data_file',
+	// Force data is a file path on the operation, with no record of its own: drawn as a data file.
+	force_file: 'data_file',
 	people: 'person',
 	directus_users: 'person',
 	campaigns: 'campaign',
@@ -70,3 +72,8 @@ const BY_COLLECTION: Record<string, Kind> = {
 	raw_stock_lots: 'stock_lot',
 };
 export const kindOfCollection = (collection: string): Kind | null => BY_COLLECTION[collection] ?? null;
+
+/** Collections whose records read better by name than by code in an Inside slot (a tool's code is a short hash, a campaign's a number). */
+const BY_NAME: ReadonlySet<string> = new Set(['tools', 'campaigns']);
+/** What an Inside slot shows for a record: its name for a tool or a campaign when it has one, else its code. */
+export const slotText = (r: Pick<Ref, 'collection' | 'code' | 'label'>): string => (BY_NAME.has(r.collection) && r.label ? r.label : r.code);

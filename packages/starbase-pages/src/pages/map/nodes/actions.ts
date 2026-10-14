@@ -13,6 +13,7 @@
 //   `hiddenSides` is which side of a node has records the person may not read (spec D21), from the
 //   graph's hidden markers; a node draws the "some records hidden" pill there.
 //   `socketLabel` names what a socket connects, for screen readers.
+//   `expanded` is which cards and tray records were opened with ＋: their button is − and calls `collapse`.
 //   A missing provide falls back to RIGHT / nothing open / nothing selected / nothing hidden.
 
 import { computed, inject, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue';
@@ -26,6 +27,10 @@ export interface MapActions {
 	hover(id: string | null, el?: HTMLElement): void;
 	toggleRows(id: string): void;
 	toggleMore(id: string): void;
+	/** − on a card or a record that ＋ opened: takes away what that ＋ added. */
+	collapse?(id: string): void;
+	/** "Unstack" on a stack of passes: draws each pass as its own card. */
+	unstack?(id: string): void;
 }
 
 export interface MapView {
@@ -35,6 +40,8 @@ export interface MapView {
 	hiddenSides?: Ref<ReadonlyMap<string, ReadonlySet<'in' | 'out'>>>;
 	/** What a socket connects, for its aria-label (spec D23): "Input: S-0412-A · Sample". The page builds it from the wires. */
 	socketLabel?: (socket: string, side: 'in' | 'out') => string;
+	/** Ids (node ids, and `<collection>:<id>` of records in a tray) whose ＋ is open: they draw − instead. */
+	expanded?: Ref<ReadonlySet<string>>;
 }
 
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');
@@ -84,13 +91,19 @@ export const activating = (fn: () => void) => (e: KeyEv) => {
 	fn();
 };
 
-/** A card (node): body click selects it, hover reports it, the ＋ button expands it. */
-export const cardHandlers = (a: MapActions, id: () => string) => ({
+/** A card (node): body click selects it, hover reports it, the ＋ button expands it (− collapses it once open). */
+export const cardHandlers = (a: MapActions, id: () => string, open: () => boolean = () => false) => ({
 	select: () => a.select(id()),
 	enter: (e: Pick<Ev, 'currentTarget'>) => a.hover(id(), e.currentTarget as HTMLElement),
 	leave: () => a.hover(null),
-	expand: stopping(() => a.expand(id())),
+	expand: stopping(() => (open() && a.collapse ? a.collapse(id()) : a.expand(id()))),
 });
+
+/** Whether the ＋ of card or record `id` is open (it draws −). */
+export function useExpanded(id: () => string): ComputedRef<boolean> {
+	const view = useMapView();
+	return computed(() => !!view.expanded?.value.has(id()));
+}
 
 /** A record shown inside a card (an Inside slot value): hover and click act on that record. */
 export const recordHandlers = (a: MapActions, r: () => Key) => ({

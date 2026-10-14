@@ -297,3 +297,45 @@ describe('groupBatches', () => {
     expect(multi(groupBatches(rows, [], { probable: true }))).toHaveLength(0);
   });
 });
+
+describe('groupBatches: stacks of passes on one sample', () => {
+  const day = (d: number) => `2026-09-${String(d).padStart(2, '0')}T09:00:00Z`;
+  const pass = (id: string, d: number, p: Partial<OpRow> = {}) =>
+    op({ id, sampleId: 's', outputSampleId: 's', methodId: 'turn', equipmentId: 'lathe', category: 'machining', date: day(d), ...p });
+  const stacks = (gs: Group[]) => gs.filter((g) => g.stack).map((g) => g.rowIds);
+  const opts = { probable: true, stack: true };
+
+  it('passes next to each other, same method and machine, in place, stack (output null counts as in place)', () => {
+    const rows = [pass('a', 1), pass('b', 2, { outputSampleId: null }), pass('c', 3)];
+    const gs = groupBatches(rows, [], opts);
+    expect(stacks(gs)).toEqual([['a', 'b', 'c']]);
+    expect(gs.find((g) => g.stack)).toMatchObject({ id: 'stack:a,b,c', kind: 'operation', batch: null, stack: true });
+    expect(gs).toHaveLength(1);
+  });
+
+  it('a test, a cut or another machine in between ends the stack', () => {
+    const t = test({ id: 'tt', subjectSampleIds: ['s'], date: day(3) });
+    expect(stacks(groupBatches([pass('a', 1), pass('b', 2), pass('c', 4), pass('d', 5)], [t], opts))).toEqual([['a', 'b'], ['c', 'd']]);
+    const cut = pass('x', 3, { outputSampleId: 'piece', methodId: 'cut' });
+    expect(stacks(groupBatches([pass('a', 1), pass('b', 2), cut, pass('c', 4)], [], opts))).toEqual([['a', 'b']]);
+    expect(stacks(groupBatches([pass('a', 1), pass('b', 2, { equipmentId: 'mill' }), pass('c', 3, { equipmentId: 'mill' })], [], opts))).toEqual([['b', 'c']]);
+  });
+
+  it('chain order is date, then sequence, then id: the same order buildGraph wires', () => {
+    const rows = [pass('b', 1, { sequence: 2 }), pass('a', 1, { sequence: 1 }), pass('z', 1, { sequence: 3, methodId: 'face' })];
+    expect(stacks(groupBatches(rows, [], opts))).toEqual([['a', 'b']]);
+  });
+
+  it('never stacks recorded batches, FAST runs, unstacked rows; nothing with stack off', () => {
+    const rows = [pass('a', 1), pass('b', 2), pass('c', 3, { batchId: 'B1' }), pass('d', 4), pass('e', 5, { sourceRunUid: 'r' }), pass('f', 6), pass('g', 7)];
+    expect(stacks(groupBatches(rows, [], opts))).toEqual([['a', 'b'], ['f', 'g']]);
+    expect(stacks(groupBatches(rows, [], { ...opts, unstacked: new Set(['g']) }))).toEqual([['a', 'b']]);
+    expect(stacks(groupBatches(rows, [], { probable: true }))).toEqual([]);
+  });
+
+  it('every row is still in exactly one group', () => {
+    const rows = [pass('a', 1), pass('b', 2), pass('c', 3, { sampleId: 'other', outputSampleId: 'other' }), pass('d', 4)];
+    const ids = groupBatches(rows, [], opts).flatMap((g) => g.rowIds).sort();
+    expect(ids).toEqual(['a', 'b', 'c', 'd']);
+  });
+});

@@ -1051,6 +1051,7 @@ describe('expanding a fan item keeps the rest of the list on the map', () => {
 
   it('a family that holds other passes of the same tool does not make them vanish', async () => {
     const { map } = await passes();
+    map.setStack(false); // each pass its own card (stacked, below)
     expect(map.shown.value.has('op:u3')).toBe(true);
     await map.expand('op:u0');
     await settle();
@@ -1058,8 +1059,20 @@ describe('expanding a fan item keeps the rest of the list on the map', () => {
     expect(containersOf(map).filter((c) => !c.collapsed).map((c) => c.id).sort()).toEqual(['op:u0', 'op:u1', 'op:u2', 'op:u3']);
   });
 
+  it("with Stack passes on, the family's passes are one stack card, and it stays", async () => {
+    const { map } = await passes();
+    await map.expand('op:u0');
+    await settle();
+    const full = containersOf(map).filter((c) => !c.collapsed);
+    expect(full.map((c) => c.id)).toEqual(['stack:u0,u1,u2,u3']);
+    expect(full[0].stacked).toBe(true);
+    expect(map.shown.value.has('stack:u0,u1,u2,u3')).toBe(true);
+    expect(map.shown.value.has('op:u4')).toBe(true);
+  });
+
   it('at the 300-card cap the card that was opened, and the others the family holds, stay', async () => {
     recordRef.mockResolvedValue(TOOL);
+    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ hidden: [], probable: true, stack: false }), setItem: () => undefined });
     usedIn.mockResolvedValue({ items: toolOps(20), total: 20 });
     const { map } = setup({ focus: 'tools:t1' });
     await settle();
@@ -1397,5 +1410,133 @@ describe('recorded batches (slice 2)', () => {
     await settle();
     const batches = containersOf(map).filter((c) => c.group.batch?.recorded);
     expect(batches.map((c) => c.title)).toEqual(['Batch', 'Batch']);
+  });
+});
+
+describe('＋ becomes −, and Reset (card tweaks)', () => {
+  const chain = () =>
+    mkData({
+      samples: ['a', 'b', 'c', 'd'].map((id) => mkSample(id)),
+      operations: [
+        mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'M' }),
+        mkOp({ id: 'o2', sampleId: 'b', outputSampleId: 'c', date: '2026-09-02T09:00:00Z', methodName: 'M' }),
+        mkOp({ id: 'o3', sampleId: 'c', outputSampleId: 'd', date: '2026-09-03T09:00:00Z', methodName: 'M' }),
+      ],
+    });
+
+  it('− on a card takes away the cards its ＋ showed, and the button is ＋ again', async () => {
+    family.mockResolvedValue(chain());
+    const { map } = setup({ focus: 'physical_samples:a', reach: '1' });
+    await settle();
+    expect(map.expandedIds.value.has('s:b')).toBe(false);
+    map.expand('s:b');
+    expect(map.shown.value.has('s:c')).toBe(true);
+    expect(map.expandedIds.value.has('s:b')).toBe(true);
+    map.collapse('s:b');
+    expect(map.shown.value.has('s:c')).toBe(false);
+    expect(map.shown.value.has('s:b')).toBe(true);
+    expect(map.expandedIds.value.has('s:b')).toBe(false);
+  });
+
+  it('a ＋ that showed nothing new stays ＋', async () => {
+    family.mockResolvedValue(chain());
+    const { map } = setup({ focus: 'physical_samples:a', reach: 'all' });
+    await settle();
+    map.expand('s:b');
+    expect(map.expandedIds.value.size).toBe(0);
+  });
+
+  it('− on a tray record takes its used-in fan off the map again; the container keeps its place', async () => {
+    const tool = { collection: 'tools', id: 't1', code: 'TL-1', label: 'Roughing insert holder' };
+    family.mockResolvedValue(
+      mkData({ samples: [mkSample('s1'), mkSample('s2')], operations: [mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: '2026-09-01T09:00:00Z', methodName: 'Cut', relations: { tool_id: tool } })] }),
+    );
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: toolOps(2), total: 2 });
+    await map.expand('tools:t1');
+    await settle();
+    expect(map.expandedIds.value.has('tools:t1')).toBe(true);
+    expect(idsOf(map)).toEqual(expect.arrayContaining(['f:tools:t1', 'op:u0', 'op:u1']));
+    map.collapse('tools:t1');
+    expect(idsOf(map)).not.toContain('f:tools:t1');
+    expect(idsOf(map)).not.toContain('op:u0');
+    expect(map.data.value?.sideFans ?? []).toEqual([]);
+    expect(map.shown.value.has('op:o1')).toBe(true);
+    // It can be opened again: the fan loads afresh.
+    await map.expand('tools:t1');
+    await settle();
+    expect(idsOf(map)).toContain('f:tools:t1');
+    expect(usedIn).toHaveBeenCalledTimes(2);
+  });
+
+  it('− on a fan item takes back the family it merged, and leaves another ＋ in place', async () => {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(3), total: 3 });
+    const { map } = setup({ focus: 'tools:t1' });
+    await settle();
+    family.mockResolvedValueOnce(familyOfX(0)).mockResolvedValueOnce(familyOfX(1));
+    await map.expand('op:u0');
+    await settle();
+    await map.expand('op:u1');
+    await settle();
+    expect(containersOf(map).find((c) => c.id === 'op:u0')?.collapsed).toBeUndefined();
+    expect(map.expandedIds.value.has('op:u0')).toBe(true);
+    map.collapse('op:u0');
+    expect(containersOf(map).find((c) => c.id === 'op:u0')?.collapsed).toBe(true);
+    expect(idsOf(map)).not.toContain('s:y0');
+    expect(containersOf(map).find((c) => c.id === 'op:u1')?.collapsed).toBeUndefined();
+    expect(idsOf(map)).toContain('s:y1');
+    expect(map.expandedIds.value.has('op:u1')).toBe(true);
+  });
+
+  it('Reset goes back to the map as loaded without asking the server again, and is a new layout', async () => {
+    family.mockResolvedValue(chain());
+    const { map } = setup({ focus: 'physical_samples:a', reach: '1' });
+    await settle();
+    const gen = map.generation.value;
+    map.expand('s:b');
+    map.toggleMore('op:o1');
+    expect(map.shown.value.has('s:c')).toBe(true);
+    map.reset();
+    expect(map.shown.value.has('s:c')).toBe(false);
+    expect(map.expandedIds.value.size).toBe(0);
+    expect(map.moreOpen.value.size).toBe(0);
+    expect(map.generation.value).toBe(gen + 1);
+    expect(family).toHaveBeenCalledTimes(1);
+  });
+
+  it('Unstack draws each pass as its own card; the Stack passes chip stacks them again', async () => {
+    const passes = ['a', 'b', 'c'].map((id, i) => mkOp({ id, sampleId: 's1', outputSampleId: 's1', methodId: 'turn', methodName: 'Turning', date: `2026-09-0${i + 1}T09:00:00Z` }));
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1')], operations: passes }));
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    expect(containersOf(map).map((c) => c.id)).toEqual(['stack:a,b,c']);
+    map.select('stack:a,b,c');
+    map.unstack('stack:a,b,c');
+    expect(containersOf(map).map((c) => c.id).sort()).toEqual(['op:a', 'op:b', 'op:c']);
+    expect(map.selectedId.value).toBe('op:a'); // the selection follows its row
+    map.setStack(false);
+    map.setStack(true);
+    expect(containersOf(map).map((c) => c.id)).toEqual(['stack:a,b,c']);
+  });
+
+  describe('the hover card of a container', () => {
+    beforeEach(() => void vi.useFakeTimers());
+    afterEach(() => void vi.useRealTimers());
+
+    it('a full container raises none (its card says it all); a long press still does', async () => {
+      family.mockResolvedValue(small());
+      const { map } = setup({ focus: 'physical_samples:s1' });
+      await vi.advanceTimersByTimeAsync(10);
+      const c = containersOf(map)[0];
+      map.hover(c.id, {} as HTMLElement);
+      await vi.advanceTimersByTimeAsync(HOVER_DELAY_MS + 10);
+      expect(map.card.value).toBeNull();
+      map.hover(null);
+      map.holdHover(c.id, {} as HTMLElement);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(map.card.value?.id).toBe(c.id);
+    });
   });
 });

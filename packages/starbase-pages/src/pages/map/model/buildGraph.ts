@@ -23,6 +23,8 @@ import type {
   TestRow,
   Wire,
 } from './types';
+import { dateText } from './dates';
+import { compareSteps, keyOf, type StepKey } from './stepOrder';
 import { keySettings, mergeSettings, mergeSlots } from './formSlots';
 import { isBundleSocket, nodeOfSocket } from './sockets';
 
@@ -81,31 +83,6 @@ interface Pending {
   carries: string | null;
   flow: Wire['flow'];
 }
-
-interface StepKey {
-  t: number;
-  seq: number;
-  id: string;
-}
-
-/** Sort key of one step: date, then sequence, then id (spec §5.2 rule 3). A missing date sorts last. */
-function timeOf(date: string | null): number {
-  if (!date) return Infinity;
-  const t = Date.parse(date);
-  return Number.isNaN(t) ? Infinity : t;
-}
-
-function compareSteps(a: StepKey, b: StepKey): number {
-  if (a.t !== b.t) return a.t < b.t ? -1 : 1;
-  if (a.seq !== b.seq) return a.seq < b.seq ? -1 : 1;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-const keyOf = (rec: OpRow | TestRow, sequence: number | null): StepKey => ({
-  t: timeOf(rec.date),
-  seq: sequence ?? Infinity,
-  id: rec.id,
-});
 
 function stockLotNode(lot: StockOrigin): RecordNode {
   const id = `lot:${lot.lotId}`;
@@ -232,7 +209,9 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
   for (const group of groups) {
     const rows = plannedByGroup.get(group.id) ?? [];
     const nodeId = group.id;
-    const folded = rows.length > maxRows && !opts.unfolded?.has(group.id);
+    // A stack is one sample passing through every row in turn: one row, one pair of sockets, never folded.
+    const stacked = !!group.stack && rows.length > 1;
+    const folded = !stacked && rows.length > maxRows && !opts.unfolded?.has(group.id);
     const bundledAt = (i: number) => folded && i >= SHOWN_WHEN_FOLDED;
 
     let nextIn = 0;
@@ -260,8 +239,9 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
         firstIn = bundledAt(i) ? `${nodeId}:in:b` : `${nodeId}:in:${nextIn++}`;
       }
 
-      const out = p.hasOut ? (bundledAt(i) ? `${nodeId}:out:b` : `${nodeId}:out:${i}`) : undefined;
+      const out = p.hasOut ? (bundledAt(i) ? `${nodeId}:out:b` : `${nodeId}:out:${stacked ? 0 : i}`) : undefined;
       placedByRecord.set(recKey(p.kind, p.rec.id), { nodeId, inSocket, out });
+      if (stacked && i > 0) return; // the passes after the first share its row
 
       const row: SampleRow = { recordId: p.rec.id };
       const sampleId = p.outSample ?? p.inSamples[0];
@@ -298,8 +278,9 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
     const method =
       first && group.kind === 'operation' ? (first as OpRow).methodName : (first as TestRow | undefined)?.testType;
     const base = method || (group.kind === 'operation' ? 'Operation' : 'Test');
-    const { title, code } = containerNames(group, base, first?.code ?? group.id);
+    const { title, code } = stacked ? { title: `${records.length} passes`, code: '' } : containerNames(group, base, first?.code ?? group.id);
     const statuses = new Set(records.map((r) => r.status));
+    const when = dateText(records.map((r) => r.date));
 
     containers.push({
       id: nodeId,
@@ -308,6 +289,9 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       group,
       title,
       code,
+      ...(method ? { method } : {}),
+      ...(when ? { when } : {}),
+      ...(stacked ? { stacked: true } : {}),
       status: statuses.size === 1 ? (first?.status ?? null) : undefined,
       category,
       rows: sampleRows,
@@ -500,6 +484,7 @@ function collapsedContainer(kind: 'operation' | 'test', row: OpRow | TestRow): C
     group: { id, kind, rowIds: [row.id], batch: null },
     title: (op ? op.methodName : test?.testType) || (kind === 'operation' ? 'Operation' : 'Test'),
     code: row.code,
+    ...((op ? op.methodName : test?.testType) ? { method: (op ? op.methodName : test?.testType)! } : {}),
     status: row.status,
     category: op ? op.category : 'test',
     rows: [{ recordId: row.id, in: `${id}:in:0` }],

@@ -163,3 +163,28 @@ describe('recordInfo: where Open record goes (I4)', () => {
     expect(openPath(recordInfo(d, lone, 'force_file:elsewhere.mat')!)).toBeNull();
   });
 });
+
+describe('recordInfo: tray records (card tweaks)', () => {
+  const forceFile = { collection: 'force_file', id: 'run3/cut.mat', code: 'cut.mat' };
+  const tool = { collection: 'tools', id: 'tl', code: '6576cc99', label: 'Roughing holder' };
+  const d = mkData({
+    samples: [mkSample('p'), mkSample('a')],
+    operations: [mkOp({ id: 'o1', code: 'OP-1', category: 'machining', sampleId: 'p', outputSampleId: 'a', relations: { force_file_id: forceFile, tool_id: tool } })],
+  });
+  const g = buildGraph(d, groupsOf(d, false), {
+    slots: () => [
+      { field: 'tool_id', role: 'Tool', ref: tool, major: true },
+      { field: 'force_file_id', role: 'Force data', ref: forceFile, major: true },
+    ],
+  });
+
+  it('Force data carries the data of its operation, so its hover card shows the Fz figure', () => {
+    expect(recordInfo(d, g, `force_file:${forceFile.id}`)!.dataOf).toEqual({ collection: 'manufacturing_operations', id: 'o1', code: 'OP-1' });
+    expect(recordInfo(d, g, 'tools:tl')!.dataOf).toBeNull();
+  });
+
+  it('a tool is named in the facts by its name, not its code', () => {
+    const op = g.nodes.find((n) => n.type === 'container')!;
+    expect(fact(recordInfo(d, g, op.id), 'Tool')).toBe('Roughing holder');
+  });
+});

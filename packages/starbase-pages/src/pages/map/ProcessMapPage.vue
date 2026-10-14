@@ -54,6 +54,8 @@ const actions: MapActions = {
 		if (id !== null && pointerKind.touch) return;
 		map.hover(id, el);
 	},
+	collapse: (id) => map.collapse(id),
+	unstack: (id) => map.unstack(id),
 	toggleRows: (id) => map.toggleRows(id),
 	toggleMore: (id) => {
 		map.toggleMore(id);
@@ -70,6 +72,7 @@ const view: MapView = {
 	selectedRef: map.selectedRefKey,
 	hiddenSides: map.hiddenSides,
 	socketLabel: (socket, side) => labelSocket.value(socket, side),
+	expanded: map.expandedIds,
 };
 provide(MAP_ACTIONS, actions);
 provide(MAP_VIEW, view);
@@ -144,13 +147,14 @@ const railProps = computed(() => ({
 	presentKinds: map.presentKinds.value,
 	hiddenKinds: map.hiddenKinds.value,
 	probable: map.probable.value,
+	stack: map.stack.value,
 	reach: map.reach.value,
 	drawnReach: map.effectiveReach.value,
 }));
 const railExpand = () => map.selectedId.value && actions.expand(map.selectedId.value);
 const railCentre = () => map.selectedId.value && map.select(map.selectedId.value, { centre: true });
 const setReach = (r: Reach) => map.setReach(r);
-const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setReach };
+const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, select: railSelect, toggleKind: map.toggleKind, setProbable: map.setProbable, setStack: map.setStack, setReach };
 
 // Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
@@ -185,7 +189,7 @@ onBeforeUnmount(() => {
 
 <template>
 	<ExplorerView :title="pageTitle">
-		<PageShell>
+		<PageShell wide>
 			<LoadState v-if="map.status.value === 'loading'" loading loading-text="Loading the Process map…" />
 
 			<NotVisible v-else-if="map.status.value === 'notVisible'" :what="focusWord.one" />
@@ -228,6 +232,7 @@ onBeforeUnmount(() => {
 							<SegmentedControl :model-value="map.dir.value" :options="DIRECTIONS" label="Direction" @update:model-value="map.setDir" />
 							<v-button small secondary @click="canvas.relayout()">Re-layout</v-button>
 							<v-button small secondary @click="canvas.fit()">Fit</v-button>
+							<v-button small secondary :disabled="!!map.expanding.value" @click="map.reset()">Reset</v-button>
 							<v-button small secondary @click="map.clearFocus()">Clear</v-button>
 						</template>
 
@@ -297,14 +302,15 @@ onBeforeUnmount(() => {
 .pm-empty h2 { margin: 0; font-size: var(--fs-xl, 18px); }
 .pm-empty p { margin: 0; color: var(--d1-dim, var(--theme--foreground-subdued)); }
 
-/* The canvas fills what is left of the window under the page header; the panel's body has no padding. */
+/* The canvas fills what is left of the window under the page header (the panel's head and the crumb line take
+   about 130 px); the panel's body has no padding. */
 .pm-panel :deep(.body) { padding: 0; }
 .pm-panel :deep(.head) { flex-wrap: wrap; }
 .pm-panel :deep(.head .spacer) { min-width: 0; }
 .pm-canvas {
 	position: relative;
-	height: clamp(420px, calc(100vh - var(--d1-header-offset, 72px) - 200px), 900px);
-	height: clamp(420px, calc(100dvh - var(--d1-header-offset, 72px) - 200px), 900px);
+	height: max(420px, calc(100vh - var(--d1-header-offset, 72px) - 130px));
+	height: max(420px, calc(100dvh - var(--d1-header-offset, 72px) - 130px));
 	background: var(--d1-surface, var(--theme--background));
 	transition: opacity 0.15s;
 }

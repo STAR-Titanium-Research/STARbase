@@ -81,6 +81,8 @@ function parseReach(v: string | undefined): Reach {
 interface Remembered {
   hidden: string[];
   probable: boolean;
+  /** The "Stack passes" chip. */
+  stack: boolean;
 }
 
 /** localStorage can be missing (node), blocked or full: every access is guarded and falls back to the defaults. */
@@ -91,12 +93,13 @@ function readRemembered(): Remembered {
       return {
         hidden: Array.isArray(parsed.hidden) ? parsed.hidden.filter((k: unknown): k is string => typeof k === 'string' && HIDEABLE.has(k)) : [],
         probable: parsed.probable !== false,
+        stack: parsed.stack !== false,
       };
     }
   } catch {
     /* no storage: defaults */
   }
-  return { hidden: [], probable: true };
+  return { hidden: [], probable: true, stack: true };
 }
 
 function writeRemembered(r: Remembered): void {
@@ -206,7 +209,11 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   function setReach(r: Reach): void {
     reach.value = r;
     // A fan has no reach, and the cards ＋ opened from a fan item (a side fan's) are not part of any reach: they stay.
-    if (!data.value?.fan && !data.value?.sideFans?.length) revealedKeys.value = new Set();
+    if (!data.value?.fan && !data.value?.sideFans?.length) {
+      revealedKeys.value = new Set();
+      // A ＋ that only showed cards has nothing left to take away; one that loaded something keeps its −.
+      opened.value = opened.value.filter((e) => e.change).map((e) => ({ ...e, revealed: [] }));
+    }
     // Whether the cap is what limits the map now, from what is drawn (kept cards may still fill it).
     capped.value = shown.value.size >= CARD_CAP;
     writeUrl({ reach: String(r) });
@@ -216,7 +223,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const remembered = readRemembered();
   const hiddenKinds = ref<ReadonlySet<string>>(new Set(remembered.hidden));
   const probable = ref(remembered.probable);
-  const remember = () => writeRemembered({ hidden: [...hiddenKinds.value], probable: probable.value });
+  const stack = ref(remembered.stack);
+  /** Operations the person took out of a stack with "Unstack"; the Stack passes chip, turned on again, stacks them again. */
+  const unstacked = ref<ReadonlySet<string>>(new Set());
+  const remember = () => writeRemembered({ hidden: [...hiddenKinds.value], probable: probable.value, stack: stack.value });
   function toggleKind(kind: string): void {
     if (!HIDEABLE.has(kind)) return;
     const next = new Set(hiddenKinds.value);
@@ -227,6 +237,17 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   function setProbable(on: boolean): void {
     probable.value = on;
     remember();
+  }
+  function setStack(on: boolean): void {
+    stack.value = on;
+    if (on) unstacked.value = new Set();
+    remember();
+  }
+  /** "Unstack" on a stack of passes: each pass becomes its own card again. */
+  function unstack(id: string): void {
+    const n = nodeById.value.get(id);
+    if (n?.type !== 'container' || !n.stacked) return;
+    unstacked.value = new Set([...unstacked.value, ...n.group.rowIds]);
   }
 
   // ---- what the page asks for ---------------------------------------------------------------------
@@ -252,6 +273,24 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const notice = ref('');
   /** Expands in flight. */
   const expanding = ref(0);
+  /** The data as the focus loaded it: Reset goes back to it, and − rebuilds from it. */
+  let initial: { data: ProcessData; families: Set<string>; fanPages: Map<string, number> } | null = null;
+  /**
+   * What each open ＋ did, in the order they were pressed: the cards it revealed (stable keys) and, when it loaded
+   * something, how it changed the data. − on its owner removes the entry; the data is the loaded data with the
+   * changes of the entries left, applied again in order (each change is pure, so that rebuilds it exactly).
+   */
+  interface Opened {
+    /** The keys of what was expanded: a card's stable keys, or a tray record's `<collection>:<id>`. */
+    owner: string[];
+    revealed: string[];
+    change?: (d: ProcessData) => ProcessData;
+    /** The fan this entry opened or paged (`<collection>:<id>`). */
+    fan?: string;
+    /** Samples whose family this entry loaded. */
+    families?: string[];
+  }
+  const opened = shallowRef<Opened[]>([]);
   const centreRequest = shallowRef<{ id: string; n: number } | null>(null);
 
   const hoverStack = createHoverStack();
@@ -338,6 +377,9 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     notice.value = '';
     familyLoaded = new Set();
     fanPages = new Map();
+    initial = null;
+    opened.value = [];
+    unstacked.value = new Set();
     opening.clear(); // a key of the old focus must not swallow a click
     paging.clear();
     selectedKey.value = null;
@@ -362,6 +404,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       data.value = loaded.data;
       if (plan === 'fan') fanPages.set(`${f.collection}:${f.id}`, 1);
       else familyLoaded = new Set(loaded.data.samples.map((s) => s.id));
+      initial = { data: loaded.data, families: new Set(familyLoaded), fanPages: new Map(fanPages) };
       // A step is selected by its own row, which any container holding it answers to (a probable batch's id changes with the chip).
       const fd = loaded.data.focus;
       selectedKey.value = fd.kind === 'operation' || fd.kind === 'test' ? `${fd.kind}:${fd.id}` : focusNodeId.value || null;
@@ -384,7 +427,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     const groups = groupBatches(
       d.operations.filter((o) => !collapsed.has(o.id)),
       d.tests.filter((t) => !collapsed.has(t.id)),
-      { probable: probable.value, batchCodes: d.batchCodes },
+      { probable: probable.value, batchCodes: d.batchCodes, stack: stack.value, unstacked: unstacked.value },
     );
     const unfolded = new Set(groups.filter((g) => keysOfGroup(g).some((k) => unfoldedKeys.value.has(k))).map((g) => g.id));
     return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded });
@@ -603,10 +646,23 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     }
   }
 
+  /** The keys an action id is remembered under: a card's stable keys (they outlive a regrouping), else the id itself. */
+  const keysOf = (id: string): string[] => {
+    const n = nodeById.value.get(id);
+    return n ? stableKeys(n) : [id];
+  };
+  /** Remembers what a ＋ did, so its − can take it away: the cards it revealed since `before`, and its change to the data. */
+  function keepOpened(owner: string[], before: ReadonlySet<string>, entry: Omit<Opened, 'owner' | 'revealed'> = {}): void {
+    const revealed = [...revealedKeys.value].filter((k) => !before.has(k));
+    if (!revealed.length && !entry.change) return; // nothing happened: the button stays ＋
+    opened.value = [...opened.value, { owner, revealed, ...entry }];
+  }
+
   /** The family of a sample merged into the map; the card that was expanded keeps its place (spec §6.7). */
   function openFamily(sampleId: string, opts: { node?: string; rowId?: string; from?: string }): Promise<void> {
     const mine = loadToken;
     const key = opts.from ?? opts.node ?? sampleId;
+    const owner = keysOf(key);
     if (opening.has(key)) return Promise.resolve(); // a second click while it loads
     opening.add(key);
     return (withBusy(async () => {
@@ -623,16 +679,19 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const anchor = opts.rowId ? next.nodes.find((n) => n.type === 'container' && n.group.rowIds.includes(opts.rowId!))?.id : opts.node;
       for (const s of family.samples) familyLoaded.add(s.id);
       // Fan items the family now holds in full (other passes of the same tool on this sample) were cards on the map: they stay.
-      const opened = new Set([...fanRowIds(before)].filter((id) => !fanRowIds(merged).has(id)));
-      const stay = next.nodes.filter((n) => n.type === 'container' && n.group.rowIds.some((id) => opened.has(id))).map((n) => n.id);
+      const wasFan = new Set([...fanRowIds(before)].filter((id) => !fanRowIds(merged).has(id)));
+      const stay = next.nodes.filter((n) => n.type === 'container' && n.group.rowIds.some((id) => wasFan.has(id))).map((n) => n.id);
+      const shownBefore = revealedKeys.value;
       publish(merged, { anchor, from: opts.from });
       admit(anchor ? shownNodes(next, anchor, 1) : [], anchor ? [anchor, ...stay] : stay);
+      keepOpened(owner, shownBefore, { change: (d) => mergeProcessData(d, family), families: family.samples.map((s) => s.id) });
     }) as Promise<void>).finally(() => void opening.delete(key));
   }
 
-  /** The fan of a record inside the map merged beside it ("used in"). */
-  function openSideFan(ref: Ref, anchor: string): Promise<void> {
+  /** The fan of a record inside the map merged beside it ("used in"); `owner` is what was expanded (the card, or the tray record). */
+  function openSideFan(ref: Ref, anchor: string, owner: string): Promise<void> {
     const mine = loadToken;
+    const ownerKeys = keysOf(owner);
     return withBusy(async () => {
       const used = await loadUsedIn(api, ref, 1);
       const before = data.value;
@@ -648,8 +707,12 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
         capped.value = true;
         return;
       }
-      fanPages.set(`${ref.collection}:${ref.id}`, 1);
-      publish(withSideFan(before, { ...ref, kind: fanKindOf(ref.collection) }, page), { anchor });
+      const fanKey = `${ref.collection}:${ref.id}`;
+      fanPages.set(fanKey, 1);
+      const root = { ...ref, kind: fanKindOf(ref.collection) };
+      const shownBefore = revealedKeys.value;
+      publish(withSideFan(before, root, page), { anchor });
+      keepOpened(ownerKeys, shownBefore, { change: (d) => withSideFan(d, root, page), fan: fanKey });
     }) as Promise<void>;
   }
 
@@ -676,6 +739,8 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       fanPages.set(key, next);
       // The stub moves to the end of the longer column.
       publish(withFanPage(before, key, page), { replace: [moreNodeId({ collection, id })] });
+      // A page belongs to its fan: − on the fan's record takes its pages away with it.
+      opened.value = [...opened.value, { owner: [], revealed: [], change: (d) => withFanPage(d, key, page), fan: key }];
     }) as Promise<void>).finally(() => void paging.delete(key));
   }
 
@@ -704,20 +769,75 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     if (node?.type === 'record' && node.kind === 'sample' && !familyLoaded.has(node.ref.id)) return openFamily(node.ref.id, { node: id });
     if (node?.type === 'record' && node.kind !== 'sample' && hasFan(node.ref.collection)) {
       const key = refKey(node.ref);
-      if (!fanRoots(d).has(key)) return openSideFan(node.ref, id);
+      if (!fanRoots(d).has(key)) return openSideFan(node.ref, id, id);
       const remaining = d.fan && key === `${d.focus.collection}:${d.focus.id}` ? (d.fan.remaining ?? 0) : ((d.sideFans ?? []).find((f) => refKey(f.root) === key)?.remaining ?? 0);
       if (remaining > 0) return loadMore(key);
     }
     if (!node) {
       const slot = slotRecord(id);
       if (slot && hasFan(slot.ref.collection)) {
-        if (!fanRoots(d).has(refKey(slot.ref))) return openSideFan(slot.ref, slot.owner);
+        if (!fanRoots(d).has(refKey(slot.ref))) return openSideFan(slot.ref, slot.owner, id);
         notice.value = `${slot.ref.code} is already open on the map.`;
       }
       return;
     }
+    const owner = keysOf(id);
+    const before = revealedKeys.value;
     admit(shownNodes(g, id, 1));
     hint({ anchor: id });
+    keepOpened(owner, before);
+  }
+
+  /** Ids whose ＋ is open (they draw −): the cards answering to an entry's keys, and the tray records it names. */
+  const expandedIds = computed<ReadonlySet<string>>(() => {
+    const keys = new Set(opened.value.flatMap((e) => e.owner));
+    const out = nodesWithKey(graph.value?.nodes ?? [], keys);
+    for (const k of keys) out.add(k);
+    return out;
+  });
+
+  /**
+   * − on what ＋ opened: hides the cards it revealed (unless another open ＋ revealed them too) and takes back what it
+   * loaded, with the pages of a fan it opened. The data is rebuilt from the focus's own, with the other ＋s replayed.
+   */
+  function collapse(id: string): void {
+    if (!initial) return;
+    const keys = new Set(keysOf(id));
+    const entry = opened.value.find((e) => e.owner.some((k) => keys.has(k)));
+    if (!entry) return;
+    const gone = new Set(opened.value.filter((e) => e === entry || (entry.fan && e.fan === entry.fan)));
+    const rest = opened.value.filter((e) => !gone.has(e));
+    const kept = new Set(rest.flatMap((e) => e.revealed));
+    const dropped = new Set([...gone].flatMap((e) => e.revealed).filter((k) => !kept.has(k)));
+    revealedKeys.value = new Set([...revealedKeys.value].filter((k) => !dropped.has(k)));
+    opened.value = rest;
+    notice.value = '';
+    capped.value = false;
+    if (![...gone].some((e) => e.change)) return;
+    familyLoaded = new Set([...initial.families, ...rest.flatMap((e) => e.families ?? [])]);
+    for (const e of gone) if (e.fan) fanPages.delete(e.fan);
+    for (const [k, n] of initial.fanPages) if (!fanPages.has(k)) fanPages.set(k, n);
+    data.value = rest.reduce((d, e) => (e.change ? e.change(d) : d), initial.data);
+  }
+
+  /** "Reset": the map as the focus first loaded it, without asking the server again; what ＋, Unstack and the folds did is gone. */
+  function reset(): void {
+    if (!initial || status.value !== 'ready') return;
+    loadToken = gate.begin(); // an expand still loading belongs to the map before the reset
+    generation.value++; // the canvas lays it out afresh
+    opened.value = [];
+    revealedKeys.value = new Set();
+    unfoldedKeys.value = new Set();
+    moreOpenKeys.value = new Set();
+    unstacked.value = new Set();
+    capped.value = false;
+    notice.value = '';
+    familyLoaded = new Set(initial.families);
+    fanPages = new Map(initial.fanPages);
+    opening.clear();
+    paging.clear();
+    clearHover();
+    data.value = initial.data;
   }
 
   const toggleRows = (id: string) => {
@@ -790,9 +910,14 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     if (cardTimer) clearTimeout(cardTimer);
     cardTimer = null;
     card.value = null;
-    const delay = cardNow ? 0 : HOVER_DELAY_MS;
+    const held = cardNow;
+    const delay = held ? 0 : HOVER_DELAY_MS;
     cardNow = false;
     if (!h?.el) return;
+    // A full container says on its face what its hover card would (the rail has the rest): no card for it, except
+    // on a long press (a phone has no rail beside the map).
+    const n = nodeById.value.get(h.id);
+    if (!held && n?.type === 'container' && !n.collapsed) return;
     const resting = h;
     cardTimer = setTimeout(() => {
       cardTimer = null;
@@ -823,6 +948,12 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     setDir,
     probable,
     setProbable,
+    stack,
+    setStack,
+    unstack,
+    collapse,
+    expandedIds,
+    reset,
     hiddenKinds,
     toggleKind,
     presentKinds,
