@@ -524,7 +524,7 @@ function hints(map: ReturnType<typeof useProcessMap>) {
   const seen: unknown[] = [];
   watch(
     () => map.nodes.value,
-    () => void seen.push(map.takeMergeHint()),
+    () => void seen.push(...map.takeMergeHints()),
   );
   return seen;
 }
@@ -948,7 +948,7 @@ describe('expand inside a loaded family still reveals one step and tells the lay
     // A change that is not an expand carries no hint (the canvas lays everything out).
     map.toggleKind('stock_lot');
     await settle();
-    expect(map.takeMergeHint()).toBeNull();
+    expect(map.takeMergeHints()).toEqual([]);
   });
 });
 
@@ -1086,5 +1086,73 @@ describe('cards opened from a side fan', () => {
     family.mockResolvedValue(familyOfX(1));
     await map.expand('op:u1');
     expect(map.notice.value).toBe('');
+  });
+});
+
+describe('expands in one tick and across focuses', () => {
+  async function fan(id = 't1') {
+    recordRef.mockResolvedValue({ collection: 'tools', id, code: id.toUpperCase() });
+    usedIn.mockResolvedValue({ items: toolOps(4), total: 4 });
+    return setup({ focus: `tools:${id}` });
+  }
+
+  it('two merges published in the same tick both reach the layout, in one batch', async () => {
+    const { map } = await fan();
+    await settle();
+    const batches: { anchor?: string }[][] = [];
+    watch(
+      () => map.nodes.value,
+      () => void batches.push(map.takeMergeHints()),
+    );
+    family.mockImplementation(async (_api, id) => familyOfX(Number(String(id).slice(1))));
+    await Promise.all([map.expand('op:u0'), map.expand('op:u1')]);
+    await settle();
+    const all = batches.flat();
+    expect(all.map((h) => h.anchor).sort()).toEqual(['op:u0', 'op:u1']);
+    expect(batches.filter((b) => b.length === 2)).toHaveLength(1); // one change, both hints
+    // and nothing is left behind for an unrelated change to pick up
+    expect(map.takeMergeHints()).toEqual([]);
+  });
+
+  it('a plus in flight when the focus changes does not swallow the same plus in the new focus', async () => {
+    const { map, route } = await fan('t1');
+    await settle();
+    let release!: (d: ProcessData) => void;
+    family.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    const old = map.expand('op:u0');
+    route.query = { focus: 'tools:t2' };
+    recordRef.mockResolvedValue({ collection: 'tools', id: 't2', code: 'T2' });
+    await settle();
+    family.mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0'); // same card key in the new focus
+    await settle();
+    expect(family).toHaveBeenCalledTimes(2);
+    expect(containersOf(map).find((c) => c.id === 'op:u0')?.collapsed).toBeUndefined();
+    release(familyOfX(0));
+    await old;
+  });
+
+  it('a paging key of the old focus is forgotten too', async () => {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValueOnce({ items: toolOps(20), total: 47 });
+    const { map, route } = setup({ focus: 'tools:t1' });
+    await settle();
+    usedIn.mockImplementationOnce(() => new Promise(() => undefined)); // never answers
+    void map.expand('more:tools:t1');
+    route.query = { focus: 'tools:t2' };
+    recordRef.mockResolvedValue({ collection: 'tools', id: 't2', code: 'T2' });
+    usedIn.mockResolvedValueOnce({ items: toolOps(20), total: 47 });
+    await settle();
+    usedIn.mockResolvedValueOnce({ items: toolOps(20, 20), total: 47 });
+    await map.expand('more:tools:t2');
+    expect(containersOf(map)).toHaveLength(40);
+    // the key that was in flight under the old focus (tools:t1) can be asked for again
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValueOnce({ items: toolOps(20), total: 47 });
+    route.query = { focus: 'tools:t1' };
+    await settle();
+    usedIn.mockResolvedValueOnce({ items: toolOps(20, 20), total: 47 });
+    await map.expand('more:tools:t1');
+    expect(containersOf(map)).toHaveLength(40);
   });
 });

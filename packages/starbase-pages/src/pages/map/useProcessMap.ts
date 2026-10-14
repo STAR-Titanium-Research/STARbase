@@ -194,10 +194,9 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   function setReach(r: Reach): void {
     reach.value = r;
     // A fan has no reach, and the cards ＋ opened from a fan item (a side fan's) are not part of any reach: they stay.
-    if (!data.value?.fan && !data.value?.sideFans?.length) {
-      revealed.value = new Set();
-      capped.value = false;
-    }
+    if (!data.value?.fan && !data.value?.sideFans?.length) revealed.value = new Set();
+    // Whether the cap is what limits the map now, from what is drawn (kept cards may still fill it).
+    capped.value = shown.value.size >= CARD_CAP;
     writeUrl({ reach: String(r) });
   }
 
@@ -252,15 +251,19 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   let familyLoaded = new Set<string>();
   /** Pages read of each fan (`<collection>:<id>`), for "+N more". */
   let fanPages = new Map<string, number>();
+  /** Expands in flight, by card (a second plus on it is ignored) and by fan (the next page). */
+  const opening = new Set<string>();
+  const paging = new Set<string>();
   /** What the next layout is told about the change that triggered it: an expand, not a new focus. */
-  let mergeHint: MergeHint | null = null;
+  let mergeHints: MergeHint[] = [];
   /**
    * Tells the next layout what kind of change it is for; forgotten once Vue has applied the change. Called
-   * after the change is made, so `nextTick` waits for the flush that carries it.
+   * after the change is made, so `nextTick` waits for the flush that carries it. Changes in one tick queue
+   * up: the layout that follows places the cards of all of them.
    */
   const hint = (h: MergeHint): void => {
-    mergeHint = h;
-    void nextTick().then(() => void (mergeHint = null));
+    mergeHints.push(h);
+    void nextTick().then(() => void (mergeHints = mergeHints.filter((x) => x !== h)));
   };
   const publish = (d: ProcessData, h: MergeHint): void => {
     notice.value = ''; // an earlier failure is old news once something merged
@@ -268,10 +271,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     hint(h);
   };
   /** Taken by the canvas when it lays out after an expand: where the new cards go (spec §6.7). */
-  const takeMergeHint = (): MergeHint | null => {
-    const h = mergeHint;
-    mergeHint = null;
-    return h;
+  const takeMergeHints = (): MergeHint[] => {
+    const hs = mergeHints;
+    mergeHints = [];
+    return hs;
   };
 
   /** What opening on a record loads (spec D20). */
@@ -307,6 +310,8 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     notice.value = '';
     familyLoaded = new Set();
     fanPages = new Map();
+    opening.clear(); // a key of the old focus must not swallow a click
+    paging.clear();
     selectedId.value = null;
     clearHover();
     error.value = '';
@@ -541,7 +546,6 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   }
 
   /** The family of a sample merged into the map; the card that was expanded keeps its place (spec §6.7). */
-  const opening = new Set<string>();
   function openFamily(sampleId: string, opts: { node?: string; rowId?: string; from?: string }): Promise<void> {
     const mine = loadToken;
     const key = opts.from ?? opts.node ?? sampleId;
@@ -591,7 +595,6 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     }) as Promise<void>;
   }
 
-  const paging = new Set<string>();
   /** "+N more": the next page of a fan. */
   function loadMore(key: string): Promise<void> {
     const at = key.indexOf(':');
@@ -759,7 +762,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     expand,
     notice,
     expanding,
-    takeMergeHint,
+    takeMergeHints,
     toggleRows,
     toggleMore,
     moreOpen,

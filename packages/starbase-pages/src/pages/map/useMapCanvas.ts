@@ -217,13 +217,13 @@ export function useMapCanvas(map: ProcessMap) {
     }
   }
 
-  /** Run a layout once every node is measured: now when they are, else when Vue Flow says they are. `merge`: an expand (spec §6.7), not a full layout. */
-  async function scheduleLayout(merge: MergeHint | null = null): Promise<void> {
+  /** Run a layout once every node is measured: now when they are, else when Vue Flow says they are. `merges`: the expands (spec §6.7) it is for, none for a full layout. */
+  async function scheduleLayout(merges: MergeHint[] | null = null): Promise<void> {
     if (!pending) {
-      pendingFull = !merge;
-      pendingMerges = merge ? [merge] : [];
-    } else if (!merge) pendingFull = true; // a full layout asked for meanwhile covers the expands too
-    else pendingMerges.push(merge); // two expands before the layout ran: it places the cards of both
+      pendingFull = !merges;
+      pendingMerges = merges ? [...merges] : [];
+    } else if (!merges) pendingFull = true; // a full layout asked for meanwhile covers the expands too
+    else pendingMerges.push(...merges); // two expands before the layout ran: it places the cards of both
     pending = true;
     await nextTick();
     if (!vf.vueFlowRef.value) return; // not mounted yet: onNodesInitialized starts the layout once it is
@@ -275,18 +275,20 @@ export function useMapCanvas(map: ProcessMap) {
   watch([() => map.nodes.value, () => map.dir.value], () => {
     const turned = map.dir.value !== lastDir;
     lastDir = map.dir.value;
-    const hint = map.takeMergeHint();
-    const merge = turned || !placed.size ? null : hint;
-    merging = merge;
+    const hints = map.takeMergeHints();
+    const merges = turned || !placed.size || !hints.length ? null : hints;
+    merging = merges?.find((m) => m.anchor) ?? null;
     // A collapsed container that opened may come back under another id (a batch): it takes the old one's place and size.
-    const from = merge?.from ? placed.get(merge.from) : undefined;
-    if (merge?.anchor && from && merge.from !== merge.anchor && !placed.has(merge.anchor)) {
-      const was = vf.findNode(merge.from!)?.position ?? from;
-      placed.set(merge.anchor, { ...from, x: was.x, y: was.y });
+    for (const merge of merges ?? []) {
+      const from = merge.from ? placed.get(merge.from) : undefined;
+      if (merge.anchor && from && merge.from !== merge.anchor && !placed.has(merge.anchor)) {
+        const was = vf.findNode(merge.from!)?.position ?? from;
+        placed.set(merge.anchor, { ...from, x: was.x, y: was.y });
+      }
     }
     rebuild();
     merging = null;
-    if (map.nodes.value.length) void scheduleLayout(merge);
+    if (map.nodes.value.length) void scheduleLayout(merges);
   });
   watch(() => map.selectedId.value, syncSelection);
   watch(() => map.focusOfHover.value, applyFocus);
