@@ -765,13 +765,13 @@ run_eq "campaign_type CHECK restricts to the two kinds" \
     "1"
 # owner_person_id (062), campaign_samples.campaign_id (087) and created_by (20261001000124), plus the
 # project_id link and the two campaign_id links of operations and tests that migration 141 registers
-# for the row filters (ADR-0011), plus the campaign_access list (migration 165, alias `access`).
-run_eq "Directus relations for campaigns are registered (8)" \
+# for the row filters (ADR-0011), plus the campaign_access list (migration 165, alias `access`) and the owner_team_id link to teams (migration 177).
+run_eq "Directus relations for campaigns are registered (9)" \
     "SELECT string_agg(many_collection || '.' || many_field || '->' || one_collection, ',' ORDER BY many_collection COLLATE \"C\", many_field COLLATE \"C\")
      FROM directus_relations
      WHERE one_collection='campaigns' OR many_collection='campaigns'
         OR (many_collection IN ('manufacturing_operations','test_sessions') AND many_field='campaign_id')" \
-    "campaign_access.campaign_id->campaigns,campaign_readers.record_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
+    "campaign_access.campaign_id->campaigns,campaign_readers.record_id->campaigns,campaign_samples.campaign_id->campaigns,campaigns.created_by->directus_users,campaigns.owner_person_id->people,campaigns.owner_team_id->teams,campaigns.project_id->projects,manufacturing_operations.campaign_id->campaigns,test_sessions.campaign_id->campaigns"
 
 echo "== Audit trigger fires on INSERT =="
 # Insert a test sample and verify audit_logs captured it.
@@ -3010,6 +3010,9 @@ tm_down=$(awk '/-- migrate:down/{f=1;next}f' "$TM")
 # functions (its down puts them back), so its down goes first of all, before 175's.
 TA=db/migrations/20261014000176_team_access.sql
 ta_down=$(awk '/-- migrate:down/{f=1;next}f' "$TA")
+# 20261014000177 (team ownership) replaces functions of 176 and 166 and adds functions in d1_private; its down puts them back, so it goes first of all, before 176's.
+TO=db/migrations/20261014000177_team_ownership.sql
+to_down=$(awk '/-- migrate:down/{f=1;next}f' "$TO")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -3049,6 +3052,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$to_down
 $ta_down
 $tm_down
 $pa_down
