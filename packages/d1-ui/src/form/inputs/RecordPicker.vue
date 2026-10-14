@@ -20,6 +20,10 @@ const props = defineProps<{
 	disabled?: boolean;
 	/** The value is inherited (not the person's own): shown greyed. */
 	inherited?: boolean;
+	/** The live required state (a condition can change it) and the aria hooks the form passes (see FieldInput). */
+	required?: boolean;
+	invalid?: boolean;
+	describedby?: string;
 }>();
 const emit = defineEmits<{ (e: 'update:value', value: string | null): void; (e: 'blur'): void }>();
 
@@ -34,7 +38,11 @@ const options = ref<PickerOption[]>([]);
 const searching = ref(false);
 const failed = ref('');
 const open = ref(false);
+// The list is open only while the box has focus: an answer that arrives after the person has left is dropped.
+const focused = ref(false);
 const active = ref(-1);
+// The option just picked, so its label is not read again once the list is gone.
+let picked: PickerOption | null = null;
 const gate = useRequestGate();
 const labelGate = useRequestGate();
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -53,7 +61,7 @@ async function resolveLabel(): Promise<void> {
 		label.value = '';
 		return;
 	}
-	const known = options.value.find((o) => o.id === id);
+	const known = options.value.find((o) => o.id === id) ?? (picked?.id === id ? picked : undefined);
 	if (known) {
 		label.value = known.label;
 		return;
@@ -82,7 +90,7 @@ async function search(q: string): Promise<void> {
 		failed.value = isForbidden(e) ? `You can't list ${noun.value}s.` : `Could not search: ${errorText(e)}`;
 	}
 	searching.value = false;
-	open.value = true;
+	open.value = focused.value;
 }
 
 function onInput(e: Event): void {
@@ -93,21 +101,31 @@ function onInput(e: Event): void {
 }
 function onFocus(e: FocusEvent): void {
 	if (props.disabled) return;
+	focused.value = true;
 	(e.target as HTMLInputElement).select();
-	if (!options.value.length) void search('');
-	else open.value = true;
+	void search('');
 }
-function onBlur(): void {
+// Leaving closes the list and forgets it: a search still on its way is dropped, and the next focus asks afresh.
+function close(): void {
 	typing.value = false;
 	open.value = false;
+	options.value = [];
+	active.value = -1;
+	failed.value = '';
+	searching.value = false;
+	gate.cancel();
 	if (timer) clearTimeout(timer);
+}
+function onBlur(): void {
+	focused.value = false;
+	close();
 	emit('blur');
 }
 function pick(o: PickerOption): void {
+	picked = o;
 	label.value = o.label;
 	emit('update:value', o.id);
-	typing.value = false;
-	open.value = false;
+	close();
 }
 function clear(): void {
 	label.value = '';
@@ -153,7 +171,9 @@ onBeforeUnmount(() => {
 				:aria-expanded="open && options.length > 0"
 				:aria-controls="listId"
 				:aria-activedescendant="activeId"
-				:aria-required="field.required || undefined"
+				:aria-required="required || undefined"
+				:aria-invalid="invalid || undefined"
+				:aria-describedby="describedby"
 				autocomplete="off"
 				spellcheck="false"
 				:disabled="disabled || !source"
@@ -200,6 +220,7 @@ onBeforeUnmount(() => {
 }
 .q:focus { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: -1px; }
 .q:disabled { opacity: 0.7; }
+.q[aria-invalid='true'] { border-color: var(--d1-bad); }
 .inherited .q { color: var(--d1-dim); font-style: italic; }
 .clear {
 	position: absolute; right: 4px; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent;
@@ -208,7 +229,7 @@ onBeforeUnmount(() => {
 .clear:hover { background: var(--d1-tile); color: inherit; }
 .opts {
 	position: absolute; z-index: 3; left: 0; right: 0; margin: 4px 0 0; padding: 4px; list-style: none; max-height: 240px; overflow-y: auto;
-	border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+	border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface); box-shadow: var(--d1-shadow, 0 2px 6px rgba(0, 0, 0, 0.1));
 }
 .opt { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; font-size: var(--fs-md, 13px); cursor: pointer; }
 .opt.on { background: var(--d1-tile); outline: 1px solid var(--d1-accent, var(--theme--primary)); outline-offset: -1px; }
