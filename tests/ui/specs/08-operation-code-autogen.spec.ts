@@ -24,7 +24,8 @@ test.describe('Manufacturing Operation — operation code auto-generation', () =
 		await page.waitForTimeout(800);
 
 		const code = await fieldByLabel(page, 'Operation Code').locator('input').first().inputValue();
-		expect(code).toBe('9-AA-MR-2023-3-24-MM-S6-80MPM_0.05feed_0.1DoC');
+		// The method prefix of the sub-type is dropped (MM-S gives S): migration 20261010000156, as in every stored code.
+		expect(code).toBe('9-AA-MR-2023-3-24-S6-80MPM_0.05feed_0.1DoC');
 	});
 
 	test('a manual edit is preserved (override stops auto-fill)', async ({ page }) => {

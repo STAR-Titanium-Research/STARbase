@@ -89,6 +89,23 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
   the drawing has the bore, and the mass estimate is π/4·(OD² − ID²)·t × density. The printed
   sample report lists `ID…` after the outer Ø.
 
+### Form blockers (migration 173, `fix/form-qa`)
+- [ ] **F1 — Test session saves from the form.** As a Lab Member, in STARbase (the framed form) and in
+  Data Studio: new Test Session, pick a Test Type, Subject → Add Existing → one of your samples, Save.
+  It saves (before: "Sample / Workpiece (Hidden): Value is required"), and the saved test's sample is
+  the subject.
+- [ ] **F2 — Imaging / Analysis campaign.** New Campaign, Campaign Type → Imaging / Analysis, a name,
+  Save. It saves (before: "An unexpected error occurred", HTTP 500).
+- [ ] **F3 — Owner shows a name.** Open any sample, operation, test, campaign, tool box, insert, recipe
+  and a project. Owner (Principal Investigator on a project) shows the person's name in a dropdown,
+  not a UUID in a text box; changing it as the owner saves. The dropdown has no "create new" (a new
+  login-less owner locked the creator out of the record). The Directus log has no warning about
+  `d1-owner-picker` after the leftover `core/extensions/d1-owner-picker` folder (no package.json,
+  empty dist) is deleted from the live checkout.
+- [ ] **F4 — Machining sub-type.** Open an operation imported from the experiment sheets (sub-type
+  MT-F). Operation Sub-type shows "Turning – Facing", not blank. A new milling operation offers the
+  Milling – … choices and its code keeps the bare letter (…-S1-…).
+
 ### Ask-DB
 - [ ] **D1/D2 — chips and messages.** The five example chips run and answer. A query returning more
   than the row limit shows "Showing the first N rows". Stop the `llm-text-to-sql` container: the

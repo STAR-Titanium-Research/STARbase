@@ -46,11 +46,13 @@ test.afterAll(async () => {
 	await api.dispose();
 });
 
-test('live: picking a machining trial fills the project field (with inherited hint)', async ({ page }) => {
+// fixme: project_id is a plain dropdown on live; configure_campaigns.sql sets d1-project-inherit, which no migration
+// applies (form QA 2026-10-14, decision 6). The field label is "Campaign" since migration 116.
+test.fixme('live: picking a machining trial fills the project field (with inherited hint)', async ({ page }) => {
 	await gotoCreateForm(page, 'manufacturing_operations');
 	await selectM2O(page, 'Manufacturing Method', 'Turning');
 	await page.waitForTimeout(1000);
-	await selectM2O(page, 'Machining Trial', campaignName);
+	await selectM2O(page, 'Campaign', campaignName);
 	await page.waitForTimeout(1000);
 
 	// The inherited hint appears only once the interface has read the campaign's
