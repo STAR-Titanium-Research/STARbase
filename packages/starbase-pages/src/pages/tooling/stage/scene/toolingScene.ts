@@ -1,7 +1,8 @@
 // The 3D view of a tool box. Imperative and outside Vue reactivity; ToolingStage.vue loads this module with a
 // dynamic import() so three.js stays out of the entry chunk. Render on demand: a frame is drawn when something
 // changed (an input, an ease, a theme change, new data), and nothing runs at rest. The one exception is the
-// gentle pulse on the next fresh edge, which runs at about 30 fps only while the stage is on screen.
+// gentle pulse on the next fresh edge: about 30 fps for three cycles after a focus, model or next-fresh change
+// while the stage is on screen, then one static frame at full strength (pulse.ts).
 
 import {
 	DirectionalLight, Mesh, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Raycaster, Scene,
@@ -20,6 +21,7 @@ import {
 import { LabelLayer } from './labels';
 import { SceneMaterials, TONE_MAPPING } from './materials';
 import { sameTarget, type PickTarget } from './pick';
+import { pulseLevel, pulseRunning } from './pulse';
 import { ThemeProbe } from './themePalette';
 
 const CLICK_SLOP_PX = 4;
@@ -62,6 +64,8 @@ export class ToolingScene {
 	private visible = true;
 	private disposed = false;
 	private lastDraw = 0;
+	private pulseStart: number | null = null;
+	private pulseDrawn = false;
 	private hoverQueued: { x: number; y: number } | null = null;
 	private down: { x: number; y: number; id: number } | null = null;
 
@@ -184,6 +188,7 @@ export class ToolingScene {
 		this.lifts = new Map(this.liftTo);
 		this.hover = null;
 		this.labels.set(this.view.labels(this.focus));
+		this.restartPulse();
 		if (!sameBox || this.finalFraming === null) this.goTo(this.focus, true);
 		else this.requestRender();
 	}
@@ -194,10 +199,12 @@ export class ToolingScene {
 		this.focus = next;
 		this.userMoved = false;
 		this.labels.set(this.view.labels(next));
+		this.restartPulse();
 		this.goTo(next, false);
 	}
 
 	setNextFresh(next: NextFresh): void {
+		if (next?.edgeId !== this.nextFresh?.edgeId) this.restartPulse();
 		this.nextFresh = next;
 		this.requestRender();
 	}
@@ -336,9 +343,14 @@ export class ToolingScene {
 		if (!this.inFrame) this.schedule();
 	}
 
-	private pulsing(): boolean {
+	private restartPulse(): void {
+		this.pulseStart = performance.now();
+	}
+
+	// Pulsing only for a bounded time after a change; the halo then rests at full strength.
+	private pulsing(now: number): boolean {
 		return this.nextFresh !== null && this.visible && document.visibilityState !== 'hidden' && !prefersReducedMotion()
-			&& !(this.focus.kind === 'edge' && this.focus.edgeId === this.nextFresh.edgeId);
+			&& !(this.focus.kind === 'edge' && this.focus.edgeId === this.nextFresh.edgeId) && pulseRunning(this.pulseStart, now);
 	}
 
 	private readonly frame = (now: number): void => {
@@ -369,7 +381,9 @@ export class ToolingScene {
 			}
 			if (this.controls.update()) busy = true; // damping keeps going after the pointer is released
 
-			const pulse = this.pulsing();
+			const pulse = this.pulsing(now);
+			if (this.pulseDrawn && !pulse) this.dirty = true; // the pulse just ended: one static frame at full strength
+			this.pulseDrawn = pulse;
 			again = busy || pulse;
 			if (!this.dirty && !busy && !pulse) return; // nothing changed
 			if (pulse && !busy && !this.dirty && now - this.lastDraw < PULSE_FRAME_MS) return;
@@ -377,7 +391,7 @@ export class ToolingScene {
 			this.lastDraw = now;
 			this.view.sync({
 				focus: this.focus, lifts: this.lifts, hover: this.hover, nextFresh: this.nextFresh,
-				pulse: pulse ? 0.5 + 0.5 * Math.sin(now / 380) : 1,
+				pulse: pulse ? pulseLevel(this.pulseStart, now) : 1,
 			});
 			this.renderer.render(this.scene, this.camera);
 			this.labels.update(this.camera, this.width, this.height, (id) => this.lifts.get(id) ?? 0);
