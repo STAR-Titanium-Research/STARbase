@@ -33,7 +33,8 @@
 -- Bookkeeping triggers: AFTER INSERT / UPDATE OF owner_team_id on the four record tables (d1_private.team_owner_sync; a BEFORE STATEMENT
 -- trigger first takes the global readers lock on every table, as migration 176 did for the grant tables: campaigns and test_sessions have none of
 -- their own before their rows are locked); AFTER UPDATE OF is_manager on team_members (d1_private.team_manager_sync).
--- No team history event for an owner grant (shared / unshared / trust_*): Transfer ownership is what the endpoint records.
+-- No team history event for an owner grant (shared / unshared / trust_*), and Transfer ownership does not write a team event either: an ownership
+-- change is recorded in audit_logs only (the owner_team_id / owner_person_id update); an ownership-history event kind is a follow-up.
 -- Down: puts migration 176's and 166's functions and views back, deletes the owner grants (and with them the derived rows), drops the columns,
 -- constraints, triggers and the new functions. It refuses while any record is owned by a team (transfer those to a person first).
 SET LOCAL lock_timeout = '10s';
