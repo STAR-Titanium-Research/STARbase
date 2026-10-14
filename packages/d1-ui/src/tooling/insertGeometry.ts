@@ -27,6 +27,8 @@ export interface InsertTypeRow {
 	fixing_hole_diameter_mm?: Num;
 }
 
+export type TipMaterial = 'pcd' | 'cbn';
+
 export interface InsertGeometry {
 	shape: ShapeLetter | 'polygon'; // 'polygon' = fallback from edge_count
 	recognised: boolean;
@@ -41,6 +43,7 @@ export interface InsertGeometry {
 	holeDiameterMm: number | null;
 	holeCountersunk: boolean;
 	edgesPerFace: number;
+	tipMaterial: TipMaterial | null; // a brazed superhard tip (PCD, PCBN), else null
 }
 
 export interface InsertCorner {
@@ -122,6 +125,18 @@ function edgeOverIc(shape: ShapeLetter | 'polygon', includedAngleDeg: number, co
 	return Math.tan(Math.PI / n);
 }
 
+// A tipped insert is named in the type's substrate, its type code or its ISO designation (the suffix, such as
+// "CCGW 09T3 04-PCD"). `material_class` is the ISO 513 group letter (P, M, K, N, S, H), not the tip, so it is not read.
+const letters = String.raw`(?<![a-z])`;
+const PCD_RE = new RegExp(`${letters}(pcd|diamond)(?![a-z])`, 'i');
+const CBN_RE = new RegExp(`${letters}(pcbn|cbn)(?![a-z])`, 'i');
+export function detectTipMaterial(type: InsertTypeRow | null): TipMaterial | null {
+	const text = [type?.substrate, type?.type_code, type?.iso_designation].filter((v): v is string => typeof v === 'string').join(' | ');
+	if (PCD_RE.test(text)) return 'pcd';
+	if (CBN_RE.test(text)) return 'cbn';
+	return null;
+}
+
 function range(n: number): number[] {
 	return Array.from({ length: n }, (_, i) => i);
 }
@@ -151,6 +166,10 @@ export function resolveInsertGeometry(type: InsertTypeRow | null): InsertGeometr
 		includedAngleDeg = ((cornerCount - 2) * 180) / cornerCount;
 	}
 
+	// A type with fewer edges than the shape has cutting corners (a one-edge CCGW tip): only the first
+	// edge_count corners cut, counted from A, and the insert is single-sided.
+	if (shape !== 'R' && edgeCount !== null && edgeCount < cuttingCorners.length) cuttingCorners = cuttingCorners.slice(0, edgeCount);
+
 	const edgeLength = positive(type?.cutting_edge_length_mm);
 	const icMm = edgeLength !== null
 		? edgeLength / edgeOverIc(shape, includedAngleDeg, cornerCount)
@@ -179,6 +198,7 @@ export function resolveInsertGeometry(type: InsertTypeRow | null): InsertGeometr
 		holeDiameterMm,
 		holeCountersunk: hole === 'countersunk',
 		edgesPerFace: cuttingCorners.length,
+		tipMaterial: detectTipMaterial(type),
 	};
 }
 

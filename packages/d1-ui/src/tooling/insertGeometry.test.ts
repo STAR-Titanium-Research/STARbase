@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { placeEdge } from './edgePlacement';
 import { insertOutline, resolveInsertGeometry, type InsertTypeRow } from './insertGeometry';
 
 const type = (iso: string | null, extra: Partial<InsertTypeRow> = {}): InsertTypeRow => ({ iso_designation: iso, ...extra });
@@ -63,6 +64,52 @@ describe('resolveInsertGeometry', () => {
 		expect(resolveInsertGeometry(type('CNMG120408', { edge_count: 4 })).doubleSided).toBe(true);
 		expect(resolveInsertGeometry(type('CCMT09T304', { edge_count: 4 })).doubleSided).toBe(true);
 		expect(resolveInsertGeometry(type('TNMG160408', { edge_count: 3 })).doubleSided).toBe(false);
+	});
+
+	it('lets edge_count cap the cutting corners: a one-edge CCGW is single-sided with only corner A', () => {
+		const g = resolveInsertGeometry(type('CCGW 09T3 04', { edge_count: 1 }));
+		expect(g).toMatchObject({ shape: 'C', cornerCount: 4, cuttingCorners: [0], edgesPerFace: 1, doubleSided: false });
+		expect(placeEdge(g, 'A')).toEqual({ face: 'top', corner: 0 });
+		expect(placeEdge(g, 'B')).toBeNull();
+		expect(insertOutline(g).corners.map((c) => c.cuts)).toEqual([true, false, false, false]);
+	});
+
+	it('caps to the first edge_count corners, from A, and leaves a count at or above the corners alone', () => {
+		expect(resolveInsertGeometry(type('TNMG160408', { edge_count: 2 })).cuttingCorners).toEqual([0, 1]);
+		expect(resolveInsertGeometry(type('SNMG120408', { edge_count: 3 }))).toMatchObject({ cuttingCorners: [0, 1, 2], doubleSided: false });
+		expect(resolveInsertGeometry(type('CNMG120408', { edge_count: 2 })).cuttingCorners).toEqual([0, 2]);
+		expect(resolveInsertGeometry(type('CNMG120408', { edge_count: 3 })).cuttingCorners).toEqual([0, 2]);
+		expect(resolveInsertGeometry(type('CNMG120408', { edge_count: 4 }))).toMatchObject({ cuttingCorners: [0, 2], doubleSided: true });
+		expect(resolveInsertGeometry(type('RCMT1204M0', { edge_count: 6 })).cuttingCorners).toHaveLength(6);
+	});
+
+	describe('tipMaterial', () => {
+		it('is null for a plain carbide insert', () => {
+			expect(resolveInsertGeometry(type('CNMG120408-MF', { substrate: 'Carbide', type_code: 'CNMG120408-MF' })).tipMaterial).toBeNull();
+			expect(resolveInsertGeometry(null).tipMaterial).toBeNull();
+		});
+
+		it('reads PCD and diamond from the substrate, the type code or the ISO suffix, in any case', () => {
+			expect(resolveInsertGeometry(type('CCGW 09T3 04', { substrate: 'PCD' })).tipMaterial).toBe('pcd');
+			expect(resolveInsertGeometry(type('CCGW 09T3 04', { substrate: 'Polycrystalline Diamond' })).tipMaterial).toBe('pcd');
+			expect(resolveInsertGeometry(type('CCGW 09T3 04', { substrate: 'diamond' })).tipMaterial).toBe('pcd');
+			expect(resolveInsertGeometry(type('CCGW 09T3 04', { type_code: 'CCGW09T304-PCD' })).tipMaterial).toBe('pcd');
+			expect(resolveInsertGeometry(type('CCGW09T304-pcd')).tipMaterial).toBe('pcd');
+			expect(resolveInsertGeometry(type('CCGW 09T3 04-PCD')).recognised).toBe(true); // the suffix does not break the parse
+		});
+
+		it('reads PCBN and CBN as cbn', () => {
+			expect(resolveInsertGeometry(type('CNGA 12 04 08', { substrate: 'PCBN' })).tipMaterial).toBe('cbn');
+			expect(resolveInsertGeometry(type('CNGA120408', { type_code: 'CNGA120408 CBN' })).tipMaterial).toBe('cbn');
+			expect(resolveInsertGeometry(type('CNGA120408-PCBN')).tipMaterial).toBe('cbn');
+			expect(resolveInsertGeometry(type('CNGA120408', { substrate: 'cBN' })).tipMaterial).toBe('cbn');
+		});
+
+		it('does not read the ISO material class (a group letter like P, M, K, N) and does not match inside a word', () => {
+			expect(resolveInsertGeometry(type('CNMG120408', { material_class: 'N' })).tipMaterial).toBeNull();
+			expect(resolveInsertGeometry(type('CNMG120408', { material_class: 'PCD' })).tipMaterial).toBeNull();
+			expect(resolveInsertGeometry(type('CNMG120408', { substrate: 'Scbnx' })).tipMaterial).toBeNull();
+		});
 	});
 
 	it('lets non-null override columns win', () => {
