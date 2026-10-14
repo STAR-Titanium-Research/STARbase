@@ -100,12 +100,15 @@ export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesO
       probable(list);
     }
 
-    // Several samples together (sample_prep, heat_treatment, additive); blank recipe equals blank.
+    // Several samples together (sample_prep, heat_treatment, additive); blank recipe equals blank. "Several
+    // samples": passes on one sample are a sequence. The sample of a row is its input, else the one it makes
+    // (an additive build from powder has no input), else the row itself.
+    const sampleOf = (o: OpRow) => o.sampleId ?? o.outputSampleId ?? o.id;
     const rest = candidates.filter((o) => !claimed.has(o.id));
     for (const list of bucket(rest, (o) =>
       TOGETHER.has(o.category) ? keyOf(o.methodId, o.equipmentId, utcDay(o.date), o.recipeKey) : null,
     )) {
-      probable(list);
+      if (new Set(list.map(sampleOf)).size >= 2) probable(list);
     }
   }
 

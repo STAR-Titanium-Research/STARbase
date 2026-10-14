@@ -265,6 +265,21 @@ describe('groupBatches', () => {
     expect(multi(groupBatches(same, [], { probable: true }))).toHaveLength(0);
   });
 
+  it('several passes on ONE sample (polishing, heat treatment) are a sequence, not "several samples together" (I1)', () => {
+    for (const category of ['sample_prep', 'heat_treatment', 'additive'] as const) {
+      const passes = [1, 2, 3].map(() => op({ category, sampleId: 's1', equipmentId: 'polisher', recipeKey: 'r1', date: DAY }));
+      const groups = groupBatches(passes, [], { probable: true });
+      expect(groups, category).toHaveLength(3);
+      expect(multi(groups), category).toHaveLength(0);
+    }
+    // two samples among them are still together
+    const mixed = [op({ category: 'sample_prep', sampleId: 's1', equipmentId: 'p', date: DAY }), op({ category: 'sample_prep', sampleId: 's2', equipmentId: 'p', date: DAY })];
+    expect(multi(groupBatches(mixed, [], { probable: true }))).toHaveLength(1);
+    // additive builds from powder have no input sample: their outputs are the samples
+    const builds = [1, 2].map((i) => op({ category: 'additive', sampleId: null, outputSampleId: `b${i}`, equipmentId: 'slm', date: DAY }));
+    expect(multi(groupBatches(builds, [], { probable: true }))).toHaveLength(1);
+  });
+
   it('the same-input rule needs a known input sample', () => {
     const rows = [1, 2].map(() => op({ category: 'machining', sampleId: null, equipmentId: 'saw', date: DAY }));
     expect(multi(groupBatches(rows, [], { probable: true }))).toHaveLength(0);
