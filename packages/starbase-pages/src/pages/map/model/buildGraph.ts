@@ -449,11 +449,16 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
 
   // ---- 7. markers for records the person may not read (D21) ---------------------------------
   const hidden: ProcessGraph['hidden'] = [];
-  const focusNode = focusNodeId(data, groups, new Set(nodes.map((n) => n.id)));
-  if (focusNode) {
-    if (data.hidden.ancestors || data.hidden.stock) hidden.push({ nodeId: focusNode, side: 'in' });
-    if (data.hidden.descendants || data.hidden.events) hidden.push({ nodeId: focusNode, side: 'out' });
-  }
+  const present = new Set(nodes.map((n) => n.id));
+  const mark = (nodeId: string, h: ProcessData['hidden']) => {
+    const add = (side: 'in' | 'out') => void (hidden.some((m) => m.nodeId === nodeId && m.side === side) || hidden.push({ nodeId, side }));
+    if (h.ancestors || h.stock) add('in');
+    if (h.descendants || h.events) add('out');
+  };
+  const focusNode = focusNodeId(data, groups, present);
+  if (focusNode) mark(focusNode, data.hidden);
+  // A family merged in with ＋ marks its own sample card, not the focus.
+  for (const f of data.mergedFamilies ?? []) if (present.has(`s:${f.root}`)) mark(`s:${f.root}`, f.hidden);
 
   return { nodes, wires: [...wires.values()], hidden, truncated: data.truncated };
 }

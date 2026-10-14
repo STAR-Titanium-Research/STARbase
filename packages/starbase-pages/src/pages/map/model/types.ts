@@ -108,6 +108,11 @@ export interface ProcessData {
    * seen from one piece): they are drawn as small cards, "another piece" when the code was not read.
    */
   pieces?: Record<string, { code: string; form: string | null }>;
+  /**
+   * Hidden-record flags of the families merged in with ＋, by the sample each was opened on: `hidden` above
+   * belongs to the focus, and these say where else the person may not read records.
+   */
+  mergedFamilies?: { root: string; hidden: ProcessData['hidden'] }[];
   /** Opened on a record that is used by operations or samples (spec D20): the used-in fan of the focus. */
   fan?: Fan;
   /** Used-in fans merged in with ＋ on a record inside the map (a tool, a machine, a material...). */

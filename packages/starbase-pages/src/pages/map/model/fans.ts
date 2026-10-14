@@ -144,6 +144,15 @@ export function mergeProcessData(base: ProcessData, add: ProcessData): ProcessDa
   const pieces = Object.entries({ ...base.pieces, ...add.pieces }).filter(([id]) => !merged.samples.some((smp) => smp.id === id));
   if (pieces.length) merged.pieces = Object.fromEntries(pieces);
   else delete merged.pieces;
+  // The flags of a family belong to its own sample: the focus's stay in `hidden`, each merged family's are kept here.
+  const families = new Map((base.mergedFamilies ?? []).concat(add.mergedFamilies ?? []).map((f) => [f.root, f]));
+  if (add.focus.kind === 'sample') {
+    const h = add.hidden;
+    if (h.ancestors || h.descendants || h.events || h.stock) families.set(add.focus.id, { root: add.focus.id, hidden: h });
+    else families.delete(add.focus.id);
+  }
+  if (families.size) merged.mergedFamilies = [...families.values()];
+  else delete merged.mergedFamilies;
   if (base.fan) merged.fan = prune(base.fan);
   if (base.sideFans) merged.sideFans = base.sideFans.map(prune);
   return merged;

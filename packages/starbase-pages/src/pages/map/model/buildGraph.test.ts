@@ -360,6 +360,22 @@ describe('buildGraph: hidden markers and flags', () => {
     expect(g.truncated).toBe(true);
   });
 
+  it('a family merged with plus keeps its own markers, on its own sample card (I3)', () => {
+    const data = {
+      ...mkData({ samples: sam('s1', 's2'), operations: [mkOp({ id: 'f1', sampleId: 's1', outputSampleId: 's2' })] }),
+      mergedFamilies: [{ root: 's2', hidden: { ancestors: false, descendants: true, events: true, stock: false } }],
+    };
+    expect(build(data).hidden).toEqual([{ nodeId: 's:s2', side: 'out' }]);
+    // both the focus family and the merged one say it; a card never gets the same marker twice
+    const both = { ...data, hidden: { ancestors: false, descendants: true, events: false, stock: false } };
+    expect(build(both).hidden).toEqual([
+      { nodeId: 's:s1', side: 'out' },
+      { nodeId: 's:s2', side: 'out' },
+    ]);
+    const twice = { ...data, mergedFamilies: [{ root: 's1', hidden: data.mergedFamilies[0].hidden }, ...data.mergedFamilies] };
+    expect(build(twice).hidden.filter((m) => m.nodeId === 's:s1')).toHaveLength(1);
+  });
+
   it('an operation focus hangs the markers on its container', () => {
     const data = {
       ...base(),

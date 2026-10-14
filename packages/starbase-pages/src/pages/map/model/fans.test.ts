@@ -131,6 +131,20 @@ describe('mergeProcessData', () => {
     expect(mergeProcessData(family(), mkData()).pieces).toBeUndefined();
   });
 
+  it('keeps the hidden-record flags of each merged family under its root sample (I3)', () => {
+    const hid = { ancestors: false, descendants: true, events: false, stock: false };
+    const base = family();
+    const add = { ...mkData({ samples: [mkSample('b')] }), hidden: hid };
+    const merged = mergeProcessData(base, add);
+    expect(merged.hidden).toEqual(base.hidden);
+    expect(merged.mergedFamilies).toEqual([{ root: 'b', hidden: hid }]);
+    // a second merge adds its own; the same family merged again replaces, and a family with nothing hidden says nothing
+    const more = mergeProcessData(merged, { ...mkData({ samples: [mkSample('c')] }), hidden: { ...hid, ancestors: true } });
+    expect(more.mergedFamilies?.map((f) => f.root)).toEqual(['b', 'c']);
+    expect(mergeProcessData(more, { ...mkData({ samples: [mkSample('b')] }), hidden: { ...hid, descendants: false } }).mergedFamilies?.map((f) => f.root)).toEqual(['c']);
+    expect(mergeProcessData(base, mkData({ samples: [mkSample('b')] })).mergedFamilies).toBeUndefined();
+  });
+
   it('drops the fan items the family now holds in full, in the focus fan and in side fans', () => {
     const fanOps = [mkOp({ id: 'u0', sampleId: 'x0' }), mkOp({ id: 'u1', sampleId: 'x1' })];
     const base = withSideFan(fanData(tool, fanPage('tools', { items: fanOps, total: 2 }, 1)), { collection: 'equipment', id: 'e1', code: 'NLX', kind: 'equipment' }, fanPage('equipment', { items: [mkOp({ id: 'e1op' })], total: 1 }, 1));
