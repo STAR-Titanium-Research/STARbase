@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-teams",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "/d1-teams: teams (create, edit, delete), their members and managers, and the approvals of members who joined after a record was shared with the team (pending list, approve / decline). Mails the owners and the joiner.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}
