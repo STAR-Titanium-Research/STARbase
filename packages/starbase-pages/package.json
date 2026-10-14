@@ -5,13 +5,20 @@
   "type": "module",
   "description": "STARbase's pages (Home, index and record pages, task screens). Host-neutral; mounted by the Directus Home module and by apps/starbase/web.",
   "main": "src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
     "@d1/ui": "*",
+    "@vue-flow/background": "1.3.2",
+    "@vue-flow/controls": "1.1.3",
+    "@vue-flow/core": "1.48.2",
+    "@vue-flow/minimap": "1.5.4",
+    "elkjs": "0.12.0",
     "jsqr": "^1.4.0",
     "qrcode": "^1.5.4",
     "vue": "^3.5.13",
