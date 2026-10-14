@@ -8,8 +8,9 @@ import type { RuleContext, Values } from './conditions';
 
 // STARbase's own form, generated from a collection's Directus field definitions (ADR-0018, spec 7.3): the Field
 // groups as headed sections, each field drawn by its interface, required marks and conditions (hidden, read-only,
-// required) applied live to what is entered. v-model is the record's values object; only fields the person has
-// changed or filled are in it. `inherited` values (a campaign's project, an alloy from the method) show greyed in
+// required) applied live to what is entered. v-model is a DRAFT's values object, not a PATCH body: it holds only the
+// fields the person has filled, and clearing a field drops its key (so an inherited value shows again) instead of
+// writing null; whatever sends changes to Directus must turn it into one itself. `inherited` values (a campaign's project, an alloy from the method) show greyed in
 // an empty field and are replaced by typing; clearing the field goes back to them. A field it cannot draw shows
 // its value and "Open in Data Studio" (openExternal). Reads (record pickers) go through the host's API.
 const props = withDefaults(
