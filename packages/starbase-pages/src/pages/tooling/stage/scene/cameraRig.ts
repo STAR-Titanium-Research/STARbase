@@ -57,10 +57,12 @@ function fitDistance(halfW: number, halfH: number, aspect: number, fovDeg: numbe
 }
 
 // The tray's polar angle: steep enough that a tall tray fills a portrait stage (the tray's projected shape
-// matches the stage's), never flatter than 52 degrees from straight up, never more top-down than 30.
-const BOX_POLAR_MIN = 30 * RAD;
+// matches the stage's), never flatter than 52 degrees from straight up, never more top-down than 36.
+const BOX_POLAR_MIN = 36 * RAD;
 const BOX_POLAR_MAX = 52 * RAD;
 const BOX_PAD = 1.1;
+// The near end of the tray looks wider than the far end, so aim for a slightly taller projection than the stage's own shape.
+const PERSPECTIVE_ASPECT = 0.88;
 
 // Smallest camera distance at which the tray's eight corners all sit inside the frame (with `pad` as a ratio),
 // from the pinhole model, so the near edge's perspective is counted. The camera looks at `target` from
@@ -95,15 +97,44 @@ function fitTray(
 const CASE_POLAR = 40 * RAD;
 const CASE_PAD = 1.04;
 
+// The vertical extent of the tray's corners in normalised screen space (-1 to 1) from the given camera.
+function trayNdcY(
+	tray: { width: number; depth: number; topY: number }, target: Vec3, polar: number, d: number, tv: number,
+): { min: number; max: number } {
+	const c: Vec3 = [0, Math.cos(polar), Math.sin(polar)];
+	const up: Vec3 = [0, Math.sin(polar), -Math.cos(polar)];
+	let min = Infinity, max = -Infinity;
+	for (const sz of [-1, 1]) for (const y of [0, tray.topY]) {
+		const rel: Vec3 = [0, y - target[1], (sz * tray.depth) / 2 - target[2]];
+		const depth = d - (rel[1] * c[1] + rel[2] * c[2]);
+		const ndc = (rel[1] * up[1] + rel[2] * up[2]) / (depth * tv);
+		min = Math.min(min, ndc);
+		max = Math.max(max, ndc);
+	}
+	return { min, max };
+}
+
 export function frameBox(
 	tray: { width: number; depth: number; topY: number; single?: boolean }, aspect: number, fovDeg = FOV_DEG,
 ): Framing {
 	const a = Math.max(0.2, aspect);
 	const polar = tray.single
 		? CASE_POLAR
-		: Math.min(BOX_POLAR_MAX, Math.max(BOX_POLAR_MIN, Math.acos(Math.min(1, tray.width / (a * tray.depth)))));
-	const target: Vec3 = [0, tray.topY * 0.4, 0];
-	return framingAt(target, fitTray(tray, target, polar, a, fovDeg, tray.single ? CASE_PAD : BOX_PAD), polar, 0);
+		: Math.min(BOX_POLAR_MAX, Math.max(BOX_POLAR_MIN, Math.acos(Math.min(1, tray.width / (PERSPECTIVE_ASPECT * a * tray.depth)))));
+	const pad = tray.single ? CASE_PAD : BOX_PAD;
+	let target: Vec3 = [0, tray.topY * 0.4, 0];
+	let distance = fitTray(tray, target, polar, a, fovDeg, pad);
+	// Perspective makes the near end of the tray larger, so the tray sits low in the frame: slide the target
+	// along the view's up axis until it is centred, and fit again.
+	const up: Vec3 = [0, Math.sin(polar), -Math.cos(polar)];
+	const tv = Math.tan((fovDeg * RAD) / 2);
+	for (let i = 0; i < 3; i++) {
+		const ndc = trayNdcY(tray, target, polar, distance, tv);
+		const shift = ((ndc.max + ndc.min) / 2) * distance * tv;
+		target = [target[0] + up[0] * shift, target[1] + up[1] * shift, target[2] + up[2] * shift];
+		distance = fitTray(tray, target, polar, a, fovDeg, pad);
+	}
+	return framingAt(target, distance, polar, 0);
 }
 
 // The reach of an insert from its centre: the farthest corner tip.

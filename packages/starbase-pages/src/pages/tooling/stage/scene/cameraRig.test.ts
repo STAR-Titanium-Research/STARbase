@@ -51,6 +51,19 @@ describe('framings', () => {
 		expect(Math.max(e.x, e.y)).toBeGreaterThan(0.8); // fills it, not a small tray in the middle
 	});
 
+	it('centres the tray vertically in the frame, though its near end looks larger', () => {
+		const aspect = 360 / 560;
+		const f = frameBox(layout, aspect);
+		const cam = new PerspectiveCamera(32, aspect, 1, 3000);
+		cam.position.set(...f.position);
+		cam.lookAt(new Vector3(...f.target));
+		cam.updateMatrixWorld();
+		cam.updateProjectionMatrix();
+		const ys: number[] = [];
+		for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const py of [0, layout.topY]) ys.push(new Vector3(sx * layout.width / 2, py, sz * layout.depth / 2).project(cam).y);
+		expect(Math.abs(Math.max(...ys) + Math.min(...ys))).toBeLessThan(0.06);
+	});
+
 	it('still fits the tray when the stage is square or landscape (the narrow, stacked layout)', () => {
 		for (const aspect of [1, 1.6, 2.5]) {
 			const e = screenExtent(layout, aspect);

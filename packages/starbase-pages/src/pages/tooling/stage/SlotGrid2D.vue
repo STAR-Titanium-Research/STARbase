@@ -162,6 +162,9 @@ button.slot:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--pri
 	color: var(--d1-dim, var(--theme--foreground-subdued));
 }
 svg { width: 100%; max-height: 280px; }
+/* Both faces share the portrait stage: each gets about half of it. */
+.faces.two svg { max-height: 190px; }
+.faces.two { gap: 6px 24px; }
 .body {
 	fill: color-mix(in srgb, var(--theme--foreground) 14%, var(--d1-tile, var(--theme--background-subdued)));
 	stroke: color-mix(in srgb, var(--theme--foreground) 55%, transparent);

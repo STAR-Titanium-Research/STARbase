@@ -31,8 +31,8 @@ export class SceneMaterials {
 	});
 	readonly mark = new MeshStandardMaterial({ metalness: 0.2, roughness: 0.5 });
 	// Brazed tips: lighter and shinier than the carbide body.
-	readonly tipPcd = new MeshStandardMaterial({ metalness: 0.95, roughness: 0.16 });
-	readonly tipCbn = new MeshStandardMaterial({ metalness: 0.8, roughness: 0.3 });
+	readonly tipPcd = new MeshStandardMaterial({ metalness: 0.7, roughness: 0.26 });
+	readonly tipCbn = new MeshStandardMaterial({ metalness: 0.65, roughness: 0.36 });
 	readonly tray = new MeshStandardMaterial({ metalness: 0.02, roughness: 0.82 });
 	readonly shadow = new MeshBasicMaterial({ color: 0x000000, transparent: true, depthWrite: false, toneMapped: false });
 	readonly ring: Record<RingTone, MeshBasicMaterial> = {
