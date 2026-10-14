@@ -14,12 +14,13 @@
 //        reads all); hidden_count is the rest. events: the last 20, newest first (?events=all for every one); an event about a
 //        record the caller cannot read carries no record, no person and no detail (record_hidden: true; kind, at and actor stay).
 //        team_events has no Lab Member read permission in Directus: this endpoint is the only way to read the history.
-//   GET    /d1-teams/:id/records?collection=<c>&limit=<n>  -> { ids: [...], truncated }  (People 4, Ruling M1) the ids of the records of ONE
-//                                          collection (physical_samples, manufacturing_operations, test_sessions, campaigns or projects) that the
-//                                          team owns (owner_team_id) or has a grant on (<kind>_team_access, which includes the hidden 'own' grant
-//                                          of an owned record: deduplicated), INTERSECTED with the caller's <kind>_readers (an administrator reads
-//                                          all), newest first by the record's updated_at; limit defaults to and is capped at 300 (Ruling M2: 300 ids fit a GET URL under Node's 16 KiB header limit) (< 1 or not a
-//                                          number is 400); truncated: there were more than `limit`. The index pages filter on these ids.
+//   GET    /d1-teams/:id/records?collection=<c>&limit=<n>  -> { ids: [...], truncated }  the ids of the records of ONE collection
+//                                          (physical_samples, manufacturing_operations, test_sessions, campaigns or projects) that the team owns
+//                                          (owner_team_id) or has a grant on (<kind>_team_access, which includes the hidden 'own' grant of an owned
+//                                          record: deduplicated), INTERSECTED with the caller's <kind>_readers (an administrator reads all), newest
+//                                          first by the record's updated_at. limit defaults to and is capped at 300 (300 ids fit a GET URL under
+//                                          Node's 16 KiB header limit); < 1 or not a number is 400. truncated: there were more than `limit`.
+//                                          The index pages filter on these ids.
 //   GET    /d1-teams/mine/recent?limit=20  -> { items: [{ collection, id, kind, code, title, team_id, team_name, team_color, changed_at }] }
 //                                          the most recently changed records (updated_at) of the caller's own teams (as owner or grantee),
 //                                          only those the caller reads; a record of two of their teams appears once; limit defaults to 20, max 100.
