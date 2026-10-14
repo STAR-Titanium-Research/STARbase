@@ -91,6 +91,8 @@ interface Cast {
 	stranger: Login;
 	teamId: string;
 	teamName: string;
+	/** this run's tag: every sample code of the run starts E2E-MT-<tag>- */
+	tag: string;
 	/** the team's samples the joiner can read, by code (nickname "e2e nick NN") */
 	teamCodes: string[];
 	hiddenCode: string;
@@ -196,7 +198,7 @@ async function cast(pw: Pw): Promise<Cast> {
 		const pshared = await ownerApi.post(`${ACCESS}/projects/${projectId}/entries`, { data: { team_id: teamId, role: 'view' } });
 		expect(pshared.ok(), `the PI shares the project with the team: ${pshared.status()} ${await pshared.text()}`).toBeTruthy();
 
-		return { admin, m, owner, joiner, joinerApi, stranger, teamId, teamName, teamCodes, hiddenCode, hiddenId, projectName, cleanup };
+		return { admin, m, owner, joiner, joinerApi, stranger, teamId, teamName, tag, teamCodes, hiddenCode, hiddenId, projectName, cleanup };
 	} catch (e) {
 		// the original failure is the one to report; cleanup logs its own problems
 		await cleanup().catch(() => undefined);
@@ -208,7 +210,7 @@ test.beforeAll(async ({ playwright }) => {
 	test.setTimeout(180_000);
 	c = await cast(playwright);
 	// the team's samples are readable to the joiner (the derived rows may take a moment)
-	await expect.poll(async () => (await c.joinerApi.get(`${D1}/items/physical_samples?filter[sample_code][_starts_with]=E2E-MT-&limit=-1&fields=sample_code`).then((r) => r.json())).data.length, { message: 'the joiner reads the team samples' }).toBe(TEAM_SAMPLES);
+	await expect.poll(async () => (await c.joinerApi.get(`${D1}/items/physical_samples?filter[sample_code][_starts_with]=E2E-MT-${c.tag}-&limit=-1&fields=sample_code`).then((r) => r.json())).data.length, { message: 'the joiner reads the team samples' }).toBe(TEAM_SAMPLES);
 });
 
 test.afterAll(async () => {
@@ -324,7 +326,9 @@ test('Home: My teams lists the team records with accessible links; Show more mov
 		expect(total, 'the panel needs more than ten lines for Show more').toBeGreaterThan(10);
 
 		await expect(page.getByRole('heading', { name: 'My teams' })).toBeVisible();
-		const lines = page.locator('ul.lines > li');
+		// the My teams section only (its <h2> names the region)
+		const panel = page.getByRole('region', { name: 'My teams' });
+		const lines = panel.locator('ul.lines > li');
 		await expect(lines).toHaveCount(10);
 		// every record link is named "<Kind> <code>: <title>"
 		const names = await lines.locator('a[aria-label]').evaluateAll((as) => as.map((a) => a.getAttribute('aria-label') ?? ''));
@@ -335,15 +339,12 @@ test('Home: My teams lists the team records with accessible links; Show more mov
 		await expect(page.getByText(c.hiddenCode), 'HIDDEN is not on the panel').toHaveCount(0);
 
 		// "Show N more" by keyboard: the button goes away and focus lands on line 11 (the first revealed one), not on <body>
-		const more = page.getByRole('button', { name: `Show ${total - 10} more` });
+		const more = panel.getByRole('button', { name: `Show ${total - 10} more` });
 		await more.focus();
 		await page.keyboard.press('Enter');
 		await expect(lines).toHaveCount(total);
 		await expect(more).toHaveCount(0);
-		await expect.poll(() => page.evaluate(() => {
-			const li = document.querySelectorAll('ul.lines > li')[10];
-			return !!li && li.contains(document.activeElement);
-		}), { message: 'focus is inside line 11' }).toBe(true);
+		await expect.poll(() => lines.nth(10).evaluate((li) => li.contains(document.activeElement)), { message: 'focus is inside line 11' }).toBe(true);
 		await expect(page.getByText(c.hiddenCode)).toHaveCount(0);
 	} finally {
 		await j.context.close();
