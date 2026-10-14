@@ -30,6 +30,7 @@ import PageShell from '../components/PageShell.vue';
 import SegmentedControl from '../components/SegmentedControl.vue';
 import { useRequestGate } from '../composables/useRequestGate';
 import CardGrid from './CardGrid.vue';
+import { rowAccent } from './accent';
 import RowPlotButtons from './RowPlotButtons.vue';
 import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
@@ -341,6 +342,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								<td v-if="showThumb" class="thumb"><div class="thumb-box"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></div></td>
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
+										<span v-if="rowAccent(def, row)" class="swatch" :style="{ background: rowAccent(def, row) as string }" aria-hidden="true" />
 										<a
 											v-if="def.rowTarget === 'record'"
 											class="cell-link"
@@ -465,6 +467,7 @@ th.num .sort { justify-content: flex-end; }
 	display: inline; padding: 0; border: 0; background: none; font: inherit; text-align: inherit;
 	color: inherit; text-decoration: none; cursor: pointer;
 }
+.swatch { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme--foreground) 30%, transparent); }
 .cell-link:hover { color: var(--d1-accent, var(--theme--primary)); text-decoration: underline; }
 .cell-link:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 3px; }
 /* Long free text (outcomes, notes) is cut instead of stretching the row. */
@@ -475,7 +478,7 @@ th.num .sort { justify-content: flex-end; }
 	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
 	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
 }
-/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load. */
+/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load; the picture inside is contained (IndexThumb), never cropped. */
 .thumb-box { box-sizing: border-box; width: 72px; height: 45px; overflow: hidden; border: 1px solid var(--d1-line); border-radius: 6px; background: var(--d1-tile); line-height: 0; }
 .skeleton .thumb .bar { width: 72px; height: 45px; border-radius: 6px; }
 

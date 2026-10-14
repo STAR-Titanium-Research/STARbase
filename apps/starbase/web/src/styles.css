@@ -14,30 +14,59 @@ body {
 /* Used by the VButton and VProgressCircular stand-ins' spinners. */
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* The sign-in, SSO-return and unreachable pages: one centred card. */
-.sb-center { min-height: 100dvh; display: grid; place-items: center; padding: 16px; box-sizing: border-box; }
-.sb-card {
-	width: min(380px, 100%); box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; padding: 28px 24px;
-	border: 1px solid var(--theme--border-color-subdued); border-radius: 14px; background: var(--theme--background-subdued);
+/* The sign-in, SSO-return and unreachable pages: one elevated card on a soft full-viewport wash. Only theme
+   tokens, so it follows light and dark (the wash is the primary and secondary colours at a few percent). */
+.sb-center {
+	min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; box-sizing: border-box;
+	background:
+		radial-gradient(ellipse 90% 60% at 50% -10%, color-mix(in srgb, var(--theme--primary) 16%, transparent), transparent 70%),
+		radial-gradient(ellipse 70% 50% at 100% 100%, color-mix(in srgb, var(--theme--secondary) 10%, transparent), transparent 70%),
+		var(--theme--background);
 }
-.sb-card h1 { margin: 4px 0 0; font-size: 18px; }
-.sb-field { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 12px; }
+.sb-card {
+	width: min(400px, 100%); box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; padding: 32px 28px 28px;
+	border: 1px solid var(--theme--border-color-subdued); border-radius: 20px; background: var(--theme--form--field--input--background);
+	box-shadow: 0 1px 2px rgb(0 0 0 / 6%), 0 18px 40px -12px rgb(0 0 0 / 28%);
+}
+.sb-card > .sb-logo { align-self: center; margin-bottom: 2px; }
+.sb-card h1 { margin: 0; font-size: 22px; line-height: 1.25; text-align: center; letter-spacing: -0.01em; }
+.sb-card > p { line-height: 1.5; }
+.sb-sub { margin: -8px 0 6px; text-align: center; color: var(--theme--foreground-subdued); font-size: 13px; }
+.sb-field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 12px; }
 .sb-field input {
-	min-height: 38px; padding: 0 10px; font: inherit; font-weight: 400; font-size: 14px; color: var(--theme--foreground);
-	border: 1px solid var(--theme--form--field--input--border-color); border-radius: 8px; background: var(--theme--form--field--input--background);
+	min-height: 42px; padding: 0 12px; font: inherit; font-weight: 400; font-size: 14px; color: var(--theme--foreground);
+	border: 1px solid var(--theme--border-color); border-radius: 10px; background: var(--theme--background);
+	transition: border-color 0.12s, box-shadow 0.12s;
+}
+.sb-field input:hover { border-color: var(--theme--foreground-subdued); }
+.sb-field input:focus-visible {
+	outline: none; border-color: var(--theme--primary);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme--primary) 28%, transparent);
 }
 .sb-primary {
-	display: inline-flex; justify-content: center; align-items: center; min-height: 40px; border: 0; border-radius: 8px;
-	background: var(--theme--primary); color: var(--theme--primary-foreground); font: inherit; font-weight: 700; text-decoration: none; cursor: pointer;
+	display: inline-flex; justify-content: center; align-items: center; gap: 8px; box-sizing: border-box; width: 100%; min-height: 44px;
+	margin-top: 4px; border: 0; border-radius: 10px; background: var(--theme--primary); color: var(--theme--primary-foreground);
+	font: inherit; font-weight: 700; text-decoration: none; cursor: pointer; transition: filter 0.12s;
 }
-.sb-primary:disabled { opacity: 0.6; }
+.sb-primary:hover:not(:disabled) { filter: brightness(1.12); }
+.sb-primary:focus-visible { outline: 2px solid var(--theme--primary); outline-offset: 3px; }
+.sb-primary:disabled { opacity: 0.75; cursor: progress; }
+.sb-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-top-color: transparent; animation: spin 0.8s linear infinite; }
 .sb-provider {
-	display: flex; justify-content: center; align-items: center; min-height: 38px; border-radius: 8px; text-decoration: none;
-	border: 1px solid var(--theme--border-color); color: var(--theme--foreground);
+	display: flex; justify-content: center; align-items: center; box-sizing: border-box; min-height: 42px; border-radius: 10px; text-decoration: none;
+	border: 1px solid var(--theme--border-color); background: transparent; color: var(--theme--foreground); font-weight: 600;
+	transition: background-color 0.12s, border-color 0.12s;
 }
-.sb-or { margin: 0; text-align: center; color: var(--theme--foreground-subdued); }
-.sb-error { margin: 0; color: var(--theme--danger); }
-.sb-hint { margin: 0; font-size: 12px; color: var(--theme--foreground-subdued); }
+.sb-provider:hover { background: var(--theme--background-subdued); border-color: var(--theme--foreground-subdued); }
+.sb-provider:focus-visible { outline: 2px solid var(--theme--primary); outline-offset: 2px; }
+.sb-or { display: flex; align-items: center; gap: 12px; margin: 2px 0; color: var(--theme--foreground-subdued); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.sb-or::before, .sb-or::after { content: ''; flex: 1; height: 1px; background: var(--theme--border-color); }
+.sb-error {
+	margin: 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.4; color: var(--theme--foreground);
+	background: var(--theme--danger-background); border: 1px solid color-mix(in srgb, var(--theme--danger) 45%, transparent);
+	border-left: 4px solid var(--theme--danger);
+}
+.sb-hint { margin: 2px 0 0; font-size: 12px; line-height: 1.45; text-align: center; color: var(--theme--foreground-subdued); }
 
 /* Phone (< 768 px, spec §3.3): the pages' side padding (PageShell reads --content-padding) shrinks so a
    record page fits 375 px with no sideways scroll. */

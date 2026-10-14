@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
@@ -110,11 +111,10 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 								<span v-if="sample.export_controlled" class="export">Export controlled</span>
 							</template>
 							<template #actions>
-								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
-								<v-button small secondary @click="access = true"><v-icon name="group" small left />Who has access</v-button>
-								<v-button small secondary :to="labelsTo"><v-icon name="label" small left />Print label</v-button>
-								<v-button small secondary @click="openReportPage"><v-icon name="picture_as_pdf" small left />Report</v-button>
-								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
+								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
+									<v-button icon small secondary :to="labelsTo" title="Print label" aria-label="Print label"><v-icon name="label" small /><span class="sr-only">Print label</span></v-button>
+									<v-button icon small secondary @click="openReportPage" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /><span class="sr-only">Report</span></v-button>
+								</RecordActions>
 							</template>
 							<template #extra><SampleGeometry :dims="dims" /></template>
 						</RecordRail>
@@ -160,4 +160,5 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 <style scoped>
 .export { color: var(--d1-bad); font-weight: 650; font-size: var(--fs-md); }
 .note { margin-top: 8px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 </style>
