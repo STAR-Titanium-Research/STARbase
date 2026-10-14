@@ -93,7 +93,7 @@ Header: `People | Teams` switch, search, **Invite** (admins) and **Add person** 
 - Visibility: the panel is shown to admins for anyone and to a member for themselves. For anyone else a member sees the
   existing read-only row (name, Researcher/Operator, teams).
 
-### 1.2 Teams view (`/people?view=teams`) and a team's page (`/teams/:id`)
+### 1.2 Teams view (`/people?view=teams`) and a team's page (`/home/teams/<id>`, E19)
 
 - **Teams view:** a row per team: tile (logo, or initials on the team colour), name, description, member count, managers'
   names. Chips: All · My teams. **New team** for everyone.
@@ -146,6 +146,10 @@ Used in the People list, the person panel, "Who has access", record rails (owner
 
 New migrations from **174** (main is at 172, and fix/form-qa takes 173; check other open branches before claiming).
 
+> **Superseded in part by plan 2 (§10).** Teams are migrations **175** and **176** (174 is the People admin, E8). The access tables,
+> `team_members`' key and the bookkeeping below are built differently: see E10 to E13. The SQL in this section is the original
+> design, not what shipped.
+
 ```sql
 CREATE TABLE teams (
     team_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -189,6 +193,9 @@ deleted its history goes with it; the owners' emails are the record of that.
 
 ### 2.1 Membership bookkeeping (triggers, so every writer obeys it)
 
+> **Superseded by E10 and E11.** The per-record state lives in `<type>_team_pending` (pending, declined) and in derived rows of
+> `<type>_access`, not in `<type>_access_members`. The table below still describes the events correctly.
+
 | Event | Effect on `<type>_access_members` |
 |---|---|
 | A team is granted on a record | one `active` row per current member |
@@ -205,6 +212,12 @@ card, the email and the dialog's "N waiting" show a pending row only while appro
 (computed from the rights tables below). So if their other path to the record goes away later, the request appears then.
 
 ### 2.2 Rights: readers, editors and managers, all materialised
+
+> **Superseded by Ruling D1 (E10).** No `<type>_editors` / `<type>_managers` tables, no `editors_of_<type>()` functions and no
+> change to `access_rules.json` or the Directus rules shipped in PR 2: a team grant is expanded into ordinary `<type>_access` rows
+> ("derived rows"), so the readers machinery and the existing Lab Member edit filters cover teams unchanged. Team **ownership**
+> (PR 3) reuses the same mechanism with a new `manage` level (the plan's outline), not these tables. Read this section as the
+> rejected alternative; ADR-0016 decision 3 is amended to match.
 
 Directus can reach a person through `access._some.person_id.user_id` but not through a team
 (`access._some.team_id.<members>.user_id` is a to-many hop inside `_some`, refused by 11.17; see the Directus filter
@@ -240,6 +253,10 @@ The Directus rules then become one hop each: update `editors._some.user_id = $CU
 | `<type>_access_members` | read where a reader of the record (the child pattern: one bare hop to the record's readers) | read all | full |
 | `<type>_editors`, `<type>_managers` | own rows (like the readers tables) | read all | full |
 
+(As built, E10 and E14: `teams`, `team_members` and `team_events` are readable by every Lab Member through the unfiltered read rows of
+`scripts/access_rules.json`; the ten `<type>_team_access` / `<type>_team_pending` tables are not registered in Directus at all, the
+endpoints read and write them, and they are not granted to `d1_llm_readonly`.)
+
 Writes to teams, membership, team grants and approvals go through the endpoints below with the system accountability after
 their own checks. Lab Admins edit teams only through STARbase (decision 17).
 
@@ -267,7 +284,8 @@ their own checks. Lab Admins edit teams only through STARbase (decision 17).
 - `POST …/entries` accepts `{team_id, role}`; `PATCH …/entries/team/:team_id` `{role?, trust_new_members?}`; `DELETE
   …/entries/team/:team_id`; `POST …/entries/team/:team_id/members/:person_id` `{decision}` (per-record approve / decline).
 - `POST …/transfer` accepts `{team_id}` for the four ownable types; mails the team's managers.
-- `can_manage` reads `<type>_managers` instead of re-running the manage filter.
+- `can_manage` reads `<type>_managers` instead of re-running the manage filter. (PR 2 keeps today's manage rule; team ownership and the
+  managers set are PR 3, E10.)
 - Emails: a team grant mails each active member with an email and a login ("via Additive"); approval mails the joiner; the
   join request mails each owner (one per joiner, listing kind and code of their affected records; titles only for records
   the owner can read, which is all of them).
@@ -298,7 +316,7 @@ It answers `can_administer_accounts` in `GET /people` so the page knows which co
 ## 4. STARbase and kit
 
 - `packages/starbase-pages/src/people.vue` splits into `people/PeopleView.vue` (list, filters, attention),
-  `people/PersonPanel.vue`, `people/TeamsView.vue`, `people/InviteDialog.vue`; new `pages/TeamPage.vue` (`/teams/:id`) and
+  `people/PersonPanel.vue`, `people/TeamsView.vue`, `people/InviteDialog.vue`; new `teams/TeamPage.vue` (`/home/teams/<id>`, E19) and
   `AcceptInvite.vue` in the STARbase app (outside the shell).
 - Kit (`@d1/ui`): `TeamTile`, `TeamCard` (popover), team support in `AccessDialog` / `AccessPersonPicker` / `accessModel`,
   a `WaitingForYou` Home card, the palette (`teamPalette.ts`: about 10 keys, each with a light and a dark shade checked for
@@ -312,7 +330,7 @@ It answers `can_administer_accounts` in `GET /people` so the page knows which co
 | PR | Contents | Depends on |
 |---|---|---|
 | 1 | People page for admins: filters, attention, person panel, account role, suspend, invites and accept page, `d1-people-admin` | none |
-| 2 | Teams: tables, membership triggers, team grants, **editors and managers tables** and the one-hop rules, `d1-teams`, team page, `TeamTile`/`TeamCard`, AccessDialog teams, approvals, Waiting for you, emails, history | 1 (the People/Teams switch) |
+| 2 | Teams: tables, membership triggers, team grants as **derived access rows** (E10; not editors and managers tables), `d1-teams`, team page, `TeamTile`/`TeamCard`, AccessDialog teams, approvals, Waiting for you, emails, history | 1 (the People/Teams switch) |
 | 3 | Team ownership: `owner_team_id`, transfer to a team, guard, owner display | 2 |
 | 4 | My teams on Home, Team filter on index pages | 2 |
 
@@ -321,7 +339,8 @@ runbook section added in PR 2 (as A1a's cutover: backup, apply, `rights_rebuild(
 
 ## 6. Testing
 
-- **Rights equality.** `tests/readers_matrix.sh` becomes a rights matrix: for readers, editors and managers, production
+- **Rights equality.** (As built, E10: the readers matrix is unchanged in shape; team grants are covered by the new mutation cases and
+  by `tests/teams.sh`, and the editors and managers outputs do not exist.) `tests/readers_matrix.sh` becomes a rights matrix: for readers, editors and managers, production
   function = `*_spec` function = the independent oracle (`scripts/dev/access_matrix_oracle.sql`, extended with teams,
   member states, trust and team owners), on the fixture and on random universes that now include teams.
 - **Mutation matrix** extended with: join (trust on / off), leave, approve, decline, trust turned on, grant removed, team
@@ -330,8 +349,10 @@ runbook section added in PR 2 (as A1a's cutover: backup, apply, `rights_rebuild(
   member cannot, Data Studio write to `team_members` refused for a Lab Member.
 - **Endpoint unit tests** (`node:test`) for `d1-teams`, `d1-people-admin` and the new `d1-record-access` routes, including
   Lab Admin vs Administrator, last manager, last Administrator, invite linking.
-- **Performance gate** on the seeded copy, as A1a: every list under 80 ms p95; a join to a team on 100 records and a grant of
-  a 20-person team each under 500 ms.
+- **Performance gate** on the seeded copy, as A1a: every list under 300 ms p95 and writes at most 2x (the coded gate of
+  `scripts/dev/directus_perf.mjs` and `scripts/dev/perf_compare.py`; the "80 ms" first written here was A1a's measured result, not its gate,
+  E20); a join to a team on 100 records and a grant of a 20-person team each under 500 ms (the scenarios `team_join_100_records` and
+  `team_grant_20_members`).
 - **UI:** vitest for the kit pieces; Playwright: People filters, person panel, invite and accept (preview with a mail
   catcher), team page, Who-has-access with a team, approve from Home; STARbase phone layout for the card and the sheet.
 - `tests/phase1_schema.sh`: the new tables are not granted to `d1_llm_readonly` (Ask-DB unchanged).

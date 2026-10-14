@@ -251,3 +251,45 @@ invite routes answer `503`.
 
 Rollback: `make migrate-down` (174), `git checkout <previous commit>`, rebuild as in step 1, recreate `directus` and `proxy`.
 A login invited meanwhile stays (an invited user is an ordinary Directus user).
+
+## Teams (PR 2) (maintainer's step, approve separately)
+
+Teams: migrations 175 (`teams`, `team_members`, `team_events`) and 176 (team grants, the derived access rows, the pending tables, the
+SQL functions), the new `d1-teams` endpoint, the team routes of `d1-record-access` and STARbase's Teams view, team page, members card
+and Home "Waiting for you". **No new `.env` keys.**
+
+**Deploy `d1-record-access` together with migration 176.** 176 splits `UNIQUE (record, person_id)` on the five access tables into two
+partial unique indexes, so the person-entry upsert of the old `d1-record-access` (`ON CONFLICT (record, person_id)`) no longer matches
+an index and every add-person call fails until the new build (its upsert names `WHERE team_access_id IS NULL`) is loaded. Never apply 176
+and leave the old extension running; the steps below do both in one go. `d1-teams` is a new extension folder inside the mounted
+`core/extensions` directory: it needs no registration, only the recreate in step 4.
+
+1. `git pull && npm ci && npm run build:starbase && npm run build:extensions` (same stash advice as the People admin section above).
+2. Back up (`docs/runbooks/backup-restore.md`), then `make migrate-status` (175 and 176 pending) and `make migrate`. 176 gives no team
+   access to anybody (no grants exist yet), so existing readers do not change.
+3. Check the derived rows and the readers, both must be clean:
+   ```sql
+   SELECT * FROM d1_private.team_drift();            -- 0 rows
+   SELECT d1_private.readers_drift_count();          -- 0
+   ```
+4. Flush Redis (Directus's permission cache) and recreate Directus so it loads the extensions:
+   `docker compose exec redis redis-cli FLUSHALL && docker compose up -d --force-recreate directus`, then
+   `docker compose up -d --force-recreate proxy` for the new STARbase build.
+5. Smoke: People shows the People | Teams switch; New team creates one and opens `/home/teams/<id>`; on a sample you own, Who has
+   access → add the team, then add a person to the team: that person is "waiting" (Home "Waiting for you" for the owner) until
+   approved or until Trust future members is ticked. `curl -s -o /dev/null -w '%{http_code}' https://d1-server.tail54eeb6.ts.net/d1-teams`
+   without a session is `401`. Joiner and team mails need the `EMAIL_*` settings (see the People admin section).
+
+Known behaviour: a derived row (an `<type>_access` row with `team_access_id` set) cannot be edited by hand, not even by an
+Administrator in Data Studio (42501 "Team access rows are managed by the team's grant"); change the team's grant instead. If the
+drift check ever shows rows (`missing`, `extra` or `role`, per grant and person), remove the team's grant on that record and add it
+again from Who has access (the grant's triggers rebuild its derived rows); do not edit derived rows by hand.
+
+Performance: the write paths `team_join_100_records` and `team_grant_20_members` are in `scripts/dev/perf_writes.sql` and
+`scripts/dev/directus_perf_writes.mjs`. The before/after comparison (`D1_SMOKE_MODE=perf bash scripts/dev/directus_smoke.sh`, then
+`scripts/dev/perf_compare.py`; gate p95 < 300 ms per list and writes at most 2x) needs a restored copy of live and is the
+maintainer's step; see `docs/runbooks/a1-record-access-cutover.md` for the procedure.
+
+Rollback: `make migrate-down` twice (176, then 175; 176's down deletes the derived rows and restores the old unique constraints),
+`git checkout <previous commit>`, rebuild, flush Redis and recreate `directus` and `proxy`. Deploy the previous `d1-record-access`
+at the same time. Teams, their members and history are lost with 175's down.
