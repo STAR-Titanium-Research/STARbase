@@ -15,6 +15,9 @@ may read; a record that does not exist and one you may not read look the same
 | [Sample](samples.md#the-sample-page) | `https://starbase.tail54eeb6.ts.net/samples/<id>` | any sample code |
 | [Operation](#operation) | `https://starbase.tail54eeb6.ts.net/operations/<id>` | any pass code |
 | [Test](#test) | `https://starbase.tail54eeb6.ts.net/tests/<id>` | any test |
+| [Tool box](tooling-and-equipment.md#the-tool-box-page) | `https://starbase.tail54eeb6.ts.net/tool-boxes/<id>` | Inventory → *Tool boxes*, or any box code |
+| [Cutting insert](tooling-and-equipment.md#the-tool-box-page) | `https://starbase.tail54eeb6.ts.net/inserts/<id>` | Inventory → *Cutting inserts*, or the box page |
+| [Insert edge](tooling-and-equipment.md#the-tool-box-page) | `https://starbase.tail54eeb6.ts.net/edges/<id>` | Inventory → *Insert edges*, an operation or test's edge, or the box page |
 
 The breadcrumb at the top of a page (`Home › Project › Campaign › Sample`) is the way back up.
 Every page has **Edit** (the [Edit drawer](#the-edit-drawer)) and **Data Studio**, which opens the
@@ -144,6 +147,12 @@ analysed, failed...) and the same breadcrumb. Sections:
 - **Results**: the numbers the processing workers wrote, grouped by analysis (basic statistics,
   FFT...). A test that is not yet processed says so.
 - **Files**.
+
+## Tool box, insert and edge
+
+A tool box, one of its inserts and one of their edges share one page with a 3D model of the box in
+the side rail: click an insert to move to it, click an edge to zoom onto it, and the record beside the
+model changes with you. See [The tool box page](tooling-and-equipment.md#the-tool-box-page).
 
 ## The Edit drawer
 

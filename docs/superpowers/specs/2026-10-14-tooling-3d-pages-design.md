@@ -109,7 +109,7 @@ Requested after the first review of PR #286 and approved in conversation.
   wide. When the layout stacks (narrow window), the stage sits above the panels.
 - **Edge count caps the cutting corners.** When `insert_types.edge_count` is below the shape's cutting
   corners, only the first `edge_count` corners cut (from A), and the insert is single-sided.
-- **Tipped inserts (PCD, PCBN, CBN).** Detected from the insert type's substrate, material class, type code
+- **Tipped inserts (PCD, PCBN, CBN).** Detected from the insert type's substrate, type code
   or ISO designation. Each cutting corner gets a brazed tip pad in a lighter, diamond-grey material.
 - **One-insert boxes.** A box holding one insert draws as a small single case, and the box framing opens
   close on that insert.
