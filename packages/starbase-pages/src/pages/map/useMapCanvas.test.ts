@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive, type ShallowRef } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { mkData, mkOp, mkSample } from './model/fixtures';
-import { loadFamily, loadRecordRef, loadRelationDefs, loadUsedIn } from './model/loadFamily';
+import { loadFamily, loadRelationDefs } from './model/loadFamily';
+import { loadRecordRef, loadUsedIn } from './model/loadFans';
 import type { ProcessData } from './model/types';
 import { useMapCanvas } from './useMapCanvas';
 import { useProcessMap } from './useProcessMap';
@@ -75,6 +76,9 @@ vi.mock('./model/loadFamily', async (orig) => ({
   ...(await orig<typeof import('./model/loadFamily')>()),
   loadFamily: vi.fn(),
   loadRelationDefs: vi.fn(async () => null),
+}));
+vi.mock('./model/loadFans', async (orig) => ({
+  ...(await orig<typeof import('./model/loadFans')>()),
   loadStepRow: vi.fn(),
   loadRecordRef: vi.fn(),
   loadUsedIn: vi.fn(),

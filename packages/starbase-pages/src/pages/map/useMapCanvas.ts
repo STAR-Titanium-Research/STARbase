@@ -20,7 +20,8 @@ import { cardLabel } from './nodes/a11y';
 import { KINDS } from './nodes/kinds';
 import { wireTooltip } from './nodes/wireTooltip';
 import MoreNode from './nodes/MoreNode.vue';
-import type { MergeHint, useProcessMap } from './useProcessMap';
+import type { MergeHint } from './useMapExpand';
+import type { useProcessMap } from './useProcessMap';
 import { useElkLayout } from './useElkLayout';
 
 type ProcessMap = ReturnType<typeof useProcessMap>;

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { HostApi, TraceResponse } from '@d1/ui';
 import { isNotVisible } from '@d1/ui';
-import { chunkByBudget, encodedQuerySize, loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './loadFamily';
+import { loadFamily, loadRelationDefs, parseFocus } from './loadFamily';
+import { loadRecordRef, loadStepRow, loadUsedIn, sampleOfRow } from './loadFans';
+import { chunkByBudget, encodedQuerySize } from './requests';
 
 interface Call {
   path: string;

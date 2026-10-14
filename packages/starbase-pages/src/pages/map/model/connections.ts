@@ -11,6 +11,7 @@
 import type { ContainerNode, JunctionNode, MapNode, ProcessGraph, Ref, Wire } from './types';
 import { nodeOfSocket } from './sockets';
 import { refKey } from '../nodes/actions';
+import { collectionOfKind } from './collections';
 
 export const CONNECTION_GROUPS = ['Came in from', 'Went on to', 'Inside', 'Used in', 'In this project'] as const;
 export type ConnectionGroup = (typeof CONNECTION_GROUPS)[number];
@@ -36,10 +37,8 @@ const FORWARD_LABEL: Record<JunctionNode['lineageType'], string> = {
   derived_from: 'derived into',
 };
 
-const COLLECTION_OF = { operation: 'manufacturing_operations', test: 'test_sessions' } as const;
-
 const containerRef = (n: ContainerNode): Connection => ({
-  collection: COLLECTION_OF[n.kind],
+  collection: collectionOfKind(n.kind) ?? '',
   id: n.group.rowIds[0] ?? n.id,
   code: n.code,
   label: n.title,

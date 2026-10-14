@@ -26,7 +26,8 @@ import { miniMapColor, useMapCanvas } from './useMapCanvas';
 import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
 import { personName, useMapExport } from './useMapExport';
-import { useProcessMap, type Reach } from './useProcessMap';
+import type { Reach } from './model/reach';
+import { useProcessMap } from './useProcessMap';
 
 // The Process map (spec D1-D3, §6.1): a record's family as a map of what was done to it. The page frame,
 // the crumb line, the rail (left, 300 px) and the map panel. The state is useProcessMap's, the drawing

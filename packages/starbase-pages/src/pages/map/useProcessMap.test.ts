@@ -3,13 +3,18 @@ import { nextTick, reactive, watch } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from './model/fixtures';
 import type { ContainerNode, MoreNode, OpRow, ProcessData } from './model/types';
-import { loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn } from './model/loadFamily';
-import { HOVER_DELAY_MS, useProcessMap } from './useProcessMap';
+import { loadFamily, loadRelationDefs } from './model/loadFamily';
+import { loadRecordRef, loadStepRow, loadUsedIn } from './model/loadFans';
+import { HOVER_DELAY_MS } from './useMapHover';
+import { useProcessMap } from './useProcessMap';
 
 vi.mock('./model/loadFamily', async (orig) => ({
   ...(await orig<typeof import('./model/loadFamily')>()),
   loadFamily: vi.fn(),
   loadRelationDefs: vi.fn(async () => null),
+}));
+vi.mock('./model/loadFans', async (orig) => ({
+  ...(await orig<typeof import('./model/loadFans')>()),
   loadStepRow: vi.fn(),
   loadRecordRef: vi.fn(),
   loadUsedIn: vi.fn(),
