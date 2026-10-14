@@ -40,12 +40,19 @@ async function orphanLogin(api: APIRequestContext): Promise<{ userId: string; em
 	const made = await api.post(`${D1_LOCAL}/users`, { data: { email, status: 'active' } });
 	expect(made.ok(), 'create a login without a person').toBeTruthy();
 	const userId = (await made.json()).data.id as string;
-	const linkedIds = async () => ((await (await api.get(`${D1_LOCAL}/items/people?filter[user_id][_eq]=${userId}&fields=person_id`)).json()).data as { person_id: string }[]).map((r) => r.person_id);
-	await expect.poll(async () => (await linkedIds()).length).toBe(1);
-	for (const id of await linkedIds()) expect((await api.delete(`${D1_LOCAL}/items/people/${id}`)).ok(), 'delete the auto-made person').toBeTruthy();
+	try {
+		const linkedIds = async () => ((await (await api.get(`${D1_LOCAL}/items/people?filter[user_id][_eq]=${userId}&fields=person_id`)).json()).data as { person_id: string }[]).map((r) => r.person_id);
+		await expect.poll(async () => (await linkedIds()).length).toBe(1);
+		for (const id of await linkedIds()) expect((await api.delete(`${D1_LOCAL}/items/people/${id}`)).ok(), 'delete the auto-made person').toBeTruthy();
+	} catch (e) {
+		await api.delete(`${D1_LOCAL}/users/${userId}`); // the caller never gets the id, so the login is removed here
+		throw e;
+	}
 	return { userId, email };
 }
-const removeOrphanLogin = (api: APIRequestContext, userId: string) => api.delete(`${D1_LOCAL}/users/${userId}`);
+const removeOrphanLogin = async (api: APIRequestContext, userId: string) => {
+	expect((await api.delete(`${D1_LOCAL}/users/${userId}`)).ok(), 'remove the throwaway login').toBeTruthy();
+};
 const row = (page: Page, text: string | RegExp) => page.locator('.prow', { hasText: text }).first();
 const panel = (page: Page, name: string) => page.getByRole('region', { name, exact: true });
 async function openPeople(page: Page, query = ''): Promise<void> {
@@ -122,8 +129,11 @@ test('admin: chips and Sort change the URL and survive reload', async ({ page })
 
 test('admin: the attention line opens a filtered list', async ({ page, playwright }) => {
 	const api = await adminApi(playwright);
-	const { userId, email } = await orphanLogin(api);
+	let userId: string | undefined;
 	try {
+		const orphan = await orphanLogin(api);
+		userId = orphan.userId;
+		const email = orphan.email;
 		await signInStarbase(page, 'admin');
 		await openPeople(page);
 		const line = page.locator('.attn');
@@ -144,7 +154,7 @@ test('admin: the attention line opens a filtered list', async ({ page, playwrigh
 		await page.locator('.attn').getByRole('button', { name: 'clear' }).click();
 		await expect(page).not.toHaveURL(/attn=/);
 	} finally {
-		await removeOrphanLogin(api, userId);
+		if (userId) await removeOrphanLogin(api, userId);
 		await api.dispose();
 	}
 });
@@ -260,6 +270,10 @@ test('admin: invite a new person; the row says "Invite not accepted"; /accept-in
 		await expect(r).toContainText('Invite not accepted');
 		const made = (await listPeople(api)).find((p) => p.full_name === name);
 		expect(made?.login?.status, 'the login is invited and linked to the new person').toBe('invited');
+		// Exactly one person holds that login: the invite linked the new person and nothing else (no duplicate from d1-person-link).
+		const holders = await api.get(`${D1_LOCAL}/items/people?filter[user_id][_eq]=${made?.user_id}&fields=person_id`);
+		expect(holders.ok()).toBeTruthy();
+		expect(((await holders.json()).data as unknown[]).length, 'one people row has the invited login').toBe(1);
 
 		// The person's panel offers Resend for an invited login.
 		await r.click();
@@ -331,8 +345,9 @@ test('member: no attention line, no Role menu; own row opens the panel; the admi
 test('Esc: a focused select, the Edit dialog and the attention menu each keep the panel open; then Esc closes it and focus returns to the row', async ({ page, playwright }) => {
 	const api = await adminApi(playwright);
 	const { personId } = await memberIds(api);
-	const { userId } = await orphanLogin(api); // the attention menu needs at least one attention item
+	let userId: string | undefined;
 	try {
+		userId = (await orphanLogin(api)).userId; // the attention menu needs at least one attention item
 		await signInStarbase(page, 'admin');
 		await openPeople(page);
 		const memberRow = row(page, MEMBER_NAME);
@@ -378,7 +393,7 @@ test('Esc: a focused select, the Edit dialog and the attention menu each keep th
 		await expect(page).not.toHaveURL(/person=/);
 		await expect(memberRow).toBeFocused();
 	} finally {
-		await removeOrphanLogin(api, userId);
+		if (userId) await removeOrphanLogin(api, userId);
 		await api.dispose();
 	}
 });
