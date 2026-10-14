@@ -123,6 +123,50 @@ The powder a FAST run used, as typed on the FAST press ("TIMET 45-150"). Many ru
 names a raw stock lot but is only text: it is not linked to the lot.
 _Avoid_: batch (on its own), FAST batch, batch number
 
+### Building on the process map
+
+**Card**:
+One record drawn on the process map on its own: a sample, a raw stock lot, a material.
+_Avoid_: node, box
+
+**Container**:
+An operation or a test (or a batch of them) drawn as a box that samples enter and leave, with what
+was used inside it.
+_Avoid_: node, operation card
+
+**Socket**:
+The round connector on the edge of a card or container where a wire starts or ends: inputs on the
+left, outputs on the right.
+_Avoid_: node, port, handle, pin (a pin is a shortcut)
+
+**Wire**:
+The line from an output socket to an input socket. A wire carries one sample.
+_Avoid_: edge, link, connection
+
+**Edit mode**:
+The process map's mode for building a process: adding cards and containers, wiring them and filling
+them in. A blank canvas is edit mode with nothing on it yet.
+_Avoid_: builder, node editor (for the mode)
+
+**Draft**:
+What someone has built in edit mode and not yet saved. Nothing in a draft is a record until it is
+saved; then all of it is.
+_Avoid_: plan (a planned operation is a saved record), sketch
+
+**Planned** / **Done**:
+An operation or test is **planned** when it has been laid out but not carried out yet, and **done**
+once someone records that it was. Both are real records; a draft is neither.
+_Avoid_: draft (for a planned record), pending, scheduled
+
+**Attach**:
+To wire an operation that is already recorded to a sample in edit mode, making that sample its input.
+_Avoid_: import, link
+
+**New from**:
+To start a new operation as a copy of an existing one (same method, machine, tool and settings) and
+change what differs.
+_Avoid_: template, duplicate, clone, import
+
 ### Tooling
 
 **Tool box**:
@@ -184,3 +228,8 @@ _Avoid_: PCD box (for the insert), diamond insert
 - "Item" and "Sample" were both used for the same records, whose Item Type also allowed Equipment and
   Miscellaneous; the 16 Equipment rows are rig kit (dyno, cases, hand tools). Resolved: the record is a
   **Sample**. The rig kit belongs in **Inventory**; that move is not made yet.
+- "Node" was used for the socket on a card ("press the free node on the sample") as well as for the cards
+  and containers themselves. Resolved: the connector is a **socket**, the line a **wire**, the boxes
+  **cards** and **containers**; "node" names none of them.
+- "Import an existing operation" meant both wiring an already-recorded operation to a sample and starting
+  a new operation from an existing one. Resolved: the first is **attach**, the second **new from**.
