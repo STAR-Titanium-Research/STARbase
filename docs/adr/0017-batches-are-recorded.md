@@ -20,13 +20,15 @@ only source: it misses a job done over two days and joins two separate jobs done
    `notes` and `owner_person_id`. `manufacturing_operations.batch_id` and `test_sessions.batch_id`
    point at it. Both are **nullable** (Directus marks a NOT NULL column without a default as
    required, the `short_id` incident) and `ON DELETE SET NULL`, so deleting a batch leaves its
-   operations and tests exactly as they were, unbatched.
+   operations and tests in place, no longer in a batch.
 2. **The code is generated, and can be typed.** `code` is `NOT NULL UNIQUE` and takes
    `batches_next_code()` as a column default, so Directus does not treat it as required. The
    function returns `'B-'` and the next `batches_code_seq` number padded to at least four digits
    and never truncated (`B-0001` ... `B-9999`, `B-10000`; a plain `lpad(n, 4, '0')` would truncate
    and fail the unique constraint from the 10000th batch on). A `BEFORE INSERT` trigger fills it when an insert sends `NULL` (or a
-   blank) explicitly, which a default does not cover and the Directus form may do. Any other unique
+   blank) explicitly, which a default does not cover. The Directus form omits `code`, and Directus
+   refuses an explicit null itself with a 400 (the column is NOT NULL), so in practice the trigger
+   fills a blank code and the default fills an omitted one. Any other unique
    text is kept. A code typed by hand in the generated shape (`B-0007`) can later collide
    with the sequence, and the insert then fails on the unique constraint until the sequence passes it.
 3. **The Process map draws recorded batches as batches, and guesses only the rest.** Rows with the
@@ -75,12 +77,17 @@ only source: it misses a job done over two days and joins two separate jobs done
 
 ## Consequences
 
-- **Deploy order.** Apply migration 177 first, then flush Redis and restart Directus (permissions
-  and the new collection are cached; the owner-default hook is loaded at start), then deploy the
-  STARbase build that groups by `batch_id`. A STARbase build that reads `batch_id` against a
-  database without the column fails the request, so the page must not go first.
+- **Deploy order.** Apply migration 177, then restart Directus (permissions and the new collection
+  are cached; the owner-default hook is loaded at start). Directus has no Redis cache configured, so
+  do not flush Redis: it also holds the rq job queue (never `FLUSHALL`). The order of the STARbase
+  build against the migration is free: the map asks for `batch_id` only when the field definitions
+  say it exists, so a build deployed before the migration draws the map as before.
 - **Down drops the recorded batches.** Rolling back removes the table and the foreign-key columns
   (operations and tests keep their rows) and restores the `sintering_batch_number` label to "Batch #".
+- **Deleting a batch touches other people's rows.** `ON DELETE SET NULL` sets `batch_id` to null
+  on every operation and test in the batch, including ones the deleter does not own. That update
+  bumps their `version` and `updated_at`, so a form someone has open on one of those rows gets an
+  OCC conflict on save, and the audit rows are written in the deleter's name.
 - The Process map's grouping reads `batch_id`.
 - The Ask-the-database role is not granted `batches` (ADR-0009); nothing needs it yet.
 - Recorded batches do not retro-fit existing rows. Existing groups stay "probable" until someone

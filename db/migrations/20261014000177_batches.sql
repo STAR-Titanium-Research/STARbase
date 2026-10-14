@@ -26,6 +26,9 @@
 -- scripts/access_rules.json generates for `batches` (custom rows: `gen_access_rules.py --values --only batches`).
 -- Directus caches permissions and schema: restart Directus after applying (no Redis cache is configured for it).
 
+-- Fail fast instead of queueing behind a long import: migrate while no import runs; on a lock timeout, re-run.
+SET LOCAL lock_timeout = '10s';
+
 CREATE SEQUENCE batches_code_seq;
 
 -- The next batch code: 'B-' and the sequence number padded to at least four digits (never truncated).
@@ -175,6 +178,8 @@ WHERE NOT EXISTS (
 );
 
 -- migrate:down
+SET LOCAL lock_timeout = '10s';
+
 -- Restores the sintering_batch_number translation exactly as migration 20261009000143 stages it
 -- ("Batch #", no note). Dropping batches drops the recorded batches; operations and tests keep their rows.
 DELETE FROM directus_permissions WHERE collection = 'batches';

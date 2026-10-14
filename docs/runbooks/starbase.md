@@ -240,6 +240,11 @@ build can be deployed before or after the migration. Migrating does not change w
 2. `docker compose restart directus`: Directus reads its schema and permissions at start, and no Redis cache is configured for it, so the restart is the operative step. This also loads the `d1-owner-default` hook, which now fills `owner_person_id` on a new
    batch (it has no build step; `core/extensions` is mounted as it is). Without the restart a Lab Member's new batch has no
    owner, and only an admin could then edit it.
+3. The STARbase build that groups by `batch_id`: `git pull && npm ci && npm run build:starbase`, then
+   `docker compose up -d --force-recreate proxy` (see "Redeploying after a change" above). This step can come before
+   or after steps 1 and 2.
+
+Run the migration while no import is running: it sets a 10 s lock timeout, so on a lock timeout just run `make migrate` again.
 
 Check:
 - `GET /fields/batches` answers (admin token); `GET /fields/manufacturing_operations/sintering_batch_number` shows the
@@ -249,7 +254,10 @@ Check:
   it is never sent, and the database fills the code. Only a code someone types is kept. (An explicit `"code": null` through the API is refused by Directus with a 400; a blank code is filled.)
 - Set **Batch** on two operations of one sample and open the sample's Process map: one container, "Batch B-…".
 
-Rollback: `make migrate-down` drops `batches` (operations and tests keep their rows; `batch_id` goes), then restart Directus again.
+Rollback: `make migrate-down` drops `batches` (operations and tests keep their rows; `batch_id` goes). Restart Directus
+immediately afterwards: its cached schema still lists `batch_id`, so every read that asks for `fields=*` on operations or tests
+fails with a 500 until it restarts. `make migrate-down` rolls back only the latest applied migration, so it undoes 177 only
+while 177 is still the newest one applied.
 
 ## Report a bug page (`/report-bug`)
 

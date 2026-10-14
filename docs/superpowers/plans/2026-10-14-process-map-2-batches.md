@@ -67,10 +67,10 @@
 
 **Files:**
 - Modify: `tests/ui/specs/17-process-map.spec.ts` (a recorded-batch scenario: create a batch + attach two operations of one family through `adminApi` on the preview copy, open the map, expect one container titled `Batch B-…`; clean up after)
-- Modify: the deploy runbook that lists `make migrate` steps (find the current STARbase runbook under `docs/runbooks/`): migrate **before** deploying this STARbase build is not required (the map tolerates a missing `batch_id`), but the form field appears only after migrate + Directus restart + cache flush — say so.
+- Modify: the deploy runbook that lists `make migrate` steps (find the current STARbase runbook under `docs/runbooks/`): migrate **before** deploying this STARbase build is not required (the map tolerates a missing `batch_id`), but the form field appears only after migrate + a Directus restart — say so.
 - Modify: `docs/wiki/database/` page that documents operations/FAST fields: mention Batch and the Powder batch label.
 
-- [ ] **Step 1:** Start the preview (`D1_PREVIEW_NAME=d1-starbase-map D1_PREVIEW_PORT=18059`, per tests/ui/README.md), apply the migration **to the copy only** (`make migrate` pointed at the preview's database URL, or the script's own migrate hook), restart that Directus and flush its cache.
+- [ ] **Step 1:** Start the preview (`D1_PREVIEW_NAME=d1-starbase-map D1_PREVIEW_PORT=18059`, per tests/ui/README.md), apply the migration **to the copy only** (`make migrate` pointed at the preview's database URL, or the script's own migrate hook), restart that Directus.
 - [ ] **Step 2:** REST smoke as admin and as a Lab Member: create a batch with `code` omitted and one with `"code": ""` → both get `B-` codes (an explicit `"code": null` is refused by Directus with a 400, accepted); set `batch_id` on two operations; open each operation in the Data Studio form (`GET /items/manufacturing_operations/<id>?fields=*,batch_id.*`), edit one field and save, copy one (`POST` with the copied body) — all succeed; `sintering_batch_number` field meta shows "Powder batch". Record the commands and responses in the report.
 - [ ] **Step 3:** Write the spec-17 scenario; run specs 13 + 17 `--retries=0` → PASS. Stop the preview.
 - [ ] **Step 4:** Update the runbook and wiki page; `py -m pre_commit run --files <files>`.

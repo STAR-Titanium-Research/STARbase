@@ -66,7 +66,7 @@ parameter is corrected (see the [Force App wiki](../force-app/plot-dashboard.md#
 When several samples are processed together as one job (a heat-treatment load, a polishing run, a set of tests on one
 day), record it as a **batch**: under **Batches** create one (leave **Code** alone and it becomes B-0001, B-0002, ...),
 then pick it in the **Batch** field of each operation or test session in that job. Every sample keeps its own operation
-or test row; the batch only ties them together, and the [Process map](explorer-pages.md) draws them as one container
+or test row; the batch only ties them together, and the [Process map](explorer-pages.md#process-map) draws them as one container
 titled "Batch B-…". Anyone in the lab can create a batch; only its owner (and admins) can edit or delete it, and
 deleting a batch leaves its operations and tests in place, just no longer in a batch.
 

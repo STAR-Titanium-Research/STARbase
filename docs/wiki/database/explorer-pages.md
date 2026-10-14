@@ -15,6 +15,7 @@ may read; a record that does not exist and one you may not read look the same
 | [Sample](samples.md#the-sample-page) | `https://starbase.tail54eeb6.ts.net/samples/<id>` | any sample code |
 | [Operation](#operation) | `https://starbase.tail54eeb6.ts.net/operations/<id>` | any pass code |
 | [Test](#test) | `https://starbase.tail54eeb6.ts.net/tests/<id>` | any test |
+| [Process map](#process-map) | `https://starbase.tail54eeb6.ts.net/map` | the sidebar: Analysis → *Process map*, or the **Process map** button on a record page or index row |
 
 The breadcrumb at the top of a page (`Home › Project › Campaign › Sample`) is the way back up.
 Every page has **Edit** (the [Edit drawer](#the-edit-drawer)) and **Data Studio**, which opens the
@@ -144,6 +145,27 @@ analysed, failed...) and the same breadcrumb. Sections:
 - **Results**: the numbers the processing workers wrote, grouped by analysis (basic statistics,
   FFT...). A test that is not yet processed says so.
 - **Files**.
+
+## Process map
+
+The **Process map** shows how samples came to be, drawn like a node editor with the samples flowing left to right. Each
+operation and each test is a box: the samples that went through it enter on the left and leave on the right, and what it
+used (machine, tool, insert edge, recipe, data file) sits inside the box. A sample with a parent and no operation behind
+it shows a small dashed junction (cut from, sintered from...). Click a box to see the record in the panel on the left; the
+**+** on a box loads more around it.
+
+Open it from **Analysis → Process map** in the sidebar, or from the **Process map** button on a sample, operation or test
+page (in the left rail) or on a row of an index page, which opens the map on that record. The address is
+`/map?focus=<kind>:<id>` and holds the view, so **Copy link** shares it. Opening on a sample shows its whole family; opening
+on a tool, machine, insert edge, recipe or stock lot shows the operations that used it. As everywhere in STARbase, the map
+only draws records you can read: where something is hidden from you, the socket says *some records hidden*.
+
+**Batches.** When several samples went through the same kind of step together, the map draws them as one container. A
+**recorded batch** (a batch someone created under **Batches** and picked on the operations or tests; see
+[Batches](operations-and-tests.md#batches)) is titled "Batch B-0001" and holds exactly the rows that point at it. Rows with
+no recorded batch that look like one job (the same method, machine and day, and for heat treatment, sample preparation and additive work also the same recipe) are drawn dashed under a **probable batch**
+header; this is only a guess. The **Probable batches** chip in the Show options turns the guessing off. A row with a
+recorded batch never joins a probable one.
 
 ## The Edit drawer
 
