@@ -253,6 +253,28 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
   and Tests tables show only readable rows. A sample the role cannot read, and a made-up id, both
   show "Not found or not visible to you" with a link back to Home. Since: Explorer pages E1 (PR
   pending).
+- [ ] **E1 — life strip grouped by day on a busy sample.** Open the Sample page of a sample with
+  20 or more operations (e.g. `10-AA-MF-2023-3-31`). Expect: the life strip has one node per day
+  for the operations and tests, labelled with the date and "N operations · M tests". Each node
+  holds a chip per record, operations as `#<step>` in step order and then tests by type. Hovering a
+  chip shows the full pass code (or the test's type and status), and clicking it opens that record's
+  page. A day with more than 16 records shows "+N more", which expands to all of them and back with
+  "Show fewer". Parents, this sample and children still have a node each. Operations with no date
+  sit in one "Undated" node at the end. Check that the days are in date order and that the
+  operation and test counts match the Operations and Tests tables. Check below ~640 px wide and in
+  the dark theme too. Since: compact life strip (PR pending).
+- [ ] **E1 — life strip folds the middle steps.** On the same busy sample, or one with a dozen
+  days of operations, open the Sample page at full width. Expect: when the steps would not fit, the
+  strip shows the start (stock, parents, this sample) and the latest steps without scrolling, with a
+  dashed "N more steps" node between them. That node gives the hidden operation and test counts and
+  their date range. Click it: every step shows, the first hidden one where the split node was, and
+  the strip scrolls sideways. **Fold the steps in between** puts the split back. Resize the window:
+  the split re-fits. Below ~640 px wide the vertical list shows at most 8 steps the same way. A
+  sample whose steps fit shows no split. On a sample blended from many parents (six or more), the
+  oldest parents fold into their own split and **This sample** stays visible. With the keyboard, Tab
+  to a split and press Enter: focus lands on the first step it showed. Press Enter on **Fold the
+  steps in between**: focus returns to the split. A screen reader reads each chip as its pass code
+  (or test and status), not as "#17". Since: compact life strip (PR pending).
 - [ ] **E1 — links from Home and the dashboards.** On Home, the recent-activity sample cards and, in
   the Lab Dashboard, "Open sample" and the timeline entries open the Sample page; operation and test
   links open their Explorer pages (E4).

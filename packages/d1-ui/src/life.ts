@@ -7,6 +7,7 @@
 // (a count would tell a reader how many records they cannot see, which for a Restricted record is information); this file
 // accepts a number as well, so it works against an older d1-trace.
 
+import { formatDate } from './format';
 import { hasPassCode, operationLabel } from './operationLabel';
 import { recordRoute } from './recordRoute';
 
@@ -63,6 +64,8 @@ export interface LifeItem {
 	isCode: boolean;
 	/** Reached only through a sample the user cannot see. */
 	throughHidden: boolean;
+	/** The operation's step (`operation_sequence`); null for everything else. */
+	sequence?: number | null;
 }
 
 // The marker text: never a number, whatever the response carries.
@@ -149,6 +152,7 @@ export function buildLife(trace: TraceResponse): LifeItem[] {
 			date: e.date,
 			to: recordRoute(e.collection, e.id),
 			throughHidden: false,
+			sequence: isTest ? null : (e.sequence ?? null),
 		});
 	}
 	items.push(...hiddenMarker('events', trace.hidden.events));
@@ -182,4 +186,71 @@ export function truncatedNotes(trace: Pick<TraceResponse, 'truncated'>): string[
 	return Object.keys(trace.truncated ?? {}).map(
 		(k) => TRUNCATED_TEXT[k] ?? `Very long history: ${k.replace('_', ' ')} is cut short.`,
 	);
+}
+
+// A sample can have 20-30 operations and tests, often several on one day: one node each made the
+// strip scroll for screens. The strip shows each day as one node instead, with a small chip per
+// record; the lineage (stock, parents, this sample, children) keeps a node per record.
+
+export interface LifeDay {
+	type: 'day';
+	key: string;
+	/** "31 Mar 2023", or "Undated". */
+	dayText: string;
+	/** Operations by step, then tests, in the order the endpoint sent them. */
+	items: LifeItem[];
+	operations: number;
+	tests: number;
+}
+
+export type LifeStep = { type: 'item'; key: string; item: LifeItem } | LifeDay;
+
+const isEvent = (i: LifeItem): boolean => i.kind === 'operation' || i.kind === 'test';
+const bySequence = (a: LifeItem, b: LifeItem): number => (a.sequence ?? Infinity) - (b.sequence ?? Infinity);
+
+/** Folds the operations and tests of `buildLife` into one step per calendar day (undated ones into one last step). */
+export function groupLife(items: LifeItem[]): LifeStep[] {
+	const steps: LifeStep[] = [];
+	let day: LifeDay | null = null;
+	for (const item of items) {
+		if (!isEvent(item)) {
+			day = null;
+			steps.push({ type: 'item', key: item.key, item });
+			continue;
+		}
+		const dayText = formatDate(item.date, 'Undated');
+		if (!day || day.dayText !== dayText) {
+			day = { type: 'day', key: `day-${dayText}-${steps.length}`, dayText, items: [], operations: 0, tests: 0 };
+			steps.push(day);
+		}
+		day.items.push(item);
+		if (item.kind === 'test') day.tests++;
+		else day.operations++;
+	}
+	for (const s of steps) {
+		if (s.type !== 'day') continue;
+		const ops = s.items.filter((i) => i.kind === 'operation').sort(bySequence);
+		s.items = [...ops, ...s.items.filter((i) => i.kind === 'test')];
+	}
+	return steps;
+}
+
+const count = (n: number, one: string, many: string): string => (n ? `${n} ${n === 1 ? one : many}` : '');
+
+/** "26 operations · 2 tests". */
+export function daySummary(day: Pick<LifeDay, 'operations' | 'tests'>): string {
+	return join([count(day.operations, 'operation', 'operations'), count(day.tests, 'test', 'tests')]);
+}
+
+/** A record's chip in a day: an operation's step (`#17`), else its label; a test's type. */
+export function chipText(item: LifeItem): string {
+	if (item.kind === 'operation' && item.sequence !== null && item.sequence !== undefined) return `#${item.sequence}`;
+	return item.label;
+}
+
+/** The chip's tooltip: the full label, with a test's status or a coded operation's step. */
+export function chipTitle(item: LifeItem): string {
+	if (item.kind === 'test') return join([item.label, item.sub]);
+	const step = item.isCode && item.sequence !== null && item.sequence !== undefined ? `step ${item.sequence}` : '';
+	return join([item.label, step]);
 }
