@@ -274,8 +274,9 @@ function onKeydown(e: KeyboardEvent) {
 							<p class="hint">The people listed on the sample can see this {{ word }} too, unless a campaign or project hides it from them. Change it on the sample.</p>
 							<ul class="rows" :aria-label="`People with access through the sample`">
 								<li v-if="parentList.owner" class="row">
-									<span class="av" aria-hidden="true">{{ initials(parentList.owner.name) }}</span>
-									<span class="who"><span class="name">{{ parentList.owner.name }}</span></span>
+									<TeamTile v-if="isTeamOwner(parentList.owner)" :team="parentList.owner" size="md" />
+									<span v-else class="av" aria-hidden="true">{{ initials(parentList.owner.name) }}</span>
+									<span class="who"><span class="name">{{ ownerRowText(parentList.owner) }}</span></span>
 									<span class="role">Owner</span>
 								</li>
 								<li v-for="e in parentEntries" :key="e.person_id ?? `plogin-${e.name}`" class="row">

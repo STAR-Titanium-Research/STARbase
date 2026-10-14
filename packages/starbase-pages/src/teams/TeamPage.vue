@@ -122,11 +122,6 @@ async function leave(m: TeamMember) {
 async function removeTeam() {
 	const t = team.value;
 	if (!t) return;
-	// a team that owns records is refused by the endpoint; say so at once, with what it owns, instead of asking first
-	if ((detail.value?.counts.owns ?? 0) > 0) {
-		actionError.value = deleteRefusal(t.name, null, detail.value?.counts.owns);
-		return;
-	}
 	if (!confirm(`Delete the team ${t.name}? Its access to records goes with it; the owners of those records are told.`)) return;
 	if (await act(() => deleteTeam(host.api, props.id), (e) => deleteRefusal(t.name, e))) host.navigate(BACK);
 }

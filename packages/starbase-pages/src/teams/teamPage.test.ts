@@ -64,11 +64,6 @@ describe('deleteRefusal', () => {
 		expect(deleteRefusal('Beta', Object.assign(new Error('This team owns records.'), { code: 'TEAM_OWNS_RECORDS', extensions: {} }))).toBe('This team owns records.');
 		expect(deleteRefusal('Beta', null)).toBe('That did not work.');
 	});
-	it('refuses before asking when the page already knows the team owns records', () => {
-		expect(deleteRefusal('Beta', null, 3)).toBe('Beta owns 3 records. Transfer ownership of them to a person or another team before deleting the team.');
-		expect(deleteRefusal('Beta', null, 1)).toBe('Beta owns 1 record. Transfer ownership of them to a person or another team before deleting the team.');
-		expect(deleteRefusal('Beta', null, 0)).toBe('That did not work.');
-	});
 });
 
 describe('levelCounts', () => {

@@ -48,11 +48,10 @@ const ownsSentence = (team: string, what: string): string =>
 
 /**
  * The words for a refused Delete. A team that owns records is refused (409 TEAM_OWNS_RECORDS, extensions.counts): the sentence names what it
- * owns. `ownsTotal`: the number of records the page already knows the team owns (the team page's "Owns" count): a team that owns records is
- * refused without asking. Any other failure shows the endpoint's own message.
+ * owns, so the page does not need its own count: the endpoint refuses atomically and deletes nothing. Any other failure shows the endpoint's
+ * own message.
  */
-export function deleteRefusal(team: string, err: unknown, ownsTotal = 0): string {
-	if (ownsTotal > 0) return ownsSentence(team, plural(ownsTotal, 'record'));
+export function deleteRefusal(team: string, err: unknown): string {
 	const e = err as { message?: string; code?: string; extensions?: { counts?: Record<string, number> } } | null;
 	if (e?.code === 'TEAM_OWNS_RECORDS' && e.extensions?.counts) return ownsSentence(team, ownedCountsText(e.extensions.counts));
 	return e?.message || 'That did not work.';
