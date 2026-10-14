@@ -8,7 +8,6 @@ const NOTES: Record<string, string> = {
 	possible_duplicate: 'Possible duplicate',
 	former_login_active: 'Former, login still active',
 	suspended_owns_records: 'Suspended, still owns records',
-	former_in_team: 'Former, still in a team',
 };
 
 /** The note for a row, or null when nothing is off (a login without a person has its own "Link to a person…" action instead). */

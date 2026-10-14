@@ -1,10 +1,9 @@
 <script setup lang="ts">
 // The panel beside the People list (a bottom sheet on a narrow screen): who the person is (Edit opens the person dialog), their Account
-// (an administrator's view: role, login, last sign-in), their Teams (chips that open the team) and their Access (counts, including the
-// records their teams give them; a count opens its records, and a line says what they are still waiting to be approved on). A member sees their own
+// (an administrator's view: role, login, last sign-in) and their Access (three counts; a count opens its records). A member sees their own
 // panel without the Account section. Words follow CONTEXT.md: account role, login, Suspended, Former; Researcher / Operator are kinds of work.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { DEFAULT_TEAM_COLOR, RecordLink, TeamTile, isTeamColor, useExplorerHost } from '@d1/ui';
+import { RecordLink, useExplorerHost } from '@d1/ui';
 import PersonEditDialog from './PersonEditDialog.vue';
 import { lastSeen } from './lastSeen';
 import {
@@ -17,7 +16,7 @@ import {
 	type PersonAccess,
 } from './peopleApi';
 import type { PeopleLogin, PeopleRow } from './peopleQuery';
-import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
+import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote } from './personPanel';
 
 const props = defineProps<{
 	personId: string;
@@ -106,14 +105,7 @@ function doAction() {
 	});
 }
 
-// ---- Teams: a tile and name per team; it opens the team's page ----
-const teams = computed(() => person.value?.teams ?? []);
-// an unknown colour key (an older team row) shows as the default teal, as the teams table does
-const tileOf = (t: { name: string; color: string; logo?: string | null }) => ({ name: t.name, color: isTeamColor(t.color) ? t.color : DEFAULT_TEAM_COLOR, logo: t.logo });
-const openTeam = (teamId: string) => host.navigate(`/home/teams/${encodeURIComponent(teamId)}`);
-
-// ---- Access: the counts; a count lists its records ----
-const waiting = computed(() => waitingLine(access.value));
+// ---- Access: three counts; a count lists its records ----
 const access = ref<PersonAccess | null>(null);
 const openList = ref<AccessList | null>(null);
 const records = ref<AccessRecord[]>([]);
@@ -231,18 +223,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 			<p v-else-if="notice" class="ok" role="status">{{ notice }}</p>
 		</section>
 
-		<section class="sec" aria-label="Teams">
-			<h3>Teams</h3>
-			<div v-if="teams.length" class="chips">
-				<button v-for="t in teams" :key="t.team_id" type="button" class="team-link" :title="t.is_manager ? `${t.name} (manager)` : t.name" @click="openTeam(t.team_id)">
-					<TeamTile :team="tileOf(t)" size="sm" />
-					<span class="nm">{{ t.name }}</span>
-					<span v-if="t.is_manager" class="mgr">manager</span>
-				</button>
-			</div>
-			<p v-else class="dim none">Not in any team.</p>
-		</section>
-
 		<section class="sec" aria-label="Access">
 			<h3>Access</h3>
 			<div v-for="l in ACCESS_LISTS" :key="l.id" class="f">
@@ -252,7 +232,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 					{{ countLabel(access[l.id]) }}
 				</button>
 			</div>
-			<p v-if="waiting" class="waiting">{{ waiting }}</p>
 			<p v-if="accessError" class="err" role="alert">{{ accessError }}</p>
 			<div v-if="openList" class="recs">
 				<v-progress-circular v-if="listLoading" indeterminate small />
@@ -319,15 +298,6 @@ h3 { margin: 12px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(-
 .dim { color: var(--d1-dim); font-size: var(--fs-sm); }
 .err { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--d1-bad); overflow-wrap: anywhere; }
 .ok { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--d1-dim); }
-
-.chips { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
-.team-link { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 10px 2px 2px; border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-tile); color: inherit; font: inherit; font-size: var(--fs-sm); font-weight: 600; cursor: pointer; }
-.team-link:hover { border-color: var(--d1-accent, var(--theme--primary)); }
-.team-link:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; }
-.team-link .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.team-link .mgr { font-size: var(--fs-xs); font-weight: 500; color: var(--d1-dim); }
-.none { margin: 4px 0 0; }
-.waiting { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--d1-warn); }
 
 .recs { margin-top: 6px; border-top: 1px solid var(--d1-line); }
 .recs ul { list-style: none; margin: 0; padding: 0; }

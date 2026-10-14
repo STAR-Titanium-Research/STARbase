@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
-import { PeopleApiError, invite, listTeamsBrief, loadAccess, loadPeople, patchLogin, removeDirectGrant } from './peopleApi';
+import { PeopleApiError, invite, loadAccess, loadPeople, patchLogin, removeDirectGrant } from './peopleApi';
 
 const fakeApi = (over: Partial<Record<keyof HostApi, any>> = {}): HostApi & Record<keyof HostApi, ReturnType<typeof vi.fn>> =>
 	({
@@ -59,76 +59,6 @@ describe('loadPeople', () => {
 	it('throws the endpoint message', async () => {
 		const api = fakeApi({ get: vi.fn(async () => { throw refused('Only an administrator can open this.'); }) });
 		await expect(loadPeople(api, true)).rejects.toThrow('Only an administrator can open this.');
-	});
-});
-
-describe('teams', () => {
-	const TEAMS = { teams: [{ team_id: 't2', name: 'beta', color: 'blue', logo: 'f1', member_count: 3 }, { team_id: 't1', name: 'Alpha', color: 'teal', logo: null }] };
-	const byUrl = (answers: Record<string, any>) => vi.fn(async (url: string) => ({ data: answers[url] ?? {} }));
-
-	it('listTeamsBrief reads GET /d1-teams and keeps id, name, colour and logo, by name', async () => {
-		const api = fakeApi({ get: byUrl({ '/d1-teams': TEAMS }) });
-		expect(await listTeamsBrief(api)).toEqual([
-			{ team_id: 't1', name: 'Alpha', color: 'teal', logo: null },
-			{ team_id: 't2', name: 'beta', color: 'blue', logo: 'f1' },
-		]);
-		expect(api.get).toHaveBeenCalledWith('/d1-teams');
-	});
-
-	it('an administrator gets the teams of each person from the endpoint, and the team list', async () => {
-		const mine = [{ team_id: 't1', name: 'Alpha', color: 'teal', logo: null, is_manager: true }];
-		const api = fakeApi({
-			get: byUrl({
-				'/d1-people-admin/people': { can_administer_accounts: true, roles: [], people: [{ person_id: 'p1', full_name: 'Ann', teams: mine }, { person_id: 'p2', full_name: 'Bo' }], logins_without_person: [] },
-				'/d1-teams': TEAMS,
-			}),
-		});
-		const data = await loadPeople(api, true);
-		expect(data.rows.map((r) => r.teams)).toEqual([mine, []]);
-		expect(data.teams.map((t) => t.team_id)).toEqual(['t1', 't2']);
-	});
-
-	it('a member gets memberships from /items/team_members joined with the teams', async () => {
-		const api = fakeApi({
-			get: byUrl({
-				'/items/people': { data: [{ person_id: 'p1', full_name: 'Ann' }, { person_id: 'p2', full_name: 'Bo' }, { person_id: 'p3', full_name: 'Cy' }] },
-				'/items/team_members': { data: [
-					{ team_id: 't2', person_id: 'p1', is_manager: true },
-					{ team_id: 't1', person_id: 'p1', is_manager: false },
-					{ team_id: 't1', person_id: 'p2', is_manager: false },
-					{ team_id: 'gone', person_id: 'p3', is_manager: false },
-				] },
-				'/d1-teams': TEAMS,
-			}),
-		});
-		const data = await loadPeople(api, false);
-		expect(api.get).toHaveBeenCalledWith('/items/team_members', { params: { fields: 'team_id,person_id,is_manager', limit: -1 } });
-		expect(data.rows.map((r) => (r.teams ?? []).map((t) => [t.team_id, t.name, t.is_manager]))).toEqual([
-			[['t2', 'beta', true], ['t1', 'Alpha', false]],
-			[['t1', 'Alpha', false]],
-			[],
-		]);
-		expect(data.teams.map((t) => t.team_id)).toEqual(['t1', 't2']);
-	});
-
-	it('the people still load when the teams cannot be read', async () => {
-		const api = fakeApi({
-			get: vi.fn(async (url: string) => {
-				if (url === '/items/people') return { data: { data: [{ person_id: 'p1', full_name: 'Ann' }] } };
-				throw refused('No teams for you.');
-			}),
-		});
-		const data = await loadPeople(api, false);
-		expect(data.teams).toEqual([]);
-		expect(data.rows[0]!.teams).toEqual([]);
-	});
-
-	it('loadAccess carries the teams and waiting counts (0 when the server leaves them out)', async () => {
-		const api = fakeApi({ get: vi.fn(async () => ({ data: { owns: 1, shared: 0, investigator: 0, teams: 4, waiting: 3, waiting_owners: 2 } })) });
-		expect(await loadAccess(api, 'p1', 'teams')).toMatchObject({ teams: 4, waiting: 3, waiting_owners: 2 });
-		expect(api.get).toHaveBeenCalledWith('/d1-people-admin/people/p1/access', { params: { list: 'teams' } });
-		const old = fakeApi({ get: vi.fn(async () => ({ data: { owns: 1, shared: 0, investigator: 0 } })) });
-		expect(await loadAccess(old, 'p1')).toMatchObject({ teams: 0, waiting: 0, waiting_owners: 0 });
 	});
 });
 

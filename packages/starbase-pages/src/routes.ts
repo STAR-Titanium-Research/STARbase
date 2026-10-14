@@ -2,7 +2,6 @@ import type { RouteRecordRaw } from 'vue-router';
 import HomeView from './home.vue';
 import RegisterSample from './register-sample.vue';
 import PeopleView from './people.vue';
-import TeamPage from './teams/TeamPage.vue';
 import SamplePage from './pages/SamplePage.vue';
 import CampaignPage from './pages/CampaignPage.vue';
 import ProjectsIndex from './pages/ProjectsIndex.vue';
@@ -22,7 +21,6 @@ export const starbaseRoutes: RouteRecordRaw[] = [
 	{ path: '', component: HomeView },
 	{ path: 'register-sample', component: RegisterSample },
 	{ path: 'people', component: PeopleView },
-	{ path: 'teams/:id', component: TeamPage, props: true },
 	{ path: 'projects', component: ProjectsIndex },
 	{ path: 'projects/:id', component: ProjectPage, props: true },
 	{ path: 'campaigns/:id', component: CampaignPage, props: true },

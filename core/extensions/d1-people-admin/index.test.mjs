@@ -250,13 +250,6 @@ test('accountAdmin: Lab Admin is admin but not accounts; a member is neither; D1
   assert.equal((await call(handlers['GET /people'], { acc: admin(U.superAdmin) })).body.can_administer_accounts, false);
 });
 
-const TEAM = { alpha: ID(901), beta: ID(902) };
-const MEMBERSHIPS = [
-  { person_id: P.ann, team_id: TEAM.alpha, name: 'Alpha Team', color: 'blue', logo: ID(950), is_manager: true },
-  { person_id: P.ann, team_id: TEAM.beta, name: 'Beta Team', color: 'teal', logo: null, is_manager: false },
-  { person_id: P.cy, team_id: TEAM.beta, name: 'Beta Team', color: 'teal', logo: null, is_manager: false },
-];
-
 test('GET /people joins login status, role name and last_access, and lists logins without a person', async () => {
   const { handlers } = mount({ raw: { 'SELECT key': ATTENTION } });
   const r = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
@@ -272,7 +265,6 @@ test('GET /people joins login status, role name and last_access, and lists login
     person_id: P.ann, full_name: 'Ann Member', email: 'ann@people.example', is_researcher: true, is_operator: false, active: true, notes: 'hello', user_id: U.ann, created_at: '2026-03-01T09:30:00.000Z',
     login: { status: 'active', role_id: R.member, role_name: 'Lab Member', last_access: '2026-10-13T08:00:00.000Z', email: 'ann@login.example' },
     attention: ['possible_duplicate'],
-    teams: [],
   });
   assert.equal(byName['Bob Member'].login.status, 'invited');
   assert.equal(byName['Bob Member'].login.last_access, null);
@@ -293,19 +285,6 @@ test('GET /people joins login status, role name and last_access, and lists login
   });
   assert.equal(r.body.logins_without_person[1].role_id, null);
   assert.equal(r.body.logins_without_person[1].role_name, null);
-});
-
-test('GET /people gives each person their teams (one query: team_members joined with teams)', async () => {
-  const { handlers, db } = mount({ raw: { 'SELECT key': ATTENTION, 'SELECT tm.person_id': MEMBERSHIPS } });
-  const r = await call(handlers['GET /people'], { acc: admin(U.superAdmin) });
-  const byName = Object.fromEntries(r.body.people.map((p) => [p.full_name, p]));
-  assert.deepEqual(byName['Ann Member'].teams, [
-    { team_id: TEAM.alpha, name: 'Alpha Team', color: 'blue', logo: ID(950), is_manager: true },
-    { team_id: TEAM.beta, name: 'Beta Team', color: 'teal', logo: null, is_manager: false },
-  ]);
-  assert.deepEqual(byName['Cy Nologin'].teams, [{ team_id: TEAM.beta, name: 'Beta Team', color: 'teal', logo: null, is_manager: false }]);
-  assert.deepEqual(byName['Bob Member'].teams, []);
-  assert.equal(db.log.raw.filter((x) => /team_members/.test(x.sql)).length, 1);
 });
 
 test('attentionCount counts login keys by user_ids and every other key by person_ids (never both)', () => {
@@ -343,7 +322,7 @@ test('GET /attention counts by the rule and omits zero counts', async () => {
   assert.deepEqual((await call(empty.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
 });
 
-const COUNTS = { 'SELECT owns': [{ owns: 3, shared: 2, investigator: 1, teams: 4, waiting: 2 }], 'SELECT count(DISTINCT': [{ owners: 1 }] };
+const COUNTS = { 'SELECT owns': [{ owns: 3, shared: 2, investigator: 1 }] };
 const SHARED = [
   { collection: 'physical_samples', record_id: SAMPLE, level: 'view', source: 'access', granted_by: 'Bob Member', added_at: new Date('2026-10-01T12:00:00Z') },
   { collection: 'physical_samples', record_id: SAMPLE_GONE, level: 'edit', source: 'access', granted_by: null, added_at: null },
@@ -356,7 +335,7 @@ test('member can read only their own access', async () => {
   const { handlers, db } = mount({ raw: accessRaw() });
   const own = await call(handlers['GET /people/:person_id/access'], { acc: member(U.ann), params: { person_id: P.ann } });
   assert.equal(own.status, 200);
-  assert.deepEqual(own.body, { owns: 3, shared: 2, investigator: 1, teams: 4, waiting: 2, waiting_owners: 1 });
+  assert.deepEqual(own.body, { owns: 3, shared: 2, investigator: 1 });
   assert.deepEqual(db.log.raw[0].bindings, [P.ann]);
   const other = await call(handlers['GET /people/:person_id/access'], { acc: member(U.ann), params: { person_id: P.bob } });
   assert.equal(other.status, 403);
@@ -383,31 +362,6 @@ test('?list=shared returns kind/code/title from COLLECTIONS fields', async () =>
   // without ?list there are only the counts
   const counts = await call(handlers['GET /people/:person_id/access'], { acc: admin(U.labAdmin), params: { person_id: P.ann } });
   assert.equal('records' in counts.body, false);
-});
-
-test('?list=teams lists the rows the teams of the person give them (source team, granted_by the team)', async () => {
-  const TEAMS = [{ collection: 'physical_samples', record_id: SAMPLE, level: 'view', source: 'team', granted_by: 'Alpha Team', added_at: new Date('2026-10-02T12:00:00Z') }];
-  const { handlers, db } = mount({ raw: { ...COUNTS, 'SELECT collection': (bindings) => (bindings[1] === 'teams' ? TEAMS : []) } });
-  const r = await call(handlers['GET /people/:person_id/access'], { acc: admin(U.labAdmin), params: { person_id: P.ann }, query: { list: 'teams' } });
-  assert.equal(r.status, 200);
-  assert.equal(r.body.teams, 4);
-  assert.deepEqual(r.body.records, [
-    { collection: 'physical_samples', id: SAMPLE, kind: 'sample', code: 'SM-001', title: 'Bar A', level: 'view', source: 'team', granted_by: 'Alpha Team', added_at: '2026-10-02T12:00:00.000Z' },
-  ]);
-  assert.deepEqual(db.log.raw.find((x) => x.sql.startsWith('SELECT collection')).bindings, [P.ann, 'teams']);
-});
-
-test('the access counts say how many records are waiting for approval and how many owners that is', async () => {
-  const { handlers, db } = mount({ raw: { ...COUNTS, 'SELECT count(DISTINCT': [{ owners: '2' }] } });
-  const r = await call(handlers['GET /people/:person_id/access'], { acc: admin(U.labAdmin), params: { person_id: P.ann } });
-  assert.equal(r.body.waiting, 2);
-  assert.equal(r.body.waiting_owners, 2);
-  assert.deepEqual(db.log.raw.find((x) => x.sql.startsWith('SELECT count(DISTINCT')).bindings.slice(-1), [P.ann]);
-  // nobody waiting: no owners query is needed and the count is 0
-  const none = mount({ raw: { 'SELECT owns': [{ owns: 0, shared: 0, investigator: 0, teams: 0, waiting: 0 }] } });
-  const n = await call(none.handlers['GET /people/:person_id/access'], { acc: admin(U.labAdmin), params: { person_id: P.ann } });
-  assert.deepEqual(n.body, { owns: 0, shared: 0, investigator: 0, teams: 0, waiting: 0, waiting_owners: 0 });
-  assert.equal(none.db.log.raw.some((x) => x.sql.startsWith('SELECT count(DISTINCT')), false);
 });
 
 test('a member does not see a record they no longer read in the list, but it is still counted', async () => {

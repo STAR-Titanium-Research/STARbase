@@ -134,9 +134,6 @@ jobs:
       - name: Run People admin function tests
         run: bash tests/people_admin.sh
 
-      - name: Run Teams tests
-        run: bash tests/teams.sh
-
       - name: Run Phase 7 traceability tests
         run: bash tests/phase7_traceability.sh
 

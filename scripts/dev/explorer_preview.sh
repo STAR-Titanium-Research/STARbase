@@ -28,7 +28,7 @@ MAIN_CHECKOUT="${D1_MAIN_CHECKOUT:-D:\\Users\\CMBE Admn 3214022001\\Documents\\G
 NAME="${D1_PREVIEW_NAME:-d1-preview}"; NET="$NAME"; PG="${NAME}-pg"; DX="${NAME}-directus"; PORT="${D1_PREVIEW_PORT:-18055}"
 LIVE_PG=d1-database-postgres-1; LIVE_DX=d1-database-directus-1
 FILES_VOL="${NAME}-uploads"
-OVERLAY="${D1_PREVIEW_OVERLAY:-d1-edit-frame d1-links d1-admin-overview d1-people-admin d1-record-access d1-teams d1-person-link}"
+OVERLAY="${D1_PREVIEW_OVERLAY:-d1-edit-frame d1-links d1-admin-overview d1-people-admin d1-record-access}"
 ENV_FILE="${D1_PREVIEW_ENV_FILE:-}"
 EXTRA_EXT="${D1_PREVIEW_EXTRA_EXT:-}"
 PUBLIC="${D1_PREVIEW_PUBLIC_URL:-http://127.0.0.1:$PORT}"

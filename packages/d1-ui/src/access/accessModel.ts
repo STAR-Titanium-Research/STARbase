@@ -4,9 +4,6 @@
 // The data comes from GET /d1-record-access/:collection/:id (core/extensions/d1-record-access). Its entries are the
 // access table and the old co-owner / investigator rows merged by person, strongest role first.
 
-import type { TeamColor } from '../teams/teamPalette';
-import type { TeamSummary } from '../teams/teamsApi';
-
 export type AccessCollection = 'physical_samples' | 'manufacturing_operations' | 'test_sessions' | 'campaigns' | 'projects';
 
 export const ACCESS_COLLECTIONS: AccessCollection[] = ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns', 'projects'];
@@ -50,30 +47,12 @@ export interface AccessEntry {
 	blocked_by: BlockedBy | null;
 }
 
-/**
- * A team the record is shared with (the endpoint's `teams`). `waiting`: members who joined after the share and wait for an owner's
- * decision; `declined`: those the owner declined. `trust_new_members`: later joiners get access without being asked about.
- */
-export interface TeamAccess {
-	team_access_id: string;
-	team_id: string;
-	name: string;
-	color: TeamColor;
-	logo: string | null;
-	member_count: number;
-	role: string;
-	trust_new_members: boolean;
-	waiting: number;
-	declined: number;
-}
-
 export interface AccessList {
 	restricted: boolean;
 	owner: AccessPerson | null;
 	project_pi: AccessPerson | null;
 	can_manage: boolean;
 	entries: AccessEntry[];
-	teams: TeamAccess[];
 }
 
 /** A People row as the add box reads it (`user_id` is the login). */
@@ -81,33 +60,6 @@ export interface PersonHit {
 	person_id: string;
 	full_name: string;
 	user_id?: string | null;
-}
-
-/** A team as the add box offers it (from GET /d1-teams). */
-export interface TeamHit {
-	kind: 'team';
-	team_id: string;
-	name: string;
-	color: TeamColor;
-	logo: string | null;
-	member_count: number;
-}
-
-export const isTeamHit = (hit: PersonHit | TeamHit): hit is TeamHit => (hit as TeamHit).kind === 'team';
-
-/** One person under a team grant: GET .../entries/team/:team_id/members. `actionable` is false for a joiner nobody needs to be asked about. */
-export interface TeamMemberRow {
-	person_id: string;
-	name: string;
-	can_sign_in: boolean;
-	actionable?: boolean;
-	decided_at?: string | null;
-}
-
-export interface TeamMembers {
-	active: TeamMemberRow[];
-	pending: TeamMemberRow[];
-	declined: TeamMemberRow[];
 }
 
 export interface RoleOption {
@@ -156,45 +108,6 @@ const RANK: Record<string, number> = { investigator: 2, edit: 2, view: 1 };
 /** Strongest role first, then by name. Returns a new array. */
 export function sortEntries<T extends Pick<AccessEntry, 'role' | 'name'>>(entries: T[]): T[] {
 	return [...entries].sort((a, b) => (RANK[b.role] ?? 0) - (RANK[a.role] ?? 0) || a.name.localeCompare(b.name));
-}
-
-/** Teams: strongest level first, then by name. Returns a new array. */
-export function sortTeams<T extends Pick<TeamAccess, 'role' | 'name'>>(teams: T[]): T[] {
-	return sortEntries(teams);
-}
-
-/** A team's level as the row prints it. A team never owns anything, so a sample's Can edit is plain "Can edit" (not "Co-owner"). */
-export function teamRoleLabel(role: string): string {
-	if (role === 'investigator') return 'Secondary investigator';
-	if (role === 'edit') return 'Can edit';
-	if (role === 'view') return 'Can view';
-	return role;
-}
-
-/** The line under a team's name. */
-export const teamMembersLabel = (count: number): string => `Team · ${count} member${count === 1 ? '' : 's'}`;
-
-/** "2 waiting · 1 declined" for the manager of the record; null when nobody waits and nobody was declined. */
-export function teamBacklogText(team: Pick<TeamAccess, 'waiting' | 'declined'>): string | null {
-	return team.waiting || team.declined ? `${team.waiting} waiting · ${team.declined} declined` : null;
-}
-
-/** The waiting people the owner is asked about (a joiner the server marks not actionable is left out). */
-export const waitingMembers = (pending: TeamMemberRow[]): TeamMemberRow[] => pending.filter((m) => m.actionable !== false);
-
-export const teamHitOf = (team: TeamSummary): TeamHit => ({
-	kind: 'team', team_id: team.team_id, name: team.name, color: team.color, logo: team.logo ?? null, member_count: team.member_count,
-});
-
-/** The add box's teams: names containing the text (client-side: the list is small), by name, without the teams the record has already. */
-export function teamsMatching(teams: TeamHit[], text: string, list: { teams?: Pick<TeamAccess, 'team_id'>[] }, limit = 5): TeamHit[] {
-	const needle = text.trim().toLowerCase();
-	if (!needle) return [];
-	const taken = new Set((list.teams ?? []).map((t) => t.team_id));
-	return teams
-		.filter((t) => !taken.has(t.team_id) && t.name.toLowerCase().includes(needle))
-		.sort((a, b) => a.name.localeCompare(b.name))
-		.slice(0, limit);
 }
 
 /** Role selector and Remove are drawn only for a manager, and never for a row the endpoint cannot address (no People row). */
@@ -283,8 +196,7 @@ export function showInherited(own: Pick<AccessList, 'restricted'>, parent: Pick<
 }
 
 /** The email result of a write as one quiet line, or null when nothing needs saying. */
-export function emailNote(email: string | undefined, what: 'added' | 'owner' | 'team'): string | null {
+export function emailNote(email: string | undefined, what: 'added' | 'owner'): string | null {
 	if (email !== 'failed') return null;
-	if (what === 'team') return 'Added. Some emails could not be sent.';
 	return what === 'added' ? 'Added. The email could not be sent.' : 'Ownership transferred. The email could not be sent.';
 }

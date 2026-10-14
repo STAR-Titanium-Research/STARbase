@@ -19,7 +19,7 @@ describe('loadAccess', () => {
 		const api = fakeApi({ get: vi.fn(async () => ({ data: { restricted: false, owner: { person_id: 'o', name: 'Ada', can_sign_in: true }, can_manage: true, entries: [{ person_id: 'p', name: 'E', role: 'view' }] } })) });
 		const res = await loadAccess(api, 'physical_samples', 'abc/1');
 		expect(api.get).toHaveBeenCalledWith('/d1-record-access/physical_samples/abc%2F1');
-		expect(res).toEqual({ ok: true, data: { restricted: false, owner: { person_id: 'o', name: 'Ada', can_sign_in: true }, project_pi: null, can_manage: true, entries: [{ person_id: 'p', name: 'E', role: 'view' }], teams: [] } });
+		expect(res).toEqual({ ok: true, data: { restricted: false, owner: { person_id: 'o', name: 'Ada', can_sign_in: true }, project_pi: null, can_manage: true, entries: [{ person_id: 'p', name: 'E', role: 'view' }] } });
 	});
 	it('does not let a missing can_manage become true', async () => {
 		const res = await loadAccess(fakeApi({ get: vi.fn(async () => ({ data: { entries: 'nope' } })) }), 'projects', 'p');

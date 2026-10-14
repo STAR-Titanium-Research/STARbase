@@ -77,10 +77,6 @@ def main():
             b == b and b < 5
         )
         flag = ""
-        # the team writers (People 2) have no before: the spec gives each an absolute limit
-        if name.startswith("team_") and a >= 500:
-            flag = "  OVER 500 ms"
-            bad += 1
         if limited and ratio == ratio and ratio > 2.0:
             flag = "  OVER 2x"
             bad += 1

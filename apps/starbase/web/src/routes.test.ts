@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { canonicalPath, configureLinks, resetLinks, resolveLink, routeTarget, starbaseLinks } from '@d1/ui';
 import {
-	CampaignPage, HomeView, IndexRoute, LabelsPage, OperationPage, PeopleView, ProjectPage, ProjectsIndex, CrawlerPage, RegisterSample, ReportBugPage, SamplePage, TeamPage, TestPage,
+	CampaignPage, HomeView, IndexRoute, LabelsPage, OperationPage, PeopleView, ProjectPage, ProjectsIndex, CrawlerPage, RegisterSample, ReportBugPage, SamplePage, TestPage,
 } from '@d1/starbase-pages';
 import AcceptInvite from './pages/AcceptInvite.vue';
 import { buildRoutes } from './router';
@@ -18,7 +18,7 @@ describe('STARbase routes', () => {
 		const cases: [string, unknown][] = [
 			['/home', HomeView], ['/home/register-sample', RegisterSample], ['/home/people', PeopleView], ['/home/projects', ProjectsIndex],
 			['/home/projects/p1', ProjectPage], ['/home/campaigns/c1', CampaignPage], ['/home/samples/a%2Fb', SamplePage],
-			['/home/operations/o1', OperationPage], ['/home/teams/t1', TeamPage], ['/home/tests/t1', TestPage], ['/home/labels?ids=1,2', LabelsPage], ['/home/samples', IndexRoute],
+			['/home/operations/o1', OperationPage], ['/home/tests/t1', TestPage], ['/home/labels?ids=1,2', LabelsPage], ['/home/samples', IndexRoute],
 			['/report-bug', ReportBugPage], ['/crawler', CrawlerPage],
 		];
 		for (const [path, component] of cases) {

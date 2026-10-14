@@ -179,8 +179,8 @@ test('admin: person panel shows account role and last sign-in; role change round
 		await expect(role).toBeEnabled();
 		await expect(account.getByText('Last sign-in')).toBeVisible();
 		await expect(account.locator('.f', { hasText: 'Last sign-in' })).toContainText(/just now|min ago|h ago/);
-		// Access: the four counts load (SQL person_access through the panel: owns, shared, investigator, and since PR 2 through teams).
-		await expect(p.getByRole('region', { name: 'Access' }).getByRole('button', { name: /records?$/ })).toHaveCount(4);
+		// Access: the three counts load (SQL person_access through the panel).
+		await expect(p.getByRole('region', { name: 'Access' }).getByRole('button', { name: /records?$/ })).toHaveCount(3);
 
 		// Lab Member -> Lab Admin ...
 		await role.selectOption({ label: 'Lab Admin' });
