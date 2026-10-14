@@ -343,8 +343,8 @@ BEGIN
     ASSERT EXISTS (SELECT 1 FROM directus_fields WHERE collection = 'teams' AND field = 'members' AND special LIKE '%o2m%'), 'the members alias field is registered';
     ASSERT EXISTS (SELECT 1 FROM directus_fields WHERE collection = 'team_members' AND field = 'member_id' AND hidden), 'the surrogate key is registered and hidden';
     ASSERT (SELECT string_agg(collection || ':' || action, ',' ORDER BY collection) FROM directus_permissions
-             WHERE policy = lm AND collection IN ('teams', 'team_members', 'team_events')) = 'team_events:read,team_members:read,teams:read',
-        'a Lab Member has read and only read on the three';
+             WHERE policy = lm AND collection IN ('teams', 'team_members', 'team_events')) = 'team_members:read,teams:read',
+        'a Lab Member has read and only read on teams and team_members';
     ASSERT (SELECT bool_and(permissions::jsonb = '{}'::jsonb AND fields = '*') FROM directus_permissions
              WHERE policy = lm AND collection IN ('teams', 'team_members', 'team_events')), 'the read rows carry no filter';
 END $$;

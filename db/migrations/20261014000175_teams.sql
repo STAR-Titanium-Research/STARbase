@@ -316,10 +316,12 @@ WHERE NOT EXISTS (
     SELECT 1 FROM directus_fields AS f WHERE f.collection = v.collection AND f.field = v.field
 );
 
--- A Lab Member reads all three (no filter); only the teams endpoint writes them.
+-- A Lab Member reads teams and team_members (no filter); only the teams endpoint writes them. team_events has NO Lab Member row: its
+-- history names records and people the reader may not be allowed to see, so it is served only by GET /d1-teams/:id, which hides what
+-- the caller cannot read.
 INSERT INTO directus_permissions (collection, action, permissions, validation, presets, fields, policy)
 SELECT v.collection, 'read', '{}'::json, '{}'::json, NULL, '*', '20000002-0000-0000-0000-000000000002'::uuid
-FROM (VALUES ('teams'), ('team_members'), ('team_events')) AS v (collection)
+FROM (VALUES ('teams'), ('team_members')) AS v (collection)
 WHERE NOT EXISTS (
     SELECT 1 FROM directus_permissions AS p
      WHERE p.policy = '20000002-0000-0000-0000-000000000002' AND p.collection = v.collection AND p.action = 'read'
