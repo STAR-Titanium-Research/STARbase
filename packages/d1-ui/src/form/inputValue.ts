@@ -34,13 +34,15 @@ export function inputText(field: Pick<FormField, 'kind' | 'type'>, value: unknow
 }
 
 /** The stored value for what an input holds: null for blank text or a number that is not one. */
-export function parseInput(field: Pick<FormField, 'kind' | 'type'>, text: string): unknown {
+export function parseInput(field: Pick<FormField, 'kind' | 'type' | 'integer'>, text: string): unknown {
 	const t = text.trim();
 	if (t === '') return null;
 	switch (field.kind) {
 		case 'number': {
 			const n = Number(t);
-			return Number.isFinite(n) ? n : null;
+			// An integer column has no decimals: 1.5 is refused (null), not rounded behind the person's back.
+			if (!Number.isFinite(n) || (field.integer && !Number.isInteger(n))) return null;
+			return n;
 		}
 		case 'time':
 			return t.length === 5 ? `${t}:00` : t;
@@ -62,4 +64,20 @@ export function parseInput(field: Pick<FormField, 'kind' | 'type'>, text: string
 /** A value that is none of the choices, in a field that allows one (Surface Finish "Other..."). */
 export function isOtherValue(field: Pick<FormField, 'allowOther' | 'choices'>, value: unknown): boolean {
 	return field.allowOther && !isEmptyValue(value) && !field.choices.some((c) => String(c.value) === String(value));
+}
+
+/**
+ * What is wrong with the text typed into a number field, or null: not a number, decimals in a whole-number field,
+ * below `min` or above `max`. Out-of-range numbers are still stored (parseInput keeps them); the form flags them.
+ */
+export function inputProblem(field: Pick<FormField, 'kind' | 'integer' | 'min' | 'max'>, text: string): string | null {
+	if (field.kind !== 'number') return null;
+	const t = text.trim();
+	if (t === '') return null;
+	const n = Number(t);
+	if (!Number.isFinite(n)) return 'Enter a number.';
+	if (field.integer && !Number.isInteger(n)) return 'Whole numbers only.';
+	if (field.min !== null && n < field.min) return `At least ${field.min}.`;
+	if (field.max !== null && n > field.max) return `At most ${field.max}.`;
+	return null;
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { inputText, isOtherValue, parseInput } from './inputValue';
+import { inputProblem, inputText, isOtherValue, parseInput } from './inputValue';
 
-const f = (kind: string, type = 'string') => ({ kind, type }) as any;
+const f = (kind: string, type = 'string', extra: Record<string, unknown> = {}) => ({ kind, type, ...extra }) as any;
 
 describe('inputText', () => {
 	it('is blank for no value and never prints null', () => {
@@ -60,5 +60,29 @@ describe('isOtherValue', () => {
 		expect(isOtherValue(field, 'ground')).toBe(false);
 		expect(isOtherValue(field, null)).toBe(false);
 		expect(isOtherValue({ ...field, allowOther: false }, 'electro-polished')).toBe(false);
+	});
+});
+
+describe('whole numbers and ranges', () => {
+	const int = f('number', 'integer', { integer: true, min: 1, max: 10 });
+	it('parseInput refuses decimals in a whole-number field, keeps them elsewhere', () => {
+		expect(parseInput(int, '3')).toBe(3);
+		expect(parseInput(int, '3.0')).toBe(3);
+		expect(parseInput(int, '2.5')).toBeNull();
+		expect(parseInput(f('number', 'decimal', { integer: false }), '2.5')).toBe(2.5);
+	});
+	it('parseInput keeps a number outside min / max (the form flags it, nothing is lost)', () => {
+		expect(parseInput(int, '11')).toBe(11);
+		expect(parseInput(int, '0')).toBe(0);
+	});
+	it('inputProblem says what is wrong', () => {
+		expect(inputProblem(int, '3')).toBeNull();
+		expect(inputProblem(int, '')).toBeNull();
+		expect(inputProblem(int, '2.5')).toBe('Whole numbers only.');
+		expect(inputProblem(int, '0')).toBe('At least 1.');
+		expect(inputProblem(int, '11')).toBe('At most 10.');
+		expect(inputProblem(int, 'abc')).toBe('Enter a number.');
+		expect(inputProblem(f('number', 'decimal', { integer: false, min: null, max: null }), '-1e6')).toBeNull();
+		expect(inputProblem(f('text', 'string', { integer: false, min: 1, max: 2 }), 'abc')).toBeNull();
 	});
 });
