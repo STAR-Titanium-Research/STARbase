@@ -3400,6 +3400,7 @@ rd_down=$(awk '/-- migrate:down/{f=1;next}f' "$LA")
 RDK=d0000000-0000-4000-8000-0000000000
 rd_dangling=$($PSQL -v ON_ERROR_STOP=0 2>&1 <<SQL
 BEGIN;
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -3421,6 +3422,7 @@ grep -q "^applied" <<<"$rd_clean_apply" && ok "scripts/a1_clean_dangling_legacy_
 # the same two DELETEs, then 166 applies and adds both foreign keys
 rd_after=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -3447,6 +3449,7 @@ SELECT 'up2_same:' || count(*) FROM (SELECT 'sample_readers' AS k, count(*) AS n
   UNION ALL SELECT 'project_readers', count(*) FROM project_readers UNION ALL SELECT 'campaign_sample_readers', count(*) FROM campaign_sample_readers
   UNION ALL SELECT 'open', count(*) FROM operation_open_to_all UNION ALL SELECT 'hidden', count(*) FROM d1_private.hidden_records EXCEPT SELECT * FROM rd_before) x;
 -- down removes everything it created
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -4851,6 +4854,7 @@ ra_down=$(awk '/-- migrate:down/{f=1;next}f' "$RA_MIG")
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
 -- 167 and 166 depend on 165's columns and tables, so they go down first (as on a real rollback)
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -4875,6 +4879,7 @@ grep -qx "ra_down_meta:0/0/0" <<<"$ra_out" && ok "165 down removes the Directus 
 grep -qx "ra_up_again:true/true/true" <<<"$ra_out" && ok "165 up after down restores the same metadata" || bad "165 up after down differs (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$to_down
 $ll_down
 $rr_down
 $la_down
@@ -4887,6 +4892,7 @@ SQL
 grep -q "access rules need" <<<"$ra_out" && ok "165 stops when a relation it needs already points at another collection" || bad "165 did not stop on a relation pointing elsewhere (output: $ra_out)"
 ra_out=$($PSQL -v ON_ERROR_STOP=1 2>&1 <<SQL
 BEGIN;
+$to_down
 $ll_down
 $rr_down
 $la_down
