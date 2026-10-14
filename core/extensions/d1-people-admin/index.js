@@ -1,6 +1,6 @@
 // Directus endpoint: d1-people-admin  (mounted at /d1-people-admin)
 //
-// The data behind the admin People page (People 1, spec docs/superpowers/specs/2026-10-14-people-and-teams-design.md). Reads, and one write:
+// The data behind the admin People page (People 1, spec docs/superpowers/specs/2026-10-14-people-and-teams-design.md). Reads, and the writes:
 //
 //   GET /d1-people-admin/people
 //     -> { can_administer_accounts, roles: [{ id, name }],
@@ -18,7 +18,19 @@
 //        Suspending also deletes the login's rows in directus_sessions, in the same transaction. Refused with 409 LAST_ADMINISTRATOR when
 //        the change would leave no active account administrator (a role change that drops the target's account-administrator status, or
 //        suspending the target). The write runs in one transaction with d1.actor_identity set; the data cache is cleared after the commit
-//        when CACHE_ENABLED is on (the same as d1-record-access).
+//        when CACHE_ENABLED is on (the same as d1-record-access). status 'active' is only for a suspended login (409 NOT_SUSPENDED otherwise;
+//        an already active login is a no-op), because an invited login set active could no longer accept its invite.
+//   POST /d1-people-admin/invite   body { email, role?: uuid, person_id?: uuid, full_name?: string }
+//     -> 201 { user_id, person_id, status: 'invited', email_sent }   (200 when an invited login for that e-mail is sent the invite again)
+//        Any administrator. Only an account administrator may choose a role; otherwise the role is Lab Member (D1_LAB_MEMBER_ROLE_ID),
+//        and another one is 403 ACCOUNTS_ADMIN_ONLY. person_id: that person must exist and have no login (409 PERSON_HAS_LOGIN); without it
+//        full_name is required and a person is created (is_researcher, email = the invite e-mail). An e-mail with a login that is not
+//        'invited' is 409 EMAIL_HAS_LOGIN (extensions.person_id when the login is linked). The login is made by Directus's
+//        UsersService.inviteUser, the person link set in the same transaction. The invite link is STARBASE_URL + '/accept-invite'
+//        (503 STARBASE_URL_UNSET when blank; docker-compose.yml puts it in USER_INVITE_URL_ALLOW_LIST).
+//        email_sent: Directus sends the mail without waiting, so true means "handed to its mailer", and a delivery failure shows only
+//        in Directus's log. A mail error that does surface keeps the login and the link: email_sent false, a warning logged.
+//   POST /d1-people-admin/invite/resend   body { user_id }  -> { email_sent }   (409 NOT_INVITED unless the login's status is 'invited')
 //
 // Who may call: /people and /attention are for administrators only (401 without a user, 403 otherwise). /access is for an
 // administrator, or for the person whose login the caller is. A non-administrator sees every count, but the list leaves out a record
@@ -37,6 +49,10 @@ import { COLLECTIONS } from '../d1-record-access/index.js';
 const SOURCE = 'd1-people-admin';
 const DEFAULT_LAB_ADMIN_ROLE_ID = '10000001-0000-0000-0000-000000000001';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DEFAULT_LAB_MEMBER_ROLE_ID = '10000001-0000-0000-0000-000000000002';
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// The accountability Directus's UsersService runs under for an invite: the caller is already checked, and d1.actor_identity names them.
+const SYSTEM_ADMIN = { user: null, role: null, admin: true, app: false };
 const LISTS = ['owns', 'shared', 'investigator'];
 const CHUNK = 1000;
 const STATUSES = ['active', 'suspended'];
@@ -46,10 +62,11 @@ const toBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
 export const COUNTED_BY_LOGIN = ['login_without_person', 'invite_not_accepted'];
 
 class HttpError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, extensions = {}) {
     super(message);
     this.status = status;
     this.code = code;
+    this.extensions = extensions; // extra fields for the error's `extensions` (e.g. the person an e-mail already belongs to)
   }
 }
 
@@ -101,7 +118,7 @@ export default {
       return res.status(known ? err.status : 500).json({
         errors: [{
           message: known ? err.message : 'Something went wrong on the server.',
-          extensions: { code: known ? err.code : 'INTERNAL_SERVER_ERROR', source: SOURCE },
+          extensions: { ...(known ? err.extensions : {}), code: known ? err.code : 'INTERNAL_SERVER_ERROR', source: SOURCE },
         }],
       });
     };
@@ -239,6 +256,11 @@ export default {
         await trx.raw("SELECT pg_advisory_xact_lock(hashtext('d1-people-admin.logins'))");
         const target = await trx('directus_users').where('id', userId).first('id', 'status', 'role');
         if (!target) throw new HttpError(404, 'NOT_FOUND', 'That login does not exist.');
+        // Setting an invited login active would make its invite unacceptable (Directus accepts an invite only while the status is
+        // 'invited'), so 'active' is for a suspended login, or one already active (a no-op).
+        if (body.status === 'active' && !['suspended', 'active'].includes(target.status)) {
+          throw new HttpError(409, 'NOT_SUSPENDED', 'Only a suspended login can be reactivated');
+        }
         if (hasRole && !(await trx('directus_roles').where('id', body.role).first('id'))) throw new HttpError(400, 'INVALID_PAYLOAD', 'That role does not exist.');
 
         const wasAccountAdmin = target.status === 'active' && (await accountAdmin(trx, userId, labAdminRoleId)).accounts;
@@ -259,6 +281,118 @@ export default {
       });
       await clearDataCache(req);
       res.json(result);
+    }));
+
+    // -- invites -----------------------------------------------------------------------------------------------
+
+    // Directus 11.17 UsersService.inviteUser(email, role, url) (verified in the image, @directus/api 35.2.0, services/users.js):
+    //  - the URL must pass USER_INVITE_URL_ALLOW_LIST, but only when a row is written (an unknown e-mail, or an invited login whose
+    //    role changes); that failure is thrown from createOne/updateOne;
+    //  - an unknown e-mail gets a new 'invited' user; an 'invited' login has its role changed if another one is asked; a login in
+    //    any other status is left alone and gets NO mail;
+    //  - the mail is fire-and-forget (`mailService.send(...).catch(log)`): it is never awaited and can never throw out of
+    //    inviteUser; a delivery failure shows only in Directus's log ("Could not send user invitation mail").
+    // So `email_sent: true` means "handed to Directus's mailer without an error", not "delivered". The catch below is for a mail
+    // error that ever does reach us: the rule (d1-record-access) is that mail never undoes a change.
+    const labMemberRoleId = trimmed(env?.D1_LAB_MEMBER_ROLE_ID) ?? DEFAULT_LAB_MEMBER_ROLE_ID;
+    const sameId = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+    const inviteUrl = () => {
+      const base = trimmed(env?.STARBASE_URL);
+      if (!base) throw new HttpError(503, 'STARBASE_URL_UNSET', 'STARBASE_URL is not set, so an invitation has nowhere to point.');
+      return `${base}/accept-invite`; // verbatim, as USER_INVITE_URL_ALLOW_LIST is set in docker-compose.yml
+    };
+    const loginByEmail = (db, email) =>
+      db('directus_users').whereRaw('LOWER(??) = ?', ['email', email.toLowerCase()]).first('id', 'email', 'status', 'role');
+
+    // Calls inviteUser on the transaction; true when the mail was handed off, false when it failed but the invited login exists.
+    async function sendInvite(trx, req, email, roleId, url) {
+      const users = new services.UsersService({ schema: req.schema, accountability: SYSTEM_ADMIN, knex: trx });
+      try {
+        await users.inviteUser(email, roleId, url);
+        return true;
+      } catch (err) {
+        let kept = null;
+        try { kept = await loginByEmail(trx, email); } catch { /* an aborted transaction: report the first error instead */ }
+        if (kept?.status !== 'invited') throw err;
+        logger?.warn?.(`${SOURCE}: the invitation mail for login ${kept.id} was not sent: ${err?.message || err}`);
+        return false;
+      }
+    }
+
+    router.post('/invite', route(async ({ req, res, acc, admin, accounts }) => {
+      requireAdmin(admin);
+      const url = inviteUrl();
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      const email = trimmed(body.email);
+      if (!email || !EMAIL.test(email)) throw new HttpError(400, 'INVALID_PAYLOAD', 'email must be an e-mail address.');
+      const hasRole = !isBlank(body.role);
+      if (hasRole && (typeof body.role !== 'string' || !UUID.test(body.role))) throw new HttpError(400, 'INVALID_PAYLOAD', 'role must be a role id.');
+      const hasPerson = !isBlank(body.person_id);
+      if (hasPerson && (typeof body.person_id !== 'string' || !UUID.test(body.person_id))) throw new HttpError(400, 'INVALID_PAYLOAD', 'person_id must be a person id.');
+      const fullName = trimmed(body.full_name);
+      // an account administrator may choose any role; everyone else invites Lab Members only
+      const roleId = hasRole ? body.role : labMemberRoleId;
+      if (!accounts && !sameId(roleId, labMemberRoleId)) throw new HttpError(403, 'ACCOUNTS_ADMIN_ONLY', 'Only an Administrator can invite someone as anything but a Lab Member.');
+
+      const result = await inTransaction(acc, async (trx) => {
+        await trx.raw("SELECT pg_advisory_xact_lock(hashtext('d1-people-admin.logins'))");
+        if (hasRole && !sameId(roleId, labMemberRoleId) && !(await trx('directus_roles').where('id', roleId).first('id'))) {
+          throw new HttpError(400, 'INVALID_PAYLOAD', 'That role does not exist.');
+        }
+        const existing = await loginByEmail(trx, email);
+        const linked = existing ? await trx('people').where('user_id', existing.id).first('person_id') : undefined;
+        if (existing && existing.status !== 'invited') {
+          throw new HttpError(409, 'EMAIL_HAS_LOGIN', 'That e-mail already has a login.', linked ? { person_id: linked.person_id } : {});
+        }
+
+        // who the login belongs to: the person it is already linked to, the one asked for, or a new one made from full_name
+        let personId = linked?.person_id ?? null;
+        if (hasPerson) {
+          if (linked && !sameId(linked.person_id, body.person_id)) {
+            throw new HttpError(409, 'EMAIL_HAS_LOGIN', 'That e-mail already has a login, linked to someone else.', { person_id: linked.person_id });
+          }
+          if (!linked) {
+            const person = await trx('people').where('person_id', body.person_id).first('person_id', 'user_id');
+            if (!person) throw new HttpError(404, 'NOT_FOUND', 'That person does not exist.');
+            if (!isBlank(person.user_id)) throw new HttpError(409, 'PERSON_HAS_LOGIN', 'That person already has a login.');
+            personId = person.person_id;
+          }
+        } else if (!linked && !fullName) {
+          throw new HttpError(400, 'INVALID_PAYLOAD', 'full_name is required when no person is chosen.');
+        }
+
+        // an invited login keeps its role unless an account administrator asks for another one
+        const inviteRole = existing && !(accounts && hasRole) ? existing.role : roleId;
+        const emailSent = await sendInvite(trx, req, existing?.email ?? email, inviteRole, url);
+
+        const login = await loginByEmail(trx, email);
+        if (!login) throw new Error('inviteUser returned without leaving a login');
+        if (linked) {
+          // already linked: nothing to do
+        } else if (personId) {
+          await trx('people').where('person_id', personId).update({ user_id: login.id });
+        } else {
+          const made = await trx('people').insert({ full_name: fullName, email, is_researcher: true, user_id: login.id }).returning('person_id');
+          personId = made?.[0]?.person_id ?? made?.[0];
+        }
+        return { created: !existing, body: { user_id: login.id, person_id: personId, status: 'invited', email_sent: emailSent } };
+      });
+      await clearDataCache(req);
+      res.status(result.created ? 201 : 200).json(result.body);
+    }));
+
+    router.post('/invite/resend', route(async ({ req, res, acc, admin }) => {
+      requireAdmin(admin);
+      const url = inviteUrl();
+      const userId = req.body?.user_id;
+      if (typeof userId !== 'string' || !UUID.test(userId)) throw new HttpError(400, 'INVALID_PAYLOAD', 'user_id must be a login id.');
+      const emailSent = await inTransaction(acc, async (trx) => {
+        const login = await trx('directus_users').where('id', userId).first('id', 'email', 'status', 'role');
+        if (!login) throw new HttpError(404, 'NOT_FOUND', 'That login does not exist.');
+        if (login.status !== 'invited') throw new HttpError(409, 'NOT_INVITED', 'Only an invited login can be sent a new invite.');
+        return sendInvite(trx, req, login.email, login.role, url);
+      });
+      res.json({ email_sent: emailSent });
     }));
 
     router.get('/people/:person_id/access', route(async ({ req, res, acc, admin }) => {

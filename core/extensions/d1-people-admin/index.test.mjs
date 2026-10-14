@@ -68,6 +68,17 @@ function makeDb(tables, rawAnswers) {
     const project = (row, cols) => (row === undefined ? undefined : cols.length ? Object.fromEntries(cols.map((c) => [c, row[c] ?? null])) : { ...row });
     const q = {
       where(a, v) { preds.push((r) => same(r[a], v)); return q; },
+      // whereRaw('LOWER(??) = ?', ['email', value]): the e-mail comparison the endpoint and Directus use
+      whereRaw(_sql, bindings) { const v = bindings[bindings.length - 1]; preds.push((r) => String(r.email ?? '').toLowerCase() === v); return q; },
+      insert(row) {
+        const rec = { ...row };
+        if (table === 'people' && !rec.person_id) rec.person_id = ID(800 + (tables.people ?? []).length);
+        if (table === 'directus_users' && !rec.id) rec.id = ID(700 + (tables.directus_users ?? []).length);
+        (tables[table] ??= []).push(rec);
+        const done = Promise.resolve([rec]);
+        done.returning = async (col) => [{ [col]: rec[col] }];
+        return done;
+      },
       update: async (changes) => { const hit = rows(); for (const r of hit) Object.assign(r, changes); return hit.length; },
       del: async () => { const hit = rows(); tables[table] = (tables[table] ?? []).filter((r) => !hit.includes(r)); return hit.length; },
       whereIn(c, values) { preds.push((r) => values.some((v) => same(r[c], v))); return q; },
@@ -107,20 +118,42 @@ function makeDb(tables, rawAnswers) {
 
 // ---- a harness ------------------------------------------------------------------------------------------
 
-function mount({ tables = baseTables(), raw = {}, env = {} } = {}) {
+// How the fake UsersService.inviteUser behaves, mirroring Directus 11.17 (services/users.js): an unknown e-mail gets an 'invited'
+// user; an 'invited' one has its role changed when a different role is asked; any other status is left alone. The mail itself
+// is fire-and-forget in Directus, so it can never throw out of inviteUser. `mailFail` is the switch the endpoint is built to
+// survive in case that ever changes: 'after' throws after the user is saved, 'before' throws before any row is written.
+function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null } = {}) {
   const db = makeDb(tables, raw);
   const errors = [];
+  const warnings = [];
+  const invites = [];
   const handlers = {};
-  const router = { get: (path, fn) => (handlers[`GET ${path}`] = fn), patch: (path, fn) => (handlers[`PATCH ${path}`] = fn) };
+  const router = {
+    get: (path, fn) => (handlers[`GET ${path}`] = fn),
+    patch: (path, fn) => (handlers[`PATCH ${path}`] = fn),
+    post: (path, fn) => (handlers[`POST ${path}`] = fn),
+  };
   const cleared = [];
   const services = {
     UtilsService: class {
       constructor(opts) { this.opts = opts; }
       async clearCache(arg) { cleared.push({ opts: this.opts, arg, committed: db.log.tx.every((t) => t.committed) }); }
     },
+    UsersService: class {
+      constructor(opts) { this.opts = opts; }
+      async inviteUser(email, role, url, subject) {
+        invites.push({ email, role, url, subject, accountability: this.opts.accountability, inTransaction: this.opts.knex !== db });
+        if (mailFail === 'before') throw new Error('mail down');
+        const knex = this.opts.knex;
+        const user = await knex('directus_users').whereRaw('LOWER(??) = ?', ['email', email.toLowerCase()]).first();
+        if (!user) await knex('directus_users').insert({ email, role, status: 'invited', first_name: null, last_name: null, last_access: null });
+        else if (user.status === 'invited' && user.role !== role) await knex('directus_users').where('id', user.id).update({ role });
+        if (mailFail === 'after') throw new Error('mail down');
+      }
+    },
   };
-  ext.handler(router, { database: db, services, logger: { sink: errors, error(m) { this.sink.push(m); }, warn() {} }, env });
-  return { db, tables, handlers, errors, cleared };
+  ext.handler(router, { database: db, services, logger: { sink: errors, error(m) { this.sink.push(m); }, warn(m) { warnings.push(m); } }, env });
+  return { db, tables, handlers, errors, warnings, invites, cleared };
 }
 
 const admin = (user) => ({ user, admin: true, app: true });
@@ -462,4 +495,261 @@ test('the data cache is cleared after the commit, only when CACHE_ENABLED is on'
   const refused = mount({ env: { CACHE_ENABLED: 'true' } });
   await patch(refused.handlers, admin(U.superAdmin), U.ann, { role: ID(999) });
   assert.equal(refused.cleared.length, 0);
+});
+
+// ---- PATCH: only a suspended login is reactivated ----------------------------------------------------------
+
+test('status active is allowed only for a suspended login (an invited login would have an unacceptable invite)', async () => {
+  const tables = baseTables();
+  const { handlers, db } = mount({ tables });
+  const as = admin(U.superAdmin);
+  const invited = await patch(handlers, as, U.bob, { status: 'active' });
+  assert.equal(invited.status, 409);
+  assert.equal(errorOf(invited).extensions.code, 'NOT_SUSPENDED');
+  assert.equal(errorOf(invited).message, 'Only a suspended login can be reactivated');
+  assert.equal(userRow(tables, U.bob).status, 'invited');
+  assert.equal(db.log.tx.every((t) => !t.committed), true);
+  // already active: a no-op, allowed; suspended: reactivated
+  assert.equal((await patch(handlers, as, U.ann, { status: 'active' })).status, 200);
+  assert.equal(userRow(tables, U.ann).status, 'active');
+  assert.equal((await patch(handlers, as, U.orphan, { status: 'active' })).status, 200);
+  assert.equal(userRow(tables, U.orphan).status, 'active');
+  // a role change on an invited login is not touched by this rule
+  assert.equal((await patch(handlers, as, U.bob, { role: R.lab })).status, 200);
+  assert.equal(userRow(tables, U.bob).status, 'invited');
+});
+
+// ---- POST /invite and POST /invite/resend ------------------------------------------------------------------
+
+const MEMBER_ROLE = '10000001-0000-0000-0000-000000000002';
+const INVITE_URL = 'https://sb.example/accept-invite';
+const ENV = { STARBASE_URL: 'https://sb.example' };
+const INVITE = 'POST /invite';
+const RESEND = 'POST /invite/resend';
+const invite = (handlers, acc, body) => call(handlers[INVITE], { acc, body });
+const loginByEmail = (tables, email) => tables.directus_users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+
+test('invites and links an existing person', async () => {
+  const { handlers, tables, db, invites } = mount({ env: ENV });
+  const r = await invite(handlers, admin(U.superAdmin), { email: 'cy@new.example', person_id: P.cy, role: R.lab });
+  assert.equal(r.status, 201);
+  const created = loginByEmail(tables, 'cy@new.example');
+  assert.deepEqual(r.body, { user_id: created.id, person_id: P.cy, status: 'invited', email_sent: true });
+  assert.equal(created.status, 'invited');
+  assert.equal(created.role, R.lab); // an account administrator may choose any role
+  assert.equal(tables.people.find((p) => p.person_id === P.cy).user_id, created.id);
+  assert.equal(tables.people.length, 4); // no person was created
+  // Directus's own service sends the mail, inside the transaction, as the system, with the STARbase accept-invite address
+  assert.equal(invites.length, 1);
+  assert.deepEqual([invites[0].email, invites[0].role, invites[0].url], ['cy@new.example', R.lab, INVITE_URL]);
+  assert.equal(invites[0].accountability.admin, true);
+  assert.equal(invites[0].inTransaction, true);
+  assert.equal(db.log.tx.length, 1);
+  assert.equal(db.log.tx[0].committed, true);
+  assert.deepEqual(db.log.tx[0].raw[0].bindings, [U.superAdmin]);
+  assert.match(db.log.tx[0].raw[0].sql, /d1\.actor_identity/);
+});
+
+test('creates the person when none is given', async () => {
+  const { handlers, tables, invites } = mount({ env: ENV });
+  const r = await invite(handlers, admin(U.superAdmin), { email: ' Eve@New.example ', full_name: ' Eve New ' });
+  assert.equal(r.status, 201);
+  const created = loginByEmail(tables, 'eve@new.example');
+  const person = tables.people.find((p) => p.full_name === 'Eve New');
+  assert.equal(tables.people.length, 5);
+  assert.equal(person.email, 'Eve@New.example');
+  assert.equal(person.is_researcher, true);
+  assert.equal(person.user_id, created.id);
+  assert.deepEqual(r.body, { user_id: created.id, person_id: person.person_id, status: 'invited', email_sent: true });
+  assert.equal(invites[0].role, MEMBER_ROLE); // no role asked: Lab Member
+  // no person and no name: refused, nothing is created
+  const before = tables.directus_users.length;
+  for (const body of [{ email: 'x@new.example' }, { email: 'x@new.example', full_name: '  ' }]) {
+    const bad = await invite(handlers, admin(U.superAdmin), body);
+    assert.equal(bad.status, 400);
+    assert.equal(errorOf(bad).extensions.code, 'INVALID_PAYLOAD');
+  }
+  assert.equal(tables.directus_users.length, before);
+  assert.equal(invites.length, 1);
+});
+
+test('lab admin invite is forced to Lab Member', async () => {
+  const { handlers, tables, invites } = mount({ env: { ...ENV, D1_LAB_MEMBER_ROLE_ID: R.member } });
+  const as = admin(U.labAdmin);
+  // no role: Lab Member (here named by D1_LAB_MEMBER_ROLE_ID)
+  assert.equal((await invite(handlers, as, { email: 'a@new.example', full_name: 'A New' })).status, 201);
+  assert.equal(invites[0].role, R.member);
+  // the Lab Member role asked for explicitly is fine
+  assert.equal((await invite(handlers, as, { email: 'b@new.example', full_name: 'B New', role: R.member })).status, 201);
+  // any other role is not: 403, nothing created
+  const before = { users: tables.directus_users.length, people: tables.people.length };
+  for (const role of [R.super, R.lab]) {
+    const r = await invite(handlers, as, { email: 'c@new.example', full_name: 'C New', role });
+    assert.equal(r.status, 403, role);
+    assert.equal(errorOf(r).extensions.code, 'ACCOUNTS_ADMIN_ONLY');
+  }
+  assert.deepEqual({ users: tables.directus_users.length, people: tables.people.length }, before);
+  assert.equal(invites.length, 2);
+  // the default Lab Member role id when the env names none
+  const plain = mount({ env: ENV });
+  await invite(plain.handlers, as, { email: 'd@new.example', full_name: 'D New' });
+  assert.equal(plain.invites[0].role, MEMBER_ROLE);
+});
+
+test('who may invite, and which role', async () => {
+  const { handlers, invites } = mount({ env: ENV });
+  const body = { email: 'z@new.example', full_name: 'Z New' };
+  assert.equal((await invite(handlers, { user: null }, body)).status, 401);
+  const forbidden = await invite(handlers, member(U.ann), body);
+  assert.equal(forbidden.status, 403);
+  assert.equal(errorOf(forbidden).extensions.code, 'FORBIDDEN');
+  // a role that does not exist, a malformed one, a bad e-mail, a bad person id
+  const as = admin(U.superAdmin);
+  assert.equal((await invite(handlers, as, { ...body, role: ID(999) })).status, 400);
+  assert.equal((await invite(handlers, as, { ...body, role: 'nope' })).status, 400);
+  for (const email of [undefined, '', 'not-an-email', 7]) assert.equal((await invite(handlers, as, { ...body, email })).status, 400, String(email));
+  assert.equal((await invite(handlers, as, { email: 'z@new.example', person_id: 'nope' })).status, 400);
+  assert.equal((await invite(handlers, as, undefined)).status, 400);
+  assert.equal(invites.length, 0);
+});
+
+test('person must exist and have no login', async () => {
+  const { handlers, tables, invites } = mount({ env: ENV });
+  const as = admin(U.superAdmin);
+  const has = await invite(handlers, as, { email: 'w@new.example', person_id: P.ann });
+  assert.equal(has.status, 409);
+  assert.equal(errorOf(has).extensions.code, 'PERSON_HAS_LOGIN');
+  const gone = await invite(handlers, as, { email: 'w@new.example', person_id: ID(555) });
+  assert.equal(gone.status, 404);
+  assert.equal(errorOf(gone).extensions.code, 'NOT_FOUND');
+  assert.equal(invites.length, 0);
+  assert.equal(loginByEmail(tables, 'w@new.example'), undefined);
+});
+
+test('email with an active login is refused with its person', async () => {
+  const { handlers, invites, tables } = mount({ env: ENV });
+  const as = admin(U.superAdmin);
+  const linked = await invite(handlers, as, { email: 'ANN@login.example', full_name: 'Ann Again' }); // any case
+  assert.equal(linked.status, 409);
+  assert.equal(errorOf(linked).extensions.code, 'EMAIL_HAS_LOGIN');
+  assert.equal(errorOf(linked).extensions.person_id, P.ann);
+  assert.equal(errorOf(linked).extensions.source, 'd1-people-admin');
+  // a suspended login too; this one has no person, so no person_id
+  const orphan = await invite(handlers, as, { email: 'orphan@login.example', full_name: 'Olga' });
+  assert.equal(orphan.status, 409);
+  assert.equal(errorOf(orphan).extensions.code, 'EMAIL_HAS_LOGIN');
+  assert.equal('person_id' in errorOf(orphan).extensions, false);
+  assert.equal(invites.length, 0);
+  assert.equal(tables.people.length, 4);
+});
+
+test('email already invited resends', async () => {
+  const { handlers, tables, invites } = mount({ env: ENV });
+  // Bob's login is invited and already linked to Bob: no person is asked for or created, his role is kept
+  const r = await invite(handlers, admin(U.labAdmin), { email: 'Bob@login.example' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { user_id: U.bob, person_id: P.bob, status: 'invited', email_sent: true });
+  assert.equal(invites.length, 1);
+  assert.deepEqual([invites[0].email, invites[0].role, invites[0].url], ['bob@login.example', R.member, INVITE_URL]);
+  assert.equal(tables.people.length, 4);
+  assert.equal(tables.directus_users.length, 6);
+  // a Lab Admin cannot change the role of an invited login by inviting again
+  userRow(tables, U.bob).role = R.super;
+  await invite(handlers, admin(U.labAdmin), { email: 'bob@login.example' });
+  assert.equal(invites[1].role, R.super);
+  assert.equal(userRow(tables, U.bob).role, R.super);
+  // an account administrator who asks for a role changes it
+  await invite(handlers, admin(U.superAdmin), { email: 'bob@login.example', role: R.lab });
+  assert.equal(userRow(tables, U.bob).role, R.lab);
+  // a person asked for that is not the one the login is linked to is refused, naming the linked one
+  const other = await invite(handlers, admin(U.superAdmin), { email: 'bob@login.example', person_id: P.cy });
+  assert.equal(other.status, 409);
+  assert.equal(errorOf(other).extensions.code, 'EMAIL_HAS_LOGIN');
+  assert.equal(errorOf(other).extensions.person_id, P.bob);
+  // the linked person asked for explicitly is fine
+  assert.equal((await invite(handlers, admin(U.superAdmin), { email: 'bob@login.example', person_id: P.bob })).status, 200);
+});
+
+test('an invited login with no person gets one linked', async () => {
+  const tables = baseTables();
+  tables.directus_users.push({ id: ID(260), email: 'loose@login.example', status: 'invited', role: R.member });
+  const { handlers } = mount({ tables, env: ENV });
+  assert.equal((await invite(handlers, admin(U.superAdmin), { email: 'loose@login.example' })).status, 400); // no person, no name
+  const r = await invite(handlers, admin(U.superAdmin), { email: 'loose@login.example', person_id: P.cy });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.user_id, ID(260));
+  assert.equal(tables.people.find((p) => p.person_id === P.cy).user_id, ID(260));
+});
+
+test('mail failure keeps the login and reports email_sent false', async () => {
+  const { handlers, tables, db, warnings, errors } = mount({ env: ENV, mailFail: 'after' });
+  const r = await invite(handlers, admin(U.superAdmin), { email: 'cy@new.example', person_id: P.cy });
+  assert.equal(r.status, 201);
+  const created = loginByEmail(tables, 'cy@new.example');
+  assert.deepEqual(r.body, { user_id: created.id, person_id: P.cy, status: 'invited', email_sent: false });
+  assert.equal(tables.people.find((p) => p.person_id === P.cy).user_id, created.id); // the link stays
+  assert.equal(db.log.tx[0].committed, true);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /mail down/);
+  assert.equal(errors.length, 0);
+  // an error that left no login behind is not a mail failure: everything rolls back and the caller gets a 500
+  const bad = mount({ env: ENV, mailFail: 'before' });
+  const r2 = await invite(bad.handlers, admin(U.superAdmin), { email: 'eve@new.example', full_name: 'Eve New' });
+  assert.equal(r2.status, 500);
+  assert.equal(loginByEmail(bad.tables, 'eve@new.example'), undefined);
+  assert.equal(bad.tables.people.length, 4);
+});
+
+test('503 when STARBASE_URL is unset', async () => {
+  for (const env of [{}, { STARBASE_URL: '' }, { STARBASE_URL: '  ' }]) {
+    const { handlers, invites, tables } = mount({ env });
+    const body = { email: 'q@new.example', full_name: 'Q New' };
+    const r = await invite(handlers, admin(U.superAdmin), body);
+    assert.equal(r.status, 503);
+    assert.equal(errorOf(r).extensions.code, 'STARBASE_URL_UNSET');
+    const again = await call(handlers[RESEND], { acc: admin(U.superAdmin), body: { user_id: U.bob } });
+    assert.equal(again.status, 503);
+    assert.equal(invites.length, 0);
+    assert.equal(tables.people.length, 4);
+  }
+});
+
+test('the data cache is cleared after an invite commits', async () => {
+  const on = mount({ env: { ...ENV, CACHE_ENABLED: 'true' } });
+  await invite(on.handlers, admin(U.superAdmin), { email: 'k@new.example', full_name: 'K New' });
+  assert.equal(on.cleared.length, 1);
+  assert.equal(on.cleared[0].committed, true);
+});
+
+test('resend sends the invite again for an invited login', async () => {
+  const { handlers, invites, tables } = mount({ env: ENV });
+  const resend = (acc, user_id) => call(handlers[RESEND], { acc, body: { user_id } });
+  for (const acc of [admin(U.labAdmin), admin(U.superAdmin)]) {
+    const r = await resend(acc, U.bob);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { email_sent: true });
+  }
+  assert.equal(invites.length, 2);
+  assert.deepEqual([invites[0].email, invites[0].role, invites[0].url], ['bob@login.example', R.member, INVITE_URL]);
+  assert.equal(userRow(tables, U.bob).status, 'invited');
+  // other statuses: 409 NOT_INVITED
+  for (const id of [U.ann, U.orphan]) {
+    const r = await resend(admin(U.superAdmin), id);
+    assert.equal(r.status, 409);
+    assert.equal(errorOf(r).extensions.code, 'NOT_INVITED');
+  }
+  assert.equal((await resend(admin(U.superAdmin), ID(777))).status, 404);
+  assert.equal((await resend(admin(U.superAdmin), 'nope')).status, 400);
+  assert.equal((await resend(admin(U.superAdmin), undefined)).status, 400);
+  assert.equal((await resend(member(U.ann), U.bob)).status, 403);
+  assert.equal((await resend({ user: null }, U.bob)).status, 401);
+  assert.equal(invites.length, 2);
+});
+
+test('resend: a mail failure reports email_sent false', async () => {
+  const { handlers, warnings } = mount({ env: ENV, mailFail: 'after' });
+  const r = await call(handlers[RESEND], { acc: admin(U.superAdmin), body: { user_id: U.bob } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { email_sent: false });
+  assert.equal(warnings.length, 1);
 });
