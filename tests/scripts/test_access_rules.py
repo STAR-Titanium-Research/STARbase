@@ -1178,9 +1178,11 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
         {"access": {"person_id": {"user_id": U}}},
         {"access": {"role": {"_in": ["manage"]}}},
     ]
-    OWNER = {"_or": [OWN, {"_and": manage_role}]}
+    owner_term = {"_or": [OWN, {"_and": manage_role}]}
     for collection in ("manufacturing_operations", "test_sessions", "campaigns"):
-        assert RULES[(collection, "delete")] == {"_and": [READER_TERM, OWNER]}, collection
+        assert RULES[(collection, "delete")] == {
+            "_and": [READER_TERM, owner_term]
+        }, collection
     assert RULES[("campaigns", "update")] == {
         "_and": [READER_TERM, {"_or": [OWN, {"_and": edit_role}]}]
     }
@@ -1189,7 +1191,7 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
         {"_and": edit_role},
     ]
     # samples and projects need no reader term: the editors and the PI are on the list, hence readers
-    assert RULES[("physical_samples", "delete")] == OWNER
+    assert RULES[("physical_samples", "delete")] == owner_term
     assert (
         RULES[("projects", "update")]
         == RULES[("projects", "delete")]
@@ -1747,7 +1749,12 @@ def _team_owned_world():
     w.op("O", sample="S")
     w.test("T", sample="S")
     w.add("sample_co_owners", sample_id="S", user_id="u_coowner")
-    for kind, key in (("sample", "S"), ("campaign", "C"), ("operation", "O"), ("test", "T")):
+    for kind, key in (
+        ("sample", "S"),
+        ("campaign", "C"),
+        ("operation", "O"),
+        ("test", "T"),
+    ):
         w.grant(kind, key, "mgr", "manage")
         w.grant(kind, key, "member", "edit")
         w.grant(kind, key, "viewer", "view")
@@ -1798,7 +1805,12 @@ def test_a_manager_owns_the_children_a_sample_owner_would():
 def test_a_demoted_manager_loses_the_owner_powers_at_once():
     """Demotion rewrites the derived role from manage to edit (migration 177): the same rules then refuse delete."""
     w = _team_owned_world()
-    for row in w.t["sample_access"] + w.t["operation_access"] + w.t["test_access"] + w.t["campaign_access"]:
+    for row in (
+        w.t["sample_access"]
+        + w.t["operation_access"]
+        + w.t["test_access"]
+        + w.t["campaign_access"]
+    ):
         if row["person_id"] == "p_mgr":
             row["role"] = "edit"
     for table, key in TEAM_OWNED:
