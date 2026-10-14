@@ -10,6 +10,12 @@
 
 import { isNotVisible, operationLabel, type HostApi, type TraceResponse } from '@d1/ui';
 import { KEY_SETTING_FIELDS, type RelationDef } from './formSlots';
+
+/** The relations of the two forms, as `loadRelationDefs` read them at runtime. */
+export interface FormDefs {
+  operation: RelationDef[];
+  test: RelationDef[];
+}
 import type { LineageRow, OpRow, ProcessCategory, ProcessData, Ref, SampleRec, StockOrigin, TestRow } from './types';
 
 // ---- constants -------------------------------------------------------------------------------
@@ -250,14 +256,67 @@ async function getList(api: HostApi, collection: string, params: Record<string, 
   return { rows, total: count === undefined || count === null ? null : Number(count) };
 }
 
+/** Most encoded bytes the extra relation fields may add to a request (the rest of the budget is for the ids). */
+const EXTRA_BUDGET = 2500;
+
+/** A many-to-one relation of a form that the fixed field list does not read. */
+interface Extra {
+  field: string;
+  collection: string;
+  key?: string;
+}
+
+/** What the fixed field lists already read, by root field. */
+const rootsOf = (fields: string[]): Set<string> => new Set(fields.map((f) => f.split('.')[0]));
+const OPERATION_ROOTS = rootsOf([...OPERATION_FIELDS, 'batch_id']);
+const TEST_ROOTS = rootsOf([...TEST_FIELDS, ...SUBJECT_FIELDS, 'batch_id']);
+
+/** The relations of a form the map has no named field for, as far as the byte budget allows (spec D6: every relation on the form). */
+function extrasOf(defs: RelationDef[] | undefined, roots: Set<string>): Extra[] {
+  const out: Extra[] = [];
+  for (const d of defs ?? []) {
+    if (roots.has(d.field) || out.some((e) => e.field === d.field)) continue;
+    const next = [...out, { field: d.field, collection: d.collection, key: d.key }];
+    if (encodedQuerySize({ fields: next.map((e) => `${e.field}.*`) }) > EXTRA_BUDGET) break;
+    out.push(next[next.length - 1]);
+  }
+  return out;
+}
+const extraFields = (extras: Extra[]): string[] => extras.map((e) => `${e.field}.*`);
+
+/**
+ * A list read that also asks for the extra relation fields. Directus refusing them (a field the role may not
+ * read, a relation it cannot expand) is not the map's problem: the read is made again without them.
+ */
+async function readList(api: HostApi, collection: string, params: Record<string, unknown>, extras: Extra[]): Promise<{ rows: Json[]; total: number | null }> {
+  if (!extras.length) return getList(api, collection, params);
+  try {
+    return await getList(api, collection, { ...params, fields: [...(params.fields as string[]), ...extraFields(extras)] });
+  } catch {
+    return getList(api, collection, params);
+  }
+}
+
+const CODE_KEYS = ['code', 'name', 'title', 'label', 'full_name', 'common_name', 'filename_download'];
+/** A record of a relation the loader has no spec for: its key, and the first column that reads like a code or a name. */
+function genericRef(extra: Extra, value: unknown): Ref | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Json;
+  const id = idOf(row[extra.key ?? 'id']);
+  if (!id) return null;
+  const codeKey = Object.keys(row).find((k) => (k === 'code' || k.endsWith('_code')) && str(row[k])) ?? CODE_KEYS.find((k) => str(row[k]));
+  return { collection: extra.collection, id, code: (codeKey && str(row[codeKey])) || id };
+}
+
 // ---- row mappers -----------------------------------------------------------------------------
 
-function mapOperation(r: Json): OpRow {
+function mapOperation(r: Json, extras: Extra[] = []): OpRow {
   const id = String(r.operation_id);
   const fast = refOf('fast_recipe_id', r.fast_recipe_id);
   const prep = refOf('source_recipe_id', r.source_recipe_id);
   const relations = relationsOf(r, OPERATION_RELATIONS);
   relations.force_file_id = forceFileRef(r.force_file_id);
+  for (const e of extras) relations[e.field] = genericRef(e, r[e.field]);
   const category = CATEGORIES.includes(r.process_category) ? (r.process_category as ProcessCategory) : null;
   return {
     id,
@@ -283,9 +342,10 @@ function mapOperation(r: Json): OpRow {
   };
 }
 
-function mapTest(r: Json): TestRow {
+function mapTest(r: Json, extras: Extra[] = []): TestRow {
   const id = String(r.session_id);
   const relations = relationsOf(r, TEST_RELATIONS);
+  for (const e of extras) relations[e.field] = genericRef(e, r[e.field]);
   const file = Array.isArray(r.session_data_files) ? r.session_data_files.map((j: Json) => j?.directus_files_id).find((f: Json) => f?.id) : null;
   // A test has several data files but one slot: the first is the Ref.
   relations.session_data_files = file
@@ -349,7 +409,7 @@ export function parseFocus(q: string | undefined): { collection: string; id: str
 
 // ---- the family of a sample ------------------------------------------------------------------
 
-async function loadOperations(api: HostApi, ids: string[]): Promise<OpRow[]> {
+async function loadOperations(api: HostApi, ids: string[], extras: Extra[]): Promise<OpRow[]> {
   // Two single-list requests per chunk (input, output) instead of one `_or` of two lists: half the ids
   // in each query string, and each is a plain filter.
   const build = (column: string) => (chunk: string[]) => ({
@@ -359,18 +419,19 @@ async function loadOperations(api: HostApi, ids: string[]): Promise<OpRow[]> {
     limit: -1,
   });
   // The longer column name sizes the chunks for both.
-  const sized = chunkByBudget(ids, build('output_sample_id'));
+  const withExtras = (column: string) => (chunk: string[]) => ({ ...build(column)(chunk), fields: [...OPERATION_FIELDS, ...extraFields(extras)] });
+  const sized = chunkByBudget(ids, withExtras('output_sample_id'));
   const pages = await Promise.all(
-    sized.flatMap((chunk) => ['sample_id', 'output_sample_id'].map((column) => getList(api, 'manufacturing_operations', build(column)(chunk)))),
+    sized.flatMap((chunk) => ['sample_id', 'output_sample_id'].map((column) => readList(api, 'manufacturing_operations', build(column)(chunk), extras))),
   );
   // An operation whose input is in one chunk and output in another comes back twice.
   const byId = new Map<string, OpRow>();
-  for (const page of pages) for (const row of page.rows) byId.set(String(row.operation_id), mapOperation(row));
+  for (const page of pages) for (const row of page.rows) byId.set(String(row.operation_id), mapOperation(row, extras));
   return [...byId.values()];
 }
 
 /** `refused`: the person may not read tests at all, so none are listed and the map marks "some records hidden". */
-async function loadTests(api: HostApi, ids: string[]): Promise<{ tests: TestRow[]; refused: boolean }> {
+async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<{ tests: TestRow[]; refused: boolean }> {
   const buildJunction = (chunk: string[]) => ({
     filter: JSON.stringify({
       [SUBJECT_ALIAS]: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: chunk } }] } },
@@ -388,15 +449,15 @@ async function loadTests(api: HostApi, ids: string[]): Promise<{ tests: TestRow[
 
   let refused = false;
   const pages = await Promise.all(
-    chunkByBudget(ids, buildJunction).map(async (chunk) => {
+    chunkByBudget(ids, (chunk) => ({ ...buildJunction(chunk), fields: [...TEST_FIELDS, ...SUBJECT_FIELDS, ...extraFields(extras)] })).map(async (chunk) => {
       try {
-        return await getList(api, 'test_sessions', buildJunction(chunk));
+        return await readList(api, 'test_sessions', buildJunction(chunk), extras);
       } catch (e) {
         // A role that may not read the junction cannot filter on it: fall back to the primary sample.
         if (!isNotVisible(e)) throw e;
       }
       try {
-        return await getList(api, 'test_sessions', buildPrimary(chunk));
+        return await readList(api, 'test_sessions', buildPrimary(chunk), extras);
       } catch (e) {
         if (!isNotVisible(e)) throw e;
         refused = true;
@@ -405,7 +466,7 @@ async function loadTests(api: HostApi, ids: string[]): Promise<{ tests: TestRow[
     }),
   );
   const byId = new Map<string, TestRow>();
-  for (const page of pages) for (const row of page.rows) byId.set(String(row.session_id), mapTest(row));
+  for (const page of pages) for (const row of page.rows) byId.set(String(row.session_id), mapTest(row, extras));
   return { tests: [...byId.values()], refused };
 }
 
@@ -482,14 +543,14 @@ async function loadPieces(api: HostApi, operations: OpRow[], family: string[]): 
 }
 
 /** Spec §7 steps 1-4 for one sample: the whole family, not just what the Reach slider will show. */
-export async function loadFamily(api: HostApi, sampleId: string): Promise<ProcessData> {
+export async function loadFamily(api: HostApi, sampleId: string, defs?: FormDefs): Promise<ProcessData> {
   const trace = (await api.get(`/d1-trace/sample/${encodeURIComponent(sampleId)}`)).data as TraceResponse;
   const root = trace.sample.sample_id;
   const ids = unique([root, ...trace.ancestors.map((a) => a.sample_id), ...trace.descendants.map((d) => d.sample_id)]);
 
   const [operations, testRead, lineageRead, samples] = await Promise.all([
-    loadOperations(api, ids),
-    loadTests(api, ids),
+    loadOperations(api, ids, extrasOf(defs?.operation, OPERATION_ROOTS)),
+    loadTests(api, ids, extrasOf(defs?.test, TEST_ROOTS)),
     loadLineage(api, ids),
     loadSamples(api, trace, ids),
   ]);
@@ -553,11 +614,11 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
 
   const meta = new Map<string, Json>(fields.map((f) => [String(f.field), f.meta ?? {}]));
   const defs: (RelationDef & { sort: number })[] = [];
-  const add = (field: string, target: string | null | undefined) => {
+  const add = (field: string, target: string | null | undefined, key?: string | null) => {
     const m = meta.get(field);
     if (!m || m.hidden || !target || defs.some((d) => d.field === field)) return;
     const label = str(Array.isArray(m.translations) ? m.translations[0]?.translation : null) ?? humanise(field);
-    defs.push({ field, label, collection: target, sort: num(m.sort) ?? Number.MAX_SAFE_INTEGER });
+    defs.push({ field, label, collection: target, ...(key ? { key } : {}), sort: num(m.sort) ?? Number.MAX_SAFE_INTEGER });
   };
 
   for (const rel of relations) {
@@ -566,7 +627,7 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
     const manyField = m.many_field ?? rel.field;
     const one = m.one_collection ?? rel.related_collection;
     if (many === collection && rel.related_collection) {
-      add(manyField, rel.related_collection);
+      add(manyField, rel.related_collection, str(rel.schema?.foreign_key_column));
     } else if (one === collection && m.one_field && m.junction_field) {
       // A files-style alias: the target is the far side of the junction, which has its own relations.
       try {
@@ -579,7 +640,7 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
     }
   }
   if (!defs.length) return null;
-  return defs.sort((a, b) => a.sort - b.sort).map(({ field, label, collection: c }) => ({ field, label, collection: c }));
+  return defs.sort((a, b) => a.sort - b.sort).map(({ sort: _sort, ...def }) => def);
 }
 
 // ---- used-in fans (spec D20) -----------------------------------------------------------------
@@ -627,9 +688,9 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
         ? getList(api, 'test_sessions', { filter: JSON.stringify(filter), fields: TEST_FIELDS, sort: ['-session_date'], ...paged })
         : Promise.resolve(null),
     ]);
-    const result: UsedIn = { items: ops.rows.map(mapOperation), total: ops.total ?? ops.rows.length };
+    const result: UsedIn = { items: ops.rows.map((r) => mapOperation(r)), total: ops.total ?? ops.rows.length };
     if (tests) {
-      result.tests = tests.rows.map(mapTest);
+      result.tests = tests.rows.map((r) => mapTest(r));
       result.testsTotal = tests.total ?? tests.rows.length;
     }
     return result;
@@ -675,7 +736,7 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
       sort: ['-operation_date'],
       limit: -1,
     });
-    return { items: ops.rows.map(mapOperation), total };
+    return { items: ops.rows.map((r) => mapOperation(r)), total };
   }
 
   throw new Error(`No used-in fan for ${ref.collection}`);

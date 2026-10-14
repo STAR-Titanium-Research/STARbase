@@ -1289,3 +1289,33 @@ describe('toggling Probable batches keeps what the person opened (I2)', () => {
     expect(map.moreOpen.value.has(containersOf(map)[0].id)).toBe(true);
   });
 });
+
+describe('the form relations reach the loader (I7)', () => {
+  const runtime = [{ field: 'cutting_fluid_id', label: 'Cutting fluid', collection: 'cutting_fluids', key: 'fluid_id' }];
+  /** The relation defs are cached per api: each test has its own. */
+  function own(query: Record<string, unknown>) {
+    const mine = {} as HostApi;
+    const route = reactive({ path: '/map', query: { ...query } as Record<string, unknown> });
+    return { mine, map: useProcessMap(mine, route, { replace: vi.fn() }) };
+  }
+
+  it('with the relations of the forms read at runtime, loadFamily is given them, for a focus and for a plus', async () => {
+    vi.mocked(loadRelationDefs).mockResolvedValue(runtime);
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1')], operations: [mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: '2026-09-01T09:00:00Z' })] }));
+    const { mine, map } = own({ focus: 'physical_samples:s1' });
+    await settle();
+    expect(family).toHaveBeenLastCalledWith(mine, 's1', { operation: runtime, test: runtime });
+    family.mockResolvedValue(mkData({ samples: [mkSample('s2'), mkSample('s3')], operations: [mkOp({ id: 'o9', sampleId: 's2', outputSampleId: 's3' })] }));
+    await map.expand('s:s2');
+    await settle();
+    expect(family).toHaveBeenLastCalledWith(mine, 's2', { operation: runtime, test: runtime });
+  });
+
+  it('with the relations refused, loadFamily is called as before and the fallback list is used', async () => {
+    vi.mocked(loadRelationDefs).mockResolvedValue(null);
+    family.mockResolvedValue(small());
+    const { mine } = own({ focus: 'physical_samples:s1' });
+    await settle();
+    expect(family).toHaveBeenLastCalledWith(mine, 's1');
+  });
+});

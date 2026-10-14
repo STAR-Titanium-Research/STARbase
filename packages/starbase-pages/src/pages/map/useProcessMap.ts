@@ -12,7 +12,7 @@ import { groupBatches } from './model/groupBatches';
 import { hoverFocus, socketSubjects, type HoverFocus } from './model/hoverFocus';
 import { createHoverStack, type Hovered } from './model/hoverStack';
 import { fanData, fanKindOf, fanNodeIds, fanPage, fanRowIds, focusPlan, hasFan, mergeProcessData, withFanPage, withSideFan } from './model/fans';
-import { loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './model/loadFamily';
+import { loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow, type FormDefs } from './model/loadFamily';
 import { shownNodes } from './model/reach';
 import { flipKeys, keysOfGroup, nodesWithKey, resolveSelection, selectionKey, stableKeys } from './model/viewState';
 import { recordInfo, type RecordInfo } from './model/recordInfo';
@@ -109,7 +109,8 @@ function writeRemembered(r: Remembered): void {
 
 // ---- relation defs of the two forms, cached per api ------------------------------------------
 
-type DefsByKind = { operation: RelationDef[]; test: RelationDef[] };
+/** `runtime`: both forms were read from the server (not the fallback lists), so the loader may ask for their relations too. */
+type DefsByKind = FormDefs & { runtime: boolean };
 const defsCache = new WeakMap<HostApi, Promise<DefsByKind>>();
 
 function loadDefs(api: HostApi): Promise<DefsByKind> {
@@ -119,8 +120,12 @@ function loadDefs(api: HostApi): Promise<DefsByKind> {
     const read = (collection: string, kind: 'operation' | 'test') =>
       loadRelationDefs(api, collection)
         .catch(() => null)
-        .then((defs) => defs ?? FALLBACK_RELATIONS[kind]);
-    cached = Promise.all([read('manufacturing_operations', 'operation'), read('test_sessions', 'test')]).then(([operation, test]) => ({ operation, test }));
+        .then((defs) => ({ defs: defs ?? FALLBACK_RELATIONS[kind], runtime: !!defs }));
+    cached = Promise.all([read('manufacturing_operations', 'operation'), read('test_sessions', 'test')]).then(([operation, test]) => ({
+      operation: operation.defs,
+      test: test.defs,
+      runtime: operation.runtime && test.runtime,
+    }));
     defsCache.set(api, cached);
   }
   return cached;
@@ -231,7 +236,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const status = ref<MapStatus>('empty');
   const error = ref('');
   const data = shallowRef<ProcessData | null>(null);
-  const defs = shallowRef<DefsByKind>({ operation: FALLBACK_RELATIONS.operation, test: FALLBACK_RELATIONS.test });
+  const defs = shallowRef<DefsByKind>({ operation: FALLBACK_RELATIONS.operation, test: FALLBACK_RELATIONS.test, runtime: false });
   // What the person did to cards is kept under stable keys (model/viewState.ts), not node ids: the Probable
   // batches chip regroups rows into containers with other ids, and the person's work must survive that.
   const unfoldedKeys = ref<ReadonlySet<string>>(new Set());
@@ -286,10 +291,20 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     return hs;
   };
 
+  /**
+   * A sample's family and the relations of the two forms. The forms are read first (cached per api) so the loader can ask
+   * for every relation on them too (spec D6); when they were refused it reads what it always did.
+   */
+  async function loadFamilyAndDefs(sampleId: string): Promise<{ family: ProcessData; defs: DefsByKind }> {
+    const relationDefs = await loadDefs(api);
+    const family = await loadFamily(api, sampleId, ...(relationDefs.runtime ? [{ operation: relationDefs.operation, test: relationDefs.test }] : []));
+    return { family, defs: relationDefs };
+  }
+
   /** What opening on a record loads (spec D20). */
   async function loadFocus(f: { collection: string; id: string }, plan: 'sample' | 'step' | 'fan'): Promise<{ data: ProcessData; defs: DefsByKind }> {
     if (plan === 'sample') {
-      const [family, relationDefs] = await Promise.all([loadFamily(api, f.id), loadDefs(api)]);
+      const { family, defs: relationDefs } = await loadFamilyAndDefs(f.id);
       return { data: family, defs: relationDefs };
     }
     if (plan === 'step') {
@@ -300,10 +315,9 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       if (!sampleId) throw new NoSample(`This ${kind} has no sample, so there is no Process map to show.`);
       // The step itself was read, so a refused trace is its sample that is hidden, not the step ("this operation
       // does not exist" would be wrong: its own page opens). A role can read a step without its sample.
-      const familyOf = loadFamily(api, sampleId).catch((e: unknown) => {
+      const { family, defs: relationDefs } = await loadFamilyAndDefs(sampleId).catch((e: unknown) => {
         throw isNotVisible(e) ? new NoSample(`You can read this ${kind}, but not the sample it belongs to, so there is no Process map to show.`) : e;
       });
-      const [family, relationDefs] = await Promise.all([familyOf, loadDefs(api)]);
       const inFamily = kind === 'test' ? family.tests.some((t) => t.id === row.id) : family.operations.some((o) => o.id === row.id);
       if (!inFamily) return { data: family, defs: relationDefs };
       return { data: { ...family, focus: { collection: f.collection, id: row.id, code: row.code, kind } }, defs: relationDefs };
@@ -581,7 +595,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     if (opening.has(key)) return Promise.resolve(); // a second click while it loads
     opening.add(key);
     return (withBusy(async () => {
-      const [family, relationDefs] = await Promise.all([loadFamily(api, sampleId), loadDefs(api)]);
+      const { family, defs: relationDefs } = await loadFamilyAndDefs(sampleId);
       const before = data.value;
       if (!gate.isCurrent(mine) || !before) return;
       const merged = mergeProcessData(before, family);

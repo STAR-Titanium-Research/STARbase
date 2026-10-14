@@ -716,3 +716,80 @@ describe('loadFamily: the pieces outside the family (C1)', () => {
     expect(data.pieces ?? {}).toEqual({});
   });
 });
+
+describe('loadFamily: every relation on the form (I7)', () => {
+  const FLUID = { field: 'cutting_fluid_id', label: 'Cutting fluid', collection: 'cutting_fluids', key: 'fluid_id' };
+  const defs = {
+    operation: [
+      { field: 'tool_id', label: 'Tool', collection: 'tools' },
+      { field: 'sample_id', label: 'Sample', collection: 'physical_samples' },
+      FLUID,
+    ],
+    test: [{ field: 'rig_id', label: 'Rig', collection: 'rigs' }],
+  };
+  const opRow = (extra: Record<string, unknown> = {}) => ({ operation_id: 'o1', sample_id: 'root', output_sample_id: null, process_category: 'machining', ...extra });
+  const answer = (rows: unknown[]): Handler => (path) => {
+    if (path.startsWith('/d1-trace/')) return trace();
+    if (path === '/items/manufacturing_operations') return { data: rows };
+    return { data: [] };
+  };
+  const fieldsOf = (calls: Call[], path: string) => calls.filter((c) => c.path === path).flatMap((c) => c.params.fields as string[]);
+
+  it('asks for each many-to-one relation the fixed list lacks, and maps what comes back to a ref', async () => {
+    const { api, calls } = fakeApi(answer([opRow({ cutting_fluid_id: { fluid_id: 'cf1', fluid_code: 'CF-1', name: 'Coolant' } })]));
+    const data = await loadFamily(api, 'root', defs);
+    const asked = fieldsOf(calls, '/items/manufacturing_operations');
+    expect(asked).toContain('cutting_fluid_id.*');
+    expect(asked).not.toContain('tool_id.*'); // already read by name
+    expect(asked).not.toContain('sample_id.*'); // shown elsewhere on the container
+    expect(data.operations[0].relations.cutting_fluid_id).toEqual({ collection: 'cutting_fluids', id: 'cf1', code: 'CF-1' });
+    expect(fieldsOf(calls, '/items/test_sessions')).toContain('rig_id.*');
+  });
+
+  it('a relation the person may not read, or an empty one, is no ref', async () => {
+    const { api } = fakeApi(answer([opRow({ cutting_fluid_id: 'cf1' }), { ...opRow({ cutting_fluid_id: null }), operation_id: 'o2' }]));
+    const data = await loadFamily(api, 'root', defs);
+    expect(data.operations.map((o) => o.relations.cutting_fluid_id ?? null)).toEqual([null, null]);
+  });
+
+  it('falls back silently to the fixed fields when Directus refuses the extra ones', async () => {
+    const { api, calls } = fakeApi((path, params) => {
+      if (path === '/items/manufacturing_operations' && (params.fields as string[]).some((f) => f.endsWith('.*'))) return httpError(400);
+      return answer([opRow()])(path, params);
+    });
+    const data = await loadFamily(api, 'root', defs);
+    expect(data.operations).toHaveLength(1);
+    expect(fieldsOf(calls, '/items/manufacturing_operations').filter((f) => f.endsWith('.*'))).not.toEqual([]); // tried
+    expect(calls.filter((c) => c.path === '/items/manufacturing_operations' && !(c.params.fields as string[]).some((f) => f.endsWith('.*'))).length).toBeGreaterThan(0);
+  });
+
+  it('without runtime defs nothing extra is asked', async () => {
+    const { api, calls } = fakeApi(answer([opRow()]));
+    await loadFamily(api, 'root');
+    expect(fieldsOf(calls, '/items/manufacturing_operations').filter((f) => f.endsWith('.*'))).toEqual([]);
+  });
+
+  it('a form with hundreds of relations still keeps every request within the byte budget', async () => {
+    const many = { operation: Array.from({ length: 300 }, (_, i) => ({ field: `relation_number_${i}_id`, label: `R${i}`, collection: 'things' })), test: [] };
+    const ids = Array.from({ length: 40 }, (_, i) => `${String(i).padStart(8, '0')}-aaaa-bbbb-cccc-dddddddddddd`);
+    const { api, calls } = fakeApi((path) => (path.startsWith('/d1-trace/') ? trace({ descendants: ids.map((id) => relative(id)) }) : { data: [] }));
+    await loadFamily(api, 'root', many);
+    for (const c of calls.filter((x) => x.path === '/items/manufacturing_operations')) expect(encodedQuerySize(c.params)).toBeLessThanOrEqual(6000);
+    const extras = fieldsOf(calls, '/items/manufacturing_operations').filter((f) => f.endsWith('.*'));
+    expect(extras.length).toBeGreaterThan(0);
+    expect(extras.length).toBeLessThan(300 * 4); // bounded, not all of them on every request
+  });
+});
+
+describe('loadRelationDefs: the key of the related record (I7)', () => {
+  it('keeps the column the relation points at, when the server says it', async () => {
+    const { api } = fakeApi((path) => {
+      if (path === '/relations/manufacturing_operations') {
+        return { data: [{ collection: 'manufacturing_operations', field: 'cutting_fluid_id', related_collection: 'cutting_fluids', schema: { foreign_key_column: 'fluid_id' }, meta: { many_collection: 'manufacturing_operations', many_field: 'cutting_fluid_id', one_collection: 'cutting_fluids' } }] };
+      }
+      if (path === '/fields/manufacturing_operations') return { data: [{ field: 'cutting_fluid_id', meta: { sort: 1, hidden: false } }] };
+      return { data: [] };
+    });
+    expect(await loadRelationDefs(api, 'manufacturing_operations')).toEqual([{ field: 'cutting_fluid_id', label: 'Cutting fluid', collection: 'cutting_fluids', key: 'fluid_id' }]);
+  });
+});

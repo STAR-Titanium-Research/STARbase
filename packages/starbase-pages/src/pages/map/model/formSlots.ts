@@ -13,6 +13,8 @@ export interface RelationDef {
   field: string;
   label: string;
   collection: string;
+  /** The column of `collection` the relation points at, when the server said (the loader reads the related record by it). */
+  key?: string;
 }
 
 type Kind = 'operation' | 'test';
