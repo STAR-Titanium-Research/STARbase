@@ -19,7 +19,7 @@ onMounted(() => {
 			<BrandLogo />
 			<h1>Can't reach the database</h1>
 			<p>STARbase couldn't reach d1-server at <code>{{ server }}</code>. Check that this device is on the tailnet, then try again.</p>
-			<button type="button" class="sb-primary" :disabled="retrying" @click="$emit('retry')">{{ retrying ? 'Trying…' : 'Try again' }}</button>
+			<button type="button" class="sb-primary" :disabled="retrying" :aria-busy="retrying ? 'true' : undefined" @click="$emit('retry')"><span v-if="retrying" class="sb-spin" aria-hidden="true" />{{ retrying ? 'Trying…' : 'Try again' }}</button>
 		</div>
 	</main>
 </template>

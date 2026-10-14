@@ -45,9 +45,9 @@ function queryValue(query: Record<string, unknown>, key: string): string | null 
 // Is the sidebar entry `to` (an app route, maybe with ?bookmark=<id>) the page at `path`/`query`?
 //  - a bookmark entry: the same page with the same ?bookmark
 //  - Home: only /home itself (every Explorer route starts with it)
-//  - any other entry: its page, or a record page under it (/home/samples/12 lights up Samples);
-//    its own list page lights it up only when no saved view is selected, so that the bookmark
-//    entry below it is the one highlighted
+//  - any other entry: its page, or a record page under it (/home/samples/12 lights up Samples),
+//    whether or not a saved view is selected on it (saved views are chips above the table now,
+//    not sidebar entries, so the list's own entry stays lit)
 export function linkActive(to: string, routePath: string, query: Record<string, unknown>): boolean {
 	// `to` is written as a Directus app path; the current route is this host's, so bring it to that form.
 	const path = canonicalPath(routePath);
@@ -56,5 +56,5 @@ export function linkActive(to: string, routePath: string, query: Record<string, 
 	if (bookmark !== null) return path === base && queryValue(query, 'bookmark') === bookmark;
 	if (base === '/home') return path === base;
 	if (path.startsWith(`${base}/`)) return true;
-	return path === base && queryValue(query, 'bookmark') === null;
+	return path === base;
 }

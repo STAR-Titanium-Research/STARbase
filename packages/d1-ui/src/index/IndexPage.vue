@@ -30,10 +30,11 @@ import PageShell from '../components/PageShell.vue';
 import SegmentedControl from '../components/SegmentedControl.vue';
 import { useRequestGate } from '../composables/useRequestGate';
 import CardGrid from './CardGrid.vue';
+import { rowAccent } from './accent';
 import RowPlotButtons from './RowPlotButtons.vue';
 import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
-import { PAGE_SIZE } from './indexQuery';
+import { PAGE_SIZE, toggledBookmark } from './indexQuery';
 import { plotKind } from './plotData';
 import { SELECT_MAX, cellText, hasNextPage, rangeText, sortDirection, sortKey } from './indexView';
 import { readListPrefs, writeListPrefs } from './listPrefs';
@@ -61,6 +62,8 @@ const initial = readListPrefs(props.def.slug);
 const view = ref<ListView>(initial.view);
 const density = ref<Density>(initial.density);
 const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
+// A designed card (campaigns) in Cards view: laid out like the Projects index, not in the panel.
+const designedCards = computed(() => view.value === 'cards' && !!slots.card);
 // Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
 const hasPlots = computed(() => plotKind(props.def.collection) !== null);
 // A sample's code is what its "Force (n)" button searches the operations list for.
@@ -220,7 +223,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 						type="button"
 						class="chip-main"
 						:aria-pressed="state.bookmark === b.id"
-						@click="state.bookmark === b.id ? undefined : setBookmark(b.id)"
+						@click="setBookmark(toggledBookmark(state.bookmark, b.id))"
 					>{{ b.bookmark }}</button>
 					<button
 						v-if="state.bookmark === b.id"
@@ -274,12 +277,14 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				<button v-if="state.bookmark !== null" type="button" class="btn" @click="setBookmark(null)">Show the whole list</button>
 			</div>
 
-			<div v-else class="panel" :class="{ busy: loading && rows.length }" :aria-busy="loading">
+			<div v-else class="panel" :class="{ busy: loading && rows.length, bare: designedCards }" :aria-busy="loading">
 				<!-- Cards: the page's own `card` slot (campaigns), else a text card per row. Skeleton cards while the
-					first page loads, so the grid does not flip to a table and back. -->
+					first page loads, so the grid does not flip to a table and back. Designed cards sit on the page
+					ground in the Projects index's wider grid, not inside the panel. -->
 				<CardGrid
 					v-if="view === 'cards' && (loading || rows.length)"
 					:def="def"
+					:wide="designedCards"
 					:rows="rows"
 					:loading="loading"
 					:row-key="rowKey"
@@ -341,6 +346,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								<td v-if="showThumb" class="thumb"><div class="thumb-box"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></div></td>
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
+										<span v-if="rowAccent(def, row)" class="swatch" :style="{ background: rowAccent(def, row) as string }" aria-hidden="true" />
 										<a
 											v-if="def.rowTarget === 'record'"
 											class="cell-link"
@@ -440,6 +446,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 	padding: 6px 16px 4px; box-shadow: var(--d1-shadow);
 }
 .panel { min-width: 0; }
+.panel.bare { background: none; border: 0; border-radius: 0; padding: 0; box-shadow: none; }
 .panel.busy { opacity: 0.6; }
 .state-row { padding: 6px 0; }
 
@@ -465,6 +472,7 @@ th.num .sort { justify-content: flex-end; }
 	display: inline; padding: 0; border: 0; background: none; font: inherit; text-align: inherit;
 	color: inherit; text-decoration: none; cursor: pointer;
 }
+.swatch { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme--foreground) 30%, transparent); }
 .cell-link:hover { color: var(--d1-accent, var(--theme--primary)); text-decoration: underline; }
 .cell-link:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 3px; }
 /* Long free text (outcomes, notes) is cut instead of stretching the row. */
@@ -475,7 +483,7 @@ th.num .sort { justify-content: flex-end; }
 	height: 28px; padding: 0 8px; border: 1px solid var(--d1-line); border-radius: 8px;
 	background: var(--d1-surface); color: var(--theme--foreground); font: inherit; font-size: var(--fs-sm, 12px);
 }
-/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load. */
+/* The roomy row's picture box: a fixed 8:5 frame (the size of the thumbnail request, scaled down), so rows do not jump as pictures load; the picture inside is contained (IndexThumb), never cropped. */
 .thumb-box { box-sizing: border-box; width: 72px; height: 45px; overflow: hidden; border: 1px solid var(--d1-line); border-radius: 6px; background: var(--d1-tile); line-height: 0; }
 .skeleton .thumb .bar { width: 72px; height: 45px; border-radius: 6px; }
 

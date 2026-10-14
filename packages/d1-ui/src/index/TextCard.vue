@@ -14,6 +14,8 @@ const props = defineProps<{
 	facts: CardFact[];
 	/** A record row's address; null for a row that opens the drawer. */
 	href: string | null;
+	/** A #rrggbb colour (already validated, see accent.ts): a stripe down the left edge and a swatch before the code. */
+	accent?: string | null;
 }>();
 const emit = defineEmits<{ open: [] }>();
 
@@ -35,11 +37,11 @@ function onCard(): void {
 </script>
 
 <template>
-	<article class="card" @click="onCard">
+	<article class="card" :class="{ accented: accent }" :style="accent ? { '--card-accent': accent } : undefined" @click="onCard">
 		<div v-if="$slots.thumb" class="pic"><slot name="thumb" /></div>
 		<div class="body">
-			<a v-if="href" class="head" :class="{ mono }" :href="href" :aria-label="link ? undefined : 'Open'" @click="onLink">{{ link || '—' }}</a>
-			<button v-else type="button" class="head" :class="{ mono }" :aria-label="link ? undefined : 'Open'" @click="onLink">{{ link || '—' }}</button>
+			<a v-if="href" class="head" :class="{ mono }" :href="href" :aria-label="link ? undefined : 'Open'" @click="onLink"><span v-if="accent" class="swatch" aria-hidden="true" />{{ link || '—' }}</a>
+			<button v-else type="button" class="head" :class="{ mono }" :aria-label="link ? undefined : 'Open'" @click="onLink"><span v-if="accent" class="swatch" aria-hidden="true" />{{ link || '—' }}</button>
 			<span v-if="sub" class="sub">{{ sub }}</span>
 			<dl v-if="facts.length" class="facts">
 				<div v-for="f in facts" :key="f.label" class="fact">
@@ -60,9 +62,17 @@ function onCard(): void {
 	border: 1px solid var(--d1-line); border-radius: 12px; background: var(--d1-tile);
 	color: var(--theme--foreground); cursor: pointer; transition: border-color 0.12s ease;
 }
+/* A colour-coded card: a 4px stripe down the left edge and a swatch by the code; the card itself stays neutral, so text reads in both themes. */
+.card.accented { border-left: 4px solid var(--card-accent); }
+.swatch {
+	display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; background: var(--card-accent);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme--foreground) 30%, transparent);
+}
 .card:hover, .card:focus-within { border-color: var(--d1-accent, var(--theme--primary)); }
-.pic { height: 120px; display: grid; place-items: center; line-height: 0; overflow: hidden; background: var(--d1-surface); border-bottom: 1px solid var(--d1-line); }
-.pic :deep(img) { width: 100%; height: 100%; object-fit: cover; }
+/* A plain block of fixed height, not a grid: the slotted picture sizes itself by `height: 100%`, which
+   inside a grid's auto row fell back to the photo's natural height and showed a zoomed-in strip. */
+.pic { box-sizing: border-box; height: 104px; padding: 6px; display: block; line-height: 0; overflow: hidden; background: var(--d1-surface); border-bottom: 1px solid var(--d1-line); }
+.pic :deep(img) { width: 100%; height: 100%; object-fit: contain; }
 .body { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 9px 11px 10px; flex: 1; }
 .head {
 	align-self: flex-start; max-width: 100%; padding: 0; border: 0; background: none; font: inherit; text-align: left;

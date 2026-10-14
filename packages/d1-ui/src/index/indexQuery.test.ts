@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { INDEX_DEFS, indexDefBySlug } from './indexConfig';
 import type { IndexDef } from './indexConfig';
 import {
-	PAGE_SIZE, SHORT_ID_RE, bookmarkSort, buildItemsParams, dataStudioLink, nested, queryFromState, stateFromQuery,
+	PAGE_SIZE, SHORT_ID_RE, bookmarkSort, buildItemsParams, dataStudioLink, nested, queryFromState, stateFromQuery, toggledBookmark,
 } from './indexQuery';
 import type { IndexState } from './indexQuery';
 import type { Bookmark } from '../nav/navConfig';
@@ -189,5 +189,15 @@ describe('a flag chip', () => {
 		});
 		expect(buildItemsParams(def, state('false'), null).filter).toBeUndefined();
 		expect(buildItemsParams(def, state('junk'), null).filter).toBeUndefined();
+	});
+});
+
+describe('toggledBookmark', () => {
+	it('turns a saved view on, and clears it when its chip is clicked again', () => {
+		expect(toggledBookmark(null, 3)).toBe(3);
+		expect(toggledBookmark(3, 3)).toBeNull();
+	});
+	it('switches straight to another view', () => {
+		expect(toggledBookmark(3, 4)).toBe(4);
 	});
 });
