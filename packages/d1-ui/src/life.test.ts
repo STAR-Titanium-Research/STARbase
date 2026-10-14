@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLife, hiddenText, truncatedNotes, type TraceResponse } from './life';
+import { buildLife, chipText, chipTitle, daySummary, groupLife, hiddenText, truncatedNotes, type TraceResponse } from './life';
 
 const base = (): TraceResponse => ({
 	sample: { sample_id: 's0', sample_code: '12-AA-FAST', form: 'disc' },
@@ -190,5 +190,65 @@ describe('buildLife: isCode', () => {
 		const t = base();
 		t.sample.sample_code = null;
 		expect(buildLife(t)[0]).toMatchObject({ label: 'This sample', isCode: false });
+	});
+});
+
+describe('groupLife', () => {
+	const op = (id: string, date: string | null, sequence: number | null, label: string | null = `P-${id}`) =>
+		({ type: 'manufacturing_operation' as const, collection: 'manufacturing_operations', id, date, label, sequence, status: null });
+	const test = (id: string, date: string | null) =>
+		({ type: 'test_session' as const, collection: 'test_sessions', id, date, label: 'tensile', sequence: null, status: 'analysed' });
+
+	it('folds the operations and tests of one day into one step, and keeps a step per lineage record', () => {
+		const t = base();
+		t.ancestors = [{ depth: 1, sample_id: 'a1', sample_code: 'A1', form: null, relationship_type: null, fraction: null, through_hidden: false }];
+		t.events = [op('o17', '2023-03-31', 17), op('o1', '2023-03-31', 1), test('t1', '2023-03-31'), op('o2', '2023-04-02', 2), op('o9', null, 9)];
+		t.hidden.events = true;
+		t.descendants = [{ depth: 1, sample_id: 'd1', sample_code: 'D1', form: null, relationship_type: null, fraction: null, through_hidden: false }];
+		const steps = groupLife(buildLife(t));
+		expect(steps.map((s) => (s.type === 'day' ? s.dayText : s.key))).toEqual([
+			'ancestor-a1',
+			'self',
+			'31 Mar 2023',
+			'2 Apr 2023',
+			'Undated',
+			'hidden-events',
+			'descendant-d1',
+		]);
+		const first = steps[2];
+		expect(first.type === 'day' && first.items.map((i) => i.key)).toEqual([
+			'manufacturing_operation-o1',
+			'manufacturing_operation-o17',
+			'test_session-t1',
+		]);
+		expect(first.type === 'day' && [first.operations, first.tests]).toEqual([2, 1]);
+	});
+
+	it('gives every step a distinct key', () => {
+		const t = base();
+		t.events = [op('o1', '2023-03-31', 1), op('o2', '2023-04-01', 2), op('o3', null, null)];
+		const keys = groupLife(buildLife(t)).map((s) => s.key);
+		expect(new Set(keys).size).toBe(keys.length);
+	});
+});
+
+describe('day summary and chips', () => {
+	it('counts operations and tests in words', () => {
+		expect(daySummary({ operations: 26, tests: 2 })).toBe('26 operations · 2 tests');
+		expect(daySummary({ operations: 1, tests: 0 })).toBe('1 operation');
+		expect(daySummary({ operations: 0, tests: 1 })).toBe('1 test');
+	});
+
+	it('names an operation by its step and keeps the full label for the tooltip', () => {
+		const t = base();
+		t.events = [
+			{ type: 'manufacturing_operation', collection: 'manufacturing_operations', id: 'o1', date: null, label: '10-AA-F17-30MPM', sequence: 17, status: null },
+			{ type: 'manufacturing_operation', collection: 'manufacturing_operations', id: 'o2', date: null, label: null, sequence: 27, status: null },
+			{ type: 'manufacturing_operation', collection: 'manufacturing_operations', id: 'o3', date: null, label: 'P3', sequence: null, status: null },
+			{ type: 'test_session', collection: 'test_sessions', id: 't1', date: null, label: 'tensile', sequence: null, status: 'failed' },
+		];
+		const events = buildLife(t).slice(1);
+		expect(events.map(chipText)).toEqual(['#17', '#27', 'P3', 'tensile']);
+		expect(events.map(chipTitle)).toEqual(['10-AA-F17-30MPM · step 17', '12-AA-FAST · step 27', 'P3', 'tensile · failed']);
 	});
 });
