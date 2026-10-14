@@ -5,14 +5,15 @@
 import ExplorerView from '../ExplorerView.vue';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { PageShell, PinToggle, canonicalPath, pinTargetForIndex, useExplorerHost } from '@d1/ui';
+import { PageShell, PinToggle, SegmentedControl, canonicalPath, pinTargetForIndex, useExplorerHost } from '@d1/ui';
 import PersonEditDialog from './PersonEditDialog.vue';
 import InviteDialog from './InviteDialog.vue';
 import LinkLoginDialog from './LinkLoginDialog.vue';
 import PersonPanel from './PersonPanel.vue';
 import PersonRow from './PersonRow.vue';
+import TeamsView from '../teams/TeamsView.vue';
 import { loadAttention, loadPeople, type AttentionItem, type PeopleData } from './peopleApi';
-import { ATTENTION_LABELS, applyList, chipCounts, parseListState, toQuery, type Chip, type ListState, type PeopleRow } from './peopleQuery';
+import { ATTENTION_LABELS, applyList, chipCounts, parseListState, toQuery, type Chip, type ListState, type PeopleRow, type PeopleViewKind } from './peopleQuery';
 
 const host = useExplorerHost();
 const { api, isAdmin } = host;
@@ -27,6 +28,13 @@ const state = computed(() => parseListState(route.query));
 function update(patch: Partial<ListState>) {
 	void router.replace({ path: route.path, query: toQuery({ ...state.value, ...patch }) });
 }
+// People | Teams: the Teams view is the same page with ?view=teams. Each view keeps only its own query, so switching starts the other clean.
+const teamsView = computed(() => state.value.view === 'teams');
+const VIEWS: { value: PeopleViewKind; label: string }[] = [
+	{ value: 'people', label: 'People' },
+	{ value: 'teams', label: 'Teams' },
+];
+const setView = (v: PeopleViewKind) => void router.replace({ path: route.path, query: v === 'teams' ? { view: 'teams' } : {} });
 // The search box keeps its own text (the URL follows it) so typing is never undone by a navigation still on its way. The finder sends
 // a People hit to /home/people?q=<name>: the box follows the URL if it changes while the page stays open.
 const qText = ref(state.value.q);
@@ -141,6 +149,7 @@ const rowKey = (r: PeopleRow) => r.person_id ?? `login:${r.user_id}`;
 const isOwn = (r: PeopleRow) => !!r.user_id && r.user_id === host.user.value?.id;
 // An administrator opens anyone; a member only their own row (the server shows the rest read-only).
 const panelId = computed(() => {
+	if (teamsView.value) return null;
 	const id = state.value.person;
 	const r = id ? rows.value.find((x) => x.person_id === id) : undefined;
 	return r && (isAdmin.value || isOwn(r)) ? r.person_id : null;
@@ -194,15 +203,17 @@ function openLink(r: PeopleRow) {
 		<PageShell :narrow="!panelId">
 			<!-- No heading of its own: the header bar already says "People". -->
 			<div class="bar">
+				<SegmentedControl :model-value="state.view" :options="VIEWS" label="Show" @update:model-value="setView" />
 				<div class="grow" />
-				<v-input class="search" :model-value="qText" placeholder="Search name / email…" :small="true" @update:model-value="onSearch">
+				<v-input v-if="!teamsView" class="search" :model-value="qText" placeholder="Search name / email…" :small="true" @update:model-value="onSearch">
 					<template #prepend><v-icon name="search" small /></template>
 				</v-input>
 				<PinToggle v-if="pinTarget" :target="pinTarget" label="People" />
-				<v-button v-if="isAdmin" small @click="inviteFor = null"><v-icon name="mail" left small />Invite</v-button>
-				<v-button small :secondary="isAdmin" @click="openDialog(null)"><v-icon name="person_add" left small />Add person</v-button>
+				<v-button v-if="isAdmin && !teamsView" small @click="inviteFor = null"><v-icon name="mail" left small />Invite</v-button>
+				<v-button v-if="!teamsView" small :secondary="isAdmin" @click="openDialog(null)"><v-icon name="person_add" left small />Add person</v-button>
 			</div>
 
+			<template v-if="!teamsView">
 			<div class="filters">
 				<button
 					v-for="c in chips"
@@ -263,6 +274,8 @@ function openLink(r: PeopleRow) {
 					/>
 				</aside>
 			</div>
+			</template>
+			<TeamsView v-else />
 		</PageShell>
 
 		<PersonEditDialog v-model="dialogOpen" :person="dialogPerson" @saved="load(true)" />

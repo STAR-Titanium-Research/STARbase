@@ -48,7 +48,10 @@ export type Chip = 'all' | 'researchers' | 'operators' | 'nologin' | 'former';
 export type RoleFilter = 'any' | 'none' | string; // 'any', 'none' (persons with no login) or a role id
 export type TeamFilter = 'any' | string; // 'any' or a team id
 export type SortKey = 'name' | 'last' | 'added';
+/** The page shows the people list, or the teams (?view=teams). */
+export type PeopleViewKind = 'people' | 'teams';
 export interface ListState {
+	view: PeopleViewKind;
 	chip: Chip;
 	role: RoleFilter;
 	/** 'any', or a team id: only people in that team. */
@@ -73,6 +76,7 @@ export function parseListState(query: Record<string, unknown>): ListState {
 	const chip = text(query.f);
 	const sort = text(query.sort);
 	return {
+		view: text(query.view) === 'teams' ? 'teams' : 'people',
 		chip: (CHIPS as readonly string[]).includes(chip) ? (chip as Chip) : 'all',
 		role: text(query.role) || 'any',
 		team: text(query.team) || 'any',
@@ -86,6 +90,7 @@ export function parseListState(query: Record<string, unknown>): ListState {
 /** The URL query for a list state; defaults are left out, so the default state is {}. */
 export function toQuery(s: ListState): Record<string, string> {
 	const out: Record<string, string> = {};
+	if (s.view === 'teams') out.view = 'teams';
 	if (s.chip !== 'all') out.f = s.chip;
 	if (s.role !== 'any') out.role = s.role;
 	if (s.team !== 'any') out.team = s.team;

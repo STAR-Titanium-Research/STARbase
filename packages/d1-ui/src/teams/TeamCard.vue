@@ -185,7 +185,7 @@ function onClick() {
 
 function openTeam() {
 	close();
-	host.navigate(`/teams/${encodeURIComponent(props.teamId)}`);
+	host.navigate(`/home/teams/${encodeURIComponent(props.teamId)}`);
 }
 
 onBeforeUnmount(() => {

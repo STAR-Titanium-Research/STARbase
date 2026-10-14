@@ -5,6 +5,7 @@ import { PageShell, useExplorerHost } from '@d1/ui';
 import QuickActions from './home/QuickActions.vue';
 import NeedsAttention from './home/NeedsAttention.vue';
 import MyWork from './home/MyWork.vue';
+import WaitingForYou from './home/WaitingForYou.vue';
 import LabStats from './home/LabStats.vue';
 import RecentActivity from './home/RecentActivity.vue';
 import AdminPanels from './home/AdminPanels.vue';
@@ -44,6 +45,7 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 				<QuickActions />
 			</section>
 
+			<WaitingForYou />
 			<FrequentlyUsed />
 			<LabStats />
 			<div class="row">

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ATTENTION_LABELS, applyList, chipCounts, parseListState, toQuery, type ListState, type PeopleRow, type PersonTeam } from './peopleQuery';
 
-const DEFAULT: ListState = { chip: 'all', role: 'any', team: 'any', sort: 'name', q: '', attn: null, person: null };
+const DEFAULT: ListState = { view: 'people', chip: 'all', role: 'any', team: 'any', sort: 'name', q: '', attn: null, person: null };
 const team = (id: string, over: Partial<PersonTeam> = {}): PersonTeam => ({ team_id: id, name: `Team ${id}`, color: 'teal', logo: null, is_manager: false, ...over });
 const state = (over: Partial<ListState> = {}): ListState => ({ ...DEFAULT, ...over });
 
@@ -46,8 +46,8 @@ describe('list state in the URL', () => {
 	});
 
 	it('round-trips every non-default field', () => {
-		const s: ListState = { chip: 'operators', role: 'r-admin', team: 't-1', sort: 'last', q: 'ada', attn: 'missing_email', person: 'p-1' };
-		expect(toQuery(s)).toEqual({ f: 'operators', role: 'r-admin', team: 't-1', sort: 'last', q: 'ada', attn: 'missing_email', person: 'p-1' });
+		const s: ListState = { view: 'teams', chip: 'operators', role: 'r-admin', team: 't-1', sort: 'last', q: 'ada', attn: 'missing_email', person: 'p-1' };
+		expect(toQuery(s)).toEqual({ view: 'teams', f: 'operators', role: 'r-admin', team: 't-1', sort: 'last', q: 'ada', attn: 'missing_email', person: 'p-1' });
 		expect(parseListState(toQuery(s))).toEqual(s);
 		for (const chip of ['researchers', 'operators', 'nologin', 'former'] as const) expect(parseListState(toQuery(state({ chip })))).toEqual(state({ chip }));
 		expect(parseListState(toQuery(state({ role: 'none' })))).toEqual(state({ role: 'none' }));
@@ -58,6 +58,10 @@ describe('list state in the URL', () => {
 	});
 
 	it('unknown chip falls back to all', () => {
+		expect(parseListState({ view: 'teams' }).view).toBe('teams');
+		expect(parseListState({ view: 'wizards' }).view).toBe('people');
+		expect(toQuery(state({ view: 'teams' }))).toEqual({ view: 'teams' });
+		expect(parseListState(toQuery(state({ view: 'teams' })))).toEqual(state({ view: 'teams' }));
 		expect(parseListState({ f: 'wizards' }).chip).toBe('all');
 		expect(parseListState({ f: 7 }).chip).toBe('all');
 		expect(parseListState({ sort: 'size' }).sort).toBe('name');

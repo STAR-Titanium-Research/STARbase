@@ -110,7 +110,7 @@ function doAction() {
 const teams = computed(() => person.value?.teams ?? []);
 // an unknown colour key (an older team row) shows as the default teal, as the teams table does
 const tileOf = (t: { name: string; color: string; logo?: string | null }) => ({ name: t.name, color: isTeamColor(t.color) ? t.color : DEFAULT_TEAM_COLOR, logo: t.logo });
-const openTeam = (teamId: string) => host.navigate(`/teams/${encodeURIComponent(teamId)}`);
+const openTeam = (teamId: string) => host.navigate(`/home/teams/${encodeURIComponent(teamId)}`);
 
 // ---- Access: the counts; a count lists its records ----
 const waiting = computed(() => waitingLine(access.value));

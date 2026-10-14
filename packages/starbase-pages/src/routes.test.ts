@@ -6,12 +6,12 @@ import SettingsPage from './pages/SettingsPage.vue';
 describe('starbaseRoutes', () => {
 	const paths = starbaseRoutes.map((r) => r.path);
 	it('has every page of the Home module', () => {
-		for (const p of ['', 'register-sample', 'people', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', ':slug']) {
+		for (const p of ['', 'register-sample', 'people', 'teams/:id', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', ':slug']) {
 			expect(paths).toContain(p);
 		}
 	});
 	it('has no other route', () => {
-		expect(paths).toHaveLength(12);
+		expect(paths).toHaveLength(13);
 	});
 	it('settings resolves to SettingsPage, not IndexRoute', () => {
 		const settings = starbaseRoutes.find((r) => r.path === 'settings');
