@@ -64,6 +64,8 @@ const initial = readListPrefs(props.def.slug);
 const view = ref<ListView>(initial.view);
 const density = ref<Density>(initial.density);
 const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
+// A designed card (campaigns) in Cards view: laid out like the Projects index, not in the panel.
+const designedCards = computed(() => view.value === 'cards' && !!slots.card);
 // Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
 const hasPlots = computed(() => plotKind(props.def.collection) !== null);
 // The kinds with no record page get a Process map pill instead (spec section 8).
@@ -279,12 +281,14 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				<button v-if="state.bookmark !== null" type="button" class="btn" @click="setBookmark(null)">Show the whole list</button>
 			</div>
 
-			<div v-else class="panel" :class="{ busy: loading && rows.length }" :aria-busy="loading">
+			<div v-else class="panel" :class="{ busy: loading && rows.length, bare: designedCards }" :aria-busy="loading">
 				<!-- Cards: the page's own `card` slot (campaigns), else a text card per row. Skeleton cards while the
-					first page loads, so the grid does not flip to a table and back. -->
+					first page loads, so the grid does not flip to a table and back. Designed cards sit on the page
+					ground in the Projects index's wider grid, not inside the panel. -->
 				<CardGrid
 					v-if="view === 'cards' && (loading || rows.length)"
 					:def="def"
+					:wide="designedCards"
 					:rows="rows"
 					:loading="loading"
 					:row-key="rowKey"
@@ -452,6 +456,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 	padding: 6px 16px 4px; box-shadow: var(--d1-shadow);
 }
 .panel { min-width: 0; }
+.panel.bare { background: none; border: 0; border-radius: 0; padding: 0; box-shadow: none; }
 .panel.busy { opacity: 0.6; }
 .state-row { padding: 6px 0; }
 

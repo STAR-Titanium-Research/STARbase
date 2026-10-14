@@ -8,7 +8,7 @@ import { STAR_BASE, adminApi, signInStarbase, watchErrors } from '../starbase/ta
 // the rail, the Sample page's button, keyboard focus, the data thumbnail, a campaign's fan, the phone's bottom
 // sheet. Data comes from admin API queries, so each scenario skips (with its reason) when the copy has none.
 //   (cd tests/ui && D1_ROUTES_CREDENTIALS=<abs path of preview-credentials-<name>.txt> D1_ROUTES_STARBASE=http://127.0.0.1:5190 \
-//      npx playwright test specs/17-process-map.spec.ts --retries=0)
+//      npx playwright test specs/19-process-map.spec.ts --retries=0)
 // Needs the d1-starbase preview and STARbase under vite preview running (tests/ui/README.md, spec 14 section).
 // Origins come from the credentials file (`url`) and D1_ROUTES_STARBASE, like spec 13, so a preview under another
 // name or port works the same.

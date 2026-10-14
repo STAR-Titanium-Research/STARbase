@@ -36,7 +36,7 @@ exit 0
 
 
 def test_every_configure_file_is_one_transaction():
-    assert len(FILES) == 7
+    assert len(FILES) == 8
     for name in FILES:
         text = (SCRIPTS / name).read_text(encoding="utf-8")
         stmts = [

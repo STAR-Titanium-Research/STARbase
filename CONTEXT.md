@@ -21,7 +21,8 @@ A STARbase page that lists the records of one kind, with search and a few fixed 
 _Avoid_: list view, collection page, list
 
 **Record page**:
-A STARbase page about a single Project, Campaign, Sample, Operation or Test.
+A STARbase page about a single Project, Campaign, Sample, Operation, Test, Tool box, Cutting insert or
+Insert edge.
 _Avoid_: detail page, item page
 
 **Task screen**:
@@ -47,6 +48,18 @@ An address on the database server for a record or a STARbase page, which forward
 STARbase lives. Everything printed or linked from the database side uses one, so moving STARbase
 never breaks it.
 _Avoid_: permalink, QR link, deep link
+
+### Records and forms
+
+**Sample**:
+A physical piece of material the lab makes, cuts or tests. The rows Data Studio lists as items are
+Samples, except the rig kit stored with them (see Flagged ambiguities).
+_Avoid_: Item, physical sample, workpiece (except as the input of an Operation)
+
+**Field group**:
+A headed block of fields inside a Data Studio form, such as "Geometry" or "Who & where". Some are
+folded away until opened ("Related records", "Legacy / system").
+_Avoid_: section (the sidebar's word), panel, part
 
 ### Navigation
 
@@ -110,6 +123,34 @@ The powder a FAST run used, as typed on the FAST press ("TIMET 45-150"). Many ru
 names a raw stock lot but is only text: it is not linked to the lot.
 _Avoid_: batch (on its own), FAST batch, batch number
 
+### Tooling
+
+**Tool box**:
+A box of cutting inserts of one insert type, as the lab received and stores it. Its inserts are numbered
+in the box.
+_Avoid_: insert box
+
+**Cutting insert**:
+One indexable insert from a tool box, named by its number in that box.
+_Avoid_: tip, tool
+
+**Insert edge**:
+One cutting edge of a cutting insert, the unit a test or operation is run with. It is named by an
+**edge letter**.
+_Avoid_: corner, cutting edge (for the record)
+
+**Edge letter**:
+The letter that says where an edge sits on its insert. Letters run clockwise from the insert's
+reference mark: the top face first (A, B, …), then the underside (C, D, …) on a double-sided insert,
+with C directly under A. Only corners that can cut get a letter. Old edges named `fA`, `fC` use the same
+letters; the `f` means nothing. When the insert type's edge count is lower than its cutting corners,
+only that many corners get letters, from A.
+
+**Tipped insert**:
+A cutting insert whose cutting edge is a brazed tip of a superhard material (PCD, PCBN), usually one per
+insert and sold one insert per box. Each tip is one insert edge.
+_Avoid_: PCD box (for the insert), diamond insert
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
@@ -119,6 +160,8 @@ _Avoid_: batch (on its own), FAST batch, batch number
 - Report QR codes, label redirects and the **Force App** reach **STARbase** through a **permanent link**.
 
 - A **saved view** belongs to exactly one **index page**.
+- A **tool box** holds **cutting inserts** of one insert type; each **cutting insert** has one
+  **insert edge** per edge letter. An edge is used or fresh; an insert is depleted when it is used up.
 - A **pin** points at one page, saved view or record. A pin to something the person can no longer see
   is kept but not shown.
 
@@ -138,3 +181,6 @@ _Avoid_: batch (on its own), FAST batch, batch number
 - "Batch" meant both the FAST press's free-text "Batch" field (the old "Batch #" form field) and several
   samples done together. Resolved: one press cycle is a **FAST run**, the press's field is the **powder batch**
   it used, and a **batch** is only several samples done together.
+- "Item" and "Sample" were both used for the same records, whose Item Type also allowed Equipment and
+  Miscellaneous; the 16 Equipment rows are rig kit (dyno, cases, hand tools). Resolved: the record is a
+  **Sample**. The rig kit belongs in **Inventory**; that move is not made yet.

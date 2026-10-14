@@ -441,11 +441,25 @@ def test_dry_run_reads_a_workbook_and_touches_no_database(
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(
-        sys, "argv", ["migrate_legacy.py", "--xlsx", str(path), "--dry-run"]
+        sys,
+        "argv",
+        ["migrate_legacy.py", ml.RETIRED_FLAG, "--xlsx", str(path), "--dry-run"],
     )
     ml.main()
     out = capsys.readouterr().out
     assert "physical_samples" in out and "Migration complete" in out
+
+
+def test_retired_importer_refuses_without_the_flag(monkeypatch, tmp_path):
+    # The guard runs before anything is read, so even a missing file is never looked at.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["migrate_legacy.py", "--xlsx", str(tmp_path / "none.xlsx"), "--dry-run"],
+    )
+    with pytest.raises(SystemExit) as e:
+        ml.main()
+    assert "retired" in str(e.value) and "decision 14" in str(e.value)
 
 
 # ---- transfer_sample_ownership.py + legacy_people ------------------------------------------

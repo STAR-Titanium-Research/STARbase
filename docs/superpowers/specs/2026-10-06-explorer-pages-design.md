@@ -253,7 +253,15 @@ and test reports only.
   - dimensions, mass estimate, condition, manufacturing method.
 - **Life of the sample.** A horizontal timeline strip: stock lot → parents → this sample →
   operations and tests by date → children. It reuses the `d1-trace` response, laid out
-  left-to-right with the vertical list as the narrow-screen fallback. Below it is the "N not
+  left-to-right with the vertical list as the narrow-screen fallback. A sample can have 20 to 30
+  operations, so operations and tests are grouped into one node per day: the date, "N operations ·
+  M tests", and a chip per record (`#<step>` for an operation, its full pass code in the tooltip),
+  folded after 16 behind "+N more". The Operations and Tests tables below list them in full.
+  When the steps are still wider than the panel, the first step, this sample and the latest steps
+  stay, and the others fold into a dashed "N more steps" node (counts and date range) that expands
+  on click (`fitSplit` measures each step). Normally the start through this sample stays and one
+  run in the middle folds; past a long line of parents the oldest parents fold too (two split
+  nodes), so this sample never does. The vertical list folds after 8 steps. Below it is the "N not
   visible to you" marker. **Deviation (E4):** the lineage graph is not drawn inline (that would
   pull the `NodeGraph` cytoscape view into the page bundle); an **Open lineage graph** button
   opens the Lab Dashboard graph centred on the sample (`?sample=<id>`).

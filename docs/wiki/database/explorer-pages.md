@@ -16,6 +16,9 @@ may read; a record that does not exist and one you may not read look the same
 | [Operation](#operation) | `https://starbase.tail54eeb6.ts.net/operations/<id>` | any pass code |
 | [Test](#test) | `https://starbase.tail54eeb6.ts.net/tests/<id>` | any test |
 | [Process map](#process-map) | `https://starbase.tail54eeb6.ts.net/map` | the sidebar: Analysis → *Process map*, or the **Process map** button on a record page or index row |
+| [Tool box](tooling-and-equipment.md#the-tool-box-page) | `https://starbase.tail54eeb6.ts.net/tool-boxes/<id>` | Inventory → *Tool boxes*, or any box code |
+| [Cutting insert](tooling-and-equipment.md#the-tool-box-page) | `https://starbase.tail54eeb6.ts.net/inserts/<id>` | Inventory → *Cutting inserts*, or the box page |
+| [Insert edge](tooling-and-equipment.md#the-tool-box-page) | `https://starbase.tail54eeb6.ts.net/edges/<id>` | Inventory → *Insert edges*, an operation or test's edge, or the box page |
 
 The breadcrumb at the top of a page (`Home › Project › Campaign › Sample`) is the way back up.
 Every page has **Edit** (the [Edit drawer](#the-edit-drawer)) and **Data Studio**, which opens the
@@ -171,6 +174,12 @@ recorded batch never joins a probable one.
 map as it is drawn under your current **Show** settings (not just the part on screen), with a header naming the record,
 the date and who exported it, and a legend of the kinds of record in it. Your view does not move while it runs. It is named
 `process-map-<record code>-<date>`. A very large map is saved at a reduced resolution that fits the browser (the page says which), and a map the browser cannot draw at all is reported, not saved empty.
+
+## Tool box, insert and edge
+
+A tool box, one of its inserts and one of their edges share one page with a 3D model of the box in
+the side rail: click an insert to move to it, click an edge to zoom onto it, and the record beside the
+model changes with you. See [The tool box page](tooling-and-equipment.md#the-tool-box-page).
 
 ## The Edit drawer
 

@@ -110,7 +110,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('sample_code', 'Code', 'code'), col('nickname', 'Nickname'),
 			rel('material_id', 'Material', 'materials', 'alloy_code'),
 			rel('project_id', 'Project', 'projects', 'project_code'),
-			col('form', 'Form'), col('current_status', 'Status'), col('location', 'Location'),
+			col('form', 'Geometry'), col('current_status', 'Status'), col('location', 'Location'),
 			col('created_at', 'Created', 'date'),
 		],
 		searchFields: ['sample_code', 'nickname'],
@@ -163,7 +163,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		],
 		searchFields: ['tool_box_code', 'description'],
 		filters: [insertType, project],
-		defaultSort: '-created_at', rowTarget: 'drawer',
+		defaultSort: '-created_at', rowTarget: 'record',
 	},
 	{
 		slug: 'inserts', collection: 'cutting_inserts', title: 'Cutting inserts', group: 'inventory', primaryKey: 'insert_id',
@@ -175,7 +175,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		],
 		searchFields: ['insert_code'],
 		filters: [insertType, boolFilter('is_depleted', 'Depleted')],
-		defaultSort: '-created_at', rowTarget: 'drawer',
+		defaultSort: '-created_at', rowTarget: 'record',
 	},
 	{
 		slug: 'edges', collection: 'insert_edges', title: 'Insert edges', group: 'inventory', primaryKey: 'edge_id',
@@ -186,7 +186,7 @@ export const INDEX_DEFS: IndexDef[] = [
 		],
 		searchFields: ['edge_code'],
 		filters: [boolFilter('is_used', 'Used')],
-		defaultSort: '-created_at', rowTarget: 'drawer',
+		defaultSort: '-created_at', rowTarget: 'record',
 	},
 	{
 		slug: 'stock-lots', collection: 'raw_stock_lots', title: 'Raw stock lots', group: 'inventory', primaryKey: 'lot_id',

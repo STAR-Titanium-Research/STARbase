@@ -21,6 +21,8 @@ defineProps<{
 	/** Extra data per row key for a `card` slot (the campaigns list's counts), and whether it is still loading. */
 	data?: ReadonlyMap<string, unknown> | null;
 	dataLoading?: boolean;
+	/** The Projects index's wider columns, for a designed card (the campaigns list). */
+	wide?: boolean;
 }>();
 const emit = defineEmits<{ open: [row: Row] }>();
 
@@ -28,10 +30,10 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 </script>
 
 <template>
-	<ul v-if="loading && !rows.length" class="card-grid" aria-hidden="true">
+	<ul v-if="loading && !rows.length" class="card-grid" :class="{ wide }" aria-hidden="true">
 		<li v-for="n in SKELETONS" :key="n" class="skeleton"><span class="bar wide" /><span class="bar" /><span class="bar short" /></li>
 	</ul>
-	<ul v-else class="card-grid">
+	<ul v-else class="card-grid" :class="{ wide }">
 		<li v-for="row in rows" :key="rowKey(row)">
 			<slot name="card" :row="row" :data="data?.get(rowKey(row)) ?? null" :loading="!!dataLoading">
 				<TextCard
@@ -53,6 +55,7 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 
 <style scoped>
 .card-grid { list-style: none; margin: 6px 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); gap: 12px; min-width: 0; }
+.card-grid.wide { margin: 0; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
 .card-grid > li { min-width: 0; }
 /* Cards of one row share a height, the designed campaign card included. */
 .card-grid > li:not(.skeleton) > :deep(*) { height: 100%; }
@@ -60,6 +63,8 @@ const SKELETONS = Array.from({ length: 12 }, (_, i) => i);
 	display: flex; flex-direction: column; gap: 8px; height: 96px; padding: 12px;
 	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile);
 }
+/* The wide grid's cards are raised (the campaign card): its skeletons match, so rows do not jump. */
+.card-grid.wide .skeleton { height: 150px; padding: 12px 14px; border-radius: var(--d1-radius, 12px); background: var(--d1-surface); box-shadow: var(--d1-shadow); }
 .bar {
 	display: block; height: 10px; width: 60%; border-radius: 5px;
 	background: linear-gradient(90deg, var(--d1-tile) 25%, var(--d1-line) 50%, var(--d1-tile) 75%);
