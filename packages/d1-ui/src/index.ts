@@ -26,6 +26,8 @@ export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, as
 export { humanise, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
 export { estimateMassGrams } from './mass';
 export { buildLife, chipText, chipTitle, daySummary, groupLife, truncatedNotes } from './life';
+export { fitSplit, splitSummary } from './lifeSplit';
+export type { LifeSplit } from './lifeSplit';
 export type { LifeDay, LifeItem, LifeStep, TraceResponse } from './life';
 export { linkedFiles, shareFiles } from './linkedFiles';
 export type { LinkedFile } from './linkedFiles';

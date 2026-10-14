@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { AppLink, chipText, chipTitle, daySummary, groupLife, type LifeDay, type LifeItem } from '@d1/ui';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { AppLink, chipText, chipTitle, daySummary, fitSplit, groupLife, splitSummary, type LifeDay, type LifeItem, type LifeStep } from '@d1/ui';
 
 // The life of the sample as a left-to-right strip: stock, ancestors, this sample, then one node per
 // day of operations and tests (a chip per record, the full pass code in its tooltip), descendants.
-// It scrolls sideways and opens centred on this sample. On a narrow container (a tablet, a split
-// view) the same list becomes a vertical timeline. The Operations and Tests panels below list every
-// record in full; this strip tells the story.
+// When the steps are wider than the panel, the start (through this sample) and the latest steps
+// stay and the middle ones fold into a split node; clicking it shows them all, and the strip then
+// scrolls sideways. On a narrow container (a tablet, a split view) the same list becomes a vertical
+// timeline, split the same way once it has more than NARROW_STEPS steps. The Operations and Tests panels below list every record in full; this
+// strip tells the story.
 const props = defineProps<{ items: LifeItem[] }>();
 const steps = computed(() => groupLife(props.items));
 
@@ -20,12 +22,41 @@ function toggle(day: LifeDay) {
 	open.value = next;
 }
 
+const life = ref<HTMLElement | null>(null);
 const strip = ref<HTMLElement | null>(null);
 // This sample's node, found with a function ref (the nodes are a v-for).
 let selfEl: HTMLElement | null = null;
 const setSelf = (item: LifeItem, el: unknown) => {
 	if (item.kind === 'self') selfEl = el as HTMLElement | null;
 };
+
+// The split. NARROW matches the container query below; SPLIT_WIDTH is the split node's CSS width.
+const NARROW = 640;
+const SPLIT_WIDTH = 170;
+// Each step's width, measured with every step drawn (a step's width does not depend on the panel's).
+const widths = ref<number[] | null>(null);
+const available = ref(0);
+const expanded = ref(false);
+const selfIndex = computed(() => steps.value.findIndex((s) => s.type === 'item' && s.item.kind === 'self'));
+// The vertical list has no width to fill, so it shows at most NARROW_STEPS steps, the split counted as one.
+const NARROW_STEPS = 8;
+const fit = computed(() => {
+	if (available.value <= 0) return null;
+	if (available.value <= NARROW) return fitSplit(steps.value.map(() => 1), NARROW_STEPS, 1, selfIndex.value);
+	return widths.value && widths.value.length === steps.value.length
+		? fitSplit(widths.value, available.value, SPLIT_WIDTH, selfIndex.value)
+		: null;
+});
+const split = computed(() => (expanded.value ? null : fit.value));
+
+type Row = LifeStep | { type: 'split'; key: string; hidden: LifeStep[] };
+const rows = computed<Row[]>(() => {
+	const all: Row[] = steps.value;
+	const s = split.value;
+	if (!s) return all;
+	const hidden = steps.value.slice(s.head, steps.value.length - s.tail);
+	return [...all.slice(0, s.head), { type: 'split', key: 'split', hidden }, ...all.slice(all.length - s.tail)];
+});
 
 function centreOnSelf() {
 	const s = strip.value;
@@ -34,8 +65,48 @@ function centreOnSelf() {
 	s.scrollLeft = el.offsetLeft - s.clientWidth / 2 + el.clientWidth / 2;
 }
 
-onMounted(centreOnSelf);
-watch(() => props.items, () => nextTick(centreOnSelf));
+async function measure() {
+	widths.value = null;
+	await nextTick();
+	const s = strip.value;
+	if (s && available.value > NARROW) widths.value = Array.from(s.children, (el) => (el as HTMLElement).getBoundingClientRect().width);
+	await nextTick();
+	centreOnSelf();
+}
+
+// Show the folded steps, scrolled so the first of them sits where the split node was.
+async function expandSplit(event: MouseEvent) {
+	const s = strip.value;
+	const at = (event.currentTarget as HTMLElement).closest('li')!.offsetLeft - (s?.scrollLeft ?? 0);
+	const first = split.value?.head ?? 0;
+	expanded.value = true;
+	await nextTick();
+	const el = s?.children[first] as HTMLElement | undefined;
+	if (s && el && available.value > NARROW) s.scrollLeft = el.offsetLeft - at;
+}
+function collapseSplit() {
+	expanded.value = false;
+	if (strip.value) strip.value.scrollLeft = 0;
+}
+
+let observer: ResizeObserver | null = null;
+onMounted(() => {
+	if (typeof ResizeObserver !== 'undefined' && life.value) {
+		observer = new ResizeObserver(([entry]) => {
+			available.value = entry.contentRect.width;
+			if (available.value > NARROW && !widths.value) void measure();
+		});
+		observer.observe(life.value);
+	} else centreOnSelf();
+});
+onBeforeUnmount(() => observer?.disconnect());
+watch(
+	() => props.items,
+	() => {
+		expanded.value = false;
+		void measure();
+	},
+);
 
 const KIND_LABEL: Record<string, string> = {
 	stock: 'Raw stock',
@@ -49,40 +120,49 @@ const KIND_LABEL: Record<string, string> = {
 </script>
 
 <template>
-	<div class="life">
+	<div ref="life" class="life">
 		<ol ref="strip" class="strip">
-			<template v-for="step in steps" :key="step.key">
-				<li v-if="step.type === 'day'" class="node day" :class="step.operations ? 'kind--operation' : 'kind--test'">
+			<template v-for="row in rows" :key="row.key">
+				<li v-if="row.type === 'split'" class="node split">
+					<button type="button" class="split-btn" :aria-expanded="false" title="Show the steps in between" @click="expandSplit">
+						<span class="dot" />
+						<span class="kind">{{ splitSummary(row.hidden).label }}</span>
+						<span v-for="line in splitSummary(row.hidden).lines" :key="line" class="sub">{{ line }}</span>
+						<span class="show">Show all</span>
+					</button>
+				</li>
+				<li v-else-if="row.type === 'day'" class="node day" :class="row.operations ? 'kind--operation' : 'kind--test'">
 					<span class="dot" />
-					<span class="kind">{{ step.dayText }}</span>
-					<span class="label">{{ daySummary(step) }}</span>
+					<span class="kind">{{ row.dayText }}</span>
+					<span class="label">{{ daySummary(row) }}</span>
 					<ul class="chips">
-						<li v-for="item in shown(step)" :key="item.key">
+						<li v-for="item in shown(row)" :key="item.key">
 							<AppLink v-if="item.to" :to="item.to" class="chip" :class="`chip--${item.kind}`" :title="chipTitle(item)">{{ chipText(item) }}</AppLink>
 							<span v-else class="chip" :class="`chip--${item.kind}`" :title="chipTitle(item)">{{ chipText(item) }}</span>
 						</li>
 					</ul>
-					<button v-if="step.items.length > CHIP_CAP" type="button" class="more" @click="toggle(step)">
-						{{ open.has(step.key) ? 'Show fewer' : `+${step.items.length - CHIP_CAP} more` }}
+					<button v-if="row.items.length > CHIP_CAP" type="button" class="more" @click="toggle(row)">
+						{{ open.has(row.key) ? 'Show fewer' : `+${row.items.length - CHIP_CAP} more` }}
 					</button>
 				</li>
 				<li
 					v-else
-					:ref="(el) => setSelf(step.item, el)"
+					:ref="(el) => setSelf(row.item, el)"
 					class="node"
-					:class="[`kind--${step.item.kind}`, { through: step.item.throughHidden }]"
+					:class="[`kind--${row.item.kind}`, { through: row.item.throughHidden }]"
 				>
 					<span class="dot" />
-					<span class="kind">{{ KIND_LABEL[step.item.kind] }}</span>
-					<AppLink v-if="step.item.to" :to="step.item.to" class="label" :class="{ code: step.item.isCode }">{{ step.item.label }}</AppLink>
-					<span v-else class="label" :class="{ code: step.item.isCode, plain: step.item.kind === 'hidden' }">{{ step.item.label }}</span>
-					<span v-if="step.item.sub" class="sub">{{ step.item.sub }}</span>
-					<span v-if="step.item.throughHidden" class="via" title="Every path to this record goes through a sample you do not have permission to read.">
+					<span class="kind">{{ KIND_LABEL[row.item.kind] }}</span>
+					<AppLink v-if="row.item.to" :to="row.item.to" class="label" :class="{ code: row.item.isCode }">{{ row.item.label }}</AppLink>
+					<span v-else class="label" :class="{ code: row.item.isCode, plain: row.item.kind === 'hidden' }">{{ row.item.label }}</span>
+					<span v-if="row.item.sub" class="sub">{{ row.item.sub }}</span>
+					<span v-if="row.item.throughHidden" class="via" title="Every path to this record goes through a sample you do not have permission to read.">
 						via a sample you cannot see
 					</span>
 				</li>
 			</template>
 		</ol>
+		<button v-if="expanded && fit" type="button" class="more fold" @click="collapseSplit">Fold the steps in between</button>
 	</div>
 </template>
 
@@ -196,11 +276,32 @@ a.chip:hover { text-decoration: underline; }
 	cursor: pointer;
 }
 .more:hover { text-decoration: underline; }
+.fold { display: block; margin: 4px 0 0 auto; }
+
+/* The split: a fixed-width node (SPLIT_WIDTH in the script) on a dashed stretch of the line. */
+.node.split { width: 170px; min-width: 0; max-width: none; box-sizing: border-box; }
+.split::before {
+	background: repeating-linear-gradient(to right, var(--theme--border-color) 0 6px, transparent 6px 11px);
+}
+.split .dot { background: var(--d1-surface, var(--theme--background)); border: 2px dashed var(--theme--foreground-subdued); box-sizing: border-box; }
+.split-btn {
+	all: unset;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	cursor: pointer;
+	font-size: var(--fs-sm, 12px);
+}
+.split-btn:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 4px; }
+.split-btn .kind { color: var(--theme--foreground); font-weight: 650; font-size: var(--fs-sm, 12px); }
+.show { margin-top: 2px; font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-accent, var(--theme--primary)); }
+.split-btn:hover .show { text-decoration: underline; }
 
 /* Narrow: the same steps as a vertical timeline. */
 @container (max-width: 640px) {
 	.strip { flex-direction: column; overflow: visible; padding: 0 0 0 4px; }
-	.node, .node.day { width: auto; max-width: none; padding: 0 0 18px 26px; }
+	.node, .node.day, .node.split { width: auto; max-width: none; padding: 0 0 18px 26px; }
+	.split::before { background: repeating-linear-gradient(to bottom, var(--theme--border-color) 0 6px, transparent 6px 11px); }
 	.node::before { top: 0; bottom: 0; left: 5px; right: auto; width: 2px; height: auto; }
 	.dot { top: 2px; left: 0; }
 	.kind--self .dot { top: 0; left: -2px; }
