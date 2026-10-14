@@ -191,6 +191,38 @@ describe('R6 stop on force alarm', () => {
 	});
 });
 
+describe('force limit while the Settings field is empty or zero (#289)', () => {
+	it('an emptied limit field does not trip on a near-zero force', () => {
+		// v-model.number writes '' for an empty field, and `v >= ''` is `v >= 0`: every frame tripped.
+		const a = makeController();
+		(a.config as any).forceThreshold = '';
+		a.evaluate({ Fx: 0.4, Fy: 0.2, Fz: 0.1 }, 0, 1200);
+		expect(a.active).toHaveLength(0);
+		expect(a.warnings).toHaveLength(0);
+	});
+
+	it('keeps protecting at the last valid limit while the field is empty or zero', () => {
+		const a = makeController();
+		a.config.forceThreshold = 300;
+		a.commitForceThreshold();
+		for (const bad of ['', 0, -5, Number.NaN]) {
+			(a.config as any).forceThreshold = bad;
+			expect(a.forceLimit).toBe(300);
+		}
+		a.evaluate({ Fx: 310, Fy: 0, Fz: 0 }, 0, 1200);
+		expect(a.active).toMatchObject([{ key: 'force:Fx', threshold: 300 }]);
+	});
+
+	it('commitForceThreshold puts the last valid limit back into an invalid field', () => {
+		const a = makeController();
+		a.config.forceThreshold = 250;
+		a.commitForceThreshold();
+		(a.config as any).forceThreshold = '';
+		a.commitForceThreshold();
+		expect(a.config.forceThreshold).toBe(250);
+	});
+});
+
 describe('parseAlarmConfig', () => {
 	it('defaults the new settings when absent (old saved configs)', () => {
 		const c = parseAlarmConfig(JSON.stringify({ forceThreshold: 250, rpmEnabled: false }));
@@ -204,5 +236,7 @@ describe('parseAlarmConfig', () => {
 		expect(c).toMatchObject({ warnPercent: 80, toneVolume: null, stopOnForceAlarm: false, forceThreshold: 400, warnEnabled: false });
 		expect(parseAlarmConfig(JSON.stringify({ toneVolume: 60 })).toneVolume).toBe(60);
 		expect(parseAlarmConfig(JSON.stringify({ toneVolume: 0 })).toneVolume).toBeNull();
+		// A zero limit trips on every frame, so it is as unusable as a missing one.
+		expect(parseAlarmConfig(JSON.stringify({ forceThreshold: 0 })).forceThreshold).toBe(400);
 	});
 });
