@@ -3003,9 +3003,13 @@ up_down=$(awk '/-- migrate:down/{f=1;next}f' "$UP")
 PA=db/migrations/20261014000174_people_admin.sql
 pa_down=$(awk '/-- migrate:down/{f=1;next}f' "$PA")
 # 20261014000175 (teams) adds four functions in d1_private (and nothing else there) and runs after 174, so its down goes
-# first of all: 174's down and 141's only drop their own objects and the schema once it is empty.
+# before 174's: 174's down and 141's only drop their own objects and the schema once it is empty.
 TM=db/migrations/20261014000175_teams.sql
 tm_down=$(awk '/-- migrate:down/{f=1;next}f' "$TM")
+# 20261014000176 (team access) adds functions in d1_private, references teams and replaces 174's functions and 166's update trigger
+# functions (its down puts them back), so its down goes first of all, before 175's.
+TA=db/migrations/20261014000176_team_access.sql
+ta_down=$(awk '/-- migrate:down/{f=1;next}f' "$TA")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -3045,6 +3049,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$ta_down
 $tm_down
 $pa_down
 $up_down
@@ -4722,15 +4727,18 @@ for ra_spec in $RA_TABLES; do
     ra_pid=$(RA_PARENT_ID "$ra_pc")
     run_eq "$ra_t: columns, types and defaults are as specified" \
         "SELECT string_agg(column_name || ' ' || data_type || ' ' || is_nullable || ' ' || coalesce(column_default, '-'), '; ' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '$ra_t'" \
-        "access_id uuid NO gen_random_uuid(); $ra_pc uuid NO -; person_id uuid NO -; role text NO -; added_by_person_id uuid YES -; created_at timestamp with time zone NO now()"
-    run_eq "$ra_t: primary key access_id, unique ($ra_pc, person_id), index on person_id" \
+        "access_id uuid NO gen_random_uuid(); $ra_pc uuid NO -; person_id uuid NO -; role text NO -; added_by_person_id uuid YES -; created_at timestamp with time zone NO now(); team_access_id uuid YES -"
+    # migration 176 split the unique key: a person's own entry is unique per record (team_access_id NULL, same name as 165's constraint),
+    # a team's derived row per record and grant
+    run_eq "$ra_t: primary key access_id, unique ($ra_pc, person_id) for own entries and per team grant for derived rows, index on person_id" \
         "SELECT (SELECT string_agg(a.attname, ',') FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey) WHERE i.indrelid = 'public.$ra_t'::regclass AND i.indisprimary)
-         || '/' || (SELECT string_agg(pg_get_constraintdef(c.oid), ',') FROM pg_constraint c WHERE c.conrelid = 'public.$ra_t'::regclass AND c.contype = 'u')
+         || '/' || coalesce((SELECT string_agg(pg_get_constraintdef(c.oid), ',') FROM pg_constraint c WHERE c.conrelid = 'public.$ra_t'::regclass AND c.contype = 'u'), 'no constraint')
+         || '/' || (SELECT string_agg(indexname || ' ' || regexp_replace(indexdef, '^.* USING btree ', ''), '; ' ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'public' AND tablename = '$ra_t' AND indexdef LIKE 'CREATE UNIQUE INDEX%' AND indexname <> '${ra_t}_pkey')
          || '/' || (SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND tablename = '$ra_t' AND indexdef LIKE '%(person_id)%' AND indexname <> '${ra_t}_pkey')" \
-        "access_id/UNIQUE ($ra_pc, person_id)/1"
-    run_eq "$ra_t: parent and person foreign keys cascade, added_by_person_id is set NULL" \
+        "access_id/no constraint/${ra_t}_${ra_pc}_person_id_key ($ra_pc, person_id) WHERE (team_access_id IS NULL); ${ra_t}_${ra_pc}_person_id_team_key ($ra_pc, person_id, team_access_id) WHERE (team_access_id IS NOT NULL)/1"
+    run_eq "$ra_t: parent, person and team grant foreign keys cascade, added_by_person_id is set NULL" \
         "SELECT string_agg(a.attname || '>' || c.confrelid::regclass::text || ':' || c.confdeltype::text, ',' ORDER BY a.attname COLLATE \"C\") FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] WHERE c.conrelid = 'public.$ra_t'::regclass AND c.contype = 'f'" \
-        "$(printf '%s\n' 'added_by_person_id>people:n' 'person_id>people:c' "$ra_pc>$ra_pt:c" | LC_ALL=C sort | paste -sd, -)"
+        "$(printf '%s\n' 'added_by_person_id>people:n' 'person_id>people:c' "$ra_pc>$ra_pt:c" "team_access_id>${ra_t%_access}_team_access:c" | LC_ALL=C sort | paste -sd, -)"
     run_eq "$ra_t has the audit trigger of migration 121" \
         "SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.$ra_t'::regclass AND NOT t.tgisinternal AND t.tgfoid = 'audit_trigger_function'::regproc AND (t.tgtype & 1) = 1 AND (t.tgtype & 4) = 4 AND (t.tgtype & 8) = 8 AND (t.tgtype & 16) = 16" "1"
     run_eq "$ra_t has no OCC version column" \

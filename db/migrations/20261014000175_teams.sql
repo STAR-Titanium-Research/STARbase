@@ -128,10 +128,19 @@ AS $$
 DECLARE
     t uuid;
 BEGIN
+    -- the lock below only serialises the checks under READ COMMITTED: under REPEATABLE READ the second check would wait for the
+    -- first commit and then still read its old snapshot (both managers in place), so it is refused there (as refresh_readers is)
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'd1_private.team_has_manager needs READ COMMITTED (the transaction is %): the manager check must see what a concurrent change committed',
+            current_setting('transaction_isolation')
+            USING ERRCODE = 'feature_not_supported';
+    END IF;
+    -- in team order, so that two transactions moving members between the same two teams lock them in the same order
     FOR t IN SELECT DISTINCT x FROM unnest(CASE TG_OP
                                               WHEN 'INSERT' THEN ARRAY[NEW.team_id]
                                               WHEN 'DELETE' THEN ARRAY[OLD.team_id]
                                               ELSE ARRAY[OLD.team_id, NEW.team_id] END) AS x
+             ORDER BY x
     LOOP
         -- serialise the checks of one team: two transactions that each remove or demote one of two managers would otherwise both
         -- pass (each sees the other's manager still in place). The second check waits for the first commit, then sees its result.
@@ -147,7 +156,7 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.team_has_manager() IS 'Deferred constraint trigger function of team_members (INITIALLY DEFERRED, so judged at COMMIT; it first locks the team row FOR NO KEY UPDATE so two transactions removing different managers are checked one after the other): a team with at least one member and no manager raises check_violation (23514) "A team must keep at least one manager". A team with no members passes. Migration 175.';
+COMMENT ON FUNCTION d1_private.team_has_manager() IS 'Deferred constraint trigger function of team_members (INITIALLY DEFERRED, so judged at COMMIT; it first locks the team row FOR NO KEY UPDATE so two transactions removing different managers are checked one after the other; the old and new team of a moved member are locked in team_id order): a team with at least one member and no manager raises check_violation (23514) "A team must keep at least one manager". A team with no members passes. Raises feature_not_supported (0A000) outside READ COMMITTED, where the lock would not make the check see a concurrent commit. Migration 175.';
 
 CREATE OR REPLACE FUNCTION d1_private.teams_history()
 RETURNS trigger

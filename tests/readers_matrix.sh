@@ -5,7 +5,8 @@
 #   1. function = oracle: the fixture's 32 universes x all users, every type, plus the narrowed amnesty, the junction and hidden records;
 #   2. the mutation matrix: one case per row of the spec's trigger-coverage table (rows 1 to 51) and every mutation class of
 #      section 10. Each case mutates, asserts d1_private.readers_drift() is EMPTY FOR ALL RECORDS (not only the touched ones), asserts at
-#      least one explicit effect, reverses the mutation and asserts both again. Cases run in a subtransaction that is rolled back;
+#      least one explicit effect, reverses the mutation and asserts both again. Cases run in a subtransaction that is rolled back.
+#      The c_team_* cases (migration 176) do the same for team grants: grant, join, leave, trust and a deleted team;
 #   3. the multi-form cases that need their own transaction or session: COPY, a 1000-row insert, the importer's ON CONFLICT DO UPDATE,
 #      TRUNCATE of every input table, a disabled trigger (detected by readers_drift, repaired by readers_rebuild), REPEATABLE READ (raises);
 #   4. the concurrency cases (two sessions, each in both commit orders): 0 (campaign_samples insert against restricting the campaign),
@@ -1088,6 +1089,116 @@ BEGIN
     PERFORM m.expect(r.restricted IS FALSE AND NOT m.hid('manufacturing_operations', o1), 'unrestricting refreshes the rollup and hidden_records');
     PERFORM m.done();
 END $$;
+
+-- team grants (migration 176): a grant on a record expands into derived <type>_access rows for the team's members, so the readers
+-- triggers of the access tables keep the readers tables right through every team change (grant, join, leave, trust, team deleted)
+CREATE OR REPLACE FUNCTION m.mk_team(l text, mgr text, others text[] DEFAULT ARRAY[]::text[]) RETURNS uuid LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO teams (team_id, name) VALUES (m.id(l), 'M team ' || l);
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES (m.id(l), m.pe(mgr), true);
+    INSERT INTO team_members (team_id, person_id) SELECT m.id(l), m.pe(x) FROM unnest(others) AS x;
+    RETURN m.id(l);
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_grant() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; c uuid; s uuid; t uuid; g uuid;
+BEGIN
+    p := m.mk_project('tgp', 'a'); c := m.mk_campaign('tgc', p, 'f'); s := m.mk_sample('tgs', p, 'e'); PERFORM m.mk_cs(c, s);
+    t := m.mk_team('tgt', 'b', ARRAY['c', 'z']);
+    PERFORM m.drift('setup');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')), 'before: the team does not read the sample');
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, t, 'view') RETURNING team_access_id INTO g;
+    PERFORM m.drift('the team grant (view)');
+    PERFORM m.expect(m.rd('sample', s, m.u('b')) AND m.rd('sample', s, m.u('c')) AND NOT m.rd('campaign', c, m.u('b')), 'the members read the sample; Can view does not reach the campaign');
+    UPDATE sample_team_access SET role = 'edit' WHERE team_access_id = g;
+    PERFORM m.drift('the grant made edit');
+    PERFORM m.expect(m.rd('campaign', c, m.u('c')) AND m.rd('project', p, m.u('c')), 'Can edit through the team: the members read the campaign and the project');
+    DELETE FROM sample_team_access WHERE team_access_id = g;
+    PERFORM m.drift('the grant removed');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('project', p, m.u('c')), 'removed: the members lose it all');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_join() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE o1 uuid; o2 uuid; t uuid; g2 uuid;
+BEGIN
+    o1 := m.mk_op('tjo1', NULL, NULL, NULL, 'a', true); o2 := m.mk_op('tjo2', NULL, NULL, NULL, 'a', true);
+    t := m.mk_team('tjt', 'b');
+    INSERT INTO operation_team_access (operation_id, team_id, role, trust_new_members) VALUES (o1, t, 'view', true);
+    INSERT INTO operation_team_access (operation_id, team_id, role) VALUES (o2, t, 'edit') RETURNING team_access_id INTO g2;
+    PERFORM m.drift('setup');
+    INSERT INTO team_members (team_id, person_id) VALUES (t, m.pe('d'));
+    PERFORM m.drift('a member joins');
+    PERFORM m.expect(m.rd('operation', o1, m.u('d')) AND NOT m.rd('operation', o2, m.u('d')), 'the trusting grant lets the joiner in, the other leaves them pending');
+    PERFORM d1_private.team_decide('manufacturing_operations', g2, m.pe('d'), 'approve');
+    PERFORM m.drift('the pending member approved');
+    PERFORM m.expect(m.rd('operation', o2, m.u('d')), 'approved: the joiner reads the second operation');
+    DELETE FROM team_members WHERE team_id = t AND person_id = m.pe('d');
+    PERFORM m.drift('the member leaves again');
+    PERFORM m.expect(NOT m.rd('operation', o1, m.u('d')) AND NOT m.rd('operation', o2, m.u('d')), 'the reverse: no access left');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_leave() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; s uuid; t uuid; g uuid;
+BEGIN
+    p := m.mk_project('tlp', 'a'); s := m.mk_sample('tls', p, 'e', true);
+    t := m.mk_team('tlt', 'b', ARRAY['c']);
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, t, 'edit') RETURNING team_access_id INTO g;
+    PERFORM m.drift('setup');
+    PERFORM m.expect(m.rd('sample', s, m.u('c')) AND m.rd('project', p, m.u('c')), 'before: the member reads the Restricted sample and, as its editor, the project');
+    DELETE FROM team_members WHERE team_id = t AND person_id = m.pe('c');
+    PERFORM m.drift('the member leaves');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('c')) AND NOT m.rd('project', p, m.u('c')), 'the leaver loses both at once');
+    INSERT INTO team_members (team_id, person_id) VALUES (t, m.pe('c'));
+    PERFORM m.drift('the member rejoins (pending)');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('c')), 'a rejoiner the grant does not trust is pending');
+    UPDATE sample_team_access SET trust_new_members = true WHERE team_access_id = g;
+    PERFORM m.drift('the grant trusts new members');
+    PERFORM m.expect(m.rd('sample', s, m.u('c')) AND m.rd('project', p, m.u('c')), 'the reverse: trusted, the member is back');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_trust() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE cm uuid; t uuid; g uuid;
+BEGIN
+    cm := m.mk_campaign('ttc', NULL, 'a', true);
+    t := m.mk_team('ttt', 'b');
+    INSERT INTO campaign_team_access (campaign_id, team_id, role) VALUES (cm, t, 'view') RETURNING team_access_id INTO g;
+    INSERT INTO team_members (team_id, person_id) VALUES (t, m.pe('d')), (t, m.pe('e'));
+    PERFORM d1_private.team_decide('campaigns', g, m.pe('e'), 'decline');
+    PERFORM m.drift('setup: d pending, e declined');
+    PERFORM m.expect(m.rd('campaign', cm, m.u('b')) AND NOT m.rd('campaign', cm, m.u('d')) AND NOT m.rd('campaign', cm, m.u('e')), 'only the member at grant time reads it');
+    UPDATE campaign_team_access SET trust_new_members = true WHERE team_access_id = g;
+    PERFORM m.drift('trust on');
+    PERFORM m.expect(m.rd('campaign', cm, m.u('d')) AND NOT m.rd('campaign', cm, m.u('e')), 'trust lets the pending member in, not the declined one');
+    UPDATE campaign_team_access SET trust_new_members = false WHERE team_access_id = g;
+    PERFORM m.drift('trust off');
+    PERFORM d1_private.team_decide('campaigns', g, m.pe('e'), 'approve');
+    PERFORM m.drift('the declined member approved');
+    PERFORM m.expect(m.rd('campaign', cm, m.u('d')) AND m.rd('campaign', cm, m.u('e')), 'the reverse: both read it');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_delete() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; s uuid; t uuid;
+BEGIN
+    p := m.mk_project('tdp', 'a', true); s := m.mk_sample('tds', NULL, 'e', true);
+    t := m.mk_team('tdt', 'b', ARRAY['c']);
+    INSERT INTO project_team_access (project_id, team_id, role) VALUES (p, t, 'investigator');
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, t, 'view');
+    PERFORM m.drift('setup');
+    PERFORM m.expect(m.rd('project', p, m.u('b')) AND m.rd('sample', s, m.u('c')), 'the team reads the Restricted project and sample');
+    DELETE FROM teams WHERE team_id = t;
+    PERFORM m.drift('the team deleted');
+    PERFORM m.expect(NOT m.rd('project', p, m.u('b')) AND NOT m.rd('sample', s, m.u('c')), 'its grants and derived rows went with it');
+    t := m.mk_team('tdt', 'b', ARRAY['c']);
+    INSERT INTO project_team_access (project_id, team_id, role) VALUES (p, t, 'investigator');
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, t, 'view');
+    PERFORM m.drift('the reverse: the team and its grants again');
+    PERFORM m.expect(m.rd('project', p, m.u('b')) AND m.rd('sample', s, m.u('c')), 'the reverse: read again');
+    PERFORM m.done();
+END $$;
 SQL
 
 echo "== The mutation matrix: one case per row of the spec's trigger-coverage table, and every mutation class =="
@@ -1492,11 +1603,11 @@ BEGIN
         ELSIF kind = 9 THEN
             what := (ARRAY['sample','operation','test','campaign','project'])[1 + m.rn(5)];
             IF m.rp(0.6) THEN
-                IF what = 'sample' THEN INSERT INTO sample_access (sample_id, person_id, role) VALUES (m.rid(sm), m.pe(m.rperson(0)), (ARRAY['view','edit'])[1 + m.rn(2)]) ON CONFLICT (sample_id, person_id) DO UPDATE SET role = EXCLUDED.role;
+                IF what = 'sample' THEN INSERT INTO sample_access (sample_id, person_id, role) VALUES (m.rid(sm), m.pe(m.rperson(0)), (ARRAY['view','edit'])[1 + m.rn(2)]) ON CONFLICT (sample_id, person_id) WHERE team_access_id IS NULL DO UPDATE SET role = EXCLUDED.role;
                 ELSIF what = 'operation' THEN INSERT INTO operation_access (operation_id, person_id, role) VALUES (m.rid(op), m.pe(m.rperson(0)), 'view') ON CONFLICT DO NOTHING;
                 ELSIF what = 'test' THEN INSERT INTO test_access (session_id, person_id, role) VALUES (m.rid(ts), m.pe(m.rperson(0)), 'view') ON CONFLICT DO NOTHING;
                 ELSIF what = 'campaign' THEN INSERT INTO campaign_access (campaign_id, person_id, role) VALUES (m.rid(cm), m.pe(m.rperson(0)), (ARRAY['view','edit'])[1 + m.rn(2)]) ON CONFLICT DO NOTHING;
-                ELSE INSERT INTO project_access (project_id, person_id, role) VALUES (m.rid(pj), m.pe(m.rperson(0)), (ARRAY['view','investigator'])[1 + m.rn(2)]) ON CONFLICT (project_id, person_id) DO UPDATE SET role = EXCLUDED.role; END IF;
+                ELSE INSERT INTO project_access (project_id, person_id, role) VALUES (m.rid(pj), m.pe(m.rperson(0)), (ARRAY['view','investigator'])[1 + m.rn(2)]) ON CONFLICT (project_id, person_id) WHERE team_access_id IS NULL DO UPDATE SET role = EXCLUDED.role; END IF;
             ELSE
                 IF what = 'sample' THEN DELETE FROM sample_access WHERE access_id = (SELECT access_id FROM sample_access ORDER BY access_id LIMIT 1 OFFSET m.rn(GREATEST((SELECT count(*)::int FROM sample_access), 1)));
                 ELSIF what = 'operation' THEN DELETE FROM operation_access WHERE access_id = (SELECT access_id FROM operation_access ORDER BY access_id LIMIT 1 OFFSET m.rn(GREATEST((SELECT count(*)::int FROM operation_access), 1)));

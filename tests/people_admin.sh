@@ -172,9 +172,11 @@ BEGIN
     ASSERT r.owns = 4, format('owns 2 samples + 1 campaign + PI of 1 project = 4, got %s', r.owns);
     ASSERT r.shared = 2, format('shared: sample_access edit + co-owner = 2, got %s', r.shared);
     ASSERT r.investigator = 1, format('investigator = 1, got %s', r.investigator);
+    ASSERT r.teams = 0 AND r.waiting = 0, format('no team access and nothing waiting (migration 176 columns), got %s and %s', r.teams, r.waiting);
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.person_access_list((SELECT id FROM pa WHERE kind = 'person'), 'teams')), 'which = teams is accepted and empty';
     -- a person with nothing: one row of zeros
     SELECT * INTO r FROM d1_private.person_access((SELECT id FROM pa WHERE kind = 'adder'));
-    ASSERT r.owns = 0 AND r.shared = 0 AND r.investigator = 0, 'the adder has no access of his own';
+    ASSERT r.owns = 0 AND r.shared = 0 AND r.investigator = 0 AND r.teams = 0 AND r.waiting = 0, 'the adder has no access of his own';
 END $$;
 SQL
 
