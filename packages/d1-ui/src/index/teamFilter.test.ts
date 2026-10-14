@@ -64,8 +64,18 @@ describe('buildItemsParams with the Team chip', () => {
 		expect(stateFromQuery(queryFromState(s))).toEqual(s);
 	});
 
+	it('300 ids keep the request under the 16 KiB header limit of Node (a 500-id request got a 431)', async () => {
+		const { TEAM_RECORDS_LIMIT } = await import('../teams/teamsApi');
+		expect(TEAM_RECORDS_LIMIT).toBe(300);
+		const ids = Array.from({ length: TEAM_RECORDS_LIMIT }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+		const p = buildItemsParams(samples, state({ filters: { team: 't1' } }), null, null, ids);
+		const enc = (v: string) => encodeURIComponent(v).replace(/%3A/gi, ':').replace(/%2C/gi, ',').replace(/%5B/gi, '[').replace(/%5D/gi, ']');
+		const url = '/items/physical_samples?' + [...(p.fields as string[]).map((f) => `fields[]=${enc(f)}`), 'sort[]=-created_at', 'limit=50', 'page=1', 'meta=filter_count', `filter=${enc(p.filter as string)}`].join('&');
+		expect(url.length).toBeLessThan(16384 - 2000); // room for the headers
+	});
+
 	it('words the truncation note', () => {
-		expect(teamTruncatedNote(500)).toBe("Showing the latest 500 of this team's records.");
+		expect(teamTruncatedNote(300)).toBe("Showing the latest 300 of this team's records.");
 	});
 });
 
@@ -127,7 +137,7 @@ describe('useIndexPage with the Team filter', () => {
 		const t = setup({ 'f.team': 't1' }, () => ({ ids: ['s1', 's2'], truncated: false }));
 		const page = useIndexPage(t.host, samples, t.route, t.router);
 		await flush();
-		expect(t.recordCalls()).toEqual([{ path: '/d1-teams/t1/records', params: { collection: 'physical_samples', limit: 500 } }]);
+		expect(t.recordCalls()).toEqual([{ path: '/d1-teams/t1/records', params: { collection: 'physical_samples', limit: 300 } }]);
 		expect(filterOf(t.items().at(-1)!.params)).toEqual({ _and: [{ sample_id: { _in: ['s1', 's2'] } }] });
 		expect(page.teamNote.value).toBe('');
 		expect(page.rows.value).toHaveLength(1);
@@ -140,11 +150,11 @@ describe('useIndexPage with the Team filter', () => {
 		expect(filterOf(t.items().at(-1)!.params)).toEqual({ _and: [{ sample_id: { _in: [NO_MATCH_ID] } }] });
 	});
 
-	it('says so when only the latest 500 of a larger team are shown, and clears the note with the chip', async () => {
+	it('says so when only the latest 300 of a larger team are shown, and clears the note with the chip', async () => {
 		const t = setup({ 'f.team': 't1' }, () => ({ ids: ['s1'], truncated: true }));
 		const page = useIndexPage(t.host, samples, t.route, t.router);
 		await flush();
-		expect(page.teamNote.value).toBe("Showing the latest 500 of this team's records.");
+		expect(page.teamNote.value).toBe("Showing the latest 300 of this team's records.");
 		page.setFilter('team', '');
 		await flush();
 		expect(page.teamNote.value).toBe('');

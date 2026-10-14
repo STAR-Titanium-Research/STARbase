@@ -126,7 +126,7 @@ export interface TeamRecordIds {
 }
 
 /** The most the endpoint returns (and the index Team filter asks for). */
-export const TEAM_RECORDS_LIMIT = 500;
+export const TEAM_RECORDS_LIMIT = 300;
 
 /** Which records of `collection` a team owns or has a grant on, and the caller reads: the Team filter of the index pages (Ruling M1: only readable ids). */
 export const getTeamRecordIds = (api: HostApi, teamId: string, collection: string, limit: number = TEAM_RECORDS_LIMIT): Promise<TeamRecordIds> =>

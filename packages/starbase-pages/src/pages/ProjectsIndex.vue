@@ -85,7 +85,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 				empty-text="No projects visible to you yet. If you expected some, you may not have been added as PI or investigator."
 			/>
 			<template v-else>
-				<p class="d1-note">
+				<p v-if="!teamFilter.loading.value" class="d1-note">
 					Showing {{ visible.length }} of {{ projects.length }} projects you can see.
 					<span v-if="projects.length >= PROJECT_CAP">Only the first {{ PROJECT_CAP }} are loaded.</span>
 				</p>
@@ -97,7 +97,9 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 				<p v-if="activityError" class="d1-note warn" role="alert">{{ activityError }}</p>
 				<p v-if="rolesError" class="d1-note warn" role="alert">{{ rolesError }}</p>
 				<p v-if="truncated" class="d1-note warn">The activity charts are based on the newest records only (the lab has more than the page loads).</p>
-				<LoadState v-if="!visible.length" empty empty-text="No project matches these filters." />
+				<!-- A chosen team's ids are still loading: nothing is known to match yet, so say loading, not "no match". -->
+				<LoadState v-if="teamFilter.loading.value" loading loading-text="Loading this team's projects…" />
+				<LoadState v-else-if="!visible.length" empty empty-text="No project matches these filters." />
 				<div v-else class="grid">
 					<ProjectCard
 						v-for="p in visible"

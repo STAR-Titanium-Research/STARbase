@@ -43,7 +43,7 @@ describe('useTeamRecordFilter', () => {
 		await flush();
 		expect(f.team.value).toBe('t1');
 		expect([...f.ids.value]).toEqual(['p1', 'p2']);
-		expect(t.api.get).toHaveBeenCalledWith('/d1-teams/t1/records', { params: { collection: 'projects', limit: 500 } });
+		expect(t.api.get).toHaveBeenCalledWith('/d1-teams/t1/records', { params: { collection: 'projects', limit: 300 } });
 		expect(f.note.value).toBe('');
 	});
 
@@ -55,12 +55,33 @@ describe('useTeamRecordFilter', () => {
 		expect(t.replaced.at(-1)).toEqual({ 'f.other': 'x', 'f.team': 't1' });
 		await flush();
 		expect([...f.ids.value]).toEqual(['t1']);
-		expect(f.note.value).toBe("Showing the latest 500 of this team's records.");
+		expect(f.note.value).toBe("Showing the latest 300 of this team's records.");
 		f.setTeam('');
 		expect(t.replaced.at(-1)).toEqual({ 'f.other': 'x' });
 		await flush();
 		expect(f.ids.value.size).toBe(0);
 		expect(f.note.value).toBe('');
+	});
+
+	it('loading is true while the ids come, and the latest choice wins over a slow answer for the team chosen before', async () => {
+		let release!: () => void;
+		const slow = new Promise<void>((r) => { release = r; });
+		const t = setup({ 'f.team': 't1' }, async (id: string) => {
+			if (id === 't1') await slow;
+			return { ids: [`${id}-p`], truncated: id === 't1' };
+		});
+		const f = useTeamRecordFilter(t.host, 'projects', t.route, t.router);
+		expect(f.loading.value).toBe(true);
+		await flush();
+		f.setTeam('t2');
+		await flush();
+		expect(f.loading.value).toBe(false);
+		expect([...f.ids.value]).toEqual(['t2-p']);
+		release();
+		await flush();
+		expect([...f.ids.value]).toEqual(['t2-p']); // t1's late answer was dropped
+		expect(f.note.value).toBe(''); // and so was its truncated note
+		expect(f.loading.value).toBe(false);
 	});
 
 	it('a failed ids request leaves the set empty (nothing matches) and says why', async () => {

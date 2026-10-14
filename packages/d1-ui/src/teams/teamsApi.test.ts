@@ -23,7 +23,7 @@ describe('reads', () => {
 	it('reads the ids of the readable records of a team in one collection', async () => {
 		const api = fakeApi({ get: vi.fn(async () => ({ data: { ids: ['a', 7], truncated: true } })) });
 		expect(await getTeamRecordIds(api, 't/1', 'physical_samples')).toEqual({ ids: ['a', '7'], truncated: true });
-		expect(api.get).toHaveBeenCalledWith('/d1-teams/t%2F1/records', { params: { collection: 'physical_samples', limit: 500 } });
+		expect(api.get).toHaveBeenCalledWith('/d1-teams/t%2F1/records', { params: { collection: 'physical_samples', limit: 300 } });
 		expect(await getTeamRecordIds(fakeApi(), 't1', 'campaigns', 20)).toEqual({ ids: [], truncated: false });
 	});
 	it('a failed ids read carries the error of the endpoint', async () => {

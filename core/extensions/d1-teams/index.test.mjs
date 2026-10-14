@@ -1216,7 +1216,7 @@ test('GET /:id/records: a project has grants only (no owner team); the investiga
   assert.deepEqual(idsOf(ann), []);
 });
 
-test('GET /:id/records: limit truncates the newest first and says so; the cap is 500 with a truncated flag', async () => {
+test('GET /:id/records: limit truncates the newest first and says so; the cap is 300 with a truncated flag', async () => {
   const { handlers } = mount({ tables: recordsWorld() });
   const base = { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples', limit: '2' } };
   const two = await call(handlers['GET /:id/records'], base);
@@ -1232,11 +1232,11 @@ test('GET /:id/records: limit truncates the newest first and says so; the cap is
   }
   const h = mount({ tables: big }).handlers['GET /:id/records'];
   const dflt = await call(h, { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples' } });
-  assert.equal(idsOf(dflt).length, 500);
+  assert.equal(idsOf(dflt).length, 300);
   assert.equal(dflt.body.truncated, true);
   assert.equal(idsOf(dflt)[0], S_OWNED); // newest first (2026-10-09 beats the January stamps)
   const huge = await call(h, { acc: member(U.ann), params: { id: T.additive }, query: { collection: 'physical_samples', limit: '9999' } });
-  assert.equal(idsOf(huge).length, 500);
+  assert.equal(idsOf(huge).length, 300);
 });
 
 test('GET /:id/records: a bad collection or limit is 400, an unknown team 404, a malformed id 400', async () => {
