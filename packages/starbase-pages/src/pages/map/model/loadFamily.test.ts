@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { HostApi, TraceResponse } from '@d1/ui';
 import { isNotVisible } from '@d1/ui';
-import { loadFamily, loadRelationDefs, loadUsedIn, parseFocus } from './loadFamily';
+import { chunkByBudget, encodedQuerySize, loadFamily, loadRelationDefs, loadUsedIn, parseFocus } from './loadFamily';
 
 interface Call {
   path: string;
@@ -72,27 +72,79 @@ describe('parseFocus', () => {
 });
 
 describe('loadFamily', () => {
-  it('chunks 320 family ids into 3 operation requests of <=150', async () => {
-    const ids = Array.from({ length: 319 }, (_, i) => `d${i}`);
+  it('keeps every request of 320 family ids within 6000 encoded bytes and covers every id', async () => {
+    const ids = Array.from({ length: 319 }, (_, i) => `${String(i).padStart(8, '0')}-aaaa-bbbb-cccc-dddddddddddd`);
     const t = trace({ descendants: ids.map((id) => relative(id)) });
     const { api, calls } = fakeApi(emptyLists(t));
     await loadFamily(api, 'root');
 
+    const family = ['root', ...ids];
+    // The query string axios would send: arrays as key[]=v pairs, all percent-encoded.
+    const encoded = (c: Call) => {
+      const sp = new URLSearchParams();
+      for (const [k, v] of Object.entries(c.params)) {
+        if (Array.isArray(v)) v.forEach((x) => sp.append(`${k}[]`, String(x)));
+        else sp.append(k, String(v));
+      }
+      return sp.toString().length;
+    };
+    const lists = (c: Call): string[] => {
+      const find = (o: any): string[] | null => {
+        if (Array.isArray(o)) {
+          for (const x of o) {
+            const r = find(x);
+            if (r) return r;
+          }
+          return null;
+        }
+        if (o && typeof o === 'object') {
+          if (Array.isArray(o._in)) return o._in;
+          for (const x of Object.values(o)) {
+            const r = find(x);
+            if (r) return r;
+          }
+        }
+        return null;
+      };
+      return find(filterOf(c)) ?? [];
+    };
+
+    for (const path of ['/items/manufacturing_operations', '/items/test_sessions', '/items/sample_genealogy', '/items/physical_samples']) {
+      const reqs = calls.filter((c) => c.path === path);
+      expect(reqs.length).toBeGreaterThan(1);
+      for (const c of reqs) expect(encoded(c)).toBeLessThanOrEqual(6000);
+    }
     const ops = calls.filter((c) => c.path === '/items/manufacturing_operations');
-    expect(ops).toHaveLength(3);
-    const sizes = ops.map((c) => filterOf(c)._or[0].sample_id._in.length);
-    expect(sizes.every((n) => n <= 150)).toBe(true);
-    expect(sizes.reduce((a, b) => a + b, 0)).toBe(320);
-    expect(calls.filter((c) => c.path === '/items/test_sessions')).toHaveLength(3);
+    for (const column of ['sample_id', 'output_sample_id']) {
+      const sent = ops.filter((c) => Object.keys(filterOf(c))[0] === column);
+      expect(sent.flatMap(lists).sort()).toEqual([...family].sort());
+    }
+    for (const path of ['/items/test_sessions', '/items/sample_genealogy', '/items/physical_samples']) {
+      expect(calls.filter((c) => c.path === path).flatMap(lists).sort()).toEqual([...family].sort());
+    }
   });
 
-  it('asks for ops by sample_id OR output_sample_id', async () => {
+  it('sizes chunks by the measured cost of an id', () => {
+    const build = (chunk: string[]) => ({ filter: JSON.stringify({ x: { _in: chunk } }) });
+    const long = Array.from({ length: 100 }, (_, i) => `id-${i}-${'z'.repeat(200)}`);
+    const out = chunkByBudget(long, build, 3000);
+    expect(out.flat()).toEqual(long);
+    for (const c of out) expect(encodedQuerySize(build(c))).toBeLessThanOrEqual(3000);
+    // a lone id over budget still goes out
+    expect(chunkByBudget(['q'.repeat(5000)], build, 3000)).toHaveLength(1);
+    expect(chunkByBudget([], build)).toEqual([]);
+  });
+
+  it('asks for ops by sample_id and by output_sample_id', async () => {
     const { api, calls } = fakeApi(emptyLists(trace({ ancestors: [relative('p1')] })));
     await loadFamily(api, 'root');
-    const call = calls.find((c) => c.path === '/items/manufacturing_operations')!;
-    const f = filterOf(call);
-    expect(f._or[0]).toEqual({ sample_id: { _in: ['root', 'p1'] } });
-    expect(f._or[1]).toEqual({ output_sample_id: { _in: ['root', 'p1'] } });
+    const reqs = calls.filter((c) => c.path === '/items/manufacturing_operations');
+    // two single-list requests, no _or
+    expect(reqs.map(filterOf)).toEqual([
+      { sample_id: { _in: ['root', 'p1'] } },
+      { output_sample_id: { _in: ['root', 'p1'] } },
+    ]);
+    const call = reqs[0];
     expect(call.params.limit).toBe(-1);
     expect(call.params.fields).toContain('sintering_batch_number');
     // slice 2 adds batch_id; asking for it now would refuse the whole read
@@ -354,6 +406,49 @@ describe('loadFamily', () => {
   });
 });
 
+describe('loadFamily degradations', () => {
+  it('a refused tests read leaves no tests and marks events hidden', async () => {
+    const { api } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/test_sessions') return httpError(403);
+      return { data: [{ operation_id: 'o1', process_category: 'machining' }] };
+    });
+    const data = await loadFamily(api, 'root');
+    expect(data.tests).toEqual([]);
+    expect(data.hidden.events).toBe(true);
+    expect(data.operations).toHaveLength(1);
+  });
+
+  it('a refused genealogy read leaves no lineage and marks ancestors hidden', async () => {
+    const { api } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/sample_genealogy') return httpError(403);
+      return { data: [] };
+    });
+    const data = await loadFamily(api, 'root');
+    expect(data.lineage).toEqual([]);
+    expect(data.hidden.ancestors).toBe(true);
+  });
+
+  it('a refused operations read still rejects', async () => {
+    const { api } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/manufacturing_operations') return httpError(403);
+      return { data: [] };
+    });
+    await expect(loadFamily(api, 'root')).rejects.toMatchObject({ response: { status: 403 } });
+  });
+
+  it('a server error on tests still rejects', async () => {
+    const { api } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/test_sessions') return httpError(500);
+      return { data: [] };
+    });
+    await expect(loadFamily(api, 'root')).rejects.toMatchObject({ response: { status: 500 } });
+  });
+});
+
 describe('loadRelationDefs', () => {
   it('derives defs from relations and fields, skipping hidden fields and relations from other collections', async () => {
     const { api } = fakeApi((path) => {
@@ -464,16 +559,30 @@ describe('loadUsedIn', () => {
     expect(res.testsTotal).toBe(4);
   });
 
-  it('material / project / campaign -> samples', async () => {
+  it('material / project -> samples', async () => {
     const { api, calls } = fakeApi(() => ({ data: [{ sample_id: 's1', sample_code: 'S1' }], meta: { filter_count: 1 } }));
     await loadUsedIn(api, { collection: 'materials', id: 'm1' }, 1);
-    await loadUsedIn(api, { collection: 'projects', id: 'p1' }, 1);
-    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
-    expect(calls.map((c) => c.path)).toEqual(['/items/physical_samples', '/items/physical_samples', '/items/physical_samples']);
+    const res = await loadUsedIn(api, { collection: 'projects', id: 'p1' }, 1);
+    expect(calls.map((c) => c.path)).toEqual(['/items/physical_samples', '/items/physical_samples']);
     expect(filterOf(calls[0])).toEqual({ material_id: { _eq: 'm1' } });
     expect(filterOf(calls[1])).toEqual({ project_id: { _eq: 'p1' } });
-    expect(filterOf(calls[2])).toEqual({ campaigns: { _some: { campaign_id: { _eq: 'c1' } } } });
     expect((res.items as { id: string; code: string }[])[0]).toMatchObject({ id: 's1', code: 'S1' });
+  });
+
+  it('campaign -> samples through the campaign_samples junction', async () => {
+    const { api, calls } = fakeApi(() => ({
+      data: [{ sample_id: { sample_id: 's1', sample_code: 'S1' } }, { sample_id: null }],
+      meta: { filter_count: 2 },
+    }));
+    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 2);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe('/items/campaign_samples');
+    expect(filterOf(calls[0])).toEqual({ campaign_id: { _eq: 'c1' } });
+    expect(calls[0].params).toMatchObject({ limit: 20, page: 2, meta: 'filter_count' });
+    expect(calls[0].params.fields).toContain('sample_id.sample_code');
+    // a sample the person cannot read is dropped, and the count stays the junction's
+    expect((res.items as { id: string; code: string }[]).map((s) => s.id)).toEqual(['s1']);
+    expect(res.total).toBe(2);
   });
 
   it('stock lot -> samples through sample_stock_provenance, then their making operations', async () => {

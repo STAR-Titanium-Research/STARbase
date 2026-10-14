@@ -14,8 +14,10 @@ import type { LineageRow, OpRow, ProcessCategory, ProcessData, Ref, SampleRec, S
 
 // ---- constants -------------------------------------------------------------------------------
 
-/** Ids per request: keeps the query string well under 8 KB (spec §7 step 2). */
+/** Most ids in one request, whatever the budget says. */
 const CHUNK = 150;
+/** Encoded query string of one request, in bytes: filter + fields + sort + limit (typical request-line limit 8 KB). */
+const QUERY_BUDGET = 6000;
 /** Rows per used-in page (spec D20). */
 const FAN_PAGE = 20;
 
@@ -158,9 +160,44 @@ const LINEAGE_TYPES: LineageRow['type'][] = ['derived_from', 'cut_from', 'sinter
 
 type Json = Record<string, any>;
 
-function chunks<T>(xs: T[], size = CHUNK): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+/**
+ * Size of the query string a request would carry, serialised the way axios does it: an array is one
+ * `key[]=value` pair per element, everything percent-encoded. Conservative on purpose (the brackets are
+ * encoded too), so a request under the budget is under it for any client.
+ */
+export function encodedQuerySize(params: Record<string, unknown>): number {
+  const sp = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) for (const v of value) sp.append(`${key}[]`, String(v));
+    else sp.append(key, String(value));
+  }
+  return sp.toString().length;
+}
+
+/**
+ * Splits `ids` so that each chunk's request (`build(chunk)` = its params) stays within `budget` encoded
+ * bytes (spec §7 step 2; typical servers refuse a request line over 8 KB). The cost of an id is
+ * measured, not assumed, so ids of any length work. At most `CHUNK` ids per request; a single id that
+ * alone exceeds the budget still goes out on its own.
+ */
+export function chunkByBudget(ids: string[], build: (chunk: string[]) => Record<string, unknown>, budget = QUERY_BUDGET): string[][] {
+  const base = encodedQuerySize(build([]));
+  const out: string[][] = [];
+  let current: string[] = [];
+  let size = base;
+  for (const id of ids) {
+    // The second copy of an id costs its quotes, its separator and its encoding: the marginal cost.
+    const cost = encodedQuerySize(build([id, id])) - encodedQuerySize(build([id]));
+    if (current.length && (size + cost > budget || current.length >= CHUNK)) {
+      out.push(current);
+      current = [];
+      size = base;
+    }
+    current.push(id);
+    size += cost;
+  }
+  if (current.length) out.push(current);
   return out;
 }
 
@@ -313,15 +350,18 @@ export function parseFocus(q: string | undefined): { collection: string; id: str
 // ---- the family of a sample ------------------------------------------------------------------
 
 async function loadOperations(api: HostApi, ids: string[]): Promise<OpRow[]> {
+  // Two single-list requests per chunk (input, output) instead of one `_or` of two lists: half the ids
+  // in each query string, and each is a plain filter.
+  const build = (column: string) => (chunk: string[]) => ({
+    filter: JSON.stringify({ [column]: { _in: chunk } }),
+    fields: OPERATION_FIELDS,
+    sort: ['operation_date', 'operation_sequence'],
+    limit: -1,
+  });
+  // The longer column name sizes the chunks for both.
+  const sized = chunkByBudget(ids, build('output_sample_id'));
   const pages = await Promise.all(
-    chunks(ids).map((chunk) =>
-      getList(api, 'manufacturing_operations', {
-        filter: JSON.stringify({ _or: [{ sample_id: { _in: chunk } }, { output_sample_id: { _in: chunk } }] }),
-        fields: OPERATION_FIELDS,
-        sort: ['operation_date', 'operation_sequence'],
-        limit: -1,
-      }),
-    ),
+    sized.flatMap((chunk) => ['sample_id', 'output_sample_id'].map((column) => getList(api, 'manufacturing_operations', build(column)(chunk)))),
   );
   // An operation whose input is in one chunk and output in another comes back twice.
   const byId = new Map<string, OpRow>();
@@ -329,48 +369,58 @@ async function loadOperations(api: HostApi, ids: string[]): Promise<OpRow[]> {
   return [...byId.values()];
 }
 
-async function loadTests(api: HostApi, ids: string[]): Promise<TestRow[]> {
-  const read = (chunk: string[]) =>
-    getList(api, 'test_sessions', {
-      filter: JSON.stringify({
-        [SUBJECT_ALIAS]: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: chunk } }] } },
-      }),
-      fields: [...TEST_FIELDS, ...SUBJECT_FIELDS],
-      sort: ['session_date'],
-      limit: -1,
-    });
-  const readPrimary = (chunk: string[]) =>
-    getList(api, 'test_sessions', {
-      filter: JSON.stringify({ sample_id: { _in: chunk } }),
-      fields: TEST_FIELDS,
-      sort: ['session_date'],
-      limit: -1,
-    });
+/** `refused`: the person may not read tests at all, so none are listed and the map marks "some records hidden". */
+async function loadTests(api: HostApi, ids: string[]): Promise<{ tests: TestRow[]; refused: boolean }> {
+  const buildJunction = (chunk: string[]) => ({
+    filter: JSON.stringify({
+      [SUBJECT_ALIAS]: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: chunk } }] } },
+    }),
+    fields: [...TEST_FIELDS, ...SUBJECT_FIELDS],
+    sort: ['session_date'],
+    limit: -1,
+  });
+  const buildPrimary = (chunk: string[]) => ({
+    filter: JSON.stringify({ sample_id: { _in: chunk } }),
+    fields: TEST_FIELDS,
+    sort: ['session_date'],
+    limit: -1,
+  });
 
+  let refused = false;
   const pages = await Promise.all(
-    chunks(ids).map(async (chunk) => {
+    chunkByBudget(ids, buildJunction).map(async (chunk) => {
       try {
-        return await read(chunk);
+        return await getList(api, 'test_sessions', buildJunction(chunk));
       } catch (e) {
         // A role that may not read the junction cannot filter on it: fall back to the primary sample.
         if (!isNotVisible(e)) throw e;
-        return readPrimary(chunk);
+      }
+      try {
+        return await getList(api, 'test_sessions', buildPrimary(chunk));
+      } catch (e) {
+        if (!isNotVisible(e)) throw e;
+        refused = true;
+        return { rows: [] as Json[], total: null };
       }
     }),
   );
   const byId = new Map<string, TestRow>();
   for (const page of pages) for (const row of page.rows) byId.set(String(row.session_id), mapTest(row));
-  return [...byId.values()];
+  return { tests: [...byId.values()], refused };
 }
 
-async function loadLineage(api: HostApi, ids: string[]): Promise<LineageRow[]> {
+/** `refused`: the person may not read genealogy; the caller marks "some records hidden". */
+async function loadLineage(api: HostApi, ids: string[]): Promise<{ lineage: LineageRow[]; refused: boolean }> {
   const family = new Set(ids);
   // By child: each child belongs to exactly one chunk, so no pair is read twice or missed.
-  const pages = await Promise.all(
-    chunks(ids).map((chunk) =>
-      getList(api, 'sample_genealogy', { filter: JSON.stringify({ child_sample_id: { _in: chunk } }), fields: GENEALOGY_FIELDS, limit: -1 }),
-    ),
-  );
+  const build = (chunk: string[]) => ({ filter: JSON.stringify({ child_sample_id: { _in: chunk } }), fields: GENEALOGY_FIELDS, limit: -1 });
+  let pages: { rows: Json[] }[];
+  try {
+    pages = await Promise.all(chunkByBudget(ids, build).map((chunk) => getList(api, 'sample_genealogy', build(chunk))));
+  } catch (e) {
+    if (!isNotVisible(e)) throw e;
+    return { lineage: [], refused: true };
+  }
   const out: LineageRow[] = [];
   for (const page of pages) {
     for (const r of page.rows) {
@@ -381,15 +431,14 @@ async function loadLineage(api: HostApi, ids: string[]): Promise<LineageRow[]> {
       out.push({ parentId, childId, type, fraction: num(r.fraction) });
     }
   }
-  return out;
+  return { lineage: out, refused: false };
 }
 
 async function loadSamples(api: HostApi, trace: TraceResponse, ids: string[]): Promise<SampleRec[]> {
   const read = new Map<string, SampleRec>();
   try {
-    const pages = await Promise.all(
-      chunks(ids).map((chunk) => getList(api, 'physical_samples', { filter: JSON.stringify({ sample_id: { _in: chunk } }), fields: SAMPLE_FIELDS, limit: -1 })),
-    );
+    const build = (chunk: string[]) => ({ filter: JSON.stringify({ sample_id: { _in: chunk } }), fields: SAMPLE_FIELDS, limit: -1 });
+    const pages = await Promise.all(chunkByBudget(ids, build).map((chunk) => getList(api, 'physical_samples', build(chunk))));
     for (const page of pages) for (const row of page.rows) read.set(String(row.sample_id), mapSample(row));
   } catch (e) {
     // The trace already named the family; without a read the cards carry code and form only.
@@ -419,7 +468,7 @@ export async function loadFamily(api: HostApi, sampleId: string): Promise<Proces
   const root = trace.sample.sample_id;
   const ids = unique([root, ...trace.ancestors.map((a) => a.sample_id), ...trace.descendants.map((d) => d.sample_id)]);
 
-  const [operations, tests, lineage, samples] = await Promise.all([
+  const [operations, testRead, lineageRead, samples] = await Promise.all([
     loadOperations(api, ids),
     loadTests(api, ids),
     loadLineage(api, ids),
@@ -441,14 +490,15 @@ export async function loadFamily(api: HostApi, sampleId: string): Promise<Proces
     focus: { collection: 'physical_samples', id: root, code: trace.sample.sample_code ?? root, kind: 'sample' },
     samples,
     operations,
-    tests,
-    lineage,
+    tests: testRead.tests,
+    lineage: lineageRead.lineage,
     stock: [...stock.values()],
     hidden: {
       stock: !!trace.hidden?.stock_origins,
-      ancestors: !!trace.hidden?.ancestors,
+      // A refused tests / genealogy read leaves a gap the person cannot see: mark it, do not fail the map.
+      ancestors: !!trace.hidden?.ancestors || lineageRead.refused,
       descendants: !!trace.hidden?.descendants,
-      events: !!trace.hidden?.events,
+      events: !!trace.hidden?.events || testRead.refused,
     },
     truncated: Object.values(trace.truncated ?? {}).some(Boolean),
   };
@@ -535,7 +585,6 @@ const OPERATION_FAN: Record<string, { column: string; tests: boolean }> = {
 const SAMPLE_FAN: Record<string, (id: string) => Json> = {
   materials: (id) => ({ material_id: { _eq: id } }),
   projects: (id) => ({ project_id: { _eq: id } }),
-  campaigns: (id) => ({ campaigns: { _some: { campaign_id: { _eq: id } } } }),
 };
 
 /**
@@ -563,6 +612,19 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
       result.testsTotal = tests.total ?? tests.rows.length;
     }
     return result;
+  }
+
+  if (ref.collection === 'campaigns') {
+    // Through the campaign_samples junction (as the Sample page reads it), not an alias filter on samples.
+    const res = await getList(api, 'campaign_samples', {
+      filter: JSON.stringify({ campaign_id: { _eq: ref.id } }),
+      fields: SAMPLE_FIELDS.map((f) => `sample_id.${f}`),
+      sort: ['sample_id.sample_code'],
+      ...paged,
+    });
+    // A sample the person may not read comes back null: no card, and no count of them.
+    const items = res.rows.map((r) => r.sample_id).filter((s): s is Json => !!s && typeof s === 'object').map(mapSample);
+    return { items, total: res.total ?? items.length };
   }
 
   const sampleFilter = SAMPLE_FAN[ref.collection];
