@@ -40,5 +40,6 @@ open.
 | [STARbase sidebar B2: one sidebar, rail, pins, settings](specs/2026-10-13-explorer-sidebar-b2-design.md) | STARbase / d1-ui | **Implemented 2026-10-13** in [#262](https://github.com/dpremoli/TimeTracker/pull/262), not yet merged (plan [2026-10-13-explorer-sidebar-b2](plans/2026-10-13-explorer-sidebar-b2.md)); builds on STARbase; supersedes N1b decision 1 |
 | [Rig test requests](specs/2026-10-11-rig-test-requests-design.md) | force-app / relay | **Design only** (phase 1 plan open) |
 | [Rig test requests: UI handoff](specs/2026-10-11-rig-test-requests-ui-handoff.md) | force-app UI | Describes the phase-1 UI as built |
+| [Process map edit mode](specs/2026-10-14-process-map-edit-mode-design.md) | STARbase / d1-build | **In progress** on `claude/keen-brahmagupta-nmo9oy` (plan [2026-10-14-process-map-edit-mode](plans/2026-10-14-process-map-edit-mode.md)); ADR-0018, ADR-0019 |
 
 Add a row when a new spec lands, and update its Status line (and this table) when it ships.
