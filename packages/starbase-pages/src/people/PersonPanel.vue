@@ -167,13 +167,16 @@ async function remove(r: AccessRecord) {
 }
 
 // ---- Esc closes the panel wherever the focus is (it stays on the row that opened it), unless Esc was meant for something over it ----
+// The listener is in the CAPTURE phase on purpose: it reads which overlay is open before any overlay's own Esc handler has run. In the bubble
+// phase a select, dialog or menu that handled Esc first could already be gone from the DOM, and the panel would close under it too.
+// It never stops propagation, so those handlers (and PeopleView's attention-menu one) still run; the menu is covered by its data-open-menu marker.
 const overlayOpen = () =>
 	Array.from(document.querySelectorAll<HTMLElement>(ESC_OWNER_SELECTOR)).some((el) => !el.matches('.v-menu-content') || el.getClientRects().length > 0);
 const onKey = (e: KeyboardEvent) => {
 	if (escapeClosesPanel(e, (document.activeElement as HTMLElement | null)?.tagName, overlayOpen())) emit('close');
 };
-onMounted(() => window.addEventListener('keydown', onKey));
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
+onMounted(() => window.addEventListener('keydown', onKey, true));
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 </script>
 
 <template>
