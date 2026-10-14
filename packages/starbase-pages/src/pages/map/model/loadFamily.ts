@@ -1,0 +1,599 @@
+// The Process map's only module that talks to the API (spec §7). Through `HostApi` only, so the
+// signed-in person's permissions apply and no Directus SDK is imported (`hostNeutral` guard).
+//
+//   loadFamily      a sample's whole family: trace, operations, tests, genealogy, samples
+//   loadRelationDefs the relations of a form, read at runtime for the Inside tray (null when refused)
+//   loadUsedIn      the used-in fan of a tool, machine, edge, recipe, stock lot, material, project, campaign
+//
+// Filters go as a JSON string (`filter: JSON.stringify(...)`), like indexQuery and plotData do: a list of
+// 150 ids as bracketed query keys would run into the 20-element array limit of the query parser.
+
+import { isNotVisible, operationLabel, type HostApi, type TraceResponse } from '@d1/ui';
+import { KEY_SETTING_FIELDS, type RelationDef } from './formSlots';
+import type { LineageRow, OpRow, ProcessCategory, ProcessData, Ref, SampleRec, StockOrigin, TestRow } from './types';
+
+// ---- constants -------------------------------------------------------------------------------
+
+/** Ids per request: keeps the query string well under 8 KB (spec §7 step 2). */
+const CHUNK = 150;
+/** Rows per used-in page (spec D20). */
+const FAN_PAGE = 20;
+
+interface RelSpec {
+  collection: string;
+  /** Primary key of the target collection. */
+  id: string;
+  /** First non-empty wins as the Ref's `code`. */
+  code: string[];
+  /** Shown as the Ref's `label` when it differs from the code. */
+  label?: string;
+}
+
+const RELATIONS = {
+  equipment_id: { collection: 'equipment', id: 'equipment_id', code: ['equipment_code'], label: 'equipment_name' },
+  tool_id: { collection: 'tools', id: 'tool_id', code: ['tool_code'], label: 'tool_name' },
+  insert_edge_id: { collection: 'insert_edges', id: 'edge_id', code: ['edge_code'] },
+  project_id: { collection: 'projects', id: 'project_id', code: ['project_code'], label: 'project_name' },
+  campaign_id: { collection: 'campaigns', id: 'campaign_id', code: ['campaign_code'], label: 'name' },
+  material_id: { collection: 'materials', id: 'material_id', code: ['alloy_code', 'common_name'], label: 'common_name' },
+  source_recipe_id: { collection: 'prep_recipes', id: 'recipe_id', code: ['name'] },
+  fast_recipe_id: { collection: 'fast_recipes', id: 'id', code: ['name'] },
+  operator_person_id: { collection: 'people', id: 'person_id', code: ['full_name'] },
+  owner_person_id: { collection: 'people', id: 'person_id', code: ['full_name'] },
+} satisfies Record<string, RelSpec>;
+
+type RelField = keyof typeof RELATIONS;
+
+const OPERATION_RELATIONS: RelField[] = [
+  'equipment_id',
+  'tool_id',
+  'insert_edge_id',
+  'project_id',
+  'campaign_id',
+  'material_id',
+  'source_recipe_id',
+  'fast_recipe_id',
+  'operator_person_id',
+  'owner_person_id',
+];
+const TEST_RELATIONS: RelField[] = [
+  'equipment_id',
+  'insert_edge_id',
+  'project_id',
+  'campaign_id',
+  'operator_person_id',
+  'owner_person_id',
+];
+
+const relationFields = (fields: RelField[]): string[] =>
+  fields.flatMap((f) => {
+    const spec: RelSpec = RELATIONS[f];
+    return [`${f}.${spec.id}`, ...spec.code.map((c) => `${f}.${c}`), ...(spec.label ? [`${f}.${spec.label}`] : [])];
+  });
+
+const unique = (xs: string[]): string[] => [...new Set(xs)];
+
+/** Inline setting fields of the key settings (formSlots.KEY_SETTING_FIELDS); `test_type` is its own column. */
+const settingFields = (categories: (keyof typeof KEY_SETTING_FIELDS)[]): string[] =>
+  unique(
+    categories.flatMap((c) => KEY_SETTING_FIELDS[c].flatMap((d) => d.fields.map((f) => f.field))).filter((f) => f !== 'test_type'),
+  );
+
+const OPERATION_SETTING_FIELDS = settingFields(['sintering', 'machining', 'heat_treatment', 'additive', 'deformation']);
+const TEST_SETTING_FIELDS = settingFields(['test']);
+
+// slice 2: batch_id (the column does not exist yet; asking for it would refuse the whole read)
+const OPERATION_FIELDS = [
+  'operation_id',
+  'pass_code',
+  'operation_sequence',
+  'operation_date',
+  'process_category',
+  'sample_id',
+  'output_sample_id',
+  'source_run_uid',
+  'sintering_batch_number',
+  // FAST recipe: `fast_recipe_id` (relation, above) where set; the typed number stays as the recipe key.
+  'sintering_recipe_number',
+  // TEXT column holding a file path or name, not a relation (mapped to a Ref by hand).
+  'force_file_id',
+  'method_id.method_id',
+  'method_id.method_name',
+  ...relationFields(OPERATION_RELATIONS),
+  ...OPERATION_SETTING_FIELDS,
+];
+
+// slice 2: batch_id on tests
+const TEST_FIELDS = [
+  'session_id',
+  'sample_id',
+  'test_code',
+  'test_type',
+  'test_category',
+  'session_date',
+  'status',
+  ...relationFields(TEST_RELATIONS),
+  'session_data_files.directus_files_id.id',
+  'session_data_files.directus_files_id.title',
+  'session_data_files.directus_files_id.filename_download',
+  ...TEST_SETTING_FIELDS,
+];
+
+// Subjects of a test: the M2A junction `test_sessions_subject(test_sessions_id, collection, item)`, whose
+// alias on `test_sessions` is `subject` (db/migrations/20260703000064_test_subject_directus_meta.sql:
+// `directus_fields` row, collection test_sessions, field `subject`, special m2a).
+const SUBJECT_ALIAS = 'subject';
+const SUBJECT_FIELDS = [`${SUBJECT_ALIAS}.collection`, `${SUBJECT_ALIAS}.item`];
+
+const SAMPLE_FIELDS = [
+  'sample_id',
+  'sample_code',
+  'form',
+  'current_status',
+  'mass_grams',
+  'diameter_mm',
+  'thickness_mm',
+  'length_mm',
+  'project_id.project_id',
+  'material_id.material_id',
+  'material_id.common_name',
+  'material_id.alloy_code',
+];
+
+/** Facts shown on a sample card, in order: column and unit. */
+const SAMPLE_FACTS: { label: string; field: string; unit: string }[] = [
+  { label: 'Mass', field: 'mass_grams', unit: 'g' },
+  { label: 'Diameter', field: 'diameter_mm', unit: 'mm' },
+  { label: 'Thickness', field: 'thickness_mm', unit: 'mm' },
+  { label: 'Length', field: 'length_mm', unit: 'mm' },
+];
+
+const GENEALOGY_FIELDS = ['child_sample_id', 'parent_sample_id', 'relationship_type', 'fraction'];
+
+const CATEGORIES: ProcessCategory[] = ['machining', 'sintering', 'heat_treatment', 'deformation', 'additive', 'sample_prep'];
+const TEST_CATEGORIES = ['nde', 'destructive', 'dynamic', 'other'] as const;
+const LINEAGE_TYPES: LineageRow['type'][] = ['derived_from', 'cut_from', 'sintered_from', 'powder_from'];
+
+// ---- small helpers ---------------------------------------------------------------------------
+
+type Json = Record<string, any>;
+
+function chunks<T>(xs: T[], size = CHUNK): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
+  return out;
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null);
+const idOf = (v: unknown): string | null => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
+const num = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** A record the person cannot read comes back as null or a bare id: neither is a Ref. */
+function refOf(field: RelField, value: unknown): Ref | null {
+  if (!value || typeof value !== 'object') return null;
+  const spec: RelSpec = RELATIONS[field];
+  const row = value as Json;
+  const id = idOf(row[spec.id]);
+  if (!id) return null;
+  const code = spec.code.map((c) => str(row[c])).find((c) => c) ?? id;
+  const label = spec.label ? str(row[spec.label]) : null;
+  const ref: Ref = { collection: spec.collection, id, code };
+  if (label && label !== code) ref.label = label;
+  return ref;
+}
+
+function relationsOf(row: Json, fields: RelField[]): Record<string, Ref | null> {
+  const out: Record<string, Ref | null> = {};
+  for (const f of fields) out[f] = refOf(f, row[f]);
+  return out;
+}
+
+function settingsOf(row: Json, fields: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of fields) if (row[f] !== null && row[f] !== undefined) out[f] = row[f];
+  return out;
+}
+
+/** `force_file_id` holds a path or name as text: the Ref names the file part. */
+function forceFileRef(value: unknown): Ref | null {
+  const text = str(value);
+  if (!text) return null;
+  const name = text.split(/[\\/]/).filter(Boolean).pop() ?? text;
+  return { collection: 'force_file', id: text, code: name };
+}
+
+async function getList(api: HostApi, collection: string, params: Record<string, unknown>): Promise<{ rows: Json[]; total: number | null }> {
+  const { data } = await api.get(`/items/${collection}`, { params });
+  const rows = (data?.data ?? []) as Json[];
+  const count = data?.meta?.filter_count;
+  return { rows, total: count === undefined || count === null ? null : Number(count) };
+}
+
+// ---- row mappers -----------------------------------------------------------------------------
+
+function mapOperation(r: Json): OpRow {
+  const id = String(r.operation_id);
+  const fast = refOf('fast_recipe_id', r.fast_recipe_id);
+  const prep = refOf('source_recipe_id', r.source_recipe_id);
+  const relations = relationsOf(r, OPERATION_RELATIONS);
+  relations.force_file_id = forceFileRef(r.force_file_id);
+  const category = CATEGORIES.includes(r.process_category) ? (r.process_category as ProcessCategory) : null;
+  return {
+    id,
+    code: operationLabel({ pass_code: str(r.pass_code), operation_sequence: num(r.operation_sequence) }),
+    methodId: idOf(r.method_id?.method_id) ?? '',
+    methodName: str(r.method_id?.method_name) ?? '',
+    category,
+    date: str(r.operation_date),
+    sequence: num(r.operation_sequence),
+    // manufacturing_operations has no status column
+    status: null,
+    sampleId: idOf(r.sample_id),
+    outputSampleId: idOf(r.output_sample_id),
+    equipmentId: relations.equipment_id?.id ?? null,
+    recipeKey: fast?.id ?? str(r.sintering_recipe_number) ?? prep?.id ?? null,
+    // slice 2: batch_id
+    batchId: null,
+    sourceRunUid: str(r.source_run_uid),
+    powderBatch: str(r.sintering_batch_number),
+    relations,
+    settings: settingsOf(r, OPERATION_SETTING_FIELDS),
+    projectId: relations.project_id?.id ?? null,
+  };
+}
+
+function mapTest(r: Json): TestRow {
+  const id = String(r.session_id);
+  const relations = relationsOf(r, TEST_RELATIONS);
+  const file = Array.isArray(r.session_data_files) ? r.session_data_files.map((j: Json) => j?.directus_files_id).find((f: Json) => f?.id) : null;
+  // A test has several data files but one slot: the first is the Ref.
+  relations.session_data_files = file
+    ? { collection: 'directus_files', id: String(file.id), code: str(file.title) ?? str(file.filename_download) ?? String(file.id) }
+    : null;
+
+  const subjects = Array.isArray(r[SUBJECT_ALIAS])
+    ? (r[SUBJECT_ALIAS] as Json[])
+        .filter((s) => s?.collection === 'physical_samples')
+        .map((s) => idOf(s.item && typeof s.item === 'object' ? s.item.sample_id : s.item))
+        .filter((s): s is string => !!s)
+    : [];
+  // No junction rows (or no read of them): the primary subject is `sample_id`.
+  const primary = idOf(r.sample_id);
+  const subjectSampleIds = subjects.length ? subjects : primary ? [primary] : [];
+
+  const category = (TEST_CATEGORIES as readonly string[]).includes(r.test_category) ? (r.test_category as TestRow['category']) : null;
+  return {
+    id,
+    code: str(r.test_code) ?? str(r.test_type) ?? 'Test',
+    testType: str(r.test_type),
+    category,
+    date: str(r.session_date),
+    status: str(r.status),
+    subjectSampleIds,
+    equipmentId: relations.equipment_id?.id ?? null,
+    // slice 2: batch_id
+    batchId: null,
+    relations,
+    settings: settingsOf(r, TEST_SETTING_FIELDS),
+    projectId: relations.project_id?.id ?? null,
+  };
+}
+
+function mapSample(r: Json): SampleRec {
+  const facts: Record<string, string> = {};
+  for (const { label, field, unit } of SAMPLE_FACTS) {
+    const n = num(r[field]);
+    if (n !== null) facts[label] = `${n} ${unit}`;
+  }
+  const id = String(r.sample_id);
+  const materialRef = refOf('material_id', r.material_id);
+  return {
+    id,
+    code: str(r.sample_code) ?? id,
+    form: str(r.form),
+    status: str(r.current_status),
+    projectId: idOf(r.project_id && typeof r.project_id === 'object' ? r.project_id.project_id : r.project_id),
+    materialRef,
+    facts,
+  };
+}
+
+// ---- focus -----------------------------------------------------------------------------------
+
+/** `physical_samples:<uuid>` (the `focus` query value). The legacy `?sample=<id>` is the page's concern. */
+export function parseFocus(q: string | undefined): { collection: string; id: string } | null {
+  const m = /^([a-z][a-z0-9_]*):([A-Za-z0-9_-]+)$/.exec(q ?? '');
+  return m ? { collection: m[1], id: m[2] } : null;
+}
+
+// ---- the family of a sample ------------------------------------------------------------------
+
+async function loadOperations(api: HostApi, ids: string[]): Promise<OpRow[]> {
+  const pages = await Promise.all(
+    chunks(ids).map((chunk) =>
+      getList(api, 'manufacturing_operations', {
+        filter: JSON.stringify({ _or: [{ sample_id: { _in: chunk } }, { output_sample_id: { _in: chunk } }] }),
+        fields: OPERATION_FIELDS,
+        sort: ['operation_date', 'operation_sequence'],
+        limit: -1,
+      }),
+    ),
+  );
+  // An operation whose input is in one chunk and output in another comes back twice.
+  const byId = new Map<string, OpRow>();
+  for (const page of pages) for (const row of page.rows) byId.set(String(row.operation_id), mapOperation(row));
+  return [...byId.values()];
+}
+
+async function loadTests(api: HostApi, ids: string[]): Promise<TestRow[]> {
+  const read = (chunk: string[]) =>
+    getList(api, 'test_sessions', {
+      filter: JSON.stringify({
+        [SUBJECT_ALIAS]: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: chunk } }] } },
+      }),
+      fields: [...TEST_FIELDS, ...SUBJECT_FIELDS],
+      sort: ['session_date'],
+      limit: -1,
+    });
+  const readPrimary = (chunk: string[]) =>
+    getList(api, 'test_sessions', {
+      filter: JSON.stringify({ sample_id: { _in: chunk } }),
+      fields: TEST_FIELDS,
+      sort: ['session_date'],
+      limit: -1,
+    });
+
+  const pages = await Promise.all(
+    chunks(ids).map(async (chunk) => {
+      try {
+        return await read(chunk);
+      } catch (e) {
+        // A role that may not read the junction cannot filter on it: fall back to the primary sample.
+        if (!isNotVisible(e)) throw e;
+        return readPrimary(chunk);
+      }
+    }),
+  );
+  const byId = new Map<string, TestRow>();
+  for (const page of pages) for (const row of page.rows) byId.set(String(row.session_id), mapTest(row));
+  return [...byId.values()];
+}
+
+async function loadLineage(api: HostApi, ids: string[]): Promise<LineageRow[]> {
+  const family = new Set(ids);
+  // By child: each child belongs to exactly one chunk, so no pair is read twice or missed.
+  const pages = await Promise.all(
+    chunks(ids).map((chunk) =>
+      getList(api, 'sample_genealogy', { filter: JSON.stringify({ child_sample_id: { _in: chunk } }), fields: GENEALOGY_FIELDS, limit: -1 }),
+    ),
+  );
+  const out: LineageRow[] = [];
+  for (const page of pages) {
+    for (const r of page.rows) {
+      const parentId = idOf(r.parent_sample_id);
+      const childId = idOf(r.child_sample_id);
+      if (!parentId || !childId || !family.has(parentId)) continue;
+      const type = LINEAGE_TYPES.includes(r.relationship_type) ? (r.relationship_type as LineageRow['type']) : 'derived_from';
+      out.push({ parentId, childId, type, fraction: num(r.fraction) });
+    }
+  }
+  return out;
+}
+
+async function loadSamples(api: HostApi, trace: TraceResponse, ids: string[]): Promise<SampleRec[]> {
+  const read = new Map<string, SampleRec>();
+  try {
+    const pages = await Promise.all(
+      chunks(ids).map((chunk) => getList(api, 'physical_samples', { filter: JSON.stringify({ sample_id: { _in: chunk } }), fields: SAMPLE_FIELDS, limit: -1 })),
+    );
+    for (const page of pages) for (const row of page.rows) read.set(String(row.sample_id), mapSample(row));
+  } catch (e) {
+    // The trace already named the family; without a read the cards carry code and form only.
+    if (!isNotVisible(e)) throw e;
+  }
+  const fromTrace = new Map<string, { code: string | null; form: string | null }>([
+    [trace.sample.sample_id, { code: trace.sample.sample_code, form: trace.sample.form }],
+  ]);
+  for (const r of [...trace.ancestors, ...trace.descendants]) fromTrace.set(r.sample_id, { code: r.sample_code, form: r.form });
+  return ids.map(
+    (id) =>
+      read.get(id) ?? {
+        id,
+        code: fromTrace.get(id)?.code ?? id,
+        form: fromTrace.get(id)?.form ?? null,
+        status: null,
+        projectId: null,
+        materialRef: null,
+        facts: {},
+      },
+  );
+}
+
+/** Spec §7 steps 1-4 for one sample: the whole family, not just what the Reach slider will show. */
+export async function loadFamily(api: HostApi, sampleId: string): Promise<ProcessData> {
+  const trace = (await api.get(`/d1-trace/sample/${encodeURIComponent(sampleId)}`)).data as TraceResponse;
+  const root = trace.sample.sample_id;
+  const ids = unique([root, ...trace.ancestors.map((a) => a.sample_id), ...trace.descendants.map((d) => d.sample_id)]);
+
+  const [operations, tests, lineage, samples] = await Promise.all([
+    loadOperations(api, ids),
+    loadTests(api, ids),
+    loadLineage(api, ids),
+    loadSamples(api, trace, ids),
+  ]);
+
+  const stock = new Map<string, StockOrigin>();
+  for (const s of trace.stock_origins) {
+    stock.set(`${s.lot_id}|${s.via_sample_id}`, {
+      lotId: s.lot_id,
+      lotCode: s.lot_code ?? s.lot_id,
+      supplier: s.supplier_name,
+      massUsedGrams: num(s.mass_used_grams),
+      sampleId: s.via_sample_id,
+    });
+  }
+
+  return {
+    focus: { collection: 'physical_samples', id: root, code: trace.sample.sample_code ?? root, kind: 'sample' },
+    samples,
+    operations,
+    tests,
+    lineage,
+    stock: [...stock.values()],
+    hidden: {
+      stock: !!trace.hidden?.stock_origins,
+      ancestors: !!trace.hidden?.ancestors,
+      descendants: !!trace.hidden?.descendants,
+      events: !!trace.hidden?.events,
+    },
+    truncated: Object.values(trace.truncated ?? {}).some(Boolean),
+  };
+}
+
+// ---- relation defs ---------------------------------------------------------------------------
+
+/** `equipment_id` -> "Equipment", `session_data_files` -> "Session data files". */
+function humanise(field: string): string {
+  const text = field.replace(/_id$/, '').replace(/_/g, ' ').trim();
+  return text ? text[0].toUpperCase() + text.slice(1) : field;
+}
+
+/**
+ * The relations of a collection's form, read from `/relations/<c>` and `/fields/<c>`: many-to-one
+ * fields and file-style many-to-many aliases, in form order, without hidden fields. `null` when the
+ * role may not read them (the caller then uses `FALLBACK_RELATIONS`) or when nothing is left.
+ */
+export async function loadRelationDefs(api: HostApi, collection: string): Promise<RelationDef[] | null> {
+  let relations: Json[];
+  let fields: Json[];
+  try {
+    [relations, fields] = await Promise.all([
+      api.get(`/relations/${collection}`).then((r) => (r.data?.data ?? []) as Json[]),
+      api.get(`/fields/${collection}`).then((r) => (r.data?.data ?? []) as Json[]),
+    ]);
+  } catch (e) {
+    if (isNotVisible(e)) return null;
+    throw e;
+  }
+
+  const meta = new Map<string, Json>(fields.map((f) => [String(f.field), f.meta ?? {}]));
+  const defs: (RelationDef & { sort: number })[] = [];
+  const add = (field: string, target: string | null | undefined) => {
+    const m = meta.get(field);
+    if (!m || m.hidden || !target || defs.some((d) => d.field === field)) return;
+    const label = str(Array.isArray(m.translations) ? m.translations[0]?.translation : null) ?? humanise(field);
+    defs.push({ field, label, collection: target, sort: num(m.sort) ?? Number.MAX_SAFE_INTEGER });
+  };
+
+  for (const rel of relations) {
+    const m = rel.meta ?? {};
+    const many = m.many_collection ?? rel.collection;
+    const manyField = m.many_field ?? rel.field;
+    const one = m.one_collection ?? rel.related_collection;
+    if (many === collection && rel.related_collection) {
+      add(manyField, rel.related_collection);
+    } else if (one === collection && m.one_field && m.junction_field) {
+      // A files-style alias: the target is the far side of the junction, which has its own relations.
+      try {
+        const far = ((await api.get(`/relations/${many}`)).data?.data ?? []) as Json[];
+        const leg = far.find((r) => (r.meta?.many_field ?? r.field) === m.junction_field && (r.meta?.many_collection ?? r.collection) === many);
+        add(m.one_field, leg?.related_collection ?? leg?.meta?.one_collection);
+      } catch (e) {
+        if (!isNotVisible(e)) throw e;
+      }
+    }
+  }
+  if (!defs.length) return null;
+  return defs.sort((a, b) => a.sort - b.sort).map(({ field, label, collection: c }) => ({ field, label, collection: c }));
+}
+
+// ---- used-in fans (spec D20) -----------------------------------------------------------------
+
+export interface UsedIn {
+  items: OpRow[] | TestRow[] | SampleRec[];
+  /** `meta.filter_count` of the main list: "+N more" is `total - 20 * page`. */
+  total: number;
+  /** Equipment and insert edges: the tests that used them (same page), and how many there are. */
+  tests?: TestRow[];
+  testsTotal?: number;
+}
+
+/** Collections that fan into operations (and tests) through one column. */
+const OPERATION_FAN: Record<string, { column: string; tests: boolean }> = {
+  tools: { column: 'tool_id', tests: false },
+  equipment: { column: 'equipment_id', tests: true },
+  insert_edges: { column: 'insert_edge_id', tests: true },
+  fast_recipes: { column: 'fast_recipe_id', tests: false },
+  prep_recipes: { column: 'source_recipe_id', tests: false },
+};
+
+/** Collections that fan into samples through a filter on `physical_samples`. */
+const SAMPLE_FAN: Record<string, (id: string) => Json> = {
+  materials: (id) => ({ material_id: { _eq: id } }),
+  projects: (id) => ({ project_id: { _eq: id } }),
+  campaigns: (id) => ({ campaigns: { _some: { campaign_id: { _eq: id } } } }),
+};
+
+/**
+ * One page (`page` is 1-based, 20 rows) of what used a record. Operations and tests come newest first;
+ * a stock lot is read through `sample_stock_provenance`: one page of its samples, then the operations that
+ * made them (`output_sample_id`), so `total` counts samples and a page may hold fewer operations.
+ */
+export async function loadUsedIn(api: HostApi, ref: { collection: string; id: string }, page: number): Promise<UsedIn> {
+  const p = Math.max(1, Math.floor(page) || 1);
+  const paged = { limit: FAN_PAGE, page: p, meta: 'filter_count' };
+  const opParams = (filter: Json) => ({ filter: JSON.stringify(filter), fields: OPERATION_FIELDS, sort: ['-operation_date'], ...paged });
+
+  const fan = OPERATION_FAN[ref.collection];
+  if (fan) {
+    const filter = { [fan.column]: { _eq: ref.id } };
+    const [ops, tests] = await Promise.all([
+      getList(api, 'manufacturing_operations', opParams(filter)),
+      fan.tests
+        ? getList(api, 'test_sessions', { filter: JSON.stringify(filter), fields: TEST_FIELDS, sort: ['-session_date'], ...paged })
+        : Promise.resolve(null),
+    ]);
+    const result: UsedIn = { items: ops.rows.map(mapOperation), total: ops.total ?? ops.rows.length };
+    if (tests) {
+      result.tests = tests.rows.map(mapTest);
+      result.testsTotal = tests.total ?? tests.rows.length;
+    }
+    return result;
+  }
+
+  const sampleFilter = SAMPLE_FAN[ref.collection];
+  if (sampleFilter) {
+    const res = await getList(api, 'physical_samples', {
+      filter: JSON.stringify(sampleFilter(ref.id)),
+      fields: SAMPLE_FIELDS,
+      sort: ['-created_at'],
+      ...paged,
+    });
+    return { items: res.rows.map(mapSample), total: res.total ?? res.rows.length };
+  }
+
+  if (ref.collection === 'raw_stock_lots') {
+    const prov = await getList(api, 'sample_stock_provenance', {
+      filter: JSON.stringify({ lot_id: { _eq: ref.id } }),
+      fields: ['sample_id'],
+      sort: ['-created_at'],
+      ...paged,
+    });
+    const sampleIds = unique(prov.rows.map((r) => idOf(r.sample_id)).filter((s): s is string => !!s));
+    const total = prov.total ?? sampleIds.length;
+    if (!sampleIds.length) return { items: [], total };
+    const ops = await getList(api, 'manufacturing_operations', {
+      filter: JSON.stringify({ output_sample_id: { _in: sampleIds } }),
+      fields: OPERATION_FIELDS,
+      sort: ['-operation_date'],
+      limit: -1,
+    });
+    return { items: ops.rows.map(mapOperation), total };
+  }
+
+  throw new Error(`No used-in fan for ${ref.collection}`);
+}

@@ -1,0 +1,507 @@
+import { describe, expect, it } from 'vitest';
+import type { HostApi, TraceResponse } from '@d1/ui';
+import { isNotVisible } from '@d1/ui';
+import { loadFamily, loadRelationDefs, loadUsedIn, parseFocus } from './loadFamily';
+
+interface Call {
+  path: string;
+  params: Record<string, any>;
+}
+
+type Handler = (path: string, params: Record<string, any>) => unknown;
+
+/** A fake HostApi that records every GET and answers from `handler` (a returned Error rejects). */
+function fakeApi(handler: Handler): { api: HostApi; calls: Call[] } {
+  const calls: Call[] = [];
+  const api = {
+    get: async (path: string, config?: { params?: Record<string, unknown> }) => {
+      const params = (config?.params ?? {}) as Record<string, any>;
+      calls.push({ path, params });
+      const out = handler(path, params);
+      if (out instanceof Error) throw out;
+      return { data: out };
+    },
+    post: async () => ({ data: {} }),
+    patch: async () => ({ data: {} }),
+    delete: async () => ({ data: {} }),
+  } as unknown as HostApi;
+  return { api, calls };
+}
+
+const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { response: { status } });
+const filterOf = (c: Call) => JSON.parse(c.params.filter as string);
+
+function trace(p: Partial<TraceResponse> = {}): TraceResponse {
+  return {
+    sample: { sample_id: 'root', sample_code: 'S-ROOT', form: 'disc' },
+    stock_origins: [],
+    ancestors: [],
+    descendants: [],
+    events: [],
+    hidden: { stock_origins: false, ancestors: false, events: false, descendants: false },
+    truncated: {},
+    ...p,
+  };
+}
+
+const relative = (id: string, depth = 1) => ({
+  depth,
+  sample_id: id,
+  sample_code: id.toUpperCase(),
+  form: null,
+  relationship_type: 'cut_from',
+  fraction: null,
+  through_hidden: false,
+});
+
+/** Answers the trace and returns an empty list for every other read. */
+const emptyLists = (t: TraceResponse): Handler => (path) => {
+  if (path.startsWith('/d1-trace/')) return t;
+  return { data: [], meta: { filter_count: 0 } };
+};
+
+describe('parseFocus', () => {
+  it('reads collection:id and rejects the rest', () => {
+    expect(parseFocus('physical_samples:abc-123')).toEqual({ collection: 'physical_samples', id: 'abc-123' });
+    expect(parseFocus(undefined)).toBeNull();
+    expect(parseFocus('')).toBeNull();
+    expect(parseFocus('physical_samples')).toBeNull();
+    expect(parseFocus('physical_samples:')).toBeNull();
+    expect(parseFocus('a:b:c')).toBeNull();
+  });
+});
+
+describe('loadFamily', () => {
+  it('chunks 320 family ids into 3 operation requests of <=150', async () => {
+    const ids = Array.from({ length: 319 }, (_, i) => `d${i}`);
+    const t = trace({ descendants: ids.map((id) => relative(id)) });
+    const { api, calls } = fakeApi(emptyLists(t));
+    await loadFamily(api, 'root');
+
+    const ops = calls.filter((c) => c.path === '/items/manufacturing_operations');
+    expect(ops).toHaveLength(3);
+    const sizes = ops.map((c) => filterOf(c)._or[0].sample_id._in.length);
+    expect(sizes.every((n) => n <= 150)).toBe(true);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(320);
+    expect(calls.filter((c) => c.path === '/items/test_sessions')).toHaveLength(3);
+  });
+
+  it('asks for ops by sample_id OR output_sample_id', async () => {
+    const { api, calls } = fakeApi(emptyLists(trace({ ancestors: [relative('p1')] })));
+    await loadFamily(api, 'root');
+    const call = calls.find((c) => c.path === '/items/manufacturing_operations')!;
+    const f = filterOf(call);
+    expect(f._or[0]).toEqual({ sample_id: { _in: ['root', 'p1'] } });
+    expect(f._or[1]).toEqual({ output_sample_id: { _in: ['root', 'p1'] } });
+    expect(call.params.limit).toBe(-1);
+    expect(call.params.fields).toContain('sintering_batch_number');
+    // slice 2 adds batch_id; asking for it now would refuse the whole read
+    expect(call.params.fields).not.toContain('batch_id');
+  });
+
+  it('asks for tests through the subject junction of physical samples', async () => {
+    const { api, calls } = fakeApi(emptyLists(trace()));
+    await loadFamily(api, 'root');
+    const call = calls.find((c) => c.path === '/items/test_sessions')!;
+    expect(filterOf(call)).toEqual({
+      subject: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: ['root'] } }] } },
+    });
+  });
+
+  it('maps trace hidden booleans and numbers to booleans', async () => {
+    const t = trace({ hidden: { stock_origins: 2, ancestors: true, events: 0, descendants: false } });
+    const { api } = fakeApi(emptyLists(t));
+    const data = await loadFamily(api, 'root');
+    expect(data.hidden).toEqual({ stock: true, ancestors: true, events: false, descendants: false });
+  });
+
+  it('truncated when any trace list is truncated', async () => {
+    const a = await loadFamily(fakeApi(emptyLists(trace({ truncated: { events: false, ancestors: false } }))).api, 'root');
+    expect(a.truncated).toBe(false);
+    const b = await loadFamily(fakeApi(emptyLists(trace({ truncated: { events: false, descendants: true } }))).api, 'root');
+    expect(b.truncated).toBe(true);
+  });
+
+  it('a 404 from d1-trace rejects with isNotVisible(err) true', async () => {
+    const { api } = fakeApi((path) => (path.startsWith('/d1-trace/') ? httpError(404) : { data: [] }));
+    const err = await loadFamily(api, 'root').then(
+      () => null,
+      (e) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(isNotVisible(err)).toBe(true);
+  });
+
+  it('builds the focus, stock origins and lineage among family ids only', async () => {
+    const t = trace({
+      ancestors: [relative('p1')],
+      stock_origins: [
+        {
+          lot_id: 'L1',
+          lot_code: 'LOT-1',
+          stock_type: 'powder',
+          supplier_name: 'Acme',
+          mass_used_grams: 12.5,
+          via_sample_id: 'p1',
+          via_sample_code: 'P1',
+          depth: 1,
+          through_hidden: false,
+        },
+      ],
+    });
+    const { api, calls } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return t;
+      if (path === '/items/sample_genealogy') {
+        return {
+          data: [
+            { child_sample_id: 'root', parent_sample_id: 'p1', relationship_type: 'cut_from', fraction: '0.5' },
+            { child_sample_id: 'root', parent_sample_id: 'outsider', relationship_type: 'derived_from', fraction: null },
+          ],
+        };
+      }
+      return { data: [], meta: { filter_count: 0 } };
+    });
+    const data = await loadFamily(api, 'root');
+    expect(data.focus).toEqual({ collection: 'physical_samples', id: 'root', code: 'S-ROOT', kind: 'sample' });
+    expect(data.lineage).toEqual([{ parentId: 'p1', childId: 'root', type: 'cut_from', fraction: 0.5 }]);
+    expect(data.stock).toEqual([{ lotId: 'L1', lotCode: 'LOT-1', supplier: 'Acme', massUsedGrams: 12.5, sampleId: 'p1' }]);
+    // stock comes from the trace, not from sample_stock_provenance
+    expect(calls.some((c) => c.path === '/items/sample_stock_provenance')).toBe(false);
+  });
+
+  it('maps a sample record, falling back to the trace when the sample read is refused', async () => {
+    const t = trace({ ancestors: [relative('p1')] });
+    const ok = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return t;
+      if (path === '/items/physical_samples') {
+        return {
+          data: [
+            {
+              sample_id: 'root',
+              sample_code: 'S-ROOT',
+              form: 'disc',
+              current_status: 'active',
+              mass_grams: '12.5',
+              diameter_mm: 20,
+              project_id: { project_id: 'p9', project_code: 'PRJ', project_name: 'Project' },
+              material_id: { material_id: 'm1', common_name: 'Ti-6Al-4V', alloy_code: 'Ti64' },
+            },
+          ],
+        };
+      }
+      return { data: [] };
+    });
+    const withRead = await loadFamily(ok.api, 'root');
+    const root = withRead.samples.find((s) => s.id === 'root')!;
+    expect(root).toMatchObject({ code: 'S-ROOT', form: 'disc', status: 'active', projectId: 'p9' });
+    expect(root.materialRef).toEqual({ collection: 'materials', id: 'm1', code: 'Ti64', label: 'Ti-6Al-4V' });
+    expect(root.facts).toEqual({ Mass: '12.5 g', Diameter: '20 mm' });
+    // a family member the read did not return is still a card, from the trace
+    expect(withRead.samples.find((s) => s.id === 'p1')).toMatchObject({ code: 'P1' });
+
+    const refused = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return t;
+      if (path === '/items/physical_samples') return httpError(403);
+      return { data: [] };
+    });
+    const fallback = await loadFamily(refused.api, 'root');
+    expect(fallback.samples.map((s) => s.id).sort()).toEqual(['p1', 'root']);
+  });
+
+  it('maps an operation row: refs, recipe key, powder batch, force file, settings', async () => {
+    const { api } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/manufacturing_operations') {
+        return {
+          data: [
+            {
+              operation_id: 'o1',
+              pass_code: 'MF-1',
+              operation_sequence: 3,
+              operation_date: '2026-01-02T00:00:00Z',
+              process_category: 'sintering',
+              sample_id: 'root',
+              output_sample_id: 'out',
+              source_run_uid: 'u1',
+              sintering_batch_number: 'TIMET 45-150',
+              force_file_id: 'C:\\force\\run7.mat',
+              sintering_max_temp_celsius: 1200,
+              sintering_max_force_kn: null,
+              method_id: { method_id: 'm1', method_name: 'FAST' },
+              equipment_id: { equipment_id: 'e1', equipment_code: 'FAST25', equipment_name: 'FAST 25' },
+              fast_recipe_id: { id: 'fr1', name: 'Recipe A' },
+              source_recipe_id: null,
+              project_id: { project_id: 'p1', project_code: 'PRJ', project_name: 'Project' },
+              tool_id: null,
+            },
+          ],
+        };
+      }
+      return { data: [] };
+    });
+    const [op] = (await loadFamily(api, 'root')).operations;
+    expect(op).toMatchObject({
+      id: 'o1',
+      code: 'MF-1',
+      methodId: 'm1',
+      methodName: 'FAST',
+      category: 'sintering',
+      date: '2026-01-02T00:00:00Z',
+      sequence: 3,
+      status: null,
+      sampleId: 'root',
+      outputSampleId: 'out',
+      equipmentId: 'e1',
+      recipeKey: 'fr1',
+      batchId: null,
+      sourceRunUid: 'u1',
+      powderBatch: 'TIMET 45-150',
+      projectId: 'p1',
+    });
+    expect(op.relations.equipment_id).toEqual({ collection: 'equipment', id: 'e1', code: 'FAST25', label: 'FAST 25' });
+    expect(op.relations.fast_recipe_id).toMatchObject({ collection: 'fast_recipes', id: 'fr1', code: 'Recipe A' });
+    expect(op.relations.force_file_id).toEqual({ collection: 'force_file', id: 'C:\\force\\run7.mat', code: 'run7.mat' });
+    expect(op.relations.tool_id).toBeNull();
+    // null settings are dropped
+    expect(op.settings).toEqual({ sintering_max_temp_celsius: 1200 });
+  });
+
+  it('recipeKey falls back to the prep recipe, then to nothing', async () => {
+    const { api } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/manufacturing_operations') {
+        return {
+          data: [
+            { operation_id: 'a', process_category: 'sample_prep', source_recipe_id: { recipe_id: 'pr1', name: 'Polish' } },
+            { operation_id: 'b', process_category: 'machining' },
+          ],
+        };
+      }
+      return { data: [] };
+    });
+    const ops = (await loadFamily(api, 'root')).operations;
+    expect(ops.find((o) => o.id === 'a')!.recipeKey).toBe('pr1');
+    expect(ops.find((o) => o.id === 'b')!.recipeKey).toBeNull();
+    expect(ops.find((o) => o.id === 'b')!.relations.force_file_id).toBeNull();
+  });
+
+  it('maps a test row: subjects from the junction (physical samples only) and data file', async () => {
+    const { api } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/test_sessions') {
+        return {
+          data: [
+            {
+              session_id: 't1',
+              sample_id: 'root',
+              test_type: 'tensile',
+              test_category: 'destructive',
+              session_date: '2026-02-01',
+              status: 'complete',
+              subject: [
+                { collection: 'physical_samples', item: 'root' },
+                { collection: 'insert_edges', item: 'ie1' },
+              ],
+              session_data_files: [{ directus_files_id: { id: 'f1', title: null, filename_download: 'curve.csv' } }],
+              equipment_id: { equipment_id: 'e9', equipment_code: 'INS', equipment_name: 'Instron' },
+              tensile_uts_mpa: 900,
+            },
+          ],
+        };
+      }
+      return { data: [] };
+    });
+    const [test] = (await loadFamily(api, 'root')).tests;
+    expect(test).toMatchObject({
+      id: 't1',
+      testType: 'tensile',
+      category: 'destructive',
+      subjectSampleIds: ['root'],
+      equipmentId: 'e9',
+      status: 'complete',
+      batchId: null,
+      settings: { tensile_uts_mpa: 900 },
+    });
+    expect(test.relations.session_data_files).toEqual({ collection: 'directus_files', id: 'f1', code: 'curve.csv' });
+  });
+
+  it('falls back to the primary sample when the subject junction cannot be filtered', async () => {
+    const { api, calls } = fakeApi((path, params) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/test_sessions') {
+        if (String(params.filter).includes('subject')) return httpError(403);
+        return { data: [{ session_id: 't1', sample_id: 'root', test_category: 'nde' }] };
+      }
+      return { data: [] };
+    });
+    const data = await loadFamily(api, 'root');
+    expect(data.tests[0].subjectSampleIds).toEqual(['root']);
+    const retry = calls.filter((c) => c.path === '/items/test_sessions').at(-1)!;
+    expect(filterOf(retry)).toEqual({ sample_id: { _in: ['root'] } });
+    expect(retry.params.fields).not.toContain('subject.item');
+  });
+
+  it('merges one operation seen in two chunks once', async () => {
+    const t = trace({ descendants: Array.from({ length: 200 }, (_, i) => relative(`d${i}`)) });
+    const { api } = fakeApi((path) => {
+      if (path.startsWith('/d1-trace/')) return t;
+      if (path === '/items/manufacturing_operations') {
+        return { data: [{ operation_id: 'same', method_id: { method_id: 'm', method_name: 'M' }, process_category: 'machining' }] };
+      }
+      return { data: [] };
+    });
+    expect((await loadFamily(api, 'root')).operations).toHaveLength(1);
+  });
+});
+
+describe('loadRelationDefs', () => {
+  it('derives defs from relations and fields, skipping hidden fields and relations from other collections', async () => {
+    const { api } = fakeApi((path) => {
+      if (path === '/relations/manufacturing_operations') {
+        return {
+          data: [
+            { collection: 'manufacturing_operations', field: 'tool_id', related_collection: 'tools', meta: { many_collection: 'manufacturing_operations', many_field: 'tool_id', one_collection: 'tools' } },
+            { collection: 'manufacturing_operations', field: 'sample_id', related_collection: 'physical_samples', meta: { many_collection: 'manufacturing_operations', many_field: 'sample_id', one_collection: 'physical_samples' } },
+            { collection: 'manufacturing_operations', field: 'secret_id', related_collection: 'people', meta: { many_collection: 'manufacturing_operations', many_field: 'secret_id', one_collection: 'people' } },
+            // someone else's m2o pointing at operations: not a relation of the form
+            { collection: 'machining_force_analysis', field: 'operation_id', related_collection: 'manufacturing_operations', meta: { many_collection: 'machining_force_analysis', many_field: 'operation_id', one_collection: 'manufacturing_operations', one_field: 'force_analyses' } },
+          ],
+        };
+      }
+      if (path === '/fields/manufacturing_operations') {
+        return {
+          data: [
+            { field: 'tool_id', meta: { sort: 2, hidden: false, translations: [{ language: 'en-GB', translation: 'Cutting tool' }] } },
+            { field: 'sample_id', meta: { sort: 1, hidden: false } },
+            { field: 'secret_id', meta: { sort: 3, hidden: true } },
+            { field: 'force_analyses', meta: { sort: 9, hidden: false } },
+          ],
+        };
+      }
+      return { data: [] };
+    });
+    const defs = await loadRelationDefs(api, 'manufacturing_operations');
+    expect(defs).toEqual([
+      { field: 'sample_id', label: 'Sample', collection: 'physical_samples' },
+      { field: 'tool_id', label: 'Cutting tool', collection: 'tools' },
+    ]);
+  });
+
+  it('resolves a files alias through its junction', async () => {
+    const { api } = fakeApi((path) => {
+      if (path === '/relations/test_sessions') {
+        return {
+          data: [
+            { collection: 'session_data_files', field: 'session_id', related_collection: 'test_sessions', meta: { many_collection: 'session_data_files', many_field: 'session_id', one_collection: 'test_sessions', one_field: 'session_data_files', junction_field: 'directus_files_id' } },
+          ],
+        };
+      }
+      // the far leg of the junction is not a relation of test_sessions: it is read from the junction
+      if (path === '/relations/session_data_files') {
+        return {
+          data: [
+            { collection: 'session_data_files', field: 'directus_files_id', related_collection: 'directus_files', meta: { many_collection: 'session_data_files', many_field: 'directus_files_id', one_collection: 'directus_files' } },
+          ],
+        };
+      }
+      if (path === '/fields/test_sessions') return { data: [{ field: 'session_data_files', meta: { hidden: false, sort: 1 } }] };
+      return { data: [] };
+    });
+    expect(await loadRelationDefs(api, 'test_sessions')).toEqual([
+      { field: 'session_data_files', label: 'Session data files', collection: 'directus_files' },
+    ]);
+  });
+
+  it('fields refused -> null (the caller uses FALLBACK_RELATIONS)', async () => {
+    const { api } = fakeApi((path) => (path.startsWith('/fields/') ? httpError(403) : { data: [] }));
+    expect(await loadRelationDefs(api, 'manufacturing_operations')).toBeNull();
+  });
+
+  it('relations refused -> null', async () => {
+    const { api } = fakeApi((path) => (path.startsWith('/relations/') ? httpError(403) : { data: [] }));
+    expect(await loadRelationDefs(api, 'test_sessions')).toBeNull();
+  });
+});
+
+describe('loadUsedIn', () => {
+  it('tool -> filter tool_id, limit 20, total from meta.filter_count', async () => {
+    const { api, calls } = fakeApi((path) => {
+      if (path === '/items/manufacturing_operations') {
+        return {
+          data: [{ operation_id: 'o1', pass_code: 'MC-1', process_category: 'machining', method_id: { method_id: 'm', method_name: 'Mill' } }],
+          meta: { filter_count: 57 },
+        };
+      }
+      return { data: [] };
+    });
+    const res = await loadUsedIn(api, { collection: 'tools', id: 'tool1' }, 1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe('/items/manufacturing_operations');
+    expect(filterOf(calls[0])).toEqual({ tool_id: { _eq: 'tool1' } });
+    expect(calls[0].params).toMatchObject({ limit: 20, page: 1, meta: 'filter_count' });
+    expect(calls[0].params.sort).toEqual(['-operation_date']);
+    expect(res.total).toBe(57);
+    expect((res.items as { id: string }[]).map((o) => o.id)).toEqual(['o1']);
+  });
+
+  it('uses the page for the offset', async () => {
+    const { api, calls } = fakeApi(() => ({ data: [], meta: { filter_count: 0 } }));
+    await loadUsedIn(api, { collection: 'fast_recipes', id: 'r1' }, 3);
+    expect(calls[0].params.page).toBe(3);
+    expect(filterOf(calls[0])).toEqual({ fast_recipe_id: { _eq: 'r1' } });
+  });
+
+  it('equipment and insert edges also list tests', async () => {
+    const { api, calls } = fakeApi((path) => {
+      if (path === '/items/test_sessions') return { data: [{ session_id: 't1' }], meta: { filter_count: 4 } };
+      return { data: [{ operation_id: 'o1', process_category: 'machining' }], meta: { filter_count: 9 } };
+    });
+    const res = await loadUsedIn(api, { collection: 'insert_edges', id: 'e1' }, 1);
+    expect(calls.map((c) => c.path).sort()).toEqual(['/items/manufacturing_operations', '/items/test_sessions']);
+    expect(filterOf(calls.find((c) => c.path === '/items/test_sessions')!)).toEqual({ insert_edge_id: { _eq: 'e1' } });
+    expect(res.total).toBe(9);
+    expect(res.tests?.map((t) => t.id)).toEqual(['t1']);
+    expect(res.testsTotal).toBe(4);
+  });
+
+  it('material / project / campaign -> samples', async () => {
+    const { api, calls } = fakeApi(() => ({ data: [{ sample_id: 's1', sample_code: 'S1' }], meta: { filter_count: 1 } }));
+    await loadUsedIn(api, { collection: 'materials', id: 'm1' }, 1);
+    await loadUsedIn(api, { collection: 'projects', id: 'p1' }, 1);
+    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
+    expect(calls.map((c) => c.path)).toEqual(['/items/physical_samples', '/items/physical_samples', '/items/physical_samples']);
+    expect(filterOf(calls[0])).toEqual({ material_id: { _eq: 'm1' } });
+    expect(filterOf(calls[1])).toEqual({ project_id: { _eq: 'p1' } });
+    expect(filterOf(calls[2])).toEqual({ campaigns: { _some: { campaign_id: { _eq: 'c1' } } } });
+    expect((res.items as { id: string; code: string }[])[0]).toMatchObject({ id: 's1', code: 'S1' });
+  });
+
+  it('stock lot -> samples through sample_stock_provenance, then their making operations', async () => {
+    const { api, calls } = fakeApi((path) => {
+      if (path === '/items/sample_stock_provenance') {
+        return { data: [{ sample_id: 's1' }, { sample_id: 's2' }], meta: { filter_count: 31 } };
+      }
+      return { data: [{ operation_id: 'o9', process_category: 'sintering', output_sample_id: 's1' }] };
+    });
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 2);
+    expect(calls[0].path).toBe('/items/sample_stock_provenance');
+    expect(filterOf(calls[0])).toEqual({ lot_id: { _eq: 'L1' } });
+    expect(calls[0].params).toMatchObject({ limit: 20, page: 2, meta: 'filter_count' });
+    expect(calls[1].path).toBe('/items/manufacturing_operations');
+    expect(filterOf(calls[1])).toEqual({ output_sample_id: { _in: ['s1', 's2'] } });
+    expect(res.total).toBe(31);
+    expect((res.items as { id: string }[]).map((o) => o.id)).toEqual(['o9']);
+  });
+
+  it('a lot with no samples on the page makes no operations request', async () => {
+    const { api, calls } = fakeApi(() => ({ data: [], meta: { filter_count: 0 } }));
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(calls).toHaveLength(1);
+    expect(res).toMatchObject({ items: [], total: 0 });
+  });
+
+  it('rejects a collection with no fan', async () => {
+    const { api } = fakeApi(() => ({ data: [] }));
+    await expect(loadUsedIn(api, { collection: 'people', id: 'x' }, 1)).rejects.toThrow(/used-in/);
+  });
+});
