@@ -93,11 +93,29 @@ export function useMapCanvas(map: ProcessMap) {
     vf.applyNodeChanges(vf.getNodes.value.map((n) => ({ id: n.id, type: 'select' as const, selected: n.id === id })));
   }
 
+  /**
+   * While a card or slot is hovered the nodes and wires that are not next to it dim, and its own wires
+   * are highlighted (spec §6.3); hovering a wire or a socket only highlights wires. Classes on Vue Flow's
+   * own wrappers (mapTokens.css), written only where they change.
+   */
+  function applyFocus(): void {
+    const f = map.focusOfHover.value;
+    for (const n of vf.getNodes.value) {
+      const cls = f?.dim && !f.nodes.has(n.id) ? 'dim' : undefined;
+      if (n.class !== cls) n.class = cls;
+    }
+    for (const e of vf.getEdges.value) {
+      const cls = f?.wires.has(e.id) ? 'hi' : f?.dim ? 'dim' : undefined;
+      if (e.class !== cls) e.class = cls;
+    }
+  }
+
   function rebuild(): void {
     const { nodes, edges } = elements();
     vf.setNodes(nodes);
     vf.setEdges(edges);
     syncSelection();
+    applyFocus();
   }
 
   // ---- layout -----------------------------------------------------------------------------------
@@ -209,6 +227,7 @@ export function useMapCanvas(map: ProcessMap) {
     if (map.nodes.value.length) void scheduleLayout();
   });
   watch(() => map.selectedId.value, syncSelection);
+  watch(() => map.focusOfHover.value, applyFocus);
   watch(
     () => map.centreRequest.value,
     (req) => {

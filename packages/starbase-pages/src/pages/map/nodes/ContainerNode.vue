@@ -4,9 +4,10 @@ import { Handle } from '@vue-flow/core';
 import { StatusBadge } from '@d1/ui';
 import type { ContainerNode, SampleRow } from '../model/types';
 import { isBundleSocket } from '../model/sockets';
-import { cardHandlers, stopping, useMapActions, useMapView } from './actions';
+import { cardHandlers, socketHandlers, stopping, useHiddenSides, useMapActions, useMapView } from './actions';
 import { handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
+import HiddenPill from './HiddenPill.vue';
 import SlotRow from './SlotRow.vue';
 
 // An operation or a test as a container (spec D4, D5, D8, D9, D14): a tinted header, one sample row per
@@ -57,6 +58,8 @@ const open = computed(() => moreOpen.value.has(props.id));
 const moreText = computed(() => (open.value ? 'Show fewer' : `+${minors.value.length} more from the form`));
 
 const card = cardHandlers(actions, () => props.id);
+const sock = (id: string) => socketHandlers(actions, () => id);
+const hiddenSides = useHiddenSides(() => props.id);
 const refold = stopping(() => actions.toggleRows(props.id));
 const toggleMore = stopping(() => actions.toggleMore(props.id));
 const inPos = computed(() => handlePosition(direction.value, 'in'));
@@ -72,6 +75,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 		@mouseenter="card.enter"
 		@mouseleave="card.leave"
 	>
+		<HiddenPill v-for="side in hiddenSides" :key="side" :side="side" />
 		<div class="ohead">
 			<v-icon class="k-ink" :name="style.icon" small />
 			<span class="m">{{ data.title }}</span>
@@ -83,23 +87,23 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 		<div v-if="data.rows.length" class="iorows">
 			<div v-for="(r, i) in shown" :key="i" class="orow">
 				<span>
-					<Handle v-if="r.in" :id="r.in" class="sock row in" type="target" :position="inPos" :connectable="false" />
+					<Handle v-if="r.in" :id="r.in" class="sock row in" type="target" :position="inPos" :connectable="false" @mouseenter="sock(r.in).enter" @mouseleave="sock(r.in).leave" />
 					<template v-if="r.row.in">{{ r.label }}</template>
 				</span>
 				<span :class="{ pass: r.row.inPlace }"></span>
 				<span>
 					<template v-if="r.row.out">{{ r.label }}</template>
-					<Handle v-if="r.out" :id="r.out" class="sock row out" type="source" :position="outPos" :connectable="false" />
+					<Handle v-if="r.out" :id="r.out" class="sock row out" type="source" :position="outPos" :connectable="false" @mouseenter="sock(r.out).enter" @mouseleave="sock(r.out).leave" />
 				</span>
 			</div>
 			<div v-if="hidden.length" class="orow bundle nodrag nopan" role="button" tabindex="0" @click="refold" @keydown.enter="refold">
 				<span>
-					<Handle v-if="bundleIn" :id="bundleIn" class="sock row in fat" type="target" :position="inPos" :connectable="false" />
+					<Handle v-if="bundleIn" :id="bundleIn" class="sock row in fat" type="target" :position="inPos" :connectable="false" @mouseenter="sock(bundleIn).enter" @mouseleave="sock(bundleIn).leave" />
 					{{ `+${hidden.length} more samples` }}
 				</span>
 				<span></span>
 				<span>
-					<Handle v-if="bundleOut" :id="bundleOut" class="sock row out fat" type="source" :position="outPos" :connectable="false" />
+					<Handle v-if="bundleOut" :id="bundleOut" class="sock row out fat" type="source" :position="outPos" :connectable="false" @mouseenter="sock(bundleOut).enter" @mouseleave="sock(bundleOut).leave" />
 				</span>
 			</div>
 			<div v-if="canFold" class="orow fold nodrag nopan" role="button" tabindex="0" @click="refold" @keydown.enter="refold">

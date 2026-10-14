@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive } from 'vue';
 import type { HostApi } from '@d1/ui';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample } from './model/fixtures';
 import type { ContainerNode, ProcessData } from './model/types';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
-import { useProcessMap } from './useProcessMap';
+import { HOVER_DELAY_MS, useProcessMap } from './useProcessMap';
 
 vi.mock('./model/loadFamily', async (orig) => ({
   ...(await orig<typeof import('./model/loadFamily')>()),
@@ -357,9 +357,112 @@ describe('useProcessMap', () => {
 
     const wire = map.graph.value!.wires[0];
     map.hover(wire.id, { dataset: { tip: 'S2 · Sample\nfrom OP\ninto S-2' } } as unknown as HTMLElement);
-    expect(map.tooltip.value).toEqual({ id: wire.id, lines: ['S2 · Sample', 'from OP', 'into S-2'], el: expect.anything() });
+    expect(map.tooltip.value).toEqual({ id: wire.id, lines: ['S2 · Sample', 'from OP', 'into S-2'], el: expect.anything(), wire: true });
     map.hover(null);
     expect(map.tooltip.value).toBeNull();
+  });
+
+  it('hovering a socket lists the wires on it', async () => {
+    family.mockResolvedValue(small());
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    const wire = map.graph.value!.wires.find((w) => w.carries === 's2' || w.from.startsWith('s:s1'))!;
+    map.hover(wire.from, {} as HTMLElement);
+    expect(map.tooltip.value).toMatchObject({ id: wire.from, wire: false });
+    expect(map.tooltip.value!.lines.length).toBeGreaterThan(0);
+    expect(map.tooltip.value!.lines[0]).toMatch(/ · /);
+    // The rail's Connections highlight what the socket's wires touch, only while it is hovered.
+    expect(map.socketHighlight.value.has('s:s1')).toBe(true);
+    map.hover(null);
+    expect(map.tooltip.value).toBeNull();
+    expect(map.socketHighlight.value.size).toBe(0);
+    map.hover('s:s1', {} as HTMLElement); // a card is not a socket
+    expect(map.socketHighlight.value.size).toBe(0);
+  });
+
+  it('the rail reads the selected record: info, connections, whether it is a card', async () => {
+    family.mockResolvedValue(small());
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    expect(map.selectedInfo.value).toMatchObject({ kind: 'sample', code: 'S1' });
+    expect(map.connections.value['Went on to']).toHaveLength(1);
+    expect(map.connections.value['Went on to']![0]).toMatchObject({ collection: 'manufacturing_operations', id: 'o1', label: 'Cut' });
+    expect(map.selectedOnMap.value).toBe(true);
+    map.select('equipment:e1');
+    expect(map.selectedOnMap.value).toBe(false);
+  });
+
+  it('hovering a card dims the rest; hovering a wire only highlights it', async () => {
+    family.mockResolvedValue(small());
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    map.hover('s:s2', {} as HTMLElement);
+    expect(map.focusOfHover.value).toMatchObject({ dim: true });
+    map.hover(null);
+    expect(map.focusOfHover.value).toBeNull();
+    map.hover(map.graph.value!.wires[0].id, {} as HTMLElement);
+    expect(map.focusOfHover.value).toMatchObject({ dim: false });
+  });
+
+  it('hidden markers become the sides a node draws "some records hidden" on, even with no socket there', async () => {
+    const d = small();
+    d.hidden = { ancestors: true, descendants: false, events: false, stock: false };
+    family.mockResolvedValue(d);
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    const root = map.graph.value!.nodes.find((n) => n.id === 's:s1')!;
+    expect(root.type === 'record' && root.ins).toEqual([]); // a root sample has no input socket
+    expect([...(map.hiddenSides.value.get('s:s1') ?? [])]).toEqual(['in']);
+  });
+
+  describe('the hover card', () => {
+    beforeEach(() => void vi.useFakeTimers());
+    afterEach(() => void vi.useRealTimers());
+
+    it('opens after 250 ms on a card with an element, not before, and closes when the pointer leaves', async () => {
+      family.mockResolvedValue(small());
+      const { map } = setup({ focus: 'physical_samples:s1' });
+      await vi.advanceTimersByTimeAsync(10);
+      const el = {} as HTMLElement;
+      map.hover('s:s1', el);
+      await vi.advanceTimersByTimeAsync(HOVER_DELAY_MS - 1);
+      expect(map.card.value).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(map.card.value).toMatchObject({ id: 's:s1', el, info: { kind: 'sample', code: 'S1' } });
+      map.hover(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(map.card.value).toBeNull();
+    });
+
+    it('moving to another card restarts the wait; a wire, a socket or an unknown id never opens one', async () => {
+      family.mockResolvedValue(small());
+      const { map } = setup({ focus: 'physical_samples:s1' });
+      await vi.advanceTimersByTimeAsync(10);
+      map.hover('s:s1', {} as HTMLElement);
+      await vi.advanceTimersByTimeAsync(200);
+      map.hover(null);
+      map.hover('s:s2', {} as HTMLElement);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(map.card.value).toBeNull();
+      await vi.advanceTimersByTimeAsync(60);
+      expect(map.card.value?.id).toBe('s:s2');
+      map.hover(null);
+      for (const id of [map.graph.value!.wires[0].id, map.graph.value!.wires[0].from, 'nope']) {
+        map.hover(id, {} as HTMLElement);
+        await vi.advanceTimersByTimeAsync(HOVER_DELAY_MS + 10);
+        expect(map.card.value).toBeNull();
+        map.hover(null);
+      }
+    });
+
+    it('a hover without an element (the rail row of a card that is not drawn) opens no card', async () => {
+      family.mockResolvedValue(small());
+      const { map } = setup({ focus: 'physical_samples:s1' });
+      await vi.advanceTimersByTimeAsync(10);
+      map.hover('s:s1');
+      await vi.advanceTimersByTimeAsync(HOVER_DELAY_MS + 10);
+      expect(map.card.value).toBeNull();
+    });
   });
 
   it('toggleRows unfolds one container and moreOpen flips for toggleMore', async () => {

@@ -6,20 +6,26 @@
 import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { errorText, isNotVisible, useRequestGate, type HostApi } from '@d1/ui';
 import { buildGraph } from './model/buildGraph';
+import { connectionsOf, type Connections } from './model/connections';
 import { FALLBACK_RELATIONS, formSlots, type RelationDef } from './model/formSlots';
 import { groupBatches } from './model/groupBatches';
+import { hoverFocus, socketSubjects, type HoverFocus } from './model/hoverFocus';
 import { createHoverStack, type Hovered } from './model/hoverStack';
 import { loadFamily, loadRelationDefs, parseFocus } from './model/loadFamily';
 import { shownNodes } from './model/reach';
+import { recordInfo, type RecordInfo } from './model/recordInfo';
 import type { ContainerNode, MapNode, ProcessData, ProcessGraph, Ref } from './model/types';
 import { KINDS, kindOfCollection } from './nodes/kinds';
 import { refKey } from './nodes/actions';
+import { socketTooltip } from './nodes/wireTooltip';
 import type { Dir } from './model/elkInput';
 
 export type MapStatus = 'empty' | 'loading' | 'ready' | 'notVisible' | 'error';
 export type Reach = 1 | 2 | 3 | 'all';
 
 const DEFAULT_REACH: Reach = 2;
+/** How long the pointer rests on a card before its hover card opens (spec 6.6). */
+export const HOVER_DELAY_MS = 250;
 /** Soft cap on the cards the map draws (spec D22). */
 export const CARD_CAP = 300;
 /** localStorage key of the Show chips (spec D25). */
@@ -126,7 +132,13 @@ const slotKind = (collection: string): string | null => kindOfCollection(collect
 
 export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) {
   const gate = useRequestGate();
-  if (getCurrentInstance()) onBeforeUnmount(() => gate.cancel());
+  let cardTimer: ReturnType<typeof setTimeout> | null = null;
+  if (getCurrentInstance()) {
+    onBeforeUnmount(() => {
+      gate.cancel();
+      if (cardTimer) clearTimeout(cardTimer);
+    });
+  }
 
   // ---- the address (spec D25) -------------------------------------------------------------------
   const focus = computed(() => parseFocus(first(route.query.focus)) ?? (first(route.query.sample) ? { collection: 'physical_samples', id: first(route.query.sample)! } : null));
@@ -381,12 +393,69 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const toggleRows = (id: string) => void (unfolded.value = flip(unfolded.value, id));
   const toggleMore = (id: string) => void (moreOpen.value = flip(moreOpen.value, id));
 
-  /** The hover tooltip of a wire (spec D17): its lines are on the hovered hit path as `data-tip`. */
+  /**
+   * The hover tooltip (spec D17). A wire: its lines are on the hovered hit path as `data-tip`. A socket:
+   * one line per wire on it.
+   */
   const tooltip = computed(() => {
     const h = hovered.value;
-    if (!h || !graph.value?.wires.some((w) => w.id === h.id)) return null;
-    const tip = h.el?.dataset?.tip;
-    return tip ? { id: h.id, lines: tip.split('\n'), el: h.el } : null;
+    const g = graph.value;
+    if (!h || !g) return null;
+    if (g.wires.some((w) => w.id === h.id)) {
+      const tip = h.el?.dataset?.tip;
+      return tip ? { id: h.id, lines: tip.split('\n'), el: h.el, wire: true } : null;
+    }
+    if (!nodeById.value.has(h.id) && /:(?:in|out):[^:]+$/.test(h.id)) {
+      const drawn = new Map(nodes.value.map((n) => [n.id, n]));
+      return { id: h.id, lines: socketTooltip(h.id, g.wires, drawn), el: h.el, wire: false };
+    }
+    return null;
+  });
+
+  // ---- what the rail and the hover card say --------------------------------------------------------
+  /** What a record (a node id, or a record inside a card) is: facts, counts, data to ask about. Null when the map does not know it. */
+  const info = (id: string): RecordInfo | null => (data.value && graph.value ? recordInfo(data.value, graph.value, id) : null);
+  const selectedInfo = computed(() => (selectedId.value ? info(selectedId.value) : null));
+  /** The selected record's connections, grouped for the rail. */
+  const connections = computed<Connections>(() => (graph.value && selectedId.value ? connectionsOf(graph.value, selectedId.value) : {}));
+  /** Is the selected record a card on the map (Expand and Centre act on cards). */
+  const selectedOnMap = computed(() => !!selectedId.value && shown.value.has(selectedId.value));
+
+  /** What the pointer's target lights up: its wires, and everything else dimmed (spec §6.3). */
+  const focusOfHover = computed<HoverFocus | null>(() => (graph.value ? hoverFocus(graph.value, hovered.value?.id ?? null) : null));
+
+  /** While a socket is hovered: the node ids its wires touch, which the rail's Connections highlight (spec D17). */
+  const socketHighlight = computed<ReadonlySet<string>>(() => {
+    const id = hovered.value?.id;
+    const g = graph.value;
+    return id && g && !nodeById.value.has(id) && /:(?:in|out):[^:]+$/.test(id) ? socketSubjects(g, id) : new Set<string>();
+  });
+
+  /** Nodes with records the person may not read on a side (spec D21): they draw "some records hidden" there. */
+  const hiddenSides = computed(() => {
+    const out = new Map<string, Set<'in' | 'out'>>();
+    for (const m of graph.value?.hidden ?? []) {
+      const sides = out.get(m.nodeId) ?? new Set<'in' | 'out'>();
+      sides.add(m.side);
+      out.set(m.nodeId, sides);
+    }
+    return out as ReadonlyMap<string, ReadonlySet<'in' | 'out'>>;
+  });
+
+  /** The hover card (spec D16): the hovered card or slot, once the pointer has rested on it for 250 ms. */
+  const card = shallowRef<{ id: string; el: HTMLElement; info: RecordInfo } | null>(null);
+  watch(hovered, (h) => {
+    if (cardTimer) clearTimeout(cardTimer);
+    cardTimer = null;
+    card.value = null;
+    if (!h?.el) return;
+    const resting = h;
+    cardTimer = setTimeout(() => {
+      cardTimer = null;
+      const now = hovered.value;
+      const found = now && now.id === resting.id && now.el ? info(now.id) : null;
+      if (found && now?.el) card.value = { id: now.id, el: now.el, info: found };
+    }, HOVER_DELAY_MS);
   });
 
   return {
@@ -425,6 +494,14 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     clearHover,
     hovered,
     tooltip,
+    info,
+    selectedInfo,
+    connections,
+    selectedOnMap,
+    focusOfHover,
+    socketHighlight,
+    hiddenSides,
+    card,
     reload: load,
   };
 }

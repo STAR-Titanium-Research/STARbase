@@ -3,15 +3,18 @@
 //
 // - MAP_ACTIONS: the calls. Ids passed to select/expand/hover are node ids (`s:<id>`, a container's
 //   group id, `j:...`), a slot's record key (refKey(slot.ref), `<collection>:<id>`), or a wire id
-//   (`<from>><to>`, only from WireEdge's hover); the three namespaces do not collide.
+//   (`<from>><to>`, only from WireEdge's hover) or a socket id (`<nodeId>:in:<i>`, from a socket's
+//   hover); the namespaces do not collide.
 // - MAP_VIEW: the page's view state the components draw from. `direction` is how the page lays out
 //   (handles go Left/Right for RIGHT, Top/Bottom for DOWN; in a container the dots stay inside their
 //   row and only the Position, i.e. the way the wire leaves, changes). `moreOpen` holds the container
 //   ids whose "+N more from the form" is open (the page flips it in toggleMore). `selectedRef` is the
 //   refKey of the record selected in the rail, so an Inside slot can show it as focal.
-//   A missing provide falls back to RIGHT / nothing open / nothing selected.
+//   `hiddenSides` is which side of a node has records the person may not read (spec D21), from the
+//   graph's hidden markers; a node draws the "some records hidden" pill there.
+//   A missing provide falls back to RIGHT / nothing open / nothing selected / nothing hidden.
 
-import { inject, ref, type InjectionKey, type Ref } from 'vue';
+import { computed, inject, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue';
 import type { Dir } from '../model/elkInput';
 import type { Ref as RecordRef } from '../model/types';
 
@@ -27,6 +30,7 @@ export interface MapView {
 	direction: Ref<Dir>;
 	moreOpen: Ref<ReadonlySet<string>>;
 	selectedRef: Ref<string | null>;
+	hiddenSides?: Ref<ReadonlyMap<string, ReadonlySet<'in' | 'out'>>>;
 }
 
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');
@@ -41,6 +45,12 @@ export const useMapActions = (): MapActions => inject(MAP_ACTIONS, NOOP);
 
 export function useMapView(): MapView {
 	return inject(MAP_VIEW, () => ({ direction: ref<Dir>('RIGHT'), moreOpen: ref<ReadonlySet<string>>(new Set()), selectedRef: ref<string | null>(null) }), true);
+}
+
+/** The sides of node `id` that have records the person may not read. */
+export function useHiddenSides(id: () => string): ComputedRef<('in' | 'out')[]> {
+	const view = useMapView();
+	return computed(() => [...(view.hiddenSides?.value.get(id()) ?? [])]);
 }
 
 // ---- event handlers ------------------------------------------------------------------------------
@@ -81,4 +91,10 @@ export const wireHandlers = (a: MapActions, wire: () => { id: string; origin: st
 		e.stopPropagation();
 		a.select(wire().origin, { centre: true });
 	},
+});
+
+/** A socket (Handle): hover reports it, so the page can list the wires on it. */
+export const socketHandlers = (a: MapActions, socket: () => string) => ({
+	enter: (e: Pick<Ev, 'currentTarget'>) => a.hover(socket(), e.currentTarget as HTMLElement),
+	leave: () => a.hover(null),
 });

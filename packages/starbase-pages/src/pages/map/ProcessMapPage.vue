@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import ExplorerView from '../../ExplorerView.vue';
-import { computed, onBeforeUnmount, provide, ref } from 'vue';
+import { computed, onBeforeUnmount, provide, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { VueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
@@ -9,18 +9,20 @@ import { MiniMap } from '@vue-flow/minimap';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
-import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, RecordRail, Section, SegmentedControl, indexRoute, recordRoute, useExplorerHost } from '@d1/ui';
+import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, useExplorerHost } from '@d1/ui';
 import type { Dir } from './model/elkInput';
-import { MAP_ACTIONS, MAP_VIEW, type MapActions, type MapView } from './nodes/actions';
-import { KINDS } from './nodes/kinds';
+import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
+import HoverCard from './HoverCard.vue';
+import MapRail from './MapRail.vue';
+import WireTip from './WireTip.vue';
 import { miniMapColor, useMapCanvas } from './useMapCanvas';
-import { useProcessMap } from './useProcessMap';
+import { useDataPreviews } from './useDataPreviews';
+import { useProcessMap, type Reach } from './useProcessMap';
 
 // The Process map (spec D1-D3, §6.1): a record's family as a map of what was done to it. The page frame,
 // the crumb line, the rail (left, 300 px) and the map panel. The state is useProcessMap's, the drawing
-// is useMapCanvas's; this file puts them together. The rail here is a placeholder (selected record and
-// "Open record"): the full rail, hover card and wire tooltip read `map.selected`, `map.hovered` and
-// `map.tooltip` and arrive with Task 8.
+// is useMapCanvas's; this file puts them together: the rail (MapRail), the hover card (HoverCard, after
+// a 250 ms rest), the wire and socket tooltip (WireTip) and the data previews they show.
 const host = useExplorerHost();
 const route = useRoute();
 const router = useRouter();
@@ -42,7 +44,7 @@ const actions: MapActions = {
 		void canvas.remeasure(id).then(() => canvas.relayout());
 	},
 };
-const view: MapView = { direction: map.dir, moreOpen: map.moreOpen, selectedRef: map.selectedRefKey };
+const view: MapView = { direction: map.dir, moreOpen: map.moreOpen, selectedRef: map.selectedRefKey, hiddenSides: map.hiddenSides };
 provide(MAP_ACTIONS, actions);
 provide(MAP_VIEW, view);
 
@@ -66,9 +68,47 @@ const frameStyle = computed(() => {
 	return f ? { left: `${f.x}px`, top: `${f.y}px`, width: `${f.width}px`, height: `${f.height}px` } : null;
 });
 
-const selectedKind = computed(() => {
-	const k = map.selected.value?.kind;
-	return k && k in KINDS ? KINDS[k as keyof typeof KINDS].label : 'Record';
+// ---- the rail, the hover card and the data they show -----------------------------------------------
+const canvasEl = ref<HTMLElement | null>(null);
+
+// Data previews (the Fz figure, FAST run data) are read once when a family arrives, for all its
+// operations, so hovering and selecting only look the answer up (no request per hover).
+const dataPreviews = useDataPreviews(host.api);
+watch(
+	() => map.data.value,
+	(d) => dataPreviews.load((d?.operations ?? []).map((o) => ({ collection: 'manufacturing_operations', id: o.id, code: o.code }))),
+	{ immediate: true },
+);
+const selectedPreview = computed(() => {
+	const of = map.selectedInfo.value?.dataOf;
+	return of ? dataPreviews.previews.value[of.id] : undefined;
+});
+const cardPreview = computed(() => {
+	const of = map.card.value?.info.dataOf;
+	return of ? dataPreviews.previews.value[of.id] : undefined;
+});
+
+/** The canvas element a rail row's record is drawn as: its card, or the card whose Inside tray holds it. */
+function elementFor(id: string): HTMLElement | undefined {
+	const owner = map.nodes.value.find((n) => n.id === id || (n.type === 'container' && n.slots.some((s) => [s.ref, ...(s.values ?? [])].some((r) => r && refKey(r) === id))));
+	if (!owner) return undefined;
+	return [...(canvasEl.value?.querySelectorAll<HTMLElement>('.vue-flow__node') ?? [])].find((el) => el.dataset.id === owner.id);
+}
+/** A row of the rail's Connections: hovering it shows that record's card on the canvas. */
+const railHover = (id: string | null) => (id === null ? map.hover(null) : map.hover(id, elementFor(id)));
+const railSelect = (id: string) => {
+	map.clearHover(); // the card of the row the pointer is on would stay behind where the map is about to move
+	map.select(id, { centre: true });
+};
+const railExpand = () => map.selectedId.value && actions.expand(map.selectedId.value);
+const railCentre = () => map.selectedId.value && map.select(map.selectedId.value, { centre: true });
+const setReach = (r: Reach) => map.setReach(r);
+
+// The wire tooltip's last line: where Ctrl/⌘+click goes.
+const tipHint = computed(() => {
+	const t = map.tooltip.value;
+	const from = t?.wire ? t.lines.find((l) => l.startsWith('from ')) : undefined;
+	return from ? `Ctrl/⌘+click to go to ${from.slice(5)}` : undefined;
 });
 
 const copied = ref(false);
@@ -122,11 +162,24 @@ onBeforeUnmount(() => {
 				</template>
 
 				<template #rail>
-					<RecordRail :kind="selectedKind" :code="map.selected.value?.ref.code ?? focusCode" :facts="[]">
-						<template #actions>
-							<v-button v-if="map.selected.value" small secondary :to="recordRoute(map.selected.value.ref.collection, map.selected.value.ref.id)">Open record</v-button>
-						</template>
-					</RecordRail>
+					<MapRail
+						:info="map.selectedInfo.value"
+						:preview="selectedPreview"
+						:on-map="map.selectedOnMap.value"
+						:connections="map.connections.value"
+						:highlight="map.socketHighlight.value"
+						:present-kinds="map.presentKinds.value"
+						:hidden-kinds="map.hiddenKinds.value"
+						:probable="map.probable.value"
+						:reach="map.reach.value"
+						@expand="railExpand"
+						@centre="railCentre"
+						@hover="railHover"
+						@select="railSelect"
+						@toggle-kind="map.toggleKind"
+						@set-probable="map.setProbable"
+						@set-reach="setReach"
+					/>
 				</template>
 
 				<Section class="pm-panel" title="Process map">
@@ -141,7 +194,7 @@ onBeforeUnmount(() => {
 					<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
 					<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
 
-					<div class="pm-canvas" :class="{ pending: !canvas.laidOut.value }" @mouseleave="map.clearHover()">
+					<div ref="canvasEl" class="pm-canvas" :class="{ pending: !canvas.laidOut.value }" @mouseleave="map.clearHover()">
 						<VueFlow
 							:node-types="canvas.nodeTypes"
 							:edge-types="canvas.edgeTypes"
@@ -162,6 +215,8 @@ onBeforeUnmount(() => {
 							<MiniMap pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
 							<Controls :show-interactive="false" />
 						</VueFlow>
+						<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
+						<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
 					</div>
 				</Section>
 			</RecordLayout>

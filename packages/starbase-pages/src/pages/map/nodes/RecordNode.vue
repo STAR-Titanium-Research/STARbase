@@ -3,8 +3,9 @@ import { computed } from 'vue';
 import { Handle } from '@vue-flow/core';
 import { StatusBadge } from '@d1/ui';
 import type { RecordNode } from '../model/types';
-import { cardHandlers, useMapActions, useMapView } from './actions';
+import { cardHandlers, socketHandlers, useHiddenSides, useMapActions, useMapView } from './actions';
 import { edgeStyle, handlePosition } from './handle';
+import HiddenPill from './HiddenPill.vue';
 import { KINDS, kindVar, statusKindOf } from './kinds';
 
 // A record as a card (spec §6.2): kind pill, status badge, ＋, code and one meta line. Sockets are
@@ -18,6 +19,8 @@ const style = computed(() => KINDS[props.data.kind]);
 // Stock flows (lots, powder batches, material) wire in the material colour, samples in the sample colour.
 const flow = computed(() => (['stock_lot', 'powder_batch', 'material'].includes(props.data.kind) ? 'var(--k-material)' : 'var(--k-sample)'));
 const card = cardHandlers(actions, () => props.id);
+const sock = (id: string) => socketHandlers(actions, () => id);
+const hiddenSides = useHiddenSides(() => props.id);
 </script>
 
 <template>
@@ -36,9 +39,12 @@ const card = cardHandlers(actions, () => props.id);
 			class="sock"
 			type="target"
 			:position="handlePosition(direction, 'in')"
+			@mouseenter="sock(s).enter"
+			@mouseleave="sock(s).leave"
 			:connectable="false"
 			:style="edgeStyle(direction, 'in', i, data.ins.length)"
 		/>
+		<HiddenPill v-for="side in hiddenSides" :key="side" :side="side" />
 		<div class="nb">
 			<div class="ntop">
 				<span class="kind k-ink k-tint"><v-icon :name="style.icon" x-small />{{ style.label }}</span>
@@ -55,6 +61,8 @@ const card = cardHandlers(actions, () => props.id);
 			class="sock"
 			type="source"
 			:position="handlePosition(direction, 'out')"
+			@mouseenter="sock(s).enter"
+			@mouseleave="sock(s).leave"
 			:connectable="false"
 			:style="edgeStyle(direction, 'out', i, data.outs.length)"
 		/>

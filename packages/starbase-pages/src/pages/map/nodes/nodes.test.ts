@@ -10,7 +10,7 @@ import JunctionNode from './JunctionNode.vue';
 import RecordNode from './RecordNode.vue';
 import SlotRow from './SlotRow.vue';
 import WireEdge from './WireEdge.vue';
-import { wireTooltip } from './wireTooltip';
+import { socketTooltip, wireTooltip } from './wireTooltip';
 import { KINDS } from './kinds';
 
 // Vue Flow's Handle needs a running flow; the stub shows which socket ids get drawn.
@@ -254,6 +254,28 @@ describe('WireEdge', () => {
 
 	it('skips the sample line when the wire carries none', () => {
 		expect(wireTooltip({ ...wire, carries: null }, byId)).toEqual(['from OP-17', 'into OP-18']);
+	});
+
+	it('omits the sample line, never a raw id, when the sample is not drawn', () => {
+		const without = new Map([...byId].filter(([k]) => k !== 's:s1'));
+		const lines = wireTooltip({ ...wire, carries: 's1' }, without);
+		expect(lines).toEqual(['from OP-17', 'into OP-18']);
+		expect(lines.join(' ')).not.toContain('s1');
+	});
+
+	it('a socket lists one "<code> · <kind>" line per wire on it', () => {
+		const lot: MapNode = { id: 'lot:l1', type: 'record', kind: 'stock_lot', ref: { collection: 'raw_stock_lots', id: 'l1', code: 'LOT-9' }, ins: [], outs: ['lot:l1:out:0'] };
+		const wires: Wire[] = [
+			{ ...wire, from: 's:s1:out:0', to: 'op:o1:in:0', origin: 's:s1', carries: 's1' },
+			{ id: 'lot:l1:out:0>op:o1:in:0', from: 'lot:l1:out:0', to: 'op:o1:in:0', carries: null, flow: 'stock', bundled: false, origin: 'lot:l1' },
+			{ ...wire, from: 's:s1:out:0', to: 'op:o2:in:0', origin: 's:s1', carries: 's1' },
+		];
+		const drawn = new Map([...byId, [lot.id, lot]]);
+		expect(socketTooltip('op:o1:in:0', wires, drawn)).toEqual(['S-0412-A · Sample', 'LOT-9 · Stock lot']);
+		// A socket with two wires carrying the same sample names it once.
+		expect(socketTooltip('s:s1:out:0', wires, drawn)).toEqual(['S-0412-A · Sample']);
+		expect(socketTooltip('op:o9:in:0', wires, drawn)).toEqual(['Not connected']);
+		expect(socketTooltip('op:o1:in:0', wires, new Map())).toEqual(['Connected records are not shown']);
 	});
 
 	it('names a junction without a code by its type', () => {
