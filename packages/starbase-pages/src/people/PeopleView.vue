@@ -7,6 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import { PageShell, PinToggle, canonicalPath, pinTargetForIndex, useExplorerHost } from '@d1/ui';
 import PersonEditDialog from './PersonEditDialog.vue';
+import InviteDialog from './InviteDialog.vue';
 import LinkLoginDialog from './LinkLoginDialog.vue';
 import PersonPanel from './PersonPanel.vue';
 import PersonRow from './PersonRow.vue';
@@ -155,8 +156,12 @@ async function closePanel() {
 }
 const onChanged = () => void load(true);
 
-// The invite dialog (the next task) is bound to this: null = invite from the header, a row = invite that person, undefined = closed.
+// The invite dialog: null = invite from the header, a row = invite that person, undefined = closed.
 const inviteFor = ref<PeopleRow | null | undefined>(undefined);
+// The dialog stays open to say the invite was sent (or could not be e-mailed); the list reloads at once so the row shows the new login.
+function openExisting(personId: string) {
+	update({ person: personId });
+}
 
 // ---- the add / read-only dialog, and the "link to a person" dialog ----
 const dialogOpen = ref(false);
@@ -253,6 +258,16 @@ function openLink(r: PeopleRow) {
 		</PageShell>
 
 		<PersonEditDialog v-model="dialogOpen" :person="dialogPerson" @saved="load(true)" />
+		<InviteDialog
+			:model-value="inviteFor !== undefined"
+			:person="inviteFor"
+			:roles="roles"
+			:can-administer-accounts="canAdminister"
+			:rows="rows"
+			@update:model-value="inviteFor = undefined"
+			@invited="load(true)"
+			@open-person="openExisting"
+		/>
 		<LinkLoginDialog v-model="linkOpen" :login="linkLogin" :rows="rows" @linked="load(true)" />
 	</ExplorerView>
 </template>

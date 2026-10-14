@@ -4,6 +4,7 @@ import { canonicalPath, configureLinks, resetLinks, resolveLink, routeTarget, st
 import {
 	CampaignPage, HomeView, IndexRoute, LabelsPage, OperationPage, PeopleView, ProjectPage, ProjectsIndex, RegisterSample, SamplePage, TestPage,
 } from '@d1/starbase-pages';
+import AcceptInvite from './pages/AcceptInvite.vue';
 import { buildRoutes } from './router';
 import { plotRoutes } from './plot/routes';
 
@@ -36,6 +37,13 @@ describe('STARbase routes', () => {
 			expect(r.meta.public, p).toBe(true);
 			expect(r.matched, p).toHaveLength(1);
 		}
+	});
+	it('/accept-invite resolves to AcceptInvite and is public, outside the shell', () => {
+		const r = memoryRouter().resolve('/accept-invite?token=abc');
+		expect(r.name).toBe('accept-invite');
+		expect(r.matched.at(-1)?.components?.default).toBe(AcceptInvite);
+		expect(r.meta.public).toBe(true);
+		expect(r.matched).toHaveLength(1);
 	});
 	it('an old /home link redirects with its query and encoding', async () => {
 		const router = memoryRouter();
