@@ -135,10 +135,13 @@ async function cast(pw: Pw, opts: { share?: 'edit' | 'view' | false } = {}): Pro
 	}
 }
 
+// What Directus 11 answers a reader the item filter hides from, and a writer it refuses: 403 (not 404, so existence does not leak).
+const DENIED = 403;
 const readStatus = async (api: APIRequestContext, sampleId: string) => (await api.get(`${D1}/items/physical_samples/${sampleId}?fields=sample_id,notes`)).status();
 const editStatus = async (api: APIRequestContext, sampleId: string) => (await api.patch(`${D1}/items/physical_samples/${sampleId}`, { data: { notes: `e2e ${unique()}` } })).status();
 const samplePage = (c: Cast) => `${STAR_BASE}/samples/${encodeURIComponent(c.sampleId)}`;
-const addMember = (c: Cast, personId: string, isManager = false) => c.admin.post(`${TEAMS}/${c.teamId}/members`, { data: { person_id: personId, is_manager: isManager } });
+// by default the administrator adds; pass c.m to have the team's manager do it
+const addMember = (c: Cast, personId: string, isManager = false, by: APIRequestContext = c.admin) => by.post(`${TEAMS}/${c.teamId}/members`, { data: { person_id: personId, is_manager: isManager } });
 const dialogOf = (page: Page) => page.getByRole('dialog', { name: /who has access/i });
 
 test('a team grant gives an active member read and edit on a Restricted sample (and the member did not have it before)', async ({ playwright, browser }) => {
@@ -147,7 +150,11 @@ test('a team grant gives an active member read and edit on a Restricted sample (
 	let ctx: BrowserContext | undefined;
 	try {
 		// Before the share: M is not the owner, the sample is Restricted: nothing.
-		expect(await readStatus(c.m, c.sampleId), 'before the grant').not.toBe(200);
+		expect(await readStatus(c.m, c.sampleId), 'before the grant: not readable').toBe(DENIED);
+
+		// The team history is not a Directus collection for a Lab Member (it names records they may not read): only GET /d1-teams/:id serves it.
+		expect((await c.m.get(`${D1}/items/team_events?limit=1`)).status(), 'team_events is not readable through Directus').toBe(DENIED);
+		expect((await c.m.get(`${TEAMS}/${c.teamId}`)).status(), 'but the team page endpoint serves the history').toBe(200);
 
 		// The owner adds the team in the browser: Who has access -> "Add people or teams" -> pick the team -> Can edit -> Add.
 		const o = await pageAs(browser, c.owner.email, c.owner.password);
@@ -194,12 +201,13 @@ test('a joiner without trust is pending and cannot read; the owner sees Waiting 
 	const joinerApi = await apiAs(playwright, c.joiner.email, c.joiner.password);
 	let ctx: BrowserContext | undefined;
 	try {
-		const added = await addMember(c, c.joiner.personId);
+		const added = await addMember(c, c.joiner.personId, false, c.m); // the manager (not the administrator) adds the joiner
 		expect(added.status()).toBe(201);
 		const body = await added.json();
 		expect(body.pending, 'one record is waiting on the owner').toBe(1);
 		expect(body.owners_asked).toBe(1);
-		expect(await readStatus(joinerApi, c.sampleId), 'a pending member cannot read').not.toBe(200);
+		expect(await readStatus(joinerApi, c.sampleId), 'a pending member cannot read').toBe(DENIED);
+		expect(await editStatus(joinerApi, c.sampleId), 'and cannot edit').toBe(DENIED);
 
 		// The owner's Home: Waiting for you says who and how many records.
 		const o = await pageAs(browser, c.owner.email, c.owner.password);
@@ -241,7 +249,8 @@ test('declining keeps the joiner out; the owner can approve later from Who has a
 		await o.page.goto(`${STAR_BASE}/home`);
 		await o.page.getByRole('button', { name: 'Decline all' }).click();
 		await expect(o.page.getByText('Waiting for you', { exact: true })).toHaveCount(0);
-		expect(await readStatus(joinerApi, c.sampleId), 'declined: no access').not.toBe(200);
+		expect(await readStatus(joinerApi, c.sampleId), 'declined: no access').toBe(DENIED);
+		expect(await editStatus(joinerApi, c.sampleId), 'declined: no edit').toBe(DENIED);
 
 		// Who has access: "0 waiting · 1 declined" -> expand -> Approve.
 		await o.page.goto(samplePage(c));
@@ -275,7 +284,7 @@ test('Trust future members: the next joiner reads at once, with nobody to approv
 		await expect(trust).toBeChecked();
 		await expect(dialog.getByRole('alert')).toHaveCount(0);
 
-		const added = await addMember(c, c.joiner.personId);
+		const added = await addMember(c, c.joiner.personId, false, c.m); // the manager (not the administrator) adds the joiner
 		expect(added.status()).toBe(201);
 		expect((await added.json()).pending, 'a trusted grant leaves nobody pending').toBe(0);
 		await expect.poll(() => readStatus(joinerApi, c.sampleId), { message: 'the joiner reads at once' }).toBe(200);
@@ -309,8 +318,8 @@ test('leaving removes access at once (the Leave button on the team page)', async
 		await expect(j.page.getByRole('heading', { name: c.teamName }).first()).toBeVisible();
 		await j.page.getByRole('button', { name: 'Leave', exact: true }).click();
 		await expect(j.page).toHaveURL(`${STAR_BASE}/people?view=teams`);
-		await expect.poll(() => readStatus(joinerApi, c.sampleId), { message: 'access ends when the member leaves' }).not.toBe(200);
-		expect(await editStatus(joinerApi, c.sampleId)).not.toBe(200);
+		await expect.poll(() => readStatus(joinerApi, c.sampleId), { message: 'access ends when the member leaves' }).toBe(DENIED);
+		expect(await editStatus(joinerApi, c.sampleId), 'and so does editing').toBe(DENIED);
 		// and the team no longer lists them
 		const detail = await (await c.admin.get(`${TEAMS}/${c.teamId}`)).json();
 		expect((detail.members as { person_id: string }[]).some((x) => x.person_id === c.joiner.personId)).toBe(false);

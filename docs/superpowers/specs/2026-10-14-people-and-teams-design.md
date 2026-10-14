@@ -130,7 +130,9 @@ Used in the People list, the person panel, "Who has access", record rails (owner
 
 - **Waiting for you** card (only when non-empty): one line per joiner and team, "Femi Noor joined Additive · 12 of your
   records", with **Approve all** / **Decline all** / **Review** (lists the records, per-record choice). Approving covers only
-  records where it would raise access (decision 12).
+  records where it would raise access (decision 12). The card is the caller's own queue: **only records they own** (the owner column,
+  or the PI of a project), an Administrator included (E22). An Administrator approves or declines a single record they do not own
+  from Who has access.
 - **My teams** panel (PR 4): the most recently changed records across the viewer's teams, one line each with the team tile.
 - Index pages (PR 4): a **Team** filter (any / one team) = records the team owns or has an access entry on.
 
@@ -251,12 +253,14 @@ The Directus rules then become one hop each: update `editors._some.user_id = $CU
 
 | Collection | Lab Member | Lab Admin | Administrator |
 |---|---|---|---|
-| `teams`, `team_members`, `team_events` | read all | read all | full |
+| `teams`, `team_members` | read all | read all | full |
+| `team_events` | no row (E22: served only by `GET /d1-teams/:id`, which hides what the caller cannot read) | no row | full |
 | `<type>_access_members` | read where a reader of the record (the child pattern: one bare hop to the record's readers) | read all | full |
 | `<type>_editors`, `<type>_managers` | own rows (like the readers tables) | read all | full |
 
-(As built, E10 and E14: `teams`, `team_members` and `team_events` are readable by every Lab Member through the unfiltered read rows of
-`scripts/access_rules.json`; the ten `<type>_team_access` / `<type>_team_pending` tables are not registered in Directus at all, the
+(As built, E10, E14 and E22: `teams` and `team_members` are readable by every Lab Member through the unfiltered read rows of
+`scripts/access_rules.json`; `team_events` has no Lab Member row, because its events name records and people the reader may not be
+allowed to see; the ten `<type>_team_access` / `<type>_team_pending` tables are not registered in Directus at all, the
 endpoints read and write them, and they are not granted to `d1_llm_readonly`.)
 
 Writes to teams, membership, team grants and approvals go through the endpoints below with the system accountability after
@@ -269,15 +273,15 @@ their own checks. Lab Admins edit teams only through STARbase (decision 17).
 | Route | Needs | Does |
 |---|---|---|
 | `GET /` | a login | all teams: tile data, member count, managers, `is_member`, `is_manager` |
-| `GET /:id` | a login | team, members (name, can_sign_in, is_manager), record counts per level, the record list filtered to what the caller can read plus `hidden_count`, history (paged) |
+| `GET /:id` | a login | team, members (name, can_sign_in, is_manager), record counts per level, the record list filtered to what the caller can read plus `hidden_count`, history (paged; an event about a record the caller cannot read keeps only its kind, time and actor: no record, no person, no detail, E22) |
 | `POST /` `{name, description?, color?}` | a login with a person | creates; the caller becomes its manager |
 | `PATCH /:id` `{name?, description?, color?, logo?}` | manager or admin | edits; a logo must be an image ≤ 1 MB (png, jpeg, svg) uploaded to a fixed `Team logos` folder |
 | `DELETE /:id` | manager or admin | refused 409 while it owns records (lists counts); else deletes and mails the owners of the records it was on |
 | `POST /:id/members` `{person_id, is_manager?}` | manager or admin | adds; answers what happened (`owned_edit: n`, `pending: n`, `owners_asked: n`); mails each owner asked, once per joiner |
 | `PATCH /:id/members/:person_id` `{is_manager}` | manager or admin | sets or clears manager (last manager refused 409) |
 | `DELETE /:id/members/:person_id` | manager, admin, or the person themselves | removes (last manager refused 409) |
-| `GET /pending` | a login | the caller's Waiting-for-you items, grouped by joiner and team, only rows where approving would raise access |
-| `POST /pending/decide` `{team_id, person_id, decision, records?}` | manages each record | approves or declines across the caller's records for that joiner and team (or only `records`) |
+| `GET /pending` | a login | the caller's Waiting-for-you items (records they **own**, an Administrator included), grouped by joiner and team, only rows where approving would raise access |
+| `POST /pending/decide` `{team_id, person_id, decision, records?}` | owns each record (an Administrator may decide a single listed record) | without `records`: approves or declines across the records the caller owns for that joiner and team; with `records` (deduplicated): only those |
 
 ### 3.2 `d1-record-access` (extended)
 
@@ -376,8 +380,8 @@ runbook section added in PR 2 (as A1a's cutover: backup, apply, `rights_rebuild(
 
 - **(plan 2) A parent delete can deadlock with a member or grant insert.** The lock-first triggers (E11) take the global readers lock
   before the statement's row and foreign-key locks, which removes the deadlock of a grant or member insert against a write that holds the
-  readers lock. A delete of a team, campaign, project, test or person racing a member insert or grant insert on the **same parent** can
-  still abort one of the two with 40P01 (deadlock detected). It is retryable and rare; the endpoints answer a 500 and the user repeats the
+  readers lock. A delete of a campaign, project, test or person racing a member insert or grant insert on the **same parent** can
+  still abort one of the two with 40P01 (deadlock detected); a delete of a **team** is covered since E22 (`teams_lock_first`). It is retryable and rare; the endpoints answer a 500 and the user repeats the
   action.
 - **(plan 2) A team logo can be overwritten through `/files`.** The 1 MB / png, jpeg, svg limit is checked by `d1-teams` when a logo is
   set, but a Lab Member has unfiltered `directus_files` rights, so a member could still replace a logo's file with another through
@@ -442,8 +446,8 @@ they disagree; each ruling was made while building, with the maintainer's standi
   (`team_access_id IS NULL`, upserts name `ON CONFLICT (record, person_id) WHERE team_access_id IS NULL`) and one derived row per grant
   (`(record, person, team_access_id)`). The spec's `<type>_access_members` is `<type>_team_pending(team_access_id, person_id, state
   pending|declined, decided_by_person_id, decided_at)`: only members who are **not** active have a row; an active member has a derived row.
-  Directus: `teams`, `team_members` and `team_events` are registered (Lab Member read-only, via the unfiltered rows of `access_rules.json`,
-  Ruling G2, so `tests/phase1_schema.sh`'s "every Lab Member row is listed" holds); the ten `<type>_team_access` / `<type>_team_pending`
+  Directus: `teams`, `team_members` and `team_events` are registered; a Lab Member reads the first two (unfiltered rows of
+  `access_rules.json`, Ruling G2, so `tests/phase1_schema.sh`'s "every Lab Member row is listed" holds) and has no row on `team_events` (E22); the ten `<type>_team_access` / `<type>_team_pending`
   tables are not registered in Directus, are audited and are not granted to `d1_llm_readonly`. What moves to PR 3 (team ownership): the
   `manage` level generated by an `owner` pseudo-grant, `owner_team_id`, `can_manage` through the owning team's managers and the guard
   following it. The tests cover the rights through the existing readers matrix (new mutation cases for team grants) and `tests/teams.sh`.
@@ -515,3 +519,14 @@ they disagree; each ruling was made while building, with the maintainer's standi
   `tests/ui/specs/18-teams.spec.ts` covers the E2E of §6 (grant, pending and approve, decline, Trust future members, leave, the members
   card, last manager, the People/Teams switch); it creates its own logins, people, teams and a Restricted sample and removes them. Spec 17's
   person panel now has four count lines (Through teams).
+- **E22 Final review of plan 2 (corrections to the above).** (1) `team_events` has **no Lab Member read row** (migration 175, `access_rules.json`):
+  its events name records and people a reader may not see; `GET /d1-teams/:id` serves the history, and an event about a record the caller
+  cannot read keeps only kind, time and actor (no `person_id`, `person_name`, record or `detail`). (2) **Waiting for you is owner-only**:
+  `GET /d1-teams/pending` and `POST /d1-teams/pending/decide` without `records` act on records the caller owns, an Administrator included;
+  an Administrator approves or declines one record at a time in Who has access. (3) A committed write never answers 500: the reads after
+  the commit (the team read back for the answer, the people for the mail) are logged and answer what is known, as `d1-record-access` does.
+  (4) `decide` deduplicates `records` by collection and id. (5) Migration 176 adds `teams_lock_first` (BEFORE DELETE, statement level, the
+  readers lock first: a team delete cannot deadlock with a member or grant insert) and `d1_private.team_pending_guard` on the five
+  `<type>_team_pending` tables (BEFORE INSERT/UPDATE/DELETE; refused unless `d1.team_sync = 'on'`, a DELETE at trigger depth > 1 or an
+  UPDATE at depth > 1 that changes only `decided_by_person_id`), a guard like E11's, not a security boundary. (6) An open members card
+  (`TeamCard`) owns Esc: it marks its popover `data-open-menu` and swallows the key, so an enclosing person panel does not also close.
