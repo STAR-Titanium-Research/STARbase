@@ -28,7 +28,7 @@ describe('framings', () => {
 	});
 
 	// The tray's eight corners seen through the framing's camera: the box they span in normalised screen space.
-	function screenExtent(l: typeof layout, aspect: number): { x: number; y: number } {
+	function screenExtent(l: Pick<typeof layout, 'width' | 'depth' | 'topY'> & { single?: boolean }, aspect: number): { x: number; y: number } {
 		const f = frameBox(l, aspect);
 		const cam = new PerspectiveCamera(32, aspect, 1, 3000);
 		cam.position.set(...f.position);
@@ -65,6 +65,34 @@ describe('framings', () => {
 			expect(Math.max(e.x, e.y)).toBeLessThanOrEqual(1);
 			expect(Math.max(e.x, e.y)).toBeGreaterThan(0.75);
 		}
+	});
+
+	it('frames a one-insert case close: the insert fills about 60% of the portrait stage, nothing clipped', () => {
+		const pcd = { iso_designation: 'CCGW 09T3 04', edge_count: 1, substrate: 'PCD' };
+		const oneModel = buildToolingModel(box, pcd, [ins[0]], []);
+		const l = trayLayout(oneModel);
+		expect(l.single).toBe(true);
+		const aspect = 340 / 520;
+		const e = screenExtent(l, aspect);
+		expect(Math.max(e.x, e.y)).toBeLessThanOrEqual(1);
+		// The insert itself: its widest reach across (x) and along (z) the case, resting in the pocket.
+		const f = frameBox(l, aspect);
+		const cam = new PerspectiveCamera(32, aspect, 1, 3000);
+		cam.position.set(...f.position);
+		cam.lookAt(new Vector3(...f.target));
+		cam.updateMatrixWorld();
+		cam.updateProjectionMatrix();
+		const xs = oneModel.outline.points.map((p) => p[0]);
+		const ys = oneModel.outline.points.map((p) => p[1]);
+		let sx = 0, sy = 0;
+		for (const x of [Math.min(...xs), Math.max(...xs)]) for (const y of [Math.min(...ys), Math.max(...ys)]) {
+			const p = new Vector3(x, l.insertY, -y).project(cam);
+			sx = Math.max(sx, Math.abs(p.x));
+			sy = Math.max(sy, Math.abs(p.y));
+		}
+		const fill = Math.max(sx, sy); // fraction of the half-frame, so of the stage's limiting side
+		expect(fill).toBeGreaterThan(0.5);
+		expect(fill).toBeLessThan(0.72);
 	});
 
 	it('frameInsert is centred on the insert and closer than the box', () => {

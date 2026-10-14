@@ -62,6 +62,40 @@ describe('trayLayout', () => {
 	});
 });
 
+describe('trayLayout of a one-insert box', () => {
+	const pcd = { iso_designation: 'CCGW 09T3 04', edge_count: 1, substrate: 'PCD' };
+	const one = buildToolingModel(box, pcd, inserts([1]), []);
+
+	it('is a small single case, one slot, sized to the insert and not to the 1.7 x IC pitch of a tray', () => {
+		const l = trayLayout(one);
+		expect([l.columns, l.rows, l.slots.length]).toEqual([1, 1, 1]);
+		expect(l.single).toBe(true);
+		expect(l.slots[0]).toMatchObject({ column: 0, row: 0, label: '1', insertId: 'i0' });
+		const trayOfOne = trayLayout(buildToolingModel(box, pcd, inserts([1, 2]), []));
+		expect(trayOfOne.single).toBe(false);
+		expect(l.width).toBeLessThan(trayOfOne.width * 0.8);
+		// The case is the pocket plus a thin wall: the insert's reach fills most of it.
+		expect(l.width).toBeLessThan(l.pocketW + 6);
+		expect(l.depth).toBeLessThan(l.pocketD + 6);
+		expect(l.width).toBeGreaterThan(l.pocketW);
+		expect(l.centre(0, 0)).toEqual({ x: 0, z: 0 });
+	});
+
+	it('names the slot by the insert number, or ? when it has none, and still rests the insert in the pocket', () => {
+		expect(trayLayout(buildToolingModel(box, pcd, inserts([null]), [])).slots[0]).toMatchObject({ label: '?', insertId: 'i0' });
+		const seven = trayLayout(buildToolingModel(box, pcd, inserts([7]), []));
+		expect(seven.slots).toHaveLength(1); // not a grid sized to the highest number
+		expect(seven.slots[0].label).toBe('7');
+		expect(seven.slotOf.has('i0')).toBe(true);
+	});
+
+	it('builds its geometry like any tray', () => {
+		const g = buildTrayGeometry(trayLayout(one));
+		g.computeBoundingBox();
+		expect(g.boundingBox!.max.y).toBeCloseTo(trayLayout(one).topY, 2);
+	});
+});
+
 describe('buildTrayGeometry', () => {
 	it('is as wide and deep as the layout, from y = 0 to the tray top', () => {
 		const l = trayLayout(ten);

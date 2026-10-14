@@ -90,13 +90,20 @@ function fitTray(
 	return hi;
 }
 
+// A one-insert case is framed close and at a fixed, friendlier angle: it fills the stage, so the insert in it
+// does too (about 60%).
+const CASE_POLAR = 40 * RAD;
+const CASE_PAD = 1.04;
+
 export function frameBox(
-	tray: { width: number; depth: number; topY: number }, aspect: number, fovDeg = FOV_DEG,
+	tray: { width: number; depth: number; topY: number; single?: boolean }, aspect: number, fovDeg = FOV_DEG,
 ): Framing {
 	const a = Math.max(0.2, aspect);
-	const polar = Math.min(BOX_POLAR_MAX, Math.max(BOX_POLAR_MIN, Math.acos(Math.min(1, tray.width / (a * tray.depth)))));
+	const polar = tray.single
+		? CASE_POLAR
+		: Math.min(BOX_POLAR_MAX, Math.max(BOX_POLAR_MIN, Math.acos(Math.min(1, tray.width / (a * tray.depth)))));
 	const target: Vec3 = [0, tray.topY * 0.4, 0];
-	return framingAt(target, fitTray(tray, target, polar, a, fovDeg, BOX_PAD), polar, 0);
+	return framingAt(target, fitTray(tray, target, polar, a, fovDeg, tray.single ? CASE_PAD : BOX_PAD), polar, 0);
 }
 
 // The reach of an insert from its centre: the farthest corner tip.
