@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PerspectiveCamera, Vector3 } from 'three';
 import { buildToolingModel } from '@d1/ui';
 import {
 	easeInOutCubic, easeStep, frameBox, frameEdge, frameInsert, FramingTween, framingAt, framingFromCamera,
@@ -26,8 +27,44 @@ describe('framings', () => {
 		expect(f.distance * Math.tan(halfH)).toBeGreaterThan(layout.width / 2);
 	});
 
-	it('a narrower stage needs a farther camera', () => {
-		expect(frameBox(layout, 1).distance).toBeGreaterThan(frameBox(layout, 2.5).distance);
+	// The tray's eight corners seen through the framing's camera: the box they span in normalised screen space.
+	function screenExtent(l: typeof layout, aspect: number): { x: number; y: number } {
+		const f = frameBox(l, aspect);
+		const cam = new PerspectiveCamera(32, aspect, 1, 3000);
+		cam.position.set(...f.position);
+		cam.lookAt(new Vector3(...f.target));
+		cam.updateMatrixWorld();
+		cam.updateProjectionMatrix();
+		let x = 0, y = 0;
+		for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const py of [0, l.topY]) {
+			const p = new Vector3(sx * l.width / 2, py, sz * l.depth / 2).project(cam);
+			x = Math.max(x, Math.abs(p.x));
+			y = Math.max(y, Math.abs(p.y));
+		}
+		return { x, y };
+	}
+
+	it('fills a portrait stage with the tall tray, all of it inside the frame', () => {
+		const e = screenExtent(layout, 360 / 560);
+		expect(layout.depth).toBeGreaterThan(layout.width);
+		expect(Math.max(e.x, e.y)).toBeLessThanOrEqual(1);
+		expect(Math.max(e.x, e.y)).toBeGreaterThan(0.8); // fills it, not a small tray in the middle
+	});
+
+	it('still fits the tray when the stage is square or landscape (the narrow, stacked layout)', () => {
+		for (const aspect of [1, 1.6, 2.5]) {
+			const e = screenExtent(layout, aspect);
+			expect(Math.max(e.x, e.y)).toBeLessThanOrEqual(1);
+		}
+	});
+
+	it('a wider tray fits too: 3 x 4 and 5 x 10 in the portrait stage', () => {
+		const grid = (n: number) => trayLayout(buildToolingModel(box, { iso_designation: 'CNMG 12 04 08-MF' }, Array.from({ length: n }, (_, i) => ({ insert_id: `i${i}`, insert_code: `X-${i}`, insert_number: i + 1, is_depleted: false })), []));
+		for (const n of [4, 12, 50]) {
+			const e = screenExtent(grid(n), 360 / 560);
+			expect(Math.max(e.x, e.y)).toBeLessThanOrEqual(1);
+			expect(Math.max(e.x, e.y)).toBeGreaterThan(0.75);
+		}
 	});
 
 	it('frameInsert is centred on the insert and closer than the box', () => {

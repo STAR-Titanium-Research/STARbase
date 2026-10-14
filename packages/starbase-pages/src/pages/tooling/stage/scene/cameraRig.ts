@@ -22,7 +22,6 @@ export const ZOOM_IN = 0.5; // closest the user may orbit in, times the framing 
 export const ZOOM_OUT = 3; // farthest
 
 const RAD = Math.PI / 180;
-const BOX_POLAR = 50 * RAD;
 const INSERT_POLAR = 42 * RAD;
 const EDGE_POLAR_TOP = 62 * RAD;
 const EDGE_POLAR_BOTTOM = 80 * RAD;
@@ -57,14 +56,47 @@ function fitDistance(halfW: number, halfH: number, aspect: number, fovDeg: numbe
 	return Math.max((halfW * pad) / Math.tan(a.h), (halfH * pad) / Math.tan(a.v));
 }
 
+// The tray's polar angle: steep enough that a tall tray fills a portrait stage (the tray's projected shape
+// matches the stage's), never flatter than 52 degrees from straight up, never more top-down than 30.
+const BOX_POLAR_MIN = 30 * RAD;
+const BOX_POLAR_MAX = 52 * RAD;
+const BOX_PAD = 1.1;
+
+// Smallest camera distance at which the tray's eight corners all sit inside the frame (with `pad` as a ratio),
+// from the pinhole model, so the near edge's perspective is counted. The camera looks at `target` from
+// `polar`, on the +z side.
+function fitTray(
+	tray: { width: number; depth: number; topY: number }, target: Vec3, polar: number, aspect: number, fovDeg: number, pad: number,
+): number {
+	const { v, h } = halfAngles(aspect, fovDeg);
+	const tv = Math.tan(v), th = Math.tan(h);
+	const c: Vec3 = [0, Math.cos(polar), Math.sin(polar)]; // from the target toward the camera
+	const up: Vec3 = [0, Math.sin(polar), -Math.cos(polar)];
+	const rels: Vec3[] = [];
+	for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const y of [0, tray.topY]) {
+		rels.push([(sx * tray.width) / 2 - target[0], y - target[1], (sz * tray.depth) / 2 - target[2]]);
+	}
+	const fits = (d: number): boolean => rels.every((p) => {
+		const depth = d - (p[1] * c[1] + p[2] * c[2]);
+		if (depth <= 0.5) return false;
+		return Math.abs(p[0]) / (depth * th) <= 1 / pad && Math.abs(p[1] * up[1] + p[2] * up[2]) / (depth * tv) <= 1 / pad;
+	});
+	let lo = 1, hi = 8;
+	while (!fits(hi) && hi < 1e6) hi *= 2;
+	for (let i = 0; i < 40; i++) {
+		const mid = (lo + hi) / 2;
+		if (fits(mid)) hi = mid; else lo = mid;
+	}
+	return hi;
+}
+
 export function frameBox(
 	tray: { width: number; depth: number; topY: number }, aspect: number, fovDeg = FOV_DEG,
 ): Framing {
-	const polar = BOX_POLAR;
-	const halfH = (tray.depth * Math.cos(polar) + tray.topY * Math.sin(polar)) / 2;
-	const near = (tray.depth / 2) * Math.sin(polar); // the front edge is closer than the middle
-	const distance = fitDistance(tray.width / 2, halfH, aspect, fovDeg, 1.12) + near * 0.6;
-	return framingAt([0, tray.topY * 0.4, 0], distance, polar, 0);
+	const a = Math.max(0.2, aspect);
+	const polar = Math.min(BOX_POLAR_MAX, Math.max(BOX_POLAR_MIN, Math.acos(Math.min(1, tray.width / (a * tray.depth)))));
+	const target: Vec3 = [0, tray.topY * 0.4, 0];
+	return framingAt(target, fitTray(tray, target, polar, a, fovDeg, BOX_PAD), polar, 0);
 }
 
 // The reach of an insert from its centre: the farthest corner tip.

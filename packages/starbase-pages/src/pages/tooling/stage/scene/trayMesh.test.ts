@@ -12,17 +12,18 @@ const cnmg = { iso_designation: 'CNMG 12 04 08-MF' };
 const ten = buildToolingModel(box, cnmg, tenInserts, []);
 
 describe('trayLayout', () => {
-	it('lays 10 inserts out as 5 x 2, in reading order', () => {
+	it('lays 10 inserts out as 2 columns x 5 rows, in reading order', () => {
 		const l = trayLayout(ten);
-		expect([l.columns, l.rows, l.slots.length]).toEqual([5, 2, 10]);
+		expect([l.columns, l.rows, l.slots.length]).toEqual([2, 5, 10]);
 		expect(l.slots[0]).toMatchObject({ column: 0, row: 0, label: '1', insertId: 'i0' });
-		expect(l.slots[5]).toMatchObject({ column: 0, row: 1, label: '6', insertId: 'i5' });
+		expect(l.slots[5]).toMatchObject({ column: 1, row: 2, label: '6', insertId: 'i5' });
 		const first = l.centre(0, 0);
 		const second = l.centre(1, 0);
 		const below = l.centre(0, 1);
 		expect(second.x - first.x).toBeCloseTo(l.pitch, 6);
 		expect(below.z - first.z).toBeCloseTo(l.pitch, 6);
-		expect(first.x + l.centre(4, 0).x).toBeCloseTo(0, 6); // centred on the origin
+		expect(first.x + second.x).toBeCloseTo(0, 6); // centred on the origin
+		expect(l.depth).toBeGreaterThan(l.width); // portrait: the long side runs along z
 	});
 
 	it('spaces the slots at about 1.7 x IC, and wide enough for the longest corner', () => {
