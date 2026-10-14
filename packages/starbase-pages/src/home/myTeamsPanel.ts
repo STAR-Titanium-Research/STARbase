@@ -9,6 +9,8 @@ import { lastSeen } from '../people/lastSeen';
 export const PANEL_SHOWN = 10;
 export const PANEL_MORE = 20;
 
+const NO_CODE = 'No code';
+
 export interface PanelLine {
 	key: string;
 	collection: string;
@@ -35,12 +37,19 @@ export function panelLines(items: RecentTeamRecord[] | null | undefined, expande
 		collection: r.collection,
 		id: r.id,
 		kind: kindLabel(r.kind),
-		code: r.code || 'No code',
+		code: r.code || NO_CODE,
 		title: r.title ?? '',
 		team: { name: r.team_name, color: isTeamColor(r.team_color) ? r.team_color : DEFAULT_TEAM_COLOR },
 		changed: changedLabel(r.changed_at, now),
 	}));
 }
 
-/** The label of the button that reveals lines 11 to 20, or null when there is nothing more to reveal. */
-export const showMoreLabel = (total: number, expanded: boolean): string | null => (!expanded && total > PANEL_SHOWN ? 'Show more' : null);
+/** The label of the button that reveals the lines after the first 10, "Show 4 more", or null when there is nothing more to reveal. */
+export function showMoreLabel(total: number, expanded: boolean): string | null {
+	const hidden = Math.min(total, PANEL_MORE) - PANEL_SHOWN;
+	return !expanded && hidden > 0 ? `Show ${hidden} more` : null;
+}
+
+/** The accessible name of a line's record link: its kind, code and title, so a record with no code is still told apart ("Sample no code: Pilot batch"). */
+export const recordLabel = (l: Pick<PanelLine, 'kind' | 'code' | 'title'>): string =>
+	`${l.kind} ${l.code === NO_CODE ? 'no code' : l.code}${l.title ? `: ${l.title}` : ''}`;

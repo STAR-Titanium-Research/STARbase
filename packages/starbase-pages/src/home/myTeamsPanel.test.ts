@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecentTeamRecord } from '@d1/ui';
-import { PANEL_MORE, PANEL_SHOWN, changedLabel, panelLines, showMoreLabel } from './myTeamsPanel';
+import { PANEL_MORE, PANEL_SHOWN, changedLabel, panelLines, recordLabel, showMoreLabel } from './myTeamsPanel';
 
 const NOW = Date.parse('2026-10-14T12:00:00Z');
 const rec = (i: number, over: Partial<RecentTeamRecord> = {}): RecentTeamRecord => ({
@@ -51,9 +51,27 @@ describe('panelLines', () => {
 });
 
 describe('showMoreLabel', () => {
-	it('offers more only when there are more than 10 and it is not expanded', () => {
+	it('offers the hidden count only when there are more than 10 and it is not expanded', () => {
 		expect(showMoreLabel(10, false)).toBeNull();
-		expect(showMoreLabel(11, false)).toBe('Show more');
+		expect(showMoreLabel(11, false)).toBe('Show 1 more');
+		expect(showMoreLabel(14, false)).toBe('Show 4 more');
 		expect(showMoreLabel(20, true)).toBeNull();
+	});
+	it('counts only what the panel can reveal (20 lines at most)', () => {
+		expect(showMoreLabel(20, false)).toBe('Show 10 more');
+		expect(showMoreLabel(35, false)).toBe('Show 10 more');
+	});
+});
+
+describe('recordLabel', () => {
+	it('names the kind, the code and the title', () => {
+		const [line] = panelLines([rec(1, { title: 'Pilot batch' })], false, NOW);
+		expect(recordLabel(line)).toBe('Sample S-1: Pilot batch');
+	});
+	it('says "no code" for a record without one, and leaves out a missing title', () => {
+		const [line] = panelLines([rec(1, { code: null, title: null })], false, NOW);
+		expect(recordLabel(line)).toBe('Sample no code');
+		const [titled] = panelLines([rec(1, { code: null, title: 'Pilot batch' })], false, NOW);
+		expect(recordLabel(titled)).toBe('Sample no code: Pilot batch');
 	});
 });
