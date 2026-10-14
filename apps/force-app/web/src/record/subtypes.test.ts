@@ -21,13 +21,14 @@ function directusChoices(): { options: Choice[]; display: Choice[] } {
 const mine: Choice[] = MACHINING_SUBTYPES.map((c) => ({ text: c.text, value: c.value }));
 const directus = directusChoices();
 
-// TEMPORARY, until stream M's change to configure_inline_params.sql (drop the "Other" choice, plan decision 8)
-// is merged: the only tolerated difference is that one trailing "Other" entry. Once it is merged, delete
-// `tolerateOther` and the `.skipIf` below, and this test is strict about everything.
-const OTHER: Choice = { text: 'Other', value: 'other' };
-const tolerateOther = (list: Choice[]) => list.length === mine.length + 1
-	&& JSON.stringify(list.slice(0, -1)) === JSON.stringify(mine)
-	&& JSON.stringify(list[list.length - 1]) === JSON.stringify(OTHER);
+// scripts/configure_form_layout.sql (run last by configure_all.sh, the same block as migration 174) sets the
+// choices again; its VALUES row for the field carries one choices document.
+const LAYOUT = readFileSync(new URL('../../../../../scripts/configure_form_layout.sql', import.meta.url), 'utf8');
+function layoutChoices(): Choice[] {
+	const row = LAYOUT.split('\n').find((l) => l.includes("('manufacturing_operations', 'machining_operation_subtype', '[{"));
+	if (!row) throw new Error('no choices row for machining_operation_subtype in configure_form_layout.sql');
+	return JSON.parse(row.match(/'(\[\{.*?\}\])'/)![1]) as Choice[];
+}
 
 describe('machining sub-type list', () => {
 	it('is the twelve MT-/MM- codes, none of them blank or repeated', () => {
@@ -40,17 +41,15 @@ describe('machining sub-type list', () => {
 		expect(mine).toEqual(MACHINING_SUBTYPE_CHOICES);
 	});
 
-	it.skipIf(tolerateOther(directus.options))('equals the Directus choices in scripts/configure_inline_params.sql (values, labels, order)', () => {
+	it('equals the Directus choices in scripts/configure_inline_params.sql (values, labels, order)', () => {
 		expect(directus.options).toEqual(mine);
 	});
 
-	it.skipIf(tolerateOther(directus.display))('equals the Directus display choices (the labels display) as well', () => {
+	it('equals the Directus display choices (the labels display) as well', () => {
 		expect(directus.display).toEqual(mine);
 	});
 
-	it('differs from the Directus choices at most by the one trailing "Other" that stream M removes', () => {
-		for (const list of [directus.options, directus.display]) {
-			expect(JSON.stringify(list) === JSON.stringify(mine) || tolerateOther(list)).toBe(true);
-		}
+	it('equals the choices configure_form_layout.sql (migration 174) sets', () => {
+		expect(layoutChoices()).toEqual(mine);
 	});
 });
