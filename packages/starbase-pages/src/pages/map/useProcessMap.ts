@@ -855,4 +855,3 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     reload: load,
   };
 }
-

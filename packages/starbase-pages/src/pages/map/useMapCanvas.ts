@@ -347,4 +347,3 @@ export function useMapCanvas(map: ProcessMap) {
 
   return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, fit, fitFocus, remeasure, reveal, frame };
 }
-

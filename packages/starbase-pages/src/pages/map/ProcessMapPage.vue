@@ -205,15 +205,15 @@ onBeforeUnmount(() => {
 						<span>›</span>
 						<span>Process map</span>
 					</template>
-	
+
 					<template #title-actions>
 						<v-button small secondary @click="copyLink"><v-icon name="link" small /> {{ copied ? 'Copied' : 'Copy link' }}</v-button>
 					</template>
-	
+
 					<template v-if="!phone" #rail>
 						<MapRail v-bind="railProps" v-on="railEvents" />
 					</template>
-	
+
 					<Section class="pm-panel" title="Process map">
 						<template #actions>
 							<v-button small secondary @click="finderOpen = true"><v-icon name="search" small /> Find a record</v-button>
@@ -222,12 +222,12 @@ onBeforeUnmount(() => {
 							<v-button small secondary @click="canvas.fit()">Fit</v-button>
 							<v-button small secondary @click="map.clearFocus()">Clear</v-button>
 						</template>
-	
+
 						<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
 						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
 						<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
 						<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
-	
+
 						<div
 							ref="canvasEl"
 							class="pm-canvas"
