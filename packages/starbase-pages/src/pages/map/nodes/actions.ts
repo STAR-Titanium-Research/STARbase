@@ -71,6 +71,19 @@ export const stopping = (fn: () => void) => (e: Pick<Ev, 'stopPropagation'>) => 
 	fn();
 };
 
+type KeyEv = { key: string; preventDefault(): void; stopPropagation(): void };
+
+/**
+ * The keydown of an element that is a button by role (`role="button"` on a div or span): Enter and Space act, as a real
+ * button's do, and Space must not also scroll the page. Stops the event like a click handler of the card does.
+ */
+export const activating = (fn: () => void) => (e: KeyEv) => {
+	if (e.key !== 'Enter' && e.key !== ' ') return;
+	e.preventDefault();
+	e.stopPropagation();
+	fn();
+};
+
 /** A card (node): body click selects it, hover reports it, the ＋ button expands it. */
 export const cardHandlers = (a: MapActions, id: () => string) => ({
 	select: () => a.select(id()),
@@ -84,6 +97,7 @@ export const recordHandlers = (a: MapActions, r: () => Key) => ({
 	enter: (e: Pick<Ev, 'currentTarget'>) => a.hover(refKey(r()), e.currentTarget as HTMLElement),
 	leave: () => a.hover(null),
 	select: stopping(() => a.select(refKey(r()))),
+	key: activating(() => a.select(refKey(r()))),
 });
 
 /** A wire's hit path: hover reports the wire; Ctrl/⌘+click selects and centres its origin. */

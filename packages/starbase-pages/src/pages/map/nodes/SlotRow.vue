@@ -49,7 +49,7 @@ const showFan = stopping(() => fanOf.value && actions.expand(refKey(fanOf.value)
 				@mouseenter="on(single).enter"
 				@mouseleave="on(single).leave"
 				@click="on(single).select"
-				@keydown.enter="on(single).select"
+				@keydown="on(single).key"
 				>{{ single.code }}</span
 			>
 			<button v-else-if="many" type="button" class="vals" :aria-expanded="expanded" @click.stop="expanded = !expanded">{{ summary }}</button>
@@ -68,7 +68,7 @@ const showFan = stopping(() => fanOf.value && actions.expand(refKey(fanOf.value)
 				@mouseenter="on(v).enter"
 				@mouseleave="on(v).leave"
 				@click="on(v).select"
-				@keydown.enter="on(v).select"
+				@keydown="on(v).key"
 			>
 				{{ v.code }}
 			</li>

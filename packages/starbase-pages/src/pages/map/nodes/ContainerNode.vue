@@ -4,7 +4,7 @@ import { Handle } from '@vue-flow/core';
 import { StatusBadge } from '@d1/ui';
 import type { ContainerNode, SampleRow } from '../model/types';
 import { isBundleSocket } from '../model/sockets';
-import { cardHandlers, stopping, useHiddenSides, useMapActions, useMapView, useSocketProps } from './actions';
+import { activating, cardHandlers, stopping, useHiddenSides, useMapActions, useMapView, useSocketProps } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
 import HiddenPill from './HiddenPill.vue';
@@ -63,6 +63,8 @@ const sockProps = useSocketProps();
 const hiddenSides = useHiddenSides(() => props.id);
 const refold = stopping(() => actions.toggleRows(props.id));
 const toggleMore = stopping(() => actions.toggleMore(props.id));
+const refoldKey = activating(() => actions.toggleRows(props.id));
+const toggleMoreKey = activating(() => actions.toggleMore(props.id));
 const inPos = computed(() => handlePosition(direction.value, 'in'));
 const outPos = computed(() => handlePosition(direction.value, 'out'));
 </script>
@@ -109,7 +111,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 					<Handle v-if="r.out" :id="r.out" class="sock row out" type="source" :position="outPos" :connectable="false" v-bind="sockProps(r.out, 'out')" />
 				</span>
 			</div>
-			<div v-if="hidden.length" class="orow bundle nodrag nopan" role="button" tabindex="0" @click="refold" @keydown.enter="refold">
+			<div v-if="hidden.length" class="orow bundle nodrag nopan" role="button" tabindex="0" @click="refold" @keydown="refoldKey">
 				<span>
 					<Handle v-if="bundleIn" :id="bundleIn" class="sock row in fat" type="target" :position="inPos" :connectable="false" v-bind="sockProps(bundleIn, 'in')" />
 					{{ `+${hidden.length} more samples` }}
@@ -119,7 +121,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 					<Handle v-if="bundleOut" :id="bundleOut" class="sock row out fat" type="source" :position="outPos" :connectable="false" v-bind="sockProps(bundleOut, 'out')" />
 				</span>
 			</div>
-			<div v-if="canFold" class="orow fold nodrag nopan" role="button" tabindex="0" @click="refold" @keydown.enter="refold">
+			<div v-if="canFold" class="orow fold nodrag nopan" role="button" tabindex="0" @click="refold" @keydown="refoldKey">
 				<span></span><span>Fold samples</span><span></span>
 			</div>
 		</div>
@@ -130,7 +132,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<template v-if="open">
 				<SlotRow v-for="s in minors" :key="s.field" :item="s" minor />
 			</template>
-			<div v-if="minors.length" class="slot more-toggle nodrag nopan" role="button" tabindex="0" @click="toggleMore" @keydown.enter="toggleMore">
+			<div v-if="minors.length" class="slot more-toggle nodrag nopan" role="button" tabindex="0" @click="toggleMore" @keydown="toggleMoreKey">
 				{{ moreText }}
 			</div>
 		</div>

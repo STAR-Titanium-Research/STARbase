@@ -4,7 +4,7 @@ import { renderToString } from 'vue/server-renderer';
 import { buildGraph } from '../model/buildGraph';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from '../model/fixtures';
 import type { ContainerNode as ContainerData, JunctionNode as JunctionData, MapNode, ProcessData, RecordNode as RecordData, Slot, Wire } from '../model/types';
-import { MAP_ACTIONS, MAP_VIEW, cardHandlers, recordHandlers, refKey, socketHandlers, socketProps, stopping, wireHandlers, type MapActions, type MapView } from './actions';
+import { MAP_ACTIONS, MAP_VIEW, activating, cardHandlers, recordHandlers, refKey, socketHandlers, socketProps, stopping, wireHandlers, type MapActions, type MapView } from './actions';
 import { cardLabel, socketLabeller } from './a11y';
 import ContainerNode from './ContainerNode.vue';
 import JunctionNode from './JunctionNode.vue';
@@ -359,6 +359,31 @@ describe('event handlers', () => {
 		rec.select(click);
 		expect(a.calls).toEqual([['hover', 'equipment:eq1', enter.currentTarget], ['hover', null], ['select', 'equipment:eq1']]);
 		expect(click.stopPropagation).toHaveBeenCalled();
+	});
+
+	it('activating: a button-like element acts on Enter and on Space, and Space does not scroll the page (L2)', () => {
+		const ran: string[] = [];
+		const act = activating(() => ran.push('run'));
+		for (const key of ['Enter', ' ']) {
+			const e = { key, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+			act(e);
+			expect(e.preventDefault, key).toHaveBeenCalled();
+			expect(e.stopPropagation, key).toHaveBeenCalled();
+		}
+		expect(ran).toEqual(['run', 'run']);
+		const other = { key: 'Tab', preventDefault: vi.fn(), stopPropagation: vi.fn() };
+		act(other);
+		expect(ran).toHaveLength(2);
+		expect(other.preventDefault).not.toHaveBeenCalled();
+	});
+
+	it('a slot record also selects from the keyboard on Enter or Space', () => {
+		const a = spies();
+		const rec = recordHandlers(a, () => refOf('equipment', 'eq1', 'NLX-1'));
+		rec.key({ key: ' ', preventDefault() {}, stopPropagation() {} });
+		rec.key({ key: 'Enter', preventDefault() {}, stopPropagation() {} });
+		rec.key({ key: 'a', preventDefault() {}, stopPropagation() {} });
+		expect(a.calls).toEqual([['select', 'equipment:eq1'], ['select', 'equipment:eq1']]);
 	});
 
 	it('stopping runs its action after stopping the event', () => {
