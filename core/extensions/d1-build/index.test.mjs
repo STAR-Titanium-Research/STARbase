@@ -306,7 +306,6 @@ test('validateDraftBody: every malformed shape is refused with a plain message',
     [{ ...good(), items: [sample('a', { existing: { id: ID(1), version: 1.5 } })] }, /existing/],
     [{ ...good(), items: [sample('a', { remove: false })] }, /remove/],
     [{ ...good(), items: [op('a', { workState: 'maybe' })] }, /workState/],
-    [{ ...good(), items: [op('a', { workState: undefined })] }, /workState/],
     [{ ...good(), items: [sample('a', { attach: true })] }, /attach/],
     [{ ...good(), items: [op('a', { attach: false })] }, /attach/],
     [{ ...good(), items: [op('a', { rows: 'one' })] }, /rows/],
@@ -1809,4 +1808,37 @@ test('DELETE /templates/:id: the creator or an administrator; another person get
   assert.equal((await del(global.id, { user: BOB, admin: true })).statusCode, 204);
   assert.equal(env.world.templates.length, 0);
   assert.equal((await del(global.id)).statusCode, 404);
+});
+
+test('a card without a work state is planned (the client\'s default for new items)', () => {
+  const noState = (item) => { const { workState, ...rest } = item; return rest; };
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), noState(mop('o1')), noState(test_('t1', { values: { test_type: 'hardness' } }))],
+    [wire(w('s0'), w('o1')), wire(w('s0'), w('t1'))],
+  );
+  assert.equal(validateDraftBody(body).ok, true);
+  const { checks, plan } = buildPlan(body, { existing: known(sampleRow(10)), required: REQUIRED });
+  assert.deepEqual(checks.filter((c) => c.level === 'block'), [], 'planned: no required-for-done fields asked');
+  assert.deepEqual([plan.operations[0].workState, plan.tests[0].workState], ['planned', 'planned']);
+  assert.equal(validateDraftBody(draft([mop('o1', {}, { workState: 'later' })])).ok, false);
+});
+
+test('passes as the client draws them: each is wired sample -> operation -> the same sample, written in items order, no loop', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('p1', { notes: '1' }), mop('p1c', { notes: '2' }), mop('p1c2', { notes: '3' })],
+    [
+      wire(w('s0'), w('p1', 0)), wire(w('p1', 0), w('s0')),
+      wire(w('s0'), w('p1c', 0)), wire(w('p1c', 0), w('s0')),
+      wire(w('s0'), w('p1c2', 0)), wire(w('p1c2', 0), w('s0')),
+    ],
+  );
+  const { checks, plan } = buildPlan(body, { existing: known(sampleRow(10)) });
+  assert.deepEqual(checks.filter((c) => c.level === 'block'), []);
+  assert.deepEqual(plan.operations.map((r) => [r.itemKey, r.output]), [['p1', null], ['p1c', null], ['p1c2', null]]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(env.world.ops.map((o) => o.data.notes), ['1', '2', '3']);
+  assert.ok(env.world.ops.every((o) => o.data.sample_id === ID(10) && !('output_sample_id' in o.data) && !('batch_id' in o.data)));
 });

@@ -148,7 +148,8 @@ export function validateDraftBody(input) {
       }
     }
     if (item.remove !== undefined && item.remove !== true) return fail(`${at}.remove must be true when present.`);
-    if (item.kind !== 'sample' && !WORK_STATES.includes(item.workState)) return fail(`${at}.workState must be planned or done.`);
+    // Absent means planned: a new card is planned until it is marked done.
+    if (item.workState !== undefined && !WORK_STATES.includes(item.workState)) return fail(`${at}.workState must be planned or done.`);
     if (item.attach !== undefined && (item.attach !== true || item.kind !== 'operation')) {
       return fail(`${at}.attach is true on an operation only.`);
     }
@@ -315,6 +316,8 @@ const lower = (s) => String(s).toLowerCase();
 const idRef = (id) => (isBlank(id) ? null : `id:${lower(id)}`);
 const itemRef = (key) => `item:${key}`;
 const keyOrder = (a, b) => String(a).localeCompare(String(b), 'en', { numeric: true });
+// A card's work state: planned unless it says done.
+const stateOf = (item) => (item.workState === 'done' ? 'done' : 'planned');
 const hasValues = (item) => isObject(item.values) && Object.keys(item.values).length > 0;
 
 // The fields the forms mark required, by collection, with their label: [{ collection, field, translations }] rows from
@@ -526,7 +529,7 @@ export function buildPlan(body, ctx = {}) {
       if (input || output) anyEnd = true;
       const after = distinct(inWires.get(rowId)).filter((s) => s.kind === 'op').map((s) => opRows.get(`${s.key}#${s.row}`)?.rowKey).filter(Boolean);
       records.push({
-        key: row.key, itemKey: item.key, rowIndex: i, mode, input, output, workState: item.workState, values: item.values,
+        key: row.key, itemKey: item.key, rowIndex: i, mode, input, output, workState: stateOf(item), values: item.values,
         existingId: item.existing ? lower(item.existing.id) : null, version: item.existing?.version ?? null,
         batchKey: mode === 'new' && rowsFor(item).length > 1 ? item.key : null, after, index: order,
       });
@@ -606,12 +609,12 @@ export function buildPlan(body, ctx = {}) {
     }
     if (isBlank(item.values.test_type)) block(item.key, 'Choose a test type.', 'test_type');
     if (!subjectRefs.length) block(item.key, 'Wire a sample into this test.', 'subject');
-    tests.push({ key: item.key, values: item.values, workState: item.workState, subjects: subjectRefs });
+    tests.push({ key: item.key, values: item.values, workState: stateOf(item), subjects: subjectRefs });
   }
 
   // -- required for done, and the warnings ----------------------------------------------------------------------------------
   const needDone = (kind, collection, item) => {
-    if (item.workState !== 'done') return;
+    if (stateOf(item) !== 'done') return;
     for (const { field, label } of required[collection] ?? []) {
       if (RESERVED_FIELDS[kind].includes(field) || blockedFields.has(`${item.key}|${field}`)) continue;
       if (isBlank(item.values[field])) block(item.key, `${label} is required.`, field);
@@ -622,7 +625,7 @@ export function buildPlan(body, ctx = {}) {
     const collection = KIND_COLLECTION[item.kind];
     needDone(item.kind, collection, item);
     if (isBlank(item.values.equipment_id)) warn(item.key, 'No machine chosen.', 'equipment_id');
-    if (item.workState === 'planned' && isBlank(item.values.planned_date)) warn(item.key, 'No planned date.', 'planned_date');
+    if (stateOf(item) === 'planned' && isBlank(item.values.planned_date)) warn(item.key, 'No planned date.', 'planned_date');
   }
 
   // -- records that exist already -------------------------------------------------------------------------------------------
