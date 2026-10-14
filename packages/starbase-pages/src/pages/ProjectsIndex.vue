@@ -99,8 +99,9 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 				<p v-if="truncated" class="d1-note warn">The activity charts are based on the newest records only (the lab has more than the page loads).</p>
 				<!-- A chosen team's ids are still loading: nothing is known to match yet, so say loading, not "no match". -->
 				<LoadState v-if="teamFilter.loading.value" loading loading-text="Loading this team's projects…" />
-				<LoadState v-else-if="!visible.length" empty empty-text="No project matches these filters." />
-				<div v-else class="grid">
+				<!-- A failed ids call already shows its alert above: no "No project matches" and no cards beside it. -->
+				<LoadState v-else-if="!visible.length && !teamFilter.error.value" empty empty-text="No project matches these filters." />
+				<div v-else-if="visible.length" class="grid">
 					<ProjectCard
 						v-for="p in visible"
 						:key="p.project_id"
