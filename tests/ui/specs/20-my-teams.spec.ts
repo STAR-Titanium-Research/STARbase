@@ -354,8 +354,11 @@ test('Home: My teams lists the team records with accessible links; Show more mov
 	try {
 		const answered = s.page.waitForResponse((r) => r.url().includes('/d1-teams/mine/recent'));
 		await s.page.goto(`${STAR_BASE}/home`);
-		expect((await answered).ok(), 'the endpoint answered').toBe(true);
-		await s.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 200))));
+		const answer = await answered;
+		expect(answer.ok(), 'the endpoint answered').toBe(true);
+		await answer.finished(); // the whole body has arrived, so the panel has what it needs to decide
+		// a positive anchor: Home itself has drawn (its greeting), so "no panel" is a decision and not a page that has not rendered yet
+		await expect(s.page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening), / })).toBeVisible();
 		await expect(s.page.getByRole('heading', { name: 'My teams' })).toHaveCount(0);
 		await expect(s.page.locator('ul.lines')).toHaveCount(0);
 		await expect(s.page.getByText('All teams →')).toHaveCount(0);
