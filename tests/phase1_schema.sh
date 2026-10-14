@@ -843,6 +843,152 @@ bt_check "redown_table:gone" "down runs again after up"
 bt_check "redown_powder:true/true" "down after up restores the Batch # label"
 bt_check "redown_ops:1" "down keeps the operation rows"
 
+echo "== Planned work migration (ADR-0019) =="
+# Process map edit mode, slice 1: work_state, planned_date, done_by_person_id, done_at on operations and tests, and the
+# `planned` sample status. Down and up run inside a rolled-back transaction; the Directus tables are stubs here, so a
+# stand-in Status field row (four choices) is seeded and the metadata is asserted by reading what the SQL wrote.
+PW=db/migrations/20261014000185_planned_work.sql
+pw_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$PW")
+pw_down=$(awk '/-- migrate:down/{f=1;next}f' "$PW")
+pw_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+DELETE FROM directus_fields WHERE collection = 'physical_samples' AND field = 'current_status';
+INSERT INTO directus_fields (collection, field, interface, options, display, display_options, hidden, sort, width)
+VALUES ('physical_samples', 'current_status', 'select-dropdown',
+        '{"choices":[{"text":"Active","value":"active"},{"text":"Consumed","value":"consumed"},{"text":"Destroyed","value":"destroyed"},{"text":"Archived","value":"archived"}]}',
+        'labels',
+        '{"choices":[{"text":"Active","value":"active","foreground":"#2E7D32","background":"#E8F5E9"},{"text":"Archived","value":"archived","foreground":"#616161","background":"#F5F5F5"}]}',
+        false, 8, 'half');
+$pw_down
+SELECT 'down_cols:' || count(*) FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions')
+    AND column_name IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at');
+SELECT 'down_meta:' || (SELECT count(*) FROM directus_fields WHERE collection IN ('manufacturing_operations', 'test_sessions') AND field IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at'))
+  || ',' || (SELECT count(*) FROM directus_relations WHERE many_field = 'done_by_person_id');
+SELECT 'down_status_check:' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'physical_samples_status_check';
+SELECT 'down_status_comment:' || col_description('physical_samples'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'physical_samples'::regclass AND attname = 'current_status'));
+SELECT 'down_choices:' || (SELECT string_agg(c ->> 'value', ',') FROM jsonb_array_elements(options::jsonb -> 'choices') c)
+  || '/' || (SELECT string_agg(c ->> 'value', ',') FROM jsonb_array_elements(display_options::jsonb -> 'choices') c)
+  FROM directus_fields WHERE collection = 'physical_samples' AND field = 'current_status';
+$pw_up
+SELECT 'up_cols:' || string_agg(table_name || '.' || column_name || '=' || data_type || '/' || is_nullable || '/' || coalesce(column_default, '-'), ';' ORDER BY table_name, column_name)
+  FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions')
+    AND column_name IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at');
+SELECT 'up_checks:' || string_agg(conname, ',' ORDER BY conname) FROM pg_constraint
+  WHERE conname IN ('manufacturing_operations_work_state_check', 'test_sessions_work_state_check');
+SELECT 'up_status_check:' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'physical_samples_status_check';
+SELECT 'up_fk:' || string_agg(conrelid::regclass::text || '=' || confdeltype::text, ',' ORDER BY conrelid::regclass::text) FROM pg_constraint
+  WHERE contype = 'f' AND confrelid = 'people'::regclass AND conrelid IN ('manufacturing_operations'::regclass, 'test_sessions'::regclass)
+    AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = conrelid AND attname = 'done_by_person_id')];
+SELECT 'up_indexes:' || string_agg(indexname || '=' || (indexdef LIKE '%WHERE (work_state = ''planned''::text)'), ',' ORDER BY indexname)
+  FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('idx_manufacturing_operations_work_state_planned', 'idx_test_sessions_work_state_planned');
+SELECT 'up_comments:' || count(*) FROM pg_attribute
+  WHERE attrelid IN ('manufacturing_operations'::regclass, 'test_sessions'::regclass)
+    AND attname IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at') AND col_description(attrelid, attnum) IS NOT NULL;
+SELECT 'up_status_comment:' || (col_description('physical_samples'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'physical_samples'::regclass AND attname = 'current_status')) LIKE '%planned%');
+SELECT 'up_fields:' || string_agg(collection || '.' || field || '/' || interface || '/' || readonly || '/' || hidden || '/' || sort || '/' || coalesce("group", '-'), ';' ORDER BY collection, sort)
+  FROM directus_fields WHERE collection IN ('manufacturing_operations', 'test_sessions') AND field IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at');
+SELECT 'up_work_state_choices:' || string_agg(DISTINCT (options::jsonb -> 'choices')::text, ';')
+  FROM directus_fields WHERE collection IN ('manufacturing_operations', 'test_sessions') AND field = 'work_state';
+SELECT 'up_relations:' || count(*) FROM directus_relations
+  WHERE many_field = 'done_by_person_id' AND many_collection IN ('manufacturing_operations', 'test_sessions') AND one_collection = 'people';
+SELECT 'up_choices:' || (SELECT string_agg(c ->> 'value', ',') FROM jsonb_array_elements(options::jsonb -> 'choices') c)
+  || '/' || (SELECT string_agg(c ->> 'value', ',') FROM jsonb_array_elements(display_options::jsonb -> 'choices') c)
+  FROM directus_fields WHERE collection = 'physical_samples' AND field = 'current_status';
+INSERT INTO people (person_id, full_name) VALUES ('c0000000-0000-4000-8000-0000000185a1', 'Done By Person');
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('c0000000-0000-4000-8000-0000000185b1', 'T-PLAN', 'planned work test method');
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-4000-8000-0000000185c1', 'TEST-PLAN-001');
+INSERT INTO physical_samples (sample_id, sample_code, current_status) VALUES ('c0000000-0000-4000-8000-0000000185c2', 'TEST-PLAN-002', 'planned');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code)
+VALUES ('c0000000-0000-4000-8000-0000000185d1', 'c0000000-0000-4000-8000-0000000185b1', 'c0000000-0000-4000-8000-0000000185c1', 'TEST-PLAN-OP-1');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, output_sample_id, pass_code, work_state, planned_date)
+VALUES ('c0000000-0000-4000-8000-0000000185d2', 'c0000000-0000-4000-8000-0000000185b1', 'c0000000-0000-4000-8000-0000000185c1',
+        'c0000000-0000-4000-8000-0000000185c2', 'TEST-PLAN-OP-2', 'planned', '2026-11-02');
+INSERT INTO test_sessions (session_id, sample_id) VALUES ('c0000000-0000-4000-8000-0000000185e1', 'c0000000-0000-4000-8000-0000000185c1');
+INSERT INTO test_sessions (session_id, sample_id, work_state, planned_date)
+VALUES ('c0000000-0000-4000-8000-0000000185e2', 'c0000000-0000-4000-8000-0000000185c1', 'planned', '2026-11-03');
+SELECT 'default_done:' || (SELECT work_state FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-0000000185d1')
+  || ',' || (SELECT work_state FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000185e1');
+SELECT 'planned_rows:' || (SELECT work_state || '/' || planned_date || '/' || (operation_date IS NULL) FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-0000000185d2')
+  || ',' || (SELECT work_state || '/' || planned_date || '/' || (session_date IS NULL) FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000185e2');
+SELECT 'planned_sample:' || current_status FROM physical_samples WHERE sample_id = 'c0000000-0000-4000-8000-0000000185c2';
+SAVEPOINT s1;
+UPDATE manufacturing_operations SET work_state = 'cancelled' WHERE operation_id = 'c0000000-0000-4000-8000-0000000185d1';
+SELECT 'bad_op_state:accepted';
+ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s2;
+UPDATE test_sessions SET work_state = 'cancelled' WHERE session_id = 'c0000000-0000-4000-8000-0000000185e1';
+SELECT 'bad_test_state:accepted';
+ROLLBACK TO SAVEPOINT s2;
+SAVEPOINT s3;
+UPDATE manufacturing_operations SET work_state = NULL WHERE operation_id = 'c0000000-0000-4000-8000-0000000185d1';
+SELECT 'null_state:accepted';
+ROLLBACK TO SAVEPOINT s3;
+SAVEPOINT s4;
+UPDATE physical_samples SET current_status = 'cancelled' WHERE sample_id = 'c0000000-0000-4000-8000-0000000185c1';
+SELECT 'bad_sample_status:accepted';
+ROLLBACK TO SAVEPOINT s4;
+UPDATE manufacturing_operations SET work_state = 'done', done_by_person_id = 'c0000000-0000-4000-8000-0000000185a1', done_at = now()
+  WHERE operation_id = 'c0000000-0000-4000-8000-0000000185d2';
+UPDATE physical_samples SET current_status = 'active' WHERE sample_id = 'c0000000-0000-4000-8000-0000000185c2';
+SELECT 'marked_done:' || (SELECT work_state || '/' || (done_by_person_id IS NOT NULL) || '/' || (done_at IS NOT NULL) FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-0000000185d2');
+DELETE FROM people WHERE person_id = 'c0000000-0000-4000-8000-0000000185a1';
+SELECT 'done_by_cleared:' || (done_by_person_id IS NULL) FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-0000000185d2';
+UPDATE physical_samples SET current_status = 'planned' WHERE sample_id = 'c0000000-0000-4000-8000-0000000185c2';
+$pw_down
+SELECT 'redown_sample:' || current_status FROM physical_samples WHERE sample_id = 'c0000000-0000-4000-8000-0000000185c2';
+SELECT 'redown_other_sample:' || current_status FROM physical_samples WHERE sample_id = 'c0000000-0000-4000-8000-0000000185c1';
+SELECT 'redown_cols:' || count(*) FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions')
+    AND column_name IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at');
+SELECT 'redown_rows:' || (SELECT count(*) FROM manufacturing_operations WHERE operation_id IN ('c0000000-0000-4000-8000-0000000185d1', 'c0000000-0000-4000-8000-0000000185d2'))
+  || ',' || (SELECT count(*) FROM test_sessions WHERE session_id IN ('c0000000-0000-4000-8000-0000000185e1', 'c0000000-0000-4000-8000-0000000185e2'));
+SELECT 'redown_meta:' || (SELECT count(*) FROM directus_fields WHERE collection IN ('manufacturing_operations', 'test_sessions') AND field IN ('work_state', 'planned_date', 'done_by_person_id', 'done_at'))
+  || ',' || (SELECT count(*) FROM directus_relations WHERE many_field = 'done_by_person_id');
+SELECT 'redown_status_check:' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'physical_samples_status_check';
+SELECT 'redown_choices:' || (SELECT string_agg(c ->> 'value', ',') FROM jsonb_array_elements(options::jsonb -> 'choices') c)
+  || '/' || (SELECT string_agg(c ->> 'value', ',') FROM jsonb_array_elements(display_options::jsonb -> 'choices') c)
+  FROM directus_fields WHERE collection = 'physical_samples' AND field = 'current_status';
+ROLLBACK;
+SQL
+)
+pw_check() { grep -qxF "$1" <<<"$pw_out" && ok "$2" || bad "$2 (psql output: $pw_out)"; }
+pw_check "down_cols:0" "down: the four work columns are gone from operations and tests"
+pw_check "down_meta:0,0" "down: their Directus fields and relations are removed"
+pw_check "down_status_check:CHECK ((current_status = ANY (ARRAY['active'::text, 'consumed'::text, 'destroyed'::text, 'archived'::text])))" "down: the sample status CHECK is the old four values"
+pw_check "down_status_comment:Lifecycle state: active | consumed | destroyed | archived." "down: the current_status comment is restored"
+pw_check "down_choices:active,consumed,destroyed,archived/active,archived" "down: the Status dropdown has no Planned choice (and a stand-in without one is unchanged)"
+pw_check "up_cols:manufacturing_operations.done_at=timestamp with time zone/YES/-;manufacturing_operations.done_by_person_id=uuid/YES/-;manufacturing_operations.planned_date=date/YES/-;manufacturing_operations.work_state=text/NO/'done'::text;test_sessions.done_at=timestamp with time zone/YES/-;test_sessions.done_by_person_id=uuid/YES/-;test_sessions.planned_date=date/YES/-;test_sessions.work_state=text/NO/'done'::text" \
+    "up: work_state is NOT NULL DEFAULT 'done'; planned_date, done_by_person_id and done_at are nullable"
+pw_check "up_checks:manufacturing_operations_work_state_check,test_sessions_work_state_check" "up: both work_state CHECK constraints exist"
+pw_check "up_status_check:CHECK ((current_status = ANY (ARRAY['active'::text, 'consumed'::text, 'destroyed'::text, 'archived'::text, 'planned'::text])))" "up: the sample status CHECK allows planned"
+pw_check "up_fk:manufacturing_operations=n,test_sessions=n" "up: done_by_person_id is a foreign key to people, ON DELETE SET NULL, on both tables"
+pw_check "up_indexes:idx_manufacturing_operations_work_state_planned=true,idx_test_sessions_work_state_planned=true" "up: partial indexes on work_state = 'planned'"
+pw_check "up_comments:8" "up: all eight new columns carry a COMMENT"
+pw_check "up_status_comment:true" "up: the current_status comment names planned"
+pw_check "up_fields:manufacturing_operations.work_state/select-dropdown/true/false/80/grp_who_where;manufacturing_operations.planned_date/datetime/false/false/90/grp_who_where;manufacturing_operations.done_by_person_id/select-dropdown-m2o/true/false/100/grp_who_where;manufacturing_operations.done_at/datetime/true/false/110/grp_who_where;test_sessions.work_state/select-dropdown/true/false/70/grp_who_where;test_sessions.planned_date/datetime/false/false/80/grp_who_where;test_sessions.done_by_person_id/select-dropdown-m2o/true/false/90/grp_who_where;test_sessions.done_at/datetime/true/false/100/grp_who_where" \
+    "up: work_state, done_by and done_at are read-only fields in the Who & where group; planned_date is editable beside them"
+pw_check 'up_work_state_choices:[{"text": "Planned", "value": "planned"}, {"text": "Done", "value": "done"}]' "up: work_state offers Planned and Done"
+pw_check "up_relations:2" "up: done_by_person_id relates to people on both collections"
+pw_check "up_choices:active,consumed,destroyed,archived,planned/active,archived,planned" "up: the Status dropdown and its labels gain Planned, once"
+pw_check "default_done:done,done" "an operation or test written without a work state is done"
+pw_check "planned_rows:planned/2026-11-02/true,planned/2026-11-03/true" "a planned operation and a planned test carry a planned date and no operation or session date"
+pw_check "planned_sample:planned" "a sample can be planned"
+! grep -qx "bad_op_state:accepted" <<<"$pw_out" && ok "an operation work_state outside planned or done is refused" || bad "an operation work_state outside planned or done is refused"
+! grep -qx "bad_test_state:accepted" <<<"$pw_out" && ok "a test work_state outside planned or done is refused" || bad "a test work_state outside planned or done is refused"
+! grep -qx "null_state:accepted" <<<"$pw_out" && ok "work_state cannot be NULL" || bad "work_state cannot be NULL"
+! grep -qx "bad_sample_status:accepted" <<<"$pw_out" && ok "a sample status outside the five is refused" || bad "a sample status outside the five is refused"
+pw_check "marked_done:done/true/true" "marking an operation done keeps who and when"
+pw_check "done_by_cleared:true" "deleting the person who marked it done clears done_by_person_id"
+pw_check "redown_sample:archived" "down: a planned sample becomes archived"
+pw_check "redown_other_sample:active" "down: other samples keep their status"
+pw_check "redown_cols:0" "down after up: the work columns are gone"
+pw_check "redown_rows:2,2" "down keeps the operation and test rows"
+pw_check "redown_meta:0,0" "down after up: the Directus fields and relations are gone"
+pw_check "redown_status_check:CHECK ((current_status = ANY (ARRAY['active'::text, 'consumed'::text, 'destroyed'::text, 'archived'::text])))" "down after up: the sample status CHECK is the old four values"
+pw_check "redown_choices:active,consumed,destroyed,archived/active,archived" "down after up: Planned is removed from the Status dropdown and its labels"
+
 echo "== Sample geometry: legacy forms are back-filled =="
 # Seed old-vocabulary samples, apply the back-fill's up SQL, assert, then ROLLBACK.
 BACKFILL=db/migrations/20260930000115_backfill_legacy_geometry_forms.sql
