@@ -19,7 +19,7 @@ const isProcess = (node: MapNode) => node.type === 'container' || node.type === 
  * One step is one process step: from a card across a container (or junction) costs 1, and the
  * container is shown together with the samples on its other sides. Containers wired directly to each
  * other (in-place work and tests on one sample) cost 1 per container. A focus that is itself a
- * container or junction starts with the samples it touches. Stock lot, powder batch and material
+ * container or junction starts with the samples it touches; a source card starts with what it feeds. Stock lot, powder batch and material
  * cards next to any shown node are always shown, and are never walked through (a lot does not pull
  * in the other samples it fed).
  */
@@ -54,7 +54,15 @@ export function shownNodes(graph: ProcessGraph, focusNodeId: string, reach: numb
   };
 
   let frontier = [focusNodeId];
-  if (isProcess(byId.get(focusNodeId)!)) for (const side of cardsAround(focusNodeId)) show(side, frontier);
+  const focus = byId.get(focusNodeId)!;
+  if (isProcess(focus)) for (const side of cardsAround(focusNodeId)) show(side, frontier);
+  else if (isSource(focus)) {
+    // A source card starts like a process: what it feeds is at distance 0, with that container's cards.
+    for (const fed of around(focusNodeId)) {
+      show(fed, frontier);
+      if (isProcess(byId.get(fed)!)) for (const side of cardsAround(fed)) show(side, frontier);
+    }
+  }
 
   for (let step = 0; step < reach && frontier.length; step++) {
     const next: string[] = [];

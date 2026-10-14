@@ -166,8 +166,11 @@ function formatValue(value: unknown, unit: string | undefined): string | null {
   else if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim())) n = Number(value);
   if (n !== null) {
     if (!Number.isFinite(n)) return null;
-    // 4 significant figures for small values (0.0004 stays 0.0004), tenths for 1000 and up.
-    const text = String(Math.abs(n) >= 1000 ? Math.round(n * 10) / 10 : Number(n.toPrecision(4)));
+    // 4 significant figures below 1000 (0.0004 stays 0.0004), tenths from 1000 up; never an exponent.
+    const text =
+      Math.abs(n) >= 1000
+        ? n.toLocaleString('en-GB', { maximumFractionDigits: 1, useGrouping: false })
+        : n.toLocaleString('en-GB', { maximumSignificantDigits: 4, useGrouping: false });
     return unit ? `${text} ${unit}` : text;
   }
   if (typeof value === 'string') return value.trim() || null;

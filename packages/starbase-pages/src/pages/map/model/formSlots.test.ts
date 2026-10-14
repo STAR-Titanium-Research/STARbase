@@ -93,6 +93,14 @@ describe('formSlots', () => {
 });
 
 describe('keySettings', () => {
+  it('never prints an exponent', () => {
+    const op = mkOp({ settings: { machining_feed_mm_per_rev: 1e-7, machining_axial_depth_of_cut_mm: 1e21 } });
+    expect(keySettings(op, 'machining')).toEqual([
+      { label: 'Feed', value: '0.0000001 mm/rev' },
+      { label: 'Depth of cut', value: '1000000000000000000000 mm' },
+    ]);
+  });
+
   it('formats by significant figures', () => {
     const op = mkOp({ settings: { machining_feed_mm_per_rev: 0.0004, machining_axial_depth_of_cut_mm: '0.12345', machining_cutting_speed_m_per_min: 12345.67 } });
     expect(keySettings(op, 'machining')).toEqual([

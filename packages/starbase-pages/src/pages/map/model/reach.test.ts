@@ -45,6 +45,18 @@ describe('shownNodes', () => {
     expect(shownNodes(g, 's:s2', 'all').size).toBe(g.nodes.length);
   });
 
+  it('a stock lot as focus shows what it feeds and the step beyond', () => {
+    const data = mkData({
+      samples: [mkSample('s1'), mkSample('s2')],
+      operations: [mkOp({ id: 'f1', sampleId: null, outputSampleId: 's1', date: '2026-01-01' })],
+      lineage: [mkLineage('s1', 's2', 'cut_from', 0.5)],
+      stock: [mkStock('l1', 's1')],
+    });
+    const g = graph(data);
+    expect(ids(shownNodes(g, 'lot:l1', 0))).toEqual(['lot:l1', 'op:f1', 's:s1']);
+    expect(ids(shownNodes(g, 'lot:l1', 1))).toEqual(['j:s1:cut_from', 'lot:l1', 'op:f1', 's:s1', 's:s2']);
+  });
+
   it('an unknown focus shows nothing', () => {
     expect(shownNodes(graph(chain()), 's:nope', 2).size).toBe(0);
   });
