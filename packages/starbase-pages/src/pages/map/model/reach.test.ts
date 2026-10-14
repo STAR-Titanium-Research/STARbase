@@ -21,14 +21,23 @@ function chain(): ProcessData {
 }
 
 describe('shownNodes', () => {
-  it('reach 1 shows focus + direct neighbours', () => {
+  it('reach 1 shows focus, the containers touching it and the samples across them', () => {
     const g = graph(chain());
-    expect(ids(shownNodes(g, 's:s2', 1))).toEqual(['op:cut', 'op:pol', 's:s2']);
+    expect(ids(shownNodes(g, 's:s2', 1))).toEqual(['op:cut', 'op:pol', 's:s1', 's:s2']);
   });
 
-  it('reach 2 on the in-place chain', () => {
+  it('reach 1 from s2 reaches s1 through the cut', () => {
+    expect(shownNodes(graph(chain()), 's:s2', 1).has('s:s1')).toBe(true);
+  });
+
+  it('reach 2 on the in-place chain costs one step per container', () => {
     const g = graph(chain());
     expect(ids(shownNodes(g, 's:s2', 2))).toEqual(['op:cut', 'op:pol', 's:s1', 's:s2', 'test:hv']);
+    expect(ids(shownNodes(g, 's:s2', 3))).toEqual(['op:cut', 'op:ht', 'op:pol', 's:s1', 's:s2', 'test:hv']);
+  });
+
+  it('a container as focus starts with the samples it touches', () => {
+    expect(ids(shownNodes(graph(chain()), 'op:cut', 0))).toEqual(['op:cut', 's:s1', 's:s2']);
   });
 
   it("'all' shows everything", () => {
@@ -48,13 +57,12 @@ describe('shownNodes', () => {
     expect(ids(shownNodes(graph(data), 's:a', 1))).toEqual(['lot:l1', 's:a']);
   });
 
-  it('a junction beside a shown sample is shown', () => {
+  it('reach 1 crosses a junction to the child sample', () => {
     const data = mkData({
-      samples: [mkSample('p'), mkSample('c')],
-      lineage: [mkLineage('p', 'c', 'derived_from', 0.5)],
+      samples: [mkSample('p'), mkSample('c'), mkSample('d')],
+      lineage: [mkLineage('p', 'c', 'derived_from', 0.5), mkLineage('c', 'd', 'derived_from', 1)],
     });
-    const shown = shownNodes(graph(data), 's:p', 1);
-    expect(shown.has('j:p:derived_from')).toBe(true);
-    expect(shown.has('s:c')).toBe(false);
+    expect(ids(shownNodes(graph(data), 's:p', 1))).toEqual(['j:p:derived_from', 's:c', 's:p']);
+    expect(shownNodes(graph(data), 's:p', 2).has('s:d')).toBe(true);
   });
 });

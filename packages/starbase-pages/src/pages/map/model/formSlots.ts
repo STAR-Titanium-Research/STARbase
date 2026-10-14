@@ -67,13 +67,13 @@ const MAJOR: Record<Kind, { field: string; role: string }[]> = {
 const EXCLUDED = new Set(['sample_id', 'output_sample_id', 'method_id', 'project_id', 'batch_id']);
 
 export function formSlots(row: OpRow | TestRow, kind: Kind, defs: RelationDef[]): Slot[] {
-  const byField = new Map(defs.map((d) => [d.field, d]));
   const refOf = (field: string): Ref | null => row.relations[field] ?? null;
 
   const slots: Slot[] = [];
+  // A major relation on the row always shows, even if the runtime `defs` do not list it.
   for (const major of MAJOR[kind]) {
     const ref = refOf(major.field);
-    if (ref && byField.has(major.field)) slots.push({ field: major.field, role: major.role, ref, major: true });
+    if (ref) slots.push({ field: major.field, role: major.role, ref, major: true });
   }
   const majors = new Set(MAJOR[kind].map((m) => m.field));
   for (const def of defs) {
@@ -166,7 +166,8 @@ function formatValue(value: unknown, unit: string | undefined): string | null {
   else if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim())) n = Number(value);
   if (n !== null) {
     if (!Number.isFinite(n)) return null;
-    const text = String(Math.round(n * 1000) / 1000);
+    // 4 significant figures for small values (0.0004 stays 0.0004), tenths for 1000 and up.
+    const text = String(Math.abs(n) >= 1000 ? Math.round(n * 10) / 10 : Number(n.toPrecision(4)));
     return unit ? `${text} ${unit}` : text;
   }
   if (typeof value === 'string') return value.trim() || null;
@@ -199,10 +200,10 @@ const refKey = (ref: Ref) => `${ref.collection}:${ref.id}`;
 
 /**
  * One slot per field, in first-seen order. A slot every row has with the same record stays as it is;
- * otherwise (different records, or some rows without it) `ref` is null and `values` holds each
- * distinct record once.
+ * otherwise `ref` is null and `values` holds each distinct record once; `partial` is also set when
+ * some rows have no such slot at all.
  */
-export function mergeSlots(rows: Slot[][]): (Slot & { values?: Ref[] })[] {
+export function mergeSlots(rows: Slot[][]): Slot[] {
   if (rows.length === 0) return [];
   const fields: string[] = [];
   for (const row of rows) for (const s of row) if (!fields.includes(s.field)) fields.push(s.field);
@@ -218,7 +219,9 @@ export function mergeSlots(rows: Slot[][]): (Slot & { values?: Ref[] })[] {
     if (shared || distinct.size === 0) {
       return { field, role: first.role, ref: refs.find((r) => r) ?? null, major: first.major };
     }
-    return { field, role: first.role, ref: null, major: first.major, values: [...distinct.values()] };
+    const merged: Slot = { field, role: first.role, ref: null, major: first.major, values: [...distinct.values()] };
+    if (refs.some((ref) => ref === null)) merged.partial = true;
+    return merged;
   });
 }
 

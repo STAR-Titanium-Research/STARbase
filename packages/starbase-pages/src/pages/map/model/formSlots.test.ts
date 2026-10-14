@@ -41,6 +41,11 @@ describe('formSlots', () => {
     expect(slots.map((s) => s.major)).toEqual([true, true, true, true, true, true, false]);
   });
 
+  it('a major relation on the row shows even when defs lack the field', () => {
+    const op = mkOp({ relations: { tool_id: ref('tools', 't1') } });
+    expect(formSlots(op, 'operation', [])).toEqual([{ field: 'tool_id', role: 'Tool', ref: ref('tools', 't1'), major: true }]);
+  });
+
   it('test majors are machine, insert edge, data', () => {
     const test = mkTest({
       relations: {
@@ -88,6 +93,15 @@ describe('formSlots', () => {
 });
 
 describe('keySettings', () => {
+  it('formats by significant figures', () => {
+    const op = mkOp({ settings: { machining_feed_mm_per_rev: 0.0004, machining_axial_depth_of_cut_mm: '0.12345', machining_cutting_speed_m_per_min: 12345.67 } });
+    expect(keySettings(op, 'machining')).toEqual([
+      { label: 'Cutting speed', value: '12345.7 m/min' },
+      { label: 'Feed', value: '0.0004 mm/rev' },
+      { label: 'Depth of cut', value: '0.1235 mm' },
+    ]);
+  });
+
   it('sintering returns max temp, max force, mould in that order and skips a missing one', () => {
     const op = mkOp({
       category: 'sintering',
@@ -156,12 +170,16 @@ describe('mergeSlots', () => {
     expect(merged[1].values?.map((v) => v.id)).toEqual(['t1', 't2']);
   });
 
-  it('the same tool twice stays one; a slot only some rows have becomes values', () => {
+  it('the same tool twice stays one; a slot only some rows have is partial', () => {
     const t = ref('tools', 't1');
-    expect(mergeSlots([[slot('tool_id', 'Tool', t)], [slot('tool_id', 'Tool', { ...t })]])[0].values).toBeUndefined();
-    expect(mergeSlots([[slot('tool_id', 'Tool', t)], [slot('tool_id', 'Tool', t)], []])).toEqual([
-      { field: 'tool_id', role: 'Tool', ref: null, major: true, values: [t] },
+    expect(mergeSlots([[slot('tool_id', 'Tool', t)], [slot('tool_id', 'Tool', { ...t })]])).toEqual([
+      slot('tool_id', 'Tool', t),
     ]);
+    expect(mergeSlots([[slot('tool_id', 'Tool', t)], [slot('tool_id', 'Tool', t)], []])).toEqual([
+      { field: 'tool_id', role: 'Tool', ref: null, major: true, values: [t], partial: true },
+    ]);
+    const differing = mergeSlots([[slot('tool_id', 'Tool', t)], [slot('tool_id', 'Tool', ref('tools', 't2'))]])[0];
+    expect(differing.partial).toBeUndefined();
   });
 
   it('a single row is unchanged and no rows give nothing', () => {

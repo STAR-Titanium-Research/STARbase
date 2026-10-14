@@ -21,6 +21,7 @@ import type {
   Wire,
 } from './types';
 import { keySettings, mergeSettings, mergeSlots } from './formSlots';
+import { isBundleSocket, nodeOfSocket } from './sockets';
 
 export interface BuildGraphOpts {
   /** Inside-tray slots of one operation or test row. */
@@ -93,10 +94,6 @@ const keyOf = (rec: OpRow | TestRow, sequence: number | null): StepKey => ({
   seq: sequence ?? Infinity,
   id: rec.id,
 });
-
-/** The node a socket id belongs to. */
-export const nodeOfSocket = (socket: string) => socket.replace(/:(?:in|out):[^:]+$/, '');
-const isBundleSocket = (socket: string) => socket.endsWith(':b');
 
 function stockLotNode(lot: StockOrigin): RecordNode {
   const id = `lot:${lot.lotId}`;

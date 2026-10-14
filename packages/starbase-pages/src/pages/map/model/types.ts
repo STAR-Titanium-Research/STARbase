@@ -131,7 +131,10 @@ export interface Slot {
   role: string;
   ref: Ref | null;
   major: boolean;
+  /** Distinct records when the rows of a batch differ (or only some have the slot). */
   values?: Ref[];
+  /** Merged slot only: some rows have it and some do not. */
+  partial?: boolean;
 }
 
 export type RecordNode = {
