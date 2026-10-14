@@ -53,6 +53,10 @@ const pageTitle = computed(() => toolingTitle(focus.value, model.value));
 const studioTo = computed(() => dataStudioRoute(collection.value, props.id));
 const pin = computed(() => pinTargetForRecord(collection.value, props.id));
 
+// The box's own row: at box focus the freshly read focused record (so a reload shows what was just saved),
+// else the row the model was built from. Either way it is one row of `tool_boxes` read with the same fields.
+const boxRow = computed(() => (focusKind.value === 'box' ? (record.value ?? box.value) : box.value));
+
 const code = computed(() => {
 	if (edge.value) return edge.value.code;
 	if (insert.value) return insert.value.code;
@@ -61,20 +65,20 @@ const code = computed(() => {
 const railTitle = computed(() => {
 	if (insert.value && edge.value) return `Edge ${edgeLabel(insert.value, edge.value)}`;
 	if (insert.value) return insertLabel(insert.value);
-	return box.value?.description ?? '';
+	return boxRow.value?.description ?? '';
 });
 const railFacts = computed(() => {
 	const m = model.value;
 	if (!m) return [];
-	if (focusKind.value === 'box') return boxRailFacts(box.value);
+	if (focusKind.value === 'box') return boxRailFacts(boxRow.value);
 	if (insert.value && edge.value) return edgeRailFacts(record.value, m, insert.value, edge.value);
 	return insert.value ? insertRailFacts(record.value, m.boxId, m.boxCode) : [];
 });
 const details = computed(() => {
-	const base = focusKind.value === 'box' ? boxDetailFacts(box.value) : edge.value ? edgeDetailFacts(record.value) : insertDetailFacts(record.value);
+	const base = focusKind.value === 'box' ? boxDetailFacts(boxRow.value) : edge.value ? edgeDetailFacts(record.value) : insertDetailFacts(record.value);
 	return detailFacts(base, [], railFacts.value);
 });
-const notes = computed(() => (focusKind.value === 'box' ? box.value?.notes : record.value?.notes) ?? null);
+const notes = computed(() => (focusKind.value === 'box' ? boxRow.value?.notes : record.value?.notes) ?? null);
 
 // An edge marked fresh that tests or operations used: spec Q6, a warning, never a change of state.
 const historyRows = computed(() => tests.value.data.length + operations.value.data.length);
@@ -144,7 +148,7 @@ const contents = computed<ContentsEntry[]>(() => {
 					<ToolingStage :model="model" :focus="focus" :next-fresh="nextFresh" @select="onSelect" />
 
 					<template v-if="focusKind === 'box'">
-						<BoxPanels :model="model" :type="box?.insert_type_id ?? null" :next-fresh="nextFresh" :counts="edgeCounts" :manufacturer="manufacturer" />
+						<BoxPanels :model="model" :type="boxRow?.insert_type_id ?? null" :next-fresh="nextFresh" :counts="edgeCounts" :manufacturer="manufacturer" />
 						<ToolingDetails :facts="details" :notes="notes" />
 					</template>
 					<template v-else-if="insert && edge">

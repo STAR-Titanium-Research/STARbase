@@ -71,7 +71,6 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 	const manufacturer = modelSection<string>('');
 
 	let pendingBox: string | null = null;
-	let boxCache: { id: string; row: any } | null = null;
 
 	const readBox = (boxId: string) => getItem('tool_boxes', boxId, { fields: BOX_FIELDS });
 	const readFocus = (k: FocusKind, rid: string) => {
@@ -86,7 +85,8 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 		return typeof raw === 'string' && raw ? raw : null;
 	};
 
-	async function loadModel(boxId: string, force: boolean) {
+	// `fresh` is the box row the focused read just returned (at box focus); else the box is read here.
+	async function loadModel(boxId: string, force: boolean, fresh: any | null) {
 		if (!force && (model.value?.boxId === boxId || pendingBox === boxId)) return;
 		if (model.value && model.value.boxId !== boxId) {
 			model.value = null;
@@ -101,10 +101,8 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 		let built: ToolingModel;
 		let boxData: any;
 		try {
-			const cached = boxCache?.id === boxId ? boxCache.row : null;
-			boxCache = null;
 			const [boxRow, inserts, edges] = await Promise.all([
-				cached ?? readBox(boxId),
+				fresh ?? readBox(boxId),
 				getItems('cutting_inserts', { filter: { tool_box_id: { _eq: boxId } }, fields: MODEL_INSERT_FIELDS, sort: ['insert_number'], limit: MAX_INSERTS }),
 				getItems('insert_edges', { filter: { insert_id: { tool_box_id: { _eq: boxId } } }, fields: MODEL_EDGE_FIELDS, limit: MAX_EDGES }),
 			]);
@@ -210,10 +208,8 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 			notVisible.value = true;
 			return;
 		}
-		if (k === 'box') boxCache = { id: boxId, row };
-
 		await Promise.all([
-			loadModel(boxId, force),
+			loadModel(boxId, force, k === 'box' ? row : null),
 			k === 'edge'
 				? fill(tests, token, 'tests', async () => {
 						const read = (filter: Record<string, unknown>) =>
