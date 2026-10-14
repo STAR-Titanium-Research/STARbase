@@ -60,7 +60,8 @@ async function showMore() {
 .link:hover { text-decoration: underline; }
 .lines { list-style: none; margin: 0; padding: 0; }
 .line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 6px 0; border-top: 1px solid var(--d1-line); }
-.line:focus { outline: none; }
+/* Show more focuses the first revealed line; when RecordLink drew a span (no link), the li itself has focus and must show it. */
+.line:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 2px; border-radius: 4px; }
 .line:first-child { border-top: 0; padding-top: 0; }
 .kind {
 	font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 8px; border-radius: 99px; white-space: nowrap;
