@@ -39,6 +39,7 @@ function fakeWorld() {
     deniedReads: new Set(),
     ops: [], // every write ItemsService was asked for, in order
     codeSeq: 0, failOn: null, lockVersions: new Map(),
+    people: [], // { person_id, user_id, is_researcher }
   };
 }
 // Transactions: the fake keeps a copy of what a transaction may change and puts it back when the transaction throws.
@@ -73,6 +74,13 @@ function fakeServices(world, log = { built: [], reads: [] }) {
         if (r) rows.push(Object.fromEntries(query.fields.map((f) => [f, r[f]])));
       }
       return rows;
+    }
+
+    async readOne(id, query) {
+      log.reads.push({ collection: this.collection, query: { one: id, ...query } });
+      const r = world.deniedReads.has(this.collection) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
+      if (!r) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+      return { ...r };
     }
 
     async createOne(data) {
@@ -153,6 +161,10 @@ function fakeDatabase(world) {
       }
       case SQL.setActor:
         return { rows: [] };
+      case SQL.personExists:
+        return { rows: world.people.filter((p) => p.person_id === b[0]).map((p) => ({ person_id: p.person_id })) };
+      case SQL.personOfUser:
+        return { rows: world.people.filter((p) => p.user_id === b[0]).map((p) => ({ person_id: p.person_id })).slice(0, 1) };
       case SQL.lockSamples:
         return { rows: csvOf(b).filter((id) => world.records.physical_samples.has(id)).map((sample_id) => ({ sample_id })) };
       case SQL.requiredFields:
@@ -1409,4 +1421,171 @@ test('cleanValues, editValues, dayOf', () => {
   assert.equal(dayOf('2026-10-20'), '2026-10-20');
   assert.equal(dayOf('20 Oct'), null);
   assert.equal(dayOf(undefined), null);
+});
+
+// ---- mark done -------------------------------------------------------------------------------------------------------
+
+const PERSON = ID(70);
+const markDone = (env, body, user = ALICE) => env.call('POST', '/mark-done', { user, body });
+
+function doneWorld(env) {
+  seed(env.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10), output_sample_id: ID(11), outcome_notes: 'ok' })]);
+  seed(env.world, 'physical_samples', [sampleRow(10), sampleRow(11, { current_status: 'planned' })]);
+  env.world.people = [{ person_id: PERSON, user_id: ALICE }, { person_id: ID(71), user_id: BOB }];
+}
+
+test('mark-done: an operation turns done with its date, who and when, and its planned output turns active', async () => {
+  const env = setup();
+  doneWorld(env);
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40), date: '2026-10-12' });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { data: { id: ID(40), work_state: 'done' } });
+  const trx = env.world.trx;
+  assert.equal(trx.log[0], SQL.setActor);
+  assert.deepEqual(env.world.ops.map((o) => [o.op, o.collection, o.id]), [
+    ['update', 'manufacturing_operations', ID(40)], ['update', 'physical_samples', ID(11)],
+  ]);
+  assert.ok(env.world.ops.every((o) => o.knex === trx), 'both writes are in the transaction, as the caller');
+  assert.deepEqual(env.world.ops[0].data, {
+    work_state: 'done', operation_date: '2026-10-12T00:00:00.000Z', done_at: NOW.toISOString(), done_by_person_id: PERSON,
+  });
+  assert.deepEqual(env.world.ops[1].data, { current_status: 'active' });
+  assert.equal(env.world.records.physical_samples.get(ID(11)).current_status, 'active');
+  assert.equal(env.world.records.manufacturing_operations.get(ID(40)).work_state, 'done');
+});
+
+test('mark-done: the date defaults to today and who defaults to the caller\'s person; someone else can be named', async () => {
+  const env = setup();
+  doneWorld(env);
+  const today = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(today.statusCode, 200);
+  assert.equal(env.world.ops[0].data.operation_date, '2026-10-14T00:00:00.000Z');
+  assert.equal(env.world.ops[0].data.done_by_person_id, PERSON);
+
+  const named = setup();
+  doneWorld(named);
+  await markDone(named, { collection: 'manufacturing_operations', id: ID(40), personId: ID(71).toUpperCase() });
+  assert.equal(named.world.ops[0].data.done_by_person_id, ID(71));
+
+  const nobody = setup();
+  doneWorld(nobody);
+  nobody.world.people = [];
+  await markDone(nobody, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal('done_by_person_id' in nobody.world.ops[0].data, false, 'a login without a person row leaves it empty');
+
+  const ghost = setup();
+  doneWorld(ghost);
+  const res = await markDone(ghost, { collection: 'manufacturing_operations', id: ID(40), personId: ID(99) });
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.errors[0].message, /person does not exist/);
+  assert.deepEqual(ghost.world.ops, []);
+});
+
+test('mark-done: a test turns done with its session date and has no output to change', async () => {
+  const env = setup();
+  seed(env.world, 'test_sessions', [testRow(50)]);
+  env.world.people = [{ person_id: PERSON, user_id: ALICE }];
+  const res = await markDone(env, { collection: 'test_sessions', id: ID(50), date: '2026-10-13' });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(env.world.ops.map((o) => o.collection), ['test_sessions']);
+  assert.deepEqual(env.world.ops[0].data, {
+    work_state: 'done', session_date: '2026-10-13T00:00:00.000Z', done_at: NOW.toISOString(), done_by_person_id: PERSON,
+  });
+});
+
+test('mark-done: the fields the forms require must be filled in; the date is the one it supplies', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.records.manufacturing_operations.get(ID(40)).machining_feed_mm_per_rev = null;
+  env.world.required = [
+    { collection: 'manufacturing_operations', field: 'method_id', translations: [{ language: 'en-US', translation: 'Method' }] },
+    { collection: 'manufacturing_operations', field: 'operation_date', translations: [{ language: 'en-US', translation: 'Operation date' }] },
+    { collection: 'manufacturing_operations', field: 'machining_feed_mm_per_rev', translations: [{ language: 'en-US', translation: 'Feed per revolution' }] },
+    { collection: 'test_sessions', field: 'test_type', translations: null },
+  ];
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.errors[0].extensions.code, 'CHECKS');
+  assert.deepEqual(res.body.errors[0].extensions.checks, [
+    { key: ID(40), field: 'machining_feed_mm_per_rev', level: 'block', text: 'Feed per revolution is required before this can be marked done.' },
+  ]);
+  assert.deepEqual(env.world.ops, []);
+  assert.equal(env.world.records.manufacturing_operations.get(ID(40)).work_state, 'planned');
+  // filled in, it goes through
+  env.world.records.manufacturing_operations.get(ID(40)).machining_feed_mm_per_rev = 0.2;
+  assert.equal((await markDone(env, { collection: 'manufacturing_operations', id: ID(40) })).statusCode, 200);
+});
+
+test('mark-done: a record that is done already is a 409 ALREADY_DONE; one the caller cannot read is a 404', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.records.manufacturing_operations.get(ID(40)).work_state = 'done';
+  const again = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(again.statusCode, 409);
+  assert.equal(again.body.errors[0].extensions.code, 'ALREADY_DONE');
+  assert.deepEqual(env.world.ops, []);
+  const missing = await markDone(env, { collection: 'test_sessions', id: ID(51) });
+  assert.equal(missing.statusCode, 404);
+  env.world.records.manufacturing_operations.get(ID(40)).work_state = 'planned';
+  env.world.deniedReads.add('manufacturing_operations');
+  const denied = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(denied.statusCode, 404);
+  assert.deepEqual(env.world.ops, []);
+});
+
+test('mark-done: an update the caller may not make is a 403 and nothing is changed, even the first write', async () => {
+  const env = setup();
+  doneWorld(env);
+  const before = stateOf(env.world);
+  env.world.failOn = (op, collection) => {
+    if (op === 'update' && collection === 'physical_samples') {
+      throw Object.assign(new Error('You do not have permission'), { status: 403, code: 'FORBIDDEN' });
+    }
+  };
+  const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.errors[0].extensions.code, 'FORBIDDEN');
+  assert.equal(stateOf(env.world), before, 'the operation is still planned');
+  assert.deepEqual(env.cleared, []);
+
+  const first = setup();
+  doneWorld(first);
+  first.world.failOn = (op, collection) => {
+    if (collection === 'manufacturing_operations') throw Object.assign(new Error('no'), { status: 403, code: 'FORBIDDEN', extensions: { source: 'd1-access-guard', reason: 'Only the owner can do that.' } });
+  };
+  const res2 = await markDone(first, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.equal(res2.statusCode, 403);
+  assert.equal(res2.body.errors[0].message, 'Only the owner can do that.');
+});
+
+test('mark-done: an output that is not planned (or no output) is left alone', async () => {
+  const env = setup();
+  doneWorld(env);
+  env.world.records.physical_samples.get(ID(11)).current_status = 'active';
+  assert.equal((await markDone(env, { collection: 'manufacturing_operations', id: ID(40) })).statusCode, 200);
+  assert.deepEqual(env.world.ops.map((o) => o.collection), ['manufacturing_operations']);
+  const none = setup();
+  seed(none.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10) })]);
+  assert.equal((await markDone(none, { collection: 'manufacturing_operations', id: ID(40) })).statusCode, 200);
+  assert.deepEqual(none.world.ops.map((o) => o.collection), ['manufacturing_operations']);
+});
+
+test('mark-done: bad input is a 400, a missing user a 401, and the cache is cleared after a commit', async () => {
+  const env = setup({ env: { CACHE_ENABLED: 'true' } });
+  doneWorld(env);
+  const ok = { collection: 'manufacturing_operations', id: ID(40) };
+  for (const body of [
+    undefined, [], {}, { ...ok, collection: 'physical_samples' }, { ...ok, collection: 'constructor' }, { ...ok, id: 'x' }, { ...ok, id: 5 },
+    { ...ok, date: '14/10/2026' }, { ...ok, date: '2026-02-31' }, { ...ok, date: '2026-13-01' }, { ...ok, date: 20261014 },
+    { ...ok, personId: 'x' }, { ...ok, personId: 7 },
+  ]) {
+    const res = await markDone(env, body);
+    assert.equal(res.statusCode, 400, JSON.stringify(body));
+    assert.equal(res.body.errors[0].extensions.code, 'INVALID_PAYLOAD');
+  }
+  assert.deepEqual(env.world.ops, []);
+  assert.deepEqual(env.cleared, []);
+  assert.equal((await markDone(env, ok, null)).statusCode, 401);
+  assert.equal((await markDone(env, { ...ok, date: '2024-02-29', personId: null })).statusCode, 200);
+  assert.equal(env.cleared.length, 1);
 });

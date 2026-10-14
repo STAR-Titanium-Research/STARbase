@@ -268,6 +268,9 @@ export const SQL = {
       'SELECT version, work_state AS state, sample_id FROM manufacturing_operations WHERE operation_id = ? FOR UPDATE',
     test_sessions: 'SELECT version, work_state AS state, NULL AS sample_id FROM test_sessions WHERE session_id = ? FOR UPDATE',
   },
+  // Mark done: is this person there, and which person is the caller (a researcher's row first, as d1-owner-default does).
+  personExists: 'SELECT person_id FROM people WHERE person_id = ?',
+  personOfUser: 'SELECT person_id FROM people WHERE user_id = ? ORDER BY is_researcher DESC, person_id LIMIT 1',
   // The code the triggers gave a new record.
   codeOf: {
     physical_samples: 'SELECT sample_code AS code FROM physical_samples WHERE sample_id = ?',
@@ -942,6 +945,95 @@ export function mount(router, context, clock = () => new Date()) {
   };
   const staleChecks = (key, text) =>
     new HttpError(409, 'CHECKS', 'Something changed, so nothing was created. Review the checks.', { checks: [{ key, level: 'block', text }] });
+
+  // -- mark done (spec 6.2, ADR-0019) ---------------------------------------------------------------------------------------
+
+  const DONE = {
+    manufacturing_operations: { dateField: 'operation_date', kind: 'operation' },
+    test_sessions: { dateField: 'session_date', kind: 'test' },
+  };
+  const isRealDate = (v) => {
+    if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+    const d = new Date(`${v}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(v);
+  };
+
+  router.post('/mark-done', route(async ({ req, res, acc }) => {
+    const b = req.body;
+    if (!isObject(b)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a JSON body with { collection, id, date?, personId? }.');
+    if (typeof b.collection !== 'string' || !Object.hasOwn(DONE, b.collection)) {
+      throw new HttpError(400, 'INVALID_PAYLOAD', 'collection must be manufacturing_operations or test_sessions.');
+    }
+    if (typeof b.id !== 'string' || !UUID.test(b.id)) throw new HttpError(400, 'INVALID_PAYLOAD', 'id must be the id of an operation or a test.');
+    if (b.date !== undefined && b.date !== null && !isRealDate(b.date)) throw new HttpError(400, 'INVALID_PAYLOAD', 'date must be a day, YYYY-MM-DD.');
+    if (b.personId !== undefined && b.personId !== null && !(typeof b.personId === 'string' && UUID.test(b.personId))) {
+      throw new HttpError(400, 'INVALID_PAYLOAD', 'personId must be the id of a person.');
+    }
+    const collection = b.collection;
+    const { dateField } = DONE[collection];
+    const recordId = b.id.toLowerCase();
+    const schema = await schemaOf(req);
+    await inTransaction(acc, async (trx) => {
+      const svc = (c) => itemsFor(schema, req.accountability, c, trx);
+      // The record as the caller can read it; one they cannot read is not there.
+      let rec;
+      try {
+        rec = await svc(collection).readOne(recordId, { fields: ['*'] });
+      } catch (err) {
+        if (isDenied(err)) throw new HttpError(404, 'NOT_FOUND', 'That record does not exist, or you cannot see it.');
+        throw err;
+      }
+      if (!rec) throw new HttpError(404, 'NOT_FOUND', 'That record does not exist, or you cannot see it.');
+      // Locked, so two people marking it done at once do it once.
+      const [locked] = rowsOf(await trx.raw(SQL.lockRecord[collection], [recordId]));
+      if (!locked) throw new HttpError(404, 'NOT_FOUND', 'That record does not exist, or you cannot see it.');
+      if (locked.state !== 'planned') throw new HttpError(409, 'ALREADY_DONE', 'That record is already marked done.');
+      // What the forms mark required must be filled in; the date is the one thing this action supplies.
+      const missing = (parseRequired(rowsOf(await trx.raw(SQL.requiredFields)))[collection] ?? [])
+        .filter(({ field }) => field !== dateField && isBlank(rec[field]));
+      if (missing.length) {
+        throw new HttpError(409, 'CHECKS', 'Fill in what is missing before marking this done.', {
+          checks: missing.map(({ field, label }) => ({ key: recordId, field, level: 'block', text: `${label} is required before this can be marked done.` })),
+        });
+      }
+      let person = null;
+      if (b.personId) {
+        const [p] = rowsOf(await trx.raw(SQL.personExists, [b.personId.toLowerCase()]));
+        if (!p) throw new HttpError(400, 'INVALID_PAYLOAD', 'That person does not exist.');
+        person = p.person_id;
+      } else {
+        const [p] = rowsOf(await trx.raw(SQL.personOfUser, [acc.user]));
+        person = p?.person_id ?? null;
+      }
+      const day = b.date ?? clock().toISOString().slice(0, 10);
+      const data = { work_state: 'done', [dateField]: `${day}T00:00:00.000Z`, done_at: clock().toISOString() };
+      if (person) data.done_by_person_id = person;
+      const fail = (err) => {
+        const { status, message } = describeFailure(err);
+        if (status === 500) throw err;
+        return new HttpError(status, status === 403 ? 'FORBIDDEN' : 'INVALID_PAYLOAD', message);
+      };
+      // The record first (the caller's update rule decides), then its planned output turns active.
+      try {
+        await svc(collection).updateOne(recordId, data);
+      } catch (err) {
+        throw err instanceof HttpError ? err : fail(err);
+      }
+      const out = collection === 'manufacturing_operations' && rec.output_sample_id ? String(rec.output_sample_id).toLowerCase() : null;
+      if (out) {
+        const [sample] = rowsOf(await trx.raw(SQL.lockRecord.physical_samples, [out]));
+        if (sample?.state === 'planned') {
+          try {
+            await svc('physical_samples').updateOne(out, { current_status: 'active' });
+          } catch (err) {
+            throw err instanceof HttpError ? err : fail(err);
+          }
+        }
+      }
+    });
+    await clearDataCache(req);
+    res.json({ data: { id: recordId, work_state: 'done' } });
+  }));
 
   // -- create (spec 6.1) ----------------------------------------------------------------------------------------------------
 
