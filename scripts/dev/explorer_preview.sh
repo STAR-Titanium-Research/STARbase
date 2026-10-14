@@ -77,6 +77,12 @@ docker network create --internal "$NET" >/dev/null || abort "docker network crea
 docker run -d --name "$PG" --network "$NET" -e POSTGRES_USER=d1 -e POSTGRES_PASSWORD="$DB_PASS" \
   -e POSTGRES_DB=d1_database pgvector/pgvector:pg16 >/dev/null || abort "postgres start"
 for _ in $(seq 1 60); do docker exec "$PG" pg_isready -h 127.0.0.1 -U d1 -d d1_database >/dev/null 2>&1 && break; sleep 1; done
+# Live's non-login roles that row-security policies name (migration 168: TO d1_llm_readonly). Without them the restore
+# fails on CREATE POLICY. Created NOLOGIN, on the copy only.
+for role in d1_llm_readonly d1_llm_app; do
+  psql_copy -c "DO \$\$ BEGIN CREATE ROLE $role NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$" >/dev/null \
+    || abort "create role $role on the copy"
+done
 
 # --- copy of live (revisions/activity data skipped). Only GRANT/REVOKE errors for live-only roles are tolerated.
 docker exec "$LIVE_PG" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --exclude-table-data=directus_revisions --exclude-table-data=directus_activity' \
