@@ -132,9 +132,7 @@ async function cast(pw: Pw): Promise<Cast> {
 		await step('dispose the manager API context', () => m.dispose());
 		await step('dispose the admin API context', () => admin.dispose());
 		if (failed.length) {
-			console.error(`E2E cleanup left something behind:
-${failed.join('
-')}`);
+			console.error(['E2E cleanup left something behind:', ...failed].join('\n'));
 			throw new Error(`E2E cleanup failed in ${failed.length} step(s): ${failed.join(' | ')}`);
 		}
 	};
