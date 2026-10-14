@@ -157,8 +157,9 @@ used (machine, tool, insert edge, recipe, data file) sits inside the box. A samp
 it shows a small dashed junction (cut from, sintered from...). Click a box to see the record in the panel on the left; the
 **+** on a box loads more around it.
 
-Open it from **Analysis → Process map** in the sidebar, or from the **Process map** button on a sample, operation or test
-page (in the left rail) or on a row of an index page, which opens the map on that record. The address is
+Open it from **Analysis → Process map** in the sidebar, or from the **Process map** button on a sample, operation, test,
+project, campaign or insert edge page (in the left rail) or on a row of an index page, which opens the map on that record.
+A tool box or a cutting insert is not drawn on the map, so its page has no such button. The address is
 `/map?focus=<kind>:<id>` and holds the view, so **Copy link** shares it. Opening on a sample shows its whole family; opening
 on a tool, machine, insert edge, recipe or stock lot shows the operations that used it. As everywhere in STARbase, the map
 only draws records you can read: where something is hidden from you, the socket says *some records hidden*.

@@ -100,8 +100,18 @@ describe('toHits', () => {
 	it('opens inventory rows in their index page drawer by primary key', () => {
 		const lot = toHits(source('raw_stock_lots'), 'lot', [{ lot_id: 'L1', lot_code: 'LOT-1' }]);
 		expect(lot[0]).toMatchObject({ group: 'Inventory', label: 'LOT-1', to: '/home/stock-lots?open=L1' });
-		const edge = toHits(source('insert_edges'), 'e', [{ edge_id: 'E 1', edge_code: 'E-1' }]);
-		expect(edge[0].to).toBe('/home/edges?open=E%201');
+	});
+
+	it('opens a tool box, cutting insert or insert edge on its record page (the index page only opens drawers)', () => {
+		const rows: [string, string, string, string][] = [
+			['tool_boxes', 'tool_box_id', 'tool_box_code', '/home/tool-boxes/B%201'],
+			['cutting_inserts', 'insert_id', 'insert_code', '/home/inserts/B%201'],
+			['insert_edges', 'edge_id', 'edge_code', '/home/edges/B%201'],
+		];
+		for (const [collection, pk, code, to] of rows) {
+			const [hit] = toHits(source(collection), 'b', [{ [pk]: 'B 1', [code]: 'B-1' }]);
+			expect(hit.to).toBe(to);
+		}
 	});
 
 	it('ranks an exact short-id match first', () => {

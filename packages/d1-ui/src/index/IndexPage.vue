@@ -68,7 +68,7 @@ const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
 const designedCards = computed(() => view.value === 'cards' && !!slots.card);
 // Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
 const hasPlots = computed(() => plotKind(props.def.collection) !== null);
-// The kinds with no record page get a Process map pill instead (spec section 8).
+// The kinds with no record page (and insert edges) get a Process map pill instead (spec section 8).
 const hasMap = computed(() => MAP_ROW_COLLECTIONS.includes(props.def.collection));
 // A sample's code is what its "Force (n)" button searches the operations list for.
 const plotCode = (row: Record<string, unknown>): string => (typeof row.sample_code === 'string' ? row.sample_code : '');

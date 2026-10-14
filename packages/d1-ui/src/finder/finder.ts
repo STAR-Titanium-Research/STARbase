@@ -47,10 +47,12 @@ const LOCAL_GROUPS = new Set<FinderGroup>(['Pages', 'Saved views']);
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
-// An inventory code finds its row and opens the index page with that row's drawer. The key comes
+// An inventory code finds its row and opens the row's record page (tool boxes, cutting inserts, insert edges), or the index page with that row's drawer. The key comes
 // from indexConfig so a renamed primary key cannot leave the finder behind.
 function inventory(collection: string, codeField: string, kind: string, extra: string[] = []): FinderSource {
-	const pk = indexDefByCollection(collection)?.primaryKey ?? `${collection}_id`;
+	const def = indexDefByCollection(collection);
+	const pk = def?.primaryKey ?? `${collection}_id`;
+	const rowTarget = def?.rowTarget;
 	return {
 		group: 'Inventory',
 		collection,
@@ -59,7 +61,7 @@ function inventory(collection: string, codeField: string, kind: string, extra: s
 		label: (r) => str(r[codeField]) || String(r[pk]),
 		// The code alone does not say what it is: a tool box and an insert edge look alike.
 		detail: () => kind,
-		to: (r) => indexRoute(collection, { open: String(r[pk]) }),
+		to: (r) => (rowTarget === 'record' ? recordRoute(collection, String(r[pk])) : indexRoute(collection, { open: String(r[pk]) })),
 		record: (r) => ({ collection, id: String(r[pk]) }),
 	};
 }

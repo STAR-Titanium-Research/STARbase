@@ -52,3 +52,18 @@ describe('record page Process map buttons', () => {
 		expect(src).toMatch(/<v-button [^>]*:to="mapTo" title="Process map" aria-label="Process map">/);
 	});
 });
+
+// The tooling page serves tool boxes, cutting inserts and insert edges; only an insert edge is a map focus (its used-in fan).
+describe('ToolingPage Process map button', () => {
+	const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'tooling/ToolingPage.vue'), 'utf8');
+	it("builds mapPath('insert_edges', id) for the edge kind only", () => {
+		expect(src).toContain("const mapTo = computed(() => (focusKind.value === 'edge' ? mapPath('insert_edges', props.id) : null));");
+	});
+	it('puts it on a Process map button that is not drawn without a map path', () => {
+		expect(src).toMatch(/<v-button v-if="mapTo" [^>]*:to="mapTo" title="Process map" aria-label="Process map">/);
+	});
+	it('offers no map path for tool boxes or cutting inserts', () => {
+		expect(src.match(/mapPath[(]/g)).toHaveLength(1);
+		expect(src).not.toMatch(/mapPath[(]'(tool_boxes|cutting_inserts)'/);
+	});
+});

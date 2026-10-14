@@ -332,7 +332,7 @@ describe('useProcessMap', () => {
     const { map, replace } = setup({ focus: 'physical_samples:s1' });
     await settle();
     replace.mockClear();
-    for (const collection of ['people', 'tools_box', 'cutting_inserts']) {
+    for (const collection of ['people', 'tool_boxes', 'cutting_inserts']) {
       expect(map.pickRecord({ collection, id: 'x1' })).toBe(false);
     }
     expect(replace).not.toHaveBeenCalled();
@@ -340,6 +340,10 @@ describe('useProcessMap', () => {
     expect(map.pickRecord({ collection: 'physical_samples', id: 's2' })).not.toBe(false);
     expect(replace).toHaveBeenCalledTimes(1);
     expect(map.pickRecord({ collection: 'tools', id: 't1' })).not.toBe(false);
+    // An insert edge has a record page but is also a map focus (a used-in fan): the Finder loads it here. Tool boxes and cutting inserts open their page.
+    replace.mockClear();
+    expect(map.pickRecord({ collection: 'insert_edges', id: 'e1' })).toBe(true);
+    expect(replace).toHaveBeenCalledTimes(1);
   });
 
   it('localStorage that throws (or is missing) does not break toggleKind, setProbable or reading', async () => {

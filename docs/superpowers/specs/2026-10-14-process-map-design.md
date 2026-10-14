@@ -265,9 +265,11 @@ newer focus cancels older work. Errors show with `errorText` in the map panel, k
   record pages that exist: Sample, Operation, Test, Project, Campaign (Campaign opens a fan of its
   samples, like Project). The Sample page's "Open lineage graph" link (to `/d1-lab-dashboard/graph`) is
   removed.
-- Tool, Equipment, Insert edge, Stock lot, Recipe (FAST and prep) and Material have no record page (they
+- Tool, Equipment, Stock lot, Recipe (FAST and prep) and Material have no record page (they
   open the Data Studio form): their **index pages** get a per-row "Process map" action that opens the
-  used-in fan. Inside the map, a slot's hover card also offers "Process map of <code>".
+  used-in fan. Insert edge has a record page since the tooling pages (`ToolingPage`, kind `edges`): its
+  rail has the same **Process map** button as the five above, and its index row keeps the action (harmless).
+  Tool boxes and cutting inserts have tooling pages too but are not map focuses: no button. Inside the map, a slot's hover card also offers "Process map of <code>".
 - `links.ts`: `canonicalPath` keeps `focus` and `reach`. The `/d1-lab-dashboard/graph` resolver test
   (`links.test.ts`) goes with the view.
 

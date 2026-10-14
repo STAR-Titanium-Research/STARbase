@@ -9,7 +9,7 @@ describe('mapPath', () => {
 });
 
 describe('MAP_ROW_COLLECTIONS', () => {
-	it('lists the seven kinds that have no record page', () => {
+	it('lists the seven kinds with a row action: those with no record page, and insert edges', () => {
 		expect([...MAP_ROW_COLLECTIONS].sort()).toEqual(['equipment', 'fast_recipes', 'insert_edges', 'materials', 'prep_recipes', 'raw_stock_lots', 'tools']);
 	});
 });
