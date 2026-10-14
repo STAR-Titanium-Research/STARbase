@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildGraph } from './buildGraph';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkStock, mkTest } from './fixtures';
-import { recordInfo } from './recordInfo';
+import { openPath, recordInfo } from './recordInfo';
 import type { ProcessData, Slot } from './types';
 
 const build = (data: ProcessData, slots: () => Slot[] = () => [], probable = false) => buildGraph(data, groupsOf(data, probable), { slots });
@@ -113,5 +113,41 @@ describe('recordInfo: a family seen from one cut piece (C1)', () => {
   it('a piece outside the family still has a card to hover: its code and the way to open it', () => {
     const info = recordInfo(seen, g, 's:b')!;
     expect(info).toMatchObject({ kind: 'sample', code: 'another piece', ref: { collection: 'physical_samples', id: 'b' } });
+  });
+});
+
+describe('recordInfo: where Open record goes (I4)', () => {
+  const forceFile = { collection: 'force_file', id: 'D:\lab\run 3\cut.mat', code: 'cut.mat' };
+  const upload = { collection: 'directus_files', id: 'f1', code: 'trace.csv' };
+  const d = mkData({
+    samples: [mkSample('p'), mkSample('a')],
+    operations: [
+      mkOp({ id: 'o1', category: 'machining', sampleId: 'p', outputSampleId: 'a', date: '2026-09-01T09:00:00Z', relations: { force_file_id: forceFile } }),
+    ],
+    tests: [mkTest({ id: 't1', subjectSampleIds: ['a'], date: '2026-09-05T09:00:00Z', relations: { session_data_files: upload } })],
+  });
+  const slotsOf = (row: { relations: Record<string, unknown> }, kind: 'operation' | 'test'): Slot[] =>
+    kind === 'operation'
+      ? [{ field: 'force_file_id', role: 'Force data', ref: forceFile, major: false }]
+      : [{ field: 'session_data_files', role: 'Data', ref: upload, major: false }];
+  const g = buildGraph(d, groupsOf(d, false), { slots: (row, kind) => slotsOf(row, kind) });
+
+  it('Force data opens the operation in the Force dashboard, not a Data Studio page that does not exist', () => {
+    const info = recordInfo(d, g, `force_file:${forceFile.id}`)!;
+    expect(info.ref).toEqual(forceFile);
+    expect(openPath(info)).toBe('/d1-force-dashboard?operation=o1');
+  });
+
+  it('a data file opens in the file library', () => {
+    expect(openPath(recordInfo(d, g, 'directus_files:f1')!)).toBe('/files/f1');
+  });
+
+  it('every other record opens its record page', () => {
+    expect(openPath(recordInfo(d, g, 's:p')!)).toBe('/home/samples/p');
+  });
+
+  it('Force data whose operation is not on the map has nowhere to open', () => {
+    const lone = buildGraph(d, groupsOf(d, false), { slots: (row, kind) => (kind === 'operation' ? [{ field: 'force_file_id', role: 'Force data', ref: { ...forceFile, id: 'elsewhere.mat' }, major: false }] : []) });
+    expect(openPath(recordInfo(d, lone, 'force_file:elsewhere.mat')!)).toBeNull();
   });
 });

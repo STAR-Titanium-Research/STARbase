@@ -80,6 +80,16 @@ describe('MapRail', () => {
     expect(await render(MapRail, railProps({ info: lot }))).toContain('href="/content/equipment/e1"');
   });
 
+  it('Open record follows the own address of the record, and is not drawn when there is none (I4)', async () => {
+    const force: RecordInfo = { ...info('s:p'), kind: 'data_file', ref: { collection: 'force_file', id: 'a/b.mat', code: 'b.mat' }, code: 'b.mat', open: '/d1-force-dashboard?operation=o1' };
+    const html = await render(MapRail, railProps({ info: force }));
+    expect(html).toContain('href="/d1-force-dashboard?operation=o1"');
+    expect(html).not.toContain('/content/force_file');
+    const none = await render(MapRail, railProps({ info: { ...force, open: null } }));
+    expect(text(none)).not.toContain('Open record');
+    expect(text(none)).toContain('Expand');
+  });
+
   it('Expand and Centre are only offered for a card on the map', async () => {
     const html = await render(MapRail, railProps({ onMap: false }));
     expect(text(html)).not.toContain('Expand');

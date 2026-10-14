@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { RecordRail, Section, SegmentedControl, StatusBadge, hasDrawableDims, recordRoute, sampleDims } from '@d1/ui';
+import { RecordRail, Section, SegmentedControl, StatusBadge, hasDrawableDims, sampleDims } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
 import DataThumb from './DataThumb.vue';
 import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
-import type { RecordInfo } from './model/recordInfo';
+import { openPath, type RecordInfo } from './model/recordInfo';
 import { KINDS, kindOfCollection, kindVar, statusKindOf } from './nodes/kinds';
 import { SETTINGS_CHIP, type Reach } from './useProcessMap';
 
@@ -38,6 +38,8 @@ const emit = defineEmits<{
 }>();
 
 const style = computed(() => (props.info ? KINDS[props.info.kind] : null));
+/** Where Open record goes: the record's page, the Force dashboard for Force data, the file library for a file; none, no button. */
+const openTo = computed(() => (props.info ? openPath(props.info) : null));
 const drawable = computed(() => !!props.info?.geometry && hasDrawableDims(props.info.geometry));
 const dims = computed(() => sampleDims(props.info?.geometry));
 
@@ -87,7 +89,7 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 			<template #kind-icon><v-icon :name="style.icon" x-small /></template>
 			<template #status><StatusBadge :kind="statusKindOf(info.kind)" :value="info.status" /></template>
 			<template #actions>
-				<v-button small :to="recordRoute(info.ref.collection, info.ref.id)"><v-icon name="open_in_new" small left />Open record</v-button>
+				<v-button v-if="openTo" small :to="openTo"><v-icon name="open_in_new" small left />Open record</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('expand')"><v-icon name="add" small left />Expand</v-button>
 				<v-button v-if="onMap" small secondary @click="emit('centre')"><v-icon name="my_location" small left />Centre</v-button>
 			</template>

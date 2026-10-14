@@ -4,7 +4,7 @@
 //
 // `id` is what the page's actions take: a node id, or a record inside a card (`<collection>:<id>`).
 
-import { formatDate, humanise, processLabel, type Fact } from '@d1/ui';
+import { analysisLink, formatDate, humanise, processLabel, recordRoute, type Fact } from '@d1/ui';
 import { LINEAGE_LABEL, kindOfCollection } from '../nodes/kinds';
 import { refKey } from '../nodes/actions';
 import { OTHER_PIECE } from './buildGraph';
@@ -15,8 +15,13 @@ export interface RecordInfo {
   /** The id it was asked for. */
   id: string;
   kind: Kind;
-  /** What "Open record" opens. */
+  /** The record this is. */
   ref: Ref;
+  /**
+   * Where "Open record" goes when it is not the record page of `ref` (Force data and uploaded files have none):
+   * a path, or null when there is nowhere to go. Absent: the record page. Read it with `openPath`.
+   */
+  open?: string | null;
   /** The heading. */
   code: string;
   /** The code describes the record (a probable batch, a lineage junction) rather than being a code you could type. */
@@ -176,8 +181,26 @@ function nodeInfo(id: string, node: MapNode, data: ProcessData, graph: ProcessGr
   return info;
 }
 
+/**
+ * Where a record inside a card opens, when it is not its Data Studio form: Force data is a file path with no
+ * record of its own, so it opens the operation that holds it in the Force dashboard (null when that operation is
+ * not on the map); an uploaded data file opens in the file library. `undefined` = the record page.
+ */
+function openOf(ref: Ref, data: ProcessData): string | null | undefined {
+  if (ref.collection === 'force_file') {
+    const op = data.operations.find((o) => o.relations.force_file_id?.id === ref.id);
+    return op ? analysisLink(op.id, 'machining')!.to : null;
+  }
+  if (ref.collection === 'directus_files') return `/files/${encodeURIComponent(ref.id)}`;
+  return undefined;
+}
+
+/** Where "Open record" goes for `info`; null when there is nowhere to go (the button is not drawn). */
+export const openPath = (info: Pick<RecordInfo, 'ref' | 'open'>): string | null =>
+  info.open === undefined ? recordRoute(info.ref.collection, info.ref.id) : info.open;
+
 /** A record shown inside a card's Inside tray: what kind it is and how many steps in the map use it. */
-function slotInfo(id: string, graph: ProcessGraph): RecordInfo | null {
+function slotInfo(id: string, data: ProcessData, graph: ProcessGraph): RecordInfo | null {
   let ref: Ref | undefined;
   let steps = 0;
   for (const n of graph.nodes) {
@@ -188,10 +211,12 @@ function slotInfo(id: string, graph: ProcessGraph): RecordInfo | null {
     steps += 1;
   }
   if (!ref) return null;
+  const open = openOf(ref, data);
   return {
     id,
     kind: kindOfCollection(ref.collection) ?? 'data_file',
     ref,
+    ...(open === undefined ? {} : { open }),
     code: ref.code,
     title: ref.label,
     facts: [],
@@ -203,5 +228,5 @@ function slotInfo(id: string, graph: ProcessGraph): RecordInfo | null {
 
 export function recordInfo(data: ProcessData, graph: ProcessGraph, id: string): RecordInfo | null {
   const node = graph.nodes.find((n) => n.id === id);
-  return node ? nodeInfo(id, node, data, graph) : slotInfo(id, graph);
+  return node ? nodeInfo(id, node, data, graph) : slotInfo(id, data, graph);
 }

@@ -3,7 +3,8 @@
 // composable only reads the event, asks them, and calls the page's actions.
 
 import type { Ref } from 'vue';
-import { openLink, recordRoute } from '@d1/ui';
+import { openLink } from '@d1/ui';
+import { openPath } from './model/recordInfo';
 import { cardOf, isKeyboardFocus, keyTarget, mapElement, mapKey, type ElLike } from './keyboard';
 import type { MapActions } from './nodes/actions';
 import { createLongPress, type createPointerKind } from './useLongPress';
@@ -58,8 +59,9 @@ export function useMapInput(o: {
 		else if (d.do === 'expand') actions.expand(d.id);
 		else {
 			// The same address as the rail's Open record; a junction or the "+N more" stub has no record.
-			const rec = map.info(d.id)?.ref;
-			if (rec) openLink(recordRoute(rec.collection, rec.id), router);
+			const info = map.info(d.id);
+			const to = info ? openPath(info) : null;
+			if (to) openLink(to, router);
 		}
 	}
 
