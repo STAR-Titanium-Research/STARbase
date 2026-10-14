@@ -92,6 +92,7 @@ WHERE one_collection='campaigns'
 INSERT INTO directus_relations (many_collection, many_field, one_collection, one_field, one_deselect_action) VALUES
 ('campaigns','project_id','projects','campaigns','nullify'),
 ('campaigns','owner_person_id','people',NULL,'nullify'),
+('campaigns','owner_team_id','teams',NULL,'nullify'),
 ('campaigns','owner','directus_users',NULL,'nullify'),
 ('campaigns','default_equipment_id','equipment',NULL,'nullify'),
 ('campaigns','default_material_id','materials',NULL,'nullify'),

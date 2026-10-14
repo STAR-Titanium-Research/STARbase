@@ -921,6 +921,10 @@ INSERT INTO directus_relations (many_collection, many_field, one_collection, one
 -- people links (migration 062). The row filters of ADR-0011 walk owner_person_id -> people.user_id, so
 -- these must survive this script (it deletes every relation of these collections above).
 ('physical_samples',          'owner_person_id',    'people',                     NULL,                       'nullify'),
+-- team owners (migration 177): the d1-access-guard owner guard names owner_team_id -> teams.team_id (scripts/access_rules.json)
+('physical_samples',          'owner_team_id',      'teams',                      NULL,                       'nullify'),
+('manufacturing_operations',  'owner_team_id',      'teams',                      NULL,                       'nullify'),
+('test_sessions',             'owner_team_id',      'teams',                      NULL,                       'nullify'),
 ('manufacturing_operations',  'owner_person_id',    'people',                     NULL,                       'nullify'),
 ('manufacturing_operations',  'operator_person_id', 'people',                     NULL,                       'nullify'),
 ('test_sessions',             'owner_person_id',    'people',                     NULL,                       'nullify'),

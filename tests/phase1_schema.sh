@@ -2757,7 +2757,7 @@ SELECT 'params_tables_present:' || count(*) FROM information_schema.tables WHERE
    'hardness_test_params','charpy_test_params','compression_test_params','sem_params','xrd_params');
 SELECT 'co_owner_rows_owner_only:' || count(*) FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'sample_co_owners' AND action IN ('update','delete')
-   AND permissions::jsonb = '{"sample_id":{"owner_person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}}'::jsonb;
+   AND permissions::jsonb = '{"_or":[{"sample_id":{"owner_person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}},{"_and":[{"sample_id":{"access":{"person_id":{"user_id":{"_eq":"\$CURRENT_USER"}}}}},{"sample_id":{"access":{"role":{"_in":["manage"]}}}}]}]}'::jsonb;
 SELECT 'rollup_read:' || permissions::text FROM directus_permissions
  WHERE policy = '$LM' AND collection = 'project_rollup' AND action = 'read';
 SELECT 'people_update_own_row:' || count(*) FROM directus_permissions
@@ -2774,7 +2774,7 @@ rl_check "unlisted:0" "every Lab Member (collection, action) row in the database
 rl_check "access_tables_read:5" "Lab Member reads the five access tables for the rows about themselves"
 rl_check "access_tables_write:0" "Lab Member has no create, update or delete grant on any access table (only the record-access endpoint writes them)"
 rl_check "params_tables_present:0" "the eleven *_params tables are gone (migration 20260623000032), so there is nothing to rule; access_rules.json keeps their stale grants only for these drift checks"
-rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only"
+rl_check "co_owner_rows_owner_only:2" "sample_co_owners update and delete are owner-only (the person owner, or a manager of the owning team)"
 rl_check "reference_filtered:0" "reference data, people (but its own-row update) and directus_files stay unfiltered"
 rl_check "ref_in_rules:0" "materials, equipment and raw_stock_lots have no rules"
 rl_check "audit_logs_rows:0" "Lab Member has no grant on audit_logs (admins only)"
@@ -3538,6 +3538,7 @@ SELECT 'up_backup_commented:' || (obj_description('d1_private.lab_member_access_
 SELECT 'up_llm_select:' || has_table_privilege('d1_llm_readonly', 'd1_private.lab_member_access_rules_backup', 'SELECT');
 SELECT 'up_in_dictionary:' || count(*) FROM v_schema_dictionary WHERE object_name LIKE 'lab\_member\_access%';
 CREATE TEMP TABLE up_rows AS SELECT * FROM directus_permissions WHERE policy = '$LM';
+$tr_down
 DROP TABLE _lm_access_rules;
 $la_up
 $tr_up
