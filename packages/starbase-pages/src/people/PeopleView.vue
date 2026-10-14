@@ -306,8 +306,11 @@ function openLink(r: PeopleRow) {
 
 /* Wide: the panel sits beside the list. Narrow: it is a sheet over the bottom of the screen. */
 .panel-slot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; max-height: 70vh; overflow: auto; padding: 0 8px 8px; }
+/* While the sheet is up the list gets as much room under it as the sheet may take, so its last row can be scrolled clear of the sheet. */
+.split.open .main { padding-bottom: 70vh; }
 @media (min-width: 1000px) {
 	.split.open { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
 	.panel-slot { position: sticky; top: 16px; z-index: auto; max-height: none; overflow: visible; padding: 0; }
+	.split.open .main { padding-bottom: 0; }
 }
 </style>

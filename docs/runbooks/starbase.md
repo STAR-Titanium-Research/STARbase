@@ -225,3 +225,25 @@ Rollback, in this order:
 4. `docker compose up -d --force-recreate directus`. The removed folders came back with the checkout.
 
 The STARbase tile stays first in the bar; remove it under Settings → Appearance if wanted.
+
+## People admin (PR 1) (maintainer's step, approve separately)
+
+The admin People page: `d1-people-admin` (a Directus endpoint), migration 173 and STARbase's `/people` and `/accept-invite`.
+**No new `.env` keys.** `USER_INVITE_URL_ALLOW_LIST` is derived from `STARBASE_URL` in `docker-compose.yml`
+(`${STARBASE_URL}/accept-invite`), so `STARBASE_URL` must already be set (the STARbase rollout above); while it is blank the
+invite routes answer `503`.
+
+1. `git pull && npm ci && npm run build:starbase && npm run build:extensions`.
+2. `make migrate-status` (173 pending), then `make migrate` (migration 173: the SQL functions behind the attention line and a
+   person's access counts).
+3. `docker compose up -d --force-recreate directus`. The recreate is what makes Directus load `d1-people-admin` and pick up
+   `USER_INVITE_URL_ALLOW_LIST`; a plain `restart` is not enough for a changed environment. Then
+   `docker compose up -d --force-recreate proxy` for the new STARbase build.
+4. Invites need a working mail transport: the `EMAIL_*` settings on live (see `docs/runbooks/a1-record-access-cutover.md`). Directus
+   sends the mail without waiting, so a failed delivery is only in `docker compose logs directus`; the page says "sent", never
+   "delivered". Check by inviting yourself from People → Invite, then opening the link.
+5. Smoke: People shows the "needs attention" line and the Role menu; a person's panel shows Account and Access;
+   `curl -s -o /dev/null -w '%{http_code}' https://d1-server.tail54eeb6.ts.net/d1-people-admin/people` without a session is `401`.
+
+Rollback: `make migrate-down` (173), `git checkout <previous commit>`, rebuild as in step 1, recreate `directus` and `proxy`.
+A login invited meanwhile stays (an invited user is an ordinary Directus user).

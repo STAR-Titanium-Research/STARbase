@@ -344,3 +344,30 @@ runbook section added in PR 2 (as A1a's cutover: backup, apply, `rights_rebuild(
 - Team logos are ordinary files: readable by id by any member (the files gap A1b closes elsewhere; a logo is not sensitive).
 - A person removed from a team and re-added is a new joiner: their earlier approvals are gone (rows were deleted on leave).
 - Ask-DB does not see teams (no grant); questions about team membership are not answerable there.
+- The last-Administrator rule is enforced only by `d1-people-admin`: Data Studio's `/users` page can still demote or suspend the
+  last Administrator.
+- Invite delivery failures show only in the Directus log: Directus sends the invite mail without waiting, so the page can say
+  "sent" but never "delivered" (E7).
+
+## 9. Errata (plan 1)
+
+Where building PR 1 (the admin People page, `docs/superpowers/plans/2026-10-14-people-1-admin-page.md`) differs from the text above.
+
+- **E1 Account administrator.** The spec said "find the Administrator role by name" (§3.4). The preview's admin has no role (an
+  admin policy attached to the user), so instead an **account administrator** is a login that reaches an `admin_access` policy
+  (`d1-record-access` `isAdminLogin`) **and** whose role is not the Lab Admin role. `D1_LAB_ADMIN_ROLE_ID` may override the id;
+  `D1_ADMINISTRATOR_ROLE_ID` is not used.
+- **E2 No mail catcher.** The preview network has no outbound mail and the repo has no catcher (§6 assumed one). Invite email
+  delivery is covered by the endpoint's unit tests (fake `UsersService`); the Playwright spec checks that the invited login exists,
+  is linked and shows "Invite not accepted", and the accept page's error path.
+- **E3** The "Former people still in a team" attention item (§1.1; `GET /attention` returns six counts in PR 1, not seven), the
+  **Team** menu and the **Through teams** count arrive with PR 2, when teams exist.
+- **E4** Removing a direct grant from the person panel calls the existing
+  `DELETE /d1-record-access/:collection/:id/entries/:person_id` (administrators manage every record); there is no new route.
+- **E5** The "Former people still in a team" item, the Team menu and the Through-teams count are PR 2's, not PR 1's (E3, listed
+  separately so it is not missed when PR 2 is planned).
+- **E6** `POST /invite` answers `200` (not `201`) when it re-sends the invite to a login that is already invited under the same
+  e-mail; a new login is `201`.
+- **E7** `email_sent` means "handed to Directus's mailer". Directus sends invites fire-and-forget, so a delivery failure shows only
+  in its log; the UI says "sent", never "delivered". A mail error that does surface keeps the login and its link and gives
+  `email_sent: false` (the page then points to Resend).
