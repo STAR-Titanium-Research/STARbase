@@ -14,19 +14,20 @@
 
 - Plan 2/3 Global Constraints apply (host-neutral UI, error shape, every CI suite on the final commit).
 - **Ruling M1:** team filtering never leaks a record the viewer cannot read: ids come only from `GET /d1-teams/:id/records`, which intersects with the caller's `<T>_readers`.
+- **Ruling M2:** the team id list is capped at 300 (500 uuids in a GET `_in` exceed Node's 16 KB header limit, 431); "latest" means last changed (`updated_at`). See spec section 12 (E33, E34).
 - Filter state lives in the URL (`f.team=<id>`), like other index filters.
 
 ## Review Focus
 
 1. A team filter on an index page shows only records the viewer can read (a hidden team record never appears, the count says nothing of hidden ones). (Task 1 test + Task 3 E2E.)
 2. The My teams panel renders nothing for someone in no team. (Task 2 test.)
-3. A team with > 500 records: the filter still works (ids posted in chunks or the endpoint caps with a clear "showing the latest 500" note). (Task 1 test.)
+3. A team with > 300 records: the filter still works (the endpoint caps at 300, Ruling M2 above, with a clear "showing the latest 300" note). (Task 1 test.)
 
 ---
 
 ### Task 1: records-of-a-team route and the index Team filter
 
-**Files:** Modify `core/extensions/d1-teams/index.js` (+tests): `GET /:id/records?collection=<c>&limit=<n≤500>` → `{ ids: [...], truncated: boolean }` — records of that collection the team owns (`owner_team_id`) or has a grant on (`<T>_team_access`), intersected with the caller's `<T>_readers` (admins: all), newest first by the record's date column; `GET /mine/recent?limit=20` → `{ items: [{ collection, id, kind, code, title, team_id, team_name, team_color, changed_at }] }` across the caller's teams (readable only). `packages/d1-ui/src/index/indexConfig.ts` / `indexQuery.ts` (+tests): new FilterDef option kind `team` — options from `listTeams`; when set, the page first calls `GET /d1-teams/:id/records?collection=` and adds `{ [key]: { _in: ids } }` (empty ids → a filter that matches nothing); "showing the latest 500 of this team's records" note when truncated; add the Team filter to the samples, operations, tests, campaigns (and projects: grants only) index definitions.
+**Files:** Modify `core/extensions/d1-teams/index.js` (+tests): `GET /:id/records?collection=<c>&limit=<n≤300>` → `{ ids: [...], truncated: boolean }` — records of that collection the team owns (`owner_team_id`) or has a grant on (`<T>_team_access`), intersected with the caller's `<T>_readers` (admins: all), newest first by the record's date column; `GET /mine/recent?limit=20` → `{ items: [{ collection, id, kind, code, title, team_id, team_name, team_color, changed_at }] }` across the caller's teams (readable only). `packages/d1-ui/src/index/indexConfig.ts` / `indexQuery.ts` (+tests): new FilterDef option kind `team` — options from `listTeams`; when set, the page first calls `GET /d1-teams/:id/records?collection=` and adds `{ [key]: { _in: ids } }` (empty ids → a filter that matches nothing); "showing the latest 300 of this team's records" note when truncated; add the Team filter to the samples, operations, tests, campaigns (and projects: grants only) index definitions.
 
 - [ ] **Step 1: failing tests** (endpoint: readers intersection, owner + grant union, truncation, admin; kit: query building with/without ids, URL round-trip). **Step 2–4.** All extension suites + `@d1/ui` + starbase-pages tests/typechecks.
 - [ ] **Step 5: Commit** `feat(teams): team filter on index pages`
