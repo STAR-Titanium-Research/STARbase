@@ -10,6 +10,7 @@ const palette = (dark: boolean): Palette => ({
 	tile: dark ? rgb(0.08, 0.1, 0.13) : rgb(0.9, 0.91, 0.93), tray: rgb(0.5, 0.5, 0.5), ink: rgb(0.1, 0.1, 0.1),
 	body: rgb(0.3, 0.3, 0.32), mark: rgb(0.6, 0.6, 0.6), ok: rgb(0.1, 0.6, 0.3), warn: rgb(0.8, 0.5, 0.1),
 	dim: rgb(0.5, 0.5, 0.55), accent: rgb(0.2, 0.4, 0.8), pick: rgb(0.6, 0.7, 0.9),
+	tipPcd: rgb(0.85, 0.86, 0.88), tipCbn: rgb(0.55, 0.45, 0.3),
 });
 
 const inserts: InsertRow[] = Array.from({ length: 10 }, (_, i) => ({
@@ -58,6 +59,43 @@ describe('SceneMaterials', () => {
 		expect(luminance(palette(true).tile)).toBeLessThan(0.35);
 		expect(new SceneMaterials(palette(true)).isDark).toBe(true);
 		expect(new SceneMaterials(palette(false)).isDark).toBe(false);
+	});
+});
+
+describe('BoxView with a tipped insert type', () => {
+	const tipped = (substrate: string | null) => {
+		const one: InsertRow[] = [{ insert_id: 'p1', insert_code: 'P-1', insert_number: 1, is_depleted: false }];
+		const e: EdgeRow[] = [{ edge_id: 'p1A', edge_code: 'P-1A', insert_id: 'p1', edge_identifier: 'A', is_used: false }];
+		const m = buildToolingModel({ tool_box_id: 'b', tool_box_code: 'B' }, { iso_designation: 'CCGW 09T3 04', edge_count: 1, substrate }, one, e);
+		const mats = new SceneMaterials(palette(false));
+		return { mats, view: new BoxView(m, mats), m };
+	};
+	const tipsOf = (v: BoxView) => v.root.getObjectByName('tips') as import('three').InstancedMesh | undefined;
+
+	it('draws a tip pad instance per solid insert, in the PCD or the CBN material', () => {
+		const pcd = tipped('PCD');
+		pcd.view.sync(state(BOX));
+		expect(tipsOf(pcd.view)!.count).toBe(1);
+		expect(tipsOf(pcd.view)!.material).toBe(pcd.mats.tipPcd);
+		const cbn = tipped('PCBN');
+		cbn.view.sync(state(BOX));
+		expect(tipsOf(cbn.view)!.material).toBe(cbn.mats.tipCbn);
+	});
+
+	it('draws no tips for plain carbide', () => {
+		expect(tipsOf(tipped('Carbide').view)).toBeUndefined();
+		expect(tipsOf(make().view)).toBeUndefined();
+	});
+
+	it('does not pick the tip pad: the insert still picks, and only edge A of the one-edge insert is drawn', () => {
+		const { view, m } = tipped('PCD');
+		view.sync(state(BOX));
+		const c = view.insertCentre('p1');
+		expect(pickDown(view, BOX, [c[0] + 3.5, 0, c[2]])).toEqual({ kind: 'insert', insertId: 'p1' });
+		let tubes = 0;
+		view.root.traverse((o) => { if (o.userData.kind === 'edge') tubes++; });
+		expect(tubes).toBe(2);
+		expect(m.geometry.cuttingCorners).toEqual([0]);
 	});
 });
 
