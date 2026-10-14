@@ -32,7 +32,7 @@ describe('NAV_GROUPS', () => {
 			'Prep recipes', 'Etchants', 'FAST recipes',
 		]);
 		expect(flat('more')).toEqual([['Print labels', '/home/labels'], ['Report a bug', '/report-bug'], ['Settings', '/home/settings']]);
-		expect(flat('admin')).toEqual([['Data Studio', '/content'], ['Force Crawler', '/d1-force-crawler']]);
+		expect(flat('admin')).toEqual([['Data Studio', '/content'], ['Force Crawler', '/crawler']]);
 	});
 
 	it('gives every link an icon that NAV_ICONS has', () => {

@@ -44,10 +44,11 @@ const providerHref = (p: AuthProvider) => providerLoginUrl(getConfig().directusU
 		<form class="sb-card" @submit.prevent="submit">
 			<BrandLogo />
 			<h1>Sign in</h1>
+			<p class="sb-sub">Welcome back to STARbase.</p>
 			<label class="sb-field">Email<input v-model="email" type="email" autocomplete="username" required autofocus /></label>
 			<label class="sb-field">Password<input v-model="password" type="password" autocomplete="current-password" required /></label>
 			<p v-if="error" class="sb-error" role="alert">{{ error }}</p>
-			<button type="submit" class="sb-primary" :disabled="busy">{{ busy ? 'Signing in…' : 'Sign in' }}</button>
+			<button type="submit" class="sb-primary" :disabled="busy" :aria-busy="busy ? 'true' : undefined"><span v-if="busy" class="sb-spin" aria-hidden="true" />{{ busy ? 'Signing in…' : 'Sign in' }}</button>
 			<template v-if="providers.length">
 				<p class="sb-or">or</p>
 				<a v-for="p in providers" :key="p.name" class="sb-provider" :href="providerHref(p)">Sign in with {{ p.label }}</a>

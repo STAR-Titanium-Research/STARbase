@@ -1,5 +1,5 @@
 import { createApp, watch } from 'vue';
-import { setPageFrame } from '@d1/starbase-pages';
+import { installCapture, setPageFrame } from '@d1/starbase-pages';
 // Bundled, not a CDN: Material Symbols as in the Force App (no network dependency for every icon).
 import 'material-symbols/rounded.css';
 import './theme.css';
@@ -19,6 +19,8 @@ import { registerStandins } from './standins/register';
 import { restoreTheme } from './appearance';
 
 async function bootstrap() {
+	// Keep the recent console errors in memory, for the Report a bug page's diagnostics.
+	installCapture();
 	// The person's last theme choice, before anything is drawn (the saved preference confirms it once loaded).
 	restoreTheme(document.documentElement);
 	await loadRuntimeConfig();

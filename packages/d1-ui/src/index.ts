@@ -23,12 +23,15 @@ export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
 // Display helpers and error predicates
 export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
-export { humanise, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
+export { humanise, statusStyle, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
+export type { Tone } from './status';
 export { CHOICES, choiceKindFor, choiceLabel } from './choiceLabels';
 export type { Choice, ChoiceKind } from './choiceLabels';
 export { estimateMassGrams } from './mass';
-export { buildLife, truncatedNotes } from './life';
-export type { LifeItem, TraceResponse } from './life';
+export { buildLife, chipText, chipTitle, daySummary, groupLife, truncatedNotes } from './life';
+export { fitSplit, splitSummary } from './lifeSplit';
+export type { LifeSplit } from './lifeSplit';
+export type { LifeDay, LifeItem, LifeStep, TraceResponse } from './life';
 export { linkedFiles, shareFiles } from './linkedFiles';
 export type { LinkedFile } from './linkedFiles';
 export { paramColumns, paramRows } from './params';

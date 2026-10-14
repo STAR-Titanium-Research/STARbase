@@ -62,9 +62,9 @@ describe('hasDrawableDims', () => {
 });
 
 describe('assetThumbUrl', () => {
-	it('is a cropped WebP of the given size, 320x200 by default', () => {
-		expect(assetThumbUrl('abc-123')).toBe('/assets/abc-123?width=320&height=200&fit=cover&format=webp');
-		expect(assetThumbUrl('abc', 64, 40)).toBe('/assets/abc?width=64&height=40&fit=cover&format=webp');
+	it('is a WebP fitted inside the given box (no crop, no padding), 320x200 by default', () => {
+		expect(assetThumbUrl('abc-123')).toBe('/assets/abc-123?width=320&height=200&fit=inside&format=webp');
+		expect(assetThumbUrl('abc', 64, 40)).toBe('/assets/abc?width=64&height=40&fit=inside&format=webp');
 	});
 });
 
