@@ -258,6 +258,22 @@ export const SQL = {
     'SELECT s.test_sessions_id AS session_id, t.work_state, s.item AS sample_id FROM test_sessions_subject s'
     + ' JOIN test_sessions t ON t.session_id = s.test_sessions_id'
     + " WHERE s.collection = 'physical_samples' AND s.item = ANY(string_to_array(?, ',')::text[])",
+  // Create: lock the samples a removal would delete before looking at what points at them, so nothing new can start to.
+  lockSamples:
+    "SELECT sample_id FROM physical_samples WHERE sample_id = ANY(string_to_array(?, ',')::uuid[]) ORDER BY sample_id FOR UPDATE",
+  // Create: lock one existing record and read its version and state (work state, or sample status) and its input sample.
+  lockRecord: {
+    physical_samples: 'SELECT version, current_status AS state, NULL AS sample_id FROM physical_samples WHERE sample_id = ? FOR UPDATE',
+    manufacturing_operations:
+      'SELECT version, work_state AS state, sample_id FROM manufacturing_operations WHERE operation_id = ? FOR UPDATE',
+    test_sessions: 'SELECT version, work_state AS state, NULL AS sample_id FROM test_sessions WHERE session_id = ? FOR UPDATE',
+  },
+  // The code the triggers gave a new record.
+  codeOf: {
+    physical_samples: 'SELECT sample_code AS code FROM physical_samples WHERE sample_id = ?',
+    manufacturing_operations: 'SELECT pass_code AS code FROM manufacturing_operations WHERE operation_id = ?',
+    test_sessions: 'SELECT test_code AS code FROM test_sessions WHERE session_id = ?',
+  },
 };
 
 // ---- planning: what a draft means (pure) -----------------------------------------------------------------------------
@@ -659,6 +675,48 @@ export function buildPlan(body, ctx = {}) {
 
 export const computeChecks = (body, ctx) => buildPlan(body, ctx).checks;
 
+// ---- writing: values and failures (pure) ---------------------------------------------------------------------------------
+
+// What a card's values become as the payload of a new record: blank values are left out (an empty string would not cast to a
+// uuid or a number), everything else goes as it is; `drop` names fields that must not be sent (the date of the other work state).
+export function cleanValues(values, drop = []) {
+  const out = {};
+  for (const [field, v] of Object.entries(values ?? {})) {
+    if (!isBlank(v) && !drop.includes(field)) out[field] = v;
+  }
+  return out;
+}
+
+// An existing record's edit: a blank value clears the field.
+export function editValues(values) {
+  return Object.fromEntries(Object.entries(values ?? {}).map(([f, v]) => [f, isBlank(v) ? null : v]));
+}
+
+// The day of a batch: the first 10 characters of an ISO date or datetime, when they are one.
+export function dayOf(v) {
+  const t = typeof v === 'string' ? v.slice(0, 10) : '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
+}
+
+// A failed write, in the contract's words: { status, message } for an error thrown by ItemsService (a Directus error, or a
+// database error that came through) or by a hook. The access guard's own refusal says why in plain words, so it is passed on;
+// anything else gets a generic line (a database message can name tables), and an unknown failure is a 500.
+export function describeFailure(err) {
+  const code = String(err?.code ?? '');
+  const reason = err?.extensions?.reason;
+  if (err?.extensions?.source === 'd1-access-guard' && typeof reason === 'string') return { status: 403, message: reason };
+  if (err?.status === 403 || code === 'FORBIDDEN') return { status: 403, message: 'You are not allowed to write that record.' };
+  if (code === 'RECORD_NOT_UNIQUE' || code === '23505') return { status: 409, message: 'That code or value is already used by another record.' };
+  if (code === 'INVALID_FOREIGN_KEY' || code === '23503') return { status: 409, message: 'It points at a record that does not exist, or is still in use.' };
+  if (code === 'NOT_NULL_VIOLATION' || code === '23502') return { status: 400, message: 'A required value is missing.' };
+  if (code === '23514') return { status: 400, message: 'A value is not allowed here.' };
+  if (/^22/.test(code) || code === 'VALUE_OUT_OF_RANGE' || code === 'VALUE_TOO_LONG') return { status: 400, message: 'A value has the wrong format or is too large.' };
+  if (Number.isInteger(err?.status) && err.status >= 400 && err.status < 500 && typeof err.message === 'string' && err.message) {
+    return { status: err.status, message: err.message };
+  }
+  return { status: 500, message: 'That record could not be written.' };
+}
+
 // ---- the endpoint ----------------------------------------------------------------------------------------------------
 
 const draftOut = (r) => ({
@@ -670,7 +728,7 @@ const draftOut = (r) => ({
 });
 
 export function mount(router, context, clock = () => new Date()) {
-  const { database, logger, services, getSchema } = context;
+  const { database, logger, services, getSchema, env } = context;
 
   const sendError = (res, err) => {
     const known = err instanceof HttpError;
@@ -709,7 +767,7 @@ export function mount(router, context, clock = () => new Date()) {
   // cannot read is "gone"), then the samples those records work on (for inheritance), the fields the forms mark required, and,
   // for what a draft removes, the planned outputs and everything that points at them. `db` / `knex` are the transaction when
   // Create calls this.
-  async function loadContext(req, body, { db = database, knex } = {}) {
+  async function loadContext(req, body, { db = database, knex, lock = false } = {}) {
     const schema = await schemaOf(req);
     const acc = req.accountability;
     const read = async (collection, ids) => {
@@ -755,6 +813,7 @@ export function mount(router, context, clock = () => new Date()) {
     const refs = [];
     if (candidates.size) {
       const csv = [...candidates].join(',');
+      if (lock) await db.raw(SQL.lockSamples, [csv]);
       for (const r of rowsOf(await db.raw(SQL.sampleInfo, [csv]))) {
         outputs.set(lower(r.sample_id), { code: r.sample_code, status: r.current_status });
       }
@@ -853,6 +912,157 @@ export function mount(router, context, clock = () => new Date()) {
     const body = draftOut(row).body;
     const ctx = await loadContext(req, body);
     res.json({ data: { checks: buildPlan(body, ctx).checks } });
+  }));
+
+  // -- writing ------------------------------------------------------------------------------------------------------------
+
+  // Knex writes bypass the Directus services that clear the data cache, and ItemsService only does so when it owns the
+  // transaction, so clear it after the commit (as d1-record-access does).
+  async function clearDataCache(req) {
+    if (!toBool(env?.CACHE_ENABLED)) return;
+    try {
+      const schema = await schemaOf(req);
+      await new services.UtilsService({ schema, accountability: { user: null, role: null, admin: true, app: false } }).clearCache({ system: false });
+    } catch (err) {
+      logger?.warn?.(`${SOURCE}: could not clear the data cache: ${err?.message || err}`);
+    }
+  }
+  // One write transaction: the actor first, so the audit trigger names the caller.
+  const inTransaction = (acc, work) =>
+    database.transaction(async (trx) => {
+      await trx.raw(SQL.setActor, [String(acc.user)]);
+      return work(trx);
+    });
+  // A write of the draft's card `key` that failed: roll everything back (the throw does) and name the card.
+  const writeFailed = (key, err) => {
+    if (err instanceof HttpError) return err;
+    const { status, message } = describeFailure(err);
+    if (status === 500) logger?.error?.(`${SOURCE}: writing ${key} failed: ${err?.stack || err?.message || err}`);
+    return new HttpError(status, 'WRITE_FAILED', message, { key });
+  };
+  const staleChecks = (key, text) =>
+    new HttpError(409, 'CHECKS', 'Something changed, so nothing was created. Review the checks.', { checks: [{ key, level: 'block', text }] });
+
+  // -- create (spec 6.1) ----------------------------------------------------------------------------------------------------
+
+  router.post('/drafts/:id/create', route(async ({ req, res, acc }) => {
+    const id = idParam(req, 'draft');
+    const schema = await schemaOf(req);
+    const out = await inTransaction(acc, async (trx) => {
+      // 1. The draft, locked, and its checks re-run inside the transaction.
+      const [row] = rowsOf(await trx.raw(SQL.lockDraft, [id, acc.user]));
+      if (!row) throw new HttpError(404, 'NOT_FOUND', 'That draft does not exist. It may have been created already.');
+      const body = draftOut(row).body;
+      const valid = validateDraftBody(body);
+      if (!valid.ok) throw new HttpError(400, 'INVALID_PAYLOAD', valid.message);
+      const ctx = await loadContext(req, body, { db: trx, knex: trx, lock: true });
+      const { checks, plan } = buildPlan(body, ctx);
+      if (checks.some((c) => c.level === 'block')) {
+        throw new HttpError(409, 'CHECKS', 'Some things are missing, so nothing was created.', { checks });
+      }
+
+      const svc = (collection) => itemsFor(schema, req.accountability, collection, trx);
+      const attempt = async (key, fn) => {
+        try {
+          return await fn();
+        } catch (err) {
+          throw writeFailed(key, err);
+        }
+      };
+      // The record is still as the checks saw it (it is locked now): its version, and that it is still planned.
+      const lock = async (key, collection, idValue) => {
+        const [r] = rowsOf(await trx.raw(SQL.lockRecord[collection], [idValue]));
+        return r ?? null;
+      };
+      const created = {};
+      const newSampleIds = [];
+      const sampleId = new Map(); // item key -> the id of the sample made for it
+      const refId = (ref) => (ref ? (ref.startsWith('id:') ? ref.slice(3) : sampleId.get(ref.slice(5))) : undefined);
+      const record = async (key, collection, idValue) => {
+        const [r] = rowsOf(await trx.raw(SQL.codeOf[collection], [idValue]));
+        created[key] = { collection, id: idValue, code: r?.code ?? null };
+      };
+      const project = (values) => (isBlank(values.project_id) ? (body.projectId ?? undefined) : values.project_id);
+      const campaign = (values) => (isBlank(values.campaign_id) ? (body.campaignId ?? undefined) : values.campaign_id);
+
+      // 2. Removals: tests, operations, then the samples that go with them (each locked, and still planned).
+      for (const [list, collection] of [
+        [plan.removals.tests, 'test_sessions'], [plan.removals.operations, 'manufacturing_operations'], [plan.removals.samples, 'physical_samples'],
+      ]) {
+        for (const r of list) {
+          const now = await attempt(r.key, () => lock(r.key, collection, r.id));
+          if (now && now.state !== 'planned') throw staleChecks(r.key, 'Done records are never deleted from the map.');
+          await attempt(r.key, () => svc(collection).deleteOne(r.id));
+        }
+      }
+      // 3. Edits to existing records, each against the version it was made on.
+      for (const e of plan.edits) {
+        const now = await attempt(e.key, () => lock(e.key, e.collection, e.id));
+        if (!now || Number(now.version) !== e.version) throw staleChecks(e.key, 'Changed since you added it. Your edits were made against an older version, so review it first.');
+        await attempt(e.key, () => svc(e.collection).updateOne(e.id, editValues(e.values)));
+      }
+      // 4. New samples, in key order (the code trigger numbers them in this order).
+      for (const s of plan.samples) {
+        const data = cleanValues(s.values);
+        if (s.planned) data.current_status = 'planned';
+        const newId = await attempt(s.key, () => svc('physical_samples').createOne(data));
+        sampleId.set(s.key, newId);
+        newSampleIds.push(newId);
+        await record(s.key, 'physical_samples', newId);
+        if (body.campaignId) {
+          await attempt(s.key, () => svc('campaign_samples').createOne({ campaign_id: body.campaignId, sample_id: newId }));
+        }
+      }
+      // 5. One batch for every operation with several rows.
+      const batchId = new Map();
+      for (const b of plan.batches) {
+        const day = dayOf(b.workState === 'done' ? b.values.operation_date : b.values.planned_date);
+        batchId.set(b.key, await attempt(b.key, () => svc('batches').createOne(day ? { batch_date: day } : {})));
+      }
+      // 6. New and attached operations, in the order of the wires.
+      for (const r of plan.operations) {
+        if (r.mode === 'attach') {
+          const now = await attempt(r.itemKey, () => lock(r.itemKey, 'manufacturing_operations', r.existingId));
+          if (!now || Number(now.version) !== r.version) throw staleChecks(r.itemKey, 'Changed since you added it. Your edits were made against an older version, so review it first.');
+          if (now.sample_id) throw staleChecks(r.itemKey, 'It got an input in the meantime, so it cannot be attached any more.');
+          await attempt(r.itemKey, () => svc('manufacturing_operations').updateOne(r.existingId, { ...editValues(r.values), sample_id: refId(r.input) }));
+          continue;
+        }
+        const data = {
+          ...cleanValues(r.values, r.workState === 'planned' ? ['operation_date'] : []),
+          work_state: r.workState,
+        };
+        if (r.input) data.sample_id = refId(r.input);
+        if (r.output) data.output_sample_id = refId(r.output);
+        if (r.batchKey) data.batch_id = batchId.get(r.batchKey);
+        const pid = project(r.values);
+        if (pid !== undefined) data.project_id = pid;
+        const cid = campaign(r.values);
+        if (cid !== undefined) data.campaign_id = cid;
+        const newId = await attempt(r.itemKey, () => svc('manufacturing_operations').createOne(data));
+        await record(r.key, 'manufacturing_operations', newId);
+        if (!(r.itemKey in created)) created[r.itemKey] = created[r.key];
+      }
+      // 7. New tests, with their samples as subjects.
+      for (const t of plan.tests) {
+        const data = {
+          ...cleanValues(t.values, t.workState === 'planned' ? ['session_date'] : []),
+          work_state: t.workState,
+          subject: { create: t.subjects.map((ref) => ({ collection: 'physical_samples', item: refId(ref) })) },
+        };
+        const pid = project(t.values);
+        if (pid !== undefined) data.project_id = pid;
+        const cid = campaign(t.values);
+        if (cid !== undefined) data.campaign_id = cid;
+        const newId = await attempt(t.key, () => svc('test_sessions').createOne(data));
+        await record(t.key, 'test_sessions', newId);
+      }
+      // 8. The draft is done with.
+      await trx.raw(SQL.deleteDraft, [id, acc.user]);
+      return { created, sampleIds: newSampleIds };
+    });
+    await clearDataCache(req);
+    res.json({ data: out });
   }));
 }
 

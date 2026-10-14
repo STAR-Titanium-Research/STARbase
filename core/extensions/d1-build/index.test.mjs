@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 import endpoint, {
   COLLECTION_PK, HttpError, KIND_COLLECTION, LIMITS, RESERVED_FIELDS, SQL, buildPlan, computeChecks, mount, orderOperations,
-  parseRequired, summarise, validateDraftBody, validateName,
+  cleanValues, dayOf, describeFailure, editValues, parseRequired, summarise, validateDraftBody, validateName,
 } from './index.js';
 
 // ---- fakes -----------------------------------------------------------------------------------------------------------
@@ -37,8 +37,19 @@ function fakeWorld() {
     required: [], // directus_fields rows { collection, field, translations }
     refOps: [], refTests: [], refSubjects: [], // what points at a sample
     deniedReads: new Set(),
+    ops: [], // every write ItemsService was asked for, in order
+    codeSeq: 0, failOn: null, lockVersions: new Map(),
   };
 }
+// Transactions: the fake keeps a copy of what a transaction may change and puts it back when the transaction throws.
+const snapshot = (world) => ({
+  drafts: world.drafts.map((d) => ({ ...d })),
+  records: Object.fromEntries(Object.entries(world.records).map(([c, m]) => [c, new Map([...m].map(([k, v]) => [k, { ...v }]))])),
+});
+const restore = (world, snap) => {
+  world.drafts = snap.drafts;
+  world.records = snap.records;
+};
 const seed = (world, collection, rows) => {
   for (const r of rows) world.records[collection].set(r[COLLECTION_PK[collection]].toLowerCase(), r);
 };
@@ -48,6 +59,7 @@ function fakeServices(world, log = { built: [], reads: [] }) {
   class ItemsService {
     constructor(collection, options) {
       this.collection = collection;
+      this.options = options;
       log.built.push({ collection, options });
     }
 
@@ -61,6 +73,41 @@ function fakeServices(world, log = { built: [], reads: [] }) {
         if (r) rows.push(Object.fromEntries(query.fields.map((f) => [f, r[f]])));
       }
       return rows;
+    }
+
+    async createOne(data) {
+      world.failOn?.('create', this.collection, data);
+      const pk = COLLECTION_PK[this.collection];
+      const id = ID(2000 + (world.seq += 1));
+      const row = { [pk]: id, version: 1, ...data };
+      if (this.collection === 'physical_samples') {
+        row.sample_code = String(row.sample_code).replace('{seq}', String((world.codeSeq += 1)));
+        row.current_status ??= 'active';
+      } else if (this.collection === 'manufacturing_operations') {
+        row.pass_code = `OP-${(world.codeSeq += 1)}`;
+        row.work_state ??= 'done';
+      } else if (this.collection === 'test_sessions') {
+        row.test_code = `T-${(world.codeSeq += 1)}`;
+        row.work_state ??= 'done';
+      }
+      (world.records[this.collection] ??= new Map()).set(id, row);
+      world.ops.push({ op: 'create', collection: this.collection, id, data, knex: this.options.knex });
+      return id;
+    }
+
+    async updateOne(id, data) {
+      world.failOn?.('update', this.collection, data);
+      const row = world.records[this.collection].get(id.toLowerCase());
+      Object.assign(row, data, { version: row.version + 1 });
+      world.ops.push({ op: 'update', collection: this.collection, id, data, knex: this.options.knex });
+      return id;
+    }
+
+    async deleteOne(id) {
+      world.failOn?.('delete', this.collection, { id });
+      world.records[this.collection].delete(id.toLowerCase());
+      world.ops.push({ op: 'delete', collection: this.collection, id, knex: this.options.knex });
+      return id;
     }
   }
   return { ItemsService, log };
@@ -100,6 +147,14 @@ function fakeDatabase(world) {
         world.drafts = world.drafts.filter((d) => !(d.draft_id === b[0] && d.user_id === b[1]));
         return { rows: [], rowCount: before - world.drafts.length };
       }
+      case SQL.lockDraft: {
+        const d = draft(b[0], b[1]);
+        return { rows: d ? [pick(d)] : [] };
+      }
+      case SQL.setActor:
+        return { rows: [] };
+      case SQL.lockSamples:
+        return { rows: csvOf(b).filter((id) => world.records.physical_samples.has(id)).map((sample_id) => ({ sample_id })) };
       case SQL.requiredFields:
         return { rows: world.required };
       case SQL.sampleInfo:
@@ -111,20 +166,50 @@ function fakeDatabase(world) {
         return { rows: world.refTests.filter((r) => csvOf(b).includes(r.sample_id)) };
       case SQL.refsSubjects:
         return { rows: world.refSubjects.filter((r) => csvOf(b).includes(r.sample_id)) };
-      default:
+      default: {
+        for (const [collection, text] of Object.entries(SQL.lockRecord)) {
+          if (sql !== text) continue;
+          const r = world.records[collection]?.get(String(b[0]).toLowerCase());
+          if (!r) return { rows: [] };
+          const state = collection === 'physical_samples' ? r.current_status : r.work_state;
+          return { rows: [{ version: world.lockVersions.get(String(b[0]).toLowerCase()) ?? r.version, state, sample_id: r.sample_id ?? null }] };
+        }
+        for (const [collection, text] of Object.entries(SQL.codeOf)) {
+          if (sql !== text) continue;
+          const r = world.records[collection]?.get(String(b[0]).toLowerCase());
+          return { rows: r ? [{ code: r.sample_code ?? r.pass_code ?? r.test_code }] : [] };
+        }
         throw new Error(`unexpected SQL: ${sql}`);
+      }
     }
   };
-  return { raw };
+  // A transaction is the same fake database with its own log; a throw puts the world back.
+  const transaction = async (fn) => {
+    const snap = snapshot(world);
+    const trx = { isTransaction: true, log: [], raw: async (sql, b) => { trx.log.push(sql); return raw(sql, b); } };
+    world.trx = trx;
+    try {
+      return await fn(trx);
+    } catch (err) {
+      restore(world, snap);
+      throw err;
+    }
+  };
+  return { raw, transaction };
 }
 
-function setup() {
+function setup({ env = {} } = {}) {
   const world = fakeWorld();
+  const cleared = [];
+  class UtilsService {
+    constructor(options) { this.options = options; }
+    async clearCache(args) { cleared.push({ args, options: this.options }); }
+  }
   const router = fakeRouter();
   const logged = [];
   const logger = { error: (m) => logged.push(m), warn: (m) => logged.push(m) };
   const fake = fakeServices(world);
-  mount(router, { database: fakeDatabase(world), logger, services: { ItemsService: fake.ItemsService }, getSchema: async () => ({ schema: true }) }, () => NOW);
+  mount(router, { database: fakeDatabase(world), logger, services: { ItemsService: fake.ItemsService, UtilsService }, getSchema: async () => ({ schema: true }), env }, () => NOW);
   const call = async (method, path, { user = ALICE, params = {}, body, admin = false } = {}) => {
     const handler = router.routes.get(`${method} ${path}`);
     assert.ok(handler, `no route ${method} ${path}`);
@@ -132,7 +217,7 @@ function setup() {
     await handler({ accountability: user ? { user, admin } : null, params, body }, res);
     return res;
   };
-  return { world, router, call, logged, log: fake.log };
+  return { world, router, call, logged, log: fake.log, cleared };
 }
 
 const emptyBody = () => ({ v: 1, projectId: null, campaignId: null, items: [], wires: [], positions: {} });
@@ -936,4 +1021,392 @@ test('check: for a removal it reads the planned output and what points at it, as
 test('computeChecks is buildPlan\'s checks', () => {
   const body = draft([sample('n1')]);
   assert.deepEqual(computeChecks(body, {}), buildPlan(body, {}).checks);
+});
+
+// ---- create ----------------------------------------------------------------------------------------------------------
+
+const PROJECT = ID(60);
+const CAMPAIGN = ID(61);
+async function keep(env, body, user = ALICE) {
+  return (await env.call('POST', '/drafts', { user, body: { name: 'draft', body } })).body.data.id;
+}
+const createCall = (env, id, user = ALICE) => env.call('POST', '/drafts/:id/create', { user, params: { id } });
+const writes = (world) => world.ops.map((o) => `${o.op}:${o.collection}`);
+const stateOf = (world) => JSON.stringify(Object.fromEntries(Object.entries(world.records).map(([c, m]) => [c, [...m.entries()]])));
+
+test('create: a planned cut is written in one transaction as the caller, in the order of spec 6.1', async () => {
+  const env = setup();
+  const { world } = env;
+  seed(world, 'physical_samples', [sampleRow(10)]);
+  const body = { ...cutDraft(), projectId: PROJECT, campaignId: CAMPAIGN };
+  body.items[1].values = { method_id: METHOD, equipment_id: ENV, planned_date: '2026-10-20', operation_date: '2026-10-14T00:00:00Z' };
+  const id = await keep(env, body);
+  const res = await createCall(env, id);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body) + env.logged.join('|'));
+
+  // the transaction starts with the actor, and every write used it (the caller's accountability is the other half)
+  const trx = world.trx;
+  assert.deepEqual(trx.log.slice(0, 2), [SQL.setActor, SQL.lockDraft]);
+  assert.ok(world.ops.length > 0 && world.ops.every((o) => o.knex === trx), 'every write carries the transaction');
+  // samples first (each followed by its campaign link), then the batch, then one operation per row
+  assert.deepEqual(writes(world), [
+    'create:physical_samples', 'create:campaign_samples',
+    'create:physical_samples', 'create:campaign_samples',
+    'create:physical_samples', 'create:campaign_samples',
+    'create:batches',
+    'create:manufacturing_operations', 'create:manufacturing_operations', 'create:manufacturing_operations',
+  ]);
+  const created = world.ops.filter((o) => o.op === 'create');
+  const samples = created.filter((o) => o.collection === 'physical_samples');
+  // key order: n2, n3, then n10; planned; inherited from the disc and the method; the draft's project
+  assert.deepEqual(samples.map((o) => o.data.sample_code), ['{seq}-A-MC-2026-10-14', '{seq}-A-MC-2026-10-14', '{seq}-A-MC-2026-10-14']);
+  for (const s of samples) {
+    assert.equal(s.data.current_status, 'planned');
+    assert.deepEqual([s.data.material_id, s.data.form, s.data.primary_method_id, s.data.project_id], [MATERIAL, 'disc', METHOD, PROJECT]);
+  }
+  assert.deepEqual(created.filter((o) => o.collection === 'campaign_samples').map((o) => o.data.campaign_id), [CAMPAIGN, CAMPAIGN, CAMPAIGN]);
+  assert.deepEqual(created.filter((o) => o.collection === 'campaign_samples').map((o) => o.data.sample_id), samples.map((o) => o.id));
+  const batch = created.find((o) => o.collection === 'batches');
+  assert.deepEqual(batch.data, { batch_date: '2026-10-20' });
+  const ops = created.filter((o) => o.collection === 'manufacturing_operations');
+  assert.equal(ops.length, 3);
+  // n10 is the first row's output in the draft, but samples are made in key order: n2, n3, n10
+  const idOfKey = { n2: samples[0].id, n3: samples[1].id, n10: samples[2].id };
+  assert.deepEqual(ops.map((o) => o.data.output_sample_id), [idOfKey.n10, idOfKey.n2, idOfKey.n3]);
+  for (const o of ops) {
+    assert.equal(o.data.sample_id, ID(10));
+    assert.equal(o.data.batch_id, batch.id);
+    assert.equal(o.data.work_state, 'planned');
+    assert.equal(o.data.method_id, METHOD);
+    assert.equal(o.data.project_id, PROJECT);
+    assert.equal(o.data.campaign_id, CAMPAIGN);
+    assert.equal(o.data.planned_date, '2026-10-20');
+    assert.equal('operation_date' in o.data, false, 'a planned operation has no operation date');
+  }
+  // the answer: a code per created record, the operation under its row keys and (first row) its card key, the new samples listed
+  assert.equal(res.body.data.sampleIds.length, 3);
+  assert.deepEqual(res.body.data.sampleIds, samples.map((o) => o.id));
+  assert.deepEqual(Object.keys(res.body.data.created).sort(), ['n10', 'n2', 'n3', 'o1', 'r1', 'r2', 'r3']);
+  assert.deepEqual(res.body.data.created.n2, { collection: 'physical_samples', id: samples[0].id, code: '1-A-MC-2026-10-14' });
+  assert.deepEqual(res.body.data.created.r2, { collection: 'manufacturing_operations', id: ops[1].id, code: 'OP-5' });
+  assert.deepEqual(res.body.data.created.o1, res.body.data.created.r1);
+  // the draft is gone, and the transaction committed
+  assert.equal(world.drafts.length, 0);
+  assert.equal(world.records.physical_samples.size, 4);
+});
+
+test('create: a done operation keeps its date, its pieces are active, and it is a single record without a batch', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1', { operation_date: '2026-10-14T08:30:00Z', equipment_id: ENV }, { workState: 'done' }), sample('n1', { values: code('{seq}-X') })],
+    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('n1'))],
+  );
+  env.world.required = [{ collection: 'manufacturing_operations', field: 'operation_date', translations: null }];
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(writes(env.world), ['create:physical_samples', 'create:manufacturing_operations']);
+  const [s, o] = env.world.ops;
+  assert.equal('current_status' in s.data, false, 'an active sample keeps the database default');
+  assert.deepEqual([o.data.work_state, o.data.operation_date, o.data.sample_id, o.data.output_sample_id, 'batch_id' in o.data], ['done', '2026-10-14T08:30:00Z', ID(10), s.id, false]);
+});
+
+test('create: tests are written with their samples as subjects, a planned test without a session date', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [
+      sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1'), sample('n1', { values: code('{seq}-X') }),
+      test_('t1', { values: { test_type: 'hardness', session_date: '2026-10-20' } }),
+      test_('t2', { workState: 'done', values: { test_type: 'tensile', session_date: '2026-10-21' } }),
+    ],
+    [wire(w('s0'), w('o1')), wire(w('o1', 0), w('n1')), wire(w('n1'), w('t1')), wire(w('s0'), w('t1')), wire(w('s0'), w('t2'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(writes(env.world), ['create:physical_samples', 'create:manufacturing_operations', 'create:test_sessions', 'create:test_sessions']);
+  const [, , t1, t2] = env.world.ops;
+  const n1 = env.world.ops[0].id;
+  assert.deepEqual(t1.data, {
+    test_type: 'hardness', work_state: 'planned',
+    subject: { create: [{ collection: 'physical_samples', item: n1 }, { collection: 'physical_samples', item: ID(10) }] },
+  });
+  assert.deepEqual(t2.data, {
+    test_type: 'tensile', session_date: '2026-10-21', work_state: 'done',
+    subject: { create: [{ collection: 'physical_samples', item: ID(10) }] },
+  });
+  assert.deepEqual(res.body.data.created.t1, { collection: 'test_sessions', id: t1.id, code: 'T-3' });
+});
+
+test('create: operations are written in the order of the wires, not of the draft', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('c', { notes: 'third' }), mop('b', { notes: 'second' }), mop('a', { notes: 'first' }), sample('n1', { values: code('{seq}-A') }), sample('n2', { values: code('{seq}-B') })],
+    // a makes n1 from the disc, b makes n2 from n1, c works on n2 (in place)
+    [wire(w('s0'), w('a')), wire(w('a', 0), w('n1')), wire(w('n1'), w('b')), wire(w('b', 0), w('n2')), wire(w('n2'), w('c'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const ops = env.world.ops.filter((o) => o.collection === 'manufacturing_operations');
+  assert.deepEqual(ops.map((o) => o.data.notes), ['first', 'second', 'third']);
+  assert.deepEqual(Object.keys(res.body.data.created).filter((k) => ['a', 'b', 'c'].includes(k)), ['a', 'b', 'c']);
+});
+
+test('create: passes of an in-place chain are written in the order they were laid out', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('p1', { notes: '1' }), mop('p2', { notes: '2' }), mop('p3', { notes: '3' })],
+    [wire(w('s0'), w('p1')), wire(w('s0'), w('p2')), wire(w('s0'), w('p3'))],
+  );
+  await createCall(env, await keep(env, body));
+  assert.deepEqual(env.world.ops.map((o) => o.data.notes), ['1', '2', '3']);
+  assert.ok(env.world.ops.every((o) => o.data.sample_id === ID(10) && !('output_sample_id' in o.data)));
+});
+
+test('create: a blocking check is a 409 CHECKS with the whole list, and nothing is written or removed', async () => {
+  const env = setup();
+  const body = draft([mop('o1', { method_id: '' }), sample('n1')]);
+  const id = await keep(env, body);
+  const res = await createCall(env, id);
+  assert.equal(res.statusCode, 409);
+  const [error] = res.body.errors;
+  assert.equal(error.extensions.code, 'CHECKS');
+  assert.equal(error.extensions.source, 'd1-build');
+  assert.ok(error.extensions.checks.some((c) => c.level === 'block' && c.key === 'o1' && c.field === 'method_id'));
+  assert.ok(error.extensions.checks.some((c) => c.level === 'warn'), 'warnings are listed too');
+  assert.deepEqual(env.world.ops, []);
+  assert.equal(env.world.drafts.length, 1);
+  assert.equal((await env.call('GET', '/drafts/:id', { params: { id } })).statusCode, 200);
+});
+
+test('create: a failing write rolls everything back, names the card, and leaves the draft', async () => {
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const id = await keep(env, cutDraft());
+  const before = stateOf(env.world);
+  let seen = 0;
+  env.world.failOn = (op, collection) => {
+    if (op === 'create' && collection === 'manufacturing_operations' && (seen += 1) === 2) {
+      throw Object.assign(new Error('insert or update violates foreign key constraint "x" on table "secret_table"'), { code: '23503' });
+    }
+  };
+  const res = await createCall(env, id);
+  assert.equal(res.statusCode, 409);
+  const [error] = res.body.errors;
+  assert.equal(error.extensions.code, 'WRITE_FAILED');
+  assert.equal(error.extensions.key, 'o1');
+  assert.doesNotMatch(error.message, /secret_table|constraint/);
+  // the three samples, the batch and the first operation were written, then taken back
+  assert.equal(env.world.ops.length, 5, 'three samples, the batch and the first operation had been written');
+  assert.equal(stateOf(env.world), before);
+  assert.equal(env.world.drafts.length, 1);
+  assert.equal(env.world.drafts[0].version, 1);
+  assert.deepEqual(env.cleared, [], 'the cache is left alone when nothing was written');
+});
+
+test('create: the card of a failing sample is named, and a refusal by the access guard says why', async () => {
+  const env = setup();
+  const body = draft([sample('n1', { values: { ...code(), material_id: MATERIAL, form: 'bar', primary_method_id: METHOD } }), sample('n2', { values: { ...code(), material_id: MATERIAL, form: 'bar', primary_method_id: METHOD } })]);
+  const id = await keep(env, body);
+  env.world.failOn = (op, collection, data) => {
+    if (data.sample_code === 'x') return;
+    if (env.world.ops.length === 1) {
+      throw Object.assign(new Error('You cannot do that'), { status: 403, code: 'FORBIDDEN', extensions: { source: 'd1-access-guard', reason: "Only the sample's owner can add co-owners." } });
+    }
+  };
+  const res = await createCall(env, id);
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.body.errors[0].extensions.key, 'n2');
+  assert.equal(res.body.errors[0].message, "Only the sample's owner can add co-owners.");
+  assert.equal(env.world.records.physical_samples.size, 0, 'the first sample was rolled back');
+});
+
+test('describeFailure: Directus and database errors in plain words, an unknown one is a 500', () => {
+  const cases = [
+    [{ status: 403, code: 'FORBIDDEN' }, 403, /not allowed/],
+    [{ status: 403, code: 'FORBIDDEN', extensions: { source: 'd1-access-guard', reason: 'Only the owner.' } }, 403, /^Only the owner\.$/],
+    [{ code: 'RECORD_NOT_UNIQUE', status: 400 }, 409, /already used/],
+    [{ code: '23505' }, 409, /already used/],
+    [{ code: 'INVALID_FOREIGN_KEY', status: 400 }, 409, /does not exist/],
+    [{ code: '23503' }, 409, /does not exist/],
+    [{ code: '23502' }, 400, /required value/],
+    [{ code: 'NOT_NULL_VIOLATION', status: 400 }, 400, /required value/],
+    [{ code: '23514' }, 400, /not allowed here/],
+    [{ code: '22P02' }, 400, /wrong format/],
+    [{ code: 'VALUE_TOO_LONG', status: 400 }, 400, /wrong format/],
+    [{ status: 400, code: 'INVALID_PAYLOAD', message: 'Field "x" has to be a number.' }, 400, /has to be a number/],
+    [{ message: 'boom' }, 500, /could not be written/],
+    [undefined, 500, /could not be written/],
+  ];
+  for (const [err, status, message] of cases) {
+    const out = describeFailure(err);
+    assert.equal(out.status, status, JSON.stringify(err));
+    assert.match(out.message, message, JSON.stringify(err));
+  }
+});
+
+test('create: an unknown failure is a 500 WRITE_FAILED naming the card and is logged', async () => {
+  const env = setup();
+  const id = await keep(env, draft([sample('n1', { values: { ...code(), material_id: MATERIAL, form: 'bar', primary_method_id: METHOD } })]));
+  env.world.failOn = () => { throw new Error('socket hang up'); };
+  const res = await createCall(env, id);
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual([res.body.errors[0].extensions.code, res.body.errors[0].extensions.key], ['WRITE_FAILED', 'n1']);
+  assert.match(env.logged.join('\n'), /socket hang up/);
+  assert.doesNotMatch(JSON.stringify(res.body), /socket hang up/);
+});
+
+test('create: edits to existing records carry their version; a record changed since is refused and everything is rolled back', async () => {
+  const env = setup();
+  seed(env.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10), machining_feed_mm_per_rev: 0.1 })]);
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const body = draft([
+    mop('o1', { machining_feed_mm_per_rev: 0.2, outcome_notes: '' }, { existing: { id: ID(40), version: 1 } }),
+    sample('n1', { values: { ...code('{seq}-A'), material_id: MATERIAL, form: 'bar', primary_method_id: METHOD } }),
+  ]);
+  const id = await keep(env, body);
+  const ok = await createCall(env, id);
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+  // the edit comes before the new records, with blanks cleared to null and the version left to the database
+  assert.deepEqual(env.world.ops.map((o) => `${o.op}:${o.collection}`), ['update:manufacturing_operations', 'create:physical_samples']);
+  assert.deepEqual(env.world.ops[0].data, { method_id: METHOD, machining_feed_mm_per_rev: 0.2, outcome_notes: null });
+  assert.equal(env.world.records.manufacturing_operations.get(ID(40)).version, 2);
+
+  // someone changed it between the check and the write: the lock sees version 3
+  const env2 = setup();
+  seed(env2.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10) })]);
+  seed(env2.world, 'physical_samples', [sampleRow(10)]);
+  const id2 = await keep(env2, body);
+  env2.world.lockVersions.set(ID(40), 3);
+  const before = stateOf(env2.world);
+  const stale = await createCall(env2, id2);
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.body.errors[0].extensions.code, 'CHECKS');
+  assert.deepEqual(stale.body.errors[0].extensions.checks.map((c) => [c.key, c.level]), [['o1', 'block']]);
+  assert.equal(stateOf(env2.world), before);
+  assert.equal(env2.world.drafts.length, 1);
+
+  // and one that was already newer when the draft was checked never gets that far
+  const env3 = setup();
+  seed(env3.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10), version: 5 })]);
+  seed(env3.world, 'physical_samples', [sampleRow(10)]);
+  const early = await createCall(env3, await keep(env3, body));
+  assert.equal(early.statusCode, 409);
+  assert.deepEqual(env3.world.ops, []);
+});
+
+test('create: an existing operation is attached to a new sample after the sample is made', async () => {
+  const env = setup();
+  seed(env.world, 'manufacturing_operations', [opRow(40)]);
+  const body = draft(
+    [op('o1', { existing: { id: ID(40), version: 1 }, attach: true, values: { outcome_notes: 'fits now' } }), sample('n1', { values: { ...code('{seq}-A'), material_id: MATERIAL, form: 'bar', primary_method_id: METHOD } })],
+    [wire(w('n1'), w('o1'))],
+  );
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(writes(env.world), ['create:physical_samples', 'update:manufacturing_operations']);
+  assert.deepEqual(env.world.ops[1].data, { outcome_notes: 'fits now', sample_id: env.world.ops[0].id });
+  assert.deepEqual(Object.keys(res.body.data.created), ['n1'], 'an attached operation is not a created record');
+
+  // it got an input while the draft was open: refused at the lock, nothing changed
+  const env2 = setup();
+  seed(env2.world, 'manufacturing_operations', [opRow(40)]);
+  const id2 = await keep(env2, body);
+  const row = env2.world.records.manufacturing_operations.get(ID(40));
+  const real = env2.world.records.manufacturing_operations.get.bind(env2.world.records.manufacturing_operations);
+  env2.world.records.manufacturing_operations.get = (k) => { const r = real(k); return r === row && env2.world.ops.length ? { ...r, sample_id: ID(11) } : r; };
+  const late = await createCall(env2, id2);
+  assert.equal(late.statusCode, 409);
+  assert.match(late.body.errors[0].extensions.checks[0].text, /got an input in the meantime/);
+  assert.equal(env2.world.records.physical_samples.size, 0);
+});
+
+test('create: removing a planned operation deletes it and its planned output, locked first, after the checks', async () => {
+  const env = setup();
+  seed(env.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10), output_sample_id: ID(11) })]);
+  seed(env.world, 'physical_samples', [sampleRow(10), sampleRow(11, { current_status: 'planned' })]);
+  env.world.refOps = [{ operation_id: ID(40), work_state: 'planned', sample_id: ID(10), output_sample_id: ID(11) }];
+  const body = draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true })]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(env.world.ops.map((o) => [o.op, o.collection, o.id]), [['delete', 'manufacturing_operations', ID(40)], ['delete', 'physical_samples', ID(11)]]);
+  assert.deepEqual([...env.world.records.physical_samples.keys()], [ID(10)]);
+  // the samples to delete are locked before anything is read about what points at them
+  const log = env.world.trx.log;
+  assert.ok(log.indexOf(SQL.lockSamples) > -1 && log.indexOf(SQL.lockSamples) < log.indexOf(SQL.refsOperations));
+  assert.deepEqual(res.body.data, { created: {}, sampleIds: [] });
+});
+
+test('create: something done that hangs off a planned output stops the removal', async () => {
+  const env = setup();
+  seed(env.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10), output_sample_id: ID(11) })]);
+  seed(env.world, 'physical_samples', [sampleRow(10), sampleRow(11, { current_status: 'planned' })]);
+  env.world.refTests = [{ session_id: ID(50), work_state: 'done', sample_id: ID(11) }];
+  const id = await keep(env, draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true })]));
+  const res = await createCall(env, id);
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.errors[0].extensions.code, 'CHECKS');
+  assert.deepEqual(env.world.ops, []);
+  assert.equal(env.world.records.physical_samples.size, 2);
+});
+
+test('create: a record marked done while the draft was open is not deleted (it is checked again under its lock)', async () => {
+  const env = setup();
+  seed(env.world, 'manufacturing_operations', [opRow(40)]);
+  const id = await keep(env, draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true })]));
+  // the caller's read sees it planned; by the time the transaction takes its lock it is done
+  const row = env.world.records.manufacturing_operations.get(ID(40));
+  const lockSql = SQL.lockRecord.manufacturing_operations;
+  env.world.records.manufacturing_operations.set(ID(40), new Proxy(row, {
+    get: (t, k) => (k === 'work_state' && env.world.trx?.log.includes(lockSql) ? 'done' : t[k]),
+  }));
+  const res = await createCall(env, id);
+  assert.equal(res.statusCode, 409);
+  assert.deepEqual(res.body.errors[0].extensions.checks, [{ key: 'o1', level: 'block', text: 'Done records are never deleted from the map.' }]);
+  assert.equal(env.world.records.manufacturing_operations.size, 1);
+});
+
+test('create: only the owner of the draft can create it, and a draft is created once', async () => {
+  const env = setup();
+  const id = await keep(env, draft([sample('n1', { values: { ...code('{seq}-A'), material_id: MATERIAL, form: 'bar', primary_method_id: METHOD } })]));
+  assert.equal((await createCall(env, id, BOB)).statusCode, 404);
+  assert.equal(env.world.records.physical_samples.size, 0);
+  assert.equal((await createCall(env, id)).statusCode, 200);
+  const again = await createCall(env, id);
+  assert.equal(again.statusCode, 404);
+  assert.match(again.body.errors[0].message, /may have been created already/);
+  assert.equal(env.world.records.physical_samples.size, 1);
+  assert.equal((await createCall(env, ID(404))).statusCode, 404);
+});
+
+test('create: the data cache is cleared after a commit when it is on, not otherwise', async () => {
+  const on = setup({ env: { CACHE_ENABLED: 'true' } });
+  const body = draft([sample('n1', { values: { ...code('{seq}-A'), material_id: MATERIAL, form: 'bar', primary_method_id: METHOD } })]);
+  await createCall(on, await keep(on, body));
+  assert.equal(on.cleared.length, 1);
+  assert.deepEqual(on.cleared[0].args, { system: false });
+  assert.equal(on.cleared[0].options.accountability.admin, true);
+  const off = setup({ env: { CACHE_ENABLED: 'false' } });
+  await createCall(off, await keep(off, body));
+  assert.deepEqual(off.cleared, []);
+});
+
+test('create: an empty draft creates nothing and is deleted', async () => {
+  const env = setup();
+  const res = await createCall(env, await keep(env, emptyBody()));
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.data, { created: {}, sampleIds: [] });
+  assert.equal(env.world.drafts.length, 0);
+});
+
+test('cleanValues, editValues, dayOf', () => {
+  assert.deepEqual(cleanValues({ a: 1, b: '', c: null, d: '  ', e: 0, f: false, g: 'x' }), { a: 1, e: 0, f: false, g: 'x' });
+  assert.deepEqual(cleanValues({ a: 1, operation_date: 'x' }, ['operation_date']), { a: 1 });
+  assert.deepEqual(editValues({ a: 1, b: '', c: null, e: 0 }), { a: 1, b: null, c: null, e: 0 });
+  assert.equal(dayOf('2026-10-20T10:00:00Z'), '2026-10-20');
+  assert.equal(dayOf('2026-10-20'), '2026-10-20');
+  assert.equal(dayOf('20 Oct'), null);
+  assert.equal(dayOf(undefined), null);
 });
