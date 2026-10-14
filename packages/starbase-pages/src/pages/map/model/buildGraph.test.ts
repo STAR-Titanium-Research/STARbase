@@ -25,6 +25,7 @@ describe('buildGraph: operations and samples', () => {
     const c = container(g, 'op:f1');
     expect(c.title).toBe('FAST sintering');
     expect(c.rows).toEqual([{ recordId: 'f1', sampleId: 's1', out: 'op:f1:out:0' }]);
+    expect(c.rows[0].inPlace).toBeUndefined();
     const w = wire(g, 'op:f1:out:0', 's:s1:in:0');
     expect(w).toMatchObject({ carries: 's1', flow: 'sample', bundled: false, origin: 'op:f1' });
     expect(record(g, 's:s1').ins).toEqual(['s:s1:in:0']);
@@ -121,6 +122,9 @@ describe('buildGraph: in-place chains', () => {
     expect(g.wires).toHaveLength(3);
     expect(g.nodes.filter((n) => n.type === 'record' && n.kind === 'sample')).toHaveLength(1);
     expect(wire(g, 'op:turn:out:0', 'op:pol:in:0')!.origin).toBe('op:turn');
+    // in-place rows (no new sample) are marked for the pass-through line; a making row is not
+    expect(container(g, 'op:turn').rows[0].inPlace).toBe(true);
+    expect(container(g, 'test:nde').rows[0].inPlace).toBe(true);
     // the last step's output is left open
     expect(g.wires.some((w) => w.from === 'test:nde:out:0')).toBe(false);
     expect(container(g, 'test:nde').rows[0].out).toBe('test:nde:out:0');

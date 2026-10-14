@@ -243,6 +243,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       if (sampleId) row.sampleId = sampleId;
       if (firstIn) row.in = firstIn;
       if (out) row.out = out;
+      if (firstIn && out && !p.outSample) row.inPlace = true;
       sampleRows.push(row);
 
       for (const lot of lots) addWire(`${lotNode(lot).id}:out:0`, firstIn!, null, 'stock', `lot:${lot.lotId}`);

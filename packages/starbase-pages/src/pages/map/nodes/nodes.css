@@ -1,0 +1,79 @@
+/* Shared chrome of the Process map's cards (RecordNode, ContainerNode, JunctionNode): the card, the
+   kind pill, the ＋ button and the sockets. Under .d1-process-map so it never leaks; each card sets
+   `--k` (its kind colour) and text on it uses .k-ink (mapTokens.css). */
+.d1-process-map .node {
+	position: relative;
+	width: 220px;
+	background: var(--d1-surface);
+	border: 1px solid var(--d1-line);
+	border-radius: var(--d1-radius, 12px);
+	box-shadow: var(--d1-shadow);
+	cursor: pointer;
+	color: var(--theme--foreground);
+	font-size: var(--fs-md, 13px);
+	line-height: 1.45;
+	transition: border-color 0.12s, box-shadow 0.12s;
+}
+.d1-process-map .node:hover { border-color: var(--d1-accent, var(--theme--primary)); box-shadow: var(--d1-shadow-lg, var(--d1-shadow)); }
+.d1-process-map .node.focal { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 0; box-shadow: 0 0 0 6px var(--d1-tint), var(--d1-shadow); }
+.d1-process-map .node.dashed { border-style: dashed; }
+
+.d1-process-map .kind {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: var(--fs-xs, 11px);
+	font-weight: 700;
+	letter-spacing: 0.01em;
+	padding: 2px 9px;
+	border-radius: 99px;
+}
+
+.d1-process-map .xbtn {
+	margin-left: 4px;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	flex: none;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	border: 1px solid var(--theme--border-color);
+	background: var(--d1-surface);
+	color: var(--d1-dim);
+	cursor: pointer;
+}
+.d1-process-map .xbtn:hover { color: var(--d1-on-accent, #fff); background: var(--d1-accent, var(--theme--primary)); border-color: var(--d1-accent, var(--theme--primary)); }
+.d1-process-map .xbtn:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; }
+
+/* Sockets: Blender-style dots on a card's edge, coloured by what flows through them. A Vue Flow Handle
+   with class "sock"; placed by inline left/top (RecordNode, JunctionNode) or by .row (inside a
+   container's sample rows). The 16px "fat" one is a folded bundle. */
+.d1-process-map .sock {
+	position: absolute;
+	width: 12px;
+	height: 12px;
+	min-width: 12px;
+	min-height: 12px;
+	border-radius: 50%;
+	background: var(--sk, var(--k-sample));
+	border: 2px solid var(--d1-surface);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--sk, var(--k-sample)) 60%, var(--theme--border-color));
+	transform: translate(-50%, -50%);
+	pointer-events: auto;
+	cursor: crosshair;
+}
+.d1-process-map .sock:hover { transform: translate(-50%, -50%) scale(1.35); }
+.d1-process-map .sock.fat {
+	width: 16px;
+	height: 16px;
+	min-width: 16px;
+	min-height: 16px;
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--sk, var(--k-sample)) 60%, var(--theme--border-color)), 0 0 0 4px color-mix(in srgb, var(--sk, var(--k-sample)) 20%, transparent);
+}
+.d1-process-map .sock.row { top: 50%; left: auto; right: auto; transform: translateY(-50%); }
+.d1-process-map .sock.row:hover { transform: translateY(-50%) scale(1.35); }
+.d1-process-map .sock.row.in { left: -21px; }
+.d1-process-map .sock.row.out { right: -21px; }
+.d1-process-map .sock.row.fat.in { left: -23px; }
+.d1-process-map .sock.row.fat.out { right: -23px; }

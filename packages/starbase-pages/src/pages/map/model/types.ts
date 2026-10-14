@@ -123,6 +123,8 @@ export interface SampleRow {
   sampleId?: string;
   in?: string;
   out?: string;
+  /** Same sample in and out (no new sample made): the container draws a pass-through line. */
+  inPlace?: boolean;
 }
 
 /** One slot of a container's Inside tray (a relation of the operation/test). */
