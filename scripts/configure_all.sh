@@ -13,7 +13,7 @@
 # Directus metadata on a live database, write a migration (see CONTRIBUTING and the db-migration skill).
 # ################################################################################################
 # Apply all Directus configuration in the correct order, then flush + restart.
-# Order matters: inline params recreate fields that field-presets then customise.
+# Order matters: inline params recreate fields that field-presets then customise; the form layout goes last.
 #
 # Every configure_*.sql file runs in its own transaction (BEGIN/COMMIT inside the file) with
 # ON_ERROR_STOP, so the first SQL error rolls that file back, stops the script with a
@@ -38,6 +38,7 @@ FILES=(
   configure_campaigns.sql
   configure_operation_files.sql
   configure_project_rollup.sql
+  configure_form_layout.sql
 )
 
 # Fail before touching anything if a file is missing.

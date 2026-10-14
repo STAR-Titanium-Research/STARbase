@@ -10,11 +10,10 @@ test.describe('Sample — live geometry preview', () => {
 	test('cylindrical geometry + dimensions render an SVG sketch', async ({ page }, testInfo) => {
 		await gotoCreateForm(page, 'physical_samples');
 
-		// Geometry/dimension fields are gated on item_type = sample (Part F conditions).
-		await selectDropdown(page, 'Item Type', 'Sample');
+		// Item Type is hidden (the database defaults it to sample); Geometry and the dimensions show on a blank form.
 		await selectDropdown(page, 'Geometry', 'Cylinder');
-		await fillInput(page, 'Ø (mm)', '25');
-		await fillInput(page, 'z / Length (mm)', '80');
+		await fillInput(page, 'Diameter Ø', '25');
+		await fillInput(page, 'Length', '80');
 		await page.waitForTimeout(800);
 
 		const preview = fieldByLabel(page, 'Shape Preview');
@@ -32,10 +31,9 @@ test.describe('Sample — live geometry preview', () => {
 
 	test('round bar draws a bar along its length with Ø and length dimensions', async ({ page }, testInfo) => {
 		await gotoCreateForm(page, 'physical_samples');
-		await selectDropdown(page, 'Item Type', 'Sample');
 		await selectDropdown(page, 'Geometry', 'Round bar');
-		await fillInput(page, 'Ø (mm)', '20');
-		await fillInput(page, 'z / Length (mm)', '100');
+		await fillInput(page, 'Diameter Ø', '20');
+		await fillInput(page, 'Length', '100');
 		await page.waitForTimeout(800);
 
 		const preview = fieldByLabel(page, 'Shape Preview');
@@ -56,13 +54,12 @@ test.describe('Sample — live geometry preview', () => {
 
 	test('bar (rectangular) and round bar draw differently', async ({ page }) => {
 		await gotoCreateForm(page, 'physical_samples');
-		await selectDropdown(page, 'Item Type', 'Sample');
 		const preview = fieldByLabel(page, 'Shape Preview');
 
 		await selectDropdown(page, 'Geometry', 'Bar', { exact: true });
-		await fillInput(page, 'x / Width (mm)', '15');
-		await fillInput(page, 'y / Thickness (mm)', '25');
-		await fillInput(page, 'z / Length (mm)', '100');
+		await fillInput(page, 'Width', '15');
+		await fillInput(page, 'Thickness', '25');
+		await fillInput(page, 'Length', '100');
 		await page.waitForTimeout(800);
 		const barSvg = preview.locator('svg').first();
 		await expect(barSvg).toBeVisible();
@@ -71,7 +68,7 @@ test.describe('Sample — live geometry preview', () => {
 		await expect(barSvg).not.toContainText('Ø');
 
 		await selectDropdown(page, 'Geometry', 'Round bar');
-		await fillInput(page, 'Ø (mm)', '20');
+		await fillInput(page, 'Diameter Ø', '20');
 		await page.waitForTimeout(800);
 		const roundSvg = preview.locator('svg').first();
 		// A round bar is a curved silhouette (paths), no flat box faces, and carries a Ø dimension.
