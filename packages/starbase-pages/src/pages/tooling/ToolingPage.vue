@@ -3,8 +3,8 @@ import ExplorerView from '../../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-	AppLink, EditDrawer, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail,
-	boxDetailFacts, boxRailFacts, dataStudioRoute, detailFacts, edgeDetailFacts, edgeLabel, edgeRailFacts, edgeUsageMismatch, findEdge, findInsert,
+	AppLink, EditDrawer, HiddenLink, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail,
+	boxDetailFacts, boxProjectHidden, boxRailFacts, dataStudioRoute, detailFacts, edgeDetailFacts, edgeLabel, edgeRailFacts, edgeUsageMismatch, findEdge, findInsert,
 	focusKindOf, focusRoute, indexRoute, insertDetailFacts, insertLabel, insertRailFacts, mismatchText, openLink, pinTargetForRecord, toolingTitle,
 	useCanUpdate, FOCUS_COLLECTION, FOCUS_KIND_LABEL, FOCUS_NOUN, type ContentsEntry, type ToolingFocus,
 } from '@d1/ui';
@@ -24,7 +24,7 @@ import EdgePanels from './EdgePanels.vue';
 const props = defineProps<{ kind: string; id: string }>();
 const router = useRouter();
 
-const { state, error, record, box, model, focus, nextFresh, tests, operations, edgeCounts, manufacturer, reload } = useToolingData(toRef(props, 'kind'), toRef(props, 'id'));
+const { state, error, record, box, model, focus, nextFresh, tests, operations, edgeCounts, manufacturer, hidden, reload } = useToolingData(toRef(props, 'kind'), toRef(props, 'id'));
 
 const focusKind = computed(() => focusKindOf(props.kind) ?? 'box');
 const collection = computed(() => FOCUS_COLLECTION[focusKind.value]);
@@ -57,6 +57,9 @@ const pin = computed(() => pinTargetForRecord(collection.value, props.id));
 // else the row the model was built from. Either way it is one row of `tool_boxes` read with the same fields.
 const boxRow = computed(() => (focusKind.value === 'box' ? (record.value ?? box.value) : box.value));
 
+// A project the user may not read is said so, in the crumbs and the rail, never shown as no project.
+const projectHidden = computed(() => boxProjectHidden(boxRow.value, hidden.value.data));
+
 const code = computed(() => {
 	if (edge.value) return edge.value.code;
 	if (insert.value) return insert.value.code;
@@ -70,7 +73,7 @@ const railTitle = computed(() => {
 const railFacts = computed(() => {
 	const m = model.value;
 	if (!m) return [];
-	if (focusKind.value === 'box') return boxRailFacts(boxRow.value);
+	if (focusKind.value === 'box') return boxRailFacts(boxRow.value, hidden.value.data);
 	if (insert.value && edge.value) return edgeRailFacts(record.value, m, insert.value, edge.value);
 	return insert.value ? insertRailFacts(record.value, m.boxId, m.boxCode) : [];
 });
@@ -119,6 +122,9 @@ const contents = computed<ContentsEntry[]>(() => {
 						<AppLink to="/home">Home</AppLink>
 						<span>›</span>
 						<AppLink :to="indexRoute('tool_boxes')">Tool boxes</AppLink>
+						<template v-if="projectHidden">
+							<span>›</span><HiddenLink label="Project" />
+						</template>
 						<span>›</span>
 						<RecordLink collection="tool_boxes" :id="model.boxId">Tool box {{ model.boxCode }}</RecordLink>
 						<template v-if="insert">

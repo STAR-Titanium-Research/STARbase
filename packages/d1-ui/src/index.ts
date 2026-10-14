@@ -199,5 +199,5 @@ export {
 export type { FocusKind, FreshWithHistory, HistoryEntry } from './tooling/toolingView';
 export { COUNT_CHUNK, chunkIds, edgeTestsFilter, edgeJunctionCountParams, junctionCountsByEdge, mergeEdgeCounts } from './tooling/edgeHistory';
 export {
-	placementText, typeFacts, boxRailFacts, boxDetailFacts, insertRailFacts, insertDetailFacts, edgeRailFacts, edgeDetailFacts,
+	placementText, typeFacts, boxProjectHidden, boxRailFacts, boxDetailFacts, insertRailFacts, insertDetailFacts, edgeRailFacts, edgeDetailFacts,
 } from './tooling/toolingFacts';

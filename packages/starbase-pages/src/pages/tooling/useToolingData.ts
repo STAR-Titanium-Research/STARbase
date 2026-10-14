@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue';
 import {
 	LIST_CAP, buildToolingModel, chunkIds, countsByKey, edgeJunctionCountParams, edgeTestsFilter, errorText, findEdge, findInsert, focusFromRoute,
-	focusKindOf, isNotVisible, junctionCountsByEdge, mergeEdgeCounts, nextFreshEdge, useItems, useRequestGate, useSections,
+	focusKindOf, isNotVisible, junctionCountsByEdge, mergeEdgeCounts, nextFreshEdge, readHiddenLinks, useItems, useRequestGate, useSections,
 	type FocusKind, type ToolingModel,
 } from '@d1/ui';
 
@@ -23,6 +23,8 @@ const TYPE_FIELDS = [
 	'insert_type_id.inserts_per_box', 'insert_type_id.edge_count', 'insert_type_id.nose_radius_mm', 'insert_type_id.cutting_edge_length_mm',
 	'insert_type_id.included_angle_deg', 'insert_type_id.fixing_hole_diameter_mm',
 ];
+// Links that read as "none" when the target is hidden by row-level visibility (ADR-0011): the box's project.
+const LINK_FIELDS = ['project_id'];
 const BOX_FIELDS = [
 	'tool_box_id', 'tool_box_code', 'description', 'location', 'package_quantity', 'notes', 'created_at', 'updated_at', 'version',
 	'project_id.project_id', 'project_id.project_code', 'owner_person_id.person_id', 'owner_person_id.full_name',
@@ -69,6 +71,8 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 	const edgeCounts = modelSection<Map<string, number>>(new Map());
 	// The insert type's maker, read on its own (see TYPE_FIELDS); '' falls back to the type's `manufacturer` text.
 	const manufacturer = modelSection<string>('');
+	// Which of the box's links point at a record the user may not read (shown as "not visible to you").
+	const hidden = modelSection<Record<string, boolean>>({});
 
 	let pendingBox: string | null = null;
 
@@ -93,6 +97,7 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 			box.value = null;
 			edgeCounts.value = { data: new Map(), loading: false, error: '' };
 			manufacturer.value = { data: '', loading: false, error: '' };
+			hidden.value = { data: {}, loading: false, error: '' };
 		}
 		const token = modelGate.begin();
 		pendingBox = boxId;
@@ -122,41 +127,44 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 				pendingBox = null;
 			}
 		}
-		const edgeIds = built.inserts.flatMap((i) => i.edges.map((e) => e.id));
 		const makerId = typeof boxData.insert_type_id?.manufacturer_id === 'string' ? boxData.insert_type_id.manufacturer_id : '';
-		const readMaker = makerId
-			? modelFill(
-					manufacturer, token, 'the manufacturer',
-					async () => {
-						const row = await getItem('manufacturers', makerId, { fields: ['name'] });
-						return typeof row?.name === 'string' ? row.name.trim() : '';
-					},
-					isNotVisible, // not readable by this role: the type's own `manufacturer` text is shown instead
-				)
-			: Promise.resolve();
-		await Promise.all([readMaker, modelFill(edgeCounts, token, 'the usage history of the edges', async () => {
-			// An edge is "used" when `is_used` says so; these counts only back the "marked fresh, but used" warnings.
-			const grouped = (collection: string) =>
-				getItems(collection, {
-					aggregate: { count: '*' },
-					groupBy: ['insert_edge_id'],
-					filter: { insert_edge_id: { insert_id: { tool_box_id: { _eq: boxId } } } },
-					limit: -1,
-				});
-			// Tests: from the junction test_sessions_subject, since insert_edge_id holds only a test's FIRST edge
-			// (migration 139). A role that may not read the junction falls back to that column.
-			const testCounts = async () => {
-				try {
-					const parts = await Promise.all(chunkIds(edgeIds).map((ids) => getItems('test_sessions_subject', edgeJunctionCountParams(ids))));
-					return junctionCountsByEdge(parts.flat());
-				} catch (e) {
-					if (!isNotVisible(e)) throw e;
-					return countsByKey(await grouped('test_sessions'), 'insert_edge_id');
-				}
-			};
-			const [t, o] = await Promise.all([testCounts(), grouped('manufacturing_operations')]);
-			return mergeEdgeCounts(t, countsByKey(o, 'insert_edge_id'));
-		})]);
+		await Promise.all([
+			makerId
+				? modelFill(manufacturer, token, 'the manufacturer', () => readMaker(makerId), isNotVisible) // unreadable: the type's own text is shown
+				: Promise.resolve(),
+			modelFill(hidden, token, 'linked records', () => readHiddenLinks(getItem, 'tool_boxes', boxId, boxData, LINK_FIELDS)),
+			modelFill(edgeCounts, token, 'the usage history of the edges', () => readEdgeCounts(boxId, built.inserts.flatMap((i) => i.edges.map((e) => e.id)))),
+		]);
+	}
+
+	async function readMaker(makerId: string): Promise<string> {
+		const row = await getItem('manufacturers', makerId, { fields: ['name'] });
+		return typeof row?.name === 'string' ? row.name.trim() : '';
+	}
+
+	// History rows per edge id. An edge is "used" when `is_used` says so; these counts only back the "marked fresh,
+	// but used" warnings.
+	async function readEdgeCounts(boxId: string, edgeIds: string[]): Promise<Map<string, number>> {
+		const grouped = (collection: string) =>
+			getItems(collection, {
+				aggregate: { count: '*' },
+				groupBy: ['insert_edge_id'],
+				filter: { insert_edge_id: { insert_id: { tool_box_id: { _eq: boxId } } } },
+				limit: -1,
+			});
+		// Tests: from the junction test_sessions_subject, since insert_edge_id holds only a test's FIRST edge
+		// (migration 139). A role that may not read the junction falls back to that column.
+		const testCounts = async () => {
+			try {
+				const parts = await Promise.all(chunkIds(edgeIds).map((ids) => getItems('test_sessions_subject', edgeJunctionCountParams(ids))));
+				return junctionCountsByEdge(parts.flat());
+			} catch (e) {
+				if (!isNotVisible(e)) throw e;
+				return countsByKey(await grouped('test_sessions'), 'insert_edge_id');
+			}
+		};
+		const [t, o] = await Promise.all([testCounts(), grouped('manufacturing_operations')]);
+		return mergeEdgeCounts(t, countsByKey(o, 'insert_edge_id'));
 	}
 
 	async function load(force = false) {
@@ -265,7 +273,7 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 
 	return {
 		kind, state, loading, modelLoading, error: computed(() => error.value || modelError.value),
-		record: current, box, model, focus, nextFresh, history, tests, operations, edgeCounts, manufacturer,
+		record: current, box, model, focus, nextFresh, history, tests, operations, edgeCounts, manufacturer, hidden,
 		reload: () => load(true),
 	};
 }

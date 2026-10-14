@@ -31,7 +31,7 @@ describe('typeFacts', () => {
 describe('rail facts', () => {
 	it('links the project and the parents through recordRoute', () => {
 		const box = boxRailFacts({ insert_type_id: { type_code: 'T1' }, project_id: { project_id: 'p1', project_code: 'H13' }, location: 'Shelf 2' });
-		expect(box.find((f) => f.label === 'Project')).toMatchObject({ value: 'Project H13', to: '/home/projects/p1' });
+		expect(box.find((f) => f.label === 'Project')).toMatchObject({ value: 'H13', to: '/home/projects/p1' });
 		expect(insertRailFacts({ insert_number: 3, is_depleted: false }, 'b1', 'BOX-1')[0]).toMatchObject({ value: 'BOX-1', to: '/home/tool-boxes/b1' });
 		const edge = edgeRailFacts({ edge_identifier: 'fC', is_used: true }, { boxId: 'b1', boxCode: 'BOX-1' }, { id: 'i1', code: 'I-3' }, {
 			id: 'e', code: 'I-3-fC', identifier: 'fC', letter: 'C', used: true, notes: null, placement: { face: 'bottom', corner: 0 },
@@ -40,6 +40,16 @@ describe('rail facts', () => {
 		expect(edge.find((f) => f.label === 'Edge letter')?.value).toBe('C');
 		expect(edge.find((f) => f.label === 'Position')?.value).toBe('Underside');
 		expect(edge.find((f) => f.label === 'Marked used')?.value).toBe('Yes');
+	});
+	it('says a project the user may not read is not visible, and leaves out a box with no project', () => {
+		const hiddenProject = boxRailFacts({ project_id: null }, { project_id: true }).find((f) => f.label === 'Project');
+		expect(hiddenProject).toMatchObject({ hidden: true, value: null });
+		// A link that came back as a bare id (no read access to projects) is hidden too.
+		expect(boxRailFacts({ project_id: 'p9' }).find((f) => f.label === 'Project')).toMatchObject({ hidden: true });
+		const none = boxRailFacts({ project_id: null }).find((f) => f.label === 'Project');
+		expect(none?.hidden).toBeUndefined();
+		expect(visibleFacts(boxRailFacts({ project_id: null })).map((f) => f.label)).not.toContain('Project');
+		expect(visibleFacts(boxRailFacts({ project_id: null }, { project_id: true })).map((f) => f.label)).toContain('Project');
 	});
 	it('is empty without a record', () => {
 		expect(boxRailFacts(null)).toEqual([]);

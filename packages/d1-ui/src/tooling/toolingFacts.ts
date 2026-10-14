@@ -2,8 +2,9 @@
 // tool box, a cutting insert and an insert edge, plus the insert type's facts. Pure, so the page stays
 // a layout. Rows are the `/items` reads of useToolingData (nested relations expanded).
 
-import { formatDate } from '../format';
+import { asRecord, formatDate } from '../format';
 import type { Fact } from '../record/facts';
+import { projectFact, type HiddenLinks } from '../record/operationFacts';
 import { recordRoute } from '../recordRoute';
 import type { InsertGeometry } from './insertGeometry';
 import type { ToolingEdge } from './toolingModel';
@@ -42,13 +43,20 @@ export function typeFacts(type: any, geometry?: InsertGeometry | null, makerName
 	];
 }
 
-/** The rail of a tool box: its type, project, owner and place. */
-export function boxRailFacts(box: any): Fact[] {
+/** Whether the box links a project the user may not read: `readHiddenLinks` says so, or the link came back as a bare id. */
+export function boxProjectHidden(box: any, hidden: HiddenLinks = {}): boolean {
+	return !!hidden.project_id || (!!box?.project_id && !asRecord(box.project_id));
+}
+
+/**
+ * The rail of a tool box: its type, project, owner and place. `hidden` is `readHiddenLinks` for the box: a project
+ * the user may not read (row-level visibility, ADR-0011) reads "not visible to you", never as no project.
+ */
+export function boxRailFacts(box: any, hidden: HiddenLinks = {}): Fact[] {
 	if (!box) return [];
-	const project = box.project_id;
 	return [
 		{ label: 'Insert type', value: text(box.insert_type_id?.type_code), mono: true },
-		{ label: 'Project', value: project?.project_code ? `Project ${project.project_code}` : '', to: project?.project_id ? recordRoute('projects', project.project_id) : undefined },
+		projectFact(asRecord(box.project_id), boxProjectHidden(box, hidden)),
 		{ label: 'Owner', value: text(box.owner_person_id?.full_name) },
 		{ label: 'Location', value: text(box.location) },
 	];
