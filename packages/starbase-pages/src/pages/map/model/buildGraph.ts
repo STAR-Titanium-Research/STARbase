@@ -288,7 +288,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       first && group.kind === 'operation' ? (first as OpRow).methodName : (first as TestRow | undefined)?.testType;
     const base = method || (group.kind === 'operation' ? 'Operation' : 'Test');
     const recorded = group.batch && group.batch.recorded ? group.batch : null;
-    const title = recorded ? `Batch ${recorded.code}` : group.batch ? `Probable batch · ${base}` : base;
+    const title = recorded ? (recorded.code ? `Batch ${recorded.code}` : 'Batch') : group.batch ? `Probable batch · ${base}` : base;
     const statuses = new Set(records.map((r) => r.status));
 
     containers.push({
@@ -297,7 +297,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
       kind: group.kind,
       group,
       title,
-      code: recorded ? recorded.code : (first?.code ?? group.id),
+      code: recorded ? (recorded.code ?? 'Batch') : (first?.code ?? group.id),
       status: statuses.size === 1 ? (first?.status ?? null) : undefined,
       category,
       rows: sampleRows,

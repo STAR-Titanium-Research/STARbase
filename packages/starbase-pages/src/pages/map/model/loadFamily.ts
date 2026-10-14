@@ -90,7 +90,6 @@ const settingFields = (categories: (keyof typeof KEY_SETTING_FIELDS)[]): string[
 const OPERATION_SETTING_FIELDS = settingFields(['sintering', 'machining', 'heat_treatment', 'additive', 'deformation']);
 const TEST_SETTING_FIELDS = settingFields(['test']);
 
-// slice 2: batch_id (the column does not exist yet; asking for it would refuse the whole read)
 const OPERATION_FIELDS = [
   'operation_id',
   'pass_code',
@@ -111,7 +110,6 @@ const OPERATION_FIELDS = [
   ...OPERATION_SETTING_FIELDS,
 ];
 
-// slice 2: batch_id on tests
 const TEST_FIELDS = [
   'session_id',
   'sample_id',
@@ -126,6 +124,38 @@ const TEST_FIELDS = [
   'session_data_files.directus_files_id.filename_download',
   ...TEST_SETTING_FIELDS,
 ];
+
+// The recorded batch of an operation or test (spec D14). `batch_id` is only asked for when the runtime field defs of
+// the collection list it (a database not yet migrated has no such column, and asking would refuse the whole read).
+const BATCH_FIELDS = ['batch_id.batch_id', 'batch_id.code'];
+const hasBatch = (defs: RelationDef[] | undefined): boolean => !!defs?.some((d) => d.field === 'batch_id' && !d.alias);
+
+/** What a read adds to the fixed field list: the extra relations, and the batch when the defs list it. */
+interface Optional {
+  extras: Extra[];
+  batch: boolean;
+}
+
+/**
+ * The batch of a row as Directus returns it: an object (`batch_id` and `code`), a bare id when the person may not read
+ * the batch itself, or null. A bare id is still a batch (the rows group on it) but has no code; null is no batch.
+ */
+function batchOf(value: unknown): { id: string; code: string | null } | null {
+  if (value && typeof value === 'object') {
+    const id = idOf((value as Json).batch_id);
+    return id ? { id, code: str((value as Json).code) } : null;
+  }
+  const id = idOf(value);
+  return id ? { id, code: null } : null;
+}
+
+/** Header codes of the batches seen on `rows`, added to `codes`. */
+function collectBatchCodes(rows: Json[], codes: Record<string, string>): void {
+  for (const row of rows) {
+    const batch = batchOf(row.batch_id);
+    if (batch?.code) codes[batch.id] = batch.code;
+  }
+}
 
 // Subjects of a test: the M2A junction `test_sessions_subject(test_sessions_id, collection, item)`, whose
 // alias on `test_sessions` is `subject` (db/migrations/20260703000064_test_subject_directus_meta.sql:
@@ -284,17 +314,27 @@ function extrasOf(defs: RelationDef[] | undefined, roots: Set<string>): Extra[] 
 }
 const extraFields = (extras: Extra[]): string[] => extras.map((e) => `${e.field}.*`);
 
+/** `fields` of a read with the optional ones: the fixed list, then the batch, then the extra relations. */
+function fieldsWith(fields: string[], { extras, batch }: Optional): string[] {
+  return [...fields, ...(batch ? BATCH_FIELDS : []), ...extraFields(extras)];
+}
+
 /**
- * A list read that also asks for the extra relation fields. Directus refusing them (a field the role may not
- * read, a relation it cannot expand) is not the map's problem: the read is made again without them.
+ * A list read that also asks for the batch and the extra relation fields. Directus refusing them (a field the role
+ * may not read, a relation it cannot expand) is not the map's problem: the read is made again without the extras,
+ * then without the batch, then with the fixed fields only.
  */
-async function readList(api: HostApi, collection: string, params: Record<string, unknown>, extras: Extra[]): Promise<{ rows: Json[]; total: number | null }> {
-  if (!extras.length) return getList(api, collection, params);
-  try {
-    return await getList(api, collection, { ...params, fields: [...(params.fields as string[]), ...extraFields(extras)] });
-  } catch {
-    return getList(api, collection, params);
+async function readList(api: HostApi, collection: string, params: Record<string, unknown>, optional: Optional): Promise<{ rows: Json[]; total: number | null }> {
+  const fixed = params.fields as string[];
+  const tiers = [fieldsWith(fixed, optional), fieldsWith(fixed, { ...optional, extras: [] }), fixed].filter((f, i, all) => i === 0 || f.length < all[i - 1].length);
+  for (const [i, fields] of tiers.entries()) {
+    try {
+      return await getList(api, collection, { ...params, fields });
+    } catch (e) {
+      if (i === tiers.length - 1) throw e;
+    }
   }
+  throw new Error('unreachable');
 }
 
 const CODE_KEYS = ['code', 'name', 'title', 'label', 'full_name', 'common_name', 'filename_download'];
@@ -332,8 +372,7 @@ function mapOperation(r: Json, extras: Extra[] = []): OpRow {
     outputSampleId: idOf(r.output_sample_id),
     equipmentId: relations.equipment_id?.id ?? null,
     recipeKey: fast?.id ?? str(r.sintering_recipe_number) ?? prep?.id ?? null,
-    // slice 2: batch_id
-    batchId: null,
+    batchId: batchOf(r.batch_id)?.id ?? null,
     sourceRunUid: str(r.source_run_uid),
     powderBatch: str(r.sintering_batch_number),
     relations,
@@ -372,8 +411,7 @@ function mapTest(r: Json, extras: Extra[] = []): TestRow {
     status: str(r.status),
     subjectSampleIds,
     equipmentId: relations.equipment_id?.id ?? null,
-    // slice 2: batch_id
-    batchId: null,
+    batchId: batchOf(r.batch_id)?.id ?? null,
     relations,
     settings: settingsOf(r, TEST_SETTING_FIELDS),
     projectId: relations.project_id?.id ?? null,
@@ -409,7 +447,7 @@ export function parseFocus(q: string | undefined): { collection: string; id: str
 
 // ---- the family of a sample ------------------------------------------------------------------
 
-async function loadOperations(api: HostApi, ids: string[], extras: Extra[]): Promise<OpRow[]> {
+async function loadOperations(api: HostApi, ids: string[], optional: Optional, batchCodes: Record<string, string>): Promise<OpRow[]> {
   // Two single-list requests per chunk (input, output) instead of one `_or` of two lists: half the ids
   // in each query string, and each is a plain filter.
   const build = (column: string) => (chunk: string[]) => ({
@@ -419,14 +457,17 @@ async function loadOperations(api: HostApi, ids: string[], extras: Extra[]): Pro
     limit: -1,
   });
   // The longer column name sizes the chunks for both.
-  const withExtras = (column: string) => (chunk: string[]) => ({ ...build(column)(chunk), fields: [...OPERATION_FIELDS, ...extraFields(extras)] });
+  const withExtras = (column: string) => (chunk: string[]) => ({ ...build(column)(chunk), fields: fieldsWith(OPERATION_FIELDS, optional) });
   const sized = chunkByBudget(ids, withExtras('output_sample_id'));
   const pages = await Promise.all(
-    sized.flatMap((chunk) => ['sample_id', 'output_sample_id'].map((column) => readList(api, 'manufacturing_operations', build(column)(chunk), extras))),
+    sized.flatMap((chunk) => ['sample_id', 'output_sample_id'].map((column) => readList(api, 'manufacturing_operations', build(column)(chunk), optional))),
   );
   // An operation whose input is in one chunk and output in another comes back twice.
   const byId = new Map<string, OpRow>();
-  for (const page of pages) for (const row of page.rows) byId.set(String(row.operation_id), mapOperation(row, extras));
+  for (const page of pages) {
+    collectBatchCodes(page.rows, batchCodes);
+    for (const row of page.rows) byId.set(String(row.operation_id), mapOperation(row, optional.extras));
+  }
   return [...byId.values()];
 }
 
@@ -435,7 +476,12 @@ async function loadOperations(api: HostApi, ids: string[], extras: Extra[]): Pro
  * only tests whose primary sample is in the family are listed (a test on several samples, with another primary, is missing).
  * Either way the map marks "some records hidden".
  */
-async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<{ tests: TestRow[]; refused: boolean; partial: boolean }> {
+async function loadTests(
+  api: HostApi,
+  ids: string[],
+  optional: Optional,
+  batchCodes: Record<string, string>,
+): Promise<{ tests: TestRow[]; refused: boolean; partial: boolean }> {
   const buildJunction = (chunk: string[]) => ({
     filter: JSON.stringify({
       [SUBJECT_ALIAS]: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: chunk } }] } },
@@ -454,16 +500,16 @@ async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<
   let refused = false;
   let partial = false;
   const pages = await Promise.all(
-    chunkByBudget(ids, (chunk) => ({ ...buildJunction(chunk), fields: [...TEST_FIELDS, ...SUBJECT_FIELDS, ...extraFields(extras)] })).map(async (chunk) => {
+    chunkByBudget(ids, (chunk) => ({ ...buildJunction(chunk), fields: fieldsWith([...TEST_FIELDS, ...SUBJECT_FIELDS], optional) })).map(async (chunk) => {
       try {
-        return await readList(api, 'test_sessions', buildJunction(chunk), extras);
+        return await readList(api, 'test_sessions', buildJunction(chunk), optional);
       } catch (e) {
         // A role that may not read the junction cannot filter on it: fall back to the primary sample.
         if (!isNotVisible(e)) throw e;
       }
       partial = true;
       try {
-        return await readList(api, 'test_sessions', buildPrimary(chunk), extras);
+        return await readList(api, 'test_sessions', buildPrimary(chunk), optional);
       } catch (e) {
         if (!isNotVisible(e)) throw e;
         refused = true;
@@ -472,7 +518,10 @@ async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<
     }),
   );
   const byId = new Map<string, TestRow>();
-  for (const page of pages) for (const row of page.rows) byId.set(String(row.session_id), mapTest(row, extras));
+  for (const page of pages) {
+    collectBatchCodes(page.rows, batchCodes);
+    for (const row of page.rows) byId.set(String(row.session_id), mapTest(row, optional.extras));
+  }
   return { tests: [...byId.values()], refused, partial };
 }
 
@@ -554,9 +603,10 @@ export async function loadFamily(api: HostApi, sampleId: string, defs?: FormDefs
   const root = trace.sample.sample_id;
   const ids = unique([root, ...trace.ancestors.map((a) => a.sample_id), ...trace.descendants.map((d) => d.sample_id)]);
 
+  const batchCodes: Record<string, string> = {};
   const [operations, testRead, lineageRead, samples] = await Promise.all([
-    loadOperations(api, ids, extrasOf(defs?.operation, OPERATION_ROOTS)),
-    loadTests(api, ids, extrasOf(defs?.test, TEST_ROOTS)),
+    loadOperations(api, ids, { extras: extrasOf(defs?.operation, OPERATION_ROOTS), batch: hasBatch(defs?.operation) }, batchCodes),
+    loadTests(api, ids, { extras: extrasOf(defs?.test, TEST_ROOTS), batch: hasBatch(defs?.test) }, batchCodes),
     loadLineage(api, ids),
     loadSamples(api, trace, ids),
   ]);
@@ -589,6 +639,7 @@ export async function loadFamily(api: HostApi, sampleId: string, defs?: FormDefs
     },
     truncated: Object.values(trace.truncated ?? {}).some(Boolean),
     ...(pieces ? { pieces } : {}),
+    ...(Object.keys(batchCodes).length ? { batchCodes } : {}),
   };
 }
 

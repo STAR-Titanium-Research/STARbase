@@ -183,8 +183,9 @@ describe('groupBatches', () => {
     });
     expect(groups[0]?.rowIds).toHaveLength(4);
 
+    // A batch whose code was not read is still a batch: grouped by id, with no code to show.
     const noCode = groupBatches(lathe, [], { probable: true });
-    expect(noCode[0]?.batch).toEqual({ recorded: true, code: 'b1' });
+    expect(noCode[0]).toMatchObject({ id: 'batch:b1', batch: { recorded: true, code: null } });
   });
 
   it('rows with a batchId never join a probable group', () => {
@@ -224,6 +225,17 @@ describe('groupBatches', () => {
     const g2 = groupBatches([], rec, { probable: true, batchCodes: { tb: 'B-0007' } });
     expect(g2).toHaveLength(2);
     expect(g2[0]).toMatchObject({ id: 'batch:tb', kind: 'test', batch: { recorded: true, code: 'B-0007' } });
+  });
+
+  it('a batch with 2 operations and 1 test is one operation group and one test group, both headed by the code', () => {
+    const ops = [op({ batchId: 'b3' }), op({ batchId: 'b3' })];
+    const t = [test({ batchId: 'b3' })];
+    const groups = groupBatches(ops, t, { probable: true, batchCodes: { b3: 'B-0003' } });
+    expect(groups.map((g) => [g.id, g.kind, g.rowIds.length])).toEqual([
+      ['batch:b3', 'operation', 2],
+      ['batch:b3:test', 'test', 1],
+    ]);
+    expect(groups.every((g) => g.batch?.recorded && g.batch.code === 'B-0003')).toBe(true);
   });
 
   it('an operation batch and a test batch with the same id stay separate groups with distinct ids', () => {

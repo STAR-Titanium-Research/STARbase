@@ -804,6 +804,95 @@ describe('loadFamily: every relation on the form (I7)', () => {
   });
 });
 
+describe('loadFamily: recorded batches (slice 2)', () => {
+  const OP_DEFS = [{ field: 'batch_id', label: 'Batch', collection: 'batches', key: 'batch_id' }];
+  const withBatch = { operation: OP_DEFS, test: OP_DEFS };
+  const without = { operation: [{ field: 'tool_id', label: 'Tool', collection: 'tools' }], test: [] };
+  const opRow = (id: string, extra: Record<string, unknown> = {}) => ({ operation_id: id, sample_id: 'root', output_sample_id: null, process_category: 'machining', ...extra });
+  const testRow = (id: string, extra: Record<string, unknown> = {}) => ({ session_id: id, sample_id: 'root', ...extra });
+  const answer = (ops: unknown[], tests: unknown[] = []): Handler => (path) => {
+    if (path.startsWith('/d1-trace/')) return trace();
+    if (path === '/items/manufacturing_operations') return { data: ops };
+    if (path === '/items/test_sessions') return { data: tests };
+    return { data: [] };
+  };
+  const requested = (calls: Call[], path: string) => calls.filter((c) => c.path === path).flatMap((c) => c.params.fields as string[]);
+  const batchFields = (calls: Call[], path: string) => requested(calls, path).filter((f) => f.startsWith('batch_id'));
+
+  it('defs without batch_id: batch_id is in no request, and the rows have no batch', async () => {
+    const { api, calls } = fakeApi(answer([opRow('o1')], [testRow('t1')]));
+    const data = await loadFamily(api, 'root', without);
+    for (const path of ['/items/manufacturing_operations', '/items/test_sessions']) expect(batchFields(calls, path)).toEqual([]);
+    expect(data.operations[0].batchId).toBeNull();
+    expect(data.tests[0].batchId).toBeNull();
+    expect(data.batchCodes).toBeUndefined();
+  });
+
+  it('without runtime defs (the fallback path) batch_id is not requested either', async () => {
+    const { api, calls } = fakeApi(answer([opRow('o1')], [testRow('t1')]));
+    await loadFamily(api, 'root');
+    for (const path of ['/items/manufacturing_operations', '/items/test_sessions']) expect(batchFields(calls, path)).toEqual([]);
+  });
+
+  it('defs for one form only gate that form: operations ask, tests do not', async () => {
+    const { api, calls } = fakeApi(answer([opRow('o1')], [testRow('t1')]));
+    await loadFamily(api, 'root', { operation: OP_DEFS, test: [] });
+    expect(requested(calls, '/items/manufacturing_operations')).toEqual(expect.arrayContaining(['batch_id.batch_id', 'batch_id.code']));
+    expect(batchFields(calls, '/items/test_sessions')).toEqual([]);
+  });
+
+  it('defs with batch_id: batch_id.batch_id and batch_id.code are asked for; rows carry batchId; batchCodes is filled', async () => {
+    const { api, calls } = fakeApi(
+      answer(
+        [opRow('o1', { batch_id: { batch_id: 'b3', code: 'B-0003' } }), opRow('o2', { batch_id: { batch_id: 'b3', code: 'B-0003' } }), opRow('o3')],
+        [testRow('t1', { batch_id: { batch_id: 'b3', code: 'B-0003' } }), testRow('t2', { batch_id: { batch_id: 'b4', code: 'B-0004' } })],
+      ),
+    );
+    const data = await loadFamily(api, 'root', withBatch);
+    for (const path of ['/items/manufacturing_operations', '/items/test_sessions']) expect(requested(calls, path)).toEqual(expect.arrayContaining(['batch_id.batch_id', 'batch_id.code']));
+    expect(data.operations.map((o) => o.batchId)).toEqual(['b3', 'b3', null]);
+    expect(data.tests.map((t) => t.batchId)).toEqual(['b3', 'b4']);
+    expect(data.batchCodes).toEqual({ b3: 'B-0003', b4: 'B-0004' });
+    // read by name, so not asked for again as an extra relation
+    expect(requested(calls, '/items/manufacturing_operations')).not.toContain('batch_id.*');
+  });
+
+  it('a batch whose code cannot be read: a bare id is a batch with no code, null is no batch', async () => {
+    const { api } = fakeApi(answer([opRow('o1', { batch_id: 'b9' }), opRow('o2', { batch_id: null }), opRow('o3', { batch_id: { batch_id: 'b8', code: null } })]));
+    const data = await loadFamily(api, 'root', withBatch);
+    expect(data.operations.map((o) => o.batchId)).toEqual(['b9', null, 'b8']);
+    expect(data.batchCodes).toBeUndefined();
+  });
+
+  it('a refused batch read degrades to the plain list instead of failing the map', async () => {
+    const { api, calls } = fakeApi((path, params) => {
+      if (path === '/items/manufacturing_operations' && (params.fields as string[]).some((f) => f.startsWith('batch_id'))) return httpError(403);
+      return answer([opRow('o1')])(path, params);
+    });
+    const data = await loadFamily(api, 'root', withBatch);
+    expect(data.operations.map((o) => o.id)).toEqual(['o1']);
+    expect(data.operations[0].batchId).toBeNull();
+    expect(calls.some((c) => c.path === '/items/manufacturing_operations' && !(c.params.fields as string[]).some((f) => f.startsWith('batch_id')))).toBe(true);
+  });
+
+  it('the batch fields count in the chunk size: every request of 320 family ids stays within 6000 encoded bytes', async () => {
+    const ids = Array.from({ length: 319 }, (_, i) => `${String(i).padStart(8, '0')}-aaaa-bbbb-cccc-dddddddddddd`);
+    const { api, calls } = fakeApi(emptyLists(trace({ descendants: ids.map((id) => relative(id)) })));
+    await loadFamily(api, 'root', withBatch);
+    for (const path of ['/items/manufacturing_operations', '/items/test_sessions']) {
+      const reqs = calls.filter((c) => c.path === path);
+      expect(reqs.length).toBeGreaterThan(1);
+      for (const c of reqs) expect(encodedQuerySize(c.params)).toBeLessThanOrEqual(6000);
+    }
+  });
+
+  it('a row read on its own (a fan, a step: no defs) carries no batch', async () => {
+    const { api } = fakeApi(() => ({ data: opRow('o1') }));
+    const row = await loadStepRow(api, { collection: 'manufacturing_operations', id: 'o1' });
+    expect(row).toMatchObject({ id: 'o1', batchId: null });
+  });
+});
+
 describe('loadRelationDefs: the key of the related record (I7)', () => {
   it('keeps the column the relation points at, when the server says it', async () => {
     const { api } = fakeApi((path) => {

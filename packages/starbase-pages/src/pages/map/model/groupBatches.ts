@@ -6,7 +6,7 @@ import type { Group, OpRow, ProcessCategory, TestRow } from './types';
 export interface GroupBatchesOpts {
   /** Guess probable batches (the "Probable batches" chip). */
   probable: boolean;
-  /** Header codes of recorded batches, by batch id ("B-0001"). Falls back to the id. */
+  /** Header codes of recorded batches, by batch id ("B-0001"). A batch with no entry has no code to show (never the id). */
   batchCodes?: Record<string, string>;
 }
 
@@ -40,7 +40,7 @@ function bucket<T>(rows: T[], keyOf: (row: T) => string | null): T[][] {
 const keyOf = (...parts: (string | null)[]) => JSON.stringify(parts);
 
 export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesOpts): Group[] {
-  const code = (batchId: string) => opts.batchCodes?.[batchId] ?? batchId;
+  const code = (batchId: string) => opts.batchCodes?.[batchId] ?? null;
 
   /** Groups, ordered by where their first row sits in the input. */
   const groups: Group[] = [];

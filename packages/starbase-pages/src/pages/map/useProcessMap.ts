@@ -384,7 +384,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     const groups = groupBatches(
       d.operations.filter((o) => !collapsed.has(o.id)),
       d.tests.filter((t) => !collapsed.has(t.id)),
-      { probable: probable.value },
+      { probable: probable.value, batchCodes: d.batchCodes },
     );
     const unfolded = new Set(groups.filter((g) => keysOfGroup(g).some((k) => unfoldedKeys.value.has(k))).map((g) => g.id));
     return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded });

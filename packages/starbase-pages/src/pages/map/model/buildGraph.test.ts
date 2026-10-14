@@ -238,16 +238,28 @@ describe('buildGraph: grouped cuts and bundling', () => {
     const data = mkData({
       samples: sam('a', 'b', 'c', 'd'),
       operations: ['a', 'b', 'c', 'd'].map((s) => mkOp({ id: `h${s}`, sampleId: s, batchId: 'B1', methodName: 'Anneal' })),
+      batchCodes: { B1: 'B-0003' },
     });
     const g = buildGraph(data, groupsOf(data), { slots, maxRows: 3 });
     const c = container(g, 'batch:B1');
 
-    expect(c.title).toBe('Batch B1');
+    expect(c.title).toBe('Batch B-0003');
+    expect(c.code).toBe('B-0003');
     expect(c.probable).toBe(false);
     expect(c.rows.map((r) => r.in)).toEqual(['batch:B1:in:0', 'batch:B1:in:1', 'batch:B1:in:b', 'batch:B1:in:b']);
     expect(wire(g, 's:c:out:0', 'batch:B1:in:b')).toMatchObject({ bundled: true });
     expect(wire(g, 's:d:out:0', 'batch:B1:in:b')).toMatchObject({ bundled: true });
     expect(wire(g, 's:a:out:0', 'batch:B1:in:0')).toMatchObject({ bundled: false });
+  });
+
+  it('a recorded batch whose code was not read is headed "Batch", with no stray space or id', () => {
+    const data = mkData({
+      samples: sam('a', 'b'),
+      operations: ['a', 'b'].map((s) => mkOp({ id: `h${s}`, sampleId: s, batchId: 'B1', methodName: 'Anneal' })),
+    });
+    const c = container(build(data), 'batch:B1');
+    expect(c.title).toBe('Batch');
+    expect(c.code).toBe('Batch');
   });
 
   it('keeps the first row slots for a multi-row group', () => {

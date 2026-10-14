@@ -106,6 +106,14 @@ describe('mergeProcessData', () => {
       stock: [mkStock('l1', 's1')],
     });
 
+  it('keeps the batch codes of both sides, so a family merged in with a plus keeps its batch headers', () => {
+    const base = { ...family(), batchCodes: { b1: 'B-0001' } };
+    const add = { ...family(), batchCodes: { b2: 'B-0002' } };
+    expect(mergeProcessData(base, add).batchCodes).toEqual({ b1: 'B-0001', b2: 'B-0002' });
+    expect(mergeProcessData(base, family()).batchCodes).toEqual({ b1: 'B-0001' });
+    expect(mergeProcessData(family(), family()).batchCodes).toBeUndefined();
+  });
+
   it('de-duplicates by id and keeps the base focus and hidden flags', () => {
     const base = { ...family(), hidden: { ancestors: true, descendants: false, events: false, stock: false } };
     const add = { ...family(), focus: { collection: 'physical_samples', id: 'zzz', code: 'ZZZ', kind: 'sample' as const }, hidden: { ancestors: false, descendants: true, events: true, stock: true }, truncated: true };

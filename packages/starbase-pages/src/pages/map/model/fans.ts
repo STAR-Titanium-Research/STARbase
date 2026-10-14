@@ -152,6 +152,9 @@ export function mergeProcessData(base: ProcessData, add: ProcessData): ProcessDa
   const pieces = Object.entries({ ...base.pieces, ...add.pieces }).filter(([id]) => !merged.samples.some((smp) => smp.id === id));
   if (pieces.length) merged.pieces = Object.fromEntries(pieces);
   else delete merged.pieces;
+  const batchCodes = { ...base.batchCodes, ...add.batchCodes };
+  if (Object.keys(batchCodes).length) merged.batchCodes = batchCodes;
+  else delete merged.batchCodes;
   // The flags of a family belong to its own sample: the focus's stay in `hidden`, each merged family's are kept here.
   const families = new Map((base.mergedFamilies ?? []).concat(add.mergedFamilies ?? []).map((f) => [f.root, f]));
   if (add.focus.kind === 'sample') {

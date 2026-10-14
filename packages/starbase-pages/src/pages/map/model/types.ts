@@ -109,6 +109,11 @@ export interface ProcessData {
    */
   pieces?: Record<string, { code: string; form: string | null }>;
   /**
+   * Codes of the recorded batches the rows above belong to, by batch id ("B-0003"). Only batches whose code was
+   * read: a batch the person may not see the code of is still a group, headed "Batch".
+   */
+  batchCodes?: Record<string, string>;
+  /**
    * Hidden-record flags of the families merged in with ＋, by the sample each was opened on: `hidden` above
    * belongs to the focus, and these say where else the person may not read records.
    */
@@ -139,7 +144,7 @@ export interface Group {
   id: string;
   kind: 'operation' | 'test';
   rowIds: string[];
-  batch: { recorded: true; code: string } | { recorded: false } | null;
+  batch: { recorded: true; code: string | null } | { recorded: false } | null;
 }
 
 /**

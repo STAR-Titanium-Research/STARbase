@@ -1361,3 +1361,37 @@ describe('the form relations reach the loader (I7)', () => {
     expect(family).toHaveBeenLastCalledWith(mine, 's1');
   });
 });
+
+describe('recorded batches (slice 2)', () => {
+  const batched = (): ProcessData =>
+    mkData({
+      samples: [mkSample('s1'), mkSample('s2'), mkSample('s3')],
+      operations: [
+        mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: '2026-09-01T09:00:00Z', methodName: 'Cut', batchId: 'b3' }),
+        mkOp({ id: 'o2', sampleId: 's1', outputSampleId: 's3', date: '2026-09-01T09:00:00Z', methodName: 'Cut', batchId: 'b3' }),
+      ],
+      tests: [mkTest({ id: 't1', subjectSampleIds: ['s2'], date: '2026-09-02T09:00:00Z', batchId: 'b3' })],
+      lineage: [mkLineage('s1', 's2'), mkLineage('s1', 's3')],
+      batchCodes: { b3: 'B-0003' },
+    });
+
+  it('a batch of 2 operations and 1 test is drawn as an operation container and a test container, both "Batch B-0003"', async () => {
+    family.mockResolvedValue(batched());
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    const batches = containersOf(map).filter((c) => c.group.batch?.recorded);
+    expect(batches.map((c) => [c.kind, c.group.rowIds.length, c.title])).toEqual([
+      ['operation', 2, 'Batch B-0003'],
+      ['test', 1, 'Batch B-0003'],
+    ]);
+    expect(batches[0].probable).toBe(false);
+  });
+
+  it('a batch whose code could not be read is still one container, headed "Batch"', async () => {
+    family.mockResolvedValue({ ...batched(), batchCodes: undefined });
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    const batches = containersOf(map).filter((c) => c.group.batch?.recorded);
+    expect(batches.map((c) => c.title)).toEqual(['Batch', 'Batch']);
+  });
+});

@@ -79,5 +79,5 @@ export function mkData(p: Partial<ProcessData> = {}): ProcessData {
 
 /** Groups for a dataset the way the page makes them. */
 export function groupsOf(data: ProcessData, probable = false): Group[] {
-  return groupBatches(data.operations, data.tests, { probable });
+  return groupBatches(data.operations, data.tests, { probable, batchCodes: data.batchCodes });
 }
