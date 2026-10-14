@@ -7,24 +7,9 @@
 // short search-box value.
 import { useWorkspace } from '../workspace';
 import LookupField from './LookupField.vue';
+import { MACHINING_SUBTYPES } from '../subtypes';
 
 const w = useWorkspace();
-
-const MACHINING_SUBTYPES = [
-	{ value: 'MT-F', text: 'Turning – Facing' },
-	{ value: 'MT-R', text: 'Turning – Roughing' },
-	{ value: 'MT-O', text: 'Turning – OD' },
-	{ value: 'MT-G', text: 'Turning – Grooving' },
-	{ value: 'MT-B', text: 'Turning – Boring' },
-	{ value: 'MT-H', text: 'Turning – Threading' },
-	{ value: 'MT-P', text: 'Turning – Parting' },
-	{ value: 'MT-D', text: 'Turning – Drilling' },
-	{ value: 'MM-F', text: 'Milling – Facing' },
-	{ value: 'MM-R', text: 'Milling – Roughing' },
-	{ value: 'MM-S', text: 'Milling – Slotting' },
-	{ value: 'MM-D', text: 'Milling – Drilling' },
-	{ value: 'other', text: 'Other' },
-] as const;
 </script>
 
 <template>

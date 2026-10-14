@@ -44,7 +44,7 @@
 // can_administer_accounts: an administrator whose role is not the Lab Admin role (D1_LAB_ADMIN_ROLE_ID). An admin policy attached to
 // the USER with no role (the preview's admin) is an account administrator; the Lab Admin is not.
 //
-// Counting rule for /attention (migration 174): login_without_person and invite_not_accepted are counted by cardinality(user_ids), every
+// Counting rule for /attention (migration 180): login_without_person and invite_not_accepted are counted by cardinality(user_ids), every
 // other key by cardinality(person_ids). Summing both arrays would count a person who has a login twice.
 //
 // Errors use the Directus shape { errors: [{ message, extensions: { code, source: 'd1-people-admin' } }] }.

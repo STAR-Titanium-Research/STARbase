@@ -89,6 +89,23 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
   the drawing has the bore, and the mass estimate is π/4·(OD² − ID²)·t × density. The printed
   sample report lists `ID…` after the outer Ø.
 
+### Form blockers (migration 173, `fix/form-qa`)
+- [ ] **F1 — Test session saves from the form.** As a Lab Member, in STARbase (the framed form) and in
+  Data Studio: new Test Session, pick a Test Type, Subject → Add Existing → one of your samples, Save.
+  It saves (before: "Sample / Workpiece (Hidden): Value is required"), and the saved test's sample is
+  the subject.
+- [ ] **F2 — Imaging / Analysis campaign.** New Campaign, Campaign Type → Imaging / Analysis, a name,
+  Save. It saves (before: "An unexpected error occurred", HTTP 500).
+- [ ] **F3 — Owner shows a name.** Open any sample, operation, test, campaign, tool box, insert, recipe
+  and a project. Owner (Principal Investigator on a project) shows the person's name in a dropdown,
+  not a UUID in a text box; changing it as the owner saves. The dropdown has no "create new" (a new
+  login-less owner locked the creator out of the record). The Directus log has no warning about
+  `d1-owner-picker` after the leftover `core/extensions/d1-owner-picker` folder (no package.json,
+  empty dist) is deleted from the live checkout.
+- [ ] **F4 — Machining sub-type.** Open an operation imported from the experiment sheets (sub-type
+  MT-F). Operation Sub-type shows "Turning – Facing", not blank. A new milling operation offers the
+  Milling – … choices and its code keeps the bare letter (…-S1-…).
+
 ### Ask-DB
 - [ ] **D1/D2 — chips and messages.** The five example chips run and answer. A query returning more
   than the row limit shows "Showing the first N rows". Stop the `llm-text-to-sql` container: the
@@ -253,6 +270,28 @@ of going headless); the addresses now are STARbase's. Restart Directus after `np
   and Tests tables show only readable rows. A sample the role cannot read, and a made-up id, both
   show "Not found or not visible to you" with a link back to Home. Since: Explorer pages E1 (PR
   pending).
+- [ ] **E1 — life strip grouped by day on a busy sample.** Open the Sample page of a sample with
+  20 or more operations (e.g. `10-AA-MF-2023-3-31`). Expect: the life strip has one node per day
+  for the operations and tests, labelled with the date and "N operations · M tests". Each node
+  holds a chip per record, operations as `#<step>` in step order and then tests by type. Hovering a
+  chip shows the full pass code (or the test's type and status), and clicking it opens that record's
+  page. A day with more than 16 records shows "+N more", which expands to all of them and back with
+  "Show fewer". Parents, this sample and children still have a node each. Operations with no date
+  sit in one "Undated" node at the end. Check that the days are in date order and that the
+  operation and test counts match the Operations and Tests tables. Check below ~640 px wide and in
+  the dark theme too. Since: compact life strip (PR pending).
+- [ ] **E1 — life strip folds the middle steps.** On the same busy sample, or one with a dozen
+  days of operations, open the Sample page at full width. Expect: when the steps would not fit, the
+  strip shows the start (stock, parents, this sample) and the latest steps without scrolling, with a
+  dashed "N more steps" node between them. That node gives the hidden operation and test counts and
+  their date range. Click it: every step shows, the first hidden one where the split node was, and
+  the strip scrolls sideways. **Fold the steps in between** puts the split back. Resize the window:
+  the split re-fits. Below ~640 px wide the vertical list shows at most 8 steps the same way. A
+  sample whose steps fit shows no split. On a sample blended from many parents (six or more), the
+  oldest parents fold into their own split and **This sample** stays visible. With the keyboard, Tab
+  to a split and press Enter: focus lands on the first step it showed. Press Enter on **Fold the
+  steps in between**: focus returns to the split. A screen reader reads each chip as its pass code
+  (or test and status), not as "#17". Since: compact life strip (PR pending).
 - [ ] **E1 — links from Home and the dashboards.** On Home, the recent-activity sample cards and, in
   the Lab Dashboard, "Open sample" and the timeline entries open the Sample page; operation and test
   links open their Explorer pages (E4).
@@ -395,12 +434,12 @@ named, was removed in phase 1 of going headless), and `d1-report` is rebuilt in 
   `https://starbase.tail54eeb6.ts.net/samples/<id>`, and Back returns to the dashboard. In the FAST plotter (`/plot/fast`) **Open** on
   a run opens the Operation page; opening the recipe still opens its Content form. Since: Explorer
   pages E4 (PR pending).
-- [ ] **E4 — project items links and lineage graph.** In a project's Content form, the Project
+- [ ] **E4 — project items links and Process map.** In a project's Content form, the Project
   items panel shows operation and sample codes as links to their Explorer pages (equipment, tools,
   inserts and materials open their Content forms); as a role that cannot read some of the
   operations, those rows stay plain text and the panel still lists them. On a Sample page,
-  **Open lineage graph** opens the Lab Dashboard graph centred on that sample, with its operations,
-  tests and neighbours, and reloading the graph URL (`?sample=<id>`) does the same. Since:
+  the rail's **Process map** button opens the Process map (STARbase `/map`) on that sample, with its operations,
+  tests and neighbours, and reloading the `/map?focus=physical_samples:<id>` URL does the same. Since:
   Explorer pages E4 (PR pending).
 - [ ] **E4-fix — the subject trigger on real data (migration 139).** Apply the migration to the
   real database (`dbmate up`) and check the back-fill: `SELECT count(*) FROM test_sessions t WHERE
@@ -409,7 +448,7 @@ named, was removed in phase 1 of going headless), and `d1-report` is rebuilt in 
   sample that no longer exists). Then create a test through the Content form, picking a sample in
   Subject. Expect, for that new test: `sample_id` is filled in the table; it appears in the
   campaign's matrix on the Campaign page (if the sample is in the campaign); the sample report
-  (Generate PDF) lists it under tests; the Lab Dashboard lineage graph and the Sample dashboard
+  (Generate PDF) lists it under tests; the Process map (STARbase `/map`) and the Sample dashboard
   show it; the sample's timeline (`f_sample_timeline`) has its entry; and the Tests panel search by
   the sample code finds it. Add a second sample to the same test: nothing changes in those views
   (only the first sample is primary), but the Sample page of the second sample lists the test.
@@ -789,12 +828,12 @@ migration 141 prints about ownerless records.
 - [ ] **Explorer fixes F1 — Ask the database and Dashboards have no entry on Home.** By the
   maintainer's decision of 2026-10-09 Ask the database is hidden from Home for now, so on this
   install it has no entry in the UI at all (its module is off in the module bar), and the
-  Dashboards module is being retired (its lineage graph is to be rebuilt). Expect: Home's quick
-  actions show no tile for either; on this install the lab dashboard is reachable only from a
-  Sample page's "Open lineage graph" until it is replaced (its module bar has `d1-lab-dashboard`
+  Dashboards module is being retired (the Process map in STARbase `/map` replaces its lineage graph). Expect: Home's quick
+  actions show no tile for either; on this install the lab dashboard is reachable only from its
+  module URL until it is replaced (its module bar has `d1-lab-dashboard`
   and `ask-db` disabled). A fresh install differs: `scripts/configure_directus.sql` enables
   `d1-lab-dashboard` in the module bar, so there it is also in the bar; do not fail this item for
-  that. Check that the link still opens the graph for the sample. Since: Explorer fixes F1, not
+  that. Check that the Sample page's Process map button opens the map for the sample. Since: Explorer fixes F1, not
   yet in a PR.
 - [ ] **Migration 20261010000160 on live: Lab Member queries stop returning 400.** Before applying,
   record `SELECT md5(string_agg(id||coalesce(permissions::text,'~'), ',' ORDER BY id)) FROM
@@ -1006,6 +1045,72 @@ migration 141 prints about ownerless records.
   Directus) and run `tests/ui` specs `14-starbase` and `15-starbase-polish` (they need Directus) and the new
   `16-sidebar-b2` against it. All three pass; a failure in 14 or 15 is a regression from the sidebar change. Since
   explorer sidebar B2. PR #262.
+
+- [ ] **FL-1 — Coupon Standard picker, in the form and on Register sample.** Rebuild and load `d1-geometry-preview`
+  (`npm run build` in its folder), then open a new Sample in Data Studio and pick Geometry = Tensile coupon: the
+  preview shows a **Standard** picker above the drawing (ASTM E8/E8M sheet, ASTM E8/E8M subsize, ISO 6892-1 type 1,
+  type 2). Pick one: Length, Width, Gauge length and Gauge width fill in the form (the preview interface asks the form
+  for it with `emit('setFieldValue', ...)`; check this works from inside the Geometry field group) and the drawing
+  redraws; Thickness stays as it was. Edit a dimension: the picker goes back to the placeholder (Custom). Reload a saved
+  record whose dimensions equal a standard: the picker shows it. Fatigue specimen offers ASTM E466 / ISO 1099 flat (typical values: check
+  them against the lab drawings); Charpy specimen offers full size and the 7.5 / 5 / 2.5 sub-sizes, which also set
+  Thickness; Bend bar offers the plain bar. Other geometries show no picker. Then the same on STARbase's Register sample screen (no longer auto-fills on picking the
+  geometry). Save a sample after picking a standard: the values are stored. Since form layout stream C.
+- [ ] **FL-2 — Labels, not codes, in STARbase and the PDF.** On a sample with Geometry Tensile coupon, Surface finish
+  Medium machined (or As produced) and a machining operation with a sub-type: STARbase's Samples list, the Sample page
+  (kind line, Surface finish), life strip, Home lists and the Equipment list (Type column and filter) show
+  "Tensile coupon (ISO 6892)", "Medium machined", "Sample prep" and the like, never `tensile_coupon` or
+  `Sample_Prep`; the sample and operation PDF reports (/d1-report/sample/<id>, /operation/<id>) do too, including the
+  "Turning – Facing" sub-type cells. Since form layout stream C.
+- [ ] **C-card-1 — Campaign cards match the project cards.** In STARbase open **Campaigns**, switch to **Cards**, and
+  open **Projects** in another tab. The campaign cards sit on the page ground (no white panel around the grid), raised
+  and as wide as the project cards, with the type tag and a coloured status pill beside the code, "Owner: …" (or
+  "not set") and the dates (or "No dates set") on the meta line, then the counts and the progress bar. While the
+  counts load they show dashes. Cards of one row share a height and rows do not overlap. Open a project with
+  campaigns: its Campaigns panel shows the same card as a tile inside the panel. Check light and dark. Since
+  branch `claude/serene-fermi-6nxf5e` (campaign cards follow the Projects design).
+
+- [ ] **TOOL-1 — Tooling pages on real data.** In STARbase open **Tool boxes**, then a real box with inserts and
+  edges. Expect: the box page with its insert type facts (ISO designation, manufacturer, coating, substrate, edges per
+  insert), the four state counts (fresh, partly used, used, depleted) adding up to the inserts list, and a **Next fresh
+  edge** card that links to the right edge (the lowest-numbered part-used insert's first fresh letter). Click an insert
+  in the stage (or the inserts list): the page becomes that insert, with its details, notes and edge list. Click an
+  edge: the page becomes that edge, with its tests and operations merged newest first, each opening its own page, and
+  **View forces** on machining operations opening the Force plotter for that operation. Open **Cutting inserts** and
+  **Insert edges** from the index pages: the rows open these pages. An edge marked fresh that has a test or operation
+  shows "Marked fresh, but N tests or operations used this edge." (check one in the Data Studio first). On the box,
+  the inserts list's last column shows "N marked fresh, but used" for an insert with such edges, and the insert page's
+  Edges list shows the same warning per edge. Create a test whose subjects are **two edges of the same insert** (the
+  Data Studio's test form, two insert edges as subjects): it must appear in the history of **both** edges, and count
+  once for each in the box's warnings (an edge marked fresh with only that test still warns). Edit opens the
+  collection's own form in the drawer and saving refreshes the page. Check light and dark. Since: tooling pages, S3;
+  review fixes (test subjects through the junction).
+- [ ] **TOOL-2 — Moving inside a box keeps the page.** On a real box, click insert, edge, then use the browser Back and
+  Forward buttons. Expect: the address changes each time, the 3D view stays on screen and only the camera moves (no flash,
+  no reload of the stage, the network tab shows no new read of the box's inserts or edges, only the clicked record and,
+  for an edge, its history), and Back returns to the previous insert or the box. Going to another box (a link, or the
+  address bar) loads that box. A box, insert or edge id you may not read (or made up) shows "Not found or not visible to
+  you". Since: tooling pages, S3.
+- [ ] **TOOL-3 — The 3D stage on a real GPU.** On a lab PC (light and dark theme) open a real box. Expect: the tray
+  and inserts draw crisply with no jagged edges; the camera eases (about 0.4 s) to an insert and to an edge; the focused
+  insert lifts out of its pocket; edge letters on the hidden underside are faded; the next fresh edge glows, pulses for
+  about 2.4 s after each move and then rests at full strength (and does not pulse in a hidden tab); with the OS set to reduce motion, moves are instant and nothing pulses. The fan stays
+  quiet when the page sits idle (no render loop at rest). Then turn WebGL off (Chrome `chrome://flags` → disable
+  WebGL, or Firefox `webgl.disabled`) and reload: the 2D slot grid shows, with the same clicks and addresses. The
+  stage is a tall tile in the left rail (about 360 px wide, up to 560 px tall); with a very short browser window it
+  shrinks but stays at least 380 px, and under 1000 px of page width it sits above the panels. Since: tooling pages, S2;
+  rail stage in #286.
+- [ ] **TOOL-4 — Edge letters match the physical insert.** Take a used CNMG from a real box, hold it with the reference
+  mark up, and compare with its insert page. Expect: A is the corner nearest the mark, B the next cutting corner
+  clockwise, C directly under A and D under B, and the edges marked used on the page are the worn ones. Repeat with a
+  single-sided insert (CCMT): only A and B. Since: tooling pages (lettering rule in `CONTEXT.md` › Tooling).
+- [ ] **TOOL-5 — A real PCD box: one insert, one edge.** Open a real PCD (or PCBN) tool box that holds one tipped
+  insert with one edge. Expect: the box is a small single case with the insert filling about 60 % of the stage; a
+  lighter, shiny tip pad (silver for PCD, warm dark gold-grey for PCBN) shows on corner A, covering the nose and about
+  3 mm of each side; there is no edge B and no other tipped corner; click the insert, then edge A: both work, and
+  the next-fresh card points at A while it is fresh. Compare the pad with the real tip (which corner, how far along the
+  sides). Check light and dark. Also open a normal 10-insert box: the grid is 2 columns by 5 rows, numbered left to
+  right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
@@ -1431,6 +1536,19 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
   PC: the app starts, signs in, records a cut, opens pop-outs and updates itself. Since #230 (0.1.36).
 - [ ] **#30 settings scroll.** On the rig PC, switching Settings tabs no longer animates or jumps
   (fixed in 0.1.33; issue closed 2026-10-11, reopen it if it still happens).
+
+### Depth of cut and force limit (2026-10-14, #288, #289)
+- [ ] **#288 depth of cut on the Record page.** With NI-DAQ selected, the cut-parameter grid shows
+  Depth of cut and Axial DoC next to Spindle and Feed. Type 0.5 and 2, record and save a cut: the
+  Directus run row has `machining_radial_depth_of_cut_mm` 0.5 and `machining_axial_depth_of_cut_mm`
+  2, and the capture's summary.json `extra_metadata` has `radial_doc`/`axial_doc`. Both survive an
+  app restart; a cleared tile saves as empty, not 0. Since the #288/#289 fix branch.
+- [ ] **#289 force alarm at the limit.** Settings > Safety Alarms: set the limit to 400 N, then
+  clear the field and click away: it goes back to 400. Start a cut with no load on the dyno: the
+  alarm stays quiet. If it still trips at once, note the axis and value on the alarm banner and keep
+  that capture folder (its first second of raw data is what #289 needs). Then press the tool against
+  the dyno past 400 N: the alarm trips, and the amber warning showed first at 320 N. Since the
+  #288/#289 fix branch.
 
 ### Rig test requests, phase 1 (rig test requests PR)
 - [ ] **First request on the rig.** Set `RIG_TEST_ALLOWED_LOGINS` on the relay (§C), install the

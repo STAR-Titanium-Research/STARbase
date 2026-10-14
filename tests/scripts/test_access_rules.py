@@ -571,6 +571,61 @@ def test_params_tables_listed_as_unfiltered_are_the_stale_ones():
     assert not stale & set(DOC["rules"])
 
 
+def test_members_cannot_edit_co_owners_or_secondary_investigators_in_the_form():
+    """Plan 2026-10-14-form-layout, decision 5: the two share-with-others aliases leave the create and update field lists of
+    their record's Lab Member rows. Read, delete and every other rule stay "*": STARbase reads both aliases and Directus
+    answers a read of a field the policy lacks with HTTP 403."""
+    for collection, left_out in (
+        ("physical_samples", "co_owners"),
+        ("projects", "secondary_investigators"),
+    ):
+        lists = {}
+        for action in ("create", "update"):
+            fields = BY_KEY[(collection, action)]["fields"]
+            assert fields != "*"
+            names = fields.split(",")
+            assert len(names) == len(set(names))
+            assert left_out not in names
+            lists[action] = names
+        assert lists["create"] == lists["update"]
+        for action in ("read", "delete"):
+            assert BY_KEY[(collection, action)]["fields"] == "*"
+    # no other ruled row names a field list
+    listed = {
+        k for k, r in BY_KEY.items() if r["fields"] != "*" and k[0] in DOC["rules"]
+    }
+    assert listed == {
+        ("physical_samples", "create"), ("physical_samples", "update"),
+        ("projects", "create"), ("projects", "update"),
+    }  # fmt: skip
+
+
+def test_rule_fields_are_validated():
+    with pytest.raises(gen.RulesError):  # a list that does not exist
+        gen.build_rows({**DOC, "rule_fields": {"projects": {"update": "nope"}}})
+    with pytest.raises(gen.RulesError):  # an action the collection has no list for
+        gen.build_rows(
+            {**DOC, "rule_fields": {"projects": {"read": "x"}, "people": {}}}
+        )
+    with pytest.raises(gen.RulesError):  # a collection without rules
+        gen.build_rows(
+            {
+                **DOC,
+                "rule_fields": {
+                    "materials": {"update": "project.not_secondary_investigators"}
+                },
+            }
+        )
+    with pytest.raises(gen.RulesError):  # duplicates
+        gen.build_rows(
+            {
+                **DOC,
+                "field_sets": {"d": ["a", "a"]},
+                "rule_fields": {"projects": {"update": "d"}},
+            }
+        )
+
+
 def test_set_cycles_and_unknown_sets_are_rejected():
     with pytest.raises(gen.RulesError):
         gen.expand({"a": [{"set": "a"}]}, "a")

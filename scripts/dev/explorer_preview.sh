@@ -77,6 +77,12 @@ docker network create --internal "$NET" >/dev/null || abort "docker network crea
 docker run -d --name "$PG" --network "$NET" -e POSTGRES_USER=d1 -e POSTGRES_PASSWORD="$DB_PASS" \
   -e POSTGRES_DB=d1_database pgvector/pgvector:pg16 >/dev/null || abort "postgres start"
 for _ in $(seq 1 60); do docker exec "$PG" pg_isready -h 127.0.0.1 -U d1 -d d1_database >/dev/null 2>&1 && break; sleep 1; done
+# Live's non-login roles that row-security policies name (migration 168: TO d1_llm_readonly). Without them the restore
+# fails on CREATE POLICY. Created NOLOGIN, on the copy only.
+for role in d1_llm_readonly d1_llm_app; do
+  psql_copy -c "DO \$\$ BEGIN CREATE ROLE $role NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$" >/dev/null \
+    || abort "create role $role on the copy"
+done
 
 # --- copy of live (revisions/activity data skipped). Only GRANT/REVOKE errors for live-only roles are tolerated.
 docker exec "$LIVE_PG" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --exclude-table-data=directus_revisions --exclude-table-data=directus_activity' \
@@ -106,7 +112,9 @@ admin_id=$(psql_copy -Atc "
   WITH p AS (SELECT id FROM directus_policies WHERE admin_access ORDER BY name LIMIT 1),
   u AS (INSERT INTO directus_users (id, email, status, token, first_name, last_name)
         VALUES (gen_random_uuid(), '$ADMIN_EMAIL', 'active', '$TOKEN', 'Preview', 'Admin') RETURNING id),
-  a AS (INSERT INTO directus_access (id, \"user\", policy) SELECT gen_random_uuid(), u.id, p.id FROM u, p RETURNING id)
+  a AS (INSERT INTO directus_access (id, \"user\", policy) SELECT gen_random_uuid(), u.id, p.id FROM u, p RETURNING id),
+  -- a people row too, so records the admin creates get an owner (d1-owner-default), as a real admin's do
+  pp AS (INSERT INTO people (full_name, user_id, is_researcher, active) SELECT 'Preview Admin', id, true, true FROM u RETURNING person_id)
   SELECT id FROM u") || abort "create preview admin"
 lm_id=$(psql_copy -Atc "
   WITH r AS (SELECT r.id FROM directus_roles r WHERE r.name = 'Lab Member' LIMIT 1),

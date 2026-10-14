@@ -251,6 +251,257 @@ rim_check "down_other_relations:3" "down: leaves relations it did not add"
 rim_check "down_owner_picker:1,d1-owner-picker" "down: the owner picker is still untouched"
 rim_check "down_ledger:dropped" "down: drops its bookkeeping table"
 
+echo "== Directus forms can be saved (form QA, migration 173) =="
+# Regression guards from driving the create forms on a copy of live (2026-10-14). A field naming an
+# interface that is not installed renders as a raw text box (the Owner fields showed person UUIDs);
+# a hidden required field blocks every save of its form (test sessions); a dropdown choice outside its
+# CHECK constraint fails with HTTP 500 (Imaging / Analysis campaigns).
+missing_ext=""
+for ext in $($PSQL -c "SELECT DISTINCT x FROM (SELECT interface AS x FROM directus_fields UNION SELECT display FROM directus_fields) AS u WHERE x LIKE 'd1-%'" 2>/dev/null); do
+    [[ -f "core/extensions/$ext/package.json" ]] || missing_ext="$missing_ext $ext"
+done
+[[ -z "$missing_ext" ]] && ok "every d1-* interface and display named in directus_fields is an extension in core/extensions" \
+    || bad "directus_fields names extensions that are not in core/extensions:$missing_ext"
+run_eq "no field is hidden, unconditional and required (the form could never be saved)" \
+    "SELECT count(*) FROM directus_fields WHERE hidden AND required AND conditions IS NULL" \
+    "0"
+run_eq "every dropdown choice passes the column's CHECK constraint" \
+    "SELECT count(*) FROM directus_fields AS f
+     CROSS JOIN LATERAL json_array_elements(f.options -> 'choices') AS ch
+     JOIN pg_class AS t ON t.relname = f.collection AND t.relnamespace = 'public'::regnamespace
+     JOIN pg_attribute AS a ON a.attrelid = t.oid AND a.attname = f.field
+     JOIN pg_constraint AS con ON con.conrelid = t.oid AND con.contype = 'c' AND con.conkey = ARRAY[a.attnum]
+     WHERE f.interface IN ('select-dropdown', 'select-radio')
+       AND pg_get_constraintdef(con.oid) ~ 'ANY \(ARRAY\['
+       AND ch ->> 'value' NOT IN (SELECT m[1] FROM regexp_matches(pg_get_constraintdef(con.oid), '''([^'']*)''', 'g') AS m)" \
+    "0"
+MIG=db/migrations/20261014000173_form_blockers.sql
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
+fb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+-- this database already ran 173: undo it, seed the pre-173 metadata, then run up and down again
+$mig_down
+DELETE FROM directus_fields WHERE (collection, field) IN (('test_sessions','sample_id'),
+  ('physical_samples','owner_person_id'), ('projects','principal_investigator_person'),
+  ('manufacturing_operations','machining_operation_subtype'));
+INSERT INTO directus_fields (collection, field, interface, options, hidden, required) VALUES
+  ('test_sessions','sample_id','select-dropdown-m2o',NULL,true,true),
+  ('physical_samples','owner_person_id','d1-owner-picker','{}',false,false),
+  ('projects','principal_investigator_person','d1-owner-picker','{}',false,false),
+  ('manufacturing_operations','machining_operation_subtype','select-dropdown','{"choices":[{"text":"Turning","value":"turning"}]}',false,false);
+$mig_up
+SELECT 'up_required:' || required FROM directus_fields WHERE collection='test_sessions' AND field='sample_id';
+SELECT 'up_pickers:' || count(*) FROM directus_fields WHERE interface='select-dropdown-m2o' AND (collection, field) IN (('physical_samples','owner_person_id'),('projects','principal_investigator_person'));
+SELECT 'up_subtype:' || (options::text LIKE '%"MT-F"%') FROM directus_fields WHERE field='machining_operation_subtype';
+INSERT INTO campaigns (name, campaign_type) VALUES ('TEST-FB-173', 'imaging_analysis');
+SELECT 'up_imaging:' || count(*) FROM campaigns WHERE name='TEST-FB-173';
+$mig_down
+SELECT 'down_required:' || required FROM directus_fields WHERE collection='test_sessions' AND field='sample_id';
+SELECT 'down_pickers:' || count(*) FROM directus_fields WHERE interface='d1-owner-picker' AND (collection, field) IN (('physical_samples','owner_person_id'),('projects','principal_investigator_person'));
+SELECT 'down_campaign:' || campaign_type FROM campaigns WHERE name='TEST-FB-173';
+ROLLBACK;
+SQL
+)
+fb_check() { grep -qx "$1" <<<"$fb_out" && ok "$2" || bad "$2 (psql output: $fb_out)"; }
+fb_check "up_required:false" "173 up: test_sessions.sample_id is no longer required"
+fb_check "up_pickers:2" "173 up: owner fields use the related-item dropdown"
+fb_check "up_subtype:true" "173 up: machining sub-type offers the stored MT-/MM- codes"
+fb_check "up_imaging:1" "173 up: an imaging_analysis campaign can be saved"
+fb_check "down_required:true" "173 down: sample_id required again"
+fb_check "down_pickers:2" "173 down: owner fields back on d1-owner-picker"
+fb_check "down_campaign:testing_campaign" "173 down: imaging campaigns are mapped to testing_campaign"
+
+
+echo "== Form layout (migration 174) =="
+# Plan 2026-10-14-form-layout: Field groups on the six record forms, unique sorts, Lab Member field lists.
+# Guards on whatever metadata the database has (CI: the part the migrations write; a copy of live: all of it).
+FL_COLLECTIONS="'physical_samples','manufacturing_operations','test_sessions','projects','campaigns','raw_stock_lots','tools','equipment','insert_types','cutting_inserts'"
+run_eq "no two visible fields of a form (same collection and group) share a sort, so Data Studio's order is the intended one" \
+    "SELECT count(*) FROM (SELECT collection, \"group\", sort FROM directus_fields
+       WHERE collection IN ($FL_COLLECTIONS) AND NOT hidden GROUP BY 1, 2, 3 HAVING count(*) > 1) AS t" \
+    "0"
+run_eq "every group-detail is a group (alias,no-data,group): without that special the form crashes" \
+    "SELECT count(*) FROM directus_fields WHERE interface = 'group-detail' AND special IS DISTINCT FROM 'alias,no-data,group'" \
+    "0"
+run_eq "no group-detail is hidden at base (a conditional group is base-visible plus a hide-unless condition)" \
+    "SELECT count(*) FROM directus_fields WHERE interface = 'group-detail' AND hidden" \
+    "0"
+run_eq "every field that names a group finds that group-detail in its own collection" \
+    "SELECT count(*) FROM directus_fields AS f WHERE f.\"group\" IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM directus_fields AS g WHERE g.collection = f.collection AND g.field = f.\"group\" AND g.interface = 'group-detail')" \
+    "0"
+# Lab Members cannot edit Co-owners or Secondary Investigators in the form (decision 5): the field lists of the create and
+# update rows name every other column and alias, so a column added later must be added to scripts/access_rules.json
+# ("field_sets") or members could not save it. Read stays '*'. On CI the alias rows of directus_fields are not there.
+LM=20000002-0000-0000-0000-000000000002
+for pair in "physical_samples:co_owners" "projects:secondary_investigators"; do
+    fl_tbl=${pair%%:*}; fl_left=${pair##*:}
+    for fl_act in create update; do
+        fl_got=$($PSQL -c "SELECT coalesce(string_agg(x, ',' ORDER BY x), '') FROM (
+            SELECT column_name::text AS x FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '$fl_tbl'
+            UNION SELECT field FROM directus_fields WHERE collection = '$fl_tbl' AND (special LIKE '%m2m%' OR special LIKE '%o2m%' OR special LIKE '%alias%') AND special NOT LIKE '%group%') c
+          WHERE x <> ALL (string_to_array((SELECT fields FROM directus_permissions WHERE policy = '$LM' AND collection = '$fl_tbl' AND action = '$fl_act'), ','))" 2>&1)
+        [[ "$fl_got" == "$fl_left" || "$fl_got" == "" ]] && ok "Lab Member $fl_tbl.$fl_act leaves out only $fl_left (got '$fl_got')" \
+            || bad "Lab Member $fl_tbl.$fl_act field list misses columns or aliases: '$fl_got' (add them to field_sets in scripts/access_rules.json)"
+    done
+    run_eq "Lab Member $fl_tbl read keeps '*' (STARbase reads $fl_left; a read refusal is an HTTP 403)" \
+        "SELECT fields FROM directus_permissions WHERE policy = '$LM' AND collection = '$fl_tbl' AND action = 'read'" "*"
+done
+# configure_form_layout.sql is the migration's layout block, so a configure run does not undo the forms.
+MIG_FL=db/migrations/20261014000174_form_layout.sql
+fl_mig=$(sed -n '/^-- BEGIN FORM LAYOUT/,/^-- END FORM LAYOUT/p' "$MIG_FL")
+fl_cfg=$(sed -n '/^-- BEGIN FORM LAYOUT/,/^-- END FORM LAYOUT/p' scripts/configure_form_layout.sql)
+[[ -n "$fl_mig" && "$fl_mig" == "$fl_cfg" ]] && ok "scripts/configure_form_layout.sql repeats the layout block of migration 174" \
+    || bad "scripts/configure_form_layout.sql and the layout block of migration 174 differ (or a marker is missing)"
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG_FL")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG_FL")
+fl_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+-- this database already ran 174: undo it, seed the metadata as it was before, then run up and down again
+$mig_down
+DELETE FROM directus_fields WHERE collection IN ($FL_COLLECTIONS);
+INSERT INTO directus_fields (collection, field, special, interface, options, hidden, sort, width, conditions, required, "group", translations) VALUES
+  ('physical_samples','report_button','alias,no-data','d1-report-button',NULL,false,0,'full',NULL,false,NULL,NULL),
+  ('physical_samples','item_type',NULL,'select-dropdown',NULL,false,4,'half',NULL,false,NULL,NULL),
+  ('physical_samples','form',NULL,'select-dropdown','{"choices":[]}',false,6,'half',
+   '[{"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false}]',false,NULL,NULL),
+  ('physical_samples','diameter_mm',NULL,'input',NULL,false,8,'half',
+   '[{"name": "sample only", "rule": {"_and": [{"item_type": {"_neq": "sample"}}]}, "hidden": true, "readonly": false, "required": false}, {"name": "form", "rule": {"_and": [{"form": {"_nin": ["disc"]}}]}, "hidden": true}]',false,NULL,NULL),
+  ('physical_samples','width_mm',NULL,'input',NULL,false,9,'half',
+   '[{"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true},{"name":"form","rule":{"_and":[{"form":{"_nin":["ring","block"]}}]},"hidden":true}]',false,NULL,NULL),
+  ('physical_samples','gauge_length_mm',NULL,'input',NULL,false,12,'half',
+   '[{"name":"form","rule":{"_and":[{"form":{"_nin":["tensile_coupon"]}}]},"hidden":true}]',false,NULL,NULL),
+  ('physical_samples','co_owners','m2m','list-m2m',NULL,false,22,'full',NULL,false,NULL,NULL),
+  ('physical_samples','surface_finish',NULL,'select-dropdown','{"allowOther":true,"choices":[{"text":"None","value":"none"}]}',false,18,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','method_id','m2o','select-dropdown-m2o',NULL,false,2,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','sample_id','m2o','select-dropdown-m2o',NULL,false,4,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','process_category',NULL,'d1-process-category',NULL,false,3,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','project_id','m2o','select-dropdown-m2o',NULL,false,11,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','campaign_id','m2o','select-dropdown-m2o','{"template":"{{name}}","filter":{"campaign_type":{"_eq":"machining_trial"}}}',false,12,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','gcode_file','file','file',NULL,true,18,'full','[{"name":"show when machining","rule":{"_and":[{"process_category":{"_eq":"machining"}}]},"hidden":false}]',false,NULL,NULL),
+  ('manufacturing_operations','sintering_machine_group','alias,no-data,group','group-detail','{"start":"open"}',false,60,'full',
+   '[{"name":"Hide unless sintering","rule":{"_and":[{"process_category":{"_neq":"sintering"}}]},"hidden":true}]',false,NULL,NULL),
+  ('manufacturing_operations','sintering_run_number',NULL,'input',NULL,false,0,'half',NULL,false,'sintering_machine_group',NULL),
+  ('test_sessions','test_type',NULL,'select-dropdown',NULL,false,2,'half',NULL,false,NULL,NULL),
+  ('test_sessions','session_date',NULL,'datetime',NULL,false,10,'half',NULL,false,NULL,NULL),
+  ('test_sessions','tensile_uts_mpa',NULL,'input',NULL,true,110,'half','[{"name":"show when tensile","rule":{"_and":[{"test_type":{"_eq":"tensile"}}]},"hidden":false}]',false,NULL,NULL),
+  ('test_sessions','capture_software',NULL,'input',NULL,false,610,'half',NULL,false,NULL,NULL),
+  ('projects','project_name',NULL,'input',NULL,false,2,'half',NULL,true,NULL,NULL),
+  ('projects','secondary_investigators','m2m','list-m2m',NULL,false,12,'full',NULL,false,NULL,NULL),
+  ('campaigns','name',NULL,'input',NULL,false,4,'half',NULL,true,NULL,NULL),
+  ('raw_stock_lots','lot_code',NULL,'input',NULL,false,2,'half',NULL,true,NULL,NULL),
+  ('raw_stock_lots','supplier_name',NULL,'input',NULL,false,5,'half',NULL,false,NULL,NULL),
+  ('tools','tool_name',NULL,'input',NULL,false,14,'half',NULL,false,NULL,NULL),
+  ('tools','image',NULL,'file-image',NULL,false,14,'half',NULL,false,NULL,NULL),
+  ('tools','op_type',NULL,'select-dropdown','{"choices":[{"text":"Turning","value":"Turning"}],"allowOther":true}',false,6,'half',NULL,false,NULL,NULL),
+  ('equipment','equipment_type',NULL,'select-dropdown','{"choices":[{"text":"Machining","value":"Machining"},{"text":"Additive Manufacturing","value":"AM"}],"allowOther":true}',false,4,'half',NULL,false,NULL,NULL),
+  ('insert_types','op_type',NULL,'select-dropdown','{"choices":[{"text":"Turning","value":"Turning"}],"allowOther":true}',false,4,'half',NULL,false,NULL,NULL);
+DELETE FROM directus_collections WHERE collection IN ('physical_samples','manufacturing_operations','test_sessions');
+INSERT INTO directus_collections (collection, translations) VALUES
+  ('physical_samples', '[{"language":"en-US","translation":"Items","singular":"Item","plural":"Items"}]'),
+  ('manufacturing_operations', '[{"language":"en-US","translation":"Manufacturing Operations","singular":"Operation","plural":"Operations"}]'),
+  ('test_sessions', '[{"language":"en-US","translation":"Test Sessions","singular":"Test Session","plural":"Test Sessions"}]');
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('physical_samples','projects') AND action IN ('create','update');
+INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy) VALUES
+  ('physical_samples','create','{}','{}','*','$LM'), ('physical_samples','update','{}','{}','*','$LM'),
+  ('projects','create','{}','{}','*','$LM'), ('projects','update','{}','{}','*','$LM');
+-- a hash of the seeded state, to prove the down section restores it exactly
+CREATE TEMP TABLE _fl_before AS SELECT md5(string_agg(f::text, '|' ORDER BY id)) AS h FROM directus_fields AS f WHERE collection IN ($FL_COLLECTIONS);
+CREATE TEMP TABLE _fl_before_c AS SELECT md5(string_agg(c::text, '|' ORDER BY collection)) AS h FROM directus_collections AS c;
+CREATE TEMP TABLE _fl_before_p AS SELECT md5(string_agg(p::text, '|' ORDER BY id)) AS h FROM directus_permissions AS p WHERE policy = '$LM';
+$mig_up
+SELECT 'up_groups_valid:' || (count(*) FILTER (WHERE special = 'alias,no-data,group' AND interface = 'group-detail' AND NOT hidden) = count(*) AND count(*) > 60) FROM directus_fields WHERE field LIKE 'grp\_%';
+SELECT 'up_sample_groups:' || string_agg(field, ',' ORDER BY sort) FROM directus_fields WHERE collection = 'physical_samples' AND field LIKE 'grp\_%';
+SELECT 'up_related_collapsed:' || count(*) FROM directus_fields WHERE field = 'grp_related' AND options::text LIKE '%closed%' AND collection IN ('physical_samples','manufacturing_operations','test_sessions','projects','campaigns');
+SELECT 'up_what_open:' || count(*) FROM directus_fields WHERE field = 'grp_what' AND options::text LIKE '%open%';
+SELECT 'up_type_groups_conditional:' || count(*) FROM directus_fields WHERE collection = 'test_sessions' AND field LIKE 'grp\_%\_params' AND conditions IS NOT NULL;
+SELECT 'up_sintering_nested:' || "group" FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_machine_group';
+SELECT 'up_sintering_child_stays:' || "group" FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_run_number';
+SELECT 'up_form_condition:' || (conditions::text LIKE '%"_in":["equipment","miscellaneous"]%' AND conditions::text NOT LIKE '%_neq%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'form';
+SELECT 'up_dimension_conditions:' || (conditions::text LIKE '%"_in":["equipment","miscellaneous"]%') || ',' || (conditions::text LIKE '%fatigue_specimen%') || ',' || (conditions::text LIKE '%charpy_specimen%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'width_mm';
+SELECT 'up_gauge_conditions:' || (conditions::text LIKE '%fatigue_specimen%') || ',' || (conditions::text NOT LIKE '%charpy_specimen%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'gauge_length_mm';
+SELECT 'up_form_choices:' || (SELECT string_agg(c ->> 'value', ',' ORDER BY ord) FROM json_array_elements(options -> 'choices') WITH ORDINALITY AS t (c, ord)) || '|' || (options::text LIKE '%Bend bar (ISO 7438)%' AND options::text LIKE '%Charpy specimen (ISO 148-1)%' AND options::text LIKE '%"Fatigue specimen"%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'form';
+SELECT 'up_item_type_hidden:' || hidden FROM directus_fields WHERE collection = 'physical_samples' AND field = 'item_type';
+SELECT 'up_form_required:' || required FROM directus_fields WHERE collection = 'physical_samples' AND field = 'form';
+SELECT 'up_op_required:' || string_agg(field || '=' || required, ',' ORDER BY field) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field IN ('method_id','sample_id');
+SELECT 'up_input_sample_when_machining:' || (conditions::text LIKE '%"required":true%' AND conditions::text LIKE '%machining%') FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sample_id';
+SELECT 'up_test_required:' || string_agg(field || '=' || required, ',' ORDER BY field) FROM directus_fields WHERE collection = 'test_sessions' AND field IN ('test_type','session_date');
+SELECT 'up_legacy_test_fields_hidden:' || hidden FROM directus_fields WHERE collection = 'test_sessions' AND field = 'capture_software';
+SELECT 'up_gcode_hidden:' || hidden || ',' || (conditions IS NULL) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'gcode_file';
+SELECT 'up_project_inherit:' || interface FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'project_id';
+SELECT 'up_campaign_unfiltered:' || (options::jsonb ? 'filter') FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'campaign_id';
+SELECT 'up_raw_new_fields:' || string_agg(field, ',' ORDER BY field) FROM directus_fields WHERE collection = 'raw_stock_lots' AND field IN ('purity_percent','mesh_size_micrometres','certificate_url');
+SELECT 'up_surface_choices:' || (options::text LIKE '%as_produced%' AND options::text LIKE '%medium_machined%' AND options::text LIKE '%allowOther%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'surface_finish';
+SELECT 'up_equipment_choices:' || jsonb_array_length((options::jsonb) -> 'choices') || ',' || (options::text NOT LIKE '%"AM"%') || ',' || (options::text LIKE '%"Sample_Prep"%' AND options::text LIKE '%Sample prep%') FROM directus_fields WHERE collection = 'equipment' AND field = 'equipment_type';
+SELECT 'up_insert_application:' || (translations::text LIKE '%Application%') || ',' || (options::text LIKE '%Roughing%') || ',' || (options::text NOT LIKE '%allowOther%') FROM directus_fields WHERE collection = 'insert_types' AND field = 'op_type';
+SELECT 'up_tools_choices:' || (options::text LIKE '%Parting%') FROM directus_fields WHERE collection = 'tools' AND field = 'op_type';
+SELECT 'up_tied_sorts:' || count(*) FROM (SELECT 1 FROM directus_fields WHERE collection IN ($FL_COLLECTIONS) AND NOT hidden GROUP BY collection, "group", sort HAVING count(*) > 1) t;
+SELECT 'up_tools_regrouped:' || count(*) FROM directus_fields WHERE collection = 'tools' AND "group" IS NOT NULL;
+SELECT 'up_collection_names:' || string_agg(translations::jsonb -> 0 ->> 'translation', ',' ORDER BY collection) FROM directus_collections WHERE collection IN ('physical_samples','manufacturing_operations','test_sessions');
+SELECT 'up_perm:' || collection || '.' || action || '=' || (fields LIKE 'sample_id,%' OR fields LIKE 'project_id,%') || ',' || NOT (string_to_array(fields, ',') && ARRAY['co_owners','secondary_investigators'])
+  FROM directus_permissions WHERE policy = '$LM' AND collection IN ('physical_samples','projects') AND action IN ('create','update') ORDER BY 1;
+SELECT 'up_backup_rows:' || kind || '=' || count(*) FROM d1_private.form_layout_174_backup GROUP BY kind ORDER BY kind;
+SELECT 'up_backup_llm_select:' || has_table_privilege('d1_llm_readonly', 'd1_private.form_layout_174_backup', 'SELECT');
+SELECT 'up_backup_commented:' || (obj_description('d1_private.form_layout_174_backup'::regclass, 'pg_class') IS NOT NULL);
+-- the configure script's block is idempotent: running it on the migrated state changes nothing
+CREATE TEMP TABLE _fl_mid AS SELECT md5(string_agg(f::text, '|' ORDER BY collection, field)) AS h FROM (SELECT collection, field, special, interface, options::text, hidden, sort, width, conditions::text, required, "group", translations::text FROM directus_fields WHERE collection IN ($FL_COLLECTIONS)) AS f;
+$fl_cfg
+SELECT 'again_same:' || ((SELECT h FROM _fl_mid) = md5(string_agg(f::text, '|' ORDER BY collection, field))) FROM (SELECT collection, field, special, interface, options::text, hidden, sort, width, conditions::text, required, "group", translations::text FROM directus_fields WHERE collection IN ($FL_COLLECTIONS)) AS f;
+SELECT 'again_groups:' || count(*) FROM directus_fields WHERE field LIKE 'grp\_%';
+$mig_down
+SELECT 'down_groups:' || count(*) FROM directus_fields WHERE field LIKE 'grp\_%';
+SELECT 'down_fields_exact:' || ((SELECT h FROM _fl_before) = md5(string_agg(f::text, '|' ORDER BY id))) FROM directus_fields AS f WHERE collection IN ($FL_COLLECTIONS);
+SELECT 'down_collections_exact:' || ((SELECT h FROM _fl_before_c) = md5(string_agg(c::text, '|' ORDER BY collection))) FROM directus_collections AS c;
+SELECT 'down_permissions_exact:' || ((SELECT h FROM _fl_before_p) = md5(string_agg(p::text, '|' ORDER BY id))) FROM directus_permissions AS p WHERE policy = '$LM';
+SELECT 'down_raw_new_fields:' || count(*) FROM directus_fields WHERE collection = 'raw_stock_lots' AND field IN ('purity_percent','mesh_size_micrometres','certificate_url');
+SELECT 'down_backup:' || coalesce(to_regclass('d1_private.form_layout_174_backup')::text, 'gone');
+ROLLBACK;
+SQL
+)
+fl_check() { grep -qxF -- "$1" <<<"$fl_out" && ok "$2" || bad "$2 (psql output: $fl_out)"; }
+fl_check "up_sample_groups:grp_what,grp_material,grp_geometry,grp_surface,grp_who_where,grp_notes,grp_related,grp_legacy" "174 up: the Sample form's Field groups, in the planned order"
+fl_check "up_groups_valid:true" "174 up: every new group is a base-visible group-detail with special alias,no-data,group"
+fl_check "up_related_collapsed:5" "174 up: Related records is collapsed on the Sample, Operation, Test, Project and Campaign forms"
+fl_check "up_what_open:6" "174 up: What is open on all six forms"
+fl_check "up_type_groups_conditional:16" "174 up: each of the 16 test types has a parameters group that is hidden unless that type is chosen"
+fl_check "up_sintering_nested:grp_sintering" "174 up: the sintering machine group sits inside the Sintering group"
+fl_check "up_sintering_child_stays:sintering_machine_group" "174 up: its children keep their group"
+fl_check "up_form_condition:true" "174 up: Geometry hides only for the rig-kit values (a blank new form no longer hides it)"
+fl_check "up_dimension_conditions:true,true,true" "174 up: Width shows for a fatigue specimen and a Charpy specimen, and still hides for a rig-kit row"
+fl_check "up_gauge_conditions:true,true" "174 up: Gauge length shows for a fatigue specimen (like a tensile coupon) but not for a Charpy specimen"
+fl_check "up_form_choices:disc,ring,cylinder,block,plate,bar,round_bar,tensile_coupon,fatigue_specimen,bend_bar,charpy_specimen,powder,other|true" "174 up: Geometry offers the 13 choices in the planned order, with the two new specimens and Bend bar (ISO 7438)"
+fl_check "up_item_type_hidden:true" "174 up: Item Type is hidden"
+fl_check "up_form_required:true" "174 up: Geometry is required in the form"
+fl_check "up_op_required:method_id=true,sample_id=false" "174 up: Method is required; Input sample is required only through its machining condition"
+fl_check "up_input_sample_when_machining:true" "174 up: Input sample is required when the process category is machining"
+fl_check "up_test_required:session_date=true,test_type=true" "174 up: Test Type and Session Date are required"
+fl_check "up_legacy_test_fields_hidden:true" "174 up: a legacy test field leaves the form"
+fl_check "up_gcode_hidden:true,true" "174 up: the G-code file leaves the form and its show-when-machining condition is cleared"
+fl_check "up_project_inherit:d1-project-inherit" "174 up: Project on an operation fills from its Campaign"
+fl_check "up_campaign_unfiltered:false" "174 up: the Campaign picker is not filtered by campaign type"
+fl_check "up_raw_new_fields:certificate_url,mesh_size_micrometres,purity_percent" "174 up: the raw stock lot's purity, mesh size and certificate fields get rows"
+fl_check "up_surface_choices:true" "174 up: Surface Finish offers As produced and Medium machined"
+fl_check "up_equipment_choices:29,true,true" "174 up: Equipment Type is the 29 stored values with readable text (AM dropped)"
+fl_check "up_insert_application:true,true,true" "174 up: insert type 'Application' offers Finishing / Medium / Roughing only"
+fl_check "up_tools_choices:true" "174 up: tools Op Type offers Parting"
+fl_check "up_tied_sorts:0" "174 up: the seeded tied sorts (tools, forms) are unique"
+fl_check "up_tools_regrouped:0" "174 up: Inventory forms are not regrouped"
+fl_check "up_collection_names:Operations,Samples,Tests" "174 up: collections are named Operations, Samples and Tests in Data Studio"
+fl_check "up_perm:physical_samples.create=true,true" "174 up: Lab Member physical_samples.create leaves out co_owners"
+fl_check "up_perm:physical_samples.update=true,true" "174 up: Lab Member physical_samples.update leaves out co_owners"
+fl_check "up_perm:projects.create=true,true" "174 up: Lab Member projects.create leaves out secondary_investigators"
+fl_check "up_perm:projects.update=true,true" "174 up: Lab Member projects.update leaves out secondary_investigators"
+fl_check "up_backup_llm_select:false" "174 up: the backup table is not readable by the Ask-DB role"
+fl_check "up_backup_commented:true" "174 up: the backup table carries a comment"
+fl_check "again_same:true" "174: the configure script's layout block, run on the migrated state, changes nothing"
+fl_check "down_groups:0" "174 down: every Field group is removed"
+fl_check "down_fields_exact:true" "174 down: every directus_fields row of the ten collections is exactly as before"
+fl_check "down_collections_exact:true" "174 down: collection names are exactly as before"
+fl_check "down_permissions_exact:true" "174 down: the Lab Member rows are exactly as before"
+fl_check "down_raw_new_fields:0" "174 down: the raw stock lot rows it added are removed"
+fl_check "down_backup:gone" "174 down: drops its backup table"
+
 echo "== Sample geometry: round bar form migration =="
 # CI has no Directus bootstrap rows (directus_fields is an empty stub), so seed the pre-migration
 # state, apply the migration's up then down SQL, and assert both — all in a rolled-back transaction.
@@ -459,6 +710,138 @@ lt_check "swap_failed_insert:A4 4×5" "a failed insert with is_default keeps the
 lt_check "occ_version:2" "an update bumps version"
 lt_check "audit_updates:1" "an update of a template is audited"
 lt_check "redown_table:gone" "down runs again after up"
+
+echo "== Batches migration =="
+# Process map slice 2 (ADR-0017): recorded batches. Down and up run inside a rolled-back transaction; the
+# Directus tables are stubs here, so a stand-in field row for sintering_batch_number is seeded with its
+# pre-migration translation ("Batch #", no note) and the metadata is asserted by reading what the SQL wrote.
+BT=db/migrations/20261014000177_batches.sql
+bt_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$BT")
+bt_down=$(awk '/-- migrate:down/{f=1;next}f' "$BT")
+bt_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+DELETE FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+INSERT INTO directus_fields (collection, field, interface, display, hidden, sort, width, translations, note)
+VALUES ('manufacturing_operations', 'sintering_batch_number', 'input', 'raw', true, 381, 'half',
+        '[{"language": "en-US", "translation": "Batch #"}]', NULL);
+$bt_down
+SELECT 'down_table:' || coalesce(to_regclass('batches')::text, 'gone');
+SELECT 'down_seq:' || coalesce(to_regclass('batches_code_seq')::text, 'gone');
+SELECT 'down_cols:' || count(*) FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions') AND column_name = 'batch_id';
+SELECT 'down_fn:' || count(*) FROM pg_proc WHERE proname IN ('batches_fill_code', 'batches_next_code');
+SELECT 'down_meta:' || (SELECT count(*) FROM directus_fields WHERE collection = 'batches' OR field = 'batch_id')
+  || ',' || (SELECT count(*) FROM directus_collections WHERE collection = 'batches')
+  || ',' || (SELECT count(*) FROM directus_permissions WHERE collection = 'batches')
+  || ',' || (SELECT count(*) FROM directus_relations WHERE many_collection = 'batches' OR one_collection = 'batches' OR many_field = 'batch_id');
+SELECT 'down_powder:' || (translations::jsonb = '[{"language": "en-US", "translation": "Batch #"}]'::jsonb) || '/' || (note IS NULL)
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+$bt_up
+SELECT 'up_powder:' || (translations::jsonb = '[{"language": "en-US", "translation": "Powder batch"}]'::jsonb) || '/' || note
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'up_powder_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'up_nullable:' || string_agg(table_name || '=' || is_nullable, ',' ORDER BY table_name) FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions') AND column_name = 'batch_id';
+SELECT 'up_code_col:' || is_nullable || '/' || (column_default LIKE '%batches_next_code()%') FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'batches' AND column_name = 'code';
+SELECT 'up_fk:' || string_agg(conrelid::regclass::text || '=' || confdeltype::text, ',' ORDER BY conrelid::regclass::text) FROM pg_constraint
+  WHERE contype = 'f' AND confrelid = 'batches'::regclass AND conrelid IN ('manufacturing_operations'::regclass, 'test_sessions'::regclass);
+SELECT 'up_indexes:' || string_agg(idx, ',' ORDER BY idx)
+  FROM (SELECT indexname AS idx FROM pg_indexes WHERE schemaname = 'public' AND tablename IN ('manufacturing_operations', 'test_sessions')
+          AND indexdef LIKE '%(batch_id)%') i;
+SELECT 'up_comments:' || (SELECT count(*) FROM information_schema.columns c
+  WHERE c.table_schema = 'public' AND c.table_name = 'batches' AND col_description('batches'::regclass, c.ordinal_position::int) IS NULL)
+  || ',' || (obj_description('batches'::regclass) IS NOT NULL)
+  || ',' || (SELECT count(*) FROM pg_attribute WHERE attname = 'batch_id' AND attrelid IN ('manufacturing_operations'::regclass, 'test_sessions'::regclass)
+              AND col_description(attrelid, attnum) IS NOT NULL);
+SELECT 'up_triggers:' || string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'batches'::regclass AND NOT tgisinternal;
+SELECT 'up_collection:' || icon || '/' || note FROM directus_collections WHERE collection = 'batches';
+SELECT 'up_fields:' || count(*) FROM directus_fields WHERE collection = 'batches';
+SELECT 'up_batch_id_fields:' || string_agg(collection || '/' || interface || '/' || (options::jsonb ->> 'template') || '/' || sort || '/' || note, ';' ORDER BY collection)
+  FROM directus_fields WHERE field = 'batch_id' AND collection IN ('manufacturing_operations', 'test_sessions');
+SELECT 'up_relations:' || count(*) FROM directus_relations WHERE many_collection = 'batches' OR one_collection = 'batches';
+SELECT 'up_perm_rows:' || string_agg(action || '=' || permissions::text, ';' ORDER BY action)
+  FROM directus_permissions WHERE collection = 'batches' AND policy = '20000002-0000-0000-0000-000000000002';
+SELECT 'up_perm_fields:' || string_agg(action || '=' || fields, ';' ORDER BY action)
+  FROM directus_permissions WHERE collection = 'batches' AND policy = '20000002-0000-0000-0000-000000000002';
+INSERT INTO batches (batch_id, notes) VALUES ('c0000000-0000-4000-8000-0000000001b1', 'code left out');
+INSERT INTO batches (batch_id, code, notes) VALUES ('c0000000-0000-4000-8000-0000000001b2', NULL, 'code sent as null');
+INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b3', '  ');
+INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b4', 'B-custom');
+SELECT 'codes:' || string_agg(code, ',' ORDER BY batch_id) FROM batches;
+-- the number is never truncated past four digits: the 10000th batch is B-10000, not B-1000
+SELECT setval('batches_code_seq', 9999);
+INSERT INTO batches (batch_id) VALUES ('c0000000-0000-4000-8000-0000000001b5');
+INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b6', NULL);
+SELECT 'big_codes:' || string_agg(code, ',' ORDER BY batch_id) FROM batches WHERE batch_id IN ('c0000000-0000-4000-8000-0000000001b5', 'c0000000-0000-4000-8000-0000000001b6');
+SAVEPOINT s1;
+INSERT INTO batches (code) VALUES ('B-0001');
+SELECT 'dup_code:accepted';
+ROLLBACK TO SAVEPOINT s1;
+UPDATE batches SET notes = 'edited' WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b4';
+SELECT 'occ_version:' || version FROM batches WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b4';
+SELECT 'audit:' || count(*) FROM audit_logs WHERE table_name = 'batches' AND record_id = 'c0000000-0000-4000-8000-0000000001b4';
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('c0000000-0000-4000-8000-0000000001a1', 'T-BATCH', 'batches test method');
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-4000-8000-0000000001d1', 'TEST-BATCH-001');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code, batch_id) VALUES
+  ('c0000000-0000-4000-8000-0000000001c1', 'c0000000-0000-4000-8000-0000000001a1', 'c0000000-0000-4000-8000-0000000001d1', 'TEST-BATCH-OP', 'c0000000-0000-4000-8000-0000000001b1');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code) VALUES
+  ('c0000000-0000-4000-8000-0000000001c2', 'c0000000-0000-4000-8000-0000000001a1', 'c0000000-0000-4000-8000-0000000001d1', 'TEST-BATCH-OP-2');
+INSERT INTO test_sessions (session_id, batch_id) VALUES ('c0000000-0000-4000-8000-0000000001e1', 'c0000000-0000-4000-8000-0000000001b1');
+SELECT 'attached:' || (SELECT count(*) FROM manufacturing_operations WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b1')
+  || ',' || (SELECT count(*) FROM test_sessions WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b1')
+  || ',' || (SELECT count(*) FROM manufacturing_operations WHERE batch_id IS NULL AND operation_id = 'c0000000-0000-4000-8000-0000000001c2');
+DELETE FROM batches WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b1';
+SELECT 'detached:' || (SELECT count(*) FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-0000000001c1' AND batch_id IS NULL)
+  || ',' || (SELECT count(*) FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001e1' AND batch_id IS NULL);
+INSERT INTO people (person_id, full_name) VALUES ('c0000000-0000-4000-8000-0000000001f1', 'Batch Owner');
+UPDATE batches SET owner_person_id = 'c0000000-0000-4000-8000-0000000001f1' WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b2';
+DELETE FROM people WHERE person_id = 'c0000000-0000-4000-8000-0000000001f1';
+SELECT 'owner_cleared:' || (owner_person_id IS NULL) FROM batches WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b2';
+$bt_down
+SELECT 'redown_table:' || coalesce(to_regclass('batches')::text, 'gone');
+SELECT 'redown_powder:' || (translations::jsonb = '[{"language": "en-US", "translation": "Batch #"}]'::jsonb) || '/' || (note IS NULL)
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'redown_ops:' || count(*) FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-0000000001c2';
+ROLLBACK;
+SQL
+)
+bt_check() { grep -qxF "$1" <<<"$bt_out" && ok "$2" || bad "$2 (psql output: $bt_out)"; }
+bt_check "down_table:gone" "down: batches is dropped"
+bt_check "down_seq:gone" "down: batches_code_seq is dropped"
+bt_check "down_cols:0" "down: batch_id is dropped from operations and tests"
+bt_check "down_fn:0" "down: the code-filling trigger function and batches_next_code() are dropped"
+bt_check "down_meta:0,0,0,0" "down: its Directus fields, collection, permissions and relations are removed"
+bt_check "down_powder:true/true" "down: sintering_batch_number is labelled Batch # again, with no note"
+bt_check 'up_powder:true/The powder batch typed on the FAST press, e.g. TIMET 45-150. Names a raw stock lot but is not linked to it.' "up: sintering_batch_number is Powder batch, with its note"
+bt_check "up_powder_rows:1" "up: sintering_batch_number keeps exactly one field row"
+bt_check "up_nullable:manufacturing_operations=YES,test_sessions=YES" "up: batch_id is nullable on operations and tests"
+bt_check "up_code_col:NO/true" "up: code is NOT NULL and defaults from batches_next_code()"
+bt_check "up_fk:manufacturing_operations=n,test_sessions=n" "up: both batch_id foreign keys are ON DELETE SET NULL"
+bt_check "up_indexes:idx_manufacturing_operations_batch_id,idx_test_sessions_batch_id" "up: both batch_id columns are indexed"
+bt_check "up_comments:0,true,2" "up: every batches column, the table and both batch_id columns carry a COMMENT"
+bt_check "big_codes:B-10000,B-10001" "past B-9999 a default and a null code keep counting (B-10000, B-10001) instead of truncating"
+bt_check "up_triggers:audit_batches,batches_fill_code,occ_batches" "up: audit, code-filling and OCC triggers are attached"
+bt_check "up_collection:inventory_2/Several operations or tests done together as one job" "up: batches is a Directus collection"
+bt_check "up_fields:9" "up: every batches column has a Directus field row"
+bt_check "up_batch_id_fields:manufacturing_operations/select-dropdown-m2o/{{code}}/11/Set when several samples were processed together as one job.;test_sessions/select-dropdown-m2o/{{code}}/9/Set when several samples were processed together as one job." \
+    "up: the batch_id M2O pickers sit beside the date fields, with the note"
+bt_check "up_relations:4" "up: batches relates to people and directus_users, operations and tests relate to batches"
+bt_check 'up_perm_rows:create={};delete={"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}};read={};update={"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}' \
+    "up: Lab Members read and create freely, update and delete only batches they own"
+bt_check "up_perm_fields:create=code,batch_date,notes,owner_person_id;delete=*;read=*;update=code,batch_date,notes,owner_person_id" \
+    "up: Lab Member create and update cannot touch the system columns"
+bt_check "codes:B-0001,B-0002,B-0003,B-custom" "a batch gets B-0001-style codes whether code is left out, null or blank, and an explicit code is kept"
+! grep -qx "dup_code:accepted" <<<"$bt_out" && ok "a duplicate batch code is refused" || bad "a duplicate batch code is refused"
+bt_check "occ_version:2" "an update bumps version"
+bt_check "audit:2" "an insert and an update of a batch are audited under its primary key"
+bt_check "attached:1,1,1" "an operation and a test can join a batch, and an operation can have none"
+bt_check "detached:1,1" "deleting a batch clears batch_id on its operations and tests"
+bt_check "owner_cleared:true" "deleting the owner clears owner_person_id"
+bt_check "redown_table:gone" "down runs again after up"
+bt_check "redown_powder:true/true" "down after up restores the Batch # label"
+bt_check "redown_ops:1" "down keeps the operation rows"
 
 echo "== Sample geometry: legacy forms are back-filled =="
 # Seed old-vocabulary samples, apply the back-fill's up SQL, assert, then ROLLBACK.
@@ -757,7 +1140,7 @@ run "manufacturing_operations.campaign_id column exists" \
 run "test_sessions.campaign_id column exists" \
     "SELECT column_name FROM information_schema.columns
      WHERE table_name='test_sessions' AND column_name='campaign_id'"
-run_eq "campaign_type CHECK restricts to the two kinds" \
+run_eq "campaign_type CHECK restricts to the known kinds" \
     "SELECT count(*) FROM information_schema.check_constraints
      WHERE constraint_name LIKE '%campaign_type%'
        AND check_clause LIKE '%machining_trial%'
@@ -2924,8 +3307,8 @@ grep -qxF "b_project_aliases:operations,samples,sessions" <<<"$cfg_out" && ok "c
     || bad "configure_directus.sql loses a projects alias (output: $cfg_out)"
 # The Owner / Operator / PI pickers (m2o -> people, migration 062) must survive the scripts, which delete
 # the field rows of these collections; otherwise the forms fall back to a raw UUID input.
-grep -qxF "b_pickers_before:12" <<<"$cfg_out" && ok "the migrations leave 12 person picker field rows (owner, operator and PI)" \
-    || bad "expected 12 owner_person_id/operator_person_id/principal_investigator_person field rows after the migrations (output: $cfg_out)"
+grep -qxF "b_pickers_before:13" <<<"$cfg_out" && ok "the migrations leave 13 person picker field rows (owner, operator and PI, and batches' owner)" \
+    || bad "expected 13 owner_person_id/operator_person_id/principal_investigator_person field rows after the migrations (output: $cfg_out)"
 grep -qxF "b_pickers_changed:0" <<<"$cfg_out" && ok "the configure scripts keep every person picker field row, with migration 062's interface, options, display, width, sort and translations" \
     || bad "a configure script drops or changes a person picker field row (output: $cfg_out)"
 grep -qxF "b_picker_relations_lost:0" <<<"$cfg_out" && ok "the configure scripts keep a relation to people for every person picker" \
@@ -2989,6 +3372,14 @@ ll_up="$ll_up
 $pu_up"
 ll_down="$pu_down
 $ll_down"
+# 20261014000174 (form layout) keeps its backup in d1_private and rewrites the field lists of four Lab Member rows (create and update
+# of physical_samples and projects), so it goes down first, before 169, and comes up last, as on a real database.
+fl_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG_FL")
+fl_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG_FL")
+ll_up="$ll_up
+$fl_up"
+ll_down="$fl_down
+$ll_down"
 # 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql
@@ -2997,9 +3388,9 @@ uu_down=$(awk '/-- migrate:down/{f=1;next}f' "$UU")
 # down goes first, as on a real database.
 UP=db/migrations/20261013000170_user_pins_and_prefs.sql
 up_down=$(awk '/-- migrate:down/{f=1;next}f' "$UP")
-# 20261014000174 (people admin) adds three functions in d1_private (and nothing else there), so its down goes
+# 20261014000180 (people admin) adds three functions in d1_private (and nothing else there), so its down goes
 # first: 141's down only drops the schema once it is empty.
-PA=db/migrations/20261014000174_people_admin.sql
+PA=db/migrations/20261014000180_people_admin.sql
 pa_down=$(awk '/-- migrate:down/{f=1;next}f' "$PA")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
@@ -3034,9 +3425,10 @@ INSERT INTO physical_samples (sample_code) VALUES ('TEST-NOOWNER-001');
 "
 rv_out=$($PSQL 2>&1 <<SQL
 BEGIN;
--- migration 143 keeps its ledger in d1_private; drop it (rolled back) so 141's down can drop the empty schema
+-- migrations 143 and 175 keep a ledger in d1_private; drop them (rolled back) so 141's down can drop the empty schema
 DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
 DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
+DROP TABLE IF EXISTS d1_private.form_values_175_backup;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
@@ -3072,9 +3464,9 @@ $jr_up
 $la_up
 $rr_up
 $ll_up
--- 20261012000164 (label_templates, a custom-rows collection) runs after these and adds its four rows, which are the generated ones
+-- 20261012000164 (label_templates) and 20261014000177 (batches), custom-rows collections, run after these and add their rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection = 'label_templates';
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches');
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -3082,8 +3474,8 @@ SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
 $ll_down
 $rr_down
 $la_down
--- the replay's own rows for label_templates go before the older migrations' down sections run
-DELETE FROM directus_permissions WHERE policy = '$LM' AND collection = 'label_templates';
+-- the replay's own rows for label_templates and batches go before the older migrations' down sections run
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches');
 $jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
@@ -3132,7 +3524,8 @@ SELECT 'dn_alias_ops:' || coalesce(one_field, 'null') FROM directus_relations WH
 SELECT 'dn_alias_tests:' || coalesce(one_field, 'null') FROM directus_relations WHERE many_collection='test_sessions' AND many_field='project_id';
 SELECT 'dn_alias_sessions_field:' || note FROM directus_fields WHERE collection='projects' AND field='sessions';
 SELECT 'dn_alias_fields:' || string_agg(field, ',' ORDER BY field) FROM directus_fields WHERE collection='projects' AND field IN ('samples','operations','sessions');
-SELECT 'dn_indexes:' || count(*) FROM pg_indexes WHERE indexname LIKE 'idx\_%\_owner\_person\_id' OR indexname IN ('idx_physical_samples_project_id','idx_sample_co_owners_user_id','idx_project_investigators_user_id');
+-- idx_batches_owner_person_id belongs to 20261014000177 (batches), which this replay never rolls back, so it is not one of the indexes expected to be gone
+SELECT 'dn_indexes:' || count(*) FROM pg_indexes WHERE (indexname LIKE 'idx\_%\_owner\_person\_id' AND tablename <> 'batches') OR indexname IN ('idx_physical_samples_project_id','idx_sample_co_owners_user_id','idx_project_investigators_user_id');
 ROLLBACK;
 SQL
 )
@@ -3536,8 +3929,8 @@ la_check "dn_matches_main:72" "167 down then 166 down: every ruled Lab Member ro
 la_check "dn_access_rows:0" "down: the five access table rows it inserted are gone"
 la_n=$(grep -o '^final_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
 [[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "166 + 167 up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
-[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 2 ))" ]] \
-    && ok "166 alone: every ruled row but project_rollup (167's) and people update (169's) matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
+[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 6 ))" ]] \
+    && ok "166 alone: every ruled row but project_rollup (167's), people update (169's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
 la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
 la_check "up_backup_inserted:12" "up: exactly the twelve new rows (five access tables, six readers tables, operation_open_to_all) are recorded as inserted"
 la_check "up_backup_commented:true" "up: the backup table has a comment"
@@ -5148,6 +5541,78 @@ SQL
 lw_check() { grep -qxF -- "$1" <<<"$ll_norole" && ok "$2" || bad "$2 (wanted $1; got: $(grep -F -e "${1%%:*}:" -e ERROR <<<"$ll_norole" | head -3 | tr '\n' ' ' | cut -c1-300))"; }
 lw_check "norole_policies:0" "168 on a database without d1_llm_readonly: applies with a notice and creates no policy"
 lw_check "norole_rls:0" "168 on a database without d1_llm_readonly: enables no row security"
+
+echo "== Sample stored values: form values migration (175) =="
+# The test database has already run 175's up, so run its down first, seed rows that carry legacy values, run up,
+# assert the mapping and the default, run down, assert the originals are back - all in a rolled-back transaction.
+MIG=db/migrations/20261014000175_form_values.sql
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
+fv_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$mig_down
+SELECT 'down_default:' || count(*) FROM information_schema.columns
+  WHERE table_name='physical_samples' AND column_name='item_type' AND column_default IS NOT NULL;
+SELECT 'down_backup_table:' || count(*) FROM information_schema.tables
+  WHERE table_schema='d1_private' AND table_name='form_values_175_backup';
+INSERT INTO physical_samples (sample_code, item_type, form, surface_finish) VALUES
+  ('TEST-FV175-01', NULL, 'rectangular', 'Machined'),
+  ('TEST-FV175-02', 'sample', 'Cylindrical', ' polished '),
+  ('TEST-FV175-03', 'sample', 'coupon', 'MIRROR'),
+  ('TEST-FV175-04', 'sample', 'BILLET', 'Ground'),
+  ('TEST-FV175-05', 'sample', 'l-profile', 'As produced'),
+  ('TEST-FV175-06', 'sample', 'disc', 'As Produced'),
+  ('TEST-FV175-07', 'sample', 'disc', 'As-sintered'),
+  ('TEST-FV175-08', 'sample', 'disc', 'as_sintered'),
+  ('TEST-FV175-09', 'sample', 'disc', 'N/A'),
+  ('TEST-FV175-10', 'equipment', 'other', 'finish_machined'),
+  ('TEST-FV175-11', 'sample', 'ring', 'rough_machined'),
+  ('TEST-FV175-12', 'sample', 'bend_bar', 'Lapped'),
+  ('TEST-FV175-13', NULL, NULL, NULL);
+CREATE TEMP TABLE fv_orig AS
+  SELECT sample_code, item_type, form, surface_finish FROM physical_samples WHERE sample_code LIKE 'TEST-FV175-%';
+$mig_up
+SELECT 'up_default:' || column_default FROM information_schema.columns
+  WHERE table_name='physical_samples' AND column_name='item_type';
+SELECT 'up_backup_rows:' || count(*) FROM d1_private.form_values_175_backup b
+  JOIN physical_samples ps USING (sample_id) WHERE ps.sample_code LIKE 'TEST-FV175-%';
+SELECT 'up:' || sample_code || ':' || coalesce(item_type, '~') || ':' || coalesce(form, '~') || ':' || coalesce(surface_finish, '~')
+  FROM physical_samples WHERE sample_code LIKE 'TEST-FV175-%';
+INSERT INTO physical_samples (sample_code, form) VALUES ('TEST-FV175-14', 'block');
+SELECT 'up_new_row_item_type:' || item_type FROM physical_samples WHERE sample_code = 'TEST-FV175-14';
+$mig_down
+SELECT 'down_default2:' || count(*) FROM information_schema.columns
+  WHERE table_name='physical_samples' AND column_name='item_type' AND column_default IS NOT NULL;
+SELECT 'down_restored:' || count(*) FROM physical_samples ps JOIN fv_orig o USING (sample_code)
+  WHERE ps.item_type IS NOT DISTINCT FROM o.item_type AND ps.form IS NOT DISTINCT FROM o.form
+    AND ps.surface_finish IS NOT DISTINCT FROM o.surface_finish;
+SELECT 'down_backup_gone:' || count(*) FROM information_schema.tables
+  WHERE table_schema='d1_private' AND table_name='form_values_175_backup';
+ROLLBACK;
+SQL
+)
+fv_check() { grep -qxF -- "$1" <<<"$fv_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$fv_out" | head -40 | tr '\n' ' ' | cut -c1-600))"; }
+fv_check "down_default:0" "175 down: item_type has no default"
+fv_check "down_backup_table:0" "175 down: backup table dropped"
+fv_check "up_default:'sample'::text" "175 up: item_type defaults to sample"
+fv_check "up_backup_rows:10" "175 up: the 10 rows that change are backed up (the three unchanged control rows are not)"
+fv_check "up:TEST-FV175-01:sample:block:medium_machined" "175 up: NULL item_type -> sample, rectangular -> block, Machined -> medium_machined"
+fv_check "up:TEST-FV175-02:sample:cylinder:polished" "175 up: Cylindrical -> cylinder, ' polished ' (case, spaces) -> polished"
+fv_check "up:TEST-FV175-03:sample:tensile_coupon:mirror" "175 up: coupon -> tensile_coupon, MIRROR -> mirror"
+fv_check "up:TEST-FV175-04:sample:cylinder:ground" "175 up: BILLET -> cylinder, Ground -> ground"
+fv_check "up:TEST-FV175-05:sample:other:as_produced" "175 up: l-profile -> other, 'As produced' -> as_produced"
+fv_check "up:TEST-FV175-06:sample:disc:as_produced" "175 up: 'As Produced' -> as_produced"
+fv_check "up:TEST-FV175-07:sample:disc:as_produced" "175 up: 'As-sintered' -> as_produced"
+fv_check "up:TEST-FV175-08:sample:disc:as_produced" "175 up: 'as_sintered' -> as_produced"
+fv_check "up:TEST-FV175-09:sample:disc:none" "175 up: N/A -> none"
+fv_check "up:TEST-FV175-10:equipment:other:finish_machined" "175 up: equipment rows and existing finish codes are untouched"
+fv_check "up:TEST-FV175-11:sample:ring:rough_machined" "175 up: a current form and finish code are untouched"
+fv_check "up:TEST-FV175-12:sample:bend_bar:Lapped" "175 up: an unknown finish is left as it is"
+fv_check "up:TEST-FV175-13:sample:~:~" "175 up: a NULL form and finish stay NULL (only item_type is filled)"
+fv_check "up_new_row_item_type:sample" "175 up: a new row without item_type gets sample"
+fv_check "down_default2:0" "175 down (after up): default dropped again"
+fv_check "down_restored:13" "175 down: every seeded row has its original item_type, form and surface_finish back"
+fv_check "down_backup_gone:0" "175 down (after up): backup table dropped"
 
 echo "== Cleanup test rows =="
 $PSQL -c "

@@ -79,7 +79,7 @@ docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL
 mrc=$?
 [[ $mrc -ne 0 && $trc -eq 0 ]] && trc=$mrc
 
-# The People admin SQL functions (migration 174): attention and access, on a copy of this database (tests/people_admin.sh).
+# The People admin SQL functions (migration 180): attention and access, on a copy of this database (tests/people_admin.sh).
 docker run --rm --network "$NET" -v "$REPO:/repo" -w /repo -e DATABASE_URL="$URL" "$RUNNER" \
   bash tests/people_admin.sh 2>&1
 prc=$?

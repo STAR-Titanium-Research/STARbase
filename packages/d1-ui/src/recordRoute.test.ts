@@ -9,6 +9,9 @@ describe('recordRoute', () => {
 		['test_sessions', '/home/tests/abc'],
 		['campaigns', '/home/campaigns/abc'],
 		['projects', '/home/projects/abc'],
+		['tool_boxes', '/home/tool-boxes/abc'],
+		['cutting_inserts', '/home/inserts/abc'],
+		['insert_edges', '/home/edges/abc'],
 	])('%s has an Explorer page', (collection, route) => {
 		expect(recordRoute(collection, 'abc')).toBe(route);
 	});

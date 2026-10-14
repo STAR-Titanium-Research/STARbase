@@ -144,7 +144,7 @@ Used in the People list, the person panel, "Who has access", record rails (owner
 
 ## 2. Data model
 
-New migrations from **174** (main is at 172, and fix/form-qa takes 173; check other open branches before claiming).
+New migrations from **180** (main took 173 to 175 and 177; the stack was renumbered 180 to 184 after merging main; check other open branches before claiming).
 
 ```sql
 CREATE TABLE teams (
@@ -373,8 +373,9 @@ Where building PR 1 (the admin People page, `docs/superpowers/plans/2026-10-14-p
 - **E7** `email_sent` means "handed to Directus's mailer". Directus sends invites fire-and-forget, so a delivery failure shows only
   in its log; the UI says "sent", never "delivered". A mail error that does surface keeps the login and its link and gives
   `email_sent: false` (the page then points to Resend).
-- **E8 Migration number.** The People admin functions are migration **174** (`20261014000174_people_admin.sql`), not 173:
-  `fix/form-qa` claims 173. The attention counts follow the People page: `login_without_person` counts only active, invited or
+- **E8 Migration number.** The People admin functions are migration **180** (`20261014000180_people_admin.sql`). They were first
+  numbered 173, then 174 (`fix/form-qa` claimed 173); main then gained 173 to 175 and 177 (form blockers, form layout, form
+  values, batches), so the people-and-teams stack was renumbered to start at 180. The attention counts follow the People page: `login_without_person` counts only active, invited or
   suspended logins (archived and draft ones are not listed), and an invited login with no person is in both `login_without_person`
   and `invite_not_accepted`.
 - **E9 Audit trail and header invite.** `PATCH /logins` writes through Directus's `UsersService.updateOne` as the caller (the

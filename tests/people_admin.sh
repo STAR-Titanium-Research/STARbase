@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The People admin SQL functions (People 1, Task 1, migration 20261014000174): d1_private.people_attention(), person_access() and
+# The People admin SQL functions (People 1, Task 1, migration 20261014000180): d1_private.people_attention(), person_access() and
 # person_access_list(). Each case runs in BEGIN ... ROLLBACK on a COPY of the migrated database (CREATE DATABASE ... TEMPLATE),
 # so nothing is left behind and the migrated database itself is never touched.
 # Usage: DATABASE_URL=postgres://d1:pw@host:5432/d1_test bash tests/people_admin.sh      (run by CI and scripts/dev/schema_test_docker.sh)

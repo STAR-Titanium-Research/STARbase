@@ -39,6 +39,8 @@ const classes = computed(() => ({
 .v-button.x-small { min-height: 24px; padding: 0 8px; font-size: var(--fs-xs, 11px); }
 .v-button.large { min-height: 44px; padding: 0 18px; }
 .v-button.icon { width: 36px; padding: 0; }
+.v-button.icon.small { width: 30px; }
+.v-button.icon.x-small { width: 24px; }
 .v-button.rounded { border-radius: 999px; }
 .v-button:disabled { opacity: 0.5; cursor: default; }
 .v-button:focus-visible { outline: 2px solid var(--theme--primary); outline-offset: 2px; }
