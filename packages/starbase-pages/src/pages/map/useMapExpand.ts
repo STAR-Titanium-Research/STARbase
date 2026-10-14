@@ -11,10 +11,9 @@ import { fanPage, fanRowIds, mergeProcessData, withFanPage, withSideFan } from '
 import { loadUsedIn, sampleOfRow } from './model/loadFans';
 import { loadFamilyAndDefs, type DefsByKind } from './model/loadFocus';
 import { CARD_CAP, shownNodes } from './model/reach';
-import type { MapNode, ProcessData, ProcessGraph, Ref } from './model/types';
+import type { MapNode, MapStatus, ProcessData, ProcessGraph, Ref } from './model/types';
 import { stableKeys } from './model/viewState';
 import { refKey } from './nodes/actions';
-import type { MapStatus } from './useProcessMap';
 
 /** What the canvas is told when an expand (not a new focus) changes what is drawn: where the new cards go (spec §6.7). */
 export interface MergeHint {

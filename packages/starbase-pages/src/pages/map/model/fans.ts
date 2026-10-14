@@ -175,23 +175,3 @@ export function fanNodeIds(data: ProcessData, graph: ProcessGraph): Set<string> 
   }
   return out;
 }
-
-/** What a record is called in the page's words: "this tool does not exist", and the crumb that leads back to its list. */
-const WORDS: Record<string, [string, string]> = {
-  physical_samples: ['sample', 'Samples'],
-  manufacturing_operations: ['operation', 'Operations'],
-  test_sessions: ['test', 'Tests'],
-  tools: ['tool', 'Tools'],
-  equipment: ['machine', 'Machines'],
-  insert_edges: ['insert edge', 'Insert edges'],
-  fast_recipes: ['recipe', 'Recipes'],
-  prep_recipes: ['recipe', 'Recipes'],
-  raw_stock_lots: ['stock lot', 'Stock lots'],
-  materials: ['material', 'Materials'],
-  projects: ['project', 'Projects'],
-  campaigns: ['campaign', 'Campaigns'],
-};
-export const recordWord = (collection: string): { one: string; many: string } => {
-  const [one, many] = WORDS[collection] ?? ['record', 'Records'];
-  return { one, many };
-};

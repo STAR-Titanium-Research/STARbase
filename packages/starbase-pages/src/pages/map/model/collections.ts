@@ -19,6 +19,8 @@ interface CollectionInfo {
   sampleFan?: true;
   /** Drawn as a card of the process itself, never as a record inside a card's Inside tray. */
   card?: true;
+  /** What a record of it is called in the page's words ("this tool does not exist") and the crumb that leads back to its list. */
+  word?: readonly [one: string, many: string];
 }
 
 /** Names the code reads by role; the table below is the only other place the strings are written. */
@@ -30,18 +32,18 @@ export const COLLECTION = {
 } as const;
 
 const TABLE: readonly CollectionInfo[] = [
-  { collection: COLLECTION.sample, kind: 'sample', plan: 'sample', card: true },
-  { collection: COLLECTION.operation, kind: 'operation', plan: 'step', card: true },
-  { collection: COLLECTION.test, kind: 'test', plan: 'step', card: true },
-  { collection: COLLECTION.stockLot, kind: 'stock_lot', plan: 'fan' },
-  { collection: 'equipment', kind: 'equipment', plan: 'fan' },
-  { collection: 'tools', kind: 'tool', plan: 'fan' },
-  { collection: 'insert_edges', kind: 'insert_edge', plan: 'fan' },
-  { collection: 'fast_recipes', kind: 'recipe', plan: 'fan' },
-  { collection: 'prep_recipes', kind: 'recipe', plan: 'fan' },
-  { collection: 'materials', kind: 'material', plan: 'fan', sampleFan: true },
-  { collection: 'projects', kind: 'project', plan: 'fan', sampleFan: true },
-  { collection: 'campaigns', kind: 'campaign', plan: 'fan', sampleFan: true },
+  { collection: COLLECTION.sample, kind: 'sample', plan: 'sample', card: true, word: ['sample', 'Samples'] },
+  { collection: COLLECTION.operation, kind: 'operation', plan: 'step', card: true, word: ['operation', 'Operations'] },
+  { collection: COLLECTION.test, kind: 'test', plan: 'step', card: true, word: ['test', 'Tests'] },
+  { collection: COLLECTION.stockLot, kind: 'stock_lot', plan: 'fan', word: ['stock lot', 'Stock lots'] },
+  { collection: 'equipment', kind: 'equipment', plan: 'fan', word: ['machine', 'Machines'] },
+  { collection: 'tools', kind: 'tool', plan: 'fan', word: ['tool', 'Tools'] },
+  { collection: 'insert_edges', kind: 'insert_edge', plan: 'fan', word: ['insert edge', 'Insert edges'] },
+  { collection: 'fast_recipes', kind: 'recipe', plan: 'fan', word: ['recipe', 'Recipes'] },
+  { collection: 'prep_recipes', kind: 'recipe', plan: 'fan', word: ['recipe', 'Recipes'] },
+  { collection: 'materials', kind: 'material', plan: 'fan', sampleFan: true, word: ['material', 'Materials'] },
+  { collection: 'projects', kind: 'project', plan: 'fan', sampleFan: true, word: ['project', 'Projects'] },
+  { collection: 'campaigns', kind: 'campaign', plan: 'fan', sampleFan: true, word: ['campaign', 'Campaigns'] },
   { collection: 'directus_files', kind: 'data_file' },
   { collection: 'people', kind: 'person' },
   { collection: 'directus_users', kind: 'person' },
@@ -78,3 +80,12 @@ export const fanKindOf = (collection: string): Kind => kindOf(collection) ?? 'da
 
 /** The page that shows one record (the Explorer page where there is one, else the Data Studio form). */
 export const recordPath = (collection: string, id: string): string => recordRoute(collection, id);
+
+/** What a record of `collection` is called in the page's words, and the crumb that leads back to its list. */
+export const recordWord = (collection: string): { one: string; many: string } => {
+  const [one, many] = BY_COLLECTION.get(collection)?.word ?? ['record', 'Records'];
+  return { one, many };
+};
+
+/** The collection of an operation or a test: the two step kinds always have one. */
+export const stepCollection = (kind: 'operation' | 'test'): string => (kind === 'operation' ? COLLECTION.operation : COLLECTION.test);

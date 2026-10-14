@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { recordRoute } from '@d1/ui';
-import { COLLECTION, COLLECTIONS, collectionOfKind, fanKindOf, focusPlan, hasFan, isSampleFan, kindOf, recordPath, slotKindOf } from './collections';
+import { COLLECTION, COLLECTIONS, collectionOfKind, fanKindOf, focusPlan, hasFan, isSampleFan, kindOf, recordPath, recordWord, slotKindOf, stepCollection } from './collections';
 import { KINDS } from '../nodes/kinds';
 
 describe('collections table', () => {
@@ -49,5 +49,22 @@ describe('collections table', () => {
   it('sends a record to the page recordRoute names', () => {
     for (const c of COLLECTIONS) expect(recordPath(c, 'a b')).toBe(recordRoute(c, 'a b'));
     expect(recordPath('physical_samples', 'x')).toBe('/home/samples/x');
+  });
+
+  it('names every collection a focus can open on in words, and any other generically', () => {
+    for (const c of COLLECTIONS.filter((x) => focusPlan(x))) {
+      const w = recordWord(c);
+      expect(w.one, c).not.toBe('record');
+      expect(w.many, c).not.toBe('Records');
+    }
+    expect(recordWord('equipment')).toEqual({ one: 'machine', many: 'Machines' });
+    expect(recordWord('nothing')).toEqual({ one: 'record', many: 'Records' });
+  });
+
+  it('knows the collection of both step kinds', () => {
+    expect(stepCollection('operation')).toBe('manufacturing_operations');
+    expect(stepCollection('test')).toBe('test_sessions');
+    expect(stepCollection('operation')).toBe(collectionOfKind('operation'));
+    expect(stepCollection('test')).toBe(collectionOfKind('test'));
   });
 });

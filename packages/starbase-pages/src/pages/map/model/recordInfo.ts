@@ -6,7 +6,7 @@
 
 import { analysisLink, formatDate, humanise, processLabel, type Fact } from '@d1/ui';
 import { LINEAGE_LABEL } from '../nodes/kinds';
-import { collectionOfKind, recordPath, slotKindOf } from './collections';
+import { recordPath, slotKindOf, stepCollection } from './collections';
 import { refKey } from '../nodes/actions';
 import { OTHER_PIECE } from './buildGraph';
 import { nodeOfSocket } from './sockets';
@@ -110,7 +110,7 @@ function containerInfo(id: string, data: ProcessData, node: ContainerNode): Reco
   facts.push({ label: 'Date', value: dateText(rows.map((r) => r.date)) });
   facts.push(...slotFacts(node));
   facts.push(...node.settings.map((s) => ({ label: s.label, value: s.value })));
-  const ref: Ref = { collection: collectionOfKind(node.kind) ?? '', id: first.id, code: first.code };
+  const ref: Ref = { collection: stepCollection(node.kind), id: first.id, code: first.code };
   return {
     id,
     kind: node.kind,

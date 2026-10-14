@@ -8,7 +8,7 @@
 import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { errorText, isNotVisible, useRequestGate, type HostApi } from '@d1/ui';
 import { buildGraph, fanRootId } from './model/buildGraph';
-import { COLLECTION, collectionOfKind, focusPlan, slotKindOf } from './model/collections';
+import { COLLECTION, focusPlan, slotKindOf, stepCollection } from './model/collections';
 import { connectionsOf, type Connections } from './model/connections';
 import { FALLBACK_RELATIONS, formSlots } from './model/formSlots';
 import { groupBatches } from './model/groupBatches';
@@ -19,13 +19,11 @@ import { CARD_CAP, fitReach, type Reach } from './model/reach';
 import { HIDEABLE, SETTINGS_CHIP, drawnNodes, presentKinds as presentKindsOf, readRemembered, writeRemembered } from './model/showChips';
 import { flipKeys, keysOfGroup, nodesWithKey, resolveSelection, selectionKey } from './model/viewState';
 import { recordInfo, type RecordInfo } from './model/recordInfo';
-import type { MapNode, ProcessData, ProcessGraph, Ref } from './model/types';
+import type { MapNode, MapStatus, ProcessData, ProcessGraph, Ref } from './model/types';
 import { refKey } from './nodes/actions';
 import type { Dir } from './model/elkInput';
 import { useMapExpand } from './useMapExpand';
 import { useMapHover } from './useMapHover';
-
-export type MapStatus = 'empty' | 'loading' | 'ready' | 'notVisible' | 'error';
 
 const DEFAULT_REACH: Reach = 2;
 
@@ -308,7 +306,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const rowId = n.rows[0]?.recordId ?? n.group.rowIds[0];
       const row = n.kind === 'operation' ? d.operations.find((o) => o.id === rowId) : d.tests.find((t) => t.id === rowId);
       if (!row) return null;
-      return { ref: { collection: collectionOfKind(n.kind) ?? '', id: row.id, code: row.code }, kind: n.kind };
+      return { ref: { collection: stepCollection(n.kind), id: row.id, code: row.code }, kind: n.kind };
     }
     if (n?.type === 'junction') return recordOf(`s:${n.parentId}`);
     for (const c of graph.value?.nodes ?? []) {

@@ -246,3 +246,6 @@ export interface ProcessGraph {
   hidden: HiddenMarker[];
   truncated: boolean;
 }
+
+/** Where the Process map is in loading its focus. */
+export type MapStatus = 'empty' | 'loading' | 'ready' | 'notVisible' | 'error';

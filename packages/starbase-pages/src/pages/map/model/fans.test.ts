@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildGraph } from './buildGraph';
-import { focusPlan, hasFan } from './collections';
-import { fanData, fanNodeIds, fanPage, fanRowIds, mergeProcessData, recordWord, withFanPage, withSideFan } from './fans';
+import { focusPlan, hasFan, recordWord } from './collections';
+import { fanData, fanNodeIds, fanPage, fanRowIds, mergeProcessData, withFanPage, withSideFan } from './fans';
 import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkStock, mkTest } from './fixtures';
 import type { UsedIn } from './loadFans';
 import type { ProcessData, Ref } from './types';
