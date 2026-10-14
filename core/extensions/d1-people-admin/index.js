@@ -4,7 +4,7 @@
 //
 //   GET /d1-people-admin/people
 //     -> { can_administer_accounts, roles: [{ id, name }],
-//          people: [{ person_id, full_name, email, is_researcher, is_operator, active, notes, user_id,
+//          people: [{ person_id, full_name, email, is_researcher, is_operator, active, notes, user_id, created_at,
 //                     login: null | { status, role_id, role_name, last_access, email }, attention: [key] }],
 //          logins_without_person: [{ user_id, email, first_name, last_name, status, role_id, role_name, last_access }] }
 //   GET /d1-people-admin/attention
@@ -142,7 +142,7 @@ export default {
     router.get('/people', route(async ({ res, admin, accounts }) => {
       requireAdmin(admin);
       const [people, users, roles, attention] = await Promise.all([
-        database('people').select('person_id', 'full_name', 'email', 'is_researcher', 'is_operator', 'active', 'notes', 'user_id'),
+        database('people').select('person_id', 'full_name', 'email', 'is_researcher', 'is_operator', 'active', 'notes', 'user_id', 'created_at'),
         database('directus_users').select('id', 'email', 'first_name', 'last_name', 'status', 'role', 'last_access'),
         database('directus_roles').select('id', 'name'),
         attentionRows(),
@@ -175,6 +175,7 @@ export default {
           active: p.active !== false,
           notes: p.notes ?? null,
           user_id: p.user_id ?? null,
+          created_at: iso(p.created_at),
           login: user ? loginOf(user) : null,
           attention: keysOf.get(String(p.person_id)) ?? [],
         };

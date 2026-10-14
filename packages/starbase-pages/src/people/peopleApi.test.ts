@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
-import { invite, loadAccess, loadPeople, patchLogin, removeDirectGrant } from './peopleApi';
+import { PeopleApiError, invite, loadAccess, loadPeople, patchLogin, removeDirectGrant } from './peopleApi';
 
 const fakeApi = (over: Partial<Record<keyof HostApi, any>> = {}): HostApi & Record<keyof HostApi, ReturnType<typeof vi.fn>> =>
 	({
@@ -48,6 +48,12 @@ describe('loadPeople', () => {
 		]);
 	});
 
+	it('a member row carries created_at from /items/people', async () => {
+		const api = fakeApi({ get: vi.fn(async () => ({ data: { data: [{ person_id: 'p1', full_name: 'Ann', created_at: '2026-03-01T09:30:00Z' }, { person_id: 'p2', full_name: 'Bo' }] } })) });
+		const rows = (await loadPeople(api, false)).rows;
+		expect(rows.map((r) => r.created_at)).toEqual(['2026-03-01T09:30:00Z', null]);
+	});
+
 	it('throws the endpoint message', async () => {
 		const api = fakeApi({ get: vi.fn(async () => { throw refused('Only an administrator can open this.'); }) });
 		await expect(loadPeople(api, true)).rejects.toThrow('Only an administrator can open this.');
@@ -76,6 +82,21 @@ describe('the other calls', () => {
 			const api = fakeApi({ post: vi.fn(async () => ({ status, data: { user_id: 'u1', person_id: 'p1', status: 'invited', email_sent: true } })) });
 			expect(await invite(api, { email: 'a@x.y', full_name: 'Ann' })).toMatchObject({ user_id: 'u1', email_sent: true });
 		}
+	});
+
+	it('a refusal keeps its status, code and extensions (EMAIL_HAS_LOGIN names the person)', async () => {
+		const err = Object.assign(new Error('Request failed with status code 409'), {
+			response: { status: 409, data: { errors: [{ message: 'That e-mail already has a login.', extensions: { code: 'EMAIL_HAS_LOGIN', source: 'd1-people-admin', person_id: 'p9' } }] } },
+		});
+		const api = fakeApi({ post: vi.fn(async () => { throw err; }) });
+		const caught = await invite(api, { email: 'a@x.y', full_name: 'Ann' }).catch((e) => e);
+		expect(caught).toBeInstanceOf(PeopleApiError);
+		expect(caught).toMatchObject({ message: 'That e-mail already has a login.', status: 409, code: 'EMAIL_HAS_LOGIN' });
+		expect(caught.extensions.person_id).toBe('p9');
+		// a network error has no response: message only
+		const down = await invite(fakeApi({ post: vi.fn(async () => { throw new Error('Network Error'); }) }), { email: 'a@x.y' }).catch((e) => e);
+		expect(down).toBeInstanceOf(PeopleApiError);
+		expect(down).toMatchObject({ message: 'Network Error', status: undefined, code: undefined });
 	});
 
 	it('removeDirectGrant calls the record-access entries route', async () => {

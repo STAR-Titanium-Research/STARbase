@@ -19,9 +19,9 @@ const PROJECT = ID(5);
 
 const baseTables = () => ({
   people: [
-    { person_id: P.ann, full_name: 'Ann Member', email: 'ann@people.example', is_researcher: true, is_operator: false, active: true, notes: 'hello', user_id: U.ann },
+    { person_id: P.ann, full_name: 'Ann Member', email: 'ann@people.example', is_researcher: true, is_operator: false, active: true, notes: 'hello', user_id: U.ann, created_at: new Date('2026-03-01T09:30:00Z') },
     { person_id: P.bob, full_name: 'Bob Member', email: null, is_researcher: true, is_operator: true, active: true, notes: null, user_id: U.bob },
-    { person_id: P.cy, full_name: 'Cy Nologin', email: 'cy@people.example', is_researcher: false, is_operator: true, active: false, notes: null, user_id: null },
+    { person_id: P.cy, full_name: 'Cy Nologin', email: 'cy@people.example', is_researcher: false, is_operator: true, active: false, notes: null, user_id: null, created_at: '2026-05-02T00:00:00Z' },
     { person_id: P.dee, full_name: 'Dee Labadmin', email: 'dee@people.example', is_researcher: true, is_operator: false, active: true, notes: null, user_id: U.labAdmin },
   ],
   directus_users: [
@@ -251,13 +251,15 @@ test('GET /people joins login status, role name and last_access, and lists login
   const byName = Object.fromEntries(r.body.people.map((p) => [p.full_name, p]));
   assert.deepEqual(r.body.people.map((p) => p.full_name), ['Ann Member', 'Bob Member', 'Cy Nologin', 'Dee Labadmin']);
   assert.deepEqual(byName['Ann Member'], {
-    person_id: P.ann, full_name: 'Ann Member', email: 'ann@people.example', is_researcher: true, is_operator: false, active: true, notes: 'hello', user_id: U.ann,
+    person_id: P.ann, full_name: 'Ann Member', email: 'ann@people.example', is_researcher: true, is_operator: false, active: true, notes: 'hello', user_id: U.ann, created_at: '2026-03-01T09:30:00.000Z',
     login: { status: 'active', role_id: R.member, role_name: 'Lab Member', last_access: '2026-10-13T08:00:00.000Z', email: 'ann@login.example' },
     attention: ['possible_duplicate'],
   });
   assert.equal(byName['Bob Member'].login.status, 'invited');
   assert.equal(byName['Bob Member'].login.last_access, null);
   assert.deepEqual(byName['Bob Member'].attention, ['invite_not_accepted', 'possible_duplicate']);
+  assert.equal(byName['Cy Nologin'].created_at, '2026-05-02T00:00:00.000Z'); // for the "recently added" sort
+  assert.equal(byName['Bob Member'].created_at, null); // a row without one
   assert.equal(byName['Cy Nologin'].login, null);
   assert.equal(byName['Cy Nologin'].user_id, null);
   assert.equal(byName['Cy Nologin'].active, false);

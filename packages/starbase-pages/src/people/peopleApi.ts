@@ -57,12 +57,34 @@ export interface PersonAccess {
 	records?: AccessRecord[];
 }
 
+/**
+ * What a failed call throws: the endpoint's message, plus its HTTP status, error code and `extensions` so a page can act on them
+ * (the invite dialog answers 409 EMAIL_HAS_LOGIN with extensions.person_id, "link to this person instead"). All unset for a network error.
+ */
+export class PeopleApiError extends Error {
+	status?: number;
+	code?: string;
+	extensions?: Record<string, unknown>;
+	constructor(message: string, detail: { status?: number; code?: string; extensions?: Record<string, unknown> } = {}) {
+		super(message);
+		this.name = 'PeopleApiError';
+		this.status = detail.status;
+		this.code = detail.code;
+		this.extensions = detail.extensions;
+	}
+}
+
 async function call<T>(work: () => Promise<{ data: any }>, shape: (body: any) => T): Promise<T> {
 	let body: unknown;
 	try {
 		body = (await work()).data;
-	} catch (e) {
-		throw new Error(errorText(e, 'Could not reach the server.'));
+	} catch (e: any) {
+		const first = e?.response?.data?.errors?.[0];
+		throw new PeopleApiError(errorText(e, 'Could not reach the server.'), {
+			status: e?.response?.status,
+			code: first?.extensions?.code,
+			extensions: first?.extensions,
+		});
 	}
 	return shape(body ?? {});
 }
