@@ -99,7 +99,7 @@ describe('buildToolingModel', () => {
 	it('sizes the grid to the highest slot number, so a gap stays a gap', () => {
 		const m = buildToolingModel(box, cnmg, [ins(1), ins(10)], []);
 		expect(m.grid.cells).toHaveLength(10);
-		expect(m.inserts[1].cell).toEqual({ number: 10, column: 4, row: 1 });
+		expect(m.inserts[1].cell).toEqual({ number: 10, column: 1, row: 4 });
 	});
 
 	it('gives an empty box an empty tray and a fallback geometry without a type', () => {

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import './tokens.css';
 
-// A record page with a side rail: a breadcrumb line, then the rail (300px, left, sticky) beside the
-// main column. Slots: `crumbs`, `title-actions` (buttons at the right of the breadcrumb line, e.g. Pin), `rail` (a RecordRail, or anything), and the default slot (the panels).
+// A record page with a side rail: a breadcrumb line, then the rail (left, sticky) beside the
+// main column. The rail is 300px wide; a page that needs more sets `--d1-rail-width` on this component's root
+// (the tooling pages use 360px for their tall stage). Slots: `crumbs`, `title-actions` (buttons at the right of the breadcrumb line, e.g. Pin), `rail` (a RecordRail, or anything), and the default slot (the panels).
 //
 // Sticky offset: the rail sticks at `top: var(--d1-sticky-top, 0px)` and its height is capped to the
 // window under it. The default is 0px (no bar above). The page inside the Data Studio sets the height
@@ -33,7 +34,7 @@ import './tokens.css';
 .d1-record-layout { display: flex; flex-direction: column; gap: 16px; min-width: 0; container-type: inline-size; }
 .top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
 .title-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-.grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
+.grid { display: grid; grid-template-columns: var(--d1-rail-width, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .rail {
 	position: sticky;
 	top: var(--d1-sticky-top, 0px);

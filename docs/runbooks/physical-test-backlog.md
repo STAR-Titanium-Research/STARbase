@@ -1063,12 +1063,21 @@ migration 141 prints about ownerless records.
   insert lifts out of its pocket; edge letters on the hidden underside are faded; the next fresh edge glows, pulses for
   about 2.4 s after each move and then rests at full strength (and does not pulse in a hidden tab); with the OS set to reduce motion, moves are instant and nothing pulses. The fan stays
   quiet when the page sits idle (no render loop at rest). Then turn WebGL off (Chrome `chrome://flags` → disable
-  WebGL, or Firefox `webgl.disabled`) and reload: the 2D slot grid shows, with the same clicks and addresses. Shrink
-  the window below 600 px wide: the 2D grid too. Since: tooling pages, S2.
+  WebGL, or Firefox `webgl.disabled`) and reload: the 2D slot grid shows, with the same clicks and addresses. The
+  stage is a tall tile in the left rail (about 360 px wide, up to 560 px tall); with a very short browser window it
+  shrinks but stays at least 380 px, and under 1000 px of page width it sits above the panels. Since: tooling pages, S2;
+  rail stage in #286.
 - [ ] **TOOL-4 — Edge letters match the physical insert.** Take a used CNMG from a real box, hold it with the reference
   mark up, and compare with its insert page. Expect: A is the corner nearest the mark, B the next cutting corner
   clockwise, C directly under A and D under B, and the edges marked used on the page are the worn ones. Repeat with a
   single-sided insert (CCMT): only A and B. Since: tooling pages (lettering rule in `CONTEXT.md` › Tooling).
+- [ ] **TOOL-5 — A real PCD box: one insert, one edge.** Open a real PCD (or PCBN) tool box that holds one tipped
+  insert with one edge. Expect: the box is a small single case with the insert filling about 60 % of the stage; a
+  lighter, shiny tip pad (silver for PCD, warm dark gold-grey for PCBN) shows on corner A, covering the nose and about
+  3 mm of each side; there is no edge B and no other tipped corner; click the insert, then edge A: both work, and
+  the next-fresh card points at A while it is fresh. Compare the pad with the real tip (which corner, how far along the
+  sides). Check light and dark. Also open a normal 10-insert box: the grid is 2 columns by 5 rows, numbered left to
+  right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

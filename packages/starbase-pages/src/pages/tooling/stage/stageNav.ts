@@ -90,3 +90,8 @@ export function stepFocus(model: ToolingModel, focus: ToolingFocus, key: NavKey,
 export function escapeFocus(focus: ToolingFocus): ToolingFocus | null {
 	return focusParent(focus);
 }
+
+// 3D needs room: the stage itself at least this wide and tall (px). A smaller one gets the 2D grid.
+export const MIN_3D_WIDTH = 260;
+export const MIN_3D_HEIGHT = 360;
+export const stageFits3d = (width: number, height: number): boolean => width >= MIN_3D_WIDTH && height >= MIN_3D_HEIGHT;

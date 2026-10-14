@@ -156,15 +156,23 @@ export function buildInsertGeometry(geom: InsertGeometry, outline: InsertOutline
 }
 
 // The reference mark: a small flat triangle on the top face, pointing at corner 0.
-export function buildReferenceMark(geom: InsertGeometry, outline: InsertOutline): BufferGeometry {
+// Where the mark sits along corner 0's bisector (from the centre): its middle, and the end nearest the corner.
+// On a tipped insert it moves in toward the hole, to leave the corner to the tip pad (tipMesh.ts).
+export function markDistance(geom: InsertGeometry, outline: InsertOutline): { size: number; centre: number; end: number } {
 	const c0 = outline.corners[0];
 	const holeR = geom.holeDiameterMm ? geom.holeDiameterMm / 2 : 0;
 	const tip = Math.hypot(c0.x, c0.y) + (geom.shape === 'R' ? 0 : geom.noseRadiusMm);
-	const d = Math.max((holeR * 1.5 + tip) / 2, holeR * 1.6);
+	const size = Math.max(0.5, Math.min(1, geom.icMm / 12));
+	const centre = geom.tipMaterial ? Math.max(holeR * 1.6, 0.5) + size * 0.4 : Math.max((holeR * 1.5 + tip) / 2, holeR * 1.6);
+	return { size, centre, end: centre + size * 0.6 };
+}
+
+export function buildReferenceMark(geom: InsertGeometry, outline: InsertOutline): BufferGeometry {
+	const c0 = outline.corners[0];
+	const { size, centre: d } = markDistance(geom, outline);
 	const a = (c0.bisectorDeg * Math.PI) / 180;
 	const dir: Pt = [Math.cos(a), Math.sin(a)];
 	const side: Pt = [-dir[1], dir[0]];
-	const size = Math.max(0.5, Math.min(1, geom.icMm / 12));
 	const p = (along: number, across: number): Vector2 => new Vector2(dir[0] * along + side[0] * across, dir[1] * along + side[1] * across);
 	const shape = new Shape([p(d + size * 0.6, 0), p(d - size * 0.4, -size * 0.45), p(d - size * 0.4, size * 0.45)]);
 	const g = new ExtrudeGeometry(shape, { depth: 0.06, bevelEnabled: false });
@@ -177,12 +185,14 @@ export function buildReferenceMark(geom: InsertGeometry, outline: InsertOutline)
 
 const lerp2 = (a: Pt, b: Pt, t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 
-// The outline run that is one edge: the nose arc plus a quarter of each side beside it (top-view coordinates).
-export function edgeRun(geom: InsertGeometry, outline: InsertOutline, corner: number): Pt[] {
+// The outline points of one corner's nose arc, with the points just outside it: the previous corner's last point
+// (`before`) and the next corner's first (`after`), so the straight sides beside the arc run from `run[0]` to
+// `before` and from `run[last]` to `after` (top-view coordinates).
+export function arcRun(geom: InsertGeometry, outline: InsertOutline, corner: number): { run: Pt[]; before: Pt; after: Pt } | null {
 	const pts = outline.points;
 	const n = pts.length;
 	const c = outline.corners[corner];
-	if (!c || n === 0) return [];
+	if (!c || n === 0) return null;
 	let inArc: boolean[];
 	if (geom.shape === 'R') {
 		const half = (360 / geom.cornerCount) * 0.25;
@@ -198,12 +208,18 @@ export function edgeRun(geom: InsertGeometry, outline: InsertOutline, corner: nu
 	let start = inArc.findIndex((v, i) => v && !inArc[(i - 1 + n) % n]);
 	if (start < 0) {
 		start = inArc.findIndex((v) => v);
-		if (start < 0) return [];
+		if (start < 0) return null;
 	}
 	const run: Pt[] = [];
 	for (let k = 0; k < n && inArc[(start + k) % n]; k++) run.push(pts[(start + k) % n]);
-	const before = pts[(start - 1 + n) % n];
-	const after = pts[(start + run.length) % n];
+	return { run, before: pts[(start - 1 + n) % n], after: pts[(start + run.length) % n] };
+}
+
+// The outline run that is one edge: the nose arc plus a quarter of each side beside it (top-view coordinates).
+export function edgeRun(geom: InsertGeometry, outline: InsertOutline, corner: number): Pt[] {
+	const arc = arcRun(geom, outline, corner);
+	if (!arc) return [];
+	const { run, before, after } = arc;
 	return [lerp2(run[0], before, EDGE_SIDE_FRACTION), ...run, lerp2(run[run.length - 1], after, EDGE_SIDE_FRACTION)];
 }
 

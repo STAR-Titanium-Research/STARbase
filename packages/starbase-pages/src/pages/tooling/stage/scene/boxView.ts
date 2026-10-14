@@ -16,6 +16,7 @@ import {
 } from './pick';
 import { buildPocketRingGeometry, buildTrayGeometry, slotLabelAnchor, slotPosition, trayLayout, type TrayLayout } from './trayMesh';
 import type { Vec3 } from './cameraRig';
+import { buildTipGeometry } from './tipMesh';
 
 const SELECTED_RADIUS_MM = 0.36;
 const HOVER_RADIUS_MM = 0.3;
@@ -44,6 +45,7 @@ export class BoxView {
 	private readonly solid: InstancedMesh;
 	private readonly ghost: InstancedMesh;
 	private readonly marks: InstancedMesh;
+	private readonly tips: InstancedMesh | null = null; // brazed PCD / PCBN pads, only for a tipped insert type
 	private readonly rings = new Map<string, Mesh>();
 	private readonly edges: EdgeItem[] = [];
 	private readonly selected: Mesh;
@@ -78,7 +80,13 @@ export class BoxView {
 		this.ghost = new InstancedMesh(bodyGeo, mats.bodyGhost, n);
 		this.marks = new InstancedMesh(markGeo, mats.mark, n);
 		this.ghost.renderOrder = 2;
-		for (const im of [this.solid, this.ghost, this.marks]) {
+		const tipGeo = buildTipGeometry(model.geometry, model.outline);
+		if (tipGeo) {
+			own(tipGeo);
+			this.tips = new InstancedMesh(tipGeo, model.geometry.tipMaterial === 'cbn' ? mats.tipCbn : mats.tipPcd, n);
+			this.tips.name = 'tips';
+		}
+		for (const im of [this.solid, this.ghost, this.marks, ...(this.tips ? [this.tips] : [])]) {
 			im.count = 0;
 			im.frustumCulled = false;
 			this.root.add(im);
@@ -149,6 +157,7 @@ export class BoxView {
 		fill(this.solid, split.solid);
 		fill(this.ghost, split.ghost);
 		fill(this.marks, split.solid);
+		if (this.tips) fill(this.tips, split.solid);
 
 		const focusInsert = focus.kind === 'box' ? null : focus.insertId;
 		for (const i of this.model.inserts) {
@@ -228,7 +237,7 @@ export class BoxView {
 		for (const g of this.geometries) g.dispose();
 		this.cache.dispose();
 		this.pickMaterial.dispose();
-		for (const im of [this.solid, this.ghost, this.marks]) im.dispose();
+		for (const im of [this.solid, this.ghost, this.marks, ...(this.tips ? [this.tips] : [])]) im.dispose();
 		this.root.clear();
 	}
 }

@@ -92,7 +92,10 @@ function pickEdge(e: ToolingEdge): void {
 .grid2d {
 	box-sizing: border-box;
 	width: 100%;
-	padding: 20px;
+	min-height: 100%;
+	display: flex;
+	flex-direction: column;
+	padding: 14px;
 	font-family: var(--theme--fonts--sans--font-family, 'Inter', system-ui, sans-serif);
 	color: var(--theme--foreground);
 }
@@ -100,9 +103,10 @@ function pickEdge(e: ToolingEdge): void {
 .slots {
 	display: grid;
 	grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+	grid-auto-rows: minmax(64px, 1fr);
 	gap: 8px;
-	max-width: 880px;
-	margin: 0 auto;
+	flex: 1;
+	width: 100%;
 }
 .slot {
 	position: relative;
@@ -158,6 +162,9 @@ button.slot:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--pri
 	color: var(--d1-dim, var(--theme--foreground-subdued));
 }
 svg { width: 100%; max-height: 280px; }
+/* Both faces share the portrait stage: each gets about half of it. */
+.faces.two svg { max-height: 190px; }
+.faces.two { gap: 6px 24px; }
 .body {
 	fill: color-mix(in srgb, var(--theme--foreground) 14%, var(--d1-tile, var(--theme--background-subdued)));
 	stroke: color-mix(in srgb, var(--theme--foreground) 55%, transparent);

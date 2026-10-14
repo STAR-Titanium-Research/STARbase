@@ -183,7 +183,7 @@ export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
 export { parseIsoDesignation, SHAPE_ANGLE_DEG } from './tooling/isoDesignation';
 export type { IsoInsert, ShapeLetter } from './tooling/isoDesignation';
 export { resolveInsertGeometry, insertOutline, DEFAULT_IC_MM, DEFAULT_THICKNESS_MM, DEFAULT_NOSE_RADIUS_MM } from './tooling/insertGeometry';
-export type { InsertGeometry, InsertCorner, InsertOutline, InsertTypeRow } from './tooling/insertGeometry';
+export type { InsertGeometry, InsertCorner, InsertOutline, InsertTypeRow, TipMaterial } from './tooling/insertGeometry';
 export { normaliseEdgeLetter, placeEdge } from './tooling/edgePlacement';
 export type { EdgePlacement } from './tooling/edgePlacement';
 export { slotGrid } from './tooling/boxLayout';

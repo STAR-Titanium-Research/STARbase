@@ -30,6 +30,9 @@ export class SceneMaterials {
 		metalness: 0.6, roughness: 0.35, transparent: true, opacity: GHOST_OPACITY, depthWrite: false,
 	});
 	readonly mark = new MeshStandardMaterial({ metalness: 0.2, roughness: 0.5 });
+	// Brazed tips: lighter and shinier than the carbide body.
+	readonly tipPcd = new MeshStandardMaterial({ metalness: 0.7, roughness: 0.26 });
+	readonly tipCbn = new MeshStandardMaterial({ metalness: 0.65, roughness: 0.36 });
 	readonly tray = new MeshStandardMaterial({ metalness: 0.02, roughness: 0.82 });
 	readonly shadow = new MeshBasicMaterial({ color: 0x000000, transparent: true, depthWrite: false, toneMapped: false });
 	readonly ring: Record<RingTone, MeshBasicMaterial> = {
@@ -51,6 +54,8 @@ export class SceneMaterials {
 		setColor(this.body.color, p.body);
 		setColor(this.bodyGhost.color, p.body);
 		setColor(this.mark.color, p.mark);
+		setColor(this.tipPcd.color, p.tipPcd);
+		setColor(this.tipCbn.color, p.tipCbn);
 		setColor(this.tray.color, p.tray);
 		this.shadow.opacity = this.isDark ? 0.55 : 0.26;
 		setColor(this.ring.fresh.color, p.ok);
@@ -73,7 +78,7 @@ export class SceneMaterials {
 
 	dispose(): void {
 		const all: Material[] = [
-			this.body, this.bodyGhost, this.mark, this.tray, this.shadow,
+			this.body, this.bodyGhost, this.mark, this.tipPcd, this.tipCbn, this.tray, this.shadow,
 			...Object.values(this.ring), ...Object.values(this.edge),
 		];
 		for (const m of all) m.dispose();

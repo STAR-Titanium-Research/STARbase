@@ -10,6 +10,10 @@ export const PALETTE_EXPRESSIONS = {
 	ink: 'var(--theme--foreground)',
 	body: 'light-dark(color-mix(in srgb, var(--theme--foreground) 88%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 28%, var(--theme--background)))',
 	mark: 'light-dark(color-mix(in srgb, var(--theme--foreground) 38%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 85%, var(--theme--background)))',
+	// Brazed tips, lighter than the carbide body in both themes. PCD is near-silver; CBN is a warm, dark gold-grey
+	// (the warning amber stirred into a grey from the same foreground).
+	tipPcd: 'light-dark(color-mix(in srgb, var(--theme--foreground) 14%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 86%, var(--theme--background)))',
+	tipCbn: 'color-mix(in srgb, var(--d1-warn, var(--theme--warning)) 42%, light-dark(color-mix(in srgb, var(--theme--foreground) 52%, var(--theme--background)), color-mix(in srgb, var(--theme--foreground) 50%, var(--theme--background))))',
 	ok: 'var(--d1-ok, var(--theme--success))',
 	warn: 'var(--d1-warn, var(--theme--warning))',
 	dim: 'var(--d1-dim, var(--theme--foreground-subdued))',

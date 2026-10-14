@@ -18,7 +18,7 @@ import EdgePanels from './EdgePanels.vue';
 
 // Tooling page: a tool box, a cutting insert and an insert edge on ONE route record
 // (:kind(tool-boxes|inserts|edges)/:id), so moving from the box to an insert to an edge keeps this
-// component, and the stage's WebGL context, alive. The stage holds the selection by emitting `select`;
+// component, and the stage's WebGL context, alive. The stage sits in the rail (RecordRail's `extra` slot). It holds the selection by emitting `select`;
 // the page turns it into a route, and the focus is read back from the route, so Back and Forward move
 // the camera. Design: docs/superpowers/specs/2026-10-14-tooling-3d-pages-design.md.
 const props = defineProps<{ kind: string; id: string }>();
@@ -117,7 +117,8 @@ const contents = computed<ContentsEntry[]>(() => {
 
 			<template v-else-if="model && focus">
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
-				<RecordLayout style="--d1-sticky-top: var(--d1-header-offset, 70px)">
+				<!-- The rail is 360px here (default 300): it holds the tall stage. -->
+				<RecordLayout style="--d1-sticky-top: var(--d1-header-offset, 70px); --d1-rail-width: 360px">
 					<template #crumbs>
 						<AppLink to="/home">Home</AppLink>
 						<span>›</span>
@@ -147,11 +148,13 @@ const contents = computed<ContentsEntry[]>(() => {
 								<v-button v-if="canUpdate !== false" icon small title="Edit" aria-label="Edit" @click="editing = true"><v-icon name="edit" small /><span class="sr-only">Edit</span></v-button>
 								<v-button icon small secondary :to="studioTo" title="Data Studio" aria-label="Data Studio"><v-icon name="open_in_new" small /><span class="sr-only">Data Studio</span></v-button>
 							</template>
+							<!-- The stage lives in the rail, in a slot that is always present, with no v-if or key on the way: moving
+							     between box, insert and edge never remounts it, so the WebGL context survives. -->
+							<template #extra>
+								<ToolingStage :model="model" :focus="focus" :next-fresh="nextFresh" @select="onSelect" />
+							</template>
 						</RecordRail>
 					</template>
-
-					<!-- Outside every v-if that flips while moving inside a box: the stage and its WebGL context stay mounted. -->
-					<ToolingStage :model="model" :focus="focus" :next-fresh="nextFresh" @select="onSelect" />
 
 					<template v-if="focusKind === 'box'">
 						<BoxPanels :model="model" :type="boxRow?.insert_type_id ?? null" :next-fresh="nextFresh" :counts="edgeCounts" :manufacturer="manufacturer" />
