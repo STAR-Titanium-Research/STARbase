@@ -6,36 +6,46 @@ describe('slotGrid', () => {
 		expect(slotGrid(1)).toEqual({ columns: 1, rows: 1, cells: [{ number: 1, column: 0, row: 0 }] });
 	});
 
-	it('keeps up to four slots on one row', () => {
+	it('stands 2 slots in one column of two, and 3 in one column of three', () => {
+		expect(slotGrid(2)).toMatchObject({ columns: 1, rows: 2 });
+		expect(slotGrid(3)).toMatchObject({ columns: 1, rows: 3 });
+	});
+
+	it('lays 4 slots out 2 x 2 in reading order', () => {
 		const g = slotGrid(4);
-		expect(g.columns).toBe(4);
-		expect(g.rows).toBe(1);
-		expect(g.cells.map((c) => c.column)).toEqual([0, 1, 2, 3]);
-		expect(g.cells.every((c) => c.row === 0)).toBe(true);
+		expect([g.columns, g.rows]).toEqual([2, 2]);
+		expect(g.cells.map((c) => [c.column, c.row])).toEqual([[0, 0], [1, 0], [0, 1], [1, 1]]);
 	});
 
-	it('lays 5 slots out 4 x 2', () => {
+	it('lays 5 slots out 2 x 3', () => {
 		const g = slotGrid(5);
-		expect([g.columns, g.rows]).toEqual([4, 2]);
-		expect(g.cells[4]).toEqual({ number: 5, column: 0, row: 1 });
+		expect([g.columns, g.rows]).toEqual([2, 3]);
+		expect(g.cells[4]).toEqual({ number: 5, column: 0, row: 2 });
 	});
 
-	it('lays 10 slots out 5 x 2 in reading order, numbered from 1', () => {
+	it('lays 10 slots out 2 columns x 5 rows in reading order, numbered from 1', () => {
 		const g = slotGrid(10);
-		expect([g.columns, g.rows]).toEqual([5, 2]);
+		expect([g.columns, g.rows]).toEqual([2, 5]);
 		expect(g.cells).toHaveLength(10);
 		expect(g.cells[0]).toEqual({ number: 1, column: 0, row: 0 });
-		expect(g.cells[4]).toEqual({ number: 5, column: 4, row: 0 });
-		expect(g.cells[5]).toEqual({ number: 6, column: 0, row: 1 });
-		expect(g.cells[9]).toEqual({ number: 10, column: 4, row: 1 });
+		expect(g.cells[1]).toEqual({ number: 2, column: 1, row: 0 });
+		expect(g.cells[2]).toEqual({ number: 3, column: 0, row: 1 });
+		expect(g.cells[9]).toEqual({ number: 10, column: 1, row: 4 });
 	});
 
-	it('lays 12 slots out 6 x 2 and 50 slots out 12 x 5', () => {
-		expect(slotGrid(12)).toMatchObject({ columns: 6, rows: 2 });
+	it('lays 12 slots out 3 x 4 and 50 slots out 5 x 10', () => {
+		expect(slotGrid(12)).toMatchObject({ columns: 3, rows: 4 });
 		const g = slotGrid(50);
-		expect([g.columns, g.rows]).toEqual([12, 5]);
+		expect([g.columns, g.rows]).toEqual([5, 10]);
 		expect(g.cells).toHaveLength(50);
-		expect(g.cells[49]).toEqual({ number: 50, column: 1, row: 4 });
+		expect(g.cells[49]).toEqual({ number: 50, column: 4, row: 9 });
+	});
+
+	it('is always portrait: never more columns than rows', () => {
+		for (let n = 1; n <= 120; n++) {
+			const g = slotGrid(n);
+			expect(g.rows).toBeGreaterThanOrEqual(g.columns);
+		}
 	});
 
 	it('numbers every slot once, with no cell outside the grid', () => {
