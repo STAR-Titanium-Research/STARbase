@@ -362,7 +362,9 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       data.value = loaded.data;
       if (plan === 'fan') fanPages.set(`${f.collection}:${f.id}`, 1);
       else familyLoaded = new Set(loaded.data.samples.map((s) => s.id));
-      selectedKey.value = focusNodeId.value || null;
+      // A step is selected by its own row, which any container holding it answers to (a probable batch's id changes with the chip).
+      const fd = loaded.data.focus;
+      selectedKey.value = fd.kind === 'operation' || fd.kind === 'test' ? `${fd.kind}:${fd.id}` : focusNodeId.value || null;
       status.value = 'ready';
     } catch (e) {
       if (!gate.isCurrent(token)) return;

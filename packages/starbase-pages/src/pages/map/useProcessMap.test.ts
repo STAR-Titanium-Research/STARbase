@@ -603,6 +603,28 @@ describe('focus kinds (D20)', () => {
     expect(map.shown.value.has(map.focusNodeId.value)).toBe(true);
   });
 
+  it('the operation a map opened on stays selected, as itself, when the Probable batches chip is turned off (I2)', async () => {
+    const data = mkData({
+      samples: [mkSample('p'), mkSample('a'), mkSample('b')],
+      operations: [
+        mkOp({ id: 'x1', sampleId: 'p', outputSampleId: 'a', date: '2026-09-01T09:00:00Z', methodName: 'Cut', methodId: 'm' }),
+        mkOp({ id: 'x2', sampleId: 'p', outputSampleId: 'b', date: '2026-09-01T10:00:00Z', methodName: 'Cut', methodId: 'm' }),
+      ],
+    });
+    stepRow.mockResolvedValue(data.operations[1]);
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'manufacturing_operations:x2' });
+    await settle();
+    expect(map.selectedId.value).toMatch(/^probable:/);
+    map.setProbable(false);
+    await settle();
+    expect(map.selectedId.value).toBe('op:x2'); // the row the map was opened on, not the first row of the batch
+    expect(map.selected.value?.ref.id).toBe('x2');
+    map.setProbable(true);
+    await settle();
+    expect(map.selectedId.value).toMatch(/^probable:/);
+  });
+
   it('a test focus opens the family of its first subject sample', async () => {
     const test = mkTest({ id: 't1', code: 'T-1', subjectSampleIds: ['s2', 's3'], date: '2026-09-02T09:00:00Z' });
     const data = mkData({ samples: [mkSample('s2'), mkSample('s3')], tests: [test] });
