@@ -2997,6 +2997,10 @@ uu_down=$(awk '/-- migrate:down/{f=1;next}f' "$UU")
 # down goes first, as on a real database.
 UP=db/migrations/20261013000170_user_pins_and_prefs.sql
 up_down=$(awk '/-- migrate:down/{f=1;next}f' "$UP")
+# 20261014000174 (people admin) adds three functions in d1_private (and nothing else there), so its down goes
+# first: 141's down only drops the schema once it is empty.
+PA=db/migrations/20261014000174_people_admin.sql
+pa_down=$(awk '/-- migrate:down/{f=1;next}f' "$PA")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -3036,6 +3040,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$pa_down
 $up_down
 $ll_down
 $rr_down
