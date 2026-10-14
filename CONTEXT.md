@@ -9,7 +9,8 @@ done to them and the tests run on them, and the people and projects behind that 
 
 **STARbase**:
 The group's own web app for reading, finding and moving between records. It is also the home of
-the lab's plotters. It reads, finds and navigates; creating and editing a record is done with
+the lab's plotters. It reads, finds and navigates, and on the **process map** it builds processes and
+fills their records in with its own form; elsewhere, creating and editing a record is done with
 **Data Studio**'s form.
 _Avoid_: Explorer (its working name), frontend, head, lab-web, d1-home
 
@@ -177,7 +178,24 @@ _Avoid_: import, link
 **New from**:
 To start a new operation as a copy of an existing one (same method, machine, tool and settings) and
 change what differs.
-_Avoid_: template, duplicate, clone, import
+_Avoid_: duplicate (that copies what is on the canvas), template (that is saved, not a record), clone, import
+
+**Duplicate**:
+To copy a card or container already on the canvas, with everything filled in on it, one or several times.
+Duplicating an in-place operation adds further passes to the same sample.
+_Avoid_: clone, copy-paste
+
+**Template**:
+A named, saved set of prefilled fields for a new operation or test (method, machine, tool, operator,
+settings), not tied to any record. It belongs to one person or is shared with their role or the whole
+group. Changing a template never changes what was made from it. A template may point to a recipe but
+is not one.
+_Avoid_: preset, recipe (a FAST or prep recipe is reference data), saved operation
+
+**Checks**:
+The list of what a draft is missing before it can be created, or a planned record before it can be
+marked done. Some entries block; the rest only warn.
+_Avoid_: supervisor (a person), validator, readiness
 
 ### Tooling
 
@@ -245,3 +263,8 @@ _Avoid_: PCD box (for the insert), diamond insert
   **cards** and **containers**; "node" names none of them.
 - "Import an existing operation" meant both wiring an already-recorded operation to a sample and starting
   a new operation from an existing one. Resolved: the first is **attach**, the second **new from**.
+- "Supervisor" was asked for as the thing that shows what a draft is missing, but in the lab a supervisor
+  is a person. Resolved: that list is **checks**.
+- "Template" was used both for starting from an existing operation and for a saved, reusable set of
+  prefilled fields. Resolved: the first is **new from**, the second a **template**; copying what is
+  already on the canvas is **duplicate**.
