@@ -35,6 +35,9 @@
 // covers: the owner column and `restricted` (A1a). Only the owner switches a record to or from
 // Restricted; a Can edit person may not, even though they may edit every other field.
 //
+// Ruling O4 (People 3) holds on this direct path too: an update that sets `owner_team_id` to a team with no manager (no is_manager row in
+// team_members) is refused 409 TEAM_HAS_NO_MANAGER, after the owner check above; administrators and internal calls are exempt.
+//
 // A third check (A1a, `restrictedKeys`) covers moving a record. Moving a sample, operation, test or
 // campaign to another project, campaign or sample changes who can see it, which is managing its access
 // by another name. When the record, its current sample, or the old or new project, campaign or sample
@@ -107,6 +110,9 @@ const restrictable = (collection) => collection === 'projects' || OWNER_GUARDS[c
 const RESTRICT_REFUSED = 'Restricting a record is not available yet. Ask an administrator.';
 // Ruling O3 (People 3): a record becomes team-owned only through Transfer ownership (d1-record-access), never by a create payload.
 const TEAM_OWN_REFUSED = 'A record becomes team-owned through Transfer ownership';
+// Ruling O4 (also on this direct path): a record owned by a team nobody manages could be changed by administrators only. The same words and
+// code as the Transfer ownership endpoint (d1-record-access); like it, any is_manager row counts (spec E27).
+const TEAM_NO_MANAGER = 'That team has no manager to look after the record — add a manager first';
 
 // The shape of a Directus ForbiddenError (status 403, code FORBIDDEN), without importing the package.
 // `reason` is shown to the person who made the request, so it is plain words (no table names, ids or
@@ -124,6 +130,16 @@ function forbidden(reason, details = {}) {
   err.status = 403;
   err.code = 'FORBIDDEN';
   err.extensions = { code: 'FORBIDDEN', reason, source: SOURCE, ...details };
+  return err;
+}
+
+// The shape of a Directus error with status 409 (a conflict with the state of the data, not a permission refusal).
+function conflict(code, reason, details = {}) {
+  const err = new Error(reason);
+  err.name = 'DirectusError';
+  err.status = 409;
+  err.code = code;
+  err.extensions = { code, reason, source: SOURCE, ...details };
   return err;
 }
 
@@ -412,6 +428,7 @@ export default ({ filter }, { services }) => {
     // Which records need the delete rule, and why (the first reason wins).
     const need = new Map();
     const movedKeys = new Map(); // record key -> the move fields whose value changes
+    const newTeams = new Map(); // team id -> the first record key an update sets it on (Ruling O4)
     for (const key of keys) {
       const row = rows.get(String(key));
       if (restrictAdminOnly() && touched.some((f) => f.field === 'restricted' && fieldChanged(f, row, payload.restricted))) {
@@ -419,6 +436,11 @@ export default ({ filter }, { services }) => {
       }
       const changedField = touched.find((f) => fieldChanged(f, row, payload[f.field]));
       if (changedField) need.set(key, changedField.field === 'restricted' ? 'restricted' : 'owner');
+      const teamSpec = touched.find((f) => f.field === 'owner_team_id');
+      if (teamSpec && fieldChanged(teamSpec, row, payload.owner_team_id)) {
+        const team = parentKey(payload.owner_team_id, teamSpec.valueKey);
+        if (!isBlank(team) && !newTeams.has(String(team))) newTeams.set(String(team), key); // clearing the team needs no manager
+      }
       const moved = moves.filter((f) => {
         const next = parentKey(payload[f], f);
         if (!row) return true;
@@ -483,6 +505,15 @@ export default ({ filter }, { services }) => {
       if (!why || campaignMoves.has(key)) continue; // (a campaign move already passed the delete rule)
       // Whoever owns a record may delete it, which is why only the owner may hand it over or restrict it.
       if (!(await canPass(deleteCheck(collection), [key], context))) throw refuse(key, ...reasons[why]);
+    }
+    // Ruling O4: the caller may hand the record over; not to a team that has no manager (after the owner check, so a non-owner learns nothing
+    // about the team). Administrators and internal calls never get here (checked()).
+    if (newTeams.size) {
+      const managed = await db('team_members').whereIn('team_id', [...newTeams.keys()]).select('team_id', 'is_manager');
+      const withManager = new Set(managed.filter((m) => toBool(m.is_manager)).map((m) => String(m.team_id)));
+      for (const [team, key] of newTeams) {
+        if (!withManager.has(team)) throw conflict('TEAM_HAS_NO_MANAGER', TEAM_NO_MANAGER, { kind: 'owner', collection, id: String(key) });
+      }
     }
   }
 

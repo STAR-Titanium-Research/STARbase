@@ -531,13 +531,14 @@ test('update: clearing a parent key grants nothing', async () => {
 // ---- owner guard: changing the owner column needs the record's delete rule ----------------------
 
 // db(table).whereIn(pk, keys).select(...) -> the rows of `existing` for those keys.
-function ownerDb(existing) {
+// `members` are the team_members rows (team_id, is_manager) the Ruling O4 lookup reads; the record rows are `existing`.
+function ownerDb(existing, members = []) {
   const calls = [];
   const db = (table) => ({
     whereIn: (column, keys) => ({
       select: async (...columns) => {
         calls.push({ table, column, keys, columns });
-        return existing.filter((row) => keys.includes(row[column]));
+        return (table === 'team_members' ? members : existing).filter((row) => keys.includes(row[column]));
       },
     }),
   });
@@ -605,7 +606,7 @@ test('owner_team_id change: a manager of the owning team (manage row) may hand t
     for (const next of ['team-b', null, { team_id: 'team-b' }]) {
       const { filters, log } = mount({ canUpdate: asManager });
       const payload = { owner_team_id: next };
-      const database = ownerDb([{ [pk]: 'k1', owner_person_id: null, owner_team_id: 'team-a' }]);
+      const database = ownerDb([{ [pk]: 'k1', owner_person_id: null, owner_team_id: 'team-a' }], [{ team_id: 'team-b', is_manager: true }]);
       assert.equal(await filters['items.update'](payload, { collection, keys: ['k1'] }, ctx({ database })), payload);
       assert.equal(log.reads.length, 1, collection);
     }
@@ -642,6 +643,53 @@ test('owner_team_id change: refusal is the owner kind; admins and internal calls
   const meta = { collection: 'test_sessions', keys: ['t1'] };
   await filters['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database, accountability: { user: 'a', admin: true } }));
   await filters['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database, accountability: null }));
+});
+
+// ---- Ruling O4 on the direct path: no team without a manager becomes the owner ----------------------------------
+
+const ownable = [['physical_samples', 'sample_id'], ['manufacturing_operations', 'operation_id'], ['test_sessions', 'session_id'], ['campaigns', 'campaign_id']];
+
+test('O4: an owner who sets owner_team_id to a team with no manager is refused 409, in each of the four records', async () => {
+  for (const [collection, pk] of ownable) {
+    for (const members of [[], [{ team_id: 'team-b', is_manager: false }], [{ team_id: 'team-other', is_manager: true }]]) {
+      const { filters } = mount({ canUpdate: () => true }); // the caller passes the delete rule: an owner
+      const database = ownerDb([{ [pk]: 'k1', owner_person_id: 'p1', owner_team_id: null }], members);
+      const err = await refusal(filters['items.update']({ owner_team_id: 'team-b' }, { collection, keys: ['k1'] }, ctx({ database })));
+      assert.equal(err.status, 409, collection);
+      assert.equal(err.code, 'TEAM_HAS_NO_MANAGER', collection);
+      assert.equal(err.extensions.source, 'd1-access-guard');
+      assert.equal(err.extensions.collection, collection);
+      assert.equal(err.message, 'That team has no manager to look after the record — add a manager first');
+    }
+  }
+});
+
+test('O4: a nested { team_id } counts, a team with a manager passes, and so does clearing the team or an unchanged team', async () => {
+  const { filters } = mount({ canUpdate: () => true });
+  const row = { sample_id: 's1', owner_person_id: null, owner_team_id: 'team-a' };
+  const managed = [{ team_id: 'team-b', is_manager: true }];
+  await filters['items.update']({ owner_team_id: { team_id: 'team-b' } }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database: ownerDb([row], managed) }));
+  await assert.rejects(
+    filters['items.update']({ owner_team_id: { team_id: 'team-b' } }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database: ownerDb([row], []) })),
+    (err) => err.status === 409,
+  );
+  // clearing the team, and the same team sent back by a form save: no lookup at all (team-a has no manager here and it does not matter)
+  for (const next of [null, '', 'team-a']) {
+    const database = ownerDb([row], []);
+    await filters['items.update']({ owner_team_id: next }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database }));
+    assert.ok(!database.calls.some((c) => c.table === 'team_members'), String(next));
+  }
+});
+
+test('O4: a caller who fails the owner check is refused 403 first (nothing is said about the team); admins and internal calls are exempt', async () => {
+  const database = () => ownerDb([{ sample_id: 's1', owner_person_id: 'p-owner', owner_team_id: null }], []);
+  const { filters } = mount({ canUpdate: () => false });
+  const err = await refusal(filters['items.update']({ owner_team_id: 'team-b' }, { collection: 'physical_samples', keys: ['s1'] }, ctx({ database: database() })));
+  assert.equal(err.status, 403);
+  const meta = { collection: 'physical_samples', keys: ['s1'] };
+  const open = mount({ canUpdate: () => true }).filters;
+  await open['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database: database(), accountability: { user: 'a', admin: true } }));
+  await open['items.update']({ owner_team_id: 'team-b' }, meta, ctx({ database: database(), accountability: null }));
 });
 
 test('owner change: a co-owner (who cannot delete) is refused', async () => {

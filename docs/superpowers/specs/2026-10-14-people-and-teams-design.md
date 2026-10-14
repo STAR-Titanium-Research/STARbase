@@ -586,6 +586,8 @@ Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the 
   creator as manager). **Parked:** O4 counts any `is_manager` row, also an inactive or loginless manager, so a team whose only
   managers are inactive can still be transferred to; such a record is administrator-managed until a manager is reactivated. The check is
   the literal rule on purpose.
+  The same rule holds on the direct path: `d1-access-guard` refuses 409 `TEAM_HAS_NO_MANAGER` (same words) when a non-administrator's update
+  sets `owner_team_id` to a team with no `is_manager` row (after its owner check; administrators are exempt).
 - **E28 Ruling O5: leaving a team-owned record does not keep the outgoing managers.** Transfer person to person keeps the previous owner as
   Can edit; **team to person and team to team do not keep the previous team or its managers** (the database drops the owner grant).
   The acting manager therefore loses access unless they are in the new team or are the new owner. Who has access warns before Confirm ("You
