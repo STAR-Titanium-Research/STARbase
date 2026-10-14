@@ -44,17 +44,19 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 				<QuickActions />
 			</section>
 
-			<div class="home-grid">
-				<div class="home-main">
-					<FrequentlyUsed />
-					<LabStats />
-					<div class="row">
-						<NeedsAttention :is-admin="isAdmin" />
-						<MyWork />
+			<div class="home-wrap">
+				<div class="home-grid">
+					<div class="home-main">
+						<FrequentlyUsed />
+						<LabStats />
+						<div class="row">
+							<NeedsAttention :is-admin="isAdmin" />
+							<MyWork />
+						</div>
+						<AdminPanels :is-admin="adminConfirmed" />
 					</div>
-					<AdminPanels :is-admin="adminConfirmed" />
+					<aside class="home-rail" aria-label="Recent activity"><RecentActivity /></aside>
 				</div>
-				<aside class="home-rail" aria-label="Recent activity"><RecentActivity /></aside>
 			</div>
 		</PageShell>
 	</ExplorerView>
@@ -74,12 +76,14 @@ const adminConfirmed = computed(() => isAdmin.value && adminKnown.value);
 	box-shadow: 0 8px 20px -12px rgba(29, 78, 216, 0.5);
 }
 .hero-text { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 14px; min-width: 0; }
-/* Main column plus a recent-activity rail. The grid is a size container, so "narrow" is the width the
-   page has (not the window's: the sidebar and the Data Studio's own chrome take some). The rail
-   sticks under the host's header bar (--d1-header-offset: STARbase's PlainFrame sets it, the Data
-   Studio's 70px is the fallback) and scrolls inside itself; it is not position: fixed, which would
-   cover the shell's sticky bars. */
-.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; container-type: inline-size; }
+/* Main column plus a recent-activity rail. The wrapper is the size container (an element cannot query
+   itself, so the grid's own @container rule below only works because the container is its parent), so
+   "narrow" is the width the page has (not the window's: the sidebar and the Data Studio's own chrome
+   take some). The rail sticks under the host's header bar (--d1-header-offset: STARbase's PlainFrame
+   sets it, the Data Studio's 70px is the fallback) and scrolls inside itself; it is not position:
+   fixed, which would cover the shell's sticky bars. */
+.home-wrap { container-type: inline-size; }
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
 .home-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .home-rail {
 	position: sticky;
