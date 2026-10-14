@@ -8,11 +8,12 @@
 -- `batch_id` is nullable everywhere (Directus treats a NOT NULL column without a default as required: the
 -- short_id incident) and ON DELETE SET NULL, so deleting a batch leaves its operations and tests as they were.
 --
--- `batches.code` is NOT NULL UNIQUE and gets 'B-0001', 'B-0002', ... from `batches_code_seq`. It has a column
--- DEFAULT (so Directus does not mark it required) and a BEFORE INSERT trigger for the case where the Directus
--- form sends code = NULL (or blank) explicitly, which a column default does not cover. The d1-next-number
--- endpoint has no prefix config for this and needs no change. Note that lpad truncates, so the pattern is only
--- unique up to B-9999.
+-- `batches.code` is NOT NULL UNIQUE and gets 'B-0001', 'B-0002', ... from `batches_code_seq` through
+-- `batches_next_code()`: four digits, more when the number needs them (B-10000), because a plain
+-- lpad(n, 4, '0') would truncate to B-1000 and fail the unique constraint from the 10000th batch on. The
+-- function is the column DEFAULT (so Directus does not mark it required) and is also called by a BEFORE INSERT
+-- trigger for the case where the Directus form sends code = NULL (or blank) explicitly, which a column default
+-- does not cover. The d1-next-number endpoint has no prefix config for this and needs no change.
 --
 -- It also relabels the FAST press's free-text field `manufacturing_operations.sintering_batch_number` as
 -- "Powder batch" (D28), so the word "batch" means only several samples done together (CONTEXT.md).
@@ -25,9 +26,22 @@
 
 CREATE SEQUENCE batches_code_seq;
 
+-- The next batch code: 'B-' and the sequence number padded to at least four digits (never truncated).
+CREATE FUNCTION batches_next_code() RETURNS text
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+AS $$
+DECLARE
+    n BIGINT := nextval('public.batches_code_seq');
+BEGIN
+    RETURN 'B-' || lpad(n::text, greatest(4, length(n::text)), '0');
+END;
+$$;
+COMMENT ON FUNCTION batches_next_code() IS 'The next batch code, B-0001, B-0002, ... (four digits, more once the number needs them), from batches_code_seq. Column default of batches.code.';
+
 CREATE TABLE batches (
     batch_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    code            TEXT NOT NULL DEFAULT 'B-' || lpad(nextval('batches_code_seq')::text, 4, '0'),
+    code            TEXT NOT NULL DEFAULT batches_next_code(),
     batch_date      DATE,
     notes           TEXT,
     owner_person_id UUID REFERENCES people (person_id) ON DELETE SET NULL,
@@ -44,7 +58,7 @@ CREATE INDEX idx_batches_owner_person_id ON batches (owner_person_id);
 
 COMMENT ON TABLE batches IS 'A recorded batch: several operations, or several tests, done together as one job on several samples. Each sample keeps its own operation or test row; manufacturing_operations.batch_id and test_sessions.batch_id tie them together.';
 COMMENT ON COLUMN batches.batch_id IS 'Primary key.';
-COMMENT ON COLUMN batches.code IS 'Unique human code, B-0001, B-0002, ... taken from batches_code_seq when left out, null or blank; any other unique text is kept.';
+COMMENT ON COLUMN batches.code IS 'Unique human code, B-0001, B-0002, ... taken from batches_next_code() (batches_code_seq) when left out, null or blank; any other unique text is kept.';
 COMMENT ON COLUMN batches.batch_date IS 'The day the job was done.';
 COMMENT ON COLUMN batches.notes IS 'Free-text note on the job.';
 COMMENT ON COLUMN batches.owner_person_id IS 'The person who owns the batch; only they (and admins) can update or delete it. Filled with the creator by the d1-owner-default hook.';
@@ -54,19 +68,19 @@ COMMENT ON COLUMN batches.updated_at IS 'Last update time, maintained by the occ
 COMMENT ON COLUMN batches.version IS 'Optimistic-concurrency counter, incremented by the occ_batches trigger.';
 
 -- A BEFORE INSERT trigger rather than only the column default: the Directus form may send code = NULL (or an
--- empty string), and an explicit NULL does not take the default. The sequence is the same one the default uses.
+-- empty string), and an explicit NULL does not take the default. It calls the same function the default uses.
 CREATE FUNCTION batches_fill_code() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public
 AS $$
 BEGIN
     IF NEW.code IS NULL OR btrim(NEW.code) = '' THEN
-        NEW.code := 'B-' || lpad(nextval('public.batches_code_seq')::text, 4, '0');
+        NEW.code := batches_next_code();
     END IF;
     RETURN NEW;
 END;
 $$;
-COMMENT ON FUNCTION batches_fill_code() IS 'BEFORE INSERT on batches: fills code from batches_code_seq when the insert sends it as NULL or blank.';
+COMMENT ON FUNCTION batches_fill_code() IS 'BEFORE INSERT on batches: fills code with batches_next_code() when the insert sends it as NULL or blank.';
 
 CREATE TRIGGER batches_fill_code
     BEFORE INSERT ON batches
@@ -179,4 +193,5 @@ DROP TRIGGER IF EXISTS occ_batches ON batches;
 DROP TRIGGER IF EXISTS batches_fill_code ON batches;
 DROP TABLE IF EXISTS batches;
 DROP FUNCTION IF EXISTS batches_fill_code();
+DROP FUNCTION IF EXISTS batches_next_code();
 DROP SEQUENCE IF EXISTS batches_code_seq;

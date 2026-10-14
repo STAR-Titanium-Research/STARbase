@@ -478,7 +478,7 @@ SELECT 'down_table:' || coalesce(to_regclass('batches')::text, 'gone');
 SELECT 'down_seq:' || coalesce(to_regclass('batches_code_seq')::text, 'gone');
 SELECT 'down_cols:' || count(*) FROM information_schema.columns
   WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions') AND column_name = 'batch_id';
-SELECT 'down_fn:' || count(*) FROM pg_proc WHERE proname = 'batches_fill_code';
+SELECT 'down_fn:' || count(*) FROM pg_proc WHERE proname IN ('batches_fill_code', 'batches_next_code');
 SELECT 'down_meta:' || (SELECT count(*) FROM directus_fields WHERE collection = 'batches' OR field = 'batch_id')
   || ',' || (SELECT count(*) FROM directus_collections WHERE collection = 'batches')
   || ',' || (SELECT count(*) FROM directus_permissions WHERE collection = 'batches')
@@ -491,7 +491,7 @@ SELECT 'up_powder:' || (translations::jsonb = '[{"language": "en-US", "translati
 SELECT 'up_powder_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
 SELECT 'up_nullable:' || string_agg(table_name || '=' || is_nullable, ',' ORDER BY table_name) FROM information_schema.columns
   WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions') AND column_name = 'batch_id';
-SELECT 'up_code_col:' || is_nullable || '/' || (column_default LIKE '%batches_code_seq%') FROM information_schema.columns
+SELECT 'up_code_col:' || is_nullable || '/' || (column_default LIKE '%batches_next_code()%') FROM information_schema.columns
   WHERE table_schema = 'public' AND table_name = 'batches' AND column_name = 'code';
 SELECT 'up_fk:' || string_agg(conrelid::regclass::text || '=' || confdeltype::text, ',' ORDER BY conrelid::regclass::text) FROM pg_constraint
   WHERE contype = 'f' AND confrelid = 'batches'::regclass AND conrelid IN ('manufacturing_operations'::regclass, 'test_sessions'::regclass);
@@ -518,6 +518,11 @@ INSERT INTO batches (batch_id, code, notes) VALUES ('c0000000-0000-4000-8000-000
 INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b3', '  ');
 INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b4', 'B-custom');
 SELECT 'codes:' || string_agg(code, ',' ORDER BY batch_id) FROM batches;
+-- the number is never truncated past four digits: the 10000th batch is B-10000, not B-1000
+SELECT setval('batches_code_seq', 9999);
+INSERT INTO batches (batch_id) VALUES ('c0000000-0000-4000-8000-0000000001b5');
+INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b6', NULL);
+SELECT 'big_codes:' || string_agg(code, ',' ORDER BY batch_id) FROM batches WHERE batch_id IN ('c0000000-0000-4000-8000-0000000001b5', 'c0000000-0000-4000-8000-0000000001b6');
 SAVEPOINT s1;
 INSERT INTO batches (code) VALUES ('B-0001');
 SELECT 'dup_code:accepted';
@@ -555,16 +560,17 @@ bt_check() { grep -qxF "$1" <<<"$bt_out" && ok "$2" || bad "$2 (psql output: $bt
 bt_check "down_table:gone" "down: batches is dropped"
 bt_check "down_seq:gone" "down: batches_code_seq is dropped"
 bt_check "down_cols:0" "down: batch_id is dropped from operations and tests"
-bt_check "down_fn:0" "down: the code-filling trigger function is dropped"
+bt_check "down_fn:0" "down: the code-filling trigger function and batches_next_code() are dropped"
 bt_check "down_meta:0,0,0,0" "down: its Directus fields, collection, permissions and relations are removed"
 bt_check "down_powder:true/true" "down: sintering_batch_number is labelled Batch # again, with no note"
 bt_check 'up_powder:true/The powder batch typed on the FAST press, e.g. TIMET 45-150. Names a raw stock lot but is not linked to it.' "up: sintering_batch_number is Powder batch, with its note"
 bt_check "up_powder_rows:1" "up: sintering_batch_number keeps exactly one field row"
 bt_check "up_nullable:manufacturing_operations=YES,test_sessions=YES" "up: batch_id is nullable on operations and tests"
-bt_check "up_code_col:NO/true" "up: code is NOT NULL and defaults from batches_code_seq"
+bt_check "up_code_col:NO/true" "up: code is NOT NULL and defaults from batches_next_code()"
 bt_check "up_fk:manufacturing_operations=n,test_sessions=n" "up: both batch_id foreign keys are ON DELETE SET NULL"
 bt_check "up_indexes:idx_manufacturing_operations_batch_id,idx_test_sessions_batch_id" "up: both batch_id columns are indexed"
 bt_check "up_comments:0,true,2" "up: every batches column, the table and both batch_id columns carry a COMMENT"
+bt_check "big_codes:B-10000,B-10001" "past B-9999 a default and a null code keep counting (B-10000, B-10001) instead of truncating"
 bt_check "up_triggers:audit_batches,batches_fill_code,occ_batches" "up: audit, code-filling and OCC triggers are attached"
 bt_check "up_collection:inventory_2/Several operations or tests done together as one job" "up: batches is a Directus collection"
 bt_check "up_fields:9" "up: every batches column has a Directus field row"
@@ -3253,6 +3259,7 @@ SELECT 'dn_alias_ops:' || coalesce(one_field, 'null') FROM directus_relations WH
 SELECT 'dn_alias_tests:' || coalesce(one_field, 'null') FROM directus_relations WHERE many_collection='test_sessions' AND many_field='project_id';
 SELECT 'dn_alias_sessions_field:' || note FROM directus_fields WHERE collection='projects' AND field='sessions';
 SELECT 'dn_alias_fields:' || string_agg(field, ',' ORDER BY field) FROM directus_fields WHERE collection='projects' AND field IN ('samples','operations','sessions');
+-- idx_batches_owner_person_id belongs to 20261014000177 (batches), which this replay never rolls back, so it is not one of the indexes expected to be gone
 SELECT 'dn_indexes:' || count(*) FROM pg_indexes WHERE (indexname LIKE 'idx\_%\_owner\_person\_id' AND tablename <> 'batches') OR indexname IN ('idx_physical_samples_project_id','idx_sample_co_owners_user_id','idx_project_investigators_user_id');
 ROLLBACK;
 SQL

@@ -22,11 +22,12 @@ only source: it misses a job done over two days and joins two separate jobs done
    required, the `short_id` incident) and `ON DELETE SET NULL`, so deleting a batch leaves its
    operations and tests exactly as they were, unbatched.
 2. **The code is generated, and can be typed.** `code` is `NOT NULL UNIQUE` and takes
-   `'B-' || lpad(nextval('batches_code_seq')::text, 4, '0')` as a column default, so Directus does
-   not treat it as required. A `BEFORE INSERT` trigger fills it when an insert sends `NULL` (or a
+   `batches_next_code()` as a column default, so Directus does not treat it as required. The
+   function returns `'B-'` and the next `batches_code_seq` number padded to at least four digits
+   and never truncated (`B-0001` ... `B-9999`, `B-10000`; a plain `lpad(n, 4, '0')` would truncate
+   and fail the unique constraint from the 10000th batch on). A `BEFORE INSERT` trigger fills it when an insert sends `NULL` (or a
    blank) explicitly, which a default does not cover and the Directus form may do. Any other unique
-   text is kept. `lpad` truncates, so the generated pattern is unique up to `B-9999`; beyond that a
-   person types a code. A code typed by hand in the generated shape (`B-0007`) can later collide
+   text is kept. A code typed by hand in the generated shape (`B-0007`) can later collide
    with the sequence, and the insert then fails on the unique constraint until the sequence passes it.
 3. **The Process map draws recorded batches as batches, and guesses only the rest.** Rows with the
    same `batch_id` form one container, in every process category. Rows with a `batch_id` never join a
