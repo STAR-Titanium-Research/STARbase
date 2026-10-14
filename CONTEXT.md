@@ -101,8 +101,9 @@ _Avoid_: run (a FAST run is one operation), group, set; and "batch" for a FAST r
 FAST press calls it that
 
 **FAST run**:
-One press cycle on the FAST (spark plasma sintering) machine, identified by its **FAST run #**. The
-machine's own software calls a run a "batch"; in the database it is never called that.
+One press cycle on the FAST (spark plasma sintering) machine: one operation, one disc. The press's
+software has a free-text "Batch" field that operators fill with a powder, series or counter name;
+many runs share the same value, so it is a label, not a batch and not a run number.
 _Avoid_: batch, FAST batch, cycle
 
 ## Relationships
@@ -130,6 +131,6 @@ _Avoid_: batch, FAST batch, cycle
 - "Lineage graph" named both the parent → child links between samples and the page that drew them
   with everything else. Resolved: **lineage** is only the link between samples; the page is the
   **process map**.
-- "Batch" meant both a FAST press cycle (the machine's word, and the old "Batch #" field) and several
-  samples done together. Resolved: the press cycle is a **FAST run** (its field is "FAST run #"); a
-  **batch** is only several samples done together.
+- "Batch" meant both the FAST press's free-text "Batch" field (the old "Batch #" form field) and several
+  samples done together. Resolved: one press cycle is a **FAST run**, the press's field is only a label,
+  and a **batch** is only several samples done together.
