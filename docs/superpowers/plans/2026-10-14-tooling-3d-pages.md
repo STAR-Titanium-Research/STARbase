@@ -19,10 +19,13 @@ Claude-Session: https://claude.ai/code/session_016gzbHS7JPckXcdb7bjgN27
 
 | Stream | Worktree | Branch | State |
 |---|---|---|---|
-| S1 logic (`@d1/ui/tooling`, routes, index rows) | agent worktree | worker branch | pending |
-| S2 stage (3D scene and 2D fallback) | agent worktree | worker branch | pending |
-| S3 page (route, data, rail and panels) | agent worktree | worker branch | pending |
+| S1 logic (`@d1/ui/tooling`, routes, index rows) | agent-a6d4da6f39af0c307 | worktree-agent-a6d4da6f39af0c307 | merged (8e8b61f) |
+| S2 stage (3D scene and 2D fallback) | agent worktree | worker branch | in progress |
+| S3 page (route, data, rail and panels) | agent worktree | worker branch | in progress |
 | Integration, review, headless check, PR | main checkout | `claude/interactive-3d-insert-preview-yp4dyu` | pending |
+
+S1 notes for S2 and S3: `SlotCell.column`/`row` are 0-based (`number` is 1-based); `slotGrid(0)` is 1 × 1 with no cells;
+corner 0 points up (`bisectorDeg` 90) except squares (135); W lists only its three 80° corners; `EdgeRow.insert_id` is a plain id.
 
 Order: S1 first (S2 and S3 import its types), then S2 and S3 in parallel, then integration.
 
