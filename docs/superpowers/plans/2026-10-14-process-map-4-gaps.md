@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Worktree `D:\Users\CMBE Admn 3214022001\Documents\GitHub\D1-Database\.claude\worktrees\process-map`, branch `feat/process-map`. Never `git stash`. Never touch containers other than the `d1-starbase-map` preview.
+- Worktree `D:\Users\CMBE Admn 3214022001\Documents\GitHub\D1-Database\.claude\worktrees\process-map`, branch `feat/process-map-gaps` (off main after PR #281 merged). Never `git stash`. Never touch containers other than the `d1-starbase-map` preview.
 - No behaviour change in the refactor task (Task 3): all existing tests pass unchanged except import paths.
 - Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; `py -m pre_commit run --files <changed>` before each commit; push after each task.
 - Write a one-line progress note to `.superpowers/sdd/2026-10-14-process-map-4-gaps/progress.md` at the end of each step so a resumed session knows where it got to.
