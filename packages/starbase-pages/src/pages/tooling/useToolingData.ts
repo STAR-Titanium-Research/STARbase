@@ -1,7 +1,8 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue';
 import {
-	LIST_CAP, buildToolingModel, countsByKey, errorText, findEdge, findInsert, focusFromRoute, focusKindOf, isNotVisible, nextFreshEdge,
-	useItems, useRequestGate, useSections, type FocusKind, type ToolingModel,
+	LIST_CAP, buildToolingModel, chunkIds, countsByKey, edgeJunctionCountParams, edgeTestsFilter, errorText, findEdge, findInsert, focusFromRoute,
+	focusKindOf, isNotVisible, junctionCountsByEdge, mergeEdgeCounts, nextFreshEdge, useItems, useRequestGate, useSections,
+	type FocusKind, type ToolingModel,
 } from '@d1/ui';
 
 // Everything the tooling record page reads, as the signed-in user (so Directus permissions apply).
@@ -91,6 +92,7 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 		pendingBox = boxId;
 		modelLoading.value = true;
 		modelError.value = '';
+		let built: ToolingModel;
 		try {
 			const cached = boxCache?.id === boxId ? boxCache.row : null;
 			boxCache = null;
@@ -101,7 +103,8 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 			]);
 			if (!modelGate.isCurrent(token)) return;
 			box.value = boxRow;
-			model.value = buildToolingModel(boxRow, boxRow.insert_type_id ?? null, inserts, edges);
+			built = buildToolingModel(boxRow, boxRow.insert_type_id ?? null, inserts, edges);
+			model.value = built;
 		} catch (e) {
 			if (!modelGate.isCurrent(token)) return;
 			if (isNotVisible(e)) notVisible.value = true;
@@ -113,6 +116,7 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 				pendingBox = null;
 			}
 		}
+		const edgeIds = built.inserts.flatMap((i) => i.edges.map((e) => e.id));
 		await modelFill(edgeCounts, token, 'the usage history of the edges', async () => {
 			// An edge is "used" when `is_used` says so; these counts only back the "marked fresh, but used" warnings.
 			const grouped = (collection: string) =>
@@ -122,10 +126,19 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 					filter: { insert_edge_id: { insert_id: { tool_box_id: { _eq: boxId } } } },
 					limit: -1,
 				});
-			const [t, o] = await Promise.all([grouped('test_sessions'), grouped('manufacturing_operations')]);
-			const counts = countsByKey(t, 'insert_edge_id');
-			for (const [edgeId, n] of countsByKey(o, 'insert_edge_id')) counts.set(edgeId, (counts.get(edgeId) ?? 0) + n);
-			return counts;
+			// Tests: from the junction test_sessions_subject, since insert_edge_id holds only a test's FIRST edge
+			// (migration 139). A role that may not read the junction falls back to that column.
+			const testCounts = async () => {
+				try {
+					const parts = await Promise.all(chunkIds(edgeIds).map((ids) => getItems('test_sessions_subject', edgeJunctionCountParams(ids))));
+					return junctionCountsByEdge(parts.flat());
+				} catch (e) {
+					if (!isNotVisible(e)) throw e;
+					return countsByKey(await grouped('test_sessions'), 'insert_edge_id');
+				}
+			};
+			const [t, o] = await Promise.all([testCounts(), grouped('manufacturing_operations')]);
+			return mergeEdgeCounts(t, countsByKey(o, 'insert_edge_id'));
 		});
 	}
 
@@ -183,14 +196,24 @@ export function useToolingData(segment: Ref<string>, id: Ref<string>) {
 		await Promise.all([
 			loadModel(boxId, force),
 			k === 'edge'
-				? fill(tests, token, 'tests', () =>
-						getItems('test_sessions', {
-							filter: { insert_edge_id: { _eq: rid } },
-							fields: ['session_id', 'test_type', 'session_date', 'status', 'sample_id.sample_code'],
-							sort: ['-session_date'],
-							limit: LIST_CAP + 1,
-						}),
-					)
+				? fill(tests, token, 'tests', async () => {
+						const read = (filter: Record<string, unknown>) =>
+							getItems('test_sessions', {
+								filter,
+								fields: ['session_id', 'test_type', 'session_date', 'status', 'sample_id.sample_code'],
+								sort: ['-session_date'],
+								limit: LIST_CAP + 1,
+							});
+						// insert_edge_id is only the test's FIRST edge (migration 139); a test with several edges lists the
+						// others in the subject junction. One read with an _or covers both.
+						try {
+							return await read(edgeTestsFilter(rid));
+						} catch (e) {
+							// A role that may not read the junction cannot filter on it: fall back to the column.
+							if (!isNotVisible(e)) throw e;
+							return read({ insert_edge_id: { _eq: rid } });
+						}
+					})
 				: Promise.resolve(),
 			k === 'edge'
 				? fill(operations, token, 'operations', () =>
