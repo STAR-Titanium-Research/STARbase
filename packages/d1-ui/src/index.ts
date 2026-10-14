@@ -178,3 +178,17 @@ export {
 	withoutDismissed, withoutPinned, writeDismissed,
 } from './usage';
 export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
+
+// Tooling record pages (pure logic: ISO 1832 designations, insert outline, edge letters, tray grid, model)
+export { parseIsoDesignation, SHAPE_ANGLE_DEG } from './tooling/isoDesignation';
+export type { IsoInsert, ShapeLetter } from './tooling/isoDesignation';
+export { resolveInsertGeometry, insertOutline, DEFAULT_IC_MM, DEFAULT_THICKNESS_MM, DEFAULT_NOSE_RADIUS_MM } from './tooling/insertGeometry';
+export type { InsertGeometry, InsertCorner, InsertOutline, InsertTypeRow } from './tooling/insertGeometry';
+export { normaliseEdgeLetter, placeEdge } from './tooling/edgePlacement';
+export type { EdgePlacement } from './tooling/edgePlacement';
+export { slotGrid } from './tooling/boxLayout';
+export type { SlotCell, SlotGrid } from './tooling/boxLayout';
+export { buildToolingModel, insertState, nextFreshEdge, edgeUsageMismatch, focusParent, focusRoute } from './tooling/toolingModel';
+export type {
+	BoxRow, InsertRow, EdgeRow, InsertState, ToolingEdge, ToolingInsert, ToolingModel, ToolingFocus,
+} from './tooling/toolingModel';
