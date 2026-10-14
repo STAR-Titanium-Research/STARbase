@@ -63,7 +63,7 @@ const EDGE_OVER_IC: Record<Exclude<ShapeLetter, 'R'>, number> = {
 	S: 1,
 	T: Math.sqrt(3),
 	V: 1 / Math.sin((35 * Math.PI) / 180),
-	W: 0.6847,
+	W: (1 / Math.tan((40 * Math.PI) / 180) + 1 / Math.tan((80 * Math.PI) / 180)) / 2, // 80 and 160 degree corners
 };
 
 function icFromCode(shape: ShapeLetter, code: string): number | null {
