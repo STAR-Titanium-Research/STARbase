@@ -87,7 +87,7 @@ export function shouldOpenFinder(
 export function openHit(
 	hit: Pick<FinderHit, 'to' | 'record'>,
 	navigate: (to: string) => void,
-	pickRecord?: (record: { collection: string; id: string }) => boolean | void,
+	pickRecord?: (record: { collection: string; id: string }) => unknown,
 ): void {
 	if (pickRecord && hit.record && pickRecord(hit.record) !== false) return;
 	navigate(hit.to);
