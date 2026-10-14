@@ -3091,9 +3091,10 @@ INSERT INTO physical_samples (sample_code) VALUES ('TEST-NOOWNER-001');
 "
 rv_out=$($PSQL 2>&1 <<SQL
 BEGIN;
--- migration 143 keeps its ledger in d1_private; drop it (rolled back) so 141's down can drop the empty schema
+-- migrations 143 and 175 keep a ledger in d1_private; drop them (rolled back) so 141's down can drop the empty schema
 DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
 DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
+DROP TABLE IF EXISTS d1_private.form_values_175_backup;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
