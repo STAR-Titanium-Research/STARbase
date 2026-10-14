@@ -28,7 +28,7 @@ const PLOTS: [string, string][] = [
 // STARbase's own pages that have no /home form (they never existed in Data Studio): written with the
 // same path in both hosts. In STARbase they are plain routes; Data Studio opens them through the
 // permanent links. Add a page here AND to starbaseRoutes, or STARbase sends it to /admin/<path>.
-export const LOCAL_PAGES: readonly string[] = ['/report-bug', '/crawler'];
+export const LOCAL_PAGES: readonly string[] = ['/report-bug', '/crawler', '/map'];
 
 const isLocalPage = (path: string): boolean => LOCAL_PAGES.some((p) => startsWithSegment(path, p));
 

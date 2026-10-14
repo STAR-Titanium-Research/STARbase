@@ -7,6 +7,7 @@ import {
 	AppLink, openLink, AccessDialog, EditDrawer, HiddenLink, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail, asRecord, dataStudioRoute,
 	detailFacts, detailsCount, hasPassCode, operationDetailBase, operationHeading, operationKind, operationRailFacts, operationSampleCount, type ContentsEntry,
 	pinTargetForRecord,
+	mapPath,
 } from '@d1/ui';
 import { useOperationData } from './operation/useOperationData';
 import OperationSamples from './operation/OperationSamples.vue';
@@ -84,6 +85,8 @@ const contents = computed<ContentsEntry[]>(() => {
 
 const openReport = () => openLink(`/d1-report/operation/${encodeURIComponent(props.id)}`, router);
 
+// The Process map, opened on this record.
+const mapTo = computed(() => mapPath('manufacturing_operations', props.id));
 const pin = computed(() => pinTargetForRecord('manufacturing_operations', props.id));
 </script>
 
@@ -128,6 +131,7 @@ const pin = computed(() => pinTargetForRecord('manufacturing_operations', props.
 							<template #kind-icon><v-icon name="precision_manufacturing" x-small /></template>
 							<template #actions>
 								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
+									<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
 									<v-button icon small secondary @click="openReport" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /><span class="sr-only">Report</span></v-button>
 								</RecordActions>
 							</template>

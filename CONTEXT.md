@@ -92,6 +92,37 @@ The section for the lab's reference data that records point to: equipment, mater
 insert types, ISO classes, methods, manufacturers, facilities, prep recipes, etchants, FAST recipes.
 _Avoid_: Resources, lookups, master data, Kit
 
+### Samples and their history
+
+**Process map**:
+The STARbase page that shows how samples came to be: the samples, the operations and tests they went
+through, and what was used in each (machine, tool, insert edge, recipe, data). Samples flow left to
+right through the operations.
+_Avoid_: lineage graph, node graph, connections graph, graph
+
+**Lineage**:
+The parent → child link between two samples: a sample cut from, sintered from, powder from or
+derived from another. Lineage is only ever between samples.
+_Avoid_: genealogy (the table's name), ancestry, lineage graph (for the page)
+
+**Batch**:
+Several operations, or several tests, done together as one job on several samples (four quarters
+polished in one run). Each sample still has its own operation or test record; the batch is what ties
+them together. A batch someone recorded is a **batch**; a group the process map only guesses (several pieces
+cut from one sample on one day, or several samples polished, heat-treated or built together on one
+day) is a **probable batch**, and is shown as such.
+_Avoid_: run (a FAST run is one operation), group, set; and "batch" for a FAST run, even though the
+FAST press calls it that
+
+**FAST run**:
+One press cycle on the FAST (spark plasma sintering) machine: one operation, one disc.
+_Avoid_: batch, FAST batch, cycle
+
+**Powder batch**:
+The powder a FAST run used, as typed on the FAST press ("TIMET 45-150"). Many runs share one. It
+names a raw stock lot but is only text: it is not linked to the lot.
+_Avoid_: batch (on its own), FAST batch, batch number
+
 ### Tooling
 
 **Tool box**:
@@ -144,6 +175,12 @@ _Avoid_: PCD box (for the insert), diamond insert
   section is **More**.
 - Pins on Home ("Frequently used") and pins in the sidebar were heading towards two different ideas.
   Resolved: one **pin**.
+- "Lineage graph" named both the parent → child links between samples and the page that drew them
+  with everything else. Resolved: **lineage** is only the link between samples; the page is the
+  **process map**.
+- "Batch" meant both the FAST press's free-text "Batch" field (the old "Batch #" form field) and several
+  samples done together. Resolved: one press cycle is a **FAST run**, the press's field is the **powder batch**
+  it used, and a **batch** is only several samples done together.
 - "Item" and "Sample" were both used for the same records, whose Item Type also allowed Equipment and
   Miscellaneous; the 16 Equipment rows are rig kit (dyno, cases, hand tools). Resolved: the record is a
   **Sample**. The rig kit belongs in **Inventory**; that move is not made yet.

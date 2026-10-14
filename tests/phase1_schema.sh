@@ -711,6 +711,138 @@ lt_check "occ_version:2" "an update bumps version"
 lt_check "audit_updates:1" "an update of a template is audited"
 lt_check "redown_table:gone" "down runs again after up"
 
+echo "== Batches migration =="
+# Process map slice 2 (ADR-0017): recorded batches. Down and up run inside a rolled-back transaction; the
+# Directus tables are stubs here, so a stand-in field row for sintering_batch_number is seeded with its
+# pre-migration translation ("Batch #", no note) and the metadata is asserted by reading what the SQL wrote.
+BT=db/migrations/20261014000177_batches.sql
+bt_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$BT")
+bt_down=$(awk '/-- migrate:down/{f=1;next}f' "$BT")
+bt_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+DELETE FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+INSERT INTO directus_fields (collection, field, interface, display, hidden, sort, width, translations, note)
+VALUES ('manufacturing_operations', 'sintering_batch_number', 'input', 'raw', true, 381, 'half',
+        '[{"language": "en-US", "translation": "Batch #"}]', NULL);
+$bt_down
+SELECT 'down_table:' || coalesce(to_regclass('batches')::text, 'gone');
+SELECT 'down_seq:' || coalesce(to_regclass('batches_code_seq')::text, 'gone');
+SELECT 'down_cols:' || count(*) FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions') AND column_name = 'batch_id';
+SELECT 'down_fn:' || count(*) FROM pg_proc WHERE proname IN ('batches_fill_code', 'batches_next_code');
+SELECT 'down_meta:' || (SELECT count(*) FROM directus_fields WHERE collection = 'batches' OR field = 'batch_id')
+  || ',' || (SELECT count(*) FROM directus_collections WHERE collection = 'batches')
+  || ',' || (SELECT count(*) FROM directus_permissions WHERE collection = 'batches')
+  || ',' || (SELECT count(*) FROM directus_relations WHERE many_collection = 'batches' OR one_collection = 'batches' OR many_field = 'batch_id');
+SELECT 'down_powder:' || (translations::jsonb = '[{"language": "en-US", "translation": "Batch #"}]'::jsonb) || '/' || (note IS NULL)
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+$bt_up
+SELECT 'up_powder:' || (translations::jsonb = '[{"language": "en-US", "translation": "Powder batch"}]'::jsonb) || '/' || note
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'up_powder_rows:' || count(*) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'up_nullable:' || string_agg(table_name || '=' || is_nullable, ',' ORDER BY table_name) FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name IN ('manufacturing_operations', 'test_sessions') AND column_name = 'batch_id';
+SELECT 'up_code_col:' || is_nullable || '/' || (column_default LIKE '%batches_next_code()%') FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'batches' AND column_name = 'code';
+SELECT 'up_fk:' || string_agg(conrelid::regclass::text || '=' || confdeltype::text, ',' ORDER BY conrelid::regclass::text) FROM pg_constraint
+  WHERE contype = 'f' AND confrelid = 'batches'::regclass AND conrelid IN ('manufacturing_operations'::regclass, 'test_sessions'::regclass);
+SELECT 'up_indexes:' || string_agg(idx, ',' ORDER BY idx)
+  FROM (SELECT indexname AS idx FROM pg_indexes WHERE schemaname = 'public' AND tablename IN ('manufacturing_operations', 'test_sessions')
+          AND indexdef LIKE '%(batch_id)%') i;
+SELECT 'up_comments:' || (SELECT count(*) FROM information_schema.columns c
+  WHERE c.table_schema = 'public' AND c.table_name = 'batches' AND col_description('batches'::regclass, c.ordinal_position::int) IS NULL)
+  || ',' || (obj_description('batches'::regclass) IS NOT NULL)
+  || ',' || (SELECT count(*) FROM pg_attribute WHERE attname = 'batch_id' AND attrelid IN ('manufacturing_operations'::regclass, 'test_sessions'::regclass)
+              AND col_description(attrelid, attnum) IS NOT NULL);
+SELECT 'up_triggers:' || string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'batches'::regclass AND NOT tgisinternal;
+SELECT 'up_collection:' || icon || '/' || note FROM directus_collections WHERE collection = 'batches';
+SELECT 'up_fields:' || count(*) FROM directus_fields WHERE collection = 'batches';
+SELECT 'up_batch_id_fields:' || string_agg(collection || '/' || interface || '/' || (options::jsonb ->> 'template') || '/' || sort || '/' || note, ';' ORDER BY collection)
+  FROM directus_fields WHERE field = 'batch_id' AND collection IN ('manufacturing_operations', 'test_sessions');
+SELECT 'up_relations:' || count(*) FROM directus_relations WHERE many_collection = 'batches' OR one_collection = 'batches';
+SELECT 'up_perm_rows:' || string_agg(action || '=' || permissions::text, ';' ORDER BY action)
+  FROM directus_permissions WHERE collection = 'batches' AND policy = '20000002-0000-0000-0000-000000000002';
+SELECT 'up_perm_fields:' || string_agg(action || '=' || fields, ';' ORDER BY action)
+  FROM directus_permissions WHERE collection = 'batches' AND policy = '20000002-0000-0000-0000-000000000002';
+INSERT INTO batches (batch_id, notes) VALUES ('c0000000-0000-4000-8000-0000000001b1', 'code left out');
+INSERT INTO batches (batch_id, code, notes) VALUES ('c0000000-0000-4000-8000-0000000001b2', NULL, 'code sent as null');
+INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b3', '  ');
+INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b4', 'B-custom');
+SELECT 'codes:' || string_agg(code, ',' ORDER BY batch_id) FROM batches;
+-- the number is never truncated past four digits: the 10000th batch is B-10000, not B-1000
+SELECT setval('batches_code_seq', 9999);
+INSERT INTO batches (batch_id) VALUES ('c0000000-0000-4000-8000-0000000001b5');
+INSERT INTO batches (batch_id, code) VALUES ('c0000000-0000-4000-8000-0000000001b6', NULL);
+SELECT 'big_codes:' || string_agg(code, ',' ORDER BY batch_id) FROM batches WHERE batch_id IN ('c0000000-0000-4000-8000-0000000001b5', 'c0000000-0000-4000-8000-0000000001b6');
+SAVEPOINT s1;
+INSERT INTO batches (code) VALUES ('B-0001');
+SELECT 'dup_code:accepted';
+ROLLBACK TO SAVEPOINT s1;
+UPDATE batches SET notes = 'edited' WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b4';
+SELECT 'occ_version:' || version FROM batches WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b4';
+SELECT 'audit:' || count(*) FROM audit_logs WHERE table_name = 'batches' AND record_id = 'c0000000-0000-4000-8000-0000000001b4';
+INSERT INTO manufacturing_methods (method_id, method_code, method_name)
+VALUES ('c0000000-0000-4000-8000-0000000001a1', 'T-BATCH', 'batches test method');
+INSERT INTO physical_samples (sample_id, sample_code) VALUES ('c0000000-0000-4000-8000-0000000001d1', 'TEST-BATCH-001');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code, batch_id) VALUES
+  ('c0000000-0000-4000-8000-0000000001c1', 'c0000000-0000-4000-8000-0000000001a1', 'c0000000-0000-4000-8000-0000000001d1', 'TEST-BATCH-OP', 'c0000000-0000-4000-8000-0000000001b1');
+INSERT INTO manufacturing_operations (operation_id, method_id, sample_id, pass_code) VALUES
+  ('c0000000-0000-4000-8000-0000000001c2', 'c0000000-0000-4000-8000-0000000001a1', 'c0000000-0000-4000-8000-0000000001d1', 'TEST-BATCH-OP-2');
+INSERT INTO test_sessions (session_id, batch_id) VALUES ('c0000000-0000-4000-8000-0000000001e1', 'c0000000-0000-4000-8000-0000000001b1');
+SELECT 'attached:' || (SELECT count(*) FROM manufacturing_operations WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b1')
+  || ',' || (SELECT count(*) FROM test_sessions WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b1')
+  || ',' || (SELECT count(*) FROM manufacturing_operations WHERE batch_id IS NULL AND operation_id = 'c0000000-0000-4000-8000-0000000001c2');
+DELETE FROM batches WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b1';
+SELECT 'detached:' || (SELECT count(*) FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-0000000001c1' AND batch_id IS NULL)
+  || ',' || (SELECT count(*) FROM test_sessions WHERE session_id = 'c0000000-0000-4000-8000-0000000001e1' AND batch_id IS NULL);
+INSERT INTO people (person_id, full_name) VALUES ('c0000000-0000-4000-8000-0000000001f1', 'Batch Owner');
+UPDATE batches SET owner_person_id = 'c0000000-0000-4000-8000-0000000001f1' WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b2';
+DELETE FROM people WHERE person_id = 'c0000000-0000-4000-8000-0000000001f1';
+SELECT 'owner_cleared:' || (owner_person_id IS NULL) FROM batches WHERE batch_id = 'c0000000-0000-4000-8000-0000000001b2';
+$bt_down
+SELECT 'redown_table:' || coalesce(to_regclass('batches')::text, 'gone');
+SELECT 'redown_powder:' || (translations::jsonb = '[{"language": "en-US", "translation": "Batch #"}]'::jsonb) || '/' || (note IS NULL)
+  FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_batch_number';
+SELECT 'redown_ops:' || count(*) FROM manufacturing_operations WHERE operation_id = 'c0000000-0000-4000-8000-0000000001c2';
+ROLLBACK;
+SQL
+)
+bt_check() { grep -qxF "$1" <<<"$bt_out" && ok "$2" || bad "$2 (psql output: $bt_out)"; }
+bt_check "down_table:gone" "down: batches is dropped"
+bt_check "down_seq:gone" "down: batches_code_seq is dropped"
+bt_check "down_cols:0" "down: batch_id is dropped from operations and tests"
+bt_check "down_fn:0" "down: the code-filling trigger function and batches_next_code() are dropped"
+bt_check "down_meta:0,0,0,0" "down: its Directus fields, collection, permissions and relations are removed"
+bt_check "down_powder:true/true" "down: sintering_batch_number is labelled Batch # again, with no note"
+bt_check 'up_powder:true/The powder batch typed on the FAST press, e.g. TIMET 45-150. Names a raw stock lot but is not linked to it.' "up: sintering_batch_number is Powder batch, with its note"
+bt_check "up_powder_rows:1" "up: sintering_batch_number keeps exactly one field row"
+bt_check "up_nullable:manufacturing_operations=YES,test_sessions=YES" "up: batch_id is nullable on operations and tests"
+bt_check "up_code_col:NO/true" "up: code is NOT NULL and defaults from batches_next_code()"
+bt_check "up_fk:manufacturing_operations=n,test_sessions=n" "up: both batch_id foreign keys are ON DELETE SET NULL"
+bt_check "up_indexes:idx_manufacturing_operations_batch_id,idx_test_sessions_batch_id" "up: both batch_id columns are indexed"
+bt_check "up_comments:0,true,2" "up: every batches column, the table and both batch_id columns carry a COMMENT"
+bt_check "big_codes:B-10000,B-10001" "past B-9999 a default and a null code keep counting (B-10000, B-10001) instead of truncating"
+bt_check "up_triggers:audit_batches,batches_fill_code,occ_batches" "up: audit, code-filling and OCC triggers are attached"
+bt_check "up_collection:inventory_2/Several operations or tests done together as one job" "up: batches is a Directus collection"
+bt_check "up_fields:9" "up: every batches column has a Directus field row"
+bt_check "up_batch_id_fields:manufacturing_operations/select-dropdown-m2o/{{code}}/11/Set when several samples were processed together as one job.;test_sessions/select-dropdown-m2o/{{code}}/9/Set when several samples were processed together as one job." \
+    "up: the batch_id M2O pickers sit beside the date fields, with the note"
+bt_check "up_relations:4" "up: batches relates to people and directus_users, operations and tests relate to batches"
+bt_check 'up_perm_rows:create={};delete={"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}};read={};update={"owner_person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}' \
+    "up: Lab Members read and create freely, update and delete only batches they own"
+bt_check "up_perm_fields:create=code,batch_date,notes,owner_person_id;delete=*;read=*;update=code,batch_date,notes,owner_person_id" \
+    "up: Lab Member create and update cannot touch the system columns"
+bt_check "codes:B-0001,B-0002,B-0003,B-custom" "a batch gets B-0001-style codes whether code is left out, null or blank, and an explicit code is kept"
+! grep -qx "dup_code:accepted" <<<"$bt_out" && ok "a duplicate batch code is refused" || bad "a duplicate batch code is refused"
+bt_check "occ_version:2" "an update bumps version"
+bt_check "audit:2" "an insert and an update of a batch are audited under its primary key"
+bt_check "attached:1,1,1" "an operation and a test can join a batch, and an operation can have none"
+bt_check "detached:1,1" "deleting a batch clears batch_id on its operations and tests"
+bt_check "owner_cleared:true" "deleting the owner clears owner_person_id"
+bt_check "redown_table:gone" "down runs again after up"
+bt_check "redown_powder:true/true" "down after up restores the Batch # label"
+bt_check "redown_ops:1" "down keeps the operation rows"
+
 echo "== Sample geometry: legacy forms are back-filled =="
 # Seed old-vocabulary samples, apply the back-fill's up SQL, assert, then ROLLBACK.
 BACKFILL=db/migrations/20260930000115_backfill_legacy_geometry_forms.sql
@@ -3175,8 +3307,8 @@ grep -qxF "b_project_aliases:operations,samples,sessions" <<<"$cfg_out" && ok "c
     || bad "configure_directus.sql loses a projects alias (output: $cfg_out)"
 # The Owner / Operator / PI pickers (m2o -> people, migration 062) must survive the scripts, which delete
 # the field rows of these collections; otherwise the forms fall back to a raw UUID input.
-grep -qxF "b_pickers_before:12" <<<"$cfg_out" && ok "the migrations leave 12 person picker field rows (owner, operator and PI)" \
-    || bad "expected 12 owner_person_id/operator_person_id/principal_investigator_person field rows after the migrations (output: $cfg_out)"
+grep -qxF "b_pickers_before:13" <<<"$cfg_out" && ok "the migrations leave 13 person picker field rows (owner, operator and PI, and batches' owner)" \
+    || bad "expected 13 owner_person_id/operator_person_id/principal_investigator_person field rows after the migrations (output: $cfg_out)"
 grep -qxF "b_pickers_changed:0" <<<"$cfg_out" && ok "the configure scripts keep every person picker field row, with migration 062's interface, options, display, width, sort and translations" \
     || bad "a configure script drops or changes a person picker field row (output: $cfg_out)"
 grep -qxF "b_picker_relations_lost:0" <<<"$cfg_out" && ok "the configure scripts keep a relation to people for every person picker" \
@@ -3327,9 +3459,9 @@ $jr_up
 $la_up
 $rr_up
 $ll_up
--- 20261012000164 (label_templates, a custom-rows collection) runs after these and adds its four rows, which are the generated ones
+-- 20261012000164 (label_templates) and 20261014000177 (batches), custom-rows collections, run after these and add their rows, which are the generated ones
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection = 'label_templates';
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches');
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -3337,8 +3469,8 @@ SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
 $ll_down
 $rr_down
 $la_down
--- the replay's own rows for label_templates go before the older migrations' down sections run
-DELETE FROM directus_permissions WHERE policy = '$LM' AND collection = 'label_templates';
+-- the replay's own rows for label_templates and batches go before the older migrations' down sections run
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches');
 $jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
@@ -3387,7 +3519,8 @@ SELECT 'dn_alias_ops:' || coalesce(one_field, 'null') FROM directus_relations WH
 SELECT 'dn_alias_tests:' || coalesce(one_field, 'null') FROM directus_relations WHERE many_collection='test_sessions' AND many_field='project_id';
 SELECT 'dn_alias_sessions_field:' || note FROM directus_fields WHERE collection='projects' AND field='sessions';
 SELECT 'dn_alias_fields:' || string_agg(field, ',' ORDER BY field) FROM directus_fields WHERE collection='projects' AND field IN ('samples','operations','sessions');
-SELECT 'dn_indexes:' || count(*) FROM pg_indexes WHERE indexname LIKE 'idx\_%\_owner\_person\_id' OR indexname IN ('idx_physical_samples_project_id','idx_sample_co_owners_user_id','idx_project_investigators_user_id');
+-- idx_batches_owner_person_id belongs to 20261014000177 (batches), which this replay never rolls back, so it is not one of the indexes expected to be gone
+SELECT 'dn_indexes:' || count(*) FROM pg_indexes WHERE (indexname LIKE 'idx\_%\_owner\_person\_id' AND tablename <> 'batches') OR indexname IN ('idx_physical_samples_project_id','idx_sample_co_owners_user_id','idx_project_investigators_user_id');
 ROLLBACK;
 SQL
 )

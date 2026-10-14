@@ -17,6 +17,8 @@ export interface FinderHit {
 	detail?: string;
 	to: string;
 	rank: number;
+	// The record behind a hit from a remote source (not Pages, not Saved views): lets a host pick it instead of opening it.
+	record?: { collection: string; id: string };
 }
 
 export interface FinderSource {
@@ -31,6 +33,8 @@ export interface FinderSource {
 	label(row: any): string;
 	detail?(row: any): string;
 	to(row: any): string;
+	// The record a row is, as collection and key.
+	record(row: any): { collection: string; id: string };
 }
 
 // Below this a query is noise: nothing remote is asked and no local hit is offered.
@@ -43,10 +47,12 @@ const LOCAL_GROUPS = new Set<FinderGroup>(['Pages', 'Saved views']);
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
-// An inventory code finds its row and opens the index page with that row's drawer. The key comes
+// An inventory code finds its row and opens the row's record page (tool boxes, cutting inserts, insert edges), or the index page with that row's drawer. The key comes
 // from indexConfig so a renamed primary key cannot leave the finder behind.
 function inventory(collection: string, codeField: string, kind: string, extra: string[] = []): FinderSource {
-	const pk = indexDefByCollection(collection)?.primaryKey ?? `${collection}_id`;
+	const def = indexDefByCollection(collection);
+	const pk = def?.primaryKey ?? `${collection}_id`;
+	const rowTarget = def?.rowTarget;
 	return {
 		group: 'Inventory',
 		collection,
@@ -55,7 +61,8 @@ function inventory(collection: string, codeField: string, kind: string, extra: s
 		label: (r) => str(r[codeField]) || String(r[pk]),
 		// The code alone does not say what it is: a tool box and an insert edge look alike.
 		detail: () => kind,
-		to: (r) => indexRoute(collection, { open: String(r[pk]) }),
+		to: (r) => (rowTarget === 'record' ? recordRoute(collection, String(r[pk])) : indexRoute(collection, { open: String(r[pk]) })),
+		record: (r) => ({ collection, id: String(r[pk]) }),
 	};
 }
 
@@ -69,6 +76,7 @@ export const FINDER_SOURCES: FinderSource[] = [
 		label: (r) => str(r.sample_code) || 'Sample',
 		detail: (r) => str(r.nickname),
 		to: (r) => recordRoute('physical_samples', r.sample_id),
+		record: (r) => ({ collection: 'physical_samples', id: String(r.sample_id) }),
 	},
 	{
 		group: 'Operations',
@@ -79,6 +87,7 @@ export const FINDER_SOURCES: FinderSource[] = [
 		shortId: true,
 		label: (r) => operationLabel(r),
 		to: (r) => recordRoute('manufacturing_operations', r.operation_id),
+		record: (r) => ({ collection: 'manufacturing_operations', id: String(r.operation_id) }),
 	},
 	{
 		group: 'Tests',
@@ -89,6 +98,7 @@ export const FINDER_SOURCES: FinderSource[] = [
 		label: (r) => str(r.test_code) || 'Test',
 		detail: (r) => str(r.test_type),
 		to: (r) => recordRoute('test_sessions', r.session_id),
+		record: (r) => ({ collection: 'test_sessions', id: String(r.session_id) }),
 	},
 	{
 		group: 'Campaigns',
@@ -98,6 +108,7 @@ export const FINDER_SOURCES: FinderSource[] = [
 		label: (r) => str(r.campaign_code) || str(r.name) || 'Campaign',
 		detail: (r) => (str(r.campaign_code) ? str(r.name) : ''),
 		to: (r) => recordRoute('campaigns', r.campaign_id),
+		record: (r) => ({ collection: 'campaigns', id: String(r.campaign_id) }),
 	},
 	{
 		// projects and people have no indexConfig def, so their keys are written out here.
@@ -108,6 +119,7 @@ export const FINDER_SOURCES: FinderSource[] = [
 		label: (r) => str(r.project_code) || str(r.project_name) || 'Project',
 		detail: (r) => (str(r.project_code) ? str(r.project_name) : ''),
 		to: (r) => recordRoute('projects', r.project_id),
+		record: (r) => ({ collection: 'projects', id: String(r.project_id) }),
 	},
 	{
 		group: 'People',
@@ -117,6 +129,7 @@ export const FINDER_SOURCES: FinderSource[] = [
 		label: (r) => str(r.full_name) || 'Person',
 		// The People page has no per-person route: it opens searched for the name.
 		to: (r) => `/home/people?q=${encodeURIComponent(str(r.full_name))}`,
+		record: (r) => ({ collection: 'people', id: String(r.person_id) }),
 	},
 	inventory('tools', 'tool_code', 'Tool'),
 	inventory('tool_boxes', 'tool_box_code', 'Tool box'),
@@ -161,7 +174,7 @@ export function toHits(src: FinderSource, q: string, rows: any[]): FinderHit[] {
 	return rows.map((row) => {
 		const label = src.label(row);
 		const exactShortId = !!src.shortId && SHORT_ID_RE.test(needle) && str(row.short_id).toLowerCase() === needle;
-		const hit: FinderHit = { group: src.group, label, to: src.to(row), rank: rankHit(q, label, exactShortId) };
+		const hit: FinderHit = { group: src.group, label, to: src.to(row), rank: rankHit(q, label, exactShortId), record: src.record(row) };
 		const detail = src.detail?.(row);
 		if (detail) hit.detail = detail;
 		return hit;

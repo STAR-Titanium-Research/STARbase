@@ -28,6 +28,7 @@ export const OWNER_FIELDS = {
 	campaigns: 'owner_person_id',
 	manufacturing_operations: 'owner_person_id',
 	test_sessions: 'owner_person_id',
+	batches: 'owner_person_id',
 	projects: 'principal_investigator_person',
 };
 

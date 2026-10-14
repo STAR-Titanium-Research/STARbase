@@ -81,7 +81,7 @@ node --test core/extensions/*/index.test.mjs
 bash scripts/sync_geometry.sh --check
 ```
 
-`d1-lab-dashboard` has no typecheck script (older cytoscape type errors in `NodeGraph.vue`).
+`d1-lab-dashboard` has no typecheck script (the lineage view it once had is now the Process map, STARbase `/map`).
 
 Plus `npm test -w @d1/force-plotting` (and `npm test -w starbase-web`) if you touched the force
 plotter or STARbase's plot pages, and `npm ci && npm test` in `core/extensions/d1-report` if you touched it.

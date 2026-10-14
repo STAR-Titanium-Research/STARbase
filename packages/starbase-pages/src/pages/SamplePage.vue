@@ -8,6 +8,7 @@ import {
 	buildLife, dataStudioRoute, detailFacts, sampleCampaigns, sampleDetailBase, sampleDims, sampleKind, sampleRailFacts, truncatedNotes,
 	type ContentsEntry,
 	pinTargetForRecord,
+	mapPath,
 } from '@d1/ui';
 import { dimsText } from '../geometry';
 import { useSampleData } from './sample/useSampleData';
@@ -68,6 +69,8 @@ const contents = computed<ContentsEntry[]>(() => [
 const labelsTo = computed(() => `/home/labels?ids=${encodeURIComponent(props.id)}`);
 const openReportPage = () => openLink(`/d1-report/sample/${encodeURIComponent(props.id)}`, router);
 
+// The Process map, opened on this record.
+const mapTo = computed(() => mapPath('physical_samples', props.id));
 const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 </script>
 
@@ -113,6 +116,7 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 							<template #actions>
 								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
 									<v-button icon small secondary :to="labelsTo" title="Print label" aria-label="Print label"><v-icon name="label" small /><span class="sr-only">Print label</span></v-button>
+									<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
 									<v-button icon small secondary @click="openReportPage" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /><span class="sr-only">Report</span></v-button>
 								</RecordActions>
 							</template>
@@ -129,11 +133,6 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 					/>
 
 					<Section id="life" title="Life of the sample">
-						<template #actions>
-							<v-button x-small secondary :to="`/d1-lab-dashboard/graph?sample=${encodeURIComponent(id)}`">
-								<v-icon name="hub" x-small left />Open lineage graph
-							</v-button>
-						</template>
 						<LoadState :loading="trace.loading" :error="trace.error">
 							<LifeStrip :items="life" />
 							<p v-for="n in notes" :key="n" class="d1-note warn note">{{ n }}</p>

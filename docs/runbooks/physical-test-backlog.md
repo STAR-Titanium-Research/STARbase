@@ -434,12 +434,12 @@ named, was removed in phase 1 of going headless), and `d1-report` is rebuilt in 
   `https://starbase.tail54eeb6.ts.net/samples/<id>`, and Back returns to the dashboard. In the FAST plotter (`/plot/fast`) **Open** on
   a run opens the Operation page; opening the recipe still opens its Content form. Since: Explorer
   pages E4 (PR pending).
-- [ ] **E4 — project items links and lineage graph.** In a project's Content form, the Project
+- [ ] **E4 — project items links and Process map.** In a project's Content form, the Project
   items panel shows operation and sample codes as links to their Explorer pages (equipment, tools,
   inserts and materials open their Content forms); as a role that cannot read some of the
   operations, those rows stay plain text and the panel still lists them. On a Sample page,
-  **Open lineage graph** opens the Lab Dashboard graph centred on that sample, with its operations,
-  tests and neighbours, and reloading the graph URL (`?sample=<id>`) does the same. Since:
+  the rail's **Process map** button opens the Process map (STARbase `/map`) on that sample, with its operations,
+  tests and neighbours, and reloading the `/map?focus=physical_samples:<id>` URL does the same. Since:
   Explorer pages E4 (PR pending).
 - [ ] **E4-fix — the subject trigger on real data (migration 139).** Apply the migration to the
   real database (`dbmate up`) and check the back-fill: `SELECT count(*) FROM test_sessions t WHERE
@@ -448,7 +448,7 @@ named, was removed in phase 1 of going headless), and `d1-report` is rebuilt in 
   sample that no longer exists). Then create a test through the Content form, picking a sample in
   Subject. Expect, for that new test: `sample_id` is filled in the table; it appears in the
   campaign's matrix on the Campaign page (if the sample is in the campaign); the sample report
-  (Generate PDF) lists it under tests; the Lab Dashboard lineage graph and the Sample dashboard
+  (Generate PDF) lists it under tests; the Process map (STARbase `/map`) and the Sample dashboard
   show it; the sample's timeline (`f_sample_timeline`) has its entry; and the Tests panel search by
   the sample code finds it. Add a second sample to the same test: nothing changes in those views
   (only the first sample is primary), but the Sample page of the second sample lists the test.
@@ -828,12 +828,12 @@ migration 141 prints about ownerless records.
 - [ ] **Explorer fixes F1 — Ask the database and Dashboards have no entry on Home.** By the
   maintainer's decision of 2026-10-09 Ask the database is hidden from Home for now, so on this
   install it has no entry in the UI at all (its module is off in the module bar), and the
-  Dashboards module is being retired (its lineage graph is to be rebuilt). Expect: Home's quick
-  actions show no tile for either; on this install the lab dashboard is reachable only from a
-  Sample page's "Open lineage graph" until it is replaced (its module bar has `d1-lab-dashboard`
+  Dashboards module is being retired (the Process map in STARbase `/map` replaces its lineage graph). Expect: Home's quick
+  actions show no tile for either; on this install the lab dashboard is reachable only from its
+  module URL until it is replaced (its module bar has `d1-lab-dashboard`
   and `ask-db` disabled). A fresh install differs: `scripts/configure_directus.sql` enables
   `d1-lab-dashboard` in the module bar, so there it is also in the bar; do not fail this item for
-  that. Check that the link still opens the graph for the sample. Since: Explorer fixes F1, not
+  that. Check that the Sample page's Process map button opens the map for the sample. Since: Explorer fixes F1, not
   yet in a PR.
 - [ ] **Migration 20261010000160 on live: Lab Member queries stop returning 400.** Before applying,
   record `SELECT md5(string_agg(id||coalesce(permissions::text,'~'), ',' ORDER BY id)) FROM

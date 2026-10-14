@@ -107,37 +107,24 @@
 				</div>
 			</div>
 		</div>
-
-		<!-- Panel 4: Node Graph -->
-		<div class="d1-panel d1-panel--graph">
-			<div class="d1-panel-header">
-				<v-icon name="hub" />
-				<h3>Connections</h3>
-			</div>
-			<NodeGraph ref="graphRef" class="d1-graph" />
-		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useItems, useRequestGate, errorText, recordRoute, AppLink } from '@d1/ui';
-import NodeGraph from './NodeGraph.vue';
 
 const { getItems } = useItems();
 
 const equipment = ref<any[]>([]);
 const equipmentSearch = ref('');
 const selectedEquipmentId = ref<string | null>(null);
-const selectedEquipmentCollection = 'equipment';
 
 const operations = ref<any[]>([]);
 const loadingOps = ref(false);
 const loadError = ref('');
 const opsGate = useRequestGate();
 const selectedOp = ref<any | null>(null);
-
-const graphRef = ref<InstanceType<typeof NodeGraph> | null>(null);
 
 const filteredEquipment = computed(() =>
 	equipmentSearch.value
@@ -193,12 +180,10 @@ async function selectEquipment(eq: any) {
 	} finally {
 		if (opsGate.isCurrent(token)) loadingOps.value = false;
 	}
-	graphRef.value?.loadNeighbors(selectedEquipmentCollection, eq.equipment_id);
 }
 
 function selectOp(op: any) {
 	selectedOp.value = op;
-	graphRef.value?.loadNeighbors('manufacturing_operations', op.operation_id);
 }
 
 function formatDate(d: string | null): string {
@@ -210,7 +195,7 @@ function formatDate(d: string | null): string {
 <style scoped>
 .d1-machining {
 	display: grid;
-	grid-template-columns: 220px minmax(280px, 1fr) 300px 340px; min-width: 0;
+	grid-template-columns: 220px minmax(280px, 1fr) minmax(300px, 1fr); min-width: 0;
 	gap: 12px;
 	height: calc(100vh - 120px);
 	padding: 12px;
@@ -230,10 +215,6 @@ function formatDate(d: string | null): string {
 	padding: 10px 12px;
 	font-size: 12px;
 	color: var(--theme--danger, #c62828);
-}
-
-.d1-panel--graph {
-	overflow: hidden;
 }
 
 .d1-panel-header {
@@ -382,10 +363,5 @@ function formatDate(d: string | null): string {
 	color: var(--theme--foreground, #1e293b);
 	margin: 0;
 	white-space: pre-wrap;
-}
-
-.d1-graph {
-	flex: 1;
-	min-height: 0;
 }
 </style>

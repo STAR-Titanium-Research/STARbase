@@ -32,6 +32,8 @@ import { useRequestGate } from '../composables/useRequestGate';
 import CardGrid from './CardGrid.vue';
 import { rowAccent } from './accent';
 import RowPlotButtons from './RowPlotButtons.vue';
+import RowMapButton from './RowMapButton.vue';
+import { MAP_ROW_COLLECTIONS } from '../mapLink';
 import { sortOptions } from './cardFacts';
 import type { ColumnDef, IndexDef } from './indexConfig';
 import { PAGE_SIZE, toggledBookmark } from './indexQuery';
@@ -66,6 +68,8 @@ const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
 const designedCards = computed(() => view.value === 'cards' && !!slots.card);
 // Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
 const hasPlots = computed(() => plotKind(props.def.collection) !== null);
+// The kinds with no record page (and insert edges) get a Process map pill instead (spec section 8).
+const hasMap = computed(() => MAP_ROW_COLLECTIONS.includes(props.def.collection));
 // A sample's code is what its "Force (n)" button searches the operations list for.
 const plotCode = (row: Record<string, unknown>): string => (typeof row.sample_code === 'string' ? row.sample_code : '');
 // The row's name, for its buttons' accessible names (its first column, else its key).
@@ -295,12 +299,13 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
-					<template v-if="$slots.footer || hasPlots || def.selectAction" #footer="{ row }">
+					<template v-if="$slots.footer || hasPlots || hasMap || def.selectAction" #footer="{ row }">
 						<label v-if="def.selectAction" class="tick">
 							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="!sel.isPicked(row) && sel.full.value" @change="sel.toggle(row)" />
 							<span>Select</span>
 						</label>
 						<RowPlotButtons v-if="hasPlots" size="card" :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
+						<RowMapButton v-if="hasMap" size="card" :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
 						<slot name="footer" :row="row" />
 					</template>
 				</CardGrid>
@@ -318,6 +323,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								<template v-else>{{ c.label }}</template>
 							</th>
 							<th v-if="hasPlots" class="plots">Plots</th>
+							<th v-if="hasMap" class="plots"><span class="sr-only">Process map</span></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -327,6 +333,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								<td v-if="showThumb" class="thumb"><span class="bar" /></td>
 								<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
 								<td v-if="hasPlots" class="plots" />
+								<td v-if="hasMap" class="plots" />
 							</tr>
 						</template>
 						<template v-else>
@@ -366,6 +373,9 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								</td>
 								<td v-if="hasPlots" class="plots">
 									<RowPlotButtons :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
+								</td>
+								<td v-if="hasMap" class="plots">
+									<RowMapButton :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
 								</td>
 							</tr>
 						</template>
@@ -460,6 +470,7 @@ th.num .sort { justify-content: flex-end; }
 
 .row { cursor: pointer; }
 .plots { text-align: right; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .tick { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); cursor: pointer; }
 .row td.plots { overflow: visible; }
 .flag {

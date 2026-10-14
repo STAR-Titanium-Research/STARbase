@@ -226,6 +226,39 @@ Rollback, in this order:
 
 The STARbase tile stays first in the bar; remove it under Settings → Appearance if wanted.
 
+## Recorded batches (migration 177, process map slice 2)
+
+Recorded batches (ADR-0017): a `batches` table, a nullable `batch_id` on `manufacturing_operations` and
+`test_sessions`, the Lab Member permissions for `batches`, and the FAST press's `sintering_batch_number` field
+relabelled **Powder batch**. Maintainer's step, approve separately.
+
+**Order.** The map tolerates a missing `batch_id` (it asks for the field only when Directus reports it), so this STARbase
+build can be deployed before or after the migration. Migrating does not change what the map draws until someone sets a
+`batch_id`. The **Batch** field on an operation or test form, and the **Batches** collection, need steps 1 and 2 only; step 3 is for the map (its grouping by `batch_id`):
+
+1. `git pull`, then `make migrate-status` (177 pending) and `make migrate` (migration 177).
+2. `docker compose restart directus`: Directus reads its schema and permissions at start, and no Redis cache is configured for it, so the restart is the operative step. This also loads the `d1-owner-default` hook, which now fills `owner_person_id` on a new
+   batch (it has no build step; `core/extensions` is mounted as it is). Without the restart a Lab Member's new batch has no
+   owner, and only an admin could then edit it.
+3. The STARbase build that groups by `batch_id` (only the map needs it): `git pull && npm ci && npm run build:starbase`, then
+   `docker compose up -d --force-recreate proxy` (see "Redeploying after a change" above). This step can come before
+   or after steps 1 and 2.
+
+Run the migration while no import is running: it sets a 10 s lock timeout, so on a lock timeout just run `make migrate` again.
+
+Check:
+- `GET /fields/batches` answers (admin token); `GET /fields/manufacturing_operations/sintering_batch_number` shows the
+  translation "Powder batch".
+- In Data Studio, create a batch with the **Code** field left alone: it saves as `B-0001`, `B-0002`, ... The form shows the
+  text `batches_next_code()` in that field before the first save (Directus prefills a column default it cannot evaluate);
+  it is never sent, and the database fills the code. Only a code someone types is kept. (An explicit `"code": null` through the API is refused by Directus with a 400; a blank code is filled.)
+- Set **Batch** on two operations of one sample and open the sample's Process map: one container, "Batch B-…".
+
+Rollback: `make migrate-down` drops `batches` (operations and tests keep their rows; `batch_id` goes). Restart Directus
+immediately afterwards: its cached schema still lists `batch_id`, so every read that asks for `fields=*` on operations or tests
+fails with a 500 until it restarts. `make migrate-down` rolls back only the latest applied migration, so it undoes 177 only
+while 177 is still the newest one applied.
+
 ## Report a bug page (`/report-bug`)
 
 STARbase's own Report a bug page posts to the `d1-bug-report` Directus endpoint

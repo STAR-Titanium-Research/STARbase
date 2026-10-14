@@ -24,6 +24,7 @@ Format: lightweight [MADR](https://adr.github.io/madr/)-style. Status is one of
 | [0013](./0013-starbase-separate-tailnet-device-shared-directus-session.md) | STARbase: its own tailnet device, sharing Directus's session | Accepted (2026-10-12) |
 | [0014](./0014-record-access.md) | Record access: a Who has access list, Restricted records, materialised readers; Ask-DB row security | Accepted for A1a (2026-10-13); amends 0011 |
 | [0015](./0015-directus-headless-starbase-is-the-only-front-end.md) | Directus goes headless; STARbase is the only front end, reached through permanent links | Proposed |
+| [0017](./0017-batches-are-recorded.md) | Batches are recorded; probable batches are only shown | Proposed (2026-10-14) |
 
 New ADRs: copy the structure of an existing one, take the next number, and add a
 row above.

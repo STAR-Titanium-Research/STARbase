@@ -14,6 +14,13 @@
   },
   "dependencies": {
     "@d1/ui": "*",
+    "@vue-flow/background": "1.3.2",
+    "@vue-flow/controls": "1.1.3",
+    "@vue-flow/core": "1.48.2",
+    "@vue-flow/minimap": "1.5.4",
+    "elkjs": "0.12.0",
+    "html-to-image": "1.11.13",
+    "jspdf": "4.2.1",
     "jsqr": "^1.4.0",
     "qrcode": "^1.5.4",
     "three": "^0.186.1",

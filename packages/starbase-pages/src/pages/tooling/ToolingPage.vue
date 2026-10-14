@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router';
 import {
 	AppLink, EditDrawer, HiddenLink, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordLink, RecordRail,
 	boxDetailFacts, boxProjectHidden, boxRailFacts, dataStudioRoute, detailFacts, edgeDetailFacts, edgeLabel, edgeRailFacts, edgeUsageMismatch, findEdge, findInsert,
-	focusKindOf, focusRoute, indexRoute, insertDetailFacts, insertLabel, insertRailFacts, mismatchText, openLink, pinTargetForRecord, toolingTitle,
+	focusKindOf, focusRoute, indexRoute, insertDetailFacts, insertLabel, insertRailFacts, mapPath, mismatchText, openLink, pinTargetForRecord, toolingTitle,
 	useCanUpdate, FOCUS_COLLECTION, FOCUS_KIND_LABEL, FOCUS_NOUN, type ContentsEntry, type ToolingFocus,
 } from '@d1/ui';
 import { useToolingData } from './useToolingData';
@@ -52,6 +52,8 @@ function onSelect(f: ToolingFocus) {
 const pageTitle = computed(() => toolingTitle(focus.value, model.value));
 const studioTo = computed(() => dataStudioRoute(collection.value, props.id));
 const pin = computed(() => pinTargetForRecord(collection.value, props.id));
+// The Process map, opened on this record. Only an insert edge can be a map focus (its used-in fan); tool boxes and cutting inserts cannot.
+const mapTo = computed(() => (focusKind.value === 'edge' ? mapPath('insert_edges', props.id) : null));
 
 // The box's own row: at box focus the freshly read focused record (so a reload shows what was just saved),
 // else the row the model was built from. Either way it is one row of `tool_boxes` read with the same fields.
@@ -146,6 +148,7 @@ const contents = computed<ContentsEntry[]>(() => {
 							<template v-if="insert" #status><StateBadge :state="edge ? (edge.used ? 'used' : 'fresh') : insert.state" /></template>
 							<template #actions>
 								<v-button v-if="canUpdate !== false" icon small title="Edit" aria-label="Edit" @click="editing = true"><v-icon name="edit" small /><span class="sr-only">Edit</span></v-button>
+								<v-button v-if="mapTo" icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
 								<v-button icon small secondary :to="studioTo" title="Data Studio" aria-label="Data Studio"><v-icon name="open_in_new" small /><span class="sr-only">Data Studio</span></v-button>
 							</template>
 							<!-- The stage lives in the rail, in a slot that is always present, with no v-if or key on the way: moving

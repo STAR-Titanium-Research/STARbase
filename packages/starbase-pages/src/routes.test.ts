@@ -10,12 +10,12 @@ import SettingsPage from './pages/SettingsPage.vue';
 describe('starbaseRoutes', () => {
 	const paths = starbaseRoutes.map((r) => r.path);
 	it('has every page of the Home module', () => {
-		for (const p of ['', 'register-sample', 'people', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', 'report-bug', 'crawler', ':kind(tool-boxes|inserts|edges)/:id', ':slug']) {
+		for (const p of ['', 'register-sample', 'people', 'projects', 'projects/:id', 'campaigns/:id', 'samples/:id', 'operations/:id', 'tests/:id', 'labels', 'settings', 'report-bug', 'crawler', 'map', ':kind(tool-boxes|inserts|edges)/:id', ':slug']) {
 			expect(paths).toContain(p);
 		}
 	});
 	it('has no other route', () => {
-		expect(paths).toHaveLength(15);
+		expect(paths).toHaveLength(16);
 	});
 	it('settings resolves to SettingsPage, not IndexRoute', () => {
 		const settings = starbaseRoutes.find((r) => r.path === 'settings');
@@ -42,6 +42,11 @@ describe('starbaseRoutes', () => {
 		expect(matched.map((m) => [m.params.kind, m.params.id])).toEqual([['tool-boxes', 'b1'], ['inserts', 'i1'], ['edges', 'e1']]);
 		// Other collections still reach their index page.
 		expect(router.resolve('/samples').matched.at(-1)?.components?.default).toBe(IndexRoute);
+	});
+	it('map is a lazy route ahead of the catch-all, so the Process map code loads only when opened', () => {
+		const map = starbaseRoutes.find((r) => r.path === 'map');
+		expect(typeof map?.component).toBe('function');
+		expect(paths.indexOf('map')).toBeLessThan(paths.indexOf(':slug'));
 	});
 	it('puts the catch-all index route last, so static paths win', () => {
 		expect(paths[paths.length - 1]).toBe(':slug');

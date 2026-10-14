@@ -23,7 +23,7 @@ describe('NAV_GROUPS', () => {
 	it('has the link labels and routes of the spec in order', () => {
 		const flat = (id: string) => NAV_GROUPS.find((g) => g.id === id)!.links.map((l) => [l.label, l.to]);
 		expect(flat('main')).toEqual([['Home', '/home']]);
-		expect(flat('analysis')).toEqual([['Force plotter', '/d1-force-dashboard'], ['FAST plotter', '/d1-fast-dashboard']]);
+		expect(flat('analysis')).toEqual([['Force plotter', '/d1-force-dashboard'], ['FAST plotter', '/d1-fast-dashboard'], ['Process map', '/map']]);
 		expect(flat('records').map(([l]) => l)).toEqual(['Projects', 'Campaigns', 'Samples', 'Operations', 'Tests', 'People']);
 		expect(flat('records')[0]).toEqual(['Projects', '/home/projects']);
 		expect(flat('inventory').map(([l]) => l)).toEqual(['Tools', 'Tool boxes', 'Cutting inserts', 'Insert edges', 'Raw stock lots']);
@@ -75,7 +75,7 @@ describe('buildNav', () => {
 		const nav = buildNav(null, [bm(1, 'View', 'physical_samples')], false);
 		expect(nav.groups.map((g) => g.id)).toEqual(['main', 'analysis', 'more', 'admin']);
 		expect(labels(nav, 'main')).toEqual(['Home']);
-		expect(labels(nav, 'analysis')).toEqual(['Force plotter', 'FAST plotter']);
+		expect(labels(nav, 'analysis')).toEqual(['Force plotter', 'FAST plotter', 'Process map']);
 		expect(labels(nav, 'more')).toEqual(['Print labels', 'Report a bug', 'Settings']);
 		expect(labels(nav, 'admin')).toEqual(['Data Studio']);
 	});
