@@ -48,9 +48,12 @@ describe('a collection the finder searches', () => {
 		expect(toOption(samples, { sample_id: 's1', sample_code: 'S-1', nickname: 'Rod' })).toEqual({ id: 's1', label: 'S-1', detail: 'Rod' });
 	});
 
-	it('a word under the finder minimum (or none) lists plain rows instead of filtering on noise', () => {
+	it('nothing typed lists plain rows; one typed letter already filters (the finder\'s two-character minimum is not the picker\'s)', () => {
 		expect(searchParams(samples, '')).toEqual({ fields: samples.fields, limit: 8 });
-		expect(searchParams(samples, 'a')).toEqual({ fields: samples.fields, limit: 8 });
+		expect(searchParams(samples, '  ')).toEqual({ fields: samples.fields, limit: 8 });
+		const one = searchParams(samples, ' a ');
+		expect(JSON.parse(one.filter as string)).toEqual({ _or: [{ sample_code: { _icontains: 'a' } }, { nickname: { _icontains: 'a' } }] });
+		expect(one.limit).toBe(8);
 	});
 
 	it('operations use the finder label (pass code, else the sample and step)', () => {

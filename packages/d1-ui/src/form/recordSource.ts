@@ -6,7 +6,7 @@
 // labelled from the field's own display template ("{{common_name}} ({{alloy_code}})"). Reads go through the
 // host's API, so the signed-in person's permissions decide what can be picked. Pure apart from the api calls.
 
-import { FINDER_SOURCES, isSearchable, sourceParams } from '../finder/finder';
+import { FINDER_SOURCES, sourceParams } from '../finder/finder';
 import type { FinderSource } from '../finder/finder';
 import type { HostApi } from '../host';
 
@@ -98,11 +98,13 @@ export function toOption(src: PickerSource, row: any): PickerOption | null {
 	return { id, label };
 }
 
-/** Params for the list of options: the finder's own query for a word, plain rows for none. */
+/** Params for the list of options: the finder's own query for whatever was typed, plain rows for nothing. */
 export function searchParams(src: PickerSource, q: string): Record<string, unknown> {
 	const text = q.trim();
 	if (src.finder) {
-		const base = isSearchable(text) ? sourceParams(src.finder, text) : { fields: src.finder.fields };
+		// The finder itself waits for two characters before it searches; a picker has the list in front of it, so one typed
+		// letter already narrows it (sourceParams does not mind the length).
+		const base = text ? sourceParams(src.finder, text) : { fields: src.finder.fields };
 		return { ...base, limit: PICK_LIMIT };
 	}
 	return { fields: src.fields, limit: PICK_LIMIT, ...(text ? { search: text } : {}) };
