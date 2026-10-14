@@ -193,7 +193,8 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   }
   function setReach(r: Reach): void {
     reach.value = r;
-    if (!data.value?.fan) {
+    // A fan has no reach, and the cards ＋ opened from a fan item (a side fan's) are not part of any reach: they stay.
+    if (!data.value?.fan && !data.value?.sideFans?.length) {
       revealed.value = new Set();
       capped.value = false;
     }
@@ -262,6 +263,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     void nextTick().then(() => void (mergeHint = null));
   };
   const publish = (d: ProcessData, h: MergeHint): void => {
+    notice.value = ''; // an earlier failure is old news once something merged
     data.value = d;
     hint(h);
   };
@@ -539,9 +541,13 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   }
 
   /** The family of a sample merged into the map; the card that was expanded keeps its place (spec §6.7). */
+  const opening = new Set<string>();
   function openFamily(sampleId: string, opts: { node?: string; rowId?: string; from?: string }): Promise<void> {
     const mine = loadToken;
-    return withBusy(async () => {
+    const key = opts.from ?? opts.node ?? sampleId;
+    if (opening.has(key)) return Promise.resolve(); // a second click while it loads
+    opening.add(key);
+    return (withBusy(async () => {
       const [family, relationDefs] = await Promise.all([loadFamily(api, sampleId), loadDefs(api)]);
       const before = data.value;
       if (!gate.isCurrent(mine) || !before) return;
@@ -559,7 +565,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const stay = next.nodes.filter((n) => n.type === 'container' && n.group.rowIds.some((id) => opened.has(id))).map((n) => n.id);
       publish(merged, { anchor, from: opts.from });
       admit(anchor ? shownNodes(next, anchor, 1) : [], anchor ? [anchor, ...stay] : stay);
-    }) as Promise<void>;
+    }) as Promise<void>).finally(() => void opening.delete(key));
   }
 
   /** The fan of a record inside the map merged beside it ("used in"). */

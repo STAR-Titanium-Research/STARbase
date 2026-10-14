@@ -51,7 +51,9 @@ provide(MAP_VIEW, view);
 
 const focusCode = computed(() => map.data.value?.focus.code ?? '');
 // The record the map is opened on is not always a sample (a tool, a project, an operation...).
-const focusWord = computed(() => recordWord(map.focus.value?.collection ?? 'physical_samples'));
+// The loaded record's collection; before anything is loaded (not visible) the one in the address.
+const focusCollection = computed(() => map.data.value?.focus.collection ?? map.focus.value?.collection ?? 'physical_samples');
+const focusWord = computed(() => recordWord(focusCollection.value));
 const pageTitle = computed(() => (map.status.value === 'ready' && focusCode.value ? `${focusCode.value} · Process map` : 'Process map'));
 
 const DIRECTIONS: { value: Dir; label: string }[] = [
@@ -153,9 +155,9 @@ onBeforeUnmount(() => {
 
 			<RecordLayout v-else class="d1-process-map" style="--d1-sticky-top: var(--d1-header-offset, 70px)">
 				<template #crumbs>
-					<AppLink :to="indexRoute(map.data.value?.focus.collection ?? 'physical_samples')">{{ focusWord.many }}</AppLink>
+					<AppLink :to="indexRoute(focusCollection)">{{ focusWord.many }}</AppLink>
 					<span>›</span>
-					<RecordLink :collection="map.data.value?.focus.collection ?? 'physical_samples'" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
+					<RecordLink :collection="focusCollection" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
 					<span>›</span>
 					<span>Process map</span>
 				</template>

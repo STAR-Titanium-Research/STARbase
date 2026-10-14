@@ -61,7 +61,7 @@ export function useMapCanvas(map: ProcessMap) {
   let needsFit = true;
   let pending = false;
   /** The pending layout is an expand (new cards go beside what is placed), not a full layout; a full one wins when both are asked for. */
-  let pendingMerge: MergeHint | null = null;
+  let pendingMerges: MergeHint[] = [];
   let pendingFull = true;
   let token = 0;
   /** Where the last layout put each node and how big it was then: for nodes that are rebuilt (hidden chips, folds) but were not dragged, and to tell cards that are new, or that grew. */
@@ -70,6 +70,10 @@ export function useMapCanvas(map: ProcessMap) {
   let merging: MergeHint | null = null;
 
   // ---- elements ---------------------------------------------------------------------------------
+  const atPlaced = (id: string): { x: number; y: number } | undefined => {
+    const b = placed.get(id);
+    return b && { x: b.x, y: b.y };
+  };
   const startOfMerge = (): { x: number; y: number } | null => {
     const id = merging?.anchor;
     const at = id ? (vf.findNode(id)?.position ?? placed.get(id)) : null;
@@ -81,7 +85,7 @@ export function useMapCanvas(map: ProcessMap) {
     const nodes: Node[] = list.map((n) => ({
       id: n.id,
       type: n.type,
-      position: vf.findNode(n.id)?.position ?? placed.get(n.id) ?? startOfMerge() ?? { x: 0, y: 0 },
+      position: vf.findNode(n.id)?.position ?? atPlaced(n.id) ?? startOfMerge() ?? { x: 0, y: 0 },
       data: n,
       draggable: true,
       selectable: false,
@@ -167,9 +171,9 @@ export function useMapCanvas(map: ProcessMap) {
     const mine = ++token;
     pending = false;
     // An expand lays out only what is new (spec §6.7); a first layout, Re-layout and a new direction lay out everything.
-    const merge = pendingFull || !placed.size ? null : pendingMerge;
+    const merges = pendingFull || !placed.size ? null : pendingMerges;
     pendingFull = true;
-    pendingMerge = null;
+    pendingMerges = [];
     const graph = map.graph.value;
     if (!graph || !vf.getNodes.value.length) return;
     const sizes: Record<string, { width: number; height: number }> = {};
@@ -183,19 +187,19 @@ export function useMapCanvas(map: ProcessMap) {
       layoutError.value = '';
       let positions = elk;
       const instant = new Set<string>();
-      if (merge) {
+      if (merges) {
         // Cards already placed stay where they are (a dragged one stays where it was dropped): only new cards, and cards a grown one pushed, move.
         const here: Record<string, Box> = {};
         for (const n of vf.getNodes.value) {
           const was = placed.get(n.id);
-          if (was && !merge.replace?.includes(n.id)) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
+          if (was && !merges.some((m) => m.replace?.includes(n.id))) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
         }
         const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
-        positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchor: merge.anchor });
+        positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors: merges.flatMap((m) => (m.anchor ? [m.anchor] : [])) });
         for (const id of Object.keys(positions)) if (!here[id]) instant.add(id);
       }
       for (const n of vf.getNodes.value) {
-        const at = positions[n.id] ?? (merge ? n.position : undefined);
+        const at = positions[n.id] ?? (merges ? n.position : undefined);
         const size = sizes[n.id];
         if (at && size) placed.set(n.id, { x: at.x, y: at.y, ...size });
       }
@@ -217,9 +221,9 @@ export function useMapCanvas(map: ProcessMap) {
   async function scheduleLayout(merge: MergeHint | null = null): Promise<void> {
     if (!pending) {
       pendingFull = !merge;
-      pendingMerge = merge;
-    } else if (!merge) pendingFull = true; // a full layout asked for meanwhile covers the expand too
-    else pendingMerge = merge;
+      pendingMerges = merge ? [merge] : [];
+    } else if (!merge) pendingFull = true; // a full layout asked for meanwhile covers the expands too
+    else pendingMerges.push(merge); // two expands before the layout ran: it places the cards of both
     pending = true;
     await nextTick();
     if (!vf.vueFlowRef.value) return; // not mounted yet: onNodesInitialized starts the layout once it is

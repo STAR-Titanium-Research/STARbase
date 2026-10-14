@@ -31,8 +31,8 @@ export interface PlaceInput {
   /** Wires between drawn nodes, as node ids. */
   edges: { from: string; to: string }[];
   dir: Dir;
-  /** The card the person expanded (it is on the map before and after). */
-  anchor?: string;
+  /** The cards the person expanded (on the map before and after); usually one, more when two expands share a layout. */
+  anchors?: string[];
 }
 
 /** Room kept between cards the layout moves. */
@@ -56,7 +56,7 @@ const cross = (dir: Dir) =>
     : { start: (b: Box) => b.x, end: (b: Box) => b.x + b.width, set: (b: Box, v: number): void => void (b.x = v) };
 
 export function placeMerged(input: PlaceInput): Record<string, Point> {
-  const { elk, sizes, placed, edges, dir, anchor } = input;
+  const { elk, sizes, placed, edges, dir } = input;
   const axis = cross(dir);
   const out: Record<string, Point> = {};
 
@@ -106,7 +106,7 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
     x: median([...fixed].filter(([id]) => elk[id]).map(([id, b]) => b.x - elk[id].x)),
     y: median([...fixed].filter(([id]) => elk[id]).map(([id, b]) => b.y - elk[id].y)),
   };
-  const anchorBox = anchor ? fixed.get(anchor) : undefined;
+  const anchorIds = (input.anchors ?? []).filter((id) => fixed.has(id));
 
   const target = new Map<string, Box>();
   for (const members of groups.values()) {
@@ -121,10 +121,13 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
     if (neighbours.size) {
       const ns = [...neighbours];
       shift = { x: median(ns.map((n) => fixed.get(n)!.x - elk[n].x)), y: median(ns.map((n) => fixed.get(n)!.y - elk[n].y)) };
-    } else if (anchorBox) {
+    } else if (anchorIds.length) {
       // Nothing placed to line up with: beside the expanded card, keeping the group's own arrangement.
       const x0 = Math.min(...members.map((m) => elk[m].x));
       const y0 = Math.min(...members.map((m) => elk[m].y));
+      // With several expanded cards, the one ELK has nearest to the group.
+      const near = anchorIds.filter((id) => elk[id]).sort((p, q) => Math.hypot(elk[p].x - x0, elk[p].y - y0) - Math.hypot(elk[q].x - x0, elk[q].y - y0))[0] ?? anchorIds[0];
+      const anchorBox = fixed.get(near)!;
       const at = dir === 'RIGHT' ? { x: anchorBox.x + anchorBox.width + GAP * 3, y: anchorBox.y } : { x: anchorBox.x, y: anchorBox.y + anchorBox.height + GAP * 3 };
       shift = { x: at.x - x0, y: at.y - y0 };
     }

@@ -151,6 +151,26 @@ describe('useMapCanvas: an expand keeps what is placed (spec 6.7)', () => {
     }
   });
 
+  it('two expands that land before the layout ran are both placed, the dragged card still where it was', async () => {
+    const { map } = await open();
+    nodesOf().find((n) => n.id === 'op:u3')!.position = { x: 900, y: 900 };
+    vi.mocked(loadFamily).mockImplementation(async (_api, id) => familyOfX(Number(String(id).slice(1))));
+    await Promise.all([map.expand('op:u0'), map.expand('op:u1')]);
+    await settle();
+    expect(at('op:u3')).toEqual({ x: 900, y: 900 });
+    const ids = nodesOf().map((n) => n.id);
+    expect(ids).toEqual(expect.arrayContaining(['s:x0', 's:y0', 's:x1', 's:y1']));
+    const boxes = nodesOf().map((n) => ({ id: n.id, ...n.position, width: n.dimensions.width, height: n.dimensions.height }));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i];
+        const b = boxes[j];
+        const apart = a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+        expect(apart, `${a.id} and ${b.id} overlap`).toBe(true);
+      }
+    }
+  });
+
   it('Re-layout puts everything back, the dragged card included', async () => {
     const { map, canvas } = await open();
     nodesOf().find((n) => n.id === 'op:u3')!.position = { x: 900, y: 900 };

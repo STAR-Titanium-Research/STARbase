@@ -668,16 +668,13 @@ const RECORD_SPECS: Record<string, RelSpec> = {
   raw_stock_lots: { collection: 'raw_stock_lots', id: 'lot_id', code: ['lot_code'], label: 'supplier_name' },
 };
 
-/** The records the map can be opened on or fanned from: everything with a spec, but not people. */
-export const hasRecordSpec = (collection: string): boolean => collection in RECORD_SPECS && collection !== 'people';
-
 /**
  * The code (and name) of a record, for the card a used-in fan hangs from. Throws what the API threw, so
  * a 403 / 404 reads as "not visible" to the caller (`isNotVisible`).
  */
 export async function loadRecordRef(api: HostApi, ref: { collection: string; id: string }): Promise<Ref> {
   const spec = RECORD_SPECS[ref.collection];
-  if (!spec) throw new Error(`The process map cannot name ${ref.collection}`);
+  if (!spec) throw new Error(`The Process map cannot name ${ref.collection}`);
   const fields = unique([spec.id, ...spec.code, ...(spec.label ? [spec.label] : [])]);
   const { data } = await api.get(`/items/${ref.collection}/${encodeURIComponent(ref.id)}`, { params: { fields } });
   const row = (data?.data ?? null) as Json | null;

@@ -71,7 +71,7 @@ export function elkInput(graph: ProcessGraph, shown: Set<string>, sizes: Sizes, 
     if (portIds.has(from)) edges.push({ id: `${node.id}:layout`, sources: [from], targets: [`${node.id}:in:0`] });
   }
   // A used-in fan is a list in a given order (newest first): ELK keeps the order of the nodes it is given.
-  const ordered = graph.nodes.some((n) => n.type === 'more' || (n.type === 'container' && n.collapsed));
+  const isFan = graph.nodes.some((n) => n.type === 'more' || (n.type === 'container' && n.collapsed));
 
   return {
     id: 'root',
@@ -81,7 +81,7 @@ export function elkInput(graph: ProcessGraph, shown: Set<string>, sizes: Sizes, 
       'elk.layered.spacing.nodeNodeBetweenLayers': '80',
       'elk.spacing.nodeNode': '36',
       'elk.edgeRouting': 'SPLINES',
-      ...(ordered ? { 'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES' } : {}),
+      ...(isFan ? { 'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES' } : {}),
     },
     children,
     edges,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { HostApi, TraceResponse } from '@d1/ui';
 import { isNotVisible } from '@d1/ui';
-import { chunkByBudget, encodedQuerySize, hasRecordSpec, loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './loadFamily';
+import { chunkByBudget, encodedQuerySize, loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './loadFamily';
 
 interface Call {
   path: string;
@@ -638,12 +638,6 @@ describe('loadRecordRef', () => {
     await expect(loadRecordRef(empty.api, { collection: 'tools', id: 'x' })).rejects.toSatisfy(isNotVisible);
   });
 
-  it('knows which collections it can name', () => {
-    expect(hasRecordSpec('tools')).toBe(true);
-    expect(hasRecordSpec('raw_stock_lots')).toBe(true);
-    expect(hasRecordSpec('people')).toBe(false);
-    expect(hasRecordSpec('widgets')).toBe(false);
-  });
 });
 
 describe('loadStepRow and sampleOfRow', () => {

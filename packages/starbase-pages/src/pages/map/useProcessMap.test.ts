@@ -1028,3 +1028,63 @@ describe('a remembered Show chip never hides the focus or a fan\'s own card', ()
     expect(mat.map.shown.value.has('f:materials:m1')).toBe(true);
   });
 });
+
+describe('cards opened from a side fan', () => {
+  const tool = { collection: 'tools', id: 't1', code: 'TL-1' };
+  async function withSideFan() {
+    family.mockResolvedValueOnce(
+      mkData({
+        samples: [mkSample('s1'), mkSample('s2')],
+        operations: [mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: '2026-09-01T09:00:00Z', methodName: 'Cut', relations: { tool_id: tool } })],
+      }),
+    );
+    const s = setup({ focus: 'physical_samples:s1', reach: '1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: toolOps(3), total: 3 });
+    await s.map.expand('tools:t1');
+    await settle();
+    return s;
+  }
+
+  it('an item opened from the side fan, and its samples, stay when Reach changes', async () => {
+    const { map } = await withSideFan();
+    family.mockResolvedValueOnce(familyOfX(1));
+    await map.expand('op:u1');
+    await settle();
+    for (const id of ['op:u1', 's:x1', 's:y1']) expect(map.shown.value.has(id), id).toBe(true);
+    map.setReach(3);
+    await settle();
+    for (const id of ['op:u1', 's:x1', 's:y1', 'f:tools:t1', 'op:u0']) expect(map.shown.value.has(id), id).toBe(true);
+    // and the tool is not "already open" with nothing to show for it
+    expect(containersOf(map).find((c) => c.id === 'op:u1')?.collapsed).toBeUndefined();
+  });
+
+  it('a second plus on a collapsed container while its family loads is ignored', async () => {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(3), total: 3 });
+    const { map } = setup({ focus: 'tools:t1' });
+    await settle();
+    family.mockResolvedValue(familyOfX(0));
+    await Promise.all([map.expand('op:u0'), map.expand('op:u0')]);
+    await settle();
+    expect(family).toHaveBeenCalledTimes(1);
+    expect(map.expanding.value).toBe(0);
+    // once it is open it can be asked again (it reveals a step; no second load)
+    await map.expand('op:u0');
+    expect(family).toHaveBeenCalledTimes(1);
+  });
+
+  it('an old failure notice goes away when a later expand merges', async () => {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(3), total: 3 });
+    const { map } = setup({ focus: 'tools:t1' });
+    await settle();
+    family.mockRejectedValueOnce(new Error('boom'));
+    await map.expand('op:u0');
+    expect(map.notice.value).toMatch(/Could not load more/);
+    map.notice.value = 'stale';
+    family.mockResolvedValue(familyOfX(1));
+    await map.expand('op:u1');
+    expect(map.notice.value).toBe('');
+  });
+});

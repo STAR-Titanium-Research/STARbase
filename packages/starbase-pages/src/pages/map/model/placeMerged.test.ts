@@ -14,7 +14,7 @@ describe('placeMerged (spec 6.7)', () => {
       placed: { a: box(500, 300), b: box(700, 300) }, // both dragged far from ELK's idea
       edges: [{ from: 'b', to: 'c' }],
       dir: 'RIGHT',
-      anchor: 'b',
+      anchors: ['b'],
     });
     expect(Object.keys(out)).toEqual(['c']);
   });
@@ -51,12 +51,27 @@ describe('placeMerged (spec 6.7)', () => {
       placed: { a: box(300, 200) },
       edges: [{ from: 'root', to: 'i0' }, { from: 'root', to: 'i1' }],
       dir: 'RIGHT',
-      anchor: 'a',
+      anchors: ['a'],
     });
     expect(out.root.x).toBeGreaterThan(400); // right of the anchor (x 300 + 100)
     expect(out.root.y).toBe(200);
     expect(out.i0.x - out.root.x).toBe(200);
     expect(out.i1.y - out.i0.y).toBe(80);
+  });
+
+  it('two expands in one layout: each group of new cards goes beside the expanded card nearest to it', () => {
+    const out = placeMerged({
+      elk: { a: { x: 0, y: 0 }, b: { x: 0, y: 1000 }, ra: { x: 0, y: 20 }, rb: { x: 0, y: 1020 } },
+      sizes: sizes('a', 'b', 'ra', 'rb'),
+      placed: { a: box(300, 200), b: box(300, 1200) },
+      edges: [],
+      dir: 'RIGHT',
+      anchors: ['a', 'b'],
+    });
+    expect(out.ra.y).toBeLessThan(400);
+    expect(out.rb.y).toBeGreaterThan(1000);
+    expect(out.ra.x).toBeGreaterThan(400);
+    expect(out.rb.x).toBeGreaterThan(400);
   });
 
   it('beside means below the card when the flow runs down', () => {
@@ -66,7 +81,7 @@ describe('placeMerged (spec 6.7)', () => {
       placed: { a: box(300, 200) },
       edges: [],
       dir: 'DOWN',
-      anchor: 'a',
+      anchors: ['a'],
     });
     expect(out.f.y).toBeGreaterThan(240);
     expect(out.f.x).toBe(300);
