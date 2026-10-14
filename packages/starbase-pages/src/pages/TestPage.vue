@@ -121,7 +121,7 @@ const pin = computed(() => pinTargetForRecord('test_sessions', props.id));
 							<template #status><StatusBadge kind="test" :value="t.status" /></template>
 							<template #actions>
 								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
-									<v-button icon small secondary @click="openReport" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /></v-button>
+									<v-button icon small secondary @click="openReport" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /><span class="sr-only">Report</span></v-button>
 								</RecordActions>
 							</template>
 						</RecordRail>
@@ -168,4 +168,5 @@ const pin = computed(() => pinTargetForRecord('test_sessions', props.id));
 <style scoped>
 /* Scroll under the page's sticky offset, like a Section (the wrapper is the target while loading). */
 .subject-slot { min-width: 0; scroll-margin-top: calc(var(--d1-sticky-top, 0px) + 8px); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 </style>

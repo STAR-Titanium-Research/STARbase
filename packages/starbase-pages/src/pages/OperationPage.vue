@@ -128,7 +128,7 @@ const pin = computed(() => pinTargetForRecord('manufacturing_operations', props.
 							<template #kind-icon><v-icon name="precision_manufacturing" x-small /></template>
 							<template #actions>
 								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
-									<v-button icon small secondary @click="openReport" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /></v-button>
+									<v-button icon small secondary @click="openReport" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /><span class="sr-only">Report</span></v-button>
 								</RecordActions>
 							</template>
 						</RecordRail>
@@ -174,3 +174,7 @@ const pin = computed(() => pinTargetForRecord('manufacturing_operations', props.
 		</PageShell>
 	</ExplorerView>
 </template>
+
+<style scoped>
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
+</style>

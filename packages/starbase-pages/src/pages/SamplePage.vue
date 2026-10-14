@@ -112,8 +112,8 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 							</template>
 							<template #actions>
 								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
-									<v-button icon small secondary :to="labelsTo" title="Print label" aria-label="Print label"><v-icon name="label" small /></v-button>
-									<v-button icon small secondary @click="openReportPage" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /></v-button>
+									<v-button icon small secondary :to="labelsTo" title="Print label" aria-label="Print label"><v-icon name="label" small /><span class="sr-only">Print label</span></v-button>
+									<v-button icon small secondary @click="openReportPage" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /><span class="sr-only">Report</span></v-button>
 								</RecordActions>
 							</template>
 							<template #extra><SampleGeometry :dims="dims" /></template>
@@ -160,4 +160,5 @@ const pin = computed(() => pinTargetForRecord('physical_samples', props.id));
 <style scoped>
 .export { color: var(--d1-bad); font-weight: 650; font-size: var(--fs-md); }
 .note { margin-top: 8px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 </style>
