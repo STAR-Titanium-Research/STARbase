@@ -7,7 +7,7 @@ import { orderedGroups, type Connections } from './model/connections';
 import type { DataPreview } from './model/dataPreview';
 import { openPath, type RecordInfo } from './model/recordInfo';
 import { KINDS, kindOfCollection, kindVar, statusKindOf } from './nodes/kinds';
-import { SETTINGS_CHIP, type Reach } from './useProcessMap';
+import { CARD_CAP, SETTINGS_CHIP, type Reach } from './useProcessMap';
 
 // The rail of the Process map (spec §6.5), from the top: the selected record's identity (kind, status,
 // code, title), its actions (Open record, Expand, Centre), the sample drawing for a sample, the data
@@ -25,7 +25,10 @@ const props = defineProps<{
 	presentKinds: string[];
 	hiddenKinds: ReadonlySet<string>;
 	probable: boolean;
+	/** The reach the person asked for. */
 	reach: Reach;
+	/** The reach actually drawn: fewer steps than `reach` when the card cap clamped it (spec D22). */
+	drawnReach?: Reach;
 }>();
 const emit = defineEmits<{
 	expand: [];
@@ -71,6 +74,13 @@ const REACHES = [
 	{ value: '3', label: '3' },
 	{ value: 'all', label: 'Whole history' },
 ] as const;
+const shownReach = computed(() => props.drawnReach ?? props.reach);
+const clamp = computed(() => {
+	if (shownReach.value === props.reach) return '';
+	const asked = props.reach === 'all' ? 'the whole history' : `${props.reach} steps`;
+	const n = shownReach.value;
+	return `Showing ${n} ${n === 1 ? 'step' : 'steps'}: ${asked} would be more than ${CARD_CAP} cards.`;
+});
 const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v) as Reach));
 </script>
 
@@ -147,7 +157,8 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 		<Section title="Reach">
 			<div class="field">
 				<span class="lab">Steps from the focus record</span>
-				<SegmentedControl :model-value="String(reach)" :options="REACHES" label="Reach" @update:model-value="onReach" />
+				<SegmentedControl :model-value="String(shownReach)" :options="REACHES" label="Reach" @update:model-value="onReach" />
+				<span v-if="clamp" class="clamp" role="status">{{ clamp }}</span>
 			</div>
 		</Section>
 	</div>
@@ -188,4 +199,5 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 
 .field { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .lab { font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
+.clamp { font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 </style>

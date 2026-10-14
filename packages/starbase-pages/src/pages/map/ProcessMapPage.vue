@@ -142,6 +142,7 @@ const railProps = computed(() => ({
 	hiddenKinds: map.hiddenKinds.value,
 	probable: map.probable.value,
 	reach: map.reach.value,
+	drawnReach: map.effectiveReach.value,
 }));
 const railExpand = () => map.selectedId.value && actions.expand(map.selectedId.value);
 const railCentre = () => map.selectedId.value && map.select(map.selectedId.value, { centre: true });

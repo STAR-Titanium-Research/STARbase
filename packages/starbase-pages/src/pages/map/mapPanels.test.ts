@@ -126,6 +126,22 @@ describe('MapRail', () => {
     expect(buttonTag(html, '2')).toMatch(/aria-checked="false"/);
   });
 
+  it('Reach: when the card cap drew fewer steps than were asked for, the drawn ones are checked and the rail says so (M1)', async () => {
+    const html = await render(MapRail, railProps({ reach: 'all', drawnReach: 2 }));
+    expect(buttonTag(html, '2')).toMatch(/aria-checked="true"/);
+    expect(buttonTag(html, 'Whole history')).toMatch(/aria-checked="false"/);
+    expect(text(html)).toContain('Showing 2 steps');
+    expect(text(html)).toContain('whole history');
+    expect(text(html)).toContain('300 cards');
+    const one = text(await render(MapRail, railProps({ reach: 3, drawnReach: 1 })));
+    expect(one).toContain('Showing 1 step');
+    expect(one).toContain('3 steps');
+    // nothing clamped: no note, the asked-for one is checked
+    const plain = await render(MapRail, railProps({ reach: 3, drawnReach: 3 }));
+    expect(text(plain)).not.toContain('Showing');
+    expect(buttonTag(plain, '3')).toMatch(/aria-checked="true"/);
+  });
+
   it('says so when nothing is selected', async () => {
     expect(text(await render(MapRail, railProps({ info: null, connections: {} })))).toContain('Select a record on the map');
   });
