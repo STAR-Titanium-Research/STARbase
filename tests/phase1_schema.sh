@@ -312,6 +312,196 @@ fb_check "down_required:true" "173 down: sample_id required again"
 fb_check "down_pickers:2" "173 down: owner fields back on d1-owner-picker"
 fb_check "down_campaign:testing_campaign" "173 down: imaging campaigns are mapped to testing_campaign"
 
+
+echo "== Form layout (migration 174) =="
+# Plan 2026-10-14-form-layout: Field groups on the six record forms, unique sorts, Lab Member field lists.
+# Guards on whatever metadata the database has (CI: the part the migrations write; a copy of live: all of it).
+FL_COLLECTIONS="'physical_samples','manufacturing_operations','test_sessions','projects','campaigns','raw_stock_lots','tools','equipment','insert_types','cutting_inserts'"
+run_eq "no two visible fields of a form (same collection and group) share a sort, so Data Studio's order is the intended one" \
+    "SELECT count(*) FROM (SELECT collection, \"group\", sort FROM directus_fields
+       WHERE collection IN ($FL_COLLECTIONS) AND NOT hidden GROUP BY 1, 2, 3 HAVING count(*) > 1) AS t" \
+    "0"
+run_eq "every group-detail is a group (alias,no-data,group): without that special the form crashes" \
+    "SELECT count(*) FROM directus_fields WHERE interface = 'group-detail' AND special IS DISTINCT FROM 'alias,no-data,group'" \
+    "0"
+run_eq "no group-detail is hidden at base (a conditional group is base-visible plus a hide-unless condition)" \
+    "SELECT count(*) FROM directus_fields WHERE interface = 'group-detail' AND hidden" \
+    "0"
+run_eq "every field that names a group finds that group-detail in its own collection" \
+    "SELECT count(*) FROM directus_fields AS f WHERE f.\"group\" IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM directus_fields AS g WHERE g.collection = f.collection AND g.field = f.\"group\" AND g.interface = 'group-detail')" \
+    "0"
+# Lab Members cannot edit Co-owners or Secondary Investigators in the form (decision 5): the field lists of the create and
+# update rows name every other column and alias, so a column added later must be added to scripts/access_rules.json
+# ("field_sets") or members could not save it. Read stays '*'. On CI the alias rows of directus_fields are not there.
+LM=20000002-0000-0000-0000-000000000002
+for pair in "physical_samples:co_owners" "projects:secondary_investigators"; do
+    fl_tbl=${pair%%:*}; fl_left=${pair##*:}
+    for fl_act in create update; do
+        fl_got=$($PSQL -c "SELECT coalesce(string_agg(x, ',' ORDER BY x), '') FROM (
+            SELECT column_name::text AS x FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '$fl_tbl'
+            UNION SELECT field FROM directus_fields WHERE collection = '$fl_tbl' AND (special LIKE '%m2m%' OR special LIKE '%o2m%' OR special LIKE '%alias%') AND special NOT LIKE '%group%') c
+          WHERE x <> ALL (string_to_array((SELECT fields FROM directus_permissions WHERE policy = '$LM' AND collection = '$fl_tbl' AND action = '$fl_act'), ','))" 2>&1)
+        [[ "$fl_got" == "$fl_left" || "$fl_got" == "" ]] && ok "Lab Member $fl_tbl.$fl_act leaves out only $fl_left (got '$fl_got')" \
+            || bad "Lab Member $fl_tbl.$fl_act field list misses columns or aliases: '$fl_got' (add them to field_sets in scripts/access_rules.json)"
+    done
+    run_eq "Lab Member $fl_tbl read keeps '*' (STARbase reads $fl_left; a read refusal is an HTTP 403)" \
+        "SELECT fields FROM directus_permissions WHERE policy = '$LM' AND collection = '$fl_tbl' AND action = 'read'" "*"
+done
+# configure_form_layout.sql is the migration's layout block, so a configure run does not undo the forms.
+MIG_FL=db/migrations/20261014000174_form_layout.sql
+fl_mig=$(sed -n '/^-- BEGIN FORM LAYOUT/,/^-- END FORM LAYOUT/p' "$MIG_FL")
+fl_cfg=$(sed -n '/^-- BEGIN FORM LAYOUT/,/^-- END FORM LAYOUT/p' scripts/configure_form_layout.sql)
+[[ -n "$fl_mig" && "$fl_mig" == "$fl_cfg" ]] && ok "scripts/configure_form_layout.sql repeats the layout block of migration 174" \
+    || bad "scripts/configure_form_layout.sql and the layout block of migration 174 differ (or a marker is missing)"
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG_FL")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG_FL")
+fl_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+-- this database already ran 174: undo it, seed the metadata as it was before, then run up and down again
+$mig_down
+DELETE FROM directus_fields WHERE collection IN ($FL_COLLECTIONS);
+INSERT INTO directus_fields (collection, field, special, interface, options, hidden, sort, width, conditions, required, "group", translations) VALUES
+  ('physical_samples','report_button','alias,no-data','d1-report-button',NULL,false,0,'full',NULL,false,NULL,NULL),
+  ('physical_samples','item_type',NULL,'select-dropdown',NULL,false,4,'half',NULL,false,NULL,NULL),
+  ('physical_samples','form',NULL,'select-dropdown','{"choices":[]}',false,6,'half',
+   '[{"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true,"readonly":false,"required":false}]',false,NULL,NULL),
+  ('physical_samples','diameter_mm',NULL,'input',NULL,false,8,'half',
+   '[{"name": "sample only", "rule": {"_and": [{"item_type": {"_neq": "sample"}}]}, "hidden": true, "readonly": false, "required": false}, {"name": "form", "rule": {"_and": [{"form": {"_nin": ["disc"]}}]}, "hidden": true}]',false,NULL,NULL),
+  ('physical_samples','width_mm',NULL,'input',NULL,false,9,'half',
+   '[{"name":"sample only","rule":{"_and":[{"item_type":{"_neq":"sample"}}]},"hidden":true},{"name":"form","rule":{"_and":[{"form":{"_nin":["ring","block"]}}]},"hidden":true}]',false,NULL,NULL),
+  ('physical_samples','gauge_length_mm',NULL,'input',NULL,false,12,'half',
+   '[{"name":"form","rule":{"_and":[{"form":{"_nin":["tensile_coupon"]}}]},"hidden":true}]',false,NULL,NULL),
+  ('physical_samples','co_owners','m2m','list-m2m',NULL,false,22,'full',NULL,false,NULL,NULL),
+  ('physical_samples','surface_finish',NULL,'select-dropdown','{"allowOther":true,"choices":[{"text":"None","value":"none"}]}',false,18,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','method_id','m2o','select-dropdown-m2o',NULL,false,2,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','sample_id','m2o','select-dropdown-m2o',NULL,false,4,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','process_category',NULL,'d1-process-category',NULL,false,3,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','project_id','m2o','select-dropdown-m2o',NULL,false,11,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','campaign_id','m2o','select-dropdown-m2o','{"template":"{{name}}","filter":{"campaign_type":{"_eq":"machining_trial"}}}',false,12,'half',NULL,false,NULL,NULL),
+  ('manufacturing_operations','gcode_file','file','file',NULL,true,18,'full','[{"name":"show when machining","rule":{"_and":[{"process_category":{"_eq":"machining"}}]},"hidden":false}]',false,NULL,NULL),
+  ('manufacturing_operations','sintering_machine_group','alias,no-data,group','group-detail','{"start":"open"}',false,60,'full',
+   '[{"name":"Hide unless sintering","rule":{"_and":[{"process_category":{"_neq":"sintering"}}]},"hidden":true}]',false,NULL,NULL),
+  ('manufacturing_operations','sintering_run_number',NULL,'input',NULL,false,0,'half',NULL,false,'sintering_machine_group',NULL),
+  ('test_sessions','test_type',NULL,'select-dropdown',NULL,false,2,'half',NULL,false,NULL,NULL),
+  ('test_sessions','session_date',NULL,'datetime',NULL,false,10,'half',NULL,false,NULL,NULL),
+  ('test_sessions','tensile_uts_mpa',NULL,'input',NULL,true,110,'half','[{"name":"show when tensile","rule":{"_and":[{"test_type":{"_eq":"tensile"}}]},"hidden":false}]',false,NULL,NULL),
+  ('test_sessions','capture_software',NULL,'input',NULL,false,610,'half',NULL,false,NULL,NULL),
+  ('projects','project_name',NULL,'input',NULL,false,2,'half',NULL,true,NULL,NULL),
+  ('projects','secondary_investigators','m2m','list-m2m',NULL,false,12,'full',NULL,false,NULL,NULL),
+  ('campaigns','name',NULL,'input',NULL,false,4,'half',NULL,true,NULL,NULL),
+  ('raw_stock_lots','lot_code',NULL,'input',NULL,false,2,'half',NULL,true,NULL,NULL),
+  ('raw_stock_lots','supplier_name',NULL,'input',NULL,false,5,'half',NULL,false,NULL,NULL),
+  ('tools','tool_name',NULL,'input',NULL,false,14,'half',NULL,false,NULL,NULL),
+  ('tools','image',NULL,'file-image',NULL,false,14,'half',NULL,false,NULL,NULL),
+  ('tools','op_type',NULL,'select-dropdown','{"choices":[{"text":"Turning","value":"Turning"}],"allowOther":true}',false,6,'half',NULL,false,NULL,NULL),
+  ('equipment','equipment_type',NULL,'select-dropdown','{"choices":[{"text":"Machining","value":"Machining"},{"text":"Additive Manufacturing","value":"AM"}],"allowOther":true}',false,4,'half',NULL,false,NULL,NULL),
+  ('insert_types','op_type',NULL,'select-dropdown','{"choices":[{"text":"Turning","value":"Turning"}],"allowOther":true}',false,4,'half',NULL,false,NULL,NULL);
+DELETE FROM directus_collections WHERE collection IN ('physical_samples','manufacturing_operations','test_sessions');
+INSERT INTO directus_collections (collection, translations) VALUES
+  ('physical_samples', '[{"language":"en-US","translation":"Items","singular":"Item","plural":"Items"}]'),
+  ('manufacturing_operations', '[{"language":"en-US","translation":"Manufacturing Operations","singular":"Operation","plural":"Operations"}]'),
+  ('test_sessions', '[{"language":"en-US","translation":"Test Sessions","singular":"Test Session","plural":"Test Sessions"}]');
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('physical_samples','projects') AND action IN ('create','update');
+INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy) VALUES
+  ('physical_samples','create','{}','{}','*','$LM'), ('physical_samples','update','{}','{}','*','$LM'),
+  ('projects','create','{}','{}','*','$LM'), ('projects','update','{}','{}','*','$LM');
+-- a hash of the seeded state, to prove the down section restores it exactly
+CREATE TEMP TABLE _fl_before AS SELECT md5(string_agg(f::text, '|' ORDER BY id)) AS h FROM directus_fields AS f WHERE collection IN ($FL_COLLECTIONS);
+CREATE TEMP TABLE _fl_before_c AS SELECT md5(string_agg(c::text, '|' ORDER BY collection)) AS h FROM directus_collections AS c;
+CREATE TEMP TABLE _fl_before_p AS SELECT md5(string_agg(p::text, '|' ORDER BY id)) AS h FROM directus_permissions AS p WHERE policy = '$LM';
+$mig_up
+SELECT 'up_groups_valid:' || (count(*) FILTER (WHERE special = 'alias,no-data,group' AND interface = 'group-detail' AND NOT hidden) = count(*) AND count(*) > 60) FROM directus_fields WHERE field LIKE 'grp\_%';
+SELECT 'up_sample_groups:' || string_agg(field, ',' ORDER BY sort) FROM directus_fields WHERE collection = 'physical_samples' AND field LIKE 'grp\_%';
+SELECT 'up_related_collapsed:' || count(*) FROM directus_fields WHERE field = 'grp_related' AND options::text LIKE '%closed%' AND collection IN ('physical_samples','manufacturing_operations','test_sessions','projects','campaigns');
+SELECT 'up_what_open:' || count(*) FROM directus_fields WHERE field = 'grp_what' AND options::text LIKE '%open%';
+SELECT 'up_type_groups_conditional:' || count(*) FROM directus_fields WHERE collection = 'test_sessions' AND field LIKE 'grp\_%\_params' AND conditions IS NOT NULL;
+SELECT 'up_sintering_nested:' || "group" FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_machine_group';
+SELECT 'up_sintering_child_stays:' || "group" FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sintering_run_number';
+SELECT 'up_form_condition:' || (conditions::text LIKE '%"_in":["equipment","miscellaneous"]%' AND conditions::text NOT LIKE '%_neq%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'form';
+SELECT 'up_dimension_conditions:' || (conditions::text LIKE '%"_in":["equipment","miscellaneous"]%') || ',' || (conditions::text LIKE '%fatigue_specimen%') || ',' || (conditions::text LIKE '%charpy_specimen%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'width_mm';
+SELECT 'up_gauge_conditions:' || (conditions::text LIKE '%fatigue_specimen%') || ',' || (conditions::text NOT LIKE '%charpy_specimen%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'gauge_length_mm';
+SELECT 'up_form_choices:' || (SELECT string_agg(c ->> 'value', ',' ORDER BY ord) FROM json_array_elements(options -> 'choices') WITH ORDINALITY AS t (c, ord)) || '|' || (options::text LIKE '%Bend bar (ISO 7438)%' AND options::text LIKE '%Charpy specimen (ISO 148-1)%' AND options::text LIKE '%"Fatigue specimen"%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'form';
+SELECT 'up_item_type_hidden:' || hidden FROM directus_fields WHERE collection = 'physical_samples' AND field = 'item_type';
+SELECT 'up_form_required:' || required FROM directus_fields WHERE collection = 'physical_samples' AND field = 'form';
+SELECT 'up_op_required:' || string_agg(field || '=' || required, ',' ORDER BY field) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field IN ('method_id','sample_id');
+SELECT 'up_input_sample_when_machining:' || (conditions::text LIKE '%"required":true%' AND conditions::text LIKE '%machining%') FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'sample_id';
+SELECT 'up_test_required:' || string_agg(field || '=' || required, ',' ORDER BY field) FROM directus_fields WHERE collection = 'test_sessions' AND field IN ('test_type','session_date');
+SELECT 'up_legacy_test_fields_hidden:' || hidden FROM directus_fields WHERE collection = 'test_sessions' AND field = 'capture_software';
+SELECT 'up_gcode_hidden:' || hidden || ',' || (conditions IS NULL) FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'gcode_file';
+SELECT 'up_project_inherit:' || interface FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'project_id';
+SELECT 'up_campaign_unfiltered:' || (options::jsonb ? 'filter') FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'campaign_id';
+SELECT 'up_raw_new_fields:' || string_agg(field, ',' ORDER BY field) FROM directus_fields WHERE collection = 'raw_stock_lots' AND field IN ('purity_percent','mesh_size_micrometres','certificate_url');
+SELECT 'up_surface_choices:' || (options::text LIKE '%as_produced%' AND options::text LIKE '%medium_machined%' AND options::text LIKE '%allowOther%') FROM directus_fields WHERE collection = 'physical_samples' AND field = 'surface_finish';
+SELECT 'up_equipment_choices:' || jsonb_array_length((options::jsonb) -> 'choices') || ',' || (options::text NOT LIKE '%"AM"%') || ',' || (options::text LIKE '%"Sample_Prep"%' AND options::text LIKE '%Sample prep%') FROM directus_fields WHERE collection = 'equipment' AND field = 'equipment_type';
+SELECT 'up_insert_application:' || (translations::text LIKE '%Application%') || ',' || (options::text LIKE '%Roughing%') || ',' || (options::text NOT LIKE '%allowOther%') FROM directus_fields WHERE collection = 'insert_types' AND field = 'op_type';
+SELECT 'up_tools_choices:' || (options::text LIKE '%Parting%') FROM directus_fields WHERE collection = 'tools' AND field = 'op_type';
+SELECT 'up_tied_sorts:' || count(*) FROM (SELECT 1 FROM directus_fields WHERE collection IN ($FL_COLLECTIONS) AND NOT hidden GROUP BY collection, "group", sort HAVING count(*) > 1) t;
+SELECT 'up_tools_regrouped:' || count(*) FROM directus_fields WHERE collection = 'tools' AND "group" IS NOT NULL;
+SELECT 'up_collection_names:' || string_agg(translations::jsonb -> 0 ->> 'translation', ',' ORDER BY collection) FROM directus_collections WHERE collection IN ('physical_samples','manufacturing_operations','test_sessions');
+SELECT 'up_perm:' || collection || '.' || action || '=' || (fields LIKE 'sample_id,%' OR fields LIKE 'project_id,%') || ',' || NOT (string_to_array(fields, ',') && ARRAY['co_owners','secondary_investigators'])
+  FROM directus_permissions WHERE policy = '$LM' AND collection IN ('physical_samples','projects') AND action IN ('create','update') ORDER BY 1;
+SELECT 'up_backup_rows:' || kind || '=' || count(*) FROM d1_private.form_layout_174_backup GROUP BY kind ORDER BY kind;
+SELECT 'up_backup_llm_select:' || has_table_privilege('d1_llm_readonly', 'd1_private.form_layout_174_backup', 'SELECT');
+SELECT 'up_backup_commented:' || (obj_description('d1_private.form_layout_174_backup'::regclass, 'pg_class') IS NOT NULL);
+-- the configure script's block is idempotent: running it on the migrated state changes nothing
+CREATE TEMP TABLE _fl_mid AS SELECT md5(string_agg(f::text, '|' ORDER BY collection, field)) AS h FROM (SELECT collection, field, special, interface, options::text, hidden, sort, width, conditions::text, required, "group", translations::text FROM directus_fields WHERE collection IN ($FL_COLLECTIONS)) AS f;
+$fl_cfg
+SELECT 'again_same:' || ((SELECT h FROM _fl_mid) = md5(string_agg(f::text, '|' ORDER BY collection, field))) FROM (SELECT collection, field, special, interface, options::text, hidden, sort, width, conditions::text, required, "group", translations::text FROM directus_fields WHERE collection IN ($FL_COLLECTIONS)) AS f;
+SELECT 'again_groups:' || count(*) FROM directus_fields WHERE field LIKE 'grp\_%';
+$mig_down
+SELECT 'down_groups:' || count(*) FROM directus_fields WHERE field LIKE 'grp\_%';
+SELECT 'down_fields_exact:' || ((SELECT h FROM _fl_before) = md5(string_agg(f::text, '|' ORDER BY id))) FROM directus_fields AS f WHERE collection IN ($FL_COLLECTIONS);
+SELECT 'down_collections_exact:' || ((SELECT h FROM _fl_before_c) = md5(string_agg(c::text, '|' ORDER BY collection))) FROM directus_collections AS c;
+SELECT 'down_permissions_exact:' || ((SELECT h FROM _fl_before_p) = md5(string_agg(p::text, '|' ORDER BY id))) FROM directus_permissions AS p WHERE policy = '$LM';
+SELECT 'down_raw_new_fields:' || count(*) FROM directus_fields WHERE collection = 'raw_stock_lots' AND field IN ('purity_percent','mesh_size_micrometres','certificate_url');
+SELECT 'down_backup:' || coalesce(to_regclass('d1_private.form_layout_174_backup')::text, 'gone');
+ROLLBACK;
+SQL
+)
+fl_check() { grep -qxF -- "$1" <<<"$fl_out" && ok "$2" || bad "$2 (psql output: $fl_out)"; }
+fl_check "up_sample_groups:grp_what,grp_material,grp_geometry,grp_surface,grp_who_where,grp_notes,grp_related,grp_legacy" "174 up: the Sample form's Field groups, in the planned order"
+fl_check "up_groups_valid:true" "174 up: every new group is a base-visible group-detail with special alias,no-data,group"
+fl_check "up_related_collapsed:5" "174 up: Related records is collapsed on the Sample, Operation, Test, Project and Campaign forms"
+fl_check "up_what_open:6" "174 up: What is open on all six forms"
+fl_check "up_type_groups_conditional:16" "174 up: each of the 16 test types has a parameters group that is hidden unless that type is chosen"
+fl_check "up_sintering_nested:grp_sintering" "174 up: the sintering machine group sits inside the Sintering group"
+fl_check "up_sintering_child_stays:sintering_machine_group" "174 up: its children keep their group"
+fl_check "up_form_condition:true" "174 up: Geometry hides only for the rig-kit values (a blank new form no longer hides it)"
+fl_check "up_dimension_conditions:true,true,true" "174 up: Width shows for a fatigue specimen and a Charpy specimen, and still hides for a rig-kit row"
+fl_check "up_gauge_conditions:true,true" "174 up: Gauge length shows for a fatigue specimen (like a tensile coupon) but not for a Charpy specimen"
+fl_check "up_form_choices:disc,ring,cylinder,block,plate,bar,round_bar,tensile_coupon,fatigue_specimen,bend_bar,charpy_specimen,powder,other|true" "174 up: Geometry offers the 13 choices in the planned order, with the two new specimens and Bend bar (ISO 7438)"
+fl_check "up_item_type_hidden:true" "174 up: Item Type is hidden"
+fl_check "up_form_required:true" "174 up: Geometry is required in the form"
+fl_check "up_op_required:method_id=true,sample_id=false" "174 up: Method is required; Input sample is required only through its machining condition"
+fl_check "up_input_sample_when_machining:true" "174 up: Input sample is required when the process category is machining"
+fl_check "up_test_required:session_date=true,test_type=true" "174 up: Test Type and Session Date are required"
+fl_check "up_legacy_test_fields_hidden:true" "174 up: a legacy test field leaves the form"
+fl_check "up_gcode_hidden:true,true" "174 up: the G-code file leaves the form and its show-when-machining condition is cleared"
+fl_check "up_project_inherit:d1-project-inherit" "174 up: Project on an operation fills from its Campaign"
+fl_check "up_campaign_unfiltered:false" "174 up: the Campaign picker is not filtered by campaign type"
+fl_check "up_raw_new_fields:certificate_url,mesh_size_micrometres,purity_percent" "174 up: the raw stock lot's purity, mesh size and certificate fields get rows"
+fl_check "up_surface_choices:true" "174 up: Surface Finish offers As produced and Medium machined"
+fl_check "up_equipment_choices:29,true,true" "174 up: Equipment Type is the 29 stored values with readable text (AM dropped)"
+fl_check "up_insert_application:true,true,true" "174 up: insert type 'Application' offers Finishing / Medium / Roughing only"
+fl_check "up_tools_choices:true" "174 up: tools Op Type offers Parting"
+fl_check "up_tied_sorts:0" "174 up: the seeded tied sorts (tools, forms) are unique"
+fl_check "up_tools_regrouped:0" "174 up: Inventory forms are not regrouped"
+fl_check "up_collection_names:Operations,Samples,Tests" "174 up: collections are named Operations, Samples and Tests in Data Studio"
+fl_check "up_perm:physical_samples.create=true,true" "174 up: Lab Member physical_samples.create leaves out co_owners"
+fl_check "up_perm:physical_samples.update=true,true" "174 up: Lab Member physical_samples.update leaves out co_owners"
+fl_check "up_perm:projects.create=true,true" "174 up: Lab Member projects.create leaves out secondary_investigators"
+fl_check "up_perm:projects.update=true,true" "174 up: Lab Member projects.update leaves out secondary_investigators"
+fl_check "up_backup_llm_select:false" "174 up: the backup table is not readable by the Ask-DB role"
+fl_check "up_backup_commented:true" "174 up: the backup table carries a comment"
+fl_check "again_same:true" "174: the configure script's layout block, run on the migrated state, changes nothing"
+fl_check "down_groups:0" "174 down: every Field group is removed"
+fl_check "down_fields_exact:true" "174 down: every directus_fields row of the ten collections is exactly as before"
+fl_check "down_collections_exact:true" "174 down: collection names are exactly as before"
+fl_check "down_permissions_exact:true" "174 down: the Lab Member rows are exactly as before"
+fl_check "down_raw_new_fields:0" "174 down: the raw stock lot rows it added are removed"
+fl_check "down_backup:gone" "174 down: drops its backup table"
+
 echo "== Sample geometry: round bar form migration =="
 # CI has no Directus bootstrap rows (directus_fields is an empty stub), so seed the pre-migration
 # state, apply the migration's up then down SQL, and assert both — all in a rolled-back transaction.
@@ -3050,6 +3240,14 @@ ll_up="$ll_up
 $pu_up"
 ll_down="$pu_down
 $ll_down"
+# 20261014000174 (form layout) keeps its backup in d1_private and rewrites the field lists of four Lab Member rows (create and update
+# of physical_samples and projects), so it goes down first, before 169, and comes up last, as on a real database.
+fl_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG_FL")
+fl_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG_FL")
+ll_up="$ll_up
+$fl_up"
+ll_down="$fl_down
+$ll_down"
 # 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql
@@ -3593,8 +3791,8 @@ la_check "dn_matches_main:72" "167 down then 166 down: every ruled Lab Member ro
 la_check "dn_access_rows:0" "down: the five access table rows it inserted are gone"
 la_n=$(grep -o '^final_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)
 [[ "${la_n:-0}" -eq "${gen_n:-x}" ]] && ok "166 + 167 up: every ruled row matches the generated rules ($la_n rows)" || bad "up: ruled rows differ from the generated rules (psql output: $la_out)"
-[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 2 ))" ]] \
-    && ok "166 alone: every ruled row but project_rollup (167's) and people update (169's) matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
+[[ "$(grep -o '^up_exact:[0-9]*' <<<"$la_out" | cut -d: -f2)" -eq "$(( ${gen_n:-0} - 6 ))" ]] \
+    && ok "166 alone: every ruled row but project_rollup (167's), people update (169's) and the four create/update field lists of 174 matches the generated rules" || bad "166 alone: ruled rows differ (psql output: $la_out)"
 la_check "up_access_rows:5" "up: the five access tables get their own-rows read row"
 la_check "up_backup_inserted:12" "up: exactly the twelve new rows (five access tables, six readers tables, operation_open_to_all) are recorded as inserted"
 la_check "up_backup_commented:true" "up: the backup table has a comment"

@@ -6,6 +6,8 @@
 // (the document reflows). URL params like ?operations=0 set the initial state.
 
 import { buildGeometry } from './geometry';
+// The labels of the coded dropdowns (never the stored codes). A synced copy of packages/d1-ui/src/choiceLabels.ts.
+import { choiceLabel } from './choiceLabels';
 
 // Collections that have an Explorer page (the `home` module). This is the same mapping as
 // recordRoute() in packages/d1-ui; d1-report is built on its own and cannot import the kit, so
@@ -234,8 +236,8 @@ export function renderSampleReport(d) {
 		kv('Manufactured', fmtDate(s.manufactured_date)),
 		kv('Entry created', fmtDate(s.created_at)),
 		kv('Location', dash(location)),
-		kv('Surface finish', dash(surfaceFinish)),
-		kv('Form', dash(s.form)),
+		kv('Surface finish', dash(choiceLabel('surfaceFinish', surfaceFinish))),
+		kv('Geometry', dash(choiceLabel('geometry', s.form))),
 		kv('Mass', s.mass_grams ? `${num(s.mass_grams, 2)} g` : '—'),
 		kv('Dimensions', dims ? `${dims} <span class="unit">mm</span>` : '—'),
 		kv('Density', s.density_g_per_cm3 ? `${num(s.density_g_per_cm3, 2)} <span class="unit">g/cm³</span>` : '—'),
@@ -272,7 +274,7 @@ export function renderSampleReport(d) {
 			.map((o) => `<tr>
 				<td class="dotcell">${dotsFor(o)}</td>
 				<td class="mono">${dash(o.pass_code)}</td>
-				<td>${[o.method_name, o.machining_operation_subtype].filter(Boolean).map(esc).join(' · ') || '—'}</td>
+				<td>${[o.method_name, choiceLabel('machiningSubtype', o.machining_operation_subtype)].filter(Boolean).map(esc).join(' · ') || '—'}</td>
 				<td class="n">${num(o.machining_cutting_speed_m_per_min, 1)}</td>
 				<td class="n">${num(o.machining_feed_mm_per_rev, 3)}</td>
 				<td class="n">${num(o.machining_spindle_speed_rpm, 0)}</td>
@@ -316,7 +318,7 @@ export function renderSampleReport(d) {
 			when: dateRange(children, 'child_created'),
 			title: `Sectioned into children <span class="count">${children.length}</span>`,
 			body: `<div class="chips">${children
-				.map((c) => `<span class="chip"><b>${esc(c.child_sample_code)}</b>${c.child_form ? ` <span class="rel">${esc(c.child_form)}</span>` : ''}${
+				.map((c) => `<span class="chip"><b>${esc(c.child_sample_code)}</b>${c.child_form ? ` <span class="rel">${esc(choiceLabel('geometry', c.child_form))}</span>` : ''}${
 					c.fraction ? ` <span class="frac">${num(c.fraction * 100, 0)}%</span>` : ''
 				}<span class="chip-date">${fmtDate(c.child_created)}</span></span>`)
 				.join('')}</div>`,
@@ -488,12 +490,12 @@ export function renderSampleReport(d) {
 		<div class="hd-left">
 			<div class="eyebrow">Sample Overview</div>
 			<h1 class="code">${esc(s.sample_code)}</h1>
-			<div class="subtitle">${dash(s.material_name)}${s.form ? ` · ${esc(s.form)}` : ''}</div>
+			<div class="subtitle">${dash(s.material_name)}${s.form ? ` · ${esc(choiceLabel('geometry', s.form))}` : ''}</div>
 			${nickname ? `<div class="nickname">${esc(nickname)}</div>` : ''}
 			<div class="badges">${statusBadge}${exportBadge}</div>
 		</div>
 		<div class="hd-right">
-			<figure class="geo-fig">${buildGeometry(s, { labelSize: 11 })}<figcaption>${dims ? `${esc(dims)} mm` : esc(s.form || 'geometry')}</figcaption></figure>
+			<figure class="geo-fig">${buildGeometry(s, { labelSize: 11 })}<figcaption>${dims ? `${esc(dims)} mm` : esc(choiceLabel('geometry', s.form) || 'geometry')}</figcaption></figure>
 			<div class="qr-wrap">
 				<div class="qr">${qrSvg}</div>
 				<div class="uid">ID ${esc(shortId)}</div>
@@ -845,7 +847,7 @@ export function renderOperationReport(d) {
 		kvCell('Sample', o.sample_id ? `<a href="${esc(sampleUrl)}">${dash(o.sample_code)}</a>` : dash(o.sample_code)),
 		kvCell('Process', catLabel),
 		kvCell('Method', dash(o.method_name), o.method_code ? esc(o.method_code) : ''),
-		kvCell('Sub-type', dash(o.machining_operation_subtype)),
+		kvCell('Sub-type', dash(choiceLabel('machiningSubtype', o.machining_operation_subtype))),
 		kvCell('Date', fmtDate(o.operation_date)),
 		kvCell('Operator', dash(o.operator_name)),
 		kvCell('Project', dash(o.project_code), o.project_name ? esc(o.project_name) : ''),
@@ -870,7 +872,7 @@ export function renderOperationReport(d) {
 	return datasheetHtml({
 		eyebrow: `${catLabel} Operation`,
 		code: dash(o.pass_code),
-		subtitle: `${dash(o.method_name)}${o.machining_operation_subtype ? ` · ${esc(o.machining_operation_subtype)}` : ''}`,
+		subtitle: `${dash(o.method_name)}${o.machining_operation_subtype ? ` · ${esc(choiceLabel('machiningSubtype', o.machining_operation_subtype))}` : ''}`,
 		details,
 		paramTitle: `${catLabel} Parameters`,
 		params: paramCells(o, OP_PARAM_GROUPS[o.process_category]),
