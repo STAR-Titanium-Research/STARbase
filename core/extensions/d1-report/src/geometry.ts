@@ -3,7 +3,7 @@
 // Draws a scaled 3-D (isometric, z-up) view of a specimen from its real dimensions,
 // with dimension markers like a technical drawing. The shape stretches with the
 // measurements (a long thin plate looks long and thin), and standard test coupons
-// (ASTM E8 tensile, bend bar) start from standard dimensions that stay editable.
+// (tensile, bend bar) can be filled from a named standard (PRESETS) that stays editable.
 
 export interface Dims {
 	form: string | null;
@@ -16,12 +16,59 @@ export interface Dims {
 	gauge_width_mm?: number | null;
 }
 
-// Standard presets. Tensile = ASTM E8/E8M sheet-type (12.5 mm wide reduced section,
-// 50 mm gauge, 200 mm long, 20 mm grip). Bend/fatigue = a plain rectangular bar.
-export const PRESETS: Record<string, Partial<Dims>> = {
-	tensile_coupon: { length_mm: 200, width_mm: 20, thickness_mm: 3, gauge_length_mm: 50, gauge_width_mm: 12.5 },
-	bend_bar: { length_mm: 100, width_mm: 15, thickness_mm: 10 },
+// Standard presets: named dimension sets for the forms that have a standard (decision 15 of
+// docs/superpowers/plans/2026-10-14-form-layout.md). Picking one fills the dimension fields, which then stay
+// editable. Thickness is never preset: it is the one dimension that differs from piece to piece.
+// The values are to be checked against the standards by the maintainer.
+export type DimKey = 'diameter_mm' | 'inner_diameter_mm' | 'length_mm' | 'width_mm' | 'thickness_mm' | 'gauge_length_mm' | 'gauge_width_mm';
+
+export interface Preset {
+	id: string;
+	text: string;
+	// Only the dimensions the standard fixes; never thickness_mm.
+	dims: Partial<Record<DimKey, number>>;
+}
+
+export const PRESETS: Record<string, Preset[]> = {
+	tensile_coupon: [
+		{ id: 'astm_e8_sheet', text: 'ASTM E8/E8M sheet', dims: { gauge_length_mm: 50, gauge_width_mm: 12.5, length_mm: 200, width_mm: 20 } },
+		{ id: 'astm_e8_subsize', text: 'ASTM E8/E8M subsize', dims: { gauge_length_mm: 25, gauge_width_mm: 6, length_mm: 100, width_mm: 10 } },
+		{ id: 'iso_6892_1_type1', text: 'ISO 6892-1 type 1', dims: { gauge_length_mm: 50, gauge_width_mm: 12.5, length_mm: 200, width_mm: 20 } },
+		{ id: 'iso_6892_1_type2', text: 'ISO 6892-1 type 2', dims: { gauge_length_mm: 80, gauge_width_mm: 20, length_mm: 250, width_mm: 30 } },
+	],
+	bend_bar: [
+		{ id: 'plain_bar', text: 'Plain bar', dims: { length_mm: 100, width_mm: 15 } },
+	],
 };
+
+export function presetsFor(form: string | null | undefined): Preset[] {
+	return PRESETS[(form || '').toLowerCase()] ?? [];
+}
+
+// The dimensions a preset fills (a copy), or null when the form has no such preset.
+export function presetDims(form: string | null | undefined, id: string): Partial<Record<DimKey, number>> | null {
+	const p = presetsFor(form).find((x) => x.id === id);
+	return p ? { ...p.dims } : null;
+}
+
+const PRESET_SHORT: Partial<Record<DimKey, string>> = { length_mm: 'L', width_mm: 'W', gauge_length_mm: 'G', gauge_width_mm: 'Wg' };
+
+// What the picker shows: "ASTM E8/E8M sheet (L 200, W 20, G 50, Wg 12.5 mm)".
+export function presetLabel(p: Preset): string {
+	const keys: DimKey[] = ['length_mm', 'width_mm', 'gauge_length_mm', 'gauge_width_mm'];
+	const parts = keys.filter((k) => p.dims[k] != null).map((k) => `${PRESET_SHORT[k]} ${p.dims[k]}`);
+	return parts.length ? `${p.text} (${parts.join(', ')} mm)` : p.text;
+}
+
+// The preset whose dimensions all equal the current values (numbers or numeric strings), else null:
+// the picker shows the standard the record already matches, and "Custom" once a dimension is edited.
+export function matchingPreset(form: string | null | undefined, values: Record<string, unknown>): string | null {
+	for (const p of presetsFor(form)) {
+		const keys = Object.keys(p.dims) as DimKey[];
+		if (keys.every((k) => Number(values[k]) === p.dims[k] && values[k] !== null && values[k] !== '')) return p.id;
+	}
+	return null;
+}
 
 // Which dimension inputs are relevant per form.
 export const FORM_FIELDS: Record<string, string[]> = {

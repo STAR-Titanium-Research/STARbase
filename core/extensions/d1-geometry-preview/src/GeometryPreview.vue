@@ -1,5 +1,16 @@
 <template>
 	<div class="geometry-preview">
+		<div v-if="presetItems.length" class="standard">
+			<span class="standard-label">Standard</span>
+			<v-select
+				class="standard-select"
+				:items="presetItems"
+				:model-value="currentPreset"
+				:disabled="disabled"
+				placeholder="Custom (choose a standard…)"
+				@update:model-value="applyPreset"
+			/>
+		</div>
 		<div v-if="!geoSvg" class="no-data">
 			<span class="notice">Select a geometry to see a shape preview</span>
 		</div>
@@ -15,7 +26,12 @@
 <script setup lang="ts">
 import { inject, computed, ref, watch, type Ref } from 'vue';
 import { useApi } from '@directus/extensions-sdk';
-import { buildGeometry, FORM_FIELDS, isRoundBar, isUprightCylinder } from './geometry';
+import { buildGeometry, FORM_FIELDS, isRoundBar, isUprightCylinder, matchingPreset, presetDims, presetLabel, presetsFor } from './geometry';
+
+defineProps<{ disabled?: boolean }>();
+// The Directus form listens for this on every interface (v-form: onSetFieldValue -> setValue(field, value)),
+// so the picker can fill the sibling dimension fields. Declared here or the event never leaves the component.
+const emit = defineEmits<{ (e: 'setFieldValue', payload: { field: string; value: unknown }): void }>();
 
 // Directus 11 injects the live form values as a Vue Ref — read `.value`.
 const values = inject<Ref<Record<string, any>>>('values', ref({}));
@@ -28,6 +44,18 @@ const num = (x: any): number | null => {
 };
 
 const geoSvg = computed(() => buildGeometry(v.value as any));
+
+// "Standard" picker: the named standards of the chosen form (tensile coupon, bend bar). It shows the
+// standard the dimensions already equal, else nothing selected ("Custom"). Picking one fills the
+// dimensions it fixes; thickness is never touched, and every field stays editable.
+const presetItems = computed(() => presetsFor(v.value.form).map((p) => ({ text: presetLabel(p), value: p.id })));
+const currentPreset = computed(() => matchingPreset(v.value.form, v.value));
+function applyPreset(id: string | null) {
+	if (!id) return;
+	const dims = presetDims(v.value.form, id);
+	if (!dims) return;
+	for (const [field, value] of Object.entries(dims)) emit('setFieldValue', { field, value });
+}
 
 // Dimension chips from the fields relevant to the chosen form.
 const SHORT: Record<string, string> = { diameter_mm: 'Ø', inner_diameter_mm: 'ID', length_mm: 'L', width_mm: 'W', thickness_mm: 't', gauge_length_mm: 'G', gauge_width_mm: 'Wg' };
@@ -78,6 +106,9 @@ const massLabel = computed<string | null>(() => {
 	paint-order: stroke; stroke: #fff; stroke-width: 2.5px; }
 .geo-canvas :deep(.gsupport) { fill: #94a3b8; stroke: #475569; stroke-width: 0.6; }
 .geo-canvas :deep(.gload) { stroke: #b91c1c; stroke-width: 1.4; }
+.standard { display: flex; align-items: center; gap: 10px; align-self: stretch; }
+.standard-label { font-size: 12px; font-weight: 600; color: var(--foreground-subdued, #6b7684); white-space: nowrap; }
+.standard-select { flex: 1; min-width: 0; }
 .no-data .notice { color: var(--foreground-subdued, #999); font-style: italic; font-size: 13px; }
 .dims { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--foreground-normal, #333); justify-content: center; }
 .dims span { background: var(--background-subdued, #f5f5f5); padding: 2px 8px; border-radius: 4px; }
