@@ -1101,10 +1101,12 @@ BEGIN
 END
 $$;
 
-INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, required, note)
-SELECT v.collection, 'owner_team_id', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}","enableCreate":false}'::json, 'related-values', TRUE, FALSE, 9, 'half', FALSE,
-       'The team that owns this record instead of a person; set through Transfer ownership'
-FROM (VALUES ('physical_samples'), ('manufacturing_operations'), ('test_sessions'), ('campaigns')) AS v (collection)
+-- Next to Owner in the "Who & where" group of migration 174 (its sorts are multiples of 10 there, so owner + 5 is free: a root-level sort of 9
+-- is not, the form-layout test refuses two visible fields of one group that share a sort).
+INSERT INTO directus_fields (collection, field, special, interface, options, display, readonly, hidden, sort, width, required, note, "group")
+SELECT v.collection, 'owner_team_id', 'm2o', 'select-dropdown-m2o', '{"template":"{{name}}","enableCreate":false}'::json, 'related-values', TRUE, FALSE, v.sort, 'half', FALSE,
+       'The team that owns this record instead of a person; set through Transfer ownership', 'grp_who_where'
+FROM (VALUES ('physical_samples', 15), ('manufacturing_operations', 35), ('test_sessions', 35), ('campaigns', 25)) AS v (collection, sort)
 WHERE NOT EXISTS (SELECT 1 FROM directus_fields AS f WHERE f.collection = v.collection AND f.field = 'owner_team_id');
 
 -- No grant to d1_llm_readonly (the Ask-the-database role); nobody else calls these directly.

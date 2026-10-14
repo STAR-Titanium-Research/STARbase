@@ -119,6 +119,18 @@ INSERT INTO d1_private.team_ownership_rules_backup (id, inserted)
 SELECT id, TRUE FROM added;
 
 
+-- The sample create/update field lists of migration 174 name every column and alias except Co-owners, so the new owner_team_id column of
+-- migration 183 must join them or the Directus form check (tests/phase1_schema.sh, "field list misses columns") fails. A person still
+-- cannot set it: d1-access-guard refuses a non-administrator's owner_team_id on create (Ruling O3) and guards its change like the owner
+-- field. A row that is still '*' (166 without 174) needs nothing.
+UPDATE directus_permissions
+   SET fields = fields || ',owner_team_id'
+ WHERE policy = '20000002-0000-0000-0000-000000000002'
+   AND collection = 'physical_samples' AND action IN ('create', 'update')
+   AND fields IS NOT NULL AND fields <> '*'
+   AND ',' || fields || ',' NOT LIKE '%,owner_team_id,%';
+
+
 -- migrate:down
 SET LOCAL lock_timeout = '10s';
 
@@ -130,5 +142,11 @@ UPDATE directus_permissions p
    SET permissions = b.permissions, validation = b.validation
   FROM d1_private.team_ownership_rules_backup b
  WHERE b.id = p.id AND NOT b.inserted;
+
+UPDATE directus_permissions
+   SET fields = regexp_replace(fields, ',owner_team_id(,|$)', '\1')
+ WHERE policy = '20000002-0000-0000-0000-000000000002'
+   AND collection = 'physical_samples' AND action IN ('create', 'update')
+   AND fields IS NOT NULL AND fields <> '*' AND fields LIKE '%,owner_team_id%';
 
 DROP TABLE IF EXISTS d1_private.team_ownership_rules_backup;
