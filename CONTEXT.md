@@ -123,6 +123,12 @@ The powder a FAST run used, as typed on the FAST press ("TIMET 45-150"). Many ru
 names a raw stock lot but is only text: it is not linked to the lot.
 _Avoid_: batch (on its own), FAST batch, batch number
 
+**Stack of passes**:
+Several operations of the same method on the same machine, done one after another on one sample with
+nothing else in between (twelve turning passes), drawn as one container that can be unstacked. Each pass
+is still its own operation.
+_Avoid_: batch (a batch is done together on several samples; passes are done in turn on one), group
+
 ### Building on the process map
 
 **Card**:
