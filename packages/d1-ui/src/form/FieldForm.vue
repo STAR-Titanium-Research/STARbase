@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue';
+import '../components/tokens.css';
 import FormNodeView from './FormNodeView.vue';
 import { effectiveValues, fieldViews, formTree, toFormFields, withValue } from './fieldModel';
 import type { FieldDef, FormField } from './fieldModel';
