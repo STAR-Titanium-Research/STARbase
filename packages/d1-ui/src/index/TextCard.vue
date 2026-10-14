@@ -69,7 +69,9 @@ function onCard(): void {
 	box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme--foreground) 30%, transparent);
 }
 .card:hover, .card:focus-within { border-color: var(--d1-accent, var(--theme--primary)); }
-.pic { height: 104px; display: grid; place-items: center; line-height: 0; overflow: hidden; background: var(--d1-surface); border-bottom: 1px solid var(--d1-line); }
+/* A plain block of fixed height, not a grid: the slotted picture sizes itself by `height: 100%`, which
+   inside a grid's auto row fell back to the photo's natural height and showed a zoomed-in strip. */
+.pic { box-sizing: border-box; height: 104px; padding: 6px; display: block; line-height: 0; overflow: hidden; background: var(--d1-surface); border-bottom: 1px solid var(--d1-line); }
 .pic :deep(img) { width: 100%; height: 100%; object-fit: contain; }
 .body { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 9px 11px 10px; flex: 1; }
 .head {
