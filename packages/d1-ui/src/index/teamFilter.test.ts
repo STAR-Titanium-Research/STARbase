@@ -64,14 +64,33 @@ describe('buildItemsParams with the Team chip', () => {
 		expect(stateFromQuery(queryFromState(s))).toEqual(s);
 	});
 
-	it('300 ids keep the request under the 16 KiB header limit of Node (a 500-id request got a 431)', async () => {
+	// Node's HTTP parser refuses a request head over 16 KiB (a 500-id request got a 431). The worst case is the Operations list (the widest
+	// chip set and the most search fields) with every chip set, a 40-character search and the 300 ids the endpoint is capped at; the cookie, user
+	// agent, sec-ch-* and referer headers also count against the same 16 KiB, so the path + query is held to 14.5 KiB (1.5 KiB of headroom). Measured
+	// with axios' serializer: 14,356 bytes (the ids alone are about 12.9 KB), so about 490 bytes of slack before this test fails.
+	it('300 ids keep the worst-case request (every chip, a 40-char search) under 14.5 KiB of path + query, leaving headroom under the 16 KiB header limit of Node', async () => {
 		const { TEAM_RECORDS_LIMIT } = await import('../teams/teamsApi');
+		const { extraFields } = await import('./indexView');
 		expect(TEAM_RECORDS_LIMIT).toBe(300);
 		const ids = Array.from({ length: TEAM_RECORDS_LIMIT }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
-		const p = buildItemsParams(samples, state({ filters: { team: 't1' } }), null, null, ids);
-		const enc = (v: string) => encodeURIComponent(v).replace(/%3A/gi, ':').replace(/%2C/gi, ',').replace(/%5B/gi, '[').replace(/%5D/gi, ']');
-		const url = '/items/physical_samples?' + [...(p.fields as string[]).map((f) => `fields[]=${enc(f)}`), 'sort[]=-created_at', 'limit=50', 'page=1', 'meta=filter_count', `filter=${enc(p.filter as string)}`].join('&');
-		expect(url.length).toBeLessThan(16384 - 2000); // room for the headers
+		const def = indexDefBySlug('operations')!;
+		const uuid = '11111111-2222-4333-8444-555555555555';
+		const filters: Record<string, string> = {};
+		for (const f of def.filters) {
+			filters[f.field] = f.options.kind === 'relation' ? uuid : f.options.kind === 'bool' || f.options.kind === 'flag' ? 'true' : f.options.kind === 'team' ? uuid : 'sintering';
+		}
+		const p = buildItemsParams(def, state({ q: 'abcdefghijklmnopqrstuvwxyz0123456789abcd', filters }), null, null, ids); // 40 characters
+		p.fields = [...(p.fields as string[]), ...extraFields(def, null).filter((f) => !(p.fields as string[]).includes(f))];
+		// axios' own serializer (1.x getUri): encodeURIComponent on keys and values, then : $ and , kept and a space as +; brackets stay
+		// percent-encoded, so an array key is `fields%5B%5D` (checked against axios 1.20 getUri: 14,356 bytes for this request)
+		const enc = (v: string) => encodeURIComponent(v).replace(/%3A/gi, ':').replace(/%24/g, '$').replace(/%2C/gi, ',').replace(/%20/g, '+');
+		const url = `/items/${def.collection}?` + [
+			...(p.fields as string[]).map((f) => `fields%5B%5D=${enc(f)}`),
+			...(p.sort as string[]).map((f) => `sort%5B%5D=${enc(f)}`),
+			`limit=${p.limit}`, `page=${p.page}`, `meta=${p.meta}`, `filter=${enc(p.filter as string)}`,
+		].join('&');
+		expect(p.filter as string).toContain(ids[299]); // the ids are really in it
+		expect(url.length).toBeLessThan(14.5 * 1024);
 	});
 
 	it('words the truncation note', () => {
