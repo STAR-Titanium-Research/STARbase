@@ -1,6 +1,8 @@
 // Batch grouping for the Process map (spec §5.3). Pure: rows in, groups out, every row in exactly
-// one group. Recorded batches (batch_id) first, then — only when `probable` — guessed ones.
+// one group. Recorded batches (batch_id) first, then — only when `probable` — guessed ones, then — only
+// when `stack` — stacks of passes on one sample.
 
+import { compareSteps, keyOf as stepKey, type StepKey } from './stepOrder';
 import type { Group, OpRow, ProcessCategory, TestRow } from './types';
 
 export interface GroupBatchesOpts {
@@ -8,6 +10,10 @@ export interface GroupBatchesOpts {
   probable: boolean;
   /** Header codes of recorded batches, by batch id ("B-0001"). A batch with no entry has no code to show (never the id). */
   batchCodes?: Record<string, string>;
+  /** Stack passes: operations on one sample, one straight after another, same method and machine, in place (the "Stack passes" chip). */
+  stack?: boolean;
+  /** Operation ids the person unstacked: they never join a stack. */
+  unstacked?: ReadonlySet<string>;
 }
 
 /** Categories whose different input samples are commonly processed together in one go. */
@@ -112,7 +118,41 @@ export function groupBatches(ops: OpRow[], tests: TestRow[], opts: GroupBatchesO
     }
   }
 
-  // 3. Everything else is a single row.
+  // 3. Stacks: a sample turned, faced or polished pass after pass. Only passes next to each other in the sample's
+  // chain (buildGraph's order: date, sequence, id) stack, so the chain through the stack stays a straight line: any
+  // other step on the sample in between (a cut, a test, a batch, another method or machine) ends the stack.
+  if (opts.stack) {
+    const stackable = (o: OpRow) =>
+      !claimed.has(o.id) && !o.batchId && !o.sourceRunUid && !opts.unstacked?.has(o.id) && (!o.outputSampleId || o.outputSampleId === o.sampleId);
+    const chains = new Map<string, { key: StepKey; op: OpRow | null }[]>();
+    const add = (sample: string, key: StepKey, op: OpRow | null) => {
+      const list = chains.get(sample);
+      if (list) list.push({ key, op });
+      else chains.set(sample, [{ key, op }]);
+    };
+    for (const o of ops) if (o.sampleId) add(o.sampleId, stepKey(o, o.sequence), stackable(o) ? o : null);
+    for (const t of tests) for (const s of new Set(t.subjectSampleIds)) add(s, stepKey(t, null), null);
+    for (const list of chains.values()) {
+      list.sort((a, b) => compareSteps(a.key, b.key));
+      let run: OpRow[] = [];
+      const close = () => {
+        if (run.length >= 2) {
+          push({ id: `stack:${run.map((r) => r.id).sort().join(',')}`, kind: 'operation', rowIds: run.map((r) => r.id), batch: null, stack: true });
+          for (const r of run) claimed.add(r.id);
+        }
+        run = [];
+      };
+      for (const { op } of list) {
+        const last = run[run.length - 1];
+        if (op && last && (op.methodId !== last.methodId || op.equipmentId !== last.equipmentId)) close();
+        if (op) run.push(op);
+        else close();
+      }
+      close();
+    }
+  }
+
+  // 4. Everything else is a single row.
   for (const o of freeOps) {
     if (!claimed.has(o.id)) push({ id: `op:${o.id}`, kind: 'operation', rowIds: [o.id], batch: null });
   }

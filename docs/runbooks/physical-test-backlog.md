@@ -1112,6 +1112,25 @@ migration 141 prints about ownerless records.
   sides). Check light and dark. Also open a normal 10-insert box: the grid is 2 columns by 5 rows, numbered left to
   right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
 
+#### Process map card tweaks (plan `2026-10-14-process-map-4-card-tweaks.md`)
+
+- [ ] **PM4-1 — Cards on a real turning sample.** Open `/map` on a sample with several turning passes (the
+  `10-AA-MF-2023-03-31-F…` series). Expect: the passes in a row with the same method and machine are one card drawn as
+  a deck (`×N` in the title bar, "N passes", first – last date); the title bar says "Machining | Turning" and never runs
+  out of the card; a single operation's full code wraps inside the card under the title bar; there is no "Inside"
+  label; Tool shows the tool's name (not `6576cc99`); Owner, Campaign and Material are chips like Machine and Tool.
+  Since: Process map card tweaks (PR pending).
+- [ ] **PM4-2 — Force data preview on its chip.** Hover anywhere on a Force data chip (icon, label or code). Expect:
+  after a moment the card shows that pass's Fz figure, square and filling the card's width; hovering the operation
+  card itself raises no card. Select the Force data chip: the rail shows the same square figure. Since: Process map
+  card tweaks (PR pending).
+- [ ] **PM4-3 — Unstack, ＋/− and Reset.** On the stacked card press **Unstack N passes**: each pass becomes its own
+  card, in order, wired one into the next. Turn the **Stack passes** Show chip off and on: the stack comes back.
+  Press ＋ on a Tool chip: the tool's other operations appear and the button turns to −; press −: they go and the
+  map is as before. Press ＋ on a sample card, then **Reset**: the map is back as first opened, with no new request
+  in the network panel. The map uses the full width of the window and its full height. Since: Process map card
+  tweaks (PR pending).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

@@ -25,6 +25,8 @@ const props = defineProps<{
 	presentKinds: string[];
 	hiddenKinds: ReadonlySet<string>;
 	probable: boolean;
+	/** The "Stack passes" chip. */
+	stack?: boolean;
 	/** The reach the person asked for. */
 	reach: Reach;
 	/** The reach actually drawn: fewer steps than `reach` when the card cap clamped it (spec D22). */
@@ -37,6 +39,7 @@ const emit = defineEmits<{
 	select: [id: string];
 	toggleKind: [kind: string];
 	setProbable: [on: boolean];
+	setStack: [on: boolean];
 	setReach: [reach: Reach];
 }>();
 
@@ -150,6 +153,9 @@ const onReach = (v: string) => emit('setReach', v === 'all' ? 'all' : (Number(v)
 				</button>
 				<button type="button" class="chip" :class="{ off: !probable }" style="--k: var(--k-op)" :aria-pressed="probable" @click="emit('setProbable', !probable)">
 					<span class="dot" aria-hidden="true"></span>Probable batches
+				</button>
+				<button type="button" class="chip" :class="{ off: !stack }" style="--k: var(--k-op)" :aria-pressed="!!stack" @click="emit('setStack', !stack)">
+					<span class="dot" aria-hidden="true"></span>Stack passes
 				</button>
 			</div>
 		</Section>

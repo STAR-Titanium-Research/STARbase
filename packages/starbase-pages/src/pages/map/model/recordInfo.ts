@@ -4,10 +4,11 @@
 //
 // `id` is what the page's actions take: a node id, or a record inside a card (`<collection>:<id>`).
 
-import { analysisLink, formatDate, humanise, processLabel, recordRoute, type Fact } from '@d1/ui';
-import { LINEAGE_LABEL, kindOfCollection } from '../nodes/kinds';
+import { analysisLink, humanise, processLabel, recordRoute, type Fact } from '@d1/ui';
+import { LINEAGE_LABEL, kindOfCollection, slotText } from '../nodes/kinds';
 import { refKey } from '../nodes/actions';
 import { OTHER_PIECE } from './buildGraph';
+import { dateText } from './dates';
 import { nodeOfSocket } from './sockets';
 import type { ContainerNode, Kind, MapNode, OpRow, ProcessData, ProcessGraph, Ref, SampleRec, TestRow } from './types';
 
@@ -38,6 +39,12 @@ export interface RecordInfo {
 
 const COLLECTION_OF = { operation: 'manufacturing_operations', test: 'test_sessions' } as const;
 
+/** The heading of a record: a tool or a campaign by its name with its code under it, anything else by its code and label. */
+function named(ref: Ref): Pick<RecordInfo, 'code' | 'title' | 'plain'> {
+  const name = slotText(ref);
+  return name !== ref.code ? { code: name, title: ref.code, plain: true } : { code: ref.code, title: ref.label };
+}
+
 /** The number at the start of a fact such as "12 mm". */
 const leadingNumber = (v: string | undefined): number | null => {
   const n = v === undefined ? NaN : Number.parseFloat(v);
@@ -55,21 +62,11 @@ function geometryOf(s: SampleRec): Record<string, unknown> | null {
   return out;
 }
 
-const dateOf = (d: string | null): number => (d ? Date.parse(d) : NaN);
-
-/** One date, or "first - last" when the rows of a batch differ. */
-function dateText(dates: (string | null)[]): string {
-  const valid = dates.filter((d): d is string => !!d && !Number.isNaN(dateOf(d))).sort((a, b) => dateOf(a) - dateOf(b));
-  if (!valid.length) return '';
-  const first = formatDate(valid[0]);
-  const last = formatDate(valid[valid.length - 1]);
-  return first === last ? first : `${first} – ${last}`;
-}
 
 function slotFacts(node: ContainerNode): Fact[] {
   return node.slots
     .filter((s) => s.major)
-    .map((s) => ({ label: s.role, value: s.ref ? s.ref.code : s.values?.length ? (s.values.length === 1 ? s.values[0].code : `${s.values.length} different`) : '' }));
+    .map((s) => ({ label: s.role, value: s.ref ? slotText(s.ref) : s.values?.length ? (s.values.length === 1 ? slotText(s.values[0]) : `${s.values.length} different`) : '' }));
 }
 
 function sampleInfo(id: string, data: ProcessData, rec: SampleRec): RecordInfo {
@@ -107,7 +104,7 @@ function containerInfo(id: string, data: ProcessData, node: ContainerNode): Reco
   const facts: Fact[] = [];
   if (node.kind === 'operation') facts.push({ label: 'Process', value: processLabel((first as OpRow).category) });
   else if ((first as TestRow).testType) facts.push({ label: 'Type', value: (first as TestRow).testType });
-  if (rows.length > 1) facts.push({ label: node.kind === 'operation' ? 'Operations' : 'Tests', value: rows.length });
+  if (rows.length > 1) facts.push({ label: node.stacked ? 'Passes' : node.kind === 'operation' ? 'Operations' : 'Tests', value: rows.length });
   facts.push({ label: 'Date', value: dateText(rows.map((r) => r.date)) });
   facts.push(...slotFacts(node));
   facts.push(...node.settings.map((s) => ({ label: s.label, value: s.value })));
@@ -118,9 +115,9 @@ function containerInfo(id: string, data: ProcessData, node: ContainerNode): Reco
     ref,
     // A probable batch has no code of its own; the first row's would stand for all of them.
     // (A recorded batch whose code was not read has none either: a dash, and the title says "Batch".)
-    code: node.probable ? node.title : node.code || '–',
-    plain: node.probable || undefined,
-    title: node.probable ? undefined : node.title,
+    code: node.probable || node.stacked ? node.title : node.code || '–',
+    plain: node.probable || node.stacked || undefined,
+    title: node.probable ? undefined : node.stacked ? node.method : node.title,
     status: node.status,
     facts,
     // A collapsed container's samples are not loaded: it has none to count.
@@ -163,6 +160,7 @@ function nodeInfo(id: string, node: MapNode, data: ProcessData, graph: ProcessGr
     ref: node.ref,
     code: node.ref.code,
     title: node.ref.label ?? node.meta,
+    ...(slotText(node.ref) !== node.ref.code ? named(node.ref) : {}),
     status: node.status,
     facts: [],
     counts: fed ? [{ value: fed, label: 'fed' }] : [],
@@ -213,17 +211,18 @@ function slotInfo(id: string, data: ProcessData, graph: ProcessGraph): RecordInf
   }
   if (!ref) return null;
   const open = openOf(ref, data);
+  // Force data is the data of the operation that holds it: its card shows that operation's Fz figure.
+  const holder = ref.collection === 'force_file' ? data.operations.find((o) => o.relations.force_file_id?.id === ref.id) : undefined;
   return {
     id,
     kind: kindOfCollection(ref.collection) ?? 'data_file',
     ref,
     ...(open === undefined ? {} : { open }),
-    code: ref.code,
-    title: ref.label,
+    ...named(ref),
     facts: [],
     counts: [{ value: steps, label: 'steps' }],
     geometry: null,
-    dataOf: null,
+    dataOf: holder ? { collection: COLLECTION_OF.operation, id: holder.id, code: holder.code } : null,
   };
 }
 

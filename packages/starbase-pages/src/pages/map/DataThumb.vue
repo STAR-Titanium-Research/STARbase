@@ -10,7 +10,8 @@ import type { DataPreview } from './model/dataPreview';
 // the plotter link is plain text (the card takes no pointer).
 const props = defineProps<{ preview?: DataPreview; link?: boolean }>();
 
-const src = computed(() => (props.preview?.kind === 'force' && props.preview.imageFileId ? assetThumbUrl(props.preview.imageFileId) : null));
+// Square: the force figures are mostly round (a face of the part), so a square shows them at their size.
+const src = computed(() => (props.preview?.kind === 'force' && props.preview.imageFileId ? assetThumbUrl(props.preview.imageFileId, 480, 480) : null));
 // A figure that cannot be made (most force figures cannot be transformed yet) falls back to the words.
 const failed = ref(false);
 watch(src, () => void (failed.value = false));
@@ -35,5 +36,5 @@ const action = computed(() => (props.preview?.kind === 'fast' ? 'Open in FAST pl
 .cap { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 .open { color: var(--d1-accent, var(--theme--primary)); text-decoration: none; font-weight: 600; white-space: nowrap; }
 a.open:hover { text-decoration: underline; }
-img { display: block; width: 100%; height: 64px; margin-top: 4px; object-fit: contain; }
+img { display: block; width: 100%; max-width: 280px; aspect-ratio: 1; height: auto; margin: 4px auto 0; object-fit: contain; }
 </style>

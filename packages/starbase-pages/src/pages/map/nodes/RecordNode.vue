@@ -3,13 +3,13 @@ import { computed } from 'vue';
 import { Handle } from '@vue-flow/core';
 import { StatusBadge } from '@d1/ui';
 import type { RecordNode } from '../model/types';
-import { cardHandlers, useHiddenSides, useMapActions, useMapView, useSocketProps } from './actions';
+import { cardHandlers, useExpanded, useHiddenSides, useMapActions, useMapView, useSocketProps } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import HiddenPill from './HiddenPill.vue';
-import { KINDS, kindVar, statusKindOf } from './kinds';
+import { KINDS, kindVar, slotText, statusKindOf } from './kinds';
 
 // A record as a card (spec §6.2): kind pill, status badge, ＋, code and one meta line. Sockets are
-// Handles on the edges; a click on the body selects it, the ＋ button expands it.
+// Handles on the edges; a click on the body selects it, the ＋ button expands it and, once open, is − to collapse it.
 const props = defineProps<{ id: string; data: RecordNode; selected?: boolean }>();
 defineOptions({ inheritAttrs: false });
 const actions = useMapActions();
@@ -18,7 +18,11 @@ const { direction } = useMapView();
 const style = computed(() => KINDS[props.data.kind]);
 // Stock flows (lots, powder batches, material) wire in the material colour, samples in the sample colour.
 const flow = computed(() => (['stock_lot', 'powder_batch', 'material'].includes(props.data.kind) ? 'var(--k-material)' : 'var(--k-sample)'));
-const card = cardHandlers(actions, () => props.id);
+const open = useExpanded(() => props.id);
+// A tool or a campaign is named by its name; its code moves to the meta line.
+const name = computed(() => slotText(props.data.ref));
+const meta = computed(() => (name.value !== props.data.ref.code ? [props.data.ref.code, props.data.meta].filter(Boolean).join(' · ') : props.data.meta));
+const card = cardHandlers(actions, () => props.id, () => open.value);
 const sockProps = useSocketProps();
 const hiddenSides = useHiddenSides(() => props.id);
 </script>
@@ -48,10 +52,10 @@ const hiddenSides = useHiddenSides(() => props.id);
 			<div class="ntop">
 				<span class="kind k-ink k-tint"><v-icon :name="style.icon" x-small />{{ style.label }}</span>
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
-				<button class="xbtn nodrag nopan" type="button" aria-label="Expand" @click="card.expand"><v-icon name="add" x-small /></button>
+				<button class="xbtn nodrag nopan" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 			</div>
-			<div class="code">{{ data.ref.code }}</div>
-			<div v-if="data.meta" class="meta">{{ data.meta }}</div>
+			<div class="code">{{ name }}</div>
+			<div v-if="meta" class="meta">{{ meta }}</div>
 		</div>
 		<Handle
 			v-for="(s, i) in data.outs"

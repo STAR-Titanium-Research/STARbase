@@ -139,12 +139,16 @@ export interface SideFan extends Fan {
   root: Ref & { kind: Kind };
 }
 
-/** A set of rows drawn as one container. `batch: null` = a single row, no batch. */
+/**
+ * A set of rows drawn as one container. `batch: null` = a single row, no batch. `stack`: consecutive passes on one
+ * sample (same method and machine, in place) drawn as one card, a deck of them; never a batch.
+ */
 export interface Group {
   id: string;
   kind: 'operation' | 'test';
   rowIds: string[];
   batch: { recorded: true; code: string | null } | { recorded: false } | null;
+  stack?: true;
 }
 
 /**
@@ -191,6 +195,12 @@ export type ContainerNode = {
   group: Group;
   title: string;
   code: string;
+  /** The method of an operation, the test type of a test ("Turning", "Tensile"): the title bar says it after the process. */
+  method?: string;
+  /** The date of the row, or "first – last" for a batch or a stack whose rows differ. */
+  when?: string;
+  /** A stack of passes on one sample (Group.stack): drawn as a deck, with "Unstack". */
+  stacked?: boolean;
   status?: string | null;
   category: ProcessCategory | 'test';
   rows: SampleRow[];
