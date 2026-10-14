@@ -29,10 +29,14 @@
 -- writes each type in one INSERT ... SELECT / DELETE). Their UPDATE triggers now also compare team_access_id.
 --
 -- Guard: BEFORE INSERT/UPDATE/DELETE on each <type>_access: touching a row whose old or new team_access_id is set raises 42501 "Team access
--- rows are managed by the team's grant" unless d1.team_sync is 'on' or the statement runs inside another trigger (pg_trigger_depth() > 1):
--- the foreign-key cascades (grant, record, person or team deleted; added_by_person_id SET NULL) run inside the referential triggers, so
--- they pass, while a statement from Data Studio, the API or psql runs at depth 1 and is refused. It is a guard against mistakes, not a
--- security boundary: a session that can run SQL can set the flag itself.
+-- rows are managed by the team's grant" unless d1.team_sync is 'on', or the write is a foreign-key cascade: inside another trigger
+-- (pg_trigger_depth() > 1) a DELETE passes (grant, record, person or team deleted) and so does an UPDATE that keeps team_access_id
+-- (added_by_person_id SET NULL); an INSERT never does. A statement from Data Studio, the API or psql runs at depth 1 and is refused. It is a
+-- guard against mistakes, not a security boundary: a session that can run SQL can set the flag itself.
+--
+-- Lock order: BEFORE STATEMENT triggers (<table>_lock_first) on team_members and the five <type>_team_access tables take the global readers lock
+-- (d1_private.team_readers_lock: the body of 166's trg_readers_lock, as people_readers_lock does there) before the statement takes any row or foreign-key lock, so a team
+-- change cannot deadlock with a write that holds the readers lock and wants the same people or record row.
 --
 -- Functions (d1_private, SECURITY DEFINER, EXECUTE revoked from PUBLIC, not granted to the Ask-the-database role):
 --   team_decide(collection, team_access_id, person_id, 'approve' | 'decline'), team_pending_actionable(collection, team_access_id,
@@ -83,6 +87,20 @@ BEGIN
 END
 $$;
 COMMENT ON FUNCTION d1_private.team_lock() IS 'Called first by the team bookkeeping (team_grant_sync, team_member_sync, team_decide): raises feature_not_supported outside READ COMMITTED, then takes the global readers lock (pg_advisory_xact_lock(hashtextextended(''d1_readers'', 0)), the lock of d1_private.refresh_readers) before anything is read, so concurrent grant, trust, decision and membership changes are applied one after the other and each sees the previous one committed. Migration 176.';
+
+-- The BEFORE STATEMENT lock trigger of team_members and the team grant tables. The same body as 166's d1_private.trg_readers_lock, in a function of
+-- its own so that 166's down (which drops trg_readers_lock without CASCADE) is not blocked by triggers of this migration.
+CREATE OR REPLACE FUNCTION d1_private.team_readers_lock()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended('d1_readers', 0));
+    RETURN NULL;
+END
+$$;
+COMMENT ON FUNCTION d1_private.team_readers_lock() IS 'BEFORE STATEMENT trigger function on team_members and the five <kind>_team_access tables: takes the global readers lock (as d1_private.trg_readers_lock does for people, samples and operations) before the statement takes any row or foreign-key lock, so the lock order is always readers lock, then rows. Migration 176.';
 
 -- The derived rows of a grant follow it.
 CREATE OR REPLACE FUNCTION d1_private.team_grant_sync()
@@ -202,10 +220,18 @@ RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, public
 AS $$
+DECLARE
+    cascade boolean;
 BEGIN
+    -- a foreign-key cascade runs inside the referential trigger (depth > 1): it may delete a derived row (its grant, record, person or team
+    -- went) or update it without touching team_access_id (added_by_person_id SET NULL); it never inserts one
+    cascade := pg_trigger_depth() > 1 AND CASE TG_OP
+                                               WHEN 'DELETE' THEN true
+                                               WHEN 'UPDATE' THEN OLD.team_access_id IS NOT DISTINCT FROM NEW.team_access_id
+                                               ELSE false END;
     IF ((TG_OP <> 'INSERT' AND OLD.team_access_id IS NOT NULL) OR (TG_OP <> 'DELETE' AND NEW.team_access_id IS NOT NULL))
        AND coalesce(current_setting('d1.team_sync', true), '') <> 'on'
-       AND pg_trigger_depth() <= 1 THEN
+       AND NOT cascade THEN
         RAISE EXCEPTION 'Team access rows are managed by the team''s grant'
             USING ERRCODE = 'insufficient_privilege', TABLE = TG_TABLE_NAME,
                   DETAIL = 'A row with team_access_id set is derived from a team grant (<type>_team_access): it follows the grant and the team''s members.',
@@ -217,7 +243,7 @@ BEGIN
     RETURN NEW;
 END
 $$;
-COMMENT ON FUNCTION d1_private.team_access_guard() IS 'Row trigger function of the five <kind>_access tables, BEFORE INSERT / UPDATE / DELETE: inserting, changing or deleting a row whose old or new team_access_id is set (a derived row, or turning a person''s own entry into one) raises insufficient_privilege (42501) "Team access rows are managed by the team''s grant", unless the transaction setting d1.team_sync is on (the bookkeeping triggers and team_decide set it) or the statement runs inside another trigger (pg_trigger_depth() > 1: the foreign-key cascades of a deleted grant, record, team or person, and added_by_person_id SET NULL). Rows with team_access_id NULL pass. A guard against edits behind the bookkeeping (Data Studio, the API), not a security boundary. Migration 176.';
+COMMENT ON FUNCTION d1_private.team_access_guard() IS 'Row trigger function of the five <kind>_access tables, BEFORE INSERT / UPDATE / DELETE: inserting, changing or deleting a row whose old or new team_access_id is set (a derived row, or turning a person''s own entry into one) raises insufficient_privilege (42501) "Team access rows are managed by the team''s grant", unless the transaction setting d1.team_sync is on (the bookkeeping triggers and team_decide set it) or it is a foreign-key cascade inside another trigger (pg_trigger_depth() > 1): a DELETE (a deleted grant, record, team or person) or an UPDATE that keeps team_access_id (added_by_person_id SET NULL); an INSERT is never let through that way. Rows with team_access_id NULL pass. A guard against edits behind the bookkeeping (Data Studio, the API), not a security boundary. Migration 176.';
 
 -- 3. Tables, the access-table column and indexes, triggers.
 DO $do$
@@ -285,6 +311,9 @@ BEGIN
                           EXECUTE FUNCTION d1_private.team_grant_sync(%2$L)', ta, k.kind, k.fk);
         EXECUTE format('CREATE TRIGGER %1$s_sync_del AFTER DELETE ON public.%1$I FOR EACH ROW EXECUTE FUNCTION d1_private.team_grant_sync(%2$L)', ta, k.kind);
         EXECUTE format('CREATE TRIGGER %1$s_team_guard BEFORE INSERT OR UPDATE OR DELETE ON public.%1$I FOR EACH ROW EXECUTE FUNCTION d1_private.team_access_guard()', acc);
+        -- the readers lock before the statement takes any row or foreign-key lock (lock order: readers lock first, as people_readers_lock in 166)
+        EXECUTE format('CREATE TRIGGER %1$s_lock_first BEFORE INSERT OR UPDATE OR DELETE ON public.%1$I FOR EACH STATEMENT EXECUTE FUNCTION d1_private.team_readers_lock()', ta);
+        EXECUTE format('COMMENT ON TRIGGER %1$s_lock_first ON public.%1$I IS %2$L', ta, 'Takes the global readers lock before the statement locks any row (the record and team foreign keys) and before the bookkeeping writes derived rows: otherwise a grant written while another transaction holds the readers lock and wants the same record row (a delete of the record) deadlocks (migration 176).');
 
         -- comments
         EXECUTE format('COMMENT ON TABLE public.%I IS %L', ta, format('A team''s access to a %s (Ruling D1): expanded into derived %s rows (team_access_id = this row) for every active member of the team, by d1_private.team_grant_sync and team_member_sync. One row per team and %s. Written through the record-access endpoint; audited; not in Directus and not granted to the Ask-the-database role. Deleted with the %s and with the team (and its derived and pending rows with it). Migration 176.', k.noun, acc, k.noun, k.noun));
@@ -323,6 +352,17 @@ CREATE TRIGGER team_members_access_sync_upd
     AFTER UPDATE OF team_id, person_id ON team_members
     FOR EACH ROW WHEN (OLD.team_id IS DISTINCT FROM NEW.team_id OR OLD.person_id IS DISTINCT FROM NEW.person_id)
     EXECUTE FUNCTION d1_private.team_member_sync();
+CREATE TRIGGER team_members_lock_first
+    BEFORE INSERT OR UPDATE OR DELETE ON team_members
+    FOR EACH STATEMENT EXECUTE FUNCTION d1_private.team_readers_lock();
+COMMENT ON TRIGGER team_members_lock_first ON team_members IS 'Takes the global readers lock before the statement locks any row (the team and person foreign keys take KEY SHARE on them) and before team_member_sync writes derived rows: otherwise a member added while another transaction holds the readers lock and updates the person (people.user_id, FOR UPDATE on the row) deadlocks (migration 176).';
+
+-- The access tables now hold own entries and derived team rows.
+COMMENT ON TABLE sample_access IS 'Who has access to a sample, by person (a person with no login can be listed; the grant starts working when an admin links the login). A person''s own entry: one row per person and sample (team_access_id NULL), written only through the record-access endpoint (A1a). A team given access adds derived rows (team_access_id set, migration 176): one per member and team grant, written only by the team bookkeeping; audited; no OCC version. Rows go with the sample and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE operation_access IS 'Who has access to a manufacturing operation, by person (a person with no login can be listed; the grant starts working when an admin links the login). A person''s own entry: one row per person and manufacturing operation (team_access_id NULL), written only through the record-access endpoint (A1a). A team given access adds derived rows (team_access_id set, migration 176): one per member and team grant, written only by the team bookkeeping; audited; no OCC version. Rows go with the manufacturing operation and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE test_access IS 'Who has access to a test session, by person (a person with no login can be listed; the grant starts working when an admin links the login). A person''s own entry: one row per person and test session (team_access_id NULL), written only through the record-access endpoint (A1a). A team given access adds derived rows (team_access_id set, migration 176): one per member and team grant, written only by the team bookkeeping; audited; no OCC version. Rows go with the test session and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE campaign_access IS 'Who has access to a campaign, by person (a person with no login can be listed; the grant starts working when an admin links the login). A person''s own entry: one row per person and campaign (team_access_id NULL), written only through the record-access endpoint (A1a). A team given access adds derived rows (team_access_id set, migration 176): one per member and team grant, written only by the team bookkeeping; audited; no OCC version. Rows go with the campaign and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE project_access IS 'Who has access to a project, by person (a person with no login can be listed; the grant starts working when an admin links the login). A person''s own entry: one row per person and project (team_access_id NULL), written only through the record-access endpoint (A1a). A team given access adds derived rows (team_access_id set, migration 176): one per member and team grant, written only by the team bookkeeping; audited; no OCC version. Rows go with the project and with the person (ON DELETE CASCADE).';
 
 -- 4. Deciding on a pending member, whether it is worth asking (Ruling D2), and the drift check.
 CREATE OR REPLACE FUNCTION d1_private.team_decide(collection text, team_access_id uuid, person_id uuid, decision text)
@@ -402,7 +442,7 @@ BEGIN
         RETURN false;
     END IF;
     SELECT l.id INTO login FROM people pe JOIN directus_users l ON l.id = pe.user_id WHERE pe.person_id = p_person;
-    IF g.role IN ('view', 'investigator') THEN
+    IF g.role = 'view' THEN
         -- would raise their access when their login does not read the record yet (a person with no login: always)
         IF login IS NULL THEN
             RETURN true;
@@ -411,22 +451,21 @@ BEGIN
             INTO found_it USING g.rec, login;
         RETURN NOT found_it;
     END IF;
-    -- edit (Ruling D2): unless they have an edit-level entry of their own or derived, or are the record's owner, a sample's co-owner, or
-    -- the PI (of a project: its owner column; of any other record: the PI of the record's project)
+    IF g.role = 'investigator' THEN
+        -- an investigator reads what is in the project, more than a reader of it: unless they are its PI or an investigator already
+        -- (an investigator entry of their own or derived, or an old project_investigators row of their login); being a reader is not enough
+        RETURN NOT (EXISTS (SELECT 1 FROM projects x WHERE x.project_id = g.rec AND x.principal_investigator_person = p_person)
+                 OR EXISTS (SELECT 1 FROM project_access a WHERE a.project_id = g.rec AND a.person_id = p_person AND a.role = 'investigator')
+                 OR (login IS NOT NULL AND EXISTS (SELECT 1 FROM project_investigators i WHERE i.project_id = g.rec AND i.user_id = login)));
+    END IF;
+    -- edit (Ruling D2a): unless they can edit it already under the Lab Member update rules: an edit-level entry of their own or derived,
+    -- the record's owner (owner_column), or a sample's co-owner. The PI of the record's project is not an editor, so approving does raise them.
     EXECUTE format('SELECT EXISTS (SELECT 1 FROM public.%I a WHERE a.%I = $1 AND a.person_id = $2 AND a.role = ''edit'')
                         OR EXISTS (SELECT 1 FROM public.%I x WHERE x.%I = $1 AND x.%I = $2)',
                    k.kind || '_access', k.fk, k.collection, k.fk, k.owner_column)
         INTO found_it USING g.rec, p_person;
     IF found_it THEN
         RETURN false;
-    END IF;
-    IF k.kind <> 'project' THEN
-        EXECUTE format('SELECT EXISTS (SELECT 1 FROM public.%I x JOIN public.projects pj ON pj.project_id = x.project_id
-                                        WHERE x.%I = $1 AND pj.principal_investigator_person = $2)', k.collection, k.fk)
-            INTO found_it USING g.rec, p_person;
-        IF found_it THEN
-            RETURN false;
-        END IF;
     END IF;
     IF k.kind = 'sample' AND login IS NOT NULL
        AND EXISTS (SELECT 1 FROM sample_co_owners o WHERE o.sample_id = g.rec AND o.user_id = login) THEN
@@ -435,7 +474,7 @@ BEGIN
     RETURN true;
 END
 $$;
-COMMENT ON FUNCTION d1_private.team_pending_actionable(text, uuid, uuid) IS 'Ruling D2: whether a member waiting on a team grant is worth asking about (shown on Home, in emails, counted as waiting): only a pending row (not declined), and only while approving it would raise the person''s access. A view or investigator grant: their login is not in the <kind>_readers table for the record (a person with no login: true). An edit grant: they have no edit-level <kind>_access row on the record (their own or derived), are not its owner (for a project, its PI: owner_column of team_kinds), not the PI of the record''s project (principal_investigator_person of projects.project_id = the record''s project_id) and, for a sample, not a co-owner (sample_co_owners). False for an unknown grant or person; raises invalid_parameter_value for an unknown collection. Migration 176.';
+COMMENT ON FUNCTION d1_private.team_pending_actionable(text, uuid, uuid) IS 'Ruling D2: whether a member waiting on a team grant is worth asking about (shown on Home, in emails, counted as waiting): only a pending row (not declined), and only while approving it would raise the person''s access. A view grant: their login is not in the <kind>_readers table for the record (a person with no login: true). An investigator grant (projects; broader than view, Ruling D2b): they are not the project''s PI and not an investigator of it already (project_access role investigator, their own or derived, or a project_investigators row of their login); being a reader of the project does not count. An edit grant (Ruling D2a): they have no edit-level <kind>_access row on the record (their own or derived), are not its owner (owner_column of team_kinds) and, for a sample, not a co-owner (sample_co_owners): the people the Lab Member update rules already let edit (the PI of the record''s project is not one of them). False for an unknown grant or person; raises invalid_parameter_value for an unknown collection. Migration 176.';
 
 CREATE OR REPLACE FUNCTION d1_private.team_drift()
 RETURNS TABLE (collection text, team_access_id uuid, person_id uuid, problem text)
@@ -764,6 +803,7 @@ REVOKE ALL ON FUNCTION d1_private.person_access_list(uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.person_access(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_kinds() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_lock() FROM PUBLIC;
+REVOKE ALL ON FUNCTION d1_private.team_readers_lock() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_grant_sync() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_member_sync() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.team_access_guard() FROM PUBLIC;
@@ -939,6 +979,13 @@ REVOKE ALL ON FUNCTION d1_private.people_attention() FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.person_access_list(uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION d1_private.person_access(uuid) FROM PUBLIC;
 
+-- 1b. Migration 165's table comments of the access tables.
+COMMENT ON TABLE sample_access IS 'Who has access to a sample, by person (a person with no login can be listed; the grant starts working when an admin links the login). One row per person and sample. Written only through the record-access endpoint (A1a); audited; no OCC version. Rows go with the sample and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE operation_access IS 'Who has access to a manufacturing operation, by person (a person with no login can be listed; the grant starts working when an admin links the login). One row per person and manufacturing operation. Written only through the record-access endpoint (A1a); audited; no OCC version. Rows go with the manufacturing operation and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE test_access IS 'Who has access to a test session, by person (a person with no login can be listed; the grant starts working when an admin links the login). One row per person and test session. Written only through the record-access endpoint (A1a); audited; no OCC version. Rows go with the test session and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE campaign_access IS 'Who has access to a campaign, by person (a person with no login can be listed; the grant starts working when an admin links the login). One row per person and campaign. Written only through the record-access endpoint (A1a); audited; no OCC version. Rows go with the campaign and with the person (ON DELETE CASCADE).';
+COMMENT ON TABLE project_access IS 'Who has access to a project, by person (a person with no login can be listed; the grant starts working when an admin links the login). One row per person and project. Written only through the record-access endpoint (A1a); audited; no OCC version. Rows go with the project and with the person (ON DELETE CASCADE).';
+
 -- 2. Migration 166's readers update trigger functions.
 CREATE OR REPLACE FUNCTION d1_private.trg_readers_sample_access_upd() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE
@@ -1034,6 +1081,7 @@ COMMENT ON FUNCTION d1_private.trg_readers_project_access_upd() IS 'Statement tr
 DROP TRIGGER IF EXISTS team_members_access_sync_ins ON team_members;
 DROP TRIGGER IF EXISTS team_members_access_sync_del ON team_members;
 DROP TRIGGER IF EXISTS team_members_access_sync_upd ON team_members;
+DROP TRIGGER IF EXISTS team_members_lock_first ON team_members;
 DO $do$
 DECLARE
     k   record;
@@ -1061,4 +1109,5 @@ DROP FUNCTION IF EXISTS d1_private.team_access_guard();
 DROP FUNCTION IF EXISTS d1_private.team_member_sync();
 DROP FUNCTION IF EXISTS d1_private.team_grant_sync();
 DROP FUNCTION IF EXISTS d1_private.team_lock();
+DROP FUNCTION IF EXISTS d1_private.team_readers_lock();
 DROP FUNCTION IF EXISTS d1_private.team_kinds();

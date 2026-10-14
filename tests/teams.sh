@@ -679,13 +679,87 @@ BEGIN
     PERFORM d1_private.team_decide('physical_samples', g, pd, 'decline');
     ASSERT NOT d1_private.team_pending_actionable('physical_samples', g, pd), 'declined: not actionable';
     ASSERT NOT d1_private.team_pending_actionable('physical_samples', g, pg_temp.tf('pa')), 'an active member: not actionable';
-    -- the PI of the record's project (Ruling D2 names the PI)
+    -- the PI of the record's project is not an editor of the sample under the Lab Member rules (Ruling D2a): an edit grant raises them
     INSERT INTO people (full_name) VALUES ('TF PI') RETURNING person_id INTO pi;
     INSERT INTO projects (project_code, project_name, principal_investigator_person) VALUES ('TF-PI-' || left(ge::text, 8), 'TF PI project', pi) RETURNING project_id INTO pj;
     INSERT INTO team_members (team_id, person_id) VALUES (t2, pi);
-    ASSERT d1_private.team_pending_actionable('physical_samples', ge, pi), 'edit grant to someone with no tie to the sample: actionable';
     UPDATE physical_samples SET project_id = pj WHERE sample_id = s;
-    ASSERT NOT d1_private.team_pending_actionable('physical_samples', ge, pi), 'edit grant to the PI of the sample''s project: not actionable';
+    ASSERT d1_private.team_pending_actionable('physical_samples', ge, pi), 'edit grant to the PI of the sample''s project: actionable (the PI does not edit it)';
+END $$;
+SQL
+
+# Ruling D2b: an investigator grant is broader than view; only the project's PI or an investigator of it gains nothing
+run_case_fx actionable_rule_D2_investigator <<'SQL'
+DO $$
+DECLARE pj uuid; g uuid; t2 uuid; pc uuid := pg_temp.tf('pc'); pd uuid := pg_temp.tf('pd'); po uuid := pg_temp.tf('po'); pb uuid := pg_temp.tf('pb');
+        pa uuid := pg_temp.tf('pa'); tag text := left(gen_random_uuid()::text, 8);
+BEGIN
+    INSERT INTO projects (project_code, project_name, principal_investigator_person) VALUES ('TF-INV-' || tag, 'TF inv project', po) RETURNING project_id INTO pj;
+    -- B is an investigator through another team (a derived row); C a reader only (a view entry); D an old project_investigators row
+    INSERT INTO teams (name) VALUES ('TF Inv team ' || tag) RETURNING team_id INTO t2;
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES (t2, pb, true);
+    INSERT INTO project_team_access (project_id, team_id, role) VALUES (pj, t2, 'investigator');
+    INSERT INTO project_access (project_id, person_id, role) VALUES (pj, pc, 'view');
+    INSERT INTO project_investigators (project_id, user_id) VALUES (pj, pg_temp.tf('ud'));
+    ASSERT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj AND user_id = pg_temp.tf('uc')), 'C reads the project';
+    -- the team under test: A (manager, active at grant time); the others join afterwards and wait
+    INSERT INTO project_team_access (project_id, team_id, role) VALUES (pj, pg_temp.tf('team'), 'investigator') RETURNING team_access_id INTO g;
+    DELETE FROM team_members WHERE team_id = pg_temp.tf('team') AND person_id = pb;
+    INSERT INTO team_members (team_id, person_id) VALUES (pg_temp.tf('team'), po), (pg_temp.tf('team'), pb), (pg_temp.tf('team'), pc), (pg_temp.tf('team'), pd);
+    ASSERT d1_private.team_pending_actionable('projects', g, pc), 'investigator grant to a mere reader: actionable';
+    ASSERT NOT d1_private.team_pending_actionable('projects', g, po), 'investigator grant to the PI: not actionable';
+    ASSERT NOT d1_private.team_pending_actionable('projects', g, pb), 'investigator grant to an investigator through another team: not actionable';
+    ASSERT NOT d1_private.team_pending_actionable('projects', g, pd), 'investigator grant to an old project_investigators row: not actionable';
+    UPDATE project_access SET role = 'investigator' WHERE project_id = pj AND person_id = pc AND team_access_id IS NULL;
+    ASSERT NOT d1_private.team_pending_actionable('projects', g, pc), 'investigator grant to someone with their own investigator entry: not actionable';
+END $$;
+SQL
+
+run_case_fx moved_member_is_pending_on_untrusting_grant <<'SQL'
+DO $$
+DECLARE t2 uuid; g uuid; s uuid := pg_temp.tf('r'); pc uuid := pg_temp.tf('pc'); pd uuid := pg_temp.tf('pd');
+BEGIN
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, pg_temp.tf('team'), 'edit') RETURNING team_access_id INTO g;
+    INSERT INTO teams (name) VALUES ('TF Elsewhere ' || left(g::text, 8)) RETURNING team_id INTO t2;
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES (t2, pc, true), (t2, pd, false);
+    -- moved by an UPDATE of team_id into the team whose grant does not trust new members
+    UPDATE team_members SET team_id = pg_temp.tf('team') WHERE team_id = t2 AND person_id = pc;
+    ASSERT (SELECT state FROM sample_team_pending WHERE team_access_id = g AND person_id = pc) = 'pending', 'the moved member is pending';
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_access WHERE person_id = pc) AND NOT pg_temp.rd(pg_temp.tf('uc'), s), 'and not active';
+    -- an active member's row handed to another person (an UPDATE of person_id): B leaves, D arrives pending
+    ASSERT pg_temp.rd(pg_temp.tf('ub'), s), 'before: B is active';
+    UPDATE team_members SET person_id = pd WHERE team_id = pg_temp.tf('team') AND person_id = pg_temp.tf('pb');
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_access WHERE person_id = pg_temp.tf('pb')) AND NOT pg_temp.rd(pg_temp.tf('ub'), s), 'the person taken out leaves';
+    ASSERT (SELECT state FROM sample_team_pending WHERE team_access_id = g AND person_id = pd) = 'pending', 'the person put in is pending';
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_access WHERE person_id = pd) AND NOT pg_temp.rd(pg_temp.tf('ud'), s), 'and not active';
+    ASSERT d1_private.team_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
+run_case_fx guard_refuses_trigger_inserts <<'SQL'
+-- a trigger (depth 2) that writes a derived row is not a foreign-key cascade: refused, like a direct write
+CREATE FUNCTION pg_temp.sneak() RETURNS trigger LANGUAGE plpgsql AS $f$
+BEGIN
+    IF NEW.what = 'insert' THEN
+        INSERT INTO sample_access (sample_id, person_id, role, team_access_id) VALUES (pg_temp.tf('s'), pg_temp.tf('pd'), 'edit', NEW.ta);
+    ELSE
+        UPDATE sample_access SET team_access_id = NEW.ta WHERE sample_id = pg_temp.tf('s') AND person_id = pg_temp.tf('pd') AND team_access_id IS NULL;
+    END IF;
+    RETURN NULL;
+END $f$;
+CREATE TEMP TABLE sneak (what text, ta uuid);
+CREATE TRIGGER sneak AFTER INSERT ON sneak FOR EACH ROW EXECUTE FUNCTION pg_temp.sneak();
+DO $$
+DECLARE g uuid; ok boolean;
+BEGIN
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (pg_temp.tf('s'), pg_temp.tf('team'), 'view') RETURNING team_access_id INTO g;
+    ok := false;
+    BEGIN INSERT INTO sneak VALUES ('insert', g); EXCEPTION WHEN insufficient_privilege THEN ok := true; END;
+    ASSERT ok, 'an insert of a derived row from inside a trigger is refused';
+    INSERT INTO sample_access (sample_id, person_id, role) VALUES (pg_temp.tf('s'), pg_temp.tf('pd'), 'view');
+    ok := false;
+    BEGIN INSERT INTO sneak VALUES ('update', g); EXCEPTION WHEN insufficient_privilege THEN ok := true; END;
+    ASSERT ok, 'turning an own entry into a derived row from inside a trigger is refused';
 END $$;
 SQL
 
@@ -804,6 +878,32 @@ conc_team join_then_grant f \
   "INSERT INTO team_members (team_id, person_id) VALUES ('@T@', '@X@')" \
   "INSERT INTO sample_team_access (sample_id, team_id, role) VALUES ('@S@', '@T@', 'view')" "0/1"
 
+# --- two sessions: the lock order. Session 1 holds the readers lock (any write to physical_samples takes it first) and 2 s later links a login to
+# person X (people.user_id is unique, so the update locks X's row FOR UPDATE); session 2 adds X to a team in between. Without the BEFORE STATEMENT
+# readers lock on team_members, session 2's foreign-key check takes KEY SHARE on X and then waits for the readers lock: a deadlock (40P01). With it,
+# session 2 waits for the readers lock before it locks any row, and both commit.
+lock_order_case() {
+  local d=9 team m x u f1 f2 o1 o2 got
+  team="${d}b000000-0000-4000-8000-0000000000d1"; m="${d}a000000-0000-4000-8000-0000000000d1"; x="${d}a000000-0000-4000-8000-0000000000d2"
+  u="${d}d000000-0000-4000-8000-0000000000d1"
+  psql "$TM_URL" --no-psqlrc -X -q -v ON_ERROR_STOP=1 -c "
+    INSERT INTO people (person_id, full_name) VALUES ('$m', 'TM L1'), ('$x', 'TM L2');
+    INSERT INTO directus_users (id, email, status) VALUES ('$u', 'tm-lock-$u@example.invalid', 'active');
+    INSERT INTO teams (team_id, name) VALUES ('$team', 'TM Lock order');
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES ('$team', '$m', true);" >/dev/null 2>&1 \
+    || { bad "lock order (two sessions): setup failed"; return; }
+  f1=$(mktemp); f2=$(mktemp)
+  ( psql "$TM_URL" --no-psqlrc -X -t -A -q -v ON_ERROR_STOP=1 -c "BEGIN; UPDATE physical_samples SET restricted = restricted WHERE false; SELECT pg_sleep(2); UPDATE people SET user_id = '$u' WHERE person_id = '$x'; COMMIT;" >"$f1" 2>&1 ) &
+  sleep 1
+  ( psql "$TM_URL" --no-psqlrc -X -t -A -q -v ON_ERROR_STOP=1 -c "BEGIN; INSERT INTO team_members (team_id, person_id) VALUES ('$team', '$x'); COMMIT;" >"$f2" 2>&1 ) &
+  wait
+  o1=$(cat "$f1"); o2=$(cat "$f2"); rm -f "$f1" "$f2"
+  got=$(psql "$TM_URL" --no-psqlrc -X -t -A -q -c "SELECT (SELECT count(*) FROM team_members WHERE team_id = '$team' AND person_id = '$x') || '/' || (SELECT count(*) FROM people WHERE person_id = '$x' AND user_id = '$u')")
+  if [[ "$got" == "1/1" ]] && ! grep -qi 'deadlock' <<<"$o1$o2"; then ok "lock order (two sessions): a member added while the person's login is linked under the readers lock: both commit, no deadlock"
+  else bad "lock order (two sessions): member/login committed $got (expected 1/1); session 1: $o1; session 2: $o2"; fi
+}
+lock_order_case
+
 run_case not_granted_to_llm_role <<'SQL'
 DO $$
 DECLARE t text; f text;
@@ -817,7 +917,7 @@ BEGIN
     FOREACH f IN ARRAY ARRAY['d1_private.team_actor_person()', 'd1_private.team_has_manager()', 'd1_private.teams_history()', 'd1_private.team_members_history()',
                              'd1_private.team_decide(text, uuid, uuid, text)', 'd1_private.team_pending_actionable(text, uuid, uuid)', 'd1_private.team_drift()',
                              'd1_private.team_drift_count()', 'd1_private.team_grant_sync()', 'd1_private.team_member_sync()', 'd1_private.team_access_guard()',
-                             'd1_private.team_lock()', 'd1_private.team_kinds()'] LOOP
+                             'd1_private.team_lock()', 'd1_private.team_kinds()', 'd1_private.team_readers_lock()'] LOOP
         ASSERT NOT has_function_privilege('d1_llm_readonly', f, 'EXECUTE'), format('%s must not be executable by d1_llm_readonly', f);
     END LOOP;
 END $$;
