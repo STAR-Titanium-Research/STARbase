@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import RecordActions from './RecordActions.vue';
 import ExplorerView from '../ExplorerView.vue';
 import { computed, ref, toRef } from 'vue';
 import { useRouter } from 'vue-router';
@@ -7,6 +8,7 @@ import {
 	dataStudioRoute, detailFacts, detailsCount, formatDate, summaryCount, summaryGroups, testDetailBase, testRailFacts, testSample, testSubjectCount, testTypeText,
 	type ContentsEntry,
 	pinTargetForRecord,
+	mapPath,
 } from '@d1/ui';
 import { useTestData } from './test/useTestData';
 import TestSubjects from './test/TestSubjects.vue';
@@ -72,6 +74,8 @@ const contents = computed<ContentsEntry[]>(() => {
 
 const openReport = () => openLink(`/d1-report/test/${encodeURIComponent(props.id)}`, router);
 
+// The Process map, opened on this record.
+const mapTo = computed(() => mapPath('test_sessions', props.id));
 const pin = computed(() => pinTargetForRecord('test_sessions', props.id));
 </script>
 
@@ -119,10 +123,10 @@ const pin = computed(() => pinTargetForRecord('test_sessions', props.id));
 							<template #kind-icon><v-icon name="biotech" x-small /></template>
 							<template #status><StatusBadge kind="test" :value="t.status" /></template>
 							<template #actions>
-								<v-button v-if="canUpdate !== false" small @click="editing = true"><v-icon name="edit" small left />Edit</v-button>
-								<v-button small secondary @click="access = true"><v-icon name="group" small left />Who has access</v-button>
-								<v-button small secondary @click="openReport"><v-icon name="picture_as_pdf" small left />Report</v-button>
-								<v-button small secondary :to="studioTo"><v-icon name="open_in_new" small left />Data Studio</v-button>
+								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
+									<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
+									<v-button icon small secondary @click="openReport" title="Report" aria-label="Report"><v-icon name="picture_as_pdf" small /><span class="sr-only">Report</span></v-button>
+								</RecordActions>
 							</template>
 						</RecordRail>
 					</template>
@@ -168,4 +172,5 @@ const pin = computed(() => pinTargetForRecord('test_sessions', props.id));
 <style scoped>
 /* Scroll under the page's sticky offset, like a Section (the wrapper is the target while loading). */
 .subject-slot { min-width: 0; scroll-margin-top: calc(var(--d1-sticky-top, 0px) + 8px); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 </style>

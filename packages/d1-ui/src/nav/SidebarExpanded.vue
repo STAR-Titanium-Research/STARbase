@@ -13,8 +13,8 @@ import NavRowMenu from './NavRowMenu.vue';
 import SidebarRow from './SidebarRow.vue';
 import { moveAmongShown } from './pinDrag';
 import { pinnedListCut, pinKey } from './sidebarModel';
-import type { PinRef, SectionId, SidebarLink, SidebarView } from './sidebarModel';
-import { HOME_LINK, viewAsRow } from './sidebarRows';
+import type { PinRef, SectionId, SidebarLink } from './sidebarModel';
+import { HOME_LINK } from './sidebarRows';
 import { usePinDrag } from './usePinDrag';
 import { useRowMenu } from './useRowMenu';
 import { useSidebarData } from './useSidebarData';
@@ -105,7 +105,6 @@ const togglePin = (ref_: PinRef | null) => {
 };
 
 const linkKey = (l: SidebarLink) => l.to;
-const viewKey = (v: SidebarView) => `view:${v.id}`;
 const sectionCurrent = (id: SectionId) => currentSection.value === id;
 </script>
 
@@ -225,25 +224,6 @@ const sectionCurrent = (id: SectionId) => currentSection.value === id;
 									@dragstart="startDrag(link.pin, $event)"
 									@dragend="endDrag"
 								/>
-								<ul v-if="link.views.length" class="rows views" :aria-label="`${link.label} saved views`">
-									<li v-for="view in link.views" :key="viewKey(view)">
-										<SidebarRow
-											:ref="(el) => setRow(`link:${viewKey(view)}`, el)"
-											:item="viewAsRow(link, view)"
-											variant="section"
-											nested
-											:pinned="pins.isPinned(view.pin)"
-											:current="isCurrent(view.to)"
-											:pins-ready="pinsReady"
-											:dragging="!!drag && pinKey(drag) === pinKey(view.pin)"
-											:menu-open="menu?.key === `link:${viewKey(view)}`"
-											@toggle-pin="togglePin(view.pin)"
-											@open-menu="openMenu(`link:${viewKey(view)}`, 'section', view, view.pin, $event)"
-											@dragstart="startDrag(view.pin, $event)"
-											@dragend="endDrag"
-										/>
-									</li>
-								</ul>
 							</li>
 						</ul>
 					</template>
@@ -299,7 +279,7 @@ const sectionCurrent = (id: SectionId) => currentSection.value === id;
 }
 .sub::after { content: ''; flex: 1 1 auto; height: 1px; background: var(--d1-side-hairline); }
 
-.rows, .views { list-style: none; margin: 0; padding: 0; }
+.rows { list-style: none; margin: 0; padding: 0; }
 .rows > li { position: relative; }
 /* The drop line, before the row the pointer is over (or after the last). */
 .rows > li.drop-before::before,
@@ -346,7 +326,6 @@ const sectionCurrent = (id: SectionId) => currentSection.value === id;
 	content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--d1-side-bar);
 }
 .body { padding-bottom: 6px; }
-.views { padding-left: 0; }
 
 .sr {
 	position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;

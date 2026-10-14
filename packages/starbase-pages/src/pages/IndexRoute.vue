@@ -8,7 +8,8 @@ import IndexThumb from './index/IndexThumb.vue';
 // The :slug route: one generic list page for every collection of INDEX_DEFS. The slug picks the
 // definition; an unknown one (a mistyped link, a page that was never made) says so and goes Home.
 // The campaigns list has a designed card (the same one the Project page uses): it is filled into the
-// page's `card` slot, with the counts loaded for the campaigns on screen.
+// page's `card` slot, with the counts loaded for the campaigns on screen, raised like the Projects
+// index's cards.
 const props = defineProps<{ slug: string }>();
 const def = computed(() => indexDefBySlug(props.slug));
 const isCampaigns = computed(() => def.value?.collection === 'campaigns');
@@ -22,7 +23,7 @@ const hasThumb = computed(() => !!def.value && thumbKind(def.value.collection) !
 		<!-- Keyed on the slug: moving from one collection to another starts a fresh page. -->
 		<IndexPage v-if="def" :key="def.slug" :def="def" :card-data="isCampaigns ? campaignCardStats : undefined">
 			<template v-if="isCampaigns" #card="{ row, data, loading }">
-				<CampaignCard :campaign="row" :stats="(data as CampaignStats | null)" :loading="loading" />
+				<CampaignCard :campaign="row" :stats="(data as CampaignStats | null)" :loading="loading" raised />
 			</template>
 			<template v-if="hasThumb" #thumb="{ row, plots }">
 				<IndexThumb :def="def" :row="row" :plots="plots" />

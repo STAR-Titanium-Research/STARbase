@@ -99,3 +99,14 @@ test('bend bar draws two supports and a red load arrow', () => {
 	assert.equal((svg.match(/class="gsupport"/g) || []).length, 2);
 	assert.match(svg, /class="gload"/);
 });
+
+test('fatigue specimen is drawn like the tensile dog-bone; Charpy specimen has a notch mark', () => {
+	const dims = { length_mm: 100, width_mm: 20, thickness_mm: 3, gauge_length_mm: 25, gauge_width_mm: 10 };
+	const norm = (s: string) => s.replace(/(gar?)-[a-z0-9]+/g, '$1');
+	assert.equal(norm(buildGeometry({ form: 'fatigue_specimen', ...dims })), norm(buildGeometry({ form: 'tensile_coupon', ...dims })));
+	const charpy = buildGeometry({ form: 'charpy_specimen', length_mm: 55, width_mm: 10, thickness_mm: 10 });
+	const plain = buildGeometry({ form: 'bar', length_mm: 55, width_mm: 10, thickness_mm: 10 });
+	assert.ok(charpy.startsWith('<svg') && !/NaN|Infinity|undefined/.test(charpy));
+	assert.ok((charpy.match(/class="gh"/g) || []).length === 2, 'two notch polygons');
+	assert.ok(!plain.includes('class="gh"'));
+});

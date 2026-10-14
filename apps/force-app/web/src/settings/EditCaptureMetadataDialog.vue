@@ -11,6 +11,7 @@
 // a capture recorded before or after this editor exists reads and writes through the same shape.
 import { reactive, ref, onMounted } from 'vue';
 import { getConfig } from '../config';
+import { MACHINING_SUBTYPES } from '../record/subtypes';
 import { api } from '../directusClient';
 import {
 	searchSamples, searchOperators, searchEquipment, searchTools, searchInserts, searchEdges,
@@ -48,18 +49,6 @@ const machining = reactive({
 	axialDoc: '', radialDoc: '', cuttingLength: '', coolantPressure: '', operationSequence: '',
 	chipsRef: '', newEdge: false, chipsCollected: false,
 });
-
-// Mirrors RecordingOptions.vue's own list. Not shared from there — extracting it isn't worth a
-// cross-cutting refactor for one dialog's sake, but if the list ever changes, change both.
-const MACHINING_SUBTYPES = [
-	{ value: 'MT-F', text: 'Turning – Facing' }, { value: 'MT-R', text: 'Turning – Roughing' },
-	{ value: 'MT-O', text: 'Turning – OD' }, { value: 'MT-G', text: 'Turning – Grooving' },
-	{ value: 'MT-B', text: 'Turning – Boring' }, { value: 'MT-H', text: 'Turning – Threading' },
-	{ value: 'MT-P', text: 'Turning – Parting' }, { value: 'MT-D', text: 'Turning – Drilling' },
-	{ value: 'MM-F', text: 'Milling – Facing' }, { value: 'MM-R', text: 'Milling – Roughing' },
-	{ value: 'MM-S', text: 'Milling – Slotting' }, { value: 'MM-D', text: 'Milling – Drilling' },
-	{ value: 'other', text: 'Other' },
-] as const;
 
 // Who recorded this cut (recorded_by_*, recorded_at, ...). Not editable here, but this dialog
 // rewrites extra_metadata / recorded_metadata wholesale, so it must be carried through or a typo

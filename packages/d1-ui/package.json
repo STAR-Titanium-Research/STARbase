@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./recordRoute": "./src/recordRoute.ts",
+    "./choiceLabels": "./src/choiceLabels.ts",
     "./editDrawer": "./src/editDrawer.ts",
     "./editFrame": "./src/editFrame.ts",
     "./editSession": "./src/composables/useEditSession.ts"

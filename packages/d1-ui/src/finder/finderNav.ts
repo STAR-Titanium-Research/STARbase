@@ -80,3 +80,15 @@ export function shouldOpenFinder(
 	e.preventDefault();
 	return !finderOpen && !isModalOpen(doc, MODAL_SELECTOR);
 }
+
+// What opening a hit does. A host that passed `pickRecord` (the Process map loads the record itself)
+// gets the record of a record hit; everything else, and every host without it, navigates to the hit. A
+// `pickRecord` that returns false declines the record (the map cannot open a person): the hit navigates.
+export function openHit(
+	hit: Pick<FinderHit, 'to' | 'record'>,
+	navigate: (to: string) => void,
+	pickRecord?: (record: { collection: string; id: string }) => unknown,
+): void {
+	if (pickRecord && hit.record && pickRecord(hit.record) !== false) return;
+	navigate(hit.to);
+}

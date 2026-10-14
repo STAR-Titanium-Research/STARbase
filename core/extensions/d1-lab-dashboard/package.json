@@ -16,8 +16,7 @@
   },
   "dependencies": {
     "@d1/directus-host": "*",
-    "@d1/ui": "*",
-    "cytoscape": "^3.30"
+    "@d1/ui": "*"
   },
   "directus:extension": {
     "type": "module",

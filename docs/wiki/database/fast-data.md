@@ -17,7 +17,7 @@ Home sidebar). It lists every FAST operation. Pick one to see its detail and plo
 
 - **FAST operations:** each run with its code, sample and date. The dot shows whether a trace is
   attached.
-- **Operation detail:** machine, material, recipe, batch, atmosphere, TC/pyrometer control, and
+- **Operation detail:** machine, material, recipe, powder batch, atmosphere, TC/pyrometer control, and
   the **sinter cycle** summary: peak temperature, force, power and voltage, PTC top/bottom
   temperatures, dwell and heating ramp. **Open ↗** opens the operation record.
 - **Recipe:** the recipe the run used (program #, target temperature and force, hold time, group).

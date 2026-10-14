@@ -107,12 +107,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							<tr
-								v-for="op in operations"
-								:key="op.operation_id"
-								class="d1-table-row"
-								@click="selectOp(op)"
-							>
+							<tr v-for="op in operations" :key="op.operation_id">
 								<td>{{ formatDate(op.operation_date) }}</td>
 								<td>{{ op.method_id?.method_name ?? '—' }}</td>
 								<td>{{ op.equipment_id?.equipment_name ?? '—' }}</td>
@@ -161,22 +156,12 @@
 				<div v-if="testSessions.length === 0" class="d1-empty">No test sessions</div>
 			</div>
 		</div>
-
-		<!-- Panel 4: Node Graph -->
-		<div class="d1-panel d1-panel--graph">
-			<div class="d1-panel-header">
-				<v-icon name="hub" />
-				<h3>Connections</h3>
-			</div>
-			<NodeGraph ref="graphRef" class="d1-graph" />
-		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useItems, useRequestGate, errorText, recordRoute, AppLink } from '@d1/ui';
-import NodeGraph from './NodeGraph.vue';
 import SampleTimeline from './SampleTimeline.vue';
 
 const { getItems } = useItems();
@@ -203,8 +188,6 @@ const tabs = [
 	{ text: 'Detail', value: 'detail' },
 	{ text: 'Timeline', value: 'timeline' },
 ] as const;
-
-const graphRef = ref<InstanceType<typeof NodeGraph> | null>(null);
 
 const statusOptions = [
 	{ text: 'Active', value: 'active' },
@@ -310,17 +293,10 @@ async function selectSample(s: any) {
 			loadingTests.value = false;
 		}
 	}
-
-	graphRef.value?.loadNeighbors('physical_samples', s.sample_id);
-}
-
-function selectOp(op: any) {
-	graphRef.value?.loadNeighbors('manufacturing_operations', op.operation_id);
 }
 
 function selectTest(ts: any) {
 	selectedTestId.value = ts.session_id;
-	graphRef.value?.loadNeighbors('test_sessions', ts.session_id);
 }
 
 function formatDate(d: string | null): string {
@@ -340,7 +316,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .d1-samples {
 	display: grid;
-	grid-template-columns: 240px minmax(300px, 1.3fr) 240px 340px; min-width: 0;
+	grid-template-columns: 240px minmax(300px, 1.3fr) minmax(240px, 1fr); min-width: 0;
 	gap: 12px;
 	height: calc(100vh - 120px);
 	padding: 12px;
@@ -360,10 +336,6 @@ onBeforeUnmount(() => {
 	padding: 10px 12px;
 	font-size: 12px;
 	color: var(--theme--danger, #c62828);
-}
-
-.d1-panel--graph {
-	overflow: hidden;
 }
 
 .d1-panel-header {
@@ -563,21 +535,8 @@ onBeforeUnmount(() => {
 	font-size: 11px;
 }
 
-.d1-table-row {
-	cursor: pointer;
-}
-
-.d1-table-row:hover td {
-	background: var(--theme--background-accent, #eef2f7);
-}
-
 .d1-table td {
 	padding: 5px 6px;
 	border-bottom: 1px solid var(--theme--border-color-subdued, #eef1f5);
-}
-
-.d1-graph {
-	flex: 1;
-	min-height: 0;
 }
 </style>

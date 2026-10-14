@@ -173,6 +173,9 @@ New STARbase pages live in `packages/starbase-pages/src` and reach Directus only
 `useExplorerHost()`, like every other page. They are added to `starbaseRoutes` and to `navConfig`.
 
 ### 6.1 Lineage graph, `/graph`
+
+> **Superseded (2026-10-14)** by the Process map, `/map`: see
+> `docs/superpowers/specs/2026-10-14-process-map-design.md`. The text below is kept for history.
 - **Library:** `@vue-flow/core` with its `background`, `controls` and `minimap` add-ons, and
   `elkjs`. Exact versions are pinned in the plan.
 - **Entry:** `/graph?focus=<collection>:<id>`. `?sample=<id>` is kept as shorthand.

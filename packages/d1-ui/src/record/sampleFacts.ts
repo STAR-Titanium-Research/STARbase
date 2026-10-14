@@ -6,7 +6,7 @@
 import { asRecord, formatDate, formatNumber } from '../format';
 import { estimateMassGrams } from '../mass';
 import { recordRoute } from '../recordRoute';
-import { humanise } from '../status';
+import { choiceLabel } from '../choiceLabels';
 import { projectFact, type HiddenLinks } from './operationFacts';
 import type { Fact } from './facts';
 
@@ -43,7 +43,7 @@ export function sampleDims(sample: Rec | null | undefined): SampleDims {
 
 /** "Sample · Round bar"; a plain "Sample" when it has no form. */
 export function sampleKind(sample: Rec | null | undefined): string {
-	return sample?.form ? `Sample · ${humanise(String(sample.form))}` : 'Sample';
+	return sample?.form ? `Sample · ${choiceLabel('geometry', sample.form)}` : 'Sample';
 }
 
 /** The measured mass, else an estimate from the dimensions and the material's density (marked as one). */
@@ -112,7 +112,7 @@ export function sampleDetailBase(sample: Rec | null | undefined): Fact[] {
 		{ label: 'Manufacturing method', value: asRecord(sample.primary_method_id)?.method_name },
 		{ label: 'Manufacturing route', value: sample.manufacturing_route },
 		{ label: 'Manufactured', value: formatDate(sample.manufactured_date) },
-		{ label: 'Surface finish', value: sample.surface_finish },
+		{ label: 'Surface finish', value: choiceLabel('surfaceFinish', sample.surface_finish) },
 		{ label: 'Item type', value: sample.item_type },
 		{ label: 'Stock category', value: sample.stock_category },
 		{ label: 'Mounted', value: sample.mounted ? sample.mounting_method || 'Yes' : '' },

@@ -133,6 +133,14 @@
     "project_investigators": {"create": "any", "read": "reader.project", "update": "investigators.write", "delete": "investigators.write"},
     "project_rollup": {"read": "rollup.read"}
   },
+  "field_sets": {
+    "sample.not_co_owners": ["sample_id","sample_code","material_id","project_id","form","mass_grams","diameter_mm","length_mm","thickness_mm","current_status","manufactured_date","export_controlled","notes","created_at","updated_at","version","nickname","location","surface_finish","legacy_notes","width_mm","owner","manufacturing_route","mounted","mounting_method","item_type","stock_category","primary_method_id","owner_person_id","gauge_length_mm","gauge_width_mm","created_by","code_sort","short_id","inner_diameter_mm","restricted","co_owners_legacy","report_button","campaigns","access","readers","manufacturing_operations","produced_by_operations","child_samples","test_sessions","data_files","data_files_open","geometry_preview"],
+    "project.not_secondary_investigators": ["project_id","project_code","project_name","description","document_number","principal_investigator_name","start_date","end_date","export_controlled","is_active","created_at","updated_at","version","principal_investigator","Image","principal_investigator_person","created_by","restricted","operations","sessions","campaigns","samples","investigator_access_notice","rollup","project_items","access","readers"]
+  },
+  "rule_fields": {
+    "physical_samples": {"create": "sample.not_co_owners", "update": "sample.not_co_owners"},
+    "projects": {"create": "project.not_secondary_investigators", "update": "project.not_secondary_investigators"}
+  },
   "custom": {
     "people": {
       "create": {"validation": {"_or": [{"user_id": {"_null": true}}, {"user_id": {"_eq": "$CURRENT_USER"}}]}},
@@ -156,6 +164,12 @@
       "read": {},
       "update": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}, "fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
       "delete": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}}
+    },
+    "batches": {
+      "create": {"fields": ["code", "batch_date", "notes", "owner_person_id"]},
+      "read": {},
+      "update": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}, "fields": ["code", "batch_date", "notes", "owner_person_id"]},
+      "delete": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}
     }
   },
   "guards": {

@@ -49,13 +49,13 @@ describe('resolveLabel', () => {
 	it('opens the sample found by short id, asking nothing else', async () => {
 		const a = api([[row]]);
 		const out = await resolveLabel(a, PAYLOAD);
-		expect(out).toEqual({ kind: 'open', to: '/home/samples/uuid-1', code: 'S-0123' });
+		expect(out).toEqual({ kind: 'open', to: '/home/samples/uuid-1', record: { collection: 'physical_samples', id: 'uuid-1' }, code: 'S-0123' });
 		expect(a.calls).toEqual([{ path: '/items/physical_samples', filter: { short_id: { _eq: '1a2b3c4d' } } }]);
 	});
 	it('asks for confirmation, and does not open, when only the code matches', async () => {
 		const a = api([[], [{ ...row, short_id: 'ffffffff', nickname: 'other' }]]);
 		expect(await resolveLabel(a, PAYLOAD)).toEqual({
-			kind: 'confirm', to: '/home/samples/uuid-1', code: 'S-0123', shortId: '1a2b3c4d',
+			kind: 'confirm', to: '/home/samples/uuid-1', record: { collection: 'physical_samples', id: 'uuid-1' }, code: 'S-0123', shortId: '1a2b3c4d',
 			lines: ['Ti-6Al-4V · "bracket A"', '2026-10-01 · DP'], found: { shortId: 'ffffffff', nickname: 'other' },
 		});
 		expect(a.calls[1].filter).toEqual({ sample_code: { _eq: 'S-0123' } });

@@ -3,7 +3,6 @@ import ModuleComponent from './Module.vue';
 import MachiningDashboard from './views/MachiningDashboard.vue';
 import SampleDashboard from './views/SampleDashboard.vue';
 import FastDashboard from './views/FastDashboard.vue';
-import NodeGraph from './views/NodeGraph.vue';
 import { installDirectusHost } from '@d1/directus-host';
 
 installDirectusHost();
@@ -21,9 +20,6 @@ export default defineModule({
 				{ path: 'samples', component: SampleDashboard },
 				{ path: 'machining', component: MachiningDashboard },
 				{ path: 'fast', component: FastDashboard },
-				// standalone: the full-page graph has nothing to click until you search, so it gets
-				// the search box the embedded Connections panels leave out.
-				{ path: 'graph', component: NodeGraph, props: { standalone: true } },
 			],
 		},
 	],

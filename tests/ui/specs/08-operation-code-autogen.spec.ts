@@ -11,9 +11,9 @@ import { gotoCreateForm, selectM2O, selectDropdown, fillInput, fieldByLabel } fr
 test.describe('Manufacturing Operation — operation code auto-generation', () => {
 	test('composes the canonical code live from the form fields', async ({ page }) => {
 		await gotoCreateForm(page, 'manufacturing_operations');
-		await selectM2O(page, 'Manufacturing Method', 'Milling');
+		await selectM2O(page, 'Method', 'Milling');
 		await page.waitForTimeout(1200);
-		await selectM2O(page, 'Input Sample / Workpiece', '9-AA-MR-2023-3-24');
+		await selectM2O(page, 'Input sample', '9-AA-MR-2023-3-24');
 		await page.waitForTimeout(800);
 		await selectDropdown(page, 'Operation Sub-type', 'Milling – Slotting');
 		await page.waitForTimeout(400);
@@ -24,14 +24,15 @@ test.describe('Manufacturing Operation — operation code auto-generation', () =
 		await page.waitForTimeout(800);
 
 		const code = await fieldByLabel(page, 'Operation Code').locator('input').first().inputValue();
-		expect(code).toBe('9-AA-MR-2023-3-24-MM-S6-80MPM_0.05feed_0.1DoC');
+		// The method prefix of the sub-type is dropped (MM-S gives S): migration 20261010000156, as in every stored code.
+		expect(code).toBe('9-AA-MR-2023-3-24-S6-80MPM_0.05feed_0.1DoC');
 	});
 
 	test('a manual edit is preserved (override stops auto-fill)', async ({ page }) => {
 		await gotoCreateForm(page, 'manufacturing_operations');
-		await selectM2O(page, 'Manufacturing Method', 'Milling');
+		await selectM2O(page, 'Method', 'Milling');
 		await page.waitForTimeout(1200);
-		await selectM2O(page, 'Input Sample / Workpiece', '9-AA-MR-2023-3-24');
+		await selectM2O(page, 'Input sample', '9-AA-MR-2023-3-24');
 		await page.waitForTimeout(800);
 
 		const input = fieldByLabel(page, 'Operation Code').locator('input').first();

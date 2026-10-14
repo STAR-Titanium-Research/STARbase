@@ -18,19 +18,22 @@ import { useExplorerHost } from '../host';
 import { MIN_QUERY } from './finder';
 import ScanResultCard from './ScanResultCard.vue';
 import type { FinderHit } from './finder';
-import { isTypingKey, moveIndex, toSections } from './finderNav';
+import { isTypingKey, moveIndex, openHit, toSections } from './finderNav';
 import { flattenLines, isScanStarted, normalizeScan } from './scan';
 import { useFinder } from './useFinder';
 import { useExplorerNav } from '../nav/useExplorerNav';
 
-const props = defineProps<{ canScan?: boolean }>();
+// `pickRecord`: a host that wants the record itself (the Process map loads it) gets it instead of the
+// navigation, unless it returns false (a record it cannot take); Pages and Saved views, which are not records, still navigate.
+const props = defineProps<{ canScan?: boolean; pickRecord?: (record: { collection: string; id: string }) => unknown }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'scan'): void }>();
 
 const host = useExplorerHost();
 const { nav, visible } = useExplorerNav(host);
 const { query, hits, loading, searchable, scan, scanning, readScanNow } = useFinder(host, nav, visible, {
-	onOpen: (to) => {
-		host.navigate(to);
+	// A label scan that found its sample: the host's pickRecord takes the record, else it navigates.
+	onOpen: (to, record) => {
+		openHit({ to, record }, (t) => host.navigate(t), props.pickRecord);
 		emit('close');
 	},
 	// The scanned text stays in the box: select it, so the next scan replaces it.
@@ -63,13 +66,13 @@ onBeforeUnmount(() => {
 	if (opener?.isConnected) opener.focus();
 });
 
-function openTo(to: string) {
-	host.navigate(to);
+function openTo(to: string, record?: { collection: string; id: string }) {
+	openHit({ to, record }, (t) => host.navigate(t), props.pickRecord);
 	emit('close');
 }
 
 function pick(hit: FinderHit) {
-	host.navigate(hit.to);
+	openHit(hit, (to) => host.navigate(to), props.pickRecord);
 	emit('close');
 }
 
