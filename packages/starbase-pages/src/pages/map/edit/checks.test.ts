@@ -1,0 +1,239 @@
+import { describe, expect, it } from 'vitest';
+import type { Check, DraftBody } from '@d1/ui';
+import { apply, emptyBody, type DraftAction } from './draft';
+import { blocking, checks, checksFor, mergeChecks, missingText, recordKey, warnings, type CheckCtx, type FieldDef } from './checks';
+
+const run = (actions: DraftAction[], from: DraftBody = emptyBody()) => actions.reduce((b, a) => apply(b, a), from);
+const texts = (list: Check[], key?: string) => list.filter((c) => !key || c.key === key).map((c) => `${c.level}:${c.field ?? '-'}:${c.text}`);
+
+const defs: CheckCtx['fields'] = {
+	manufacturing_operations: [
+		{ field: 'method_id', required: true, label: 'Method' },
+		{ field: 'operation_date', required: true, label: 'Date' },
+		{ field: 'feed_rate', required: true, label: 'Feed rate' },
+		{ field: 'sample_id', required: true, label: 'Sample' },
+		{ field: 'notes', required: false },
+		{ field: 'secret', required: true, hidden: true },
+		{ field: 'stamp', required: true, readonly: true },
+	],
+	test_sessions: [
+		{ field: 'test_type', required: true, label: 'Test type' },
+		{ field: 'session_date', required: true, label: 'Date' },
+	],
+	physical_samples: [{ field: 'location', required: false, label: 'Location' }],
+};
+
+const ctx: CheckCtx = {
+	fields: defs,
+	alloyCode: (m) => ({ ti: 'Ti64' })[m],
+	methodCode: (m) => ({ mc: 'MC' })[m],
+	today: new Date(2026, 9, 14, 12),
+};
+
+/** A planned cut: sample (material, form) → cut (method, machine, planned date) → new sample. All its structure is there. */
+const planned = (): DraftBody =>
+	run([
+		{ type: 'addSample', values: { material_id: 'ti', form: 'disc', primary_method_id: 'mc' } },
+		{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, from: { key: 'n1' } },
+		{ type: 'setValues', key: 'n2', values: { equipment_id: 'e', planned_date: '2026-11-01' } },
+		{ type: 'addSample', from: { key: 'n2', row: 0 } },
+	]);
+
+describe('structure (planned records)', () => {
+	it('a planned cut that has its method and its wires has nothing to say', () => {
+		expect(checks(planned(), ctx)).toEqual([]);
+	});
+
+	it('a planned record does not need the required fields of a done one', () => {
+		const list = checks(planned(), ctx);
+		expect(texts(list)).not.toContainEqual(expect.stringContaining('Feed rate'));
+		expect(texts(list)).not.toContainEqual(expect.stringContaining('Date'));
+	});
+
+	it('an operation without a method blocks', () => {
+		const b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
+		expect(blocking(checks(b, ctx)).map((c) => [c.key, c.field])).toEqual([['n2', 'method_id']]);
+	});
+
+	it('an operation with neither a sample in nor out blocks, once per piece', () => {
+		const b = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, rows: 2 }]);
+		const list = blocking(checks(b, ctx));
+		expect(texts(list)).toEqual([
+			'block:-:Piece 1 of this operation needs a sample going in or coming out: wire a sample to its socket.',
+			'block:-:Piece 2 of this operation needs a sample going in or coming out: wire a sample to its socket.',
+		]);
+	});
+
+	it('an operation with only an output is fine (a build from powder)', () => {
+		const b = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' } }, { type: 'addSample', values: { material_id: 'ti' }, from: { key: 'n1', row: 0 } }]);
+		expect(blocking(checks(b, ctx)).filter((c) => c.key === 'n1')).toEqual([]);
+	});
+
+	it('a piece of a cut that makes no sample yet is a warning, not a block', () => {
+		let b = planned();
+		b = apply(b, { type: 'addOutputRow', key: 'n2' });
+		const list = checks(b, ctx);
+		expect(blocking(list)).toEqual([]);
+		expect(texts(list, 'n2')).toEqual(['warn:-:Piece 2 of this operation makes no new sample yet: add a sample to its output socket.']);
+	});
+
+	it('a test needs its type and a sample', () => {
+		const b = run([{ type: 'addContainer', kind: 'test', source: { from: 'blank' } }]);
+		expect(texts(blocking(checks(b, ctx)))).toEqual([
+			'block:test_type:Choose the type of this test.',
+			'block:-:This test needs the sample it is done on: wire a sample to its socket.',
+		]);
+	});
+
+	it('a test on a sample through an in-place operation has its subject', () => {
+		let b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'addPass', sample: { key: 'n1' }, values: { method_id: 'mc' } }]);
+		b = apply(b, { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'hardness' }, from: { key: 'n2', row: 0 } });
+		expect(blocking(checks(b, ctx))).toEqual([]);
+	});
+
+	it('a free new sample needs a material and a method for its code; an output sample inherits them', () => {
+		const free = run([{ type: 'addSample' }]);
+		expect(texts(blocking(checks(free, ctx)))).toEqual([
+			"block:material_id:Choose the material: it is part of the sample's code.",
+			"block:primary_method_id:Choose the method: it is part of the sample's code.",
+		]);
+		const b = run([
+			{ type: 'addSample', values: { material_id: 'ti' } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, from: { key: 'n1' } },
+			{ type: 'addSample', from: { key: 'n2', row: 0 } },
+		]);
+		expect(checksFor(blocking(checks(b, ctx)), 'n4')).toEqual([]);
+	});
+
+	it('says when the code cannot be made because the material or method has no code', () => {
+		const b = run([{ type: 'addSample', values: { material_id: 'unknown', primary_method_id: 'mc' } }]);
+		expect(blocking(checks(b, ctx)).map((c) => c.field)).toEqual(['sample_code']);
+	});
+
+	it('warns about the missing machine and planned date, never blocks on them', () => {
+		const b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'mc' }, from: { key: 'n1' } }]);
+		const list = checks(b, ctx);
+		expect(blocking(list)).toEqual([]);
+		expect(texts(warnings(list))).toEqual(['warn:planned_date:No planned date yet.', 'warn:equipment_id:No machine yet.']);
+	});
+});
+
+describe('done records', () => {
+	const done = () => apply(planned(), { type: 'setWorkState', key: 'n2', workState: 'done' });
+
+	it('block on the fields the form marks required, by their labels', () => {
+		const list = blocking(checks(done(), ctx));
+		expect(texts(list, 'n2')).toEqual([
+			'block:operation_date:Fill in Date: a done operation needs it.',
+			'block:feed_rate:Fill in Feed rate: a done operation needs it.',
+		]);
+	});
+
+	it('are satisfied once the fields have values', () => {
+		const b = apply(done(), { type: 'setValues', key: 'n2', values: { operation_date: '2026-10-14', feed_rate: 0.2 } });
+		expect(blocking(checks(b, ctx))).toEqual([]);
+	});
+
+	it('never ask for what the wires, the draft or the server fill in, nor hidden or read-only fields', () => {
+		const fields = texts(blocking(checks(done(), ctx))).join(' ');
+		expect(fields).not.toMatch(/Sample|secret|stamp|method/);
+	});
+
+	it('the draft project satisfies a required project', () => {
+		const withProject: CheckCtx = { ...ctx, fields: { ...defs, manufacturing_operations: [...(defs!.manufacturing_operations as FieldDef[]), { field: 'project_id', required: true, label: 'Project' }] } };
+		expect(texts(blocking(checks(done(), withProject)))).toContainEqual(expect.stringContaining('Project'));
+		const b = apply(done(), { type: 'setProject', projectId: 'p' });
+		expect(texts(blocking(checks(b, withProject)))).not.toContainEqual(expect.stringContaining('Project'));
+	});
+
+	it('a done test needs its required fields too', () => {
+		const b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'addContainer', kind: 'test', source: { from: 'blank', testType: 'tensile' }, workState: 'done', from: { key: 'n1' } }]);
+		expect(texts(blocking(checks(b, ctx)))).toEqual(['block:session_date:Fill in Date: a done test needs it.']);
+	});
+
+	it('a free sample, and one made by a done operation, is an active record with its own required fields', () => {
+		const withForm: CheckCtx = { ...ctx, fields: { ...defs, physical_samples: [{ field: 'location', required: true, label: 'Location' }] } };
+		const b = apply(planned(), { type: 'setWorkState', key: 'n2', workState: 'done' });
+		expect(texts(checks(b, withForm).filter((c) => c.key === 'n4'))).toEqual(['block:location:Fill in Location: a new sample needs it.']);
+		// While the operation is planned the sample is a planned one: structure only.
+		expect(checks(planned(), withForm).filter((c) => c.key === 'n4')).toEqual([]);
+		// A free sample is active from the start.
+		const free = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }]);
+		expect(texts(checks(free, withForm))).toEqual(['block:location:Fill in Location: a new sample needs it.']);
+	});
+});
+
+describe('existing records (E13)', () => {
+	const attached = (): DraftBody => run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'attach', operation: { id: 'op-9', version: 3 }, workState: 'planned', from: { key: 'n1' } }]);
+	const key = recordKey('manufacturing_operations', 'op-9');
+
+	it('records that were not read yet say nothing', () => {
+		expect(blocking(checks(attached(), { ...ctx, records: {} }))).toEqual([]);
+	});
+
+	it('changed since added is a warning', () => {
+		const list = checks(attached(), { ...ctx, records: { [key]: { version: 4, values: { method_id: 'mc', equipment_id: 'e' } } } });
+		expect(texts(list, 'n2')).toEqual(['warn:-:Changed since you added it. Review it before you create.']);
+		expect(blocking(list)).toEqual([]);
+	});
+
+	it('the same version says nothing', () => {
+		const list = checks(attached(), { ...ctx, records: { [key]: { version: 3, values: { method_id: 'mc', equipment_id: 'e' } } } });
+		expect(list).toEqual([]);
+	});
+
+	it('gone blocks and hides the rest of that card', () => {
+		const list = checks(attached(), { ...ctx, records: { [key]: null } });
+		expect(texts(list, 'n2')).toEqual(['block:-:This operation is gone, or you can no longer see it. Take it off the canvas.']);
+	});
+
+	it('an attached operation that got an input meanwhile blocks', () => {
+		const list = checks(attached(), { ...ctx, records: { [key]: { version: 3, values: { method_id: 'mc', sample_id: 'other' } } } });
+		expect(texts(blocking(list), 'n2')).toEqual(['block:-:This operation has a sample going in now, so it can no longer be attached.']);
+		const flagged = checks(attached(), { ...ctx, records: { [key]: { version: 3, hasInput: true, values: { method_id: 'mc' } } } });
+		expect(blocking(flagged)).toHaveLength(1);
+	});
+
+	it('an existing sample that is gone blocks', () => {
+		const b = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }]);
+		const list = checks(b, { ...ctx, records: { [recordKey('physical_samples', 's')]: null } });
+		expect(texts(list)).toEqual(['block:-:This sample is gone, or you can no longer see it. Take it off the canvas.']);
+	});
+
+	it('an edit to an existing record is only checked for the fields it changes', () => {
+		let b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'attach', operation: { id: 'op-9', version: 3 }, workState: 'done', from: { key: 'n1' } }]);
+		const records: CheckCtx['records'] = { [key]: { version: 3, values: { method_id: 'mc', equipment_id: 'e' } } };
+		expect(blocking(checks(b, { ...ctx, records }))).toEqual([]);
+		b = apply(b, { type: 'setValues', key: 'n2', values: { feed_rate: null } });
+		expect(texts(blocking(checks(b, { ...ctx, records })))).toEqual(['block:feed_rate:Fill in Feed rate: a done operation needs it.']);
+	});
+
+	it('deleting a done record is refused', () => {
+		const b = apply(attached(), { type: 'remove', key: 'n2', deleteRecord: true });
+		const list = checks(b, { ...ctx, records: { [key]: { version: 3, values: { work_state: 'done' } } } });
+		expect(texts(blocking(list))).toEqual(['block:-:A done operation is never deleted from the map.']);
+		expect(blocking(checks(b, { ...ctx, records: { [key]: { version: 3, values: { work_state: 'planned' } } } }))).toEqual([]);
+	});
+});
+
+describe('helpers', () => {
+	it('blocking checks come first', () => {
+		const b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
+		const levels = checks(b, ctx).map((c) => c.level);
+		expect(levels).toEqual([...levels].sort((a, c) => (a === c ? 0 : a === 'block' ? -1 : 1)));
+		expect(levels[0]).toBe('block');
+	});
+
+	it('missingText counts the blocking ones', () => {
+		expect(missingText([])).toBe('');
+		expect(missingText([{ key: 'n1', level: 'warn', text: 'x' }])).toBe('');
+		expect(missingText([{ key: 'n1', level: 'block', text: 'x' }])).toBe('1 thing missing');
+		expect(missingText([{ key: 'n1', level: 'block', text: 'x' }, { key: 'n2', level: 'block', text: 'y' }])).toBe('2 things missing');
+	});
+
+	it('mergeChecks drops the same message twice', () => {
+		const a: Check = { key: 'n1', level: 'warn', text: 'No machine yet.', field: 'equipment_id' };
+		const b: Check = { key: 'n1', level: 'block', text: 'Choose the method of this operation.', field: 'method_id' };
+		expect(mergeChecks([a], [b, a])).toEqual([b, a]);
+	});
+});
