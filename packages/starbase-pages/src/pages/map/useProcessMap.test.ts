@@ -190,6 +190,25 @@ describe('useProcessMap', () => {
     expect(meta('s:s1')).not.toContain('other project');
   });
 
+  it('the tag of a card from another project is the code of that project when a loaded row names it, else "other project" (M2)', async () => {
+    const home = { collection: 'projects', id: 'p1', code: 'PRJ-1' };
+    const other = { collection: 'projects', id: 'p2', code: 'PRJ-2', label: 'Wear study' };
+    const data = mkData({
+      samples: [mkSample('s1', { projectId: 'p1', form: 'disc' }), mkSample('s2', { projectId: 'p2', form: 'disc' }), mkSample('s3', { projectId: 'p3' })],
+      operations: [
+        mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: '2026-09-01T09:00:00Z', relations: { project_id: home }, projectId: 'p1' }),
+        mkOp({ id: 'o2', sampleId: 's2', outputSampleId: 's3', date: '2026-09-02T09:00:00Z', relations: { project_id: other }, projectId: 'p2' }),
+      ],
+    });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:s1', reach: 'all' });
+    await settle();
+    const meta = (id: string) => (map.nodes.value.find((n) => n.id === id) as { meta?: string }).meta ?? '';
+    expect(meta('s:s2')).toBe('disc · project PRJ-2');
+    expect(meta('s:s3')).toBe('other project'); // no loaded row names p3
+    expect(meta('s:s1')).toBe('disc');
+  });
+
   it('a reach change does not reload the family', async () => {
     family.mockResolvedValue(small());
     const { map } = setup({ focus: 'physical_samples:s1' });

@@ -450,6 +450,16 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     return ids;
   });
 
+  /** The projects the loaded rows name, by id: what a card of another project is tagged with. */
+  const projectRefs = computed(() => {
+    const out = new Map<string, Ref>();
+    for (const row of [...(data.value?.operations ?? []), ...(data.value?.tests ?? [])]) {
+      const r = row.relations.project_id;
+      if (r && r.code && !out.has(r.id)) out.set(r.id, r);
+    }
+    return out;
+  });
+
   /** The shown nodes with the Show chips applied to their Inside slots and key settings, and other projects tagged. */
   const nodes = computed<MapNode[]>(() => {
     const hide = hiddenKinds.value;
@@ -458,7 +468,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       .filter((n) => shown.value.has(n.id))
       .map((n) => {
         // Spec D13: a record of another project says so on its meta line.
-        if (n.type === 'record' && home && n.projectId && n.projectId !== home) return { ...n, meta: [n.meta, 'other project'].filter(Boolean).join(' · ') };
+        if (n.type === 'record' && home && n.projectId && n.projectId !== home) {
+          const code = projectRefs.value.get(n.projectId)?.code;
+          return { ...n, meta: [n.meta, code ? `project ${code}` : 'other project'].filter(Boolean).join(' · ') };
+        }
         if (n.type !== 'container') return n;
         const slots = n.slots.filter((s) => {
           const refs = s.ref ? [s.ref] : (s.values ?? []);
