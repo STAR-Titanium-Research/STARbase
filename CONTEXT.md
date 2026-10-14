@@ -79,6 +79,17 @@ The section for the lab's reference data that records point to: equipment, mater
 insert types, ISO classes, methods, manufacturers, facilities, prep recipes, etchants, FAST recipes.
 _Avoid_: Resources, lookups, master data, Kit
 
+### Tooling
+
+**Insert edge**:
+One cutting edge of a cutting insert, the unit a test or operation is run with. It is named by an
+**edge letter**.
+_Avoid_: corner, cutting edge (for the record)
+
+**Edge letter**:
+The letter that says where an edge sits on its insert. Letters run clockwise from the insert's
+reference mark: the top face first (A, B, …), then the underside (C, D, …) on a double-sided insert.
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
