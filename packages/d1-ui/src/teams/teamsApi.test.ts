@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, listPending, listTeams, onTeamChange, removeMember, setManager,
-	updateTeam, uploadTeamLogo,
+	updateTeam, uploadTeamLogo, getTeamRecordIds,
 } from './teamsApi';
 
 const fail = (status: number, message: string, code?: string, extra: Record<string, unknown> = {}) =>
@@ -20,6 +20,16 @@ function fakeApi(over: Record<string, any> = {}) {
 beforeEach(() => clearTeamCache());
 
 describe('reads', () => {
+	it('reads the ids of the readable records of a team in one collection', async () => {
+		const api = fakeApi({ get: vi.fn(async () => ({ data: { ids: ['a', 7], truncated: true } })) });
+		expect(await getTeamRecordIds(api, 't/1', 'physical_samples')).toEqual({ ids: ['a', '7'], truncated: true });
+		expect(api.get).toHaveBeenCalledWith('/d1-teams/t%2F1/records', { params: { collection: 'physical_samples', limit: 500 } });
+		expect(await getTeamRecordIds(fakeApi(), 't1', 'campaigns', 20)).toEqual({ ids: [], truncated: false });
+	});
+	it('a failed ids read carries the error of the endpoint', async () => {
+		const api = fakeApi({ get: vi.fn(async () => { throw fail(404, 'That team does not exist.', 'NOT_FOUND'); }) });
+		await expect(getTeamRecordIds(api, 't1', 'campaigns')).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+	});
 	it('lists the teams', async () => {
 		const api = fakeApi({ get: vi.fn(async () => ({ data: { teams: [{ team_id: 't1', name: 'A' }] } })) });
 		expect(await listTeams(api)).toEqual([{ team_id: 't1', name: 'A' }]);

@@ -12,6 +12,9 @@ export interface ColumnDef {
 	relation?: { collection: string; display: string };
 }
 
+// The URL key of the Team filter (`f.team`) and the chip's field.
+export const TEAM_FILTER_FIELD = 'team';
+
 export interface FilterDef {
 	field: string;
 	label: string;
@@ -19,7 +22,10 @@ export interface FilterDef {
 	// `fallback`: a second field that labels a row whose `display` is empty (a campaign without a code is named).
 	options: { kind: 'relation'; collection: string; display: string; fallback?: string } | { kind: 'enum'; values?: string[] } | { kind: 'bool' }
 		// A yes / off toggle (not a column): when on (`f.<field>=true`) the given Directus filter is ANDed in.
-		| { kind: 'flag'; filter: Record<string, unknown> };
+		| { kind: 'flag'; filter: Record<string, unknown> }
+		// A team (`f.<field>=<team id>`, not a column): options are the teams (listTeams); the page asks the d1-teams endpoint for the ids of the
+		// team's records the viewer can read and filters the primary key to them (Ruling M1). An empty answer matches nothing.
+		| { kind: 'team' };
 }
 
 export interface IndexDef {
@@ -61,6 +67,8 @@ const relFilter = (field: string, label: string, collection: string, display: st
 const enumFilter = (field: string, label: string): FilterDef => ({ field, label, options: { kind: 'enum' } });
 const boolFilter = (field: string, label: string): FilterDef => ({ field, label, options: { kind: 'bool' } });
 
+// "Records of this team" (owned or shared with it), on the four team-ownable lists. Projects are filtered on their bespoke page.
+const team: FilterDef = { field: TEAM_FILTER_FIELD, label: 'Team', options: { kind: 'team' } };
 const project = relFilter('project_id', 'Project', 'projects', 'project_code');
 const campaign = relFilter('campaign_id', 'Campaign', 'campaigns', 'campaign_code', 'name');
 const material = relFilter('material_id', 'Material', 'materials', 'alloy_code');
@@ -101,7 +109,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('start_date', 'Start', 'date'), col('end_date', 'End', 'date'),
 		],
 		searchFields: ['campaign_code', 'name'],
-		filters: [project, enumFilter('status', 'Status'), enumFilter('campaign_type', 'Type'), noOwner],
+		filters: [project, enumFilter('status', 'Status'), enumFilter('campaign_type', 'Type'), team, noOwner],
 		defaultSort: '-start_date', rowTarget: 'record',
 	},
 	{
@@ -114,7 +122,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('created_at', 'Created', 'date'),
 		],
 		searchFields: ['sample_code', 'nickname'],
-		filters: [project, enumFilter('current_status', 'Status'), material, noOwner],
+		filters: [project, enumFilter('current_status', 'Status'), material, team, noOwner],
 		defaultSort: '-created_at', rowTarget: 'record', hasShortId: true,
 		selectAction: { label: 'Print labels for selected', path: '/home/labels', param: 'ids' },
 	},
@@ -128,7 +136,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('operation_date', 'Date', 'date'), col('operator_name', 'Operator'), col('outcome_notes', 'Outcome'),
 		],
 		searchFields: ['pass_code', 'sample_id.sample_code', 'operator_name'],
-		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory, hasForce, noOwnerMachining],
+		filters: [project, campaign, relFilter('method_id', 'Method', 'manufacturing_methods', 'method_code'), processCategory, hasForce, team, noOwnerMachining],
 		defaultSort: '-operation_date', rowTarget: 'record', hasShortId: true,
 	},
 	{
@@ -140,7 +148,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			rel('equipment_id', 'Equipment', 'equipment', 'equipment_name'),
 		],
 		searchFields: ['test_code', 'test_type', 'sample_id.sample_code'],
-		filters: [project, campaign, enumFilter('test_type', 'Type'), enumFilter('status', 'Status')],
+		filters: [project, campaign, enumFilter('test_type', 'Type'), enumFilter('status', 'Status'), team],
 		defaultSort: '-session_date', rowTarget: 'record', hasShortId: true,
 	},
 	{

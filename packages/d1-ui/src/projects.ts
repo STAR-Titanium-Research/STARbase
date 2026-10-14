@@ -41,6 +41,9 @@ export interface ProjectFilters {
 	role: RoleFilter;
 	status: StatusFilter;
 	query: string;
+	// The ids of the chosen team's projects the viewer reads (GET /d1-teams/:id/records): only these. null / absent = no team chosen;
+	// an empty set (a team with none, or ids not known yet) matches nothing.
+	teamIds?: ReadonlySet<string> | null;
 }
 
 // Roles other than 'all' need the user's id.
@@ -56,6 +59,7 @@ export function filterProjects<T extends ProjectRow>(
 			const role = projectRole(p, userId);
 			if (filters.role === 'any' ? role === null : role !== filters.role) return false;
 		}
+		if (filters.teamIds && !filters.teamIds.has(p.project_id)) return false;
 		if (filters.status === 'active' && p.is_active === false) return false;
 		if (filters.status === 'inactive' && p.is_active !== false) return false;
 		if (q && !`${p.project_code} ${p.project_name}`.toLowerCase().includes(q)) return false;

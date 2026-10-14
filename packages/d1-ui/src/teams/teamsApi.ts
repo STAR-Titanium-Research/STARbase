@@ -119,6 +119,22 @@ const asList = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 
 export const listTeams = (api: HostApi): Promise<TeamSummary[]> => call(() => api.get('/d1-teams'), (b) => asList<TeamSummary>(b.teams));
 
+/** The ids of a team's records of one collection that the caller can read, newest first (GET /d1-teams/:id/records). `truncated`: the team has more than `limit`. */
+export interface TeamRecordIds {
+	ids: string[];
+	truncated: boolean;
+}
+
+/** The most the endpoint returns (and the index Team filter asks for). */
+export const TEAM_RECORDS_LIMIT = 500;
+
+/** Which records of `collection` a team owns or has a grant on, and the caller reads: the Team filter of the index pages (Ruling M1: only readable ids). */
+export const getTeamRecordIds = (api: HostApi, teamId: string, collection: string, limit: number = TEAM_RECORDS_LIMIT): Promise<TeamRecordIds> =>
+	call(
+		() => api.get(path(teamId, 'records'), { params: { collection, limit } }),
+		(b) => ({ ids: asList<unknown>(b.ids).map(String), truncated: b.truncated === true }),
+	);
+
 /** One team with its members, counts, readable records and history. `{ events: 'all' }` asks for every event, not the last 20. */
 export const getTeam = (api: HostApi, id: string, opts?: { events?: 'all' }): Promise<TeamDetail> =>
 	call(

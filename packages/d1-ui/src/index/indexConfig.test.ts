@@ -111,12 +111,12 @@ describe('INDEX_DEFS', () => {
 				field: 'campaign_id', label: 'Campaign', options: { kind: 'relation', collection: 'campaigns', display: 'campaign_code', fallback: 'name' },
 			});
 		}
-		expect(indexDefBySlug('operations')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Method', 'Process category', 'With force data', 'No owner (not sintering)']);
-		expect(indexDefBySlug('operations')!.filters.at(-2)).toEqual({
+		expect(indexDefBySlug('operations')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Method', 'Process category', 'With force data', 'Team', 'No owner (not sintering)']);
+		expect(indexDefBySlug('operations')!.filters.find((f) => f.field === 'has_force')).toEqual({
 			field: 'has_force', label: 'With force data',
 			options: { kind: 'flag', filter: { force_analyses: { _some: { status: { _eq: 'done' } } } } },
 		});
-		expect(indexDefBySlug('tests')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Type', 'Status']);
+		expect(indexDefBySlug('tests')!.filters.map((f) => f.label)).toEqual(['Project', 'Campaign', 'Type', 'Status', 'Team']);
 	});
 
 	// The admin Home's Ownerless panel links here with f.no_owner=true; its counts are what these filters list.
@@ -143,7 +143,7 @@ describe('INDEX_DEFS', () => {
 			'sample_code', 'nickname', 'material_id', 'project_id', 'form', 'current_status', 'location', 'created_at',
 		]);
 		expect(d.searchFields).toEqual(['sample_code', 'nickname']);
-		expect(d.filters.map((f) => f.label)).toEqual(['Project', 'Status', 'Material', 'No owner']);
+		expect(d.filters.map((f) => f.label)).toEqual(['Project', 'Status', 'Material', 'Team', 'No owner']);
 		expect(d.defaultSort).toBe('-created_at');
 	});
 });
