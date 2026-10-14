@@ -75,13 +75,21 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
     const was = placed[id];
     if (Math.abs(box.width - was.width) > GROWN || Math.abs(box.height - was.height) > GROWN) queue.push(id);
   }
+  const pinned = (id: string) => !!input.pinned?.has(id);
+  const pinnedBoxes = [...fixed].filter(([id]) => pinned(id)).map(([, b]) => b);
   const moved = new Set<string>();
   for (let guard = 0; queue.length && guard < fixed.size * fixed.size + 8; guard++) {
     const id = queue.shift()!;
     const box = fixed.get(id)!;
     for (const [otherId, other] of fixed) {
-      if (otherId === id || input.pinned?.has(otherId) || !overlaps(box, other) || axis.start(other) < axis.start(box)) continue;
+      if (otherId === id || pinned(otherId) || !overlaps(box, other) || axis.start(other) < axis.start(box)) continue;
       axis.set(other, axis.end(box) + GAP);
+      // ...but never onto a card the person dragged there: on past it.
+      for (let guard2 = 0; guard2 <= pinnedBoxes.length; guard2++) {
+        const hit = pinnedBoxes.filter((p) => overlaps(other, p)).sort((a, b) => axis.end(b) - axis.end(a))[0];
+        if (!hit) break;
+        axis.set(other, axis.end(hit) + GAP);
+      }
       moved.add(otherId);
       queue.push(otherId);
     }
@@ -103,10 +111,10 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
   const groups = new Map<string, string[]>();
   for (const id of fresh) groups.set(find(id), [...(groups.get(find(id)) ?? []), id]);
 
-  /** How far ELK is from where the placed cards are, over all placed cards ELK also laid out. */
+  /** How far ELK is from where the placed cards are, over all placed cards ELK also laid out (dragged ones say nothing about it). */
   const global: Point = {
-    x: median([...fixed].filter(([id]) => elk[id]).map(([id, b]) => b.x - elk[id].x)),
-    y: median([...fixed].filter(([id]) => elk[id]).map(([id, b]) => b.y - elk[id].y)),
+    x: median([...fixed].filter(([id]) => elk[id] && !pinned(id)).map(([id, b]) => b.x - elk[id].x)),
+    y: median([...fixed].filter(([id]) => elk[id] && !pinned(id)).map(([id, b]) => b.y - elk[id].y)),
   };
   const anchorIds = (input.anchors ?? []).filter((id) => fixed.has(id));
 

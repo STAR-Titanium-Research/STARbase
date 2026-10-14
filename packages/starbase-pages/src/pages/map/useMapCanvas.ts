@@ -239,7 +239,7 @@ export function useMapCanvas(map: ProcessMap) {
   }
 
   vf.onNodeDragStop((e) => {
-    for (const n of e.nodes ?? [e.node]) dragged.add(n.id);
+    for (const n of e.nodes) dragged.add(n.id);
   });
 
   /** Run a layout once every node is measured: now when they are, else when Vue Flow says they are. `merges`: the expands (spec §6.7) it is for, none for a full layout. */
@@ -340,11 +340,12 @@ export function useMapCanvas(map: ProcessMap) {
       if (merge.anchor && from && merge.from !== merge.anchor && !placed.has(merge.anchor)) {
         const was = vf.findNode(merge.from!)?.position ?? from;
         placed.set(merge.anchor, { ...from, x: was.x, y: was.y });
+        if (dragged.delete(merge.from!)) dragged.add(merge.anchor); // the pin goes with the card
       }
     }
     // Cards that are gone are forgotten: one that comes back is a new card, placed beside what it is wired to.
     const drawn = new Set(map.nodes.value.map((n) => n.id));
-    for (const id of [...placed.keys()]) {
+    for (const id of new Set([...placed.keys(), ...dragged])) {
       if (drawn.has(id)) continue;
       placed.delete(id);
       dragged.delete(id);

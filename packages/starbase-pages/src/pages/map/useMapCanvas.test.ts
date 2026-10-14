@@ -17,7 +17,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null, tall: new Map<string, number>(), dragStops: [] as ((e: { node: { id: string }; nodes: { id: string }[] }) => void)[] }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -48,7 +48,7 @@ vi.mock('@vue-flow/core', async (orig) => {
     updateNodeInternals: () => {
       for (const n of nodes.value) {
         const d = n.data as { type?: string; collapsed?: boolean } | undefined;
-        n.dimensions = d?.type === 'container' && !d.collapsed ? { width: 310, height: 200 } : { width: 310, height: 40 };
+        n.dimensions = { width: 310, height: store.tall.get(n.id) ?? (d?.type === 'container' && !d.collapsed ? 200 : 40) };
       }
     },
     onNodesInitialized: () => undefined,
@@ -126,6 +126,7 @@ beforeEach(() => {
   store.layouts = 0;
   store.gate = null;
   store.dragStops.length = 0;
+  store.tall.clear();
   (store.nodes as ShallowRef<FakeNode[]>).value = [];
   vi.mocked(loadFamily).mockReset();
   vi.mocked(loadRecordRef).mockReset();
@@ -314,17 +315,23 @@ describe('useMapCanvas: a dragged card stays put when what is shown changes (spe
     for (const n of nodesOf()) expect(n.position, n.id).toEqual(before.get(n.id));
   });
 
-  it('a dragged card keeps its position when "+N more from the form" opens (the card grows, its neighbours make room)', async () => {
-    const { map, canvas } = await openChain({ reach: 'all' });
-    const group = map.nodes.value.find((n) => n.type === 'container')!;
-    drag('s:e', { x: 900, y: 900 });
+  it('a dragged card keeps its position when "+N more from the form" opens: the card really grows and the others make room, none onto the dragged one', async () => {
+    const { map, canvas } = await open();
+    const u0 = { ...at('op:u0') };
+    drag('op:u3', { x: u0.x, y: u0.y + 230 }); // just where a card pushed down by u0 would land (u0 is 200 tall, plus the gap)
     const layouts = store.layouts;
-    map.toggleMore(group.id);
-    await canvas.remeasure(group.id);
+    const before = new Map(nodesOf().map((n) => [n.id, { ...n.position }]));
+    store.tall.set('op:u0', 200); // the form's rows open: the card is taller now
+    map.toggleMore('op:u0');
+    await canvas.remeasure('op:u0');
     await canvas.reflow();
     await settle();
     expect(store.layouts).toBe(layouts + 1);
-    expect(at('s:e')).toEqual({ x: 900, y: 900 });
+    expect(at('op:u0')).toEqual(u0);
+    expect(at('op:u3')).toEqual(before.get('op:u3'));
+    // the card grew: cards it covers made room (so something moved), and none of them came to rest on the dragged card
+    expect(nodesOf().some((n) => n.id !== 'op:u3' && at(n.id).y !== before.get(n.id)!.y)).toBe(true);
+    noOverlaps(['op:u3']);
   });
 
   it('a card that is dragged is not pushed aside by a card that grew', async () => {

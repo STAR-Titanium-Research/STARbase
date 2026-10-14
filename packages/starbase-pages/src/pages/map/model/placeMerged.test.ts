@@ -114,6 +114,33 @@ describe('placeMerged (spec 6.7)', () => {
     expect(out.c.y).toBeGreaterThanOrEqual(200);
   });
 
+  it('a card pushed by a card that grew is not put on a pinned card on its way: it goes on past it', () => {
+    const tall = { width: 100, height: 200 };
+    const out = placeMerged({
+      elk: {},
+      sizes: { a: tall, b: tall, c: size },
+      placed: { a: box(0, 0), b: { x: 0, y: 60, ...tall }, c: box(0, 120) }, // a grew 40 -> 200; b was dragged under it
+      edges: [],
+      dir: 'RIGHT',
+      pinned: new Set(['b']),
+    });
+    expect(out.a).toBeUndefined();
+    expect(out.b).toBeUndefined();
+    expect(out.c.y).toBeGreaterThanOrEqual(60 + 200 + 28);
+  });
+
+  it('dragged cards do not count when new cards are lined up with the placed ones', () => {
+    const out = placeMerged({
+      elk: { a: { x: 0, y: 0 }, b: { x: 0, y: 100 }, n: { x: 0, y: 200 } },
+      sizes: sizes('a', 'b', 'n'),
+      placed: { a: box(0, 0), b: box(900, 900) }, // b was dragged far away
+      edges: [],
+      dir: 'RIGHT',
+      pinned: new Set(['b']),
+    });
+    expect(out.n).toEqual({ x: 0, y: 200 });
+  });
+
   it('with nothing placed it is ELK as it is', () => {
     const elk = { a: { x: 0, y: 0 }, b: { x: 200, y: 10 } };
     expect(placeMerged({ elk, sizes: sizes('a', 'b'), placed: {}, edges: [], dir: 'RIGHT' })).toEqual(elk);
