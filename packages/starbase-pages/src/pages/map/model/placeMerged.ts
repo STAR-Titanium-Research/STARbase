@@ -78,11 +78,14 @@ export function placeMerged(input: PlaceInput): Record<string, Point> {
   const pinned = (id: string) => !!input.pinned?.has(id);
   const pinnedBoxes = [...fixed].filter(([id]) => pinned(id)).map(([, b]) => b);
   const moved = new Set<string>();
-  for (let guard = 0; queue.length && guard < fixed.size * fixed.size + 8; guard++) {
+  // Every move is queued again, so a card that was pushed (or hopped past a dragged one) is checked against everything placed.
+  for (let guard = 0; queue.length && guard < fixed.size ** 3 + 8; guard++) {
     const id = queue.shift()!;
     const box = fixed.get(id)!;
     for (const [otherId, other] of fixed) {
-      if (otherId === id || pinned(otherId) || !overlaps(box, other) || axis.start(other) < axis.start(box)) continue;
+      if (otherId === id || pinned(otherId) || !overlaps(box, other)) continue;
+      // A card that grew leaves what lies above it alone; a card that was moved clears everything it landed on.
+      if (!moved.has(id) && axis.start(other) < axis.start(box)) continue;
       axis.set(other, axis.end(box) + GAP);
       // ...but never onto a card the person dragged there: on past it.
       for (let guard2 = 0; guard2 <= pinnedBoxes.length; guard2++) {
