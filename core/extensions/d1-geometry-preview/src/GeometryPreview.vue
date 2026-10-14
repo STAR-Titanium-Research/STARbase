@@ -50,11 +50,27 @@ const geoSvg = computed(() => buildGeometry(v.value as any));
 // dimensions it fixes; thickness is never touched, and every field stays editable.
 const presetItems = computed(() => presetsFor(v.value.form).map((p) => ({ text: presetLabel(p), value: p.id })));
 const currentPreset = computed(() => matchingPreset(v.value.form, v.value));
-function applyPreset(id: string | null) {
+// The form applies setFieldValue against the values it last rendered, so several emits in one tick
+// overwrite each other and only one dimension sticks (seen on the preview copy). Emit one field at a
+// time and wait until the form's values show it (or 500 ms) before the next.
+function landed(field: string, value: unknown): Promise<void> {
+	return new Promise((resolve) => {
+		let done = false;
+		let stop: (() => void) | null = null;
+		const finish = () => { if (done) return; done = true; stop?.(); clearTimeout(timer); resolve(); };
+		const timer = setTimeout(finish, 500);
+		stop = watch(() => values.value?.[field], (x) => { if (x == value) finish(); });
+		if (values.value?.[field] == value) finish();
+	});
+}
+async function applyPreset(id: string | null) {
 	if (!id) return;
 	const dims = presetDims(v.value.form, id);
 	if (!dims) return;
-	for (const [field, value] of Object.entries(dims)) emit('setFieldValue', { field, value });
+	for (const [field, value] of Object.entries(dims)) {
+		emit('setFieldValue', { field, value });
+		await landed(field, value);
+	}
 }
 
 // Dimension chips from the fields relevant to the chosen form.

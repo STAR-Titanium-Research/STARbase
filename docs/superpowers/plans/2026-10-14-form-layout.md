@@ -9,9 +9,9 @@ the forms on the `d1-formqa` preview copy (port 18058) before anything merges.
 
 | Stream | Worktree | Branch | Base | State |
 |---|---|---|---|---|
-| M — form metadata (migration 174, configure scripts, specs) | `.claude/worktrees/form-layout-meta` | `feat/form-layout-meta` | `feat/form-layout` | started |
-| C — code (labels table, coupon presets, Force App list check, retire importer) | `.claude/worktrees/form-layout-code` | `feat/form-layout-code` | `feat/form-layout` | started |
-| D — stored values (migration 175, data) | `.claude/worktrees/form-values` | `data/form-values` | `feat/form-layout` | started |
+| M — form metadata (migration 174, configure scripts, specs) | `.claude/worktrees/form-layout-meta` | `feat/form-layout-meta` | `feat/form-layout` | merged into feat/form-layout |
+| C — code (labels table, coupon presets, Force App list check, retire importer) | `.claude/worktrees/form-layout-code` | `feat/form-layout-code` | `feat/form-layout` | merged into feat/form-layout |
+| D — stored values (migration 175, data) | `.claude/worktrees/form-values` | `data/form-values` | `feat/form-layout` | done; PR B |
 
 PR A = `feat/form-layout` (M + C merged in), stacked on #278. PR B = `data/form-values`, stacked on PR A.
 
@@ -68,6 +68,14 @@ PR A = `feat/form-layout` (M + C merged in), stacked on #278. PR B = `data/form-
     10), ISO 6892-1 type 1 (L0 50, b0 12.5, L 200, grip 20), ISO 6892-1 type 2 (L0 80, b0 20, L 250, grip 30);
     thickness is left to the user. In the Data Studio form (the geometry preview interface) and on STARbase's
     Register-sample screen. Values to be checked against the standards by the maintainer.
+
+16. **Fatigue and Charpy** (added 2026-10-14): "Bend / fatigue bar" splits into **Bend bar (ISO 7438)** (existing rows) and a new
+    **Fatigue specimen** (tensile coupon dimensions; presets ASTM E466 flat and ISO 1099 flat, typical values to be checked). New
+    **Charpy specimen (ISO 148-1)** (length, width, thickness; presets full size 55 × 10 × 10 and sub-sizes 7.5 / 5 / 2.5, which set
+    the thickness).
+
+Deviation from decision 5, as built: for Lab Members Co-owners and Secondary Investigators are **read-only**, not hidden. Hiding
+them needs read access removed, which makes every STARbase query that names the alias fail with 403.
 
 ## Form specs (stream M)
 
