@@ -640,7 +640,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const page = fanPage(ref.collection, used, 1);
       const held = new Set([...before.operations.map((o) => o.id), ...before.tests.map((t) => t.id)]);
       const fresh = page.items.filter((i) => i.collection === 'physical_samples' || !held.has(i.id)).length;
-      if (!fresh && !page.remaining) {
+      if (!fresh && page.remaining === 0) {
         notice.value = `Nothing else in the map used ${ref.code}.`;
         return;
       }
@@ -705,8 +705,9 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     if (node?.type === 'record' && node.kind !== 'sample' && hasFan(node.ref.collection)) {
       const key = refKey(node.ref);
       if (!fanRoots(d).has(key)) return openSideFan(node.ref, id);
-      const remaining = d.fan && key === `${d.focus.collection}:${d.focus.id}` ? (d.fan.remaining ?? 0) : ((d.sideFans ?? []).find((f) => refKey(f.root) === key)?.remaining ?? 0);
-      if (remaining !== 0) return loadMore(key);
+      const fan = d.fan && key === `${d.focus.collection}:${d.focus.id}` ? d.fan : (d.sideFans ?? []).find((f) => refKey(f.root) === key);
+      // null = more to load with no count to show (D21): only an unset or zero remaining means there is nothing to load.
+      if (fan && fan.remaining !== undefined && fan.remaining !== 0) return loadMore(key);
     }
     if (!node) {
       const slot = slotRecord(id);

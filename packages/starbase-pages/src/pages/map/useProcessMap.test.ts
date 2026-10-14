@@ -892,6 +892,42 @@ describe('expand: loading more (D15, spec 7)', () => {
     expect(usedIn).not.toHaveBeenCalled();
   });
 
+  it('a stock lot side fan whose first page has no operations still shows "More", and no notice (D21)', async () => {
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1')], stock: [{ lotId: 'l1', lotCode: 'LOT-1', supplier: null, massUsedGrams: null, sampleId: 's1' }] }));
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: [], total: null, more: true });
+    await map.expand('lot:l1');
+    await settle();
+    expect(map.notice.value).toBe('');
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')).toMatchObject({ id: 'more:raw_stock_lots:l1', remaining: null });
+  });
+
+  it('Expand on a fan root whose "More" has no count loads the next page (side fan, then focus fan)', async () => {
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1')], stock: [{ lotId: 'l1', lotCode: 'LOT-1', supplier: null, massUsedGrams: null, sampleId: 's1' }] }));
+    const side = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: [], total: null, more: true });
+    await side.map.expand('lot:l1');
+    await settle();
+    usedIn.mockClear();
+    usedIn.mockResolvedValue({ items: toolOps(1), total: null, more: false });
+    await side.map.expand('lot:l1');
+    await settle();
+    expect(usedIn).toHaveBeenCalledWith(api, { collection: 'raw_stock_lots', id: 'l1' }, 2);
+
+    usedIn.mockReset();
+    recordRef.mockResolvedValue({ collection: 'raw_stock_lots', id: 'l2', code: 'LOT-2' });
+    usedIn.mockResolvedValue({ items: [], total: null, more: true });
+    const focus = setup({ focus: 'raw_stock_lots:l2' });
+    await settle();
+    usedIn.mockClear();
+    usedIn.mockResolvedValue({ items: toolOps(1), total: null, more: false });
+    await focus.map.expand('lot:l2');
+    await settle();
+    expect(usedIn).toHaveBeenCalledWith(api, { collection: 'raw_stock_lots', id: 'l2' }, 2);
+  });
+
   it('a record nothing else used says so and adds nothing', async () => {
     const tool = { collection: 'tools', id: 't1', code: 'TL-1' };
     const op = mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', relations: { tool_id: tool } });

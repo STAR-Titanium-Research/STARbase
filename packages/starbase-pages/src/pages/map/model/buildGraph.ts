@@ -487,7 +487,12 @@ function focusNodeId(data: ProcessData, groups: Group[], present: Set<string>): 
   return firstSample && present.has(`s:${firstSample.id}`) ? `s:${firstSample.id}` : null;
 }
 
-const remainingOf = (f: Fan): number | null => (f.remaining === null ? null : Math.max(0, f.remaining ?? (f.total ?? 0) - f.items.length));
+/** Rows still to load; null = more, but no number to show (a null remaining, or a fan with no count: D21). */
+const remainingOf = (f: Fan): number | null => {
+  if (f.remaining === null) return null;
+  if (f.remaining !== undefined) return Math.max(0, f.remaining);
+  return f.total === null ? null : Math.max(0, f.total - f.items.length);
+};
 
 /** A used-in fan item as a header-only container: its sample flow is loaded when the person expands it. */
 function collapsedContainer(kind: 'operation' | 'test', row: OpRow | TestRow): ContainerNode {

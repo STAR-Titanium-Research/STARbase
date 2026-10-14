@@ -1,14 +1,14 @@
-// Where the nodes go after an expand or a merge (spec §6.7): cards already on the map keep their places
-// (a dragged card stays where it was dropped), and only the new cards are laid out, so that they do not
-// overlap anything. Pure: ELK's positions for the whole graph come in, final positions of the cards that
+// Where the nodes go after an expand or a merge (spec §6.7): only the new cards are laid out, so that they do
+// not overlap anything; a dragged card stays where it was dropped, and the other cards on the map keep their
+// places unless a card that grew must push them. Pure: ELK's positions for the whole graph come in, final positions of the cards that
 // move go out. A full Re-layout does not come through here.
 //
 // New cards keep ELK's arrangement among themselves. A group of new cards wired to a card that is already
 // placed is shifted so that it lines up with that card; a group wired to nothing placed (the used-in fan of
 // a record in an Inside tray) is put beside the card the person expanded. A card that grew (a collapsed
-// container that was opened) keeps its place and pushes the placed cards it now overlaps along the cross
-// axis, instead of lying on top of them. Only DRAGGED cards are guaranteed to stay where they are; a card
-// that merely grew may itself be pushed to keep the gap.
+// container that was opened) pushes the placed cards it now overlaps along the cross axis, instead of lying
+// on top of them. Only DRAGGED cards are guaranteed to stay where they are, so a grown card may itself be
+// pushed to keep the gap.
 
 import type { Dir } from './elkInput';
 
