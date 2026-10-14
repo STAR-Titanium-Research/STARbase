@@ -119,10 +119,10 @@ export { default as TeamFaces } from './teams/TeamFaces.vue';
 export { TEAM_COLORS, TEAM_PALETTE, DEFAULT_TEAM_COLOR, contrastRatio, isTeamColor, lightDark, paletteFor, teamInitials } from './teams/teamPalette';
 export type { TeamColor, TeamPaint } from './teams/teamPalette';
 export {
-	TEAM_RECORDS_LIMIT, TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, getTeamRecordIds, listPending, listTeams, onTeamChange, removeMember, setManager,
+	TEAM_RECORDS_LIMIT, TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, getTeamRecordIds, listPending, listTeams, myRecentTeamRecords, onTeamChange, removeMember, setManager,
 	updateTeam, uploadTeamLogo,
 } from './teams/teamsApi';
-export type { TeamRecordIds, PendingDecision, PendingItem, TeamDetail, TeamEdit, TeamCounts, TeamEvent, TeamLevel, TeamMember, TeamRecord, TeamSummary } from './teams/teamsApi';
+export type { RecentTeamRecord, TeamRecordIds, PendingDecision, PendingItem, TeamDetail, TeamEdit, TeamCounts, TeamEvent, TeamLevel, TeamMember, TeamRecord, TeamSummary } from './teams/teamsApi';
 export { useTeamRecordFilter } from './teams/useTeamRecordFilter';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
 export { default as CampaignCard } from './campaign/CampaignCard.vue';

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, listPending, listTeams, onTeamChange, removeMember, setManager,
-	updateTeam, uploadTeamLogo, getTeamRecordIds,
+	updateTeam, uploadTeamLogo, getTeamRecordIds, myRecentTeamRecords,
 } from './teamsApi';
 
 const fail = (status: number, message: string, code?: string, extra: Record<string, unknown> = {}) =>
@@ -25,6 +25,15 @@ describe('reads', () => {
 		expect(await getTeamRecordIds(api, 't/1', 'physical_samples')).toEqual({ ids: ['a', '7'], truncated: true });
 		expect(api.get).toHaveBeenCalledWith('/d1-teams/t%2F1/records', { params: { collection: 'physical_samples', limit: 300 } });
 		expect(await getTeamRecordIds(fakeApi(), 't1', 'campaigns', 20)).toEqual({ ids: [], truncated: false });
+	});
+	it('reads the recent records of my teams, asking for the limit given (20 by default)', async () => {
+		const item = { collection: 'campaigns', id: 'c1', kind: 'campaign', code: 'C-1', title: 'T', team_id: 't1', team_name: 'Additive', team_color: 'teal', changed_at: '2026-10-14T10:00:00Z' };
+		const api = fakeApi({ get: vi.fn(async () => ({ data: { items: [item] } })) });
+		expect(await myRecentTeamRecords(api)).toEqual([item]);
+		expect(api.get).toHaveBeenCalledWith('/d1-teams/mine/recent', { params: { limit: 20 } });
+		await myRecentTeamRecords(api, 5);
+		expect(api.get).toHaveBeenLastCalledWith('/d1-teams/mine/recent', { params: { limit: 5 } });
+		expect(await myRecentTeamRecords(fakeApi())).toEqual([]);
 	});
 	it('a failed ids read carries the error of the endpoint', async () => {
 		const api = fakeApi({ get: vi.fn(async () => { throw fail(404, 'That team does not exist.', 'NOT_FOUND'); }) });

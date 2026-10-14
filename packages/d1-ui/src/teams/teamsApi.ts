@@ -135,6 +135,23 @@ export const getTeamRecordIds = (api: HostApi, teamId: string, collection: strin
 		(b) => ({ ids: asList<unknown>(b.ids).map(String), truncated: b.truncated === true }),
 	);
 
+/** A record of one of the caller's own teams, as GET /d1-teams/mine/recent lists it (readable records only, newest change first). `team_color` is a palette key. */
+export interface RecentTeamRecord {
+	collection: string;
+	id: string;
+	kind: string | null;
+	code: string | null;
+	title: string | null;
+	team_id: string;
+	team_name: string;
+	team_color: TeamColor;
+	changed_at: string | null;
+}
+
+/** The most recently changed records of the caller's teams (owner or grantee) that the caller can read; the endpoint caps `limit` at 100. */
+export const myRecentTeamRecords = (api: HostApi, limit = 20): Promise<RecentTeamRecord[]> =>
+	call(() => api.get('/d1-teams/mine/recent', { params: { limit } }), (b) => asList<RecentTeamRecord>(b.items));
+
 /** One team with its members, counts, readable records and history. `{ events: 'all' }` asks for every event, not the last 20. */
 export const getTeam = (api: HostApi, id: string, opts?: { events?: 'all' }): Promise<TeamDetail> =>
 	call(
