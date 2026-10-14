@@ -121,7 +121,9 @@ describe('INDEX_DEFS', () => {
 
 	// The admin Home's Ownerless panel links here with f.no_owner=true; its counts are what these filters list.
 	it('gives samples, campaigns and operations a No owner flag chip', () => {
-		const plain = { field: 'no_owner', label: 'No owner', options: { kind: 'flag', filter: { owner_person_id: { _null: true } } } };
+		// A record a team owns has an owner too: neither column is set on an ownerless one.
+		const neither = [{ owner_person_id: { _null: true } }, { owner_team_id: { _null: true } }];
+		const plain = { field: 'no_owner', label: 'No owner', options: { kind: 'flag', filter: { _and: neither } } };
 		expect(indexDefBySlug('samples')!.filters.at(-1)).toEqual(plain);
 		expect(indexDefBySlug('campaigns')!.filters.at(-1)).toEqual(plain);
 		// Operations: no owner and not sintering, a NULL category kept (the panel's count; a bare _neq would drop NULLs).
@@ -129,7 +131,7 @@ describe('INDEX_DEFS', () => {
 			field: 'no_owner', label: 'No owner (not sintering)',
 			options: {
 				kind: 'flag',
-				filter: { _and: [{ owner_person_id: { _null: true } }, { _or: [{ process_category: { _null: true } }, { process_category: { _neq: 'sintering' } }] }] },
+				filter: { _and: [...neither, { _or: [{ process_category: { _null: true } }, { process_category: { _neq: 'sintering' } }] }] },
 			},
 		});
 		expect(indexDefBySlug('tests')!.filters.some((f) => f.field === 'no_owner')).toBe(false);

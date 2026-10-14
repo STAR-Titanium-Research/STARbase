@@ -47,7 +47,7 @@ export { projectRole, projectStatusLabel, filterProjects, campaignProgress, coun
 export type { ProjectRow, ProjectRole, RoleFilter, StatusFilter, CampaignProgress, ForceRows } from './projects';
 export {
 	CURRENT_USER, projectInvestigatorFilter, ownedByMe, samplesMine, projectsMine, campaignsMine, forceErrorOnMyOperations, forcePendingOperations,
-	failedTests, ownerlessSamples,
+	failedTests, ownerlessSamples, ownedByTeams, withMyTeams,
 } from './mine';
 
 // Composables
@@ -80,6 +80,7 @@ export { pinTargetForIndex, pinTargetForRecord } from './components/pinTarget';
 export { default as RecordRail } from './components/RecordRail.vue';
 export { default as FactList } from './components/FactList.vue';
 export { default as PageContents } from './components/PageContents.vue';
+export { ownerName } from './record/facts';
 export type { Fact } from './record/facts';
 export type { ContentsEntry } from './record/contents';
 export { detailFacts, detailsCount } from './record/details';

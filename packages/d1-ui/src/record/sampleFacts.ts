@@ -8,7 +8,7 @@ import { estimateMassGrams } from '../mass';
 import { recordRoute } from '../recordRoute';
 import { humanise } from '../status';
 import { projectFact, type HiddenLinks } from './operationFacts';
-import type { Fact } from './facts';
+import { ownerName, type Fact } from './facts';
 
 type Rec = Record<string, any>;
 
@@ -96,7 +96,7 @@ export function sampleRailFacts(sample: Rec | null | undefined, dimensions: stri
 		{ label: 'Dimensions', value: dimensions },
 		{ label: 'Mass', value: sampleMassText(sample) },
 		{ label: 'Location', value: sample.location },
-		{ label: 'Owner', value: asRecord(sample.owner_person_id)?.full_name },
+		{ label: 'Owner', value: ownerName(sample) },
 		{ label: 'Co-owners', value: coOwnerText(sample) },
 		// A project link that came back as a bare id was not readable: hidden, like a missing one.
 		projectFact(project, hidden.project_id || (!!sample.project_id && !project)),

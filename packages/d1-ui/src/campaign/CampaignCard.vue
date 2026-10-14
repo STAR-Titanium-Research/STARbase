@@ -7,6 +7,7 @@ import { computed } from 'vue';
 import { formatDate } from '../format';
 import { humanise } from '../status';
 import { recordRoute } from '../recordRoute';
+import { ownerName } from '../record/facts';
 import { campaignTypeLabel } from './campaignType';
 import type { CampaignStats } from './campaignCardStats';
 import ProgressBar from '../components/ProgressBar.vue';
@@ -25,6 +26,7 @@ const dates = computed(() => {
 	const b = formatDate(props.campaign.end_date);
 	return a && b ? `${a} to ${b}` : a ? `From ${a}` : b ? `Until ${b}` : '';
 });
+const owner = computed(() => ownerName(props.campaign));
 const progress = computed(() => props.stats?.progress ?? null);
 </script>
 
@@ -37,7 +39,7 @@ const progress = computed(() => props.stats?.progress ?? null);
 		<template #tag><span class="d1-tag">{{ campaignTypeLabel(campaign.campaign_type) }}</span></template>
 		<template #meta>
 			<span v-if="campaign.status">{{ humanise(campaign.status) }}</span>
-			<span v-if="campaign.owner_person_id?.full_name">Owner: {{ campaign.owner_person_id.full_name }}</span>
+			<span v-if="owner">Owner: {{ owner }}</span>
 			<span v-if="dates">{{ dates }}</span>
 		</template>
 		<template v-if="stats">
