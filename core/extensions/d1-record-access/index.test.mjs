@@ -723,6 +723,7 @@ test('roleLabel and recordLink', () => {
 test('the link map is the five STARbase page routes, and recordRoute\'s', () => {
   const index = readFileSync(new URL('../../../packages/starbase-pages/src/routes.ts', import.meta.url), 'utf8');
   const routes = Object.fromEntries([...index.matchAll(/path: '([a-z]+)\/:id', component: (\w+)Page/g)].map((m) => [m[2], m[1]]));
+  delete routes.Team; // teams/:id is a page route too, but not a record page: no entry in the link map
   assert.deepEqual(routes, { Project: 'projects', Campaign: 'campaigns', Sample: 'samples', Operation: 'operations', Test: 'tests' });
   const byPage = { physical_samples: 'Sample', manufacturing_operations: 'Operation', test_sessions: 'Test', campaigns: 'Campaign', projects: 'Project' };
   assert.deepEqual(Object.keys(COLLECTIONS).sort(), Object.keys(byPage).sort());
