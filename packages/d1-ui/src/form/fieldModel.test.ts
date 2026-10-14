@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { OPERATION_DEFS, SAMPLE_DEFS, TEST_DEFS } from './fieldDefs.fixtures';
-import { choiceText, displayText, effectiveValues, fieldViews, formTree, hasShown, isEmptyValue, missingRequired, toFormFields, withValue } from './fieldModel';
+import { choiceText, displayText, effectiveValues, fieldViews, formTree, hasShown, isEmptyValue, missingRequired, toFormFields, withDefaults, withValue } from './fieldModel';
 import type { FormField, FormNode } from './fieldModel';
 
 const byName = (fields: FormField[], name: string): FormField => {
@@ -207,7 +207,7 @@ describe('fieldViews', () => {
 	});
 
 	it('the legacy code field shows once it has a value', () => {
-		expect(fieldViews(ops, {}).get('nc_program_text')?.hidden).toBe(true);
+		expect(fieldViews(ops, { nc_program_text: '' }).get('nc_program_text')?.hidden).toBe(true);
 		expect(fieldViews(ops, { nc_program_text: 'G01 X0' }).get('nc_program_text')?.hidden).toBe(false);
 	});
 
@@ -221,6 +221,7 @@ describe('fieldViews', () => {
 
 	it('Related records stay hidden until the sample has been saved', () => {
 		const s = toFormFields(SAMPLE_DEFS);
+		expect(fieldViews(s, {}).get('campaigns')?.hidden).toBe(true); // short_id is absent: its column default '' stands in
 		expect(fieldViews(s, { short_id: '' }).get('campaigns')?.hidden).toBe(true);
 		expect(fieldViews(s, { short_id: 'ab12cd' }).get('campaigns')?.hidden).toBe(false);
 	});
@@ -268,6 +269,25 @@ describe('values as text', () => {
 		expect(displayText(byName(fields, 'co_owners'), [1, 2, 3])).toBe('3 items');
 		expect(displayText(byName(fields, 'sample_code'), { a: 1 })).toBe('{"a":1}');
 		expect(displayText(byName(fields, 'diameter_mm'), '12.5')).toBe('12.5');
+	});
+});
+
+describe('column defaults', () => {
+	it('reads a plain default and drops database expressions', () => {
+		const f = toFormFields([
+			{ field: 'a', type: 'string', schema: { default_value: '' } },
+			{ field: 'b', type: 'string', schema: { default_value: 'sample' } },
+			{ field: 'c', type: 'integer', schema: { default_value: 0 } },
+			{ field: 'd', type: 'integer', schema: { default_value: "nextval('seq'::regclass)" } },
+			{ field: 'e', type: 'timestamp', schema: { default_value: 'now()' } },
+			{ field: 'f', type: 'string', schema: { default_value: "'x'::text" } },
+			{ field: 'g', type: 'string', schema: { default_value: null } },
+		]);
+		expect(f.map((x) => x.defaultValue)).toEqual(['', 'sample', 0, undefined, undefined, undefined, undefined]);
+	});
+	it('withDefaults puts the defaults under the values', () => {
+		const f = toFormFields([{ field: 'a', type: 'string', schema: { default_value: '' } }, { field: 'b', type: 'string', schema: { default_value: 'x' } }]);
+		expect(withDefaults(f, { b: 'mine' })).toEqual({ a: '', b: 'mine' });
 	});
 });
 

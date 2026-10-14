@@ -4,7 +4,7 @@ import '../components/tokens.css';
 import FormNodeView from './FormNodeView.vue';
 import { effectiveValues, fieldViews, formTree, toFormFields, withValue } from './fieldModel';
 import type { FieldDef, FormField } from './fieldModel';
-import type { Values } from './conditions';
+import type { RuleContext, Values } from './conditions';
 
 // STARbase's own form, generated from a collection's Directus field definitions (ADR-0018, spec 7.3): the Field
 // groups as headed sections, each field drawn by its interface, required marks and conditions (hidden, read-only,
@@ -23,8 +23,10 @@ const props = withDefaults(
 		readonly?: boolean;
 		/** Mark every required field that is empty (set after a failed Create), not only those the person has been into. */
 		showMissing?: boolean;
+		/** What `$CURRENT_USER` and `$NOW` in a field's conditions mean; without it a rule using one never matches. */
+		context?: RuleContext;
 	}>(),
-	{ inherited: undefined, readonly: false, showMissing: false },
+	{ inherited: undefined, readonly: false, showMissing: false, context: undefined },
 );
 const emit = defineEmits<{
 	(e: 'update:modelValue', value: Values): void;
@@ -38,7 +40,7 @@ const formFields = computed<FormField[]>(() => {
 });
 const tree = computed(() => formTree(formFields.value));
 // Conditions read what is shown: the person's value, else the inherited one.
-const views = computed(() => fieldViews(formFields.value, effectiveValues(props.modelValue, props.inherited)));
+const views = computed(() => fieldViews(formFields.value, effectiveValues(props.modelValue, props.inherited), { context: props.context }));
 const touched = reactive(new Set<string>());
 const idPrefix = `d1-form-${props.collection}`;
 

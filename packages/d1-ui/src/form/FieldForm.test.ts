@@ -84,15 +84,15 @@ describe('FieldForm', () => {
 	});
 
 	it('applies conditions live: a machining operation shows Tooling and Cutting, not Sintering', async () => {
-		const machining = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: { process_category: 'machining' } });
+		const machining = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: { process_category: 'machining', nc_program_text: '' } });
 		const headings = [...machining.matchAll(/<h2[^>]*>(.*?)<\/h2>/g)].map((m) => m[1]);
 		expect(headings).toEqual(['What', 'Tooling', 'Cutting parameters', 'Notes &amp; files']);
 		expect(machining).toContain('data-field="machining_spindle_speed_rpm"');
 		expect(text(row(machining, 'machining_spindle_speed_rpm'))).toContain('rpm');
 		expect(machining).not.toContain('data-field="sintering_max_temp_celsius"');
-		expect(machining).not.toContain('data-field="nc_program_text"'); // a legacy field with no value stays out
+		expect(machining).not.toContain('data-field="nc_program_text"'); // a legacy field holding '' stays out
 
-		const sintering = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: { process_category: 'sintering' } });
+		const sintering = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: { process_category: 'sintering', nc_program_text: '' } });
 		expect([...sintering.matchAll(/<h2[^>]*>(.*?)<\/h2>/g)].map((m) => m[1])).toEqual(['What', 'Sintering', 'Notes &amp; files']);
 		// the nested group is a quiet sub-heading, not a second section
 		expect([...sintering.matchAll(/<h3[^>]*>(.*?)<\/h3>/g)].map((m) => m[1])).toEqual(['Machine data']);
@@ -100,7 +100,7 @@ describe('FieldForm', () => {
 	});
 
 	it('a blank form shows only the unconditional groups', async () => {
-		const html = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: {} });
+		const html = await render({ collection: 'manufacturing_operations', fields: OPERATION_DEFS, modelValue: { nc_program_text: '' } });
 		expect([...html.matchAll(/<h2[^>]*>(.*?)<\/h2>/g)].map((m) => m[1])).toEqual(['What', 'Notes &amp; files']);
 	});
 

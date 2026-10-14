@@ -29,6 +29,8 @@ interface Spec {
 	fk?: string;
 	fkKey?: string;
 	pk?: boolean;
+	/** schema.default_value */
+	default?: unknown;
 }
 
 function def(collection: string, field: string, s: Spec = {}): FieldDef {
@@ -42,6 +44,7 @@ function def(collection: string, field: string, s: Spec = {}): FieldDef {
 			data_type: s.type === 'decimal' ? 'numeric' : (s.type ?? 'text'),
 			is_nullable: true,
 			is_primary_key: !!s.pk,
+			default_value: s.default ?? null,
 			...(s.fk ? { foreign_key_table: s.fk, foreign_key_column: s.fkKey ?? 'id' } : {}),
 		},
 		meta: {
@@ -142,6 +145,7 @@ export const SAMPLE_DEFS: FieldDef[] = [
 		options: { choices: [{ text: 'Sample', value: 'sample' }, { text: 'Equipment', value: 'equipment' }, { text: 'Miscellaneous', value: 'miscellaneous' }] },
 		hidden: true,
 		sort: 5,
+		default: 'sample',
 	}),
 	def('physical_samples', 'mounted', { type: 'boolean', interface: 'toggle', special: ['cast-boolean'], group: 'grp_surface', sort: 20, label: 'Mounted?' }),
 	group('physical_samples', 'grp_surface', 'Surface & mounting', 40, 'open', HIDE_FOR_RIG_KIT),
@@ -163,7 +167,7 @@ export const SAMPLE_DEFS: FieldDef[] = [
 	def('physical_samples', 'co_owners', { type: 'alias', special: ['m2m'], interface: 'list-m2m', group: 'grp_who_where', sort: 30, width: 'full', note: 'Members share a sample through Who has access in STARbase.' }),
 	def('physical_samples', 'campaigns', { type: 'alias', special: ['o2m'], interface: 'list-o2m', group: 'grp_related', sort: 10, width: 'full' }),
 	group('physical_samples', 'grp_related', 'Related records', 70, 'closed', HIDE_UNTIL_SAVED),
-	def('physical_samples', 'short_id', { group: 'grp_legacy', sort: 10, readonly: true }),
+	def('physical_samples', 'short_id', { group: 'grp_legacy', sort: 10, readonly: true, default: '' }),
 	def('physical_samples', 'created_at', { type: 'timestamp', special: ['date-created'], interface: 'datetime', readonly: true, hidden: true }),
 	def('physical_samples', 'report_button', { type: 'alias', special: ['alias', 'no-data'], interface: 'd1-report-button', sort: 0, width: 'full' }),
 	group('physical_samples', 'grp_legacy', 'Legacy / system', 80, 'closed'),

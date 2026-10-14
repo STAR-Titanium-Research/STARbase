@@ -8,7 +8,7 @@
 // kind 'external': the form shows its value and "Open in Data Studio" instead.
 
 import { applyConditions } from './conditions';
-import type { AppliedConditions, FieldCondition, Values } from './conditions';
+import type { AppliedConditions, EvalOptions, FieldCondition, Values } from './conditions';
 import { fieldLabel, fieldUnit } from '../params';
 
 export type FieldKind =
@@ -63,6 +63,8 @@ export interface FormField {
 	related: { collection: string; key: string | null; template: string | null } | null;
 	/** Groups only: starts collapsed. */
 	collapsed: boolean;
+	/** The column's own default (`schema.default_value`) when it is a plain value: a new Data Studio form starts from these. */
+	defaultValue: unknown;
 }
 
 /** A field definition as Directus describes it; only `field` is required, everything else is read defensively. */
@@ -106,6 +108,13 @@ function isSystem(def: FieldDef): boolean {
 	if (def.schema?.is_primary_key) return true;
 	if (sp.some((x) => SYSTEM_SPECIALS.has(x))) return true;
 	return sp.includes('no-data'); // report_button, dividers, notices
+}
+
+// A default that is a value, not an expression the database evaluates (nextval(...), now(), 'x'::text).
+function plainDefault(v: unknown): unknown {
+	if (v === null || v === undefined) return undefined;
+	if (typeof v === 'string' && (/\(.*\)/.test(v) || v.includes('::'))) return undefined;
+	return v;
 }
 
 function choicesOf(def: FieldDef): FieldChoice[] {
@@ -210,6 +219,7 @@ export function toFormFields(defs: readonly FieldDef[], opts: FormFieldOptions =
 			integer: INTEGER_TYPES.has(type),
 			related: kind === 'record' || kind === 'person' ? related : null,
 			collapsed: kind === 'group' && options.start === 'closed',
+			defaultValue: plainDefault(def.schema?.default_value),
 		};
 		out.push(f);
 	}
@@ -267,12 +277,20 @@ export interface FieldView extends AppliedConditions {
 	hiddenByGroup: boolean;
 }
 
+/** `values` with the columns' own defaults under it, the way a new Data Studio form starts (Related records waits on `short_id` being ''). */
+export function withDefaults(fields: readonly FormField[], values: Values): Values {
+	const out: Values = {};
+	for (const f of fields) if (f.kind !== 'group' && f.defaultValue !== undefined) out[f.field] = f.defaultValue;
+	return { ...out, ...values };
+}
+
 /** The live state of every field for `values` (conditions applied; a hidden group hides what is in it). */
-export function fieldViews(fields: readonly FormField[], values: Values): Map<string, FieldView> {
+export function fieldViews(fields: readonly FormField[], values: Values, opts: EvalOptions = {}): Map<string, FieldView> {
 	const byName = new Map(fields.map((f) => [f.field, f]));
 	const own = new Map<string, AppliedConditions>();
+	const seen = withDefaults(fields, values);
 	for (const f of fields) {
-		own.set(f.field, applyConditions({ hidden: f.hidden, readonly: f.readonly, required: f.required }, f.conditions, values));
+		own.set(f.field, applyConditions({ hidden: f.hidden, readonly: f.readonly, required: f.required }, f.conditions, seen, opts));
 	}
 	const out = new Map<string, FieldView>();
 	for (const f of fields) {
