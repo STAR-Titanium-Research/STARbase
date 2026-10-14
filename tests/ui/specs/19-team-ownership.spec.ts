@@ -34,19 +34,22 @@ async function labMemberRole(api: APIRequestContext): Promise<string> {
 }
 
 // A Lab Member login with a password; d1-person-link makes its person (found by polling).
-async function makeLogin(api: APIRequestContext, label: string): Promise<Login> {
+// The ids go into `created` as soon as they exist, so a failure later in this function (or the cast) still cleans them up.
+async function makeLogin(api: APIRequestContext, label: string, created: { users: string[]; people: string[] }): Promise<Login> {
 	const tag = unique();
 	const email = `e2e-own-${label.toLowerCase()}-${tag}@example.com`;
 	const password = `E2e-${tag}-Passw0rd!`;
 	const made = await api.post(`${D1}/users`, { data: { email, password, status: 'active', role: await labMemberRole(api), first_name: `E2E${label}`, last_name: tag } });
 	expect(made.ok(), `create the ${label} login: ${made.status()}`).toBeTruthy();
 	const userId = (await made.json()).data.id as string;
+	created.users.push(userId);
 	let person: { person_id: string; full_name: string } | undefined;
 	await expect.poll(async () => {
 		const r = await api.get(`${D1}/items/people?filter[user_id][_eq]=${userId}&fields=person_id,full_name`);
 		person = ((await r.json()).data as { person_id: string; full_name: string }[])[0];
 		return !!person;
 	}, { message: `the person of the ${label} login` }).toBe(true);
+	created.people.push(person!.person_id);
 	return { userId, personId: person!.person_id, email, password, name: person!.full_name };
 }
 
@@ -102,25 +105,43 @@ async function cast(pw: Pw): Promise<Cast> {
 	const created: { users: string[]; people: string[] } = { users: [], people: [] };
 	const track: Cast['track'] = { teams: [], records: [] };
 	const apis: APIRequestContext[] = [];
+	// Every step runs in its own try and its status is checked (Playwright does not throw on 4xx): 2xx and 404 (already gone) are fine,
+	// anything else is logged and fails the test at the end, after the remaining steps have run.
 	const cleanup = async () => {
-		for (const r of track.records) await admin.delete(`${D1}/items/${r.collection}/${r.id}`);
-		for (const id of track.teams) await admin.delete(`${TEAMS}/${id}`);
-		for (const id of created.people) await admin.delete(`${D1}/items/people/${id}`);
-		for (const id of created.users) await admin.delete(`${D1}/users/${id}`);
-		for (const a of apis) await a.dispose();
-		await m.dispose();
-		await admin.dispose();
+		const failed: string[] = [];
+		const step = async (what: string, run: () => Promise<{ status(): number; text(): Promise<string> } | void>) => {
+			try {
+				const r = await run();
+				if (r && !(r.status() >= 200 && r.status() < 300) && r.status() !== 404) failed.push(`${what}: ${r.status()} ${(await r.text()).slice(0, 200)}`);
+			} catch (e) {
+				failed.push(`${what}: ${String(e)}`);
+			}
+		};
+		for (const r of track.records) await step(`delete ${r.collection} ${r.id}`, () => admin.delete(`${D1}/items/${r.collection}/${r.id}`));
+		for (const id of track.teams) await step(`delete team ${id}`, () => admin.delete(`${TEAMS}/${id}`));
+		for (const id of created.people) await step(`delete person ${id}`, () => admin.delete(`${D1}/items/people/${id}`));
+		// a person made by d1-person-link after the poll gave up is found by its user
+		for (const id of created.users) {
+			await step(`delete the person of user ${id}`, async () => {
+				const found = ((await (await admin.get(`${D1}/items/people?filter[user_id][_eq]=${id}&fields=person_id`)).json()).data ?? []) as { person_id: string }[];
+				for (const p of found) await admin.delete(`${D1}/items/people/${p.person_id}`);
+			});
+			await step(`delete user ${id}`, () => admin.delete(`${D1}/users/${id}`));
+		}
+		for (const a of apis) await step('dispose an API context', () => a.dispose());
+		await step('dispose the manager API context', () => m.dispose());
+		await step('dispose the admin API context', () => admin.dispose());
+		if (failed.length) {
+			console.error(`E2E cleanup left something behind:
+${failed.join('
+')}`);
+			throw new Error(`E2E cleanup failed in ${failed.length} step(s): ${failed.join(' | ')}`);
+		}
 	};
 	try {
-		const owner = await makeLogin(admin, 'Owner');
-		created.users.push(owner.userId);
-		created.people.push(owner.personId);
-		const joiner = await makeLogin(admin, 'Joiner');
-		created.users.push(joiner.userId);
-		created.people.push(joiner.personId);
-		const stranger = await makeLogin(admin, 'Stranger');
-		created.users.push(stranger.userId);
-		created.people.push(stranger.personId);
+		const owner = await makeLogin(admin, 'Owner', created);
+		const joiner = await makeLogin(admin, 'Joiner', created);
+		const stranger = await makeLogin(admin, 'Stranger', created);
 		const ownerApi = await apiAs(pw, owner.email, owner.password);
 		const joinerApi = await apiAs(pw, joiner.email, joiner.password);
 		const strangerApi = await apiAs(pw, stranger.email, stranger.password);
@@ -143,7 +164,8 @@ async function cast(pw: Pw): Promise<Cast> {
 		track.records.push({ collection: 'physical_samples', id: sampleId });
 		return { admin, m, owner, ownerApi, joiner, joinerApi, stranger, strangerApi, teamId, teamName, sampleId, sampleCode, track, cleanup };
 	} catch (e) {
-		await cleanup();
+		// the original failure is the one to report; cleanup logs its own problems
+		await cleanup().catch(() => undefined);
 		throw e;
 	}
 }
