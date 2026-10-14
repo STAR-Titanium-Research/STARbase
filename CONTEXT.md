@@ -151,6 +151,7 @@ _Avoid_: invited, requested
 A choice on one record's team entry: people who join the team later get that record's access level without the
 owner approving them.
 _Avoid_: auto-approve, open team
+
 ### Samples and their history
 
 **Process map**:
