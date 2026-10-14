@@ -951,3 +951,80 @@ describe('expand inside a loaded family still reveals one step and tells the lay
     expect(map.takeMergeHint()).toBeNull();
   });
 });
+
+describe('expanding a fan item keeps the rest of the list on the map', () => {
+  /** u0..u3 are passes of one tool on the same sample, three or more steps apart; u4 is on another sample. */
+  async function passes() {
+    recordRef.mockResolvedValue(TOOL);
+    const ops = [0, 1, 2, 3].map((i) =>
+      mkOp({ id: `u${i}`, code: `OP-${i}`, methodName: 'Polish', date: `2026-09-${String(10 + i).padStart(2, '0')}T09:00:00Z`, sampleId: 'x0', outputSampleId: 'x0' }),
+    );
+    usedIn.mockResolvedValue({ items: [...ops, ...toolOps(1).map((o) => ({ ...o, id: 'u4', sampleId: 'x4', outputSampleId: 'y4' }))], total: 5 });
+    const s = setup({ focus: 'tools:t1' });
+    await settle();
+    family.mockResolvedValue(mkData({ samples: [mkSample('x0')], operations: ops }));
+    return s;
+  }
+
+  it('a family that holds other passes of the same tool does not make them vanish', async () => {
+    const { map } = await passes();
+    expect(map.shown.value.has('op:u3')).toBe(true);
+    await map.expand('op:u0');
+    await settle();
+    for (const id of ['op:u0', 'op:u1', 'op:u2', 'op:u3', 'op:u4']) expect(map.shown.value.has(id), id).toBe(true);
+    expect(containersOf(map).filter((c) => !c.collapsed).map((c) => c.id).sort()).toEqual(['op:u0', 'op:u1', 'op:u2', 'op:u3']);
+  });
+
+  it('at the 300-card cap the card that was opened, and the others the family holds, stay', async () => {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(20), total: 20 });
+    const { map } = setup({ focus: 'tools:t1' });
+    await settle();
+    // First fill the map to the cap with a broad family under u5.
+    const kids = Array.from({ length: 350 }, (_, i) => `k${i}`);
+    family.mockResolvedValueOnce(
+      mkData({
+        samples: ['x5', 'y5', ...kids].map((id) => mkSample(id)),
+        operations: [
+          mkOp({ id: 'u5', code: 'OP-5', methodName: 'Turning', sampleId: 'x5', outputSampleId: 'y5', date: '2026-09-23T09:00:00Z' }),
+          ...kids.map((k, i) => mkOp({ id: `c${i}`, sampleId: 'y5', outputSampleId: k, date: '2026-09-24T09:00:00Z', methodName: 'Cut', methodId: 'm' })),
+        ],
+      }),
+    );
+    await map.expand('op:u5');
+    await settle();
+    expect(map.shown.value.size).toBe(300);
+    // Now open u1 whose family also holds u2 as a pass on the same sample: no room, but neither card goes.
+    family.mockResolvedValueOnce(
+      mkData({
+        samples: [mkSample('x1')],
+        operations: ['u1', 'u2'].map((id, i) => mkOp({ id, sampleId: 'x1', outputSampleId: 'x1', methodName: 'Polish', date: `2026-09-${20 + i}T09:00:00Z` })),
+      }),
+    );
+    await map.expand('op:u1');
+    await settle();
+    expect(map.shown.value.has('op:u1')).toBe(true);
+    expect(map.shown.value.has('op:u2')).toBe(true);
+    expect(containersOf(map).find((c) => c.id === 'op:u1')?.collapsed).toBeUndefined();
+    expect(map.partial.value).toBe(true);
+  });
+});
+
+describe('a remembered Show chip never hides the focus or a fan\'s own card', () => {
+  it('hidden: ["tool"] still shows the tool a fan hangs from', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ hidden: ['tool', 'material', 'project'], probable: true }), setItem: () => undefined });
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(3), total: 3 });
+    const { map } = setup({ focus: 'tools:t1' });
+    await settle();
+    expect(map.hiddenKinds.value.has('tool')).toBe(true);
+    expect(map.shown.value.has('f:tools:t1')).toBe(true);
+    expect(map.nodes.value.map((n) => n.id)).toContain('f:tools:t1');
+
+    recordRef.mockResolvedValue({ collection: 'materials', id: 'm1', code: 'Ti64' });
+    usedIn.mockResolvedValue({ items: [mkSample('a')], total: 1 });
+    const mat = setup({ focus: 'materials:m1' });
+    await settle();
+    expect(mat.map.shown.value.has('f:materials:m1')).toBe(true);
+  });
+});

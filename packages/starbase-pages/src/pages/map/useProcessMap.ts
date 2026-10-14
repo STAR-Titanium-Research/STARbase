@@ -391,12 +391,20 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   const nodeById = computed(() => new Map((graph.value?.nodes ?? []).map((n) => [n.id, n])));
 
+  /** The cards a Show chip never hides: the focus, and the record each fan hangs from (a remembered "Tool" chip must not empty a tool's fan). */
+  const pinned = computed(() => {
+    const d = data.value;
+    const out = new Set<string>(focusNodeId.value ? [focusNodeId.value] : []);
+    if (d) for (const f of [d.fan && { root: d.focus }, ...(d.sideFans ?? [])]) if (f) out.add(fanRootId(f.root));
+    return out;
+  });
+
   /** Node ids drawn: the reach, plus what ＋ revealed, minus the hidden Show chips. */
   const shown = computed(() => {
     const ids = new Set([...fitted.value.ids, ...revealed.value]);
     for (const id of ids) {
       const n = nodeById.value.get(id);
-      if (n?.type === 'record' && hiddenKinds.value.has(n.kind)) ids.delete(id);
+      if (n?.type === 'record' && hiddenKinds.value.has(n.kind) && !pinned.value.has(id)) ids.delete(id);
     }
     return ids;
   });
@@ -486,7 +494,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   // ---- ＋ (spec D15, §7 "Expand") ---------------------------------------------------------------
   /** Adds ids to what is drawn, up to the 300-card cap (spec D22): when some do not fit, the banner says so. */
-  function admit(ids: Iterable<string>): void {
+  function admit(ids: Iterable<string>, force: Iterable<string> = []): void {
+    // Cards that were on the map before the expand (the fan items a merged family now holds in full) stay whatever the cap says.
+    const kept = [...force].filter((id) => nodeById.value.has(id) && !shown.value.has(id));
+    if (kept.length) revealed.value = new Set([...revealed.value, ...kept]);
     const add: string[] = [];
     for (const id of ids) {
       const n = nodeById.value.get(id);
@@ -543,8 +554,11 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const next = graphOf(merged);
       const anchor = opts.rowId ? next.nodes.find((n) => n.type === 'container' && n.group.rowIds.includes(opts.rowId!))?.id : opts.node;
       for (const s of family.samples) familyLoaded.add(s.id);
+      // Fan items the family now holds in full (other passes of the same tool on this sample) were cards on the map: they stay.
+      const opened = new Set([...fanRowIds(before)].filter((id) => !fanRowIds(merged).has(id)));
+      const stay = next.nodes.filter((n) => n.type === 'container' && n.group.rowIds.some((id) => opened.has(id))).map((n) => n.id);
       publish(merged, { anchor, from: opts.from });
-      if (anchor) admit(shownNodes(next, anchor, 1));
+      admit(anchor ? shownNodes(next, anchor, 1) : [], anchor ? [anchor, ...stay] : stay);
     }) as Promise<void>;
   }
 
