@@ -42,6 +42,9 @@ export interface TeamMember {
 
 export type TeamLevel = 'view' | 'edit' | 'investigator';
 
+/** The records of a team per access level; `owns` is the records the team OWNS (owner_team_id), whose owner grant is a record with role 'own'. */
+export type TeamCounts = Record<TeamLevel, number> & { owns?: number };
+
 export interface TeamRecord {
 	collection: string;
 	id: string;
@@ -71,7 +74,7 @@ export interface TeamEvent {
 export interface TeamDetail {
 	team: TeamSummary;
 	members: TeamMember[];
-	counts: Record<TeamLevel, number>;
+	counts: TeamCounts;
 	records: TeamRecord[];
 	hidden_count: number;
 	events: TeamEvent[];
@@ -123,7 +126,7 @@ export const getTeam = (api: HostApi, id: string, opts?: { events?: 'all' }): Pr
 		(b) => ({
 			team: b.team,
 			members: asList<TeamMember>(b.members),
-			counts: { view: 0, edit: 0, investigator: 0, ...(b.counts ?? {}) },
+			counts: { view: 0, edit: 0, investigator: 0, owns: 0, ...(b.counts ?? {}) },
 			records: asList<TeamRecord>(b.records),
 			hidden_count: Number(b.hidden_count) || 0,
 			events: asList<TeamEvent>(b.events),

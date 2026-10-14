@@ -122,7 +122,7 @@ export {
 	TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, listPending, listTeams, onTeamChange, removeMember, setManager,
 	updateTeam, uploadTeamLogo,
 } from './teams/teamsApi';
-export type { PendingDecision, PendingItem, TeamDetail, TeamEdit, TeamEvent, TeamLevel, TeamMember, TeamRecord, TeamSummary } from './teams/teamsApi';
+export type { PendingDecision, PendingItem, TeamDetail, TeamEdit, TeamCounts, TeamEvent, TeamLevel, TeamMember, TeamRecord, TeamSummary } from './teams/teamsApi';
 export { default as CampaignWorkbench } from './campaign/CampaignWorkbench.vue';
 export { default as CampaignCard } from './campaign/CampaignCard.vue';
 export { campaignCardStats, loadCampaignStats } from './campaign/campaignCardStats';

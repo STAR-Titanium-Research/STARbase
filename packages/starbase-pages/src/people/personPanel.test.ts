@@ -58,6 +58,7 @@ describe('words', () => {
 		expect(levelLabel('view')).toBe('Can view');
 		expect(levelLabel('edit')).toBe('Can edit');
 		expect(levelLabel('pi')).toBe('Principal investigator');
+		expect(levelLabel('own')).toBe('Owns');
 		expect(levelLabel('weird')).toBe('weird');
 		expect(levelLabel(null)).toBe('');
 		expect(kindLabel('sample')).toBe('Sample');
@@ -97,6 +98,7 @@ describe('sourceNote', () => {
 	it('says where the others are changed', () => {
 		expect(sourceNote(rec('co_owner', 'sample'), true)).toEqual({ remove: false, text: 'co-owner (old entry)' });
 		expect(sourceNote(rec('investigator_junction'), true)).toEqual({ remove: false, text: 'old entry, change on the project' });
+		expect(sourceNote(rec('team_owner', 'sample'), true)).toEqual({ remove: false, text: 'through the team that owns it' });
 		expect(sourceNote(rec('pi'), true)).toEqual({ remove: false, text: 'change on the project' });
 		expect(sourceNote(rec('owner', 'sample'), true)).toEqual({ remove: false, text: 'change on the sample' });
 	});
