@@ -141,3 +141,45 @@ SELECT 'PERFW cascade_change_pi_of_big_project ' || round(extract(epoch FROM clo
 \echo :m
 SELECT 'PERFLOCKS cascade_change_pi_of_big_project ' || count(*) FROM pg_locks WHERE pid = pg_backend_pid();
 ROLLBACK;
+
+-- 7. teams (People 2, migrations 175 and 176; skipped in a "before" run that withholds them). The grant of a team is expanded into one derived
+-- <type>_access row per active member, and each such write recomputes the readers tables of the affected records (statement triggers, one
+-- recompute per statement). Two writers, spec section 6 (each under 500 ms):
+SELECT to_regclass('public.team_members') IS NOT NULL AS has_teams \gset
+\if :has_teams
+-- 7a. a person joins a team that has been given Can edit on 100 records, every grant trusting new members (the worst case: 100 derived rows
+-- and their readers recompute; without trust the joiner only gets 100 pending rows)
+BEGIN;
+INSERT INTO teams (name) VALUES ('Perf join team ' || :rep) RETURNING team_id AS join_team \gset
+INSERT INTO team_members (team_id, person_id, is_manager)
+SELECT :'join_team', person_id, true FROM people ORDER BY (user_id IS NOT NULL) DESC, md5(person_id::text || 'jm') LIMIT 1;
+INSERT INTO sample_team_access (sample_id, team_id, role, trust_new_members)
+SELECT sample_id, :'join_team', 'edit', true FROM physical_samples ORDER BY (project_id = :'big_project') DESC, md5(sample_id::text) LIMIT 100;
+SELECT person_id AS joiner FROM people WHERE person_id NOT IN (SELECT person_id FROM team_members WHERE team_id = :'join_team')
+ ORDER BY (user_id IS NOT NULL) DESC, md5(person_id::text || 'jj') LIMIT 1 \gset
+SELECT clock_timestamp() AS t0 \gset
+INSERT INTO team_members (team_id, person_id) VALUES (:'join_team', :'joiner');
+SELECT 'PERFW team_join_100_records ' || round(extract(epoch FROM clock_timestamp() - :'t0'::timestamptz) * 1000) AS m \gset
+\echo :m
+SELECT 'PERFLOCKS team_join_100_records ' || count(*) FROM pg_locks WHERE pid = pg_backend_pid();
+SELECT 'PERFINFO team_join_100_records ' || (SELECT count(*) FROM sample_access WHERE person_id = :'joiner' AND team_access_id IS NOT NULL) || ' derived rows for the joiner' AS info \gset
+\echo :info
+ROLLBACK;
+
+-- 7b. a team of 20 people is given Can edit on the big sample (the one in several campaigns with many operations): 20 derived rows and the
+-- readers recompute of the sample and everything below it
+BEGIN;
+INSERT INTO teams (name) VALUES ('Perf grant team ' || :rep) RETURNING team_id AS grant_team \gset
+INSERT INTO team_members (team_id, person_id, is_manager)
+SELECT :'grant_team', person_id, row_number() OVER (ORDER BY md5(person_id::text || 'gm')) = 1
+  FROM people ORDER BY (user_id IS NOT NULL) DESC, md5(person_id::text || 'gm') LIMIT 20;
+SELECT clock_timestamp() AS t0 \gset
+INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (:'big_sample', :'grant_team', 'edit');
+SELECT 'PERFW team_grant_20_members ' || round(extract(epoch FROM clock_timestamp() - :'t0'::timestamptz) * 1000) AS m \gset
+\echo :m
+SELECT 'PERFLOCKS team_grant_20_members ' || count(*) FROM pg_locks WHERE pid = pg_backend_pid();
+SELECT 'PERFINFO team_grant_20_members ' || (SELECT count(*) FROM team_members WHERE team_id = :'grant_team') || ' members, '
+       || (SELECT count(*) FROM sample_access WHERE sample_id = :'big_sample' AND team_access_id IS NOT NULL) || ' derived rows' AS info \gset
+\echo :info
+ROLLBACK;
+\endif
