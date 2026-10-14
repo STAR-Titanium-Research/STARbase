@@ -127,6 +127,11 @@ Private schema (not exposed)
                              migration 141 saved and the aliases it added (its down restores and
                              drops them). Not in this dictionary, not exposed by Directus (outside
                              its schema scan), not granted to the LLM role.
+  d1_private.process_drafts, d1_private.process_templates
+                             the process map's edit mode (migration 186, ADR-0018): a person's
+                             unfinished build (DraftBody JSON, private to its owner, deleted when
+                             created) and saved templates for new operations and tests (private,
+                             role or global scope). Reached only through the d1-build endpoint.
 ```
 
 ---

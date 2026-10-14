@@ -989,6 +989,132 @@ pw_check "redown_meta:0,0" "down after up: the Directus fields and relations are
 pw_check "redown_status_check:CHECK ((current_status = ANY (ARRAY['active'::text, 'consumed'::text, 'destroyed'::text, 'archived'::text])))" "down after up: the sample status CHECK is the old four values"
 pw_check "redown_choices:active,consumed,destroyed,archived/active,archived" "down after up: Planned is removed from the Status dropdown and its labels"
 
+echo "== Draft and template store migration (ADR-0018) =="
+# Process map edit mode, slice 2: d1_private.process_drafts and process_templates, reached only through d1-build.
+# Down and up run inside a rolled-back transaction.
+BS=db/migrations/20261014000186_build_store.sql
+bs_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$BS")
+bs_down=$(awk '/-- migrate:down/{f=1;next}f' "$BS")
+bs_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$bs_down
+SELECT 'down_tables:' || count(*) FROM pg_tables WHERE schemaname = 'd1_private' AND tablename IN ('process_drafts', 'process_templates');
+$bs_up
+SELECT 'up_tables:' || string_agg(tablename, ',' ORDER BY tablename) FROM pg_tables
+  WHERE schemaname = 'd1_private' AND tablename IN ('process_drafts', 'process_templates');
+SELECT 'up_public:' || count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('process_drafts', 'process_templates');
+SELECT 'up_drafts_cols:' || string_agg(column_name || '/' || is_nullable || '/' || coalesce(column_default, '-'), ';' ORDER BY ordinal_position)
+  FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'process_drafts';
+SELECT 'up_templates_cols:' || string_agg(column_name || '/' || is_nullable, ';' ORDER BY ordinal_position)
+  FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'process_templates';
+SELECT 'up_comments:' || (SELECT count(*) FROM information_schema.columns c
+    WHERE c.table_schema = 'd1_private' AND c.table_name IN ('process_drafts', 'process_templates')
+      AND col_description((c.table_schema || '.' || c.table_name)::regclass, c.ordinal_position::int) IS NULL)
+  || ',' || (obj_description('d1_private.process_drafts'::regclass) IS NOT NULL)
+  || ',' || (obj_description('d1_private.process_templates'::regclass) IS NOT NULL);
+SELECT 'up_indexes:' || string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes
+  WHERE schemaname = 'd1_private' AND tablename IN ('process_drafts', 'process_templates') AND indexname LIKE 'idx\_%';
+SELECT 'up_llm_drafts:' || has_table_privilege('d1_llm_readonly', 'd1_private.process_drafts', 'SELECT')
+  || ',' || has_table_privilege('d1_llm_readonly', 'd1_private.process_templates', 'SELECT');
+INSERT INTO directus_users (id, email) VALUES ('c0000000-0000-4000-8000-0000000186a1', 'bs-a@example.test'),
+                                              ('c0000000-0000-4000-8000-0000000186a2', 'bs-b@example.test');
+INSERT INTO directus_roles (id, name) VALUES ('c0000000-0000-4000-8000-0000000186b1', 'BS role');
+INSERT INTO d1_private.process_drafts (user_id, name, body)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'first', '{"v":1,"items":[],"wires":[],"positions":{}}');
+INSERT INTO d1_private.process_drafts (draft_id, user_id, name, body)
+VALUES ('c0000000-0000-4000-8000-0000000186d2', 'c0000000-0000-4000-8000-0000000186a1', 'second', '{"v":1}');
+INSERT INTO d1_private.process_drafts (user_id, name, body)
+VALUES ('c0000000-0000-4000-8000-0000000186a2', 'other person', '{"v":1}');
+SELECT 'draft_defaults:' || (SELECT count(*) FROM d1_private.process_drafts WHERE user_id = 'c0000000-0000-4000-8000-0000000186a1' AND version = 1
+  AND draft_id IS NOT NULL AND created_at IS NOT NULL AND updated_at IS NOT NULL);
+SAVEPOINT s1;
+INSERT INTO d1_private.process_drafts (user_id, name, body) VALUES ('c0000000-0000-4000-8000-0000000186a1', '  ', '{}');
+SELECT 'blank_name:accepted';
+ROLLBACK TO SAVEPOINT s1;
+SAVEPOINT s2;
+INSERT INTO d1_private.process_drafts (user_id, name, body) VALUES ('c0000000-0000-4000-8000-0000000186a1', 'array body', '[]');
+SELECT 'array_body:accepted';
+ROLLBACK TO SAVEPOINT s2;
+SAVEPOINT s3;
+INSERT INTO d1_private.process_drafts (user_id, name, body) VALUES ('c0000000-0000-4000-8000-0000000186ff', 'no such user', '{}');
+SELECT 'unknown_user:accepted';
+ROLLBACK TO SAVEPOINT s3;
+-- the endpoint's optimistic update: only the row at the named version changes
+UPDATE d1_private.process_drafts SET name = 'renamed', version = version + 1, updated_at = now()
+  WHERE draft_id = 'c0000000-0000-4000-8000-0000000186d2' AND user_id = 'c0000000-0000-4000-8000-0000000186a1' AND version = 1;
+SELECT 'occ_hit:' || (SELECT version FROM d1_private.process_drafts WHERE draft_id = 'c0000000-0000-4000-8000-0000000186d2');
+UPDATE d1_private.process_drafts SET name = 'stale', version = version + 1
+  WHERE draft_id = 'c0000000-0000-4000-8000-0000000186d2' AND version = 1;
+SELECT 'occ_stale:' || (SELECT name FROM d1_private.process_drafts WHERE draft_id = 'c0000000-0000-4000-8000-0000000186d2');
+INSERT INTO d1_private.process_templates (user_id, scope, name, collection, values)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'private', 'cut template', 'manufacturing_operations', '{"method_id":"m"}');
+INSERT INTO d1_private.process_templates (user_id, scope, role_id, name, collection, values)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'role', 'c0000000-0000-4000-8000-0000000186b1', 'role template', 'test_sessions', '{"test_type":"hardness"}');
+INSERT INTO d1_private.process_templates (user_id, scope, name, collection, values)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'global', 'global template', 'test_sessions', '{}');
+SELECT 'template_defaults:' || (SELECT count(*) FROM d1_private.process_templates WHERE version = 1 AND template_id IS NOT NULL AND created_at IS NOT NULL AND updated_at IS NOT NULL);
+SAVEPOINT s4;
+INSERT INTO d1_private.process_templates (user_id, scope, name, collection, values)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'team', 'bad scope', 'test_sessions', '{}');
+SELECT 'bad_scope:accepted';
+ROLLBACK TO SAVEPOINT s4;
+SAVEPOINT s5;
+INSERT INTO d1_private.process_templates (user_id, scope, name, collection, values)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'role', 'role scope without role', 'test_sessions', '{}');
+SELECT 'role_without_role:accepted';
+ROLLBACK TO SAVEPOINT s5;
+SAVEPOINT s6;
+INSERT INTO d1_private.process_templates (user_id, scope, role_id, name, collection, values)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'private', 'c0000000-0000-4000-8000-0000000186b1', 'private with role', 'test_sessions', '{}');
+SELECT 'private_with_role:accepted';
+ROLLBACK TO SAVEPOINT s6;
+SAVEPOINT s7;
+INSERT INTO d1_private.process_templates (user_id, scope, name, collection, values)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'private', 'samples template', 'physical_samples', '{}');
+SELECT 'sample_template:accepted';
+ROLLBACK TO SAVEPOINT s7;
+SAVEPOINT s8;
+INSERT INTO d1_private.process_templates (user_id, scope, name, collection, values)
+VALUES ('c0000000-0000-4000-8000-0000000186a1', 'private', 'array values', 'test_sessions', '[]');
+SELECT 'array_values:accepted';
+ROLLBACK TO SAVEPOINT s8;
+-- a deleted role takes its role templates; a deleted login takes its drafts and templates
+DELETE FROM directus_roles WHERE id = 'c0000000-0000-4000-8000-0000000186b1';
+SELECT 'role_gone:' || (SELECT count(*) FROM d1_private.process_templates WHERE scope = 'role');
+DELETE FROM directus_users WHERE id = 'c0000000-0000-4000-8000-0000000186a1';
+SELECT 'user_gone:' || (SELECT count(*) FROM d1_private.process_drafts WHERE user_id = 'c0000000-0000-4000-8000-0000000186a1')
+  || ',' || (SELECT count(*) FROM d1_private.process_templates WHERE user_id = 'c0000000-0000-4000-8000-0000000186a1')
+  || ',' || (SELECT count(*) FROM d1_private.process_drafts WHERE user_id = 'c0000000-0000-4000-8000-0000000186a2');
+$bs_down
+SELECT 'redown_tables:' || count(*) FROM pg_tables WHERE schemaname = 'd1_private' AND tablename IN ('process_drafts', 'process_templates');
+ROLLBACK;
+SQL
+)
+bs_check() { grep -qxF "$1" <<<"$bs_out" && ok "$2" || bad "$2 (psql output: $bs_out)"; }
+bs_check "down_tables:0" "down: both tables are dropped"
+bs_check "up_tables:process_drafts,process_templates" "up: process_drafts and process_templates exist in d1_private"
+bs_check "up_public:0" "up: neither table is in public (outside the Directus schema scan)"
+bs_check "up_drafts_cols:draft_id/NO/gen_random_uuid();user_id/NO/-;name/NO/-;body/NO/-;created_at/NO/now();updated_at/NO/now();version/NO/1" "up: drafts columns, NOT NULLs and defaults"
+bs_check "up_templates_cols:template_id/NO;user_id/NO;scope/NO;role_id/YES;name/NO;collection/NO;values/NO;created_at/NO;updated_at/NO;version/NO" "up: templates columns and NOT NULLs"
+bs_check "up_comments:0,true,true" "up: every column of both tables and both tables carry a COMMENT"
+bs_check "up_indexes:idx_process_drafts_user_updated,idx_process_templates_scope_role,idx_process_templates_user_updated" "up: the owner and scope indexes exist"
+bs_check "up_llm_drafts:false,false" "d1_llm_readonly cannot read drafts or templates"
+bs_check "draft_defaults:2" "a draft gets an id, timestamps and version 1"
+! grep -qx "blank_name:accepted" <<<"$bs_out" && ok "a blank draft name is refused" || bad "a blank draft name is refused"
+! grep -qx "array_body:accepted" <<<"$bs_out" && ok "a draft body that is not a JSON object is refused" || bad "a draft body that is not a JSON object is refused"
+! grep -qx "unknown_user:accepted" <<<"$bs_out" && ok "a draft for a login that does not exist is refused" || bad "a draft for a login that does not exist is refused"
+bs_check "occ_hit:2" "the endpoint's versioned update changes the row at the named version"
+bs_check "occ_stale:renamed" "an update naming a stale version changes nothing"
+bs_check "template_defaults:3" "private, role and global templates are accepted with defaults"
+! grep -qx "bad_scope:accepted" <<<"$bs_out" && ok "a template scope other than private, role, global is refused" || bad "a template scope other than private, role, global is refused"
+! grep -qx "role_without_role:accepted" <<<"$bs_out" && ok "a role-scope template without a role is refused" || bad "a role-scope template without a role is refused"
+! grep -qx "private_with_role:accepted" <<<"$bs_out" && ok "a private template with a role is refused" || bad "a private template with a role is refused"
+! grep -qx "sample_template:accepted" <<<"$bs_out" && ok "templates hold operations and tests only" || bad "templates hold operations and tests only"
+! grep -qx "array_values:accepted" <<<"$bs_out" && ok "template values must be a JSON object" || bad "template values must be a JSON object"
+bs_check "role_gone:0" "deleting a role deletes the templates shared with it"
+bs_check "user_gone:0,0,1" "deleting a login deletes its drafts and templates, and only theirs"
+bs_check "redown_tables:0" "down after up drops both tables"
+
 echo "== Sample geometry: legacy forms are back-filled =="
 # Seed old-vocabulary samples, apply the back-fill's up SQL, assert, then ROLLBACK.
 BACKFILL=db/migrations/20260930000115_backfill_legacy_geometry_forms.sql
@@ -3584,6 +3710,8 @@ BEGIN;
 DROP TABLE IF EXISTS d1_private.restore_inline_param_meta_changes;
 DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 DROP TABLE IF EXISTS d1_private.form_values_175_backup;
+DROP TABLE IF EXISTS d1_private.process_templates;
+DROP TABLE IF EXISTS d1_private.process_drafts;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
