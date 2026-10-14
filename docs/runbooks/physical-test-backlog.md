@@ -98,7 +98,8 @@ extensions load (`docker exec d1-database-redis-1 redis-cli FLUSHALL`, then
   Save. It saves (before: "An unexpected error occurred", HTTP 500).
 - [ ] **F3 — Owner shows a name.** Open any sample, operation, test, campaign, tool box, insert, recipe
   and a project. Owner (Principal Investigator on a project) shows the person's name in a dropdown,
-  not a UUID in a text box; changing it as the owner saves. The Directus log has no warning about
+  not a UUID in a text box; changing it as the owner saves. The dropdown has no "create new" (a new
+  login-less owner locked the creator out of the record). The Directus log has no warning about
   `d1-owner-picker` after the leftover `core/extensions/d1-owner-picker` folder (no package.json,
   empty dist) is deleted from the live checkout.
 - [ ] **F4 — Machining sub-type.** Open an operation imported from the experiment sheets (sub-type

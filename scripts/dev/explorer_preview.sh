@@ -109,7 +109,9 @@ admin_id=$(psql_copy -Atc "
   WITH p AS (SELECT id FROM directus_policies WHERE admin_access ORDER BY name LIMIT 1),
   u AS (INSERT INTO directus_users (id, email, status, token, first_name, last_name)
         VALUES (gen_random_uuid(), '$ADMIN_EMAIL', 'active', '$TOKEN', 'Preview', 'Admin') RETURNING id),
-  a AS (INSERT INTO directus_access (id, \"user\", policy) SELECT gen_random_uuid(), u.id, p.id FROM u, p RETURNING id)
+  a AS (INSERT INTO directus_access (id, \"user\", policy) SELECT gen_random_uuid(), u.id, p.id FROM u, p RETURNING id),
+  -- a people row too, so records the admin creates get an owner (d1-owner-default), as a real admin's do
+  pp AS (INSERT INTO people (full_name, user_id, is_researcher, active) SELECT 'Preview Admin', id, true, true FROM u RETURNING person_id)
   SELECT id FROM u") || abort "create preview admin"
 lm_id=$(psql_copy -Atc "
   WITH r AS (SELECT r.id FROM directus_roles r WHERE r.name = 'Lab Member' LIMIT 1),

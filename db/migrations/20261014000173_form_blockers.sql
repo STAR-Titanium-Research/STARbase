@@ -14,6 +14,8 @@
 --    dist/, so Directus falls back to a plain input. They go back to the standard related-item dropdown that
 --    scripts/configure_directus.sql, configure_campaigns.sql and configure_sample_prep.sql already define (the
 --    picker's "same as parent" shortcut goes with it; d1-owner-default still makes the creator the owner).
+--    Creating a person from the dropdown is off: a Lab Member who made a new, login-less person the owner lost
+--    read and edit of the record the moment it was saved (checked on the copy).
 -- 4. The machining Operation Sub-type offered generic words (turning, facing, ...) while every stored value is a
 --    method code + letter (MT-F 159 rows, MT-R 18, MT-O 4, MM-R 1 on live), so existing operations showed a blank
 --    sub-type and a new one got a value the operation-code rule (migration 156) cannot shorten. Migration 143
@@ -27,10 +29,17 @@ ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_campaign_type_check;
 ALTER TABLE campaigns ADD CONSTRAINT campaigns_campaign_type_check
     CHECK (campaign_type IN ('machining_trial', 'testing_campaign', 'imaging_analysis'));
 
+-- By name, not by interface: a database built from the migrations alone (CI) never had d1-owner-picker, and the
+-- configure scripts write these same rows (phase1 checks the two agree).
 UPDATE directus_fields
 SET interface = 'select-dropdown-m2o',
-    options = '{"template":"{{full_name}}","enableCreate":true}'
-WHERE interface = 'd1-owner-picker';
+    options = '{"template":"{{full_name}}","enableCreate":false}'
+WHERE (collection, field) IN (
+    ('campaigns', 'owner_person_id'), ('cutting_inserts', 'owner_person_id'), ('etchants', 'owner_person_id'),
+    ('insert_edges', 'owner_person_id'), ('manufacturing_operations', 'owner_person_id'),
+    ('physical_samples', 'owner_person_id'), ('prep_recipes', 'owner_person_id'),
+    ('projects', 'principal_investigator_person'), ('test_sessions', 'owner_person_id'),
+    ('tool_boxes', 'owner_person_id'));
 
 UPDATE directus_fields
 SET options = '{"choices":[{"text":"Turning – Facing","value":"MT-F"},{"text":"Turning – Roughing","value":"MT-R"},{"text":"Turning – OD","value":"MT-O"},{"text":"Turning – Grooving","value":"MT-G"},{"text":"Turning – Boring","value":"MT-B"},{"text":"Turning – Threading","value":"MT-H"},{"text":"Turning – Parting","value":"MT-P"},{"text":"Turning – Drilling","value":"MT-D"},{"text":"Milling – Facing","value":"MM-F"},{"text":"Milling – Roughing","value":"MM-R"},{"text":"Milling – Slotting","value":"MM-S"},{"text":"Milling – Drilling","value":"MM-D"},{"text":"Other","value":"other"}]}',
