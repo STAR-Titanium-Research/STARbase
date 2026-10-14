@@ -6,6 +6,7 @@ import {
 	AppLink, CampaignProgressBars, CampaignWorkbench, AccessDialog, EditDrawer, HiddenLink, useCampaignData, useCanUpdate, LoadState, NotVisible, PageShell, PinToggle, RecordLayout,
 	RecordLink, RecordRail, Section, StatusBadge, campaignCode, campaignContents, campaignRailFacts, dataStudioRoute, type ContentsEntry,
 	pinTargetForRecord,
+	mapPath,
 } from '@d1/ui';
 import { useCampaignRecord } from './campaign/useCampaignRecord';
 
@@ -67,6 +68,8 @@ const contents = computed<ContentsEntry[]>(() => {
 	});
 });
 
+// The Process map, opened on this record.
+const mapTo = computed(() => mapPath('campaigns', props.id));
 const pin = computed(() => pinTargetForRecord('campaigns', props.id));
 </script>
 
@@ -102,7 +105,9 @@ const pin = computed(() => pinTargetForRecord('campaigns', props.id));
 							<template #kind-icon><v-icon name="folder_special" x-small /></template>
 							<template #status><StatusBadge kind="campaign" :value="campaign.status" /></template>
 							<template #actions>
-								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true" />
+								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
+									<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
+								</RecordActions>
 							</template>
 							<template #after-facts>
 								<CampaignProgressBars rail :overview="data.overview.value" :force-hidden="data.analysisUnavailable.value" :force-failed="!!data.analyses.value.error" />

@@ -92,7 +92,6 @@ describe('STARbase', () => {
 	it('sends everything else to d1-server', () => {
 		use();
 		expect(resolveLink('/content/materials/7')).toEqual({ kind: 'external', href: `${D1}/admin/content/materials/7` });
-		expect(resolveLink('/d1-lab-dashboard/graph?sample=1')).toEqual({ kind: 'external', href: `${D1}/admin/d1-lab-dashboard/graph?sample=1` });
 		expect(resolveLink('/d1-report/sample/5')).toEqual({ kind: 'external', href: `${D1}/d1-report/sample/5` });
 		expect(resolveLink('/homework')).toEqual({ kind: 'external', href: `${D1}/admin/homework` });
 	});

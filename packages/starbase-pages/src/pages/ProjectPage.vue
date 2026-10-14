@@ -6,6 +6,7 @@ import {
 	AppLink, AccessDialog, EditDrawer, useCanUpdate, LIST_CAP, LoadState, NotVisible, PageShell, PinToggle, RecordLayout, RecordRail, Section, Sparkline, dataStudioRoute,
 	projectContents, projectRailFacts, projectStatusLabel, type ContentsEntry,
 	pinTargetForRecord,
+	mapPath,
 } from '@d1/ui';
 import { useProjectData } from './projects/useProjectData';
 import CampaignCards from './projects/CampaignCards.vue';
@@ -54,6 +55,8 @@ const contents = computed<ContentsEntry[]>(() => projectContents({
 	equipment: equipment.value.loading ? null : equipment.value.data.length,
 }));
 
+// The Process map, opened on this record.
+const mapTo = computed(() => mapPath('projects', props.id));
 const pin = computed(() => pinTargetForRecord('projects', props.id));
 </script>
 
@@ -85,7 +88,9 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 								<span v-if="project.export_controlled" class="export">Export controlled</span>
 							</template>
 							<template #actions>
-								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true" />
+								<RecordActions :can-update="canUpdate" :studio-to="studioTo" @edit="editing = true" @access="access = true">
+									<v-button icon small secondary :to="mapTo" title="Process map" aria-label="Process map"><v-icon name="account_tree" small /><span class="sr-only">Process map</span></v-button>
+								</RecordActions>
 							</template>
 							<template #after-facts>
 								<p class="d1-note">Counts of the records you can see in this project.</p>

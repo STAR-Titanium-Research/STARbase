@@ -152,6 +152,8 @@ export type { ThumbKind } from './index/thumbs';
 export { plotKind, plotRequests, mergePlots } from './index/plotData';
 export type { RowPlots } from './index/plotData';
 export { default as IndexPage } from './index/IndexPage.vue';
+export { default as RowMapButton } from './index/RowMapButton.vue';
+export { MAP_ROW_COLLECTIONS, mapPath } from './mapLink';
 
 // Admin Home rules (the crawler online test, the overview shape, the Needs attention rows)
 export { CRAWLER_ONLINE_MS, ago, attentionView, crawlerOnline, isAuthRefusal, normaliseOverview, overviewTime, ownerlessRows, ownerlessTotal } from './adminHome';
