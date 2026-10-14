@@ -245,6 +245,7 @@ function openLink(r: PeopleRow) {
 				</div>
 				<aside v-if="panelId" class="panel-slot">
 					<PersonPanel
+						:key="panelId"
 						:person-id="panelId"
 						:rows="rows"
 						:can-administer-accounts="canAdminister"
