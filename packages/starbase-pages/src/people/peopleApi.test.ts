@@ -36,6 +36,8 @@ describe('loadPeople', () => {
 			['person', 'p1', null], ['login', null, 'u-active'], ['login', null, 'u-invited'], ['login', null, 'u-suspended'],
 		]);
 		expect(data.rows[1]).toMatchObject({ full_name: 'active@lab.example', attention: ['login_without_person'], login: { status: 'active', role_id: 'r1' } });
+		expect(data.rows[2].attention).toEqual(['login_without_person', 'invite_not_accepted']);
+		expect(data.rows[3].attention).toEqual(['login_without_person']);
 	});
 
 	it('a member reads /items/people and gets person rows with no login and no attention', async () => {

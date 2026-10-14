@@ -20,9 +20,10 @@ LANGUAGE sql STABLE SECURITY INVOKER
 SET search_path = pg_catalog, public
 AS $$
     WITH
-    -- a login nobody is linked to
+    -- a usable login (active, invited or suspended: what the People page lists) that nobody is linked to; archived and draft ones are not people the lab acts on
     lw AS (
-        SELECT u.id FROM directus_users u WHERE NOT EXISTS (SELECT 1 FROM people pe WHERE pe.user_id = u.id)
+        SELECT u.id FROM directus_users u
+         WHERE u.status IN ('active', 'invited', 'suspended') AND NOT EXISTS (SELECT 1 FROM people pe WHERE pe.user_id = u.id)
     ),
     -- an invited login that was never accepted, with its person when it has one
     inv AS (
@@ -89,7 +90,7 @@ AS $$
      WHERE cardinality(i.person_ids) > 0 OR cardinality(i.user_ids) > 0
      ORDER BY i.ord
 $$;
-COMMENT ON FUNCTION d1_private.people_attention() IS 'What needs an administrator''s attention on the People page: one row per key, only keys with at least one hit, in a fixed order. login_without_person (user_ids: logins no person is linked to), invite_not_accepted (logins with status invited; person_ids are their people, if any), missing_email (people with no email and no email on the linked login), possible_duplicate (people sharing lower(btrim(full_name)) or lower(email)), former_login_active (people.active = false whose linked login is still active), suspended_owns_records (a suspended login whose person owns a sample, campaign, operation or test, or is the PI of a project). Count an item by user_ids for login_without_person and invite_not_accepted, by person_ids for the others (the person-based keys also fill user_ids with the same people''s logins where they have one). SECURITY INVOKER, read-only; not granted to the Ask-the-database role. Migration 173.';
+COMMENT ON FUNCTION d1_private.people_attention() IS 'What needs an administrator''s attention on the People page: one row per key, only keys with at least one hit, in a fixed order. login_without_person (user_ids: active, invited or suspended logins no person is linked to; archived and draft ones are left out, as on the People page), invite_not_accepted (logins with status invited; person_ids are their people, if any), missing_email (people with no email and no email on the linked login), possible_duplicate (people sharing lower(btrim(full_name)) or lower(email)), former_login_active (people.active = false whose linked login is still active), suspended_owns_records (a suspended login whose person owns a sample, campaign, operation or test, or is the PI of a project). Count an item by user_ids for login_without_person and invite_not_accepted, by person_ids for the others (the person-based keys also fill user_ids with the same people''s logins where they have one). SECURITY INVOKER, read-only; not granted to the Ask-the-database role. Migration 174.';
 
 -- 2. The access list of one person: the single source of the counts below.
 CREATE OR REPLACE FUNCTION d1_private.person_access_list(p uuid, which text)
@@ -155,7 +156,7 @@ BEGIN
     END IF;
 END
 $$;
-COMMENT ON FUNCTION d1_private.person_access_list(uuid, text) IS 'The records behind one count of d1_private.person_access, for the person panel. which = owns: records with owner_person_id = the person in physical_samples, campaigns, manufacturing_operations and test_sessions (level and source owner), and projects they are PI of (level and source pi). which = shared: view / edit rows of the person in the five *_access tables (source access, granted_by the adder''s full_name, added_at the grant date) and the sample_co_owners rows of the person''s login (source co_owner, level edit). which = investigator: project_access rows with role investigator (source access) and project_investigators rows of the person''s login (source investigator_junction). Any other value raises invalid_parameter_value. Ordered by collection, then record_id. SECURITY INVOKER, read-only; not granted to the Ask-the-database role. Migration 173.';
+COMMENT ON FUNCTION d1_private.person_access_list(uuid, text) IS 'The records behind one count of d1_private.person_access, for the person panel. which = owns: records with owner_person_id = the person in physical_samples, campaigns, manufacturing_operations and test_sessions (level and source owner), and projects they are PI of (level and source pi). which = shared: view / edit rows of the person in the five *_access tables (source access, granted_by the adder''s full_name, added_at the grant date) and the sample_co_owners rows of the person''s login (source co_owner, level edit). which = investigator: project_access rows with role investigator (source access) and project_investigators rows of the person''s login (source investigator_junction). Any other value raises invalid_parameter_value. Ordered by collection, then record_id. SECURITY INVOKER, read-only; not granted to the Ask-the-database role. Migration 174.';
 
 -- 3. The three counts.
 CREATE OR REPLACE FUNCTION d1_private.person_access(p uuid)
@@ -167,7 +168,7 @@ AS $$
            (SELECT count(*)::int FROM d1_private.person_access_list(p, 'shared')),
            (SELECT count(*)::int FROM d1_private.person_access_list(p, 'investigator'))
 $$;
-COMMENT ON FUNCTION d1_private.person_access(uuid) IS 'The three counts of the person panel, always one row: owns (records they own in samples, campaigns, operations and tests, plus projects they are PI of), shared (view / edit rows of theirs in the five *_access tables, plus the sample_co_owners rows of their login), investigator (project_access rows with role investigator, plus the project_investigators rows of their login). Counts the rows d1_private.person_access_list returns for the same person. SECURITY INVOKER, read-only; not granted to the Ask-the-database role. Migration 173.';
+COMMENT ON FUNCTION d1_private.person_access(uuid) IS 'The three counts of the person panel, always one row: owns (records they own in samples, campaigns, operations and tests, plus projects they are PI of), shared (view / edit rows of theirs in the five *_access tables, plus the sample_co_owners rows of their login), investigator (project_access rows with role investigator, plus the project_investigators rows of their login). Counts the rows d1_private.person_access_list returns for the same person. SECURITY INVOKER, read-only; not granted to the Ask-the-database role. Migration 174.';
 
 -- No grant to d1_llm_readonly (the Ask-the-database role): it must not ask who owns what, who is suspended or whose invite is open.
 REVOKE ALL ON FUNCTION d1_private.people_attention() FROM PUBLIC;

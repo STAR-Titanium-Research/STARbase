@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The People admin SQL functions (People 1, Task 1, migration 20261014000173): d1_private.people_attention(), person_access() and
+# The People admin SQL functions (People 1, Task 1, migration 20261014000174): d1_private.people_attention(), person_access() and
 # person_access_list(). Each case runs in BEGIN ... ROLLBACK on a COPY of the migrated database (CREATE DATABASE ... TEMPLATE),
 # so nothing is left behind and the migrated database itself is never touched.
 # Usage: DATABASE_URL=postgres://d1:pw@host:5432/d1_test bash tests/people_admin.sh      (run by CI and scripts/dev/schema_test_docker.sh)
@@ -79,6 +79,15 @@ BEGIN
     ASSERT got = ARRAY[u], format('login_without_person lists the new login, got %s', got);
     DELETE FROM directus_users WHERE id = u;
     ASSERT NOT EXISTS (SELECT 1 FROM d1_private.people_attention() WHERE key = 'login_without_person'), 'the key is gone after the delete';
+    -- archived and draft logins are not usable logins: not counted (the People page does not list them either)
+    INSERT INTO directus_users (id, email, status) VALUES (u, 'pa-arch-' || u || '@example.invalid', 'archived');
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.people_attention() WHERE key = 'login_without_person'), 'archived login: not counted';
+    UPDATE directus_users SET status = 'draft' WHERE id = u;
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.people_attention() WHERE key = 'login_without_person'), 'draft login: not counted';
+    UPDATE directus_users SET status = 'suspended' WHERE id = u;
+    SELECT user_ids INTO got FROM d1_private.people_attention() WHERE key = 'login_without_person';
+    ASSERT got = ARRAY[u], 'suspended login without a person: counted';
+    DELETE FROM directus_users WHERE id = u;
     -- only keys with a hit are ever returned, one row per key
     ASSERT NOT EXISTS (SELECT 1 FROM d1_private.people_attention() WHERE cardinality(person_ids) = 0 AND cardinality(user_ids) = 0), 'no empty rows';
     ASSERT (SELECT count(*) = count(DISTINCT key) FROM d1_private.people_attention()), 'one row per key';

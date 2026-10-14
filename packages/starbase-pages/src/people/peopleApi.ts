@@ -106,7 +106,8 @@ function loginRow(l: LoginWithoutPerson): PeopleRow {
 		notes: null,
 		user_id: l.user_id,
 		login,
-		attention: ['login_without_person'],
+		// an invited login with no person is in both counts (the endpoint's invite_not_accepted is by login, login_without_person too)
+		attention: l.status === 'invited' ? ['login_without_person', 'invite_not_accepted'] : ['login_without_person'],
 	};
 }
 
