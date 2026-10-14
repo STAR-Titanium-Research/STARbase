@@ -1316,6 +1316,57 @@ BEGIN
 END $$;
 SQL
 
+run_case_own owner_elevation_for_managers <<'SQL'
+DO $$
+DECLARE t uuid := pg_temp.tf('team'); cm uuid; s uuid; o uuid; ts uuid; pj uuid; pj2 uuid; oo uuid; mth uuid; tag text := left(gen_random_uuid()::text, 8);
+        ua uuid := pg_temp.tf('ua'); ub uuid := pg_temp.tf('ub');
+BEGIN
+    SELECT method_id INTO mth FROM manufacturing_methods ORDER BY method_id LIMIT 1;
+    -- a Restricted campaign owned by the team, with an unrestricted sample, operation and test in it
+    cm := pg_temp.mk('campaign', t, NULL);
+    INSERT INTO physical_samples (sample_code) VALUES ('TF-EL-' || tag) RETURNING sample_id INTO s;
+    INSERT INTO campaign_samples (campaign_id, sample_id) VALUES (cm, s);
+    INSERT INTO manufacturing_operations (method_id, campaign_id, source_system) VALUES (mth, cm, 'tf_test') RETURNING operation_id INTO o;
+    INSERT INTO test_sessions (test_type, campaign_id) VALUES ('hardness', cm) RETURNING session_id INTO ts;
+    ASSERT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = s AND user_id = ua), 'the manager acts as the campaign''s owner: reads its sample';
+    ASSERT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = o AND user_id = ua) AND EXISTS (SELECT 1 FROM test_readers WHERE record_id = ts AND user_id = ua), 'and its operation and test';
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = s AND user_id = ub) AND NOT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = o AND user_id = ub)
+       AND NOT EXISTS (SELECT 1 FROM test_readers WHERE record_id = ts AND user_id = ub), 'a plain member reads none of them';
+    ASSERT d1_private.can_read_sample(s, ua) AND NOT d1_private.can_read_sample(s, ub) AND d1_private.can_read_operation(o, ua) AND NOT d1_private.can_read_operation(o, ub), 'the predicates agree';
+    -- a team-owned operation in an unrestricted project: its manager reads the project
+    INSERT INTO projects (project_code, project_name) VALUES ('TF-EL-' || tag, 'TF elevation project') RETURNING project_id INTO pj;
+    INSERT INTO manufacturing_operations (method_id, project_id, source_system, owner_team_id, restricted) VALUES (mth, pj, 'tf_test', t, true) RETURNING operation_id INTO oo;
+    ASSERT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj AND user_id = ua), 'the manager of a team-owned operation reads its project';
+    ASSERT NOT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj AND user_id = ub), 'a plain member does not';
+    ASSERT d1_private.can_read_project(pj, ua) AND NOT d1_private.can_read_project(pj, ub), 'the project predicate agrees';
+    -- a test, in another project
+    INSERT INTO projects (project_code, project_name) VALUES ('TF-EM-' || tag, 'TF elevation project 2') RETURNING project_id INTO pj2;
+    INSERT INTO test_sessions (test_type, project_id, owner_team_id, restricted) VALUES ('hardness', pj2, t, true);
+    ASSERT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ua) AND NOT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ub), 'a team-owned test: manager yes, member no';
+    -- demoted: the elevations go at once
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = pg_temp.tf('pb');
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = pg_temp.tf('pa');
+    ASSERT NOT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = s AND user_id = ua) AND NOT EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj AND user_id = ua), 'the demoted manager lost them';
+    ASSERT EXISTS (SELECT 1 FROM sample_readers WHERE record_id = s AND user_id = ub) AND EXISTS (SELECT 1 FROM project_readers WHERE record_id = pj2 AND user_id = ub), 'the new manager has them';
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
+run_case_own suspended_manager_of_owning_team_is_flagged <<'SQL'
+DO $$
+DECLARE s uuid := pg_temp.tf('s'); t uuid := pg_temp.tf('team'); got record;
+BEGIN
+    UPDATE directus_users SET status = 'suspended' WHERE id IN (pg_temp.tf('ua'), pg_temp.tf('ub'));
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.people_attention() WHERE key = 'suspended_owns_records' AND pg_temp.tf('pa') = ANY (person_ids)), 'before: A owns nothing';
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    SELECT * INTO got FROM d1_private.people_attention() WHERE key = 'suspended_owns_records';
+    ASSERT pg_temp.tf('pa') = ANY (got.person_ids) AND pg_temp.tf('ua') = ANY (got.user_ids), format('the suspended manager of a team that owns a record is flagged: %s', to_jsonb(got));
+    ASSERT NOT (pg_temp.tf('pb') = ANY (got.person_ids)), 'the suspended plain member is not';
+    UPDATE physical_samples SET owner_team_id = NULL WHERE sample_id = s;
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.people_attention() WHERE key = 'suspended_owns_records' AND pg_temp.tf('pa') = ANY (person_ids)), 'cleared: not flagged';
+END $$;
+SQL
+
 # --- two sessions: a team grant added while a member joins. Each side's trigger reads what the other writes (the grant reads the members,
 # the joiner the grants); without a common lock each misses the other's uncommitted row and the joiner ends with neither a derived nor a
 # pending row (team_drift: missing). Session 1 holds its transaction open for 3 s, session 2 starts 1 s later. Both orders.

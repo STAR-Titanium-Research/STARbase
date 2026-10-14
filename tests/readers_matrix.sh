@@ -1282,6 +1282,46 @@ BEGIN
     PERFORM m.done();
 END $$;
 
+-- the owner's elevated paths (a campaign's owner reads its samples, operations and tests; the owner of a campaign, operation or test reads its
+-- project) belong to a team's managers too (the manage row), not to its plain members (edit)
+CREATE OR REPLACE FUNCTION m.c_team_own_owner_paths() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE pc uuid; po uuid; pt uuid; pk uuid; cm uuid; cm2 uuid; s uuid; o uuid; ts uuid; oo uuid; to2 uuid; t uuid;
+BEGIN
+    pc := m.mk_project('top_pc', 'e'); po := m.mk_project('top_po', 'e'); pt := m.mk_project('top_pt', 'e'); pk := m.mk_project('top_pk', 'e');
+    cm := m.mk_campaign('top_c', NULL, 'f', true); s := m.mk_sample('top_s', NULL, 'f', false); PERFORM m.mk_cs(cm, s);
+    o := m.mk_op('top_o', NULL, NULL, cm, 'f', false); ts := m.mk_test('top_t', NULL, NULL, cm, 'f', false);
+    cm2 := m.mk_campaign('top_c2', pc, 'f', false); oo := m.mk_op('top_oo', NULL, po, NULL, 'f', false); to2 := m.mk_test('top_tt', NULL, pt, NULL, 'f', false);
+    t := m.mk_team('top_team', 'b', ARRAY['c']);
+    PERFORM m.drift('setup');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('operation', o, m.u('b')) AND NOT m.rd('project', pc, m.u('b')), 'before: the team reads nothing');
+    -- the Restricted campaign, and an operation and a test in it, become team-owned
+    UPDATE campaigns SET owner_person_id = NULL, owner_team_id = t WHERE campaign_id IN (cm, cm2);
+    UPDATE manufacturing_operations SET owner_person_id = NULL, owner_team_id = t WHERE operation_id = oo;
+    UPDATE test_sessions SET owner_person_id = NULL, owner_team_id = t WHERE session_id = to2;
+    PERFORM m.drift('campaigns, operation and test become team-owned');
+    PERFORM m.expect(m.rd('campaign', cm, m.u('b')) AND m.rd('campaign', cm, m.u('c')), 'both members read the Restricted campaign (its list)');
+    PERFORM m.expect(m.rd('sample', s, m.u('b')) AND m.rd('operation', o, m.u('b')) AND m.rd('test', ts, m.u('b')), 'the manager acts as the campaign''s owner: reads its sample, operation and test');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('c')) AND NOT m.rd('operation', o, m.u('c')) AND NOT m.rd('test', ts, m.u('c')), 'the plain member does not');
+    PERFORM m.expect(m.rd('project', pc, m.u('b')) AND m.rd('project', po, m.u('b')) AND m.rd('project', pt, m.u('b')), 'the manager reads the projects of a team-owned campaign, operation and test');
+    PERFORM m.expect(NOT m.rd('project', pc, m.u('c')) AND NOT m.rd('project', po, m.u('c')) AND NOT m.rd('project', pt, m.u('c')), 'the plain member reads none of them');
+    PERFORM m.oracle_agree('sample', s); PERFORM m.oracle_agree('operation', o); PERFORM m.oracle_agree('test', ts); PERFORM m.oracle_agree('campaign', cm);
+    PERFORM m.oracle_agree('project', pc); PERFORM m.oracle_agree('project', po); PERFORM m.oracle_agree('project', pt);
+    -- the flag moves: c becomes the manager, b a plain member: the elevations move with it (the role change reaches the readers)
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = m.pe('c');
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = m.pe('b');
+    PERFORM m.drift('the manager flag swapped');
+    PERFORM m.expect(m.rd('sample', s, m.u('c')) AND m.rd('operation', o, m.u('c')) AND m.rd('project', po, m.u('c')) AND m.rd('project', pc, m.u('c')), 'c, now the manager, has the elevations');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('operation', o, m.u('b')) AND NOT m.rd('project', po, m.u('b')) AND NOT m.rd('project', pt, m.u('b')), 'b, demoted, lost them at once');
+    PERFORM m.oracle_agree('sample', s); PERFORM m.oracle_agree('operation', o); PERFORM m.oracle_agree('project', po); PERFORM m.oracle_agree('project', pc);
+    -- the reverse: the owners cleared
+    UPDATE campaigns SET owner_team_id = NULL WHERE campaign_id IN (cm, cm2);
+    UPDATE manufacturing_operations SET owner_team_id = NULL WHERE operation_id = oo;
+    UPDATE test_sessions SET owner_team_id = NULL WHERE session_id = to2;
+    PERFORM m.drift('the owners cleared');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('c')) AND NOT m.rd('project', po, m.u('c')) AND NOT m.rd('project', pt, m.u('c')) AND NOT m.rd('campaign', cm, m.u('c')), 'the reverse: the team lost it all');
+    PERFORM m.done();
+END $$;
+
 CREATE OR REPLACE FUNCTION m.c_team_own_clear() RETURNS void LANGUAGE plpgsql AS $$
 DECLARE p uuid; s uuid; t uuid; o uuid;
 BEGIN
