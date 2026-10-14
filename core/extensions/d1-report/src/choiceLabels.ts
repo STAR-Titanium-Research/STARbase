@@ -67,7 +67,7 @@ export const EQUIPMENT_TYPE_CHOICES: Choice[] = [
 	{ value: 'Powder_Mixer', text: 'Powder mixer' },
 	{ value: 'Sample_Prep', text: 'Sample prep' },
 	{ value: 'SEM', text: 'SEM' },
-	{ value: 'SEM_FIB', text: 'SEM-FIB' },
+	{ value: 'SEM_FIB', text: 'SEM / FIB' },
 	{ value: 'Spheroidiser', text: 'Spheroidiser' },
 	{ value: 'TEM', text: 'TEM' },
 	{ value: 'Thermomechanical_Sim', text: 'Thermomechanical simulator' },
