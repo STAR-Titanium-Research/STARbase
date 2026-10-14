@@ -430,8 +430,12 @@ async function loadOperations(api: HostApi, ids: string[], extras: Extra[]): Pro
   return [...byId.values()];
 }
 
-/** `refused`: the person may not read tests at all, so none are listed and the map marks "some records hidden". */
-async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<{ tests: TestRow[]; refused: boolean }> {
+/**
+ * `refused`: the person may not read tests at all, so none are listed. `partial`: the subject junction could not be read, so
+ * only tests whose primary sample is in the family are listed (a test on several samples, with another primary, is missing).
+ * Either way the map marks "some records hidden".
+ */
+async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<{ tests: TestRow[]; refused: boolean; partial: boolean }> {
   const buildJunction = (chunk: string[]) => ({
     filter: JSON.stringify({
       [SUBJECT_ALIAS]: { _some: { _and: [{ collection: { _eq: 'physical_samples' } }, { item: { _in: chunk } }] } },
@@ -448,6 +452,7 @@ async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<
   });
 
   let refused = false;
+  let partial = false;
   const pages = await Promise.all(
     chunkByBudget(ids, (chunk) => ({ ...buildJunction(chunk), fields: [...TEST_FIELDS, ...SUBJECT_FIELDS, ...extraFields(extras)] })).map(async (chunk) => {
       try {
@@ -456,6 +461,7 @@ async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<
         // A role that may not read the junction cannot filter on it: fall back to the primary sample.
         if (!isNotVisible(e)) throw e;
       }
+      partial = true;
       try {
         return await readList(api, 'test_sessions', buildPrimary(chunk), extras);
       } catch (e) {
@@ -467,7 +473,7 @@ async function loadTests(api: HostApi, ids: string[], extras: Extra[]): Promise<
   );
   const byId = new Map<string, TestRow>();
   for (const page of pages) for (const row of page.rows) byId.set(String(row.session_id), mapTest(row, extras));
-  return { tests: [...byId.values()], refused };
+  return { tests: [...byId.values()], refused, partial };
 }
 
 /** `refused`: the person may not read genealogy; the caller marks "some records hidden". */
@@ -579,7 +585,7 @@ export async function loadFamily(api: HostApi, sampleId: string, defs?: FormDefs
       // A refused tests / genealogy read leaves a gap the person cannot see: mark it, do not fail the map.
       ancestors: !!trace.hidden?.ancestors || lineageRead.refused,
       descendants: !!trace.hidden?.descendants,
-      events: !!trace.hidden?.events || testRead.refused,
+      events: !!trace.hidden?.events || testRead.refused || testRead.partial,
     },
     truncated: Object.values(trace.truncated ?? {}).some(Boolean),
     ...(pieces ? { pieces } : {}),

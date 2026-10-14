@@ -393,6 +393,20 @@ describe('loadFamily', () => {
     expect(retry.params.fields).not.toContain('subject.item');
   });
 
+  it('the primary-subject fallback leaves out tests whose subject is another sample: events are marked hidden (L1)', async () => {
+    const answerWith = (junctionRefused: boolean): Handler => (path, params) => {
+      if (path.startsWith('/d1-trace/')) return trace();
+      if (path === '/items/test_sessions') {
+        if (junctionRefused && String(params.filter).includes('subject')) return httpError(403);
+        return { data: [{ session_id: 't1', sample_id: 'root', test_category: 'nde' }] };
+      }
+      return { data: [] };
+    };
+    expect((await loadFamily(fakeApi(answerWith(true)).api, 'root')).hidden.events).toBe(true);
+    // the junction read in full is complete: nothing hidden
+    expect((await loadFamily(fakeApi(answerWith(false)).api, 'root')).hidden.events).toBe(false);
+  });
+
   it('merges one operation seen in two chunks once', async () => {
     const t = trace({ descendants: Array.from({ length: 200 }, (_, i) => relative(`d${i}`)) });
     const { api } = fakeApi((path) => {
