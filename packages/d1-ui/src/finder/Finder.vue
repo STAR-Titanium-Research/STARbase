@@ -31,8 +31,9 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'scan'): void }>();
 const host = useExplorerHost();
 const { nav, visible } = useExplorerNav(host);
 const { query, hits, loading, searchable, scan, scanning, readScanNow } = useFinder(host, nav, visible, {
-	onOpen: (to) => {
-		host.navigate(to);
+	// A label scan that found its sample: the host's pickRecord takes the record, else it navigates.
+	onOpen: (to, record) => {
+		openHit({ to, record }, (t) => host.navigate(t), props.pickRecord);
 		emit('close');
 	},
 	// The scanned text stays in the box: select it, so the next scan replaces it.
@@ -65,8 +66,8 @@ onBeforeUnmount(() => {
 	if (opener?.isConnected) opener.focus();
 });
 
-function openTo(to: string) {
-	host.navigate(to);
+function openTo(to: string, record?: { collection: string; id: string }) {
+	openHit({ to, record }, (t) => host.navigate(t), props.pickRecord);
 	emit('close');
 }
 

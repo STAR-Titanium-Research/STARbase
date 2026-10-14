@@ -23,7 +23,7 @@ export type FinderScan = { status: 'reading' } | { status: 'resolving' } | { sta
 
 export interface FinderOptions {
 	// A scanned label's sample was found: the route to open.
-	onOpen?: (to: string) => void;
+	onOpen?: (to: string, record?: { collection: string; id: string }) => void;
 	// A scan ended without opening a sample (not found, a card to confirm, not a label). The box still
 	// holds the scanned text; the host selects it so the next scan replaces it instead of being added to it.
 	onSettled?: () => void;
@@ -67,7 +67,7 @@ export function useFinder(host: ExplorerHost, nav: Ref<VisibleNav>, visible: Ref
 		const outcome = await resolveLabel(host.api, query.value);
 		if (!gate.isCurrent(token)) return; // edited meanwhile, or closed
 		scan.value = { status: 'done', outcome };
-		if (outcome.kind === 'open') options.onOpen?.(outcome.to);
+		if (outcome.kind === 'open') options.onOpen?.(outcome.to, outcome.record);
 		else options.onSettled?.();
 	}
 

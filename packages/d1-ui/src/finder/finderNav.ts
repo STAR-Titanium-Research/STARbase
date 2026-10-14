@@ -84,7 +84,7 @@ export function shouldOpenFinder(
 // What opening a hit does. A host that passed `pickRecord` (the Process map loads the record itself)
 // gets the record of a record hit; everything else, and every host without it, navigates to the hit.
 export function openHit(
-	hit: FinderHit,
+	hit: Pick<FinderHit, 'to' | 'record'>,
 	navigate: (to: string) => void,
 	pickRecord?: (record: { collection: string; id: string }) => void,
 ): void {
