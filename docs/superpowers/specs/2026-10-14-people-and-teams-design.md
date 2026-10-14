@@ -395,7 +395,19 @@ runbook section added in PR 2 (as A1a's cutover: backup, apply, `rights_rebuild(
   member with a login, also those who could already read the record; `team_pending_actionable` is one function call per pending row, so a
   record with a very large backlog is slow to list.
 - **(plan 2) Not covered by the E2E.** The mails (the preview has no transport; the endpoints' unit tests use a fake one), the Home `MyTeams`
-  panel and the Team filter (PR 4) and team ownership (PR 3).
+  panel and the Team filter (PR 4); team ownership (PR 3) has its own spec, 19.
+
+- **(plan 3) A direct owner change is an owner's transfer by another door (Ruling O3a).** An owner, or a manager of the owning team, can
+  PATCH `owner_team_id` through Directus: no previous-owner Can edit row, no manager mail. Only non-owner paths are closed (E26).
+- **(plan 3) Leaving a team-owned record costs access (Ruling O5).** Team to person or team to team does not keep the outgoing managers
+  as Can edit, unlike person to person; the dialog warns, and the new owner must add them back (E28).
+- **(plan 3) A team whose only managers are inactive can still receive a transfer (the parked O4 case).** Such a record is
+  administrator-managed until a manager is reactivated (E27).
+- **(plan 3) Some views still assume a person owner.** Label owner initials, the `d1-report` owner row, the ForceDashboard "related to me"
+  filter and Home's force-error tile do not see team-owned records yet: a follow-up (E30). The Delete confirmation on a team's page does
+  not warn that it refuses while the team owns records (the refusal message follows).
+- **(plan 3) `GET /d1-teams/:id` lists the owner grant** among a team's records with role `own` and counts it in `hidden_count`; the page
+  labels it "Owns" (E24).
 
 ## 9. Errata (plan 1)
 
@@ -530,3 +542,78 @@ they disagree; each ruling was made while building, with the maintainer's standi
   `<type>_team_pending` tables (BEFORE INSERT/UPDATE/DELETE; refused unless `d1.team_sync = 'on'`, a DELETE at trigger depth > 1 or an
   UPDATE at depth > 1 that changes only `decided_by_person_id`), a guard like E11's, not a security boundary. (6) An open members card
   (`TeamCard`) owns Esc: it marks its popover `data-open-menu` and swallows the key, so an enclosing person panel does not also close.
+
+## 11. Errata (plan 3)
+
+Where building PR 3 (Team ownership, `docs/superpowers/plans/2026-10-14-people-3-team-ownership.md`) differs from, or settles, the text above.
+These win over §1 to §7 where they disagree; each ruling was made while building, with the maintainer's standing instruction to continue.
+Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the `manage` level, the bookkeeping and the readers) and **178**
+(`team_ownership_rules`: the regenerated Lab Member rows); they ship together (E25).
+
+- **E23 Ruling O1: the `manage` access level, and managers are the owner wherever the owner is tested (decision 13, §2, §3.2, §3.3).** An
+  owner grant (`<type>_team_access.role = 'own'`, trust on, hidden from Who has access) is expanded by the bookkeeping like any grant, with
+  the derived role chosen by the manager flag: a member gets `edit`, a **manager gets `manage`** (`d1_private.team_derived_role`;
+  promoting or demoting a manager rewrites the derived rows at once). `manage` exists only on the four ownable types' `<type>_access`
+  (not `project_access`: a team is never a PI) and a CHECK lets only the bookkeeping write it (`manage` requires `team_access_id`). Wherever
+  SQL or `scripts/access_rules.json` treats `edit` as an editor, `manage` counts too; **wherever the owner is tested, a `manage` row counts
+  as the owner**: the Lab Member delete and manage filters, the owner guards (`owner_person_id`, `owner_team_id`, `restricted`), and the
+  approval test (`team_pending_actionable`). Review of migration 177 extended this to the owner-elevation paths of the readers (a campaign
+  owner reading its samples, an owner reading its project, a campaign owner reading its operations), the matrix oracle and
+  `suspended_owns_records`, so a team's managers read what a person owner reads; and the **orphan amnesty** (an unrestricted operation with
+  no owner, project or campaign is open to every member) now needs no team owner either, so a team-owned orphan operation is not open to
+  all (spec 19 proves it). Cost of the choice: managers read slightly more than plain members, as person owners do.
+- **E24 Ruling O2: the owner grant is not a team entry.** `GET /d1-record-access/:collection/:id` `teams` and `entries` never list the
+  `own` grant or its derived rows; the owner row shows the team ("Additive (managers)", with the managers' names). The per-team routes
+  act on shared teams only: PATCH, DELETE and the add on the owning team answer 409 `TEAM_OWNS_RECORD`, members and decide answer 404 as
+  if it were not listed. `GET /d1-teams/:id` still lists the owner grant among a team's records with role `own` (the page labels it
+  "Owns", and `counts.owns` is counted from the record tables), and `hidden_count` counts them.
+- **E25 Migrations 177 and 178 deploy together, with their extensions.** 177 alone would let an editor write `owner_team_id` through the
+  API and make their own team the owner (the Directus `readonly` flag only affects forms; the owner guards that refuse it are 178's rules and
+  `d1-access-guard`'s generated `rules.json`). Deploy `d1-access-guard`, `d1-owner-default`, `d1-record-access`, `d1-teams` and
+  `d1-admin-overview` (its ownerless counts need the column) in the same release (runbook "Team ownership (PR 3)"). 178's down restores
+  the previous Lab Member rows from `d1_private.team_ownership_rules_backup`; 177's down refuses (0A000) while any record has an
+  `owner_team_id`. `configure_directus.sql` and `configure_campaigns.sql` register the `owner_team_id` to `teams` relation (they delete
+  all relations of the record tables, so `configure_all.sh` would otherwise drop the one 177 made).
+- **E26 Ruling O3: a record becomes team-owned only through Transfer (Q15).** `d1-access-guard` refuses a non-blank `owner_team_id` on
+  `items.create` of a sample, operation, test or campaign for a non-admin (403 FORBIDDEN, "A record becomes team-owned through Transfer
+  ownership"; also nested and batch creates); `d1-owner-default` never gives a record created with `owner_team_id` a person owner (an
+  administrator or an import may create one: the CHECK allows only one owner). **Ruling O3a:** an owner, or a manager of the owning team,
+  who PATCHes `owner_team_id` directly (the owner guard passes) is an owner's transfer by another door: accepted. Only paths that are not
+  the owner's are closed; that path writes no "previous owner stays as Can edit" row and sends no manager mail.
+- **E27 Ruling O4: no transfer to a team with no manager.** `POST …/transfer {team_id}` answers 409 `TEAM_HAS_NO_MANAGER` ("That team
+  has no manager to look after the record — add a manager first") and writes nothing, since the record would be manageable by an
+  administrator only. An empty team exists (an administrator can make one through `/items/teams`; a team made through STARbase has its
+  creator as manager). **Parked:** O4 counts any `is_manager` row, also an inactive or loginless manager, so a team whose only
+  managers are inactive can still be transferred to; such a record is administrator-managed until a manager is reactivated. The check is
+  the literal rule on purpose.
+- **E28 Ruling O5: leaving a team-owned record does not keep the outgoing managers.** Transfer person to person keeps the previous owner as
+  Can edit; **team to person and team to team do not keep the previous team or its managers** (the database drops the owner grant).
+  The acting manager therefore loses access unless they are in the new team or are the new owner. Who has access warns before Confirm ("You
+  and the other managers of <team> will lose access unless you are added back.") and the record page, which re-reads after a transfer,
+  then says "Not found or not visible to you" to a manager who gave it away (spec 19). A person to team transfer keeps the previous
+  person owner as Can edit. Transfer back to a person clears `owner_team_id` and the owner grant in one UPDATE.
+- **E29 Team delete and the managers' queue.** `DELETE /d1-teams/:id` maps the restrict foreign key to 409 `TEAM_OWNS_RECORDS` with
+  `extensions.counts` per collection and the message "Beta owns 2 samples and 1 campaign. Transfer ownership of them to a person or
+  another team before deleting the team."; nothing is deleted, mailed or cache-cleared (the team page shows the message after the
+  confirm, by design, since a stale local count must not skip the refusal). `POST /:id/members` answers `owned_edit` (records the team
+  owns). For a team-owned record "the owner" means the managers of the owning team: Waiting for you (`/pending`, `/pending/decide`,
+  including the 403 for a plain member), the joiner-waiting mail and the team-deleted mail go to them (one mail per owner, the caller
+  excluded), and the `ownerless` counts, "no owner" flags and the My work filters treat a team owner as an owner (`owner_person_id IS NULL
+  AND owner_team_id IS NULL`; samples and campaigns of the teams I belong to are in My work).
+- **E30 Follow-up (not in PR 3): readers that still assume a person owner.** These stay person-owner-only in this PR, so team members do
+  not see team-owned records there until the follow-up: the **owner initials on printed labels** (`labels/sample.ts`, `labels/page.ts`:
+  a team-owned sample prints none), the **`d1-report` owner row**, the **ForceDashboard "related to me" operations filter** and Home's
+  force-error tile (`forceErrorOnMyOperations` = `ownedByMe AND …`). Also open: the samples fallback filter on Home now carries the team
+  clause (a role that cannot filter on `owner_team_id` gets an error instead of the owner-only fallback; Lab Member can).
+- **E31 Preview and tests.** `scripts/dev/explorer_preview.sh` needs `d1-owner-default d1-access-guard` in the overlay for spec 19 (the
+  README's overlay line has them; the preview applies 177 and 178). `tests/ui/specs/19-team-ownership.spec.ts` is the E2E on real Directus
+  and Postgres, with its own logins, people, teams, samples and operations (removed in `finally`): a person-to-team transfer in the
+  browser (owner row, hidden owner grant, previous owner kept as Can edit), a manager and a plain member of the same team on the same
+  record (**the person and the role conditions of the delete and manage rules bind to the same access row**: the member's `edit` row does
+  not make them a manager although the manager's `manage` row exists; delete, share, transfer and both owner fields are refused, the
+  controls are absent and the sentence "Only <team>'s managers can change who has access." shows), the rail showing the team, promoting
+  and then demoting a manager (sharing allowed, then refused at once with no delay), the manager deleting the record, Ruling O3 (403
+  on create), Ruling O4 (409 in the API and the message in the dialog), the team delete refusal with counts, transfer back to a person
+  (owner grant and derived rows gone, members lose access, the team then deletes), and the team-owned orphan operation (read by a member,
+  refused to a stranger, while an ownerless one is open). **Not covered:** the mails (no transport in the preview), the My work and
+  team-filter views of team-owned records in a browser (the pure-function tests cover them) and the E30 readers.
