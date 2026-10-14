@@ -658,7 +658,7 @@ INSERT INTO directus_fields (collection, field, special, interface, options, dis
 -- ── test_sessions ─────────────────────────────────────────────────────────────
 INSERT INTO directus_fields (collection, field, special, interface, options, display, display_options, readonly, hidden, sort, width, required, translations) VALUES
 ('test_sessions','session_id',           'uuid','input',NULL,'raw',NULL,true,true,1,'full',false,NULL),
-('test_sessions','sample_id',            'm2o','select-dropdown-m2o','{"template":"{{sample_code}} – {{nickname}}"}','related-values','{"template":"{{sample_code}}"}',false,false,2,'half',true,'[{"language":"en-US","translation":"Sample / Workpiece"}]'),
+('test_sessions','sample_id',            'm2o','select-dropdown-m2o','{"template":"{{sample_code}} – {{nickname}}"}','related-values','{"template":"{{sample_code}}"}',false,false,2,'half',false,'[{"language":"en-US","translation":"Sample / Workpiece"}]'),
 ('test_sessions','campaign_id',          'm2o','select-dropdown-m2o','{"template":"{{name}}"}','related-values','{"template":"{{name}}"}',false,false,10,'half',false,'[{"language":"en-US","translation":"Campaign"}]'),
 ('test_sessions','equipment_id',         'm2o','d1-machine-picker','{"categoryField":"test_category"}','related-values','{"template":"{{equipment_name}}"}',false,false,3,'half',false,'[{"language":"en-US","translation":"Machine"}]'),
 ('test_sessions','insert_edge_id',       'm2o','select-dropdown-m2o','{"template":"{{edge_code}}"}','related-values','{"template":"{{edge_code}}"}',false,false,4,'half',false,'[{"language":"en-US","translation":"Insert Edge Used"}]'),

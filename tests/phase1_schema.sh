@@ -251,6 +251,67 @@ rim_check "down_other_relations:3" "down: leaves relations it did not add"
 rim_check "down_owner_picker:1,d1-owner-picker" "down: the owner picker is still untouched"
 rim_check "down_ledger:dropped" "down: drops its bookkeeping table"
 
+echo "== Directus forms can be saved (form QA, migration 173) =="
+# Regression guards from driving the create forms on a copy of live (2026-10-14). A field naming an
+# interface that is not installed renders as a raw text box (the Owner fields showed person UUIDs);
+# a hidden required field blocks every save of its form (test sessions); a dropdown choice outside its
+# CHECK constraint fails with HTTP 500 (Imaging / Analysis campaigns).
+missing_ext=""
+for ext in $($PSQL -c "SELECT DISTINCT x FROM (SELECT interface AS x FROM directus_fields UNION SELECT display FROM directus_fields) AS u WHERE x LIKE 'd1-%'" 2>/dev/null); do
+    [[ -f "core/extensions/$ext/package.json" ]] || missing_ext="$missing_ext $ext"
+done
+[[ -z "$missing_ext" ]] && ok "every d1-* interface and display named in directus_fields is an extension in core/extensions" \
+    || bad "directus_fields names extensions that are not in core/extensions:$missing_ext"
+run_eq "no field is hidden, unconditional and required (the form could never be saved)" \
+    "SELECT count(*) FROM directus_fields WHERE hidden AND required AND conditions IS NULL" \
+    "0"
+run_eq "every dropdown choice passes the column's CHECK constraint" \
+    "SELECT count(*) FROM directus_fields AS f
+     CROSS JOIN LATERAL json_array_elements(f.options -> 'choices') AS ch
+     JOIN pg_class AS t ON t.relname = f.collection AND t.relnamespace = 'public'::regnamespace
+     JOIN pg_attribute AS a ON a.attrelid = t.oid AND a.attname = f.field
+     JOIN pg_constraint AS con ON con.conrelid = t.oid AND con.contype = 'c' AND con.conkey = ARRAY[a.attnum]
+     WHERE f.interface IN ('select-dropdown', 'select-radio')
+       AND pg_get_constraintdef(con.oid) ~ 'ANY \(ARRAY\['
+       AND ch ->> 'value' NOT IN (SELECT m[1] FROM regexp_matches(pg_get_constraintdef(con.oid), '''([^'']*)''', 'g') AS m)" \
+    "0"
+MIG=db/migrations/20261014000173_form_blockers.sql
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
+fb_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+-- this database already ran 173: undo it, seed the pre-173 metadata, then run up and down again
+$mig_down
+DELETE FROM directus_fields WHERE (collection, field) IN (('test_sessions','sample_id'),
+  ('physical_samples','owner_person_id'), ('projects','principal_investigator_person'),
+  ('manufacturing_operations','machining_operation_subtype'));
+INSERT INTO directus_fields (collection, field, interface, options, hidden, required) VALUES
+  ('test_sessions','sample_id','select-dropdown-m2o',NULL,true,true),
+  ('physical_samples','owner_person_id','d1-owner-picker','{}',false,false),
+  ('projects','principal_investigator_person','d1-owner-picker','{}',false,false),
+  ('manufacturing_operations','machining_operation_subtype','select-dropdown','{"choices":[{"text":"Turning","value":"turning"}]}',false,false);
+$mig_up
+SELECT 'up_required:' || required FROM directus_fields WHERE collection='test_sessions' AND field='sample_id';
+SELECT 'up_pickers:' || count(*) FROM directus_fields WHERE interface='select-dropdown-m2o' AND (collection, field) IN (('physical_samples','owner_person_id'),('projects','principal_investigator_person'));
+SELECT 'up_subtype:' || (options::text LIKE '%"MT-F"%') FROM directus_fields WHERE field='machining_operation_subtype';
+INSERT INTO campaigns (name, campaign_type) VALUES ('TEST-FB-173', 'imaging_analysis');
+SELECT 'up_imaging:' || count(*) FROM campaigns WHERE name='TEST-FB-173';
+$mig_down
+SELECT 'down_required:' || required FROM directus_fields WHERE collection='test_sessions' AND field='sample_id';
+SELECT 'down_pickers:' || count(*) FROM directus_fields WHERE interface='d1-owner-picker' AND (collection, field) IN (('physical_samples','owner_person_id'),('projects','principal_investigator_person'));
+SELECT 'down_campaign:' || campaign_type FROM campaigns WHERE name='TEST-FB-173';
+ROLLBACK;
+SQL
+)
+fb_check() { grep -qx "$1" <<<"$fb_out" && ok "$2" || bad "$2 (psql output: $fb_out)"; }
+fb_check "up_required:false" "173 up: test_sessions.sample_id is no longer required"
+fb_check "up_pickers:2" "173 up: owner fields use the related-item dropdown"
+fb_check "up_subtype:true" "173 up: machining sub-type offers the stored MT-/MM- codes"
+fb_check "up_imaging:1" "173 up: an imaging_analysis campaign can be saved"
+fb_check "down_required:true" "173 down: sample_id required again"
+fb_check "down_pickers:2" "173 down: owner fields back on d1-owner-picker"
+fb_check "down_campaign:testing_campaign" "173 down: imaging campaigns are mapped to testing_campaign"
+
 echo "== Sample geometry: round bar form migration =="
 # CI has no Directus bootstrap rows (directus_fields is an empty stub), so seed the pre-migration
 # state, apply the migration's up then down SQL, and assert both — all in a rolled-back transaction.
@@ -757,7 +818,7 @@ run "manufacturing_operations.campaign_id column exists" \
 run "test_sessions.campaign_id column exists" \
     "SELECT column_name FROM information_schema.columns
      WHERE table_name='test_sessions' AND column_name='campaign_id'"
-run_eq "campaign_type CHECK restricts to the two kinds" \
+run_eq "campaign_type CHECK restricts to the known kinds" \
     "SELECT count(*) FROM information_schema.check_constraints
      WHERE constraint_name LIKE '%campaign_type%'
        AND check_clause LIKE '%machining_trial%'
