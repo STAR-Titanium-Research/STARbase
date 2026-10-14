@@ -3,10 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-// the real query builder (a dependency of Directus), only to compile the upsert and see the SQL Postgres would get
-const { default: knexLib } = await import('knex');
-const realKnex = knexLib({ client: 'pg' });
-
 import ext, { COLLECTIONS, mailContent, recipientAddress, recordLink, roleLabel, withTimeout } from './index.js';
 
 // ---- ids and the world ----------------------------------------------------------------------------------
@@ -122,7 +118,7 @@ function makeDb(initial, hook = null) {
               const found = rowsOf(table).find((r) => (r.team_access_id ?? null) === null && cols.every((c) => same(r[c], row[c])));
               if (found) Object.assign(found, patch);
               else rowsOf(table).push({ access_id: `acc-${rowsOf(table).length + 1}`, created_at: new Date('2026-10-13T09:00:00Z'), ...row });
-              log.compiled.push(conflict.compile(table, row, patch));
+              log.compiled.push({ table, target: conflict.target, patch });
               log.writes.push({ table, op: found ? 'upsert-update' : 'insert', row, inTrx });
             },
           }),
@@ -147,7 +143,7 @@ function makeDb(initial, hook = null) {
       }
     };
     // Lazy like knex's: a raw runs (and is logged) when awaited. The conflict clause is only ever passed to onConflict, never awaited; it is
-    // compiled with the REAL knex so the test sees the SQL Postgres gets.
+    // rendered here (no knex: CI runs these tests without npm install) so the test sees the conflict target the endpoint hands to Postgres.
     db.raw = (sql, bindings) => {
       const answer = {
         sql,
@@ -159,7 +155,9 @@ function makeDb(initial, hook = null) {
       };
       if (/^\(\?\?, \?\?\) WHERE \?\? IS NULL$/.test(sql)) {
         answer.partialIndex = { columns: bindings.slice(0, 2) };
-        answer.compile = (table, row, patch) => realKnex(table).insert(row).onConflict(realKnex.raw(sql, bindings)).merge(patch).toString();
+        // knex renders ?? as a double-quoted identifier
+        let i = 0;
+        answer.target = sql.replaceAll('??', () => `"${bindings[i++]}"`);
       }
       return answer;
     };
@@ -632,6 +630,8 @@ test('add: every record type has its own table, key and roles', async () => {
     assert.equal(r.body.entry.label, role === 'investigator' ? 'Secondary investigator' : 'Can edit');
     assert.equal(db.tables()[tablesOf[collection]].length, 1, collection);
   }
+  // each record type's upsert names the partial unique index of own rows (its own fk, person_id, WHERE team_access_id IS NULL)
+  assert.deepEqual(db.log.compiled.map((c) => [c.table, c.target]), Object.entries(tablesOf).map(([collection, table]) => [table, `("${COLLECTIONS[collection].fk}", "person_id") WHERE "team_access_id" IS NULL`]));
   const mails = mount({ manage: () => true });
   const t = await call(mails.handlers['POST /:collection/:id/entries'], { collection: 'campaigns', id: CAMPAIGN, body: { person_id: P.nologin, role: 'view' } });
   assert.match(mails.calls.mail.sent[0].subject, /gave you access to campaign CMP-1/);
@@ -1328,7 +1328,9 @@ test('person POST: the upsert names the partial unique index of own rows, so a p
   await add(handlers, { person_id: P.view, role: 'view' });
   assert.deepEqual(db.tables().sample_access.map((x) => [x.role, x.team_access_id ?? null]), [['view', TA], ['view', null]]);
   // and the SQL is ON CONFLICT (fk, person_id) WHERE team_access_id IS NULL
-  assert.match(db.log.compiled[0], /on conflict \("sample_id", "person_id"\) WHERE "team_access_id" IS NULL do update set "role" = 'edit'$/);
+  assert.equal(db.log.compiled[0].table, 'sample_access');
+  assert.equal(db.log.compiled[0].target, '("sample_id", "person_id") WHERE "team_access_id" IS NULL');
+  assert.equal(db.log.compiled[0].patch.role, 'edit');
 });
 
 test('person POST: a team member with only a derived row is a new grant: mailed, and an own row is added', async () => {
