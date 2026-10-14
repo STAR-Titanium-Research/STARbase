@@ -155,13 +155,19 @@ them in. A blank canvas is edit mode with nothing on it yet.
 _Avoid_: builder, node editor (for the mode)
 
 **Draft**:
-What someone has built in edit mode and not yet saved. Nothing in a draft is a record until it is
-saved; then all of it is.
-_Avoid_: plan (a planned operation is a saved record), sketch
+What someone has built in edit mode and not yet created. A draft is kept for its owner automatically,
+survives closing the page, and has a name; a person can have several. Nothing in a draft is a record
+until it is created, and then all of it is at once, or none of it.
+_Avoid_: plan (a planned operation is a record), sketch, unsaved changes
+
+**Create**:
+Turning a draft into records, all together. It is refused while anything the records need is missing.
+_Avoid_: save (a draft is kept without saving), commit, publish
 
 **Planned** / **Done**:
 An operation or test is **planned** when it has been laid out but not carried out yet, and **done**
-once someone records that it was. Both are real records; a draft is neither.
+once someone marks it done, saying when and who. Both are real records; a draft is neither. A sample an
+operation is planned to make is a **planned sample** until that operation is done.
 _Avoid_: draft (for a planned record), pending, scheduled
 
 **Attach**:
