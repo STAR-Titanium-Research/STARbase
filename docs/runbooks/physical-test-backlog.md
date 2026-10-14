@@ -1070,6 +1070,48 @@ migration 141 prints about ownerless records.
   campaigns: its Campaigns panel shows the same card as a tile inside the panel. Check light and dark. Since
   branch `claude/serene-fermi-6nxf5e` (campaign cards follow the Projects design).
 
+- [ ] **TOOL-1 — Tooling pages on real data.** In STARbase open **Tool boxes**, then a real box with inserts and
+  edges. Expect: the box page with its insert type facts (ISO designation, manufacturer, coating, substrate, edges per
+  insert), the four state counts (fresh, partly used, used, depleted) adding up to the inserts list, and a **Next fresh
+  edge** card that links to the right edge (the lowest-numbered part-used insert's first fresh letter). Click an insert
+  in the stage (or the inserts list): the page becomes that insert, with its details, notes and edge list. Click an
+  edge: the page becomes that edge, with its tests and operations merged newest first, each opening its own page, and
+  **View forces** on machining operations opening the Force plotter for that operation. Open **Cutting inserts** and
+  **Insert edges** from the index pages: the rows open these pages. An edge marked fresh that has a test or operation
+  shows "Marked fresh, but N tests or operations used this edge." (check one in the Data Studio first). On the box,
+  the inserts list's last column shows "N marked fresh, but used" for an insert with such edges, and the insert page's
+  Edges list shows the same warning per edge. Create a test whose subjects are **two edges of the same insert** (the
+  Data Studio's test form, two insert edges as subjects): it must appear in the history of **both** edges, and count
+  once for each in the box's warnings (an edge marked fresh with only that test still warns). Edit opens the
+  collection's own form in the drawer and saving refreshes the page. Check light and dark. Since: tooling pages, S3;
+  review fixes (test subjects through the junction).
+- [ ] **TOOL-2 — Moving inside a box keeps the page.** On a real box, click insert, edge, then use the browser Back and
+  Forward buttons. Expect: the address changes each time, the 3D view stays on screen and only the camera moves (no flash,
+  no reload of the stage, the network tab shows no new read of the box's inserts or edges, only the clicked record and,
+  for an edge, its history), and Back returns to the previous insert or the box. Going to another box (a link, or the
+  address bar) loads that box. A box, insert or edge id you may not read (or made up) shows "Not found or not visible to
+  you". Since: tooling pages, S3.
+- [ ] **TOOL-3 — The 3D stage on a real GPU.** On a lab PC (light and dark theme) open a real box. Expect: the tray
+  and inserts draw crisply with no jagged edges; the camera eases (about 0.4 s) to an insert and to an edge; the focused
+  insert lifts out of its pocket; edge letters on the hidden underside are faded; the next fresh edge glows, pulses for
+  about 2.4 s after each move and then rests at full strength (and does not pulse in a hidden tab); with the OS set to reduce motion, moves are instant and nothing pulses. The fan stays
+  quiet when the page sits idle (no render loop at rest). Then turn WebGL off (Chrome `chrome://flags` → disable
+  WebGL, or Firefox `webgl.disabled`) and reload: the 2D slot grid shows, with the same clicks and addresses. The
+  stage is a tall tile in the left rail (about 360 px wide, up to 560 px tall); with a very short browser window it
+  shrinks but stays at least 380 px, and under 1000 px of page width it sits above the panels. Since: tooling pages, S2;
+  rail stage in #286.
+- [ ] **TOOL-4 — Edge letters match the physical insert.** Take a used CNMG from a real box, hold it with the reference
+  mark up, and compare with its insert page. Expect: A is the corner nearest the mark, B the next cutting corner
+  clockwise, C directly under A and D under B, and the edges marked used on the page are the worn ones. Repeat with a
+  single-sided insert (CCMT): only A and B. Since: tooling pages (lettering rule in `CONTEXT.md` › Tooling).
+- [ ] **TOOL-5 — A real PCD box: one insert, one edge.** Open a real PCD (or PCBN) tool box that holds one tipped
+  insert with one edge. Expect: the box is a small single case with the insert filling about 60 % of the stage; a
+  lighter, shiny tip pad (silver for PCD, warm dark gold-grey for PCBN) shows on corner A, covering the nose and about
+  3 mm of each side; there is no edge B and no other tipped corner; click the insert, then edge A: both work, and
+  the next-fresh card points at A while it is fresh. Compare the pad with the real tip (which corner, how far along the
+  sides). Check light and dark. Also open a normal 10-insert box: the grid is 2 columns by 5 rows, numbered left to
+  right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and
