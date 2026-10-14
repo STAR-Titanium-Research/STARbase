@@ -21,7 +21,8 @@ A STARbase page that lists the records of one kind, with search and a few fixed 
 _Avoid_: list view, collection page, list
 
 **Record page**:
-A STARbase page about a single Project, Campaign, Sample, Operation or Test.
+A STARbase page about a single Project, Campaign, Sample, Operation, Test, Tool box, Cutting insert or
+Insert edge.
 _Avoid_: detail page, item page
 
 **Task screen**:
@@ -81,6 +82,15 @@ _Avoid_: Resources, lookups, master data, Kit
 
 ### Tooling
 
+**Tool box**:
+A box of cutting inserts of one insert type, as the lab received and stores it. Its inserts are numbered
+in the box.
+_Avoid_: insert box
+
+**Cutting insert**:
+One indexable insert from a tool box, named by its number in that box.
+_Avoid_: tip, tool
+
 **Insert edge**:
 One cutting edge of a cutting insert, the unit a test or operation is run with. It is named by an
 **edge letter**.
@@ -88,7 +98,9 @@ _Avoid_: corner, cutting edge (for the record)
 
 **Edge letter**:
 The letter that says where an edge sits on its insert. Letters run clockwise from the insert's
-reference mark: the top face first (A, B, …), then the underside (C, D, …) on a double-sided insert.
+reference mark: the top face first (A, B, …), then the underside (C, D, …) on a double-sided insert,
+with C directly under A. Only corners that can cut get a letter. Old edges named `fA`, `fC` use the same
+letters; the `f` means nothing.
 
 ## Relationships
 
@@ -99,6 +111,8 @@ reference mark: the top face first (A, B, …), then the underside (C, D, …) o
 - Report QR codes, label redirects and the **Force App** reach **STARbase** through a **permanent link**.
 
 - A **saved view** belongs to exactly one **index page**.
+- A **tool box** holds **cutting inserts** of one insert type; each **cutting insert** has one
+  **insert edge** per edge letter. An edge is used or fresh; an insert is depleted when it is used up.
 - A **pin** points at one page, saved view or record. A pin to something the person can no longer see
   is kept but not shown.
 
