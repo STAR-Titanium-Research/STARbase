@@ -234,13 +234,13 @@ relabelled **Powder batch**. Maintainer's step, approve separately.
 
 **Order.** The map tolerates a missing `batch_id` (it asks for the field only when Directus reports it), so this STARbase
 build can be deployed before or after the migration. Migrating does not change what the map draws until someone sets a
-`batch_id`. The **Batch** field on an operation or test form, and the **Batches** collection, appear only after all of:
+`batch_id`. The **Batch** field on an operation or test form, and the **Batches** collection, need steps 1 and 2 only; step 3 is for the map (its grouping by `batch_id`):
 
 1. `git pull`, then `make migrate-status` (177 pending) and `make migrate` (migration 177).
 2. `docker compose restart directus`: Directus reads its schema and permissions at start, and no Redis cache is configured for it, so the restart is the operative step. This also loads the `d1-owner-default` hook, which now fills `owner_person_id` on a new
    batch (it has no build step; `core/extensions` is mounted as it is). Without the restart a Lab Member's new batch has no
    owner, and only an admin could then edit it.
-3. The STARbase build that groups by `batch_id`: `git pull && npm ci && npm run build:starbase`, then
+3. The STARbase build that groups by `batch_id` (only the map needs it): `git pull && npm ci && npm run build:starbase`, then
    `docker compose up -d --force-recreate proxy` (see "Redeploying after a change" above). This step can come before
    or after steps 1 and 2.
 

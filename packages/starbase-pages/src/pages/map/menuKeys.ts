@@ -12,3 +12,13 @@ export function menuKey(key: string, current: number, count: number): MenuKeyRes
   if (key === 'End') return { focus: count - 1 };
   return null;
 }
+
+/** Focus moved to `next` (a focusout's relatedTarget): true when that is another element outside the menu (Tab out), which closes it. */
+export function focusLeftMenu(next: EventTarget | null, menu: { contains(node: Node): boolean }): boolean {
+  return next !== null && !menu.contains(next as Node);
+}
+
+/** The element that had focus is gone from the page (a disabled button gives it up): focus is on nothing, or on <body>. */
+export function focusLost(active: Element | null, body: Element | null): boolean {
+  return active === null || active === body;
+}

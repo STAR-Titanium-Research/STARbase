@@ -162,10 +162,15 @@ only draws records you can read: where something is hidden from you, the socket 
 
 **Batches.** When several samples went through the same kind of step together, the map draws them as one container. A
 **recorded batch** (a batch someone created under **Batches** and picked on the operations or tests; see
-[Batches](operations-and-tests.md#batches)) is titled "Batch B-0001" and holds exactly the rows that point at it. Rows with
+[Batches](operations-and-tests.md#batches)) is titled "Batch B-0001" and holds exactly the rows that point at it. Operations with
 no recorded batch that look like one job (the same method, machine and day, and for heat treatment, sample preparation and additive work also the same recipe) are drawn dashed under a **probable batch**
-header; this is only a guess. The **Probable batches** chip in the Show options turns the guessing off. A row with a
+header; this is only a guess, and it is made for operations only (a test is never guessed into a batch). The **Probable batches** chip in the **Show** section turns the guessing off. An operation with a
 recorded batch never joins a probable one.
+
+**Export.** The **Export** button above the map saves it as a **PNG image** or a **PDF, one page**. The file shows the whole
+map as it is drawn under your current **Show** settings (not just the part on screen), with a header naming the record,
+the date and who exported it, and a legend of the kinds of record in it. Your view does not move while it runs. It is named
+`process-map-<record code>-<date>`. A very large map is saved at screen resolution, and the page says so.
 
 ## The Edit drawer
 

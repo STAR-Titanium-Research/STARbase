@@ -410,6 +410,82 @@ test.describe('Process map on a phone (admin)', () => {
 	});
 });
 
+// Export (spec D26, §10): Export ▾ → PNG and PDF hand the browser a real file, the on-screen map does not move, and the
+// strict CSP (img-src data: blob:, font-src data:) lets html-to-image embed the icon font without a console error.
+test.describe('Process map export (admin)', () => {
+	test.setTimeout(120_000);
+	test.use({ viewport: { width: 1400, height: 900 }, acceptDownloads: true });
+
+	let admin: APIRequestContext;
+	test.beforeAll(async ({ playwright }) => {
+		admin = await adminApi(playwright, SERVER);
+	});
+	test.afterAll(async () => {
+		await admin.dispose();
+	});
+
+	/** Export ▾ → the item, and the file the browser is handed. */
+	async function exportAs(page: Page, item: RegExp): Promise<{ name: string; bytes: Buffer }> {
+		const download = page.waitForEvent('download', { timeout: 60_000 });
+		await page.getByRole('button', { name: /^Export/ }).click();
+		await page.getByRole('menuitem', { name: item }).click();
+		const file = await download;
+		return { name: file.suggestedFilename(), bytes: readFileSync(await file.path()) };
+	}
+
+	test('Export gives a PNG and a one-page PDF, and the map stays where it was', async ({ page }) => {
+		const errors = watchErrors(page, IGNORED_CONSOLE);
+		const sample = await familySample(admin);
+		test.skip(!sample, 'the copy has no sample with operations');
+		await signInStarbase(page, 'admin', ORIGINS);
+		await openMap(page, SAMPLES, sample!.id);
+		const before = await viewport(page);
+		const cards = await nodes(page).count();
+
+		const png = await exportAs(page, /PNG image/);
+		expect(png.name).toMatch(/^process-map-.+-\d{4}-\d{2}-\d{2}\.png$/);
+		expect(png.bytes.length, 'a picture, not an empty canvas').toBeGreaterThan(10_000);
+		expect([...png.bytes.subarray(0, 8)], 'PNG signature').toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+		await expect(page.getByRole('button', { name: /^Export/ })).toBeEnabled({ timeout: 30_000 });
+		expect(await viewport(page), 'the PNG export did not move the map').toBe(before);
+		await expect(page.getByRole('button', { name: /^Export/ }), 'focus is back on Export, not lost to the page').toBeFocused();
+
+		const pdf = await exportAs(page, /PDF, one page/);
+		expect(pdf.name).toMatch(/^process-map-.+-\d{4}-\d{2}-\d{2}\.pdf$/);
+		expect(pdf.bytes.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+		expect(pdf.bytes.length).toBeGreaterThan(10_000);
+		await expect(page.getByRole('button', { name: /^Export/ })).toBeEnabled({ timeout: 30_000 });
+		expect(await viewport(page), 'the PDF export did not move the map').toBe(before);
+
+		await expect(page.locator('.pm-export-frame'), 'the picture frame is gone after the export').toHaveCount(0);
+		expect(await nodes(page).count(), 'the same cards are drawn').toBe(cards);
+		await expect(page.locator('.pm-banner.pm-bad')).toHaveCount(0);
+		expect(errors, 'no console error (a CSP violation would show here)').toEqual([]);
+	});
+
+	test('the Export menu works from the keyboard: arrows, Escape back to the button, Tab out closes it', async ({ page }) => {
+		const sample = await familySample(admin);
+		test.skip(!sample, 'the copy has no sample with operations');
+		await signInStarbase(page, 'admin', ORIGINS);
+		await openMap(page, SAMPLES, sample!.id);
+		const trigger = page.getByRole('button', { name: /^Export/ });
+		const items = page.getByRole('menuitem');
+		await trigger.focus();
+		await page.keyboard.press('Enter');
+		await expect(items.first(), 'opening moves focus into the menu').toBeFocused();
+		await page.keyboard.press('ArrowDown');
+		await expect(items.nth(1)).toBeFocused();
+		await page.keyboard.press('Escape');
+		await expect(items).toHaveCount(0);
+		await expect(trigger, 'Escape puts focus back on the button').toBeFocused();
+		await page.keyboard.press('Enter');
+		await expect(items.first()).toBeFocused();
+		await page.keyboard.press('Tab');
+		await page.keyboard.press('Tab');
+		await expect(items, 'Tab out of the menu closes it').toHaveCount(0);
+	});
+});
+
 // A recorded batch (spec §9, ADR-0017): a batch row created through the API with two operations of one family
 // attached to it draws as ONE container titled "Batch B-…" holding both rows. The batch and the batch_id values
 // are put back afterwards (a batch is deleted last; batch_id is ON DELETE SET NULL anyway). Needs the batches

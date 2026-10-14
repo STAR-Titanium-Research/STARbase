@@ -10,6 +10,7 @@
 import { nextTick, ref, type Ref } from 'vue';
 import { useVueFlow } from '@vue-flow/core';
 import { saveFile } from '../../labels/saveFile';
+import { inlineSvgPaint } from './exportSvg';
 import { captureFilter, exportPlan, mergeBounds, type Bounds, type ExportPlan } from './model/exportPlan';
 import type { Kind } from './model/types';
 import type { useMapCanvas } from './useMapCanvas';
@@ -100,6 +101,8 @@ export function useMapExport({ canvas, map, person, deps: given = {} }: MapExpor
       if (!frame || !graph || !live || !plan) throw new Error('the map is not on screen');
       const copy = live.cloneNode(true) as HTMLElement;
       copy.style.transform = `translate(${plan.graph.x}px, ${plan.graph.y}px) scale(1)`;
+      // html-to-image does not style what is inside an svg (the wires): give the copy its paint from the live pane.
+      inlineSvgPaint(live, copy);
       graph.appendChild(copy);
       return frame;
     },

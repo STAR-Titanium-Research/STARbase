@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { menuKey } from './menuKeys';
+import { focusLeftMenu, focusLost, menuKey } from './menuKeys';
 
 // "Export ▾" (spec D26): a button with a two-item menu, PNG or PDF. Opening moves focus into the menu, the arrow keys move between
-// the items, Escape closes it and puts focus back on the button; a pick or a press elsewhere closes it too.
-defineProps<{ busy: boolean; disabled: boolean }>();
+// the items, Escape closes it and puts focus back on the button; a pick, a press elsewhere or Tab out of the menu closes it too.
+// The button is disabled while an export runs, which drops focus to <body>: when the export is done, focus goes back to the button.
+const props = defineProps<{ busy: boolean; disabled: boolean }>();
 const emit = defineEmits<{ pick: [format: 'png' | 'pdf'] }>();
 
 const open = ref(false);
@@ -38,6 +39,16 @@ watch(open, (now) => {
 	if (now) void nextTick(() => items()[0]?.focus());
 });
 onBeforeUnmount(() => listen(false));
+const onFocusOut = (e: FocusEvent) => {
+	if (open.value && root.value && focusLeftMenu(e.relatedTarget, root.value)) open.value = false;
+};
+watch(
+	() => props.busy,
+	(now, was) => {
+		if (was && !now && focusLost(document.activeElement, document.body)) trigger()?.focus();
+	},
+	{ flush: 'post' }, // after the button is enabled again
+);
 const pick = (format: 'png' | 'pdf') => {
 	closeToTrigger();
 	emit('pick', format);
@@ -45,7 +56,7 @@ const pick = (format: 'png' | 'pdf') => {
 </script>
 
 <template>
-	<div ref="root" class="pm-export">
+	<div ref="root" class="pm-export" @focusout="onFocusOut">
 		<v-button small secondary :loading="busy" :disabled="disabled" aria-haspopup="menu" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
 			<v-icon name="download" small /> Export <v-icon name="expand_more" small />
 		</v-button>
