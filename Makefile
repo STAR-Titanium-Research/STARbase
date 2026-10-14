@@ -147,12 +147,12 @@ llm-test: llm-build ## Run text-to-SQL guard/eval unit tests inside Docker
 llm-eval: ## Validate the NL->SQL gold set against the guard (offline; no LLM needed)
 	docker run --rm d1-llm-text-to-sql python eval/run_eval.py
 
-migrate-legacy: ## Run Phase 8 legacy data migration (requires DATABASE_URL and XLSX)
+migrate-legacy: ## RETIRED: refuses to run (see scripts/migrate_legacy.py)
 	@test -n "$(XLSX)" || (echo "ERROR: set XLSX=/path/to/Sample_Data.xlsx" && exit 1)
 	pip install -q -r scripts/requirements.txt
 	DATABASE_URL="$(DATABASE_URL)" python3 scripts/migrate_legacy.py --xlsx "$(XLSX)"
 
-migrate-legacy-dry: ## Dry-run the legacy migration (no DB required)
+migrate-legacy-dry: ## RETIRED: refuses to run (see scripts/migrate_legacy.py)
 	@test -n "$(XLSX)" || (echo "ERROR: set XLSX=/path/to/Sample_Data.xlsx" && exit 1)
 	pip install -q -r scripts/requirements.txt
 	python3 scripts/migrate_legacy.py --xlsx "$(XLSX)" --dry-run
