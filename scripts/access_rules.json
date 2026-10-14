@@ -156,6 +156,12 @@
       "read": {},
       "update": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}, "fields": ["name", "description", "media", "page_width_mm", "page_height_mm", "columns", "rows", "label_width_mm", "label_height_mm", "margin_top_mm", "margin_left_mm", "gap_x_mm", "gap_y_mm", "padding_mm", "arrangement", "qr_size_mm", "fields", "qr_fields"]},
       "delete": {"permissions": {"user_created": {"_eq": "$CURRENT_USER"}}}
+    },
+    "batches": {
+      "create": {"fields": ["code", "batch_date", "notes", "owner_person_id"]},
+      "read": {},
+      "update": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}, "fields": ["code", "batch_date", "notes", "owner_person_id"]},
+      "delete": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}
     }
   },
   "guards": {
