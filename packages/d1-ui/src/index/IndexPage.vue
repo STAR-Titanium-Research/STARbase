@@ -12,8 +12,12 @@
 // The `footer` slot (a row's buttons) is drawn at the foot of a text card. Operations and samples
 // get their Force / FAST buttons from here (RowPlotButtons, filled by useIndexPage's `plots`); the
 // `thumb` slot also receives the row's `plots` (an operation's Fz figure comes from there).
+// With `pick` the page is a row picker, opened over another page (the process map's sample picker): its state is kept in
+// memory, not in the URL; a click on a row ticks it instead of opening it; a button hands the ticked rows back (`pick` event,
+// pickMode.ts); the links, Plots, Process map, Pin, New and Data Studio buttons are not drawn.
 import { computed, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import '../components/tokens.css';
 import { useExplorerHost } from '../host';
 import type { ExplorerHost } from '../host';
 import { linkHref } from '../links';
@@ -42,16 +46,31 @@ import { SELECT_MAX, cellText, hasNextPage, rangeText, sortDirection, sortKey } 
 import { readListPrefs, writeListPrefs } from './listPrefs';
 import type { Density, ListView } from './listPrefs';
 import { useRowSelection } from './useRowSelection';
+import { memoryRoute, nounsFor, PICK_ATTR } from './pickMode';
+import type { PickedRow, PickNouns } from './pickMode';
+import { usePickMode } from './usePickMode';
 import { useIndexPage } from './useIndexPage';
+import type { RouteLike, RouterLike } from './useIndexPage';
 
 const props = defineProps<{
 	def: IndexDef;
 	cardData?: (host: ExplorerHost, rows: any[]) => Promise<ReadonlyMap<string, unknown>>;
+	/** Picker mode (fixed for the life of the component). */
+	pick?: boolean;
+	/** Keys already taken (on the canvas): drawn, but cannot be ticked. */
+	pickTaken?: readonly string[];
+	/** What the confirm button counts ("Add 3 samples"); the def's title by default. */
+	pickNouns?: PickNouns;
 }>();
+const emit = defineEmits<{ pick: [rows: PickedRow[]] }>();
 
 const host: ExplorerHost = useExplorerHost();
-const route = useRoute();
-const router = useRouter();
+// Picker mode keeps the list's state in memory: the page it is opened over keeps its own address (and has no router to ask).
+const memory = props.pick ? memoryRoute(props.def.slug) : null;
+const route: RouteLike = memory?.route ?? useRoute();
+const router: RouterLike & { resolve(to: string): { href: string } } = memory
+	? { ...memory.router, resolve: () => ({ href: '' }) }
+	: (useRouter() as unknown as RouterLike & { resolve(to: string): { href: string } });
 
 const {
 	rows, total, plots, loading, error, forbidden, bookmarkUnavailable, state, sort, bookmarks, searchText, chips, dsLink, filtered, hasFilters,
@@ -67,9 +86,9 @@ const showThumb = computed(() => density.value === 'roomy' && !!slots.thumb);
 // A designed card (campaigns) in Cards view: laid out like the Projects index, not in the panel.
 const designedCards = computed(() => view.value === 'cards' && !!slots.card);
 // Operations and samples carry Force / FAST buttons (a right-aligned "Plots" column, and a card's footer).
-const hasPlots = computed(() => plotKind(props.def.collection) !== null);
+const hasPlots = computed(() => !props.pick && plotKind(props.def.collection) !== null);
 // The kinds with no record page (and insert edges) get a Process map pill instead (spec section 8).
-const hasMap = computed(() => MAP_ROW_COLLECTIONS.includes(props.def.collection));
+const hasMap = computed(() => !props.pick && MAP_ROW_COLLECTIONS.includes(props.def.collection));
 // A sample's code is what its "Force (n)" button searches the operations list for.
 const plotCode = (row: Record<string, unknown>): string => (typeof row.sample_code === 'string' ? row.sample_code : '');
 // The row's name, for its buttons' accessible names (its first column, else its key).
@@ -107,6 +126,7 @@ const drawerOpen = ref(false);
 const drawerKey = ref('');
 
 function openRow(row: Record<string, unknown>): void {
+	if (props.pick) return pickState.toggle(row);
 	const pk = rowKey(row);
 	if (props.def.rowTarget === 'record') host.navigate(recordRoute(props.def.collection, pk));
 	else {
@@ -143,12 +163,27 @@ function onRowLink(e: MouseEvent, row: Record<string, unknown>): void {
 }
 
 // ---- ticked rows (defs with a selectAction): kept across pages, in the order ticked ----------------
-const sel = useRowSelection(props.def, rows, rowKey, (to) => host.navigate(to));
+// In picker mode every list can tick (not only those with a selectAction), and rows already taken are not tickable,
+// so "tick every row on this page" leaves them out.
+const ticks = !!props.pick || !!props.def.selectAction;
+const tickable = computed(() => (props.pick ? rows.value.filter((r) => !pickState.isTaken(r)) : rows.value));
+const sel = useRowSelection(props.def, tickable, rowKey, (to) => host.navigate(to));
+const root = ref<unknown>(null);
+const pickState = usePickMode({
+	sel,
+	rows,
+	rowKey,
+	rowLabel,
+	root,
+	taken: () => props.pickTaken ?? [],
+	nouns: props.pickNouns ?? nounsFor(props.def.title),
+	emit: (picked) => emit('pick', picked),
+});
 
 // ---- cards ----------------------------------------------------------------------------------
 // With no column headers to click, the cards toolbar sorts through a select (the same URL sort).
 const sortChoices = computed(() => sortOptions(props.def, sort.value, (c) => sortable(c)));
-const cardHref = (row: Record<string, unknown>): string | null => (props.def.rowTarget === 'record' ? rowHref(row) : null);
+const cardHref = (row: Record<string, unknown>): string | null => (props.def.rowTarget === 'record' && !props.pick ? rowHref(row) : null);
 
 // What a designed card shows beyond the row (the campaigns' counts), for the rows on screen. A
 // failure leaves the map empty: the cards then say the numbers are unavailable.
@@ -190,8 +225,8 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 </script>
 
 <template>
-	<PageShell>
-		<nav class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ def.title }}</span></nav>
+	<PageShell ref="root" :class="{ picking: pick }">
+		<nav v-if="!pick" class="d1-crumbs"><AppLink to="/home">Home</AppLink><span>›</span><span>{{ def.title }}</span></nav>
 
 		<NotVisible v-if="forbidden" :what="`${def.title.toLowerCase()} list`" />
 
@@ -199,8 +234,9 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 			<div class="head">
 				<span class="range" role="status">{{ rangeText(state.page, rows.length, total) }}</span>
 				<span class="spacer" />
-				<PinToggle v-if="pinTarget" :target="pinTarget" :label="pinLabel" />
-				<button v-if="def.selectAction" type="button" class="btn" :disabled="!sel.picked.value.length" @click="sel.run">
+				<PinToggle v-if="pinTarget && !pick" :target="pinTarget" :label="pinLabel" />
+				<button v-if="pick" type="button" class="btn pri" :disabled="!pickState.count.value" @click="pickState.confirm">{{ pickState.text.value }}</button>
+				<button v-else-if="def.selectAction" type="button" class="btn" :disabled="!sel.picked.value.length" @click="sel.run">
 					{{ def.selectAction.label }}{{ sel.picked.value.length ? ` (${sel.picked.value.length})` : '' }}
 				</button>
 				<SegmentedControl :model-value="view" :options="VIEW_OPTIONS" label="View" @update:model-value="setView" />
@@ -211,13 +247,15 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 					</select>
 				</label>
 				<SegmentedControl :model-value="density" :options="DENSITY_OPTIONS" label="Row density" @update:model-value="setDensity" />
-				<button
-					type="button"
-					class="btn"
-					:title="dsLink.note ?? undefined"
-					@click="host.openDataStudio(dsLink.to)"
-				>Open in Data Studio</button>
-				<button type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
+				<template v-if="!pick">
+					<button
+						type="button"
+						class="btn"
+						:title="dsLink.note ?? undefined"
+						@click="host.openDataStudio(dsLink.to)"
+					>Open in Data Studio</button>
+					<button type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
+				</template>
 			</div>
 
 			<div v-if="bookmarks.length" class="chips" role="group" aria-label="Saved views">
@@ -293,16 +331,17 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 					:loading="loading"
 					:row-key="rowKey"
 					:href-for="cardHref"
+					:pick="pick"
 					:data="cardMap"
 					:data-loading="cardLoading"
 					@open="openRow"
 				>
 					<template v-if="$slots.card" #card="s"><slot name="card" v-bind="s" /></template>
 					<template v-if="$slots.thumb" #thumb="{ row }"><slot name="thumb" :row="row" :plots="plots[rowKey(row)] ?? null" /></template>
-					<template v-if="$slots.footer || hasPlots || hasMap || def.selectAction" #footer="{ row }">
-						<label v-if="def.selectAction" class="tick">
-							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="!sel.isPicked(row) && sel.full.value" @change="sel.toggle(row)" />
-							<span>Select</span>
+					<template v-if="$slots.footer || hasPlots || hasMap || ticks" #footer="{ row }">
+						<label v-if="ticks" class="tick">
+							<input type="checkbox" :checked="sel.isPicked(row)" :disabled="pickState.isTaken(row) || (!sel.isPicked(row) && sel.full.value)" @change="sel.toggle(row)" />
+							<span>{{ pickState.isTaken(row) ? 'Already added' : 'Select' }}</span>
 						</label>
 						<RowPlotButtons v-if="hasPlots" size="card" :collection="def.collection" :id="rowKey(row)" :code="plotCode(row)" :label="rowLabel(row)" :plots="plots[rowKey(row)]" />
 						<RowMapButton v-if="hasMap" size="card" :collection="def.collection" :id="rowKey(row)" :label="rowLabel(row)" />
@@ -312,7 +351,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				<DataTable v-else-if="loading || rows.length" :density="density">
 					<thead>
 						<tr>
-							<th v-if="def.selectAction" class="fit">
+							<th v-if="ticks" class="fit">
 								<input type="checkbox" :checked="sel.allPicked.value" aria-label="Tick every row on this page" @change="sel.togglePage" />
 							</th>
 							<th v-if="showThumb" class="thumb" aria-hidden="true" />
@@ -329,7 +368,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 					<tbody>
 						<template v-if="loading && !rows.length">
 							<tr v-for="n in skeletonRows" :key="n" class="skeleton" aria-hidden="true">
-							<td v-if="def.selectAction" />
+							<td v-if="ticks" />
 								<td v-if="showThumb" class="thumb"><span class="bar" /></td>
 								<td v-for="c in def.columns" :key="c.field"><span class="bar" /></td>
 								<td v-if="hasPlots" class="plots" />
@@ -339,13 +378,20 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 						<template v-else>
 							<!-- The row stays a table row (so the table is still announced as one); the first cell holds
 								the real link or button, and a click anywhere else on the row does the same for a mouse. -->
-							<tr v-for="row in rows" :key="rowKey(row)" class="row" @click="openRow(row)">
-							<td v-if="def.selectAction" class="fit" @click.stop>
+							<tr
+								v-for="row in rows"
+								:key="rowKey(row)"
+								class="row"
+								:class="{ on: pick && sel.isPicked(row), taken: pick && pickState.isTaken(row) }"
+								:[PICK_ATTR]="pick ? rowKey(row) : undefined"
+								@click="openRow(row)"
+							>
+							<td v-if="ticks" class="fit" @click.stop>
 								<input
 									type="checkbox"
 									:checked="sel.isPicked(row)"
-									:disabled="!sel.isPicked(row) && sel.full.value"
-									aria-label="Tick this row"
+									:disabled="pickState.isTaken(row) || (!sel.isPicked(row) && sel.full.value)"
+									:aria-label="pickState.isTaken(row) ? 'Already added' : 'Tick this row'"
 									@click.stop
 									@change="sel.toggle(row)"
 								/>
@@ -354,8 +400,10 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 								<td v-for="(c, i) in def.columns" :key="c.field" :class="cellClass(c)">
 									<template v-if="i === 0">
 										<span v-if="rowAccent(def, row)" class="swatch" :style="{ background: rowAccent(def, row) as string }" aria-hidden="true" />
+										<!-- Picking: the row is ticked by a click, so its first cell is text, not a link. -->
+										<span v-if="pick" class="cell-text">{{ cellText(row, c, def) || '—' }}<span v-if="pickState.isTaken(row)" class="taken-tag">already added</span></span>
 										<a
-											v-if="def.rowTarget === 'record'"
+											v-else-if="def.rowTarget === 'record'"
 											class="cell-link"
 											:href="rowHref(row)"
 											:aria-label="cellText(row, c, def) ? undefined : 'Open'"
@@ -387,7 +435,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 				</div>
 			</div>
 
-			<p v-if="def.selectAction && sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
+			<p v-if="ticks && sel.full.value" class="d1-note warn" role="status">Up to {{ SELECT_MAX }} rows can be ticked at once.</p>
 
 			<div v-if="!error && total !== null && total > 0" class="foot">
 				<span class="d1-note">Page {{ state.page }} of {{ Math.max(1, Math.ceil(total / PAGE_SIZE)) }}</span>
@@ -398,7 +446,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 			</div>
 
 			<EditDrawer
-				v-if="def.rowTarget === 'drawer'"
+				v-if="def.rowTarget === 'drawer' && !pick"
 				:model-value="drawerOpen"
 				:collection="def.collection"
 				:primary-key="drawerKey"
@@ -469,6 +517,11 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 th.num .sort { justify-content: flex-end; }
 
 .row { cursor: pointer; }
+.row.on td { background: var(--d1-tint); }
+.row.taken { opacity: 0.55; cursor: default; }
+.taken-tag { margin-left: 8px; font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--d1-dim); }
+/* In an overlay the page has no frame of its own to pad. */
+.d1-page.picking { padding: 0 0 8px; max-width: none; }
 .plots { text-align: right; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .tick { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--d1-dim); cursor: pointer; }
