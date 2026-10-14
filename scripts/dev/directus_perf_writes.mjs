@@ -162,7 +162,7 @@ const teamSetup = async (tag) => {
   return must(t, `${tag} team`) ? t.body.team_id : null;
 };
 const dropTeam = (id) => call('DELETE', `/d1-teams/${id}`, ADMIN);
-const people = teamsOn ? ((await admin('/items/people?' + q({ fields: ['person_id', 'user_id'], filter: { person_id: { _nnull: true } }, sort: ['-user_id'], limit: 60 }))) ?? []) : [];
+const people = teamsOn ? ((await admin('/items/people?' + q({ fields: ['person_id', 'user_id'], filter: { user_id: { _nnull: true } }, limit: 60 }))) ?? []) : [];
 if (want('team_join_100_records') && teamsOn) {
   const samples = ((await admin('/items/physical_samples?' + q({ fields: ['sample_id'], limit: 100, sort: ['sample_id'] }))) ?? []).map((r) => r.sample_id);
   const times = [];
@@ -176,8 +176,10 @@ if (want('team_join_100_records') && teamsOn) {
       ok = must(g, 'team_join_100_records grant') && must(t, 'team_join_100_records trust');
       if (!ok) break;
     }
-    const joiner = ok && people.find((p) => p.user_id)?.person_id;
-    if (joiner) {
+    const inTeam = new Set((((await call('GET', `/d1-teams/${team}`, ADMIN)).body?.members) ?? []).map((m) => m.person_id));
+    const joiner = ok && people.find((p) => !inTeam.has(p.person_id))?.person_id;
+    if (!joiner) { console.log('PERFW team_join_100_records FAILED no joiner or no grants'); bad++; }
+    else {
       const r = await call('POST', `/d1-teams/${team}/members`, ADMIN, { person_id: joiner });
       if (must(r, 'team_join_100_records')) times.push(r.ms);
     }
@@ -191,12 +193,16 @@ if (want('team_grant_20_members') && teamsOn && bigSample) {
     const team = await teamSetup('grant');
     if (!team) break;
     let ok = true;
-    for (const person of people.slice(0, 20)) {
-      const r = await call('POST', `/d1-teams/${team}/members`, ADMIN, { person_id: person.person_id });
-      if (r.status >= 400 && r.status < 500) continue; // the creator (or a repeated person) is already a member
-      ok = must(r, 'team_grant_20_members member');
+    const inTeam = new Set((((await call('GET', `/d1-teams/${team}`, ADMIN)).body?.members) ?? []).map((m) => m.person_id)); // the creator
+    let added = inTeam.size;
+    for (const person of people) {
+      if (added >= 20) break;
+      if (inTeam.has(person.person_id)) continue;
+      ok = must(await call('POST', `/d1-teams/${team}/members`, ADMIN, { person_id: person.person_id }), 'team_grant_20_members member');
       if (!ok) break;
+      added += 1;
     }
+    if (ok && added < 20) console.log(`PERFINFO team_grant_20_members only ${added} people with a login in the copy`);
     if (ok) {
       const r = await call('POST', `/d1-record-access/physical_samples/${bigSample}/entries`, ADMIN, { team_id: team, role: 'edit' });
       if (must(r, 'team_grant_20_members')) times.push(r.ms);

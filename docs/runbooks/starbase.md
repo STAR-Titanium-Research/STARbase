@@ -273,7 +273,7 @@ and leave the old extension running; the steps below do both in one go. `d1-team
    SELECT d1_private.readers_drift_count();          -- 0
    ```
 4. Flush Redis (Directus's permission cache) and recreate Directus so it loads the extensions:
-   `docker compose exec redis redis-cli FLUSHALL && docker compose up -d --force-recreate directus`, then
+   `docker compose exec -T redis redis-cli FLUSHALL` (the command of the A1a cutover, step 6) and then `docker compose up -d --force-recreate directus`, then
    `docker compose up -d --force-recreate proxy` for the new STARbase build.
 5. Smoke: People shows the People | Teams switch; New team creates one and opens `/home/teams/<id>`; on a sample you own, Who has
    access → add the team, then add a person to the team: that person is "waiting" (Home "Waiting for you" for the owner) until
@@ -286,9 +286,13 @@ drift check ever shows rows (`missing`, `extra` or `role`, per grant and person)
 again from Who has access (the grant's triggers rebuild its derived rows); do not edit derived rows by hand.
 
 Performance: the write paths `team_join_100_records` and `team_grant_20_members` are in `scripts/dev/perf_writes.sql` and
-`scripts/dev/directus_perf_writes.mjs`. The before/after comparison (`D1_SMOKE_MODE=perf bash scripts/dev/directus_smoke.sh`, then
-`scripts/dev/perf_compare.py`; gate p95 < 300 ms per list and writes at most 2x) needs a restored copy of live and is the
-maintainer's step; see `docs/runbooks/a1-record-access-cutover.md` for the procedure.
+`scripts/dev/directus_perf_writes.mjs`. The gate (p95 < 300 ms per list request, writes at most 2x, the two team writers under 500 ms) was
+run on 2026-10-14 on the seeded copy of live, before (`--skip 20261014000174 --skip 20261014000175 --skip 20261014000176`, overlays
+`d1-next-number d1-access-guard d1-record-access d1-trace d1-admin-overview`) and after (the same plus `d1-teams d1-people-admin
+d1-person-link`), with `D1_SMOKE_MODE=perf D1_SMOKE_REQUIRE_LM=1 bash scripts/dev/directus_smoke.sh` and
+`py -3 scripts/dev/perf_compare.py before.log after.log`: GATE PASS, worst read p95 143 ms, worst write ratio x1.00,
+`team_join_100_records` 115 ms and `team_grant_20_members` 81 ms through Directus (59 ms and 17 ms in SQL). Re-run it on the
+maintainer's machine if the copy of live has changed a lot; the procedure is in `docs/runbooks/a1-record-access-cutover.md`.
 
 Rollback: `make migrate-down` twice (176, then 175; 176's down deletes the derived rows and restores the old unique constraints),
 `git checkout <previous commit>`, rebuild, flush Redis and recreate `directus` and `proxy`. Deploy the previous `d1-record-access`

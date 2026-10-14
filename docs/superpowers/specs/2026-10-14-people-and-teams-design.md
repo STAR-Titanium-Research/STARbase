@@ -34,7 +34,8 @@ Teams
    other managers (round 0). A team always has at least one manager (Q13).
 9. All teams and their members are visible to every member; no private teams (Q10).
 10. Storage: a separate `teams` table, a team as a second kind of grantee on the five access tables, and the **edit and own
-    rights materialised in SQL** beside the readers (data-model option 2).
+    rights materialised in SQL** beside the readers (data-model option 2). *(As built: the edit rights are not a second set of tables; a team
+    grant is expanded into derived access rows, E10.)*
 11. **Owner approves joiners.** A team manager must never widen access to a record they do not own. Sharing a record with a
     team covers its members at that moment; someone who joins later gets that record's access only when its owner approves,
     or when the owner ticked **Trust future members** on that record's team entry (per record, Q7). Leaving removes access at
@@ -205,7 +206,8 @@ deleted its history goes with it; the owners' emails are the record of that.
 | Trust future members turned on | the grant's `pending` rows become `active` (declined stay declined) |
 | A grant is removed | its rows go (cascade) |
 
-Members of a team that **owns** a record need no rows: ownership is read from `team_members` directly (decision 13).
+Members of a team that **owns** a record need no rows: ownership is read from `team_members` directly (decision 13). *(PR 3 will instead
+use an `owner` pseudo-grant expanded into derived rows, E10.)*
 
 "Would joining raise their access?" is not stored. A `pending` row stays pending whatever else the person can see; the Home
 card, the email and the dialog's "N waiting" show a pending row only while approving it would raise that person's level
@@ -487,7 +489,7 @@ they disagree; each ruling was made while building, with the maintainer's standi
   `PATCH` / `DELETE .../entries/team/:team_id`, the new `GET .../entries/team/:team_id/members` (active, pending with `actionable`,
   declined) and `POST .../entries/team/:team_id/members/:person_id {decision}`. The person routes (change role, remove, transfer) act only
   on a person's own entry (`team_access_id IS NULL`); derived rows are never edited through them. `owner` as a team, `POST .../transfer
-  {team_id}` and `can_manage` through the owning team are PR 3. Lab Admin and Administrator are not told apart for teams: an
+  {team_id}` and `can_manage` through the owning team are PR 3. Lab Admin and Administrator are not told apart for teams (both have `admin_access`, which is what the endpoint reads): an
   administrator manages every team and every record's team entries.
 - **E16 People page.** The Team menu takes the teams from `GET /d1-teams` (a brief list); an admin's rows get their teams from `GET
   /d1-people-admin/people`, a member's rows from `GET /items/team_members?fields=team_id,person_id&limit=-1` (a Lab Member may read it)
@@ -507,7 +509,8 @@ they disagree; each ruling was made while building, with the maintainer's standi
   per list request and writes at most 2x** the "before" time; "every list under 80 ms p95" was A1a's measured result, not its gate. The two
   team writers each have an absolute limit of 500 ms (`scripts/dev/perf_compare.py` flags them): `team_join_100_records` and
   `team_grant_20_members` (SQL in `scripts/dev/perf_writes.sql`, through Directus in `scripts/dev/directus_perf_writes.mjs`). They have no
-  "before" (the tables do not exist without 175 and 176), so they are judged against 500 ms only.
+  "before" (the tables do not exist without 175 and 176), so they are judged against 500 ms only. Measured 2026-10-14 on the seeded copy (`perf_compare.py` before/after: GATE PASS, worst read
+  p95 143 ms, worst write ratio x1.00): `team_join_100_records` 115 ms and `team_grant_20_members` 81 ms through Directus (59 and 17 ms in SQL).
 - **E21 Preview and tests.** `scripts/dev/explorer_preview.sh`'s default overlay gains `d1-teams` and `d1-person-link`.
   `tests/ui/specs/18-teams.spec.ts` covers the E2E of §6 (grant, pending and approve, decline, Trust future members, leave, the members
   card, last manager, the People/Teams switch); it creates its own logins, people, teams and a Restricted sample and removes them. Spec 17's
