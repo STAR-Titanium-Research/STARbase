@@ -1,7 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { AccessRecord } from './peopleApi';
 import type { PeopleRow } from './peopleQuery';
-import { ACCESS_LISTS, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
+import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
 
 const row = (status: string | null | undefined): PeopleRow => ({
 	kind: 'person',
@@ -108,4 +109,16 @@ describe('escapeClosesPanel', () => {
 	it('leaves Esc to whatever already took it', () => expect(escapeClosesPanel({ key: 'Escape', defaultPrevented: true }, null, false)).toBe(false));
 	it('leaves Esc to a select', () => expect(escapeClosesPanel(esc, 'SELECT', false)).toBe(false));
 	it('leaves Esc to an open dialog or menu', () => expect(escapeClosesPanel(esc, null, true)).toBe(false));
+});
+
+describe('an open members card owns Esc', () => {
+	// PersonPanel listens on window (capture), which runs before TeamCard's document listener: the panel can only leave the Esc to an
+	// open card by seeing it as an open overlay. TeamCard marks its popover data-open-menu and swallows the key.
+	const card = readFileSync(new URL('../../../d1-ui/src/teams/TeamCard.vue', import.meta.url), 'utf8');
+	it('the panel counts [data-open-menu] as an open overlay', () => expect(ESC_OWNER_SELECTOR).toContain('[data-open-menu]'));
+	it('the card popover carries data-open-menu', () => expect(card).toMatch(/ref="pop"\s+data-open-menu/));
+	it('the card Escape handler stops the event for every listener and prevents the default', () => {
+		const handler = card.slice(card.indexOf('function onDocKey'), card.indexOf('function onDocPointer'));
+		for (const call of ['e.stopPropagation()', 'e.stopImmediatePropagation()', 'e.preventDefault()']) expect(handler).toContain(call);
+	});
 });

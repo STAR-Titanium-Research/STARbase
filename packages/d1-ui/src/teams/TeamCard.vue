@@ -107,8 +107,11 @@ function place() {
 
 function onDocKey(e: KeyboardEvent) {
 	if (e.key !== 'Escape') return;
-	// capture phase: this Escape closes the card only, not the dialog or panel the card sits in
+	// capture phase: this Escape closes the card only, not the dialog or panel the card sits in. stopImmediatePropagation as well: another
+	// capture listener on the document must not see it either. A listener on window runs BEFORE this one, so the open card also carries
+	// data-open-menu (below): a panel that reads which overlay is open (PersonPanel, ESC_OWNER_SELECTOR) leaves this Escape to the card.
 	e.stopPropagation();
+	e.stopImmediatePropagation();
 	e.preventDefault();
 	close();
 	// focus was inside the card (Open team): give it back to the trigger, without that focus reopening the card
@@ -202,6 +205,7 @@ onBeforeUnmount(() => {
 			v-if="open"
 			:id="uid"
 			ref="pop"
+			data-open-menu
 			class="d1-kit pop"
 			role="group"
 			:aria-label="team ? `Team ${team.name}` : 'Team'"
