@@ -591,7 +591,9 @@ def test_members_cannot_edit_co_owners_or_secondary_investigators_in_the_form():
         for action in ("read", "delete"):
             assert BY_KEY[(collection, action)]["fields"] == "*"
     # no other ruled row names a field list
-    listed = {k for k, r in BY_KEY.items() if r["fields"] != "*" and k[0] in DOC["rules"]}
+    listed = {
+        k for k, r in BY_KEY.items() if r["fields"] != "*" and k[0] in DOC["rules"]
+    }
     assert listed == {
         ("physical_samples", "create"), ("physical_samples", "update"),
         ("projects", "create"), ("projects", "update"),
@@ -602,11 +604,26 @@ def test_rule_fields_are_validated():
     with pytest.raises(gen.RulesError):  # a list that does not exist
         gen.build_rows({**DOC, "rule_fields": {"projects": {"update": "nope"}}})
     with pytest.raises(gen.RulesError):  # an action the collection has no list for
-        gen.build_rows({**DOC, "rule_fields": {"projects": {"read": "x"}, "people": {}}})
+        gen.build_rows(
+            {**DOC, "rule_fields": {"projects": {"read": "x"}, "people": {}}}
+        )
     with pytest.raises(gen.RulesError):  # a collection without rules
-        gen.build_rows({**DOC, "rule_fields": {"materials": {"update": "project.not_secondary_investigators"}}})
+        gen.build_rows(
+            {
+                **DOC,
+                "rule_fields": {
+                    "materials": {"update": "project.not_secondary_investigators"}
+                },
+            }
+        )
     with pytest.raises(gen.RulesError):  # duplicates
-        gen.build_rows({**DOC, "field_sets": {"d": ["a", "a"]}, "rule_fields": {"projects": {"update": "d"}}})
+        gen.build_rows(
+            {
+                **DOC,
+                "field_sets": {"d": ["a", "a"]},
+                "rule_fields": {"projects": {"update": "d"}},
+            }
+        )
 
 
 def test_set_cycles_and_unknown_sets_are_rejected():

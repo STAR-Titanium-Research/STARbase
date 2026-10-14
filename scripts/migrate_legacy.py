@@ -1623,7 +1623,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
-        RETIRED_FLAG, action="store_true", help="Acknowledge that this importer is retired"
+        RETIRED_FLAG,
+        action="store_true",
+        help="Acknowledge that this importer is retired",
     )
     p.add_argument("--xlsx", required=True, help="Path to Sample_Data.xlsx")
     p.add_argument(
