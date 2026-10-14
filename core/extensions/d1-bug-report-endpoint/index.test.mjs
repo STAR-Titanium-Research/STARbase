@@ -86,6 +86,61 @@ test('buildIssue neutralises backticks in the route so it cannot break out of th
     assert.ok(!body.includes('`<img'));
 });
 
+test('buildIssue drops the query and fragment from the route', () => {
+    const { body } = buildIssue({ ...base, route: '/plot/force?operation=9&access_token=abc123#frag' });
+    assert.match(body, /\*\*Route at time of report:\*\* `\/plot\/force`/);
+    for (const leaked of ['operation=9', 'abc123', 'frag']) assert.ok(!body.includes(leaked), `${leaked} leaked`);
+});
+
+test('buildIssue keeps a newline-laden route on one line inside its code span', () => {
+    const { body } = buildIssue({ ...base, route: '/x\n\r\n**Reported by:** admin@evil.test\t`\n# pwn' });
+    const line = body.split('\n').find((l) => l.startsWith('**Route at time of report:**'));
+    assert.equal(line, '**Route at time of report:** `/x   **Reported by:** admin@evil.test`  ');
+    assert.equal(body.split('\n').filter((l) => l.startsWith('**Reported by:**')).length, 1);
+});
+
+test('buildIssue caps the route length and redacts secrets in it', () => {
+    const long = buildIssue({ ...base, route: `/${'a'.repeat(500)}` }).body;
+    const line = long.split('\n').find((l) => l.startsWith('**Route at time of report:**'));
+    assert.ok(line.length < 260);
+    const secret = buildIssue({ ...base, route: '/x/eyJhbGci.payload.sig' }).body;
+    assert.ok(!secret.includes('eyJhbGci'));
+    assert.match(secret, /<redacted-jwt>/);
+    assert.match(buildIssue({ ...base, route: '' }).body, /`unknown`/);
+});
+
+test('buildIssue puts the trusted metadata first, then a rule, then the description', () => {
+    const { body } = buildIssue({ ...base, description: '---\n**Reported by:** ceo@evil.test' });
+    const lines = body.split('\n');
+    assert.ok(lines[0].startsWith('**Reported by:** a@b.ac.uk (Lab Member)'));
+    assert.ok(body.indexOf('a@b.ac.uk') < body.indexOf('ceo@'));
+    assert.equal(lines.indexOf('---'), 5);
+    assert.ok(lines.indexOf('**Source:** STARbase  ') < lines.indexOf('---'));
+});
+
+test('buildIssue neutralises @mentions in the title and description but not the reporter line', () => {
+    const r = buildIssue({ ...base, title: 'cc @octocat', description: 'ping @org/team and @someone' });
+    assert.equal(r.title, '[Bug] cc @​octocat');
+    assert.ok(r.body.includes('@​org/team'));
+    assert.ok(r.body.includes('@​someone'));
+    assert.ok(!/@(?!​)(org|someone)/.test(r.body));
+    assert.match(r.body, /\*\*Reported by:\*\* a@b\.ac\.uk/);
+});
+
+test('buildIssue redacts JSON-shaped secrets and bare JWTs', () => {
+    const { body } = buildIssue({
+        ...base,
+        diagnostics: '{"access_token":"abc123","password": "hunter2", "n": 1}',
+        consoleTail: 'token: tok999 saw eyJhbGciOi.eyJzdWIiOjF9.sigsig in a header',
+    });
+    for (const leaked of ['abc123', 'hunter2', 'tok999', 'eyJhbGciOi', 'sigsig']) {
+        assert.ok(!body.includes(leaked), `${leaked} leaked`);
+    }
+    assert.match(body, /"access_token":"<redacted>"/);
+    assert.match(body, /"n": 1/);
+    assert.match(body, /<redacted-jwt>/);
+});
+
 test('buildIssue truncates an oversized title to GitHub-friendly length', () => {
     const r = buildIssue({ ...base, title: 'x'.repeat(400) });
     assert.ok(r.title.length <= 250);

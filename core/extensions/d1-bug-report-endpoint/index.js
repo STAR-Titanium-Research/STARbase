@@ -45,6 +45,10 @@ function resolveScope(area, scope) {
 const SECRET_PATTERNS = [
     [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer <redacted>'],
     [/\b(access_token|refresh_token|token|password|secret|api_key)=[^&\s]+/gi, '$1=<redacted>'],
+    // JSON-shaped (and `key: value`) secrets, e.g. {"access_token":"abc"}. Key kept, value replaced.
+    [/("?\b(?:access_token|refresh_token|token|password|secret|api_key)"?\s*[:=]\s*)"?(?!<redacted)[^"&\s,}]+"?/gi, '$1"<redacted>"'],
+    // A bare JWT (header.payload.signature) with no key or Bearer prefix in front of it.
+    [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, '<redacted-jwt>'],
 ];
 const redact = (text) => SECRET_PATTERNS.reduce((t, [re, to]) => t.replace(re, to), text);
 
@@ -60,8 +64,20 @@ const fence = (text, limit) => [
 const BASE_LABELS = ['starbase-report'];
 
 // A literal backtick in the route would close the code span and let the rest render as markdown.
+// The route is client-supplied: drop any query/fragment (they can carry ids and tokens), flatten
+// whitespace controls so it stays on one line, remove backticks, cap the length, and redact.
 const safeRoute = (route) =>
-    String(route || 'unknown').slice(0, 300).replace(/`/g, "'");
+    redact(
+        String(route || 'unknown')
+            .replace(/[?#].*/s, '')
+            .replace(/[\r\n\t]/g, ' ')
+            .replace(/`/g, '')
+            .slice(0, 200),
+    ).trim() || 'unknown';
+
+// Free text from the reporter must not ping people: a zero-width space after '@' stops GitHub
+// turning it into a mention. (The trusted reporter line is not passed through this.)
+const defang = (text) => String(text).replace(/@/g, '@​');
 
 export function buildIssue({
     title,
@@ -75,7 +91,7 @@ export function buildIssue({
     diagnostics = '',
     consoleTail = '',
 }) {
-    let t = String(title ?? '').trim();
+    let t = defang(String(title ?? '').trim());
     if (!t) return { error: 'A title is required.' };
     const k = KINDS[kind] ? kind : 'bug';
     const a = AREAS.has(area) ? area : 'general';
@@ -86,14 +102,16 @@ export function buildIssue({
         ? `${reporterEmail}${role ? ` (${role})` : ''}`
         : '_unknown_';
     const resolved = resolveScope(a, scope);
+    // Trusted metadata goes FIRST so the free-text description below cannot forge or displace it.
     const parts = [
-        String(description ?? '').trim().slice(0, 20000) || '_(no description provided)_',
-        '',
-        '---',
-        `**Area:** ${a}${resolved ? ` › ${resolved}` : ''}  `,
         `**Reported by:** ${reporter}  `,
+        `**Area:** ${a}${resolved ? ` › ${resolved}` : ''}  `,
         `**Route at time of report:** \`${safeRoute(route)}\`  `,
         '**Source:** STARbase  ',
+        '',
+        '---',
+        '',
+        defang(String(description ?? '').trim().slice(0, 20000)) || '_(no description provided)_',
     ];
     // Browser state first: short, and answers "what browser/size/locale" without a round-trip.
     // The console tail is collapsed so it does not bury the description. Limits leave headroom

@@ -15,13 +15,14 @@ const host = useExplorerHost();
 const kind = ref<ReportKind>('bug');
 const area = ref('general');
 const scope = ref('');
-const includeDiagnostics = ref(true);
+const includeDiagnostics = ref(false);
 const title = ref('');
 const description = ref('');
 
 // vue-router records where the person navigated from; by the time they are here the page they were
 // on is no longer in the address, so this is the best available "where did it happen".
-const route = (window.history.state?.back as string | undefined) || 'unknown';
+// The query and fragment are dropped: they can carry record ids or tokens, and the server also strips them.
+const route = ((window.history.state?.back as string | undefined) || 'unknown').replace(/[?#].*/s, '') || 'unknown';
 const suggestion = suggestFromRoute(route);
 if (suggestion) {
 	area.value = suggestion.area;
@@ -112,7 +113,7 @@ async function send() {
 
 					<label class="lf-check">
 						<input v-model="includeDiagnostics" type="checkbox" data-test="bug-debug" @change="refreshPreview" />
-						<span>Include diagnostics (browser, page address without its query, recent console errors). No page content or passwords.</span>
+						<span>Include diagnostics. This adds browser details and recent console errors, which may contain record values. Passwords and tokens are stripped.</span>
 					</label>
 					<details v-if="includeDiagnostics" class="rb-preview" @toggle="refreshPreview">
 						<summary>See exactly what will be attached</summary>
