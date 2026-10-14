@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-	TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, listPending, listTeams, removeMember, setManager,
+	TeamsApiError, addMember, cachedTeam, clearTeamCache, createTeam, decidePending, deleteTeam, getTeam, listPending, listTeams, onTeamChange, removeMember, setManager,
 	updateTeam, uploadTeamLogo,
 } from './teamsApi';
 
@@ -184,5 +184,57 @@ describe('a change forgets the kept read of its team', () => {
 		await updateTeam(bad, 't1', { name: 'B' }).catch(() => undefined);
 		await cachedTeam(bad, 't1');
 		expect(get).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('onTeamChange', () => {
+	it('tells a subscriber when its team is cleared, not other teams, and stops after unsubscribe', () => {
+		const a = vi.fn();
+		const b = vi.fn();
+		const stopA = onTeamChange('t1', a);
+		onTeamChange('t2', b);
+		clearTeamCache('t1');
+		expect(a).toHaveBeenCalledTimes(1);
+		expect(b).not.toHaveBeenCalled();
+		clearTeamCache();
+		expect(a).toHaveBeenCalledTimes(2);
+		expect(b).toHaveBeenCalledTimes(1);
+		stopA();
+		clearTeamCache('t1');
+		expect(a).toHaveBeenCalledTimes(2);
+		clearTeamCache('t2');
+		expect(b).toHaveBeenCalledTimes(2);
+	});
+	it('drops the kept read before it tells, so a refetch inside the callback is fresh', async () => {
+		const get = vi.fn(async () => ({ data: { team: { team_id: 't1' } } }));
+		const api = fakeApi({ get });
+		await cachedTeam(api, 't1');
+		let refetched = 0;
+		onTeamChange('t1', () => { void cachedTeam(api, 't1').then(() => (refetched += 1)); });
+		clearTeamCache('t1');
+		await Promise.resolve();
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+	it('is told after each successful write, and not after a failed one', async () => {
+		const fn = vi.fn();
+		onTeamChange('t1', fn);
+		const api = fakeApi();
+		await updateTeam(api, 't1', { name: 'B' });
+		await deleteTeam(api, 't1');
+		await addMember(api, 't1', 'p');
+		await setManager(api, 't1', 'p', true);
+		await removeMember(api, 't1', 'p');
+		expect(fn).toHaveBeenCalledTimes(5);
+		const bad = fakeApi({ post: vi.fn(async () => { throw fail(409, 'x', 'LAST_MANAGER'); }) });
+		await addMember(bad, 't1', 'p').catch(() => undefined);
+		expect(fn).toHaveBeenCalledTimes(5);
+	});
+	it('lets a callback unsubscribe itself while being told', () => {
+		const calls: string[] = [];
+		const stop = onTeamChange('t9', () => { calls.push('a'); stop(); });
+		onTeamChange('t9', () => calls.push('b'));
+		clearTeamCache('t9');
+		clearTeamCache('t9');
+		expect(calls).toEqual(['a', 'b', 'b']);
 	});
 });

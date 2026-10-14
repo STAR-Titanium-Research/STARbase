@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import '../components/tokens.css';
 import { EXPLORER_HOST, type ExplorerHost } from '../host';
-import { cachedTeam, type TeamDetail } from './teamsApi';
+import { cachedTeam, onTeamChange, type TeamDetail } from './teamsApi';
+import { cardStatus, triggerAttrs } from './teamCardModel';
 import TeamTile from './TeamTile.vue';
 
 // The members card of a team: wrap whatever names the team (a chip, a row, a name) in <TeamCard :team-id>, and a small popover opens on mouse
 // hover, keyboard focus and tap. It lists the first six members (managers first, as the endpoint sorts them; a manager badge; "no login" for
 // a person who cannot sign in yet), "and N more", and Open team (the team's page). Escape or leaving closes it; a tap on the trigger keeps it
 // open until the next tap, Escape or a tap outside. The team is read once per page (the cache in teamsApi) the first time the card opens.
+//
+// The trigger (the default slot) gets the slot props `open`, `popId` and `triggerAttrs` (aria-haspopup, aria-expanded, aria-controls): bind them
+// on the element that opens the card, <template #default="{ triggerAttrs }"><button v-bind="triggerAttrs">, so a screen reader hears that a card
+// opened. The card says its content in a live region. When the team changes (a member added or removed through teamsApi) a mounted card forgets
+// what it showed and reads again the next time it is open.
 //
 // The popover is position: fixed, placed from the trigger's box and kept on screen, so a dialog's or a panel's overflow does not clip it.
 const props = defineProps<{ teamId: string }>();
@@ -29,9 +35,13 @@ const pinned = ref(false);
 const detail = ref<TeamDetail | null>(null);
 const failed = ref('');
 const loading = ref(false);
+// bumped when what is shown is dropped, so a read that was still on its way does not put the old team back
+let generation = 0;
 const pos = ref({ left: 0, top: 0 });
 let timer: ReturnType<typeof setTimeout> | null = null;
 let mute = false;
+
+const attrs = computed(() => triggerAttrs(open.value, uid));
 
 const team = computed(() => detail.value?.team ?? null);
 const members = computed(() => detail.value?.members ?? []);
@@ -43,30 +53,40 @@ function clearTimer() {
 	timer = null;
 }
 
-// The team is read through the page cache; a failed read is not cached, so the next opening retries. A card whose team changes starts again.
+// The team is read through the page cache; a failed read is not cached, so the next opening retries.
 async function load() {
 	if (detail.value || loading.value) return;
 	const asked = props.teamId;
+	const gen = generation;
 	loading.value = true;
 	failed.value = '';
 	try {
 		const d = await cachedTeam(host.api, asked);
-		if (asked === props.teamId) detail.value = d;
+		if (asked === props.teamId && gen === generation) detail.value = d;
 	} catch (e: any) {
-		if (asked === props.teamId) failed.value = e?.message || 'Could not read the team.';
+		if (asked === props.teamId && gen === generation) failed.value = e?.message || 'Could not read the team.';
 	} finally {
-		if (asked === props.teamId) loading.value = false;
+		if (asked === props.teamId && gen === generation) loading.value = false;
 	}
 }
-watch(
-	() => props.teamId,
-	() => {
-		detail.value = null;
-		failed.value = '';
-		loading.value = false;
-		if (open.value) void load();
-	},
-);
+// Forget what is shown (another team, or this one changed) and read again at once when the card is open.
+function forget() {
+	generation += 1;
+	detail.value = null;
+	failed.value = '';
+	loading.value = false;
+	if (open.value) void load();
+}
+let stop: (() => void) | null = null;
+function follow() {
+	stop?.();
+	stop = onTeamChange(props.teamId, forget);
+}
+onMounted(follow);
+watch(() => props.teamId, () => {
+	forget();
+	follow();
+});
 
 // Under the trigger, left-aligned with it, and moved to stay inside the window (above the trigger when there is no room below).
 function place() {
@@ -165,26 +185,31 @@ function openTeam() {
 	host.navigate(`/teams/${encodeURIComponent(props.teamId)}`);
 }
 
-onBeforeUnmount(close);
+onBeforeUnmount(() => {
+	stop?.();
+	close();
+});
 </script>
 
 <template>
 	<span ref="root" class="d1-team-card" @pointerenter="onEnter" @pointerleave="onLeave" @focusin="onFocusIn" @focusout="onFocusOut" @click="onClick">
-		<slot />
+		<slot :open="open" :popId="uid" :triggerAttrs="attrs" />
 		<div
 			v-if="open"
 			:id="uid"
 			ref="pop"
 			class="d1-kit pop"
-			role="group"
+			role="dialog"
 			:aria-label="team ? `Team ${team.name}` : 'Team'"
 			:style="{ left: `${pos.left}px`, top: `${pos.top}px` }"
 			@pointerenter="(e: PointerEvent) => isMouse(e) && clearTimer()"
 			@pointerleave="onLeave"
 			@click.stop
 		>
-			<p v-if="failed" class="msg err" role="alert">{{ failed }}</p>
-			<p v-else-if="!team" class="msg" role="status">Loading…</p>
+			<!-- the live region is in the card from the moment it opens, so the change from Loading to the team is announced -->
+			<span class="sr" role="status" aria-live="polite">{{ cardStatus(team, members.length, failed) }}</span>
+			<p v-if="failed" class="msg err" aria-hidden="true">{{ failed }}</p>
+			<p v-else-if="!team" class="msg" aria-hidden="true">Loading…</p>
 			<template v-else>
 				<header class="head">
 					<TeamTile :team="team" size="md" />
@@ -216,6 +241,7 @@ onBeforeUnmount(close);
 	border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-surface); color: var(--theme--foreground); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
 	font-size: var(--fs-md, 13px); font-weight: 400; text-align: left; white-space: normal; cursor: default;
 }
+.sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .head { display: flex; align-items: center; gap: 10px; }
 .titles { min-width: 0; display: flex; flex-direction: column; }
 .nm { font-weight: 700; overflow-wrap: anywhere; }

@@ -43,13 +43,15 @@ function toggle() {
 <template>
 	<li class="row team">
 		<TeamCard :team-id="team.team_id">
-			<button type="button" class="ident" :aria-label="`${team.name}. ${teamMembersLabel(team.member_count)}. Show members`">
-				<TeamTile :team="team" size="md" />
-				<span class="who">
-					<span class="name">{{ team.name }}</span>
-					<span class="sub">{{ teamMembersLabel(team.member_count) }}</span>
-				</span>
-			</button>
+			<template #default="{ triggerAttrs }">
+				<button type="button" class="ident" v-bind="triggerAttrs" :aria-label="`${team.name}. ${teamMembersLabel(team.member_count)}. Show members`">
+					<TeamTile :team="team" size="md" />
+					<span class="who">
+						<span class="name">{{ team.name }}</span>
+						<span class="sub">{{ teamMembersLabel(team.member_count) }}</span>
+					</span>
+				</button>
+			</template>
 		</TeamCard>
 		<TeamFaces :team-id="team.team_id" />
 		<span class="grow" />

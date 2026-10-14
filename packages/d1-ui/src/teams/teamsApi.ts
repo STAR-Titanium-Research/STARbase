@@ -184,7 +184,7 @@ export const uploadTeamLogo = (api: HostApi, file: File): Promise<string> =>
 	);
 
 // The members card (TeamCard) and the face stacks of the access dialog read the same team many times on one page: the answer is kept per
-// page load. A failed read is forgotten so the next hover retries. Call clearTeamCache after a change so a card does not show stale members.
+// page load. A failed read is forgotten so the next hover retries. A change drops it (clearTeamCache) and tells the mounted cards (onTeamChange).
 const cache = new Map<string, Promise<TeamDetail>>();
 
 export function cachedTeam(api: HostApi, id: string): Promise<TeamDetail> {
@@ -207,7 +207,26 @@ function forgetAfter(id: string) {
 	};
 }
 
+// Who is showing a team: a mounted TeamCard or TeamFaces subscribes for its team, and is told whenever that team's kept read is dropped
+// (a successful team or membership write, or clearTeamCache), so it can forget what it shows and read again when next needed.
+const listeners = new Map<string, Set<() => void>>();
+
+/** Call `fn` after the kept read of team `id` is dropped. Returns the function that stops it. */
+export function onTeamChange(id: string, fn: () => void): () => void {
+	let set = listeners.get(id);
+	if (!set) listeners.set(id, (set = new Set()));
+	set.add(fn);
+	return () => {
+		const s = listeners.get(id);
+		s?.delete(fn);
+		if (s && !s.size) listeners.delete(id);
+	};
+}
+
+/** Drop the kept read of one team (or all) and tell whoever shows it. The read is gone before they are told, so a refetch is fresh. */
 export function clearTeamCache(id?: string): void {
+	const ids = id === undefined ? [...listeners.keys()] : [id];
 	if (id === undefined) cache.clear();
 	else cache.delete(id);
+	for (const key of ids) for (const fn of [...(listeners.get(key) ?? [])]) fn();
 }

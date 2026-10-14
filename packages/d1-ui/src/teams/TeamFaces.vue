@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue';
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import '../components/tokens.css';
 import { EXPLORER_HOST } from '../host';
 import { initials } from '../access/accessModel';
-import { cachedTeam, type TeamMember } from './teamsApi';
+import { cachedTeam, onTeamChange, type TeamMember } from './teamsApi';
 
 // A small stack of overlapping initials circles: the first few members of a team and "+N" for the rest. Read through the page's team cache
 // (the same read as the members card), so a dialog with several teams asks the server once per team. Decoration only (aria-hidden): the
@@ -12,21 +12,39 @@ const props = withDefaults(defineProps<{ teamId: string; max?: number }>(), { ma
 
 const host = inject(EXPLORER_HOST);
 const members = ref<TeamMember[]>([]);
-let current = '';
+let seq = 0;
+let shownFor = '';
 
 async function load() {
-	current = props.teamId;
-	members.value = [];
+	const mine = ++seq;
+	// another team: clear; the same team read again keeps the old faces until the new ones arrive (no flicker)
+	if (shownFor !== props.teamId) members.value = [];
 	if (!host) return;
 	try {
 		const d = await cachedTeam(host.api, props.teamId);
-		if (current === props.teamId) members.value = d.members;
+		if (mine === seq) {
+			members.value = d.members;
+			shownFor = props.teamId;
+		}
 	} catch {
 		// nothing to show
 	}
 }
-onMounted(load);
-watch(() => props.teamId, load);
+// A member added or removed through teamsApi drops the kept read: read again, so the stack is not stale.
+let stop: (() => void) | null = null;
+function follow() {
+	stop?.();
+	stop = onTeamChange(props.teamId, () => void load());
+}
+onMounted(() => {
+	follow();
+	void load();
+});
+watch(() => props.teamId, () => {
+	follow();
+	void load();
+});
+onBeforeUnmount(() => stop?.());
 
 const faces = computed(() => members.value.slice(0, props.max));
 const rest = computed(() => Math.max(0, members.value.length - props.max));
