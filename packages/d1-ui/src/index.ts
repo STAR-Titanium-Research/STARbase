@@ -23,7 +23,8 @@ export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
 // Display helpers and error predicates
 export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
-export { humanise, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
+export { humanise, statusStyle, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';
+export type { Tone } from './status';
 export { estimateMassGrams } from './mass';
 export { buildLife, truncatedNotes } from './life';
 export type { LifeItem, TraceResponse } from './life';
