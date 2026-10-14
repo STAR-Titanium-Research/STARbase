@@ -75,6 +75,10 @@ export function starbaseLinks(serverBase: string): LinkConfig {
 				if (startsWithSegment(path, from)) return { kind: 'route', to: to + path.slice(from.length) };
 			}
 			if (isLocalPage(path)) return { kind: 'route', to: path };
+			// Old Data Studio links to the Force crawler module land on STARbase's own crawler page.
+			if (startsWithSegment(path, '/d1-force-crawler')) {
+				return { kind: 'route', to: '/crawler' + path.slice('/d1-force-crawler'.length) };
+			}
 			if (REPORT.test(path)) return { kind: 'external', href: base + path };
 			return { kind: 'external', href: `${base}/admin${path}` };
 		},

@@ -72,6 +72,13 @@ describe('STARbase', () => {
 			if (r.kind === 'route') expect(canonicalPath(r.to)).toBe(p);
 		}
 	});
+	it('maps old /d1-force-crawler links (and subpaths) to its own /crawler page', () => {
+		use();
+		expect(resolveLink('/d1-force-crawler')).toEqual({ kind: 'route', to: '/crawler' });
+		expect(resolveLink('/d1-force-crawler?x=1')).toEqual({ kind: 'route', to: '/crawler?x=1' });
+		expect(resolveLink('/d1-force-crawler/jobs/3')).toEqual({ kind: 'route', to: '/crawler/jobs/3' });
+		expect(resolveLink('/d1-force-crawlers')).toEqual({ kind: 'external', href: `${D1}/admin/d1-force-crawlers` });
+	});
 	it('sends everything else to d1-server', () => {
 		use();
 		expect(resolveLink('/content/materials/7')).toEqual({ kind: 'external', href: `${D1}/admin/content/materials/7` });
