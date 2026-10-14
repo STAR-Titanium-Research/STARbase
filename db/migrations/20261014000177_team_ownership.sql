@@ -22,6 +22,8 @@
 --     (a campaign's owner reads its samples, operations and tests; the owner of a campaign, operation or test reads its project) in s_read,
 --     rec_read, can_read_project and their exact-set counterparts readers_of_sample / _operation / _test / _project and the candidates, through the
 --     views v_c_owner, v_o_owner, v_t_owner (the person owner plus the manage rows) and the predicates c_owner, o_owner, t_owner;
+--     the orphan amnesty (operation_open_of: an unrestricted operation with no owner, project or campaign is open to every member) now needs no
+--     team owner either, and the operations update trigger compares owner_team_id, so a team-owned orphan operation is never open to all;
 --     people_attention counts a suspended manager of a team that owns records under suspended_owns_records. The *_access_upd triggers of
 --     operations, tests and campaigns now also compare role (a derived row turning manage or edit changes the readers).
 --     The Lab Member rules (who may update or delete in Directus) are migration 178.
@@ -963,6 +965,33 @@ BEGIN
                                               AND (xp.project_id IS NULL OR NOT xp.restricted OR EXISTS (SELECT 1 FROM d1_private.v_p_list pl WHERE pl.project_id = xp.project_id AND pl.user_id = pa.uid)))))));
 END
 $$;
+CREATE OR REPLACE FUNCTION d1_private.operation_open_of(ids uuid[]) RETURNS TABLE (record_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
+    SELECT o.operation_id FROM manufacturing_operations o
+     WHERE o.operation_id = ANY (ids) AND o.owner_person_id IS NULL AND o.owner_team_id IS NULL AND o.project_id IS NULL AND o.campaign_id IS NULL AND NOT o.restricted
+       AND (o.sample_id IS NULL
+            OR EXISTS (SELECT 1 FROM physical_samples s LEFT JOIN projects sp ON sp.project_id = s.project_id
+                        WHERE s.sample_id = o.sample_id AND NOT s.restricted AND coalesce(NOT sp.restricted, true)
+                          AND (NOT EXISTS (SELECT 1 FROM campaign_samples cs WHERE cs.sample_id = s.sample_id)
+                               OR EXISTS (SELECT 1 FROM campaign_samples cs JOIN campaigns c ON c.campaign_id = cs.campaign_id LEFT JOIN projects cp ON cp.project_id = c.project_id
+                                           WHERE cs.sample_id = s.sample_id AND NOT c.restricted AND coalesce(NOT cp.restricted, true))))) $$;
+COMMENT ON FUNCTION d1_private.operation_open_of(uuid[]) IS 'The operations every member may read (the narrowed orphan amnesty: no person owner, no team owner (migration 177), no project, no campaign; operation_open_to_all materialises it).';
+CREATE OR REPLACE FUNCTION d1_private.trg_readers_manufacturing_operations_upd() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE
+    v_seed_o uuid[];
+    v_touch_p uuid[];
+BEGIN
+    SELECT array_agg(n.operation_id),
+           array_agg(o.project_id) || array_agg(n.project_id)
+      INTO v_seed_o, v_touch_p
+      FROM old_rows o JOIN new_rows n ON n.operation_id = o.operation_id
+     WHERE (n.owner_person_id, n.owner_team_id, n.project_id, n.campaign_id, n.sample_id, n.restricted) IS DISTINCT FROM (o.owner_person_id, o.owner_team_id, o.project_id, o.campaign_id, o.sample_id, o.restricted);
+    IF v_seed_o IS NULL THEN
+        RETURN NULL;
+    END IF;
+    PERFORM d1_private.refresh_readers(NULL, d1_private.uniq(v_seed_o), NULL, NULL, NULL, NULL, NULL, d1_private.uniq(v_touch_p), NULL);
+    RETURN NULL;
+END
+$$;
 CREATE OR REPLACE FUNCTION d1_private.campaign_candidates(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
     SELECT DISTINCT q.record_id, q.user_id FROM (
         SELECT c.campaign_id AS record_id, d1_private.person_login(c.owner_person_id) AS user_id FROM campaigns c WHERE c.campaign_id = ANY (ids)
@@ -1166,6 +1195,33 @@ BEGIN
                                             WHERE x.sample_id = s.sample_id
                                               AND (NOT xc.restricted OR EXISTS (SELECT 1 FROM d1_private.v_c_list cl WHERE cl.campaign_id = xc.campaign_id AND cl.user_id = pa.uid))
                                               AND (xp.project_id IS NULL OR NOT xp.restricted OR EXISTS (SELECT 1 FROM d1_private.v_p_list pl WHERE pl.project_id = xp.project_id AND pl.user_id = pa.uid)))))));
+END
+$$;
+CREATE OR REPLACE FUNCTION d1_private.operation_open_of(ids uuid[]) RETURNS TABLE (record_id uuid) LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
+    SELECT o.operation_id FROM manufacturing_operations o
+     WHERE o.operation_id = ANY (ids) AND o.owner_person_id IS NULL AND o.project_id IS NULL AND o.campaign_id IS NULL AND NOT o.restricted
+       AND (o.sample_id IS NULL
+            OR EXISTS (SELECT 1 FROM physical_samples s LEFT JOIN projects sp ON sp.project_id = s.project_id
+                        WHERE s.sample_id = o.sample_id AND NOT s.restricted AND coalesce(NOT sp.restricted, true)
+                          AND (NOT EXISTS (SELECT 1 FROM campaign_samples cs WHERE cs.sample_id = s.sample_id)
+                               OR EXISTS (SELECT 1 FROM campaign_samples cs JOIN campaigns c ON c.campaign_id = cs.campaign_id LEFT JOIN projects cp ON cp.project_id = c.project_id
+                                           WHERE cs.sample_id = s.sample_id AND NOT c.restricted AND coalesce(NOT cp.restricted, true))))) $$;
+COMMENT ON FUNCTION d1_private.operation_open_of(uuid[]) IS 'The operations every member may read (the narrowed orphan amnesty; operation_open_to_all materialises it).';
+CREATE OR REPLACE FUNCTION d1_private.trg_readers_manufacturing_operations_upd() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE
+    v_seed_o uuid[];
+    v_touch_p uuid[];
+BEGIN
+    SELECT array_agg(n.operation_id),
+           array_agg(o.project_id) || array_agg(n.project_id)
+      INTO v_seed_o, v_touch_p
+      FROM old_rows o JOIN new_rows n ON n.operation_id = o.operation_id
+     WHERE (n.owner_person_id, n.project_id, n.campaign_id, n.sample_id, n.restricted) IS DISTINCT FROM (o.owner_person_id, o.project_id, o.campaign_id, o.sample_id, o.restricted);
+    IF v_seed_o IS NULL THEN
+        RETURN NULL;
+    END IF;
+    PERFORM d1_private.refresh_readers(NULL, d1_private.uniq(v_seed_o), NULL, NULL, NULL, NULL, NULL, d1_private.uniq(v_touch_p), NULL);
+    RETURN NULL;
 END
 $$;
 CREATE OR REPLACE FUNCTION d1_private.readers_of_operation(ids uuid[]) RETURNS TABLE (record_id uuid, user_id uuid) LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$

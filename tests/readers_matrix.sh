@@ -1322,6 +1322,30 @@ BEGIN
     PERFORM m.done();
 END $$;
 
+-- the orphan amnesty: an unrestricted operation with no person owner, no project and no campaign is open to every member. A team-owned one has an
+-- owner: it is not open to all (only its team reads it); clearing the team owner makes it an orphan again. A team with no members writes no access row,
+-- so only the operations update trigger (which compares owner_team_id) refreshes the amnesty then.
+CREATE OR REPLACE FUNCTION m.c_team_own_orphan_open() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE o uuid; o2 uuid; t uuid; t2 uuid;
+BEGIN
+    o := m.mk_op('too_o', NULL, NULL, NULL, NULL, false); o2 := m.mk_op('too_o2', NULL, NULL, NULL, NULL, false);
+    t := m.mk_team('too_team', 'b', ARRAY['c']);
+    INSERT INTO teams (team_id, name) VALUES (m.id('too_empty'), 'M team empty orphan'); t2 := m.id('too_empty');
+    PERFORM m.drift('setup');
+    PERFORM m.expect(m.open(o) AND m.open(o2) AND m.rd('operation', o, m.u('d')) IS NOT TRUE AND ref.op_open(o) AND ref.op_read(o, m.u('d')), 'before: an ownerless orphan operation is open to every member (the oracle too)');
+    UPDATE manufacturing_operations SET owner_team_id = t WHERE operation_id = o;
+    UPDATE manufacturing_operations SET owner_team_id = t2 WHERE operation_id = o2;
+    PERFORM m.drift('the orphan operations become team-owned');
+    PERFORM m.expect(NOT m.open(o) AND NOT m.open(o2), 'team-owned: not open to all (also for a team with no members)');
+    PERFORM m.expect(NOT ref.op_open(o) AND NOT ref.op_open(o2) AND NOT ref.op_read(o, m.u('d')) AND NOT ref.op_read(o2, m.u('d')), 'the oracle agrees: a stranger cannot read them');
+    PERFORM m.expect(m.rd('operation', o, m.u('b')) AND m.rd('operation', o, m.u('c')) AND NOT m.rd('operation', o, m.u('d')), 'only the team reads the first');
+    PERFORM m.oracle_agree('operation', o); PERFORM m.oracle_agree('operation', o2);
+    UPDATE manufacturing_operations SET owner_team_id = NULL WHERE operation_id IN (o, o2);
+    PERFORM m.drift('the team owners cleared');
+    PERFORM m.expect(m.open(o) AND m.open(o2) AND ref.op_open(o) AND ref.op_open(o2), 'the reverse: ownerless again, open to all again');
+    PERFORM m.done();
+END $$;
+
 CREATE OR REPLACE FUNCTION m.c_team_own_clear() RETURNS void LANGUAGE plpgsql AS $$
 DECLARE p uuid; s uuid; t uuid; o uuid;
 BEGIN

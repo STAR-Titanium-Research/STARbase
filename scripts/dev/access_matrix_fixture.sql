@@ -203,7 +203,7 @@ CREATE FUNCTION ref.expected_json() RETURNS text LANGUAGE sql STABLE AS $$
                     FROM ref.fixture_users f),
         -- the real operations every member reads (the narrowed amnesty, ref.amnesty_open): the copy's ownerless legacy runs
         'real_amnesty_ops', (SELECT coalesce(jsonb_agg(o.operation_id ORDER BY o.operation_id), '[]') FROM manufacturing_operations o
-                              WHERE ref.amnesty_open(o.owner_person_id, o.project_id, o.campaign_id, o.restricted, o.sample_id)
+                              WHERE ref.amnesty_open(o.owner_person_id, o.owner_team_id, o.project_id, o.campaign_id, o.restricted, o.sample_id)
                                 AND o.operation_id NOT IN (SELECT id FROM ref.fx_ids WHERE kind = 'manufacturing_operations')),
         'universes', (SELECT jsonb_agg(jsonb_build_object(
                           'k', k, 'P', ref.id('P' || k), 'Q', ref.id('Q' || k), 'C', ref.id('C' || k), 'C2', ref.id('C2_' || k),

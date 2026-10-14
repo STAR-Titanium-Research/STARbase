@@ -1367,6 +1367,31 @@ BEGIN
 END $$;
 SQL
 
+run_case_own team_owned_orphan_operation_is_not_open_to_all <<'SQL'
+DO $$
+DECLARE o uuid; t uuid := pg_temp.tf('team'); e uuid; mth uuid; ua uuid := pg_temp.tf('ua'); uc uuid := pg_temp.tf('uc');
+BEGIN
+    SELECT method_id INTO mth FROM manufacturing_methods ORDER BY method_id LIMIT 1;
+    -- an ownerless, unrestricted operation with no project, campaign or sample: the orphan amnesty, open to every member
+    INSERT INTO manufacturing_operations (method_id, source_system) VALUES (mth, 'tf_test') RETURNING operation_id INTO o;
+    ASSERT EXISTS (SELECT 1 FROM operation_open_to_all WHERE record_id = o), 'an ownerless orphan operation is open to all';
+    -- team-owned: it has an owner, so it is not an orphan; only the team reads it
+    UPDATE manufacturing_operations SET owner_team_id = t WHERE operation_id = o;
+    ASSERT NOT EXISTS (SELECT 1 FROM operation_open_to_all WHERE record_id = o), 'a team-owned orphan operation is not open to all';
+    ASSERT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = o AND user_id = ua) AND NOT EXISTS (SELECT 1 FROM operation_readers WHERE record_id = o AND user_id = uc), 'the team reads it, a stranger does not';
+    ASSERT NOT EXISTS (SELECT 1 FROM d1_private.operation_open_of(ARRAY[o])), 'operation_open_of agrees';
+    -- inserted team-owned, and owned by a team with no members (no access row is written: only the update trigger sees owner_team_id)
+    INSERT INTO manufacturing_operations (method_id, source_system, owner_team_id) VALUES (mth, 'tf_test', t) RETURNING operation_id INTO e;
+    ASSERT NOT EXISTS (SELECT 1 FROM operation_open_to_all WHERE record_id = e), 'inserted team-owned: not open to all';
+    UPDATE manufacturing_operations SET owner_team_id = NULL WHERE operation_id IN (o, e);
+    ASSERT (SELECT count(*) FROM operation_open_to_all WHERE record_id IN (o, e)) = 2, 'cleared (no person owner): open to all again';
+    INSERT INTO teams (name) VALUES ('TF empty ' || left(o::text, 8)) RETURNING team_id INTO t;
+    UPDATE manufacturing_operations SET owner_team_id = t WHERE operation_id = o;
+    ASSERT NOT EXISTS (SELECT 1 FROM operation_open_to_all WHERE record_id = o), 'owned by a team with no members: still not open to all (the update trigger compares owner_team_id)';
+    ASSERT d1_private.readers_drift_count() = 0 AND d1_private.team_drift_count() = 0, 'no drift';
+END $$;
+SQL
+
 # --- two sessions: a team grant added while a member joins. Each side's trigger reads what the other writes (the grant reads the members,
 # the joiner the grants); without a common lock each misses the other's uncommitted row and the joiner ends with neither a derived nor a
 # pending row (team_drift: missing). Session 1 holds its transaction open for 3 s, session 2 starts 1 s later. Both orders.

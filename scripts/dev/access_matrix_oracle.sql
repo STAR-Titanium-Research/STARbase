@@ -125,8 +125,10 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 -- the narrowed orphan amnesty: an operation with no owner, project or campaign, not restricted, and either no sample or a sample that is
 -- unrestricted with an open project (none or unrestricted) and either in no campaign or in at least one campaign open to everyone
 -- (unrestricted, open project). Open to everyone: no user argument.
-CREATE OR REPLACE FUNCTION ref.amnesty_open(owner uuid, project uuid, campaign uuid, restricted boolean, sample uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT owner IS NULL AND project IS NULL AND campaign IS NULL AND NOT restricted
+DROP FUNCTION IF EXISTS ref.amnesty_open(uuid, uuid, uuid, boolean, uuid);
+-- owner_team: the owning team (People 3); a team-owned operation has an owner, so it is not an orphan
+CREATE OR REPLACE FUNCTION ref.amnesty_open(owner uuid, owner_team uuid, project uuid, campaign uuid, restricted boolean, sample uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT owner IS NULL AND owner_team IS NULL AND project IS NULL AND campaign IS NULL AND NOT restricted
        AND (sample IS NULL OR EXISTS (
             SELECT 1 FROM physical_samples s
              WHERE s.sample_id = sample AND NOT s.restricted
@@ -153,7 +155,7 @@ CREATE OR REPLACE FUNCTION ref.op_read_ordinary(o uuid, u uuid) RETURNS boolean 
                         EXISTS (SELECT 1 FROM operation_access a WHERE a.operation_id = x.operation_id AND ref.me(a.person_id, u)), u)
       FROM manufacturing_operations x WHERE x.operation_id = o $$;
 CREATE OR REPLACE FUNCTION ref.op_open(o uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.amnesty_open(x.owner_person_id, x.project_id, x.campaign_id, x.restricted, x.sample_id)
+    SELECT ref.amnesty_open(x.owner_person_id, x.owner_team_id, x.project_id, x.campaign_id, x.restricted, x.sample_id)
       FROM manufacturing_operations x WHERE x.operation_id = o $$;
 CREATE OR REPLACE FUNCTION ref.op_read(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT coalesce(ref.op_read_ordinary(o, u), false) OR coalesce(ref.op_open(o), false) $$;
