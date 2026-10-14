@@ -170,7 +170,7 @@ recorded batch never joins a probable one.
 **Export.** The **Export** button above the map saves it as a **PNG image** or a **PDF, one page**. The file shows the whole
 map as it is drawn under your current **Show** settings (not just the part on screen), with a header naming the record,
 the date and who exported it, and a legend of the kinds of record in it. Your view does not move while it runs. It is named
-`process-map-<record code>-<date>`. A very large map is saved at screen resolution, and the page says so.
+`process-map-<record code>-<date>`. A very large map is saved at a reduced resolution that fits the browser (the page says which), and a map the browser cannot draw at all is reported, not saved empty.
 
 ## The Edit drawer
 

@@ -17,7 +17,7 @@ interface FakeNode {
   data: unknown;
   class?: string;
 }
-const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0 }));
+const store = vi.hoisted(() => ({ nodes: null as unknown, layouts: 0, gate: null as Promise<void> | null }));
 
 vi.mock('@vue-flow/core', async (orig) => {
   const { shallowRef: sref, ref: vref } = await import('vue');
@@ -62,6 +62,7 @@ vi.mock('./useElkLayout', () => ({
   useElkLayout: () => ({
     layout: async (graph: { nodes: { id: string }[] }, shown: Set<string>) => {
       store.layouts++;
+      if (store.gate) await store.gate;
       const out: Record<string, { x: number; y: number }> = {};
       graph.nodes.filter((n) => shown.has(n.id)).forEach((n, i) => (out[n.id] = { x: 0, y: i * 100 }));
       return out;
@@ -105,6 +106,7 @@ async function open() {
 
 beforeEach(() => {
   store.layouts = 0;
+  store.gate = null;
   (store.nodes as ShallowRef<FakeNode[]>).value = [];
   vi.mocked(loadFamily).mockReset();
   vi.mocked(loadRecordRef).mockReset();
@@ -213,5 +215,37 @@ describe('useMapCanvas: an expand keeps what is placed (spec 6.7)', () => {
     await settle();
     expect(at('op:u3').x).toBe(0);
     expect(at('op:u3').y).toBeLessThan(900);
+  });
+});
+
+describe('useMapCanvas: whenSettled (the export waits for the layout)', () => {
+  it('is true at once when nothing is being laid out or moved', async () => {
+    const { canvas } = await open();
+    expect(await canvas.whenSettled()).toBe(true);
+  });
+
+  it('waits for a layout that is running, then says true', async () => {
+    const { canvas, map } = await open();
+    let release!: () => void;
+    store.gate = new Promise<void>((r) => (release = r));
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    void map.expand('op:u0');
+    await settle(); // the layout has started and is held by the gate
+    let done: boolean | null = null;
+    void canvas.whenSettled(2000).then((v) => (done = v));
+    await settle();
+    expect(done).toBeNull();
+    release();
+    await settle();
+    expect(done).toBe(true);
+  });
+
+  it('gives up after the time it was given, so the export can tell the person instead of photographing a moving map', async () => {
+    const { canvas, map } = await open();
+    store.gate = new Promise<void>(() => undefined); // a layout that never ends
+    vi.mocked(loadFamily).mockResolvedValue(familyOfX(0));
+    void map.expand('op:u0');
+    await settle();
+    expect(await canvas.whenSettled(60)).toBe(false);
   });
 });

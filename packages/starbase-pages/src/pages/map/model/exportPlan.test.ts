@@ -63,13 +63,31 @@ describe('exportPlan', () => {
   });
 
   it('clamps the pixel ratio for a huge map', () => {
-    const p = plan({ bounds: { x: 0, y: 0, width: 12000 - 80, height: 9000 - 80 - 200 } });
-    expect(p.width).toBe(12000);
+    const p = plan({ bounds: { x: 0, y: 0, width: 8000 - 80, height: 4000 - 80 - 200 } });
+    expect(p.width).toBe(8000);
     expect(p.pixelRatio).toBeLessThanOrEqual(16384 / p.width);
-    expect(p.width * p.pixelRatio * p.height * p.pixelRatio).toBeLessThanOrEqual(268_435_456);
+    expect(p.width * p.pixelRatio * p.height * p.pixelRatio).toBeLessThanOrEqual(67_108_864);
     expect(p.pixelRatio).toBeGreaterThanOrEqual(1);
     expect(p.reduced).toBe(true);
     expect(p.screenResolution).toBe(false);
+  });
+
+  it('lets the area cap bind: a 6000 x 4000 map at ratio 2 would be ~100 MP, so it is cut to 64 MP (16 MP on a touch device)', () => {
+    const bounds = { x: 0, y: 0, width: 6000, height: 4000 };
+    const desk = plan({ bounds });
+    expect(desk.pixelRatio).toBeLessThan(2);
+    expect(desk.pixelRatio).toBeGreaterThanOrEqual(1);
+    expect(desk.width * desk.pixelRatio * desk.height * desk.pixelRatio).toBeLessThanOrEqual(67_108_864);
+    expect(desk.screenResolution).toBe(false);
+    // ...and a touch device (a smaller canvas budget) cannot even keep ratio 1 for it.
+    const touch = plan({ bounds, coarse: true });
+    expect(touch.pixelRatio).toBe(1);
+    expect(touch.screenResolution).toBe(true);
+    // A map that fits the touch budget at ratio >= 1 is reduced to 16 MP, not 64.
+    const mid = plan({ bounds: { x: 0, y: 0, width: 3000, height: 2000 }, coarse: true });
+    expect(mid.pixelRatio).toBeLessThan(2);
+    expect(mid.width * mid.pixelRatio * mid.height * mid.pixelRatio).toBeLessThanOrEqual(16_777_216);
+    expect(plan({ bounds: { x: 0, y: 0, width: 3000, height: 2000 } }).pixelRatio).toBe(2);
   });
 
   it('keeps each side under 16384 px even when the area allows more', () => {
@@ -83,6 +101,19 @@ describe('exportPlan', () => {
     expect(p.pixelRatio).toBe(1);
     expect(p.reduced).toBe(true);
     expect(p.screenResolution).toBe(true);
+  });
+
+  it('gives the PDF its own ratio: enough for 300 dpi in the image box, never above the PNG ratio, never below 1', () => {
+    const small = plan({ format: 'pdf' });
+    expect(small.pdf?.pixelRatio).toBe(2); // 277 mm at 300 dpi is ~3272 px wide for a 880 px picture: more than the PNG's 2
+    const big = plan({ format: 'pdf', bounds: { x: 0, y: 0, width: 6000, height: 1000 } });
+    expect(big.pdf!.pixelRatio).toBeGreaterThanOrEqual(1);
+    expect(big.pdf!.pixelRatio).toBeLessThan(big.pixelRatio);
+    const imageWidthPx = (big.pdf!.imageBox.w / 25.4) * 300;
+    expect(big.width * big.pdf!.pixelRatio).toBeLessThanOrEqual(Math.max(imageWidthPx, big.width) + 1);
+    const huge = plan({ format: 'pdf', bounds: { x: 0, y: 0, width: 20000, height: 400 } });
+    expect(huge.pdf!.pixelRatio).toBe(1);
+    expect(plan().pdf).toBeUndefined();
   });
 
   it('has no PDF page for a PNG', () => {
@@ -137,6 +168,9 @@ describe('captureFilter', () => {
   });
   it('drops the hover card, wire tip, controls, minimap and notices', () => {
     for (const s of ['.hover-card', '.wire-tip', '.vue-flow__controls', '.vue-flow__minimap', '.pm-banner']) expect(captureFilter(el(s))).toBe(false);
+  });
+  it('drops the controls inside a card that are not meant for print: the + buttons, the fold and the "more" toggles', () => {
+    for (const s of ['.xbtn', '.fold', '.more-toggle']) expect(captureFilter(el(s))).toBe(false);
   });
   it('keeps text nodes, which have no matches()', () => {
     expect(captureFilter({} as unknown as Element)).toBe(true);

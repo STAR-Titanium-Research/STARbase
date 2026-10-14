@@ -61,6 +61,8 @@ export function useMapCanvas(map: ProcessMap) {
   const layoutError = ref('');
   let needsFit = true;
   let pending = false;
+  /** Layouts (and the move to their places) in progress: the export waits for none (whenSettled). */
+  let running = 0;
   /** The pending layout is an expand (new cards go beside what is placed), not a full layout; a full one wins when both are asked for. */
   let pendingMerges: MergeHint[] = [];
   let pendingFull = true;
@@ -172,6 +174,15 @@ export function useMapCanvas(map: ProcessMap) {
   }
 
   async function runLayout(): Promise<void> {
+    running++;
+    try {
+      await layoutOnce();
+    } finally {
+      running--;
+    }
+  }
+
+  async function layoutOnce(): Promise<void> {
     const mine = ++token;
     pending = false;
     // An expand lays out only what is new (spec §6.7); a first layout, Re-layout and a new direction lay out everything.
@@ -239,6 +250,20 @@ export function useMapCanvas(map: ProcessMap) {
   vf.onNodesInitialized(() => {
     if (pending) void runLayout();
   });
+
+  /**
+   * Resolves true once no layout is waiting or running and no card is moving (the export must not photograph a map half-way to its
+   * places), false if that has not happened within `timeoutMs`.
+   */
+  async function whenSettled(timeoutMs = 2000): Promise<boolean> {
+    await nextTick(); // a change made this tick has asked for its layout by now
+    const until = Date.now() + timeoutMs;
+    while (pending || running > 0) {
+      if (Date.now() >= until) return false;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return true;
+  }
 
   // ---- viewport ---------------------------------------------------------------------------------
   const fitIds = (ids: string[] | undefined, animate = true) => {
@@ -345,5 +370,5 @@ export function useMapCanvas(map: ProcessMap) {
     return { x: x0 - FRAME_PAD, y: y0 - FRAME_PAD - FRAME_LABEL, width: x1 - x0 + FRAME_PAD * 2, height: y1 - y0 + FRAME_PAD * 2 + FRAME_LABEL };
   });
 
-  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, fit, fitFocus, remeasure, reveal, frame };
+  return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, fit, fitFocus, remeasure, reveal, frame, whenSettled };
 }

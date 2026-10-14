@@ -156,7 +156,8 @@ const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, s
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
 
 // Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
-const mapExport = useMapExport({ canvas, map, person: () => personName(host.user.value) });
+// The project frame is part of the picture only when it is drawn (the same test the template makes).
+const mapExport = useMapExport({ canvas, map, projectFrame: () => (frameStyle.value && frameLabel.value ? canvas.frame.value : null), person: () => personName(host.user.value) });
 
 // The wire tooltip's last line: where Ctrl/⌘+click goes.
 const tipHint = computed(() => {
@@ -234,7 +235,10 @@ onBeforeUnmount(() => {
 						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
 						<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
 						<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
-						<div v-if="mapExport.error.value" class="pm-banner pm-bad" role="alert">{{ mapExport.error.value }}</div>
+						<div v-if="mapExport.error.value" class="pm-banner pm-bad pm-dismissable" role="alert">
+							<span>{{ mapExport.error.value }}</span>
+							<button type="button" class="pm-dismiss" aria-label="Dismiss" @click="mapExport.dismissError()"><v-icon name="close" x-small /></button>
+						</div>
 						<div v-else-if="mapExport.notice.value" class="pm-banner" role="status">{{ mapExport.notice.value }}</div>
 
 						<div
@@ -315,6 +319,10 @@ onBeforeUnmount(() => {
 	border-bottom: 1px solid var(--d1-line, var(--theme--border-color-subdued));
 }
 .pm-bad { color: var(--d1-bad, var(--theme--danger)); }
+.pm-dismissable { display: flex; align-items: center; gap: 8px; }
+.pm-dismissable span { flex: 1; }
+.pm-dismiss { display: inline-flex; padding: 2px; border: 0; border-radius: 4px; background: none; color: inherit; cursor: pointer; }
+.pm-dismiss:hover, .pm-dismiss:focus-visible { background: var(--d1-tile, var(--theme--background-subdued)); outline: none; }
 
 /* The project frame (spec D13): in flow coordinates inside Vue Flow's transformed pane, behind the nodes. */
 .pm-frame {

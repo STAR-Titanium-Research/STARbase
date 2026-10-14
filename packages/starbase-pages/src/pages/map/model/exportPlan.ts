@@ -22,6 +22,8 @@ export interface ExportInput {
   person: string | null;
   now: Date;
   format: 'png' | 'pdf';
+  /** A touch device (pointer: coarse): its canvas budget is smaller, so the area cap is lower. */
+  coarse?: boolean;
 }
 
 export interface ExportPlan {
@@ -42,7 +44,13 @@ export interface ExportPlan {
   legendHeight: number;
   /** The map's box inside the picture, and where flow (0,0) lands in it (a translation at zoom 1). */
   graph: { width: number; height: number; x: number; y: number };
-  pdf?: { format: 'a4' | 'a3'; orientation: 'landscape'; imageBox: { x: number; y: number; w: number; h: number } };
+  pdf?: {
+    format: 'a4' | 'a3';
+    orientation: 'landscape';
+    imageBox: { x: number; y: number; w: number; h: number };
+    /** The PDF's own pixel ratio: what 300 dpi needs in the image box, never above `pixelRatio`, never below 1. */
+    pixelRatio: number;
+  };
 }
 
 const PADDING = 40;
@@ -53,9 +61,11 @@ const LEGEND_ITEM = 130;
 const LEGEND_ROW = 24;
 const LEGEND_PAD = 20;
 const WANT_RATIO = 2;
-/** Browser canvas limits: each side, and width x height in pixels. */
+/** Canvas limits: each side (the browsers' hard limit), and width x height in pixels (kept well under the browsers' hard limits, which fail silently with an empty picture). */
 const MAX_SIDE = 16384;
-const MAX_AREA = 268_435_456;
+const MAX_AREA = 67_108_864; // 64 MP
+const MAX_AREA_COARSE = 16_777_216; // 16 MP on touch devices, whose canvases are smaller
+const PDF_DPI = 300;
 const PAGES = { a4: { w: 297, h: 210 }, a3: { w: 420, h: 297 } } as const;
 const MARGIN_MM = 10;
 
@@ -80,6 +90,7 @@ export function mergeBounds(boxes: Bounds[]): Bounds | null {
 
 export function exportPlan(input: ExportInput): ExportPlan {
   const { bounds, focus, person, now, format } = input;
+  const maxArea = input.coarse ? MAX_AREA_COARSE : MAX_AREA;
 
   const present = new Set(input.kinds);
   const legend = (Object.keys(KINDS) as Kind[]).filter((k) => present.has(k)).map((kind) => ({ kind, label: KINDS[kind].label }));
@@ -98,7 +109,7 @@ export function exportPlan(input: ExportInput): ExportPlan {
     y: PADDING - bounds.y,
   };
 
-  const fit = Math.min(WANT_RATIO, MAX_SIDE / width, MAX_SIDE / height, Math.sqrt(MAX_AREA / (width * height)));
+  const fit = Math.min(WANT_RATIO, MAX_SIDE / width, MAX_SIDE / height, Math.sqrt(maxArea / (width * height)));
   const screenResolution = fit < 1;
   const pixelRatio = screenResolution ? 1 : Math.floor(fit * 1000) / 1000;
 
@@ -127,13 +138,20 @@ export function exportPlan(input: ExportInput): ExportPlan {
     const scale = Math.min(box.w / width, box.h / height);
     const w = width * scale;
     const h = height * scale;
-    plan.pdf = { format: pageFormat, orientation: 'landscape', imageBox: { x: MARGIN_MM + (box.w - w) / 2, y: MARGIN_MM + (box.h - h) / 2, w, h } };
+    const dpiRatio = ((w / 25.4) * PDF_DPI) / width;
+    const pdfRatio = Math.max(1, Math.floor(Math.min(pixelRatio, dpiRatio) * 1000) / 1000);
+    plan.pdf = { format: pageFormat, orientation: 'landscape', imageBox: { x: MARGIN_MM + (box.w - w) / 2, y: MARGIN_MM + (box.h - h) / 2, w, h }, pixelRatio: pdfRatio };
   }
   return plan;
 }
 
-/** Everything the picture leaves out: the hover card, the wire tip, Vue Flow's controls and minimap, the notices. */
-const LEFT_OUT = ['.hover-card', '.wire-tip', '.vue-flow__controls', '.vue-flow__minimap', '.vue-flow__panel', '.pm-banner'].join(',');
+/**
+ * Everything the picture leaves out. The overlays (hover card, wire tip, Vue Flow's controls, minimap and panels, the notices) are
+ * not in the picture in the first place: the export clones only the transformation pane, which holds the nodes, wires and frame, so
+ * the first selectors are belt and braces. What is in the clone and must go: the controls inside a card, which are for the screen.
+ * The + buttons (expand a card or a slot's fan, `.xbtn`), the fold row and the "more" toggle of a card's minor fields.
+ */
+const LEFT_OUT = ['.hover-card', '.wire-tip', '.vue-flow__controls', '.vue-flow__minimap', '.vue-flow__panel', '.pm-banner', '.xbtn', '.fold', '.more-toggle'].join(',');
 
 /** html-to-image's `filter`: false drops a node (and what is under it) from the picture. Text nodes have no `matches`. */
 export function captureFilter(node: Element): boolean {

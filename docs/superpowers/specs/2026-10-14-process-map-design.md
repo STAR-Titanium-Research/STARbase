@@ -294,9 +294,16 @@ newer focus cancels older work. Errors show with `errorText` in the map panel, k
 ## 10. Slice 3 — export
 
 Export ▾ (PNG, PDF) in the title actions. Both render an off-screen export frame: header (focus code and
-kind, date, exporter), the whole graph fitted (Vue Flow `getNodesBounds` + `getViewportForBounds`), and a
-legend of the kinds present; `html-to-image` `toPng` (pixel ratio 2); PDF = `jspdf` with that PNG on one
-landscape page, A4 or A3 when the aspect ratio is wider than 2:1. Check STARbase's CSP / Caddy headers
+kind, date, exporter), the whole graph, and a legend of the kinds present. The graph is a clone of the Vue Flow
+pane (its transformation pane, so the hover card, controls and minimap are not in it) put into the frame at
+zoom 1, sized to the bounds of the drawn cards (and the project frame, when it is drawn) plus padding, with the
+cards' own controls (the + buttons, fold and "more" toggles) filtered out. `html-to-image` takes the picture
+(`toBlob` for the PNG, `toPng` for the PDF's image) at pixel ratio 2, reduced to stay inside the canvas limits
+(each side 16384 px; 64 MP in all, 16 MP on touch devices); `skipFonts: false`, because the card icons are a
+same-origin icon font. A browser that refuses the canvas returns an empty picture: it is retried once at ratio
+1 and then reported ("This map is too large to export in this browser"), never saved. PDF = `jspdf` with the
+picture on one landscape page, A4 or A3 when the aspect ratio is wider than 2:1, at the ratio 300 dpi needs
+there (at most the PNG's). Check STARbase's CSP / Caddy headers
 allow `img-src data: blob:` and that fonts are same-origin (embeddable). Downloads use the existing
 credentialed-blob pattern (never navigate).
 

@@ -20,6 +20,11 @@ describe('menuKey', () => {
     expect(menuKey('Escape', 0, 2)).toEqual({ close: true });
     expect(menuKey('Escape', -1, 0)).toEqual({ close: true });
   });
+  it('closes on Tab too, and lets the browser move focus on (native), unlike Escape', () => {
+    expect(menuKey('Tab', 0, 2)).toEqual({ close: true, native: true });
+    expect(menuKey('Tab', -1, 0)).toEqual({ close: true, native: true });
+    expect(menuKey('Escape', 0, 2)).not.toHaveProperty('native');
+  });
   it('ignores other keys and an empty menu', () => {
     expect(menuKey('a', 0, 2)).toBeNull();
     expect(menuKey('ArrowDown', 0, 0)).toBeNull();

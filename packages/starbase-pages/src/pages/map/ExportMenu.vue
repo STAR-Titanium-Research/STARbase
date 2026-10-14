@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { focusLeftMenu, focusLost, menuKey } from './menuKeys';
 
 // "Export ▾" (spec D26): a button with a two-item menu, PNG or PDF. Opening moves focus into the menu, the arrow keys move between
-// the items, Escape closes it and puts focus back on the button; a pick, a press elsewhere or Tab out of the menu closes it too.
+// the items (roving focus: the items are not tab stops), Escape closes it and puts focus back on the button, Tab closes it and moves on;
+// a pick or a press elsewhere closes it too. The keys are handled on the component only while focus is inside it, not on the document.
 // The button is disabled while an export runs, which drops focus to <body>: when the export is done, focus goes back to the button.
 const props = defineProps<{ busy: boolean; disabled: boolean }>();
 const emit = defineEmits<{ pick: [format: 'png' | 'pdf'] }>();
 
 const open = ref(false);
+const triggerId = useId();
 const root = ref<HTMLElement | null>(null);
 const away = (e: Event) => {
 	if (root.value && !root.value.contains(e.target as Node)) open.value = false;
@@ -19,21 +21,21 @@ const closeToTrigger = () => {
 	open.value = false;
 	trigger()?.focus();
 };
-/** Keys inside the menu, and Escape anywhere while it is open. */
+/** Keys while focus is on the button or in the menu (this handler is on the component, so it never sees keys from elsewhere). */
 const onKey = (e: KeyboardEvent) => {
-	if (e.key !== 'Escape' && !root.value?.contains(document.activeElement)) return; // arrows belong to the menu only while focus is in it
+	if (!open.value) return;
 	const list = items();
 	const result = menuKey(e.key, list.indexOf(document.activeElement as HTMLElement), list.length);
 	if (!result) return;
-	e.preventDefault();
-	if ('close' in result) closeToTrigger();
-	else list[result.focus]?.focus();
+	if ('close' in result) {
+		if (!result.native) e.preventDefault();
+		closeToTrigger(); // Tab: focus is on the button when the browser moves it on, so it lands on what follows the button
+	} else {
+		e.preventDefault();
+		list[result.focus]?.focus();
+	}
 };
-const listen = (on: boolean) => {
-	const toggle = on ? document.addEventListener.bind(document) : document.removeEventListener.bind(document);
-	toggle('pointerdown', away);
-	toggle('keydown', onKey as EventListener);
-};
+const listen = (on: boolean) => (on ? document.addEventListener : document.removeEventListener).call(document, 'pointerdown', away);
 watch(open, (now) => {
 	listen(now);
 	if (now) void nextTick(() => items()[0]?.focus());
@@ -56,13 +58,13 @@ const pick = (format: 'png' | 'pdf') => {
 </script>
 
 <template>
-	<div ref="root" class="pm-export" @focusout="onFocusOut">
-		<v-button small secondary :loading="busy" :disabled="disabled" aria-haspopup="menu" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
+	<div ref="root" class="pm-export" @focusout="onFocusOut" @keydown="onKey">
+		<v-button :id="triggerId" small secondary :loading="busy" :disabled="disabled" aria-haspopup="menu" :aria-expanded="open ? 'true' : 'false'" @click="open = !open">
 			<v-icon name="download" small /> Export <v-icon name="expand_more" small />
 		</v-button>
-		<ul v-if="open" class="pm-export-menu" role="menu">
-			<li role="none"><button type="button" role="menuitem" @click="pick('png')">PNG image</button></li>
-			<li role="none"><button type="button" role="menuitem" @click="pick('pdf')">PDF, one page</button></li>
+		<ul v-if="open" class="pm-export-menu" role="menu" :aria-labelledby="triggerId">
+			<li role="none"><button type="button" role="menuitem" tabindex="-1" @click="pick('png')">PNG image</button></li>
+			<li role="none"><button type="button" role="menuitem" tabindex="-1" @click="pick('pdf')">PDF, one page</button></li>
 		</ul>
 	</div>
 </template>
