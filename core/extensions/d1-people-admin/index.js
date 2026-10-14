@@ -1,6 +1,6 @@
 // Directus endpoint: d1-people-admin  (mounted at /d1-people-admin)
 //
-// The data behind the admin People page (People 1, spec docs/superpowers/specs/2026-10-14-people-and-teams-design.md). Reads only:
+// The data behind the admin People page (People 1, spec docs/superpowers/specs/2026-10-14-people-and-teams-design.md). Reads, and one write:
 //
 //   GET /d1-people-admin/people
 //     -> { can_administer_accounts, roles: [{ id, name }],
@@ -12,6 +12,13 @@
 //   GET /d1-people-admin/people/:person_id/access[?list=owns|shared|investigator]
 //     -> { owns, shared, investigator }   (d1_private.person_access: three counts)
 //        + records: [{ collection, id, kind, code, title, level, source, granted_by, added_at }] for the asked list
+//   PATCH /d1-people-admin/logins/:user_id   body { role?: uuid, status?: 'active' | 'suspended' }
+//     -> { user_id, role_id, role_name, status }
+//        Account administrators only (403 ACCOUNTS_ADMIN_ONLY for a Lab Admin or anyone else). The role must exist in directus_roles (400).
+//        Suspending also deletes the login's rows in directus_sessions, in the same transaction. Refused with 409 LAST_ADMINISTRATOR when
+//        the change would leave no active account administrator (a role change that drops the target's account-administrator status, or
+//        suspending the target). The write runs in one transaction with d1.actor_identity set; the data cache is cleared after the commit
+//        when CACHE_ENABLED is on (the same as d1-record-access).
 //
 // Who may call: /people and /attention are for administrators only (401 without a user, 403 otherwise). /access is for an
 // administrator, or for the person whose login the caller is. A non-administrator sees every count, but the list leaves out a record
@@ -32,6 +39,8 @@ const DEFAULT_LAB_ADMIN_ROLE_ID = '10000001-0000-0000-0000-000000000001';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LISTS = ['owns', 'shared', 'investigator'];
 const CHUNK = 1000;
+const STATUSES = ['active', 'suspended'];
+const toBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
 
 // Keys counted by login; every other key is counted by person.
 export const COUNTED_BY_LOGIN = ['login_without_person', 'invite_not_accepted'];
@@ -83,7 +92,7 @@ export async function accountAdmin(db, userId, labAdminRoleId) {
 
 export default {
   id: SOURCE,
-  handler: (router, { database, logger, env }) => {
+  handler: (router, { database, logger, env, services }) => {
     const labAdminRoleId = trimmed(env?.D1_LAB_ADMIN_ROLE_ID) ?? DEFAULT_LAB_ADMIN_ROLE_ID;
 
     const sendError = (res, err) => {
@@ -185,6 +194,71 @@ export default {
         .map((row) => ({ key: row.key, count: attentionCount(row) }))
         .filter((item) => item.count > 0);
       res.json({ items });
+    }));
+
+    // -- change a login's role or status ---------------------------------------------------------------------
+
+    // One write transaction: the actor first, so the audit trigger names the caller (as d1-record-access does).
+    const inTransaction = (acc, work) =>
+      database.transaction(async (trx) => {
+        await trx.raw("SELECT set_config('d1.actor_identity', ?, true)", [String(acc.user)]);
+        return work(trx);
+      });
+
+    // Knex writes bypass the Directus services that clear the data cache, so clear it after the commit (as d1-record-access does).
+    async function clearDataCache(req) {
+      if (!toBool(env?.CACHE_ENABLED)) return;
+      try {
+        await new services.UtilsService({ schema: req.schema, accountability: { user: null, role: null, admin: true, app: false } }).clearCache({ system: false });
+      } catch (err) {
+        logger?.warn?.(`${SOURCE}: could not clear the data cache: ${err?.message || err}`);
+      }
+    }
+
+    // The number of active logins that are account administrators.
+    async function activeAccountAdmins(db) {
+      const active = await db('directus_users').where('status', 'active').select('id');
+      let count = 0;
+      for (const { id } of active) if ((await accountAdmin(db, id, labAdminRoleId)).accounts) count += 1;
+      return count;
+    }
+
+    router.patch('/logins/:user_id', route(async ({ req, res, acc, accounts }) => {
+      if (!accounts) throw new HttpError(403, 'ACCOUNTS_ADMIN_ONLY', 'Only an Administrator can change a login.');
+      const userId = req.params?.user_id;
+      if (typeof userId !== 'string' || !UUID.test(userId)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The login id is not valid.');
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      const hasRole = body.role !== undefined;
+      const hasStatus = body.status !== undefined;
+      if (!hasRole && !hasStatus) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a role or a status.');
+      if (hasRole && (typeof body.role !== 'string' || !UUID.test(body.role))) throw new HttpError(400, 'INVALID_PAYLOAD', 'role must be a role id.');
+      if (hasStatus && !STATUSES.includes(body.status)) throw new HttpError(400, 'INVALID_PAYLOAD', 'status must be active or suspended.');
+
+      const result = await inTransaction(acc, async (trx) => {
+        // one change at a time, so two requests cannot each see the other administrator still there
+        await trx.raw("SELECT pg_advisory_xact_lock(hashtext('d1-people-admin.logins'))");
+        const target = await trx('directus_users').where('id', userId).first('id', 'status', 'role');
+        if (!target) throw new HttpError(404, 'NOT_FOUND', 'That login does not exist.');
+        if (hasRole && !(await trx('directus_roles').where('id', body.role).first('id'))) throw new HttpError(400, 'INVALID_PAYLOAD', 'That role does not exist.');
+
+        const wasAccountAdmin = target.status === 'active' && (await accountAdmin(trx, userId, labAdminRoleId)).accounts;
+        const changes = {};
+        if (hasRole) changes.role = body.role;
+        if (hasStatus) changes.status = body.status;
+        await trx('directus_users').where('id', userId).update(changes);
+        if (body.status === 'suspended') await trx('directus_sessions').where('user', userId).del();
+
+        // counted after the change, so the target counts only if it is still an active account administrator
+        if (wasAccountAdmin && (await activeAccountAdmins(trx)) === 0) {
+          throw new HttpError(409, 'LAST_ADMINISTRATOR', 'Make someone else an Administrator first');
+        }
+
+        const user = await trx('directus_users').where('id', userId).first('id', 'status', 'role');
+        const role = isBlank(user.role) ? null : await trx('directus_roles').where('id', user.role).first('name');
+        return { user_id: user.id, role_id: user.role ?? null, role_name: role?.name ?? null, status: user.status ?? null };
+      });
+      await clearDataCache(req);
+      res.json(result);
     }));
 
     router.get('/people/:person_id/access', route(async ({ req, res, acc, admin }) => {

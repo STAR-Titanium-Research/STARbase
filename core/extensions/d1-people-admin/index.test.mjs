@@ -61,13 +61,15 @@ const baseTables = () => ({
 
 const same = (a, b) => String(a) === String(b);
 function makeDb(tables, rawAnswers) {
-  const log = { raw: [] };
+  const log = { raw: [], tx: [] };
   const db = (table) => {
     const preds = [];
     const rows = () => (tables[table] ?? []).filter((r) => preds.every((p) => p(r)));
     const project = (row, cols) => (row === undefined ? undefined : cols.length ? Object.fromEntries(cols.map((c) => [c, row[c] ?? null])) : { ...row });
     const q = {
       where(a, v) { preds.push((r) => same(r[a], v)); return q; },
+      update: async (changes) => { const hit = rows(); for (const r of hit) Object.assign(r, changes); return hit.length; },
+      del: async () => { const hit = rows(); tables[table] = (tables[table] ?? []).filter((r) => !hit.includes(r)); return hit.length; },
       whereIn(c, values) { preds.push((r) => values.some((v) => same(r[c], v))); return q; },
       select: async (...cols) => rows().map((r) => project(r, cols)),
       first: async (...cols) => project(rows()[0], cols),
@@ -81,6 +83,24 @@ function makeDb(tables, rawAnswers) {
     }
     return { rows: [] };
   };
+  // a transaction: the same tables, restored if the work throws; log.tx records each one and whether it committed
+  db.transaction = async (work) => {
+    const snapshot = structuredClone(tables);
+    const entry = { raw: [], committed: false };
+    log.tx.push(entry);
+    const trx = makeDb(tables, rawAnswers);
+    const trxRaw = trx.raw;
+    trx.raw = async (sql, bindings) => { entry.raw.push({ sql, bindings }); return trxRaw(sql, bindings); };
+    try {
+      const out = await work(trx);
+      entry.committed = true;
+      return out;
+    } catch (err) {
+      for (const key of Object.keys(tables)) delete tables[key];
+      Object.assign(tables, snapshot);
+      throw err;
+    }
+  };
   db.log = log;
   return db;
 }
@@ -91,22 +111,29 @@ function mount({ tables = baseTables(), raw = {}, env = {} } = {}) {
   const db = makeDb(tables, raw);
   const errors = [];
   const handlers = {};
-  const router = { get: (path, fn) => (handlers[`GET ${path}`] = fn) };
-  ext.handler(router, { database: db, logger: { sink: errors, error(m) { this.sink.push(m); }, warn() {} }, env });
-  return { db, handlers, errors };
+  const router = { get: (path, fn) => (handlers[`GET ${path}`] = fn), patch: (path, fn) => (handlers[`PATCH ${path}`] = fn) };
+  const cleared = [];
+  const services = {
+    UtilsService: class {
+      constructor(opts) { this.opts = opts; }
+      async clearCache(arg) { cleared.push({ opts: this.opts, arg, committed: db.log.tx.every((t) => t.committed) }); }
+    },
+  };
+  ext.handler(router, { database: db, services, logger: { sink: errors, error(m) { this.sink.push(m); }, warn() {} }, env });
+  return { db, tables, handlers, errors, cleared };
 }
 
 const admin = (user) => ({ user, admin: true, app: true });
 const member = (user) => ({ user, admin: false, app: true });
 
-function call(h, { acc, params = {}, query = {} } = {}) {
+function call(h, { acc, params = {}, query = {}, body } = {}) {
   return new Promise((resolve) => {
     const out = { status: 200, body: undefined };
     const res = {
       status(code) { out.status = code; return res; },
       json(b) { out.body = b; resolve(out); return res; },
     };
-    h({ accountability: acc, params, query }, res);
+    h({ accountability: acc, params, query, body, schema: {} }, res);
   });
 }
 const errorOf = (r) => r.body?.errors?.[0];
@@ -294,4 +321,145 @@ test('a member does not see a record they no longer read in the list, but it is 
   assert.equal(r.status, 200);
   assert.equal(r.body.shared, 2); // the count is the full count
   assert.deepEqual(r.body.records.map((x) => x.id), [SAMPLE, PROJECT]); // SAMPLE_GONE is not in Ann's readers table
+});
+
+// ---- PATCH /logins/:user_id ---------------------------------------------------------------------------------
+
+const PATCH = 'PATCH /logins/:user_id';
+const patch = (handlers, acc, user, body) => call(handlers[PATCH], { acc, params: { user_id: user }, body });
+const userRow = (tables, id) => tables.directus_users.find((u) => u.id === id);
+const withSessions = () => {
+  const tables = baseTables();
+  tables.directus_sessions = [
+    { token: 't1', user: U.ann }, { token: 't2', user: U.ann }, { token: 't3', user: U.bob },
+  ];
+  return tables;
+};
+
+test('lab admin cannot change a role', async () => {
+  const { handlers, tables } = mount();
+  for (const acc of [admin(U.labAdmin), member(U.ann)]) {
+    const r = await patch(handlers, acc, U.ann, { role: R.super });
+    assert.equal(r.status, 403);
+    assert.equal(errorOf(r).extensions.code, 'ACCOUNTS_ADMIN_ONLY');
+  }
+  assert.equal(userRow(tables, U.ann).role, R.member);
+  assert.equal((await patch(handlers, { user: null }, U.ann, { role: R.super })).status, 401);
+});
+
+test('changes the role', async () => {
+  const { handlers, tables, db } = mount();
+  const r = await patch(handlers, admin(U.superAdmin), U.ann, { role: R.lab });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { user_id: U.ann, role_id: R.lab, role_name: 'Lab Admin', status: 'active' });
+  assert.equal(userRow(tables, U.ann).role, R.lab);
+  assert.equal(userRow(tables, U.ann).status, 'active'); // the status was not sent: untouched
+  // in one transaction, actor first
+  assert.equal(db.log.tx.length, 1);
+  assert.equal(db.log.tx[0].committed, true);
+  assert.match(db.log.tx[0].raw[0].sql, /set_config\('d1\.actor_identity', \?, true\)/);
+  assert.deepEqual(db.log.tx[0].raw[0].bindings, [U.superAdmin]);
+});
+
+test('an unknown role id, a malformed body or a missing login is refused', async () => {
+  const { handlers, tables } = mount();
+  const as = admin(U.superAdmin);
+  const unknown = await patch(handlers, as, U.ann, { role: ID(999) });
+  assert.equal(unknown.status, 400);
+  assert.equal(errorOf(unknown).extensions.code, 'INVALID_PAYLOAD');
+  assert.equal(userRow(tables, U.ann).role, R.member);
+  assert.equal((await patch(handlers, as, U.ann, { role: 'nope' })).status, 400);
+  assert.equal((await patch(handlers, as, U.ann, { role: null })).status, 400);
+  assert.equal((await patch(handlers, as, U.ann, {})).status, 400);
+  assert.equal((await patch(handlers, as, U.ann, undefined)).status, 400);
+  assert.equal((await patch(handlers, as, 'nope', { role: R.lab })).status, 400);
+  const gone = await patch(handlers, as, ID(777), { role: R.lab });
+  assert.equal(gone.status, 404);
+  assert.equal(errorOf(gone).extensions.code, 'NOT_FOUND');
+});
+
+test('a status other than active or suspended is refused', async () => {
+  const { handlers, tables } = mount();
+  for (const status of ['invited', 'draft', 'archived', '', null, 1]) {
+    const r = await patch(handlers, admin(U.superAdmin), U.ann, { status });
+    assert.equal(r.status, 400, String(status));
+    assert.equal(errorOf(r).extensions.code, 'INVALID_PAYLOAD');
+  }
+  assert.equal(userRow(tables, U.ann).status, 'active');
+});
+
+test('refuses demoting the last account administrator', async () => {
+  const tables = baseTables();
+  userRow(tables, U.previewAdmin).status = 'suspended'; // Su Per is now the only active account administrator
+  const { handlers, db } = mount({ tables });
+  const as = admin(U.superAdmin);
+  for (const role of [R.member, R.lab]) { // a role without admin, and the Lab Admin role (admin, but not account administrator)
+    const r = await patch(handlers, as, U.superAdmin, { role });
+    assert.equal(r.status, 409, role);
+    assert.equal(errorOf(r).extensions.code, 'LAST_ADMINISTRATOR');
+    assert.equal(errorOf(r).message, 'Make someone else an Administrator first');
+    assert.equal(userRow(tables, U.superAdmin).role, R.super); // rolled back
+  }
+  assert.equal(db.log.tx.every((t) => !t.committed), true);
+  // keeping the role is fine
+  assert.equal((await patch(handlers, as, U.superAdmin, { role: R.super })).status, 200);
+  // a second active account administrator makes the demotion allowed
+  userRow(tables, U.previewAdmin).status = 'active';
+  const ok = await patch(handlers, as, U.superAdmin, { role: R.member });
+  assert.equal(ok.status, 200);
+  assert.equal(userRow(tables, U.superAdmin).role, R.member);
+});
+
+test('refuses suspending the last account administrator; a non-administrator is never blocked', async () => {
+  const tables = withSessions();
+  userRow(tables, U.previewAdmin).status = 'suspended';
+  tables.directus_sessions.push({ token: 't4', user: U.superAdmin });
+  const { handlers } = mount({ tables });
+  const r = await patch(handlers, admin(U.superAdmin), U.superAdmin, { status: 'suspended' });
+  assert.equal(r.status, 409);
+  assert.equal(errorOf(r).extensions.code, 'LAST_ADMINISTRATOR');
+  assert.equal(errorOf(r).message, 'Make someone else an Administrator first');
+  assert.equal(userRow(tables, U.superAdmin).status, 'active');
+  assert.equal(tables.directus_sessions.some((s) => s.user === U.superAdmin), true); // rolled back: the sessions are still there
+  // suspending a login that is not an account administrator is not blocked
+  assert.equal((await patch(handlers, admin(U.superAdmin), U.ann, { status: 'suspended' })).status, 200);
+});
+
+test('suspend ends sessions', async () => {
+  const tables = withSessions();
+  const { handlers, db } = mount({ tables });
+  const r = await patch(handlers, admin(U.superAdmin), U.ann, { status: 'suspended' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { user_id: U.ann, role_id: R.member, role_name: 'Lab Member', status: 'suspended' });
+  assert.equal(userRow(tables, U.ann).status, 'suspended');
+  assert.deepEqual(tables.directus_sessions.map((s) => s.token), ['t3']); // both sessions of Ann are gone, the one of Bob stays
+  assert.equal(db.log.tx.length, 1);
+  assert.equal(db.log.tx[0].committed, true);
+  assert.deepEqual(db.log.tx[0].raw[0].bindings, [U.superAdmin]);
+  assert.match(db.log.tx[0].raw[0].sql, /d1\.actor_identity/);
+});
+
+test('reactivate', async () => {
+  const tables = withSessions();
+  const { handlers } = mount({ tables });
+  const r = await patch(handlers, admin(U.superAdmin), U.orphan, { status: 'active' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.status, 'active');
+  assert.equal(userRow(tables, U.orphan).status, 'active');
+  assert.equal(tables.directus_sessions.length, 3); // reactivating touches no sessions
+});
+
+test('the data cache is cleared after the commit, only when CACHE_ENABLED is on', async () => {
+  const off = mount({ env: {} });
+  await patch(off.handlers, admin(U.superAdmin), U.ann, { role: R.lab });
+  assert.equal(off.cleared.length, 0);
+  const on = mount({ env: { CACHE_ENABLED: 'true' } });
+  await patch(on.handlers, admin(U.superAdmin), U.ann, { role: R.lab });
+  assert.equal(on.cleared.length, 1);
+  assert.deepEqual(on.cleared[0].arg, { system: false });
+  assert.equal(on.cleared[0].committed, true);
+  // a refused change clears nothing
+  const refused = mount({ env: { CACHE_ENABLED: 'true' } });
+  await patch(refused.handlers, admin(U.superAdmin), U.ann, { role: ID(999) });
+  assert.equal(refused.cleared.length, 0);
 });
