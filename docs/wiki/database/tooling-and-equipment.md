@@ -51,13 +51,20 @@ In STARbase a tool box, one of its inserts and one of their edges are a single p
 the box in the side rail. Open it from Inventory → **Tool boxes**, **Cutting inserts** or **Insert
 edges**, or from any box, insert or edge code on another page.
 
-![A tool box in STARbase](../images/database/tooling-box.png)
+![A tool box in STARbase: the box model in the side rail, its state counts and next fresh edge beside it](../images/database/tooling-box.png)
+
+*The tooling screenshots were taken from STARbase against stubbed demo records (the local demo stack
+has no tool boxes yet); the codes, people and project are demo values.*
 
 | You are on | Address | The model shows | Beside it |
 |---|---|---|---|
 | the **box** | `/tool-boxes/<id>` | the tray, its numbered inserts coloured by state | how many inserts are fresh, partly used, used or depleted; the **Next fresh edge**; the insert type; the inserts |
 | an **insert** | `/inserts/<id>` | that insert lifted out of its pocket, with its lettered edges | the insert's details and notes, and its edges with their state |
 | an **edge** | `/edges/<id>` | a close view of that edge, highlighted | the edge's details and its **history**: every test and operation run with it, newest first |
+
+![An insert: lifted out of its pocket, with its lettered edges](../images/database/tooling-insert.png)
+
+![An edge: the close view, and the edge's history](../images/database/tooling-edge.png)
 
 - **Moving around.** Click an insert in the model (or in a list) to go to it, then click one of its
   edges. **Esc**, the **Up** button or the breadcrumb goes back up a level; the arrow keys step to the
@@ -105,6 +112,8 @@ named `fA`, `fC` use the same letters.
 brazed tip. Give its insert type a **Usable Edges Per Insert** of 1 and a **Substrate** of *PCD*,
 *PCBN* or *CBN* (a type code or designation ending in one of those works too): the box draws as a single small case, the tip shows in a lighter diamond finish on
 corner A, and the insert has edge A only.
+
+![A PCD box: one tipped insert in a single case](../images/database/tooling-pcd.png)
 
 ## Machines and equipment
 

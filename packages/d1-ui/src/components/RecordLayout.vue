@@ -14,11 +14,14 @@ import './tokens.css';
 //
 // Narrow: the layout root is a size container, and under 1000px of its own width (not the width of
 // the viewport, so it also holds with the Data Studio sidebar open) the rail stacks above the main
-// column, stops sticking, lays its facts out in columns and drops "On this page".
+// column, stops sticking, lays its facts out in columns and drops "On this page". `late-stack` moves that
+// point down to 840px, for a page whose rail carries something that should stay beside the panels on a
+// laptop with the sidebar open (the tooling pages' tall 3D stage).
+defineProps<{ lateStack?: boolean }>();
 </script>
 
 <template>
-	<div class="d1-record-layout d1-kit">
+	<div class="d1-record-layout d1-kit" :class="{ 'late-stack': lateStack }">
 		<div v-if="$slots.crumbs || $slots['title-actions']" class="top">
 			<nav v-if="$slots.crumbs" class="d1-crumbs" aria-label="Breadcrumb"><slot name="crumbs" /></nav>
 			<div v-if="$slots['title-actions']" class="title-actions"><slot name="title-actions" /></div>
@@ -48,8 +51,13 @@ import './tokens.css';
 /* The panels stack with the page frame's 16px gap. */
 .main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 @container (max-width: 1000px) {
-	.grid { grid-template-columns: minmax(0, 1fr); }
-	.rail { position: static; max-height: none; overflow: visible; padding: 0; --d1-fact-grid: repeat(auto-fill, minmax(280px, 1fr)); }
-	.rail :deep(.d1-page-contents) { display: none; }
+	.d1-record-layout:not(.late-stack) .grid { grid-template-columns: minmax(0, 1fr); }
+	.d1-record-layout:not(.late-stack) .rail { position: static; max-height: none; overflow: visible; padding: 0; --d1-fact-grid: repeat(auto-fill, minmax(280px, 1fr)); }
+	.d1-record-layout:not(.late-stack) .rail :deep(.d1-page-contents) { display: none; }
+}
+@container (max-width: 840px) {
+	.late-stack .grid { grid-template-columns: minmax(0, 1fr); }
+	.late-stack .rail { position: static; max-height: none; overflow: visible; padding: 0; --d1-fact-grid: repeat(auto-fill, minmax(280px, 1fr)); }
+	.late-stack .rail :deep(.d1-page-contents) { display: none; }
 }
 </style>

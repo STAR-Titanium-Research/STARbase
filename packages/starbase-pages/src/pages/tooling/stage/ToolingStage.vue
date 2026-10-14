@@ -291,8 +291,8 @@ function grab(): void {
 		var(--d1-tile, var(--theme--background-subdued)) 72%
 	);
 }
-/* Stacked layout (the page is under 1000px wide): the stage sits above the panels at full width, shorter. */
-@container (max-width: 1000px) {
+/* Stacked layout (the tooling page stacks under 840px, RecordLayout late-stack): the stage sits above the panels at full width, shorter. */
+@container (max-width: 840px) {
 	.tstage__view {
 		height: clamp(380px, calc(100vh - var(--d1-sticky-top, 70px) - 240px), 480px);
 		height: clamp(380px, calc(100dvh - var(--d1-sticky-top, 70px) - 240px), 480px);

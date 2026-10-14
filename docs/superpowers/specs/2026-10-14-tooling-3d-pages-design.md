@@ -106,7 +106,9 @@ Requested after the first review of PR #286 and approved in conversation.
 - **The box turns 90°.** `slotGrid` is portrait: the long side of the tray runs down the stage (10 → 2
   columns × 5 rows), numbered in reading order. The camera frames the tall tray; the 2D grid is portrait too.
 - **3D by stage size.** 3D needs the stage to be at least about 260 px wide and 360 px tall, not 600 px
-  wide. When the layout stacks (narrow window), the stage sits above the panels.
+  wide. Tooling pages stack only under 840 px of layout width (`RecordLayout` `late-stack`, against the
+  usual 1000 px), so a 1280 px laptop with the sidebar open keeps the tall rail; when stacked, the stage
+  sits above the panels.
 - **Edge count caps the cutting corners.** When `insert_types.edge_count` is below the shape's cutting
   corners, only the first `edge_count` corners cut (from A), and the insert is single-sided.
 - **Tipped inserts (PCD, PCBN, CBN).** Detected from the insert type's substrate, type code

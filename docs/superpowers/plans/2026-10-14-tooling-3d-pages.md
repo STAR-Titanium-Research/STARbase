@@ -27,6 +27,9 @@ Claude-Session: https://claude.ai/code/session_016gzbHS7JPckXcdb7bjgN27
 S1 notes for S2 and S3: `SlotCell.column`/`row` are 0-based (`number` is 1-based); `slotGrid(0)` is 1 × 1 with no cells;
 corner 0 points up (`bisectorDeg` 90) except squares (135); W lists only its three 80° corners; `EdgeRow.insert_id` is a plain id.
 
+Follow-up (addendum: tall side rail, tipped inserts): agent-a1f556af0cfa40b57, merged (7dadc0c); late stacking
+at 840 px and the wiki added by the coordinator.
+
 Order: S1 first (S2 and S3 import its types), then S2 and S3 in parallel, then integration.
 
 ## Shared interfaces (S1 owns them; S2 and S3 code against them)

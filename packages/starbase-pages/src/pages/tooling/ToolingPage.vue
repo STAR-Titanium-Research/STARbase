@@ -118,7 +118,7 @@ const contents = computed<ContentsEntry[]>(() => {
 			<template v-else-if="model && focus">
 				<!-- 70px: the Data Studio's header bar is 54px, plus a 16px gap. -->
 				<!-- The rail is 360px here (default 300): it holds the tall stage. -->
-				<RecordLayout style="--d1-sticky-top: var(--d1-header-offset, 70px); --d1-rail-width: 360px">
+				<RecordLayout late-stack style="--d1-sticky-top: var(--d1-header-offset, 70px); --d1-rail-width: 360px">
 					<template #crumbs>
 						<AppLink to="/home">Home</AppLink>
 						<span>›</span>
