@@ -9,6 +9,7 @@ import type { MapNode, Wire } from '../model/types';
 export function nodeLabel(node: MapNode | undefined): string | null {
 	if (!node) return null;
 	if (node.type === 'junction') return LINEAGE_LABEL[node.lineageType];
+	if (node.type === 'more') return null;
 	return node.type === 'record' ? node.ref.code : node.code;
 }
 

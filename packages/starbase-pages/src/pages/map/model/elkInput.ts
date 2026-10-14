@@ -1,6 +1,7 @@
 // Builds the ELK graph for the Process map's layout (spec §6.7). Pure; no Vue, no elkjs runtime import.
 
 import type { ElkNode, ElkPort } from 'elkjs/lib/elk-api';
+import { fanRootId } from './buildGraph';
 import { isBundleSocket } from './sockets';
 import type { MapNode, ProcessGraph } from './types';
 
@@ -28,6 +29,9 @@ function socketsOf(node: MapNode): { ins: string[]; outs: string[] } {
       return { ins: ordered(node.rows.map((r) => r.in)), outs: ordered(node.rows.map((r) => r.out)) };
     case 'junction':
       return { ins: [node.in], outs: node.outs.map((o) => o.socket) };
+    case 'more':
+      // Only for the layout (nothing is drawn): the stub hangs from its record so it ends its column.
+      return { ins: [`${node.id}:in:0`], outs: [] };
   }
 }
 
@@ -60,6 +64,14 @@ export function elkInput(graph: ProcessGraph, shown: Set<string>, sizes: Sizes, 
   const edges = graph.wires
     .filter((w) => portIds.has(w.from) && portIds.has(w.to))
     .map((w) => ({ id: w.id, sources: [w.from], targets: [w.to] }));
+  for (const node of graph.nodes) {
+    if (node.type !== 'more' || !shown.has(node.id)) continue;
+    const at = node.of.indexOf(':');
+    const from = `${fanRootId({ collection: node.of.slice(0, at), id: node.of.slice(at + 1) })}:out:0`;
+    if (portIds.has(from)) edges.push({ id: `${node.id}:layout`, sources: [from], targets: [`${node.id}:in:0`] });
+  }
+  // A used-in fan is a list in a given order (newest first): ELK keeps the order of the nodes it is given.
+  const ordered = graph.nodes.some((n) => n.type === 'more' || (n.type === 'container' && n.collapsed));
 
   return {
     id: 'root',
@@ -69,6 +81,7 @@ export function elkInput(graph: ProcessGraph, shown: Set<string>, sizes: Sizes, 
       'elk.layered.spacing.nodeNodeBetweenLayers': '80',
       'elk.spacing.nodeNode': '36',
       'elk.edgeRouting': 'SPLINES',
+      ...(ordered ? { 'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES' } : {}),
     },
     children,
     edges,

@@ -391,7 +391,7 @@ describe('buildGraph: structure', () => {
       else if (n.type === 'junction') {
         sockets.add(n.in);
         n.outs.forEach((o) => sockets.add(o.socket));
-      } else
+      } else if (n.type === 'container')
         for (const r of n.rows) {
           if (r.in) sockets.add(r.in);
           if (r.out) sockets.add(r.out);
@@ -471,5 +471,115 @@ describe('buildGraph: Inside tray and settings of a container', () => {
       },
     });
     expect(seen).toEqual(['d']);
+  });
+});
+
+const DAY = '2026-09-01T09:00:00Z';
+
+describe('buildGraph: used-in fans (D20)', () => {
+  const tool = { collection: 'tools', id: 't1', code: 'TL-1', kind: 'tool' as const };
+  const ref = (collection: string, id: string, code = id.toUpperCase()) => ({ collection, id, code });
+  /** `n` operations that used the tool, newest first, as the loader returns them: none of their samples are loaded. */
+  const toolFan = (n: number, total = n) => {
+    const operations = Array.from({ length: n }, (_, i) =>
+      mkOp({ id: `u${i}`, code: `OP-${i}`, methodName: 'Turning', category: 'machining', date: `2026-09-${String(28 - i).padStart(2, '0')}T09:00:00Z`, sampleId: `x${i}` }),
+    );
+    return mkData({ focus: tool, operations, fan: { items: operations.map((o) => ref('manufacturing_operations', o.id, o.code)), total } });
+  };
+  /** The page's call: collapsed fan rows are not grouped into batches. */
+  const buildFan = (data: ProcessData): ProcessGraph => {
+    const fanned = new Set([...(data.fan?.items ?? []), ...(data.sideFans ?? []).flatMap((f) => f.items)].map((i) => i.id));
+    const rest = { ...data, operations: data.operations.filter((o) => !fanned.has(o.id)), tests: data.tests.filter((t) => !fanned.has(t.id)) };
+    return buildGraph(data, groupsOf(rest, false), { slots });
+  };
+
+  it('a tool fans into collapsed containers wired from its card, and a "+N more" stub when there are more', () => {
+    const g = buildFan(toolFan(20, 47));
+    const root = record(g, 'f:tools:t1');
+    expect(root).toMatchObject({ kind: 'tool', ref: { code: 'TL-1' }, ins: [], outs: ['f:tools:t1:out:0'] });
+    const containers = g.nodes.filter((n): n is ContainerNode => n.type === 'container');
+    expect(containers).toHaveLength(20);
+    expect(containers.every((c) => c.collapsed === true && c.slots.length === 0 && c.settings.length === 0)).toBe(true);
+    expect(containers[0]).toMatchObject({ id: 'op:u0', title: 'Turning', code: 'OP-0', meta: '2026-09-28', rows: [{ recordId: 'u0', in: 'op:u0:in:0' }] });
+    expect(g.wires).toHaveLength(20);
+    expect(wire(g, 'f:tools:t1:out:0', 'op:u3:in:0')).toMatchObject({ origin: 'f:tools:t1', carries: null });
+    expect(g.nodes.find((n) => n.type === 'more')).toEqual({ id: 'more:tools:t1', type: 'more', of: 'tools:t1', remaining: 27 });
+    // The samples the operations touched are not loaded: nothing else is drawn.
+    expect(g.nodes).toHaveLength(1 + 20 + 1);
+  });
+
+  it('no stub when everything is listed; a stub counted from `remaining` when that differs from the rows (a stock lot page)', () => {
+    expect(buildFan(toolFan(3)).nodes.some((n) => n.type === 'more')).toBe(false);
+    const data = toolFan(0, 45);
+    data.fan = { items: [], total: 45, remaining: 25 };
+    expect(buildFan(data).nodes.find((n) => n.type === 'more')).toMatchObject({ remaining: 25 });
+  });
+
+  it('equipment fans into operations and tests alike', () => {
+    const op = mkOp({ id: 'o1', methodName: 'Sinter', date: DAY });
+    const test = mkTest({ id: 't9', testType: 'Tensile', category: 'destructive', date: '2026-09-02T09:00:00Z', status: 'done' });
+    const data = mkData({
+      focus: { collection: 'equipment', id: 'e1', code: 'NLX', kind: 'equipment' },
+      operations: [op],
+      tests: [test],
+      fan: { items: [ref('test_sessions', 't9'), ref('manufacturing_operations', 'o1')], total: 2 },
+    });
+    const g = buildFan(data);
+    expect(container(g, 'test:t9')).toMatchObject({ kind: 'test', collapsed: true, title: 'Tensile', category: 'test', status: 'done' });
+    expect(container(g, 'op:o1')).toMatchObject({ kind: 'operation', collapsed: true });
+    expect(wire(g, 'f:equipment:e1:out:0', 'test:t9:in:0')).toBeDefined();
+  });
+
+  it('a material fans into sample cards (no material card of their own)', () => {
+    const data = mkData({
+      focus: { collection: 'materials', id: 'm1', code: 'Ti64', kind: 'material' },
+      samples: sam('a', 'b'),
+      fan: { items: [ref('physical_samples', 'a'), ref('physical_samples', 'b')], total: 2 },
+    });
+    for (const s of data.samples) s.materialRef = { collection: 'materials', id: 'm1', code: 'Ti64' };
+    const g = build(data);
+    expect(record(g, 'f:materials:m1')).toMatchObject({ kind: 'material' });
+    expect(record(g, 's:a').ins).toEqual(['s:a:in:0']);
+    expect(wire(g, 'f:materials:m1:out:0', 's:a:in:0')).toBeDefined();
+    expect(wire(g, 'f:materials:m1:out:0', 's:b:in:0')).toBeDefined();
+    expect(g.nodes.some((n) => n.id.startsWith('m:'))).toBe(false);
+  });
+
+  it('a stock lot fan hangs from the lot card the family steps already use, not a second one', () => {
+    const lot = { collection: 'raw_stock_lots', id: 'l1', code: 'LOT-1', kind: 'stock_lot' as const };
+    const op = mkOp({ id: 'o1', outputSampleId: 's1' });
+    const data = mkData({ focus: lot, samples: sam('s1'), operations: [op], stock: [mkStock('l1', 's1')], fan: { items: [ref('manufacturing_operations', 'o1')], total: 1 } });
+    const g = build(data);
+    expect(g.nodes.filter((n) => n.id === 'lot:l1')).toHaveLength(1);
+    expect(record(g, 'lot:l1').outs).toEqual(['lot:l1:out:0']);
+  });
+
+  it('an item whose family is loaded is its full container, not a second collapsed one', () => {
+    const op = mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: DAY, methodName: 'Cut' });
+    const data = mkData({ focus: tool, samples: sam('s1', 's2'), operations: [op], fan: { items: [ref('manufacturing_operations', 'o1')], total: 1 } });
+    const g = build(data);
+    expect(g.nodes.filter((n) => n.type === 'container')).toHaveLength(1);
+    expect(container(g, 'op:o1').collapsed).toBeUndefined();
+  });
+
+  it('side fans (a record inside the map opened with the plus button) hang beside their own card, each with its own stub', () => {
+    const op = mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: DAY });
+    const used = mkOp({ id: 'u1', methodName: 'Turning', date: DAY });
+    const data = mkData({
+      samples: sam('s1', 's2'),
+      operations: [op, used],
+      sideFans: [{ root: tool, items: [ref('manufacturing_operations', 'u1')], total: 30, remaining: 29 }],
+    });
+    const g = buildFan(data);
+    expect(record(g, 'f:tools:t1')).toBeDefined();
+    expect(container(g, 'op:u1').collapsed).toBe(true);
+    expect(container(g, 'op:o1').collapsed).toBeUndefined();
+    expect(g.nodes.find((n) => n.type === 'more')).toMatchObject({ id: 'more:tools:t1', remaining: 29 });
+  });
+
+  it('a fan focus puts the hidden-record markers on its own card, never on a sample', () => {
+    const data = toolFan(2);
+    data.hidden = { ancestors: false, descendants: true, events: false, stock: false };
+    expect(buildFan(data).hidden).toEqual([{ nodeId: 'f:tools:t1', side: 'out' }]);
   });
 });

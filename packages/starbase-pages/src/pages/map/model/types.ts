@@ -103,7 +103,25 @@ export interface ProcessData {
   stock: StockOrigin[];
   hidden: { ancestors: boolean; descendants: boolean; events: boolean; stock: boolean };
   truncated: boolean;
-  fan?: { items: Ref[]; total: number };
+  /** Opened on a record that is used by operations or samples (spec D20): the used-in fan of the focus. */
+  fan?: Fan;
+  /** Used-in fans merged in with ＋ on a record inside the map (a tool, a machine, a material...). */
+  sideFans?: SideFan[];
+}
+
+/**
+ * A page-by-page list of what used a record: operations or tests (drawn as collapsed containers) or
+ * samples (cards). `items` are the refs loaded so far, in the order drawn. `total` is the server's count of
+ * the main list; `remaining` is what is still to load ("+N more"), which differs from `total - items.length`
+ * for a stock lot (counted in samples, drawn as operations) and a campaign (unreadable samples are dropped).
+ */
+export interface Fan {
+  items: Ref[];
+  total: number;
+  remaining?: number;
+}
+export interface SideFan extends Fan {
+  root: Ref & { kind: Kind };
 }
 
 /** A set of rows drawn as one container. `batch: null` = a single row, no batch. */
@@ -164,8 +182,20 @@ export type ContainerNode = {
   slots: Slot[];
   settings: { label: string; value: string }[];
   bundled: boolean;
+  /** Header only (a used-in fan item whose family is not loaded yet): drawn without rows, Inside tray or settings. */
   collapsed?: boolean;
+  /** The date line a collapsed container shows. */
+  meta?: string;
   probable: boolean;
+};
+
+/** The "+N more" stub that ends a used-in fan: clicking it loads the next page. */
+export type MoreNode = {
+  id: string;
+  type: 'more';
+  /** The record whose fan it continues, `<collection>:<id>`. */
+  of: string;
+  remaining: number;
 };
 
 export type JunctionNode = {
@@ -177,7 +207,7 @@ export type JunctionNode = {
   in: string;
 };
 
-export type MapNode = RecordNode | ContainerNode | JunctionNode;
+export type MapNode = RecordNode | ContainerNode | JunctionNode | MoreNode;
 
 export interface Wire {
   id: string;

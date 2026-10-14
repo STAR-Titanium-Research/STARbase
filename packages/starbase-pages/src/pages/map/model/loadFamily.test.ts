@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { HostApi, TraceResponse } from '@d1/ui';
 import { isNotVisible } from '@d1/ui';
-import { chunkByBudget, encodedQuerySize, loadFamily, loadRelationDefs, loadUsedIn, parseFocus } from './loadFamily';
+import { chunkByBudget, encodedQuerySize, hasRecordSpec, loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './loadFamily';
 
 interface Call {
   path: string;
@@ -612,5 +612,74 @@ describe('loadUsedIn', () => {
   it('rejects a collection with no fan', async () => {
     const { api } = fakeApi(() => ({ data: [] }));
     await expect(loadUsedIn(api, { collection: 'people', id: 'x' }, 1)).rejects.toThrow(/used-in/);
+  });
+});
+
+describe('loadRecordRef', () => {
+  it('names a tool, a machine, a stock lot or a project from its own row', async () => {
+    const { api, calls } = fakeApi((path) => {
+      if (path === '/items/tools/t1') return { data: { tool_id: 't1', tool_code: 'TL-9', tool_name: 'Insert holder' } };
+      if (path === '/items/raw_stock_lots/l1') return { data: { lot_id: 'l1', lot_code: 'LOT-3', supplier_name: 'AP&C' } };
+      if (path === '/items/fast_recipes/r1') return { data: { id: 'r1', name: 'Ti64 a' } };
+      return httpError(404);
+    });
+    expect(await loadRecordRef(api, { collection: 'tools', id: 't1' })).toEqual({ collection: 'tools', id: 't1', code: 'TL-9', label: 'Insert holder' });
+    expect(await loadRecordRef(api, { collection: 'raw_stock_lots', id: 'l1' })).toEqual({ collection: 'raw_stock_lots', id: 'l1', code: 'LOT-3', label: 'AP&C' });
+    expect(await loadRecordRef(api, { collection: 'fast_recipes', id: 'r1' })).toEqual({ collection: 'fast_recipes', id: 'r1', code: 'Ti64 a' });
+    expect(calls[0].params.fields).toEqual(['tool_id', 'tool_code', 'tool_name']);
+  });
+
+  it('a missing or unreadable record rejects as not visible; an unknown collection is refused without a request', async () => {
+    const { api, calls } = fakeApi(() => httpError(403));
+    await expect(loadRecordRef(api, { collection: 'tools', id: 'x' })).rejects.toSatisfy(isNotVisible);
+    await expect(loadRecordRef(api, { collection: 'widgets', id: 'x' })).rejects.toThrow(/cannot name/);
+    expect(calls).toHaveLength(1);
+    const empty = fakeApi(() => ({ data: null }));
+    await expect(loadRecordRef(empty.api, { collection: 'tools', id: 'x' })).rejects.toSatisfy(isNotVisible);
+  });
+
+  it('knows which collections it can name', () => {
+    expect(hasRecordSpec('tools')).toBe(true);
+    expect(hasRecordSpec('raw_stock_lots')).toBe(true);
+    expect(hasRecordSpec('people')).toBe(false);
+    expect(hasRecordSpec('widgets')).toBe(false);
+  });
+});
+
+describe('loadStepRow and sampleOfRow', () => {
+  it('an operation: its input sample, else its output', async () => {
+    const { api } = fakeApi(() => ({ data: { operation_id: 'o1', pass_code: 'P1', sample_id: 's1', output_sample_id: 's2', method_id: { method_id: 'm', method_name: 'Cut' } } }));
+    const row = await loadStepRow(api, { collection: 'manufacturing_operations', id: 'o1' });
+    expect(row).toMatchObject({ id: 'o1', sampleId: 's1', outputSampleId: 's2' });
+    expect(sampleOfRow(row)).toBe('s1');
+    expect(sampleOfRow({ ...row, sampleId: null } as typeof row)).toBe('s2');
+    expect(sampleOfRow({ ...row, sampleId: null, outputSampleId: null } as typeof row)).toBeNull();
+  });
+
+  it('a test: its first subject, else its own sample', async () => {
+    const { api, calls } = fakeApi(() => ({ data: { session_id: 't1', sample_id: 'sa', test_code: 'T-1', subject: [{ collection: 'physical_samples', item: 'sb' }] } }));
+    const test = await loadStepRow(api, { collection: 'test_sessions', id: 't1' });
+    expect(sampleOfRow(test)).toBe('sb');
+    expect(calls[0].params.fields).toContain('subject.item');
+
+    const bare = fakeApi(() => ({ data: { session_id: 't1', sample_id: 'sa' } }));
+    expect(sampleOfRow(await loadStepRow(bare.api, { collection: 'test_sessions', id: 't1' }))).toBe('sa');
+  });
+
+  it('a test read refused with the subject junction is read again without it', async () => {
+    let n = 0;
+    const { api, calls } = fakeApi((_path, params) => {
+      n++;
+      return (params.fields as string[]).includes('subject.item') ? httpError(403) : { data: { session_id: 't1', sample_id: 'sa' } };
+    });
+    expect(sampleOfRow(await loadStepRow(api, { collection: 'test_sessions', id: 't1' }))).toBe('sa');
+    expect(n).toBe(2);
+    expect(calls[1].params.fields).not.toContain('subject.item');
+  });
+
+  it('a missing step rejects as not visible, another collection is refused', async () => {
+    const { api } = fakeApi(() => ({ data: null }));
+    await expect(loadStepRow(api, { collection: 'manufacturing_operations', id: 'x' })).rejects.toSatisfy(isNotVisible);
+    await expect(loadStepRow(api, { collection: 'tools', id: 'x' })).rejects.toThrow(/not an operation or a test/);
   });
 });

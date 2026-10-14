@@ -166,3 +166,32 @@ describe('elkInput', () => {
     expect(child(root, 'j:a').ports!.map((p) => p.layoutOptions?.['elk.port.side'])).toEqual(['NORTH', 'SOUTH']);
   });
 });
+
+describe('elkInput: a used-in fan', () => {
+  const fan = (): ProcessGraph => ({
+    nodes: [
+      { id: 'f:tools:t1', type: 'record', kind: 'tool', ref: { collection: 'tools', id: 't1', code: 'TL' }, ins: [], outs: ['f:tools:t1:out:0'] },
+      { ...container('op:u0', [{ in: 'op:u0:in:0' }]), collapsed: true },
+      { id: 'more:tools:t1', type: 'more', of: 'tools:t1', remaining: 5 },
+    ],
+    wires: [{ id: 'f>u0', from: 'f:tools:t1:out:0', to: 'op:u0:in:0', carries: null, flow: 'stock', bundled: false, origin: 'f:tools:t1' }],
+    hidden: [],
+    truncated: false,
+  });
+  const all = new Set(['f:tools:t1', 'op:u0', 'more:tools:t1']);
+
+  it('keeps the order of the list, and hangs the "+N more" stub from the record so it ends the column', () => {
+    const elk = elkInput(fan(), all, {}, 'RIGHT');
+    expect(elk.layoutOptions?.['elk.layered.considerModelOrder.strategy']).toBe('NODES_AND_EDGES');
+    expect(elk.children?.find((c) => c.id === 'more:tools:t1')?.ports?.map((p) => p.id)).toEqual(['more:tools:t1:in:0']);
+    expect(elk.edges?.map((e) => [e.sources[0], e.targets[0]])).toEqual([
+      ['f:tools:t1:out:0', 'op:u0:in:0'],
+      ['f:tools:t1:out:0', 'more:tools:t1:in:0'],
+    ]);
+  });
+
+  it('a graph with no fan lays out as before', () => {
+    const g: ProcessGraph = { nodes: [card('a', [], ['a:out:0'])], wires: [], hidden: [], truncated: false };
+    expect(elkInput(g, new Set(['a']), {}, 'RIGHT').layoutOptions).not.toHaveProperty('elk.layered.considerModelOrder.strategy');
+  });
+});

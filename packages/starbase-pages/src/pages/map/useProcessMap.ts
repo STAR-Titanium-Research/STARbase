@@ -3,15 +3,16 @@
 // (ProcessMapPage.vue) draws it; the rail / hover card (Task 8) read `selected`, `hovered`, `tooltip`.
 // Through the host's `api` only, like the model (spec §7).
 
-import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { computed, getCurrentInstance, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { errorText, isNotVisible, useRequestGate, type HostApi } from '@d1/ui';
-import { buildGraph } from './model/buildGraph';
+import { buildGraph, fanRootId, moreNodeId } from './model/buildGraph';
 import { connectionsOf, type Connections } from './model/connections';
 import { FALLBACK_RELATIONS, formSlots, type RelationDef } from './model/formSlots';
 import { groupBatches } from './model/groupBatches';
 import { hoverFocus, socketSubjects, type HoverFocus } from './model/hoverFocus';
 import { createHoverStack, type Hovered } from './model/hoverStack';
-import { loadFamily, loadRelationDefs, parseFocus } from './model/loadFamily';
+import { fanData, fanKindOf, fanNodeIds, fanPage, fanRowIds, focusPlan, hasFan, mergeProcessData, withFanPage, withSideFan } from './model/fans';
+import { loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './model/loadFamily';
 import { shownNodes } from './model/reach';
 import { recordInfo, type RecordInfo } from './model/recordInfo';
 import type { ContainerNode, MapNode, ProcessData, ProcessGraph, Ref } from './model/types';
@@ -37,6 +38,19 @@ const SOURCE_KINDS = ['stock_lot', 'powder_batch', 'material'];
 /** What a Show chip may hide: never the samples, operations, tests or lineage the wires run through. */
 const STRUCTURAL = new Set(['sample', 'operation', 'test', 'junction']);
 const HIDEABLE: ReadonlySet<string> = new Set([...Object.keys(KINDS).filter((k) => !STRUCTURAL.has(k)), SETTINGS_CHIP]);
+
+/** What the canvas is told when an expand (not a new focus) changes what is drawn: where the new cards go (spec §6.7). */
+export interface MergeHint {
+  /** The card the person expanded: new cards line up with it, or sit beside it when nothing placed is wired to them. */
+  anchor?: string;
+  /** The collapsed container `anchor` replaced (it has another id when it joined a batch): `anchor` takes its place and size. */
+  from?: string;
+  /** Cards to lay out again from ELK's result (a "+N more" stub moves to the end of its column). */
+  replace?: string[];
+}
+
+/** A focused operation or test that has no sample to open the family of. */
+class NoSample extends Error {}
 
 /** The route and router the map needs: kept to what it uses so tests can fake them. */
 export interface MapRoute {
@@ -179,7 +193,10 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   }
   function setReach(r: Reach): void {
     reach.value = r;
-    revealed.value = new Set();
+    if (!data.value?.fan) {
+      revealed.value = new Set();
+      capped.value = false;
+    }
     writeUrl({ reach: String(r) });
   }
 
@@ -213,6 +230,14 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   /** Cards the person revealed with ＋ beyond what the reach shows. */
   const revealed = ref<ReadonlySet<string>>(new Set());
   const selectedId = ref<string | null>(null);
+  /** The last expand could not add everything: the 300-card cap (spec D22) stopped it. */
+  const capped = ref(false);
+  /** Counts focus loads: the canvas starts afresh on a new one, not on an expand (which changes `data` too). */
+  const generation = ref(0);
+  /** What the last expand said, when it could not do what was asked (an error keeps what is loaded, spec §7). */
+  const notice = ref('');
+  /** Expands in flight. */
+  const expanding = ref(0);
   const centreRequest = shallowRef<{ id: string; n: number } | null>(null);
 
   const hoverStack = createHoverStack();
@@ -220,12 +245,66 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const hover = (id: string | null, el?: HTMLElement) => void (hovered.value = hoverStack.hover(id, el));
   const clearHover = () => void (hovered.value = hoverStack.clear());
 
+  /** The load (focus) the loaded data belongs to: the result of an expand that outlives its focus is dropped. */
+  let loadToken = 0;
+  /** Samples whose whole family is loaded; a sample card outside them opens by loading its family. */
+  let familyLoaded = new Set<string>();
+  /** Pages read of each fan (`<collection>:<id>`), for "+N more". */
+  let fanPages = new Map<string, number>();
+  /** What the next layout is told about the change that triggered it: an expand, not a new focus. */
+  let mergeHint: MergeHint | null = null;
+  /**
+   * Tells the next layout what kind of change it is for; forgotten once Vue has applied the change. Called
+   * after the change is made, so `nextTick` waits for the flush that carries it.
+   */
+  const hint = (h: MergeHint): void => {
+    mergeHint = h;
+    void nextTick().then(() => void (mergeHint = null));
+  };
+  const publish = (d: ProcessData, h: MergeHint): void => {
+    data.value = d;
+    hint(h);
+  };
+  /** Taken by the canvas when it lays out after an expand: where the new cards go (spec §6.7). */
+  const takeMergeHint = (): MergeHint | null => {
+    const h = mergeHint;
+    mergeHint = null;
+    return h;
+  };
+
+  /** What opening on a record loads (spec D20). */
+  async function loadFocus(f: { collection: string; id: string }, plan: 'sample' | 'step' | 'fan'): Promise<{ data: ProcessData; defs: DefsByKind }> {
+    if (plan === 'sample') {
+      const [family, relationDefs] = await Promise.all([loadFamily(api, f.id), loadDefs(api)]);
+      return { data: family, defs: relationDefs };
+    }
+    if (plan === 'step') {
+      // The family of the step's sample, with the step's own container focused.
+      const row = await loadStepRow(api, f);
+      const kind = f.collection === 'test_sessions' ? 'test' : 'operation';
+      const sampleId = sampleOfRow(row);
+      if (!sampleId) throw new NoSample(`This ${kind} has no sample, so there is no process to show.`);
+      const [family, relationDefs] = await Promise.all([loadFamily(api, sampleId), loadDefs(api)]);
+      const inFamily = kind === 'test' ? family.tests.some((t) => t.id === row.id) : family.operations.some((o) => o.id === row.id);
+      if (!inFamily) return { data: family, defs: relationDefs };
+      return { data: { ...family, focus: { collection: f.collection, id: row.id, code: row.code, kind } }, defs: relationDefs };
+    }
+    const [record, used, relationDefs] = await Promise.all([loadRecordRef(api, f), loadUsedIn(api, f, 1), loadDefs(api)]);
+    return { data: fanData({ ...record, kind: fanKindOf(f.collection) }, fanPage(f.collection, used, 1)), defs: relationDefs };
+  }
+
   async function load(): Promise<void> {
     const token = gate.begin();
+    loadToken = token;
+    generation.value++;
     data.value = null;
     unfolded.value = new Set();
     moreOpen.value = new Set();
     revealed.value = new Set();
+    capped.value = false;
+    notice.value = '';
+    familyLoaded = new Set();
+    fanPages = new Map();
     selectedId.value = null;
     clearHover();
     error.value = '';
@@ -234,55 +313,81 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       status.value = 'empty';
       return;
     }
-    if (f.collection !== 'physical_samples') {
-      // Opening on a tool, machine, project... is the used-in fan (spec D20), not built yet.
+    const plan = focusPlan(f.collection);
+    if (!plan) {
       status.value = 'error';
-      error.value = 'The Process map opens on a sample for now. Open a sample and use its Process map button.';
+      error.value = 'The Process map cannot open on this kind of record.';
       return;
     }
     status.value = 'loading';
     try {
-      const [family, relationDefs] = await Promise.all([loadFamily(api, f.id), loadDefs(api)]);
+      const loaded = await loadFocus(f, plan);
       if (!gate.isCurrent(token)) return;
-      defs.value = relationDefs;
-      data.value = family;
-      selectedId.value = `s:${family.focus.id}`;
+      defs.value = loaded.defs;
+      data.value = loaded.data;
+      if (plan === 'fan') fanPages.set(`${f.collection}:${f.id}`, 1);
+      else familyLoaded = new Set(loaded.data.samples.map((s) => s.id));
+      selectedId.value = focusNodeId.value || null;
       status.value = 'ready';
     } catch (e) {
       if (!gate.isCurrent(token)) return;
       if (isNotVisible(e)) status.value = 'notVisible';
       else {
         status.value = 'error';
-        error.value = `Could not load the Process map: ${errorText(e)}`;
+        error.value = e instanceof NoSample ? e.message : `Could not load the Process map: ${errorText(e)}`;
       }
     }
   }
   watch(focusKey, () => void load(), { immediate: true });
 
   // ---- the graph ----------------------------------------------------------------------------------
-  const graph = computed<ProcessGraph | null>(() => {
-    const d = data.value;
-    if (!d) return null;
-    const groups = groupBatches(d.operations, d.tests, { probable: probable.value });
+  /** The graph of `d`. Steps still collapsed in a fan are drawn by buildGraph's fan mode, not grouped into batches. */
+  function graphOf(d: ProcessData): ProcessGraph {
+    const collapsed = fanRowIds(d);
+    const groups = groupBatches(
+      d.operations.filter((o) => !collapsed.has(o.id)),
+      d.tests.filter((t) => !collapsed.has(t.id)),
+      { probable: probable.value },
+    );
     return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded: unfolded.value });
-  });
+  }
+  const graph = computed<ProcessGraph | null>(() => (data.value ? graphOf(data.value) : null));
   // A rebuilt graph removes elements that never see mouseleave.
   watch(graph, () => clearHover());
 
   const focusProjectId = computed(() => {
     const d = data.value;
-    return d?.samples.find((s) => s.id === d.focus.id)?.projectId ?? null;
+    if (!d) return null;
+    const { kind, id } = d.focus;
+    if (kind === 'sample') return d.samples.find((s) => s.id === id)?.projectId ?? null;
+    if (kind === 'operation') return d.operations.find((o) => o.id === id)?.projectId ?? null;
+    if (kind === 'test') return d.tests.find((t) => t.id === id)?.projectId ?? null;
+    return kind === 'project' ? id : null;
   });
-  const focusNodeId = computed(() => (data.value ? `s:${data.value.focus.id}` : ''));
+  /** The node the map is focused on: the sample's card, the step's container (in whichever batch it is), the record a fan hangs from. */
+  const focusNodeId = computed(() => {
+    const d = data.value;
+    const g = graph.value;
+    if (!d || !g) return '';
+    const { kind, id } = d.focus;
+    if (kind === 'sample') return `s:${id}`;
+    if (kind === 'operation' || kind === 'test') return g.nodes.find((n) => n.type === 'container' && n.kind === kind && n.group.rowIds.includes(id))?.id ?? '';
+    return fanRootId(d.focus);
+  });
 
   const fitted = computed(() => {
     const g = graph.value;
-    if (!g || !focusNodeId.value) return { ids: new Set<string>(), effective: reach.value, clamped: false };
-    return fitReach(g, focusNodeId.value, reach.value);
+    const d = data.value;
+    if (!g || !d || !focusNodeId.value) return { ids: new Set<string>(), effective: reach.value, clamped: false };
+    // What a fan lists is always drawn. A fan has no reach (it has no steps to count), so only fans are shown.
+    const fans = fanNodeIds(d, g);
+    if (d.fan) return { ids: fans, effective: reach.value, clamped: false };
+    const r = fitReach(g, focusNodeId.value, reach.value);
+    return fans.size ? { ...r, ids: new Set([...r.ids, ...fans]) } : r;
   });
   const effectiveReach = computed(() => fitted.value.effective);
   /** The banner "Showing part of this history" (spec D22). */
-  const partial = computed(() => !!data.value?.truncated || fitted.value.clamped);
+  const partial = computed(() => !!data.value?.truncated || fitted.value.clamped || capped.value);
 
   const nodeById = computed(() => new Map((graph.value?.nodes ?? []).map((n) => [n.id, n])));
 
@@ -339,6 +444,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     const d = data.value;
     const id = focusProjectId.value;
     if (!d || !id) return null;
+    if (d.focus.kind === 'project') return d.focus;
     for (const row of [...d.operations, ...d.tests]) {
       const r = row.relations.project_id;
       if (r && r.id === id) return r;
@@ -378,11 +484,159 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     if (opts.centre) centreRequest.value = { id, n: ++centreCount };
   }
 
-  /** ＋ on a card: what is one process step beyond it becomes shown. (Loading more of the history is Task 9.) */
-  function expand(id: string): void {
+  // ---- ＋ (spec D15, §7 "Expand") ---------------------------------------------------------------
+  /** Adds ids to what is drawn, up to the 300-card cap (spec D22): when some do not fit, the banner says so. */
+  function admit(ids: Iterable<string>): void {
+    const add: string[] = [];
+    for (const id of ids) {
+      const n = nodeById.value.get(id);
+      if (!n || shown.value.has(id) || (n.type === 'record' && hiddenKinds.value.has(n.kind))) continue;
+      add.push(id);
+    }
+    const room = Math.max(0, CARD_CAP - shown.value.size);
+    if (add.length > room) capped.value = true;
+    if (room && add.length) revealed.value = new Set([...revealed.value, ...add.slice(0, room)]);
+  }
+
+  /** The record inside a card (an Inside slot) that an action id (`<collection>:<id>`) names, and the container holding it. */
+  function slotRecord(id: string): { ref: Ref; owner: string } | null {
+    for (const c of graph.value?.nodes ?? []) {
+      if (c.type !== 'container') continue;
+      for (const s of c.slots) {
+        const hit = (s.ref ? [s.ref] : (s.values ?? [])).find((r) => refKey(r) === id);
+        if (hit) return { ref: hit, owner: c.id };
+      }
+    }
+    return null;
+  }
+
+  /** The fans on the map by their record (`<collection>:<id>`). */
+  const fanRoots = (d: ProcessData): Set<string> =>
+    new Set([...(d.fan ? [`${d.focus.collection}:${d.focus.id}`] : []), ...(d.sideFans ?? []).map((f) => `${f.root.collection}:${f.root.id}`)]);
+
+  /** Runs one expand: counts it while it loads, and says what went wrong without dropping what is loaded (spec §7). */
+  async function withBusy<T>(work: () => Promise<T>): Promise<T | undefined> {
+    expanding.value++;
+    try {
+      return await work();
+    } catch (e) {
+      notice.value = `Could not load more of the Process map: ${errorText(e)}`;
+      return undefined;
+    } finally {
+      expanding.value--;
+    }
+  }
+
+  /** The family of a sample merged into the map; the card that was expanded keeps its place (spec §6.7). */
+  function openFamily(sampleId: string, opts: { node?: string; rowId?: string; from?: string }): Promise<void> {
+    const mine = loadToken;
+    return withBusy(async () => {
+      const [family, relationDefs] = await Promise.all([loadFamily(api, sampleId), loadDefs(api)]);
+      const before = data.value;
+      if (!gate.isCurrent(mine) || !before) return;
+      const merged = mergeProcessData(before, family);
+      if (opts.rowId && fanRowIds(merged).has(opts.rowId)) {
+        notice.value = 'The samples of this step cannot be read, so its flow is not shown.';
+        return;
+      }
+      defs.value = relationDefs;
+      const next = graphOf(merged);
+      const anchor = opts.rowId ? next.nodes.find((n) => n.type === 'container' && n.group.rowIds.includes(opts.rowId!))?.id : opts.node;
+      for (const s of family.samples) familyLoaded.add(s.id);
+      publish(merged, { anchor, from: opts.from });
+      if (anchor) admit(shownNodes(next, anchor, 1));
+    }) as Promise<void>;
+  }
+
+  /** The fan of a record inside the map merged beside it ("used in"). */
+  function openSideFan(ref: Ref, anchor: string): Promise<void> {
+    const mine = loadToken;
+    return withBusy(async () => {
+      const used = await loadUsedIn(api, ref, 1);
+      const before = data.value;
+      if (!gate.isCurrent(mine) || !before) return;
+      const page = fanPage(ref.collection, used, 1);
+      const held = new Set([...before.operations.map((o) => o.id), ...before.tests.map((t) => t.id)]);
+      const fresh = page.items.filter((i) => i.collection === 'physical_samples' || !held.has(i.id)).length;
+      if (!fresh && !page.remaining) {
+        notice.value = `Nothing else in the map used ${ref.code}.`;
+        return;
+      }
+      if (shown.value.size + fresh + 2 > CARD_CAP) {
+        capped.value = true;
+        return;
+      }
+      fanPages.set(`${ref.collection}:${ref.id}`, 1);
+      publish(withSideFan(before, { ...ref, kind: fanKindOf(ref.collection) }, page), { anchor });
+    }) as Promise<void>;
+  }
+
+  const paging = new Set<string>();
+  /** "+N more": the next page of a fan. */
+  function loadMore(key: string): Promise<void> {
+    const at = key.indexOf(':');
+    const collection = key.slice(0, at);
+    const id = key.slice(at + 1);
+    const mine = loadToken;
+    if (paging.has(key)) return Promise.resolve();
+    paging.add(key);
+    return (withBusy(async () => {
+      const next = (fanPages.get(key) ?? 1) + 1;
+      const used = await loadUsedIn(api, { collection, id }, next);
+      const before = data.value;
+      if (!gate.isCurrent(mine) || !before) return;
+      const page = fanPage(collection, used, next);
+      const held = new Set([...before.operations.map((o) => o.id), ...before.tests.map((t) => t.id)]);
+      const fresh = page.items.filter((i) => i.collection === 'physical_samples' || !held.has(i.id)).length;
+      if (shown.value.size + fresh > CARD_CAP) {
+        capped.value = true; // stop adding; what is drawn stays, and the stub stays to say there is more
+        return;
+      }
+      fanPages.set(key, next);
+      // The stub moves to the end of the longer column.
+      publish(withFanPage(before, key, page), { replace: [moreNodeId({ collection, id })] });
+    }) as Promise<void>).finally(() => void paging.delete(key));
+  }
+
+  /**
+   * ＋ on a card or a record in an Inside tray: loads what is not there yet, and shows what is one process step beyond it.
+   * A collapsed container opens its sample's family; a sample outside the loaded families, its family; a record with a
+   * used-in fan (a tool in an Inside tray, a material or stock lot card), its fan beside it; "+N more", the next page.
+   */
+  async function expand(id: string): Promise<void> {
+    const d = data.value;
     const g = graph.value;
-    if (!g || !nodeById.value.has(id)) return;
-    revealed.value = new Set([...revealed.value, ...shownNodes(g, id, 1)]);
+    if (!d || !g || status.value !== 'ready') return;
+    notice.value = '';
+    if (id.startsWith('more:')) return loadMore(id.slice('more:'.length));
+    const node = nodeById.value.get(id);
+    if (node?.type === 'container' && node.collapsed) {
+      const rowId = node.group.rowIds[0];
+      const row = node.kind === 'operation' ? d.operations.find((o) => o.id === rowId) : d.tests.find((t) => t.id === rowId);
+      const sample = row ? sampleOfRow(row) : null;
+      if (!sample) {
+        notice.value = `${node.title} has no sample to open.`;
+        return;
+      }
+      return openFamily(sample, { rowId, from: id });
+    }
+    if (node?.type === 'record' && node.kind === 'sample' && !familyLoaded.has(node.ref.id)) return openFamily(node.ref.id, { node: id });
+    if (node?.type === 'record' && node.kind !== 'sample' && hasFan(node.ref.collection)) {
+      const key = refKey(node.ref);
+      if (!fanRoots(d).has(key)) return openSideFan(node.ref, id);
+      const remaining = d.fan && key === `${d.focus.collection}:${d.focus.id}` ? (d.fan.remaining ?? 0) : ((d.sideFans ?? []).find((f) => refKey(f.root) === key)?.remaining ?? 0);
+      if (remaining > 0) return loadMore(key);
+    }
+    if (!node) {
+      const slot = slotRecord(id);
+      if (slot && hasFan(slot.ref.collection)) {
+        if (!fanRoots(d).has(refKey(slot.ref))) return openSideFan(slot.ref, slot.owner);
+        notice.value = `${slot.ref.code} is already open on the map.`;
+      }
+      return;
+    }
+    admit(shownNodes(g, id, 1));
+    hint({ anchor: id });
   }
 
   const flip = (set: ReadonlySet<string>, id: string) => {
@@ -461,6 +715,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   return {
     status,
     error,
+    generation,
     data,
     graph,
     shown,
@@ -482,6 +737,9 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     presentKinds,
     project,
     expand,
+    notice,
+    expanding,
+    takeMergeHint,
     toggleRows,
     toggleMore,
     moreOpen,

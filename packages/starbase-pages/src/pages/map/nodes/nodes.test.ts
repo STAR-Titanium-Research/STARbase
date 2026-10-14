@@ -7,6 +7,7 @@ import type { ContainerNode as ContainerData, JunctionNode as JunctionData, MapN
 import { MAP_ACTIONS, MAP_VIEW, cardHandlers, recordHandlers, refKey, stopping, wireHandlers, type MapActions, type MapView } from './actions';
 import ContainerNode from './ContainerNode.vue';
 import JunctionNode from './JunctionNode.vue';
+import MoreNode from './MoreNode.vue';
 import RecordNode from './RecordNode.vue';
 import SlotRow from './SlotRow.vue';
 import WireEdge from './WireEdge.vue';
@@ -406,5 +407,64 @@ describe('controls inside cards do not start a Vue Flow drag or pan', () => {
 		const rec: RecordData = { id: 's:a', type: 'record', kind: 'sample', ref: refOf('physical_samples', 'a', 'S-A'), ins: [], outs: [] };
 		noDrag(await render(RecordNode, { id: rec.id, data: rec }), /<button class="xbtn[^"]*"/);
 		noDrag(await render(SlotRow, { item: machine('NLX-1') }), /class="slot [^"]*"/);
+	});
+});
+
+describe('used-in fan cards (D20)', () => {
+	const collapsed: ContainerData = {
+		id: 'op:u0',
+		type: 'container',
+		kind: 'operation',
+		group: { id: 'op:u0', kind: 'operation', rowIds: ['u0'], batch: null },
+		title: 'Turning',
+		code: 'OP-17',
+		category: 'machining',
+		rows: [{ recordId: 'u0', in: 'op:u0:in:0' }],
+		// Whatever the data holds, a collapsed container draws none of it.
+		slots: [{ field: 'equipment_id', role: 'Machine', ref: refOf('equipment', 'eq1', 'NLX-1'), major: true }],
+		settings: [{ label: 'Speed', value: '900' }],
+		bundled: false,
+		collapsed: true,
+		meta: '2026-09-28',
+		probable: false,
+	};
+
+	it('a collapsed container is its header, its date and one input socket, with the plus button', async () => {
+		const html = await render(ContainerNode, { id: collapsed.id, data: collapsed });
+		const t = text(html);
+		expect(t).toContain('Turning');
+		expect(t).toContain('2026-09-28');
+		expect(t).not.toContain('Inside');
+		expect(t).not.toContain('Sample');
+		expect(t).not.toContain('Speed');
+		expect(ids(html)).toEqual(['op:u0:in:0']);
+		expect(html).toContain('aria-label="Expand"');
+		expect(html).toContain('collapsed');
+	});
+
+	it('an opened container (collapsed gone) draws its rows and Inside tray again', async () => {
+		const html = await render(ContainerNode, { id: collapsed.id, data: { ...collapsed, collapsed: undefined, rows: [{ recordId: 'u0', sampleId: 'y0', in: 'op:u0:in:0', out: 'op:u0:out:0' }] } });
+		expect(text(html)).toContain('Inside');
+		expect(ids(html)).toEqual(['op:u0:in:0', 'op:u0:out:0']);
+	});
+
+	it('the "+N more" stub says how many and has no sockets', async () => {
+		const html = await render(MoreNode, { id: 'more:tools:t1', data: { id: 'more:tools:t1', type: 'more', of: 'tools:t1', remaining: 27 } });
+		expect(text(html)).toContain('+27 more');
+		expect(html).toContain('role="button"');
+		expect(html).toContain('aria-label="Load +27 more"');
+		expect(ids(html)).toEqual([]);
+	});
+
+	it('a record that has a used-in fan offers a plus button in its slot; one that has none does not', async () => {
+		const tool: Slot = { field: 'tool_id', role: 'Tool', ref: refOf('tools', 't1', 'TL-1'), major: true };
+		expect(await render(SlotRow, { item: tool })).toContain('Show what else used TL-1');
+		expect(await render(SlotRow, { item: minor('operator_person_id', 'Operator', 'Ada') })).not.toContain('Show what else used');
+	});
+
+	it('the stub asks the page to load the next page by its own id', () => {
+		const a = spies();
+		stopping(() => a.expand('more:tools:t1'))({ stopPropagation() {} });
+		expect(a.calls).toEqual([['expand', 'more:tools:t1']]);
 	});
 });

@@ -8,6 +8,8 @@
 import { computed, markRaw, nextTick, ref, watch } from 'vue';
 import { useVueFlow, type Edge, type GraphNode, type Node, type NodeTypesObject, type EdgeTypesObject } from '@vue-flow/core';
 import { nodeOfSocket } from './model/sockets';
+import { fanNodeIds } from './model/fans';
+import { placeMerged, type Box } from './model/placeMerged';
 import { shownNodes } from './model/reach';
 import type { MapNode } from './model/types';
 import ContainerNode from './nodes/ContainerNode.vue';
@@ -16,12 +18,13 @@ import RecordNode from './nodes/RecordNode.vue';
 import WireEdge from './nodes/WireEdge.vue';
 import { KINDS } from './nodes/kinds';
 import { wireTooltip } from './nodes/wireTooltip';
-import type { useProcessMap } from './useProcessMap';
+import MoreNode from './nodes/MoreNode.vue';
+import type { MergeHint, useProcessMap } from './useProcessMap';
 import { useElkLayout } from './useElkLayout';
 
 type ProcessMap = ReturnType<typeof useProcessMap>;
 
-const nodeTypes = { record: markRaw(RecordNode), container: markRaw(ContainerNode), junction: markRaw(JunctionNode) } as unknown as NodeTypesObject;
+const nodeTypes = { record: markRaw(RecordNode), container: markRaw(ContainerNode), junction: markRaw(JunctionNode), more: markRaw(MoreNode) } as unknown as NodeTypesObject;
 const edgeTypes = { wire: markRaw(WireEdge) } as unknown as EdgeTypesObject;
 
 /** Duration of the move to the laid-out positions. */
@@ -30,6 +33,8 @@ const MOVE_MS = 200;
 const FRAME_PAD = 28;
 const FRAME_LABEL = 30;
 const FIT_PADDING = 0.12;
+/** Nodes of a used-in fan the first view frames: its record and the first few items. */
+const FAN_FIT = 9;
 
 const reducedMotion = (): boolean => {
   try {
@@ -55,18 +60,28 @@ export function useMapCanvas(map: ProcessMap) {
   const layoutError = ref('');
   let needsFit = true;
   let pending = false;
+  /** The pending layout is an expand (new cards go beside what is placed), not a full layout; a full one wins when both are asked for. */
+  let pendingMerge: MergeHint | null = null;
+  let pendingFull = true;
   let token = 0;
-  /** Where the last layout put each node, for nodes that are rebuilt (hidden chips, folds) but were not dragged. */
-  const placed = new Map<string, { x: number; y: number }>();
+  /** Where the last layout put each node and how big it was then: for nodes that are rebuilt (hidden chips, folds) but were not dragged, and to tell cards that are new, or that grew. */
+  const placed = new Map<string, Box>();
+  /** The expand being drawn: new cards start at the card that was expanded instead of the origin. */
+  let merging: MergeHint | null = null;
 
   // ---- elements ---------------------------------------------------------------------------------
+  const startOfMerge = (): { x: number; y: number } | null => {
+    const id = merging?.anchor;
+    const at = id ? (vf.findNode(id)?.position ?? placed.get(id)) : null;
+    return at ? { x: at.x, y: at.y } : null;
+  };
   function elements(): { nodes: Node[]; edges: Edge[] } {
     const list = map.nodes.value;
     const byId = new Map(list.map((n) => [n.id, n]));
     const nodes: Node[] = list.map((n) => ({
       id: n.id,
       type: n.type,
-      position: vf.findNode(n.id)?.position ?? placed.get(n.id) ?? { x: 0, y: 0 },
+      position: vf.findNode(n.id)?.position ?? placed.get(n.id) ?? startOfMerge() ?? { x: 0, y: 0 },
       data: n,
       draggable: true,
       selectable: false,
@@ -122,13 +137,13 @@ export function useMapCanvas(map: ProcessMap) {
   const measuredSize = (n: GraphNode) => (n.dimensions.width > 0 && n.dimensions.height > 0 ? { width: n.dimensions.width, height: n.dimensions.height } : null);
   const allMeasured = () => vf.getNodes.value.length > 0 && vf.getNodes.value.every((n) => measuredSize(n));
 
-  /** Move every node to `target`, over MOVE_MS (instantly for people who asked for less motion). */
-  function moveTo(target: Record<string, { x: number; y: number }>): Promise<void> {
+  /** Move the nodes of `target`, over MOVE_MS (instantly for people who asked for less motion, and for `instant` ones: new cards do not fly in). */
+  function moveTo(target: Record<string, { x: number; y: number }>, instant: ReadonlySet<string> = new Set()): Promise<void> {
     const start = new Map(vf.getNodes.value.map((n) => [n.id, { ...n.position }]));
     const apply = (t: number) =>
       vf.applyNodeChanges(
         Object.entries(target).map(([id, to]) => {
-          const from = start.get(id) ?? to;
+          const from = instant.has(id) ? to : (start.get(id) ?? to);
           return { id, type: 'position' as const, from, position: { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t } };
         }),
       );
@@ -151,6 +166,10 @@ export function useMapCanvas(map: ProcessMap) {
   async function runLayout(): Promise<void> {
     const mine = ++token;
     pending = false;
+    // An expand lays out only what is new (spec §6.7); a first layout, Re-layout and a new direction lay out everything.
+    const merge = pendingFull || !placed.size ? null : pendingMerge;
+    pendingFull = true;
+    pendingMerge = null;
     const graph = map.graph.value;
     if (!graph || !vf.getNodes.value.length) return;
     const sizes: Record<string, { width: number; height: number }> = {};
@@ -159,11 +178,28 @@ export function useMapCanvas(map: ProcessMap) {
       if (s) sizes[n.id] = s;
     }
     try {
-      const positions = await layout(graph, new Set(vf.getNodes.value.map((n) => n.id)), sizes, map.dir.value);
+      const elk = await layout(graph, new Set(vf.getNodes.value.map((n) => n.id)), sizes, map.dir.value);
       if (mine !== token) return; // a newer layout (or a new family) supersedes this one
       layoutError.value = '';
-      for (const [id, p] of Object.entries(positions)) placed.set(id, p);
-      await moveTo(positions);
+      let positions = elk;
+      const instant = new Set<string>();
+      if (merge) {
+        // Cards already placed stay where they are (a dragged one stays where it was dropped): only new cards, and cards a grown one pushed, move.
+        const here: Record<string, Box> = {};
+        for (const n of vf.getNodes.value) {
+          const was = placed.get(n.id);
+          if (was && !merge.replace?.includes(n.id)) here[n.id] = { x: n.position.x, y: n.position.y, width: was.width, height: was.height };
+        }
+        const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
+        positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchor: merge.anchor });
+        for (const id of Object.keys(positions)) if (!here[id]) instant.add(id);
+      }
+      for (const n of vf.getNodes.value) {
+        const at = positions[n.id] ?? (merge ? n.position : undefined);
+        const size = sizes[n.id];
+        if (at && size) placed.set(n.id, { x: at.x, y: at.y, ...size });
+      }
+      await moveTo(positions, instant);
       if (mine !== token) return;
       laidOut.value = true;
       if (needsFit) {
@@ -177,8 +213,13 @@ export function useMapCanvas(map: ProcessMap) {
     }
   }
 
-  /** Run a layout once every node is measured: now when they are, else when Vue Flow says they are. */
-  async function scheduleLayout(): Promise<void> {
+  /** Run a layout once every node is measured: now when they are, else when Vue Flow says they are. `merge`: an expand (spec §6.7), not a full layout. */
+  async function scheduleLayout(merge: MergeHint | null = null): Promise<void> {
+    if (!pending) {
+      pendingFull = !merge;
+      pendingMerge = merge;
+    } else if (!merge) pendingFull = true; // a full layout asked for meanwhile covers the expand too
+    else pendingMerge = merge;
     pending = true;
     await nextTick();
     if (!vf.vueFlowRef.value) return; // not mounted yet: onNodesInitialized starts the layout once it is
@@ -199,6 +240,9 @@ export function useMapCanvas(map: ProcessMap) {
   /** Frame the focus and what is one process step around it (not the whole family at a tiny zoom). */
   function fitFocus(animate = true): Promise<boolean> {
     const g = map.graph.value;
+    const d = map.data.value;
+    // A fan has no steps to count: frame its record and the head of the list (the rest is a pan away), not a zoom out to all of it.
+    if (g && d?.fan) return fitIds([...fanNodeIds(d, g)].slice(0, FAN_FIT), animate);
     if (!g || !map.focusNodeId.value) return fitIds(undefined, animate);
     return fitIds([...shownNodes(g, map.focusNodeId.value, 1)], animate);
   }
@@ -211,9 +255,9 @@ export function useMapCanvas(map: ProcessMap) {
   }
 
   // ---- reacting to the page state -----------------------------------------------------------------
-  // A new family: start again, invisible until laid out, then fit around the focus.
+  // A new focus (not an expand, which changes the data too): start again, invisible until laid out, then fit around the focus.
   watch(
-    () => map.data.value,
+    () => map.generation.value,
     () => {
       laidOut.value = false;
       needsFit = true;
@@ -221,10 +265,24 @@ export function useMapCanvas(map: ProcessMap) {
       token++;
     },
   );
-  // The shown set, the Show chips, a fold or the direction changed: rebuild and lay out again.
+  // The shown set, the Show chips, a fold or the direction changed: rebuild and lay out again. An expand
+  // (the page says so with a merge hint) lays out only what is new; everything else lays out everything.
+  let lastDir = map.dir.value;
   watch([() => map.nodes.value, () => map.dir.value], () => {
+    const turned = map.dir.value !== lastDir;
+    lastDir = map.dir.value;
+    const hint = map.takeMergeHint();
+    const merge = turned || !placed.size ? null : hint;
+    merging = merge;
+    // A collapsed container that opened may come back under another id (a batch): it takes the old one's place and size.
+    const from = merge?.from ? placed.get(merge.from) : undefined;
+    if (merge?.anchor && from && merge.from !== merge.anchor && !placed.has(merge.anchor)) {
+      const was = vf.findNode(merge.from!)?.position ?? from;
+      placed.set(merge.anchor, { ...from, x: was.x, y: was.y });
+    }
     rebuild();
-    if (map.nodes.value.length) void scheduleLayout();
+    merging = null;
+    if (map.nodes.value.length) void scheduleLayout(merge);
   });
   watch(() => map.selectedId.value, syncSelection);
   watch(() => map.focusOfHover.value, applyFocus);

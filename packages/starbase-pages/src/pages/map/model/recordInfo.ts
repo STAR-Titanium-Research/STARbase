@@ -116,13 +116,15 @@ function containerInfo(id: string, data: ProcessData, node: ContainerNode): Reco
     title: node.probable ? undefined : node.title,
     status: node.status,
     facts,
-    counts: [{ value: node.rows.length, label: node.rows.length === 1 ? 'sample' : 'samples' }],
+    // A collapsed container's samples are not loaded: it has none to count.
+    counts: node.collapsed ? [] : [{ value: node.rows.length, label: node.rows.length === 1 ? 'sample' : 'samples' }],
     geometry: null,
     dataOf: node.kind === 'operation' ? ref : null,
   };
 }
 
 function nodeInfo(id: string, node: MapNode, data: ProcessData, graph: ProcessGraph): RecordInfo | null {
+  if (node.type === 'more') return null;
   if (node.type === 'container') return containerInfo(id, data, node);
 
   if (node.type === 'junction') {

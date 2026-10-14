@@ -11,6 +11,7 @@ import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
 import { AppLink, Finder, LoadState, NotVisible, PageShell, RecordLayout, RecordLink, Section, SegmentedControl, indexRoute, useExplorerHost } from '@d1/ui';
 import type { Dir } from './model/elkInput';
+import { recordWord } from './model/fans';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import HoverCard from './HoverCard.vue';
 import MapRail from './MapRail.vue';
@@ -33,7 +34,7 @@ const canvas = useMapCanvas(map);
 const actions: MapActions = {
 	select: (id, opts) => map.select(id, opts),
 	expand: (id) => {
-		map.expand(id);
+		void map.expand(id); // loads what is missing, shows what is one step beyond
 		void canvas.remeasure(id);
 	},
 	hover: (id, el) => map.hover(id, el),
@@ -49,6 +50,8 @@ provide(MAP_ACTIONS, actions);
 provide(MAP_VIEW, view);
 
 const focusCode = computed(() => map.data.value?.focus.code ?? '');
+// The record the map is opened on is not always a sample (a tool, a project, an operation...).
+const focusWord = computed(() => recordWord(map.focus.value?.collection ?? 'physical_samples'));
 const pageTitle = computed(() => (map.status.value === 'ready' && focusCode.value ? `${focusCode.value} · Process map` : 'Process map'));
 
 const DIRECTIONS: { value: Dir; label: string }[] = [
@@ -133,7 +136,7 @@ onBeforeUnmount(() => {
 		<PageShell>
 			<LoadState v-if="map.status.value === 'loading'" loading loading-text="Loading the Process map…" />
 
-			<NotVisible v-else-if="map.status.value === 'notVisible'" what="sample" />
+			<NotVisible v-else-if="map.status.value === 'notVisible'" :what="focusWord.one" />
 
 			<template v-else-if="map.status.value === 'error'">
 				<LoadState :error="map.error.value" />
@@ -150,9 +153,9 @@ onBeforeUnmount(() => {
 
 			<RecordLayout v-else class="d1-process-map" style="--d1-sticky-top: var(--d1-header-offset, 70px)">
 				<template #crumbs>
-					<AppLink :to="indexRoute('physical_samples')">Samples</AppLink>
+					<AppLink :to="indexRoute(map.data.value?.focus.collection ?? 'physical_samples')">{{ focusWord.many }}</AppLink>
 					<span>›</span>
-					<RecordLink collection="physical_samples" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
+					<RecordLink :collection="map.data.value?.focus.collection ?? 'physical_samples'" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
 					<span>›</span>
 					<span>Process map</span>
 				</template>
@@ -191,6 +194,8 @@ onBeforeUnmount(() => {
 						<v-button small secondary @click="map.clearFocus()">Clear</v-button>
 					</template>
 
+					<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
+					<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
 					<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
 					<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
 

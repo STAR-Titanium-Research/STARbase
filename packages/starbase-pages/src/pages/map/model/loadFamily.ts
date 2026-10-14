@@ -19,7 +19,7 @@ const CHUNK = 150;
 /** Encoded query string of one request, in bytes: filter + fields + sort + limit (typical request-line limit 8 KB). */
 const QUERY_BUDGET = 6000;
 /** Rows per used-in page (spec D20). */
-const FAN_PAGE = 20;
+export const FAN_PAGE = 20;
 
 interface RelSpec {
   collection: string;
@@ -658,4 +658,59 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
   }
 
   throw new Error(`No used-in fan for ${ref.collection}`);
+}
+
+// ---- the record a fan or a focused step starts from (spec D20) -----------------------------------
+
+/** What names a record that has no page of its own: table key, code columns, label column. */
+const RECORD_SPECS: Record<string, RelSpec> = {
+  ...Object.fromEntries(Object.values(RELATIONS).map((spec) => [spec.collection, spec as RelSpec])),
+  raw_stock_lots: { collection: 'raw_stock_lots', id: 'lot_id', code: ['lot_code'], label: 'supplier_name' },
+};
+
+/** The records the map can be opened on or fanned from: everything with a spec, but not people. */
+export const hasRecordSpec = (collection: string): boolean => collection in RECORD_SPECS && collection !== 'people';
+
+/**
+ * The code (and name) of a record, for the card a used-in fan hangs from. Throws what the API threw, so
+ * a 403 / 404 reads as "not visible" to the caller (`isNotVisible`).
+ */
+export async function loadRecordRef(api: HostApi, ref: { collection: string; id: string }): Promise<Ref> {
+  const spec = RECORD_SPECS[ref.collection];
+  if (!spec) throw new Error(`The process map cannot name ${ref.collection}`);
+  const fields = unique([spec.id, ...spec.code, ...(spec.label ? [spec.label] : [])]);
+  const { data } = await api.get(`/items/${ref.collection}/${encodeURIComponent(ref.id)}`, { params: { fields } });
+  const row = (data?.data ?? null) as Json | null;
+  const id = row ? idOf(row[spec.id]) : null;
+  if (!row || !id) throw Object.assign(new Error('Record not found'), { response: { status: 404 } });
+  const code = spec.code.map((c) => str(row[c])).find((c) => c) ?? id;
+  const label = spec.label ? str(row[spec.label]) : null;
+  return label && label !== code ? { collection: ref.collection, id, code, label } : { collection: ref.collection, id, code };
+}
+
+/** The sample whose family stands for an operation or test: an operation's input (else its output), a test's first subject. */
+export const sampleOfRow = (row: OpRow | TestRow): string | null =>
+  'subjectSampleIds' in row ? (row.subjectSampleIds[0] ?? null) : (row.sampleId ?? row.outputSampleId);
+
+/** Reads the operation or test an Operation / Test focus names, as the loader maps it. Throws like `loadRecordRef`. */
+export async function loadStepRow(api: HostApi, ref: { collection: string; id: string }): Promise<OpRow | TestRow> {
+  const id = encodeURIComponent(ref.id);
+  if (ref.collection === 'manufacturing_operations') {
+    const { data } = await api.get(`/items/manufacturing_operations/${id}`, { params: { fields: OPERATION_FIELDS } });
+    if (!data?.data) throw Object.assign(new Error('Record not found'), { response: { status: 404 } });
+    return mapOperation(data.data as Json);
+  }
+  if (ref.collection === 'test_sessions') {
+    let res;
+    try {
+      res = await api.get(`/items/test_sessions/${id}`, { params: { fields: [...TEST_FIELDS, ...SUBJECT_FIELDS] } });
+    } catch (e) {
+      // A role that may not read the subject junction still reads the test's own sample.
+      if (!isNotVisible(e)) throw e;
+      res = await api.get(`/items/test_sessions/${id}`, { params: { fields: TEST_FIELDS } });
+    }
+    if (!res.data?.data) throw Object.assign(new Error('Record not found'), { response: { status: 404 } });
+    return mapTest(res.data.data as Json);
+  }
+  throw new Error(`${ref.collection} is not an operation or a test`);
 }

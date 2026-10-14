@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { hasFan } from '../model/fans';
 import type { Ref as RecordRef, Slot } from '../model/types';
-import { recordHandlers, refKey, useMapActions, useMapView } from './actions';
+import { recordHandlers, refKey, stopping, useMapActions, useMapView } from './actions';
 import { KINDS, kindOfCollection, kindVar } from './kinds';
 
 // One slot of a container's Inside tray (spec D6): the role, and the record in it. A merged batch slot
@@ -29,6 +30,9 @@ const focal = computed(() => {
 });
 
 const on = (r: RecordRef) => recordHandlers(actions, () => r);
+// ＋ on the record: what else used it, merged beside this card (spec §7 "Expand"). Only records that have a used-in fan.
+const fanOf = computed(() => (single.value && hasFan(single.value.collection) ? single.value : null));
+const showFan = stopping(() => fanOf.value && actions.expand(refKey(fanOf.value)));
 </script>
 
 <template>
@@ -50,6 +54,7 @@ const on = (r: RecordRef) => recordHandlers(actions, () => r);
 			<button v-else-if="many" type="button" class="vals" :aria-expanded="expanded" @click.stop="expanded = !expanded">{{ summary }}</button>
 			<span v-else class="sc none">none</span>
 			<span v-if="item.partial" class="part">some rows</span>
+			<button v-if="fanOf" class="xbtn nodrag nopan" type="button" :aria-label="`Show what else used ${fanOf.code}`" @click="showFan"><v-icon name="add" x-small /></button>
 		</div>
 		<ul v-if="many && expanded" class="vlist">
 			<li
@@ -81,6 +86,8 @@ const on = (r: RecordRef) => recordHandlers(actions, () => r);
 .sc.none { color: var(--d1-dim); font-weight: 500; cursor: default; }
 .sc:focus-visible, .vals:focus-visible { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 1px; border-radius: 4px; }
 .vals { border: 0; padding: 0; background: transparent; color: var(--d1-accent, var(--theme--primary)); font: inherit; font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer; }
+.xbtn { margin-left: auto; width: 18px; height: 18px; }
+.part + .xbtn { margin-left: 4px; }
 .part { margin-left: auto; font-size: var(--fs-xs, 11px); color: var(--d1-dim); white-space: nowrap; }
 .vlist { list-style: none; margin: 0 0 0 38px; padding: 0 0 0 8px; border-left: 2px solid var(--d1-line); display: flex; flex-direction: column; gap: 2px; }
 .vlist .sc { display: block; padding: 1px 0; }

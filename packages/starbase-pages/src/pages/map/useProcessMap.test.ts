@@ -1,18 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { nextTick, reactive } from 'vue';
+import { nextTick, reactive, watch } from 'vue';
 import type { HostApi } from '@d1/ui';
-import { groupsOf, mkData, mkLineage, mkOp, mkSample } from './model/fixtures';
-import type { ContainerNode, ProcessData } from './model/types';
-import { loadFamily, loadRelationDefs } from './model/loadFamily';
+import { groupsOf, mkData, mkLineage, mkOp, mkSample, mkTest } from './model/fixtures';
+import type { ContainerNode, MoreNode, OpRow, ProcessData } from './model/types';
+import { loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn } from './model/loadFamily';
 import { HOVER_DELAY_MS, useProcessMap } from './useProcessMap';
 
 vi.mock('./model/loadFamily', async (orig) => ({
   ...(await orig<typeof import('./model/loadFamily')>()),
   loadFamily: vi.fn(),
   loadRelationDefs: vi.fn(async () => null),
+  loadStepRow: vi.fn(),
+  loadRecordRef: vi.fn(),
+  loadUsedIn: vi.fn(),
 }));
 
 const family = vi.mocked(loadFamily);
+const stepRow = vi.mocked(loadStepRow);
+const recordRef = vi.mocked(loadRecordRef);
+const usedIn = vi.mocked(loadUsedIn);
 const api = {} as HostApi;
 const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { response: { status } });
 
@@ -29,6 +35,20 @@ const settle = async () => {
   for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
   await nextTick();
 };
+
+/** `n` operations of a tool (newest first), as loadUsedIn returns them: their samples are not loaded. */
+function toolOps(n: number, from = 0): OpRow[] {
+  return Array.from({ length: n }, (_, i) =>
+    mkOp({ id: `u${from + i}`, code: `OP-${from + i}`, methodName: 'Turning', date: `2026-09-${String(28 - ((from + i) % 28)).padStart(2, '0')}T09:00:00Z`, sampleId: `x${from + i}`, outputSampleId: `y${from + i}` }),
+  );
+}
+const TOOL = { collection: 'tools', id: 't1', code: 'TL-1' };
+/** The family of sample `x${i}`: the tool's operation u<i> cutting it into y<i>. */
+const familyOfX = (i: number): ProcessData =>
+  mkData({
+    samples: [mkSample(`x${i}`), mkSample(`y${i}`)],
+    operations: [mkOp({ id: `u${i}`, code: `OP-${i}`, methodName: 'Turning', date: '2026-09-01T09:00:00Z', sampleId: `x${i}`, outputSampleId: `y${i}` })],
+  });
 
 /** p is cut into 20 pieces, each piece into 20 more: 421 samples. */
 function wide(): ProcessData {
@@ -54,6 +74,9 @@ const small = (): ProcessData =>
 
 beforeEach(() => {
   family.mockReset();
+  stepRow.mockReset();
+  recordRef.mockReset();
+  usedIn.mockReset();
   vi.mocked(loadRelationDefs).mockResolvedValue(null);
   vi.unstubAllGlobals();
 });
@@ -104,12 +127,12 @@ describe('useProcessMap', () => {
     expect(map.error.value).toContain('boom');
   });
 
-  it('a focus that is not a sample is an error that says so, not a crash', async () => {
-    const { map } = setup({ focus: 'tools:t1' });
+  it('a collection the map cannot focus at all says so plainly and loads nothing', async () => {
+    const { map } = setup({ focus: 'widgets:w1' });
     await settle();
     expect(map.status.value).toBe('error');
-    expect(map.error.value).toMatch(/sample/i);
-    expect(family).not.toHaveBeenCalled();
+    expect(map.error.value).toBe('The Process map cannot open on this kind of record.');
+    for (const load of [family, stepRow, recordRef, usedIn]) expect(load).not.toHaveBeenCalled();
   });
 
   it('a newer focus wins over a slower older one', async () => {
@@ -271,13 +294,18 @@ describe('useProcessMap', () => {
     expect(family).toHaveBeenLastCalledWith(api, 's2');
   });
 
-  it('setFocus from the empty page, and on a collection the map cannot focus yet, shows its current state', async () => {
+  it('setFocus from the empty page opens a tool as its used-in fan, and a collection it cannot focus as the plain state', async () => {
+    recordRef.mockResolvedValue({ collection: 'tools', id: 't1', code: 'TL-1' });
+    usedIn.mockResolvedValue({ items: toolOps(2), total: 2 });
     const { map } = setup();
     await settle();
     map.setFocus('tools', 't1');
     await settle();
+    expect(map.status.value).toBe('ready');
+    expect(map.focusNodeId.value).toBe('f:tools:t1');
+    map.setFocus('widgets', 'w1');
+    await settle();
     expect(map.status.value).toBe('error');
-    expect(map.error.value).toMatch(/sample/i);
   });
 
   it('localStorage that throws (or is missing) does not break toggleKind, setProbable or reading', async () => {
@@ -486,5 +514,440 @@ describe('useProcessMap', () => {
     expect(map.moreOpen.value.has(id)).toBe(true);
     map.toggleMore(id);
     expect(map.moreOpen.value.has(id)).toBe(false);
+  });
+});
+
+// ---- focus kinds, used-in fans and expand ------------------------------------------------------
+
+/** What the canvas sees on each change of nodes: the merge hint of that change (it takes it like this). */
+function hints(map: ReturnType<typeof useProcessMap>) {
+  const seen: unknown[] = [];
+  watch(
+    () => map.nodes.value,
+    () => void seen.push(map.takeMergeHint()),
+  );
+  return seen;
+}
+
+const containersOf = (map: ReturnType<typeof useProcessMap>) => map.graph.value!.nodes.filter((n): n is ContainerNode => n.type === 'container');
+const idsOf = (map: ReturnType<typeof useProcessMap>) => map.graph.value!.nodes.map((n) => n.id);
+
+describe('focus kinds (D20)', () => {
+  it('operation focus loads its input sample\'s family and focuses the container', async () => {
+    const data = mkData({
+      samples: [mkSample('s1'), mkSample('s2')],
+      operations: [mkOp({ id: 'o1', code: 'OP-1', sampleId: 's1', outputSampleId: 's2', date: '2026-09-01T09:00:00Z', methodName: 'Cut' })],
+    });
+    stepRow.mockResolvedValue(data.operations[0]);
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'manufacturing_operations:o1' });
+    await settle();
+    expect(stepRow).toHaveBeenCalledWith(api, { collection: 'manufacturing_operations', id: 'o1' });
+    expect(family).toHaveBeenCalledWith(api, 's1');
+    expect(map.status.value).toBe('ready');
+    expect(map.data.value?.focus).toMatchObject({ collection: 'manufacturing_operations', id: 'o1', code: 'OP-1', kind: 'operation' });
+    expect(map.focusNodeId.value).toBe('op:o1');
+    expect(map.selectedId.value).toBe('op:o1');
+    expect(map.selected.value?.ref).toMatchObject({ collection: 'manufacturing_operations', id: 'o1' });
+    expect(map.shown.value.has('op:o1')).toBe(true);
+    expect(map.shown.value.has('s:s1')).toBe(true);
+  });
+
+  it('an operation in a probable batch focuses the batch container it sits in', async () => {
+    const data = mkData({
+      samples: [mkSample('p'), mkSample('a'), mkSample('b')],
+      operations: [
+        mkOp({ id: 'x1', sampleId: 'p', outputSampleId: 'a', date: '2026-09-01T09:00:00Z', methodName: 'Cut', methodId: 'm' }),
+        mkOp({ id: 'x2', sampleId: 'p', outputSampleId: 'b', date: '2026-09-01T10:00:00Z', methodName: 'Cut', methodId: 'm' }),
+      ],
+    });
+    stepRow.mockResolvedValue(data.operations[1]);
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'manufacturing_operations:x2' });
+    await settle();
+    expect(map.focusNodeId.value).toMatch(/^probable:/);
+    expect(map.shown.value.has(map.focusNodeId.value)).toBe(true);
+  });
+
+  it('a test focus opens the family of its first subject sample', async () => {
+    const test = mkTest({ id: 't1', code: 'T-1', subjectSampleIds: ['s2', 's3'], date: '2026-09-02T09:00:00Z' });
+    const data = mkData({ samples: [mkSample('s2'), mkSample('s3')], tests: [test] });
+    stepRow.mockResolvedValue(test);
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'test_sessions:t1' });
+    await settle();
+    expect(family).toHaveBeenCalledWith(api, 's2');
+    expect(map.data.value?.focus).toMatchObject({ collection: 'test_sessions', id: 't1', kind: 'test' });
+    expect(map.focusNodeId.value).toBe('test:t1');
+  });
+
+  it('an operation with no sample says so; one the person may not read is not visible', async () => {
+    stepRow.mockResolvedValue(mkOp({ id: 'o1', sampleId: null, outputSampleId: null }));
+    const a = setup({ focus: 'manufacturing_operations:o1' });
+    await settle();
+    expect(a.map.status.value).toBe('error');
+    expect(a.map.error.value).toMatch(/no sample/);
+    expect(family).not.toHaveBeenCalled();
+
+    stepRow.mockRejectedValue(httpError(404));
+    const b = setup({ focus: 'test_sessions:nope' });
+    await settle();
+    expect(b.map.status.value).toBe('notVisible');
+  });
+
+  it('tool focus builds a fan of at most 20 collapsed containers and "+N more"', async () => {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(20), total: 47 });
+    const { map } = setup({ focus: 'tools:t1', reach: '1' });
+    await settle();
+    expect(recordRef).toHaveBeenCalledWith(api, { collection: 'tools', id: 't1' });
+    expect(usedIn).toHaveBeenCalledWith(api, { collection: 'tools', id: 't1' }, 1);
+    expect(map.status.value).toBe('ready');
+    expect(map.focusNodeId.value).toBe('f:tools:t1');
+    expect(map.selectedId.value).toBe('f:tools:t1');
+    const containers = containersOf(map);
+    expect(containers).toHaveLength(20);
+    expect(containers.every((c) => c.collapsed)).toBe(true);
+    const more = map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')!;
+    expect(more).toMatchObject({ id: 'more:tools:t1', remaining: 27 });
+    // Reach does not cut a fan: everything it lists is drawn.
+    expect(map.shown.value.size).toBe(22);
+    expect(map.nodes.value.map((n) => n.id)).toContain('more:tools:t1');
+    expect(map.partial.value).toBe(false);
+  });
+
+  it('material focus fans samples as cards', async () => {
+    recordRef.mockResolvedValue({ collection: 'materials', id: 'm1', code: 'Ti64' });
+    usedIn.mockResolvedValue({ items: [mkSample('a'), mkSample('b'), mkSample('c')], total: 3 });
+    const { map } = setup({ focus: 'materials:m1' });
+    await settle();
+    expect(map.data.value?.focus).toMatchObject({ kind: 'material', collection: 'materials' });
+    const kinds = map.nodes.value.map((n) => (n.type === 'record' ? n.kind : n.type));
+    expect(kinds.sort()).toEqual(['material', 'sample', 'sample', 'sample']);
+    expect(map.graph.value!.nodes.some((n) => n.type === 'more')).toBe(false);
+  });
+
+  it('project and campaign focus open the same sample fan; an equipment focus lists operations and tests', async () => {
+    recordRef.mockResolvedValue({ collection: 'projects', id: 'p1', code: 'PRJ-1' });
+    usedIn.mockResolvedValue({ items: [mkSample('a')], total: 1 });
+    const a = setup({ focus: 'projects:p1' });
+    await settle();
+    expect(a.map.focusNodeId.value).toBe('f:projects:p1');
+    expect(a.map.project.value).toMatchObject({ collection: 'projects', code: 'PRJ-1' }); // the frame names the project
+
+    recordRef.mockResolvedValue({ collection: 'equipment', id: 'e1', code: 'NLX' });
+    usedIn.mockResolvedValue({ items: toolOps(1), total: 1, tests: [mkTest({ id: 'tt1', code: 'T-9', date: '2026-09-03T09:00:00Z' })], testsTotal: 1 });
+    const b = setup({ focus: 'equipment:e1' });
+    await settle();
+    expect(containersOf(b.map).map((c) => c.kind).sort()).toEqual(['operation', 'test']);
+  });
+
+  it('a fan root the person may not read is not visible; a failed read is an error', async () => {
+    recordRef.mockRejectedValue(httpError(403));
+    usedIn.mockResolvedValue({ items: [], total: 0 });
+    const a = setup({ focus: 'tools:t1' });
+    await settle();
+    expect(a.map.status.value).toBe('notVisible');
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockRejectedValue(Object.assign(new Error('x'), { response: { status: 500, data: { errors: [{ message: 'boom' }] } } }));
+    const b = setup({ focus: 'tools:t1' });
+    await settle();
+    expect(b.map.status.value).toBe('error');
+    expect(b.map.error.value).toContain('boom');
+  });
+});
+
+describe('expand: loading more (D15, spec 7)', () => {
+  async function toolFan(total = 47, extra: Record<string, unknown> = {}) {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(20), total });
+    const s = setup({ focus: 'tools:t1', ...extra });
+    await settle();
+    return s;
+  }
+
+  it('expanding a collapsed container merges its family without duplicating nodes, and the container opens', async () => {
+    const { map } = await toolFan();
+    const seen = hints(map);
+    family.mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    await settle();
+    expect(family).toHaveBeenLastCalledWith(api, 'x0');
+    const ids = idsOf(map);
+    expect(new Set(ids).size).toBe(ids.length);
+    const opened = containersOf(map).find((c) => c.id === 'op:u0')!;
+    expect(opened.collapsed).toBeUndefined();
+    expect(opened.rows[0]).toMatchObject({ sampleId: 'y0' });
+    expect(containersOf(map).filter((c) => c.collapsed)).toHaveLength(19);
+    expect(map.data.value?.fan?.items.some((i) => i.id === 'u0')).toBe(false);
+    expect(map.data.value?.operations.filter((o) => o.id === 'u0')).toHaveLength(1);
+    expect(ids).toContain('s:x0');
+    expect(map.shown.value.has('s:y0')).toBe(true);
+    // The layout is told to keep what is placed and open the card where it is.
+    expect(seen.at(-1)).toMatchObject({ anchor: 'op:u0', from: 'op:u0' });
+    // The focus (and the selection) did not move.
+    expect(map.focusNodeId.value).toBe('f:tools:t1');
+    expect(map.generation.value).toBe(1);
+  });
+
+  it('an opened step that joins a probable batch hands its place to the batch container', async () => {
+    const { map } = await toolFan();
+    const seen = hints(map);
+    const fam = familyOfX(0);
+    fam.samples.push(mkSample('z0'));
+    fam.operations.push(mkOp({ id: 'twin', sampleId: 'x0', outputSampleId: 'z0', date: '2026-09-28T10:00:00Z', methodName: 'Turning', methodId: fam.operations[0].methodId }));
+    family.mockResolvedValue(fam);
+    await map.expand('op:u0');
+    await settle();
+    const hint = seen.at(-1) as { anchor: string; from: string };
+    expect(hint.from).toBe('op:u0');
+    expect(hint.anchor).toMatch(/^probable:/);
+    expect(map.shown.value.has(hint.anchor)).toBe(true);
+  });
+
+  it('"+N more" loads the next page of the fan and moves the stub; a second click while it loads does nothing', async () => {
+    const { map } = await toolFan(47);
+    const seen = hints(map);
+    usedIn.mockResolvedValue({ items: toolOps(20, 20), total: 47 });
+    const first = map.expand('more:tools:t1');
+    const second = map.expand('more:tools:t1');
+    await Promise.all([first, second]);
+    await settle();
+    expect(usedIn).toHaveBeenCalledTimes(2); // the first page and this one
+    expect(usedIn).toHaveBeenLastCalledWith(api, { collection: 'tools', id: 't1' }, 2);
+    expect(containersOf(map)).toHaveLength(40);
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBe(7);
+    expect(seen.at(-1)).toMatchObject({ replace: ['more:tools:t1'] });
+
+    usedIn.mockResolvedValue({ items: toolOps(7, 40), total: 47 });
+    await map.expand('more:tools:t1');
+    await settle();
+    expect(containersOf(map)).toHaveLength(47);
+    expect(map.graph.value!.nodes.some((n) => n.type === 'more')).toBe(false);
+  });
+
+  it('a stock lot page with no operations is not the end: "+N more" stays and loads the next page', async () => {
+    recordRef.mockResolvedValue({ collection: 'raw_stock_lots', id: 'l1', code: 'LOT-1' });
+    usedIn.mockResolvedValue({ items: [], total: 45 });
+    const { map } = setup({ focus: 'raw_stock_lots:l1' });
+    await settle();
+    expect(map.focusNodeId.value).toBe('lot:l1');
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBe(25);
+    usedIn.mockResolvedValue({ items: toolOps(2), total: 45 });
+    await map.expand('more:raw_stock_lots:l1');
+    await settle();
+    expect(containersOf(map)).toHaveLength(2);
+    expect(map.graph.value!.nodes.find((n): n is MoreNode => n.type === 'more')?.remaining).toBe(5);
+  });
+
+  it('a sample card of a fan opens its family once; after that the plus button reveals what is one step beyond it', async () => {
+    recordRef.mockResolvedValue({ collection: 'materials', id: 'm1', code: 'Ti64' });
+    usedIn.mockResolvedValue({ items: [mkSample('a'), mkSample('b')], total: 2 });
+    const { map } = setup({ focus: 'materials:m1' });
+    await settle();
+    family.mockResolvedValue(
+      mkData({
+        samples: [mkSample('a'), mkSample('a1'), mkSample('a2')],
+        operations: [
+          mkOp({ id: 'k1', sampleId: 'a', outputSampleId: 'a1', date: '2026-09-01T09:00:00Z', methodName: 'Cut' }),
+          mkOp({ id: 'k2', sampleId: 'a1', outputSampleId: 'a2', date: '2026-09-02T09:00:00Z', methodName: 'Cut' }),
+        ],
+      }),
+    );
+    await map.expand('s:a');
+    await settle();
+    expect(family).toHaveBeenCalledTimes(1);
+    expect(family).toHaveBeenCalledWith(api, 'a');
+    const ids = idsOf(map);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(map.shown.value.has('s:a1')).toBe(true);
+    expect(map.shown.value.has('s:a2')).toBe(false);
+    await map.expand('s:a1'); // its family is loaded: one more step
+    expect(family).toHaveBeenCalledTimes(1);
+    expect(map.shown.value.has('s:a2')).toBe(true);
+  });
+
+  it('plus on a record inside an Inside tray merges its used-in fan beside that container', async () => {
+    const tool = { collection: 'tools', id: 't1', code: 'TL-1' };
+    const data = mkData({
+      samples: [mkSample('s1'), mkSample('s2')],
+      operations: [mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: '2026-09-01T09:00:00Z', methodName: 'Cut', relations: { tool_id: tool } })],
+    });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    const seen = hints(map);
+    usedIn.mockResolvedValue({ items: [...toolOps(2), mkOp({ id: 'o1', sampleId: 's1' })], total: 3 });
+    await map.expand('tools:t1');
+    await settle();
+    expect(usedIn).toHaveBeenCalledWith(api, tool, 1);
+    expect(idsOf(map)).toEqual(expect.arrayContaining(['f:tools:t1', 'op:u0', 'op:u1']));
+    expect(containersOf(map).filter((c) => c.collapsed).map((c) => c.id)).toEqual(['op:u0', 'op:u1']); // o1 is already drawn in full
+    expect(map.shown.value.has('f:tools:t1')).toBe(true);
+    expect(map.shown.value.has('op:u0')).toBe(true);
+    expect(seen.at(-1)).toMatchObject({ anchor: 'op:o1' });
+    // Reach does not take the fan away again.
+    map.setReach(1);
+    expect(map.shown.value.has('op:u1')).toBe(true);
+    // Asking again does not load it twice.
+    await map.expand('tools:t1');
+    expect(usedIn).toHaveBeenCalledTimes(1);
+    expect(map.notice.value).toMatch(/already open/);
+  });
+
+  it('plus on a record with no fan (a person, a data file) does nothing', async () => {
+    const data = mkData({ samples: [mkSample('s1'), mkSample('s2')], operations: [mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', relations: { operator_person_id: { collection: 'people', id: 'pp', code: 'Ada' } } })] });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    await map.expand('people:pp');
+    expect(usedIn).not.toHaveBeenCalled();
+  });
+
+  it('a record nothing else used says so and adds nothing', async () => {
+    const tool = { collection: 'tools', id: 't1', code: 'TL-1' };
+    const op = mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', relations: { tool_id: tool } });
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1'), mkSample('s2')], operations: [op] }));
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: [op], total: 1 });
+    await map.expand('tools:t1');
+    expect(map.notice.value).toMatch(/Nothing else/);
+    expect(idsOf(map)).not.toContain('f:tools:t1');
+  });
+
+  it('a failed expand shows the error and keeps what is loaded', async () => {
+    const { map } = await toolFan();
+    family.mockRejectedValue(Object.assign(new Error('x'), { response: { status: 500, data: { errors: [{ message: 'boom' }] } } }));
+    const before = map.nodes.value.length;
+    await map.expand('op:u0');
+    expect(map.notice.value).toContain('boom');
+    expect(map.expanding.value).toBe(0);
+    expect(map.status.value).toBe('ready');
+    expect(map.nodes.value).toHaveLength(before);
+    expect(containersOf(map).every((c) => c.collapsed)).toBe(true);
+    // The next expand clears it.
+    family.mockResolvedValue(familyOfX(1));
+    await map.expand('op:u1');
+    expect(map.notice.value).toBe('');
+  });
+
+  it('a collapsed step with no sample cannot open its family', async () => {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: [mkOp({ id: 'bare', code: 'OP-BARE', sampleId: null, outputSampleId: null })], total: 1 });
+    const { map } = setup({ focus: 'tools:t1' });
+    await settle();
+    await map.expand('op:bare');
+    expect(family).not.toHaveBeenCalled();
+    expect(map.notice.value).toMatch(/no sample/);
+  });
+
+  it('the result of an expand that outlives its focus is dropped', async () => {
+    const { map, route } = await toolFan();
+    let release!: (d: ProcessData) => void;
+    family.mockImplementationOnce(() => new Promise((r) => (release = r)));
+    const pending = map.expand('op:u0');
+    recordRef.mockResolvedValue({ collection: 'tools', id: 't2', code: 'TL-2' });
+    usedIn.mockResolvedValue({ items: toolOps(1, 100), total: 1 });
+    route.query = { focus: 'tools:t2' };
+    await settle();
+    release(familyOfX(0));
+    await pending;
+    await settle();
+    expect(map.focusNodeId.value).toBe('f:tools:t2');
+    expect(idsOf(map)).not.toContain('s:x0');
+    expect(map.expanding.value).toBe(0);
+  });
+
+  it('a new focus is a new generation for the canvas; an expand is not', async () => {
+    const { map, route } = await toolFan();
+    const g = map.generation.value;
+    family.mockResolvedValue(familyOfX(0));
+    await map.expand('op:u0');
+    expect(map.generation.value).toBe(g);
+    recordRef.mockResolvedValue({ collection: 'tools', id: 't2', code: 'TL-2' });
+    usedIn.mockResolvedValue({ items: [], total: 0 });
+    route.query = { focus: 'tools:t2' };
+    await settle();
+    expect(map.generation.value).toBeGreaterThan(g);
+  });
+});
+
+describe('the 300-card cap applies to what plus reveals (D22)', () => {
+  /** a -> b by one operation, b -> 350 pieces by one batch: b's step beyond is 351 cards. */
+  function broad(): ProcessData {
+    const kids = Array.from({ length: 350 }, (_, i) => `k${i}`);
+    return mkData({
+      samples: ['a', 'b', ...kids].map((id) => mkSample(id)),
+      operations: [
+        mkOp({ id: 'first', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' }),
+        ...kids.map((k, i) => mkOp({ id: `cut${i}`, sampleId: 'b', outputSampleId: k, date: '2026-09-02T09:00:00Z', methodName: 'Cut', methodId: 'm' })),
+      ],
+    });
+  }
+
+  it('stops adding at 300 cards and sets the banner', async () => {
+    family.mockResolvedValue(broad());
+    const { map } = setup({ focus: 'physical_samples:a', reach: '1' });
+    await settle();
+    expect(map.partial.value).toBe(false);
+    const before = map.shown.value.size;
+    expect(before).toBeLessThan(10);
+    await map.expand('s:b');
+    expect(map.shown.value.size).toBe(300);
+    expect(map.partial.value).toBe(true);
+    // Another click cannot add past it either.
+    await map.expand('s:b');
+    expect(map.shown.value.size).toBe(300);
+    // A new reach starts again.
+    map.setReach(1);
+    expect(map.shown.value.size).toBe(before);
+    expect(map.partial.value).toBe(false);
+  });
+
+  it('a family merged by plus stops at the cap too, and "+N more" does not load a page that would not fit', async () => {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(20), total: 47 });
+    const { map } = setup({ focus: 'tools:t1' });
+    await settle();
+    const fam = broad();
+    fam.operations[0] = mkOp({ id: 'u0', sampleId: 'x0', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'Cut' });
+    fam.samples[0] = mkSample('x0');
+    fam.operations.slice(1).forEach((o) => (o.sampleId = 'x0'));
+    family.mockResolvedValue(fam);
+    await map.expand('op:u0');
+    await settle();
+    expect(map.shown.value.size).toBeLessThanOrEqual(300);
+    expect(map.partial.value).toBe(true);
+    const items = map.data.value!.fan!.items.length;
+    usedIn.mockResolvedValue({ items: toolOps(20, 20), total: 47 });
+    await map.expand('more:tools:t1');
+    expect(map.data.value!.fan!.items).toHaveLength(items); // nothing added
+    expect(map.graph.value!.nodes.some((n) => n.type === 'more')).toBe(true);
+    expect(map.partial.value).toBe(true);
+  });
+});
+
+describe('expand inside a loaded family still reveals one step and tells the layout to keep what is placed', () => {
+  it('hands the canvas a merge hint naming the card', async () => {
+    const data = mkData({
+      samples: ['a', 'b', 'c'].map((id) => mkSample(id)),
+      operations: [
+        mkOp({ id: 'o1', sampleId: 'a', outputSampleId: 'b', date: '2026-09-01T09:00:00Z', methodName: 'M' }),
+        mkOp({ id: 'o2', sampleId: 'b', outputSampleId: 'c', date: '2026-09-02T09:00:00Z', methodName: 'M' }),
+      ],
+    });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:a', reach: '1' });
+    await settle();
+    const seen = hints(map);
+    await map.expand('s:b');
+    await settle();
+    expect(seen.at(-1)).toEqual({ anchor: 's:b' });
+    expect(map.shown.value.has('s:c')).toBe(true);
+    // A change that is not an expand carries no hint (the canvas lays everything out).
+    map.toggleKind('stock_lot');
+    await settle();
+    expect(map.takeMergeHint()).toBeNull();
   });
 });

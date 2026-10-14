@@ -8,11 +8,14 @@ import type {
   ContainerNode,
   Group,
   JunctionNode,
+  Kind,
   MapNode,
+  MoreNode,
   OpRow,
   ProcessCategory,
   ProcessData,
   ProcessGraph,
+  Ref,
   RecordNode,
   SampleRow,
   Slot,
@@ -31,6 +34,11 @@ export interface BuildGraphOpts {
   /** Container (group) ids the person unfolded: they keep every row on its own socket. */
   unfolded?: ReadonlySet<string>;
 }
+
+/** The node a used-in fan hangs from: the focus record, or a record ＋ opened a fan of. A stock lot is its `lot:` card. */
+export const fanRootId = (r: Pick<Ref, 'collection' | 'id'>): string => (r.collection === 'raw_stock_lots' ? `lot:${r.id}` : `f:${r.collection}:${r.id}`);
+/** The "+N more" stub that continues the fan of a record. */
+export const moreNodeId = (r: Pick<Ref, 'collection' | 'id'>): string => `more:${r.collection}:${r.id}`;
 
 const DEFAULT_MAX_ROWS = 3;
 /** Rows still shown on their own sockets once a container folds (spec D8: show 2, fold the rest). */
@@ -349,6 +357,37 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
     pushIncoming(row.childId, { from: socket, origin: id, carries: row.childId, flow: 'sample' });
   }
 
+  // ---- 4b. used-in fans (D20): the record, a collapsed container or a sample card per item, "+N more" -----
+  const fanNodes: MapNode[] = [];
+  const fans: { root: Ref & { kind: Kind }; items: Ref[]; remaining: number }[] = [];
+  if (data.fan) fans.push({ root: data.focus, items: data.fan.items, remaining: remainingOf(data.fan) });
+  for (const f of data.sideFans ?? []) fans.push({ root: f.root, items: f.items, remaining: remainingOf(f) });
+  for (const fan of fans) {
+    const rootId = fanRootId(fan.root);
+    const rootOut = `${rootId}:out:0`;
+    if (fan.root.collection === 'raw_stock_lots') {
+      if (!lotNodes.has(rootId)) lotNodes.set(rootId, { id: rootId, type: 'record', kind: 'stock_lot', ref: fan.root, ins: [], outs: [rootOut] });
+    } else {
+      fanNodes.push({ id: rootId, type: 'record', kind: fan.root.kind, ref: fan.root, ins: [], outs: [rootOut] });
+    }
+    for (const item of fan.items) {
+      if (item.collection === COLLECTION.sample) {
+        if (known(item.id)) pushIncoming(item.id, { from: rootOut, origin: rootId, carries: null, flow: 'stock' });
+        continue;
+      }
+      const kind = item.collection === COLLECTION.operation ? 'operation' : item.collection === 'test_sessions' ? 'test' : null;
+      if (!kind || placedByRecord.has(recKey(kind, item.id))) continue; // its family is loaded: the full container stands
+      const row = kind === 'operation' ? opById.get(item.id) : testById.get(item.id);
+      if (!row) continue;
+      const node = collapsedContainer(kind, row);
+      fanNodes.push(node);
+      addWire(rootOut, node.rows[0].in!, null, 'stock', rootId);
+    }
+    if (fan.remaining > 0) {
+      fanNodes.push({ id: moreNodeId(fan.root), type: 'more', of: `${fan.root.collection}:${fan.root.id}`, remaining: fan.remaining } satisfies MoreNode);
+    }
+  }
+
   // ---- 5. stock lots into a card (no making operation), materials of roots -------------------
   for (const [sample, lots] of stockBySample) {
     if (makingOp.has(sample)) continue; // already wired into the making operation's input
@@ -396,6 +435,7 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
     ...lotNodes.values(),
     ...powderNodes,
     ...materials,
+    ...fanNodes,
   ];
 
   // ---- 7. markers for records the person may not read (D21) ---------------------------------
@@ -416,8 +456,34 @@ function focusNodeId(data: ProcessData, groups: Group[], present: Set<string>): 
   if (kind === 'sample') candidate = `s:${id}`;
   else if (kind === 'operation' || kind === 'test') {
     candidate = groups.find((g) => g.kind === kind && g.rowIds.includes(id))?.id ?? null;
-  } else if (kind === 'stock_lot') candidate = `lot:${id}`;
+  } else candidate = fanRootId(data.focus);
   if (candidate && present.has(candidate)) return candidate;
   const firstSample = data.samples[0];
   return firstSample && present.has(`s:${firstSample.id}`) ? `s:${firstSample.id}` : null;
+}
+
+const remainingOf = (f: { items: Ref[]; total: number; remaining?: number }): number => Math.max(0, f.remaining ?? f.total - f.items.length);
+
+/** A used-in fan item as a header-only container: its sample flow is loaded when the person expands it. */
+function collapsedContainer(kind: 'operation' | 'test', row: OpRow | TestRow): ContainerNode {
+  const id = kind === 'operation' ? `op:${row.id}` : `test:${row.id}`;
+  const op = kind === 'operation' ? (row as OpRow) : null;
+  const test = kind === 'test' ? (row as TestRow) : null;
+  return {
+    id,
+    type: 'container',
+    kind,
+    group: { id, kind, rowIds: [row.id], batch: null },
+    title: (op ? op.methodName : test?.testType) || (kind === 'operation' ? 'Operation' : 'Test'),
+    code: row.code,
+    status: row.status,
+    category: op ? op.category : 'test',
+    rows: [{ recordId: row.id, in: `${id}:in:0` }],
+    slots: [],
+    settings: [],
+    bundled: false,
+    collapsed: true,
+    meta: row.date?.slice(0, 10) || undefined,
+    probable: false,
+  };
 }

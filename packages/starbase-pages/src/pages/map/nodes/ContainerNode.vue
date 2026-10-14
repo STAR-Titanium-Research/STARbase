@@ -5,7 +5,7 @@ import { StatusBadge } from '@d1/ui';
 import type { ContainerNode, SampleRow } from '../model/types';
 import { isBundleSocket } from '../model/sockets';
 import { cardHandlers, socketHandlers, stopping, useHiddenSides, useMapActions, useMapView } from './actions';
-import { handlePosition } from './handle';
+import { edgeStyle, handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
 import HiddenPill from './HiddenPill.vue';
 import SlotRow from './SlotRow.vue';
@@ -52,6 +52,7 @@ const bundleIn = computed(() => hidden.value.find((r) => r.in && isBundleSocket(
 const bundleOut = computed(() => hidden.value.find((r) => r.out && isBundleSocket(r.out))?.out ?? null);
 const canFold = computed(() => !props.data.bundled && props.data.rows.length > FOLD_ABOVE);
 
+const collapsedIn = computed(() => (props.data.collapsed ? (props.data.rows[0]?.in ?? null) : null));
 const majors = computed(() => props.data.slots.filter((s) => s.major));
 const minors = computed(() => props.data.slots.filter((s) => !s.major));
 const open = computed(() => moreOpen.value.has(props.id));
@@ -69,22 +70,35 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 <template>
 	<div
 		class="node op"
-		:class="{ test: data.kind === 'test', probable: data.probable, dashed: data.probable, focal: selected }"
+		:class="{ test: data.kind === 'test', probable: data.probable, dashed: data.probable, collapsed: data.collapsed, focal: selected }"
 		:style="{ '--k': kindVar(style), '--sk': 'var(--k-sample)' }"
 		@click="card.select"
 		@mouseenter="card.enter"
 		@mouseleave="card.leave"
 	>
 		<HiddenPill v-for="side in hiddenSides" :key="side" :side="side" />
+		<!-- A collapsed container (a used-in fan item) is its header and one input socket: its samples load on ＋. -->
+		<Handle
+			v-if="data.collapsed && collapsedIn"
+			:id="collapsedIn"
+			class="sock"
+			type="target"
+			:position="inPos"
+			:connectable="false"
+			:style="edgeStyle(direction, 'in', 0, 1)"
+			@mouseenter="sock(collapsedIn).enter"
+			@mouseleave="sock(collapsedIn).leave"
+		/>
 		<div class="ohead">
 			<v-icon class="k-ink" :name="style.icon" small />
 			<span class="m">{{ data.title }}</span>
 			<span v-if="showCode" class="c">{{ data.code }}</span>
+			<span v-if="data.collapsed && data.meta" class="c">{{ data.meta }}</span>
 			<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
 			<button class="xbtn nodrag nopan" type="button" aria-label="Expand" @click="card.expand"><v-icon name="add" x-small /></button>
 		</div>
 
-		<div v-if="data.rows.length" class="iorows">
+		<div v-if="data.rows.length && !data.collapsed" class="iorows">
 			<div v-for="(r, i) in shown" :key="i" class="orow">
 				<span>
 					<Handle v-if="r.in" :id="r.in" class="sock row in" type="target" :position="inPos" :connectable="false" @mouseenter="sock(r.in).enter" @mouseleave="sock(r.in).leave" />
@@ -111,7 +125,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			</div>
 		</div>
 
-		<div v-if="data.slots.length" class="slots" @click.stop>
+		<div v-if="data.slots.length && !data.collapsed" class="slots" @click.stop>
 			<div class="lab">Inside</div>
 			<SlotRow v-for="s in majors" :key="s.field" :item="s" />
 			<template v-if="open">
@@ -122,7 +136,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			</div>
 		</div>
 
-		<dl v-if="data.settings.length" class="params">
+		<dl v-if="data.settings.length && !data.collapsed" class="params">
 			<div v-for="s in data.settings" :key="s.label">
 				<dt>{{ s.label }}</dt>
 				<dd>{{ s.value }}</dd>
@@ -143,6 +157,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 	background: color-mix(in srgb, var(--k) 16%, var(--d1-surface));
 	border-bottom: 1px solid color-mix(in srgb, var(--k) 30%, var(--d1-line));
 }
+.collapsed .ohead { border-radius: 11px; border-bottom: 0; }
 .m { font-weight: 700; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .c { font-family: var(--theme--fonts--monospace--font-family, monospace); font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .st { margin-left: auto; }
