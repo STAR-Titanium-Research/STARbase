@@ -237,8 +237,7 @@ build can be deployed before or after the migration. Migrating does not change w
 `batch_id`. The **Batch** field on an operation or test form, and the **Batches** collection, appear only after all of:
 
 1. `git pull`, then `make migrate-status` (177 pending) and `make migrate` (migration 177).
-2. `docker compose exec -T redis redis-cli FLUSHALL`: Directus caches schema and permissions.
-3. `docker compose restart directus`. This also loads the `d1-owner-default` hook, which now fills `owner_person_id` on a new
+2. `docker compose restart directus`: Directus reads its schema and permissions at start, and no Redis cache is configured for it, so the restart is the operative step. This also loads the `d1-owner-default` hook, which now fills `owner_person_id` on a new
    batch (it has no build step; `core/extensions` is mounted as it is). Without the restart a Lab Member's new batch has no
    owner, and only an admin could then edit it.
 
@@ -247,11 +246,10 @@ Check:
   translation "Powder batch".
 - In Data Studio, create a batch with the **Code** field left alone: it saves as `B-0001`, `B-0002`, ... The form shows the
   text `batches_next_code()` in that field before the first save (Directus prefills a column default it cannot evaluate);
-  it is never sent, and the database fills the code. Only a code someone types is kept.
+  it is never sent, and the database fills the code. Only a code someone types is kept. (An explicit `"code": null` through the API is refused by Directus with a 400; a blank code is filled.)
 - Set **Batch** on two operations of one sample and open the sample's Process map: one container, "Batch B-…".
 
-Rollback: `make migrate-down` drops `batches` (operations and tests keep their rows; `batch_id` goes), then flush Redis and
-restart Directus again.
+Rollback: `make migrate-down` drops `batches` (operations and tests keep their rows; `batch_id` goes), then restart Directus again.
 
 ## Report a bug page (`/report-bug`)
 

@@ -24,7 +24,7 @@
 ## Review Focus
 
 1. **STARbase deployed before `make migrate`** — the map must not request `batch_id` when `/fields/manufacturing_operations` has no such field (Directus would refuse the whole operations read). → Task 2 test `defs without batch_id → no batch_id requested`.
-2. **The form sends `"code": null`** — the insert must still get a `B-` code. → Task 1 SQL test and Task 3 REST smoke.
+2. **The form's `code`** — the form omits it (Directus never sends the column default), so the default gives a `B-` code; a blank code gets one from the trigger; Directus itself refuses an explicit `"code": null` (400, accepted). → Task 1 SQL test and Task 3 REST smoke.
 3. **A batch holding operations and tests** — they must form two containers (an operation batch and a test batch), not one. → Task 2 test.
 4. **A batch the person cannot read** (permissions) — the container falls back to ungrouped rows, no crash, no code shown. → Task 2 test `batch_id present but batch unreadable`.
 5. **Migration down** — removes fields, relations, permissions, columns, table and sequence cleanly, and restores the old "Batch #" label. → Task 1 up/down test.
@@ -71,7 +71,7 @@
 - Modify: `docs/wiki/database/` page that documents operations/FAST fields: mention Batch and the Powder batch label.
 
 - [ ] **Step 1:** Start the preview (`D1_PREVIEW_NAME=d1-starbase-map D1_PREVIEW_PORT=18059`, per tests/ui/README.md), apply the migration **to the copy only** (`make migrate` pointed at the preview's database URL, or the script's own migrate hook), restart that Directus and flush its cache.
-- [ ] **Step 2:** REST smoke as admin and as a Lab Member: create a batch with `code` omitted, and one with `"code": null` → both get `B-` codes; set `batch_id` on two operations; open each operation in the Data Studio form (`GET /items/manufacturing_operations/<id>?fields=*,batch_id.*`), edit one field and save, copy one (`POST` with the copied body) — all succeed; `sintering_batch_number` field meta shows "Powder batch". Record the commands and responses in the report.
+- [ ] **Step 2:** REST smoke as admin and as a Lab Member: create a batch with `code` omitted and one with `"code": ""` → both get `B-` codes (an explicit `"code": null` is refused by Directus with a 400, accepted); set `batch_id` on two operations; open each operation in the Data Studio form (`GET /items/manufacturing_operations/<id>?fields=*,batch_id.*`), edit one field and save, copy one (`POST` with the copied body) — all succeed; `sintering_batch_number` field meta shows "Powder batch". Record the commands and responses in the report.
 - [ ] **Step 3:** Write the spec-17 scenario; run specs 13 + 17 `--retries=0` → PASS. Stop the preview.
 - [ ] **Step 4:** Update the runbook and wiki page; `py -m pre_commit run --files <files>`.
 - [ ] **Step 5:** Commit `test(batches): preview smoke and map batch scenario; docs`, push.

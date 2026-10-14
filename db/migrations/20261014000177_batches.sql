@@ -11,9 +11,11 @@
 -- `batches.code` is NOT NULL UNIQUE and gets 'B-0001', 'B-0002', ... from `batches_code_seq` through
 -- `batches_next_code()`: four digits, more when the number needs them (B-10000), because a plain
 -- lpad(n, 4, '0') would truncate to B-1000 and fail the unique constraint from the 10000th batch on. The
--- function is the column DEFAULT (so Directus does not mark it required) and is also called by a BEFORE INSERT
--- trigger for the case where the Directus form sends code = NULL (or blank) explicitly, which a column default
--- does not cover. The d1-next-number endpoint has no prefix config for this and needs no change.
+-- function is the column DEFAULT (so Directus does not mark it required): the code is filled when the insert
+-- leaves it out, which is what the Data Studio form does (it never sends the default). A BEFORE INSERT trigger
+-- also fills a blank code, which a column default does not cover. An explicit NULL never reaches the database
+-- through Directus (it refuses it itself, 400, because the column is NOT NULL). The d1-next-number endpoint has
+-- no prefix config for this and needs no change.
 --
 -- It also relabels the FAST press's free-text field `manufacturing_operations.sintering_batch_number` as
 -- "Powder batch" (D28), so the word "batch" means only several samples done together (CONTEXT.md).
@@ -22,7 +24,7 @@
 -- the signed-in user's person (the way ADR-0014 expresses ownership); admins (admin_access policy) do
 -- everything. The d1-owner-default hook fills the owner on create. The Lab Member rows are the ones
 -- scripts/access_rules.json generates for `batches` (custom rows: `gen_access_rules.py --values --only batches`).
--- Directus caches permissions: flush Redis and restart Directus after applying.
+-- Directus caches permissions and schema: restart Directus after applying (no Redis cache is configured for it).
 
 CREATE SEQUENCE batches_code_seq;
 
@@ -58,7 +60,7 @@ CREATE INDEX idx_batches_owner_person_id ON batches (owner_person_id);
 
 COMMENT ON TABLE batches IS 'A recorded batch: several operations, or several tests, done together as one job on several samples. Each sample keeps its own operation or test row; manufacturing_operations.batch_id and test_sessions.batch_id tie them together.';
 COMMENT ON COLUMN batches.batch_id IS 'Primary key.';
-COMMENT ON COLUMN batches.code IS 'Unique human code, B-0001, B-0002, ... taken from batches_next_code() (batches_code_seq) when left out, null or blank; any other unique text is kept.';
+COMMENT ON COLUMN batches.code IS 'Unique human code, B-0001, B-0002, ... taken from batches_next_code() (batches_code_seq) when the insert leaves it out (column default) or sends it blank (trigger); Directus itself refuses an explicit null; any other unique text is kept.';
 COMMENT ON COLUMN batches.batch_date IS 'The day the job was done.';
 COMMENT ON COLUMN batches.notes IS 'Free-text note on the job.';
 COMMENT ON COLUMN batches.owner_person_id IS 'The person who owns the batch; only they (and admins) can update or delete it. Filled with the creator by the d1-owner-default hook.';
@@ -67,8 +69,8 @@ COMMENT ON COLUMN batches.date_created IS 'When the batch was created (set by Di
 COMMENT ON COLUMN batches.updated_at IS 'Last update time, maintained by the occ_batches trigger.';
 COMMENT ON COLUMN batches.version IS 'Optimistic-concurrency counter, incremented by the occ_batches trigger.';
 
--- A BEFORE INSERT trigger rather than only the column default: the Directus form may send code = NULL (or an
--- empty string), and an explicit NULL does not take the default. It calls the same function the default uses.
+-- A BEFORE INSERT trigger as well as the column default: a blank code (an empty string, or NULL from direct SQL)
+-- does not take the default. It calls the same function the default uses.
 CREATE FUNCTION batches_fill_code() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public
@@ -80,7 +82,7 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-COMMENT ON FUNCTION batches_fill_code() IS 'BEFORE INSERT on batches: fills code with batches_next_code() when the insert sends it as NULL or blank.';
+COMMENT ON FUNCTION batches_fill_code() IS 'BEFORE INSERT on batches: fills code with batches_next_code() when the insert sends it blank (empty, or NULL from direct SQL).';
 
 CREATE TRIGGER batches_fill_code
     BEFORE INSERT ON batches

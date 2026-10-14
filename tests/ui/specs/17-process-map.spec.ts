@@ -449,16 +449,24 @@ test.describe('Process map recorded batch (admin)', () => {
 
 			await signInStarbase(page, 'admin', ORIGINS);
 			await openMap(page, SAMPLES, sampleId);
-			const container = page.locator('.vue-flow__node-container').filter({ has: page.locator('.ohead .m', { hasText: `Batch ${batch.code}` }) });
+			const container = page.locator('.vue-flow__node-container').filter({ has: page.locator('.ohead .m', { hasText: new RegExp(`^Batch ${batch.code}$`) }) });
 			await expect(container, 'one container for the recorded batch').toHaveCount(1);
 			await expect(container.locator('.orow:not(.fold):not(.bundle)'), 'one row per operation').toHaveCount(2);
 			await expect(page.locator('body')).not.toContainText(/lineage graph/i);
 			expect(errors).toEqual([]);
 		} finally {
 			// Back to how the copy was: batch_id cleared first, then the batch (the delete would also null them).
-			for (const id of attached) await admin.patch(`${SERVER}/items/manufacturing_operations/${id}`, { data: { batch_id: null } });
-			if (batchId) await admin.delete(`${SERVER}/items/batches/${batchId}`);
+			const cleanup: { ok: boolean; what: string }[] = [];
+			for (const id of attached) {
+				const r = await admin.patch(`${SERVER}/items/manufacturing_operations/${id}`, { data: { batch_id: null } });
+				cleanup.push({ ok: r.ok(), what: `detach operation ${id} from the batch` });
+			}
+			if (batchId) {
+				const r = await admin.delete(`${SERVER}/items/batches/${batchId}`);
+				cleanup.push({ ok: r.ok(), what: 'delete the E2E batch' });
+			}
 			await admin.dispose();
+			for (const c of cleanup) expect(c.ok, c.what).toBeTruthy();
 		}
 	});
 });

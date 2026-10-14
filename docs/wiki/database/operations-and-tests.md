@@ -68,7 +68,7 @@ day), record it as a **batch**: under **Batches** create one (leave **Code** alo
 then pick it in the **Batch** field of each operation or test session in that job. Every sample keeps its own operation
 or test row; the batch only ties them together, and the [Process map](explorer-pages.md) draws them as one container
 titled "Batch B-…". Anyone in the lab can create a batch; only its owner (and admins) can edit or delete it, and
-deleting a batch leaves its operations and tests as they were.
+deleting a batch leaves its operations and tests in place, just no longer in a batch.
 
 **Powder batch** (on a FAST sintering operation) is not a batch in this sense: it is the powder batch typed on the
 press, e.g. TIMET 45-150, a free-text name for a raw stock lot that is not linked to anything.
