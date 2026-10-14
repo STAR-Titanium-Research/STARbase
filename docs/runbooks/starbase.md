@@ -272,9 +272,21 @@ and leave the old extension running; the steps below do both in one go. `d1-team
    SELECT * FROM d1_private.team_drift();            -- 0 rows
    SELECT d1_private.readers_drift_count();          -- 0
    ```
-4. Flush Redis (Directus's permission cache) and recreate Directus so it loads the extensions:
-   `docker compose exec -T redis redis-cli FLUSHALL` (the command of the A1a cutover, step 6) and then `docker compose up -d --force-recreate directus`, then
-   `docker compose up -d --force-recreate proxy` for the new STARbase build.
+4. Reload Directus on the new extensions and a clean permission cache. **Between `make migrate` (176) and this step the old
+   `d1-record-access` is still running, and adding a person through Who has access fails (its upsert no longer matches an index): keep that
+   window short, go straight from step 2 to here (step 3 is SQL only and can wait until Directus is back).** In order:
+   ```bash
+   docker compose stop directus                      # first: a running Directus would re-cache stale permissions after a flush
+   # Redis also holds the rq queues of heavy-data-worker and analysis-worker. FLUSHALL drops their queued jobs, so check them first:
+   docker compose exec heavy-data-worker sh -c 'rq info --url "$REDIS_URL"'     # the queues (heavy-data, analysis) must show 0 queued
+   docker compose exec -T redis redis-cli FLUSHALL   # only when they are empty, or in a quiet window nobody has uploads in flight
+   docker compose up -d directus                     # (--force-recreate if the extension folder or .env changed)
+   docker compose up -d --force-recreate proxy       # the new STARbase build
+   ```
+   Alternative that leaves Redis alone: start Directus (`docker compose up -d --force-recreate directus`) and, as an administrator,
+   `POST /utils/cache/clear` (as docs/runbooks/upgrade-2026-10-row-level-visibility.md step 3 offers); a Directus restart reads the new
+   relations and the new extension anyway, the cache clear only drops cached permission answers. (`rq info` for the analysis queue
+   is the same command run in `analysis-worker` if `heavy-data-worker` does not list it.)
 5. Smoke: People shows the People | Teams switch; New team creates one and opens `/home/teams/<id>`; on a sample you own, Who has
    access → add the team, then add a person to the team: that person is "waiting" (Home "Waiting for you" for the owner) until
    approved or until Trust future members is ticked. `curl -s -o /dev/null -w '%{http_code}' https://d1-server.tail54eeb6.ts.net/d1-teams`
