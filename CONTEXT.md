@@ -95,16 +95,20 @@ _Avoid_: genealogy (the table's name), ancestry, lineage graph (for the page)
 **Batch**:
 Several operations, or several tests, done together as one job on several samples (four quarters
 polished in one run). Each sample still has its own operation or test record; the batch is what ties
-them together. A batch someone recorded is a **batch**; a group the process map only guesses from
-matching method, machine, day and recipe is a **probable batch**, and is shown as such.
+them together. A batch someone recorded is a **batch**; a group the process map only guesses (several pieces
+cut from one sample on one day, or several samples polished, heat-treated or built together on one
+day) is a **probable batch**, and is shown as such.
 _Avoid_: run (a FAST run is one operation), group, set; and "batch" for a FAST run, even though the
 FAST press calls it that
 
 **FAST run**:
-One press cycle on the FAST (spark plasma sintering) machine: one operation, one disc. The press's
-software has a free-text "Batch" field that operators fill with a powder, series or counter name;
-many runs share the same value, so it is a label, not a batch and not a run number.
+One press cycle on the FAST (spark plasma sintering) machine: one operation, one disc.
 _Avoid_: batch, FAST batch, cycle
+
+**Powder batch**:
+The powder a FAST run used, as typed on the FAST press ("TIMET 45-150"). Many runs share one. It
+names a raw stock lot but is only text: it is not linked to the lot.
+_Avoid_: batch (on its own), FAST batch, batch number
 
 ## Relationships
 
@@ -132,5 +136,5 @@ _Avoid_: batch, FAST batch, cycle
   with everything else. Resolved: **lineage** is only the link between samples; the page is the
   **process map**.
 - "Batch" meant both the FAST press's free-text "Batch" field (the old "Batch #" form field) and several
-  samples done together. Resolved: one press cycle is a **FAST run**, the press's field is only a label,
-  and a **batch** is only several samples done together.
+  samples done together. Resolved: one press cycle is a **FAST run**, the press's field is the **powder batch**
+  it used, and a **batch** is only several samples done together.
