@@ -39,7 +39,10 @@ describe('reads', () => {
 		expect(t.hidden_count).toBe(0);
 		expect(t.counts).toEqual({ view: 0, edit: 0, investigator: 0, owns: 0 });
 	});
-tit('keeps the count of records the team owns', async () => {		const api = fakeApi({ get: vi.fn(async () => ({ data: { team: {}, counts: { view: 1, edit: 2, investigator: 0, owns: 5 } } })) });		expect((await getTeam(api, 't1')).counts).toEqual({ view: 1, edit: 2, investigator: 0, owns: 5 });	});
+	it('keeps the count of records the team owns', async () => {
+		const api = fakeApi({ get: vi.fn(async () => ({ data: { team: {}, counts: { view: 1, edit: 2, investigator: 0, owns: 5 } } })) });
+		expect((await getTeam(api, 't1')).counts).toEqual({ view: 1, edit: 2, investigator: 0, owns: 5 });
+	});
 	it('can ask for every event', async () => {
 		const api = fakeApi({ get: vi.fn(async () => ({ data: { team: {} } })) });
 		await getTeam(api, 't1', { events: 'all' });
