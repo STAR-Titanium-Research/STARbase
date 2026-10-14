@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { STAR_BASE, adminApi, signInStarbase } from '../starbase/target';
+import { STAR_BASE, adminApi, signInStarbase, watchErrors } from '../starbase/target';
 
 // The Process map (/map) end to end on the preview copy of live, as an admin and as a Lab Member: the map draws
 // from a real family, a wire's tooltip and Ctrl+click, ＋ on a slot, hover / drag / ＋ leave the viewport alone,
@@ -27,20 +27,8 @@ const ORIGINS = { star: STARBASE, d1: SERVER };
 const SAMPLES = 'physical_samples';
 // Chrome logs every 4xx resource as a console error: a Lab Member's refused reads (and the map's own d1-trace 404 for
 // a sample it may not see) are handled by the pages, so only 5xx responses, page errors and other console errors count.
-const IGNORED_CONSOLE = [/favicon/i, /ResizeObserver loop/, /Failed to load resource/];
+const IGNORED_CONSOLE = [/ResizeObserver loop/];
 const CRASH = /Unexpected Error|no Explorer host|No such page/i;
-
-function watchErrors(page: Page): string[] {
-	const errors: string[] = [];
-	page.on('pageerror', (e) => errors.push(String(e)));
-	page.on('response', (r) => {
-		if (r.status() >= 500) errors.push(`${r.status()} ${r.url()}`);
-	});
-	page.on('console', (m) => {
-		if (m.type() === 'error' && !IGNORED_CONSOLE.some((r) => r.test(m.text()))) errors.push(m.text());
-	});
-	return errors;
-}
 
 type Json = Record<string, unknown>;
 async function rows(api: APIRequestContext, path: string): Promise<Json[]> {
@@ -49,8 +37,9 @@ async function rows(api: APIRequestContext, path: string): Promise<Json[]> {
 }
 const str = (v: unknown) => (typeof v === 'string' ? v : null);
 
-/** A sample with a few operations on it: one whose operation has a machine and a tool (a slot with ＋), when there is one. */
-async function familySample(api: APIRequestContext, readable?: APIRequestContext): Promise<{ id: string; code: string } | null> {
+/** Samples with operations on them, up to `max`: those whose operation has a machine and a tool (a slot with ＋) first. */
+async function familySamples(api: APIRequestContext, readable?: APIRequestContext, max = 1): Promise<{ id: string; code: string }[]> {
+	const found: { id: string; code: string }[] = [];
 	const tries = [
 		'/items/manufacturing_operations?limit=40&fields=sample_id&filter[sample_id][_nnull]=true&filter[equipment_id][_nnull]=true&filter[tool_id][_nnull]=true',
 		'/items/manufacturing_operations?limit=40&fields=sample_id&filter[sample_id][_nnull]=true',
@@ -60,11 +49,13 @@ async function familySample(api: APIRequestContext, readable?: APIRequestContext
 		for (const id of ids.slice(0, 20)) {
 			// A Lab Member reads only some samples: the sample must be one this session can read.
 			const sample = (await rows(readable ?? api, `/items/${SAMPLES}?limit=1&fields=sample_id,sample_code&filter[sample_id][_eq]=${id}`))[0];
-			if (sample && str(sample.sample_code)) return { id, code: str(sample.sample_code)! };
+			if (sample && str(sample.sample_code) && !found.some((f) => f.id === id)) found.push({ id, code: str(sample.sample_code)! });
+			if (found.length >= max) return found;
 		}
 	}
-	return null;
+	return found;
 }
+const familySample = async (api: APIRequestContext, readable?: APIRequestContext) => (await familySamples(api, readable))[0] ?? null;
 
 const mapUrl = (collection: string, id: string) => `${STARBASE}/map?focus=${collection}:${encodeURIComponent(id)}`;
 const nodes = (page: Page) => page.locator('.vue-flow__node');
@@ -110,6 +101,27 @@ async function pointOnWire(page: Page, i: number): Promise<{ x: number; y: numbe
 	});
 }
 
+/** Hover every wire the pointer can reach and read the tooltip it raises. */
+async function hoverWires(page: Page): Promise<{ i: number; text: string; at: { x: number; y: number } }[]> {
+	const wires = await page.locator('.vue-flow__edge path.hit').count();
+	const tips: { i: number; text: string; at: { x: number; y: number } }[] = [];
+	for (let i = 0; i < wires; i++) {
+		const at = await pointOnWire(page, i);
+		if (!at) continue;
+		await page.mouse.move(at.x, at.y);
+		const tip = page.locator('.wire-tip.show');
+		try {
+			await tip.waitFor({ state: 'visible', timeout: 1500 });
+			tips.push({ i, text: await tip.innerText(), at });
+		} catch {
+			/* a wire with no drawn ends raises no tooltip */
+		}
+		await page.mouse.move(2, 2);
+		await expect(page.locator('.wire-tip.show')).toHaveCount(0);
+	}
+	return tips;
+}
+
 for (const who of ['admin', 'member'] as const) {
 	test.describe(`Process map as ${who}`, () => {
 		test.setTimeout(120_000);
@@ -132,12 +144,12 @@ for (const who of ['admin', 'member'] as const) {
 			return !!sample;
 		}
 
-		test('a sample\'s map draws; a wire\'s tooltip names its sample; Ctrl+click goes to the wire\'s origin', async ({ page }) => {
-			const errors = watchErrors(page);
+		test('a sample\'s map draws, and a wire\'s tooltip names its sample', async ({ page }) => {
+			const errors = watchErrors(page, IGNORED_CONSOLE);
 			await signInStarbase(page, who, ORIGINS);
 			if (!(await ensureSample(page))) {
-				// Nothing this account may map: the page must say so, not crash. (The admin always has a sample.)
-				expect(who, 'the admin copy has samples with operations').toBe('member');
+				test.skip(who === 'admin', 'the copy has no sample with operations');
+				// Nothing this account may map: the page must say so, not crash.
 				const any = await familySample(admin);
 				test.skip(!any, 'the copy has no sample with operations');
 				await page.goto(mapUrl(SAMPLES, any!.id), { waitUntil: 'networkidle' });
@@ -151,49 +163,43 @@ for (const who of ['admin', 'member'] as const) {
 			await expect(page.locator('.vue-flow__node-container').first(), 'an operation card').toBeVisible();
 			await expect(railCode(page), 'the rail names the focus').toHaveText(sample!.code);
 
-			// Hover every wire the pointer can reach, and read the tooltip it raises.
-			const wires = await page.locator('.vue-flow__edge path.hit').count();
-			expect(wires, 'the map has wires').toBeGreaterThan(0);
-			const tips: { i: number; text: string; at: { x: number; y: number } }[] = [];
-			for (let i = 0; i < wires; i++) {
-				const at = await pointOnWire(page, i);
-				if (!at) continue;
-				await page.mouse.move(at.x, at.y);
-				const tip = page.locator('.wire-tip.show');
-				try {
-					await tip.waitFor({ state: 'visible', timeout: 1500 });
-					tips.push({ i, text: await tip.innerText(), at });
-				} catch {
-					/* a wire with no drawn ends raises no tooltip */
-				}
-				await page.mouse.move(2, 2);
-				await expect(page.locator('.wire-tip.show')).toHaveCount(0);
-			}
+			const tips = await hoverWires(page);
 			expect(tips.length, 'a wire raised its tooltip').toBeGreaterThan(0);
 			expect(tips.some((t) => t.text.includes(sample!.code)), `a tooltip names ${sample!.code}`).toBe(true);
-
-			// Ctrl+click a wire that comes from somewhere other than the selected record: the rail moves to that origin.
-			const before = (await railCode(page).innerText()).trim();
-			const far = tips
-				.map((t) => ({ ...t, from: /^from (.+)$/m.exec(t.text)?.[1] ?? null }))
-				.find((t) => t.from && t.from !== before);
-			if (far) {
-				await page.mouse.move(far.at.x, far.at.y);
-				await page.keyboard.down('Control');
-				await page.mouse.click(far.at.x, far.at.y);
-				await page.keyboard.up('Control');
-				await expect(railCode(page), 'the rail shows the wire\'s origin').toHaveText(far.from!);
-			} else {
-				console.log(`${who}: every wire comes from ${before}; Ctrl+click not exercised`);
-			}
-
 			await expect(page.locator('body')).not.toContainText(/lineage graph/i);
 			await expect(page.locator('body')).not.toContainText(CRASH);
 			expect(errors).toEqual([]);
 		});
 
+		test('Ctrl+click on a wire goes to the wire\'s origin', async ({ page }) => {
+			const errors = watchErrors(page, IGNORED_CONSOLE);
+			await signInStarbase(page, who, ORIGINS);
+			test.skip(!(await ensureSample(page)), `the ${who} can read no sample with operations on this copy`);
+			// A sample whose map has a wire that comes from a record other than the selected one (an operation's output,
+			// a material's wire): look through a few samples; never pass without clicking.
+			const candidates = await familySamples(admin, who === 'member' ? page.request : undefined, 8);
+			let clicked: string | null = null;
+			for (const c of candidates) {
+				await openMap(page, SAMPLES, c.id);
+				const before = (await railCode(page).innerText()).trim();
+				const far = (await hoverWires(page))
+					.map((t) => ({ ...t, from: /^from (.+)$/m.exec(t.text)?.[1] ?? null }))
+					.find((t) => t.from && t.from !== before);
+				if (!far) continue;
+				await page.mouse.move(far.at.x, far.at.y);
+				await page.keyboard.down('Control');
+				await page.mouse.click(far.at.x, far.at.y);
+				await page.keyboard.up('Control');
+				await expect(railCode(page), 'the rail shows the wire\'s origin').toHaveText(far.from!);
+				clicked = far.from;
+				break;
+			}
+			expect(errors).toEqual([]);
+			test.skip(!clicked, `none of ${candidates.length} samples the ${who} can map has a wire from a record other than the selected one`);
+		});
+
 		test('＋ on a slot adds cards; hover, a card drag and ＋ do not pan the canvas', async ({ page }) => {
-			const errors = watchErrors(page);
+			const errors = watchErrors(page, IGNORED_CONSOLE);
 			await signInStarbase(page, who, ORIGINS);
 			test.skip(!(await ensureSample(page)), `the ${who} can read no sample with operations on this copy`);
 			await openMap(page, SAMPLES, sample!.id);
@@ -250,7 +256,7 @@ for (const who of ['admin', 'member'] as const) {
 		});
 
 		test('Open record in the rail leads to the record page; the Sample page\'s Process map button leads back', async ({ page }) => {
-			const errors = watchErrors(page);
+			const errors = watchErrors(page, IGNORED_CONSOLE);
 			await signInStarbase(page, who, ORIGINS);
 			test.skip(!(await ensureSample(page)), `the ${who} can read no sample with operations on this copy`);
 			await openMap(page, SAMPLES, sample!.id);
@@ -269,7 +275,7 @@ for (const who of ['admin', 'member'] as const) {
 		});
 
 		test('an operation the account may read opens its map, or says the sample is what it may not see', async ({ page }) => {
-			const errors = watchErrors(page);
+			const errors = watchErrors(page, IGNORED_CONSOLE);
 			await signInStarbase(page, who, ORIGINS);
 			const op = (await rows(page.request, '/items/manufacturing_operations?limit=1&fields=operation_id&filter[sample_id][_nnull]=true'))[0];
 			test.skip(!op, `the ${who} can read no operation with a sample on this copy`);
@@ -299,7 +305,7 @@ test.describe('Process map: keyboard, data thumbnail, campaign fan (admin)', () 
 	});
 
 	test('Tab reaches cards and sockets, and a socket names what it connects', async ({ page }) => {
-		const errors = watchErrors(page);
+		const errors = watchErrors(page, IGNORED_CONSOLE);
 		const sample = await familySample(admin);
 		test.skip(!sample, 'the copy has no sample with operations');
 		await signInStarbase(page, 'admin', ORIGINS);
@@ -322,7 +328,7 @@ test.describe('Process map: keyboard, data thumbnail, campaign fan (admin)', () 
 	});
 
 	test('a campaign\'s fan loads (its sample sort is accepted) and draws its samples', async ({ page }) => {
-		const errors = watchErrors(page);
+		const errors = watchErrors(page, IGNORED_CONSOLE);
 		const link = (await rows(admin, '/items/campaign_samples?limit=1&fields=campaign_id'))[0];
 		test.skip(!link, 'the copy has no campaign with samples');
 		await signInStarbase(page, 'admin', ORIGINS);
@@ -337,7 +343,7 @@ test.describe('Process map: keyboard, data thumbnail, campaign fan (admin)', () 
 	});
 
 	test('the Fz figure of an operation with force data draws, or the card falls back to its words', async ({ page }) => {
-		const errors = watchErrors(page);
+		const errors = watchErrors(page, IGNORED_CONSOLE);
 		const withFz = await rows(admin, '/items/machining_force_analysis?limit=12&fields=operation_id&filter[frm_fz][_nnull]=true&filter[status][_eq]=done');
 		test.skip(!withFz.length, 'the copy has no force analysis with a figure');
 		await signInStarbase(page, 'admin', ORIGINS);
@@ -369,8 +375,8 @@ test.describe('Process map on a phone (admin)', () => {
 	test.setTimeout(120_000);
 	test.use({ viewport: { width: 375, height: 812 } });
 
-	test('the collapsed sheet sits under the map, not over its zoom controls, once the page is scrolled to the end', async ({ page, playwright }) => {
-		const errors = watchErrors(page);
+	test('first paint: the zoom controls are on screen and the collapsed sheet does not cover them', async ({ page, playwright }) => {
+		const errors = watchErrors(page, IGNORED_CONSOLE);
 		const admin = await adminApi(playwright, SERVER);
 		const sample = await familySample(admin);
 		await admin.dispose();
@@ -380,17 +386,19 @@ test.describe('Process map on a phone (admin)', () => {
 		await expect(page.locator('.pm-canvas:not(.pending)')).toBeVisible();
 		await expect(page.locator('.pm-sheet')).toBeVisible();
 		await expect(page.locator('.vue-flow__minimap'), 'no minimap on a phone').toHaveCount(0);
-		// Scroll every scrolling ancestor of the map to its end: the controls sit at the canvas's bottom edge.
-		await page.evaluate(() => {
-			for (const e of document.querySelectorAll<HTMLElement>('*')) {
-				if (e.scrollHeight > e.clientHeight + 5 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)) e.scrollTop = e.scrollHeight;
-			}
-			window.scrollTo(0, document.body.scrollHeight);
-		});
+		// No scrolling: the state the person lands in.
 		const controls = (await page.locator('.vue-flow__controls').boundingBox())!;
 		const sheet = (await page.locator('.pm-sheet').boundingBox())!;
-		expect(controls.y, 'the controls are on screen').toBeGreaterThanOrEqual(0);
+		const view = page.viewportSize()!;
+		expect(controls.y, 'the controls start on screen').toBeGreaterThanOrEqual(0);
+		expect(controls.y + controls.height, 'the controls end inside the window').toBeLessThanOrEqual(view.height);
 		expect(controls.y + controls.height, 'the sheet does not cover the controls').toBeLessThanOrEqual(sheet.y);
+		// Every button of the controls receives the pointer (nothing on top of it).
+		for (const b of await page.locator('.vue-flow__controls-button').all()) {
+			const box = (await b.boundingBox())!;
+			const hit = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.vue-flow__controls-button'), [box.x + box.width / 2, box.y + box.height / 2]);
+			expect(hit, 'a control button receives the pointer').toBe(true);
+		}
 
 		// Opening the sheet shows the rail; closing it again gives the map back.
 		await page.locator('.pm-sheet > .head').click();

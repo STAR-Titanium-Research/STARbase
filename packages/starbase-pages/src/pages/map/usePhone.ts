@@ -22,3 +22,10 @@ export function useIsPhone(mq: Query | null = systemQuery()): Ref<boolean> {
 	if (getCurrentInstance()) onBeforeUnmount(() => mq.removeEventListener('change', onChange));
 	return phone;
 }
+
+/**
+ * Where Vue Flow's zoom controls sit. Bottom-left on a desktop; on a phone the bottom band of the window is the
+ * collapsed bottom sheet (MapSheet), which at first paint lies over the canvas's lower corner, so the controls go
+ * to the top-left, where nothing covers them.
+ */
+export const controlsPosition = (phone: boolean): 'top-left' | 'bottom-left' => (phone ? 'top-left' : 'bottom-left');

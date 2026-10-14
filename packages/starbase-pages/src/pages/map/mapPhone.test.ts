@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createSSRApp, defineComponent, h } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import MapSheet from './MapSheet.vue';
-import { PHONE_QUERY, useIsPhone } from './usePhone';
+import { PHONE_QUERY, controlsPosition, useIsPhone } from './usePhone';
 
 const VIcon = defineComponent({ props: { name: String }, setup: (p) => () => h('i', { class: 'v-icon' }, p.name) });
 
@@ -42,5 +42,12 @@ describe('useIsPhone', () => {
 
 	it('is false where there is no matchMedia (server rendering)', () => {
 		expect(useIsPhone(null).value).toBe(false);
+	});
+});
+
+describe('controlsPosition', () => {
+	it('moves the zoom controls out from under the collapsed bottom sheet on a phone', () => {
+		expect(controlsPosition(true)).toBe('top-left');
+		expect(controlsPosition(false)).toBe('bottom-left');
 	});
 });

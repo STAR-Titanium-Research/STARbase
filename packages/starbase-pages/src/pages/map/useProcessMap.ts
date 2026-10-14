@@ -288,7 +288,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       const row = await loadStepRow(api, f);
       const kind = f.collection === 'test_sessions' ? 'test' : 'operation';
       const sampleId = sampleOfRow(row);
-      if (!sampleId) throw new NoSample(`This ${kind} has no sample, so there is no process to show.`);
+      if (!sampleId) throw new NoSample(`This ${kind} has no sample, so there is no Process map to show.`);
       // The step itself was read, so a refused trace is its sample that is hidden, not the step ("this operation
       // does not exist" would be wrong: its own page opens). A role can read a step without its sample.
       const familyOf = loadFamily(api, sampleId).catch((e: unknown) => {

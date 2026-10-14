@@ -21,7 +21,7 @@ import WireTip from './WireTip.vue';
 import { createPointerKind } from './useLongPress';
 import { useMapInput } from './useMapInput';
 import { miniMapColor, useMapCanvas } from './useMapCanvas';
-import { useIsPhone } from './usePhone';
+import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
 import { useProcessMap, type Reach } from './useProcessMap';
 
@@ -257,7 +257,7 @@ onBeforeUnmount(() => {
 								</template>
 								<Background variant="dots" :gap="22" :size="1.4" pattern-color="var(--d1-line)" />
 								<MiniMap v-if="!phone" pannable zoomable :node-color="miniMapColor" mask-color="color-mix(in srgb, var(--theme--background) 70%, transparent)" />
-								<Controls :show-interactive="false" />
+								<Controls :show-interactive="false" :position="controlsPosition(phone)" />
 							</VueFlow>
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
 							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
