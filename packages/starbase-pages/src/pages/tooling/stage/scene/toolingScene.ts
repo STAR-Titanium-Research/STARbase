@@ -21,11 +21,9 @@ import {
 import { LabelLayer } from './labels';
 import { SceneMaterials, TONE_MAPPING } from './materials';
 import { sameTarget, type PickTarget } from './pick';
-import { pulseLevel, pulseRunning } from './pulse';
+import { wireCanvasInput } from './canvasInput';
+import { RenderLoop, type LoopHost } from './renderLoop';
 import { ThemeProbe } from './themePalette';
-
-const CLICK_SLOP_PX = 4;
-const PULSE_FRAME_MS = 33;
 
 type NextFresh = { insertId: string; edgeId: string } | null;
 
@@ -43,6 +41,7 @@ export class ToolingScene {
 	private readonly shadow: Mesh;
 	private readonly tween = new FramingTween();
 	private readonly io: IntersectionObserver | null;
+	private readonly loop: RenderLoop;
 
 	private view: BoxView | null = null;
 	private model: ToolingModel | null = null;
@@ -58,16 +57,9 @@ export class ToolingScene {
 	private width = 0;
 	private height = 0;
 
-	private raf = 0;
-	private dirty = false;
-	private inFrame = false;
 	private visible = true;
 	private disposed = false;
-	private lastDraw = 0;
-	private pulseStart: number | null = null;
-	private pulseDrawn = false;
 	private hoverQueued: { x: number; y: number } | null = null;
-	private down: { x: number; y: number; id: number } | null = null;
 
 	private pickCb: ((t: PickTarget) => void) | null = null;
 	private hoverCb: ((t: PickTarget | null, x: number, y: number) => void) | null = null;
@@ -79,6 +71,14 @@ export class ToolingScene {
 		this.renderer.setClearColor(0x000000, 0);
 		this.renderer.toneMapping = TONE_MAPPING;
 		this.renderer.outputColorSpace = SRGBColorSpace;
+
+		const host: LoopHost = {
+			ready: () => !this.disposed && this.view !== null,
+			pulseAllowed: () => this.pulseAllowed(),
+			advance: (now) => this.advance(now),
+			draw: (pulse) => this.draw(pulse),
+		};
+		this.loop = new RenderLoop(host);
 
 		this.probe = new ThemeProbe(overlay);
 		this.mats = new SceneMaterials(this.probe.resolve());
@@ -127,32 +127,19 @@ export class ToolingScene {
 
 	// --- wiring ----------------------------------------------------------------------------------------
 
-	private on<K extends keyof HTMLElementEventMap>(el: HTMLElement, type: K, fn: (e: HTMLElementEventMap[K]) => void): void {
-		el.addEventListener(type, fn as EventListener);
-		this.cleanups.push(() => el.removeEventListener(type, fn as EventListener));
-	}
-
 	private listen(): void {
-		const c = this.canvas;
-		this.on(c, 'pointerdown', (e) => { this.down = { x: e.clientX, y: e.clientY, id: e.pointerId }; });
-		this.on(c, 'pointerup', (e) => {
-			const d = this.down;
-			this.down = null;
-			if (!d || d.id !== e.pointerId || e.button !== 0) return;
-			if (Math.hypot(e.clientX - d.x, e.clientY - d.y) >= CLICK_SLOP_PX) return; // a drag, not a pick
-			const t = this.pickAt(e.clientX, e.clientY);
-			if (t) this.pickCb?.(t);
-		});
-		this.on(c, 'pointercancel', () => { this.down = null; });
-		this.on(c, 'pointermove', (e) => {
-			if (e.buttons !== 0) return; // dragging: the orbit owns it
-			this.hoverQueued = { x: e.clientX, y: e.clientY };
-			this.schedule();
-		});
-		this.on(c, 'pointerleave', () => { this.hoverQueued = null; this.setHover(null, 0, 0); });
-		const onLost = (e: Event) => { e.preventDefault(); this.lostCb?.(); };
-		c.addEventListener('webglcontextlost', onLost);
-		this.cleanups.push(() => c.removeEventListener('webglcontextlost', onLost));
+		this.cleanups.push(wireCanvasInput(this.canvas, {
+			click: (x, y) => {
+				const t = this.pickAt(x, y);
+				if (t) this.pickCb?.(t);
+			},
+			hover: (x, y) => {
+				this.hoverQueued = { x, y };
+				this.loop.schedule();
+			},
+			leave: () => { this.hoverQueued = null; this.setHover(null, 0, 0); },
+			contextLost: () => this.lostCb?.(),
+		}));
 
 		const onChange = () => this.requestRender();
 		const onStart = () => {
@@ -188,7 +175,7 @@ export class ToolingScene {
 		this.lifts = new Map(this.liftTo);
 		this.hover = null;
 		this.labels.set(this.view.labels(this.focus));
-		this.restartPulse();
+		this.loop.restartPulse();
 		if (!sameBox || this.finalFraming === null) this.goTo(this.focus, true);
 		else this.requestRender();
 	}
@@ -199,12 +186,12 @@ export class ToolingScene {
 		this.focus = next;
 		this.userMoved = false;
 		this.labels.set(this.view.labels(next));
-		this.restartPulse();
+		this.loop.restartPulse();
 		this.goTo(next, false);
 	}
 
 	setNextFresh(next: NextFresh): void {
-		if (next?.edgeId !== this.nextFresh?.edgeId) this.restartPulse();
+		if (next?.edgeId !== this.nextFresh?.edgeId) this.loop.restartPulse();
 		this.nextFresh = next;
 		this.requestRender();
 	}
@@ -330,84 +317,58 @@ export class ToolingScene {
 		if (changed) this.requestRender();
 	}
 
-	// --- the render loop (on demand) ---------------------------------------------------------------------------
+	// --- the render loop (on demand; timing lives in renderLoop.ts) -----------------------------------------------
 
-	private schedule(): void {
-		if (this.raf || this.disposed) return;
-		this.raf = requestAnimationFrame(this.frame);
-	}
-
-	// Something changed: draw a frame soon. Calls made while a frame runs fold into that frame.
 	requestRender(): void {
-		this.dirty = true;
-		if (!this.inFrame) this.schedule();
+		this.loop.request();
 	}
 
-	private restartPulse(): void {
-		this.pulseStart = performance.now();
-	}
-
-	// Pulsing only for a bounded time after a change; the halo then rests at full strength.
-	private pulsing(now: number): boolean {
+	// Pulsing only while the stage is on screen, motion is allowed, and the next fresh edge is not the focused one.
+	private pulseAllowed(): boolean {
 		return this.nextFresh !== null && this.visible && document.visibilityState !== 'hidden' && !prefersReducedMotion()
-			&& !(this.focus.kind === 'edge' && this.focus.edgeId === this.nextFresh.edgeId) && pulseRunning(this.pulseStart, now);
+			&& !(this.focus.kind === 'edge' && this.focus.edgeId === this.nextFresh.edgeId);
 	}
 
-	private readonly frame = (now: number): void => {
-		this.raf = 0;
-		if (this.disposed || !this.view) return;
-		this.inFrame = true;
-		let again = false;
-		try {
-			if (this.hoverQueued) {
-				const q = this.hoverQueued;
-				this.hoverQueued = null;
-				const rect = this.canvas.getBoundingClientRect();
-				this.setHover(this.pickAt(q.x, q.y), q.x - rect.left, q.y - rect.top);
-			}
-
-			let busy = false;
-			if (this.tween.active) {
-				this.lifts = stepLifts(this.liftFrom, this.liftTo, this.tween.eased(now));
-				const s = this.tween.sample(now);
-				if (s) {
-					this.applyFraming(s.framing);
-					if (s.done) {
-						this.lifts = new Map(this.liftTo);
-						if (this.finalFraming) this.applyLimits(this.finalFraming);
-					} else busy = true;
-				}
-				this.dirty = true;
-			}
-			if (this.controls.update()) busy = true; // damping keeps going after the pointer is released
-
-			const pulse = this.pulsing(now);
-			if (this.pulseDrawn && !pulse) this.dirty = true; // the pulse just ended: one static frame at full strength
-			this.pulseDrawn = pulse;
-			again = busy || pulse;
-			if (!this.dirty && !busy && !pulse) return; // nothing changed
-			if (pulse && !busy && !this.dirty && now - this.lastDraw < PULSE_FRAME_MS) return;
-			this.dirty = false;
-			this.lastDraw = now;
-			this.view.sync({
-				focus: this.focus, lifts: this.lifts, hover: this.hover, nextFresh: this.nextFresh,
-				pulse: pulse ? pulseLevel(this.pulseStart, now) : 1,
-			});
-			this.renderer.render(this.scene, this.camera);
-			this.labels.update(this.camera, this.width, this.height, (id) => this.lifts.get(id) ?? 0);
-		} finally {
-			this.inFrame = false;
-			if (again) this.schedule();
+	// Everything that moves on its own: the queued hover pick, the camera ease and lifts, orbit damping.
+	private advance(now: number): boolean {
+		if (this.hoverQueued) {
+			const q = this.hoverQueued;
+			this.hoverQueued = null;
+			const rect = this.canvas.getBoundingClientRect();
+			this.setHover(this.pickAt(q.x, q.y), q.x - rect.left, q.y - rect.top);
 		}
-	};
+
+		let busy = false;
+		if (this.tween.active) {
+			this.lifts = stepLifts(this.liftFrom, this.liftTo, this.tween.eased(now));
+			const s = this.tween.sample(now);
+			if (s) {
+				this.applyFraming(s.framing);
+				if (s.done) {
+					this.lifts = new Map(this.liftTo);
+					if (this.finalFraming) this.applyLimits(this.finalFraming);
+				} else busy = true;
+			}
+			this.loop.request();
+		}
+		if (this.controls.update()) busy = true; // damping keeps going after the pointer is released
+		return busy;
+	}
+
+	private draw(pulse: number): void {
+		const view = this.view;
+		if (!view) return;
+		view.sync({ focus: this.focus, lifts: this.lifts, hover: this.hover, nextFresh: this.nextFresh, pulse });
+		this.renderer.render(this.scene, this.camera);
+		this.labels.update(this.camera, this.width, this.height, (id) => this.lifts.get(id) ?? 0);
+	}
 
 	// --- teardown -------------------------------------------------------------------------------------------------
 
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		if (this.raf) cancelAnimationFrame(this.raf);
-		this.raf = 0;
+		this.loop.dispose();
 		for (const c of this.cleanups) c();
 		this.cleanups.length = 0;
 		this.io?.disconnect();
