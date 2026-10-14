@@ -2,7 +2,7 @@
   "name": "directus-extension-d1-people-admin",
   "version": "1.0.0",
   "type": "module",
-  "description": "GET /d1-people-admin/people, /attention and /people/:person_id/access (admin only, or the person themselves for access), and PATCH /logins/:user_id (account administrators: role, suspend, reactivate): the data behind the admin People page.",
+  "description": "GET /d1-people-admin/people, /attention and /people/:person_id/access (admin only, or the person themselves for access), PATCH /logins/:user_id (account administrators: role, suspend, reactivate) and POST /invite, /invite/resend (invite a person by e-mail through Directus, link the login): the data behind the admin People page.",
   "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
   "directus:extension": {
     "type": "endpoint",

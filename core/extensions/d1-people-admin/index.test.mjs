@@ -69,7 +69,9 @@ function makeDb(tables, rawAnswers) {
     const q = {
       where(a, v) { preds.push((r) => same(r[a], v)); return q; },
       // whereRaw('LOWER(??) = ?', ['email', value]): the e-mail comparison the endpoint and Directus use
-      whereRaw(_sql, bindings) { const v = bindings[bindings.length - 1]; preds.push((r) => String(r.email ?? '').toLowerCase() === v); return q; },
+      // (and lower(btrim(??)) = ? on people: the same, trimmed)
+      whereRaw(_sql, bindings) { const v = bindings[bindings.length - 1]; preds.push((r) => String(r.email ?? '').trim().toLowerCase() === v); return q; },
+      whereNull(a) { preds.push((r) => r[a] === null || r[a] === undefined); return q; },
       insert(row) {
         const rec = { ...row };
         if (table === 'people' && !rec.person_id) rec.person_id = ID(800 + (tables.people ?? []).length);
@@ -122,11 +124,12 @@ function makeDb(tables, rawAnswers) {
 // user; an 'invited' one has its role changed when a different role is asked; any other status is left alone. The mail itself
 // is fire-and-forget in Directus, so it can never throw out of inviteUser. `mailFail` is the switch the endpoint is built to
 // survive in case that ever changes: 'after' throws after the user is saved, 'before' throws before any row is written.
-function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null } = {}) {
+function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null, updateFail = null } = {}) {
   const db = makeDb(tables, raw);
   const errors = [];
   const warnings = [];
   const invites = [];
+  const updates = [];
   const handlers = {};
   const router = {
     get: (path, fn) => (handlers[`GET ${path}`] = fn),
@@ -141,6 +144,14 @@ function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null } = 
     },
     UsersService: class {
       constructor(opts) { this.opts = opts; }
+      // PATCH /logins writes through updateOne as the caller, on the transaction (verified in a throwaway directus/directus:11, which also
+      // throws 422 UNPROCESSABLE_CONTENT "Cannot remove the last admin user from the system": `updateFail` stands in for that)
+      async updateOne(id, changes) {
+        updates.push({ id, changes: { ...changes }, accountability: this.opts.accountability, schema: this.opts.schema, inTransaction: this.opts.knex !== db });
+        if (updateFail) throw updateFail;
+        await this.opts.knex('directus_users').where('id', id).update(changes);
+        return id;
+      }
       async inviteUser(email, role, url, subject) {
         invites.push({ email, role, url, subject, accountability: this.opts.accountability, inTransaction: this.opts.knex !== db });
         if (mailFail === 'before') throw new Error('mail down');
@@ -156,7 +167,7 @@ function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null } = 
     },
   };
   ext.handler(router, { database: db, services, logger: { sink: errors, error(m) { this.sink.push(m); }, warn(m) { warnings.push(m); } }, env });
-  return { db, tables, handlers, errors, warnings, invites, cleared };
+  return { db, tables, handlers, errors, warnings, invites, updates, cleared };
 }
 
 const admin = (user) => ({ user, admin: true, app: true });
@@ -385,6 +396,29 @@ test('lab admin cannot change a role', async () => {
   assert.equal((await patch(handlers, { user: null }, U.ann, { role: R.super })).status, 401);
 });
 
+test('writes through UsersService.updateOne as the caller, inside the transaction (the audit trail)', async () => {
+  const { handlers, tables, updates, db } = mount();
+  const caller = admin(U.superAdmin);
+  assert.equal((await patch(handlers, caller, U.ann, { role: R.lab, status: 'suspended' })).status, 200);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].id, U.ann);
+  assert.deepEqual(updates[0].changes, { role: R.lab, status: 'suspended' });
+  assert.deepEqual(updates[0].accountability, caller); // not a system accountability: Directus records the activity under the caller
+  assert.equal(updates[0].inTransaction, true);
+  assert.deepEqual(updates[0].schema, {}); // req.schema is passed on
+  assert.deepEqual(userRow(tables, U.ann), { ...userRow(tables, U.ann), role: R.lab, status: 'suspended' });
+  assert.equal(db.log.tx[0].committed, true);
+  // Directus's own last-admin check (422) is the same answer as ours: 409 LAST_ADMINISTRATOR, rolled back
+  const last = mount({ updateFail: Object.assign(new Error("Can't process content. Cannot remove the last admin user from the system."), { code: 'UNPROCESSABLE_CONTENT', extensions: { reason: 'Cannot remove the last admin user from the system' } }) });
+  const r = await patch(last.handlers, caller, U.ann, { role: R.member });
+  assert.equal(r.status, 409);
+  assert.equal(errorOf(r).extensions.code, 'LAST_ADMINISTRATOR');
+  assert.equal(last.db.log.tx.every((t) => !t.committed), true);
+  // any other error from the service is a 500, not swallowed
+  const broken = mount({ updateFail: new Error('boom') });
+  assert.equal((await patch(broken.handlers, caller, U.ann, { role: R.member })).status, 500);
+});
+
 test('changes the role', async () => {
   const { handlers, tables, db } = mount();
   const r = await patch(handlers, admin(U.superAdmin), U.ann, { role: R.lab });
@@ -524,6 +558,19 @@ test('status active is allowed only for a suspended login (an invited login woul
   assert.equal(userRow(tables, U.bob).status, 'invited');
 });
 
+test('an invite that has not been accepted cannot be suspended', async () => {
+  const tables = withSessions();
+  const { handlers, db, updates } = mount({ tables });
+  const r = await patch(handlers, admin(U.superAdmin), U.bob, { status: 'suspended' });
+  assert.equal(r.status, 409);
+  assert.equal(errorOf(r).extensions.code, 'NOT_ACTIVE');
+  assert.equal(errorOf(r).message, 'An invite that has not been accepted cannot be suspended — delete the login instead');
+  assert.equal(userRow(tables, U.bob).status, 'invited');
+  assert.equal(tables.directus_sessions.some((s) => s.user === U.bob), true); // nothing was touched
+  assert.equal(updates.length, 0);
+  assert.equal(db.log.tx.every((t) => !t.committed), true);
+});
+
 // ---- POST /invite and POST /invite/resend ------------------------------------------------------------------
 
 const MEMBER_ROLE = '10000001-0000-0000-0000-000000000002';
@@ -544,6 +591,7 @@ test('invites and links an existing person', async () => {
   assert.equal(created.role, R.lab); // an account administrator may choose any role
   assert.equal(tables.people.find((p) => p.person_id === P.cy).user_id, created.id);
   assert.equal(tables.people.length, 4); // no person was created
+  assert.equal(tables.people.find((p) => p.person_id === P.cy).is_researcher, true); // linking makes a researcher (the hook does the same)
   // Directus's own service sends the mail, inside the transaction, as the system, with the STARbase accept-invite address
   assert.equal(invites.length, 1);
   assert.deepEqual([invites[0].email, invites[0].role, invites[0].url], ['cy@new.example', R.lab, INVITE_URL]);
@@ -766,4 +814,67 @@ test('a failed role change on an invited login is an error, not a mail failure',
   assert.equal(userRow(tables, U.bob).role, R.member); // unchanged
   assert.equal(db.log.tx.every((t) => !t.committed), true); // rolled back
   assert.equal(warnings.length, 0);
+});
+
+// ---- POST /invite from the header: no person chosen, so an unlinked person with this e-mail is that person ------------
+
+test('header invite: one unlinked person with the e-mail is linked, not duplicated', async () => {
+  const tables = baseTables();
+  const { handlers, invites } = mount({ tables, env: ENV });
+  // Cy has no login and is not a researcher; the e-mail matches ignoring case and spaces; a name is not needed
+  tables.people.find((p) => p.person_id === P.cy).email = ' CY@People.example ';
+  const r = await invite(handlers, admin(U.superAdmin), { email: 'cy@people.example' });
+  assert.equal(r.status, 201);
+  const created = loginByEmail(tables, 'cy@people.example');
+  assert.deepEqual(r.body, { user_id: created.id, person_id: P.cy, status: 'invited', email_sent: true });
+  assert.equal(tables.people.length, 4); // nobody was inserted
+  const cy = tables.people.find((p) => p.person_id === P.cy);
+  assert.equal(cy.user_id, created.id);
+  assert.equal(cy.is_researcher, true); // whoever is linked to a login is a researcher, as d1-person-link sets it
+  assert.equal(invites.length, 1);
+  // a full_name sent along changes nothing: still the existing person
+  const again = mount({ tables: baseTables(), env: ENV });
+  const r2 = await invite(again.handlers, admin(U.superAdmin), { email: 'CY@people.example', full_name: 'Somebody Else' });
+  assert.equal(r2.body.person_id, P.cy);
+  assert.equal(again.tables.people.length, 4);
+  // a person who already has a login is not a candidate: Ann's e-mail on a person row with a login still creates a new person
+  const linkedOnly = baseTables();
+  linkedOnly.people.find((p) => p.person_id === P.ann).email = 'shared@people.example';
+  const third = mount({ tables: linkedOnly, env: ENV });
+  const r3 = await invite(third.handlers, admin(U.superAdmin), { email: 'shared@people.example', full_name: 'New Shared' });
+  assert.equal(r3.status, 201);
+  assert.equal(linkedOnly.people.length, 5);
+});
+
+test('header invite: several unlinked people with the e-mail is 409 PERSON_AMBIGUOUS, nothing is created', async () => {
+  const tables = baseTables();
+  tables.people.push({ person_id: ID(150), full_name: 'Cy Twin', email: 'cy@people.example', is_researcher: false, is_operator: false, active: true, notes: null, user_id: null });
+  const { handlers, db, invites } = mount({ tables, env: ENV });
+  const before = { users: tables.directus_users.length, people: tables.people.length };
+  const r = await invite(handlers, admin(U.superAdmin), { email: 'Cy@People.example', full_name: 'Cy' });
+  assert.equal(r.status, 409);
+  assert.equal(errorOf(r).extensions.code, 'PERSON_AMBIGUOUS');
+  assert.equal(errorOf(r).message, 'Several people have this email — invite from the right person\'s panel');
+  assert.deepEqual([...errorOf(r).extensions.person_ids].sort(), [P.cy, ID(150)].sort());
+  assert.deepEqual({ users: tables.directus_users.length, people: tables.people.length }, before);
+  assert.equal(invites.length, 0);
+  assert.equal(db.log.tx.every((t) => !t.committed), true);
+  // choosing the person in the panel (person_id) is the way out
+  assert.equal((await invite(handlers, admin(U.superAdmin), { email: 'cy@people.example', person_id: P.cy })).status, 201);
+});
+
+test('header invite: no person with the e-mail inserts a new one (is_researcher), as before', async () => {
+  const { handlers, tables } = mount({ env: ENV });
+  const r = await invite(handlers, admin(U.superAdmin), { email: 'nobody@new.example', full_name: 'No Body' });
+  assert.equal(r.status, 201);
+  assert.equal(tables.people.length, 5);
+  assert.equal(tables.people.find((p) => p.full_name === 'No Body').is_researcher, true);
+  // an invited login of yours with no person, e-mail matching an unlinked person: linked too
+  const t2 = baseTables();
+  t2.directus_users.push({ id: ID(261), email: 'cy@people.example', status: 'invited', role: R.member });
+  const m2 = mount({ tables: t2, env: ENV });
+  const r2 = await invite(m2.handlers, admin(U.superAdmin), { email: 'cy@people.example' });
+  assert.equal(r2.status, 200);
+  assert.equal(r2.body.person_id, P.cy);
+  assert.equal(t2.people.find((p) => p.person_id === P.cy).user_id, ID(261));
 });

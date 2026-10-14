@@ -17,14 +17,19 @@
 //        Account administrators only (403 ACCOUNTS_ADMIN_ONLY for a Lab Admin or anyone else). The role must exist in directus_roles (400).
 //        Suspending also deletes the login's rows in directus_sessions, in the same transaction. Refused with 409 LAST_ADMINISTRATOR when
 //        the change would leave no active account administrator (a role change that drops the target's account-administrator status, or
-//        suspending the target). The write runs in one transaction with d1.actor_identity set; the data cache is cleared after the commit
+//        suspending the target). The write goes through Directus's UsersService.updateOne as the caller (so directus_activity and
+//        directus_revisions record it under their name), in one transaction with d1.actor_identity set and an advisory lock; Directus's own
+//        last-admin check (422) is answered as LAST_ADMINISTRATOR too. The data cache is cleared after the commit
 //        when CACHE_ENABLED is on (the same as d1-record-access). status 'active' is only for a suspended login (409 NOT_SUSPENDED otherwise;
-//        an already active login is a no-op), because an invited login set active could no longer accept its invite.
+//        an already active login is a no-op), because an invited login set active could no longer accept its invite; an invited login
+//        cannot be suspended either (409 NOT_ACTIVE: delete the login instead).
 //   POST /d1-people-admin/invite   body { email, role?: uuid, person_id?: uuid, full_name?: string }
 //     -> 201 { user_id, person_id, status: 'invited', email_sent }   (200 when an invited login for that e-mail is sent the invite again)
 //        Any administrator. Only an account administrator may choose a role; otherwise the role is Lab Member (D1_LAB_MEMBER_ROLE_ID),
 //        and another one is 403 ACCOUNTS_ADMIN_ONLY. person_id: that person must exist and have no login (409 PERSON_HAS_LOGIN); without it
-//        full_name is required and a person is created (is_researcher, email = the invite e-mail). An e-mail with a login that is not
+//        full_name is required and a person is created (is_researcher, email = the invite e-mail), unless exactly one unlinked person has
+//        that e-mail (compared lower(btrim)): that person is linked instead (several: 409 PERSON_AMBIGUOUS with extensions.person_ids).
+//        Every person the endpoint links becomes a researcher, as in d1-person-link. An e-mail with a login that is not
 //        'invited' is 409 EMAIL_HAS_LOGIN (extensions.person_id when the login is linked). The login is made by Directus's
 //        UsersService.inviteUser, the person link set in the same transaction. The invite link is STARBASE_URL + '/accept-invite'
 //        (503 STARBASE_URL_UNSET when blank; docker-compose.yml puts it in USER_INVITE_URL_ALLOW_LIST).
@@ -39,7 +44,7 @@
 // can_administer_accounts: an administrator whose role is not the Lab Admin role (D1_LAB_ADMIN_ROLE_ID). An admin policy attached to
 // the USER with no role (the preview's admin) is an account administrator; the Lab Admin is not.
 //
-// Counting rule for /attention (migration 173): login_without_person and invite_not_accepted are counted by cardinality(user_ids), every
+// Counting rule for /attention (migration 174): login_without_person and invite_not_accepted are counted by cardinality(user_ids), every
 // other key by cardinality(person_ids). Summing both arrays would count a person who has a login twice.
 //
 // Errors use the Directus shape { errors: [{ message, extensions: { code, source: 'd1-people-admin' } }] }.
@@ -262,13 +267,28 @@ export default {
         if (body.status === 'active' && !['suspended', 'active'].includes(target.status)) {
           throw new HttpError(409, 'NOT_SUSPENDED', 'Only a suspended login can be reactivated');
         }
+        // an invite that was never accepted has no sessions and nothing to suspend; deleting the login is the way to withdraw it
+        if (body.status === 'suspended' && target.status === 'invited') {
+          throw new HttpError(409, 'NOT_ACTIVE', 'An invite that has not been accepted cannot be suspended — delete the login instead');
+        }
         if (hasRole && !(await trx('directus_roles').where('id', body.role).first('id'))) throw new HttpError(400, 'INVALID_PAYLOAD', 'That role does not exist.');
 
         const wasAccountAdmin = target.status === 'active' && (await accountAdmin(trx, userId, labAdminRoleId)).accounts;
         const changes = {};
         if (hasRole) changes.role = body.role;
         if (hasStatus) changes.status = body.status;
-        await trx('directus_users').where('id', userId).update(changes);
+        // Through Directus's UsersService, as the caller, so the change lands in directus_activity / directus_revisions under their name
+        // (verified in a throwaway directus/directus:11: it joins the `knex` transaction, so a rollback undoes the activity row too, and
+        // it has its own "last admin" check that throws 422 UNPROCESSABLE_CONTENT, mapped below).
+        try {
+          await new services.UsersService({ schema: req.schema, accountability: req.accountability, knex: trx }).updateOne(userId, changes);
+        } catch (err) {
+          if (err?.code === 'UNPROCESSABLE_CONTENT' && /last admin/i.test(String(err?.extensions?.reason ?? err?.message ?? ''))) {
+            throw new HttpError(409, 'LAST_ADMINISTRATOR', 'Make someone else an Administrator first');
+          }
+          throw err;
+        }
+        // UsersService already ends the sessions of a login that is no longer active; this stays as the guarantee
         if (body.status === 'suspended') await trx('directus_sessions').where('user', userId).del();
 
         // counted after the change, so the target counts only if it is still an active account administrator
@@ -305,7 +325,9 @@ export default {
     const loginByEmail = (db, email) =>
       db('directus_users').whereRaw('LOWER(??) = ?', ['email', email.toLowerCase()]).first('id', 'email', 'status', 'role');
 
-    // Calls inviteUser on the transaction; true when the mail was handed off, false when it failed but the invited login exists.
+    // Calls UsersService.inviteUser on the transaction. `existed`: the login was already there (invited) before this call, so inviteUser
+    // only re-sends or changes its role. Returns true when the mail was handed off, false when it failed but the invited login is there
+    // as asked (made by this call, or already holding `roleId`); any other failure is rethrown, which rolls the transaction back.
     async function sendInvite(trx, req, email, roleId, url, existed) {
       const users = new services.UsersService({ schema: req.schema, accountability: SYSTEM_ADMIN, knex: trx });
       try {
@@ -316,7 +338,7 @@ export default {
         try { kept = await loginByEmail(trx, email); } catch { /* an aborted transaction: report the first error instead */ }
         // Swallow only when the invited login is there as asked: made by this call, or already holding the requested role. Anything else
         // (e.g. a role update that failed, such as a USER_INVITE_URL_ALLOW_LIST out of step with STARBASE_URL) is a real failure: roll back.
-        const asRequested = kept?.status === 'invited' && (!existed || String(kept.role ?? '') === String(roleId ?? ''));
+        const asRequested = kept?.status === 'invited' && (!existed || sameId(kept.role ?? '', roleId ?? ''));
         if (!asRequested) throw err;
         logger?.warn?.(`${SOURCE}: the invitation mail for login ${kept.id} was not sent: ${err?.message || err}`);
         return false;
@@ -349,7 +371,8 @@ export default {
           throw new HttpError(409, 'EMAIL_HAS_LOGIN', 'That e-mail already has a login.', linked ? { person_id: linked.person_id } : {});
         }
 
-        // who the login belongs to: the person it is already linked to, the one asked for, or a new one made from full_name
+        // who the login belongs to: the person it is already linked to, the one asked for, the one unlinked person who has this
+        // e-mail (d1-person-link's rule), or a new one made from full_name
         let personId = linked?.person_id ?? null;
         if (hasPerson) {
           if (linked && !sameId(linked.person_id, body.person_id)) {
@@ -361,8 +384,14 @@ export default {
             if (!isBlank(person.user_id)) throw new HttpError(409, 'PERSON_HAS_LOGIN', 'That person already has a login.');
             personId = person.person_id;
           }
-        } else if (!linked && !fullName) {
-          throw new HttpError(400, 'INVALID_PAYLOAD', 'full_name is required when no person is chosen.');
+        } else if (!linked) {
+          // the header invite names no person: an unlinked person with this e-mail is that person, not a new one (no duplicate)
+          const sameEmail = await trx('people').whereNull('user_id').whereRaw('lower(btrim(??)) = ?', ['email', email.toLowerCase()]).select('person_id');
+          if (sameEmail.length > 1) {
+            throw new HttpError(409, 'PERSON_AMBIGUOUS', 'Several people have this email — invite from the right person\'s panel', { person_ids: sameEmail.map((p) => p.person_id) });
+          }
+          if (sameEmail.length === 1) personId = sameEmail[0].person_id;
+          else if (!fullName) throw new HttpError(400, 'INVALID_PAYLOAD', 'full_name is required when no person is chosen.');
         }
 
         // an invited login keeps its role unless an account administrator asks for another one
@@ -374,7 +403,10 @@ export default {
         if (linked) {
           // already linked: nothing to do
         } else if (personId) {
-          await trx('people').where('person_id', personId).update({ user_id: login.id });
+          // Directus's users.create event also reaches d1-person-link, but on its own connection: its insert points at a login this
+          // transaction has not committed yet, so it fails on the foreign key and returns quietly. This write is the one that links.
+          // Whoever has a login is a researcher (as the hook sets it).
+          await trx('people').where('person_id', personId).update({ user_id: login.id, is_researcher: true });
         } else {
           const made = await trx('people').insert({ full_name: fullName, email, is_researcher: true, user_id: login.id }).returning('person_id');
           personId = made?.[0]?.person_id ?? made?.[0];
