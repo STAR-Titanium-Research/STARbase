@@ -5205,6 +5205,78 @@ lw_check() { grep -qxF -- "$1" <<<"$ll_norole" && ok "$2" || bad "$2 (wanted $1;
 lw_check "norole_policies:0" "168 on a database without d1_llm_readonly: applies with a notice and creates no policy"
 lw_check "norole_rls:0" "168 on a database without d1_llm_readonly: enables no row security"
 
+echo "== Sample stored values: form values migration (175) =="
+# The test database has already run 175's up, so run its down first, seed rows that carry legacy values, run up,
+# assert the mapping and the default, run down, assert the originals are back - all in a rolled-back transaction.
+MIG=db/migrations/20261014000175_form_values.sql
+mig_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$MIG")
+mig_down=$(awk '/-- migrate:down/{f=1;next}f' "$MIG")
+fv_out=$($PSQL 2>&1 <<SQL
+BEGIN;
+$mig_down
+SELECT 'down_default:' || count(*) FROM information_schema.columns
+  WHERE table_name='physical_samples' AND column_name='item_type' AND column_default IS NOT NULL;
+SELECT 'down_backup_table:' || count(*) FROM information_schema.tables
+  WHERE table_schema='d1_private' AND table_name='form_values_175_backup';
+INSERT INTO physical_samples (sample_code, item_type, form, surface_finish) VALUES
+  ('TEST-FV175-01', NULL, 'rectangular', 'Machined'),
+  ('TEST-FV175-02', 'sample', 'Cylindrical', ' polished '),
+  ('TEST-FV175-03', 'sample', 'coupon', 'MIRROR'),
+  ('TEST-FV175-04', 'sample', 'BILLET', 'Ground'),
+  ('TEST-FV175-05', 'sample', 'l-profile', 'As produced'),
+  ('TEST-FV175-06', 'sample', 'disc', 'As Produced'),
+  ('TEST-FV175-07', 'sample', 'disc', 'As-sintered'),
+  ('TEST-FV175-08', 'sample', 'disc', 'as_sintered'),
+  ('TEST-FV175-09', 'sample', 'disc', 'N/A'),
+  ('TEST-FV175-10', 'equipment', 'other', 'finish_machined'),
+  ('TEST-FV175-11', 'sample', 'ring', 'rough_machined'),
+  ('TEST-FV175-12', 'sample', 'bend_bar', 'Lapped'),
+  ('TEST-FV175-13', NULL, NULL, NULL);
+CREATE TEMP TABLE fv_orig AS
+  SELECT sample_code, item_type, form, surface_finish FROM physical_samples WHERE sample_code LIKE 'TEST-FV175-%';
+$mig_up
+SELECT 'up_default:' || column_default FROM information_schema.columns
+  WHERE table_name='physical_samples' AND column_name='item_type';
+SELECT 'up_backup_rows:' || count(*) FROM d1_private.form_values_175_backup b
+  JOIN physical_samples ps USING (sample_id) WHERE ps.sample_code LIKE 'TEST-FV175-%';
+SELECT 'up:' || sample_code || ':' || coalesce(item_type, '~') || ':' || coalesce(form, '~') || ':' || coalesce(surface_finish, '~')
+  FROM physical_samples WHERE sample_code LIKE 'TEST-FV175-%';
+INSERT INTO physical_samples (sample_code, form) VALUES ('TEST-FV175-14', 'block');
+SELECT 'up_new_row_item_type:' || item_type FROM physical_samples WHERE sample_code = 'TEST-FV175-14';
+$mig_down
+SELECT 'down_default2:' || count(*) FROM information_schema.columns
+  WHERE table_name='physical_samples' AND column_name='item_type' AND column_default IS NOT NULL;
+SELECT 'down_restored:' || count(*) FROM physical_samples ps JOIN fv_orig o USING (sample_code)
+  WHERE ps.item_type IS NOT DISTINCT FROM o.item_type AND ps.form IS NOT DISTINCT FROM o.form
+    AND ps.surface_finish IS NOT DISTINCT FROM o.surface_finish;
+SELECT 'down_backup_gone:' || count(*) FROM information_schema.tables
+  WHERE table_schema='d1_private' AND table_name='form_values_175_backup';
+ROLLBACK;
+SQL
+)
+fv_check() { grep -qxF -- "$1" <<<"$fv_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$fv_out" | head -40 | tr '\n' ' ' | cut -c1-600))"; }
+fv_check "down_default:0" "175 down: item_type has no default"
+fv_check "down_backup_table:0" "175 down: backup table dropped"
+fv_check "up_default:'sample'::text" "175 up: item_type defaults to sample"
+fv_check "up_backup_rows:10" "175 up: the 10 rows that change are backed up (the three unchanged control rows are not)"
+fv_check "up:TEST-FV175-01:sample:block:medium_machined" "175 up: NULL item_type -> sample, rectangular -> block, Machined -> medium_machined"
+fv_check "up:TEST-FV175-02:sample:cylinder:polished" "175 up: Cylindrical -> cylinder, ' polished ' (case, spaces) -> polished"
+fv_check "up:TEST-FV175-03:sample:tensile_coupon:mirror" "175 up: coupon -> tensile_coupon, MIRROR -> mirror"
+fv_check "up:TEST-FV175-04:sample:cylinder:ground" "175 up: BILLET -> cylinder, Ground -> ground"
+fv_check "up:TEST-FV175-05:sample:other:as_produced" "175 up: l-profile -> other, 'As produced' -> as_produced"
+fv_check "up:TEST-FV175-06:sample:disc:as_produced" "175 up: 'As Produced' -> as_produced"
+fv_check "up:TEST-FV175-07:sample:disc:as_produced" "175 up: 'As-sintered' -> as_produced"
+fv_check "up:TEST-FV175-08:sample:disc:as_produced" "175 up: 'as_sintered' -> as_produced"
+fv_check "up:TEST-FV175-09:sample:disc:none" "175 up: N/A -> none"
+fv_check "up:TEST-FV175-10:equipment:other:finish_machined" "175 up: equipment rows and existing finish codes are untouched"
+fv_check "up:TEST-FV175-11:sample:ring:rough_machined" "175 up: a current form and finish code are untouched"
+fv_check "up:TEST-FV175-12:sample:bend_bar:Lapped" "175 up: an unknown finish is left as it is"
+fv_check "up:TEST-FV175-13:sample:~:~" "175 up: a NULL form and finish stay NULL (only item_type is filled)"
+fv_check "up_new_row_item_type:sample" "175 up: a new row without item_type gets sample"
+fv_check "down_default2:0" "175 down (after up): default dropped again"
+fv_check "down_restored:13" "175 down: every seeded row has its original item_type, form and surface_finish back"
+fv_check "down_backup_gone:0" "175 down (after up): backup table dropped"
+
 echo "== Cleanup test rows =="
 $PSQL -c "
     DELETE FROM sample_genealogy
