@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import {
-	AppLink, DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, formatDate, hasPassCode, indexRoute, operationLabel, processLabel, type SectionState,
+	AppLink, DataTable, LIST_CAP, LoadState, RecordLink, Section, StatusBadge, choiceLabel, formatDate, hasPassCode, indexRoute, operationLabel, processLabel, type SectionState,
 } from '@d1/ui';
 
 // "Not in a campaign": records that carry this project but no campaign. Three short lists, each
@@ -24,11 +24,11 @@ const isEmpty = (b: SectionState<any[]>) => !b.loading && !b.error && !b.data.le
 	<Section id="unassigned-samples" title="Samples not in a campaign" :count="props.samples.loading ? null : sampleRows.length" :empty="isEmpty(props.samples)" empty-text="Every sample of this project that you can see is in a campaign.">
 		<LoadState :loading="props.samples.loading" :error="props.samples.error">
 			<DataTable>
-				<thead><tr><th>Sample</th><th>Form</th><th>Material</th><th>Status</th></tr></thead>
+				<thead><tr><th>Sample</th><th>Geometry</th><th>Material</th><th>Status</th></tr></thead>
 				<tbody>
 					<tr v-for="s in sampleRows" :key="s.sample_id">
 						<td><RecordLink collection="physical_samples" :id="s.sample_id" class="mono">{{ s.sample_code || 'Sample' }}</RecordLink></td>
-						<td>{{ s.form ?? '' }}</td>
+						<td>{{ choiceLabel('geometry', s.form) }}</td>
 						<td>{{ s.material_id?.common_name ?? '' }}</td>
 						<td><StatusBadge kind="sample" :value="s.current_status" /></td>
 					</tr>

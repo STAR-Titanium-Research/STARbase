@@ -114,6 +114,16 @@ describe('sampleRailFacts', () => {
 	});
 });
 
+describe('labels, not codes', () => {
+	it('the kind line and the surface finish read the choice label', () => {
+		expect(sampleKind({ form: 'bend_bar' })).toBe('Sample · Bend / fatigue bar (ISO 7438)');
+		const finish = (v: string) => sampleDetailBase({ ...sample, surface_finish: v }).find((f) => f.label === 'Surface finish')?.value;
+		expect(finish('medium_machined')).toBe('Medium machined');
+		expect(finish('as_produced')).toBe('As produced');
+		expect(finish('')).toBe('');
+	});
+});
+
 describe('sampleDetailBase', () => {
 	it('has the old overview values the rail does not, plus the project name', () => {
 		const facts = sampleDetailBase({ ...sample, manufacturing_route: 'AM', surface_finish: 'As built', item_type: 'specimen', stock_category: 'S' });

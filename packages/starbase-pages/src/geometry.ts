@@ -53,9 +53,9 @@ export const FORMS = [
 	{ text: 'Plate', value: 'plate' },
 	{ text: 'Bar', value: 'bar' },
 	{ text: 'Round bar', value: 'round_bar' },
-	{ text: 'Tensile coupon (ASTM E8)', value: 'tensile_coupon' },
-	{ text: 'Bend / fatigue bar', value: 'bend_bar' },
-	{ text: 'Powder / compact', value: 'powder' },
+	{ text: 'Tensile coupon (ISO 6892)', value: 'tensile_coupon' },
+	{ text: 'Bend / fatigue bar (ISO 7438)', value: 'bend_bar' },
+	{ text: 'Powder / Compact', value: 'powder' },
 	{ text: 'Other', value: 'other' },
 ];
 

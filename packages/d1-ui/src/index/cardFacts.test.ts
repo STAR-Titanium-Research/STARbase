@@ -26,7 +26,7 @@ describe('cardFacts', () => {
 	it('lists the columns after the code and title, formatted like the table, at most four', () => {
 		const facts = cardFacts(samples, row);
 		expect(facts).toHaveLength(4);
-		expect(facts.map((f) => f.label)).toEqual(['Material', 'Project', 'Form', 'Status']);
+		expect(facts.map((f) => f.label)).toEqual(['Material', 'Project', 'Geometry', 'Status']);
 		expect(facts[0]).toEqual({ label: 'Material', value: 'Ti64' });
 	});
 	it('skips empty values and a relation the role cannot read', () => {

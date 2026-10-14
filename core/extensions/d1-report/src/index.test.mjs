@@ -10,7 +10,7 @@ import { test } from 'node:test';
 
 import endpoint from './index.js';
 import { readFileSync } from 'node:fs';
-import { recordLink, EXPLORER_PAGES } from './render.js';
+import { recordLink, EXPLORER_PAGES, renderSampleReport, renderOperationReport } from './render.js';
 
 const SID = '11111111-1111-4111-8111-111111111111';
 const OP_A = '22222222-2222-4222-8222-222222222222';
@@ -378,4 +378,22 @@ test('GET /label and /labels go to the labels page through the permanent link, q
 	assert.equal((await getRedirect(routes, '/labels', {})).redirectTo, `${LIMS}/d1-links/go/p/labels`);
 	const { routes: bare } = harness({}, {});
 	assert.equal((await getRedirect(bare, '/label', { codes: 'S-001' })).redirectTo, '/d1-links/go/p/labels?codes=S-001');
+});
+
+test('the PDF shows choice labels, not stored codes', () => {
+	const sample = renderSampleReport({
+		sample: { sample_id: 'aaaa-1', sample_code: '1-X', form: 'tensile_coupon', material_name: 'Ti64' },
+		surfaceFinish: 'medium_machined', ops: [{ operation_id: 'o1', pass_code: 'P1', method_name: 'Turning', machining_operation_subtype: 'MT-F' }], parents: [],
+		children: [{ child_sample_code: '1-Y', child_form: 'bend_bar' }], tests: [], qrSvg: '', recordUrl: '/x',
+	});
+	for (const text of ['Medium machined', 'Tensile coupon (ISO 6892)', 'Turning · Turning – Facing', 'Bend / fatigue bar (ISO 7438)']) {
+		assert.ok(sample.includes(text), text);
+	}
+	for (const code of ['medium_machined', '>tensile_coupon<', 'MT-F', 'bend_bar']) assert.ok(!sample.includes(code), `still shows ${code}`);
+	const op = renderOperationReport({
+		op: { operation_id: 'o1', pass_code: 'P1', method_name: 'Milling', process_category: 'machining', machining_operation_subtype: 'MM-D' },
+		qrSvg: '', recordUrl: '/x', publicUrl: '',
+	});
+	assert.ok(op.includes('Milling – Drilling'));
+	assert.ok(!op.includes('MM-D'));
 });
