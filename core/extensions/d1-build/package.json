@@ -1,0 +1,13 @@
+{
+  "name": "directus-extension-d1-build",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "/d1-build: the process map's edit mode on the server. Drafts (private, versioned), checks, one transactional create that writes a whole draft as real records through Directus's ItemsService, Mark done, and templates.",
+  "keywords": ["directus", "directus-extension", "directus-custom-endpoint"],
+  "directus:extension": {
+    "type": "endpoint",
+    "path": "index.js",
+    "source": "index.js",
+    "host": "^11.0.0"
+  }
+}
