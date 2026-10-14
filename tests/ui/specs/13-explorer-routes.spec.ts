@@ -126,6 +126,8 @@ for (const who of ['admin', 'member'] as const) {
 				// d1-campaign-ops: the interface root (.co) sits inside the campaign form.
 				await page.goto(`${ADMIN_BASE}/content/campaigns/${encodeURIComponent(campaign)}`, { waitUntil: 'networkidle' });
 				await expect(page.locator('.v-form').first(), 'campaign form').toBeVisible();
+				// Migration 174 put the interface in the collapsed "Related records" group: open it to render .co.
+				await page.locator('.v-form .v-detail.group-detail', { hasText: 'Related records' }).locator('.v-divider').first().click();
 				await expect(page.locator('.co').first(), 'campaign-ops panel').toBeVisible();
 				await expect(page.locator('body'), 'campaign form: no crash text').not.toContainText(CRASH);
 			} else {
