@@ -595,6 +595,28 @@ describe('focus kinds (D20)', () => {
     expect(b.map.status.value).toBe('notVisible');
   });
 
+  it('an operation the person may read, on a sample they may not, says so instead of "not visible"', async () => {
+    // Found in the browser: a Lab Member can read an operation (its page opens) but not its sample, so the
+    // sample's trace is a 404. "This operation does not exist" would be wrong; the sample is what is hidden.
+    stepRow.mockResolvedValue(mkOp({ id: 'o1', sampleId: 's9', outputSampleId: null }));
+    family.mockRejectedValue(httpError(404));
+    const a = setup({ focus: 'manufacturing_operations:o1' });
+    await settle();
+    expect(a.map.status.value).toBe('error');
+    expect(a.map.error.value).toMatch(/can read this operation, but not the sample/);
+
+    stepRow.mockResolvedValue(mkTest({ id: 't1', subjectSampleIds: ['s9'] }));
+    const b = setup({ focus: 'test_sessions:t1' });
+    await settle();
+    expect(b.map.error.value).toMatch(/can read this test, but not the sample/);
+
+    // A server error on the sample's trace is still an error with its own text.
+    family.mockRejectedValue(Object.assign(new Error('x'), { response: { status: 500, data: { errors: [{ message: 'boom' }] } } }));
+    const c = setup({ focus: 'manufacturing_operations:o1' });
+    await settle();
+    expect(c.map.error.value).toContain('boom');
+  });
+
   it('tool focus builds a fan of at most 20 collapsed containers and "+N more"', async () => {
     recordRef.mockResolvedValue(TOOL);
     usedIn.mockResolvedValue({ items: toolOps(20), total: 47 });
