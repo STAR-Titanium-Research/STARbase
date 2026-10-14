@@ -11,7 +11,8 @@
 //                                               hidden_count, events: [...] }
 //        counts are over every grant of the team. records are the granted records the caller READS (<kind>_readers; an administrator
 //        reads all); hidden_count is the rest. events: the last 20, newest first (?events=all for every one); an event about a
-//        record the caller cannot read carries no record (record_hidden: true).
+//        record the caller cannot read carries no record, no person and no detail (record_hidden: true; kind, at and actor stay).
+//        team_events has no Lab Member read permission in Directus: this endpoint is the only way to read the history.
 //   POST   /d1-teams                       { name, description?, color? } -> 201 team; the caller (who needs a person, else 409 NO_PERSON)
 //                                          becomes its manager; 409 TEAM_NAME_TAKEN
 //   PATCH  /d1-teams/:id                   { name?, description?, color?, logo? }  manager or administrator. logo: a directus_files id of an
@@ -27,15 +28,19 @@
 //        The last manager cannot leave or be demoted while others remain: the deferred constraint of migration 175 raises 23514 at COMMIT,
 //        which is answered as 409 LAST_MANAGER "Make someone else a manager first".
 //   GET    /d1-teams/pending               -> { items: [{ team_id, team_name, person_id, full_name, records: [{ collection, id, kind, code,
-//                                               title, role }] }] }  the actionable pending rows on records the caller manages (owner column,
-//                                               the PI for a project, or any record for an administrator), grouped by joiner and team
+//                                               title, role }] }] }  the actionable pending rows on records the caller OWNS (owner column,
+//                                               or the PI for a project; an administrator included), grouped by joiner and team
 //   POST   /d1-teams/pending/decide        { team_id, person_id, decision: 'approve' | 'decline', records?: [{ collection, id }] }
-//                                          -> { decision, decided, records }  d1_private.team_decide for each record the caller manages
-//                                          (all of them, or only `records`: one the caller does not manage is 403 and nothing is applied).
-//                                          The joiner is mailed on approve.
+//                                          -> { decision, decided, records }  d1_private.team_decide for each record the caller owns (all of
+//                                          them when `records` is absent, an administrator included), or only `records` (deduplicated), where an
+//                                          administrator may decide any single record; one the caller may not decide is 403 and nothing is
+//                                          applied. The joiner is mailed on approve.
 //
-// "Manages a record": an administrator, or the caller's person is the record's owner (owner_person_id; principal_investigator_person for a
-// project). A team that owns records arrives in PR 3.
+// "Owns a record": the caller's person is the record's owner (owner_person_id; principal_investigator_person for a project). A team that
+// owns records arrives in PR 3. "Manages" (decide with an explicit record) is owns, or an administrator.
+//
+// After a commit nothing may turn the answer into a 500: the reads that build the answer or the mail are logged and fall back to what is
+// known (afterCommit), as d1-record-access does.
 //
 // Writes: one knex transaction with set_config('d1.actor_identity', <caller>, true) so the history triggers name the caller; the Directus
 // data cache is cleared after the commit (CACHE_ENABLED); mail goes out after the commit and NEVER undoes a change (a failure is logged).
@@ -270,6 +275,16 @@ export default {
         warn(`could not clear the data cache: ${err?.message || err}`);
       }
     }
+    // A read AFTER a commit: the change stands whatever happens here, so a failure is logged and answers `fallback` (the committed
+    // write never turns into a 500; the same rule as d1-record-access's entryOf and teamOf).
+    async function afterCommit(what, read, fallback) {
+      try {
+        return await read();
+      } catch (err) {
+        logger?.error?.(`${SOURCE}: ${what} is committed but reading it back failed: ${err?.stack || err?.message || err}`);
+        return typeof fallback === 'function' ? fallback() : fallback;
+      }
+    }
     // 'sent' | 'skipped' | 'failed'; never throws. person: { person_id, user_id, email }.
     async function deliver(req, person, content) {
       try {
@@ -354,7 +369,8 @@ export default {
       }
       return out;
     }
-    const manages = (row, me, admin) => admin || (me && sameId(row.owner_person_id, me.person_id));
+    const owns = (row, me) => Boolean(me && sameId(row.owner_person_id, me.person_id));
+    const manages = (row, me, admin) => admin || owns(row, me);
     const recordOf = (row) => ({
       collection: row.collection, id: row.record_id, kind: row.cfg.kind, code: firstOf(row.record, row.cfg.code), title: firstOf(row.record, row.cfg.title), role: row.role,
     });
@@ -371,8 +387,10 @@ export default {
 
     router.get('/pending', route(async ({ res, acc, admin }) => {
       const me = await callerPerson(database, acc);
-      if (!admin && !me) return res.json({ items: [] });
-      const rows = await pendingRows(database, { keep: (row) => manages(row, me, admin) });
+      if (!me) return res.json({ items: [] });
+      // Waiting for you is the caller's own queue: only records they OWN, an administrator included (an administrator approves or
+      // declines a single record from Who has access).
+      const rows = await pendingRows(database, { keep: (row) => owns(row, me) });
       const [teams, people] = await Promise.all([
         selectIn(database, 'teams', 'team_id', rows.map((r) => r.team_id), ['team_id', 'name']),
         loadPeople(database, rows.map((r) => r.person_id)),
@@ -406,7 +424,7 @@ export default {
           const cfg = isObject(r) && typeof r.collection === 'string' && Object.hasOwn(COLLECTIONS, r.collection) ? COLLECTIONS[r.collection] : null;
           if (!cfg || !isUuid(r.id)) throw invalid('Each record needs a collection (samples, operations, tests, campaigns or projects) and an id.');
           return { cfg, id: r.id };
-        });
+        }).filter((r, i, all) => all.findIndex((o) => o.cfg === r.cfg && sameId(o.id, r.id)) === i); // the same record twice is decided once
       }
       const me = await callerPerson(database, acc);
 
@@ -429,7 +447,7 @@ export default {
           }
         } else {
           const all = await pendingRows(trx, { teamId: body.team_id, personId: body.person_id });
-          targets = all.filter((row) => manages(row, me, admin));
+          targets = all.filter((row) => owns(row, me)); // the whole queue is the caller's own records, an administrator included
           if (all.length && !targets.length) throw new HttpError(403, 'FORBIDDEN', 'You can only decide on records you own.');
         }
         for (const t of targets) {
@@ -440,7 +458,7 @@ export default {
       await clearDataCache(req);
 
       if (body.decision === 'approve' && done.length) {
-        const [team, people] = await Promise.all([database('teams').where('team_id', body.team_id).first('name'), loadPeople(database, [body.person_id])]);
+        const [team, people] = await afterCommit('the approval', () => Promise.all([database('teams').where('team_id', body.team_id).first('name'), loadPeople(database, [body.person_id])]), [null, new Map()]);
         const joiner = people.get(String(body.person_id));
         if (joiner && !sameId(joiner.user_id, acc.user)) {
           const teamName = team?.name ?? 'a team';
@@ -500,20 +518,23 @@ export default {
       const events = raw.map((e) => {
         const about = e.collection && e.record_id;
         const record = about ? eventRecords.get(recordKey(e.collection, e.record_id)) : null;
+        const hidden = Boolean(about && !record);
+        // An event about a record the caller cannot read keeps only what happened, when and by whom: who it concerned and the detail
+        // could name the record or the people with access to it.
         return {
           event_id: Number(e.event_id),
           at: iso(e.at),
           kind: e.kind,
           actor_person_id: e.actor_person_id ?? null,
           actor_name: isBlank(e.actor_person_id) ? null : eventPeople.get(String(e.actor_person_id))?.full_name ?? null,
-          person_id: e.person_id ?? null,
-          person_name: isBlank(e.person_id) ? null : eventPeople.get(String(e.person_id))?.full_name ?? null,
+          person_id: hidden ? null : e.person_id ?? null,
+          person_name: hidden || isBlank(e.person_id) ? null : eventPeople.get(String(e.person_id))?.full_name ?? null,
           collection: record ? record.collection : null,
           record_id: record ? record.id : null,
           record_kind: record ? record.kind : null,
           record_code: record ? record.code : null,
-          record_hidden: Boolean(about && !record),
-          detail: e.detail ?? null,
+          record_hidden: hidden,
+          detail: hidden ? null : e.detail ?? null,
         };
       });
 
@@ -537,7 +558,10 @@ export default {
         return id;
       }, 'team');
       await clearDataCache(req);
-      res.status(201).json(await teamItem(database, me, teamId));
+      res.status(201).json(await afterCommit(`the new team ${teamId}`, () => teamItem(database, me, teamId), () => ({
+        team_id: teamId, name: fields.name, description: fields.description ?? null, color: fields.color ?? 'teal', logo: null, member_count: 1,
+        managers: [{ person_id: me.person_id, full_name: me.full_name ?? null }], is_member: true, is_manager: true,
+      })));
     }));
 
     router.patch('/:id', route(async ({ req, res, acc, admin }) => {
@@ -550,7 +574,11 @@ export default {
       if (!Object.keys(changes).length) throw invalid('Send a name, description, color or logo.');
       await write(acc, (trx) => trx('teams').where('team_id', team.team_id).update(changes), 'team');
       await clearDataCache(req);
-      res.json(await teamItem(database, me, team.team_id));
+      res.json(await afterCommit(`the change to team ${team.team_id}`, () => teamItem(database, me, team.team_id), () => ({
+        team_id: team.team_id, name: changes.name ?? team.name, description: changes.description === undefined ? team.description ?? null : changes.description,
+        color: changes.color ?? team.color ?? 'teal', logo: changes.logo === undefined ? team.logo ?? null : changes.logo,
+        member_count: null, managers: [], is_member: null, is_manager: null,
+      })));
     }));
 
     router.delete('/:id', route(async ({ req, res, acc, admin }) => {
@@ -575,7 +603,7 @@ export default {
       });
       await clearDataCache(req);
 
-      const people = await loadPeople(database, [...owners.keys()]);
+      const people = await afterCommit(`the deletion of team ${team.team_id}`, () => loadPeople(database, [...owners.keys()]), new Map());
       let mailed = 0;
       await Promise.all([...owners].map(async ([ownerId, lines]) => {
         const owner = people.get(ownerId);
@@ -617,7 +645,7 @@ export default {
         if (isBlank(row.owner_person_id) || sameId(row.owner_person_id, me?.person_id)) continue;
         byOwner.set(String(row.owner_person_id), [...(byOwner.get(String(row.owner_person_id)) ?? []), row]);
       }
-      const owners = await loadPeople(database, [...byOwner.keys()]);
+      const owners = await afterCommit(`the new member of team ${team.team_id}`, () => loadPeople(database, [...byOwner.keys()]), new Map());
       await Promise.all([...byOwner].map(async ([ownerId, rows]) => {
         const owner = owners.get(ownerId);
         if (!owner) return;

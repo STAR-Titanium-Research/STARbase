@@ -10,7 +10,7 @@ const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const LAB_ADMIN_ROLE = '10000001-0000-0000-0000-000000000001';
 const R = { member: ID(31), super: ID(32) };
 const POLICY = { admin: ID(41), member: ID(42) };
-const P = { ann: ID(101), bob: ID(102), cy: ID(103), eve: ID(104), fay: ID(105), gus: ID(106) };
+const P = { ann: ID(101), bob: ID(102), cy: ID(103), eve: ID(104), fay: ID(105), gus: ID(106), adm: ID(107) };
 const U = { ann: ID(201), bob: ID(202), eve: ID(203), fay: ID(204), admin: ID(205), stranger: ID(206), noperson: ID(207) };
 const T = { additive: ID(301), beta: ID(302) };
 const S = { one: ID(1), two: ID(2), three: ID(3) };
@@ -221,7 +221,7 @@ function makeDb(tables, rawAnswers) {
 
 // ---- a harness ------------------------------------------------------------------------------------------
 
-function mount({ tables = baseTables(), env = {}, mailFail = false, notActionable = [], decideFail = null } = {}) {
+function mount({ tables = baseTables(), env = {}, mailFail = false, notActionable = [], decideFail = null, breakAfterCommit = [] } = {}) {
   const decided = [];
   const mails = [];
   const cleared = [];
@@ -247,6 +247,13 @@ function mount({ tables = baseTables(), env = {}, mailFail = false, notActionabl
     },
   };
   const db = makeDb(tables, raw);
+  // What the endpoint sees as `database`: reads of the tables in breakAfterCommit throw once a transaction has committed (to test that a
+  // committed write never answers 500). Reads before the write, and everything inside a transaction, are untouched.
+  const broken = new Set(breakAfterCommit);
+  const database = Object.assign((table) => {
+    if (broken.has(table) && db.log.tx.length && db.log.tx.every((t) => t.committed)) throw new Error(`reading ${table} failed`);
+    return db(table);
+  }, { raw: (...a) => db.raw(...a), transaction: (...a) => db.transaction(...a), log: db.log });
   const handlers = {};
   const order = [];
   const reg = (method) => (path, fn) => { handlers[`${method} ${path}`] = fn; order.push(`${method} ${path}`); };
@@ -265,7 +272,7 @@ function mount({ tables = baseTables(), env = {}, mailFail = false, notActionabl
     },
   };
   ext.handler(router, {
-    database: db, services, env,
+    database, services, env,
     logger: { error(m) { errors.push(m); }, warn(m) { warnings.push(m); } },
   });
   return { db, tables, handlers, order, mails, cleared, errors, warnings, decided };
@@ -408,6 +415,33 @@ test('GET /:id: the history is the last 20 newest first, ?events=all gives every
   assert.equal(all.body.events.length, 27); // the other team's event is not in it
 });
 
+test('GET /:id: an event about a record the caller cannot read drops the person and the detail, keeping kind, time and actor', async () => {
+  const tables = baseTables();
+  tables.team_events.push(
+    { event_id: 1, team_id: T.additive, at: '2026-10-02T00:00:00Z', actor_person_id: P.fay, kind: 'approved', person_id: P.cy, collection: 'physical_samples', record_id: S.two, detail: { level: 'edit', note: 'secret' } },
+    { event_id: 2, team_id: T.additive, at: '2026-10-02T01:00:00Z', actor_person_id: P.eve, kind: 'approved', person_id: P.cy, collection: 'physical_samples', record_id: S.one, detail: { level: 'view' } },
+  );
+  const { handlers } = mount({ tables });
+  const ann = await call(handlers['GET /:id'], { acc: member(U.ann), params: { id: T.additive } });
+  const [readable, hidden] = ann.body.events; // newest first: SM-001 (Ann reads it), then SM-002 (she does not)
+  assert.equal(readable.person_name, 'Cy Nologin');
+  assert.deepEqual(readable.detail, { level: 'view' });
+  assert.equal(hidden.record_hidden, true);
+  assert.equal(hidden.kind, 'approved');
+  assert.equal(hidden.at, '2026-10-02T00:00:00.000Z');
+  assert.equal(hidden.actor_person_id, P.fay);
+  assert.equal(hidden.actor_name, 'Fay Owner');
+  assert.equal(hidden.person_id, null);
+  assert.equal(hidden.person_name, null);
+  assert.equal(hidden.detail, null);
+  assert.doesNotMatch(JSON.stringify(hidden), /Cy Nologin|secret|SM-002/);
+  // an administrator reads every record, so nothing is dropped
+  const adm = await call(handlers['GET /:id'], { acc: admin(U.admin), params: { id: T.additive } });
+  assert.equal(adm.body.events[1].person_name, 'Cy Nologin');
+  assert.equal(adm.body.events[1].record_hidden, false);
+  assert.deepEqual(adm.body.events[1].detail, { level: 'edit', note: 'secret' });
+});
+
 // ---- POST / -----------------------------------------------------------------------------------------------
 
 test('POST / creates a team and makes the caller its manager in one transaction', async () => {
@@ -428,6 +462,21 @@ test('POST / creates a team and makes the caller its manager in one transaction'
   assert.deepEqual(db.log.tx[0].raw[0].bindings, [U.bob]);
   assert.equal(cleared.length, 1);
   assert.equal(cleared[0].committed, true);
+});
+
+test('POST /: a failure reading the team back after the commit is logged and answers the known team, never a 500', async () => {
+  const { handlers, tables, errors } = mount({ breakAfterCommit: ['team_members'] });
+  const r = await call(handlers['POST /'], { acc: member(U.bob), body: { name: 'Ceramics', description: 'Kilns', color: 'violet' } });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.name, 'Ceramics');
+  assert.equal(r.body.color, 'violet');
+  assert.equal(r.body.description, 'Kilns');
+  assert.equal(r.body.member_count, 1);
+  assert.deepEqual(r.body.managers, [{ person_id: P.bob, full_name: 'Bob Member' }]);
+  assert.equal(r.body.is_manager, true);
+  assert.equal(r.body.team_id, tables.teams.find((t) => t.name === 'Ceramics').team_id);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /committed but reading it back failed/);
 });
 
 test('POST / defaults the colour to teal and an absent description to null', async () => {
@@ -470,6 +519,18 @@ test('PATCH /:id: a manager edits name, description and colour', async () => {
   assert.equal(r.body.color, 'amber');
   assert.equal(r.body.description, null);
   assert.equal(tables.teams[0].name, 'Additive Mfg');
+});
+
+test('PATCH /:id: a failure reading the team back after the commit is logged and answers what is known, never a 500', async () => {
+  const { handlers, tables, errors } = mount({ breakAfterCommit: ['team_members'] });
+  const r = await call(handlers['PATCH /:id'], { acc: member(U.ann), params: { id: T.additive }, body: { name: 'Renamed', color: 'pink' } });
+  assert.equal(r.status, 200);
+  assert.equal(tables.teams.find((t) => t.team_id === T.additive).name, 'Renamed');
+  assert.equal(r.body.team_id, T.additive);
+  assert.equal(r.body.name, 'Renamed');
+  assert.equal(r.body.color, 'pink');
+  assert.equal(r.body.description, 'Powder people');
+  assert.equal(errors.length, 1);
 });
 
 test('PATCH /:id: a non-manager (a plain member, or a stranger) is refused 403; an administrator may', async () => {
@@ -568,6 +629,16 @@ test('DELETE /:id: a mail failure never undoes the delete', async () => {
   assert.ok(warnings.length >= 1);
 });
 
+test('DELETE /:id: a failure after the commit (reading the owners for the mail) is logged and answers 200 deleted', async () => {
+  const { handlers, tables, mails, errors } = mount({ breakAfterCommit: ['people'] });
+  const r = await call(handlers['DELETE /:id'], { acc: member(U.ann), params: { id: T.additive } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { deleted: true, owners_mailed: 0 });
+  assert.equal(tables.teams.some((t) => t.team_id === T.additive), false);
+  assert.equal(mails.length, 0);
+  assert.equal(errors.length, 1);
+});
+
 test('DELETE /:id: HTML in the team name is escaped in the mail', async () => {
   const tables = baseTables();
   tables.teams[0].name = '<b>Additive</b>';
@@ -618,6 +689,16 @@ test('POST /:id/members: a team with no grants answers zeros; an owner with no l
   const { handlers, mails } = mount({ tables });
   await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
   assert.ok(mails.some((m) => m.to === 'cy@people.example'));
+});
+
+test('POST /:id/members: a failure after the commit (reading the owners for the mail) is logged and answers 201; no mail', async () => {
+  const { handlers, tables, mails, errors } = mount({ breakAfterCommit: ['people'] });
+  const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 });
+  assert.equal(tables.team_members.some((m) => m.person_id === P.gus), true);
+  assert.equal(mails.length, 0);
+  assert.equal(errors.length, 1);
 });
 
 test('POST /:id/members: is_manager adds a manager', async () => {
@@ -760,11 +841,19 @@ test('GET /pending lists only actionable rows on records the caller owns, groupe
   }
 });
 
-test('GET /pending: an administrator sees every actionable row; one that is not worth asking about (D2) is left out', async () => {
-  const { handlers } = mount({ notActionable: [['physical_samples', GRANT.s2, P.cy]] });
+test('GET /pending: an administrator sees only the records they own, like anyone; one that is not worth asking about (D2) is left out', async () => {
+  const none = mount();
+  assert.deepEqual((await call(none.handlers['GET /pending'], { acc: admin(U.admin) })).body, { items: [] }); // no person at all
+  const tables = baseTables();
+  tables.people.push({ person_id: P.adm, full_name: 'Ada Admin', email: 'ada@people.example', user_id: U.admin });
+  tables.physical_samples[1].owner_person_id = P.adm; // SM-002, edit grant, Cy pending
+  tables.physical_samples[2].owner_person_id = P.adm; // SM-003: Cy's row is declined
+  const { handlers } = mount({ tables });
   const r = await call(handlers['GET /pending'], { acc: admin(U.admin) });
   assert.equal(r.body.items.length, 1);
-  assert.deepEqual(keyed(r.body.items[0].records), ['project:PRJ1:investigator', 'sample:SM-001:view']);
+  assert.deepEqual(keyed(r.body.items[0].records), ['sample:SM-002:edit']); // not Eve's SM-001 or the project
+  const dropped = mount({ tables, notActionable: [['physical_samples', GRANT.s2, P.cy]] });
+  assert.deepEqual((await call(dropped.handlers['GET /pending'], { acc: admin(U.admin) })).body, { items: [] });
 });
 
 test('GET /pending: two joiners or two teams make separate items', async () => {
@@ -831,7 +920,22 @@ test('decide with records: only those, and each must be one the caller manages (
   assert.equal(other.tables.sample_access.length, 0);
 });
 
-test('decide: an administrator decides any record; a stranger with nothing of their own is 403', async () => {
+test('decide without records: an administrator acts only on records they own (403 when the queue holds none of theirs)', async () => {
+  const tables = baseTables();
+  tables.people.push({ person_id: P.adm, full_name: 'Ada Admin', email: 'ada@people.example', user_id: U.admin });
+  tables.physical_samples[1].owner_person_id = P.adm;
+  const mine = mount({ tables });
+  const r = await decide(mine.handlers, U.admin, { team_id: T.additive, person_id: P.cy, decision: 'approve' }, admin(U.admin));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.decided, 1);
+  assert.deepEqual(mine.decided.map((d) => d.team_access_id), [GRANT.s2]); // Eve's SM-001 and the project are left alone
+  const none = mount();
+  const refused = await decide(none.handlers, U.admin, { team_id: T.additive, person_id: P.cy, decision: 'approve' }, admin(U.admin));
+  assert.equal(refused.status, 403);
+  assert.deepEqual(none.decided, []);
+});
+
+test('decide with records: an administrator decides any single record; a stranger with nothing of their own is 403', async () => {
   const adm = mount();
   const r = await decide(adm.handlers, U.admin, { team_id: T.additive, person_id: P.cy, decision: 'approve', records: [{ collection: 'physical_samples', id: S.two }] }, admin(U.admin));
   assert.equal(r.status, 200);
@@ -876,6 +980,28 @@ test('decide: approving a declined row works (the owner changed their mind); the
   const f = await decide(failing.handlers, U.eve, { team_id: T.additive, person_id: P.cy, decision: 'approve' });
   assert.equal(f.status, 409);
   assert.equal(errorOf(f).extensions.code, 'NOTHING_TO_DECIDE');
+});
+
+test('decide: a failure after the commit (reading the team and joiner for the mail) is logged and answers 200 with what was decided', async () => {
+  const { handlers, decided, mails, errors } = mount({ breakAfterCommit: ['teams'] });
+  const r = await decide(handlers, U.eve, { team_id: T.additive, person_id: P.cy, decision: 'approve' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.decided, 2);
+  assert.equal(decided.length, 2);
+  assert.equal(mails.length, 0);
+  assert.equal(errors.length, 1);
+});
+
+test('decide: the same record listed twice is decided once', async () => {
+  const { handlers, decided } = mount();
+  const r = await decide(handlers, U.eve, {
+    team_id: T.additive, person_id: P.cy, decision: 'approve',
+    records: [{ collection: 'physical_samples', id: S.one }, { collection: 'physical_samples', id: S.one.toUpperCase() }, { collection: 'projects', id: PROJECT }, { collection: 'physical_samples', id: S.one }],
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.decided, 2);
+  assert.deepEqual(r.body.records, [{ collection: 'physical_samples', id: S.one }, { collection: 'projects', id: PROJECT }]);
+  assert.deepEqual(decided.map((d) => d.team_access_id), [GRANT.s1, GRANT.pr]); // team_decide ran once per record, no second NOTHING_TO_DECIDE
 });
 
 test('decide: a mail failure never undoes the approval', async () => {
