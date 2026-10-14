@@ -8,7 +8,11 @@
 import { reactive } from 'vue';
 import type { RouteLike, RouterLike } from './useIndexPage';
 
-/** A row chosen in picker mode: its key, its first column's text, and where it was on screen (null if not on this page). */
+/**
+ * A row chosen in picker mode: its key, its first column's text, and where it was on screen. `rect` is null when the row
+ * was not drawn at the moment of confirming (ticked on another page, or filtered out since): a caller must cope with
+ * that (a fly-in has nowhere to start from, so it just places the card).
+ */
 export interface PickedRow {
 	id: string;
 	code: string;
