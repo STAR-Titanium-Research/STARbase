@@ -1007,6 +1007,14 @@ migration 141 prints about ownerless records.
   `16-sidebar-b2` against it. All three pass; a failure in 14 or 15 is a regression from the sidebar change. Since
   explorer sidebar B2. PR #262.
 
+- [ ] **C-card-1 — Campaign cards match the project cards.** In STARbase open **Campaigns**, switch to **Cards**, and
+  open **Projects** in another tab. The campaign cards sit on the page ground (no white panel around the grid), raised
+  and as wide as the project cards, with the type tag and a coloured status pill beside the code, "Owner: …" (or
+  "not set") and the dates (or "No dates set") on the meta line, then the counts and the progress bar. While the
+  counts load they show dashes. Cards of one row share a height and rows do not overlap. Open a project with
+  campaigns: its Campaigns panel shows the same card as a tile inside the panel. Check light and dark. Since
+  branch `claude/serene-fermi-6nxf5e` (campaign cards follow the Projects design).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and
