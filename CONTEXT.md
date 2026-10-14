@@ -97,7 +97,13 @@ Several operations, or several tests, done together as one job on several sample
 polished in one run). Each sample still has its own operation or test record; the batch is what ties
 them together. A batch someone recorded is a **batch**; a group the process map only guesses from
 matching method, machine, day and recipe is a **probable batch**, and is shown as such.
-_Avoid_: run (a FAST run is one operation), group, set
+_Avoid_: run (a FAST run is one operation), group, set; and "batch" for a FAST run, even though the
+FAST press calls it that
+
+**FAST run**:
+One press cycle on the FAST (spark plasma sintering) machine, identified by its **FAST run #**. The
+machine's own software calls a run a "batch"; in the database it is never called that.
+_Avoid_: batch, FAST batch, cycle
 
 ## Relationships
 
@@ -124,3 +130,6 @@ _Avoid_: run (a FAST run is one operation), group, set
 - "Lineage graph" named both the parent → child links between samples and the page that drew them
   with everything else. Resolved: **lineage** is only the link between samples; the page is the
   **process map**.
+- "Batch" meant both a FAST press cycle (the machine's word, and the old "Batch #" field) and several
+  samples done together. Resolved: the press cycle is a **FAST run** (its field is "FAST run #"); a
+  **batch** is only several samples done together.
