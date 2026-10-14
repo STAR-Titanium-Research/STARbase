@@ -14,6 +14,7 @@ import { createHoverStack, type Hovered } from './model/hoverStack';
 import { fanData, fanKindOf, fanNodeIds, fanPage, fanRowIds, focusPlan, hasFan, mergeProcessData, withFanPage, withSideFan } from './model/fans';
 import { loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './model/loadFamily';
 import { shownNodes } from './model/reach';
+import { flipKeys, keysOfGroup, nodesWithKey, resolveSelection, selectionKey, stableKeys } from './model/viewState';
 import { recordInfo, type RecordInfo } from './model/recordInfo';
 import type { ContainerNode, MapNode, ProcessData, ProcessGraph, Ref } from './model/types';
 import { KINDS, kindOfCollection } from './nodes/kinds';
@@ -194,7 +195,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   function setReach(r: Reach): void {
     reach.value = r;
     // A fan has no reach, and the cards ＋ opened from a fan item (a side fan's) are not part of any reach: they stay.
-    if (!data.value?.fan && !data.value?.sideFans?.length) revealed.value = new Set();
+    if (!data.value?.fan && !data.value?.sideFans?.length) revealedKeys.value = new Set();
     // Whether the cap is what limits the map now, from what is drawn (kept cards may still fill it).
     capped.value = shown.value.size >= CARD_CAP;
     writeUrl({ reach: String(r) });
@@ -225,11 +226,13 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const error = ref('');
   const data = shallowRef<ProcessData | null>(null);
   const defs = shallowRef<DefsByKind>({ operation: FALLBACK_RELATIONS.operation, test: FALLBACK_RELATIONS.test });
-  const unfolded = ref<ReadonlySet<string>>(new Set());
-  const moreOpen = ref<ReadonlySet<string>>(new Set());
+  // What the person did to cards is kept under stable keys (model/viewState.ts), not node ids: the Probable
+  // batches chip regroups rows into containers with other ids, and the person's work must survive that.
+  const unfoldedKeys = ref<ReadonlySet<string>>(new Set());
+  const moreOpenKeys = ref<ReadonlySet<string>>(new Set());
   /** Cards the person revealed with ＋ beyond what the reach shows. */
-  const revealed = ref<ReadonlySet<string>>(new Set());
-  const selectedId = ref<string | null>(null);
+  const revealedKeys = ref<ReadonlySet<string>>(new Set());
+  const selectedKey = ref<string | null>(null);
   /** The last expand could not add everything: the 300-card cap (spec D22) stopped it. */
   const capped = ref(false);
   /** Counts focus loads: the canvas starts afresh on a new one, not on an expand (which changes `data` too). */
@@ -308,16 +311,16 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     loadToken = token;
     generation.value++;
     data.value = null;
-    unfolded.value = new Set();
-    moreOpen.value = new Set();
-    revealed.value = new Set();
+    unfoldedKeys.value = new Set();
+    moreOpenKeys.value = new Set();
+    revealedKeys.value = new Set();
     capped.value = false;
     notice.value = '';
     familyLoaded = new Set();
     fanPages = new Map();
     opening.clear(); // a key of the old focus must not swallow a click
     paging.clear();
-    selectedId.value = null;
+    selectedKey.value = null;
     clearHover();
     error.value = '';
     const f = focus.value;
@@ -339,7 +342,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       data.value = loaded.data;
       if (plan === 'fan') fanPages.set(`${f.collection}:${f.id}`, 1);
       else familyLoaded = new Set(loaded.data.samples.map((s) => s.id));
-      selectedId.value = focusNodeId.value || null;
+      selectedKey.value = focusNodeId.value || null;
       status.value = 'ready';
     } catch (e) {
       if (!gate.isCurrent(token)) return;
@@ -361,7 +364,8 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
       d.tests.filter((t) => !collapsed.has(t.id)),
       { probable: probable.value },
     );
-    return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded: unfolded.value });
+    const unfolded = new Set(groups.filter((g) => keysOfGroup(g).some((k) => unfoldedKeys.value.has(k))).map((g) => g.id));
+    return buildGraph(d, groups, { slots: (row, kind) => formSlots(row, kind, defs.value[kind]), unfolded });
   }
   const graph = computed<ProcessGraph | null>(() => (data.value ? graphOf(data.value) : null));
   // A rebuilt graph removes elements that never see mouseleave.
@@ -402,6 +406,11 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const partial = computed(() => !!data.value?.truncated || fitted.value.clamped || capped.value);
 
   const nodeById = computed(() => new Map((graph.value?.nodes ?? []).map((n) => [n.id, n])));
+  /** The nodes of the graph the person revealed or opened, by their stable keys. */
+  const revealed = computed(() => nodesWithKey(graph.value?.nodes ?? [], revealedKeys.value));
+  const moreOpen = computed<ReadonlySet<string>>(() => nodesWithKey(graph.value?.nodes ?? [], moreOpenKeys.value));
+  /** The selected node's id in the graph as it is now. */
+  const selectedId = computed(() => resolveSelection(selectedKey.value, graph.value?.nodes ?? []));
 
   /** The cards a Show chip never hides: the focus, and the record each fan hangs from (a remembered "Tool" chip must not empty a tool's fan). */
   const pinned = computed(() => {
@@ -500,7 +509,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   let centreCount = 0;
   function select(id: string, opts: { centre?: boolean } = {}): void {
-    selectedId.value = id;
+    selectedKey.value = selectionKey(id, graph.value?.nodes ?? []);
     if (opts.centre) centreRequest.value = { id, n: ++centreCount };
   }
 
@@ -509,7 +518,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   function admit(ids: Iterable<string>, force: Iterable<string> = []): void {
     // Cards that were on the map before the expand (the fan items a merged family now holds in full) stay whatever the cap says.
     const kept = [...force].filter((id) => nodeById.value.has(id) && !shown.value.has(id));
-    if (kept.length) revealed.value = new Set([...revealed.value, ...kept]);
+    if (kept.length) reveal(kept);
     const add: string[] = [];
     for (const id of ids) {
       const n = nodeById.value.get(id);
@@ -518,7 +527,16 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     }
     const room = Math.max(0, CARD_CAP - shown.value.size);
     if (add.length > room) capped.value = true;
-    if (room && add.length) revealed.value = new Set([...revealed.value, ...add.slice(0, room)]);
+    if (room && add.length) reveal(add.slice(0, room));
+  }
+  /** Remembers these cards as revealed, under keys that survive a regrouping of the rows. */
+  function reveal(ids: Iterable<string>): void {
+    const next = new Set(revealedKeys.value);
+    for (const id of ids) {
+      const n = nodeById.value.get(id);
+      if (n) for (const k of stableKeys(n)) next.add(k);
+    }
+    revealedKeys.value = next;
   }
 
   /** The record inside a card (an Inside slot) that an action id (`<collection>:<id>`) names, and the container holding it. */
@@ -667,13 +685,14 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     hint({ anchor: id });
   }
 
-  const flip = (set: ReadonlySet<string>, id: string) => {
-    const next = new Set(set);
-    if (!next.delete(id)) next.add(id);
-    return next;
+  const toggleRows = (id: string) => {
+    const n = nodeById.value.get(id);
+    if (n) unfoldedKeys.value = flipKeys(unfoldedKeys.value, n);
   };
-  const toggleRows = (id: string) => void (unfolded.value = flip(unfolded.value, id));
-  const toggleMore = (id: string) => void (moreOpen.value = flip(moreOpen.value, id));
+  const toggleMore = (id: string) => {
+    const n = nodeById.value.get(id);
+    if (n) moreOpenKeys.value = flipKeys(moreOpenKeys.value, n);
+  };
 
   /**
    * The hover tooltip (spec D17). A wire: its lines are on the hovered hit path as `data-tip`. A socket:

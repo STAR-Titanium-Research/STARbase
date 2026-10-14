@@ -1202,3 +1202,75 @@ describe('a piece outside the family (C1)', () => {
     expect(map.graph.value?.nodes.find((n) => n.id === 's:b')).toMatchObject({ ref: { code: 'S-1B' } });
   });
 });
+
+describe('toggling Probable batches keeps what the person opened (I2)', () => {
+  const DAY = '2026-09-28T09:00:00Z';
+  async function openedCut() {
+    recordRef.mockResolvedValue(TOOL);
+    usedIn.mockResolvedValue({ items: toolOps(3), total: 3 });
+    const { map } = setup({ focus: 'tools:t1' });
+    await settle();
+    // x0 was cut three times the same day: its family groups u0 with its two siblings
+    family.mockResolvedValue(
+      mkData({
+        samples: ['x0', 'y0', 'y0b', 'y0c'].map((id) => mkSample(id)),
+        operations: [
+          mkOp({ id: 'u0', code: 'OP-0', methodName: 'Turning', date: DAY, sampleId: 'x0', outputSampleId: 'y0' }),
+          mkOp({ id: 'u0b', methodName: 'Turning', date: DAY, sampleId: 'x0', outputSampleId: 'y0b' }),
+          mkOp({ id: 'u0c', methodName: 'Turning', date: DAY, sampleId: 'x0', outputSampleId: 'y0c' }),
+        ],
+      }),
+    );
+    await map.expand('op:u0');
+    await settle();
+    return map;
+  }
+
+  it('the cards plus revealed are still drawn after the chip is turned off and on', async () => {
+    const map = await openedCut();
+    const group = containersOf(map).find((c) => c.group.rowIds.includes('u0'))!;
+    expect(group.probable).toBe(true);
+    expect(map.shown.value.has(group.id)).toBe(true);
+    map.setProbable(false);
+    await settle();
+    for (const id of ['op:u0', 'op:u0b', 'op:u0c', 's:x0', 's:y0']) expect(map.shown.value.has(id), `${id} off`).toBe(true);
+    map.setProbable(true);
+    await settle();
+    expect(map.shown.value.has(group.id)).toBe(true);
+    expect(map.shown.value.has('s:y0')).toBe(true);
+  });
+
+  it('the selection follows its record: a container stays selected as the op it holds, a sample as itself', async () => {
+    const map = await openedCut();
+    const group = containersOf(map).find((c) => c.group.rowIds.includes('u0'))!;
+    map.select(group.id);
+    map.setProbable(false);
+    await settle();
+    expect(map.selectedId.value).toBe('op:u0');
+    expect(map.selected.value?.ref.id).toBe('u0');
+    map.select('s:y0');
+    map.setProbable(true);
+    await settle();
+    expect(map.selectedId.value).toBe('s:y0');
+  });
+
+  it('an unfolded container and an opened "more" stay open across the toggle', async () => {
+    const data = mkData({
+      samples: ['p', 'c0', 'c1', 'c2', 'c3'].map((id) => mkSample(id)),
+      operations: ['c0', 'c1', 'c2', 'c3'].map((c, i) => mkOp({ id: `k${i}`, sampleId: 'p', outputSampleId: c, date: DAY, methodName: 'Cut' })),
+    });
+    family.mockResolvedValue(data);
+    const { map } = setup({ focus: 'physical_samples:p' });
+    await settle();
+    const group = containersOf(map)[0];
+    map.toggleRows(group.id);
+    map.toggleMore(group.id);
+    expect(containersOf(map)[0].bundled).toBe(false);
+    map.setProbable(false);
+    // four single operations now: one of them still reports the opened "more"
+    expect(containersOf(map).some((c) => map.moreOpen.value.has(c.id))).toBe(true);
+    map.setProbable(true);
+    expect(containersOf(map)[0].bundled).toBe(false);
+    expect(map.moreOpen.value.has(containersOf(map)[0].id)).toBe(true);
+  });
+});
