@@ -79,6 +79,66 @@ The section for the lab's reference data that records point to: equipment, mater
 insert types, ISO classes, methods, manufacturers, facilities, prep recipes, etchants, FAST recipes.
 _Avoid_: Resources, lookups, master data, Kit
 
+### People and access
+
+**Person**:
+Anyone attributed on a record: a researcher, an operator, or both. A person may or may not have a login.
+_Avoid_: user, account, member (for this)
+
+**Login**:
+The means of signing in to STARbase. A login belongs to at most one person; a person may have none.
+_Avoid_: user, account
+
+**Researcher** / **Operator**:
+What kind of work a person does; a person can be both. Never called a role.
+_Avoid_: role, type
+
+**Former**:
+A person who has left the group. Their records and history stay; being Former changes nothing else by itself.
+_Avoid_: inactive, archived, deleted
+
+**Suspended**:
+A login that can no longer sign in. Independent of Former.
+_Avoid_: disabled, deactivated, Former
+
+**Account role**:
+What a login may administer: Administrator, Lab Admin or Lab Member. Only an Administrator changes one.
+_Avoid_: role (alone), permission, user role
+
+**Access level**:
+What one person or team may do with one record: Can view, Can edit or Owner; on a project, Investigator or
+Principal investigator in their place.
+_Avoid_: role, permission, share type
+
+**Owner**:
+Who decides who has access to a record and may transfer or restrict it: a person, or a team for a sample,
+campaign, operation or test. A project's owner is its principal investigator, always a person.
+_Avoid_: creator, author
+
+**Restricted**:
+A record visible only to its owner, the people and teams listed on it, and admins; it hides everything under it.
+_Avoid_: private, hidden, locked
+
+**Team**:
+A named set of people, visible to everyone, that can be given an access level on a record or own one. A team
+cannot sign in and never acts by itself.
+_Avoid_: group (that is the STAR group as a whole), team account, role
+
+**Team manager**:
+A team member who may add and remove members and name other managers. For a record the team owns, the team's
+managers act as its owner.
+_Avoid_: team owner, team admin
+
+**Pending member**:
+A team member whose access to one record shared with the team waits for that record's owner, because they joined
+after it was shared and joining would raise their access to it.
+_Avoid_: invited, requested
+
+**Trust future members**:
+A choice on one record's team entry: people who join the team later get that record's access level without the
+owner approving them.
+_Avoid_: auto-approve, open team
+
 ## Relationships
 
 - **STARbase** contains **Home**, the **index pages**, the **record pages**, the **task screens**
@@ -91,6 +151,13 @@ _Avoid_: Resources, lookups, master data, Kit
 - A **pin** points at one page, saved view or record. A pin to something the person can no longer see
   is kept but not shown.
 
+- A **person** has at most one **login**; a **login** has one **account role**.
+- A **team** has one or more **team managers**; its members are **people**, never other teams.
+- A record has exactly one **owner** and any number of people and teams with an **access level**; someone's
+  access is the highest level any path gives them.
+- Removing someone from a **team** takes its access away at once; adding someone gives access only where the
+  owner **trusts future members** or approves them.
+
 ## Flagged ambiguities
 
 - "The frontend", "the head" and "the Explorer" were all used for this app; "Home" was used both
@@ -101,3 +168,8 @@ _Avoid_: Resources, lookups, master data, Kit
   section is **More**.
 - Pins on Home ("Frequently used") and pins in the sidebar were heading towards two different ideas.
   Resolved: one **pin**.
+- "Role" meant the login's Directus role, the access level on a record, team manager vs member, and
+  researcher vs operator. Resolved: **account role**, **access level**, **team manager**, and
+  **Researcher** / **Operator** (never "role").
+- "Group", "team" and "team account" were used for a set of people given access together. Resolved: a
+  **team**, which is not an account; "group" means the STAR group.

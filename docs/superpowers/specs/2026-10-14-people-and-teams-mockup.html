@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>People and Teams</title>
+<style>
+:root{--bg:#f3f5f8;--surface:#fff;--tile:#f0f2f5;--line:#e3e7ec;--fg:#17202b;--dim:#5f6a78;--accent:#1d4ed8;--tint:#e6edfd;--team:#0f766e;--teamt:#dcf2ef;--warn:#9a5b00;--r:12px}
+@media (prefers-color-scheme:dark){:root{--bg:#10151c;--surface:#18202a;--tile:#202a35;--line:#2a3542;--fg:#e6ebf1;--dim:#9aa6b4;--accent:#7aa2ff;--tint:#1f2c4a;--team:#5fd3c3;--teamt:#163532;--warn:#f0b65a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;padding:32px 16px 80px}
+.mock{max-width:880px;margin:0 auto 56px}
+.label{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--dim);margin:0 0 4px}
+.cap{color:var(--dim);margin:0 0 14px;max-width:70ch}
+h1{font-size:20px;margin:0 0 4px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+.top{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.top .grow{flex:1}
+.seg{display:inline-flex;background:var(--tile);border-radius:8px;padding:2px}
+.seg b{padding:4px 12px;border-radius:6px;font-weight:600;color:var(--dim)}
+.seg b.on{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.search{height:32px;flex:0 1 240px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--dim);padding:0 10px;display:flex;align-items:center}
+.btn{height:32px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--fg);font:inherit;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.btn.p{background:var(--accent);border-color:var(--accent);color:#fff}
+.link{color:var(--accent);font-weight:600}
+.attn{font-size:12px;color:var(--warn);margin:-4px 0 10px}
+.row{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row.sel{background:var(--tile)}
+.row .main{flex:1;min-width:0}
+.av{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--tint);color:var(--accent);font-weight:700;font-size:11px;flex:0 0 auto}
+.av.t{border-radius:9px;background:var(--teamt);color:var(--team)}
+.av.s{width:24px;height:24px;font-size:9px}
+.nm{font-weight:600}
+.sub{color:var(--dim);font-size:12px}
+.meta{color:var(--dim);font-size:12px;white-space:nowrap}
+.flag{font-size:12px;color:var(--warn);white-space:nowrap}
+.rel{position:relative}
+.pop{position:absolute;z-index:5;width:250px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:12px}
+.pop ul{list-style:none;margin:8px 0 0;padding:0}
+.pop li{display:flex;gap:8px;align-items:center;padding:3px 0}
+.pop li .r{margin-left:auto;font-size:11px;color:var(--dim)}
+.pop .foot{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:12px;text-align:right}
+.split{display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start}
+@media(max-width:820px){.split{grid-template-columns:1fr}}
+.side{padding:16px}
+.side .head{display:flex;gap:12px;align-items:center;margin-bottom:16px}
+.side .head .av{width:44px;height:44px;font-size:14px}
+.f{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-top:1px solid var(--line)}
+.f:first-of-type{border-top:0}
+.f span:first-child{color:var(--dim)}
+select{height:28px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--fg);font:inherit;padding:0 6px}
+h3{font-size:12px;font-weight:600;color:var(--dim);margin:18px 0 6px}
+.tchip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--team);background:var(--teamt);border-radius:99px;padding:2px 9px;margin:0 4px 4px 0}
+.dlg{max-width:520px}
+.dlg header{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:600;font-size:15px}
+.dlg .body{padding:8px 16px 4px}
+.dlg footer{padding:10px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end}
+.inp{height:34px;border:1px solid var(--line);border-radius:8px;padding:0 10px;display:flex;align-items:center;color:var(--dim);margin:8px 0}
+.dlg .row{padding:9px 0}
+.qs{max-width:880px;margin:0 auto;color:var(--fg)}
+.qs ol{padding-left:20px;margin:6px 0}.qs li{margin:4px 0}
+.filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 10px}.fc{height:28px;padding:0 10px;border:1px solid var(--line);border-radius:99px;background:var(--surface);font-size:12px;font-weight:600;color:var(--dim);display:inline-flex;align-items:center;gap:5px}.fc.on{background:var(--tint);border-color:transparent;color:var(--accent)}.fc .n{opacity:.7}.dd{height:28px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:12px;color:var(--fg);display:inline-flex;align-items:center;gap:4px}.dd::after{content:"▾";color:var(--dim)}.sep{flex:1}
+</style>
+</head>
+<body>
+
+<div class="mock">
+  <h1>People and Teams</h1>
+  <p class="cap">Second pass, simpler. Extra detail only appears when you open something.</p>
+</div>
+
+<!-- 1 -->
+<div class="mock">
+  <p class="label">1 · People list (admin)</p>
+  <p class="cap">Quick filter chips with counts, plus Role, Team and Sort menus. Anything that needs attention gets one quiet line, and clicking review filters the list to it. Each row shows only the person, their role and when they last signed in. A warning appears on a row only when something is off.</p>
+  <div class="top">
+    <div class="seg"><b class="on">People</b><b>Teams</b></div>
+    <div class="grow"></div>
+    <div class="search">Search…</div>
+    <button class="btn p">Invite</button>
+  </div>
+  <div class="filters">
+    <span class="fc on">Everyone <span class="n">41</span></span><span class="fc">Researchers <span class="n">24</span></span><span class="fc">Operators <span class="n">11</span></span><span class="fc">No login <span class="n">9</span></span><span class="fc">Former <span class="n">6</span></span>
+    <span class="sep"></span>
+    <span class="dd">Role: any</span><span class="dd">Team: any</span><span class="dd">Sort: name</span>
+  </div>
+  <p class="attn">3 things need attention · <span class="link">review</span></p>
+  <div class="panel">
+    <div class="row sel"><span class="av">AH</span><div class="main"><div class="nm">Alex Hart</div><div class="sub">Researcher</div></div><span class="meta">Lab Member</span><span class="meta" style="width:90px;text-align:right">2 h ago</span></div>
+    <div class="row"><span class="av">BK</span><div class="main"><div class="nm">Bea Kowal</div><div class="sub">Researcher</div></div><span class="meta">Administrator</span><span class="meta" style="width:90px;text-align:right">yesterday</span></div>
+    <div class="row"><span class="av">CO</span><div class="main"><div class="nm">Chidi Okafor</div><div class="sub">Researcher</div></div><span class="flag">Invite not accepted</span><span class="meta" style="width:90px;text-align:right">—</span></div>
+    <div class="row"><span class="av">DW</span><div class="main"><div class="nm">Dan Wright</div><div class="sub">Operator</div></div><span class="meta">No login</span><span class="meta" style="width:90px;text-align:right">—</span></div>
+  </div>
+</div>
+
+<!-- 2 -->
+<div class="mock">
+  <p class="label">2 · Clicking a person</p>
+  <p class="cap">Opens a side panel with three short sections. "Access" shows only counts. Clicking a count lists those records.</p>
+  <div class="split">
+    <div class="panel" style="padding:14px;color:var(--dim);min-height:120px">list</div>
+    <div class="panel side">
+      <div class="head"><span class="av">AH</span><div><div class="nm" style="font-size:15px">Alex Hart</div><div class="sub">a.hart@sheffield.ac.uk</div></div></div>
+      <div class="f"><span>Role</span><select><option>Lab Member</option></select></div>
+      <div class="f"><span>Login</span><span>Active · <span class="link">Suspend</span></span></div>
+      <div class="f"><span>Last sign-in</span><span>2 h ago</span></div>
+      <h3>Teams</h3>
+      <span class="tchip">Additive</span><span class="tchip">FAST</span>
+      <h3>Access</h3>
+      <div class="f"><span>Owns</span><span class="link">14 records</span></div>
+      <div class="f"><span>Shared with them</span><span class="link">9 records</span></div>
+      <div class="f"><span>Through teams</span><span class="link">38 records</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- 3 -->
+<div class="mock" style="margin-bottom:190px">
+  <p class="label" id="m3">3 · Sharing a record with a team</p>
+  <p class="cap">The existing "Who has access" dialog. A team is added like a person, and hovering over, focusing or tapping its row shows the members.</p>
+  <div class="panel dlg rel">
+    <header>Who has access to C-031 Laser sweep</header>
+    <div class="body">
+      <div class="inp">Add people or teams</div>
+      <div class="row"><span class="av">BK</span><div class="main nm">Bea Kowal</div><span class="meta">Owner</span></div>
+      <div class="row"><span class="av t">AD</span><div class="main"><div class="nm">Additive</div><div class="sub">Team · 6 members</div></div><select><option>Can edit</option></select></div>
+      <div class="row"><span class="av">CO</span><div class="main nm">Chidi Okafor</div><select><option>Can view</option></select></div>
+    </div>
+    <div class="pop" style="left:56px;top:218px">
+      <div style="display:flex;gap:8px;align-items:center"><span class="av t s">AD</span><b>Additive</b><span class="sub">6 members</span></div>
+      <ul>
+        <li><span class="av s">BK</span>Bea Kowal<span class="r">manager</span></li>
+        <li><span class="av s">AH</span>Alex Hart<span class="r">manager</span></li>
+        <li><span class="av s">FN</span>Femi Noor</li>
+        <li><span class="av s">GS</span>Greta Sun</li>
+        <li><span class="av s">+2</span><span class="sub">and 2 more</span></li>
+      </ul>
+      <div class="foot"><span class="link">Open team</span></div>
+    </div>
+    <footer><button class="btn p">Done</button></footer>
+  </div>
+</div>
+
+<!-- 4 -->
+<div class="mock">
+  <p class="label">4 · A team</p>
+  <p class="cap">Just the members. Managers can add and remove people.</p>
+  <div class="panel side" style="max-width:520px">
+    <div class="head"><span class="av t">AD</span><div style="flex:1"><div class="nm" style="font-size:15px">Additive</div><div class="sub">6 members · <span class="link">38 records</span></div></div><button class="btn">Add member</button></div>
+    <div class="row" style="padding:8px 0"><span class="av s">BK</span><div class="main">Bea Kowal</div><span class="meta">manager</span></div>
+    <div class="row" style="padding:8px 0"><span class="av s">AH</span><div class="main">Alex Hart</div><span class="meta">manager</span></div>
+    <div class="row" style="padding:8px 0"><span class="av s">FN</span><div class="main">Femi Noor</div></div>
+    <div class="row" style="padding:8px 0"><span class="av s">GS</span><div class="main">Greta Sun</div></div>
+  </div>
+</div>
+
+<div class="qs"><b>Agreed 2026-10-14.</b> The People list keeps chips and Role, Team and Sort menus. People and Teams are a switch. Teams also get a colour (fixed palette) and an optional logo. See the spec for everything else.</div>
+</body>
+</html>
