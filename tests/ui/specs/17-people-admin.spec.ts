@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
-import { D1_LOCAL, STAR_BASE, account, adminApi, signInStarbase } from '../starbase/target';
+import { D1_BASE, D1_LOCAL, STAR_BASE, account, adminApi, pointAtD1, signInStarbase } from '../starbase/target';
 
 // The admin People page (People 1: d1-people-admin + STARbase /people and /accept-invite), in a real browser against the
 // d1-starbase preview, ports layout, same setup as spec 14 (tests/ui/README.md). The preview overlay needs d1-people-admin and
@@ -33,6 +33,19 @@ async function memberLogin(playwright: Parameters<typeof adminApi>[0]): Promise<
 		await anon.dispose();
 	}
 }
+// A login with no person, so the attention item login_without_person exists whatever the copy holds. d1-person-link makes a person for
+// every new login; this deletes it. Remove the login with removeOrphanLogin.
+async function orphanLogin(api: APIRequestContext): Promise<{ userId: string; email: string }> {
+	const email = `e2e-orphan-${unique()}@example.com`;
+	const made = await api.post(`${D1_LOCAL}/users`, { data: { email, status: 'active' } });
+	expect(made.ok(), 'create a login without a person').toBeTruthy();
+	const userId = (await made.json()).data.id as string;
+	const linkedIds = async () => ((await (await api.get(`${D1_LOCAL}/items/people?filter[user_id][_eq]=${userId}&fields=person_id`)).json()).data as { person_id: string }[]).map((r) => r.person_id);
+	await expect.poll(async () => (await linkedIds()).length).toBe(1);
+	for (const id of await linkedIds()) expect((await api.delete(`${D1_LOCAL}/items/people/${id}`)).ok(), 'delete the auto-made person').toBeTruthy();
+	return { userId, email };
+}
+const removeOrphanLogin = (api: APIRequestContext, userId: string) => api.delete(`${D1_LOCAL}/users/${userId}`);
 const row = (page: Page, text: string | RegExp) => page.locator('.prow', { hasText: text }).first();
 const panel = (page: Page, name: string) => page.getByRole('region', { name, exact: true });
 async function openPeople(page: Page, query = ''): Promise<void> {
@@ -109,16 +122,8 @@ test('admin: chips and Sort change the URL and survive reload', async ({ page })
 
 test('admin: the attention line opens a filtered list', async ({ page, playwright }) => {
 	const api = await adminApi(playwright);
-	const email = `e2e-orphan-${unique()}@example.com`;
-	// A login with no person: the attention item login_without_person.
-	const made = await api.post(`${D1_LOCAL}/users`, { data: { email, status: 'active' } });
-	expect(made.ok(), 'create a login without a person').toBeTruthy();
-	const userId = (await made.json()).data.id as string;
+	const { userId, email } = await orphanLogin(api);
 	try {
-		// d1-person-link makes a person for every new login; delete it so the login really has none.
-		await expect.poll(async () => (await (await api.get(`${D1_LOCAL}/items/people?filter[user_id][_eq]=${userId}&fields=person_id`)).json()).data.length).toBe(1);
-		const linked = (await (await api.get(`${D1_LOCAL}/items/people?filter[user_id][_eq]=${userId}&fields=person_id`)).json()).data[0].person_id as string;
-		expect((await api.delete(`${D1_LOCAL}/items/people/${linked}`)).ok(), 'delete the auto-made person').toBeTruthy();
 		await signInStarbase(page, 'admin');
 		await openPeople(page);
 		const line = page.locator('.attn');
@@ -139,7 +144,7 @@ test('admin: the attention line opens a filtered list', async ({ page, playwrigh
 		await page.locator('.attn').getByRole('button', { name: 'clear' }).click();
 		await expect(page).not.toHaveURL(/attn=/);
 	} finally {
-		await api.delete(`${D1_LOCAL}/users/${userId}`);
+		await removeOrphanLogin(api, userId);
 		await api.dispose();
 	}
 });
@@ -210,7 +215,7 @@ test('admin: suspend and reactivate the member login; the member is signed out',
 		expect((await (await api.get(`${D1_LOCAL}/users/${userId}?fields=status`)).json()).data.status).toBe('suspended');
 
 		// The member's next request is signed out: its session rows are gone, so the API says 401 and STARbase goes to sign-in.
-		const status = await mpage.evaluate(async (d1) => (await fetch(`${d1}/users/me`, { credentials: 'include' })).status, D1_LOCAL);
+		const status = await mpage.evaluate(async (d1) => (await fetch(`${d1}/users/me`, { credentials: 'include' })).status, D1_BASE);
 		expect(status, "the member's next request").toBe(401);
 		await mpage.reload();
 		await expect(mpage).toHaveURL(/\/signin/, { timeout: 30_000 });
@@ -265,7 +270,7 @@ test('admin: invite a new person; the row says "Invite not accepted"; /accept-in
 		const anon = await browser.newContext();
 		try {
 			const ap = await anon.newPage();
-			await ap.route(`${STAR_BASE}/config.json`, (route) => route.fulfill({ json: { directusUrl: 'http://127.0.0.1:18057' } }));
+			await pointAtD1(anon);
 			await ap.goto(`${STAR_BASE}/accept-invite?token=bogus`);
 			await expect(ap.getByRole('heading', { name: 'Set your password' })).toBeVisible();
 			await ap.getByLabel('New password', { exact: true }).fill('Bogus-Passw0rd-123!');
@@ -326,51 +331,56 @@ test('member: no attention line, no Role menu; own row opens the panel; the admi
 test('Esc: a focused select, the Edit dialog and the attention menu each keep the panel open; then Esc closes it and focus returns to the row', async ({ page, playwright }) => {
 	const api = await adminApi(playwright);
 	const { personId } = await memberIds(api);
-	await api.dispose();
-	await signInStarbase(page, 'admin');
-	await openPeople(page);
-	const memberRow = row(page, MEMBER_NAME);
-	await memberRow.click();
-	const p = panel(page, MEMBER_NAME);
-	await expect(p).toBeVisible();
-	await expect(page).toHaveURL(new RegExp(`person=${personId}`));
+	const { userId } = await orphanLogin(api); // the attention menu needs at least one attention item
+	try {
+		await signInStarbase(page, 'admin');
+		await openPeople(page);
+		const memberRow = row(page, MEMBER_NAME);
+		await memberRow.click();
+		const p = panel(page, MEMBER_NAME);
+		await expect(p).toBeVisible();
+		await expect(page).toHaveURL(new RegExp(`person=${personId}`));
 
-	// 1. A select with focus (the panel's Role select, then the list's Sort select): Esc leaves the panel open. STARbase's selects are
-	//    native <select>s, whose popup a headless browser does not draw, so "open" is the focused state here.
-	const role = p.locator('select.role');
-	await role.focus();
-	await page.keyboard.press('Escape');
-	await expect(p).toBeVisible();
-	const sort = page.locator('select').filter({ hasText: 'Sort: Name' });
-	await sort.focus();
-	await page.keyboard.press('Escape');
-	await expect(p).toBeVisible();
+		// 1. A select with focus (the panel's Role select, then the list's Sort select): Esc leaves the panel open. STARbase's selects are
+		//    native <select>s, whose popup a headless browser does not draw, so "open" is the focused state here.
+		const role = p.locator('select.role');
+		await role.focus();
+		await page.keyboard.press('Escape');
+		await expect(p).toBeVisible();
+		const sort = page.locator('select').filter({ hasText: 'Sort: Name' });
+		await sort.focus();
+		await page.keyboard.press('Escape');
+		await expect(p).toBeVisible();
 
-	// 2. The Edit dialog: Esc closes only the dialog; the panel stays; focus goes back to Edit.
-	const edit = p.getByRole('button', { name: 'Edit', exact: true });
-	await edit.click();
-	const dialog = page.getByRole('dialog');
-	await expect(dialog).toBeVisible();
-	await page.keyboard.press('Escape');
-	await expect(dialog).toBeHidden();
-	await expect(p).toBeVisible();
-	await expect(edit).toBeFocused();
+		// 2. The Edit dialog: Esc closes only the dialog; the panel stays; focus goes back to Edit.
+		const edit = p.getByRole('button', { name: 'Edit', exact: true });
+		await edit.click();
+		const dialog = page.getByRole('dialog');
+		await expect(dialog).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(dialog).toBeHidden();
+		await expect(p).toBeVisible();
+		await expect(edit).toBeFocused();
 
-	// 3. The attention menu: Esc closes only the menu; the panel stays; focus goes back to "review".
-	const review = page.locator('.attn').getByRole('button', { name: 'review' });
-	await review.click();
-	const menu = page.locator('[data-open-menu]');
-	await expect(menu).toBeVisible();
-	await page.keyboard.press('Escape');
-	await expect(menu).toBeHidden();
-	await expect(p).toBeVisible();
-	await expect(review).toBeFocused();
+		// 3. The attention menu: Esc closes only the menu; the panel stays; focus goes back to "review".
+		const review = page.locator('.attn').getByRole('button', { name: 'review' });
+		await review.click();
+		const menu = page.locator('[data-open-menu]');
+		await expect(menu).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(menu).toBeHidden();
+		await expect(p).toBeVisible();
+		await expect(review).toBeFocused();
 
-	// 4. Nothing else is open: Esc closes the panel, drops ?person= and puts focus back on the row.
-	await page.keyboard.press('Escape');
-	await expect(p).toBeHidden();
-	await expect(page).not.toHaveURL(/person=/);
-	await expect(memberRow).toBeFocused();
+		// 4. Nothing else is open: Esc closes the panel, drops ?person= and puts focus back on the row.
+		await page.keyboard.press('Escape');
+		await expect(p).toBeHidden();
+		await expect(page).not.toHaveURL(/person=/);
+		await expect(memberRow).toBeFocused();
+	} finally {
+		await removeOrphanLogin(api, userId);
+		await api.dispose();
+	}
 });
 
 test('phone (390x844): the person panel is a bottom sheet and the list can still scroll its last row clear of it', async ({ browser }) => {
