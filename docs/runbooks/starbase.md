@@ -323,10 +323,13 @@ rails, the team page, My work). **No new `.env` keys.** Needs PR 2 ("Teams (PR 2
 API (the guard that refuses it is 178's rules plus `d1-access-guard`'s `rules.json`) and make their own team the owner, so a manager of
 their team would be handed `manage`. Never stop between the two migrations, and never leave the old extensions running with 177 applied:
 the old `d1-record-access` does not know `owner_team_id`, the old `d1-teams` would not turn the refusal of an owning team's delete into the 409 with counts, and the
-old `d1-admin-overview` counts team-owned records as ownerless (the new one needs the column and fails soft without it).
+old `d1-admin-overview` counts team-owned records as ownerless (the new one needs the column and fails soft without it). That is why
+Directus is stopped before `make migrate` (step 2) and only started again on the new extensions (step 4).
 
 1. `git pull && npm ci && npm run build:starbase && npm run build:extensions` (same stash advice as the People admin section above).
-2. Back up (`docs/runbooks/backup-restore.md`), then `make migrate-status` (177 and 178 pending) and `make migrate`. 177 changes no
+2. **Stop Directus first** (`docker compose stop directus`) so the old Directus and the old guard never serve against 177 without 178's
+   rules (a running Directus would let an editor write `owner_team_id` in that window). Back up (`docs/runbooks/backup-restore.md`), then
+   `make migrate-status` (177 and 178 pending) and `make migrate`. 177 changes no
    access: no record has an `owner_team_id` yet, so existing readers do not change. 178 replaces 15 collections' Lab Member rows (a backup
    of the old rows is in `d1_private.team_ownership_rules_backup`).
 3. Check, both must be clean:
@@ -334,13 +337,13 @@ old `d1-admin-overview` counts team-owned records as ownerless (the new one need
    SELECT * FROM d1_private.team_drift();            -- 0 rows
    SELECT d1_private.readers_drift_count();          -- 0
    ```
-4. Reload Directus on the new extensions and a clean permission cache, **in the same order as "Teams (PR 2)" step 4**: `docker compose stop
-   directus` first (a running Directus would re-cache stale permissions after a flush); then either flush Redis (only after
+4. Reload Directus on the new extensions and a clean permission cache, **in the same order as "Teams (PR 2)" step 4** (Directus is
+   already stopped from step 2, and must stay stopped until here, so nothing re-caches stale permissions): either flush Redis (only after
    `docker compose exec heavy-data-worker sh -c 'rq info --url "$REDIS_URL"'` shows every queue empty, nothing failed and no busy worker:
    `docker compose exec -T redis redis-cli FLUSHALL`) and `docker compose up -d directus` (with `--force-recreate` for the changed
    extension folders), or start Directus and run `POST /utils/cache/clear` as an administrator **immediately after it starts and before
-   anyone is let back in**; then `docker compose up -d --force-recreate proxy` for the new STARbase build. Keep the window between
-   `make migrate` and this step short (178's rules and the new extensions must be live together).
+   anyone is let back in**; then `docker compose up -d --force-recreate proxy` for the new STARbase build. Directus is down from step 2
+   until here, so keep that window short (178's rules and the new extensions must be live together).
 5. Smoke: on a sample you own, Who has access → Transfer ownership… → pick a team you manage; the owner row now reads "<team> (managers)",
    the rail's Owner shows the team name, and you (the previous owner) stay on it as Can edit. A plain member of that team can edit the
    sample but sees "Only <team>'s managers can change who has access." and no controls; transfer a team with no manager and the dialog
@@ -380,7 +383,7 @@ request, unrelated ones included (`force_replay_search` 8 to 24 ms), while a 177
 not: machine load, not the change; if a re-run looks like that, repeat it on a quiet machine. Re-run it when the copy of live has changed a lot
 (the procedure is in `docs/runbooks/a1-record-access-cutover.md`).
 
-Rollback: `make migrate-down` twice (178, then 177), **after** transferring every team-owned record to a person (177's down refuses with
+Rollback: `docker compose stop directus` first, then `make migrate-down` twice (178, then 177), **after** transferring every team-owned record to a person (177's down refuses with
 0A000 while any record has an `owner_team_id`; 178's down restores the previous Lab Member rows from its backup table), `git checkout
 <previous commit>`, rebuild, then reload exactly as in step 4 and deploy the previous `d1-access-guard`, `d1-owner-default`,
 `d1-record-access`, `d1-teams` and `d1-admin-overview` at the same time. Teams, members and history stay (175 and 176 are untouched).
