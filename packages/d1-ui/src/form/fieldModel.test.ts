@@ -245,6 +245,16 @@ describe('missingRequired', () => {
 		expect(missingRequired(ops, { process_category: 'sintering', method_id: 'x', operation_date: '2026-10-14' })).toEqual([]);
 	});
 
+	it('never asks for a read-only field (its own, or a condition makes it so)', () => {
+		const fields = toFormFields([
+			{ field: 'a', type: 'string', meta: { required: true, readonly: true } },
+			{ field: 'b', type: 'string', meta: { required: true, conditions: [{ rule: { k: { _eq: 1 } }, readonly: true }] } },
+			{ field: 'k', type: 'integer' },
+		]);
+		expect(missingRequired(fields, { k: 1 })).toEqual([]);
+		expect(missingRequired(fields, { k: 2 }).map((f) => f.field)).toEqual(['b']);
+	});
+
 	it('0 and false are values', () => {
 		const fields = toFormFields([{ field: 'n', type: 'integer', meta: { required: true } }, { field: 'b', type: 'boolean', meta: { required: true } }]);
 		expect(missingRequired(fields, { n: 0, b: false })).toEqual([]);

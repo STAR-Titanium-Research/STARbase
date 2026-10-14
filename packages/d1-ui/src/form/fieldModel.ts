@@ -336,13 +336,13 @@ export function effectiveValues(own: Values, inherited?: Values): Values {
 	return out;
 }
 
-/** The shown, writable, required fields that have no value yet, in form order. Groups never count. */
+/** The shown, writable, required fields that have no value yet, in form order. Groups and read-only fields never count. */
 export function missingRequired(fields: readonly FormField[], values: Values, views?: ReadonlyMap<string, FieldView>): FormField[] {
 	const live = views ?? fieldViews(fields, values);
 	return fields.filter((f) => {
 		if (f.kind === 'group') return false;
 		const v = live.get(f.field);
-		return !!v && !v.hidden && v.required && isEmptyValue(values[f.field]);
+		return !!v && !v.hidden && !v.readonly && v.required && isEmptyValue(values[f.field]);
 	});
 }
 
