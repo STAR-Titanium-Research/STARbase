@@ -31,7 +31,7 @@ and so does a raw stock lot reached through such a sample. A very long history s
 ![Lab Dashboard, Machining tab](../images/database/lab-machining.png)
 
 Pick a machine to list its operations, then an operation to see its sample, tooling and
-parameters. The connection graph links the operation to its sample, edge and machine.
+parameters. The Process map (STARbase `/map`) shows how the operation connects to its sample, edge and machine.
 
 ### FAST
 
