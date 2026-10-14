@@ -371,8 +371,11 @@ bash scripts/dev/directus_smoke.sh` and compared with `py -3 scripts/dev/perf_co
 177 alone causes it, 178's rules add nothing; the member's own `co_owned_operation_*` reads are x1.9 to x2.1), every other read within x1.7; writes at most x1.53 (`link_login_big_pi`),
 the importer and the cascades x1.0 to x1.1. The team writers: `team_grant_20_members` 30 ms in SQL (was 15) and 106 ms through Directus,
 `team_join_100_records` 71 ms in SQL (was 36) and 123 ms through Directus, all far under their 500 ms limit. `perf_compare.py` still prints
-`GATE: FAIL (2 problems)`, only because the two team writers have a "before" on this copy (175 and 176 are in both runs) and so are held to
-2x; spec section 10 (E20) judges them against 500 ms. Two earlier "after" runs on the same machine were uniformly 3 to 4x slower on every
+`GATE: FAIL (2 problems)` for the two team writers, and the table behind it is not like for like: it keeps one line per scenario name (the last), the
+"after" log has the SQL line and then the Directus line, the "before" log has only the SQL line (no `d1-teams` in it), so it compares Directus-after
+(106 and 123 ms) with SQL-before (15 and 36 ms), x7.07 and x3.42. Like for like in SQL the ratios are x2.0 (30 / 15 ms) and x1.97 (71 / 36 ms), right
+at the 2x line and from millisecond medians of three repetitions; through Directus there is no "before". Spec section 10 (E20) judges the two
+writers against 500 ms, where both pass by a wide margin. Two earlier "after" runs on the same machine were uniformly 3 to 4x slower on every
 request, unrelated ones included (`force_replay_search` 8 to 24 ms), while a 177-only run, the "before" runs and a third "after" run were
 not: machine load, not the change; if a re-run looks like that, repeat it on a quiet machine. Re-run it when the copy of live has changed a lot
 (the procedure is in `docs/runbooks/a1-record-access-cutover.md`).

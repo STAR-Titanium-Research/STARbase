@@ -619,5 +619,6 @@ Migrations are **177** (`team_ownership`: `owner_team_id`, the owner grant, the 
   team-filter views of team-owned records in a browser (the pure-function tests cover them) and the E30 readers.
   **Performance (E20's gate, 2026-10-14, seeded copy of live, 177 and 178 withheld against applied):** worst read p95 144 ms (a stranger's
   `co_owned_operation_all_fields`, 38 to 144 ms, from 177; every other read within x1.7), writes at most x1.53, the team writers 30 and 71 ms
-  in SQL and 106 and 123 ms through Directus (limit 500 ms). `perf_compare.py` prints FAIL only because those two writers now have a "before".
+  in SQL and 106 and 123 ms through Directus (limit 500 ms). `perf_compare.py` prints FAIL for them because it sets the Directus "after" lines against the SQL-only "before" (x7.07, x3.42); like for
+  like in SQL they are x2.0 and x1.97 (n=3 medians of a few milliseconds), and through Directus they have no "before".
   Details and the caveat about two machine-loaded runs: runbook "Team ownership (PR 3)".
