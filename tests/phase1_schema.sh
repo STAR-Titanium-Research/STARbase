@@ -933,7 +933,8 @@ echo "== Audit coverage: every business table, keyed by its primary key (review 
 # permission rows lives in the private schema d1_private, so this public-schema check never sees it.
 # The readers tables of migration 166 (sample_readers, operation_readers, test_readers, campaign_readers, project_readers,
 # campaign_sample_readers, operation_open_to_all) are derived caches written only by the recompute triggers: not audited either.
-AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints','sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all'"
+# team_events (migration 175) is the history of a team, written only by the team triggers and the sharing code: it is a log, so not audited either.
+AUDIT_EXCLUDED="'audit_logs','audit_log_actors','schema_migrations','project_rollup','semantic_embeddings','force_crawler_state','short_ids','test_code_counters','file_fingerprints','team_events','sample_readers','operation_readers','test_readers','campaign_readers','project_readers','campaign_sample_readers','operation_open_to_all'"
 run_eq "every business table has an audit trigger (missing: none)" \
     "SELECT coalesce(string_agg(c.relname, ', ' ORDER BY c.relname), '')
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -3001,6 +3002,10 @@ up_down=$(awk '/-- migrate:down/{f=1;next}f' "$UP")
 # first: 141's down only drops the schema once it is empty.
 PA=db/migrations/20261014000174_people_admin.sql
 pa_down=$(awk '/-- migrate:down/{f=1;next}f' "$PA")
+# 20261014000175 (teams) adds four functions in d1_private (and nothing else there) and runs after 174, so its down goes
+# first of all: 174's down and 141's only drop their own objects and the schema once it is empty.
+TM=db/migrations/20261014000175_teams.sql
+tm_down=$(awk '/-- migrate:down/{f=1;next}f' "$TM")
 rv_ruled="(SELECT collection FROM _gen WHERE ruled UNION SELECT 'audit_logs')"
 rv_seed="
 DELETE FROM directus_permissions WHERE policy = '$LM'
@@ -3040,6 +3045,7 @@ DROP TABLE IF EXISTS d1_private.operation_sequence_backfill;
 CREATE TEMP TABLE _gen AS
   SELECT * FROM json_to_recordset(\$rules\$$rules_json\$rules\$::json)
     AS x(collection text, action text, permissions jsonb, validation jsonb, fields text, ruled boolean);
+$tm_down
 $pa_down
 $up_down
 $ll_down

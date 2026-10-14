@@ -215,6 +215,9 @@
     "fast_recipes": ["read"],
     "force_crawler_state": ["read"],
     "label_settings": ["read"],
+    "teams": ["read"],
+    "team_members": ["read"],
+    "team_events": ["read"],
     "directus_files": ["create", "read", "update", "delete"]
   }
 }
