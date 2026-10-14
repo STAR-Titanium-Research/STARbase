@@ -192,3 +192,11 @@ export { buildToolingModel, insertState, nextFreshEdge, edgeUsageMismatch, focus
 export type {
 	BoxRow, InsertRow, EdgeRow, InsertState, ToolingEdge, ToolingInsert, ToolingModel, ToolingFocus,
 } from './tooling/toolingModel';
+export {
+	focusKindOf, focusFromRoute, stateCounts, findInsert, findEdge, insertLabel, edgeLabel, toolingTitle, mismatchText, freshWithHistory, mergeHistory,
+	FOCUS_COLLECTION, FOCUS_KIND_LABEL, FOCUS_NOUN, STATE_ORDER, STATE_LABEL,
+} from './tooling/toolingView';
+export type { FocusKind, FreshWithHistory, HistoryEntry } from './tooling/toolingView';
+export {
+	placementText, typeFacts, boxRailFacts, boxDetailFacts, insertRailFacts, insertDetailFacts, edgeRailFacts, edgeDetailFacts,
+} from './tooling/toolingFacts';
