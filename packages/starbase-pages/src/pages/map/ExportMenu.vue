@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue';
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { menuKey } from './menuKeys';
 
-// "Export ▾" (spec D26): a button with a two-item menu, PNG or PDF. Closes on a pick, on Escape and on a press elsewhere.
+// "Export ▾" (spec D26): a button with a two-item menu, PNG or PDF. Opening moves focus into the menu, the arrow keys move between
+// the items, Escape closes it and puts focus back on the button; a pick or a press elsewhere closes it too.
 defineProps<{ busy: boolean; disabled: boolean }>();
 const emit = defineEmits<{ pick: [format: 'png' | 'pdf'] }>();
 
@@ -10,18 +12,34 @@ const root = ref<HTMLElement | null>(null);
 const away = (e: Event) => {
 	if (root.value && !root.value.contains(e.target as Node)) open.value = false;
 };
+const items = () => [...(root.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+const trigger = () => root.value?.querySelector<HTMLElement>('button');
+const closeToTrigger = () => {
+	open.value = false;
+	trigger()?.focus();
+};
+/** Keys inside the menu, and Escape anywhere while it is open. */
 const onKey = (e: KeyboardEvent) => {
-	if (e.key === 'Escape') open.value = false;
+	if (e.key !== 'Escape' && !root.value?.contains(document.activeElement)) return; // arrows belong to the menu only while focus is in it
+	const list = items();
+	const result = menuKey(e.key, list.indexOf(document.activeElement as HTMLElement), list.length);
+	if (!result) return;
+	e.preventDefault();
+	if ('close' in result) closeToTrigger();
+	else list[result.focus]?.focus();
 };
 const listen = (on: boolean) => {
 	const toggle = on ? document.addEventListener.bind(document) : document.removeEventListener.bind(document);
 	toggle('pointerdown', away);
 	toggle('keydown', onKey as EventListener);
 };
-watch(open, listen);
+watch(open, (now) => {
+	listen(now);
+	if (now) void nextTick(() => items()[0]?.focus());
+});
 onBeforeUnmount(() => listen(false));
 const pick = (format: 'png' | 'pdf') => {
-	open.value = false;
+	closeToTrigger();
 	emit('pick', format);
 };
 </script>

@@ -126,6 +126,9 @@ export function useMapExport({ canvas, map, person, deps: given = {} }: MapExpor
     error.value = '';
     notice.value = '';
     try {
+      // The libraries load first (a slow chunk is a wait the person may use to change the map); then the bounds, the plan,
+      // the frame and the copy of the pane are taken with nothing awaited in between but the frame's own draw.
+      const [toPng, PdfDocument] = await Promise.all([deps.loadToPng(), format === 'pdf' ? deps.loadJsPdf() : Promise.resolve(null)]);
       const bounds = drawnBounds();
       const data = map.data.value;
       if (!bounds || !data) throw new Error('Nothing to export yet.');
@@ -134,8 +137,6 @@ export function useMapExport({ canvas, map, person, deps: given = {} }: MapExpor
       const plan = exportPlan({ bounds, kinds, focus: { kind: data.focus.kind, code: data.focus.code }, person: person(), now: deps.now(), format });
       if (plan.screenResolution) notice.value = LARGE_MAP_NOTICE;
 
-      // Both libraries are fetched by this click, in parallel with the frame being drawn.
-      const [toPng, PdfDocument] = await Promise.all([deps.loadToPng(), format === 'pdf' ? deps.loadJsPdf() : Promise.resolve(null)]);
       framePlan.value = plan;
       const frame = await deps.frame(plan);
       const png = await toPng(frame, {
@@ -160,6 +161,7 @@ export function useMapExport({ canvas, map, person, deps: given = {} }: MapExpor
         deps.save(plan.fileName, 'application/pdf', new Uint8Array(doc.output('arraybuffer')));
       }
     } catch (e) {
+      notice.value = '';
       error.value = `Could not export the map: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       framePlan.value = null;

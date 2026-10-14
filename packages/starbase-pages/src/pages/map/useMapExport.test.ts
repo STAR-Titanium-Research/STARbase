@@ -35,6 +35,7 @@ function setup(over: Partial<ExportDeps> = {}, nodes: MapNode[] = [sample, op]) 
   });
   const save = vi.fn();
   const clearHover = vi.fn();
+  const nodesRef = ref<MapNode[]>(nodes);
   const deps: ExportDeps = {
     loadToPng: async () => toPng,
     loadJsPdf: async () => jsPdfCtor as unknown as Awaited<ReturnType<ExportDeps['loadJsPdf']>>,
@@ -46,11 +47,11 @@ function setup(over: Partial<ExportDeps> = {}, nodes: MapNode[] = [sample, op]) 
   };
   const exp = useMapExport({
     canvas: { frame: ref({ x: 72, y: 12, width: 880, height: 466 }) } as never,
-    map: { nodes: ref(nodes), data: ref({ focus: { kind: 'sample', code: 'S-0001', collection: 'physical_samples', id: 'a' } }), clearHover } as never,
+    map: { nodes: nodesRef, data: ref({ focus: { kind: 'sample', code: 'S-0001', collection: 'physical_samples', id: 'a' } }), clearHover } as never,
     person: () => 'Ada Lovelace',
     deps,
   });
-  return { exp, el, toPng, addImage, output, jsPdfCtor, save, clearHover };
+  return { exp, el, toPng, addImage, output, jsPdfCtor, save, clearHover, nodesRef };
 }
 
 describe('personName', () => {
@@ -173,5 +174,40 @@ describe('useMapExport', () => {
     stop();
     expect(plans[0].legend.map((l) => l.kind)).toEqual(['sample', 'operation']);
     expect(plans[0].header).toEqual(['Sample S-0001 — Process map', 'Exported 2026-10-14 09:05 by Ada Lovelace']);
+  });
+
+  it('takes the bounds and the legend after the libraries have loaded, so changes made during a slow load are in the picture', async () => {
+    const saved = flowNodes().value;
+    let release!: () => void;
+    const toPng = vi.fn(async () => 'data:image/png;base64,AA==');
+    const { exp, nodesRef } = setup({ loadToPng: () => new Promise((res) => (release = () => res(toPng))) }, [sample]);
+    const plans: { width: number; legend: { kind: string }[] }[] = [];
+    const stop = watch(exp.framePlan, (p) => p && plans.push(p), { flush: 'sync' });
+    try {
+      const run = exp.exportAs('png');
+      flowNodes().value = [{ id: 'x', computedPosition: { x: 0, y: 0 }, dimensions: { width: 2000, height: 100 } }]; // the map grew while the chunk loaded
+      nodesRef.value = [sample, op]; // and a Show chip was turned on
+      release();
+      await run;
+      expect(toPng).toHaveBeenCalledTimes(1);
+      expect(plans[0].width).toBe(2080);
+      expect(plans[0].legend.map((l) => l.kind)).toEqual(['sample', 'operation']);
+    } finally {
+      stop();
+      flowNodes().value = saved;
+    }
+  });
+
+  it('does not leave the large-map notice behind when the capture then fails', async () => {
+    const saved = flowNodes().value;
+    flowNodes().value = [{ id: 'x', computedPosition: { x: 0, y: 0 }, dimensions: { width: 20000, height: 400 } }];
+    try {
+      const { exp } = setup({ loadToPng: async () => vi.fn().mockRejectedValue(new Error('boom')) });
+      await exp.exportAs('png');
+      expect(exp.error.value).toMatch(/boom/);
+      expect(exp.notice.value).toBe('');
+    } finally {
+      flowNodes().value = saved;
+    }
   });
 });

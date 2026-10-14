@@ -9,7 +9,7 @@ defineProps<{ plan: ExportPlan }>();
 </script>
 
 <template>
-	<div class="pm-export-frame" aria-hidden="true" :style="{ width: `${plan.width}px`, height: `${plan.height}px` }">
+	<div class="pm-export-frame" aria-hidden="true" inert :style="{ width: `${plan.width}px`, height: `${plan.height}px` }">
 		<header class="pm-xf-head" :style="{ height: `${plan.headerHeight}px` }">
 			<div class="pm-xf-title">{{ plan.header[0] }}</div>
 			<div class="pm-xf-sub">{{ plan.header[1] }}</div>
