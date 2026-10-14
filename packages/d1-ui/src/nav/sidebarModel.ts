@@ -28,6 +28,8 @@ export interface SidebarLink {
 	collection: string | null;
 	// null when the page has no page key (Report a bug, Settings, Data Studio, Force Crawler).
 	pin: PinRef | null;
+	// Not drawn in the sidebar (saved views are chips above the table, #272); kept only so a view
+	// pinned earlier still resolves in the Pinned list (resolvePins).
 	views: SidebarView[];
 }
 
