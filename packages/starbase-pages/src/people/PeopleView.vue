@@ -3,7 +3,7 @@
 // in a panel beside it. What the list shows (chip, role, sort, search, attention filter, open person) lives in the URL, so a link or a reload
 // brings the same view back. An administrator sees logins, account roles and the attention line; a member sees names and kinds of work.
 import ExplorerView from '../ExplorerView.vue';
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { PageShell, PinToggle, canonicalPath, pinTargetForIndex, useExplorerHost } from '@d1/ui';
 import PersonEditDialog from './PersonEditDialog.vue';
@@ -93,6 +93,32 @@ const sortItems = computed(() => [
 // ---- the attention line (administrators) ----
 const attentionTotal = computed(() => attention.value.reduce((n, a) => n + a.count, 0));
 const attentionOpen = ref(false);
+const attnEl = ref<HTMLElement | null>(null);
+const reviewBtn = ref<HTMLButtonElement | null>(null);
+// The hand-built menu closes on Esc (the key is taken, so the open person's panel does not also close) and on a click away from it.
+const onMenuKey = (e: KeyboardEvent) => {
+	if (e.key !== 'Escape') return;
+	e.preventDefault();
+	attentionOpen.value = false;
+	void nextTick(() => reviewBtn.value?.focus());
+};
+const onMenuAway = (e: MouseEvent) => {
+	if (attnEl.value && !attnEl.value.contains(e.target as Node)) attentionOpen.value = false;
+};
+// On document, so the Esc handler runs before the panel's window listener.
+watch(attentionOpen, (open) => {
+	if (open) {
+		document.addEventListener('keydown', onMenuKey);
+		document.addEventListener('click', onMenuAway);
+	} else {
+		document.removeEventListener('keydown', onMenuKey);
+		document.removeEventListener('click', onMenuAway);
+	}
+});
+onBeforeUnmount(() => {
+	document.removeEventListener('keydown', onMenuKey);
+	document.removeEventListener('click', onMenuAway);
+});
 const attentionItems = computed(() =>
 	attention.value.map((a) => ({ key: a.key, text: ATTENTION_LABELS[a.key]?.(a.count) ?? `${a.count} ${a.key}` })),
 );
@@ -186,10 +212,10 @@ function openLink(r: PeopleRow) {
 			<div v-if="isAdmin && state.attn" class="attn">
 				Showing {{ attentionActive }} · <button type="button" class="link" @click="pickAttention(null)">clear</button>
 			</div>
-			<div v-else-if="isAdmin && attentionTotal" class="attn">
+			<div v-else-if="isAdmin && attentionTotal" ref="attnEl" class="attn">
 				{{ attentionTotal }} {{ attentionTotal === 1 ? 'thing needs' : 'things need' }} attention ·
-				<button type="button" class="link" :aria-expanded="attentionOpen" @click="attentionOpen = !attentionOpen">review</button>
-				<ul v-if="attentionOpen" class="attn-menu">
+				<button ref="reviewBtn" type="button" class="link" :aria-expanded="attentionOpen" @click="attentionOpen = !attentionOpen">review</button>
+				<ul v-if="attentionOpen" class="attn-menu" data-open-menu>
 					<li v-for="a in attentionItems" :key="a.key"><button type="button" class="link" @click="pickAttention(a.key)">{{ a.text }}</button></li>
 				</ul>
 			</div>
