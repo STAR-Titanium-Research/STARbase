@@ -7,9 +7,10 @@
 //   GET    /d1-teams                       -> { teams: [{ team_id, name, description, color, logo, member_count,
 //                                                         managers: [{ person_id, full_name }], is_member, is_manager }] }
 //   GET    /d1-teams/:id                   -> { team, members: [{ person_id, full_name, can_sign_in, is_manager, joined_at }],
-//                                               counts: { view, edit, investigator }, records: [{ collection, id, kind, code, title, role }],
+//                                               counts: { view, edit, investigator, owns }, records: [{ collection, id, kind, code, title, role }],
 //                                               hidden_count, events: [...] }
-//        counts are over every grant of the team. records are the granted records the caller READS (<kind>_readers; an administrator
+//        counts are over every grant of the team (owns: the records the team OWNS, owner_team_id; their owner grant is a record with role
+//        'own'). records are the granted records the caller READS (<kind>_readers; an administrator
 //        reads all); hidden_count is the rest. events: the last 20, newest first (?events=all for every one); an event about a
 //        record the caller cannot read carries no record, no person and no detail (record_hidden: true; kind, at and actor stay).
 //        team_events has no Lab Member read permission in Directus: this endpoint is the only way to read the history.
@@ -17,12 +18,16 @@
 //                                          becomes its manager; 409 TEAM_NAME_TAKEN
 //   PATCH  /d1-teams/:id                   { name?, description?, color?, logo? }  manager or administrator. logo: a directus_files id of an
 //                                          image/png, image/jpeg or image/svg+xml of at most 1 MB (else 400 BAD_LOGO), or null to clear it
-//   DELETE /d1-teams/:id                   manager or administrator; the grants go with the team; each affected record's owner is mailed once
+//   DELETE /d1-teams/:id                   manager or administrator; the grants go with the team; each affected record's owner is mailed once.
+//                                          A team that owns records is refused: 409 TEAM_OWNS_RECORDS, extensions.counts = records per
+//                                          collection (physical_samples, manufacturing_operations, test_sessions, campaigns); the foreign
+//                                          key owner_team_id (ON DELETE RESTRICT, migration 177) raises 23503 and nothing is deleted
 //   POST   /d1-teams/:id/members           { person_id, is_manager? }  manager or administrator
 //                                          -> 201 { pending, owners_asked, owned_edit }
 //        pending: the joiner's pending rows that are worth asking about (Ruling D2, d1_private.team_pending_actionable). owners_asked: the
 //        owners of those records, not counting the caller. Each of those owners is mailed ONCE for this joiner, listing kind and code of
-//        their records. owned_edit stays 0 until teams can own records (PR 3).
+//        their records (the owner of a team-owned record is the team's managers). owned_edit: the records the team owns: the joiner has
+//        Can edit on them at once (a manager: manage), the owner grant trusts new members.
 //   PATCH  /d1-teams/:id/members/:person_id  { is_manager }   manager or administrator
 //   DELETE /d1-teams/:id/members/:person_id  manager, administrator, or the person themself
 //        The last manager cannot leave or be demoted while others remain: the deferred constraint of migration 175 raises 23514 at COMMIT,
@@ -36,8 +41,8 @@
 //                                          administrator may decide any single record; one the caller may not decide is 403 and nothing is
 //                                          applied. The joiner is mailed on approve.
 //
-// "Owns a record": the caller's person is the record's owner (owner_person_id; principal_investigator_person for a project). A team that
-// owns records arrives in PR 3. "Manages" (decide with an explicit record) is owns, or an administrator.
+// "Owns a record": the caller's person is the record's owner (owner_person_id; principal_investigator_person for a project), or a MANAGER
+// of the team that owns it (owner_team_id, migration 177). "Manages" (decide with an explicit record) is owns, or an administrator.
 //
 // After a commit nothing may turn the answer into a 500: the reads that build the answer or the mail are logged and fall back to what is
 // known (afterCommit), as d1-record-access does.
@@ -62,6 +67,7 @@ const EVENTS_SHOWN = 20;
 const CHUNK = 1000;
 const LEVELS = ['view', 'edit', 'investigator'];
 const RECORD_TYPES = Object.values(COLLECTIONS);
+const OWNABLE_TYPES = RECORD_TYPES.filter((cfg) => cfg.ownerTeam); // the four types a team can own (not projects)
 
 class HttpError extends Error {
   constructor(status, code, message, extensions = {}) {
@@ -235,6 +241,28 @@ export default {
       return out;
     }
 
+    // The records a team owns (owner_team_id), per collection: { physical_samples, manufacturing_operations, test_sessions, campaigns }.
+    async function ownedCounts(db, teamId) {
+      const counts = {};
+      for (const cfg of OWNABLE_TYPES) counts[cfg.collection] = (await db(cfg.collection).where('owner_team_id', teamId).select(cfg.key)).length;
+      return counts;
+    }
+    const sumOf = (counts) => Object.values(counts).reduce((a, b) => a + b, 0);
+    // The teams the person manages (lower-case ids): a manager acts as the owner of what the team owns.
+    async function managedTeamIds(db, me) {
+      if (!me) return new Set();
+      const rows = await db('team_members').where('person_id', me.person_id).where('is_manager', true).select('team_id');
+      return new Set(rows.map((r) => String(r.team_id).toLowerCase()));
+    }
+    // Who owns a record for the purposes of asking and telling: its person owner, or the managers of its owner team. -> [person_id]
+    async function ownerIds(db, cfg, record) {
+      if (cfg.ownerTeam && !isBlank(record.owner_team_id)) {
+        return (await db('team_members').where('team_id', record.owner_team_id).where('is_manager', true).select('person_id')).map((m) => String(m.person_id));
+      }
+      return isBlank(record[cfg.ownerField]) ? [] : [String(record[cfg.ownerField])];
+    }
+    const ownerColumns = (cfg) => [cfg.key, cfg.ownerField, ...(cfg.ownerTeam ? ['owner_team_id'] : [])];
+
     // ---- writing helpers ---------------------------------------------------------------------------------
 
     // Postgres errors of a team write -> an HttpError. `what`: 'team' (the name is unique) or 'member' (a person is in a team once).
@@ -250,6 +278,10 @@ export default {
       }
       if (err?.code === '23505' && what === 'member' && (isBlank(err.constraint) || err.constraint === 'team_members_team_id_person_id_key')) {
         return new HttpError(409, 'ALREADY_MEMBER', 'That person is already in the team.');
+      }
+      // owner_team_id of a record table is ON DELETE RESTRICT: a team that owns records cannot be deleted (constraint <table>_owner_team_id_fkey)
+      if (err?.code === '23503' && what === 'team-delete' && (isBlank(err.constraint) || /_owner_team_id_fkey$/.test(String(err.constraint)))) {
+        return new HttpError(409, 'TEAM_OWNS_RECORDS', 'This team owns records.');
       }
       if (err?.code === 'P0002') return new HttpError(409, 'NOTHING_TO_DECIDE', 'That person is not waiting for approval on that record.');
       return err;
@@ -353,7 +385,7 @@ export default {
         const grants = await selectIn(db, accessTable(cfg), 'team_access_id', pending.map((p) => p.team_access_id),
           ['team_access_id', cfg.fk, 'team_id', 'role'], teamId ? (q) => q.where('team_id', teamId) : undefined);
         const grantOf = new Map(grants.map((g) => [String(g.team_access_id), g]));
-        const fields = [...new Set([cfg.key, cfg.ownerField, ...cfg.code, ...cfg.title])];
+        const fields = [...new Set([...ownerColumns(cfg), ...cfg.code, ...cfg.title])];
         const records = new Map((await selectIn(db, cfg.collection, cfg.key, grants.map((g) => g[cfg.fk]), fields)).map((r) => [String(r[cfg.key]), r]));
         for (const p of pending) {
           const grant = grantOf.get(String(p.team_access_id));
@@ -361,7 +393,7 @@ export default {
           if (!record) continue;
           const row = {
             cfg, collection: cfg.collection, record_id: record[cfg.key], record, team_access_id: p.team_access_id, team_id: grant.team_id,
-            person_id: p.person_id, role: grant.role, owner_person_id: record[cfg.ownerField] ?? null,
+            person_id: p.person_id, role: grant.role, owner_person_id: record[cfg.ownerField] ?? null, owner_team_id: record.owner_team_id ?? null,
           };
           if (!keep(row)) continue;
           if (await actionable(db, cfg.collection, p.team_access_id, p.person_id)) out.push(row);
@@ -369,12 +401,21 @@ export default {
       }
       return out;
     }
-    const owns = (row, me) => Boolean(me && sameId(row.owner_person_id, me.person_id));
-    const manages = (row, me, admin) => admin || owns(row, me);
+    // owns: the caller's person owns the record, or manages the team that owns it (`managed`: managedTeamIds)
+    const owns = (row, me, managed) => Boolean(me && (sameId(row.owner_person_id, me.person_id) || (!isBlank(row.owner_team_id) && managed.has(String(row.owner_team_id).toLowerCase()))));
+    const manages = (row, me, admin, managed) => admin || owns(row, me, managed);
     const recordOf = (row) => ({
       collection: row.collection, id: row.record_id, kind: row.cfg.kind, code: firstOf(row.record, row.cfg.code), title: firstOf(row.record, row.cfg.title), role: row.role,
     });
     const lineOf = (row) => `${capital(row.cfg.kind)} ${firstOf(row.record, row.cfg.code) ?? '(no code)'}`;
+
+    // "<team> owns 2 samples and 1 campaign. Transfer them to a person or another team first."
+    const NOUNS = { physical_samples: ['sample', 'samples'], manufacturing_operations: ['operation', 'operations'], test_sessions: ['test', 'tests'], campaigns: ['campaign', 'campaigns'] };
+    function ownsMessage(name, counts) {
+      const parts = Object.entries(counts ?? {}).filter(([, n]) => n > 0).map(([collection, n]) => `${n} ${NOUNS[collection][n === 1 ? 0 : 1]}`);
+      const what = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0] ?? 'records';
+      return `${name} owns ${what}. Transfer ownership of them to a person or another team before deleting the team.`;
+    }
 
     // ---- GET / ---------------------------------------------------------------------------------------------
 
@@ -388,9 +429,10 @@ export default {
     router.get('/pending', route(async ({ res, acc, admin }) => {
       const me = await callerPerson(database, acc);
       if (!me) return res.json({ items: [] });
-      // Waiting for you is the caller's own queue: only records they OWN, an administrator included (an administrator approves or
-      // declines a single record from Who has access).
-      const rows = await pendingRows(database, { keep: (row) => owns(row, me) });
+      // Waiting for you is the caller's own queue: only records they OWN (or that a team they manage owns), an administrator included
+      // (an administrator approves or declines a single record from Who has access).
+      const managed = await managedTeamIds(database, me);
+      const rows = await pendingRows(database, { keep: (row) => owns(row, me, managed) });
       const [teams, people] = await Promise.all([
         selectIn(database, 'teams', 'team_id', rows.map((r) => r.team_id), ['team_id', 'name']),
         loadPeople(database, rows.map((r) => r.person_id)),
@@ -427,6 +469,7 @@ export default {
         }).filter((r, i, all) => all.findIndex((o) => o.cfg === r.cfg && sameId(o.id, r.id)) === i); // the same record twice is decided once
       }
       const me = await callerPerson(database, acc);
+      const managed = await managedTeamIds(database, me);
 
       const done = await write(acc, async (trx) => {
         // what to decide: [{ cfg, collection, record_id, record, team_access_id, role }]
@@ -434,20 +477,20 @@ export default {
         if (asked) {
           targets = [];
           for (const { cfg, id } of asked) {
-            const fields = [...new Set([cfg.key, cfg.ownerField, ...cfg.code, ...cfg.title])];
+            const fields = [...new Set([...ownerColumns(cfg), ...cfg.code, ...cfg.title])];
             const record = await trx(cfg.collection).where(cfg.key, id).first(...fields);
             if (!record) throw new HttpError(404, 'NOT_FOUND', 'That record does not exist.');
             const grant = await trx(accessTable(cfg)).where(cfg.fk, id).where('team_id', body.team_id).first('team_access_id', 'role');
-            const row = { cfg, collection: cfg.collection, record_id: id, record, owner_person_id: record[cfg.ownerField] ?? null, team_access_id: grant?.team_access_id, role: grant?.role };
+            const row = { cfg, collection: cfg.collection, record_id: id, record, owner_person_id: record[cfg.ownerField] ?? null, owner_team_id: record.owner_team_id ?? null, team_access_id: grant?.team_access_id, role: grant?.role };
             // checked for every record before any is decided, so a refusal leaves nothing half applied
-            if (!manages(row, me, admin)) throw new HttpError(403, 'FORBIDDEN', 'You can only decide on records you own.');
+            if (!manages(row, me, admin, managed)) throw new HttpError(403, 'FORBIDDEN', 'You can only decide on records you own.');
             const waiting = grant ? await trx(pendingTable(cfg)).where('team_access_id', grant.team_access_id).where('person_id', body.person_id).first('state') : null;
             if (!waiting) throw new HttpError(409, 'NOTHING_TO_DECIDE', 'That person is not waiting for approval on that record.');
             targets.push(row);
           }
         } else {
           const all = await pendingRows(trx, { teamId: body.team_id, personId: body.person_id });
-          targets = all.filter((row) => owns(row, me)); // the whole queue is the caller's own records, an administrator included
+          targets = all.filter((row) => owns(row, me, managed)); // the whole queue is the caller's own records, an administrator included
           if (all.length && !targets.length) throw new HttpError(403, 'FORBIDDEN', 'You can only decide on records you own.');
         }
         for (const t of targets) {
@@ -501,6 +544,7 @@ export default {
       }
       const counts = Object.fromEntries(LEVELS.map((level) => [level, 0]));
       for (const g of grants) if (Object.hasOwn(counts, g.role)) counts[g.role] += 1;
+      counts.owns = sumOf(await ownedCounts(database, team.team_id));
       const described = await describeRecords(database, grants, viewer);
       const order = (collection) => RECORD_TYPES.findIndex((c) => c.collection === collection);
       const records = grants
@@ -586,21 +630,30 @@ export default {
       const me = await callerPerson(database, acc);
       await requireManager(database, team.team_id, me, admin);
 
-      const owners = await write(acc, async (trx) => {
-        // who owns the records the team has access to, read before the grants go with the team
-        const byOwner = new Map(); // owner person id -> [line]
-        for (const cfg of RECORD_TYPES) {
-          const grants = await trx(accessTable(cfg)).where('team_id', team.team_id).select(cfg.fk);
-          const fields = [...new Set([cfg.key, cfg.ownerField, ...cfg.code])];
-          for (const record of await selectIn(trx, cfg.collection, cfg.key, grants.map((g) => g[cfg.fk]), fields)) {
-            const owner = record[cfg.ownerField];
-            if (isBlank(owner) || sameId(owner, me?.person_id)) continue; // no owner, or the one deleting the team
-            byOwner.set(String(owner), [...(byOwner.get(String(owner)) ?? []), `${capital(cfg.kind)} ${firstOf(record, cfg.code) ?? '(no code)'}`]);
+      let owners;
+      try {
+        owners = await write(acc, async (trx) => {
+          // who owns the records the team has access to, read before the grants go with the team (a record a team owns: its managers)
+          const byOwner = new Map(); // owner person id -> [line]
+          for (const cfg of RECORD_TYPES) {
+            const grants = await trx(accessTable(cfg)).where('team_id', team.team_id).select(cfg.fk);
+            const fields = [...new Set([...ownerColumns(cfg), ...cfg.code])];
+            for (const record of await selectIn(trx, cfg.collection, cfg.key, grants.map((g) => g[cfg.fk]), fields)) {
+              for (const owner of await ownerIds(trx, cfg, record)) {
+                if (sameId(owner, me?.person_id)) continue; // the one deleting the team
+                byOwner.set(owner, [...(byOwner.get(owner) ?? []), `${capital(cfg.kind)} ${firstOf(record, cfg.code) ?? '(no code)'}`]);
+              }
+            }
           }
-        }
-        await trx('teams').where('team_id', team.team_id).del();
-        return byOwner;
-      });
+          await trx('teams').where('team_id', team.team_id).del(); // RESTRICT: raises 23503 while the team owns a record
+          return byOwner;
+        }, 'team-delete');
+      } catch (err) {
+        if (!(err instanceof HttpError) || err.code !== 'TEAM_OWNS_RECORDS') throw err;
+        // the transaction rolled back; say what the team owns (a failed read here still answers the refusal)
+        const counts = await afterCommit(`the refusal to delete team ${team.team_id}`, () => ownedCounts(database, team.team_id), null);
+        throw new HttpError(409, 'TEAM_OWNS_RECORDS', ownsMessage(team.name, counts), counts ? { counts } : {});
+      }
       await clearDataCache(req);
 
       const people = await afterCommit(`the deletion of team ${team.team_id}`, () => loadPeople(database, [...owners.keys()]), new Map());
@@ -639,11 +692,13 @@ export default {
       }, 'member');
       await clearDataCache(req);
 
-      // one mail per owner (not the caller), listing their records
+      // one mail per owner (not the caller), listing their records; the owner of a record a team owns is that team's managers
       const byOwner = new Map();
       for (const row of pending) {
-        if (isBlank(row.owner_person_id) || sameId(row.owner_person_id, me?.person_id)) continue;
-        byOwner.set(String(row.owner_person_id), [...(byOwner.get(String(row.owner_person_id)) ?? []), row]);
+        for (const owner of await afterCommit(`the owners of ${row.collection} ${row.record_id}`, () => ownerIds(database, row.cfg, row.record), [])) {
+          if (sameId(owner, me?.person_id)) continue;
+          byOwner.set(owner, [...(byOwner.get(owner) ?? []), row]);
+        }
       }
       const owners = await afterCommit(`the new member of team ${team.team_id}`, () => loadPeople(database, [...byOwner.keys()]), new Map());
       await Promise.all([...byOwner].map(async ([ownerId, rows]) => {
@@ -657,7 +712,8 @@ export default {
           link: starbaseLink(),
         }));
       }));
-      res.status(201).json({ pending: pending.length, owners_asked: byOwner.size, owned_edit: 0 });
+      const owned = await afterCommit(`the records team ${team.team_id} owns`, () => ownedCounts(database, team.team_id), {});
+      res.status(201).json({ pending: pending.length, owners_asked: byOwner.size, owned_edit: sumOf(owned) });
     }));
 
     router.patch('/:id/members/:person_id', route(async ({ req, res, acc, admin }) => {

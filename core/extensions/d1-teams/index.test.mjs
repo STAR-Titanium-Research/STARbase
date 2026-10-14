@@ -158,6 +158,14 @@ function makeDb(tables, rawAnswers) {
       del: async () => {
         const hit = rows();
         log.statements.push({ op: 'delete', table });
+        // owner_team_id of the four record tables is a foreign key ON DELETE RESTRICT (migration 177): a team that owns a record stays
+        if (table === 'teams') {
+          for (const t of hit) {
+            for (const collection of ['physical_samples', 'manufacturing_operations', 'test_sessions', 'campaigns']) {
+              if ((tables[collection] ?? []).some((r) => same(r.owner_team_id, t.team_id))) throw pgError('23503', collection + '_owner_team_id_fkey', 'violates foreign key constraint');
+            }
+          }
+        }
         tables[table] = (tables[table] ?? []).filter((r) => !hit.includes(r));
         if (table === 'teams') {
           for (const t of hit) {
@@ -357,7 +365,7 @@ test('GET /:id returns the team, its members, counts and only the records the ca
   assert.equal(r.body.team.name, 'Additive');
   assert.deepEqual(r.body.members.map((m) => [m.full_name, m.is_manager, m.can_sign_in]), [['Ann Manager', true, true], ['Bob Member', false, true]]);
   assert.equal(r.body.members[1].joined_at, '2026-10-03T00:00:00.000Z');
-  assert.deepEqual(r.body.counts, { view: 2, edit: 1, investigator: 1 }); // counted over every grant, readable or not
+  assert.deepEqual(r.body.counts, { view: 2, edit: 1, investigator: 1, owns: 0 }); // counted over every grant, readable or not
   // Ann reads SM-001 and SM-003; SM-002 (edit) and the project are hidden
   assert.deepEqual(r.body.records.map((x) => [x.collection, x.id, x.kind, x.code, x.title, x.role]), [
     ['physical_samples', S.one, 'sample', 'SM-001', 'Bar A', 'view'],
@@ -373,7 +381,7 @@ test('GET /:id: a member with no person in the team still sees counts, members a
   assert.equal(stranger.status, 200);
   assert.deepEqual(stranger.body.records, []);
   assert.equal(stranger.body.hidden_count, 4);
-  assert.deepEqual(stranger.body.counts, { view: 2, edit: 1, investigator: 1 });
+  assert.deepEqual(stranger.body.counts, { view: 2, edit: 1, investigator: 1, owns: 0 });
   const adm = await call(handlers['GET /:id'], { acc: admin(U.admin), params: { id: T.additive } });
   assert.equal(adm.body.records.length, 4);
   assert.equal(adm.body.hidden_count, 0);
@@ -657,7 +665,7 @@ test('POST /:id/members adds the person, answers the pending counts and mails ea
   const { handlers, tables, mails, cleared, db } = mount({ env: { CACHE_ENABLED: 'true' } });
   const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
   assert.equal(r.status, 201);
-  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 });
+  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 }); // no record is owned by Additive
   assert.deepEqual(tables.team_members.filter((m) => m.person_id === P.gus).map((m) => [m.team_id, m.is_manager]), [[T.additive, false]]);
   assert.match(db.log.tx[0].raw[0].sql, /set_config\('d1\.actor_identity'/);
   // Eve owns SM-001 and the project: one mail with both; Fay owns SM-002; Ann (the adder) owns SM-003 and is not mailed
@@ -695,7 +703,7 @@ test('POST /:id/members: a failure after the commit (reading the owners for the 
   const { handlers, tables, mails, errors } = mount({ breakAfterCommit: ['people'] });
   const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
   assert.equal(r.status, 201);
-  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 });
+  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 }); // no record is owned by Additive
   assert.equal(tables.team_members.some((m) => m.person_id === P.gus), true);
   assert.equal(mails.length, 0);
   assert.equal(errors.length, 1);
@@ -734,7 +742,7 @@ test('POST /:id/members: a mail failure never undoes the add', async () => {
   const { handlers, tables } = mount({ mailFail: true });
   const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
   assert.equal(r.status, 201);
-  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 });
+  assert.deepEqual(r.body, { pending: 4, owners_asked: 2, owned_edit: 0 }); // no record is owned by Additive
   assert.equal(tables.team_members.some((m) => m.person_id === P.gus), true);
 });
 
@@ -1011,4 +1019,139 @@ test('decide: a mail failure never undoes the approval', async () => {
   assert.equal(r.body.decided, 2);
   assert.equal(decided.length, 2);
   assert.ok(warnings.length >= 1);
+});
+
+// ---- team ownership (migration 177, People 3 Task 3) ---------------------------------------------------------------------
+// Beta (manager Fay, member Bob) owns SM-004 and SM-005. Additive has a view grant on SM-004; Cy waits on it. The owner grant (role own)
+// is the database's: it is in the world so the endpoint's reads can skip it.
+
+const S4 = ID(4);
+const S5 = ID(5);
+const OWN = { s4: ID(411), s5: ID(412) };
+const teamOwnedWorld = () => {
+  const t = baseTables();
+  t.team_members.push({ member_id: ID(604), team_id: T.beta, person_id: P.bob, is_manager: false, joined_at: '2026-10-04T00:00:00Z' });
+  t.physical_samples.push(
+    { sample_id: S4, sample_code: 'SM-004', nickname: 'Team bar', owner_person_id: null, owner_team_id: T.beta },
+    { sample_id: S5, sample_code: 'SM-005', nickname: null, owner_person_id: null, owner_team_id: T.beta },
+  );
+  t.sample_readers.push({ record_id: S4, user_id: U.fay }, { record_id: S5, user_id: U.fay }, { record_id: S4, user_id: U.ann });
+  t.sample_team_access.push(
+    { team_access_id: OWN.s4, sample_id: S4, team_id: T.beta, role: 'own', trust_new_members: true },
+    { team_access_id: OWN.s5, sample_id: S5, team_id: T.beta, role: 'own', trust_new_members: true },
+    { team_access_id: ID(413), sample_id: S4, team_id: T.additive, role: 'view', trust_new_members: false },
+  );
+  t.sample_team_pending.push({ team_access_id: ID(413), person_id: P.cy, state: 'pending' });
+  return t;
+};
+
+test('DELETE /:id: a team that owns records is refused 409 TEAM_OWNS_RECORDS with counts per collection; nothing is deleted or mailed', async () => {
+  const tables = teamOwnedWorld();
+  tables.campaigns = [{ campaign_id: ID(7), campaign_code: 'CMP-1', owner_person_id: null, owner_team_id: T.beta }];
+  tables.manufacturing_operations = [];
+  tables.test_sessions = [];
+  const { handlers, mails, cleared } = mount({ tables, env: { CACHE_ENABLED: 'true' } });
+  const r = await call(handlers['DELETE /:id'], { acc: member(U.fay), params: { id: T.beta } });
+  assert.equal(r.status, 409);
+  const e = errorOf(r);
+  assert.equal(e.extensions.code, 'TEAM_OWNS_RECORDS');
+  assert.equal(e.extensions.source, 'd1-teams');
+  assert.deepEqual(e.extensions.counts, { physical_samples: 2, manufacturing_operations: 0, test_sessions: 0, campaigns: 1 });
+  assert.equal(e.message, 'Beta owns 2 samples and 1 campaign. Transfer ownership of them to a person or another team before deleting the team.');
+  assert.ok(tables.teams.some((t) => t.team_id === T.beta), 'the team stays');
+  assert.ok(tables.team_members.some((m) => m.team_id === T.beta), 'its members stay');
+  assert.equal(tables.sample_team_access.filter((g) => g.team_id === T.beta).length, 2, 'its grants stay');
+  assert.equal(mails.length, 0);
+  assert.equal(cleared.length, 0, 'nothing changed, so no cache clear');
+  // an administrator is refused the same way; the singular reads "1 sample"
+  const one = teamOwnedWorld();
+  one.physical_samples = one.physical_samples.filter((s) => s.sample_id !== S5);
+  const adm = mount({ tables: one });
+  const a = await call(adm.handlers['DELETE /:id'], { acc: admin(U.admin), params: { id: T.beta } });
+  assert.deepEqual([a.status, errorOf(a).extensions.code], [409, 'TEAM_OWNS_RECORDS']);
+  assert.match(errorOf(a).message, /^Beta owns 1 sample\./);
+});
+
+test('DELETE /:id: a team that only has a share on records (no owner_team_id) is deleted as before; a non-manager is refused before anything is read', async () => {
+  const { handlers, tables } = mount({ tables: teamOwnedWorld() });
+  assert.equal((await call(handlers['DELETE /:id'], { acc: member(U.ann), params: { id: T.additive } })).status, 200);
+  assert.ok(!tables.teams.some((t) => t.team_id === T.additive));
+  const plain = await call(handlers['DELETE /:id'], { acc: member(U.bob), params: { id: T.beta } });
+  assert.equal(plain.status, 403, 'a plain member of the owning team cannot delete it');
+});
+
+test('DELETE /:id: the managers of an owning team are mailed (once) when a team that has a share on its record is deleted', async () => {
+  const { handlers, mails } = mount({ tables: teamOwnedWorld() });
+  const r = await call(handlers['DELETE /:id'], { acc: member(U.ann), params: { id: T.additive } });
+  assert.equal(r.status, 200);
+  // Eve, Fay (SM-002 and the managers of Beta, which owns SM-004) are the owners; Ann deleted it herself
+  const fay = mails.filter((m) => m.to === 'fay@login.example');
+  assert.equal(fay.length, 1);
+  assert.match(fay[0].text, /sample SM-002/i);
+  assert.match(fay[0].text, /sample SM-004/i);
+  assert.equal(mails.filter((m) => m.to === 'bob@login.example').length, 0, 'a plain member of the owning team is not an owner');
+});
+
+test('GET /:id: counts gain owns (the records the team owns), the owner grant shows as a record with role own', async () => {
+  const { handlers } = mount({ tables: teamOwnedWorld() });
+  const beta = await call(handlers['GET /:id'], { acc: member(U.fay), params: { id: T.beta } });
+  assert.equal(beta.status, 200);
+  assert.deepEqual(beta.body.counts, { view: 0, edit: 0, investigator: 0, owns: 2 });
+  assert.deepEqual(beta.body.records.map((r) => [r.code, r.role]), [['SM-004', 'own'], ['SM-005', 'own']]);
+  const additive = await call(handlers['GET /:id'], { acc: member(U.ann), params: { id: T.additive } });
+  assert.deepEqual(additive.body.counts, { view: 3, edit: 1, investigator: 1, owns: 0 });
+});
+
+test('POST /:id/members: owned_edit is the number of records the team owns; a team that owns none answers 0', async () => {
+  const { handlers } = mount({ tables: teamOwnedWorld() });
+  const owning = await call(handlers['POST /:id/members'], { acc: member(U.fay), params: { id: T.beta }, body: { person_id: P.gus } });
+  assert.equal(owning.status, 201);
+  assert.deepEqual(owning.body, { pending: 0, owners_asked: 0, owned_edit: 2 });
+  const none = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
+  assert.equal(none.body.owned_edit, 0);
+});
+
+test('POST /:id/members: a joiner waiting on a record a team owns asks the owning team\'s managers (not the caller), once', async () => {
+  const tables = teamOwnedWorld();
+  // Gus joins Additive, which has a (not trusting) view grant on SM-004, owned by Beta
+  const { handlers, mails } = mount({ tables });
+  const r = await call(handlers['POST /:id/members'], { acc: member(U.ann), params: { id: T.additive }, body: { person_id: P.gus } });
+  assert.equal(r.status, 201);
+  const fay = mails.filter((m) => m.to === 'fay@login.example');
+  assert.equal(fay.length, 1, 'one mail for all of Fay\'s records');
+  assert.match(fay[0].text, /sample SM-004/i);
+  assert.match(fay[0].text, /sample SM-002/i);
+  assert.equal(mails.filter((m) => m.to === 'bob@login.example').length, 0, 'a plain member of Beta is not asked');
+});
+
+test('GET /pending: a manager of the owning team sees the waiting joiners on records the team owns; a plain member and the other team\'s manager do not', async () => {
+  const { handlers } = mount({ tables: teamOwnedWorld() });
+  const fay = await call(handlers['GET /pending'], { acc: member(U.fay) });
+  assert.deepEqual(keyed(fay.body.items[0].records), ['sample:SM-002:edit', 'sample:SM-004:view'], 'her own SM-002 and the team-owned SM-004');
+  assert.deepEqual(fay.body.items.map((i) => [i.team_name, i.full_name]), [['Additive', 'Cy Nologin']]);
+  for (const user of [U.bob, U.ann]) {
+    const body = (await call(handlers['GET /pending'], { acc: member(user) })).body;
+    assert.ok(!JSON.stringify(body).includes('SM-004'), `${user} does not own SM-004`);
+  }
+  // demoted manager: no longer the owner
+  const demoted = teamOwnedWorld();
+  demoted.team_members.find((m) => m.team_id === T.beta && m.person_id === P.fay).is_manager = false;
+  demoted.team_members.find((m) => m.team_id === T.beta && m.person_id === P.bob).is_manager = true;
+  const after = mount({ tables: demoted });
+  assert.ok(!JSON.stringify((await call(after.handlers['GET /pending'], { acc: member(U.fay) })).body).includes('SM-004'));
+  assert.ok(JSON.stringify((await call(after.handlers['GET /pending'], { acc: member(U.bob) })).body).includes('SM-004'));
+});
+
+test('decide: a manager of the owning team decides the records the team owns; a plain member is refused (403, nothing applied)', async () => {
+  const { handlers, decided, tables } = mount({ tables: teamOwnedWorld() });
+  const plain = await call(handlers['POST /pending/decide'], { acc: member(U.bob), body: { team_id: T.additive, person_id: P.cy, decision: 'approve', records: [{ collection: 'physical_samples', id: S4 }] } });
+  assert.deepEqual([plain.status, errorOf(plain).extensions.code], [403, 'FORBIDDEN']);
+  assert.equal(decided.length, 0);
+  const one = await call(handlers['POST /pending/decide'], { acc: member(U.fay), body: { team_id: T.additive, person_id: P.cy, decision: 'approve', records: [{ collection: 'physical_samples', id: S4 }] } });
+  assert.equal(one.status, 200);
+  assert.deepEqual(decided.map((d) => d.team_access_id), [ID(413)]);
+  assert.ok(!tables.sample_team_pending.some((p) => p.team_access_id === ID(413) && p.person_id === P.cy));
+  // without `records`: the whole queue of the caller, which now includes SM-002 (hers) and nothing of Eve's
+  const all = await call(handlers['POST /pending/decide'], { acc: member(U.fay), body: { team_id: T.additive, person_id: P.cy, decision: 'decline' } });
+  assert.deepEqual([all.status, all.body.decided], [200, 1]);
 });
