@@ -1537,6 +1537,19 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 - [ ] **#30 settings scroll.** On the rig PC, switching Settings tabs no longer animates or jumps
   (fixed in 0.1.33; issue closed 2026-10-11, reopen it if it still happens).
 
+### Depth of cut and force limit (2026-10-14, #288, #289)
+- [ ] **#288 depth of cut on the Record page.** With NI-DAQ selected, the cut-parameter grid shows
+  Depth of cut and Axial DoC next to Spindle and Feed. Type 0.5 and 2, record and save a cut: the
+  Directus run row has `machining_radial_depth_of_cut_mm` 0.5 and `machining_axial_depth_of_cut_mm`
+  2, and the capture's summary.json `extra_metadata` has `radial_doc`/`axial_doc`. Both survive an
+  app restart; a cleared tile saves as empty, not 0. Since the #288/#289 fix branch.
+- [ ] **#289 force alarm at the limit.** Settings > Safety Alarms: set the limit to 400 N, then
+  clear the field and click away: it goes back to 400. Start a cut with no load on the dyno: the
+  alarm stays quiet. If it still trips at once, note the axis and value on the alarm banner and keep
+  that capture folder (its first second of raw data is what #289 needs). Then press the tool against
+  the dyno past 400 N: the alarm trips, and the amber warning showed first at 320 N. Since the
+  #288/#289 fix branch.
+
 ### Rig test requests, phase 1 (rig test requests PR)
 - [ ] **First request on the rig.** Set `RIG_TEST_ALLOWED_LOGINS` on the relay (§C), install the
   release on the rig, and open an issue with a `rig-test` block naming two backlog items, then add

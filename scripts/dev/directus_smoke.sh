@@ -40,7 +40,9 @@
 # loads, and the harness asserts d1_private.readers_drift_count() = 0 afterwards.
 # D1_SMOKE_MODE=seed loads it and leaves the copy running for hand measurement. D1_SMOKE_MODE=perf loads scripts/dev/seed_access_fixture.sql (restricted records, access rows, big projects) into the
 # copy instead and runs scripts/dev/directus_perf.mjs: p50/p95 per list request for a stranger and a member
-# (use --skip 20261012000166 --skip 20261012000167 for "before"). D1_SMOKE_KEEP=1 leaves the copy running for debugging
+# (use --skip 20261012000166 --skip 20261012000167 for "before"; the team scenarios of People 2 need the d1-teams and d1-record-access overlays
+# and migrations 181 and 182 and are reported only for "after", against the 500 ms of the spec: a "before" run for them is
+# --skip 20261014000181 --skip 20261014000182, where they do not run). D1_SMOKE_KEEP=1 leaves the copy running for debugging
 # (docker rm -fv d1-smoke-directus d1-smoke-pg; docker network rm d1-smoke).
 #
 # Usage: [D1_SMOKE_REQUIRE_LM=1] bash scripts/dev/directus_smoke.sh [--skip <migration-version>...]   (from the repo root)
@@ -99,6 +101,9 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ -n "$ready" ]] || abort "postgres not ready after 60s" 1
+# Live's A1a policies (migration 168) are TO d1_llm_readonly, a role pg_dump does not carry (scripts/dev/explorer_preview.sh makes it the same way):
+# make it on the copy first, or every CREATE POLICY fails the restore.
+psql_copy -c "CREATE ROLE d1_llm_readonly NOLOGIN" >/dev/null || abort "create d1_llm_readonly on the copy" $?
 
 # --- restore a copy of live (live is only read). Revisions/activity data are skipped: large, not needed.
 # Two steps so a failed or truncated dump cannot pass: the dump is streamed into a file in the scratch
@@ -291,7 +296,7 @@ if [[ "$MODE" == perf ]]; then
                             printf "PERFW %s n=%d p50=%d max=%d\n", k, m, a[int((m + 1) / 2)], a[m] } }' <<<"$wall" | sort
   node_writes() { docker run --rm --network "$NET" -e DIRECTUS_URL="http://$DX:8055" -e TOKEN="$TOKEN" -e D1_SMOKE_PERF_N="${D1_SMOKE_PERFW_N:-3}" "$@" \
     -v "$REPO/scripts/dev:/smoke:ro" node:20-alpine node /smoke/directus_perf_writes.mjs 2>&1; }
-  D1_PERF_WRITES_ONLY='^(force_app_upload|coowner_added_big_sample|tests_with_subjects_x20|campaign_add_50_samples|link_login_big_pi)$'
+  D1_PERF_WRITES_ONLY='^(force_app_upload|coowner_added_big_sample|tests_with_subjects_x20|campaign_add_50_samples|link_login_big_pi|team_join_100_records|team_grant_20_members)$'
   node_writes -e D1_PERF_WRITES_ONLY="$D1_PERF_WRITES_ONLY" || crc=1
   # UI writes while an import transaction is open: the importer's INSERT ... (3000 FAST runs) stays uncommitted for UI_WAIT seconds and a
   # sample, a test and a campaign note are saved meanwhile (the global readers lock and the rollup lock make them wait for its commit).

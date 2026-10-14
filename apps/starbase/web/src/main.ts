@@ -35,7 +35,7 @@ async function bootstrap() {
 	const guard = installSessionGuard(api, () => {
 		session.markSignedOut();
 		const here = router.currentRoute.value;
-		if (here.name === 'signin' || here.name === 'signin-done') return;
+		if (here.name === 'signin' || here.name === 'signin-done' || here.name === 'accept-invite') return;
 		void router.replace(here.fullPath === '/' ? '/signin' : `/signin?next=${encodeURIComponent(here.fullPath)}`);
 	});
 

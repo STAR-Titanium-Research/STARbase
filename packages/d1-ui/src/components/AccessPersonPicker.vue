@@ -2,19 +2,31 @@
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue';
 import { EXPLORER_HOST } from '../host';
 import { useRequestGate } from '../composables/useRequestGate';
-import { searchPeople } from '../access/accessApi';
-import { LOGINLESS_NOTE, addable, isLoginless, type AccessList, type PersonHit } from '../access/accessModel';
+import { loadTeamHits, searchPeople } from '../access/accessApi';
+import {
+	LOGINLESS_NOTE, addable, isLoginless, isTeamHit, teamMembersLabel, teamsMatching, type AccessList, type PersonHit, type TeamHit,
+} from '../access/accessModel';
 import { moveIndex } from '../finder/finderNav';
+import TeamTile from '../teams/TeamTile.vue';
 
 // The add box of the "Who has access" dialog: a combobox that searches active People by name (the same /items/people the People
-// page reads). A person with no login can be picked and is marked "can't sign in yet": the grant starts working the day an admin
-// links a login to them. People already on the list are left out; for a transfer (`entries: false`) only the owner is.
-// Enter picks the highlighted person, the arrow keys move, Escape closes the list (and only then: a second Escape closes the dialog).
-const props = withDefaults(defineProps<{ list: Pick<AccessList, 'owner' | 'entries'> | null; label: string; placeholder?: string; entries?: boolean; disabled?: boolean }>(), {
-	placeholder: 'Add people by name…',
-	entries: true,
-});
-const emit = defineEmits<{ (e: 'pick', person: PersonHit): void }>();
+// page reads) and, with `teams`, the teams too (GET /d1-teams, read once and filtered by name here). A person with no login can be picked
+// and is marked "can't sign in yet": the grant starts working the day an admin links a login to them. People and teams already on the list
+// are left out; for a transfer (`entries: false`) only the owner is. People come first, then teams.
+// Enter picks the highlighted row, the arrow keys move, Escape closes the list (and only then: a second Escape closes the dialog).
+const props = withDefaults(
+	defineProps<{
+		list: (Pick<AccessList, 'owner' | 'entries'> & Partial<Pick<AccessList, 'teams'>>) | null;
+		label: string;
+		placeholder?: string;
+		entries?: boolean;
+		/** Offer teams as well as people. */
+		teams?: boolean;
+		disabled?: boolean;
+	}>(),
+	{ placeholder: 'Add people by name…', entries: true, teams: false },
+);
+const emit = defineEmits<{ (e: 'pick', hit: PersonHit | TeamHit): void }>();
 
 const host = inject(EXPLORER_HOST);
 if (!host) throw new Error('AccessPersonPicker needs an ExplorerHost: render it inside ExplorerView');
@@ -22,6 +34,9 @@ if (!host) throw new Error('AccessPersonPicker needs an ExplorerHost: render it 
 const uid = `d1-access-pick-${Math.random().toString(36).slice(2, 8)}`;
 const text = ref('');
 const hits = ref<PersonHit[]>([]);
+// Every team, read on the first search and kept while the box is mounted; `searched` is the text the shown rows answer.
+const allTeams = ref<TeamHit[] | null>(null);
+const searched = ref('');
 const searching = ref(false);
 const failed = ref('');
 const open = ref(false);
@@ -30,10 +45,13 @@ const input = ref<HTMLInputElement | null>(null);
 const gate = useRequestGate();
 let timer: ReturnType<typeof setTimeout> | null = null;
 
-const shown = computed(() => {
+const shown = computed<(PersonHit | TeamHit)[]>(() => {
 	const list = props.list ?? { owner: null, entries: [] };
-	return addable(hits.value, props.entries ? list : { owner: list.owner, entries: [] });
+	const people = addable(hits.value, props.entries ? list : { owner: list.owner, entries: [] });
+	const teams = props.teams && allTeams.value ? teamsMatching(allTeams.value, searched.value, list) : [];
+	return [...people, ...teams];
 });
+const keyOf = (hit: PersonHit | TeamHit) => (isTeamHit(hit) ? `team-${hit.team_id}` : hit.person_id);
 const activeId = computed(() => (active.value >= 0 && active.value < shown.value.length ? `${uid}-opt-${active.value}` : undefined));
 
 watch(text, (value) => {
@@ -49,12 +67,15 @@ watch(text, (value) => {
 	searching.value = true;
 	timer = setTimeout(async () => {
 		const token = gate.begin();
-		const res = await searchPeople(host.api, value);
+		const [res, teamRes] = await Promise.all([searchPeople(host.api, value), props.teams && !allTeams.value ? loadTeamHits(host.api) : null]);
 		if (!gate.isCurrent(token)) return;
 		searching.value = false;
+		if (teamRes?.ok) allTeams.value = teamRes.data;
+		searched.value = value;
 		if (res.ok) {
 			hits.value = res.data;
-			failed.value = '';
+			// the people are shown either way; a failed team list is said, not hidden
+			failed.value = teamRes && !teamRes.ok ? `Teams could not be listed: ${teamRes.message}` : '';
 		} else {
 			hits.value = [];
 			failed.value = res.message;
@@ -68,8 +89,8 @@ onBeforeUnmount(() => {
 	gate.cancel();
 });
 
-function pick(person: PersonHit) {
-	emit('pick', person);
+function pick(hit: PersonHit | TeamHit) {
+	emit('pick', hit);
 	text.value = '';
 	hits.value = [];
 	open.value = false;
@@ -84,8 +105,8 @@ function onKeydown(e: KeyboardEvent) {
 	} else if (e.key === 'Enter') {
 		if (e.isComposing) return;
 		e.preventDefault();
-		const person = shown.value[active.value];
-		if (open.value && person) pick(person);
+		const hit = shown.value[active.value];
+		if (open.value && hit) pick(hit);
 	} else if (e.key === 'Escape' && open.value) {
 		e.preventDefault();
 		e.stopPropagation();
@@ -121,7 +142,7 @@ defineExpose({ focus: () => input.value?.focus() });
 			<li
 				v-for="(p, i) in shown"
 				:id="`${uid}-opt-${i}`"
-				:key="p.person_id"
+				:key="keyOf(p)"
 				role="option"
 				class="opt"
 				:class="{ on: i === active }"
@@ -130,14 +151,21 @@ defineExpose({ focus: () => input.value?.focus() });
 				@mousemove="active = i"
 				@click="pick(p)"
 			>
-				<span class="n">{{ p.full_name }}</span>
-				<span v-if="isLoginless(p)" class="tag">{{ LOGINLESS_NOTE }}</span>
+				<template v-if="isTeamHit(p)">
+					<TeamTile :team="p" size="sm" />
+					<span class="n">{{ p.name }}</span>
+					<span class="sub">{{ teamMembersLabel(p.member_count) }}</span>
+				</template>
+				<template v-else>
+					<span class="n">{{ p.full_name }}</span>
+					<span v-if="isLoginless(p)" class="tag">{{ LOGINLESS_NOTE }}</span>
+				</template>
 			</li>
 		</ul>
 		<p class="hint" role="status" aria-live="polite">
 			<template v-if="failed">{{ failed }}</template>
 			<template v-else-if="searching">Searching…</template>
-			<template v-else-if="text.trim() && open && !shown.length">No one matches (people already on the list are left out).</template>
+			<template v-else-if="text.trim() && open && !shown.length">No one matches ({{ teams ? 'people and teams' : 'people' }} already on the list are left out).</template>
 		</p>
 	</div>
 </template>
@@ -154,7 +182,8 @@ defineExpose({ focus: () => input.value?.focus() });
 	position: absolute; z-index: 2; left: 0; right: 0; margin: 4px 0 0; padding: 4px; list-style: none; max-height: 240px; overflow-y: auto;
 	border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
-.opt { display: flex; align-items: baseline; gap: 10px; padding: 6px 8px; border-radius: 6px; font-size: var(--fs-md, 13px); cursor: pointer; }
+.sub { font-size: var(--fs-sm, 12px); color: var(--d1-dim); white-space: nowrap; }
+.opt { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; font-size: var(--fs-md, 13px); cursor: pointer; }
 .opt.on { background: var(--d1-tile); outline: 1px solid var(--d1-accent, var(--theme--primary)); outline-offset: -1px; }
 .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .tag { font-size: var(--fs-xs, 11px); color: var(--d1-warn); white-space: nowrap; }

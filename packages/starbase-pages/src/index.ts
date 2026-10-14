@@ -1,6 +1,7 @@
 export { default as HomeView } from './home.vue';
 export { default as RegisterSample } from './register-sample.vue';
 export { default as PeopleView } from './people.vue';
+export { default as TeamPage } from './teams/TeamPage.vue';
 export { default as SamplePage } from './pages/SamplePage.vue';
 export { default as CampaignPage } from './pages/CampaignPage.vue';
 export { default as ProjectsIndex } from './pages/ProjectsIndex.vue';
