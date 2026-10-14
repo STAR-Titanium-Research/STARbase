@@ -40,7 +40,7 @@ repos:
     hooks:
       - id: hadolint-docker
 
-  # The sample-geometry drawing engine is vendored into three Directus extensions.
+  # The sample-geometry drawing engine is vendored into three Directus extensions (and the choice labels table into d1-report).
   - repo: local
     hooks:
       - id: geometry-copies-in-sync
@@ -48,7 +48,7 @@ repos:
         entry: bash scripts/sync_geometry.sh --check
         language: system
         pass_filenames: false
-        files: ^(core/extensions/(d1-geometry-preview|d1-report)|packages/starbase-pages)/src/
+        files: ^(core/extensions/(d1-geometry-preview|d1-report)|packages/starbase-pages)/src/|^packages/d1-ui/src/choiceLabels.ts$
       - id: access-rules-in-sync
         name: Lab Member permission block, d1-access-guard and d1-record-access rules match access_rules.json
         entry: python3 scripts/gen_access_rules.py --check

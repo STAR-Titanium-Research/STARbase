@@ -3,7 +3,7 @@ import ExplorerView from './ExplorerView.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE, PageShell, createdRecord, openLink, recordRoute, useExplorerHost } from '@d1/ui';
-import { buildGeometry, dimsText, FORMS, FORM_FIELDS, PRESETS, fieldLabel } from './geometry';
+import { buildGeometry, dimsText, FORMS, FORM_FIELDS, fieldLabel, matchingPreset, presetDims, presetLabel, presetsFor } from './geometry';
 
 const host = useExplorerHost();
 const api = host.api;
@@ -77,17 +77,20 @@ watch(
 );
 
 // Live parametric isometric preview + the dimension inputs relevant to the chosen
-// form. Picking a standard test coupon fills its standard dimensions, which then
-// stay editable and reshape the drawing.
+// form. A form with named standards (tensile coupon, bend bar) offers a "Standard" picker that
+// fills the dimensions the standard fixes (never the thickness); they stay editable.
 const dimFields = computed<string[]>(() => FORM_FIELDS[(f.value.form || '').toLowerCase()] ?? []);
 const geoSvg = computed(() => buildGeometry(f.value as any));
 const geoDimsText = computed(() => dimsText(f.value as any));
 const flabel = fieldLabel;
 
-watch(() => f.value.form, (form) => {
-	const preset = PRESETS[(form || '').toLowerCase()];
-	if (preset) Object.assign(f.value, preset); // standard specimen → standard dimensions
-});
+const presetItems = computed(() => presetsFor(f.value.form).map((p) => ({ text: presetLabel(p), value: p.id })));
+// The standard the dimensions already equal, else none ("Custom").
+const currentPreset = computed(() => matchingPreset(f.value.form, f.value));
+function applyPreset(id: string | null) {
+	const dims = id ? presetDims(f.value.form, id) : null;
+	if (dims) Object.assign(f.value, dims);
+}
 
 function codeWith(num: string): string {
 	const mat = materials.value.find((m) => m.value === f.value.material_id);
@@ -226,7 +229,11 @@ onMounted(async () => {
 
 				<section class="card">
 					<h3><span class="step">2</span> Geometry</h3>
-					<div class="row"><div class="fld"><label>Form</label><v-select :items="forms" v-model="f.form" placeholder="Shape…" show-deselect /></div><div class="fld"><label>Mass (g)</label><v-input type="number" v-model="f.mass_grams" placeholder="0" /></div></div>
+					<div class="row"><div class="fld"><label>Geometry</label><v-select :items="forms" v-model="f.form" placeholder="Shape…" show-deselect /></div><div class="fld"><label>Mass (g)</label><v-input type="number" v-model="f.mass_grams" placeholder="0" /></div></div>
+					<div class="fld" v-if="presetItems.length">
+						<label>Standard</label>
+						<v-select :items="presetItems" :model-value="currentPreset" placeholder="Custom (choose a standard…)" @update:model-value="applyPreset" />
+					</div>
 					<div class="dimgrid" v-if="dimFields.length">
 						<div class="fld" v-for="k in dimFields" :key="k">
 							<label>{{ flabel(k) }}</label>
@@ -237,7 +244,7 @@ onMounted(async () => {
 						<div class="geo-canvas" v-html="geoSvg"></div>
 						<div class="geo-cap">{{ formLabel }}<span v-if="geoDimsText"> · {{ geoDimsText }}</span></div>
 					</div>
-					<div class="geo-live empty" v-else><span>Pick a form to preview the shape</span></div>
+					<div class="geo-live empty" v-else><span>Pick a geometry to preview the shape</span></div>
 				</section>
 
 				<section class="card">

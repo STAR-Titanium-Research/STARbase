@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-"""Phase 8 — Legacy data migration from Sample_Data.xlsx into D1 PostgreSQL.
+"""RETIRED. Phase 8 — Legacy data migration from Sample_Data.xlsx into D1 PostgreSQL.
 
-Reads the AppSheet/Sheets export and loads every entity into the target schema
+This importer is retired (docs/superpowers/plans/2026-10-14-form-layout.md, decision 14).
+It writes the old free-text values (geometry names, surface finishes and the like) that the
+database no longer stores, so running it would put values into the tables that the forms
+cannot show. It refuses to run unless --i-know-this-is-retired is passed. The demo seed
+(scripts/seed_demo_sample.sql) uses the current values; use that for a development database.
+
+What it did: reads the AppSheet/Sheets export and loads every entity into the target schema
 in FK-dependency order. Safe to re-run: a re-run never overwrites a value that is already
 in the database (so edits made in the app survive). Where a row already exists it is left
 as is (ON CONFLICT DO NOTHING) or only has its NULL columns filled in
@@ -14,14 +20,14 @@ columns (owner, user_id), resolved through the `people` table (see legacy_people
 Provenance: every imported row records 'Imported from legacy AppSheet export'
 in its notes / outcome_notes field so the audit trail is clear.
 
-Usage
+Usage (only with --i-know-this-is-retired)
 -----
     pip install -r scripts/requirements.txt
     DATABASE_URL="postgres://d1:$POSTGRES_PASSWORD@localhost:5432/d1_database" \\
-        python3 scripts/migrate_legacy.py --xlsx /path/to/Sample_Data.xlsx
+        python3 scripts/migrate_legacy.py --i-know-this-is-retired --xlsx /path/to/Sample_Data.xlsx
 
     # Dry-run (prints row counts only, no DB writes):
-    python3 scripts/migrate_legacy.py --xlsx /path/to/Sample_Data.xlsx --dry-run
+    python3 scripts/migrate_legacy.py --i-know-this-is-retired --xlsx /path/to/Sample_Data.xlsx --dry-run
 """
 
 from __future__ import annotations
@@ -1601,9 +1607,24 @@ def migrate(
     return stats, all_warnings
 
 
+RETIRED_FLAG = "--i-know-this-is-retired"
+RETIRED_MESSAGE = (
+    "migrate_legacy.py is retired: it writes the old free-text values that the database no "
+    "longer stores (see docs/superpowers/plans/2026-10-14-form-layout.md, decision 14). "
+    "Nothing was read or written. For a development database use the demo seed. "
+    f"If you really mean to run it, pass {RETIRED_FLAG}."
+)
+
+
 def main() -> None:
+    # First thing, before argparse and before any file or database is touched.
+    if RETIRED_FLAG not in sys.argv[1:]:
+        sys.exit(RETIRED_MESSAGE)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument(
+        RETIRED_FLAG, action="store_true", help="Acknowledge that this importer is retired"
+    )
     p.add_argument("--xlsx", required=True, help="Path to Sample_Data.xlsx")
     p.add_argument(
         "--dry-run", action="store_true", help="Print counts only; make no DB changes"

@@ -108,7 +108,7 @@ export const INDEX_DEFS: IndexDef[] = [
 			col('sample_code', 'Code', 'code'), col('nickname', 'Nickname'),
 			rel('material_id', 'Material', 'materials', 'alloy_code'),
 			rel('project_id', 'Project', 'projects', 'project_code'),
-			col('form', 'Form'), col('current_status', 'Status'), col('location', 'Location'),
+			col('form', 'Geometry'), col('current_status', 'Status'), col('location', 'Location'),
 			col('created_at', 'Created', 'date'),
 		],
 		searchFields: ['sample_code', 'nickname'],

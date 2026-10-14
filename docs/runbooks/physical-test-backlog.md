@@ -1024,6 +1024,22 @@ migration 141 prints about ownerless records.
   `16-sidebar-b2` against it. All three pass; a failure in 14 or 15 is a regression from the sidebar change. Since
   explorer sidebar B2. PR #262.
 
+- [ ] **FL-1 — Coupon Standard picker, in the form and on Register sample.** Rebuild and load `d1-geometry-preview`
+  (`npm run build` in its folder), then open a new Sample in Data Studio and pick Geometry = Tensile coupon: the
+  preview shows a **Standard** picker above the drawing (ASTM E8/E8M sheet, ASTM E8/E8M subsize, ISO 6892-1 type 1,
+  type 2). Pick one: Length, Width, Gauge length and Gauge width fill in the form (the preview interface asks the form
+  for it with `emit('setFieldValue', ...)`; check this works from inside the Geometry field group) and the drawing
+  redraws; Thickness stays as it was. Edit a dimension: the picker goes back to the placeholder (Custom). Reload a saved
+  record whose dimensions equal a standard: the picker shows it. Bend / fatigue bar offers one Plain bar. Other
+  geometries show no picker. Then the same on STARbase's Register sample screen (no longer auto-fills on picking the
+  geometry). Save a sample after picking a standard: the values are stored. Since form layout stream C.
+- [ ] **FL-2 — Labels, not codes, in STARbase and the PDF.** On a sample with Geometry Tensile coupon, Surface finish
+  Medium machined (or As produced) and a machining operation with a sub-type: STARbase's Samples list, the Sample page
+  (kind line, Surface finish), life strip, Home lists and the Equipment list (Type column and filter) show
+  "Tensile coupon (ISO 6892)", "Medium machined", "Sample prep" and the like, never `tensile_coupon` or
+  `Sample_Prep`; the sample and operation PDF reports (/d1-report/sample/<id>, /operation/<id>) do too, including the
+  "Turning – Facing" sub-type cells. Since form layout stream C.
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and

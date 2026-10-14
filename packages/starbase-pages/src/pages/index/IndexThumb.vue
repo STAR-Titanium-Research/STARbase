@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { assetThumbUrl, fileId, hasDrawableDims, humanise, imageField, sampleDims, thumbKind } from '@d1/ui';
+import { assetThumbUrl, choiceLabel, fileId, hasDrawableDims, imageField, sampleDims, thumbKind } from '@d1/ui';
 import type { IndexDef, RowPlots } from '@d1/ui';
 import SampleGeometry from '../sample/SampleGeometry.vue';
 
@@ -41,7 +41,7 @@ watch(src, () => { failed.value = false; });
 const placeholder = computed(() => {
 	if (kind.value === 'geometry') {
 		const form = typeof props.row.form === 'string' ? props.row.form.trim() : '';
-		return form ? humanise(form) : 'No drawing';
+		return form ? choiceLabel('geometry', form) : 'No drawing';
 	}
 	if (kind.value === 'force' && props.row.process_category !== 'sintering') return 'No force figure yet';
 	return props.def.collection === 'manufacturers' ? 'No logo' : 'No picture';

@@ -21,7 +21,7 @@ echo "pre-commit run --files $(tr '\n' ' ' <<<"$files")"
 echo "bash tests/phase0_smoke.sh"
 has '^(docker-compose\.yml|\.env\.example|infra/(caddy|tailscale)/)' && echo "node --test tests/starbase_compose.test.mjs && npm test -w starbase-web -- csp   # CI: lint, directus-ui"
 
-has '^(core/extensions/(d1-geometry-preview|d1-report)/|packages/starbase-pages/src/|scripts/sync_geometry\.sh)' && {
+has '^(core/extensions/(d1-geometry-preview|d1-report)/|packages/starbase-pages/src/|packages/d1-ui/src/choiceLabels.ts|scripts/sync_geometry\.sh)' && {
   echo "bash scripts/sync_geometry.sh --check"
   echo "node --experimental-strip-types --test core/extensions/d1-geometry-preview/test/geometry.test.ts"
 }
