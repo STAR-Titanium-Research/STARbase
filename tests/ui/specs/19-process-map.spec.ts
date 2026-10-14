@@ -1,12 +1,15 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { STAR_BASE, adminApi, signInStarbase, watchErrors } from '../starbase/target';
+import { STAR_BASE, account, adminApi, signInStarbase, watchErrors } from '../starbase/target';
 
 // The Process map (/map) end to end on the preview copy of live, as an admin and as a Lab Member: the map draws
 // from a real family, a wire's tooltip and Ctrl+click, ＋ on a slot, hover / drag / ＋ leave the viewport alone,
 // the rail, the Sample page's button, keyboard focus, the data thumbnail, a campaign's fan, the phone's bottom
 // sheet. Data comes from admin API queries, so each scenario skips (with its reason) when the copy has none.
+// A fresh copy gives the Lab Member no readable sample, so the member run lists a few family samples as "Can view"
+// for the member's person (sample_access, role view: the supported way to share, ADR-0014) and removes exactly the
+// rows it added afterwards.
 //   (cd tests/ui && D1_ROUTES_CREDENTIALS=<abs path of preview-credentials-<name>.txt> D1_ROUTES_STARBASE=http://127.0.0.1:5190 \
 //      npx playwright test specs/19-process-map.spec.ts --retries=0)
 // Needs the d1-starbase preview and STARbase under vite preview running (tests/ui/README.md, spec 14 section).
@@ -56,6 +59,29 @@ async function familySamples(api: APIRequestContext, readable?: APIRequestContex
 	return found;
 }
 const familySample = async (api: APIRequestContext, readable?: APIRequestContext) => (await familySamples(api, readable))[0] ?? null;
+
+/**
+ * Make up to `max` family samples readable to the preview's Lab Member by listing the member's person as "Can view" on them
+ * (sample_access, role view; the readers tables follow by trigger). Returns the access rows it created, to be removed by
+ * `revokeAccess`; a sample the member can already read through an existing row is left alone.
+ */
+async function grantMemberView(api: APIRequestContext, max = 4): Promise<string[]> {
+	const [email] = account('member');
+	const user = (await rows(api, `/users?limit=1&fields=id&filter[email][_eq]=${encodeURIComponent(email)}`))[0];
+	const person = user && (await rows(api, `/items/people?limit=1&fields=person_id&filter[user_id][_eq]=${user.id}`))[0];
+	if (!person) return [];
+	const created: string[] = [];
+	for (const s of await familySamples(api, undefined, max)) {
+		const existing = await rows(api, `/items/sample_access?limit=1&fields=access_id&filter[sample_id][_eq]=${s.id}&filter[person_id][_eq]=${person.person_id}`);
+		if (existing.length) continue;
+		const res = await api.post(`${SERVER}/items/sample_access`, { data: { sample_id: s.id, person_id: person.person_id, role: 'view' } });
+		if (res.ok()) created.push(String(((await res.json()).data as Json).access_id));
+	}
+	return created;
+}
+async function revokeAccess(api: APIRequestContext, ids: string[]): Promise<void> {
+	for (const id of ids) await api.delete(`${SERVER}/items/sample_access/${id}`);
+}
 
 const mapUrl = (collection: string, id: string) => `${STARBASE}/map?focus=${collection}:${encodeURIComponent(id)}`;
 const nodes = (page: Page) => page.locator('.vue-flow__node');
@@ -129,13 +155,20 @@ for (const who of ['admin', 'member'] as const) {
 
 		let admin: APIRequestContext;
 		let sample: { id: string; code: string } | null = null;
+		let granted: string[] = [];
 		test.beforeAll(async ({ playwright }) => {
 			admin = await adminApi(playwright, SERVER);
-			// The admin reads every sample; the Lab Member's own sample is found in its own session in the first test.
+			// The admin reads every sample; the Lab Member reads none on a fresh copy, so it is given a few to view (put
+			// back in afterAll) and finds its own sample in its own session in the first test.
 			if (who === 'admin') sample = await familySample(admin);
+			else granted = await grantMemberView(admin);
 		});
 		test.afterAll(async () => {
-			await admin.dispose();
+			try {
+				await revokeAccess(admin, granted);
+			} finally {
+				await admin.dispose();
+			}
 		});
 
 		// A member reads only some samples (on a fresh copy it may read none): look through its own session.
