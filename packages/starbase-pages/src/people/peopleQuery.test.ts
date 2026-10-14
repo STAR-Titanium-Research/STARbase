@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ATTENTION_LABELS, applyList, chipCounts, parseListState, toQuery, type ListState, type PeopleRow } from './peopleQuery';
+import { ATTENTION_LABELS, applyList, chipCounts, parseListState, toQuery, type ListState, type PeopleRow, type PersonTeam } from './peopleQuery';
 
-const DEFAULT: ListState = { chip: 'all', role: 'any', sort: 'name', q: '', attn: null, person: null };
+const DEFAULT: ListState = { chip: 'all', role: 'any', team: 'any', sort: 'name', q: '', attn: null, person: null };
+const team = (id: string, over: Partial<PersonTeam> = {}): PersonTeam => ({ team_id: id, name: `Team ${id}`, color: 'teal', logo: null, is_manager: false, ...over });
 const state = (over: Partial<ListState> = {}): ListState => ({ ...DEFAULT, ...over });
 
 type Over = Partial<PeopleRow> & { signedIn?: string | null; role?: string | null };
@@ -45,12 +46,15 @@ describe('list state in the URL', () => {
 	});
 
 	it('round-trips every non-default field', () => {
-		const s: ListState = { chip: 'operators', role: 'r-admin', sort: 'last', q: 'ada', attn: 'missing_email', person: 'p-1' };
-		expect(toQuery(s)).toEqual({ f: 'operators', role: 'r-admin', sort: 'last', q: 'ada', attn: 'missing_email', person: 'p-1' });
+		const s: ListState = { chip: 'operators', role: 'r-admin', team: 't-1', sort: 'last', q: 'ada', attn: 'missing_email', person: 'p-1' };
+		expect(toQuery(s)).toEqual({ f: 'operators', role: 'r-admin', team: 't-1', sort: 'last', q: 'ada', attn: 'missing_email', person: 'p-1' });
 		expect(parseListState(toQuery(s))).toEqual(s);
 		for (const chip of ['researchers', 'operators', 'nologin', 'former'] as const) expect(parseListState(toQuery(state({ chip })))).toEqual(state({ chip }));
 		expect(parseListState(toQuery(state({ role: 'none' })))).toEqual(state({ role: 'none' }));
 		expect(parseListState(toQuery(state({ sort: 'added' })))).toEqual(state({ sort: 'added' }));
+		expect(parseListState(toQuery(state({ team: 't-9' })))).toEqual(state({ team: 't-9' }));
+		expect(parseListState({ team: 't-9' }).team).toBe('t-9');
+		expect(parseListState({ team: '' }).team).toBe('any');
 	});
 
 	it('unknown chip falls back to all', () => {
@@ -134,6 +138,32 @@ describe('applyList', () => {
 	});
 });
 
+describe('the team filter', () => {
+	it('keeps the people whose teams include the team, and nobody else', () => {
+		const rows = [
+			person('Ann', { teams: [team('t1'), team('t2')] }),
+			person('Bo', { teams: [team('t2')] }),
+			person('Cy', { teams: [] }),
+			person('Di'), // a row with no teams at all
+			loginRow('u-9', 'x@y.z'),
+		];
+		expect(ids(applyList(rows, state({ team: 't2' })))).toEqual(['Ann', 'Bo']);
+		expect(ids(applyList(rows, state({ team: 't1' })))).toEqual(['Ann']);
+		expect(ids(applyList(rows, state({ team: 'nope' })))).toEqual([]);
+		expect(ids(applyList(rows, state({ team: 'any' })))).toEqual(['Ann', 'Bo', 'Cy', 'Di', 'u-9']);
+	});
+
+	it('combines with the chips and the role', () => {
+		const rows = [
+			person('Ann', { teams: [team('t1')], signedIn: null, role: 'r-a' }),
+			person('Bo', { teams: [team('t1')], active: false }),
+			person('Cy', { teams: [team('t2')], active: false }),
+		];
+		expect(ids(applyList(rows, state({ team: 't1', chip: 'former' })))).toEqual(['Bo']);
+		expect(ids(applyList(rows, state({ team: 't1', role: 'r-a' })))).toEqual(['Ann']);
+	});
+});
+
 describe('chipCounts', () => {
 	it('chipCounts counts persons only', () => {
 		const rows = [
@@ -150,7 +180,7 @@ describe('ATTENTION_LABELS', () => {
 	it('ATTENTION_LABELS pluralise', () => {
 		const L = ATTENTION_LABELS;
 		expect(Object.keys(L).sort()).toEqual(
-			['former_login_active', 'invite_not_accepted', 'login_without_person', 'missing_email', 'possible_duplicate', 'suspended_owns_records'],
+			['former_in_team', 'former_login_active', 'invite_not_accepted', 'login_without_person', 'missing_email', 'possible_duplicate', 'suspended_owns_records'],
 		);
 		expect(L.login_without_person(3)).toBe('3 logins with no person');
 		expect(L.login_without_person(1)).toBe('1 login with no person');
@@ -164,5 +194,7 @@ describe('ATTENTION_LABELS', () => {
 		expect(L.former_login_active(2)).toBe('2 Former people whose logins are still active');
 		expect(L.suspended_owns_records(1)).toBe('1 Suspended login that still owns records');
 		expect(L.suspended_owns_records(2)).toBe('2 Suspended logins that still own records');
+		expect(L.former_in_team(1)).toBe('1 Former person still in a team');
+		expect(L.former_in_team(3)).toBe('3 Former people still in a team');
 	});
 });

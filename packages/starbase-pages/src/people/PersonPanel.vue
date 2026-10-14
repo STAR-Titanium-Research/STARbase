@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // The panel beside the People list (a bottom sheet on a narrow screen): who the person is (Edit opens the person dialog), their Account
-// (an administrator's view: role, login, last sign-in) and their Access (three counts; a count opens its records). A member sees their own
+// (an administrator's view: role, login, last sign-in), their Teams (chips that open the team) and their Access (counts, including the
+// records their teams give them; a count opens its records, and a line says what they are still waiting to be approved on). A member sees their own
 // panel without the Account section. Words follow CONTEXT.md: account role, login, Suspended, Former; Researcher / Operator are kinds of work.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RecordLink, useExplorerHost } from '@d1/ui';
+import TeamChip from './TeamChip.vue';
 import PersonEditDialog from './PersonEditDialog.vue';
 import { lastSeen } from './lastSeen';
 import {
@@ -16,7 +18,7 @@ import {
 	type PersonAccess,
 } from './peopleApi';
 import type { PeopleLogin, PeopleRow } from './peopleQuery';
-import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote } from './personPanel';
+import { ACCESS_LISTS, ESC_OWNER_SELECTOR, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
 
 const props = defineProps<{
 	personId: string;
@@ -105,7 +107,12 @@ function doAction() {
 	});
 }
 
-// ---- Access: three counts; a count lists its records ----
+// ---- Teams: a chip per team; it opens the team's page ----
+const teams = computed(() => person.value?.teams ?? []);
+const openTeam = (teamId: string) => host.navigate(`/teams/${encodeURIComponent(teamId)}`);
+
+// ---- Access: the counts; a count lists its records ----
+const waiting = computed(() => waitingLine(access.value));
 const access = ref<PersonAccess | null>(null);
 const openList = ref<AccessList | null>(null);
 const records = ref<AccessRecord[]>([]);
@@ -223,6 +230,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 			<p v-else-if="notice" class="ok" role="status">{{ notice }}</p>
 		</section>
 
+		<section class="sec" aria-label="Teams">
+			<h3>Teams</h3>
+			<div v-if="teams.length" class="chips">
+				<TeamChip v-for="t in teams" :key="t.team_id" :team="t" clickable @open="openTeam" />
+			</div>
+			<p v-else class="dim none">Not in any team.</p>
+		</section>
+
 		<section class="sec" aria-label="Access">
 			<h3>Access</h3>
 			<div v-for="l in ACCESS_LISTS" :key="l.id" class="f">
@@ -232,6 +247,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 					{{ countLabel(access[l.id]) }}
 				</button>
 			</div>
+			<p v-if="waiting" class="waiting">{{ waiting }}</p>
 			<p v-if="accessError" class="err" role="alert">{{ accessError }}</p>
 			<div v-if="openList" class="recs">
 				<v-progress-circular v-if="listLoading" indeterminate small />
@@ -298,6 +314,10 @@ h3 { margin: 12px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(-
 .dim { color: var(--d1-dim); font-size: var(--fs-sm); }
 .err { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--d1-bad); overflow-wrap: anywhere; }
 .ok { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--d1-dim); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
+.none { margin: 4px 0 0; }
+.waiting { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--d1-warn); }
 
 .recs { margin-top: 6px; border-top: 1px solid var(--d1-line); }
 .recs ul { list-style: none; margin: 0; padding: 0; }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The People page: a sparse list (filter chips with counts, Role and Sort menus, one quiet "needs attention" line) with the open person
+// The People page: a sparse list (filter chips with counts, Role, Team and Sort menus, one quiet "needs attention" line) with the open person
 // in a panel beside it. What the list shows (chip, role, sort, search, attention filter, open person) lives in the URL, so a link or a reload
 // brings the same view back. An administrator sees logins, account roles and the attention line; a member sees names and kinds of work.
 import ExplorerView from '../ExplorerView.vue';
@@ -67,7 +67,7 @@ const rows = computed<PeopleRow[]>(() => data.value?.rows ?? []);
 const canAdminister = computed(() => data.value?.canAdministerAccounts === true);
 const roles = computed(() => (data.value?.roles ?? []).map((r) => ({ id: r.id, name: r.name ?? r.id })));
 const counts = computed(() => chipCounts(rows.value));
-// A member has no logins to filter by: their list state is the chip, sort and search only.
+// A member has no logins to filter by: their list state is the chip, team, sort and search only.
 const effective = computed<ListState>(() => (isAdmin.value ? state.value : { ...state.value, role: 'any', attn: null }));
 const shown = computed(() => applyList(rows.value, effective.value));
 
@@ -85,6 +85,12 @@ const roleItems = computed(() => [
 	...roles.value.map((r) => ({ text: `Role: ${r.name}`, value: r.id })),
 	{ text: 'Role: No login', value: 'none' },
 ]);
+// Everyone may filter by team (a Lab Member reads the teams too); the menu is left out when there are none to choose from.
+const teamItems = computed(() => [
+	{ text: 'Team: any', value: 'any' },
+	...(data.value?.teams ?? []).map((t) => ({ text: `Team: ${t.name}`, value: t.team_id })),
+]);
+const showTeamMenu = computed(() => (data.value?.teams.length ?? 0) > 0 || state.value.team !== 'any');
 const sortItems = computed(() => [
 	{ text: 'Sort: Name', value: 'name' },
 	...(isAdmin.value ? [{ text: 'Sort: Last sign-in', value: 'last' }] : []),
@@ -211,6 +217,7 @@ function openLink(r: PeopleRow) {
 				</button>
 				<span class="sep" />
 				<v-select v-if="isAdmin" class="menu" :model-value="state.role" :items="roleItems" @update:model-value="update({ role: String($event) })" />
+				<v-select v-if="showTeamMenu" class="menu" :model-value="state.team" :items="teamItems" @update:model-value="update({ team: String($event) })" />
 				<v-select class="menu" :model-value="state.sort" :items="sortItems" @update:model-value="update({ sort: $event as ListState['sort'] })" />
 			</div>
 

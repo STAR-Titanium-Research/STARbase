@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AccessRecord } from './peopleApi';
 import type { PeopleRow } from './peopleQuery';
-import { canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote } from './personPanel';
+import { ACCESS_LISTS, canEditRole, countLabel, escapeClosesPanel, kindLabel, levelLabel, loginLine, sourceNote, waitingLine } from './personPanel';
 
 const row = (status: string | null | undefined): PeopleRow => ({
 	kind: 'person',
@@ -61,6 +61,19 @@ describe('words', () => {
 		expect(levelLabel(null)).toBe('');
 		expect(kindLabel('sample')).toBe('Sample');
 		expect(kindLabel(null)).toBe('Record');
+	});
+});
+
+describe('teams on the panel', () => {
+	it('has a Through teams row that lists like the others', () => {
+		expect(ACCESS_LISTS.map((l) => l.id)).toEqual(['owns', 'shared', 'investigator', 'teams']);
+		expect(ACCESS_LISTS.find((l) => l.id === 'teams')?.label).toBe('Through teams');
+	});
+	it('waitingLine says how many records and owners, or nothing when none are waiting', () => {
+		expect(waitingLine({ waiting: 3, waiting_owners: 2 })).toBe('Waiting for approval: 3 records (2 owners)');
+		expect(waitingLine({ waiting: 1, waiting_owners: 1 })).toBe('Waiting for approval: 1 record (1 owner)');
+		expect(waitingLine({ waiting: 0, waiting_owners: 0 })).toBeNull();
+		expect(waitingLine(null)).toBeNull();
 	});
 });
 

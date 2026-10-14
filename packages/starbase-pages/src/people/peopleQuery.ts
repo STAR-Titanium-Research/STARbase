@@ -1,4 +1,4 @@
-// The People page's list state: what the URL says (chip, role, sort, search, attention filter, open person), and the pure
+// The People page's list state: what the URL says (chip, role, team, sort, search, attention filter, open person), and the pure
 // filter/sort/count functions over the rows the page loaded (peopleApi.ts). No Vue, no network, so it is all unit-tested.
 
 /** The login a person has, as d1-people-admin returns it (null for a person without one). */
@@ -8,6 +8,17 @@ export interface PeopleLogin {
 	role_name: string | null;
 	last_access: string | null;
 	email: string | null;
+}
+
+/** A team a person belongs to, as d1-people-admin returns it (a member's row gets the same from /items/team_members joined with the teams). */
+export interface PersonTeam {
+	team_id: string;
+	name: string;
+	/** One of the palette keys: teal, blue, indigo, violet, pink, red, orange, amber, green, slate. */
+	color: string;
+	/** directus_files id of the logo, or null. */
+	logo: string | null;
+	is_manager: boolean;
 }
 
 /**
@@ -29,14 +40,19 @@ export interface PeopleRow {
 	attention: string[];
 	/** When the person was added. The People endpoint does not return it yet, so "Recently added" leaves rows without it last. */
 	created_at?: string | null;
+	/** The teams the person is in (absent on a login without a person). */
+	teams?: PersonTeam[];
 }
 
 export type Chip = 'all' | 'researchers' | 'operators' | 'nologin' | 'former';
 export type RoleFilter = 'any' | 'none' | string; // 'any', 'none' (persons with no login) or a role id
+export type TeamFilter = 'any' | string; // 'any' or a team id
 export type SortKey = 'name' | 'last' | 'added';
 export interface ListState {
 	chip: Chip;
 	role: RoleFilter;
+	/** 'any', or a team id: only people in that team. */
+	team: TeamFilter;
 	sort: SortKey;
 	q: string;
 	attn: string | null;
@@ -59,6 +75,7 @@ export function parseListState(query: Record<string, unknown>): ListState {
 	return {
 		chip: (CHIPS as readonly string[]).includes(chip) ? (chip as Chip) : 'all',
 		role: text(query.role) || 'any',
+		team: text(query.team) || 'any',
 		sort: (SORTS as readonly string[]).includes(sort) ? (sort as SortKey) : 'name',
 		q: text(query.q),
 		attn: text(query.attn) || null,
@@ -71,6 +88,7 @@ export function toQuery(s: ListState): Record<string, string> {
 	const out: Record<string, string> = {};
 	if (s.chip !== 'all') out.f = s.chip;
 	if (s.role !== 'any') out.role = s.role;
+	if (s.team !== 'any') out.team = s.team;
 	if (s.sort !== 'name') out.sort = s.sort;
 	if (s.q) out.q = s.q;
 	if (s.attn) out.attn = s.attn;
@@ -91,6 +109,8 @@ function roleMatches(r: PeopleRow, role: RoleFilter): boolean {
 	if (role === 'none') return r.login === null;
 	return r.login?.role_id === role;
 }
+
+const teamMatches = (r: PeopleRow, team: TeamFilter): boolean => team === 'any' || (r.teams ?? []).some((t) => t.team_id === team);
 
 const when = (iso: string | null | undefined): number => {
 	const t = iso ? Date.parse(iso) : NaN;
@@ -122,6 +142,7 @@ export function applyList(rows: PeopleRow[], s: ListState): PeopleRow[] {
 				if (s.attn !== 'login_without_person' && !(s.chip === 'all' && s.attn === null)) return false;
 			} else if (!chipMatches[s.chip](r)) return false;
 			if (!roleMatches(r, s.role)) return false;
+			if (!teamMatches(r, s.team)) return false;
 			if (s.attn && !r.attention.includes(s.attn)) return false;
 			if (q && !`${r.full_name}\n${r.email ?? ''}\n${r.login?.email ?? ''}`.toLowerCase().includes(q)) return false;
 			return true;
@@ -149,4 +170,5 @@ export const ATTENTION_LABELS: Record<string, (n: number) => string> = {
 	possible_duplicate: (n) => plural(n, 'possible duplicate', 'possible duplicates'),
 	former_login_active: (n) => `${n} Former ${n === 1 ? 'person whose login is' : 'people whose logins are'} still active`,
 	suspended_owns_records: (n) => `${n} Suspended ${n === 1 ? 'login that still owns' : 'logins that still own'} records`,
+	former_in_team: (n) => `${n} Former ${n === 1 ? 'person' : 'people'} still in a team`,
 };
