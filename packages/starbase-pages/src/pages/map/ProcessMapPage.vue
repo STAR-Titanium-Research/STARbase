@@ -14,6 +14,8 @@ import type { Dir } from './model/elkInput';
 import { recordWord } from './model/fans';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
+import ExportFrame from './ExportFrame.vue';
+import ExportMenu from './ExportMenu.vue';
 import HoverCard from './HoverCard.vue';
 import MapRail from './MapRail.vue';
 import MapSheet from './MapSheet.vue';
@@ -23,6 +25,7 @@ import { useMapInput } from './useMapInput';
 import { miniMapColor, useMapCanvas } from './useMapCanvas';
 import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
+import { personName, useMapExport } from './useMapExport';
 import { useProcessMap, type Reach } from './useProcessMap';
 
 // The Process map (spec D1-D3, §6.1): a record's family as a map of what was done to it. The page frame,
@@ -152,6 +155,9 @@ const railEvents = { expand: railExpand, centre: railCentre, hover: railHover, s
 // Keyboard, focus and touch (spec D23, D24): the canvas's handlers, decisions in useMapInput.ts.
 const input = useMapInput({ map, canvas, canvasEl, actions, router, pointerKind });
 
+// Export ▾ (spec D26): PNG or PDF of the whole map at the current Show settings. The off-screen frame is drawn only while it runs.
+const mapExport = useMapExport({ canvas, map, person: () => personName(host.user.value) });
+
 // The wire tooltip's last line: where Ctrl/⌘+click goes.
 const tipHint = computed(() => {
 	const t = map.tooltip.value;
@@ -208,6 +214,7 @@ onBeforeUnmount(() => {
 
 					<template #title-actions>
 						<v-button small secondary @click="copyLink"><v-icon name="link" small /> {{ copied ? 'Copied' : 'Copy link' }}</v-button>
+						<ExportMenu :busy="mapExport.exporting.value" :disabled="!canvas.laidOut.value || !map.nodes.value.length || mapExport.exporting.value" @pick="mapExport.exportAs" />
 					</template>
 
 					<template v-if="!phone" #rail>
@@ -227,6 +234,8 @@ onBeforeUnmount(() => {
 						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
 						<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
 						<div v-if="canvas.layoutError.value" class="pm-banner pm-bad" role="alert">{{ canvas.layoutError.value }}</div>
+						<div v-if="mapExport.error.value" class="pm-banner pm-bad" role="alert">{{ mapExport.error.value }}</div>
+						<div v-else-if="mapExport.notice.value" class="pm-banner" role="status">{{ mapExport.notice.value }}</div>
 
 						<div
 							ref="canvasEl"
@@ -267,6 +276,7 @@ onBeforeUnmount(() => {
 							<WireTip :lines="map.tooltip.value?.lines ?? null" :canvas="canvasEl" :hint="tipHint" />
 							<HoverCard v-if="map.card.value && canvasEl" :key="map.card.value.id" :info="map.card.value.info" :preview="cardPreview" :target="map.card.value.el" :canvas="canvasEl" />
 						</div>
+						<ExportFrame v-if="mapExport.framePlan.value" :plan="mapExport.framePlan.value" />
 					</Section>
 				</RecordLayout>
 				<MapSheet v-if="phone" :title="map.selectedInfo.value?.code ?? 'Nothing selected'">
