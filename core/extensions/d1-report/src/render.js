@@ -17,6 +17,9 @@ export const EXPLORER_PAGES = {
 	test_sessions: 'tests',
 	campaigns: 'campaigns',
 	projects: 'projects',
+	tool_boxes: 'tool-boxes',
+	cutting_inserts: 'inserts',
+	insert_edges: 'edges',
 };
 
 // Where report QR codes and in-report links point: the permanent link on the Directus host
