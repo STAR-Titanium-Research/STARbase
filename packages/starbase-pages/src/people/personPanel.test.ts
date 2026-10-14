@@ -59,6 +59,7 @@ describe('words', () => {
 		expect(levelLabel('edit')).toBe('Can edit');
 		expect(levelLabel('pi')).toBe('Principal investigator');
 		expect(levelLabel('own')).toBe('Owns');
+		expect(levelLabel('manage')).toBe('Manages (team owner)');
 		expect(levelLabel('weird')).toBe('weird');
 		expect(levelLabel(null)).toBe('');
 		expect(kindLabel('sample')).toBe('Sample');

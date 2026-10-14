@@ -62,6 +62,7 @@ export function waitingLine(a: Pick<PersonAccess, 'waiting' | 'waiting_owners'> 
 const LEVELS: Record<string, string> = {
 	owner: 'Owner',
 	own: 'Owns', // a record the team owns (its owner grant)
+	manage: 'Manages (team owner)', // a manager of the team that owns the record (a manage row)
 	pi: 'Principal investigator',
 	view: 'Can view',
 	edit: 'Can edit',
