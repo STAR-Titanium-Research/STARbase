@@ -12,7 +12,7 @@ import { createHoverStack, type Hovered } from './model/hoverStack';
 import { loadFamily, loadRelationDefs, parseFocus } from './model/loadFamily';
 import { shownNodes } from './model/reach';
 import type { ContainerNode, MapNode, ProcessData, ProcessGraph, Ref } from './model/types';
-import { kindOfCollection } from './nodes/kinds';
+import { KINDS, kindOfCollection } from './nodes/kinds';
 import { refKey } from './nodes/actions';
 import type { Dir } from './model/elkInput';
 
@@ -28,6 +28,9 @@ export const SHOW_KEY = 'd1.map.show.v1';
 export const SETTINGS_CHIP = 'settings';
 /** Cards that are only ever drawn beside what they feed; a Show chip each. */
 const SOURCE_KINDS = ['stock_lot', 'powder_batch', 'material'];
+/** What a Show chip may hide: never the samples, operations, tests or lineage the wires run through. */
+const STRUCTURAL = new Set(['sample', 'operation', 'test', 'junction']);
+const HIDEABLE: ReadonlySet<string> = new Set([...Object.keys(KINDS).filter((k) => !STRUCTURAL.has(k)), SETTINGS_CHIP]);
 
 /** The route and router the map needs: kept to what it uses so tests can fake them. */
 export interface MapRoute {
@@ -65,7 +68,7 @@ function readRemembered(): Remembered {
     const parsed = JSON.parse(localStorage.getItem(SHOW_KEY) ?? 'null');
     if (parsed && typeof parsed === 'object') {
       return {
-        hidden: Array.isArray(parsed.hidden) ? parsed.hidden.filter((k: unknown): k is string => typeof k === 'string') : [],
+        hidden: Array.isArray(parsed.hidden) ? parsed.hidden.filter((k: unknown): k is string => typeof k === 'string' && HIDEABLE.has(k)) : [],
         probable: parsed.probable !== false,
       };
     }
@@ -144,6 +147,15 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     if (focusKey.value) query.focus = focusKey.value;
     void router.replace({ path: route.path, query: { ...query, ...patch } });
   }
+  /** The Finder picked a record: load it into the map (reach kept). */
+  function setFocus(collection: string, id: string): void {
+    const query: Record<string, string> = {};
+    for (const [k, v] of Object.entries(route.query)) {
+      const s = first(v);
+      if (s !== undefined && k !== 'sample') query[k] = s;
+    }
+    void router.replace({ path: route.path, query: { ...query, focus: `${collection}:${id}`, reach: String(reach.value) } });
+  }
   /** "Clear": back to the search-first page, keeping the other query keys. */
   function clearFocus(): void {
     const query: Record<string, string> = {};
@@ -165,6 +177,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   const probable = ref(remembered.probable);
   const remember = () => writeRemembered({ hidden: [...hiddenKinds.value], probable: probable.value });
   function toggleKind(kind: string): void {
+    if (!HIDEABLE.has(kind)) return;
     const next = new Set(hiddenKinds.value);
     if (!next.delete(kind)) next.add(kind);
     hiddenKinds.value = next;
@@ -390,6 +403,7 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
     partial,
     setReach,
     clearFocus,
+    setFocus,
     dir,
     setDir,
     probable,

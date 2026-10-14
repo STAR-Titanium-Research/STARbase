@@ -38,7 +38,8 @@ const actions: MapActions = {
 	toggleRows: (id) => map.toggleRows(id),
 	toggleMore: (id) => {
 		map.toggleMore(id);
-		void canvas.remeasure(id);
+		// The card grows or shrinks: measure it, then lay out again so it does not overlap its neighbours.
+		void canvas.remeasure(id).then(() => canvas.relayout());
 	},
 };
 const view: MapView = { direction: map.dir, moreOpen: map.moreOpen, selectedRef: map.selectedRefKey };
@@ -165,7 +166,7 @@ onBeforeUnmount(() => {
 				</Section>
 			</RecordLayout>
 		</PageShell>
-		<Finder v-if="finderOpen" @close="finderOpen = false" />
+		<Finder v-if="finderOpen" :pick-record="(r) => map.setFocus(r.collection, r.id)" @close="finderOpen = false" />
 	</ExplorerView>
 </template>
 

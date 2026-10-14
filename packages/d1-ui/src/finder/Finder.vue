@@ -18,12 +18,14 @@ import { useExplorerHost } from '../host';
 import { MIN_QUERY } from './finder';
 import ScanResultCard from './ScanResultCard.vue';
 import type { FinderHit } from './finder';
-import { isTypingKey, moveIndex, toSections } from './finderNav';
+import { isTypingKey, moveIndex, openHit, toSections } from './finderNav';
 import { flattenLines, isScanStarted, normalizeScan } from './scan';
 import { useFinder } from './useFinder';
 import { useExplorerNav } from '../nav/useExplorerNav';
 
-const props = defineProps<{ canScan?: boolean }>();
+// `pickRecord`: a host that wants the record itself (the Process map loads it) gets it instead of the
+// navigation; Pages and Saved views, which are not records, still navigate.
+const props = defineProps<{ canScan?: boolean; pickRecord?: (record: { collection: string; id: string }) => void }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'scan'): void }>();
 
 const host = useExplorerHost();
@@ -69,7 +71,7 @@ function openTo(to: string) {
 }
 
 function pick(hit: FinderHit) {
-	host.navigate(hit.to);
+	openHit(hit, (to) => host.navigate(to), props.pickRecord);
 	emit('close');
 }
 

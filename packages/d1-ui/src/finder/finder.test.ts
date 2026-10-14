@@ -157,3 +157,22 @@ describe('visibleSources', () => {
 		);
 	});
 });
+
+describe('hits carry their record', () => {
+	it('every remote source says which record a row is', () => {
+		const cases: [string, any][] = [
+			['physical_samples', { sample_id: 's1', sample_code: 'S-1' }],
+			['manufacturing_operations', { operation_id: 'o1' }],
+			['test_sessions', { session_id: 't1' }],
+			['campaigns', { campaign_id: 'c1' }],
+			['projects', { project_id: 'p1' }],
+			['people', { person_id: 'pe1', full_name: 'Jo' }],
+			['raw_stock_lots', { lot_id: 'L1', lot_code: 'LOT-1' }],
+		];
+		for (const [collection, row] of cases) {
+			const [hit] = toHits(source(collection), 'x', [row]);
+			expect(hit.record, collection).toEqual({ collection, id: Object.values(row)[0] });
+		}
+		for (const src of FINDER_SOURCES) expect(typeof src.record, src.collection).toBe('function');
+	});
+});

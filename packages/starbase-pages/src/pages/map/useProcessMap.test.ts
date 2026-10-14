@@ -249,6 +249,37 @@ describe('useProcessMap', () => {
     expect(again.map.hiddenKinds.value.has('stock_lot')).toBe(true);
   });
 
+  it('hidden kinds read back from storage are validated: only hideable kinds survive', async () => {
+    const stored = JSON.stringify({ hidden: ['sample', 'operation', 'test', 'junction', 'nonsense', 7, 'stock_lot', 'equipment', 'settings'], probable: true });
+    vi.stubGlobal('localStorage', { getItem: () => stored, setItem: () => undefined });
+    family.mockResolvedValue(small());
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    expect([...map.hiddenKinds.value].sort()).toEqual(['equipment', 'settings', 'stock_lot']);
+    expect(map.shown.value.has('s:s1')).toBe(true);
+    map.toggleKind('sample');
+    expect(map.hiddenKinds.value.has('sample')).toBe(false);
+  });
+
+  it('setFocus loads a picked record: replace on the same path with focus and the current reach', async () => {
+    family.mockResolvedValue(small());
+    const { map, replace } = setup({ focus: 'physical_samples:s1', reach: '3', keep: 'me' });
+    await settle();
+    map.setFocus('physical_samples', 's2');
+    expect(replace).toHaveBeenLastCalledWith({ path: '/map', query: { focus: 'physical_samples:s2', reach: '3', keep: 'me' } });
+    await settle();
+    expect(family).toHaveBeenLastCalledWith(api, 's2');
+  });
+
+  it('setFocus from the empty page, and on a collection the map cannot focus yet, shows its current state', async () => {
+    const { map } = setup();
+    await settle();
+    map.setFocus('tools', 't1');
+    await settle();
+    expect(map.status.value).toBe('error');
+    expect(map.error.value).toMatch(/sample/i);
+  });
+
   it('localStorage that throws (or is missing) does not break toggleKind, setProbable or reading', async () => {
     const boom = () => {
       throw new Error('denied');

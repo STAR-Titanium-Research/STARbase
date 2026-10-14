@@ -150,7 +150,7 @@ export function useMapCanvas(map: ProcessMap) {
       laidOut.value = true;
       if (needsFit) {
         needsFit = false;
-        await fitFocus();
+        await fitFocus(false); // the first view of a family: no glide from the default viewport
       }
     } catch (e) {
       if (mine !== token) return;
@@ -174,15 +174,15 @@ export function useMapCanvas(map: ProcessMap) {
   });
 
   // ---- viewport ---------------------------------------------------------------------------------
-  const fitIds = (ids: string[] | undefined) => {
+  const fitIds = (ids: string[] | undefined, animate = true) => {
     const present = ids?.filter((id) => vf.findNode(id));
-    return vf.fitView({ padding: FIT_PADDING, maxZoom: 1, duration: reducedMotion() ? 0 : 300, ...(present?.length ? { nodes: present } : {}) });
+    return vf.fitView({ padding: FIT_PADDING, maxZoom: 1, duration: animate && !reducedMotion() ? 300 : 0, ...(present?.length ? { nodes: present } : {}) });
   };
   /** Frame the focus and what is one process step around it (not the whole family at a tiny zoom). */
-  function fitFocus(): Promise<boolean> {
+  function fitFocus(animate = true): Promise<boolean> {
     const g = map.graph.value;
-    if (!g || !map.focusNodeId.value) return fitIds(undefined);
-    return fitIds([...shownNodes(g, map.focusNodeId.value, 1)]);
+    if (!g || !map.focusNodeId.value) return fitIds(undefined, animate);
+    return fitIds([...shownNodes(g, map.focusNodeId.value, 1)], animate);
   }
   /** Fit everything drawn (the Fit button). */
   const fit = () => fitIds(undefined);
