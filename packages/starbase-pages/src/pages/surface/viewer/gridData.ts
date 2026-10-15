@@ -16,8 +16,8 @@ export interface ScanMeta {
 	sourceFormat: string | null;
 }
 
-// The decimated grid is at most 1024 cells on the longer side; a meta that claims much more is not ours.
-export const MAX_GRID_SIDE = 4096;
+// The decimated grid is at most 1024 cells on the longer side (the contract, and the worker's cap); a meta that claims more is not ours.
+export const MAX_GRID_SIDE = 1024;
 
 const finite = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const count = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null);
@@ -91,8 +91,6 @@ export interface TextureData {
 	stats: GridStats;
 }
 
-const FILL_PASSES = 512;
-
 /**
  * The grid in the form the shader reads. A GPU may treat NaN as anything, so none is ever uploaded: a missing
  * cell gets a height filled in from its neighbours (so the surface next to a hole is not dragged down to 0) and a
@@ -101,45 +99,56 @@ const FILL_PASSES = 512;
 export function buildTextureData(grid: Float32Array, width: number, height: number): TextureData {
 	if (grid.length !== width * height) throw new ScanDataError('The grid does not match its size.');
 	const stats = gridStats(grid);
-	const data = new Float32Array(grid.length * 2);
-	const known = new Uint8Array(grid.length); // 1 = has a height (valid, or already filled)
-	const open: number[] = [];
-	for (let i = 0; i < grid.length; i++) {
+	const cells = grid.length;
+	const data = new Float32Array(cells * 2);
+	const known = new Uint8Array(cells); // 1 = has a height (valid, or already filled)
+	let missing = 0;
+	for (let i = 0; i < cells; i++) {
 		if (Number.isFinite(grid[i])) {
 			data[i * 2] = grid[i];
 			data[i * 2 + 1] = 1;
 			known[i] = 1;
 		} else {
-			open.push(i);
+			missing++;
 		}
 	}
-	if (open.length === 0) return { data, stats };
+	if (missing === 0) return { data, stats };
 
-	// Grow the known cells into the holes one ring at a time, each new cell the mean of its known 4-neighbours.
-	const fallback = stats.valid ? (stats.min + stats.max) / 2 : 0;
-	let todo = open;
-	for (let pass = 0; pass < FILL_PASSES && todo.length > 0; pass++) {
-		const filled: Array<[number, number]> = [];
-		const left: number[] = [];
-		for (const i of todo) {
-			const x = i % width;
-			const y = (i - x) / width;
-			let sum = 0;
-			let n = 0;
-			if (x > 0 && known[i - 1]) { sum += data[(i - 1) * 2]; n++; }
-			if (x < width - 1 && known[i + 1]) { sum += data[(i + 1) * 2]; n++; }
-			if (y > 0 && known[i - width]) { sum += data[(i - width) * 2]; n++; }
-			if (y < height - 1 && known[i + width]) { sum += data[(i + width) * 2]; n++; }
-			if (n > 0) filled.push([i, sum / n]);
-			else left.push(i);
+	// Fill the holes with one breadth-first sweep from their rims, so every cell is visited once however deep the hole
+	// is (a round scan in a square frame leaves hundreds of thousands of empty cells). The queue holds empty cells
+	// that touch a known one; a cell takes the mean of its known 4-neighbours when it is reached, then queues its own
+	// empty neighbours. The first rings are the mean of the rim; deeper cells simply carry the nearest value inward.
+	const queue = new Int32Array(missing);
+	const queued = new Uint8Array(cells);
+	let head = 0;
+	let tail = 0;
+	const touchesKnown = (i: number, x: number, y: number): boolean =>
+		(x > 0 && known[i - 1] === 1) || (x < width - 1 && known[i + 1] === 1) || (y > 0 && known[i - width] === 1) || (y < height - 1 && known[i + width] === 1);
+	for (let i = 0, y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++, i++) {
+			if (known[i] === 0 && touchesKnown(i, x, y)) {
+				queue[tail++] = i;
+				queued[i] = 1;
+			}
 		}
-		if (filled.length === 0) break; // no known cell at all: the fallback below
-		for (const [i, v] of filled) {
-			data[i * 2] = v;
-			known[i] = 1;
-		}
-		todo = left;
 	}
-	for (const i of todo) data[i * 2] = fallback; // a hole too deep to grow into, or a grid with no data
+	while (head < tail) {
+		const i = queue[head++];
+		const x = i % width;
+		const y = (i - x) / width;
+		let sum = 0;
+		let n = 0;
+		if (x > 0 && known[i - 1]) { sum += data[(i - 1) * 2]; n++; }
+		if (x < width - 1 && known[i + 1]) { sum += data[(i + 1) * 2]; n++; }
+		if (y > 0 && known[i - width]) { sum += data[(i - width) * 2]; n++; }
+		if (y < height - 1 && known[i + width]) { sum += data[(i + width) * 2]; n++; }
+		data[i * 2] = sum / n; // n >= 1: it was queued because a neighbour was known
+		known[i] = 1;
+		if (x > 0 && !known[i - 1] && !queued[i - 1]) { queued[i - 1] = 1; queue[tail++] = i - 1; }
+		if (x < width - 1 && !known[i + 1] && !queued[i + 1]) { queued[i + 1] = 1; queue[tail++] = i + 1; }
+		if (y > 0 && !known[i - width] && !queued[i - width]) { queued[i - width] = 1; queue[tail++] = i - width; }
+		if (y < height - 1 && !known[i + width] && !queued[i + width]) { queued[i + width] = 1; queue[tail++] = i + width; }
+	}
+	// A grid with no data at all has nothing to sweep from: every cell stays 0 with the mask 0, and is discarded.
 	return { data, stats };
 }
