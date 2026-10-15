@@ -32,9 +32,9 @@ export function outline2d(geom: InsertGeometry, outline: InsertOutline): Outline
 
 	const c0 = outline.corners[0];
 	let mark = '';
-	if (c0) {
-		// The same size and place as the 3D mark (markPlacement.ts).
-		const { size, centre } = markDistance(geom, outline);
+	const placed = c0 ? markDistance(geom, outline) : null; // the same size and place as the 3D mark (markPlacement.ts)
+	if (c0 && placed) {
+		const { size, centre } = placed;
 		const p = ([x, y]: [number, number]) => `${f(x)} ${f(-y)}`;
 		const [tip, left, right] = markVertices(c0.bisectorDeg, size, centre);
 		mark = `M${p(tip)} L${p(left)} L${p(right)} Z`;

@@ -15,8 +15,8 @@ import { BoxView } from './boxView';
 import { shadowTexture, SHADOW_FILL } from './groundShadow';
 import { liftTargets, LIFT_MM, stepLifts } from './lifts';
 import {
-	easeFraction, easeToBounds, frameBox, frameEdge, frameInsert, FOV_DEG, framingFromCamera, FramingTween,
-	moveDuration, orbitLimits, prefersReducedMotion, rotationBounds, type Framing, type Vec3,
+	boundsContaining, easeFraction, easeToBounds, frameBox, frameEdge, frameInsert, FOV_DEG, framingFromCamera, FramingTween,
+	hardBounds, moveDuration, orbitLimits, prefersReducedMotion, rotationBounds, type Framing, type Vec3,
 } from './cameraRig';
 import { LabelLayer } from './labels';
 import { SceneMaterials, TONE_MAPPING } from './materials';
@@ -56,6 +56,7 @@ export class ToolingScene {
 	private userMoved = false;
 	private dragging = false; // a pointer is down on the orbit: no easing back to the bounds yet
 	private lastAdvance = 0;
+	private limitsWidened = false; // the orbit limits were widened to hold a view grabbed mid-move
 	private width = 0;
 	private height = 0;
 
@@ -172,7 +173,7 @@ export class ToolingScene {
 		const sameBox = this.model?.boxId === model.boxId;
 		this.model = model;
 		this.view?.dispose();
-		this.view = new BoxView(model, this.mats);
+		this.view = new BoxView(model, this.mats, () => this.requestRender());
 		this.scene.add(this.view.root);
 		const l = this.view.layout;
 		this.shadow.scale.set(l.width / SHADOW_FILL, l.depth / SHADOW_FILL, 1);
@@ -257,14 +258,18 @@ export class ToolingScene {
 		this.camera.lookAt(this.controls.target);
 	}
 
-	private applyLimits(f: Framing): void {
+	// The orbit limits of a framing. With `around` (the camera was grabbed mid-move and is not yet inside them), they are
+	// widened to hold that view, so nothing jumps; `easeBack` then draws it in and restores the plain limits.
+	private applyLimits(f: Framing, around: Framing | null = null): void {
 		const l = orbitLimits(f);
-		this.controls.minDistance = l.minDistance;
-		this.controls.maxDistance = l.maxDistance;
-		this.controls.minPolarAngle = l.minPolar;
-		this.controls.maxPolarAngle = l.maxPolar;
-		this.controls.minAzimuthAngle = l.minAzimuth;
-		this.controls.maxAzimuthAngle = l.maxAzimuth;
+		const r = around ? boundsContaining(hardBounds(f), around) : l;
+		this.controls.minDistance = around ? Math.min(l.minDistance, around.distance) : l.minDistance;
+		this.controls.maxDistance = around ? Math.max(l.maxDistance, around.distance) : l.maxDistance;
+		this.controls.minPolarAngle = r.minPolar;
+		this.controls.maxPolarAngle = r.maxPolar;
+		this.controls.minAzimuthAngle = r.minAzimuth;
+		this.controls.maxAzimuthAngle = r.maxAzimuth;
+		this.limitsWidened = around !== null;
 	}
 
 	// Ease the camera (and the lifted insert) to a focus; instantly when asked or under reduced motion.
@@ -297,9 +302,10 @@ export class ToolingScene {
 	// The user grabbed the camera mid-move: stop where it is, with the insert already at its destination.
 	private settle(): void {
 		if (!this.tween.active) return;
+		const view = framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3);
 		this.tween.cancel();
 		this.lifts = new Map(this.liftTo);
-		if (this.finalFraming) this.applyLimits(this.finalFraming);
+		if (this.finalFraming) this.applyLimits(this.finalFraming, view);
 		this.requestRender();
 	}
 
@@ -376,7 +382,10 @@ export class ToolingScene {
 		if (this.dragging || this.tween.active || !this.finalFraming) return false;
 		const view = framingFromCamera(this.camera.position.toArray() as Vec3, this.controls.target.toArray() as Vec3);
 		const next = easeToBounds(view, rotationBounds(this.finalFraming), easeFraction(dt, prefersReducedMotion()));
-		if (!next) return false;
+		if (!next) {
+			if (this.limitsWidened) this.applyLimits(this.finalFraming); // back inside: the plain limits again
+			return false;
+		}
 		this.camera.position.set(...next.position);
 		this.camera.lookAt(this.controls.target);
 		return true;

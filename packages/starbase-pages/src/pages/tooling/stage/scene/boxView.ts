@@ -15,7 +15,9 @@ import {
 	ghostInserts, partitionInstances, pickFromInstance, pickFromUserData, type PickTarget,
 } from './pick';
 import { buildPocketRingGeometry, buildTrayGeometry, slotPosition, trayLayout, type TrayLayout } from './trayMesh';
-import { buildEtchGeometry, drawEtchAtlas, ETCH_LIFT_MM, etchLabels, packAtlas, type EtchLabel } from './etchMesh';
+import {
+	buildEtchGeometry, drawEtchAtlas, ETCH_FONT, ETCH_LIFT_MM, etchLabels, packAtlas, repaintEtchAtlas, type EtchLabel,
+} from './etchMesh';
 import type { Vec3 } from './cameraRig';
 import { buildTipGeometry } from './tipMesh';
 
@@ -45,7 +47,7 @@ export class BoxView {
 	private readonly pickMaterial = new MeshBasicMaterial({ visible: false });
 	private readonly solid: InstancedMesh;
 	private readonly ghost: InstancedMesh;
-	private readonly marks: InstancedMesh;
+	private readonly marks: InstancedMesh | null = null; // the reference arrow; none when no arrow fits the face
 	private readonly tips: InstancedMesh | null = null; // brazed PCD / PCBN pads, only for a tipped insert type
 	private readonly rings = new Map<string, Mesh>();
 	private readonly edges: EdgeItem[] = [];
@@ -54,11 +56,13 @@ export class BoxView {
 	private readonly glow: Mesh;
 	private readonly halo: Mesh;
 	private etch: { mesh: Mesh; labels: EtchLabel[]; texture: CanvasTexture } | null = null; // the etched slot numbers
+	private disposed = false;
 	private solidIds: string[] = [];
 	private ghostIds: string[] = [];
 	private readonly m = new Matrix4();
 
-	constructor(readonly model: ToolingModel, private readonly mats: SceneMaterials) {
+	// `onChange` is called when the view changes by itself (the etched text redrawn once the web font has loaded).
+	constructor(readonly model: ToolingModel, private readonly mats: SceneMaterials, private readonly onChange: () => void = () => {}) {
 		this.layout = trayLayout(model);
 		const own = <T extends BufferGeometry>(g: T): T => { this.geometries.push(g); return g; };
 		const n = Math.max(1, model.inserts.length);
@@ -79,10 +83,10 @@ export class BoxView {
 		}
 
 		const bodyGeo = own(buildInsertGeometry(model.geometry, model.outline));
-		const markGeo = own(buildReferenceMark(model.geometry, model.outline));
+		const markGeo = buildReferenceMark(model.geometry, model.outline);
 		this.solid = new InstancedMesh(bodyGeo, mats.body, n);
 		this.ghost = new InstancedMesh(bodyGeo, mats.bodyGhost, n);
-		this.marks = new InstancedMesh(markGeo, mats.mark, n);
+		if (markGeo) this.marks = new InstancedMesh(own(markGeo), mats.mark, n);
 		this.ghost.renderOrder = 2;
 		const tipGeo = buildTipGeometry(model.geometry, model.outline);
 		if (tipGeo) {
@@ -90,7 +94,7 @@ export class BoxView {
 			this.tips = new InstancedMesh(tipGeo, model.geometry.tipMaterial === 'cbn' ? mats.tipCbn : mats.tipPcd, n);
 			this.tips.name = 'tips';
 		}
-		for (const im of [this.solid, this.ghost, this.marks, ...(this.tips ? [this.tips] : [])]) {
+		for (const im of [this.solid, this.ghost, ...(this.marks ? [this.marks] : []), ...(this.tips ? [this.tips] : [])]) {
 			im.count = 0;
 			im.frustumCulled = false;
 			this.root.add(im);
@@ -127,10 +131,17 @@ export class BoxView {
 		if (!texture) return;
 		const mesh = new Mesh(own(buildEtchGeometry(labels, atlas, this.layout.topY + ETCH_LIFT_MM)), this.mats.etch);
 		mesh.renderOrder = 1;
-		this.mats.etch.map = texture;
+		this.mats.etch.alphaMap = texture;
 		this.mats.etch.needsUpdate = true;
 		this.etch = { mesh, labels, texture };
 		this.root.add(mesh);
+		// The atlas was drawn with whatever font was ready; draw it again once the web font has loaded.
+		const fonts = (typeof document !== 'undefined' ? document.fonts : undefined) as FontFaceSet | undefined;
+		fonts?.load?.(ETCH_FONT).then(() => fonts.ready).then(() => {
+			if (this.disposed || !this.etch || this.etch.texture !== texture) return;
+			repaintEtchAtlas(texture, labels, atlas);
+			this.onChange();
+		}).catch(() => { /* the fallback font stays */ });
 	}
 
 	// The centre of an insert (mid-thickness), raised by `lift`.
@@ -177,7 +188,7 @@ export class BoxView {
 		};
 		fill(this.solid, split.solid);
 		fill(this.ghost, split.ghost);
-		fill(this.marks, split.solid);
+		if (this.marks) fill(this.marks, split.solid);
 		if (this.tips) fill(this.tips, split.solid);
 
 		const focusInsert = focus.kind === 'box' ? null : focus.insertId;
@@ -253,16 +264,17 @@ export class BoxView {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		this.root.removeFromParent();
 		for (const g of this.geometries) g.dispose();
 		this.cache.dispose();
 		this.pickMaterial.dispose();
 		if (this.etch) {
-			if (this.mats.etch.map === this.etch.texture) { this.mats.etch.map = null; this.mats.etch.needsUpdate = true; }
+			if (this.mats.etch.alphaMap === this.etch.texture) { this.mats.etch.alphaMap = null; this.mats.etch.needsUpdate = true; }
 			this.etch.texture.dispose();
 			this.etch = null;
 		}
-		for (const im of [this.solid, this.ghost, this.marks, ...(this.tips ? [this.tips] : [])]) im.dispose();
+		for (const im of [this.solid, this.ghost, ...(this.marks ? [this.marks] : []), ...(this.tips ? [this.tips] : [])]) im.dispose();
 		this.root.clear();
 	}
 }

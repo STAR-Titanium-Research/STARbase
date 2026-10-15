@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Raycaster, Vector3, type Intersection } from 'three';
 import { buildToolingModel, type EdgeRow, type InsertRow, type ToolingFocus } from '@d1/ui';
 import { BoxView, type ViewState } from './boxView';
-import { etchInk, SceneMaterials } from './materials';
+import { edgeColour, etchInk, SceneMaterials } from './materials';
 import { etchLabels } from './etchMesh';
 import { luminance, type Palette, type Rgba } from './themePalette';
 
@@ -48,12 +48,46 @@ function pickDown(view: BoxView, focus: ToolingFocus, at: [number, number, numbe
 describe('SceneMaterials', () => {
 	it('takes state colours from the palette, and recolours on update', () => {
 		const m = new SceneMaterials(palette(false));
-		expect(m.ring.fresh.color.getHex()).not.toBe(m.ring.used.color.getHex());
-		const before = m.ring.selected.color.getHex();
+		const before = m.ring.hover.color.getHex();
 		m.update({ ...palette(false), accent: rgb(0.9, 0.1, 0.1) });
-		expect(m.ring.selected.color.getHex()).not.toBe(before);
+		expect(m.ring.hover.color.getHex()).not.toBe(before);
 		expect(m.ring.depleted.opacity).toBeCloseTo(0.35, 6);
 		expect(m.bodyGhost.opacity).toBeCloseTo(0.35, 6);
+	});
+
+	it('draws every pocket ring in one neutral groove tone, whatever the state, so it never blends with the green fresh edges', () => {
+		for (const dark of [false, true]) {
+			const m = new SceneMaterials({ ...palette(dark), ok: rgb(0.1, 0.8, 0.4), warn: rgb(0.9, 0.6, 0.1) });
+			const groove = m.ring.fresh.color.getHex();
+			for (const tone of ['partly-used', 'used', 'depleted'] as const) expect(m.ring[tone].color.getHex()).toBe(groove);
+			expect(groove).not.toBe(m.edge.fresh.color.getHex()); // not the fresh edge's green
+			expect(m.ring.fresh.color.g).toBeLessThan(0.7);
+			const tray = m.tray.color;
+			const g = m.ring.fresh.color;
+			// subtle: close to the tray's own tone (within a quarter of the range in every channel)
+			expect(Math.abs(g.r - tray.r)).toBeLessThan(0.25);
+			expect(Math.abs(g.g - tray.g)).toBeLessThan(0.25);
+			expect(Math.abs(g.b - tray.b)).toBeLessThan(0.25);
+			expect(m.ring.depleted.opacity).toBeCloseTo(0.35, 6); // depleted stays ghosted
+			expect(m.ring.selected.color.getHex()).toBe(m.edge.selected.color.getHex()); // the selected ring is the selection blue
+			expect(m.ring.hover.color.getHex()).not.toBe(groove);
+			expect(m.ring.selected.color.getHex()).not.toBe(groove);
+			m.dispose();
+		}
+	});
+
+	it('lifts the edge colours on a dark stage and leaves a light stage as it is', () => {
+		const p = { ...palette(false), ok: rgb(0.1, 0.6, 0.3), dim: rgb(0.5, 0.5, 0.55) };
+		expect(edgeColour(p.ok, false)).toEqual(p.ok);
+		const lit = edgeColour(p.ok, true);
+		expect(luminance(lit)).toBeGreaterThan(luminance(p.ok));
+		expect(lit.g).toBeGreaterThan(lit.r); // still green, not washed to white
+		const light = new SceneMaterials(p);
+		const dark = new SceneMaterials({ ...palette(true), ok: p.ok, dim: p.dim });
+		expect(dark.edge.fresh.color.g).toBeGreaterThan(light.edge.fresh.color.g);
+		expect(dark.edge.used.color.r).toBeGreaterThan(light.edge.used.color.r);
+		light.dispose();
+		dark.dispose();
 	});
 
 	it('colours the selected edge with its own selection colour, apart from the hover lift and the state colours', () => {
@@ -139,7 +173,7 @@ describe('BoxView with a tipped insert type', () => {
 describe('BoxView etched slot numbers', () => {
 	afterEach(() => vi.unstubAllGlobals());
 	const stubCanvas = () => {
-		const ctx = { clearRect() {}, fillText() {}, fillStyle: '', font: '', textAlign: '', textBaseline: '' };
+		const ctx = { fillRect() {}, fillText() {}, measureText: (t: string) => ({ width: t.length * 40 }), fillStyle: '', font: '', textAlign: '', textBaseline: '' };
 		vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) });
 	};
 	const etchOf = (view: BoxView, mats: SceneMaterials) => view.root.children.find((o) => (o as import('three').Mesh).material === mats.etch) as import('three').Mesh | undefined;
@@ -147,7 +181,7 @@ describe('BoxView etched slot numbers', () => {
 	it('draws no etch without a canvas (Node), and still builds the rest of the box', () => {
 		const { view, mats } = make();
 		expect(etchOf(view, mats)).toBeUndefined();
-		expect(mats.etch.map).toBeNull();
+		expect(mats.etch.alphaMap).toBeNull();
 		expect(view.pickables(BOX).length).toBeGreaterThan(10);
 	});
 
@@ -156,7 +190,8 @@ describe('BoxView etched slot numbers', () => {
 		const { view, mats } = make();
 		const etch = etchOf(view, mats)!;
 		expect(etch).toBeDefined();
-		expect(mats.etch.map).not.toBeNull();
+		expect(mats.etch.alphaMap).not.toBeNull();
+		expect(mats.etch.map).toBeNull(); // the atlas is an alpha map: opaque canvas, so no straight-alpha fringe
 		expect(etch.geometry.getAttribute('position').count).toBe((view.layout.slots.length + 2) * 6); // a quad per slot, plus the box code and the type
 		etch.geometry.computeBoundingBox();
 		const b = etch.geometry.boundingBox!;
@@ -202,12 +237,12 @@ describe('BoxView etched slot numbers', () => {
 		const empty = etchLabels(view.layout).find((l) => view.layout.slots[l.slot].insertId === null)!;
 		expect(empty.text).toBe('2');
 		expect(pickDown(view, BOX, [empty.x, 0, empty.z])).toBeNull();
-		const texture = mats.etch.map!;
+		const texture = mats.etch.alphaMap!;
 		let disposed = false;
 		texture.addEventListener('dispose', () => { disposed = true; });
 		view.dispose();
 		expect(disposed).toBe(true);
-		expect(mats.etch.map).toBeNull();
+		expect(mats.etch.alphaMap).toBeNull();
 		mats.dispose();
 	});
 });

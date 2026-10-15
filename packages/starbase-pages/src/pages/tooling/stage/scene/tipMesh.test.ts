@@ -83,7 +83,7 @@ describe('buildTipGeometry', () => {
 		const pos = buildTipGeometry(g, o)!.getAttribute('position');
 		let apexZ = -Infinity; // the pad's inner point lies on the bisector (x = 0); corner 0 points to -z
 		for (let i = 0; i < pos.count; i++) if (Math.abs(pos.getX(i)) < 1e-3) apexZ = Math.max(apexZ, pos.getZ(i));
-		const mark = buildReferenceMark(g, o);
+		const mark = buildReferenceMark(g, o)!;
 		mark.computeBoundingBox();
 		expect(apexZ).toBeLessThan(-1);
 		expect(mark.boundingBox!.min.z).toBeGreaterThanOrEqual(apexZ - 1e-6);

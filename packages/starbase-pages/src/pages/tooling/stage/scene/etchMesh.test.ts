@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildToolingModel, type InsertRow } from '@d1/ui';
-import { buildEtchGeometry, drawEtchAtlas, etchLabels, packAtlas, type EtchLabel } from './etchMesh';
+import { buildEtchGeometry, drawEtchAtlas, etchLabels, packAtlas, repaintEtchAtlas, type EtchLabel } from './etchMesh';
 import { numberAspect, trayLayout, type TrayLayout } from './trayMesh';
 
 const box = { tool_box_id: 'b1', tool_box_code: 'BOX-1' };
@@ -168,13 +168,36 @@ describe('etchLabels: the box code and the insert type', () => {
 			expect(long.h).toBeLessThanOrEqual(short.h + 1e-9);
 			expect(long.h).toBeGreaterThanOrEqual(1.4 - 1e-9);
 			expect(long.w).toBeLessThanOrEqual(l.width - 4 + 1e-9);
-			expect(short.h).toBeLessThanOrEqual(l.endH + 1e-9);
+			expect(short.h).toBeLessThanOrEqual(l.endHTop + 1e-9);
 		}
 		// A long code on a wide tray keeps the full title height; on a narrow one it is smaller.
 		const wide = layoutOf(60);
 		expect(titleLabels(etchLabels(wide, { top: TITLES.bottom, bottom: null }))[0].h).toBeGreaterThan(
 			titleLabels(etchLabels(layoutOf(2), { top: TITLES.bottom, bottom: null }))[0].h,
 		);
+	});
+
+	it('sizes each title from its own room: the far end\'s line is taller than the near end\'s, and both fit their room', () => {
+		for (const l of [layoutOf(10), layoutOf(10, 'SNMG 12 04 08'), layoutOf(10, null, R390), layoutOf(12, 'CCMT 09 T3 04')]) {
+			const [top, bottom] = titleLabels(etchLabels(l, { top: 'BOX', bottom: 'TYPE' }));
+			expect(top.h).toBeGreaterThan(bottom.h * 1.3); // offsets the far end's foreshortening
+			expect(top.h + 2).toBeLessThanOrEqual(l.endRoom + 1e-9);
+			expect(bottom.h + 2).toBeLessThanOrEqual(l.endRoom + 1e-9);
+			expect(l.endHTop).toBeCloseTo(l.endH * 1.45, 9);
+		}
+	});
+
+	it('never stretches a very long title: its quad is never wider than its atlas cell has pixels for', () => {
+		for (const l of [layoutOf(2), layoutOf(60)]) {
+			for (const text of ['X'.repeat(40), 'X'.repeat(60), 'X'.repeat(200)]) {
+				const labels = etchLabels(l, { top: text, bottom: null });
+				const atlas = packAtlas(labels);
+				const t = titleLabels(labels)[0];
+				const cell = atlas.cells[atlas.cells.length - 1];
+				expect(Math.abs(cell.w / cell.h - t.w / t.h)).toBeLessThan(1 / 72 + 1e-9); // the cell has the quad's proportions
+				expect(cell.w).toBeLessThanOrEqual(2048);
+			}
+		}
 	});
 
 	it('squeezes a code too long for the minimum height, rather than overrun the tray', () => {
@@ -251,6 +274,38 @@ describe('packAtlas and buildEtchGeometry', () => {
 	});
 });
 
+describe('drawEtchAtlas: fonts', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const stub = () => {
+		const fonts: string[] = [];
+		const ctx = {
+			fillRect() {}, fillStyle: '', textAlign: '', textBaseline: '', measureText: (t: string) => ({ width: t.length * 41 }),
+			set font(v: string) { fonts.push(v); }, get font() { return fonts[fonts.length - 1] ?? ''; }, fillText() {},
+		};
+		vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) });
+		return { fonts };
+	};
+
+	it('makes the font smaller, not the letters narrower, for a line too wide for its cell', () => {
+		const { fonts } = stub();
+		const labels: EtchLabel[] = [{ slot: -1, text: 'X'.repeat(200), x: 0, z: 0, w: 40, h: 1.4 }];
+		drawEtchAtlas(labels, packAtlas(labels));
+		const px = (f: string) => Number(/(\d+(?:\.\d+)?)px/.exec(f)![1]);
+		expect(fonts.length).toBeGreaterThan(1);
+		expect(px(fonts[fonts.length - 1])).toBeLessThan(px(fonts[0]));
+	});
+
+	it('paints again into the same texture on request, and flags it for upload', () => {
+		stub();
+		const labels = etchLabels(layoutOf(2));
+		const atlas = packAtlas(labels);
+		const texture = drawEtchAtlas(labels, atlas)!;
+		const v = texture.version;
+		repaintEtchAtlas(texture, labels, atlas);
+		expect(texture.version).toBe(v + 1);
+	});
+});
+
 describe('drawEtchAtlas', () => {
 	afterEach(() => vi.unstubAllGlobals());
 
@@ -261,11 +316,13 @@ describe('drawEtchAtlas', () => {
 		expect(drawEtchAtlas(labels, packAtlas(labels))).toBeNull();
 	});
 
-	it('draws each text white into its cell, squeezed to the cell, and returns a texture of the canvas', () => {
+	it('draws each text white on black into its cell, and returns an alpha-map texture of the canvas', () => {
 		const drawn: Array<[string, number, number, number]> = [];
+		const fonts: string[] = [];
 		const ctx = {
-			clearRect() {}, fillStyle: '', font: '', textAlign: '', textBaseline: '',
-			fillText: (t: string, x: number, y: number, maxW: number) => drawn.push([t, x, y, maxW]),
+			fillRect() {}, fillStyle: '', textAlign: '', textBaseline: '', measureText: (t: string) => ({ width: t.length * 41 }),
+			set font(v: string) { fonts.push(v); }, get font() { return fonts[fonts.length - 1] ?? ''; },
+			fillText: (t: string, x: number, y: number) => drawn.push([t, x, y, 0]),
 		};
 		vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) });
 		const labels = etchLabels(layoutOf(3), TITLES);
@@ -273,8 +330,8 @@ describe('drawEtchAtlas', () => {
 		const texture = drawEtchAtlas(labels, atlas)!;
 		expect(texture).not.toBeNull();
 		expect(drawn.map((d) => d[0])).toEqual(['1', '2', '3', 'CNMG12-3', TITLES.bottom]);
-		drawn.forEach((d, i) => expect(d[3]).toBeLessThanOrEqual(atlas.cells[i].w));
-		expect(ctx.fillStyle).toBe('#fff');
+		expect(ctx.fillStyle).toBe('#fff'); // white glyphs (on black) for an alpha map
+		expect(texture.colorSpace).toBe('');
 		texture.dispose();
 	});
 });

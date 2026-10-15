@@ -161,8 +161,11 @@ export function buildInsertGeometry(geom: InsertGeometry, outline: InsertOutline
 export { markDistance };
 const MARK_HEIGHT_MM = 0.12;
 
-export function buildReferenceMark(geom: InsertGeometry, outline: InsertOutline): BufferGeometry {
-	const { size, centre } = markDistance(geom, outline);
+// Null when no arrow fits the face (a very small insert).
+export function buildReferenceMark(geom: InsertGeometry, outline: InsertOutline): BufferGeometry | null {
+	const placed = markDistance(geom, outline);
+	if (!placed) return null;
+	const { size, centre } = placed;
 	const shape = new Shape(markVertices(outline.corners[0].bisectorDeg, size, centre).map(([x, y]) => new Vector2(x, y)));
 	const g = new ExtrudeGeometry(shape, { depth: MARK_HEIGHT_MM, bevelEnabled: false });
 	g.rotateX(-Math.PI / 2);

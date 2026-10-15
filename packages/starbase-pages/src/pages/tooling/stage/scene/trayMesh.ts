@@ -20,6 +20,7 @@ const RING_LIFT_MM = 0.03;
 // code, the insert type) a little less; a hair of tray is kept around each.
 const NUMBER_H_SHARE = 0.3;
 const END_H_SHARE = 0.25;
+const FAR_END_SCALE = 1.45; // the far end's title is this much taller than the near end's
 const TEXT_PAD_MM = 1;
 const NUMBER_FRONT_SHARE = 0.7; // an etched number in front of a pocket takes this much of the strip there
 // The width of a slot number of `chars` characters, as a multiple of its height.
@@ -42,7 +43,8 @@ export interface TrayLayout {
 	sideRoom: number; // tray from a pocket's outer edge to the tray's side, in the first and last column: the etched number's room
 	endRoom: number; // tray from the first row's back edge, and the last row's front edge, to the tray's end: the title lines' room
 	numberH: number; // the height of an etched slot number
-	endH: number; // the most a title line's height can be
+	endH: number; // the most the near end's title line's height can be
+	endHTop: number; // ... and the far end's, taller to offset its foreshortening and distance
 	slots: TraySlot[];
 	slotOf: Map<string, TraySlot>;
 	centre(column: number, row: number): { x: number; z: number };
@@ -58,6 +60,7 @@ function singleCase(model: ToolingModel, pocketW: number, pocketD: number, pitch
 		insertY: FLOOR_MM + 0.15 + thicknessMm / 2, sideRoom: CASE_WALL_MM, endRoom: CASE_WALL_MM,
 		numberH: Math.min(CASE_WALL_MM * NUMBER_FRONT_SHARE, pocketW * NUMBER_H_SHARE),
 		endH: Math.min(CASE_WALL_MM * NUMBER_FRONT_SHARE, pocketW * END_H_SHARE),
+		endHTop: Math.min(CASE_WALL_MM * NUMBER_FRONT_SHARE, pocketW * END_H_SHARE),
 		slots: [slot], slotOf: new Map([[insert.id, slot]]), centre: () => ({ x: 0, z: 0 }),
 	};
 }
@@ -99,8 +102,9 @@ export function trayLayout(model: ToolingModel): TrayLayout {
 	const longest = Math.max(1, ...slots.map((s) => s.label.length));
 	const numberH = columns > 2 ? Math.min(pocketW * NUMBER_H_SHARE, (pitch - pocketD) * NUMBER_FRONT_SHARE) : pocketW * NUMBER_H_SHARE;
 	const endH = Math.min(numberH, pocketW * END_H_SHARE);
+	const endHTop = endH * FAR_END_SCALE;
 	const sideMargin = Math.max(margin, numberH * numberAspect(longest) + 2 * TEXT_PAD_MM - (pitch - pocketW) / 2);
-	const endMargin = Math.max(margin, endH + 2 * TEXT_PAD_MM - (pitch - pocketD) / 2, columns > 2 ? numberH / 2 + endH + 2 * TEXT_PAD_MM : 0);
+	const endMargin = Math.max(margin, endHTop + 2 * TEXT_PAD_MM - (pitch - pocketD) / 2, columns > 2 ? numberH / 2 + endH + 2 * TEXT_PAD_MM : 0);
 	const width = columns * pitch + 2 * sideMargin;
 	const depth = rows * pitch + 2 * endMargin;
 	const slotOf = new Map<string, TraySlot>();
@@ -110,7 +114,7 @@ export function trayLayout(model: ToolingModel): TrayLayout {
 		floorY: FLOOR_MM,
 		topY: FLOOR_MM + POCKET_DEPTH_MM,
 		insertY: FLOOR_MM + 0.15 + g.thicknessMm / 2,
-		sideRoom: (pitch - pocketW) / 2 + sideMargin, endRoom: (pitch - pocketD) / 2 + endMargin, numberH, endH,
+		sideRoom: (pitch - pocketW) / 2 + sideMargin, endRoom: (pitch - pocketD) / 2 + endMargin, numberH, endH, endHTop,
 		slots, slotOf,
 		centre: (column, row) => ({ x: (column - (columns - 1) / 2) * pitch, z: (row - (rows - 1) / 2) * pitch }),
 	};

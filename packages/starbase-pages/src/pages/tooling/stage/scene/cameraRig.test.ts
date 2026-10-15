@@ -3,7 +3,7 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import { buildToolingModel } from '@d1/ui';
 import {
 	AZIMUTH_RANGE, easeFraction, easeInOutCubic, easeStep, easeToBounds, frameBox, frameEdge, frameInsert, FramingTween, framingAt, framingFromCamera,
-	hardBounds, interpolateFraming, MIN_ELEVATION, moveDuration, MOVE_MS, orbitLimits, POLAR_FLOOR, POLAR_MAX, POLAR_MIN,
+	boundsContaining, hardBounds, interpolateFraming, MIN_ELEVATION, moveDuration, MOVE_MS, orbitLimits, POLAR_FLOOR, POLAR_MAX, POLAR_MIN,
 	POLAR_RANGE, prefersReducedMotion, rotationBounds, ZOOM_IN, ZOOM_OUT,
 	type Vec3,
 } from './cameraRig';
@@ -194,19 +194,20 @@ describe('limited rotation', () => {
 		frameEdge(centre, model.geometry, model.outline, { face: 'bottom', corner: 1 }, 2),
 	];
 
-	it('turns about 35 degrees left or right of the framing\'s own view', () => {
+	it('turns about 10 degrees left or right of the framing\'s own view', () => {
 		for (const f of views()) {
 			const b = rotationBounds(f);
-			expect(b.minAzimuth).toBeCloseTo(f.azimuth - 35 * RAD, 9);
-			expect(b.maxAzimuth).toBeCloseTo(f.azimuth + 35 * RAD, 9);
+			expect(b.minAzimuth).toBeCloseTo(f.azimuth - 10 * RAD, 9);
+			expect(b.maxAzimuth).toBeCloseTo(f.azimuth + 10 * RAD, 9);
 		}
-		expect(AZIMUTH_RANGE).toBeCloseTo(35 * RAD, 9);
+		expect(AZIMUTH_RANGE).toBeCloseTo(10 * RAD, 9);
+		expect(POLAR_RANGE).toBeCloseTo(8 * RAD, 9);
 	});
 
-	it('tilts about 20 degrees up or down of the framing\'s own view, so the box, an insert and an edge each have their own range', () => {
+	it('tilts about 8 degrees up or down of the framing\'s own view, so the box, an insert and an edge each have their own range', () => {
 		const box = frameBox(layout, 2);
 		const b = rotationBounds(box);
-		expect(b.maxPolar - box.polar).toBeCloseTo(20 * RAD, 9);
+		expect(b.maxPolar - box.polar).toBeCloseTo(8 * RAD, 9);
 		expect(box.polar - b.minPolar).toBeGreaterThan(0);
 		const insert = frameInsert(centre, model.geometry, model.outline, 2);
 		const i = rotationBounds(insert);
@@ -225,7 +226,7 @@ describe('limited rotation', () => {
 		// A view near the plane or near straight down keeps the bounds inside the limits.
 		const steep = rotationBounds(framingAt([0, 0, 0], 50, 10 * RAD, 0));
 		expect(steep.minPolar).toBeCloseTo(POLAR_FLOOR, 9);
-		const flat = rotationBounds(framingAt([0, 0, 0], 50, 60 * RAD, 0));
+		const flat = rotationBounds(framingAt([0, 0, 0], 50, 70 * RAD, 0));
 		expect(deg(flat.maxPolar)).toBeCloseTo(75, 9); // 15 degrees above the plane
 	});
 
@@ -245,7 +246,8 @@ describe('limited rotation', () => {
 			const h = hardBounds(f);
 			expect(h.minAzimuth).toBeLessThan(b.minAzimuth);
 			expect(h.maxAzimuth).toBeGreaterThan(b.maxAzimuth);
-			expect(b.minAzimuth - h.minAzimuth).toBeLessThanOrEqual(10 * RAD);
+			expect(b.minAzimuth - h.minAzimuth).toBeLessThanOrEqual(3 * RAD); // a small slack
+			expect(h.maxPolar - b.maxPolar).toBeLessThanOrEqual(3 * RAD);
 			expect(h.maxPolar).toBeGreaterThanOrEqual(b.maxPolar);
 			expect(h.maxPolar).toBeLessThan(90 * RAD); // never to the plane itself
 			expect(h.minPolar).toBeGreaterThan(0); // never exactly straight down
@@ -293,7 +295,7 @@ describe('limited rotation', () => {
 		it('takes the short way across the +-pi seam for a view that looks from behind', () => {
 			const behind = framingAt([0, 0, 0], 20, 1, 179 * RAD);
 			const bb = rotationBounds(behind);
-			// 20 degrees past the +35 bound, as the camera reports it (azimuth wrapped into -pi..pi, here about -126)
+			// 20 degrees past the +10 bound, as the camera reports it (azimuth wrapped into -pi..pi, here about -126)
 			const raw = framingAt([0, 0, 0], 20, 1, behind.azimuth + AZIMUTH_RANGE + 20 * RAD);
 			const past = framingFromCamera(raw.position, raw.target);
 			expect(past.azimuth).toBeLessThan(0);
@@ -307,6 +309,39 @@ describe('limited rotation', () => {
 			const out = easeToBounds(tilted, b, 1)!;
 			expect(out.polar).toBeCloseTo(tilted.polar, 9);
 			expect(out.azimuth).toBeCloseTo(b.maxAzimuth, 9);
+		});
+	});
+
+	describe('boundsContaining', () => {
+		const home = framingAt([0, 0, 0], 40, 0.6, 0.3);
+		const b = hardBounds(home);
+
+		it('is the bounds themselves for a view inside them', () => {
+			const w = boundsContaining(b, home);
+			for (const k of ['minAzimuth', 'maxAzimuth', 'minPolar', 'maxPolar'] as const) expect(w[k]).toBeCloseTo(b[k], 9);
+		});
+
+		it('widens the bounds to hold a view far outside them, so grabbing the camera mid-move cannot make it jump', () => {
+			const far = framingAt([0, 0, 0], 40, 1.2, 0.3 + 50 * RAD); // a mid-move view 50 degrees round and 35 degrees down from home
+			const w = boundsContaining(b, far);
+			expect(w.maxAzimuth).toBeGreaterThanOrEqual(far.azimuth);
+			expect(w.maxPolar).toBeGreaterThanOrEqual(far.polar);
+			expect(w.minAzimuth).toBeCloseTo(b.minAzimuth, 9); // the other sides stay put
+			expect(w.minPolar).toBeCloseTo(b.minPolar, 9);
+			// every azimuth and polar from the view back to home lies inside the window: nothing clamps on the way in
+			const toward = easeToBounds(far, rotationBounds(home), 0.5)!;
+			expect(toward.azimuth).toBeLessThan(far.azimuth);
+			expect(toward.azimuth).toBeGreaterThan(rotationBounds(home).maxAzimuth);
+			expect(toward.azimuth).toBeLessThanOrEqual(w.maxAzimuth);
+		});
+
+		it('takes the short way round the seam for a view from behind', () => {
+			const behind = framingAt([0, 0, 0], 20, 1, 179 * RAD);
+			const raw = framingAt([0, 0, 0], 20, 1, behind.azimuth - 40 * RAD);
+			const view = framingFromCamera(raw.position, raw.target);
+			const w = boundsContaining(hardBounds(behind), view);
+			expect(w.maxAzimuth - w.minAzimuth).toBeLessThan(Math.PI);
+			expect(w.minAzimuth).toBeLessThan(behind.azimuth - 40 * RAD + 1e-6);
 		});
 	});
 

@@ -174,18 +174,18 @@ export function frameEdge(
 }
 
 // --- limited rotation ------------------------------------------------------------------------------------
-// The view can be turned a little each way from a framing's own view, not all the way round: about 35 degrees left or
-// right, and about 20 degrees up or down, never lower than 15 degrees above the tray plane and never past straight
+// The view can be turned a little each way from a framing's own view, not all the way round: about 10 degrees left or
+// right, and about 8 degrees up or down, never lower than 15 degrees above the tray plane and never past straight
 // down. The bounds are relative to the framing, so the box, an insert and an edge each turn around their own default.
 // They are soft: OrbitControls is given the bounds plus a little slack, so a drag can overshoot a few degrees, and
 // `easeToBounds` then eases the view back to the bound once it is let go (no hard stop, no jitter).
 
-export const AZIMUTH_RANGE = 35 * RAD;
-export const POLAR_RANGE = 20 * RAD;
+export const AZIMUTH_RANGE = 10 * RAD;
+export const POLAR_RANGE = 8 * RAD;
 export const MIN_ELEVATION = 15 * RAD; // the lowest the camera goes, above the tray's plane
 export const POLAR_FLOOR = 3 * RAD; // the most top-down: just short of straight down, where the orbit is degenerate
-const AZIMUTH_SLACK = 6 * RAD;
-const POLAR_SLACK = 5 * RAD;
+const AZIMUTH_SLACK = 2 * RAD;
+const POLAR_SLACK = 2 * RAD;
 const SNAP = 0.0005; // radians; closer than this to a bound counts as on it
 
 export interface Rotation { minAzimuth: number; maxAzimuth: number; minPolar: number; maxPolar: number }
@@ -222,6 +222,20 @@ export function easeToBounds(view: Framing, b: Rotation, k: number): Framing | n
 	if (Math.abs(off - offInside) < SNAP && Math.abs(view.polar - polarInside) < SNAP) return null;
 	const kk = Math.min(1, Math.max(0, k));
 	return framingAt(view.target, view.distance, view.polar + (polarInside - view.polar) * kk, centre + off + (offInside - off) * kk);
+}
+
+// The bounds widened, if need be, to take in a view that lies outside them (the camera was grabbed mid-move, far from
+// where it is going): so grabbing the camera never makes it jump, and `easeToBounds` then eases it back in.
+export function boundsContaining(b: Rotation, view: Framing): Rotation {
+	const centre = (b.minAzimuth + b.maxAzimuth) / 2;
+	const off = shortestArc(centre, view.azimuth);
+	const half = (b.maxAzimuth - b.minAzimuth) / 2;
+	return {
+		minAzimuth: centre + Math.min(-half, off - SNAP),
+		maxAzimuth: centre + Math.max(half, off + SNAP),
+		minPolar: Math.min(b.minPolar, view.polar - SNAP),
+		maxPolar: Math.max(b.maxPolar, view.polar + SNAP),
+	};
 }
 
 // The fraction of the way back to a bound to take in a frame of `dtMs`: the same feel at any frame rate.

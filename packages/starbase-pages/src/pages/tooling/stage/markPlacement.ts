@@ -9,7 +9,7 @@ const HOLE_MARGIN_MM = 0.4; // clear of the hole (or its countersink)
 const TIP_RESERVE_MM = 1.8; // a tipped insert keeps at least this much brazed wedge between the mark and the nose
 const TIP_STOP_GAP_MM = 0.3; // tipMesh.ts stops its pad this far short of the mark
 const MIN_SIZE_MM = 0.5;
-const STEP_MM = 0.1;
+const STEP_MM = 0.05;
 
 // The arrow in (along the bisector, across it) units of `size`: a tip ahead of the middle, a base behind it.
 export const MARK_TIP = 0.6;
@@ -53,22 +53,33 @@ export function markVertices(bisectorDeg: number, size: number, d: number): [Pt,
 
 // Where the mark sits along corner 0's bisector (from the centre): its middle, and the end nearest the corner.
 // It scales with the insert and sits as large as fits, clear of the hole, the rim and the corner; on a tipped
-// insert it moves in toward the hole, to leave the corner to the tip pad (tipMesh.ts). For a milling insert
+// insert it moves in toward the hole, to leave the corner to the tip pad (tipMesh.ts). Null when no arrow fits the face. For a milling insert
 // (shape 'rect') the bisector runs through the corner's fillet centre, which is all the search needs.
-export function markDistance(geom: InsertGeometry, outline: InsertOutline): { size: number; centre: number; end: number } {
+export function markDistance(geom: InsertGeometry, outline: InsertOutline): { size: number; centre: number; end: number } | null {
+	return search(geom, outline, STRICT) ?? search(geom, outline, RELAXED);
+}
+
+// How much clear space a placement keeps, and the smallest arrow worth drawing. A small insert (a 6 mm round with a
+// countersink) has only a thin strip between the hole and the rim, so it gets the relaxed pass; failing that, no mark.
+interface Clearance { rim: number; hole: number; reserve: number; minSize: number }
+const STRICT: Clearance = { rim: MARK_MARGIN_MM, hole: HOLE_MARGIN_MM, reserve: TIP_RESERVE_MM, minSize: MIN_SIZE_MM };
+const RELAXED: Clearance = { rim: 0.2, hole: 0.15, reserve: 1.2 + TIP_STOP_GAP_MM, minSize: 0.35 };
+
+function search(geom: InsertGeometry, outline: InsertOutline, k: Clearance): { size: number; centre: number; end: number } | null {
 	const c0 = outline.corners[0];
+	if (!c0) return null;
 	const opening = openingRadius(geom);
 	const tip = Math.hypot(c0.x, c0.y) + (geom.shape === 'R' ? 0 : geom.noseRadiusMm);
 	const wanted = Math.min(3.2, Math.max(1.2, geom.icMm * 0.22));
 	const tipped = geom.tipMaterial !== null;
 
-	for (let size = wanted; size >= MIN_SIZE_MM; size *= 0.92) {
-		const first = Math.max(opening > 0 ? opening + HOLE_MARGIN_MM : 0.5, 0.5) - size * MARK_BASE;
+	for (let size = wanted; size >= k.minSize; size *= 0.92) {
+		const first = Math.max(opening > 0 ? opening + k.hole : 0.5, 0.5) - size * MARK_BASE;
 		let lo = -1;
 		let hi = -1;
 		for (let d = first; d <= tip; d += STEP_MM) {
-			const fits = markVertices(c0.bisectorDeg, size, d).every((v) => faceClearance(outline.points, v) >= MARK_MARGIN_MM)
-				&& (!tipped || d + size * MARK_TIP + TIP_STOP_GAP_MM <= tip - TIP_RESERVE_MM);
+			const fits = markVertices(c0.bisectorDeg, size, d).every((v) => faceClearance(outline.points, v) >= k.rim)
+				&& (!tipped || d + size * MARK_TIP + TIP_STOP_GAP_MM <= tip - k.reserve);
 			if (!fits) continue;
 			if (lo < 0) lo = d;
 			hi = d;
@@ -78,7 +89,5 @@ export function markDistance(geom: InsertGeometry, outline: InsertOutline): { si
 			return { size, centre, end: centre + size * MARK_TIP };
 		}
 	}
-	const size = MIN_SIZE_MM;
-	const centre = Math.max(opening * 1.6, 0.5) + size * 0.4;
-	return { size, centre, end: centre + size * MARK_TIP };
+	return null;
 }
