@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostApi } from '@d1/ui';
-import { createErrors, createScan, fetchGrid, fetchMeta, fetchThumb, newScanBody, renderAgain, scanErrorText } from './scanApi';
+import { createErrors, createScan, fetchGrid, fetchMeta, fetchThumb, isObjectMissing, newScanBody, OBJECT_MISSING_MESSAGE, renderAgain, scanErrorText } from './scanApi';
 import { ScanDataError } from './viewer/gridData';
 
 function fakeApi(handlers: Partial<Record<'get' | 'post', (path: string, ...rest: any[]) => any>>) {
@@ -68,6 +68,20 @@ describe('error texts', () => {
 		expect(createErrors(httpError(403, [{ message: "You don't have permission", extensions: { code: 'FORBIDDEN' } }]))[0]).toMatch(/may not add a surface scan/);
 		expect(createErrors(new Error('Network Error'))).toEqual(['Network Error']);
 		expect(createErrors({})).toEqual(['The surface scan could not be added.']);
+	});
+	it('names OBJECT_MISSING (a done scan whose files are gone) and offers the way out, also when the body came as bytes', async () => {
+		const missing = httpError(404, [{ message: OBJECT_MISSING_MESSAGE, extensions: { code: 'OBJECT_MISSING' } }]);
+		expect(isObjectMissing(missing)).toBe(true);
+		expect(isObjectMissing(httpError(404, [{ extensions: { code: 'NOT_RENDERED' } }]))).toBe(false);
+		expect(isObjectMissing(httpError(500, [{ extensions: { code: 'OBJECT_MISSING' } }]))).toBe(false);
+		expect(scanErrorText(missing)).toBe('The rendered data is missing; render the scan again.');
+		// /grid is read as an arraybuffer: its error body is bytes until fetchGrid decodes it
+		const bytes = httpError(404);
+		(bytes as any).response.data = new TextEncoder().encode(JSON.stringify({ errors: [{ message: OBJECT_MISSING_MESSAGE, extensions: { code: 'OBJECT_MISSING' } }] })).buffer;
+		const meta = await fetchMeta(fakeApi({ get: () => ({ data: { width: 2, height: 2 } }) }).api, 's1');
+		const err = await fetchGrid(fakeApi({ get: () => { throw bytes; } }).api, 's1', meta).catch((e) => e);
+		expect(isObjectMissing(err)).toBe(true);
+		expect(scanErrorText(err)).toBe(OBJECT_MISSING_MESSAGE);
 	});
 	it('explains a 404 from the endpoint as not rendered yet', () => {
 		expect(scanErrorText(httpError(404))).toMatch(/not been rendered/);

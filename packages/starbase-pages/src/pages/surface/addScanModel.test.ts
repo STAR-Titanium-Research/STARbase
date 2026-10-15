@@ -8,14 +8,28 @@ const ok = (o: Partial<ScanForm> = {}): ScanForm => ({ ...emptyForm(), file: FIL
 const TODAY = '2026-10-15';
 
 describe('fileFilter', () => {
-	it('offers topography files only, case-insensitively by ending', () => {
+	it('offers archive files only (storage star: the worker reads them by archive_path)', () => {
 		const f = fileFilter('') as any;
-		expect(f._or).toHaveLength(TOPOGRAPHY_EXTENSIONS.length);
-		expect(f._or[0]).toEqual({ filename_download: { _iends_with: '.al3d' } });
+		expect(f._and[0]).toEqual({ storage: { _eq: 'star' } });
+		expect(f._and).toHaveLength(2);
+	});
+	it('offers topography files by ending, case-insensitively', () => {
+		const ext = (fileFilter('') as any)._and[1];
+		expect(ext._or).toHaveLength(TOPOGRAPHY_EXTENSIONS.length);
+		expect(ext._or[0]).toEqual({ filename_download: { _iends_with: '.al3d' } });
 	});
 	it('adds the typed text on the name or title', () => {
 		const f = fileFilter('  edge ') as any;
-		expect(f._and[1]).toEqual({ _or: [{ filename_download: { _icontains: 'edge' } }, { title: { _icontains: 'edge' } }] });
+		expect(f._and).toHaveLength(3);
+		expect(f._and[2]).toEqual({ _or: [{ filename_download: { _icontains: 'edge' } }, { title: { _icontains: 'edge' } }] });
+	});
+	it('lists exactly the agreed endings: no hdf5 or sxm, none of the generic text and array formats', () => {
+		expect([...TOPOGRAPHY_EXTENSIONS].sort()).toEqual(
+			['.al3d', '.opd', '.opdx', '.x3p', '.ibw', '.h5', '.datx', '.sur', '.plu', '.apx', '.plux', '.vk3', '.vk4', '.vk6', '.vk7', '.lext', '.zon', '.os3d', '.sdf', '.frt', '.mnt', '.gwy', '.mdt', '.nms', '.oir', '.poir', '.ezd', '.nid', '.bcr', '.bcrf', '.tmd', '.zmg', '.mi', '.jpk', '.qep', '.spm'].sort(),
+		);
+		for (const generic of ['.tif', '.tiff', '.xyz', '.asc', '.hfm', '.npy', '.hdf5', '.sxm', '.mat', '.nc', '.txt', '.csv', '.dat']) {
+			expect(TOPOGRAPHY_EXTENSIONS as readonly string[]).not.toContain(generic);
+		}
 	});
 });
 

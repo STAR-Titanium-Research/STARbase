@@ -6,16 +6,18 @@
 // around it. Without WebGL it says so and still shows the facts.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { LoadState, useExplorerHost, useRequestGate } from '@d1/ui';
-import { hasWebGL } from '../../tooling/stage/webgl';
-import { fetchGrid, fetchMeta, scanErrorText } from '../scanApi';
+import { fetchGrid, fetchMeta, isObjectMissing, renderAgain, scanErrorText } from '../scanApi';
 import { rampCss } from './colourRamp';
 import { prepareScan, type PreparedScan } from './prepareScan';
 import {
 	exaggerationToSlider, formatExaggeration, formatMicrometres, pitchText, sizeText, SLIDER_STEPS, sliderToExaggeration,
 } from './scanLayout';
+import { hasWebGL2 } from './webgl2';
 import type { SurfaceScene } from './surfaceScene'; // type only: erased, three.js is not imported here
 
 const props = defineProps<{ scanId: string; title?: string }>();
+// The scan was sent to be rendered again (after "the rendered data is missing"): the panel reloads its list.
+const emit = defineEmits<{ (e: 'rerendered'): void }>();
 
 const host = useExplorerHost();
 const gate = useRequestGate();
@@ -23,6 +25,11 @@ const gate = useRequestGate();
 type Phase = 'loading' | 'error' | 'no-webgl' | 'ready';
 const phase = ref<Phase>('loading');
 const error = ref('');
+const missing = ref(false); // the endpoint says the rendered files are gone (OBJECT_MISSING): offer Render again
+const rendering = ref(false);
+const renderError = ref('');
+// A Lab Viewer changes nothing: no Render again for them.
+const canWrite = computed(() => !host.canViewAllAccess.value);
 const prepared = ref<PreparedScan | null>(null);
 const sceneError = ref('');
 const sceneLost = ref(false);
@@ -46,6 +53,8 @@ async function load(): Promise<void> {
 	stopScene();
 	phase.value = 'loading';
 	error.value = '';
+	missing.value = false;
+	renderError.value = '';
 	prepared.value = null;
 	try {
 		const meta = await fetchMeta(host.api, props.scanId);
@@ -55,10 +64,11 @@ async function load(): Promise<void> {
 		prepared.value = p;
 		slider.value = exaggerationToSlider(p.initialExaggeration);
 		colour.value = true;
-		phase.value = hasWebGL() ? 'ready' : 'no-webgl';
+		phase.value = hasWebGL2() ? 'ready' : 'no-webgl';
 	} catch (e) {
 		if (!gate.isCurrent(token)) return;
 		error.value = scanErrorText(e);
+		missing.value = isObjectMissing(e);
 		phase.value = 'error';
 	}
 }
@@ -107,6 +117,20 @@ function restart(): void {
 	void startScene();
 }
 
+async function renderThisAgain(): Promise<void> {
+	if (rendering.value) return;
+	rendering.value = true;
+	renderError.value = '';
+	try {
+		await renderAgain(host.api, props.scanId);
+		emit('rerendered');
+	} catch (e) {
+		renderError.value = scanErrorText(e);
+	} finally {
+		rendering.value = false;
+	}
+}
+
 function resetView(): void {
 	if (!prepared.value) return;
 	slider.value = exaggerationToSlider(prepared.value.initialExaggeration);
@@ -138,7 +162,7 @@ const facts = computed(() => {
 	}
 	return rows;
 });
-const hint = '3D view of the surface scan. Drag to rotate, scroll or pinch to zoom.';
+const hint = '3D view of the surface scan. Drag or use the arrow keys to rotate, scroll, pinch or use plus and minus to zoom.';
 </script>
 
 <template>
@@ -147,15 +171,19 @@ const hint = '3D view of the surface scan. Drag to rotate, scroll or pinch to zo
 
 		<div v-else-if="phase === 'error'" class="problem" role="alert">
 			<p>{{ error }}</p>
-			<v-button small secondary @click="load">Try again</v-button>
+			<p v-if="renderError">{{ renderError }}</p>
+			<div class="problem-actions">
+				<v-button v-if="missing && canWrite" small :loading="rendering" @click="renderThisAgain">Render again</v-button>
+				<v-button small secondary @click="load">Try again</v-button>
+			</div>
 		</div>
 
 		<template v-else-if="prepared">
 			<div v-if="phase === 'no-webgl'" class="problem" role="status">
-				<p>This browser cannot draw the 3D view (WebGL is off or missing). The facts of the scan are below.</p>
+				<p>This browser cannot draw the 3D view (WebGL 2 is off or missing). The facts of the scan are below.</p>
 			</div>
 			<div v-else ref="stageEl" class="stage">
-				<canvas :key="canvasKey" ref="canvasEl" class="canvas" tabindex="0" role="img" :aria-label="title ? `${hint} ${title}` : hint" />
+				<canvas :key="canvasKey" ref="canvasEl" class="canvas" tabindex="0" role="application" :aria-label="title ? `${hint} ${title}` : hint" />
 				<div v-if="starting" class="over"><v-progress-circular indeterminate small /> Preparing the 3D view…</div>
 				<div v-if="sceneError" class="over problem" role="alert">
 					<p>{{ sceneError }}</p>
@@ -207,6 +235,7 @@ const hint = '3D view of the surface scan. Drag to rotate, scroll or pinch to zo
 .over.problem { background: color-mix(in srgb, var(--d1-tile, var(--theme--background-subdued)) 88%, transparent); pointer-events: auto; }
 .problem { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; font-size: var(--fs-sm, 12px); }
 .problem p { margin: 0; }
+.problem-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .over.problem p { color: var(--d1-bad, var(--theme--danger)); }
 .legend {
 	position: absolute; top: 12px; right: 12px;

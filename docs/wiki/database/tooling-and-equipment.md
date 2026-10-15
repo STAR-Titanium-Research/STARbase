@@ -132,15 +132,18 @@ a thumbnail, its condition, date, operation and render status.
 behind it in the cloud tests); the surface is synthetic.*
 
 - **Add a surface scan.** The button opens a dialog: pick a file from the file library (only files with a
-  topography ending such as `.al3d` are listed), the condition, a note (required for *other*), the date and
+  topography ending such as `.al3d`, and only files from the archive share, are listed), the condition, a note (required for *other*), the date and
   the operation if you know it. **Adding a scan makes the file visible to every lab member**, whoever owns
   the file or whatever project it belongs to, and the dialog says so each time. A file can be a scan of one
   item once.
 - **Rendering.** The server reads the file once and keeps a down-sampled height grid and a thumbnail
   (at most 1024 cells on the longer side). A new scan shows *Waiting to render*, then *Rendering*, then
   *Ready*; the panel refreshes itself. If the file cannot be read the scan shows *Render failed* with the
-  reason, and **Render again** queues it once more (after you fix the file or the worker).
-- **Open in 3D.** Drag to turn the surface, scroll or pinch to zoom; there is no panning and no measuring.
+  reason, and **Render again** queues it once more (after you fix the file or the worker). **Render again** is
+  also on a *Ready* scan, for the day its stored picture has gone missing: the view then says "The rendered
+  data is missing; render the scan again." and offers the same button.
+- **Open in 3D.** Drag to turn the surface, scroll or pinch to zoom (or, with the view focused, the arrow
+  keys and **+** / **−**); there is no panning and no measuring.
   The **vertical exaggeration** slider (1× to 1000×) stretches the heights, because a real surface is
   almost flat at true scale; it starts at a value that makes the relief readable. **Colour by height** turns
   the ramp on or off, and the legend gives the lowest and highest point in micrometres. Cells with no
