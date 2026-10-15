@@ -37,6 +37,7 @@ KEEP          ?= 7
         bootstrap-minio backup restore prune-backups \
         worker-build worker-test worker-logs phase4-test \
         analysis-build analysis-test llm-build llm-test llm-eval \
+        surface-scan-build surface-scan-test \
         migrate-legacy migrate-legacy-dry index-archive index-archive-dry inbox-crawler inbox-crawler-once
 
 help: ## List available targets
@@ -103,6 +104,15 @@ bootstrap-minio: ## Create MinIO buckets after first `make up` (idempotent)
 		sh -c "mc mb --ignore-existing local/d1-files \
 			&& mc mb --ignore-existing local/d1-backups \
 			&& echo 'Buckets ready: d1-files, d1-backups'"
+	# The read-only user Directus (d1-surface-scan) uses; skipped while MINIO_SURFACE_READER_PASSWORD is empty.
+	docker run --rm \
+		--network $(COMPOSE_NETWORK) \
+		-e MC_HOST_local="http://$(MINIO_ROOT_USER):$(MINIO_ROOT_PASSWORD)@minio:9000" \
+		-e BUCKET="$(or $(MINIO_BUCKET),d1-files)" \
+		-e READER_USER="$(or $(MINIO_SURFACE_READER_USER),surface-reader)" \
+		-e READER_PASSWORD="$(MINIO_SURFACE_READER_PASSWORD)" \
+		-v "$(CURDIR)/infra/minio:/infra:ro" \
+		minio/mc:latest sh /infra/surface_reader.sh
 
 backup: ## Dump PostgreSQL and upload to MinIO (stack must be running)
 	bash infra/backup/backup.sh
@@ -135,6 +145,13 @@ analysis-build: ## Build the FFT analysis worker Docker image
 
 analysis-test: analysis-build ## Run FFT analysis worker unit tests inside Docker
 	docker run --rm d1-analysis-worker \
+		python -m pytest tests/ -v --tb=short
+
+surface-scan-build: ## Build the surface-scan render worker Docker image
+	docker build -t d1-surface-scan-worker plugins/surface-scan-worker/
+
+surface-scan-test: surface-scan-build ## Run surface-scan render worker unit tests inside Docker
+	docker run --rm d1-surface-scan-worker \
 		python -m pytest tests/ -v --tb=short
 
 llm-build: ## Build the text-to-SQL plugin Docker image

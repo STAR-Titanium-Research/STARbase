@@ -46,6 +46,7 @@ export const PY_SERVICES = [
 export const IMAGES = [
   { name: 'Heavy-data worker', image: 'd1-heavy-data-worker', context: 'plugins/heavy-data-worker', test: 'python -m pytest tests/ -q --tb=short' },
   { name: 'Analysis worker', image: 'd1-analysis-worker', context: 'plugins/analysis-worker', test: 'python -m pytest tests/ -q --tb=short' },
+  { name: 'Surface-scan worker', image: 'd1-surface-scan-worker', context: 'plugins/surface-scan-worker', test: 'python -m pytest tests/ -q --tb=short' },
   { name: 'Text-to-SQL plugin', image: 'd1-llm-text-to-sql', context: 'plugins/llm-text-to-sql', test: 'python -m pytest tests/ -q --tb=short' },
   { name: 'Filter service', image: 'd1-filter-service', context: 'plugins/filter-service', test: '' },
   { name: 'Diagnostics service', image: 'd1-diag-service', context: '.', dockerfile: 'plugins/diag-service/Dockerfile', watch: ['plugins/diag-service/', 'scripts/diag/'], test: '' },
