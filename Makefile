@@ -186,7 +186,7 @@ inbox-crawler: ## Start the inbox crawler daemon (read-only; finds new files in 
 
 inbox-crawler-once: ## One scan of everyone with the inbox crawler, then exit (see docs/runbooks/inbox-crawler.md)
 	docker compose --profile archive run --rm inbox-crawler \
-		sh -c "pip install -q 'psycopg2-binary>=2.9' 'Pillow>=10.1' && python -m inbox_crawler --once"
+		sh -c "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && python -m inbox_crawler --once"
 
 reset-db: ## Drop all tables and re-apply migrations + seed (DESTRUCTIVE — dev only). Asks you to type the DB name; CONFIRM=<name> skips the prompt.
 	@echo "WARNING: this DROPS the database '$(DB_NAME)' and every table in it."
