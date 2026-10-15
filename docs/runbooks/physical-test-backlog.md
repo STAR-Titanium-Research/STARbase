@@ -1825,6 +1825,37 @@ The issues were closed on 2026-10-11; reopen the one whose check fails.
 - [ ] **Branch protection requires "CI passed".** In GitHub *Settings > Branches*, `main` requires
   the **CI passed** check. A PR with a failing job cannot merge. Since #138 (CI/CD overhaul).
 
+### Inbox crawler and found files (2026-10-15, PR #310 and its follow-ups)
+
+Needs the real share (`archive_share` mount on d1-server) and real Directus data. Spec:
+[found files and the Inbox](../superpowers/specs/2026-10-15-found-files-inbox-design.md), ADR-0020.
+
+- [ ] **F1 — The crawler cannot write to the share.** From inside the `inbox-crawler` container, try
+  `touch /mnt/archive/star_group1/Users/<your alias>/x` and `rm` on a throwaway file. Expect both to fail.
+  Record that the SMB account in `.env` is the maintainer's personal admin one and can write; follow-up:
+  create a read-only SMB account for the service and re-run this check with it.
+- [ ] **F2 — Folder mtimes move on the real share.** Create a file two folders deep in a test folder, then
+  `stat` its parent and grandparent through the mount. Expect the parent's mtime to change (the grandparent's
+  need not). If the parent's does not, the incremental scan misses files; report before enabling it.
+- [ ] **F3 — Baseline and new files.** Set one person's `uni_alias`, run a scan. Expect everything already
+  there to appear under *Older* (backlog) and the badge to stay 0. Save a new image in that folder; within 30
+  minutes (or at once with *Rescan my folder*) expect it under *New* and the badge to read 1.
+- [ ] **F4 — Load on the share.** Time a first scan of a real personal folder tree and an incremental one;
+  watch the share for impact (read rate stays under the `read_mb_per_s` cap). Record both durations.
+- [ ] **F5 — Documents are never opened.** With a document in a scanned folder, confirm from the crawler's
+  log (and the file server's open-file list if available) that it is only listed, not opened, until it is
+  linked; then that linking it produces one read and a `file_fingerprints` row.
+- [ ] **F6 — Short-ID links on real records.** Save an image whose name contains a real sample's short ID.
+  Expect it flagged with the reason *short ID … in the file name*; link it; open the sample page and see it.
+  Try *Accept all* on a filtered list and *Undo* the batch. Try a view-only person: Link must be refused.
+- [ ] **F7 — Auto-link.** For a test person with auto-link on, save an image with an exact short ID; expect it
+  linked, listed under *Recently auto-linked*, and undoable. With auto-link off, expect no link.
+- [ ] **F8 — SEM tagging on JEOL images.** Run the maintainer's JEOL sample images through the crawler;
+  record how many are tagged *possible SEM image*, any misses and any false positives (screenshots,
+  photos). Decide whether to switch the OCR flag on.
+- [ ] **F9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the surface-scan contract
+  from the Alicona chat's work. Expect tag `surface_scan`; link flow per that contract.
+
 ## Done
 
 (Move ticked items here with their date and result.)
