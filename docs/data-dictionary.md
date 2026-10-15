@@ -423,9 +423,9 @@ audited on its junction row). Files stay on the share.
 
 | Column | Type | Description |
 |---|---|---|
-| `people.uni_alias` | TEXT, nullable | Name of the person's personal folder under `Users/`. 2 to 64 of letters, digits, `.`, `_`, `-`, never only dots. Unique ignoring case (`people_uni_alias_key`) |
+| `people.uni_alias` | TEXT, nullable | Name of the person's personal folder under `Users/`. 2 to 64 of letters, digits, `.`, `_`, `-`, not starting with a dot (no `..`, no `.snapshot`). Unique ignoring case (`people_uni_alias_key`) |
 | `people.scan_while_former` | BOOLEAN NOT NULL | Default false. True: keep scanning the folder after the person is inactive |
-| `teams.share_folder` | TEXT, nullable | Name of the team's folder under `Shared/`: no `/` or `\`, not blank, not only dots. Unique ignoring case (`teams_share_folder_key`) |
+| `teams.share_folder` | TEXT, nullable | Name of the team's folder under `Shared/`: no `/` or `\`, not blank, no leading or trailing blanks, not only dots. Unique ignoring case (`teams_share_folder_key`) |
 
 **`d1_private.file_candidates`**: one row per found file, until linked, dismissed or gone. `directus_files_id` is
 unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id` (both cascade).

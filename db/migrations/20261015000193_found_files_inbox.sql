@@ -30,7 +30,8 @@
 --
 -- Differences from the spec's section 4 (the spec is updated in the same commit):
 --   * teams are keyed by team_id, not id: FKs are teams (team_id);
---   * extra CHECKs the spec did not list: an alias or folder made only of dots ('..' would walk out of Users/ or Shared/),
+--   * extra CHECKs the spec did not list: an alias that starts with a dot and a folder made only of dots ('..' would walk out
+--     of Users/ or Shared/, '.snapshot' is a hidden system folder), a folder with leading or trailing blanks,
 --     kind_confidence between 0 and 1, matches a JSON array, extracted a JSON object, a suggestion names both a collection and
 --     a record, size not negative, a candidate is not its own duplicate, a person-scope request names a person;
 --   * extra columns: file_candidates.adopted_at (the "linking a document sets a flag the crawler reads to hash it once" of
@@ -46,19 +47,19 @@ SET LOCAL lock_timeout = '10s';
 ALTER TABLE people
     ADD COLUMN uni_alias TEXT,
     ADD COLUMN scan_while_former BOOLEAN NOT NULL DEFAULT false,
-    ADD CONSTRAINT people_uni_alias_format_check CHECK (uni_alias ~ '^[A-Za-z0-9._-]{2,64}$'),
-    ADD CONSTRAINT people_uni_alias_not_dots_check CHECK (uni_alias !~ '^[.]+$');
+    ADD CONSTRAINT people_uni_alias_format_check CHECK (uni_alias ~ '^[A-Za-z0-9_-][A-Za-z0-9._-]{1,63}$');
 CREATE UNIQUE INDEX people_uni_alias_key ON people (lower(uni_alias)) WHERE uni_alias IS NOT NULL;
 
 ALTER TABLE teams
     ADD COLUMN share_folder TEXT,
     ADD CONSTRAINT teams_share_folder_format_check CHECK (share_folder !~ '[\\/]' AND btrim(share_folder) <> ''),
-    ADD CONSTRAINT teams_share_folder_not_dots_check CHECK (btrim(share_folder) !~ '^[.]+$');
+    ADD CONSTRAINT teams_share_folder_trim_check CHECK (share_folder = btrim(share_folder)),
+    ADD CONSTRAINT teams_share_folder_not_dots_check CHECK (share_folder !~ '^[.]+$');
 CREATE UNIQUE INDEX teams_share_folder_key ON teams (lower(share_folder)) WHERE share_folder IS NOT NULL;
 
-COMMENT ON COLUMN people.uni_alias IS 'The name of this person''s personal folder on the lab share (Users/<uni alias>), which the inbox crawler scans for found files. 2 to 64 characters from letters, digits, dot, underscore and hyphen, never only dots. Unique ignoring case. Set by an administrator; NULL means the person has no folder to scan. migration 193.';
+COMMENT ON COLUMN people.uni_alias IS 'The name of this person''s personal folder on the lab share (Users/<uni alias>), which the inbox crawler scans for found files. 2 to 64 characters from letters, digits, dot, underscore and hyphen, not starting with a dot (so neither '..' nor a hidden folder such as '.snapshot'). Unique ignoring case. Set by an administrator; NULL means the person has no folder to scan. migration 193.';
 COMMENT ON COLUMN people.scan_while_former IS 'True when the inbox crawler should keep scanning this person''s folder after they are marked inactive (a Former person). Default false: a Former person''s folder is not scanned. Set by an administrator. migration 193.';
-COMMENT ON COLUMN teams.share_folder IS 'The name of this team''s folder on the lab share (Shared/<share folder>), which the inbox crawler scans for found files. A single folder name: no slash or backslash, not blank, not only dots. Unique ignoring case. NULL means the team has no folder to scan. migration 193.';
+COMMENT ON COLUMN teams.share_folder IS 'The name of this team''s folder on the lab share (Shared/<share folder>), which the inbox crawler scans for found files. A single folder name: no slash or backslash, not blank, no leading or trailing blanks, not only dots. Unique ignoring case. NULL means the team has no folder to scan. migration 193.';
 COMMENT ON INDEX people_uni_alias_key IS 'Two people cannot share a uni alias, ignoring case; people without an alias are not constrained.';
 COMMENT ON INDEX teams_share_folder_key IS 'Two teams cannot share a share folder, ignoring case; teams without a folder are not constrained.';
 
@@ -357,6 +358,7 @@ DROP TABLE IF EXISTS d1_private.file_candidates;
 DROP INDEX IF EXISTS teams_share_folder_key;
 ALTER TABLE teams
     DROP CONSTRAINT IF EXISTS teams_share_folder_not_dots_check,
+    DROP CONSTRAINT IF EXISTS teams_share_folder_trim_check,
     DROP CONSTRAINT IF EXISTS teams_share_folder_format_check,
     DROP COLUMN IF EXISTS share_folder;
 
@@ -364,7 +366,6 @@ DROP TRIGGER IF EXISTS people_inbox_columns_insert ON people;
 DROP FUNCTION IF EXISTS d1_private.people_inbox_columns_insert_guard();
 DROP INDEX IF EXISTS people_uni_alias_key;
 ALTER TABLE people
-    DROP CONSTRAINT IF EXISTS people_uni_alias_not_dots_check,
     DROP CONSTRAINT IF EXISTS people_uni_alias_format_check,
     DROP COLUMN IF EXISTS scan_while_former,
     DROP COLUMN IF EXISTS uni_alias;

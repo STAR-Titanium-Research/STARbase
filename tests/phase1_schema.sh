@@ -6194,6 +6194,10 @@ fi_out=$(fi_sql "UPDATE people SET uni_alias = '$FI_A65' WHERE person_id = '$FI_
 grep -q 'check constraint' <<<"$fi_out" && ok "a 65-character uni_alias is rejected" || bad "65-character uni_alias was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "UPDATE people SET uni_alias = '..' WHERE person_id = '$FI_P1';")
 grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias '..' is rejected (it would walk out of Users/)" || bad "uni_alias '..' was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = '.snapshot' WHERE person_id = '$FI_P1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias '.snapshot' (a leading dot) is rejected" || bad "uni_alias with a leading dot was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE people SET uni_alias = '.ab' WHERE person_id = '$FI_P1';")
+grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias '.ab' (a leading dot) is rejected" || bad "uni_alias '.ab' was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "UPDATE people SET uni_alias = 'a b' WHERE person_id = '$FI_P1';")
 grep -q 'check constraint' <<<"$fi_out" && ok "uni_alias with a space is rejected" || bad "uni_alias with a space was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "UPDATE people SET uni_alias = 'abc12de' WHERE person_id = '$FI_P1';
@@ -6230,6 +6234,10 @@ fi_out=$(fi_sql "UPDATE teams SET share_folder = '' WHERE team_id = '$FI_T1';")
 grep -q 'check constraint' <<<"$fi_out" && ok "an empty share_folder is rejected" || bad "empty share_folder was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "UPDATE teams SET share_folder = '   ' WHERE team_id = '$FI_T1';")
 grep -q 'check constraint' <<<"$fi_out" && ok "a blank share_folder is rejected" || bad "blank share_folder was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE teams SET share_folder = ' Lab' WHERE team_id = '$FI_T1';")
+grep -q 'teams_share_folder_trim_check' <<<"$fi_out" && ok "a share_folder with a leading blank is rejected" || bad "leading blank in share_folder was not rejected (output: $fi_out)"
+fi_out=$(fi_sql "UPDATE teams SET share_folder = 'Lab ' WHERE team_id = '$FI_T1';")
+grep -q 'teams_share_folder_trim_check' <<<"$fi_out" && ok "a share_folder with a trailing blank is rejected" || bad "trailing blank in share_folder was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "UPDATE teams SET share_folder = '..' WHERE team_id = '$FI_T1';")
 grep -q 'check constraint' <<<"$fi_out" && ok "share_folder '..' is rejected (it would walk out of Shared/)" || bad "share_folder '..' was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "UPDATE teams SET share_folder = 'Alloy Group 2026' WHERE team_id = '$FI_T1';
