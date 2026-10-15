@@ -196,12 +196,16 @@ class Store:
         full: bool = True,
     ) -> None:
         """Counters always; last_scan_finished_at only for a scan that ran to its end (an aborted one,
-        for example when the share dropped, leaves it where it was)."""
+        for example when the share dropped, leaves it where it was). last_error is replaced by a new
+        error, and cleared by a scan of everyone that ran to its end with none (so the admin tab stops
+        showing a problem that has gone); a one-person or unfinished scan leaves it alone."""
+        new_error = (last_error or None) and last_error[:900]
         self._run(
             "UPDATE inbox_crawler_state SET "
             " last_scan_finished_at = CASE WHEN %s AND %s THEN now() ELSE last_scan_finished_at END,"
             " files_registered = files_registered + %s, error_count = error_count + %s,"
-            " last_error = COALESCE(%s, last_error),"
+            " last_error = CASE WHEN %s::text IS NOT NULL THEN %s::text "
+            "   WHEN %s AND %s THEN NULL ELSE last_error END,"
             " unmatched_folders = COALESCE(%s::jsonb, unmatched_folders), updated_at = now() "
             "WHERE id = %s",
             (
@@ -209,7 +213,10 @@ class Store:
                 full,
                 registered,
                 errors,
-                (last_error or None) and last_error[:900],
+                new_error,
+                new_error,
+                completed,
+                full,
                 None if unmatched is None else json.dumps(sorted(unmatched)),
                 STATE_ID,
             ),

@@ -594,3 +594,64 @@ def test_a_second_crawler_refuses_to_start_and_exits_non_zero(
         holder.conn.close()
     assert cli.main(["--once", "--root", world.root]) == 0  # free again: it runs
     assert world.one("SELECT count(*) FROM file_candidates")[0] == 1
+
+
+# ---- 7d: last_error clears after a scan of everyone that completed cleanly ---------------------------
+
+
+def last_error(world):
+    world.conn.rollback()
+    return world.one("SELECT last_error FROM inbox_crawler_state")[0]
+
+
+def set_last_error(world, text="the share did not answer"):
+    world.q("UPDATE inbox_crawler_state SET last_error = %s", (text,))
+    world.commit()
+
+
+def finished(world, **kw):
+    args = {
+        "registered": 0,
+        "errors": 0,
+        "last_error": None,
+        "unmatched": None,
+        "completed": True,
+        "full": True,
+    }
+    args.update(kw)
+    db.Store(world.conn).scan_finished(**args)
+
+
+def test_a_clean_completed_scan_of_everyone_clears_last_error(world):
+    set_last_error(world)
+    finished(world)
+    assert last_error(world) is None
+
+
+def test_a_scan_with_a_new_error_replaces_it(world):
+    set_last_error(world)
+    finished(world, errors=1, last_error="Users/ab12: cannot be read (OSError)")
+    assert last_error(world) == "Users/ab12: cannot be read (OSError)"
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"full": False},  # one person's scan says nothing about the rest
+        {"completed": False},  # stopped half way
+    ],
+)
+def test_a_scan_that_proves_nothing_keeps_last_error(world, kw):
+    set_last_error(world)
+    finished(world, **kw)
+    assert last_error(world) == "the share did not answer"
+
+
+def test_the_daemon_clears_it_after_the_share_comes_back(world):
+    world.person("abc12de")
+    world.write("Users/abc12de/a.png", png())
+    settle(world)
+    set_last_error(world)
+    d, _spy, _ = make_daemon(world)
+    d.tick()
+    assert last_error(world) is None
