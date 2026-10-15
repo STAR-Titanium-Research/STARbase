@@ -55,6 +55,21 @@ def safe_folder_name(name) -> bool:
     return set(name) != {"."} and not skip_dir(name)
 
 
+def clean_rel_path(rel, root: str | None = None) -> bool:
+    """Whether `rel` is a plain share-relative path of a file: no backslash or NUL, no empty, '.' or '..'
+    part (so a trailing or doubled slash is out too), at least two parts, and, when `root` (an owner's
+    folder, "Users/ab12") is given, strictly below it. Pure string work. Used on every path the crawler did
+    not make itself (a pointer row's metadata is editable by any Lab Member) before it is stored or read."""
+    if not isinstance(rel, str) or "\\" in rel or "\x00" in rel:
+        return False
+    parts = rel.split("/")
+    if len(parts) < 2 or any(p in ("", ".", "..") for p in parts):
+        return False
+    if root is None:
+        return True
+    return rel.startswith(root + "/")
+
+
 @dataclass(frozen=True)
 class Matching:
     owners: list[Owner]  # folders to scan

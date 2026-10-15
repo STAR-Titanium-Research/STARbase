@@ -22,7 +22,7 @@ from . import identity, recognise
 from .fs_readonly import extension
 from .hashing import HashOutcome
 from .identity import FILENAME_DISK_MAX, file_id, folder_id, guess_type
-from .owners import Owner
+from .owners import Owner, clean_rel_path
 
 log = logging.getLogger("inbox_crawler.db")
 
@@ -104,6 +104,9 @@ class Store:
         self.storage = storage
         self.root_folder_name = root_folder_name
         self._folders_done: set[str] = set()
+        self._warned: set[str] = (
+            set()
+        )  # candidates already complained about (once per process)
 
     # ---- plumbing --------------------------------------------------------------------
 
@@ -405,19 +408,39 @@ class Store:
     def resync_paths(self, owner: Owner) -> int:
         """Re-read each of the owner's candidates' rel_path from its pointer row (metadata.archive_path).
         The indexer re-points a moved file's references, the candidate included, to the pointer row at the
-        new path but cannot touch rel_path, which would then name a path that is gone. Only candidates of
-        this owner, and only paths that are under the owner's folder, are changed."""
-        owner_filter = _owner_eq(owner, "c.")
-        return self._run(
-            "UPDATE file_candidates c SET rel_path = df.metadata::jsonb->>'archive_path' "
-            "FROM directus_files df WHERE df.id = c.directus_files_id AND "
-            + owner_filter
+        new path but cannot touch rel_path, which would then name a path that is gone.
+
+        metadata.archive_path is editable by any Lab Member, so it is only believed when it is a clean path
+        (no '..', backslash, empty or '.' part) under this owner's folder AND the pointer row's own id is
+        the indexer's uuid5 of that very path. A real move always satisfies the last rule: the indexer
+        re-points the candidate to the row of the NEW path, whose id is uuid5(new path) and whose
+        archive_path is that path. An edited archive_path names another file, so the ids disagree and the
+        candidate keeps its path (the D2 rule: only a person's own, linked files are ever read)."""
+        rows = self._all(
+            "SELECT c.candidate_id::text, c.directus_files_id::text, df.metadata::jsonb->>'archive_path' "
+            "FROM file_candidates c JOIN directus_files df ON df.id = c.directus_files_id WHERE "
+            + _owner_eq(owner, "c.")
             + " "
             "AND df.metadata::jsonb->>'archive_path' IS NOT NULL "
             "AND c.rel_path <> df.metadata::jsonb->>'archive_path' "
             "AND left(df.metadata::jsonb->>'archive_path', %s) = %s",
             (owner.id, len(owner.root) + 1, owner.root + "/"),
         )
+        done = 0
+        for candidate_id, files_id, archive_path in rows:
+            if not clean_rel_path(archive_path, owner.root) or (
+                str(file_id(archive_path)) != files_id
+            ):
+                log.warning(
+                    "not re-syncing candidate %s: its pointer row names a path that is not its own",
+                    candidate_id,
+                )
+                continue
+            done += self._run(
+                "UPDATE file_candidates SET rel_path = %s WHERE candidate_id = %s",
+                (archive_path, candidate_id),
+            )
+        return done
 
     def already_linked(self, files_ids: list[str]) -> set[str]:
         """Which of these pointer-row ids are already linked to a sample, operation or test (by Data Studio's
@@ -721,16 +744,53 @@ class Store:
     def adopted_awaiting_hash(self, limit: int = 20) -> list[tuple[str, str, str]]:
         """Candidates a person has linked (and so agreed to be read once) that have no fingerprint yet,
         or whose last try failed more than an hour ago: (candidate_id, directus_files_id, rel_path).
-        Only state 'linked' rows are read: an undone link stops the read."""
-        rows = self._all(
-            "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path "
-            "FROM file_candidates c LEFT JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
-            "WHERE c.adopted_at IS NOT NULL AND c.state = 'linked' "
-            "  AND (f.directus_files_id IS NULL OR (f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s))) "
-            "ORDER BY c.adopted_at LIMIT %s",
-            (HASH_RETRY_HOURS, limit),
+        Only state 'linked' rows are read: an undone link stops the read.
+
+        Nothing is returned for a row whose stored path is not its own: the path must be clean, below the
+        owner's folder (spelled as the share spells it, SMB being case-insensitive) and the row's id must be
+        the indexer's uuid5 of it. Such a row is skipped before anything is read, and does not block the
+        rows behind it."""
+        out: list[tuple[str, str, str]] = []
+        page = max(limit, 1) * 10
+        for offset in range(0, page * 5, page):
+            rows = self._all(
+                "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path, "
+                " CASE WHEN c.owner_person_id IS NOT NULL THEN 'Users' ELSE 'Shared' END, "
+                " COALESCE(p.uni_alias, t.share_folder) "
+                "FROM file_candidates c "
+                "LEFT JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
+                "LEFT JOIN people p ON p.person_id = c.owner_person_id "
+                "LEFT JOIN teams t ON t.team_id = c.owner_team_id "
+                "WHERE c.adopted_at IS NOT NULL AND c.state = 'linked' "
+                "  AND (f.directus_files_id IS NULL OR (f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s))) "
+                "ORDER BY c.adopted_at, c.candidate_id LIMIT %s OFFSET %s",
+                (HASH_RETRY_HOURS, page, offset),
+            )
+            for cid, fid, rel, base, folder in rows:
+                if self._own_path(rel, fid, base, folder):
+                    out.append((cid, fid, rel))
+                    if len(out) >= limit:
+                        return out
+                elif cid not in self._warned:
+                    self._warned.add(cid)
+                    log.warning(
+                        "not reading candidate %s: its stored path is not its own", cid
+                    )
+            if len(rows) < page:
+                break
+        return out
+
+    @staticmethod
+    def _own_path(rel: str, files_id: str, base: str, folder: str | None) -> bool:
+        if not folder or not clean_rel_path(rel):
+            return False
+        parts = rel.split("/")
+        return (
+            parts[0] == base
+            and parts[1].lower() == folder.lower()
+            and len(parts) > 2
+            and str(file_id(rel)) == files_id
         )
-        return [tuple(r) for r in rows]
 
     def errored_hashes(self, limit: int = 20) -> list[tuple[str, str, str]]:
         """Images and scans whose discovery hash failed at least an hour ago and are still undecided."""
