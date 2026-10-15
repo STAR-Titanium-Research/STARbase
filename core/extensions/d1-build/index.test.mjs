@@ -53,7 +53,7 @@ function fakeWorld() {
     // records the caller can read (what ItemsService answers), by collection then lower-case id
     records: { physical_samples: new Map(), manufacturing_operations: new Map(), test_sessions: new Map() },
     required: [], // directus_fields rows { collection, field, translations }
-    refOps: [], refTests: [], refSubjects: [], refGenealogy: [], // what points at a sample
+    refOps: [], refTests: [], refSubjects: [], refGenealogy: [], subjects: [], // what points at a sample; subjects: { session_id, sample_id } of tests
     deniedReads: new Set(), hiddenIds: new Set(), // collections, and record ids, the caller cannot read
     ops: [], // every write ItemsService was asked for, in order
     codeSeq: 0, failOn: null, lockVersions: new Map(),
@@ -97,7 +97,7 @@ function fakeServices(world, log = { built: [], reads: [] }) {
 
     async readOne(id, query) {
       log.reads.push({ collection: this.collection, query: { one: id, ...query } });
-      const r = world.deniedReads.has(this.collection) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
+      const r = world.deniedReads.has(this.collection) || world.hiddenIds.has(String(id).toLowerCase()) ? null : world.records[this.collection]?.get(String(id).toLowerCase());
       if (!r) throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
       return { ...r };
     }
@@ -216,6 +216,8 @@ function fakeDatabase(world) {
           .map((r) => ({ sample_id: r.sample_id, sample_code: r.sample_code, current_status: r.current_status })) };
       case SQL.refsOperations:
         return { rows: world.refOps.filter((r) => csvOf(b).includes(r.sample_id) || csvOf(b).includes(r.output_sample_id)) };
+      case SQL.testSubjects:
+        return { rows: world.subjects.filter((r) => r.session_id === b[0]).map((r) => ({ sample_id: r.sample_id })) };
       case SQL.refsGenealogy:
         return { rows: world.refGenealogy.filter((r) => csvOf(b).includes(r.parent_sample_id)) };
       case SQL.refsTests:
@@ -1495,7 +1497,7 @@ test('mark-done: an operation turns done with its date, who and when, and its pl
   doneWorld(env);
   const res = await markDone(env, { collection: 'manufacturing_operations', id: ID(40), date: '2026-10-12' });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
-  assert.deepEqual(res.body, { data: { id: ID(40), work_state: 'done' } });
+  assert.deepEqual(res.body, { data: { ids: [ID(40)], work_state: 'done', id: ID(40) } });
   const trx = env.world.trx;
   assert.equal(trx.log[0], SQL.setActor);
   assert.deepEqual(env.world.ops.map((o) => [o.op, o.collection, o.id]), [
@@ -2114,4 +2116,219 @@ test('create: the same checks hold at Create (done work on a planned sample is a
   assert.equal(res.statusCode, 409);
   assert.ok(res.body.errors[0].extensions.checks.some((c) => c.code === 'STRUCTURE' && /still planned/.test(c.text)));
   assert.deepEqual(env.world.ops, []);
+});
+
+// ---- mark done for a whole container, and mark planned ---------------------------------------------------------------
+
+const markPlanned = (env, body, user = ALICE) => env.call('POST', '/mark-planned', { user, body });
+const OPS = 'manufacturing_operations';
+
+// A cut done as a container: the same input disc, four rows, each with its own planned output.
+function cutWorld(env, state = 'planned', outputStatus = 'planned') {
+  seed(env.world, 'physical_samples', [sampleRow(10), ...[11, 12, 13, 14].map((n) => sampleRow(n, { current_status: outputStatus }))]);
+  seed(env.world, OPS, [11, 12, 13, 14].map((n) => opRow(n + 30, { sample_id: ID(10), output_sample_id: ID(n), work_state: state })));
+  env.world.people = [{ person_id: PERSON, user_id: ALICE }];
+}
+const allIds = [41, 42, 43, 44].map(ID);
+
+test('mark-done: a whole container in one call, all in one transaction: every row done, every output active', async () => {
+  const env = setup();
+  cutWorld(env);
+  const res = await markDone(env, { collection: OPS, ids: allIds, date: '2026-10-12' });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { data: { ids: allIds, work_state: 'done' } });
+  assert.equal(env.world.ops.length, 8);
+  assert.ok(env.world.ops.every((o) => o.knex === env.world.trx), 'one transaction');
+  for (const id of allIds) assert.equal(env.world.records[OPS].get(id).work_state, 'done');
+  for (const n of [11, 12, 13, 14]) assert.equal(env.world.records.physical_samples.get(ID(n)).current_status, 'active');
+  assert.equal(env.world.records.physical_samples.get(ID(10)).current_status, 'active');
+  assert.equal(env.world.trx.log.filter((q) => q === SQL.setActor).length, 1);
+});
+
+test('mark-done: all or nothing: one refused record undoes the rest', async () => {
+  const env = setup();
+  cutWorld(env);
+  const before = stateOf(env.world);
+  env.world.failOn = (op, collection, data) => {
+    if (op === 'update' && collection === OPS && env.world.ops.filter((o) => o.collection === OPS).length === 2) {
+      throw Object.assign(new Error('no'), { status: 403, code: 'FORBIDDEN' });
+    }
+  };
+  const res = await markDone(env, { collection: OPS, ids: allIds });
+  assert.equal(res.statusCode, 403);
+  assert.equal(stateOf(env.world), before);
+  assert.deepEqual(env.cleared, []);
+});
+
+test('mark-done: ids are 1 to 100 ids of one collection (or the older single id); a duplicate counts once; ids wins', async () => {
+  const env = setup();
+  cutWorld(env);
+  const ok = { collection: OPS };
+  for (const body of [
+    { ...ok, ids: [] }, { ...ok, ids: 'x' }, { ...ok, ids: ['x'] }, { ...ok, ids: [1] }, { ...ok, ids: Array.from({ length: 101 }, (_, i) => ID(1000 + i)) },
+    { ...ok }, { ...ok, id: null, ids: null },
+  ]) {
+    const res = await markDone(env, body);
+    assert.equal(res.statusCode, 400, JSON.stringify(body).slice(0, 80));
+    assert.match(res.body.errors[0].message, /ids must be 1 to 100/);
+  }
+  assert.deepEqual(env.world.ops, []);
+  const dup = await markDone(env, { ...ok, ids: [ID(41), ID(41).toUpperCase()] });
+  assert.deepEqual(dup.body.data.ids, [ID(41)]);
+  assert.equal(env.world.ops.filter((o) => o.collection === OPS).length, 1);
+  const both = await markDone(env, { ...ok, id: ID(42), ids: [ID(43)] });
+  assert.deepEqual(both.body.data, { ids: [ID(43)], work_state: 'done' });
+  const hundred = setup();
+  seed(hundred.world, OPS, Array.from({ length: 100 }, (_, i) => opRow(2000 + i, { sample_id: ID(10) })));
+  seed(hundred.world, 'physical_samples', [sampleRow(10)]);
+  const res = await markDone(hundred, { ...ok, ids: Array.from({ length: 100 }, (_, i) => ID(2000 + i)) });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.data.ids.length, 100);
+});
+
+test('mark-done: one record already done stops the whole call', async () => {
+  const env = setup();
+  cutWorld(env);
+  env.world.records[OPS].get(ID(43)).work_state = 'done';
+  const res = await markDone(env, { collection: OPS, ids: allIds });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.errors[0].extensions.code, 'ALREADY_DONE');
+  assert.deepEqual(env.world.ops, []);
+});
+
+test('mark-done: done work on a planned sample is blocked unless an operation in the same call makes it', async () => {
+  const TEXT = 'Its sample is still planned; mark the operation that makes it done first.';
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10, { current_status: 'planned' })]);
+  seed(env.world, OPS, [opRow(40, { sample_id: ID(10) })]);
+  const res = await markDone(env, { collection: OPS, ids: [ID(40)] });
+  assert.equal(res.statusCode, 409);
+  assert.deepEqual(res.body.errors[0].extensions.checks, [{ key: ID(40), level: 'block', code: 'STRUCTURE', text: TEXT }]);
+  assert.deepEqual(env.world.ops, []);
+  // a chain: 41 makes sample 11 from the active disc, 42 works on sample 11; called as [42, 41] it is written 41 first
+  const chain = setup();
+  seed(chain.world, 'physical_samples', [sampleRow(10), sampleRow(11, { current_status: 'planned' })]);
+  seed(chain.world, OPS, [opRow(41, { sample_id: ID(10), output_sample_id: ID(11) }), opRow(42, { sample_id: ID(11) })]);
+  const ok = await markDone(chain, { collection: OPS, ids: [ID(42), ID(41)] });
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+  assert.deepEqual(chain.world.ops.filter((o) => o.collection === OPS).map((o) => o.id), [ID(41), ID(42)]);
+  assert.equal(chain.world.records.physical_samples.get(ID(11)).current_status, 'active');
+  // a test on a planned subject
+  const test = setup();
+  seed(test.world, 'physical_samples', [sampleRow(10), sampleRow(11, { current_status: 'planned' })]);
+  seed(test.world, 'test_sessions', [testRow(50)]);
+  test.world.subjects = [{ session_id: ID(50), sample_id: ID(10) }, { session_id: ID(50), sample_id: ID(11) }];
+  const t = await markDone(test, { collection: 'test_sessions', ids: [ID(50)] });
+  assert.equal(t.statusCode, 409);
+  assert.equal(t.body.errors[0].extensions.checks[0].text, TEXT);
+  test.world.subjects = [{ session_id: ID(50), sample_id: ID(10) }];
+  assert.equal((await markDone(test, { collection: 'test_sessions', ids: [ID(50)] })).statusCode, 200);
+});
+
+test('mark-done: the output samples it turns active must have what the sample form marks required', async () => {
+  const env = setup();
+  cutWorld(env);
+  env.world.required = [
+    { collection: 'physical_samples', field: 'material_id', translations: [{ language: 'en-US', translation: 'Material' }] },
+    { collection: 'physical_samples', field: 'form', translations: [{ language: 'en-US', translation: 'Form' }] },
+    { collection: OPS, field: 'method_id', translations: null },
+  ];
+  env.world.records.physical_samples.get(ID(12)).material_id = null;
+  env.world.records.physical_samples.get(ID(14)).form = '';
+  const res = await markDone(env, { collection: OPS, ids: allIds });
+  assert.equal(res.statusCode, 409);
+  assert.deepEqual(res.body.errors[0].extensions.checks, [
+    { key: ID(12), field: 'material_id', level: 'block', code: 'REQUIRED', text: 'Material is required before the sample it makes can be made active.' },
+    { key: ID(14), field: 'form', level: 'block', code: 'REQUIRED', text: 'Form is required before the sample it makes can be made active.' },
+  ]);
+  assert.deepEqual(env.world.ops, []);
+  // an output the caller cannot read is left to the update; once filled in, it goes through
+  env.world.hiddenIds.add(ID(12));
+  env.world.records.physical_samples.get(ID(14)).form = 'disc';
+  const last = await markDone(env, { collection: OPS, ids: allIds });
+  assert.equal(last.statusCode, 200, JSON.stringify(last.body));
+});
+
+test('mark-planned: a done container goes back to planned in one transaction, its outputs with it, the done fields cleared', async () => {
+  const env = setup();
+  cutWorld(env, 'done', 'active');
+  const res = await markPlanned(env, { collection: OPS, ids: allIds });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { data: { ids: allIds, work_state: 'planned' } });
+  const updates = env.world.ops.filter((o) => o.collection === OPS);
+  assert.equal(updates.length, 4);
+  for (const u of updates) assert.deepEqual(u.data, { work_state: 'planned', operation_date: null, done_by_person_id: null, done_at: null });
+  assert.ok(env.world.ops.every((o) => o.knex === env.world.trx));
+  for (const n of [11, 12, 13, 14]) assert.equal(env.world.records.physical_samples.get(ID(n)).current_status, 'planned');
+  assert.equal(env.world.records.physical_samples.get(ID(10)).current_status, 'active', 'the input is not touched');
+  // a test: its session date is the one cleared
+  const t = setup();
+  seed(t.world, 'test_sessions', [testRow(50, { work_state: 'done' })]);
+  const r = await markPlanned(t, { collection: 'test_sessions', id: ID(50) });
+  assert.deepEqual(r.body.data, { ids: [ID(50)], work_state: 'planned', id: ID(50) });
+  assert.deepEqual(t.world.ops[0].data, { work_state: 'planned', session_date: null, done_by_person_id: null, done_at: null });
+});
+
+test('mark-planned: refused (REMOVE_BLOCKED) while something done hangs off an output; the code is named only if the caller can read it', async () => {
+  const run = async (hide) => {
+    const env = setup();
+    cutWorld(env, 'done', 'active');
+    seed(env.world, 'physical_samples', [sampleRow(11, { current_status: 'active', sample_code: 'SECRET-11' })]);
+    env.world.refOps = [{ operation_id: ID(60), work_state: 'done', sample_id: ID(11), output_sample_id: null }, { operation_id: ID(61), work_state: 'planned', sample_id: ID(12), output_sample_id: null }];
+    env.world.refTests = [{ session_id: ID(62), work_state: 'done', sample_id: ID(13) }];
+    if (hide) env.world.hiddenIds.add(ID(11));
+    return { env, res: await markPlanned(env, { collection: OPS, ids: allIds }) };
+  };
+  const seen = await run(false);
+  assert.equal(seen.res.statusCode, 409);
+  assert.deepEqual(seen.res.body.errors[0].extensions.checks, [
+    { key: ID(41), level: 'block', code: 'REMOVE_BLOCKED', text: 'Something done hangs off SECRET-11, so it cannot go back to planned.' },
+    { key: ID(43), level: 'block', code: 'REMOVE_BLOCKED', text: 'Something done hangs off S-13, so it cannot go back to planned.' },
+  ]);
+  assert.deepEqual(seen.env.world.ops, [], 'nothing is written');
+  const hidden = await run(true);
+  assert.doesNotMatch(JSON.stringify(hidden.res.body), /SECRET/);
+  assert.match(hidden.res.body.errors[0].extensions.checks[0].text, /hangs off a sample/);
+});
+
+test('mark-planned: records going back together do not hold each other up; consumed outputs and in-place operations are left alone', async () => {
+  const env = setup();
+  // 41 makes sample 11 from the disc; 42 (also going back) works on sample 11; 43 is in place on the disc; 44's output was consumed
+  seed(env.world, 'physical_samples', [sampleRow(10), sampleRow(11), sampleRow(14, { current_status: 'consumed' })]);
+  seed(env.world, OPS, [
+    opRow(41, { sample_id: ID(10), output_sample_id: ID(11), work_state: 'done' }),
+    opRow(42, { sample_id: ID(11), work_state: 'done' }),
+    opRow(43, { sample_id: ID(10), output_sample_id: ID(10), work_state: 'done' }),
+    opRow(44, { sample_id: ID(10), output_sample_id: ID(14), work_state: 'done' }),
+  ]);
+  env.world.refOps = [{ operation_id: ID(42), work_state: 'done', sample_id: ID(11), output_sample_id: null }];
+  const res = await markPlanned(env, { collection: OPS, ids: [ID(41), ID(42), ID(43), ID(44)] });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(env.world.records.physical_samples.get(ID(11)).current_status, 'planned');
+  assert.equal(env.world.records.physical_samples.get(ID(10)).current_status, 'active');
+  assert.equal(env.world.records.physical_samples.get(ID(14)).current_status, 'consumed');
+});
+
+test('mark-planned: the guard decides who may: a refusal is a 403 with its reason and nothing changes; a planned record is a 409', async () => {
+  const env = setup();
+  cutWorld(env, 'done', 'active');
+  const before = stateOf(env.world);
+  env.world.failOn = (op, collection) => {
+    if (op === 'update' && collection === OPS && env.world.ops.length === 2) {
+      throw Object.assign(new Error('no'), { status: 403, code: 'FORBIDDEN', extensions: { source: 'd1-access-guard', reason: 'Only the owner can set a done record back to planned.' } });
+    }
+  };
+  const res = await markPlanned(env, { collection: OPS, ids: allIds });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.errors[0].message, 'Only the owner can set a done record back to planned.');
+  assert.equal(stateOf(env.world), before);
+  const planned = setup();
+  cutWorld(planned, 'planned');
+  const again = await markPlanned(planned, { collection: OPS, ids: allIds });
+  assert.equal(again.statusCode, 409);
+  assert.equal(again.body.errors[0].extensions.code, 'ALREADY_PLANNED');
+  for (const body of [undefined, {}, { collection: 'physical_samples', ids: [ID(41)] }, { collection: OPS, ids: [] }, { collection: OPS, ids: ['x'] }]) {
+    assert.equal((await markPlanned(planned, body)).statusCode, 400, JSON.stringify(body));
+  }
+  assert.equal((await markPlanned(planned, { collection: OPS, ids: [ID(99)] })).statusCode, 404);
 });

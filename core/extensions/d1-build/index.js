@@ -17,7 +17,12 @@
 //                                              409 { errors: [{ extensions: { code: 'CHECKS', checks } }] } when a blocking check holds
 //                                              (nothing is written); a failed write: { errors: [{ extensions: { code: 'WRITE_FAILED', key } }] }
 //                                              (everything is rolled back, the draft is untouched)
-//   POST   /d1-build/mark-done {collection, id, date?, personId?} -> { data: { id, work_state: 'done' } }  (409 CHECKS as above)
+//   POST   /d1-build/mark-done {collection, ids (1 to 100 of one collection) | id, date?, personId?}
+//                                           -> { data: { ids, work_state: 'done' } }  (one transaction, all or nothing; a single `id` request
+//                                              also gets `id`; 409 CHECKS as above, 409 ALREADY_DONE)
+//   POST   /d1-build/mark-planned {collection, ids | id} -> { data: { ids, work_state: 'planned' } }  (owner or admin only through the access
+//                                              guard; clears the date, done_by and done_at; planned output samples go back to planned unless
+//                                              something done hangs off them: 409 CHECKS REMOVE_BLOCKED; 409 ALREADY_PLANNED)
 //   GET    /d1-build/templates              -> { data: [{ id, name, scope, role_id, collection, values, user_id, updated_at, version }] }
 //   GET    /d1-build/templates/:id, POST /d1-build/templates, PATCH /d1-build/templates/:id, DELETE /d1-build/templates/:id
 //   Check = { key: DraftKey (or a record id for mark-done); field?: string; level: 'block' | 'warn'; code: CheckCode; text: string }
@@ -279,6 +284,8 @@ export const SQL = {
   refsOperations:
     'SELECT operation_id, work_state, sample_id, output_sample_id FROM manufacturing_operations'
     + " WHERE sample_id = ANY(string_to_array(?, ',')::uuid[]) OR output_sample_id = ANY(string_to_array(?, ',')::uuid[])",
+  // Mark done: the samples a test works on (statuses come from sampleInfo).
+  testSubjects: "SELECT item AS sample_id FROM test_sessions_subject WHERE test_sessions_id = ? AND collection = 'physical_samples'",
   refsGenealogy:
     "SELECT parent_sample_id, child_sample_id FROM sample_genealogy WHERE parent_sample_id = ANY(string_to_array(?, ',')::uuid[])",
   refsTests:
@@ -1191,7 +1198,7 @@ export function mount(router, context, clock = () => new Date()) {
     res.status(204).end();
   }));
 
-  // -- mark done (spec 6.2, ADR-0019) ---------------------------------------------------------------------------------------
+  // -- mark done and mark planned (spec 6.2, ADR-0019) ---------------------------------------------------------------------
 
   const DONE = {
     manufacturing_operations: { dateField: 'operation_date', kind: 'operation' },
@@ -1202,45 +1209,116 @@ export function mount(router, context, clock = () => new Date()) {
     const d = new Date(`${v}T00:00:00Z`);
     return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(v);
   };
-
-  router.post('/mark-done', route(async ({ req, res, acc }) => {
-    const b = req.body;
-    if (!isObject(b)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a JSON body with { collection, id, date?, personId? }.');
+  const MAX_IDS = 100;
+  // { collection, ids } from the body: `ids` (1 to 100 ids of one collection) or the older single `id`; duplicates count once.
+  const containerIds = (b) => {
+    if (!isObject(b)) throw new HttpError(400, 'INVALID_PAYLOAD', 'Send a JSON body with { collection, ids, ... }.');
     if (typeof b.collection !== 'string' || !Object.hasOwn(DONE, b.collection)) {
       throw new HttpError(400, 'INVALID_PAYLOAD', 'collection must be manufacturing_operations or test_sessions.');
     }
-    if (typeof b.id !== 'string' || !UUID.test(b.id)) throw new HttpError(400, 'INVALID_PAYLOAD', 'id must be the id of an operation or a test.');
+    const list = b.ids !== undefined && b.ids !== null ? b.ids : (b.id !== undefined && b.id !== null ? [b.id] : null);
+    if (!Array.isArray(list) || list.length < 1 || list.length > MAX_IDS || !list.every((i) => typeof i === 'string' && UUID.test(i))) {
+      throw new HttpError(400, 'INVALID_PAYLOAD', `ids must be 1 to ${MAX_IDS} ids of ${b.collection}.`);
+    }
+    return { collection: b.collection, ids: [...new Set(list.map((i) => i.toLowerCase()))], single: b.ids === undefined || b.ids === null };
+  };
+  const answer = (ids, state, single) => ({ ids, work_state: state, ...(single ? { id: ids[0] } : {}) });
+  // A write ItemsService refused, as a 403 (with the access guard's reason) or a 400.
+  const refused = (err) => {
+    if (err instanceof HttpError) return err;
+    const { status, message } = describeFailure(err);
+    if (status === 500) return err;
+    return new HttpError(status, status === 403 ? 'FORBIDDEN' : 'INVALID_PAYLOAD', message);
+  };
+  const notThere = () => new HttpError(404, 'NOT_FOUND', 'That record does not exist, or you cannot see it.');
+
+  // The records as the caller reads them, locked, with their state. A record the caller cannot read is not there.
+  async function readContainers(svc, trx, collection, ids) {
+    const recs = [];
+    for (const id of ids) {
+      let rec;
+      try {
+        rec = await svc(collection).readOne(id, { fields: ['*'] });
+      } catch (err) {
+        if (isDenied(err)) throw notThere();
+        throw err;
+      }
+      if (!rec) throw notThere();
+      const [locked] = rowsOf(await trx.raw(SQL.lockRecord[collection], [id]));
+      if (!locked) throw notThere();
+      recs.push({ id, rec, state: locked.state });
+    }
+    return recs;
+  }
+  // The sample a record leaves behind as its output, when it is one: the order of a call follows output to input.
+  const refOf = (v) => (v ? `id:${lower(v)}` : null);
+  const inOrder = (recs) => orderOperations(recs.map((r, index) => ({
+    key: r.id, index, input: refOf(r.rec.sample_id), output: refOf(r.rec.output_sample_id) === refOf(r.rec.sample_id) ? null : refOf(r.rec.output_sample_id),
+  }))).order.map((o) => recs.find((r) => r.id === o.key));
+
+  router.post('/mark-done', route(async ({ req, res, acc }) => {
+    const b = req.body;
+    const { collection, ids, single } = containerIds(b);
     if (b.date !== undefined && b.date !== null && !isRealDate(b.date)) throw new HttpError(400, 'INVALID_PAYLOAD', 'date must be a day, YYYY-MM-DD.');
     if (b.personId !== undefined && b.personId !== null && !(typeof b.personId === 'string' && UUID.test(b.personId))) {
       throw new HttpError(400, 'INVALID_PAYLOAD', 'personId must be the id of a person.');
     }
-    const collection = b.collection;
     const { dateField } = DONE[collection];
-    const recordId = b.id.toLowerCase();
     const schema = await schemaOf(req);
+    // All of them, in ONE transaction: all done or none.
     await inTransaction(acc, async (trx) => {
       const svc = (c) => itemsFor(schema, req.accountability, c, trx);
-      // The record as the caller can read it; one they cannot read is not there.
-      let rec;
-      try {
-        rec = await svc(collection).readOne(recordId, { fields: ['*'] });
-      } catch (err) {
-        if (isDenied(err)) throw new HttpError(404, 'NOT_FOUND', 'That record does not exist, or you cannot see it.');
-        throw err;
-      }
-      if (!rec) throw new HttpError(404, 'NOT_FOUND', 'That record does not exist, or you cannot see it.');
-      // Locked, so two people marking it done at once do it once.
-      const [locked] = rowsOf(await trx.raw(SQL.lockRecord[collection], [recordId]));
-      if (!locked) throw new HttpError(404, 'NOT_FOUND', 'That record does not exist, or you cannot see it.');
-      if (locked.state !== 'planned') throw new HttpError(409, 'ALREADY_DONE', 'That record is already marked done.');
+      const recs = await readContainers(svc, trx, collection, ids);
+      if (recs.some((r) => r.state !== 'planned')) throw new HttpError(409, 'ALREADY_DONE', recs.length > 1 ? 'One of those records is already marked done.' : 'That record is already marked done.');
+      const checks = [];
       // What the forms mark required must be filled in; the date is the one thing this action supplies.
-      const missing = (parseRequired(rowsOf(await trx.raw(SQL.requiredFields)))[collection] ?? [])
-        .filter(({ field }) => field !== dateField && isBlank(rec[field]));
-      if (missing.length) {
-        throw new HttpError(409, 'CHECKS', 'Fill in what is missing before marking this done.', {
-          checks: missing.map(({ field, label }) => ({ key: recordId, field, level: 'block', code: 'REQUIRED', text: `${label} is required before this can be marked done.` })),
-        });
+      const required = parseRequired(rowsOf(await trx.raw(SQL.requiredFields)));
+      for (const { id, rec } of recs) {
+        for (const { field, label } of (required[collection] ?? []).filter((f) => f.field !== dateField)) {
+          if (isBlank(rec[field])) checks.push({ key: id, field, level: 'block', code: 'REQUIRED', text: `${label} is required before this can be marked done.` });
+        }
       }
+      // Done work needs samples that exist. A sample that is still planned is a block, unless a record marked done in this very
+      // call makes it (they are written in that order).
+      const making = new Set(recs.map((r) => refOf(r.rec.output_sample_id)).filter(Boolean));
+      const inputs = new Map(); // record id -> the samples it works on
+      for (const { id, rec } of recs) {
+        if (collection === 'manufacturing_operations') inputs.set(id, [rec.sample_id].filter(Boolean).map(lower));
+        else inputs.set(id, rowsOf(await trx.raw(SQL.testSubjects, [id])).map((r) => lower(r.sample_id)));
+      }
+      const wanted = [...new Set([...inputs.values()].flat())];
+      const status = new Map();
+      if (wanted.length) for (const r of rowsOf(await trx.raw(SQL.sampleInfo, [wanted.join(',')]))) status.set(lower(r.sample_id), r.current_status);
+      for (const [id, samples] of inputs) {
+        if (samples.some((sid) => status.get(sid) === 'planned' && !making.has(`id:${sid}`))) {
+          checks.push({ key: id, level: 'block', code: 'STRUCTURE', text: 'Its sample is still planned; mark the operation that makes it done first.' });
+        }
+      }
+      // An operation's planned output turns active, so what the sample's form marks required must be there too (as the caller
+      // reads it; an output they cannot read is left to the update, which will refuse it).
+      const outputs = new Map(); // record id -> output sample id
+      if (collection === 'manufacturing_operations') {
+        for (const { id, rec } of recs) {
+          if (!rec.output_sample_id) continue;
+          const sid = lower(rec.output_sample_id);
+          if (sid === lower(rec.sample_id ?? '')) continue;
+          const [sample] = rowsOf(await trx.raw(SQL.lockRecord.physical_samples, [sid]));
+          if (sample?.state !== 'planned') continue;
+          outputs.set(id, sid);
+          let row = null;
+          try {
+            row = await svc('physical_samples').readOne(sid, { fields: ['*'] });
+          } catch (err) {
+            if (!isDenied(err)) throw err;
+          }
+          if (!row) continue;
+          for (const { field, label } of required.physical_samples ?? []) {
+            if (isBlank(row[field])) checks.push({ key: sid, field, level: 'block', code: 'REQUIRED', text: `${label} is required before the sample it makes can be made active.` });
+          }
+        }
+      }
+      if (checks.length) throw new HttpError(409, 'CHECKS', 'Fill in what is missing before marking this done.', { checks });
+
       let person = null;
       if (b.personId) {
         const [p] = rowsOf(await trx.raw(SQL.personExists, [b.personId.toLowerCase()]));
@@ -1253,31 +1331,78 @@ export function mount(router, context, clock = () => new Date()) {
       const day = b.date ?? clock().toISOString().slice(0, 10);
       const data = { work_state: 'done', [dateField]: `${day}T00:00:00.000Z`, done_at: clock().toISOString() };
       if (person) data.done_by_person_id = person;
-      const fail = (err) => {
-        const { status, message } = describeFailure(err);
-        if (status === 500) throw err;
-        return new HttpError(status, status === 403 ? 'FORBIDDEN' : 'INVALID_PAYLOAD', message);
-      };
-      // The record first (the caller's update rule decides), then its planned output turns active.
-      try {
-        await svc(collection).updateOne(recordId, data);
-      } catch (err) {
-        throw err instanceof HttpError ? err : fail(err);
-      }
-      const out = collection === 'manufacturing_operations' && rec.output_sample_id ? String(rec.output_sample_id).toLowerCase() : null;
-      if (out) {
-        const [sample] = rowsOf(await trx.raw(SQL.lockRecord.physical_samples, [out]));
-        if (sample?.state === 'planned') {
-          try {
-            await svc('physical_samples').updateOne(out, { current_status: 'active' });
-          } catch (err) {
-            throw err instanceof HttpError ? err : fail(err);
-          }
+      // Each record first (the caller's update rule decides), then its planned output turns active: what makes a sample first.
+      for (const { id } of collection === 'manufacturing_operations' ? inOrder(recs) : recs) {
+        try {
+          await svc(collection).updateOne(id, data);
+          if (outputs.has(id)) await svc('physical_samples').updateOne(outputs.get(id), { current_status: 'active' });
+        } catch (err) {
+          throw refused(err);
         }
       }
     });
     await clearDataCache(req);
-    res.json({ data: { id: recordId, work_state: 'done' } });
+    res.json({ data: answer(ids, 'done', single) });
+  }));
+
+  // Back to planned: one transaction for the whole container. The access guard (owner or admin) is the rule, run by ItemsService
+  // for each record; the output samples go back to planned unless something done hangs off them.
+  router.post('/mark-planned', route(async ({ req, res, acc }) => {
+    const { collection, ids, single } = containerIds(req.body);
+    const { dateField } = DONE[collection];
+    const schema = await schemaOf(req);
+    await inTransaction(acc, async (trx) => {
+      const svc = (c) => itemsFor(schema, req.accountability, c, trx);
+      const recs = await readContainers(svc, trx, collection, ids);
+      if (recs.some((r) => r.state !== 'done')) {
+        throw new HttpError(409, 'ALREADY_PLANNED', recs.length > 1 ? 'One of those records is not marked done.' : 'That record is not marked done.');
+      }
+      const checks = [];
+      const back = new Map(); // record id -> the output sample that goes back to planned
+      if (collection === 'manufacturing_operations') {
+        const outs = recs.map((r) => ({ id: r.id, sid: r.rec.output_sample_id ? lower(r.rec.output_sample_id) : null, input: r.rec.sample_id ? lower(r.rec.sample_id) : null }))
+          .filter((o) => o.sid && o.sid !== o.input);
+        const csv = outs.map((o) => o.sid).join(',');
+        const hanging = new Map(); // sample id -> done records that point at it, other than the ones going back
+        if (outs.length) {
+          const mine = new Set(ids);
+          const add = (sid, id) => { if (sid && !mine.has(lower(id))) hanging.set(lower(sid), [...(hanging.get(lower(sid)) ?? []), id]); };
+          for (const r of rowsOf(await trx.raw(SQL.refsOperations, [csv, csv]))) {
+            if (r.work_state === 'done') { add(r.sample_id, r.operation_id); add(r.output_sample_id, r.operation_id); }
+          }
+          for (const r of [...rowsOf(await trx.raw(SQL.refsTests, [csv])), ...rowsOf(await trx.raw(SQL.refsSubjects, [csv]))]) {
+            if (r.work_state === 'done') add(r.sample_id, r.session_id);
+          }
+        }
+        for (const { id, sid } of outs) {
+          const [sample] = rowsOf(await trx.raw(SQL.lockRecord.physical_samples, [sid]));
+          if (sample?.state !== 'active') continue; // consumed, archived ...: not ours to move
+          if (hanging.has(sid)) {
+            let code = 'a sample';
+            try {
+              code = (await svc('physical_samples').readOne(sid, { fields: ['sample_code'] }))?.sample_code ?? code;
+            } catch (err) {
+              if (!isDenied(err)) throw err;
+            }
+            checks.push({ key: id, level: 'block', code: 'REMOVE_BLOCKED', text: `Something done hangs off ${code}, so it cannot go back to planned.` });
+          } else {
+            back.set(id, sid);
+          }
+        }
+      }
+      if (checks.length) throw new HttpError(409, 'CHECKS', 'Something done depends on this, so it cannot go back to planned.', { checks });
+      const data = { work_state: 'planned', [dateField]: null, done_by_person_id: null, done_at: null };
+      for (const { id } of recs) {
+        try {
+          await svc(collection).updateOne(id, data);
+          if (back.has(id)) await svc('physical_samples').updateOne(back.get(id), { current_status: 'planned' });
+        } catch (err) {
+          throw refused(err);
+        }
+      }
+    });
+    await clearDataCache(req);
+    res.json({ data: answer(ids, 'planned', single) });
   }));
 
   // -- create (spec 6.1) ----------------------------------------------------------------------------------------------------

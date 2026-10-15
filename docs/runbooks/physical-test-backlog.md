@@ -1156,10 +1156,12 @@ checks can be run from `/map?edit=new`.
   operations and (campaign) the samples; the draft is gone from `GET /d1-build/drafts`; you can open every new record in
   STARbase; the audit log names you (not the system) as the actor of all of them. Print the labels (`/labels?ids=…`
   with the four ids): the codes print before the cut. Since: edit-mode stream A (PR pending).
-- [ ] **PM5-3 — Mark done.** `POST /d1-build/mark-done` for one of the four planned operations (date today). Expect: its
-  `work_state` is `done`, `operation_date`, `done_by_person_id` (you) and `done_at` are set; its output sample turns
-  `active`, the other three operations and outputs stay planned; Data Studio shows the work state as Done. Mark it done again:
-  409 `ALREADY_DONE`. On a planned operation whose method has a field the form marks required and that is empty, the call is
+- [ ] **PM5-3 — Mark done.** `POST /d1-build/mark-done` with `ids` of all four planned operations of the cut (date today).
+  Expect: all four are `done` with `operation_date`, `done_by_person_id` (you) and `done_at` set, and all four output samples
+  `active`, in one go (if one is refused, none changes); Data Studio shows the work state as Done. Mark them done again: 409
+  `ALREADY_DONE`. A planned output with an empty required field (material, form) refuses with a `CHECKS` entry keyed by the
+  sample's id; an operation on a sample that is still planned refuses with "Its sample is still planned; mark the operation
+  that makes it done first." On a planned operation whose method has a field the form marks required and that is empty, the call is
   409 `CHECKS` naming the field and nothing changes. Since: edit-mode stream A (PR pending).
 - [ ] **PM5-4 — Create rolls back as a whole when one record is refused.** Build a draft whose last operation is on a sample
   you may read but not edit (another person's sample), or whose method is refused by a Directus rule. `create` answers an
@@ -1171,6 +1173,11 @@ checks can be run from `/map?edit=new`.
   a done record back to planned." and no change. As the owner, and as an administrator, the same call works; the audit log
   keeps both changes. A planned operation you can edit may still be set to done by you. Repeat for a test. Since: edit-mode
   stream A (PR pending).
+- [ ] **PM5-5b — Mark planned.** As the owner, `POST /d1-build/mark-planned` with `ids` of the done cut: the four operations
+  are planned again with no operation date, done by or done at, and their outputs are `planned` again. With a done hardness
+  test on one of the outputs first, the call is refused (`REMOVE_BLOCKED`, naming the sample only if you can read it) and
+  nothing changes. As a non-owner editor it is a 403 "Only the owner can set a done record back to planned."; as an
+  administrator it works. Since: edit-mode stream A (PR pending).
 - [ ] **PM5-6 — Drafts are private and versioned.** A draft made by one Lab Member is a 404 (not a 403) for another on
   `GET`, `PATCH`, `DELETE`, `check` and `create`, and is not in their `GET /d1-build/drafts`. Two `PATCH` calls with the same
   `version`: the second is 409 `CONFLICT` and the stored draft is the first one's. A draft that was created cannot be created
