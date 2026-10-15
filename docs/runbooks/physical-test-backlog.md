@@ -1111,6 +1111,28 @@ migration 141 prints about ownerless records.
   the next-fresh card points at A while it is fresh. Compare the pad with the real tip (which corner, how far along the
   sides). Check light and dark. Also open a normal 10-insert box: the grid is 2 columns by 5 rows, numbered left to
   right then down, filling the rail's tall stage. Since: #286 (tipped inserts and the tall side-rail stage).
+- [ ] **SCAN-UI1 — Surface scans panel and Add dialog on real data.** As a Lab Member, open a real cutting insert and
+  its edge in STARbase. Expect: a **Surface scans** panel under Details (empty at first: "No surface scan of this
+  insert."). Press **Add a surface scan**: the dialog warns that the file becomes visible to every lab member; the
+  file list shows real `.al3d` files from the library (an archive file also shows its path on the share), a file that
+  is already a scan of this item is greyed out, and Add is disabled until a file and a condition are chosen (and a
+  note when the condition is *other*). Save one scan of an edge, with a date and one of its operations: the dialog
+  closes, the row appears as *Waiting to render*, then *Rendering*, then *Ready* without a reload, and its thumbnail
+  loads (a height map, not a broken image). The insert page lists only the insert's scans; the edge page lists its
+  own and the insert's, the latter tagged *Insert*. Add the same file to the same edge again from another tab: the
+  dialog says it is already a scan of this item. Add a file that cannot be read (a renamed text file with an
+  allowed ending): the scan shows *Render failed* with the reason, and **Render again** puts it back to *Waiting to
+  render*. As a Lab Viewer, the panel shows the scans but no Add and no Render again. Check light and dark and a phone
+  width. Since: surface scans, S3 (PR pending).
+- [ ] **SCAN-UI2 — The surface viewer on a real scan and a real GPU.** On a lab PC, open a rendered real `.al3d` scan
+  with **Open in 3D**. Expect: the surface draws within a second or two, with no jagged edge; dragging turns it
+  smoothly and the wheel zooms (no panning, no way to lose the surface); the **vertical exaggeration** slider
+  stretches the relief and Reset view restores the opening view; **Colour by height** switches between the ramp and
+  grey; the legend's lowest and highest heights match the instrument's own (or the file's) values in micrometres; the
+  size and pixel pitch under the view match the scan; cells the instrument did not measure show as holes (and are
+  counted under the view). Compare the shape with the Alicona software's view of the same file. The fan stays
+  quiet when the page sits idle. Turn WebGL off in the browser and reload: the view says it cannot draw and the facts
+  remain. Since: surface scans, S3 (PR pending).
 
 #### Process map card tweaks (plan `2026-10-14-process-map-4-card-tweaks.md`)
 
