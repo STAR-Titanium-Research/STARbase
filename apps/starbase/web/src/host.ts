@@ -1,6 +1,7 @@
 import type { AxiosInstance } from 'axios';
 import type { Router } from 'vue-router';
-import { configureLinks, openLink, setExplorerHostFactory, starbaseLinks, type ExplorerHost, type HostApi, type HostField } from '@d1/ui';
+import { computed } from 'vue';
+import { configureLinks, isLabViewerRole, openLink, setExplorerHostFactory, starbaseLinks, type ExplorerHost, type HostApi, type HostField } from '@d1/ui';
 import { installUsagePings } from '@d1/starbase-pages';
 import type { Session } from './session';
 
@@ -40,6 +41,8 @@ export function createStarbaseHost(deps: HostDeps): ExplorerHost {
 		appearance: 'own',
 		isAdmin: session.isAdmin,
 		adminKnown: session.adminKnown,
+		// the session's own role id (GET /users/me), so a Lab Viewer is known as soon as someone is signed in
+		canViewAllAccess: computed(() => isLabViewerRole(session.user.value?.role)),
 		user: session.user as ExplorerHost['user'],
 	};
 	if (deps.openEditor) host.openEditor = deps.openEditor;

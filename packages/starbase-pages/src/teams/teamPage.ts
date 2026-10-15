@@ -62,8 +62,8 @@ export const hiddenLine = (n: number): string | null => (n > 0 ? `and ${n} you c
 
 export const managersLine = (managers: { full_name: string | null }[]): string => managers.map((m) => m.full_name || 'Unnamed').join(', ');
 
-/** Who may edit, delete and manage the members of a team: its managers and administrators. */
-export const canManage = (team: Pick<TeamSummary, 'is_manager'> | null, isAdmin: boolean): boolean => !!team && (team.is_manager || isAdmin);
+/** Who may edit, delete and manage the members of a team: its managers and administrators. Never a read-only viewer (a Lab Viewer, even one who manages the team). */
+export const canManage = (team: Pick<TeamSummary, 'is_manager'> | null, isAdmin: boolean, readOnly = false): boolean => !readOnly && !!team && (team.is_manager || isAdmin);
 
 export const teamsShown = (teams: TeamSummary[], chip: 'all' | 'mine'): TeamSummary[] => (chip === 'mine' ? teams.filter((t) => t.is_member) : teams);
 

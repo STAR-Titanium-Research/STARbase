@@ -9,6 +9,7 @@ import TeamEditDialog from './TeamEditDialog.vue';
 import { managersLine, plural, teamsShown, tileOf } from './teamPage';
 
 const host = useExplorerHost();
+const { canViewAllAccess } = host; // a Lab Viewer reads the teams and starts none
 const gate = useRequestGate();
 
 const teams = ref<TeamSummary[] | null>(null);
@@ -46,7 +47,7 @@ const created = (t: TeamSummary) => open(t);
 			<button type="button" class="fc" :class="{ on: chip === 'all' }" :aria-pressed="chip === 'all'" @click="chip = 'all'">All <span class="n">{{ all.length }}</span></button>
 			<button type="button" class="fc" :class="{ on: chip === 'mine' }" :aria-pressed="chip === 'mine'" @click="chip = 'mine'">My teams <span class="n">{{ mine.length }}</span></button>
 			<div class="grow" />
-			<v-button small @click="creating = true"><v-icon name="group_add" left small />New team</v-button>
+			<v-button v-if="!canViewAllAccess" small @click="creating = true"><v-icon name="group_add" left small />New team</v-button>
 		</div>
 
 		<v-progress-circular v-if="!teams && !loadError" indeterminate class="load" />

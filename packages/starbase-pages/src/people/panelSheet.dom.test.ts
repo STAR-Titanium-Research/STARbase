@@ -53,7 +53,7 @@ function narrow(isNarrow: boolean) {
 async function mountPage() {
 	const api = fakeApi();
 	setExplorerHostFactory(() => ({
-		api: api as any, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(true), adminKnown: ref(true),
+		api: api as any, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(true), adminKnown: ref(true), canViewAllAccess: ref(false),
 		user: ref({ id: 'u-me' }),
 	}));
 	setPageFrame(defineComponent({ props: { title: String }, setup: (_p, { slots }) => () => h('div', [slots.default?.()]) }));
@@ -157,7 +157,7 @@ describe('PersonPanel and Esc', () => {
 	async function mountPanel(wrapper: (inner: () => any) => any) {
 		const api = fakeApi();
 		setExplorerHostFactory(() => ({
-			api: api as any, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(true), adminKnown: ref(true), user: ref({ id: 'u-me' }),
+			api: api as any, navigate: () => {}, openDataStudio: () => {}, fieldsFor: async () => [], isAdmin: ref(true), adminKnown: ref(true), canViewAllAccess: ref(false), user: ref({ id: 'u-me' }),
 		}));
 		const closed = vi.fn();
 		const rows: PeopleRow[] = [{ ...person(ANN, 'Ann Member'), kind: 'person' }];

@@ -139,7 +139,7 @@ export type { CampaignData } from './campaign/useCampaignData';
 
 // Explorer navigation: host contract, sidebar tree, index-page configs
 export { EXPLORER_HOST, setExplorerHostFactory, useExplorerHost } from './host';
-export { guessAdmin } from './hostAdmin';
+export { LAB_VIEWER_ROLE_ID, guessAdmin, isLabViewerRole } from './hostAdmin';
 export type { ExplorerHost, HostApi, HostField, HostRequestConfig, HostResponse } from './host';
 export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser, pickBookmarkId, linkForBookmark } from './nav/navConfig';
 export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The panel beside the People list (a full-height sheet below the wide layout, see PeopleView and panelSheet.ts): who the person is (Edit opens the person dialog), their Account
-// (an administrator's view: role, login, last sign-in), their Teams (chips that open the team) and their Access (counts, including the
+// (an administrator's view, which a Lab Viewer shares read-only: role, login, last sign-in), their Teams (chips that open the team) and their Access (counts, including the
 // records their teams give them; a count opens its records, and a line says what they are still waiting to be approved on). A member sees their own
 // panel without the Account section. Words follow CONTEXT.md: account role, login, Suspended, Former; Researcher / Operator are kinds of work.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -34,7 +34,11 @@ const emit = defineEmits<{
 }>();
 
 const host = useExplorerHost();
-const { api, isAdmin } = host;
+const { api, isAdmin, canViewAllAccess } = host;
+// Who looks at everyone's account and access: an administrator, or a Lab Viewer. A Lab Viewer sees all of it and changes none of it: every
+// control below that changes something (Edit, the role, Suspend, Resend, Invite, Remove) is behind `!readOnly`.
+const readOnly = computed(() => canViewAllAccess.value);
+const seeAll = computed(() => isAdmin.value || canViewAllAccess.value);
 
 const listed = computed(() => props.rows.find((r) => r.person_id === props.personId) ?? null);
 // What a change just did to the login, shown until the reloaded list says the same (so the select and the line never flick back).
@@ -59,10 +63,10 @@ const initials = computed(
 
 // ---- Edit: an administrator edits anyone; a member only their own row (the dialog keeps the same rule) ----
 const editOpen = ref(false);
-const canEdit = computed(() => isAdmin.value || (!!person.value?.user_id && person.value.user_id === host.user.value?.id));
+const canEdit = computed(() => !readOnly.value && (isAdmin.value || (!!person.value?.user_id && person.value.user_id === host.user.value?.id)));
 
 // ---- Account (administrators) ----
-const viewer = computed(() => ({ admin: isAdmin.value, accounts: props.canAdministerAccounts }));
+const viewer = computed(() => ({ admin: seeAll.value, accounts: props.canAdministerAccounts && !readOnly.value, readOnly: readOnly.value }));
 const line = computed(() => (person.value ? loginLine(person.value, viewer.value) : null));
 const roleEditable = computed(() => !!person.value && canEditRole(person.value, viewer.value));
 const roleItems = computed(() => props.roles.map((r) => ({ text: r.name, value: r.id })));
@@ -206,12 +210,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 		</header>
 
 		<div class="body">
-		<section v-if="isAdmin && line" class="sec" aria-label="Account">
+		<section v-if="seeAll && line" class="sec" aria-label="Account">
 			<h3>Account</h3>
 			<div class="f">
 				<span>Role</span>
+				<span v-if="person.login && readOnly">{{ person.login.role_name ?? 'No account role' }}</span>
 				<v-select
-					v-if="person.login"
+					v-else-if="person.login"
 					class="role"
 					:model-value="person.login.role_id"
 					:items="roleItems"
@@ -274,7 +279,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
 								{{ levelLabel(r.level) }}<template v-if="r.granted_by"> · granted by {{ r.granted_by }}</template>
 							</span>
 						</span>
-						<template v-for="n in [sourceNote(r, isAdmin)]" :key="'n'">
+						<template v-for="n in [sourceNote(r, seeAll, readOnly)]" :key="'n'">
 							<button
 								v-if="n && n.remove"
 								type="button"

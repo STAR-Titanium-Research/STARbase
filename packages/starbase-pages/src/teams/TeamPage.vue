@@ -16,7 +16,7 @@ import { kindLabel, levelLabel } from '../people/personPanel';
 const props = defineProps<{ id: string }>();
 
 const host = useExplorerHost();
-const { isAdmin } = host;
+const { isAdmin, canViewAllAccess } = host; // a Lab Viewer reads the team and changes nothing
 const gate = useRequestGate();
 const BACK = '/home/people?view=teams';
 
@@ -34,7 +34,7 @@ const ownPersonId = ref<string | null>(null);
 
 const team = computed(() => detail.value?.team ?? null);
 const members = computed(() => detail.value?.members ?? []);
-const manage = computed(() => canManage(team.value, isAdmin.value));
+const manage = computed(() => canManage(team.value, isAdmin.value, canViewAllAccess.value));
 const levels = computed(() => (detail.value ? levelCounts(detail.value.counts) : []));
 const summary = computed(() => (detail.value ? membersAndRecords(detail.value.members.length, detail.value.counts) : ''));
 const recordsTotal = computed(() => {
@@ -165,10 +165,10 @@ async function removeTeam() {
 								<button type="button" class="link" :disabled="busy" @click="toggleManager(m)">{{ m.is_manager ? 'Remove manager' : 'Make manager' }}</button>
 								<button v-if="!isSelf(m)" type="button" class="link" :disabled="busy" @click="remove(m)">Remove</button>
 							</template>
-							<button v-if="isSelf(m)" type="button" class="link" :disabled="busy" @click="leave(m)">Leave</button>
+							<button v-if="isSelf(m) && !canViewAllAccess" type="button" class="link" :disabled="busy" @click="leave(m)">Leave</button>
 						</li>
 					</ul>
-					<p v-if="managersLine(team.managers) === ''" class="d1-note warn pad">This team has no manager. An administrator can add one.</p>
+					<p v-if="managersLine(team.managers) === ''" class="d1-note warn pad">This team has no manager.<template v-if="!canViewAllAccess"> An administrator can add one.</template></p>
 				</Section>
 
 				<Section title="Records" :count="recordsTotal">

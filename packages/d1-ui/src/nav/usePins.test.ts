@@ -27,6 +27,7 @@ function makeHost(get: Handler, post: Handler = () => ({ data: {} })) {
 		fieldsFor: async () => [],
 		isAdmin: ref(false),
 		adminKnown: ref(true),
+		canViewAllAccess: ref(false),
 		user: ref(null),
 	};
 	setExplorerHostFactory(() => host);

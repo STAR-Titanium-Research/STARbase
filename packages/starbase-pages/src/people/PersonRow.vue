@@ -7,7 +7,8 @@ import { lastSeen } from './lastSeen';
 import type { PeopleRow } from './peopleQuery';
 import { rowNote } from './rowNote';
 
-const props = defineProps<{ row: PeopleRow; admin: boolean; selected: boolean; rowKey: string }>();
+// `admin`: show the account column (an administrator, or a Lab Viewer). `readOnly`: a Lab Viewer, so no "Link to a person…" (it changes a login).
+const props = defineProps<{ row: PeopleRow; admin: boolean; selected: boolean; rowKey: string; readOnly?: boolean }>();
 const emit = defineEmits<{ (e: 'open', row: PeopleRow): void; (e: 'link', row: PeopleRow): void }>();
 
 const initials = computed(
@@ -54,7 +55,7 @@ const accountRole = computed(() => {
 		</span>
 		<template v-if="admin">
 			<span class="status">
-				<button v-if="isLogin" type="button" class="link" @click.stop="emit('link', row)">Link to a person…</button>
+				<button v-if="isLogin && !readOnly" type="button" class="link" @click.stop="emit('link', row)">Link to a person…</button>
 				<span v-if="note" class="flag">{{ note }}</span>
 				<span v-else class="meta">{{ accountRole }}</span>
 			</span>
