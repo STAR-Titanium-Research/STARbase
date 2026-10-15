@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import stat
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
@@ -45,6 +46,12 @@ ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
         "jpk", "qep", "spm",
     }
 )  # fmt: skip
+
+
+#: The namespace ``scripts/index_archive.py`` derives every archive file id from (``file_id``): the id of
+#: a pointer row is ``uuid5(_NS, "file:" + <path relative to ARCHIVE_ROOT>)``. The crawler registers its
+#: pointer rows with the same rule. Keep this value identical to that script's ``_NS``.
+_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "d1-database.archive-index.v1")
 
 
 class RenderError(Exception):
@@ -83,6 +90,31 @@ def format_for(path: str) -> str:
             f"The installed SurfaceTopography has no reader for .{ext} files."
         )
     return fmt
+
+
+def expected_file_id(archive_path: str) -> str:
+    """The id the archive indexer (and the crawler) give the pointer row of *archive_path*."""
+    return str(uuid.uuid5(_ID_NAMESPACE, "file:" + archive_path))
+
+
+def check_identity(file_id: str | None, archive_path: str | None) -> None:
+    """Refuse a file row whose ``archive_path`` is not the path its id was derived from.
+
+    ``metadata.archive_path`` is editable by every Lab Member (they can update ``directus_files``), so on
+    its own it would let anyone repoint a scan at any topography file under the share, such as one in
+    another person's personal folder, and publish its rendered surface lab-wide. The id is derived from
+    the path by the indexer and cannot be changed, so a row whose id does not match its path was
+    repointed (or was not registered by the indexer or crawler) and is not rendered.
+    """
+    if not file_id or not archive_path or not isinstance(archive_path, str):
+        raise RenderError(
+            "The file is not on the archive share (it has no archive_path)."
+        )
+    if str(file_id).lower() != expected_file_id(archive_path):
+        raise RenderError(
+            "The file's archive_path does not match its id (it was edited after the file was "
+            "registered), so it is not rendered."
+        )
 
 
 def resolve(archive_path: str | None) -> Path:

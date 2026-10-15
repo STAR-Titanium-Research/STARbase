@@ -41,3 +41,6 @@ finds new files on the share) needs somewhere to put a scan, and must not own re
   place (path, size or mtime change gives a new key).
 - Adding a scan publishes a file from someone's personal folder to every lab member; the UI says so.
 - The old edge-subject Alicona Tests still exist until a later, guarded migration.
+- A pointer row's `archive_path` is editable by every Lab Member, so the worker renders a file only when its id
+  equals the id derived from that path (`uuid5` of `file:<path>`, the indexer's and the crawler's rule); a
+  repointed row is refused (found by the crawler session's review of this feature).

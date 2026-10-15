@@ -103,7 +103,9 @@ def _render(directus_files_id: str) -> dict:
         raise RenderError(
             "The file is not on the archive share; only archive files are rendered."
         )
-    path = archive.resolve((file_row.get("metadata") or {}).get("archive_path"))
+    archive_path = (file_row.get("metadata") or {}).get("archive_path")
+    archive.check_identity(file_row.get("id"), archive_path)
+    path = archive.resolve(archive_path)
     st = archive.stat_file(path)
 
     key = cache_key(

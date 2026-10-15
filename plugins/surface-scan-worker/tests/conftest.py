@@ -44,9 +44,24 @@ class FakeWorld:
         self.rows[scan_id] = row
         return row
 
-    def add_file(self, relative_path: str | None, file_id=FILE, storage="star") -> None:
+    def add_file(
+        self,
+        relative_path: str | None,
+        file_id=FILE,
+        storage="star",
+        forged=False,
+    ) -> None:
+        """Register a file row under ``file_id`` (what the scan row points at).
+
+        A real pointer row's id is derived from its path (``archive.expected_file_id``), so the row
+        Directus returns carries that id. ``forged=True`` keeps ``file_id`` as the row's own id instead,
+        i.e. a row whose archive_path was edited after it was registered.
+        """
         metadata = {"archive_path": relative_path} if relative_path is not None else {}
-        self.files[file_id] = {"id": file_id, "storage": storage, "metadata": metadata}
+        row_id = file_id
+        if relative_path is not None and not forged:
+            row_id = archive.expected_file_id(relative_path)
+        self.files[file_id] = {"id": row_id, "storage": storage, "metadata": metadata}
 
     def current_fingerprint(self, file_id: str, sha: str, **overrides) -> dict:
         """A ``done`` fingerprint that describes the file on disk right now (size and mtime)."""

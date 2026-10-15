@@ -73,6 +73,7 @@ status writes do not loop (they do add Flow log lines, which is why Create alone
 | `The file could not be opened read-only: ... Too many levels of symbolic links` | The path is (now) a symlink; links are not followed at the last step. |
 | `The file is not on the archive share ...` | The library file is a local upload, or has no `archive_path`. Only archive files are rendered. |
 | `... (moved or deleted)` | The path in the library no longer exists on the share. Re-run `make index-archive`, then Render again. |
+| `The file's archive_path does not match its id ...` | The file row's `metadata.archive_path` was edited after it was registered: the id of an archive pointer row is derived from its path (`scripts/index_archive.py` `file_id`, the same rule the crawler uses), so a mismatch means someone repointed the row at another file. This is refused on purpose, because every Lab Member can update `directus_files` and could otherwise publish any file under the share (for instance from a personal folder) as a scan. Register the real file (re-run the indexer or let the crawler find it) and add that one. |
 | `The file resolves outside the archive` / `escapes the archive` | A bad `archive_path`; the worker refused it. Fix the file row. |
 | `The file could not be read as al3d: ...` | The file is corrupt, truncated or not what its extension says. |
 | `The file does not state its length unit` | The scale is unknown; the worker will not guess. |
