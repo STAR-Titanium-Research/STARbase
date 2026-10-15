@@ -142,6 +142,19 @@ describe('applyList', () => {
 	});
 });
 
+describe('Former people go last', () => {
+	const rows = [person('Zed', { active: false, signedIn: '2026-10-10T00:00:00Z' }), person('Amy', { active: false, signedIn: '2026-01-01T00:00:00Z' }), person('Bob', { signedIn: '2026-02-01T00:00:00Z' }), person('Cat', { signedIn: '2026-09-01T00:00:00Z' })];
+	it('by name: the active first, then the Former, each in name order', () => {
+		expect(applyList(rows, state()).map((r) => r.person_id)).toEqual(['Bob', 'Cat', 'Amy', 'Zed']);
+	});
+	it('by last sign-in: the chosen sort still applies inside each group', () => {
+		expect(applyList(rows, state({ sort: 'last' })).map((r) => r.person_id)).toEqual(['Cat', 'Bob', 'Zed', 'Amy']);
+	});
+	it('a login without a person is not Former', () => {
+		expect(applyList([person('Amy', { active: false }), loginRow('u1', 'z@lab.example')], state()).map((r) => r.kind)).toEqual(['login', 'person']);
+	});
+});
+
 describe('the team filter', () => {
 	it('keeps the people whose teams include the team, and nobody else', () => {
 		const rows = [

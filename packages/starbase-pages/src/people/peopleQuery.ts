@@ -135,8 +135,12 @@ const SORTERS: Record<SortKey, (a: PeopleRow, b: PeopleRow) => number> = {
 	added: byDateDesc((r) => when(r.created_at)),
 };
 
+// Former people (active = false) go last whatever the sort; the chosen sort still orders the Former among themselves.
+const formerLast = (sort: (a: PeopleRow, b: PeopleRow) => number) => (a: PeopleRow, b: PeopleRow) =>
+	(a.active === b.active ? 0 : a.active ? -1 : 1) || sort(a, b);
+
 /**
- * The rows to show. A login without a person is a row only under the "All" chip or the "login without person" attention filter;
+ * The rows to show, Former people last. A login without a person is a row only under the "All" chip or the "login without person" attention filter;
  * every chip counts persons. A new array: the input is not changed.
  */
 export function applyList(rows: PeopleRow[], s: ListState): PeopleRow[] {
@@ -152,7 +156,7 @@ export function applyList(rows: PeopleRow[], s: ListState): PeopleRow[] {
 			if (q && !`${r.full_name}\n${r.email ?? ''}\n${r.login?.email ?? ''}`.toLowerCase().includes(q)) return false;
 			return true;
 		})
-		.sort(SORTERS[s.sort]);
+		.sort(formerLast(SORTERS[s.sort]));
 }
 
 /** How many persons each chip holds (login rows are not counted). */
