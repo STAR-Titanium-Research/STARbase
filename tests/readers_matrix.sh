@@ -1581,6 +1581,13 @@ BEGIN
     SELECT count(*) INTO n FROM directus_permissions p WHERE p.policy = pol AND p.action = 'read' AND p.collection IN ('physical_samples', 'projects', 'campaigns', 'test_sessions', 'manufacturing_operations')
        AND p.permissions::text NOT LIKE '%readers%';
     PERFORM m.expect(n = 0, 'a record type is read through the readers tables (membership test), the same rule as Lab Member');
+    -- a viewer reads every row of the tables that Lab Member reads only for itself: project_rollup and the five *_access tables (Task B)
+    SELECT count(*) INTO n FROM directus_permissions p WHERE p.policy = pol AND p.action = 'read'
+       AND p.collection IN ('project_rollup', 'sample_access', 'operation_access', 'test_access', 'campaign_access', 'project_access') AND p.permissions::jsonb = '{}'::jsonb AND p.fields = '*';
+    PERFORM m.expect(n = 6, 'a viewer reads every row of project_rollup and the five *_access tables: no filter (found ' || n || ' of 6)');
+    SELECT count(*) INTO n FROM directus_permissions p WHERE p.policy = '20000002-0000-0000-0000-000000000002' AND p.action = 'read'
+       AND p.collection IN ('project_rollup', 'sample_access', 'operation_access', 'test_access', 'campaign_access', 'project_access') AND p.permissions::jsonb <> '{}'::jsonb;
+    PERFORM m.expect(n = 6, 'Lab Member still reads only its own rows of those six (found ' || n || ' of 6)');
     PERFORM m.done();
 END $$;
 SQL

@@ -474,6 +474,7 @@ def test_script_has_no_ungenerated_lab_member_rows():
 # =================================================================================================
 
 VIEWER = DOC["viewer"]
+READ_ALL = set(VIEWER["read_all"])
 NL = chr(10)
 
 
@@ -482,8 +483,9 @@ def test_viewer_rows_are_the_lab_member_read_rows_unchanged():
     assert len(VIEWER_ROWS) == len(reads) > 50
     for lm, v in zip(reads, VIEWER_ROWS):
         assert v["policy"] == VIEWER["policy"] != lm["policy"]
-        assert {k: x for k, x in v.items() if k != "policy"} == {
-            k: x for k, x in lm.items() if k != "policy"
+        skip = {"policy", "permissions"} if lm["collection"] in READ_ALL else {"policy"}
+        assert {k: x for k, x in v.items() if k not in skip} == {
+            k: x for k, x in lm.items() if k not in skip
         }, f"{lm['collection']} read differs between Lab Member and Lab Viewer"
 
 
@@ -2027,3 +2029,52 @@ def test_manage_is_never_a_project_role():
     text = json.dumps([RULES[("projects", a)] for a in ("update", "delete")])
     assert "manage" not in text
     assert "access" not in text
+
+
+# ---- Lab Viewer, Task B: the rules that are about the caller are open for a viewer ----------------------
+
+
+def test_viewer_read_all_is_the_rollup_and_the_five_access_tables():
+    assert READ_ALL == {
+        "project_rollup",
+        "sample_access",
+        "operation_access",
+        "test_access",
+        "campaign_access",
+        "project_access",
+    }
+
+
+def test_viewer_reads_every_row_of_the_caller_scoped_tables_and_lab_member_does_not():
+    for collection in READ_ALL:
+        member = BY_KEY[(collection, "read")]["permissions"]
+        viewer = next(r for r in VIEWER_ROWS if r["collection"] == collection)
+        assert member != {}, f"{collection}: Lab Member must stay scoped to the caller"
+        assert "$CURRENT_USER" in json.dumps(member), collection
+        assert viewer["permissions"] == {}, collection
+        assert viewer["action"] == "read" and viewer["fields"] == "*"
+
+
+def test_viewer_read_all_changes_nothing_else():
+    ruled_as_member = [
+        r["collection"] for r in VIEWER_ROWS if r["collection"] not in READ_ALL
+    ]
+    for collection in ruled_as_member:
+        viewer = next(r for r in VIEWER_ROWS if r["collection"] == collection)
+        assert viewer["permissions"] == BY_KEY[(collection, "read")]["permissions"]
+
+
+def test_viewer_read_all_is_validated():
+    base = {k: v for k, v in VIEWER.items() if k != "read_all"}
+    for bad in (
+        {**base, "read_all": "project_rollup"},
+        {**base, "read_all": ["people", "people"]},
+        {**base, "read_all": ["not_a_collection"]},
+    ):
+        with pytest.raises(gen.RulesError):
+            gen.viewer_rows({**DOC, "viewer": bad}, ROWS)
+    # no read_all at all is the old behaviour: every viewer row is the Lab Member row
+    plain = gen.viewer_rows({**DOC, "viewer": base}, ROWS)
+    assert [r["permissions"] for r in plain] == [
+        r["permissions"] for r in ROWS if r["action"] == "read"
+    ]

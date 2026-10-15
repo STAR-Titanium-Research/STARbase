@@ -30,9 +30,9 @@
 -- the custom endpoints (d1-record-access, d1-teams, d1-people-admin) refuse a Lab Viewer on every route that changes anything (Task A of this
 -- change; ADR-0014 amendment).
 --
--- Known gaps, accepted for now (copied rules, not invented ones): project_rollup is read by a project's PI and investigators only, and the five
--- *_access tables by the person they list, exactly as for Lab Member, so a viewer sees no rollup rows of other people's projects and no one else's
--- access rows through Directus. The People page and its endpoints are Task B.
+-- A viewer reads EVERY row of project_rollup and of the five *_access tables: Lab Member reads only the rows about itself there (a project's PI and
+-- investigators; the access rows that list the caller), which is about the caller, not about a record, so for the viewer that rule is no filter
+-- (scripts/access_rules.json "viewer.read_all"). The *_team_access and *_team_pending tables have no Directus permission for anyone: the endpoints read them.
 --
 -- Rollout: stop Directus, migrate, start it (the changed extensions load at start; the role and policy are new, so no cached permission goes stale), then invite with the role
 -- Lab Viewer (docs/runbooks/starbase.md).
@@ -72,13 +72,13 @@ INSERT INTO _lv_rules (collection, action, filter, validation, fields) VALUES
     ('session_additional_operators', 'read', '{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
     ('test_sessions_subject', 'read', '{"test_sessions_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
     ('project_investigators', 'read', '{"project_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*'),
-    ('project_rollup', 'read', '{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"restricted":{"_eq":false}},{"_or":[{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"project_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"project_id":{"access":{"role":{"_in":["investigator"]}}}}]}]}]}]}', '{}', '*'),
+    ('project_rollup', 'read', '{}', '{}', '*'),
     ('people', 'read', '{}', '{}', '*'),
-    ('sample_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
-    ('operation_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
-    ('test_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
-    ('campaign_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
-    ('project_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*'),
+    ('sample_access', 'read', '{}', '{}', '*'),
+    ('operation_access', 'read', '{}', '{}', '*'),
+    ('test_access', 'read', '{}', '{}', '*'),
+    ('campaign_access', 'read', '{}', '{}', '*'),
+    ('project_access', 'read', '{}', '{}', '*'),
     ('sample_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
     ('operation_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),
     ('test_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*'),

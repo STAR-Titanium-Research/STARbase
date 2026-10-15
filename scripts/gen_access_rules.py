@@ -493,10 +493,17 @@ def ruled_collections(doc: dict) -> set[str]:
 def viewer_config(doc: dict) -> dict:
     """The Lab Viewer role, policy and access row ids (access_rules.json "viewer")."""
     cfg = doc.get("viewer")
-    if not isinstance(cfg, dict) or set(cfg) != {"role", "policy", "access"}:
+    if (
+        not isinstance(cfg, dict)
+        or not {"role", "policy", "access"} <= set(cfg)
+        or set(cfg) - {"role", "policy", "access", "read_all"}
+    ):
         raise RulesError(
-            '"viewer" must be {"role": uuid, "policy": uuid, "access": uuid}'
+            '"viewer" must be {"role": uuid, "policy": uuid, "access": uuid, "read_all": [collection, ...]}'
         )
+    read_all = cfg.get("read_all", [])
+    if not isinstance(read_all, list) or len(set(read_all)) != len(read_all):
+        raise RulesError('"viewer.read_all" must be a list of distinct collections')
     if len({cfg["role"], cfg["policy"], cfg["access"], doc["policy"]}) != 4:
         raise RulesError(
             '"viewer" ids must differ from each other and from the Lab Member policy'
@@ -505,10 +512,25 @@ def viewer_config(doc: dict) -> dict:
 
 
 def viewer_rows(doc: dict, rows: list[dict]) -> list[dict]:
-    """The Lab Viewer rows: every READ row of Lab Member (ruled, custom and unfiltered), unchanged, under the viewer's
-    policy. A viewer never writes, so no create, update or delete row exists for it."""
-    policy = viewer_config(doc)["policy"]
-    return [{**r, "policy": policy} for r in rows if r["action"] == "read"]
+    """The Lab Viewer rows: every READ row of Lab Member (ruled, custom and unfiltered) under the viewer's policy, unchanged
+    except for the collections of "viewer.read_all", whose rule is about the caller (own access rows, own project rollup) and
+    becomes no filter, so a viewer reads every row of them. A viewer never writes, so no create, update or delete row exists."""
+    cfg = viewer_config(doc)
+    read_all = set(cfg.get("read_all", []))
+    reads = [r for r in rows if r["action"] == "read"]
+    missing = read_all - {r["collection"] for r in reads}
+    if missing:
+        raise RulesError(
+            f'"viewer.read_all" names collections Lab Member has no read row for: {sorted(missing)}'
+        )
+    return [
+        {
+            **r,
+            "policy": cfg["policy"],
+            **({"permissions": {}} if r["collection"] in read_all else {}),
+        }
+        for r in reads
+    ]
 
 
 def compact(value: object) -> str:

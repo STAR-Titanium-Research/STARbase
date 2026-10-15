@@ -5679,6 +5679,8 @@ python3 scripts/gen_access_rules.py --check >/dev/null 2>&1 \
     && ok "configure_users_and_policies.sql carries the generated Lab Member and Lab Viewer blocks (no drift from access_rules.json)" \
     || bad "configure_users_and_policies.sql differs from access_rules.json (run gen_access_rules.py --write)"
 lv_rules_json=$(python3 scripts/gen_access_rules.py --viewer-json)
+# the collections whose Lab Member read rule is about the caller; the viewer reads every row of them (access_rules.json "viewer.read_all")
+lv_all=$(python3 -c "import json; print(','.join(chr(39) + c + chr(39) for c in json.load(open('scripts/access_rules.json'))['viewer']['read_all']))")
 lm_rules_json=$(python3 scripts/gen_access_rules.py --json)
 lvx_out=$($PSQL 2>&1 <<SQL
 CREATE TEMP TABLE _vgen AS
@@ -5695,10 +5697,15 @@ SELECT 'exact:' || count(*) FROM _vgen g JOIN directus_permissions p
 SELECT 'writes:' || count(*) FROM directus_permissions WHERE policy = '$VW' AND action <> 'read';
 SELECT 'generated_writes:' || count(*) FROM _vgen WHERE action <> 'read';
 -- the rows are the read rows of Lab Member as the generator makes them: same collections, filters, validation and fields
-SELECT 'lm_read_only_in_lm:' || count(*) FROM (SELECT collection, permissions, validation, fields FROM _lmgen WHERE action = 'read'
+SELECT 'lm_read_only_in_lm:' || count(*) FROM (SELECT collection, permissions, validation, fields FROM _lmgen WHERE action = 'read' AND collection NOT IN ($lv_all)
     EXCEPT SELECT collection, permissions, validation, fields FROM _vgen) x;
-SELECT 'lm_read_only_in_viewer:' || count(*) FROM (SELECT collection, permissions, validation, fields FROM _vgen
+SELECT 'lm_read_only_in_viewer:' || count(*) FROM (SELECT collection, permissions, validation, fields FROM _vgen WHERE collection NOT IN ($lv_all)
     EXCEPT SELECT collection, permissions, validation, fields FROM _lmgen WHERE action = 'read') x;
+-- Task B: project_rollup and the five *_access tables are about the caller for a Lab Member (own rows only) and open for the viewer (every row)
+SELECT 'read_all_n:' || count(*) FROM _vgen WHERE collection IN ($lv_all);
+SELECT 'read_all_viewer_open:' || count(*) FROM directus_permissions WHERE policy = '$VW' AND action = 'read' AND collection IN ($lv_all) AND permissions::jsonb = '{}'::jsonb AND fields = '*';
+SELECT 'read_all_member_scoped:' || count(*) FROM directus_permissions WHERE policy = '$LM' AND action = 'read' AND collection IN ($lv_all) AND permissions::jsonb <> '{}'::jsonb;
+SELECT 'read_all_same_cols:' || count(*) FROM _lmgen l JOIN _vgen v USING (collection, action, validation, fields) WHERE l.action = 'read' AND l.collection IN ($lv_all);
 SELECT 'role:' || count(*) FROM directus_roles WHERE id = '$VROLE' AND name = 'Lab Viewer';
 SELECT 'policy:' || count(*) FROM directus_policies WHERE id = '$VW' AND name = 'Lab Viewer' AND NOT admin_access AND app_access;
 SELECT 'access:' || count(*) FROM directus_access WHERE role = '$VROLE' AND policy = '$VW';
@@ -5748,8 +5755,12 @@ lvx_check "stored:$lvx_n" "the Lab Viewer policy holds exactly the $lvx_n genera
 lvx_check "exact:$lvx_n" "every generated Lab Viewer row is stored with the same filter, validation and fields"
 lvx_check "writes:0" "the Lab Viewer policy has no create, update or delete row"
 lvx_check "generated_writes:0" "the generator makes no create, update or delete row for Lab Viewer"
-lvx_check "lm_read_only_in_lm:0" "every read row of Lab Member (as generated) is a Lab Viewer row"
-lvx_check "lm_read_only_in_viewer:0" "every Lab Viewer row is a read row of Lab Member (same collection, filter, validation, fields)"
+lvx_check "lm_read_only_in_lm:0" "every read row of Lab Member (as generated) is a Lab Viewer row, but the rows about the caller (viewer.read_all)"
+lvx_check "lm_read_only_in_viewer:0" "every Lab Viewer row is a read row of Lab Member (same collection, filter, validation, fields), but the rows about the caller"
+lvx_check "read_all_n:6" "the viewer reads every row of project_rollup and the five *_access tables (six rows)"
+lvx_check "read_all_viewer_open:6" "those six viewer rows have no filter and every field, as stored"
+lvx_check "read_all_member_scoped:6" "Lab Member keeps its own-person filter on the same six collections, as stored"
+lvx_check "read_all_same_cols:6" "the six rows differ from Lab Member's only in the filter"
 lvx_check "role:1" "the role Lab Viewer exists"
 lvx_check "policy:1" "the policy Lab Viewer has app access and no admin access"
 lvx_check "access:1" "the role is bound to the policy"
