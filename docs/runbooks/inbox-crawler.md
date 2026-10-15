@@ -25,8 +25,8 @@ administrators (admin tab on `/crawler`) and are not scanned.
 | `DATABASE_URL`, `ARCHIVE_ROOT` | compose | as `archive-indexer` |
 | `D1_INBOX_URL` | `.env` | `http://directus:8055` |
 | `D1_INBOX_CRAWLER_SECRET` | `.env`, the same value Directus gets | empty: auto-link is off |
-| `INBOX_OCR=1` | environment | off (not validated; needs `pytesseract` and tesseract in the image) |
-| `INBOX_LOG_LEVEL=DEBUG` | environment | `INFO`; DEBUG logs every file the crawler opens; a value that is not a level falls back to INFO with a warning |
+| `INBOX_OCR=1` | `.env` (passed through by compose) | off (not validated; needs `pytesseract` and tesseract in the image) |
+| `INBOX_LOG_LEVEL=DEBUG` | `.env` (passed through by compose; recreate the service after changing it) | `INFO`; DEBUG logs every file the crawler opens; a value that is not a level falls back to INFO with a warning |
 | `desired_state`, `interval_minutes`, `read_mb_per_s` | `d1_private.inbox_crawler_state` (admin tab) | running, 30, 60 |
 
 ## What it does and does not do

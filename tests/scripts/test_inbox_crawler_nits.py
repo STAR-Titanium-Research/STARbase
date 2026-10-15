@@ -195,6 +195,23 @@ def test_the_compose_service_and_make_target_pin_exact_versions_that_requirement
     assert "pip install -q psycopg2-binary Pillow" not in block  # no unpinned install
 
 
+def test_the_compose_service_passes_the_ocr_and_log_level_settings_through_empty_by_default():
+    compose = (ROOT / "docker-compose.yml").read_text()
+    block = compose[compose.index("  inbox-crawler:") :]
+    block = block[: block.index("\nvolumes:")]
+    assert "INBOX_OCR: ${INBOX_OCR:-}" in block
+    assert "INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}" in block
+
+
+def test_an_empty_log_level_means_the_default():
+    """Compose passes an empty string when .env does not set it."""
+    from inbox_crawler import __main__ as cli
+
+    assert cli._log_level("") == logging.INFO
+    assert cli._log_level(None) == logging.INFO
+    assert cli._log_level("debug") == logging.DEBUG
+
+
 # ---- recognition looks only below the owner's folder ----------------------------------------------------
 
 

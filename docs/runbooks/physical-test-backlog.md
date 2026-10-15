@@ -1903,8 +1903,8 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
 - [ ] **IF4 — Load on the share.** Time a first scan of a real personal folder tree and an incremental one;
   watch the share for impact (read rate stays under the `read_mb_per_s` cap). Record both durations.
 - [ ] **IF5 — Documents are never opened.** With a document in a scanned folder, confirm from the crawler's
-  log (run it with `INBOX_LOG_LEVEL=DEBUG`, which logs every file it opens, and `docker compose logs
-  inbox-crawler`) and the file server's open-file list if available, that it is only listed, not opened, until
+  log (put `INBOX_LOG_LEVEL=DEBUG` in `.env`, run `docker compose --profile archive up -d inbox-crawler`
+  to recreate the service with it, which logs every file it opens, then `docker compose logs inbox-crawler`) and the file server's open-file list if available, that it is only listed, not opened, until
   it is linked; then that linking it produces one read (an INFO line `reading <path> once to fingerprint it`)
   and a `file_fingerprints` row with its size and mtime. Undo the link and confirm no further read.
 - [ ] **IF6 — Short-ID links on real records.** Save an image whose name contains a real sample's short ID.
