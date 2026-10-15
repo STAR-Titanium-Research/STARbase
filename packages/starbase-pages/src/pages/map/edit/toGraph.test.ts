@@ -161,6 +161,34 @@ describe('toGraph', () => {
 		expect(t.rows[0].out).toBeUndefined();
 	});
 
+	it('numbers the draft steps in the order Create writes them: wires first, then the order of the draft', () => {
+		// n1 sample; B (n2, row n3) is laid out first but wired after A (n4, row n5): sample → A → B.
+		let body = run([
+			{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'turn' } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'turn' }, from: { key: 'n1' } },
+		]);
+		body = apply(body, { type: 'wire', from: { key: 'n4', row: 0 }, to: { key: 'n2' } });
+		const data = toGraph(mkData({ samples: [mkSample('s1')] }), body, ctx);
+		const seq = (id: string) => data.operations.find((o) => o.id === id)!.sequence!;
+		expect(seq('draft:n5')).toBeLessThan(seq('draft:n3'));
+		expect(data.operations.find((o) => o.id === 'draft:n3')!.sampleId).toBe('s1');
+		// Untouched wires keep the order of the draft.
+		const plain = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }, { type: 'addPass', sample: { key: 'n1' }, values: {} }, { type: 'addPass', sample: { key: 'n1' }, values: {} }]);
+		const d2 = toGraph(mkData({ samples: [mkSample('s1')] }), plain, ctx);
+		expect(d2.operations.map((o) => o.id)).toEqual(['draft:n3', 'draft:n5']);
+		expect(d2.operations[0].sequence!).toBeLessThan(d2.operations[1].sequence!);
+	});
+
+	it('an undated draft pass goes after the undated recorded passes on its sample', () => {
+		const recorded = mkOp({ id: 'rec', sampleId: 's1', outputSampleId: null, methodId: 'turn', methodName: 'Turning', category: 'machining', equipmentId: 'lathe', date: null, sequence: null });
+		const body = run([{ type: 'addPass', sample: { id: 's1', version: 1 }, values: { method_id: 'turn', equipment_id: 'lathe' } }]);
+		const data = toGraph(mkData({ samples: [mkSample('s1')], operations: [recorded] }), body, ctx);
+		const g = draw(data);
+		const stack = g.nodes.find((n): n is ContainerNode => n.type === 'container')!;
+		expect(stack.group.rowIds).toEqual(['rec', 'draft:n3']);
+	});
+
 	it('an operation and a test wired on from a cut work on the piece the cut made', () => {
 		let body = run([
 			{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] },

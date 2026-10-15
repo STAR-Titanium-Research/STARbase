@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftBody, DraftOperation, DraftSample, DraftTest } from '@d1/ui';
 import {
-	apply, canWire, continuesAs, emptyBody, inputSampleOf, isInPlace, itemOf, newFromValues, newKeys, nextKey, outputSampleOf, subjectsOf, wireInto, wireProblem,
+	apply, canWire, continuesAs, emptyBody, inputSampleOf, isInPlace, itemOf, newFromValues, newKeys, nextKey, orderedRows, outputSampleOf, subjectsOf, wireInto, wireProblem,
 	type DraftAction,
 } from './draft';
 
@@ -440,5 +440,43 @@ describe('types', () => {
 		expect(b.v).toBe(1);
 		const s = b.items[0] as DraftSample;
 		expect(s.kind).toBe('sample');
+	});
+});
+
+describe('orderedRows (the order Create writes operations)', () => {
+	it('keeps the order of the draft, except that a row waits for what it is wired from and for the maker of its sample', () => {
+		// n1 sample; B n2(n3) laid out first, A n4(n5) from n1, B wired after A.
+		let b = run([
+			{ type: 'addSample' },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } },
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } },
+		]);
+		expect(orderedRows(b).map((r) => r.rowKey)).toEqual(['n3', 'n5']);
+		b = apply(b, { type: 'wire', from: { key: 'n4', row: 0 }, to: { key: 'n2' } });
+		expect(orderedRows(b).map((r) => r.rowKey)).toEqual(['n5', 'n3']);
+		// A row that works on the sample another row makes waits for it.
+		const made = run([
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }, // n1 (row n2): will make n6
+			{ type: 'addContainer', kind: 'operation', source: { from: 'blank' } }, // n3 (row n4)
+			{ type: 'addSample' }, // n5
+		]);
+		let m = apply(made, { type: 'wire', from: { key: 'n3', row: 0 }, to: { key: 'n5' } });
+		m = apply(m, { type: 'wire', from: { key: 'n5' }, to: { key: 'n1', row: 0 } });
+		expect(orderedRows(m).map((r) => r.rowKey)).toEqual(['n4', 'n2']);
+	});
+
+	it('appends a loop in draft order instead of dropping it', () => {
+		const looped: DraftBody = {
+			...emptyBody(),
+			items: [
+				{ key: 'n1', kind: 'operation', workState: 'planned', values: {}, rows: [{ key: 'n2' }] },
+				{ key: 'n3', kind: 'operation', workState: 'planned', values: {}, rows: [{ key: 'n4' }] },
+			],
+			wires: [
+				{ from: { key: 'n1', row: 0 }, to: { key: 'n3', row: 0 } },
+				{ from: { key: 'n3', row: 0 }, to: { key: 'n1', row: 0 } },
+			],
+		};
+		expect(orderedRows(looped).map((r) => r.rowKey)).toEqual(['n2', 'n4']);
 	});
 });

@@ -177,6 +177,53 @@ export function isInPlace(body: DraftBody, item: DraftOperation): boolean {
 	return item.rows.length === 1 && outputSampleOf(body, item.key, 0) === null;
 }
 
+/**
+ * The operation rows in the order Create writes them, as d1-build's `orderOperations`: a row waits for the rows that make the
+ * sample it works on and for the operation rows wired into it; everything else keeps the order of the draft, so the passes of
+ * an in-place chain are numbered as they were laid out. A loop is appended in draft order.
+ */
+export function orderedRows(body: DraftBody): { rowKey: DraftKey; itemKey: DraftKey; row: number }[] {
+	interface R {
+		rowKey: DraftKey;
+		itemKey: DraftKey;
+		row: number;
+		input: DraftKey | null;
+		output: DraftKey | null;
+		after: DraftKey[];
+	}
+	const rows: R[] = [];
+	for (const item of body.items) {
+		if (item.kind !== 'operation' || item.remove) continue;
+		item.rows.forEach((r, row) => {
+			const after: DraftKey[] = [];
+			for (const w of body.wires) {
+				if (w.to.key !== item.key || (w.to.row ?? 0) !== row) continue;
+				const from = itemOf(body, w.from.key);
+				const key = from?.kind === 'operation' ? from.rows[w.from.row ?? 0]?.key : undefined;
+				if (key) after.push(key);
+			}
+			rows.push({ rowKey: r.key, itemKey: item.key, row, input: inputSampleOf(body, { key: item.key, row }), output: outputSampleOf(body, item.key, row), after });
+		});
+	}
+	const makers = new Map<DraftKey, DraftKey[]>();
+	for (const r of rows) if (r.output) makers.set(r.output, [...(makers.get(r.output) ?? []), r.rowKey]);
+	const known = new Set(rows.map((r) => r.rowKey));
+	const needs = new Map(rows.map((r) => [r.rowKey, new Set<DraftKey>()]));
+	for (const r of rows) {
+		for (const m of r.input ? (makers.get(r.input) ?? []) : []) if (m !== r.rowKey) needs.get(r.rowKey)!.add(m);
+		for (const b of r.after) if (known.has(b) && b !== r.rowKey) needs.get(r.rowKey)!.add(b);
+	}
+	const placed = new Set<DraftKey>();
+	const order: R[] = [];
+	for (;;) {
+		const next = rows.find((r) => !placed.has(r.rowKey) && [...needs.get(r.rowKey)!].every((k) => placed.has(k)));
+		if (!next) break;
+		placed.add(next.rowKey);
+		order.push(next);
+	}
+	return [...order, ...rows.filter((r) => !placed.has(r.rowKey))].map(({ rowKey, itemKey, row }) => ({ rowKey, itemKey, row }));
+}
+
 // ---- wiring rules -------------------------------------------------------------------------------
 
 function reaches(body: DraftBody, extra: DraftWire, start: DraftKey, goal: DraftKey): boolean {

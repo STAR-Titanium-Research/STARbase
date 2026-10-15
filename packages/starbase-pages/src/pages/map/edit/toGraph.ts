@@ -10,7 +10,7 @@
 import type { DraftBody, DraftItem, DraftKey, DraftOperation, DraftSample, DraftTest } from '@d1/ui';
 import { KEY_SETTING_FIELDS, FALLBACK_RELATIONS, type RelationDef } from '../model/formSlots';
 import type { OpRow, ProcessCategory, ProcessData, Ref, SampleRec, TestRow } from '../model/types';
-import { inputSampleOf, itemOf, outputSampleOf, subjectsOf } from './draft';
+import { inputSampleOf, itemOf, orderedRows, outputSampleOf, subjectsOf } from './draft';
 import { inheritedValues, makerOf, type InheritCtx } from './inherit';
 
 export interface ToGraphCtx extends InheritCtx {
@@ -63,7 +63,7 @@ const num = (v: unknown): number | null => {
 	return Number.isFinite(n) ? n : null;
 };
 
-/** Where the draft's new operations start in the order of the steps on a sample: after every recorded one. */
+/** Where the draft's new operations start in the numbering (after Create's order); recorded steps still come first on the same date, see stepOrder. */
 const DRAFT_SEQUENCE = 1_000_000;
 
 /** The date a record is drawn and ordered by: the day it happened, else (planned) the day it is meant to happen. */
@@ -141,11 +141,11 @@ export function toGraph(data: ProcessData | null, body: DraftBody, ctx: ToGraphC
 	}
 
 	// Operations: one record per row.
-	let sequence = DRAFT_SEQUENCE;
+	// Numbered in the order Create writes them (d1-build's orderOperations): the wires first, then the order of the draft.
+	const position = new Map(orderedRows(body).map((r, i) => [r.rowKey, i]));
 	for (const item of body.items) {
 		if (item.kind === 'operation') {
 			item.rows.forEach((row, i) => {
-				sequence += 1;
 				const input = recordOf(inputSampleOf(body, { key: item.key, row: i }));
 				const output = recordOf(outputSampleOf(body, item.key, i));
 				if (item.existing) {
@@ -162,7 +162,7 @@ export function toGraph(data: ProcessData | null, body: DraftBody, ctx: ToGraphC
 					methodName: (method && ctx.methods?.[method]?.name) || '',
 					category: (method && ctx.methods?.[method]?.category) || null,
 					date: dateOf(item, v),
-					sequence,
+					sequence: DRAFT_SEQUENCE + (position.get(row.key) ?? 0),
 					status: null,
 					sampleId: input,
 					outputSampleId: output,
