@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import classify_sem, db, hashing, kinds, owners, recognise
+from .fs_readonly import ReadRefused
 from .identity import file_id
 
 log = logging.getLogger("inbox_crawler.scan")
@@ -73,9 +74,15 @@ def still_the_same(
     return hashed
 
 
-def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
+def fingerprint_file(
+    share, rel: str, throttle, *, adopted: bool = False, progress=None
+):
     """Stat, hash and re-check one file. Returns (outcome, stat or None, mtime or None). Used for a file a
-    person has linked (adopted) and for retrying a hash that failed; both write file_fingerprints."""
+    person has linked (adopted) and for retrying a hash that failed; both write file_fingerprints.
+
+    Never raises for a path the share refuses (a `..` part, a link in the path, a file type the allow-list
+    does not cover): that is an 'error' outcome like any unreadable file, so the caller writes its row, the
+    row is retried no sooner than an hour later and the loop goes on to the next file."""
     try:
         st = share.stat(rel)
     except FileNotFoundError:
@@ -90,9 +97,22 @@ def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
             None,
             None,
         )
+    except ValueError:
+        return (
+            hashing.HashOutcome("error", error="not a path the share allows"),
+            None,
+            None,
+        )
     if not st.is_file:
         return hashing.HashOutcome("error", error="not a regular file"), None, None
-    out = hashing.hash_file(share, rel, throttle=throttle, adopted=adopted)
+    try:
+        out = hashing.hash_file(
+            share, rel, throttle=throttle, adopted=adopted, progress=progress
+        )
+    except (ReadRefused, ValueError) as exc:
+        log.warning("not reading %s: %s", rel, type(exc).__name__)
+        refused = hashing.HashOutcome("error", error=f"read refused: {exc}"[:500])
+        return refused, st, db.to_datetime(st.mtime_ns)
     try:
         out = still_the_same(share, rel, st, out)
     except OSError as exc:
@@ -232,8 +252,9 @@ class Scanner:
     # ---- one scan --------------------------------------------------------------------
 
     def scan(self, *, person_id: str | None = None) -> ScanStats:
-        """Scan everyone (person_id None), or one person's personal folder. Never raises for a share
-        problem: it returns stats with `aborted` set."""
+        """Scan everyone (person_id None), or one person: their personal folder and the folders of the
+        teams they are an active member of. Never raises for a share problem: it returns stats with
+        `aborted` set."""
         stats = ScanStats()
         if self.lookup is None:
             self.lookup = self.store.load_lookup()
@@ -250,7 +271,11 @@ class Scanner:
         people = self.store.load_people()
         if person_id is not None:
             people = [p for p in people if p["person_id"] == person_id]
-        teams = [] if person_id is not None else self.store.load_teams()
+        teams = (
+            self.store.load_teams()
+            if person_id is None
+            else self.store.load_teams_of(person_id)
+        )
         claims = {
             owners.PERSON_BASE: ("person", owners.person_claims(people)),
             owners.TEAM_BASE: ("team", owners.team_claims(teams)),
@@ -587,7 +612,12 @@ class Scanner:
                 else 0
             )
             hashed = hashing.hash_file(
-                self.share, rel, throttle=self.throttle, keep_up_to=keep
+                self.share,
+                rel,
+                throttle=self.throttle,
+                keep_up_to=keep,
+                # a big file through a slow throttle takes minutes: keep the heartbeat beating
+                progress=lambda _total: self._tell(f"hashing {rel}"),
             )
             if hashed.status == "missing":
                 # Listed a moment ago and gone now: the file was removed or the share is going. Do not

@@ -1,10 +1,11 @@
 """Ask the d1-inbox extension to auto-link files (spec section 5). The crawler never links itself.
 
-After a scan, files of opted-in people that name exactly one record by an exact short ID (images and
-surface scans, never documents, never copies) are offered to `POST /d1-inbox/auto-link` with the shared
-secret in `X-Inbox-Crawler-Secret`. The extension decides: it re-checks the opt-in, the match and that the
-person can edit the record, links as that person and answers per candidate. This module only asks, and
-remembers which candidates got a definite answer so they are not asked again by this process.
+After a scan, files of opted-in people that name exactly one record by an exact short ID (SEM images and
+other images only: never surface scans, never documents, never copies, never one the person undid) are
+offered to `POST /d1-inbox/auto-link` with the shared secret in `X-Inbox-Crawler-Secret`. The extension
+decides: it re-checks the opt-in, the match and that the person can edit the record, links as that
+person and answers per candidate. This module only asks, and remembers which candidates got a definite
+answer so they are not asked again by this process.
 """
 
 from __future__ import annotations

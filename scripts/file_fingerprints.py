@@ -368,6 +368,17 @@ _LINKED_SQL = """f.id IN (
         UNION SELECT directus_files_id FROM machining_force_analysis)"""
 
 
+# The inbox crawler (scripts/inbox_crawler) registers a pointer row for every file it finds on a person's
+# or team's share folder, documents included, but reads only images and surface scans (ADR-0020): a
+# document's content is read once, after a person links it. So under --phase all a row it registered
+# (metadata.found_by = 'inbox_crawler', which db.register_file writes) that is not linked yet is left alone.
+_UNLINKED_CRAWLER_FIND_SQL = (
+    "(COALESCE(f.metadata::jsonb->>'found_by', '') = 'inbox_crawler' AND NOT ("
+    + _LINKED_SQL
+    + "))"
+)
+
+
 def select_files(
     cur,
     phase: str,
@@ -380,7 +391,7 @@ def select_files(
     if phase not in ("linked", "all"):
         raise ValueError(f"phase must be 'linked' or 'all', not {phase!r}")
     storages = ["star", "local"] if include_local else ["star"]
-    linked = _LINKED_SQL if phase == "linked" else "true"
+    linked = _LINKED_SQL if phase == "linked" else f"NOT {_UNLINKED_CRAWLER_FIND_SQL}"
     permanent = "starts_with(COALESCE(fp.error_message, ''), %s)"
     sql = f"""
         SELECT f.id::text, f.storage, f.metadata::jsonb->>'archive_path', f.filename_disk,
@@ -852,7 +863,7 @@ def _parser() -> argparse.ArgumentParser:
         "--phase",
         choices=("linked", "all"),
         required=True,
-        help="linked: files attached to operations/samples/sessions/force analyses; all: every file",
+        help="linked: files attached to operations/samples/sessions/force analyses; all: every file except one the inbox crawler found that nobody has linked yet",
     )
     p.add_argument(
         "--workers", type=int, default=1, help="parallel hashing threads (default 1)"

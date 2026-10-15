@@ -158,7 +158,7 @@ def test_the_expiry_is_an_hour_and_old_entries_do_not_pile_up():
     assert attempted == {}
 
 
-# ---- the pip pins agree with scripts/requirements.txt ---------------------------------------------------
+# ---- the pip pins are exact, the same in both places, and inside what requirements.txt allows ---------
 
 
 def _specs(text):
@@ -168,17 +168,48 @@ def _specs(text):
     }
 
 
-def test_the_compose_service_and_make_target_pin_what_requirements_pins():
-    wanted = _specs((ROOT / "scripts/requirements.txt").read_text())
-    assert set(wanted) == {"psycopg2-binary", "pillow"}
+def _version(spec):
+    return tuple(int(x) for x in re.findall(r"\d+", spec.split("=", 1)[1].lstrip("=")))
+
+
+def test_the_compose_service_and_make_target_pin_exact_versions_that_requirements_allows():
+    floor = _specs((ROOT / "scripts/requirements.txt").read_text())
+    assert set(floor) == {"psycopg2-binary", "pillow"}
     compose = (ROOT / "docker-compose.yml").read_text()
     block = compose[compose.index("  inbox-crawler:") :]
     block = block[: block.index("\nvolumes:")]
-    assert _specs(block) == wanted
-    assert "pip install -q psycopg2-binary Pillow" not in block  # no unpinned install
     make = (ROOT / "Makefile").read_text()
     once = make[make.index("inbox-crawler-once:") :].split("\n\n")[0]
-    assert _specs(once) == wanted
+    pinned = _specs(block)
+    assert pinned == _specs(once)  # the daemon and the one-off scan run the same code
+    assert set(pinned) == set(floor)
+    for name, spec in pinned.items():
+        assert re.fullmatch(
+            r"[A-Za-z0-9-]+==\d+(\.\d+)+", spec
+        ), spec  # exact, never a range
+        assert _version(spec) >= _version(
+            floor[name]
+        ), spec  # and not below requirements.txt's floor
+    assert pinned["pillow"] == "Pillow==12.3.0"
+    assert pinned["psycopg2-binary"] == "psycopg2-binary==2.9.13"
+    assert "pip install -q psycopg2-binary Pillow" not in block  # no unpinned install
+
+
+def test_the_compose_service_passes_the_ocr_and_log_level_settings_through_empty_by_default():
+    compose = (ROOT / "docker-compose.yml").read_text()
+    block = compose[compose.index("  inbox-crawler:") :]
+    block = block[: block.index("\nvolumes:")]
+    assert "INBOX_OCR: ${INBOX_OCR:-}" in block
+    assert "INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}" in block
+
+
+def test_an_empty_log_level_means_the_default():
+    """Compose passes an empty string when .env does not set it."""
+    from inbox_crawler import __main__ as cli
+
+    assert cli._log_level("") == logging.INFO
+    assert cli._log_level(None) == logging.INFO
+    assert cli._log_level("debug") == logging.DEBUG
 
 
 # ---- recognition looks only below the owner's folder ----------------------------------------------------

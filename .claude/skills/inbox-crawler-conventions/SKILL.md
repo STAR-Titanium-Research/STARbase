@@ -29,7 +29,9 @@ folder**, **team folder**, **uni alias**. The crawler is the **inbox crawler**; 
    mid-scan (every path looks absent) aborts the scan and marks nothing `gone`.
 4. **Identity matches the indexer.** `directus_files.id` is the indexer's uuid5 of the path relative to
    `star_group1`; import the rule, do not copy it. `storage='star'`.
-5. **The crawler never writes a link.** Linking and auto-linking go through the `d1-inbox` extension.
+5. **The crawler never creates a link.** It never writes a link or a link bookkeeping column; it only re-points
+   existing file references when a file moves, via the indexer's `repoint_file_references`. Linking and
+   auto-linking go through the `d1-inbox` extension.
 6. **No secrets in logs.** Never print `SMB_PASS` or `DATABASE_URL`.
 
 ## Checks to run before each commit

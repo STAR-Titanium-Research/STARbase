@@ -603,12 +603,16 @@ services:
       D1_INBOX_URL: ${D1_INBOX_URL:-http://directus:8055}
       # Empty switches auto-link off. Must equal the D1_INBOX_CRAWLER_SECRET Directus gets.
       D1_INBOX_CRAWLER_SECRET: ${D1_INBOX_CRAWLER_SECRET:-}
+      # From .env; empty keeps the defaults (OCR off, INFO). INBOX_LOG_LEVEL=DEBUG logs every file opened.
+      INBOX_OCR: ${INBOX_OCR:-}
+      INBOX_LOG_LEVEL: ${INBOX_LOG_LEVEL:-}
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - ./scripts:/scripts:ro
       - archive_share:/mnt/archive:ro
     working_dir: /scripts
-    command: ["sh", "-c", "pip install -q 'psycopg2-binary>=2.9' 'Pillow>=10.1' && exec python -m inbox_crawler --daemon"]
+    # Exact versions (the ones CI resolved): a bump is a reviewed change, not whatever pip finds at a restart.
+    command: ["sh", "-c", "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && exec python -m inbox_crawler --daemon"]
     networks: [d1net]
 
 volumes:

@@ -1898,13 +1898,14 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   everything (correct, but slow: IF4 would show it).
 - [ ] **IF3 — Baseline and new files.** Set one person's `uni_alias`, run a scan. Expect everything already
   there to appear under *Older* (backlog) and the badge to stay 0. Save a new image in that folder; within 30
-  minutes (or at once with *Rescan my folder*) expect it under *New* and the badge to read 1. A file saved in
+  minutes (or, with *Rescan my folder*, once the scan running at the moment has finished and the daemon's next
+  30-second tick has claimed the request) expect it under *New* and the badge to read 1. A file saved in
   the last 5 seconds before a scan is left for the next one (it may still be being written).
 - [ ] **IF4 — Load on the share.** Time a first scan of a real personal folder tree and an incremental one;
   watch the share for impact (read rate stays under the `read_mb_per_s` cap). Record both durations.
 - [ ] **IF5 — Documents are never opened.** With a document in a scanned folder, confirm from the crawler's
-  log (run it with `INBOX_LOG_LEVEL=DEBUG`, which logs every file it opens, and `docker compose logs
-  inbox-crawler`) and the file server's open-file list if available, that it is only listed, not opened, until
+  log (put `INBOX_LOG_LEVEL=DEBUG` in `.env`, run `docker compose --profile archive up -d inbox-crawler`
+  to recreate the service with it, which logs every file it opens, then `docker compose logs inbox-crawler`) and the file server's open-file list if available, that it is only listed, not opened, until
   it is linked; then that linking it produces one read (an INFO line `reading <path> once to fingerprint it`)
   and a `file_fingerprints` row with its size and mtime. Undo the link and confirm no further read.
 - [ ] **IF6 — Short-ID links on real records.** Save an image whose name contains a real sample's short ID.
@@ -1964,6 +1965,38 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   runs (or between two scans), then give the old folder name to another person. Expect the old person's
   found files (not linked ones) to vanish from their Inbox, the new owner to get a first scan of that folder
   (everything *Older*, badge 0), and no found file of the folder in the old person's Inbox.
+- [ ] **IF15 — Other tools can still read documents under `Users/` that nobody linked.**
+  `index_archive.py --fingerprint` and `file_fingerprints.py` can still read documents under `Users/` that
+  nobody linked: decide whether to restrict them. The crawler reads a document only after a person links it
+  (ADR-0020), and `file_fingerprints.py --phase all` now skips a row the crawler registered (`metadata.found_by
+  = 'inbox_crawler'`) until it is linked. The indexer's own walk (`make index-archive`, with or without
+  `--fingerprint`, which reads 128 KB of every file it indexes) and `file_fingerprints.py --phase linked` are
+  unchanged, and a document the indexer registered earlier is not marked `found_by`. Run `make index-archive
+  --fingerprint` on a test folder with a document in it, check what was read, and decide: restrict both tools
+  to the folders the lab agreed to index, or accept it. Since: found files inbox, final review (S5).
+- [ ] **IF16 — An undone auto-link stays undone (live).** With auto-link on for a test person, save an image
+  with an exact short ID of a sample they can edit; let the crawler auto-link it, then **Undo** it in the Inbox
+  (*Recently auto-linked*). Restart the crawler (`docker compose --profile archive restart inbox-crawler`, which
+  forgets its in-process list of answered candidates) and run another scan (*Rescan my folder*). Expect the file
+  to stay in the *New* list, unlinked, with no new auto-link and no `auto-link:` offer for it in the crawler's
+  log; a different exact-short-ID image saved afterwards is still auto-linked. Needs the server stream's
+  `file_candidates.auto_undone_at` (migration 193). Since: found files inbox, final review (B1).
+- [ ] **IF17 — Pausing the crawler (SQL).** There is no admin route or tab for this. On d1-server run
+  `UPDATE d1_private.inbox_crawler_state SET desired_state = 'paused'` (psql in the `postgres` container).
+  Within about 30 seconds expect the admin tab to show the crawler as paused but still online (the heartbeat keeps going), a file
+  saved in a scanned folder to stay unfound across a scheduled scan time, and a *Rescan my folder* request to
+  stay queued. Set `desired_state = 'running'` and expect the request to be claimed within about 30 seconds and
+  the file to appear. Also try `interval_minutes` and `read_mb_per_s` the same way (a CHECK refuses 0).
+  Since: found files inbox, final review (runbook).
+- [ ] **IF18 — The heartbeat keeps beating during a long hash.** Link a large document (a few GB, or lower
+  `read_mb_per_s` to 0.5 on a 100 MB one so the read takes several minutes). While it is read once to
+  fingerprint it, expect the admin tab to keep showing the daemon *Online* with the activity `hashing <path>`
+  and `last_heartbeat_at` never more than about 30 seconds old, then a `file_fingerprints` row. Restore the
+  rate afterwards. Since: found files inbox, final review (7a).
+- [ ] **IF19 — One crawler at a time.** With the daemon running, run `make inbox-crawler-once`: expect it to
+  log that another crawler holds the lock and exit 1 without scanning; start a second daemon container the same
+  way and expect it to exit 1. Stop the daemon and expect `make inbox-crawler-once` to run. Since: found files
+  inbox, final review (7c).
 - [ ] **IF20 — Auto-link acts as the person (live Directus).** Set `D1_INBOX_CRAWLER_SECRET` in `.env`, restart
   Directus. With a test person (a Lab Member, auto-link on) whose image names a sample they can edit, run a
   crawler scan or `curl -X POST /d1-inbox/auto-link -H "X-Inbox-Crawler-Secret: ..." -d '{"candidate_ids":[...]}'`.
@@ -2038,8 +2071,9 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   rule). A scan error appears once under *Errors*. A folder created under `Users/` or `Shared/` that no alias or
   share folder names shows under *Folders no one owns*, and a person with no alias under *People without a uni
   alias* (linking to the People page); give them an alias and expect them to leave the list after the next
-  scan. Press *Scan all* and expect the request to be claimed within about 30 seconds, and a second press while
-  one waits to say it is already queued. A Lab Member who opens `/crawler?tab=inbox` is told it is for
+  scan. Press *Scan all* and expect the request to be claimed once the current scan finishes (then within about
+  30 seconds; a scheduled scan, a first one especially, can run for hours), and a second press while one
+  waits to say it is already queued. A Lab Member who opens `/crawler?tab=inbox` is told it is for
   administrators. Since: Inbox stream D.
 
 ## Done

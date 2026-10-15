@@ -43,6 +43,10 @@ CREATE TABLE directus_users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), emai
 CREATE TABLE people (person_id uuid PRIMARY KEY DEFAULT gen_random_uuid(), full_name text,
     user_id uuid REFERENCES directus_users (id), active boolean NOT NULL DEFAULT true);
 CREATE TABLE teams (team_id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text);
+CREATE TABLE team_members (member_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id uuid NOT NULL REFERENCES teams (team_id) ON DELETE CASCADE,
+    person_id uuid NOT NULL REFERENCES people (person_id) ON DELETE CASCADE,
+    is_manager boolean NOT NULL DEFAULT false, UNIQUE (team_id, person_id));
 CREATE TABLE directus_folders (id uuid PRIMARY KEY, name text NOT NULL, parent uuid);
 CREATE TABLE directus_files (id uuid PRIMARY KEY, storage text NOT NULL, filename_disk text,
     filename_download text, title text, type text, folder uuid, filesize bigint, metadata json,
@@ -109,6 +113,12 @@ class World:
         self.q("UPDATE teams SET share_folder = %s WHERE team_id = %s", (folder, tid))
         return tid
 
+    def member(self, team_id, person_id):
+        self.q(
+            "INSERT INTO team_members (team_id, person_id) VALUES (%s, %s)",
+            (team_id, person_id),
+        )
+
     def sample(self, short_id, code=None):
         sid = str(uuid.uuid4())
         self.q(
@@ -154,6 +164,12 @@ def world(tmp_path):
         cur.execute(STUBS)
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
+        # Added to migration 193 by the server stream (an undone auto-link is never offered again); a no-op
+        # once the migration has it, so this worktree's tests run before and after the two are merged.
+        cur.execute(
+            f"ALTER TABLE {schema}.file_candidates "
+            "ADD COLUMN IF NOT EXISTS auto_undone_at TIMESTAMPTZ"
+        )
         conn.commit()
         yield World(conn, schema, str(root), DSN)
     finally:

@@ -22,7 +22,7 @@ from . import identity, recognise
 from .fs_readonly import extension
 from .hashing import HashOutcome
 from .identity import FILENAME_DISK_MAX, file_id, folder_id, guess_type
-from .owners import Owner
+from .owners import Owner, clean_rel_path
 
 log = logging.getLogger("inbox_crawler.db")
 
@@ -32,6 +32,9 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 STALE_REQUEST_MINUTES = 15
 # An errored hash is tried again no sooner than this.
 HASH_RETRY_HOURS = 1
+# The session-level advisory lock that makes one crawler (daemon or --once) at a time. An arbitrary fixed
+# bigint; it lives on the crawler's own connection, so it goes with a killed process.
+CRAWLER_LOCK_KEY = 7_302_150_400_193
 
 
 def connect(dsn: str, private_schema: str = "d1_private"):
@@ -104,6 +107,9 @@ class Store:
         self.storage = storage
         self.root_folder_name = root_folder_name
         self._folders_done: set[str] = set()
+        self._warned: set[str] = (
+            set()
+        )  # candidates already complained about (once per process)
 
     # ---- plumbing --------------------------------------------------------------------
 
@@ -138,6 +144,14 @@ class Store:
             if row is None:
                 return None
             return dict(zip([d[0] for d in cur.description], row, strict=True))
+
+    def try_crawler_lock(self) -> bool:
+        """Take the single-crawler advisory lock on this connection, without waiting. False when another
+        connection (another daemon, or a --once run) holds it. Postgres releases it when the connection
+        ends, and it is not tied to a transaction, so commits and rollbacks leave it alone."""
+        row = self._one("SELECT pg_try_advisory_lock(%s)", (CRAWLER_LOCK_KEY,))
+        self.commit()
+        return bool(row and row[0])
 
     def daemon_started(self) -> None:
         self._run(
@@ -182,12 +196,16 @@ class Store:
         full: bool = True,
     ) -> None:
         """Counters always; last_scan_finished_at only for a scan that ran to its end (an aborted one,
-        for example when the share dropped, leaves it where it was)."""
+        for example when the share dropped, leaves it where it was). last_error is replaced by a new
+        error, and cleared by a scan of everyone that ran to its end with none (so the admin tab stops
+        showing a problem that has gone); a one-person or unfinished scan leaves it alone."""
+        new_error = (last_error or None) and last_error[:900]
         self._run(
             "UPDATE inbox_crawler_state SET "
             " last_scan_finished_at = CASE WHEN %s AND %s THEN now() ELSE last_scan_finished_at END,"
             " files_registered = files_registered + %s, error_count = error_count + %s,"
-            " last_error = COALESCE(%s, last_error),"
+            " last_error = CASE WHEN %s::text IS NOT NULL THEN %s::text "
+            "   WHEN %s AND %s THEN NULL ELSE last_error END,"
             " unmatched_folders = COALESCE(%s::jsonb, unmatched_folders), updated_at = now() "
             "WHERE id = %s",
             (
@@ -195,7 +213,10 @@ class Store:
                 full,
                 registered,
                 errors,
-                (last_error or None) and last_error[:900],
+                new_error,
+                new_error,
+                completed,
+                full,
                 None if unmatched is None else json.dumps(sorted(unmatched)),
                 STATE_ID,
             ),
@@ -270,6 +291,18 @@ class Store:
         rows = self._all(
             "SELECT team_id::text, share_folder, name FROM teams "
             "WHERE share_folder IS NOT NULL ORDER BY team_id"
+        )
+        return [{"team_id": r[0], "share_folder": r[1], "name": r[2]} for r in rows]
+
+    def load_teams_of(self, person_id: str) -> list[dict]:
+        """The teams with a share folder that this person is a member of, for a one-person scan. Only an
+        ACTIVE person (people.active): that is who the Inbox shows a team's files to, and so who can ask."""
+        rows = self._all(
+            "SELECT t.team_id::text, t.share_folder, t.name FROM teams t "
+            "JOIN team_members m ON m.team_id = t.team_id "
+            "JOIN people p ON p.person_id = m.person_id "
+            "WHERE m.person_id = %s AND p.active AND t.share_folder IS NOT NULL ORDER BY t.team_id",
+            (person_id,),
         )
         return [{"team_id": r[0], "share_folder": r[1], "name": r[2]} for r in rows]
 
@@ -405,19 +438,39 @@ class Store:
     def resync_paths(self, owner: Owner) -> int:
         """Re-read each of the owner's candidates' rel_path from its pointer row (metadata.archive_path).
         The indexer re-points a moved file's references, the candidate included, to the pointer row at the
-        new path but cannot touch rel_path, which would then name a path that is gone. Only candidates of
-        this owner, and only paths that are under the owner's folder, are changed."""
-        owner_filter = _owner_eq(owner, "c.")
-        return self._run(
-            "UPDATE file_candidates c SET rel_path = df.metadata::jsonb->>'archive_path' "
-            "FROM directus_files df WHERE df.id = c.directus_files_id AND "
-            + owner_filter
+        new path but cannot touch rel_path, which would then name a path that is gone.
+
+        metadata.archive_path is editable by any Lab Member, so it is only believed when it is a clean path
+        (no '..', backslash, empty or '.' part) under this owner's folder AND the pointer row's own id is
+        the indexer's uuid5 of that very path. A real move always satisfies the last rule: the indexer
+        re-points the candidate to the row of the NEW path, whose id is uuid5(new path) and whose
+        archive_path is that path. An edited archive_path names another file, so the ids disagree and the
+        candidate keeps its path (the D2 rule: only a person's own, linked files are ever read)."""
+        rows = self._all(
+            "SELECT c.candidate_id::text, c.directus_files_id::text, df.metadata::jsonb->>'archive_path' "
+            "FROM file_candidates c JOIN directus_files df ON df.id = c.directus_files_id WHERE "
+            + _owner_eq(owner, "c.")
             + " "
             "AND df.metadata::jsonb->>'archive_path' IS NOT NULL "
             "AND c.rel_path <> df.metadata::jsonb->>'archive_path' "
             "AND left(df.metadata::jsonb->>'archive_path', %s) = %s",
             (owner.id, len(owner.root) + 1, owner.root + "/"),
         )
+        done = 0
+        for candidate_id, files_id, archive_path in rows:
+            if not clean_rel_path(archive_path, owner.root) or (
+                str(file_id(archive_path)) != files_id
+            ):
+                log.warning(
+                    "not re-syncing candidate %s: its pointer row names a path that is not its own",
+                    candidate_id,
+                )
+                continue
+            done += self._run(
+                "UPDATE file_candidates SET rel_path = %s WHERE candidate_id = %s",
+                (archive_path, candidate_id),
+            )
+        return done
 
     def already_linked(self, files_ids: list[str]) -> set[str]:
         """Which of these pointer-row ids are already linked to a sample, operation or test (by Data Studio's
@@ -721,16 +774,53 @@ class Store:
     def adopted_awaiting_hash(self, limit: int = 20) -> list[tuple[str, str, str]]:
         """Candidates a person has linked (and so agreed to be read once) that have no fingerprint yet,
         or whose last try failed more than an hour ago: (candidate_id, directus_files_id, rel_path).
-        Only state 'linked' rows are read: an undone link stops the read."""
-        rows = self._all(
-            "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path "
-            "FROM file_candidates c LEFT JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
-            "WHERE c.adopted_at IS NOT NULL AND c.state = 'linked' "
-            "  AND (f.directus_files_id IS NULL OR (f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s))) "
-            "ORDER BY c.adopted_at LIMIT %s",
-            (HASH_RETRY_HOURS, limit),
+        Only state 'linked' rows are read: an undone link stops the read.
+
+        Nothing is returned for a row whose stored path is not its own: the path must be clean, below the
+        owner's folder (spelled as the share spells it, SMB being case-insensitive) and the row's id must be
+        the indexer's uuid5 of it. Such a row is skipped before anything is read, and does not block the
+        rows behind it."""
+        out: list[tuple[str, str, str]] = []
+        page = max(limit, 1) * 10
+        for offset in range(0, page * 5, page):
+            rows = self._all(
+                "SELECT c.candidate_id::text, c.directus_files_id::text, c.rel_path, "
+                " CASE WHEN c.owner_person_id IS NOT NULL THEN 'Users' ELSE 'Shared' END, "
+                " COALESCE(p.uni_alias, t.share_folder) "
+                "FROM file_candidates c "
+                "LEFT JOIN file_fingerprints f ON f.directus_files_id = c.directus_files_id "
+                "LEFT JOIN people p ON p.person_id = c.owner_person_id "
+                "LEFT JOIN teams t ON t.team_id = c.owner_team_id "
+                "WHERE c.adopted_at IS NOT NULL AND c.state = 'linked' "
+                "  AND (f.directus_files_id IS NULL OR (f.status = 'error' AND f.hashed_at < now() - make_interval(hours => %s))) "
+                "ORDER BY c.adopted_at, c.candidate_id LIMIT %s OFFSET %s",
+                (HASH_RETRY_HOURS, page, offset),
+            )
+            for cid, fid, rel, base, folder in rows:
+                if self._own_path(rel, fid, base, folder):
+                    out.append((cid, fid, rel))
+                    if len(out) >= limit:
+                        return out
+                elif cid not in self._warned:
+                    self._warned.add(cid)
+                    log.warning(
+                        "not reading candidate %s: its stored path is not its own", cid
+                    )
+            if len(rows) < page:
+                break
+        return out
+
+    @staticmethod
+    def _own_path(rel: str, files_id: str, base: str, folder: str | None) -> bool:
+        if not folder or not clean_rel_path(rel):
+            return False
+        parts = rel.split("/")
+        return (
+            parts[0] == base
+            and parts[1].lower() == folder.lower()
+            and len(parts) > 2
+            and str(file_id(rel)) == files_id
         )
-        return [tuple(r) for r in rows]
 
     def errored_hashes(self, limit: int = 20) -> list[tuple[str, str, str]]:
         """Images and scans whose discovery hash failed at least an hour ago and are still undecided."""
@@ -748,7 +838,8 @@ class Store:
 
     def autolink_candidates(self, person_ids: set[str], limit: int = 200) -> list[dict]:
         """Undecided new files of opted-in people that name exactly one record by an exact short ID,
-        are images or surface scans (never documents) and are not copies."""
+        are SEM images or other images (never surface scans or documents), are not copies and
+        were not auto-linked and undone by the person (auto_undone_at)."""
         if not person_ids:
             return []
         rows = self._all(
@@ -756,6 +847,7 @@ class Store:
             " suggested_record_id::text, kind FROM file_candidates "
             "WHERE state = 'new' AND origin = 'new' AND match_strength = 'short_id' "
             "  AND suggested_record_id IS NOT NULL AND duplicate_of IS NULL "
+            "  AND auto_undone_at IS NULL "
             "  AND kind IN ('sem_image', 'image') "
             "  AND owner_person_id = ANY(%s::uuid[]) "
             "ORDER BY first_seen_at, candidate_id LIMIT %s",
