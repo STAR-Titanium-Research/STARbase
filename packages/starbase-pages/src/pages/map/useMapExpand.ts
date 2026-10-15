@@ -23,6 +23,11 @@ export interface MergeHint {
   from?: string;
   /** Cards to lay out again from ELK's result (a "+N more" stub moves to the end of its column). */
   replace?: string[];
+  /**
+   * A container whose rows folded or unfolded: the cards on its sockets swap their places (not ELK's) until they are in the
+   * order of the sockets (model/reslot.ts). Dragged cards stay.
+   */
+  reslot?: string;
 }
 
 /** The state of `useProcessMap` an expand reads and changes. */
@@ -363,5 +368,5 @@ export function useMapExpand(deps: ExpandDeps) {
     keepOpened(owner, before);
   }
 
-  return { expand, reset, loaded, restore, forgetReveals, collapse, expandedIds, takeMergeHints };
+  return { expand, reset, loaded, restore, forgetReveals, collapse, expandedIds, takeMergeHints, hint };
 }

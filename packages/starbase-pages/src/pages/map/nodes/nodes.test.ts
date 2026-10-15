@@ -337,13 +337,13 @@ describe('WireEdge', () => {
 		...over,
 	});
 
-	it('renders a bezier wire with a wide hit path, thicker when bundled', async () => {
+	it('renders a bezier wire with a wide hit path, as thick as any other when it carries a folded bundle', async () => {
 		const html = await render(WireEdge, edgeProps());
 		expect(html).toMatch(/<path class="[^"]*\bwire\b[^"]*" d="M/);
 		expect(html).toContain('class="hit"');
 		expect(wireClass(html)).not.toContain('fat');
-		const fat = await render(WireEdge, edgeProps({ data: { wire: { ...wire, bundled: true }, tooltip: [] } }));
-		expect(wireClass(fat)).toContain('fat');
+		const bundled = await render(WireEdge, edgeProps({ data: { wire: { ...wire, bundled: true }, tooltip: [] } }));
+		expect(wireClass(bundled)).not.toContain('fat'); // the bundle socket is fat; the wire into it is not
 		const stock = await render(WireEdge, edgeProps({ data: { wire: { ...wire, flow: 'stock' }, tooltip: [] } }));
 		expect(stock).toContain('flow-stock');
 	});

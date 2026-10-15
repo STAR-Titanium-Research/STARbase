@@ -10,6 +10,7 @@ import { useVueFlow, type Edge, type GraphNode, type Node, type NodeTypesObject,
 import { nodeOfSocket } from './model/sockets';
 import { fanNodeIds } from './model/fans';
 import { placeMerged, type Box } from './model/placeMerged';
+import { reslot } from './model/reslot';
 import { shownNodes } from './model/reach';
 import type { MapNode } from './model/types';
 import ContainerNode from './nodes/ContainerNode.vue';
@@ -228,6 +229,17 @@ export function useMapCanvas(map: ProcessMap) {
         const wires = graph.wires.map((w) => ({ from: nodeOfSocket(w.from), to: nodeOfSocket(w.to) }));
         positions = placeMerged({ elk, sizes, placed: here, edges: wires, dir: map.dir.value, anchors: merges.flatMap((m) => (m.anchor ? [m.anchor] : [])), pinned: dragged });
         for (const id of Object.keys(positions)) if (!here[id]) instant.add(id);
+        // A container that folded or unfolded: the cards on its sockets deal out the places they have, in the sockets' order (they glide there).
+        for (const m of merges) {
+          const container = m.reslot ? graph.nodes.find((n) => n.id === m.reslot) : undefined;
+          if (container?.type !== 'container') continue;
+          const boxes: Record<string, Box> = {};
+          for (const n of vf.getNodes.value) {
+            const at = positions[n.id] ?? n.position;
+            if (sizes[n.id]) boxes[n.id] = { x: at.x, y: at.y, ...sizes[n.id] };
+          }
+          positions = { ...positions, ...reslot({ container, wires: graph.wires, boxes, dragged, dir: map.dir.value, containers: graph.nodes.filter((n): n is typeof container => n.type === 'container') }) };
+        }
       }
       for (const n of vf.getNodes.value) {
         const at = positions[n.id] ?? (merges ? n.position : undefined);
