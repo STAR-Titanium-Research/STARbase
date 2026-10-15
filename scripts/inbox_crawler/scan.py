@@ -543,6 +543,8 @@ class Scanner:
                     ocr_func=self.ocr_func,
                     profiles=self.profiles,
                 )
+                if cls.reason.startswith("not decoded"):
+                    log.info("%s is registered as a plain image: %s", rel, cls.reason)
         rec = recognise.recognise(rel, self.lookup)
         result = self.store.register_file(
             owner=owner,

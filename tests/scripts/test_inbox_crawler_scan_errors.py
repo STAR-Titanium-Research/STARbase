@@ -169,6 +169,41 @@ def test_a_file_that_vanishes_while_it_is_read_is_temporary(world):
     assert baselined(world, "Users/abc12de") in (None, (False,))
 
 
+def test_images_that_cannot_be_decoded_are_registered_as_plain_images(world, caplog):
+    import logging
+    import struct
+    import zlib
+
+    world.person("abc12de")
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    bomb = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 40000, 40000, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00"))
+        + chunk(b"IEND", b"")
+    )
+    world.write("Users/abc12de/bomb.png", bomb)
+    world.write("Users/abc12de/not_a_tiff.tif", b"this is not an image")
+    world.write("Users/abc12de/fine.png", png())
+    world.commit()
+    settle(world)
+    with caplog.at_level(logging.INFO):
+        stats = run(world)[0]
+    assert stats.errors == 0 and stats.registered == 3
+    got = cands(world)
+    assert {k: v[2] for k, v in got.items()} == {
+        "Users/abc12de/bomb.png": "image",
+        "Users/abc12de/not_a_tiff.tif": "image",
+        "Users/abc12de/fine.png": "image",
+    }
+    assert "plain image" in caplog.text
+    assert baselined(world, "Users/abc12de") == (True,)
+
+
 def test_an_unlisted_root_never_baselines_even_with_only_permanent_errors(world):
     import errno
 

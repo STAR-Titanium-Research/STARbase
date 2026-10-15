@@ -15,6 +15,7 @@ suggests.
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -27,7 +28,13 @@ except ImportError:  # pragma: no cover
     Image = None
 
 SEM_MIN_CONFIDENCE = 0.6  # at or above this a profile's claim becomes kind sem_image
-MAX_PIXELS = 400_000_000  # refuse to decode anything bigger (a decompression bomb is just an image)
+MAX_PIXELS = 50_000_000  # refuse to decode anything bigger (a decompression bomb is just an image)
+# Only these formats are decoded: Pillow knows dozens, some of which run external programs (EPS) or are
+# not images at all. A file named .tif that is something else is a plain, undecoded image.
+FORMATS = ["TIFF", "JPEG", "PNG", "BMP"]
+DRAFT_ABOVE_PIXELS = (
+    8_000_000  # a larger JPEG is decoded at half scale: the data bar is large
+)
 
 _TEXT_TAGS = (270, 271, 272, 305)  # ImageDescription, Make, Model, Software
 _MAX_META_CHARS = 20_000
@@ -255,10 +262,20 @@ def classify_image(
     if ocr and ocr_func is None:
         ocr_func = default_ocr
     try:
-        Image.MAX_IMAGE_PIXELS = MAX_PIXELS
-        img = Image.open(fh)
-        img.load()
-    except Exception as exc:  # a corrupt or exotic file is still a found file
+        with warnings.catch_warnings():
+            # Pillow only warns between 1x and 2x its limit; a warning here is an error.
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+            img = Image.open(fh, formats=FORMATS)
+            w, h = img.size  # known from the header, before anything is decoded
+            if w * h > MAX_PIXELS:
+                return Classification(
+                    "image", None, {}, f"not decoded: too large ({w} x {h} pixels)"
+                )
+            if img.format == "JPEG" and w * h > DRAFT_ABOVE_PIXELS:
+                img.draft("L", (w // 2, h // 2))
+            img.load()
+    except Exception as exc:  # a corrupt, huge or exotic file is still a found file
         return Classification("image", None, {}, f"not decoded: {type(exc).__name__}")
     best: ProfileResult | None = None
     for p in profiles:
