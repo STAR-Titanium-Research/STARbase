@@ -156,6 +156,7 @@ const pin = computed(() => pinTargetForRecord('projects', props.id));
 </template>
 
 <style scoped>
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: -1px; padding: 0; border: 0; }
 /* Side by side while there is room, but a section with nothing in it is only its lid, so it takes the
    whole row (its one line of text does not wrap in half a column). Dense: the sections after it fill
    the gap it leaves in the row above. */
