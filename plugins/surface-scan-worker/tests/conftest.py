@@ -1,6 +1,7 @@
 """pytest configuration: plugin root on sys.path, and the fakes the job tests share."""
 
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,20 @@ class FakeWorld:
     def add_file(self, relative_path: str | None, file_id=FILE, storage="star") -> None:
         metadata = {"archive_path": relative_path} if relative_path is not None else {}
         self.files[file_id] = {"id": file_id, "storage": storage, "metadata": metadata}
+
+    def current_fingerprint(self, file_id: str, sha: str, **overrides) -> dict:
+        """A ``done`` fingerprint that describes the file on disk right now (size and mtime)."""
+        archive_path = self.files[file_id]["metadata"]["archive_path"]
+        st = (self.root / archive_path).stat()
+        fp = {
+            "status": "done",
+            "content_sha256": sha,
+            "size_bytes": st.st_size,
+            "source_mtime": datetime.fromtimestamp(st.st_mtime, UTC).isoformat(),
+        }
+        fp.update(overrides)
+        self.fingerprints[file_id] = fp
+        return fp
 
     # --- fakes for app.lib.directus_client --------------------------------------------------
     def get_scan(self, scan_id):

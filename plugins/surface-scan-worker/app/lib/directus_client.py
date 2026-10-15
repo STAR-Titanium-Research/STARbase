@@ -155,23 +155,30 @@ def get_file(file_id: str) -> dict:
 
 def get_fingerprint(file_id: str) -> dict | None:
     """The crawler's ``file_fingerprints`` row for the file (``status``, ``content_sha256``,
-    ``size_bytes``), or None when there is none or this worker may not read the table.
+    ``size_bytes``, ``source_mtime``: the hash and its staleness key), or None when there is none.
 
-    Read only. A missing fingerprint is normal (the crawler has not seen the file): the caller falls
-    back to a provisional cache key.
+    Read only. Asked as a filtered list, not by primary key: Directus answers 403 for a primary key
+    that does not exist, which would be indistinguishable from a missing permission. An empty list means
+    the crawler has not seen the file (normal: the caller uses a provisional cache key); a 403 here
+    really is a permission problem, logged as one (and the provisional key is used all the same).
     """
     resp = requests.get(
-        f"{DIRECTUS_URL}/items/file_fingerprints/{file_id}",
-        params={"fields": "status,content_sha256,size_bytes"},
+        f"{DIRECTUS_URL}/items/file_fingerprints",
+        params={
+            "filter[directus_files_id][_eq]": file_id,
+            "fields": "status,content_sha256,size_bytes,source_mtime",
+            "limit": "1",
+        },
         headers=_headers(),
         timeout=30,
     )
-    if resp.status_code == 404:
-        return None
     if resp.status_code == 403:
         log.warning(
-            "not allowed to read file_fingerprints; using provisional cache keys"
+            "the worker's token may not read file_fingerprints (403); "
+            "grant it read access. Using provisional cache keys meanwhile."
         )
         return None
     data = _data(resp)
-    return data if isinstance(data, dict) else None
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return data[0]
+    return None
