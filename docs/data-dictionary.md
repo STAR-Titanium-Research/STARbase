@@ -132,6 +132,11 @@ Private schema (not exposed)
                              unfinished build (DraftBody JSON, private to its owner, deleted when
                              created) and saved templates for new operations and tests (private,
                              role or global scope). Reached only through the d1-build endpoint.
+  d1_private.file_candidates, inbox_dirs, inbox_scan_requests, inbox_crawler_state, inbox_prefs
+                             found files and the Inbox (migration 193, ADR-0020): files the inbox
+                             crawler found in people's and teams' folders on the share, its folder
+                             cache, its scan queue, its control row and the auto-link opt-in. Reached
+                             only through the d1-inbox endpoint and the crawler; see "Found files".
 ```
 
 ---
@@ -401,6 +406,69 @@ metadata-only edit of a `.mat` file. Rows are deleted with their file (`ON DELET
 Indexes: `file_fingerprints_content_idx` on `content_sha256` (duplicate and copy detection);
 `file_fingerprints_data_idx` on `data_sha256`, partial (`WHERE data_sha256 IS NOT NULL`).
 `CHECK`s: both hashes are 64 lower-case hex characters; `status = 'done'` needs a `content_sha256`.
+
+---
+
+### Found files and the Inbox: `people.uni_alias`, `teams.share_folder`, `d1_private.file_candidates` and friends
+
+Migration `…193` ([spec](superpowers/specs/2026-10-15-found-files-inbox-design.md) section 4,
+[ADR-0020](adr/0020-inbox-crawler-read-only-allow-listed.md)). The inbox crawler lists each person's folder
+(`Users/<uni alias>`) and each team's folder (`Shared/<share folder>`) on the lab share, registers new files and
+tags what they look like and which record they name; people link them in STARbase's Inbox. The five tables are in
+`d1_private`: not exposed by Directus (candidates are never readable through its REST API), not in
+`v_schema_dictionary`, not granted to the LLM role, no audit or OCC triggers (derived bookkeeping; the link is
+audited on its junction row). Files stay on the share.
+
+**New columns on existing tables** (set by an administrator; not in the Lab Member `people` update field list)
+
+| Column | Type | Description |
+|---|---|---|
+| `people.uni_alias` | TEXT, nullable | Name of the person's personal folder under `Users/`. 2 to 64 of letters, digits, `.`, `_`, `-`, never only dots. Unique ignoring case (`people_uni_alias_key`) |
+| `people.scan_while_former` | BOOLEAN NOT NULL | Default false. True: keep scanning the folder after the person is inactive |
+| `teams.share_folder` | TEXT, nullable | Name of the team's folder under `Shared/`: no `/` or `\`, not blank, not only dots. Unique ignoring case (`teams_share_folder_key`) |
+
+**`d1_private.file_candidates`**: one row per found file, until linked, dismissed or gone. `directus_files_id` is
+unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id` (both cascade).
+
+| Column | Type | Description |
+|---|---|---|
+| `candidate_id` | UUID PK | Surrogate key |
+| `directus_files_id` | UUID NOT NULL UNIQUE FK | The `directus_files` pointer row (`storage = 'star'`) |
+| `owner_person_id`, `owner_team_id` | UUID FK | Whose folder it was found in; exactly one is set |
+| `kind` | TEXT NOT NULL | `sem_image` (possible SEM image), `surface_scan` (`.al3d`), `image`, `document`, `other`. Documents and others are never opened before a person links them |
+| `kind_confidence` | NUMERIC(4,3) | Classifier confidence, 0 to 1; NULL when none ran |
+| `extracted` | JSONB NOT NULL | JSON object of what was actually read (kV, magnification, ...); `{}` when nothing |
+| `origin` | TEXT NOT NULL | `new` (found after the owner's first complete scan) or `backlog` (found during it: "Older files") |
+| `state` | TEXT NOT NULL | `new` (default), `linked`, `dismissed`, `gone` |
+| `match_strength` | TEXT NOT NULL | Strongest way the path names a record: `short_id`, `code`, `edge_code`, `none` (default) |
+| `matches` | JSONB NOT NULL | JSON array of `{collection, record_id, via, token}` at the strongest level |
+| `suggested_collection`, `suggested_record_id` | TEXT, UUID | The single record named; both set or both NULL. NULL when two or more match |
+| `duplicate_of` | UUID FK (self) | Earlier candidate with the same content hash; `ON DELETE SET NULL` |
+| `rel_path` | TEXT NOT NULL | Path relative to the share root (`star_group1`) |
+| `size_bytes`, `source_mtime` | BIGINT, TIMESTAMPTZ | Size (>= 0) and modification time when found |
+| `first_seen_at`, `decided_at`, `decided_by` | TIMESTAMPTZ, TIMESTAMPTZ, UUID FK | First seen; when and by which Directus user (`ON DELETE SET NULL`) it was linked or dismissed |
+| `link_kind`, `linked_collection`, `linked_junction_id`, `link_batch_id` | TEXT, TEXT, UUID, UUID | Undo bookkeeping: `manual` / `bulk` / `auto`, the record collection, the junction row created, the batch one Undo removes |
+| `adopted_at` | TIMESTAMPTZ | Set when a document or other non-image file is linked: the crawler then reads it once and hashes it |
+
+Indexes: `(owner_person_id, state)`, `(owner_team_id, state)`; partial on not-null: `(link_batch_id)`,
+`(suggested_record_id)`, `(duplicate_of)`, `(adopted_at)`.
+
+**`d1_private.inbox_dirs`**: the folder cache. `rel_path` PK; one owner (person or team, cascade); `dir_mtime`,
+`last_listed_at`; `baselined_at` is set on an owner's root row when their first complete scan ends.
+
+**`d1_private.inbox_scan_requests`**: the queue behind "Rescan my folder" and "Scan all". `scope`
+(`person` / `all`; `person_id` required exactly for `person`), `requested_by`, `requested_at`, `started_at`,
+`finished_at`, `status` (`queued` default, `running`, `done`, `failed`), `error`. Indexes `(status, requested_at)`
+and partial `(person_id, requested_at DESC)`.
+
+**`d1_private.inbox_crawler_state`**: singleton (id `00000000-0000-0000-0000-000000000001`, seeded). Admin
+settings `desired_state` (`running` default / `paused`), `interval_minutes` (default 30), `read_mb_per_s` (default
+60); daemon status `last_heartbeat_at`, `daemon_started_at`, `current_activity`, `last_scan_started_at`,
+`last_scan_finished_at`, `files_registered`, `error_count`, `last_error`; `unmatched_folders` (JSON array of
+share-relative paths of folders under `Users/` and `Shared/` that match nobody, rewritten each scan); `updated_at`.
+
+**`d1_private.inbox_prefs`**: `user_id` (PK, FK `directus_users`, cascade), `auto_link` (BOOLEAN NOT NULL, default
+false: the person's opt-in to auto-linking exact short-ID matches of images and surface scans), `updated_at`.
 
 ---
 
