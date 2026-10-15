@@ -1990,7 +1990,16 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   Viewer is refused 403. Then **Undo** the batch and expect the `surface_scans` row to be gone, the candidate back
   in the new list, and the derived files in MinIO (`surface-scans/<cache key>/`) left as cache. Also undo a batch
   while its render is still `rendering`: the row goes, and the worker's final write finds no row (its job is logged
-  as failed; nothing else changes). Since: found files inbox, stream F1.
+  as failed; nothing else changes). Through the STARbase form (`/inbox`, **Add a surface scan**): the dialog warns
+  that the file becomes visible to every lab member, has **no condition chosen** and keeps *Add a surface scan*
+  off until an insert or edge (searched by its code) and a condition are set; the operation list offers only the
+  operations run with the chosen edge, or any edge of the chosen insert; after the add the notice says *Added as a
+  surface scan of <code>* and **Recently linked** shows the same line with a link to the insert or edge page and
+  the batch titled *Added as a surface scan*; a second add of the same file to the same insert is refused with
+  *That file is already added as a surface scan of this insert or edge*; as a Lab Viewer the add is refused with
+  the read-only message; make the person lose delete rights on `surface_scans` (or use another member's scan) and
+  expect Undo to show *You can no longer delete that surface scan, so adding it cannot be undone.* and change
+  nothing; the dialog fits a phone-width window. Since: found files inbox, streams F1 and F2.
 - [ ] **IF30 — Inbox page on real data (STARbase `/inbox`).** Needs the deployed `d1-inbox` and a person with a
   `uni_alias`. Expect: rows for the found files with kind, folder, size and date and the icon of the kind (**no
   thumbnails**: archive files are pointer rows Directus cannot serve, so the page draws none and makes no
@@ -1998,8 +2007,8 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   file name* with a link to the record. Link, Change (search by code, nickname and short ID in the picker),
   Dismiss, Restore and, after each, focus on the next row (or the status line when none is left); *Show more*
   past 50 files; the Other files section (collapsed, with its count; open it and link a document: the dialog
-  says linking reads the file once); a surface-scan row whose button reads *Add a surface scan*, is off and
-  says *Surface scans can be added soon*. *Accept all* on a real list: the dialog opens on the server's dry run
+  says linking reads the file once); a surface-scan row whose button reads *Add a surface scan* (enabled; the
+  dialog is checked in **IF23**) and which never offers *Link*. *Accept all* on a real list: the dialog opens on the server's dry run
   (Confirm waits for it), names the count and the first few *file to record* pairs and what would be left, and
   Confirm links exactly those; try it with a record you can only view (it is left, with the reason). *Rescan my
   folder* twice in a row (the second shows the rate-limit message). Since: Inbox stream D.
