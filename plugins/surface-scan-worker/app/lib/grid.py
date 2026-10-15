@@ -145,7 +145,9 @@ def thumbnail_png(grid: np.ndarray) -> bytes:
         t = np.clip((small[valid].astype(np.float64) - lo) / span, 0.0, 1.0)
         stops = np.linspace(0.0, 1.0, len(_RAMP))
         for channel in range(3):
-            rgba[..., channel][valid] = np.round(np.interp(t, stops, _RAMP[:, channel])).astype(np.uint8)
+            rgba[..., channel][valid] = np.round(
+                np.interp(t, stops, _RAMP[:, channel])
+            ).astype(np.uint8)
         rgba[..., 3][valid] = 255
     buf = io.BytesIO()
     Image.fromarray(rgba).save(buf, format="PNG", optimize=True)

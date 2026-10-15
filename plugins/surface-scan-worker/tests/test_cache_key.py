@@ -9,7 +9,9 @@ SHA = "ab" * 32
 
 
 def test_a_done_fingerprint_gives_the_content_hash():
-    assert cache_key(FILE, {"status": "done", "content_sha256": SHA}, 1000, 1.7e9) == SHA
+    assert (
+        cache_key(FILE, {"status": "done", "content_sha256": SHA}, 1000, 1.7e9) == SHA
+    )
 
 
 def test_the_hash_is_the_key_whatever_the_size_and_mtime():
@@ -29,7 +31,10 @@ def test_a_fingerprint_that_is_not_done_is_ignored(status):
 
 @pytest.mark.parametrize("sha", [None, "", "XYZ", "AB" * 32, "ab" * 31])
 def test_a_done_fingerprint_with_no_valid_hash_is_ignored(sha):
-    assert cache_key(FILE, {"status": "done", "content_sha256": sha}, 5, 6) == f"p-{FILE}-5-6"
+    assert (
+        cache_key(FILE, {"status": "done", "content_sha256": sha}, 5, 6)
+        == f"p-{FILE}-5-6"
+    )
 
 
 def test_a_fingerprint_for_a_different_size_is_stale():
@@ -38,7 +43,12 @@ def test_a_fingerprint_for_a_different_size_is_stale():
 
 
 def test_a_fingerprint_without_a_recorded_size_is_trusted():
-    assert cache_key(FILE, {"status": "done", "content_sha256": SHA, "size_bytes": None}, 1000, 6) == SHA
+    assert (
+        cache_key(
+            FILE, {"status": "done", "content_sha256": SHA, "size_bytes": None}, 1000, 6
+        )
+        == SHA
+    )
 
 
 def test_the_provisional_key_changes_when_the_file_is_overwritten_in_place():

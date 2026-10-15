@@ -16,7 +16,11 @@ _MAGIC = b"AliconaImaging\x00\r\n"
 
 
 def _tag(key: str, value: object) -> bytes:
-    return key.encode().ljust(20, b"\x00") + str(value).encode().ljust(30, b"\x00") + b"\r\n"
+    return (
+        key.encode().ljust(20, b"\x00")
+        + str(value).encode().ljust(30, b"\x00")
+        + b"\r\n"
+    )
 
 
 def write_al3d(

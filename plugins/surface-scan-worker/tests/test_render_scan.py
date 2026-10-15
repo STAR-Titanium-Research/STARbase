@@ -14,12 +14,10 @@ from app.jobs import render_scan as job
 from app.lib import topography
 from app.lib.directus_client import VersionConflictError
 
-from .conftest import FILE, SCAN
+from .conftest import FILE, OTHER_FILE, OTHER_SCAN, SCAN
 from .synthetic import ramp, write_al3d
 
 SHA = "cd" * 32
-OTHER_FILE = "9c1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c77"
-OTHER_SCAN = "1b0a1c1e-5a53-4b0e-9a3c-0d6f6a0c9e22"
 
 
 def _scan_file(world, name="insert-1.al3d", rows=40, cols=60, **kw) -> Path:
@@ -29,7 +27,11 @@ def _scan_file(world, name="insert-1.al3d", rows=40, cols=60, **kw) -> Path:
 
 
 def _objects_under(world, key):
-    return {k.rsplit("/", 1)[1]: v for k, v in world.objects.items() if k.startswith(f"surface-scans/{key}/")}
+    return {
+        k.rsplit("/", 1)[1]: v
+        for k, v in world.objects.items()
+        if k.startswith(f"surface-scans/{key}/")
+    }
 
 
 def test_happy_path_renders_and_fills_the_row(world):
@@ -77,7 +79,9 @@ def test_the_three_objects_are_written_under_the_cache_key(world):
     assert set(objects) == {"grid.bin", "meta.json", "thumb.png"}
     grid_bytes, _ = objects["grid.bin"]
     cells = np.frombuffer(grid_bytes, dtype="<f4").reshape(3, 4)
-    np.testing.assert_allclose(cells, ramp(3, 4, scale_m=1.0), atol=1e-4)  # micrometres, top row first
+    np.testing.assert_allclose(
+        cells, ramp(3, 4, scale_m=1.0), atol=1e-4
+    )  # micrometres, top row first
     meta = json.loads(objects["meta.json"][0])
     assert meta["width"] == 4 and meta["height"] == 3
     assert meta["source_format"] == "al3d"
@@ -134,7 +138,11 @@ def test_cache_hit_skips_reading_the_file(world, monkeypatch):
 
     # The same bytes under another file id and name: same content hash.
     _scan_file(world, name="copy.al3d")
-    world.files[OTHER_FILE] = {"id": OTHER_FILE, "storage": "star", "metadata": {"archive_path": "rig/copy.al3d"}}
+    world.files[OTHER_FILE] = {
+        "id": OTHER_FILE,
+        "storage": "star",
+        "metadata": {"archive_path": "rig/copy.al3d"},
+    }
     world.fingerprints[OTHER_FILE] = {"status": "done", "content_sha256": SHA}
     world.add_scan(OTHER_SCAN, OTHER_FILE)
 
@@ -177,7 +185,9 @@ def test_only_a_pending_row_is_rendered(world):
 def test_losing_the_claim_race_does_nothing(world):
     _scan_file(world)
     world.add_scan()
-    world.conflicts_to_inject = 1  # another job claimed it between our read and our write
+    world.conflicts_to_inject = (
+        1  # another job claimed it between our read and our write
+    )
     job.render_scan(SCAN)
     assert world.objects == {}
     assert world.rows[SCAN]["render_status"] == "pending"
@@ -254,8 +264,12 @@ def test_a_local_upload_is_not_rendered(world):
     _fails(world, "not on the archive share")
 
 
-@pytest.mark.parametrize("path", ["../../etc/passwd.al3d", "/etc/shadow.al3d", "rig/../../x.al3d"])
-def test_a_path_that_escapes_the_archive_fails_and_nothing_is_opened(world, monkeypatch, path):
+@pytest.mark.parametrize(
+    "path", ["../../etc/passwd.al3d", "/etc/shadow.al3d", "rig/../../x.al3d"]
+)
+def test_a_path_that_escapes_the_archive_fails_and_nothing_is_opened(
+    world, monkeypatch, path
+):
     world.add_file(path)
     world.add_scan()
     monkeypatch.setattr(topography, "read_scan", lambda p: pytest.fail("must not open"))
@@ -264,7 +278,9 @@ def test_a_path_that_escapes_the_archive_fails_and_nothing_is_opened(world, monk
     assert world.rows[SCAN]["render_status"] == "failed"
 
 
-@pytest.mark.parametrize("name", ["report.pdf", "protocol.docx", "force.mat", "table.xlsx", "notes.txt"])
+@pytest.mark.parametrize(
+    "name", ["report.pdf", "protocol.docx", "force.mat", "table.xlsx", "notes.txt"]
+)
 def test_documents_are_never_opened(world, monkeypatch, name):
     (world.root / "rig" / name).write_bytes(b"not a scan")
     world.add_file(f"rig/{name}")
@@ -339,12 +355,22 @@ def _code_strings(tree: ast.AST):
     """String literals in *tree* that are code (f-strings, URLs, SQL), not docstrings."""
     docstrings = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Module | ast.FunctionDef | ast.ClassDef | ast.AsyncFunctionDef):
+        if isinstance(
+            node, ast.Module | ast.FunctionDef | ast.ClassDef | ast.AsyncFunctionDef
+        ):
             body = getattr(node, "body", [])
-            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+            ):
                 docstrings.add(id(body[0].value))
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        ):
             yield node.value
 
 
@@ -367,6 +393,8 @@ def test_the_only_open_of_an_archive_file_is_read_only():
     opens = []
     for source in APP.rglob("*.py"):
         for line in source.read_text().splitlines():
-            if re.search(r"(?<![\w.])open\(", line) and not line.lstrip().startswith(("#", '"""')):
+            if re.search(r"(?<![\w.])open\(", line) and not line.lstrip().startswith(
+                ("#", '"""')
+            ):
                 opens.append((source.name, line.strip()))
-    assert opens == [("archive.py", 'return open(path, "rb")  # noqa: SIM115 - the caller closes it')]
+    assert opens == [("archive.py", 'return open(path, "rb")  # the caller closes it')]

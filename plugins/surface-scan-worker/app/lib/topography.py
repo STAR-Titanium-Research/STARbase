@@ -14,12 +14,20 @@ import numpy as np
 from SurfaceTopography import open_topography
 
 from app.lib import archive
-from app.lib.archive import RenderRefused
+from app.lib.archive import RenderError
 
 try:  # SurfaceTopography exceptions that mean "this file is not what its extension says"
-    from SurfaceTopography.Exceptions import CorruptFile, FileFormatMismatch, ReadFileError
+    from SurfaceTopography.Exceptions import (
+        CorruptFile,
+        FileFormatMismatch,
+        ReadFileError,
+    )
 
-    _FILE_ERRORS: tuple[type[Exception], ...] = (CorruptFile, FileFormatMismatch, ReadFileError)
+    _FILE_ERRORS: tuple[type[Exception], ...] = (
+        CorruptFile,
+        FileFormatMismatch,
+        ReadFileError,
+    )
 except ImportError:  # pragma: no cover - older library
     _FILE_ERRORS = ()
 
@@ -45,7 +53,7 @@ class Scan:
 def read_scan(path: Path) -> Scan:
     """Open *path* read-only and return its default channel in micrometres.
 
-    :class:`RenderRefused` for a file the library cannot read or that is not a 2D height map.
+    :class:`RenderError` for a file the library cannot read or that is not a 2D height map.
     """
     fmt = archive.format_for(path.name)
     with archive.open_readonly(path) as handle:
@@ -54,23 +62,31 @@ def read_scan(path: Path) -> Scan:
             topography = reader.topography()
             source_format = reader.format()
             return _to_scan(topography, source_format)
-        except RenderRefused:
+        except RenderError:
             raise
         except _FILE_ERRORS as err:
-            raise RenderRefused(f"The file could not be read as {fmt}: {err}") from err
-        except Exception as err:  # noqa: BLE001 - readers raise assorted errors on bad input
-            raise RenderRefused(f"The file could not be read as {fmt}: {type(err).__name__}: {err}") from err
+            raise RenderError(f"The file could not be read as {fmt}: {err}") from err
+        except Exception as err:
+            raise RenderError(
+                f"The file could not be read as {fmt}: {type(err).__name__}: {err}"
+            ) from err
 
 
 def _to_scan(topography, source_format: str) -> Scan:
     if topography.dim != 2 or not topography.is_uniform:
-        raise RenderRefused("The file is not a 2D uniform height map (a line scan or point cloud).")
+        raise RenderError(
+            "The file is not a 2D uniform height map (a line scan or point cloud)."
+        )
     if not topography.unit:
-        raise RenderRefused("The file does not state its length unit, so the scale is unknown.")
+        raise RenderError(
+            "The file does not state its length unit, so the scale is unknown."
+        )
     try:
         in_um = topography.to_unit("um")
-    except Exception as err:  # noqa: BLE001
-        raise RenderRefused(f"The file's length unit cannot be converted to micrometres: {err}") from err
+    except Exception as err:
+        raise RenderError(
+            f"The file's length unit cannot be converted to micrometres: {err}"
+        ) from err
 
     nx, ny = in_um.nb_grid_pts
     size_x, size_y = in_um.physical_sizes

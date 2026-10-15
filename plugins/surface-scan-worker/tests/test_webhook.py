@@ -31,7 +31,11 @@ def _post(client, body, enqueued=True):
 def test_create_enqueues_a_render(client):
     r, enqueue = _post(
         client,
-        {"event": "surface_scans.items.create", "key": SCAN, "payload": {"condition": "worn"}},
+        {
+            "event": "surface_scans.items.create",
+            "key": SCAN,
+            "payload": {"condition": "worn"},
+        },
     )
     assert r.status_code == 202
     assert r.get_json()["job_id"] == "job-1"
@@ -46,7 +50,11 @@ def test_create_with_explicit_pending_enqueues(client):
 def test_render_again_update_enqueues(client):
     r, enqueue = _post(
         client,
-        {"event": "surface_scans.items.update", "key": SCAN, "payload": {"render_status": "pending"}},
+        {
+            "event": "surface_scans.items.update",
+            "key": SCAN,
+            "payload": {"render_status": "pending"},
+        },
     )
     assert r.status_code == 202
     enqueue.assert_called_once()
@@ -54,7 +62,12 @@ def test_render_again_update_enqueues(client):
 
 @pytest.mark.parametrize(
     "payload",
-    [{"notes": "edited"}, {"render_status": "rendering"}, {"render_status": "done"}, {}],
+    [
+        {"notes": "edited"},
+        {"render_status": "rendering"},
+        {"render_status": "done"},
+        {},
+    ],
 )
 def test_other_updates_are_skipped(client, payload):
     r, enqueue = _post(
@@ -84,7 +97,14 @@ def test_direct_call_with_scan_id(client):
 
 
 @pytest.mark.parametrize(
-    "body", [{}, {"key": "not-a-uuid"}, {"key": "../../etc/passwd"}, {"keys": [SCAN, SCAN]}, []]
+    "body",
+    [
+        {},
+        {"key": "not-a-uuid"},
+        {"key": "../../etc/passwd"},
+        {"keys": [SCAN, SCAN]},
+        [],
+    ],
 )
 def test_missing_or_bad_id_is_a_400(client, body):
     r, enqueue = _post(client, body)

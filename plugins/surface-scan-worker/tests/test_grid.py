@@ -19,7 +19,9 @@ def test_factor_is_the_smallest_that_fits():
     assert grid.decimation_factor(1, 1) == 1
 
 
-@pytest.mark.parametrize("rows,cols", [(1500, 4000), (4000, 1500), (5000, 5000), (1025, 7), (1023, 1024)])
+@pytest.mark.parametrize(
+    "rows,cols", [(1500, 4000), (4000, 1500), (5000, 5000), (1025, 7), (1023, 1024)]
+)
 def test_decimated_grid_is_at_most_1024_on_the_longer_side_and_keeps_aspect(rows, cols):
     source = np.zeros((rows, cols), dtype=np.float32)
     cells, factor = grid.decimate(source)
@@ -90,7 +92,9 @@ def test_grid_bin_is_float32_little_endian_row_major_top_row_first():
     raw = grid.grid_bytes(cells)
     assert len(raw) == 2 * 3 * 4
     back = np.frombuffer(raw, dtype="<f4").reshape(2, 3)
-    np.testing.assert_array_equal(back[0], [1.0, 2.0, 3.0])  # first row of the array is first on disk
+    np.testing.assert_array_equal(
+        back[0], [1.0, 2.0, 3.0]
+    )  # first row of the array is first on disk
     assert np.isnan(back[1, 1])
     assert raw[:4] == struct.pack("<f", 1.0)  # little-endian on any host
     assert raw[12:16] == struct.pack("<f", 4.0)  # row 1 follows row 0

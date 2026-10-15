@@ -16,7 +16,9 @@ def client():
 
 
 @pytest.mark.parametrize("value", [None, ""])
-def test_unset_or_empty_secret_rejects_everything_but_health(client, monkeypatch, value):
+def test_unset_or_empty_secret_rejects_everything_but_health(
+    client, monkeypatch, value
+):
     if value is None:
         monkeypatch.delenv("WORKER_WEBHOOK_SECRET", raising=False)
     else:

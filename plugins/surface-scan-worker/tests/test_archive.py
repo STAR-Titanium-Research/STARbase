@@ -7,7 +7,7 @@ import stat
 import pytest
 
 from app.lib import archive
-from app.lib.archive import RenderRefused
+from app.lib.archive import RenderError
 
 from .synthetic import ramp, write_al3d
 
@@ -25,7 +25,10 @@ def share(tmp_path, monkeypatch):
 
 
 def test_a_clean_relative_path_resolves_inside_the_root(share):
-    assert archive.resolve("rig/insert-1.al3d") == (share / "rig" / "insert-1.al3d").resolve()
+    assert (
+        archive.resolve("rig/insert-1.al3d")
+        == (share / "rig" / "insert-1.al3d").resolve()
+    )
 
 
 def test_extension_match_is_case_insensitive(share):
@@ -48,7 +51,7 @@ def test_extension_match_is_case_insensitive(share):
     ],
 )
 def test_unclean_paths_are_refused(share, bad):
-    with pytest.raises(RenderRefused):
+    with pytest.raises(RenderError):
         archive.resolve(bad)
 
 
@@ -56,7 +59,7 @@ def test_a_symlink_that_leaves_the_root_is_refused(share, tmp_path):
     outside = tmp_path / "secret.al3d"
     outside.write_bytes(b"x")
     (share / "rig" / "link.al3d").symlink_to(outside)
-    with pytest.raises(RenderRefused, match="outside"):
+    with pytest.raises(RenderError, match="outside"):
         archive.resolve("rig/link.al3d")
 
 
@@ -64,7 +67,7 @@ def test_a_symlink_to_a_sibling_group_inside_the_mount_is_still_refused(share):
     sibling = share.parent / "other_group" / "x.al3d"
     sibling.write_bytes(b"x")
     (share / "rig" / "link.al3d").symlink_to(sibling)
-    with pytest.raises(RenderRefused):
+    with pytest.raises(RenderError):
         archive.resolve("rig/link.al3d")
 
 
@@ -76,7 +79,7 @@ def test_a_symlink_that_stays_inside_the_root_is_fine(share):
 
 def test_a_root_outside_the_mount_is_refused(share, monkeypatch, tmp_path):
     monkeypatch.setattr(archive, "ARCHIVE_ROOT", str(tmp_path))
-    with pytest.raises(RenderRefused, match="mount"):
+    with pytest.raises(RenderError, match="mount"):
         archive.resolve("rig/x.al3d")
 
 
@@ -100,7 +103,7 @@ def test_a_root_outside_the_mount_is_refused(share, monkeypatch, tmp_path):
     ],
 )
 def test_non_topography_extensions_are_refused(share, name):
-    with pytest.raises(RenderRefused, match="topography"):
+    with pytest.raises(RenderError, match="topography"):
         archive.resolve(f"rig/{name}")
 
 
@@ -130,22 +133,22 @@ def test_documents_and_force_files_are_not_in_the_allowlist():
 
 def test_the_extension_is_checked_before_the_file_is_looked_up(share):
     # The file does not exist, but the refusal is about its type, not about a missing file.
-    with pytest.raises(RenderRefused, match="topography"):
+    with pytest.raises(RenderError, match="topography"):
         archive.resolve("rig/missing.pdf")
 
 
 def test_stat_of_a_missing_file_is_a_refusal(share):
-    with pytest.raises(RenderRefused, match="moved or deleted"):
+    with pytest.raises(RenderError, match="moved or deleted"):
         archive.stat_file(share / "rig" / "gone.al3d")
 
 
 def test_stat_of_a_directory_or_fifo_is_a_refusal(share):
     (share / "rig" / "dir.al3d").mkdir()
-    with pytest.raises(RenderRefused, match="regular"):
+    with pytest.raises(RenderError, match="regular"):
         archive.stat_file(share / "rig" / "dir.al3d")
     fifo = share / "rig" / "pipe.al3d"
     os.mkfifo(fifo)
-    with pytest.raises(RenderRefused, match="regular"):
+    with pytest.raises(RenderError, match="regular"):
         archive.stat_file(fifo)
 
 

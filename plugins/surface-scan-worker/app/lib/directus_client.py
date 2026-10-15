@@ -26,7 +26,9 @@ _TOKEN: str = os.getenv("WORKER_DIRECTUS_TOKEN", "")
 OCC_MAX_ATTEMPTS: int = int(os.getenv("OCC_MAX_ATTEMPTS", "5"))
 
 COLLECTION = "surface_scans"
-SCAN_FIELDS = "scan_id,directus_files_id,render_status,render_error,cache_key,version,updated_at"
+SCAN_FIELDS = (
+    "scan_id,directus_files_id,render_status,render_error,cache_key,version,updated_at"
+)
 LIST_FIELDS = "scan_id,render_status,version,updated_at"
 
 
@@ -75,7 +77,9 @@ def patch_scan(scan_id: str, payload: dict, version: int | None = None) -> dict:
     resp.raise_for_status()
     body = resp.json()
     if version is not None and not body.get("data"):
-        raise VersionConflictError(f"surface scan {scan_id}: version {version} is stale")
+        raise VersionConflictError(
+            f"surface scan {scan_id}: version {version} is stale"
+        )
     return body
 
 
@@ -95,7 +99,9 @@ def update_scan(
         current = get_scan(scan_id)
         version = current.get("version")
         if version is None:
-            raise ValueError(f"surface scan {scan_id}: row has no version; refusing blind write")
+            raise ValueError(
+                f"surface scan {scan_id}: row has no version; refusing blind write"
+            )
         payload = compute(current)
         if not payload:
             return None
@@ -105,10 +111,14 @@ def update_scan(
             log.info("OCC conflict scan=%s attempt=%d", scan_id, attempt)
             if attempt < attempts:
                 time.sleep(random.uniform(0.05, 0.25) * attempt)
-    raise VersionConflictError(f"surface scan {scan_id}: gave up after {attempts} version conflicts")
+    raise VersionConflictError(
+        f"surface scan {scan_id}: gave up after {attempts} version conflicts"
+    )
 
 
-def list_scans(status: str, limit: int = 50, updated_before_iso: str | None = None) -> list[dict]:
+def list_scans(
+    status: str, limit: int = 50, updated_before_iso: str | None = None
+) -> list[dict]:
     """Rows with ``render_status = status`` (oldest first), optionally only those not touched since
     *updated_before_iso*."""
     params = {
@@ -119,7 +129,12 @@ def list_scans(status: str, limit: int = 50, updated_before_iso: str | None = No
     }
     if updated_before_iso:
         params["filter[updated_at][_lt]"] = updated_before_iso
-    resp = requests.get(f"{DIRECTUS_URL}/items/{COLLECTION}", params=params, headers=_headers(), timeout=30)
+    resp = requests.get(
+        f"{DIRECTUS_URL}/items/{COLLECTION}",
+        params=params,
+        headers=_headers(),
+        timeout=30,
+    )
     data = _data(resp)
     return data if isinstance(data, list) else []
 
@@ -154,7 +169,9 @@ def get_fingerprint(file_id: str) -> dict | None:
     if resp.status_code == 404:
         return None
     if resp.status_code == 403:
-        log.warning("not allowed to read file_fingerprints; using provisional cache keys")
+        log.warning(
+            "not allowed to read file_fingerprints; using provisional cache keys"
+        )
         return None
     data = _data(resp)
     return data if isinstance(data, dict) else None

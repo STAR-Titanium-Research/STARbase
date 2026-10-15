@@ -71,7 +71,9 @@ def fail_rendering(message: str, older_than: datetime | None = None) -> list[str
     """Fail ``rendering`` rows (all of them, or those untouched since *older_than*)."""
     cutoff = older_than.isoformat() if older_than else None
     failed: list[str] = []
-    for row in directus_client.list_scans(STATUS_RENDERING, limit=BATCH, updated_before_iso=cutoff):
+    for row in directus_client.list_scans(
+        STATUS_RENDERING, limit=BATCH, updated_before_iso=cutoff
+    ):
         scan_id = row.get("scan_id")
         if not scan_id:
             continue
@@ -85,7 +87,9 @@ def fail_rendering(message: str, older_than: datetime | None = None) -> list[str
 
 
 def reap_once(now: datetime | None = None) -> list[str]:
-    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=job_timeout_seconds() + _grace_seconds())
+    cutoff = (now or datetime.now(UTC)) - timedelta(
+        seconds=job_timeout_seconds() + _grace_seconds()
+    )
     return fail_rendering(TIMEOUT_MESSAGE, older_than=cutoff)
 
 

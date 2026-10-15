@@ -12,6 +12,8 @@ from app.lib.directus_client import VersionConflictError  # noqa: E402
 
 SCAN = "0b0a1c1e-5a53-4b0e-9a3c-0d6f6a0c9e11"
 FILE = "5d1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c01"
+OTHER_SCAN = "1b0a1c1e-5a53-4b0e-9a3c-0d6f6a0c9e22"
+OTHER_FILE = "9c1d6a52-2f3a-4c0e-bd0b-7a1a4f0f9c77"
 
 
 class FakeWorld:

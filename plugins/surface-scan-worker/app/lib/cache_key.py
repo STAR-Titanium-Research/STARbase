@@ -16,7 +16,9 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PREFIX = "surface-scans"
 
 
-def cache_key(directus_files_id: str, fingerprint: dict | None, size_bytes: int, mtime: float) -> str:
+def cache_key(
+    directus_files_id: str, fingerprint: dict | None, size_bytes: int, mtime: float
+) -> str:
     """``content_sha256`` when the fingerprint is ``done`` and still describes this file, else
     ``p-<directus_files_id>-<size>-<mtime>``.
 
@@ -26,7 +28,9 @@ def cache_key(directus_files_id: str, fingerprint: dict | None, size_bytes: int,
     if fingerprint and fingerprint.get("status") == "done":
         sha = str(fingerprint.get("content_sha256") or "")
         recorded_size = fingerprint.get("size_bytes")
-        if _SHA256.match(sha) and (recorded_size is None or int(recorded_size) == int(size_bytes)):
+        if _SHA256.match(sha) and (
+            recorded_size is None or int(recorded_size) == int(size_bytes)
+        ):
             return sha
     return f"p-{directus_files_id}-{int(size_bytes)}-{int(mtime)}"
 
@@ -34,4 +38,8 @@ def cache_key(directus_files_id: str, fingerprint: dict | None, size_bytes: int,
 def object_keys(key: str) -> dict[str, str]:
     """The three object keys of one render, by name."""
     base = f"{PREFIX}/{key}"
-    return {"grid": f"{base}/grid.bin", "meta": f"{base}/meta.json", "thumb": f"{base}/thumb.png"}
+    return {
+        "grid": f"{base}/grid.bin",
+        "meta": f"{base}/meta.json",
+        "thumb": f"{base}/thumb.png",
+    }

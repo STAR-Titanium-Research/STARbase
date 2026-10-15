@@ -64,8 +64,12 @@ def webhook_scan():
     event = str(body.get("event") or "")
     status = item.get("render_status")
     is_update = event.endswith(".update")
-    if (is_update and status != STATUS_PENDING) or (status is not None and status != STATUS_PENDING):
-        return jsonify({"status": "skipped", "reason": "render_status is not pending"}), 200
+    if (is_update and status != STATUS_PENDING) or (
+        status is not None and status != STATUS_PENDING
+    ):
+        return jsonify(
+            {"status": "skipped", "reason": "render_status is not pending"}
+        ), 200
 
     try:
         job, enqueued = enqueue_render(_queue, scan_id)
@@ -73,5 +77,7 @@ def webhook_scan():
         log.exception("queue unavailable")
         return jsonify({"error": "queue unavailable"}), 503
     if not enqueued:
-        return jsonify({"status": "skipped", "reason": "already queued", "job_id": job.id}), 200
+        return jsonify(
+            {"status": "skipped", "reason": "already queued", "job_id": job.id}
+        ), 200
     return jsonify({"job_id": job.id}), 202

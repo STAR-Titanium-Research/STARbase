@@ -26,4 +26,6 @@ def job_timeout_seconds() -> int:
 
 def poll_interval_seconds() -> int:
     """Seconds between poller passes (env ``POLL_INTERVAL_SECONDS``, default 60, at least 5)."""
-    return max(5, _positive_int_env("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS))
+    return max(
+        5, _positive_int_env("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS)
+    )

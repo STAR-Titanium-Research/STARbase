@@ -14,10 +14,15 @@ import logging
 from datetime import UTC, datetime
 
 from app.lib import archive, directus_client, grid, minio_client, topography
-from app.lib.archive import RenderRefused
+from app.lib.archive import RenderError
 from app.lib.cache_key import cache_key, object_keys
 from app.lib.directus_client import VersionConflictError
-from app.lib.statuses import STATUS_DONE, STATUS_FAILED, STATUS_PENDING, STATUS_RENDERING
+from app.lib.statuses import (
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_PENDING,
+    STATUS_RENDERING,
+)
 
 log = logging.getLogger(__name__)
 
@@ -56,16 +61,24 @@ def render_scan(scan_id: str) -> None:
     log.info("start scan=%s file=%s", scan_id, row.get("directus_files_id"))
     try:
         columns = _render(row["directus_files_id"])
-        _finish(scan_id, {**columns, "render_status": STATUS_DONE, "render_error": None})
+        _finish(
+            scan_id, {**columns, "render_status": STATUS_DONE, "render_error": None}
+        )
         log.info("done scan=%s key=%s", scan_id, columns["cache_key"])
     except Exception as err:
         log.exception("failed scan=%s", scan_id)
-        _finish(scan_id, {"render_status": STATUS_FAILED, "render_error": _message(err)})
+        _finish(
+            scan_id, {"render_status": STATUS_FAILED, "render_error": _message(err)}
+        )
         raise
 
 
 def _message(err: Exception) -> str:
-    text = str(err) if isinstance(err, RenderRefused) else f"Unexpected error: {type(err).__name__}: {err}"
+    text = (
+        str(err)
+        if isinstance(err, RenderError)
+        else f"Unexpected error: {type(err).__name__}: {err}"
+    )
     return text[:_ERROR_LIMIT]
 
 
@@ -87,7 +100,9 @@ def _render(directus_files_id: str) -> dict:
     """Produce the render (or find it in the cache) and return the row's columns for it."""
     file_row = directus_client.get_file(directus_files_id)
     if file_row.get("storage") != "star":
-        raise RenderRefused("The file is not on the archive share; only archive files are rendered.")
+        raise RenderError(
+            "The file is not on the archive share; only archive files are rendered."
+        )
     path = archive.resolve((file_row.get("metadata") or {}).get("archive_path"))
     st = archive.stat_file(path)
 
@@ -117,7 +132,9 @@ def _render(directus_files_id: str) -> dict:
             source_format=scan.source_format,
         )
     except ValueError as err:
-        raise RenderRefused("The file has no valid height values (every cell is no-data).") from err
+        raise RenderError(
+            "The file has no valid height values (every cell is no-data)."
+        ) from err
 
     minio_client.put_object(keys["grid"], grid.grid_bytes(cells))
     minio_client.put_object(keys["thumb"], grid.thumbnail_png(cells), "image/png")
@@ -130,7 +147,10 @@ def _cached_meta(keys: dict[str, str]) -> dict | None:
     raw = minio_client.get_object_bytes(keys["meta"])
     if raw is None:
         return None
-    if not (minio_client.object_exists(keys["grid"]) and minio_client.object_exists(keys["thumb"])):
+    if not (
+        minio_client.object_exists(keys["grid"])
+        and minio_client.object_exists(keys["thumb"])
+    ):
         return None
     try:
         meta = json.loads(raw)
