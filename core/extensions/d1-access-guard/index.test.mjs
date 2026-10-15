@@ -1481,13 +1481,27 @@ test('back to planned: the owner may set a done record back to planned', async (
   const database = ownerDb([{ operation_id: 'o1', work_state: 'done' }]);
   assert.equal(await filters['items.update'](payload, { collection: 'manufacturing_operations', keys: ['o1'] }, ctx({ database })), payload);
   assert.equal(log.reads.length, 1);
+  // the same update clears what only a done record has
+  assert.deepEqual(payload, { work_state: 'planned', planned_date: '2026-11-02', operation_date: null, done_by_person_id: null, done_at: null });
+  const test_ = { work_state: 'planned', session_date: '2026-10-01' };
+  const tdb = ownerDb([{ session_id: 't1', work_state: 'done' }]);
+  await mount({ canUpdate: ownsOnly('test_sessions:t1') }).filters['items.update'](test_, { collection: 'test_sessions', keys: ['t1'] }, ctx({ database: tdb }));
+  assert.deepEqual(test_, { work_state: 'planned', session_date: null, done_by_person_id: null, done_at: null });
+});
+
+test('back to planned: a refusal leaves the payload as it was', async () => {
+  const payload = { work_state: 'planned', operation_date: '2026-10-01' };
+  await refusal(mount({ canUpdate: ownsOnly() }).filters['items.update'](payload, { collection: 'manufacturing_operations', keys: ['o1'] }, ctx({ database: ownerDb([{ operation_id: 'o1', work_state: 'done' }]) })));
+  assert.deepEqual(payload, { work_state: 'planned', operation_date: '2026-10-01' });
 });
 
 test('back to planned: a record that is planned already, or an unchanged save, checks no rule', async () => {
   const { filters, log } = mount({ canUpdate: () => false });
   const database = ownerDb([{ operation_id: 'o1', work_state: 'planned' }]);
-  assert.equal(await filters['items.update'](planned, { collection: 'manufacturing_operations', keys: ['o1'] }, ctx({ database })), planned);
+  const again = { ...planned };
+  assert.equal(await filters['items.update'](again, { collection: 'manufacturing_operations', keys: ['o1'] }, ctx({ database })), again);
   assert.equal(log.reads.length, 0);
+  assert.deepEqual(again, { work_state: 'planned' }, 'nothing is cleared when nothing moves back');
 });
 
 test('back to planned: other payloads read nothing (done, other fields, no work_state)', async () => {
@@ -1526,8 +1540,8 @@ test('back to planned: a batch is checked per key, and one record that is not th
     { operation_id: 'o3', work_state: 'done' },
   ];
   const meta = (keys) => ({ collection: 'manufacturing_operations', keys });
-  await filters['items.update'](planned, meta(['o1', 'o2']), ctx({ database: ownerDb(rows) }));
-  const err = await refusal(filters['items.update'](planned, meta(['o1', 'o3']), ctx({ database: ownerDb(rows) })));
+  await filters['items.update']({ ...planned }, meta(['o1', 'o2']), ctx({ database: ownerDb(rows) }));
+  const err = await refusal(filters['items.update']({ ...planned }, meta(['o1', 'o3']), ctx({ database: ownerDb(rows) })));
   assert.equal(err.extensions.id, 'o3');
   // o2 was planned already: no rule run for it; o1 and o3 each ran one
   assert.deepEqual(log.reads.map((r) => r.query.filter._and[0].operation_id._eq), ['o1', 'o1', 'o3']);

@@ -44,7 +44,8 @@
 //
 // A fourth check (ADR-0019, planned work) covers the work state of operations and tests: an update that sets `work_state` to
 // 'planned' on a record that is 'done' must pass the record's DELETE rule (its owner), else 403 ("Only the owner can set a done
-// record back to planned."). Admins and internal calls are not checked. Marking a record done is not guarded: whoever may edit it
+// record back to planned."). When the move is allowed, the same payload also clears operation_date / session_date,
+// done_by_person_id and done_at (a planned record has none). Admins and internal calls are not checked. Marking a record done is not guarded: whoever may edit it
 // may do that (the d1-build endpoint).
 //
 // Two more writes could be used to read what a restriction hides, so they are guarded here (the readers
@@ -151,6 +152,7 @@ const CAMPAIGN_CONTENT =
   'This campaign holds restricted records you do not own, so only an administrator can move it to another project.';
 // Operations and tests carry a work state (migration 185, ADR-0019): done -> planned is the owner's call.
 const WORK_STATE_COLLECTIONS = new Set(['manufacturing_operations', 'test_sessions']);
+const DONE_DATE_FIELD = { manufacturing_operations: 'operation_date', test_sessions: 'session_date' };
 const BACK_TO_PLANNED = 'Only the owner can set a done record back to planned.';
 const OWNER_NOUNS = {
   physical_samples: 'sample',
@@ -411,12 +413,17 @@ export default ({ filter }, { services }) => {
     const guard = OWNER_GUARDS[collection];
     const stored = await context.database(collection).whereIn(guard.key, keys).select(guard.key, 'work_state');
     const rows = new Map(stored.map((row) => [String(row[guard.key]), row]));
+    let movedBack = false;
     for (const key of keys) {
       if (rows.get(String(key))?.work_state === 'planned') continue;
       if (!(await canPass(deleteCheck(collection), [key], context))) {
         throw forbidden(BACK_TO_PLANNED, { kind: 'owner', collection, id: String(key) });
       }
+      movedBack = true;
     }
+    // A planned record has no date it happened on and nobody who marked it done: when the move back is allowed, the same
+    // update clears them (d1-build's mark-planned does the same; this is the safety net for a direct write).
+    if (movedBack) Object.assign(payload, { [DONE_DATE_FIELD[collection]]: null, done_by_person_id: null, done_at: null });
   }
 
   // The update checks of the four record types: the owner column and `restricted`, and moves.
