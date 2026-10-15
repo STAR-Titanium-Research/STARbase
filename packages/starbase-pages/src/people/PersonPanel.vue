@@ -328,7 +328,7 @@ h3 { margin: 12px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(-
 .f { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 0; border-top: 1px solid var(--d1-line); font-size: var(--fs-md); }
 .f:first-of-type { border-top: 0; }
 .f > span:first-child { color: var(--d1-dim); flex: 0 0 auto; }
-.role { width: auto; min-width: 0; flex: 0 1 180px; min-height: 28px; font-size: var(--fs-sm); }
+.f .role { width: auto; min-width: 0; flex: 0 1 180px; min-height: 28px; font-size: var(--fs-sm); }
 
 .link { border: 0; background: transparent; padding: 0; font: inherit; font-weight: 600; color: var(--d1-accent, var(--theme--primary)); cursor: pointer; }
 .link:hover:not(:disabled) { text-decoration: underline; }

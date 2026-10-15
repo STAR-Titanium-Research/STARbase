@@ -80,7 +80,7 @@ Header: `People | Teams` switch, search, **Invite** (admins) and **Add person** 
 - A row: avatar, name, Researcher/Operator under it; right side: account role (admins; "No login" for everyone) and last
   sign-in (admins). A row carries one amber note only when something is off (Invite not accepted, Suspended, in an
   attention item). Former rows are dimmed. A login with no person is listed as its email with "Link to a person…".
-- Clicking a row opens the **person panel** beside the list (a bottom sheet on a phone).
+- Clicking a row opens the **person panel** beside the list (below 1000 px a full-height sheet over the page, like the phone menu: backdrop, own header bar, Esc and a backdrop tap close it).
 
 **Person panel**
 - Head: avatar, name, email, Edit (opens today's edit dialog).

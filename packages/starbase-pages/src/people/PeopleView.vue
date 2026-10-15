@@ -373,7 +373,7 @@ function openLink(r: PeopleRow) {
 .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .grow { flex: 1; }
 /* A fixed basis, not only a maximum: free to shrink, the field shrank to its icon and "Se…" and the row never wrapped. */
-.search { flex: 0 0 220px; max-width: 100%; }
+.bar .search { flex: 0 0 220px; max-width: 100%; }
 
 .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 /* Wide: the chips and the menus are one wrapping row, as if the wrappers were not there. */
@@ -385,7 +385,8 @@ function openLink(r: PeopleRow) {
 .fc.on { background: var(--d1-accent, var(--theme--primary, #1d4ed8)); border-color: var(--d1-accent, var(--theme--primary, #1d4ed8)); color: var(--d1-on-accent, #fff); }
 .fc .n { opacity: .75; font-weight: 700; margin-left: 5px; font-variant-numeric: tabular-nums; }
 .sep { flex: 1 1 12px; }
-.menu { width: auto; min-width: 0; min-height: 28px; font-size: var(--fs-sm); }
+/* Two classes: STARbase's v-select stand-in sets width: 100% and min-height: 36px with one, and which of the two stylesheets comes last is not ours to count on. */
+.menus .menu { width: auto; min-width: 0; max-width: 160px; min-height: 28px; font-size: var(--fs-sm); }
 
 /* One quiet line, not a banner. */
 .attn { margin: 0; font-size: var(--fs-sm); color: var(--d1-warn); }
@@ -420,14 +421,14 @@ function openLink(r: PeopleRow) {
 @media (max-width: 767px) {
 	/* People | Teams and Pin on the first line, the search across the next, Invite and Add person under it. */
 	.pin { order: 2; }
-	.search { order: 3; flex: 1 1 100%; }
+	.bar .search { order: 3; flex: 1 1 100%; }
 	.act { order: 4; }
 	/* The chips wrap; Role, Team and Sort are one row of equal menus, not a full-width select each. */
 	.filters { flex-direction: column; align-items: stretch; gap: 8px; }
 	.chips { display: flex; flex-wrap: wrap; gap: 6px; }
 	.sep { display: none; }
 	.menus { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
-	.menu { width: 100%; min-width: 0; text-overflow: ellipsis; }
+	.menus .menu { width: 100%; min-width: 0; max-width: none; min-height: 32px; text-overflow: ellipsis; }
 	.attn-menu { max-width: 100%; }
 }
 </style>
