@@ -1855,6 +1855,21 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   photos). Decide whether to switch the OCR flag on.
 - [ ] **F9 — Alicona `.al3d` tagging and hand-off.** Needs real `.al3d` files and the surface-scan contract
   from the Alicona chat's work. Expect tag `surface_scan`; link flow per that contract.
+- [ ] **F10 — Auto-link acts as the person (live Directus).** Set `D1_INBOX_CRAWLER_SECRET` in `.env`, restart
+  Directus. With a test person (a Lab Member, auto-link on) whose image names a sample they can edit, run a
+  crawler scan or `curl -X POST /d1-inbox/auto-link -H "X-Inbox-Crawler-Secret: ..." -d '{"candidate_ids":[...]}'`.
+  Expect `linked`, and in `audit_logs` the new `sample_data_files` row names that person, not an administrator.
+  Repeat for a sample they can only view, and a Restricted one: expect `skipped NOT_EDITABLE`. A call without the
+  header (or with a wrong one) must be 401/403. This is the one thing the unit tests cannot prove: that the
+  accountability `d1-inbox` builds for a login (role tree and policy flags read from the database) is accepted by
+  Directus's ItemsService. Since: found files inbox, stream B.
+- [ ] **F11 — A member cannot squat a uni alias.** As a Lab Member in Data Studio, create a People row and try to
+  set `uni alias` or `scan while Former` (the fields should not be offered; a direct API POST with them must be
+  refused 403). Apply migration 194 first and flush Redis / restart Directus (permissions are cached). Since:
+  found files inbox, stream B (migration 194).
+- [ ] **F12 — A file already linked in Data Studio.** Link an image to a sample in Data Studio's file picker,
+  then try to link the same found file to that sample in the Inbox: expect the refusal "already linked to that
+  record" (409 `ALREADY_ON_RECORD`) and no second row; Dismiss clears it. Since: found files inbox, stream B.
 
 ## Done
 
