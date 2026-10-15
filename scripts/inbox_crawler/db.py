@@ -35,6 +35,11 @@ HASH_RETRY_HOURS = 1
 # The session-level advisory lock that makes one crawler (daemon or --once) at a time. An arbitrary fixed
 # bigint; it lives on the crawler's own connection, so it goes with a killed process.
 CRAWLER_LOCK_KEY = 7_302_150_400_193
+# The heartbeat's own connection gives up on a locked or slow status row after these many milliseconds: a
+# heartbeat is best effort and must never hold the scan up.
+HEARTBEAT_LOCK_TIMEOUT_MS = 2_000
+HEARTBEAT_STATEMENT_TIMEOUT_MS = 5_000
+HEARTBEAT_CONNECT_TIMEOUT_S = 5
 
 
 def connect(dsn: str, private_schema: str = "d1_private"):
@@ -101,11 +106,25 @@ class RegisterResult:
 
 class Store:
     def __init__(
-        self, conn, *, storage: str = "star", root_folder_name: str = "star_group1"
+        self,
+        conn,
+        *,
+        storage: str = "star",
+        root_folder_name: str = "star_group1",
+        heartbeat_dsn: str | None = None,
+        private_schema: str | None = None,
     ):
         self.conn = conn
         self.storage = storage
         self.root_folder_name = root_folder_name
+        # The heartbeat is written on a connection of its own (see heartbeat()). Without an explicit DSN it
+        # reuses the scan connection's own parameters; without a schema, that connection's search_path.
+        self._heartbeat_dsn = heartbeat_dsn
+        self._heartbeat_path = (
+            None if private_schema is None else f"{private_schema}, public"
+        )
+        self._heartbeat_conn = None
+        self._heartbeat_failing = False
         self._folders_done: set[str] = set()
         self._warned: set[str] = (
             set()
@@ -162,19 +181,91 @@ class Store:
         self.commit()
 
     def heartbeat(self, activity: str | None) -> None:
-        """Best effort: a failed status write must never take the daemon down."""
+        """Best effort: a failed status write must never take the daemon down.
+
+        Written on a separate autocommit connection, never on the scan's. The scan connection holds the
+        owner's unfinished registrations in an open transaction (committed only after the owner's alias
+        check), so a heartbeat on it would commit that work unchecked, and a failed one would roll it back
+        silently. This one can neither: on any failure it only logs, and tries a new connection next time."""
         try:
-            self._run(
-                "UPDATE inbox_crawler_state SET current_activity = %s, last_heartbeat_at = now(), "
-                "updated_at = now() WHERE id = %s",
-                ((activity or "")[:900] or None, STATE_ID),
+            conn = self._heartbeat_connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE inbox_crawler_state SET current_activity = %s, last_heartbeat_at = now(), "
+                    "updated_at = now() WHERE id = %s",
+                    ((activity or "")[:900] or None, STATE_ID),
+                )
+            self._heartbeat_failing = False
+        except Exception as exc:  # noqa: BLE001
+            self._drop_heartbeat_connection()
+            # Once per run of failures: a heartbeat fires every few seconds. Never the exception text, which
+            # can echo the DSN.
+            if not self._heartbeat_failing:
+                self._heartbeat_failing = True
+                log.warning(
+                    "heartbeat not written (%s); the scan is not affected",
+                    type(exc).__name__,
+                )
+
+    def _heartbeat_connection(self):
+        if self._heartbeat_conn is not None and not self._heartbeat_conn.closed:
+            return self._heartbeat_conn
+        import psycopg2
+
+        dsn = self._heartbeat_dsn
+        if not dsn:
+            info = self.conn.info
+            dsn = psycopg2.extensions.make_dsn(
+                **{**info.dsn_parameters, "password": info.password}
             )
-            self.commit()
-        except Exception:  # noqa: BLE001
+        if self._heartbeat_path is None:
+            self._heartbeat_path = self._scan_search_path()
+        conn = psycopg2.connect(
+            dsn,
+            connect_timeout=HEARTBEAT_CONNECT_TIMEOUT_S,
+            options=(
+                f"-c lock_timeout={HEARTBEAT_LOCK_TIMEOUT_MS} "
+                f"-c statement_timeout={HEARTBEAT_STATEMENT_TIMEOUT_MS}"
+            ),
+        )
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT set_config('search_path', %s, false)",
+                    (self._heartbeat_path,),
+                )
+        except Exception:
+            conn.close()
+            raise
+        self._heartbeat_conn = conn
+        return conn
+
+    def _scan_search_path(self) -> str:
+        """The scan connection's search_path, read without leaving a transaction open that was not."""
+        import psycopg2
+
+        was_idle = (
+            self.conn.info.transaction_status
+            == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+        )
+        try:
+            row = self._one("SHOW search_path")
+        finally:
+            if was_idle:
+                self.conn.rollback()
+        return row[0]
+
+    def _drop_heartbeat_connection(self) -> None:
+        conn, self._heartbeat_conn = self._heartbeat_conn, None
+        if conn is not None:
             try:
-                self.rollback()
+                conn.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    def close_heartbeat(self) -> None:
+        self._drop_heartbeat_connection()
 
     def scan_started(self) -> None:
         """A scan of everyone began (a one-person request does not move the schedule)."""
