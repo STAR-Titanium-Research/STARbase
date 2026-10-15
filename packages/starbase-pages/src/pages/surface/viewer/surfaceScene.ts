@@ -91,8 +91,8 @@ export class SurfaceScene {
 		this.controls.zoomSpeed = 0.8;
 		this.controls.addEventListener('change', this.request);
 		canvas.addEventListener('webglcontextlost', this.onLost);
+		this.resize(); // the camera's aspect first: the opening view is framed for the real size of the canvas
 		this.applyFrame();
-		this.resize();
 	}
 
 	// ---- inputs from the viewer -------------------------------------------------------------------------
