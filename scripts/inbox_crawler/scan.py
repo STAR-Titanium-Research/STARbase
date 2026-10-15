@@ -74,7 +74,9 @@ def still_the_same(
     return hashed
 
 
-def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
+def fingerprint_file(
+    share, rel: str, throttle, *, adopted: bool = False, progress=None
+):
     """Stat, hash and re-check one file. Returns (outcome, stat or None, mtime or None). Used for a file a
     person has linked (adopted) and for retrying a hash that failed; both write file_fingerprints.
 
@@ -104,7 +106,9 @@ def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
     if not st.is_file:
         return hashing.HashOutcome("error", error="not a regular file"), None, None
     try:
-        out = hashing.hash_file(share, rel, throttle=throttle, adopted=adopted)
+        out = hashing.hash_file(
+            share, rel, throttle=throttle, adopted=adopted, progress=progress
+        )
     except (ReadRefused, ValueError) as exc:
         log.warning("not reading %s: %s", rel, type(exc).__name__)
         refused = hashing.HashOutcome("error", error=f"read refused: {exc}"[:500])
@@ -608,7 +612,12 @@ class Scanner:
                 else 0
             )
             hashed = hashing.hash_file(
-                self.share, rel, throttle=self.throttle, keep_up_to=keep
+                self.share,
+                rel,
+                throttle=self.throttle,
+                keep_up_to=keep,
+                # a big file through a slow throttle takes minutes: keep the heartbeat beating
+                progress=lambda _total: self._tell(f"hashing {rel}"),
             )
             if hashed.status == "missing":
                 # Listed a moment ago and gone now: the file was removed or the share is going. Do not

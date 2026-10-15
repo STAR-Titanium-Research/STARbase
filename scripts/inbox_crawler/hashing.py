@@ -61,11 +61,29 @@ class HashOutcome:
     error: str | None = None
 
 
+class Pulse:
+    """Calls `fn(total_bytes_so_far)` at most once per `every_s`, however often it is called itself. Used as
+    the `progress` callback of a hash, so a long throttled read still shows the crawler is alive."""
+
+    def __init__(self, every_s: float, fn, clock=time.monotonic):
+        self.every_s = every_s
+        self._fn = fn
+        self._clock = clock
+        self._last = clock()
+
+    def __call__(self, total: int = 0) -> None:
+        now = self._clock()
+        if now - self._last >= self.every_s:
+            self._last = now
+            self._fn(total)
+
+
 def hash_stream(
-    fh, *, throttle: Throttle | None = None, keep_up_to: int = 0
+    fh, *, throttle: Throttle | None = None, keep_up_to: int = 0, progress=None
 ) -> HashOutcome:
     """SHA-256 of everything `fh` yields. Keeps the bytes when there are at most `keep_up_to` of them, so
-    the caller can classify without reading the file a second time."""
+    the caller can classify without reading the file a second time. `progress(total)` is called after each
+    chunk (and after the throttle's wait): it adds no read."""
     h = hashlib.sha256()
     total = 0
     kept: bytearray | None = bytearray() if keep_up_to > 0 else None
@@ -77,6 +95,8 @@ def hash_stream(
         total += len(buf)
         if throttle is not None:
             throttle.consume(len(buf))
+        if progress is not None:
+            progress(total)
         if kept is not None:
             if total <= keep_up_to:
                 kept += buf
@@ -94,6 +114,7 @@ def hash_file(
     throttle: Throttle | None,
     adopted: bool = False,
     keep_up_to: int = 0,
+    progress=None,
 ) -> HashOutcome:
     """Hash a share-relative file. A vanished file is 'missing', any other read failure is 'error' (the
     caller records it and moves on; it is never retried in a loop). A refusal by the allow-list is a
@@ -104,7 +125,9 @@ def hash_file(
         log.debug("reading %s", rel)
     try:
         with share.open_rb(rel, adopted=adopted) as fh:
-            return hash_stream(fh, throttle=throttle, keep_up_to=keep_up_to)
+            return hash_stream(
+                fh, throttle=throttle, keep_up_to=keep_up_to, progress=progress
+            )
     except FileNotFoundError:
         return HashOutcome("missing", error="the file is not on the share")
     except OSError as exc:

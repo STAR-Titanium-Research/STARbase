@@ -438,3 +438,101 @@ def test_the_scan_of_everyone_is_unchanged_by_membership(folders):
     world.commit()
     _stats, _spy, _store = scan_all(world)
     assert len(candidate_paths(world)) == 5
+
+
+# ---- 7a: the heartbeat keeps beating while a big file is hashed through the throttle ----------------
+
+import io  # noqa: E402
+
+from inbox_crawler import hashing  # noqa: E402
+
+
+class FakeTime:
+    """A clock the throttle's sleep moves, so an hour of throttled reading takes no time."""
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def slow_throttle(ft, mib_per_s=0.01):
+    return hashing.Throttle(mib_per_s * (1 << 20), clock=ft.now, sleep=ft.sleep)
+
+
+def test_hash_stream_reports_progress_after_every_chunk_without_reading_more():
+    data = b"x" * (3 * hashing.CHUNK + 5)
+    seen = []
+    out = hashing.hash_stream(io.BytesIO(data), progress=seen.append)
+    assert out.status == "done" and out.size == len(data)
+    assert seen == [hashing.CHUNK, 2 * hashing.CHUNK, 3 * hashing.CHUNK, len(data)]
+
+
+def test_a_pulse_fires_at_most_once_per_interval():
+    ft, beats = FakeTime(), []
+    pulse = hashing.Pulse(30, lambda total: beats.append(total), clock=ft.now)
+    pulse(1)  # t=0: too soon
+    ft.t += 29
+    pulse(2)
+    ft.t += 2  # 31 s
+    pulse(3)
+    pulse(4)  # just beat
+    ft.t += 30
+    pulse(5)
+    assert beats == [3, 5]
+
+
+def beats_during(world, tmp_path, size_mib, mib_per_s):
+    """Run the daemon's hash of one large linked file through a slow throttle; the heartbeats written."""
+    pid, _ = world.person("ab12")
+    world.write("Users/ab12/big.pdf", b"x" * (size_mib << 20))
+    add_candidate(
+        world, pid, "Users/ab12/big.pdf", kind="document", state="linked", adopted=True
+    )
+    ft = FakeTime()
+    d, _spy, store = make_daemon(world)
+    d._clock = ft.now
+    d.throttle = slow_throttle(ft, mib_per_s)
+    beats = []
+    real = store.heartbeat
+    store.heartbeat = lambda text: (beats.append(text), real(text))[1]
+    d.hash_pending()
+    return beats, ft
+
+
+def test_a_long_throttled_hash_writes_heartbeats_at_least_every_30_seconds(
+    world, tmp_path
+):
+    # 4 MiB at 0.05 MiB/s is 80 s of throttled reading: at least two beats
+    beats, ft = beats_during(world, tmp_path, 4, 0.05)
+    hashing_beats = [b for b in beats if b and b.startswith("hashing ")]
+    assert ft.t - 1000.0 >= 79
+    assert len(hashing_beats) >= 2
+    assert "Users/ab12/big.pdf" in hashing_beats[0]
+
+
+def test_a_quick_hash_writes_no_extra_heartbeat(world, tmp_path):
+    beats, _ = beats_during(world, tmp_path, 2, 1000)
+    assert [b for b in beats if b and b.startswith("hashing ")] == []
+
+
+def test_a_big_image_hashed_at_discovery_keeps_the_activity_beating(world):
+    from test_inbox_crawler_scan import make
+
+    world.person("ab12")
+    world.write("Users/ab12/big.tif", b"x" * (4 << 20))
+    settle(world)
+    ft, told = FakeTime(), []
+    sc, _spy, _store = make(
+        world,
+        throttle=slow_throttle(ft, 0.05),  # 80 s of throttled reading
+        clock=ft.now,
+        activity=told.append,
+    )
+    stats = sc.scan()
+    assert stats.registered == 1
+    assert len([t for t in told if t.startswith("hashing ")]) >= 2

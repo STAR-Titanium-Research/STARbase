@@ -35,6 +35,9 @@ class Config:
     ocr: bool = False
     tick_s: float = 30.0  # how often requests are claimed
     error_sleep_s: float = 15.0
+    heartbeat_s: float = (
+        30.0  # the heartbeat while one large file is hashed through the throttle
+    )
 
 
 class Daemon:
@@ -48,6 +51,7 @@ class Daemon:
         now=lambda: datetime.now(UTC),
         stop: threading.Event | None = None,
         scanner_options: dict | None = None,
+        clock=None,
     ):
         self.store = store
         self.share = share
@@ -60,6 +64,9 @@ class Daemon:
             str, float
         ] = {}  # candidates the extension answered for, and when
         self._scanner_options = scanner_options or {}
+        self._clock = (
+            clock  # None: time.monotonic (hashing.Pulse's default); tests pass a fake
+        )
 
     # ---- one tick ----------------------------------------------------------------------
 
@@ -191,8 +198,14 @@ class Daemon:
     def _fingerprint(
         self, files_id: str, rel: str, *, adopted: bool
     ) -> hashing.HashOutcome:
+        pulse_args = {} if self._clock is None else {"clock": self._clock}
+        pulse = hashing.Pulse(
+            self.config.heartbeat_s,
+            lambda _total: self.store.heartbeat(f"hashing {rel}"),
+            **pulse_args,
+        )
         out, st, mtime = scan.fingerprint_file(
-            self.share, rel, self.throttle, adopted=adopted
+            self.share, rel, self.throttle, adopted=adopted, progress=pulse
         )
         self.store.upsert_fingerprint(
             files_id, out, None if st is None else st.size, mtime
