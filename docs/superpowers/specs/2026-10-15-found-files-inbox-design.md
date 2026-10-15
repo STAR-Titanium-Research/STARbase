@@ -171,8 +171,8 @@ the junction itself.
 it once (`open_rb(..., adopted=True)`), hashes it and writes `file_fingerprints`.
 
 **When an alias or share folder changes.** Triggers on `people` (`AFTER UPDATE OF uni_alias`) and `teams`
-(`AFTER UPDATE OF share_folder`), firing only when the value really changes (`IS DISTINCT FROM`; setting it to
-`NULL` counts), delete that owner's `inbox_dirs` rows and that owner's `file_candidates` in state `new`, `gone`
+(`AFTER UPDATE OF share_folder`), firing only when the value really changes (`lower(old) IS DISTINCT FROM lower(new)`: alias and share folder
+uniqueness ignore case, so `ABC` to `abc` is the same name and changes nothing; setting it to or from `NULL` counts), delete that owner's `inbox_dirs` rows and that owner's `file_candidates` in state `new`, `gone`
 and `dismissed`. Candidates in state `linked` are kept (the link is a decision and its undo bookkeeping must
 survive). The cache and the undecided rows described the old folder, so left alone they would strand. The owner's
 next scan is a first scan of the new folder: everything in it is backlog and `baselined_at` is set again. An

@@ -317,6 +317,9 @@ COMMENT ON INDEX d1_private.inbox_prefs_pkey IS 'One preferences row per user.';
 -- FROM, not on every UPDATE of the row) the owner's cache rows and their candidates in state new, gone or dismissed are
 -- deleted; linked candidates are kept (the link is a decision and its undo bookkeeping must survive). The owner's next
 -- scan is then a first scan of the new folder: everything in it is backlog, and baselined_at is set again.
+-- "Really changes" ignores letter case: alias and share folder uniqueness is case-insensitive (lower(...) unique indexes), so
+-- ABC and abc are the same folder name and a case-only edit must not wipe dismissals, the undo records or the folder cache.
+-- A change from or to NULL still counts (lower(NULL) IS DISTINCT FROM lower('x')).
 CREATE FUNCTION d1_private.inbox_person_alias_changed()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -329,9 +332,9 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.inbox_person_alias_changed() IS 'Trigger function (migration 193): when a person''s uni_alias changes, deletes the old folder''s cache rows (inbox_dirs) and that person''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
+COMMENT ON FUNCTION d1_private.inbox_person_alias_changed() IS 'Trigger function (migration 193): when a person''s uni_alias changes (not for a change of letter case only: aliases are unique ignoring case), deletes the old folder''s cache rows (inbox_dirs) and that person''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
 CREATE TRIGGER people_inbox_alias_changed AFTER UPDATE OF uni_alias ON people
-    FOR EACH ROW WHEN (OLD.uni_alias IS DISTINCT FROM NEW.uni_alias)
+    FOR EACH ROW WHEN (lower(OLD.uni_alias) IS DISTINCT FROM lower(NEW.uni_alias))
     EXECUTE FUNCTION d1_private.inbox_person_alias_changed();
 
 CREATE FUNCTION d1_private.inbox_team_folder_changed()
@@ -346,9 +349,9 @@ BEGIN
     RETURN NULL;
 END
 $$;
-COMMENT ON FUNCTION d1_private.inbox_team_folder_changed() IS 'Trigger function (migration 193): when a team''s share_folder changes, deletes the old folder''s cache rows (inbox_dirs) and that team''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
+COMMENT ON FUNCTION d1_private.inbox_team_folder_changed() IS 'Trigger function (migration 193): when a team''s share_folder changes (not for a change of letter case only: folders are unique ignoring case), deletes the old folder''s cache rows (inbox_dirs) and that team''s found files in state new, gone or dismissed; linked ones are kept. The next scan is a first scan of the new folder.';
 CREATE TRIGGER teams_inbox_folder_changed AFTER UPDATE OF share_folder ON teams
-    FOR EACH ROW WHEN (OLD.share_folder IS DISTINCT FROM NEW.share_folder)
+    FOR EACH ROW WHEN (lower(OLD.share_folder) IS DISTINCT FROM lower(NEW.share_folder))
     EXECUTE FUNCTION d1_private.inbox_team_folder_changed();
 
 -- migrate:down

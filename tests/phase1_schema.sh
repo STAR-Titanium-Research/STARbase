@@ -6406,6 +6406,19 @@ UPDATE people SET uni_alias = 'old01', notes = 'touched' WHERE person_id = '$FI_
 UPDATE people SET uni_alias = NULL WHERE person_id = '$FI_P2';
 SELECT 'fi_alias_same:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
 grep -q 'fi_alias_same:2:4' <<<"$fi_out" && ok "an UPDATE that leaves the uni_alias as it was deletes nothing" || bad "an unchanged alias deleted rows (output: $fi_out)"
+# a change of letter case only is the same alias (uniqueness is case-insensitive): nothing is wiped; NULL to a value and back still is a change
+fi_out=$(fi_sql "$fi_seed_person
+UPDATE people SET uni_alias = 'OLD01' WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_case:' || (SELECT uni_alias FROM people WHERE person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');
+UPDATE people SET uni_alias = 'Old01x' WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_real:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
+grep -q 'fi_alias_case:OLD01:2:4' <<<"$fi_out" && ok "changing only the letter case of a uni_alias (old01 to OLD01) wipes nothing: dismissals and the folder cache stay" || bad "a case-only alias change wiped rows (output: $fi_out)"
+grep -q 'fi_alias_real:0:1' <<<"$fi_out" && ok "a different alias after a case change still starts the folder over" || bad "a real alias change after a case change did not wipe (output: $fi_out)"
+fi_out=$(fi_sql "INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id) VALUES ('Users/never', '$FI_P1');
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, rel_path, state) VALUES ('$FI_F1', '$FI_P1', 'image', 'new', 'Users/never/a.tif', 'dismissed');
+UPDATE people SET uni_alias = 'first01' WHERE person_id = '$FI_P1';
+SELECT 'fi_alias_null_to_value:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
+grep -q 'fi_alias_null_to_value:0:0' <<<"$fi_out" && ok "giving a person their first uni_alias (NULL to a value) still starts their folder over" || bad "NULL to a value did not wipe (output: $fi_out)"
 fi_out=$(fi_sql "$fi_seed_person
 UPDATE people SET uni_alias = NULL WHERE person_id = '$FI_P1';
 SELECT 'fi_alias_clear:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_person_id = '$FI_P1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_person_id = '$FI_P1');")
@@ -6432,6 +6445,17 @@ fi_out=$(fi_sql "$fi_seed_team
 UPDATE teams SET share_folder = 'OldFolder', description = 'touched' WHERE team_id = '$FI_T1';
 SELECT 'fi_team_same:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = '$FI_T1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = '$FI_T1');")
 grep -q 'fi_team_same:2:4' <<<"$fi_out" && ok "an UPDATE that leaves the share_folder as it was deletes nothing" || bad "an unchanged share folder deleted rows (output: $fi_out)"
+fi_out=$(fi_sql "$fi_seed_team
+UPDATE teams SET share_folder = 'oldfolder' WHERE team_id = '$FI_T1';
+SELECT 'fi_team_case:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = '$FI_T1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = '$FI_T1');
+UPDATE teams SET share_folder = 'OldFolder2' WHERE team_id = '$FI_T1';
+SELECT 'fi_team_real:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = '$FI_T1') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = '$FI_T1');
+UPDATE teams SET share_folder = NULL WHERE team_id = 'a2000000-0000-4000-8000-0000000000b2';
+SELECT 'fi_team_to_null:' || (SELECT count(*) FROM d1_private.inbox_dirs WHERE owner_team_id = 'a2000000-0000-4000-8000-0000000000b2') || ':' || (SELECT count(*) FROM d1_private.file_candidates WHERE owner_team_id = 'a2000000-0000-4000-8000-0000000000b2');
+UPDATE teams SET share_folder = 'Back' WHERE team_id = 'a2000000-0000-4000-8000-0000000000b2';")
+grep -q 'fi_team_case:2:4' <<<"$fi_out" && ok "changing only the letter case of a share_folder (OldFolder to oldfolder) wipes nothing" || bad "a case-only share folder change wiped rows (output: $fi_out)"
+grep -q 'fi_team_real:0:1' <<<"$fi_out" && ok "a different share_folder after a case change still starts the folder over" || bad "a real share folder change after a case change did not wipe (output: $fi_out)"
+grep -q 'fi_team_to_null:0:0' <<<"$fi_out" && ok "clearing a share_folder (value to NULL) still starts the folder over" || bad "value to NULL did not wipe a team (output: $fi_out)"
 run_eq "the alias and folder triggers are AFTER UPDATE OF row triggers with a WHEN condition" \
     "SELECT string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgname IN ('people_inbox_alias_changed', 'teams_inbox_folder_changed') AND (tgtype & 1) = 1 AND (tgtype & 2) = 0 AND (tgtype & 16) = 16 AND tgqual IS NOT NULL" "people_inbox_alias_changed,teams_inbox_folder_changed"
 # inbox_dirs
