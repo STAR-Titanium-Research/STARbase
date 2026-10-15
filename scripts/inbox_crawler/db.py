@@ -192,14 +192,19 @@ class Store:
 
     # ---- scan requests ---------------------------------------------------------------
 
-    def fail_stale_requests(self) -> int:
-        """On start-up: a request still 'running' after STALE_REQUEST_MINUTES was claimed by a daemon
-        that died. Fail it, so the person can ask again (one queued or running request per person)."""
+    def fail_stale_requests(
+        self, older_than_minutes: int | None = STALE_REQUEST_MINUTES
+    ) -> int:
+        """Fail requests a dead daemon left 'running', so the person can ask again (one queued or running
+        request per person). With a number: those running longer than that, which every tick clears (a
+        request this daemon claimed is finished within the same tick, so none of ours is ever running at
+        its start). With None: every running request, for start-up (there is one daemon)."""
         n = self._run(
             "UPDATE inbox_scan_requests SET status = 'failed', finished_at = now(), "
             "error = 'the crawler stopped while it was scanning; ask again' "
-            "WHERE status = 'running' AND started_at < now() - make_interval(mins => %s)",
-            (STALE_REQUEST_MINUTES,),
+            "WHERE status = 'running' "
+            "AND (%s::int IS NULL OR started_at < now() - make_interval(mins => %s))",
+            (older_than_minutes, older_than_minutes),
         )
         self.commit()
         return n

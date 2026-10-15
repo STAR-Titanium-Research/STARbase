@@ -70,6 +70,7 @@ class Daemon:
                 "inbox_crawler_state row missing; the migration has not been applied"
             )
             return "no-state"
+        store.fail_stale_requests()  # every tick: a dead daemon's request must not lock a person out
         if state["desired_state"] != "running":
             store.heartbeat("paused")
             return "paused"
@@ -203,7 +204,9 @@ class Daemon:
         """Loop until stopped. A failed iteration is logged (the exception's class only, never a message
         that could carry a connection string), the connection is replaced and the loop sleeps and goes on."""
         store = self.store
-        store.fail_stale_requests()
+        store.fail_stale_requests(
+            None
+        )  # one daemon: whatever is 'running' now is not ours
         store.daemon_started()
         log.info("inbox crawler started; polling inbox_crawler_state")
         while not self.stop_event.is_set():
