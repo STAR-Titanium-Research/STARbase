@@ -107,6 +107,7 @@ class OwnerUnavailable(Exception):  # noqa: N818
 class ScanStats:
     registered: int = 0
     errors: int = 0
+    temporary_errors: int = 0
     listed_dirs: int = 0
     gone: int = 0
     repointed: int = 0
@@ -119,8 +120,13 @@ class ScanStats:
     )
     new_candidates: list[str] = field(default_factory=list)
 
-    def error(self, msg: str) -> None:
+    def error(self, msg: str, temporary: bool = False) -> None:
+        """Record an error. A temporary one (the share hiccuping, an I/O error, a file vanishing while it
+        is read) may clear by itself and blocks an owner's baseline; a permanent one (no permission, a
+        folder too deep, a name that cannot be registered) will not, and does not."""
         self.errors += 1
+        if temporary:
+            self.temporary_errors += 1
         self.last_error = msg
 
 
@@ -300,7 +306,7 @@ class Scanner:
         # only together with the gone marks, so an abort or a stop in between cannot hide the loss.
         deferred: dict[str, object] = {}
         fresh: list[_Fresh] = []
-        owner_errors_before = stats.errors
+        temporary_before = stats.temporary_errors
         root_listed = False
         stack: list[tuple[str, int]] = [(owner.root, 0)]
         while stack:
@@ -326,7 +332,10 @@ class Scanner:
                 continue
             except OSError as exc:
                 self._note_failure(exc)
-                stats.error(f"{d}: cannot stat ({type(exc).__name__})")
+                stats.error(
+                    f"{d}: cannot stat ({type(exc).__name__})",
+                    temporary=not isinstance(exc, PermissionError),
+                )
                 continue
             if not st.is_dir:
                 vanished_dirs.append(d)
@@ -382,7 +391,7 @@ class Scanner:
                 if not any(d == v or d.startswith(v + "/") for v in vanished_dirs):
                     store.upsert_dir(owner, d, self._cacheable(mtime), listed=True)
         stats.owners_scanned += 1
-        if root_listed and stats.errors == owner_errors_before:
+        if root_listed and stats.temporary_errors == temporary_before:
             store.mark_baselined(owner)
         store.commit()
 
@@ -417,7 +426,10 @@ class Scanner:
             return False
         except OSError as exc:
             self._note_failure(exc)
-            stats.error(f"{d}: cannot list ({type(exc).__name__})")
+            stats.error(
+                f"{d}: cannot list ({type(exc).__name__})",
+                temporary=not isinstance(exc, PermissionError),
+            )
             return False
         stats.listed_dirs += 1
         self._tell(f"scanning {d}")
@@ -456,7 +468,10 @@ class Scanner:
                 f = self._new_file(owner, rel, e.name, origin, stats)
             except OSError as exc:
                 self._note_failure(exc)
-                stats.error(f"{rel}: cannot read its details ({type(exc).__name__})")
+                stats.error(
+                    f"{rel}: cannot read its details ({type(exc).__name__})",
+                    temporary=not isinstance(exc, PermissionError),
+                )
                 complete = False
                 continue
             except Exception as exc:  # noqa: BLE001 (a DB error on one file must not stop the scan)

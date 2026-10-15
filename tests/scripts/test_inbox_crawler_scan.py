@@ -705,15 +705,12 @@ def test_an_unreadable_directory_is_recorded_skipped_and_retried_next_scan(one_p
     assert stats.errors == 1 and "sem" in stats.last_error
     assert "Users/abc12de/notes.pdf" in cands(world)
     assert "Users/abc12de/sem/a.png" not in cands(world)
-    assert baselined(world, "Users/abc12de") in (
-        None,
-        (False,),
-    )  # not a complete first scan
-    spy.fail.clear()
-    stats = sc.scan()  # readable now: the folder is found, still backlog
-    assert stats.errors == 0
-    assert cands(world)["Users/abc12de/sem/a.png"][1] == "backlog"
+    # no permission is permanent: it does not hold the baseline back (see test_inbox_crawler_scan_errors.py)
     assert baselined(world, "Users/abc12de") == (True,)
+    spy.fail.clear()
+    stats = sc.scan()  # readable now: the folder is found; it was not part of the baseline, so it is new
+    assert stats.errors == 0
+    assert cands(world)["Users/abc12de/sem/a.png"][1] == "new"
 
 
 def test_a_file_that_cannot_be_statted_keeps_its_folder_uncached(one_person):

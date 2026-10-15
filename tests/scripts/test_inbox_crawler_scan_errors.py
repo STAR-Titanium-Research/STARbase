@@ -72,3 +72,108 @@ def test_the_share_itself_going_still_aborts_everything(world):
     sc, spy, _ = make(world)
     spy.vanish_after = 3
     assert sc.scan().aborted
+
+
+# ---- item 4: permanent errors do not block the baseline, temporary ones do ---------------------------
+
+
+def tree(world):
+    world.person("abc12de")
+    world.write("Users/abc12de/ok.png", png((1, 1, 1)))
+    world.write("Users/abc12de/locked/x.png", png((2, 2, 2)))
+    world.commit()
+    settle(world)
+
+
+def test_a_folder_one_may_not_read_does_not_stop_the_baseline(world):
+    import errno
+
+    tree(world)
+    sc, spy, _ = make(world)
+    spy.fail[("scandir", "Users/abc12de/locked")] = PermissionError(
+        errno.EACCES, "denied"
+    )
+    stats = sc.scan()
+    assert stats.errors == 1 and stats.temporary_errors == 0
+    assert baselined(world, "Users/abc12de") == (True,)
+    assert cands(world)["Users/abc12de/ok.png"][1] == "backlog"
+    # when the folder becomes readable its files are found, as new (it was not part of the baseline)
+    spy.fail.clear()
+    sc.scan()
+    assert cands(world)["Users/abc12de/locked/x.png"][1] == "new"
+
+
+def test_a_file_that_may_not_be_statted_is_permanent_too(world):
+    import errno
+
+    tree(world)
+    sc, spy, _ = make(world)
+    spy.fail[("stat", "Users/abc12de/locked/x.png")] = PermissionError(
+        errno.EACCES, "denied"
+    )
+    sc.scan()
+    assert baselined(world, "Users/abc12de") == (True,)
+
+
+def test_a_name_that_fails_to_register_is_permanent(world, monkeypatch):
+    tree(world)
+    sc, spy, store = make(world)
+    real = store.register_file
+
+    def flaky(**kw):
+        if kw["rel"].endswith("x.png"):
+            raise ValueError("bad value")
+        return real(**kw)
+
+    monkeypatch.setattr(store, "register_file", flaky)
+    stats = sc.scan()
+    assert stats.errors == 1 and stats.temporary_errors == 0
+    assert baselined(world, "Users/abc12de") == (True,)
+
+
+def test_a_folder_nested_too_deep_is_permanent(world, monkeypatch):
+    from inbox_crawler import scan
+
+    tree(world)
+    monkeypatch.setattr(scan, "MAX_DEPTH", 0)
+    sc, spy, _ = make(world)
+    stats = sc.scan()
+    assert stats.errors >= 1 and stats.temporary_errors == 0
+    assert baselined(world, "Users/abc12de") == (True,)
+
+
+@pytest.mark.parametrize("where", ["scandir", "stat"])
+def test_an_io_error_is_temporary_and_blocks_the_baseline(world, where):
+    import errno
+
+    tree(world)
+    sc, spy, _ = make(world)
+    spy.fail[(where, "Users/abc12de/locked")] = OSError(errno.EIO, "I/O error")
+    stats = sc.scan()
+    assert stats.temporary_errors >= 1
+    assert baselined(world, "Users/abc12de") in (None, (False,))
+    spy.fail.clear()
+    sc.scan()
+    assert baselined(world, "Users/abc12de") == (True,)
+    assert (
+        cands(world)["Users/abc12de/locked/x.png"][1] == "backlog"
+    )  # a clean first scan: all backlog
+
+
+def test_a_file_that_vanishes_while_it_is_read_is_temporary(world):
+    tree(world)
+    sc, spy, _ = make(world)
+    spy.fail[("open", "Users/abc12de/ok.png")] = FileNotFoundError(2, "gone")
+    stats = sc.scan()
+    assert stats.temporary_errors == 1
+    assert baselined(world, "Users/abc12de") in (None, (False,))
+
+
+def test_an_unlisted_root_never_baselines_even_with_only_permanent_errors(world):
+    import errno
+
+    tree(world)
+    sc, spy, _ = make(world)
+    spy.fail[("scandir", "Users/abc12de")] = PermissionError(errno.EACCES, "denied")
+    sc.scan()
+    assert baselined(world, "Users/abc12de") in (None, (False,))
