@@ -227,7 +227,8 @@ ELK graph (`elkInput.ts`: `elk.algorithm=layered`, `elk.direction=RIGHT` or `DOW
 `elk.portConstraints=FIXED_ORDER` on containers, ports from socket ids, spacing tuned to the mockup),
 run `elkjs/lib/elk.bundled.js` (no worker), then set positions with a short animation. After an expand,
 nodes already placed keep their layer (ELK `interactive` layering seeded with current positions).
-Dragging sets positions locally; Re-layout reruns ELK.
+Dragging sets positions locally; Re-layout reruns ELK. Changing Show, Reach or folding a row keeps every card where it is
+(new cards are placed around them, `placeMerged`); only Re-layout and a change of direction re-lay everything.
 
 ## 7. Loading data
 
@@ -249,7 +250,9 @@ Sample focus:
 
 Used-in fan (D20): operations (or tests) filtered by the relation (`equipment_id`, `tool_id`,
 `insert_edge_id`, recipe, or the stock lot through `sample_stock_provenance`), `sort=-operation_date`,
-`limit=20`, `meta=filter_count` for "+N more".
+`limit=20`, `meta=filter_count` for "+N more". The campaign fan and the stock-lot fan are counted from a junction or
+provenance table whose rows the target's permissions do not filter, so a count could include records the person may
+not read: those two fans show "More" **without a number** (D21) and keep paging until a page comes back short.
 
 Expand (＋): on a slot record → its used-in fan beside the container; on a sample outside the loaded
 family → that sample's family (steps 1–4) merged in. Each request goes through `useRequestGate` so a

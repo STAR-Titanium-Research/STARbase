@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { HostApi, TraceResponse } from '@d1/ui';
 import { isNotVisible } from '@d1/ui';
-import { chunkByBudget, encodedQuerySize, loadFamily, loadRecordRef, loadRelationDefs, loadStepRow, loadUsedIn, parseFocus, sampleOfRow } from './loadFamily';
+import { loadFamily, loadRelationDefs, parseFocus } from './loadFamily';
+import { loadRecordRef, loadStepRow, loadUsedIn, sampleOfRow } from './loadFans';
+import { chunkByBudget, encodedQuerySize } from './requests';
 
 interface Call {
   path: string;
@@ -594,9 +596,19 @@ describe('loadUsedIn', () => {
     expect(filterOf(calls[0])).toEqual({ campaign_id: { _eq: 'c1' } });
     expect(calls[0].params).toMatchObject({ limit: 20, page: 2, meta: 'filter_count' });
     expect(calls[0].params.fields).toContain('sample_id.sample_code');
-    // a sample the person cannot read is dropped, and the count stays the junction's
+    // a sample the person cannot read is dropped, and the junction's count (which includes it) is not passed on
     expect((res.items as { id: string; code: string }[]).map((s) => s.id)).toEqual(['s1']);
-    expect(res.total).toBe(2);
+    expect(res.total).toBeNull();
+    expect(res.more).toBe(false); // a short page is the last one
+  });
+
+  it('campaign: a full junction page means more, whatever the readable count (D21)', async () => {
+    const rows = Array.from({ length: 20 }, (_, i) => (i < 3 ? { sample_id: { sample_id: `s${i}`, sample_code: `S${i}` } } : { sample_id: null }));
+    const { api } = fakeApi(() => ({ data: rows, meta: { filter_count: 45 } }));
+    const res = await loadUsedIn(api, { collection: 'campaigns', id: 'c1' }, 1);
+    expect(res.items).toHaveLength(3);
+    expect(res.total).toBeNull();
+    expect(res.more).toBe(true);
   });
 
   it('stock lot -> samples through sample_stock_provenance, then their making operations', async () => {
@@ -612,15 +624,27 @@ describe('loadUsedIn', () => {
     expect(calls[0].params).toMatchObject({ limit: 20, page: 2, meta: 'filter_count' });
     expect(calls[1].path).toBe('/items/manufacturing_operations');
     expect(filterOf(calls[1])).toEqual({ output_sample_id: { _in: ['s1', 's2'] } });
-    expect(res.total).toBe(31);
+    // the provenance count is not permission-filtered by the lot: no number is passed on (D21)
+    expect(res.total).toBeNull();
+    expect(res.more).toBe(false);
     expect((res.items as { id: string }[]).map((o) => o.id)).toEqual(['o9']);
+  });
+
+  it('stock lot: a full provenance page means more', async () => {
+    const { api } = fakeApi((path) => {
+      if (path === '/items/sample_stock_provenance') return { data: Array.from({ length: 20 }, (_, i) => ({ sample_id: `s${i}` })), meta: { filter_count: 31 } };
+      return { data: [] };
+    });
+    const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
+    expect(res.total).toBeNull();
+    expect(res.more).toBe(true);
   });
 
   it('a lot with no samples on the page makes no operations request', async () => {
     const { api, calls } = fakeApi(() => ({ data: [], meta: { filter_count: 0 } }));
     const res = await loadUsedIn(api, { collection: 'raw_stock_lots', id: 'L1' }, 1);
     expect(calls).toHaveLength(1);
-    expect(res).toMatchObject({ items: [], total: 0 });
+    expect(res).toMatchObject({ items: [], total: null, more: false });
   });
 
   it('rejects a collection with no fan', async () => {

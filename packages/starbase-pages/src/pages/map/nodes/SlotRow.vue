@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { hasFan } from '../model/fans';
+import { hasFan, slotKindOf } from '../model/collections';
 import type { Ref as RecordRef, Slot } from '../model/types';
 import { recordHandlers, refKey, stopping, useMapActions, useMapView } from './actions';
-import { KINDS, kindOfCollection, kindVar } from './kinds';
+import { KINDS, kindVar } from './kinds';
 
 // One slot of a container's Inside tray (spec D6): the role, and the record in it. A merged batch slot
 // can hold several records (`values`): "N different", opening to a list; when only some rows of the
@@ -20,7 +20,7 @@ const many = computed(() => !props.item.ref && values.value.length > 1);
 const single = computed(() => props.item.ref ?? (values.value.length === 1 ? values.value[0] : null));
 const summary = computed(() => (props.item.partial ? `${values.value.length} values` : `${values.value.length} different`));
 
-const kind = computed(() => kindOfCollection((single.value ?? values.value[0])?.collection ?? ''));
+const kind = computed(() => slotKindOf((single.value ?? values.value[0])?.collection ?? ''));
 const color = computed(() => (kind.value ? kindVar(KINDS[kind.value]) : 'var(--k-file)'));
 const icon = computed(() => (kind.value ? KINDS[kind.value].icon : 'link'));
 
