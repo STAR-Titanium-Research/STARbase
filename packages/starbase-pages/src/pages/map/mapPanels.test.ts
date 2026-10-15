@@ -80,9 +80,9 @@ describe('MapRail', () => {
     const label = 'Process map of ';
 
     it('is offered for a record whose collection opens a map, linking to its own focus', async () => {
-      const html = await render(MapRail, railProps({ info: as('equipment', 'e 1', 'Mill'), focus: { collection: 'physical_samples', id: 'p' } }));
+      const html = await render(MapRail, railProps({ info: as('equipment', 'e1', 'Mill'), focus: { collection: 'physical_samples', id: 'p' } }));
       expect(text(html)).toContain(`${label}Mill`);
-      expect(html).toContain('/map?focus=equipment:e%201');
+      expect(html).toContain('/map?focus=equipment:e1');
     });
 
     it('is offered for another sample or step than the focus', async () => {

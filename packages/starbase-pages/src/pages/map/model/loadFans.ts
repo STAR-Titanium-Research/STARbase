@@ -119,7 +119,8 @@ export async function loadUsedIn(api: HostApi, ref: { collection: string; id: st
     }
     const readable = prov.rows.map((r) => sampleIdOf(r.sample_id));
     const sampleIds = unique(readable.filter((s): s is string => !!s));
-    const hidden = refused || readable.some((s) => !s);
+    // A refused read of an empty bare page has nothing that could be hidden: no marker.
+    const hidden = (refused && prov.rows.length > 0) || readable.some((s) => !s);
     // As for a campaign: the provenance count includes samples the person may not read, so only "is there a next page".
     const more = prov.rows.length >= FAN_PAGE;
     if (!sampleIds.length) return { items: [], total: null, more, ...(hidden ? { hidden } : {}) };

@@ -71,7 +71,7 @@ function assertPreviewWrites(what: string): void {
 	const problems: string[] = [];
 	if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) problems.push(`host ${u.hostname} is not loopback`);
 	if (port === '8055' || (process.env.DIRECTUS_PORT && port === process.env.DIRECTUS_PORT)) problems.push(`port ${port} is a live Directus port`);
-	if (!/preview-credentials(-.+)?\.txt$/.test(credsFile.replace(/\\/g, '/'))) problems.push(`credentials file ${credsFile} is not preview-credentials[-<name>].txt`);
+	if (!/(^|[\\/])preview-credentials(-[^\\/]+)?\.txt$/.test(credsFile)) problems.push(`credentials file ${credsFile} is not preview-credentials[-<name>].txt`);
 	if (problems.length) throw new Error(`refusing to ${what} on ${SERVER}: ${problems.join('; ')}`);
 }
 
