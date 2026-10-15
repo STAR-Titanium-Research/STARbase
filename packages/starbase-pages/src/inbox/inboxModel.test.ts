@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-	DEFAULT_FILTERS, DOCUMENT_NOTICE, PAGE_SIZE, STRENGTH_LABEL, SURFACE_SCAN_NOTICE, TABS,
+	DEFAULT_FILTERS, DOCUMENT_NOTICE, PAGE_SIZE, STRENGTH_LABEL, TABS,
 	canChange, duplicateText, extractedText, filtersToQuery,
 	folderOf, hasActiveFilters, hasThumbnail, kindLabel, linkTarget, listPlan, nameOf, needsReadNotice, ownerText, parseFilters,
 	primaryAction, sizeText, suggestionOf, whereInPath,
@@ -150,10 +150,9 @@ describe('the row buttons', () => {
 	it('a suggestion the caller may not edit opens the picker instead of a link that would be refused', () => {
 		expect(primaryAction(exactMatch({ suggested_can_edit: false })).kind).toBe('pick');
 	});
-	it('a surface scan is found but its button is off, with the notice', () => {
+	it('a surface scan has its own enabled button, which is not Link, and no Change', () => {
 		const f = exactMatch({ kind: 'surface_scan' });
-		expect(primaryAction(f)).toEqual({ kind: 'disabled', label: 'Add a surface scan', reason: 'Surface scans can be added soon' });
-		expect(SURFACE_SCAN_NOTICE).toBe('Surface scans can be added soon');
+		expect(primaryAction(f)).toEqual({ kind: 'scan', label: 'Add a surface scan' });
 		expect(canChange(f)).toBe(false);
 	});
 	it('only documents and other files need the "reads this file once" notice', () => {

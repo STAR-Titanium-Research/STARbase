@@ -5,6 +5,7 @@
 // Words on screen (CONTEXT.md, Files on the share): found file, Inbox, link, "Older files" for the backlog, uni alias, share folder. A
 // surface scan is "added", never "linked" or "attached".
 import type { FileKind, FilesQuery, FoundFile, InboxTab, MatchStrength } from './inboxApi';
+import { SCAN_ADD_LABEL } from './inboxScan';
 
 // ---- tabs ----
 
@@ -286,20 +287,20 @@ export function suggestionOf(f: FoundFile): Suggestion | null {
 
 // ---- the row's buttons ----
 
-export const SURFACE_SCAN_NOTICE = 'Surface scans can be added soon';
 export const DOCUMENT_NOTICE = 'Linking reads this file once to fingerprint it.';
 
 export type PrimaryAction =
 	| { kind: 'link'; label: string }
 	| { kind: 'pick'; label: string }
-	| { kind: 'disabled'; label: string; reason: string };
+	/** A surface scan: opens its own form (inboxScan.ts), because it is ADDED to an insert or an edge with a condition the person chooses. */
+	| { kind: 'scan'; label: string };
 
 /**
- * The row's main button. A surface scan is added through its own form (stream F), so its button is off for now. A file with a suggestion
- * the page can link, and the caller may edit, links straight to it; any other file opens the record picker.
+ * The row's main button. A surface scan is ADDED through its own form (it is never sent to a sample, operation or test). A file with a
+ * suggestion the page can link, and the caller may edit, links straight to it; any other file opens the record picker.
  */
 export function primaryAction(f: FoundFile): PrimaryAction {
-	if (f.kind === 'surface_scan') return { kind: 'disabled', label: 'Add a surface scan', reason: SURFACE_SCAN_NOTICE };
+	if (f.kind === 'surface_scan') return { kind: 'scan', label: SCAN_ADD_LABEL };
 	const s = suggestionOf(f);
 	if (s?.target && f.suggested_can_edit !== false) return { kind: 'link', label: 'Link' };
 	return { kind: 'pick', label: 'Link to…' };

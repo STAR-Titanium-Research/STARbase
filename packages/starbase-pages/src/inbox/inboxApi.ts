@@ -9,8 +9,10 @@
 //
 //   GET  /d1-inbox/summary              -> { data: InboxSummary } (see @d1/ui inboxSummary.ts; the badge and Home panel read it too)
 //   GET  /d1-inbox/files?<FilesQuery>   -> { data: FoundFile[], meta: { total, limit, offset, acceptable | null } }
-//   POST /d1-inbox/link                 { items: [{ candidate_id, collection, record_id }] } -> { data: { link_batch_id, linked: <count>, items } };
-//                                       403 when the caller cannot edit the record, 409 when someone else got there first
+//   POST /d1-inbox/link                 { items: [{ candidate_id, collection, record_id } | ScanLinkItem] } -> { data: { link_batch_id, linked: <count>, items } };
+//                                       403 when the caller cannot edit the record, 409 when someone else got there first. A surface scan is ADDED, not
+//                                       linked: its item is a ScanLinkItem (insert_id | edge_id, condition, ...); a repeat by the same person answers
+//                                       link_batch_id null, linked 0 and the item `already_linked: true`. Errors: inboxScan.ts scanErrorText.
 //   POST /d1-inbox/accept-all           { filter, dry_run?, candidate_ids? } -> { data: { link_batch_id, linked: <count>, items, skipped: [{ candidate_id,
 //                                       reason }], has_more } }; a dry run changes nothing and answers the count it would link (`count`, or
 //                                       `acceptable`) and the files it would link (`ids`, or `items`); candidate_ids links exactly those
@@ -91,6 +93,9 @@ export interface FoundFile {
 	linked_collection?: string | null;
 	linked_record_id?: string | null;
 	linked_label?: string | null;
+	/** Linked tab, a file added as a surface scan: the insert or the edge it was added to (the other is null). Absent on any other row. */
+	linked_insert_id?: string | null;
+	linked_edge_id?: string | null;
 	/** Optional: the person (login name) who decided it. */
 	decided_by_name?: string | null;
 	owner: FileOwner;
@@ -133,6 +138,21 @@ export interface LinkItem {
 	collection: string;
 	record_id: string;
 }
+/**
+ * A surface scan added from the Inbox (spec section 8, as built by stream F1): exactly one of insert_id and edge_id, a condition the person
+ * chose (required, never defaulted), and optionally the operation, the day, a condition note (500 characters) and notes (2000). It has no record_id.
+ */
+export interface ScanLinkItem {
+	candidate_id: string;
+	collection: 'surface_scans';
+	insert_id?: string;
+	edge_id?: string;
+	condition: 'new' | 'worn' | 'cleaned' | 'other';
+	operation_id?: string;
+	scanned_on?: string;
+	condition_note?: string;
+	notes?: string;
+}
 /** One link made (or, in a dry run, that would be): the file, the record, and the junction row it made. */
 export interface LinkedItem {
 	candidate_id: string;
@@ -143,6 +163,9 @@ export interface LinkedItem {
 	junction_id?: string;
 	adopted?: boolean;
 	already_linked?: boolean;
+	/** A surface scan item: record_id is the new scan's id; these name the insert or edge it was added to (the other is null). */
+	insert_id?: string | null;
+	edge_id?: string | null;
 }
 export interface LinkResult {
 	link_batch_id: string;
@@ -309,6 +332,9 @@ export function parseFile(v: unknown): FoundFile | null {
 	if (str(r.name)) file.name = str(r.name) as string;
 	if (typeof r.mime_type === 'string' || r.mime_type === null) file.mime_type = r.mime_type;
 	if (typeof r.adopted === 'boolean') file.adopted = r.adopted;
+	// only a row added as a surface scan carries these (the server leaves them out of any other row)
+	if ('linked_insert_id' in r) file.linked_insert_id = str(r.linked_insert_id);
+	if ('linked_edge_id' in r) file.linked_edge_id = str(r.linked_edge_id);
 	return file;
 }
 
@@ -350,6 +376,8 @@ function linkedItems(v: unknown): LinkedItem[] {
 			if (typeof i.junction_id === 'string') item.junction_id = i.junction_id;
 			if (typeof i.adopted === 'boolean') item.adopted = i.adopted;
 			if (i.already_linked === true) item.already_linked = true;
+			if ('insert_id' in i) item.insert_id = str(i.insert_id);
+			if ('edge_id' in i) item.edge_id = str(i.edge_id);
 			return item;
 		});
 }
@@ -357,7 +385,7 @@ function linkedItems(v: unknown): LinkedItem[] {
 /** How many files an answer says it linked: its `linked` count (a list, as an older draft sent it, counts its length), else its items. */
 const linkedCount = (b: any, items: LinkedItem[]): number => (Array.isArray(b.linked) ? b.linked.length : num(b.linked) ?? (b.dry_run === true ? 0 : num(b.count) ?? items.length));
 
-export const linkFiles = (api: HostApi, items: LinkItem[]): Promise<LinkResult> =>
+export const linkFiles = (api: HostApi, items: Array<LinkItem | ScanLinkItem>): Promise<LinkResult> =>
 	call(
 		() => api.post(`${BASE}/link`, { items }),
 		(b) => {

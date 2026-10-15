@@ -304,6 +304,18 @@ Directus's REST (they live in `d1_private`).
 - **Settings:** auto-link switch with the consent text (names what will be linked, that documents are never
   auto-linked, and where the undo is).
 
+*As built (stream F2, the surface-scan form):* a `surface_scan` row's button is **Add a surface scan** (enabled; the row never offers Link or Change)
+and opens a dialog (`AddScanDialog.vue`, pure parts in `inboxScan.ts`): an Insert or Edge choice with a search by code through `/items` as the
+signed-in user (started with the item the file's path names, when it names one), the **condition** (required, nothing chosen to begin with, the four
+options and labels of the Alicona dialog, which also supplies the validation, the operation picker's fields and the lab-wide warning), and
+optionally the operation, the day, a condition note and notes. Confirm stays off until an item and a condition are set (and, as in the Alicona
+dialog, a note when the condition is *other*), and a second click while the first runs sends one request. The add is the scan item of section 8
+sent alone to `POST /d1-inbox/link`; the page never sends a scan to a sample, operation or test. The notice reads *Added as a surface scan of
+<code>. It is now visible to every lab member.* with one batch Undo; a repeat is *That file was already added.* with no Undo; every refusal code of
+section 8 has its own words (a 400 names the control it is about), and the 403 of an Undo shows verbatim. On *Recently linked* the row reads *Added as
+a surface scan of H13A-#2 (worn)* and routes to the insert or edge page by `linked_insert_id` / `linked_edge_id` (STARbase has no page for a scan
+row); a batch of scans is titled *Added as a surface scan, 1 file*. Live checks: backlog **IF23** (the STARbase form) and **IF30**.
+
 ## 11. Known risks and limits
 
 - The crawler runs under the maintainer's personal admin SMB account (can write). Mitigated by the read-only

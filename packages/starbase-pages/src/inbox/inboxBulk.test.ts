@@ -67,6 +67,21 @@ describe('batches (one Undo each)', () => {
 	});
 });
 
+describe('batches that added surface scans', () => {
+	const scan = (batch: string) => foundFile({ state: 'linked', link_batch_id: batch, decided_at: '2026-10-15T10:00:00Z', link_kind: 'manual', linked_collection: 'surface_scans', linked_record_id: 's1', linked_insert_id: 'i1', linked_edge_id: null });
+	const sample = (batch: string) => foundFile({ state: 'linked', link_batch_id: batch, decided_at: '2026-10-15T10:00:00Z', link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: 'p1' });
+	it('say they were added, never linked', () => {
+		expect(batchTitle(batchesOf([scan('b1')])[0])).toBe('Added as a surface scan, 1 file');
+		expect(batchTitle(batchesOf([scan('b1'), scan('b1')])[0])).toBe('Added as surface scans, 2 files');
+	});
+	it('a batch of both says how many were scans', () => {
+		const [b] = batchesOf([sample('b1'), scan('b1')]);
+		expect(b.scans).toBe(1);
+		expect(batchTitle(b)).toBe('Linked by you, 2 files (1 added as a surface scan)');
+		expect(batchTitle(batchesOf([sample('b2')])[0])).toBe('Linked by you, 1 file');
+	});
+});
+
 describe('groupLinked', () => {
 	it('one group per batch, newest first, then the rows that have no batch', () => {
 		const a = foundFile({ state: 'linked', link_batch_id: 'b1', decided_at: '2026-10-14T10:00:00Z', link_kind: 'bulk' });

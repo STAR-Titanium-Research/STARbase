@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
 import { DEFAULT_FILTERS, type InboxFilters } from './inboxModel';
+import { emptyScanAdd, type ScanAddForm } from './inboxScan';
 import { createInbox } from './useInbox';
 import { createFakeInbox, exactMatch, foundFile, type FakeInboxOptions } from './fakeInboxServer';
 
@@ -289,5 +290,133 @@ describe('Rescan my folder', () => {
 		expect(inbox.notice.value).toMatchObject({ tone: 'warn' });
 		expect(inbox.notice.value?.text).toBe('A scan of your folder is already queued or ran recently. A folder can be rescanned once every 10 minutes. Try again in 9 minutes.');
 		expect(inbox.rescanning.value).toBe(false);
+	});
+});
+
+describe('adding a surface scan', () => {
+	const INSERT = '00000000-0000-4000-8000-000000000201';
+	const EDGE = '00000000-0000-4000-8000-000000000202';
+	const OP = '00000000-0000-4000-8000-000000000102';
+	const scanFile = () => foundFile({ kind: 'surface_scan', rel_path: 'Users/ab1cd/scans/H13A-2_fC_worn.al3d' });
+	const insert = { kind: 'insert' as const, id: INSERT, label: 'H13A-#2', detail: '' };
+	const edge = { kind: 'edge' as const, id: EDGE, label: 'H13A-#2-fC', detail: 'Insert H13A-#2' };
+	const form = (over: Partial<ScanAddForm> = {}): ScanAddForm => ({ ...emptyScanAdd(insert), condition: 'worn', ...over });
+	const scanSetup = (opts: FakeInboxOptions = {}) => {
+		const s = setup([scanFile(), exactMatch()], undefined, opts);
+		return { ...s, file: () => s.fake.files[0] };
+	};
+	const sentLinks = (fake: ReturnType<typeof createFakeInbox>) => fake.calls.filter((c) => c.path === '/d1-inbox/link');
+
+	it('sends the scan item, says where it went, and offers one Undo for the batch', async () => {
+		const { inbox, fake, changed, file } = scanSetup();
+		await inbox.load();
+		expect(await inbox.addScan(file(), form({ item: edge, condition: 'cleaned', operationId: OP, date: '2026-10-14', conditionNote: 'ultrasonic bath', notes: 'after pass 3' }))).toEqual({ ok: true });
+		expect(sentLinks(fake)[0].body).toEqual({ items: [{ candidate_id: file().candidate_id, collection: 'surface_scans', edge_id: EDGE, condition: 'cleaned', operation_id: OP, scanned_on: '2026-10-14', condition_note: 'ultrasonic bath', notes: 'after pass 3' }] });
+		expect(fake.scans).toHaveLength(1);
+		expect(fake.scans[0]).toMatchObject({ edge_id: EDGE, insert_id: null, condition: 'cleaned', operation_id: OP });
+		expect(inbox.notice.value).toMatchObject({ tone: 'ok', text: 'Added as a surface scan of H13A-#2-fC. It is now visible to every lab member.', undo: { kind: 'batch' } });
+		expect(inbox.main.value.rows.map((f) => f.candidate_id)).not.toContain(file().candidate_id);
+		expect(changed).toHaveBeenCalled();
+	});
+
+	it('Undo deletes the scan and puts the file back in the Inbox', async () => {
+		const { inbox, fake, file } = scanSetup();
+		await inbox.load();
+		await inbox.addScan(file(), form());
+		await inbox.undo(inbox.notice.value!.undo!);
+		expect(fake.scans).toEqual([]);
+		expect(file().state).toBe('new');
+		expect(inbox.notice.value?.text).toBe('Undone: 1 found file back in your Inbox.');
+	});
+
+	it('Undo refused (the person may no longer delete the scan) shows the endpoint\'s words, verbatim, and undoes nothing', async () => {
+		const { inbox, fake, file } = scanSetup({ scanUndoAllowed: false });
+		await inbox.load();
+		await inbox.addScan(file(), form());
+		const r = await inbox.undo(inbox.notice.value!.undo!);
+		expect(r).toEqual({ ok: false, message: 'You can no longer delete that surface scan, so adding it cannot be undone.' });
+		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: 'You can no longer delete that surface scan, so adding it cannot be undone.' });
+		expect(fake.scans).toHaveLength(1);
+		expect(file().state).toBe('linked');
+	});
+
+	it('a repeat by the same person says it was already added, and offers no Undo', async () => {
+		const { inbox, fake, file } = scanSetup();
+		await inbox.load();
+		await inbox.addScan(file(), form());
+		expect(await inbox.addScan(file(), form())).toEqual({ ok: true });
+		expect(inbox.notice.value).toMatchObject({ tone: 'ok', text: 'That file was already added.' });
+		expect(inbox.notice.value?.undo).toBeUndefined();
+		expect(fake.scans).toHaveLength(1);
+	});
+
+	it('sends nothing until there is an item and a condition (and never a default condition)', async () => {
+		const { inbox, fake, file } = scanSetup();
+		await inbox.load();
+		expect(await inbox.addScan(file(), emptyScanAdd(insert))).toMatchObject({ ok: false });
+		expect(await inbox.addScan(file(), { ...emptyScanAdd(), condition: 'worn' })).toMatchObject({ ok: false });
+		expect(sentLinks(fake)).toHaveLength(0);
+	});
+
+	it('a second click while the first runs sends one request', async () => {
+		const { inbox, fake, file } = scanSetup();
+		await inbox.load();
+		const first = inbox.addScan(file(), form());
+		expect(await inbox.addScan(file(), form())).toMatchObject({ ok: false });
+		await first;
+		expect(sentLinks(fake)).toHaveLength(1);
+	});
+
+	it('the plain Link path never sends a surface scan to /link for a sample, operation or test', async () => {
+		const { inbox, fake } = setup([exactMatch({ kind: 'surface_scan' }, '77aa88bb', 'S-9')]);
+		await inbox.load();
+		const f = fake.files[0];
+		expect(await inbox.link(f, 'physical_samples', f.suggested_record_id as string)).toEqual({ ok: false, message: 'A surface scan is added to an insert or an edge.' });
+		expect(await inbox.linkSuggested(f)).toMatchObject({ ok: false });
+		expect(fake.calls.filter((c) => c.path === '/d1-inbox/link')).toHaveLength(0);
+	});
+
+	it('only a surface scan file is added as one (nothing is sent for any other)', async () => {
+		const { inbox, fake } = scanSetup();
+		await inbox.load();
+		expect(await inbox.addScan(fake.files[1], form())).toEqual({ ok: false, message: 'Only a surface scan file can be added to an insert or an edge.' });
+		expect(sentLinks(fake)).toHaveLength(0);
+	});
+
+	it.each([
+		['NOT_FOUND', { scanItems: { inserts: {} } }, 'That insert, edge or operation does not exist, or you cannot see it. Choose another.', true],
+		['FORBIDDEN', { scanAllowed: false }, 'You are not allowed to add surface scans.', false],
+		['SURFACE_SCANS_UNAVAILABLE', { scanTableMissing: true }, 'Surface scans are not available yet.', true],
+	] as Array<[string, FakeInboxOptions, string, boolean]>)('%s is said in its own words, and the row stays', async (_code, opts, text, reloads) => {
+		const { inbox, fake, file } = scanSetup(opts);
+		await inbox.load();
+		const before = fake.calls.filter((c) => c.path === '/d1-inbox/files').length;
+		expect(await inbox.addScan(file(), form())).toEqual({ ok: false, message: text });
+		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text });
+		expect(inbox.main.value.rows.map((f) => f.candidate_id)).toContain(file().candidate_id);
+		expect(file().state).toBe('new');
+		await new Promise((r) => setTimeout(r, 0));
+		// a 404 or 409 means the list changed under us: it is read again
+		expect(fake.calls.filter((c) => c.path === '/d1-inbox/files').length > before).toBe(reloads);
+	});
+
+	it('the same file added twice to one insert is "already added" (409 from the table\'s unique constraint)', async () => {
+		const { inbox, fake } = scanSetup();
+		await inbox.load();
+		const a = fake.files[0];
+		await inbox.addScan(a, form());
+		// a copy of the same file in another Inbox: same pointer row, same insert
+		const b = foundFile({ kind: 'surface_scan', directus_files_id: a.directus_files_id, rel_path: 'Users/zz9/copy.al3d' });
+		fake.files.push(b);
+		expect(await inbox.addScan(b, form())).toEqual({ ok: false, message: 'That file is already added as a surface scan of this insert or edge.' });
+		expect(fake.scans).toHaveLength(1);
+	});
+
+	it('a 400 names the control it is about, so the dialog can mark it', async () => {
+		const { inbox, file } = scanSetup();
+		await inbox.load();
+		// a day the form lets through (a shape check only) that the endpoint does not read as a real day
+		const r = await inbox.addScan(file(), form({ date: '2026-02-31' }));
+		expect(r).toEqual({ ok: false, message: 'The scan date is not a valid day. Use the date box, or leave it empty.', field: 'scanned_on' });
 	});
 });

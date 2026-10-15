@@ -2,11 +2,12 @@ import { test, expect, type Browser, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { D1_BASE, STAR_BASE, watchErrors } from '../starbase/target';
 import { stubD1 } from '../starbase/stubD1';
+import { STUB_TOOLING as T } from '../starbase/stubScans';
 import { foundFile, stubInbox, type InboxStub } from '../starbase/stubInbox';
 
 // The Inbox (found files: spec 2026-10-15-found-files-inbox-design.md) in STARbase, in a real browser: the sidebar entry and its badge, Home's
-// panel, the /inbox page (rows with the reason, Link and Undo, Accept all with its confirm, the surface-scan row, Other files, Rescan and its
-// 429), Settings' auto-link switch with its consent text, and the Inbox crawler tab on /crawler. d1-server is a stand-in
+// panel, the /inbox page (rows with the reason, Link and Undo, Accept all with its confirm, the surface-scan row and its Add a surface scan
+// dialog (desktop and phone width), Other files, Rescan and its 429), Settings' auto-link switch with its consent text, and the Inbox crawler tab on /crawler. d1-server is a stand-in
 // (tests/ui/starbase/stubD1.ts for the shell, stubInbox.ts for d1-inbox, the same fake the vitest page tests use), so this needs only STARbase
 // served by `vite preview` (tests/ui/README.md), no Directus and no backend.
 // Run: cd tests/ui && npx playwright test specs/22-inbox.spec.ts   (INBOX_SHOTS=<dir> also saves screenshots there)
@@ -28,7 +29,8 @@ async function start(browser: Browser, path: string, width = 1280, opts: Paramet
 	await stubD1(context);
 	const inbox = await stubInbox(context, opts);
 	await page.goto(STAR_BASE + path);
-	await expect(page.locator('aside nav.d1-nav')).toBeVisible();
+	// the sidebar is a drawer on a phone: wait for the page's own tabs there
+	await expect(page.locator(width >= 900 ? 'aside nav.d1-nav' : 'nav[aria-label="Inbox tabs"]')).toBeVisible();
 	return { page, inbox, errors };
 }
 
@@ -63,7 +65,7 @@ test('the rail shows the Inbox icon with its badge', async ({ browser }) => {
 	await page.context().close();
 });
 
-test('the Inbox page: rows say what the crawler thinks and why; a surface scan is found but its Link is off; documents are collapsed', async ({ browser }) => {
+test('the Inbox page: rows say what the crawler thinks and why; a surface scan has Add a surface scan, not Link; documents are collapsed', async ({ browser }) => {
 	const { page, errors } = await start(browser, '/inbox');
 	await expect.poll(() => names(page)).toEqual(['3fa9c1d2_A1.tif', '9ab3c4d5_B2.tif', 'plain.tif', 'edge1.al3d']);
 	const first = row(page, '3fa9c1d2_A1.tif');
@@ -78,9 +80,9 @@ test('the Inbox page: rows say what the crawler thinks and why; a surface scan i
 	expect(assetRequests).toEqual([]);
 
 	const scan = row(page, 'edge1.al3d');
-	await expect(scan.getByRole('button', { name: 'Add a surface scan' })).toBeDisabled();
+	await expect(scan.getByRole('button', { name: 'Add a surface scan' })).toBeEnabled();
 	await expect(scan.getByRole('button', { name: 'Link', exact: true })).toHaveCount(0);
-	await expect(scan.locator('[data-test="scan-notice"]')).toHaveText('Surface scans can be added soon');
+	await expect(scan.locator('[data-test="scan-notice"]')).toHaveText('Added to an insert or an edge, with the condition you choose.');
 
 	const other = page.locator('[data-test="other-files"]');
 	await expect(other).toContainText('Other files');
@@ -89,6 +91,112 @@ test('the Inbox page: rows say what the crawler thinks and why; a surface scan i
 	await expect(other).toContainText('notes.pdf');
 	await expect(other).toContainText('Linking reads this file once to fingerprint it.');
 	await shot(page, 'inbox-new');
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+// The stand-in knows the stub tool box's insert and edge (stubScans.ts), so a scan added to them is accepted and labelled with their codes.
+const scanItems = { inserts: { [T.insertId]: T.insertCode }, edges: { [T.edgeId]: T.edgeCode } };
+const scanDialog = (page: Page) => page.locator('[data-test="add-scan-dialog"]');
+
+async function pickInsert(page: Page) {
+	const dialog = scanDialog(page);
+	await dialog.locator('[data-test="scan-item-search"]').fill('CNMG');
+	await dialog.getByText(T.insertCode, { exact: true }).first().click();
+}
+
+test('Add a surface scan: the dialog warns the whole lab will see the file, has no condition chosen, and adds it to an insert; Recently linked says where, and Undo brings the file back', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 1280, { scanItems });
+	await row(page, 'edge1.al3d').getByRole('button', { name: 'Add a surface scan' }).click();
+	const dialog = scanDialog(page);
+	await expect(dialog).toBeVisible();
+	await expect(dialog.locator('[data-test="visibility-warning"]')).toContainText('Adding a surface scan makes this file visible to every lab member');
+	await expect(dialog.locator('input[name="scan-condition"]')).toHaveCount(4);
+	await expect(dialog.locator('input[name="scan-condition"]:checked')).toHaveCount(0);
+	await expect(dialog.locator('[data-test="scan-confirm"]')).toBeDisabled();
+	await shot(page, 'scan-dialog-empty');
+	await pickInsert(page);
+	await expect(dialog.locator('[data-test="scan-confirm"]')).toBeDisabled();
+	await dialog.getByText('Worn', { exact: true }).click();
+	await expect(dialog.locator('[data-test="scan-confirm"]')).toBeEnabled();
+	await shot(page, 'scan-dialog-filled');
+	await dialog.locator('[data-test="scan-confirm"]').click();
+	await expect(dialog).toBeHidden();
+	await expect(page.locator('[data-test="notice"]')).toContainText(`Added as a surface scan of ${T.insertCode}. It is now visible to every lab member.`);
+	await expect.poll(() => names(page)).not.toContain('edge1.al3d');
+	expect(inbox.scans).toHaveLength(1);
+	expect(inbox.scans[0]).toMatchObject({ insert_id: T.insertId, edge_id: null, condition: 'worn' });
+	await page.locator('[data-test="tab-linked"]').click();
+	await expect.poll(() => names(page)).toEqual(['edge1.al3d']);
+	const linked = row(page, 'edge1.al3d').locator('[data-test="linked-to"]');
+	await expect(linked).toContainText(`Added as a surface scan of ${T.insertCode} (worn)`);
+	await expect(linked.getByRole('link', { name: `${T.insertCode} (worn)` })).toHaveAttribute('href', new RegExp(`/inserts/${T.insertId}$`));
+	await expect(page.locator('[data-test="batch"]')).toContainText('Added as a surface scan, 1 file');
+	await shot(page, 'scan-linked');
+	await page.locator('[data-test="undo-batch"]').click();
+	await expect(page.locator('[data-test="notice"]')).toContainText('Undone: 1 found file back in your Inbox.');
+	expect(inbox.scans).toHaveLength(0);
+	expect(inbox.files.find((f) => f.rel_path.endsWith('edge1.al3d'))!.state).toBe('new');
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('Add a surface scan to an edge with its operation, the day and a note', async ({ browser }) => {
+	const { page, inbox } = await start(browser, '/inbox', 1280, { scanItems });
+	await row(page, 'edge1.al3d').getByRole('button', { name: 'Add a surface scan' }).click();
+	const dialog = scanDialog(page);
+	await dialog.getByRole('radio', { name: 'Edge' }).click();
+	await dialog.locator('[data-test="scan-item-search"]').fill('CNMG');
+	await dialog.getByText(T.edgeCode, { exact: true }).first().click();
+	const op = dialog.locator('[data-test="scan-operation"]');
+	await expect(op).toBeEnabled();
+	await op.selectOption({ index: 1 });
+	await dialog.locator('[data-test="scan-date"]').fill('2026-10-14');
+	await dialog.getByText('Cleaned', { exact: true }).click();
+	await dialog.locator('[data-test="scan-condition-note"]').fill('ultrasonic bath');
+	await dialog.locator('[data-test="scan-notes"]').fill('after pass 3');
+	await dialog.locator('[data-test="scan-confirm"]').click();
+	await expect(dialog).toBeHidden();
+	expect(inbox.scans[0]).toMatchObject({ edge_id: T.edgeId, insert_id: null, condition: 'cleaned', scanned_on: '2026-10-14', condition_note: 'ultrasonic bath', notes: 'after pass 3' });
+	expect(inbox.scans[0].operation_id).toBe('00000000-0000-4000-8000-0000000000c1');
+	await page.context().close();
+});
+
+test('a refused add says why in the dialog, keeps it open and leaves the row in the Inbox', async ({ browser }) => {
+	const { page, inbox } = await start(browser, '/inbox', 1280, { scanItems, scanAllowed: false });
+	await row(page, 'edge1.al3d').getByRole('button', { name: 'Add a surface scan' }).click();
+	const dialog = scanDialog(page);
+	await pickInsert(page);
+	await dialog.getByText('New', { exact: true }).click();
+	await dialog.locator('[data-test="scan-confirm"]').click();
+	await expect(dialog.locator('[data-test="scan-error"]')).toHaveText('You are not allowed to add surface scans.');
+	await expect(dialog).toBeVisible();
+	expect(inbox.scans).toHaveLength(0);
+	await shot(page, 'scan-refused');
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+	await expect(dialog).toBeHidden();
+	expect(await names(page)).toContain('edge1.al3d');
+	await page.context().close();
+});
+
+test('Add a surface scan works at phone width: the dialog fits the screen and Confirm can be reached', async ({ browser }) => {
+	const { page, inbox, errors } = await start(browser, '/inbox', 390);
+	await row(page, 'edge1.al3d').getByRole('button', { name: 'Add a surface scan' }).click();
+	const dialog = scanDialog(page);
+	await expect(dialog).toBeVisible();
+	const box = (await dialog.boundingBox())!;
+	expect(box.x).toBeGreaterThanOrEqual(0);
+	expect(box.x + box.width).toBeLessThanOrEqual(390);
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+	await pickInsert(page);
+	await dialog.getByText('Worn', { exact: true }).click();
+	await shot(page, 'scan-dialog-phone');
+	const confirm = dialog.locator('[data-test="scan-confirm"]');
+	await confirm.scrollIntoViewIfNeeded();
+	await expect(confirm).toBeEnabled();
+	await confirm.click();
+	await expect(dialog).toBeHidden();
+	expect(inbox.scans).toHaveLength(1);
 	expect(errors).toEqual([]);
 	await page.context().close();
 });

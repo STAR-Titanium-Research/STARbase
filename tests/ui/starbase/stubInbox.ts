@@ -52,5 +52,23 @@ export async function stubInbox(context: BrowserContext, opts: FakeInboxOptions 
 		}
 		return route.fallback();
 	});
+	// The Add a surface scan dialog's operation picker: one operation of the stand-in's edge, with a real id (stubScans.ts's own operation has a
+	// made-up one, which the endpoint, and so the fake, refuses as an id).
+	await context.route(`${D1_BASE}/items/manufacturing_operations*`, async (route) => {
+		if (route.request().method() === 'GET' && !route.request().url().includes('aggregate')) {
+			return route.fulfill({ status: 200, headers: cors, json: { data: [STUB_SCAN_OPERATION] } });
+		}
+		return route.fallback();
+	});
 	return fake;
 }
+
+/** The operation the stand-in offers for a surface scan (a UUID, as the endpoint requires). */
+export const STUB_SCAN_OPERATION = {
+	operation_id: '00000000-0000-4000-8000-0000000000c1',
+	pass_code: 'OP-TURN-7',
+	operation_sequence: 1,
+	operation_date: '2026-09-29',
+	process_category: 'machining',
+	sample_id: { sample_code: 'S-0042' },
+};
