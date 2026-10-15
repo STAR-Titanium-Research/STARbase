@@ -21,7 +21,10 @@ export interface MergeHint {
   anchor?: string;
   /** The collapsed container `anchor` replaced (it has another id when it joined a batch): `anchor` takes its place and size. */
   from?: string;
-  /** Cards to lay out again from ELK's result (a "+N more" stub moves to the end of its column). */
+  /**
+   * Cards to lay out again from ELK's result, except the ones the person dragged (a "+N more" stub moves to the end of its
+   * column; the cards on a container's sockets follow the new order of those sockets when its rows fold or unfold).
+   */
   replace?: string[];
 }
 
@@ -363,5 +366,5 @@ export function useMapExpand(deps: ExpandDeps) {
     keepOpened(owner, before);
   }
 
-  return { expand, reset, loaded, restore, forgetReveals, collapse, expandedIds, takeMergeHints };
+  return { expand, reset, loaded, restore, forgetReveals, collapse, expandedIds, takeMergeHints, hint };
 }

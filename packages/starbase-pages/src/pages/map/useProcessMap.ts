@@ -18,6 +18,7 @@ import { parseFocus } from './model/loadFamily';
 import { NoSample, loadFocus, type DefsByKind } from './model/loadFocus';
 import { CARD_CAP, fitReach, type Reach } from './model/reach';
 import { HIDEABLE, SETTINGS_CHIP, drawnNodes, presentKinds as presentKindsOf, readRemembered, writeRemembered } from './model/showChips';
+import { nodeOfSocket } from './model/sockets';
 import { flipKeys, keysOfGroup, nodesWithKey, resolveSelection, selectionKey } from './model/viewState';
 import { recordInfo, type RecordInfo } from './model/recordInfo';
 import type { MapNode, MapStatus, ProcessData, ProcessGraph, Ref } from './model/types';
@@ -349,7 +350,17 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
 
   const toggleRows = (id: string) => {
     const n = nodeById.value.get(id);
-    if (n) unfoldedKeys.value = flipKeys(unfoldedKeys.value, n);
+    if (!n) return;
+    unfoldedKeys.value = flipKeys(unfoldedKeys.value, n);
+    // The container's sockets are other sockets now (each row its own, or the bundle again), in row order: the cards on them are
+    // laid out again so their order follows the sockets' and no wire crosses. Cards the person dragged stay, and nothing further away moves.
+    const wires = graph.value?.wires ?? [];
+    const next = new Set<string>();
+    for (const w of wires) {
+      if (nodeOfSocket(w.from) === id) next.add(nodeOfSocket(w.to));
+      else if (nodeOfSocket(w.to) === id) next.add(nodeOfSocket(w.from));
+    }
+    expansion.hint({ replace: [...next] });
   };
   const toggleMore = (id: string) => {
     const n = nodeById.value.get(id);

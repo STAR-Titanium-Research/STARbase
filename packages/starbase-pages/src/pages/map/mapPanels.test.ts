@@ -103,6 +103,45 @@ describe('MapRail', () => {
         expect(text(await render(MapRail, railProps({ info: as(collection, id, 'X') })))).not.toContain(label);
       }
     });
+
+    describe('a batch is not a record you can map', () => {
+      const cuts = mkData({
+        samples: [mkSample('p'), ...[0, 1, 2, 3].map((i) => mkSample(`c${i}`))],
+        operations: [0, 1, 2, 3].map((i) =>
+          mkOp({ id: `cut${i}`, code: `CUT-${i}`, sampleId: 'p', outputSampleId: `c${i}`, date: DAY, methodName: 'Sectioned', category: 'machining', equipmentId: 'eq1' }),
+        ),
+      });
+      const batchInfo = (probable: boolean, extra: Partial<ProcessData> = {}): RecordInfo => {
+        const d = { ...cuts, ...extra };
+        const g = buildGraph(d, groupsOf(d, probable), { slots: () => [] });
+        const node = g.nodes.find((n): n is ContainerData => n.type === 'container')!;
+        return recordInfo(d, g, node.id)!;
+      };
+
+      it('is not offered for a probable batch (its title is no code)', async () => {
+        const batch = batchInfo(true);
+        expect(batch.code).toBe('Probable batch · Sectioned');
+        expect(text(await render(MapRail, railProps({ info: batch })))).not.toContain(label);
+      });
+
+      it('is not offered for a recorded batch either', async () => {
+        const recorded = batchInfo(false, { operations: cuts.operations.map((o) => ({ ...o, batchId: 'B1' })), batchCodes: { B1: 'B-0007' } });
+        expect(recorded.code).toBe('B-0007');
+        expect(text(await render(MapRail, railProps({ info: recorded })))).not.toContain(label);
+      });
+
+      it('is offered for a single-row container, by the operation\'s code', async () => {
+        const html = await render(MapRail, railProps({ info: info(op.id), focus: { collection: 'physical_samples', id: 'p' } }));
+        expect(text(html)).toContain(`${label}OP-1`);
+        expect(html).toContain('/map?focus=manufacturing_operations:o1');
+      });
+    });
+
+    it('the label cannot overflow the rail: it is clipped with an ellipsis and the whole text is the link\'s title', async () => {
+      const html = await render(MapRail, railProps({ info: as('equipment', 'e1', 'A-very-long-machine-code-that-does-not-fit-the-rail'), focus: { collection: 'physical_samples', id: 'p' } }));
+      expect(html).toMatch(/<a[^>]*class="[^"]*pm-maplink[^"]*"[^>]*title="Process map of A-very-long-machine-code-that-does-not-fit-the-rail"/);
+      expect(html).toMatch(/<span class="pm-maplabel"[^>]*>Process map of A-very/);
+    });
   });
 
   it('Open record of a kind with no record page falls back to the Data Studio form', async () => {
