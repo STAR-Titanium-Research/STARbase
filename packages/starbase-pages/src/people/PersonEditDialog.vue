@@ -3,6 +3,8 @@
 // a member can edit only their OWN row (the server refuses the rest), anyone may add a person, only an admin links a login.
 import { computed, ref, watch } from 'vue';
 import { useExplorerHost } from '@d1/ui';
+import { ALIAS_HINT, FOLDER_CHANGE_NOTE, FORMER_HINT, folderSaveError, isDuplicate } from '../inbox/folderModel';
+import { createPersonFolder } from './personFolder';
 import type { PeopleRow } from './peopleQuery';
 
 interface Person {
@@ -25,6 +27,9 @@ const api = host.api;
 const { isAdmin } = host;
 
 const users = ref<Opt[]>([]);
+// The inbox crawler's fields (uni alias, scan while Former): administrators only, see personFolder.ts.
+const folder = createPersonFolder(api);
+const { alias, scanFormer } = folder;
 const saving = ref(false);
 const err = ref('');
 const draft = ref<Person>(blank());
@@ -67,6 +72,8 @@ watch(
 		if (!open) return;
 		draft.value = props.person ? fromRow(props.person) : blank();
 		err.value = '';
+		folder.reset(!!props.person?.person_id);
+		if (props.person?.person_id && isAdmin.value) void folder.load(props.person.person_id);
 		if (!users.value.length) void loadUsers();
 	},
 	{ immediate: true },
@@ -74,8 +81,11 @@ watch(
 
 async function save() {
 	if (!draft.value.full_name.trim()) { err.value = 'Name is required.'; return; }
+	if (isAdmin.value && folder.issue.value) { err.value = folder.issue.value; return; }
 	saving.value = true;
 	err.value = '';
+	// What an existing person's save adds for the inbox crawler's fields: only what changed, and only for an administrator.
+	const folderChanges = isAdmin.value && !isNew.value ? folder.changes() : {};
 	try {
 		const body: Record<string, unknown> = {
 			full_name: draft.value.full_name.trim(),
@@ -87,12 +97,28 @@ async function save() {
 		};
 		// Members never send the login: the server refuses a change to it.
 		if (isAdmin.value) body.user_id = draft.value.user_id || null;
-		if (isNew.value) await api.post('/items/people', body);
-		else await api.patch(`/items/people/${draft.value.person_id}`, body);
+		if (isNew.value) {
+			// The alias is never part of the create (the database refuses one on insert): the person is made first, then the fields are set.
+			const created = await api.post('/items/people', body);
+			const personId = created?.data?.data?.person_id;
+			const failure = isAdmin.value ? await folder.afterCreate(personId, draft.value.full_name.trim()) : null;
+			if (failure) {
+				// The person exists: the dialog stays open on them, and the list learns of them.
+				if (typeof personId === 'string') draft.value = { ...draft.value, person_id: personId };
+				err.value = failure;
+				emit('saved');
+				return;
+			}
+		} else {
+			await api.patch(`/items/people/${draft.value.person_id}`, { ...body, ...folderChanges });
+		}
 		close();
 		emit('saved');
 	} catch (e: any) {
-		err.value = e?.response?.data?.errors?.[0]?.message || e?.message || 'Could not save.';
+		// A unique violation on a save that changed the alias can only be the alias: say so, naming no one.
+		err.value = 'uni_alias' in folderChanges && isDuplicate(e)
+			? folderSaveError(e, 'alias', 'Could not save.')
+			: e?.response?.data?.errors?.[0]?.message || e?.message || 'Could not save.';
 	} finally {
 		saving.value = false;
 	}
@@ -135,6 +161,17 @@ async function remove() {
 					<label class="tg"><v-checkbox v-model="draft.is_operator" /> Operator / technician</label>
 					<label class="tg"><v-checkbox v-model="draft.active" /> Active <span class="hint">(uncheck if they've left the group)</span></label>
 				</div>
+				<div v-if="isAdmin" class="folder" data-test="person-folder">
+					<div class="fld">
+						<label for="person-alias">Uni alias</label>
+						<input id="person-alias" v-model="alias" class="plain" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. ab1cd" :disabled="!folder.ready.value" :aria-invalid="!!folder.issue.value" data-test="person-alias" />
+						<span class="hint">{{ ALIAS_HINT }}</span>
+						<span v-if="folder.issue.value" class="err" role="alert" data-test="person-alias-issue">{{ folder.issue.value }}</span>
+						<span class="hint warn" data-test="person-alias-note">{{ FOLDER_CHANGE_NOTE }}</span>
+						<span v-if="folder.loadError.value" class="err" role="alert">{{ folder.loadError.value }}</span>
+					</div>
+					<label class="tg"><input v-model="scanFormer" type="checkbox" role="switch" :disabled="!folder.ready.value" data-test="person-scan-former" /> Scan while Former <span class="hint">{{ FORMER_HINT }}</span></label>
+				</div>
 				<div class="fld"><label>Notes</label><v-textarea v-model="draft.notes" placeholder="Optional" /></div>
 				<p v-if="!canEditDraft" class="hint">You can only change your own entry. An admin can edit anyone's.</p>
 				<p v-if="err" class="err">{{ err }}</p>
@@ -159,6 +196,14 @@ async function remove() {
 .tg .hint { font-weight: 400; color: var(--theme--foreground-subdued, #94a3b8); font-size: 11px; }
 .edit-card .fld > .hint { font-size: 11px; color: var(--theme--foreground-subdued, #94a3b8); }
 .spacer { flex: 1; }
+.folder { margin: 4px 0 8px; padding: 10px 0 0; border-top: 1px solid var(--theme--border-color-subdued, #e5e7eb); }
+.plain {
+	height: 36px; padding: 0 10px; box-sizing: border-box; border: 1px solid var(--theme--border-color, #d1d5db); border-radius: var(--theme--border-radius, 8px);
+	background: var(--theme--form--field--input--background, var(--theme--background)); color: var(--theme--foreground); font: inherit;
+}
+.plain[aria-invalid='true'] { border-color: var(--theme--danger); }
+.edit-card .fld > .hint.warn { color: var(--theme--warning, #b45309); }
+.edit-card .fld > .err { font-size: 12px; }
 .del { --v-button-color: var(--theme--danger); }
 .err { color: var(--theme--danger); font-size: 12px; margin: 6px 0 0; }
 </style>
