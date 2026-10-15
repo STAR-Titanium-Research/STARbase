@@ -4,6 +4,7 @@
 -- Creates:
 --   • Lab Admin role  + admin_access policy
 --   • Lab Member role + CRUD policy for all lab collections
+--   • Lab Viewer role + read-only policy (the read rows of Lab Member; migration 20261015000185): reads every record, changes nothing
 --   • 15 Directus users from the XLSX Users sheet + one external co-owner
 --   • sample_co_owners junction rows wired from legacy co_owners TEXT
 --     (email resolution is handled in migrate_legacy.py — this file just sets up auth)
@@ -31,7 +32,8 @@ END $$;
 -- ─────────────────────────────────────────────────────────────────────────────
 INSERT INTO directus_roles (id, name, icon, description) VALUES
 ('10000001-0000-0000-0000-000000000001', 'Lab Admin',   'admin_panel_settings', 'Full platform access — manages users, roles, and all lab data'),
-('10000001-0000-0000-0000-000000000002', 'Lab Member',  'science',              'Read and contribute lab data; manage own samples')
+('10000001-0000-0000-0000-000000000002', 'Lab Member',  'science',              'Read and contribute lab data; manage own samples'),
+('10000001-0000-0000-0000-000000000003', 'Lab Viewer',  'visibility',           'Reads every record, including Restricted ones, and changes nothing')
 ON CONFLICT (id) DO UPDATE SET
     name        = EXCLUDED.name,
     description = EXCLUDED.description;
@@ -41,7 +43,8 @@ ON CONFLICT (id) DO UPDATE SET
 -- ─────────────────────────────────────────────────────────────────────────────
 INSERT INTO directus_policies (id, name, icon, description, admin_access, app_access) VALUES
 ('20000002-0000-0000-0000-000000000001', 'Lab Admin',   'shield', 'Full administrative access',                          TRUE,  TRUE),
-('20000002-0000-0000-0000-000000000002', 'Lab Member',  'badge',  'App access + full CRUD on all lab data collections',  FALSE, TRUE)
+('20000002-0000-0000-0000-000000000002', 'Lab Member',  'badge',  'App access + full CRUD on all lab data collections',  FALSE, TRUE),
+('20000002-0000-0000-0000-000000000003', 'Lab Viewer',  'badge',  'App access + read only on all lab data collections',  FALSE, TRUE)
 ON CONFLICT (id) DO UPDATE SET
     name         = EXCLUDED.name,
     admin_access = EXCLUDED.admin_access,
@@ -52,7 +55,8 @@ ON CONFLICT (id) DO UPDATE SET
 -- ─────────────────────────────────────────────────────────────────────────────
 INSERT INTO directus_access (id, role, policy, sort) VALUES
 ('30000003-0000-0000-0000-000000000001', '10000001-0000-0000-0000-000000000001', '20000002-0000-0000-0000-000000000001', 1),
-('30000003-0000-0000-0000-000000000002', '10000001-0000-0000-0000-000000000002', '20000002-0000-0000-0000-000000000002', 1)
+('30000003-0000-0000-0000-000000000002', '10000001-0000-0000-0000-000000000002', '20000002-0000-0000-0000-000000000002', 1),
+('30000003-0000-0000-0000-000000000003', '10000001-0000-0000-0000-000000000003', '20000002-0000-0000-0000-000000000003', 1)
 ON CONFLICT (id) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -268,6 +272,81 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, f
 ('directus_files', 'update', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('directus_files', 'delete', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002');
 -- END GENERATED: Lab Member permissions
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 4b. Lab Viewer permissions: the READ rows of Lab Member, unchanged, and nothing else (no create, update or delete)
+--     (migration 20261015000185_lab_viewer; generated from the same scripts/access_rules.json, so the two stay in step)
+-- ─────────────────────────────────────────────────────────────────────────────
+DELETE FROM directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000003';
+
+-- BEGIN GENERATED: Lab Viewer permissions (scripts/gen_access_rules.py --write; do not edit by hand)
+INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy) VALUES
+('physical_samples', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('manufacturing_operations', 'read', '{"_or":[{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"open_to_all":{"_some":{"record_id":{"_nnull":true}}}}]}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('test_sessions', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('campaigns', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('projects', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('sample_co_owners', 'read', '{"sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('sample_stock_provenance', 'read', '{"sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('sample_data_files', 'read', '{"sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('sample_genealogy', 'read', '{"_or":[{"child_sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"parent_sample_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}]}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('campaign_samples', 'read', '{"readers":{"_some":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('operation_data_files', 'read', '{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('machining_force_analysis', 'read', '{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('fast_run_data', 'read', '{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('session_data_files', 'read', '{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('operation_additional_operators', 'read', '{"operation_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('session_additional_operators', 'read', '{"session_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('test_sessions_subject', 'read', '{"test_sessions_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('project_investigators', 'read', '{"project_id":{"readers":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('project_rollup', 'read', '{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"restricted":{"_eq":false}},{"_or":[{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"project_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"project_id":{"access":{"role":{"_in":["investigator"]}}}}]}]}]}]}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('people', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('sample_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('operation_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('test_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('campaign_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('project_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('sample_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('operation_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('test_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('campaign_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('project_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('campaign_sample_readers', 'read', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('operation_open_to_all', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('label_templates', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('batches', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('machining_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('sintering_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('heat_treatment_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('deformation_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('am_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('tensile_test_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('hardness_test_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('charpy_test_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('compression_test_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('sem_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('xrd_params', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('materials', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('material_iso_classifications', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('alloying_elements', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('material_alloying_elements', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('equipment', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('tools', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('tool_boxes', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('cutting_inserts', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('insert_edges', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('insert_types', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('manufacturers', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('raw_stock_lots', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('manufacturing_methods', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('facilities', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('fast_recipes', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('force_crawler_state', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('label_settings', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('teams', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('team_members', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003'),
+('directus_files', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000003');
+-- END GENERATED: Lab Viewer permissions
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 5. Users

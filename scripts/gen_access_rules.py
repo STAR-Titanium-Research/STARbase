@@ -7,6 +7,12 @@ access_rules.json is the single source of the row-level visibility rules. This s
   --json     print every Lab Member row as JSON, with a `ruled` flag for the collections that
              have rules (tests compare the database with this)
   --sql      print the INSERT statement, between its BEGIN/END GENERATED markers
+  --viewer-json
+             print every Lab Viewer row as JSON (the read rows of Lab Member under the Lab Viewer policy: tests compare the
+             database with this)
+  --viewer-values
+             print every Lab Viewer row as `(collection, action, filter, validation, fields)` VALUES lines, to paste into
+             the migration that creates or changes the policy (20261015000185_lab_viewer.sql)
   --values   print every row of the collections that have rules (or custom rows) as
              `(collection, action, filter, validation, fields)` VALUES lines, to paste into the
              migration that applies a rule change (a migration is a snapshot, so it embeds the rules
@@ -28,6 +34,12 @@ access_rules.json is the single source of the row-level visibility rules. This s
 A ruled row grants every field ("*") unless "rule_fields" names a "field_sets" list for its (collection, action): Directus
 has no "all but", so leaving a field out of a policy means listing all the others. Used so Lab Members cannot edit
 `co_owners` and `secondary_investigators` in the form (read stays "*": STARbase reads both).
+
+Lab Viewer (migration 185, ADR-0014 amendment) is a read-only account role that reads every record. Its policy is not written
+by hand either: it is the READ rows of Lab Member, as they are (same collections, same filters, same fields), under the
+"viewer" policy of access_rules.json, with no create, update or delete row at all. The generated block of the Lab Viewer rows
+sits next to the Lab Member block in configure_users_and_policies.sql and `--check` covers both. Who a viewer reads is the
+readers machinery (a viewer is a reader of every record), so the Lab Member read rules are exactly right for it.
 
 Read visibility itself is not written in access_rules.json: who can read a record is computed in SQL
 (d1_private.readers_of_*, migration 166) and stored in the <type>_readers tables. A read rule is
@@ -82,6 +94,11 @@ BEGIN = (
     "(scripts/gen_access_rules.py --write; do not edit by hand)"
 )
 END = "-- END GENERATED: Lab Member permissions"
+VIEWER_BEGIN = (
+    "-- BEGIN GENERATED: Lab Viewer permissions "
+    "(scripts/gen_access_rules.py --write; do not edit by hand)"
+)
+VIEWER_END = "-- END GENERATED: Lab Viewer permissions"
 ACTIONS = ("create", "read", "update", "delete")
 CURRENT_USER = "$CURRENT_USER"
 
@@ -473,13 +490,34 @@ def ruled_collections(doc: dict) -> set[str]:
     return set(doc["rules"]) | set(doc.get("custom", {}))
 
 
+def viewer_config(doc: dict) -> dict:
+    """The Lab Viewer role, policy and access row ids (access_rules.json "viewer")."""
+    cfg = doc.get("viewer")
+    if not isinstance(cfg, dict) or set(cfg) != {"role", "policy", "access"}:
+        raise RulesError(
+            '"viewer" must be {"role": uuid, "policy": uuid, "access": uuid}'
+        )
+    if len({cfg["role"], cfg["policy"], cfg["access"], doc["policy"]}) != 4:
+        raise RulesError(
+            '"viewer" ids must differ from each other and from the Lab Member policy'
+        )
+    return cfg
+
+
+def viewer_rows(doc: dict, rows: list[dict]) -> list[dict]:
+    """The Lab Viewer rows: every READ row of Lab Member (ruled, custom and unfiltered), unchanged, under the viewer's
+    policy. A viewer never writes, so no create, update or delete row exists for it."""
+    policy = viewer_config(doc)["policy"]
+    return [{**r, "policy": policy} for r in rows if r["action"] == "read"]
+
+
 def compact(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True)
 
 
-def sql_block(rows: list[dict]) -> str:
+def sql_block(rows: list[dict], begin: str = BEGIN, end: str = END) -> str:
     lines = [
-        BEGIN,
+        begin,
         "INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy) VALUES",
     ]
     values = [
@@ -488,20 +526,21 @@ def sql_block(rows: list[dict]) -> str:
         for r in rows
     ]
     lines.append(",\n".join(values) + ";")
-    lines.append(END)
+    lines.append(end)
     return "\n".join(lines)
 
 
 def migration_values(
-    rows: list[dict], ruled: set[str], only: set[str] | None = None
+    rows: list[dict], ruled: set[str] | None, only: set[str] | None = None
 ) -> str:
-    """Every row of a collection that has rules (create rows included), as VALUES lines.
+    """Every row of a collection that has rules (create rows included), as VALUES lines (`ruled` None: every row).
     `only` narrows it to those collections (a migration that changes some of the rules)."""
     return ",\n".join(
         f"    ('{r['collection']}', '{r['action']}', '{compact(r['permissions'])}', "
         f"'{compact(r['validation'])}', '{r['fields']}')"
         for r in rows
-        if r["collection"] in ruled and (only is None or r["collection"] in only)
+        if (ruled is None or r["collection"] in ruled)
+        and (only is None or r["collection"] in only)
     )
 
 
@@ -796,17 +835,26 @@ def write_lf(path: Path, text: str) -> None:
         f.write(text)
 
 
-def script_block(script_text: str) -> tuple[int, int]:
-    start = script_text.find(BEGIN)
-    end = script_text.find(END)
-    if start < 0 or end < 0 or end < start:
-        raise RulesError(f"the script has no '{BEGIN[:40]}...' block")
-    return start, end + len(END)
+def script_block(
+    script_text: str, begin: str = BEGIN, end: str = END
+) -> tuple[int, int]:
+    start = script_text.find(begin)
+    stop = script_text.find(end)
+    if start < 0 or stop < 0 or stop < start:
+        raise RulesError(f"the script has no '{begin[:40]}...' block")
+    return start, stop + len(end)
 
 
-def render_script(script_text: str, rows: list[dict]) -> str:
+def render_script(
+    script_text: str, rows: list[dict], viewer: list[dict] | None = None
+) -> str:
+    """The script with its generated blocks rewritten: Lab Member rows and, when `viewer` is given, Lab Viewer rows."""
     start, end = script_block(script_text)
-    return script_text[:start] + sql_block(rows) + script_text[end:]
+    text = script_text[:start] + sql_block(rows) + script_text[end:]
+    if viewer is not None:
+        start, end = script_block(text, VIEWER_BEGIN, VIEWER_END)
+        text = text[:start] + sql_block(viewer, VIEWER_BEGIN, VIEWER_END) + text[end:]
+    return text
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -814,7 +862,17 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     mode = ap.add_mutually_exclusive_group(required=True)
-    for flag in ("json", "sql", "values", "hook", "record", "write", "check"):
+    for flag in (
+        "json",
+        "sql",
+        "values",
+        "hook",
+        "record",
+        "write",
+        "check",
+        "viewer-json",
+        "viewer-values",
+    ):
         mode.add_argument(f"--{flag}", action="store_true")
     mode.add_argument("--resolve", type=Path, metavar="FILE")
     ap.add_argument("--rules", type=Path, default=RULES_FILE)
@@ -831,6 +889,7 @@ def main(argv: list[str] | None = None) -> int:
     doc = load(args.rules)
     try:
         rows = build_rows(doc)
+        viewer = viewer_rows(doc, rows)
         hook_text = hook_rules_text(doc)
         record_text = record_rules_text(doc)
     except RulesError as exc:
@@ -844,6 +903,15 @@ def main(argv: list[str] | None = None) -> int:
                 [{**r, "ruled": r["collection"] in ruled} for r in rows], indent=1
             )
         )
+    elif args.viewer_json:
+        ruled = ruled_collections(doc)
+        print(
+            json.dumps(
+                [{**r, "ruled": r["collection"] in ruled} for r in viewer], indent=1
+            )
+        )
+    elif args.viewer_values:
+        print(migration_values(viewer, None))
     elif args.sql:
         print(sql_block(rows))
     elif args.values:
@@ -862,7 +930,7 @@ def main(argv: list[str] | None = None) -> int:
         print("every rule path resolves")
     elif args.write:
         text = args.script.read_text(encoding="utf-8")
-        write_lf(args.script, render_script(text, rows))
+        write_lf(args.script, render_script(text, rows, viewer))
         for path, body in (
             (args.hook_rules, hook_text),
             (args.record_rules, record_text),
@@ -872,7 +940,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         text = args.script.read_text(encoding="utf-8")
         stale = []
-        if render_script(text, rows) != text:
+        if render_script(text, rows, viewer) != text:
             stale.append(args.script.name)
         for path, want in (
             (args.hook_rules, hook_text),
@@ -889,8 +957,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         print(
-            f"{args.script.name}, the d1-access-guard rules and the d1-record-access rules match "
-            f"{args.rules.name} ({len(rows)} rows)"
+            f"{args.script.name} (Lab Member and Lab Viewer blocks), the d1-access-guard rules and the d1-record-access rules match "
+            f"{args.rules.name} ({len(rows)} Lab Member rows, {len(viewer)} Lab Viewer rows)"
         )
     return 0
 

@@ -38,6 +38,7 @@ spec.loader.exec_module(gen)
 
 DOC = gen.load()
 ROWS = gen.build_rows(DOC)
+VIEWER_ROWS = gen.viewer_rows(DOC, ROWS)
 BY_KEY = {(r["collection"], r["action"]): r for r in ROWS}
 RULES = {k: r["permissions"] for k, r in BY_KEY.items()}
 # Lab Member filters of main before A1 (generator output on 2026-10-12, frozen so no git history is needed).
@@ -443,7 +444,7 @@ def base_people(w):
 def test_generated_script_block_is_current():
     script = SCRIPTS / "configure_users_and_policies.sql"
     assert gen.render_script(
-        script.read_text(encoding="utf-8"), ROWS
+        script.read_text(encoding="utf-8"), ROWS, VIEWER_ROWS
     ) == script.read_text(
         encoding="utf-8"
     ), "run `python3 scripts/gen_access_rules.py --write`"
@@ -459,11 +460,154 @@ def test_check_command_detects_a_hand_edit(tmp_path):
 
 
 def test_script_has_no_ungenerated_lab_member_rows():
-    """The only INSERT INTO directus_permissions in the script is the generated one."""
+    """The only INSERT INTO directus_permissions in the script are the two generated ones (Lab Member, Lab Viewer)."""
     text = (SCRIPTS / "configure_users_and_policies.sql").read_text(encoding="utf-8")
-    assert text.count("INSERT INTO directus_permissions") == 1
+    assert text.count("INSERT INTO directus_permissions") == 2
     start, end = gen.script_block(text)
     assert "INSERT INTO directus_permissions" in text[start:end]
+    start, end = gen.script_block(text, gen.VIEWER_BEGIN, gen.VIEWER_END)
+    assert "INSERT INTO directus_permissions" in text[start:end]
+
+
+# =================================================================================================
+# Lab Viewer (migration 185): the read rows of Lab Member under another policy, and nothing else
+# =================================================================================================
+
+VIEWER = DOC["viewer"]
+NL = chr(10)
+
+
+def test_viewer_rows_are_the_lab_member_read_rows_unchanged():
+    reads = [r for r in ROWS if r["action"] == "read"]
+    assert len(VIEWER_ROWS) == len(reads) > 50
+    for lm, v in zip(reads, VIEWER_ROWS):
+        assert v["policy"] == VIEWER["policy"] != lm["policy"]
+        assert {k: x for k, x in v.items() if k != "policy"} == {
+            k: x for k, x in lm.items() if k != "policy"
+        }, f"{lm['collection']} read differs between Lab Member and Lab Viewer"
+
+
+def test_viewer_has_no_create_update_or_delete_row_at_all():
+    assert {r["action"] for r in VIEWER_ROWS} == {"read"}
+    assert not [r for r in VIEWER_ROWS if r["action"] in ("create", "update", "delete")]
+
+
+def test_viewer_reads_every_collection_lab_member_reads_and_no_other():
+    lm_read = {r["collection"] for r in ROWS if r["action"] == "read"}
+    assert {r["collection"] for r in VIEWER_ROWS} == lm_read
+    assert len({r["collection"] for r in VIEWER_ROWS}) == len(
+        VIEWER_ROWS
+    )  # one read row each
+
+
+def test_viewer_reads_records_through_the_readers_tables_like_lab_member():
+    for collection in (
+        "physical_samples", "manufacturing_operations", "test_sessions", "campaigns", "projects",
+    ):  # fmt: skip
+        row = next(r for r in VIEWER_ROWS if r["collection"] == collection)
+        assert "readers" in json.dumps(row["permissions"]), collection
+
+
+def test_viewer_ids_are_distinct_and_follow_the_existing_pattern():
+    assert VIEWER["role"].startswith("10000001-0000-0000-0000-")
+    assert VIEWER["policy"].startswith("20000002-0000-0000-0000-")
+    assert VIEWER["access"].startswith("30000003-0000-0000-0000-")
+    assert len({VIEWER["role"], VIEWER["policy"], VIEWER["access"], DOC["policy"]}) == 4
+    assert VIEWER["role"] not in (
+        "10000001-0000-0000-0000-000000000001",
+        "10000001-0000-0000-0000-000000000002",
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        {},
+        {"role": "a", "policy": "b"},
+        {"role": "a", "policy": "b", "access": "c", "extra": "d"},
+        {"role": "a", "policy": "a", "access": "c"},
+    ],
+)
+def test_viewer_config_is_validated(bad):
+    doc = {**DOC, "viewer": bad}
+    if bad is None:
+        del doc["viewer"]
+    with pytest.raises(gen.RulesError):
+        gen.viewer_rows(doc, ROWS)
+
+
+def test_viewer_policy_must_not_be_the_lab_member_policy():
+    doc = {**DOC, "viewer": {**VIEWER, "policy": DOC["policy"]}}
+    with pytest.raises(gen.RulesError):
+        gen.viewer_rows(doc, ROWS)
+
+
+def test_check_command_detects_a_hand_edit_of_the_viewer_block(tmp_path):
+    script = tmp_path / "configure_users_and_policies.sql"
+    text = (SCRIPTS / "configure_users_and_policies.sql").read_text(encoding="utf-8")
+    start, end = gen.script_block(text, gen.VIEWER_BEGIN, gen.VIEWER_END)
+    block = text[start:end]
+    assert "'update'" not in block and "'delete'" not in block
+    # a write row added by hand is drift, and so is a changed filter
+    for edited in (
+        block.replace(
+            "VALUES" + NL,
+            "VALUES"
+            + NL
+            + "('people', 'delete', '{}', '{}', '*', '"
+            + VIEWER["policy"]
+            + "'),"
+            + NL,
+            1,
+        ),
+        block.replace('"readers"', '"owner_person_id"', 1),
+    ):
+        assert edited != block
+        script.write_text(text.replace(block, edited), encoding="utf-8")
+        assert gen.main(["--check", "--script", str(script)]) == 1
+    script.write_text(text, encoding="utf-8")
+    assert gen.main(["--check", "--script", str(script)]) == 0
+
+
+def test_script_creates_the_viewer_role_policy_and_binding():
+    text = (SCRIPTS / "configure_users_and_policies.sql").read_text(encoding="utf-8")
+    assert f"('{VIEWER['role']}', 'Lab Viewer'" in text
+    assert f"('{VIEWER['policy']}', 'Lab Viewer'" in text
+    assert (
+        f"('{VIEWER['access']}', '{VIEWER['role']}', '{VIEWER['policy']}', 1)" in text
+    )
+    # the viewer rows are replaced as a block, like Lab Member's
+    assert (
+        f"DELETE FROM directus_permissions WHERE policy = '{VIEWER['policy']}'" in text
+    )
+
+
+def test_viewer_json_and_values_cover_every_row(capsys):
+    assert gen.main(["--viewer-json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [(r["collection"], r["action"]) for r in rows] == [
+        (r["collection"], r["action"]) for r in VIEWER_ROWS
+    ]
+    assert {r["policy"] for r in rows} == {VIEWER["policy"]}
+    assert gen.main(["--viewer-values"]) == 0
+    values = capsys.readouterr().out.strip().splitlines()
+    assert len(values) == len(VIEWER_ROWS)
+    assert all("'read'" in v for v in values)
+
+
+def test_migration_185_carries_the_generated_viewer_rows():
+    """The migration is a snapshot of the rules on the day it was written; this keeps it equal until a later migration changes them."""
+    migration = (
+        SCRIPTS.parent / "db" / "migrations" / "20261015000185_lab_viewer.sql"
+    ).read_text(encoding="utf-8")
+    values = gen.migration_values(VIEWER_ROWS, None)
+    assert values in migration
+    assert (
+        "'create'" not in values
+        and "'update'" not in values
+        and "'delete'" not in values
+    )
 
 
 def test_create_is_never_filtered():

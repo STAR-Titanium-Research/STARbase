@@ -56,7 +56,7 @@
 //
 // Errors use the Directus shape { errors: [{ message, extensions: { code, source: 'd1-people-admin' } }] }.
 
-import { COLLECTIONS } from '../d1-record-access/index.js';
+import { COLLECTIONS, READ_ONLY_ROLE_MESSAGE, isLabViewer, isWriteRequest, labViewerRoleId } from '../d1-record-access/index.js';
 
 const SOURCE = 'd1-people-admin';
 const DEFAULT_LAB_ADMIN_ROLE_ID = '10000001-0000-0000-0000-000000000001';
@@ -138,6 +138,8 @@ export default {
       try {
         const acc = req.accountability;
         if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
+        // a Lab Viewer changes nothing: no role or status change, no invite (also refused below: a viewer is no administrator)
+        if (isWriteRequest(req) && (await isLabViewer(database, acc.user, labViewerRoleId(env)))) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
         const caller = await accountAdmin(database, acc.user, labAdminRoleId);
         await fn({ req, res, acc, admin: acc.admin === true || caller.admin, accounts: caller.accounts });
       } catch (err) {

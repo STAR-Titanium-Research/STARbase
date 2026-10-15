@@ -410,6 +410,32 @@ Preview and E2E: `npm run build:extensions && npm run build -w starbase-web`, th
 `cd tests/ui && npx playwright test specs/20-my-teams.spec.ts` (it makes its own logins, a team, 12 team-owned samples, a pending restricted
 sample and a team-shared project, and removes them afterwards).
 
+## Lab Viewer (migration 185) (maintainer's step, approve separately)
+
+A read-only account role for the lab's PI: it **reads every record (Restricted included) and changes nothing**. It is migration 185 (the role, its
+policy, `d1_private.v_viewers`, the viewer branch of the readers functions and the triggers on `directus_users`) and a change to the `d1-record-access`,
+`d1-teams` and `d1-people-admin` extensions, which now refuse a viewer on every route that changes anything. **No new `.env` keys** (`D1_LAB_VIEWER_ROLE_ID` is
+optional and only needed if the role has a different id on this server). Needs the People and Teams migrations (180 to 184) applied first.
+
+1. `git pull && npm ci && npm run build:extensions` (STARbase is unchanged by this step).
+2. **Stop Directus, migrate, start it**: `docker compose stop directus`, `make migrate-status` (185 pending), `make migrate`, `docker compose up -d --force-recreate directus`
+   (the recreate loads the changed extensions). Stopping first keeps a writer from holding the readers lock while the migration takes it. **No Redis flush is needed**: the
+   role and its policy are new, so Directus has no cached permissions for them, and none of the existing rows changed (do not `FLUSHALL`: Redis also holds the worker queues).
+3. Check: `SELECT d1_private.readers_drift_count();` is `0`; `SELECT name FROM directus_roles WHERE name = 'Lab Viewer';` returns one row; the policy has read rows only:
+   `SELECT action, count(*) FROM directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000003' GROUP BY 1;` returns `read` and nothing else.
+4. **Invite with the role Lab Viewer** (People → Invite, role Lab Viewer; only an Administrator can choose a role). The invite makes a People row marked Researcher as it does for
+   everyone; it changes nothing for a viewer. Sign in as the viewer and look at a Restricted record of someone else's: it is there, and every edit, share, transfer and
+   delete is refused.
+5. Smoke as the viewer, from a second device: Samples, Operations, Tests, Campaigns and Projects list every record, a Restricted one included; Who has access opens and every button
+   that changes something answers 403 `READ_ONLY_ROLE`. **Not yet for a viewer**: the People page, the project rollup of other people's projects and Ask-the-database
+   of Restricted records (it hides them from everyone).
+
+Making someone a viewer, or taking the role away, or suspending or unsuspending a viewer, recomputes every readers table (a few seconds on the live data); it is safe to do
+while the lab works. To stop being a viewer is the same as any role change (People → Role).
+
+Rollback: `make migrate-down` (185): the role, policy, view, triggers and viewer branches go, the readers are recomputed, a login that still had the role is left without one
+(give it a role again before it signs in). Then `git checkout <previous commit>`, `npm run build:extensions`, recreate `directus`.
+
 ## Recorded batches (migration 177, process map slice 2)
 
 Recorded batches (ADR-0017): a `batches` table, a nullable `batch_id` on `manufacturing_operations` and

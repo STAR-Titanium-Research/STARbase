@@ -173,14 +173,14 @@ function mount({ tables = baseTables(), raw = {}, env = {}, mailFail = null, upd
 const admin = (user) => ({ user, admin: true, app: true });
 const member = (user) => ({ user, admin: false, app: true });
 
-function call(h, { acc, params = {}, query = {}, body } = {}) {
+function call(h, { acc, params = {}, query = {}, body, method } = {}) {
   return new Promise((resolve) => {
     const out = { status: 200, body: undefined };
     const res = {
       status(code) { out.status = code; return res; },
       json(b) { out.body = b; resolve(out); return res; },
     };
-    h({ accountability: acc, params, query, body, schema: {} }, res);
+    h({ accountability: acc, params, query, body, schema: {}, ...(method ? { method } : {}) }, res);
   });
 }
 const errorOf = (r) => r.body?.errors?.[0];
@@ -954,4 +954,33 @@ test('header invite: no person with the e-mail inserts a new one (is_researcher)
   assert.equal(r2.status, 200);
   assert.equal(r2.body.person_id, P.cy);
   assert.equal(t2.people.find((p) => p.person_id === P.cy).user_id, ID(261));
+});
+
+// ---- Lab Viewer (migration 185): reads everything, changes nothing ---------------------------------------------------
+
+test('Lab Viewer: no role change, no invite, no resend (403 READ_ONLY_ROLE), even for a viewer who also holds an admin policy on the user', async () => {
+  const VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
+  const tables = baseTables();
+  tables.directus_users.push({ id: ID(262), email: 'pi@login.example', status: 'active', role: VIEWER_ROLE });
+  tables.directus_access.push({ role: null, user: ID(262), policy: POLICY.admin }); // an administrator by a user policy, whose account role is Lab Viewer
+  const { handlers, db, invites } = mount({ tables, env: ENV });
+  const viewer = { user: ID(262), admin: true, app: true };
+  for (const [route, body, params] of [
+    ['PATCH /logins/:user_id', { role: R.member }, { user_id: U.ann }],
+    ['POST /invite', { email: 'new@people.example' }, {}],
+    ['POST /invite/resend', { user_id: U.bob }, {}],
+  ]) {
+    const r = await call(handlers[route], { acc: viewer, body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+    assert.equal(errorOf(r).extensions.source, 'd1-people-admin');
+  }
+  assert.deepEqual(db.log.tx, []);
+  assert.equal(invites.length, 0);
+  // a plain viewer is no administrator either: the read routes stay admin-only until the People page opens them (Task B)
+  const plain = baseTables();
+  plain.directus_users.find((u) => u.id === U.ann).role = VIEWER_ROLE;
+  const m2 = mount({ tables: plain, env: ENV });
+  const r2 = await call(m2.handlers['PATCH /logins/:user_id'], { acc: { user: U.ann, admin: false, app: true }, body: { role: R.member }, params: { user_id: U.bob }, method: 'PATCH' });
+  assert.equal(errorOf(r2).extensions.code, 'READ_ONLY_ROLE');
 });

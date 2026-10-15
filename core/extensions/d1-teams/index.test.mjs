@@ -289,14 +289,14 @@ function mount({ tables = baseTables(), env = {}, mailFail = false, notActionabl
 const admin = (user) => ({ user, admin: true, app: true });
 const member = (user) => ({ user, admin: false, app: true });
 
-function call(h, { acc, params = {}, query = {}, body } = {}) {
+function call(h, { acc, params = {}, query = {}, body, method } = {}) {
   return new Promise((resolve, reject) => {
     const out = { status: 200, body: undefined };
     const res = {
       status(code) { out.status = code; return res; },
       json(b) { out.body = b; resolve(out); return res; },
     };
-    Promise.resolve(h({ accountability: acc, params, query, body, schema: {} }, res)).catch(reject);
+    Promise.resolve(h({ accountability: acc, params, query, body, schema: {}, ...(method ? { method } : {}) }, res)).catch(reject);
   });
 }
 const errorOf = (r) => r.body?.errors?.[0];
@@ -1292,4 +1292,39 @@ test('GET /mine/recent: a record granted to two of the caller\'s teams is listed
   adminTables.people.push({ person_id: P.adm, full_name: 'Adm In', email: null, user_id: U.admin });
   const adm = await call(mount({ tables: adminTables }).handlers['GET /mine/recent'], { acc: admin(U.admin) });
   assert.deepEqual(adm.body.items.map((i) => i.code), ['SM-010', 'OP-1', 'SM-003', 'SM-001', 'SM-002', 'PRJ1']);
+});
+
+// ---- Lab Viewer (migration 185): reads everything, changes nothing ---------------------------------------------------
+
+test('Lab Viewer: a viewer who MANAGES a team and owns records is refused on every route that changes anything, and may read', async () => {
+  const tables = baseTables();
+  tables.directus_users.find((u) => u.id === U.ann).role = '10000001-0000-0000-0000-000000000003'; // Ann manages Additive
+  const { handlers, db, decided, mails, cleared } = mount({ tables });
+  const writes = [
+    ['POST /', { name: 'Viewers team' }, {}],
+    ['PATCH /:id', { name: 'Renamed' }, { id: T.additive }],
+    ['DELETE /:id', undefined, { id: T.additive }],
+    ['POST /:id/members', { person_id: P.cy }, { id: T.additive }],
+    ['PATCH /:id/members/:person_id', { is_manager: true }, { id: T.additive, person_id: P.bob }],
+    ['DELETE /:id/members/:person_id', undefined, { id: T.additive, person_id: P.bob }],
+    ['POST /pending/decide', { collection: 'physical_samples', team_access_id: ID(900), person_id: P.bob, decision: 'approve' }, {}],
+  ];
+  for (const [route, body, params] of writes) {
+    assert.ok(handlers[route], route);
+    const r = await call(handlers[route], { acc: member(U.ann), body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+    assert.equal(errorOf(r).extensions.source, 'd1-teams');
+  }
+  assert.deepEqual(db.log.tx, []); // refused before any transaction opened
+  assert.deepEqual(decided, []);
+  assert.equal(mails.length, 0);
+  assert.equal(cleared.length, 0);
+  // reading is not refused
+  assert.equal((await call(handlers['GET /'], { acc: member(U.ann), method: 'GET' })).status, 200);
+  assert.equal((await call(handlers['GET /:id'], { acc: member(U.ann), params: { id: T.additive }, method: 'GET' })).status, 200);
+  // the same manager as a Lab Member is not refused
+  const ok = mount();
+  const created = await call(ok.handlers['POST /'], { acc: member(U.ann), body: { name: 'Fresh team' }, method: 'POST' });
+  assert.notEqual(errorOf(created)?.extensions?.code, 'READ_ONLY_ROLE');
 });
