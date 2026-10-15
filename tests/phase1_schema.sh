@@ -6210,8 +6210,12 @@ grep -q 'fi_alias_chars:ab.c_d-1' <<<"$fi_out" && ok "uni_alias may contain dot,
 fi_out=$(fi_sql "UPDATE people SET uni_alias = 'Abc12de' WHERE person_id = '$FI_P1';
 UPDATE people SET uni_alias = 'aBC12DE' WHERE person_id = '$FI_P2';")
 grep -q 'duplicate key' <<<"$fi_out" && ok "a uni_alias that differs only in case is rejected (unique on lower)" || bad "case-different duplicate uni_alias was not rejected (output: $fi_out)"
-fi_out=$(fi_sql "SELECT 'fi_nulls:' || count(*) FROM people WHERE person_id IN ('$FI_P1', '$FI_P2') AND uni_alias IS NULL;")
-grep -q 'fi_nulls:2' <<<"$fi_out" && ok "two people without an alias are fine (the unique index skips NULL)" || bad "two NULL aliases failed (output: $fi_out)"
+run_eq "people_uni_alias_key is a unique index on lower(uni_alias), partial WHERE uni_alias IS NOT NULL (so any number of people may have no alias)" \
+    "SELECT (indexdef LIKE 'CREATE UNIQUE INDEX people_uni_alias_key ON public.people USING btree (lower(uni_alias)) WHERE (uni_alias IS NOT NULL)') FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'people_uni_alias_key'" "t"
+fi_out=$(fi_sql "SELECT 'fi_nulls:' || count(*) FROM people WHERE person_id IN ('$FI_P1', '$FI_P2') AND uni_alias IS NULL;
+UPDATE people SET uni_alias = 'solo01' WHERE person_id = '$FI_P1';
+SELECT 'fi_nulls_after:' || count(*) FROM people WHERE person_id IN ('$FI_P1', '$FI_P2') AND uni_alias IS NULL;")
+grep -q 'fi_nulls:2' <<<"$fi_out" && grep -q 'fi_nulls_after:1' <<<"$fi_out" && ok "two people without an alias coexist, and one of them can take an alias while the other stays without" || bad "NULL aliases misbehaved (output: $fi_out)"
 # A new people row cannot carry an alias or the Former switch (a Lab Member can create people; only an administrator may UPDATE these)
 fi_out=$(fi_sql "INSERT INTO people (full_name, uni_alias) VALUES ('Inbox Squatter', 'squat1');")
 grep -q 'uni_alias and scan_while_former can only be set by an update' <<<"$fi_out" && ok "inserting a person with a uni_alias is refused (an alias can only be set by an update)" || bad "insert with uni_alias was not refused (output: $fi_out)"
@@ -6224,6 +6228,8 @@ grep -q 'fi_ins_upd:plain01:true' <<<"$fi_out" && ok "a person inserted without 
 run_eq "the insert guard is a BEFORE INSERT row trigger on people" \
     "SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.people'::regclass AND tgname = 'people_inbox_columns_insert' AND (tgtype & 2) = 2 AND (tgtype & 4) = 4 AND (tgtype & 1) = 1" "1"
 # teams.share_folder
+run_eq "teams_share_folder_key is a unique index on lower(share_folder), partial WHERE share_folder IS NOT NULL" \
+    "SELECT (indexdef LIKE 'CREATE UNIQUE INDEX teams_share_folder_key ON public.teams USING btree (lower(share_folder)) WHERE (share_folder IS NOT NULL)') FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'teams_share_folder_key'" "t"
 run_eq "teams.share_folder is nullable text" \
     "SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'teams' AND column_name = 'share_folder'" "text:YES"
 fi_out=$(fi_sql "UPDATE teams SET share_folder = 'x/y' WHERE team_id = '$FI_T1';")
@@ -6444,8 +6450,10 @@ run_eq "scan requests have an index for claiming queued rows and one for the per
     "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'inbox_scan_requests' AND (indexdef LIKE '%(status, requested_at)%' OR indexdef LIKE '%(person_id, requested_at%')" "2"
 # inbox_crawler_state (singleton)
 run_eq "inbox_crawler_state is seeded with exactly one row" "SELECT count(*) FROM d1_private.inbox_crawler_state" "1"
-run_eq "the seeded state row has the defaults (interval 30 minutes, 60 MB/s, zero counters, no unmatched folders, never heartbeated)" \
-    "SELECT interval_minutes || ':' || read_mb_per_s::int || ':' || files_registered || ':' || error_count || ':' || unmatched_folders || ':' || (last_heartbeat_at IS NULL) || ':' || (desired_state IN ('running', 'paused')) FROM d1_private.inbox_crawler_state" "30:60:0:0:[]:true:true"
+run_eq "the seeded state row has the defaults (running, interval 30 minutes, 60 MB/s, zero counters, no unmatched folders, never heartbeated)" \
+    "SELECT desired_state || ':' || interval_minutes || ':' || read_mb_per_s::int || ':' || files_registered || ':' || error_count || ':' || unmatched_folders || ':' || (last_heartbeat_at IS NULL) FROM d1_private.inbox_crawler_state" "running:30:60:0:0:[]:true"
+run_eq "the column defaults themselves are desired_state 'running', interval 30, read rate 60 (not just the seeded row)" \
+    "SELECT string_agg(column_name || '=' || column_default, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = 'd1_private' AND table_name = 'inbox_crawler_state' AND column_name IN ('desired_state', 'interval_minutes', 'read_mb_per_s')" "desired_state='running'::text,interval_minutes=30,read_mb_per_s=60"
 fi_out=$(fi_sql "INSERT INTO d1_private.inbox_crawler_state (id) VALUES ('a2000000-0000-4000-8000-0000000000ee');")
 grep -q 'check constraint' <<<"$fi_out" && ok "a second inbox_crawler_state row with another id is rejected (singleton check)" || bad "second state row was not rejected (output: $fi_out)"
 fi_out=$(fi_sql "INSERT INTO d1_private.inbox_crawler_state (id) VALUES ('00000000-0000-0000-0000-000000000001');")
