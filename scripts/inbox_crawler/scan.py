@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import classify_sem, db, hashing, kinds, owners, recognise
+from .fs_readonly import ReadRefused
 from .identity import file_id
 
 log = logging.getLogger("inbox_crawler.scan")
@@ -75,7 +76,11 @@ def still_the_same(
 
 def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
     """Stat, hash and re-check one file. Returns (outcome, stat or None, mtime or None). Used for a file a
-    person has linked (adopted) and for retrying a hash that failed; both write file_fingerprints."""
+    person has linked (adopted) and for retrying a hash that failed; both write file_fingerprints.
+
+    Never raises for a path the share refuses (a `..` part, a link in the path, a file type the allow-list
+    does not cover): that is an 'error' outcome like any unreadable file, so the caller writes its row, the
+    row is retried no sooner than an hour later and the loop goes on to the next file."""
     try:
         st = share.stat(rel)
     except FileNotFoundError:
@@ -90,9 +95,20 @@ def fingerprint_file(share, rel: str, throttle, *, adopted: bool = False):
             None,
             None,
         )
+    except ValueError:
+        return (
+            hashing.HashOutcome("error", error="not a path the share allows"),
+            None,
+            None,
+        )
     if not st.is_file:
         return hashing.HashOutcome("error", error="not a regular file"), None, None
-    out = hashing.hash_file(share, rel, throttle=throttle, adopted=adopted)
+    try:
+        out = hashing.hash_file(share, rel, throttle=throttle, adopted=adopted)
+    except (ReadRefused, ValueError) as exc:
+        log.warning("not reading %s: %s", rel, type(exc).__name__)
+        refused = hashing.HashOutcome("error", error=f"read refused: {exc}"[:500])
+        return refused, st, db.to_datetime(st.mtime_ns)
     try:
         out = still_the_same(share, rel, st, out)
     except OSError as exc:
