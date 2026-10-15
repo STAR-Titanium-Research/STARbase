@@ -1,15 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Raycaster, Vector3, type Intersection } from 'three';
 import { buildToolingModel, type EdgeRow, type InsertRow, type ToolingFocus } from '@d1/ui';
 import { BoxView, type ViewState } from './boxView';
-import { SceneMaterials } from './materials';
+import { etchInk, SceneMaterials } from './materials';
+import { etchLabels } from './etchMesh';
 import { luminance, type Palette, type Rgba } from './themePalette';
 
 const rgb = (r: number, g: number, b: number): Rgba => ({ r, g, b, a: 1 });
 const palette = (dark: boolean): Palette => ({
 	tile: dark ? rgb(0.08, 0.1, 0.13) : rgb(0.9, 0.91, 0.93), tray: rgb(0.5, 0.5, 0.5), ink: rgb(0.1, 0.1, 0.1),
 	body: rgb(0.3, 0.3, 0.32), mark: rgb(0.6, 0.6, 0.6), ok: rgb(0.1, 0.6, 0.3), warn: rgb(0.8, 0.5, 0.1),
-	dim: rgb(0.5, 0.5, 0.55), accent: rgb(0.2, 0.4, 0.8), pick: rgb(0.6, 0.7, 0.9),
+	dim: rgb(0.5, 0.5, 0.55), accent: rgb(0.2, 0.4, 0.8), pick: rgb(0.6, 0.7, 0.9), select: rgb(0.25, 0.41, 0.88),
 	tipPcd: rgb(0.85, 0.86, 0.88), tipCbn: rgb(0.55, 0.45, 0.3),
 });
 
@@ -55,6 +56,41 @@ describe('SceneMaterials', () => {
 		expect(m.bodyGhost.opacity).toBeCloseTo(0.35, 6);
 	});
 
+	it('colours the selected edge with its own selection colour, apart from the hover lift and the state colours', () => {
+		const m = new SceneMaterials(palette(false));
+		const hex = (c: { getHex(): number }) => c.getHex();
+		expect(hex(m.edge.selected.color)).toBe(hex(m.edge.glow.color));
+		for (const other of [m.edge.hover, m.edge.fresh, m.edge.used, m.edge.halo]) expect(hex(m.edge.selected.color)).not.toBe(hex(other.color));
+		const before = hex(m.edge.selected.color);
+		m.update({ ...palette(false), select: rgb(0.9, 0.2, 0.2) });
+		expect(hex(m.edge.selected.color)).not.toBe(before);
+		expect(m.edge.selected.opacity).toBe(1);
+		expect(m.edge.glow.opacity).toBeLessThan(m.edge.selected.opacity); // a soft glow around the solid tube
+	});
+
+	it('inks the etched numbers darker than the tray on a light stage, and lighter on a dark one, and recolours on a theme change', () => {
+		const light = { ...palette(false), ink: rgb(0.08, 0.1, 0.2), tray: rgb(0.78, 0.79, 0.82) };
+		const dark = { ...palette(true), ink: rgb(0.92, 0.94, 0.97), tray: rgb(0.1, 0.12, 0.15) };
+		expect(luminance(etchInk(light.ink, light.tray, false))).toBeLessThan(luminance(light.tray));
+		expect(luminance(etchInk(dark.ink, dark.tray, true))).toBeGreaterThan(luminance(dark.tray));
+		// Eased toward the tray, so it reads as cut into it: not quite the page's ink.
+		expect(luminance(etchInk(light.ink, light.tray, false))).toBeGreaterThan(luminance(light.ink));
+		const m = new SceneMaterials(light);
+		const asLight = m.etch.color.getHex();
+		m.update(dark);
+		expect(m.etch.color.getHex()).not.toBe(asLight);
+		const hex = m.etch.color.getHex(); // sRGB
+		expect(luminance({ r: (hex >> 16) / 255, g: ((hex >> 8) & 255) / 255, b: (hex & 255) / 255, a: 1 })).toBeGreaterThan(0.3); // legible on the dark tray
+	});
+
+	it('makes the reference arrow near-white in the light theme and keeps it flat (not tone mapped)', () => {
+		const m = new SceneMaterials({ ...palette(false), mark: rgb(0.94, 0.94, 0.96) });
+		expect(m.mark.toneMapped).toBe(false);
+		expect(luminance({ r: m.mark.color.r, g: m.mark.color.g, b: m.mark.color.b, a: 1 })).toBeGreaterThan(
+			luminance({ r: m.body.color.r, g: m.body.color.g, b: m.body.color.b, a: 1 }) * 3,
+		);
+	});
+
 	it('knows a dark stage from a light one', () => {
 		expect(luminance(palette(true).tile)).toBeLessThan(0.35);
 		expect(new SceneMaterials(palette(true)).isDark).toBe(true);
@@ -96,6 +132,83 @@ describe('BoxView with a tipped insert type', () => {
 		view.root.traverse((o) => { if (o.userData.kind === 'edge') tubes++; });
 		expect(tubes).toBe(2);
 		expect(m.geometry.cuttingCorners).toEqual([0]);
+	});
+});
+
+// The tray's etched numbers need a canvas; in Node a stub stands in, which is all a CanvasTexture needs.
+describe('BoxView etched slot numbers', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const stubCanvas = () => {
+		const ctx = { clearRect() {}, fillText() {}, fillStyle: '', font: '', textAlign: '', textBaseline: '' };
+		vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) });
+	};
+	const etchOf = (view: BoxView, mats: SceneMaterials) => view.root.children.find((o) => (o as import('three').Mesh).material === mats.etch) as import('three').Mesh | undefined;
+
+	it('draws no etch without a canvas (Node), and still builds the rest of the box', () => {
+		const { view, mats } = make();
+		expect(etchOf(view, mats)).toBeUndefined();
+		expect(mats.etch.map).toBeNull();
+		expect(view.pickables(BOX).length).toBeGreaterThan(10);
+	});
+
+	it('etches one quad per slot (empty ones too) flat on the tray top, outside the highlight overlays', () => {
+		stubCanvas();
+		const { view, mats } = make();
+		const etch = etchOf(view, mats)!;
+		expect(etch).toBeDefined();
+		expect(mats.etch.map).not.toBeNull();
+		expect(etch.geometry.getAttribute('position').count).toBe((view.layout.slots.length + 2) * 6); // a quad per slot, plus the box code and the type
+		etch.geometry.computeBoundingBox();
+		const b = etch.geometry.boundingBox!;
+		expect(b.min.y).toBeGreaterThan(view.layout.topY);
+		expect(b.max.y).toBeLessThan(view.layout.topY + 0.1);
+		expect(etch.renderOrder).toBeLessThan(3);
+		expect(mats.etch.depthWrite).toBe(false);
+		expect(mats.etch.polygonOffset).toBe(true);
+	});
+
+	it('does not move with insert lifts', () => {
+		stubCanvas();
+		const { view, mats } = make();
+		const etch = etchOf(view, mats)!;
+		const before = Array.from(etch.geometry.getAttribute('position').array);
+		view.sync(state({ kind: 'insert', insertId: 'i3' }, { lifts: new Map([['i3', 9]]) }));
+		expect(Array.from(etch.geometry.getAttribute('position').array)).toEqual(before);
+		expect(etch.position.y).toBe(0);
+	});
+
+	it('picks the slot\'s insert from a click on its etched number, from the box and from a focused insert', () => {
+		stubCanvas();
+		const { view, mats } = make();
+		view.sync(state(BOX));
+		const labels = etchLabels(view.layout);
+		for (const k of [0, 4, 9]) {
+			const l = labels[k];
+			expect(pickDown(view, BOX, [l.x, 0, l.z])).toEqual({ kind: 'insert', insertId: `i${k + 1}` });
+		}
+		const focus: ToolingFocus = { kind: 'insert', insertId: 'i3' };
+		view.sync(state(focus));
+		expect(pickDown(view, focus, [labels[0].x, 0, labels[0].z])).toEqual({ kind: 'insert', insertId: 'i1' });
+		expect(etchOf(view, mats)).toBeDefined();
+	});
+
+	it('picks nothing from the number of an empty slot, and disposes its texture and map', () => {
+		stubCanvas();
+		const fewer = buildToolingModel({ tool_box_id: 'b', tool_box_code: 'B' }, { iso_designation: 'CNMG 12 04 08-MF' },
+			[{ insert_id: 'a', insert_code: 'A', insert_number: 1, is_depleted: false }, { insert_id: 'c', insert_code: 'C', insert_number: 3, is_depleted: false }], []);
+		const mats = new SceneMaterials(palette(false));
+		const view = new BoxView(fewer, mats);
+		view.sync(state(BOX));
+		const empty = etchLabels(view.layout).find((l) => view.layout.slots[l.slot].insertId === null)!;
+		expect(empty.text).toBe('2');
+		expect(pickDown(view, BOX, [empty.x, 0, empty.z])).toBeNull();
+		const texture = mats.etch.map!;
+		let disposed = false;
+		texture.addEventListener('dispose', () => { disposed = true; });
+		view.dispose();
+		expect(disposed).toBe(true);
+		expect(mats.etch.map).toBeNull();
+		mats.dispose();
 	});
 });
 
@@ -161,13 +274,9 @@ describe('BoxView', () => {
 		expect(pickDown(view, BOX, nose)?.kind).not.toBe('edge');
 	});
 
-	it('shows slot numbers at box level and edge letters at insert level', () => {
+	it('has no slot pills at box level (the numbers are etched in the tray) and edge letters at insert level', () => {
 		const { view } = make();
-		const box = view.labels(BOX);
-		expect(box.map((l) => l.text)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
-		expect(box.every((l) => l.target?.kind === 'insert')).toBe(true);
-		expect(box.find((l) => l.text === '10')!.tone).toBe('dim'); // depleted
-		expect(box.find((l) => l.text === '2')!.tone).toBe('warn'); // part used
+		expect(view.labels(BOX)).toEqual([]);
 
 		const insert = view.labels({ kind: 'insert', insertId: 'i2' });
 		expect(insert.map((l) => l.text)).toEqual(['A', 'B', 'C', 'D']);
@@ -183,10 +292,30 @@ describe('BoxView', () => {
 		const hidden = () => view.root.children.filter((o) => (o as { isMesh?: boolean }).isMesh && !(o as { isInstancedMesh?: boolean }).isInstancedMesh);
 		view.sync(state(BOX, { nextFresh: { insertId: 'i2', edgeId: 'i2B' } }));
 		const visibleOverlays = (hidden() as import('three').Mesh[]).filter((m) => m.renderOrder >= 3 && m.visible);
-		expect(visibleOverlays).toHaveLength(1); // only the next-fresh halo
+		expect(visibleOverlays).toHaveLength(1); // only the next-fresh halo (no selection, so no glow)
 		view.sync(state({ kind: 'edge', insertId: 'i2', edgeId: 'i2B' }, { nextFresh: { insertId: 'i2', edgeId: 'i2B' } }));
 		const now = (hidden() as import('three').Mesh[]).filter((m) => m.renderOrder >= 3 && m.visible);
-		expect(now).toHaveLength(1); // the selection replaces the halo on the same edge
+		expect(now).toHaveLength(2); // the selection (the tube and its glow) replaces the halo on the same edge
+		const radius = (m: import('three').Mesh) => { m.geometry.computeBoundingBox(); return m.geometry.boundingBox!.max.y - m.geometry.boundingBox!.min.y; };
+		const [tube, glow] = (now as import('three').Mesh[]).sort((a, b) => radius(a) - radius(b));
+		expect(radius(glow)).toBeGreaterThan(radius(tube) * 1.5);
+		expect(radius(tube)).toBeGreaterThan(2 * 0.22 * 1.5); // clearly thicker than the 0.22 mm edge tube it covers
+	});
+
+	it('draws a hovered edge thinner than a selected one, and the glow pulses with the pulse', () => {
+		const { view, mats } = make();
+		const focus: ToolingFocus = { kind: 'edge', insertId: 'i2', edgeId: 'i2B' };
+		view.sync(state(focus, { hover: { kind: 'edge', insertId: 'i2', edgeId: 'i2C' }, pulse: 1 }));
+		const overlays = (view.root.children as import('three').Mesh[]).filter((m) => m.renderOrder >= 3 && m.visible);
+		const height = (m: import('three').Mesh) => { m.geometry.computeBoundingBox(); return m.geometry.boundingBox!.max.y - m.geometry.boundingBox!.min.y; };
+		const hovered = overlays.find((m) => m.material === mats.edge.hover)!;
+		const selected = overlays.find((m) => m.material === mats.edge.selected)!;
+		expect(height(hovered)).toBeLessThan(height(selected));
+		expect(mats.edge.hover.opacity).toBeLessThan(mats.edge.selected.opacity);
+		const full = mats.edge.glow.opacity;
+		view.sync(state(focus, { pulse: 0 }));
+		expect(mats.edge.glow.opacity).toBeLessThan(full);
+		expect(mats.edge.glow.opacity).toBeGreaterThan(0.1);
 	});
 
 	it('disposes its geometries and leaves nothing in the group', () => {

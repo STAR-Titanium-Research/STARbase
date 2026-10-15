@@ -8,7 +8,7 @@ import { luminance, type Palette, type Rgba } from './themePalette';
 const rgba = (v: number): Rgba => ({ r: v, g: v, b: v, a: 1 });
 const palette = (dark: boolean): Palette => {
 	const p = {} as Palette;
-	for (const k of ['tile', 'tray', 'ink', 'body', 'mark', 'ok', 'warn', 'dim', 'accent', 'pick', 'tipPcd', 'tipCbn'] as const) p[k] = rgba(0.5);
+	for (const k of ['tile', 'tray', 'ink', 'body', 'mark', 'ok', 'warn', 'dim', 'accent', 'pick', 'select', 'tipPcd', 'tipCbn'] as const) p[k] = rgba(0.5);
 	p.tile = rgba(dark ? 0.05 : 0.95);
 	p.body = rgba(dark ? 0.2 : 0.3);
 	p.tipPcd = rgba(dark ? 0.8 : 0.85);

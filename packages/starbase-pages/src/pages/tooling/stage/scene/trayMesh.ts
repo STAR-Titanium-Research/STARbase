@@ -12,10 +12,18 @@ export const RING_WIDTH_MM = 0.7;
 const POCKET_MARGIN_MM = 2.4; // clearance around the insert, all sides, to the pocket wall
 // A box of one insert is a small case: a snug pocket and a thin wall, so the insert fills most of it.
 const CASE_POCKET_MARGIN_MM = 2;
-const CASE_WALL_MM = 2;
-const SLOT_GAP_MM = 3; // minimum wall between two pockets
+const CASE_WALL_MM = 2.6; // wide enough for the etched number on its front
+const SLOT_GAP_MM = 5; // minimum wall between two pockets; also the strip an inner column's etched number sits in
 const TRAY_BEVEL_MM = 0.25;
 const RING_LIFT_MM = 0.03;
+// The etched text (etchMesh.ts): a slot number is as tall as this share of the pocket's width, a title line (the box
+// code, the insert type) a little less; a hair of tray is kept around each.
+const NUMBER_H_SHARE = 0.3;
+const END_H_SHARE = 0.25;
+const TEXT_PAD_MM = 1;
+const NUMBER_FRONT_SHARE = 0.7; // an etched number in front of a pocket takes this much of the strip there
+// The width of a slot number of `chars` characters, as a multiple of its height.
+export const numberAspect = (chars: number): number => 0.57 * Math.max(1, chars) + 0.12;
 
 export interface TraySlot { column: number; row: number; label: string; insertId: string | null }
 
@@ -31,6 +39,10 @@ export interface TrayLayout {
 	floorY: number; // top of the pocket floor
 	topY: number; // top of the tray
 	insertY: number; // mid-thickness of an insert resting in a pocket
+	sideRoom: number; // tray from a pocket's outer edge to the tray's side, in the first and last column: the etched number's room
+	endRoom: number; // tray from the first row's back edge, and the last row's front edge, to the tray's end: the title lines' room
+	numberH: number; // the height of an etched slot number
+	endH: number; // the most a title line's height can be
 	slots: TraySlot[];
 	slotOf: Map<string, TraySlot>;
 	centre(column: number, row: number): { x: number; z: number };
@@ -43,7 +55,9 @@ function singleCase(model: ToolingModel, pocketW: number, pocketD: number, pitch
 	return {
 		columns: 1, rows: 1, single: true, pitch, width: pocketW + 2 * CASE_WALL_MM, depth: pocketD + 2 * CASE_WALL_MM,
 		pocketW, pocketD, floorY: FLOOR_MM, topY: FLOOR_MM + POCKET_DEPTH_MM,
-		insertY: FLOOR_MM + 0.15 + thicknessMm / 2,
+		insertY: FLOOR_MM + 0.15 + thicknessMm / 2, sideRoom: CASE_WALL_MM, endRoom: CASE_WALL_MM,
+		numberH: Math.min(CASE_WALL_MM * NUMBER_FRONT_SHARE, pocketW * NUMBER_H_SHARE),
+		endH: Math.min(CASE_WALL_MM * NUMBER_FRONT_SHARE, pocketW * END_H_SHARE),
 		slots: [slot], slotOf: new Map([[insert.id, slot]]), centre: () => ({ x: 0, z: 0 }),
 	};
 }
@@ -78,8 +92,17 @@ export function trayLayout(model: ToolingModel): TrayLayout {
 	const rows = Math.max(1, Math.ceil(Math.max(next, 1) / columns), model.grid.rows);
 
 	const margin = pitch * 0.3;
-	const width = columns * pitch + 2 * margin;
-	const depth = rows * pitch + 2 * margin;
+	// The outer columns' numbers sit in the tray's side margins and an inner column's in front of its pocket, so the
+	// numbers are as tall as the pocket allows, but never taller than the strip in front of an inner pocket. The box
+	// code and the insert type are etched across the ends. The margins are widened, if need be, until the widest number
+	// fits beside a pocket and the title lines fit past the last row's (inner) numbers, each with a hair to spare.
+	const longest = Math.max(1, ...slots.map((s) => s.label.length));
+	const numberH = columns > 2 ? Math.min(pocketW * NUMBER_H_SHARE, (pitch - pocketD) * NUMBER_FRONT_SHARE) : pocketW * NUMBER_H_SHARE;
+	const endH = Math.min(numberH, pocketW * END_H_SHARE);
+	const sideMargin = Math.max(margin, numberH * numberAspect(longest) + 2 * TEXT_PAD_MM - (pitch - pocketW) / 2);
+	const endMargin = Math.max(margin, endH + 2 * TEXT_PAD_MM - (pitch - pocketD) / 2, columns > 2 ? numberH / 2 + endH + 2 * TEXT_PAD_MM : 0);
+	const width = columns * pitch + 2 * sideMargin;
+	const depth = rows * pitch + 2 * endMargin;
 	const slotOf = new Map<string, TraySlot>();
 	for (const s of slots) if (s.insertId) slotOf.set(s.insertId, s);
 	return {
@@ -87,6 +110,7 @@ export function trayLayout(model: ToolingModel): TrayLayout {
 		floorY: FLOOR_MM,
 		topY: FLOOR_MM + POCKET_DEPTH_MM,
 		insertY: FLOOR_MM + 0.15 + g.thicknessMm / 2,
+		sideRoom: (pitch - pocketW) / 2 + sideMargin, endRoom: (pitch - pocketD) / 2 + endMargin, numberH, endH,
 		slots, slotOf,
 		centre: (column, row) => ({ x: (column - (columns - 1) / 2) * pitch, z: (row - (rows - 1) / 2) * pitch }),
 	};
@@ -95,12 +119,6 @@ export function trayLayout(model: ToolingModel): TrayLayout {
 export function slotPosition(layout: TrayLayout, slot: TraySlot): { x: number; y: number; z: number } {
 	const c = layout.centre(slot.column, slot.row);
 	return { x: c.x, y: layout.insertY, z: c.z };
-}
-
-// The number pill of a slot sits on the front rim of its pocket.
-export function slotLabelAnchor(layout: TrayLayout, slot: TraySlot): [number, number, number] {
-	const c = layout.centre(slot.column, slot.row);
-	return [c.x, layout.topY, c.z + layout.pocketD / 2 - 0.2];
 }
 
 function roundedRect(shape: Shape | Path, cx: number, cy: number, w: number, h: number, r: number): void {

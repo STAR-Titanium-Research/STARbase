@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildToolingModel, type InsertRow } from '@d1/ui';
 import {
-	buildPocketRingGeometry, buildTrayGeometry, FLOOR_MM, POCKET_DEPTH_MM, slotLabelAnchor, slotPosition, trayLayout,
+	buildPocketRingGeometry, buildTrayGeometry, FLOOR_MM, POCKET_DEPTH_MM, slotPosition, trayLayout,
 } from './trayMesh';
 
 const box = { tool_box_id: 'b1', tool_box_code: 'BOX-1' };
@@ -32,6 +32,7 @@ describe('trayLayout', () => {
 		expect(l.pocketD).toBeGreaterThan(2 * 9.4); // the CNMG nose reaches 9.4 mm from the centre
 		expect(l.pitch).toBeGreaterThan(l.pocketD);
 		expect(l.pitch).toBeGreaterThan(l.pocketW);
+		expect(l.pitch - l.pocketD).toBeGreaterThanOrEqual(5 - 1e-6); // room for the etched number between rows
 	});
 
 	it('gives an insert with a missing or duplicate number an extra pocket, marked ?', () => {
@@ -56,9 +57,6 @@ describe('trayLayout', () => {
 		expect(l.insertY - 4.76 / 2).toBeGreaterThan(l.floorY);
 		const p = slotPosition(l, l.slots[0]);
 		expect(p.y).toBe(l.insertY);
-		const a = slotLabelAnchor(l, l.slots[0]);
-		expect(a[1]).toBe(l.topY);
-		expect(a[2]).toBeGreaterThan(p.z); // on the front rim
 	});
 });
 

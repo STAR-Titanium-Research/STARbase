@@ -45,6 +45,16 @@ describe('buildToolingModel', () => {
 		expect(model.outline.corners).toHaveLength(4);
 	});
 
+	it('names the insert type from its type code, else its ISO designation, else nothing', () => {
+		const typed = (t: Record<string, unknown> | null) => buildToolingModel(box, t, [ins(1)], []).typeCode;
+		expect(typed({ type_code: '  DNMG150604-MF1 TS2000  ', iso_designation: 'DNMG 15 06 04' })).toBe('DNMG150604-MF1 TS2000');
+		expect(typed({ type_code: '   ', iso_designation: ' CNMG 12 04 08-MF ' })).toBe('CNMG 12 04 08-MF');
+		expect(typed({ type_code: null, iso_designation: 'CNMG 12 04 08' })).toBe('CNMG 12 04 08');
+		expect(typed({ type_code: '', iso_designation: null })).toBeNull();
+		expect(typed({})).toBeNull();
+		expect(typed(null)).toBeNull();
+	});
+
 	it('sorts inserts by number and gives each its slot', () => {
 		expect(model.inserts.map((i) => i.number)).toEqual([1, 2, 3]);
 		expect(model.grid.columns * model.grid.rows).toBeGreaterThanOrEqual(3);
@@ -181,6 +191,6 @@ describe('focusRoute', () => {
 describe('types', () => {
 	it('exposes the model shape the stage draws', () => {
 		const m: ToolingModel = buildToolingModel(box, cnmg, [ins(1)], fourEdges('i1'));
-		expect(Object.keys(m).sort()).toEqual(['boxCode', 'boxId', 'geometry', 'grid', 'inserts', 'outline']);
+		expect(Object.keys(m).sort()).toEqual(['boxCode', 'boxId', 'geometry', 'grid', 'inserts', 'outline', 'typeCode']);
 	});
 });

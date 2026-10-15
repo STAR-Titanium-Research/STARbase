@@ -1,24 +1,27 @@
-// Everything drawn for one tool box: the tray, a state ring per pocket, the inserts (instanced, one geometry),
-// an edge segment per placed edge, and the highlights. Built once per model; `sync()` re-poses it for the
+// Everything drawn for one tool box: the tray with its etched slot numbers, a state ring per pocket, the inserts
+// (instanced, one geometry), an edge segment per placed edge, and the highlights. Built once per model; `sync()` re-poses it for the
 // current focus, hover and lifts. Imperative and outside Vue reactivity.
 
 import {
-	BufferGeometry, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, type Intersection, type Object3D,
+	BufferGeometry, type CanvasTexture, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, type Intersection, type Object3D,
 } from 'three';
 import type { EdgePlacement, ToolingEdge, ToolingFocus, ToolingModel } from '@d1/ui';
 import {
 	buildInsertGeometry, buildReferenceMark, createEdgeSegments, edgeAnchor, EdgeGeometryCache,
 } from './insertMesh';
 import type { SceneMaterials } from './materials';
-import type { LabelSpec, LabelTone } from './labels';
+import type { LabelSpec } from './labels';
 import {
 	ghostInserts, partitionInstances, pickFromInstance, pickFromUserData, type PickTarget,
 } from './pick';
-import { buildPocketRingGeometry, buildTrayGeometry, slotLabelAnchor, slotPosition, trayLayout, type TrayLayout } from './trayMesh';
+import { buildPocketRingGeometry, buildTrayGeometry, slotPosition, trayLayout, type TrayLayout } from './trayMesh';
+import { buildEtchGeometry, drawEtchAtlas, ETCH_LIFT_MM, etchLabels, packAtlas, type EtchLabel } from './etchMesh';
 import type { Vec3 } from './cameraRig';
 import { buildTipGeometry } from './tipMesh';
 
-const SELECTED_RADIUS_MM = 0.36;
+// The selected edge is a thick vivid tube inside a soft translucent glow; hover is a thin, weaker tube.
+const SELECTED_RADIUS_MM = 0.6;
+const GLOW_RADIUS_MM = 1.2;
 const HOVER_RADIUS_MM = 0.3;
 const HALO_RADIUS_MM = 0.5;
 const PICK_RADIUS_MM = 1.1; // fat invisible tubes: an edge is easy to aim at
@@ -34,8 +37,6 @@ export interface ViewState {
 
 interface EdgeItem { insertId: string; edge: ToolingEdge; mesh: Mesh; pick: Mesh }
 
-const stateTone = (s: string): LabelTone => (s === 'fresh' ? 'ok' : s === 'partly-used' ? 'warn' : 'dim');
-
 export class BoxView {
 	readonly root = new Group();
 	readonly layout: TrayLayout;
@@ -50,7 +51,9 @@ export class BoxView {
 	private readonly edges: EdgeItem[] = [];
 	private readonly selected: Mesh;
 	private readonly hovered: Mesh;
+	private readonly glow: Mesh;
 	private readonly halo: Mesh;
+	private etch: { mesh: Mesh; labels: EtchLabel[]; texture: CanvasTexture } | null = null; // the etched slot numbers
 	private solidIds: string[] = [];
 	private ghostIds: string[] = [];
 	private readonly m = new Matrix4();
@@ -61,6 +64,7 @@ export class BoxView {
 		const n = Math.max(1, model.inserts.length);
 
 		this.root.add(new Mesh(own(buildTrayGeometry(this.layout)), mats.tray));
+		this.etchNumbers(own);
 
 		const ringGeo = own(buildPocketRingGeometry(this.layout));
 		for (const i of model.inserts) {
@@ -107,9 +111,26 @@ export class BoxView {
 
 		this.selected = new Mesh(undefined, mats.edge.selected);
 		this.hovered = new Mesh(undefined, mats.edge.hover);
+		this.glow = new Mesh(undefined, mats.edge.glow);
 		this.halo = new Mesh(undefined, mats.edge.halo);
-		for (const h of [this.selected, this.hovered, this.halo]) { h.visible = false; h.renderOrder = 3; this.root.add(h); }
+		for (const h of [this.selected, this.hovered, this.glow, this.halo]) { h.visible = false; h.renderOrder = 3; this.root.add(h); }
+		this.glow.renderOrder = 4;
 		this.halo.renderOrder = 4;
+	}
+
+	// The slot numbers (beside each pocket) and the box code and insert type (across the tray's ends), etched into the
+	// tray's top. They never move with the inserts, so they are built once. With no canvas (Node) there is nothing to draw them with, and no mesh.
+	private etchNumbers(own: <T extends BufferGeometry>(g: T) => T): void {
+		const labels = etchLabels(this.layout, { top: this.model.boxCode.trim() || null, bottom: this.model.typeCode });
+		const atlas = packAtlas(labels);
+		const texture = drawEtchAtlas(labels, atlas);
+		if (!texture) return;
+		const mesh = new Mesh(own(buildEtchGeometry(labels, atlas, this.layout.topY + ETCH_LIFT_MM)), this.mats.etch);
+		mesh.renderOrder = 1;
+		this.mats.etch.map = texture;
+		this.mats.etch.needsUpdate = true;
+		this.etch = { mesh, labels, texture };
+		this.root.add(mesh);
 	}
 
 	// The centre of an insert (mid-thickness), raised by `lift`.
@@ -178,16 +199,18 @@ export class BoxView {
 		const selEdge = focus.kind === 'edge' ? focus.edgeId : null;
 		const selInsert = focus.kind === 'edge' ? focus.insertId : '';
 		this.overlay(this.selected, selEdge, SELECTED_RADIUS_MM, selInsert, lift(selInsert));
+		this.overlay(this.glow, selEdge, GLOW_RADIUS_MM, selInsert, lift(selInsert));
 		const hoverEdge = hover?.kind === 'edge' && hover.edgeId !== selEdge ? hover : null;
 		this.overlay(this.hovered, hoverEdge ? hoverEdge.edgeId : null, HOVER_RADIUS_MM, hoverEdge?.insertId ?? '', hoverEdge ? lift(hoverEdge.insertId) : 0);
 		const next = state.nextFresh && state.nextFresh.edgeId !== selEdge ? state.nextFresh : null;
 		this.overlay(this.halo, next ? next.edgeId : null, HALO_RADIUS_MM, next?.insertId ?? '', next ? lift(next.insertId) : 0);
 		this.mats.edge.halo.opacity = 0.22 + 0.5 * state.pulse;
+		this.mats.edge.glow.opacity = 0.2 + 0.25 * state.pulse; // the selection's glow breathes with the same pulse
 	}
 
-	// Meshes a click or hover can hit: the inserts and their rings, and the fat edge tubes of the focused insert.
+	// Meshes a click or hover can hit: the inserts, their rings and etched numbers, and the fat edge tubes of the focused insert.
 	pickables(focus: ToolingFocus): Object3D[] {
-		const list: Object3D[] = [this.solid, this.ghost, ...this.rings.values()];
+		const list: Object3D[] = [this.solid, this.ghost, ...this.rings.values(), ...(this.etch ? [this.etch.mesh] : [])];
 		if (focus.kind !== 'box') for (const e of this.edges) if (e.insertId === focus.insertId) list.push(e.pick);
 		return list;
 	}
@@ -195,24 +218,21 @@ export class BoxView {
 	resolve(hit: Intersection, focus: ToolingFocus): PickTarget | null {
 		if (hit.object === this.solid) return pickFromInstance(this.solidIds, hit.instanceId);
 		if (hit.object === this.ghost) return pickFromInstance(this.ghostIds, hit.instanceId);
+		if (this.etch && hit.object === this.etch.mesh) return this.pickEtched(hit.faceIndex);
 		return pickFromUserData(hit.object.userData, focus);
 	}
 
-	// The pills for a focus: slot numbers at box level, edge letters at insert and edge level.
+	// An etched number picks its slot's insert (an empty slot, or a title line, picks nothing). Two triangles make a quad.
+	private pickEtched(faceIndex: number | null | undefined): PickTarget | null {
+		const label = faceIndex === undefined || faceIndex === null ? undefined : this.etch?.labels[faceIndex >> 1];
+		const insertId = label && label.slot >= 0 ? this.layout.slots[label.slot].insertId : null;
+		return insertId ? { kind: 'insert', insertId } : null;
+	}
+
+	// The pills for a focus: edge letters at insert and edge level (the slot numbers are etched into the tray).
 	labels(focus: ToolingFocus): LabelSpec[] {
 		const out: LabelSpec[] = [];
-		if (focus.kind === 'box') {
-			for (const slot of this.layout.slots) {
-				const insert = this.model.inserts.find((i) => i.id === slot.insertId);
-				out.push({
-					key: `slot:${slot.column}:${slot.row}`, text: slot.label, anchor: slotLabelAnchor(this.layout, slot),
-					tone: insert ? stateTone(insert.state) : 'none',
-					target: insert ? { kind: 'insert', insertId: insert.id } : null,
-					title: insert ? `Insert ${slot.label}, ${insert.state.replace('-', ' ')}` : `Slot ${slot.label}, empty`,
-				});
-			}
-			return out;
-		}
+		if (focus.kind === 'box') return out;
 		const insert = this.model.inserts.find((i) => i.id === focus.insertId);
 		if (!insert) return out;
 		for (const e of insert.edges) {
@@ -237,6 +257,11 @@ export class BoxView {
 		for (const g of this.geometries) g.dispose();
 		this.cache.dispose();
 		this.pickMaterial.dispose();
+		if (this.etch) {
+			if (this.mats.etch.map === this.etch.texture) { this.mats.etch.map = null; this.mats.etch.needsUpdate = true; }
+			this.etch.texture.dispose();
+			this.etch = null;
+		}
 		for (const im of [this.solid, this.ghost, this.marks, ...(this.tips ? [this.tips] : [])]) im.dispose();
 		this.root.clear();
 	}

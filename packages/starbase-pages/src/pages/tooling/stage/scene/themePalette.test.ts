@@ -46,6 +46,13 @@ describe('parseCssColor', () => {
 			expect(parseCssColor(s), s).toBeNull();
 		}
 	});
+
+	it('has a selection colour that is its own variable, apart from the state colours and the hover lift', () => {
+		expect(PALETTE_EXPRESSIONS.select).toContain('--d1-select');
+		for (const other of [PALETTE_EXPRESSIONS.ok, PALETTE_EXPRESSIONS.warn, PALETTE_EXPRESSIONS.dim, PALETTE_EXPRESSIONS.pick]) {
+			expect(PALETTE_EXPRESSIONS.select).not.toBe(other);
+		}
+	});
 });
 
 describe('luminance', () => {

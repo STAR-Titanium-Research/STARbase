@@ -9,6 +9,7 @@ import {
 	type Material, Mesh,
 } from 'three';
 import type { EdgePlacement, InsertGeometry, InsertOutline, ToolingInsert } from '@d1/ui';
+import { markDistance, markVertices } from '../markPlacement';
 
 export const BEVEL_MM = 0.15;
 export const EDGE_TUBE_RADIUS_MM = 0.22;
@@ -155,27 +156,15 @@ export function buildInsertGeometry(geom: InsertGeometry, outline: InsertOutline
 	return b.toGeometry();
 }
 
-// The reference mark: a small flat triangle on the top face, pointing at corner 0.
-// Where the mark sits along corner 0's bisector (from the centre): its middle, and the end nearest the corner.
-// On a tipped insert it moves in toward the hole, to leave the corner to the tip pad (tipMesh.ts).
-export function markDistance(geom: InsertGeometry, outline: InsertOutline): { size: number; centre: number; end: number } {
-	const c0 = outline.corners[0];
-	const holeR = geom.holeDiameterMm ? geom.holeDiameterMm / 2 : 0;
-	const tip = Math.hypot(c0.x, c0.y) + (geom.shape === 'R' ? 0 : geom.noseRadiusMm);
-	const size = Math.max(0.5, Math.min(1, geom.icMm / 12));
-	const centre = geom.tipMaterial ? Math.max(holeR * 1.6, 0.5) + size * 0.4 : Math.max((holeR * 1.5 + tip) / 2, holeR * 1.6);
-	return { size, centre, end: centre + size * 0.6 };
-}
+// The reference mark: a flat triangle, raised a little off the top face, pointing at corner 0. Its size and place
+// (markDistance, shared with the 2D drawing) scale with the insert.
+export { markDistance };
+const MARK_HEIGHT_MM = 0.12;
 
 export function buildReferenceMark(geom: InsertGeometry, outline: InsertOutline): BufferGeometry {
-	const c0 = outline.corners[0];
-	const { size, centre: d } = markDistance(geom, outline);
-	const a = (c0.bisectorDeg * Math.PI) / 180;
-	const dir: Pt = [Math.cos(a), Math.sin(a)];
-	const side: Pt = [-dir[1], dir[0]];
-	const p = (along: number, across: number): Vector2 => new Vector2(dir[0] * along + side[0] * across, dir[1] * along + side[1] * across);
-	const shape = new Shape([p(d + size * 0.6, 0), p(d - size * 0.4, -size * 0.45), p(d - size * 0.4, size * 0.45)]);
-	const g = new ExtrudeGeometry(shape, { depth: 0.06, bevelEnabled: false });
+	const { size, centre } = markDistance(geom, outline);
+	const shape = new Shape(markVertices(outline.corners[0].bisectorDeg, size, centre).map(([x, y]) => new Vector2(x, y)));
+	const g = new ExtrudeGeometry(shape, { depth: MARK_HEIGHT_MM, bevelEnabled: false });
 	g.rotateX(-Math.PI / 2);
 	g.translate(0, geom.thicknessMm / 2 - 0.01, 0);
 	return g;
