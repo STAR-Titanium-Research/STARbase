@@ -21,6 +21,14 @@ export { readHiddenLinks } from './hiddenLinks';
 export { createdRecord, CREATED_BUT_HIDDEN_MESSAGE, NO_PERSON_MESSAGE } from './createResult';
 export { projectScopeFilter, sampleProjectScopeFilter } from './projectScope';
 
+// Building on the process map: the draft body, the d1-build answers, the sample code template (edit mode)
+export { sampleCodeTemplate, SEQ_PLACEHOLDER } from './build/sampleCode';
+export type { SampleCodeParts } from './build/sampleCode';
+export type {
+	Check, CheckResponse, CreatedRecord, CreateRefusal, CreateResponse, DraftBase, DraftBody, DraftItem, DraftKey, DraftListEntry, DraftOperation,
+	DraftRecord, DraftSample, DraftTest, DraftWire, MarkDoneBody, MarkDoneResponse, MarkPlannedBody, MarkPlannedResponse, TemplateRecord, WriteFailure,
+} from './build/types';
+
 // Display helpers and error predicates
 export { breakableParts, formatDate, formatNumber, formatQuantity, errorText, asRecord, isNotVisible, isForbidden, isFilterRefused } from './format';
 export { humanise, statusStyle, TEST_DONE_STATUSES, TEST_STATUS_ORDER } from './status';

@@ -21,6 +21,7 @@ env/
 htmlcov/
 dist/
 build/
+!packages/d1-ui/src/build/
 # Bare `dist/` matches only directories named exactly "dist" — the desktop-base SPA build output
 # needs its own entry.
 apps/force-app/web/dist-desktop/

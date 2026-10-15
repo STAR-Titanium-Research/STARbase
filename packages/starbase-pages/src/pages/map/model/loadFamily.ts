@@ -15,6 +15,12 @@ import { KEY_SETTING_FIELDS, type RelationDef } from './formSlots';
 export interface FormDefs {
   operation: RelationDef[];
   test: RelationDef[];
+  /**
+   * The work-state fields (`work_state`, `planned_date`) that `/fields/<collection>` lists for each form. Asked for only
+   * when listed, like `batch_id`: a database without the planned-work migration has no such columns and asking would
+   * refuse the whole read. Left out, nothing is asked for and every record is drawn done.
+   */
+  workFields?: { operation: string[]; test: string[] };
 }
 import type { LineageRow, OpRow, ProcessCategory, ProcessData, Ref, SampleRec, StockOrigin, TestRow } from './types';
 
@@ -128,12 +134,17 @@ const TEST_FIELDS = [
 // The recorded batch of an operation or test (spec D14). `batch_id` is only asked for when the runtime field defs of
 // the collection list it (a database not yet migrated has no such column, and asking would refuse the whole read).
 const BATCH_FIELDS = ['batch_id.batch_id', 'batch_id.code'];
+/** Planned work (ADR-0019): whether an operation or test is planned or done, and when it is meant to happen. */
+export const WORK_FIELDS = ['work_state', 'planned_date'];
+const listedWork = (names: string[] | undefined): string[] => WORK_FIELDS.filter((f) => names?.includes(f));
 const hasBatch = (defs: RelationDef[] | undefined): boolean => !!defs?.some((d) => d.field === 'batch_id' && !d.alias);
 
-/** What a read adds to the fixed field list: the extra relations, and the batch when the defs list it. */
+/** What a read adds to the fixed field list: the extra relations, and the batch and work state when the defs list them. */
 interface Optional {
   extras: Extra[];
   batch: boolean;
+  /** Work-state fields the defs list (`WORK_FIELDS`). */
+  work: string[];
 }
 
 /**
@@ -314,26 +325,28 @@ function extrasOf(defs: RelationDef[] | undefined, roots: Set<string>): Extra[] 
 }
 const extraFields = (extras: Extra[]): string[] => extras.map((e) => `${e.field}.*`);
 
-/** `fields` of a read with the optional ones: the fixed list, then the batch, then the extra relations. */
-function fieldsWith(fields: string[], { extras, batch }: Optional): string[] {
-  return [...fields, ...(batch ? BATCH_FIELDS : []), ...extraFields(extras)];
+/** `fields` of a read with the optional ones: the fixed list, then the batch, the work state, then the extra relations. */
+function fieldsWith(fields: string[], { extras, batch, work }: Optional): string[] {
+  return [...fields, ...(batch ? BATCH_FIELDS : []), ...work, ...extraFields(extras)];
 }
 
 /** Directus saying no to the request (a field the role may not read, a relation it cannot expand): 400, 403, 404. Not a 5xx or a network failure. */
 const isRefusal = (e: any): boolean => [400, 403, 404].includes(e?.response?.status);
 
 /**
- * A list read that also asks for the batch and the extra relation fields. Directus refusing them is not the map's
+ * A list read that also asks for the batch, the work state and the extra relation fields. Directus refusing them is not the map's
  * problem: the read is made again with less. First with the extras and no batch, then with the batch and no extras
  * (each optional part can be the refused one), then with the fixed fields only. Only a refusal is retried; a server
  * or network error is thrown at once.
  */
 async function readList(api: HostApi, collection: string, params: Record<string, unknown>, optional: Optional): Promise<{ rows: Json[]; total: number | null }> {
   const fixed = params.fields as string[];
-  const { extras, batch } = optional;
+  const { extras, batch, work } = optional;
+  // The batch and the work state are the "light" optional fields: a refusal drops them together, then the extras.
+  const light = batch || work.length > 0;
   const tiers: string[][] = [fieldsWith(fixed, optional)];
-  if (batch && extras.length) tiers.push(fieldsWith(fixed, { extras, batch: false }), fieldsWith(fixed, { extras: [], batch }));
-  if (batch || extras.length) tiers.push(fixed);
+  if (light && extras.length) tiers.push(fieldsWith(fixed, { extras, batch: false, work: [] }), fieldsWith(fixed, { extras: [], batch, work }));
+  if (light || extras.length) tiers.push(fixed);
   for (const fields of tiers.slice(0, -1)) {
     try {
       return await getList(api, collection, { ...params, fields });
@@ -357,6 +370,15 @@ function genericRef(extra: Extra, value: unknown): Ref | null {
 
 // ---- row mappers -----------------------------------------------------------------------------
 
+/**
+ * Planned work (ADR-0019) of a row as read. Only a row that says `planned` is planned: without the field (not asked for,
+ * or a database without the migration) a record is done, which is what every record was before the column existed.
+ */
+function workOf(r: Json): { workState?: 'planned'; plannedDate?: string | null } {
+  if (r.work_state !== 'planned') return {};
+  return { workState: 'planned', plannedDate: str(r.planned_date) };
+}
+
 function mapOperation(r: Json, extras: Extra[] = []): OpRow {
   const id = String(r.operation_id);
   const fast = refOf('fast_recipe_id', r.fast_recipe_id);
@@ -365,13 +387,15 @@ function mapOperation(r: Json, extras: Extra[] = []): OpRow {
   relations.force_file_id = forceFileRef(r.force_file_id);
   for (const e of extras) relations[e.field] = genericRef(e, r[e.field]);
   const category = CATEGORIES.includes(r.process_category) ? (r.process_category as ProcessCategory) : null;
+  const work = workOf(r);
   return {
     id,
     code: operationLabel({ pass_code: str(r.pass_code), operation_sequence: num(r.operation_sequence) }),
     methodId: idOf(r.method_id?.method_id) ?? '',
     methodName: str(r.method_id?.method_name) ?? '',
     category,
-    date: str(r.operation_date),
+    // A planned operation has no operation date: the day it is meant to happen stands in, so it sorts and reads as one.
+    date: str(r.operation_date) ?? (work.plannedDate ?? null),
     sequence: num(r.operation_sequence),
     // manufacturing_operations has no status column
     status: null,
@@ -385,6 +409,7 @@ function mapOperation(r: Json, extras: Extra[] = []): OpRow {
     relations,
     settings: settingsOf(r, OPERATION_SETTING_FIELDS),
     projectId: relations.project_id?.id ?? null,
+    ...work,
   };
 }
 
@@ -409,12 +434,13 @@ function mapTest(r: Json, extras: Extra[] = []): TestRow {
   const subjectSampleIds = subjects.length ? subjects : primary ? [primary] : [];
 
   const category = (TEST_CATEGORIES as readonly string[]).includes(r.test_category) ? (r.test_category as TestRow['category']) : null;
+  const work = workOf(r);
   return {
     id,
     code: str(r.test_code) ?? str(r.test_type) ?? 'Test',
     testType: str(r.test_type),
     category,
-    date: str(r.session_date),
+    date: str(r.session_date) ?? (work.plannedDate ?? null),
     status: str(r.status),
     subjectSampleIds,
     equipmentId: relations.equipment_id?.id ?? null,
@@ -422,6 +448,7 @@ function mapTest(r: Json, extras: Extra[] = []): TestRow {
     relations,
     settings: settingsOf(r, TEST_SETTING_FIELDS),
     projectId: relations.project_id?.id ?? null,
+    ...work,
   };
 }
 
@@ -612,8 +639,8 @@ export async function loadFamily(api: HostApi, sampleId: string, defs?: FormDefs
 
   const batchCodes: Record<string, string> = {};
   const [operations, testRead, lineageRead, samples] = await Promise.all([
-    loadOperations(api, ids, { extras: extrasOf(defs?.operation, OPERATION_ROOTS), batch: hasBatch(defs?.operation) }, batchCodes),
-    loadTests(api, ids, { extras: extrasOf(defs?.test, TEST_ROOTS), batch: hasBatch(defs?.test) }, batchCodes),
+    loadOperations(api, ids, { extras: extrasOf(defs?.operation, OPERATION_ROOTS), batch: hasBatch(defs?.operation), work: listedWork(defs?.workFields?.operation) }, batchCodes),
+    loadTests(api, ids, { extras: extrasOf(defs?.test, TEST_ROOTS), batch: hasBatch(defs?.test), work: listedWork(defs?.workFields?.test) }, batchCodes),
     loadLineage(api, ids),
     loadSamples(api, trace, ids),
   ]);
@@ -658,12 +685,25 @@ function humanise(field: string): string {
   return text ? text[0].toUpperCase() + text.slice(1) : field;
 }
 
+/** The relations of a form and the work-state fields it lists, from `/relations/<c>` and `/fields/<c>`. */
+export interface FormRead {
+  /** `null` when the role may not read them (the caller then uses `FALLBACK_RELATIONS`) or when nothing is left. */
+  defs: RelationDef[] | null;
+  /** Which of `WORK_FIELDS` the collection's fields list. */
+  work: string[];
+}
+
 /**
  * The relations of a collection's form, read from `/relations/<c>` and `/fields/<c>`: many-to-one
  * fields and file-style many-to-many aliases, in form order, without hidden fields. `null` when the
  * role may not read them (the caller then uses `FALLBACK_RELATIONS`) or when nothing is left.
  */
 export async function loadRelationDefs(api: HostApi, collection: string): Promise<RelationDef[] | null> {
+  return (await loadFormRead(api, collection)).defs;
+}
+
+/** `loadRelationDefs` and, from the same `/fields` answer, the work-state fields the collection lists (planned work, ADR-0019). */
+export async function loadFormRead(api: HostApi, collection: string): Promise<FormRead> {
   let relations: Json[];
   let fields: Json[];
   try {
@@ -672,9 +712,10 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
       api.get(`/fields/${collection}`).then((r) => (r.data?.data ?? []) as Json[]),
     ]);
   } catch (e) {
-    if (isNotVisible(e)) return null;
+    if (isNotVisible(e)) return { defs: null, work: [] };
     throw e;
   }
+  const work = listedWork(fields.map((f) => String(f.field)));
 
   const meta = new Map<string, Json>(fields.map((f) => [String(f.field), f.meta ?? {}]));
   const defs: (RelationDef & { sort: number })[] = [];
@@ -703,8 +744,8 @@ export async function loadRelationDefs(api: HostApi, collection: string): Promis
       }
     }
   }
-  if (!defs.length) return null;
-  return defs.sort((a, b) => a.sort - b.sort).map(({ sort: _sort, ...def }) => def);
+  if (!defs.length) return { defs: null, work };
+  return { defs: defs.sort((a, b) => a.sort - b.sort).map(({ sort: _sort, ...def }) => def), work };
 }
 
 // ---- used-in fans (spec D20) -----------------------------------------------------------------

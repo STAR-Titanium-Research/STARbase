@@ -30,7 +30,7 @@ const hiddenSides = useHiddenSides(() => props.id);
 <template>
 	<div
 		class="node rec"
-		:class="{ focal: selected }"
+		:class="{ planned: data.planned, draft: data.draft, focal: selected }"
 		:style="{ '--k': kindVar(style), '--sk': flow }"
 		@click="card.select"
 		@mouseenter="card.enter"

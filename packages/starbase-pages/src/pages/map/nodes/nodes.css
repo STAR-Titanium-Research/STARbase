@@ -18,6 +18,44 @@
 .d1-process-map .node.focal { outline: 2px solid var(--d1-accent, var(--theme--primary)); outline-offset: 0; box-shadow: 0 0 0 6px var(--d1-tint), var(--d1-shadow); }
 .d1-process-map .node.dashed { border-style: dashed; }
 
+/* Planned work (ADR-0019, classes set by the node components from `data.planned` / `data.draft`): a planned container or
+   sample is a real record that is not carried out yet, so it is ghosted: dashed, see-through, with a "Planned" pill (a
+   sample's status badge already says so). A draft item is not a record yet (edit mode): dashed in the accent colour with
+   a tint and a "Draft" pill. Colours only; the cards keep their size, so the layout does not move. */
+.d1-process-map .node.planned { border-style: dashed; opacity: 0.72; }
+.d1-process-map .node.planned:hover,
+.d1-process-map .node.planned.focal { opacity: 1; }
+.d1-process-map .node.draft {
+	border-style: dashed;
+	border-color: var(--d1-accent, var(--theme--primary));
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 7%, var(--d1-surface));
+	opacity: 1;
+}
+.d1-process-map .node.planned:not(.rec):not(.draft)::after,
+.d1-process-map .node.draft::after {
+	content: 'Planned';
+	position: absolute;
+	top: -9px;
+	right: 12px;
+	padding: 1px 8px;
+	border-radius: 99px;
+	font-size: var(--fs-xs, 11px);
+	font-weight: 700;
+	line-height: 1.4;
+	letter-spacing: 0.01em;
+	pointer-events: none;
+	color: var(--d1-dim);
+	background: var(--d1-surface);
+	border: 1px dashed var(--d1-line);
+}
+.d1-process-map .node.draft::after {
+	content: 'Draft';
+	color: var(--d1-accent, var(--theme--primary));
+	border-color: var(--d1-accent, var(--theme--primary));
+	background: color-mix(in srgb, var(--d1-accent, var(--theme--primary)) 12%, var(--d1-surface));
+}
+.d1-process-map .node.draft.planned:not(.rec)::after { content: 'Draft · planned'; }
+
 .d1-process-map .kind {
 	display: inline-flex;
 	align-items: center;
