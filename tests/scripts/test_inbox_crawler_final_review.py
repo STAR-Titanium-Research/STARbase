@@ -536,3 +536,61 @@ def test_a_big_image_hashed_at_discovery_keeps_the_activity_beating(world):
     stats = sc.scan()
     assert stats.registered == 1
     assert len([t for t in told if t.startswith("hashing ")]) >= 2
+
+
+# ---- 7c: one crawler at a time (an advisory lock on the crawler's own connection) -------------------
+
+
+def second_connection(world):
+    import psycopg2
+
+    conn = psycopg2.connect(world.dsn)
+    return db.Store(conn)
+
+
+def test_only_one_connection_holds_the_crawler_lock(world):
+    first, second = db.Store(world.conn), second_connection(world)
+    try:
+        assert first.try_crawler_lock() is True
+        assert second.try_crawler_lock() is False
+        assert first.try_crawler_lock() is True  # re-asking on the holder is harmless
+        world.conn.rollback()  # the lock is not tied to a transaction
+        assert second.try_crawler_lock() is False
+    finally:
+        second.conn.close()
+
+
+def test_the_lock_is_free_again_when_the_holder_goes_away(world):
+    first, second = second_connection(world), second_connection(world)
+    try:
+        assert first.try_crawler_lock() is True
+        first.conn.close()  # a killed daemon: its connection ends, Postgres drops the lock
+        assert second.try_crawler_lock() is True
+    finally:
+        second.conn.close()
+
+
+@pytest.mark.parametrize("mode", ["--once", "--daemon"])
+def test_a_second_crawler_refuses_to_start_and_exits_non_zero(
+    world, monkeypatch, caplog, mode
+):
+    from inbox_crawler import __main__ as cli
+
+    monkeypatch.setenv("DATABASE_URL", world.dsn)
+    monkeypatch.setenv("INBOX_PRIVATE_SCHEMA", world.schema)
+    holder = second_connection(world)
+    try:
+        assert holder.try_crawler_lock()
+        world.person("abc12de")
+        world.write("Users/abc12de/a.png", png())
+        settle(world)
+        world.commit()
+        assert cli.main([mode, "--root", world.root]) == 1
+        assert "lock" in caplog.text
+        # it scanned nothing and the state row was not touched by a daemon start
+        assert world.one("SELECT count(*) FROM file_candidates")[0] == 0
+        assert world.one("SELECT daemon_started_at FROM inbox_crawler_state")[0] is None
+    finally:
+        holder.conn.close()
+    assert cli.main(["--once", "--root", world.root]) == 0  # free again: it runs
+    assert world.one("SELECT count(*) FROM file_candidates")[0] == 1

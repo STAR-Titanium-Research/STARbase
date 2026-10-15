@@ -116,6 +116,15 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         storage=os.environ.get("STORAGE_NAME", "star"),
         root_folder_name=os.environ.get("ROOT_FOLDER", "star_group1"),
     )
+    if not store.try_crawler_lock():
+        log.error(
+            "another inbox crawler holds the database lock (a daemon, or a --once run): "
+            "%s",
+            "refusing to run alongside it"
+            if args.once
+            else "not starting a second daemon",
+        )
+        return 1
     stop = threading.Event()
     d = daemon.Daemon(
         store,
@@ -145,9 +154,13 @@ def _run(args, dsn: str, schema: str, holder: dict) -> int:
         except Exception:  # noqa: BLE001
             pass
         holder["conn"] = db.connect(dsn, schema)
-        return db.Store(
+        new = db.Store(
             holder["conn"], storage=old.storage, root_folder_name=old.root_folder_name
         )
+        # The lock went with the old connection: take it again, or someone else has it now.
+        if not new.try_crawler_lock():
+            raise RuntimeError("the single-crawler lock is held by another process")
+        return new
 
     d.run_forever(reconnect)
     return 0

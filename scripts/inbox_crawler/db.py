@@ -32,6 +32,9 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 STALE_REQUEST_MINUTES = 15
 # An errored hash is tried again no sooner than this.
 HASH_RETRY_HOURS = 1
+# The session-level advisory lock that makes one crawler (daemon or --once) at a time. An arbitrary fixed
+# bigint; it lives on the crawler's own connection, so it goes with a killed process.
+CRAWLER_LOCK_KEY = 7_302_150_400_193
 
 
 def connect(dsn: str, private_schema: str = "d1_private"):
@@ -141,6 +144,14 @@ class Store:
             if row is None:
                 return None
             return dict(zip([d[0] for d in cur.description], row, strict=True))
+
+    def try_crawler_lock(self) -> bool:
+        """Take the single-crawler advisory lock on this connection, without waiting. False when another
+        connection (another daemon, or a --once run) holds it. Postgres releases it when the connection
+        ends, and it is not tied to a transaction, so commits and rollbacks leave it alone."""
+        row = self._one("SELECT pg_try_advisory_lock(%s)", (CRAWLER_LOCK_KEY,))
+        self.commit()
+        return bool(row and row[0])
 
     def daemon_started(self) -> None:
         self._run(
