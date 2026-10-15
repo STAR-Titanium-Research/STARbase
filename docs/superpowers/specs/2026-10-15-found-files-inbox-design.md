@@ -264,6 +264,13 @@ Directus's REST (they live in `d1_private`).
 - A file edited in place is not noticed.
 - SEM tagging is a guess until validated on real images.
 - A code in a file name can drift from its record after a rename.
+- Any Lab Member can delete a `directus_files` row today (ADR-0011, until the A1b file-access work), and a found
+  file's candidate row cascades from it, so a deletion silently removes someone else's candidate (and its undo
+  record). The crawler only re-registers it if the folder's modified time changes. Pre-existing exposure, not
+  introduced here; whoever owns ADR-0011's A1b work should know.
+- Aliases are the only link between a folder and a person: a Lab Member cannot set one (create list, insert
+  trigger and update list all exclude it), but an administrator's typo routes someone's files to the wrong
+  person until fixed; fixing it resets that owner's undecided files (§5).
 - Directus uploads are not backed up (pre-existing, unrelated).
 
 ## 12. Testing
