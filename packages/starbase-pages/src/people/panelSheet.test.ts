@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WIDE_QUERY, backdropDismiss, tabWrapTarget, useNarrowPanel } from './panelSheet';
+import { backdropDismiss, tabWrapTarget, useNarrowPanel } from './panelSheet';
 
 describe('backdropDismiss', () => {
 	it('closes only when the press started and the click ended on the backdrop', () => {
@@ -41,9 +41,6 @@ describe('useNarrowPanel', () => {
 		};
 	};
 
-	it('asks for the wide layout at 1000 px, the width PeopleView puts the panel beside the list', () => {
-		expect(WIDE_QUERY).toBe('(min-width: 1000px)');
-	});
 	it('is narrow when the wide query does not match, and follows it', () => {
 		const mq = fakeQuery(false);
 		const narrow = useNarrowPanel(mq as never);

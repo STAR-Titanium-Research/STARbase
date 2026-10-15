@@ -311,6 +311,27 @@ test('a login merged into another (login_aliases) is not a login without a perso
   assert.deepEqual((await call(only.handlers['GET /attention'], { acc: admin(U.superAdmin) })).body, { items: [] });
 });
 
+test('login_aliases is read once per /people request, and an unreadable one only logs a warning', async () => {
+  let reads = 0;
+  const tables = baseTables();
+  tables.login_aliases = [];
+  const ok = mount({ tables, raw: { 'SELECT key': ATTENTION } });
+  const real = tables.login_aliases;
+  Object.defineProperty(tables, 'login_aliases', { get() { reads += 1; return real; }, configurable: true });
+  assert.equal((await call(ok.handlers['GET /people'], { acc: admin(U.superAdmin) })).status, 200);
+  assert.equal(reads, 1);
+
+  const broken = baseTables();
+  Object.defineProperty(broken, 'login_aliases', { get() { throw new Error('relation "login_aliases" does not exist'); } });
+  const m = mount({ tables: broken, raw: { 'SELECT key': ATTENTION } });
+  const r = await call(m.handlers['GET /people'], { acc: admin(U.superAdmin) });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.logins_without_person.length, 3); // nothing is hidden when the aliases cannot be read
+  assert.equal((await call(m.handlers['GET /attention'], { acc: admin(U.superAdmin) })).status, 200);
+  assert.ok(m.warnings.some((w) => /login_aliases/.test(w)));
+  assert.deepEqual(m.errors, []);
+});
+
 test('a Former person is never missing an email: not on their row, not in the /attention count', async () => {
   // Cy (active: false) and Bob (active) both have no email on the people row
   const rows = [{ key: 'missing_email', person_ids: [P.bob, P.cy], user_ids: [U.bob] }, ...ATTENTION.filter((a) => a.key === 'possible_duplicate')];

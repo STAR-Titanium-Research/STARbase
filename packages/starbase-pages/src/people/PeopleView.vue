@@ -171,6 +171,8 @@ function openRow(r: PeopleRow) {
 // Focus goes back to the row that opened the panel. Where the panel is a sheet the page behind is inert until the sheet is gone, and the
 // URL (so the sheet) changes a moment after update() is called: the sheet's watcher below does it then.
 let returnTo: string | null = null;
+// The last person whose panel was open: where focus goes when the sheet closes by some other route (the stale-person watcher, Back).
+let lastOpened: string | null = null;
 const focusRow = (id: string | null) => listEl.value?.querySelector<HTMLElement>(`[data-key="${id}"]`)?.focus();
 async function closePanel() {
 	const id = state.value.person;
@@ -191,15 +193,20 @@ const slotEl = ref<HTMLElement | null>(null);
 const panelName = computed(() => rows.value.find((r) => r.person_id === panelId.value)?.full_name ?? 'Person');
 // Focus goes into the sheet when it opens (closePanel gives it back to the row). The sheet takes it itself, not a button: nothing is
 // pressed by accident, and a screen reader announces the dialog and its name.
+watch(panelId, (id) => {
+	if (id) lastOpened = id;
+}, { immediate: true });
 watch(sheetOpen, async (open) => {
 	await nextTick();
 	if (open) {
 		returnTo = null;
 		slotEl.value?.focus({ preventScroll: true });
-	} else if (returnTo) {
-		focusRow(returnTo);
-		returnTo = null;
+		return;
 	}
+	// closePanel asked for a row; any other way of closing leaves focus on <body>, so give it to the last person's row if it is still there
+	const id = returnTo ?? (!document.activeElement || document.activeElement === document.body ? lastOpened : null);
+	returnTo = null;
+	if (id) focusRow(id);
 });
 // A tap on the backdrop closes the sheet: the press must have started there too (a drag out of the sheet is not a tap).
 let pressedBackdrop = false;
@@ -280,7 +287,6 @@ function openLink(r: PeopleRow) {
 						{{ c.label }} <span class="n">{{ counts[c.id] }}</span>
 					</button>
 				</div>
-				<span class="sep" />
 				<!-- Role, Team and Sort: after the chips, and on a phone one row of equal menus under them. -->
 				<div class="menus">
 					<v-select v-if="isAdmin" class="menu" :model-value="state.role" :items="roleItems" @update:model-value="update({ role: String($event) })" />
@@ -306,8 +312,8 @@ function openLink(r: PeopleRow) {
 				<div class="main">
 					<div v-if="!shown.length" class="empty">No people match.</div>
 					<div v-else ref="listEl" class="groups">
-						<section v-for="g in groups" :key="g.id" class="group" :aria-label="g.label">
-							<h2 class="grp">{{ g.label }} <span class="n">{{ g.rows.length }}</span></h2>
+						<section v-for="g in groups" :key="g.id" class="group" :aria-labelledby="`people-group-${g.id}`">
+							<h2 :id="`people-group-${g.id}`" class="grp">{{ g.label }} <span class="n">{{ g.rows.length }}</span></h2>
 							<div class="list">
 								<PersonRow
 									v-for="r in g.rows"
@@ -383,15 +389,16 @@ function openLink(r: PeopleRow) {
 .bar .search { flex: 0 0 220px; max-width: 100%; }
 
 .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-/* Wide: the chips and the menus are one wrapping row, as if the wrappers were not there. */
-.chips, .menus { display: contents; }
+/* Wide: the chips, then Role, Team and Sort pushed to the right. The three menus are one item, so when the row is too narrow they wrap
+   together onto a second line (Sort never wraps alone). */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.menus { display: flex; gap: 6px; align-items: center; margin-left: auto; }
 /* The force app's chip: 26px, a pill, filled with the accent when it is the one chosen. */
 .fc { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border: 1px solid var(--d1-line); background: var(--d1-surface); border-radius: 99px;
 	font: inherit; font-size: var(--fs-sm); font-weight: 600; line-height: 1; color: var(--d1-dim); cursor: pointer; }
 .fc:hover { color: var(--theme--foreground); }
 .fc.on { background: var(--d1-accent, var(--theme--primary, #1d4ed8)); border-color: var(--d1-accent, var(--theme--primary, #1d4ed8)); color: var(--d1-on-accent, #fff); }
 .fc .n { opacity: .75; font-weight: 700; margin-left: 5px; font-variant-numeric: tabular-nums; }
-.sep { flex: 1 1 12px; }
 /* Two classes: STARbase's v-select stand-in sets width: 100% and min-height: 36px with one, and which of the two stylesheets comes last is not ours to count on. */
 .menus .menu { width: auto; min-width: 0; max-width: 138px; min-height: 28px; font-size: var(--fs-sm); }
 
@@ -420,7 +427,7 @@ function openLink(r: PeopleRow) {
 .panel-wrap { display: contents; }
 .sheet-backdrop { position: fixed; inset: 0; z-index: 80; display: flex; justify-content: flex-end; background: rgba(0, 0, 0, 0.4); touch-action: none; overscroll-behavior: contain;
 	color: var(--theme--foreground); font-family: var(--theme--fonts--sans--font-family, -apple-system, 'Segoe UI', Roboto, sans-serif); font-size: var(--fs-md, 13px); line-height: 1.45; }
-.panel-slot.sheet { box-sizing: border-box; width: min(440px, calc(100vw - 32px)); height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
+.panel-slot.sheet { box-sizing: border-box; width: min(440px, calc(100vw - 32px)); height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
 	padding-right: env(safe-area-inset-right); background: var(--d1-surface); border-left: 1px solid var(--d1-line); box-shadow: -4px 0 24px rgba(0, 0, 0, 0.3); touch-action: pan-y; }
 .panel-slot.sheet:focus { outline: none; }
 @media (min-width: 1000px) {
@@ -436,9 +443,7 @@ function openLink(r: PeopleRow) {
 	.act { order: 4; }
 	/* The chips wrap; Role, Team and Sort are one row of equal menus, not a full-width select each. */
 	.filters { flex-direction: column; align-items: stretch; gap: 8px; }
-	.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-	.sep { display: none; }
-	.menus { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+	.menus { margin-left: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
 	.menus .menu { width: 100%; min-width: 0; max-width: none; min-height: 32px; text-overflow: ellipsis; }
 	.attn-menu { max-width: 100%; }
 }
