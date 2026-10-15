@@ -8,6 +8,8 @@
 #      least one explicit effect, reverses the mutation and asserts both again. Cases run in a subtransaction that is rolled back.
 #      The c_team_* cases (migration 182) do the same for team grants: grant, join, leave, trust and a deleted team;
 #      the c_team_own_* cases (migration 183) for team ownership (the owner grant, manage = edit, the manager flag, clearing), against the oracle too;
+#      the c_viewer_* cases (migration 185) for the Lab Viewer role: a viewer reads every Restricted record of every type, suspending, a role change,
+#      a delete and records created later move the viewer rows, the policy has read rows only; the oracle models a viewer on its own (ref.viewer);
 #   3. the multi-form cases that need their own transaction or session: COPY, a 1000-row insert, the importer's ON CONFLICT DO UPDATE,
 #      TRUNCATE of every input table, a disabled trigger (detected by readers_drift, repaired by readers_rebuild), REPEATABLE READ (raises);
 #   4. the concurrency cases (two sessions, each in both commit orders): 0 (campaign_samples insert against restricting the campaign),
@@ -143,6 +145,16 @@ CREATE OR REPLACE FUNCTION m.mk_cs(camp uuid, smp uuid) RETURNS uuid LANGUAGE pl
 DECLARE v uuid;
 BEGIN INSERT INTO campaign_samples (campaign_id, sample_id) VALUES (camp, smp) RETURNING id INTO v; RETURN v; END $$;
 
+-- Lab Viewer (migration 185): a login whose account role is Lab Viewer reads every record. m.mk_viewer makes the login (and, with a person, the person that
+-- owns it); m.vrole is the role's fixed id (never read from d1_private.v_viewers: the checks below must not use the thing they check)
+CREATE OR REPLACE FUNCTION m.vrole() RETURNS uuid LANGUAGE sql IMMUTABLE AS $$ SELECT '10000001-0000-0000-0000-000000000003'::uuid $$;
+CREATE OR REPLACE FUNCTION m.mk_viewer(n text, with_person boolean DEFAULT false, st text DEFAULT 'active') RETURNS uuid LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO directus_users (id, email, status, first_name, last_name, role) VALUES (m.u(n), 'm-' || n || '@example.invalid', st, 'M', n, m.vrole());
+    IF with_person THEN INSERT INTO people (person_id, full_name, user_id, is_researcher, active) VALUES (m.pe(n), 'M ' || n, m.u(n), true, true); END IF;
+    RETURN m.u(n);
+END $$;
+
 -- the runner: one case = one function m.<name>() that ends with m.done(); everything it did is rolled back
 CREATE OR REPLACE FUNCTION m.run(fname text) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE msg text; good boolean := false;
@@ -253,6 +265,24 @@ n=$(q "$FIX_URL" "SELECT count(*) FROM (WITH f AS (SELECT * FROM d1_private.read
 echo "$orig" | qf "$FIX_URL" >/dev/null || bad "could not restore readers_of_sample"
 q "$FIX_URL" "SELECT d1_private.readers_rebuild()" >/dev/null
 [[ "$(q "$FIX_URL" "SELECT d1_private.readers_drift_count()")" == 0 ]] && ok "after restoring the function and readers_rebuild() the drift is empty" || bad "drift after restoring the function"
+
+# Lab Viewer (migration 185): the same 32 universes with two logins made viewers (one of them suspended again), against the oracle, which models a viewer on its own
+echo "== Lab Viewer in the 32 universes: function = oracle = drift 0, with a viewer and a suspended viewer present =="
+vres=$( { echo "BEGIN;";
+  echo "UPDATE directus_users SET role = '10000001-0000-0000-0000-000000000003' WHERE id IN (SELECT id FROM directus_users ORDER BY id LIMIT 2);";
+  echo "UPDATE directus_users SET status = 'suspended' WHERE id = (SELECT id FROM directus_users ORDER BY id OFFSET 1 LIMIT 1);";
+  echo "$equiv;";
+  echo "SELECT 'drift ' || d1_private.readers_drift_count();";
+  echo "SELECT 'viewer_rows ' || count(*) FROM sample_readers WHERE user_id = (SELECT id FROM directus_users ORDER BY id LIMIT 1);";
+  echo "SELECT 'samples ' || count(*) FROM physical_samples;";
+  echo "ROLLBACK;"; } | qf "$FIX_URL")
+for t in sample operation amnesty test campaign project junction hidden; do
+  n=$(grep "^$t " <<<"$vres" | cut -d' ' -f2)
+  [[ "$n" == 0 ]] && ok "with viewers present, function = oracle: $t (every record x every user)" || bad "with viewers present the function differs from the oracle for $t: $n pair(s) (result: $vres)"
+done
+[[ "$(grep '^drift ' <<<"$vres")" == "drift 0" ]] && ok "with viewers present, readers_drift() is empty" || bad "drift with viewers present: $vres"
+[[ "$(grep '^viewer_rows ' <<<"$vres" | cut -d' ' -f2)" == "$(grep '^samples ' <<<"$vres" | cut -d' ' -f2)" ]] && ok "the viewer is a reader of every sample of the fixture" || bad "the viewer does not read every sample: $vres"
+[[ "$(q "$FIX_URL" "SELECT count(*) FROM d1_private.v_viewers")" == 0 ]] && ok "the check left no viewer behind (rolled back)" || bad "a viewer was left in the fixture"
 
 # ------------------------------------------------------------------------------------------------------------------------------
 # The mutation matrix: one function per case
@@ -1375,6 +1405,191 @@ BEGIN
     PERFORM m.expect(NOT m.rd('project', p, m.u('b')) AND NOT EXISTS (SELECT 1 FROM sample_team_access WHERE team_id = t), 'a deleted record takes its owner grant with it');
     PERFORM m.done();
 END $$;
+
+-- Lab Viewer (migration 185): a login whose account role is Lab Viewer (and not suspended) is a reader of every record of every type, Restricted
+-- included, through the same readers machinery. m.v_build makes a Restricted universe owned by f and e; m.v_reads says whether v reads all of it.
+CREATE OR REPLACE FUNCTION m.v_build() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; c uuid; s uuid;
+BEGIN
+    p := m.mk_project('v_p', 'e', true); c := m.mk_campaign('v_c', p, 'f', true); s := m.mk_sample('v_s', p, 'f', true);
+    PERFORM m.mk_cs(c, s);
+    PERFORM m.mk_op('v_o', s, p, c, 'f', true); PERFORM m.mk_test('v_t', s, p, c, 'f', true);
+    PERFORM m.mk_project('v_p2', NULL, true); PERFORM m.mk_sample('v_s2', NULL, NULL, true);
+    PERFORM m.mk_op('v_o2', NULL, NULL, NULL, NULL, true);
+END $$;
+CREATE OR REPLACE FUNCTION m.v_reads(u uuid) RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT string_agg(k, ',' ORDER BY k) FROM (
+        SELECT 'p' AS k WHERE m.rd('project', m.id('v_p'), u) AND m.rd('project', m.id('v_p2'), u)
+        UNION ALL SELECT 'c' WHERE m.rd('campaign', m.id('v_c'), u)
+        UNION ALL SELECT 's' WHERE m.rd('sample', m.id('v_s'), u) AND m.rd('sample', m.id('v_s2'), u)
+        UNION ALL SELECT 'j' WHERE m.rd('junction', (SELECT id FROM campaign_samples WHERE campaign_id = m.id('v_c') AND sample_id = m.id('v_s')), u)
+        UNION ALL SELECT 'o' WHERE m.rd('operation', m.id('v_o'), u) AND m.rd('operation', m.id('v_o2'), u)
+        UNION ALL SELECT 't' WHERE m.rd('test', m.id('v_t'), u)) x $$;
+-- the function, its specification (candidates then predicate, plus the viewers) and the independent oracle agree on every record
+CREATE OR REPLACE FUNCTION m.v_agree(u uuid, label text) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE n bigint;
+BEGIN
+    SELECT count(*) INTO n FROM (
+        SELECT 1 FROM physical_samples s WHERE ref.s_read(s.sample_id, u) IS DISTINCT FROM m.rd('sample', s.sample_id, u)
+        UNION ALL SELECT 1 FROM manufacturing_operations s WHERE ref.op_read_ordinary(s.operation_id, u) IS DISTINCT FROM m.rd('operation', s.operation_id, u)
+        UNION ALL SELECT 1 FROM test_sessions s WHERE ref.test_read(s.session_id, u) IS DISTINCT FROM m.rd('test', s.session_id, u)
+        UNION ALL SELECT 1 FROM campaigns s WHERE ref.c_read(s.campaign_id, u) IS DISTINCT FROM m.rd('campaign', s.campaign_id, u)
+        UNION ALL SELECT 1 FROM projects s WHERE ref.pj_read(s.project_id, u) IS DISTINCT FROM m.rd('project', s.project_id, u)
+        UNION ALL SELECT 1 FROM campaign_samples s WHERE ref.cs_read(s.id, u) IS DISTINCT FROM m.rd('junction', s.id, u)) x;
+    IF n > 0 THEN RAISE EXCEPTION 'm_fail: % the readers tables and the oracle disagree for the login on % record(s)', label, n USING ERRCODE = 'M0002'; END IF;
+    SELECT count(*) INTO n FROM (
+        (SELECT * FROM d1_private.readers_of_sample(ARRAY(SELECT sample_id FROM physical_samples)) EXCEPT SELECT * FROM d1_private.readers_of_sample_spec(ARRAY(SELECT sample_id FROM physical_samples)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_sample_spec(ARRAY(SELECT sample_id FROM physical_samples)) EXCEPT SELECT * FROM d1_private.readers_of_sample(ARRAY(SELECT sample_id FROM physical_samples)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_operation(ARRAY(SELECT operation_id FROM manufacturing_operations)) EXCEPT SELECT * FROM d1_private.readers_of_operation_spec(ARRAY(SELECT operation_id FROM manufacturing_operations)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_operation_spec(ARRAY(SELECT operation_id FROM manufacturing_operations)) EXCEPT SELECT * FROM d1_private.readers_of_operation(ARRAY(SELECT operation_id FROM manufacturing_operations)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_test(ARRAY(SELECT session_id FROM test_sessions)) EXCEPT SELECT * FROM d1_private.readers_of_test_spec(ARRAY(SELECT session_id FROM test_sessions)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_test_spec(ARRAY(SELECT session_id FROM test_sessions)) EXCEPT SELECT * FROM d1_private.readers_of_test(ARRAY(SELECT session_id FROM test_sessions)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_campaign(ARRAY(SELECT campaign_id FROM campaigns)) EXCEPT SELECT * FROM d1_private.readers_of_campaign_spec(ARRAY(SELECT campaign_id FROM campaigns)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_campaign_spec(ARRAY(SELECT campaign_id FROM campaigns)) EXCEPT SELECT * FROM d1_private.readers_of_campaign(ARRAY(SELECT campaign_id FROM campaigns)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_project(ARRAY(SELECT project_id FROM projects)) EXCEPT SELECT * FROM d1_private.readers_of_project_spec(ARRAY(SELECT project_id FROM projects)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_project_spec(ARRAY(SELECT project_id FROM projects)) EXCEPT SELECT * FROM d1_private.readers_of_project(ARRAY(SELECT project_id FROM projects)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_campaign_sample(ARRAY(SELECT id FROM campaign_samples)) EXCEPT SELECT * FROM d1_private.readers_of_campaign_sample_spec(ARRAY(SELECT id FROM campaign_samples)))
+        UNION ALL (SELECT * FROM d1_private.readers_of_campaign_sample_spec(ARRAY(SELECT id FROM campaign_samples)) EXCEPT SELECT * FROM d1_private.readers_of_campaign_sample(ARRAY(SELECT id FROM campaign_samples)))) x;
+    IF n > 0 THEN RAISE EXCEPTION 'm_fail: % the production readers_of_* differ from their _spec functions: % pair(s)', label, n USING ERRCODE = 'M0002'; END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_viewer_reads_everything() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v uuid; p uuid; c uuid; s uuid; n bigint;
+BEGIN
+    PERFORM m.v_build();
+    PERFORM m.drift('the Restricted universe');
+    PERFORM m.expect(m.v_reads(m.u('b')) IS NULL AND m.v_reads(m.u('a')) IS NULL, 'before: an ordinary member reads none of it');
+    v := m.mk_viewer('v');
+    PERFORM m.drift('the viewer is created');
+    PERFORM m.expect(m.v_reads(v) = 'c,j,o,p,s,t', 'a new login with the Lab Viewer role reads every Restricted record of every type: ' || coalesce(m.v_reads(v), 'nothing'));
+    PERFORM m.expect(m.v_reads(m.u('b')) IS NULL, 'an ordinary member still reads none of it');
+    PERFORM m.v_agree(v, 'the viewer');
+    -- the insert path: a record created after the role was granted
+    p := m.mk_project('v_np', 'f', true); c := m.mk_campaign('v_nc', p, 'f', true); s := m.mk_sample('v_ns', p, 'f', true);
+    PERFORM m.mk_op('v_no', s, p, c, 'f', true); PERFORM m.mk_test('v_nt', s, p, c, 'f', true); PERFORM m.mk_cs(c, s);
+    PERFORM m.drift('Restricted records created after the viewer');
+    PERFORM m.expect(m.rd('project', p, v) AND m.rd('campaign', c, v) AND m.rd('sample', s, v) AND m.rd('operation', m.id('v_no'), v) AND m.rd('test', m.id('v_nt'), v)
+                     AND m.rd('junction', (SELECT id FROM campaign_samples WHERE campaign_id = c AND sample_id = s), v), 'the viewer reads what is created after the role was granted');
+    -- the viewer is not added to the Ask-the-database cache: Restricted stays hidden from that role
+    PERFORM m.expect(m.hid('physical_samples', s) AND m.hid('manufacturing_operations', m.id('v_o')), 'Restricted records are still hidden from the Ask-the-database role');
+    -- changing what makes a record Restricted changes nothing for the viewer
+    UPDATE physical_samples SET restricted = false WHERE sample_id = s; UPDATE projects SET restricted = false WHERE project_id = p;
+    PERFORM m.drift('unrestricted');
+    UPDATE physical_samples SET restricted = true, owner_person_id = NULL WHERE sample_id = s;
+    PERFORM m.drift('restricted again, with no owner');
+    PERFORM m.expect(m.rd('sample', s, v) AND m.rd('project', p, v), 'the viewer still reads it');
+    PERFORM m.v_agree(v, 'the viewer after the changes');
+    SELECT count(*) INTO n FROM sample_readers WHERE user_id = v;
+    PERFORM m.expect(n = (SELECT count(*) FROM physical_samples), 'the viewer is a reader of every sample');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_viewer_suspend() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v uuid; w uuid; own uuid; oo uuid;
+BEGIN
+    PERFORM m.v_build();
+    v := m.mk_viewer('v', true);
+    own := m.mk_sample('v_own', NULL, 'v', false); oo := m.mk_op('v_oo', own, NULL, NULL, 'v', false);
+    PERFORM m.drift('a viewer who also owns a sample');
+    PERFORM m.expect(m.v_reads(v) = 'c,j,o,p,s,t', 'the viewer reads everything');
+    UPDATE directus_users SET status = 'suspended' WHERE id = v;
+    PERFORM m.drift('the viewer is suspended');
+    PERFORM m.expect(m.v_reads(v) IS NULL, 'suspended: none of the Restricted records, by any path');
+    PERFORM m.expect(m.rd('sample', own, v) AND m.rd('operation', oo, v), 'suspended: the records the person owns are still read by the ordinary path');
+    UPDATE directus_users SET status = 'active' WHERE id = v;
+    PERFORM m.drift('the viewer is active again');
+    PERFORM m.expect(m.v_reads(v) = 'c,j,o,p,s,t', 'unsuspended: reads everything again');
+    -- an invite that is not yet accepted is not suspended
+    w := m.mk_viewer('w', false, 'invited');
+    PERFORM m.drift('an invited viewer');
+    PERFORM m.expect(m.v_reads(w) = 'c,j,o,p,s,t', 'an invited (not suspended) login with the role is a reader');
+    -- a viewer created suspended reads nothing
+    PERFORM m.mk_viewer('x', false, 'suspended');
+    PERFORM m.drift('a suspended viewer is created');
+    PERFORM m.expect(m.v_reads(m.u('x')) IS NULL, 'a login created suspended reads none of it');
+    PERFORM m.v_agree(v, 'the viewer'); PERFORM m.v_agree(m.u('x'), 'the suspended viewer');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_viewer_role_change() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v uuid;
+BEGIN
+    PERFORM m.v_build();
+    v := m.mk_viewer('v');
+    PERFORM m.expect(m.v_reads(v) = 'c,j,o,p,s,t', 'the viewer reads everything');
+    UPDATE directus_users SET role = '10000001-0000-0000-0000-000000000002' WHERE id = v;
+    PERFORM m.drift('the role becomes Lab Member');
+    PERFORM m.expect(m.v_reads(v) IS NULL AND NOT EXISTS (SELECT 1 FROM sample_readers WHERE user_id = v) AND NOT EXISTS (SELECT 1 FROM operation_readers WHERE user_id = v), 'Lab Member: a reader of nothing');
+    UPDATE directus_users SET role = m.vrole() WHERE id = v;
+    PERFORM m.drift('the role is Lab Viewer again');
+    PERFORM m.expect(m.v_reads(v) = 'c,j,o,p,s,t', 'Lab Viewer again: reads everything');
+    UPDATE directus_users SET role = NULL WHERE id = v;
+    PERFORM m.drift('no role');
+    PERFORM m.expect(m.v_reads(v) IS NULL, 'no role: none');
+    -- an existing login gains the role
+    PERFORM m.expect(m.v_reads(m.u('b')) IS NULL, 'before: b reads none of it');
+    UPDATE directus_users SET role = m.vrole() WHERE id = m.u('b');
+    PERFORM m.drift('b becomes a viewer');
+    PERFORM m.expect(m.v_reads(m.u('b')) = 'c,j,o,p,s,t', 'b, made a viewer, reads everything');
+    PERFORM m.v_agree(m.u('b'), 'b');
+    -- a column that is not the role or the status changes nothing
+    UPDATE directus_users SET last_page = '/x', last_access = now() WHERE id = m.u('b');
+    PERFORM m.drift('last_access');
+    PERFORM m.expect(m.v_reads(m.u('b')) = 'c,j,o,p,s,t', 'last_access and last_page change nothing');
+    UPDATE directus_users SET role = NULL WHERE id = m.u('b');
+    PERFORM m.drift('b is no viewer');
+    PERFORM m.expect(m.v_reads(m.u('b')) IS NULL, 'b, no viewer, reads none of it');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_viewer_delete() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v uuid; n bigint;
+BEGIN
+    PERFORM m.v_build();
+    v := m.mk_viewer('v', true); PERFORM m.mk_viewer('w');
+    PERFORM m.drift('two viewers');
+    DELETE FROM directus_users WHERE id = v;
+    PERFORM m.drift('a viewer is deleted');
+    SELECT (SELECT count(*) FROM sample_readers WHERE user_id = v) + (SELECT count(*) FROM operation_readers WHERE user_id = v) + (SELECT count(*) FROM test_readers WHERE user_id = v)
+         + (SELECT count(*) FROM campaign_readers WHERE user_id = v) + (SELECT count(*) FROM project_readers WHERE user_id = v) + (SELECT count(*) FROM campaign_sample_readers WHERE user_id = v) INTO n;
+    PERFORM m.expect(n = 0, 'the deleted login has no readers row left');
+    PERFORM m.expect(m.v_reads(m.u('w')) = 'c,j,o,p,s,t', 'the other viewer still reads everything');
+    DELETE FROM directus_users WHERE id = m.u('w');
+    PERFORM m.drift('the last viewer is deleted');
+    PERFORM m.expect(NOT EXISTS (SELECT 1 FROM sample_readers WHERE user_id = m.u('w')), 'no row of the second viewer either');
+    PERFORM m.mk_viewer('v');
+    PERFORM m.drift('the same login id comes back');
+    PERFORM m.expect(m.v_reads(m.u('v')) = 'c,j,o,p,s,t', 'a login created again with the role reads everything');
+    -- deleting an operation, a test and a campaign removes their viewer rows with them
+    DELETE FROM test_sessions WHERE session_id = m.id('v_t'); DELETE FROM manufacturing_operations WHERE operation_id = m.id('v_o');
+    DELETE FROM campaign_samples WHERE campaign_id = m.id('v_c'); DELETE FROM campaigns WHERE campaign_id = m.id('v_c');
+    PERFORM m.drift('records deleted under a viewer');
+    PERFORM m.done();
+END $$;
+
+-- the policy and the role: read rows only, no create, update or delete anywhere (Directus denies a write for lack of a row; the endpoints refuse on top)
+CREATE OR REPLACE FUNCTION m.c_viewer_policy_reads_only() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE n bigint; pol uuid := '20000002-0000-0000-0000-000000000003';
+BEGIN
+    PERFORM m.expect((SELECT count(*) FROM directus_roles WHERE id = m.vrole() AND name = 'Lab Viewer') = 1, 'the role Lab Viewer exists');
+    PERFORM m.expect((SELECT count(*) FROM directus_policies WHERE id = pol AND name = 'Lab Viewer' AND NOT admin_access AND app_access) = 1, 'the policy Lab Viewer has app access and no admin access');
+    PERFORM m.expect((SELECT count(*) FROM directus_access WHERE role = m.vrole() AND policy = pol AND "user" IS NULL) = 1, 'the role is bound to its policy');
+    SELECT count(*) INTO n FROM directus_permissions WHERE policy = pol AND action <> 'read';
+    PERFORM m.expect(n = 0, 'the viewer policy has no create, update or delete row (found ' || n || ')');
+    SELECT count(*) INTO n FROM directus_permissions WHERE policy = pol AND action = 'read';
+    PERFORM m.expect(n > 50, 'the viewer policy has its read rows (' || n || ')');
+    SELECT count(*) INTO n FROM directus_permissions p WHERE p.policy = pol AND p.action = 'read' AND p.collection IN ('physical_samples', 'projects', 'campaigns', 'test_sessions', 'manufacturing_operations')
+       AND p.permissions::text NOT LIKE '%readers%';
+    PERFORM m.expect(n = 0, 'a record type is read through the readers tables (membership test), the same rule as Lab Member');
+    -- a viewer reads every row of the tables that Lab Member reads only for itself: project_rollup and the five *_access tables (Task B)
+    SELECT count(*) INTO n FROM directus_permissions p WHERE p.policy = pol AND p.action = 'read'
+       AND p.collection IN ('project_rollup', 'sample_access', 'operation_access', 'test_access', 'campaign_access', 'project_access') AND p.permissions::jsonb = '{}'::jsonb AND p.fields = '*';
+    PERFORM m.expect(n = 6, 'a viewer reads every row of project_rollup and the five *_access tables: no filter (found ' || n || ' of 6)');
+    SELECT count(*) INTO n FROM directus_permissions p WHERE p.policy = '20000002-0000-0000-0000-000000000002' AND p.action = 'read'
+       AND p.collection IN ('project_rollup', 'sample_access', 'operation_access', 'test_access', 'campaign_access', 'project_access') AND p.permissions::jsonb <> '{}'::jsonb;
+    PERFORM m.expect(n = 6, 'Lab Member still reads only its own rows of those six (found ' || n || ' of 6)');
+    PERFORM m.done();
+END $$;
 SQL
 
 echo "== The mutation matrix: one case per row of the spec's trigger-coverage table, and every mutation class =="
@@ -1739,7 +1954,7 @@ END $$;
 
 -- one random mutation (an invalid one, refused by a constraint, is skipped; anything else is a failure)
 CREATE OR REPLACE FUNCTION m.rmutate(step int) RETURNS text LANGUAGE plpgsql AS $$
-DECLARE kind int := m.rn(20); sm uuid[]; op uuid[]; ts uuid[]; cm uuid[]; pj uuid[]; r uuid; tbl text; what text;
+DECLARE kind int := m.rn(22); sm uuid[]; op uuid[]; ts uuid[]; cm uuid[]; pj uuid[]; r uuid; tbl text; what text;
 BEGIN
     sm := ARRAY(SELECT sample_id FROM physical_samples WHERE sample_code LIKE 'M-x%'); op := ARRAY(SELECT operation_id FROM manufacturing_operations WHERE pass_code IS NULL OR true ORDER BY operation_id);
     ts := ARRAY(SELECT session_id FROM test_sessions WHERE test_type = 'hardness' ORDER BY session_id); cm := ARRAY(SELECT campaign_id FROM campaigns WHERE name LIKE 'M x%');
@@ -1830,6 +2045,15 @@ BEGIN
         ELSIF kind = 18 THEN
             -- a project is deleted (campaigns set null; samples, operations or tests may refuse it)
             DELETE FROM projects WHERE project_id = m.rid(pj);
+        ELSIF kind = 20 THEN
+            -- a login becomes a Lab Viewer or stops being one (migration 185)
+            what := (ARRAY['a','b','c','d','e','f'])[1 + m.rn(6)];
+            UPDATE directus_users SET role = CASE WHEN role IS NOT DISTINCT FROM m.vrole() THEN NULL ELSE m.vrole() END WHERE id = m.u(what);
+        ELSIF kind = 21 THEN
+            -- a viewer is suspended or unsuspended (a login that is not a viewer changes nothing)
+            what := (ARRAY['a','b','c','d','e','f'])[1 + m.rn(6)];
+            UPDATE directus_users SET role = m.vrole() WHERE id = m.u(what) AND m.rp(0.3);
+            UPDATE directus_users SET status = CASE WHEN status = 'suspended' THEN 'active' ELSE 'suspended' END WHERE id = m.u(what);
         ELSIF kind = 19 THEN
             -- multi-row statements: two rows of a table in one UPDATE
             what := (ARRAY['s','o','c','w'])[1 + m.rn(4)];

@@ -11,6 +11,7 @@ import SamplesPanel from './SamplesPanel.vue';
 import TestsPanel from './TestsPanel.vue';
 import { useCampaignData, type CampaignData } from './useCampaignData';
 import { useCanUpdate } from '../composables/useCanUpdate';
+import { useExplorerHost } from '../host';
 
 // Everything below a campaign's header: counts and progress, the sample x step matrix, the sample,
 // operation and test lists and their pickers. Used by the Campaign page and, without the matrix, by
@@ -45,6 +46,9 @@ const { junction, operations, tests, analyses, analysisUnavailable, overview, ma
 // needs the campaign's owner or the sample's own owner, so it stays.
 const askId = computed(() => (props.canUpdate === undefined ? props.campaignId : null));
 const own = useCanUpdate('campaigns', askId);
+// A Lab Viewer looks and changes nothing: no picker, no add and no remove button in any of the three lists.
+const host = useExplorerHost();
+const readOnly = computed(() => host.canViewAllAccess?.value === true);
 const cannotAdd = computed(() => (props.canUpdate === undefined ? own.canUpdate.value : props.canUpdate) === false);
 
 defineExpose({ reload });
@@ -70,14 +74,15 @@ defineExpose({ reload });
 			</LoadState>
 		</Section>
 
-		<p v-if="cannotAdd" class="d1-cnote">Only the campaign's owner can add samples here. Operations and tests are moved by their own owner.</p>
+		<p v-if="readOnly" class="d1-cnote">This account is read-only: it can look at the campaign and change nothing.</p>
+		<p v-else-if="cannotAdd" class="d1-cnote">Only the campaign's owner can add samples here. Operations and tests are moved by their own owner.</p>
 
 		<!-- The two short lists share a row while there is room (on the Campaign page); in the form
 		     they stack. A three-column list across the whole page put its figures a screen away
 		     from the code they belong to. -->
 		<div class="d1-ccols">
-			<SamplesPanel :id="sectionIds ? 'samples' : undefined" :campaign-id="campaignId" :rows="overview.sampleRows" :junction="junction" :cannot-add="cannotAdd" :hidden-count="overview.counts.hiddenSamples" @changed="reload" />
-			<TestsPanel :id="sectionIds ? 'test-sessions' : undefined" :campaign-id="campaignId" :rows="overview.testRows" :section="tests" @changed="reload" />
+			<SamplesPanel :id="sectionIds ? 'samples' : undefined" :campaign-id="campaignId" :rows="overview.sampleRows" :junction="junction" :cannot-add="cannotAdd" :read-only="readOnly" :hidden-count="overview.counts.hiddenSamples" @changed="reload" />
+			<TestsPanel :id="sectionIds ? 'test-sessions' : undefined" :campaign-id="campaignId" :rows="overview.testRows" :section="tests" :read-only="readOnly" @changed="reload" />
 		</div>
 		<OperationsPanel
 			:id="sectionIds ? 'operations' : undefined"
@@ -86,6 +91,7 @@ defineExpose({ reload });
 			:rows="overview.opRows"
 			:section="operations"
 			:force-hidden="analysisUnavailable || !!analyses.error"
+			:read-only="readOnly"
 			@changed="reload"
 		/>
 	</div>

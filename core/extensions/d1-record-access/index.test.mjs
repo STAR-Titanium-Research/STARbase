@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import ext, { COLLECTIONS, mailContent, recipientAddress, recordLink, roleLabel, withTimeout } from './index.js';
+import ext, { COLLECTIONS, LAB_VIEWER_ROLE_ID, mailContent, recipientAddress, recordLink, roleLabel, withTimeout } from './index.js';
 
 // ---- ids and the world ----------------------------------------------------------------------------------
 
@@ -241,14 +241,14 @@ const owner = { user: U.owner, admin: false, app: true };
 const admin = { user: ID(250), admin: true, app: true };
 const as = (user) => ({ user, admin: false, app: true });
 
-function call(h, { acc = owner, collection = 'physical_samples', id = SAMPLE, body, params = {} } = {}) {
+function call(h, { acc = owner, collection = 'physical_samples', id = SAMPLE, body, params = {}, method } = {}) {
   return new Promise((resolve) => {
     const out = { status: 200, body: undefined };
     const res = {
       status(code) { out.status = code; return res; },
       json(b) { out.body = b; resolve(out); return res; },
     };
-    h({ accountability: acc, params: { collection, id, ...params }, body, schema: 'SCHEMA' }, res);
+    h({ accountability: acc, params: { collection, id, ...params }, body, schema: 'SCHEMA', ...(method ? { method } : {}) }, res);
   });
 }
 const errorOf = (r) => r.body?.errors?.[0];
@@ -1646,4 +1646,132 @@ test('mailContent: ownerTeam words the mail for a team\'s managers; everything i
   assert.doesNotMatch(blocked.text, /Bar|https/);
   // unchanged without it
   assert.equal(mailContent({ adder: 'Olive', kind: 'sample', code: 'SM-1', transfer: true }).subject, 'Olive made you the owner of sample SM-1');
+});
+
+// ---- Lab Viewer (migration 185): reads everything, changes nothing ---------------------------------------------------
+
+const VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
+const withViewer = (userId, role = VIEWER_ROLE) => {
+  const world = baseTables();
+  world.directus_users.find((u) => u.id === userId).role = role;
+  return world;
+};
+const WRITES = [
+  ['POST /:collection/:id/entries', { person_id: P.view, role: 'view' }, {}],
+  ['PATCH /:collection/:id/entries/:person_id', { role: 'edit' }, { person_id: P.view }],
+  ['DELETE /:collection/:id/entries/:person_id', undefined, { person_id: P.view }],
+  ['PATCH /:collection/:id/entries/team/:team_id', { role: 'edit' }, { team_id: T.alpha }],
+  ['DELETE /:collection/:id/entries/team/:team_id', undefined, { team_id: T.alpha }],
+  ['POST /:collection/:id/entries/team/:team_id/members/:person_id', { decision: 'approve' }, { team_id: T.alpha, person_id: P.view }],
+  ['POST /:collection/:id/transfer', { person_id: P.view }, {}],
+];
+
+test('Lab Viewer: a viewer who OWNS the record (so passes the manage rule) is refused on every route that changes anything', async () => {
+  const { handlers, db, calls } = mount({ tables: withViewer(U.owner) });
+  for (const [route, body, params] of WRITES) {
+    assert.ok(handlers[route], route);
+    const r = await call(handlers[route], { acc: owner, body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+    assert.equal(errorOf(r).extensions.source, 'd1-record-access');
+  }
+  // refused before anything else: no manage check, no read as the caller, no write, no mail, no cache clear
+  assert.deepEqual(db.log.writes, []);
+  assert.deepEqual(db.log.events, []);
+  assert.equal(calls.manage.length, 0);
+  assert.equal(calls.reads.length, 0);
+  assert.equal(calls.mail.sent.length, 0);
+  assert.equal(calls.cache.length, 0);
+  // the same route for the same owner as a Lab Member is not refused
+  const member = mount({ tables: withViewer(U.owner, '10000001-0000-0000-0000-000000000002') });
+  const ok = await call(member.handlers['POST /:collection/:id/entries'], { body: { person_id: P.nologin, role: 'view' }, method: 'POST' });
+  assert.notEqual(errorOf(ok)?.extensions?.code, 'READ_ONLY_ROLE');
+});
+
+test('Lab Viewer: a SUSPENDED viewer (role kept) is refused every write too: the write rule has no status in it (fail closed)', async () => {
+  const world = withViewer(U.owner);
+  world.directus_users.find((u) => u.id === U.owner).status = 'suspended';
+  const { handlers, db } = mount({ tables: world });
+  for (const [route, body, params] of WRITES) {
+    const r = await call(handlers[route], { acc: owner, body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+  }
+  assert.deepEqual(db.log.writes, []);
+});
+
+test('Lab Viewer: a viewer who is the PI of a project is refused too, and an administrator who is a viewer is refused (the role decides)', async () => {
+  const pi = mount({ tables: withViewer(U.pi) });
+  const r = await call(pi.handlers['POST /:collection/:id/entries'], { acc: as(U.pi), collection: 'projects', id: PROJECT, body: { person_id: P.view, role: 'view' }, method: 'POST' });
+  assert.equal(r.status, 403);
+  assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE');
+  const adm = mount({ tables: (() => { const w = baseTables(); w.directus_users.push({ id: admin.user, email: 'adm@login.example', role: VIEWER_ROLE }); return w; })() });
+  const r2 = await call(adm.handlers['POST /:collection/:id/transfer'], { acc: admin, body: { person_id: P.view }, method: 'POST' });
+  assert.equal(errorOf(r2).extensions.code, 'READ_ONLY_ROLE');
+});
+
+test('Lab Viewer: reading the access list is not refused (GET), and the role id is matched without case and is not overridable', async () => {
+  const { handlers } = mount({ tables: withViewer(U.owner) });
+  const get = await call(handlers['GET /:collection/:id'], { method: 'GET' });
+  assert.equal(get.status, 200);
+  const upper = mount({ tables: withViewer(U.owner, VIEWER_ROLE.toUpperCase()) });
+  assert.equal(errorOf(await call(upper.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' })).extensions.code, 'READ_ONLY_ROLE');
+  // no environment override: D1_LAB_VIEWER_ROLE_ID changes nothing (one role id, fail closed)
+  const other = ID(777);
+  const env = { PUBLIC_URL: 'https://lab.example/', D1_LAB_VIEWER_ROLE_ID: other };
+  const swapped = mount({ tables: withViewer(U.owner, other), env });
+  assert.notEqual(errorOf(await call(swapped.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' }))?.extensions?.code, 'READ_ONLY_ROLE');
+  const kept = mount({ tables: withViewer(U.owner), env });
+  assert.equal(errorOf(await call(kept.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' })).extensions.code, 'READ_ONLY_ROLE');
+});
+
+// ---- Lab Viewer, Task B: the access list is readable by a viewer, and offers no change --------------------------------
+
+test('Lab Viewer: GET /:collection/:id answers a viewer with the list as everyone reads it, and can_manage is false even for the record\'s owner', async () => {
+  const world = withViewer(U.owner);
+  const { handlers } = mount({ tables: world });
+  const get = handlers['GET /:collection/:id'];
+  const viewerOwner = await call(get, { acc: owner, method: 'GET' });
+  assert.equal(viewerOwner.status, 200);
+  assert.equal(viewerOwner.body.can_manage, false); // the manage rule would say yes: the viewer owns it
+  // the same owner as a Lab Member can manage, and the rest of the body is the same
+  const asMember = await call(mount({ tables: withViewer(U.owner, '10000001-0000-0000-0000-000000000002') }).handlers['GET /:collection/:id'], { acc: owner, method: 'GET' });
+  assert.equal(asMember.body.can_manage, true);
+  assert.deepEqual({ ...viewerOwner.body, can_manage: null }, { ...asMember.body, can_manage: null });
+  // a viewer who owns nothing: the same list, no manage
+  const stranger = withViewer(U.stranger);
+  const other = await call(mount({ tables: stranger }).handlers['GET /:collection/:id'], { acc: as(U.stranger), method: 'GET' });
+  assert.equal(other.status, 200);
+  assert.equal(other.body.can_manage, false);
+  assert.deepEqual(other.body.entries, viewerOwner.body.entries);
+  // the team-members read route is readable too
+  const members = await call(handlers['GET /:collection/:id/entries/team/:team_id/members'], { acc: owner, params: { team_id: T.alpha }, method: 'GET' });
+  assert.notEqual(members.status, 403);
+  assert.notEqual(errorOf(members)?.extensions?.code, 'READ_ONLY_ROLE');
+});
+
+// ---- one Lab Viewer role id ---------------------------------------------------------------------------------------------------
+
+test('one Lab Viewer role id: scripts/access_rules.json, the extensions, @d1/ui, migration 185 and the SQL scripts all name the same one', () => {
+  const root = new URL('../../../', import.meta.url);
+  const read = (path) => readFileSync(new URL(path, root), 'utf8');
+  const id = JSON.parse(read('scripts/access_rules.json')).viewer.role;
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  // the extension constant (d1-record-access exports it; d1-teams, d1-people-admin and d1-access-guard import it, none writes it again)
+  assert.equal(LAB_VIEWER_ROLE_ID, id);
+  for (const ext of ['d1-teams', 'd1-people-admin', 'd1-access-guard']) {
+    const source = read(`core/extensions/${ext}/index.js`);
+    assert.doesNotMatch(source, new RegExp(id), `${ext} writes the viewer role id again`);
+    assert.match(source, /from '\.\.\/d1-record-access\/index\.js'/, `${ext} imports the shared constant`);
+  }
+  // the front end
+  assert.match(read('packages/d1-ui/src/hostAdmin.ts'), new RegExp(`export const LAB_VIEWER_ROLE_ID = '${id}'`));
+  // migration 185: d1_private.lab_viewer_role() is the one place SQL names it
+  const definition = read('db/migrations/20261015000185_lab_viewer.sql')
+    .split(/\r?\n/)
+    .find((line) => line.includes('FUNCTION d1_private.lab_viewer_role()'));
+  assert.ok(definition, 'lab_viewer_role() is defined');
+  assert.ok(definition.includes(`SELECT '${id}'::uuid`), 'lab_viewer_role() returns the one id');
+  // the generated role row of the account script
+  assert.ok(read('scripts/configure_users_and_policies.sql').includes(id));
 });

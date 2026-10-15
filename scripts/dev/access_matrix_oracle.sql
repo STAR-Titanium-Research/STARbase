@@ -14,6 +14,11 @@ CREATE SCHEMA IF NOT EXISTS ref;
 
 CREATE OR REPLACE FUNCTION ref.id(label text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $$ SELECT md5('smoke-access-' || label)::uuid $$;
 
+-- Lab Viewer (migration 185): a login whose account role is Lab Viewer (10000001-0000-0000-0000-000000000003) and that is not suspended reads every record of
+-- every type, Restricted included. Written here from that sentence, not from d1_private.v_viewers.
+CREATE OR REPLACE FUNCTION ref.viewer(u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM directus_users x WHERE x.id = u AND x.role = '10000001-0000-0000-0000-000000000003' AND x.status <> 'suspended') $$;
+
 CREATE OR REPLACE FUNCTION ref.me(person uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT person IS NOT NULL AND EXISTS (SELECT 1 FROM people WHERE person_id = person AND user_id = u) $$;
 
@@ -97,7 +102,8 @@ CREATE OR REPLACE FUNCTION ref.gate_s_star(s uuid, u uuid) RETURNS boolean LANGU
 CREATE OR REPLACE FUNCTION ref.s_read(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
         SELECT 1 FROM physical_samples x WHERE x.sample_id = s AND (
-            ref.s_listed(s, u)
+            ref.viewer(u)
+            OR ref.s_listed(s, u)
             OR (NOT x.restricted AND (
                 ref.p_invs(x.project_id, u)
                 OR EXISTS (SELECT 1 FROM campaign_samples cs JOIN campaigns c ON c.campaign_id = cs.campaign_id
@@ -151,7 +157,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 
 -- an operation: the ordinary read, the amnesty (everyone), the full read (their OR)
 CREATE OR REPLACE FUNCTION ref.op_read_ordinary(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
+    SELECT ref.viewer(u) OR ref.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
                         EXISTS (SELECT 1 FROM operation_access a WHERE a.operation_id = x.operation_id AND ref.me(a.person_id, u)), u)
       FROM manufacturing_operations x WHERE x.operation_id = o $$;
 CREATE OR REPLACE FUNCTION ref.op_open(o uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -169,7 +175,7 @@ CREATE OR REPLACE FUNCTION ref.op_delete(o uuid, u uuid) RETURNS boolean LANGUAG
       FROM manufacturing_operations x WHERE x.operation_id = o $$;
 
 CREATE OR REPLACE FUNCTION ref.test_read(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
+    SELECT ref.viewer(u) OR ref.rec_read(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
                         EXISTS (SELECT 1 FROM test_access a WHERE a.session_id = x.session_id AND ref.me(a.person_id, u)), u)
       FROM test_sessions x WHERE x.session_id = t $$;
 CREATE OR REPLACE FUNCTION ref.test_update(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -183,11 +189,11 @@ CREATE OR REPLACE FUNCTION ref.test_delete(t uuid, u uuid) RETURNS boolean LANGU
 
 CREATE OR REPLACE FUNCTION ref.c_read(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
-        SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.gate_p(x.project_id, u) AND (
+        SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND (ref.viewer(u) OR ref.gate_p(x.project_id, u) AND (
             ref.c_listed(c, u)
             OR (NOT x.restricted AND (
                 ref.p_invs(x.project_id, u)
-                OR EXISTS (SELECT 1 FROM campaign_samples cs WHERE cs.campaign_id = c AND ref.s_editor(cs.sample_id, u)))))) $$;
+                OR EXISTS (SELECT 1 FROM campaign_samples cs WHERE cs.campaign_id = c AND ref.s_editor(cs.sample_id, u))))))) $$;
 CREATE OR REPLACE FUNCTION ref.c_update(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.gate_p(x.project_id, u)
                       AND (ref.me(x.owner_person_id, u)
@@ -199,7 +205,8 @@ CREATE OR REPLACE FUNCTION ref.c_delete(c uuid, u uuid) RETURNS boolean LANGUAGE
 CREATE OR REPLACE FUNCTION ref.pj_read(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
         SELECT 1 FROM projects x WHERE x.project_id = p AND (
-            ref.p_listed(p, u)
+            ref.viewer(u)
+            OR ref.p_listed(p, u)
             OR (NOT x.restricted AND (
                 EXISTS (SELECT 1 FROM campaigns c WHERE c.project_id = p AND ref.c_owner(c.campaign_id, u) AND ref.c_read(c.campaign_id, u))
                 OR EXISTS (SELECT 1 FROM physical_samples s WHERE s.project_id = p AND ref.s_editor(s.sample_id, u) AND ref.s_read(s.sample_id, u))
@@ -209,7 +216,7 @@ CREATE OR REPLACE FUNCTION ref.pj_read(p uuid, u uuid) RETURNS boolean LANGUAGE 
 -- a campaign_samples row, from the rule as the first attempt wrote it (sample gate AND (campaign read OR sample read)), which the readers
 -- design shows equal to "readers of the sample, or, for an unrestricted sample, readers of the campaign"
 CREATE OR REPLACE FUNCTION ref.cs_read(j uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT coalesce((SELECT ref.gate_s(cs.sample_id, u) AND (ref.c_read(cs.campaign_id, u) OR ref.s_read(cs.sample_id, u))
+    SELECT coalesce((SELECT ref.viewer(u) OR (ref.gate_s(cs.sample_id, u) AND (ref.c_read(cs.campaign_id, u) OR ref.s_read(cs.sample_id, u)))
                        FROM campaign_samples cs WHERE cs.id = j), false) $$;
 
 -- hidden from the Ask-the-database role (spec section 7), from the flags: restricted, or its project restricted; a campaign also when

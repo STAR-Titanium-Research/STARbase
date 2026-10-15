@@ -44,9 +44,10 @@
 //        in Directus's log. A mail error that does surface keeps the login and the link: email_sent false, a warning logged.
 //   POST /d1-people-admin/invite/resend   body { user_id }  -> { email_sent }   (409 NOT_INVITED unless the login's status is 'invited')
 //
-// Who may call: /people and /attention are for administrators only (401 without a user, 403 otherwise). /access is for an
-// administrator, or for the person whose login the caller is. A non-administrator sees every count, but the list leaves out a record
-// they no longer read (their own readers row is missing): it is counted, not listed.
+// Who may call: /people and /attention are for administrators and Lab Viewers (401 without a user, 403 otherwise; a viewer reads what an
+// administrator reads and changes nothing, so every write route answers a viewer 403 READ_ONLY_ROLE). /access is for an administrator, a
+// Lab Viewer, or the person whose login the caller is. A plain non-administrator sees every count, but the list leaves out a record they no
+// longer read (their own readers row is missing): it is counted, not listed; an administrator gets every record listed. A Lab Viewer is filtered the same way as a member: an active viewer is a reader of every record (so reads all of them), a suspended one with a live token reads nothing Restricted.
 //
 // can_administer_accounts: an administrator whose role is not the Lab Admin role (D1_LAB_ADMIN_ROLE_ID). An admin policy attached to
 // the USER with no role (the preview's admin) is an account administrator; the Lab Admin is not.
@@ -56,7 +57,7 @@
 //
 // Errors use the Directus shape { errors: [{ message, extensions: { code, source: 'd1-people-admin' } }] }.
 
-import { COLLECTIONS } from '../d1-record-access/index.js';
+import { COLLECTIONS, READ_ONLY_ROLE_MESSAGE, isLabViewer, isWriteRequest } from '../d1-record-access/index.js';
 
 const SOURCE = 'd1-people-admin';
 const DEFAULT_LAB_ADMIN_ROLE_ID = '10000001-0000-0000-0000-000000000001';
@@ -138,14 +139,23 @@ export default {
       try {
         const acc = req.accountability;
         if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
+        // a Lab Viewer changes nothing: no role or status change, no invite (also refused below: a viewer is no administrator)
+        const viewer = await isLabViewer(database, acc.user);
+        if (viewer && isWriteRequest(req)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
         const caller = await accountAdmin(database, acc.user, labAdminRoleId);
-        await fn({ req, res, acc, admin: acc.admin === true || caller.admin, accounts: caller.accounts });
+        const admin = acc.admin === true || caller.admin;
+        // `admin` stays the right to CHANGE things (a viewer has none); `readAll` is the right to LOOK at everyone's access: an administrator, or a Lab Viewer
+        await fn({ req, res, acc, admin, accounts: caller.accounts, readAll: admin || viewer, unfiltered: admin && !viewer });
       } catch (err) {
         return sendError(res, err);
       }
     };
     const requireAdmin = (admin) => {
       if (!admin) throw new HttpError(403, 'FORBIDDEN', 'Only an administrator can open this.');
+    };
+    // the read routes of the People page: an administrator or a Lab Viewer (migration 185); the writes below use requireAdmin / accounts
+    const requireReadAll = (readAll) => {
+      if (!readAll) throw new HttpError(403, 'FORBIDDEN', 'Only an administrator or a Lab Viewer can open this.');
     };
 
     // d1_private.people_attention() rows: { key, person_ids, user_ids }
@@ -181,8 +191,8 @@ export default {
         'SELECT tm.person_id, t.team_id, t.name, t.color, t.logo, tm.is_manager FROM team_members tm JOIN teams t ON t.team_id = tm.team_id ORDER BY lower(t.name), t.team_id',
       ))?.rows ?? [];
 
-    router.get('/people', route(async ({ res, admin, accounts }) => {
-      requireAdmin(admin);
+    router.get('/people', route(async ({ res, readAll, accounts }) => {
+      requireReadAll(readAll);
       const aliasesP = aliasIds();
       const [people, users, roles, attention, memberships, aliases] = await Promise.all([
         database('people').select('person_id', 'full_name', 'email', 'is_researcher', 'is_operator', 'active', 'notes', 'user_id', 'created_at'),
@@ -258,8 +268,8 @@ export default {
       });
     }));
 
-    router.get('/attention', route(async ({ res, admin }) => {
-      requireAdmin(admin);
+    router.get('/attention', route(async ({ res, readAll }) => {
+      requireReadAll(readAll);
       const items = (await attentionRows())
         .map((row) => ({ key: row.key, count: attentionCount(row) }))
         .filter((item) => item.count > 0);
@@ -478,11 +488,11 @@ export default {
       res.json({ email_sent: emailSent });
     }));
 
-    router.get('/people/:person_id/access', route(async ({ req, res, acc, admin }) => {
+    router.get('/people/:person_id/access', route(async ({ req, res, acc, unfiltered, readAll }) => {
       const personId = req.params?.person_id;
       if (typeof personId !== 'string' || !UUID.test(personId)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The person id is not valid.');
       const person = await database('people').where('person_id', personId).first('person_id', 'user_id');
-      if (!admin && !(person && !isBlank(person.user_id) && String(person.user_id) === String(acc.user))) {
+      if (!readAll && !(person && !isBlank(person.user_id) && String(person.user_id) === String(acc.user))) {
         throw new HttpError(403, 'FORBIDDEN', 'You can only see your own access.');
       }
       if (!person) throw new HttpError(404, 'NOT_FOUND', 'That person does not exist.');
@@ -499,7 +509,7 @@ export default {
         waiting,
         waiting_owners: waiting ? await waitingOwners(personId) : 0,
       };
-      if (!isBlank(which)) body.records = await recordsOf({ personId, which, viewer: admin ? null : String(acc.user) });
+      if (!isBlank(which)) body.records = await recordsOf({ personId, which, viewer: unfiltered ? null : String(acc.user) });
       res.json(body);
     }));
 

@@ -115,6 +115,23 @@ class HttpError extends Error {
 }
 
 const isBlank = (v) => v === undefined || v === null || v === '';
+
+// Lab Viewer (migration 185, ADR-0014 amendment): an account role that reads every record and changes NOTHING. Directus refuses a viewer's item writes
+// because its policy has no create, update or delete row; this endpoint (and d1-teams and d1-people-admin, which import these) writes with knex or as the
+// system after its own check, and "a reader of the record" can pass that check (a viewer may own records, or be a project's PI), so every route that changes
+// anything refuses a viewer first. ONE rule, fail closed: the caller's role id is the Lab Viewer role id (scripts/access_rules.json "viewer.role"),
+// whatever the login's status; there is no environment override. A viewer's LISTS are not a second rule: they stay filtered by the readers rows as that
+// viewer (an active viewer is a reader of everything, so the answer is the same; a suspended one reads nothing Restricted). Only an administrator
+// takes the unfiltered path.
+export const LAB_VIEWER_ROLE_ID = '10000001-0000-0000-0000-000000000003';
+export const READ_ONLY_ROLE_MESSAGE = 'The Lab Viewer role is read-only: it can look at everything and cannot change anything.';
+// does the request change something? (anything but GET, HEAD and OPTIONS; a request with no method counts as a change, the safe answer)
+export const isWriteRequest = (req) => !['GET', 'HEAD', 'OPTIONS'].includes(String(req?.method ?? 'POST').toUpperCase());
+export async function isLabViewer(db, userId) {
+  if (isBlank(userId)) return false;
+  const user = await db('directus_users').where('id', userId).first('role');
+  return !isBlank(user?.role) && String(user.role).toLowerCase() === LAB_VIEWER_ROLE_ID;
+}
 const isForbidden = (e) => e?.status === 403 || e?.code === 'FORBIDDEN';
 const toBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
 const same = (a, b) => String(a) === String(b);
@@ -259,12 +276,15 @@ export default {
       try {
         const acc = req.accountability;
         if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
+        // a Lab Viewer changes nothing: the access list, an owner, a team entry (the manage rule below would pass a viewer who owns a record)
+        const labViewer = await isLabViewer(database, acc.user);
+        if (labViewer && isWriteRequest(req)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
         const collection = req.params?.collection;
         const cfg = isCollection(collection) ? COLLECTIONS[collection] : null;
         if (!cfg) throw new HttpError(400, 'INVALID_PAYLOAD', 'That kind of record has no access list.');
         const id = req.params?.id;
         if (typeof id !== 'string' || !UUID.test(id)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The record id is not valid.');
-        await fn({ req, res, acc, cfg, id });
+        await fn({ req, res, acc, cfg, id, labViewer });
       } catch (err) {
         return sendError(res, err);
       }
@@ -573,13 +593,14 @@ export default {
 
     // -- the routes ------------------------------------------------------------------------------------------
     router.get('/:collection/:id', route(async (args) => {
-      const { res, cfg, id, acc } = args;
+      const { res, cfg, id, acc, labViewer } = args;
       await requireReadable(args);
       const record = await loadRecord(database, cfg, id);
       const owner = await ownerOf(database, cfg, record);
       // the project's PI is named only to a caller who can read that project (a sample reader need not): no hidden parent's details
       const pi = (await callerReadsParent(args, 'project_id', record)) ? await projectPi(database, cfg, record) : null;
-      const manage = await canManage(args);
+      // a Lab Viewer reads the list and changes none of it: the manage rule would say yes to a viewer who owns the record, the page must not offer the controls
+      const manage = labViewer ? false : await canManage(args);
       const entries = await buildEntries(database, cfg, id, record, acc);
       const teams = await buildTeams(database, cfg, id);
       res.json({ restricted: toBool(record.restricted), owner, project_pi: personRef(pi), can_manage: manage, entries, teams });

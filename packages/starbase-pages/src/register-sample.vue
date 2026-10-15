@@ -186,8 +186,13 @@ onMounted(async () => {
 <template>
 	<ExplorerView title="Register a Sample">
 		<PageShell narrow>
+			<!-- A Lab Viewer (migration 185) reads everything and registers nothing: no form, whatever the address. -->
+			<div v-if="host.canViewAllAccess?.value" class="card done">
+				<h2>This account is read-only</h2>
+				<p class="hidden-note">The Lab Viewer role can look at every record and cannot register a sample.</p>
+			</div>
 			<!-- success -->
-			<div v-if="created" class="card done">
+			<div v-else-if="created" class="card done">
 				<v-icon name="check_circle" class="done-ic" />
 				<h2>Sample registered</h2>
 				<template v-if="createdHidden">

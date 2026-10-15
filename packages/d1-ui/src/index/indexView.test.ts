@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { indexDefBySlug } from './indexConfig';
 import type { IndexState } from './indexQuery';
 import type { Bookmark } from '../nav/navConfig';
+import { recordRoute } from '../recordRoute';
 import {
 	BOOL_OPTIONS, cellText, effectiveState, enumOptionParams, enumOptions, extraFields, hasActiveFilters, hasExplicitQ, hasNextPage,
 	nextSort, queryForState, sortKey, rangeText, relationKey, relationOptionParams, relationOptions, relationText, sortDirection, withChange,
-	validSort, withSelected, selectionRoute, SELECT_MAX,
+	validSort, withSelected, selectionRoute, SELECT_MAX, rowOpen,
 } from './indexView';
 
 const samples = indexDefBySlug('samples')!;
@@ -251,5 +252,19 @@ describe('select action', () => {
 		expect(selectionRoute(samples.selectAction!, ['a1', 'b2'])).toBe('/home/labels?ids=a1,b2');
 		expect(selectionRoute(samples.selectAction!, ['a b'])).toBe('/home/labels?ids=a%20b');
 		expect(SELECT_MAX).toBe(100);
+	});
+});
+
+describe('rowOpen (what a row click does; a Lab Viewer is never given the edit drawer)', () => {
+	it('a record def navigates to the record page, for everyone', () => {
+		expect(rowOpen('record', false, 'physical_samples', 's1')).toEqual({ kind: 'navigate', to: recordRoute('physical_samples', 's1') });
+		expect(rowOpen('record', true, 'physical_samples', 's1')).toEqual({ kind: 'navigate', to: recordRoute('physical_samples', 's1') });
+	});
+	it('a drawer def opens the drawer for a member', () => {
+		expect(rowOpen('drawer', false, 'manufacturers', 'm1')).toEqual({ kind: 'drawer' });
+		expect(rowOpen('drawer', undefined, 'manufacturers', 'm1')).toEqual({ kind: 'drawer' });
+	});
+	it('a drawer def opens the record in Data Studio for a viewer', () => {
+		expect(rowOpen('drawer', true, 'manufacturers', 'm 1')).toEqual({ kind: 'studio', to: '/content/manufacturers/m%201' });
 	});
 });

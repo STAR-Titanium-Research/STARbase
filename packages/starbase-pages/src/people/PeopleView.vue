@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // The People page: a sparse list (filter chips with counts, Role, Team and Sort menus, one quiet "needs attention" line) with the open person
 // in a panel beside it. What the list shows (chip, role, sort, search, attention filter, open person) lives in the URL, so a link or a reload
-// brings the same view back. An administrator sees logins, account roles and the attention line; a member sees names and kinds of work.
+// brings the same view back. An administrator sees logins, account roles and the attention line; a member sees names and kinds of work. A Lab
+// Viewer sees what an administrator sees (everyone's panel, the Account section, the attention line) and has no control that changes anything.
 // Below the wide layout (1000 px) the open person is a full-height sheet over the page, as STARbase's phone menu is; on a phone the
 // header, the filters and the rows are laid out to fit 375 px.
 import ExplorerView from '../ExplorerView.vue';
@@ -19,7 +20,11 @@ import { loadAttention, loadPeople, type AttentionItem, type PeopleData } from '
 import { ATTENTION_LABELS, applyList, chipCounts, groupPeople, parseListState, toQuery, type Chip, type ListState, type PeopleRow, type PeopleViewKind } from './peopleQuery';
 
 const host = useExplorerHost();
-const { api, isAdmin } = host;
+const { api, isAdmin, canViewAllAccess } = host;
+// seeAll: the administrator's reads (logins, roles, the attention line, every person's panel). readOnly: a Lab Viewer, who has those and no
+// Invite, Add person, "Link to a person…" or edit; the panel and the dialogs gate their own controls the same way.
+const seeAll = computed(() => isAdmin.value || canViewAllAccess.value);
+const readOnly = computed(() => canViewAllAccess.value);
 const route = useRoute();
 const router = useRouter();
 const go = (to: string) => host.navigate(to);
@@ -55,7 +60,7 @@ const loadError = ref('');
 let seq = 0;
 async function load(silent = false) {
 	const mine = ++seq;
-	const admin = isAdmin.value;
+	const admin = seeAll.value;
 	if (!silent) loading.value = true;
 	try {
 		const [people, attn] = await Promise.all([loadPeople(api, admin), admin ? loadAttention(api).catch((): AttentionItem[] => []) : Promise.resolve([] as AttentionItem[])]);
@@ -72,14 +77,14 @@ async function load(silent = false) {
 }
 onMounted(() => void load());
 // isAdmin starts as a guess and is corrected when the server answers: load again as the right kind of user.
-watch(isAdmin, () => void load());
+watch(seeAll, () => void load());
 
 const rows = computed<PeopleRow[]>(() => data.value?.rows ?? []);
 const canAdminister = computed(() => data.value?.canAdministerAccounts === true);
 const roles = computed(() => (data.value?.roles ?? []).map((r) => ({ id: r.id, name: r.name ?? r.id })));
 const counts = computed(() => chipCounts(rows.value));
 // A member has no logins to filter by: their list state is the chip, team, sort and search only.
-const effective = computed<ListState>(() => (isAdmin.value ? state.value : { ...state.value, role: 'any', attn: null }));
+const effective = computed<ListState>(() => (seeAll.value ? state.value : { ...state.value, role: 'any', attn: null }));
 const shown = computed(() => applyList(rows.value, effective.value));
 // What is shown, in groups (Admins, Users, Operators, Former); the filters, chips and search have already chosen the rows.
 const groups = computed(() => groupPeople(shown.value));
@@ -91,7 +96,7 @@ const CHIPS: { id: Chip; label: string; admin?: boolean }[] = [
 	{ id: 'nologin', label: 'No login', admin: true },
 	{ id: 'former', label: 'Former' },
 ];
-const chips = computed(() => CHIPS.filter((c) => !c.admin || isAdmin.value));
+const chips = computed(() => CHIPS.filter((c) => !c.admin || seeAll.value));
 
 const roleItems = computed(() => [
 	{ text: 'Role: Any', value: 'any' },
@@ -106,7 +111,7 @@ const teamItems = computed(() => [
 const showTeamMenu = computed(() => (data.value?.teams.length ?? 0) > 0 || state.value.team !== 'any');
 const sortItems = computed(() => [
 	{ text: 'Sort: Name', value: 'name' },
-	...(isAdmin.value ? [{ text: 'Sort: Last sign-in', value: 'last' }] : []),
+	...(seeAll.value ? [{ text: 'Sort: Last sign-in', value: 'last' }] : []),
 	{ text: 'Sort: Recently added', value: 'added' },
 ]);
 
@@ -157,15 +162,15 @@ const panelId = computed(() => {
 	if (teamsView.value) return null;
 	const id = state.value.person;
 	const r = id ? rows.value.find((x) => x.person_id === id) : undefined;
-	return r && (isAdmin.value || isOwn(r)) ? r.person_id : null;
+	return r && (seeAll.value || isOwn(r)) ? r.person_id : null;
 });
 // A link to someone who is gone (or whom this user may not open) leaves no stale ?person= in the URL.
 watch([panelId, data, loading], () => {
-	if (state.value.person && !panelId.value && !loading.value && host.adminKnown.value && data.value?.forAdmin === isAdmin.value) update({ person: null });
+	if (state.value.person && !panelId.value && !loading.value && host.adminKnown.value && data.value?.forAdmin === seeAll.value) update({ person: null });
 });
 function openRow(r: PeopleRow) {
 	if (r.kind !== 'person' || !r.person_id) return;
-	if (isAdmin.value || isOwn(r)) update({ person: r.person_id });
+	if (seeAll.value || isOwn(r)) update({ person: r.person_id });
 	else openDialog(r);
 }
 // Focus goes back to the row that opened the panel. Where the panel is a sheet the page behind is inert until the sheet is gone, and the
@@ -268,8 +273,8 @@ function openLink(r: PeopleRow) {
 					<template #prepend><v-icon name="search" small /></template>
 				</v-input>
 				<PinToggle v-if="pinTarget" class="pin" :target="pinTarget" label="People" />
-				<v-button v-if="isAdmin && !teamsView" class="act" small @click="inviteFor = null"><v-icon name="mail" left small />Invite</v-button>
-				<v-button v-if="!teamsView" class="act" small :secondary="isAdmin" @click="openDialog(null)"><v-icon name="person_add" left small />Add person</v-button>
+				<v-button v-if="isAdmin && !readOnly && !teamsView" class="act" small @click="inviteFor = null"><v-icon name="mail" left small />Invite</v-button>
+				<v-button v-if="!teamsView && !readOnly" class="act" small :secondary="isAdmin" @click="openDialog(null)"><v-icon name="person_add" left small />Add person</v-button>
 			</div>
 
 			<template v-if="!teamsView">
@@ -289,16 +294,16 @@ function openLink(r: PeopleRow) {
 				</div>
 				<!-- Role, Team and Sort: after the chips, and on a phone one row of equal menus under them. -->
 				<div class="menus">
-					<v-select v-if="isAdmin" class="menu" :model-value="state.role" :items="roleItems" @update:model-value="update({ role: String($event) })" />
+					<v-select v-if="seeAll" class="menu" :model-value="state.role" :items="roleItems" @update:model-value="update({ role: String($event) })" />
 					<v-select v-if="showTeamMenu" class="menu" :model-value="state.team" :items="teamItems" @update:model-value="update({ team: String($event) })" />
 					<v-select class="menu" :model-value="state.sort" :items="sortItems" @update:model-value="update({ sort: $event as ListState['sort'] })" />
 				</div>
 			</div>
 
-			<div v-if="isAdmin && state.attn" class="attn">
+			<div v-if="seeAll && state.attn" class="attn">
 				Showing {{ attentionActive }} · <button type="button" class="link" @click="pickAttention(null)">clear</button>
 			</div>
-			<div v-else-if="isAdmin && attentionTotal" ref="attnEl" class="attn">
+			<div v-else-if="seeAll && attentionTotal" ref="attnEl" class="attn">
 				{{ attentionTotal }} {{ attentionTotal === 1 ? 'thing needs' : 'things need' }} attention ·
 				<button ref="reviewBtn" type="button" class="link" :aria-expanded="attentionOpen" @click="attentionOpen = !attentionOpen">review</button>
 				<ul v-if="attentionOpen" class="attn-menu" data-open-menu>
@@ -320,7 +325,8 @@ function openLink(r: PeopleRow) {
 									:key="rowKey(r)"
 									:row="r"
 									:row-key="rowKey(r)"
-									:admin="isAdmin"
+									:admin="seeAll"
+									:read-only="readOnly"
 									:selected="!!panelId && r.person_id === panelId"
 									@open="openRow"
 									@link="openLink"

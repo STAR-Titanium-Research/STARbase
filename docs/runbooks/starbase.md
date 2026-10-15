@@ -410,6 +410,46 @@ Preview and E2E: `npm run build:extensions && npm run build -w starbase-web`, th
 `cd tests/ui && npx playwright test specs/20-my-teams.spec.ts` (it makes its own logins, a team, 12 team-owned samples, a pending restricted
 sample and a team-shared project, and removes them afterwards).
 
+## Lab Viewer (migration 185) (maintainer's step, approve separately)
+
+A read-only account role for the lab's PI: it **reads every record (Restricted included) and changes nothing**. It is migration 185 (the role, its
+policy, `d1_private.v_viewers`, the viewer branch of the readers functions and the triggers on `directus_users`), a change to the `d1-record-access`,
+`d1-teams`, `d1-people-admin` and `d1-access-guard` extensions (they refuse a viewer on every route that changes anything, and a comment too; a viewer's lists are filtered by its readers rows, an administrator's are not) and to the People
+and Teams pages of STARbase and of the Directus Explorer module. **No new `.env` keys**: the role has one fixed id
+(`10000001-0000-0000-0000-000000000003`, `scripts/access_rules.json` `viewer.role`) that the migration, the extensions and the front end all use; there is no environment override. Needs the People and Teams migrations (180 to 184) applied first.
+
+1. `git pull && npm ci && npm run build:extensions && npm run build:starbase` (the Directus module and STARbase both know the role now).
+2. **Stop Directus, migrate, start it**: `docker compose stop directus`, `make migrate-status` (185 pending), `make migrate`, `docker compose up -d --force-recreate directus`
+   (the recreate loads the changed extensions). Stopping first keeps a writer from holding the readers lock while the migration takes it. **No Redis flush is needed**: the
+   role and its policy are new, so Directus has no cached permissions for them, and none of the existing rows changed (do not `FLUSHALL`: Redis also holds the worker queues).
+3. Check: `SELECT d1_private.readers_drift_count();` is `0`; `SELECT name FROM directus_roles WHERE name = 'Lab Viewer';` returns one row; the policy has read rows only:
+   `SELECT action, count(*) FROM directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000003' GROUP BY 1;` returns `read` and nothing else.
+4. **Invite with the role Lab Viewer** (People → Invite, role Lab Viewer; only an Administrator can choose a role). The invite makes a People row marked Researcher as it does for
+   everyone; it changes nothing for a viewer. **Grant the Lab Viewer role only**: never attach the Lab Viewer policy, an admin policy or any other policy to the user as well (in the Directus app or with the items API). The viewer's write refusals come from the role's policy having no write rows; a second policy on the user would add rows and Directus would then let them write. The user's Policies list must stay empty, with the role as the only grant. Sign in as the viewer and look at a Restricted record of someone else's: it is there, and every edit, share, transfer and
+   delete is refused.
+5. Smoke as the viewer, from a second device: Samples, Operations, Tests, Campaigns and Projects list every record, a Restricted one included; Who has access opens and every button
+   that changes something answers 403 `READ_ONLY_ROLE`. **People, as the viewer sees it**: the whole page an administrator sees (every person, the Account section with the role as
+   text, the Teams and Access counts and each record list, the "needs attention" line, the Teams view and every team page) and **no control that changes anything**: no Invite, Add
+   person, Edit, role select, Suspend, Resend, Link to a person, Remove, New team, Edit team, Add member, Make manager or Leave. The viewer's own login sits under Users, not Admins.
+   The project rollup of other people's projects is readable too (the viewer reads every row of `project_rollup` and of the five `*_access` tables). **Not for a viewer**:
+   Ask-the-database of Restricted records (it hides them from everyone).
+   **The pages offer it nothing that changes anything**: no Edit on a sample, operation, test, campaign, project or tool page, no `+ New` on an index page or `New project`, no
+   Register a sample or Log an operation on Home (Print labels and Scan stay), no template buttons on Print labels (printing stays), no add or remove in a campaign's lists, and
+   Who has access opens read-only. (The Force dashboard's own buttons are not part of this: the server refuses them.)
+6. Comments: as the viewer, write a comment on a record (the comments sidebar of the Directus app): it answers 403 `READ_ONLY_ROLE`. Directus gives every app-access policy a
+   built-in right to comment that no permission row can remove, so `d1-access-guard` refuses it by role (`comments.create`, `comments.update`, `comments.delete`).
+
+**What a viewer can still write, on purpose** (none of it is lab data): their own presets and bookmarks, the status of their own notifications, their own preferences, pins and
+usage (`d1-usage`), and bug reports (the bug-report relay). Everything else, comments included, is refused.
+
+Making someone a viewer, or taking the role away, or suspending or unsuspending a viewer (or deleting one), runs a full `readers_rebuild()`, which takes the
+global readers lock: every record write in the lab waits while it runs. `docs/runbooks/a1-record-access-cutover.md` measured a rebuild at 0.73 s on the seeded
+copy ("about a second on the live data"), so it is unnoticeable, but it is not measured for this change on the live data: do the first one in a quiet moment, and
+check `SELECT d1_private.readers_drift_count();` is `0` afterwards. Changing a login's name or `last_access` does not rebuild anything.
+
+Rollback: `make migrate-down` (185): the role, policy, view, triggers and viewer branches go, the readers are recomputed, a login that still had the role is left without one
+(give it a role again before it signs in). Then `git checkout <previous commit>`, `npm run build:extensions`, recreate `directus`.
+
 ## Recorded batches (migration 177, process map slice 2)
 
 Recorded batches (ADR-0017): a `batches` table, a nullable `batch_id` on `manufacturing_operations` and

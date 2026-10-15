@@ -289,14 +289,14 @@ function mount({ tables = baseTables(), env = {}, mailFail = false, notActionabl
 const admin = (user) => ({ user, admin: true, app: true });
 const member = (user) => ({ user, admin: false, app: true });
 
-function call(h, { acc, params = {}, query = {}, body } = {}) {
+function call(h, { acc, params = {}, query = {}, body, method } = {}) {
   return new Promise((resolve, reject) => {
     const out = { status: 200, body: undefined };
     const res = {
       status(code) { out.status = code; return res; },
       json(b) { out.body = b; resolve(out); return res; },
     };
-    Promise.resolve(h({ accountability: acc, params, query, body, schema: {} }, res)).catch(reject);
+    Promise.resolve(h({ accountability: acc, params, query, body, schema: {}, ...(method ? { method } : {}) }, res)).catch(reject);
   });
 }
 const errorOf = (r) => r.body?.errors?.[0];
@@ -1292,4 +1292,142 @@ test('GET /mine/recent: a record granted to two of the caller\'s teams is listed
   adminTables.people.push({ person_id: P.adm, full_name: 'Adm In', email: null, user_id: U.admin });
   const adm = await call(mount({ tables: adminTables }).handlers['GET /mine/recent'], { acc: admin(U.admin) });
   assert.deepEqual(adm.body.items.map((i) => i.code), ['SM-010', 'OP-1', 'SM-003', 'SM-001', 'SM-002', 'PRJ1']);
+});
+
+// ---- Lab Viewer (migration 185): reads everything, changes nothing ---------------------------------------------------
+
+test('Lab Viewer: a viewer who MANAGES a team and owns records is refused on every route that changes anything, and may read', async () => {
+  const tables = baseTables();
+  tables.directus_users.find((u) => u.id === U.ann).role = '10000001-0000-0000-0000-000000000003'; // Ann manages Additive
+  const { handlers, db, decided, mails, cleared } = mount({ tables });
+  const writes = [
+    ['POST /', { name: 'Viewers team' }, {}],
+    ['PATCH /:id', { name: 'Renamed' }, { id: T.additive }],
+    ['DELETE /:id', undefined, { id: T.additive }],
+    ['POST /:id/members', { person_id: P.cy }, { id: T.additive }],
+    ['PATCH /:id/members/:person_id', { is_manager: true }, { id: T.additive, person_id: P.bob }],
+    ['DELETE /:id/members/:person_id', undefined, { id: T.additive, person_id: P.bob }],
+    ['POST /pending/decide', { collection: 'physical_samples', team_access_id: ID(900), person_id: P.bob, decision: 'approve' }, {}],
+  ];
+  for (const [route, body, params] of writes) {
+    assert.ok(handlers[route], route);
+    const r = await call(handlers[route], { acc: member(U.ann), body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+    assert.equal(errorOf(r).extensions.source, 'd1-teams');
+  }
+  assert.deepEqual(db.log.tx, []); // refused before any transaction opened
+  assert.deepEqual(decided, []);
+  assert.equal(mails.length, 0);
+  assert.equal(cleared.length, 0);
+  // reading is not refused
+  assert.equal((await call(handlers['GET /'], { acc: member(U.ann), method: 'GET' })).status, 200);
+  assert.equal((await call(handlers['GET /:id'], { acc: member(U.ann), params: { id: T.additive }, method: 'GET' })).status, 200);
+  // the same manager as a Lab Member is not refused
+  const ok = mount();
+  const created = await call(ok.handlers['POST /'], { acc: member(U.ann), body: { name: 'Fresh team' }, method: 'POST' });
+  assert.notEqual(errorOf(created)?.extensions?.code, 'READ_ONLY_ROLE');
+});
+
+// ---- Lab Viewer, Task B: the read routes show a viewer every record of a team, as an administrator sees them ------------
+// A viewer's lists are NOT an unfiltered path: they are filtered by the readers rows as that viewer, like a member's. An active viewer is a reader of
+// every record (migration 185 puts a row in every readers table), so the answer equals an administrator's; a suspended viewer has no rows.
+
+const LAB_VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
+const VIEWER = ID(208);
+const SUSPENDED_VIEWER = ID(209);
+const viewerWorld = () => {
+  const tables = recordsWorld();
+  tables.directus_users.push({ id: VIEWER, email: 'pi@login.example', status: 'active', role: LAB_VIEWER_ROLE });
+  tables.directus_access.push({ role: LAB_VIEWER_ROLE, user: null, policy: POLICY.member }); // not an administrator
+  // what the readers triggers do for an active viewer: a row for every record of every type
+  for (const s of tables.physical_samples) tables.sample_readers.push({ record_id: s.sample_id, user_id: VIEWER });
+  for (const p of tables.projects) tables.project_readers.push({ record_id: p.project_id, user_id: VIEWER });
+  for (const o of tables.manufacturing_operations) tables.operation_readers.push({ record_id: o.operation_id, user_id: VIEWER });
+  return tables;
+};
+// role still Lab Viewer, status suspended: the readers triggers removed every row
+const suspendedViewerWorld = () => {
+  const tables = recordsWorld();
+  tables.directus_users.push({ id: SUSPENDED_VIEWER, email: 'gone@login.example', status: 'suspended', role: LAB_VIEWER_ROLE });
+  return tables;
+};
+const viewing = (user) => ({ user, admin: false, app: true });
+
+test('Lab Viewer: an active viewer (a reader of everything) sees every record of the team, as an administrator does', async () => {
+  const { handlers } = mount({ tables: viewerWorld() });
+  const seen = await call(handlers['GET /:id'], { acc: viewing(VIEWER), params: { id: T.additive }, method: 'GET' });
+  const asAdmin = await call(handlers['GET /:id'], { acc: admin(U.admin), params: { id: T.additive }, method: 'GET' });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.records, asAdmin.body.records);
+  assert.equal(seen.body.hidden_count, 0);
+  assert.deepEqual(seen.body.members, asAdmin.body.members);
+  assert.deepEqual(seen.body.counts, asAdmin.body.counts);
+  assert.ok(seen.body.records.some((x) => x.kind === 'project' && x.code === 'PRJ1'));
+  const query = { collection: 'physical_samples' };
+  const list = await call(handlers['GET /:id/records'], { acc: viewing(VIEWER), params: { id: T.additive }, query, method: 'GET' });
+  assert.deepEqual(list.body, (await call(handlers['GET /:id/records'], { acc: admin(U.admin), params: { id: T.additive }, query, method: 'GET' })).body);
+  assert.deepEqual(idsOf(list), [S_OWNED, S.three, S.one, S.two]);
+  // a Lab Member who is no viewer is unchanged
+  const stranger = await call(handlers['GET /:id'], { acc: member(U.stranger), params: { id: T.additive }, method: 'GET' });
+  assert.equal(stranger.body.hidden_count, 5); // every grant is hidden from a member who reads none of them
+  assert.deepEqual(stranger.body.records, []);
+});
+
+test('Lab Viewer: a SUSPENDED viewer (role kept, no readers rows) sees no record of a team, on every read route, and is still refused writes', async () => {
+  const { handlers } = mount({ tables: suspendedViewerWorld() });
+  const acc = viewing(SUSPENDED_VIEWER);
+  const seen = await call(handlers['GET /:id'], { acc, params: { id: T.additive }, method: 'GET' });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.records, []);
+  assert.equal(seen.body.hidden_count, 5);
+  const list = await call(handlers['GET /:id/records'], { acc, params: { id: T.additive }, query: { collection: 'physical_samples' }, method: 'GET' });
+  assert.deepEqual(list.body, { ids: [], truncated: false });
+  const recent = await call(handlers['GET /mine/recent'], { acc, method: 'GET' });
+  assert.deepEqual(recent.body.items, []);
+  const write = await call(handlers['PATCH /:id'], { acc, body: { name: 'Mine now' }, params: { id: T.additive }, method: 'PATCH' });
+  assert.equal(write.status, 403);
+  assert.equal(errorOf(write).extensions.code, 'READ_ONLY_ROLE');
+});
+
+test('Lab Viewer: GET /mine/recent lists the records of the teams of a viewer the readers rows allow; GET /pending is empty even for a viewer who owns a record somebody waits on', async () => {
+  const tables = viewerWorld();
+  tables.directus_users.find((u) => u.id === U.eve).role = LAB_VIEWER_ROLE; // Eve owns SM-001 and the project, and Cy waits on both
+  const { handlers } = mount({ tables });
+  assert.equal((await call(handlers['GET /pending'], { acc: member(U.eve), method: 'GET' })).body.items.length, 0);
+  // the same Eve as a Lab Member sees what is waiting for her
+  const plain = mount({ tables: recordsWorld() });
+  assert.equal((await call(plain.handlers['GET /pending'], { acc: member(U.eve), method: 'GET' })).body.items.length, 1);
+  // Bob (member of Additive) is a viewer with a readers row on every record: his recent list holds more than he reads as a member (who reads none)
+  const t2 = viewerWorld();
+  t2.directus_users.find((u) => u.id === U.bob).role = LAB_VIEWER_ROLE;
+  for (const s of t2.physical_samples) t2.sample_readers.push({ record_id: s.sample_id, user_id: U.bob });
+  t2.project_readers.push({ record_id: PROJECT, user_id: U.bob });
+  const recent = await call(mount({ tables: t2 }).handlers['GET /mine/recent'], { acc: member(U.bob), method: 'GET' });
+  const asMember = await call(mount({ tables: viewerWorld() }).handlers['GET /mine/recent'], { acc: member(U.bob), method: 'GET' });
+  assert.equal(recent.status, 200);
+  assert.ok(recent.body.items.length > asMember.body.items.length);
+});
+
+test('Lab Viewer: a viewer who ALSO holds an admin policy is still filtered by its readers rows (no unfiltered administrator read path)', async () => {
+  const tables = suspendedViewerWorld(); // role Lab Viewer, no readers rows
+  tables.directus_access.push({ role: null, user: SUSPENDED_VIEWER, policy: POLICY.admin }); // an administrator by a user policy
+  const { handlers } = mount({ tables });
+  const acc = viewing(SUSPENDED_VIEWER);
+  const seen = await call(handlers['GET /:id'], { acc, params: { id: T.additive }, method: 'GET' });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.records, []);
+  assert.equal(seen.body.hidden_count, 5);
+  const list = await call(handlers['GET /:id/records'], { acc, params: { id: T.additive }, query: { collection: 'physical_samples' }, method: 'GET' });
+  assert.deepEqual(list.body, { ids: [], truncated: false });
+  assert.deepEqual((await call(handlers['GET /mine/recent'], { acc, method: 'GET' })).body.items, []);
+  // the write rule still refuses it by role
+  const write = await call(handlers['PATCH /:id'], { acc, body: { name: 'Mine now' }, params: { id: T.additive }, method: 'PATCH' });
+  assert.equal(errorOf(write).extensions.code, 'READ_ONLY_ROLE');
+  // the same admin policy on a plain Lab Member is the unfiltered administrator path
+  const plain = recordsWorld();
+  plain.directus_access.push({ role: null, user: U.stranger, policy: POLICY.admin });
+  const adm = await call(mount({ tables: plain }).handlers['GET /:id'], { acc: member(U.stranger), params: { id: T.additive }, method: 'GET' });
+  assert.equal(adm.body.hidden_count, 0);
+  assert.ok(adm.body.records.length > 0);
 });

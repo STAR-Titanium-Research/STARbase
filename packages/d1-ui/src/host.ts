@@ -43,6 +43,11 @@ export interface ExplorerHost {
 	isAdmin: Ref<boolean>;
 	// False until the server has answered (or failed to): while false, isAdmin may still be a guess.
 	adminKnown: Ref<boolean>;
+	// True for a Lab Viewer: a login (account role Lab Viewer, migration 185) that may LOOK at everyone's access, as an administrator does, and
+	// changes nothing. It is not true for an administrator: a page that shows what an administrator sees shows it for
+	// `isAdmin || canViewAllAccess`, and keeps every control that changes something behind isAdmin AND not canViewAllAccess (the server refuses a
+	// viewer's writes either way). Known from the first frame: it is read off the role the host already has.
+	canViewAllAccess: Ref<boolean>;
 	user: Ref<{ id: string; first_name?: string; last_name?: string; email?: string; role?: string | null } | null>;
 }
 

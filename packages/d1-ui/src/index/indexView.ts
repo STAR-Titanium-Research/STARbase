@@ -10,10 +10,20 @@ import type { Bookmark } from '../nav/navConfig';
 import type { ColumnDef, IndexDef, SelectAction } from './indexConfig';
 import { indexDefByCollection } from './indexConfig';
 import { PAGE_SIZE, bookmarkSort, queryFromState } from './indexQuery';
+import { dataStudioRoute, recordRoute } from '../recordRoute';
 import type { IndexState } from './indexQuery';
 import { thumbFields } from './thumbs';
 
 type Row = Record<string, unknown>;
+
+// What a click on a row (or ?open=<key> from the finder) does. A 'record' def navigates to the record's Explorer page. A 'drawer' def opens
+// the edit drawer, which is an editable form with Save: not for a Lab Viewer (migration 185: reads everything, changes nothing), who gets the
+// record in Data Studio instead, where its read-only policy shows the form read-only.
+export type RowOpen = { kind: 'navigate'; to: string } | { kind: 'studio'; to: string } | { kind: 'drawer' };
+export function rowOpen(rowTarget: 'record' | 'drawer', viewer: boolean | null | undefined, collection: string, pk: string): RowOpen {
+	if (rowTarget === 'record') return { kind: 'navigate', to: recordRoute(collection, pk) };
+	return viewer ? { kind: 'studio', to: dataStudioRoute(collection, pk) } : { kind: 'drawer' };
+}
 
 // ---- cells -------------------------------------------------------------------------------------
 

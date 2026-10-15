@@ -50,7 +50,8 @@ const addBox = ref<InstanceType<typeof AccessPersonPicker> | null>(null);
 const transferBox = ref<InstanceType<typeof AccessPersonPicker> | null>(null);
 let opener: HTMLElement | null = null;
 
-const canManage = computed(() => list.value?.can_manage === true);
+// A Lab Viewer (migration 185) changes nothing: the server answers can_manage false, and the controls stay off here whatever it says.
+const canManage = computed(() => list.value?.can_manage === true && !host?.canViewAllAccess?.value);
 const word = computed(() => recordWord(props.collection));
 const roles = computed(() => ROLE_LABELS(props.collection));
 const entries = computed(() => sortEntries(list.value?.entries ?? []));

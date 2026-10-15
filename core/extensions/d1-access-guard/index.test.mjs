@@ -141,8 +141,8 @@ const denied = (re) => (err) => {
   return true;
 };
 
-test('registers an items.create, an items.delete and an items.update filter', () => {
-  assert.deepEqual(Object.keys(mount().filters).sort(), ['items.create', 'items.delete', 'items.update']);
+test('registers the items.create, items.delete and items.update filters, and the three comment filters of the Lab Viewer', () => {
+  assert.deepEqual(Object.keys(mount().filters).sort(), ['comments.create', 'comments.delete', 'comments.update', 'items.create', 'items.delete', 'items.update']);
 });
 
 test('the shipped rules guard exactly the four visibility junctions', () => {
@@ -1626,4 +1626,55 @@ test('an admin and an internal call may create a team-owned record; other collec
   assert.equal(await filters['items.create'](payload, { collection: 'physical_samples' }, ctx({ accountability: null })), payload);
   assert.equal(await filters['items.create'](payload, { collection: 'projects' }, ctx()), payload);
   assert.equal(await filters['items.create'](payload, { collection: 'sample_genealogy' }, ctx()), payload);
+});
+
+// ---- Lab Viewer (migration 185): Directus's built-in comment rights are refused to the role ----------------------------------
+
+const VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
+const readOnly = (err) => {
+  assert.equal(err.status, 403);
+  assert.equal(err.code, 'READ_ONLY_ROLE');
+  assert.equal(err.name, 'DirectusError');
+  assert.equal(err.extensions.code, 'READ_ONLY_ROLE');
+  assert.equal(err.extensions.source, 'd1-access-guard');
+  assert.match(err.extensions.reason, /read-only/);
+  return true;
+};
+
+test('Lab Viewer: comments.create, comments.update and comments.delete are refused 403 READ_ONLY_ROLE, whatever the status or the policy', async () => {
+  const { filters } = mount();
+  const payload = { collection: 'physical_samples', item: 's1', comment: 'looks odd' };
+  const calls = {
+    'comments.create': [payload, { collection: 'directus_comments' }],
+    'comments.update': [{ comment: 'edited' }, { collection: 'directus_comments', keys: ['c1'] }],
+    'comments.delete': [['c1'], { collection: 'directus_comments', keys: ['c1'] }],
+  };
+  const viewers = [
+    { user: 'user-v', role: VIEWER_ROLE, admin: false, app: true },
+    { user: 'user-v', role: VIEWER_ROLE.toUpperCase(), admin: false, app: true }, // ids compare without case
+    { user: 'user-v', role: VIEWER_ROLE, roles: [VIEWER_ROLE], admin: true, app: true }, // the role decides, an admin policy on the login does not exempt it
+    { user: 'user-v', role: 'some-other-role', roles: ['some-other-role', VIEWER_ROLE], admin: false, app: true },
+  ];
+  for (const accountability of viewers) {
+    for (const [event, args] of Object.entries(calls)) {
+      await assert.rejects(filters[event](...args, ctx({ accountability })), readOnly, `${event} as ${JSON.stringify(accountability)}`);
+    }
+  }
+});
+
+test('Lab Viewer: a Lab Member, an administrator and an internal call (no accountability) write comments as before', async () => {
+  const { filters } = mount();
+  const payload = { comment: 'fine' };
+  const callers = [
+    member,
+    { user: 'user-a', role: '10000001-0000-0000-0000-000000000001', admin: true, app: true },
+    { user: 'user-m', role: null, admin: false, app: true }, // no role (a user policy only)
+    null,
+    undefined,
+  ];
+  for (const accountability of callers) {
+    for (const event of ['comments.create', 'comments.update', 'comments.delete']) {
+      assert.equal(await filters[event](payload, { collection: 'directus_comments' }, ctx({ accountability })), payload, event);
+    }
+  }
 });

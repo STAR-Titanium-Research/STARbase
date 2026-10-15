@@ -17,6 +17,19 @@ export function updateAccess(body: unknown): boolean | null {
 	return typeof access === 'boolean' ? access : null;
 }
 
+// A Lab Viewer (migration 185) reads everything and changes nothing, so no page offers it a control that changes something, whatever
+// Directus answers about one record. `viewer` is host.canViewAllAccess (known from the first frame, read off the account role), so the
+// control is never on screen while the answer is still on its way. Directus would refuse the write anyway (the viewer's policy has no write
+// row); this only keeps the button from being offered.
+// offerWrite: the answer of updateAccess, but false for a viewer. mayChange: "show the control", unless a viewer or exactly false.
+export function offerWrite(viewer: boolean | null | undefined, answer: boolean | null | undefined): boolean | null {
+	if (viewer) return false;
+	return typeof answer === 'boolean' ? answer : null;
+}
+export function mayChange(viewer: boolean | null | undefined, canUpdate: boolean | null | undefined): boolean {
+	return !viewer && canUpdate !== false;
+}
+
 // Messages for a refused write (HTTP 403 / FORBIDDEN) on a record the user may read but not change.
 export const NOT_OWNER_MESSAGE = 'Only the owner or a co-owner can change this record.';
 export const NOT_YOUR_RECORD_MESSAGE = 'You can only add records you own or co-own.';

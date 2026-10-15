@@ -172,6 +172,12 @@ describe('groupPeople', () => {
 		]);
 	});
 
+	it('a Lab Viewer login is a User, not an Administrator', () => {
+		const viewer = { ...person('Pat'), login: { status: 'active', role_id: 'r-v', role_name: 'Lab Viewer', last_access: null, email: null } };
+		expect(groupOf(viewer)).toBe('users');
+		expect(groupPeople([admin('Ada'), viewer]).map((g) => [g.id, ids(g.rows)])).toEqual([['admins', ['Ada']], ['users', ['Pat']]]);
+	});
+
 	it('a researcher who is also an operator, without a login, is a User', () => {
 		expect(groupOf(person('Both', { is_operator: true }))).toBe('users');
 	});

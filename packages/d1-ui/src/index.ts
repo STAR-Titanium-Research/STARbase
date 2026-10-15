@@ -63,7 +63,7 @@ export type { SectionState } from './composables/useSections';
 export { useFieldDefs } from './composables/useFieldDefs';
 export { useCanUpdate } from './composables/useCanUpdate';
 export {
-	NOT_CAMPAIGN_OWNER_MESSAGE, NOT_OWNER_MESSAGE, NOT_PI_MESSAGE, NOT_YOUR_RECORD_MESSAGE, forbiddenReason, notOwnerMessage,
+	NOT_CAMPAIGN_OWNER_MESSAGE, NOT_OWNER_MESSAGE, NOT_PI_MESSAGE, NOT_YOUR_RECORD_MESSAGE, forbiddenReason, mayChange, notOwnerMessage, offerWrite,
 } from './canUpdate';
 
 // Components
@@ -139,7 +139,7 @@ export type { CampaignData } from './campaign/useCampaignData';
 
 // Explorer navigation: host contract, sidebar tree, index-page configs
 export { EXPLORER_HOST, setExplorerHostFactory, useExplorerHost } from './host';
-export { guessAdmin } from './hostAdmin';
+export { LAB_VIEWER_ROLE_ID, guessAdmin, isLabViewerRole } from './hostAdmin';
 export type { ExplorerHost, HostApi, HostField, HostRequestConfig, HostResponse } from './host';
 export { NAV_GROUPS, BOOKMARK_VISIBILITY_FILTER, buildNav, bookmarkVisibleToUser, pickBookmarkId, linkForBookmark } from './nav/navConfig';
 export type { NavLink, NavGroup, Bookmark, VisibleNav } from './nav/navConfig';
@@ -193,7 +193,7 @@ export type {
 export {
 	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, readDismissed,
 	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget, suggestedPageEntries,
-	withoutDismissed, withoutPinned, writeDismissed,
+	WRITE_ACTION_KEYS, withoutDismissed, withoutPinned, withoutWriteActions, writeDismissed,
 } from './usage';
 export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
 

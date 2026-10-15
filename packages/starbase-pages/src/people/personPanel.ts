@@ -11,20 +11,25 @@ export interface LoginLine {
 	action: { kind: LoginActionKind; label: string } | null;
 }
 
-/** Who is looking: an administrator (Administrator or Lab Admin) and whether they may change accounts (an Administrator only). */
+/**
+ * Who is looking: someone who sees everyone's account (an administrator, Administrator or Lab Admin, or a Lab Viewer), whether they may change
+ * accounts (an Administrator only), and `readOnly`: a Lab Viewer, who sees the Login line and has no action on it.
+ */
 export interface Viewer {
 	admin: boolean;
 	accounts: boolean;
+	readOnly?: boolean;
 }
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * The Login line of the Account section. Suspend and Reactivate change a login, so only an account administrator gets them; Resend and
- * Invite are for any administrator. A login in some other state (draft, archived) is named and has no action.
+ * Invite are for any administrator. A login in some other state (draft, archived) is named and has no action. A read-only viewer (a Lab Viewer)
+ * sees the state and never an action; a member sees only the state.
  */
 export function loginLine(row: PeopleRow, viewer: Viewer): LoginLine {
-	if (!viewer.admin) return { state: row.login ? cap(row.login.status ?? 'Active') : 'No login', action: null };
+	if (!viewer.admin || viewer.readOnly) return { state: row.login ? cap(row.login.status ?? 'Active') : 'No login', action: null };
 	const login = row.login;
 	if (!login) return { state: 'No login', action: { kind: 'invite', label: 'Invite' } };
 	switch (login.status) {
@@ -39,8 +44,8 @@ export function loginLine(row: PeopleRow, viewer: Viewer): LoginLine {
 	}
 }
 
-/** The Role select is enabled only for an account administrator, and only when there is a login to give a role to. */
-export const canEditRole = (row: PeopleRow, viewer: Viewer): boolean => viewer.accounts && !!row.login && !!row.user_id;
+/** The Role select is enabled only for an account administrator, and only when there is a login to give a role to. Never for a read-only viewer. */
+export const canEditRole = (row: PeopleRow, viewer: Viewer): boolean => viewer.accounts && !viewer.readOnly && !!row.login && !!row.user_id;
 
 export const ACCESS_LISTS: { id: AccessList; label: string }[] = [
 	{ id: 'owns', label: 'Owns' },
@@ -77,13 +82,14 @@ export type SourceNote = { remove: true } | { remove: false; text: string } | nu
 
 /**
  * What an administrator can do about one listed record. A direct entry (`access`) can be removed here; any other source is shown for
- * what it is and changed where it lives. Nothing for a viewer who is not an administrator.
+ * what it is and changed where it lives. Nothing for someone who does not see everyone's access. `readOnly` (a Lab Viewer) gets the same words and
+ * no Remove: a direct entry is not named at all (the line already says who granted it).
  */
-export function sourceNote(rec: AccessRecord, admin: boolean): SourceNote {
+export function sourceNote(rec: AccessRecord, admin: boolean, readOnly = false): SourceNote {
 	if (!admin) return null;
 	switch (rec.source) {
 		case 'access':
-			return { remove: true };
+			return readOnly ? null : { remove: true };
 		case 'co_owner':
 			return { remove: false, text: 'co-owner (old entry)' };
 		case 'investigator_junction':

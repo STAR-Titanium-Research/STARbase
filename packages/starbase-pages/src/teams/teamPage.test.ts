@@ -166,6 +166,11 @@ describe('canManage', () => {
 		expect(canManage(team({}), true)).toBe(true);
 		expect(canManage(null, true)).toBe(false);
 	});
+	it('never lets a read-only viewer (a Lab Viewer) manage, even one who manages the team or is flagged an administrator', () => {
+		expect(canManage(team({ is_manager: true }), false, true)).toBe(false);
+		expect(canManage(team({}), true, true)).toBe(false);
+		expect(canManage(team({ is_manager: true }), false, false)).toBe(true);
+	});
 });
 
 describe('teamsShown', () => {
