@@ -1,0 +1,44 @@
+{
+  "description": "accept-all for exactly the files a dry run listed",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/accept-all",
+    "body": {
+      "filter": {
+        "tab": "new",
+        "strength": "short_id"
+      },
+      "candidate_ids": [
+        "00000000-0000-4000-8000-000000001001",
+        "00000000-0000-4000-8000-000000001011"
+      ]
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "link_batch_id": "00000000-0000-4000-8000-000000000901",
+      "linked": 2,
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101",
+          "junction_id": "00000000-0000-4000-8000-000000005001",
+          "adopted": false
+        },
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001011",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101",
+          "junction_id": "00000000-0000-4000-8000-000000005011",
+          "adopted": true
+        }
+      ],
+      "skipped": [],
+      "skipped_total": 0,
+      "has_more": false,
+      "next_cursor": null
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "description": "someone else linked the file first",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101"
+        }
+      ]
+    }
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "That file was already linked.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "code": "ALREADY_LINKED",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

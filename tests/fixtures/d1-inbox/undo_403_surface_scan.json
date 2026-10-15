@@ -1,0 +1,23 @@
+{
+  "description": "the caller may no longer delete the scan: nothing is undone",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/undo",
+    "body": {
+      "link_batch_id": "00000000-0000-4000-8000-000000000903"
+    }
+  },
+  "status": 403,
+  "body": {
+    "errors": [
+      {
+        "message": "You can no longer delete that surface scan, so adding it cannot be undone.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "code": "FORBIDDEN",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

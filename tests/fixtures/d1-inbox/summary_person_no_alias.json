@@ -1,0 +1,21 @@
+{
+  "description": "a person whose uni alias is not set yet: has_alias is false",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/summary"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "person": {
+        "person_id": "00000000-0000-4000-8000-000000000011",
+        "new": 0,
+        "older_matches": 0,
+        "has_alias": false
+      },
+      "teams": [],
+      "new": 0,
+      "older_matches": 0
+    }
+  }
+}

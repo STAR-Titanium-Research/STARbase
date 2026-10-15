@@ -55,8 +55,12 @@ CREATE TABLE IF NOT EXISTS directus_users (
     text_direction VARCHAR(255) DEFAULT 'auto' NOT NULL
 );
 
+-- filename_download and type: the columns the d1-inbox list query reads (tests/phase1_schema.sh prepares it against this stub). Real Directus has both
+-- (and many more) before our migrations run, so on a production database this CREATE does nothing.
 CREATE TABLE IF NOT EXISTS directus_files (
-    id UUID NOT NULL PRIMARY KEY
+    id UUID NOT NULL PRIMARY KEY,
+    filename_download TEXT,
+    type TEXT
 );
 
 -- ── access / permissions ───────────────────────────────────────────

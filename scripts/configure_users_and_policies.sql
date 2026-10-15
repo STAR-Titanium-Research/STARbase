@@ -142,7 +142,7 @@ INSERT INTO directus_permissions (collection, action, permissions, validation, f
 ('project_investigators', 'update', '{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('project_investigators', 'delete', '{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('project_rollup', 'read', '{"_or":[{"project_id":{"principal_investigator_person":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"restricted":{"_eq":false}},{"_or":[{"project_id":{"secondary_investigators":{"user_id":{"_eq":"$CURRENT_USER"}}}},{"_and":[{"project_id":{"access":{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}}},{"project_id":{"access":{"role":{"_in":["investigator"]}}}}]}]}]}]}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
-('people', 'create', '{}', '{"_or":[{"user_id":{"_null":true}},{"user_id":{"_eq":"$CURRENT_USER"}}]}', '*', '20000002-0000-0000-0000-000000000002'),
+('people', 'create', '{}', '{"_or":[{"user_id":{"_null":true}},{"user_id":{"_eq":"$CURRENT_USER"}}]}', 'person_id,full_name,email,user_id,is_operator,is_researcher,active,notes,legacy_machine_operator_id,created_at', '20000002-0000-0000-0000-000000000002'),
 ('people', 'read', '{}', '{}', '*', '20000002-0000-0000-0000-000000000002'),
 ('people', 'update', '{"user_id":{"_eq":"$CURRENT_USER"}}', '{}', 'full_name,email,is_operator,is_researcher,active,notes', '20000002-0000-0000-0000-000000000002'),
 ('sample_access', 'read', '{"person_id":{"user_id":{"_eq":"$CURRENT_USER"}}}', '{}', '*', '20000002-0000-0000-0000-000000000002'),

@@ -1,0 +1,29 @@
+{
+  "description": "there is no surface_scans table yet (the feature check)",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "condition": "worn"
+        }
+      ]
+    }
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "Surface scans are not available yet.",
+        "extensions": {
+          "code": "SURFACE_SCANS_UNAVAILABLE",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

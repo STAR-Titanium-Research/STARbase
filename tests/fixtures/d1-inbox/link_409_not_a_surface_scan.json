@@ -1,0 +1,30 @@
+{
+  "description": "only a surface_scan file can be added as a surface scan",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "collection": "surface_scans",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "condition": "worn"
+        }
+      ]
+    }
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "Only a surface scan file can be added to an insert or an edge.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001001",
+          "code": "NOT_A_SURFACE_SCAN",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

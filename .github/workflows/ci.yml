@@ -86,7 +86,7 @@ jobs:
         run: node --experimental-strip-types --test core/extensions/d1-geometry-preview/test/geometry.test.ts
       - name: Extension endpoint tests
         if: ${{ !cancelled() }}
-        run: node --test core/extensions/*/index.test.mjs
+        run: node --test core/extensions/*/index*.test.mjs
       - name: "STARbase compose wiring (parse-only)"
         if: ${{ !cancelled() }}
         run: node --test tests/starbase_compose.test.mjs
@@ -127,6 +127,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-db
+      # The d1-inbox SQL checks in phase1 run the extension's own queries with node; without it they skip.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
 
       - name: Run Phase 1 schema tests
         run: bash tests/phase1_schema.sh

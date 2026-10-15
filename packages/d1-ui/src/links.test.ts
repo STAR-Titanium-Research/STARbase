@@ -72,6 +72,14 @@ describe('STARbase', () => {
 			if (r.kind === 'route') expect(canonicalPath(r.to)).toBe(p);
 		}
 	});
+	it('keeps the Inbox (/inbox?tab=…) as a route, and /inboxes stays a Data Studio page', () => {
+		use();
+		expect(resolveLink('/inbox')).toEqual({ kind: 'route', to: '/inbox' });
+		expect(resolveLink('/inbox?tab=older')).toEqual({ kind: 'route', to: '/inbox?tab=older' });
+		expect(resolveLink('/inboxes')).toEqual({ kind: 'external', href: `${D1}/admin/inboxes` });
+		expect(canonicalPath('/inbox')).toBe('/inbox');
+		expect(directusLinks.resolve('/inbox')).toEqual({ kind: 'external', href: '/d1-links/go/p/inbox' });
+	});
 	it('keeps the Process map (/map?focus=…&reach=…) as a route and canonicalPath keeps focus and reach', () => {
 		use();
 		const q = '/map?focus=physical_samples:3f2a&reach=all';

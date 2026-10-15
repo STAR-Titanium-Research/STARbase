@@ -12,6 +12,7 @@ export { default as LabelsPage } from './pages/LabelsPage.vue';
 export { default as SettingsPage } from './pages/SettingsPage.vue';
 export { default as ReportBugPage } from './pages/ReportBugPage.vue';
 export { default as CrawlerPage } from './pages/CrawlerPage.vue';
+export { default as InboxPage } from './pages/InboxPage.vue';
 export { default as IndexRoute } from './pages/IndexRoute.vue';
 export { installCapture } from './bugReport/capture';
 export { installUsagePings, pingVisit } from './usagePing';

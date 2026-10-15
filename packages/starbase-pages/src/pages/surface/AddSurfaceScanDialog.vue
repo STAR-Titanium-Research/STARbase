@@ -5,9 +5,9 @@
 // dialog always shows that the file becomes visible to every lab member (spec, decision 6). A create has no
 // version to clash with, so the refusals handled here are permission, a file already added, and validation.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { formatDate, operationLabel, processLabel, useExplorerHost, useRequestGate } from '@d1/ui';
+import { useExplorerHost, useRequestGate } from '@d1/ui';
 import {
-	emptyForm, FILE_FIELDS, fileFilter, formatBytes, formProblems, normaliseFile, operationFilter, todayIso, VISIBILITY_WARNING, type LibraryFile,
+	emptyForm, FILE_FIELDS, fileFilter, formatBytes, formProblems, normaliseFile, OPERATION_FIELDS, operationFilter, operationOption, todayIso, VISIBILITY_WARNING, type LibraryFile,
 } from './addScanModel';
 import { createErrors, createScan } from './scanApi';
 import { CONDITION_LABEL, SCAN_CONDITIONS } from './scanModel';
@@ -72,16 +72,13 @@ async function loadOperations(): Promise<void> {
 		const res = await host.api.get('/items/manufacturing_operations', {
 			params: {
 				filter: JSON.stringify(operationFilter({ insertId: props.insertId, edgeId: props.edgeId })),
-				fields: ['operation_id', 'pass_code', 'operation_sequence', 'operation_date', 'process_category', 'sample_id.sample_code'],
+				fields: OPERATION_FIELDS,
 				sort: ['-operation_date'],
 				limit: 100,
 			},
 		});
 		if (!opGate.isCurrent(token)) return;
-		operations.value = ((res.data?.data ?? []) as any[]).map((o) => ({
-			value: String(o.operation_id),
-			text: [operationLabel(o), processLabel(o.process_category), formatDate(o.operation_date)].filter(Boolean).join(' · '),
-		}));
+		operations.value = ((res.data?.data ?? []) as any[]).map(operationOption);
 	} catch (e: any) {
 		if (!opGate.isCurrent(token)) return;
 		operationsError.value = 'Could not load the operations; you can still add the scan without one.';

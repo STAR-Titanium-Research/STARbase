@@ -1,0 +1,21 @@
+{
+  "description": "a rescan within 10 minutes of the last (or while one waits)",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/rescan",
+    "body": {}
+  },
+  "status": 429,
+  "body": {
+    "errors": [
+      {
+        "message": "Your folder was scanned or queued a moment ago. Try again in a few minutes.",
+        "extensions": {
+          "retry_after_seconds": 420,
+          "code": "RATE_LIMITED",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

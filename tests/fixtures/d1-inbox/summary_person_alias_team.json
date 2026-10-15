@@ -1,0 +1,28 @@
+{
+  "description": "a person with an alias and one team that has a share folder (a team with none is left out)",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/summary"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "person": {
+        "person_id": "00000000-0000-4000-8000-000000000011",
+        "new": 3,
+        "older_matches": 2,
+        "has_alias": true
+      },
+      "teams": [
+        {
+          "team_id": "00000000-0000-4000-8000-000000000021",
+          "name": "SEM team",
+          "new": 4,
+          "older_matches": 1
+        }
+      ],
+      "new": 7,
+      "older_matches": 3
+    }
+  }
+}

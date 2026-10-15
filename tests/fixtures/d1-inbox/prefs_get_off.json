@@ -1,0 +1,13 @@
+{
+  "description": "auto-link off (the default)",
+  "request": {
+    "method": "GET",
+    "path": "/d1-inbox/prefs"
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "auto_link": false
+    }
+  }
+}

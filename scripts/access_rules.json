@@ -164,7 +164,7 @@
   },
   "custom": {
     "people": {
-      "create": {"validation": {"_or": [{"user_id": {"_null": true}}, {"user_id": {"_eq": "$CURRENT_USER"}}]}},
+      "create": {"validation": {"_or": [{"user_id": {"_null": true}}, {"user_id": {"_eq": "$CURRENT_USER"}}]}, "fields": ["person_id", "full_name", "email", "user_id", "is_operator", "is_researcher", "active", "notes", "legacy_machine_operator_id", "created_at"]},
       "read": {},
       "update": {"permissions": {"user_id": {"_eq": "$CURRENT_USER"}}, "fields": ["full_name", "email", "is_operator", "is_researcher", "active", "notes"]}
     },

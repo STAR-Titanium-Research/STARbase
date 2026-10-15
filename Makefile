@@ -38,7 +38,7 @@ KEEP          ?= 7
         worker-build worker-test worker-logs phase4-test \
         analysis-build analysis-test llm-build llm-test llm-eval \
         surface-scan-build surface-scan-test \
-        migrate-legacy migrate-legacy-dry index-archive index-archive-dry
+        migrate-legacy migrate-legacy-dry index-archive index-archive-dry inbox-crawler inbox-crawler-once
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -180,6 +180,13 @@ index-archive: ## Index the SMB archive into the Directus File Library (idempote
 index-archive-dry: ## Dry-run the archive indexer (counts only, no DB writes)
 	docker compose --profile archive run --rm archive-indexer \
 		sh -c "pip install -q psycopg2-binary && python /scripts/index_archive.py --dry-run"
+
+inbox-crawler: ## Start the inbox crawler daemon (read-only; finds new files in personal and team folders for the Inbox)
+	docker compose --profile archive up -d inbox-crawler
+
+inbox-crawler-once: ## One scan of everyone with the inbox crawler, then exit (see docs/runbooks/inbox-crawler.md)
+	docker compose --profile archive run --rm inbox-crawler \
+		sh -c "pip install -q 'psycopg2-binary==2.9.13' 'Pillow==12.3.0' && python -m inbox_crawler --once"
 
 reset-db: ## Drop all tables and re-apply migrations + seed (DESTRUCTIVE — dev only). Asks you to type the DB name; CONFIRM=<name> skips the prompt.
 	@echo "WARNING: this DROPS the database '$(DB_NAME)' and every table in it."

@@ -1,0 +1,35 @@
+{
+  "description": "a surface scan added to an insert (the condition is the only thing the person must choose)",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/link",
+    "body": {
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "condition": "worn"
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "link_batch_id": "00000000-0000-4000-8000-000000000901",
+      "linked": 1,
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001003",
+          "collection": "surface_scans",
+          "record_id": "00000000-0000-4000-8000-000000006001",
+          "junction_id": "00000000-0000-4000-8000-000000006001",
+          "insert_id": "00000000-0000-4000-8000-000000000201",
+          "edge_id": null,
+          "adopted": false
+        }
+      ]
+    }
+  }
+}
