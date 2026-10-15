@@ -12,6 +12,7 @@ import { COLLECTION, focusPlan, slotKindOf, stepCollection } from './model/colle
 import { connectionsOf, type Connections } from './model/connections';
 import { FALLBACK_RELATIONS, formSlots } from './model/formSlots';
 import { groupBatches } from './model/groupBatches';
+import { chainFocus, type HoverFocus } from './model/hoverFocus';
 import { fanNodeIds, fanRowIds } from './model/fans';
 import { parseFocus } from './model/loadFamily';
 import { NoSample, loadFocus, type DefsByKind } from './model/loadFocus';
@@ -358,7 +359,18 @@ export function useProcessMap(api: HostApi, route: MapRoute, router: MapRouter) 
   });
 
   // ---- the pointer, and ＋ ------------------------------------------------------------------------
-  const { hovered, hover, holdHover, clearHover, tooltip, focusOfHover, socketHighlight, card } = useMapHover({ graph, nodeById, nodes, info });
+  const { hovered, hover, holdHover, clearHover, tooltip, focusOfHover: hoverOnly, socketHighlight, card } = useMapHover({ graph, nodeById, nodes, info });
+  // A selected card lights up its whole chain (what its samples came from and went on to). Hovering another
+  // card still shows that card's neighbours; hovering a wire or socket adds its wires to the chain.
+  const chain = computed(() => (graph.value ? chainFocus(graph.value, selectedId.value) : null));
+  const focusOfHover = computed<HoverFocus | null>(() => {
+    const h = hoverOnly.value;
+    const c = chain.value;
+    if (!c) return h;
+    if (!h || hovered.value?.id === selectedId.value) return c;
+    if (!h.dim) return { ...c, wires: new Set([...c.wires, ...h.wires]) };
+    return h;
+  });
   const expansion = useMapExpand({ api, gate, status, data, defs, graph, nodeById, shown, hiddenKinds, revealedKeys, graphOf, notice, capped, expanding });
 
   // Last, so that everything a load resets is there: it runs at once for a focus already in the address.

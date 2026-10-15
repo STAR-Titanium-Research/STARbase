@@ -463,16 +463,21 @@ describe('useProcessMap', () => {
     expect(map.selectedOnMap.value).toBe(false);
   });
 
-  it('hovering a card dims the rest; hovering a wire only highlights it', async () => {
+  it('the selection lights its chain; hovering another card shows its neighbours; a wire adds to the chain', async () => {
     family.mockResolvedValue(small());
     const { map } = setup({ focus: 'physical_samples:s1' });
     await settle();
+    expect(map.selectedId.value).toBe('s:s1');
+    const chain = map.focusOfHover.value!;
+    expect(chain).toMatchObject({ dim: true });
+    expect(chain.nodes.has('s:s1')).toBe(true);
     map.hover('s:s2', {} as HTMLElement);
     expect(map.focusOfHover.value).toMatchObject({ dim: true });
     map.hover(null);
-    expect(map.focusOfHover.value).toBeNull();
-    map.hover(map.graph.value!.wires[0].id, {} as HTMLElement);
-    expect(map.focusOfHover.value).toMatchObject({ dim: false });
+    expect(map.focusOfHover.value).toEqual(chain);
+    const wire = map.graph.value!.wires[0].id;
+    map.hover(wire, {} as HTMLElement);
+    expect(map.focusOfHover.value!.wires.has(wire)).toBe(true);
   });
 
   it('hidden markers become the sides a node draws "some records hidden" on, even with no socket there', async () => {

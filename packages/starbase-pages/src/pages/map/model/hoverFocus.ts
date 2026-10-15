@@ -1,8 +1,9 @@
 // What the pointer's target lights up on the Process map (spec §6.3, D17). Hovering a card or a record in
 // a card's Inside tray keeps that card, what it is wired to and those wires bright and dims the rest;
-// hovering a wire or a socket only highlights the wires involved (its tooltip says the rest). Pure.
+// hovering a wire or a socket only highlights the wires involved (its tooltip says the rest). A selected
+// card lights up its whole chain instead (`chainFocus`). Pure.
 
-import type { ProcessGraph, Wire } from './types';
+import type { MapNode, ProcessGraph, Wire } from './types';
 import { nodeOfSocket } from './sockets';
 import { refKey } from '../nodes/actions';
 
@@ -45,6 +46,78 @@ export function hoverFocus(graph: ProcessGraph, id: string | null): HoverFocus |
     nodes.add(from);
     nodes.add(to);
   }
+  return { dim: true, nodes, wires };
+}
+
+/**
+ * The sockets on the far side of a node from `socket`: walking `up`, the inputs that feed this output;
+ * walking `down`, the outputs this input feeds. A container answers row by row, so a cut's piece leads back
+ * to the one input and not across to its sibling pieces; any other card passes everything through.
+ */
+function across(node: MapNode | undefined, socket: string, dir: 'up' | 'down'): string[] {
+  if (!node) return [];
+  switch (node.type) {
+    case 'container':
+      return node.rows.filter((r) => (dir === 'up' ? r.out : r.in) === socket).flatMap((r) => (dir === 'up' ? r.in : r.out) ?? []);
+    case 'record':
+      return dir === 'up' ? node.ins : node.outs;
+    case 'junction':
+      return dir === 'up' ? [node.in] : node.outs.map((o) => o.socket);
+    default:
+      return [];
+  }
+}
+
+/** The sockets a walk starts from on the selected card itself. */
+function ownSockets(node: MapNode, dir: 'up' | 'down'): string[] {
+  switch (node.type) {
+    case 'container':
+      return node.rows.flatMap((r) => (dir === 'up' ? r.in : r.out) ?? []);
+    case 'record':
+      return dir === 'up' ? node.ins : node.outs;
+    case 'junction':
+      return dir === 'up' ? [node.in] : node.outs.map((o) => o.socket);
+    default:
+      return [];
+  }
+}
+
+/**
+ * Everything a selected card's samples came from and went on to (the user's "whole chain"): walk the wires
+ * upstream from its inputs and downstream from its outputs, through each card on the way. Unrelated
+ * branches (a sibling piece of a cut and what was done to it) stay dim.
+ */
+export function chainFocus(graph: ProcessGraph, id: string | null): HoverFocus | null {
+  const start = id ? graph.nodes.find((n) => n.id === id) : undefined;
+  if (!start) return null;
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const into = new Map<string, Wire[]>();
+  const outOf = new Map<string, Wire[]>();
+  for (const w of graph.wires) {
+    into.set(w.to, [...(into.get(w.to) ?? []), w]);
+    outOf.set(w.from, [...(outOf.get(w.from) ?? []), w]);
+  }
+  const nodes = new Set([start.id]);
+  const wires = new Set<string>();
+
+  const walk = (dir: 'up' | 'down') => {
+    const seen = new Set<string>();
+    const queue = [...ownSockets(start, dir)]; // a copy: a record's own ins/outs must not be emptied
+    while (queue.length) {
+      const socket = queue.pop()!;
+      if (seen.has(socket)) continue;
+      seen.add(socket);
+      for (const w of (dir === 'up' ? into : outOf).get(socket) ?? []) {
+        wires.add(w.id);
+        const far = dir === 'up' ? w.from : w.to;
+        const farNode = nodeOfSocket(far);
+        nodes.add(farNode);
+        queue.push(...across(byId.get(farNode), far, dir));
+      }
+    }
+  };
+  walk('up');
+  walk('down');
   return { dim: true, nodes, wires };
 }
 

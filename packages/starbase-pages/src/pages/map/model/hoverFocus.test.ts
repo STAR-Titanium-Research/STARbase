@@ -1,8 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import { buildGraph } from './buildGraph';
 import { groupsOf, mkData, mkOp, mkSample } from './fixtures';
-import { hoverFocus, socketSubjects, wiresAtSocket } from './hoverFocus';
+import { chainFocus, hoverFocus, socketSubjects, wiresAtSocket } from './hoverFocus';
 import type { Slot } from './types';
+
+describe('chainFocus', () => {
+  // m --Cut (one batch)--> c0, c1, c2;  c0 --Polish--> d;  c1 --Polish--> e
+  const day = '2026-09-01T09:00:00Z';
+  const cut = mkData({
+    samples: ['m', 'c0', 'c1', 'c2', 'd', 'e'].map((id) => mkSample(id)),
+    operations: [
+      ...['c0', 'c1', 'c2'].map((c) => mkOp({ id: `cut-${c}`, methodName: 'Cut', sampleId: 'm', outputSampleId: c, date: day, equipmentId: 'eq' })),
+      mkOp({ id: 'pol-d', methodName: 'Polish', sampleId: 'c0', outputSampleId: 'd', date: '2026-09-03T09:00:00Z' }),
+      mkOp({ id: 'pol-e', methodName: 'Polish', sampleId: 'c1', outputSampleId: 'e', date: '2026-09-04T09:00:00Z' }),
+    ],
+  });
+  const g = buildGraph(cut, groupsOf(cut, true), { slots: () => [] });
+  const opOf = (row: string) => g.nodes.find((n) => n.type === 'container' && n.group.rowIds.includes(row))!.id;
+
+  it('a piece: back through its own row of the cut to the parent, on to what came after; siblings stay dim', () => {
+    const f = chainFocus(g, 's:c0')!;
+    expect(f.dim).toBe(true);
+    expect([...f.nodes].sort()).toEqual(['s:m', opOf('cut-c0'), 's:c0', opOf('pol-d'), 's:d'].sort());
+    expect(f.nodes.has('s:c1')).toBe(false);
+    expect(f.nodes.has('s:e')).toBe(false);
+  });
+
+  it('the parent: everything downstream of it, every piece and branch', () => {
+    const f = chainFocus(g, 's:m')!;
+    for (const id of ['s:c0', 's:c1', 's:c2', 's:d', 's:e']) expect([...f.nodes]).toContain(id);
+    expect(f.wires.size).toBe(g.wires.length);
+  });
+
+  it('nothing selected, or an id not on the map: no chain', () => {
+    expect(chainFocus(g, null)).toBeNull();
+    expect(chainFocus(g, 'nope')).toBeNull();
+  });
+});
 
 const DAY = '2026-09-01T09:00:00Z';
 const slot: Slot = { field: 'equipment_id', role: 'Machine', ref: { collection: 'equipment', id: 'e1', code: 'Mill' }, major: true };
