@@ -5,7 +5,7 @@ import { mkData, mkOp, mkSample } from './model/fixtures';
 import { loadFamily, loadRelationDefs } from './model/loadFamily';
 import { loadRecordRef, loadUsedIn } from './model/loadFans';
 import type { ProcessData } from './model/types';
-import { useMapCanvas } from './useMapCanvas';
+import { MIN_ZOOM, screenPixel, useMapCanvas } from './useMapCanvas';
 import { useProcessMap } from './useProcessMap';
 
 // Vue Flow measures nodes in a browser; here a store that keeps what the canvas gives it: nodes with
@@ -427,5 +427,16 @@ describe('useMapCanvas: whenSettled (the export waits for the layout)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('screenPixel: dashed outlines keep their on-screen width', () => {
+  it('is one screen pixel in flow units at every zoom down to the minimum, and never more', () => {
+    expect(screenPixel(1)).toBe(1);
+    expect(screenPixel(0.5)).toBe(2);
+    expect(screenPixel(0.1)).toBeCloseTo(10);
+    expect(screenPixel(1.6)).toBeCloseTo(0.625);
+    expect(screenPixel(0.01)).toBeCloseTo(1 / MIN_ZOOM); // below the minimum zoom counts as the minimum
+    expect(screenPixel(Number.NaN)).toBeCloseTo(1 / MIN_ZOOM);
   });
 });

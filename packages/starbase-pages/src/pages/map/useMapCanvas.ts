@@ -29,6 +29,15 @@ type ProcessMap = ReturnType<typeof useProcessMap>;
 const nodeTypes = { record: markRaw(RecordNode), container: markRaw(ContainerNode), junction: markRaw(JunctionNode), more: markRaw(MoreNode) } as unknown as NodeTypesObject;
 const edgeTypes = { wire: markRaw(WireEdge) } as unknown as EdgeTypesObject;
 
+/** The furthest the map zooms out (the page's Vue Flow `min-zoom`). */
+export const MIN_ZOOM = 0.1;
+
+/**
+ * One screen pixel in flow units at `zoom`: what a dashed outline's width is multiplied by so it is the same on screen
+ * at every zoom down to MIN_ZOOM (a zoom below it, or a bad value, counts as MIN_ZOOM).
+ */
+export const screenPixel = (zoom: number): number => 1 / (Number.isFinite(zoom) ? Math.max(zoom, MIN_ZOOM) : MIN_ZOOM);
+
 /** Duration of the move to the laid-out positions. */
 const MOVE_MS = 200;
 /** Room round the nodes for the project frame and its label. */
@@ -406,8 +415,8 @@ export function useMapCanvas(map: ProcessMap) {
     return { x: x0 - FRAME_PAD, y: y0 - FRAME_PAD - FRAME_LABEL, width: x1 - x0 + FRAME_PAD * 2, height: y1 - y0 + FRAME_PAD * 2 + FRAME_LABEL };
   });
 
-  /** One screen pixel in flow units (capped), so dashed outlines stay visible when zoomed out. */
-  const screenPx = computed(() => Math.min(4, 1 / Math.max(vf.viewport.value.zoom, 0.01)));
+  /** One screen pixel in flow units, so dashed outlines keep their on-screen width at every zoom. */
+  const screenPx = computed(() => screenPixel(vf.viewport.value.zoom));
 
   return { nodeTypes, edgeTypes, laidOut, layoutError, relayout, reflow, fit, fitFocus, remeasure, reveal, frame, screenPx, whenSettled };
 }

@@ -1130,6 +1130,11 @@ migration 141 prints about ownerless records.
   map is as before. Press ＋ on a sample card, then **Reset**: the map is back as first opened, with no new request
   in the network panel. The map uses the full width of the window and its full height. Since: Process map card
   tweaks (PR pending).
+- [ ] **PM4-4 — Hover follows the chain choice; dashed outlines at any zoom.** Right-click a card, pick **Show
+  upstream**, then hover other cards: each lights only what its samples came from. Pick **Show downstream**: hovering
+  lights only what came after. Zoom all the way out and all the way in on a map with a probable batch and a project
+  frame: their dashed outlines look the same thickness on screen at every zoom. Since: chain hover and outline fix
+  (PR pending).
 
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 

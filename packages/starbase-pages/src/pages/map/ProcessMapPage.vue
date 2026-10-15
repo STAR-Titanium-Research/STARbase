@@ -24,7 +24,7 @@ import MapSheet from './MapSheet.vue';
 import WireTip from './WireTip.vue';
 import { createPointerKind } from './useLongPress';
 import { useMapInput } from './useMapInput';
-import { miniMapColor, useMapCanvas } from './useMapCanvas';
+import { MIN_ZOOM, miniMapColor, useMapCanvas } from './useMapCanvas';
 import { controlsPosition, useIsPhone } from './usePhone';
 import { useDataPreviews } from './useDataPreviews';
 import { personName, useMapExport } from './useMapExport';
@@ -305,7 +305,7 @@ onBeforeUnmount(() => {
 								:nodes-connectable="false"
 								:elements-selectable="false"
 								:zoom-on-double-click="false"
-								:min-zoom="0.1"
+								:min-zoom="MIN_ZOOM"
 								:max-zoom="1.6"
 								:only-render-visible-elements="false"
 							>
@@ -377,8 +377,8 @@ onBeforeUnmount(() => {
 	z-index: -1;
 	box-sizing: border-box;
 	pointer-events: none;
-	/* --pm-px is one screen pixel in flow units: the frame stays visible when zoomed out. */
-	border: max(1.5px, calc(1.5 * var(--pm-px, 1px))) dashed color-mix(in srgb, var(--k) 70%, transparent);
+	/* --pm-px is one screen pixel in flow units: the frame's outline is the same on screen at every zoom. */
+	border: calc(1.5 * var(--pm-px, 1px)) dashed color-mix(in srgb, var(--k) 70%, transparent);
 	border-radius: 18px;
 	background: color-mix(in srgb, var(--k) 5%, transparent);
 }
