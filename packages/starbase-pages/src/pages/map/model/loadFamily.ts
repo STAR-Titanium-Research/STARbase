@@ -174,7 +174,7 @@ function collectBatchCodes(rows: Json[], codes: Record<string, string>): void {
 const SUBJECT_ALIAS = 'subject';
 const SUBJECT_FIELDS = [`${SUBJECT_ALIAS}.collection`, `${SUBJECT_ALIAS}.item`];
 
-const SAMPLE_FIELDS = [
+export const SAMPLE_FIELDS = [
   'sample_id',
   'sample_code',
   'form',
@@ -452,7 +452,7 @@ function mapTest(r: Json, extras: Extra[] = []): TestRow {
   };
 }
 
-function mapSample(r: Json): SampleRec {
+export function mapSample(r: Json): SampleRec {
   const facts: Record<string, string> = {};
   for (const { label, field, unit } of SAMPLE_FACTS) {
     const n = num(r[field]);

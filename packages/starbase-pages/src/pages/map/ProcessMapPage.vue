@@ -14,6 +14,8 @@ import type { Dir } from './model/elkInput';
 import { recordWord } from './model/fans';
 import { MAP_ACTIONS, MAP_VIEW, refKey, type MapActions, type MapView } from './nodes/actions';
 import { socketLabeller } from './nodes/a11y';
+import EditLid from './edit/EditLid.vue';
+import { provideEditMode, useEditMode } from './edit/useEditMode';
 import ExportFrame from './ExportFrame.vue';
 import ExportMenu from './ExportMenu.vue';
 import HoverCard from './HoverCard.vue';
@@ -36,10 +38,23 @@ import { useProcessMap, type Reach } from './useProcessMap';
 const host = useExplorerHost();
 const route = useRoute();
 const router = useRouter();
-const map = useProcessMap(host.api, route, router);
-const canvas = useMapCanvas(map);
-/** Below 768 px: the rail is a bottom sheet, the minimap is gone, a long press shows the hover card. */
+/** Below 768 px: the rail is a bottom sheet, the minimap is gone, a long press shows the hover card, and nothing can be built (E20). */
 const phone = useIsPhone();
+// Edit mode (spec §7.1) is made first: the map draws the draft it merges in (its overlay), and edit mode reads which card is selected from the map.
+const edit = useEditMode({
+	api: host.api,
+	fieldsFor: (c) => host.fieldsFor(c),
+	route,
+	router,
+	isPhone: phone,
+	focus: () => map.focus.value,
+	focusCode: () => map.data.value?.focus.code || undefined,
+	selected: () => map.graph.value?.nodes.find((n) => n.id === map.selectedId.value),
+	hint: (h) => map.hintMerge(h),
+});
+const map = useProcessMap(host.api, route, router, edit.overlay);
+const canvas = useMapCanvas(map);
+provideEditMode(edit);
 const pointerKind = createPointerKind();
 
 // What the node and wire components call (nodes/actions.ts).
@@ -78,11 +93,13 @@ provide(MAP_ACTIONS, actions);
 provide(MAP_VIEW, view);
 
 const focusCode = computed(() => map.data.value?.focus.code ?? '');
+/** A blank canvas: edit mode with no record to map. */
+const blank = computed(() => !map.focus.value);
 // The record the map is opened on is not always a sample (a tool, a project, an operation...).
 // The loaded record's collection; before anything is loaded (not visible) the one in the address.
 const focusCollection = computed(() => map.data.value?.focus.collection ?? map.focus.value?.collection ?? 'physical_samples');
 const focusWord = computed(() => recordWord(focusCollection.value));
-const pageTitle = computed(() => (map.status.value === 'ready' && focusCode.value ? `${focusCode.value} · Process map` : 'Process map'));
+const pageTitle = computed(() => (blank.value && edit.drafted.value ? 'Build a process' : map.status.value === 'ready' && focusCode.value ? `${focusCode.value} · Process map` : 'Process map'));
 
 const DIRECTIONS: { value: Dir; label: string }[] = [
 	{ value: 'RIGHT', label: 'Left → right' },
@@ -112,7 +129,7 @@ watch(
 	() => map.data.value,
 	(d) => {
 		if (!d) dataPreviews.reset();
-		else dataPreviews.load(d.operations.map((o) => ({ collection: 'manufacturing_operations', id: o.id, code: o.code })));
+		else dataPreviews.load(d.operations.filter((o) => !o.id.startsWith('draft:')).map((o) => ({ collection: 'manufacturing_operations', id: o.id, code: o.code })));
 	},
 	{ immediate: true },
 );
@@ -190,7 +207,7 @@ onBeforeUnmount(() => {
 <template>
 	<ExplorerView :title="pageTitle">
 		<PageShell wide>
-			<LoadState v-if="map.status.value === 'loading'" loading loading-text="Loading the Process map…" />
+			<LoadState v-if="map.status.value === 'loading' || edit.pending.value" loading :loading-text="edit.pending.value ? 'Opening your draft…' : 'Loading the Process map…'" />
 
 			<NotVisible v-else-if="map.status.value === 'notVisible'" :what="focusWord.one" />
 
@@ -210,14 +227,23 @@ onBeforeUnmount(() => {
 			<template v-else>
 				<RecordLayout class="d1-process-map" style="--d1-sticky-top: var(--d1-header-offset, 70px)">
 					<template #crumbs>
-						<AppLink :to="indexRoute(focusCollection)">{{ focusWord.many }}</AppLink>
-						<span>›</span>
-						<RecordLink :collection="focusCollection" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
-						<span>›</span>
-						<span>Process map</span>
+						<template v-if="blank">
+							<AppLink to="/map">Process map</AppLink>
+							<span>›</span>
+							<span>{{ edit.drafted.value ? edit.draft.name.value || 'Build a process' : 'Build a process' }}</span>
+						</template>
+						<template v-else>
+							<AppLink :to="indexRoute(focusCollection)">{{ focusWord.many }}</AppLink>
+							<span>›</span>
+							<RecordLink :collection="focusCollection" :id="map.data.value?.focus.id">{{ focusCode }}</RecordLink>
+							<span>›</span>
+							<span>Process map</span>
+						</template>
 					</template>
 
 					<template #title-actions>
+						<v-button v-if="edit.editing.value" small @click="edit.done()"><v-icon name="check" small /> Done editing</v-button>
+						<v-button v-else-if="edit.canBuild.value && !edit.param.value" small secondary @click="edit.startEditing()"><v-icon name="edit" small /> Edit</v-button>
 						<v-button small secondary @click="copyLink"><v-icon name="link" small /> {{ copied ? 'Copied' : 'Copy link' }}</v-button>
 						<ExportMenu :busy="mapExport.exporting.value" :disabled="!canvas.laidOut.value || !map.nodes.value.length || mapExport.exporting.value" @pick="mapExport.exportAs" />
 					</template>
@@ -236,6 +262,24 @@ onBeforeUnmount(() => {
 							<v-button small secondary @click="map.clearFocus()">Clear</v-button>
 						</template>
 
+						<EditLid
+							v-if="edit.editing.value"
+							:name="edit.draft.name.value"
+							:can-undo="edit.draft.canUndo.value"
+							:can-redo="edit.draft.canRedo.value"
+							:drafts="edit.drafts.value"
+							:current-id="edit.draft.draftId.value"
+							:saving="edit.draft.saving.value"
+							:save-error="edit.draft.saveError.value"
+							:notice="edit.draft.notice.value"
+							@undo="edit.undo()"
+							@redo="edit.redo()"
+							@rename="edit.draft.rename"
+							@open="edit.openDraft"
+							@dismiss-notice="edit.draft.notice.value = ''"
+						/>
+						<div v-else-if="edit.drafted.value" class="pm-banner" role="status">This draft is open to look at only: building needs a screen at least 768 px wide.</div>
+						<div v-if="edit.failed.value" class="pm-banner pm-bad" role="alert">{{ edit.failed.value }}</div>
 						<div v-if="map.notice.value" class="pm-banner pm-bad" role="alert">{{ map.notice.value }}</div>
 						<div v-else-if="map.expanding.value" class="pm-banner" role="status">Loading more of the Process map…</div>
 						<div v-if="map.partial.value" class="pm-banner" role="status">Showing part of this history. The map shows the nearest steps; the rest is cut at the limits.</div>
@@ -249,7 +293,7 @@ onBeforeUnmount(() => {
 						<div
 							ref="canvasEl"
 							class="pm-canvas"
-							:class="{ pending: !canvas.laidOut.value }"
+							:class="{ pending: !canvas.laidOut.value && map.nodes.value.length > 0 }"
 							@mouseleave="map.clearHover()"
 							@keydown="input.onKey"
 							@focusin="input.onFocusIn"
