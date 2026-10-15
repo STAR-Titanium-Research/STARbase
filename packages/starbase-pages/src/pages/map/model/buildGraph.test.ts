@@ -611,6 +611,33 @@ describe('buildGraph: used-in fans (D20)', () => {
     expect(g.nodes.find((n) => n.type === 'more')).toMatchObject({ id: 'more:tools:t1', remaining: 29 });
   });
 
+  it('a hidden fan puts one marker on its root, on the output side; a readable fan none (D21)', () => {
+    const data = toolFan(2);
+    expect(buildFan(data).hidden).toEqual([]);
+    data.fan = { ...data.fan!, hidden: true };
+    expect(buildFan(data).hidden).toEqual([{ nodeId: 'f:tools:t1', side: 'out' }]);
+    // alongside the focus's own flag: still one marker on that side
+    data.hidden = { ancestors: false, descendants: true, events: false, stock: false };
+    expect(buildFan(data).hidden).toEqual([{ nodeId: 'f:tools:t1', side: 'out' }]);
+  });
+
+  it('a hidden stock-lot fan marks its lot card', () => {
+    const lot = { collection: 'raw_stock_lots', id: 'l1', code: 'LOT-1', kind: 'stock_lot' as const };
+    const data = mkData({ focus: lot, fan: { items: [], total: null, remaining: 0, hidden: true } });
+    expect(buildFan(data).hidden).toEqual([{ nodeId: 'lot:l1', side: 'out' }]);
+  });
+
+  it('a hidden side fan marks its own root, not the focus', () => {
+    const op = mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', date: DAY });
+    const used = mkOp({ id: 'u1', methodName: 'Turning', date: DAY });
+    const data = mkData({
+      samples: sam('s1', 's2'),
+      operations: [op, used],
+      sideFans: [{ root: tool, items: [ref('manufacturing_operations', 'u1')], total: 1, remaining: 0, hidden: true }],
+    });
+    expect(buildFan(data).hidden).toEqual([{ nodeId: 'f:tools:t1', side: 'out' }]);
+  });
+
   it('a fan focus puts the hidden-record markers on its own card, never on a sample', () => {
     const data = toolFan(2);
     data.hidden = { ancestors: false, descendants: true, events: false, stock: false };

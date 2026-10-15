@@ -192,10 +192,10 @@ export type {
 // Frequently used (Home panel and the visit pings; the server half is core/extensions/d1-usage)
 export {
 	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, readDismissed,
-	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget, suggestedPageEntries,
+	loadRecordLabels, recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget, suggestedPageEntries,
 	WRITE_ACTION_KEYS, withoutDismissed, withoutPinned, withoutWriteActions, writeDismissed,
 } from './usage';
-export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
+export type { PageInfo, RecordGet, RepeatFilter, UsageEntry, UsageKind } from './usage';
 
 // Tooling record pages (pure logic: ISO 1832 designations, insert outline, edge letters, tray grid, model)
 export { parseIsoDesignation, SHAPE_ANGLE_DEG } from './tooling/isoDesignation';

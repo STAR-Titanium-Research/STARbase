@@ -28,6 +28,7 @@ import { useDataPreviews } from './useDataPreviews';
 import { personName, useMapExport } from './useMapExport';
 import type { Reach } from './model/reach';
 import { useProcessMap } from './useProcessMap';
+import { useRecentRecords } from './useRecentRecords';
 
 // The Process map (spec D1-D3, §6.1): a record's family as a map of what was done to it. The page frame,
 // the crumb line, the rail (left, 300 px) and the map panel. The state is useProcessMap's, the drawing
@@ -89,6 +90,9 @@ const DIRECTIONS: { value: Dir; label: string }[] = [
 
 // The shell owns the Finder (Ctrl+K); with no focus the page offers it as the way to pick a record.
 const finderOpen = ref(false);
+// The records this person used lately, offered as starting points while no record is picked (read once, when that state first shows).
+const recent = useRecentRecords(host.api);
+watch(() => map.status.value, (s) => { if (s === 'empty') recent.load().catch(() => {}); }, { immediate: true });
 
 const frameLabel = computed(() => {
 	const p = map.project.value;
@@ -138,6 +142,7 @@ const railSelect = (id: string) => {
 /** The rail's props, one object for its two homes: the left column, and on a phone the bottom sheet. */
 const railProps = computed(() => ({
 	info: map.selectedInfo.value,
+	focus: map.focus.value,
 	preview: selectedPreview.value,
 	onMap: map.selectedOnMap.value,
 	connections: map.connections.value,
@@ -201,6 +206,12 @@ onBeforeUnmount(() => {
 					<h2>Pick a record to map</h2>
 					<p>The Process map shows what was done to a sample: the operations and tests, what went in and what came out, in the order they happened.</p>
 					<v-button @click="finderOpen = true"><v-icon name="search" small /> Find a record to map</v-button>
+					<nav v-if="recent.picks.value.length" class="pm-recent" aria-label="Recent records">
+						<h3>Recent records</h3>
+						<ul>
+							<li v-for="pick in recent.picks.value" :key="pick.target"><AppLink :to="pick.to">{{ pick.label }}</AppLink></li>
+						</ul>
+					</nav>
 				</div>
 			</Section>
 
@@ -297,6 +308,9 @@ onBeforeUnmount(() => {
 .pm-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 24px 8px; max-width: 560px; }
 .pm-empty h2 { margin: 0; font-size: var(--fs-xl, 18px); }
 .pm-empty p { margin: 0; color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.pm-recent { margin-top: 8px; }
+.pm-recent h3 { margin: 0 0 6px; font-size: var(--fs-md, 14px); color: var(--d1-dim, var(--theme--foreground-subdued)); }
+.pm-recent ul { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
 
 /* The canvas fills what is left of the window under the page header; the panel's body has no padding. */
 .pm-panel :deep(.body) { padding: 0; }

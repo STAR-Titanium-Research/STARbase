@@ -369,9 +369,9 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
 
   // ---- 4b. used-in fans (D20): the record, a collapsed container or a sample card per item, "+N more" -----
   const fanNodes: MapNode[] = [];
-  const fans: { root: Ref & { kind: Kind }; items: Ref[]; remaining: number | null }[] = [];
-  if (data.fan) fans.push({ root: data.focus, items: data.fan.items, remaining: remainingOf(data.fan) });
-  for (const f of data.sideFans ?? []) fans.push({ root: f.root, items: f.items, remaining: remainingOf(f) });
+  const fans: { root: Ref & { kind: Kind }; items: Ref[]; remaining: number | null; hidden: boolean }[] = [];
+  if (data.fan) fans.push({ root: data.focus, items: data.fan.items, remaining: remainingOf(data.fan), hidden: !!data.fan.hidden });
+  for (const f of data.sideFans ?? []) fans.push({ root: f.root, items: f.items, remaining: remainingOf(f), hidden: !!f.hidden });
   for (const fan of fans) {
     const rootId = fanRootId(fan.root);
     const rootOut = `${rootId}:out:0`;
@@ -461,6 +461,11 @@ export function buildGraph(data: ProcessData, groups: Group[], opts: BuildGraphO
     if (h.ancestors || h.stock) add('in');
     if (h.descendants || h.events) add('out');
   };
+  // A fan that skipped samples the person may not read: one marker on its root (the fan runs out of it), no count.
+  for (const fan of fans) {
+    const rootId = fanRootId(fan.root);
+    if (fan.hidden && present.has(rootId)) mark(rootId, { ancestors: false, descendants: true, events: false, stock: false });
+  }
   const focusNode = focusNodeId(data, groups, present);
   if (focusNode) mark(focusNode, data.hidden);
   // A family merged in with ＋ marks its own sample card, not the focus.

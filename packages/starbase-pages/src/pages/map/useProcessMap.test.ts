@@ -945,6 +945,19 @@ describe('expand: loading more (D15, spec 7)', () => {
     expect(idsOf(map)).not.toContain('f:tools:t1');
   });
 
+  it('a record whose only other users are hidden still opens its side fan, with the marker', async () => {
+    const tool = { collection: 'tools', id: 't1', code: 'TL-1' };
+    const op = mkOp({ id: 'o1', sampleId: 's1', outputSampleId: 's2', relations: { tool_id: tool } });
+    family.mockResolvedValue(mkData({ samples: [mkSample('s1'), mkSample('s2')], operations: [op] }));
+    const { map } = setup({ focus: 'physical_samples:s1' });
+    await settle();
+    usedIn.mockResolvedValue({ items: [op], total: 1, hidden: true });
+    await map.expand('tools:t1');
+    expect(map.notice.value).toBe('');
+    expect(idsOf(map)).toContain('f:tools:t1');
+    expect([...map.hiddenSides.value.keys()]).toContain('f:tools:t1');
+  });
+
   it('a failed expand shows the error and keeps what is loaded', async () => {
     const { map } = await toolFan();
     family.mockRejectedValue(Object.assign(new Error('x'), { response: { status: 500, data: { errors: [{ message: 'boom' }] } } }));

@@ -187,7 +187,7 @@ export function useMapExpand(deps: ExpandDeps) {
       const page = fanPage(ref.collection, used, 1);
       const held = new Set([...before.operations.map((o) => o.id), ...before.tests.map((t) => t.id)]);
       const fresh = page.items.filter((i) => i.collection === COLLECTION.sample || !held.has(i.id)).length;
-      if (!fresh && page.remaining === 0) {
+      if (!fresh && page.remaining === 0 && !page.hidden) {
         notice.value = `Nothing else in the map used ${ref.code}.`;
         return;
       }

@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { INDEX_DEFS } from './index/indexConfig';
 import {
 	DISMISSED_KEY, PAGES, PAGE_KEYS, RECORD_COLLECTIONS, SUGGESTED_PAGES, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget,
-	readDismissed, recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget,
+	loadRecordLabels, readDismissed, recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget,
 	suggestedPageEntries, withoutDismissed, withoutPinned, withoutWriteActions, writeDismissed, WRITE_ACTION_KEYS, type UsageEntry,
 } from './usage';
 
@@ -262,6 +262,34 @@ describe('records', () => {
 		expect(splitRecordTarget(`people:${S1}`)).toEqual({ collection: 'people', id: S1 });
 		expect(splitRecordTarget('samples')).toBeNull();
 		expect(splitRecordTarget(`tools:${S1}`)).toBeNull();
+	});
+});
+
+describe('loadRecordLabels', () => {
+	const S2 = '22222222-bbbb-4bbb-8bbb-000000000002';
+	const C1 = '33333333-cccc-4ccc-8ccc-000000000003';
+	const items = [{ target: `campaigns:${C1}` }, { target: `physical_samples:${S1}` }, { target: 'tools:x' }, { target: `physical_samples:${S2}` }];
+
+	it('reads one request per collection and answers in the order of the items, skipping what is not a record collection', async () => {
+		const get = vi.fn(async (path: string, config: { params: any }) => {
+			if (path === '/items/campaigns') {
+				await new Promise((r) => setTimeout(r, 5)); // the earlier item answers last, but keeps its place
+				return { data: { data: [{ campaign_id: C1, campaign_code: 'C-1' }] } };
+			}
+			const ids: string[] = JSON.parse(config.params.filter).sample_id._in;
+			return { data: { data: ids.map((id) => ({ sample_id: id, sample_code: `S-${id.slice(0, 2)}` })) } };
+		});
+		const out = await loadRecordLabels(get, items);
+		expect(out.map((e) => e.label)).toEqual(['C-1', 'S-11', 'S-22']);
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+
+	it('leaves out a collection that refuses, and a record that did not come back', async () => {
+		const get = vi.fn(async (path: string) => {
+			if (path === '/items/campaigns') throw Object.assign(new Error('no'), { response: { status: 403 } });
+			return { data: { data: [{ sample_id: S2, sample_code: 'S-2' }] } };
+		});
+		expect((await loadRecordLabels(get, items)).map((e) => e.label)).toEqual(['S-2']);
 	});
 });
 
