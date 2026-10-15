@@ -3,10 +3,11 @@
 
 import { SCAN_CONDITIONS, type ScanCondition } from './scanModel';
 
-// File types the render worker is meant to read (SurfaceTopography picks the reader by extension; Alicona .al3d
-// first). The library search offers files with these endings only. The worker has the last word: a file it cannot
-// read fails its render with the reason, and "Render again" shows it. Keep in step with plugins/surface-scan-worker.
-export const TOPOGRAPHY_EXTENSIONS = ['.al3d', '.opd', '.opdx', '.x3p', '.ibw', '.h5', '.hdf5', '.nc', '.mat', '.sxm', '.datx'] as const;
+// File types the library search offers: the common SurfaceTopography formats (Alicona .al3d first). The render
+// worker has the last word: it builds its own list from SurfaceTopography's readers, minus mat, txt, csv, dat, xlsx,
+// zip and nc (documents, tables and force recordings on the share; plugins/surface-scan-worker app/lib/archive.py),
+// and a file it refuses fails its render with the reason, which "Render again" shows. Keep this list inside that one.
+export const TOPOGRAPHY_EXTENSIONS = ['.al3d', '.opd', '.opdx', '.x3p', '.ibw', '.h5', '.hdf5', '.sxm', '.datx'] as const;
 
 /** The visible warning of the dialog (spec decision 6). */
 export const VISIBILITY_WARNING =
