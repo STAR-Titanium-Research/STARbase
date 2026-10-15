@@ -297,7 +297,10 @@ def test_a_gone_candidate_that_becomes_a_surface_scan_is_dropped_too_but_decided
 
 
 def test_without_the_surface_scans_table_both_checks_still_work(world):
-    # an older database: no surface_scans table (the world has none until a test creates one)
+    # an older database: no surface_scans table. The world's own schema has none until a test creates
+    # one, but a CI database that ran migration 192 has the real table in public, so leave public out.
+    world.q(f"SET search_path = {world.schema}")
+    world.commit()
     assert world.one("SELECT to_regclass('surface_scans') IS NULL")[0]
     store = db.Store(world.conn)
     assert store.already_linked(["00000000-0000-0000-0000-0000000000aa"]) == set()
