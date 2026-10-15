@@ -563,30 +563,51 @@ class Store:
             )
         return done
 
+    def _has_surface_scans(self) -> bool:
+        """Does the database have the surface-scan table (migration 192)? An older one does not."""
+        row = self._one("SELECT to_regclass('surface_scans') IS NOT NULL")
+        return bool(row and row[0])
+
     def already_linked(self, files_ids: list[str]) -> set[str]:
         """Which of these pointer-row ids are already linked to a sample, operation or test (by Data Studio's
-        picker or by the d1-inbox extension). Such a file is not a found file: nobody needs to link it."""
+        picker or by the d1-inbox extension), or already a surface scan (added in the Alicona feature's own
+        dialog, which offers every star .al3d, the crawler's included). Such a file is not a found file:
+        nobody needs to link it."""
         if not files_ids:
             return set()
+        scans = (
+            " UNION SELECT directus_files_id::text FROM surface_scans WHERE directus_files_id = ANY(%s::uuid[])"
+            if self._has_surface_scans()
+            else ""
+        )
         rows = self._all(
             "SELECT directus_files_id::text FROM sample_data_files WHERE directus_files_id = ANY(%s::uuid[]) "
             "UNION SELECT directus_files_id::text FROM operation_data_files WHERE directus_files_id = ANY(%s::uuid[]) "
-            "UNION SELECT directus_files_id::text FROM session_data_files WHERE directus_files_id = ANY(%s::uuid[])",
-            (files_ids, files_ids, files_ids),
+            "UNION SELECT directus_files_id::text FROM session_data_files WHERE directus_files_id = ANY(%s::uuid[])"
+            + scans,
+            (files_ids,) * (4 if scans else 3),
         )
         return {r[0] for r in rows}
 
     def drop_linked_elsewhere(self, owner: Owner) -> int:
         """Delete the owner's UNDECIDED candidates (new or gone) whose file has meanwhile been linked in one
-        of the three junctions: the extension would refuse to link them again (already on the record) and
-        the Inbox would show them for ever. Linked and dismissed rows are never touched."""
+        of the three junctions or added as a surface scan: the extension would refuse to link them again
+        (already on the record) and the Inbox would show them for ever. Linked and dismissed rows are never
+        touched."""
+        scans = (
+            "  OR EXISTS (SELECT 1 FROM surface_scans j WHERE j.directus_files_id = c.directus_files_id)"
+            if self._has_surface_scans()
+            else ""
+        )
         return self._run(
             "DELETE FROM file_candidates c WHERE "
             + _owner_eq(owner, "c.")
             + " AND c.state IN ('new', 'gone') "
             "AND (EXISTS (SELECT 1 FROM sample_data_files j WHERE j.directus_files_id = c.directus_files_id) "
             "  OR EXISTS (SELECT 1 FROM operation_data_files j WHERE j.directus_files_id = c.directus_files_id) "
-            "  OR EXISTS (SELECT 1 FROM session_data_files j WHERE j.directus_files_id = c.directus_files_id))",
+            "  OR EXISTS (SELECT 1 FROM session_data_files j WHERE j.directus_files_id = c.directus_files_id)"
+            + scans
+            + ")",
             (owner.id,),
         )
 

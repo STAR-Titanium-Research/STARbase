@@ -213,3 +213,97 @@ def test_seeding_the_walk_with_new_candidates_folders_costs_no_extra_stat_normal
     assert stats.listed_dirs == 0 and stats.gone == 0
     for folder in ("Users/abc12de/sem", "Users/abc12de/sem/deep"):
         assert spy.stats.count(folder) == 1  # stat-ed once, never twice
+
+
+# ---- S5: a file that is already a surface scan is not a found file ----------------------------------
+
+SURFACE_SCANS_STUB = (
+    "CREATE TABLE surface_scans (scan_id serial PRIMARY KEY, "
+    "directus_files_id uuid NOT NULL REFERENCES directus_files (id) ON DELETE CASCADE)"
+)
+
+
+def add_as_surface_scan(world, rel):
+    """What the Alicona feature's own dialog does: a surface_scans row for the file's pointer row."""
+    from inbox_crawler.identity import file_id
+
+    fid = str(file_id(rel))
+    world.q(
+        "INSERT INTO directus_files (id, storage, filename_download) VALUES (%s, 'star', %s) ON CONFLICT DO NOTHING",
+        (fid, rel.rsplit("/", 1)[-1]),
+    )
+    world.q("INSERT INTO surface_scans (directus_files_id) VALUES (%s)", (fid,))
+    world.commit()
+    return fid
+
+
+def test_a_file_that_is_already_a_surface_scan_gets_no_candidate(world):
+    world.q(SURFACE_SCANS_STUB)
+    world.person("abc12de")
+    world.write("Users/abc12de/done.al3d", b"AL3D" * 100)
+    world.write("Users/abc12de/free.al3d", b"AL3D" * 50)
+    add_as_surface_scan(world, "Users/abc12de/done.al3d")
+    settle(world)
+    stats = run(world)[0]
+    assert list(cands(world)) == ["Users/abc12de/free.al3d"]
+    assert stats.registered == 1 and stats.errors == 0
+
+
+def test_an_undecided_candidate_that_becomes_a_surface_scan_is_dropped_at_the_next_scan(
+    world,
+):
+    world.q(SURFACE_SCANS_STUB)
+    world.person("abc12de")
+    world.write("Users/abc12de/a.al3d", b"AL3D" * 100)
+    world.write("Users/abc12de/b.al3d", b"AL3D" * 50)
+    settle(world)
+    run(world)
+    assert len(cands(world)) == 2
+    add_as_surface_scan(world, "Users/abc12de/a.al3d")
+    stats = run(world)[0]
+    assert stats.listed_dirs == 0  # nothing in the folder changed
+    assert list(cands(world)) == ["Users/abc12de/b.al3d"]
+
+
+def test_a_gone_candidate_that_becomes_a_surface_scan_is_dropped_too_but_decided_ones_stay(
+    world,
+):
+    world.q(SURFACE_SCANS_STUB)
+    world.person("abc12de")
+    for n in ("gone", "linked", "dismissed"):
+        world.write(f"Users/abc12de/{n}.al3d", b"AL3D" + n.encode())
+    settle(world)
+    run(world)
+    world.q(
+        "UPDATE file_candidates SET state = 'linked', link_kind = 'manual', linked_collection = 'insert_edges', "
+        "linked_junction_id = gen_random_uuid(), link_batch_id = gen_random_uuid() "
+        "WHERE rel_path = 'Users/abc12de/linked.al3d'"
+    )
+    world.q(
+        "UPDATE file_candidates SET state = 'dismissed' WHERE rel_path = 'Users/abc12de/dismissed.al3d'"
+    )
+    world.q(
+        "UPDATE file_candidates SET state = 'gone' WHERE rel_path = 'Users/abc12de/gone.al3d'"
+    )
+    world.commit()
+    for n in ("gone", "linked", "dismissed"):
+        add_as_surface_scan(world, f"Users/abc12de/{n}.al3d")
+    run(world)
+    assert {k: v[0] for k, v in cands(world).items()} == {
+        "Users/abc12de/linked.al3d": "linked",
+        "Users/abc12de/dismissed.al3d": "dismissed",
+    }
+
+
+def test_without_the_surface_scans_table_both_checks_still_work(world):
+    # an older database: no surface_scans table (the world has none until a test creates one)
+    assert world.one("SELECT to_regclass('surface_scans') IS NULL")[0]
+    store = db.Store(world.conn)
+    assert store.already_linked(["00000000-0000-0000-0000-0000000000aa"]) == set()
+    pid, _ = world.person("abc12de")
+    world.write("Users/abc12de/a.al3d", b"AL3D" * 100)
+    settle(world)
+    run(world)
+    assert list(cands(world)) == ["Users/abc12de/a.al3d"]
+    assert store.drop_linked_elsewhere(person_owner(pid, "abc12de")) == 0
+    assert list(cands(world)) == ["Users/abc12de/a.al3d"]
