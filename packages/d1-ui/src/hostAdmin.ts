@@ -19,8 +19,8 @@ export function guessAdmin(store: StoreLike | null | undefined): boolean {
 }
 
 // The account role Lab Viewer (migration 185, ADR-0014 amendment): a login that reads every record and changes nothing. Its id is the one the
-// endpoints compare (d1-record-access labViewerRoleId, scripts/access_rules.json "viewer.role"). The endpoints can move it with the environment
-// variable D1_LAB_VIEWER_ROLE_ID; a front end has no such variable, so an app that moves it also changes it here.
+// endpoints compare (d1-record-access LAB_VIEWER_ROLE_ID, migration 185, scripts/access_rules.json "viewer.role"); there is no environment override,
+// and a test (the "one Lab Viewer role id" test of core/extensions/d1-record-access/index.test.mjs) keeps the copies equal.
 export const LAB_VIEWER_ROLE_ID = '10000001-0000-0000-0000-000000000003';
 
 // Is this the Lab Viewer role? `role` is a role id as the hosts keep it (user.role), or a role object from the Directus store. No role (null,

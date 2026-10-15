@@ -1015,6 +1015,17 @@ const viewerTables = () => {
   t.directus_users.push({ id: VIEWER_USER, email: 'pi@login.example', first_name: 'Pi', last_name: 'Viewer', status: 'active', role: VIEWER_ROLE, last_access: null });
   t.directus_roles.push({ id: VIEWER_ROLE, name: 'Lab Viewer' });
   t.directus_access.push({ role: VIEWER_ROLE, user: null, policy: POLICY.member }); // no admin policy: the viewer is not an administrator
+  // what the readers triggers do for an ACTIVE viewer: a row for every record of every type (a viewer's lists are filtered by these rows, like a member's)
+  t.sample_readers.push({ record_id: SAMPLE, user_id: VIEWER_USER }, { record_id: SAMPLE_GONE, user_id: VIEWER_USER });
+  t.project_readers.push({ record_id: PROJECT, user_id: VIEWER_USER });
+  return t;
+};
+// role still Lab Viewer, status suspended, readers rows removed (a live token of a suspended login)
+const suspendedViewerTables = () => {
+  const t = viewerTables();
+  t.directus_users.find((u) => u.id === VIEWER_USER).status = 'suspended';
+  t.sample_readers = t.sample_readers.filter((r) => r.user_id !== VIEWER_USER);
+  t.project_readers = t.project_readers.filter((r) => r.user_id !== VIEWER_USER);
   return t;
 };
 const viewer = { user: VIEWER_USER, admin: false, app: true };
@@ -1034,14 +1045,14 @@ test('Lab Viewer: GET /people and GET /attention give the same body an administr
   assert.ok(att.body.items.length > 0);
 });
 
-test('Lab Viewer: GET /people/:id/access reads the counts of any person and lists every record, including ones the viewer has no readers row for', async () => {
+test('Lab Viewer: GET /people/:id/access reads the counts of any person and lists every record (an active viewer has a readers row on each)', async () => {
   const { handlers } = mount({ tables: viewerTables(), raw: accessRaw() });
   const counts = await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.bob } });
   assert.equal(counts.status, 200);
   assert.deepEqual(counts.body, { owns: 3, shared: 2, investigator: 1, teams: 4, waiting: 2, waiting_owners: 1 });
   const list = await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.ann }, query: { list: 'shared' } });
   assert.equal(list.status, 200);
-  // the same list an administrator gets: all three records, not only the ones in the viewer's own readers rows (it has none)
+  // the same list an administrator gets: all three records (the viewer's readers rows cover them all)
   const asAdmin = await call(mount({ tables: viewerTables(), raw: accessRaw() }).handlers['GET /people/:person_id/access'], { method: 'GET', acc: admin(U.labAdmin), params: { person_id: P.ann }, query: { list: 'shared' } });
   assert.deepEqual(list.body, asAdmin.body);
   assert.deepEqual(list.body.records.map((r) => r.id), [SAMPLE, SAMPLE_GONE, PROJECT]);
@@ -1071,14 +1082,24 @@ test('Lab Viewer: the writes stay closed (403 READ_ONLY_ROLE) and a Lab Member i
   assert.equal((await call(m.handlers['GET /people/:person_id/access'], { acc: member(U.ann), params: { person_id: P.bob } })).status, 403);
 });
 
-test('Lab Viewer: the viewer role id can be overridden (D1_LAB_VIEWER_ROLE_ID)', async () => {
+test('Lab Viewer: a SUSPENDED viewer (role kept, no readers rows) is counted but listed nothing, and is still refused every write', async () => {
+  const { handlers, db } = mount({ tables: suspendedViewerTables(), raw: accessRaw() });
+  const list = await call(handlers['GET /people/:person_id/access'], { method: 'GET', acc: viewer, params: { person_id: P.ann }, query: { list: 'shared' } });
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body.records, []); // counted above, none listed: the unfiltered path is the administrator's alone
+  assert.ok(list.body.shared > 0);
+  const r = await call(handlers['PATCH /logins/:user_id'], { acc: viewer, body: { status: 'active' }, params: { user_id: VIEWER_USER }, method: 'PATCH' });
+  assert.equal(r.status, 403);
+  assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE');
+  assert.deepEqual(db.log.tx, []);
+});
+
+test('Lab Viewer: no environment override: another D1_LAB_VIEWER_ROLE_ID changes nothing', async () => {
   const other = ID(778);
   const t = viewerTables();
   t.directus_users.find((u) => u.id === VIEWER_USER).role = other;
-  const env = { ...ENV, D1_LAB_VIEWER_ROLE_ID: other };
-  const swapped = mount({ tables: t, env });
-  assert.equal((await call(swapped.handlers['GET /people'], { method: 'GET', acc: viewer })).status, 200);
-  // the default role id is no longer a viewer under the override
-  const old = mount({ tables: viewerTables(), env });
-  assert.equal((await call(old.handlers['GET /people'], { method: 'GET', acc: viewer })).status, 403);
+  const swapped = mount({ tables: t, env: { ...ENV, D1_LAB_VIEWER_ROLE_ID: other } });
+  assert.equal((await call(swapped.handlers['GET /people'], { method: 'GET', acc: viewer })).status, 403); // the other role is no viewer
+  const same = mount({ tables: viewerTables(), env: { ...ENV, D1_LAB_VIEWER_ROLE_ID: other } });
+  assert.equal((await call(same.handlers['GET /people'], { method: 'GET', acc: viewer })).status, 200); // the one role id is the viewer
 });

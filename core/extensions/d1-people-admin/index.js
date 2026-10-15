@@ -47,7 +47,7 @@
 // Who may call: /people and /attention are for administrators and Lab Viewers (401 without a user, 403 otherwise; a viewer reads what an
 // administrator reads and changes nothing, so every write route answers a viewer 403 READ_ONLY_ROLE). /access is for an administrator, a
 // Lab Viewer, or the person whose login the caller is. A plain non-administrator sees every count, but the list leaves out a record they no
-// longer read (their own readers row is missing): it is counted, not listed; an administrator and a viewer get every record listed.
+// longer read (their own readers row is missing): it is counted, not listed; an administrator gets every record listed. A Lab Viewer is filtered the same way as a member: an active viewer is a reader of every record (so reads all of them), a suspended one with a live token reads nothing Restricted.
 //
 // can_administer_accounts: an administrator whose role is not the Lab Admin role (D1_LAB_ADMIN_ROLE_ID). An admin policy attached to
 // the USER with no role (the preview's admin) is an account administrator; the Lab Admin is not.
@@ -57,7 +57,7 @@
 //
 // Errors use the Directus shape { errors: [{ message, extensions: { code, source: 'd1-people-admin' } }] }.
 
-import { COLLECTIONS, READ_ONLY_ROLE_MESSAGE, isLabViewer, isWriteRequest, labViewerRoleId } from '../d1-record-access/index.js';
+import { COLLECTIONS, READ_ONLY_ROLE_MESSAGE, isLabViewer, isWriteRequest } from '../d1-record-access/index.js';
 
 const SOURCE = 'd1-people-admin';
 const DEFAULT_LAB_ADMIN_ROLE_ID = '10000001-0000-0000-0000-000000000001';
@@ -140,7 +140,7 @@ export default {
         const acc = req.accountability;
         if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
         // a Lab Viewer changes nothing: no role or status change, no invite (also refused below: a viewer is no administrator)
-        const viewer = await isLabViewer(database, acc.user, labViewerRoleId(env));
+        const viewer = await isLabViewer(database, acc.user);
         if (viewer && isWriteRequest(req)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
         const caller = await accountAdmin(database, acc.user, labAdminRoleId);
         const admin = acc.admin === true || caller.admin;
@@ -488,7 +488,7 @@ export default {
       res.json({ email_sent: emailSent });
     }));
 
-    router.get('/people/:person_id/access', route(async ({ req, res, acc, readAll }) => {
+    router.get('/people/:person_id/access', route(async ({ req, res, acc, admin, readAll }) => {
       const personId = req.params?.person_id;
       if (typeof personId !== 'string' || !UUID.test(personId)) throw new HttpError(400, 'INVALID_PAYLOAD', 'The person id is not valid.');
       const person = await database('people').where('person_id', personId).first('person_id', 'user_id');
@@ -509,7 +509,7 @@ export default {
         waiting,
         waiting_owners: waiting ? await waitingOwners(personId) : 0,
       };
-      if (!isBlank(which)) body.records = await recordsOf({ personId, which, viewer: readAll ? null : String(acc.user) });
+      if (!isBlank(which)) body.records = await recordsOf({ personId, which, viewer: admin ? null : String(acc.user) });
       res.json(body);
     }));
 

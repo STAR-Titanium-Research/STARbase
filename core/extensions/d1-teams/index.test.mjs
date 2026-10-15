@@ -1329,19 +1329,32 @@ test('Lab Viewer: a viewer who MANAGES a team and owns records is refused on eve
   assert.notEqual(errorOf(created)?.extensions?.code, 'READ_ONLY_ROLE');
 });
 
-// ---- Lab Viewer, Task B: the read routes show a viewer every record of a team, as an administrator sees them --------------
+// ---- Lab Viewer, Task B: the read routes show a viewer every record of a team, as an administrator sees them ------------
+// A viewer's lists are NOT an unfiltered path: they are filtered by the readers rows as that viewer, like a member's. An active viewer is a reader of
+// every record (migration 185 puts a row in every readers table), so the answer equals an administrator's; a suspended viewer has no rows.
 
 const LAB_VIEWER_ROLE = '10000001-0000-0000-0000-000000000003';
 const VIEWER = ID(208);
+const SUSPENDED_VIEWER = ID(209);
 const viewerWorld = () => {
   const tables = recordsWorld();
   tables.directus_users.push({ id: VIEWER, email: 'pi@login.example', status: 'active', role: LAB_VIEWER_ROLE });
   tables.directus_access.push({ role: LAB_VIEWER_ROLE, user: null, policy: POLICY.member }); // not an administrator
+  // what the readers triggers do for an active viewer: a row for every record of every type
+  for (const s of tables.physical_samples) tables.sample_readers.push({ record_id: s.sample_id, user_id: VIEWER });
+  for (const p of tables.projects) tables.project_readers.push({ record_id: p.project_id, user_id: VIEWER });
+  for (const o of tables.manufacturing_operations) tables.operation_readers.push({ record_id: o.operation_id, user_id: VIEWER });
+  return tables;
+};
+// role still Lab Viewer, status suspended: the readers triggers removed every row
+const suspendedViewerWorld = () => {
+  const tables = recordsWorld();
+  tables.directus_users.push({ id: SUSPENDED_VIEWER, email: 'gone@login.example', status: 'suspended', role: LAB_VIEWER_ROLE });
   return tables;
 };
 const viewing = (user) => ({ user, admin: false, app: true });
 
-test('Lab Viewer: GET /:id and GET /:id/records show every record of the team, with nothing hidden, though the viewer has no readers rows in the fixture', async () => {
+test('Lab Viewer: an active viewer (a reader of everything) sees every record of the team, as an administrator does', async () => {
   const { handlers } = mount({ tables: viewerWorld() });
   const seen = await call(handlers['GET /:id'], { acc: viewing(VIEWER), params: { id: T.additive }, method: 'GET' });
   const asAdmin = await call(handlers['GET /:id'], { acc: admin(U.admin), params: { id: T.additive }, method: 'GET' });
@@ -1361,7 +1374,23 @@ test('Lab Viewer: GET /:id and GET /:id/records show every record of the team, w
   assert.deepEqual(stranger.body.records, []);
 });
 
-test('Lab Viewer: GET /mine/recent reads every record of the viewer\'s teams; GET /pending is empty even for a viewer who owns a record somebody waits on', async () => {
+test('Lab Viewer: a SUSPENDED viewer (role kept, no readers rows) sees no record of a team, on every read route, and is still refused writes', async () => {
+  const { handlers } = mount({ tables: suspendedViewerWorld() });
+  const acc = viewing(SUSPENDED_VIEWER);
+  const seen = await call(handlers['GET /:id'], { acc, params: { id: T.additive }, method: 'GET' });
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.records, []);
+  assert.equal(seen.body.hidden_count, 5);
+  const list = await call(handlers['GET /:id/records'], { acc, params: { id: T.additive }, query: { collection: 'physical_samples' }, method: 'GET' });
+  assert.deepEqual(list.body, { ids: [], truncated: false });
+  const recent = await call(handlers['GET /mine/recent'], { acc, method: 'GET' });
+  assert.deepEqual(recent.body.items, []);
+  const write = await call(handlers['PATCH /:id'], { acc, body: { name: 'Mine now' }, params: { id: T.additive }, method: 'PATCH' });
+  assert.equal(write.status, 403);
+  assert.equal(errorOf(write).extensions.code, 'READ_ONLY_ROLE');
+});
+
+test('Lab Viewer: GET /mine/recent lists the records of the teams of a viewer the readers rows allow; GET /pending is empty even for a viewer who owns a record somebody waits on', async () => {
   const tables = viewerWorld();
   tables.directus_users.find((u) => u.id === U.eve).role = LAB_VIEWER_ROLE; // Eve owns SM-001 and the project, and Cy waits on both
   const { handlers } = mount({ tables });
@@ -1369,9 +1398,11 @@ test('Lab Viewer: GET /mine/recent reads every record of the viewer\'s teams; GE
   // the same Eve as a Lab Member sees what is waiting for her
   const plain = mount({ tables: recordsWorld() });
   assert.equal((await call(plain.handlers['GET /pending'], { acc: member(U.eve), method: 'GET' })).body.items.length, 1);
-  // Bob (member of Additive) is a viewer: his recent list holds the records he has no readers row for
+  // Bob (member of Additive) is a viewer with a readers row on every record: his recent list holds more than he reads as a member (who reads none)
   const t2 = viewerWorld();
   t2.directus_users.find((u) => u.id === U.bob).role = LAB_VIEWER_ROLE;
+  for (const s of t2.physical_samples) t2.sample_readers.push({ record_id: s.sample_id, user_id: U.bob });
+  t2.project_readers.push({ record_id: PROJECT, user_id: U.bob });
   const recent = await call(mount({ tables: t2 }).handlers['GET /mine/recent'], { acc: member(U.bob), method: 'GET' });
   const asMember = await call(mount({ tables: viewerWorld() }).handlers['GET /mine/recent'], { acc: member(U.bob), method: 'GET' });
   assert.equal(recent.status, 200);

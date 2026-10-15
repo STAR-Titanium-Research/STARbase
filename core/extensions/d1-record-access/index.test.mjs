@@ -1688,6 +1688,18 @@ test('Lab Viewer: a viewer who OWNS the record (so passes the manage rule) is re
   assert.notEqual(errorOf(ok)?.extensions?.code, 'READ_ONLY_ROLE');
 });
 
+test('Lab Viewer: a SUSPENDED viewer (role kept) is refused every write too: the write rule has no status in it (fail closed)', async () => {
+  const world = withViewer(U.owner);
+  world.directus_users.find((u) => u.id === U.owner).status = 'suspended';
+  const { handlers, db } = mount({ tables: world });
+  for (const [route, body, params] of WRITES) {
+    const r = await call(handlers[route], { acc: owner, body, params, method: route.split(' ')[0] });
+    assert.equal(r.status, 403, route);
+    assert.equal(errorOf(r).extensions.code, 'READ_ONLY_ROLE', route);
+  }
+  assert.deepEqual(db.log.writes, []);
+});
+
 test('Lab Viewer: a viewer who is the PI of a project is refused too, and an administrator who is a viewer is refused (the role decides)', async () => {
   const pi = mount({ tables: withViewer(U.pi) });
   const r = await call(pi.handlers['POST /:collection/:id/entries'], { acc: as(U.pi), collection: 'projects', id: PROJECT, body: { person_id: P.view, role: 'view' }, method: 'POST' });
@@ -1698,19 +1710,19 @@ test('Lab Viewer: a viewer who is the PI of a project is refused too, and an adm
   assert.equal(errorOf(r2).extensions.code, 'READ_ONLY_ROLE');
 });
 
-test('Lab Viewer: reading the access list is not refused (GET), and the role id is matched without case and can be overridden', async () => {
+test('Lab Viewer: reading the access list is not refused (GET), and the role id is matched without case and is not overridable', async () => {
   const { handlers } = mount({ tables: withViewer(U.owner) });
   const get = await call(handlers['GET /:collection/:id'], { method: 'GET' });
   assert.equal(get.status, 200);
   const upper = mount({ tables: withViewer(U.owner, VIEWER_ROLE.toUpperCase()) });
   assert.equal(errorOf(await call(upper.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' })).extensions.code, 'READ_ONLY_ROLE');
-  // D1_LAB_VIEWER_ROLE_ID: another role id is the viewer, and the default one is no longer
+  // no environment override: D1_LAB_VIEWER_ROLE_ID changes nothing (one role id, fail closed)
   const other = ID(777);
   const env = { PUBLIC_URL: 'https://lab.example/', D1_LAB_VIEWER_ROLE_ID: other };
   const swapped = mount({ tables: withViewer(U.owner, other), env });
-  assert.equal(errorOf(await call(swapped.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' })).extensions.code, 'READ_ONLY_ROLE');
-  const old = mount({ tables: withViewer(U.owner), env });
-  assert.notEqual(errorOf(await call(old.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' }))?.extensions?.code, 'READ_ONLY_ROLE');
+  assert.notEqual(errorOf(await call(swapped.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' }))?.extensions?.code, 'READ_ONLY_ROLE');
+  const kept = mount({ tables: withViewer(U.owner), env });
+  assert.equal(errorOf(await call(kept.handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view }, method: 'POST' })).extensions.code, 'READ_ONLY_ROLE');
 });
 
 // ---- Lab Viewer, Task B: the access list is readable by a viewer, and offers no change --------------------------------

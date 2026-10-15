@@ -415,8 +415,8 @@ sample and a team-shared project, and removes them afterwards).
 A read-only account role for the lab's PI: it **reads every record (Restricted included) and changes nothing**. It is migration 185 (the role, its
 policy, `d1_private.v_viewers`, the viewer branch of the readers functions and the triggers on `directus_users`), a change to the `d1-record-access`,
 `d1-teams` and `d1-people-admin` extensions (they refuse a viewer on every route that changes anything, and answer its reads like an administrator's) and to the People
-and Teams pages of STARbase and of the Directus Explorer module. **No new `.env` keys** (`D1_LAB_VIEWER_ROLE_ID` is
-optional and only needed if the role has a different id on this server). Needs the People and Teams migrations (180 to 184) applied first.
+and Teams pages of STARbase and of the Directus Explorer module. **No new `.env` keys**: the role has one fixed id
+(`10000001-0000-0000-0000-000000000003`, `scripts/access_rules.json` `viewer.role`) that the migration, the extensions and the front end all use; there is no environment override. Needs the People and Teams migrations (180 to 184) applied first.
 
 1. `git pull && npm ci && npm run build:extensions && npm run build:starbase` (the Directus module and STARbase both know the role now).
 2. **Stop Directus, migrate, start it**: `docker compose stop directus`, `make migrate-status` (185 pending), `make migrate`, `docker compose up -d --force-recreate directus`

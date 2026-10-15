@@ -119,16 +119,18 @@ const isBlank = (v) => v === undefined || v === null || v === '';
 // Lab Viewer (migration 185, ADR-0014 amendment): an account role that reads every record and changes NOTHING. Directus refuses a viewer's item writes
 // because its policy has no create, update or delete row; this endpoint (and d1-teams and d1-people-admin, which import these) writes with knex or as the
 // system after its own check, and "a reader of the record" can pass that check (a viewer may own records, or be a project's PI), so every route that changes
-// anything refuses a viewer first. The role is compared by id (D1_LAB_VIEWER_ROLE_ID overrides the default of scripts/access_rules.json "viewer").
-export const DEFAULT_LAB_VIEWER_ROLE_ID = '10000001-0000-0000-0000-000000000003';
+// anything refuses a viewer first. ONE rule, fail closed: the caller's role id is the Lab Viewer role id (scripts/access_rules.json "viewer.role"),
+// whatever the login's status; there is no environment override. A viewer's LISTS are not a second rule: they stay filtered by the readers rows as that
+// viewer (an active viewer is a reader of everything, so the answer is the same; a suspended one reads nothing Restricted). Only an administrator
+// takes the unfiltered path.
+export const LAB_VIEWER_ROLE_ID = '10000001-0000-0000-0000-000000000003';
 export const READ_ONLY_ROLE_MESSAGE = 'The Lab Viewer role is read-only: it can look at everything and cannot change anything.';
-export const labViewerRoleId = (env) => (typeof env?.D1_LAB_VIEWER_ROLE_ID === 'string' && env.D1_LAB_VIEWER_ROLE_ID.trim()) || DEFAULT_LAB_VIEWER_ROLE_ID;
 // does the request change something? (anything but GET, HEAD and OPTIONS; a request with no method counts as a change, the safe answer)
 export const isWriteRequest = (req) => !['GET', 'HEAD', 'OPTIONS'].includes(String(req?.method ?? 'POST').toUpperCase());
-export async function isLabViewer(db, userId, roleId = DEFAULT_LAB_VIEWER_ROLE_ID) {
-  if (isBlank(userId) || isBlank(roleId)) return false;
+export async function isLabViewer(db, userId) {
+  if (isBlank(userId)) return false;
   const user = await db('directus_users').where('id', userId).first('role');
-  return !isBlank(user?.role) && String(user.role).toLowerCase() === String(roleId).toLowerCase();
+  return !isBlank(user?.role) && String(user.role).toLowerCase() === LAB_VIEWER_ROLE_ID;
 }
 const isForbidden = (e) => e?.status === 403 || e?.code === 'FORBIDDEN';
 const toBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
@@ -275,7 +277,7 @@ export default {
         const acc = req.accountability;
         if (!acc?.user) throw new HttpError(401, 'UNAUTHORIZED', 'Sign in first.');
         // a Lab Viewer changes nothing: the access list, an owner, a team entry (the manage rule below would pass a viewer who owns a record)
-        const labViewer = await isLabViewer(database, acc.user, labViewerRoleId(env));
+        const labViewer = await isLabViewer(database, acc.user);
         if (labViewer && isWriteRequest(req)) throw new HttpError(403, 'READ_ONLY_ROLE', READ_ONLY_ROLE_MESSAGE);
         const collection = req.params?.collection;
         const cfg = isCollection(collection) ? COLLECTIONS[collection] : null;
