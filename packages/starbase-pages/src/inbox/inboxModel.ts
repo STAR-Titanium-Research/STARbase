@@ -48,8 +48,11 @@ export function kindLabel(kind: FileKind): string {
 	}
 }
 
-/** A thumbnail is asked for only on the image kinds that are pictures (a surface scan is not one). */
-export const hasThumbnail = (kind: FileKind): boolean => kind === 'sem_image' || kind === 'image';
+/**
+ * No thumbnail in v1: a found file is a pointer row (storage 'star') whose bytes Directus cannot serve, and serving share bytes through
+ * Directus is out of scope (spec section 13). Every row shows its kind's icon, and the page asks the asset route for nothing.
+ */
+export const hasThumbnail = (_kind: FileKind): boolean => false;
 
 export const KIND_FILTER_ITEMS: ReadonlyArray<{ value: string; text: string }> = [
 	{ value: 'any', text: 'Any kind' },
@@ -296,7 +299,7 @@ export type PrimaryAction =
  * the page can link, and the caller may edit, links straight to it; any other file opens the record picker.
  */
 export function primaryAction(f: FoundFile): PrimaryAction {
-	if (f.kind === 'surface_scan') return { kind: 'disabled', label: 'Link', reason: SURFACE_SCAN_NOTICE };
+	if (f.kind === 'surface_scan') return { kind: 'disabled', label: 'Add a surface scan', reason: SURFACE_SCAN_NOTICE };
 	const s = suggestionOf(f);
 	if (s?.target && f.suggested_can_edit !== false) return { kind: 'link', label: 'Link' };
 	return { kind: 'pick', label: 'Link to…' };

@@ -57,6 +57,7 @@ describe('the Inbox crawler tab', () => {
 		expect(text('[data-test="ic-unmatched"]')).toContain('Users/zz9');
 		expect(text('[data-test="ic-unmatched"]')).toContain('Set it on the People page');
 		expect(text('[data-test="ic-no-alias"]')).toContain('Bo Chan');
+		expect(text('[data-test="inbox-crawler"]')).toContain('People without a uni alias');
 		expect(text('[data-test="ic-errors"]')).toBe('');
 	});
 
@@ -70,6 +71,16 @@ describe('the Inbox crawler tab', () => {
 		expect(text('[data-test="ic-scan-state"]')).toContain('did not finish');
 		expect(text('[data-test="ic-errors"]')).toContain('The share went away mid-scan.');
 		expect(text('[data-test="ic-errors"]')).toContain('Scan request failed: share unavailable');
+	});
+
+	it('the endpoint\'s verdict decides: stale is Offline however recent the heartbeat looks, and its errors show once', async () => {
+		await mount({
+			status: { desired_state: 'running', interval_minutes: 30, daemon: 'stale', last_heartbeat_at: new Date().toISOString(), files_registered: 5, error_count: 1, last_error: 'The share went away mid-scan.' },
+			errors: [{ at: '2026-10-15T10:01:00Z', message: 'The share went away mid-scan.' }],
+		});
+		await vi.waitFor(() => expect(q('[data-test="ic-daemon"]')).not.toBeNull());
+		expect(text('[data-test="ic-daemon"]')).toBe('Offline');
+		expect(q('[data-test="ic-errors"]')?.querySelectorAll('li')).toHaveLength(1);
 	});
 
 	it('Scan all queues a scan and says so', async () => {

@@ -2,10 +2,33 @@ import { computed, ref } from 'vue';
 import { useRequestGate, type HostApi } from '@d1/ui';
 import {
 	InboxApiError, acceptAll, dismissFiles, linkFiles, loadFiles, rescan, restoreFiles, undoBatch,
-	type FilesQuery, type FoundFile, type LinkItem,
+	type FilesQuery, type FoundFile, type LinkItem, type Skipped,
 } from './inboxApi';
-import { RESCAN_QUEUED_TEXT, acceptFilter, acceptPreview, acceptResultText, linkResultText, rateLimitMessage, undoResultText } from './inboxBulk';
-import { listPlan, suggestionOf, type InboxFilters } from './inboxModel';
+import {
+	RESCAN_QUEUED_TEXT, acceptFilter, acceptPairs, acceptPreview, acceptResultText, isAcceptable, linkResultText, mayReadDocuments, rateLimitMessage, undoResultText,
+	type AcceptPair,
+} from './inboxBulk';
+import { listPlan, nameOf, suggestionOf, type InboxFilters } from './inboxModel';
+
+// The confirm of Accept all: what the dry run said (the count, the files and where they go, what it would leave), and whether it is still asking.
+export interface AcceptDialog {
+	open: boolean;
+	loading: boolean;
+	error: string;
+	count: number;
+	hasMore: boolean;
+	skipped: Skipped[];
+	pairs: AcceptPair[];
+	/** The pairs are the server's own list (not an example from the rows on screen). */
+	pairsExact: boolean;
+	/** The files the dry run listed, when it listed them all: Confirm asks for exactly these. */
+	ids: string[] | null;
+	mayRead: boolean;
+}
+const closedAccept = (): AcceptDialog => ({ open: false, loading: false, error: '', count: 0, hasMore: false, skipped: [], pairs: [], pairsExact: false, ids: null, mayRead: false });
+/** Pairs shown in the confirm; the rest are counted. */
+export const PAIRS_SHOWN = 5;
+
 
 // The Inbox page's state and actions, over the typed client, with no lifecycle hooks (InboxView adds them) so it is tested with the fake
 // server. It loads the picture rows and the "Other files" section as two lists (the second one collapsed: only its count is asked for
@@ -54,6 +77,8 @@ export function createInbox(deps: InboxDeps) {
 	const busy = ref<string[]>([]);
 	const accepting = ref(false);
 	const rescanning = ref(false);
+	/** The Undo that is running (a batch id): a second click on any Undo waits for it. */
+	const undoing = ref<string | null>(null);
 
 	const isBusy = (id: string) => busy.value.includes(id);
 	const say = (n: Notice | null) => (notice.value = n);
@@ -137,7 +162,9 @@ export function createInbox(deps: InboxDeps) {
 		}
 	}
 
-	async function run<T>(ids: string[], work: () => Promise<T>): Promise<T> {
+	// One write per file at a time: a second click while the first runs (a double click, Enter held down) does nothing.
+	async function run<T extends Outcome>(ids: string[], work: () => Promise<T>): Promise<T | Outcome> {
+		if (ids.some(isBusy)) return { ok: false, message: 'That file is already being changed.' };
 		busy.value = [...busy.value, ...ids];
 		try {
 			return await work();
@@ -205,24 +232,71 @@ export function createInbox(deps: InboxDeps) {
 	}
 
 	// ---- Accept all ----
+	// The button is enabled when the files on screen include one it would link, or when there are more files than the page holds (the first page
+	// may hold none while a later one does). Clicking it asks the server what it WOULD do (a dry run), and Confirm stays off until that answers;
+	// Confirm then links what the dry run listed when it listed them, else the same filter.
 	const preview = computed(() => {
-		const f = deps.getFilters();
-		const plan = listPlan(f);
-		const parts = [plan.main ? main.value : null, plan.other ? other.value : null].filter((p): p is Part => p !== null);
-		// The server's count over the whole filter, when every part has one; else the rows on screen.
-		const counts = parts.map((p) => p.acceptable);
-		const server = counts.length > 0 && counts.every((c): c is number => c !== null) ? counts.reduce((a, b) => a + b, 0) : null;
-		return acceptPreview([...main.value.rows, ...other.value.rows], server);
+		const plan = listPlan(deps.getFilters());
+		const mainAll = !plan.main || main.value.rows.length >= main.value.total;
+		// a collapsed Other files section holds no rows at all: its documents may be accepted too, so the count is not the whole until it is opened
+		const otherAll = !plan.other || other.value.total === 0 || (otherFull.value && other.value.rows.length >= other.value.total);
+		return acceptPreview([...main.value.rows, ...other.value.rows], mainAll && otherAll);
 	});
+	/** A list is still loading or growing: its count would be stale, so Accept all waits for it. */
+	const listBusy = computed(() => loading.value || otherLoading.value || moreLoading.value);
 	const canAcceptAll = computed(() => {
 		const tab = deps.getFilters().tab;
-		return (tab === 'new' || tab === 'older') && preview.value.count > 0 && !accepting.value;
+		const maybe = preview.value.count > 0 || !preview.value.exact;
+		const anything = main.value.total + other.value.total > 0;
+		return (tab === 'new' || tab === 'older') && anything && maybe && !accepting.value && !listBusy.value && !acceptDialog.value.loading;
 	});
 
-	async function acceptAllNow(): Promise<Outcome> {
+	const acceptDialog = ref<AcceptDialog>(closedAccept());
+	let acceptToken = 0;
+
+	/** Where a row on screen would go, for naming the pairs of the preview. */
+	const knownRow = (id: string) => {
+		const f = [...main.value.rows, ...other.value.rows].find((r) => r.candidate_id === id);
+		return f ? { file: nameOf(f.rel_path), record: f.suggested_label } : null;
+	};
+
+	async function openAccept(): Promise<void> {
+		if (!canAcceptAll.value) return;
+		const token = ++acceptToken;
+		const filters = deps.getFilters();
+		acceptDialog.value = { ...closedAccept(), open: true, loading: true, mayRead: mayReadDocuments(filters) };
+		try {
+			const r = await acceptAll(api, acceptFilter(filters), { dryRun: true });
+			if (token !== acceptToken) return;
+			// The dry run's list is only trusted when it covers the whole count: Confirm then asks for exactly those files.
+			const listed = r.ids.length > 0 && r.ids.length === r.acceptable;
+			const named = listed ? acceptPairs(r.ids, r.items, knownRow) : null;
+			const fromRows = [...main.value.rows, ...other.value.rows].filter(isAcceptable).slice(0, PAIRS_SHOWN).map((f) => ({ file: nameOf(f.rel_path), record: f.suggested_label ?? 'a record' }));
+			// Where the files go: the server's own list when the page can name every file in it; else a few of the files on screen, said to be examples.
+			const pairs = named && named.pairs.length > 0 ? named.pairs : fromRows;
+			acceptDialog.value = {
+				...acceptDialog.value, loading: false, count: r.acceptable, hasMore: r.has_more, skipped: r.skipped, pairs, pairsExact: !!named?.all && pairs.length > 0,
+				ids: listed ? r.ids : null,
+			};
+		} catch (e) {
+			if (token !== acceptToken) return;
+			acceptDialog.value = { ...acceptDialog.value, loading: false, error: message(e, 'Could not check which files would be linked.') };
+		}
+	}
+
+	function closeAccept(): void {
+		acceptToken += 1;
+		acceptDialog.value = closedAccept();
+	}
+
+	/** Confirm: link what was previewed. Does nothing while the preview is loading, empty, or a run is already going. */
+	async function confirmAccept(): Promise<Outcome> {
+		const d = acceptDialog.value;
+		if (!d.open || d.loading || d.error || d.count < 1 || accepting.value) return { ok: false, message: 'Nothing to confirm yet.' };
 		accepting.value = true;
 		try {
-			const r = await acceptAll(api, acceptFilter(deps.getFilters()));
+			const r = await acceptAll(api, acceptFilter(deps.getFilters()), d.ids ? { candidateIds: d.ids } : {});
+			closeAccept();
 			say({
 				tone: r.linked > 0 ? 'ok' : 'warn',
 				text: r.linked > 0 ? acceptResultText(r.linked, r.skipped.length) : 'Nothing was linked: no found file matched exactly one record you can edit.',
@@ -232,13 +306,18 @@ export function createInbox(deps: InboxDeps) {
 			deps.onChanged?.();
 			return { ok: true };
 		} catch (e) {
+			closeAccept();
 			return failed(e, 'Could not accept the files.');
 		} finally {
 			accepting.value = false;
 		}
 	}
 
+	/** The Undo of a notice or a batch. One at a time: a second click while one runs does nothing. */
 	async function undo(u: NoticeUndo): Promise<Outcome> {
+		const key = u.kind === 'batch' ? u.id : u.ids.join(',');
+		if (undoing.value !== null) return { ok: false, message: 'An undo is already running.' };
+		undoing.value = key;
 		try {
 			if (u.kind === 'batch') {
 				const n = await undoBatch(api, u.id);
@@ -252,6 +331,8 @@ export function createInbox(deps: InboxDeps) {
 			return { ok: true };
 		} catch (e) {
 			return failed(e, 'Could not undo that.');
+		} finally {
+			undoing.value = null;
 		}
 	}
 
@@ -276,8 +357,8 @@ export function createInbox(deps: InboxDeps) {
 
 	return {
 		main, other, loading, otherLoading, moreLoading, error, otherError, otherOpen, notice, busy, accepting, rescanning,
-		preview, canAcceptAll, isBusy,
-		load, toggleOther, loadMoreMain, loadMoreOther, link, linkSuggested, dismiss, restore, acceptAllNow, undo, rescanNow,
+		preview, canAcceptAll, isBusy, undoing, listBusy, acceptDialog,
+		load, toggleOther, loadMoreMain, loadMoreOther, link, linkSuggested, dismiss, restore, openAccept, closeAccept, confirmAccept, undo, rescanNow,
 		dismissNotice: () => say(null),
 		cancel: () => {
 			mainGate.cancel();

@@ -87,6 +87,8 @@ function onInput() {
 }
 function setCollection(c: string) {
 	collection.value = c;
+	// A chosen record belongs to its own kind: switching kind clears it, so Link never links to a sample while the dialog shows tests.
+	if (picked.value && picked.value.collection !== c) picked.value = null;
 	results.value = [];
 	void search();
 }

@@ -3,11 +3,18 @@
 import type { Fact, Tone } from '@d1/ui';
 import type { CrawlerStatus, PersonWithoutAlias } from './inboxApi';
 
-/** The daemon claims scan requests about every 30 s and beats on each loop, so a heartbeat older than this means it is not running. */
-export const INBOX_HEARTBEAT_MAX_MS = 90_000;
+/**
+ * d1-inbox calls the daemon stale after 5 minutes without a heartbeat. The crawler beats every 30 s when idle and every 5 s while it scans
+ * (scripts/inbox_crawler/daemon.py tick_s, scan.py _ACTIVITY_EVERY_S), so a live daemon never comes near it and the verdict does not flap.
+ */
+export const INBOX_HEARTBEAT_MAX_MS = 5 * 60_000;
 
-export function isOnline(s: Pick<CrawlerStatus, 'last_heartbeat_at'> | null | undefined, now: number = Date.now()): boolean {
-	if (!s?.last_heartbeat_at) return false;
+/** Is the daemon running (paused counts: it still beats)? The endpoint's own verdict (status.daemon) wins; without one, the heartbeat decides. */
+export function isOnline(s: Pick<CrawlerStatus, 'last_heartbeat_at'> & Partial<Pick<CrawlerStatus, 'daemon'>> | null | undefined, now: number = Date.now()): boolean {
+	if (!s) return false;
+	if (s.daemon === 'alive' || s.daemon === 'paused') return true;
+	if (s.daemon === 'stale' || s.daemon === 'never') return false;
+	if (!s.last_heartbeat_at) return false;
 	const t = Date.parse(s.last_heartbeat_at);
 	return !Number.isNaN(t) && now - t < INBOX_HEARTBEAT_MAX_MS;
 }
@@ -17,10 +24,11 @@ export interface DaemonView {
 	tone: Tone;
 }
 
-/** Offline (no recent heartbeat), or online and running / paused. */
+/** Offline (no recent heartbeat), not started yet, or online and running / paused. */
 export function daemonView(s: CrawlerStatus | null, now: number = Date.now()): DaemonView {
+	if (s?.daemon === 'never' || (!s?.daemon && !s?.last_heartbeat_at)) return { label: 'Not started yet', tone: 'warning' };
 	if (!isOnline(s, now)) return { label: 'Offline', tone: 'danger' };
-	return s?.desired_state === 'paused' ? { label: 'Online, paused', tone: 'warning' } : { label: 'Online, running', tone: 'success' };
+	return s?.daemon === 'paused' || (!s?.daemon && s?.desired_state === 'paused') ? { label: 'Online, paused', tone: 'warning' } : { label: 'Online, running', tone: 'success' };
 }
 
 /** "12 Oct 2026, 14:05", or a dash when there is none. */
@@ -89,7 +97,7 @@ export interface AliasRow {
 export function aliasRows(people: readonly PersonWithoutAlias[]): AliasRow[] {
 	return [...people]
 		.sort((a, b) => a.full_name.localeCompare(b.full_name, undefined, { sensitivity: 'base' }))
-		.map((p) => ({ id: p.person_id, name: p.full_name || 'Unnamed', note: p.active ? '' : 'Former', to: `/home/people?q=${encodeURIComponent(p.full_name)}` }));
+		.map((p) => ({ id: p.person_id, name: p.full_name || 'Unnamed', note: [p.active ? '' : 'Former', p.has_login ? '' : 'no login yet'].filter(Boolean).join(', '), to: `/home/people?q=${encodeURIComponent(p.full_name)}` }));
 }
 
 export const SCAN_ALL_TEXT = 'Scan of every folder requested. It starts within about 30 seconds.';

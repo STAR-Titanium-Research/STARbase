@@ -5,7 +5,8 @@ import { SCAN_ALL_TEXT } from './adminView';
 
 // The Inbox crawler tab's state: GET /d1-inbox/admin (administrators only) and the Scan all button. No lifecycle hooks (the panel adds the
 // poll), so it is tested with the fake server. A failed refresh keeps what was shown, with the reason; a 404 says the server has no d1-inbox
-// yet, a 403 says the tab is for administrators.
+// yet (final: it stops asking), a 403 says the tab is for administrators (not final: the next poll asks again, a role can change), and anything
+// else, a 401 included, is an error line.
 
 export type Missing = 'none' | 'no-endpoint' | 'not-admin';
 
@@ -21,7 +22,7 @@ export function createInboxAdmin(api: HostApi) {
 	let busy = false;
 
 	async function load(): Promise<void> {
-		if (busy || missing.value !== 'none') return;
+		if (busy || missing.value === 'no-endpoint') return;
 		busy = true;
 		const token = gate.begin();
 		try {
@@ -29,10 +30,11 @@ export function createInboxAdmin(api: HostApi) {
 			if (!gate.isCurrent(token)) return;
 			data.value = next;
 			error.value = '';
+			missing.value = 'none';
 		} catch (e) {
 			if (!gate.isCurrent(token)) return;
 			if (e instanceof InboxApiError && e.status === 404) missing.value = 'no-endpoint';
-			else if (e instanceof InboxApiError && (e.status === 403 || e.status === 401)) missing.value = 'not-admin';
+			else if (e instanceof InboxApiError && e.status === 403) missing.value = 'not-admin';
 			else error.value = `Could not refresh the Inbox crawler status: ${e instanceof Error ? e.message : 'request failed'}`;
 		} finally {
 			busy = false;

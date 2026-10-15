@@ -3,20 +3,27 @@
 // code and extensions (the d1-record-access error shape, plan Global Constraints: 401 / 403 / 404 / 409 / 400 / 429), so a page shows the
 // text it is given.
 //
-// THE PAYLOAD CONTRACT. The spec fixes the routes and the d1_private.file_candidates columns (migration 193) but leaves the JSON shapes
-// open. These interfaces are what this page expects; the endpoint worker (stream B) should match them, and every field marked "optional"
-// may be left out. Answers may be the bare JSON or wrapped as `{ data: ... }` (both are read), and a list may carry `meta`.
+// THE PAYLOAD CONTRACT is d1-inbox's own (core/extensions/d1-inbox/index.js, stream B, header comment and fileOut / shapeSummary / the routes):
+// the server is the source of truth and these interfaces follow it. Every answer is `{ data: ... }` (a list also carries `meta`); the client also
+// reads a bare body. Fields marked "optional" may be left out.
 //
-//   GET  /d1-inbox/summary              -> InboxSummary (see @d1/ui inboxSummary.ts; the badge and Home panel read it too)
-//   GET  /d1-inbox/files?<FilesQuery>   -> { data: FoundFile[], meta: { total, acceptable? } }
-//   POST /d1-inbox/link                 { items: [{ candidate_id, collection, record_id }] } -> LinkResult
-//   POST /d1-inbox/accept-all           { filter: FilesQuery } -> AcceptAllResult
-//   POST /d1-inbox/dismiss | /restore   { candidate_ids: string[] } -> { changed: number }
-//   POST /d1-inbox/undo                 { link_batch_id } -> { undone: number }
-//   POST /d1-inbox/rescan               {} -> { queued: true }   (429 when asked again within 10 minutes; extensions.retry_after_seconds optional)
-//   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link } -> InboxPrefs
-//   GET  /d1-inbox/admin                -> InboxAdmin (administrators only)
-//   POST /d1-inbox/admin/scan-all       {} -> { queued: true }
+//   GET  /d1-inbox/summary              -> { data: InboxSummary } (see @d1/ui inboxSummary.ts; the badge and Home panel read it too)
+//   GET  /d1-inbox/files?<FilesQuery>   -> { data: FoundFile[], meta: { total, limit, offset, acceptable | null } }
+//   POST /d1-inbox/link                 { items: [{ candidate_id, collection, record_id }] } -> { data: { link_batch_id, linked: <count>, items } };
+//                                       403 when the caller cannot edit the record, 409 when someone else got there first
+//   POST /d1-inbox/accept-all           { filter, dry_run?, candidate_ids? } -> { data: { link_batch_id, linked: <count>, items, skipped: [{ candidate_id,
+//                                       reason }], has_more } }; a dry run changes nothing and answers the count it would link (`count`, or
+//                                       `acceptable`) and the files it would link (`ids`, or `items`); candidate_ids links exactly those
+//   POST /d1-inbox/dismiss | /restore   { candidate_ids } -> { data: { changed, changed_ids, unchanged_ids } }
+//   POST /d1-inbox/undo                 { link_batch_id } -> { data: { link_batch_id, undone } }
+//   POST /d1-inbox/rescan               202 { data: { queued: true } }; 429 (extensions.retry_after_seconds) within 10 minutes or while a scan is
+//                                       queued or running; 409 NO_FOLDER when the person has no folder
+//   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link } -> { data: { auto_link } }
+//   GET  /d1-inbox/admin                -> { data: InboxAdmin } (administrators only)
+//   POST /d1-inbox/admin/scan-all       202 { data: { queued: true } }; 409 ALREADY_QUEUED while one waits
+//
+// The client does not ask for meta.acceptable (the list's count of what Accept all would link): the dry run, asked when the confirm opens, is the
+// one count it trusts. A dry run that lists its files is previewed and confirmed file by file; one that does not is confirmed by the same filter.
 import { errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 
 const BASE = '/d1-inbox';
@@ -50,8 +57,13 @@ export interface FileOwner {
  */
 export interface FoundFile {
 	candidate_id: string;
-	/** The directus_files pointer row: the page asks the asset route for a thumbnail of an image kind with it. */
+	/** The directus_files pointer row. Directus cannot serve its bytes (storage 'star'), so the page draws no thumbnail from it. */
 	directus_files_id: string;
+	/** The file's name (directus_files.filename_download, else the last part of rel_path). */
+	name?: string;
+	mime_type?: string | null;
+	/** True once a person linked this document or other file and the crawler may read it to fingerprint it. */
+	adopted?: boolean;
 	kind: FileKind;
 	kind_confidence: number | null;
 	extracted: Record<string, unknown>;
@@ -63,7 +75,7 @@ export interface FoundFile {
 	suggested_record_id: string | null;
 	/** Server-resolved name of the suggested record ("S-0042"), or null when the caller cannot read it. */
 	suggested_label: string | null;
-	/** Optional: false when the caller may not edit the suggested record (so Link would be refused). */
+	/** Present when a suggestion is: false when the caller may not edit the suggested record (so Link would be refused). */
 	suggested_can_edit?: boolean;
 	duplicate_of: string | null;
 	/** Optional: whose Inbox the original is in, for "copy of a file in ...". */
@@ -121,13 +133,43 @@ export interface LinkItem {
 	collection: string;
 	record_id: string;
 }
+/** One link made (or, in a dry run, that would be): the file, the record, and the junction row it made. */
+export interface LinkedItem {
+	candidate_id: string;
+	collection: string;
+	record_id: string;
+	/** Optional: the server-resolved code of the record ("S-0042"). */
+	label?: string | null;
+	junction_id?: string;
+	adopted?: boolean;
+	already_linked?: boolean;
+}
 export interface LinkResult {
 	link_batch_id: string;
+	/** How many files were linked. */
 	linked: number;
+	items: LinkedItem[];
+}
+/** Why Accept all left a file for the person (the endpoint's codes): SURFACE_SCAN, NOT_EDITABLE, ALREADY_ON_RECORD, COPY, NOT_NEW... */
+export interface Skipped {
+	candidate_id: string;
+	reason: string;
 }
 export interface AcceptAllResult extends LinkResult {
-	/** Rows the filter matched that were not linked (not exact, not editable, a document the caller left alone...). */
-	skipped: Array<{ candidate_id: string; reason: string }>;
+	skipped: Skipped[];
+	/** More files matched than one run takes (500): run it again after this one. */
+	has_more: boolean;
+	/** A dry run: nothing was linked; `acceptable` is what a real run would link. */
+	dry_run: boolean;
+	/** The count a dry run answers (`count`, or `acceptable` in the first draft); for a real run, what it linked. */
+	acceptable: number;
+	/** The files a dry run would link (`ids`, or the candidate_ids of its `items`): Confirm can ask for exactly these. */
+	ids: string[];
+}
+export interface AcceptOptions {
+	dryRun?: boolean;
+	/** Link exactly these files (the ones a dry run listed), when the endpoint takes them. */
+	candidateIds?: string[];
 }
 
 export interface InboxPrefs {
@@ -137,6 +179,8 @@ export interface InboxPrefs {
 export interface CrawlerStatus {
 	desired_state: string | null;
 	interval_minutes: number | null;
+	/** The endpoint's own verdict from the heartbeat (5-minute rule): alive, paused, stale (no recent heartbeat), never (none yet). */
+	daemon: 'alive' | 'paused' | 'stale' | 'never' | null;
 	last_heartbeat_at: string | null;
 	daemon_started_at: string | null;
 	current_activity: string | null;
@@ -149,8 +193,10 @@ export interface CrawlerStatus {
 export interface PersonWithoutAlias {
 	person_id: string;
 	full_name: string;
-	/** A Former person (active = false) is not scanned unless scan_while_former is on. */
+	/** The list is of active people; a Former person is not scanned unless scan_while_former is on. */
 	active: boolean;
+	/** Whether the person has a login (a person with none will not open the Inbox). */
+	has_login: boolean;
 }
 export interface ScanError {
 	at: string | null;
@@ -164,8 +210,11 @@ export interface InboxAdmin {
 	/** Share-relative paths ("Users/zz9", "Shared/Old project") of folders no alias or share folder names. */
 	unmatched_folders: string[];
 	people_without_alias: PersonWithoutAlias[];
-	/** Optional: scan requests waiting for the daemon. */
+	/** Scan requests waiting for the daemon (queued plus running). */
 	queued_requests: number;
+	queue: { queued: number; running: number };
+	/** File candidates by state ({ new, linked, dismissed, gone }). */
+	candidates: Record<string, number>;
 }
 
 /**
@@ -255,6 +304,9 @@ export function parseFile(v: unknown): FoundFile | null {
 		owner: parseOwner(r.owner),
 	};
 	if (typeof r.suggested_can_edit === 'boolean') file.suggested_can_edit = r.suggested_can_edit;
+	if (str(r.name)) file.name = str(r.name) as string;
+	if (typeof r.mime_type === 'string') file.mime_type = r.mime_type;
+	if (typeof r.adopted === 'boolean') file.adopted = r.adopted;
 	return file;
 }
 
@@ -286,17 +338,53 @@ export const loadFiles = (api: HostApi, q: FilesQuery): Promise<FilesPage> =>
 		},
 	);
 
-export const linkFiles = (api: HostApi, items: LinkItem[]): Promise<LinkResult> =>
-	call(() => api.post(`${BASE}/link`, { items }), (b) => ({ link_batch_id: String(b.link_batch_id ?? ''), linked: num(b.linked) ?? items.length }));
+/** The items of a link or accept-all answer: the ones that name a file and a record. */
+function linkedItems(v: unknown): LinkedItem[] {
+	return (Array.isArray(v) ? v : [])
+		.filter((i: any) => i && typeof i.candidate_id === 'string' && typeof i.record_id === 'string')
+		.map((i: any): LinkedItem => {
+			const item: LinkedItem = { candidate_id: i.candidate_id, collection: String(i.collection ?? ''), record_id: i.record_id };
+			if (typeof i.label === 'string') item.label = i.label;
+			if (typeof i.junction_id === 'string') item.junction_id = i.junction_id;
+			if (typeof i.adopted === 'boolean') item.adopted = i.adopted;
+			if (i.already_linked === true) item.already_linked = true;
+			return item;
+		});
+}
 
-export const acceptAll = (api: HostApi, filter: FilesQuery): Promise<AcceptAllResult> =>
+/** How many files an answer says it linked: its `linked` count (a list, as an older draft sent it, counts its length), else its items. */
+const linkedCount = (b: any, items: LinkedItem[]): number => (Array.isArray(b.linked) ? b.linked.length : num(b.linked) ?? (b.dry_run === true ? 0 : num(b.count) ?? items.length));
+
+export const linkFiles = (api: HostApi, items: LinkItem[]): Promise<LinkResult> =>
 	call(
-		() => api.post(`${BASE}/accept-all`, { filter: filesParams(filter) }),
-		(b) => ({
-			link_batch_id: String(b.link_batch_id ?? ''),
-			linked: num(b.linked) ?? 0,
-			skipped: (Array.isArray(b.skipped) ? b.skipped : []).map((s: any) => ({ candidate_id: String(s?.candidate_id ?? ''), reason: String(s?.reason ?? '') })),
-		}),
+		() => api.post(`${BASE}/link`, { items }),
+		(b) => {
+			const done = linkedItems(b.items);
+			return { link_batch_id: String(b.link_batch_id ?? ''), linked: linkedCount(b, done), items: done };
+		},
+	);
+
+/**
+ * Accept all (decision D9). With `dryRun` nothing is changed: the answer says how many files a real run would link (`acceptable`), which it
+ * would leave and why (`skipped`), and whether more matched than one run takes (`has_more`). `candidateIds` asks for exactly those files.
+ */
+export const acceptAll = (api: HostApi, filter: FilesQuery, opts: AcceptOptions = {}): Promise<AcceptAllResult> =>
+	call(
+		() => api.post(`${BASE}/accept-all`, { filter: filesParams(filter), ...(opts.dryRun ? { dry_run: true } : {}), ...(opts.candidateIds ? { candidate_ids: opts.candidateIds } : {}) }),
+		(b) => {
+			const done = linkedItems(b.items);
+			const linked = linkedCount(b, done);
+			return {
+				link_batch_id: typeof b.link_batch_id === 'string' ? b.link_batch_id : '',
+				linked,
+				items: done,
+				skipped: (Array.isArray(b.skipped) ? b.skipped : []).map((s: any): Skipped => ({ candidate_id: String(s?.candidate_id ?? ''), reason: String(s?.reason ?? '') })),
+				has_more: b.has_more === true,
+				dry_run: b.dry_run === true,
+				acceptable: num(b.acceptable) ?? num(b.count) ?? (Array.isArray(b.ids) ? b.ids.length : linked),
+				ids: Array.isArray(b.ids) ? b.ids.filter((i: unknown): i is string => typeof i === 'string') : done.map((i) => i.candidate_id),
+			};
+		},
 	);
 
 export const dismissFiles = (api: HostApi, candidateIds: string[]): Promise<number> =>
@@ -326,6 +414,7 @@ export const savePrefs = (api: HostApi, prefs: InboxPrefs): Promise<InboxPrefs> 
 const adminStatus = (s: Record<string, any> | null | undefined): CrawlerStatus => ({
 	desired_state: str(s?.desired_state),
 	interval_minutes: num(s?.interval_minutes),
+	daemon: s?.daemon === 'alive' || s?.daemon === 'paused' || s?.daemon === 'stale' || s?.daemon === 'never' ? s.daemon : null,
 	last_heartbeat_at: str(s?.last_heartbeat_at),
 	daemon_started_at: str(s?.daemon_started_at),
 	current_activity: str(s?.current_activity),
@@ -345,8 +434,10 @@ export const loadAdmin = (api: HostApi): Promise<InboxAdmin> =>
 			unmatched_folders: (Array.isArray(b.unmatched_folders) ? b.unmatched_folders : []).filter((f: unknown): f is string => typeof f === 'string'),
 			people_without_alias: (Array.isArray(b.people_without_alias) ? b.people_without_alias : [])
 				.filter((p: any) => p && typeof p.person_id === 'string')
-				.map((p: any): PersonWithoutAlias => ({ person_id: p.person_id, full_name: String(p.full_name ?? ''), active: p.active !== false })),
+				.map((p: any): PersonWithoutAlias => ({ person_id: p.person_id, full_name: String(p.full_name ?? ''), active: p.active !== false, has_login: p.has_login === true })),
 			queued_requests: num(b.queued_requests) ?? 0,
+			queue: { queued: num(b.queue?.queued) ?? 0, running: num(b.queue?.running) ?? 0 },
+			candidates: Object.fromEntries(Object.entries(b.candidates && typeof b.candidates === 'object' ? b.candidates : {}).map(([k, v]) => [k, num(v) ?? 0])),
 		}),
 	);
 

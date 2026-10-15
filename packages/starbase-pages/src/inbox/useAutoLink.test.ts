@@ -53,13 +53,21 @@ describe('createAutoLink', () => {
 		expect(fake.files[0].state).toBe('new');
 	});
 
-	it('a server with no d1-inbox leaves the section out, with no error', async () => {
-		for (const status of [404, 403]) {
-			const api = { get: vi.fn(async () => { throw refused(status); }) } as unknown as HostApi;
+	it('a server with no d1-inbox (404) leaves the section out, with no error', async () => {
+		const api = { get: vi.fn(async () => { throw refused(404); }) } as unknown as HostApi;
+		const s = createAutoLink(api);
+		await s.load();
+		expect(s.absent.value).toBe(true);
+		expect(s.error.value).toBe('');
+	});
+
+	it('a refusal (403 or 401) is not "no endpoint": the section stays and says it, with Retry', async () => {
+		for (const status of [403, 401]) {
+			const api = { get: vi.fn(async () => { throw refused(status, 'Not allowed.'); }) } as unknown as HostApi;
 			const s = createAutoLink(api);
 			await s.load();
-			expect(s.absent.value).toBe(true);
-			expect(s.error.value).toBe('');
+			expect(s.absent.value).toBe(false);
+			expect(s.error.value).toBe('Not allowed.');
 		}
 	});
 

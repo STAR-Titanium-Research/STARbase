@@ -34,16 +34,34 @@ describe('createInboxAdmin', () => {
 		expect(s.scanning.value).toBe(false);
 	});
 
-	it('a server with no d1-inbox (404) and a non-administrator (403) are said, not errors; and it stops asking', async () => {
-		for (const [status, missing] of [[404, 'no-endpoint'], [403, 'not-admin']] as const) {
-			const get = vi.fn(async () => { throw refused(status); });
-			const s = createInboxAdmin({ get } as unknown as HostApi);
-			await s.load();
-			expect(s.missing.value).toBe(missing);
-			expect(s.error.value).toBe('');
-			await s.load();
-			expect(get).toHaveBeenCalledTimes(1);
-		}
+	it('a server with no d1-inbox (404) is said, not an error, and it stops asking for good', async () => {
+		const get = vi.fn(async () => { throw refused(404); });
+		const s = createInboxAdmin({ get } as unknown as HostApi);
+		await s.load();
+		expect(s.missing.value).toBe('no-endpoint');
+		expect(s.error.value).toBe('');
+		await s.load();
+		expect(get).toHaveBeenCalledTimes(1);
+	});
+
+	it('a non-administrator (403) is told so, and is asked again next time (a role can change); a 401 is an error line', async () => {
+		let status = 403;
+		const fake = createFakeInbox();
+		const get = vi.fn(async (path: string, config?: any) => {
+			if (status === 200) return fake.api.get(path, config);
+			throw refused(status);
+		});
+		const s = createInboxAdmin({ ...fake.api, get } as unknown as HostApi);
+		await s.load();
+		expect(s.missing.value).toBe('not-admin');
+		status = 401;
+		await s.load();
+		expect(s.error.value).toContain('Could not refresh');
+		status = 200;
+		await s.load();
+		expect(get).toHaveBeenCalledTimes(3);
+		expect(s.missing.value).toBe('none');
+		expect(s.data.value?.status.daemon).toBe('alive');
 	});
 
 	it('a failed refresh keeps the status that was shown and says why', async () => {

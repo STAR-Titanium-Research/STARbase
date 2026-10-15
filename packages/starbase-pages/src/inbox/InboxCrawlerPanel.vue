@@ -79,7 +79,7 @@ const errors = computed(() => {
 					</ul>
 				</Section>
 
-				<Section title="People without an alias" :count="noAlias.length" :empty="!noAlias.length" empty-text="Every person has a uni alias.">
+				<Section title="People without a uni alias" :count="noAlias.length" :empty="!noAlias.length" empty-text="Every active person has a uni alias.">
 					<p class="d1-note">Their personal folder is not scanned until an administrator sets a uni alias on the People page.</p>
 					<ul class="list" data-test="ic-no-alias">
 						<li v-for="p in noAlias" :key="p.id">

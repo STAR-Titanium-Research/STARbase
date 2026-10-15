@@ -1,6 +1,6 @@
 // What the Inbox does in bulk and says about it, as plain functions (no Vue, no network): Accept all (what it would link, the confirm), one
 // Undo per batch, the rescan messages and the consent text of the auto-link switch. Split from inboxModel.ts, which has the rows.
-import type { FilesQuery, FoundFile } from './inboxApi';
+import type { FilesQuery, FoundFile, LinkedItem, Skipped } from './inboxApi';
 import { linkTarget, needsReadNotice, type InboxFilters } from './inboxModel';
 
 /** What Accept all sends: the tab and the filters on screen, narrowed to exact short-ID matches (the endpoint links nothing else). */
@@ -29,26 +29,89 @@ export function isAcceptable(f: FoundFile): boolean {
 }
 
 export interface AcceptPreview {
+	/** How many of the files on screen Accept all would link (an estimate: the server's dry run, asked on click, is the count that counts). */
 	count: number;
 	/** Of those, documents and other files, each read once to fingerprint it. */
 	reads: number;
+	/** Every matching file is on screen, so `count` is the whole count and not just the first page's. */
+	exact: boolean;
 }
 
-/** What Accept all would do with these rows. A server count over the whole filter (meta.acceptable) wins over the rows on screen. */
-export function acceptPreview(rows: readonly FoundFile[], serverCount: number | null = null): AcceptPreview {
+/** What Accept all would do with these rows; `loadedAll` says the rows are every file the filter matches. */
+export function acceptPreview(rows: readonly FoundFile[], loadedAll = true): AcceptPreview {
 	const acceptable = rows.filter(isAcceptable);
-	return { count: serverCount ?? acceptable.length, reads: acceptable.filter((f) => needsReadNotice(f.kind)).length };
+	return { count: acceptable.length, reads: acceptable.filter((f) => needsReadNotice(f.kind)).length, exact: loadedAll };
 }
 
 const files = (n: number) => `${n} found file${n === 1 ? '' : 's'}`;
 
-/** The confirm's text: names the count, what is linked and that it can be undone. */
-export function acceptConfirmText(p: AcceptPreview): string {
-	const reads = p.reads > 0 ? ` Linking ${p.reads === 1 ? 'one of them reads it' : `${p.reads} of them reads each`} once to fingerprint it.` : '';
-	return `Link ${files(p.count)} to the record that ${p.count === 1 ? 'its' : 'each'} short ID names? Only exact short-ID matches to a record you can edit are linked.${reads} You can undo the whole batch afterwards.`;
+/** What the confirm is about: the dry run's count, whether more files matched than one run takes, and whether documents may be among them. */
+export interface AcceptPlan {
+	count: number;
+	hasMore: boolean;
+	/** The filter can include documents or other files: linking reads each once to fingerprint it. */
+	mayRead: boolean;
 }
 
-export const acceptButtonText = (p: AcceptPreview): string => (p.count > 0 ? `Accept all (${p.count})` : 'Accept all');
+/** The confirm's text: names the count, what is linked, what is read and that it can be undone. */
+export function acceptConfirmText(p: AcceptPlan): string {
+	const reads = p.mayRead ? ' Any documents or other files among them are read once to fingerprint them.' : '';
+	const more = p.hasMore ? ' More files match than one run takes: this links the first 500, and you can run it again afterwards.' : '';
+	return `Link ${files(p.count)} to the record that ${p.count === 1 ? 'its' : 'each'} short ID names? Only exact short-ID matches to a record you can edit are linked.${reads}${more} You can undo the whole batch afterwards.`;
+}
+
+/** The kinds a filter can reach: does Accept all possibly read documents? (A kind filter on pictures cannot.) */
+export const mayReadDocuments = (f: InboxFilters): boolean => f.kind === 'any' || f.kind === 'document' || f.kind === 'other';
+
+const REASON_WORDS: Record<string, [string, string]> = {
+	SURFACE_SCAN: ['surface scan (added one by one)', 'surface scans (added one by one)'],
+	NOT_EDITABLE: ['file whose record you cannot edit', 'files whose record you cannot edit'],
+	COPY: ['copy of another file', 'copies of other files'],
+	ALREADY_ON_RECORD: ['file already on that record', 'files already on that record'],
+	NOT_NEW: ['file that is no longer new', 'files that are no longer new'],
+	NO_SUGGESTION: ['file with no record to link to', 'files with no record to link to'],
+	COLLECTION_NOT_SUPPORTED: ['file for a kind of record that cannot be linked yet', 'files for a kind of record that cannot be linked yet'],
+};
+
+/** "Left for you to decide: 2 files whose record you cannot edit, 1 surface scan (added one by one)." null when nothing was left. */
+export function skippedText(skipped: readonly Skipped[]): string | null {
+	if (!skipped.length) return null;
+	const counts = new Map<string, number>();
+	for (const s of skipped) counts.set(s.reason, (counts.get(s.reason) ?? 0) + 1);
+	const parts = [...counts].map(([reason, n]) => {
+		const words = REASON_WORDS[reason];
+		const plain = reason.toLowerCase().replace(/_/g, ' ');
+		return `${n} ${words ? words[n === 1 ? 0 : 1] : n === 1 ? `file (${plain})` : `files (${plain})`}`;
+	});
+	return `Left for you to decide: ${parts.join(', ')}.`;
+}
+
+export interface AcceptPair {
+	file: string;
+	record: string;
+}
+
+/**
+ * "3fa9c1d2_A1.tif to S-0042": where the files go. A file the page cannot name (the dry run listed it, but it is not among the rows on screen)
+ * is left out of the pairs, and `all` says whether none was. `names` finds a file's name and its suggested record by id (the rows on screen);
+ * an item of the dry run may carry the record's label itself.
+ */
+export function acceptPairs(
+	ids: readonly string[],
+	items: readonly LinkedItem[],
+	names: (candidateId: string) => { file: string; record: string | null } | null,
+): { pairs: AcceptPair[]; all: boolean } {
+	const pairs: AcceptPair[] = [];
+	for (const id of ids) {
+		const known = names(id);
+		if (!known) continue;
+		pairs.push({ file: known.file, record: items.find((i) => i.candidate_id === id)?.label ?? known.record ?? 'a record' });
+	}
+	return { pairs, all: pairs.length === ids.length };
+}
+
+/** The number is shown when it is the whole count; with more files than the page holds the button just says Accept all and the confirm counts. */
+export const acceptButtonText = (p: AcceptPreview): string => (p.exact && p.count > 0 ? `Accept all (${p.count})` : 'Accept all');
 
 /** "Linked 12 found files. 3 were left for you to decide." */
 export function acceptResultText(linked: number, skipped: number): string {

@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { AppLink, assetUrl, formatDate, recordRoute } from '@d1/ui';
+import { computed } from 'vue';
+import { AppLink, formatDate, recordRoute } from '@d1/ui';
 import type { FoundFile } from './inboxApi';
 import {
-	DOCUMENT_NOTICE, STRENGTH_LABEL, canChange, duplicateText, extractedText, folderOf, hasThumbnail, kindLabel, nameOf, needsReadNotice, ownerText,
+	DOCUMENT_NOTICE, STRENGTH_LABEL, canChange, duplicateText, extractedText, folderOf, kindLabel, nameOf, needsReadNotice, ownerText,
 	primaryAction, sizeText, suggestionOf,
 } from './inboxModel';
 import { BATCH_KIND_TEXT } from './inboxBulk';
 
-// One found file: a thumbnail (picture kinds only), its name and folder, what the crawler read and what it thinks the file belongs to
+// One found file: the icon of its kind, its name and folder, what the crawler read and what it thinks the file belongs to
 // (and why), and the buttons. The row only reports what was asked; the page does it (useInbox).
 const props = defineProps<{
 	file: FoundFile;
@@ -35,10 +35,7 @@ const copy = computed(() => duplicateText(props.file));
 const meta = computed(() => [sizeText(props.file.size_bytes), formatDate(props.file.source_mtime ?? props.file.first_seen_at)].filter(Boolean).join(' · '));
 const reads = computed(() => needsReadNotice(props.file.kind));
 
-// A thumbnail is asked of the asset route for the picture kinds only; a file it cannot draw (the route needs the bytes, which stay on the
-// share) falls back to the kind's icon instead of a broken image.
-const broken = ref(false);
-const thumb = computed(() => (hasThumbnail(props.file.kind) && props.file.directus_files_id && !broken.value ? assetUrl(props.file.directus_files_id, { width: 128, height: 128, fit: 'cover', format: 'webp' }) : null));
+// No thumbnail: a found file is a pointer row Directus cannot serve, so every row shows the icon of its kind (see hasThumbnail).
 const icon = computed(() => ({ sem_image: 'image', image: 'image', surface_scan: 'view_in_ar', document: 'description', other: 'draft' })[props.file.kind]);
 
 const linkedTo = computed(() => (props.file.linked_collection && props.file.linked_record_id ? recordRoute(props.file.linked_collection, props.file.linked_record_id) : null));
@@ -47,11 +44,8 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 </script>
 
 <template>
-	<li class="row" :class="{ busy, weak: suggestion?.weak }" :data-state="file.state" data-test="inbox-row">
-		<span class="thumb" aria-hidden="true">
-			<img v-if="thumb" :src="thumb" alt="" loading="lazy" width="64" height="64" @error="broken = true" />
-			<v-icon v-else :name="icon" />
-		</span>
+	<li class="row" :class="{ busy, weak: suggestion?.weak }" :data-state="file.state" :data-row-id="file.candidate_id" data-test="inbox-row">
+		<span class="thumb" aria-hidden="true"><v-icon :name="icon" /></span>
 
 		<div class="main">
 			<div class="line">
@@ -95,7 +89,6 @@ const how = computed(() => (props.file.link_kind ? BATCH_KIND_TEXT[props.file.li
 .row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--d1-line); border-radius: 10px; background: var(--d1-tile); list-style: none; }
 .row.busy { opacity: 0.6; }
 .thumb { flex: none; display: grid; place-items: center; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; background: var(--d1-surface, var(--theme--background)); border: 1px solid var(--d1-line); color: var(--d1-dim); }
-.thumb img { width: 64px; height: 64px; object-fit: cover; display: block; }
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .name { font-size: var(--fs-md, 13px); font-weight: 650; overflow-wrap: anywhere; }

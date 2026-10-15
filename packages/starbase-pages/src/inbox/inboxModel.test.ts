@@ -78,8 +78,8 @@ describe('how a file reads', () => {
 		expect(kindLabel('document')).toBe('Document');
 		expect(kindLabel('other')).toBe('File');
 	});
-	it('a thumbnail is only for pictures', () => {
-		expect([hasThumbnail('sem_image'), hasThumbnail('image'), hasThumbnail('surface_scan'), hasThumbnail('document'), hasThumbnail('other')]).toEqual([true, true, false, false, false]);
+	it('has no thumbnail for any kind in v1 (Directus cannot serve a pointer row): the kind icon only', () => {
+		expect([hasThumbnail('sem_image'), hasThumbnail('image'), hasThumbnail('surface_scan'), hasThumbnail('document'), hasThumbnail('other')]).toEqual([false, false, false, false, false]);
 	});
 	it('shows only what the crawler read from an SEM image', () => {
 		expect(extractedText({ kv: 15, magnification: 5000, scale_bar: '2 µm', instrument: 'JEOL' })).toBe('15 kV · ×5,000 · 2 µm · JEOL');
@@ -152,7 +152,7 @@ describe('the row buttons', () => {
 	});
 	it('a surface scan is found but its button is off, with the notice', () => {
 		const f = exactMatch({ kind: 'surface_scan' });
-		expect(primaryAction(f)).toEqual({ kind: 'disabled', label: 'Link', reason: 'Surface scans can be added soon' });
+		expect(primaryAction(f)).toEqual({ kind: 'disabled', label: 'Add a surface scan', reason: 'Surface scans can be added soon' });
 		expect(SURFACE_SCAN_NOTICE).toBe('Surface scans can be added soon');
 		expect(canChange(f)).toBe(false);
 	});

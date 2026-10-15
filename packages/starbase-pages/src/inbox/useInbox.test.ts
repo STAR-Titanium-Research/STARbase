@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HostApi } from '@d1/ui';
 import { DEFAULT_FILTERS, type InboxFilters } from './inboxModel';
 import { createInbox } from './useInbox';
-import { createFakeInbox, exactMatch, foundFile } from './fakeInboxServer';
+import { createFakeInbox, exactMatch, foundFile, type FakeInboxOptions } from './fakeInboxServer';
 
-function setup(files = [exactMatch(), foundFile(), foundFile({ kind: 'surface_scan', rel_path: 'Users/ab1cd/scans/x.al3d' }), foundFile({ kind: 'document', rel_path: 'Users/ab1cd/notes.pdf' })], now?: () => number) {
-	const fake = createFakeInbox({ files, now });
+function setup(files = [exactMatch(), foundFile(), foundFile({ kind: 'surface_scan', rel_path: 'Users/ab1cd/scans/x.al3d' }), foundFile({ kind: 'document', rel_path: 'Users/ab1cd/notes.pdf' })], now?: () => number, opts: FakeInboxOptions = {}) {
+	const fake = createFakeInbox({ files, now, ...opts });
 	let filters: InboxFilters = { ...DEFAULT_FILTERS };
 	const changed = vi.fn();
 	const inbox = createInbox({ api: fake.api, getFilters: () => filters, onChanged: changed });
@@ -99,8 +99,8 @@ describe('linking', () => {
 		const file = inbox.main.value.rows.find((f) => f.match_strength === 'short_id')!;
 		fake.files.find((f) => f.candidate_id === file.candidate_id)!.state = 'linked';
 		const r = await inbox.linkSuggested(file);
-		expect(r).toEqual({ ok: false, message: 'Someone already linked this file.' });
-		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: 'Someone already linked this file.' });
+		expect(r).toEqual({ ok: false, message: 'That file was already linked.' });
+		expect(inbox.notice.value).toMatchObject({ tone: 'bad', text: 'That file was already linked.' });
 		await vi.waitFor(() => expect(inbox.main.value.rows.map((f) => f.candidate_id)).not.toContain(file.candidate_id));
 	});
 	it('marks a row busy while its write runs', async () => {
@@ -129,32 +129,151 @@ describe('dismissing', () => {
 	});
 });
 
-describe('Accept all', () => {
-	it('previews the count the server evaluated, and links the exact matches in one batch with one Undo', async () => {
-		const { inbox, fake } = setup([exactMatch(), exactMatch({}, '9ab3c4d5', 'S-0043'), foundFile(), exactMatch({ kind: 'surface_scan' }, '77aa88bb', 'S-9')]);
-		await inbox.load();
-		expect(inbox.preview.value.count).toBe(2);
+describe('Accept all (a dry run first, then Confirm)', () => {
+	const exactFiles = () => [exactMatch(), exactMatch({}, '9ab3c4d5', 'S-0043'), foundFile(), exactMatch({ kind: 'surface_scan' }, '77aa88bb', 'S-9')];
+
+	it('the button needs no server count: it is on when the rows on screen hold a file it would link, and waits while a list loads', async () => {
+		const { inbox, fake } = setup(exactFiles());
+		expect(inbox.canAcceptAll.value).toBe(false);
+		const loadingNow = inbox.load();
+		expect(inbox.canAcceptAll.value).toBe(false);
+		await loadingNow;
+		expect(inbox.preview.value).toMatchObject({ count: 2, exact: true });
 		expect(inbox.canAcceptAll.value).toBe(true);
-		await inbox.acceptAllNow();
+		// the list never asks for the server's acceptable count
+		expect(fake.calls.filter((c) => c.path === '/d1-inbox/files').every((c) => !('acceptable' in (c.params ?? {})))).toBe(true);
+	});
+
+	it('opening it asks the server for a dry run, changes nothing, and Confirm links exactly the files it listed', async () => {
+		const { inbox, fake } = setup(exactFiles());
+		await inbox.load();
+		const opening = inbox.openAccept();
+		expect(inbox.acceptDialog.value).toMatchObject({ open: true, loading: true });
+		await opening;
+		const d = inbox.acceptDialog.value;
+		expect(d).toMatchObject({ loading: false, count: 2, hasMore: false, pairsExact: true, ids: [fake.files[0].candidate_id, fake.files[1].candidate_id] });
+		expect(d.pairs).toEqual([{ file: '3fa9c1d2_A1.tif', record: 'S-0042' }, { file: '9ab3c4d5_A1.tif', record: 'S-0043' }]);
+		expect(d.skipped).toEqual([{ candidate_id: fake.files[3].candidate_id, reason: 'SURFACE_SCAN' }]);
+		expect(fake.calls.at(-1)?.body).toMatchObject({ dry_run: true });
+		expect(fake.files.every((f) => f.state === 'new')).toBe(true);
+
+		const r = await inbox.confirmAccept();
+		expect(r).toEqual({ ok: true });
+		const real = fake.calls.filter((c) => c.path === '/d1-inbox/accept-all').at(-1)!;
+		expect(real.body).not.toHaveProperty('dry_run');
+		expect(real.body).toMatchObject({ candidate_ids: d.ids });
+		expect(inbox.acceptDialog.value.open).toBe(false);
 		expect(inbox.notice.value).toMatchObject({ tone: 'ok', text: 'Linked 2 found files.', undo: { kind: 'batch' } });
 		expect(fake.files.filter((f) => f.link_kind === 'bulk')).toHaveLength(2);
-		expect(inbox.canAcceptAll.value).toBe(false);
-		await inbox.undo(inbox.notice.value!.undo!);
-		expect(fake.files.filter((f) => f.state === 'linked')).toHaveLength(0);
 	});
-	it('is off on the Recently linked and Dismissed tabs and when nothing matches exactly', async () => {
-		const { inbox, setFilters } = setup([foundFile()]);
+
+	it('Confirm links the previewed files, not whatever matches by then: a file that arrives between the preview and Confirm is left alone', async () => {
+		const { inbox, fake } = setup(exactFiles());
 		await inbox.load();
+		await inbox.openAccept();
+		fake.files.push(exactMatch({}, '55ee66ff', 'S-7'));
+		await inbox.confirmAccept();
+		expect(fake.files.filter((f) => f.state === 'linked')).toHaveLength(2);
+		expect(fake.files.at(-1)?.state).toBe('new');
+	});
+
+	it('against an endpoint that only counts (no ids in the dry run), it confirms by the same filter and says the pairs are examples', async () => {
+		const { inbox, fake } = setup(exactFiles(), undefined, { dryRunIds: false });
+		await inbox.load();
+		await inbox.openAccept();
+		expect(inbox.acceptDialog.value).toMatchObject({ count: 2, ids: null, pairsExact: false });
+		expect(inbox.acceptDialog.value.pairs).toHaveLength(2);
+		await inbox.confirmAccept();
+		const real = fake.calls.filter((c) => c.path === '/d1-inbox/accept-all').at(-1)!;
+		expect(real.body).not.toHaveProperty('candidate_ids');
+		expect(real.body).toMatchObject({ filter: { tab: 'new', strength: 'short_id' } });
+		expect(fake.files.filter((f) => f.state === 'linked')).toHaveLength(2);
+	});
+
+	it('Confirm does nothing while the dry run is still out, and after a failed one', async () => {
+		const { inbox, fake } = setup(exactFiles());
+		await inbox.load();
+		const opening = inbox.openAccept();
+		expect(await inbox.confirmAccept()).toMatchObject({ ok: false });
+		await opening;
+		fake.api.post = vi.fn(async () => { throw Object.assign(new Error('x'), { response: { status: 500, data: { errors: [{ message: 'The server is busy.' }] } } }); });
+		await inbox.closeAccept();
+		await inbox.openAccept();
+		expect(inbox.acceptDialog.value).toMatchObject({ loading: false, error: 'The server is busy.' });
+		expect(await inbox.confirmAccept()).toMatchObject({ ok: false });
+	});
+
+	it('Confirm is guarded against a second click while it runs: one request, one batch', async () => {
+		const { inbox, fake } = setup(exactFiles());
+		await inbox.load();
+		await inbox.openAccept();
+		const first = inbox.confirmAccept();
+		const second = inbox.confirmAccept();
+		expect(await second).toMatchObject({ ok: false });
+		await first;
+		expect(fake.calls.filter((c) => c.path === '/d1-inbox/accept-all' && !(c.body as { dry_run?: boolean }).dry_run)).toHaveLength(1);
+	});
+
+	it('says what it reads: with more files than one run takes, hasMore; and nothing to link when nothing matches', async () => {
+		const { inbox } = setup([foundFile()]);
+		await inbox.load();
+		// no exact match on screen and everything loaded: the button stays off, so there is no dialog to open
 		expect(inbox.canAcceptAll.value).toBe(false);
+		await inbox.openAccept();
+		expect(inbox.acceptDialog.value.open).toBe(false);
+	});
+
+	it('names a record the caller cannot edit as left for them, and links the rest', async () => {
+		const { inbox, fake } = setup(exactFiles(), undefined, { editable: (_c, id) => !id.includes('9ab3c4d5') });
+		await inbox.load();
+		await inbox.openAccept();
+		expect(inbox.acceptDialog.value.count).toBe(1);
+		expect(inbox.acceptDialog.value.skipped.map((s) => s.reason).sort()).toEqual(['NOT_EDITABLE', 'SURFACE_SCAN']);
+		await inbox.confirmAccept();
+		expect(fake.files.filter((f) => f.state === 'linked')).toHaveLength(1);
+	});
+
+	it('shows the Undo of the returned batch, and one Undo reverses it', async () => {
+		const { inbox, fake } = setup(exactFiles());
+		await inbox.load();
+		await inbox.openAccept();
+		await inbox.confirmAccept();
+		const undo = inbox.notice.value!.undo!;
+		expect(undo).toMatchObject({ kind: 'batch' });
+		await inbox.undo(undo);
+		expect(fake.files.filter((f) => f.state === 'linked')).toHaveLength(0);
+		expect(inbox.notice.value?.text).toBe('Undone: 2 found files back in your Inbox.');
+	});
+
+	it('an Undo is one at a time: a second click while one runs does nothing', async () => {
+		const { inbox, fake } = setup(exactFiles());
+		await inbox.load();
+		await inbox.openAccept();
+		await inbox.confirmAccept();
+		const undo = inbox.notice.value!.undo!;
+		const first = inbox.undo(undo);
+		expect(inbox.undoing.value).not.toBeNull();
+		expect(await inbox.undo(undo)).toMatchObject({ ok: false });
+		await first;
+		expect(inbox.undoing.value).toBeNull();
+		expect(fake.calls.filter((c) => c.path === '/d1-inbox/undo')).toHaveLength(1);
+	});
+
+	it('is off on the Recently linked and Dismissed tabs', async () => {
+		const { inbox, setFilters } = setup(exactFiles());
+		await inbox.load();
 		setFilters({ tab: 'linked' });
 		expect(inbox.canAcceptAll.value).toBe(false);
 	});
-	it('says so when nothing was linked', async () => {
-		const { inbox } = setup([foundFile()]);
+
+	it('a second click on a row\'s Link while its write runs does nothing', async () => {
+		const { inbox, fake } = setup(exactFiles());
 		await inbox.load();
-		await inbox.acceptAllNow();
-		expect(inbox.notice.value).toMatchObject({ tone: 'warn' });
-		expect(inbox.notice.value?.undo).toBeUndefined();
+		const file = inbox.main.value.rows[0];
+		const first = inbox.linkSuggested(file);
+		expect(await inbox.linkSuggested(file)).toMatchObject({ ok: false });
+		await first;
+		expect(fake.calls.filter((c) => c.path === '/d1-inbox/link')).toHaveLength(1);
 	});
 });
 

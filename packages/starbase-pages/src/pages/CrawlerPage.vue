@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
 import { AppLink, PageShell, useExplorerHost } from '@d1/ui';
 import ExplorerView from '../ExplorerView.vue';
 import CrawlerPanel from '../crawler/CrawlerPanel.vue';
@@ -15,7 +15,6 @@ import InboxCrawlerPanel from '../inbox/InboxCrawlerPanel.vue';
 // non-admin itself.
 const host = useExplorerHost();
 const route = useRoute();
-const router = useRouter();
 const access = computed(() => crawlerAccess(host.adminKnown.value, host.isAdmin.value));
 
 const TABS = [
@@ -25,7 +24,8 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id'];
 const tab = computed<TabId>(() => (route.query.tab === 'inbox' ? 'inbox' : 'force'));
 const title = computed(() => (tab.value === 'inbox' ? 'Inbox crawler' : 'Force Crawler'));
-const setTab = (id: TabId) => void router.replace({ path: route.path, query: id === 'force' ? {} : { tab: id } });
+// The tabs are links (the tab is in the address): the one you are on carries aria-current.
+const tabTo = (id: TabId) => (id === 'force' ? '/crawler' : `/crawler?tab=${id}`);
 </script>
 
 <template>
@@ -37,19 +37,17 @@ const setTab = (id: TabId) => void router.replace({ path: route.path, query: id 
 				Admins only. The Force Crawler controls the host's .mat processing queue; ask an administrator if you need something changed.
 			</p>
 			<template v-else>
-				<div class="tabs" role="tablist" aria-label="Crawlers">
-					<button
+				<nav class="tabs" aria-label="Crawlers">
+					<AppLink
 						v-for="t in TABS"
 						:key="t.id"
-						type="button"
-						role="tab"
+						:to="tabTo(t.id)"
 						class="tab"
 						:class="{ on: tab === t.id }"
-						:aria-selected="tab === t.id"
+						:aria-current="tab === t.id ? 'page' : undefined"
 						:data-test="`crawler-tab-${t.id}`"
-						@click="setTab(t.id)"
-					>{{ t.label }}</button>
-				</div>
+					>{{ t.label }}</AppLink>
+				</nav>
 				<InboxCrawlerPanel v-if="tab === 'inbox'" />
 				<CrawlerPanel v-else />
 			</template>
@@ -60,8 +58,8 @@ const setTab = (id: TabId) => void router.replace({ path: route.path, query: id 
 <style scoped>
 .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--d1-line); }
 .tab {
-	display: inline-flex; align-items: center; height: 34px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
-	background: none; color: var(--d1-dim); font: inherit; font-size: var(--fs-md, 13px); font-weight: 600; cursor: pointer;
+	display: inline-flex; align-items: center; height: 34px; padding: 0 12px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+	color: var(--d1-dim); font-size: var(--fs-md, 13px); font-weight: 600; text-decoration: none;
 }
 .tab:hover { color: var(--theme--foreground); }
 .tab.on { color: var(--theme--foreground); border-bottom-color: var(--d1-accent, var(--theme--primary)); }

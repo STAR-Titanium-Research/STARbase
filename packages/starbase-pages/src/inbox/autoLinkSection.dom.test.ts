@@ -107,6 +107,13 @@ describe('Settings → Inbox', () => {
 		expect(fake.files[0].state).toBe('new');
 	});
 
+	it('a refusal (403) is not "no d1-inbox": the section stays and says why, with Retry', async () => {
+		await mount((base) => ({ ...base, get: async () => { throw Object.assign(new Error('x'), { response: { status: 403, data: { errors: [{ message: 'Not allowed.' }] } } }); } }));
+		await vi.waitFor(() => expect(document.querySelector('[data-test="autolink-section"]')).not.toBeNull());
+		await vi.waitFor(() => expect(document.body.textContent).toContain('Not allowed.'));
+		expect(document.body.textContent).toContain('Retry');
+	});
+
 	it('draws nothing at all when the server has no d1-inbox', async () => {
 		await mount((base) => ({ ...base, get: async () => { throw Object.assign(new Error('x'), { response: { status: 404, data: {} } }); } }));
 		await new Promise((r) => setTimeout(r, 30));

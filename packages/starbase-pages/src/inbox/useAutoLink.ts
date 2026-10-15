@@ -6,8 +6,8 @@ import { undoResultText } from './inboxBulk';
 // The Settings section for automatic linking (decision D10): the per-person switch (off by default) and the "Recently auto-linked" list,
 // with its undo. No lifecycle hooks, so it is tested with the fake server (AutoLinkSection adds them).
 //
-// A server without d1-inbox (404) or a refusal (403, 401) leaves the section out (`absent`): Settings must work before the server side is
-// deployed. A failed save puts the switch back and says so, with Retry.
+// A server without d1-inbox (404) leaves the section out (`absent`): Settings must work before the server side is
+// deployed. A refusal (403, 401) is an error line with Retry, as it may pass. A failed save puts the switch back and says so, with Retry.
 
 export const RECENT_LIMIT = 20;
 
@@ -23,7 +23,7 @@ export function createAutoLink(api: HostApi, onChanged?: () => void) {
 	const recentError = ref('');
 	const undoing = ref<string | null>(null);
 
-	const missing = (e: unknown) => e instanceof InboxApiError && (e.status === 404 || e.status === 403 || e.status === 401);
+	const missing = (e: unknown) => e instanceof InboxApiError && e.status === 404;
 
 	async function loadRecent(): Promise<void> {
 		const token = gate.begin();
