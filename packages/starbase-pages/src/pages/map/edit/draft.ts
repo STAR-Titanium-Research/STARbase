@@ -267,7 +267,8 @@ export function wireProblem(body: DraftBody, from: WireEnd, to: WireEnd): string
 		const input = inputSampleOf(body, { key: a.key, row: fromRow });
 		if (b.key !== input) {
 			if (b.existing) return 'That sample already exists with its own history: it cannot be made by this operation.';
-			if (body.wires.some((w) => w.to.key === b.key && itemOf(body, w.from.key)?.kind === 'operation')) return 'That sample is already made by another operation.';
+			// A wire back to the sample an operation took in is in place work, not making it.
+			if (body.wires.some((w) => w.to.key === b.key && itemOf(body, w.from.key)?.kind === 'operation' && !backEdge(body, w))) return 'That sample is already made by another operation.';
 		}
 	} else if (b.kind === 'operation') {
 		if (b.existing && !b.attach) return 'Only an operation without an input sample can be attached.';

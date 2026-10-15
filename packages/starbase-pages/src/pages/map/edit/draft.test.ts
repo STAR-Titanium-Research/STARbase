@@ -219,6 +219,16 @@ describe('wire / unwire', () => {
 		expect(wireProblem(b, { key: 'n6', row: 0 }, { key: 'n2' })).toMatch(/already made by another operation/);
 	});
 
+	it('a pass back onto its own sample does not count as making it', () => {
+		// n1 → pass n2 (row n3) → back to n1; another operation n4 (row n5) may still make n1.
+		const b = run([{ type: 'addSample' }, { type: 'addPass', sample: { key: 'n1' }, values: {} }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } }]);
+		expect(wireProblem(b, { key: 'n4', row: 0 }, { key: 'n1' })).toBeNull();
+		// ...but a real maker still blocks a second one.
+		const made = apply(b, { type: 'wire', from: { key: 'n4', row: 0 }, to: { key: 'n1' } });
+		const second = apply(made, { type: 'addContainer', kind: 'operation', source: { from: 'blank' } });
+		expect(wireProblem(second, { key: 'n6', row: 0 }, { key: 'n1' })).toMatch(/already made by another operation/);
+	});
+
 	it('an existing sample cannot be made by an operation, but an operation can leave it in place', () => {
 		let b = run([{ type: 'addExistingSamples', samples: [{ id: 's', version: 1 }] }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
 		b = apply(b, { type: 'addExistingSamples', samples: [{ id: 't', version: 1 }] }); // n4
