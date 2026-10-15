@@ -3737,6 +3737,15 @@ ll_up="$ll_up
 $fl_up"
 ll_down="$fl_down
 $ll_down"
+# 20261015000194 (people create without the inbox alias columns) rewrites one Lab Member row (people create: its field list) and needs no backup
+# (down puts '*' back), so, like 169, it is peeled with 168 (down first of all) and replayed with it (up last).
+PC=db/migrations/20261015000194_people_create_no_inbox_fields.sql
+pc_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$PC")
+pc_down=$(awk '/-- migrate:down/{f=1;next}f' "$PC")
+ll_up="$ll_up
+$pc_up"
+ll_down="$pc_down
+$ll_down"
 # 20261012000163 (per-user usage scores) also keeps tables in d1_private, and runs after 161: this
 # migration's down only empties the schema (and drops it) once 163's down has run too.
 UU=db/migrations/20261012000163_user_usage.sql

@@ -236,6 +236,11 @@ record, decided by the same function `d1-access-guard` uses. A view-only user is
 | `POST /d1-inbox/auto-link` | machine | only for opted-in people, exact short-ID, one record, caller-as-person edit check; the crawler sends the header `X-Inbox-Crawler-Secret` (env `D1_INBOX_CRAWLER_SECRET`, compared in constant time; 401 when the header is missing, 403 when wrong or when the secret is not configured); body `{candidate_ids: [...]}`, answer `{data: {results: [{candidate_id, status: linked/skipped/error, reason?, link_batch_id?}]}}`; backlog, team-folder, copy, document and surface-scan files are skipped |
 | `GET /d1-inbox/admin`, `POST /d1-inbox/admin/scan-all` | administrator | status, last scan, errors, unmatched folders, people without an alias |
 
+*As built (stream B):* a file already linked to the chosen record (for example in Data Studio) is refused 409
+`ALREADY_ON_RECORD`: the table's CHECK needs a junction id the batch itself made, and undo must never delete a row it
+did not create. Accept-all skips such rows and also documents (a bulk link would read them without the person
+having seen the notice); auto-link also skips backlog, team-folder, copy and surface-scan files.
+
 Visibility of a candidate: its owner person's login; any active member of its owner team (the first member to
 link or dismiss resolves it for everyone); administrators (all). Candidates are never readable through
 Directus's REST (they live in `d1_private`).
