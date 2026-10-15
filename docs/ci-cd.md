@@ -56,12 +56,12 @@ Things worth knowing:
 | Job | What it proves | Runs on a PR when it touches |
 |---|---|---|
 | Lint and quick checks | The hooks in `.pre-commit-config.yaml` (whitespace, YAML/JSON, ruff, sqlfluff, hadolint, geometry copies in sync), geometry unit tests and every extension's `index.test.mjs`, the CI-plan tests, and `tests/phase0_smoke.sh` including `docker compose config` | always |
-| Schema migrations | Migrations and seed apply. Then the phase 1/6/7 schema tests run. Then [`migration_roundtrip.sh`](../scripts/ci/migration_roundtrip.sh) rolls back **every** migration (each down must succeed), fails on any table, view, function, type or schema left behind, and applies them all again | `db/`, `scripts/`, `tests/`, `d1-access-guard` |
+| Schema migrations | Migrations and seed apply. Then the phase 1/6/7 schema tests run. Then [`migration_roundtrip.sh`](../scripts/ci/migration_roundtrip.sh) rolls back **every** migration (each down must succeed), fails on any table, view, function, type or schema left behind, and applies them all again | `db/`, `scripts/`, `tests/`, `d1-access-guard`, `d1-inbox` (its SQL is prepared against the real schema in phase 1) |
 | Scripts and diagnostics | `tests/scripts` against a real database, including the diag goldens. A skipped DB test fails the job | the same, plus the force app's changelog |
 | Service images | Each selected Dockerfile in `docker-compose.yml` builds, and its tests run inside the image (diag-service and filter-service tests read files outside their image, so Python services runs them) | that image's directory |
 | Directus extensions | Each selected extension with its own lockfile installs, builds and passes its own tests, exactly as on the server | that extension's directory |
 | Force app JS | `@d1/force-plotting`, `force-app-web` and `force-app-desktop` tests, typechecks and builds | the force app's web/desktop, either `packages/`, the force dashboard, the root `package*.json` |
-| Explorer UI | `@d1/ui` tests, typechecks of the Explorer pages, the lab dashboard and the campaign interface, and the workspace extension builds | `packages/d1-ui`, the workspace extensions, the root `package*.json` |
+| Explorer UI | `@d1/ui` tests, typechecks of the Explorer pages, the lab dashboard and the campaign interface, and the workspace extension builds | `packages/d1-ui`, the workspace extensions, the root `package*.json`, `tests/fixtures/d1-inbox/` and `d1-inbox` (its contract fixtures are replayed through the client) |
 | Force app Python (recorder backend) | Backend tests on Python 3.11 with the `nidaq` extra, as the release freezes it | `apps/force-app/backend/` |
 | Python services | Backup server, bug-report relay, filter service and diag service on Python 3.12 (as their images run), each in its own venv | that service (filter: also the backend's `d1lc.py`; diag: also `scripts/diag/`) |
 | **CI passed** | Every job above passed or was not needed | always |
