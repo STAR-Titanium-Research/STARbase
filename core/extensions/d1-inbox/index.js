@@ -1009,7 +1009,8 @@ export function mount(router, context, deps = {}) {
     const [queue] = rowsOf(await database.raw(SQL.adminQueue, []));
     const s = state ?? {};
     const beat = s.last_heartbeat_at ? new Date(s.last_heartbeat_at).getTime() : null;
-    const daemon = beat === null ? 'never' : s.desired_state === 'paused' ? 'paused' : clock().getTime() - beat > DAEMON_STALE_MS ? 'stale' : 'alive';
+    // never or stale FIRST: a daemon that stopped heartbeating is not "paused" just because its desired state says so
+    const daemon = beat === null ? 'never' : clock().getTime() - beat > DAEMON_STALE_MS ? 'stale' : s.desired_state === 'paused' ? 'paused' : 'alive';
     const unmatched = asJson(s.unmatched_folders);
     // recent failures: the daemon's last error (its time is when the last scan ended) and the failed scan requests
     const errors = [
