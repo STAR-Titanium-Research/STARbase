@@ -28,7 +28,7 @@ MAIN_CHECKOUT="${D1_MAIN_CHECKOUT:-D:\\Users\\CMBE Admn 3214022001\\Documents\\G
 NAME="${D1_PREVIEW_NAME:-d1-preview}"; NET="$NAME"; PG="${NAME}-pg"; DX="${NAME}-directus"; PORT="${D1_PREVIEW_PORT:-18055}"
 LIVE_PG=d1-database-postgres-1; LIVE_DX=d1-database-directus-1
 FILES_VOL="${NAME}-uploads"
-OVERLAY="${D1_PREVIEW_OVERLAY:-d1-edit-frame d1-links d1-admin-overview}"
+OVERLAY="${D1_PREVIEW_OVERLAY:-d1-edit-frame d1-links d1-admin-overview d1-people-admin d1-record-access d1-teams d1-person-link}"
 ENV_FILE="${D1_PREVIEW_ENV_FILE:-}"
 EXTRA_EXT="${D1_PREVIEW_EXTRA_EXT:-}"
 PUBLIC="${D1_PREVIEW_PUBLIC_URL:-http://127.0.0.1:$PORT}"
@@ -88,6 +88,9 @@ done
 docker exec "$LIVE_PG" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --exclude-table-data=directus_revisions --exclude-table-data=directus_activity' \
   | docker exec -i "$PG" sh -c 'cat > /tmp/live.dump'
 ps=("${PIPESTATUS[@]}"); [[ ${ps[0]} -eq 0 && ${ps[1]} -eq 0 ]] || abort "pg_dump of live"
+# Live's A1a policies (migration 168) are TO d1_llm_readonly, a role pg_dump does not carry: make it on the copy first, or every
+# CREATE POLICY fails. The copy's own migration 15 skips it when it exists.
+psql_copy -c "CREATE ROLE d1_llm_readonly NOLOGIN" >/dev/null || abort "create d1_llm_readonly on the copy"
 rout=$(docker exec "$PG" pg_restore -U d1 -d d1_database --no-owner --role=d1 /tmp/live.dump 2>&1)
 bad=$(grep -A1 '^pg_restore: error:' <<<"$rout" | grep -v -- '^--$' | paste - - | grep -vE 'role "[^"]+" does not exist.*Command was: (GRANT|REVOKE) ' || true)
 [[ -z "$bad" ]] || abort "restore" "$bad"

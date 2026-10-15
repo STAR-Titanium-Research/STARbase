@@ -5,14 +5,19 @@ import { EXPLORER_HOST } from '../host';
 import { useAccess } from '../access/useAccess';
 import {
 	LOGINLESS_NOTE, RESTRICT_UI, ROLE_LABELS, blockedText, canChangeRole, entryLabel, initials, isLoginless, noManagerText, ownerWord, piNote,
-	recordWord, sortEntries, transferConfirmText, type AccessEntry, type PersonHit,
+	recordWord, sortEntries, sortTeams, teamMembersLabel, isTeamHit, transferConfirmText, hitName, isTeamOwner, ownerManagersText, ownerRowText,
+	transferOffersTeams, type AccessEntry, type PersonHit, type TeamHit,
 } from '../access/accessModel';
 import AccessPersonPicker from './AccessPersonPicker.vue';
+import AccessTeamRow from './AccessTeamRow.vue';
+import TeamTile from '../teams/TeamTile.vue';
 
 // "Who has access": a Google Drive "Manage members" style dialog on the record pages (spec section 1). Everyone who can read the record
 // sees the list; the controls (add, role, remove, transfer) are drawn only for the owner (the PI for a project) and admins, and
 // everyone else reads "Only <owner> can change who has access." Operations and tests on an unrestricted sample also show who
-// can see them through the sample (`parent`), read-only. It talks to /d1-record-access through the host's api, so the kit stays
+// can see them through the sample (`parent`), read-only. Teams are added like people (the add box searches both) and listed with their
+// tile, member count and a members card; a manager of the record can trust future members and approve or decline joiners who wait
+// (AccessTeamRow). It talks to /d1-record-access through the host's api, so the kit stays
 // host-neutral. The page behind it is told (`changed`) after every write.
 //
 // Keyboard: Escape closes (a first Escape closes an open name list), Tab cycles inside the dialog, focus goes back to whatever had it.
@@ -49,20 +54,30 @@ const canManage = computed(() => list.value?.can_manage === true);
 const word = computed(() => recordWord(props.collection));
 const roles = computed(() => ROLE_LABELS(props.collection));
 const entries = computed(() => sortEntries(list.value?.entries ?? []));
+const teams = computed(() => sortTeams(list.value?.teams ?? []));
 const parentEntries = computed(() => sortEntries(parentList.value?.entries ?? []));
 const pi = computed(() => (list.value ? piNote(list.value, props.collection) : null));
 
-// Add: pick a person, choose a role (default Can view), Add.
-const picked = ref<PersonHit | null>(null);
+// Add: pick a person or a team, choose a role (default Can view), Add.
+const picked = ref<PersonHit | TeamHit | null>(null);
+const pickedPerson = computed(() => (picked.value && !isTeamHit(picked.value) ? picked.value : null));
+const pickedTeam = computed(() => (picked.value && isTeamHit(picked.value) ? picked.value : null));
 const pickedRole = ref('view');
 // Transfer: choose the new owner, read the confirm text, Confirm.
 const transferring = ref(false);
-const transferTarget = ref<PersonHit | null>(null);
+const transferTarget = ref<PersonHit | TeamHit | null>(null);
+const transferPerson = computed(() => (transferTarget.value && !isTeamHit(transferTarget.value) ? transferTarget.value : null));
+// A team owner is not kept as Can edit and its managers lose access unless added back (Ruling O5): the text warns before Confirm.
 const confirmText = computed(() =>
 	transferTarget.value
-		? transferConfirmText(list.value?.owner?.name ?? null, transferTarget.value.full_name, props.collection, !host.isAdmin.value)
+		? transferConfirmText(list.value?.owner?.name ?? null, hitName(transferTarget.value), props.collection, !host.isAdmin.value, {
+				fromTeam: isTeamOwner(list.value?.owner),
+				toTeam: isTeamHit(transferTarget.value),
+			})
 		: '',
 );
+const teamOwner = computed(() => (isTeamOwner(list.value?.owner) ? list.value!.owner : null));
+const managersText = computed(() => ownerManagersText(list.value?.owner ?? null));
 
 function reset() {
 	picked.value = null;
@@ -101,12 +116,30 @@ async function refocus() {
 }
 async function addPicked() {
 	if (!picked.value || busy.value) return;
-	if (await access.add(picked.value.person_id, pickedRole.value)) reset();
+	const done = isTeamHit(picked.value) ? await access.addTeam(picked.value.team_id, pickedRole.value) : await access.add(picked.value.person_id, pickedRole.value);
+	if (done) reset();
+	await refocus();
+}
+// A decision removes the button that had focus. Keep focus on the team's next Approve / Decline (or its "N waiting" button) when it still
+// exists, else on the add box, so a keyboard user is not dropped on the page behind.
+async function decideJoiner(teamId: string, personId: string, decision: 'approve' | 'decline') {
+	await access.decide(teamId, personId, decision);
+	await nextTick();
+	const at = document.activeElement;
+	if (at && at !== document.body && dialog.value?.contains(at)) return;
+	const next = dialog.value?.querySelector<HTMLElement>(`[data-team-id="${teamId.replace(/[\\"]/g, "")}"] :is(.joiners button, .backlog)`);
+	if (next) next.focus();
+	else await refocus();
+}
+async function removeTeam(teamId: string) {
+	if (busy.value) return;
+	await access.removeTeam(teamId);
 	await refocus();
 }
 async function confirmTransfer() {
 	if (!transferTarget.value || busy.value) return;
-	if (await access.transferTo(transferTarget.value.person_id)) reset();
+	const to = transferTarget.value;
+	if (await access.transferTo(isTeamHit(to) ? { team_id: to.team_id } : { person_id: to.person_id })) reset();
 	await refocus();
 }
 async function removeEntry(entry: AccessEntry) {
@@ -167,30 +200,56 @@ function onKeydown(e: KeyboardEvent) {
 						</label>
 
 						<div v-if="canManage && !transferring" class="add">
-							<AccessPersonPicker ref="addBox" :list="list" label="Add people by name" :disabled="busy" @pick="(p: PersonHit) => (picked = p)" />
+							<AccessPersonPicker ref="addBox" :list="list" teams label="Add people or teams by name" placeholder="Add people or teams" :disabled="busy" @pick="(p: PersonHit | TeamHit) => (picked = p)" />
 						</div>
-						<div v-if="canManage && picked && !transferring" class="picked">
-							<span class="who"><b>{{ picked.full_name }}</b><span v-if="isLoginless(picked)" class="tag">{{ LOGINLESS_NOTE }}</span></span>
-							<select v-model="pickedRole" :aria-label="`Role for ${picked.full_name}`" :disabled="busy">
+						<div v-if="canManage && pickedPerson && !transferring" class="picked">
+							<span class="who"><b>{{ pickedPerson.full_name }}</b><span v-if="isLoginless(pickedPerson)" class="tag">{{ LOGINLESS_NOTE }}</span></span>
+							<select v-model="pickedRole" :aria-label="`Role for ${pickedPerson.full_name}`" :disabled="busy">
 								<option v-for="r in roles" :key="r.role" :value="r.role">{{ r.label }}</option>
 							</select>
 							<button type="button" class="btn primary" :disabled="busy" @click="addPicked">Add</button>
 							<button type="button" class="btn" :disabled="busy" @click="picked = null">Cancel</button>
-							<p v-if="isLoginless(picked)" class="hint full">They are added now, and the access starts working the day an admin links their login to their People record.</p>
+							<p v-if="isLoginless(pickedPerson)" class="hint full">They are added now, and the access starts working the day an admin links their login to their People record.</p>
+						</div>
+						<div v-if="canManage && pickedTeam && !transferring" class="picked">
+							<span class="who team-pick"><TeamTile :team="pickedTeam" size="sm" /><b>{{ pickedTeam.name }}</b><span class="hint">{{ teamMembersLabel(pickedTeam.member_count) }}</span></span>
+							<select v-model="pickedRole" :aria-label="`Level for the team ${pickedTeam.name}`" :disabled="busy">
+								<option v-for="r in roles" :key="r.role" :value="r.role">{{ r.label }}</option>
+							</select>
+							<button type="button" class="btn primary" :disabled="busy" @click="addPicked">Add</button>
+							<button type="button" class="btn" :disabled="busy" @click="picked = null">Cancel</button>
+							<p class="hint full">Everyone in the team gets this access now. Someone who joins the team later waits for an owner's approval, unless you choose Trust future members.</p>
 						</div>
 
 						<p v-if="error" class="err" role="alert">{{ error }}</p>
 						<p v-else-if="note" class="hint quiet" role="status" aria-live="polite">{{ note }}</p>
 
 						<ul class="rows" :aria-label="`People with access to this ${word}`">
-							<li class="row owner">
-								<span class="av" aria-hidden="true">{{ list.owner ? initials(list.owner.name) : '?' }}</span>
+							<li class="row owner" :data-owner-kind="teamOwner ? 'team' : 'person'">
+								<TeamTile v-if="teamOwner" :team="teamOwner" size="md" />
+								<span v-else class="av" aria-hidden="true">{{ list.owner ? initials(list.owner.name) : '?' }}</span>
 								<span class="who">
-									<span class="name">{{ list.owner ? list.owner.name : 'No owner' }}</span>
-									<span v-if="list.owner && !list.owner.can_sign_in" class="tag">{{ LOGINLESS_NOTE }}</span>
+									<span class="name">{{ ownerRowText(list.owner) }}</span>
+									<span v-if="list.owner && !isTeamOwner(list.owner) && !list.owner.can_sign_in" class="tag">{{ LOGINLESS_NOTE }}</span>
+									<span v-if="managersText" class="hint full">Managers: {{ managersText }}</span>
 								</span>
 								<span class="role">{{ ownerWord(collection) }}</span>
 							</li>
+							<AccessTeamRow
+								v-for="t in teams"
+								:key="t.team_id"
+								:team="t"
+								:can-manage="canManage"
+								:busy="busy"
+								:roles="roles"
+								:members="access.teamMembers.value[t.team_id] ?? null"
+								@role="(role: string) => access.changeTeam(t.team_id, { role })"
+								@trust="(value: boolean) => access.changeTeam(t.team_id, { trust_new_members: value })"
+								@remove="removeTeam(t.team_id)"
+								@expand="access.loadMembers(t.team_id)"
+								:data-team-id="t.team_id"
+								@decide="(personId: string, decision: 'approve' | 'decline') => decideJoiner(t.team_id, personId, decision)"
+							/>
 							<li v-for="e in entries" :key="e.person_id ?? `login-${e.name}`" class="row">
 								<span class="av" aria-hidden="true">{{ initials(e.name) }}</span>
 								<span class="who">
@@ -207,7 +266,7 @@ function onKeydown(e: KeyboardEvent) {
 								</template>
 								<span v-else class="role">{{ entryLabel(e, collection) }}</span>
 							</li>
-							<li v-if="!entries.length" class="row empty">Nobody else has been added.</li>
+							<li v-if="!entries.length && !teams.length" class="row empty">Nobody else has been added.</li>
 						</ul>
 
 						<section v-if="parentList" class="inherited">
@@ -215,8 +274,9 @@ function onKeydown(e: KeyboardEvent) {
 							<p class="hint">The people listed on the sample can see this {{ word }} too, unless a campaign or project hides it from them. Change it on the sample.</p>
 							<ul class="rows" :aria-label="`People with access through the sample`">
 								<li v-if="parentList.owner" class="row">
-									<span class="av" aria-hidden="true">{{ initials(parentList.owner.name) }}</span>
-									<span class="who"><span class="name">{{ parentList.owner.name }}</span></span>
+									<TeamTile v-if="isTeamOwner(parentList.owner)" :team="parentList.owner" size="md" />
+									<span v-else class="av" aria-hidden="true">{{ initials(parentList.owner.name) }}</span>
+									<span class="who"><span class="name">{{ ownerRowText(parentList.owner) }}</span></span>
 									<span class="role">Owner</span>
 								</li>
 								<li v-for="e in parentEntries" :key="e.person_id ?? `plogin-${e.name}`" class="row">
@@ -232,12 +292,12 @@ function onKeydown(e: KeyboardEvent) {
 						<section v-if="canManage && transferring" class="transfer">
 							<h3>Transfer ownership</h3>
 							<template v-if="!transferTarget">
-								<p class="hint">Choose the new {{ collection === 'projects' ? 'principal investigator' : 'owner' }}.</p>
-								<AccessPersonPicker ref="transferBox" :list="list" :entries="false" label="New owner, by name" placeholder="Search by name…" :disabled="busy" @pick="(p: PersonHit) => (transferTarget = p)" />
+								<p class="hint">Choose the new {{ collection === 'projects' ? 'principal investigator' : 'owner' }}{{ transferOffersTeams(collection) ? ', a person or a team' : '' }}.</p>
+								<AccessPersonPicker ref="transferBox" :list="list" :entries="false" :teams="transferOffersTeams(collection)" label="New owner, by name" :placeholder="transferOffersTeams(collection) ? 'Search people or teams…' : 'Search by name…'" :disabled="busy" @pick="(p: PersonHit | TeamHit) => (transferTarget = p)" />
 							</template>
 							<template v-else>
 								<p class="confirm" role="status">{{ confirmText }}</p>
-								<span v-if="transferTarget && isLoginless(transferTarget)" class="hint">{{ transferTarget.full_name }} {{ LOGINLESS_NOTE }}, so nobody can act as the owner until an admin links their login.</span>
+								<span v-if="transferPerson && isLoginless(transferPerson)" class="hint">{{ transferPerson.full_name }} {{ LOGINLESS_NOTE }}, so nobody can act as the owner until an admin links their login.</span>
 							</template>
 							<div class="actions">
 								<button v-if="transferTarget" type="button" class="btn primary" :disabled="busy" @click="confirmTransfer">Confirm transfer</button>
@@ -277,6 +337,7 @@ function onKeydown(e: KeyboardEvent) {
 .add { display: flex; gap: 8px; }
 .picked { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-tile); }
 .picked .who { flex: 1; min-width: 120px; }
+.team-pick { align-items: center; gap: 8px; }
 .full { flex-basis: 100%; margin: 0; }
 .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--d1-line); font-size: var(--fs-md, 13px); }

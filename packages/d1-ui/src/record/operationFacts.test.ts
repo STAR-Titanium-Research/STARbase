@@ -27,6 +27,10 @@ describe('operationKind', () => {
 });
 
 describe('operationRailFacts', () => {
+	it('shows the owning team as the Owner of a team-owned operation', () => {
+		expect(byLabel(operationRailFacts({ ...op, owner_person_id: null, owner_team_id: { team_id: 't1', name: 'Additive', color: 'teal', logo: null } }, {}), 'Owner')?.value).toBe('Additive');
+	});
+
 	it('has the old header line, the method and the links up the tree, in order', () => {
 		const facts = operationRailFacts(op, {});
 		expect(facts.map((f) => f.label)).toEqual(['Date', 'Method', 'Machine', 'Owner', 'Operator', 'Sample', 'Project', 'Campaign']);

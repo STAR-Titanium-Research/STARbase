@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { capList, visibleFacts, type Fact } from './facts';
+import { capList, ownerName, visibleFacts, type Fact } from './facts';
 
 describe('visibleFacts', () => {
 	it('drops facts with null, undefined or empty values', () => {
@@ -49,5 +49,19 @@ describe('capList', () => {
 	});
 	it('takes another cap', () => {
 		expect(capList([1, 2, 3], 2)).toEqual({ shown: [1, 2], more: 1 });
+	});
+});
+
+describe('ownerName', () => {
+	it("is the owning team's name when the record has one, else the owner person's name", () => {
+		expect(ownerName({ owner_person_id: { full_name: 'Ada Owner' }, owner_team_id: null })).toBe('Ada Owner');
+		expect(ownerName({ owner_person_id: null, owner_team_id: { team_id: 't1', name: 'Additive' } })).toBe('Additive');
+		expect(ownerName({ owner_person_id: { full_name: 'Ada Owner' } })).toBe('Ada Owner');
+	});
+
+	it('is empty for no owner, and for a team the reader cannot read (a bare id)', () => {
+		expect(ownerName({ owner_person_id: null, owner_team_id: null })).toBe('');
+		expect(ownerName({ owner_person_id: null, owner_team_id: 't1' })).toBe('');
+		expect(ownerName(null)).toBe('');
 	});
 });

@@ -532,7 +532,7 @@ onBeforeUnmount(() => {
 				<span class="material-symbols-rounded">warning</span>
 				<span>Approaching the force limit:
 					<template v-for="(wn, i) in w.alarms.warnings" :key="wn.key">{{ i ? ', ' : ' ' }}{{ wn.axis }} {{ wn.value.toFixed(0) }} N</template>
-					(warning at {{ w.alarms.warnLevel?.toFixed(0) }} N, alarm at {{ w.alarms.config.forceThreshold }} N)</span>
+					(warning at {{ w.alarms.warnLevel?.toFixed(0) }} N, alarm at {{ w.alarms.forceLimit }} N)</span>
 				<button class="btn sm inverse disk-action-ack" @click="w.alarms.dismissWarnings()">Dismiss</button>
 			</div>
 

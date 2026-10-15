@@ -65,9 +65,12 @@
     "sample.editors": [
       "owner_person_id.user_id",
       "co_owners.user_id",
-      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit"]}}
+      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit", "manage"]}}
     ],
-    "sample.owner": ["owner_person_id.user_id"],
+    "sample.owner": [
+      "owner_person_id.user_id",
+      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["manage"]}}
+    ],
     "link.sample.owner": [{"via": "sample_id", "set": "sample.owner"}],
     "link.sample.editors": [{"via": "sample_id", "set": "sample.editors"}],
     "genealogy.write": [{"via": "child_sample_id", "set": "sample.editors"}],
@@ -80,9 +83,12 @@
 
     "record.editors": [
       "owner_person_id.user_id",
-      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit"]}}
+      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit", "manage"]}}
     ],
-    "record.owner": ["owner_person_id.user_id"],
+    "record.owner": [
+      "owner_person_id.user_id",
+      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["manage"]}}
+    ],
     "record.update": {
       "and": [
         {"set": "reader"},
@@ -99,12 +105,15 @@
         {"set": "reader"},
         {"or": [
           "owner_person_id.user_id",
-          {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit"]}}
+          {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["edit", "manage"]}}
         ]}
       ]
     },
-    "campaign.manage": {"and": [{"set": "reader"}, "owner_person_id.user_id"]},
-    "campaign.owner": ["owner_person_id.user_id"],
+    "campaign.manage": {"and": [{"set": "reader"}, {"set": "campaign.owner"}]},
+    "campaign.owner": [
+      "owner_person_id.user_id",
+      {"path": "access._some.person_id.user_id", "at": "access", "where": {"role": ["manage"]}}
+    ],
 
     "investigators.write": [{"via": "project_id", "set": "project.pi"}],
     "rollup.read": [
@@ -134,7 +143,7 @@
     "project_rollup": {"read": "rollup.read"}
   },
   "field_sets": {
-    "sample.not_co_owners": ["sample_id","sample_code","material_id","project_id","form","mass_grams","diameter_mm","length_mm","thickness_mm","current_status","manufactured_date","export_controlled","notes","created_at","updated_at","version","nickname","location","surface_finish","legacy_notes","width_mm","owner","manufacturing_route","mounted","mounting_method","item_type","stock_category","primary_method_id","owner_person_id","gauge_length_mm","gauge_width_mm","created_by","code_sort","short_id","inner_diameter_mm","restricted","co_owners_legacy","report_button","campaigns","access","readers","manufacturing_operations","produced_by_operations","child_samples","test_sessions","data_files","data_files_open","geometry_preview"],
+    "sample.not_co_owners": ["sample_id","sample_code","material_id","project_id","form","mass_grams","diameter_mm","length_mm","thickness_mm","current_status","manufactured_date","export_controlled","notes","created_at","updated_at","version","nickname","location","surface_finish","legacy_notes","width_mm","owner","manufacturing_route","mounted","mounting_method","item_type","stock_category","primary_method_id","owner_person_id","gauge_length_mm","gauge_width_mm","created_by","code_sort","short_id","inner_diameter_mm","restricted","co_owners_legacy","report_button","campaigns","access","readers","manufacturing_operations","produced_by_operations","child_samples","test_sessions","data_files","data_files_open","geometry_preview","owner_team_id"],
     "project.not_secondary_investigators": ["project_id","project_code","project_name","description","document_number","principal_investigator_name","start_date","end_date","export_controlled","is_active","created_at","updated_at","version","principal_investigator","Image","principal_investigator_person","created_by","restricted","operations","sessions","campaigns","samples","investigator_access_notice","rollup","project_items","access","readers"]
   },
   "rule_fields": {
@@ -182,10 +191,10 @@
     "test_sessions_subject": [{"field": "test_sessions_id", "parent": "test_sessions", "key": "session_id", "rule": "update"}]
   },
   "owner_guards": {
-    "physical_samples": {"key": "sample_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "restricted"}]},
-    "manufacturing_operations": {"key": "operation_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "restricted"}]},
-    "test_sessions": {"key": "session_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "restricted"}]},
-    "campaigns": {"key": "campaign_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "restricted"}]}
+    "physical_samples": {"key": "sample_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "owner_team_id", "value_key": "team_id"}, {"field": "restricted"}]},
+    "manufacturing_operations": {"key": "operation_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "owner_team_id", "value_key": "team_id"}, {"field": "restricted"}]},
+    "test_sessions": {"key": "session_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "owner_team_id", "value_key": "team_id"}, {"field": "restricted"}]},
+    "campaigns": {"key": "campaign_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "owner_team_id", "value_key": "team_id"}, {"field": "restricted"}]}
   },
   "restricted_keys": {
     "physical_samples": ["project_id"],
@@ -229,6 +238,8 @@
     "fast_recipes": ["read"],
     "force_crawler_state": ["read"],
     "label_settings": ["read"],
+    "teams": ["read"],
+    "team_members": ["read"],
     "directus_files": ["create", "read", "update", "delete"]
   }
 }

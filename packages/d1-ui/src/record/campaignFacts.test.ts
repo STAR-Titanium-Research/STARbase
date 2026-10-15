@@ -26,6 +26,10 @@ describe('campaignCode', () => {
 });
 
 describe('campaignRailFacts', () => {
+	it('shows the owning team as the Owner of a team-owned campaign', () => {
+		expect(byLabel(campaignRailFacts({ ...campaign, owner_person_id: null, owner_team_id: { team_id: 't1', name: 'Additive', color: 'teal', logo: null } }, {}, counts), 'Owner')?.value).toBe('Additive');
+	});
+
 	it('has the old meta line, the project and the counts, in order', () => {
 		const facts = campaignRailFacts(campaign, {}, counts);
 		expect(visibleFacts(facts).map((f) => f.label)).toEqual(['Type', 'Owner', 'Dates', 'Machine', 'Material', 'Project', 'Samples', 'Operations', 'Test sessions']);

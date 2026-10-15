@@ -25,6 +25,10 @@ describe('testTypeText', () => {
 });
 
 describe('testRailFacts', () => {
+	it('shows the owning team as the Owner of a team-owned test', () => {
+		expect(get(testRailFacts({ ...test, owner_person_id: null, owner_team_id: { team_id: 't1', name: 'Additive', color: 'teal', logo: null } }, none, {}), 'Owner')?.value).toBe('Additive');
+	});
+
 	it('has the date, category, machine, people and the links up the tree', () => {
 		const facts = testRailFacts(test, none, {});
 		expect(facts.map((f) => f.label)).toEqual(['Date', 'Category', 'Machine', 'Owner', 'Operator', 'Sample', 'Project', 'Campaign']);

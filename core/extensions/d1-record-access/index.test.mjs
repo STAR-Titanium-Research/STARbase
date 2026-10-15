@@ -15,6 +15,7 @@ const CAMPAIGN = ID(4);
 const PROJECT = ID(5);
 const OTHER_SAMPLE = ID(9);
 const P = { owner: ID(101), co: ID(102), view: ID(103), nologin: ID(104), nomail: ID(105), inactive: ID(106), pi: ID(107), badlogin: ID(108), stranger: ID(109), editor: ID(110) };
+const T = { alpha: ID(301), beta: ID(302), empty: ID(303) };
 const U = { owner: ID(201), co: ID(202), view: ID(203), pi: ID(207), badlogin: ID(208), stranger: ID(209), editor: ID(210), orphan: ID(299) };
 
 const baseTables = () => ({
@@ -51,6 +52,16 @@ const baseTables = () => ({
   campaigns: [{ campaign_id: CAMPAIGN, owner_person_id: P.owner, restricted: false, project_id: PROJECT, campaign_code: 'CMP-1', name: 'Campaign one' }],
   projects: [{ project_id: PROJECT, principal_investigator_person: P.pi, restricted: false, project_code: 'PRJ1', project_name: 'Project One' }],
   sample_access: [], operation_access: [], test_access: [], campaign_access: [], project_access: [],
+  teams: [
+    { team_id: T.alpha, name: 'Alpha lab', color: 'blue', logo: null },
+    { team_id: T.beta, name: 'Beta crew', color: 'green', logo: ID(400) },
+    { team_id: T.empty, name: 'Empty team', color: null, logo: null },
+  ],
+  // Alpha: the owner, two readers, a co-owner, a login with no address, a person with no login, an inactive person, a stranger
+  team_members: [P.owner, P.view, P.co, P.badlogin, P.nologin, P.inactive, P.stranger].map((person_id) => ({ team_id: T.alpha, person_id, is_manager: false }))
+    .concat([{ team_id: T.beta, person_id: P.view, is_manager: true }]),
+  sample_team_access: [], operation_team_access: [], test_team_access: [], campaign_team_access: [], project_team_access: [],
+  sample_team_pending: [], operation_team_pending: [], test_team_pending: [], campaign_team_pending: [], project_team_pending: [],
   sample_co_owners: [], project_investigators: [],
   sample_readers: [], operation_readers: [], test_readers: [], campaign_readers: [], project_readers: [],
   directus_access: [], directus_policies: [],
@@ -59,9 +70,9 @@ const baseTables = () => ({
 // ---- a tiny in-memory knex: just the calls the endpoint makes, with transactions that roll back -----------
 
 const same = (a, b) => String(a) === String(b);
-function makeDb(initial) {
+function makeDb(initial, hook = null) {
   const store = { tables: structuredClone(initial) };
-  const log = { events: [], raw: [], writes: [] };
+  const log = { events: [], raw: [], writes: [], compiled: [] };
   const over = (target, inTrx) => {
     const rowsOf = (table) => (target.tables[table] ??= []);
     const db = (table) => {
@@ -76,36 +87,79 @@ function makeDb(initial) {
           return q;
         },
         whereIn(c, values) { preds.push((r) => values.some((v) => same(r[c], v))); return q; },
+        whereNull(c) { preds.push((r) => r[c] === null || r[c] === undefined); return q; },
+        whereNotNull(c) { preds.push((r) => r[c] !== null && r[c] !== undefined); return q; },
         select: async (...cols) => rows().map((r) => project(r, cols)),
         first: async (...cols) => project(rows()[0], cols),
         update: async (patch) => {
           const hit = rows();
+          guard(table, hit);
           for (const r of hit) Object.assign(r, patch);
           log.writes.push({ table, op: 'update', patch, n: hit.length, inTrx });
           return hit.length;
         },
         del: async () => {
           const hit = new Set(rows());
+          guard(table, [...hit]);
           target.tables[table] = rowsOf(table).filter((r) => !hit.has(r));
           log.writes.push({ table, op: 'delete', n: hit.size, inTrx });
           return hit.size;
         },
+        // awaited directly it is a plain INSERT (a team grant: unique per record and team, like the table); .onConflict(...).merge() is an
+        // upsert, and the conflict target must be the raw clause of the partial unique index, as in Postgres
         insert: (row) => ({
-          onConflict: (cols) => ({
+          onConflict: (conflict) => ({
             merge: async (patch) => {
-              const found = rowsOf(table).find((r) => cols.every((c) => same(r[c], row[c])));
+              if (!conflict?.partialIndex) {
+                // the own-entry unique key is a PARTIAL index since migration 182: a plain column list cannot infer it
+                throw Object.assign(new Error('there is no unique or exclusion constraint matching the ON CONFLICT specification'), { code: '42P10' });
+              }
+              const cols = conflict.partialIndex.columns;
+              const found = rowsOf(table).find((r) => (r.team_access_id ?? null) === null && cols.every((c) => same(r[c], row[c])));
               if (found) Object.assign(found, patch);
               else rowsOf(table).push({ access_id: `acc-${rowsOf(table).length + 1}`, created_at: new Date('2026-10-13T09:00:00Z'), ...row });
+              log.compiled.push({ table, target: conflict.target, patch });
               log.writes.push({ table, op: found ? 'upsert-update' : 'insert', row, inTrx });
             },
           }),
+          then(resolve, reject) {
+            return (async () => {
+              if (/_team_access$/.test(table)) {
+                const keys = Object.entries(row).filter(([k]) => /_id$/.test(k) && k !== 'added_by_person_id' && k !== 'team_access_id');
+                if (rowsOf(table).some((r) => keys.every(([k, v]) => same(r[k], v)))) throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+                rowsOf(table).push({ team_access_id: `ta-${rowsOf(table).length + 1}`, trust_new_members: false, created_at: new Date('2026-10-14T09:00:00Z'), ...row });
+              } else rowsOf(table).push({ access_id: `acc-${rowsOf(table).length + 1}`, created_at: new Date('2026-10-13T09:00:00Z'), ...row });
+              log.writes.push({ table, op: 'insert', row, inTrx });
+            })().then(resolve, reject);
+          },
         }),
       };
       return q;
     };
-    db.raw = async (sql, bindings) => {
-      log.raw.push({ sql, bindings, inTrx });
-      return { rows: [] };
+    // Postgres: only the team triggers may touch a derived row (team_access_id set) of an access table; anything else raises 42501
+    const guard = (table, hit) => {
+      if (/^(sample|operation|test|campaign|project)_access$/.test(table) && hit.some((r) => (r.team_access_id ?? null) !== null)) {
+        throw Object.assign(new Error('Team access rows are managed by the team\'s grant'), { code: '42501' });
+      }
+    };
+    // Lazy like knex's: a raw runs (and is logged) when awaited. The conflict clause is only ever passed to onConflict, never awaited; it is
+    // rendered here (no knex: CI runs these tests without npm install) so the test sees the conflict target the endpoint hands to Postgres.
+    db.raw = (sql, bindings) => {
+      const answer = {
+        sql,
+        bindings,
+        then: (resolve, reject) => {
+          log.raw.push({ sql, bindings, inTrx });
+          return Promise.resolve().then(() => (hook ? hook(sql, bindings, target) : { rows: [] })).then(resolve, reject);
+        },
+      };
+      if (/^\(\?\?, \?\?\) WHERE \?\? IS NULL$/.test(sql)) {
+        answer.partialIndex = { columns: bindings.slice(0, 2) };
+        // knex renders ?? as a double-quoted identifier
+        let i = 0;
+        answer.target = sql.replaceAll('??', () => `"${bindings[i++]}"`);
+      }
+      return answer;
     };
     return db;
   };
@@ -135,8 +189,8 @@ function makeDb(initial) {
 
 const forbidden = () => Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
 
-function mount({ tables = baseTables(), readable = () => true, manage = (c, id, user) => user === U.owner || (c === 'projects' && user === U.pi), mail = {}, env = { PUBLIC_URL: 'https://lab.example/' } } = {}) {
-  const db = makeDb(tables);
+function mount({ raw = null, tables = baseTables(), readable = () => true, manage = (c, id, user) => user === U.owner || (c === 'projects' && user === U.pi), mail = {}, env = { PUBLIC_URL: 'https://lab.example/' } } = {}) {
+  const db = makeDb(tables, raw);
   const calls = { items: [], manage: [], reads: [], cache: [], mail: { built: [], sent: [] } };
   const keyOf = (collection) => COLLECTIONS[collection].key;
   class ItemsService {
@@ -201,13 +255,17 @@ const errorOf = (r) => r.body?.errors?.[0];
 
 // ---- routes and the shape of errors ---------------------------------------------------------------------------
 
-test('registers the five routes', () => {
+test('registers the nine routes (the five of the people list and the four of the team entries)', () => {
   const { handlers } = mount();
   assert.deepEqual(Object.keys(handlers).sort(), [
     'DELETE /:collection/:id/entries/:person_id',
+    'DELETE /:collection/:id/entries/team/:team_id',
     'GET /:collection/:id',
+    'GET /:collection/:id/entries/team/:team_id/members',
     'PATCH /:collection/:id/entries/:person_id',
+    'PATCH /:collection/:id/entries/team/:team_id',
     'POST /:collection/:id/entries',
+    'POST /:collection/:id/entries/team/:team_id/members/:person_id',
     'POST /:collection/:id/transfer',
   ]);
 });
@@ -334,7 +392,7 @@ test('GET: restricted, the owner, the project PI and the merged entries with the
   const r = await call(handlers['GET /:collection/:id']);
   assert.equal(r.status, 200);
   assert.equal(r.body.restricted, true);
-  assert.deepEqual(r.body.owner, { person_id: P.owner, name: 'Olive Owner', can_sign_in: true });
+  assert.deepEqual(r.body.owner, { kind: 'person', person_id: P.owner, name: 'Olive Owner', can_sign_in: true });
   assert.deepEqual(r.body.project_pi, { person_id: P.pi, name: 'Pia PI', can_sign_in: true });
   assert.equal(r.body.can_manage, true);
   const by = Object.fromEntries(r.body.entries.map((e) => [e.name, e]));
@@ -572,6 +630,8 @@ test('add: every record type has its own table, key and roles', async () => {
     assert.equal(r.body.entry.label, role === 'investigator' ? 'Secondary investigator' : 'Can edit');
     assert.equal(db.tables()[tablesOf[collection]].length, 1, collection);
   }
+  // each record type's upsert names the partial unique index of own rows (its own fk, person_id, WHERE team_access_id IS NULL)
+  assert.deepEqual(db.log.compiled.map((c) => [c.table, c.target]), Object.entries(tablesOf).map(([collection, table]) => [table, `("${COLLECTIONS[collection].fk}", "person_id") WHERE "team_access_id" IS NULL`]));
   const mails = mount({ manage: () => true });
   const t = await call(mails.handlers['POST /:collection/:id/entries'], { collection: 'campaigns', id: CAMPAIGN, body: { person_id: P.nologin, role: 'view' } });
   assert.match(mails.calls.mail.sent[0].subject, /gave you access to campaign CMP-1/);
@@ -663,6 +723,7 @@ test('roleLabel and recordLink', () => {
 test('the link map is the five STARbase page routes, and recordRoute\'s', () => {
   const index = readFileSync(new URL('../../../packages/starbase-pages/src/routes.ts', import.meta.url), 'utf8');
   const routes = Object.fromEntries([...index.matchAll(/path: '([a-z]+)\/:id', component: (\w+)Page/g)].map((m) => [m[2], m[1]]));
+  delete routes.Team; // teams/:id is a page route too, but not a record page: no entry in the link map
   assert.deepEqual(routes, { Project: 'projects', Campaign: 'campaigns', Sample: 'samples', Operation: 'operations', Test: 'tests' });
   const byPage = { physical_samples: 'Sample', manufacturing_operations: 'Operation', test_sessions: 'Test', campaigns: 'Campaign', projects: 'Project' };
   assert.deepEqual(Object.keys(COLLECTIONS).sort(), Object.keys(byPage).sort());
@@ -744,7 +805,7 @@ test('transfer: sets the owner, keeps the previous owner as Can edit, drops the 
   const { handlers, db, calls } = mount({ tables: world });
   const r = await transfer(handlers, P.view);
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, { owner: { person_id: P.view, name: 'Vic Viewer', can_sign_in: true }, email: 'sent', blocked_by: null });
+  assert.deepEqual(r.body, { owner: { kind: 'person', person_id: P.view, name: 'Vic Viewer', can_sign_in: true }, email: 'sent', blocked_by: null });
   assert.equal(db.tables().physical_samples[0].owner_person_id, P.view);
   assert.deepEqual(db.tables().sample_access.map((x) => [x.person_id, x.role]), [[P.owner, 'edit']], 'the new owner has no row, the previous owner is Can edit');
   assert.deepEqual(db.tables().sample_co_owners, [], 'both old rows are gone');
@@ -966,4 +1027,623 @@ test('a read-back that fails after the commit still answers 200 with the committ
   assert.equal(db.tables().sample_access.length, 1, 'the change is committed');
   assert.ok(errors.some((e) => /committed but reading it back failed/.test(e)));
   assert.equal(calls.mail.sent.length, 0);
+});
+
+// ---- teams in who-has-access (migration 182) -------------------------------------------------------------------------
+
+// What the database does for the team functions, in the in-memory world: team_pending_actionable answers `actionable(ta, person)`;
+// team_decide approves (the pending row goes, a derived row appears) or declines (the row stays, declined). Every call is recorded.
+function teamHook({ actionable = () => true, decideError = null } = {}) {
+  const seen = [];
+  const hook = (sql, bindings, target) => {
+    if (/team_pending_actionable|team_decide/.test(sql)) seen.push({ sql, bindings }); // not the actor's set_config
+    if (/team_pending_actionable/.test(sql)) return { rows: [{ ok: actionable(bindings[1], bindings[2]) }] };
+    if (/team_decide/.test(sql)) {
+      if (decideError) throw decideError;
+      const [collection, ta, person, decision] = bindings;
+      const cfg = COLLECTIONS[collection];
+      const pending = (target.tables[`${cfg.kind}_team_pending`] ??= []);
+      const row = pending.find((r) => r.team_access_id === ta && r.person_id === person);
+      const grant = target.tables[`${cfg.kind}_team_access`].find((g) => g.team_access_id === ta);
+      if (decision === 'approve') {
+        pending.splice(pending.indexOf(row), 1);
+        target.tables[cfg.table].push({ access_id: `d-${person}`, [cfg.fk]: grant[cfg.fk], person_id: person, role: grant.role, added_by_person_id: grant.added_by_person_id, team_access_id: ta, created_at: new Date() });
+      } else row.state = 'declined';
+    }
+    return { rows: [] };
+  };
+  hook.seen = seen;
+  return hook;
+}
+
+const TA = 'ta-alpha';
+const TB = 'ta-beta';
+const sampleGrant = (extra = {}) => ({ team_access_id: TA, sample_id: SAMPLE, team_id: T.alpha, role: 'view', trust_new_members: false, added_by_person_id: P.owner, created_at: new Date(), ...extra });
+const derived = (person_id, role = 'view', ta = TA) => ({ access_id: `d-${ta}-${person_id}`, sample_id: SAMPLE, person_id, role, added_by_person_id: P.owner, team_access_id: ta, created_at: new Date() });
+const own = (person_id, role = 'view') => ({ access_id: `o-${person_id}`, sample_id: SAMPLE, person_id, role, added_by_person_id: P.owner, team_access_id: null, created_at: new Date('2026-10-01T10:00:00Z') });
+const teamRoute = (m, suffix = '') => `${m} /:collection/:id/entries/team/:team_id${suffix}`;
+
+test('GET: the teams of the record (counts, role, trust, waiting = worth asking about, declined), and derived rows are not person entries', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant({ trust_new_members: false }), sampleGrant({ team_access_id: TB, team_id: T.beta, role: 'edit', trust_new_members: true }));
+  world.sample_access.push(own(P.co, 'view'), derived(P.view), derived(P.owner), derived(P.co, 'edit', TB));
+  world.sample_team_pending.push(
+    { team_access_id: TA, person_id: P.stranger, state: 'pending' }, { team_access_id: TA, person_id: P.nologin, state: 'pending' },
+    { team_access_id: TA, person_id: P.badlogin, state: 'declined' }, { team_access_id: TA, person_id: P.inactive, state: 'declined' },
+  );
+  const hook = teamHook({ actionable: (ta, person) => person !== P.nologin }); // not worth asking about
+  const { handlers } = mount({ tables: world, raw: hook });
+  const r = await call(handlers['GET /:collection/:id']);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.teams, [
+    { team_access_id: TA, team_id: T.alpha, name: 'Alpha lab', color: 'blue', logo: null, member_count: 7, role: 'view', trust_new_members: false, waiting: 1, declined: 2 },
+    { team_access_id: TB, team_id: T.beta, name: 'Beta crew', color: 'green', logo: ID(400), member_count: 1, role: 'edit', trust_new_members: true, waiting: 0, declined: 0 },
+  ]);
+  // the person entries: the own row of Cory only; the derived rows of Vic, Olive (the owner) and Cory (Beta) are not entries
+  assert.deepEqual(r.body.entries.map((e) => [e.name, e.role, e.source]), [['Cory Coowner', 'view', 'access']]);
+  assert.ok(hook.seen.every((c) => /team_pending_actionable/.test(c.sql)), 'only pending rows were asked about');
+  assert.deepEqual(hook.seen.map((c) => c.bindings), [['physical_samples', TA, P.stranger], ['physical_samples', TA, P.nologin]]);
+  // a record with no team grant: an empty list
+  assert.deepEqual((await call(handlers['GET /:collection/:id'], { collection: 'campaigns', id: CAMPAIGN })).body.teams, []);
+});
+
+test('GET: a person with an own row AND a derived row is one entry, with the own role', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant({ role: 'edit' }));
+  world.sample_access.push(derived(P.view, 'edit'), own(P.view, 'view'));
+  const { handlers } = mount({ tables: world, raw: teamHook() });
+  const entries = (await call(handlers['GET /:collection/:id'])).body.entries;
+  assert.deepEqual(entries.map((e) => [e.name, e.role]), [['Vic Viewer', 'view']]);
+});
+
+test('add team: inserts the grant, mails each ACTIVE member with a login and an address (not the adder, not those waiting), "via <team>"', async () => {
+  const world = baseTables();
+  world.sample_team_pending.push({ team_access_id: 'ta-1', person_id: P.stranger, state: 'pending' }); // waits on this grant: not mailed
+  const { handlers, db, calls } = mount({ tables: world, raw: teamHook() });
+  const r = await add(handlers, { team_id: T.alpha, role: 'edit' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(db.tables().sample_team_access.map((g) => [g.sample_id, g.team_id, g.role, g.added_by_person_id]), [[SAMPLE, T.alpha, 'edit', P.owner]]);
+  assert.equal(db.tables().sample_access.length, 0, 'the derived rows are the database\'s (triggers), the endpoint writes only the grant');
+  assert.equal(r.body.team.name, 'Alpha lab');
+  assert.equal(r.body.team.role, 'edit');
+  // members: owner (the adder), view, co, badlogin (login without address), nologin, inactive, stranger (waiting)
+  assert.deepEqual(calls.mail.sent.map((m) => m.to).sort(), ['co@login.example', 'vic@login.example']);
+  for (const m of calls.mail.sent) {
+    assert.match(m.subject, /Olive Owner gave you access to sample SM-001 via Alpha lab/);
+    assert.match(m.text, /via Alpha lab/);
+    assert.match(m.html, /via Alpha lab/);
+    assert.match(m.text, /Your role: Can edit/);
+  }
+  assert.deepEqual(r.body.emails, { sent: 2, skipped: 2, failed: 0 });
+  assert.equal(r.body.email, 'sent');
+  assert.deepEqual(db.log.events, ['begin', 'commit']);
+  assert.match(db.log.raw[0].sql, /d1\.actor_identity/);
+  assert.ok(calls.mail.sent.every((m) => m.to !== 'olive@people.example' && m.to !== 'owner@login.example'), 'never the adder');
+});
+
+test('add team: a team with nobody to mail, and a failing mail, both leave the grant standing', async () => {
+  const none = mount({ raw: teamHook() });
+  const r = await add(none.handlers, { team_id: T.empty, role: 'view' });
+  assert.deepEqual([r.status, r.body.email, r.body.emails], [200, 'skipped', { sent: 0, skipped: 0, failed: 0 }]);
+  assert.equal(none.db.tables().sample_team_access.length, 1);
+  const failing = mount({ mail: { fail: true }, raw: teamHook() });
+  const f = await add(failing.handlers, { team_id: T.alpha, role: 'view' });
+  assert.equal(f.status, 200);
+  assert.equal(f.body.email, 'failed');
+  assert.equal(f.body.emails.failed, 3, 'Vic, Cory and Sam (nobody waits on this grant)');
+  assert.equal(failing.db.tables().sample_team_access.length, 1, 'mail never undoes a change');
+  assert.ok(failing.warnings.some((w) => /email for physical_samples/.test(w)));
+});
+
+test('add team: a member who cannot read the record yet is mailed the generic wording (no title, no link)', async () => {
+  const world = baseTables();
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.co }); // Cory reads it already, Vic does not
+  const { handlers, calls } = mount({ tables: world, raw: teamHook() });
+  await add(handlers, { team_id: T.alpha, role: 'view' });
+  const to = Object.fromEntries(calls.mail.sent.map((m) => [m.to, m]));
+  assert.ok(to['co@login.example'].text.includes('Bar A') && to['co@login.example'].text.includes('lab.example'));
+  assert.ok(!to['vic@login.example'].text.includes('Bar A') && !to['vic@login.example'].text.includes('lab.example'));
+  assert.match(to['vic@login.example'].text, /via Alpha lab/);
+});
+
+test('add team: a duplicate is 409 TEAM_ALREADY_LISTED, also when two owners add it at once; unknown team, bad ids, bad role: 400; a non-manager: 403', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  const { handlers, db, calls } = mount({ tables: world, raw: teamHook() });
+  const dup = await add(handlers, { team_id: T.alpha, role: 'view' });
+  assert.equal(dup.status, 409);
+  assert.equal(errorOf(dup).extensions.code, 'TEAM_ALREADY_LISTED');
+  assert.equal(errorOf(dup).extensions.source, 'd1-record-access');
+  // the race: the pre-check saw nothing, the unique key refuses
+  const racing = mount({ raw: teamHook() });
+  const original = racing.db.transaction;
+  racing.db.transaction = (fn) => original((trx) => fn(Object.assign((table) => {
+    const q = trx(table);
+    if (table === 'sample_team_access') q.insert = () => Promise.reject(Object.assign(new Error('duplicate key'), { code: '23505' }));
+    return q;
+  }, { raw: trx.raw })));
+  const race = await add(racing.handlers, { team_id: T.alpha, role: 'view' });
+  assert.deepEqual([race.status, errorOf(race).extensions.code], [409, 'TEAM_ALREADY_LISTED']);
+  for (const body of [{ team_id: ID(777), role: 'view' }, { team_id: 'nope', role: 'view' }, { team_id: T.beta }, { team_id: T.beta, role: 'investigator' }, { team_id: T.beta, role: 'admin' }]) {
+    assert.equal((await add(handlers, body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await add(handlers, { team_id: T.beta, role: 'view' }, { acc: as(U.view) })).status, 403);
+  assert.equal(db.tables().sample_team_access.length, 1, 'nothing was added');
+  assert.equal(calls.mail.sent.length, 0);
+  // a project takes investigator, not edit
+  const proj = await call(handlers['POST /:collection/:id/entries'], { collection: 'projects', id: PROJECT, acc: as(U.pi), body: { team_id: T.beta, role: 'investigator' } });
+  assert.equal(proj.status, 200);
+  assert.equal(db.tables().project_team_access[0].role, 'investigator');
+  assert.equal((await call(handlers['POST /:collection/:id/entries'], { collection: 'projects', id: PROJECT, acc: as(U.pi), body: { team_id: T.empty, role: 'edit' } })).status, 400);
+});
+
+test('PATCH team: role and trust_new_members change the grant (the triggers move the rows); bad input, unknown grant, non-manager', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  const { handlers, db, calls } = mount({ tables: world, raw: teamHook() });
+  const patch = handlers[teamRoute('PATCH')];
+  const params = { team_id: T.alpha };
+  const role = await call(patch, { params, body: { role: 'edit' } });
+  assert.equal(role.status, 200);
+  assert.deepEqual([role.body.team.role, role.body.team.trust_new_members], ['edit', false]);
+  const trust = await call(patch, { params, body: { trust_new_members: true } });
+  assert.deepEqual([trust.body.team.role, trust.body.team.trust_new_members], ['edit', true]);
+  const both = await call(patch, { params, body: { role: 'view', trust_new_members: false } });
+  assert.deepEqual([both.body.team.role, both.body.team.trust_new_members], ['view', false]);
+  assert.equal(db.log.writes.filter((w) => w.table === 'sample_team_access' && w.op === 'update').length, 3);
+  assert.equal(db.tables().sample_access.length, 0, 'no derived row is touched by hand');
+  for (const body of [undefined, {}, { role: 'investigator' }, { trust_new_members: 'yes' }, { role: 5 }]) assert.equal((await call(patch, { params, body })).status, 400, JSON.stringify(body));
+  assert.equal((await call(patch, { params: { team_id: 'nope' }, body: { role: 'edit' } })).status, 400);
+  assert.equal((await call(patch, { params: { team_id: T.beta }, body: { role: 'edit' } })).status, 404, 'that team is not on the record');
+  assert.equal((await call(patch, { params, acc: as(U.view), body: { role: 'edit' } })).status, 403);
+  assert.equal(calls.mail.sent.length, 0);
+});
+
+test('DELETE team: removes the grant only (the derived and pending rows go with it in the database); 404 when not listed; 403 for a non-manager', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant(), sampleGrant({ team_access_id: TB, team_id: T.beta }));
+  const { handlers, db } = mount({ tables: world, raw: teamHook() });
+  const del = handlers[teamRoute('DELETE')];
+  assert.equal((await call(del, { params: { team_id: T.alpha }, acc: as(U.view) })).status, 403);
+  const r = await call(del, { params: { team_id: T.alpha } });
+  assert.deepEqual([r.status, r.body], [200, { removed: true }]);
+  assert.deepEqual(db.tables().sample_team_access.map((g) => g.team_id), [T.beta]);
+  assert.equal((await call(del, { params: { team_id: T.alpha } })).status, 404);
+  assert.equal((await call(del, { params: { team_id: 'x' } })).status, 400);
+  assert.deepEqual(db.log.events.slice(-2), ['begin', 'rollback']);
+});
+
+test('GET members: active (derived rows), pending (with whether it is worth asking) and declined; readers may look, an unlisted team is 404', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  world.sample_access.push(derived(P.view), derived(P.co), own(P.nologin), derived(P.owner, 'view', TB));
+  world.sample_team_pending.push(
+    { team_access_id: TA, person_id: P.stranger, state: 'pending', decided_at: null }, { team_access_id: TA, person_id: P.badlogin, state: 'pending', decided_at: null },
+    { team_access_id: TA, person_id: P.inactive, state: 'declined', decided_at: new Date('2026-10-14T08:00:00Z') },
+  );
+  const { handlers } = mount({ tables: world, raw: teamHook({ actionable: (ta, person) => person === P.stranger }) });
+  const get = handlers[teamRoute('GET', '/members')];
+  const r = await call(get, { params: { team_id: T.alpha }, acc: as(U.view) }); // a plain reader
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.active, [
+    { person_id: P.co, name: 'Cory Coowner', can_sign_in: true }, { person_id: P.view, name: 'Vic Viewer', can_sign_in: true },
+  ]);
+  assert.deepEqual(r.body.pending, [
+    { person_id: P.badlogin, name: 'Bo Badlogin', can_sign_in: true, actionable: false }, { person_id: P.stranger, name: 'Sam Stranger', can_sign_in: true, actionable: true },
+  ]);
+  assert.deepEqual(r.body.declined, [{ person_id: P.inactive, name: 'Ian Inactive', can_sign_in: false, decided_at: '2026-10-14T08:00:00.000Z' }]);
+  assert.equal((await call(get, { params: { team_id: T.beta } })).status, 404);
+  assert.equal((await call(get, { params: { team_id: 'x' } })).status, 400);
+  // a record the caller cannot read stays a 404 (nothing about it)
+  const hidden = mount({ tables: world, raw: teamHook(), readable: () => false });
+  assert.equal((await call(hidden.handlers[teamRoute('GET', '/members')], { params: { team_id: T.alpha } })).status, 404);
+});
+
+const decideRoute = teamRoute('POST', '/members/:person_id');
+const decide = (h, personId, body, extra = {}) => call(h[decideRoute], { params: { team_id: T.alpha, person_id: personId }, body, ...extra });
+
+test('decide: approve runs team_decide as the manager, the joiner gets the derived row and one mail "via <team>"; decline mails nobody', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant({ role: 'edit' }));
+  world.sample_team_pending.push({ team_access_id: TA, person_id: P.view, state: 'pending' }, { team_access_id: TA, person_id: P.co, state: 'pending' });
+  const hook = teamHook();
+  const { handlers, db, calls } = mount({ tables: world, raw: hook });
+  const ok = await decide(handlers, P.view, { decision: 'approve' });
+  assert.deepEqual([ok.status, ok.body], [200, { decision: 'approve', email: 'sent' }]);
+  assert.deepEqual(hook.seen.map((c) => c.bindings), [['physical_samples', TA, P.view, 'approve']]);
+  assert.match(hook.seen[0].sql, /d1_private\.team_decide/);
+  assert.deepEqual(db.log.events, ['begin', 'commit']);
+  assert.match(db.log.raw[0].sql, /d1\.actor_identity/, 'the actor first, so team_decide names the caller');
+  assert.ok(db.tables().sample_access.some((r) => r.person_id === P.view && r.team_access_id === TA && r.role === 'edit'));
+  assert.deepEqual(db.tables().sample_team_pending.map((p) => p.person_id), [P.co]);
+  assert.equal(calls.mail.sent.length, 1);
+  assert.equal(calls.mail.sent[0].to, 'vic@login.example');
+  assert.match(calls.mail.sent[0].subject, /gave you access to sample SM-001 via Alpha lab/);
+  assert.match(calls.mail.sent[0].text, /Your role: Can edit/);
+  const no = await decide(handlers, P.co, { decision: 'decline' });
+  assert.deepEqual([no.status, no.body], [200, { decision: 'decline', email: 'skipped' }]);
+  assert.equal(db.tables().sample_team_pending[0].state, 'declined');
+  assert.equal(calls.mail.sent.length, 1, 'no mail for a decline');
+  // a declined member can still be approved later
+  const later = await decide(handlers, P.co, { decision: 'approve' });
+  assert.equal(later.status, 200);
+  assert.equal(calls.mail.sent.length, 2);
+});
+
+test('decide: a failing mail leaves the approval standing; the approver is never mailed', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  world.sample_team_pending.push({ team_access_id: TA, person_id: P.view, state: 'pending' }, { team_access_id: TA, person_id: P.owner, state: 'pending' });
+  const failing = mount({ tables: world, raw: teamHook(), mail: { fail: true } });
+  const r = await decide(failing.handlers, P.view, { decision: 'approve' });
+  assert.deepEqual([r.status, r.body.email], [200, 'failed']);
+  assert.ok(failing.db.tables().sample_access.some((x) => x.person_id === P.view && x.team_access_id === TA));
+  const self = await decide(failing.handlers, P.owner, { decision: 'approve' }); // the manager is the joiner
+  assert.equal(self.body.email, 'skipped');
+});
+
+test('decide: only a manager of the record (403, nothing run), 409 when nothing waits, P0002 from the function is 409 too, 400 on bad input, 404 unlisted team', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  world.sample_team_pending.push({ team_access_id: TA, person_id: P.view, state: 'pending' });
+  const hook = teamHook();
+  const { handlers, db } = mount({ tables: world, raw: hook });
+  assert.equal((await decide(handlers, P.view, { decision: 'approve' }, { acc: as(U.co) })).status, 403);
+  assert.equal(hook.seen.length, 0, 'team_decide never ran');
+  assert.deepEqual(db.log.events.slice(-2), ['begin', 'rollback']);
+  assert.equal((await decide(handlers, P.view, { decision: 'approve' }, { acc: admin })).status, 200, 'an admin may');
+  const again = await decide(handlers, P.view, { decision: 'approve' });
+  assert.equal(again.status, 409);
+  assert.equal(errorOf(again).extensions.code, 'NOTHING_TO_DECIDE');
+  assert.equal((await decide(handlers, P.stranger, { decision: 'decline' })).status, 409);
+  for (const body of [undefined, {}, { decision: 'maybe' }, { decision: 'APPROVE' }]) assert.equal((await decide(handlers, P.view, body)).status, 400, JSON.stringify(body));
+  assert.equal((await decide(handlers, 'nope', { decision: 'approve' })).status, 400);
+  assert.equal((await call(handlers[decideRoute], { params: { team_id: T.beta, person_id: P.view }, body: { decision: 'approve' } })).status, 404);
+  const raced = baseTables();
+  raced.sample_team_access.push(sampleGrant());
+  raced.sample_team_pending.push({ team_access_id: TA, person_id: P.view, state: 'pending' });
+  const p0002 = mount({ tables: raced, raw: teamHook({ decideError: Object.assign(new Error('Nothing to decide'), { code: 'P0002' }) }) });
+  const lost = await decide(p0002.handlers, P.view, { decision: 'approve' });
+  assert.deepEqual([lost.status, errorOf(lost).extensions.code], [409, 'NOTHING_TO_DECIDE']);
+  assert.equal(p0002.calls.mail.sent.length, 0);
+});
+
+// ---- the person flows next to derived rows (the must-fix: a person's own flows touch only team_access_id IS NULL) ----
+
+const derivedOf = (db, ta = TA) => db.tables().sample_access.filter((r) => r.team_access_id === ta);
+
+test('person POST: the upsert names the partial unique index of own rows, so a person who also has a derived row gets an own row and the derived row is untouched', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  world.sample_access.push(derived(P.view, 'view'));
+  world.sample_co_owners.push({ id: 1, sample_id: SAMPLE, user_id: U.view });
+  const { handlers, db } = mount({ tables: world, raw: teamHook() });
+  const r = await add(handlers, { person_id: P.view, role: 'edit' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.email, 'skipped', 'the legacy co-owner row made this not a new grant');
+  assert.deepEqual(db.tables().sample_access.map((x) => [x.person_id, x.role, x.team_access_id ?? null]), [[P.view, 'view', TA], [P.view, 'edit', null]]);
+  assert.deepEqual(db.tables().sample_co_owners, [], 'the old row still goes (dropLegacy)');
+  assert.deepEqual(r.body.entry && [r.body.entry.role, r.body.entry.source], ['edit', 'access']);
+  // a second add updates the own row in place
+  await add(handlers, { person_id: P.view, role: 'view' });
+  assert.deepEqual(db.tables().sample_access.map((x) => [x.role, x.team_access_id ?? null]), [['view', TA], ['view', null]]);
+  // and the SQL is ON CONFLICT (fk, person_id) WHERE team_access_id IS NULL
+  assert.equal(db.log.compiled[0].table, 'sample_access');
+  assert.equal(db.log.compiled[0].target, '("sample_id", "person_id") WHERE "team_access_id" IS NULL');
+  assert.equal(db.log.compiled[0].patch.role, 'edit');
+});
+
+test('person POST: a team member with only a derived row is a new grant: mailed, and an own row is added', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  world.sample_access.push(derived(P.view, 'view'));
+  const { handlers, db, calls } = mount({ tables: world, raw: teamHook() });
+  const r = await add(handlers, { person_id: P.view, role: 'view' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.email, 'sent', 'a derived row is not an entry of their own');
+  assert.equal(calls.mail.sent.length, 1);
+  assert.equal(db.tables().sample_access.filter((x) => x.person_id === P.view).length, 2);
+});
+
+test('person PATCH: changes the own row only; a person who only has a derived row is not on the list (404)', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  world.sample_access.push(derived(P.view, 'view'), own(P.view, 'view'), derived(P.co, 'view'));
+  const { handlers, db } = mount({ tables: world, raw: teamHook() });
+  const patch = handlers['PATCH /:collection/:id/entries/:person_id'];
+  const r = await call(patch, { params: { person_id: P.view }, body: { role: 'edit' } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(db.tables().sample_access.filter((x) => x.person_id === P.view).map((x) => [x.role, x.team_access_id ?? null]), [['view', TA], ['edit', null]]);
+  assert.equal((await call(patch, { params: { person_id: P.co }, body: { role: 'edit' } })).status, 404, 'Cory is only on the list through a team');
+  assert.deepEqual(derivedOf(db).map((x) => [x.person_id, x.role]), [[P.view, 'view'], [P.co, 'view']]);
+});
+
+test('person DELETE: removes the own row and leaves every derived row (the guard would refuse them); a derived-only person is a 404', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant(), sampleGrant({ team_access_id: TB, team_id: T.beta }));
+  world.sample_access.push(derived(P.view, 'view'), derived(P.view, 'view', TB), own(P.view, 'edit'), derived(P.co, 'view'));
+  const { handlers, db } = mount({ tables: world, raw: teamHook() });
+  const del = handlers['DELETE /:collection/:id/entries/:person_id'];
+  const r = await call(del, { params: { person_id: P.view } });
+  assert.deepEqual([r.status, r.body], [200, { removed: true }]);
+  assert.deepEqual(db.tables().sample_access.map((x) => [x.person_id, x.team_access_id]), [[P.view, TA], [P.view, TB], [P.co, TA]]);
+  assert.equal((await call(del, { params: { person_id: P.view } })).status, 404, 'only derived rows left: not on the person list');
+  assert.equal((await call(del, { params: { person_id: P.co } })).status, 404);
+  assert.equal(db.tables().sample_access.length, 3);
+});
+
+test('transfer: the new owner\'s own row goes, their derived rows stay; the previous owner gets an own row next to theirs', async () => {
+  const world = baseTables();
+  world.sample_team_access.push(sampleGrant());
+  world.sample_access.push(derived(P.view, 'view'), own(P.view, 'view'), derived(P.owner, 'view'));
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.view });
+  const { handlers, db } = mount({ tables: world, raw: teamHook() });
+  const r = await transfer(handlers, P.view);
+  assert.equal(r.status, 200);
+  assert.equal(db.tables().physical_samples[0].owner_person_id, P.view);
+  const rows = db.tables().sample_access.map((x) => [x.person_id, x.role, x.team_access_id ?? null]);
+  assert.deepEqual(rows, [[P.view, 'view', TA], [P.owner, 'view', TA], [P.owner, 'edit', null]]);
+  // the previous owner: an own Can edit row, the derived row untouched; the new owner: derived row kept, own row gone
+  const got = await call(handlers['GET /:collection/:id'], { acc: as(U.view) });
+  assert.deepEqual(got.body.entries.map((e) => [e.name, e.role]), [['Olive Owner', 'edit']]);
+});
+
+test('transfer on a project: the previous PI becomes an own investigator row though a derived row exists', async () => {
+  const world = baseTables();
+  world.project_team_access.push({ team_access_id: 'ta-p', project_id: PROJECT, team_id: T.alpha, role: 'investigator', trust_new_members: false, added_by_person_id: P.pi });
+  world.project_access.push({ access_id: 'd1', project_id: PROJECT, person_id: P.pi, role: 'investigator', added_by_person_id: P.pi, team_access_id: 'ta-p', created_at: new Date() });
+  const { handlers, db } = mount({ tables: world, manage: () => true, raw: teamHook() });
+  const r = await transfer(handlers, P.view, { collection: 'projects', id: PROJECT, acc: as(U.pi) });
+  assert.equal(r.status, 200);
+  assert.deepEqual(db.tables().project_access.map((x) => [x.person_id, x.team_access_id ?? null]), [[P.pi, 'ta-p'], [P.pi, null]]);
+});
+
+test('the mock models the partial index: a plain column list as the conflict target is refused like Postgres refuses it', async () => {
+  const { db } = mount();
+  await assert.rejects(db.transaction((trx) => trx('sample_access').insert({ sample_id: SAMPLE, person_id: P.view, role: 'view' }).onConflict(['sample_id', 'person_id']).merge({ role: 'view' })), /no unique or exclusion constraint/);
+});
+
+test('mailContent: via adds "via <team>" to the subject and the body, HTML-escaped; without it nothing changes', () => {
+  const m = mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1', title: 'Bar', link: 'https://x/y', via: 'Lab <b>1</b>' });
+  assert.equal(m.subject, 'Olive gave you access to sample SM-1 via Lab <b>1</b>');
+  assert.match(m.text, /the sample SM-1 \(Bar\) via Lab <b>1<\/b>\./);
+  assert.match(m.html, /via Lab &lt;b&gt;1&lt;\/b&gt;\./);
+  assert.ok(!m.html.includes('<b>1'));
+  assert.ok(!/via/.test(mailContent({ adder: 'Olive', role: 'Can view', kind: 'sample', code: 'SM-1' }).subject));
+});
+
+// ---- team ownership (migration 183, People 3 Task 3) ---------------------------------------------------------------------
+// The database makes the owner grant (role own) and its derived rows (manage / edit) when owner_team_id is set; this in-memory world has
+// no triggers, so the tests look at what the ENDPOINT writes and answers, and put the grant and rows in the world where a read needs them.
+
+const transferTeam = (h, teamId, extra = {}) => call(h['POST /:collection/:id/transfer'], { body: { team_id: teamId }, ...extra });
+const ownGrant = (team_id = T.beta, extra = {}) => ({ team_access_id: 'ta-own', sample_id: SAMPLE, team_id, role: 'own', trust_new_members: true, added_by_person_id: P.owner, created_at: new Date(), ...extra });
+// a world where Beta (managers Vic and Edda, member Cory) owns the sample
+const teamOwned = () => {
+  const world = baseTables();
+  world.physical_samples[0].owner_person_id = null;
+  world.physical_samples[0].owner_team_id = T.beta;
+  world.team_members.push({ team_id: T.beta, person_id: P.co, is_manager: false }, { team_id: T.beta, person_id: P.editor, is_manager: true });
+  world.sample_team_access.push(ownGrant());
+  world.sample_access.push(
+    { access_id: 'd-v', sample_id: SAMPLE, person_id: P.view, role: 'manage', added_by_person_id: P.owner, team_access_id: 'ta-own', created_at: new Date() },
+    { access_id: 'd-e', sample_id: SAMPLE, person_id: P.editor, role: 'manage', added_by_person_id: P.owner, team_access_id: 'ta-own', created_at: new Date() },
+    { access_id: 'd-c', sample_id: SAMPLE, person_id: P.co, role: 'edit', added_by_person_id: P.owner, team_access_id: 'ta-own', created_at: new Date() },
+  );
+  return world;
+};
+const asVic = as(U.view);
+const viaManagers = (c, id, user) => (c === 'physical_samples' && id === SAMPLE ? [U.view, U.editor, U.owner].includes(user) : user === U.owner || (c === 'projects' && user === U.pi));
+
+test('GET owner: a person owner gains kind person; a team owner is { kind team, team_id, name, color, logo, managers }; no owner is null', async () => {
+  const mine = mount();
+  assert.deepEqual((await call(mine.handlers['GET /:collection/:id'])).body.owner, { kind: 'person', person_id: P.owner, name: 'Olive Owner', can_sign_in: true });
+  const { handlers } = mount({ tables: teamOwned(), manage: viaManagers });
+  const r = await call(handlers['GET /:collection/:id'], { acc: asVic });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.owner, {
+    kind: 'team', team_id: T.beta, name: 'Beta crew', color: 'green', logo: ID(400),
+    managers: [{ person_id: P.editor, full_name: 'Edda Editor' }, { person_id: P.view, full_name: 'Vic Viewer' }],
+  });
+  assert.equal(r.body.can_manage, true, 'a manager acts as the owner');
+  assert.equal((await call(handlers['GET /:collection/:id'], { acc: as(U.co) })).body.can_manage, false, 'a plain member does not');
+  // a project has no team owner: its PI is a person
+  assert.deepEqual((await call(mine.handlers['GET /:collection/:id'], { collection: 'projects', id: PROJECT, acc: as(U.pi) })).body.owner, { kind: 'person', person_id: P.pi, name: 'Pia PI', can_sign_in: true });
+  const none = baseTables();
+  none.physical_samples[0].owner_person_id = null;
+  assert.equal((await call(mount({ tables: none }).handlers['GET /:collection/:id'])).body.owner, null);
+});
+
+test('GET: the owner grant is not a team entry and its derived rows are not person entries (Ruling O2); a real share of another team still is', async () => {
+  const world = teamOwned();
+  world.sample_team_access.push(sampleGrant()); // Alpha, a view share
+  world.sample_access.push({ access_id: 'd-a', sample_id: SAMPLE, person_id: P.stranger, role: 'view', added_by_person_id: P.owner, team_access_id: TA, created_at: new Date() }, own(P.nologin, 'view'));
+  const { handlers } = mount({ tables: world, raw: teamHook(), manage: viaManagers });
+  const r = await call(handlers['GET /:collection/:id'], { acc: asVic });
+  assert.deepEqual(r.body.teams.map((t) => [t.team_id, t.role]), [[T.alpha, 'view']], 'Beta owns the record: shown as the owner only');
+  assert.deepEqual(r.body.entries.map((e) => e.name), ['Nell Nologin']);
+  // only an owner grant: an empty list
+  const only = mount({ tables: teamOwned(), raw: teamHook() });
+  const bare = await call(only.handlers['GET /:collection/:id'], { acc: asVic });
+  assert.deepEqual([bare.body.teams, bare.body.entries], [[], []]);
+});
+
+test('the owner grant is refused by the team routes: PATCH, DELETE, add (409 TEAM_OWNS_RECORD), members and decide (404)', async () => {
+  const { handlers, db } = mount({ tables: teamOwned(), raw: teamHook(), manage: viaManagers });
+  const params = { team_id: T.beta };
+  for (const [what, r] of [
+    ['patch', await call(handlers[teamRoute('PATCH')], { acc: asVic, params, body: { role: 'view' } })],
+    ['patch trust', await call(handlers[teamRoute('PATCH')], { acc: asVic, params, body: { trust_new_members: false } })],
+    ['delete', await call(handlers[teamRoute('DELETE')], { acc: asVic, params })],
+    ['add', await add(handlers, { team_id: T.beta, role: 'view' }, { acc: asVic })],
+  ]) {
+    assert.deepEqual([r.status, errorOf(r).extensions.code], [409, 'TEAM_OWNS_RECORD'], what);
+  }
+  const members = await call(handlers[teamRoute('GET', '/members')], { acc: asVic, params });
+  assert.deepEqual([members.status, errorOf(members).extensions.code], [404, 'NOT_FOUND']);
+  const decided = await decide(handlers, P.co, { decision: 'approve' }, { acc: asVic, params: { team_id: T.beta, person_id: P.co } });
+  assert.deepEqual([decided.status, errorOf(decided).extensions.code], [404, 'NOT_FOUND']);
+  assert.deepEqual(db.tables().sample_team_access.map((g) => [g.team_id, g.role]), [[T.beta, 'own']], 'the grant is untouched');
+  assert.equal(db.log.writes.filter((w) => w.table === 'sample_team_access').length, 0);
+});
+
+test('transfer to a team: one update sets owner_team_id and clears owner_person_id; the previous owner stays Can edit; the old rows go', async () => {
+  const world = baseTables();
+  world.sample_co_owners.push({ id: 2, sample_id: SAMPLE, user_id: U.owner });
+  const { handlers, db, calls } = mount({ tables: world });
+  const r = await transferTeam(handlers, T.beta);
+  assert.equal(r.status, 200);
+  const sample = db.tables().physical_samples[0];
+  assert.deepEqual([sample.owner_team_id, sample.owner_person_id], [T.beta, null]);
+  const updates = db.log.writes.filter((w) => w.table === 'physical_samples');
+  assert.equal(updates.length, 1, 'ONE update: the CHECK allows at most one owner');
+  assert.deepEqual(updates[0].patch, { owner_team_id: T.beta, owner_person_id: null });
+  assert.deepEqual(db.tables().sample_access.map((x) => [x.person_id, x.role, x.team_access_id ?? null]), [[P.owner, 'edit', null]]);
+  assert.deepEqual(db.tables().sample_co_owners, [], 'the previous owner\'s old co-owner row is folded into the access row');
+  assert.deepEqual(db.tables().sample_team_access, [], 'the endpoint never writes the owner grant: the database does');
+  assert.deepEqual(db.log.events, ['begin', 'commit']);
+  assert.match(db.log.raw[0].sql, /d1\.actor_identity/);
+  assert.equal(r.body.owner.kind, 'team');
+  assert.equal(r.body.owner.name, 'Beta crew');
+  assert.equal(r.body.blocked_by, null);
+  assert.ok(calls.manage.every((m) => m.knex?.isTransaction), 'the manage check ran inside the transaction');
+});
+
+test('transfer to a team mails the team\'s managers once each (not the adder), "made <team> the owner", with the link', async () => {
+  const world = baseTables();
+  world.team_members.push({ team_id: T.beta, person_id: P.editor, is_manager: true }, { team_id: T.beta, person_id: P.co, is_manager: false }, { team_id: T.beta, person_id: P.nologin, is_manager: true });
+  const { handlers, calls } = mount({ tables: world });
+  const r = await transferTeam(handlers, T.beta);
+  // managers: Vic and Edda have logins and addresses; Nell is a manager with no login (not mailed); Cory is only a member
+  assert.deepEqual(calls.mail.sent.map((m) => m.to).sort(), ['edda@login.example', 'vic@login.example']);
+  for (const m of calls.mail.sent) {
+    assert.equal(m.subject, 'Olive Owner made Beta crew the owner of sample SM-001');
+    assert.match(m.text, /As a manager of Beta crew you can share it, transfer it and delete it\./);
+    assert.match(m.text, /Olive Owner made the team Beta crew the owner of the sample SM-001/);
+    assert.match(m.html, /As a manager of Beta crew/);
+  }
+  assert.deepEqual(r.body.emails, { sent: 2, skipped: 0, failed: 0 });
+  assert.equal(r.body.email, 'sent');
+  // the caller is never mailed, even when they manage the team
+  const self = baseTables();
+  self.team_members.push({ team_id: T.beta, person_id: P.owner, is_manager: true });
+  const mine = mount({ tables: self });
+  const s = await transferTeam(mine.handlers, T.beta);
+  assert.deepEqual(mine.calls.mail.sent.map((m) => m.to), ['vic@login.example']);
+  assert.equal(s.body.owner.managers.length, 2);
+});
+
+test('transfer to a team: a team with no manager is refused 409 TEAM_HAS_NO_MANAGER (Ruling O4) and nothing is written', async () => {
+  const { handlers, db, calls } = mount();
+  const e = await transferTeam(handlers, T.empty);
+  assert.deepEqual([e.status, errorOf(e).extensions.code], [409, 'TEAM_HAS_NO_MANAGER']);
+  assert.equal(errorOf(e).message, 'That team has no manager to look after the record — add a manager first');
+  assert.equal(db.log.writes.length, 0, 'no UPDATE, no access row');
+  assert.deepEqual(db.log.events.slice(-1), ['rollback']);
+  const sample = db.tables().physical_samples[0];
+  assert.deepEqual([sample.owner_person_id, sample.owner_team_id ?? null], [P.owner, null]);
+  assert.equal(calls.mail.sent.length, 0);
+  // a team whose members are all non-managers (Alpha) is refused too
+  const plain = mount();
+  assert.equal(errorOf(await transferTeam(plain.handlers, T.alpha)).extensions.code, 'TEAM_HAS_NO_MANAGER');
+  assert.equal(plain.db.log.writes.length, 0);
+});
+
+test('transfer to a team: a failing mail leaves it standing', async () => {
+  const failing = mount({ mail: { fail: true } });
+  const r = await transferTeam(failing.handlers, T.beta);
+  assert.deepEqual([r.status, r.body.email], [200, 'failed']);
+  assert.equal(failing.db.tables().physical_samples[0].owner_team_id, T.beta);
+});
+
+test('transfer to a team: a project is 409 NOT_OWNABLE_BY_TEAM; the four ownable types work; the team is validated; same team 409; person+team 400', async () => {
+  const { handlers, db } = mount({ manage: () => true });
+  const project = await transferTeam(handlers, T.beta, { collection: 'projects', id: PROJECT, acc: as(U.pi) });
+  assert.deepEqual([project.status, errorOf(project).extensions.code], [409, 'NOT_OWNABLE_BY_TEAM']);
+  assert.equal(db.tables().projects[0].principal_investigator_person, P.pi);
+  assert.equal(db.tables().projects[0].owner_team_id, undefined, 'no owner_team_id column is ever written on a project');
+  for (const [collection, id, key] of [['manufacturing_operations', OPERATION, 'operation_id'], ['test_sessions', TEST, 'session_id'], ['campaigns', CAMPAIGN, 'campaign_id'], ['physical_samples', SAMPLE, 'sample_id']]) {
+    const r = await transferTeam(handlers, T.beta, { collection, id });
+    assert.equal(r.status, 200, collection);
+    const row = db.tables()[collection].find((x) => x[key] === id);
+    assert.deepEqual([row.owner_team_id, row.owner_person_id], [T.beta, null], collection);
+  }
+  assert.equal((await transfer(handlers, P.view, { collection: 'projects', id: PROJECT, acc: as(U.pi) })).status, 200, 'a person transfer of a project is unchanged');
+  assert.equal((await transferTeam(handlers, ID(777))).status, 400);
+  assert.equal((await transferTeam(handlers, 'nope')).status, 400);
+  const again = await transferTeam(handlers, T.beta);
+  assert.deepEqual([again.status, errorOf(again).extensions.code], [409, 'CONFLICT']);
+  const both = await call(handlers['POST /:collection/:id/transfer'], { body: { person_id: P.view, team_id: T.beta } });
+  assert.equal(both.status, 400);
+  assert.equal((await call(handlers['POST /:collection/:id/transfer'], { body: {} })).status, 400);
+});
+
+test('transfer to a team needs the manage right: a plain member and a stranger get 403 and nothing changes; a manager of the owning team may', async () => {
+  const world = teamOwned();
+  world.team_members.find((m) => m.team_id === T.alpha && m.person_id === P.owner).is_manager = true; // Alpha needs a manager to own (Ruling O4)
+  const { handlers, db } = mount({ tables: world, manage: viaManagers });
+  for (const user of [U.co, U.stranger]) {
+    const r = await transferTeam(handlers, T.alpha, { acc: as(user) });
+    assert.equal(r.status, 403, String(user));
+  }
+  assert.equal(db.tables().physical_samples[0].owner_team_id, T.beta);
+  assert.equal((await transferTeam(handlers, T.alpha, { acc: asVic })).status, 200, 'a manager of the owning team acts as the owner');
+  assert.equal(db.tables().physical_samples[0].owner_team_id, T.alpha);
+  const ownerless = baseTables();
+  ownerless.physical_samples[0].owner_person_id = null;
+  const adm = mount({ tables: ownerless, manage: () => false });
+  assert.equal((await transferTeam(adm.handlers, T.beta, { acc: admin })).status, 200);
+});
+
+test('transfer from a team to a team: owner_team_id moves; there is no person owner to keep, so no access row is written', async () => {
+  const world = teamOwned();
+  world.team_members.find((m) => m.team_id === T.alpha && m.person_id === P.owner).is_manager = true; // Alpha needs a manager to own (Ruling O4)
+  const { handlers, db } = mount({ tables: world, manage: viaManagers });
+  const r = await transferTeam(handlers, T.alpha, { acc: asVic });
+  assert.equal(r.status, 200);
+  const sample = db.tables().physical_samples[0];
+  assert.deepEqual([sample.owner_team_id, sample.owner_person_id], [T.alpha, null]);
+  assert.equal(db.log.writes.filter((w) => w.table === 'sample_access' && w.op !== 'delete').length, 0);
+});
+
+test('transfer to a person from a team-owned record clears owner_team_id in the SAME update; nobody is kept as Can edit', async () => {
+  const world = teamOwned();
+  world.sample_readers.push({ record_id: SAMPLE, user_id: U.owner });
+  const { handlers, db, calls } = mount({ tables: world, manage: viaManagers });
+  const r = await transfer(handlers, P.owner, { acc: asVic });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.owner, { kind: 'person', person_id: P.owner, name: 'Olive Owner', can_sign_in: true });
+  const sample = db.tables().physical_samples[0];
+  assert.deepEqual([sample.owner_person_id, sample.owner_team_id], [P.owner, null]);
+  const updates = db.log.writes.filter((w) => w.table === 'physical_samples');
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].patch, { owner_person_id: P.owner, owner_team_id: null });
+  assert.equal(db.log.writes.filter((w) => w.table === 'sample_access' && w.op === 'upsert-update').length, 0);
+  assert.deepEqual(db.tables().sample_access.filter((x) => x.team_access_id === null || x.team_access_id === undefined), [], 'no own rows made for anybody');
+  // the new owner is mailed as before (a person)
+  assert.equal(calls.mail.sent[0].subject, 'Vic Viewer made you the owner of sample SM-001');
+  assert.deepEqual(db.log.events, ['begin', 'commit']);
+});
+
+test('transfer to a person on a project never writes owner_team_id; on an operation it clears it', async () => {
+  const { handlers, db } = mount({ manage: () => true });
+  await transfer(handlers, P.view, { collection: 'projects', id: PROJECT, acc: as(U.pi) });
+  assert.equal(db.log.writes.find((w) => w.table === 'projects').patch.owner_team_id, undefined);
+  await transfer(handlers, P.view, { collection: 'manufacturing_operations', id: OPERATION });
+  assert.deepEqual(db.log.writes.find((w) => w.table === 'manufacturing_operations').patch, { owner_person_id: P.view, owner_team_id: null });
+});
+
+test('mailContent: ownerTeam words the mail for a team\'s managers; everything is escaped; it wins over transfer and via', () => {
+  const m = mailContent({ adder: 'Olive', kind: 'sample', code: 'SM-1', title: 'Bar <A>', ownerTeam: 'R&D <crew>', transfer: true, link: 'https://x.example/s/1' });
+  assert.equal(m.subject, 'Olive made R&D <crew> the owner of sample SM-1');
+  assert.match(m.text, /Olive made the team R&D <crew> the owner of the sample SM-1 \(Bar <A>\)\./);
+  assert.match(m.text, /As a manager of R&D <crew> you can share it, transfer it and delete it\./);
+  assert.match(m.html, /R&amp;D &lt;crew&gt;/);
+  assert.doesNotMatch(m.html, /<crew>/);
+  assert.match(m.text, /Open it here: https:\/\/x\.example\/s\/1/);
+  // a blocked manager gets the generic wording: no title, no link
+  const blocked = mailContent({ adder: 'Olive', kind: 'sample', code: 'SM-1', title: 'Bar', ownerTeam: 'Beta', link: 'https://x.example', blockedReason: 'no_login' });
+  assert.doesNotMatch(blocked.text, /Bar|https/);
+  // unchanged without it
+  assert.equal(mailContent({ adder: 'Olive', kind: 'sample', code: 'SM-1', transfer: true }).subject, 'Olive made you the owner of sample SM-1');
 });

@@ -9,6 +9,10 @@
 //   tests_with_subjects_x20   20 x POST /items/test_sessions with a subject (migration 139's per-subject UPDATE; one refresh per row)
 //   campaign_add_50_samples   50 x POST /items/campaign_samples into the largest campaign of the large project (what Directus does for M2M writes)
 //   link_login_big_pi         PATCH /items/people/<PI of the large project> {user_id}: row 45's cascade over the project's whole content (admin)
+//   team_join_100_records     POST /d1-teams/<team>/members: a person joins a team given Can edit on 100 records (every grant trusts new members:
+//                             100 derived access rows and their readers recompute; People 2, needs migrations 181 and 182 and the d1-teams and
+//                             d1-record-access extensions; skipped when /d1-teams does not answer)
+//   team_grant_20_members     POST /d1-record-access/physical_samples/<big sample>/entries {team_id, role}: a team of 20 is given Can edit on the big sample
 //   ui_write_wait_<kind>      a PATCH of a sample / test / campaign note as a member WHILE the harness holds an import transaction open
 const BASE = process.env.DIRECTUS_URL;
 const ADMIN = process.env.TOKEN;
@@ -148,6 +152,64 @@ if (want('link_login_big_pi') && bigProject?.principal_investigator_person?.pers
     times.push(r.ms);
   }
   if (times.length) report('link_login_big_pi', times);
+}
+
+// ---- 5b. teams (People 2): the member makes a team (the creator is its manager), the admin gives it records and members; the join and the
+// grant are timed, the setup is not. Each round removes its team (DELETE /d1-teams/<id> takes the grants and derived rows with it).
+const teamsOn = (await call('GET', '/d1-teams', ADMIN)).status === 200;
+const teamSetup = async (tag) => {
+  const t = await call('POST', '/d1-teams', MEMBER, { name: `Perf team ${tag} ${Date.now()}` });
+  return must(t, `${tag} team`) ? t.body.team_id : null;
+};
+const dropTeam = (id) => call('DELETE', `/d1-teams/${id}`, ADMIN);
+const people = teamsOn ? ((await admin('/items/people?' + q({ fields: ['person_id', 'user_id'], filter: { user_id: { _nnull: true } }, limit: 60 }))) ?? []) : [];
+if (want('team_join_100_records') && teamsOn) {
+  const samples = ((await admin('/items/physical_samples?' + q({ fields: ['sample_id'], limit: 100, sort: ['sample_id'] }))) ?? []).map((r) => r.sample_id);
+  const times = [];
+  for (let k = 0; k < Math.min(N, 3) && samples.length; k++) {
+    const team = await teamSetup('join');
+    if (!team) break;
+    let ok = true;
+    for (const sid of samples) {
+      const g = await call('POST', `/d1-record-access/physical_samples/${sid}/entries`, ADMIN, { team_id: team, role: 'edit' });
+      const t = ok && await call('PATCH', `/d1-record-access/physical_samples/${sid}/entries/team/${team}`, ADMIN, { trust_new_members: true });
+      ok = must(g, 'team_join_100_records grant') && must(t, 'team_join_100_records trust');
+      if (!ok) break;
+    }
+    const inTeam = new Set((((await call('GET', `/d1-teams/${team}`, ADMIN)).body?.members) ?? []).map((m) => m.person_id));
+    const joiner = ok && people.find((p) => !inTeam.has(p.person_id))?.person_id;
+    if (!joiner) { console.log('PERFW team_join_100_records FAILED no joiner or no grants'); bad++; }
+    else {
+      const r = await call('POST', `/d1-teams/${team}/members`, ADMIN, { person_id: joiner });
+      if (must(r, 'team_join_100_records')) times.push(r.ms);
+    }
+    await dropTeam(team);
+  }
+  if (times.length) report('team_join_100_records', times);
+}
+if (want('team_grant_20_members') && teamsOn && bigSample) {
+  const times = [];
+  for (let k = 0; k < Math.min(N, 3); k++) {
+    const team = await teamSetup('grant');
+    if (!team) break;
+    let ok = true;
+    const inTeam = new Set((((await call('GET', `/d1-teams/${team}`, ADMIN)).body?.members) ?? []).map((m) => m.person_id)); // the creator
+    let added = inTeam.size;
+    for (const person of people) {
+      if (added >= 20) break;
+      if (inTeam.has(person.person_id)) continue;
+      ok = must(await call('POST', `/d1-teams/${team}/members`, ADMIN, { person_id: person.person_id }), 'team_grant_20_members member');
+      if (!ok) break;
+      added += 1;
+    }
+    if (ok && added < 20) console.log(`PERFINFO team_grant_20_members only ${added} people with a login in the copy`);
+    if (ok) {
+      const r = await call('POST', `/d1-record-access/physical_samples/${bigSample}/entries`, ADMIN, { team_id: team, role: 'edit' });
+      if (must(r, 'team_grant_20_members')) times.push(r.ms);
+    }
+    await dropTeam(team);
+  }
+  if (times.length) report('team_grant_20_members', times);
 }
 
 // ---- 6. UI writes while the harness holds an import transaction (a member edits a sample, a test, a campaign note)

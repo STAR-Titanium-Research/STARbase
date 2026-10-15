@@ -5,7 +5,9 @@
 #   1. function = oracle: the fixture's 32 universes x all users, every type, plus the narrowed amnesty, the junction and hidden records;
 #   2. the mutation matrix: one case per row of the spec's trigger-coverage table (rows 1 to 51) and every mutation class of
 #      section 10. Each case mutates, asserts d1_private.readers_drift() is EMPTY FOR ALL RECORDS (not only the touched ones), asserts at
-#      least one explicit effect, reverses the mutation and asserts both again. Cases run in a subtransaction that is rolled back;
+#      least one explicit effect, reverses the mutation and asserts both again. Cases run in a subtransaction that is rolled back.
+#      The c_team_* cases (migration 182) do the same for team grants: grant, join, leave, trust and a deleted team;
+#      the c_team_own_* cases (migration 183) for team ownership (the owner grant, manage = edit, the manager flag, clearing), against the oracle too;
 #   3. the multi-form cases that need their own transaction or session: COPY, a 1000-row insert, the importer's ON CONFLICT DO UPDATE,
 #      TRUNCATE of every input table, a disabled trigger (detected by readers_drift, repaired by readers_rebuild), REPEATABLE READ (raises);
 #   4. the concurrency cases (two sessions, each in both commit orders): 0 (campaign_samples insert against restricting the campaign),
@@ -1088,6 +1090,291 @@ BEGIN
     PERFORM m.expect(r.restricted IS FALSE AND NOT m.hid('manufacturing_operations', o1), 'unrestricting refreshes the rollup and hidden_records');
     PERFORM m.done();
 END $$;
+
+-- team grants (migration 182): a grant on a record expands into derived <type>_access rows for the team's members, so the readers
+-- triggers of the access tables keep the readers tables right through every team change (grant, join, leave, trust, team deleted)
+CREATE OR REPLACE FUNCTION m.mk_team(l text, mgr text, others text[] DEFAULT ARRAY[]::text[]) RETURNS uuid LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO teams (team_id, name) VALUES (m.id(l), 'M team ' || l);
+    INSERT INTO team_members (team_id, person_id, is_manager) VALUES (m.id(l), m.pe(mgr), true);
+    INSERT INTO team_members (team_id, person_id) SELECT m.id(l), m.pe(x) FROM unnest(others) AS x;
+    RETURN m.id(l);
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_grant() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; c uuid; s uuid; t uuid; g uuid;
+BEGIN
+    p := m.mk_project('tgp', 'a'); c := m.mk_campaign('tgc', p, 'f'); s := m.mk_sample('tgs', p, 'e'); PERFORM m.mk_cs(c, s);
+    t := m.mk_team('tgt', 'b', ARRAY['c', 'z']);
+    PERFORM m.drift('setup');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')), 'before: the team does not read the sample');
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, t, 'view') RETURNING team_access_id INTO g;
+    PERFORM m.drift('the team grant (view)');
+    PERFORM m.expect(m.rd('sample', s, m.u('b')) AND m.rd('sample', s, m.u('c')) AND NOT m.rd('campaign', c, m.u('b')), 'the members read the sample; Can view does not reach the campaign');
+    UPDATE sample_team_access SET role = 'edit' WHERE team_access_id = g;
+    PERFORM m.drift('the grant made edit');
+    PERFORM m.expect(m.rd('campaign', c, m.u('c')) AND m.rd('project', p, m.u('c')), 'Can edit through the team: the members read the campaign and the project');
+    DELETE FROM sample_team_access WHERE team_access_id = g;
+    PERFORM m.drift('the grant removed');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('project', p, m.u('c')), 'removed: the members lose it all');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_join() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE o1 uuid; o2 uuid; t uuid; g2 uuid;
+BEGIN
+    o1 := m.mk_op('tjo1', NULL, NULL, NULL, 'a', true); o2 := m.mk_op('tjo2', NULL, NULL, NULL, 'a', true);
+    t := m.mk_team('tjt', 'b');
+    INSERT INTO operation_team_access (operation_id, team_id, role, trust_new_members) VALUES (o1, t, 'view', true);
+    INSERT INTO operation_team_access (operation_id, team_id, role) VALUES (o2, t, 'edit') RETURNING team_access_id INTO g2;
+    PERFORM m.drift('setup');
+    INSERT INTO team_members (team_id, person_id) VALUES (t, m.pe('d'));
+    PERFORM m.drift('a member joins');
+    PERFORM m.expect(m.rd('operation', o1, m.u('d')) AND NOT m.rd('operation', o2, m.u('d')), 'the trusting grant lets the joiner in, the other leaves them pending');
+    PERFORM d1_private.team_decide('manufacturing_operations', g2, m.pe('d'), 'approve');
+    PERFORM m.drift('the pending member approved');
+    PERFORM m.expect(m.rd('operation', o2, m.u('d')), 'approved: the joiner reads the second operation');
+    DELETE FROM team_members WHERE team_id = t AND person_id = m.pe('d');
+    PERFORM m.drift('the member leaves again');
+    PERFORM m.expect(NOT m.rd('operation', o1, m.u('d')) AND NOT m.rd('operation', o2, m.u('d')), 'the reverse: no access left');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_leave() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; s uuid; t uuid; g uuid;
+BEGIN
+    p := m.mk_project('tlp', 'a'); s := m.mk_sample('tls', p, 'e', true);
+    t := m.mk_team('tlt', 'b', ARRAY['c']);
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, t, 'edit') RETURNING team_access_id INTO g;
+    PERFORM m.drift('setup');
+    PERFORM m.expect(m.rd('sample', s, m.u('c')) AND m.rd('project', p, m.u('c')), 'before: the member reads the Restricted sample and, as its editor, the project');
+    DELETE FROM team_members WHERE team_id = t AND person_id = m.pe('c');
+    PERFORM m.drift('the member leaves');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('c')) AND NOT m.rd('project', p, m.u('c')), 'the leaver loses both at once');
+    INSERT INTO team_members (team_id, person_id) VALUES (t, m.pe('c'));
+    PERFORM m.drift('the member rejoins (pending)');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('c')), 'a rejoiner the grant does not trust is pending');
+    UPDATE sample_team_access SET trust_new_members = true WHERE team_access_id = g;
+    PERFORM m.drift('the grant trusts new members');
+    PERFORM m.expect(m.rd('sample', s, m.u('c')) AND m.rd('project', p, m.u('c')), 'the reverse: trusted, the member is back');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_trust() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE cm uuid; t uuid; g uuid;
+BEGIN
+    cm := m.mk_campaign('ttc', NULL, 'a', true);
+    t := m.mk_team('ttt', 'b');
+    INSERT INTO campaign_team_access (campaign_id, team_id, role) VALUES (cm, t, 'view') RETURNING team_access_id INTO g;
+    INSERT INTO team_members (team_id, person_id) VALUES (t, m.pe('d')), (t, m.pe('e'));
+    PERFORM d1_private.team_decide('campaigns', g, m.pe('e'), 'decline');
+    PERFORM m.drift('setup: d pending, e declined');
+    PERFORM m.expect(m.rd('campaign', cm, m.u('b')) AND NOT m.rd('campaign', cm, m.u('d')) AND NOT m.rd('campaign', cm, m.u('e')), 'only the member at grant time reads it');
+    UPDATE campaign_team_access SET trust_new_members = true WHERE team_access_id = g;
+    PERFORM m.drift('trust on');
+    PERFORM m.expect(m.rd('campaign', cm, m.u('d')) AND NOT m.rd('campaign', cm, m.u('e')), 'trust lets the pending member in, not the declined one');
+    UPDATE campaign_team_access SET trust_new_members = false WHERE team_access_id = g;
+    PERFORM m.drift('trust off');
+    PERFORM d1_private.team_decide('campaigns', g, m.pe('e'), 'approve');
+    PERFORM m.drift('the declined member approved');
+    PERFORM m.expect(m.rd('campaign', cm, m.u('d')) AND m.rd('campaign', cm, m.u('e')), 'the reverse: both read it');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_delete() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; s uuid; t uuid;
+BEGIN
+    p := m.mk_project('tdp', 'a', true); s := m.mk_sample('tds', NULL, 'e', true);
+    t := m.mk_team('tdt', 'b', ARRAY['c']);
+    INSERT INTO project_team_access (project_id, team_id, role) VALUES (p, t, 'investigator');
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, t, 'view');
+    PERFORM m.drift('setup');
+    PERFORM m.expect(m.rd('project', p, m.u('b')) AND m.rd('sample', s, m.u('c')), 'the team reads the Restricted project and sample');
+    DELETE FROM teams WHERE team_id = t;
+    PERFORM m.drift('the team deleted');
+    PERFORM m.expect(NOT m.rd('project', p, m.u('b')) AND NOT m.rd('sample', s, m.u('c')), 'its grants and derived rows went with it');
+    t := m.mk_team('tdt', 'b', ARRAY['c']);
+    INSERT INTO project_team_access (project_id, team_id, role) VALUES (p, t, 'investigator');
+    INSERT INTO sample_team_access (sample_id, team_id, role) VALUES (s, t, 'view');
+    PERFORM m.drift('the reverse: the team and its grants again');
+    PERFORM m.expect(m.rd('project', p, m.u('b')) AND m.rd('sample', s, m.u('c')), 'the reverse: read again');
+    PERFORM m.done();
+END $$;
+
+-- team ownership (migration 183): owner_team_id keeps an owner grant whose derived rows give the team's managers the level manage and its other
+-- members edit. The readers machinery counts manage like edit (s_editor, the editor views, the candidates, readers_of_project), and the oracle
+-- (scripts/dev/access_matrix_oracle.sql) models the same: m.oracle_agree compares every reader table row of a record, for every user, with the oracle.
+CREATE OR REPLACE FUNCTION m.oracle_agree(kind text, rec uuid) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE n text; o boolean;
+BEGIN
+    FOREACH n IN ARRAY ARRAY['a', 'b', 'c', 'd', 'e', 'f'] LOOP
+        o := CASE kind WHEN 'sample' THEN ref.s_read(rec, m.u(n)) WHEN 'campaign' THEN ref.c_read(rec, m.u(n)) WHEN 'project' THEN ref.pj_read(rec, m.u(n))
+                       WHEN 'operation' THEN ref.op_read_ordinary(rec, m.u(n)) ELSE ref.test_read(rec, m.u(n)) END;
+        IF o IS DISTINCT FROM m.rd(kind, rec, m.u(n)) THEN
+            RAISE EXCEPTION 'm_fail: the readers table and the oracle disagree on % % for user %: table %, oracle %', kind, left(rec::text, 8), n, m.rd(kind, rec, m.u(n)), o USING ERRCODE = 'M0002';
+        END IF;
+    END LOOP;
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_own_set() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; s uuid; o uuid; t uuid; ts uuid; cm uuid; tt uuid; ct uuid; oo uuid; n text;
+BEGIN
+    p := m.mk_project('tos_p', 'e'); s := m.mk_sample('tos_s', p, 'f', true); o := m.mk_op('tos_o', s, NULL, NULL, NULL, false);
+    ts := m.mk_test('tos_t', s, NULL, NULL, 'f', true); cm := m.mk_campaign('tos_c', NULL, 'f', true); oo := m.mk_op('tos_oo', NULL, NULL, NULL, 'f', true);
+    t := m.mk_team('tos_team', 'b', ARRAY['c', 'z']);
+    PERFORM m.drift('setup');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('sample', s, m.u('c')) AND m.rd('sample', s, m.u('f')), 'before: the person owner f reads the Restricted sample, the team does not');
+    -- the sample, then the other three types, become team-owned
+    UPDATE physical_samples SET owner_person_id = NULL, owner_team_id = t WHERE sample_id = s;
+    PERFORM m.drift('the sample becomes team-owned');
+    PERFORM m.expect(m.rd('sample', s, m.u('b')) AND m.rd('sample', s, m.u('c')) AND NOT m.rd('sample', s, m.u('f')) AND m.rd('sample', s, m.u('e')),
+        'the members read the Restricted sample, the former owner f does not, the PI e does');
+    PERFORM m.expect(m.rd('operation', o, m.u('b')) AND m.rd('operation', o, m.u('c')) AND NOT m.rd('operation', o, m.u('f')), 'the child operation follows the sample''s list');
+    PERFORM m.expect(m.rd('project', p, m.u('b')) AND m.rd('project', p, m.u('c')), 'a manager (manage) and a member (edit) are editors of a sample in the project: both read it');
+    PERFORM m.expect(d1_private.s_editor(s, m.u('b')) AND d1_private.s_editor(s, m.u('c')) AND ref.s_editor(s, m.u('b')) AND ref.s_editor(s, m.u('c')) AND NOT ref.s_editor(s, m.u('f')),
+        'the function and the oracle: both members are editors, the former owner is not');
+    PERFORM m.expect((SELECT string_agg(DISTINCT a.role, ',' ORDER BY a.role) FROM sample_access a WHERE a.sample_id = s) = 'edit,manage' AND (SELECT a.role FROM sample_access a WHERE a.sample_id = s AND a.person_id = m.pe('b')) = 'manage', 'the manager has the manage row, the members edit');
+    PERFORM m.expect(ref.s_owner(s, m.u('b')) AND NOT ref.s_owner(s, m.u('c')), 'the oracle''s owner: the manager only');
+    UPDATE test_sessions SET owner_person_id = NULL, owner_team_id = t WHERE session_id = ts;
+    UPDATE campaigns SET owner_person_id = NULL, owner_team_id = t WHERE campaign_id = cm;
+    UPDATE manufacturing_operations SET owner_person_id = NULL, owner_team_id = t WHERE operation_id = oo;
+    PERFORM m.drift('the test, the campaign and the operation become team-owned');
+    PERFORM m.expect(m.rd('test', ts, m.u('b')) AND m.rd('test', ts, m.u('c')) AND m.rd('campaign', cm, m.u('b')) AND m.rd('campaign', cm, m.u('c'))
+                     AND m.rd('operation', oo, m.u('b')) AND m.rd('operation', oo, m.u('c')) AND NOT m.rd('operation', oo, m.u('f')), 'the members read the other three Restricted records');
+    -- the oracle's update and delete rules: manage and edit may update, only manage deletes
+    PERFORM m.expect(ref.test_update(ts, m.u('b')) AND ref.test_update(ts, m.u('c')) AND ref.test_delete(ts, m.u('b')) AND NOT ref.test_delete(ts, m.u('c')), 'test: update by both, delete by the manager');
+    PERFORM m.expect(ref.c_update(cm, m.u('b')) AND ref.c_update(cm, m.u('c')) AND ref.c_delete(cm, m.u('b')) AND NOT ref.c_delete(cm, m.u('c')), 'campaign: update by both, delete by the manager');
+    PERFORM m.expect(ref.op_update(oo, m.u('b')) AND ref.op_update(oo, m.u('c')) AND ref.op_delete(oo, m.u('b')) AND NOT ref.op_delete(oo, m.u('c')), 'operation: update by both, delete by the manager');
+    PERFORM m.oracle_agree('sample', s); PERFORM m.oracle_agree('operation', o); PERFORM m.oracle_agree('project', p); PERFORM m.oracle_agree('test', ts);
+    PERFORM m.oracle_agree('campaign', cm); PERFORM m.oracle_agree('operation', oo);
+    -- the reverse: back to a person owner
+    UPDATE physical_samples SET owner_team_id = NULL, owner_person_id = m.pe('f') WHERE sample_id = s;
+    PERFORM m.drift('the sample goes back to a person');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('project', p, m.u('b')) AND m.rd('sample', s, m.u('f')) AND NOT d1_private.s_editor(s, m.u('b')), 'the reverse: the team lost it all, f reads it again');
+    PERFORM m.oracle_agree('sample', s); PERFORM m.oracle_agree('project', p);
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_own_manager_flag() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; s uuid; cm uuid; t uuid;
+BEGIN
+    p := m.mk_project('tof_p', 'e'); s := m.mk_sample('tof_s', p, NULL, true); cm := m.mk_campaign('tof_c', NULL, NULL, false); PERFORM m.mk_cs(cm, s);
+    t := m.mk_team('tof_team', 'b', ARRAY['c']);
+    UPDATE physical_samples SET owner_team_id = t WHERE sample_id = s;
+    PERFORM m.drift('team-owned');
+    PERFORM m.expect(m.rd('project', p, m.u('b')) AND m.rd('project', p, m.u('c')) AND m.rd('campaign', cm, m.u('b')) AND m.rd('campaign', cm, m.u('c')), 'start: manage and edit are editors alike: both read the project and the unrestricted campaign');
+    -- c becomes a manager, b is demoted: the derived rows swap roles, the readers do not change
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = m.pe('c');
+    PERFORM m.drift('c made manager');
+    PERFORM m.expect((SELECT a.role FROM sample_access a WHERE a.sample_id = s AND a.person_id = m.pe('c')) = 'manage', 'c holds manage now');
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = m.pe('b');
+    PERFORM m.drift('b demoted');
+    PERFORM m.expect((SELECT a.role FROM sample_access a WHERE a.sample_id = s AND a.person_id = m.pe('b')) = 'edit', 'b holds edit now');
+    PERFORM m.expect(m.rd('project', p, m.u('b')) AND m.rd('project', p, m.u('c')) AND m.rd('campaign', cm, m.u('b')) AND m.rd('campaign', cm, m.u('c'))
+                     AND ref.s_editor(s, m.u('b')) AND ref.s_editor(s, m.u('c')) AND ref.s_owner(s, m.u('c')) AND NOT ref.s_owner(s, m.u('b')),
+        'a demotion changes the owner powers (oracle), not the reading: the demoted manager still edits and reads');
+    PERFORM m.oracle_agree('sample', s); PERFORM m.oracle_agree('project', p); PERFORM m.oracle_agree('campaign', cm);
+    -- the reverse
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = m.pe('b');
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = m.pe('c');
+    PERFORM m.drift('the flags swapped back');
+    PERFORM m.expect((SELECT string_agg(a.role, ',' ORDER BY a.role) FROM sample_access a WHERE a.sample_id = s) = 'edit,manage' AND ref.s_owner(s, m.u('b')), 'the reverse: b manages again');
+    PERFORM m.done();
+END $$;
+
+-- the owner's elevated paths (a campaign's owner reads its samples, operations and tests; the owner of a campaign, operation or test reads its
+-- project) belong to a team's managers too (the manage row), not to its plain members (edit)
+CREATE OR REPLACE FUNCTION m.c_team_own_owner_paths() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE pc uuid; po uuid; pt uuid; pk uuid; cm uuid; cm2 uuid; s uuid; o uuid; ts uuid; oo uuid; to2 uuid; t uuid;
+BEGIN
+    pc := m.mk_project('top_pc', 'e'); po := m.mk_project('top_po', 'e'); pt := m.mk_project('top_pt', 'e'); pk := m.mk_project('top_pk', 'e');
+    cm := m.mk_campaign('top_c', NULL, 'f', true); s := m.mk_sample('top_s', NULL, 'f', false); PERFORM m.mk_cs(cm, s);
+    o := m.mk_op('top_o', NULL, NULL, cm, 'f', false); ts := m.mk_test('top_t', NULL, NULL, cm, 'f', false);
+    cm2 := m.mk_campaign('top_c2', pc, 'f', false); oo := m.mk_op('top_oo', NULL, po, NULL, 'f', false); to2 := m.mk_test('top_tt', NULL, pt, NULL, 'f', false);
+    t := m.mk_team('top_team', 'b', ARRAY['c']);
+    PERFORM m.drift('setup');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('operation', o, m.u('b')) AND NOT m.rd('project', pc, m.u('b')), 'before: the team reads nothing');
+    -- the Restricted campaign, and an operation and a test in it, become team-owned
+    UPDATE campaigns SET owner_person_id = NULL, owner_team_id = t WHERE campaign_id IN (cm, cm2);
+    UPDATE manufacturing_operations SET owner_person_id = NULL, owner_team_id = t WHERE operation_id = oo;
+    UPDATE test_sessions SET owner_person_id = NULL, owner_team_id = t WHERE session_id = to2;
+    PERFORM m.drift('campaigns, operation and test become team-owned');
+    PERFORM m.expect(m.rd('campaign', cm, m.u('b')) AND m.rd('campaign', cm, m.u('c')), 'both members read the Restricted campaign (its list)');
+    PERFORM m.expect(m.rd('sample', s, m.u('b')) AND m.rd('operation', o, m.u('b')) AND m.rd('test', ts, m.u('b')), 'the manager acts as the campaign''s owner: reads its sample, operation and test');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('c')) AND NOT m.rd('operation', o, m.u('c')) AND NOT m.rd('test', ts, m.u('c')), 'the plain member does not');
+    PERFORM m.expect(m.rd('project', pc, m.u('b')) AND m.rd('project', po, m.u('b')) AND m.rd('project', pt, m.u('b')), 'the manager reads the projects of a team-owned campaign, operation and test');
+    PERFORM m.expect(NOT m.rd('project', pc, m.u('c')) AND NOT m.rd('project', po, m.u('c')) AND NOT m.rd('project', pt, m.u('c')), 'the plain member reads none of them');
+    PERFORM m.oracle_agree('sample', s); PERFORM m.oracle_agree('operation', o); PERFORM m.oracle_agree('test', ts); PERFORM m.oracle_agree('campaign', cm);
+    PERFORM m.oracle_agree('project', pc); PERFORM m.oracle_agree('project', po); PERFORM m.oracle_agree('project', pt);
+    -- the flag moves: c becomes the manager, b a plain member: the elevations move with it (the role change reaches the readers)
+    UPDATE team_members SET is_manager = true WHERE team_id = t AND person_id = m.pe('c');
+    UPDATE team_members SET is_manager = false WHERE team_id = t AND person_id = m.pe('b');
+    PERFORM m.drift('the manager flag swapped');
+    PERFORM m.expect(m.rd('sample', s, m.u('c')) AND m.rd('operation', o, m.u('c')) AND m.rd('project', po, m.u('c')) AND m.rd('project', pc, m.u('c')), 'c, now the manager, has the elevations');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('operation', o, m.u('b')) AND NOT m.rd('project', po, m.u('b')) AND NOT m.rd('project', pt, m.u('b')), 'b, demoted, lost them at once');
+    PERFORM m.oracle_agree('sample', s); PERFORM m.oracle_agree('operation', o); PERFORM m.oracle_agree('project', po); PERFORM m.oracle_agree('project', pc);
+    -- the reverse: the owners cleared
+    UPDATE campaigns SET owner_team_id = NULL WHERE campaign_id IN (cm, cm2);
+    UPDATE manufacturing_operations SET owner_team_id = NULL WHERE operation_id = oo;
+    UPDATE test_sessions SET owner_team_id = NULL WHERE session_id = to2;
+    PERFORM m.drift('the owners cleared');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('c')) AND NOT m.rd('project', po, m.u('c')) AND NOT m.rd('project', pt, m.u('c')) AND NOT m.rd('campaign', cm, m.u('c')), 'the reverse: the team lost it all');
+    PERFORM m.done();
+END $$;
+
+-- the orphan amnesty: an unrestricted operation with no person owner, no project and no campaign is open to every member. A team-owned one has an
+-- owner: it is not open to all (only its team reads it); clearing the team owner makes it an orphan again. A team with no members writes no access row,
+-- so only the operations update trigger (which compares owner_team_id) refreshes the amnesty then.
+CREATE OR REPLACE FUNCTION m.c_team_own_orphan_open() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE o uuid; o2 uuid; t uuid; t2 uuid;
+BEGIN
+    o := m.mk_op('too_o', NULL, NULL, NULL, NULL, false); o2 := m.mk_op('too_o2', NULL, NULL, NULL, NULL, false);
+    t := m.mk_team('too_team', 'b', ARRAY['c']);
+    INSERT INTO teams (team_id, name) VALUES (m.id('too_empty'), 'M team empty orphan'); t2 := m.id('too_empty');
+    PERFORM m.drift('setup');
+    PERFORM m.expect(m.open(o) AND m.open(o2) AND m.rd('operation', o, m.u('d')) IS NOT TRUE AND ref.op_open(o) AND ref.op_read(o, m.u('d')), 'before: an ownerless orphan operation is open to every member (the oracle too)');
+    UPDATE manufacturing_operations SET owner_team_id = t WHERE operation_id = o;
+    UPDATE manufacturing_operations SET owner_team_id = t2 WHERE operation_id = o2;
+    PERFORM m.drift('the orphan operations become team-owned');
+    PERFORM m.expect(NOT m.open(o) AND NOT m.open(o2), 'team-owned: not open to all (also for a team with no members)');
+    PERFORM m.expect(NOT ref.op_open(o) AND NOT ref.op_open(o2) AND NOT ref.op_read(o, m.u('d')) AND NOT ref.op_read(o2, m.u('d')), 'the oracle agrees: a stranger cannot read them');
+    PERFORM m.expect(m.rd('operation', o, m.u('b')) AND m.rd('operation', o, m.u('c')) AND NOT m.rd('operation', o, m.u('d')), 'only the team reads the first');
+    PERFORM m.oracle_agree('operation', o); PERFORM m.oracle_agree('operation', o2);
+    UPDATE manufacturing_operations SET owner_team_id = NULL WHERE operation_id IN (o, o2);
+    PERFORM m.drift('the team owners cleared');
+    PERFORM m.expect(m.open(o) AND m.open(o2) AND ref.op_open(o) AND ref.op_open(o2), 'the reverse: ownerless again, open to all again');
+    PERFORM m.done();
+END $$;
+
+CREATE OR REPLACE FUNCTION m.c_team_own_clear() RETURNS void LANGUAGE plpgsql AS $$
+DECLARE p uuid; s uuid; t uuid; o uuid;
+BEGIN
+    p := m.mk_project('toc_p', 'e'); s := m.mk_sample('toc_s', p, NULL, true); o := m.mk_op('toc_o', s, NULL, NULL, NULL, false);
+    t := m.mk_team('toc_team', 'b', ARRAY['c', 'z']);
+    PERFORM m.drift('setup');
+    UPDATE physical_samples SET owner_team_id = t WHERE sample_id = s;
+    PERFORM m.drift('team-owned');
+    PERFORM m.expect(m.rd('sample', s, m.u('b')) AND m.rd('operation', o, m.u('c')) AND m.rd('project', p, m.u('b')), 'the team reads the sample, its operation and the project');
+    -- the team is not deleted while it owns the record; cleared, the grant and every derived row go
+    UPDATE physical_samples SET owner_team_id = NULL WHERE sample_id = s;
+    PERFORM m.drift('the owner cleared');
+    PERFORM m.expect(NOT m.rd('sample', s, m.u('b')) AND NOT m.rd('operation', o, m.u('c')) AND NOT m.rd('project', p, m.u('b')) AND NOT m.rd('project', p, m.u('c')),
+        'the team lost the sample, its operation and the project');
+    PERFORM m.expect(NOT EXISTS (SELECT 1 FROM sample_access WHERE sample_id = s) AND NOT EXISTS (SELECT 1 FROM sample_team_access WHERE sample_id = s), 'no grant, no derived row');
+    PERFORM m.oracle_agree('sample', s); PERFORM m.oracle_agree('operation', o); PERFORM m.oracle_agree('project', p);
+    DELETE FROM teams WHERE team_id = t;
+    PERFORM m.drift('the team deleted');
+    -- the reverse: owned again (a new team), then the record deleted while owned: nothing is left behind
+    t := m.mk_team('toc_team', 'b', ARRAY['c']);
+    UPDATE physical_samples SET owner_team_id = t WHERE sample_id = s;
+    PERFORM m.drift('owned again');
+    PERFORM m.expect(m.rd('sample', s, m.u('b')) AND m.rd('project', p, m.u('c')), 'the reverse: the new team reads it again');
+    DELETE FROM manufacturing_operations WHERE operation_id = o;
+    DELETE FROM physical_samples WHERE sample_id = s;
+    PERFORM m.drift('the team-owned record deleted');
+    PERFORM m.expect(NOT m.rd('project', p, m.u('b')) AND NOT EXISTS (SELECT 1 FROM sample_team_access WHERE team_id = t), 'a deleted record takes its owner grant with it');
+    PERFORM m.done();
+END $$;
 SQL
 
 echo "== The mutation matrix: one case per row of the spec's trigger-coverage table, and every mutation class =="
@@ -1492,11 +1779,11 @@ BEGIN
         ELSIF kind = 9 THEN
             what := (ARRAY['sample','operation','test','campaign','project'])[1 + m.rn(5)];
             IF m.rp(0.6) THEN
-                IF what = 'sample' THEN INSERT INTO sample_access (sample_id, person_id, role) VALUES (m.rid(sm), m.pe(m.rperson(0)), (ARRAY['view','edit'])[1 + m.rn(2)]) ON CONFLICT (sample_id, person_id) DO UPDATE SET role = EXCLUDED.role;
+                IF what = 'sample' THEN INSERT INTO sample_access (sample_id, person_id, role) VALUES (m.rid(sm), m.pe(m.rperson(0)), (ARRAY['view','edit'])[1 + m.rn(2)]) ON CONFLICT (sample_id, person_id) WHERE team_access_id IS NULL DO UPDATE SET role = EXCLUDED.role;
                 ELSIF what = 'operation' THEN INSERT INTO operation_access (operation_id, person_id, role) VALUES (m.rid(op), m.pe(m.rperson(0)), 'view') ON CONFLICT DO NOTHING;
                 ELSIF what = 'test' THEN INSERT INTO test_access (session_id, person_id, role) VALUES (m.rid(ts), m.pe(m.rperson(0)), 'view') ON CONFLICT DO NOTHING;
                 ELSIF what = 'campaign' THEN INSERT INTO campaign_access (campaign_id, person_id, role) VALUES (m.rid(cm), m.pe(m.rperson(0)), (ARRAY['view','edit'])[1 + m.rn(2)]) ON CONFLICT DO NOTHING;
-                ELSE INSERT INTO project_access (project_id, person_id, role) VALUES (m.rid(pj), m.pe(m.rperson(0)), (ARRAY['view','investigator'])[1 + m.rn(2)]) ON CONFLICT (project_id, person_id) DO UPDATE SET role = EXCLUDED.role; END IF;
+                ELSE INSERT INTO project_access (project_id, person_id, role) VALUES (m.rid(pj), m.pe(m.rperson(0)), (ARRAY['view','investigator'])[1 + m.rn(2)]) ON CONFLICT (project_id, person_id) WHERE team_access_id IS NULL DO UPDATE SET role = EXCLUDED.role; END IF;
             ELSE
                 IF what = 'sample' THEN DELETE FROM sample_access WHERE access_id = (SELECT access_id FROM sample_access ORDER BY access_id LIMIT 1 OFFSET m.rn(GREATEST((SELECT count(*)::int FROM sample_access), 1)));
                 ELSIF what = 'operation' THEN DELETE FROM operation_access WHERE access_id = (SELECT access_id FROM operation_access ORDER BY access_id LIMIT 1 OFFSET m.rn(GREATEST((SELECT count(*)::int FROM operation_access), 1)));

@@ -29,6 +29,8 @@ export function extraFields(def: IndexDef, readable: ReadonlySet<string> | null 
 	// Which dashboard an operation belongs to (a sintering run has no force figure).
 	if (def.collection === 'manufacturing_operations') out.push('process_category');
 	if (def.collection === 'campaigns' && (!readable || readable.has('people'))) out.push('owner_person_id.full_name');
+	// The owning team's name (a team-owned campaign has no owner person); a role that cannot read teams does not ask for it.
+	if (def.collection === 'campaigns' && (!readable || readable.has('teams'))) out.push('owner_team_id.name');
 	// The thumbnail's own fields (a sample's form and dimensions, an image list's file field).
 	out.push(...thumbFields(def.collection));
 	// The row's accent colour (the ISO classes' colour_hex).
@@ -151,6 +153,11 @@ export function withChange(s: IndexState, patch: Partial<IndexState>): IndexStat
 
 export function hasActiveFilters(s: IndexState): boolean {
 	return s.q.trim() !== '' || Object.values(s.filters).some(Boolean);
+}
+
+// The note under the filters when the Team filter shows only the newest of a larger team (the endpoint's cap).
+export function teamTruncatedNote(limit: number): string {
+	return `Showing the latest ${grouped(limit)} of this team's records.`;
 }
 
 // ---- chip options -----------------------------------------------------------------------------

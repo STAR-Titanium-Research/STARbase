@@ -4,7 +4,8 @@
 // The endpoint answers with the bare JSON (no `data` wrapper), /items answers with `{ data: [...] }`.
 import type { ExplorerHost } from '../host';
 import { errorText } from '../format';
-import { peopleSearchQuery, type AccessEntry, type AccessList, type BlockedBy, type PersonHit } from './accessModel';
+import { listTeams } from '../teams/teamsApi';
+import { peopleSearchQuery, teamHitOf, type AccessEntry, type AccessList, type BlockedBy, type PersonHit, type TeamHit, type TeamMembers } from './accessModel';
 
 export type AccessApi = ExplorerHost['api'];
 
@@ -32,6 +33,7 @@ export const loadAccess = (api: AccessApi, collection: string, id: string): Prom
 			project_pi: body.project_pi ?? null,
 			can_manage: body.can_manage === true,
 			entries: Array.isArray(body.entries) ? body.entries : [],
+			teams: Array.isArray(body.teams) ? body.teams : [],
 		};
 	});
 
@@ -53,15 +55,20 @@ export const removeEntry = (api: AccessApi, collection: string, id: string, pers
 		return true as const;
 	});
 
-/** The new owner's name and `blocked_by` come back too: the dialog says when they cannot read the record yet (the change is made anyway). */
+/**
+ * The new owner's name and `blocked_by` come back too: the dialog says when they cannot read the record yet (the change is made anyway).
+ * `to`: a person id, `{ person_id }` or `{ team_id }` (the four ownable types only: a project is 409 NOT_OWNABLE_BY_TEAM, a team with no
+ * manager is 409 TEAM_HAS_NO_MANAGER; the endpoint's words come back as the message).
+ */
 export const transfer = (
 	api: AccessApi,
 	collection: string,
 	id: string,
-	personId: string,
+	to: string | { person_id: string } | { team_id: string },
 ): Promise<Outcome<{ email: EmailResult; owner: { name: string } | null; blocked_by: BlockedBy | null }>> =>
 	run(async () => {
-		const body = (await api.post(`${base(collection, id)}/transfer`, { person_id: personId })).data ?? {};
+		const target = typeof to === 'string' ? { person_id: to } : to;
+		const body = (await api.post(`${base(collection, id)}/transfer`, target)).data ?? {};
 		return { email: body.email ?? 'skipped', owner: body.owner ?? null, blocked_by: body.blocked_by ?? null };
 	});
 
@@ -74,3 +81,56 @@ export const searchPeople = (api: AccessApi, text: string, limit?: number): Prom
 		const res = await api.get('/items/people', { params: { ...q, filter: JSON.stringify(q.filter) } });
 		return (res.data?.data ?? []) as PersonHit[];
 	});
+
+// ---- teams: a team's grant on the record (the endpoint's /entries/team/... routes) and the add box's team list ----
+
+const teamBase = (collection: string, id: string, teamId: string) => `${base(collection, id)}/entries/team/${encodeURIComponent(teamId)}`;
+
+export const addTeamEntry = (api: AccessApi, collection: string, id: string, teamId: string, role: string): Promise<Outcome<{ email: EmailResult }>> =>
+	run(async () => {
+		const body = (await api.post(`${base(collection, id)}/entries`, { team_id: teamId, role })).data ?? {};
+		return { email: body.email ?? 'skipped' };
+	});
+
+/** The level and/or whether later joiners are trusted. */
+export const setTeamEntry = (
+	api: AccessApi,
+	collection: string,
+	id: string,
+	teamId: string,
+	patch: { role?: string; trust_new_members?: boolean },
+): Promise<Outcome<true>> =>
+	run(async () => {
+		await api.patch(teamBase(collection, id, teamId), patch);
+		return true as const;
+	});
+
+export const removeTeamEntry = (api: AccessApi, collection: string, id: string, teamId: string): Promise<Outcome<true>> =>
+	run(async () => {
+		await api.delete(teamBase(collection, id, teamId));
+		return true as const;
+	});
+
+/** Who gets access through the team's grant: active, waiting for an owner's decision, declined. */
+export const loadTeamMembers = (api: AccessApi, collection: string, id: string, teamId: string): Promise<Outcome<TeamMembers>> =>
+	run(async () => {
+		const body = (await api.get(`${teamBase(collection, id, teamId)}/members`)).data ?? {};
+		const list = (v: unknown) => (Array.isArray(v) ? v : []);
+		return { active: list(body.active), pending: list(body.pending), declined: list(body.declined) };
+	});
+
+export const decideTeamMember = (
+	api: AccessApi,
+	collection: string,
+	id: string,
+	teamId: string,
+	personId: string,
+	decision: 'approve' | 'decline',
+): Promise<Outcome<{ decision: string; email: EmailResult | undefined }>> =>
+	run(async () => {
+		const body = (await api.post(`${teamBase(collection, id, teamId)}/members/${encodeURIComponent(personId)}`, { decision })).data ?? {};
+		return { decision: body.decision ?? decision, email: body.email };
+	});
+
+/** Every team as an add-box hit; the box filters by name itself (GET /d1-teams is one small list). */
+export const loadTeamHits = (api: AccessApi): Promise<Outcome<TeamHit[]>> => run(async () => (await listTeams(api)).map(teamHitOf));

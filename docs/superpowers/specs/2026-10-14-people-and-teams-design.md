@@ -1,0 +1,670 @@
+# People and Teams: an admin People page, and teams that can be given access
+
+- **Status:** Draft for maintainer review (2026-10-14)
+- **Decision record:** [ADR-0016](../../adr/0016-teams.md) (amends [ADR-0014](../../adr/0014-record-access.md))
+- **Glossary:** `CONTEXT.md` § People and access (Person, Login, Account role, Access level, Owner, Team, Team manager,
+  Pending member, Trust future members, Former, Suspended)
+- **Mockup:** [`2026-10-14-people-and-teams-mockup.html`](./2026-10-14-people-and-teams-mockup.html) (second pass, the
+  agreed density)
+
+## Why
+
+The People page is a flat list with a Researcher/Operator chip and an edit dialog. Admins cannot see or change account roles,
+invite someone, see who never signed in, find logins with no person, or answer "what can this person see". And access can
+only be given person by person: a sub-group that works together has to be added to every record one name at a time. The
+maintainer wants teams that can be given access the way Google Groups can, shown as one entry that reveals its members on
+hover.
+
+## Decisions (maintainer, 2026-10-14, binding)
+
+People page
+1. Admin controls wanted: **accounts and roles**, **who sees what**, **activity and health**. Offboarding (Former ⇒ suspend ⇒
+   transfer) is **not** wanted; Former triggers nothing automatically (Q5).
+2. New logins come by **email invite** from STARbase; the login is linked to its person in the same server call (Q22).
+3. Only an **Administrator** changes an account role, suspends a login, or invites with a role above Lab Member. A Lab Admin
+   sees everything an Administrator sees, edits People rows, links logins, invites (as Lab Member) and manages any team (Q11).
+4. Everyone sees their **own** person panel; only admins see other people's access (Q12).
+5. The list keeps filtering: quick chips with counts plus Role, Team and Sort menus. One quiet "needs attention" line (Q23).
+6. People and Teams are a **switch** on the People page, not two sidebar entries.
+
+Teams
+7. A team is **not an account**: it cannot sign in and never acts by itself (Q2). Members are **people** (a person with no
+   login may be one, Q4); teams do not contain teams.
+8. **Anyone** may create a team; its creator becomes a **team manager**; managers (and admins) change membership and name
+   other managers (round 0). A team always has at least one manager (Q13).
+9. All teams and their members are visible to every member; no private teams (Q10).
+10. Storage: a separate `teams` table, a team as a second kind of grantee on the five access tables, and the **edit and own
+    rights materialised in SQL** beside the readers (data-model option 2). *(As built: the edit rights are not a second set of tables; a team
+    grant is expanded into derived access rows, E10.)*
+11. **Owner approves joiners.** A team manager must never widen access to a record they do not own. Sharing a record with a
+    team covers its members at that moment; someone who joins later gets that record's access only when its owner approves,
+    or when the owner ticked **Trust future members** on that record's team entry (per record, Q7). Leaving removes access at
+    once.
+12. Approval is asked only when joining would **raise** that person's access to the record, and says what changes (Q8). A
+    decline is remembered for that record; the owner can approve later from "Who has access"; the joiner is not asked again
+    (Q6). Each affected owner gets **one email per joiner** listing the records, and a Home **Waiting for you** card holds
+    every open request (Q17). The joiner's own panel says "Waiting for approval: N records (M owners)", with no titles (Q18).
+13. A team can **own** samples, campaigns, operations and tests, never a project; on a project a team can be an
+    **Investigator**, never the PI (Q9). The team's managers act as the owner. A record becomes team-owned only through
+    **Transfer ownership** (Q15). Someone a manager adds to a team that owns records gets Can edit on them at once; the add
+    dialog says so (Q16).
+14. A team that owns records cannot be deleted until its managers transfer them; deleting a team removes its access entries
+    and tells the owners (Q14).
+15. Adding a team to a record emails each **active** member with an email and a login, naming the team ("via Additive");
+    pending members are mailed when approved (Q19).
+16. A team's page shows counts per access level to everyone; its record list shows only what the viewer can read, plus "and N
+    you can't see" (Q20). It has a **History** (last 20 events, "show all") (Q26).
+17. Teams and membership change **only through STARbase**; in Data Studio the team tables are read-only for Lab Members and
+    editable by Administrators only (Q25).
+18. Identity: unique name, optional one-line description, a **colour** from a fixed palette, an optional **logo** upload
+    (Q28, Q30, Q31).
+19. **"My teams" on Home** and a **Team filter** on index pages: a team's work is the records it owns or has an access level
+    on (Q21).
+20. An admin can remove a **direct** grant from a person's panel; access through a team or a project is listed with "change on
+    the team / project" (Q27).
+
+## 1. What people see
+
+### 1.1 People page (`/people`)
+
+Header: `People | Teams` switch, search, **Invite** (admins) and **Add person** (everyone, as today).
+
+**People view**
+- Chips with counts: Everyone · Researchers · Operators · No login · Former. Menus: **Role** (any, Administrator, Lab Admin,
+  Lab Member, no login), **Team** (any, or one team), **Sort** (name, last sign-in, recently added). Chip, menus and search
+  combine; the state is in the URL query (`?f=former&team=<id>&sort=last`) so a view can be pinned.
+- **Needs attention** (admins only): one line, "3 things need attention · review". *Review* opens a small menu of the items
+  with a count above zero; picking one filters the list (`?attn=<key>`). Items: logins with no person; invites not
+  accepted; people missing an email; possible duplicate names (same normalised full name, or same email); Former people
+  whose login is still active; Former people still in a team; Suspended logins that still own records.
+- A row: avatar, name, Researcher/Operator under it; right side: account role (admins; "No login" for everyone) and last
+  sign-in (admins). A row carries one amber note only when something is off (Invite not accepted, Suspended, in an
+  attention item). Former rows are dimmed. A login with no person is listed as its email with "Link to a person…".
+- Clicking a row opens the **person panel** beside the list (a bottom sheet on a phone).
+
+**Person panel**
+- Head: avatar, name, email, Edit (opens today's edit dialog).
+- Account (admins; Administrators can change): Role (select), Login (Active · Suspend / Suspended · Reactivate / Invited ·
+  Resend), Last sign-in. A Lab Admin sees these read-only. No login: **Invite** (Administrator chooses the account role; a Lab
+  Admin's invite is Lab Member).
+- Teams: chips (team colour or logo); "+ Add to team" for admins and for managers of a team.
+- Access: three counts (Owns · Shared with them · Through teams), plus "Waiting for approval: N records (M owners)" when it
+  applies. Clicking a count lists the records (kind chip, code, title, access level, "via <team>" / "granted by <name>");
+  direct grants have **Remove** (admins); team and project paths say where to change them.
+- Visibility: the panel is shown to admins for anyone and to a member for themselves. For anyone else a member sees the
+  existing read-only row (name, Researcher/Operator, teams).
+
+### 1.2 Teams view (`/people?view=teams`) and a team's page (`/home/teams/<id>`, E19)
+
+- **Teams view:** a row per team: tile (logo, or initials on the team colour), name, description, member count, managers'
+  names. Chips: All · My teams. **New team** for everyone.
+- **Team page:** tile, name, description, "N members · M records". **Members** (manager badge; managers and admins: Add
+  member, Make manager, Remove, Leave); **Records** (counts per level for everyone: Owns · Can edit · Can view ·
+  Investigator; the list only shows records the viewer can read, then "and N you can't see"); **History** (adds, removes,
+  manager changes, approvals and declines, renames, shares; last 20, "show all"). **Edit** (managers, admins): name,
+  description, colour, logo. **Delete** (managers, admins): refused while the team owns records ("Transfer its 12 records
+  first").
+- **Add member dialog** lists what happens: "Femi will get Can edit on the 12 records Additive owns. Owners of 26 other
+  records shared with Additive will be asked to approve." Adding a person with no login is allowed and says so.
+- **Removing the last manager** is refused ("Make someone else a manager first"); admins may always manage.
+
+### 1.3 Team tile and hover card
+
+One kit component, `TeamTile` (square, logo or initials on the palette colour), and `TeamCard`: name, member count, members
+with manager badges and "no login" tags (first 6, then "and N more"), "Open team". The card opens on **hover, keyboard focus
+or tap** (a popover, not a title tooltip), closes on Escape or leaving; it fetches the team once per page and caches it.
+Used in the People list, the person panel, "Who has access", record rails (owner), the Teams view and the Home panel.
+
+### 1.4 "Who has access" (`AccessDialog`)
+
+- The add box finds people **and** teams ("Add people or teams"); a team result shows its tile and member count.
+- A team row: tile, name, "Team · 6 members", a face stack; the row opens `TeamCard`. Its access level select (Can view /
+  Can edit; Investigator on a project) and Remove behave like a person's. Owners see on the row: **Trust future members**
+  (checkbox, off by default) and, when there are any, "2 waiting · 1 declined" which expands to per-person Approve /
+  Decline (declined: Approve).
+- A team owner shows as "Additive (managers)" with the tile; "Transfer ownership…" offers teams for samples, campaigns,
+  operations and tests (not projects).
+- "Only <owner> can change who has access" reads "Only Additive's managers …" for a team-owned record.
+
+### 1.5 Home
+
+- **Waiting for you** card (only when non-empty): one line per joiner and team, "Femi Noor joined Additive · 12 of your
+  records", with **Approve all** / **Decline all** / **Review** (lists the records, per-record choice). Approving covers only
+  records where it would raise access (decision 12). The card is the caller's own queue: **only records they own** (the owner column,
+  or the PI of a project), an Administrator included (E22). An Administrator approves or declines a single record they do not own
+  from Who has access.
+- **My teams** panel (PR 4): the most recently changed records across the viewer's teams, one line each with the team tile.
+- Index pages (PR 4): a **Team** filter (any / one team) = records the team owns or has an access entry on.
+
+### 1.6 Invites and the accept page
+
+- **Invite** (person panel or the header): email (prefilled from the person), account role (Administrator: any; Lab Admin:
+  Lab Member only). The server creates the login with Directus's invite, links it to the person (creating the person when
+  invited from the header), and Directus mails the link. The row shows "Invite not accepted · Resend", and the invite says
+  it expires in 7 days.
+- **Accept page** `/accept-invite?token=…` in STARbase (outside the signed-in shell, like the sign-in page): set password
+  (the live password policy is shown), then signed in and sent Home. An expired or used token says so and names who to ask.
+
+## 2. Data model
+
+New migrations from **180** (main took 173 to 175 and 183; the stack was renumbered 180 to 184 after merging main; check other open branches before claiming).
+
+> **Superseded in part by plan 2 (§10).** Teams are migrations **181** and **182** (180 is the People admin, E8). The access tables,
+> `team_members`' key and the bookkeeping below are built differently: see E10 to E13. The SQL in this section is the original
+> design, not what shipped.
+
+```sql
+CREATE TABLE teams (
+    team_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    description TEXT,
+    color       TEXT NOT NULL DEFAULT 'teal' CHECK (color IN ('teal','blue','indigo','violet','pink','red','orange','amber','green','slate')),
+    logo        UUID REFERENCES directus_files(id) ON DELETE SET NULL,
+    created_by_person_id UUID REFERENCES people(person_id) ON DELETE SET NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX teams_name_key ON teams (lower(name));
+
+CREATE TABLE team_members (
+    team_id    UUID NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
+    person_id  UUID NOT NULL REFERENCES people(person_id) ON DELETE CASCADE,
+    is_manager BOOLEAN NOT NULL DEFAULT false,
+    joined_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (team_id, person_id)
+);
+-- a deferred constraint trigger refuses a commit that leaves a team with members but no manager
+```
+
+**The five access tables** (`sample_access`, `operation_access`, `test_access`, `campaign_access`, `project_access`):
+- `person_id` becomes nullable; add `team_id UUID REFERENCES teams ON DELETE CASCADE` and `trust_new_members BOOLEAN NOT NULL
+  DEFAULT false`; `CHECK (num_nonnulls(person_id, team_id) = 1)`; `trust_new_members` only with a team; unique
+  `(record, person_id)` and `(record, team_id)` as partial unique indexes.
+- Per table, `<type>_access_members(access_id → <type>_access ON DELETE CASCADE, person_id → people ON DELETE CASCADE, state
+  TEXT CHECK (state IN ('active','pending','declined')), decided_by_person_id, decided_at, PRIMARY KEY (access_id,
+  person_id))`. One row per member of the granted team. Five tables, not one polymorphic table, so every row has a real
+  foreign key and cascades (the same reasoning as ADR-0014's five access tables).
+
+**Ownership:** `owner_team_id UUID REFERENCES teams ON DELETE RESTRICT` on `physical_samples`, `manufacturing_operations`,
+`test_sessions`, `campaigns`; `CHECK (num_nonnulls(owner_person_id, owner_team_id) <= 1)` (existing rows may have no owner).
+`RESTRICT` is what refuses deleting a team that owns records.
+
+**History:** `team_events(event_id, team_id ON DELETE CASCADE, at, actor_person_id, kind, person_id, collection, record_id,
+detail JSONB)`; kinds: `created`, `renamed`, `member_added`, `member_removed`, `manager_set`, `manager_unset`, `shared`,
+`unshared`, `approved`, `declined`, `trust_set`, `trust_unset`. Written by the triggers below (actor from
+`d1.actor_identity`, as migration 128's audit), so Data Studio edits by Administrators are recorded too. When a team is
+deleted its history goes with it; the owners' emails are the record of that.
+
+### 2.1 Membership bookkeeping (triggers, so every writer obeys it)
+
+> **Superseded by E10 and E11.** The per-record state lives in `<type>_team_pending` (pending, declined) and in derived rows of
+> `<type>_access`, not in `<type>_access_members`. The table below still describes the events correctly.
+
+| Event | Effect on `<type>_access_members` |
+|---|---|
+| A team is granted on a record | one `active` row per current member |
+| A person joins a team | for each grant of that team: `active` if `trust_new_members`, else `pending` |
+| A person leaves a team | their rows for that team's grants are deleted |
+| An owner approves / declines | `active` / `declined`, with who and when |
+| Trust future members turned on | the grant's `pending` rows become `active` (declined stay declined) |
+| A grant is removed | its rows go (cascade) |
+
+Members of a team that **owns** a record need no rows: ownership is read from `team_members` directly (decision 13). *(PR 3 will instead
+use an `owner` pseudo-grant expanded into derived rows, E10.)*
+
+"Would joining raise their access?" is not stored. A `pending` row stays pending whatever else the person can see; the Home
+card, the email and the dialog's "N waiting" show a pending row only while approving it would raise that person's level
+(computed from the rights tables below). So if their other path to the record goes away later, the request appears then.
+
+### 2.2 Rights: readers, editors and managers, all materialised
+
+> **Superseded by Ruling D1 (E10).** No `<type>_editors` / `<type>_managers` tables, no `editors_of_<type>()` functions and no
+> change to `access_rules.json` or the Directus rules shipped in PR 2: a team grant is expanded into ordinary `<type>_access` rows
+> ("derived rows"), so the readers machinery and the existing Lab Member edit filters cover teams unchanged. Team **ownership**
+> (PR 3) reuses the same mechanism with a new `manage` level (the plan's outline), not these tables. Read this section as the
+> rejected alternative; ADR-0016 decision 3 is amended to match.
+
+Directus can reach a person through `access._some.person_id.user_id` but not through a team
+(`access._some.team_id.<members>.user_id` is a to-many hop inside `_some`, refused by 11.17; see the Directus filter
+traps). So, beside the existing `<type>_readers(record_id, user_id)`:
+
+- `<type>_editors(record_id, user_id)`: logins that may update the record (today's `sample.editors` / `record.update` /
+  `campaign.update` / `project.pi` sets, plus team paths), always a subset of the readers.
+- `<type>_managers(record_id, user_id)`: logins that may manage it (delete, change access, transfer, restrict): the owner,
+  or the owning team's managers; the PI for a project.
+
+They are computed by `d1_private.editors_of_<type>()` and `d1_private.managers_of_<type>()` next to `readers_of_<type>()`,
+recomputed by the **same** statement triggers under the **same** global advisory lock, checked by the same drift function
+(`readers_drift()` grows to `rights_drift()`, still shown on `/d1-admin-overview`) and rebuilt by `rights_rebuild()`.
+
+The team paths, added to every function family:
+- **Read:** an active `<type>_access_members` row of the person's login; for a team-owned record, every member's login.
+- **Edit:** the same with the grant's level `edit` (on a project, `investigator` follows today's investigator rule); every
+  member of an owning team.
+- **Manage:** the owning team's managers.
+- A team grant on a **Restricted** record lists its active members exactly as a person entry would (the cascade of ADR-0014
+  decision 4 is unchanged).
+
+The Directus rules then become one hop each: update `editors._some.user_id = $CURRENT_USER`, delete and manage
+`managers._some.user_id = $CURRENT_USER` (the reader term is already inside the tables). `access_rules.json` and
+`gen_access_rules.py` are updated to emit them; `--check` stays in CI. The old junctions (`sample_co_owners`,
+`project_investigators`) keep counting through the functions, as now.
+
+### 2.3 Directus permissions
+
+| Collection | Lab Member | Lab Admin | Administrator |
+|---|---|---|---|
+| `teams`, `team_members` | read all | read all | full |
+| `team_events` | no row (E22: served only by `GET /d1-teams/:id`, which hides what the caller cannot read) | no row | full |
+| `<type>_access_members` | read where a reader of the record (the child pattern: one bare hop to the record's readers) | read all | full |
+| `<type>_editors`, `<type>_managers` | own rows (like the readers tables) | read all | full |
+
+(As built, E10, E14 and E22: `teams` and `team_members` are readable by every Lab Member through the unfiltered read rows of
+`scripts/access_rules.json`; `team_events` has no Lab Member row, because its events name records and people the reader may not be
+allowed to see; the ten `<type>_team_access` / `<type>_team_pending` tables are not registered in Directus at all, the
+endpoints read and write them, and they are not granted to `d1_llm_readonly`.)
+
+Writes to teams, membership, team grants and approvals go through the endpoints below with the system accountability after
+their own checks. Lab Admins edit teams only through STARbase (decision 17).
+
+## 3. Server
+
+### 3.1 `d1-teams` (new endpoint)
+
+| Route | Needs | Does |
+|---|---|---|
+| `GET /` | a login | all teams: tile data, member count, managers, `is_member`, `is_manager` |
+| `GET /:id` | a login | team, members (name, can_sign_in, is_manager), record counts per level, the record list filtered to what the caller can read plus `hidden_count`, history (paged; an event about a record the caller cannot read keeps only its kind, time and actor: no record, no person, no detail, E22) |
+| `POST /` `{name, description?, color?}` | a login with a person | creates; the caller becomes its manager |
+| `PATCH /:id` `{name?, description?, color?, logo?}` | manager or admin | edits; a logo must be an image ≤ 1 MB (png, jpeg, svg) uploaded to a fixed `Team logos` folder |
+| `DELETE /:id` | manager or admin | refused 409 while it owns records (lists counts); else deletes and mails the owners of the records it was on |
+| `POST /:id/members` `{person_id, is_manager?}` | manager or admin | adds; answers what happened (`owned_edit: n`, `pending: n`, `owners_asked: n`); mails each owner asked, once per joiner |
+| `PATCH /:id/members/:person_id` `{is_manager}` | manager or admin | sets or clears manager (last manager refused 409) |
+| `DELETE /:id/members/:person_id` | manager, admin, or the person themselves | removes (last manager refused 409) |
+| `GET /pending` | a login | the caller's Waiting-for-you items (records they **own**, an Administrator included), grouped by joiner and team, only rows where approving would raise access |
+| `POST /pending/decide` `{team_id, person_id, decision, records?}` | owns each record (an Administrator may decide a single listed record) | without `records`: approves or declines across the records the caller owns for that joiner and team; with `records` (deduplicated): only those |
+
+### 3.2 `d1-record-access` (extended)
+
+- `GET` returns team entries: `{ team_id, name, color, logo, member_count, role, trust_new_members, waiting, declined }` and
+  `owner` may be a team `{ team_id, name, managers }`.
+- `POST …/entries` accepts `{team_id, role}`; `PATCH …/entries/team/:team_id` `{role?, trust_new_members?}`; `DELETE
+  …/entries/team/:team_id`; `POST …/entries/team/:team_id/members/:person_id` `{decision}` (per-record approve / decline).
+- `POST …/transfer` accepts `{team_id}` for the four ownable types; mails the team's managers.
+- `can_manage` reads `<type>_managers` instead of re-running the manage filter. (PR 2 keeps today's manage rule; team ownership and the
+  managers set are PR 3, E10.)
+- Emails: a team grant mails each active member with an email and a login ("via Additive"); approval mails the joiner; the
+  join request mails each owner (one per joiner, listing kind and code of their affected records; titles only for records
+  the owner can read, which is all of them).
+
+### 3.3 `d1-access-guard` (extended)
+
+The owner and Restricted guards treat "is the owner" as "is in `<type>_managers`". Setting `owner_team_id` directly (Data
+Studio) is held to the same rule as `owner_person_id`; setting both is refused by the CHECK.
+
+### 3.4 `d1-people-admin` (new endpoint, PR 1)
+
+| Route | Needs | Does |
+|---|---|---|
+| `GET /people` | admin | People rows joined to logins: account role, status, `last_access`, teams, attention flags; plus logins with no person |
+| `GET /attention` | admin | the seven counts |
+| `GET /people/:person_id/access` | admin, or the person themselves | counts and lists from the rights tables and access tables (owns, shared with them, through teams, pending) |
+| `PATCH /logins/:user_id` `{role?, status?}` | **Administrator** | changes the account role or suspends / reactivates; refuses demoting the last Administrator |
+| `POST /invite` `{person_id? , full_name?, email, role}` | admin (role above Lab Member: Administrator) | Directus `UsersService.inviteUser(email, role, <STARbase>/accept-invite)`, then links `people.user_id` in the same transaction (creating the person when needed) |
+| `POST /invite/resend` `{user_id}` | admin | re-sends |
+
+**Administrator vs Lab Admin.** Both roles have `admin_access`, so STARbase's `isAdmin` cannot tell them apart. The endpoint
+decides by role: the Administrator role is found by name once at start-up and can be pinned with `D1_ADMINISTRATOR_ROLE_ID`.
+It answers `can_administer_accounts` in `GET /people` so the page knows which controls to draw.
+
+**Config.** `USER_INVITE_URL_ALLOW_LIST` gains `${STARBASE_URL}/accept-invite`; the accept page posts to
+`/users/invite/accept`.
+
+## 4. STARbase and kit
+
+- `packages/starbase-pages/src/people.vue` splits into `people/PeopleView.vue` (list, filters, attention),
+  `people/PersonPanel.vue`, `people/TeamsView.vue`, `people/InviteDialog.vue`; new `teams/TeamPage.vue` (`/home/teams/<id>`, E19) and
+  `AcceptInvite.vue` in the STARbase app (outside the shell).
+- Kit (`@d1/ui`): `TeamTile`, `TeamCard` (popover), team support in `AccessDialog` / `AccessPersonPicker` / `accessModel`,
+  a `WaitingForYou` Home card, the palette (`teamPalette.ts`: about 10 keys, each with a light and a dark shade checked for
+  4.5:1 text contrast on both themes).
+- Index pages (PR 4): the Team filter as a fixed filter; Home `MyTeams` panel.
+- Routes: `people` (unchanged path, `?view=teams`), `teams/:id`; the route harness (`tests/ui/specs/13-explorer-routes`) gains
+  both.
+
+## 5. Delivery
+
+| PR | Contents | Depends on |
+|---|---|---|
+| 1 | People page for admins: filters, attention, person panel, account role, suspend, invites and accept page, `d1-people-admin` | none |
+| 2 | Teams: tables, membership triggers, team grants as **derived access rows** (E10; not editors and managers tables), `d1-teams`, team page, `TeamTile`/`TeamCard`, AccessDialog teams, approvals, Waiting for you, emails, history | 1 (the People/Teams switch) |
+| 3 | Team ownership: `owner_team_id`, transfer to a team, guard, owner display | 2 |
+| 4 | My teams on Home, Team filter on index pages | 2 |
+
+Each PR is a draft until the maintainer reviews it; migrations are applied to live only by the maintainer, following a
+runbook section added in PR 2 (as A1a's cutover: backup, apply, `rights_rebuild()`, drift check, Redis flush, restart).
+
+## 6. Testing
+
+- **Rights equality.** (As built, E10: the readers matrix is unchanged in shape; team grants are covered by the new mutation cases and
+  by `tests/teams.sh`, and the editors and managers outputs do not exist.) `tests/readers_matrix.sh` becomes a rights matrix: for readers, editors and managers, production
+  function = `*_spec` function = the independent oracle (`scripts/dev/access_matrix_oracle.sql`, extended with teams,
+  member states, trust and team owners), on the fixture and on random universes that now include teams.
+- **Mutation matrix** extended with: join (trust on / off), leave, approve, decline, trust turned on, grant removed, team
+  deleted, manager change, transfer to and from a team, Restricted record with a team grant.
+- **Directus smoke** (copy of live) with a team-shared record as Lab Member: can read, can edit only at Can edit, pending
+  member cannot, Data Studio write to `team_members` refused for a Lab Member.
+- **Endpoint unit tests** (`node:test`) for `d1-teams`, `d1-people-admin` and the new `d1-record-access` routes, including
+  Lab Admin vs Administrator, last manager, last Administrator, invite linking.
+- **Performance gate** on the seeded copy, as A1a: every list under 300 ms p95 and writes at most 2x (the coded gate of
+  `scripts/dev/directus_perf.mjs` and `scripts/dev/perf_compare.py`; the "80 ms" first written here was A1a's measured result, not its gate,
+  E20); a join to a team on 100 records and a grant of a 20-person team each under 500 ms (the scenarios `team_join_100_records` and
+  `team_grant_20_members`).
+- **UI:** vitest for the kit pieces; Playwright: People filters, person panel, invite and accept (preview with a mail
+  catcher), team page, Who-has-access with a team, approve from Home; STARbase phone layout for the card and the sheet.
+- `tests/phase1_schema.sh`: the new tables are not granted to `d1_llm_readonly` (Ask-DB unchanged).
+
+## 7. Known gaps (accepted)
+
+- Administrators editing `team_members` in Data Studio get the bookkeeping and history (triggers) but no emails (those come
+  from the endpoints).
+- A team's name, colour, logo and member list are visible to every member, including names of members who have no login.
+- Team logos are ordinary files: readable by id by any member (the files gap A1b closes elsewhere; a logo is not sensitive).
+- A person removed from a team and re-added is a new joiner: their earlier approvals are gone (rows were deleted on leave).
+- Ask-DB does not see teams (no grant); questions about team membership are not answerable there.
+- The last-Administrator rule is enforced only by `d1-people-admin`: Data Studio's `/users` page can still demote or suspend the
+  last Administrator.
+- A Lab Admin has `admin_access`, so Data Studio `/users` lets them change any role (their own included) and suspend logins; the
+  People page's Lab Admin limits are page policy, not a security boundary.
+- Invite delivery failures show only in the Directus log: Directus sends the invite mail without waiting, so the page can say
+  "sent" but never "delivered" (E7).
+
+- **(plan 2) A parent delete can deadlock with a member or grant insert.** The lock-first triggers (E11) take the global readers lock
+  before the statement's row and foreign-key locks, which removes the deadlock of a grant or member insert against a write that holds the
+  readers lock. A delete of a campaign, project, test or person racing a member insert or grant insert on the **same parent** can
+  still abort one of the two with 40P01 (deadlock detected); a delete of a **team** is covered since E22 (`teams_lock_first`). It is retryable and rare; the endpoints answer a 500 and the user repeats the
+  action.
+- **(plan 2) A team logo can be overwritten through `/files`.** The 1 MB / png, jpeg, svg limit is checked by `d1-teams` when a logo is
+  set, but a Lab Member has unfiltered `directus_files` rights, so a member could still replace a logo's file with another through
+  `/files`. A logo is not sensitive; the files gap A1b closes elsewhere covers it.
+- **(plan 2) Pending and declined names are visible to every reader of a record.** `GET /d1-record-access/:collection/:id/entries/team/:team_id/members`
+  lists the active, pending and declined members of a team's grant to anyone who can read the record (the record's own list already names
+  its people to the same readers), and the owner-only view is not enforced. Showing pending and declined to managers only is a follow-up.
+- **(plan 2) Derived rows cannot be edited by hand, even by an Administrator** (E11). A wrong derived row is repaired by removing and adding
+  the grant again; `d1_private.team_drift()` finds them.
+- **(plan 2) Team mail can reach people who already have access, and the waiting counts run per grant.** A team grant mails every active
+  member with a login, also those who could already read the record; `team_pending_actionable` is one function call per pending row, so a
+  record with a very large backlog is slow to list.
+- **(plan 2) Not covered by the E2E.** The mails (the preview has no transport; the endpoints' unit tests use a fake one), the Home `MyTeams`
+  panel and the Team filter (PR 4); team ownership (PR 3) has its own spec, 19.
+
+- **(plan 3) A direct owner change is an owner's transfer by another door (Ruling O3a).** An owner, or a manager of the owning team, can
+  PATCH `owner_team_id` through Directus: no previous-owner Can edit row, no manager mail. Only non-owner paths are closed (E26).
+- **(plan 3) Leaving a team-owned record costs access (Ruling O5).** Team to person or team to team does not keep the outgoing managers
+  as Can edit, unlike person to person; the dialog warns, and the new owner must add them back (E28).
+- **(plan 3) A team whose only managers are inactive can still receive a transfer (the parked O4 case).** Such a record is
+  administrator-managed until a manager is reactivated (E27).
+- **(plan 3) Some views still assume a person owner.** Label owner initials, the `d1-report` owner row, the ForceDashboard "related to me"
+  filter and Home's force-error tile do not see team-owned records yet: a follow-up (E30). The Delete confirmation on a team's page does
+  not warn that it refuses while the team owns records (the refusal message follows).
+- **(plan 3) `GET /d1-teams/:id` lists the owner grant** among a team's records with role `own` and counts it in `hidden_count`; the page
+  labels it "Owns" (E24).
+
+## 9. Errata (plan 1)
+
+Where building PR 1 (the admin People page, `docs/superpowers/plans/2026-10-14-people-1-admin-page.md`) differs from the text above.
+
+- **E1 Account administrator.** The spec said "find the Administrator role by name" (§3.4). The preview's admin has no role (an
+  admin policy attached to the user), so instead an **account administrator** is a login that reaches an `admin_access` policy
+  (`d1-record-access` `isAdminLogin`) **and** whose role is not the Lab Admin role. `D1_LAB_ADMIN_ROLE_ID` may override the id;
+  `D1_ADMINISTRATOR_ROLE_ID` is not used.
+- **E2 No mail catcher.** The preview network has no outbound mail and the repo has no catcher (§6 assumed one). Invite email
+  delivery is covered by the endpoint's unit tests (fake `UsersService`); the Playwright spec checks that the invited login exists,
+  is linked and shows "Invite not accepted", and the accept page's error path.
+- **E3** The "Former people still in a team" attention item (§1.1; `GET /attention` returns six counts in PR 1, not seven), the
+  **Team** menu and the **Through teams** count arrive with PR 2, when teams exist.
+- **E4** Removing a direct grant from the person panel calls the existing
+  `DELETE /d1-record-access/:collection/:id/entries/:person_id` (administrators manage every record); there is no new route.
+- **E5** The "Former people still in a team" item, the Team menu and the Through-teams count are PR 2's, not PR 1's (E3, listed
+  separately so it is not missed when PR 2 is planned).
+- **E6** `POST /invite` answers `200` (not `201`) when it re-sends the invite to a login that is already invited under the same
+  e-mail; a new login is `201`.
+- **E7** `email_sent` means "handed to Directus's mailer". Directus sends invites fire-and-forget, so a delivery failure shows only
+  in its log; the UI says "sent", never "delivered". A mail error that does surface keeps the login and its link and gives
+  `email_sent: false` (the page then points to Resend).
+- **E8 Migration number.** The People admin functions are migration **180** (`20261014000180_people_admin.sql`). They were first
+  numbered 173, then 174 (`fix/form-qa` claimed 173); main then gained 173 to 175 and 183 (form blockers, form layout, form
+  values, batches), so the people-and-teams stack was renumbered to start at 180. The attention counts follow the People page: `login_without_person` counts only active, invited or
+  suspended logins (archived and draft ones are not listed), and an invited login with no person is in both `login_without_person`
+  and `invite_not_accepted`.
+- **E9 Audit trail and header invite.** `PATCH /logins` writes through Directus's `UsersService.updateOne` as the caller (the
+  change is in `directus_activity` / `directus_revisions` under their name). A header invite with no person chosen links the one
+  unlinked person who has that e-mail (several: 409 `PERSON_AMBIGUOUS`); every person the endpoint links becomes a researcher.
+  An invite that has not been accepted cannot be suspended (409 `NOT_ACTIVE`).
+
+## 10. Errata (plan 2)
+
+Where building PR 2 (Teams, `docs/superpowers/plans/2026-10-14-people-2-teams.md`) differs from the text above. These win over §1 to §7 where
+they disagree; each ruling was made while building, with the maintainer's standing instruction to continue.
+
+- **E10 Ruling D1: derived rows replace editors, managers and the access-members tables (§2, §2.1, §2.2, §2.3, §3.2, §3.3, §5, §6, decision
+  10).** No `<type>_editors` / `<type>_managers` tables, no `editors_of_<type>()` / `managers_of_<type>()`, no `rights_rebuild()` and no
+  change to `scripts/access_rules.json` or the Directus rules. A team grant is a row of `<type>_team_access` (`team_access_id`, the record,
+  `team_id`, `role` = view or edit, investigator on a project, `trust_new_members`, who added it) and is **expanded by triggers into
+  ordinary `<type>_access` rows, one per active member, tagged with `team_access_id`** ("derived rows"). Everything that reads access rows
+  by person then covers teams with no change: the readers functions and tables of migration 166, the Restricted cascades, the Lab Member
+  update and delete filters (`access._some.person_id.user_id` with a role), Ask-DB row security. Reason: the spec's design needed a new
+  generator item kind, new aliases in three places, editors oracles that do not exist and a rewrite of every Lab Member update and delete
+  rule, all gated by a matrix CI does not run; derived rows reuse machinery that is already proven. `<type>_access.person_id` stays NOT
+  NULL (a derived row belongs to a person); `UNIQUE (record, person_id)` became two partial unique indexes: a person's own entry
+  (`team_access_id IS NULL`, upserts name `ON CONFLICT (record, person_id) WHERE team_access_id IS NULL`) and one derived row per grant
+  (`(record, person, team_access_id)`). The spec's `<type>_access_members` is `<type>_team_pending(team_access_id, person_id, state
+  pending|declined, decided_by_person_id, decided_at)`: only members who are **not** active have a row; an active member has a derived row.
+  Directus: `teams`, `team_members` and `team_events` are registered; a Lab Member reads the first two (unfiltered rows of
+  `access_rules.json`, Ruling G2, so `tests/phase1_schema.sh`'s "every Lab Member row is listed" holds) and has no row on `team_events` (E22); the ten `<type>_team_access` / `<type>_team_pending`
+  tables are not registered in Directus, are audited and are not granted to `d1_llm_readonly`. What moves to PR 3 (team ownership): the
+  `manage` level generated by an `owner` pseudo-grant, `owner_team_id`, `can_manage` through the owning team's managers and the guard
+  following it. The tests cover the rights through the existing readers matrix (new mutation cases for team grants) and `tests/teams.sh`.
+- **E11 Bookkeeping and guards (§2.1).** The events of §2.1 are row-level AFTER triggers (SECURITY DEFINER). A grant insert writes the
+  derived rows and an event `shared`; a role change moves them; trust off to on turns the pending rows into derived rows (declined stay);
+  deleting a grant takes its derived and pending rows by cascade; a member added gets a derived row per trusting grant and a pending row per
+  other grant; a member removed loses both kinds (an UPDATE of `team_id` or `person_id` is leave plus join). A grant cannot be moved to
+  another record or team. **Guard:** a BEFORE trigger on each `<type>_access` refuses insert, update or delete of a row with
+  `team_access_id` set (42501 "Team access rows are managed by the team's grant") unless the bookkeeping is running
+  (`d1.team_sync = 'on'`) or the statement is a foreign-key cascade (a DELETE inside another trigger; an UPDATE that keeps
+  `team_access_id`). So **an Administrator in Data Studio cannot edit a derived row either**; it is a guard against mistakes, not a security
+  boundary. **Lock order:** statement-level BEFORE triggers on `team_members` and the five grant tables take the global readers lock
+  first, then the statement locks rows; each bookkeeping function takes `d1_private.team_lock()` (READ COMMITTED only), so a grant and a
+  joiner committed together cannot miss each other. A **surrogate key** (E12) and the manager rule follow.
+- **E12 `team_members` has a surrogate key.** `team_members(member_id uuid PK default gen_random_uuid(), team_id, person_id, is_manager,
+  joined_at)` with `UNIQUE (team_id, person_id)`, not the composite primary key of §2: a Directus collection needs a single primary key and
+  PR 2 reads `team_members` through `/items` (the People page's Team menu for a member). The deferred constraint "a team with members has a
+  manager" is a constraint trigger at commit (23514 "A team must keep at least one manager"); the endpoint answers it as 409
+  `LAST_MANAGER`, "Make someone else a manager first". `teams.name` is unique on `lower(btrim(name))`.
+- **E13 Migrations 181 and 182 (first numbered 175 and 176, renumbered with the stack); 182 replaces 180's functions (§2).** 181 is `teams`, `team_members`, `team_events` and their
+  triggers; 182 is the team grants, derived rows, pending tables, guards, `d1_private.team_decide()`, `team_pending_actionable()`,
+  `team_drift()` / `team_drift_count()` and `team_kinds()`. 182 also replaces migration 180's three people-admin functions:
+  `person_access_list(p, 'teams')` lists the derived rows (source `team`, "granted by" the team's name) and **'shared' and 'investigator'
+  leave them out** (so a count does not double); `person_access` returns `(owns, shared, investigator, teams, waiting)` (a new return type:
+  dropped and created); `people_attention` gains the key `former_in_team` (E3, E5). 182 also changes the person upsert target of
+  `d1-record-access`: **deploy the new `d1-record-access` together with 182** (runbook "Teams (PR 2)"). The database gate is
+  `ROUNDTRIP=2 bash scripts/dev/schema_test_docker.sh` (Ruling G1): `ROUNDTRIP=6` would also roll back main's migration 172, whose re-up
+  fails when the reference seed is loaded (already so on main).
+- **E14 Ruling D2: when approval is asked (decision 12, §2.1 last paragraph).** A pending row is **actionable** (shown on Home, in
+  emails, counted as "N waiting") only while approving it would raise that person's access; `d1_private.team_pending_actionable(collection,
+  team_access_id, person_id)` computes it, nothing is stored. **D2:** for a `view` grant the person's login is not already in
+  `<type>_readers` for the record. **D2a (edit grants):** the person has no `edit`-level `<type>_access` row (own or derived), is not the
+  record's owner, is not a co-owner of the sample (`sample_co_owners`); the PI of the record's project does **not** count (the Lab Member
+  edit rules do not let a PI edit a child sample, operation or test). **D2b (investigator grants on a project):** unless the person is
+  already the project's PI or an investigator (an access row, own or derived, or `project_investigators`); a mere reader does not
+  count. A person with no login is always actionable. A pending row stays pending; it comes back into the lists if the other path goes
+  away.
+- **E15 Endpoints (§3.1, §3.2).** `d1-teams` has the routes of §3.1 with these differences: create takes no logo (the logo is added by
+  editing); `POST /:id/members` answers `{pending, owners_asked, owned_edit}` with `owned_edit` always `0` until PR 3; `GET /pending` and
+  `POST /pending/decide` act on the rows the caller manages (an administrator: every row), and a decision without `records` covers all of
+  the caller's rows for that joiner and team; a team grant mails each active member once ("via <team>"). `d1-record-access` returns the team
+  entries in a **separate `teams` array** next to `entries` (the person list), takes a team in `POST .../entries {team_id, role}`, and has
+  `PATCH` / `DELETE .../entries/team/:team_id`, the new `GET .../entries/team/:team_id/members` (active, pending with `actionable`,
+  declined) and `POST .../entries/team/:team_id/members/:person_id {decision}`. The person routes (change role, remove, transfer) act only
+  on a person's own entry (`team_access_id IS NULL`); derived rows are never edited through them. `owner` as a team, `POST .../transfer
+  {team_id}` and `can_manage` through the owning team are PR 3. Lab Admin and Administrator are not told apart for teams (both have `admin_access`, which is what the endpoint reads): an
+  administrator manages every team and every record's team entries.
+- **E16 People page.** The Team menu takes the teams from `GET /d1-teams` (a brief list); an admin's rows get their teams from `GET
+  /d1-people-admin/people`, a member's rows from `GET /items/team_members?fields=team_id,person_id&limit=-1` (a Lab Member may read it)
+  (Ruling P1). The person panel's "Through teams" line and "Waiting for approval: N records (M owners)" use the 182 functions. People and
+  Teams are a switch in the list bar (`?view=teams`; the default is left out of the address); switching drops the other view's filters.
+- **E17 `TeamCard` is a disclosure, not a dialog (§1.3).** The trigger (any element that names the team) carries `aria-expanded` and
+  `aria-controls`; the card is `role="group"` labelled "Team <name>", takes no focus (focus stays on the trigger), says its content through
+  a live region that always exists, closes on Escape (this Escape closes the card only, not the dialog or panel it sits in), on leaving and
+  on a tap outside, and reads the team once per page (a member change forgets it). A mouse hover opens it after 150 ms, keyboard focus at
+  once, a click or tap pins it.
+- **E18 Words.** Spec and UI follow `CONTEXT.md`: team, team manager, pending member, Trust future members, access level (Can view, Can
+  edit, Investigator); never "group" for a team.
+- **E19 Team page path (§1.2, §4).** The team page is routed as `/home/teams/<id>` (the form Explorer hosts navigate with; `/teams/<id>`
+  would resolve to an external link in the Directus host). In STARbase the address bar shows `/teams/<id>` (the `/home` prefix is dropped,
+  as for every Explorer page), and `/people?view=teams` for the list. After Leave or Delete the page goes back to `/home/people?view=teams`.
+- **E20 Performance gate (§6).** The gate coded in `scripts/dev/directus_perf.mjs` and `scripts/dev/perf_compare.py` is **p95 below 300 ms
+  per list request and writes at most 2x** the "before" time; "every list under 80 ms p95" was A1a's measured result, not its gate. The two
+  team writers each have an absolute limit of 500 ms (`scripts/dev/perf_compare.py` flags them): `team_join_100_records` and
+  `team_grant_20_members` (SQL in `scripts/dev/perf_writes.sql`, through Directus in `scripts/dev/directus_perf_writes.mjs`). They have no
+  "before" (the tables do not exist without 181 and 182), so they are judged against 500 ms only. Measured 2026-10-14 on the seeded copy (`perf_compare.py` before/after: GATE PASS, worst read
+  p95 143 ms, worst write ratio x1.00): `team_join_100_records` 115 ms and `team_grant_20_members` 81 ms through Directus (59 and 17 ms in SQL).
+- **E21 Preview and tests.** `scripts/dev/explorer_preview.sh`'s default overlay gains `d1-teams` and `d1-person-link`.
+  `tests/ui/specs/18-teams.spec.ts` covers the E2E of §6 (grant, pending and approve, decline, Trust future members, leave, the members
+  card, last manager, the People/Teams switch); it creates its own logins, people, teams and a Restricted sample and removes them. Spec 17's
+  person panel now has four count lines (Through teams).
+- **E22 Final review of plan 2 (corrections to the above).** (1) `team_events` has **no Lab Member read row** (migration 181, `access_rules.json`):
+  its events name records and people a reader may not see; `GET /d1-teams/:id` serves the history, and an event about a record the caller
+  cannot read keeps only kind, time and actor (no `person_id`, `person_name`, record or `detail`). (2) **Waiting for you is owner-only**:
+  `GET /d1-teams/pending` and `POST /d1-teams/pending/decide` without `records` act on records the caller owns, an Administrator included;
+  an Administrator approves or declines one record at a time in Who has access. (3) A committed write never answers 500: the reads after
+  the commit (the team read back for the answer, the people for the mail) are logged and answer what is known, as `d1-record-access` does.
+  (4) `decide` deduplicates `records` by collection and id. (5) Migration 182 adds `teams_lock_first` (BEFORE DELETE, statement level, the
+  readers lock first: a team delete cannot deadlock with a member or grant insert) and `d1_private.team_pending_guard` on the five
+  `<type>_team_pending` tables (BEFORE INSERT/UPDATE/DELETE; refused unless `d1.team_sync = 'on'`, a DELETE at trigger depth > 1 or an
+  UPDATE at depth > 1 that changes only `decided_by_person_id`), a guard like E11's, not a security boundary. (6) An open members card
+  (`TeamCard`) owns Esc: it marks its popover `data-open-menu` and swallows the key, so an enclosing person panel does not also close.
+
+## 11. Errata (plan 3)
+
+Where building PR 3 (Team ownership, `docs/superpowers/plans/2026-10-14-people-3-team-ownership.md`) differs from, or settles, the text above.
+These win over §1 to §7 where they disagree; each ruling was made while building, with the maintainer's standing instruction to continue.
+Migrations are **183** (`team_ownership`: `owner_team_id`, the owner grant, the `manage` level, the bookkeeping and the readers) and **184**
+(`team_ownership_rules`: the regenerated Lab Member rows); they ship together (E25).
+
+- **E23 Ruling O1: the `manage` access level, and managers are the owner wherever the owner is tested (decision 13, §2, §3.2, §3.3).** An
+  owner grant (`<type>_team_access.role = 'own'`, trust on, hidden from Who has access) is expanded by the bookkeeping like any grant, with
+  the derived role chosen by the manager flag: a member gets `edit`, a **manager gets `manage`** (`d1_private.team_derived_role`;
+  promoting or demoting a manager rewrites the derived rows at once). `manage` exists only on the four ownable types' `<type>_access`
+  (not `project_access`: a team is never a PI) and a CHECK lets only the bookkeeping write it (`manage` requires `team_access_id`). Wherever
+  SQL or `scripts/access_rules.json` treats `edit` as an editor, `manage` counts too; **wherever the owner is tested, a `manage` row counts
+  as the owner**: the Lab Member delete and manage filters, the owner guards (`owner_person_id`, `owner_team_id`, `restricted`), and the
+  approval test (`team_pending_actionable`). Review of migration 183 extended this to the owner-elevation paths of the readers (a campaign
+  owner reading its samples, an owner reading its project, a campaign owner reading its operations), the matrix oracle and
+  `suspended_owns_records`, so a team's managers read what a person owner reads; and the **orphan amnesty** (an unrestricted operation with
+  no owner, project or campaign is open to every member) now needs no team owner either, so a team-owned orphan operation is not open to
+  all (spec 19 proves it). Cost of the choice: managers read slightly more than plain members, as person owners do.
+- **E24 Ruling O2: the owner grant is not a team entry.** `GET /d1-record-access/:collection/:id` `teams` and `entries` never list the
+  `own` grant or its derived rows; the owner row shows the team ("Additive (managers)", with the managers' names). The per-team routes
+  act on shared teams only: PATCH, DELETE and the add on the owning team answer 409 `TEAM_OWNS_RECORD`, members and decide answer 404 as
+  if it were not listed. `GET /d1-teams/:id` still lists the owner grant among a team's records with role `own` (the page labels it
+  "Owns", and `counts.owns` is counted from the record tables), and `hidden_count` counts them.
+- **E25 Migrations 183 and 184 deploy together, with their extensions.** 183 alone would let an editor write `owner_team_id` through the
+  API and make their own team the owner (the Directus `readonly` flag only affects forms; the owner guards that refuse it are 184's rules and
+  `d1-access-guard`'s generated `rules.json`). Deploy `d1-access-guard`, `d1-owner-default`, `d1-record-access`, `d1-teams` and
+  `d1-admin-overview` (its ownerless counts need the column) in the same release (runbook "Team ownership (PR 3)"). 184's down restores
+  the previous Lab Member rows from `d1_private.team_ownership_rules_backup`; 183's down refuses (0A000) while any record has an
+  `owner_team_id`. `configure_directus.sql` and `configure_campaigns.sql` register the `owner_team_id` to `teams` relation (they delete
+  all relations of the record tables, so `configure_all.sh` would otherwise drop the one 183 made).
+- **E26 Ruling O3: a record becomes team-owned only through Transfer (Q15).** `d1-access-guard` refuses a non-blank `owner_team_id` on
+  `items.create` of a sample, operation, test or campaign for a non-admin (403 FORBIDDEN, "A record becomes team-owned through Transfer
+  ownership"; also nested and batch creates); `d1-owner-default` never gives a record created with `owner_team_id` a person owner (an
+  administrator or an import may create one: the CHECK allows only one owner). **Ruling O3a:** an owner, or a manager of the owning team,
+  who PATCHes `owner_team_id` directly (the owner guard passes) is an owner's transfer by another door: accepted. Only paths that are not
+  the owner's are closed; that path writes no "previous owner stays as Can edit" row and sends no manager mail.
+- **E27 Ruling O4: no transfer to a team with no manager.** `POST …/transfer {team_id}` answers 409 `TEAM_HAS_NO_MANAGER` ("That team
+  has no manager to look after the record — add a manager first") and writes nothing, since the record would be manageable by an
+  administrator only. An empty team exists (an administrator can make one through `/items/teams`; a team made through STARbase has its
+  creator as manager). **Parked:** O4 counts any `is_manager` row, also an inactive or loginless manager, so a team whose only
+  managers are inactive can still be transferred to; such a record is administrator-managed until a manager is reactivated. The check is
+  the literal rule on purpose.
+  The same rule holds on the direct path: `d1-access-guard` refuses 409 `TEAM_HAS_NO_MANAGER` (same words) when a non-administrator's update
+  sets `owner_team_id` to a team with no `is_manager` row (after its owner check; administrators are exempt).
+- **E28 Ruling O5: leaving a team-owned record does not keep the outgoing managers.** Transfer person to person keeps the previous owner as
+  Can edit; **team to person and team to team do not keep the previous team or its managers** (the database drops the owner grant).
+  The acting manager therefore loses access unless they are in the new team or are the new owner. Who has access warns before Confirm ("You
+  and the other managers of <team> will lose access unless you are added back.") and the record page, which re-reads after a transfer,
+  then says "Not found or not visible to you" to a manager who gave it away (spec 19). A person to team transfer keeps the previous
+  person owner as Can edit. Transfer back to a person clears `owner_team_id` and the owner grant in one UPDATE.
+- **E29 Team delete and the managers' queue.** `DELETE /d1-teams/:id` maps the restrict foreign key to 409 `TEAM_OWNS_RECORDS` with
+  `extensions.counts` per collection and the message "Beta owns 2 samples and 1 campaign. Transfer ownership of them to a person or
+  another team before deleting the team."; nothing is deleted, mailed or cache-cleared (the team page shows the message after the
+  confirm, by design, since a stale local count must not skip the refusal). `POST /:id/members` answers `owned_edit` (records the team
+  owns). For a team-owned record "the owner" means the managers of the owning team: Waiting for you (`/pending`, `/pending/decide`,
+  including the 403 for a plain member), the joiner-waiting mail and the team-deleted mail go to them (one mail per owner, the caller
+  excluded), and the `ownerless` counts, "no owner" flags and the My work filters treat a team owner as an owner (`owner_person_id IS NULL
+  AND owner_team_id IS NULL`; samples and campaigns of the teams I belong to are in My work).
+- **E30 Follow-up (not in PR 3): readers that still assume a person owner.** These stay person-owner-only in this PR, so team members do
+  not see team-owned records there until the follow-up: the **owner initials on printed labels** (`labels/sample.ts`, `labels/page.ts`:
+  a team-owned sample prints none), the **`d1-report` owner row**, the **ForceDashboard "related to me" operations filter** and Home's
+  force-error tile (`forceErrorOnMyOperations` = `ownedByMe AND …`). Also open: the samples fallback filter on Home now carries the team
+  clause (a role that cannot filter on `owner_team_id` gets an error instead of the owner-only fallback; Lab Member can).
+- **E31 Preview and tests.** `scripts/dev/explorer_preview.sh` needs `d1-owner-default d1-access-guard` in the overlay for spec 19 (the
+  README's overlay line has them; the preview applies 183 and 184). `tests/ui/specs/19-team-ownership.spec.ts` is the E2E on real Directus
+  and Postgres, with its own logins, people, teams, samples and operations (removed in `finally`): a person-to-team transfer in the
+  browser (owner row, hidden owner grant, previous owner kept as Can edit), a manager and a plain member of the same team on the same
+  record (**the person and the role conditions of the delete and manage rules bind to the same access row**: the member's `edit` row does
+  not make them a manager although the manager's `manage` row exists; delete, share, transfer and both owner fields are refused, the
+  controls are absent and the sentence "Only <team>'s managers can change who has access." shows), the rail showing the team, promoting
+  and then demoting a manager (sharing allowed, then refused at once with no delay), the manager deleting the record, Ruling O3 (403
+  on create), Ruling O4 (409 in the API and the message in the dialog), the team delete refusal with counts, transfer back to a person
+  (owner grant and derived rows gone, members lose access, the team then deletes), and the team-owned orphan operation (read by a member,
+  refused to a stranger, while an ownerless one is open). **Not covered:** the mails (no transport in the preview), the My work
+  view of team-owned records in a browser (the pure-function tests cover it; the Team filter is spec 20, E37) and the E30 readers.
+  **Performance (E20's gate, 2026-10-14, seeded copy of live, 183 and 184 withheld against applied):** worst read p95 144 ms (a stranger's
+  `co_owned_operation_all_fields`, 38 to 144 ms, from 183; every other read within x1.7), writes at most x1.53, the team writers 30 and 71 ms
+  in SQL and 106 and 123 ms through Directus (limit 500 ms). `perf_compare.py` prints FAIL for them because it sets the Directus "after" lines against the SQL-only "before" (x7.07, x3.42); like for
+  like in SQL they are x2.0 and x1.97 (n=3 medians of a few milliseconds), and through Directus they have no "before".
+  Details and the caveat about two machine-loaded runs: runbook "Team ownership (PR 3)".
+
+## 12. Errata (plan 4)
+
+Where building PR 4 (My teams, `docs/superpowers/plans/2026-10-14-people-4-my-teams.md`) differs from, or settles, the text above. These win
+over §1 to §7 where they disagree. No migration: PR 4 is `d1-teams` (two routes), the index kit, STARbase's Projects page and Home.
+
+- **E32 Ruling M1: a team filter never names a record the viewer cannot read (decision 19, §1.5, §4).** The ids of "the team's records" come
+  only from `GET /d1-teams/:id/records?collection=<c>&limit=<n>` -> `{ ids, truncated }`: the records of that collection the team owns
+  (`owner_team_id`, the four ownable types) or has a grant on (`<type>_team_access`, which includes the hidden `own` grant), de-duplicated,
+  **intersected with the caller's `<type>_readers`** (administrators: all), newest first. A record shared with the team before the viewer joined
+  (pending, no trust for future members) is one of the team's records but not one the viewer can read, so it is not in the answer, in the
+  filtered list, in the panel, or in a count. The kit never falls back to an unfiltered list: no ids, an empty answer, an unknown team or a
+  failed call gives a list that matches nothing (the nil uuid in `_in`) or an error state. `GET /d1-teams/mine/recent?limit=20` (default 20,
+  max 100) is the same intersection across the caller's teams: a record in two of the caller's teams is listed once (first by team name);
+  no person or no team gives `{ items: [] }`. Spec 20 proves both on real Postgres (a restricted sample pending for the member is absent
+  everywhere, the manager who reads it through the share is told of it, a stranger of nothing).
+- **E33 Ruling M2: at most 300 ids per team.** The plan said 500. 500 uuids in a GET `_in` come to about 22 KB on the request line, over
+  Node's 16 KB header limit (Directus answers 431); about 367 is the most that fits, so the cap is **300** (`MAX_TEAM_RECORDS` in `d1-teams`,
+  `TEAM_RECORDS_LIMIT` in the kit; a larger `limit` clamps, `limit < 1` or not an integer is 400 INVALID_PAYLOAD). When more exist,
+  `truncated` is true and the page says "Showing the latest 300 of this team's records." Cost: a team with more than 300 readable records of
+  one kind shows only its newest 300 on that list.
+- **E34 "Latest" is `updated_at`.** All five record tables have `created_at` and `updated_at`, and the `occ_<table>` trigger sets `updated_at`
+  on every UPDATE, so "newest first", the cut at 300 and the panel's `changed_at` all mean "last changed", not "created". Cost: a bulk edit
+  reshuffles which 300 show. Rows with no date sort last.
+- **E35 The Team filter.** A fixed chip (`FilterDef.options = { kind: 'team' }`, URL `f.team=<id>`, like the other chips) on samples,
+  operations, tests and campaigns; the options are all teams (`listTeams`), the records are the viewer's readable ones. Projects have no
+  `IndexDef` (a bespoke page), so `ProjectsIndex` filters on the client with the same composable (`useTeamRecordFilter`, `f.team` in the URL,
+  `router.replace`): projects are grants only (a team never owns a project). While the chosen team's ids load the page says "Loading this
+  team's projects…" (never "No project matches these filters") and hides the "Showing N of M" line. The URL is shareable: someone who cannot
+  read any of the team's records opens it and sees nothing.
+- **E36 The Home "My teams" panel (decision 19).** One flat list of lines (no grouping by team), each with the team tile, kind chip, code,
+  title, team name and "changed ..." ; the first 10, and "Show N more" (N = min(total, 20) - 10) reveals the rest of the 20 already loaded (no
+  second request) and moves keyboard focus to line 11, since the button unmounts when pressed. A record link is named "<Kind> <code>: <title>"
+  ("Sample no code: ..." for a record without a code). The panel draws nothing at all, not even its heading, when the viewer is in no team, no
+  record is readable, or the read fails (silent, like the other Home panels). Its model is `home/myTeamsPanel.ts` (the plan's name `myTeams.ts`
+  was taken by "Your work"'s team ids); the component is `home/MyTeams.vue`, placed after MyWork.
+- **E37 Tests.** The unit and vitest suites cover the routes, the query building and the panel's pure model; the repo has no component-mount
+  tests, so what only a browser can show is `tests/ui/specs/20-my-teams.spec.ts` (own logins, people, team, a pending restricted sample, 12
+  team-owned samples and a team-shared project, removed in `afterAll`): the Samples Team filter shows exactly the member's 12 readable team
+  samples and never the pending one, `f.team` survives a reload and a direct visit, a stranger filtering by the team sees nothing, the Projects
+  page shows its loading text and never flashes "No project matches", the panel draws for the member with a Show more that moves focus to line
+  11 and links named by kind, code and title, and draws nothing for a person in no team. **Not covered:** the panel's "All teams" link and
+  the 300-id truncation note in a browser (unit-tested), and a team of more than 300 records.

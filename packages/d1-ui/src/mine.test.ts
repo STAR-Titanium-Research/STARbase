@@ -1,8 +1,38 @@
 import { describe, expect, it } from 'vitest';
 import {
-	campaignsMine, coOwnedByMe, failedTests, forceErrorOnMyOperations, forcePendingOperations, ownedByMe, ownerlessSamples, projectInvestigatorFilter,
-	projectsMine, samplesMine,
+	campaignsMine, coOwnedByMe, failedTests, forceErrorOnMyOperations, forcePendingOperations, ownedByMe, ownedByTeams, ownerlessSamples, projectInvestigatorFilter,
+	projectsMine, samplesMine, withMyTeams,
 } from './mine';
+
+// A record a team owns (owner_team_id) is the work of every member of that team: the member ids come from /items/team_members.
+describe('records of my teams', () => {
+	it('names the teams I belong to by id, and is nothing when I belong to none', () => {
+		expect(ownedByTeams(['t1', 't2'])).toEqual({ owner_team_id: { _in: ['t1', 't2'] } });
+		expect(ownedByTeams([])).toBeNull();
+	});
+
+	it('widens a "mine" filter with the team clause, and leaves it alone without teams', () => {
+		expect(withMyTeams(ownedByMe, [])).toBe(ownedByMe);
+		expect(withMyTeams(ownedByMe, ['t1'])).toEqual({ _or: [ownedByMe, { owner_team_id: { _in: ['t1'] } }] });
+		// an _or of its own is extended, not nested
+		expect(withMyTeams(samplesMine, ['t1'])).toEqual({ _or: [ownedByMe, coOwnedByMe, { owner_team_id: { _in: ['t1'] } }] });
+	});
+
+	it('are legal filters', () => {
+		for (const f of [withMyTeams(ownedByMe, ['t1', 't2']), withMyTeams(samplesMine, ['t1']), ownedByTeams(['t1'])]) expect(filterProblems(f)).toEqual([]);
+	});
+
+	it('leaves the exported samplesMine and campaignsMine as the smoke test carries them', () => {
+		expect(JSON.stringify(samplesMine)).not.toContain('owner_team_id');
+		expect(campaignsMine).toBe(ownedByMe);
+	});
+});
+
+describe('ownerlessSamples', () => {
+	it('has neither a person nor a team as owner', () => {
+		expect(ownerlessSamples).toEqual({ _and: [{ owner_person_id: { _null: true } }, { owner_team_id: { _null: true } }] });
+	});
+});
 
 describe('projectInvestigatorFilter', () => {
 	it('is "this project" AND "I am its PI or an investigator"', () => {

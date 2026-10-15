@@ -125,6 +125,18 @@ test('the SQL follows the agreed rules', async () => {
     assert.match(all, /process_category IS NULL OR process_category <> 'sintering'/);
 });
 
+test('a record a team owns has an owner: every ownerless count needs owner_team_id IS NULL too', async () => {
+    const calls = [];
+    await call(mount(fakeDb({}, calls)), admin);
+    const ownerless = calls.filter((s) => /owner_person_id IS NULL/.test(s));
+    // samples, campaigns and machining operations: three counts, each excluding team-owned records
+    assert.equal(ownerless.length, 3);
+    for (const sql of ownerless) assert.match(sql, /owner_person_id IS NULL AND owner_team_id IS NULL/, sql);
+    assert.ok(ownerless.some((s) => /FROM physical_samples/.test(s)));
+    assert.ok(ownerless.some((s) => /FROM campaigns/.test(s)));
+    assert.ok(ownerless.some((s) => /FROM manufacturing_operations/.test(s) && /process_category <> 'sintering'/.test(s)));
+});
+
 test('a missing file_fingerprints table gives zeros, not an error', async () => {
     const calls = [];
     const r = await call(mount(fakeDb({ to_regclass: { rows: [{ t: null }] } }, calls)), admin);

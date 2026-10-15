@@ -48,6 +48,17 @@ CREATE OR REPLACE FUNCTION ref.gate_c(c uuid, u uuid) RETURNS boolean LANGUAGE s
     SELECT c IS NULL OR EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c
                                    AND (NOT x.restricted OR ref.c_listed(c, u)) AND ref.gate_p(x.project_id, u)) $$;
 
+-- who acts as the owner of a campaign, operation or test: its person owner, or a manager of the team that owns it (the access level manage, People 3)
+CREATE OR REPLACE FUNCTION ref.c_owner(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.me(x.owner_person_id, u))
+        OR EXISTS (SELECT 1 FROM campaign_access a WHERE a.campaign_id = c AND a.role = 'manage' AND ref.me(a.person_id, u)) $$;
+CREATE OR REPLACE FUNCTION ref.o_owner(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM manufacturing_operations x WHERE x.operation_id = o AND ref.me(x.owner_person_id, u))
+        OR EXISTS (SELECT 1 FROM operation_access a WHERE a.operation_id = o AND a.role = 'manage' AND ref.me(a.person_id, u)) $$;
+CREATE OR REPLACE FUNCTION ref.t_owner(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM test_sessions x WHERE x.session_id = t AND ref.me(x.owner_person_id, u))
+        OR EXISTS (SELECT 1 FROM test_access a WHERE a.session_id = t AND a.role = 'manage' AND ref.me(a.person_id, u)) $$;
+
 -- on a sample's list: owner, co-owner, access entry, PI of its project, PI of a campaign's project
 CREATE OR REPLACE FUNCTION ref.s_listed(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (SELECT 1 FROM physical_samples x WHERE x.sample_id = s
@@ -59,10 +70,16 @@ CREATE OR REPLACE FUNCTION ref.s_listed(s uuid, u uuid) RETURNS boolean LANGUAGE
 CREATE OR REPLACE FUNCTION ref.gate_s(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT s IS NULL OR EXISTS (SELECT 1 FROM physical_samples x WHERE x.sample_id = s AND (NOT x.restricted OR ref.s_listed(s, u))) $$;
 
+-- the owner of a sample: its owner, or a manager of the team that owns it (the access level manage is held only by such a manager, People 3)
+CREATE OR REPLACE FUNCTION ref.s_owner(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM physical_samples x WHERE x.sample_id = s AND ref.me(x.owner_person_id, u))
+        OR EXISTS (SELECT 1 FROM sample_access a WHERE a.sample_id = s AND a.role = 'manage' AND ref.me(a.person_id, u)) $$;
+
+-- an editor of a sample: the owner, a co-owner, an access entry with role edit or manage (manage = a manager of the owning team, People 3)
 CREATE OR REPLACE FUNCTION ref.s_editor(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (SELECT 1 FROM physical_samples x WHERE x.sample_id = s AND ref.me(x.owner_person_id, u))
         OR EXISTS (SELECT 1 FROM sample_co_owners o WHERE o.sample_id = s AND o.user_id = u)
-        OR EXISTS (SELECT 1 FROM sample_access a WHERE a.sample_id = s AND a.role = 'edit' AND ref.me(a.person_id, u)) $$;
+        OR EXISTS (SELECT 1 FROM sample_access a WHERE a.sample_id = s AND a.role IN ('edit', 'manage') AND ref.me(a.person_id, u)) $$;
 
 -- the sample is campaign-shielded from u: it belongs to at least one campaign and no campaign of it lets u in
 CREATE OR REPLACE FUNCTION ref.s_shielded(s uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -85,7 +102,7 @@ CREATE OR REPLACE FUNCTION ref.s_read(s uuid, u uuid) RETURNS boolean LANGUAGE s
                 ref.p_invs(x.project_id, u)
                 OR EXISTS (SELECT 1 FROM campaign_samples cs JOIN campaigns c ON c.campaign_id = cs.campaign_id
                             WHERE cs.sample_id = s
-                              AND ((ref.me(c.owner_person_id, u) AND ref.gate_p(c.project_id, u))
+                              AND ((ref.c_owner(c.campaign_id, u) AND ref.gate_p(c.project_id, u))
                                    OR (NOT c.restricted AND ref.p_invs(c.project_id, u)))))))) $$;
 
 -- operations and tests: gates (S*, P of the sample's project, P, C), then the record's own rule
@@ -103,13 +120,15 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
                 OR (NOT restricted AND (
                     ref.s_read(sample, u) OR ref.p_invs(project, u)
                     OR EXISTS (SELECT 1 FROM campaigns c WHERE c.campaign_id = campaign
-                                  AND (ref.me(c.owner_person_id, u) OR ref.p_invs(c.project_id, u)))))) $$;
+                                  AND (ref.c_owner(c.campaign_id, u) OR ref.p_invs(c.project_id, u)))))) $$;
 
 -- the narrowed orphan amnesty: an operation with no owner, project or campaign, not restricted, and either no sample or a sample that is
 -- unrestricted with an open project (none or unrestricted) and either in no campaign or in at least one campaign open to everyone
 -- (unrestricted, open project). Open to everyone: no user argument.
-CREATE OR REPLACE FUNCTION ref.amnesty_open(owner uuid, project uuid, campaign uuid, restricted boolean, sample uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT owner IS NULL AND project IS NULL AND campaign IS NULL AND NOT restricted
+DROP FUNCTION IF EXISTS ref.amnesty_open(uuid, uuid, uuid, boolean, uuid);
+-- owner_team: the owning team (People 3); a team-owned operation has an owner, so it is not an orphan
+CREATE OR REPLACE FUNCTION ref.amnesty_open(owner uuid, owner_team uuid, project uuid, campaign uuid, restricted boolean, sample uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT owner IS NULL AND owner_team IS NULL AND project IS NULL AND campaign IS NULL AND NOT restricted
        AND (sample IS NULL OR EXISTS (
             SELECT 1 FROM physical_samples s
              WHERE s.sample_id = sample AND NOT s.restricted
@@ -124,9 +143,11 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT ref.rec_gates(sample, project, campaign, u)
        AND (ref.me(owner, u) OR acc_edit OR (NOT restricted AND sample IS NOT NULL AND ref.s_editor(sample, u))) $$;
 
-CREATE OR REPLACE FUNCTION ref.rec_delete(owner uuid, project uuid, campaign uuid, sample uuid, u uuid)
+DROP FUNCTION IF EXISTS ref.rec_delete(uuid, uuid, uuid, uuid, uuid);
+-- is_owner: u is the record's person owner or holds a manage row (a manager of the team that owns it)
+CREATE OR REPLACE FUNCTION ref.rec_delete(is_owner boolean, project uuid, campaign uuid, sample uuid, u uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_gates(sample, project, campaign, u) AND ref.me(owner, u) $$;
+    SELECT ref.rec_gates(sample, project, campaign, u) AND is_owner $$;
 
 -- an operation: the ordinary read, the amnesty (everyone), the full read (their OR)
 CREATE OR REPLACE FUNCTION ref.op_read_ordinary(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -134,16 +155,17 @@ CREATE OR REPLACE FUNCTION ref.op_read_ordinary(o uuid, u uuid) RETURNS boolean 
                         EXISTS (SELECT 1 FROM operation_access a WHERE a.operation_id = x.operation_id AND ref.me(a.person_id, u)), u)
       FROM manufacturing_operations x WHERE x.operation_id = o $$;
 CREATE OR REPLACE FUNCTION ref.op_open(o uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.amnesty_open(x.owner_person_id, x.project_id, x.campaign_id, x.restricted, x.sample_id)
+    SELECT ref.amnesty_open(x.owner_person_id, x.owner_team_id, x.project_id, x.campaign_id, x.restricted, x.sample_id)
       FROM manufacturing_operations x WHERE x.operation_id = o $$;
 CREATE OR REPLACE FUNCTION ref.op_read(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT coalesce(ref.op_read_ordinary(o, u), false) OR coalesce(ref.op_open(o), false) $$;
 CREATE OR REPLACE FUNCTION ref.op_update(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT ref.rec_update(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
-                          EXISTS (SELECT 1 FROM operation_access a WHERE a.operation_id = x.operation_id AND a.role = 'edit' AND ref.me(a.person_id, u)), u)
+                          EXISTS (SELECT 1 FROM operation_access a WHERE a.operation_id = x.operation_id AND a.role IN ('edit', 'manage') AND ref.me(a.person_id, u)), u)
       FROM manufacturing_operations x WHERE x.operation_id = o $$;
 CREATE OR REPLACE FUNCTION ref.op_delete(o uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_delete(x.owner_person_id, x.project_id, x.campaign_id, x.sample_id, u)
+    SELECT ref.rec_delete(ref.o_owner(x.operation_id, u),
+                          x.project_id, x.campaign_id, x.sample_id, u)
       FROM manufacturing_operations x WHERE x.operation_id = o $$;
 
 CREATE OR REPLACE FUNCTION ref.test_read(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -152,10 +174,11 @@ CREATE OR REPLACE FUNCTION ref.test_read(t uuid, u uuid) RETURNS boolean LANGUAG
       FROM test_sessions x WHERE x.session_id = t $$;
 CREATE OR REPLACE FUNCTION ref.test_update(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT ref.rec_update(x.restricted, x.owner_person_id, x.project_id, x.campaign_id, x.sample_id,
-                          EXISTS (SELECT 1 FROM test_access a WHERE a.session_id = x.session_id AND a.role = 'edit' AND ref.me(a.person_id, u)), u)
+                          EXISTS (SELECT 1 FROM test_access a WHERE a.session_id = x.session_id AND a.role IN ('edit', 'manage') AND ref.me(a.person_id, u)), u)
       FROM test_sessions x WHERE x.session_id = t $$;
 CREATE OR REPLACE FUNCTION ref.test_delete(t uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT ref.rec_delete(x.owner_person_id, x.project_id, x.campaign_id, x.sample_id, u)
+    SELECT ref.rec_delete(ref.t_owner(x.session_id, u),
+                          x.project_id, x.campaign_id, x.sample_id, u)
       FROM test_sessions x WHERE x.session_id = t $$;
 
 CREATE OR REPLACE FUNCTION ref.c_read(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
@@ -168,19 +191,20 @@ CREATE OR REPLACE FUNCTION ref.c_read(c uuid, u uuid) RETURNS boolean LANGUAGE s
 CREATE OR REPLACE FUNCTION ref.c_update(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.gate_p(x.project_id, u)
                       AND (ref.me(x.owner_person_id, u)
-                           OR EXISTS (SELECT 1 FROM campaign_access a WHERE a.campaign_id = c AND a.role = 'edit' AND ref.me(a.person_id, u)))) $$;
+                           OR EXISTS (SELECT 1 FROM campaign_access a WHERE a.campaign_id = c AND a.role IN ('edit', 'manage') AND ref.me(a.person_id, u)))) $$;
 CREATE OR REPLACE FUNCTION ref.c_delete(c uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.gate_p(x.project_id, u) AND ref.me(x.owner_person_id, u)) $$;
+    SELECT EXISTS (SELECT 1 FROM campaigns x WHERE x.campaign_id = c AND ref.gate_p(x.project_id, u)
+                      AND ref.c_owner(c, u)) $$;
 
 CREATE OR REPLACE FUNCTION ref.pj_read(p uuid, u uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
         SELECT 1 FROM projects x WHERE x.project_id = p AND (
             ref.p_listed(p, u)
             OR (NOT x.restricted AND (
-                EXISTS (SELECT 1 FROM campaigns c WHERE c.project_id = p AND ref.me(c.owner_person_id, u) AND ref.c_read(c.campaign_id, u))
+                EXISTS (SELECT 1 FROM campaigns c WHERE c.project_id = p AND ref.c_owner(c.campaign_id, u) AND ref.c_read(c.campaign_id, u))
                 OR EXISTS (SELECT 1 FROM physical_samples s WHERE s.project_id = p AND ref.s_editor(s.sample_id, u) AND ref.s_read(s.sample_id, u))
-                OR EXISTS (SELECT 1 FROM manufacturing_operations o WHERE o.project_id = p AND ref.me(o.owner_person_id, u) AND ref.op_read(o.operation_id, u))
-                OR EXISTS (SELECT 1 FROM test_sessions t WHERE t.project_id = p AND ref.me(t.owner_person_id, u) AND ref.test_read(t.session_id, u)))))) $$;
+                OR EXISTS (SELECT 1 FROM manufacturing_operations o WHERE o.project_id = p AND ref.o_owner(o.operation_id, u) AND ref.op_read(o.operation_id, u))
+                OR EXISTS (SELECT 1 FROM test_sessions t WHERE t.project_id = p AND ref.t_owner(t.session_id, u) AND ref.test_read(t.session_id, u)))))) $$;
 
 -- a campaign_samples row, from the rule as the first attempt wrote it (sample gate AND (campaign read OR sample read)), which the readers
 -- design shows equal to "readers of the sample, or, for an unrestricted sample, readers of the campaign"
