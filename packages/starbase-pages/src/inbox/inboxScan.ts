@@ -188,4 +188,3 @@ export function scanTarget(f: Pick<FoundFile, 'linked_collection' | 'linked_inse
 
 /** "Added as a surface scan of H13A-#2 (worn)": the row's line on the Recently linked tab (the label is the server's); this is the part before " of". */
 export const ADDED_SCAN_LEAD = 'Added as a surface scan';
-
