@@ -202,6 +202,15 @@ export function mergeWithSuggestions<T extends { target: string }>(items: T[], s
 	return out;
 }
 
+// The quick actions that create a record. A Lab Viewer (migration 185) changes nothing, so none of them is offered to it: not as a Home
+// button, not as a suggestion, not in its history.
+export const WRITE_ACTION_KEYS: ReadonlySet<string> = new Set(['action:register-sample', 'action:log-operation']);
+
+// `entries` without the create actions when `viewer` (host.canViewAllAccess); the same list otherwise.
+export function withoutWriteActions<T extends { target: string }>(entries: readonly T[], viewer: boolean | null | undefined): T[] {
+	return viewer ? entries.filter((e) => !WRITE_ACTION_KEYS.has(e.target)) : [...entries];
+}
+
 // The suggested pages as entries, for mergeWithSuggestions.
 export function suggestedPageEntries(): UsageEntry[] {
 	return SUGGESTED_PAGES.flatMap((key) => {

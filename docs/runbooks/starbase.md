@@ -433,6 +433,9 @@ and Teams pages of STARbase and of the Directus Explorer module. **No new `.env`
    person, Edit, role select, Suspend, Resend, Link to a person, Remove, New team, Edit team, Add member, Make manager or Leave. The viewer's own login sits under Users, not Admins.
    The project rollup of other people's projects is readable too (the viewer reads every row of `project_rollup` and of the five `*_access` tables). **Not for a viewer**:
    Ask-the-database of Restricted records (it hides them from everyone).
+   **The pages offer it nothing that changes anything**: no Edit on a sample, operation, test, campaign, project or tool page, no `+ New` on an index page or `New project`, no
+   Register a sample or Log an operation on Home (Print labels and Scan stay), no template buttons on Print labels (printing stays), no add or remove in a campaign's lists, and
+   Who has access opens read-only. (The Force dashboard's own buttons are not part of this: the server refuses them.)
 6. Comments: as the viewer, write a comment on a record (the comments sidebar of the Directus app): it answers 403 `READ_ONLY_ROLE`. Directus gives every app-access policy a
    built-in right to comment that no permission row can remove, so `d1-access-guard` refuses it by role (`comments.create`, `comments.update`, `comments.delete`).
 

@@ -6,7 +6,7 @@ import { INDEX_DEFS } from './index/indexConfig';
 import {
 	DISMISSED_KEY, PAGES, PAGE_KEYS, RECORD_COLLECTIONS, SUGGESTED_PAGES, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget,
 	readDismissed, recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget,
-	suggestedPageEntries, withoutDismissed, withoutPinned, writeDismissed, type UsageEntry,
+	suggestedPageEntries, withoutDismissed, withoutPinned, withoutWriteActions, writeDismissed, WRITE_ACTION_KEYS, type UsageEntry,
 } from './usage';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -325,5 +325,27 @@ describe('dismissed suggestions', () => {
 	it('filters suggestions by the dismissed set', () => {
 		const sug = [{ target: 'samples' }, { target: 'operations' }];
 		expect(withoutDismissed(sug, new Set(['samples']))).toEqual([{ target: 'operations' }]);
+	});
+});
+
+describe('withoutWriteActions (a Lab Viewer is offered no create action)', () => {
+	it('names exactly the two quick actions that create a record', () => {
+		expect([...WRITE_ACTION_KEYS].sort()).toEqual(['action:log-operation', 'action:register-sample']);
+	});
+	it('drops them for a viewer, from the suggestions too, and keeps the rest', () => {
+		const suggested = suggestedPageEntries();
+		expect(suggested.some((e) => e.target === 'action:register-sample')).toBe(true);
+		const kept = withoutWriteActions(suggested, true).map((e) => e.target);
+		expect(kept).not.toContain('action:register-sample');
+		expect(kept).not.toContain('action:log-operation');
+		expect(kept).toContain('samples');
+		const own = [{ target: 'action:print-labels' }, { target: 'action:log-operation' }, { target: 'people' }];
+		expect(withoutWriteActions(own, true).map((e) => e.target)).toEqual(['action:print-labels', 'people']);
+	});
+	it('changes nothing for anyone else', () => {
+		const own = [{ target: 'action:log-operation' }, { target: 'people' }];
+		expect(withoutWriteActions(own, false)).toEqual(own);
+		expect(withoutWriteActions(own, undefined)).toEqual(own);
+		expect(withoutWriteActions(own, false)).not.toBe(own); // a copy
 	});
 });

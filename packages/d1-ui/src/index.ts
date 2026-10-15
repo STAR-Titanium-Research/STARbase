@@ -63,7 +63,7 @@ export type { SectionState } from './composables/useSections';
 export { useFieldDefs } from './composables/useFieldDefs';
 export { useCanUpdate } from './composables/useCanUpdate';
 export {
-	NOT_CAMPAIGN_OWNER_MESSAGE, NOT_OWNER_MESSAGE, NOT_PI_MESSAGE, NOT_YOUR_RECORD_MESSAGE, forbiddenReason, notOwnerMessage,
+	NOT_CAMPAIGN_OWNER_MESSAGE, NOT_OWNER_MESSAGE, NOT_PI_MESSAGE, NOT_YOUR_RECORD_MESSAGE, forbiddenReason, mayChange, notOwnerMessage, offerWrite,
 } from './canUpdate';
 
 // Components
@@ -193,7 +193,7 @@ export type {
 export {
 	PAGE_KEYS, PAGES, RECORD_COLLECTIONS, createRepeatFilter, mergeWithSuggestions, pageEntry, pageTarget, readDismissed,
 	recordEntries, recordRequest, recordTarget, removeEntry, restoreEntry, routeTarget, splitRecordTarget, suggestedPageEntries,
-	withoutDismissed, withoutPinned, writeDismissed,
+	WRITE_ACTION_KEYS, withoutDismissed, withoutPinned, withoutWriteActions, writeDismissed,
 } from './usage';
 export type { PageInfo, RepeatFilter, UsageEntry, UsageKind } from './usage';
 

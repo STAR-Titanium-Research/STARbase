@@ -74,7 +74,7 @@ const statusOptions: { value: StatusFilter; label: string }[] = [
 				</label>
 				<span class="spacer" />
 				<PinToggle v-if="pinTarget" :target="pinTarget" label="Projects" />
-				<v-button small secondary to="/content/projects/+"><v-icon name="add" small left />New project</v-button>
+				<v-button v-if="!host.canViewAllAccess?.value" small secondary to="/content/projects/+"><v-icon name="add" small left />New project</v-button>
 			</div>
 
 			<LoadState v-if="loading && !projects.length" loading loading-text="Loading projects…" />

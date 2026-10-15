@@ -217,7 +217,7 @@ const pinLabel = computed(() => (state.value.bookmark !== null ? (bookmarks.valu
 					:title="dsLink.note ?? undefined"
 					@click="host.openDataStudio(dsLink.to)"
 				>Open in Data Studio</button>
-				<button type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
+				<button v-if="!host.canViewAllAccess?.value" type="button" class="btn pri" @click="host.openDataStudio(`/content/${def.collection}/+`)">+ New</button>
 			</div>
 
 			<div v-if="bookmarks.length" class="chips" role="group" aria-label="Saved views">

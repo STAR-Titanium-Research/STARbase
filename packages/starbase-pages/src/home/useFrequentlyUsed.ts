@@ -1,7 +1,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import {
 	useExplorerHost, usePins, RECORD_COLLECTIONS, mergeWithSuggestions, pageEntry, readDismissed, recordEntries, recordRequest, removeEntry, restoreEntry,
-	splitRecordTarget, suggestedPageEntries, useRequestGate, withoutDismissed, withoutPinned, writeDismissed, type UsageEntry,
+	splitRecordTarget, suggestedPageEntries, useRequestGate, withoutDismissed, withoutPinned, withoutWriteActions, writeDismissed, type UsageEntry,
 } from '@d1/ui';
 
 // The Home "Frequently used" lists. GET /d1-usage (core/extensions/d1-usage) says which pages and
@@ -22,7 +22,8 @@ export const MAX_SHOWN = 15;
 type Which = 'pages' | 'records';
 
 export function useFrequentlyUsed() {
-	const api = useExplorerHost().api;
+	const host = useExplorerHost();
+	const api = host.api;
 	const pinsState = usePins();
 	const gate = useRequestGate();
 	const pages = ref<UsageEntry[]>([]);
@@ -139,9 +140,11 @@ export function useFrequentlyUsed() {
 	// Pinned rows are left out of both lists, as the shared pins state says (a suggestion has no row on
 	// the server, so only this filter keeps a pinned one off the list).
 	const isPinned = pinsState.isPinned;
+	// A Lab Viewer changes nothing: the create actions (Register a sample, Log an operation) are left out of both.
+	const viewer = () => host.canViewAllAccess?.value === true;
 	const pageList = computed(() => mergeWithSuggestions(
-		withoutPinned(pages.value, 'page', isPinned),
-		withoutPinned(withoutDismissed(suggestedPageEntries(), dismissed.value), 'page', isPinned),
+		withoutPinned(withoutWriteActions(pages.value, viewer()), 'page', isPinned),
+		withoutPinned(withoutDismissed(withoutWriteActions(suggestedPageEntries(), viewer()), dismissed.value), 'page', isPinned),
 		SHOWN,
 	).slice(0, MAX_SHOWN));
 	const recordList = computed(() => withoutPinned(records.value, 'record', isPinned).slice(0, MAX_SHOWN));
