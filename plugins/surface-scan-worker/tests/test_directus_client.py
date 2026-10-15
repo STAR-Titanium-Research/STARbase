@@ -94,22 +94,49 @@ def test_list_scans_filters_by_status_and_age(http):
     assert params["limit"] == "10"
 
 
-def test_fingerprint_is_a_plain_get(http):
-    http.get.return_value = _resp(
-        body={"data": {"status": "done", "content_sha256": "ab" * 32}}
-    )
-    assert dc.get_fingerprint("f1")["status"] == "done"
-    assert http.get.call_args.args[0].endswith("/items/file_fingerprints/f1")
+def test_fingerprint_is_a_filtered_list_get_with_its_staleness_key(http):
+    row = {
+        "status": "done",
+        "content_sha256": "ab" * 32,
+        "size_bytes": 10,
+        "source_mtime": "2025-10-09T08:53:20+00:00",
+    }
+    http.get.return_value = _resp(body={"data": [row]})
+    assert dc.get_fingerprint("f1") == row
+    url = http.get.call_args.args[0]
+    params = http.get.call_args.kwargs["params"]
+    assert url.endswith(
+        "/items/file_fingerprints"
+    )  # not .../f1: a missing id would be a 403
+    assert params["filter[directus_files_id][_eq]"] == "f1"
+    assert params["limit"] == "1"
+    # columns of migration 20261010000159, including both halves of the staleness key
+    assert set(params["fields"].split(",")) == {
+        "status",
+        "content_sha256",
+        "size_bytes",
+        "source_mtime",
+    }
     http.patch.assert_not_called()
     http.post.assert_not_called()
     http.put.assert_not_called()
     http.delete.assert_not_called()
 
 
-@pytest.mark.parametrize("status", [404, 403])
-def test_no_readable_fingerprint_is_none_not_an_error(http, status):
-    http.get.return_value = _resp(status=status)
-    assert dc.get_fingerprint("f1") is None
+def test_no_fingerprint_is_an_empty_list_and_is_none_without_a_warning(http, caplog):
+    http.get.return_value = _resp(body={"data": []})
+    with caplog.at_level("WARNING"):
+        assert dc.get_fingerprint("f1") is None
+    assert "permission" not in caplog.text and "may not read" not in caplog.text
+
+
+def test_a_403_is_a_real_permission_problem_and_is_logged_as_one(http, caplog):
+    http.get.return_value = _resp(status=403)
+    with caplog.at_level("WARNING"):
+        assert (
+            dc.get_fingerprint("f1") is None
+        )  # still falls back to the provisional key
+    assert "may not read file_fingerprints" in caplog.text
 
 
 def test_a_server_error_reading_the_fingerprint_propagates(http):

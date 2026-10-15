@@ -119,7 +119,9 @@ def _render(directus_files_id: str) -> dict:
         log.info("cache hit key=%s", key)
         return _columns(key, cached)
 
-    scan = topography.read_scan(path)
+    scan = topography.read_scan(
+        path, st
+    )  # refused if the file is no longer the one stat-ed
     cells, factor = grid.decimate(scan.heights_um)
     try:
         meta = grid.meta_bytes(

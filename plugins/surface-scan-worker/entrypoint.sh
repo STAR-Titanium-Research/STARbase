@@ -4,6 +4,11 @@
 # policy sees it (a crashed rq worker must not leave /health green).
 set -e
 
+# Taken before any child starts: the poller's startup sweep fails 'rendering' rows last touched before
+# this instant, and must not touch a row a worker claims while the poller is still importing.
+SURFACE_SCAN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export SURFACE_SCAN_STARTED_AT
+
 CONCURRENCY="${SURFACE_SCAN_CONCURRENCY:-1}"
 case "$CONCURRENCY" in
     1|2) ;;

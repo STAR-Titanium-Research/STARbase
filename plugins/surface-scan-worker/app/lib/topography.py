@@ -7,6 +7,7 @@ rather than guessed at.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,13 +51,19 @@ class Scan:
         return int(self.heights_um.shape[0])
 
 
-def read_scan(path: Path) -> Scan:
+def read_scan(path: Path, expected: os.stat_result | None = None) -> Scan:
     """Open *path* read-only and return its default channel in micrometres.
+
+    *expected* is the ``archive.stat_file`` result of *path* (the job passes the one its cache key
+    came from; the file is refused if it is no longer that file). The library reads from the verified
+    descriptor, never from the path.
 
     :class:`RenderError` for a file the library cannot read or that is not a 2D height map.
     """
     fmt = archive.format_for(path.name)
-    with archive.open_readonly(path) as handle:
+    if expected is None:
+        expected = archive.stat_file(path)
+    with archive.open_readonly(path, expected) as handle:
         try:
             reader = open_topography(handle, format=fmt)
             topography = reader.topography()

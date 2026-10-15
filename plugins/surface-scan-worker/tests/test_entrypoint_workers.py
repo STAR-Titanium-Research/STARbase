@@ -1,5 +1,8 @@
 """entrypoint.sh: one or two rq workers (renders at a time), and the poller is supervised too."""
 
+import subprocess
+from datetime import UTC, datetime
+
 import pytest
 
 from .test_entrypoint import STAY_UP, _run, pidfile  # noqa: F401 - the PIDFILE fixture
@@ -47,6 +50,34 @@ def test_more_than_two_renders_at_a_time_is_refused(tmp_path, monkeypatch, bad):
     proc, _ = _run(tmp_path, {"gunicorn": STAY_UP, "python": STAY_UP, "rq": STAY_UP})
     assert proc.returncode == 2
     assert "SURFACE_SCAN_CONCURRENCY" in proc.stderr
+
+
+def test_the_start_time_is_exported_before_any_child_starts(tmp_path, monkeypatch):
+    """The poller's startup sweep needs the container's start, not the time its imports finished."""
+    _env(tmp_path, monkeypatch, "2")
+    monkeypatch.delenv("SURFACE_SCAN_STARTED_AT", raising=False)
+    seen = tmp_path / "seen"
+    monkeypatch.setenv("SEEN", str(seen))
+    record = 'echo "$0 $SURFACE_SCAN_STARTED_AT $(date -u +%s)" >> "$SEEN"; '
+    before = int(
+        subprocess.run(["date", "-u", "+%s"], capture_output=True, text=True).stdout
+    )
+    proc, _ = _run(
+        tmp_path,
+        {
+            "gunicorn": record + STAY_UP,
+            "python": record + STAY_UP,
+            "rq": record + "sleep 1; exit 4",
+        },
+    )
+    assert proc.returncode == 4
+    lines = [line.split() for line in seen.read_text().splitlines()]
+    assert len(lines) == 4  # gunicorn, two rq workers, the poller
+    stamps = {line[1] for line in lines}
+    assert len(stamps) == 1  # every child got the same value
+    (stamp,) = stamps
+    started = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    assert before - 1 <= started.timestamp() <= min(int(line[2]) for line in lines)
 
 
 def test_dead_poller_stops_the_container(tmp_path, monkeypatch):
