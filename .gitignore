@@ -113,3 +113,7 @@ logs/
 # Vite dev cache
 apps/force-app/web/.vite/
 _shots*.mjs
+
+# Local DB dumps / exports (contain credentials and personal data); keep the folder only
+backups/*
+!backups/.gitkeep

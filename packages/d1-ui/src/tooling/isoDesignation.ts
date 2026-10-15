@@ -87,7 +87,9 @@ export function parseIsoDesignation(text: string | null | undefined): IsoInsert 
 	const head = (dash < 0 ? text : text.slice(0, dash)).replace(/\s+/g, '').toUpperCase();
 	const tail = dash < 0 ? '' : text.slice(dash + 1).replace(/\s+/g, '').toUpperCase();
 	if (!head) return null;
-	const m = DESIGNATION.exec(tail ? `${head}-${tail}` : head);
+	// A type code often carries a grade after the chipbreaker ("SM H13A", "MF1 890 (A41)"): if the whole text does not
+	// parse, the designation proper (the part before the '-') still decides the shape.
+	const m = DESIGNATION.exec(tail ? `${head}-${tail}` : head) ?? DESIGNATION.exec(head);
 	if (!m) return null;
 	const [, shapeL, clearL, , typeL, sizeCode, thickCode, noseCode, suffix] = m;
 	const type = TYPE[typeL];
@@ -105,4 +107,32 @@ export function parseIsoDesignation(text: string | null | undefined): IsoInsert 
 		noseRadiusMm: noseCode === undefined || noseCode === 'M0' ? null : Number(noseCode) / 10,
 		chipbreaker: suffix ?? null,
 	};
+}
+
+// Milling inserts are not ISO 1832 turning inserts. Sandvik CoroMill 390 ("R390-11 T3 08M-MM S30T") is a rectangle
+// with rounded corners: only the sizes whose catalogue dimensions are known are recognised.
+export interface MillingInsert {
+	raw: string;
+	family: 'R390';
+	lengthMm: number;
+	widthMm: number;
+	thicknessMm: number;
+	noseRadiusMm: number; // from the "08" of the code, in tenths of a millimetre
+	holeDiameterMm: number;
+	cuttingEdges: number; // one per long side, so opposite corners are the two cutting corners
+}
+
+const R390_SIZES: Record<string, { lengthMm: number; widthMm: number; thicknessMm: number; holeDiameterMm: number }> = {
+	'11': { lengthMm: 11.45, widthMm: 6.8, thicknessMm: 3.59, holeDiameterMm: 2.8 },
+};
+
+const MILLING = /^R390-?(\d{2})([0-9T]\d)(\d{2})/;
+
+export function parseMillingDesignation(text: string | null | undefined): MillingInsert | null {
+	if (typeof text !== 'string') return null;
+	const m = MILLING.exec(text.replace(/\s+/g, '').toUpperCase());
+	if (!m) return null;
+	const size = R390_SIZES[m[1]];
+	if (!size) return null;
+	return { raw: text, family: 'R390', ...size, noseRadiusMm: Number(m[3]) / 10, cuttingEdges: 2 };
 }
