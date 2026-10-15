@@ -108,8 +108,12 @@ for (const [key, value] of Object.entries(SQL)) {
 const csv = (v) => String(v ?? '').split(',').filter(Boolean);
 const copy = (v) => structuredClone(v);
 
-const snapshot = (w) => ({ candidates: copy(w.candidates), junctions: copy(w.junctions), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs) });
-const restore = (w, s) => { w.candidates = s.candidates; w.junctions = s.junctions; w.scanRequests = s.scanRequests; w.prefs = s.prefs; };
+// a rollback puts the candidate objects back IN PLACE (the tests hold references to them)
+const snapshot = (w) => ({ candidates: [...w.candidates.values()].map((c) => [c, copy(c)]), junctions: copy(w.junctions), scanRequests: copy(w.scanRequests), prefs: copy(w.prefs) });
+const restore = (w, s) => {
+  for (const [obj, saved] of s.candidates) { for (const k of Object.keys(obj)) delete obj[k]; Object.assign(obj, saved); }
+  w.junctions = s.junctions; w.scanRequests = s.scanRequests; w.prefs = s.prefs;
+};
 
 function statement(w, sql, b, txId) {
   w.log.push({ sql, name: NAMES.get(sql) ?? null, bindings: b, tx: txId });
