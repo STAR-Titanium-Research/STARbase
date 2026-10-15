@@ -816,6 +816,7 @@ class Store:
             " suggested_record_id::text, kind FROM file_candidates "
             "WHERE state = 'new' AND origin = 'new' AND match_strength = 'short_id' "
             "  AND suggested_record_id IS NOT NULL AND duplicate_of IS NULL "
+            "  AND auto_undone_at IS NULL "
             "  AND kind IN ('sem_image', 'image') "
             "  AND owner_person_id = ANY(%s::uuid[]) "
             "ORDER BY first_seen_at, candidate_id LIMIT %s",

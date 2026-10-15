@@ -154,6 +154,12 @@ def world(tmp_path):
         cur.execute(STUBS)
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
+        # Added to migration 193 by the server stream (an undone auto-link is never offered again); a no-op
+        # once the migration has it, so this worktree's tests run before and after the two are merged.
+        cur.execute(
+            f"ALTER TABLE {schema}.file_candidates "
+            "ADD COLUMN IF NOT EXISTS auto_undone_at TIMESTAMPTZ"
+        )
         conn.commit()
         yield World(conn, schema, str(root), DSN)
     finally:

@@ -284,3 +284,40 @@ def test_adopted_awaiting_hash_for_a_team_file(world):
         team_id=tid,
     )
     assert [r[0] for r in db.Store(world.conn).adopted_awaiting_hash()] == [cid]
+
+
+# ---- B1: an auto-link a person undid is never offered again ----------------------------------------
+
+from test_inbox_crawler_daemon import (  # noqa: E402
+    FakeInbox,  # noqa: F401
+    eligible,
+    inbox,  # noqa: F401
+    linkable,  # noqa: F401
+    run_autolink,
+)
+
+
+def test_an_undone_auto_link_is_not_offered_again(linkable, inbox):
+    world, pid, _, sid = linkable
+    undone = eligible(world, pid, sid, rel="Users/abc12de/3fa9c1d2_undone.png")
+    fresh = eligible(world, pid, sid, rel="Users/abc12de/3fa9c1d2_fresh.png")
+    world.q(
+        "UPDATE file_candidates SET auto_undone_at = now() WHERE candidate_id = %s",
+        (undone,),
+    )
+    world.commit()
+    counts, attempted = run_autolink(world, inbox)
+    assert counts["offered"] == 1
+    assert inbox.requests[0]["body"] == {"candidate_ids": [fresh]}
+    assert set(attempted) == {fresh}
+
+
+def test_the_in_process_attempted_map_still_holds_back_an_answered_candidate(
+    linkable, inbox
+):
+    world, pid, _, sid = linkable
+    cid = eligible(world, pid, sid)
+    _, attempted = run_autolink(world, inbox)
+    inbox.requests.clear()
+    counts, _ = run_autolink(world, inbox, attempted)
+    assert counts["offered"] == 0 and cid in attempted and inbox.requests == []
