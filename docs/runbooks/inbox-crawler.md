@@ -77,13 +77,24 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
 - **A share that goes away** aborts the scan and marks nothing gone (`last_scan_finished_at` does not advance;
   the admin tab shows the error until a later scan of everyone completes cleanly and clears it). A large file
   hashed through the read throttle keeps writing the heartbeat (at least every 30 seconds), so the admin tab
-  does not show the daemon as stale while it reads. An unreadable folder of one person is recorded and that
+  does not show the daemon as stale while it reads. The heartbeat is written on a connection of its own
+  (autocommit, with a 2 second lock timeout and a 5 second statement timeout), never on the scan's: it can
+  neither commit the owner's unfinished registrations (that is the alias check's job, at the end of a folder)
+  nor roll them back, and a failed one only logs `heartbeat not written (<error class>)` once and is tried
+  again with a new connection on the next beat. An unreadable folder of one person is recorded and that
   person skipped; the others are still scanned. A file that vanished while the share was fine becomes `gone` if nobody had decided
   it; one that reappears under another path with the same content is re-pointed. A scan that stops after
   listing a folder cannot lose that decision: the folder is cached as changed until the gone marks are written.
+- **A deleted folder.** Every scan stats the folder of each undecided (`new`) file and every folder above it,
+  not only the folders in the cache, so a whole folder that was deleted is noticed even when its cache rows
+  went earlier. That matters for a file that was dismissed (or linked) when its folder was deleted and is then
+  restored (or its link undone): it comes back as `new`, and the next scan marks it `gone`.
 - **Already linked is not found.** A file already linked to a sample, operation or test (for example in Data
-  Studio) gets no candidate, and an undecided candidate whose file is linked meanwhile is deleted at the next
-  scan. Linked and dismissed rows are never touched.
+  Studio), or already a surface scan (`surface_scans.directus_files_id`, added in the Alicona feature's own
+  dialog, which offers every star `.al3d`, the crawler's included), gets no candidate, and an undecided
+  candidate whose file is linked or a surface scan meanwhile is deleted at the next scan. Linked and
+  dismissed rows are never touched. A database without the `surface_scans` table (migration 192) skips that
+  check.
 - **Copies.** The same image or surface scan (same hash) in two places is registered once as the original; the
   later one has `duplicate_of` set. d1-inbox lists a copy marked *copy of* the original and hides it once its
   original is linked or dismissed (same owner) or linked (different owner); a copy is not counted in the badge.
@@ -99,8 +110,10 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
 - **A pointer row's path is not trusted.** `metadata.archive_path` can be edited by any Lab Member, so a
   candidate's path is re-synced from it after an indexer move only when it is a clean path under the same owner's
   folder and the row's id is the indexer's id for that very path; before a linked document is read, its stored
-  path is checked the same way. A path the share refuses is recorded as an error row (retried hourly), never an
-  exception that repeats every 30 seconds.
+  path is checked the same way: a linked document whose stored path is not its own (for example one left under
+  an old alias) gets an `error` fingerprint row, `path is not under its owner folder`, retried hourly like any
+  failed hash, so a pile of them cannot hold back the documents behind them. A path the share refuses is
+  recorded as an error row (retried hourly), never an exception that repeats every 30 seconds.
 - **Rescan my folder** scans the person's own folder (if they have an alias) and the folders of the teams they
   are an active member of; a person with neither fails the request with *no folder to scan*.
 - **Alias changes.** The crawler's cached rows are tied to their owner. If a person's alias or a team's share
@@ -125,8 +138,11 @@ daemon still clears stale scan requests and keeps its heartbeat; requests queued
 - **The crawler connects to Postgres as the superuser** (`POSTGRES_USER` from `.env`, like the indexer). A
   dedicated role that can reach only the tables it needs is a follow-up; until then the code (and the tests that
   read it) are the only limit on what it writes.
-- Other tools can still read documents under `Users/` that nobody linked (the indexer, `file_fingerprints.py
-  --phase linked`): backlog IF15.
+- Other tools can still read documents under `Users/` that nobody linked (the indexer's own walk): backlog
+  IF15. `file_fingerprints.py --phase all` does not: it skips a document or other non-image file the crawler
+  found (a `d1_private.file_candidates` row of kind `document` or `other`) that is not linked and was never
+  adopted. It keys on that candidate row, not on `directus_files.metadata.found_by`, which the indexer's next
+  run overwrites and any Lab Member can edit. `--phase all` stays a superset of `--phase linked`.
 
 ## When something looks wrong
 

@@ -164,12 +164,6 @@ def world(tmp_path):
         cur.execute(STUBS)
         cur.execute(migration_up(FINGERPRINTS))
         cur.execute(migration_up(INBOX, schema))
-        # Added to migration 193 by the server stream (an undone auto-link is never offered again); a no-op
-        # once the migration has it, so this worktree's tests run before and after the two are merged.
-        cur.execute(
-            f"ALTER TABLE {schema}.file_candidates "
-            "ADD COLUMN IF NOT EXISTS auto_undone_at TIMESTAMPTZ"
-        )
         conn.commit()
         yield World(conn, schema, str(root), DSN)
     finally:
@@ -199,3 +193,16 @@ def test_the_world_has_the_real_inbox_tables(world):
 
 def test_the_world_is_dropped_between_tests(world):
     assert world.one("SELECT count(*) FROM file_candidates")[0] == 0
+
+
+def test_the_world_gets_every_candidate_column_from_the_real_migration(world):
+    cols = {
+        r[0]
+        for r in world.q(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = 'file_candidates'",
+            (world.schema,),
+        )
+    }
+    # the fixture has no ALTER of its own: migration 193 carries both
+    assert {"adopted_at", "auto_undone_at"} <= cols
