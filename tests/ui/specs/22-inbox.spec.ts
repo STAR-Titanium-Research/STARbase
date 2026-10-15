@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { D1_BASE, STAR_BASE, watchErrors } from '../starbase/target';
 import { stubD1 } from '../starbase/stubD1';
 import { STUB_TOOLING as T } from '../starbase/stubScans';
-import { foundFile, stubInbox, type InboxStub } from '../starbase/stubInbox';
+import { foundFile, sampleFiles, stubInbox, type InboxStub } from '../starbase/stubInbox';
 
 // The Inbox (found files: spec 2026-10-15-found-files-inbox-design.md) in STARbase, in a real browser: the sidebar entry and its badge, Home's
 // panel, the /inbox page (rows with the reason, Link and Undo, Accept all with its confirm, the surface-scan row and its Add a surface scan
@@ -52,6 +52,20 @@ test('the sidebar has an Inbox entry under Home with the count of new files (not
 	await shot(page, 'home');
 	await panel.getByRole('link', { name: /5 new files/ }).click();
 	await expect(page).toHaveURL(/\/inbox/);
+	expect(errors).toEqual([]);
+	await page.context().close();
+});
+
+test('Home\'s "older files match a record" line opens the Older files tab on the Exact match filter, listing only those files', async ({ browser }) => {
+	// two older files: one names a record by short ID, one names nothing (the line counts only the first)
+	const files = [...sampleFiles(), foundFile({ origin: 'backlog', rel_path: 'Users/ab1cd/old/nothing.tif' })];
+	const { page, errors } = await start(browser, '/', 1280, { files });
+	await page.locator('[data-test="home-inbox"]').getByRole('link', { name: /1 older file matches a record/ }).click();
+	await expect(page).toHaveURL(/tab=older/);
+	await expect(page).toHaveURL(/strength=short_id(,|%2C)code/);
+	await expect(page.locator('[data-test="filter-strength"]')).toHaveValue('short_id,code');
+	await expect(page.locator('[data-test="filter-strength"] option:checked')).toHaveText('Exact match');
+	await expect.poll(() => names(page)).toEqual(['55ee66ff_old.tif']);
 	expect(errors).toEqual([]);
 	await page.context().close();
 });
