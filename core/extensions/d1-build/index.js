@@ -20,7 +20,9 @@
 //   POST   /d1-build/mark-done {collection, id, date?, personId?} -> { data: { id, work_state: 'done' } }  (409 CHECKS as above)
 //   GET    /d1-build/templates              -> { data: [{ id, name, scope, role_id, collection, values, user_id, updated_at, version }] }
 //   GET    /d1-build/templates/:id, POST /d1-build/templates, PATCH /d1-build/templates/:id, DELETE /d1-build/templates/:id
-//   Check = { key: DraftKey (or a record id for mark-done); field?: string; level: 'block' | 'warn'; text: string }
+//   Check = { key: DraftKey (or a record id for mark-done); field?: string; level: 'block' | 'warn'; code: CheckCode; text: string }
+//   CheckCode (CHECK_CODES) is a stable reason to branch on: GONE, NOT_ATTACHABLE, STALE_VERSION, REMOVE_BLOCKED, PERMISSION (reserved:
+//   no check says it yet, a refused write is WRITE_FAILED), REQUIRED, STRUCTURE, OTHER.
 //
 // Every route needs a signed-in user (401 otherwise). Errors have the Directus shape
 // { errors: [{ message, extensions: { code, source: 'd1-build', ... } }] }.
@@ -49,6 +51,8 @@ const FIELD = /^[a-z_][a-z0-9_]{0,63}$/;
 // Limits that keep one draft a draft and not a dump: the body is a few hundred small objects at most.
 export const LIMITS = { bodyChars: 1_000_000, items: 300, rows: 100, wires: 1000, name: 200, positions: 1000 };
 
+// The stable reasons a check carries in `code`.
+export const CHECK_CODES = ['GONE', 'NOT_ATTACHABLE', 'STALE_VERSION', 'REMOVE_BLOCKED', 'PERMISSION', 'REQUIRED', 'STRUCTURE', 'OTHER'];
 export const WORK_STATES = ['planned', 'done'];
 export const KINDS = ['sample', 'operation', 'test'];
 
@@ -125,6 +129,8 @@ export function validateDraftBody(input) {
   if (!Array.isArray(input.items)) return fail('items must be a list.');
   if (!Array.isArray(input.wires)) return fail('wires must be a list.');
   if (!isObject(input.positions)) return fail('positions must be an object.');
+  // seq: the client's key counter; accepted, not used here.
+  if (input.seq !== undefined && !isInt(input.seq, 0)) return fail('seq must be a whole number.');
   if (input.items.length > LIMITS.items) return fail(`A draft holds at most ${LIMITS.items} items.`);
   if (input.wires.length > LIMITS.wires) return fail(`A draft holds at most ${LIMITS.wires} wires.`);
   if (Object.keys(input.positions).length > LIMITS.positions) return fail('positions holds too many entries.');
@@ -372,12 +378,13 @@ export function buildPlan(body, ctx = {}) {
   const checks = [];
   const seen = new Set();
   const blockedFields = new Set();
-  const note = (level) => (key, text, field) => {
+  // code: a stable reason a client can branch on (CHECK_CODES); STRUCTURE is the default (wiring, method, nothing to work on).
+  const note = (level) => (key, text, field, code = 'STRUCTURE') => {
     const id = `${level}|${key}|${field ?? ''}|${text}`;
     if (seen.has(id)) return;
     seen.add(id);
     if (level === 'block' && field) blockedFields.add(`${key}|${field}`);
-    checks.push({ key, ...(field ? { field } : {}), level, text });
+    checks.push({ key, ...(field ? { field } : {}), level, code, text });
   };
   const block = note('block');
   const warn = note('warn');
@@ -438,7 +445,7 @@ export function buildPlan(body, ctx = {}) {
       continue;
     }
     if (from.item.remove || to.item.remove) {
-      block(from.item.remove ? to.item.key : from.item.key, 'This card is wired to something that is being removed.');
+      block(from.item.remove ? to.item.key : from.item.key, 'This card is wired to something that is being removed.', undefined, 'REMOVE_BLOCKED');
       continue;
     }
     const fk = from.item.kind;
@@ -521,12 +528,15 @@ export function buildPlan(body, ctx = {}) {
   for (const item of items) {
     if (item.kind !== 'operation' || !live(item) || byKey.get(item.key) !== item || (!isNew(item) && !item.attach)) continue;
     const mode = isNew(item) ? 'new' : 'attach';
-    let anyEnd = false;
+    const rowCount = rowsFor(item).length;
     rowsFor(item).forEach((row, i) => {
       const rowId = `${item.key}#${i}`;
       const input = inputOf(rowId);
       const output = outputOf(rowId);
-      if (input || output) anyEnd = true;
+      // Each row is its own record, and the database refuses one with neither a sample nor an output.
+      if (mode === 'new' && !input && !output) {
+        block(item.key, rowCount > 1 ? `Row ${i + 1} needs a sample wired into it, or an output.` : 'Wire a sample into this operation, or give it an output.');
+      }
       const after = distinct(inWires.get(rowId)).filter((s) => s.kind === 'op').map((s) => opRows.get(`${s.key}#${s.row}`)?.rowKey).filter(Boolean);
       records.push({
         key: row.key, itemKey: item.key, rowIndex: i, mode, input, output, workState: stateOf(item), values: item.values,
@@ -536,7 +546,6 @@ export function buildPlan(body, ctx = {}) {
       order += 1;
     });
     if (mode === 'new' && isBlank(item.values.method_id)) block(item.key, 'Choose a method.', 'method_id');
-    if (mode === 'new' && !anyEnd) block(item.key, 'Wire a sample into this operation, or give it an output.');
     if (mode === 'attach' && !records.some((r) => r.itemKey === item.key && r.input)) {
       block(item.key, 'Wire a sample into this operation to attach it.');
     }
@@ -588,11 +597,11 @@ export function buildPlan(body, ctx = {}) {
     const made = makers.get(itemRef(item.key))?.[0];
     const planned = made?.workState === 'planned';
     const values = effectiveSample(item);
-    if (isBlank(values.sample_code)) block(item.key, 'Give the sample a code.', 'sample_code');
+    if (isBlank(values.sample_code)) block(item.key, 'Give the sample a code.', 'sample_code', 'REQUIRED');
     if (!planned) {
       for (const { field, label } of required.physical_samples ?? []) {
         if (RESERVED_FIELDS.sample.includes(field) || blockedFields.has(`${item.key}|${field}`)) continue;
-        if (isBlank(values[field])) block(item.key, `${label} is required.`, field);
+        if (isBlank(values[field])) block(item.key, `${label} is required.`, field, 'REQUIRED');
       }
     }
     samples.push({ key: item.key, values, planned });
@@ -617,15 +626,15 @@ export function buildPlan(body, ctx = {}) {
     if (stateOf(item) !== 'done') return;
     for (const { field, label } of required[collection] ?? []) {
       if (RESERVED_FIELDS[kind].includes(field) || blockedFields.has(`${item.key}|${field}`)) continue;
-      if (isBlank(item.values[field])) block(item.key, `${label} is required.`, field);
+      if (isBlank(item.values[field])) block(item.key, `${label} is required.`, field, 'REQUIRED');
     }
   };
   for (const item of items) {
     if (!isNew(item) || !live(item) || byKey.get(item.key) !== item || item.kind === 'sample') continue;
     const collection = KIND_COLLECTION[item.kind];
     needDone(item.kind, collection, item);
-    if (isBlank(item.values.equipment_id)) warn(item.key, 'No machine chosen.', 'equipment_id');
-    if (stateOf(item) === 'planned' && isBlank(item.values.planned_date)) warn(item.key, 'No planned date.', 'planned_date');
+    if (isBlank(item.values.equipment_id)) warn(item.key, 'No machine chosen.', 'equipment_id', 'OTHER');
+    if (stateOf(item) === 'planned' && isBlank(item.values.planned_date)) warn(item.key, 'No planned date.', 'planned_date', 'OTHER');
   }
 
   // -- records that exist already -------------------------------------------------------------------------------------------
@@ -636,20 +645,20 @@ export function buildPlan(body, ctx = {}) {
     if (!item.existing || byKey.get(item.key) !== item) continue;
     const row = stored(item);
     if (!row) {
-      if (item.remove) warn(item.key, 'This record is already gone; there is nothing to remove.');
-      else block(item.key, 'This record no longer exists, or you can no longer see it.');
+      if (item.remove) warn(item.key, 'This record is already gone; there is nothing to remove.', undefined, 'GONE');
+      else block(item.key, 'This record no longer exists, or you can no longer see it.', undefined, 'GONE');
       continue;
     }
     const editing = !item.remove && (item.attach === true || hasValues(item));
     if (Number(row.version) !== item.existing.version) {
-      if (editing) block(item.key, 'Changed since you added it. Your edits were made against an older version, so review it first.');
-      else warn(item.key, 'Changed since you added it — review.');
+      if (editing) block(item.key, 'Changed since you added it. Your edits were made against an older version, so review it first.', undefined, 'STALE_VERSION');
+      else warn(item.key, 'Changed since you added it — review.', undefined, 'STALE_VERSION');
     }
-    if (item.attach && !isBlank(row.sample_id)) block(item.key, 'It got an input in the meantime, so it cannot be attached any more.');
+    if (item.attach && !isBlank(row.sample_id)) block(item.key, 'It got an input in the meantime, so it cannot be attached any more.', undefined, 'NOT_ATTACHABLE');
     if (item.remove) {
       const state = item.kind === 'sample' ? row.current_status : row.work_state;
       if (state !== 'planned') {
-        block(item.key, 'Done records are never deleted from the map.');
+        block(item.key, 'Done records are never deleted from the map.', undefined, 'REMOVE_BLOCKED');
         continue;
       }
       const id = lower(item.existing.id);
@@ -673,10 +682,10 @@ export function buildPlan(body, ctx = {}) {
     const code = outputsInfo.get(sid)?.code ?? existing.get(sid)?.sample_code ?? 'the sample';
     const hanging = refs.filter((r) => r.sampleIds.map(lower).includes(sid)
       && !(r.kind === 'operation' ? deleting.operations : deleting.tests).has(lower(r.id)));
-    if (hanging.some((r) => r.work_state === 'done')) block(cause, `Something done hangs off ${code}, so it cannot be removed.`);
-    else if (hanging.length) block(cause, `Something planned still hangs off ${code}. Remove that too.`);
-    for (const r of records) if (r.input === `id:${sid}` || r.output === `id:${sid}`) block(r.itemKey, `This is wired to ${code}, which is being removed.`);
-    for (const t of tests) if (t.subjects.includes(`id:${sid}`)) block(t.key, `This is wired to ${code}, which is being removed.`);
+    if (hanging.some((r) => r.work_state === 'done')) block(cause, `Something done hangs off ${code}, so it cannot be removed.`, undefined, 'REMOVE_BLOCKED');
+    else if (hanging.length) block(cause, `Something planned still hangs off ${code}. Remove that too.`, undefined, 'REMOVE_BLOCKED');
+    for (const r of records) if (r.input === `id:${sid}` || r.output === `id:${sid}`) block(r.itemKey, `This is wired to ${code}, which is being removed.`, undefined, 'REMOVE_BLOCKED');
+    for (const t of tests) if (t.subjects.includes(`id:${sid}`)) block(t.key, `This is wired to ${code}, which is being removed.`, undefined, 'REMOVE_BLOCKED');
   }
   for (const item of items) {
     if (item.kind === 'sample' && item.remove && item.existing && deleting.samples.get(lower(item.existing.id)) === item.key) {
@@ -995,8 +1004,8 @@ export function mount(router, context, clock = () => new Date()) {
     if (status === 500) logger?.error?.(`${SOURCE}: writing ${key} failed: ${err?.stack || err?.message || err}`);
     return new HttpError(status, 'WRITE_FAILED', message, { key });
   };
-  const staleChecks = (key, text) =>
-    new HttpError(409, 'CHECKS', 'Something changed, so nothing was created. Review the checks.', { checks: [{ key, level: 'block', text }] });
+  const staleChecks = (key, text, code) =>
+    new HttpError(409, 'CHECKS', 'Something changed, so nothing was created. Review the checks.', { checks: [{ key, level: 'block', code, text }] });
 
   // -- templates (spec E11) ------------------------------------------------------------------------------------------------
 
@@ -1152,7 +1161,7 @@ export function mount(router, context, clock = () => new Date()) {
         .filter(({ field }) => field !== dateField && isBlank(rec[field]));
       if (missing.length) {
         throw new HttpError(409, 'CHECKS', 'Fill in what is missing before marking this done.', {
-          checks: missing.map(({ field, label }) => ({ key: recordId, field, level: 'block', text: `${label} is required before this can be marked done.` })),
+          checks: missing.map(({ field, label }) => ({ key: recordId, field, level: 'block', code: 'REQUIRED', text: `${label} is required before this can be marked done.` })),
         });
       }
       let person = null;
@@ -1242,14 +1251,14 @@ export function mount(router, context, clock = () => new Date()) {
       ]) {
         for (const r of list) {
           const now = await attempt(r.key, () => lock(r.key, collection, r.id));
-          if (now && now.state !== 'planned') throw staleChecks(r.key, 'Done records are never deleted from the map.');
+          if (now && now.state !== 'planned') throw staleChecks(r.key, 'Done records are never deleted from the map.', 'REMOVE_BLOCKED');
           await attempt(r.key, () => svc(collection).deleteOne(r.id));
         }
       }
       // 3. Edits to existing records, each against the version it was made on.
       for (const e of plan.edits) {
         const now = await attempt(e.key, () => lock(e.key, e.collection, e.id));
-        if (!now || Number(now.version) !== e.version) throw staleChecks(e.key, 'Changed since you added it. Your edits were made against an older version, so review it first.');
+        if (!now || Number(now.version) !== e.version) throw staleChecks(e.key, 'Changed since you added it. Your edits were made against an older version, so review it first.', 'STALE_VERSION');
         await attempt(e.key, () => svc(e.collection).updateOne(e.id, editValues(e.values)));
       }
       // 4. New samples, in key order (the code trigger numbers them in this order).
@@ -1274,8 +1283,8 @@ export function mount(router, context, clock = () => new Date()) {
       for (const r of plan.operations) {
         if (r.mode === 'attach') {
           const now = await attempt(r.itemKey, () => lock(r.itemKey, 'manufacturing_operations', r.existingId));
-          if (!now || Number(now.version) !== r.version) throw staleChecks(r.itemKey, 'Changed since you added it. Your edits were made against an older version, so review it first.');
-          if (now.sample_id) throw staleChecks(r.itemKey, 'It got an input in the meantime, so it cannot be attached any more.');
+          if (!now || Number(now.version) !== r.version) throw staleChecks(r.itemKey, 'Changed since you added it. Your edits were made against an older version, so review it first.', 'STALE_VERSION');
+          if (now.sample_id) throw staleChecks(r.itemKey, 'It got an input in the meantime, so it cannot be attached any more.', 'NOT_ATTACHABLE');
           await attempt(r.itemKey, () => svc('manufacturing_operations').updateOne(r.existingId, { ...editValues(r.values), sample_id: refId(r.input) }));
           continue;
         }

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 import endpoint, {
   COLLECTION_PK, HttpError, KIND_COLLECTION, LIMITS, RESERVED_FIELDS, SQL, buildPlan, computeChecks, mount, orderOperations,
-  cleanValues, dayOf, describeFailure, editValues, parseRequired, summarise, templateVisibleTo, validateDraftBody, validateName,
+  CHECK_CODES, cleanValues, dayOf, describeFailure, editValues, parseRequired, summarise, templateVisibleTo, validateDraftBody, validateName,
   validateTemplateValues,
 } from './index.js';
 
@@ -677,12 +677,13 @@ test('an operation with one row is not batched', () => {
   assert.deepEqual(plan.batches, []);
 });
 
-test('every check is { key, field?, level, text }, in plain words, never the glossary words it must not use', () => {
+test('every check is { key, field?, level, code, text }, in plain words, never the glossary words it must not use', () => {
   const body = draft([mop('o1', { method_id: '' }), sample('n1'), test_('t1')]);
   const { checks } = buildPlan(body, { required: REQUIRED });
   assert.ok(checks.length >= 4);
   for (const c of checks) {
-    assert.deepEqual(Object.keys(c).filter((k) => !['key', 'field', 'level', 'text'].includes(k)), []);
+    assert.deepEqual(Object.keys(c).filter((k) => !['key', 'field', 'level', 'code', 'text'].includes(k)), []);
+    assert.ok(CHECK_CODES.includes(c.code), c.code);
     assert.ok(['block', 'warn'].includes(c.level));
     assert.ok(typeof c.text === 'string' && c.text.endsWith('.') || c.text.endsWith('review.'), c.text);
     assert.doesNotMatch(c.text, /\bnode\b|\bsave\b|supervisor|undefined|null/i, c.text);
@@ -692,7 +693,7 @@ test('every check is { key, field?, level, text }, in plain words, never the glo
 test('an operation needs a method, and something to work on or make', () => {
   const body = draft([mop('o1', { method_id: '  ' }), sample('s0', { existing: { id: ID(10), version: 1 } })]);
   const { checks } = buildPlan(body, { existing: known(sampleRow(10)) });
-  assert.deepEqual(where(checks, 'o1', 'method_id'), [{ key: 'o1', field: 'method_id', level: 'block', text: 'Choose a method.' }]);
+  assert.deepEqual(where(checks, 'o1', 'method_id'), [{ key: 'o1', field: 'method_id', level: 'block', code: 'STRUCTURE', text: 'Choose a method.' }]);
   assert.equal(where(checks, 'o1').filter((c) => c.level === 'block' && !c.field).length, 1);
   assert.match(where(checks, 'o1').find((c) => !c.field && c.level === 'block').text, /Wire a sample into this operation/);
   // an output alone is enough: the operation makes a sample from nothing (a sintering run)
@@ -949,9 +950,9 @@ test('removal is refused while something done hangs off the output, and asks for
   const body = draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true })]);
   const base = { existing: known(opRow(40, { sample_id: ID(10), output_sample_id: ID(11) })), outputs: new Map([[ID(11), { code: 'S-11', status: 'planned' }]]) };
   const done = buildPlan(body, { ...base, refs: [{ kind: 'test', id: ID(50), work_state: 'done', sampleIds: [ID(11)] }] }).checks;
-  assert.deepEqual(done, [{ key: 'o1', level: 'block', text: 'Something done hangs off S-11, so it cannot be removed.' }]);
+  assert.deepEqual(done, [{ key: 'o1', level: 'block', code: 'REMOVE_BLOCKED', text: 'Something done hangs off S-11, so it cannot be removed.' }]);
   const planned = buildPlan(body, { ...base, refs: [{ kind: 'operation', id: ID(41), work_state: 'planned', sampleIds: [ID(11)] }] }).checks;
-  assert.deepEqual(planned, [{ key: 'o1', level: 'block', text: 'Something planned still hangs off S-11. Remove that too.' }]);
+  assert.deepEqual(planned, [{ key: 'o1', level: 'block', code: 'REMOVE_BLOCKED', text: 'Something planned still hangs off S-11. Remove that too.' }]);
   // removed in the same draft, it no longer hangs there
   const both = draft([
     op('o1', { existing: { id: ID(40), version: 1 }, remove: true }),
@@ -1053,7 +1054,7 @@ test('check: for a removal it reads the planned output and what points at it, as
   const body = draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true })]);
   const made = (await call('POST', '/drafts', { body: { name: 'x', body } })).body.data;
   const res = await call('POST', '/drafts/:id/check', { params: { id: made.id } });
-  assert.deepEqual(res.body.data.checks, [{ key: 'o1', level: 'block', text: 'Something done hangs off S-11, so it cannot be removed.' }]);
+  assert.deepEqual(res.body.data.checks, [{ key: 'o1', level: 'block', code: 'REMOVE_BLOCKED', text: 'Something done hangs off S-11, so it cannot be removed.' }]);
 });
 
 test('computeChecks is buildPlan\'s checks', () => {
@@ -1402,7 +1403,7 @@ test('create: a record marked done while the draft was open is not deleted (it i
   }));
   const res = await createCall(env, id);
   assert.equal(res.statusCode, 409);
-  assert.deepEqual(res.body.errors[0].extensions.checks, [{ key: 'o1', level: 'block', text: 'Done records are never deleted from the map.' }]);
+  assert.deepEqual(res.body.errors[0].extensions.checks, [{ key: 'o1', level: 'block', code: 'REMOVE_BLOCKED', text: 'Done records are never deleted from the map.' }]);
   assert.equal(env.world.records.manufacturing_operations.size, 1);
 });
 
@@ -1533,7 +1534,7 @@ test('mark-done: the fields the forms require must be filled in; the date is the
   assert.equal(res.statusCode, 409);
   assert.equal(res.body.errors[0].extensions.code, 'CHECKS');
   assert.deepEqual(res.body.errors[0].extensions.checks, [
-    { key: ID(40), field: 'machining_feed_mm_per_rev', level: 'block', text: 'Feed per revolution is required before this can be marked done.' },
+    { key: ID(40), field: 'machining_feed_mm_per_rev', level: 'block', code: 'REQUIRED', text: 'Feed per revolution is required before this can be marked done.' },
   ]);
   assert.deepEqual(env.world.ops, []);
   assert.equal(env.world.records.manufacturing_operations.get(ID(40)).work_state, 'planned');
@@ -1841,4 +1842,102 @@ test('passes as the client draws them: each is wired sample -> operation -> the 
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   assert.deepEqual(env.world.ops.map((o) => o.data.notes), ['1', '2', '3']);
   assert.ok(env.world.ops.every((o) => o.data.sample_id === ID(10) && !('output_sample_id' in o.data) && !('batch_id' in o.data)));
+});
+
+// ---- check codes, per-row structure, seq -----------------------------------------------------------------------------
+
+const codesOf = (checks) => checks.map((c) => `${c.key}:${c.field ?? '-'}:${c.code}`).sort();
+
+test('every check carries a stable code: what is missing, gone, stale, attachable or blocked from removal', () => {
+  assert.deepEqual(CHECK_CODES, ['GONE', 'NOT_ATTACHABLE', 'STALE_VERSION', 'REMOVE_BLOCKED', 'PERMISSION', 'REQUIRED', 'STRUCTURE', 'OTHER']);
+  // structure: method, nothing to work on, wiring; required: the form's fields and the sample code
+  const structure = buildPlan(draft([mop('o1', { method_id: '' }), sample('n1'), test_('t1')], [wire(w('ghost'), w('o1'))]), { required: REQUIRED }).checks;
+  assert.deepEqual(codesOf(structure.filter((c) => c.level === 'block')), [
+    'n1:form:REQUIRED', 'n1:material_id:REQUIRED', 'n1:primary_method_id:REQUIRED', 'n1:sample_code:REQUIRED',
+    'o1:-:STRUCTURE', 'o1:-:STRUCTURE', 'o1:method_id:STRUCTURE', 't1:subject:STRUCTURE', 't1:test_type:STRUCTURE',
+  ]);
+  const done = buildPlan(draft([mop('o1', {}, { workState: 'done' })]), { required: REQUIRED }).checks;
+  assert.equal(where(done, 'o1', 'operation_date')[0].code, 'REQUIRED');
+  // warnings that are only advice
+  assert.deepEqual(codesOf(buildPlan(draft([mop('o1')]), {}).checks.filter((c) => c.level === 'warn')), ['o1:equipment_id:OTHER', 'o1:planned_date:OTHER']);
+  // records that exist already
+  const existing = known(sampleRow(11, { version: 4 }), opRow(40, { sample_id: ID(12) }), opRow(41, { work_state: 'done' }));
+  const body = draft([
+    sample('gone', { existing: { id: ID(10), version: 1 } }),
+    sample('stale', { existing: { id: ID(11), version: 1 } }),
+    op('edit', { existing: { id: ID(41), version: 1 }, values: { notes: 'x' } }),
+    op('attach', { existing: { id: ID(40), version: 1 }, attach: true }),
+    op('rem', { existing: { id: ID(41), version: 1 }, remove: true }),
+  ], [wire(w('stale'), w('attach'))]);
+  const out = buildPlan(body, { existing }).checks;
+  assert.deepEqual(codesOf(out), ['attach:-:NOT_ATTACHABLE', 'gone:-:GONE', 'rem:-:REMOVE_BLOCKED', 'stale:-:STALE_VERSION']);
+});
+
+test('check codes for a stale edit and for something hanging off a removal', () => {
+  const edit = draft([mop('o1', { notes: 'x' }, { existing: { id: ID(40), version: 2 } })]);
+  assert.deepEqual(codesOf(buildPlan(edit, { existing: known(opRow(40, { version: 3 })) }).checks), ['o1:-:STALE_VERSION']);
+  const hang = buildPlan(draft([op('o1', { existing: { id: ID(40), version: 1 }, remove: true })]), {
+    existing: known(opRow(40, { output_sample_id: ID(11) })),
+    outputs: new Map([[ID(11), { code: 'S-11', status: 'planned' }]]),
+    refs: [{ kind: 'test', id: ID(50), work_state: 'done', sampleIds: [ID(11)] }],
+  }).checks;
+  assert.deepEqual(codesOf(hang), ['o1:-:REMOVE_BLOCKED']);
+});
+
+test('create\'s 409 CHECKS and mark-done\'s carry codes too', async () => {
+  const env = setup();
+  const res = await createCall(env, await keep(env, draft([mop('o1', { method_id: '' }), sample('n1')])));
+  assert.equal(res.statusCode, 409);
+  const checks = res.body.errors[0].extensions.checks;
+  assert.ok(checks.length > 0 && checks.every((c) => CHECK_CODES.includes(c.code)), JSON.stringify(checks));
+  // a version that moved under the lock, a record marked done under the lock, an input that arrived under the lock
+  const stale = setup();
+  seed(stale.world, 'manufacturing_operations', [opRow(40, { sample_id: ID(10) })]);
+  seed(stale.world, 'physical_samples', [sampleRow(10)]);
+  stale.world.lockVersions.set(ID(40), 3);
+  const r2 = await createCall(stale, await keep(stale, draft([mop('o1', { machining_feed_mm_per_rev: 0.2 }, { existing: { id: ID(40), version: 1 } })])));
+  assert.deepEqual(r2.body.errors[0].extensions.checks.map((c) => c.code), ['STALE_VERSION']);
+  const md = setup();
+  md.world.people = [];
+  seed(md.world, 'manufacturing_operations', [opRow(40, { machining_feed_mm_per_rev: null })]);
+  md.world.required = [{ collection: 'manufacturing_operations', field: 'machining_feed_mm_per_rev', translations: null }];
+  const r3 = await markDone(md, { collection: 'manufacturing_operations', id: ID(40) });
+  assert.deepEqual(r3.body.errors[0].extensions.checks.map((c) => c.code), ['REQUIRED']);
+});
+
+test('no sample in or out is checked per row: a cut row with neither is a blocking STRUCTURE check', async () => {
+  // three rows; the input is wired to rows 0 and 2 only, the outputs to rows 0 and 1: row 1 has an output, row 2 an input
+  // and nothing is missing; a fourth row has neither
+  const s = (k) => sample(k, { values: code('{seq}-X') });
+  const body = draft(
+    [sample('s0', { existing: { id: ID(10), version: 1 } }), mop('o1', {}, { rows: [{ key: 'a' }, { key: 'b' }, { key: 'c' }, { key: 'd' }] }), s('n1'), s('n2')],
+    [wire(w('s0'), w('o1', 0)), wire(w('s0'), w('o1', 2)), wire(w('o1', 0), w('n1')), wire(w('o1', 1), w('n2'))],
+  );
+  const { checks } = buildPlan(body, { existing: known(sampleRow(10)) });
+  const missing = checks.filter((c) => c.level === 'block');
+  assert.deepEqual(missing, [{ key: 'o1', level: 'block', code: 'STRUCTURE', text: 'Row 4 needs a sample wired into it, or an output.' }]);
+  // and it is a 409 CHECKS at Create, nothing written, not a failed write
+  const env = setup();
+  seed(env.world, 'physical_samples', [sampleRow(10)]);
+  const res = await createCall(env, await keep(env, body));
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.errors[0].extensions.code, 'CHECKS');
+  assert.deepEqual(env.world.ops, []);
+  // a single-row operation keeps its original wording
+  const one = buildPlan(draft([mop('o1')]), {}).checks.filter((c) => c.level === 'block');
+  assert.deepEqual(one.map((c) => c.text), ['Wire a sample into this operation, or give it an output.']);
+  // several rows, all unwired: one check per row
+  const all = buildPlan(draft([mop('o1', {}, { rows: [{ key: 'a' }, { key: 'b' }] })]), {}).checks.filter((c) => c.level === 'block');
+  assert.deepEqual(all.map((c) => c.text), ['Row 1 needs a sample wired into it, or an output.', 'Row 2 needs a sample wired into it, or an output.']);
+});
+
+test('a draft may carry the client\'s key counter, seq: accepted and kept', () => {
+  assert.equal(validateDraftBody({ ...emptyBody(), seq: 12 }).ok, true);
+  assert.equal(validateDraftBody({ ...emptyBody(), seq: 0 }).ok, true);
+  assert.equal(validateDraftBody({ ...emptyBody(), seq: '12' }).ok, false);
+  assert.equal(validateDraftBody({ ...emptyBody(), seq: -1 }).ok, false);
+  assert.equal(validateDraftBody({ ...emptyBody(), seq: 1.5 }).ok, false);
+  assert.equal(validateDraftBody({ ...emptyBody(), seq: 3 }).body.seq, 3);
+  // and it does not change what the checks say
+  assert.deepEqual(buildPlan({ ...draft([mop('o1')]), seq: 9 }, {}).checks, buildPlan(draft([mop('o1')]), {}).checks);
 });
