@@ -134,6 +134,9 @@ const isTarget = (name) => typeof name === 'string' && Object.hasOwn(LINK_TARGET
 // data, so Directus's own create permission on surface_scans decides) and needs a person-chosen condition. These are the collections a link item names.
 export const SURFACE_SCANS = 'surface_scans';
 export const LINK_COLLECTIONS = [...Object.keys(LINK_TARGETS), SURFACE_SCANS];
+// The edge a surface scan file's name points to (match_strength 'edge_code'): read as the caller so the list can name it, but never editable (a scan is
+// added through Directus's create permission on surface_scans, not a record-edit right) and not a link target.
+const SCAN_EDGES = 'insert_edges';
 export const SCAN_CONDITIONS = ['new', 'worn', 'cleaned', 'other'];
 // The table has no length limits (TEXT); these are the endpoint's own, so a paste of a whole report is refused instead of stored.
 const MAX_CONDITION_NOTE = 500;
@@ -555,7 +558,8 @@ export function duplicateOwnerOut(row, viewer) {
 export function fileOut(row, info) {
   const matches = Array.isArray(asJson(row.matches)) ? asJson(row.matches) : [];
   const key = (collection, id) => `${collection}:${id}`;
-  const seen = (collection, id) => Boolean(id) && info.readable.has(key(collection, id));
+  // an insert edge is named only on a surface scan row (the F2 dialog's pre-selection); on any other file it is never a suggestion or a match
+  const seen = (collection, id) => Boolean(id) && (collection !== SCAN_EDGES || row.kind === 'surface_scan') && info.readable.has(key(collection, id));
   const suggested = seen(row.suggested_collection, row.suggested_record_id);
   const linked = seen(row.linked_collection, row.linked_record_id);
   const out = {
@@ -839,6 +843,20 @@ export function mount(router, context, deps = {}) {
         for (const r of rows) {
           readable.add(`${collection}:${r[target.pk]}`);
           labels.set(`${collection}:${r[target.pk]}`, r[target.code] ?? null);
+        }
+      } catch (err) {
+        if (!isDenied(err)) throw err;
+      }
+    }
+    // The edge a surface scan file's name points to (S4): read as the caller (their read rule decides), named by its code, and NEVER added to the
+    // editable set below (adding a scan is not editing the edge). fileOut passes it through for a surface scan row only.
+    const edgeIds = [...new Set(pairs.filter(([c, id]) => c === SCAN_EDGES && isUuid(id)).map(([, id]) => String(id)))];
+    if (edgeIds.length) {
+      try {
+        const rows = await itemsFor(schema, acc, SCAN_EDGES).readByQuery({ fields: ['edge_id', 'edge_code'], filter: { edge_id: { _in: edgeIds } }, limit: edgeIds.length });
+        for (const r of rows) {
+          readable.add(`${SCAN_EDGES}:${r.edge_id}`);
+          labels.set(`${SCAN_EDGES}:${r.edge_id}`, r.edge_code ?? null);
         }
       } catch (err) {
         if (!isDenied(err)) throw err;

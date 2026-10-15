@@ -22,7 +22,7 @@ import {
 	DEFAULT_FILTERS, KIND_FILTER_ITEMS, STRENGTH_FILTER_ITEMS, TABS, canChange, duplicateText, extractedText, filtersToQuery, linkTarget, listPlan, needsReadNotice, ownerText, primaryAction, suggestionOf,
 	type InboxFilters,
 } from './inboxModel';
-import { emptyScanAdd, isAddedScan, scanAddProblems, scanErrorText, scanLinkItem, scanTarget, type ScanAddForm, type ScanItemOption } from './inboxScan';
+import { emptyScanAdd, isAddedScan, scanAddProblems, scanErrorText, scanLinkItem, scanTarget, suggestedScanItem, type ScanAddForm, type ScanItemOption } from './inboxScan';
 import { createAutoLink, RECENT_LIMIT } from './useAutoLink';
 import { createInbox } from './useInbox';
 import { createInboxAdmin } from './useInboxAdmin';
@@ -145,6 +145,21 @@ describe('GET /d1-inbox/files', () => {
 		expect(duplicateText(other)).toBe('Copy of a file someone else also has');
 		expect(JSON.stringify(other)).not.toContain('Bob B');
 		expect(duplicateText(rows.find((r) => r.candidate_id === ID(1002))!)).toBe("Copy of a file in Alice A's Inbox");
+	});
+
+	it('a surface scan file named after an edge arrives with that edge suggested, so the Add dialog starts with it chosen (S4)', async () => {
+		const rows = (await loadFiles(only(fx('files_new')).api, {})).rows;
+		const edge = rows.find((r) => r.candidate_id === ID(1014))!;
+		expect(edge.kind).toBe('surface_scan');
+		expect(edge.match_strength).toBe('edge_code');
+		expect(edge.suggested_collection).toBe('insert_edges');
+		expect(suggestedScanItem(edge)).toEqual({ kind: 'edge', id: ID(202), label: 'H13A-#2-fC', detail: '' });
+		expect(primaryAction(edge)).toEqual({ kind: 'scan', label: 'Add a surface scan' });
+		// the suggestion is never an edit right, and Accept all never takes the file
+		expect(edge.suggested_can_edit).toBe(false);
+		expect(isAcceptable(edge)).toBe(false);
+		// a scan with no name pointing anywhere has no item to start with
+		expect(suggestedScanItem(rows.find((r) => r.candidate_id === ID(1003))!)).toBeNull();
 	});
 
 	it('a surface scan has Add a surface scan and no Link, a document is read once, a file the caller cannot edit asks for a record, a hidden record has no suggestion', async () => {

@@ -325,6 +325,11 @@ function fakeServices(w) {
           edge_id: r.edge_id ? { edge_id: r.edge_id, edge_code: w.labels[r.edge_id] } : null,
         }));
       }
+      if (this.collection === 'insert_edges' && query.filter.edge_id?._in) {
+        // the label read of the list (S4): the edges the caller may READ (w.refs.insert_edges), with their codes; w.denyRefRead makes the collection forbidden
+        if (w.denyRefRead === 'insert_edges') throw Object.assign(new Error('forbidden'), { status: 403, code: 'FORBIDDEN' });
+        return query.filter.edge_id._in.filter((id) => w.refs.insert_edges.has(id)).map((id) => ({ edge_id: id, edge_code: w.labels[id] }));
+      }
       const refPk = { cutting_inserts: 'insert_id', insert_edges: 'edge_id', manufacturing_operations: 'operation_id' }[this.collection];
       if (refPk && !query.filter._and && query.filter[refPk]?._eq !== undefined) {
         // the existence read of a scan's insert, edge or operation, as the caller
@@ -1588,6 +1593,84 @@ test('GET /files: a row added as a surface scan names the scan, its insert or ed
   assert.equal(gone.body.data[0].linked_collection, null);
   assert.equal(gone.body.data[0].linked_record_id, null);
   assert.equal('linked_insert_id' in gone.body.data[0], false);
+});
+
+// S4: the file name of a surface scan can name an edge ("H13A-#2-fC"): the crawler suggests it (insert_edges, match_strength edge_code) and the F2 dialog
+// starts with that edge chosen, so the list must NAME the edge to a caller who can read it. Never editable (a scan is added through Directus's create
+// permission on surface_scans, not a record-edit right), and only a surface scan candidate carries it.
+const edgeCand = (over = {}, edge = EDGE1) => scanCand({
+  match_strength: 'edge_code', matches: [{ collection: 'insert_edges', record_id: edge, via: 'edge_code', token: 'INS-001-E1' }],
+  suggested_collection: 'insert_edges', suggested_record_id: edge, ...over,
+});
+
+test('GET /files: an edge named by a surface scan file is suggested to a caller who can read the edge (id and code), never as editable', async () => {
+  const w = newWorld();
+  const scan = edgeCand();
+  w.listRows = [listRow(scan)];
+  const { call } = setup(w);
+  const res = await call('GET /files', { user: U.alice });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const [row] = res.body.data;
+  assert.equal(row.suggested_collection, 'insert_edges');
+  assert.equal(row.suggested_record_id, EDGE1);
+  assert.equal(row.suggested_label, 'INS-001-E1', 'the edge code, read as the caller');
+  assert.equal(row.match_strength, 'edge_code');
+  assert.deepEqual(row.matches.map((m) => m.record_id), [EDGE1]);
+  assert.equal(row.suggested_can_edit, false, 'an edge is never in the editable set: adding a scan is not editing the edge');
+  const read = w.items.find((i) => i.op === 'read' && i.collection === 'insert_edges');
+  assert.equal(read.accountability.user, U.alice, 'read as the caller');
+  assert.deepEqual(read.query.fields.sort(), ['edge_code', 'edge_id']);
+  // an administrator is no exception to "never editable"
+  const admin = await call('GET /files', { user: U.admin, admin: true, role: ID(80) });
+  assert.equal(admin.body.data[0].suggested_can_edit, false);
+});
+
+test('GET /files: an edge the caller cannot read (or whose collection is forbidden) is named nowhere: no suggestion, no match, no id', async () => {
+  const w = newWorld();
+  const hidden = ID(299);
+  w.listRows = [listRow(edgeCand({}, hidden))];
+  const { call } = setup(w);
+  const res = await call('GET /files', { user: U.alice });
+  const [row] = res.body.data;
+  assert.equal(row.suggested_collection, null);
+  assert.equal(row.suggested_record_id, null);
+  assert.equal(row.suggested_label, null);
+  assert.deepEqual(row.matches, []);
+  assert.equal(row.match_strength, 'edge_code', 'the strength is kept');
+  assert.ok(!('suggested_can_edit' in row));
+  assert.equal(JSON.stringify(res.body).includes(hidden), false);
+  // no read permission on insert_edges at all: the list still answers, naming nothing
+  w.listRows = [listRow(edgeCand())];
+  w.denyRefRead = 'insert_edges';
+  const denied = await call('GET /files', { user: U.alice });
+  assert.equal(denied.statusCode, 200);
+  assert.equal(denied.body.data[0].suggested_record_id, null);
+});
+
+test('GET /files: an edge suggestion is passed through for a surface scan candidate only (an image or document named like an edge gets none)', async () => {
+  const w = newWorld();
+  w.listRows = [listRow(edgeCand({ kind: 'sem_image' })), listRow(edgeCand({ kind: 'document' })), listRow(edgeCand())];
+  const { call } = setup(w);
+  const [image, doc, scan] = (await call('GET /files', { user: U.alice })).body.data;
+  for (const r of [image, doc]) {
+    assert.equal(r.suggested_record_id, null);
+    assert.equal(r.suggested_label, null);
+    assert.deepEqual(r.matches, []);
+    assert.ok(!('suggested_can_edit' in r));
+  }
+  assert.equal(scan.suggested_record_id, EDGE1);
+});
+
+test('GET /files: one insert_edges read per page, however many rows name an edge; none when no row does', async () => {
+  const w = newWorld();
+  w.listRows = [listRow(edgeCand()), listRow(edgeCand()), listRow(cand())];
+  const { call } = setup(w);
+  await call('GET /files', { user: U.alice });
+  assert.equal(w.items.filter((i) => i.op === 'read' && i.collection === 'insert_edges').length, 1);
+  w.items.length = 0;
+  w.listRows = [listRow(cand())];
+  await call('GET /files', { user: U.alice });
+  assert.equal(w.items.filter((i) => i.collection === 'insert_edges').length, 0);
 });
 
 test('the SQL: linked_record_id of the list falls back to the scan id for a row added as a surface scan; scan SQL names only the scans table and information_schema', () => {

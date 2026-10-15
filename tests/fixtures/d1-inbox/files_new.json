@@ -140,6 +140,49 @@
         "adopted": false
       },
       {
+        "candidate_id": "00000000-0000-4000-8000-000000001014",
+        "directus_files_id": "00000000-0000-4000-8000-000000003014",
+        "name": "H13A-2_fC_new.al3d",
+        "mime_type": null,
+        "kind": "surface_scan",
+        "kind_confidence": 1,
+        "extracted": {},
+        "origin": "new",
+        "state": "new",
+        "match_strength": "edge_code",
+        "matches": [
+          {
+            "collection": "insert_edges",
+            "record_id": "00000000-0000-4000-8000-000000000202",
+            "via": "edge_code",
+            "token": "H13A-#2-fC"
+          }
+        ],
+        "suggested_collection": "insert_edges",
+        "suggested_record_id": "00000000-0000-4000-8000-000000000202",
+        "suggested_label": "H13A-#2-fC",
+        "duplicate_of": null,
+        "duplicate_of_owner": null,
+        "rel_path": "Users/ali1/alicona/H13A-2_fC_new.al3d",
+        "size_bytes": 52428800,
+        "source_mtime": "2026-10-10T09:00:00.000Z",
+        "first_seen_at": "2026-10-11T09:00:00.000Z",
+        "decided_at": null,
+        "link_kind": null,
+        "link_batch_id": null,
+        "linked_collection": null,
+        "linked_record_id": null,
+        "linked_label": null,
+        "decided_by_name": null,
+        "owner": {
+          "kind": "person",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "name": "Alice A"
+        },
+        "adopted": false,
+        "suggested_can_edit": false
+      },
+      {
         "candidate_id": "00000000-0000-4000-8000-000000001004",
         "directus_files_id": "00000000-0000-4000-8000-000000003004",
         "name": "S-0042_notes.pdf",
@@ -305,7 +348,7 @@
       }
     ],
     "meta": {
-      "total": 7,
+      "total": 8,
       "limit": 50,
       "offset": 0,
       "acceptable": null
