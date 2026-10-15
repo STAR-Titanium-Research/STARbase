@@ -103,7 +103,7 @@ already says so (changes marked *as built*).
     file; it is the "flag the crawler reads" (plan B2/C6): the crawler hashes rows with `adopted_at IS NOT NULL`
     that have no `file_fingerprints` row yet (`open_rb(..., adopted=True)`). Stays set after an undo.
   - indexes: `(owner_person_id, state)`, `(owner_team_id, state)`, and, partial on not-null, `(link_batch_id)`,
-    `(suggested_record_id)`; *as built* also partial `(duplicate_of)` and `(adopted_at)`
+    `(suggested_record_id)`; *as built* also partial `(duplicate_of)`, `(adopted_at)` and `(decided_by)`
 - `inbox_dirs` — the folder cache: `rel_path TEXT PK`, `owner_person_id`, `owner_team_id` (same check and
   `ON DELETE CASCADE` foreign keys; each owner column is indexed),
   `dir_mtime TIMESTAMPTZ`, `last_listed_at`, `baselined_at TIMESTAMPTZ` (set on the owner's root row when their
@@ -116,7 +116,7 @@ already says so (changes marked *as built*).
   claim), partial `(person_id, requested_at DESC)` (the rate limit) and, *as built*, a partial UNIQUE index on
   `(person_id) WHERE scope = 'person' AND status IN ('queued','running')`: at most one open request per person, so
   two concurrent `rescan` calls cannot both pass the endpoint's check (the loser gets a unique violation, reported
-  as 429).
+  as 429), and partial `(requested_by)` (the user foreign key).
 - `inbox_crawler_state` — singleton like `force_crawler_state` (`id` fixed to
   `00000000-0000-0000-0000-000000000001`, one seeded row): `desired_state` (`running`/`paused`, default
   `running`: the daemon is already opt-in through the compose profile and the admin tab has no start switch),

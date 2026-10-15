@@ -6463,6 +6463,9 @@ fi_out=$(fi_sql "INSERT INTO d1_private.inbox_scan_requests (scope, person_id) V
 INSERT INTO d1_private.inbox_scan_requests (scope) VALUES ('all'), ('all');
 SELECT 'fi_open_many:' || count(*) FROM d1_private.inbox_scan_requests;")
 grep -q 'fi_open_many:4' <<<"$fi_out" && ok "different people each have one open request, and scan-all requests are not limited by it" || bad "open-request index was too strict (output: $fi_out)"
+run_eq "the user foreign keys are indexed, partial on NOT NULL (file_candidates.decided_by, inbox_scan_requests.requested_by)" \
+    "SELECT string_agg(indexname, ',' ORDER BY indexname) FROM pg_indexes WHERE schemaname = 'd1_private' AND ((indexname = 'idx_file_candidates_decided_by' AND indexdef LIKE '%(decided_by) WHERE (decided_by IS NOT NULL)') OR (indexname = 'idx_inbox_scan_requests_requested_by' AND indexdef LIKE '%(requested_by) WHERE (requested_by IS NOT NULL)'))" \
+    "idx_file_candidates_decided_by,idx_inbox_scan_requests_requested_by"
 run_eq "scan requests have an index for claiming queued rows and one for the per-person rate limit" \
     "SELECT count(*) FROM pg_indexes WHERE schemaname = 'd1_private' AND tablename = 'inbox_scan_requests' AND (indexdef LIKE '%(status, requested_at)%' OR indexdef LIKE '%(person_id, requested_at%')" "2"
 # inbox_crawler_state (singleton)

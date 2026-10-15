@@ -141,6 +141,7 @@ CREATE INDEX idx_file_candidates_link_batch ON d1_private.file_candidates (link_
 CREATE INDEX idx_file_candidates_suggested_record ON d1_private.file_candidates (suggested_record_id) WHERE suggested_record_id IS NOT NULL;
 CREATE INDEX idx_file_candidates_duplicate_of ON d1_private.file_candidates (duplicate_of) WHERE duplicate_of IS NOT NULL;
 CREATE INDEX idx_file_candidates_adopted ON d1_private.file_candidates (adopted_at) WHERE adopted_at IS NOT NULL;
+CREATE INDEX idx_file_candidates_decided_by ON d1_private.file_candidates (decided_by) WHERE decided_by IS NOT NULL;
 
 COMMENT ON TABLE d1_private.file_candidates IS 'One row per file the inbox crawler found in a person''s or a team''s folder on the lab share, until a person links, dismisses or loses it (migration 193; spec 2026-10-15-found-files-inbox-design.md section 4). Written by the crawler (database role) and by the d1-inbox endpoint, which is the only reader for people: d1_private is outside the Directus schema scan, so candidates are never readable through its REST API. Derived bookkeeping: no audit trigger (the link itself is audited on its junction row). The file bytes stay on the share; the directus_files row is only a pointer.';
 COMMENT ON COLUMN d1_private.file_candidates.candidate_id IS 'Surrogate key of the found file.';
@@ -175,6 +176,7 @@ COMMENT ON INDEX d1_private.idx_file_candidates_owner_team_state IS 'A team''s i
 COMMENT ON INDEX d1_private.idx_file_candidates_link_batch IS 'Undo: finds the candidates of one link batch. Partial: only linked rows have a batch.';
 COMMENT ON INDEX d1_private.idx_file_candidates_suggested_record IS 'Finds the candidates that suggest a given record (for example to refresh them when a record is deleted). Partial: only rows with a suggestion.';
 COMMENT ON INDEX d1_private.idx_file_candidates_duplicate_of IS 'Finds the copies of a candidate (when the original is linked, dismissed or deleted). Partial: only copies.';
+COMMENT ON INDEX d1_private.idx_file_candidates_decided_by IS 'The foreign key to directus_users: finds what a user decided (the Recently linked and auto-linked lists), and keeps deleting a user cheap (ON DELETE SET NULL). Partial: only decided rows.';
 COMMENT ON INDEX d1_private.idx_file_candidates_adopted IS 'The crawler''s hash-after-adoption loop: documents a person linked and that still need hashing. Partial: only adopted rows.';
 
 -- 3. The folder cache.
@@ -224,6 +226,7 @@ CREATE TABLE d1_private.inbox_scan_requests (
 );
 CREATE INDEX idx_inbox_scan_requests_status ON d1_private.inbox_scan_requests (status, requested_at);
 CREATE INDEX idx_inbox_scan_requests_person ON d1_private.inbox_scan_requests (person_id, requested_at DESC) WHERE person_id IS NOT NULL;
+CREATE INDEX idx_inbox_scan_requests_requested_by ON d1_private.inbox_scan_requests (requested_by) WHERE requested_by IS NOT NULL;
 -- At most one open request per person: the endpoint's "refused if one is queued" check is a read followed by an insert, so
 -- two concurrent clicks could both pass it; this index makes the second insert fail (the endpoint turns that into a 429).
 CREATE UNIQUE INDEX inbox_scan_requests_one_open_per_person_key ON d1_private.inbox_scan_requests (person_id)
@@ -241,6 +244,7 @@ COMMENT ON COLUMN d1_private.inbox_scan_requests.status IS 'queued: waiting for 
 COMMENT ON COLUMN d1_private.inbox_scan_requests.error IS 'Why a failed request failed (for example the share was unreachable); NULL otherwise.';
 COMMENT ON INDEX d1_private.inbox_scan_requests_pkey IS 'One row per request.';
 COMMENT ON INDEX d1_private.idx_inbox_scan_requests_status IS 'The daemon''s claim: queued requests, oldest first.';
+COMMENT ON INDEX d1_private.idx_inbox_scan_requests_requested_by IS 'The foreign key to directus_users: keeps deleting a user cheap (ON DELETE SET NULL). Partial: only requests whose user is still known.';
 COMMENT ON INDEX d1_private.inbox_scan_requests_one_open_per_person_key IS 'A person has at most one open (queued or running) person-scope request. Closes the race between the rate-limit read and the insert in the d1-inbox endpoint: the second of two concurrent requests fails with a unique violation, which the endpoint reports as 429. Partial: finished requests do not count.';
 COMMENT ON INDEX d1_private.idx_inbox_scan_requests_person IS 'The per-person rate limit: a person''s latest request. Partial: only person-scope requests.';
 

@@ -451,7 +451,7 @@ unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id`
 | `adopted_at` | TIMESTAMPTZ | Set when a document or other non-image file is linked: the crawler then reads it once and hashes it |
 
 Indexes: `(owner_person_id, state)`, `(owner_team_id, state)`; partial on not-null: `(link_batch_id)`,
-`(suggested_record_id)`, `(duplicate_of)`, `(adopted_at)`.
+`(suggested_record_id)`, `(duplicate_of)`, `(adopted_at)`, `(decided_by)`.
 
 **When an alias or share folder changes** (triggers `people_inbox_alias_changed`, `teams_inbox_folder_changed`,
 only when the value really changes, `NULL` included): that owner's `inbox_dirs` rows and their `file_candidates` in
@@ -466,7 +466,7 @@ new folder (everything is backlog).
 `finished_at`, `status` (`queued` default, `running`, `done`, `failed`), `error`. Indexes `(status, requested_at)`
 and partial `(person_id, requested_at DESC)`. A partial unique index
 (`inbox_scan_requests_one_open_per_person_key`) allows at most one queued or running person-scope request per
-person, closing the race between the endpoint's rate-limit check and its insert.
+person, closing the race between the endpoint's rate-limit check and its insert. Partial index on `(requested_by)` for the user foreign key.
 
 **`d1_private.inbox_crawler_state`**: singleton (id `00000000-0000-0000-0000-000000000001`, seeded). Admin
 settings `desired_state` (`running` default / `paused`), `interval_minutes` (default 30), `read_mb_per_s` (default
