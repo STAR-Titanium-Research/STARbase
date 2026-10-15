@@ -450,12 +450,15 @@ unique and cascades; owner is exactly one of `owner_person_id` / `owner_team_id`
 | `first_seen_at`, `decided_at`, `decided_by` | TIMESTAMPTZ, TIMESTAMPTZ, UUID FK | First seen; when and by which Directus user (`ON DELETE SET NULL`) it was linked or dismissed |
 | `link_kind`, `linked_collection`, `linked_junction_id`, `link_batch_id` | TEXT, TEXT, UUID, UUID | Undo bookkeeping: `manual` / `bulk` / `auto`, the record collection, the junction row created, the batch one Undo removes. All four are set when `state = 'linked'` and all NULL otherwise (two CHECKs), so an undo clears all four with the state; `linked_collection` has no list, so a later link target needs no migration |
 | `adopted_at` | TIMESTAMPTZ | Set when a document or other non-image file is linked: the crawler then reads it once and hashes it |
+| `auto_undone_at` | TIMESTAMPTZ | Set when a person undoes an `auto` link of this file (an undo of a batch whose `link_kind` was `auto`; a manual or bulk undo leaves it NULL). The crawler's auto-link and `POST /d1-inbox/auto-link` then skip the file (reason `UNDONE`), so the next scan does not link it again; a person's own Link or Accept all of it is still allowed. Stays set for the life of the row |
 
 Indexes: `(owner_person_id, state)`, `(owner_team_id, state)`; partial on not-null: `(link_batch_id)`,
 `(suggested_record_id)`, `(duplicate_of)`, `(adopted_at)`, `(decided_by)`.
 
 **When an alias or share folder changes** (triggers `people_inbox_alias_changed`, `teams_inbox_folder_changed`,
-only when the value really changes, `NULL` included): that owner's `inbox_dirs` rows and their `file_candidates` in
+only when the value really changes, `NULL` included; the trigger condition compares `lower(old)` with `lower(new)`, because
+aliases and share folders are unique ignoring case, so a change of letter case only, `ABC` to `abc`, fires nothing and deletes
+nothing): that owner's `inbox_dirs` rows and their `file_candidates` in
 state `new`, `gone` and `dismissed` are deleted; `linked` candidates are kept. The next scan is a first scan of the
 new folder (everything is backlog).
 
