@@ -37,6 +37,7 @@ KEEP          ?= 7
         bootstrap-minio backup restore prune-backups \
         worker-build worker-test worker-logs phase4-test \
         analysis-build analysis-test llm-build llm-test llm-eval \
+        surface-scan-build surface-scan-test \
         migrate-legacy migrate-legacy-dry index-archive index-archive-dry
 
 help: ## List available targets
@@ -135,6 +136,13 @@ analysis-build: ## Build the FFT analysis worker Docker image
 
 analysis-test: analysis-build ## Run FFT analysis worker unit tests inside Docker
 	docker run --rm d1-analysis-worker \
+		python -m pytest tests/ -v --tb=short
+
+surface-scan-build: ## Build the surface-scan render worker Docker image
+	docker build -t d1-surface-scan-worker plugins/surface-scan-worker/
+
+surface-scan-test: surface-scan-build ## Run surface-scan render worker unit tests inside Docker
+	docker run --rm d1-surface-scan-worker \
 		python -m pytest tests/ -v --tb=short
 
 llm-build: ## Build the text-to-SQL plugin Docker image
