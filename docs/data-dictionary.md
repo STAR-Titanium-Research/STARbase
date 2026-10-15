@@ -68,6 +68,7 @@ Tooling hierarchy (3 levels)
   tool_boxes                   grandparent: storage container
   cutting_inserts              parent: individual multi-edged insert
   insert_edges                 child: discrete cutting point
+  surface_scans                topography scans (an .al3d or any SurfaceTopography file) of one insert or one edge, with the condition it was in
 
 Core sample lifecycle
   physical_samples             central entity (dual identity: UUID + sample_code)
@@ -401,6 +402,43 @@ metadata-only edit of a `.mat` file. Rows are deleted with their file (`ON DELET
 Indexes: `file_fingerprints_content_idx` on `content_sha256` (duplicate and copy detection);
 `file_fingerprints_data_idx` on `data_sha256`, partial (`WHERE data_sha256 IS NOT NULL`).
 `CHECK`s: both hashes are 64 lower-case hex characters; `status = 'done'` needs a `content_sha256`.
+
+---
+
+### `surface_scans`
+
+One topography scan of one cutting insert **or** one insert edge (migration `…192`, ADR-0020). Not a Test: an Alicona
+Test on a sample surface stays a Test. The file is a `directus_files` pointer row on the read-only archive share; the
+`surface-scan-worker` reads it (read-only), writes a decimated height grid and a thumbnail to MinIO and fills the `render_*` and
+derived columns. Browsers get the objects through the `d1-surface-scan` endpoint, never from MinIO. Reference data like
+`insert_edges`: every Lab Member reads and writes, every Lab Viewer reads (ADR-0011); not granted to the Ask-DB role. OCC (`version`)
+and audit triggers as on every mutable table.
+
+| Column | Type | Description |
+|---|---|---|
+| `scan_id` | UUID PK | |
+| `insert_id` | UUID | The cutting insert (`ON DELETE CASCADE`). Exactly one of `insert_id` and `edge_id` is set (`CHECK`) |
+| `edge_id` | UUID | The insert edge (`ON DELETE CASCADE`) |
+| `directus_files_id` | UUID NOT NULL | The scan file (`ON DELETE CASCADE`). `UNIQUE (insert_id, directus_files_id)` and `UNIQUE (edge_id, directus_files_id)`: a file is filed once per item |
+| `condition` | TEXT NOT NULL | `new`, `worn`, `cleaned` or `other` |
+| `condition_note` | TEXT | Free note on the condition |
+| `scanned_on` | DATE | The day it was scanned |
+| `operation_id` | UUID | The operation that wore the item (`ON DELETE SET NULL`) |
+| `notes` | TEXT | |
+| `render_status` | TEXT NOT NULL | `pending` (default), `rendering`, `done` or `failed`. The viewer is served only when `done` |
+| `render_error` | TEXT | Why the last render failed; cleared by Render again |
+| `rendered_at` | TIMESTAMPTZ | When the last render finished |
+| `cache_key` | TEXT | Names the objects under `surface-scans/<cache_key>/` (`grid.bin`, `meta.json`, `thumb.png`): `file_fingerprints.content_sha256`, else the provisional `p-<directus_files_id>-<size>-<mtime>`. Set by the worker, which never hashes a file. The endpoint's ETag |
+| `source_format` | TEXT | Name of the SurfaceTopography reader |
+| `source_width`, `source_height` | INTEGER | Pixels of the file's height map |
+| `grid_width`, `grid_height` | INTEGER | Cells of the decimated grid (at most 1024 on the longer side) |
+| `pixel_pitch_x_um`, `pixel_pitch_y_um` | NUMERIC | Cell size of the decimated grid, micrometres |
+| `z_min_um`, `z_max_um` | NUMERIC | Lowest and highest height in the grid, micrometres. The file's extremes, not a roughness value |
+| `owner`, `owner_person_id` | UUID | Legacy login (hidden) and the person who added it (filled by `d1-owner-default`) |
+| `created_at`, `updated_at`, `version` | | As on every mutable table |
+
+Indexes on `insert_id`, `edge_id`, `directus_files_id`, `render_status` (partial: only `pending` and `rendering`),
+`operation_id` and `owner_person_id` (both partial: non-null).
 
 ---
 

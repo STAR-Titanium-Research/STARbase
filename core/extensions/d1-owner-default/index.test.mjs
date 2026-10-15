@@ -41,6 +41,7 @@ const ALL_FIELDS = [
   ['manufacturing_operations', 'owner_person_id'],
   ['test_sessions', 'owner_person_id'],
   ['batches', 'owner_person_id'],
+  ['surface_scans', 'owner_person_id'],
   ['projects', 'principal_investigator_person'],
 ];
 

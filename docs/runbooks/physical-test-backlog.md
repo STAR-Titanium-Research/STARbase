@@ -1246,6 +1246,32 @@ checks can be run from `/map?edit=new`.
   hardness test on each (about 60 records). Expect `create` to answer in a few seconds, with the same checks as PM5-2, and the
   Directus data cache (if enabled) showing the new records straight away. Since: edit-mode stream A (PR pending).
 
+### Surface scans on inserts and edges (migration 192, ADR-0020)
+- [ ] **SS1 — Render a real `.al3d` from the share.** Needs the stack with the `surface-scan-worker`, MinIO and the archive
+  share mounted read-only. In STARbase add a surface scan (condition Worn) to a real edge, picking a real Alicona `.al3d` from
+  the file library. Expect: the scan goes pending, rendering, done within about a minute, and the row shows a grid of at most
+  1024 cells on the longer side, a pixel pitch and a height range that agree with the Alicona software's own numbers for that
+  file (the range will not match Sz exactly: it is the file's extremes, not a roughness value). In MinIO,
+  `mc ls local/d1-files/surface-scans/<cache_key>/` lists `grid.bin`, `meta.json` and `thumb.png`. With a session cookie,
+  `GET /d1-surface-scan/<scan_id>/grid` answers 200 with an `ETag` equal to the cache key and `Cache-Control: private, no-cache`; the
+  same request with `If-None-Match` answers 304; `/meta` and `/thumb` answer too; a user who may not read the scan, and a request
+  without a session, are refused. The archive share is unchanged afterwards (no new file, same modification time on the `.al3d`; the
+  volume is mounted `:ro`). Then add a scan whose file is not a topography (a PDF): it ends failed with a readable `render_error`
+  and never opens a document; Render again on it queues it once. A file the crawler has hashed gets its `content_sha256` as cache
+  key, one it has not gets `p-<file id>-<size>-<mtime>`. Since: surface scans PR (pending).
+- [ ] **SS2 — The viewer on a real GPU.** Open the scan from SS1 on the lab PC's real browser and GPU (note which). Expect a lit 3D
+  surface of the edge, smooth orbit and zoom with a 1024-cell grid, the exaggeration slider and colour by height responding at once, a
+  legend in micrometres that matches the row's range, holes where the file has no data (not spikes or zero), and the thumbnail on
+  the insert and edge pages. Also open it on a laptop with only an integrated GPU: it must still draw (slower is fine), and where
+  float textures are missing it says so instead of showing a blank canvas. Since: surface scans PR (pending).
+- [ ] **SS3 — Count the Alicona Tests whose subject is an edge (dry run, before any migration).** Nothing is migrated by this PR.
+  On the live database, in a read-only transaction (`BEGIN READ ONLY;` ... `ROLLBACK;`), run
+  `SELECT count(*) FROM test_sessions t WHERE t.test_type = 'alicona' AND (t.insert_edge_id IS NOT NULL OR EXISTS (SELECT 1 FROM
+  test_sessions_subject s WHERE s.test_sessions_id = t.session_id AND s.collection = 'insert_edges'));`
+  and the same count of those that have a linked file. Write both numbers after this item. They size the later script that
+  proposes surface scans for them (follow-up F1 of the plan): a handful can be done by hand, hundreds need the guarded script. Since:
+  surface scans PR (pending).
+
 ## B. Force rig (NI-DAQ, Lab Amp, packaged Windows app)
 
 Install the current release from the update feed on the acquisition PC. Use a real sample and
