@@ -1871,6 +1871,23 @@ Needs the real share (`archive_share` mount on d1-server) and real Directus data
   save a file and, without reloading, expect the badge to catch up within about three minutes or when the
   window regains focus. On a server without `d1-inbox`, the entry and the panel are absent and nothing errors.
   Since: Inbox stream D.
+- [ ] **F12 — Uni alias and share folder fields on real Directus.** As an administrator, open a person on the
+  People page: *Uni alias* and *Scan while Former* show the stored values and the note *Changing this resets
+  the Inbox for this folder; linked files stay linked.* Set an alias, save, reopen: it is kept. Try `a/b`, one
+  character and `.ab` (refused in the form), and an alias another person already has in a different case (the
+  server refuses; the form says *That alias is already used by another person* and names no one). Add a
+  **new** person with an alias: the person is created and the alias is set by a second request (the database
+  refuses an alias on insert); check the Directus request log shows a POST without it then a PATCH. On a
+  team, set *Share folder* the same way (try `x/y`, blank, a name another team has). Change an alias after
+  that person has found files and confirm the undecided and dismissed ones are gone while linked ones stay.
+  A Lab Member sees neither field. Since: Inbox stream D.
+- [ ] **F13 — Inbox crawler tab on `/crawler` (administrators).** With the `inbox-crawler` daemon running,
+  expect *Online, running*, the interval, the last scan times and the file count; stop the daemon and expect
+  *Offline* within about two minutes. A folder created under `Users/` or `Shared/` that no alias or share
+  folder names shows under *Folders no one owns*, and a person with no alias under *People without an alias*
+  (linking to the People page); give them an alias and expect them to leave the list after the next scan. Press
+  *Scan all* and expect the request to be claimed within about 30 seconds. A Lab Member who opens
+  `/crawler?tab=inbox` is told it is for administrators. Since: Inbox stream D.
 
 ## Done
 
