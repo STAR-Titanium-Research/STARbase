@@ -61,16 +61,30 @@ async function familySamples(api: APIRequestContext, readable?: APIRequestContex
 const familySample = async (api: APIRequestContext, readable?: APIRequestContext) => (await familySamples(api, readable))[0] ?? null;
 
 /**
+ * Refuse to write unless this run is plainly against a throwaway preview copy. All three must hold:
+ * the Directus host is loopback (127.0.0.1, localhost or [::1]); its port is neither 8055 (the live Directus' port) nor
+ * $DIRECTUS_PORT when that is set; and the credentials file is a `preview-credentials-<name>.txt` (what the preview script writes).
+ */
+function assertPreviewWrites(what: string): void {
+	const u = new URL(SERVER);
+	const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+	const problems: string[] = [];
+	if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) problems.push(`host ${u.hostname} is not loopback`);
+	if (port === '8055' || (process.env.DIRECTUS_PORT && port === process.env.DIRECTUS_PORT)) problems.push(`port ${port} is a live Directus port`);
+	if (!/preview-credentials-.+\.txt$/.test(credsFile.replace(/\\/g, '/'))) problems.push(`credentials file ${credsFile} is not preview-credentials-<name>.txt`);
+	if (problems.length) throw new Error(`refusing to ${what} on ${SERVER}: ${problems.join('; ')}`);
+}
+
+/**
  * Make up to `max` family samples readable to the preview's Lab Member by listing the member's person as "Can view" on them
  * (sample_access, role view; the readers tables follow by trigger). Each access row it creates is pushed onto `created` at once
  * (the caller owns the array, so a failure half-way still cleans up what exists); a sample the member can already read through
  * an existing row is left alone. Returns how many family samples the member may now read through such a row.
  * The direct insert is a deliberate test shortcut: the d1-record-access endpoint would email the member and set added_by.
- * It writes only to the preview copy: it refuses any other host.
+ * It writes only to the preview copy: assertPreviewWrites refuses anything else.
  */
 async function grantMemberView(api: APIRequestContext, created: string[], max = 4): Promise<number> {
-	const host = new URL(SERVER).hostname;
-	if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) throw new Error(`refusing to write test access rows to ${SERVER}: not a local preview`);
+	assertPreviewWrites('write test access rows');
 	const [email] = account('member');
 	const user = (await rows(api, `/users?limit=1&fields=id&filter[email][_eq]=${encodeURIComponent(email)}`))[0];
 	const person = user && (await rows(api, `/items/people?limit=1&fields=person_id&filter[user_id][_eq]=${user.id}`))[0];
@@ -568,6 +582,7 @@ test.describe('Process map recorded batch (admin)', () => {
 			test.skip(!pick, 'the copy has no sample with two unbatched operations');
 			const [sampleId, opIds] = pick!;
 
+			assertPreviewWrites('create a test batch');
 			const made = await admin.post(`${SERVER}/items/batches`, { data: { notes: 'E2E process map scenario' } });
 			expect(made.ok(), 'create a batch with the code left out').toBeTruthy();
 			const batch = (await made.json()).data as { batch_id: string; code: string };
