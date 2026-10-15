@@ -313,22 +313,30 @@ class Store:
 
     def owner_baselined(self, owner: Owner) -> bool:
         """True once the owner's first complete scan has ended. A missing root row (never scanned, or
-        wiped by an alias change) is 'not baselined': the next scan is a first scan."""
+        wiped by an alias change) is 'not baselined': the next scan is a first scan. The row must be the
+        owner's own: a folder handed to someone else is not already baselined for them."""
         row = self._one(
-            "SELECT baselined_at FROM inbox_dirs WHERE rel_path = %s", (owner.root,)
+            "SELECT baselined_at FROM inbox_dirs WHERE rel_path = %s AND "
+            + _owner_eq(owner),
+            (owner.root, owner.id),
         )
         return bool(row and row[0] is not None)
 
     def upsert_dir(
         self, owner: Owner, rel: str, mtime: datetime | None, listed: bool
-    ) -> None:
-        self._run(
-            "INSERT INTO inbox_dirs (rel_path, owner_person_id, owner_team_id, dir_mtime, last_listed_at) "
-            "VALUES (%s, %s, %s, %s, CASE WHEN %s THEN now() END) "
+    ) -> bool:
+        """Cache a directory for the owner. False when the path already has a row of ANOTHER owner (a
+        folder that changed hands): that row is left alone and this directory is not cached."""
+        col = "owner_person_id" if owner.kind == "person" else "owner_team_id"
+        n = self._run(
+            "INSERT INTO inbox_dirs (rel_path, " + col + ", dir_mtime, last_listed_at) "
+            "VALUES (%s, %s, %s, CASE WHEN %s THEN now() END) "
             "ON CONFLICT (rel_path) DO UPDATE SET dir_mtime = EXCLUDED.dir_mtime, "
-            "  last_listed_at = CASE WHEN %s THEN now() ELSE inbox_dirs.last_listed_at END",
-            (rel, owner.person_id, owner.team_id, mtime, listed, listed),
+            "  last_listed_at = CASE WHEN %s THEN now() ELSE inbox_dirs.last_listed_at END "
+            "WHERE inbox_dirs." + col + " = EXCLUDED." + col,
+            (rel, owner.id, mtime, listed, listed),
         )
+        return n > 0
 
     def forget_dirs_under(self, owner: Owner, prefixes: list[str]) -> None:
         """Drop cache rows of directories that no longer exist (and everything below them)."""
@@ -341,8 +349,45 @@ class Store:
 
     def mark_baselined(self, owner: Owner) -> None:
         self._run(
-            "UPDATE inbox_dirs SET baselined_at = now() WHERE rel_path = %s AND baselined_at IS NULL",
-            (owner.root,),
+            "UPDATE inbox_dirs SET baselined_at = now() WHERE rel_path = %s AND baselined_at IS NULL AND "
+            + _owner_eq(owner),
+            (owner.root, owner.id),
+        )
+
+    def owner_claim_unchanged(self, owner: Owner) -> bool:
+        """Does the owner still hold the folder the scan started with (people.uni_alias, teams.share_folder)?
+        The row is read FOR SHARE: a change to it waits for this transaction's commit, so work committed
+        after a True answer is work for an owner who still had the folder, and the trigger that cleans up
+        after a change then sees it."""
+        if owner.kind == "person":
+            row = self._one(
+                "SELECT uni_alias FROM people WHERE person_id = %s FOR SHARE",
+                (owner.id,),
+            )
+        else:
+            row = self._one(
+                "SELECT share_folder FROM teams WHERE team_id = %s FOR SHARE",
+                (owner.id,),
+            )
+        return row is not None and row[0] == owner.claim
+
+    def drop_foreign_state(self, owner: Owner) -> None:
+        """A folder that changed hands: whatever another owner left under this owner's folder (cache rows,
+        and candidates that are not linked) is stale and would hide or leak files. Linked rows stay, as
+        the migration's own cleanup leaves them."""
+        mine = _owner_eq(owner)
+        n = len(owner.root) + 1
+        under = "(rel_path = %s OR left(rel_path, %s) = %s)"
+        self._run(
+            "DELETE FROM inbox_dirs WHERE " + under + " AND NOT (" + mine + ")",
+            (owner.root, n, owner.root + "/", owner.id),
+        )
+        self._run(
+            "DELETE FROM file_candidates WHERE left(rel_path, %s) = %s AND NOT ("
+            + mine
+            + ") "
+            "AND state IN ('new', 'gone', 'dismissed')",
+            (n, owner.root + "/", owner.id),
         )
 
     # ---- candidates ------------------------------------------------------------------

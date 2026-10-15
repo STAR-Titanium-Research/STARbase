@@ -106,6 +106,10 @@ class OwnerUnavailable(Exception):  # noqa: N818
     """One owner's folder cannot be read while the share itself answers: record it, skip that owner."""
 
 
+class OwnerChanged(OwnerUnavailable):
+    """The owner's alias or share folder changed while its folder was being scanned: its work is dropped."""
+
+
 @dataclass
 class ScanStats:
     registered: int = 0
@@ -270,7 +274,7 @@ class Scanner:
                 return
             try:
                 self.scan_owner(owner, bases, stats)
-            except OwnerUnavailable as exc:
+            except OwnerUnavailable as exc:  # includes OwnerChanged
                 self.store.rollback()  # this owner's unfinished work; folders already committed stand
                 stats.error(str(exc))
                 log.warning("skipping %s: %s", owner.root, exc)
@@ -292,6 +296,9 @@ class Scanner:
         self._owner_ok(owner, bases)
         self._bases = bases
         store = self.store
+        store.drop_foreign_state(
+            owner
+        )  # a folder that changed hands starts clean for its new owner
         store.resync_paths(
             owner
         )  # the indexer may have moved files: its pointer rows say where
@@ -318,7 +325,7 @@ class Scanner:
         while stack:
             if self.stop():
                 stats.interrupted = True
-                store.commit()
+                self._commit(owner)
                 return
             d, depth = stack.pop()
             if depth > MAX_DEPTH:
@@ -399,7 +406,7 @@ class Scanner:
         stats.owners_scanned += 1
         if root_listed and stats.temporary_errors == temporary_before:
             store.mark_baselined(owner)
-        store.commit()
+        self._commit(owner)
 
     def _list_dir(
         self,
@@ -494,7 +501,9 @@ class Scanner:
                 fresh.append(f)
                 batch += 1
                 if batch >= COMMIT_EVERY:
-                    store.commit()  # candidates are idempotent; the folder's own row still comes last
+                    self._commit(
+                        owner
+                    )  # candidates are idempotent; the folder's own row still comes last
                     batch = 0
         for n in subdirs:
             child = f"{d}/{n}"
@@ -508,10 +517,21 @@ class Scanner:
                 store.upsert_dir(owner, d, None, listed=True)
                 deferred[d] = mtime
             else:
-                store.upsert_dir(owner, d, self._cacheable(mtime), listed=True)
-        store.commit()
+                if not store.upsert_dir(owner, d, self._cacheable(mtime), listed=True):
+                    raise OwnerChanged(f"{d}: another owner has this folder")
+        self._commit(owner)
         stack.extend((f"{d}/{n}", depth + 1) for n in reversed(subdirs))
         return complete
+
+    def _commit(self, owner: owners.Owner) -> None:
+        """Commit the owner's work, but only while the owner still holds the folder the scan started with.
+        If the alias or share folder changed, the unfinished work is rolled back and the owner skipped."""
+        if not self.store.owner_claim_unchanged(owner):
+            self.store.rollback()
+            raise OwnerChanged(
+                f"{owner.root}: its alias or share folder changed during the scan"
+            )
+        self.store.commit()
 
     def _cacheable(self, mtime):
         """The mtime to cache for a listed folder. One changed in the last moments may change again within

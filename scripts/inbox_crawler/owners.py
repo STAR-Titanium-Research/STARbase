@@ -28,7 +28,8 @@ class Owner:
     root: (
         str  # the folder's share-relative path, as the share spells it ("Users/AB123")
     )
-    label: str = ""  # for the log and the activity text: the alias or the folder name
+    label: str = ""  # for the log and the activity text: the alias, or the team name
+    claim: str = ""  # people.uni_alias / teams.share_folder as the scan started: re-checked before commits
 
     @property
     def person_id(self) -> str | None:
@@ -99,7 +100,7 @@ def match_folders(
         used.add(found)
         path = f"{base}/{found}"
         if scannable:
-            owners.append(Owner(kind, owner_id, path, label or folder))
+            owners.append(Owner(kind, owner_id, path, label or folder, claim=folder))
         else:
             skipped.append(path)
     unmatched = [f"{base}/{d}" for d in dirs if d not in used]
