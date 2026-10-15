@@ -102,7 +102,7 @@ Develop against the route table in spec §9 with a typed `inboxApi.ts` and a fak
 Contract received from the Alicona chat (spec §8). Two parts, started after B and D are merged:
 
 - [ ] **F1 (`d1-server-implementer`):** in `d1-inbox`, a `surface_scans` link target: `POST /d1-inbox/link` accepts `{candidate_id, collection:'surface_scans', insert_id|edge_id, condition, operation_id?, scanned_on?, condition_note?, notes?}`; creates the row through `ItemsService` as the caller in the same transaction as the candidate update; undo deletes it; refuses a missing/invalid `condition`, both or neither of `insert_id`/`edge_id`; a feature check that the `surface_scans` table exists (otherwise 409 "Surface scans are not available yet"). Tests with fakes.
-- [ ] **F2 (`directus-ui-implementer`):** for `kind='surface_scan'` the Link dialog's button reads "Add a surface scan" and collects item (insert or edge picker), condition (required, no default), optional operation, date and notes; never says "link" or "attach" for it.
+- [ ] **F2 (`directus-ui-implementer`):** for `kind='surface_scan'` the Link dialog's button reads "Add a surface scan" and collects item (insert or edge picker), condition (required, no default), optional operation, date and notes; shows the warning "Adding a surface scan makes the file visible to every lab member"; a duplicate (same item and file, refused by the table's unique constraint) is shown as "already added"; never says "link" or "attach" for it.
 - [ ] **F3:** once the Alicona chat's `surface_scans` migration is on the base branch, run both against the real table (schema test) and tick backlog item F9.
 
 ## Stream R — Review and CI (coordinator)
