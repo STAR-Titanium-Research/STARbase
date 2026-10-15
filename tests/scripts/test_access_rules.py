@@ -724,13 +724,24 @@ def test_members_cannot_set_the_inbox_alias_columns_when_creating_or_updating_a_
         assert not inbox_only & set(names), action
     create = set(BY_KEY[("people", "create")]["fields"].split(","))
     # a person can still be created as before: every other column stays (the validation is untouched)
-    assert {"full_name", "email", "user_id", "is_operator", "is_researcher", "active", "notes"} <= create
+    assert {
+        "full_name",
+        "email",
+        "user_id",
+        "is_operator",
+        "is_researcher",
+        "active",
+        "notes",
+    } <= create
     assert BY_KEY[("people", "create")]["validation"] == {
         "_or": [{"user_id": {"_null": True}}, {"user_id": {"_eq": "$CURRENT_USER"}}]
     }
     assert BY_KEY[("people", "read")]["fields"] == "*"
     # the migration carries the same list as the generator (and its down puts the open list back)
-    mig = (SCRIPTS.parent / "db/migrations/20261015000194_people_create_no_inbox_fields.sql").read_text()
+    mig = (
+        SCRIPTS.parent
+        / "db/migrations/20261015000194_people_create_no_inbox_fields.sql"
+    ).read_text()
     up, down = mig.split("-- migrate:down")
     assert f"fields = '{BY_KEY[('people', 'create')]['fields']}'" in up
     assert "fields = '*'" in down
