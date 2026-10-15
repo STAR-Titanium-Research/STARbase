@@ -413,11 +413,12 @@ sample and a team-shared project, and removes them afterwards).
 ## Lab Viewer (migration 185) (maintainer's step, approve separately)
 
 A read-only account role for the lab's PI: it **reads every record (Restricted included) and changes nothing**. It is migration 185 (the role, its
-policy, `d1_private.v_viewers`, the viewer branch of the readers functions and the triggers on `directus_users`) and a change to the `d1-record-access`,
-`d1-teams` and `d1-people-admin` extensions, which now refuse a viewer on every route that changes anything. **No new `.env` keys** (`D1_LAB_VIEWER_ROLE_ID` is
+policy, `d1_private.v_viewers`, the viewer branch of the readers functions and the triggers on `directus_users`), a change to the `d1-record-access`,
+`d1-teams` and `d1-people-admin` extensions (they refuse a viewer on every route that changes anything, and answer its reads like an administrator's) and to the People
+and Teams pages of STARbase and of the Directus Explorer module. **No new `.env` keys** (`D1_LAB_VIEWER_ROLE_ID` is
 optional and only needed if the role has a different id on this server). Needs the People and Teams migrations (180 to 184) applied first.
 
-1. `git pull && npm ci && npm run build:extensions` (STARbase is unchanged by this step).
+1. `git pull && npm ci && npm run build:extensions && npm run build:starbase` (the Directus module and STARbase both know the role now).
 2. **Stop Directus, migrate, start it**: `docker compose stop directus`, `make migrate-status` (185 pending), `make migrate`, `docker compose up -d --force-recreate directus`
    (the recreate loads the changed extensions). Stopping first keeps a writer from holding the readers lock while the migration takes it. **No Redis flush is needed**: the
    role and its policy are new, so Directus has no cached permissions for them, and none of the existing rows changed (do not `FLUSHALL`: Redis also holds the worker queues).
@@ -427,8 +428,11 @@ optional and only needed if the role has a different id on this server). Needs t
    everyone; it changes nothing for a viewer. Sign in as the viewer and look at a Restricted record of someone else's: it is there, and every edit, share, transfer and
    delete is refused.
 5. Smoke as the viewer, from a second device: Samples, Operations, Tests, Campaigns and Projects list every record, a Restricted one included; Who has access opens and every button
-   that changes something answers 403 `READ_ONLY_ROLE`. **Not yet for a viewer**: the People page, the project rollup of other people's projects and Ask-the-database
-   of Restricted records (it hides them from everyone).
+   that changes something answers 403 `READ_ONLY_ROLE`. **People, as the viewer sees it**: the whole page an administrator sees (every person, the Account section with the role as
+   text, the Teams and Access counts and each record list, the "needs attention" line, the Teams view and every team page) and **no control that changes anything**: no Invite, Add
+   person, Edit, role select, Suspend, Resend, Link to a person, Remove, New team, Edit team, Add member, Make manager or Leave. The viewer's own login sits under Users, not Admins.
+   The project rollup of other people's projects is readable too (the viewer reads every row of `project_rollup` and of the five `*_access` tables). **Not for a viewer**:
+   Ask-the-database of Restricted records (it hides them from everyone).
 
 Making someone a viewer, or taking the role away, or suspending or unsuspending a viewer (or deleting one), runs a full `readers_rebuild()`, which takes the
 global readers lock: every record write in the lab waits while it runs. `docs/runbooks/a1-record-access-cutover.md` measured a rebuild at 0.73 s on the seeded

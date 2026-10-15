@@ -121,7 +121,8 @@ _Avoid_: role (alone), permission, user role
 **Lab Viewer**:
 The account role that reads everything and changes nothing: a login with it is a reader of every record,
 Restricted ones included, and may create, edit, share, transfer or delete none, nor anything on the People
-and Teams pages. It sees what a Lab Member sees, with every record on top, and never writes.
+and Teams pages. It sees what a Lab Member sees, with every record on top, and on the People page what an
+administrator sees (everyone's access, read-only, no control), and never writes.
 _Avoid_: guest, read-only user, observer
 
 **Access level**:

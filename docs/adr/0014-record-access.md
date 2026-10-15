@@ -80,9 +80,15 @@ show a viewer everything with no special case:
   (`d1-record-access`, `d1-teams`, `d1-people-admin`) refuse a viewer first on every route that changes anything (`403 READ_ONLY_ROLE`), because a viewer who owns a
   record or is a project's PI would otherwise pass their manage check.
 - Not changed, so still true for a viewer: **Ask-the-database** hides Restricted records from every asker (its role-level row security is the table above), and
-  files and octrees stay open until A1b. `project_rollup` and the five `*_access` tables keep the rules they have for Lab Member (a project's PI and
-  investigators; the person an access row lists), so through Directus a viewer sees no rollup rows of other people's projects and no one else's access rows;
-  the People page for a viewer is a later step.
+  files and octrees stay open until A1b.
+- `project_rollup` and the five `*_access` tables are about the caller for a Lab Member (a project's PI and investigators; the person an access row lists). For the
+  viewer that rule is no filter (`scripts/access_rules.json` `viewer.read_all`, generated like the rest, `--check` covers it): it reads every row, as it reads every record.
+  The `*_team_access` and `*_team_pending` tables have no Directus permission for anyone; the endpoints read them.
+- The People page for a viewer (Task B): `d1-people-admin` (`/people`, `/attention`, `/people/:id/access`), `d1-teams` and `d1-record-access` (`GET`) answer a viewer what they answer
+  an administrator (every person, every record of every list: a viewer reads every record), and still refuse its writes. A viewer's `can_manage` is always `false`, and
+  `GET /d1-teams/pending` is empty (nothing waits for someone who decides nothing). The host contract (`@d1/ui`) carries `canViewAllAccess` (the account role id, the
+  same id rule as the endpoints); the People and Teams pages show an administrator's reads for `isAdmin || canViewAllAccess` and keep every control that changes something
+  off for a viewer.
 
 ## Known gaps (accepted)
 
